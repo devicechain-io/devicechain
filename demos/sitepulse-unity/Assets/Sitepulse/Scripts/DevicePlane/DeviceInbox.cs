@@ -7,7 +7,7 @@ using System.Threading;
 
 namespace DeviceChain.Sitepulse.DevicePlane
 {
-    public enum DeviceEventKind { LinkState, Started, StartFailed, FirstPublish, Command }
+    public enum DeviceEventKind { LinkState, Started, StartFailed, FirstPublish, Command, PumpFaulted }
 
     /// <summary>
     /// A plain record of something that happened on an SDK thread, queued for the main thread. It

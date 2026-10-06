@@ -30,6 +30,7 @@ namespace DeviceChain.Sitepulse.DevicePlane
         Task disposeTask;
         int started, halted, firstPublish;
         long published, sendErrors, lastPublishTicks;
+        int consecutiveFailures;
 
         public DeviceSessionHost(SceneDevice device, string deviceToken, IDeviceLink link, int generation, DeviceInbox inbox)
         {
@@ -52,6 +53,9 @@ namespace DeviceChain.Sitepulse.DevicePlane
 
         public long Published => Interlocked.Read(ref published);
         public long SendErrors => Interlocked.Read(ref sendErrors);
+
+        /// <summary>Failed sends since the last acknowledged one.</summary>
+        public int ConsecutiveSendFailures => Volatile.Read(ref consecutiveFailures);
 
         public DateTimeOffset? LastPublishUtc
         {
@@ -115,10 +119,22 @@ namespace DeviceChain.Sitepulse.DevicePlane
             {
                 if (Volatile.Read(ref halted) == 1) return;
                 Volatile.Write(ref started, 1);
-                pumpTask = Task.Run(() => Pump.RunAsync(stop.Token));
+                pumpTask = Task.Run(() => Pump.RunAsync(stop.Token)).ContinueWith(
+                    t => OnPumpFaulted(t.Exception),
+                    CancellationToken.None, TaskContinuationOptions.OnlyOnFaulted, TaskScheduler.Default);
             }
 
             Post(DeviceEventKind.Started, LinkState.Ready);
+        }
+
+        // a send loop that died (not one that was stopped) leaves a device that can never publish again: say so
+        void OnPumpFaulted(AggregateException e)
+        {
+            Halt();
+            var inner = e?.GetBaseException();
+            var why = inner == null ? "unknown" : inner.GetType().Name + ": " + inner.Message;
+            PlatformLog.Error($"{ExternalId}: send loop faulted: {why}");
+            Post(DeviceEventKind.PumpFaulted, LinkState.Stopped, why);
         }
 
         string CommandNote(string name)
@@ -171,6 +187,7 @@ namespace DeviceChain.Sitepulse.DevicePlane
         void ISampleObserver.Published(Sample sample, DateTimeOffset at)
         {
             Interlocked.Increment(ref published);
+            Volatile.Write(ref consecutiveFailures, 0);
             Interlocked.Exchange(ref lastPublishTicks, at.UtcTicks);
             if (Interlocked.Exchange(ref firstPublish, 1) == 0) Post(DeviceEventKind.FirstPublish);
         }
@@ -178,6 +195,7 @@ namespace DeviceChain.Sitepulse.DevicePlane
         void ISampleObserver.SendFailed(Sample sample, string reason, bool permanent)
         {
             Interlocked.Increment(ref sendErrors);
+            if (!permanent) Interlocked.Increment(ref consecutiveFailures);
             PlatformLog.Warn($"{ExternalId}: send {(permanent ? "rejected" : "failed, will retry")} ({sample.Kind}): {reason}");
         }
 

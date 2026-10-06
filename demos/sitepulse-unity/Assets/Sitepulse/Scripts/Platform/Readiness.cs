@@ -59,14 +59,34 @@ namespace DeviceChain.Sitepulse.Platform
         /// <summary>The last command the device was sent and what it answered; null if none.</summary>
         public string LastCommand { get; set; }
 
+        /// <summary>Consecutive failed sends since the last acknowledged one.</summary>
+        public int ConsecutiveSendFailures { get; set; }
+
+        /// <summary>
+        /// Why a device with a session is not really publishing right now (no acknowledgement for a while,
+        /// or sends failing); null while it is. Set by <see cref="ReadinessBoard.Evaluate"/>. A stalled
+        /// device is neither publishing nor failed: it has a session and may recover.
+        /// </summary>
+        public string StallReason { get; set; }
+
+        public bool Stalled => StallReason != null;
+
         public bool Failed => FailReason != null;
+
+        /// <summary>
+        /// Drawn as a grey placeholder: it has no working session, now or later (it did not bind, has no
+        /// credential, could not create or start a session, or the broker refused it). A reconnecting,
+        /// connecting or stalled device has a session and is not grey.
+        /// </summary>
+        public bool IsGrey => Failed;
     }
 
     /// <summary>
     /// The per-device readiness the panel shows. Counts are exact: <c>n/19 credentialed · k failed</c>
     /// (and, once sessions are starting, <c>n/19 publishing · k failed</c>) counts devices at that
     /// state and never rounds up, and a device is one or the other, so pending devices are in
-    /// neither number. A device that is reconnecting is neither publishing nor failed.
+    /// neither number. A device that is reconnecting is neither publishing nor failed, and one that has a
+    /// session but has gone quiet (<see cref="Evaluate"/>) is stalled: not publishing, not failed.
     /// </summary>
     public sealed class ReadinessBoard
     {
@@ -102,14 +122,34 @@ namespace DeviceChain.Sitepulse.Platform
             }
         }
 
-        /// <summary>Devices whose session has acknowledged a sample and that are not currently reconnecting, stopped or failed.</summary>
+        /// <summary>Longest a publishing device may go without an acknowledgement before it is called stalled.</summary>
+        public static readonly TimeSpan StallAfter = TimeSpan.FromSeconds(5);
+
+        /// <summary>Consecutive failed sends at which a device is called stalled.</summary>
+        public const int StallAfterFailures = 3;
+
+        /// <summary>
+        /// Devices whose session has acknowledged a sample within <see cref="StallAfter"/>, with fewer than
+        /// <see cref="StallAfterFailures"/> failed sends in a row, and that are not reconnecting, stopped or failed.
+        /// </summary>
         public int PublishingCount
         {
             get
             {
                 var n = 0;
                 foreach (var d in devices)
-                    if (d.Stage == DeviceStage.Publishing && d.Side == DeviceSide.None && !d.Failed) n++;
+                    if (d.Stage == DeviceStage.Publishing && d.Side == DeviceSide.None && !d.Failed && !d.Stalled) n++;
+                return n;
+            }
+        }
+
+        public int StalledCount
+        {
+            get
+            {
+                var n = 0;
+                foreach (var d in devices)
+                    if (d.Stage == DeviceStage.Publishing && d.Side == DeviceSide.None && !d.Failed && d.Stalled) n++;
                 return n;
             }
         }
@@ -131,7 +171,7 @@ namespace DeviceChain.Sitepulse.Platform
         public DeviceReadiness this[string externalId] => byId[externalId];
 
         public string Summary() => SessionsBegun
-            ? $"{PublishingCount}/{Total} publishing · {FailedCount} failed"
+            ? $"{PublishingCount}/{Total} publishing{(StalledCount > 0 ? $" · {StalledCount} stalled" : "")} · {FailedCount} failed"
             : $"{CredentialedCount}/{Total} credentialed · {FailedCount} failed";
 
         /// <summary>Marks every credentialed device as connecting, and switches the header to the publishing count.</summary>
@@ -174,15 +214,56 @@ namespace DeviceChain.Sitepulse.Platform
         }
 
         /// <summary>Copies a session's counters in; a redraw is asked for only when one moved.</summary>
-        public void SetStats(string externalId, long published, long sendErrors, long dropped, DateTimeOffset? lastPublishUtc)
+        public void SetStats(string externalId, long published, long sendErrors, long dropped, DateTimeOffset? lastPublishUtc, int consecutiveFailures = 0)
         {
             var d = byId[externalId];
-            if (d.Published == published && d.SendErrors == sendErrors && d.Dropped == dropped && d.LastPublishUtc == lastPublishUtc) return;
+            if (d.Published == published && d.SendErrors == sendErrors && d.Dropped == dropped && d.LastPublishUtc == lastPublishUtc
+                && d.ConsecutiveSendFailures == consecutiveFailures) return;
             d.Published = published;
             d.SendErrors = sendErrors;
             d.Dropped = dropped;
             d.LastPublishUtc = lastPublishUtc;
+            d.ConsecutiveSendFailures = consecutiveFailures;
             Version++;
+        }
+
+        /// <summary>
+        /// Decides, at <paramref name="now"/>, which publishing devices have stalled: no acknowledgement
+        /// within <see cref="StallAfter"/>, or <see cref="StallAfterFailures"/> failed sends in a row. A
+        /// device that has never published is not stalled (it is still on the ladder).
+        /// </summary>
+        public void Evaluate(DateTimeOffset now)
+        {
+            foreach (var d in devices)
+            {
+                string reason = null;
+                if (d.Stage == DeviceStage.Publishing && d.Side == DeviceSide.None && !d.Failed)
+                {
+                    if (d.ConsecutiveSendFailures >= StallAfterFailures)
+                        reason = $"sends failing · {d.ConsecutiveSendFailures} in a row";
+                    else if (!d.LastPublishUtc.HasValue || now - d.LastPublishUtc.Value > StallAfter)
+                    {
+                        var quiet = d.LastPublishUtc.HasValue ? (int)(now - d.LastPublishUtc.Value).TotalSeconds : 0;
+                        reason = $"no acknowledgement for {quiet} s";
+                    }
+                }
+
+                if (reason == d.StallReason) continue;
+                d.StallReason = reason;
+                Version++;
+            }
+        }
+
+        /// <summary>
+        /// The devices that should be drawn grey and are not yet in <paramref name="already"/>, which it
+        /// then records. Grey is applied once per machine and never lifted.
+        /// </summary>
+        public List<SceneDevice> TakeNewlyGrey(ISet<string> already)
+        {
+            var list = new List<SceneDevice>();
+            foreach (var d in devices)
+                if (d.IsGrey && already.Add(d.Device.ExternalId)) list.Add(d.Device);
+            return list;
         }
 
         public void SetBind(BindResult r)
@@ -263,7 +344,10 @@ namespace DeviceChain.Sitepulse.Platform
             {
                 case DeviceSide.Reconnecting: state = "reconnecting"; break;
                 case DeviceSide.Stopped: state = "stopped"; break;
-                default: state = d.Stage == DeviceStage.Connecting ? "connecting" : d.Stage == DeviceStage.Ready ? "ready" : "publishing"; break;
+                default:
+                    state = d.Stage == DeviceStage.Connecting ? "connecting" : d.Stage == DeviceStage.Ready ? "ready"
+                        : d.Stalled ? "stalled · " + d.StallReason : "publishing";
+                    break;
             }
 
             var text = $"{id} · {state}";
@@ -276,7 +360,7 @@ namespace DeviceChain.Sitepulse.Platform
             if (d.SendErrors > 0) text += $" · {d.SendErrors} send errors";
             if (d.Dropped > 0) text += $" · {d.Dropped} dropped";
             text += Command(d);
-            var ok = d.Stage == DeviceStage.Publishing && d.Side == DeviceSide.None;
+            var ok = d.Stage == DeviceStage.Publishing && d.Side == DeviceSide.None && !d.Stalled;
             return new PanelLine(text, ok ? LineKind.Ok : LineKind.Pending);
         }
 

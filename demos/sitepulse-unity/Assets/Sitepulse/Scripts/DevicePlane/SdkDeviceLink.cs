@@ -3,12 +3,15 @@
 
 using System;
 using System.Threading;
+using System.Runtime.CompilerServices;
 using System.Threading.Tasks;
 using DeviceChain.Sdk.Ingest;
 using DeviceChain.Sdk.Mqtt;
 using DeviceChain.Sdk.Transport;
 using DeviceChain.Sitepulse.Platform;
 using DeviceChain.Sitepulse.Simulation;
+
+[assembly: InternalsVisibleTo("DeviceChain.Sitepulse.Tests.EditMode")]
 
 namespace DeviceChain.Sitepulse.DevicePlane
 {
@@ -26,19 +29,28 @@ namespace DeviceChain.Sitepulse.DevicePlane
         readonly string credentialId;
 
         public SdkDeviceLink(MqttSessionOptions options, string deviceToken, string credentialId)
+            : this(new MqttDeviceSession(options), null, deviceToken, credentialId)
+        {
+        }
+
+        SdkDeviceLink(MqttDeviceSession session, IDeviceEventCarrier carrier, string deviceToken, string credentialId)
         {
             this.deviceToken = deviceToken;
             this.credentialId = credentialId;
-            session = new MqttDeviceSession(options);
-            publisher = new DeviceEventPublisher(new MqttDeviceEventCarrier(session, deviceToken));
-            session.StateChanged += s => StateChanged?.Invoke(Map(s));
+            this.session = session;
+            publisher = new DeviceEventPublisher(carrier ?? new MqttDeviceEventCarrier(session, deviceToken));
+            if (session != null) session.StateChanged += s => StateChanged?.Invoke(Map(s));
         }
+
+        /// <summary>A link with no session over a carrier of the caller's choosing, to see exactly what it asks the SDK to send.</summary>
+        internal static SdkDeviceLink OverCarrier(IDeviceEventCarrier carrier, string deviceToken, string credentialId)
+            => new SdkDeviceLink(null, carrier ?? throw new ArgumentNullException(nameof(carrier)), deviceToken, credentialId);
 
         public event Action<LinkState> StateChanged;
 
-        public bool CanPublish => session.State == MqttSessionState.Ready;
+        public bool CanPublish => session != null && session.State == MqttSessionState.Ready;
 
-        static LinkState Map(MqttSessionState s)
+        internal static LinkState Map(MqttSessionState s)
         {
             switch (s)
             {
@@ -51,7 +63,7 @@ namespace DeviceChain.Sitepulse.DevicePlane
         }
 
         public Task StartAsync(string refusalReason, Action<string> onCommand, CancellationToken cancellationToken)
-            => session.StartAsync((command, _) =>
+            => Session().StartAsync((command, _) =>
             {
                 onCommand(command.Name);
                 return Task.FromResult(CommandOutcome.Failed(refusalReason));
@@ -70,7 +82,9 @@ namespace DeviceChain.Sitepulse.DevicePlane
             return publisher.EmitLocationAsync(deviceToken, credentialId, fix, sample.OccurredUtc, cancellationToken);
         }
 
-        public ValueTask DisposeAsync() => session.DisposeAsync();
+        MqttDeviceSession Session() => session ?? throw new InvalidOperationException("this link has no session");
+
+        public ValueTask DisposeAsync() => session != null ? session.DisposeAsync() : default;
     }
 
     /// <summary>

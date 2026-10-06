@@ -24,6 +24,8 @@ namespace DeviceChain.Sitepulse.Tests
             readonly Counter counter;
             readonly object gate = new object();
             public bool Up;
+            public Exception PublishThrows;
+            public bool CanPublishThrows, BlindBeforeStartThrows;
             public int Disposed, Starts;
             public string Refusal;
             public Action<string> OnCommand;
@@ -39,7 +41,7 @@ namespace DeviceChain.Sitepulse.Tests
 
             public event Action<LinkState> StateChanged;
 
-            public bool CanPublish => Up;
+            public bool CanPublish => CanPublishThrows ? throw new InvalidOperationException("link state unreadable") : Up;
 
             public int PublishedCount
             {
@@ -59,7 +61,12 @@ namespace DeviceChain.Sitepulse.Tests
                 try
                 {
                     await Task.Delay(StartTakes, cancellationToken);
-                    if (StartThrows != null) throw StartThrows;
+                    if (StartThrows != null)
+                    {
+                        if (BlindBeforeStartThrows) Raise(LinkState.Blind);
+                        throw StartThrows;
+                    }
+
                     Up = true;
                     Raise(LinkState.Ready);
                 }
@@ -71,6 +78,8 @@ namespace DeviceChain.Sitepulse.Tests
 
             public Task PublishAsync(Sample sample, CancellationToken cancellationToken)
             {
+                var fail = PublishThrows;
+                if (fail != null) return Task.FromException(fail);
                 lock (gate) Published.Add(sample);
                 return Task.CompletedTask;
             }
@@ -94,9 +103,11 @@ namespace DeviceChain.Sitepulse.Tests
             public readonly Dictionary<string, FakeLink> Links = new Dictionary<string, FakeLink>();
             public readonly List<string> Created = new List<string>();
             public Action<FakeLink> Customise = _ => { };
+            public string CreateThrowsFor;
 
             public IDeviceLink Create(string externalId, string deviceToken, string credentialId)
             {
+                if (externalId == CreateThrowsFor) throw new InvalidOperationException("no session for you");
                 Created.Add(deviceToken);
                 var l = new FakeLink(externalId, Counter);
                 Customise(l);
@@ -266,6 +277,7 @@ namespace DeviceChain.Sitepulse.Tests
 
                 var victim = factory.Links["SP-HL-0004"];
                 victim.Raise(LinkState.Blind);
+                Assert.IsFalse(fleet["SP-HL-0004"].Accepting, "halted on the SDK thread, before the main thread has heard");
                 fleet.Pump();
                 Assert.AreEqual(DeviceSide.Blind, board["SP-HL-0004"].Side);
                 Assert.IsTrue(board["SP-HL-0004"].Failed);
@@ -404,6 +416,284 @@ namespace DeviceChain.Sitepulse.Tests
             Assert.Less(factory.Links.Values.Count(l => l.Starts > 0), 10, "the sessions still queued behind the limit were never started");
             Assert.AreEqual(0, factory.Counter.InFlight);
             foreach (var l in factory.Links.Values) Assert.AreEqual(1, l.Disposed);
+        }
+
+        // ---- speed over a frame hitch
+
+        sealed class DrivenPoses : IPoseSource
+        {
+            public double East;
+            public bool TryGet(string externalId, out MachinePose pose)
+            {
+                pose = new MachinePose(East, 0, 5, 90, false);
+                return true;
+            }
+        }
+
+        [Test]
+        public void AFrameHitchKeepsTheSpeedAndNeverReadsAsAStop()
+        {
+            var (board, creds) = Credentialed(Fleet);
+            var factory = new FakeFactory();
+            var fleet = StartedFleet(board, creds, factory);
+            try
+            {
+                var poses = new DrivenPoses();
+                var wall = DateTimeOffset.UtcNow;
+                var motion = fleet["SP-HL-0001"].Simulation.Motion;
+                const double frame = 1.0 / 60.0, hitchGame = 0.3, hitchWall = 1.0, speed = 5.0;
+
+                // every 20th frame the scene advances 0.3 s while the wall clock moves a full second
+                var slowest = double.MaxValue;
+                for (var i = 0; i < 600; i++)
+                {
+                    var hitch = i % 20 == 19;
+                    var game = hitch ? hitchGame : frame;
+                    poses.East += speed * game;
+                    wall += TimeSpan.FromSeconds(hitch ? hitchWall : frame);
+                    fleet.Advance(wall, poses, game);
+                    if (i >= 120)
+                    {
+                        slowest = Math.Min(slowest, motion.SpeedMps);
+                        Assert.IsTrue(motion.IsMoving, $"frame {i}: a machine at constant speed is never stopped");
+                    }
+                }
+
+                Assert.GreaterOrEqual(slowest, 0.5 * speed, "speed over the time the scene moved, not the wall clock");
+                Assert.AreEqual(speed, motion.SpeedMps, 0.5);
+            }
+            finally { fleet.Shutdown(TimeSpan.FromSeconds(10)); }
+        }
+
+        // ---- stalled, not publishing
+
+        [Test]
+        public void ADeviceWithNoAckForFiveSecondsIsStalledNotPublishingAndNotFailed()
+        {
+            var (board, creds) = Credentialed(Fleet);
+            var factory = new FakeFactory();
+            var fleet = StartedFleet(board, creds, factory);
+            try
+            {
+                ReachPublishing(fleet, board, 10);
+                var acked = board["SP-HL-0001"].LastPublishUtc.Value;
+
+                fleet.Pump(acked + TimeSpan.FromSeconds(4.9));
+                Assert.IsFalse(board["SP-HL-0001"].Stalled, "inside the window");
+                fleet.Pump(acked + TimeSpan.FromSeconds(20));
+                Assert.IsTrue(board["SP-HL-0001"].Stalled);
+                Assert.IsFalse(board["SP-HL-0001"].Failed);
+                Assert.AreEqual(0, board.PublishingCount);
+                Assert.AreEqual(10, board.StalledCount);
+                Assert.AreEqual("0/10 publishing · 10 stalled · 0 failed", board.Summary());
+                StringAssert.Contains("stalled · no acknowledgement for", board.Lines()[0].Text);
+                Assert.AreEqual(LineKind.Pending, board.Lines()[0].Kind);
+
+                // a fresh ack brings it back
+                fleet.Advance(DateTimeOffset.UtcNow + TimeSpan.FromSeconds(30), new StillPoses());
+                Assert.IsTrue(WaitFor(() =>
+                {
+                    fleet.Pump(DateTimeOffset.UtcNow);
+                    return board.PublishingCount == 10;
+                }), board.Summary());
+            }
+            finally { fleet.Shutdown(TimeSpan.FromSeconds(10)); }
+        }
+
+        [Test]
+        public void ThreeSendFailuresInARowStallADeviceThatAckedASecondAgo()
+        {
+            var (board, creds) = Credentialed(Fleet);
+            var factory = new FakeFactory();
+            var fleet = StartedFleet(board, creds, factory);
+            try
+            {
+                ReachPublishing(fleet, board, 10);
+                var link = factory.Links["SP-HL-0001"];
+                link.PublishThrows = new TimeoutException("broker did not answer");
+                var t = DateTimeOffset.UtcNow;
+                for (var i = 1; i <= 6; i++) fleet.Advance(t + TimeSpan.FromSeconds(i), new StillPoses());
+
+                Assert.IsTrue(WaitFor(() => fleet["SP-HL-0001"].ConsecutiveSendFailures >= 3, 15));
+                fleet.Pump(DateTimeOffset.UtcNow);
+                Assert.IsTrue(board["SP-HL-0001"].Stalled);
+                StringAssert.Contains("sends failing", board["SP-HL-0001"].StallReason);
+                Assert.IsFalse(board["SP-HL-0001"].Failed);
+                Assert.AreEqual(9, board.PublishingCount);
+
+                link.PublishThrows = null;
+                Assert.IsTrue(WaitFor(() =>
+                {
+                    fleet.Pump(DateTimeOffset.UtcNow);
+                    return board.PublishingCount == 10;
+                }, 15), board.Summary());
+                Assert.AreEqual(0, fleet["SP-HL-0001"].ConsecutiveSendFailures, "an ack resets the run");
+            }
+            finally { fleet.Shutdown(TimeSpan.FromSeconds(10)); }
+        }
+
+        [Test]
+        public void ASendLoopThatFaultsFailsTheDeviceAndIsReleased()
+        {
+            var (board, creds) = Credentialed(Fleet);
+            var factory = new FakeFactory();
+            var fleet = StartedFleet(board, creds, factory);
+            try
+            {
+                ReachPublishing(fleet, board, 10);
+                UnityEngine.TestTools.LogAssert.Expect(UnityEngine.LogType.Error, new System.Text.RegularExpressions.Regex("SP-HL-0003: send loop faulted"));
+                factory.Links["SP-HL-0003"].CanPublishThrows = true;
+                fleet.Advance(DateTimeOffset.UtcNow + TimeSpan.FromSeconds(5), new StillPoses());
+                Assert.IsTrue(WaitFor(() =>
+                {
+                    fleet.Pump();
+                    return board["SP-HL-0003"].Failed;
+                }), board.Summary());
+                StringAssert.Contains("send loop stopped", board["SP-HL-0003"].FailReason);
+                Assert.IsTrue(board["SP-HL-0003"].IsGrey);
+                Assert.IsTrue(WaitFor(() => factory.Links["SP-HL-0003"].Disposed == 1));
+            }
+            finally { fleet.Shutdown(TimeSpan.FromSeconds(10)); }
+        }
+
+        // ---- the first publish can be heard before the start returns
+
+        [Test]
+        public void AFirstPublishHeardBeforeTheStartedEventKeepsTheDevicePublishing()
+        {
+            var (board, creds) = Credentialed(Fleet);
+            var factory = new FakeFactory();
+            var fleet = new DeviceFleet(board, creds, factory);
+            try
+            {
+                fleet.StartAll().GetAwaiter().GetResult();
+                fleet.Inbox.Drain(fleet.Generation, _ => { });      // drop the Started events the starts posted
+                fleet.Inbox.Post(new DeviceEvent(fleet.Generation, "SP-HL-0001", DeviceEventKind.FirstPublish));
+                fleet.Inbox.Post(new DeviceEvent(fleet.Generation, "SP-HL-0001", DeviceEventKind.Started, LinkState.Ready));
+                fleet.Inbox.Post(new DeviceEvent(fleet.Generation, "SP-HL-0001", DeviceEventKind.LinkState, LinkState.Ready));
+                fleet.Pump();
+                Assert.AreEqual(DeviceStage.Publishing, board["SP-HL-0001"].Stage);
+            }
+            finally { fleet.Shutdown(TimeSpan.FromSeconds(10)); }
+        }
+
+        // ---- blind stays blind
+
+        [Test]
+        public void AStartThatFailsBecauseTheBrokerRefusedKeepsSayingBlind()
+        {
+            var (board, creds) = Credentialed(Fleet);
+            var factory = new FakeFactory
+            {
+                Customise = l =>
+                {
+                    if (l.Id != "SP-HL-0002") return;
+                    l.StartThrows = new InvalidOperationException("subscription refused");
+                    l.BlindBeforeStartThrows = true;
+                },
+            };
+            var fleet = StartedFleet(board, creds, factory);
+            try
+            {
+                Assert.IsTrue(WaitFor(() =>
+                {
+                    fleet.Pump();
+                    return board["SP-HL-0002"].Failed;
+                }));
+                fleet.Pump();
+                Assert.AreEqual(DeviceSide.Blind, board["SP-HL-0002"].Side);
+                StringAssert.Contains("blind", board["SP-HL-0002"].FailReason);
+                StringAssert.DoesNotContain("could not start", board["SP-HL-0002"].FailReason);
+            }
+            finally { fleet.Shutdown(TimeSpan.FromSeconds(10)); }
+        }
+
+        // ---- who is grey
+
+        static void AssertNobodyGrey(ReadinessBoard board, HashSet<string> greyed, string why)
+            => Assert.IsEmpty(board.TakeNewlyGrey(greyed), why);
+
+        [Test]
+        public void ADeviceWithNoBindingOrNoCredentialIsGreyOnceAndOnlyOnce()
+        {
+            var (board, creds) = Credentialed(Fleet, missing: "SP-LD-0002");
+            var greyed = new HashSet<string>();
+            var first = board.TakeNewlyGrey(greyed);
+            CollectionAssert.AreEqual(new[] { "SP-LD-0002" }, first.Select(d => d.ExternalId));
+            AssertNobodyGrey(board, greyed, "applied once, never again");
+        }
+
+        [Test]
+        public void ADeviceWhoseSessionWasNeverMadeIsGrey()
+        {
+            var (board, creds) = Credentialed(Fleet);
+            var factory = new FakeFactory { CreateThrowsFor = "SP-HL-0005" };
+            var fleet = StartedFleet(board, creds, factory);
+            try
+            {
+                var grey = board.TakeNewlyGrey(new HashSet<string>());
+                CollectionAssert.AreEqual(new[] { "SP-HL-0005" }, grey.Select(d => d.ExternalId));
+                StringAssert.Contains("could not be created", board["SP-HL-0005"].FailReason);
+            }
+            finally { fleet.Shutdown(TimeSpan.FromSeconds(10)); }
+        }
+
+        [Test]
+        public void ADeviceWithNoCredentialForItsSessionIsGrey()
+        {
+            var (board, _) = Credentialed(Fleet);
+            var fleet = new DeviceFleet(board, new DeviceCredentials(), new FakeFactory());
+            try
+            {
+                fleet.StartAll().GetAwaiter().GetResult();
+                Assert.AreEqual(10, board.TakeNewlyGrey(new HashSet<string>()).Count);
+                StringAssert.Contains("no credential for the session", board["SP-HL-0001"].FailReason);
+            }
+            finally { fleet.Shutdown(TimeSpan.FromSeconds(10)); }
+        }
+
+        [Test]
+        public void ADeviceThatCouldNotStartAndABlindDeviceAreGrey()
+        {
+            var (board, creds) = Credentialed(Fleet);
+            var factory = new FakeFactory { Customise = l => { if (l.Id == "SP-HL-0002") l.StartThrows = new InvalidOperationException("broker said no"); } };
+            var fleet = StartedFleet(board, creds, factory);
+            try
+            {
+                var greyed = new HashSet<string>();
+                CollectionAssert.AreEqual(new[] { "SP-HL-0002" }, board.TakeNewlyGrey(greyed).Select(d => d.ExternalId));
+                ReachPublishing(fleet, board, 9);
+                factory.Links["SP-HL-0004"].Raise(LinkState.Blind);
+                fleet.Pump();
+                CollectionAssert.AreEqual(new[] { "SP-HL-0004" }, board.TakeNewlyGrey(greyed).Select(d => d.ExternalId), "blind is grey and only newly so");
+            }
+            finally { fleet.Shutdown(TimeSpan.FromSeconds(10)); }
+        }
+
+        [Test]
+        public void AReconnectingConnectingOrStalledDeviceIsNotGrey()
+        {
+            var (board, creds) = Credentialed(Fleet);
+            var factory = new FakeFactory();
+            var fleet = new DeviceFleet(board, creds, factory);
+            try
+            {
+                var starting = fleet.StartAll();
+                AssertNobodyGrey(board, new HashSet<string>(), "connecting");
+                starting.GetAwaiter().GetResult();
+                fleet.Pump();
+                ReachPublishing(fleet, board, 10);
+
+                factory.Links["SP-LD-0001"].Up = false;
+                factory.Links["SP-LD-0001"].Raise(LinkState.Reconnecting);
+                fleet.Pump();
+                AssertNobodyGrey(board, new HashSet<string>(), "reconnecting");
+
+                fleet.Pump(board["SP-HL-0001"].LastPublishUtc.Value + TimeSpan.FromSeconds(30));
+                Assert.Greater(board.StalledCount, 0);
+                AssertNobodyGrey(board, new HashSet<string>(), "stalled has a session");
+            }
+            finally { fleet.Shutdown(TimeSpan.FromSeconds(10)); }
         }
 
         // ---- the board

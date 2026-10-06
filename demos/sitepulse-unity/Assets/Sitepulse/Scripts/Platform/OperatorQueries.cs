@@ -37,8 +37,8 @@ namespace DeviceChain.Sitepulse.Platform
         }
 
         /// <summary>Construct on the main thread (the transport captures its context).</summary>
-        public static OperatorQueries Create(RunnerConfig config, TokenBroker broker) =>
-            new OperatorQueries(new GraphQlClient(new UnityWebRequestHttpTransport(), new Uri(config.ApiOrigin), broker.AsProvider()), broker);
+        public static OperatorQueries Create(RunnerConfig config, TokenBroker broker, Area area = Area.DeviceManagement) =>
+            new OperatorQueries(new GraphQlClient(new UnityWebRequestHttpTransport(), new Uri(config.ApiOrigin), broker.AsProvider()), broker, area);
 
         public QueryFn AsQueryFn() => Run;
 
@@ -84,6 +84,13 @@ namespace DeviceChain.Sitepulse.Platform
                 w.WriteString("credentialType", CredentialResolver.AccessToken);
                 w.WriteBoolean("enabled", true);
                 w.WriteEndObject();
+            });
+
+        /// <summary>One string variable per value, named by <paramref name="name"/>.</summary>
+        public static string Strings(System.Collections.Generic.IReadOnlyList<string> values, Func<int, string> name) =>
+            Write(w =>
+            {
+                for (var i = 0; i < values.Count; i++) w.WriteString(name(i), values[i]);
             });
 
         static string Write(Action<Utf8JsonWriter> body)

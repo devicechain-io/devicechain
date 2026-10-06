@@ -200,6 +200,20 @@ namespace DeviceChain.Sitepulse.Simulation
         }
 
         /// <summary>
+        /// Sets where the machine starts from, before it has taken a single step: the one other place a
+        /// level is written, and it cannot be a way to refuel because it refuses once the machine has run.
+        /// </summary>
+        public void Restore(double fuelPct, double engineHours)
+        {
+            if (IsPlant) throw new InvalidOperationException("a plant has no fuel tank");
+            if (simTime > 0) throw new InvalidOperationException("a machine can only be restored before it has run");
+            if (double.IsNaN(fuelPct) || fuelPct < 0 || fuelPct > 100) throw new ArgumentOutOfRangeException(nameof(fuelPct));
+            if (double.IsNaN(engineHours) || engineHours < 0) throw new ArgumentOutOfRangeException(nameof(engineHours));
+            fuel = fuelPct;
+            this.engineHours = engineHours;
+        }
+
+        /// <summary>
         /// Raises the tank to the permit's level (never lowers it). The permit is single use and names
         /// this device; nothing else in the model can raise fuel.
         /// </summary>

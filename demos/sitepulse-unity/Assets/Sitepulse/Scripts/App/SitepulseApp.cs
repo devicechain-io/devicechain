@@ -6,6 +6,7 @@ using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Collections.Generic;
+using DeviceChain.Sdk;
 using DeviceChain.Sitepulse.DevicePlane;
 using DeviceChain.Sitepulse.Platform;
 using DeviceChain.Sitepulse.Simulation;
@@ -46,6 +47,7 @@ namespace DeviceChain.Sitepulse.App
         SitepulseHud hud;
         SitepulseMode mode;
         bool started;
+        bool? previousRunInBackground;
         CancellationTokenSource cts;
 
         // Live
@@ -96,6 +98,9 @@ namespace DeviceChain.Sitepulse.App
                     PlatformLog.Error("Replay is not in this build");
                     break;
                 case SitepulseMode.Live:
+                    // a Live run is a device on the network: it keeps publishing when the window loses focus
+                    previousRunInBackground = Application.runInBackground;
+                    Application.runInBackground = true;
                     HideCards();
                     hud.SetBadge(SitepulseModes.Badge(mode), BadgeTone.Live);
                     UseLiveChoreography();
@@ -208,9 +213,20 @@ namespace DeviceChain.Sitepulse.App
             ApplyGhosts();
             Render();
 
+            // each machine resumes from the platform's last observed fuel and engine hours (device-state),
+            // and from its seed only where the platform has nothing
+            var tokens = new List<string>();
+            foreach (var d in board.Devices)
+                if (!d.Failed && d.Stage == DeviceStage.Credentialed && d.Device.Kind != SceneKind.Plant) tokens.Add(d.Bind.DeviceToken);
+            var lastState = await LastStateQuery.FetchAsync(
+                OperatorQueries.Create(cfg.Value, broker, Area.DeviceState).AsQueryFn(), tokens, ct);
+
+            // the app may have been torn down while the platform was being asked: build nothing then
+            ct.ThrowIfCancellationRequested();
+
             // sessions: one per credentialed device; a device without one is grey and does not publish
             poses = new RigPoseSource(fleet, overlay);
-            plane = new DeviceFleet(board, credentials, new SdkDeviceLinkFactory(cfg.Value, caPem));
+            plane = new DeviceFleet(board, credentials, new SdkDeviceLinkFactory(cfg.Value, caPem), platformState: lastState);
             _ = plane.StartAll();
             Render();
         }
@@ -222,11 +238,19 @@ namespace DeviceChain.Sitepulse.App
             if (plane != null && !stopped)
             {
                 plane.Pump();
-                plane.Advance(DateTimeOffset.UtcNow, poses);
                 ApplyGhosts();
             }
 
             Render();
+        }
+
+        // After every Update has run, so the fleet has already moved the machines for this frame: the pose is
+        // read where the machine is now, over the time the scene itself advanced (the clock that moved it).
+        void LateUpdate()
+        {
+            if (plane == null || stopped || poses == null) return;
+            var scale = fleet != null ? fleet.timeScale : 1f;
+            plane.Advance(DateTimeOffset.UtcNow, poses, Time.deltaTime * scale);
         }
 
         string TokenLine()
@@ -255,23 +279,21 @@ namespace DeviceChain.Sitepulse.App
         /// <summary>
         /// A machine with no session is drawn as a grey placeholder, not as a working one: it did not
         /// bind, or it has no credential, or the broker refused it (blind), or its session could not
-        /// start. Every one of those is a failed device, and a failed device has no host and so
-        /// publishes nothing. Grey is applied once per machine and never lifted.
+        /// start (<see cref="DeviceReadiness.IsGrey"/>). Grey is applied once per machine and never lifted.
         /// </summary>
         void ApplyGhosts()
         {
             if (fleet == null || board == null) return;
-            foreach (var d in board.Devices)
+            foreach (var d in board.TakeNewlyGrey(greyed))
             {
-                if (!d.Failed || !greyed.Add(d.Device.ExternalId)) continue;
-                if (d.Device.Kind == SceneKind.Plant)
+                if (d.Kind == SceneKind.Plant)
                 {
                     GhostTint.Apply(overlay != null ? overlay.plant : null);
                     continue;
                 }
 
                 foreach (var rig in fleet.Machines)
-                    if (rig.name == d.Device.ExternalId) GhostTint.Apply(rig.transform);
+                    if (rig.name == d.ExternalId) GhostTint.Apply(rig.transform);
             }
         }
 
@@ -290,6 +312,7 @@ namespace DeviceChain.Sitepulse.App
         {
             cts?.Cancel();
             Teardown();
+            if (previousRunInBackground.HasValue) Application.runInBackground = previousRunInBackground.Value;
             cts?.Dispose();
             hud?.Destroy();
         }

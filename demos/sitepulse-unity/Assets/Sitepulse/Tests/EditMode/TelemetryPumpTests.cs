@@ -314,6 +314,48 @@ namespace DeviceChain.Sitepulse.Tests
             Assert.AreEqual(n, sink.Acked.Count + ring.Count);
         }
 
+        sealed class BlockingSink : ISampleSink, ISampleObserver
+        {
+            public readonly TaskCompletionSource<bool> Gate = new TaskCompletionSource<bool>();
+            public readonly TaskCompletionSource<bool> Entered = new TaskCompletionSource<bool>();
+            public int Acked;
+            public bool CanPublish => true;
+
+            public Task PublishAsync(Sample sample, CancellationToken cancellationToken)
+            {
+                Entered.TrySetResult(true);
+                return Gate.Task;
+            }
+
+            public void Published(Sample sample, DateTimeOffset at) => Acked++;
+            public void SendFailed(Sample sample, string reason, bool permanent) { }
+        }
+
+        [Test]
+        public void ASampleDroppedWhileInFlightIsNotAlsoCountedPublishedAndTheUnsentHeadStays()
+        {
+            var ring = new OutboundRing();
+            var sink = new BlockingSink();
+            var pump = new SamplePump(ring, sink, () => 1.5, sink);
+            long produced = 0;
+            for (var i = 0; i < OutboundRing.Capacity; i++) ring.Enqueue(Seq(++produced));
+
+            var step = pump.StepAsync(T0 + TimeSpan.FromSeconds(10), CancellationToken.None);
+            Assert.IsTrue(sink.Entered.Task.Wait(TimeSpan.FromSeconds(5)), "sample 1 is in flight");
+
+            ring.Enqueue(Seq(++produced));            // the ring is full: the in-flight sample 1 is dropped for room
+            Assert.AreEqual(1, ring.Dropped);
+
+            sink.Gate.SetResult(true);
+            Assert.AreEqual(PumpOutcome.Sent, step.GetAwaiter().GetResult());
+
+            Assert.IsTrue(ring.TryPeek(out var head));
+            Assert.AreEqual(2, head.Sequence, "the unsent head is still queued: the ack removed the sample it sent, not the head");
+            Assert.AreEqual(OutboundRing.Capacity, ring.Count);
+            Assert.AreEqual(0, sink.Acked, "already counted as dropped, so not published as well");
+            Assert.AreEqual(produced, sink.Acked + ring.Dropped + ring.Count, "produced = published + dropped + queued");
+        }
+
         [Test]
         public void ThePumpStopsAtOnceWhenCancelled()
         {

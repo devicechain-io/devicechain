@@ -31,6 +31,7 @@ namespace DeviceChain.Sitepulse.DevicePlane
         readonly DeviceCredentials credentials;
         readonly IDeviceLinkFactory factory;
         readonly int maxStarts;
+        readonly IReadOnlyDictionary<string, IReadOnlyDictionary<string, double>> platformState;
         readonly DeviceInbox inbox = new DeviceInbox();
         readonly List<DeviceSessionHost> hosts = new List<DeviceSessionHost>();
         readonly Dictionary<string, DeviceSessionHost> byId = new Dictionary<string, DeviceSessionHost>(StringComparer.Ordinal);
@@ -42,8 +43,10 @@ namespace DeviceChain.Sitepulse.DevicePlane
         DateTimeOffset lastAdvance = DateTimeOffset.MinValue;
         Task shutdown;
 
-        public DeviceFleet(ReadinessBoard board, DeviceCredentials credentials, IDeviceLinkFactory factory, int generation = 1, int maxStartsInFlight = MaxStartsInFlight)
+        public DeviceFleet(ReadinessBoard board, DeviceCredentials credentials, IDeviceLinkFactory factory, int generation = 1, int maxStartsInFlight = MaxStartsInFlight,
+            IReadOnlyDictionary<string, IReadOnlyDictionary<string, double>> platformState = null)
         {
+            this.platformState = platformState;
             this.board = board ?? throw new ArgumentNullException(nameof(board));
             this.credentials = credentials ?? throw new ArgumentNullException(nameof(credentials));
             this.factory = factory ?? throw new ArgumentNullException(nameof(factory));
@@ -95,12 +98,26 @@ namespace DeviceChain.Sitepulse.DevicePlane
                     continue;
                 }
 
+                SeedFromPlatform(host, d.Bind.DeviceToken);
                 hosts.Add(host);
                 byId[id] = host;
                 starts.Add(() => host.StartAsync(cts.Token));
             }
 
             return RunStarts(starts, cts.Token);
+        }
+
+        // a machine resumes from what the platform last saw (so a relaunch does not move its fuel), and
+        // falls back to the deterministic seed only for a value the platform does not have
+        void SeedFromPlatform(DeviceSessionHost host, string deviceToken)
+        {
+            var model = host.Simulation.Model;
+            if (model.IsPlant) return;
+            IReadOnlyDictionary<string, double> seen = null;
+            platformState?.TryGetValue(deviceToken, out seen);
+            var chosen = LastState.Choose(model.FuelPct, model.EngineHours, seen);
+            model.Restore(chosen.FuelPct, chosen.EngineHours);
+            PlatformLog.Info($"{host.ExternalId}: fuel {chosen.FuelPct:0.0}% from {chosen.FuelSource}, engine hours {chosen.EngineHours:0.0} from {chosen.EngineHoursSource}");
         }
 
         async Task RunStarts(List<Func<Task>> starts, CancellationToken ct)
@@ -136,12 +153,13 @@ namespace DeviceChain.Sitepulse.DevicePlane
         }
 
         /// <summary>Applies queued session events to the board and copies the counters in. Main thread, once a frame.</summary>
-        public void Pump()
+        public void Pump(DateTimeOffset? now = null)
         {
             if (shutdown != null) return;
             inbox.Drain(Generation, Apply);
             foreach (var h in hosts)
-                board.SetStats(h.ExternalId, h.Published, h.SendErrors, h.Ring.Dropped, h.LastPublishUtc);
+                board.SetStats(h.ExternalId, h.Published, h.SendErrors, h.Ring.Dropped, h.LastPublishUtc, h.ConsecutiveSendFailures);
+            board.Evaluate(now ?? DateTimeOffset.UtcNow);
         }
 
         void Apply(DeviceEvent e)
@@ -179,7 +197,13 @@ namespace DeviceChain.Sitepulse.DevicePlane
                     if (d.Stage < DeviceStage.Ready) board.SetStage(id, DeviceStage.Ready);
                     break;
                 case DeviceEventKind.StartFailed:
+                    // a refusal that already made the device blind keeps saying blind: that is the reason
+                    if (d.Side == DeviceSide.Blind) break;
                     board.FailSession(id, "session could not start · " + Redactor.Redact(e.Text ?? ""));
+                    Retire(host);
+                    break;
+                case DeviceEventKind.PumpFaulted:
+                    board.FailSession(id, "send loop stopped · " + Redactor.Redact(e.Text ?? ""));
                     Retire(host);
                     break;
                 case DeviceEventKind.FirstPublish:
@@ -201,11 +225,15 @@ namespace DeviceChain.Sitepulse.DevicePlane
         /// <summary>
         /// Advances every live device's simulation by the real time since the last call and queues
         /// what is due. A device that failed, is blind, or has no session yet produces nothing to send.
+        /// <paramref name="frameSeconds"/> is the time the scene itself moved by since the last call
+        /// (the clock that moved the machines); with it, speed is the distance the machine travelled over
+        /// the time it took, not over the wall clock, so a frame hitch does not read as a teleport. Without
+        /// it the wall-clock gap is used.
         /// </summary>
-        public void Advance(DateTimeOffset now, IPoseSource poses)
+        public void Advance(DateTimeOffset now, IPoseSource poses, double? frameSeconds = null)
         {
             if (shutdown != null || hosts.Count == 0) return;
-            var elapsed = lastAdvance == DateTimeOffset.MinValue ? 0.0 : (now - lastAdvance).TotalSeconds;
+            var elapsed = frameSeconds ?? (lastAdvance == DateTimeOffset.MinValue ? 0.0 : (now - lastAdvance).TotalSeconds);
             lastAdvance = now;
             if (elapsed < 0) elapsed = 0;
             if (elapsed > 1.0) elapsed = 1.0;
@@ -243,9 +271,10 @@ namespace DeviceChain.Sitepulse.DevicePlane
             {
                 return Task.Run(() => t).Wait(timeout);
             }
-            catch (AggregateException)
+            catch (AggregateException e)
             {
-                return true;
+                PlatformLog.Warn($"device plane shutdown failed: {e.GetBaseException().GetType().Name}: {e.GetBaseException().Message}");
+                return false;
             }
         }
     }

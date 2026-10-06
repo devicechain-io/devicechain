@@ -117,7 +117,10 @@ namespace DeviceChain.Sitepulse.Simulation
             }
 
             failures = 0;
-            ring.Remove(sample.Sequence);
+
+            // A sample the ring dropped for room while it was in flight is already counted as dropped;
+            // counting it published too would make produced = published + dropped + queued false.
+            if (!ring.Remove(sample.Sequence)) return PumpOutcome.Sent;
             observer.Published(sample, now);
             return PumpOutcome.Sent;
         }
