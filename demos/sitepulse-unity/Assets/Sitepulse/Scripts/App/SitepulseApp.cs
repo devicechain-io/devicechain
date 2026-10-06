@@ -70,6 +70,7 @@ namespace DeviceChain.Sitepulse.App
         TaskDirector director;
         RefuelVignette vignette;
         PresenterControls presenter;
+        string focusShown;
         SiteGeometry site;
         Timeline timeline;
         string tasksShown;
@@ -107,7 +108,11 @@ namespace DeviceChain.Sitepulse.App
             cts = new CancellationTokenSource();
             hud = new SitepulseHud(transform);
             // the data layer keeps its cards off the HUD
-            if (overlay != null) overlay.Obstacles = hud.Obstacles;
+            if (overlay != null)
+            {
+                overlay.Obstacles = hud.Obstacles;
+                overlay.Picked += OnPicked;
+            }
 
             appStartedAt = DateTimeOffset.UtcNow;
             var args = Environment.GetCommandLineArgs();
@@ -585,6 +590,16 @@ namespace DeviceChain.Sitepulse.App
             PlatformLog.Info($"task layer · {machines.Count} machines · route network of {director.Graph.NodeCount} nodes in {director.Graph.Components()} piece(s)");
             presenter = new PresenterControls(director, id => plane[id].Simulation.Model,
                 () => runnerConfig == null || broker == null ? null : OperatorQueries.Create(runnerConfig, broker, Area.CommandDelivery).AsQueryFn());
+            // a machine whose own task is still running keeps its card, as one with an unfinished command does
+            if (overlay != null) overlay.TaskRunning = id => director != null && director.TryController(id, out var c) && c.Running != null;
+        }
+
+        /// <summary>A click on the scene: the presenter and the overlay share the one selected machine.</summary>
+        void OnPicked(string id)
+        {
+            if (presenter == null) return;
+            if (!presenter.Pick(id)) presenter.ClearFocus();
+            focusShown = presenter.Focus;
         }
 
         void Update()
@@ -659,6 +674,13 @@ namespace DeviceChain.Sitepulse.App
             }
 
             presenter.FollowLatest(timeline?.LastCommanded);
+            // the keys and a click select the same machine: the overlay shows whichever the presenter holds
+            if (overlay != null && presenter.Focus != focusShown)
+            {
+                focusShown = presenter.Focus;
+                overlay.Selected = focusShown;
+            }
+
             var text = showTimeline ? presenter.PanelText(DateTimeOffset.UtcNow) : null;
             // the panel's text moves with the clock (a message ages out), so it is set when it differs
             if (text != tasksShown)
@@ -779,6 +801,7 @@ namespace DeviceChain.Sitepulse.App
 
         void OnDestroy()
         {
+            if (overlay != null) overlay.Picked -= OnPicked;
             cts?.Cancel();
             Teardown();
             sampleLog?.Dispose();

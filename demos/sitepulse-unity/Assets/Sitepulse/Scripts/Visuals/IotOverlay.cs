@@ -3,8 +3,10 @@
 
 using System;
 using System.Collections.Generic;
+using DeviceChain.Demos;
 using DeviceChain.Sitepulse.Domain;
 using UnityEngine;
+using UnityEngine.InputSystem;
 using UnityEngine.Rendering;
 using UnityEngine.UI;
 
@@ -25,8 +27,14 @@ namespace DeviceChain.Sitepulse.Visuals
     /// source reads what the platform reported. A reading has its source's provenance for life, so a
     /// value of the other kind cannot reach a card. An observed card shows how fresh each value is.
     ///
+    /// Which devices carry a card is decided by <see cref="CardSelection"/>: an active alarm, an active
+    /// command (a finished one lingers a few seconds), and the one selected machine (a click on it, the
+    /// presenter's keys, or a rendered shot's focus); at most four. Where a card sits is calm: it keeps its
+    /// slot until the slot has been unusable for half a second, glides when it must move (<see cref="CardSlot"/>)
+    /// and fades in and out, while its leader's pin still tracks the machine every frame.
+    ///
     /// Layout is done every frame in screen space: each target's on-screen bounds are taken from
-    /// its renderers, its leader lands on the top of those bounds, and its card is placed where it
+    /// its renderers, its leader lands on the top of those bounds, and a card is given a slot where it
     /// covers no machine, no other card, no other leader and as little of the cut as it can. A
     /// machine much smaller on screen than the largest one in view gets no card, since its leader
     /// would point at a speck; the zone's name never sits over a card's target; and no two
@@ -46,8 +54,6 @@ namespace DeviceChain.Sitepulse.Visuals
         public Transform plant;
         [Tooltip("Show the overlay.")]
         public bool show = true;
-        [Tooltip("The machines that may carry a card, in order of preference.")]
-        public string[] tagged = { "SP-HL-0006", "SP-LD-0003", "SP-HL-0003", "SP-HL-0001" };
         [Tooltip("At most this many cards at once.")]
         [Range(1, 6)] public int maxCards = 4;
         [Tooltip("The machine with an active alarm, and the alarm's key. A low-fuel alarm brings the " +
@@ -56,7 +62,7 @@ namespace DeviceChain.Sitepulse.Visuals
         public string alarmKey = AlarmKeys.LowFuel;
         [Tooltip("The plant device's id.")]
         public string plantId = "SP-PL-0001";
-        [Tooltip("A machine gets a card only if it is at least this share of the height of the largest machine in view.")]
+        [Tooltip("A machine gets a card only if it is at least this share of the height of the largest machine in view (the selected one is exempt); once shown it keeps it down to 80% of this.")]
         [Range(0f, 1f)] public float minTargetShare = 0.35f;
         [Tooltip("Card size relative to a 1080-pixel-high frame.")]
         [Range(0.5f, 2f)] public float cardScale = 1f;
@@ -101,19 +107,34 @@ namespace DeviceChain.Sitepulse.Visuals
 
             // the card, its leader and the pin where the leader lands
             public RectTransform card, panel, edgeRect, leader, pin, dot, alarmBar;
+            public CanvasGroup[] groups;              // the card's, its leader's and its pin's: one fade
             public Image edge, leaderImage;
             public RawImage dotImage, pinImage;
             public Text title, kind, tag, alarmText;
             public readonly Row[] rows = new Row[MaxRows];
             public float height;
 
+            // calm: where the card sits and how it fades
+            public readonly CardSlot slot = new CardSlot();
+
             // this frame
             public Rect screen;
-            public Vector2 anchor;
-            public bool visible;
+            public Vector2 anchor;                    // the last one found; kept while the target is out of frame, so a fading card has somewhere to be
+            public bool visible, wanted;
         }
 
         readonly List<Target> targets = new List<Target>();
+        readonly Dictionary<string, Target> byId = new Dictionary<string, Target>(StringComparer.Ordinal);
+        readonly CardSelection policy = new CardSelection();
+        readonly List<CardInput> inputs = new List<CardInput>();
+        readonly List<string> chosenIds = new List<string>();
+        readonly List<string> loggedIds = new List<string>();
+        readonly List<Target> fading = new List<Target>();
+        readonly List<Target> needSolve = new List<Target>();
+        readonly List<(string id, Bounds bounds)> pickables = new List<(string, Bounds)>();
+        readonly SolveGate gate = new SolveGate();
+        float uiClock;
+        int lastFrame = -1;
         readonly List<Rect> blockers = new List<Rect>();
         readonly List<Rect> placed = new List<Rect>();
         readonly List<Target> chosen = new List<Target>();
@@ -170,7 +191,19 @@ namespace DeviceChain.Sitepulse.Visuals
             }
         }
 
-        /// <summary>The readings the cards show, by device id.</summary>
+        /// <summary>The one selected device (a machine's id, or the plant's), or null. Its card shows whatever its state.</summary>
+        public string Selected { get; set; }
+
+        /// <summary>Raised when a click on the scene picks a device (its id) or empty ground (null). The selection is already set; the composition root mirrors it.</summary>
+        public event Action<string> Picked;
+
+        /// <summary>Whether a device's own task is still running (its card shows while it is, as it does for a command the platform has not finished). Null: never.</summary>
+        public Func<string, bool> TaskRunning;
+
+        /// <summary>The devices that carry a card now, best first.</summary>
+        public IReadOnlyList<string> CardIds => chosenIds;
+
+        /// <summary>The readings of every device the overlay knows (a card is drawn for those the policy chooses), by device id.</summary>
         public IEnumerable<DeviceReading> Readings
         {
             get
@@ -216,6 +249,10 @@ namespace DeviceChain.Sitepulse.Visuals
         void Clear()
         {
             targets.Clear();
+            byId.Clear();
+            policy.Reset();
+            chosenIds.Clear();
+            loggedIds.Clear();
             alarmTarget = null;
             if (root != null) DestroyImmediate(root);
             root = null;
@@ -247,30 +284,20 @@ namespace DeviceChain.Sitepulse.Visuals
             canvasRect = (RectTransform)cgo.transform;
             canvasRect.pivot = new Vector2(0.5f, 0.5f);
 
-            foreach (var id in tagged)
+            foreach (var rig in fleet.Machines)
             {
-                MachineRig rig = null;
-                foreach (var m in fleet.Machines)
-                    if (m.name == id) rig = m;
-                if (rig == null) continue;
-                var reading = new DeviceReading(id, DeviceReading.Profile.Equipment, source.Provenance);
-                var t = new Target
+                var id = rig.name;
+                var lod0 = Lod0(rig.gameObject);
+                AddTarget(new Target
                 {
-                    reading = reading, rig = rig, renderers = Lod0(rig.gameObject), cab = CabOf(rig, Lod0(rig.gameObject)),
+                    reading = new DeviceReading(id, DeviceReading.Profile.Equipment, source.Provenance), rig = rig, renderers = lod0, cab = CabOf(rig, lod0),
                     kindLabel = rig.Kind == MachineKind.Hauler ? "Haul truck" : rig.Kind == MachineKind.Loader ? "Wheel loader" : "Dozer",
-                };
-                MakeCard(t);
-                targets.Add(t);
+                });
             }
-            machineRenderers.Clear();
-            foreach (var m in fleet.Machines) machineRenderers.Add(Lod0(m.gameObject));
+
             hopper = plant != null ? FleetRig.Find(plant, "Hopper") : null;
             if (hopper != null)
-            {
-                var t = new Target { reading = new DeviceReading(plantId, DeviceReading.Profile.Plant, source.Provenance), kindLabel = "Primary crusher" };
-                MakeCard(t);
-                targets.Add(t);
-            }
+                AddTarget(new Target { reading = new DeviceReading(plantId, DeviceReading.Profile.Plant, source.Provenance), kindLabel = "Primary crusher" });
 
             fence = Parse(features.text, geofenceName, out var zone);
             if (fence.Count > 2 && lineMaterial != null)
@@ -317,6 +344,12 @@ namespace DeviceChain.Sitepulse.Visuals
             }
             UpdateReadings();
             Refresh(Camera.main);
+        }
+
+        void AddTarget(Target t)
+        {
+            targets.Add(t);
+            byId[t.reading.DeviceId] = t;
         }
 
         /// <summary>The renderers of a machine's cab, from its LOD0 renderers.</summary>
@@ -391,6 +424,16 @@ namespace DeviceChain.Sitepulse.Visuals
             t.pin.anchorMin = t.pin.anchorMax = Vector2.zero;
             t.pin.pivot = new Vector2(0.5f, 0.5f);
             t.pin.sizeDelta = new Vector2(11f, 11f);
+            t.groups = new[] { Group(t.card), Group(t.leader), Group(t.pin) };
+            foreach (var g in t.groups) g.alpha = 0f;
+        }
+
+        static CanvasGroup Group(RectTransform r)
+        {
+            var g = r.gameObject.AddComponent<CanvasGroup>();
+            g.interactable = false;
+            g.blocksRaycasts = false;
+            return g;
         }
 
         static void Place(RectTransform r, Vector2 min, Vector2 size)
@@ -497,7 +540,34 @@ namespace DeviceChain.Sitepulse.Visuals
 
         void Update()
         {
-            if (Application.isPlaying) Step(Time.deltaTime, false);
+            if (!Application.isPlaying) return;
+            Step(Time.deltaTime, false);
+            PollPointer();
+        }
+
+        /// <summary>A click on a machine (or the crusher) selects it; a click on nothing clears the selection.</summary>
+        void PollPointer()
+        {
+            if (root == null || !show) return;
+            var pointer = Pointer.current;
+            if (pointer == null || !pointer.press.wasPressedThisFrame) return;
+            var cam = Camera.main;
+            if (cam == null) return;
+            pickables.Clear();
+            foreach (var t in targets)
+                pickables.Add((t.reading.DeviceId, t.rig != null ? Bounds(t.renderers) : PlantBounds()));
+            var ray = cam.ScreenPointToRay(pointer.position.ReadValue());
+            var id = CardPicking.Pick(ray, pickables, out float d);
+            // the ground in front of a machine hides it from a click as it does from the eye
+            if (id != null && GroundBefore(ray, d)) id = null;
+            Selected = id;
+            Picked?.Invoke(id);
+        }
+
+        bool GroundBefore(Ray ray, float distance)
+        {
+            var col = terrain != null && terrain.Terrain != null ? terrain.Terrain.GetComponent<TerrainCollider>() : null;
+            return col != null && col.Raycast(ray, out var hit, distance) && hit.distance < distance - 1f;
         }
 
         void LateUpdate()
@@ -539,8 +609,6 @@ namespace DeviceChain.Sitepulse.Visuals
                 src.Fill(new ReadingSubject(t.reading.DeviceId), t.reading, now);
                 if (t.rig != null && t.reading.HasAlarm) alarmTarget = t;
             }
-
-            foreach (var t in targets) Fill(t, now, src.StreamLive);
         }
 
         static Color InkOf(RowTone tone) => tone == RowTone.Dim ? Dim : tone == RowTone.Ink ? Ink : tone == RowTone.Warn ? Warn : Grey;
@@ -636,8 +704,8 @@ namespace DeviceChain.Sitepulse.Visuals
 
         // ------------------------------------------------------------------ layout
         /// <summary>
-        /// Place the canvas in front of <paramref name="cam"/>, find each target on screen, and
-        /// lay out the cards and leaders for this frame. Call before rendering a still.
+        /// Place the canvas in front of <paramref name="cam"/>, find each target on screen, choose which
+        /// carry a card, and keep or move their slots for this frame. Call before rendering a still.
         /// </summary>
         public void Refresh(Camera cam)
         {
@@ -646,21 +714,23 @@ namespace DeviceChain.Sitepulse.Visuals
             if (!show) return;
             float aspect = cam.aspect > 0f ? cam.aspect : 16f / 9f;            // the projection's, which places the targets
             float refW = RefH * aspect;
+            float dt = FrameDelta();
+            uiClock += dt;
+            bool snap = !Application.isPlaying;                                // an editor still shows its cards at once
+            bool reduced = DemoIntro.PreferReducedMotion;
 
             canvasRect.sizeDelta = new Vector2(refW, RefH);
             PlaceCanvas(cam);
 
             // every machine on screen is something a card must not cover
             blockers.Clear();
-            foreach (var rs in machineRenderers)
-                if (ScreenRect(cam, Bounds(rs), refW, out var r)) blockers.Add(Inflate(r, 4f));
-            AddObstacles(Obstacles, refW, obstacleScratch, blockers);
-
+            float largest = 0f;
             foreach (var t in targets)
             {
                 t.visible = false;
                 var b = t.rig != null ? Bounds(t.renderers) : PlantBounds();
                 if (!ScreenRect(cam, b, refW, out t.screen)) continue;
+                if (t.rig != null) blockers.Add(Inflate(t.screen, 4f));
                 // the leader lands on the machine itself, on its cab's roof (the top of the cab's
                 // bounds), not on the top of the whole machine's box, which may be in the air
                 var cb = t.cab != null && t.cab.Length > 0 ? Bounds(t.cab) : b;
@@ -672,18 +742,44 @@ namespace DeviceChain.Sitepulse.Visuals
                             && t.anchor.x > Margin && t.anchor.x < refW - Margin && t.anchor.y > Margin && t.anchor.y < RefH - Margin
                             && !Hidden(cam, top);
                 if (t.rig == null) blockers.Add(Inflate(t.screen, 2f));
+                else if (t.visible) largest = Mathf.Max(largest, t.screen.height);
             }
 
-            // the cards: the alarm first, then the plant, then by how large the machine is on
-            // screen; a machine far smaller than the largest in view is a speck, and gets none
-            float largest = 0f;
+            AddObstacles(Obstacles, refW, obstacleScratch, blockers);
+
+            // the cards: alarms, commands and the selected machine, at most a few, none for a speck
+            inputs.Clear();
             foreach (var t in targets)
-                if (t.visible && t.rig != null) largest = Mathf.Max(largest, t.screen.height);
+            {
+                var r = t.reading;
+                int rank = r.HasAlarm ? CardSelection.AlarmRank(r.FirstAlarm.Severity) : 0;
+                bool inFlight = (r.CommandStatus.HasValue && !r.CommandStatus.Value.IsTerminal) || (TaskRunning != null && TaskRunning(r.DeviceId));
+                float share = t.rig == null || largest <= 0f ? 1f : t.screen.height / largest;
+                inputs.Add(new CardInput(r.DeviceId, t.visible, share, rank, inFlight));
+            }
+
+            policy.MaxCards = maxCards;
+            policy.MinShare = minTargetShare;
+            policy.Choose(uiClock, inputs, Selected, chosenIds);
+            LogChosen();
             chosen.Clear();
+            foreach (var t in targets) t.wanted = false;
+            foreach (var id in chosenIds)
+                if (byId.TryGetValue(id, out var t)) chosen.Add(t);
+            fading.Clear();
             foreach (var t in targets)
-                if (t.visible && (t.rig == null || t.screen.height >= minTargetShare * largest)) chosen.Add(t);
-            chosen.Sort(byPriority ??= (a, b) => Priority(b).CompareTo(Priority(a)));
-            if (chosen.Count > maxCards) chosen.RemoveRange(maxCards, chosen.Count - maxCards);
+                if (t.card != null && t.slot.HasSlot && !chosen.Contains(t)) fading.Add(t);
+
+            var now = Clock != null ? Clock() : DateTimeOffset.UtcNow;
+            bool live = source.StreamLive;
+            foreach (var t in chosen)
+            {
+                if (t.card == null) MakeCard(t);
+                Fill(t, now, live);
+            }
+
+            foreach (var t in fading) Fill(t, now, live);
+
             // nothing is laid over a target that has a card: not the zone's name, not another card
             targetRects.Clear();
             foreach (var t in chosen) targetRects.Add(Inflate(t.screen, 6f));
@@ -734,13 +830,9 @@ namespace DeviceChain.Sitepulse.Visuals
                 }
             }
 
+            LayOut(dt, refW, reduced);
             foreach (var t in targets)
-            {
-                bool on = chosen.Contains(t) && PlaceCard(t, refW);
-                t.card.gameObject.SetActive(on);
-                t.leader.gameObject.SetActive(on);
-                t.pin.gameObject.SetActive(on);
-            }
+                if (t.card != null) Draw(t, dt, reduced, snap);
 
             if (ring != null)
             {
@@ -757,6 +849,129 @@ namespace DeviceChain.Sitepulse.Visuals
             }
         }
 
+        /// <summary>How long this frame took, once per frame however many times the overlay is refreshed in it. Zero outside play, where nothing animates.</summary>
+        float FrameDelta()
+        {
+            if (!Application.isPlaying || Time.frameCount == lastFrame) return 0f;
+            lastFrame = Time.frameCount;
+            float d = Time.timeScale > 0f ? Time.deltaTime : Time.unscaledDeltaTime;
+            return Mathf.Clamp(d, 0f, 0.1f);
+        }
+
+        /// <summary>Says which cards show when that changes, never every frame.</summary>
+        void LogChosen()
+        {
+            bool same = loggedIds.Count == chosenIds.Count;
+            for (int i = 0; same && i < chosenIds.Count; i++) same = loggedIds[i] == chosenIds[i];
+            if (same) return;
+            loggedIds.Clear();
+            loggedIds.AddRange(chosenIds);
+            if (Application.isPlaying)
+                Debug.Log("[sitepulse] cards: " + (chosenIds.Count == 0 ? "none" : string.Join(", ", chosenIds)) + (Selected != null ? " · selected " + Selected : ""));
+        }
+
+        /// <summary>The slot a card has been given, as a rectangle and where its leader bends, from where its target is now.</summary>
+        void SlotOf(Target t, out Rect rect, out Vector2 elbow)
+        {
+            rect = new Rect(t.anchor + t.slot.Offset, new Vector2(CardW, t.height) * cardScale);
+            elbow = t.anchor + t.slot.ElbowOffset;
+        }
+
+        void Commit(Rect r, Vector2 anchor, Vector2 elbow)
+        {
+            placed.Add(Inflate(r, 8f));
+            leaders.Add((anchor, elbow));
+        }
+
+        /// <summary>
+        /// Keeps the slots cards already have, and gives a new one only to a card with none or whose slot has been unusable for
+        /// half a second. Cards that must move are re-laid at most twice a second; a card with no slot at all is placed at once.
+        /// </summary>
+        void LayOut(float dt, float refW, bool reduced)
+        {
+            gate.Tick(dt);
+            bool solveNow = gate.TryTake();
+            // a card on its way out holds its place while it fades
+            foreach (var t in fading)
+            {
+                SlotOf(t, out var fr, out var fe);
+                Commit(fr, t.anchor, fe);
+            }
+
+            needSolve.Clear();
+            foreach (var t in chosen)
+            {
+                t.wanted = true;
+                if (!t.slot.HasSlot) { needSolve.Add(t); continue; }
+                SlotOf(t, out var r, out var e);
+                if (t.slot.Observe(SlotValid(t, r, e, refW), dt)) needSolve.Add(t);
+                else Commit(r, t.anchor, e);
+            }
+
+            foreach (var t in needSolve)
+            {
+                bool had = t.slot.HasSlot;
+                if (had && !solveNow)
+                {
+                    SlotOf(t, out var kept, out var keptElbow);
+                    Commit(kept, t.anchor, keptElbow);
+                    continue;
+                }
+
+                if (FindSlot(t, refW, out var r, out var e))
+                {
+                    t.slot.Assign(r.position - t.anchor, e - t.anchor, reduced);
+                    Commit(r, t.anchor, e);
+                }
+                else if (had)
+                {
+                    SlotOf(t, out var kept, out var keptElbow);
+                    Commit(kept, t.anchor, keptElbow);
+                }
+                else t.wanted = false;
+            }
+        }
+
+        /// <summary>Moves, fades and draws a card: where its slot is now (gliding), its leader from the pin that tracks the machine.</summary>
+        void Draw(Target t, float dt, bool reduced, bool snap)
+        {
+            bool wanted = t.wanted;
+            if (!wanted && !t.slot.HasSlot)
+            {
+                SetShown(t, false);
+                return;
+            }
+
+            t.slot.Step(dt, wanted, reduced, snap);
+            if (t.slot.Gone(wanted))
+            {
+                t.slot.Release();
+                SetShown(t, false);
+                return;
+            }
+
+            SetShown(t, true);
+            // the pin is on the machine this frame; the card and the leader's bend are where the slot (gliding) puts them from it
+            var pos = t.anchor + t.slot.Display;
+            var elbow = t.anchor + t.slot.DisplayElbow;
+            t.card.anchoredPosition = pos;
+            t.card.localScale = Vector3.one * cardScale;
+            var seg = elbow - t.anchor;
+            t.leader.anchoredPosition = t.anchor;
+            t.leader.sizeDelta = new Vector2(seg.magnitude, 2f * Mathf.Max(1f, cardScale));
+            t.leader.localRotation = Quaternion.Euler(0f, 0f, Mathf.Atan2(seg.y, seg.x) * Mathf.Rad2Deg);
+            t.pin.anchoredPosition = t.anchor;
+            foreach (var g in t.groups) g.alpha = t.slot.Alpha;
+        }
+
+        static void SetShown(Target t, bool on)
+        {
+            if (t.card.gameObject.activeSelf == on) return;
+            t.card.gameObject.SetActive(on);
+            t.leader.gameObject.SetActive(on);
+            t.pin.gameObject.SetActive(on);
+        }
+
         /// <summary>Whether the terrain stands between the camera and a point.</summary>
         bool Hidden(Camera cam, Vector3 p)
         {
@@ -768,28 +983,26 @@ namespace DeviceChain.Sitepulse.Visuals
             return col.Raycast(new Ray(from, to / d), out _, d - 0.5f);
         }
 
-        Comparison<Target> byPriority;
-
-        float Priority(Target t)
-        {
-            if (t.reading.HasAlarm) return 1e6f;
-            if (t.rig == null) return 1e5f;
-            if (t.rig.name == IllustrativeReadingSource.PlantFeeder) return 1e4f + t.screen.height;
-            return t.screen.height;
-        }
-
         static readonly float[] Angles = { 90f, 65f, 115f, 40f, 140f, 15f, 165f, -15f, -165f, -50f, -130f };
         static readonly float[] Lengths = { 55f, 95f, 140f, 190f, 250f, 320f, 400f };
 
-        /// <summary>Find the cheapest place for a card round its anchor: inside the frame, over no
-        /// machine and no other card, its leader crossing no card, covering as little of the cut
-        /// as it can. False when there is none.</summary>
-        bool PlaceCard(Target t, float refW)
+        /// <summary>Whether a card at <paramref name="r"/> with its leader bending at <paramref name="e"/> is inside the frame, over no
+        /// machine and no other card, its leader crossing no card and clear of the other leaders.</summary>
+        bool SlotValid(Target t, Rect r, Vector2 e, float refW)
+        {
+            if (r.xMin < Margin || r.yMin < Margin || r.xMax > refW - Margin || r.yMax > RefH - Margin) return false;
+            if (Hits(r, placed) || Hits(r, blockers) || Hits(r, targetRects)) return false;
+            return !(LeaderHits(t.anchor, e, placed) || CoversLeader(r) || LeaderClash(t.anchor, e));
+        }
+
+        /// <summary>Find the cheapest place for a card round its anchor: a valid slot, covering as little of the cut as it can.
+        /// False when there is none.</summary>
+        bool FindSlot(Target t, float refW, out Rect bestRect, out Vector2 bestElbow)
         {
             var size = new Vector2(CardW, t.height) * cardScale;
             float best = float.PositiveInfinity;
-            Rect bestRect = default;
-            Vector2 bestElbow = default;
+            bestRect = default;
+            bestElbow = default;
             foreach (float ang in Angles)
             {
                 var dir = new Vector2(Mathf.Cos(ang * Mathf.Deg2Rad), Mathf.Sin(ang * Mathf.Deg2Rad));
@@ -800,11 +1013,9 @@ namespace DeviceChain.Sitepulse.Visuals
                     float x = Mathf.Abs(dir.x) < 0.2f ? e.x - size.x * 0.18f : dir.x > 0f ? e.x : e.x - size.x;
                     float y = dir.y > 0.35f ? e.y : dir.y < -0.35f ? e.y - size.y : e.y - size.y / 2f;
                     var r = new Rect(x, y, size.x, size.y);
-                    if (r.xMin < Margin || r.yMin < Margin || r.xMax > refW - Margin || r.yMax > RefH - Margin) continue;
                     float cost = len + Mathf.Abs(ang - 90f) * 0.6f;
                     if (cost >= best) continue;
-                    if (Hits(r, placed) || Hits(r, blockers) || Hits(r, targetRects)) continue;
-                    if (LeaderHits(t.anchor, e, placed) || CoversLeader(r) || LeaderClash(t.anchor, e)) continue;
+                    if (!SlotValid(t, r, e, refW)) continue;
                     cost += CutCover(r) * 900f;
                     if (cost < best)
                     {
@@ -814,17 +1025,8 @@ namespace DeviceChain.Sitepulse.Visuals
                     }
                 }
             }
-            if (float.IsPositiveInfinity(best)) return false;
-            placed.Add(Inflate(bestRect, 8f));
-            leaders.Add((t.anchor, bestElbow));
-            t.card.anchoredPosition = bestRect.position;
-            t.card.localScale = Vector3.one * cardScale;
-            var seg = bestElbow - t.anchor;
-            t.leader.anchoredPosition = t.anchor;
-            t.leader.sizeDelta = new Vector2(seg.magnitude, 2f * Mathf.Max(1f, cardScale));
-            t.leader.localRotation = Quaternion.Euler(0f, 0f, Mathf.Atan2(seg.y, seg.x) * Mathf.Rad2Deg);
-            t.pin.anchoredPosition = t.anchor;
-            return true;
+
+            return !float.IsPositiveInfinity(best);
         }
 
         static bool Hits(Rect r, List<Rect> list)
@@ -936,8 +1138,6 @@ namespace DeviceChain.Sitepulse.Visuals
             }
             return b;
         }
-
-        readonly List<Renderer[]> machineRenderers = new List<Renderer[]>();
 
         /// <summary>The primary crusher: its hopper and the crusher under it, not the whole plant.</summary>
         Bounds PlantBounds()
