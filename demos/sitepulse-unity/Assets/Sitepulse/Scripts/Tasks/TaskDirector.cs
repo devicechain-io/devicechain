@@ -22,6 +22,17 @@ namespace DeviceChain.Sitepulse.Tasks
     {
         public const double YieldDistance = 8.0, LaneHalfWidth = 3.0, BayClearRadius = 5.0;
 
+        /// <summary>A machine slower than this (m/s) is standing.</summary>
+        public const double StandingSpeed = 0.2;
+
+        /// <summary>How long a machine waits behind one that stands in its lane before it carries on past it, in simulation seconds.</summary>
+        public const double StandingYieldSeconds = 10.0;
+
+        readonly Dictionary<string, (double X, double Z)> lastSeen = new Dictionary<string, (double X, double Z)>(StringComparer.Ordinal);
+        readonly Dictionary<string, double> speeds = new Dictionary<string, double>(StringComparer.Ordinal);
+        readonly Dictionary<string, double> waitingSince = new Dictionary<string, double>(StringComparer.Ordinal);
+        double now;
+
         readonly Dictionary<string, MachineController> controllers = new Dictionary<string, MachineController>(StringComparer.Ordinal);
         readonly Dictionary<string, IMachineBody> bodies = new Dictionary<string, IMachineBody>(StringComparer.Ordinal);
         readonly List<string> order = new List<string>();
@@ -79,6 +90,17 @@ namespace DeviceChain.Sitepulse.Tasks
         {
             if (reset) return;
 
+            // how fast everybody has been going since the last step, wherever the motion came from (a track or a drive)
+            foreach (var id in order)
+            {
+                var b = bodies[id];
+                if (simDt > 0 && lastSeen.TryGetValue(id, out var was))
+                    speeds[id] = Math.Sqrt((b.X - was.X) * (b.X - was.X) + (b.Z - was.Z) * (b.Z - was.Z)) / simDt;
+                lastSeen[id] = (b.X, b.Z);
+            }
+
+            now += simDt;
+
             // a bay held by a machine that is no longer in the middle of refuelling is not held
             var holder = bay.Holder;
             if (holder != null && (!controllers.TryGetValue(holder, out var h) || !h.WantsBay)) bay.Release(holder);
@@ -112,10 +134,18 @@ namespace DeviceChain.Sitepulse.Tasks
 
         // ---------------------------------------------------------------- the world, as the controllers see it
 
+        /// <summary>
+        /// Another machine's footprint is within <see cref="YieldDistance"/> ahead in the lane. A machine that is moving is
+        /// always yielded to. One that is standing (parked, serviced, stalled, waiting its turn) is yielded to for at most
+        /// <see cref="StandingYieldSeconds"/>: after that the machine behind carries on, so nothing waits forever
+        /// behind a machine that is not going anywhere. (A machine nothing has been seen to do yet counts as moving.)
+        /// </summary>
         public bool Blocked(string id, double x, double z, double headingDegrees)
         {
             var h = headingDegrees * Math.PI / 180.0;
             double fx = Math.Sin(h), fz = Math.Cos(h);
+            var moving = false;
+            var standing = false;
             foreach (var kv in bodies)
             {
                 if (kv.Key == id) continue;
@@ -124,10 +154,30 @@ namespace DeviceChain.Sitepulse.Tasks
                 var ahead = dx * fx + dz * fz;
                 if (ahead <= 0 || ahead > YieldDistance) continue;
                 var across = Math.Abs(dx * fz - dz * fx);
-                if (across < LaneHalfWidth) return true;
+                if (across >= LaneHalfWidth) continue;
+                if (!speeds.TryGetValue(kv.Key, out var v) || v >= StandingSpeed) moving = true;
+                else standing = true;
             }
 
-            return false;
+            if (moving)
+            {
+                waitingSince.Remove(id);
+                return true;
+            }
+
+            if (!standing)
+            {
+                waitingSince.Remove(id);
+                return false;
+            }
+
+            if (!waitingSince.TryGetValue(id, out var since))
+            {
+                waitingSince[id] = now;
+                return true;
+            }
+
+            return now - since < StandingYieldSeconds;
         }
 
         public bool BayClear(string id)

@@ -230,19 +230,36 @@ namespace DeviceChain.Sitepulse.Tasks
             }
 
             var before = slot;
-            var claimed = parking.Claim(id, zone, body.X, body.Z, (x, z) => world.Occupied(id, x, z), ParkingLot.Margin(body.Kind));
-            if (claimed == null)
+            // nearest the site's parking spot first, when the zone holds one; otherwise nearest the machine
+            var gateX = body.X;
+            var gateZ = body.Z;
+            if (site.Spots.TryGetValue(SiteGeometry.ParkingSpot, out var park) && zone.Contains(park.X, park.Z))
             {
-                Refuse(request, "no free parking slot in " + request.Area);
-                return;
+                gateX = park.X;
+                gateZ = park.Z;
             }
 
-            var route = graph.Plan(body.X, body.Z, claimed.Value.X, claimed.Value.Z);
-            if (route == null)
+            // a slot is offered only when a machine can drive to it with its whole footprint clear of everything standing on the site
+            var footprint = ParkingLot.FootprintRadius(body.Kind);
+            var unreachable = new System.Collections.Generic.List<(double X, double Z)>();
+            ParkingSlot? claimed = null;
+            Route route = null;
+            while (true)
+            {
+                claimed = parking.Claim(id, zone, gateX, gateZ,
+                    (x, z) => world.Occupied(id, x, z) || unreachable.Exists(u => Math.Abs(u.X - x) < 1e-6 && Math.Abs(u.Z - z) < 1e-6),
+                    ParkingLot.Margin(body.Kind), site.Obstacles, footprint);
+                if (claimed == null) break;
+                route = graph.Plan(body.X, body.Z, claimed.Value.X, claimed.Value.Z, site.Obstacles, ParkingLot.TravelRadius(body.Kind));
+                if (route != null) break;
+                unreachable.Add((claimed.Value.X, claimed.Value.Z));
+            }
+
+            if (claimed == null)
             {
                 parking.Release(id);
                 if (before.HasValue) parking.Hold(id, before.Value);
-                Refuse(request, "no route to " + request.Area);
+                Refuse(request, unreachable.Count > 0 ? "no route to " + request.Area : "no free parking slot in " + request.Area);
                 return;
             }
 

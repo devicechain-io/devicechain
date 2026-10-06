@@ -70,6 +70,9 @@ namespace DeviceChain.Sitepulse.Tasks
         public double StartX => x[0];
         public double StartZ => z[0];
 
+        /// <summary>How fast leg <paramref name="leg"/> may be taken, as a share of cruise: a road's own factor, or <see cref="SpeedModel.OffRoadFactor"/> off one.</summary>
+        public double LegFactor(int leg) => factor[leg];
+
         public IReadOnlyList<double> Xs => x;
         public IReadOnlyList<double> Zs => z;
 
@@ -195,6 +198,8 @@ namespace DeviceChain.Sitepulse.Tasks
         readonly List<List<Edge>> adjacency = new List<List<Edge>>();
         readonly Dictionary<string, int> spotNodes = new Dictionary<string, int>(StringComparer.Ordinal);
 
+        int roadNodeCount;
+
         public int NodeCount => nx.Count;
 
         RouteGraph() { }
@@ -261,6 +266,7 @@ namespace DeviceChain.Sitepulse.Tasks
 
             // spots: the queue joins the network, the bay hangs off the queue and the road
             var roadCount = g.NodeCount;
+            g.roadNodeCount = roadCount;
             foreach (var kv in site.Spots)
             {
                 if (kv.Key == BaySpot) continue;
@@ -394,9 +400,119 @@ namespace DeviceChain.Sitepulse.Tasks
             return best;
         }
 
+        /// <summary>
+        /// As <see cref="Plan(double,double,double,double)"/>, but every off-road leg (the machine to the road, the road to
+        /// the goal) keeps a machine sweeping a circle of <paramref name="footprint"/> metres clear of every obstacle by
+        /// <see cref="ParkingLot.TravelClearance"/>, going around them when the straight line does not. An obstacle an endpoint
+        /// already stands nearer than that is kept no nearer than the end is (a machine in a bay can drive out of it). Null when no clear approach
+        /// exists. The roads themselves are taken as built.
+        /// </summary>
+        public Route Plan(double sx, double sz, double gx, double gz, IReadOnlyList<Obstacle> avoid, double footprint)
+        {
+            if (avoid == null || avoid.Count == 0) return Plan(sx, sz, gx, gz);
+            if (nx.Count == 0) return null;
+            var clearance = footprint + ParkingLot.TravelClearance;
+            // the joins across a pad and to a spot are open ground too: a machine is not sent down one that runs through something
+            var joins = new Dictionary<long, bool>();
+            Func<int, int, bool> usable = (a, b) =>
+            {
+                var edge = adjacency[a].Find(e => e.To == b);
+                if (Math.Abs(edge.Factor - SpeedModel.OffRoadFactor) > 1e-9 && Math.Abs(edge.Factor - SpeedModel.BayApproachFactor) > 1e-9) return true;
+                var key = a < b ? (long)a * nx.Count + b : (long)b * nx.Count + a;
+                if (!joins.TryGetValue(key, out var ok))
+                    joins[key] = ok = Detour.StraightClear(nx[a], nz[a], nx[b], nz[b], avoid, clearance);
+                return ok;
+            };
+            var starts = ClearApproaches(sx, sz, avoid, clearance);
+            var goals = ClearApproaches(gx, gz, avoid, clearance);
+            Route best = null;
+            var bestCost = double.MaxValue;
+            foreach (var s in starts)
+            {
+                var prev = new int[nx.Count];
+                var dist = Dijkstra(s.Node, prev, usable);
+                foreach (var g in goals)
+                {
+                    if (double.IsPositiveInfinity(dist[g.Node])) continue;
+                    var cost = s.Length / SpeedModel.OffRoadFactor + dist[g.Node] + g.Length / SpeedModel.OffRoadFactor;
+                    if (cost >= bestCost) continue;
+                    bestCost = cost;
+                    best = Assemble(s.Path, g.Path, s.Node, g.Node, prev);
+                }
+            }
+
+            return best;
+        }
+
+        struct Approach
+        {
+            public int Node;
+            public double Length;
+            public List<double[]> Path; // from the point to the node, the point first
+        }
+
+        // the nearest few road nodes the point can reach clear of the obstacles, with the way there
+        readonly Dictionary<(double, double, double), List<Approach>> approaches = new Dictionary<(double, double, double), List<Approach>>();
+        IReadOnlyList<Obstacle> approachesFor;
+
+        List<Approach> ClearApproaches(double x, double z, IReadOnlyList<Obstacle> active, double clearance)
+        {
+            // a machine asking about slot after slot asks from the same place: remember where it can get on the road
+            if (!ReferenceEquals(approachesFor, active) || approaches.Count > 64) { approaches.Clear(); approachesFor = active; }
+            if (approaches.TryGetValue((x, z, clearance), out var known)) return known;
+            return approaches[(x, z, clearance)] = FindApproaches(x, z, active, clearance);
+        }
+
+        List<Approach> FindApproaches(double x, double z, IReadOnlyList<Obstacle> active, double clearance)
+        {
+            var order = new List<int>();
+            for (var i = 0; i < roadNodeCount; i++) order.Add(i);
+            order.Sort((a, b) => (Sq(nx[a] - x) + Sq(nz[a] - z)).CompareTo(Sq(nx[b] - x) + Sq(nz[b] - z)));
+            var found = new List<Approach>();
+            foreach (var n in order)
+            {
+                if (found.Count >= Candidates) break;
+                var path = Detour.Find(x, z, nx[n], nz[n], active, clearance);
+                if (path == null) continue;
+                found.Add(new Approach { Node = n, Path = path, Length = Detour.Length(path) });
+            }
+
+            return found;
+        }
+
+        Route Assemble(List<double[]> toRoad, List<double[]> fromRoad, int s, int g, int[] prev)
+        {
+            var chain = new List<int>();
+            for (var n = g; n >= 0; n = prev[n])
+            {
+                chain.Add(n);
+                if (n == s) break;
+            }
+
+            chain.Reverse();
+            var b = new RouteBuilder();
+            b.Start(toRoad[0][0], toRoad[0][1]);
+            for (var i = 1; i < toRoad.Count; i++) b.Leg(toRoad[i][0], toRoad[i][1], SpeedModel.OffRoadFactor, 0);
+            for (var i = 1; i < chain.Count; i++)
+            {
+                var a = chain[i - 1];
+                var c = chain[i];
+                foreach (var e in adjacency[a])
+                    if (e.To == c)
+                    {
+                        b.Leg(nx[c], nz[c], e.Factor, e.GradePct);
+                        break;
+                    }
+            }
+
+            // the goal's path runs point -> node; the route runs node -> point
+            for (var i = fromRoad.Count - 2; i >= 0; i--) b.Leg(fromRoad[i][0], fromRoad[i][1], SpeedModel.OffRoadFactor, 0);
+            return b.Build();
+        }
+
         static double Sq(double v) => v * v;
 
-        double[] Dijkstra(int source, int[] prev)
+        double[] Dijkstra(int source, int[] prev, Func<int, int, bool> usable = null)
         {
             var dist = new double[nx.Count];
             for (var i = 0; i < dist.Length; i++)
@@ -417,6 +533,7 @@ namespace DeviceChain.Sitepulse.Tasks
                 done[u] = true;
                 foreach (var e in adjacency[u])
                 {
+                    if (usable != null && !usable(u, e.To)) continue;
                     var alt = dist[u] + e.Cost;
                     if (alt < dist[e.To]) { dist[e.To] = alt; prev[e.To] = u; }
                 }
@@ -452,6 +569,175 @@ namespace DeviceChain.Sitepulse.Tasks
 
             b.Leg(gx, gz, SpeedModel.OffRoadFactor, 0);
             return b.Build();
+        }
+    }
+}
+
+namespace DeviceChain.Sitepulse.Tasks
+{
+    /// <summary>
+    /// A way around the obstacles between two points: the shortest path over the straight lines between the
+    /// points and the corners of the obstacles' clearance outlines (a visibility graph). Only the obstacles a
+    /// path actually runs into are built into the graph, so a long clear leg costs one sweep.
+    ///
+    /// Every obstacle is kept <c>clearance</c> away, except that one an end of the path already stands nearer than
+    /// that (a road end beside a sign, a machine in the bay) is kept as far as that end is: the path may leave it
+    /// but not go nearer than it starts.
+    /// </summary>
+    internal static class Detour
+    {
+        const double SampleStep = 1.0, Slack = 0.3, Tolerance = 1e-6;
+
+        public static double Length(List<double[]> path)
+        {
+            var len = 0.0;
+            for (var i = 1; i < path.Count; i++)
+                len += Math.Sqrt((path[i][0] - path[i - 1][0]) * (path[i][0] - path[i - 1][0]) + (path[i][1] - path[i - 1][1]) * (path[i][1] - path[i - 1][1]));
+            return len;
+        }
+
+        static int Violator(IReadOnlyList<Obstacle> all, double[] thr, double x, double z)
+        {
+            for (var i = 0; i < all.Count; i++)
+                if (!all[i].IsAtLeast(x, z, thr[i] - Tolerance)) return i;
+            return -1;
+        }
+
+        // every one of the listed obstacles the segment runs nearer to than it may
+        static void Blockers(IReadOnlyList<Obstacle> all, double[] thr, double ax, double az, double bx, double bz, List<int> into)
+        {
+            var len = Math.Sqrt((bx - ax) * (bx - ax) + (bz - az) * (bz - az));
+            var n = Math.Max(1, (int)Math.Ceiling(len / SampleStep));
+            for (var k = 0; k < all.Count; k++)
+            {
+                if (into.Contains(k)) continue;
+                for (var i = 0; i <= n; i++)
+                {
+                    var t = (double)i / n;
+                    if (all[k].IsAtLeast(ax + (bx - ax) * t, az + (bz - az) * t, thr[k] - Tolerance)) continue;
+                    into.Add(k);
+                    break;
+                }
+            }
+        }
+
+        // the first of the listed obstacles the segment runs nearer to than it may, or -1
+        static int Blocker(IReadOnlyList<Obstacle> all, double[] thr, IReadOnlyList<int> which, double ax, double az, double bx, double bz)
+        {
+            var len = Math.Sqrt((bx - ax) * (bx - ax) + (bz - az) * (bz - az));
+            var n = Math.Max(1, (int)Math.Ceiling(len / SampleStep));
+            for (var i = 0; i <= n; i++)
+            {
+                var t = (double)i / n;
+                var x = ax + (bx - ax) * t;
+                var z = az + (bz - az) * t;
+                for (var k = 0; k < which.Count; k++)
+                    if (!all[which[k]].IsAtLeast(x, z, thr[which[k]] - Tolerance)) return which[k];
+            }
+
+            return -1;
+        }
+
+        /// <summary>True when the straight line from a to b keeps <paramref name="clearance"/> (as <see cref="Find"/> reads it).</summary>
+        public static bool StraightClear(double ax, double az, double bx, double bz, IReadOnlyList<Obstacle> all, double clearance)
+        {
+            var thr = new double[all.Count];
+            var everyone = new List<int>();
+            for (var i = 0; i < all.Count; i++)
+            {
+                thr[i] = Math.Min(clearance, Math.Min(all[i].Distance(ax, az), all[i].Distance(bx, bz)));
+                everyone.Add(i);
+            }
+
+            return Blocker(all, thr, everyone, ax, az, bx, bz) < 0;
+        }
+
+        /// <summary>The path from a to b (both included) clear of every obstacle by <paramref name="clearance"/>, or null when there is none.</summary>
+        public static List<double[]> Find(double ax, double az, double bx, double bz, IReadOnlyList<Obstacle> all, double clearance)
+        {
+            var thr = new double[all.Count];
+            var everyone = new List<int>();
+            for (var i = 0; i < all.Count; i++)
+            {
+                thr[i] = Math.Min(clearance, Math.Min(all[i].Distance(ax, az), all[i].Distance(bx, bz)));
+                everyone.Add(i);
+            }
+
+            // start with what the straight line runs into, and take on whatever each path found still runs into
+            var relevant = new List<int>();
+            Blockers(all, thr, ax, az, bx, bz, relevant);
+            for (var round = 0; round <= 2 * all.Count; round++)
+            {
+                var droppers = new List<int>();
+                var path = Shortest(ax, az, bx, bz, relevant, all, thr, clearance, droppers);
+                var more = new List<int>();
+                if (path == null)
+                {
+                    // the corners that would have let it round the obstacles in hand may stand inside others: those matter too
+                    foreach (var d in droppers)
+                        if (!relevant.Contains(d) && !more.Contains(d)) more.Add(d);
+                }
+                else
+                {
+                    for (var i = 1; i < path.Count; i++) Blockers(all, thr, path[i - 1][0], path[i - 1][1], path[i][0], path[i][1], more);
+                    more.RemoveAll(m => relevant.Contains(m));
+                    if (more.Count == 0) return path;
+                }
+
+                if (more.Count == 0) return null;
+                relevant.AddRange(more);
+            }
+
+            return null;
+        }
+
+        static List<double[]> Shortest(double ax, double az, double bx, double bz, List<int> relevant, IReadOnlyList<Obstacle> all, double[] thr, double clearance, List<int> droppers)
+        {
+            var px = new List<double> { ax, bx };
+            var pz = new List<double> { az, bz };
+            var wx = new List<double>();
+            var wz = new List<double>();
+            foreach (var o in relevant) all[o].CornerWaypoints(clearance + Slack, wx, wz);
+            for (var i = 0; i < wx.Count; i++)
+            {
+                var twin = false;
+                for (var j = 2; j < px.Count && !twin; j++) twin = Math.Abs(px[j] - wx[i]) < 1e-6 && Math.Abs(pz[j] - wz[i]) < 1e-6;
+                if (twin) continue;
+                var inside = Violator(all, thr, wx[i], wz[i]);
+                if (inside < 0) { px.Add(wx[i]); pz.Add(wz[i]); }
+                else droppers.Add(inside);
+            }
+
+            var count = px.Count;
+            var dist = new double[count];
+            var prev = new int[count];
+            var done = new bool[count];
+            for (var i = 0; i < count; i++) { dist[i] = double.PositiveInfinity; prev[i] = -1; }
+            dist[0] = 0;
+            for (var iter = 0; iter < count; iter++)
+            {
+                var u = -1;
+                var best = double.PositiveInfinity;
+                for (var i = 0; i < count; i++)
+                    if (!done[i] && dist[i] < best) { best = dist[i]; u = i; }
+                if (u < 0 || u == 1) break;
+                done[u] = true;
+                for (var v = 0; v < count; v++)
+                {
+                    if (done[v]) continue;
+                    var d = Math.Sqrt((px[u] - px[v]) * (px[u] - px[v]) + (pz[u] - pz[v]) * (pz[u] - pz[v]));
+                    if (dist[u] + d >= dist[v]) continue;
+                    if (relevant.Count > 0 && Blocker(all, thr, relevant, px[u], pz[u], px[v], pz[v]) >= 0) continue;
+                    dist[v] = dist[u] + d;
+                    prev[v] = u;
+                }
+            }
+
+            if (double.IsPositiveInfinity(dist[1])) return null;
+            var path = new List<double[]>();
+            for (var n = 1; n >= 0; n = prev[n]) path.Add(new[] { px[n], pz[n] });
+            path.Reverse();
+            return path;
         }
     }
 }

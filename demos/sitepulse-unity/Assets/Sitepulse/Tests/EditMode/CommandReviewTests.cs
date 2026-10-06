@@ -58,7 +58,7 @@ namespace DeviceChain.Sitepulse.Tests
                 return false;
             }, 3000);
             Assert.IsTrue(finished, Rows(r));
-            Assert.IsTrue(cmd.Completion.Result.Succeeded, cmd.Completion.Result + "\n" + Rows(r));
+            Assert.IsTrue(cmd.Completion.Answer().Succeeded, cmd.Completion.Answer() + "\n" + Rows(r));
             Assert.GreaterOrEqual(r.Model.FuelPct, 94.9, "a full tank, not a truck cut off during the service");
             Assert.Greater(r.Now, 2.0 * eta + 60.0 + RefuelService.DurationSeconds, "the whole took longer than the driving was allowed");
         }
@@ -82,7 +82,7 @@ namespace DeviceChain.Sitepulse.Tests
             // the real clock runs out while the service runs (simulation time stands still)
             for (var i = 0; i < 200 && !ra.IsComplete; i++) d.Step(0.0, 10.0);
             Assert.IsTrue(ra.IsComplete);
-            StringAssert.Contains("wall-clock cap", ra.Completion.Result.Reason);
+            StringAssert.Contains("wall-clock cap", ra.Completion.Answer().Reason);
             Assert.AreEqual(MachineMode.Returning, d["A"].Mode, "the truck leaves the bay");
             Assert.IsNull(d.Bay.Holder);
 
@@ -90,7 +90,7 @@ namespace DeviceChain.Sitepulse.Tests
             d.Submit("B", rb);
             for (var t = 0.0; t < 1500 && !rb.IsComplete; t += 0.25) d.Step(0.25, 0.25);
             Assert.IsTrue(rb.IsComplete);
-            Assert.IsTrue(rb.Completion.Result.Succeeded, "the next truck is served: " + rb.Completion.Result);
+            Assert.IsTrue(rb.Completion.Answer().Succeeded, "the next truck is served: " + rb.Completion.Answer());
             for (var t = 0.0; t < 600 && d["A"].Mode != MachineMode.Working; t += 0.25) d.Step(0.25, 0.25);
             Assert.AreEqual(MachineMode.Working, d["A"].Mode, "and the first is back on its track");
         }
@@ -108,7 +108,7 @@ namespace DeviceChain.Sitepulse.Tests
             r.Run(() => false, 3);
 
             var refused = r.Send("goto-area", "sp-zone-moon");
-            Assert.AreEqual("no scene geometry for area sp-zone-moon", refused.Completion.Result.Reason);
+            Assert.AreEqual("no scene geometry for area sp-zone-moon", refused.Completion.Answer().Reason);
             Assert.AreEqual(MachineMode.Returning, r.Controller.Mode, "it is still on its way back");
             Assert.IsFalse(r.Body.Attached);
 
@@ -134,15 +134,15 @@ namespace DeviceChain.Sitepulse.Tests
             Assert.IsTrue(r.Parking.Holds(r.Id));
             var at = (r.Body.X, r.Body.Z);
 
-            Assert.IsFalse(r.Send("goto-area", "sp-zone-moon").Completion.Result.Succeeded);
+            Assert.IsFalse(r.Send("goto-area", "sp-zone-moon").Completion.Answer().Succeeded);
             Assert.IsTrue(r.Parking.Holds(r.Id), "an unknown area");
 
             var fill = CommandKit.Site.Zones.First(z => z.Name == Fill);
-            for (var i = 0; i < 40; i++) r.Parking.Claim("other-" + i, fill, 0, 0, null);
-            Assert.AreEqual("no free parking slot in sp-zone-fill", r.Send("goto-area", Fill).Completion.Result.Reason);
+            for (var i = 0; i < 40; i++) r.Parking.Claim("other-" + i, fill, 0, 0, null, ParkingLot.Margin(r.Body.Kind), CommandKit.Site.Obstacles, ParkingLot.FootprintRadius(r.Body.Kind));
+            Assert.AreEqual("no free parking slot in sp-zone-fill", r.Send("goto-area", Fill).Completion.Answer().Reason);
             Assert.IsTrue(r.Parking.Holds(r.Id), "a full zone");
 
-            Assert.IsFalse(r.Send("self-destruct").Completion.Result.Succeeded);
+            Assert.IsFalse(r.Send("self-destruct").Completion.Answer().Succeeded);
             Assert.IsTrue(r.Parking.Holds(r.Id), "an unknown command");
             Assert.AreEqual(MachineMode.Parked, r.Controller.Mode);
             Assert.AreEqual(at, (r.Body.X, r.Body.Z));
@@ -177,7 +177,7 @@ namespace DeviceChain.Sitepulse.Tests
             Assert.AreEqual(MachineMode.Parked, r.Controller.Mode);
             Assert.IsFalse(r.Parking.Holds(r.Id));
             StringAssert.Contains("outcome: DROPPED", Rows(r));
-            Assert.AreEqual("the simulation gave no answer in time", cmd.Completion.Result.Reason, "the first answer stands");
+            Assert.AreEqual("the simulation gave no answer in time", cmd.Completion.Answer().Reason, "the first answer stands");
 
             var at = (r.Body.X, r.Body.Z);
             r.Run(() => false, 10);
@@ -185,7 +185,7 @@ namespace DeviceChain.Sitepulse.Tests
 
             var next = r.Send("goto-area", Fill);
             Assert.IsTrue(r.Run(() => next.IsComplete));
-            Assert.IsTrue(next.Completion.Result.Succeeded, "and it takes the next command");
+            Assert.IsTrue(next.Completion.Answer().Succeeded, "and it takes the next command");
         }
 
         [Test]
@@ -215,7 +215,7 @@ namespace DeviceChain.Sitepulse.Tests
             var bad = r.Send("goto-area", "sp-zone-moon", "c-bad");
             var good = r.Send("goto-area", Yard, "c-good");
             Assert.IsTrue(r.Run(() => good.IsComplete));
-            Assert.AreEqual("no scene geometry for area sp-zone-moon", bad.Completion.Result.Reason, "its answer is the refusal");
+            Assert.AreEqual("no scene geometry for area sp-zone-moon", bad.Completion.Answer().Reason, "its answer is the refusal");
             Assert.IsFalse(r.Timeline.Rows(r.Id).Any(x => x.Kind == TimelineKinds.Superseded), Rows(r));
         }
 
@@ -226,11 +226,11 @@ namespace DeviceChain.Sitepulse.Tests
             var first = r.Send("goto-area", Yard, "c-1");
             first.Complete(TaskResult.Fail("the simulation gave no answer in time"));
             var second = r.Send("goto-area", Fill, "c-2");
-            Assert.AreEqual("the simulation gave no answer in time", first.Completion.Result.Reason);
+            Assert.AreEqual("the simulation gave no answer in time", first.Completion.Answer().Reason);
             Assert.IsFalse(r.Timeline.Rows(r.Id).Any(x => x.Kind == TimelineKinds.Superseded), "it was not superseded: it had been answered; " + Rows(r));
             StringAssert.Contains("outcome: dropped", Rows(r));
             Assert.IsTrue(r.Run(() => second.IsComplete));
-            Assert.IsTrue(second.Completion.Result.Succeeded);
+            Assert.IsTrue(second.Completion.Answer().Succeeded);
         }
 
         [Test]
@@ -338,6 +338,82 @@ namespace DeviceChain.Sitepulse.Tests
             Assert.IsTrue(r.Run(() => cmd.IsComplete));
             Assert.IsTrue(CommandKit.Site.TryZone(Yard, out var yard));
             Assert.IsTrue(yard.Contains(r.Body.X, r.Body.Z, -ParkingLot.Margin(EquipmentKind.Hauler)), "the truck that was sent parks well inside");
+        }
+
+        // ---- parking keeps the whole machine clear of what stands in the zone
+
+        static readonly EquipmentKind[] Kinds = { EquipmentKind.Hauler, EquipmentKind.Loader, EquipmentKind.Dozer };
+
+        [Test]
+        public void EveryParkingSlotKeepsTheMachineClearOfEveryPropAndPile()
+        {
+            Assert.IsNotEmpty(CommandKit.Site.Obstacles, "the feature file's props, piles and the refuel approach are read");
+            foreach (var kind in Kinds)
+                foreach (var z in CommandKit.Site.Zones)
+                    foreach (var s in ParkingLot.Slots(z, z.CentreX, z.CentreZ, ParkingLot.Margin(kind), CommandKit.Site.Obstacles, ParkingLot.FootprintRadius(kind)))
+                        foreach (var o in CommandKit.Site.Obstacles)
+                            Assert.GreaterOrEqual(o.Distance(s.X, s.Z), ParkingLot.FootprintRadius(kind) + ParkingLot.Clearance,
+                                $"{kind} in {z.Name} slot {s.Index} ({s.X:0.0}, {s.Z:0.0}) touches {o.Name}");
+        }
+
+        [Test]
+        public void EveryZoneStillHasAtLeastThreeHaulerSlots()
+        {
+            foreach (var z in CommandKit.Site.Zones)
+            {
+                var slots = ParkingLot.Slots(z, z.CentreX, z.CentreZ, ParkingLot.Margin(EquipmentKind.Hauler), CommandKit.Site.Obstacles, ParkingLot.FootprintRadius(EquipmentKind.Hauler));
+                Assert.GreaterOrEqual(slots.Count, 3, z.Name + ": " + string.Join(" ", slots.Select(s => $"({s.X:0.#},{s.Z:0.#})")));
+            }
+        }
+
+        [Test]
+        public void ThePropsAreReadWhereTheFeatureFileStandsThemAndTheWorkshopRoofIsNotAParkingSlot()
+        {
+            var site = CommandKit.Site;
+            var workshop = site.Obstacles.First(o => o.Name == "workshop");
+            Assert.Less(workshop.Distance(-70, -36), 0, "the workshop's middle is inside it");
+            Assert.Greater(workshop.Distance(-70, -50), 0, "and 14 m north of it is outside");
+            Assert.Less(site.Obstacles.First(o => o.Name == "yard-stockpile-1").Distance(-98, -22), 0, "a pile is read as an obstacle");
+            Assert.Less(site.Obstacles.First(o => o.Name == "refuel-approach").Distance(-59.5, -60), 0, "so is the strip between the refuel queue and the bay");
+        }
+
+        [Test]
+        public void AZoneWhoseSlotsAreAllBlockedRefusesWithAReason()
+        {
+            var zone = new Rect2("blocked", 0, 40, 0, 40);
+            var wall = new[] { Obstacle.Box("wall", 20, 20, 30, 30, 0) };
+            Assert.IsEmpty(ParkingLot.Slots(zone, 0, 0, ParkingLot.Margin(EquipmentKind.Hauler), wall, ParkingLot.FootprintRadius(EquipmentKind.Hauler)));
+            Assert.IsNull(new ParkingLot().Claim("A", zone, 0, 0, null, ParkingLot.Margin(EquipmentKind.Hauler), wall, ParkingLot.FootprintRadius(EquipmentKind.Hauler)));
+        }
+
+        [Test]
+        public void ATruckSentToTheYardParksClearOfTheYardsProps()
+        {
+            var r = new Rig("SP-HL-0003");
+            var cmd = r.Send("goto-area", Yard);
+            Assert.IsTrue(r.Run(() => cmd.IsComplete));
+            Assert.IsTrue(cmd.Completion.Answer().Succeeded);
+            foreach (var o in CommandKit.Site.Obstacles)
+                Assert.GreaterOrEqual(o.Distance(r.Body.X, r.Body.Z), ParkingLot.FootprintRadius(EquipmentKind.Hauler), $"parked on {o.Name}");
+        }
+
+        [Test]
+        public void TwoMachinesAskingFromDifferentPlacesAreOfferedTheSameSlotsNeverOverlappingOnes()
+        {
+            var site = CommandKit.Site;
+            foreach (var z in site.Zones)
+            {
+                var m = ParkingLot.Margin(EquipmentKind.Hauler);
+                var f = ParkingLot.FootprintRadius(EquipmentKind.Hauler);
+                var a = ParkingLot.Slots(z, z.X0, z.Z0, m, site.Obstacles, f);
+                var b = ParkingLot.Slots(z, z.X1, z.Z1, m, site.Obstacles, f);
+                CollectionAssert.AreEquivalent(a.Select(s => s.Index), b.Select(s => s.Index), z.Name);
+                CollectionAssert.AreEqual(a.Select(s => s.Index), ParkingLot.Slots(z, z.X0, z.Z0, m, site.Obstacles, f).Select(s => s.Index), z.Name + " is deterministic");
+                foreach (var p in a)
+                    foreach (var q in a)
+                        if (p.Index != q.Index)
+                            Assert.GreaterOrEqual(Math.Sqrt((p.X - q.X) * (p.X - q.X) + (p.Z - q.Z) * (p.Z - q.Z)), ParkingLot.Spacing - 1e-6, z.Name);
+            }
         }
     }
 }

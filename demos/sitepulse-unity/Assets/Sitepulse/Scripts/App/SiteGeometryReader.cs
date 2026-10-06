@@ -52,7 +52,60 @@ namespace DeviceChain.Sitepulse.App
 
             if (roads.Count == 0) throw new FormatException("the feature file lists no roads");
             if (zones.Count == 0) throw new FormatException("the feature file lists no zones");
-            return new SiteGeometry(roads, spots, zones, pads);
+            return new SiteGeometry(roads, spots, zones, pads, Obstacles(root, spots));
+        }
+
+        /// <summary>
+        /// Half extents (m) along a prop's own X and Z, read off the generator that models it
+        /// (ArtSource/props/build_props.py), outermost box of the piece including its slab, bund, steps or drawbar.
+        /// A prop type the file lists with no entry here is refused: a parking slot must never be judged against a size nobody wrote down.
+        /// </summary>
+        static readonly Dictionary<string, (double X, double Z)> PropHalfExtents = new Dictionary<string, (double, double)>(StringComparer.Ordinal)
+        {
+            ["site_office"] = (4.85, 2.5),       // L 4.8, W 1.5; steps reach to W + 1.0
+            ["workshop"] = (9.3, 6.3),           // X 9.0, Zh 6.0, slab +0.3
+            ["container_blue"] = (3.03, 1.22),
+            ["container_red"] = (3.03, 1.22),
+            ["fuel_tank"] = (5.2, 3.5),          // bund BX 5.2, BZ 2.3, dispenser out to BZ + 1.2
+            ["light_tower"] = (2.5, 1.7),        // body 1.35, drawbar to 2.5, outriggers out to 1.5 + pad
+            ["cone"] = (0.2, 0.2),
+            ["barrier"] = (1.48, 0.3),           // prism 2.96 m long, 0.6 m wide at the foot
+            ["site_sign"] = (1.65, 0.3),         // panel 3.2 m, posts
+            ["crusher_plant"] = (22.0, 16.0),    // stands in no zone; a generous bound of the plant's footprint, not a measurement
+        };
+
+        /// <summary>The refuel approach: a machine queueing for, or in, the bay holds this strip clear (radius = a hauler's footprint).</summary>
+        const double ApproachRadius = 6.4;
+
+        /// <summary>The slope a pile's toe reaches along, 1.3 x its height over tan(37 deg) (ArtSource/terrain/quarry_heightmap.py, REPOSE_DEG and the pile's toe wobble).</summary>
+        static double PileRadius(double height) => height / Math.Tan(37.0 * Math.PI / 180.0) * 1.3;
+
+        static List<Obstacle> Obstacles(JsonElement root, IReadOnlyDictionary<string, Spot> spots)
+        {
+            var list = new List<Obstacle>();
+            if (root.TryGetProperty("props", out var props) && props.ValueKind == JsonValueKind.Array)
+                foreach (var p in props.EnumerateArray())
+                {
+                    var type = Str(p, "p");
+                    if (!PropHalfExtents.TryGetValue(type, out var half)) throw new FormatException($"the feature file lists a \"{type}\" prop with no known footprint");
+                    list.Add(Obstacle.Box(type, Num(p, "x"), Num(p, "z"), half.X, half.Z, p.TryGetProperty("heading", out var hd) && hd.ValueKind == JsonValueKind.Number ? hd.GetDouble() : 0.0));
+                }
+
+            if (root.TryGetProperty("piles", out var piles) && piles.ValueKind == JsonValueKind.Array)
+                foreach (var p in piles.EnumerateArray())
+                {
+                    var x = Num(p, "x");
+                    var z = Num(p, "z");
+                    var len = p.TryGetProperty("len", out var l) && l.ValueKind == JsonValueKind.Number ? l.GetDouble() : 0.0;
+                    var heading = (p.TryGetProperty("heading", out var hd) && hd.ValueKind == JsonValueKind.Number ? hd.GetDouble() : 0.0) * Math.PI / 180.0;
+                    var ux = Math.Sin(heading) * len / 2.0;
+                    var uz = Math.Cos(heading) * len / 2.0;
+                    list.Add(Obstacle.Capsule(Str(p, "name"), x - ux, z - uz, x + ux, z + uz, PileRadius(Num(p, "h"))));
+                }
+
+            if (spots.TryGetValue(RouteGraph.QueueSpot, out var queue) && spots.TryGetValue(RouteGraph.BaySpot, out var bay))
+                list.Add(Obstacle.Capsule("refuel-approach", queue.X, queue.Z, bay.X, bay.Z, ApproachRadius));
+            return list;
         }
 
         static IEnumerable<JsonElement> Array(JsonElement o, string name)
