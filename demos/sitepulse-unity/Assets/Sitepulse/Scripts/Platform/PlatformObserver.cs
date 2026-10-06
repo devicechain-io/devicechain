@@ -129,15 +129,15 @@ namespace DeviceChain.Sitepulse.Platform
                 inbox.Post(i);
             }
 
-            TokenProvider tokens = broker.AsProvider();
-            measurementSocket = new GraphQlWsClient(new ClientWebSocketFactory(), new Uri(config.WsUrl), tokens);
-            alarmSocket = new GraphQlWsClient(new ClientWebSocketFactory(), alarmUri, tokens);
+            var measurementToken = new HandedToken(broker);
+            var alarmToken = new HandedToken(broker);
+            measurementSocket = new GraphQlWsClient(new ClientWebSocketFactory(), new Uri(config.WsUrl), measurementToken.Provider);
+            alarmSocket = new GraphQlWsClient(new ClientWebSocketFactory(), alarmUri, alarmToken.Provider);
             var state = OperatorQueries.Create(config, broker, Area.DeviceState).AsQueryFn();
             var devices = OperatorQueries.Create(config, broker, Area.DeviceManagement).AsQueryFn();
             var commands = OperatorQueries.Create(config, broker, Area.CommandDelivery).AsQueryFn();
             var none = JsonDocument.Parse(ObserverQueries.NoVariables).RootElement.Clone();
 
-            Task RefreshToken(CancellationToken c) => RefreshAfterRejection(c);
 
             var measurements = new StreamRunner<JsonElement>(
                 c => measurementSocket.SubscribeAsync(ObserverQueries.MeasurementSubscription, none, Json, Json, c),
@@ -148,7 +148,7 @@ namespace DeviceChain.Sitepulse.Platform
                     if (m != null) Post(m);
                 },
                 (s, reason) => Post(new StatusItem("measurements", s.ToString(), reason, clock())),
-                RefreshToken, clock: clock);
+                measurementToken.RefreshAfterRejection, clock: clock);
             var alarms = new StreamRunner<JsonElement>(
                 c => alarmSocket.SubscribeAsync(ObserverQueries.AlarmSubscription, none, Json, Json, c),
                 c => SnapshotAlarms(devices, Post, clock, c),
@@ -158,7 +158,7 @@ namespace DeviceChain.Sitepulse.Platform
                     if (a != null) Post(a);
                 },
                 (s, reason) => Post(new StatusItem("alarms", s.ToString(), reason, clock())),
-                RefreshToken, clock: clock);
+                alarmToken.RefreshAfterRejection, clock: clock);
 
             _ = Guard("measurement stream", () => measurements.RunAsync(ct), ct);
             _ = Guard("alarm stream", () => alarms.RunAsync(ct), ct);
@@ -167,12 +167,6 @@ namespace DeviceChain.Sitepulse.Platform
             _ = Guard("presence poll", () => Poll("presence", PresenceEvery, c => PollPresence(state, Post, c), ct), ct);
         }
 
-        async Task RefreshAfterRejection(CancellationToken ct)
-        {
-            // the server said the token it was given is no good: whatever the broker holds is suspect, so fetch a new one
-            var used = await broker.Get(ct);
-            await broker.NotifyUnauthorized(used);
-        }
 
         async Task SnapshotMeasurements(QueryFn state, Action<ObserverItem> post, CancellationToken ct)
         {

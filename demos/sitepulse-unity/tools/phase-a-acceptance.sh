@@ -14,6 +14,10 @@
 #   phase-a-acceptance.sh                       the acceptance run
 #   phase-a-acceptance.sh --controls            ... and then every negative control, each its own relaunch
 #   phase-a-acceptance.sh --controls-only       only the controls
+#   phase-a-acceptance.sh --soak [MINUTES]      the soak (default 30): ONE long Live run with all 18 machines, a low-fuel
+#                                               cycle on a different truck every ~6 minutes, and the measurements of the whole
+#                                               (frame time, observation lag, memory, cadence, sessions, gaps). It replaces the
+#                                               normal run; add --with-run to do both, --controls for the controls first
 #   phase-a-acceptance.sh --build editor|batch  build the player first (see below)
 #
 # Options:
@@ -24,6 +28,17 @@
 #   --out DIR                   evidence root (default: Build/acceptance, ignored by git)
 #   --screenshot-after SECONDS  when the player saves its picture (default 55)
 #   --allow-stale-build         do not fail on a build older than HEAD (it is still recorded)
+#   --with-run                  with --soak: also run the normal acceptance
+#
+# The controls (--controls): bogus-binding, wrong-ca, bad-credential, unknown-command, runner-stop, and the Phase B ones:
+#   rule-disabled    the platform's low-fuel rule is disabled (draft + publish), the player prepares a low tank on SP-HL-0006
+#                    and judges that nothing reacted; the rule is then rolled back to the version it was and verified
+#   redelivery       NOT run live: a redelivery cannot be triggered honestly in a live run, and is recorded as an info item
+#                    pointing at the SDK's own tests (see phase_b_check.REDELIVERY_INFO)
+#   observer-outage  event-management is scaled to 0 for ~40 s on the isolated cluster and back; the player judges the banner,
+#                    the stale cards, the devices still publishing and the snapshot refresh
+# Anything a control changes on the platform is recorded BEFORE it is changed and restored from a trap, and the restore is
+# verified: a control that leaves the platform altered is a failure.
 #
 # Environment: SP_HOME (default ~/sitepulse-env) for the broker CA; DC_VERSION (the platform version the
 # environment was installed at, recorded in the bundle); RUNNER (default http://127.0.0.1:8090).
@@ -56,7 +71,11 @@ DO_CONTROLS=0
 UNITY_EXE="${UNITY_EXE:-/mnt/c/Program Files/Unity/Hub/Editor/6000.5.3f1/Editor/Unity.exe}"
 
 # the controls, in the order they run: the faulted device is named where the control needs one
-CONTROLS=("bogus-binding:SP-HL-0004" "wrong-ca" "bad-credential:SP-DZ-0002" "unknown-command" "runner-stop")
+CONTROLS=("bogus-binding:SP-HL-0004" "wrong-ca" "bad-credential:SP-DZ-0002" "unknown-command" "runner-stop" "rule-disabled" "redelivery" "observer-outage")
+ACCEPT_NAME=phaseA
+DO_SOAK=0
+SOAK_MIN=30
+WITH_RUN=0
 
 log() { printf '[phase-a] %s\n' "$*" >&2; }
 die() { log "ERROR: $*"; exit 1; }
@@ -65,6 +84,12 @@ while [ $# -gt 0 ]; do
 	case "$1" in
 	--controls) DO_CONTROLS=1 ;;
 	--controls-only) DO_CONTROLS=1 DO_RUN=0 ;;
+	--soak)
+		DO_SOAK=1
+		DO_RUN=0
+		if [[ "${2:-}" =~ ^[0-9]+$ ]]; then SOAK_MIN="$2"; shift; fi
+		;;
+	--with-run) WITH_RUN=1 ;;
 	--build) BUILD="${2:?--build needs none, editor or batch}"; shift ;;
 	--out) OUT_ROOT="${2:?--out needs a directory}"; shift ;;
 	--screenshot-after) SHOT_AFTER="${2:?needs seconds}"; shift ;;
@@ -74,6 +99,8 @@ while [ $# -gt 0 ]; do
 	esac
 	shift
 done
+[ "$WITH_RUN" = 0 ] || DO_RUN=1
+{ [ "$SOAK_MIN" -ge 1 ] && [ "$SOAK_MIN" -le 240 ]; } || die "--soak MINUTES is 1 to 240"
 
 win() { wslpath -w "$1"; }
 now_iso() { date -u +%Y-%m-%dT%H:%M:%S.%3NZ; }
@@ -175,7 +202,7 @@ launch_player() {
 	shift 2
 	local before after pid _
 	before="$(win_pids | tr '\n' ' ')"
-	"$PLAYER" -sitepulse-mode live -sitepulse-acceptance phaseA \
+	"$PLAYER" -sitepulse-mode live -sitepulse-acceptance "$ACCEPT_NAME" \
 		-sitepulse-acceptance-dir "$(win "$dir")" \
 		-dc-runner "$RUNNER" -dc-ca "$(win "$ca")" \
 		-sitepulse-platform-version "$DC_VERSION" \
@@ -271,10 +298,23 @@ execute() {
 	since="$(date -u -d '-5 seconds' +%Y-%m-%dT%H:%M:%S.%3NZ)"
 	CHECKER_RC=0
 	PLAYER_CRASHED=0
+	local mem_job=""
+	if [ "$mode" = soak ]; then ACCEPT_NAME=soak; else ACCEPT_NAME=phaseA; fi
 	launch_player "$dir" "$ca" "$@"
-	if [ "$mode" = run ]; then run_with_checker "$dir" "$since" run
-	else run_with_checker "$dir" "$since" control --control "$label"; fi
+	if [ "$mode" = soak ]; then
+		sample_memory "$PLAYER_PID" "$dir/memory.tsv" &
+		mem_job=$!
+	fi
+	case "$mode" in
+	run) run_with_checker "$dir" "$since" run ;;
+	soak) run_with_checker "$dir" "$since" soak --soak-minutes "$SOAK_MIN" ;;
+	*) run_with_checker "$dir" "$since" control --control "$label" ;;
+	esac
 	wait_player 120 || true
+	if [ -n "$mem_job" ]; then
+		kill "$mem_job" 2>/dev/null || true
+		wait "$mem_job" 2>/dev/null || true
+	fi
 	stage_log "$dir"
 	local verdict="the player's exit code is $PLAYER_EXIT"
 	if [ "$PLAYER_CRASHED" = 1 ]; then item FAIL "player-$label" "the player ran to its verdict" "it crashed before leaving one; see $(basename "$dir")/player.filtered.log"; fi
@@ -283,6 +323,62 @@ execute() {
 	else item FAIL "player-exit-$label" "the player exits 0 (its own probe passed)" "$verdict"; fi
 	if [ -s "$dir/screenshot.png" ]; then item PASS "screenshot-$label" "the player saved a screenshot" "$(basename "$dir")/screenshot.png, $(stat -c %s "$dir/screenshot.png") bytes"
 	else item FAIL "screenshot-$label" "the player saved a screenshot" "no screenshot.png"; fi
+}
+
+# ---------------------------------------------------------------------------
+# the soak's own measurements from the Windows side: the player's memory every minute, and the machine it ran on
+# ---------------------------------------------------------------------------
+
+# sample_memory <windows-pid> <out.tsv>: one "epoch<TAB>MiB" line a minute for as long as the player lives
+sample_memory() {
+	local pid="$1" out="$2" ws
+	while player_alive; do
+		ws="$(powershell.exe -NoProfile -Command "(Get-Process -Id $pid -ErrorAction SilentlyContinue).WorkingSet64" 2>/dev/null | tr -d '\r' || true)"
+		case "$ws" in
+		'' | *[!0-9]*) ;;
+		*) printf '%s\t%s\n' "$(date +%s)" "$((ws / 1048576))" >>"$out" ;;
+		esac
+		sleep 58
+	done
+}
+
+# write_hardware <out>: the CPU, GPU, memory and OS this run was measured on (one line; nothing identifying beyond the models)
+write_hardware() {
+	local out="$1" ps1="$1.ps1"
+	cat >"$ps1" <<'PS'
+$c = Get-CimInstance Win32_Processor | Select-Object -First 1
+$g = (Get-CimInstance Win32_VideoController | ForEach-Object { $_.Name }) -join ' + '
+$m = [math]::Round((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory / 1GB)
+$o = (Get-CimInstance Win32_OperatingSystem).Caption
+$c.Name.Trim() + ' (' + $c.NumberOfCores + 'C/' + $c.NumberOfLogicalProcessors + 'T), ' + $g + ', ' + $m + ' GB RAM, ' + $o
+PS
+	powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$(win "$ps1")" 2>/dev/null | tr -d '\r' >"$out" || true
+	rm -f "$ps1"
+	[ -s "$out" ] || echo "not recorded (powershell was not reachable)" >"$out"
+}
+
+# ---------------------------------------------------------------------------
+# what a control changes on the platform is put back from here, whatever happened above: the checker records an undo
+# file BEFORE it changes anything and removes it only once the restore is verified, so a file still lying here means the
+# platform may still be altered. Idempotent: a restored record does nothing.
+# ---------------------------------------------------------------------------
+
+restore_pending() {
+	local rc=0 f
+	{ [ -n "$EVID" ] && [ -d "$EVID" ]; } || return 0
+	while IFS= read -r f; do
+		python3 "$CHECK" rule-restore --state "$f" --runner "$RUNNER" --out "$(dirname "$f")" >/dev/null || {
+			log "ERROR: the low-fuel rule is NOT verified restored. Run: python3 $CHECK rule-restore --state $f --runner $RUNNER"
+			rc=1
+		}
+	done < <(find "$EVID" -name rule-state.json)
+	while IFS= read -r f; do
+		python3 "$CHECK" scale-restore --state "$f" --live-env "$LIVE_ENV" --out "$(dirname "$f")" >/dev/null || {
+			log "ERROR: a deployment is NOT verified restored. Run: python3 $CHECK scale-restore --state $f --live-env $LIVE_ENV"
+			rc=1
+		}
+	done < <(find "$EVID" -name scale-pending.tsv)
+	return "$rc"
 }
 
 # ---------------------------------------------------------------------------
@@ -312,6 +408,7 @@ main() {
 	mkdir -p "$EVID"
 	: >"$EVID/script-items.tsv"
 	log "evidence: $EVID"
+	trap 'restore_pending || exit 1' EXIT
 
 	[ -f "$PLAYER" ] || die "no player at $PLAYER: build it first (--build editor|batch)"
 	cp "$CA_SRC" "$EVID/ca.pem"   # a public certificate
@@ -362,6 +459,15 @@ PY
 			unknown-command)
 				python3 "$CHECK" unknown-command --dir "$dir" --runner "$RUNNER" --out "$dir" || failed=1
 				;;
+			redelivery)
+				item info redelivery-covered-by-sdk-tests "a redelivered command is not executed twice: COVERED BY THE SDK'S TESTS, not run live" \
+					"$(python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import phase_b_check as b; print(b.REDELIVERY_INFO)' "$HERE")"
+				;;
+			rule-disabled | observer-outage)
+				execute "$dir" "$c" "$EVID/ca.pem" control -sitepulse-control "$c" || failed=1
+				[ "$CHECKER_RC" = 0 ] || failed=1
+				restore_pending || failed=1
+				;;
 			wrong-ca)
 				make_wrong_ca "$dir/wrong-ca.pem"
 				execute "$dir" "$c" "$dir/wrong-ca.pem" control -sitepulse-control "$c" || failed=1
@@ -375,9 +481,20 @@ PY
 		done
 	fi
 
+	if [ "$DO_SOAK" = 1 ]; then
+		local sdir="$EVID/soak"
+		mkdir -p "$sdir"
+		log "---- soak: $SOAK_MIN minute(s) of Live"
+		write_hardware "$sdir/hardware.txt"
+		execute "$sdir" soak "$EVID/ca.pem" soak || failed=1
+		[ "$CHECKER_RC" = 0 ] || failed=1
+	fi
+
+	restore_pending || failed=1
+
 	# ---- the bundle ---------------------------------------------------------------------------------
 	local scan=()
-	while IFS= read -r f; do scan+=("$f"); done < <(find "$EVID" -type f \( -name 'phaseA-*' -o -name 'player.filtered.log' -o -name 'checker-*.json' -o -name 'SUMMARY-*.md' -o -name 'environment.json' \))
+	while IFS= read -r f; do scan+=("$f"); done < <(find "$EVID" -type f \( -name 'phaseA-*' -o -name 'player.filtered.log' -o -name 'checker-*.json' -o -name 'SUMMARY-*.md' -o -name 'environment.json' -o -name 'soak.json' -o -name 'rule-state.json' -o -name 'hardware.txt' \))
 	python3 "$CHECK" leakscan --dir "$EVID" --out "$EVID" --files "${scan[@]}" || failed=1
 
 	{
@@ -396,9 +513,10 @@ print("- **Player**: built from %s (tracked tree clean: %s); SDK commit %s; Unit
 PY
 		fi
 		echo "- **Controls**: $([ "$DO_CONTROLS" = 1 ] && echo run || echo "not run (--controls)")"
+		echo "- **Soak**: $([ "$DO_SOAK" = 1 ] && echo "$SOAK_MIN minute(s)" || echo "not run (--soak)")"
 	} >"$EVID/header.md"
 	python3 "$CHECK" bundle --dir "$EVID" --header "$EVID/header.md" || failed=1
-	rm -f "$EVID"/SUMMARY-*.md "$EVID"/controls/*/SUMMARY-*.md "$EVID/header.md"
+	rm -f "$EVID"/SUMMARY-*.md "$EVID"/controls/*/SUMMARY-*.md "$EVID"/soak/SUMMARY-*.md "$EVID/header.md"
 	log "evidence bundle: $EVID (SUMMARY.md)"
 	exit "$failed"
 }

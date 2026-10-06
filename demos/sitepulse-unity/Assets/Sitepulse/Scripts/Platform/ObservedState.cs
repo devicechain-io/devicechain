@@ -139,6 +139,18 @@ namespace DeviceChain.Sitepulse.Platform
 
         public int Version { get; private set; }
 
+        /// <summary>
+        /// Measurements applied from a snapshot (the platform's whole answer after a (re)subscribe), counted whether or not a newer
+        /// streamed value already held the key. A reader that sees it grow knows a snapshot refresh was taken; nothing else uses it.
+        /// </summary>
+        public int SnapshotMeasurements { get; private set; }
+
+        /// <summary>
+        /// Told how long after a streamed measurement happened this app saw it (observed minus occurred; both are this host's clock),
+        /// for each one that was applied. The acceptance soak records the distribution; nothing else sets it.
+        /// </summary>
+        public Action<TimeSpan> MeasurementLag { get; set; }
+
         /// <summary>When the newest measurement of this run happened for a device; null if none has been seen.</summary>
         public DateTimeOffset? NewestOwnRunAt(string deviceToken) => devices.TryGetValue(deviceToken ?? "", out var d) ? d.NewestOwnRunAt : null;
 
@@ -154,11 +166,14 @@ namespace DeviceChain.Sitepulse.Platform
         internal bool ApplyMeasurement(string deviceToken, string name, double value, DateTimeOffset occurredAt, DateTimeOffset observedAt, bool fromSnapshot)
         {
             var d = Of(deviceToken);
+            if (fromSnapshot) SnapshotMeasurements++;
             if (d.measurements.TryGetValue(name, out var held))
             {
                 // newer wins; at the same instant the stream's word stands over a snapshot's
                 if (occurredAt < held.OccurredAt || (occurredAt == held.OccurredAt && fromSnapshot)) return false;
             }
+
+            if (!fromSnapshot) MeasurementLag?.Invoke(observedAt - occurredAt);
 
             d.measurements[name] = new ObservedValue(value, occurredAt, observedAt);
             if (!LastMeasurementSeenAt.HasValue || observedAt > LastMeasurementSeenAt.Value) LastMeasurementSeenAt = observedAt;

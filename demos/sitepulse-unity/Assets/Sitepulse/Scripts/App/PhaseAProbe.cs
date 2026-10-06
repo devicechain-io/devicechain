@@ -46,6 +46,9 @@ namespace DeviceChain.Sitepulse.App
         /// <summary>The provenance of the data layer's source; null when it has none.</summary>
         public Func<Provenance?> CardSource { get; set; }
 
+        /// <summary>Whether the data layer's source is told the measurement stream is live; null when it has no source.</summary>
+        public Func<bool?> CardStreamLive { get; set; }
+
         public Func<Timeline> Timeline { get; set; }
 
         /// <summary>The presenter's "prepare low fuel" for one machine; returns what it said.</summary>
@@ -59,6 +62,64 @@ namespace DeviceChain.Sitepulse.App
         public string SamplePath { get; set; }
         public Func<long> SampleLines { get; set; }
         public string UnityVersion { get; set; }
+
+        // what the Phase B controls and the soak read (all optional: a probe that does not need one never asks)
+
+        /// <summary>The observer's two streams, as the banner and the readiness line read them.</summary>
+        public ObserverStatus Observer { get; set; }
+
+        /// <summary>One machine's task state and local tank, or null when it has none.</summary>
+        public Func<string, MachineView?> Machine { get; set; }
+
+        /// <summary>The refuel bay's holder and queue, or null before the task layer exists.</summary>
+        public Func<BayView?> Bay { get; set; }
+
+        /// <summary>How many device sessions the plane holds.</summary>
+        public Func<int> SessionCount { get; set; }
+
+        /// <summary>Samples the outbound rings gave up on (summed over every device).</summary>
+        public Func<long> DroppedSamples { get; set; }
+
+        /// <summary>Sends the sessions reported as failed (summed over every device).</summary>
+        public Func<long> SendErrors { get; set; }
+
+        /// <summary>This frame's unscaled delta time in seconds.</summary>
+        public Func<double> FrameSeconds { get; set; }
+    }
+
+    /// <summary>A machine's controller state and its local tank, as the probe samples it.</summary>
+    public readonly struct MachineView
+    {
+        public MachineView(MachineMode mode, TaskPhase phase, double fuelPct, bool wantsBay)
+        {
+            Mode = mode;
+            Phase = phase;
+            FuelPct = fuelPct;
+            WantsBay = wantsBay;
+        }
+
+        public MachineMode Mode { get; }
+        public TaskPhase Phase { get; }
+        public double FuelPct { get; }
+        public bool WantsBay { get; }
+
+        /// <summary>On its routine track and not in line for the bay.</summary>
+        public bool OnTrack => Mode == MachineMode.Working && !WantsBay;
+
+        public override string ToString() => Mode + (Phase != TaskPhase.None ? "/" + Phase : "");
+    }
+
+    /// <summary>The refuel bay: who holds it (null when free) and how many wait.</summary>
+    public readonly struct BayView
+    {
+        public BayView(string holder, int waiting)
+        {
+            Holder = holder;
+            Waiting = waiting;
+        }
+
+        public string Holder { get; }
+        public int Waiting { get; }
     }
 
     /// <summary>
@@ -73,7 +134,7 @@ namespace DeviceChain.Sitepulse.App
     /// Run as a control (<c>-sitepulse-control</c>), it takes no commands: it waits a fixed time and judges
     /// that the injected fault failed the way it should have.
     /// </summary>
-    public sealed class PhaseAProbe
+    public sealed partial class PhaseAProbe
     {
         public const string ResultFile = "phaseA-result.json";
         public const string SampleFile = "phaseA-samples.jsonl";
@@ -131,12 +192,15 @@ namespace DeviceChain.Sitepulse.App
         {
             if (Finished) return;
             var now = clock();
+            SampleFrame();
             if ((now - lastTick).TotalSeconds < TickEverySeconds) return;
             lastTick = now;
             var t = Elapsed(now);
 
             var changed = Milestones(t);
-            if (options.IsControl) TickControl(now, t);
+            if (observedAt.HasValue && phaseText == "starting") phaseText = "observed";
+            if (options.IsSoak) TickSoak(now, t);
+            else if (options.IsControl) TickControl(now, t);
             else TickPhaseA(now, t);
             if (Finished) return;
 
@@ -198,6 +262,8 @@ namespace DeviceChain.Sitepulse.App
         // a runner-stop control watches the fleet for a while after it came up (the script stops the runner then)
         void TickControl(DateTimeOffset now, double t)
         {
+            if (options.Control.Kind == ControlSpec.RuleDisabled) { TickRuleDisabled(now, t); return; }
+            if (options.Control.Kind == ControlSpec.ObserverOutage) { TickObserverOutage(now, t); return; }
             var due = options.Control.Kind == ControlSpec.RunnerStop
                 ? (observedAt.HasValue ? observedAt.Value + RunnerStopWindowSeconds : ReachBudgetSeconds)
                 : ControlCheckSeconds;
@@ -219,7 +285,10 @@ namespace DeviceChain.Sitepulse.App
             items.Insert(2, TimeItem("publishing-19", "every device's session is publishing (the broker acknowledged a sample)", publishingAt, board, d => d.Stage >= DeviceStage.Publishing && !d.Failed, null));
             items.Insert(3, TimeItem("observed-19", $"every device observed by the platform within {ObservedBudgetSeconds:0} s of the player's start", observedAt, board, d => d.Stage >= DeviceStage.Observed && !d.Failed, ObservedBudgetSeconds));
 
-            if (options.IsControl) items.Add(EvaluateControl(options.Control, board, world.Board.Brief()));
+            if (options.IsSoak) AddSoakItems(now);
+            else if (options.IsControl && options.Control.Kind == ControlSpec.RuleDisabled) AddRuleDisabledItems(now);
+            else if (options.IsControl && options.Control.Kind == ControlSpec.ObserverOutage) AddObserverOutageItems(now);
+            else if (options.IsControl) items.Add(EvaluateControl(options.Control, board, world.Board.Brief()));
             else
             {
                 items.Add(new ProbeItem("low-fuel-prepared", $"the presenter's prepare-low-fuel ran on {RefuelMachine}", prepared != null && cardsAt.HasValue, prepared ?? "not reached"));
@@ -244,7 +313,7 @@ namespace DeviceChain.Sitepulse.App
             var ok = at.HasValue && n == board.Total && (!budget.HasValue || at.Value <= budget.Value);
             var detail = at.HasValue ? $"{board.Total}/{board.Total} after {at.Value:0.0} s" : $"{n}/{board.Total} at the end; never reached {board.Total}/{board.Total}";
             if (at.HasValue && budget.HasValue && at.Value > budget.Value) detail += $" (budget {budget.Value:0} s)";
-            return new ProbeItem(id, what, options.IsControl ? (bool?)null : ok, detail, at);
+            return new ProbeItem(id, what, FleetMustComeUp ? ok : (bool?)null, detail, at);
         }
 
         // ------------------------------------------------------------------ checks (pure over their inputs)
@@ -558,6 +627,7 @@ namespace DeviceChain.Sitepulse.App
                 }
 
                 w.WriteBoolean("final", final);
+                w.WriteString("phase", final ? "final" : PhaseName);
                 w.WriteString("startedAt", startedAt.UtcDateTime.ToString("O", CultureInfo.InvariantCulture));
                 w.WriteString("writtenAt", now.UtcDateTime.ToString("O", CultureInfo.InvariantCulture));
                 if (final) w.WriteString("finishedAt", finishedAtText);
@@ -576,6 +646,8 @@ namespace DeviceChain.Sitepulse.App
                 Seconds(w, "observedSeconds", observedAt);
                 w.WriteNumber("observedBudgetSeconds", ObservedBudgetSeconds);
                 w.WriteEndObject();
+
+                RenderScenarios(w);
 
                 w.WriteStartObject("samples");
                 w.WriteString("path", Redactor.Redact(world.SamplePath ?? ""));
