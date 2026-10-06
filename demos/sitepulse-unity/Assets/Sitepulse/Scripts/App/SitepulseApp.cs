@@ -7,6 +7,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Collections.Generic;
 using DeviceChain.Sdk;
+using DeviceChain.Sitepulse.Domain;
 using DeviceChain.Sitepulse.DevicePlane;
 using DeviceChain.Sitepulse.Platform;
 using DeviceChain.Sitepulse.Simulation;
@@ -83,6 +84,14 @@ namespace DeviceChain.Sitepulse.App
         float nextStatusLog;
         const float StatusLogEverySeconds = 10f;
 
+        // acceptance (-sitepulse-acceptance): null in every normal run
+        AcceptanceOptions acceptance;
+        PhaseAProbe probe;
+        EmittedSampleLog sampleLog;
+        string acceptanceDir;
+        DateTimeOffset appStartedAt;
+        bool quitIssued;
+
         public SitepulseMode Mode => mode;
 
         void Awake()
@@ -92,18 +101,35 @@ namespace DeviceChain.Sitepulse.App
             // the data layer keeps its cards off the HUD
             if (overlay != null) overlay.Obstacles = hud.Obstacles;
 
+            appStartedAt = DateTimeOffset.UtcNow;
             var args = Environment.GetCommandLineArgs();
             var parsed = SitepulseModes.FromCommandLine(args, out var present);
-            if (!parsed.Ok)
+            var accepting = AcceptanceFlags.FromCommandLine(args);
+            if (!parsed.Ok || !accepting.Ok)
             {
+                var why = parsed.Ok ? accepting.Error : accepting.Ok ? parsed.Error : parsed.Error + "\n" + accepting.Error;
                 HideCards();
                 hud.SetBadge("MODE ERROR · nothing is running", BadgeTone.Error);
-                hud.ShowError("The mode could not be chosen", parsed.Error);
-                PlatformLog.Error(parsed.Error);
+                hud.ShowError("The mode could not be chosen", why);
+                PlatformLog.Error(why);
+                AbortAcceptance(args, why);
                 return;
             }
 
+            acceptance = accepting.Value;
             mode = parsed.Value;
+            if (acceptance != null && (mode != SitepulseMode.Live || !present))
+            {
+                const string need = "-sitepulse-acceptance needs -sitepulse-mode live";
+                HideCards();
+                hud.SetBadge("MODE ERROR · nothing is running", BadgeTone.Error);
+                hud.ShowError("The mode could not be chosen", need);
+                PlatformLog.Error(need);
+                acceptance = null;
+                AbortAcceptanceWith(accepting.Value, need);
+                return;
+            }
+
             if (!present && Application.isEditor && editorMode != EditorModeOverride.None)
                 mode = (SitepulseMode)Enum.Parse(typeof(SitepulseMode), editorMode.ToString());
             started = true;
@@ -124,7 +150,7 @@ namespace DeviceChain.Sitepulse.App
                     previousRunInBackground = Application.runInBackground;
                     Application.runInBackground = true;
                     UseObservedCards();
-                    hud.SetBadge(SitepulseModes.Badge(mode), BadgeTone.Live);
+                    hud.SetBadge(LiveBadge(), LiveTone());
                     UseLiveChoreography();
                     break;
             }
@@ -201,6 +227,87 @@ namespace DeviceChain.Sitepulse.App
             hud.SetBanner(null);
             hud.SetBadge("LIVE · not running", BadgeTone.Error);
             hud.ShowError(title, message);
+            if (probe == null && acceptance != null) AbortAcceptanceWith(acceptance, title + ": " + message);
+        }
+
+        // ------------------------------------------------------------------ acceptance
+
+        string LiveBadge(string tenantName = null, string instance = null)
+            => SitepulseModes.Badge(mode, tenantName, instance) + (acceptance != null ? " · " + acceptance.RunLabel : "");
+
+        // a control is amber, so a run with a fault injected can never be taken for a normal one
+        BadgeTone LiveTone() => acceptance != null && acceptance.IsControl ? BadgeTone.Illustrative : BadgeTone.Live;
+
+        static bool HasDevice(IReadOnlyList<SceneDevice> devices, string id)
+        {
+            foreach (var d in devices)
+                if (d.ExternalId == id) return true;
+            return false;
+        }
+
+        string AcceptanceDir() => acceptanceDir ?? (acceptanceDir = string.IsNullOrEmpty(acceptance.Directory) ? Application.persistentDataPath : acceptance.Directory);
+
+        void StartProbe()
+        {
+            var dir = AcceptanceDir();
+            var world = new ProbeWorld
+            {
+                Board = board,
+                Observed = observed,
+                Cards = () => overlay != null ? overlay.Readings : Array.Empty<DeviceReading>(),
+                CardSource = () => overlay != null && overlay.Source != null ? overlay.Source.Provenance : (Provenance?)null,
+                Timeline = () => timeline,
+                PrepareLowFuel = id => presenter?.PrepareLowFuel(id),
+                FileExists = name => File.Exists(Path.Combine(dir, name)),
+                WriteFile = (name, text) => WriteAtomically(Path.Combine(dir, name), text),
+                SamplePath = Path.Combine(dir, PhaseAProbe.SampleFile),
+                SampleLines = () => sampleLog?.Lines ?? 0,
+                UnityVersion = Application.unityVersion,
+            };
+            probe = new PhaseAProbe(acceptance, world, appStartedAt, null, PlatformLog.Info);
+        }
+
+        void TickProbe()
+        {
+            if (probe == null) return;
+            probe.Tick();
+            if (!probe.Finished || quitIssued) return;
+            quitIssued = true;
+            PlatformLog.Info($"{acceptance.RunLabel} · {(probe.Passed ? "PASS" : "FAIL")} · quitting with exit code {probe.ExitCode}");
+            Application.Quit(probe.ExitCode);
+        }
+
+        // a run that never got far enough to measure anything still leaves a result, and a failing exit code
+        void AbortAcceptance(string[] args, string why)
+        {
+            var parsed = AcceptanceFlags.FromCommandLine(args);
+            if (parsed.Ok && parsed.Value != null) AbortAcceptanceWith(parsed.Value, why);
+        }
+
+        void AbortAcceptanceWith(AcceptanceOptions options, string why)
+        {
+            if (options == null || quitIssued) return;
+            quitIssued = true;
+            try
+            {
+                var dir = string.IsNullOrEmpty(options.Directory) ? Application.persistentDataPath : options.Directory;
+                WriteAtomically(Path.Combine(dir, PhaseAProbe.ResultFile), PhaseAProbe.AbortedResult(options, appStartedAt, DateTimeOffset.UtcNow, Application.unityVersion, why));
+            }
+            catch (Exception e) when (e is IOException || e is UnauthorizedAccessException)
+            {
+                PlatformLog.Warn("acceptance: cannot write the result: " + e.Message);
+            }
+
+            Application.Quit(1);
+        }
+
+        static void WriteAtomically(string path, string text)
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(path)));
+            var tmp = path + ".tmp";
+            File.WriteAllText(tmp, text, new System.Text.UTF8Encoding(false));
+            if (File.Exists(path)) File.Replace(tmp, path, null);
+            else File.Move(tmp, path);
         }
 
         async Task RunLive(CancellationToken ct)
@@ -241,13 +348,21 @@ namespace DeviceChain.Sitepulse.App
 
             tenant = cfg.Value.Tenant;
             runnerConfig = cfg.Value;
-            hud.SetBadge(SitepulseModes.Badge(mode, cfg.Value.Tenant, cfg.Value.InstanceId), BadgeTone.Live);
+            hud.SetBadge(LiveBadge(cfg.Value.Tenant, cfg.Value.InstanceId), LiveTone());
             PlatformLog.Info($"live · {cfg.Value} · api {cfg.Value.ApiOrigin}");
+            if (acceptance != null) PlatformLog.Info($"{acceptance.RunLabel} · results in {AcceptanceDir()}");
 
             broker = new TokenBroker(cfg.Value, client.Fetch);
             var queries = OperatorQueries.Create(cfg.Value, broker);
             board = new ReadinessBoard(devices, tenant);
             var credentials = new DeviceCredentials();
+            if (acceptance != null && acceptance.IsControl && acceptance.Control.Target != null && !HasDevice(devices, acceptance.Control.Target))
+            {
+                Stop("The acceptance control cannot start", $"{AcceptanceFlags.ControlFlag} names {acceptance.Control.Target}, which is not a device of this scene");
+                return;
+            }
+
+            if (acceptance != null) StartProbe();
             Render();
 
             byte[] caPem;
@@ -258,8 +373,15 @@ namespace DeviceChain.Sitepulse.App
                 return;
             }
 
-            await new DeviceBinder(queries.AsQueryFn(), contract).BindAsync(devices, board, credentials, ct);
+            // an acceptance control may rename one device in the resolve query; nothing else touches it
+            await new DeviceBinder(AcceptanceControls.WrapBind(queries.AsQueryFn(), acceptance?.Control), contract).BindAsync(devices, board, credentials, ct);
             PlatformLog.Info($"bind complete · {board.Summary()}");
+            if (acceptance != null && acceptance.IsControl && acceptance.Control.Kind == ControlSpec.BadCredential)
+            {
+                var corrupted = AcceptanceControls.CorruptCredential(credentials, board.TokenOf(acceptance.Control.Target));
+                PlatformLog.Info($"{acceptance.RunLabel} · one character of {acceptance.Control.Target}'s credential changed: {(corrupted ? "yes" : "NO (it has no credential)")}");
+            }
+
             ApplyGhosts();
             Render();
 
@@ -276,7 +398,14 @@ namespace DeviceChain.Sitepulse.App
 
             // sessions: one per credentialed device; a device without one is grey and does not publish
             poses = new RigPoseSource(fleet, overlay);
-            plane = new DeviceFleet(board, credentials, new SdkDeviceLinkFactory(cfg.Value, caPem), platformState: lastState, sceneHasZone: site.HasZone);
+            IDeviceLinkFactory links = new SdkDeviceLinkFactory(cfg.Value, caPem);
+            if (acceptance != null)
+            {
+                sampleLog = new EmittedSampleLog(Path.Combine(AcceptanceDir(), PhaseAProbe.SampleFile));
+                links = new RecordingLinkFactory(links, sampleLog);
+            }
+
+            plane = new DeviceFleet(board, credentials, links, platformState: lastState, sceneHasZone: site.HasZone);
             _ = plane.StartAll();
             BuildTaskLayer();
 
@@ -316,6 +445,7 @@ namespace DeviceChain.Sitepulse.App
         {
             if (broker == null) return;
             broker.Tick();
+            TickProbe();
             if (plane != null && !stopped)
             {
                 plane.Pump();
@@ -484,12 +614,17 @@ namespace DeviceChain.Sitepulse.App
                 PlatformLog.Warn("device sessions did not all close in time");
         }
 
-        void OnApplicationQuit() => Teardown();
+        void OnApplicationQuit()
+        {
+            Teardown();
+            sampleLog?.Dispose();
+        }
 
         void OnDestroy()
         {
             cts?.Cancel();
             Teardown();
+            sampleLog?.Dispose();
             if (previousRunInBackground.HasValue) Application.runInBackground = previousRunInBackground.Value;
             cts?.Dispose();
             hud?.Destroy();

@@ -222,6 +222,93 @@ The C# SDK is a local package (`sdks/unity/io.devicechain.sdk`). Its DLLs are bu
 config, resolves the scene's devices and opens one measurement subscription, then writes
 `live-smoke.log` beside the player log and quits.
 
+## Live environment
+
+Live mode needs a DeviceChain instance and the Sitepulse simulation's runner. `tools/live-env.sh`
+brings up one that is isolated from every other DeviceChain state on the machine:
+
+```
+tools/live-env.sh up              # a kind cluster "sitepulse", one instance, the sim and its runner, the broker CA
+tools/live-env.sh status          # read-only: what is running (changes nothing, prints no secret)
+tools/live-env.sh down --stop     # pause it (runner and node stopped, everything kept); `up` resumes it
+tools/live-env.sh down            # tear it down and remove its home
+tools/live-env.sh runner stop     # stop (or `start`) just the runner; the cluster is left alone
+tools/live-env.sh sample <label> [seconds] [interval]   # footprint: node CPU and memory, per-container working set
+tools/live-env.sh verify          # confirm the scenario's objects through the platform GraphQL
+```
+
+Every `dcctl`, `kind`, `kubectl` and `helm` call runs with its own `HOME` (`$SP_HOME`, default
+`~/sitepulse-env`) and its own `KUBECONFIG`, so `~/.devicechain` and `~/.kube/config` are never read
+or written, and no other kind cluster is touched. `up` refuses to start when a host port (80, 443,
+1883, 8090) is held by anything that is not this environment, or when another kind node publishes
+those ports; stop that one yourself first. The platform comes from a released `dcctl` whose checksum
+and build attestation are verified (`DC_VERSION`, default 0.19.0). The runner's `/config.json` serves a
+tenant-admin token on loopback only; the script never prints it. It needs `docker`, `kind`, `kubectl`,
+`helm`, `openssl`, `curl`, `gh` (to download `dcctl`) and OpenTofu or Terraform. `up` writes the broker's
+CA to `$SP_HOME/nats-ca.pem` (and to `$SP_CA_OUT` if set, e.g. a folder under `/mnt/c` the player
+can read); that is the `-dc-ca` a player is started with.
+
+## Acceptance
+
+`tools/phase-a-acceptance.sh` runs the Phase A acceptance against that environment. It launches the Windows
+IL2CPP player in Live mode with `-sitepulse-acceptance phaseA`, and while the player's own probe
+measures what only the player can see, `tools/phase_a_check.py` judges what the platform holds.
+
+```
+tools/live-env.sh up                                  # once
+tools/phase-a-acceptance.sh --build editor|batch      # build the player first (editor: $UNITY_EVAL; batch: Editor closed)
+tools/phase-a-acceptance.sh                           # the run, with the player already built
+tools/phase-a-acceptance.sh --controls                # the run, then every negative control
+tools/phase-a-acceptance.sh --controls-only
+```
+
+The player is built by `DeviceChain.Sitepulse.EditorTools.BuildPlayer.Windows64Il2Cpp` (Windows x64,
+IL2CPP, the build settings' scenes, `Build/Sitepulse.exe`), which also writes `Build/build-info.json`: the
+git commit and whether the tracked tree was clean, the C# SDK's last commit, the Unity version, the
+scripting backend, the stripping level and the build time. The run fails if that commit is not `HEAD`.
+
+What it checks:
+
+- **Fleet**: all 19 devices bound, credentialed, publishing and observed, with the time each took; all
+  19 observed within 30 s of the player's start.
+- **Cards**: every value on a Live card, and every value read for all 19 devices from the observer's state,
+  has Observed provenance and was observed in this run (asserted by the probe from `ObservedState`, not from
+  pixels).
+- **Storage**: every sample the player emitted (its `phaseA-samples.jsonl`: device, kind, occurredTime, values) is
+  stored, matched by device and occurredTime (within a millisecond) and by key and value, never by count;
+  stored Location rows carry speed, heading and elevation, as does `latestLocations`.
+- **Commands**: a console-style `goto-area sp-zone-yard` to SP-HL-0003 is SUCCESSFUL with `respondedTime`; a
+  `goto-refuel` then a `goto-area sp-zone-fill` to SP-HL-0001 end FAILED "superseded by ..." then SUCCESSFUL;
+  an unknown `areaToken` is rejected at enqueue with `PAYLOAD_SCHEMA_VIOLATION`; a command to SP-PL-0001 is
+  FAILED with a reason; and the probe lowers SP-HL-0006's tank as the presenter's **P** does, so the platform's
+  own low-fuel rule sends the `goto-refuel`, which must be SUCCESSFUL.
+- **Fuel**: SP-HL-0006's stored fuel rises only between that command's `sentTime` and `respondedTime`
+  (widened by 3 s for the two machines' clocks; `environment.json` records the measured offset).
+- **Corroboration**: each platform outcome against the device's own log (received, accepted, service started
+  and finished, SUCCESS; a superseded row; a refusal row; nothing at all for the rejected command).
+
+Evidence lands in `Build/acceptance/phaseA-<timestamp>/` (not under version control): `SUMMARY.md` (every item
+PASS or FAIL), `report.json`, `build-info.json`, `environment.json` (platform version, CA fingerprint, clock
+offset), `phaseA-result.json` (the probe), `phaseA-samples.jsonl`, `checker-*.json`, the filtered player log
+and a screenshot, with each control in `controls/<name>/`. The player's log is reduced to its `[sitepulse]`
+lines and run through the player's own redaction, and the bundle is scanned for any 32-hex or JWT shape;
+the runner's token is held in a variable and never printed or stored.
+
+Negative controls (`--controls`), each shown to fail the right way (the run exits non-zero if one does not):
+`bogus-binding:SP-HL-0004` (that device is listed under a name the platform does not have: a grey placeholder
+with a message, the other 18 still observed); `wrong-ca` (a freshly generated self-signed CA: TLS refused, every
+device failed or still connecting, nothing stored by the platform); `bad-credential:SP-DZ-0002` (one
+character of that device's credential changed: refused at connect, blind and grey, the other 18 fine);
+`unknown-command` (rejected at enqueue with `COMMAND_NOT_IN_VOCABULARY`, as data); and `runner-stop` (the
+runner is stopped for a minute while the fleet runs: observation goes on, because the observer talks to the
+platform and not the runner, so no banner appears within the operator token's 15 minutes; the control
+records that and does not exercise the token's expiry).
+
+The injected faults are flags that only exist under `-sitepulse-acceptance`: `-sitepulse-control <spec>`
+alone is a startup error, and a control run says so in the badge (amber, `ACCEPTANCE CONTROL ...`), in the
+log and in `phaseA-result.json`. The checker's pure parts have unit tests: `cd tools && python3 -m unittest
+test_phase_a_check`.
+
 ## Quality levels
 
 - **PC**: the full look (MSAA, screen-space ambient occlusion, long four-cascade shadows).
@@ -253,7 +340,8 @@ machines with tracks of the right length, and the geofence encloses the cut insi
 work site's colour map, and that a device card's record holds only the profiles' measurement
 keys, alarms and command states. The platform tests cover the runner config and `live.json`
 validation, the token refresh schedule, device binding and the credential cross-check over canned
-responses, and the log redactor. (`ArtSource/terrain/quarry_fleet.py` fails if any two machines' footprints touch.) Run them from **Window > General > Test Runner**,
+responses, and the log redactor; the acceptance tests cover its flags, its injected faults, the emitted-sample
+log and the probe. (`ArtSource/terrain/quarry_fleet.py` fails if any two machines' footprints touch.) Run them from **Window > General > Test Runner**,
 or from the command line with the Editor closed:
 
 ```

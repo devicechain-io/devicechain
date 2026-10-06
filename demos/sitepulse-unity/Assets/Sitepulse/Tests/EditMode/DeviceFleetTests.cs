@@ -338,6 +338,24 @@ namespace DeviceChain.Sitepulse.Tests
             finally { fleet.Shutdown(TimeSpan.FromSeconds(10)); }
         }
 
+        [Test]
+        public void ARefusalAtConnectIsWordedAsTheBrokersAndTheDeviceIsStoppedNotLeftConnecting()
+        {
+            var (board, creds) = Credentialed(Fleet);
+            var factory = new FakeFactory { Customise = l => { if (l.Id == "SP-HL-0002") l.StartThrows = new InvalidOperationException("connecting to ssl://localhost:1883/ failed: Connecting with MQTT server failed (NotAuthorized)."); } };
+            var fleet = StartedFleet(board, creds, factory);
+            try
+            {
+                var d = board["SP-HL-0002"];
+                Assert.IsTrue(d.Failed);
+                StringAssert.Contains("refused by the broker (NotAuthorized)", d.FailReason);
+                StringAssert.DoesNotContain("ssl://", d.FailReason, "the raw exception text is for the log, not the readiness line");
+                Assert.AreEqual(DeviceSide.Stopped, d.Side);
+                Assert.IsTrue(DeviceChain.Sitepulse.App.PhaseAProbe.BrokerRefusedAtConnect(d));
+            }
+            finally { fleet.Shutdown(TimeSpan.FromSeconds(10)); }
+        }
+
         // ---- commands
 
         [Test]
