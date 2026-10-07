@@ -654,45 +654,74 @@ namespace DeviceChain.Sitepulse.Tests
         static Shot[] Loop => Load("sitepulse-website-loop.json").Shots.ToArray();
 
         [Test]
-        public void TheLoopIsTwentyFiveSecondsOfSixteenByNineWithNoDialogJustFourChips()
+        public void TheLoopIsAboutHalfAMinuteOfSixteenByNineWithNoDialogJustFourChips()
         {
             var shots = Loop;
-            Assert.AreEqual(25.0, shots.Sum(s => s.Duration), 1e-9);
+            Assert.AreEqual(27.0, shots.Sum(s => s.Duration), 1e-9);
             Assert.IsTrue(shots.All(s => s.Width == 1920 && s.Height == 1080));
             var chips = shots.SelectMany(s => s.Chips).Select(c => c.Text).ToArray();
             CollectionAssert.AreEqual(new[] { "Telemetry over MQTT", "Rule fires: low fuel", "Command sent", "Command SUCCESSFUL" }, chips);
         }
 
         [Test]
-        public void TheLoopStartsAndEndsOnTheSameCameraPose()
+        public void TheLoopOpensAndClosesOnTheSameWidePoseAndIsMostlyNotCloseUps()
         {
             var shots = Loop;
             var first = shots.First();
             var last = shots.Last();
-            // the same machine pose at both ends: the follow rig is relative to it, so equal poses mean the camera is the same
+            Assert.AreEqual(RigKind.Fixed, first.Camera.Rig);
+            Assert.AreEqual(RigKind.Fixed, last.Camera.Rig);
             var s = new MachineSample { X = 12f, Y = 3f, Z = -8f, Heading = 70f };
             var a = CameraRigs.Evaluate(first.Camera, _ => s, 0, first.Duration);
             var b = CameraRigs.Evaluate(last.Camera, _ => s, last.Duration, last.Duration);
-            Assert.AreEqual(a.Position.x, b.Position.x, 1e-5);
-            Assert.AreEqual(a.Position.y, b.Position.y, 1e-5);
-            Assert.AreEqual(a.Position.z, b.Position.z, 1e-5);
-            Assert.AreEqual(a.LookAt.x, b.LookAt.x, 1e-5);
-            Assert.AreEqual(a.LookAt.y, b.LookAt.y, 1e-5);
-            Assert.AreEqual(a.LookAt.z, b.LookAt.z, 1e-5);
-            Assert.AreEqual(a.Fov, b.Fov);
-            // and every cut in between is on the same rig, so the joins do not jump the camera
-            foreach (var shot in shots)
-            {
-                var p = CameraRigs.Evaluate(shot.Camera, _ => s, shot.Duration / 2, shot.Duration);
-                Assert.AreEqual(a.Position.x, p.Position.x, 1e-5, shot.Name);
-                Assert.AreEqual(a.Fov, p.Fov, shot.Name);
-            }
-
-            // the same composition at both ends: the same card on the same machine, nothing else drawn
+            Assert.AreEqual(a.Position.x, b.Position.x, 1e-4);
+            Assert.AreEqual(a.Position.y, b.Position.y, 1e-4);
+            Assert.AreEqual(a.Position.z, b.Position.z, 1e-4);
+            Assert.AreEqual(a.LookAt.x, b.LookAt.x, 1e-4);
+            Assert.AreEqual(a.Fov, b.Fov, 1e-4);
+            // the closer follows tell the story beats, the rest show the site: at least three cuts are not a follow
+            Assert.GreaterOrEqual(shots.Count(x => x.Camera.Rig != RigKind.Follow), 3);
+            // and no two neighbouring cuts share a camera rig with the same placement
+            for (var i = 1; i < shots.Length; i++)
+                Assert.IsFalse(shots[i].Camera.Rig == shots[i - 1].Camera.Rig && shots[i].Camera.Rig == RigKind.Follow, shots[i].Name + " follows after a follow");
+            // the same composition at both ends
             Assert.AreEqual(first.Selected, last.Selected);
             Assert.AreEqual(first.Layers.Cards, last.Layers.Cards);
             Assert.AreEqual(first.Layers.Drawer, last.Layers.Drawer);
             Assert.AreEqual(first.Layers.Panel, last.Layers.Panel);
+        }
+
+        [Test]
+        public void TheLoopFileIsContinuousAndThePlanHasNoOverlapInRecordedTime()
+        {
+            var file = Load("sitepulse-website-loop.json");
+            Assert.IsTrue(file.Continuous, "the website loop declares that its cuts run forward without overlap");
+            using var take = new VideoTake();
+            var plan = ShotPlanner.Plan(file, take.Data);
+            for (var i = 1; i < plan.Count; i++)
+                Assert.GreaterOrEqual(plan[i].Start, plan[i - 1].Start + plan[i - 1].Shot.Duration - 1e-6, plan[i].Shot.Name + " starts before " + plan[i - 1].Shot.Name + " ends");
+        }
+
+        [Test]
+        public void AContinuousFileWhoseCutsOverlapIsRefusedByName()
+        {
+            using var take = new VideoTake();
+            string Json(string flag, double second) => @"{" + flag + @"""fps"":30,""shots"":[
+                {""name"":""first"",""startEvent"":{""kind"":""runStart""},""offset"":10,""duration"":5,""camera"":{""rig"":""fixed"",""pos"":[0,60,2],""lookAt"":[0,0,0]}},
+                {""name"":""second"",""startEvent"":{""kind"":""runStart""},""offset"":" + second.ToString(System.Globalization.CultureInfo.InvariantCulture) + @",""duration"":5,""camera"":{""rig"":""fixed"",""pos"":[0,60,2],""lookAt"":[0,0,0]}}]}";
+            var ex = Assert.Throws<ShotException>(() => ShotPlanner.Plan(ShotFile.Parse(Json(@"""continuous"":true,", 12)), take.Data));
+            StringAssert.Contains("second", ex.Message);
+            StringAssert.Contains("first", ex.Message);
+            StringAssert.Contains("continuous", ex.Message);
+            Assert.DoesNotThrow(() => ShotPlanner.Plan(ShotFile.Parse(Json(@"""continuous"":true,", 15)), take.Data), "starting exactly where the last one ended is not an overlap");
+            Assert.DoesNotThrow(() => ShotPlanner.Plan(ShotFile.Parse(Json("", 12)), take.Data), "a file that does not declare it is cut by an editor and may repeat a moment");
+        }
+
+        [Test]
+        public void TheContinuousFlagMustBeABoolean()
+        {
+            var json = @"{""continuous"":""yes"",""shots"":[{""name"":""x"",""startEvent"":{""kind"":""runStart""},""duration"":2,""camera"":{""rig"":""fixed"",""pos"":[0,1,2],""lookAt"":[0,0,0]}}]}";
+            StringAssert.Contains("continuous", Assert.Throws<ShotException>(() => ShotFile.Parse(json)).Message);
         }
 
         [Test]
@@ -706,10 +735,10 @@ namespace DeviceChain.Sitepulse.Tests
             CollectionAssert.AreEqual(new[] { "Telemetry over MQTT", "Rule fires: low fuel", "Command sent", "Command SUCCESSFUL" }, story.Select(x => x.chip).ToArray());
             for (var i = 1; i < story.Count; i++) Assert.Greater(story[i].runSeconds, story[i - 1].runSeconds, story[i].chip + " comes after " + story[i - 1].chip);
             Assert.AreEqual(205.0, story.Single(x => x.chip == "Rule fires: low fuel").runSeconds, 1e-6, "the alarm line the platform sent");
-            Assert.AreEqual(206.5, story.Single(x => x.chip == "Command sent").runSeconds, 1e-6, "the command's SENT");
+            Assert.AreEqual(207.25, story.Single(x => x.chip == "Command sent").runSeconds, 1e-6, "just after the command's SENT (206.5)");
             Assert.AreEqual(291.0, story.Single(x => x.chip == "Command SUCCESSFUL").runSeconds, 1e-6, "the platform's SUCCESSFUL");
             // the cuts run forward in time: the loop never plays the cycle backwards
-            for (var i = 1; i < plan.Count; i++) Assert.GreaterOrEqual(plan[i].Start, plan[i - 1].Start, plan[i].Shot.Name);
+            for (var i = 1; i < plan.Count; i++) Assert.GreaterOrEqual(plan[i].Start, plan[i - 1].Start + plan[i - 1].Shot.Duration - 1e-6, plan[i].Shot.Name);
             Assert.IsTrue(plan.All(p => !p.Shot.Camera.Machines().Except(new[] { "SP-HL-0006" }).Any()));
         }
 
