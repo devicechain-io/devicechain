@@ -1,5 +1,5 @@
 {
-  "description": "The Unity shots of the Sitepulse feature video (S02-S16, S21, S22) in 16:9, each started from an event a video run records (-sitepulse-video-run): the establishing and plant shots from the start of the recording (offsets sit inside the run's first 150 s of steady work), the low-fuel story from SP-HL-0006's own events, the tyre story from SP-HL-0003's, and S21 from the operator's goto-area arriving. S13 and S14 are each two shots (the alarm clears early in the 40 s service, the command succeeds at its end). Renders are a replay of a recorded live run: say so in the video's description and captions (render.json carries the run, the date and the clock). No shot asks for the badge, the readiness panel, the key help or a replay tag: a render has none. Offsets are for tuning against the frames.",
+  "description": "The Unity shots of the Sitepulse feature video (S02-S16, S21, S22) in 16:9, each started from an event a video run records (-sitepulse-video-run): the establishing and plant shots from the start of the recording (offsets sit inside the run's first 150 s of steady work), the low-fuel story from SP-HL-0006's own events, the tyre story from SP-HL-0003's, and S21 from the platform's SUCCESSFUL of the operator's goto-area (the shot runs on to 2 s after it). S13 and S14 are each two shots (the alarm clears early in the 40 s service, the command succeeds at its end). Renders are a replay of a recorded live run: say so in the video's description and captions (render.json carries the run, the date and the clock). No shot asks for the badge, the readiness panel, the key help or a replay tag: a render has none. Offsets are for tuning against the frames.",
   "fps": 60,
   "shots": [
     {
@@ -67,8 +67,8 @@
       "startEvent": {"kind": "runStart"},
       "offset": 94,
       "duration": 5,
-      "camera": {"rig": "follow", "target": "SP-DZ-0001", "back": 14, "up": 4, "side": -9, "fov": 38, "lookSide": 3.5},
-      "focus": "SP-DZ-0001",
+      "camera": {"rig": "follow", "target": "SP-HL-0002", "back": 14, "up": 4, "side": -9, "fov": 38, "lookSide": 3.5},
+      "focus": "SP-HL-0002",
       "cards": false,
       "panel": true
     },
@@ -201,9 +201,9 @@
     },
     {
       "name": "s21-operator-command-arrives",
-      "startEvent": {"kind": "timeline", "device": "SP-HL-0003", "rowKind": "arrived", "contains": "parked"},
-      "offset": -4.5,
-      "duration": 5,
+      "startEvent": {"kind": "command", "name": "goto-area", "status": "SUCCESSFUL", "device": "SP-HL-0003"},
+      "offset": -5,
+      "duration": 7,
       "camera": {"rig": "follow", "target": "SP-HL-0003", "back": 16, "up": 14, "side": -4, "fov": 45},
       "focus": "SP-HL-0003",
       "route": true

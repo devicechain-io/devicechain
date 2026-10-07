@@ -7,7 +7,9 @@ using System.Linq;
 using DeviceChain.Sitepulse.Domain;
 using DeviceChain.Sitepulse.Recording;
 using DeviceChain.Sitepulse.Replay;
+using DeviceChain.Sitepulse.Visuals;
 using NUnit.Framework;
+using UnityEngine;
 
 namespace DeviceChain.Sitepulse.Tests
 {
@@ -87,9 +89,137 @@ namespace DeviceChain.Sitepulse.Tests
             Assert.AreEqual(new[] { "alarm low-fuel ACTIVE · MAJOR", "command goto-refuel SENT" }, Texts(log));
             log.AlarmObserved(Truck, "al-1", "low-fuel", "CLEARED", "MAJOR", T0.AddSeconds(30));
             Assert.AreEqual(3, Rows(log).Count);
-            // a second alarm of the same key is another alarm, with its own rows
-            log.AlarmObserved(Truck, "al-2", "low-fuel", "ACTIVE", "MAJOR", T0.AddSeconds(90));
+            // the platform keeps ONE alarm row per device and key and flips it in place: the SAME token raised again is another row
+            log.AlarmObserved(Truck, "al-1", "low-fuel", "ACTIVE", "MAJOR", T0.AddSeconds(90));
             Assert.AreEqual(4, Rows(log).Count);
+        }
+
+        [Test]
+        public void OneAlarmTokenCyclingActiveClearedActiveClearedIsFourRows()
+        {
+            var log = new ProofLog();
+            for (var cycle = 0; cycle < 2; cycle++)
+            {
+                log.AlarmObserved(Truck, "al-1", "low-fuel", "ACTIVE", "MAJOR", T0.AddSeconds(100 * cycle));
+                log.AlarmObserved(Truck, "al-1", "low-fuel", "CLEARED", "MAJOR", T0.AddSeconds(100 * cycle + 40));
+            }
+
+            Assert.AreEqual(new[] { "ACTIVE", "CLEARED", "ACTIVE", "CLEARED" }, Rows(log).Select(r => r.Text.Split(' ')[2]).ToArray());
+            // told again (the stream after the snapshot, a repeat of the poll) they add nothing
+            var v = log.Version;
+            log.AlarmObserved(Truck, "al-1", "low-fuel", "ACTIVE", "MAJOR", T0.AddSeconds(100));
+            log.AlarmObserved(Truck, "al-1", "low-fuel", "CLEARED", "MAJOR", T0.AddSeconds(40));
+            Assert.AreEqual(v, log.Version);
+            Assert.AreEqual(4, Rows(log).Count);
+        }
+
+        [Test]
+        public void ARetakeShowsTheNewActiveAfterTheSnapshotsOldOneAndTheClear()
+        {
+            var log = new ProofLog();
+            // the startup snapshot still listed the previous take's alarm; then it cleared; then this take raised the same alarm again
+            log.AlarmObserved(Truck, "al-1", "low-fuel", "ACTIVE", "MAJOR", T0);
+            log.AlarmObserved(Truck, "al-1", "low-fuel", "CLEARED", "MAJOR", T0.AddSeconds(30));
+            log.AlarmObserved(Truck, "al-1", "low-fuel", "ACTIVE", "MAJOR", T0.AddSeconds(600));
+            var rows = Rows(log);
+            Assert.AreEqual(3, rows.Count);
+            Assert.AreEqual("alarm low-fuel ACTIVE · MAJOR", rows[2].Text);
+            Assert.AreEqual(T0.AddSeconds(600), rows[2].At);
+        }
+
+        [Test]
+        public void AnAcknowledgementOrANewSeverityIsNotAnotherActiveRow()
+        {
+            var log = new ProofLog();
+            log.AlarmObserved(Truck, "al-1", "low-fuel", "ACTIVE", "MAJOR", T0);
+            log.AlarmObserved(Truck, "al-1", "low-fuel", "ACTIVE", "MAJOR", T0.AddSeconds(5));
+            log.AlarmObserved(Truck, "al-1", "low-fuel", "ACTIVE", "CRITICAL", T0.AddSeconds(9));
+            Assert.AreEqual(1, Rows(log).Count);
+        }
+
+        [Test]
+        public void AResetStartsTheChainOverSoAFreshRunsAlarmIsARowAgain()
+        {
+            var log = new ProofLog();
+            log.AlarmObserved(Truck, "al-1", "low-fuel", "ACTIVE", "MAJOR", T0);
+            log.Reset();
+            Assert.AreEqual(0, Rows(log).Count);
+            log.AlarmObserved(Truck, "al-1", "low-fuel", "ACTIVE", "MAJOR", T0);
+            Assert.AreEqual(1, Rows(log).Count);
+        }
+
+        [Test]
+        public void ADevicesReceiptThatCameBeforeThePollThatSawSentStillReadsQueuedSentReceived()
+        {
+            var log = new ProofLog();
+            // the device (its own clock) received the command at 3.2 s; the 1 Hz poll saw it QUEUED at 3.0 and SENT only at 4.0
+            log.CommandObserved(Truck, "tok-0000-abcdef1234", "goto-refuel", "QUEUED", T0.AddSeconds(3.0), T0.AddSeconds(3.0));
+            log.DeviceRow(Truck, T0.AddSeconds(3.2), "received", "goto-refuel (…abcdef1234)");
+            log.DeviceRow(Truck, T0.AddSeconds(3.3), "accepted", "refuel bay: route 212 m, ETA 48 s");
+            log.CommandObserved(Truck, "tok-0000-abcdef1234", "goto-refuel", "SENT", T0.AddSeconds(3.0), T0.AddSeconds(4.0));
+            var rows = Rows(log);
+            CollectionAssert.AreEqual(new[] { "command goto-refuel QUEUED", "command goto-refuel SENT", "received · goto-refuel (…abcdef1234)", "accepted · refuel bay: route 212 m, ETA 48 s" },
+                rows.Select(r => r.Text).ToArray());
+            Assert.IsFalse(rows[0].Seen, "QUEUED is dated by the platform");
+            Assert.IsTrue(rows[1].Seen, "SENT is only when this app saw it");
+            Assert.IsFalse(rows[2].Seen);
+        }
+
+        [Test]
+        public void AnotherCommandsRowsAndOtherRowsKeepTheirTimeOrderAroundOneCommandsChain()
+        {
+            var log = new ProofLog();
+            log.AlarmObserved(Truck, "al-1", "low-fuel", "ACTIVE", "MAJOR", T0.AddSeconds(1));
+            log.CommandObserved(Truck, "tok-1-aaaaaaaaaa", "goto-refuel", "QUEUED", T0.AddSeconds(2), T0.AddSeconds(2.5));
+            log.DeviceRow(Truck, T0.AddSeconds(2.2), "received", "goto-refuel (…aaaaaaaaaa)");
+            log.CommandObserved(Truck, "tok-1-aaaaaaaaaa", "goto-refuel", "SENT", T0.AddSeconds(2), T0.AddSeconds(3.5));
+            log.DeviceRow(Truck, T0.AddSeconds(2.3), "accepted", "refuel bay");
+            log.DeviceRow(Truck, T0.AddSeconds(60), "refuelling", "service started");
+            log.DeviceRow(Truck, T0.AddSeconds(90), "outcome", "SUCCESS: refuelled");
+            log.CommandObserved(Truck, "tok-1-aaaaaaaaaa", "goto-refuel", "SUCCESSFUL", T0.AddSeconds(2), T0.AddSeconds(88));
+            CollectionAssert.AreEqual(
+                new[]
+                {
+                    "alarm low-fuel ACTIVE · MAJOR", "command goto-refuel QUEUED", "command goto-refuel SENT", "received · goto-refuel (…aaaaaaaaaa)", "accepted · refuel bay",
+                    "refuelling · service started", "outcome · SUCCESS: refuelled", "command goto-refuel SUCCESSFUL",
+                },
+                Texts(log), "the device's outcome comes before the platform's finishing state even when a poll saw the platform's first");
+        }
+
+        [Test]
+        public void AClockThatRunsBehindNeverPutsARowAboveItsOwnCommandsQueueing()
+        {
+            var log = new ProofLog();
+            log.CommandObserved(Truck, "tok-2-bbbbbbbbbb", "goto-refuel", "QUEUED", T0.AddSeconds(100), T0.AddSeconds(100));
+            log.DeviceRow(Truck, T0.AddSeconds(90), "received", "goto-refuel (…bbbbbbbbbb)");
+            log.DeviceRow(Truck, T0.AddSeconds(95), "outcome", "SUCCESS");
+            log.CommandObserved(Truck, "tok-2-bbbbbbbbbb", "goto-refuel", "SUCCESSFUL", T0.AddSeconds(100), T0.AddSeconds(101));
+            CollectionAssert.AreEqual(new[] { "command goto-refuel QUEUED", "received · goto-refuel (…bbbbbbbbbb)", "outcome · SUCCESS", "command goto-refuel SUCCESSFUL" }, Texts(log));
+        }
+
+        [Test]
+        public void ThePresentersRowsAreNeverPushedOutOfTheDrawerByALongChain()
+        {
+            var log = new ProofLog();
+            log.DeviceRow(Truck, T0, "presenter", "prepare low-fuel cycle: fuel 18.0% -> 15.5%");
+            log.SampleObserved(Truck, "fuel_pct", 14.97, T0.AddSeconds(40), false);
+            log.AlarmObserved(Truck, "al-1", "low-fuel", "ACTIVE", "MAJOR", T0.AddSeconds(41));
+            log.CommandObserved(Truck, "c-1", "goto-refuel", "QUEUED", T0.AddSeconds(41.5), T0.AddSeconds(42));
+            log.CommandObserved(Truck, "c-1", "goto-refuel", "SENT", T0.AddSeconds(41.5), T0.AddSeconds(43));
+            log.DeviceRow(Truck, T0.AddSeconds(43.2), "received", "goto-refuel (…abc)");
+            log.DeviceRow(Truck, T0.AddSeconds(43.3), "accepted", "refuel bay: route 212 m, ETA 48 s");
+            log.DeviceRow(Truck, T0.AddSeconds(100), "refuelling", "service started at 14.6% fuel");
+            log.AlarmObserved(Truck, "al-1", "low-fuel", "CLEARED", "MAJOR", T0.AddSeconds(102));
+            log.DeviceRow(Truck, T0.AddSeconds(140), "refuelling", "service finished: 14.6% -> 95.0%");
+            log.DeviceRow(Truck, T0.AddSeconds(140), "outcome", "SUCCESS: refuelled 14.6% to 95.0%");
+            log.CommandObserved(Truck, "c-1", "goto-refuel", "SUCCESSFUL", T0.AddSeconds(41.5), T0.AddSeconds(141));
+            log.SampleObserved(Truck, "tyre_pressure_kpa", 590, T0.AddSeconds(150), false);
+            log.AlarmObserved(Truck, "al-2", "tyre-pressure-low", "ACTIVE", "MAJOR", T0.AddSeconds(151));
+            var rows = Rows(log, max: 12);
+            Assert.AreEqual(12, rows.Count);
+            Assert.IsTrue(rows.Any(r => r.Source == ProofSource.Presenter && r.Text.Contains("prepare low-fuel")), "the disclosure stays");
+            Assert.AreEqual("alarm tyre-pressure-low ACTIVE · MAJOR", rows.Last().Text, "and the newest is still the newest");
+            for (var i = 1; i < rows.Count; i++) Assert.GreaterOrEqual(rows[i].At, rows[0].At);
         }
 
         [Test]
@@ -197,6 +327,101 @@ namespace DeviceChain.Sitepulse.Tests
         }
 
         const int ProofDrawerRowsFit = 12;
+    }
+
+    /// <summary>The proof drawer and the chips do not jump: the drawer's top edge is pinned and a box that must move glides as the cards do.</summary>
+    public sealed class CalmLayoutTests
+    {
+        static readonly (DrawerMode mode, float refW, string name)[] Frames =
+        {
+            (DrawerMode.Side, 1920f, "landscape side"),
+            (DrawerMode.Side, 607.5f, "portrait side"),
+            (DrawerMode.Full, 1920f, "landscape full"),
+            (DrawerMode.Full, 607.5f, "portrait full"),
+        };
+
+        [Test]
+        public void ARowMoreGrowsTheDrawerDownwardAndMovesNothingAlreadyOnScreen()
+        {
+            foreach (var (mode, refW, name) in Frames)
+            {
+                var before = DrawerLayout.Place(mode, refW, DrawerLayout.HeightFor(0));
+                for (var rows = 1; rows <= DrawerLayout.MaxRows; rows++)
+                {
+                    var now = DrawerLayout.Place(mode, refW, DrawerLayout.HeightFor(rows));
+                    Assert.AreEqual(before.yMax, now.yMax, 0.001f, name + ": the top edge stays at " + rows + " rows");
+                    Assert.AreEqual(before.x, now.x, 0.001f, name + ": and so does its left edge");
+                    Assert.GreaterOrEqual(now.yMin, 0f, name + ": a full drawer stays on screen");
+                    before = now;
+                }
+            }
+        }
+
+        [Test]
+        public void TheDrawersSizeDoesNotDependOnHowManyRowsItHolds()
+        {
+            foreach (var (mode, refW, name) in Frames)
+                Assert.AreEqual(DrawerLayout.ScaleFor(mode, refW), DrawerLayout.Place(mode, refW, DrawerLayout.HeightFor(3)).width / DrawerLayout.W, 0.0001f, name);
+        }
+
+        [Test]
+        public void AHeightThatMustChangeGlidesNoFasterThanTheCardsDoAndReducedMotionSnaps()
+        {
+            float from = DrawerLayout.HeightFor(5), to = DrawerLayout.HeightFor(6), v = 0f, h = from;
+            const float dt = 1f / 60f;
+            var first = CalmGlide.Step(h, to, ref v, dt, false, false);
+            Assert.Less(first - from, (to - from) * 0.5f, "a row's worth of height is not taken in one frame");
+            h = first;
+            var steps = 1;
+            while (Mathf.Abs(to - h) > 0.05f && steps < 600)
+            {
+                var next = CalmGlide.Step(h, to, ref v, dt, false, false);
+                Assert.LessOrEqual(Mathf.Abs(next - h), CardTiming.GlideMaxSpeed * dt + 0.0001f);
+                h = next;
+                steps++;
+            }
+
+            Assert.Less(steps, 90, "and it gets there within about a second and a half");
+            var rv = 0f;
+            Assert.AreEqual(to, CalmGlide.Step(from, to, ref rv, dt, true, false), 0.0001f, "reduced motion: no glide");
+            Assert.AreEqual(to, CalmGlide.Step(from, to, ref rv, dt, false, true), 0.0001f, "a still: no glide");
+        }
+
+        static (List<Vector2> sizes, List<bool> on) Chips(params bool[] on) =>
+            (on.Select(_ => new Vector2(300f, 40f)).ToList(), on.ToList());
+
+        [Test]
+        public void AChipThatLeavesTheStackClosesTheGapAboveItInTheLandscapeStackAndBelowItInThePortraitOne()
+        {
+            var (sizes, on) = Chips(true, true, true);
+            var t = new List<Vector2>();
+            ChipStack.Place(sizes, on, false, 36f, 36f, 8f, t);
+            CollectionAssert.AreEqual(new[] { 36f, 84f, 132f }, t.Select(p => p.y).ToArray());
+            on[0] = false;
+            ChipStack.Place(sizes, on, false, 36f, 36f, 8f, t);
+            Assert.AreEqual(36f, t[1].y, "the second chip is now first: it is where the first was");
+            Assert.AreEqual(84f, t[2].y);
+
+            on[0] = true;
+            ChipStack.Place(sizes, on, true, 18f, 900f, 8f, t);
+            CollectionAssert.AreEqual(new[] { 860f, 812f, 764f }, t.Select(p => p.y).ToArray());
+        }
+
+        [Test]
+        public void AChipWhoseSlotMovesGlidesThereInsteadOfJumping()
+        {
+            var shown = new Vector2(36f, 84f);
+            var target = new Vector2(36f, 36f);
+            var v = Vector2.zero;
+            const float dt = 1f / 60f;
+            var next = CalmGlide.Step(shown, target, ref v, dt, false, false);
+            Assert.Greater(next.y, 60f, "one frame is nowhere near the whole 48 units");
+            Assert.Less(next.y, 84f);
+            Assert.AreEqual(36f, next.x, 0.0001f);
+            var steps = 0;
+            while ((next - target).magnitude > 0.05f && steps++ < 600) next = CalmGlide.Step(next, target, ref v, dt, false, false);
+            Assert.Less(steps, 90);
+        }
     }
 
     /// <summary>What a recording's lines become: the same rows the live app held, from the one function both use.</summary>

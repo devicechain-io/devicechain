@@ -189,6 +189,8 @@ namespace DeviceChain.Sitepulse.Visuals
 
         sealed class ZoneLabel
         {
+            public string token, name;
+            public Text text;
             public Vector3 at;
             public RectTransform chip;
             public CanvasGroup group;
@@ -244,6 +246,9 @@ namespace DeviceChain.Sitepulse.Visuals
 
         /// <summary>Where the proof drawer's rows come from (the live app's log, or a replay's, rebuilt from the recording). Null: no drawer.</summary>
         public IProofRows Proof { get; set; }
+
+        /// <summary>The platform's names for the site's zones (Live: asked of the platform; a replay: read from the recording). Null, or a zone it has no name for: no label, never a guessed one.</summary>
+        public ZoneNameBook ZoneBook { get; set; }
 
         /// <summary>The route a machine is driving, by id (the task layer's, or a replay's from the recording); null for none.</summary>
         public Func<string, RoutePolyline> RouteOf { get; set; }
@@ -417,7 +422,7 @@ namespace DeviceChain.Sitepulse.Visuals
             Refresh(Camera.main);
         }
 
-        /// <summary>One name over each of the site's zones: the platform's own name for the area, the feature file's label where the platform has none.</summary>
+        /// <summary>One name over each of the site's zones, the platform's own name for the area. A zone the run has no name for shows none.</summary>
         void BuildZoneLabels()
         {
             var file = JsonUtility.FromJson<FeatureFile>(features.text);
@@ -429,13 +434,13 @@ namespace DeviceChain.Sitepulse.Visuals
                 var chip = Image(canvasRect, "Zone " + z.token, Vector2.zero, new Vector2(10f, 30f), Panel);
                 Image(chip, "Edge", Vector2.zero, new Vector2(4f, 30f), Ok);
                 var text = Label(chip, "Text", new Vector2(14f, 4f), new Vector2(400f, 24f), 19, FontStyle.Bold, Ink);
-                text.text = ZoneNames.Of(z.token, z.label);
-                chip.sizeDelta = new Vector2(text.preferredWidth + 28f, 30f);
+                text.text = "";
+                chip.sizeDelta = new Vector2(28f, 30f);
                 var group = chip.gameObject.AddComponent<CanvasGroup>();
                 group.interactable = false;
                 group.blocksRaycasts = false;
                 chip.gameObject.SetActive(false);
-                zoneLabels.Add(new ZoneLabel { at = new Vector3(cx, terrain.HeightAt(cx, cz) + 6f, cz), chip = chip, group = group });
+                zoneLabels.Add(new ZoneLabel { token = z.token, text = text, at = new Vector3(cx, terrain.HeightAt(cx, cz) + 6f, cz), chip = chip, group = group });
             }
         }
 
@@ -980,7 +985,7 @@ namespace DeviceChain.Sitepulse.Visuals
                 panel = PanelModel.Build(sel.reading, sel.kindLabel, KeysOf(sel), at, source.StreamLive);
             AddBlocker(panelView.Update(canvasRect, panel, refW, dt, reduced, snap));
             AddBlocker(drawerView.Update(canvasRect, Layers.Drawer, Selected, Proof, refW, dt, reduced, snap));
-            chipsView.Update(canvasRect, Chips, ShotTime, refW, SafeInsets.x, snap);
+            chipsView.Update(canvasRect, Chips, ShotTime, refW, SafeInsets.x, snap, dt, reduced);
             foreach (var r in chipsView.Rects) AddBlocker(r);
             if (SafeInsets.x > 0f) blockers.Add(new Rect(0f, RefH * (1f - SafeInsets.x), refW, RefH * SafeInsets.x));
             if (SafeInsets.y > 0f) blockers.Add(new Rect(0f, 0f, refW, RefH * SafeInsets.y));
@@ -994,8 +999,19 @@ namespace DeviceChain.Sitepulse.Visuals
         /// <summary>A zone's name: it rides the zone's point while that place is clear, and fades out (rather than jumps) when it is not.</summary>
         void StepZone(ZoneLabel z, Camera cam, float refW, float dt, bool snap, bool reduced)
         {
+            var name = ZoneBook?.Of(z.token);
+            if (name != z.name)
+            {
+                z.name = name;
+                if (name != null)
+                {
+                    z.text.text = name;
+                    z.chip.sizeDelta = new Vector2(z.text.preferredWidth + 28f, 30f);
+                }
+            }
+
             var size = z.chip.sizeDelta * cardScale;
-            z.placer.Step(Layers.ZoneLabels ? 1 : 0, _ =>
+            z.placer.Step(Layers.ZoneLabels && name != null ? 1 : 0, _ =>
             {
                 var v = cam.WorldToViewportPoint(z.at);
                 var at = new Vector2(v.x * refW - size.x / 2f, v.y * RefH - size.y / 2f);

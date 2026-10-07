@@ -401,17 +401,22 @@ shot (it needs ffmpeg and says so when it is missing).
 drawn first on the selected card), `cardScale` and `chips`. The **proof drawer** lists what happened to the selected
 machine, each row with its time (UTC) and who says so: the platform (a sample below a rule's line, an alarm changing state,
 a command changing state), the device (its own timeline), the presenter. It draws only what happened: a state the observer
-never saw has no row, and a device's SUCCESS is never drawn as the platform's SUCCESSFUL. The **machine panel** shows the
+never saw has no row, and a device's SUCCESS is never drawn as the platform's SUCCESSFUL. The rows of one command read in the order
+it happened to it (queued, sent, the device receiving and accepting it, the device's outcome, the platform's finishing state), never
+by comparing clocks; the platform does not date the states between queued and finished, so those rows say "seen hh:mm:ss" (when
+this app saw them), not when they happened. The **machine panel** shows the
 machine's own profile metrics with units and the time each was last observed (a dozer's three, a truck's five). The
 **route highlight** draws the route the machine is driving on the terrain, from the task layer live and from the
 recorded `route` lines of `device.ndjson` in a replay. A **chip** is small print rendered into the frame
-(`{"text":"Command sent","event":{...},"duration":3}` starts when its recorded event did); only a shot file gives one.
+(`{"text":"Command sent","event":{...},"duration":3}` starts when its recorded event did, or `offset` seconds after it, never before); only a shot file gives one.
 There is no flag for the badge, the readiness panel, the key help or a replay tag: a render has none, and a shot file that
-asks for one is refused. In the app, **D** toggles the drawer, **I** the panel and **Z** the zone names (named as the platform
-names the areas); **K** punctures the selected machine's tyre (a slow leak through the model's own publish path, the
+asks for one is refused. In the app, **D** toggles the drawer, **I** the panel and **Z** the zone names (the platform's own area names: Live asks
+the platform once, read-only, and records the answer; a replay reads the recording; Choreographed, which is offline and illustrative,
+carries the manifest's copy. A zone the platform does not name, or a platform that cannot be asked, shows no label and the log says why); **K** punctures the selected machine's tyre (a slow leak through the model's own publish path, the
 presenter's input like **P**).
 
-**The feature video.** `tools/video-take.sh` records the one live take (the player's `-sitepulse-video-run`: steady work,
+**The feature video.** `tools/video-take.sh` records the one live take (the player's `-sitepulse-video-run`: it waits up to 5 minutes for every
+device to be observed, saying which one is not every 10 seconds, and otherwise exits 1 with the reason in `video-run.json`; then steady work,
 the low-fuel cycle on SP-HL-0006, the puncture on SP-HL-0003, then the operator's `goto-area sp-zone-yard` to SP-HL-0003,
 which you send from the console or, with `--unattended`, `tools/video_take.py operator` sends). The shots are
 `tools/shots/sitepulse-video.json` (every Unity shot of the script, 16:9), `sitepulse-video-9x16.json` (the portrait cut)

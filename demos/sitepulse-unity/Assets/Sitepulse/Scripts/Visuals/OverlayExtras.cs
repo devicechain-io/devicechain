@@ -75,9 +75,10 @@ namespace DeviceChain.Sitepulse.Visuals
     /// </summary>
     sealed class ProofDrawerView : FadeBox
     {
-        public const float W = 760f, RowH = 25f, HeadH = 52f, Pad = 14f;
-        public const int MaxRows = 12;
-        const int MaxChars = 68;
+        public const float W = DrawerLayout.W, RowH = DrawerLayout.RowH, HeadH = DrawerLayout.HeadH, Pad = DrawerLayout.Pad;
+        public const int MaxRows = DrawerLayout.MaxRows;
+        const int MaxChars = 60;
+        const float TimeW = 134f;
 
         sealed class Line
         {
@@ -91,7 +92,8 @@ namespace DeviceChain.Sitepulse.Visuals
         RectTransform edge;
         string shownDevice;
         int shownVersion = -1;
-        float clock;
+        float clock, shownH, heightVelocity;
+        bool placed;
 
         void Build(RectTransform canvas)
         {
@@ -104,8 +106,8 @@ namespace DeviceChain.Sitepulse.Visuals
             {
                 var l = new Line
                 {
-                    time = IotOverlay.Label(root, "Time" + i, Vector2.zero, new Vector2(80f, 22f), 15, FontStyle.Normal, OverlayStyle.Muted),
-                    text = IotOverlay.Label(root, "Text" + i, Vector2.zero, new Vector2(W - 2 * Pad - 80f - 92f, 22f), 15, FontStyle.Normal, OverlayStyle.Ink),
+                    time = IotOverlay.Label(root, "Time" + i, Vector2.zero, new Vector2(TimeW, 22f), 15, FontStyle.Normal, OverlayStyle.Muted),
+                    text = IotOverlay.Label(root, "Text" + i, Vector2.zero, new Vector2(W - 2 * Pad - TimeW - 92f, 22f), 15, FontStyle.Normal, OverlayStyle.Ink),
                     source = IotOverlay.Label(root, "Source" + i, Vector2.zero, new Vector2(88f, 22f), 13, FontStyle.Bold, OverlayStyle.Accent),
                 };
                 l.time.font = IotOverlay.CardMono;
@@ -121,11 +123,19 @@ namespace DeviceChain.Sitepulse.Visuals
             if (wanted && !Built) Build(canvas);
             clock += dt;
             Fade(wanted, dt, reduced, snap);
-            if (!Built || Presence <= 0f) return default;
+            if (!Built || Presence <= 0f)
+            {
+                placed = false;
+                return default;
+            }
 
             if (wanted && (device != shownDevice || source.Version != shownVersion))
             {
-                if (device != shownDevice) born.Clear();
+                if (device != shownDevice)
+                {
+                    born.Clear();
+                    placed = false;
+                }
                 shownDevice = device;
                 shownVersion = source.Version;
                 rows.Clear();
@@ -134,23 +144,18 @@ namespace DeviceChain.Sitepulse.Visuals
             }
 
             var n = rows.Count;
-            var h = HeadH + Pad + Math.Max(1, n) * RowH + Pad * 0.5f;
-            var portrait = refW < OverlayStyle.RefH;
-            float scale;
-            if (mode == DrawerMode.Full) scale = Mathf.Min(1.9f, (refW * 0.86f) / W, (OverlayStyle.RefH * 0.8f) / h);
-            else scale = Mathf.Min(1f, (refW - 2f * OverlayStyle.Margin) / W);
-            var size = new Vector2(W, h) * scale;
-            Vector2 at;
-            if (mode == DrawerMode.Full) at = new Vector2((refW - size.x) / 2f, (OverlayStyle.RefH - size.y) / 2f);
-            else if (portrait) at = new Vector2((refW - size.x) / 2f, OverlayStyle.RefH * 0.20f + OverlayStyle.Margin);
-            else at = new Vector2(refW - OverlayStyle.Margin - size.x, (OverlayStyle.RefH - size.y) / 2f);
-
-            root.anchoredPosition = at;
+            // the box's height glides to the rows it holds, its top edge pinned (DrawerLayout), so a row more moves nothing already drawn
+            var target = DrawerLayout.HeightFor(n);
+            var h = placed ? CalmGlide.Step(shownH, target, ref heightVelocity, dt, reduced, snap) : target;
+            placed = true;
+            shownH = h;
+            var rect = DrawerLayout.Place(mode, refW, h);
+            root.anchoredPosition = rect.position;
             root.sizeDelta = new Vector2(W, h);
-            root.localScale = Vector3.one * scale;
+            root.localScale = Vector3.one * DrawerLayout.ScaleFor(mode, refW);
             edge.sizeDelta = new Vector2(4f, h);
             Layout(n, h, snap);
-            return new Rect(at, size);
+            return rect;
         }
 
         void Fill(string device)
@@ -163,7 +168,7 @@ namespace DeviceChain.Sitepulse.Visuals
                 lines[i].time.enabled = lines[i].text.enabled = lines[i].source.enabled = on;
                 if (!on) continue;
                 var r = rows[i];
-                lines[i].time.text = PanelModel.Clock(r.At);
+                lines[i].time.text = (r.Seen ? "seen " : "") + PanelModel.Clock(r.At);
                 var text = r.Text.Length > MaxChars ? r.Text.Substring(0, MaxChars - 1) + "…" : r.Text;
                 lines[i].text.text = text;
                 lines[i].source.text = r.SourceLabel;
@@ -186,7 +191,7 @@ namespace DeviceChain.Sitepulse.Visuals
                 var y = h - HeadH - Pad - (i + 1) * RowH + 2f;
                 var l = lines[i];
                 l.time.rectTransform.anchoredPosition = new Vector2(Pad + 4f, y);
-                l.text.rectTransform.anchoredPosition = new Vector2(Pad + 4f + 84f, y);
+                l.text.rectTransform.anchoredPosition = new Vector2(Pad + 4f + TimeW + 4f, y);
                 l.source.rectTransform.anchoredPosition = new Vector2(W - Pad - 88f, y);
                 var key = rows[i].At.UtcTicks + "|" + rows[i].Source + "|" + rows[i].Text;
                 var a = snap || !born.TryGetValue(key, out var b) ? 1f : Mathf.Clamp01((clock - b) / CardTiming.FadeSeconds);
@@ -309,23 +314,32 @@ namespace DeviceChain.Sitepulse.Visuals
             public RectTransform box;
             public Text text;
             public CanvasGroup group;
+            public Vector2 shown, velocity;
+            public bool placed;
         }
 
         readonly List<Chip> chips = new List<Chip>();
         readonly List<Rect> rects = new List<Rect>();
+        readonly List<Vector2> sizes = new List<Vector2>();
+        readonly List<bool> onFlags = new List<bool>();
+        readonly List<float> alphas = new List<float>();
+        readonly List<Vector2> targets = new List<Vector2>();
 
         public IReadOnlyList<Rect> Rects => rects;
 
         /// <summary>One frame at <paramref name="time"/> seconds into the shot; fills <see cref="Rects"/> with what is on screen.</summary>
-        public void Update(RectTransform canvas, IReadOnlyList<ChipView> wanted, double time, float refW, float safeTop, bool snap)
+        public void Update(RectTransform canvas, IReadOnlyList<ChipView> wanted, double time, float refW, float safeTop, bool snap, float dt = 0f, bool reduced = false)
         {
             rects.Clear();
             var count = wanted == null ? 0 : wanted.Count;
             while (chips.Count < count) chips.Add(Make(canvas, chips.Count));
             var portrait = refW < OverlayStyle.RefH;
             var scale = portrait ? 0.75f : 1f;
-            var y = portrait ? OverlayStyle.RefH * (1f - Mathf.Max(safeTop, 0.14f)) - OverlayStyle.Margin : OverlayStyle.Margin * 2f;
+            var y0 = portrait ? OverlayStyle.RefH * (1f - Mathf.Max(safeTop, 0.14f)) - OverlayStyle.Margin : OverlayStyle.Margin * 2f;
             var x = portrait ? OverlayStyle.Margin : OverlayStyle.Margin * 2f;
+            sizes.Clear();
+            onFlags.Clear();
+            alphas.Clear();
             for (var i = 0; i < chips.Count; i++)
             {
                 var c = chips[i];
@@ -343,16 +357,31 @@ namespace DeviceChain.Sitepulse.Visuals
                     }
                 }
 
-                var on = a > 0f;
+                alphas.Add(a);
+                onFlags.Add(a > 0f);
+                sizes.Add(c.box.sizeDelta * scale);
+            }
+
+            // where each chip stands in the stack; one that is already showing glides there as the cards do (a chip arriving or leaving
+            // above it does not make it jump), one that is just appearing starts there
+            ChipStack.Place(sizes, onFlags, portrait, x, y0, Gap, targets);
+            for (var i = 0; i < chips.Count; i++)
+            {
+                var c = chips[i];
+                var on = onFlags[i];
                 if (c.box.gameObject.activeSelf != on) c.box.gameObject.SetActive(on);
-                if (!on) continue;
-                c.group.alpha = a;
-                var size = c.box.sizeDelta * scale;
-                if (portrait) y -= size.y;
-                c.box.anchoredPosition = new Vector2(x, y);
+                if (!on)
+                {
+                    c.placed = false;
+                    continue;
+                }
+
+                c.group.alpha = alphas[i];
+                c.shown = c.placed ? CalmGlide.Step(c.shown, targets[i], ref c.velocity, dt, reduced, snap) : targets[i];
+                c.placed = true;
+                c.box.anchoredPosition = c.shown;
                 c.box.localScale = Vector3.one * scale;
-                rects.Add(new Rect(x, y, size.x, size.y));
-                y += portrait ? -Gap : size.y + Gap;
+                rects.Add(new Rect(c.shown.x, c.shown.y, sizes[i].x, sizes[i].y));
             }
         }
 

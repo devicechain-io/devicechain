@@ -3,8 +3,11 @@
 """Unit tests for the pure parts of video_take.py. Run: python3 -m unittest test_video_take (from this directory)."""
 
 import os
+import contextlib
+import io
 import tempfile
 import unittest
+from unittest import mock
 
 import phase_a_check as c
 import video_take as v
@@ -142,6 +145,59 @@ class Sending(unittest.TestCase):
         self.assertEqual("PASS", v.judge("SUCCESSFUL", None)[0])
         for s in ("FAILED", "TIMEOUT", "EXPIRED", "CANCELLED", "SENT", None):
             self.assertEqual("FAIL", v.judge(s, None)[0], s)
+
+
+class Main(unittest.TestCase):
+    """What the command line does: its exit code is what the unattended take reads, and it sends nothing unless the player said it was time."""
+
+    def run_main(self, argv, platform=None, waited=True):
+        out = io.StringIO()
+        made = []
+
+        def make_platform(url):
+            made.append(url)
+            return platform
+
+        with mock.patch.object(v, "wait_for_operator_step", return_value=waited) as wait, mock.patch.object(c, "Platform", make_platform), \
+                contextlib.redirect_stdout(out), contextlib.redirect_stderr(out):
+            rc = v.main(argv)
+        return rc, out.getvalue(), made, wait
+
+    def test_when_the_wait_for_the_players_signal_times_out_nothing_is_sent_and_it_exits_1(self):
+        p = FakePlatform()
+        rc, out, made, wait = self.run_main(["operator", "--log", "player.log", "--wait-timeout", "5"], p, waited=False)
+        self.assertEqual(1, rc)
+        self.assertEqual([], p.created, "no command without the player's say-so")
+        self.assertEqual([], made, "and the platform was not even contacted")
+        wait.assert_called_once_with("player.log", 5.0)
+        self.assertIn("nothing was sent", out)
+
+    def test_a_successful_command_exits_0_after_sending_exactly_one(self):
+        p = FakePlatform()
+        rc, out, _, _ = self.run_main(["operator", "--now"], p)
+        self.assertEqual(0, rc)
+        self.assertEqual(1, len(p.created))
+        self.assertIn("PASS", out)
+
+    def test_a_command_the_platform_finishes_as_failed_exits_non_zero(self):
+        rc, out, _, _ = self.run_main(["operator", "--now"], FakePlatform(statuses=("FAILED",)))
+        self.assertNotEqual(0, rc)
+        self.assertIn("FAIL", out)
+
+    def test_a_command_the_platform_rejects_exits_non_zero_and_says_so(self):
+        p = FakePlatform(rejection={"code": "PAYLOAD_SCHEMA_VIOLATION", "reason": "areaToken"})
+        rc, out, _, _ = self.run_main(["operator", "--now"], p)
+        self.assertNotEqual(0, rc)
+        self.assertIn("rejected", out)
+
+    def test_a_platform_that_does_not_answer_exits_non_zero(self):
+        class Down(FakePlatform):
+            def device_tokens(self, ids):
+                raise c.PlatformError("connection refused")
+
+        rc, out, _, _ = self.run_main(["operator", "--now"], Down())
+        self.assertNotEqual(0, rc)
+        self.assertIn("did not answer", out)
 
 
 if __name__ == "__main__":

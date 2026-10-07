@@ -73,6 +73,8 @@ namespace DeviceChain.Sitepulse.App
 
         // the proof drawer's log (fed by the observer and the device timeline) and the route highlight's source: Live's own, as a replay has its own
         readonly ProofLog proofLog = new ProofLog();
+        readonly ZoneNameBook zoneBook = new ZoneNameBook();
+        DeviceLine zonesLine;
         readonly RouteCache routeCache = new RouteCache();
         readonly Dictionary<string, string> idByToken = new Dictionary<string, string>(StringComparer.Ordinal);
 
@@ -192,6 +194,8 @@ namespace DeviceChain.Sitepulse.App
             {
                 case SitepulseMode.Choreographed:
                     hud.SetBadge(SitepulseModes.Badge(mode), BadgeTone.Illustrative);
+                    // offline and illustrative: there is no platform to ask, so the zones carry the manifest's own names
+                    if (overlay != null) overlay.ZoneBook = ZoneNames.ManifestCopy();
                     break;
                 case SitepulseMode.Replay:
                     StartReplay(args);
@@ -222,6 +226,7 @@ namespace DeviceChain.Sitepulse.App
             overlay.Source = new ObservedReadingSource(observed, id => board?.TokenOf(id), () => observerStatus.Measurements.IsLive);
             overlay.CommandsSince = sessionStart;
             overlay.Proof = proofLog;
+            overlay.ZoneBook = zoneBook;
         }
 
         /// <summary>
@@ -522,6 +527,7 @@ namespace DeviceChain.Sitepulse.App
             // an acceptance control may rename one device in the resolve query; nothing else touches it
             await new DeviceBinder(AcceptanceControls.WrapBind(queries.AsQueryFn(), acceptance?.Control), contract).BindAsync(devices, board, credentials, ct);
             PlatformLog.Info($"bind complete · {board.Summary()}");
+            await ReadZoneNames(queries.AsQueryFn(), SitepulseScene.Zones(overlay.features.text), ct);
             if (acceptance != null && acceptance.IsControl && acceptance.Control.Kind == ControlSpec.BadCredential)
             {
                 var corrupted = AcceptanceControls.CorruptCredential(credentials, board.TokenOf(acceptance.Control.Target));
@@ -574,6 +580,16 @@ namespace DeviceChain.Sitepulse.App
             Render();
         }
 
+        // The zones' names are the platform's: asked once (read-only, under the operator's own token) and recorded, so a replay labels them from the
+        // recording. A platform that cannot say leaves the zones unlabelled; the reason is logged and recorded.
+        async Task ReadZoneNames(QueryFn query, ISet<string> zones, CancellationToken ct)
+        {
+            var result = await ZoneNamesQuery.FetchAsync(query, zones, ct);
+            foreach (var kv in result.Names) zoneBook.Set(kv.Key, kv.Value);
+            PlatformLog.Info(result.Ok ? $"zone names · {result.Names.Count} of {zones.Count} named by the platform" : "zone names · none (" + result.Failure + ")");
+            zonesLine = RecordingMaps.Zones(result.Names, result.Failure);
+        }
+
         // What the observer is told goes to the proof log through the same function a replay uses on the recorded lines, so the drawer holds the same rows.
         void WatchObserver(PlatformObserver o)
         {
@@ -599,6 +615,20 @@ namespace DeviceChain.Sitepulse.App
                     if (d.Stage < DeviceStage.Observed || d.Failed) return false;
                 return true;
             },
+            WhyNotObserved = () =>
+            {
+                if (board == null || board.Total == 0) return "there are no devices on the board yet";
+                var parts = new List<string>();
+                var more = 0;
+                foreach (var d in board.Devices)
+                {
+                    if (d.Stage >= DeviceStage.Observed && !d.Failed) continue;
+                    if (parts.Count >= 4) more++;
+                    else parts.Add(d.Device.ExternalId + (d.Failed ? " failed (" + Redactor.Redact(d.FailReason) + ")" : " not observed yet (at " + d.Stage + ")"));
+                }
+
+                return string.Join("; ", parts) + (more > 0 ? $"; and {more} more" : "");
+            },
             PrepareLowFuel = id => presenter?.PrepareLowFuel(id),
             PrepareTyreLeak = id => presenter?.PrepareTyreLeak(id),
             AlarmActive = (id, key) =>
@@ -609,12 +639,15 @@ namespace DeviceChain.Sitepulse.App
                     if (a.IsActive && a.AlarmKey == key) return true;
                 return false;
             },
-            CommandSuccessful = (id, name, since) =>
+            CommandTokens = (id, name) =>
             {
                 var token = board?.TokenOf(id);
-                if (token == null || !observed.TryGet(token, out var dev)) return false;
-                var c = dev.LastCommand;
-                return c != null && c.Name == name && c.Status == "SUCCESSFUL" && c.QueuedAt >= since;
+                return token != null && observed.TryGet(token, out var dev) ? VideoCommands.Tokens(dev, name) : new HashSet<string>();
+            },
+            CommandSuccessful = (id, name, known) =>
+            {
+                var token = board?.TokenOf(id);
+                return token != null && observed.TryGet(token, out var dev) && VideoCommands.NewSuccessful(dev, name, known);
             },
             OnTrack = id => ProbeMachine(id)?.OnTrack ?? false,
             Log = PlatformLog.Info,
@@ -663,6 +696,9 @@ namespace DeviceChain.Sitepulse.App
                 Manifest = $"{(fleet.choreography != null ? fleet.choreography.name : "fleet")} · {deviceCount} devices",
             }, PlatformLog.Info);
             sampleRelay.Target = liveRecorder;
+            if (liveRecorder != null && zonesLine != null)
+                try { liveRecorder.Recorder.Device(zonesLine); }
+                catch (Exception e) { liveRecorder.Recorder.Fail(e); }
         }
 
         // every machine that has a session also has a task layer: a command it is sent drives its rig. The
@@ -773,7 +809,12 @@ namespace DeviceChain.Sitepulse.App
                     if (kb.zKey.wasPressedThisFrame) overlay.Layers = overlay.Layers.With(zoneLabels: !overlay.Layers.ZoneLabels);
                 }
                 if (kb.gKey.wasPressedThisFrame) presenter.Resume();
-                if (kb.fKey.wasPressedThisFrame) RunPresenterAsync(presenter.BeginFresh);
+                if (kb.fKey.wasPressedThisFrame)
+                {
+                    // a fresh run: the drawer starts with nothing, as the run does (the alarm's token is the same every cycle)
+                    proofLog.Reset();
+                    RunPresenterAsync(presenter.BeginFresh);
+                }
                 if (presenter.Fresh == FreshState.Confirm)
                 {
                     if (kb.yKey.wasPressedThisFrame) RunPresenterAsync(presenter.ConfirmFresh);

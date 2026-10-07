@@ -365,7 +365,12 @@ namespace DeviceChain.Sitepulse.Replay
             var hasEvent = e.TryGetProperty("event", out var ev);
             var hasAt = e.TryGetProperty("at", out _);
             if (hasEvent == hasAt) throw new ShotException($"{where}: chip \"{c.Text}\" needs exactly one of \"at\" (seconds into the shot) or \"event\" (a recorded event)");
-            if (hasEvent) c.Event = EventSelector.Read(ev, where + ", chip \"" + c.Text + "\"");
+            if (hasEvent)
+            {
+                // a chip tied to an event says it happened: it can start with the event or after it, never before
+                if (c.Offset < 0) throw new ShotException($"{where}: chip \"{c.Text}\" starts before its event (\"offset\" cannot be negative)");
+                c.Event = EventSelector.Read(ev, where + ", chip \"" + c.Text + "\"");
+            }
             else if (c.At < 0) throw new ShotException($"{where}: chip \"{c.Text}\" starts before the shot does");
             return c;
         }

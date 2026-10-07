@@ -58,19 +58,52 @@ namespace DeviceChain.Sitepulse.Domain
         public double Until { get; }
     }
 
-    /// <summary>The names the three zones carry on the platform (the areas the Sitepulse manifest provisions), by area token.</summary>
+    /// <summary>
+    /// The names the site's zones carry on the platform (its areas, by token), as far as this run knows them. A zone the book has no name for
+    /// has no label: nothing here guesses a name. Live fills it from the platform's own areas, a replay from what the run recorded, and
+    /// Choreographed (offline, illustrative) from <see cref="ZoneNames.ManifestCopy"/>.
+    /// </summary>
+    public sealed class ZoneNameBook
+    {
+        readonly Dictionary<string, string> names = new Dictionary<string, string>(StringComparer.Ordinal);
+
+        /// <summary>Moves whenever a name is set or the book is cleared.</summary>
+        public int Version { get; private set; }
+
+        public int Count => names.Count;
+
+        public void Set(string token, string name)
+        {
+            if (string.IsNullOrWhiteSpace(token) || string.IsNullOrWhiteSpace(name)) return;
+            if (names.TryGetValue(token, out var held) && held == name) return;
+            names[token] = name;
+            Version++;
+        }
+
+        public void Clear()
+        {
+            if (names.Count == 0) return;
+            names.Clear();
+            Version++;
+        }
+
+        /// <summary>The platform's name for a zone, or null when this run has none (the zone then has no label).</summary>
+        public string Of(string token) => token != null && names.TryGetValue(token, out var n) ? n : null;
+    }
+
     public static class ZoneNames
     {
-        /// <summary>The platform's area name for a zone token, or <paramref name="fallback"/> (the feature file's own label) for a zone it does not know.</summary>
-        public static string Of(string token, string fallback)
+        /// <summary>
+        /// The names the Sitepulse manifest gives its three areas. It stands in ONLY for Choreographed mode, which has no platform to ask; a Live run asks
+        /// the platform and a replay reads what the run recorded.
+        /// </summary>
+        public static ZoneNameBook ManifestCopy()
         {
-            switch (token)
-            {
-                case "sp-zone-cut": return "Excavation Face";
-                case "sp-zone-fill": return "Fill Ground";
-                case "sp-zone-yard": return "Equipment Yard";
-                default: return fallback;
-            }
+            var book = new ZoneNameBook();
+            book.Set("sp-zone-cut", "Excavation Face");
+            book.Set("sp-zone-fill", "Fill Ground");
+            book.Set("sp-zone-yard", "Equipment Yard");
+            return book;
         }
     }
 }

@@ -6,8 +6,11 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using System.Threading;
+using System.Threading.Tasks;
 using DeviceChain.Sitepulse.App;
 using DeviceChain.Sitepulse.Domain;
+using DeviceChain.Sitepulse.Platform;
 using DeviceChain.Sitepulse.Recording;
 using DeviceChain.Sitepulse.Replay;
 using DeviceChain.Sitepulse.Visuals;
@@ -259,6 +262,7 @@ namespace DeviceChain.Sitepulse.Tests
                 Assert.IsNull(overlay.Featured);
                 Assert.IsNull(overlay.RouteOf);
                 Assert.IsNull(overlay.Proof);
+                Assert.IsNull(overlay.ZoneBook, "a zone has a label only where a mode gave the overlay the platform's (or the manifest's) names");
                 Assert.AreEqual(Vector2.zero, overlay.SafeInsets);
                 Assert.AreEqual(OverlayLayers.InteractiveDefault.Cards, overlay.Layers.Cards);
             }
@@ -269,12 +273,95 @@ namespace DeviceChain.Sitepulse.Tests
         }
 
         [Test]
-        public void TheZoneNamesAreThePlatformsAreaNamesAndAnUnknownZoneKeepsTheFilesLabel()
+        public void AZoneTheRunHasNoNameForHasNoLabelAndNothingIsGuessed()
         {
-            Assert.AreEqual("Excavation Face", ZoneNames.Of("sp-zone-cut", "Cut"));
-            Assert.AreEqual("Fill Ground", ZoneNames.Of("sp-zone-fill", "Fill"));
-            Assert.AreEqual("Equipment Yard", ZoneNames.Of("sp-zone-yard", "Yard"));
-            Assert.AreEqual("Laydown", ZoneNames.Of("sp-zone-new", "Laydown"));
+            var book = new ZoneNameBook();
+            Assert.IsNull(book.Of("sp-zone-cut"), "an empty book names nothing");
+            book.Set("sp-zone-cut", "Excavation Face");
+            book.Set("sp-zone-fill", " ");
+            book.Set(null, "x");
+            Assert.AreEqual("Excavation Face", book.Of("sp-zone-cut"));
+            Assert.IsNull(book.Of("sp-zone-fill"), "a blank name is no name");
+            Assert.IsNull(book.Of("sp-zone-new"), "and a zone it was not told of keeps no label of the file's");
+            Assert.IsNull(book.Of(null));
+            var v = book.Version;
+            book.Set("sp-zone-cut", "Excavation Face");
+            Assert.AreEqual(v, book.Version, "the same name again changes nothing");
+            book.Clear();
+            Assert.IsNull(book.Of("sp-zone-cut"));
+        }
+
+        [Test]
+        public void OnlyChoreographedModeCarriesTheManifestsCopyOfTheNames()
+        {
+            var book = ZoneNames.ManifestCopy();
+            Assert.AreEqual("Excavation Face", book.Of("sp-zone-cut"));
+            Assert.AreEqual("Fill Ground", book.Of("sp-zone-fill"));
+            Assert.AreEqual("Equipment Yard", book.Of("sp-zone-yard"));
+            Assert.AreEqual(3, book.Count);
+        }
+
+        [Test]
+        public void TheAreaQueryIsReadOnlyAndAsksForNamesByTokenAndTheParseNamesTheZonesTheAnswerHas()
+        {
+            StringAssert.StartsWith("query ", ZoneNamesQuery.Document);
+            StringAssert.DoesNotContain("mutation", ZoneNamesQuery.Document);
+            StringAssert.Contains("areasByToken(tokens: $t) { token name }", ZoneNamesQuery.Document);
+            using (var vars = System.Text.Json.JsonDocument.Parse(ZoneNamesQuery.Variables(new[] { "sp-zone-cut", "sp-zone-fill" })))
+                CollectionAssert.AreEqual(new[] { "sp-zone-cut", "sp-zone-fill" }, vars.RootElement.GetProperty("t").EnumerateArray().Select(e => e.GetString()).ToArray());
+            var r = ZoneNamesQuery.Parse(new[] { "sp-zone-cut", "sp-zone-fill", "sp-zone-yard" },
+                "{\"areasByToken\":[{\"token\":\"sp-zone-cut\",\"name\":\"Excavation Face\"},{\"token\":\"sp-zone-fill\",\"name\":null}]}");
+            Assert.IsTrue(r.Ok);
+            CollectionAssert.AreEqual(new[] { "sp-zone-cut" }, r.Names.Keys.ToArray());
+            CollectionAssert.AreEqual(new[] { "sp-zone-fill", "sp-zone-yard" }, r.Unnamed.ToArray(), "a null name and an absent area are both unnamed");
+        }
+
+        [Test]
+        public void AQueryThatFailsGivesNoNamesAndTheReasonAndNeverThrows()
+        {
+            var r = ZoneNamesQuery.FetchAsync((q, v, ct) => throw new InvalidOperationException("the area service is down"), new[] { "sp-zone-cut" }, CancellationToken.None).GetAwaiter().GetResult();
+            Assert.IsFalse(r.Ok);
+            StringAssert.Contains("the area service is down", r.Failure);
+            Assert.AreEqual(0, r.Names.Count);
+            var ok = ZoneNamesQuery.FetchAsync((q, v, ct) => Task.FromResult("{\"areasByToken\":[{\"token\":\"sp-zone-yard\",\"name\":\"Equipment Yard\"}]}"), new[] { "sp-zone-yard" }, CancellationToken.None).GetAwaiter().GetResult();
+            Assert.IsTrue(ok.Ok);
+            Assert.AreEqual("Equipment Yard", ok.Names["sp-zone-yard"]);
+        }
+
+        [Test]
+        public void TheNamesAreRecordedAndAReplayLabelsTheZonesFromTheRecordingAndNothingElse()
+        {
+            using var run = new SyntheticRun();
+            run.Drive(0, 12.0);
+            run.Dev(0.5, RecordingMaps.Zones(new Dictionary<string, string> { ["sp-zone-cut"] = "Excavation Face", ["sp-zone-yard"] = "Equipment Yard" }, null));
+            var session = new ReplaySession(run.Reload());
+            session.Seek(0.1);
+            Assert.AreEqual(0, session.Zones.Count, "the names were read when the run started, not before");
+            session.Seek(5.0);
+            Assert.AreEqual("Excavation Face", session.Zones.Of("sp-zone-cut"));
+            Assert.AreEqual("Equipment Yard", session.Zones.Of("sp-zone-yard"));
+            Assert.IsNull(session.Zones.Of("sp-zone-fill"), "the platform named two: the third has no label, and no manifest copy fills it in");
+            session.Seek(0.2);
+            Assert.AreEqual(0, session.Zones.Count, "rewound, they are not yet known");
+        }
+
+        [Test]
+        public void ARecordingWhoseNamesCouldNotBeReadSaysWhyAndLabelsNothing()
+        {
+            using var run = new SyntheticRun();
+            run.Drive(0, 12.0);
+            run.Dev(0.5, RecordingMaps.Zones(new Dictionary<string, string>(), "InvalidOperationException: the area service is down"));
+            var data = run.Reload();
+            var line = data.Device.Single(d => d.K == DeviceKinds.Zones);
+            StringAssert.Contains("the area service is down", line.Text);
+            var session = new ReplaySession(data);
+            session.Seek(5.0);
+            Assert.AreEqual(0, session.Zones.Count);
+            using var none = new SyntheticRun();
+            none.Drive(0, 12.0);
+            var empty = new ReplaySession(none.Reload());
+            empty.Seek(5.0);
+            Assert.AreEqual(0, empty.Zones.Count, "a recording with no zones line names none");
         }
     }
 
@@ -311,10 +398,19 @@ namespace DeviceChain.Sitepulse.Tests
         }
 
         [Test]
+        public void AnEventChipCannotStartBeforeItsEvent()
+        {
+            var bad = Doc(@"[{""text"":""x"",""event"":{""kind"":""alarm"",""key"":""low-fuel"",""state"":""ACTIVE""},""offset"":-0.5,""duration"":1}]");
+            StringAssert.Contains("before its event", Assert.Throws<ShotException>(() => ShotFile.Parse(bad)).Message);
+            var ok = Doc(@"[{""text"":""x"",""event"":{""kind"":""alarm"",""key"":""low-fuel"",""state"":""ACTIVE""},""offset"":0.5,""duration"":1}]");
+            Assert.DoesNotThrow(() => ShotFile.Parse(ok));
+        }
+
+        [Test]
         public void AChipThatFallsOutsideTheShotOrWhoseEventIsNotInTheRecordingStopsTheRender()
         {
             using var take = new VideoTake();
-            var late = Doc(@"[{""text"":""Device confirms SUCCESSFUL"",""event"":{""kind"":""command"",""name"":""goto-refuel"",""status"":""SUCCESSFUL"",""device"":""SP-HL-0006""},""duration"":1}]");
+            var late = Doc(@"[{""text"":""Command SUCCESSFUL"",""event"":{""kind"":""command"",""name"":""goto-refuel"",""status"":""SUCCESSFUL"",""device"":""SP-HL-0006""},""duration"":1}]");
             StringAssert.Contains("falls outside the shot", Assert.Throws<ShotException>(() => ShotPlanner.Plan(ShotFile.Parse(late), take.Data)).Message);
             var absent = Doc(@"[{""text"":""x"",""event"":{""kind"":""alarm"",""key"":""engine-overheat"",""state"":""ACTIVE""},""duration"":1}]");
             StringAssert.Contains("no recorded event matches", Assert.Throws<ShotException>(() => ShotPlanner.Plan(ShotFile.Parse(absent), take.Data)).Message);
@@ -476,7 +572,7 @@ namespace DeviceChain.Sitepulse.Tests
             CollectionAssert.AreEquivalent(new[] { "SP-HL-0003", "SP-LD-0003", "SP-HL-0006", "SP-PL-0001" }, Of("s05").PinnedCards);
             CollectionAssert.AreEquivalent(new[] { "SP-LD-0003", "SP-PL-0001" }, Of("s06").PinnedCards);
             Assert.IsTrue(Of("s07").Layers.Panel);
-            Assert.AreEqual("SP-DZ-0001", Of("s07").Selected, "the panel is a dozer's");
+            Assert.AreEqual("SP-HL-0002", Of("s07").Selected, "the panel is a haul truck's (all five metrics the script lists), one the story does not use");
             Assert.AreEqual(5.0, Of("s07").Duration);
             Assert.AreEqual(50f, Of("s08").Camera.Fov);
             Assert.AreEqual(12f, Of("s08").Camera.Back);
@@ -495,6 +591,29 @@ namespace DeviceChain.Sitepulse.Tests
             Assert.AreEqual(7.0, Of("s16").Duration);
             Assert.AreEqual("SP-HL-0003", Of("s21").Selected);
             Assert.AreEqual(45f, Of("s21").Camera.Fov);
+        }
+
+        [Test]
+        public void TheOperatorShotIsAnchoredOnThePlatformsSuccessfulAndRunsOnPastIt()
+        {
+            var s21 = Load("sitepulse-video.json").Shots.Single(s => s.Name.StartsWith("s21", StringComparison.Ordinal));
+            Assert.AreEqual("command", s21.StartEvent.Kind);
+            Assert.AreEqual("goto-area", s21.StartEvent.Name);
+            Assert.AreEqual("SUCCESSFUL", s21.StartEvent.Status, "the shot cannot end before the platform's SUCCESSFUL can be seen");
+            Assert.AreEqual("SP-HL-0003", s21.StartEvent.Device);
+            Assert.GreaterOrEqual(s21.Offset + s21.Duration, 1.5, "and it runs on past it");
+            foreach (var file in new[] { "sitepulse-video.json", "sitepulse-video-9x16.json" })
+                foreach (var shot in Load(file).Shots.Where(x => x.StartEvent != null && x.StartEvent.Status == "SUCCESSFUL"))
+                    Assert.GreaterOrEqual(shot.Offset + shot.Duration, 1.5, shot.Name + ": a shot on a SUCCESSFUL shows what follows it");
+        }
+
+        [Test]
+        public void TheSelectedMachinePanelShotIsOnAMachineWithAllFiveMetrics()
+        {
+            var s07 = Load("sitepulse-video.json").Shots.Single(s => s.Name.StartsWith("s07", StringComparison.Ordinal));
+            StringAssert.StartsWith("SP-HL-", s07.Selected, "a haul truck has payload and tyres; a dozer's panel shows three");
+            Assert.AreNotEqual("SP-HL-0006", s07.Selected);
+            Assert.AreNotEqual("SP-HL-0003", s07.Selected);
         }
 
         [Test]
@@ -541,7 +660,7 @@ namespace DeviceChain.Sitepulse.Tests
             Assert.AreEqual(25.0, shots.Sum(s => s.Duration), 1e-9);
             Assert.IsTrue(shots.All(s => s.Width == 1920 && s.Height == 1080));
             var chips = shots.SelectMany(s => s.Chips).Select(c => c.Text).ToArray();
-            CollectionAssert.AreEqual(new[] { "Telemetry over MQTT", "Rule fires: low fuel", "Command sent", "Device confirms SUCCESSFUL" }, chips);
+            CollectionAssert.AreEqual(new[] { "Telemetry over MQTT", "Rule fires: low fuel", "Command sent", "Command SUCCESSFUL" }, chips);
         }
 
         [Test]
@@ -584,11 +703,11 @@ namespace DeviceChain.Sitepulse.Tests
             var story = new List<(string chip, double runSeconds)>();
             foreach (var p in plan)
                 foreach (var c in p.Chips) story.Add((c.Text, p.Start + c.From));
-            CollectionAssert.AreEqual(new[] { "Telemetry over MQTT", "Rule fires: low fuel", "Command sent", "Device confirms SUCCESSFUL" }, story.Select(x => x.chip).ToArray());
+            CollectionAssert.AreEqual(new[] { "Telemetry over MQTT", "Rule fires: low fuel", "Command sent", "Command SUCCESSFUL" }, story.Select(x => x.chip).ToArray());
             for (var i = 1; i < story.Count; i++) Assert.Greater(story[i].runSeconds, story[i - 1].runSeconds, story[i].chip + " comes after " + story[i - 1].chip);
             Assert.AreEqual(205.0, story.Single(x => x.chip == "Rule fires: low fuel").runSeconds, 1e-6, "the alarm line the platform sent");
             Assert.AreEqual(206.5, story.Single(x => x.chip == "Command sent").runSeconds, 1e-6, "the command's SENT");
-            Assert.AreEqual(291.0, story.Single(x => x.chip == "Device confirms SUCCESSFUL").runSeconds, 1e-6, "the platform's SUCCESSFUL");
+            Assert.AreEqual(291.0, story.Single(x => x.chip == "Command SUCCESSFUL").runSeconds, 1e-6, "the platform's SUCCESSFUL");
             // the cuts run forward in time: the loop never plays the cycle backwards
             for (var i = 1; i < plan.Count; i++) Assert.GreaterOrEqual(plan[i].Start, plan[i - 1].Start, plan[i].Shot.Name);
             Assert.IsTrue(plan.All(p => !p.Shot.Camera.Machines().Except(new[] { "SP-HL-0006" }).Any()));
@@ -612,7 +731,8 @@ namespace DeviceChain.Sitepulse.Tests
             var ex = Assert.Throws<ShotException>(() => ShotPlanner.Plan(Load("sitepulse-video.json"), take.Data));
             StringAssert.Contains("no recorded event matches", ex.Message);
             StringAssert.Contains("SP-HL-0003", ex.Message);
-            StringAssert.Contains("parked", ex.Message, "the operator's arrival is the event S21 starts from");
+            StringAssert.Contains("goto-area", ex.Message, "the operator's SUCCESSFUL goto-area is the event S21 starts from");
+            StringAssert.Contains("SUCCESSFUL", ex.Message);
         }
 
         [Test]

@@ -88,7 +88,7 @@
       "featured": "fuel_pct",
       "chips": [
         {
-          "text": "Device confirms SUCCESSFUL",
+          "text": "Command SUCCESSFUL",
           "event": {"kind": "command", "name": "goto-refuel", "status": "SUCCESSFUL", "device": "SP-HL-0006"},
           "offset": 0,
           "duration": 1.3

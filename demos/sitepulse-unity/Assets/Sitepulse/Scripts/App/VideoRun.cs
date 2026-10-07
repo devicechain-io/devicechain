@@ -5,6 +5,7 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Text;
+using DeviceChain.Sitepulse.Platform;
 
 namespace DeviceChain.Sitepulse.App
 {
@@ -30,6 +31,9 @@ namespace DeviceChain.Sitepulse.App
         /// <summary>Every device has been observed by the platform (the readiness board's own answer).</summary>
         public Func<bool> FleetObserved { get; set; }
 
+        /// <summary>Why the fleet is not observed yet (which devices, and whether one failed): said while the run waits, and when it gives up. Optional.</summary>
+        public Func<string> WhyNotObserved { get; set; }
+
         /// <summary>The presenter's prepare-low-fuel on a machine (inputs only); returns what it said, or null if there is no such machine.</summary>
         public Func<string, string> PrepareLowFuel { get; set; }
 
@@ -39,14 +43,50 @@ namespace DeviceChain.Sitepulse.App
         /// <summary>The platform says this machine has this alarm active.</summary>
         public Func<string, string, bool> AlarmActive { get; set; }
 
-        /// <summary>The platform says this machine's newest command of this name, queued at or after the given time, is SUCCESSFUL.</summary>
-        public Func<string, string, DateTimeOffset, bool> CommandSuccessful { get; set; }
+        /// <summary>The tokens of the commands of this name the platform has already told the observer about for this machine.</summary>
+        public Func<string, string, IReadOnlyCollection<string>> CommandTokens { get; set; }
+
+        /// <summary>
+        /// The platform says a command of this name for this machine, whose token is NOT among the given ones, is SUCCESSFUL. A command is told
+        /// apart by its token, never by a time: the platform's queued time is the cluster's clock and this app's clock is another.
+        /// </summary>
+        public Func<string, string, IReadOnlyCollection<string>, bool> CommandSuccessful { get; set; }
 
         /// <summary>The machine is on its routine track again (the device's own account).</summary>
         public Func<string, bool> OnTrack { get; set; }
 
         public Action<string> Log { get; set; }
         public Action<int> Quit { get; set; }
+    }
+
+    /// <summary>What the video run reads of a machine's commands in the observed state.</summary>
+    public static class VideoCommands
+    {
+        public static HashSet<string> Tokens(ObservedDevice device, string name)
+        {
+            var tokens = new HashSet<string>(StringComparer.Ordinal);
+            if (device == null) return tokens;
+            foreach (var c in device.Commands.Values)
+                if (c.Name == name) tokens.Add(c.Token);
+            return tokens;
+        }
+
+        /// <summary>True when a command of this name that is not among <paramref name="known"/> has been reported SUCCESSFUL.</summary>
+        public static bool NewSuccessful(ObservedDevice device, string name, IReadOnlyCollection<string> known)
+        {
+            if (device == null) return false;
+            foreach (var c in device.Commands.Values)
+                if (c.Name == name && c.Status == "SUCCESSFUL" && !Contains(known, c.Token)) return true;
+            return false;
+        }
+
+        static bool Contains(IReadOnlyCollection<string> known, string token)
+        {
+            if (known == null) return false;
+            foreach (var k in known)
+                if (k == token) return true;
+            return false;
+        }
     }
 
     /// <summary>One thing the run did or waited for: when, and what happened.</summary>
@@ -86,6 +126,11 @@ namespace DeviceChain.Sitepulse.App
 
         public const double SteadyBetweenSeconds = 45.0;
 
+        /// <summary>The run waits this long for every device to be observed, saying why not every <see cref="WaitingLogSeconds"/>, and then gives up.</summary>
+        public const double FleetWaitSeconds = 300.0;
+
+        public const double WaitingLogSeconds = 10.0;
+
         /// <summary>After the tyre alarm the truck is left driving for this long, so its card, drawer and chase shots are all in the recording.</summary>
         public const double AfterTyreAlarmSeconds = 90.0;
 
@@ -98,7 +143,9 @@ namespace DeviceChain.Sitepulse.App
         readonly VideoRunWorld world;
         readonly List<VideoStep> steps = new List<VideoStep>();
         Stage stage = Stage.Waiting;
-        DateTimeOffset begun, stageAt, preparedAt, operatorAt;
+        DateTimeOffset begun, stageAt;
+        DateTimeOffset? waitedSince, lastWaitingLog;
+        IReadOnlyCollection<string> knownRefuels, knownAreaCommands;
 
         public VideoRun(VideoRunWorld world)
         {
@@ -134,21 +181,26 @@ namespace DeviceChain.Sitepulse.App
             switch (stage)
             {
                 case Stage.Waiting:
-                    if (!world.FleetObserved()) return;
+                    if (!world.FleetObserved())
+                    {
+                        WaitForFleet(now);
+                        return;
+                    }
+
                     begun = now;
                     Enter(Stage.Steady, now);
                     Step("fleet observed", now, $"the fleet works undisturbed for {SteadyFirstSeconds:0} s (the establishing shots)");
                     break;
                 case Stage.Steady:
                     if (Since(now) < SteadyFirstSeconds) return;
-                    preparedAt = now;
+                    knownRefuels = world.CommandTokens(Protagonist, "goto-refuel");
                     Step("low fuel", now, $"{Protagonist}: " + (world.PrepareLowFuel(Protagonist) ?? "the presenter could not prepare the tank"));
                     Enter(Stage.Refuel, now);
                     break;
                 case Stage.Refuel:
                     // the platform's rule has sent the refuel command and the truck has done it: its success is the platform's, and the
                     // truck being on its track again is the device's
-                    if (world.CommandSuccessful(Protagonist, "goto-refuel", preparedAt) && world.OnTrack(Protagonist))
+                    if (world.CommandSuccessful(Protagonist, "goto-refuel", knownRefuels) && world.OnTrack(Protagonist))
                     {
                         Step("refuel cycle complete", now, "the platform says goto-refuel SUCCESSFUL and the truck is back at work");
                         Enter(Stage.Between, now);
@@ -180,12 +232,12 @@ namespace DeviceChain.Sitepulse.App
                     break;
                 case Stage.TyreAlarm:
                     if (Since(now) < AfterTyreAlarmSeconds) return;
-                    operatorAt = now;
+                    knownAreaCommands = world.CommandTokens(Puncture, "goto-area");
                     Step("operator", now, $"send goto-area {OperatorArea} to {Puncture} (the console's device page, Commands panel); the run waits for it to succeed");
                     Enter(Stage.Operator, now);
                     break;
                 case Stage.Operator:
-                    if (world.CommandSuccessful(Puncture, "goto-area", operatorAt))
+                    if (world.CommandSuccessful(Puncture, "goto-area", knownAreaCommands))
                     {
                         Step("operator command complete", now, "the platform says goto-area SUCCESSFUL");
                         Enter(Stage.Tail, now);
@@ -207,6 +259,28 @@ namespace DeviceChain.Sitepulse.App
                     world.Quit(Complete ? 0 : 1);
                     break;
             }
+        }
+
+        // nothing is happening yet: say why every few seconds, and after FleetWaitSeconds stop and say that too (a take that never started is not a hang)
+        void WaitForFleet(DateTimeOffset now)
+        {
+            if (!waitedSince.HasValue) waitedSince = now;
+            var waited = (now - waitedSince.Value).TotalSeconds;
+            var why = world.WhyNotObserved?.Invoke() ?? "the fleet is not all observed";
+            if (waited >= FleetWaitSeconds)
+            {
+                var note = $"not every device was observed within {FleetWaitSeconds:0} s: {why}";
+                steps.Add(new VideoStep("fleet NOT observed", waited, note));
+                world.Log("video-run: fleet NOT observed · " + note);
+                Complete = false;
+                Enter(Stage.Done, now);
+                world.Quit(1);
+                return;
+            }
+
+            if (lastWaitingLog.HasValue && (now - lastWaitingLog.Value).TotalSeconds < WaitingLogSeconds) return;
+            lastWaitingLog = now;
+            world.Log($"video-run: waiting for the fleet ({waited:0} s) · {why}");
         }
 
         /// <summary>The steps as JSON, for the file the run leaves beside its recording.</summary>

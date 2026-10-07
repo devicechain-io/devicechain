@@ -168,6 +168,7 @@ namespace DeviceChain.Sitepulse.Replay
             overlay.CommandsSince = session.Header.StartedAtUtc;
             // the drawer's rows and the route highlight come from the recording, rebuilt by the code the live app runs
             overlay.Proof = session.Proof;
+            overlay.ZoneBook = session.Zones;
             overlay.RouteOf = session.RouteOf;
             return source;
         }
