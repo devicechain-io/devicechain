@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 using System;
+using System.Collections.Generic;
 
 namespace DeviceChain.Sitepulse.Domain
 {
@@ -48,6 +49,40 @@ namespace DeviceChain.Sitepulse.Domain
     public static class CardPresenter
     {
         public const string NoValue = "—";
+
+        /// <summary>The most rows a card has: the alarm's (or the featured) metric, payload, fuel, speed and the command's state.</summary>
+        public const int MaxRows = 5;
+
+        /// <summary>The token of the speed row in <see cref="RowPlan"/>.</summary>
+        public const string SpeedToken = "@speed";
+
+        /// <summary>The token of the command row in <see cref="RowPlan"/>.</summary>
+        public const string CommandToken = "@command";
+
+        /// <summary>
+        /// The rows a card shows, top to bottom, as measurement keys and the two tokens <see cref="SpeedToken"/> and <see cref="CommandToken"/>.
+        /// A machine's own rows are payload, fuel and speed, led by <paramref name="first"/> (the alarm's metric, or the one a shot features)
+        /// when there is one; a command's state, when it has one, is ALWAYS a row, so a card that is full of metrics never hides what the
+        /// operator just sent. Never more than <see cref="MaxRows"/>.
+        /// </summary>
+        public static List<string> RowPlan(bool plant, string first, bool hasCommand)
+        {
+            var plan = new List<string>();
+            if (plant)
+            {
+                plan.Add(MeasurementKeys.ThroughputTph);
+                plan.Add(MeasurementKeys.PlantRunning);
+                return plan;
+            }
+
+            if (first != null) plan.Add(first);
+            if (first != MeasurementKeys.PayloadT) plan.Add(MeasurementKeys.PayloadT);
+            if (first != MeasurementKeys.FuelPct) plan.Add(MeasurementKeys.FuelPct);
+            plan.Add(SpeedToken);
+            if (hasCommand) plan.Add(CommandToken);
+            if (plan.Count > MaxRows) throw new InvalidOperationException("a card plan of " + plan.Count + " rows");
+            return plan;
+        }
 
         /// <summary>A measurement (or speed) row. <paramref name="occurredAt"/> is when the value happened on the device.</summary>
         public static RowView Row(bool observed, string value, DateTimeOffset? occurredAt, DateTimeOffset now, bool streamLive, bool warn = false, TimeSpan? freshWithin = null)

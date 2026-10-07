@@ -14,7 +14,7 @@ namespace DeviceChain.Sitepulse.Tasks
     public static class PresenterActions
     {
         /// <summary>The platform's low-fuel line (sitepulse.go), in percent.</summary>
-        public const double LowFuelLinePct = 15.0;
+        public const double LowFuelLinePct = DeviceChain.Sitepulse.Domain.RuleLines.LowFuelPct;
 
         /// <summary>Where "prepare the next low-fuel cycle" puts the tank: just above the line.</summary>
         public const double JustAbovePct = 15.5;
@@ -37,6 +37,36 @@ namespace DeviceChain.Sitepulse.Tasks
                     said = "prepare low-fuel cycle: fuel " + F1(before) + "% -> " + F1(model.FuelPct) + "%, crosses " + F0(LowFuelLinePct) + "% in about " + F0(CrossWithinSeconds) + " s";
                 else
                     said = "prepare low-fuel cycle: fuel is already at " + F1(before) + "%, at or below the line: nothing to prepare";
+            }
+
+            timeline?.Add(id, TimelineKinds.Presenter, said);
+            return said;
+        }
+
+        /// <summary>The platform's low-tyre-pressure line (sitepulse.go), in kPa.</summary>
+        public const double TyreLowLineKpa = DeviceChain.Sitepulse.Domain.RuleLines.TyreLowKpa;
+
+        /// <summary>Where "puncture" puts the pressure: just above the line.</summary>
+        public const double TyreJustAboveKpa = 605.0;
+
+        /// <summary>About how long the leak takes to cross the line.</summary>
+        public const double TyreCrossWithinSeconds = 60.0;
+
+        /// <summary>
+        /// A slow tyre leak on a machine that has tyres (a haul truck or a loader; a tracked dozer has none): inputs only, through the model's
+        /// own publish path. The platform's tyre rule raises its alarm (and sends nothing); the machine keeps driving. Returns what it did.
+        /// </summary>
+        public static string PrepareTyreLeak(string id, MachineModel model, Timeline timeline)
+        {
+            string said;
+            if (!model.HasTyres) said = "puncture: this machine has no tyres";
+            else
+            {
+                var before = model.TyrePressureKpa;
+                if (model.PrepareTyreLeak(TyreJustAboveKpa, TyreCrossWithinSeconds, TyreLowLineKpa))
+                    said = "puncture (a slow tyre leak): tyre pressure " + F1(before) + " -> " + F1(model.TyrePressureKpa) + " kPa, falls through " + F0(TyreLowLineKpa) + " kPa in about " + F0(TyreCrossWithinSeconds) + " s";
+                else
+                    said = "puncture: tyre pressure is already at " + F1(before) + " kPa, at or below the line: nothing to do";
             }
 
             timeline?.Add(id, TimelineKinds.Presenter, said);

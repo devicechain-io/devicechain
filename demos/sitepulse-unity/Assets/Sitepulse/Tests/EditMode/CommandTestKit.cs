@@ -90,6 +90,10 @@ namespace DeviceChain.Sitepulse.Tests
         public bool Blocked(string id, double x, double z, double headingDegrees) => Block;
         public bool BayClear(string id) => !BayBusy;
         public bool Occupied(string id, double x, double z) => false;
+
+        /// <summary>Somebody is driving past the place the machine would rejoin its track.</summary>
+        public bool TrackBusy;
+        public bool TrackClear(string id, double x, double z) => !TrackBusy;
     }
 
     internal static class CommandKit

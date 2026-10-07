@@ -35,6 +35,12 @@ namespace DeviceChain.Sitepulse.Tasks
 
         /// <summary>Something other than <paramref name="id"/> stands within parking-clear distance of the point.</summary>
         bool Occupied(string id, double x, double z);
+
+        /// <summary>
+        /// A machine may rejoin its track at the point: no other machine is driving near it (a machine on its routine track does not
+        /// look for anyone, so the one that joins must) and none stands where the machine would be set down.
+        /// </summary>
+        bool TrackClear(string id, double x, double z);
     }
 
     /// <summary>The budgets a command's local execution is held to (design 4.3), in simulation time with a wall-clock hard cap.</summary>
@@ -44,6 +50,12 @@ namespace DeviceChain.Sitepulse.Tasks
         public const double AreaSlackSeconds = 60.0, AreaWallCapSeconds = 600.0;
         public const double BayWaitSeconds = 120.0, RefuelWallCapSeconds = 900.0;
         public const double ReturnWallCapSeconds = 600.0;
+
+        /// <summary>
+        /// A machine heading back to its track stops this far (metres) short of the place it rejoins while that place is not clear, so
+        /// it never waits on the road itself; the radii of "not clear" are the director's (<see cref="TaskDirector.RejoinMovingRadius"/>).
+        /// </summary>
+        public const double RejoinHoldBackMetres = 16.0;
 
         /// <summary>The longest any one command can be held, for the handler's own last-resort answer.</summary>
         public const double LongestWallCapSeconds = RefuelWallCapSeconds;
@@ -103,6 +115,9 @@ namespace DeviceChain.Sitepulse.Tasks
         public TaskPhase Phase { get; private set; }
         public TaskRequest Running => active;
         public double SpeedMps => follow.Speed;
+
+        /// <summary>The route the machine is driving now (to a destination, to the queue, into the bay, back to its track); null when it is not driving one.</summary>
+        public Route CurrentRoute => follow.Route;
 
         /// <summary>The bay is held or waited for by this machine.</summary>
         public bool WantsBay => Phase == TaskPhase.WaitingForBay || Phase == TaskPhase.EnteringBay || Phase == TaskPhase.Refuelling;
@@ -320,6 +335,12 @@ namespace DeviceChain.Sitepulse.Tasks
             }
         }
 
+        /// <summary>Stands still (braking if it is moving) because the track it is heading for is not clear.</summary>
+        void Hold(double dt)
+        {
+            if (follow.Active) follow.Advance(dt, body, kin, (x, z, h) => true);
+        }
+
         bool Drive(double dt) => follow.Advance(dt, body, kin, (x, z, h) => world.Blocked(id, x, z, h));
 
         void StepTask(double simDt, double wallDt)
@@ -520,7 +541,21 @@ namespace DeviceChain.Sitepulse.Tasks
 
             if (follow.Active)
             {
+                // the machines on their routine tracks follow them blind: the machine that rejoins one has to look, and wait off the road
+                var toRejoin = Math.Sqrt((returnPoint.X - body.X) * (returnPoint.X - body.X) + (returnPoint.Z - body.Z) * (returnPoint.Z - body.Z));
+                if (toRejoin <= TaskBudgets.RejoinHoldBackMetres && !world.TrackClear(id, returnPoint.X, returnPoint.Z))
+                {
+                    Hold(simDt);
+                    return;
+                }
+
                 Drive(simDt);
+                return;
+            }
+
+            if (!world.TrackClear(id, returnPoint.X, returnPoint.Z))
+            {
+                Hold(simDt);
                 return;
             }
 

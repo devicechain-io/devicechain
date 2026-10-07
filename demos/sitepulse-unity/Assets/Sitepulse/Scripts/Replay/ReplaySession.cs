@@ -4,6 +4,7 @@
 using System;
 using System.Collections.Generic;
 using System.Text;
+using DeviceChain.Sitepulse.Domain;
 using DeviceChain.Sitepulse.Recording;
 using DeviceChain.Sitepulse.Tasks;
 
@@ -21,11 +22,16 @@ namespace DeviceChain.Sitepulse.Replay
         readonly ReplayedState state = new ReplayedState();
         readonly Dictionary<string, List<(double t, TimelineRow row)>> timeline = new Dictionary<string, List<(double, TimelineRow)>>(StringComparer.Ordinal);
         readonly List<(double t, string machine)> received = new List<(double, string)>();
-        int next;
+        readonly ProofLog proof = new ProofLog();
+        readonly ZoneNameBook zones = new ZoneNameBook();
+        readonly Dictionary<string, RoutePolyline> routes = new Dictionary<string, RoutePolyline>(StringComparer.Ordinal);
+        readonly Func<string, string> idOfToken;
+        int next, nextDevice;
 
         public ReplaySession(RecordingData data)
         {
             this.data = data ?? throw new ArgumentNullException(nameof(data));
+            idOfToken = token => data.Header.IdOf(token);
             foreach (var d in data.Device)
             {
                 if (d.K != DeviceKinds.Timeline) continue;
@@ -38,6 +44,15 @@ namespace DeviceChain.Sitepulse.Replay
         public RecordingData Data => data;
         public RunHeader Header => data.Header;
         public ReplayedState State => state;
+
+        /// <summary>The proof drawer's rows as of the cursor: the same ones the live app held, rebuilt from the recording by the same code.</summary>
+        public ProofLog Proof => proof;
+
+        /// <summary>The zone names the recording holds as of the cursor (the platform's, read when the run started); empty when it holds none, and then no zone is labelled.</summary>
+        public ZoneNameBook Zones => zones;
+
+        /// <summary>The route the machine was driving at the cursor, drawn from the recording; null when it was driving none.</summary>
+        public RoutePolyline RouteOf(string machine) => routes.TryGetValue(machine, out var r) ? r : null;
         public double Duration => data.Duration;
 
         /// <summary>Seconds into the recording.</summary>
@@ -56,11 +71,31 @@ namespace DeviceChain.Sitepulse.Replay
             if (t < Time)
             {
                 state.Reset();
+                proof.Reset();
+                zones.Clear();
+                routes.Clear();
                 next = 0;
+                nextDevice = 0;
             }
 
             var log = data.Observed;
-            while (next < log.Count && log[next].T <= t) state.Apply(log[next++]);
+            while (next < log.Count && log[next].T <= t)
+            {
+                var line = log[next++];
+                state.Apply(line);
+                ProofFeed.Apply(proof, line, idOfToken);
+            }
+
+            var device = data.Device;
+            while (nextDevice < device.Count && device[nextDevice].T <= t)
+            {
+                var d = device[nextDevice++];
+                if (d.K == DeviceKinds.Timeline) proof.DeviceRow(d.Device, d.Utc, d.RowKind, d.Text);
+                else if (d.K == DeviceKinds.Route) routes[d.Device] = RoutePolyline.FromFlat(d.Points);
+                else if (d.K == DeviceKinds.Zones)
+                    foreach (var kv in d.ZoneNames) zones.Set(kv.Key, kv.Value);
+            }
+
             Time = t;
         }
 

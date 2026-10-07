@@ -83,6 +83,7 @@ namespace DeviceChain.Sitepulse.Platform
 
         public IReadOnlyDictionary<string, ObservedValue> Measurements => measurements;
         public IReadOnlyDictionary<string, ObservedAlarm> Alarms => alarms;
+        public IReadOnlyDictionary<string, ObservedCommand> Commands => commands;
         public ObservedLocation Location { get; internal set; }
         public ObservedPresence Presence { get; internal set; }
 

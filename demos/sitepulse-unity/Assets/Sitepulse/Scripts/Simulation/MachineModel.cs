@@ -101,6 +101,7 @@ namespace DeviceChain.Sitepulse.Simulation
         readonly double tyreBase, tempOffset, fuelRateScale, phase;
         double fuel, engineTemp, engineHours, tyre, payload, throughput, simTime;
         double boostPctPerHour, boostEndsBelowPct;
+        double leakKpaPerSecond, leakStopsBelowKpa, leakLossKpa;
         bool wasLoaded;
         ulong loads;
 
@@ -178,6 +179,14 @@ namespace DeviceChain.Sitepulse.Simulation
             if (HasTyres)
             {
                 tyre = tyreBase + 0.3 * (engineTemp - 85.0) + 0.8 * Math.Sin(2.0 * Math.PI * simTime / 240.0 + phase);
+                if (leakKpaPerSecond > 0)
+                {
+                    // a slow leak: the pressure it has lost only grows, until it has fallen well past the line
+                    leakLossKpa += leakKpaPerSecond * dt;
+                    if (tyre - leakLossKpa < leakStopsBelowKpa) leakKpaPerSecond = 0;
+                }
+
+                tyre -= leakLossKpa;
 
                 if (input.Loaded && !wasLoaded)
                 {
@@ -240,6 +249,34 @@ namespace DeviceChain.Sitepulse.Simulation
             if (fuel > justAbovePct) fuel = justAbovePct;
             boostPctPerHour = (fuel - linePct) / crossWithinSeconds * 3600.0;
             boostEndsBelowPct = linePct - 1.0;
+            return true;
+        }
+
+        /// <summary>The leak a presenter's puncture adds, kPa per second; 0 when none is running or it has run its course.</summary>
+        public double LeakKpaPerSecond => leakKpaPerSecond;
+
+        /// <summary>
+        /// A presenter input: a slow tyre leak. The pressure is brought down to <paramref name="justAboveKpa"/> if it is higher (it is never
+        /// raised), and a leak is added that carries it through <paramref name="lineKpa"/> in about <paramref name="crossWithinSeconds"/>, then
+        /// goes on a little way past it and stops. The pressure published is the model's own, falling through <see cref="Step"/> like any other
+        /// value: nothing here writes to the platform. Returns false (and changes nothing) when the machine has no tyres or the pressure is
+        /// already at or below the line.
+        /// </summary>
+        public bool PrepareTyreLeak(double justAboveKpa, double crossWithinSeconds, double lineKpa = 600.0)
+        {
+            if (!HasTyres) return false;
+            if (double.IsNaN(justAboveKpa) || justAboveKpa <= lineKpa) throw new ArgumentOutOfRangeException(nameof(justAboveKpa));
+            if (!(crossWithinSeconds > 0)) throw new ArgumentOutOfRangeException(nameof(crossWithinSeconds));
+            if (tyre <= lineKpa) return false;
+            if (tyre > justAboveKpa)
+            {
+                leakLossKpa += tyre - justAboveKpa;
+                tyre = justAboveKpa;
+            }
+
+            // a little more than the distance to the line, so the model's own wobble cannot hold it above the line
+            leakKpaPerSecond = (justAboveKpa - lineKpa + 3.0) / crossWithinSeconds;
+            leakStopsBelowKpa = lineKpa - 12.0;
             return true;
         }
 

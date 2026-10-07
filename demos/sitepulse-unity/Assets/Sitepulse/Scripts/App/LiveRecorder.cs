@@ -211,6 +211,7 @@ namespace DeviceChain.Sitepulse.App
             };
             if (world.Timeline != null) world.Timeline.Added += OnTimelineRow;
             if (world.Presenter != null) world.Presenter.Said += OnPresenterSaid;
+            if (world.Director != null) world.Director.RouteChanged += OnRouteChanged;
         }
 
         void OnDeviceEvent(DeviceEvent e)
@@ -244,6 +245,13 @@ namespace DeviceChain.Sitepulse.App
                 l.Text = row.Text;
                 recorder.Device(l);
             }
+            catch (Exception e) { recorder.Fail(e); }
+        }
+
+        // the route a machine drives is recorded as it starts and as it ends, so the highlight can be drawn again from the recording
+        void OnRouteChanged(string machine, Route route)
+        {
+            try { recorder.Device(RecordingMaps.Route(machine, route)); }
             catch (Exception e) { recorder.Fail(e); }
         }
 
@@ -371,6 +379,7 @@ namespace DeviceChain.Sitepulse.App
             if (world.Plane != null) world.Plane.OnEvent = null;
             if (world.Timeline != null) world.Timeline.Added -= OnTimelineRow;
             if (world.Presenter != null) world.Presenter.Said -= OnPresenterSaid;
+            if (world.Director != null) world.Director.RouteChanged -= OnRouteChanged;
             recorder.Close();
             log($"recording closed · {recorder.Directory} · {recorder.Stats} · {recorder.Stats.TotalBytes / 1024.0:0.0} KiB on disk");
         }

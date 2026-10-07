@@ -181,6 +181,23 @@ namespace DeviceChain.Sitepulse.App
             return l;
         }
 
+        /// <summary>The line for a machine starting to drive a route, or (a null route) stopping.</summary>
+        public static DeviceLine Route(string externalId, Tasks.Route route)
+        {
+            var l = DeviceLine.Of(DeviceKinds.Route, externalId);
+            l.Points.AddRange(Tasks.RoutePolyline.ToFlat(route));
+            return l;
+        }
+
+        /// <summary>The line for the platform's zone names read at the start of a run: the names it gave, and (when it could not give them) why.</summary>
+        public static DeviceLine Zones(IReadOnlyDictionary<string, string> names, string failure)
+        {
+            var l = DeviceLine.Of(DeviceKinds.Zones, "site");
+            foreach (var kv in names) l.ZoneNames[kv.Key] = kv.Value;
+            l.Text = failure;
+            return l;
+        }
+
         public static DeviceLine Sample(string externalId, Sample sample, DateTimeOffset ackedAt)
         {
             var l = DeviceLine.Of(DeviceKinds.Sample, externalId);

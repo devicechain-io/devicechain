@@ -278,6 +278,12 @@ namespace DeviceChain.Sitepulse.Recording
         public const string LinkState = "linkState", Started = "started", StartFailed = "startFailed", FirstPublish = "firstPublish",
             Command = "command", CommandRefused = "commandRefused", TaskReceived = "taskReceived", TaskCompleted = "taskCompleted",
             Timeline = "timeline";
+
+        /// <summary>The route a machine started driving (<c>pts</c>: x0, z0, x1, z1, ... in the site's metres), or, with no points, that it stopped driving one. The route highlight is drawn again from these.</summary>
+        public const string Route = "route";
+
+        /// <summary>The platform's names for the site's zones, asked once when the run started (<c>zones</c>: token to name; <c>text</c>: why there are none, when the platform could not say). A replay labels the zones from this and from nothing else.</summary>
+        public const string Zones = "zones";
     }
 
     /// <summary>
@@ -313,6 +319,12 @@ namespace DeviceChain.Sitepulse.Recording
 
         // timeline
         public string RowKind { get; set; }
+
+        // route: the flat list of points; empty means the machine stopped driving its route
+        public List<double> Points { get; } = new List<double>();
+
+        // zones: token to the platform's name for the area
+        public SortedDictionary<string, string> ZoneNames { get; } = new SortedDictionary<string, string>(StringComparer.Ordinal);
 
         public static DeviceLine Of(string kind, string device) => new DeviceLine { K = kind, Device = device };
 
@@ -364,6 +376,17 @@ namespace DeviceChain.Sitepulse.Recording
                     w.WriteString("rk", RowKind);
                     w.WriteString("text", Text);
                     break;
+                case DeviceKinds.Zones:
+                    w.WriteStartObject("zones");
+                    foreach (var kv in ZoneNames) w.WriteString(kv.Key, kv.Value);
+                    w.WriteEndObject();
+                    JsonIo.WriteStr(w, "text", Text);
+                    break;
+                case DeviceKinds.Route:
+                    w.WriteStartArray("pts");
+                    foreach (var p in Points) w.WriteNumberValue(Math.Round(p, 1));
+                    w.WriteEndArray();
+                    break;
                 default:
                     throw new InvalidOperationException("unknown device line kind " + K);
             }
@@ -413,6 +436,25 @@ namespace DeviceChain.Sitepulse.Recording
                 case DeviceKinds.Timeline:
                     l.RowKind = JsonIo.RequireStr(e, "rk", "timeline");
                     l.Text = JsonIo.RequireStr(e, "text", "timeline");
+                    break;
+                case DeviceKinds.Zones:
+                    if (e.TryGetProperty("zones", out var zs) && zs.ValueKind == JsonValueKind.Object)
+                        foreach (var z in zs.EnumerateObject())
+                        {
+                            if (z.Value.ValueKind != JsonValueKind.String) throw new RecordingFormatException("zones: every name must be a string");
+                            l.ZoneNames[z.Name] = z.Value.GetString();
+                        }
+
+                    l.Text = JsonIo.Str(e, "text");
+                    break;
+                case DeviceKinds.Route:
+                    if (e.TryGetProperty("pts", out var pts) && pts.ValueKind == JsonValueKind.Array)
+                        foreach (var p in pts.EnumerateArray())
+                        {
+                            if (p.ValueKind != JsonValueKind.Number) throw new RecordingFormatException("route: \"pts\" must be numbers");
+                            l.Points.Add(p.GetDouble());
+                        }
+
                     break;
                 default:
                     throw new RecordingFormatException("device.ndjson has a line of unknown kind \"" + l.K + "\"");

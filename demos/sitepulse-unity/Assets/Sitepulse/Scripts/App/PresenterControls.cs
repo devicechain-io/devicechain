@@ -22,7 +22,7 @@ namespace DeviceChain.Sitepulse.App
     /// </summary>
     public sealed class PresenterControls
     {
-        public const string HelpLine = "[ ] machine · T timeline · P prepare low fuel · G resume work · F fresh run · R readiness · L local sim";
+        public const string HelpLine = "[ ] machine · T timeline · P prepare low fuel · K puncture a tyre · G resume work · F fresh run · R readiness · L local sim · D proof drawer · I machine panel · Z zone names";
 
         readonly TaskDirector director;
         readonly Func<string, MachineModel> modelOf;
@@ -122,6 +122,18 @@ namespace DeviceChain.Sitepulse.App
         {
             if (id == null || IndexOf(id) < 0) return null;
             var said = PresenterActions.PrepareLowFuel(id, modelOf(id), director.Timeline);
+            Say(id + ": " + said);
+            return said;
+        }
+
+        /// <summary>A slow tyre leak on the selected machine (inputs only, through the model's own publish path).</summary>
+        public string PrepareTyreLeak() => PrepareTyreLeak(Selected);
+
+        /// <summary>The same for a named machine (the video run); null when there is no such machine.</summary>
+        public string PrepareTyreLeak(string id)
+        {
+            if (id == null || IndexOf(id) < 0) return null;
+            var said = PresenterActions.PrepareTyreLeak(id, modelOf(id), director.Timeline);
             Say(id + ": " + said);
             return said;
         }

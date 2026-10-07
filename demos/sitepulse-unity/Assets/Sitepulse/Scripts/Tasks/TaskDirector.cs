@@ -22,6 +22,13 @@ namespace DeviceChain.Sitepulse.Tasks
     {
         public const double YieldDistance = 8.0, LaneHalfWidth = 3.0, BayClearRadius = 5.0;
 
+        /// <summary>
+        /// A machine rejoining its track waits while another that is driving is within <see cref="RejoinMovingRadius"/> metres of the place it
+        /// would rejoin at (a truck on its routine track follows the track blind, and a machine set down on one in step with it travels
+        /// through it), or another of any kind is within <see cref="RejoinStandingRadius"/> of it (a hauler's footprint).
+        /// </summary>
+        public const double RejoinMovingRadius = 24.0, RejoinStandingRadius = 8.0;
+
         /// <summary>A machine slower than this (m/s) is standing.</summary>
         public const double StandingSpeed = 0.2;
 
@@ -63,6 +70,14 @@ namespace DeviceChain.Sitepulse.Tasks
         public IReadOnlyList<string> Machines => order;
 
         public MachineController this[string id] => controllers[id];
+
+        /// <summary>
+        /// Raised, after a step, when a machine starts driving a route (the route), changes to another, or stops driving (null). The route
+        /// highlight and the recording listen here, so the highlight can be drawn again from the recording.
+        /// </summary>
+        public event Action<string, Route> RouteChanged;
+
+        readonly Dictionary<string, Route> routesAnnounced = new Dictionary<string, Route>(StringComparer.Ordinal);
 
         public bool TryController(string id, out MachineController controller) => controllers.TryGetValue(id, out controller);
 
@@ -108,6 +123,19 @@ namespace DeviceChain.Sitepulse.Tasks
                 if (!controllers.TryGetValue(queued, out var q) || !q.WantsBay) bay.Release(queued);
 
             foreach (var id in order) controllers[id].Step(simDt, wallDt);
+            AnnounceRoutes();
+        }
+
+        void AnnounceRoutes()
+        {
+            foreach (var id in order)
+            {
+                var route = controllers[id].CurrentRoute;
+                routesAnnounced.TryGetValue(id, out var was);
+                if (ReferenceEquals(route, was)) continue;
+                routesAnnounced[id] = route;
+                RouteChanged?.Invoke(id, route);
+            }
         }
 
         /// <summary>The run is ending: every running task is answered with <paramref name="reason"/>, and later commands are too. Returns how many tasks it answered.</summary>
@@ -187,6 +215,23 @@ namespace DeviceChain.Sitepulse.Tasks
         }
 
         public bool Occupied(string id, double x, double z) => Occupied(id, x, z, ParkingLot.ClearRadius);
+
+        public bool TrackClear(string id, double x, double z)
+        {
+            foreach (var kv in bodies)
+            {
+                if (kv.Key == id) continue;
+                var dx = kv.Value.X - x;
+                var dz = kv.Value.Z - z;
+                var d2 = dx * dx + dz * dz;
+                if (d2 < RejoinStandingRadius * RejoinStandingRadius) return false;
+                // a machine nothing has been seen to do yet counts as moving
+                var moving = !speeds.TryGetValue(kv.Key, out var v) || v >= StandingSpeed;
+                if (moving && d2 < RejoinMovingRadius * RejoinMovingRadius) return false;
+            }
+
+            return true;
+        }
 
         bool Occupied(string id, double x, double z, double radius)
         {

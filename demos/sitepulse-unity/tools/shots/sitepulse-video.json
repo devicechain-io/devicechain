@@ -1,0 +1,226 @@
+{
+  "description": "The Unity shots of the Sitepulse feature video (S02-S16, S21, S22) in 16:9, each started from an event a video run records (-sitepulse-video-run): the establishing and plant shots from the start of the recording (offsets sit inside the run's first 150 s of steady work), the low-fuel story from SP-HL-0006's own events, the tyre story from SP-HL-0003's, and S21 from the platform's SUCCESSFUL of the operator's goto-area (the shot runs on to 2 s after it). S13 and S14 are each two shots (the alarm clears early in the 40 s service, the command succeeds at its end). Renders are a replay of a recorded live run: say so in the video's description and captions (render.json carries the run, the date and the clock). No shot asks for the badge, the readiness panel, the key help or a replay tag: a render has none. Offsets are for tuning against the frames.",
+  "fps": 60,
+  "shots": [
+    {
+      "name": "s02-establishing-crane",
+      "startEvent": {"kind": "runStart"},
+      "offset": 30,
+      "duration": 6,
+      "camera": {
+        "rig": "fixed",
+        "pos": [-130, 64, -165],
+        "lookAt": [6, -8, -32],
+        "fov": 42,
+        "to": {"pos": [-109.6, 44, -145.0], "lookAt": [6, -8, -32]}
+      },
+      "cards": false,
+      "zoneLabels": 3.0
+    },
+    {
+      "name": "s03-cut-face",
+      "startEvent": {"kind": "runStart"},
+      "offset": 42,
+      "duration": 4.5,
+      "camera": {
+        "rig": "fixed",
+        "pos": [17, -6.9, 44],
+        "lookAt": [2, -6.8, 38.5],
+        "fov": 46,
+        "to": {"pos": [16.4, -6.8, 44.5], "lookAt": [2.4, -6.8, 38.2]}
+      },
+      "cards": false
+    },
+    {
+      "name": "s04-haul-road-chase",
+      "startEvent": {"kind": "runStart"},
+      "offset": 54,
+      "duration": 4.5,
+      "camera": {"rig": "fixed", "pos": [104, 9, -32], "lookAtTarget": "SP-HL-0002", "lookHeight": 1.5, "fov": 28},
+      "cards": false
+    },
+    {
+      "name": "s05-cards-pop-in",
+      "startEvent": {"kind": "runStart"},
+      "offset": 66,
+      "duration": 5,
+      "camera": {"rig": "fixed", "pos": [-109.6, 44, -145.0], "lookAt": [6, -8, -32], "fov": 42},
+      "cards": ["SP-HL-0003", "SP-LD-0003", "SP-HL-0006", "SP-PL-0001"],
+      "cardStagger": 1.0
+    },
+    {
+      "name": "s06-plant-hero",
+      "startEvent": {"kind": "runStart"},
+      "offset": 80,
+      "duration": 5,
+      "camera": {
+        "rig": "fixed",
+        "pos": [-61, 4.4, -117],
+        "lookAt": [-31, 4.2, -101.5],
+        "fov": 33,
+        "to": {"pos": [-60.4, 4.4, -116.7], "lookAt": [-31, 4.2, -101.5]}
+      },
+      "cards": ["SP-LD-0003", "SP-PL-0001"]
+    },
+    {
+      "name": "s07-selected-machine-panel",
+      "startEvent": {"kind": "runStart"},
+      "offset": 94,
+      "duration": 5,
+      "camera": {"rig": "follow", "target": "SP-HL-0002", "back": 14, "up": 4, "side": -9, "fov": 38, "lookSide": 3.5},
+      "focus": "SP-HL-0002",
+      "cards": false,
+      "panel": true
+    },
+    {
+      "name": "s08-fuel-draining",
+      "startEvent": {"kind": "measurement", "name": "fuel_pct", "below": 15, "device": "SP-HL-0006"},
+      "offset": -7,
+      "duration": 6,
+      "camera": {"rig": "follow", "target": "SP-HL-0006", "back": 12, "up": 4, "side": -4, "fov": 50},
+      "focus": "SP-HL-0006",
+      "featured": "fuel_pct"
+    },
+    {
+      "name": "s09-alarm-low-fuel",
+      "startEvent": {"kind": "alarm", "key": "low-fuel", "state": "ACTIVE", "device": "SP-HL-0006"},
+      "offset": -1.2,
+      "duration": 4,
+      "camera": {
+        "rig": "follow",
+        "target": "SP-HL-0006",
+        "back": 9,
+        "up": 8.6,
+        "side": -6,
+        "fov": 50,
+        "lookHeight": 3.0,
+        "to": {"back": 12, "up": 8.6, "side": -3, "lookHeight": 1.5}
+      },
+      "focus": "SP-HL-0006",
+      "drawer": true,
+      "featured": "fuel_pct"
+    },
+    {
+      "name": "s10-command-arrives",
+      "startEvent": {"kind": "command", "name": "goto-refuel", "device": "SP-HL-0006"},
+      "offset": -0.5,
+      "duration": 4,
+      "camera": {"rig": "follow", "target": "SP-HL-0006", "back": 12, "up": 8.6, "side": -6, "fov": 50, "lookSide": 4.5},
+      "focus": "SP-HL-0006",
+      "drawer": true
+    },
+    {
+      "name": "s11-reroute",
+      "startEvent": {"kind": "timeline", "device": "SP-HL-0006", "rowKind": "accepted", "contains": "refuel bay"},
+      "offset": -0.5,
+      "duration": 5,
+      "camera": {
+        "rig": "follow",
+        "target": "SP-HL-0006",
+        "back": 0.5,
+        "up": 60,
+        "side": 0,
+        "fov": 40,
+        "lookHeight": 0,
+        "to": {"back": 28, "up": 28, "lookHeight": 0.5}
+      },
+      "focus": "SP-HL-0006",
+      "route": true
+    },
+    {
+      "name": "s12-refuel-bay",
+      "startEvent": {"kind": "timeline", "device": "SP-HL-0006", "rowKind": "refuelling", "contains": "service started"},
+      "offset": -1,
+      "duration": 5,
+      "camera": {"rig": "fixed", "pos": [-64, 3.2, -46], "lookAt": [-62, 1.8, -58], "fov": 50},
+      "focus": "SP-HL-0006",
+      "featured": "fuel_pct"
+    },
+    {
+      "name": "s13a-alarm-clears",
+      "startEvent": {"kind": "alarm", "key": "low-fuel", "state": "CLEARED", "device": "SP-HL-0006"},
+      "offset": -1,
+      "duration": 3,
+      "camera": {"rig": "follow", "target": "SP-HL-0006", "back": -12, "up": 10, "side": 12, "fov": 40, "lookHeight": 3.0},
+      "focus": "SP-HL-0006",
+      "featured": "fuel_pct"
+    },
+    {
+      "name": "s13b-command-successful",
+      "startEvent": {"kind": "command", "name": "goto-refuel", "status": "SUCCESSFUL", "device": "SP-HL-0006"},
+      "offset": -1,
+      "duration": 3,
+      "camera": {"rig": "follow", "target": "SP-HL-0006", "back": -12, "up": 10, "side": 12, "fov": 40, "lookHeight": 3.0},
+      "focus": "SP-HL-0006"
+    },
+    {
+      "name": "s14a-proof-drawer-full",
+      "startEvent": {"kind": "command", "name": "goto-refuel", "status": "SUCCESSFUL", "device": "SP-HL-0006"},
+      "offset": 1,
+      "duration": 2,
+      "camera": {"rig": "follow", "target": "SP-HL-0006", "back": 12, "up": 4, "side": -4, "fov": 50},
+      "focus": "SP-HL-0006",
+      "cards": false,
+      "drawer": "full"
+    },
+    {
+      "name": "s14b-pulls-away",
+      "startEvent": {"kind": "timeline", "device": "SP-HL-0006", "rowKind": "working", "contains": "back on its track"},
+      "offset": -4,
+      "duration": 3,
+      "camera": {"rig": "follow", "target": "SP-HL-0006", "back": 30, "up": 22, "side": -10, "fov": 45},
+      "focus": "SP-HL-0006"
+    },
+    {
+      "name": "s15-tyre-falling",
+      "startEvent": {"kind": "measurement", "name": "tyre_pressure_kpa", "below": 600, "device": "SP-HL-0003"},
+      "offset": -6,
+      "duration": 6,
+      "camera": {
+        "rig": "orbit",
+        "target": "SP-HL-0003",
+        "radius": 14,
+        "height": 2.4,
+        "degreesPerSecond": 15,
+        "startDegrees": 120,
+        "lookHeight": 3.0,
+        "fov": 45
+      },
+      "focus": "SP-HL-0003",
+      "featured": "tyre_pressure_kpa"
+    },
+    {
+      "name": "s16-alarm-tyre-pressure",
+      "startEvent": {"kind": "alarm", "key": "tyre-pressure-low", "state": "ACTIVE", "device": "SP-HL-0003"},
+      "offset": -1,
+      "duration": 7,
+      "camera": {"rig": "follow", "target": "SP-HL-0003", "back": 12, "up": 4, "side": -4, "fov": 50},
+      "focus": "SP-HL-0003",
+      "drawer": true,
+      "featured": "tyre_pressure_kpa"
+    },
+    {
+      "name": "s21-operator-command-arrives",
+      "startEvent": {"kind": "command", "name": "goto-area", "status": "SUCCESSFUL", "device": "SP-HL-0003"},
+      "offset": -5,
+      "duration": 7,
+      "camera": {"rig": "follow", "target": "SP-HL-0003", "back": 16, "up": 14, "side": -4, "fov": 45},
+      "focus": "SP-HL-0003",
+      "route": true
+    },
+    {
+      "name": "s22-golden-hour-wide",
+      "startEvent": {"kind": "runStart"},
+      "offset": 110,
+      "duration": 5,
+      "camera": {
+        "rig": "fixed",
+        "pos": [-130, 64, -165],
+        "lookAt": [6, -8, -32],
+        "fov": 38,
+        "to": {"pos": [-105.5, 64, -190.2], "lookAt": [6, -8, -32]}
+      },
+      "cards": false
+    }
+  ]
+}
