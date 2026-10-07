@@ -858,6 +858,7 @@ namespace DeviceChain.Sitepulse.Visuals
 
             machineBlockers = blockers.Count;
             AddObstacles(Obstacles, refW, obstacleScratch, blockers);
+            safe = CardSafeArea.Of(refW, RefH, SafeInsets.x, SafeInsets.y);
             AddElements(refW, dt, reduced, snap);
 
             // the cards: alarms, commands and the selected machine, at most a few, none for a speck
@@ -1102,17 +1103,24 @@ namespace DeviceChain.Sitepulse.Visuals
                     continue;
                 }
 
-                if (FindSlot(t, refW, out var r, out var e))
+                FindSlot(t, refW, out var r, out var e, out bool exact, out float cost);
+                if (had && !exact)
                 {
-                    t.slot.Assign(r.position - t.anchor, e - t.anchor, reduced);
-                    Commit(r, t.anchor, e);
+                    // no usable slot: move only when another is clearly less bad than the one held (it is drawn inside the safe area
+                    // either way), so a card that has to sit somewhat over something does not wander between near-equal places
+                    SlotOf(t, out var cur, out _);
+                    cur.position += CardSafeArea.Shift(cur, safe);
+                    var curElbow = CardSafeArea.Nearest(cur, t.anchor);
+                    if (cost + CardSlotSearch.LeaderFault / 2f >= Badness(t, cur, curElbow))
+                    {
+                        SlotOf(t, out var kept, out var keptElbow);
+                        Commit(kept, t.anchor, keptElbow);
+                        continue;
+                    }
                 }
-                else if (had)
-                {
-                    SlotOf(t, out var kept, out var keptElbow);
-                    Commit(kept, t.anchor, keptElbow);
-                }
-                else t.wanted = false;
+
+                t.slot.Assign(r.position - t.anchor, e - t.anchor, reduced);
+                Commit(r, t.anchor, e);
             }
         }
 
@@ -1138,6 +1146,11 @@ namespace DeviceChain.Sitepulse.Visuals
             // the pin is on the machine this frame; the card and the leader's bend are where the slot (gliding) puts them from it
             var pos = t.anchor + t.slot.Display;
             var elbow = t.anchor + t.slot.DisplayElbow;
+            // never outside the safe area: a slot that has gone bad is held for a moment while the camera moves on, and the card
+            // is kept in frame meanwhile (the clamp moves no faster than the card, so it never jumps); the leader still reaches the machine
+            var shift = CardSafeArea.Shift(new Rect(pos, new Vector2(CardW, t.height) * cardScale), safe);
+            pos += shift;
+            elbow += shift;
             t.card.anchoredPosition = pos;
             t.card.localScale = Vector3.one * cardScale;
             var seg = elbow - t.anchor;
@@ -1167,50 +1180,36 @@ namespace DeviceChain.Sitepulse.Visuals
             return col.Raycast(new Ray(from, to / d), out _, d - 0.5f);
         }
 
-        static readonly float[] Angles = { 90f, 65f, 115f, 40f, 140f, 15f, 165f, -15f, -165f, -50f, -130f };
-        static readonly float[] Lengths = { 55f, 95f, 140f, 190f, 250f, 320f, 400f };
-
         /// <summary>Whether a card at <paramref name="r"/> with its leader bending at <paramref name="e"/> is inside the frame, over no
         /// machine and no other card, its leader crossing no card and clear of the other leaders.</summary>
         bool SlotValid(Target t, Rect r, Vector2 e, float refW)
         {
-            if (r.xMin < Margin || r.yMin < Margin || r.xMax > refW - Margin || r.yMax > RefH - Margin) return false;
+            if (!CardSafeArea.Inside(r, safe)) return false;
             if (Hits(r, placed) || Hits(r, blockers) || Hits(r, targetRects)) return false;
             return !(LeaderHits(t.anchor, e, placed) || CoversLeader(r) || LeaderClash(t.anchor, e));
         }
 
-        /// <summary>Find the cheapest place for a card round its anchor: a valid slot, covering as little of the cut as it can.
-        /// False when there is none.</summary>
-        bool FindSlot(Target t, float refW, out Rect bestRect, out Vector2 bestElbow)
+        /// <summary>The frame's safe area for cards this frame.</summary>
+        Rect safe;
+
+        /// <summary>How bad a slot that is not fully usable is: the area it covers of the machines, the other cards and the held-clear bands, and a fault for each leader that crosses something.</summary>
+        float Badness(Target t, Rect r, Vector2 e)
+        {
+            float bad = 0f;
+            foreach (var p in placed) bad += CardSafeArea.OverlapArea(r, p);
+            foreach (var p in blockers) bad += CardSafeArea.OverlapArea(r, p);
+            foreach (var p in targetRects) bad += CardSafeArea.OverlapArea(r, p);
+            if (LeaderHits(t.anchor, e, placed) || CoversLeader(r) || LeaderClash(t.anchor, e)) bad += CardSlotSearch.LeaderFault;
+            return bad;
+        }
+
+        /// <summary>The cheapest place for a card round its anchor: a valid slot, covering as little of the cut as it can; failing that
+        /// the least bad one, inside the safe area. Always finds one.</summary>
+        void FindSlot(Target t, float refW, out Rect bestRect, out Vector2 bestElbow, out bool exact, out float cost)
         {
             var size = new Vector2(CardW, t.height) * cardScale;
-            float best = float.PositiveInfinity;
-            bestRect = default;
-            bestElbow = default;
-            foreach (float ang in Angles)
-            {
-                var dir = new Vector2(Mathf.Cos(ang * Mathf.Deg2Rad), Mathf.Sin(ang * Mathf.Deg2Rad));
-                foreach (float len in Lengths)
-                {
-                    var e = t.anchor + dir * len;
-                    // the leader meets the card at the corner or side nearest the anchor
-                    float x = Mathf.Abs(dir.x) < 0.2f ? e.x - size.x * 0.18f : dir.x > 0f ? e.x : e.x - size.x;
-                    float y = dir.y > 0.35f ? e.y : dir.y < -0.35f ? e.y - size.y : e.y - size.y / 2f;
-                    var r = new Rect(x, y, size.x, size.y);
-                    float cost = len + Mathf.Abs(ang - 90f) * 0.6f;
-                    if (cost >= best) continue;
-                    if (!SlotValid(t, r, e, refW)) continue;
-                    cost += CutCover(r) * 900f;
-                    if (cost < best)
-                    {
-                        best = cost;
-                        bestRect = r;
-                        bestElbow = e;
-                    }
-                }
-            }
-
-            return !float.IsPositiveInfinity(best);
+            CardSlotSearch.Find(t.anchor, size, safe, (r, e) => SlotValid(t, r, e, refW), CutCover, (r, e) => Badness(t, r, e),
+                out bestRect, out bestElbow, out exact, out cost);
         }
 
         static bool Hits(Rect r, List<Rect> list, int from = 0)
