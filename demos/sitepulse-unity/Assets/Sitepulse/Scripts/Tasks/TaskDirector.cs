@@ -18,7 +18,7 @@ namespace DeviceChain.Sitepulse.Tasks
     /// the spot, and a command that arrives after <see cref="FailAll"/> is too: nothing is ever left
     /// waiting for an answer that will not come.
     /// </summary>
-    public sealed class TaskDirector : ITaskSink, ITaskWorld
+    public sealed partial class TaskDirector : ITaskSink, ITaskWorld
     {
         public const double YieldDistance = 8.0, LaneHalfWidth = 3.0, BayClearRadius = 5.0;
 
@@ -71,6 +71,9 @@ namespace DeviceChain.Sitepulse.Tasks
 
         public MachineController this[string id] => controllers[id];
 
+        /// <summary>How fast the machine has been going since the last step, wherever the motion came from; 0 until it has been seen to move.</summary>
+        public double SpeedOf(string id) => speeds.TryGetValue(id, out var v) ? v : 0.0;
+
         /// <summary>
         /// Raised, after a step, when a machine starts driving a route (the route), changes to another, or stops driving (null). The route
         /// highlight and the recording listen here, so the highlight can be drawn again from the recording.
@@ -95,7 +98,42 @@ namespace DeviceChain.Sitepulse.Tasks
                 return;
             }
 
+            // a machine taken off its track stows its implements where it stands, and what that covers must not be where something else is:
+            // the command waits (the machine goes on working) until the place is clear
+            if (bodies[externalId].Attached && !DetachClear(externalId))
+            {
+                Timeline.Add(externalId, TimelineKinds.Received, request.Key + (request.Area != null ? " " + request.Area : "") + ": waiting for the way to clear");
+                deferred.Add((externalId, request, now));
+                return;
+            }
+
             c.Submit(request);
+        }
+
+        /// <summary>How long (simulation seconds) a command waits for a clear place to take the machine off its track before it is answered failed.</summary>
+        public const double DeferSeconds = 60.0;
+
+        readonly List<(string Id, TaskRequest Request, double Since)> deferred = new List<(string Id, TaskRequest Request, double Since)>();
+
+        void ReleaseDeferred()
+        {
+            for (var i = 0; i < deferred.Count; i++)
+            {
+                var (id, request, since) = deferred[i];
+                if (request.IsComplete || DetachClear(id) || now - since > DeferSeconds)
+                {
+                    deferred.RemoveAt(i--);
+                    if (request.IsComplete) continue;
+                    if (!DetachClear(id))
+                    {
+                        Timeline.Add(id, TimelineKinds.Refused, "its place was not clear for " + (int)DeferSeconds + " s");
+                        request.Complete(TaskResult.Fail("the machine could not be taken off its track: something stood too close"));
+                        continue;
+                    }
+
+                    controllers[id].Submit(request);
+                }
+            }
         }
 
         public void Refused(string externalId, string text) => Timeline.Add(externalId, TimelineKinds.Refused, text);
@@ -115,6 +153,9 @@ namespace DeviceChain.Sitepulse.Tasks
             }
 
             now += simDt;
+            Observe();
+            ReleaseDeferred();
+            StepTracks(simDt);
 
             // a bay held by a machine that is no longer in the middle of refuelling is not held
             var holder = bay.Holder;
@@ -143,6 +184,8 @@ namespace DeviceChain.Sitepulse.Tasks
         {
             reset = true;
             var answered = 0;
+            foreach (var (_, request, _) in deferred) answered += request.Complete(TaskResult.Fail(reason)) ? 1 : 0;
+            deferred.Clear();
             foreach (var id in order) answered += controllers[id].FailAll(reason);
             return answered;
         }

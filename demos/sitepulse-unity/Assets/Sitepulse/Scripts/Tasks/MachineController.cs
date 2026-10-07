@@ -41,6 +41,40 @@ namespace DeviceChain.Sitepulse.Tasks
         /// look for anyone, so the one that joins must) and none stands where the machine would be set down.
         /// </summary>
         bool TrackClear(string id, double x, double z);
+
+        /// <summary>
+        /// As <see cref="TrackClear"/>, for the whole of a machine of this kind put down there facing that way: its footprint, not just its
+        /// middle, has the room. The default asks only the middle.
+        /// </summary>
+        bool TrackClearFor(string id, EquipmentKind kind, double x, double z, double headingDegrees) => TrackClear(id, x, z);
+
+        /// <summary>
+        /// What a machine driving a route should do about the machines near its way: stop for one it would meet, and which side of its
+        /// line to take to pass one that stands (or comes the other way) on it. <paramref name="s"/> is how far along the route it is,
+        /// <paramref name="lateral"/> how far it is to the right of the route's line now. The default asks nothing of anyone.
+        /// </summary>
+        SteerAdvice Steer(string id, EquipmentKind kind, Route route, double s, double speed, double lateral) => default;
+
+        /// <summary>The machine standing at this pose, instead of where it is, would touch another machine that it is not already touching and moving away from.</summary>
+        bool WouldTouch(string id, EquipmentKind kind, double x, double z, double headingDegrees) => false;
+    }
+
+    /// <summary>
+    /// A machine driving a route is told whether to stop, how far to the right of the route's line to be (negative: to the left), and
+    /// whether to back up along the route instead, when it has stood facing something it can neither pass nor wait out.
+    /// </summary>
+    public readonly struct SteerAdvice
+    {
+        public SteerAdvice(bool stop, double lateral, bool reverse = false)
+        {
+            Stop = stop;
+            Lateral = lateral;
+            Reverse = reverse;
+        }
+
+        public bool Stop { get; }
+        public double Lateral { get; }
+        public bool Reverse { get; }
     }
 
     /// <summary>The budgets a command's local execution is held to (design 4.3), in simulation time with a wall-clock hard cap.</summary>
@@ -118,6 +152,11 @@ namespace DeviceChain.Sitepulse.Tasks
 
         /// <summary>The route the machine is driving now (to a destination, to the queue, into the bay, back to its track); null when it is not driving one.</summary>
         public Route CurrentRoute => follow.Route;
+
+        /// <summary>How far along <see cref="CurrentRoute"/> the machine is, and how far to the right of its line.</summary>
+        public double RouteProgress => follow.Progress;
+
+        public double RouteLateral => follow.Lateral;
 
         /// <summary>The bay is held or waited for by this machine.</summary>
         public bool WantsBay => Phase == TaskPhase.WaitingForBay || Phase == TaskPhase.EnteringBay || Phase == TaskPhase.Refuelling;
@@ -338,10 +377,14 @@ namespace DeviceChain.Sitepulse.Tasks
         /// <summary>Stands still (braking if it is moving) because the track it is heading for is not clear.</summary>
         void Hold(double dt)
         {
-            if (follow.Active) follow.Advance(dt, body, kin, (x, z, h) => true);
+            if (follow.Active) follow.Advance(dt, body, kin, (x, z, h) => true, Advise, Touches);
         }
 
-        bool Drive(double dt) => follow.Advance(dt, body, kin, (x, z, h) => world.Blocked(id, x, z, h));
+        SteerAdvice Advise(Route route, double at, double speed, double lateral) => world.Steer(id, body.Kind, route, at, speed, lateral);
+
+        bool Drive(double dt) => follow.Advance(dt, body, kin, (x, z, h) => world.Blocked(id, x, z, h), Advise, Touches);
+
+        bool Touches(double x, double z, double heading) => world.WouldTouch(id, body.Kind, x, z, heading);
 
         void StepTask(double simDt, double wallDt)
         {
@@ -543,7 +586,7 @@ namespace DeviceChain.Sitepulse.Tasks
             {
                 // the machines on their routine tracks follow them blind: the machine that rejoins one has to look, and wait off the road
                 var toRejoin = Math.Sqrt((returnPoint.X - body.X) * (returnPoint.X - body.X) + (returnPoint.Z - body.Z) * (returnPoint.Z - body.Z));
-                if (toRejoin <= TaskBudgets.RejoinHoldBackMetres && !world.TrackClear(id, returnPoint.X, returnPoint.Z))
+                if (toRejoin <= TaskBudgets.RejoinHoldBackMetres && !world.TrackClearFor(id, body.Kind, returnPoint.X, returnPoint.Z, returnPoint.HeadingDegrees))
                 {
                     Hold(simDt);
                     return;
@@ -553,13 +596,13 @@ namespace DeviceChain.Sitepulse.Tasks
                 return;
             }
 
-            if (!world.TrackClear(id, returnPoint.X, returnPoint.Z))
+            if (!world.TrackClearFor(id, body.Kind, returnPoint.X, returnPoint.Z, returnPoint.HeadingDegrees))
             {
                 Hold(simDt);
                 return;
             }
 
-            if (!follow.Align(simDt, body, kin, returnPoint.HeadingDegrees)) return;
+            if (!follow.Align(simDt, body, kin, returnPoint.HeadingDegrees, Touches)) return;
             body.Attach(returnPoint);
             Mode = MachineMode.Working;
             timeline.Add(id, TimelineKinds.Working, "back on its track");
