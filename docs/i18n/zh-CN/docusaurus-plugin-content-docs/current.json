@@ -1,0 +1,58 @@
+{
+  "version.label": {
+    "message": "开发版",
+    "description": "The label for version current"
+  },
+  "sidebar.docs.category.Concepts": {
+    "message": "概念",
+    "description": "The label for category 'Concepts' in sidebar 'docs'"
+  },
+  "sidebar.docs.category.Concepts.link.generated-index.description": {
+    "message": "了解 DeviceChain 的设计：平台基础、设备连接、事件自动化、可视化，以及租户所依赖的平台服务。",
+    "description": "The generated-index page description for category 'Concepts' in sidebar 'docs'"
+  },
+  "sidebar.docs.category.Guides": {
+    "message": "指南",
+    "description": "The label for category 'Guides' in sidebar 'docs'"
+  },
+  "sidebar.docs.category.Guides.link.generated-index.description": {
+    "message": "运行和使用 DeviceChain 的实用指南。",
+    "description": "The generated-index page description for category 'Guides' in sidebar 'docs'"
+  },
+  "sidebar.docs.category.Reference": {
+    "message": "参考",
+    "description": "The label for category 'Reference' in sidebar 'docs'"
+  },
+  "sidebar.docs.category.Reference.link.generated-index.description": {
+    "message": "参考资料：GraphQL API 和配置。",
+    "description": "The generated-index page description for category 'Reference' in sidebar 'docs'"
+  },
+  "sidebar.docs.category.Deployment": {
+    "message": "部署",
+    "description": "The label for category 'Deployment' in sidebar 'docs'"
+  },
+  "sidebar.docs.category.Deployment.link.generated-index.description": {
+    "message": "运行 DeviceChain：Kubernetes 运维和基础设施部署。",
+    "description": "The generated-index page description for category 'Deployment' in sidebar 'docs'"
+  },
+  "sidebar.docs.category.Foundations": {
+    "message": "基础",
+    "description": "The label for category 'Foundations' in sidebar 'docs'"
+  },
+  "sidebar.docs.category.Device Connectivity": {
+    "message": "设备连接",
+    "description": "The label for category 'Device Connectivity' in sidebar 'docs'"
+  },
+  "sidebar.docs.category.Automation": {
+    "message": "自动化",
+    "description": "The label for category 'Automation' in sidebar 'docs'"
+  },
+  "sidebar.docs.category.Visualization": {
+    "message": "可视化",
+    "description": "The label for category 'Visualization' in sidebar 'docs'"
+  },
+  "sidebar.docs.category.Platform Services": {
+    "message": "平台服务",
+    "description": "The label for category 'Platform Services' in sidebar 'docs'"
+  }
+}
