@@ -13,12 +13,18 @@ It is the operator's hand and nothing else: it creates no alarm and writes no va
     video_take.py operator --runner http://127.0.0.1:8090 --log <player log> [--wait-timeout 2700]
     video_take.py operator --runner http://127.0.0.1:8090 --now      send at once (no log to wait on)
 
+--operator picks whose hand sends it: `console` has a headless browser do it through the console's own UI (device page, Commands, Go To Area,
+areaToken sp-zone-yard, Send) while recording the console shots S17-S20 (console_capture.py; needs tools/console-recorder-setup.sh), `api` sends
+it through the operator plane as above, `auto` (the default) is console when the recorder is installed and api when it is not. A console part
+that fails BEFORE it sent anything falls back to api, so the take is not lost; one that fails after it sent never sends twice.
+
 Everything that decides something is a pure function above the I/O (tested by test_video_take.py).
 """
 
 import argparse
 import os
 import re
+import subprocess
 import sys
 import time
 
@@ -32,6 +38,39 @@ COMMAND = "goto-area"
 OPERATOR_STEP = re.compile(r"video-run: \d+ s \W+ operator \W+ send goto-area " + re.escape(AREA) + " to " + DEVICE)
 
 TERMINAL = {"SUCCESSFUL", "FAILED", "TIMEOUT", "EXPIRED", "CANCELLED"}
+
+OPERATOR_MODES = ("auto", "api", "console")
+# console_capture.py's exit statuses
+CONSOLE_OK = 0
+CONSOLE_FAILED_BEFORE_SEND = 3
+CONSOLE_FAILED_AFTER_SEND = 4
+
+
+def choose_operator(requested, recorder_ready):
+    """The operator mode a take runs with: 'console' or 'api'. 'auto' is console when the recorder is installed, else api; asking for
+    console without the recorder is an error rather than a quiet fall back to something that records nothing."""
+    if requested not in OPERATOR_MODES:
+        raise ValueError("operator mode must be one of " + ", ".join(OPERATOR_MODES))
+    if requested == "auto":
+        return "console" if recorder_ready else "api"
+    if requested == "console" and not recorder_ready:
+        raise ValueError("--operator console needs the recorder: run tools/console-recorder-setup.sh")
+    return requested
+
+
+def console_outcome(returncode):
+    """'done' (the console sent it), 'sent-clip-lost' (it sent it but a clip failed: never send again) or 'fallback' (nothing was sent)."""
+    if returncode == CONSOLE_OK:
+        return "done"
+    if returncode == CONSOLE_FAILED_AFTER_SEND:
+        return "sent-clip-lost"
+    return "fallback"
+
+
+def recorder_python():
+    """The interpreter that has Playwright (the setup script's venv), or None."""
+    cand = os.environ.get("SP_RECORDER_PYTHON") or os.path.join(os.path.expanduser("~"), ".cache", "sitepulse-recorder", "venv", "bin", "python")
+    return cand if os.access(cand, os.X_OK) else None
 
 
 def operator_payload(area=AREA):
@@ -109,8 +148,30 @@ def main(argv=None):
     p.add_argument("--log", help="the player's log file, which says when it is time")
     p.add_argument("--now", action="store_true", help="send at once, without waiting for the player's log")
     p.add_argument("--wait-timeout", type=float, default=2700, help="seconds to wait for the player to say it is time")
+    p.add_argument("--operator", choices=OPERATOR_MODES, default="auto", help="who sends the command: the console UI, the API, or auto (console when the recorder is installed)")
+    p.add_argument("--out", help="the take's out directory (console mode: the clips go to <out>/console/)")
     p.add_argument("--finish-timeout", type=float, default=600, help="seconds to wait for the platform to finish with the command")
     args = p.parse_args(argv)
+
+    py = recorder_python()
+    try:
+        mode = choose_operator(args.operator, py is not None and not args.now)
+    except ValueError as e:
+        p.error(str(e))
+    if mode == "console":
+        if not (args.log and args.out):
+            p.error("--operator console needs --log and --out")
+        c.say("operator: the console's own UI sends the command, and the console shots are recorded")
+        script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "console_capture.py")
+        rc = subprocess.call([py, script, "take", "--log", args.log, "--out", args.out, "--wait-timeout", str(args.wait_timeout)])
+        outcome = console_outcome(rc)
+        if outcome == "done":
+            print("PASS the console sent the command (clips under " + os.path.join(args.out, "console") + ")")
+            return 0
+        if outcome == "sent-clip-lost":
+            print("FAIL the console sent the command but a clip was lost (see the recorder's output)")
+            return 1
+        c.say("the console part failed before it sent anything: falling back to the operator plane")
 
     if not args.now:
         if not args.log:

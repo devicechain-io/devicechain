@@ -13,11 +13,18 @@
 #   video-take.sh                        the player does everything but the operator's command, which YOU send from the console
 #                                        (device page, Commands panel: Go To Area, areaToken sp-zone-yard, to SP-HL-0003) when the
 #                                        player's log says "operator" -- that is the console part you record
-#   video-take.sh --unattended           ... and this script sends that command through the operator plane when the player says it is time
+#   video-take.sh --unattended           ... and this script sends that command when the player says it is time, and records the console's
+#                                        part: S17 the Site Pulse board once the tyre alarm is ACTIVE, S18 the originator drill, S19 the
+#                                        Commands form, S20 Send and the command row QUEUED -> SENT -> SUCCESSFUL (1920x1080 mp4 under
+#                                        <out>/console/, indexed by console-shots.json; headless Chromium, see console-recorder-setup.sh)
+#   video-take.sh --operator api|console|auto   (with --unattended) who sends it: `console` = a headless browser through the console's own
+#                                        UI, recorded; `api` = the operator plane, nothing recorded; `auto` (default) = console when the
+#                                        recorder is installed, else api. A console part that fails before sending falls back to api.
 #   video-take.sh --out DIR              evidence and recordings under DIR (default Build/video-take/<stamp>)
 #   video-take.sh --timeout-min N        stop the player if it is still running after N minutes (default 40)
 #
-# Afterwards:  <out>/recordings/<run id>/   the recording (run.json, sim.bin, observed/device/presenter.ndjson, video-run.json)
+# Afterwards:  <out>/console/                 the console clips and console-shots.json (unattended, console operator)
+#              <out>/recordings/<run id>/   the recording (run.json, sim.bin, observed/device/presenter.ndjson, video-run.json)
 #              <out>/player.filtered.log    the player's [sitepulse] lines, redacted
 # Render:      Build/Sitepulse.exe -force-d3d11 -sitepulse-render <shots.json> -sitepulse-replay <run id> -sitepulse-record <out>/recordings
 #                  -sitepulse-out <frames dir> -screen-fullscreen 0 -screen-width 1920 -screen-height 1080 -no-intro   (Windows paths)
@@ -41,6 +48,7 @@ DC_VERSION="${DC_VERSION:-0.19.0}"
 RUNNER="${RUNNER:-http://127.0.0.1:8090}"
 OUT=""
 UNATTENDED=0
+OPERATOR=auto
 TIMEOUT_MIN=40
 
 log() { printf '[video-take] %s\n' "$*" >&2; }
@@ -50,12 +58,14 @@ while [ $# -gt 0 ]; do
 	case "$1" in
 	--unattended) UNATTENDED=1 ;;
 	--out) OUT="${2:?--out needs a directory}"; shift ;;
+	--operator) OPERATOR="${2:?--operator needs api, console or auto}"; shift ;;
 	--timeout-min) TIMEOUT_MIN="${2:?--timeout-min needs minutes}"; shift ;;
 	-h | --help) sed -n '2,/^set -euo/p' "${BASH_SOURCE[0]}" | sed '$d' | sed 's/^# \{0,1\}//'; exit 0 ;;
 	*) die "unknown option $1 (see --help)" ;;
 	esac
 	shift
 done
+case "$OPERATOR" in api | console | auto) ;; *) die "--operator is api, console or auto" ;; esac
 case "$TIMEOUT_MIN" in '' | *[!0-9]*) die "--timeout-min is a whole number of minutes" ;; esac
 
 win() { wslpath -w "$1"; }
@@ -122,7 +132,7 @@ main() {
 
 	local operator_job=""
 	if [ "$UNATTENDED" = 1 ]; then
-		python3 "$HERE/video_take.py" operator --runner "$RUNNER" --log "$RAW" >"$OUT/operator.txt" 2>&1 &
+		python3 "$HERE/video_take.py" operator --runner "$RUNNER" --log "$RAW" --out "$OUT" --operator "$OPERATOR" >"$OUT/operator.txt" 2>&1 &
 		operator_job=$!
 	fi
 
@@ -139,6 +149,12 @@ main() {
 	local rc=0
 	wait "$PLAYER_JOB" 2>/dev/null || rc=$?
 	if [ -n "$operator_job" ]; then
+		# the console recorder may still be filming the command row's last seconds: give it time before it is stopped
+		local grace=0
+		while [ "$grace" -lt 150 ] && kill -0 "$operator_job" 2>/dev/null; do
+			sleep 2
+			grace=$((grace + 2))
+		done
 		kill "$operator_job" 2>/dev/null || true
 		wait "$operator_job" 2>/dev/null || true
 		log "the operator's part: $(tr '\n' ' ' <"$OUT/operator.txt")"
