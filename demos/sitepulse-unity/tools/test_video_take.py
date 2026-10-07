@@ -20,6 +20,7 @@ class FakePlatform:
         self.statuses = list(statuses)
         self.rejection = rejection
         self.created = []
+        self.tokens = []
         self.devices = {"SP-HL-0003": "tok-3"} if devices is None else devices
 
     def device_tokens(self, ids):
@@ -27,7 +28,8 @@ class FakePlatform:
 
     def create_command(self, device_token, name, payload=None, token=None):
         self.created.append((device_token, name, payload))
-        return {"token": "op-1", "rejection": self.rejection}
+        self.tokens.append(token)
+        return {"token": token or "op-1", "rejection": self.rejection}
 
     def commands_by_token(self, tokens):
         s = self.statuses.pop(0) if len(self.statuses) > 1 else self.statuses[0]
@@ -113,7 +115,9 @@ class Sending(unittest.TestCase):
     def test_it_creates_exactly_the_consoles_command_for_exactly_one_device(self):
         p = FakePlatform()
         token, rejection = v.send_operator_command(p)
-        self.assertEqual("op-1", token)
+        self.assertRegex(token, r"^video-goto-area-[0-9a-f]{8}$")
+        self.assertEqual([token], p.tokens)
+        self.assertFalse(token.startswith("accept-"), "a take's command is not named like an acceptance run's")
         self.assertIsNone(rejection)
         self.assertEqual([("tok-3", "goto-area", {"areaToken": "sp-zone-yard"})], p.created)
 

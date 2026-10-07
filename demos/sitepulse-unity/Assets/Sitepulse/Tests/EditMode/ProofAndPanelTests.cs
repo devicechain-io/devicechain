@@ -86,12 +86,12 @@ namespace DeviceChain.Sitepulse.Tests
                 log.CommandObserved(Truck, "c-1", "goto-refuel", "SENT", T0, T0.AddSeconds(1 + i));
             }
 
-            Assert.AreEqual(new[] { "alarm low-fuel ACTIVE · MAJOR", "command goto-refuel SENT" }, Texts(log));
+            Assert.AreEqual(new[] { "alarm low-fuel ACTIVE · MAJOR", "command goto-refuel QUEUED", "command goto-refuel SENT" }, Texts(log));
             log.AlarmObserved(Truck, "al-1", "low-fuel", "CLEARED", "MAJOR", T0.AddSeconds(30));
-            Assert.AreEqual(3, Rows(log).Count);
+            Assert.AreEqual(4, Rows(log).Count);
             // the platform keeps ONE alarm row per device and key and flips it in place: the SAME token raised again is another row
             log.AlarmObserved(Truck, "al-1", "low-fuel", "ACTIVE", "MAJOR", T0.AddSeconds(90));
-            Assert.AreEqual(4, Rows(log).Count);
+            Assert.AreEqual(5, Rows(log).Count);
         }
 
         [Test]
@@ -235,9 +235,9 @@ namespace DeviceChain.Sitepulse.Tests
         [Test]
         public void AMissingPlatformRowStaysMissing()
         {
-            // the observer's poll saw the command only once it was SENT: there is no QUEUED row, and none is made up
+            // the observer's poll saw the command only once it was SENT and the platform gave no queued time: there is nothing to date a QUEUED row by, and none is made up
             var log = new ProofLog();
-            log.CommandObserved(Truck, "c-1", "goto-refuel", "SENT", T0, T0.AddSeconds(1));
+            log.CommandObserved(Truck, "c-1", "goto-refuel", "SENT", null, T0.AddSeconds(1));
             CollectionAssert.AreEqual(new[] { "command goto-refuel SENT" }, Texts(log));
 
             // the device finished and said SUCCESS: that is the device's row, never the platform's SUCCESSFUL
@@ -250,6 +250,50 @@ namespace DeviceChain.Sitepulse.Tests
             log.AlarmObserved(Truck, "al-1", "low-fuel", "ACTIVE", "MAJOR", T0);
             log.SampleObserved(Truck, "fuel_pct", 90, T0.AddSeconds(60), false);
             Assert.IsFalse(Rows(log).Any(r => r.Text.Contains("CLEARED")));
+        }
+
+        [Test]
+        public void ACommandFirstSeenAlreadySentStillHasItsPlatformDatedQueuedRow()
+        {
+            // the 1 Hz poll first saw the command SENT; the platform recorded when it queued it, and that is a fact, not an inference
+            var log = new ProofLog();
+            log.CommandObserved(Truck, "c-1", "goto-refuel", "SENT", T0.AddSeconds(1), T0.AddSeconds(2));
+            var rows = Rows(log);
+            CollectionAssert.AreEqual(new[] { "command goto-refuel QUEUED", "command goto-refuel SENT" }, Texts(log));
+            Assert.AreEqual(T0.AddSeconds(1), rows[0].At);
+            Assert.AreEqual(ProofSource.Platform, rows[0].Source);
+            Assert.IsFalse(rows[0].Seen, "dated by the platform's own queued time, not by when this app saw it");
+            Assert.IsTrue(rows[1].Seen);
+
+            // the same, first seen already SUCCESSFUL, and told again later with a QUEUED of its own: one QUEUED row
+            log.CommandObserved(Truck, "c-2", "goto-area", "SUCCESSFUL", T0.AddSeconds(10), T0.AddSeconds(30));
+            log.CommandObserved(Truck, "c-2", "goto-area", "QUEUED", T0.AddSeconds(10), T0.AddSeconds(31));
+            Assert.AreEqual(1, Texts(log).Count(t => t == "command goto-area QUEUED"));
+            Assert.AreEqual(new[] { "command goto-refuel QUEUED", "command goto-refuel SENT", "command goto-area QUEUED", "command goto-area SUCCESSFUL" }, Texts(log));
+        }
+
+        [Test]
+        public void AQueuedRowReachesTheDrawerThroughTheRecordedLinesToo()
+        {
+            var log = new ProofLog();
+            var line = new DeviceChain.Sitepulse.Recording.ObservedLine
+            {
+                K = DeviceChain.Sitepulse.Recording.ObservedKinds.Command, Device = "sp-hauler-06", Token = "tok-9-zzzzzzzzzz", Name = "goto-refuel", State = "SENT",
+                QueuedAt = T0.AddSeconds(5), ObservedAt = T0.AddSeconds(6), Utc = T0.AddSeconds(6),
+            };
+            DeviceChain.Sitepulse.Recording.ProofFeed.Apply(log, line, d => d == "sp-hauler-06" ? Truck : null);
+            CollectionAssert.AreEqual(new[] { "command goto-refuel QUEUED", "command goto-refuel SENT" }, Texts(log));
+            Assert.AreEqual(T0.AddSeconds(5), Rows(log)[0].At);
+
+            // a line with no queued time (or the minimum date a missing one is recorded as) makes no QUEUED row
+            var bare = new DeviceChain.Sitepulse.Recording.ObservedLine
+            {
+                K = DeviceChain.Sitepulse.Recording.ObservedKinds.Command, Device = "sp-hauler-06", Token = "tok-8-yyyyyyyyyy", Name = "goto-area", State = "SENT",
+                QueuedAt = DateTimeOffset.MinValue, ObservedAt = T0.AddSeconds(60), Utc = T0.AddSeconds(60),
+            };
+            DeviceChain.Sitepulse.Recording.ProofFeed.Apply(log, bare, d => Truck);
+            Assert.AreEqual(1, Texts(log).Count(t => t == "command goto-area SENT"));
+            Assert.AreEqual(0, Texts(log).Count(t => t == "command goto-area QUEUED"));
         }
 
         [Test]
@@ -445,7 +489,7 @@ namespace DeviceChain.Sitepulse.Tests
             ProofFeed.Apply(log, SyntheticRun.Alarm("sp-unknown-device", "al-9", "low-fuel", "ACTIVE", T0.AddSeconds(1)), IdOf);
             var rows = new List<ProofRow>();
             log.Rows(SyntheticRun.Truck, rows, 12);
-            Assert.AreEqual(3, rows.Count);
+            Assert.AreEqual(4, rows.Count, "the sample, the alarm, the command's platform-dated QUEUED and its SENT");
             Assert.IsTrue(rows.All(r => r.Source == ProofSource.Platform));
             rows.Clear();
             log.Rows("sp-unknown-device", rows, 12);

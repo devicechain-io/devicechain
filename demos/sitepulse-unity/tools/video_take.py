@@ -85,7 +85,8 @@ def send_operator_command(platform, area=AREA):
     tokens = platform.device_tokens([DEVICE])
     if DEVICE not in tokens:
         raise c.PlatformError(DEVICE + " does not exist on the platform")
-    created = platform.create_command(tokens[DEVICE], COMMAND, operator_payload(area))
+    # a take's own token prefix: the unattended operator is the take's, not an acceptance run's
+    created = platform.create_command(tokens[DEVICE], COMMAND, operator_payload(area), token=f"video-{COMMAND}-{os.urandom(4).hex()}")
     return created["token"], created.get("rejection")
 
 

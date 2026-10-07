@@ -106,4 +106,21 @@ namespace DeviceChain.Sitepulse.Domain
             return book;
         }
     }
+
+    /// <summary>The places inside a zone its name may ride, best first: the middle, then the middle of each half and each quarter.</summary>
+    public static class ZoneLabelSpots
+    {
+        static readonly (double fx, double fz)[] Fractions =
+        {
+            (0.5, 0.5), (0.5, 0.25), (0.5, 0.75), (0.25, 0.5), (0.75, 0.5), (0.25, 0.25), (0.75, 0.25), (0.25, 0.75), (0.75, 0.75),
+        };
+
+        /// <summary>The spots of a zone <c>[x0, x1] x [z0, z1]</c>, in metres, in the order a label tries them.</summary>
+        public static IReadOnlyList<(double X, double Z)> Of(double x0, double x1, double z0, double z1)
+        {
+            var spots = new List<(double, double)>(Fractions.Length);
+            foreach (var (fx, fz) in Fractions) spots.Add((x0 + (x1 - x0) * fx, z0 + (z1 - z0) * fz));
+            return spots;
+        }
+    }
 }

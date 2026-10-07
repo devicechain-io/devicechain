@@ -85,7 +85,7 @@ namespace DeviceChain.Sitepulse.Visuals
         const float CardW = 252f, Pad = 12f, HeadH = 46f, RowH = 23f, AlarmH = 26f, Margin = 18f;
         const float LeaderGap = 28f;                  // how close two leaders may run, away from their pins
         const float LeaderFree = 30f;                 // the length of a leader next to its pin the gap ignores
-        const int MaxRows = 4;
+        const int MaxRows = CardPresenter.MaxRows;
 
         [Serializable] sealed class Spot { public float x, y, z; }
         [Serializable] sealed class Geofence { public string token; public Spot[] points; }
@@ -191,7 +191,7 @@ namespace DeviceChain.Sitepulse.Visuals
         {
             public string token, name;
             public Text text;
-            public Vector3 at;
+            public Vector3[] spots;
             public RectTransform chip;
             public CanvasGroup group;
             public readonly LabelPlacer placer = new LabelPlacer();
@@ -430,7 +430,9 @@ namespace DeviceChain.Sitepulse.Visuals
             foreach (var z in file.zones)
             {
                 if (z.rect == null || z.rect.Length != 4) continue;
-                float cx = (z.rect[0] + z.rect[1]) / 2f, cz = (z.rect[2] + z.rect[3]) / 2f;
+                var spots = new List<Vector3>();
+                foreach (var (sx, sz) in ZoneLabelSpots.Of(z.rect[0], z.rect[1], z.rect[2], z.rect[3]))
+                    spots.Add(new Vector3((float)sx, terrain.HeightAt((float)sx, (float)sz) + 6f, (float)sz));
                 var chip = Image(canvasRect, "Zone " + z.token, Vector2.zero, new Vector2(10f, 30f), Panel);
                 Image(chip, "Edge", Vector2.zero, new Vector2(4f, 30f), Ok);
                 var text = Label(chip, "Text", new Vector2(14f, 4f), new Vector2(400f, 24f), 19, FontStyle.Bold, Ink);
@@ -440,7 +442,7 @@ namespace DeviceChain.Sitepulse.Visuals
                 group.interactable = false;
                 group.blocksRaycasts = false;
                 chip.gameObject.SetActive(false);
-                zoneLabels.Add(new ZoneLabel { token = z.token, text = text, at = new Vector3(cx, terrain.HeightAt(cx, cz) + 6f, cz), chip = chip, group = group });
+                zoneLabels.Add(new ZoneLabel { token = z.token, text = text, spots = spots.ToArray(), chip = chip, group = group });
             }
         }
 
@@ -743,24 +745,20 @@ namespace DeviceChain.Sitepulse.Visuals
             DateTimeOffset? StampOf(string key) => r.TryGetStamp(key, out var st) ? st.OccurredAt : (DateTimeOffset?)null;
             void Metric(string key, bool warn = false) => Draw(MeasurementKeys.Label(key), CardPresenter.Row(observed, r.Format(key), StampOf(key), now, live, warn));
             bool stopped = false;
-            if (r.Kind == DeviceReading.Profile.Plant)
+            bool plant = r.Kind == DeviceReading.Profile.Plant;
+            // the alarm's own metric first and inked as a warning; else, on the selected machine, the metric a shot features
+            var first = plant ? null : alarmKeyRow ?? FeaturedFor(t);
+            foreach (var planned in CardPresenter.RowPlan(plant, first, !plant && r.CommandStatus.HasValue))
             {
-                Metric(MeasurementKeys.ThroughputTph);
-                Metric(MeasurementKeys.PlantRunning);
-                stopped = r.TryGetFlag(MeasurementKeys.PlantRunning, out bool running) && !running;
-            }
-            else
-            {
-                // the alarm's own metric first and inked as a warning; else, on the selected machine, the metric a shot features
-                var first = alarmKeyRow ?? FeaturedFor(t);
-                if (first != null) Metric(first, warn: alarmKeyRow != null);
-                if (first != MeasurementKeys.PayloadT) Metric(MeasurementKeys.PayloadT);
-                if (first != MeasurementKeys.FuelPct) Metric(MeasurementKeys.FuelPct);
-                Draw("Speed", CardPresenter.Row(observed, r.SpeedKmh.HasValue ? r.SpeedKmh.Value.ToString("0") + " km/h" : null,
-                    r.SpeedStamp?.OccurredAt, now, live, false, FreshnessRule.LocationFreshWithin));
-                if (r.CommandStatus.HasValue)
+                if (planned == CardPresenter.SpeedToken)
+                    Draw("Speed", CardPresenter.Row(observed, r.SpeedKmh.HasValue ? r.SpeedKmh.Value.ToString("0") + " km/h" : null,
+                        r.SpeedStamp?.OccurredAt, now, live, false, FreshnessRule.LocationFreshWithin));
+                else if (planned == CardPresenter.CommandToken)
                     Draw(CommandKeys.Label(r.Command), CardPresenter.CommandRow(observed, r.CommandStatus.Value.Label, r.CommandStatus.Value.IsTerminal, r.CommandStamp?.ObservedAt, now, live));
+                else Metric(planned, warn: alarmKeyRow != null && planned == first);
             }
+
+            if (plant) stopped = r.TryGetFlag(MeasurementKeys.PlantRunning, out bool running) && !running;
             for (int i = 0; i < MaxRows; i++)
             {
                 t.rows[i].label.enabled = i < n;
@@ -858,6 +856,7 @@ namespace DeviceChain.Sitepulse.Visuals
                 else if (t.visible) largest = Mathf.Max(largest, t.screen.height);
             }
 
+            machineBlockers = blockers.Count;
             AddObstacles(Obstacles, refW, obstacleScratch, blockers);
             AddElements(refW, dt, reduced, snap);
 
@@ -1011,13 +1010,18 @@ namespace DeviceChain.Sitepulse.Visuals
             }
 
             var size = z.chip.sizeDelta * cardScale;
-            z.placer.Step(Layers.ZoneLabels && name != null ? 1 : 0, _ =>
+            // the zone's name rides one of several places inside the zone: the first that is clear of the machines and the rest, and failing
+            // that the first that is clear of everything but the machines (a wide shot has a machine over most of a zone's centre; a name
+            // that never showed would be worse than one beside a truck)
+            int n = z.spots.Length;
+            z.placer.Step(Layers.ZoneLabels && name != null ? 2 * n : 0, i =>
             {
-                var v = cam.WorldToViewportPoint(z.at);
+                var relaxed = i >= n;
+                var v = cam.WorldToViewportPoint(z.spots[i % n]);
                 var at = new Vector2(v.x * refW - size.x / 2f, v.y * RefH - size.y / 2f);
                 var rect = new Rect(at, size);
                 bool valid = v.z > 0f && at.x > Margin && at.x + size.x < refW - Margin && at.y > Margin && at.y + size.y < RefH - Margin
-                             && !Hits(rect, targetRects) && !Hits(rect, blockers) && !Hits(rect, placed) && !Hidden(cam, z.at);
+                             && !Hits(rect, targetRects) && !Hits(rect, blockers, relaxed ? machineBlockers : 0) && !Hits(rect, placed) && !Hidden(cam, z.spots[i % n]);
                 return (at, valid);
             }, snap ? 10f : dt, reduced);
             bool on = z.placer.Alpha > 0f;
@@ -1209,12 +1213,15 @@ namespace DeviceChain.Sitepulse.Visuals
             return !float.IsPositiveInfinity(best);
         }
 
-        static bool Hits(Rect r, List<Rect> list)
+        static bool Hits(Rect r, List<Rect> list, int from = 0)
         {
-            foreach (var o in list)
-                if (o.Overlaps(r)) return true;
+            for (var i = from; i < list.Count; i++)
+                if (list[i].Overlaps(r)) return true;
             return false;
         }
+
+        /// <summary>How many of <see cref="blockers"/> (from the front) are the machines' own screen rects; the rest are the drawer, the panel, the chips and the safe margins.</summary>
+        int machineBlockers;
 
         /// <summary>Whether a card would sit over a leader already drawn.</summary>
         bool CoversLeader(Rect r)

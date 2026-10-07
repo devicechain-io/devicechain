@@ -36,11 +36,14 @@ namespace DeviceChain.Sitepulse.Recording
                 case ObservedKinds.Command:
                 {
                     var id = idOfToken(l.Device);
-                    if (id != null) log.CommandObserved(id, l.Token, l.Name, l.State, l.QueuedAt ?? l.Utc, l.ObservedAt ?? l.Utc);
+                    if (id != null) log.CommandObserved(id, l.Token, l.Name, l.State, PlatformTime(l.QueuedAt), l.ObservedAt ?? l.Utc);
                     break;
                 }
             }
         }
+
+        /// <summary>The platform's own queued time, or null when the line carries none (a missing time is recorded as the minimum date).</summary>
+        static DateTimeOffset? PlatformTime(DateTimeOffset? t) => t.HasValue && t.Value.Year > 2000 ? t : null;
 
         static void Alarm(ProofLog log, ObservedLine a, Func<string, string> idOfToken)
         {

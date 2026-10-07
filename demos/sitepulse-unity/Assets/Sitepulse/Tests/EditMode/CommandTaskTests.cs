@@ -943,6 +943,78 @@ namespace DeviceChain.Sitepulse.Tests
             Assert.IsTrue(cmd.Completion.Answer().Succeeded, d.Timeline.Text("SP-HL-0003", 20));
         }
 
+        // ---- rejoining the track: a machine on its routine track follows it blind, so the one that joins has to look
+
+        [Test]
+        public void AMachineHeadingBackToItsTrackWaitsOffTheRoadWhileTrafficIsPassingAndJoinsOnceItHas()
+        {
+            var r = new Rig();
+            var cmd = r.Send("goto-area", Yard);
+            Assert.IsTrue(r.Run(() => cmd.IsComplete));
+            Assert.IsNull(r.Controller.Resume());
+            Assert.IsTrue(r.Body.TryNearestTrackPoint(r.Body.X, r.Body.Z, out var join));
+
+            r.World.TrackBusy = true;
+            r.Run(() => false, 300);
+            Assert.AreEqual(MachineMode.Returning, r.Controller.Mode, "it waits, it does not give up in 5 minutes of a busy road");
+            Assert.IsFalse(r.Body.Attached);
+            Assert.AreEqual(0, r.Body.Attaches);
+            var gap = Math.Sqrt((r.Body.X - join.X) * (r.Body.X - join.X) + (r.Body.Z - join.Z) * (r.Body.Z - join.Z));
+            Assert.Greater(gap, TaskBudgets.RejoinHoldBackMetres - 3.0, "it stopped short of the place it rejoins, not on it");
+            Assert.LessOrEqual(gap, TaskBudgets.RejoinHoldBackMetres + 0.1);
+            Assert.AreEqual(0.0, r.Controller.SpeedMps, 1e-6, "standing");
+
+            r.World.TrackBusy = false;
+            Assert.IsTrue(r.Run(() => r.Controller.Mode == MachineMode.Working, 300));
+            Assert.AreEqual(1, r.Body.Attaches);
+            Assert.AreEqual(join.TrackSeconds, r.Body.LastAttach.Value.TrackSeconds, "at the same place of its track");
+        }
+
+        [Test]
+        public void TheDirectorSaysATrackIsNotClearWhileAMachineIsDrivingNearItOrAnyStandsOnIt()
+        {
+            var track = CommandKit.Track(0);
+            var me = new FakeBody("ME", EquipmentKind.Hauler, track[0].X, track[0].Z, 0, track);
+            var other = new FakeBody("OTHER", EquipmentKind.Hauler, 500, 500);
+            var d = new TaskDirector(CommandKit.Site, CommandKit.Graph, new Timeline(),
+                new[] { ((IMachineBody)me, new MachineModel(EquipmentKind.Hauler, "ME")), (other, new MachineModel(EquipmentKind.Hauler, "OTHER")) }, 1);
+            const double X = 100, Z = 100;
+            d.Step(0.5, 0.5);
+            d.Step(0.5, 0.5);
+            Assert.IsTrue(d.TrackClear("ME", X, Z), "a machine far away");
+
+            // it stands 20 m away: parked machines are not driving through
+            Place(other, X + 20, Z);
+            d.Step(0.5, 0.5);
+            d.Step(0.5, 0.5);
+            Assert.IsTrue(d.TrackClear("ME", X, Z), "a machine standing 20 m off is not in the way");
+
+            // it stands where the machine would be set down
+            Place(other, X + 5, Z);
+            d.Step(0.5, 0.5);
+            d.Step(0.5, 0.5);
+            Assert.IsFalse(d.TrackClear("ME", X, Z), "a machine standing within a footprint of the place");
+
+            // it drives past 20 m away, then 30 m away
+            Place(other, X + 20, Z);
+            d.Step(0.5, 0.5);
+            Place(other, X + 20, Z + 3);
+            d.Step(0.5, 0.5);
+            Assert.IsFalse(d.TrackClear("ME", X, Z), "a machine driving 20 m off is about to arrive");
+            Place(other, X + 30, Z);
+            d.Step(0.5, 0.5);
+            Place(other, X + 30, Z + 3);
+            d.Step(0.5, 0.5);
+            Assert.IsTrue(d.TrackClear("ME", X, Z), "once it is past the radius the track is clear");
+            Assert.IsTrue(d.TrackClear("OTHER", X + 30, Z), "a machine is never in its own way");
+        }
+
+        static void Place(FakeBody b, double x, double z)
+        {
+            b.Detach();
+            b.Drive(x, z, 0, 0, 0);
+        }
+
         // ---- reading the feature file
 
         [Test]

@@ -369,7 +369,7 @@ namespace DeviceChain.Sitepulse.Tests
     {
         static string Doc(string chips, double duration = 6, string extra = "") =>
             @"{""shots"":[{""name"":""c"",""startEvent"":{""kind"":""alarm"",""key"":""low-fuel"",""state"":""ACTIVE"",""device"":""SP-HL-0006""},""offset"":-1,""duration"":" + duration + @"," + extra +
-            @"""camera"":{""rig"":""follow"",""target"":""SP-HL-0006""}" + (chips == null ? "" : @",""chips"":" + chips) + "}]}";
+            @"""camera"":{""rig"":""follow"",""target"":""SP-HL-0006"",""up"":40}" + (chips == null ? "" : @",""chips"":" + chips) + "}]}";
 
         [Test]
         public void ChipsRenderOnlyWhenTheShotAsksAndAShotWithoutThemPlansNone()
@@ -587,7 +587,7 @@ namespace DeviceChain.Sitepulse.Tests
             Assert.AreEqual("SP-HL-0003", Of("s15").Selected, "the tyre story is on SP-HL-0003, never a dozer");
             Assert.AreEqual("tyre_pressure_kpa", Of("s15").Featured);
             Assert.AreEqual(RigKind.Orbit, Of("s15").Camera.Rig);
-            Assert.AreEqual(35f, Of("s15").Camera.Fov);
+            Assert.AreEqual(45f, Of("s15").Camera.Fov);
             Assert.AreEqual(7.0, Of("s16").Duration);
             Assert.AreEqual("SP-HL-0003", Of("s21").Selected);
             Assert.AreEqual(45f, Of("s21").Camera.Fov);
@@ -764,6 +764,118 @@ namespace DeviceChain.Sitepulse.Tests
             using var take = new VideoTake();
             var json = @"{""shots"":[{""name"":""x"",""startEvent"":{""kind"":""runStart""},""duration"":2,""cards"":[""SP-PL-0001""],""camera"":{""rig"":""fixed"",""pos"":[0,1,2],""lookAt"":[0,0,0]}}]}";
             Assert.DoesNotThrow(() => ShotPlanner.Plan(ShotFile.Parse(json), take.Data));
+        }
+    }
+
+    /// <summary>What a machine's card shows: a command's state is never the row a full card gives up.</summary>
+    public sealed class CardRowPlanTests
+    {
+        [Test]
+        public void AMachineCardWithAnAlarmAndACommandShowsTheCommandsStateToo()
+        {
+            // the tyre alarm's card: its metric, payload, fuel, speed, and then what the operator sent
+            var plan = CardPresenter.RowPlan(false, MeasurementKeys.TyrePressureKpa, true);
+            CollectionAssert.AreEqual(new[] { MeasurementKeys.TyrePressureKpa, MeasurementKeys.PayloadT, MeasurementKeys.FuelPct, CardPresenter.SpeedToken, CardPresenter.CommandToken }, plan);
+            Assert.LessOrEqual(plan.Count, CardPresenter.MaxRows);
+        }
+
+        [Test]
+        public void NoCombinationOfAlarmFeaturedMetricAndCommandDropsTheCommandOrOverflowsTheCard()
+        {
+            var firsts = new List<string> { null, MeasurementKeys.TyrePressureKpa, MeasurementKeys.FuelPct, MeasurementKeys.PayloadT, MeasurementKeys.EngineTempC };
+            foreach (var first in firsts)
+                foreach (var command in new[] { false, true })
+                {
+                    var plan = CardPresenter.RowPlan(false, first, command);
+                    Assert.LessOrEqual(plan.Count, CardPresenter.MaxRows, $"first={first} command={command}");
+                    Assert.AreEqual(command, plan.Contains(CardPresenter.CommandToken), $"first={first}: a command has a row exactly when there is one");
+                    Assert.AreEqual(1, plan.Count(r => r == CardPresenter.SpeedToken));
+                    Assert.AreEqual(plan.Count, plan.Distinct().Count(), "no row twice");
+                }
+        }
+
+        [Test]
+        public void ThePlantCardIsItsTwoFiguresAndNothingElse()
+        {
+            CollectionAssert.AreEqual(new[] { MeasurementKeys.ThroughputTph, MeasurementKeys.PlantRunning }, CardPresenter.RowPlan(true, null, false));
+        }
+    }
+
+    /// <summary>A camera that follows or orbits a machine never ends up inside it (a wheel filling the frame, no card in sight).</summary>
+    public sealed class CameraClearanceTests
+    {
+        static CameraSpec Spec(string camera) => ShotFile.Parse(@"{""shots"":[{""name"":""f"",""startEvent"":{""kind"":""runStart""},""duration"":4,""camera"":" + camera + "}]}").Shots[0].Camera;
+
+        [Test]
+        public void TheCamerasThatPutAWheelOnTheLensAreRefused()
+        {
+            // the follow camera 2.5 m beside and 4.5 m behind a haul truck's pose was inside its body
+            StringAssert.Contains("inside its body", CameraRigs.ClippingReason(Spec(@"{""rig"":""follow"",""target"":""SP-HL-0006"",""back"":4.5,""up"":2,""side"":-2.5,""fov"":40}")));
+            // so was one that starts there and pulls back
+            StringAssert.Contains("inside its body", CameraRigs.ClippingReason(Spec(@"{""rig"":""follow"",""target"":""SP-HL-0006"",""back"":3.5,""up"":1.8,""side"":-2.2,""to"":{""back"":12,""up"":4,""side"":-3}}")));
+            // and an orbit at 7 m and wheel height passes through the truck's corners
+            StringAssert.Contains("runs through", CameraRigs.ClippingReason(Spec(@"{""rig"":""orbit"",""target"":""SP-HL-0003"",""radius"":7,""height"":1.2}")));
+        }
+
+        [Test]
+        public void TheFramingsTheVideoUsesAreClearOfTheBody()
+        {
+            Assert.IsNull(CameraRigs.ClippingReason(Spec(@"{""rig"":""follow"",""target"":""SP-HL-0006"",""back"":-9,""up"":3.8,""side"":9,""fov"":40,""lookHeight"":3}")), "the cab close-up, ahead and to the side");
+            Assert.IsNull(CameraRigs.ClippingReason(Spec(@"{""rig"":""follow"",""target"":""SP-HL-0006"",""back"":9,""up"":3.5,""side"":-6,""to"":{""back"":12,""up"":4,""side"":-3}}")), "the pull-back from the alarm");
+            Assert.IsNull(CameraRigs.ClippingReason(Spec(@"{""rig"":""follow"",""target"":""SP-HL-0006"",""back"":0.5,""up"":60,""side"":0,""to"":{""back"":28,""up"":28}}")), "straight above is above it");
+            Assert.IsNull(CameraRigs.ClippingReason(Spec(@"{""rig"":""orbit"",""target"":""SP-HL-0003"",""radius"":14,""height"":2.4}")));
+            Assert.IsNull(CameraRigs.ClippingReason(Spec(@"{""rig"":""fixed"",""pos"":[0,1,2],""lookAt"":[0,0,0]}")), "a fixed camera is placed by hand");
+            Assert.IsNull(CameraRigs.ClippingReason(Spec(@"{""rig"":""follow"",""target"":""t""}")), "the default framing");
+        }
+
+        [Test]
+        public void ACameraThatPassesThroughAnyMachineDuringTheShotIsFoundAndNamed()
+        {
+            using var take = new VideoTake();
+            var sim = take.Data.Sim;
+            Assert.IsTrue(sim.TryIndexOf("SP-HL-0003", out var i));
+            var s = sim.Sample(10.0, i);
+            string Fixed(float x, float y, float z) => CameraRigs.IntrusionReason(
+                Spec(@"{""rig"":""fixed"",""pos"":[" + x.ToString(System.Globalization.CultureInfo.InvariantCulture) + "," + y.ToString(System.Globalization.CultureInfo.InvariantCulture) + "," + z.ToString(System.Globalization.CultureInfo.InvariantCulture) + @"],""lookAt"":[0,0,0]}"), sim, 10.0, 0.5);
+
+            // a fixed camera standing in the middle of one truck (not the one anything else is following)
+            var inside = Fixed(s.X, s.Y + 2f, s.Z);
+            StringAssert.Contains("the camera is inside SP-", inside);
+            // the same place a crane's height above it, and 20 m away on the ground, are not inside anything
+            Assert.IsNull(Fixed(s.X, s.Y + 40f, s.Z));
+            Assert.IsNull(Fixed(s.X + 400f, s.Y + 2f, s.Z + 400f));
+            // the camera of a shot that follows one truck is checked against every OTHER machine too
+            var follow = CameraRigs.IntrusionReason(Spec(@"{""rig"":""fixed"",""pos"":[" + s.X.ToString(System.Globalization.CultureInfo.InvariantCulture) + "," + (s.Y + 2f).ToString(System.Globalization.CultureInfo.InvariantCulture) + "," + s.Z.ToString(System.Globalization.CultureInfo.InvariantCulture) + @"],""lookAtTarget"":""SP-HL-0006""}"), sim, 10.0, 0.5);
+            StringAssert.Contains("the camera is inside SP-", follow);
+        }
+
+        [Test]
+        public void ARenderIsRefusedBeforeItStartsWhenAShotsCameraWouldClipTheMachine()
+        {
+            using var take = new VideoTake();
+            var json = @"{""shots"":[{""name"":""wheel"",""startEvent"":{""kind"":""runStart""},""duration"":2,""camera"":{""rig"":""follow"",""target"":""SP-HL-0006"",""back"":4.5,""up"":2,""side"":-2.5}}]}";
+            var ex = Assert.Throws<ShotException>(() => ShotPlanner.Plan(ShotFile.Parse(json), take.Data));
+            StringAssert.Contains("shot wheel", ex.Message);
+            StringAssert.Contains("inside its body", ex.Message);
+        }
+    }
+
+    /// <summary>A zone's name has more than one place to ride, so a wide shot with a machine over the middle of the zone still names it.</summary>
+    public sealed class ZoneLabelSpotsTests
+    {
+        [Test]
+        public void ANameTriesTheMiddleOfItsZoneFirstAndThenTheHalvesAndQuarters_AllInsideTheZone()
+        {
+            var spots = ZoneLabelSpots.Of(-108, -46, -76, -14);
+            Assert.AreEqual(9, spots.Count);
+            Assert.AreEqual((-77.0, -45.0), spots[0], "the middle first");
+            foreach (var (x, z) in spots)
+            {
+                Assert.That(x, Is.InRange(-108.0, -46.0));
+                Assert.That(z, Is.InRange(-76.0, -14.0));
+            }
+
+            Assert.AreEqual(spots.Count, spots.Distinct().Count(), "nine different places");
         }
     }
 }

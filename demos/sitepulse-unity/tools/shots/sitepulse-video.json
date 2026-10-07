@@ -89,12 +89,12 @@
       "camera": {
         "rig": "follow",
         "target": "SP-HL-0006",
-        "back": 3.5,
-        "up": 1.8,
-        "side": -2.2,
+        "back": 9,
+        "up": 8.6,
+        "side": -6,
         "fov": 50,
-        "lookHeight": 2.0,
-        "to": {"back": 12, "up": 4, "side": -3, "lookHeight": 1.5}
+        "lookHeight": 3.0,
+        "to": {"back": 12, "up": 8.6, "side": -3, "lookHeight": 1.5}
       },
       "focus": "SP-HL-0006",
       "drawer": true,
@@ -105,7 +105,7 @@
       "startEvent": {"kind": "command", "name": "goto-refuel", "device": "SP-HL-0006"},
       "offset": -0.5,
       "duration": 4,
-      "camera": {"rig": "follow", "target": "SP-HL-0006", "back": 12, "up": 4, "side": -6, "fov": 50, "lookSide": 4.5},
+      "camera": {"rig": "follow", "target": "SP-HL-0006", "back": 12, "up": 8.6, "side": -6, "fov": 50, "lookSide": 4.5},
       "focus": "SP-HL-0006",
       "drawer": true
     },
@@ -141,7 +141,7 @@
       "startEvent": {"kind": "alarm", "key": "low-fuel", "state": "CLEARED", "device": "SP-HL-0006"},
       "offset": -1,
       "duration": 3,
-      "camera": {"rig": "follow", "target": "SP-HL-0006", "back": 4.5, "up": 2, "side": -2.5, "fov": 40, "lookHeight": 1.8},
+      "camera": {"rig": "follow", "target": "SP-HL-0006", "back": -12, "up": 10, "side": 12, "fov": 40, "lookHeight": 3.0},
       "focus": "SP-HL-0006",
       "featured": "fuel_pct"
     },
@@ -150,7 +150,7 @@
       "startEvent": {"kind": "command", "name": "goto-refuel", "status": "SUCCESSFUL", "device": "SP-HL-0006"},
       "offset": -1,
       "duration": 3,
-      "camera": {"rig": "follow", "target": "SP-HL-0006", "back": 4.5, "up": 2, "side": -2.5, "fov": 40, "lookHeight": 1.8},
+      "camera": {"rig": "follow", "target": "SP-HL-0006", "back": -12, "up": 10, "side": 12, "fov": 40, "lookHeight": 3.0},
       "focus": "SP-HL-0006"
     },
     {
@@ -174,17 +174,17 @@
     {
       "name": "s15-tyre-falling",
       "startEvent": {"kind": "measurement", "name": "tyre_pressure_kpa", "below": 600, "device": "SP-HL-0003"},
-      "offset": -5,
+      "offset": -6,
       "duration": 6,
       "camera": {
         "rig": "orbit",
         "target": "SP-HL-0003",
-        "radius": 7,
-        "height": 1.2,
+        "radius": 14,
+        "height": 2.4,
         "degreesPerSecond": 15,
-        "startDegrees": 45,
-        "lookHeight": 0.9,
-        "fov": 35
+        "startDegrees": 120,
+        "lookHeight": 3.0,
+        "fov": 45
       },
       "focus": "SP-HL-0003",
       "featured": "tyre_pressure_kpa"

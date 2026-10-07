@@ -66,7 +66,7 @@ namespace DeviceChain.Sitepulse.Domain
     /// The proof drawer's evidence, per device: only things that HAPPENED, each with the time it happened and who says so. A row is added
     /// when the platform said something (a sample on the far side of a rule's line, an alarm changing state, a command changing state),
     /// when the device's own timeline said something, or when the presenter's hand moved an input. Nothing is inferred: a command state
-    /// the observer never saw has no row, an alarm that was never reported cleared has no CLEARED row, and a device's "SUCCESS" is never
+    /// the observer never saw has no row (except QUEUED, which the platform itself dated: see <see cref="CommandObserved"/>), an alarm that was never reported cleared has no CLEARED row, and a device's "SUCCESS" is never
     /// turned into a platform's SUCCESSFUL. A snapshot's measurement is a fact about the past, not an event, and adds no row. Main thread.
     /// </summary>
     public sealed class ProofLog : IProofRows
@@ -269,21 +269,31 @@ namespace DeviceChain.Sitepulse.Domain
         /// A command's state as the observer last saw it: one row for each state of each command it SAW. QUEUED is dated when the platform
         /// queued it; every other state is dated when this app SAW it (the platform does not date the transitions between), and says so
         /// (<see cref="ProofRow.Seen"/>). The rows of one command are ordered causally, not by those times.
+        ///
+        /// The platform's own <c>queued</c> time is a recorded fact about every command, so a command first seen already SENT (or finished)
+        /// still gets its QUEUED row, dated by that time and sourced to the platform, never "seen". When the platform gave no queued time
+        /// (<paramref name="queuedAt"/> null) there is nothing to date it by and no row is made up.
         /// </summary>
-        public void CommandObserved(string device, string token, string name, string status, DateTimeOffset queuedAt, DateTimeOffset observedAt)
+        public void CommandObserved(string device, string token, string name, string status, DateTimeOffset? queuedAt, DateTimeOffset observedAt)
         {
             if (device == null || token == null || name == null || status == null) return;
             var lane = Of(device);
-            if (!lane.Seen.Add("c|" + token + "|" + status)) return;
-            var queued = status == "QUEUED";
-            var stage = queued ? StageQueued : status == "SENT" ? StageSent : CommandStatus.Parse(status).IsTerminal ? StageTerminal : StageOther;
-            Add(lane, new Entry
+            var anchor = queuedAt ?? observedAt;
+            var queuedKey = "c|" + token + "|QUEUED";
+            if (status == "QUEUED")
             {
-                Row = new ProofRow(queued ? queuedAt : observedAt, ProofSource.Platform, "command " + name + " " + status, !queued),
-                Stage = stage,
-                CommandToken = token,
-                Queued = queuedAt,
-            });
+                if (!lane.Seen.Add(queuedKey)) return;
+                Add(lane, new Entry { Row = new ProofRow(anchor, ProofSource.Platform, "command " + name + " QUEUED", !queuedAt.HasValue), Stage = StageQueued, CommandToken = token, Queued = anchor });
+                return;
+            }
+
+            // first seen already past QUEUED: the platform still recorded when it queued the command
+            if (queuedAt.HasValue && lane.Seen.Add(queuedKey))
+                Add(lane, new Entry { Row = new ProofRow(anchor, ProofSource.Platform, "command " + name + " QUEUED", false), Stage = StageQueued, CommandToken = token, Queued = anchor });
+
+            if (!lane.Seen.Add("c|" + token + "|" + status)) return;
+            var stage = status == "SENT" ? StageSent : CommandStatus.Parse(status).IsTerminal ? StageTerminal : StageOther;
+            Add(lane, new Entry { Row = new ProofRow(observedAt, ProofSource.Platform, "command " + name + " " + status, true), Stage = stage, CommandToken = token, Queued = anchor });
         }
 
         /// <summary>A row of the machine's own timeline (its account of what it did). Kinds the drawer does not show are ignored.</summary>

@@ -22,6 +22,13 @@ namespace DeviceChain.Sitepulse.Tasks
     {
         public const double YieldDistance = 8.0, LaneHalfWidth = 3.0, BayClearRadius = 5.0;
 
+        /// <summary>
+        /// A machine rejoining its track waits while another that is driving is within <see cref="RejoinMovingRadius"/> metres of the place it
+        /// would rejoin at (a truck on its routine track follows the track blind, and a machine set down on one in step with it travels
+        /// through it), or another of any kind is within <see cref="RejoinStandingRadius"/> of it (a hauler's footprint).
+        /// </summary>
+        public const double RejoinMovingRadius = 24.0, RejoinStandingRadius = 8.0;
+
         /// <summary>A machine slower than this (m/s) is standing.</summary>
         public const double StandingSpeed = 0.2;
 
@@ -208,6 +215,23 @@ namespace DeviceChain.Sitepulse.Tasks
         }
 
         public bool Occupied(string id, double x, double z) => Occupied(id, x, z, ParkingLot.ClearRadius);
+
+        public bool TrackClear(string id, double x, double z)
+        {
+            foreach (var kv in bodies)
+            {
+                if (kv.Key == id) continue;
+                var dx = kv.Value.X - x;
+                var dz = kv.Value.Z - z;
+                var d2 = dx * dx + dz * dz;
+                if (d2 < RejoinStandingRadius * RejoinStandingRadius) return false;
+                // a machine nothing has been seen to do yet counts as moving
+                var moving = !speeds.TryGetValue(kv.Key, out var v) || v >= StandingSpeed;
+                if (moving && d2 < RejoinMovingRadius * RejoinMovingRadius) return false;
+            }
+
+            return true;
+        }
 
         bool Occupied(string id, double x, double z, double radius)
         {

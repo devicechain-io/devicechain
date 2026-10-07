@@ -646,6 +646,8 @@ namespace DeviceChain.Sitepulse.Replay
                 if (shot.Focus != null && !data.Sim.TryIndexOf(shot.Focus, out _)) throw new ShotException($"shot {shot.Name}: focus names machine \"{shot.Focus}\", which the recording does not hold");
                 foreach (var m in shot.Camera.Machines())
                     if (!data.Sim.TryIndexOf(m, out _)) throw new ShotException($"shot {shot.Name}: the camera names machine \"{m}\", which the recording does not hold");
+                var clip = CameraRigs.ClippingReason(shot.Camera);
+                if (clip != null) throw new ShotException($"shot {shot.Name}: {clip}");
                 foreach (var id in shot.PinnedCards)
                     if (data.Header.TokenOf(id) == null) throw new ShotException($"shot {shot.Name}: cards names device \"{id}\", which the recording does not hold");
                 var start = ev.T + shot.Offset;
@@ -660,6 +662,8 @@ namespace DeviceChain.Sitepulse.Replay
                 var end = start + shot.Duration;
                 if (end > data.Duration + 1e-6)
                     throw new ShotException($"shot {shot.Name}: starts at {start:0.0} s and lasts {shot.Duration:0.0} s, but the recording is {data.Duration:0.0} s long");
+                var intrusion = CameraRigs.IntrusionReason(shot.Camera, data.Sim, start, shot.Duration);
+                if (intrusion != null) throw new ShotException($"shot {shot.Name}: {intrusion}");
                 var planned = new PlannedShot
                 {
                     Shot = shot,
