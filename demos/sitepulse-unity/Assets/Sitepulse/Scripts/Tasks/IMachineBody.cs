@@ -51,5 +51,13 @@ namespace DeviceChain.Sitepulse.Tasks
 
         /// <summary>Puts it back on its track at that place: its routine work resumes from there.</summary>
         void Attach(TrackPoint point);
+
+        /// <summary>
+        /// How fast its routine track plays, from 0 (held where it is) to 1 (the track's own pace). A track played at less than its own
+        /// pace plays less of itself and goes on from where it stood; a body with no track ignores it.
+        /// </summary>
+        void SetTrackRate(double rate)
+        {
+        }
     }
 }

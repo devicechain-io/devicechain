@@ -53,5 +53,7 @@ namespace DeviceChain.Sitepulse.Visuals
         }
 
         public void Attach(TrackPoint point) => fleet.Attach(Id, (float)point.TrackSeconds);
+
+        public void SetTrackRate(double rate) => fleet.SetTrackRate(Id, (float)rate);
     }
 }
