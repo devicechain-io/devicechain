@@ -193,8 +193,17 @@ namespace DeviceChain.Sitepulse.Tests
         public void EveryZoneAndTheRefuelBayAreReachableFromEveryTrack()
         {
             var goals = new List<(string, double, double)>();
+            var parking = CommandKit.Site.Spots[SiteGeometry.ParkingSpot];
             foreach (var z in CommandKit.Site.Zones)
-                foreach (var s in ParkingLot.Slots(z, z.CentreX, z.CentreZ)) goals.Add(($"{z.Name}#{s.Index}", s.X, s.Z));
+            {
+                var slots = ParkingLot.Slots(z, z.CentreX, z.CentreZ);
+                // a slot on a bank steeper than a truck climbs has no route from anywhere (a command to it moves on to the next slot);
+                // the rest are reachable from every track, and that is what is asserted below
+                var reachable = slots.Where(s => CommandKit.Graph.Plan(parking.X, parking.Z, s.X, s.Z) != null).ToList();
+                Assert.GreaterOrEqual(reachable.Count * 4, slots.Count * 3, $"{z.Name}: most of its slots can be driven to");
+                foreach (var s in reachable) goals.Add(($"{z.Name}#{s.Index}", s.X, s.Z));
+            }
+
             foreach (var spot in new[] { RouteGraph.QueueSpot, RouteGraph.BaySpot })
             {
                 Assert.IsTrue(CommandKit.Site.Spots.TryGetValue(spot, out var sp), spot);

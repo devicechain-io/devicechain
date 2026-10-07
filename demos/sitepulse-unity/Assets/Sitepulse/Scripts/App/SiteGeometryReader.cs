@@ -55,6 +55,19 @@ namespace DeviceChain.Sitepulse.App
             return new SiteGeometry(roads, spots, zones, pads, Obstacles(root, spots));
         }
 
+        /// <summary>The ground the feature file describes, from its packed heightmap (<c>quarry_height.bytes</c>).</summary>
+        public static TerrainHeights ParseTerrain(string featuresJson, byte[] packedHeights)
+        {
+            if (string.IsNullOrWhiteSpace(featuresJson)) throw new FormatException("the feature file is empty");
+            if (packedHeights == null || packedHeights.Length == 0) throw new FormatException("the heightmap is empty");
+            using var doc = JsonDocument.Parse(featuresJson);
+            var t = doc.RootElement.GetProperty("terrain");
+            var res = t.GetProperty("height_res").GetInt32();
+            var pos = t.GetProperty("position");
+            return new TerrainHeights(TerrainHeights.Decode(packedHeights, res), t.GetProperty("size_m").GetDouble(),
+                pos[0].GetDouble(), pos[2].GetDouble(), pos[1].GetDouble(), t.GetProperty("elev_range").GetDouble());
+        }
+
         /// <summary>
         /// Half extents (m) along a prop's own X and Z, read off the generator that models it
         /// (ArtSource/props/build_props.py), outermost box of the piece including its slab, bund, steps or drawbar.

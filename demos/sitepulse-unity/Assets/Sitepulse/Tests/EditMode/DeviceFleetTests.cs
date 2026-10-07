@@ -828,8 +828,9 @@ namespace DeviceChain.Sitepulse.Tests
             foreach (var h in c.Fleet.Hosts)
             {
                 if (h.Simulation.Model.IsPlant) continue;
-                // the machine the tests send places stands on the haul loop; the rest are parked far off, out of every lane
-                var at = h.ExternalId == "SP-HL-0003" ? track[300] : new TrackPoint(4000 + 100 * i++, 4000, 0, 0);
+                // the machines the tests send places stand on the haul loop (a route is planned over the site's ground, so a machine
+                // has to be on the site); the rest are parked far off, out of every lane
+                var at = h.ExternalId == "SP-HL-0003" ? track[300] : h.ExternalId == "SP-HL-0005" ? track[600] : new TrackPoint(4000 + 100 * i++, 4000, 0, 0);
                 var body = new FakeBody(h.ExternalId, h.Simulation.Model.Kind, at.X, at.Z, at.HeadingDegrees, track);
                 c.Bodies[h.ExternalId] = body;
                 machines.Add((body, h.Simulation.Model));

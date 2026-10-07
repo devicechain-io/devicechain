@@ -274,7 +274,7 @@ namespace DeviceChain.Sitepulse.Tasks
             {
                 parking.Release(id);
                 if (before.HasValue) parking.Hold(id, before.Value);
-                Refuse(request, unreachable.Count > 0 ? "no route to " + request.Area : "no free parking slot in " + request.Area);
+                Refuse(request, unreachable.Count > 0 ? NoRoute(request.Area) : "no free parking slot in " + request.Area);
                 return;
             }
 
@@ -283,6 +283,10 @@ namespace DeviceChain.Sitepulse.Tasks
             Phase = TaskPhase.ToDestination;
             TakeOver(request, route, route.Length, eta, TaskBudgets.EtaFactor * eta + TaskBudgets.AreaSlackSeconds, TaskBudgets.AreaWallCapSeconds, request.Area);
         }
+
+        // a refusal that says why: the planner drops every stretch over the grade limit, so a place only a steeper way leads to has no route
+        static string NoRoute(string where) =>
+            "no drivable route to " + where + " (a route stays within a " + Grade.MaxPct.ToString("0", System.Globalization.CultureInfo.InvariantCulture) + " % grade and clear of obstacles)";
 
         void BeginRefuel(TaskRequest request)
         {
@@ -295,7 +299,7 @@ namespace DeviceChain.Sitepulse.Tasks
             var route = graph.Plan(body.X, body.Z, queue.X, queue.Z);
             if (route == null)
             {
-                Refuse(request, "no route to the refuel queue");
+                Refuse(request, NoRoute("the refuel queue"));
                 return;
             }
 
