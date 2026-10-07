@@ -1377,6 +1377,14 @@ jobs:
       - name: Schema publishing self-tests
         run: node --test docs/scripts/schema-publish.test.mjs
 
+      - name: Translation freshness self-tests
+        run: node --test docs/scripts/translation-freshness.test.mjs
+
+      # English remains the reference; locale refreshes may happen in batches.
+      # Report changed source pages without blocking unrelated English edits.
+      - name: Chinese translation review status
+        run: node docs/scripts/check-translation-freshness.mjs
+
       # Netlify builds the docs site, not Actions — so a backend rename would break
       # the docs deploy AFTER merge, in a Go pull request that triggers no docs
       # build at all. Running the generator in check mode here puts the failure on

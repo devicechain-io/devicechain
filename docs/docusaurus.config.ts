@@ -60,12 +60,12 @@ const config: Config = {
 
   i18n: {
     defaultLocale: 'en',
-    // Spanish is the GA docs locale (ADR-066). Additional locales (de, pt-BR, ja)
-    // ship post-GA, matching the app's locale roadmap.
-    locales: ['en', 'es'],
+    // English is the reference; translated locales retain their own routes.
+    locales: ['en', 'es', 'zh-CN'],
     localeConfigs: {
       en: { label: 'English' },
       es: { label: 'Español' },
+      'zh-CN': { label: '简体中文', htmlLang: 'zh-CN' },
     },
   },
 
