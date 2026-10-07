@@ -421,6 +421,13 @@ namespace DeviceChain.Sitepulse.Replay
     {
         public const double DefaultPreroll = 3.0;
         public int Fps { get; set; } = 60;
+
+        /// <summary>
+        /// <c>"continuous": true</c>: the shots are one story told forward, so each starts at or after the previous one's end in recorded time.
+        /// A cut that overlaps its predecessor shows the same moment twice (it reads as a scene repeating), and the planner refuses it by name.
+        /// </summary>
+        public bool Continuous { get; set; }
+
         public List<Shot> Shots { get; } = new List<Shot>();
 
         public static ShotFile Parse(string json)
@@ -433,9 +440,14 @@ namespace DeviceChain.Sitepulse.Replay
                 var root = doc.RootElement;
                 if (root.ValueKind != JsonValueKind.Object) throw new ShotException("the shots file must be an object with a \"shots\" array");
                 foreach (var p in root.EnumerateObject())
-                    if (p.Name != "fps" && p.Name != "shots" && p.Name != "description") throw new ShotException($"the shots file has an unknown field \"{p.Name}\"");
+                    if (p.Name != "fps" && p.Name != "shots" && p.Name != "description" && p.Name != "continuous") throw new ShotException($"the shots file has an unknown field \"{p.Name}\"");
                 var file = new ShotFile { Fps = (int)JsonIo.Long(root, "fps", 60) };
                 if (file.Fps != 30 && file.Fps != 60) throw new ShotException($"fps {file.Fps} is not 30 or 60");
+                if (root.TryGetProperty("continuous", out var cont))
+                {
+                    if (cont.ValueKind != JsonValueKind.True && cont.ValueKind != JsonValueKind.False) throw new ShotException("\"continuous\" must be true or false");
+                    file.Continuous = cont.GetBoolean();
+                }
                 if (!root.TryGetProperty("shots", out var shots) || shots.ValueKind != JsonValueKind.Array || shots.GetArrayLength() == 0)
                     throw new ShotException("the shots file has no \"shots\"");
                 var names = new HashSet<string>(StringComparer.Ordinal);
@@ -660,6 +672,14 @@ namespace DeviceChain.Sitepulse.Replay
                 }
 
                 var end = start + shot.Duration;
+                if (file.Continuous && plan.Count > 0)
+                {
+                    var before = plan[plan.Count - 1];
+                    var beforeEnd = before.Start + before.Shot.Duration;
+                    if (start < beforeEnd - 1e-6)
+                        throw new ShotException($"shot {shot.Name}: starts at {start:0.0} s of the recording, {beforeEnd - start:0.0} s before {before.Shot.Name} ends ({beforeEnd:0.0} s), but the file is \"continuous\": every shot must start at or after the end of the one before it, or the cut shows the same moment twice");
+                }
+
                 if (end > data.Duration + 1e-6)
                     throw new ShotException($"shot {shot.Name}: starts at {start:0.0} s and lasts {shot.Duration:0.0} s, but the recording is {data.Duration:0.0} s long");
                 var intrusion = CameraRigs.IntrusionReason(shot.Camera, data.Sim, start, shot.Duration);
