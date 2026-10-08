@@ -192,6 +192,13 @@ namespace DeviceChain.Sitepulse.Tasks
                 return;
             }
 
+            // off the ground the routes are graded over there is no slope to read, only a guess: nothing is planned from there
+            if (!graph.OnSite(body.X, body.Z))
+            {
+                Refuse(request, OutsideSite(body.X, body.Z));
+                return;
+            }
+
             if (request.Key == CommandKeys.GotoArea) BeginArea(request);
             else if (request.Key == CommandKeys.GotoRefuel) BeginRefuel(request);
             else Refuse(request, "unknown command " + request.Key);
@@ -274,7 +281,7 @@ namespace DeviceChain.Sitepulse.Tasks
             {
                 parking.Release(id);
                 if (before.HasValue) parking.Hold(id, before.Value);
-                Refuse(request, unreachable.Count > 0 ? "no route to " + request.Area : "no free parking slot in " + request.Area);
+                Refuse(request, unreachable.Count > 0 ? NoRoute(request.Area) : "no free parking slot in " + request.Area);
                 return;
             }
 
@@ -283,6 +290,13 @@ namespace DeviceChain.Sitepulse.Tasks
             Phase = TaskPhase.ToDestination;
             TakeOver(request, route, route.Length, eta, TaskBudgets.EtaFactor * eta + TaskBudgets.AreaSlackSeconds, TaskBudgets.AreaWallCapSeconds, request.Area);
         }
+
+        static string OutsideSite(double x, double z) =>
+            "the machine is outside the site at (" + F0(x) + ", " + F0(z) + "): no route is planned over ground the site does not hold";
+
+        // a refusal that says why: the planner drops every stretch over the grade limit, so a place only a steeper way leads to has no route
+        static string NoRoute(string where) =>
+            "no drivable route to " + where + " (a route stays within a " + Grade.MaxPct.ToString("0", System.Globalization.CultureInfo.InvariantCulture) + " % grade and clear of obstacles)";
 
         void BeginRefuel(TaskRequest request)
         {
@@ -295,7 +309,7 @@ namespace DeviceChain.Sitepulse.Tasks
             var route = graph.Plan(body.X, body.Z, queue.X, queue.Z);
             if (route == null)
             {
-                Refuse(request, "no route to the refuel queue");
+                Refuse(request, NoRoute("the refuel queue"));
                 return;
             }
 
@@ -502,6 +516,13 @@ namespace DeviceChain.Sitepulse.Tasks
             {
                 Mode = MachineMode.Parked;
                 timeline.Add(id, TimelineKinds.Returning, "no track of its own to return to");
+                return;
+            }
+
+            if (!graph.OnSite(body.X, body.Z))
+            {
+                Mode = MachineMode.Parked;
+                timeline.Add(id, TimelineKinds.Returning, OutsideSite(body.X, body.Z));
                 return;
             }
 

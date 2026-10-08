@@ -706,6 +706,14 @@ namespace DeviceChain.Sitepulse.App
         void BuildTaskLayer()
         {
             if (plane == null || fleet == null) return;
+            // routes are planned over the ground the terrain was built from: without it no grade could be checked, and a truck would be sent up a wall
+            var ground = fleet.terrain != null ? fleet.terrain.Field : null;
+            if (ground == null)
+            {
+                PlatformLog.Error("task layer not started: the quarry terrain is not built, so routes cannot be planned over its grades");
+                return;
+            }
+
             var rigs = new Dictionary<string, MachineRig>(StringComparer.Ordinal);
             foreach (var rig in fleet.Machines) rigs[rig.name] = rig;
             var machines = new List<(IMachineBody, MachineModel)>();
@@ -713,7 +721,7 @@ namespace DeviceChain.Sitepulse.App
                 if (rigs.TryGetValue(host.ExternalId, out var rig)) machines.Add((new FleetBody(fleet, rig), host.Simulation.Model));
             timeline = new Timeline();
             timeline.Added += (machine, row) => proofLog.DeviceRow(machine, row.At, row.Kind, row.Text);
-            director = new TaskDirector(site, RouteGraph.Build(site), timeline, machines, plane.Generation);
+            director = new TaskDirector(site, RouteGraph.Build(site, ground), timeline, machines, plane.Generation);
             plane.Tasks = director;
             // the bay's attendant serves the machine the Refuelling state names, not whoever stands in the bay
             vignette = FindAnyObjectByType<RefuelVignette>();

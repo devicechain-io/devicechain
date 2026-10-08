@@ -105,11 +105,33 @@ namespace DeviceChain.Sitepulse.Tests
         public static string AssetPath(string relative) => Path.Combine(Application.dataPath, "Sitepulse", relative);
 
         public static SiteGeometry Site => site ??= SiteGeometryReader.Parse(File.ReadAllText(AssetPath("Art/Terrain/quarry_features.json")));
-        public static RouteGraph Graph => graph ??= RouteGraph.Build(Site);
+        static TerrainHeights ground;
+
+        /// <summary>The ground the scene is built on, read from the same files.</summary>
+        public static TerrainHeights Ground => ground ??= SiteGeometryReader.ParseTerrain(File.ReadAllText(AssetPath("Art/Terrain/quarry_features.json")), File.ReadAllBytes(AssetPath("Art/Terrain/quarry_height.bytes")));
+
+        public static RouteGraph Graph => graph ??= RouteGraph.Build(Site, Ground);
 
         static JsonElement Fleet => (fleet ??= JsonDocument.Parse(File.ReadAllText(AssetPath("Data/quarry_fleet_live.json")))).RootElement;
 
         public static int TrackCount => Fleet.GetProperty("tracks").GetArrayLength();
+
+        /// <summary>Where machine <paramref name="id"/> is on its track <paramref name="seconds"/> into the live choreography (the nearest frame).</summary>
+        public static TrackPoint MachineAt(string id, double seconds)
+        {
+            foreach (var m in Fleet.GetProperty("machines").EnumerateArray())
+            {
+                if (m.GetProperty("id").GetString() != id) continue;
+                var track = m.GetProperty("track").GetInt32();
+                var period = Fleet.GetProperty("tracks")[track].GetProperty("period").GetDouble();
+                var frames = Track(track);
+                var t = (seconds - m.GetProperty("offset").GetDouble()) % period;
+                if (t < 0) t += period;
+                return frames[(int)Math.Round(t / Fleet.GetProperty("dt").GetDouble()) % frames.Count];
+            }
+
+            throw new ArgumentException("no machine " + id, nameof(id));
+        }
 
         /// <summary>The frames of one of the live choreography's tracks, as track points.</summary>
         public static List<TrackPoint> Track(int index)
@@ -137,7 +159,7 @@ namespace DeviceChain.Sitepulse.Tests
         public double Now;
         long sequence;
 
-        public Rig(string id = "SP-HL-0003", EquipmentKind kind = EquipmentKind.Hauler, double? x = null, double? z = null, bool withTrack = true)
+        public Rig(string id = "SP-HL-0003", EquipmentKind kind = EquipmentKind.Hauler, double? x = null, double? z = null, bool withTrack = true, RouteGraph graph = null, SiteGeometry site = null)
         {
             Id = id;
             var track = withTrack ? CommandKit.Track(0) : null;
@@ -145,7 +167,7 @@ namespace DeviceChain.Sitepulse.Tests
             var start = track != null ? track[300] : new TrackPoint(0, 0, 0, 0);
             Body = new FakeBody(id, kind, x ?? start.X, z ?? start.Z, start.HeadingDegrees, track);
             Model = new MachineModel(kind, id);
-            Controller = new MachineController(Body, Model, CommandKit.Site, CommandKit.Graph, Bay, Parking, Timeline, World);
+            Controller = new MachineController(Body, Model, site ?? CommandKit.Site, graph ?? CommandKit.Graph, Bay, Parking, Timeline, World);
         }
 
         public TaskRequest Send(string key, string area = null, string token = null, long? seq = null)

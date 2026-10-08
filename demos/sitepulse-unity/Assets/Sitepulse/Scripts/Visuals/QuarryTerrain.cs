@@ -5,6 +5,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.IO.Compression;
+using DeviceChain.Sitepulse.Tasks;
 using UnityEngine;
 using UnityEngine.Rendering;
 
@@ -67,6 +68,9 @@ namespace DeviceChain.Sitepulse.Visuals
         public Terrain Terrain { get; private set; }
         public bool Built { get; private set; }
 
+        /// <summary>The ground's height as the task layer reads it (null until built).</summary>
+        public TerrainHeights Field { get; private set; }
+
         void OnEnable() => Build();
 
         void OnDisable() => Clear();
@@ -84,6 +88,7 @@ namespace DeviceChain.Sitepulse.Visuals
             Info = f.terrain;
             int res = Info.height_res;
             var heights = DecodeHeights(heightmap.bytes, res);
+            Field = new TerrainHeights(heights, Info.size_m, Info.position[0], Info.position[2], Info.position[1], Info.elev_range);
 
             var td = new TerrainData { name = "Quarry (generated)", hideFlags = HideFlags.DontSave };
             td.heightmapResolution = res;
@@ -111,6 +116,7 @@ namespace DeviceChain.Sitepulse.Visuals
         void Clear()
         {
             Built = false;
+            Field = null;
             var t = GetComponent<Terrain>();
             if (t != null && t.terrainData != null && (t.terrainData.hideFlags & HideFlags.DontSave) != 0)
             {
@@ -122,40 +128,8 @@ namespace DeviceChain.Sitepulse.Visuals
             }
         }
 
-        /// <summary>
-        /// Unpack the heightmap: gzip of plane-predicted uint16 samples, row 0 = south edge.
-        /// Each sample was stored as s - (west + south - southwest) mod 65536.
-        /// </summary>
-        public static float[,] DecodeHeights(byte[] packed, int res)
-        {
-            var raw = new byte[res * res * 2];
-            using (var gz = new GZipStream(new MemoryStream(packed), CompressionMode.Decompress))
-            {
-                int off = 0;
-                while (off < raw.Length)
-                {
-                    int n = gz.Read(raw, off, raw.Length - off);
-                    if (n <= 0) throw new InvalidDataException($"heightmap ends after {off} of {raw.Length} bytes");
-                    off += n;
-                }
-            }
-            var s = new int[res * res];
-            for (int j = 0; j < res; j++)
-            {
-                for (int i = 0; i < res; i++)
-                {
-                    int k = j * res + i;
-                    int pred = (i > 0 ? s[k - 1] : 0) + (j > 0 ? s[k - res] : 0) - (i > 0 && j > 0 ? s[k - res - 1] : 0);
-                    int r = raw[2 * k] | (raw[2 * k + 1] << 8);
-                    s[k] = (r + pred) & 0xFFFF;
-                }
-            }
-            var h = new float[res, res];
-            for (int j = 0; j < res; j++)
-                for (int i = 0; i < res; i++)
-                    h[j, i] = s[j * res + i] / 65535f;
-            return h;
-        }
+        /// <summary>Unpack the heightmap (see <see cref="TerrainHeights.Decode"/>).</summary>
+        public static float[,] DecodeHeights(byte[] packed, int res) => TerrainHeights.Decode(packed, res);
 
         void PlantTrees(TerrainData td, Plant[] plants)
         {

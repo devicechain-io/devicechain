@@ -187,9 +187,31 @@ namespace DeviceChain.Sitepulse.Tasks
 
         public const string BaySpot = "refuel-bay", QueueSpot = "refuel-queue";
 
+        /// <summary>One stretch of the network, from one node to a neighbour.</summary>
+        public readonly struct EdgeInfo
+        {
+            public EdgeInfo(double ax, double az, double bx, double bz, bool road, double sustainedPct)
+            {
+                Ax = ax; Az = az; Bx = bx; Bz = bz; IsRoad = road; SustainedGradePct = sustainedPct;
+            }
+
+            public double Ax { get; }
+            public double Az { get; }
+            public double Bx { get; }
+            public double Bz { get; }
+
+            /// <summary>A stretch of a road (otherwise a join across open ground).</summary>
+            public bool IsRoad { get; }
+
+            /// <summary>The steepest grade over any <see cref="Grade.WindowMetres"/> of it, in percent, on the ground.</summary>
+            public double SustainedGradePct { get; }
+        }
+
         struct Edge
         {
             public int To;
+            public double SustainedPct;
+            public bool Road;
             public double Length, Factor, GradePct;
             public double Cost => Length / Factor;
         }
@@ -199,26 +221,44 @@ namespace DeviceChain.Sitepulse.Tasks
         readonly Dictionary<string, int> spotNodes = new Dictionary<string, int>(StringComparer.Ordinal);
 
         int roadNodeCount;
+        IHeightField ground;
+
+        /// <summary>Every stretch of the network (each once), with how steep the ground under it is: none exceeds <see cref="Grade.MaxPct"/>.</summary>
+        public IEnumerable<EdgeInfo> Edges()
+        {
+            for (var a = 0; a < adjacency.Count; a++)
+                foreach (var e in adjacency[a])
+                    if (a < e.To) yield return new EdgeInfo(nx[a], nz[a], nx[e.To], nz[e.To], e.Road, e.SustainedPct);
+        }
 
         public int NodeCount => nx.Count;
 
         RouteGraph() { }
 
-        public static RouteGraph Build(SiteGeometry site)
+        /// <summary>
+        /// Builds the network over the ground it lies on. A stretch steeper than <see cref="Grade.MaxPct"/> (sustained over
+        /// <see cref="Grade.WindowMetres"/>) is not part of it, whatever joins it, so no route ever climbs what a truck cannot: a machine
+        /// that cannot reach a place by a grade it can climb has no route there.
+        /// </summary>
+        public static RouteGraph Build(SiteGeometry site, IHeightField ground)
         {
             if (site == null) throw new ArgumentNullException(nameof(site));
-            var g = new RouteGraph();
+            var g = new RouteGraph { ground = ground ?? throw new ArgumentNullException(nameof(ground)) };
             var ends = new List<int>();
             var roadNodes = new List<List<int>>();
             foreach (var road in site.Roads)
             {
                 var nodes = new List<int>();
                 var factor = SpeedModel.RoadFactor(road.Kind);
+                var rx = new List<double>();
+                var rz = new List<double>();
+                foreach (var rp in road.Points) { rx.Add(rp.X); rz.Add(rp.Z); }
+                var steep = Grade.PerLeg(ground, rx, rz);
                 for (var i = 0; i < road.Points.Count; i++)
                 {
                     var p = road.Points[i];
                     var n = g.NodeAt(p.X, p.Y, p.Z);
-                    if (nodes.Count > 0 && nodes[nodes.Count - 1] != n) g.Connect(nodes[nodes.Count - 1], n, factor);
+                    if (nodes.Count > 0 && nodes[nodes.Count - 1] != n) g.Connect(nodes[nodes.Count - 1], n, factor, steep[i - 1]);
                     if (nodes.Count == 0 || nodes[nodes.Count - 1] != n) nodes.Add(n);
                 }
 
@@ -249,7 +289,7 @@ namespace DeviceChain.Sitepulse.Tasks
                         }
                     }
 
-                    if (best >= 0 && best != e) g.Connect(e, best, 0.6);
+                    if (best >= 0 && best != e) g.ConnectOnGround(e, best, 0.6);
                 }
             }
 
@@ -261,7 +301,7 @@ namespace DeviceChain.Sitepulse.Tasks
                 var inside = new List<int>();
                 foreach (var e in ends)
                     if (pad.Contains(g.nx[e], g.nz[e], PadMargin) && !inside.Contains(e)) inside.Add(e);
-                for (var i = 1; i < inside.Count; i++) g.Connect(inside[0], inside[i], SpeedModel.OffRoadFactor);
+                for (var i = 1; i < inside.Count; i++) g.ConnectOnGround(inside[0], inside[i], SpeedModel.OffRoadFactor);
             }
 
             // spots: the queue joins the network, the bay hangs off the queue and the road
@@ -272,17 +312,17 @@ namespace DeviceChain.Sitepulse.Tasks
                 if (kv.Key == BaySpot) continue;
                 var n = g.AddNode(kv.Value.X, 0, kv.Value.Z);
                 g.spotNodes[kv.Key] = n;
-                var near = g.Nearest(kv.Value.X, kv.Value.Z, roadCount);
-                if (near >= 0) g.Connect(n, near, SpeedModel.OffRoadFactor);
+                // a spot no road reaches on a grade a truck can climb (the plant on its terrace) is no place on the network
+                if (!g.ConnectNearest(n, kv.Value.X, kv.Value.Z, roadCount, SpeedModel.OffRoadFactor)) g.DropLast(kv.Key);
             }
 
             if (site.Spots.TryGetValue(BaySpot, out var bay))
             {
                 var n = g.AddNode(bay.X, 0, bay.Z);
                 g.spotNodes[BaySpot] = n;
-                var near = g.Nearest(bay.X, bay.Z, roadCount);
-                if (near >= 0) g.Connect(n, near, SpeedModel.OffRoadFactor);
-                if (g.spotNodes.TryGetValue(QueueSpot, out var queue)) g.Connect(n, queue, SpeedModel.BayApproachFactor);
+                g.ConnectNearest(n, bay.X, bay.Z, roadCount, SpeedModel.OffRoadFactor);
+                if (g.spotNodes.TryGetValue(QueueSpot, out var queue)) g.ConnectOnGround(n, queue, SpeedModel.BayApproachFactor);
+                if (g.adjacency[n].Count == 0) g.DropLast(BaySpot);
             }
 
             return g;
@@ -306,41 +346,76 @@ namespace DeviceChain.Sitepulse.Tasks
 
         double Dist(int a, int b) => Math.Sqrt((nx[a] - nx[b]) * (nx[a] - nx[b]) + (nz[a] - nz[b]) * (nz[a] - nz[b]));
 
-        void Connect(int a, int b, double factor)
+        // a stretch of road: kept when the ground under it is within the grade limit
+        void Connect(int a, int b, double factor, double sustainedPct)
         {
-            if (a == b) return;
+            if (a == b || sustainedPct > Grade.MaxPct) return;
+            Add(a, b, factor, sustainedPct, true);
+        }
+
+        // a join across open ground: kept when the straight line between the two is within the grade limit
+        bool ConnectOnGround(int a, int b, double factor)
+        {
+            if (a == b) return false;
+            var pct = Grade.MaxSustained(ground, new[] { nx[a], nx[b] }, new[] { nz[a], nz[b] });
+            if (pct > Grade.MaxPct) return false;
+            Add(a, b, factor, pct, false);
+            return true;
+        }
+
+        // takes back the spot node just added, which nothing joined (it is the last node, and nothing refers to it)
+        void DropLast(string spot)
+        {
+            var last = nx.Count - 1;
+            nx.RemoveAt(last);
+            ny.RemoveAt(last);
+            nz.RemoveAt(last);
+            adjacency.RemoveAt(last);
+            spotNodes.Remove(spot);
+        }
+
+        // a spot joins the nearest road node it can reach on a grade a truck can climb
+        bool ConnectNearest(int spot, double x, double z, int limit, double factor)
+        {
+            var order = new List<int>();
+            for (var i = 0; i < limit; i++) order.Add(i);
+            order.Sort((a, b) => (Sq(nx[a] - x) + Sq(nz[a] - z)).CompareTo(Sq(nx[b] - x) + Sq(nz[b] - z)));
+            foreach (var n in order)
+                if (ConnectOnGround(spot, n, factor)) return true;
+            return false;
+        }
+
+        void Add(int a, int b, double factor, double sustainedPct, bool road)
+        {
             var len = Dist(a, b);
-            var grade = len > 1e-6 ? (ny[b] - ny[a]) / len * 100.0 : 0;
+            var grade = len > 1e-6 ? (road ? ny[b] - ny[a] : ground.HeightAt(nx[b], nz[b]) - ground.HeightAt(nx[a], nz[a])) / len * 100.0 : 0;
             foreach (var e in adjacency[a])
                 if (e.To == b) return;
-            adjacency[a].Add(new Edge { To = b, Length = len, Factor = factor, GradePct = grade });
-            adjacency[b].Add(new Edge { To = a, Length = len, Factor = factor, GradePct = -grade });
+            adjacency[a].Add(new Edge { To = b, Length = len, Factor = factor, GradePct = grade, SustainedPct = sustainedPct, Road = road });
+            adjacency[b].Add(new Edge { To = a, Length = len, Factor = factor, GradePct = -grade, SustainedPct = sustainedPct, Road = road });
         }
 
-        int Nearest(double x, double z, int limit)
-        {
-            var best = -1;
-            var bestD = double.MaxValue;
-            for (var i = 0; i < limit; i++)
-            {
-                var d = (nx[i] - x) * (nx[i] - x) + (nz[i] - z) * (nz[i] - z);
-                if (d < bestD) { bestD = d; best = i; }
-            }
-
-            return best;
-        }
-
+        // the nearest few nodes a machine at the point can drive to over ground it can climb
         List<int> NearestSet(double x, double z, int count)
         {
             var order = new List<int>();
             for (var i = 0; i < nx.Count; i++) order.Add(i);
             order.Sort((a, b) =>
                 ((nx[a] - x) * (nx[a] - x) + (nz[a] - z) * (nz[a] - z)).CompareTo((nx[b] - x) * (nx[b] - x) + (nz[b] - z) * (nz[b] - z)));
-            if (order.Count > count) order.RemoveRange(count, order.Count - count);
-            return order;
+            var found = new List<int>();
+            foreach (var n in order)
+            {
+                if (found.Count >= count) break;
+                if (Grade.MaxSustained(ground, new[] { x, nx[n] }, new[] { z, nz[n] }) <= Grade.MaxPct) found.Add(n);
+            }
+
+            return found;
         }
 
         /// <summary>The network node of a named spot, or -1.</summary>
+        /// <summary>The point is on the site: the ground under it is known, so a route from or to it can be graded. Off it nothing is planned.</summary>
+        public bool OnSite(double x, double z) => ground.Covers(x, z);
+
         public int SpotNode(string name) => spotNodes.TryGetValue(name, out var n) ? n : -1;
 
         public bool TryNodePosition(int node, out double x, out double z)
@@ -392,8 +467,11 @@ namespace DeviceChain.Sitepulse.Tasks
                     var cost = Math.Sqrt(Sq(nx[s] - sx) + Sq(nz[s] - sz)) / SpeedModel.OffRoadFactor + dist[g]
                                + Math.Sqrt(Sq(nx[g] - gx) + Sq(nz[g] - gz)) / SpeedModel.OffRoadFactor;
                     if (cost >= bestCost) continue;
+                    var candidate = Assemble(sx, sz, gx, gz, s, g, prev);
+                    // the stretches were each climbable; the whole of the way, read as a slope, must be too
+                    if (Grade.MaxSustained(ground, candidate.Xs, candidate.Zs) > Grade.MaxPct) continue;
                     bestCost = cost;
-                    best = Assemble(sx, sz, gx, gz, s, g, prev);
+                    best = candidate;
                 }
             }
 
@@ -436,8 +514,10 @@ namespace DeviceChain.Sitepulse.Tasks
                     if (double.IsPositiveInfinity(dist[g.Node])) continue;
                     var cost = s.Length / SpeedModel.OffRoadFactor + dist[g.Node] + g.Length / SpeedModel.OffRoadFactor;
                     if (cost >= bestCost) continue;
+                    var candidate = Assemble(s.Path, g.Path, s.Node, g.Node, prev);
+                    if (Grade.MaxSustained(ground, candidate.Xs, candidate.Zs) > Grade.MaxPct) continue;
                     bestCost = cost;
-                    best = Assemble(s.Path, g.Path, s.Node, g.Node, prev);
+                    best = candidate;
                 }
             }
 
@@ -474,6 +554,11 @@ namespace DeviceChain.Sitepulse.Tasks
                 if (found.Count >= Candidates) break;
                 var path = Detour.Find(x, z, nx[n], nz[n], active, clearance);
                 if (path == null) continue;
+                // a way round whatever is in the road that climbs what a truck cannot is no approach: the next node is tried
+                var px = new List<double>();
+                var pz = new List<double>();
+                foreach (var pt in path) { px.Add(pt[0]); pz.Add(pt[1]); }
+                if (Grade.MaxSustained(ground, px, pz) > Grade.MaxPct) continue;
                 found.Add(new Approach { Node = n, Path = path, Length = Detour.Length(path) });
             }
 
