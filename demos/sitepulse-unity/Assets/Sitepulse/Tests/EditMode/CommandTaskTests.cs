@@ -926,21 +926,29 @@ namespace DeviceChain.Sitepulse.Tests
         }
 
         [Test]
-        public void ATruckDrivingToTheYardPastAMachineStandingOnItsRouteStillArrives()
+        public void ATruckDrivingToTheYardPastAMachineStandingOnItsRouteStillArrivesAndNeverTouchesIt()
         {
             var frames = CommandKit.Track(0);
             var f = frames[300];
             var a = new FakeBody("SP-HL-0003", EquipmentKind.Hauler, f.X, f.Z, f.HeadingDegrees, frames);
             var plan = CommandKit.Graph.Plan(f.X, f.Z, -90, -45, CommandKit.Site.Obstacles, ParkingLot.TravelRadius(EquipmentKind.Hauler));
             Assert.IsNotNull(plan);
-            plan.PointAt(plan.Length * 0.3, out var px, out var pz, out _, out _);
-            var blocker = new FakeBody("SP-HL-0004", EquipmentKind.Hauler, px, pz, 0);
+            plan.PointAt(plan.Length * 0.3, out var px, out var pz, out var ph, out _);
+            // standing in the road lengthwise (across it, with the road no wider than a truck is long, nothing can pass: it would have to wait)
+            var blocker = new FakeBody("SP-HL-0004", EquipmentKind.Hauler, px, pz, ph);
             var d = YieldWorld(new[] { a, blocker });
             var cmd = new TaskRequest("c-1", "goto-area", Yard, 1, 1);
             d.Submit("SP-HL-0003", cmd);
-            for (var t = 0.0; t < 1500 && !cmd.IsComplete; t += 0.25) d.Step(0.25, 0.25);
+            var nearest = double.MaxValue;
+            for (var t = 0.0; t < 1500 && !cmd.IsComplete; t += 0.25)
+            {
+                d.Step(0.25, 0.25);
+                nearest = Math.Min(nearest, Footprint.Gap(Footprint.At(a.Kind, a.X, a.Z, a.HeadingDegrees), Footprint.At(blocker.Kind, blocker.X, blocker.Z, blocker.HeadingDegrees)));
+            }
+
             Assert.IsTrue(cmd.IsComplete, d.Timeline.Text("SP-HL-0003", 20));
             Assert.IsTrue(cmd.Completion.Answer().Succeeded, d.Timeline.Text("SP-HL-0003", 20));
+            Assert.GreaterOrEqual(nearest, 0.0, "it went round the machine, not through it: nearest " + nearest.ToString("0.00") + " m");
         }
 
         // ---- rejoining the track: a machine on its routine track follows it blind, so the one that joins has to look

@@ -437,9 +437,12 @@ A player started with `-sitepulse-quality Laptop` runs at that level.
 - The preview choreography is scripted local motion, not the site simulation; the haul trucks
   take the loaded buckets as one load, and the dump pad does not grow.
 - Routing is a network of the site's road centrelines with straight off-road legs across pads and to
-  parking slots; a machine in the way is yielded to, not driven around, so two machines nose to nose
-  end their commands as failed when the budget runs out. Machines that are still on their routine
-  tracks do not yield to a machine that left its own.
+  parking slots. No two machines ever overlap: a machine on its routine track slows, and stops, behind
+  anything ahead of it (and waits for the way a machine on an errand is about to take), and a machine on
+  an errand stops for what is in its way, swerves round what stands on the road, and backs out of the way
+  when it is face to face with what it cannot pass. A machine standing across a road too narrow to
+  pass it ends the command of the one behind it as failed when the budget runs out; the haul trucks queue
+  behind a machine that stays on the road.
 - In Choreographed mode the cards' values are illustrative. Only the machines and the plant listed
   in `IotOverlay` carry a card.
 

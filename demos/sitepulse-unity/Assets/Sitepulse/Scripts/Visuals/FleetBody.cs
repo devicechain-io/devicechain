@@ -53,5 +53,18 @@ namespace DeviceChain.Sitepulse.Visuals
         }
 
         public void Attach(TrackPoint point) => fleet.Attach(Id, (float)point.TrackSeconds);
+
+        public bool BoomRaised => Rig.Kind == MachineKind.Loader && Rig.boom < Footprint.LoaderRaisedBoomDegrees;
+
+        public bool TryTrackPoseAhead(double seconds, out double x, out double z, out double headingDegrees, out bool boomRaised)
+        {
+            var ok = fleet.TryTrackPoseAhead(Id, (float)seconds, out var fx, out var fz, out var fh, out boomRaised);
+            x = fx;
+            z = fz;
+            headingDegrees = SiteDefinition.Canonical(fh);
+            return ok;
+        }
+
+        public void SetTrackRate(double rate) => fleet.SetTrackRate(Id, (float)rate);
     }
 }

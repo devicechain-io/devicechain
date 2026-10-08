@@ -71,6 +71,9 @@ namespace DeviceChain.Sitepulse.Visuals
             public bool posed;
             public float halfLength, halfWidth;
             public bool detached;
+
+            /// <summary>How fast the track plays: 1 is its own pace, 0 holds the machine where it is (the task layer sets it so that machines do not drive into each other).</summary>
+            public float rate = 1f;
             public Material[] dusty = Array.Empty<Material>();
             public float dustGround = float.NaN;
         }
@@ -202,7 +205,11 @@ namespace DeviceChain.Sitepulse.Visuals
         void Update()
         {
             if (!Application.isPlaying) return;
-            time += Time.deltaTime * timeScale;
+            var step = Time.deltaTime * timeScale;
+            time += step;
+            // a track held back plays less of itself: its clock is put back by what it did not play
+            foreach (var u in units)
+                if (!u.detached && u.rate < 1f) u.offset += step * (1f - u.rate);
             Seek(time);
             foreach (var u in units)
                 if (u.effects != null) u.effects.Step(Time.deltaTime * timeScale, false);
@@ -244,6 +251,7 @@ namespace DeviceChain.Sitepulse.Visuals
             var u = Find(id);
             if (u == null || u.detached) return;
             u.detached = true;
+            u.rate = 1f;
             var rig = u.rig;
             switch (rig.Kind)
             {
@@ -259,6 +267,36 @@ namespace DeviceChain.Sitepulse.Visuals
                     rig.dump = 0f;
                     break;
             }
+        }
+
+        /// <summary>How fast the machine's routine track plays, 0 to 1 (see <see cref="Unit.rate"/>). A machine that is not on its track ignores it.</summary>
+        public void SetTrackRate(string id, float rate)
+        {
+            var u = Find(id);
+            if (u != null && !u.detached) u.rate = Mathf.Clamp01(rate);
+        }
+
+        /// <summary>
+        /// Where the machine's track will have it after <paramref name="seconds"/> more of the track at its own pace, and whether a loader's
+        /// boom is up then. False when it is not on its track.
+        /// </summary>
+        public bool TryTrackPoseAhead(string id, float seconds, out float x, out float z, out float heading, out bool boomRaised)
+        {
+            x = z = heading = 0f;
+            boomRaised = false;
+            var u = Find(id);
+            if (u == null || u.detached || data == null) return false;
+            var tr = u.track;
+            int frames = tr.data.Length / Stride;
+            float ft = Mathf.Repeat(time - u.offset + seconds, tr.period) / data.dt;
+            int i = Mathf.Min((int)ft, frames - 1), j = (i + 1) % frames;
+            float w = ft - (int)ft;
+            float V(int k) => Mathf.Lerp(tr.data[i * Stride + k], tr.data[j * Stride + k], w);
+            x = V(0);
+            z = V(1);
+            heading = tr.data[i * Stride + 2] + Mathf.DeltaAngle(tr.data[i * Stride + 2], tr.data[j * Stride + 2]) * w;
+            boomRaised = u.rig.Kind == MachineKind.Loader && V(4) < -40f;
+            return true;
         }
 
         /// <summary>Puts a detached machine on the ground at a place, facing a way, having moved <paramref name="distance"/> metres (wheels turn by it).</summary>
