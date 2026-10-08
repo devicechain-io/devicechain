@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net"
 	"sync"
 	"sync/atomic"
@@ -537,14 +538,42 @@ func answeredOn(t *testing.T, err error) bool {
 // readOnce runs one ReadMessage on its own goroutine and hands back the result, so the test
 // can disturb the broker while the read's fetch is in flight.
 func readOnce(r *natsReader, d time.Duration) <-chan error {
+	ctx, cancel := context.WithTimeout(context.Background(), d)
+	return readUntil(ctx, cancel, r)
+}
+
+// readUntil is readOnce ended by ctx rather than by a duration.
+func readUntil(ctx context.Context, cancel context.CancelFunc, r *natsReader) <-chan error {
 	out := make(chan error, 1)
 	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), d)
 		defer cancel()
 		_, err := r.ReadMessage(ctx)
 		out <- err
 	}()
 	return out
+}
+
+// noProbe keeps the reader's liveness probe from running for the rest of a test's reads, so
+// the probe cannot supply an answer the test means to come from something else.
+func noProbe(r *natsReader) { r.consecutiveTimeouts = math.MinInt }
+
+// proxiedReader is a reader whose client reaches its broker through a cutProxy.
+func proxiedReader(t *testing.T) (*natsReader, *cutProxy, *NatsManager) {
+	t.Helper()
+	srv := startBrokerKeepingStore(t, -1, dctest.JetStreamStoreDir(t))
+	t.Cleanup(srv.Shutdown)
+	proxy := newCutProxy(t, srv.Addr().String())
+	nmgr := managerFor(t, srv)
+	nmgr.Microservice.InstanceConfiguration.Infrastructure.Nats.Port = uint32(proxy.port)
+	if err := nmgr.ExecuteInitialize(t.Context()); err != nil {
+		t.Fatalf("connecting through the proxy: %v", err)
+	}
+	t.Cleanup(func() { nmgr.nc.Close() })
+	reader, err := nmgr.NewReader(streams.InboundEvents)
+	if err != nil {
+		t.Fatalf("reader: %v", err)
+	}
+	return reader.(*natsReader), proxy, nmgr
 }
 
 // cutProxy forwards a port to a broker and can sever the client's side of it while the
@@ -558,6 +587,9 @@ type cutProxy struct {
 	mu     sync.Mutex
 	ln     net.Listener
 	conns  []net.Conn
+	// hangUp makes the proxy accept a connection and close it at once, so a client's dial
+	// succeeds and its handshake fails.
+	hangUp atomic.Bool
 }
 
 func newCutProxy(t *testing.T, target string) *cutProxy {
@@ -594,6 +626,10 @@ func (p *cutProxy) accept(ln net.Listener) {
 		c, err := ln.Accept()
 		if err != nil {
 			return
+		}
+		if p.hangUp.Load() {
+			_ = c.Close()
+			continue
 		}
 		b, err := net.Dial("tcp", p.target)
 		if err != nil {
@@ -635,20 +671,7 @@ func (p *cutProxy) cut() {
 // supplies the evidence instead. The evidence is cleared before each half while nothing can
 // answer, so whatever the error carries came from that one status change.
 func TestTheFetchAReconnectInterruptsIsAnAnswerAndTheDisconnectIsNot(t *testing.T) {
-	srv := startBrokerKeepingStore(t, -1, dctest.JetStreamStoreDir(t))
-	defer srv.Shutdown()
-	proxy := newCutProxy(t, srv.Addr().String())
-	nmgr := managerFor(t, srv)
-	nmgr.Microservice.InstanceConfiguration.Infrastructure.Nats.Port = uint32(proxy.port)
-	if err := nmgr.ExecuteInitialize(t.Context()); err != nil {
-		t.Fatalf("connecting through the proxy: %v", err)
-	}
-	t.Cleanup(func() { nmgr.nc.Close() })
-	reader, err := nmgr.NewReader(streams.InboundEvents)
-	if err != nil {
-		t.Fatalf("reader: %v", err)
-	}
-	r := reader.(*natsReader)
+	r, proxy, nmgr := proxiedReader(t)
 
 	// The disconnect side. The read starts against a live broker, and its fetch is in
 	// flight when the connection is cut. Nothing can answer in the 300ms before the cut: a
@@ -670,29 +693,115 @@ func TestTheFetchAReconnectInterruptsIsAnAnswerAndTheDisconnectIsNot(t *testing.
 		t.Fatal("cutting the connection under a fetch did not end the read within 10s")
 	}
 
-	// The reconnect side. The client knows the broker is gone before the read starts. The
-	// read's fetches wait out their own deadline while the client retries (its reconnect wait
-	// is about two seconds, inside the five empty fetches before a probe), so the reconnect
-	// lands on a fetch in flight.
+	// The reconnect side. The client knows the broker is gone before the read starts, and the
+	// read's fetches wait out their own deadline while the client retries. The reconnect
+	// usually lands on a fetch in flight and ends the read with that fetch's error, which
+	// must carry the answer. It need not: a fetch whose deadline runs out during the
+	// handshake ends empty, and the next starts already connected. Then the read runs on until
+	// it is stopped, and the answer must be waiting for the next error instead. Either way the
+	// probe is kept out of it, so only the reconnect can have answered.
 	waitFor(t, "the client to see the broker gone", func() bool { return !nmgr.nc.IsConnected() })
-	r.consecutiveTimeouts = 0
+	noProbe(r)
 	if r.answered.Load() {
 		t.Fatal("the reader recorded a broker answer with its connection cut")
 	}
-	res = readOnce(r, 20*time.Second)
+	ctx, stop := context.WithCancel(context.Background())
+	res = readUntil(ctx, stop, r)
 	time.Sleep(200 * time.Millisecond)
 	proxy.open()
+	waitFor(t, "the client to reconnect", nmgr.nc.IsConnected)
+	stop()
 	select {
 	case err := <-res:
+		switch {
+		case errors.Is(err, nats.ErrFetchDisconnected):
+			if !answeredOn(t, err) {
+				t.Fatalf("the fetch the reconnect interrupted returned %q with no broker answer: an outage "+
+					"longer than the budget would end the loop the moment the broker came back", err)
+			}
+		case errors.Is(err, io.EOF):
+			t.Log("the reconnect landed between fetches")
+			if !answeredOn(t, r.readError(errors.New("the next error"))) {
+				t.Fatal("the reconnect landed between fetches and the reader recorded no broker answer: " +
+					"the outage's run stays open until a probe, and an error before it ends the loop")
+			}
+		default:
+			t.Fatalf("the reconnect returned %v, want the `disconnected during fetch` of the fetch it "+
+				"interrupted, or io.EOF when it interrupted none", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the read did not end within 10s of its context being cancelled")
+	}
+}
+
+// 🔴 A RECONNECT NO FETCH SAW IS STILL AN ANSWER. nats.go interrupts a fetch in flight on a
+// change of connection status, but nothing makes a fetch be in flight: the client holds its
+// lock through the reconnect handshake, so a fetch whose deadline runs out meanwhile ends
+// empty and the next one starts already connected. Read only from the interrupted fetch,
+// that reconnect is lost, and the outage's run stays open until the next probe — any error
+// before it lands on a run longer than the budget and ends the loop the moment the broker
+// came back. Here the reconnect completes with no read running at all, which is that case
+// made certain.
+func TestAReconnectNoFetchSawIsStillAnAnswer(t *testing.T) {
+	r, proxy, nmgr := proxiedReader(t)
+
+	proxy.cut()
+	waitFor(t, "the client to see the broker gone", func() bool { return !nmgr.nc.IsConnected() })
+	_ = r.readError(errors.New("clear the bind's evidence"))
+	proxy.open()
+	waitFor(t, "the client to reconnect", nmgr.nc.IsConnected)
+
+	noProbe(r)
+	if err := <-readOnce(r, 1500*time.Millisecond); !errors.Is(err, io.EOF) {
+		t.Fatalf("an idle read after the reconnect returned %v, want io.EOF at the end of its context", err)
+	}
+	if !answeredOn(t, r.readError(errors.New("the next error"))) {
+		t.Fatal("the client reconnected since the reader's last error, and the next error carried no " +
+			"broker answer: an outage longer than the budget would end the loop at its next error")
+	}
+}
+
+// The other side of that: a reconnect ATTEMPT is no answer. nats.go counts a reconnect once
+// its dial succeeds, before the handshake that shows a broker is there, so an address that
+// accepts and hangs up adds to the count every time the client tries it. Taken for an answer,
+// that would excuse a broker that is down for as long as something listens on its port.
+func TestAReconnectAttemptThatFailsItsHandshakeIsNoAnswer(t *testing.T) {
+	r, proxy, nmgr := proxiedReader(t)
+
+	proxy.cut()
+	waitFor(t, "the client to see the broker gone", func() bool { return !nmgr.nc.IsConnected() })
+	_ = r.readError(errors.New("clear the bind's evidence"))
+	before := nmgr.nc.Stats().Reconnects
+	proxy.hangUp.Store(true)
+	proxy.open()
+	waitFor(t, "the client to attempt a reconnect", func() bool { return nmgr.nc.Stats().Reconnects > before })
+	if nmgr.nc.IsConnected() {
+		t.Fatal("the client connected through a proxy that hangs up on it")
+	}
+
+	// Each failed handshake is a change of connection status, so it can end a fetch with
+	// `disconnected during fetch`; every error handed out is checked, since each takes the
+	// evidence with it and a check of the reader alone would then pass for the wrong reason.
+	noProbe(r)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	for {
+		_, err := r.ReadMessage(ctx)
+		if errors.Is(err, io.EOF) {
+			break
+		}
 		if !errors.Is(err, nats.ErrFetchDisconnected) {
-			t.Fatalf("the reconnect returned %v, want the `disconnected during fetch` of the fetch it interrupted", err)
+			t.Fatalf("an idle read with the broker unreachable returned %v, want `disconnected during fetch` "+
+				"or io.EOF", err)
 		}
-		if !answeredOn(t, err) {
-			t.Fatalf("the fetch the reconnect interrupted returned %q with no broker answer: an outage "+
-				"longer than the budget would end the loop the moment the broker came back", err)
+		if answeredOn(t, err) {
+			t.Fatalf("the read error %q, handed out while every reconnect attempt failed its handshake, "+
+				"carried a broker answer", err)
 		}
-	case <-time.After(15 * time.Second):
-		t.Fatal("the reconnect did not end the read within 15s")
+	}
+	if answeredOn(t, r.readError(errors.New("the next error"))) {
+		t.Fatal("reconnect attempts that never completed a handshake were recorded as a broker answer: " +
+			"a broker that stays down would then never end the loop")
 	}
 }
 

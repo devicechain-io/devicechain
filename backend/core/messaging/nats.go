@@ -1299,7 +1299,7 @@ type natsReader struct {
 	consecutiveTimeouts int
 	// answered records that the broker completed a round trip with this reader since the
 	// last non-EOF error ReadMessage returned: a fetch that delivered, a liveness probe that
-	// found the consumer, a (re)bind, a reconnect seen by the fetch it interrupted, or a
+	// found the consumer, a (re)bind, a reconnect the client completed (noteReconnect), or a
 	// fresh backpressure measurement taken while the reader was parked behind it. The next
 	// such error carries it (readError) and clears it. That is how the read loop's pacer
 	// tells two separate failures from one long one on a stream that delivers nothing in
@@ -1326,6 +1326,10 @@ type natsReader struct {
 	// Atomic because bindLocked also runs on the term-build goroutine (BindTerm); every
 	// other writer is the read goroutine.
 	answered atomic.Bool
+	// reconnectsSeen is the client's reconnect count when this reader last recorded one as an
+	// answer (or when it was built), so noteReconnect can tell a reconnect it has not yet
+	// counted from one it has. Read goroutine only, after NewReader sets it.
+	reconnectsSeen uint64
 	// lastErrorAt is when ReadMessage last handed out a non-EOF error, so a backpressure
 	// measurement can be told to be newer than it. Read goroutine only.
 	lastErrorAt time.Time
@@ -1756,6 +1760,10 @@ func (nmgr *NatsManager) NewReader(suffix string, opts ...ReaderOption) (Message
 	if r.slots > 0 {
 		r.capacity = newCapacity(r.slots, nmgr.ackWait(), nmgr.metrics.heldPastAckWaitFor(r.durable))
 	}
+	if nmgr.nc != nil {
+		// A reconnect before this reader existed is no answer to it.
+		r.reconnectsSeen = nmgr.nc.Stats().Reconnects
+	}
 	if err := r.bind(); err != nil {
 		return nil, err
 	}
@@ -2130,6 +2138,8 @@ func (r *natsReader) ReadMessage(ctx context.Context) (_ Message, err error) {
 				}
 			}
 			msgs, err := sub.Fetch(batch, nats.MaxWait(fetchTimeout))
+			// Before the error is handed out, so the error the reconnect interrupted carries it.
+			r.noteReconnect()
 			if r.capacity != nil {
 				r.holdFetched(msgs, batch, leftovers, fetchedAt)
 			}
@@ -2183,15 +2193,8 @@ func (r *natsReader) ReadMessage(ctx context.Context) (_ Message, err error) {
 					}
 					continue
 				}
-				// A fetch is interrupted by EVERY change of connection status, the reconnect
-				// included. Seen connected, this is the fetch the reconnect interrupted, and the
-				// reconnect is the broker answering: without counting it, an outage longer than
-				// the pacer's budget would end the process at the moment the broker came back,
-				// when the restart has nothing left to re-dial. The disconnect side of the same
-				// outage sees the connection down and carries no answer.
-				if errors.Is(err, nats.ErrFetchDisconnected) && r.nmgr.nc != nil && r.nmgr.nc.IsConnected() {
-					r.answered.Store(true)
-				}
+				// A fetch interrupted by a reconnect returns `disconnected during fetch` like the
+				// one the disconnect interrupted; noteReconnect above has already told them apart.
 				return Message{}, r.readError(err)
 			}
 			if len(msgs) == 0 {
@@ -2225,6 +2228,37 @@ func (r *natsReader) ReadMessage(ctx context.Context) (_ Message, err error) {
 		msg.origin = Origin{Suffix: r.suffix, Stream: r.stream, Consumer: r.durable, Seq: seq}
 		return msg, nil
 	}
+}
+
+// noteReconnect records, as a broker answer, a reconnect the client has completed since this
+// reader last counted one. The reconnect is the broker answering: without counting it, an
+// outage longer than the pacer's budget would end the process at the moment the broker came
+// back, when a restart has nothing left to re-dial. The disconnect side of the same outage
+// finds no new completed reconnect and carries no answer.
+//
+// 🔴 IT IS READ FROM THE CONNECTION, NOT FROM THE FETCH A RECONNECT INTERRUPTS. nats.go does
+// interrupt a fetch in flight on every change of connection status, but a reconnect does not
+// always land on one: the client holds its lock through the whole handshake, so a fetch whose
+// own deadline runs out meanwhile ends empty and the next one starts already connected, and a
+// fetch whose deadline and status change arrive together can take either. A reconnect missed
+// that way left the outage's run open until the next liveness probe, and an error before the
+// probe landed on a run longer than the budget.
+//
+// The count is sampled on both sides of the status, so the CONNECTED it reads belongs to the
+// connection that count made: a count that moved under the status read is left for the next
+// fetch, and a reconnect attempt that failed its handshake (it counts, but the client stays
+// reconnecting) is never taken for an answer.
+func (r *natsReader) noteReconnect() {
+	if r.nmgr == nil || r.nmgr.nc == nil {
+		return
+	}
+	nc := r.nmgr.nc
+	before := nc.Stats().Reconnects
+	if before == r.reconnectsSeen || !nc.IsConnected() || nc.Stats().Reconnects != before {
+		return
+	}
+	r.reconnectsSeen = before
+	r.answered.Store(true)
 }
 
 // brokerReadError is a non-EOF read error together with whether the broker had answered
