@@ -69,7 +69,8 @@ function numberAt(rec: Record<string, unknown>, key: string, fallback: number): 
 // parseDashboardDefinition validates a parsed JSON value and returns a definition
 // with defaults filled, or throws DashboardDefinitionError. `raw` is the value
 // after JSON.parse (the caller owns the parse so a syntax error is theirs to
-// handle); an already-typed object round-trips unchanged.
+// handle); an already-typed object round-trips unchanged, an unknown-type
+// placeholder included.
 export function parseDashboardDefinition(raw: unknown): DashboardDefinition {
   if (!isRecord(raw)) throw new DashboardDefinitionError('not a JSON object');
 
@@ -294,6 +295,7 @@ function parseWidget(raw: unknown, index: number): WidgetInstance {
   if (typeof type !== 'string' || type.length === 0) {
     throw new DashboardDefinitionError(`widgets[${index}] has unknown type ${JSON.stringify(type)}`);
   }
+  if (type === UNKNOWN_WIDGET_TYPE && isRecord(raw.raw)) return reparseUnknownWidget(raw, index);
   if (!WIDGET_TYPE_SET.has(type)) return parseUnknownWidget(raw, index);
 
   const widget: KnownWidgetInstance = {
@@ -329,6 +331,21 @@ function parseUnknownWidget(raw: Record<string, unknown>, index: number): Unknow
     type: UNKNOWN_WIDGET_TYPE,
     layout: parseLayout(raw.layout, index),
     raw: JSON.parse(JSON.stringify(raw)) as Record<string, unknown>,
+  };
+}
+
+// reparseUnknownWidget takes back a placeholder this parser already built — a typed
+// definition handed to the parser again — as the same placeholder: its stored object is
+// kept as its raw, and its id and layout (which may carry an edit) come from the
+// placeholder. Wrapping it again would make the save write the wrapper and lose the
+// widget. The serializer never writes the placeholder type, so no stored document takes
+// this path.
+function reparseUnknownWidget(raw: Record<string, unknown>, index: number): UnknownWidgetInstance {
+  return {
+    id: storedWidgetId(raw) ?? generateWidgetId(),
+    type: UNKNOWN_WIDGET_TYPE,
+    layout: parseLayout(raw.layout, index),
+    raw: JSON.parse(JSON.stringify(raw.raw)) as Record<string, unknown>,
   };
 }
 
@@ -515,7 +532,7 @@ function storedUnknownLayout(layout: WidgetLayout, rawLayout: unknown): unknown 
     if (sameBox(parseBox(box), current)) {
       out[bp] = box;
     } else {
-      out[bp] = current;
+      out[bp] = movedBox(box, current);
       changed = true;
     }
   }
@@ -525,6 +542,15 @@ function storedUnknownLayout(layout: WidgetLayout, rawLayout: unknown): unknown 
     changed = true;
   }
   return changed ? out : rawLayout;
+}
+
+// movedBox writes an edited box over a stored one. The fields a box has in this build
+// take the edited values; any other field the stored box carries (one a newer release
+// added) is kept, so a move does not strip it. An offset the edit cleared is removed.
+function movedBox(stored: Record<string, unknown>, current: WidgetBox): Record<string, unknown> {
+  const out: Record<string, unknown> = { ...stored, ...current };
+  if (current.offset === undefined) delete out.offset;
+  return out;
 }
 
 function sameBox(a: WidgetBox, b: WidgetBox): boolean {

@@ -195,20 +195,67 @@ describe('unknown widget types', () => {
     expect(stored.widgets).toHaveLength(1);
   });
 
-  it('degrade a stored placeholder type literally, rather than trusting it', () => {
+  it('re-parse an already-parsed placeholder as itself (parse is idempotent)', () => {
+    // The parser's contract is that an already-typed definition comes back unchanged. A
+    // placeholder handed back in must not be wrapped again: the save would then write
+    // the wrapper, and the stored widget's type would become the placeholder type.
+    const once = parseDashboardDefinition(board([label, newerWidget()]));
+    const twice = parseDashboardDefinition(once);
+    expect(twice).toEqual(once);
+    expect(serializeDefinition(twice)).toBe(serializeDefinition(once));
+    expect(savedWidget(twice, 1)).toBe(JSON.stringify(newerWidget()));
+
+    // An edit made before the re-parse is kept by it, and still reaches the save.
+    const moved = setWidgetBox(once, 'deck-1', { col: 6, colSpan: 12, row: 0, rowSpan: 4, z: 2 });
+    const movedTwice = parseDashboardDefinition(moved);
+    expect(serializeDefinition(movedTwice)).toBe(serializeDefinition(moved));
+
+    // An id-less stored widget stays id-less through a re-parse too.
+    const { id: _id, ...noId } = newerWidget();
+    const noIdTwice = parseDashboardDefinition(parseDashboardDefinition(board([noId])));
+    expect(savedWidget(noIdTwice, 0)).toBe(JSON.stringify(noId));
+  });
+
+  it('hold a stored placeholder type with no raw object literally, rather than trusting it', () => {
     // Nothing this build writes carries the placeholder type, but a hand-edited or
-    // foreign document might. It is not a type this build renders, so it is held raw.
-    const odd = { id: 'x', type: PLACEHOLDER, layout: { base: box() }, raw: { anything: 1 } };
+    // foreign document might. Without a raw object it is not a placeholder this parser
+    // built, and it is not a type this build renders, so it is held raw like any other.
+    const odd = { id: 'x', type: PLACEHOLDER, layout: { base: box() }, raw: 'not an object' };
     const def = parseDashboardDefinition(board([odd]));
     expect(def.widgets[0].type).toBe(PLACEHOLDER);
     expect(savedWidget(def, 0)).toBe(JSON.stringify(odd));
   });
 
-  it('still reject a widget with no type, or a non-string one', () => {
+  it('keep a box field this build does not know when the box is moved', () => {
+    // A newer release may add a field to a box. Moving the placeholder writes the fields
+    // this build knows and must leave that one in place.
+    const stored = { ...newerWidget(), layout: { base: { col: 0, colSpan: 4, row: 0, rowSpan: 3, z: 0, minRows: 2 } } };
+    const def = parseDashboardDefinition(board([stored]));
+    const moved = setWidgetBox(def, 'deck-1', { col: 1, colSpan: 4, row: 0, rowSpan: 3, z: 0 });
+    const saved = JSON.parse(savedWidget(moved, 0)) as { layout: { base: unknown } };
+    expect(JSON.stringify(saved.layout.base)).toBe(
+      JSON.stringify({ col: 1, colSpan: 4, row: 0, rowSpan: 3, z: 0, minRows: 2 }),
+    );
+  });
+
+  it('drop a stored offset the edit cleared, and write one the edit set', () => {
+    const stored = { ...newerWidget(), layout: { base: { ...box(), offset: { x: 3, y: 4 } } } };
+    const def = parseDashboardDefinition(board([stored]));
+    const cleared = setWidgetBox(def, 'deck-1', box({ col: 1 }));
+    expect((JSON.parse(savedWidget(cleared, 0)) as { layout: { base: object } }).layout.base).not.toHaveProperty('offset');
+    const nudged = setWidgetBox(def, 'deck-1', { ...box(), offset: { x: 5, y: 6 } });
+    expect((JSON.parse(savedWidget(nudged, 0)) as { layout: { base: { offset: unknown } } }).layout.base.offset).toEqual({
+      x: 5,
+      y: 6,
+    });
+  });
+
+  it('still reject a widget with no type, an empty one, or a non-string one', () => {
     // A missing type is a broken document, not a newer widget: there is nothing to name
     // and no viewer that could render it.
     expect(() => parseDashboardDefinition(board([{ layout: { base: box() } }]))).toThrow(/unknown type/);
     expect(() => parseDashboardDefinition(board([{ type: 7, layout: { base: box() } }]))).toThrow(/unknown type/);
+    expect(() => parseDashboardDefinition(board([{ type: '', layout: { base: box() } }]))).toThrow(/unknown type/);
   });
 
   it('still reject an unknown widget with no base box (it could not be placed)', () => {

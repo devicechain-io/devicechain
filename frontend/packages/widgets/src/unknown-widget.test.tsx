@@ -62,7 +62,28 @@ describe('a widget of an unknown type', () => {
     expect(screen.getByText(/card-deck/)).toBeTruthy();
   });
 
-  it('subscribes to nothing on any channel', async () => {
+  // The parser never gives a placeholder a datasource, so with the parsed placeholder
+  // nothing would subscribe whatever the widget layer did. This one carries a datasource
+  // forced past the type, so it subscribes unless the placeholder is dispatched to its
+  // own frame before any channel is chosen.
+  it('opens no channel, even for a placeholder that carries a datasource', async () => {
+    const { hub, asHub } = spyHub();
+    const withSource = {
+      ...parsedBoard().widgets[0],
+      datasource: { kind: 'device', deviceToken: 'd1', measurements: ['fuel_pct'] },
+    } as unknown as WidgetInstance;
+    render(<ConnectedWidget widget={withSource} hub={asHub} />);
+    await act(async () => {});
+    expect(hub.subscribeWidget).not.toHaveBeenCalled();
+    expect(hub.subscribeAlarms).not.toHaveBeenCalled();
+    expect(hub.subscribeCommands).not.toHaveBeenCalled();
+    expect(hub.subscribeLocations).not.toHaveBeenCalled();
+    expect(screen.getByText('This widget needs a newer viewer')).toBeTruthy();
+  });
+
+  // A regression guard rather than a test of the dispatch: the parsed placeholder has no
+  // datasource, so this held before the placeholder had a frame of its own.
+  it('subscribes to nothing on any channel when rendered as parsed', async () => {
     const { hub, asHub } = spyHub();
     render(<ConnectedWidget widget={parsedBoard().widgets[0]} hub={asHub} />);
     await act(async () => {});

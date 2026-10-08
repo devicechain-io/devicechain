@@ -124,8 +124,9 @@ describe('parseDashboardDefinition', () => {
     expect(def.widgets[0].type).toBe('unknown-widget');
   });
 
-  it('rejects a widget with no type', () => {
+  it('rejects a widget with no type or an empty one', () => {
     expect(() => parseDashboardDefinition({ widgets: [{ layout: { base: box() } }] })).toThrow(/unknown type/);
+    expect(() => parseDashboardDefinition({ widgets: [{ type: '', layout: { base: box() } }] })).toThrow(/unknown type/);
   });
 
   it('rejects a stored unbound datasource rather than rendering it as an empty widget', () => {

@@ -227,10 +227,6 @@ function parseAcknowledged(value: string | undefined): boolean | undefined {
   return undefined;
 }
 
-// WidgetUnavailableFrame is shown when a widget's bound device no longer exists (a
-// deleted device's stable token). Distinct from the error frame: not a transient
-// failure to retry, but a settled "this entity is gone" — so it reads as a state, not
-// an error.
 // The placeholder for a widget this build cannot render. It names the stored type so an
 // author can tell which widget it is and which release added it; the stored object is
 // otherwise untouched (the serializer writes it back verbatim).
@@ -260,6 +256,10 @@ function UnknownWidgetFrame({ widget }: { widget: UnknownWidgetInstance }): Reac
   );
 }
 
+// WidgetUnavailableFrame is shown when a widget's bound device no longer exists (a
+// deleted device's stable token). Distinct from the error frame: not a transient
+// failure to retry, but a settled "this entity is gone" — so it reads as a state, not
+// an error.
 function WidgetUnavailableFrame({ widget }: { widget: WidgetInstance }): ReactNode {
   return (
     <WidgetFrame title={optString(widget.options, 'title')}>
