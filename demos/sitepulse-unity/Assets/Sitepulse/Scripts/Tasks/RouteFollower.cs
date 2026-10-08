@@ -36,9 +36,9 @@ namespace DeviceChain.Sitepulse.Tasks
     }
 
     /// <summary>
-    /// Drives a body along a <see cref="Route"/>: the route is followed exactly in position, speed
-    /// follows the surface, slope and the corner ahead and eases in to the end, and the heading turns
-    /// toward the path at the machine's own yaw rate (so a sharp turn slows it). While something is in its
+    /// Drives a body along a <see cref="Route"/>, keeping to the lane the road gives the way it is going (see <see cref="LaneLine"/>):
+    /// the line is followed exactly in position, speed follows the surface, slope and the corner ahead and eases in to the end, and
+    /// the heading turns toward the path at the machine's own yaw rate (so a sharp turn slows it). While something is in its
     /// way (<c>blocked</c>) the target speed is zero.
     /// </summary>
     internal sealed class RouteFollower
@@ -46,17 +46,31 @@ namespace DeviceChain.Sitepulse.Tasks
         const double Lookahead = 2.0, ArriveWithin = 0.05, CreepSpeed = 0.3, SteerLimit = 25.0;
 
         Route route;
-        double s;
+        LaneLine line;
+        double s;   // metres driven along the line
 
         public double Speed { get; private set; }
         public double HeadingDegrees { get; private set; }
         public Route Route => route;
-        public double Remaining => route == null ? 0 : Math.Max(0, route.Length - s);
+        public double Remaining => route == null ? 0 : Math.Max(0, line.Length - s);
         public bool Active => route != null;
+
+        /// <summary>
+        /// How much of its lane's offset this machine takes on the routes it drives next, from 0 (the road's own line) to 1 (the lane).
+        /// It is the machine's own: a machine alone on a road can be given a smaller share and drift toward the middle of it.
+        /// </summary>
+        public double LaneShare { get; set; } = 1.0;
+
+        /// <summary>How far to the right of the route's own line the machine is now (negative: to the left, in its lane).</summary>
+        public double Lateral => route == null ? 0.0 : line.LateralAt(s);
+
+        /// <summary>How far along the route's own line the machine is now, in metres (the line it drives is not the same length: see <see cref="LaneLine"/>).</summary>
+        public double Progress => route == null ? 0.0 : line.CentrelineAt(s);
 
         public void Start(Route r, double headingDegrees)
         {
             route = r;
+            line = r == null ? null : LaneLine.Build(r, LaneShare);
             s = 0;
             HeadingDegrees = headingDegrees;
         }
@@ -64,6 +78,7 @@ namespace DeviceChain.Sitepulse.Tasks
         public void Clear()
         {
             route = null;
+            line = null;
             Speed = 0;
         }
 
@@ -84,12 +99,13 @@ namespace DeviceChain.Sitepulse.Tasks
             if (route.Legs == 0)
             {
                 route = null;
+                line = null;
                 return true;
             }
 
-            var remaining = route.Length - s;
-            route.PointAt(s, out var px, out var pz, out _, out var leg);
-            route.PointAt(Math.Min(route.Length, s + Lookahead), out _, out _, out var look, out _);
+            var remaining = line.Length - s;
+            line.PointAt(s, out var px, out var pz, out _, out var leg);
+            line.PointAt(Math.Min(line.Length, s + Lookahead), out _, out _, out var look, out _);
 
             var err = Delta(look, HeadingDegrees);
             var turn = Math.Min(Math.Abs(err), k.YawRate * dt);
@@ -107,13 +123,14 @@ namespace DeviceChain.Sitepulse.Tasks
 
             var ds = Math.Min(Speed * dt, remaining);
             s += ds;
-            route.PointAt(s, out var x, out var z, out _, out _);
+            line.PointAt(s, out var x, out var z, out _, out _);
             var steer = Math.Max(-SteerLimit, Math.Min(SteerLimit, err));
             body.Drive(x, z, HeadingDegrees, ds, steer);
 
-            if (route.Length - s > ArriveWithin) return false;
+            if (line.Length - s > ArriveWithin) return false;
             Speed = 0;
             route = null;
+            line = null;
             return true;
         }
 

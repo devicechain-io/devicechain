@@ -15,7 +15,7 @@ namespace DeviceChain.Sitepulse.Tests
     public sealed class GradeRouteTests
     {
         /// <summary>Ground defined by a function, so a test says what the slope is.</summary>
-        sealed class Field : IHeightField
+        internal sealed class Field : IHeightField
         {
             readonly Func<double, double, double> f;
             public Field(Func<double, double, double> f) { this.f = f; }

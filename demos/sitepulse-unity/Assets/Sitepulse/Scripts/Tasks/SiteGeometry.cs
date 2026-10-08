@@ -36,6 +36,35 @@ namespace DeviceChain.Sitepulse.Tasks
         public string Kind { get; }
         public double Width { get; }
         public IReadOnlyList<RoadPoint> Points { get; }
+
+        /// <summary>How wide a haul truck is (metres), at its front deck.</summary>
+        public const double HaulTruckWidth = 5.7;
+
+        /// <summary>
+        /// The narrowest road with a lane for each direction (metres): the lanes at their least offset (<see cref="MinLaneOffset"/>, which
+        /// leaves a metre of air between two haul trucks passing) keep each truck's outer edge on the road. A narrower road is
+        /// <see cref="SingleLane"/>.
+        /// </summary>
+        public const double TwoLaneWidth = 2 * (MinLaneOffset + HaulTruckWidth / 2.0);
+
+        /// <summary>
+        /// The least a lane's centre may lie from the road's centreline (metres): two haul trucks 5.7 m wide pass with a metre of air
+        /// between them. The choreography generator (<c>quarry_fleet.py</c>: <c>lane_offset</c>) lays its loop by the same rule.
+        /// </summary>
+        public const double MinLaneOffset = 3.4;
+
+        /// <summary>
+        /// Too narrow for two haul trucks to pass (narrower than <see cref="TwoLaneWidth"/>): a truck drives its centreline, and two
+        /// going opposite ways would overlap on it, so only one may be on it at a time (nothing enforces that yet). On this site: the plant road (10 m), the fill return and the yard road (12 m).
+        /// </summary>
+        public bool SingleLane => Width < TwoLaneWidth;
+
+        /// <summary>
+        /// How far from the centreline the lane of each direction runs: a quarter of the width (the middle of each half), and never less
+        /// than <see cref="MinLaneOffset"/>; none on a <see cref="SingleLane"/> road. Traffic keeps left: the lane is to the left of
+        /// the way a machine is going.
+        /// </summary>
+        public double LaneOffset => SingleLane ? 0.0 : Math.Max(Width / 4.0, MinLaneOffset);
     }
 
     /// <summary>A named place on the site (refuel bay, refuel queue, parking, ...).</summary>

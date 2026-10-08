@@ -116,6 +116,16 @@ namespace DeviceChain.Sitepulse.Tasks
         public TaskRequest Running => active;
         public double SpeedMps => follow.Speed;
 
+        /// <summary>
+        /// How much of its lane's offset this machine takes on the routes it drives (0 the road's own line, 1 its lane; see
+        /// <see cref="LaneLine"/>). It is the machine's own: the seam for a machine alone on a road to drift toward the middle of it.
+        /// </summary>
+        public double LaneShare
+        {
+            get => follow.LaneShare;
+            set => follow.LaneShare = value;
+        }
+
         /// <summary>The route the machine is driving now (to a destination, to the queue, into the bay, back to its track); null when it is not driving one.</summary>
         public Route CurrentRoute => follow.Route;
 
