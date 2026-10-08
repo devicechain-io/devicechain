@@ -16,8 +16,11 @@ WHAT IT MAKES
   * 5 haulers on one closed haul loop, spaced a fifth of the loop apart in time: load at the
     muck pile in the pit, up the ramp, out to the dump pad, reverse to the tipping edge and
     dump, back along the return road, through the yard past the refuel bay, and down the ramp.
-    Traffic keeps LEFT, each direction on its own lane of the 20 m ramp, which lets the loop
-    run without crossing itself.
+    Traffic keeps LEFT on every road wide enough for two trucks, each direction on its own lane (see
+    `lane_offset`): the loop runs in the lane of the way it goes, so a truck sent along such a road
+    the other way by a command meets the loop's trucks passing, never sharing their line. A road
+    narrower than TWO_LANE_WIDTH (two lanes at the least offset, a truck's width each) is single-lane: the loop drives its
+    centreline.
   * a 6th hauler out of the loop: from its parking place to the refuel bay (a lay-by beside the
     yard's through lane), a stop while it is fuelled, and back to park.
   * 6 loaders: one loads the haulers from the loading bench, PASSES buckets per truck (its
@@ -265,12 +268,46 @@ DUMP_UP, DUMP_HOLD = 5.0, 3.5
 # at the pad, as on a real haul road) and the turn-round is 2 m further from the tipping edge.
 LIVE_LOAD_STOP, LIVE_CUSP_STOP, LIVE_TURN_X = 28.0, 10.0, 78.0
 TURN_X = 80.0                   # x of the turn-round on the dump pad, where a truck stops before reversing
-LANE = 5.0                      # lane centre offset from the ramp's centreline (20 m ramp, keep left)
+MIN_LANE = 3.4                  # two 5.7 m haul trucks pass with a metre of air between them (SiteGeometry.MinLaneOffset)
+TWO_LANE_WIDTH = 2 * (MIN_LANE + 5.7 / 2)  # the narrowest road whose two lanes keep a haul truck's outer edge on it (RoadLine.TwoLaneWidth)
+
+
+def lane_offset(width):
+    """How far from a road's centreline the lane of each direction runs: a quarter of the width, and never
+    less than MIN_LANE; none on a road narrower than TWO_LANE_WIDTH, which is single-lane (its centreline is
+    driven). Traffic keeps left. Tasks/SiteGeometry.cs (`RoadLine.LaneOffset`) applies the same rule to the
+    routes machines drive on command; the two must agree (LaneTests checks the loop against it)."""
+    if width < TWO_LANE_WIDTH:
+        return 0.0
+    return max(width / 4.0, MIN_LANE)
+
+
+def road_lane(ground, name, reverse=False, x_from=None, i0=0, i1=None, fade_in=0.0):
+    """The road's centreline, offset to the left of the way the loop travels it (reverse: against the order
+    the file lists its points), as (x, z) points at least 8 m apart (plus the last). `fade_in` eases the
+    offset in from the road's centreline over that many metres (a road that starts at a gate or a sign)."""
+    rd = next(r for r in ground.f["roads"] if r["name"] == name)
+    pts = np.array([(p[0], p[2]) for p in rd["points"]])[i0:i1]
+    if reverse:
+        pts = pts[::-1]
+    if x_from is not None:
+        pts = pts[int(np.argmax(pts[:, 0] >= x_from)):]
+    d = np.gradient(pts, axis=0)
+    d /= np.linalg.norm(d, axis=1, keepdims=True)
+    left = np.stack([-d[:, 1], d[:, 0]], 1)
+    along = np.r_[0.0, np.cumsum(np.linalg.norm(np.diff(pts, axis=0), axis=1))]
+    k = np.minimum(1.0, along / fade_in)[:, None] if fade_in > 0 else 1.0
+    lane = pts + left * lane_offset(rd["width"]) * k
+    keep = [0]
+    for i in range(1, len(lane)):
+        if np.linalg.norm(lane[i] - lane[keep[-1]]) >= 8.0 or i == len(lane) - 1:
+            keep.append(i)
+    return [tuple(map(float, lane[i])) for i in keep]
 
 
 def ramp_lane(ground, side, x_from=-14.0):
-    """The ramp centreline from x_from to the top, offset LANE metres to the left (side=+1) or
-    right (side=-1) of the uphill direction, as (x, z) points about 8 m apart."""
+    """The ramp centreline from x_from to the top, offset to the left (side=+1) or right (side=-1) of the
+    uphill direction by the ramp's lane offset, as (x, z) points about 8 m apart."""
     rd = next(r for r in ground.f["roads"] if r["name"] == "pit-ramp")
     pts = np.array([(p[0], p[2]) for p in rd["points"]])
     i0 = int(np.argmax(pts[:, 0] >= x_from))
@@ -278,7 +315,7 @@ def ramp_lane(ground, side, x_from=-14.0):
     d = np.gradient(pts, axis=0)
     d /= np.linalg.norm(d, axis=1, keepdims=True)
     left = np.stack([-d[:, 1], d[:, 0]], 1)
-    lane = pts + left * LANE * side
+    lane = pts + left * lane_offset(rd["width"]) * side
     keep = [0]
     for i in range(1, len(lane)):
         if np.linalg.norm(lane[i] - lane[keep[-1]]) >= 8.0 or i == len(lane) - 1:
@@ -303,15 +340,15 @@ def haul_runs(ground):
     # 1: loaded, from the load point round the pit floor, up the ramp, to the turn-round on the dump pad
     out = ([(4.0, 35.5), (16.0, 35.5), (27.0, 36.0), (33.5, 31.5), (29.0, 27.0), (16.0, 26.5), (-4.0, 26.5),
             (-14.0, 26.5), (-19.5, 22.5), (-18.0, 17.0)] + up[1:]
-           + [(80.5, -20.0), (88.0, -31.0), (93.5, -39.0), (90.0, -45.0), (86.0, -49.5), (TURN_X, -51.0)])
+           + road_lane(ground, "fill-road")[1:] + [(90.0, -45.0), (86.0, -49.5), (TURN_X, -51.0)])
     # 2: reverse to the tipping edge
     back = [(TURN_X, -51.0), (101.0, -51.0)]
     # 3: empty, back along the return road, through the yard past the refuel bay, down the ramp,
     #    round to the load point
-    home = ([(101.0, -51.0), (94.0, -53.0), (89.0, -58.0), (84.0, -62.0), (79.0, -67.0), (60.0, -70.0),
-             (30.0, -68.0), (0.0, -64.0), (-30.0, -62.0), (-44.0, -61.5), (-47.5, -58.0), (-49.0, -52.0),
-             (-49.0, -40.0), (-44.0, -30.5), (-10.0, -30.0), (30.0, -26.0), (52.0, -21.5), (61.0, -14.0)]
-            + down[:-1] + [(-17.0, 6.0), (-31.0, 21.0), (-29.0, 31.0), (-24.0, 36.5), (-16.0, 36.0),
+    home = ([(101.0, -51.0), (94.0, -53.0), (89.0, -58.0), (84.0, -62.0)]
+            + road_lane(ground, "fill-return") + [(-47.5, -62.0), (-49.0, -52.0), (-49.0, -40.0)]
+            + road_lane(ground, "yard-road", fade_in=24.0)[:-1]
+            + down[1:-1] + [(-17.0, 6.0), (-31.0, 21.0), (-29.0, 31.0), (-24.0, 36.5), (-16.0, 36.0),
                            (-6.0, 35.5), (4.0, 35.5)])
     return [
         Run(out, loaded=True, stop=CUSP_STOP, tag="haul-loaded"),
@@ -513,7 +550,10 @@ def sat_gap(A, B):
     return best
 
 
-HAULER_CLEARANCE = 3.0          # metres two haul trucks must keep apart, passing or queueing
+HAULER_CLEARANCE = 2.5          # metres two haul trucks must keep apart, passing or queueing. The tightest place on the
+                                # loop is the junction at the head of the ramp: with lanes on the 12 m roads, SP-HL-0001
+                                # and SP-HL-0004 came to 2.52 m there 53 s into the live loop, and 2.5 m is the floor that
+                                # holds it. With those roads single-lane the closest is 3.11 m (preview) and 3.14 m (live).
 LOADER_RAISED_FRONT = 2.6       # a loader's footprint front (m) with its boom raised: its front tyres
 
 

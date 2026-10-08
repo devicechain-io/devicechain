@@ -48,14 +48,16 @@ namespace DeviceChain.Sitepulse.Tasks
     /// <summary>A path over the site: waypoints, and for each leg how fast it can be taken.</summary>
     public sealed class Route
     {
-        readonly double[] x, z, cumulative, factor, grade;
+        readonly double[] x, z, cumulative, factor, grade, lane;
 
-        internal Route(List<double> xs, List<double> zs, List<double> factors, List<double> grades)
+        internal Route(List<double> xs, List<double> zs, List<double> factors, List<double> grades, List<double> lanes = null)
         {
             x = xs.ToArray();
             z = zs.ToArray();
             factor = factors.ToArray();
             grade = grades.ToArray();
+            lane = new double[grade.Length];
+            if (lanes != null) lanes.CopyTo(lane);
             cumulative = new double[x.Length];
             for (var i = 1; i < x.Length; i++)
                 cumulative[i] = cumulative[i - 1] + Math.Sqrt(Sq(x[i] - x[i - 1]) + Sq(z[i] - z[i - 1]));
@@ -72,6 +74,55 @@ namespace DeviceChain.Sitepulse.Tasks
 
         /// <summary>How fast leg <paramref name="leg"/> may be taken, as a share of cruise: a road's own factor, or <see cref="SpeedModel.OffRoadFactor"/> off one.</summary>
         public double LegFactor(int leg) => factor[leg];
+
+        /// <summary>
+        /// How far (metres) a machine keeps to the left of this leg's line: the offset of the lane the road gives the direction of travel.
+        /// Zero off a road. Traffic keeps LEFT, as the choreographed tracks do (see <see cref="SiteGeometry"/>).
+        /// </summary>
+        public double LaneOffset(int leg) => lane[leg];
+
+        /// <summary>The lane offset at distance <paramref name="s"/> along the route.</summary>
+        public double LaneAt(double s)
+        {
+            if (Legs == 0) return 0.0;
+            return lane[LegAt(Math.Max(0.0, Math.Min(Length, s)))];
+        }
+
+        /// <summary>
+        /// The place <paramref name="lateral"/> metres to the right of the route's line at distance <paramref name="s"/>, measured along a
+        /// normal that turns smoothly through the corners (so a machine keeping to a lane does not jump sideways at a vertex).
+        /// </summary>
+        public void OffsetPointAt(double s, double lateral, out double px, out double pz, out double headingDegrees)
+        {
+            PointAt(s, out px, out pz, out headingDegrees, out var leg);
+            if (lateral == 0.0 || Legs == 0) return;
+            var nh = headingDegrees;
+            const double Blend = 3.0;
+            var into = s - cumulative[leg];
+            var outOf = cumulative[leg + 1] - s;
+            if (into < Blend && leg > 0)
+            {
+                var prev = Simulation.SiteDefinition.HeadingDegrees(x[leg] - x[leg - 1], z[leg] - z[leg - 1]);
+                nh = headingDegrees + Delta(prev, headingDegrees) * 0.5 * (Blend - into) / Blend;
+            }
+            else if (outOf < Blend && leg < Legs - 1)
+            {
+                var next = Simulation.SiteDefinition.HeadingDegrees(x[leg + 2] - x[leg + 1], z[leg + 2] - z[leg + 1]);
+                nh = headingDegrees + Delta(next, headingDegrees) * 0.5 * (Blend - outOf) / Blend;
+            }
+
+            var h = nh * Math.PI / 180.0;
+            px += Math.Cos(h) * lateral;
+            pz -= Math.Sin(h) * lateral;
+        }
+
+        static double Delta(double to, double from)
+        {
+            var d = (to - from) % 360.0;
+            if (d > 180.0) d -= 360.0;
+            if (d < -180.0) d += 360.0;
+            return d;
+        }
 
         public IReadOnlyList<double> Xs => x;
         public IReadOnlyList<double> Zs => z;
@@ -131,20 +182,11 @@ namespace DeviceChain.Sitepulse.Tasks
             return t;
         }
 
-        /// <summary>This route followed by <paramref name="next"/>, which must start where this ends.</summary>
-        public Route Then(Route next)
-        {
-            var b = new RouteBuilder();
-            b.Start(x[0], z[0]);
-            for (var i = 0; i < Legs; i++) b.Leg(x[i + 1], z[i + 1], factor[i], grade[i]);
-            for (var i = 0; i < next.Legs; i++) b.Leg(next.x[i + 1], next.z[i + 1], next.factor[i], next.grade[i]);
-            return b.Build();
-        }
     }
 
     sealed class RouteBuilder
     {
-        readonly List<double> xs = new List<double>(), zs = new List<double>(), factors = new List<double>(), grades = new List<double>();
+        readonly List<double> xs = new List<double>(), zs = new List<double>(), factors = new List<double>(), grades = new List<double>(), lanes = new List<double>();
 
         public void Start(double x, double z)
         {
@@ -152,7 +194,7 @@ namespace DeviceChain.Sitepulse.Tasks
             zs.Add(z);
         }
 
-        public void Leg(double x, double z, double factor, double gradePct)
+        public void Leg(double x, double z, double factor, double gradePct, double lane = 0.0)
         {
             var dx = x - xs[xs.Count - 1];
             var dz = z - zs[zs.Count - 1];
@@ -161,9 +203,10 @@ namespace DeviceChain.Sitepulse.Tasks
             zs.Add(z);
             factors.Add(factor);
             grades.Add(gradePct);
+            lanes.Add(lane);
         }
 
-        public Route Build() => new Route(xs, zs, factors, grades);
+        public Route Build() => new Route(xs, zs, factors, grades, lanes);
     }
 
     /// <summary>
@@ -190,9 +233,9 @@ namespace DeviceChain.Sitepulse.Tasks
         /// <summary>One stretch of the network, from one node to a neighbour.</summary>
         public readonly struct EdgeInfo
         {
-            public EdgeInfo(double ax, double az, double bx, double bz, bool road, double sustainedPct)
+            public EdgeInfo(double ax, double az, double bx, double bz, bool road, double lane, double sustainedPct)
             {
-                Ax = ax; Az = az; Bx = bx; Bz = bz; IsRoad = road; SustainedGradePct = sustainedPct;
+                Ax = ax; Az = az; Bx = bx; Bz = bz; IsRoad = road; Lane = lane; SustainedGradePct = sustainedPct;
             }
 
             public double Ax { get; }
@@ -203,6 +246,12 @@ namespace DeviceChain.Sitepulse.Tasks
             /// <summary>A stretch of a road (otherwise a join across open ground).</summary>
             public bool IsRoad { get; }
 
+            /// <summary>How far each direction's lane runs from the centreline: none off a road, and none on a single-lane stretch.</summary>
+            public double Lane { get; }
+
+            /// <summary>A stretch of road a truck drives on its centreline, both ways: too narrow, too steep in a lane, or too near something for two lanes.</summary>
+            public bool SingleLane => IsRoad && Lane == 0.0;
+
             /// <summary>The steepest grade over any <see cref="Grade.WindowMetres"/> of it, in percent, on the ground.</summary>
             public double SustainedGradePct { get; }
         }
@@ -210,7 +259,7 @@ namespace DeviceChain.Sitepulse.Tasks
         struct Edge
         {
             public int To;
-            public double SustainedPct;
+            public double Lane, SustainedPct;
             public bool Road;
             public double Length, Factor, GradePct;
             public double Cost => Length / Factor;
@@ -228,7 +277,7 @@ namespace DeviceChain.Sitepulse.Tasks
         {
             for (var a = 0; a < adjacency.Count; a++)
                 foreach (var e in adjacency[a])
-                    if (a < e.To) yield return new EdgeInfo(nx[a], nz[a], nx[e.To], nz[e.To], e.Road, e.SustainedPct);
+                    if (a < e.To) yield return new EdgeInfo(nx[a], nz[a], nx[e.To], nz[e.To], e.Road, e.Lane, e.SustainedPct);
         }
 
         public int NodeCount => nx.Count;
@@ -254,11 +303,12 @@ namespace DeviceChain.Sitepulse.Tasks
                 var rz = new List<double>();
                 foreach (var rp in road.Points) { rx.Add(rp.X); rz.Add(rp.Z); }
                 var steep = Grade.PerLeg(ground, rx, rz);
+                var lanes = LegLanes(road, ground, site.Obstacles);
                 for (var i = 0; i < road.Points.Count; i++)
                 {
                     var p = road.Points[i];
                     var n = g.NodeAt(p.X, p.Y, p.Z);
-                    if (nodes.Count > 0 && nodes[nodes.Count - 1] != n) g.Connect(nodes[nodes.Count - 1], n, factor, steep[i - 1]);
+                    if (nodes.Count > 0 && nodes[nodes.Count - 1] != n) g.Connect(nodes[nodes.Count - 1], n, factor, lanes[i - 1], steep[i - 1]);
                     if (nodes.Count == 0 || nodes[nodes.Count - 1] != n) nodes.Add(n);
                 }
 
@@ -344,13 +394,112 @@ namespace DeviceChain.Sitepulse.Tasks
             return AddNode(x, y, z);
         }
 
+        /// <summary>
+        /// The lane each direction of a road keeps to on each of its stretches: the road's <see cref="RoadLine.LaneOffset"/>, or none
+        /// (the stretch is single-lane, and a truck drives its centreline) where the road is <see cref="RoadLine.SingleLane"/>, where the
+        /// lane of either direction is steeper than <see cref="Grade.MaxPct"/> (the inside of a curve is shorter than its centreline, so
+        /// it climbs more steeply), or where something standing on the site is within a lane and a haul truck's travel clearance of the
+        /// centreline. So a truck anywhere between the centreline and its lane is clear of everything by that clearance.
+        /// </summary>
+        static double[] LegLanes(RoadLine road, IHeightField ground, IReadOnlyList<Obstacle> obstacles)
+        {
+            var legs = Math.Max(0, road.Points.Count - 1);
+            var lanes = new double[legs];
+            var lane = road.LaneOffset;
+            if (legs == 0 || lane <= 0.0) return lanes;
+            var single = new bool[legs];
+
+            // each direction's lane, read on the ground as the slope a truck in it climbs
+            for (var dir = 0; dir < 2; dir++)
+            {
+                var b = new RouteBuilder();
+                var map = new List<int>();    // route leg -> road leg
+                var first = dir == 0 ? 0 : legs;
+                b.Start(road.Points[first].X, road.Points[first].Z);
+                double lx = road.Points[first].X, lz = road.Points[first].Z;
+                for (var k = 1; k <= legs; k++)
+                {
+                    var i = dir == 0 ? k : legs - k;
+                    var p = road.Points[i];
+                    if ((p.X - lx) * (p.X - lx) + (p.Z - lz) * (p.Z - lz) < 1e-8) continue;
+                    b.Leg(p.X, p.Z, 1.0, 0.0, lane);
+                    map.Add(dir == 0 ? i - 1 : i);
+                    lx = p.X;
+                    lz = p.Z;
+                }
+
+                var r = b.Build();
+                if (r.Legs == 0) continue;
+                var xs = new List<double>();
+                var zs = new List<double>();
+                var of = new List<int>();
+                var count = (int)Math.Ceiling(r.Length / 0.5);
+                for (var k = 0; k <= count; k++)
+                {
+                    var s = Math.Min(r.Length, k * 0.5);
+                    r.OffsetPointAt(s, -lane, out var x, out var z, out _);
+                    r.PointAt(s, out _, out _, out _, out var leg);
+                    xs.Add(x);
+                    zs.Add(z);
+                    of.Add(map[leg]);
+                }
+
+                var pct = Grade.PerLeg(ground, xs, zs);
+                for (var k = 0; k < pct.Length; k++)
+                    if (pct[k] > Grade.MaxPct) single[of[k]] = single[of[k + 1]] = true;
+            }
+
+            // nothing standing within a lane and a truck's clearance of the centreline
+            var reach = lane + ParkingLot.TravelRadius(Simulation.EquipmentKind.Hauler) + ParkingLot.TravelClearance;
+            for (var i = 0; i < legs && obstacles != null; i++)
+            {
+                RoadPoint a = road.Points[i], c = road.Points[i + 1];
+                var len = Math.Sqrt((c.X - a.X) * (c.X - a.X) + (c.Z - a.Z) * (c.Z - a.Z));
+                var n = Math.Max(1, (int)Math.Ceiling(len / 0.5));
+                for (var k = 0; k <= n && !single[i]; k++)
+                {
+                    double x = a.X + (c.X - a.X) * k / n, z = a.Z + (c.Z - a.Z) * k / n;
+                    foreach (var o in obstacles)
+                        if (o.Distance(x, z) < reach) { single[i] = true; break; }
+                }
+            }
+
+            for (var i = 0; i < legs; i++) lanes[i] = single[i] ? 0.0 : lane;
+            return lanes;
+        }
+
+        // the lane line a truck drives along a planned route is within the grade limit and, on a plan that avoids obstacles, comes no nearer
+        // anything standing than the route's own line does or than the clearance. Each road's own lanes were read in LegLanes, but that
+        // reads the road's surveyed points, and a route is built on the graph's nodes: a road end within NodeAt's merge tolerance of an
+        // earlier road's node is moved onto it (up to 1.4 m), and a route is what joins roads, turning from one onto another where the
+        // line cuts the corner inside both roads' lanes, over ground neither read. So both are read again here, on the line driven.
+        const double LaneSamplingTolerance = 0.05;   // how much nearer than the route's line a sampled lane line may read: the sampling, not a step toward it
+
+        static bool LaneLineDrivable(IHeightField ground, Route route, IReadOnlyList<Obstacle> avoid, double clearance)
+        {
+            var line = LaneLine.Build(route);
+            line.Polyline(1.0, out var xs, out var zs);
+            if (Grade.MaxSustained(ground, xs, zs) > Grade.MaxPct) return false;
+            if (avoid == null || avoid.Count == 0) return true;
+            for (var d = 0.0; d <= line.Length; d += 0.5)
+            {
+                if (Math.Abs(line.LateralAt(d)) < 1e-9) continue;
+                line.PointAt(d, out var x, out var z, out _, out _);
+                route.PointAt(line.CentrelineAt(d), out var cx, out var cz, out _, out _);
+                foreach (var o in avoid)
+                    if (o.Distance(x, z) < Math.Min(clearance, o.Distance(cx, cz)) - LaneSamplingTolerance) return false;
+            }
+
+            return true;
+        }
+
         double Dist(int a, int b) => Math.Sqrt((nx[a] - nx[b]) * (nx[a] - nx[b]) + (nz[a] - nz[b]) * (nz[a] - nz[b]));
 
         // a stretch of road: kept when the ground under it is within the grade limit
-        void Connect(int a, int b, double factor, double sustainedPct)
+        void Connect(int a, int b, double factor, double lane, double sustainedPct)
         {
             if (a == b || sustainedPct > Grade.MaxPct) return;
-            Add(a, b, factor, sustainedPct, true);
+            Add(a, b, factor, lane, sustainedPct, true);
         }
 
         // a join across open ground: kept when the straight line between the two is within the grade limit
@@ -359,7 +508,7 @@ namespace DeviceChain.Sitepulse.Tasks
             if (a == b) return false;
             var pct = Grade.MaxSustained(ground, new[] { nx[a], nx[b] }, new[] { nz[a], nz[b] });
             if (pct > Grade.MaxPct) return false;
-            Add(a, b, factor, pct, false);
+            Add(a, b, factor, 0.0, pct, false);
             return true;
         }
 
@@ -385,14 +534,14 @@ namespace DeviceChain.Sitepulse.Tasks
             return false;
         }
 
-        void Add(int a, int b, double factor, double sustainedPct, bool road)
+        void Add(int a, int b, double factor, double lane, double sustainedPct, bool road)
         {
             var len = Dist(a, b);
             var grade = len > 1e-6 ? (road ? ny[b] - ny[a] : ground.HeightAt(nx[b], nz[b]) - ground.HeightAt(nx[a], nz[a])) / len * 100.0 : 0;
             foreach (var e in adjacency[a])
                 if (e.To == b) return;
-            adjacency[a].Add(new Edge { To = b, Length = len, Factor = factor, GradePct = grade, SustainedPct = sustainedPct, Road = road });
-            adjacency[b].Add(new Edge { To = a, Length = len, Factor = factor, GradePct = -grade, SustainedPct = sustainedPct, Road = road });
+            adjacency[a].Add(new Edge { To = b, Length = len, Factor = factor, GradePct = grade, Lane = lane, SustainedPct = sustainedPct, Road = road });
+            adjacency[b].Add(new Edge { To = a, Length = len, Factor = factor, GradePct = -grade, Lane = lane, SustainedPct = sustainedPct, Road = road });
         }
 
         // the nearest few nodes a machine at the point can drive to over ground it can climb
@@ -468,8 +617,9 @@ namespace DeviceChain.Sitepulse.Tasks
                                + Math.Sqrt(Sq(nx[g] - gx) + Sq(nz[g] - gz)) / SpeedModel.OffRoadFactor;
                     if (cost >= bestCost) continue;
                     var candidate = Assemble(sx, sz, gx, gz, s, g, prev);
-                    // the stretches were each climbable; the whole of the way, read as a slope, must be too
+                    // the stretches were each climbable; the whole of the way, read as a slope, must be too, and so must the lane line driven along it
                     if (Grade.MaxSustained(ground, candidate.Xs, candidate.Zs) > Grade.MaxPct) continue;
+                    if (!LaneLineDrivable(ground, candidate, null, 0.0)) continue;
                     bestCost = cost;
                     best = candidate;
                 }
@@ -516,6 +666,7 @@ namespace DeviceChain.Sitepulse.Tasks
                     if (cost >= bestCost) continue;
                     var candidate = Assemble(s.Path, g.Path, s.Node, g.Node, prev);
                     if (Grade.MaxSustained(ground, candidate.Xs, candidate.Zs) > Grade.MaxPct) continue;
+                    if (!LaneLineDrivable(ground, candidate, avoid, clearance)) continue;
                     bestCost = cost;
                     best = candidate;
                 }
@@ -585,7 +736,7 @@ namespace DeviceChain.Sitepulse.Tasks
                 foreach (var e in adjacency[a])
                     if (e.To == c)
                     {
-                        b.Leg(nx[c], nz[c], e.Factor, e.GradePct);
+                        b.Leg(nx[c], nz[c], e.Factor, e.GradePct, e.Lane);
                         break;
                     }
             }
@@ -647,7 +798,7 @@ namespace DeviceChain.Sitepulse.Tasks
                 foreach (var e in adjacency[a])
                     if (e.To == c)
                     {
-                        b.Leg(nx[c], nz[c], e.Factor, e.GradePct);
+                        b.Leg(nx[c], nz[c], e.Factor, e.GradePct, e.Lane);
                         break;
                     }
             }
