@@ -306,7 +306,8 @@ function Load({
 // Render the parsed definition read-only, its slots resolved through the effective
 // manifest. VIEW-ONLY — no edit mode, no save, no react-rnd.
 
-function View({
+// Exported for its behaviour test (view-bindings.test.tsx); App is the only render site.
+export function View({
   loaded,
   authorities,
   onChange,

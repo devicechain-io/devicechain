@@ -294,8 +294,11 @@ export function useMeasurementStream(
     setTagged({ key, state: EMPTY }); // reset the live buffer whenever the datasource changes (or clears)
     if (!datasource) return;
 
+    // A callback for a selector the buffer has already moved past (a sink that answers
+    // after its subscription was released) leaves the buffer alone rather than re-tagging
+    // it to the old selector, which would blank the current one's values.
     const update = (fn: (prev: MeasurementStreamState) => MeasurementStreamState) =>
-      setTagged((prev) => ({ key, state: fn(prev.key === key ? prev.state : EMPTY) }));
+      setTagged((prev) => (prev.key === key ? { key, state: fn(prev.state) } : prev));
 
     return hub.subscribeWidget(datasource, {
       next: (sample) =>

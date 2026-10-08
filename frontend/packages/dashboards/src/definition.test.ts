@@ -122,6 +122,17 @@ describe('parseDashboardDefinition', () => {
     ).toThrow(/unknown type/);
   });
 
+  it('rejects a stored unbound datasource rather than rendering it as an empty widget', () => {
+    expect(() =>
+      parseDashboardDefinition({
+        widgets: [
+          { type: 'label', layout: { base: box() } },
+          { type: 'gauge', layout: { base: box() }, datasource: { kind: 'unbound', measurements: ['t'] } },
+        ],
+      }),
+    ).toThrow(/widgets\[1\]\.datasource has kind 'unbound'/);
+  });
+
   it('rejects a widget layout with no base box', () => {
     expect(() =>
       parseDashboardDefinition({ widgets: [{ type: 'label', layout: { tablet: box() } }] }),

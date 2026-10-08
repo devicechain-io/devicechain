@@ -192,6 +192,31 @@ describe('useMeasurementStream across a selector change', () => {
     expect(seen.length).toBeGreaterThan(0);
     for (const view of seen) expect(view).toEqual({ token: 'dev-b', value: undefined });
   });
+
+  it("ignores a late value from the previous selector's released subscription", () => {
+    // A data source that keeps every sink it was handed, released or not.
+    const sinks = new Map<string, WidgetStreamSink>();
+    const hub = {
+      subscribeWidget: (datasource: DatasourceSelector, s: WidgetStreamSink) => {
+        sinks.set(datasource.kind === 'device' ? datasource.deviceToken : '', s);
+        return () => {};
+      },
+    } as unknown as DashboardHub;
+    const deviceA: DatasourceSelector = { kind: 'device', deviceToken: 'dev-a', measurements: ['temperature'] };
+    const deviceB: DatasourceSelector = { kind: 'device', deviceToken: 'dev-b', measurements: ['temperature'] };
+    const { result, rerender } = renderHook(({ datasource }) => useMeasurementStream(hub, datasource), {
+      initialProps: { datasource: deviceA },
+    });
+
+    rerender({ datasource: deviceB });
+    act(() => sinks.get('dev-b')?.next({ ...sample('temperature', 12, '2026-01-01T00:00:01Z'), deviceToken: 'dev-b' }));
+    expect(result.current.latest.temperature?.value).toBe(12);
+
+    // dev-a's sink answers after it was released: dev-b's value stays.
+    act(() => sinks.get('dev-a')?.next(sample('temperature', 71, '2026-01-01T00:00:02Z')));
+    expect(result.current.latest.temperature?.value).toBe(12);
+    expect(result.current.samples.map((s) => s.value)).toEqual([12]);
+  });
 });
 
 describe('useAlarmStream', () => {

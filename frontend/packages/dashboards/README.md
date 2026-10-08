@@ -29,19 +29,24 @@ device" into what reads like an outage.
 One hub serves a whole board. Widgets subscribe to it; it does the deduplication.
 
 ```ts
-import { DashboardHub } from '@devicechain/dashboards';
+import { DashboardHub, resolveWidgetDatasource } from '@devicechain/dashboards';
 
 const hub = new DashboardHub({
   resolver,                 // how a selector becomes device tokens
   authorities: user.scopes, // what this viewer may do; drives hub.can(...)
 });
 
-const stop = hub.subscribeWidget(widget.datasource, {
+// The hub holds no slot bindings: resolve a widget's `slot` selector through them
+// first. A slot with no binding resolves to an explicit `unbound` selector, which the
+// hub answers with no data; a raw `slot` selector is an error.
+// It is undefined only for a widget that declares no datasource at all.
+const datasource = resolveWidgetDatasource(widget.datasource, bindings);
+const stop = datasource && hub.subscribeWidget(datasource, {
   next: (sample) => setLatest(sample),
 });
 
 // later
-stop();
+stop?.();
 hub.disposeAll();
 ```
 
