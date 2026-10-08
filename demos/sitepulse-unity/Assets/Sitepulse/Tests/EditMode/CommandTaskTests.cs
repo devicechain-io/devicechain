@@ -194,14 +194,21 @@ namespace DeviceChain.Sitepulse.Tests
         {
             var goals = new List<(string, double, double)>();
             var parking = CommandKit.Site.Spots[SiteGeometry.ParkingSpot];
+            // a slot on a bank steeper than a truck climbs has no route from anywhere (a command to it moves on to the next slot): these,
+            // exactly, on the quarry's ground; every other slot is reachable from every track, and that is what is asserted below
+            var unreachable = new Dictionary<string, int[]>
+            {
+                ["sp-zone-cut"] = new[] { 13 },
+                ["sp-zone-fill"] = new int[0],
+                ["sp-zone-yard"] = new[] { 3, 7 },
+            };
+            Assert.AreEqual(unreachable.Keys.OrderBy(k => k), CommandKit.Site.Zones.Select(z => z.Name).OrderBy(k => k), "every zone is listed");
             foreach (var z in CommandKit.Site.Zones)
             {
                 var slots = ParkingLot.Slots(z, z.CentreX, z.CentreZ);
-                // a slot on a bank steeper than a truck climbs has no route from anywhere (a command to it moves on to the next slot);
-                // the rest are reachable from every track, and that is what is asserted below
-                var reachable = slots.Where(s => CommandKit.Graph.Plan(parking.X, parking.Z, s.X, s.Z) != null).ToList();
-                Assert.GreaterOrEqual(reachable.Count * 4, slots.Count * 3, $"{z.Name}: most of its slots can be driven to");
-                foreach (var s in reachable) goals.Add(($"{z.Name}#{s.Index}", s.X, s.Z));
+                var cut = slots.Where(s => CommandKit.Graph.Plan(parking.X, parking.Z, s.X, s.Z) == null).Select(s => s.Index).OrderBy(i => i).ToArray();
+                Assert.AreEqual(unreachable[z.Name], cut, $"{z.Name}: the slots of its {slots.Count} no route reaches");
+                foreach (var s in slots.Where(s => !unreachable[z.Name].Contains(s.Index))) goals.Add(($"{z.Name}#{s.Index}", s.X, s.Z));
             }
 
             foreach (var spot in new[] { RouteGraph.QueueSpot, RouteGraph.BaySpot })
@@ -819,13 +826,16 @@ namespace DeviceChain.Sitepulse.Tests
                             for (var leg = 0; leg < route.Legs; leg++)
                             {
                                 if (Math.Abs(route.LegFactor(leg) - SpeedModel.OffRoadFactor) > 1e-9) continue;
-                                foreach (var (x, z) in Sampled(xs[leg], zs[leg], xs[leg + 1], zs[leg + 1]))
-                                    foreach (var o in obstacles)
-                                    {
-                                        // a leg that starts or ends nearer than the clearance (a road end beside a sign, a machine that starts inside a yard) goes no nearer than that
-                                        var need = Math.Min(Math.Min(clearance, Math.Min(o.Distance(xs[leg], zs[leg]), o.Distance(xs[leg + 1], zs[leg + 1]))), Math.Min(o.Distance(f.X, f.Z), o.Distance(slot.X, slot.Z)));
-                                        Assert.GreaterOrEqual(o.Distance(x, z), need - 1e-3, $"{kind} from ({f.X:0},{f.Z:0}) to {zone.Name} slot {slot.Index}: leg {leg} at ({x:0.0},{z:0.0}) is within reach of {o.Name}");
-                                    }
+                                var points = Sampled(xs[leg], zs[leg], xs[leg + 1], zs[leg + 1]).ToArray();
+                                foreach (var o in obstacles)
+                                {
+                                    // a leg that starts or ends nearer than the clearance (a road end beside a sign, a machine that starts inside a yard) goes no nearer than that
+                                    var need = Math.Min(Math.Min(clearance, Math.Min(o.Distance(xs[leg], zs[leg]), o.Distance(xs[leg + 1], zs[leg + 1]))), Math.Min(o.Distance(f.X, f.Z), o.Distance(slot.X, slot.Z)));
+                                    // every sample is checked; the message is written only for one that fails (24 million of them are checked)
+                                    foreach (var (x, z) in points)
+                                        if (o.Distance(x, z) < need - 1e-3)
+                                            Assert.Fail($"{kind} from ({f.X:0},{f.Z:0}) to {zone.Name} slot {slot.Index}: leg {leg} at ({x:0.0},{z:0.0}) is within reach of {o.Name}: {o.Distance(x, z):0.00} m, needs {need:0.00} m");
+                                }
                             }
                         }
 

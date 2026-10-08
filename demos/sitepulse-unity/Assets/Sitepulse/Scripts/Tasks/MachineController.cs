@@ -192,6 +192,13 @@ namespace DeviceChain.Sitepulse.Tasks
                 return;
             }
 
+            // off the ground the routes are graded over there is no slope to read, only a guess: nothing is planned from there
+            if (!graph.OnSite(body.X, body.Z))
+            {
+                Refuse(request, OutsideSite(body.X, body.Z));
+                return;
+            }
+
             if (request.Key == CommandKeys.GotoArea) BeginArea(request);
             else if (request.Key == CommandKeys.GotoRefuel) BeginRefuel(request);
             else Refuse(request, "unknown command " + request.Key);
@@ -283,6 +290,9 @@ namespace DeviceChain.Sitepulse.Tasks
             Phase = TaskPhase.ToDestination;
             TakeOver(request, route, route.Length, eta, TaskBudgets.EtaFactor * eta + TaskBudgets.AreaSlackSeconds, TaskBudgets.AreaWallCapSeconds, request.Area);
         }
+
+        static string OutsideSite(double x, double z) =>
+            "the machine is outside the site at (" + F0(x) + ", " + F0(z) + "): no route is planned over ground the site does not hold";
 
         // a refusal that says why: the planner drops every stretch over the grade limit, so a place only a steeper way leads to has no route
         static string NoRoute(string where) =>
@@ -506,6 +516,13 @@ namespace DeviceChain.Sitepulse.Tasks
             {
                 Mode = MachineMode.Parked;
                 timeline.Add(id, TimelineKinds.Returning, "no track of its own to return to");
+                return;
+            }
+
+            if (!graph.OnSite(body.X, body.Z))
+            {
+                Mode = MachineMode.Parked;
+                timeline.Add(id, TimelineKinds.Returning, OutsideSite(body.X, body.Z));
                 return;
             }
 

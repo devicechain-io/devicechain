@@ -11,6 +11,10 @@ namespace DeviceChain.Sitepulse.Tasks
     /// <summary>The ground's height anywhere on the site, in metres.</summary>
     public interface IHeightField
     {
+        /// <summary>The ground is known at (x, z): the point is on the site. Off it there is no height to read, only a guess.</summary>
+        bool Covers(double x, double z);
+
+        /// <summary>The height at a point the field <see cref="Covers"/>; a point off the site is refused, never extrapolated.</summary>
         double HeightAt(double x, double z);
     }
 
@@ -23,7 +27,7 @@ namespace DeviceChain.Sitepulse.Tasks
     {
         readonly float[,] h;
         readonly int res;
-        readonly double cell, x0, z0, baseY, range;
+        readonly double cell, x0, z0, size, baseY, range;
 
         /// <param name="normalised">Heights 0..1 indexed [row along z from the south, column along x from the west].</param>
         /// <param name="sizeMetres">Side of the square the grid covers.</param>
@@ -39,12 +43,17 @@ namespace DeviceChain.Sitepulse.Tasks
             cell = sizeMetres / (res - 1);
             this.x0 = x0;
             this.z0 = z0;
+            size = sizeMetres;
             this.baseY = baseY;
             range = rangeMetres;
         }
 
+        public bool Covers(double x, double z) => x >= x0 && x <= x0 + size && z >= z0 && z <= z0 + size;
+
         public double HeightAt(double x, double z)
         {
+            if (!Covers(x, z))
+                throw new ArgumentOutOfRangeException(nameof(x), $"({x:0.#}, {z:0.#}) is outside the site: the ground is known from ({x0:0}, {z0:0}) to ({x0 + size:0}, {z0 + size:0})");
             var c = (x - x0) / cell;
             var r = (z - z0) / cell;
             var c0 = Math.Max(0, Math.Min(res - 2, (int)Math.Floor(c)));
@@ -97,6 +106,9 @@ namespace DeviceChain.Sitepulse.Tasks
     /// (<see cref="WindowMetres"/>), and a step in the ground is a rise over a few metres (<see cref="StepMetres"/>) that a truck
     /// cannot take however short it is: a berm or a pit wall's lip. Both are reported on one scale, in percent, so one limit
     /// (<see cref="MaxPct"/>) covers them: a rise of <see cref="MaxStepPct"/> % over a step counts as <see cref="MaxPct"/> %.
+    /// A path shorter than a window or a step is read as one of that length (its rise over <see cref="WindowMetres"/> or
+    /// <see cref="StepMetres"/>), so a short join is not refused for a rise a longer one would take in its stride. A path any
+    /// part of which is off the site has no grade a truck can be sent along: it reads as infinitely steep.
     /// </summary>
     public static class Grade
     {
@@ -140,7 +152,16 @@ namespace DeviceChain.Sitepulse.Tasks
                 var s = k * step;
                 while (leg < xs.Count - 2 && s > cum[leg + 1]) leg++;
                 var t = cum[leg + 1] - cum[leg] > 1e-9 ? (s - cum[leg]) / (cum[leg + 1] - cum[leg]) : 1.0;
-                y[k] = ground.HeightAt(xs[leg] + (xs[leg + 1] - xs[leg]) * t, zs[leg] + (zs[leg + 1] - zs[leg]) * t);
+                double px = xs[leg] + (xs[leg + 1] - xs[leg]) * t, pz = zs[leg] + (zs[leg + 1] - zs[leg]) * t;
+                // off the site there is no ground to read, only an extrapolation of the edge: such a path is not driven
+                if (!ground.Covers(px, pz))
+                {
+                    if (legs != null)
+                        for (var q = 0; q < legs.Length; q++) legs[q] = double.PositiveInfinity;
+                    return double.PositiveInfinity;
+                }
+
+                y[k] = ground.HeightAt(px, pz);
                 legOf[k] = leg;
             }
 
@@ -149,9 +170,11 @@ namespace DeviceChain.Sitepulse.Tasks
                 var length = pass == 0 ? WindowMetres : StepMetres;
                 var scale = pass == 0 ? 1.0 : MaxPct / MaxStepPct;
                 var w = Math.Min(n, Math.Max(1, (int)Math.Round(length / step)));
+                // a path shorter than the window is one window: its rise is read over the window's length, not its own
+                var run = total < length ? length : w * step;
                 for (var k = 0; k + w <= n; k++)
                 {
-                    var g = Math.Abs(y[k + w] - y[k]) / (w * step) * 100.0 * scale;
+                    var g = Math.Abs(y[k + w] - y[k]) / run * 100.0 * scale;
                     if (g > worst) worst = g;
                     if (legs == null) continue;
                     for (var q = legOf[k]; q <= legOf[k + w]; q++)

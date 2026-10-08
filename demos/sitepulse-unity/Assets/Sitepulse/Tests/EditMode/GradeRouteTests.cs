@@ -19,6 +19,7 @@ namespace DeviceChain.Sitepulse.Tests
         {
             readonly Func<double, double, double> f;
             public Field(Func<double, double, double> f) { this.f = f; }
+            public bool Covers(double x, double z) => true;
             public double HeightAt(double x, double z) => f(x, z);
         }
 
@@ -28,6 +29,7 @@ namespace DeviceChain.Sitepulse.Tests
             readonly IHeightField inner;
             readonly double factor, reference;
             public Steeper(IHeightField inner, double factor) { this.inner = inner; this.factor = factor; reference = inner.HeightAt(-92, -40); }
+            public bool Covers(double x, double z) => inner.Covers(x, z);
             public double HeightAt(double x, double z) => reference + (inner.HeightAt(x, z) - reference) * factor;
         }
 
@@ -74,6 +76,61 @@ namespace DeviceChain.Sitepulse.Tests
             Assert.AreEqual(0.0, legs[0], 1e-9, "flat leg");
             Assert.Greater(legs[2], Grade.MaxPct);
             Assert.Greater(legs[3], Grade.MaxPct);
+        }
+
+        [Test]
+        public void AWindowThatRunsFromOneLegIntoTheNextNamesBoth()
+        {
+            // a 1.5 m lip half a metre into the second leg: every window over it starts on the first leg and ends on the second
+            var ground = new Field((x, z) => x < 20.5 ? 0.0 : 1.5);
+            var legs = Grade.PerLeg(ground, new[] { 0.0, 20.0, 40.0, 60.0 }, new double[4]);
+            Assert.Greater(legs[0], Grade.MaxPct, "the leg the steep windows start on");
+            Assert.Greater(legs[1], Grade.MaxPct, "the leg they end on, which holds the lip");
+            Assert.AreEqual(0.0, legs[2], 1e-9, "a leg no window over the lip reaches");
+        }
+
+        [Test]
+        public void APathShorterThanAWindowIsReadOverAWindowSoAShortJoinIsNotRefusedForItsLength()
+        {
+            // 1 m over 7 m: 14.3 % over its own length, but a slope is the rise over 10 m, and a truck that climbs 10 % climbs this
+            Assert.AreEqual(10.0, Grade.MaxSustained(new Field((x, z) => x / 7.0), new[] { 0.0, 7.0 }, new[] { 0.0, 0.0 }), 1e-6);
+            // 0.5 m over 3 m: 5 % over a window, and over a step 0.5 m in 4 m (12.5 %, 6 % on the common scale)
+            Assert.AreEqual(6.0, Grade.MaxSustained(new Field((x, z) => x / 6.0), new[] { 0.0, 3.0 }, new[] { 0.0, 0.0 }), 1e-6);
+            // the step still sees a lip however short the path is: 1.1 m in 3 m is 27.5 % over a step (13.2 %)
+            Assert.AreEqual(13.2, Grade.MaxSustained(new Field((x, z) => x * 1.1 / 3.0), new[] { 0.0, 3.0 }, new[] { 0.0, 0.0 }), 1e-6);
+            // and a path as long as a window is read as it was
+            Assert.AreEqual(12.5, Grade.MaxSustained(new Field((x, z) => 0.125 * x), new[] { 0.0, 10.0 }, new[] { 0.0, 0.0 }), 1e-6);
+        }
+
+        [Test]
+        public void APointOffTheSiteHasNoHeightAndNothingIsPlannedFromIt()
+        {
+            var ground = CommandKit.Ground;
+            Assert.IsTrue(ground.Covers(511.0, -511.0), "the site's ground runs to its edges");
+            Assert.IsFalse(ground.Covers(600.0, 0.0));
+            Assert.IsFalse(ground.Covers(0.0, -513.0));
+            Assert.Throws<ArgumentOutOfRangeException>(() => ground.HeightAt(600.0, 0.0), "its height is refused, never guessed from the edge");
+            Assert.AreEqual(double.PositiveInfinity, Grade.MaxSustained(ground, new[] { 500.0, 600.0 }, new[] { 0.0, 0.0 }), "a path off the site is not one a truck is sent along");
+            Assert.IsTrue(Grade.PerLeg(ground, new[] { 400.0, 500.0, 600.0 }, new[] { 0.0, 0.0, 0.0 }).All(double.IsPositiveInfinity));
+            var queue = CommandKit.Site.Spots[RouteGraph.QueueSpot];
+            Assert.IsFalse(CommandKit.Graph.OnSite(600.0, 0.0));
+            Assert.IsTrue(CommandKit.Graph.OnSite(queue.X, queue.Z));
+            Assert.IsNull(CommandKit.Graph.Plan(600.0, 0.0, queue.X, queue.Z));
+            Assert.IsNull(CommandKit.Graph.Plan(queue.X, queue.Z, 600.0, 0.0));
+        }
+
+        [Test]
+        public void ACommandToAMachineOffTheSiteIsRefusedAsOutsideTheSite()
+        {
+            foreach (var (key, area) in new[] { ("goto-area", "sp-zone-cut"), ("goto-refuel", (string)null) })
+            {
+                var r = new Rig("SP-HL-0003", EquipmentKind.Hauler, 600, 0, withTrack: false);
+                var cmd = r.Send(key, area);
+                var result = cmd.Completion.Answer();
+                Assert.IsFalse(result.Succeeded, key);
+                StringAssert.StartsWith("the machine is outside the site at (600, 0)", result.Reason, key);
+                Assert.AreEqual(0, r.Body.Detaches, "it never left its place for a drive over ground nobody knows");
+            }
         }
 
         // ---- the network
@@ -199,6 +256,30 @@ namespace DeviceChain.Sitepulse.Tests
             StringAssert.StartsWith("no drivable route to sp-zone-cut", result.Reason);
             StringAssert.Contains("12 % grade", result.Reason, "it names why");
             Assert.AreEqual(0, r.Body.Detaches, "the machine never left its place for a drive that cannot be made");
+        }
+
+        [Test]
+        public void ACommandWhoseNearestSlotOnlyASteeperWayReachesParksInTheNextOne()
+        {
+            var road = new RoadLine("r", "haul-road", 12.0, new[] { new RoadPoint(0, 0, 0), new RoadPoint(200, 0, 0) });
+            var zone = new Rect2("z-test", 100, 160, 20, 60);
+            var site = new SiteGeometry(new[] { road }, new Dictionary<string, Spot>(), new List<Rect2> { zone }, new List<Rect2>());
+            const double startX = 130, startZ = 0;
+            var slots = ParkingLot.Slots(zone, startX, startZ, ParkingLot.Margin(EquipmentKind.Hauler), site.Obstacles, ParkingLot.FootprintRadius(EquipmentKind.Hauler));
+            Assert.GreaterOrEqual(slots.Count, 2, "premise: a zone of several slots");
+            var first = slots[0];
+            // the slot nearest the truck stands on a 3 m mesa, a wall to a truck on every side
+            var ground = new Field((x, z) => Math.Abs(x - first.X) < 4.0 && Math.Abs(z - first.Z) < 4.0 ? 3.0 : 0.0);
+            var graph = RouteGraph.Build(site, ground);
+            Assert.IsNull(graph.Plan(startX, startZ, first.X, first.Z), "premise: the nearest slot has no route");
+            Assert.IsNotNull(graph.Plan(startX, startZ, slots[1].X, slots[1].Z), "premise: the next one has");
+
+            var r = new Rig("SP-HL-0003", EquipmentKind.Hauler, startX, startZ, withTrack: false, graph: graph, site: site);
+            var cmd = r.Send("goto-area", "z-test");
+            Assert.IsFalse(cmd.IsComplete, "accepted: it is on its way, not refused because its first choice cannot be driven to");
+            Assert.AreEqual(TaskPhase.ToDestination, r.Controller.Phase);
+            Assert.AreEqual(slots[1].X, r.Controller.CurrentRoute.EndX, 1e-6, "to the next slot");
+            Assert.AreEqual(slots[1].Z, r.Controller.CurrentRoute.EndZ, 1e-6);
         }
 
         [Test]

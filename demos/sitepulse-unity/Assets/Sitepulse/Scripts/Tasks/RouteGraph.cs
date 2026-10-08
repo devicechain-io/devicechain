@@ -413,6 +413,9 @@ namespace DeviceChain.Sitepulse.Tasks
         }
 
         /// <summary>The network node of a named spot, or -1.</summary>
+        /// <summary>The point is on the site: the ground under it is known, so a route from or to it can be graded. Off it nothing is planned.</summary>
+        public bool OnSite(double x, double z) => ground.Covers(x, z);
+
         public int SpotNode(string name) => spotNodes.TryGetValue(name, out var n) ? n : -1;
 
         public bool TryNodePosition(int node, out double x, out double z)

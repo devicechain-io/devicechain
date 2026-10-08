@@ -159,7 +159,7 @@ namespace DeviceChain.Sitepulse.Tests
         public double Now;
         long sequence;
 
-        public Rig(string id = "SP-HL-0003", EquipmentKind kind = EquipmentKind.Hauler, double? x = null, double? z = null, bool withTrack = true, RouteGraph graph = null)
+        public Rig(string id = "SP-HL-0003", EquipmentKind kind = EquipmentKind.Hauler, double? x = null, double? z = null, bool withTrack = true, RouteGraph graph = null, SiteGeometry site = null)
         {
             Id = id;
             var track = withTrack ? CommandKit.Track(0) : null;
@@ -167,7 +167,7 @@ namespace DeviceChain.Sitepulse.Tests
             var start = track != null ? track[300] : new TrackPoint(0, 0, 0, 0);
             Body = new FakeBody(id, kind, x ?? start.X, z ?? start.Z, start.HeadingDegrees, track);
             Model = new MachineModel(kind, id);
-            Controller = new MachineController(Body, Model, CommandKit.Site, graph ?? CommandKit.Graph, Bay, Parking, Timeline, World);
+            Controller = new MachineController(Body, Model, site ?? CommandKit.Site, graph ?? CommandKit.Graph, Bay, Parking, Timeline, World);
         }
 
         public TaskRequest Send(string key, string area = null, string token = null, long? seq = null)
