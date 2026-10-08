@@ -1,0 +1,32 @@
+<!--
+  Copyright The DeviceChain Authors
+  SPDX-License-Identifier: Apache-2.0
+
+  Runs the package's Tests/Runtime/ files under NUnit on net8.0. The Unity Test Runner runs
+  the very same files in the Editor, so they keep to the NUnit API both runners share; the
+  Tests.Compat project enforces that subset at compile time.
+-->
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <RootNamespace>DeviceChain.Sim.Traffic.Tests</RootNamespace>
+    <IsTestProject>true</IsTestProject>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />
+    <PackageReference Include="NUnit" Version="3.14.0" />
+    <PackageReference Include="NUnit3TestAdapter" Version="4.6.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../DeviceChain.Sim.Traffic/DeviceChain.Sim.Traffic.csproj" />
+    <ProjectReference Include="../DeviceChain.Sim.Traffic.Testing/DeviceChain.Sim.Traffic.Testing.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Include="../../Tests/Runtime/**/*.cs" />
+  </ItemGroup>
+
+</Project>

@@ -1664,6 +1664,65 @@ jobs:
         run: ./sdks/unity/tools/UnityCompileCheck/compile-check.sh
 
   # ---------------------------------------------------------------------------
+  # Shared simulation traffic library (demos/shared/io.devicechain.sim-traffic): a source
+  # Unity package whose Dotnet~/ sidecar compiles the SAME .cs files Unity compiles. No CI job
+  # runs Unity, so this is the coverage those files get:
+  #   - Runtime/ and Testing/ for netstandard2.1 + net8.0 at LangVersion 9, warnings as
+  #     errors, AOT analyzers on net8.0 — how Unity compiles them (-langversion:9.0,
+  #     .NET Standard 2.1), so a C# 10 construct fails here, not in the Editor;
+  #   - Tests/ run under NUnit on net8.0, and compiled again for netstandard2.1 against the
+  #     oldest NUnit 3.x with a .NET Standard build (Tests.Compat), the closest public stand-in
+  #     for the NUnit 3.5 fork the Unity Test Runner uses. A stand-in, not the fork: the
+  #     package's Unity host project run in batch mode remains the final check.
+  # ---------------------------------------------------------------------------
+  sim-traffic:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: demos/shared/io.devicechain.sim-traffic/Dotnet~
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Restore
+        run: dotnet restore
+
+      - name: Build (runtime, test kit, tests, and the old-NUnit compile)
+        run: dotnet build --no-restore -c Release
+
+      # A non-terminating loop inside the library is bounded here, as a named hang, rather
+      # than by the job's six-hour ceiling.
+      - name: Test
+        run: dotnet test --no-build -c Release --blame-hang-timeout 2m
+
+      # One set of files must mean one behaviour on every runtime, so the shared sources carry
+      # no conditional compilation at all. 🔴 The exit status is checked EXACTLY: grep exits 1
+      # for "no match", 0 for a match, and 2 for a bad path or a read error — and 2 must fail
+      # too, or a renamed folder would turn this into a check of nothing that reports clean.
+      - name: No conditional compilation in the shared sources
+        run: |
+          set +e
+          grep -rnE '^\s*#\s*(el)?if\b' ../Runtime ../Testing ../Tests
+          rc=$?
+          set -e
+          [ "$rc" -eq 1 ] || { echo "::error::grep rc=$rc (0 = found a directive above, 2 = bad path or read error)"; exit 1; }
+          echo "no #if/#elif in Runtime/, Testing/ or Tests/"
+
+      # Unity imports the package from these files with whatever .meta files are committed;
+      # a missing one gets a new GUID on every machine. The self-test runs first so the green
+      # run below is one that could have been red.
+      - name: Unity .meta check self-test
+        working-directory: .
+        run: hack/check-unity-metas.sh --self-test
+
+      - name: Every package file and folder has a committed .meta
+        working-directory: .
+        run: hack/check-unity-metas.sh demos/shared/io.devicechain.sim-traffic
+
+  # ---------------------------------------------------------------------------
   # Helm chart: lint and template render.
   # ---------------------------------------------------------------------------
   helm:
@@ -2393,6 +2452,7 @@ jobs:
       - frontend
       - csharp
       - unity-compile-check
+      - sim-traffic
       - helm
       - opentofu
       - image-smoke

@@ -1,0 +1,42 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+# Copyright The DeviceChain Authors
+# SPDX-License-Identifier: Apache-2.0
+VisualStudioVersion = 17.0.31903.59
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DeviceChain.Sim.Traffic", "DeviceChain.Sim.Traffic\DeviceChain.Sim.Traffic.csproj", "{37EDEF57-3C11-43FD-B17F-352197D9C0E2}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DeviceChain.Sim.Traffic.Testing", "DeviceChain.Sim.Traffic.Testing\DeviceChain.Sim.Traffic.Testing.csproj", "{0AF3F140-F2B1-4041-AA83-4DFE83D7E731}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DeviceChain.Sim.Traffic.Tests", "DeviceChain.Sim.Traffic.Tests\DeviceChain.Sim.Traffic.Tests.csproj", "{C15A3FFC-EBD8-45C0-97CE-16622A58CF63}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DeviceChain.Sim.Traffic.Tests.Compat", "DeviceChain.Sim.Traffic.Tests.Compat\DeviceChain.Sim.Traffic.Tests.Compat.csproj", "{B789BCBE-DF49-4B79-9BA3-86AEEC7622A4}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{37EDEF57-3C11-43FD-B17F-352197D9C0E2}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{37EDEF57-3C11-43FD-B17F-352197D9C0E2}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{37EDEF57-3C11-43FD-B17F-352197D9C0E2}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{37EDEF57-3C11-43FD-B17F-352197D9C0E2}.Release|Any CPU.Build.0 = Release|Any CPU
+		{0AF3F140-F2B1-4041-AA83-4DFE83D7E731}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{0AF3F140-F2B1-4041-AA83-4DFE83D7E731}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{0AF3F140-F2B1-4041-AA83-4DFE83D7E731}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{0AF3F140-F2B1-4041-AA83-4DFE83D7E731}.Release|Any CPU.Build.0 = Release|Any CPU
+		{C15A3FFC-EBD8-45C0-97CE-16622A58CF63}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{C15A3FFC-EBD8-45C0-97CE-16622A58CF63}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{C15A3FFC-EBD8-45C0-97CE-16622A58CF63}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{C15A3FFC-EBD8-45C0-97CE-16622A58CF63}.Release|Any CPU.Build.0 = Release|Any CPU
+		{B789BCBE-DF49-4B79-9BA3-86AEEC7622A4}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{B789BCBE-DF49-4B79-9BA3-86AEEC7622A4}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{B789BCBE-DF49-4B79-9BA3-86AEEC7622A4}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{B789BCBE-DF49-4B79-9BA3-86AEEC7622A4}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+EndGlobal

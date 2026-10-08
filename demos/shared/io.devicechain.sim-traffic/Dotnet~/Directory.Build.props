@@ -1,0 +1,27 @@
+<!--
+  Copyright The DeviceChain Authors
+  SPDX-License-Identifier: Apache-2.0
+
+  Build settings for the dotnet sidecar of io.devicechain.sim-traffic. The projects in this
+  folder compile the SAME .cs files Unity compiles from Runtime/, Testing/ and Tests/, so the
+  settings mirror how Unity builds them:
+
+  - LangVersion 9: Unity 6 compiles with -langversion:9.0. A C# 10+ construct (file-scoped
+    namespace, global using, record struct, raw string) must fail HERE, before Unity sees it.
+  - netstandard2.1 is the API surface Unity exposes (apiCompatibilityLevel .NET Standard 2.1).
+  - Nullable disabled: Unity compiles these files without nullable annotations.
+  - ImplicitUsings disabled: Unity has no implicit global usings, so a file that compiles here
+    only thanks to one would not compile there.
+-->
+<Project>
+  <PropertyGroup>
+    <LangVersion>9</LangVersion>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <Deterministic>true</Deterministic>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <IsPackable>false</IsPackable>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+  </PropertyGroup>
+</Project>

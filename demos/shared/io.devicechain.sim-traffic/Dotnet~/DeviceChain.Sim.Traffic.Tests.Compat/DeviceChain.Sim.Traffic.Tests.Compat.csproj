@@ -1,0 +1,35 @@
+<!--
+  Copyright The DeviceChain Authors
+  SPDX-License-Identifier: Apache-2.0
+
+  Compile-only. Builds the package's Tests/Runtime/ files for netstandard2.1 against the oldest
+  NUnit 3.x that has a .NET Standard build. Unity's own NUnit fork (com.unity.ext.nunit) is based
+  on NUnit 3.5, but 3.5.0 ships .NET Framework assemblies only and does not restore for
+  netstandard; 3.6.0 is the first that does, and the closest public stand-in for the fork. So a
+  test that uses an API only newer NUnit has fails the build here rather than in the Editor. It
+  is a stand-in, not the fork itself: the Unity batch-mode test run of the host project remains
+  the final check. Nothing here is run.
+-->
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>netstandard2.1</TargetFramework>
+    <RootNamespace>DeviceChain.Sim.Traffic.Tests</RootNamespace>
+    <AssemblyName>DeviceChain.Sim.Traffic.Tests.Compat</AssemblyName>
+    <IsTestProject>false</IsTestProject>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="NUnit" Version="[3.6.0]" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../DeviceChain.Sim.Traffic/DeviceChain.Sim.Traffic.csproj" />
+    <ProjectReference Include="../DeviceChain.Sim.Traffic.Testing/DeviceChain.Sim.Traffic.Testing.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Include="../../Tests/Runtime/**/*.cs" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,9 @@
+{
+  "dependencies": {
+    "com.unity.test-framework": "1.7.0",
+    "io.devicechain.sim-traffic": "file:../../io.devicechain.sim-traffic"
+  },
+  "testables": [
+    "io.devicechain.sim-traffic"
+  ]
+}

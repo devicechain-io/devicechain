@@ -1,0 +1,23 @@
+# Copyright The DeviceChain Authors
+# SPDX-License-Identifier: Apache-2.0
+#
+# Unity-generated and machine-local state, rebuilt by the Editor on open.
+/[Ll]ibrary/
+/[Tt]emp/
+/[Oo]bj/
+/[Ll]ogs/
+/[Uu]ser[Ss]ettings/
+/[Bb]uilds/
+# The project has no assets of its own: it only loads the package. Unity refuses a
+# -projectPath with no Assets folder, so the folder is kept (by .gitkeep) and its
+# contents are not.
+/Assets/*
+!/Assets/.gitkeep
+*.csproj
+*.sln
+*.slnx
+*.user
+.vs/
+.vscode/
+.idea/
+/test-results*.xml
