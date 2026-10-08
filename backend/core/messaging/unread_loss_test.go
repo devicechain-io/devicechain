@@ -5,6 +5,8 @@ package messaging
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -120,8 +122,61 @@ func (g *unreadRig) read(n int) []uint64 {
 	return seqs
 }
 
+// sample runs the sampler's pass once the broker has counted every stored message against
+// the rig's durable. A PubAck is sent BEFORE the stream signals its consumers, and NumPending
+// is counted from that signal, so a pass straight after a publish can read a message or two
+// low (CI saw 48 of 50). Production samples every few seconds and its alerts have a margin
+// for that; a test asserting an exact ratio does not. The rule is awaitConsumerCounts's:
+// NumPending must equal what the stream holds past max(Delivered.Stream, FirstSeq-1). Every
+// rig's durable matches every message of its stream, and nothing is deleted from the middle,
+// so the rule holds whenever the broker has caught up. When it never does, the wait fails
+// with what it last saw rather than sampling a number that only looks plausible.
 func (g *unreadRig) sample() {
+	g.t.Helper()
+	g.awaitCounted()
 	g.nmgr.sampleNow(context.Background())
+}
+
+// sampleLive runs the pass as it is, mid-traffic, as production's timer does: for a test
+// that samples while it publishes and reads, from a goroutine that is not the test's, where
+// waiting for the counts to settle would never end and could not fail the test anyway.
+func (g *unreadRig) sampleLive() {
+	g.nmgr.sampleNow(context.Background())
+}
+
+func (g *unreadRig) awaitCounted() {
+	g.t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	var last string
+	for {
+		st, err := g.nmgr.js.StreamInfo(g.stream)
+		if errors.Is(err, nats.ErrStreamNotFound) {
+			return // nothing to count: a test that deleted the stream samples its absence
+		} else if err != nil {
+			last = fmt.Sprintf("stream info: %v", err)
+		} else if ci, err := g.nmgr.js.ConsumerInfo(g.stream, g.durable); errors.Is(err, nats.ErrConsumerNotFound) {
+			return // nothing to count against: a test that deleted the durable samples its absence
+		} else if err != nil {
+			last = fmt.Sprintf("consumer info: %v", err)
+		} else {
+			from := ci.Delivered.Stream
+			if st.State.FirstSeq > 0 {
+				from = max(from, st.State.FirstSeq-1)
+			}
+			want := uint64(0)
+			if st.State.LastSeq > from {
+				want = st.State.LastSeq - from
+			}
+			if ci.NumPending == want {
+				return
+			}
+			last = fmt.Sprintf("%s pending %d, want %d", g.durable, ci.NumPending, want)
+		}
+		if time.Now().After(deadline) {
+			g.t.Fatalf("the broker had not counted every stored message against the durable after 10s: %s", last)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
 }
 
 // series reads one per-durable series from the registry the service's /metrics serves.
@@ -243,7 +298,7 @@ func TestLiveLaggingDurableLossIsCounted(t *testing.T) {
 				mu.Lock()
 				working := len(delivered) > 0 && !delivered[published]
 				mu.Unlock()
-				g.sample()
+				g.sampleLive()
 				if !working {
 					continue
 				}
