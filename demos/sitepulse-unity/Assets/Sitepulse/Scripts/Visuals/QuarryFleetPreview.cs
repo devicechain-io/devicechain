@@ -3,6 +3,7 @@
 
 using System;
 using System.Collections.Generic;
+using DeviceChain.Sitepulse.Tasks;
 using UnityEngine;
 
 namespace DeviceChain.Sitepulse.Visuals
@@ -60,14 +61,15 @@ namespace DeviceChain.Sitepulse.Visuals
             public float offset;
         }
 
-        const int Stride = 8;   // x, z, heading, travel, p1, p2, steer, flag
-
         sealed class Unit
         {
             public MachineRig rig;
             public MachineEffects effects;
             public Track track;
-            public float offset, travel;
+            public float travel;
+
+            /// <summary>The machine's routine track as it is played: its clock, its rate and its frames (the class the EditMode bodies play theirs through).</summary>
+            public TrackPlayer player;
             public bool posed;
             public float halfLength, halfWidth;
             public bool detached;
@@ -184,7 +186,7 @@ namespace DeviceChain.Sitepulse.Visuals
                     fx = go.AddComponent<MachineEffects>();
                     fx.Bind(rig, effects);
                 }
-                units.Add(new Unit { rig = rig, effects = fx, track = data.tracks[m.track], offset = m.offset, halfLength = hl, halfWidth = hw, dusty = dusty });
+                units.Add(new Unit { rig = rig, effects = fx, track = data.tracks[m.track], player = new TrackPlayer(data.tracks[m.track].data, data.dt, data.tracks[m.track].period, m.offset), halfLength = hl, halfWidth = hw, dusty = dusty });
             }
             Seek(time);
         }
@@ -202,10 +204,22 @@ namespace DeviceChain.Sitepulse.Visuals
         void Update()
         {
             if (!Application.isPlaying) return;
-            time += Time.deltaTime * timeScale;
+            Play(Time.deltaTime * timeScale);
+        }
+
+        /// <summary>
+        /// One frame of play: the scene clock moves on by <paramref name="step"/> seconds and every machine on its track is posed
+        /// at its own clock, which runs at the rate the task layer set for it (<see cref="SetTrackRate"/>).
+        /// </summary>
+        public void Play(float step)
+        {
+            time += step;
+            // a track held back plays less of itself: its clock is put back by what it did not play
+            foreach (var u in units)
+                if (!u.detached) u.player.Advance(step);
             Seek(time);
             foreach (var u in units)
-                if (u.effects != null) u.effects.Step(Time.deltaTime * timeScale, false);
+                if (u.effects != null) u.effects.Step(step, false);
         }
 
         /// <summary>
@@ -244,6 +258,7 @@ namespace DeviceChain.Sitepulse.Visuals
             var u = Find(id);
             if (u == null || u.detached) return;
             u.detached = true;
+            u.player.Detach();
             var rig = u.rig;
             switch (rig.Kind)
             {
@@ -310,6 +325,13 @@ namespace DeviceChain.Sitepulse.Visuals
             return true;
         }
 
+        /// <summary>How fast the machine's routine track plays, from 0 (held where it is) to 1 (the track's own pace; see <see cref="TrackPlayer.Rate"/>). A machine that is off its track ignores it.</summary>
+        public void SetTrackRate(string id, float rate)
+        {
+            var u = Find(id);
+            if (u != null && !u.detached) u.player.SetRate(rate);
+        }
+
         /// <summary>The place on the machine's own track nearest to a point: its position, heading and how far into the loop it is.</summary>
         public bool TryNearestTrackPoint(string id, float x, float z, out Vector2 position, out float heading, out float trackSeconds)
         {
@@ -318,20 +340,10 @@ namespace DeviceChain.Sitepulse.Visuals
             trackSeconds = 0f;
             var u = Find(id);
             if (u == null || data == null) return false;
-            var tr = u.track;
-            int frames = tr.data.Length / Stride;
-            int best = -1;
-            float bestD = float.MaxValue;
-            for (int i = 0; i < frames; i++)
-            {
-                float dx = tr.data[i * Stride] - x, dz = tr.data[i * Stride + 1] - z;
-                float d = dx * dx + dz * dz;
-                if (d < bestD) { bestD = d; best = i; }
-            }
-            if (best < 0) return false;
-            position = new Vector2(tr.data[best * Stride], tr.data[best * Stride + 1]);
-            heading = tr.data[best * Stride + 2];
-            trackSeconds = best * data.dt;
+            if (!u.player.TryNearest(x, z, out var p)) return false;
+            position = new Vector2((float)p.X, (float)p.Z);
+            heading = (float)p.HeadingDegrees;
+            trackSeconds = (float)p.TrackSeconds;
             return true;
         }
 
@@ -340,7 +352,7 @@ namespace DeviceChain.Sitepulse.Visuals
         {
             var u = Find(id);
             if (u == null || !u.detached) return;
-            u.offset = time - trackSeconds;
+            u.player.Attach(time, trackSeconds);
             u.posed = false;
             u.detached = false;
             Seek(time);
@@ -366,39 +378,31 @@ namespace DeviceChain.Sitepulse.Visuals
             foreach (var u in units)
             {
                 if (u.detached) continue;
-                var tr = u.track;
-                int frames = tr.data.Length / Stride;
-                float ft = Mathf.Repeat(t - u.offset, tr.period) / data.dt;
-                int i = Mathf.Min((int)ft, frames - 1), j = (i + 1) % frames;
-                float w = ft - (int)ft;
-                float V(int k) => Mathf.Lerp(tr.data[i * Stride + k], tr.data[j * Stride + k], w);
-                float x = V(0), z = V(1);
-                float heading = tr.data[i * Stride + 2] + Mathf.DeltaAngle(tr.data[i * Stride + 2], tr.data[j * Stride + 2]) * w;
-                float travel = j == 0 ? tr.data[i * Stride + 3] : V(3);
-                Place(u, x, z, heading);
+                var f = u.player.SampleAt(t);
+                Place(u, f.X, f.Z, f.Heading);
                 var rig = u.rig;
                 if (u.posed)
                 {
-                    float d = travel - u.travel;
+                    float d = f.Travel - u.travel;
                     if (Mathf.Abs(d) < 50f) rig.AddTravel(d);   // a jump means the track looped
                 }
-                u.travel = travel;
+                u.travel = f.Travel;
                 u.posed = true;
                 switch (rig.Kind)
                 {
                     case MachineKind.Dozer:
-                        rig.bladeArm = V(4);
-                        rig.ripper = V(5);
+                        rig.bladeArm = f.P1;
+                        rig.ripper = f.P2;
                         break;
                     case MachineKind.Loader:
-                        rig.boom = V(4);
-                        rig.bucket = V(5);
-                        rig.steer = V(6);
+                        rig.boom = f.P1;
+                        rig.bucket = f.P2;
+                        rig.steer = f.Steer;
                         break;
                     case MachineKind.Hauler:
-                        rig.dump = V(4);
-                        rig.steer = V(6);
-                        rig.loaded = tr.data[i * Stride + 7] > 0.5f;
+                        rig.dump = f.P1;
+                        rig.steer = f.Steer;
+                        rig.loaded = f.Loaded;
                         break;
                 }
                 if (!Application.isPlaying) rig.Apply();
