@@ -1,0 +1,27 @@
+<!--
+  Copyright The DeviceChain Authors
+  SPDX-License-Identifier: Apache-2.0
+
+  The runtime assembly, compiled from the package's Runtime/ folder (the same files Unity
+  compiles through DeviceChain.Sim.Traffic.asmdef, which has no engine references).
+-->
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFrameworks>netstandard2.1;net8.0</TargetFrameworks>
+    <RootNamespace>DeviceChain.Sim.Traffic</RootNamespace>
+    <AssemblyName>DeviceChain.Sim.Traffic</AssemblyName>
+  </PropertyGroup>
+
+  <!-- The trim and AOT analyzers only run on a target that supports them. The library must
+       stay free of reflection and runtime code generation, since Unity players run it under
+       IL2CPP. -->
+  <PropertyGroup Condition="'$(TargetFramework)' == 'net8.0'">
+    <IsAotCompatible>true</IsAotCompatible>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="../../Runtime/**/*.cs" />
+  </ItemGroup>
+
+</Project>

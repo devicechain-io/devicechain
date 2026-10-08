@@ -1,0 +1,28 @@
+<!--
+  Copyright The DeviceChain Authors
+  SPDX-License-Identifier: Apache-2.0
+
+  The test kit consumers use in their own tests, compiled from the package's Testing/ folder.
+  It has no NUnit dependency, so it could never pull a test framework into a player build.
+-->
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFrameworks>netstandard2.1;net8.0</TargetFrameworks>
+    <RootNamespace>DeviceChain.Sim.Traffic.Testing</RootNamespace>
+    <AssemblyName>DeviceChain.Sim.Traffic.Testing</AssemblyName>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(TargetFramework)' == 'net8.0'">
+    <IsAotCompatible>true</IsAotCompatible>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../DeviceChain.Sim.Traffic/DeviceChain.Sim.Traffic.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Include="../../Testing/**/*.cs" />
+  </ItemGroup>
+
+</Project>

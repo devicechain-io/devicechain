@@ -1,0 +1,18 @@
+{
+    "name": "DeviceChain.Sim.Traffic.Testing",
+    "rootNamespace": "DeviceChain.Sim.Traffic.Testing",
+    "references": [
+        "DeviceChain.Sim.Traffic"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": false,
+    "defineConstraints": [
+        "UNITY_INCLUDE_TESTS"
+    ],
+    "versionDefines": [],
+    "noEngineReferences": true
+}

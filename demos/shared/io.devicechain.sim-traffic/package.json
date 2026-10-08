@@ -1,0 +1,12 @@
+{
+  "name": "io.devicechain.sim-traffic",
+  "version": "0.1.0",
+  "displayName": "DeviceChain Simulation Traffic",
+  "description": "Plain C# building blocks for drawing plausible vehicle and machine traffic in DeviceChain simulations and demos. Early: holds a 2D vector type so far. Simulation only; not for controlling real vehicles or machines.",
+  "unity": "6000.5",
+  "license": "Apache-2.0",
+  "author": {
+    "name": "The DeviceChain Authors"
+  },
+  "dependencies": {}
+}
