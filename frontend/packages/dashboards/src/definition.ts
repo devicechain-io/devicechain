@@ -294,7 +294,7 @@ function parseWidget(raw: unknown, index: number): WidgetInstance {
   // so downstream (hub/widgets) never sees a partial shape (a device selector with
   // no measurements array, an anchor with a non-object target, …). Reserved/other
   // kinds are carried through opaquely — the hub rejects them.
-  const ds = parseDatasource(raw.datasource);
+  const ds = parseDatasource(raw.datasource, index);
   if (ds) widget.datasource = ds;
   if (isRecord(raw.options)) widget.options = raw.options as Record<string, unknown>;
   return widget;
@@ -338,10 +338,20 @@ function withLocation<S extends object>(selector: S, raw: Record<string, unknown
 
 // parseDatasource coerces a raw datasource into a normalized selector, or drops it
 // (returns undefined) when it is absent or its `kind` is not a non-empty string.
-function parseDatasource(raw: unknown): WidgetInstance['datasource'] | undefined {
+function parseDatasource(raw: unknown, index: number): WidgetInstance['datasource'] | undefined {
   if (!isRecord(raw)) return undefined;
   const kind = raw.kind;
   if (typeof kind !== 'string' || kind.length === 0) return undefined;
+
+  // 🔴 `unbound` is what the RENDERER produces for a slot with no binding; it is never
+  // stored. Carried through, a stored one would render as an empty pane on every channel
+  // with nothing to say why — the shape of a correctly unbound slot, not of a broken
+  // definition. A widget with no entity is stored as a `slot` with no binding.
+  if (kind === 'unbound') {
+    throw new DashboardDefinitionError(
+      `widgets[${index}].datasource has kind 'unbound', which is never stored; bind the widget through a slot`,
+    );
+  }
 
   if (kind === 'device') {
     return withLocation(

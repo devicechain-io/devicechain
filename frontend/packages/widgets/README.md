@@ -34,8 +34,15 @@ acknowledge, command send — render without their controls. That is the whole
 opt-in: a viewer that never passes `actions` cannot write, regardless of what the
 board contains.
 
+A templated board takes its slot bindings on the renderer, not the hub:
+`<DashboardRenderer bindings={bindings} … />`. Keep one hub for the board
+(`useDashboardHub(resolver, authorities)` builds and disposes it); a new
+`bindings` map re-subscribes only the widgets whose slot moved.
+
 Or drive a single widget yourself with `ConnectedWidget`, and look components up
-by type through `WIDGET_REGISTRY` and its per-channel siblings.
+by type through `WIDGET_REGISTRY` and its per-channel siblings. A widget bound to a
+slot needs its datasource resolved first (`resolveWidgets` or
+`resolveWidgetDatasource`).
 
 ## The widgets
 

@@ -3,7 +3,12 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { effectiveBindings, parseBindingManifest, stripDefaultBindings } from './bindings';
+import {
+  effectiveBindings,
+  parseBindingManifest,
+  resolveWidgetDatasource,
+  stripDefaultBindings,
+} from './bindings';
 import type { DashboardDefinition, SlotBinding } from './types';
 
 function def(slots: DashboardDefinition['slots']): DashboardDefinition {
@@ -121,5 +126,60 @@ describe('stripDefaultBindings', () => {
     expect(effectiveBindings(template, hostB)).toEqual({ primary: { kind: 'device', deviceToken: 'host-b' } });
     // A non-template (defaults kept) renders the author's device with no manifest.
     expect(effectiveBindings(authored)).toEqual({ primary: devA });
+  });
+});
+
+// resolveWidgetDatasource is the ONE place a widget's slot meets the settled bindings. The
+// renderer hands its result to the data source, so what it returns for an unbound slot
+// decides whether an alarm tile shows nothing or the whole tenant.
+describe('resolveWidgetDatasource', () => {
+  const anchor = { relationship: 'assigned', targetType: 'area' as const, targetToken: 'pit-1' };
+
+  it('resolves a slot bound to a device to that device, keeping the widget series', () => {
+    expect(
+      resolveWidgetDatasource(
+        { kind: 'slot', slot: 'm', measurements: ['fuel'], location: { series: 'latest' } },
+        { m: devA },
+      ),
+    ).toEqual({ kind: 'device', deviceToken: 'a', measurements: ['fuel'], location: { series: 'latest' } });
+  });
+
+  it('resolves a slot bound to an anchor to that anchor', () => {
+    expect(
+      resolveWidgetDatasource({ kind: 'slot', slot: 's', measurements: ['t'] }, { s: { kind: 'anchor', anchor } }),
+    ).toEqual({ kind: 'anchor', anchor, measurements: ['t'] });
+  });
+
+  it('adds no location key when the widget names none', () => {
+    const out = resolveWidgetDatasource({ kind: 'slot', slot: 'm', measurements: [] }, { m: devB });
+    expect(out).toEqual({ kind: 'device', deviceToken: 'b', measurements: [] });
+    expect(out && 'location' in out).toBe(false);
+  });
+
+  it('resolves an unbound slot to an explicit unbound selector — never to undefined', () => {
+    const out = resolveWidgetDatasource({ kind: 'slot', slot: 'm', measurements: ['fuel'] }, {});
+    expect(out).toEqual({ kind: 'unbound', measurements: ['fuel'] });
+    // The same with no manifest at all: an omitted manifest binds nothing.
+    expect(resolveWidgetDatasource({ kind: 'slot', slot: 'm', measurements: [] }, undefined)).toEqual({
+      kind: 'unbound',
+      measurements: [],
+    });
+  });
+
+  it('is prototype-safe: an inherited name is unbound, not Object.prototype', () => {
+    for (const slot of ['constructor', 'toString', '__proto__']) {
+      expect(resolveWidgetDatasource({ kind: 'slot', slot, measurements: [] }, {})).toEqual({
+        kind: 'unbound',
+        measurements: [],
+      });
+    }
+  });
+
+  it('passes every non-slot selector through untouched, and keeps an absent datasource absent', () => {
+    const device = { kind: 'device' as const, deviceToken: 'x', measurements: ['t'] };
+    expect(resolveWidgetDatasource(device, { m: devA })).toBe(device);
+    const reserved = { kind: 'devices' as const, deviceTokens: ['x'], measurements: [] };
+    expect(resolveWidgetDatasource(reserved, {})).toBe(reserved);
+    expect(resolveWidgetDatasource(undefined, { m: devA })).toBeUndefined();
   });
 });

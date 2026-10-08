@@ -1,10 +1,10 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
-import type { SlotBinding, SlotDefinition, WidgetInstance } from '@devicechain/dashboards';
+import type { SlotBinding, WidgetInstance } from '@devicechain/dashboards';
 import { describe, expect, it } from 'vitest';
 
-import { gridItemStyle, sizingStyle, widgetSubjectLabel } from './dashboard-renderer';
+import { gridItemStyle, resolveWidgets, sizingStyle, widgetSubjectLabel } from './dashboard-renderer';
 
 // A minimal widget carrying only the datasource the subject resolver reads.
 function widgetWith(datasource: WidgetInstance['datasource']): WidgetInstance {
@@ -44,10 +44,9 @@ describe('gridItemStyle', () => {
   });
 });
 
-// widgetSubjectLabel resolves the entity a widget shows to the frame subtitle, from a
-// device/anchor selector directly or a slot selector through the effective bindings (with
-// the slot default as fallback) — the "which asset?" answer, updated once selection
-// re-points a slot.
+// widgetSubjectLabel names the entity a widget shows, read from the CONCRETE selector the
+// renderer resolved (resolveWidgets) — the same selector the widget subscribes with, so the
+// subtitle cannot name a different entity than the one on screen.
 describe('widgetSubjectLabel', () => {
   const anchorBinding: SlotBinding = {
     kind: 'anchor',
@@ -55,44 +54,49 @@ describe('widgetSubjectLabel', () => {
   };
 
   it('names a device selector by its token', () => {
-    expect(widgetSubjectLabel(widgetWith({ kind: 'device', deviceToken: 'bp-therm-001', measurements: [] }), undefined, undefined)).toBe(
+    expect(widgetSubjectLabel(widgetWith({ kind: 'device', deviceToken: 'bp-therm-001', measurements: [] }))).toBe(
       'bp-therm-001',
     );
   });
 
   it('names an anchor selector by its target token', () => {
     const w = widgetWith({ kind: 'anchor', anchor: anchorBinding.anchor, measurements: [] });
-    expect(widgetSubjectLabel(w, undefined, undefined)).toBe('building-1');
+    expect(widgetSubjectLabel(w)).toBe('building-1');
   });
 
-  it('resolves a slot through the effective bindings (overlay wins over the slot default)', () => {
-    const slots: Record<string, SlotDefinition> = {
-      s1: { type: 'device', defaultBinding: { kind: 'device', deviceToken: 'default-dev' } },
-    };
+  it('names a slot by the entity the settled bindings resolve it to', () => {
     const bindings: Record<string, SlotBinding> = { s1: { kind: 'device', deviceToken: 'selected-dev' } };
-    const w = widgetWith({ kind: 'slot', slot: 's1', measurements: [] });
-    expect(widgetSubjectLabel(w, slots, bindings)).toBe('selected-dev');
+    const [w] = resolveWidgets([widgetWith({ kind: 'slot', slot: 's1', measurements: [] })], bindings);
+    expect(widgetSubjectLabel(w)).toBe('selected-dev');
+    const [a] = resolveWidgets([widgetWith({ kind: 'slot', slot: 's1', measurements: [] })], { s1: anchorBinding });
+    expect(widgetSubjectLabel(a)).toBe('building-1');
   });
 
-  it('falls back to a slot default binding when no overlay is present', () => {
-    const slots: Record<string, SlotDefinition> = {
-      s1: { type: 'device', defaultBinding: { kind: 'device', deviceToken: 'default-dev' } },
-    };
-    const w = widgetWith({ kind: 'slot', slot: 's1', measurements: [] });
-    expect(widgetSubjectLabel(w, slots, undefined)).toBe('default-dev');
+  it('names nothing for no datasource, an unbound slot, an unresolved slot, a reserved kind, an empty token', () => {
+    expect(widgetSubjectLabel(widgetWith(undefined))).toBeUndefined();
+    expect(widgetSubjectLabel(widgetWith({ kind: 'unbound', measurements: [] }))).toBeUndefined();
+    expect(widgetSubjectLabel(widgetWith({ kind: 'slot', slot: 's1', measurements: [] }))).toBeUndefined();
+    expect(widgetSubjectLabel(widgetWith({ kind: 'devices', deviceTokens: ['a'], measurements: [] }))).toBeUndefined();
+    expect(widgetSubjectLabel(widgetWith({ kind: 'device', deviceToken: '', measurements: [] }))).toBeUndefined();
+  });
+});
+
+// resolveWidgets is the renderer's one hand-off from a definition to a data source.
+describe('resolveWidgets', () => {
+  it('resolves a slot widget and leaves every other widget object untouched', () => {
+    const device = widgetWith({ kind: 'device', deviceToken: 'x', measurements: [] });
+    const none = widgetWith(undefined);
+    const slot = widgetWith({ kind: 'slot', slot: 's1', measurements: ['t'] });
+    const [d, n, s] = resolveWidgets([device, none, slot], { s1: { kind: 'device', deviceToken: 'dev' } });
+    expect(d).toBe(device);
+    expect(n).toBe(none);
+    expect(n.datasource).toBeUndefined();
+    expect(s.datasource).toEqual({ kind: 'device', deviceToken: 'dev', measurements: ['t'] });
   });
 
-  it('returns undefined for a datasource-free widget, an unbound slot, and a reserved kind', () => {
-    expect(widgetSubjectLabel(widgetWith(undefined), undefined, undefined)).toBeUndefined();
-    expect(widgetSubjectLabel(widgetWith({ kind: 'slot', slot: 'missing', measurements: [] }), {}, {})).toBeUndefined();
-    expect(
-      widgetSubjectLabel(widgetWith({ kind: 'devices', deviceTokens: ['a'], measurements: [] }), undefined, undefined),
-    ).toBeUndefined();
-  });
-
-  it('is prototype-safe: a slot named __proto__ resolves as absent, not a prototype object', () => {
-    const w = widgetWith({ kind: 'slot', slot: '__proto__', measurements: [] });
-    expect(widgetSubjectLabel(w, {}, {})).toBeUndefined();
+  it('turns an unbound slot into an explicit unbound selector, never an absent datasource', () => {
+    const [s] = resolveWidgets([widgetWith({ kind: 'slot', slot: 'missing', measurements: [] })], undefined);
+    expect(s.datasource).toEqual({ kind: 'unbound', measurements: [] });
   });
 });
 

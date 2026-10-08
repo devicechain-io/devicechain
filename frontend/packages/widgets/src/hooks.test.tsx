@@ -163,6 +163,62 @@ const alarm = (over: Partial<AlarmRow> = {}): AlarmRow => ({
   ...over,
 });
 
+// A selection moves a widget from one device to another on the SAME hub. The live buffer
+// is reset by an effect, and an effect runs after the render that carried the new
+// selector — so the hook must not let that one render show the old device's values.
+describe('useMeasurementStream across a selector change', () => {
+  it("never renders the previous device's live value under the new selector", () => {
+    const f = fakeHub();
+    const deviceA: DatasourceSelector = { kind: 'device', deviceToken: 'dev-a', measurements: ['temperature'] };
+    const deviceB: DatasourceSelector = { kind: 'device', deviceToken: 'dev-b', measurements: ['temperature'] };
+    // Every render's view, recorded DURING render (before any effect of that commit runs).
+    const seen: Array<{ token: string; value: unknown }> = [];
+    const { rerender } = renderHook(
+      ({ datasource }) => {
+        const state = useMeasurementStream(f.hub, datasource);
+        seen.push({
+          token: datasource.kind === 'device' ? datasource.deviceToken : '',
+          value: state.latest.temperature?.value,
+        });
+        return state;
+      },
+      { initialProps: { datasource: deviceA } },
+    );
+    f.push(sample('temperature', 71, '2026-01-01T00:00:00Z'));
+    expect(seen[seen.length - 1]).toEqual({ token: 'dev-a', value: 71 });
+
+    seen.length = 0;
+    rerender({ datasource: deviceB });
+    expect(seen.length).toBeGreaterThan(0);
+    for (const view of seen) expect(view).toEqual({ token: 'dev-b', value: undefined });
+  });
+
+  it("ignores a late value from the previous selector's released subscription", () => {
+    // A data source that keeps every sink it was handed, released or not.
+    const sinks = new Map<string, WidgetStreamSink>();
+    const hub = {
+      subscribeWidget: (datasource: DatasourceSelector, s: WidgetStreamSink) => {
+        sinks.set(datasource.kind === 'device' ? datasource.deviceToken : '', s);
+        return () => {};
+      },
+    } as unknown as DashboardHub;
+    const deviceA: DatasourceSelector = { kind: 'device', deviceToken: 'dev-a', measurements: ['temperature'] };
+    const deviceB: DatasourceSelector = { kind: 'device', deviceToken: 'dev-b', measurements: ['temperature'] };
+    const { result, rerender } = renderHook(({ datasource }) => useMeasurementStream(hub, datasource), {
+      initialProps: { datasource: deviceA },
+    });
+
+    rerender({ datasource: deviceB });
+    act(() => sinks.get('dev-b')?.next({ ...sample('temperature', 12, '2026-01-01T00:00:01Z'), deviceToken: 'dev-b' }));
+    expect(result.current.latest.temperature?.value).toBe(12);
+
+    // dev-a's sink answers after it was released: dev-b's value stays.
+    act(() => sinks.get('dev-a')?.next(sample('temperature', 71, '2026-01-01T00:00:02Z')));
+    expect(result.current.latest.temperature?.value).toBe(12);
+    expect(result.current.samples.map((s) => s.value)).toEqual([12]);
+  });
+});
+
 describe('useAlarmStream', () => {
   it('starts in a loading state before any snapshot arrives', () => {
     const f = fakeAlarmHub();

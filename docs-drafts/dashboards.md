@@ -34,14 +34,17 @@ console authoring                              dashboard-management
                                    paste into /dash
                                           │
         parseDashboardDefinition → effectiveBindings(manifest) → resolveContextBindings
-                                          │
-                                    DashboardHub
+                                          │  settled bindings
+                  DashboardRenderer: resolveWidgetDatasource per widget
+                    (slot → device | anchor | unbound; the hub holds no bindings)
+                                          │  concrete selectors
+                                    DashboardHub (one per resolver + authorities)
                     ┌─────────────────────┼─────────────────────┐
               measurement              alarm                 control
               (subscription,      (query + trigger,        (poll only,
                multiplexed)        30s poll backstop)        every 4s)
                                           │
-                                  DashboardRenderer → ConnectedWidget → a pure widget
+                                  ConnectedWidget → a pure widget
 ```
 
 Two arrows are not what they look like. **Publishing changes what nobody reads** — every reader gets
@@ -159,14 +162,35 @@ well-defined (`types.ts:194-197`).
 and is fail-safe at every branch: an unbound or non-anchor parent leaves the child unbound, a
 membership error leaves it unbound, a type-incompatible selection is ignored rather than corrupting
 the context, and a selection naming an undeclared slot is dropped so a mis-authored drill target
-cannot churn a rebuild. It never throws.
+cannot churn a re-subscription. It never throws.
 
 🔑 The interim state strips a scoped slot's default at first paint — **"unbound, never stale"**
 (`context.ts:45-49`) — because a default computed for one context is wrong in another.
 
-The same care shows up in the frame subtitle: a scoped slot reads **only** the resolved bindings and
-never its default, because falling back would name an entity that is not being shown — a lying
-subtitle (`frontend/packages/widgets/src/dashboard-renderer.tsx:189-195`).
+The same care shows up in the frame subtitle: it is read from the CONCRETE selector the renderer
+resolved for the widget — the one the widget subscribes with — so it can never name an entity that is
+not being shown (`widgetSubjectLabel` in `frontend/packages/widgets/src/dashboard-renderer.tsx`).
+
+### Selection without a rebuild
+
+The hub holds **no bindings**. `DashboardRenderer` resolves every widget's `slot` selector through the
+settled bindings (`resolveWidgetDatasource`, `frontend/packages/dashboards/src/bindings.ts`) before the
+widget subscribes, so a host builds one hub per `(resolver, authorities)` (`useDashboardHub`) and keeps
+it. Every channel keys its subscription on the selector's value, so a selection that re-points one slot
+re-subscribes only the widgets bound to it; before this, both hosts rebuilt the hub on every selection,
+which blanked every live value and re-fetched every history on the board.
+
+🔴 **An unbound slot resolves to `{kind:'unbound'}`, never to an absent datasource.** An absent
+datasource is tenant-wide on the alarm channel; `unbound` is zero devices on every channel (no stream,
+an empty alarm snapshot, no command target, no positions, no availability check). A raw `slot` that
+reaches the hub is an error, not an empty pane, because the hub cannot tell "unbound" from "the host
+forgot to resolve it".
+
+History seeds are keyed by each widget's own concrete selector. A seed fetched for a selector the
+widget no longer has is dropped at render, synchronously, and the live buffer is tagged the same way,
+so a re-pointed widget never shows the previous device's value while the new one is loading. The
+console debounces bindings (250 ms) only on the edit canvas, where typing an anchor would otherwise
+re-subscribe per keystroke; view-mode selection is undebounced.
 
 ## 4. Rendering
 

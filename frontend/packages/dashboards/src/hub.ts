@@ -272,12 +272,13 @@ export interface WidgetActions {
   can(authority: string): boolean;
 }
 
+// The hub holds NO slot bindings. A widget's `slot` selector is resolved by the renderer
+// (resolveWidgetDatasource) through the settled bindings before it reaches the hub, so one
+// hub serves a board for its whole life: a selection that re-points a slot changes the
+// concrete selector of just the widgets bound to it, and only those re-subscribe. A host
+// builds one hub per (resolver, authorities).
 export interface DashboardHubConfig {
   resolver: DeviceResolver;
-  // The effective slot→entity manifest (slot defaults merged with any host override;
-  // see effectiveBindings). A widget's `slot` selector resolves through this. Absent
-  // slots render as an empty placeholder. Can be replaced later via setBindings.
-  bindings?: Record<string, SlotBinding>;
   // The current viewer's authorities (access-token claims). Drives `can()` — which
   // gates whether a widget's action controls render. Omitted/empty = no write actions
   // (the read-only default); '*' grants all. The server enforces authority regardless.
@@ -353,21 +354,10 @@ export class DashboardHub implements WidgetDataSource, WidgetActions {
   // commandDisposers — the location channel holds a poll per subscription, not a shared
   // device stream), so disposeAll() can tear down every map widget's poll.
   private readonly locationDisposers = new Set<() => void>();
-  // slot name → concrete entity binding. Consulted when a widget's selector is a
-  // `slot`. Mutable so the authoring host can rebind live (setBindings).
-  private bindings: Record<string, SlotBinding>;
 
   constructor(config: DashboardHubConfig) {
     this.resolver = config.resolver;
-    this.bindings = config.bindings ?? {};
     this.authorities = new Set(config.authorities ?? []);
-  }
-
-  // setBindings replaces the slot manifest. New subscriptions resolve through it;
-  // callers that need already-open slot streams to re-resolve should re-subscribe
-  // (the console keys the renderer on the manifest to do exactly that).
-  setBindings(bindings: Record<string, SlotBinding>): void {
-    this.bindings = bindings;
   }
 
   // subscribeWidget binds a widget's datasource to a sink and returns a disposer.
@@ -442,9 +432,10 @@ export class DashboardHub implements WidgetDataSource, WidgetActions {
         // A scoped widget that resolves to no device (an unbound slot, an empty anchor)
         // shows an empty state — NOT tenant-wide. Only a widget with no datasource at
         // all is tenant-wide. Nothing to stream/poll here. Scope is resolved once (like
-        // the measurement channel): a slot rebind rebuilds the hub and re-resolves, but
-        // organic anchor-membership change isn't picked up until the hub is rebuilt —
-        // a deferred enhancement shared with the measurement channel.
+        // the measurement channel): a slot rebind arrives as a new concrete selector, which
+        // re-subscribes this widget, but organic anchor-membership change isn't picked up
+        // until the widget re-subscribes — a deferred enhancement shared with the
+        // measurement channel.
         if (!scope.tenantWide && scope.tokens.length === 0) {
           sink.next({ alarms: [], total: 0 });
           return;
@@ -481,7 +472,10 @@ export class DashboardHub implements WidgetDataSource, WidgetActions {
 
   // resolveAlarmScope turns an alarm widget's scope selector into the originator device
   // tokens to filter on, or tenant-wide when it carries no datasource. Reuses the same
-  // device/anchor/slot resolution the measurement channel does.
+  // device/anchor/unbound resolution the measurement channel does.
+  //
+  // 🔴 Only an ABSENT datasource is tenant-wide. `{kind:'unbound'}` is a datasource, and
+  // it resolves to zero devices like any other empty scope.
   private async resolveAlarmScope(
     datasource: DatasourceSelector | undefined,
   ): Promise<{ tenantWide: boolean; tokens: string[] }> {
@@ -809,9 +803,10 @@ export class DashboardHub implements WidgetDataSource, WidgetActions {
   }
 
   // isDatasourceAvailable reports whether a widget's bound device still exists. Only a
-  // device selector (or a slot bound to a device) is validated — an anchor, an unbound
-  // slot, or no datasource has a legitimate empty state and is always "available". Fails
-  // open: an existence-check outage returns true (never falsely mark a live device gone).
+  // device selector is validated (a slot bound to a device arrives as one) — an anchor, an
+  // unbound slot, or no datasource has a legitimate empty state and is always "available".
+  // Fails open: an existence-check outage returns true (never falsely mark a live device
+  // gone).
   async isDatasourceAvailable(datasource: DatasourceSelector | undefined): Promise<boolean> {
     const deviceToken = this.availabilityToken(datasource);
     if (deviceToken === undefined) return true;
@@ -825,19 +820,13 @@ export class DashboardHub implements WidgetDataSource, WidgetActions {
   // availabilityToken returns the single device token whose existence gates a widget's
   // availability, or undefined when there is nothing device-specific to validate (an
   // anchor's membership is self-validating; an unbound slot is a placeholder; a reserved
-  // kind isn't resolved yet).
+  // kind isn't resolved yet; an unresolved slot fails on its data channel instead).
   private availabilityToken(datasource: DatasourceSelector | undefined): string | undefined {
     if (!datasource) return undefined;
     // An empty token (a half-authored or hand-edited definition) has nothing to
     // validate — treat it like an unbound slot (available/empty), not a device that
     // "no longer exists", and skip the guaranteed-empty query.
     if (datasource.kind === 'device') return datasource.deviceToken || undefined;
-    if (datasource.kind === 'slot') {
-      const binding = Object.prototype.hasOwnProperty.call(this.bindings, datasource.slot)
-        ? this.bindings[datasource.slot]
-        : undefined;
-      return binding && binding.kind === 'device' ? binding.deviceToken || undefined : undefined;
-    }
     return undefined;
   }
 
@@ -858,19 +847,20 @@ export class DashboardHub implements WidgetDataSource, WidgetActions {
           { kind: 'anchor', anchor: datasource.anchor },
           new Set(datasource.measurements),
         );
-      case 'slot': {
-        // Own-property lookup: a slot named 'constructor'/'__proto__'/'toString' must
-        // NOT resolve to an inherited Object.prototype member (which is truthy and
-        // would bypass the unbound-placeholder guard, then crash on binding.kind).
-        // An unbound slot is a valid placeholder (a template the host hasn't bound),
-        // not an error — resolve to zero devices, a silent empty state (like an anchor
-        // with no members), so the widget shows an empty pane, not an error.
-        const binding = Object.prototype.hasOwnProperty.call(this.bindings, datasource.slot)
-          ? this.bindings[datasource.slot]
-          : undefined;
-        if (!binding) return [];
-        return this.resolveBinding(binding, new Set(datasource.measurements));
-      }
+      case 'unbound':
+        // A slot with no binding, as the renderer resolved it: a valid placeholder (a
+        // template the host hasn't bound, a selection not yet made), not an error.
+        // Zero devices — a silent empty state, like an anchor with no members.
+        return [];
+      case 'slot':
+        // 🔴 FAIL LOUDLY. The hub keeps no bindings, so a slot here was never resolved:
+        // the host handed a raw definition widget to the data source instead of going
+        // through the renderer (or resolveWidgetDatasource). Answering "zero devices"
+        // would make that bug look exactly like a slot that is legitimately unbound.
+        throw new Error(
+          `dashboard slot '${datasource.slot}' reached the data source unresolved; ` +
+            'resolve it through the bindings first (resolveWidgetDatasource)',
+        );
       default:
         throw new Error(
           `dashboard selector kind '${datasource.kind}' is not supported yet`,

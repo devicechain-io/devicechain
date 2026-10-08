@@ -14,11 +14,11 @@ import {
   defaultHistoryWindow,
   fetchWidgetHistory,
   resolveWidgetBox,
+  resolveWidgetDatasource,
   type Breakpoints,
   type CanvasBackground,
   type CanvasSizing,
   type DashboardDefinition,
-  type SlotDefinition,
   type WidgetActions,
   type WidgetBox,
   type WidgetDataSource,
@@ -26,7 +26,7 @@ import {
   type SlotBinding,
   type WidgetInstance,
 } from '@devicechain/dashboards';
-import { useEffect, useState, type CSSProperties } from 'react';
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 
 import { ConnectedWidget } from './connected-widget';
 import {
@@ -49,8 +49,11 @@ export interface DashboardRendererProps {
   // Default true; set false for offline preview, where the data source (e.g.
   // SyntheticDataSource) supplies its own history and the backend must not be hit.
   seedHistory?: boolean;
-  // The effective slot manifest, so a slot-based widget's history seed resolves to
-  // the bound device (must match the bindings on `hub`). Omit for slot-free dashboards.
+  // The settled slot manifest (useResolvedBindings). Every widget's `slot` selector is
+  // resolved through it HERE, before the widget subscribes, to the bound device or anchor
+  // — or to an explicit `unbound` selector when the slot has no binding. The hub holds no
+  // bindings, so a host keeps ONE hub (useDashboardHub) and a change to this map
+  // re-subscribes only the widgets whose slot moved. Omitted = no slot is bound.
   bindings?: Record<string, SlotBinding>;
   // Host override for the definition's container sizing (the embed knob — a host can
   // force a dashboard authored `fill` into a fixed-px box, or vice versa). Omitted →
@@ -78,7 +81,11 @@ export function DashboardRenderer({
   candidates,
 }: DashboardRendererProps) {
   const breakpoint = useActiveBreakpoint(definition.canvas.breakpoints);
-  const histories = useWidgetHistories(definition.widgets, seedHistory, bindings);
+  // Each widget with its slot resolved to a concrete selector. Recomputed per render;
+  // that is cheap, and every channel keys its subscription on the selector's VALUE, so a
+  // widget whose concrete selector did not change keeps its subscription.
+  const widgets = useMemo(() => resolveWidgets(definition.widgets, bindings), [definition.widgets, bindings]);
+  const histories = useWidgetHistories(widgets, seedHistory);
 
   const { grid, background: bg } = definition.canvas;
   const rowGap = typeof grid.gap === 'number' ? grid.gap : grid.gap.row;
@@ -99,11 +106,11 @@ export function DashboardRenderer({
             width: '100%',
           }}
         >
-          {definition.widgets.map((widget) => {
+          {widgets.map((widget) => {
             const box = resolveWidgetBox(widget.layout, breakpoint);
             return (
               <div key={widget.id} style={gridItemStyle(box, grid.columns)}>
-                <WidgetSubjectProvider label={widgetSubjectLabel(widget, definition.slots, bindings)}>
+                <WidgetSubjectProvider label={widgetSubjectLabel(widget)}>
                   <ConnectedWidget
                     widget={widget}
                     hub={hub}
@@ -161,40 +168,31 @@ export function sizingStyle(sizing: CanvasSizing, bg: CanvasBackground | undefin
   return { ...base, width: '100%', height: sizing.height };
 }
 
-// ownGet reads a string-keyed map defensively: only an OWN property, so a hand-edited
-// definition naming a slot `__proto__`/`constructor` reads as absent rather than
-// returning a prototype object (the same defense the hub applies to slot lookups).
-function ownGet<T>(map: Record<string, T> | undefined, key: string): T | undefined {
-  return map && Object.prototype.hasOwnProperty.call(map, key) ? map[key] : undefined;
+// resolveWidgets maps each widget's datasource through the settled bindings
+// (resolveWidgetDatasource): a slot becomes the device or anchor it is bound to, or an
+// explicit `unbound` selector. A widget with no datasource keeps none — that is a
+// different fact (tenant-wide on the alarm channel) and must not be manufactured here.
+export function resolveWidgets(
+  widgets: WidgetInstance[],
+  bindings: Record<string, SlotBinding> | undefined,
+): WidgetInstance[] {
+  return widgets.map((widget) => {
+    if (widget.datasource?.kind !== 'slot') return widget;
+    return { ...widget, datasource: resolveWidgetDatasource(widget.datasource, bindings) };
+  });
 }
 
-// widgetSubjectLabel resolves the entity a widget shows — its datasource's bound device
-// or anchor — to a short label for the frame subtitle. A slot selector resolves through
-// the effective `bindings` (host manifest / selection overlay) first, then the slot's own
-// default, so the subtitle always names the CURRENTLY-resolved entity. Returns undefined
-// for a datasource-free widget (label/image), a tenant-wide alarm table, or a reserved
-// selector kind — the frame then shows no subtitle.
-export function widgetSubjectLabel(
-  widget: WidgetInstance,
-  slots: Record<string, SlotDefinition> | undefined,
-  bindings: Record<string, SlotBinding> | undefined,
-): string | undefined {
+// widgetSubjectLabel names the entity a widget shows — its CONCRETE datasource's device
+// or anchor — for the frame subtitle. Pass the widget as the renderer resolved it
+// (resolveWidgets), so the subtitle is read from the same selector the widget subscribes
+// with and can never name an entity other than the one being shown. Returns undefined for
+// a datasource-free widget (label/image, a tenant-wide alarm tile), an unbound slot, an
+// unresolved slot, or a reserved selector kind — the frame then shows no subtitle.
+export function widgetSubjectLabel(widget: WidgetInstance): string | undefined {
   const ds = widget.datasource;
   if (!ds) return undefined;
-  let binding: SlotBinding | undefined;
-  if (ds.kind === 'device') {
-    binding = ds.deviceToken ? { kind: 'device', deviceToken: ds.deviceToken } : undefined;
-  } else if (ds.kind === 'anchor') {
-    binding = { kind: 'anchor', anchor: ds.anchor };
-  } else if (ds.kind === 'slot') {
-    const slot = ownGet(slots, ds.slot);
-    // A SCOPED slot is authoritative in the resolved `bindings` only — the cascade omits
-    // it when unbound, so falling back to its default would name an entity that isn't
-    // being shown (a lying subtitle). A plain slot may still fall back to its default.
-    binding = slot?.scope ? ownGet(bindings, ds.slot) : ownGet(bindings, ds.slot) ?? slot?.defaultBinding;
-  }
-  if (binding?.kind === 'device') return binding.deviceToken;
-  if (binding?.kind === 'anchor') return binding.anchor.targetToken;
+  if (ds.kind === 'device') return ds.deviceToken || undefined;
+  if (ds.kind === 'anchor') return ds.anchor.targetToken;
   return undefined;
 }
 
@@ -212,50 +210,88 @@ function useActiveBreakpoint(breakpoints: Breakpoints): string {
   return activeBreakpoint(breakpoints, width);
 }
 
-// useWidgetHistories backfills each widget once from bucketedMeasurements and
-// returns a stable id→samples map (a widget's array is set once, so it doesn't
-// churn the stream's seed). Fetched in parallel; failures yield an empty seed.
+// A widget's seed, tagged with the concrete selector it was fetched for.
+interface Seed {
+  key: string;
+  samples: MeasurementSample[];
+}
+
+// seedKey is the identity of what a measurement widget's history is OF: its concrete
+// selector, by value. Undefined for a widget that takes no seed.
+function seedKey(widget: WidgetInstance): string | undefined {
+  if (WIDGET_CHANNEL[widget.type] !== 'measurement') return undefined;
+  return JSON.stringify(widget.datasource ?? null);
+}
+
+// useWidgetHistories backfills each measurement widget from bucketedMeasurements and
+// returns an id→samples map. Each seed is keyed by the widget's OWN concrete selector,
+// not by the board's bindings as a whole, so:
+//
+//   - a selection that re-points one slot re-fetches only the widgets bound to it;
+//   - a seed fetched for a selector the widget no longer has is DROPPED at render,
+//     synchronously, so a widget never shows the previous device's history under the new
+//     device while the new fetch is pending;
+//   - a slow answer for a superseded selector is discarded when it lands.
+//
+// A widget's samples array is the one stored for its seed, so an unchanged seed keeps
+// its identity across renders and does not churn the stream's merge.
 function useWidgetHistories(
   widgets: WidgetInstance[],
   enabled: boolean,
-  bindings: Record<string, SlotBinding> | undefined,
-): Record<string, MeasurementSample[]> {
-  const [histories, setHistories] = useState<Record<string, MeasurementSample[]>>({});
-  // Value-compare the manifest so an unchanged-but-new object reference doesn't
-  // refetch history every render.
-  const bindingsKey = bindings ? JSON.stringify(bindings) : null;
+): Record<string, MeasurementSample[] | undefined> {
+  const [seeds, setSeeds] = useState<Record<string, Seed>>({});
+  // widget id → the selector key most recently REQUESTED for it. A fetch whose key is no
+  // longer the requested one is stale when it lands.
+  const requested = useRef<Record<string, string>>({});
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
+
+  // The (id, key) pairs that want a seed; value-compared so an equal render is a no-op.
+  const wanted = widgets.flatMap((w) => {
+    const key = seedKey(w);
+    return key === undefined ? [] : [[w.id, key] as const];
+  });
+  const wantedKey = JSON.stringify(wanted);
 
   useEffect(() => {
     // Preview (enabled=false) must not touch the backend; clear any prior seed so a
     // toggle from live→preview doesn't leave stale real history under synthetic data.
     if (!enabled) {
-      setHistories({});
+      requested.current = {};
+      setSeeds({});
       return;
     }
-    let cancelled = false;
     const historyWindow = defaultHistoryWindow();
-    Promise.all(
-      widgets.map(
-        // Only measurement widgets consume a history seed; a non-measurement widget
-        // (alarm, command) reconciles from its own channel, so backfilling it would fire
-        // a wasted (and all-measurements) bucketedMeasurements query it ignores.
-        async (w) =>
-          [
-            w.id,
-            WIDGET_CHANNEL[w.type] === 'measurement'
-              ? await fetchWidgetHistory(w, historyWindow, bindings)
-              : [],
-          ] as const,
-      ),
-    ).then((entries) => {
-      if (!cancelled) setHistories(Object.fromEntries(entries));
-    });
-    return () => {
-      cancelled = true;
-    };
-    // bindings read via bindingsKey (value identity), not reference.
+    const byId = new Map(widgets.map((w) => [w.id, w]));
+    const next: Record<string, string> = {};
+    for (const [id, key] of wanted) {
+      next[id] = key;
+      if (requested.current[id] === key) continue; // already fetched (or in flight) for this selector
+      const widget = byId.get(id);
+      if (!widget) continue;
+      void fetchWidgetHistory(widget, historyWindow).then((samples) => {
+        if (!mounted.current || requested.current[id] !== key) return; // superseded or unmounted
+        setSeeds((prev) => ({ ...prev, [id]: { key, samples } }));
+      });
+    }
+    requested.current = next;
+    // `widgets`/`wanted` are read via wantedKey (value identity), not reference.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [widgets, enabled, bindingsKey]);
+  }, [wantedKey, enabled]);
 
-  return histories;
+  // Hand each widget its seed ONLY if it was fetched for the selector the widget has now.
+  return useMemo(() => {
+    const out: Record<string, MeasurementSample[] | undefined> = {};
+    if (!enabled) return out;
+    for (const w of widgets) {
+      const seed = seeds[w.id];
+      out[w.id] = seed && seed.key === seedKey(w) ? seed.samples : undefined;
+    }
+    return out;
+  }, [widgets, seeds, enabled]);
 }

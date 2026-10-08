@@ -9,7 +9,7 @@
 
 // The view-only dashboard renderer: lays a parsed definition's widgets on the
 // canvas and binds each to the hub. The shared viewer for the console + external apps.
-export { DashboardRenderer, widgetSubjectLabel, type DashboardRendererProps } from './dashboard-renderer';
+export { DashboardRenderer, resolveWidgets, widgetSubjectLabel, type DashboardRendererProps } from './dashboard-renderer';
 
 // Renderer entry point: binds the hub to a widget by type.
 export { ConnectedWidget, type ConnectedWidgetProps } from './connected-widget';
@@ -141,6 +141,7 @@ export {
   useCommandStream,
   useLocationStream,
   useDatasourceAvailability,
+  useDashboardHub,
   useResolvedBindings,
   useSlotCandidates,
   useCandidates,

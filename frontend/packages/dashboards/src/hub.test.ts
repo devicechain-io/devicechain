@@ -208,67 +208,6 @@ describe('DashboardHub', () => {
     expect(hub.openStreamCount).toBe(0);
   });
 
-  it('resolves a slot selector through its device binding', async () => {
-    const hub = new DashboardHub({
-      resolver: newResolver(),
-      bindings: { primary: { kind: 'device', deviceToken: 'therm-001' } },
-    });
-    const sink = { next: vi.fn() };
-
-    hub.subscribeWidget({ kind: 'slot', slot: 'primary', measurements: ['temperature'] }, sink);
-    await flush();
-
-    expect(hub.openStreamCount).toBe(1);
-    h.streams[0].sink.next({ measurementStream: sampleFor('therm-001', 'temperature', 21) });
-    expect(sink.next).toHaveBeenCalledWith(expect.objectContaining({ value: 21 }));
-  });
-
-  it('resolves a slot selector through an anchor binding (one stream per member)', async () => {
-    const hub = new DashboardHub({
-      resolver: newResolver(),
-      bindings: {
-        area: { kind: 'anchor', anchor: { relationship: 'assigned', targetType: 'area', targetToken: 'plant-1' } },
-      },
-    });
-    hub.subscribeWidget({ kind: 'slot', slot: 'area', measurements: ['temperature'] }, { next: vi.fn() });
-    await flush();
-    expect(hub.openStreamCount).toBe(2); // members 'therm-004' and 'therm-005'
-  });
-
-  it('treats a prototype-named slot as unbound, not a crash', async () => {
-    const hub = new DashboardHub({ resolver: newResolver() }); // empty bindings
-    const sink = { next: vi.fn(), error: vi.fn() };
-
-    // 'constructor' etc. are inherited on a plain object; the own-property guard must
-    // treat them as unbound (silent placeholder), not resolve to Object.prototype.
-    hub.subscribeWidget({ kind: 'slot', slot: 'constructor', measurements: ['t'] }, sink);
-    await flush();
-
-    expect(hub.openStreamCount).toBe(0);
-    expect(sink.error).not.toHaveBeenCalled();
-  });
-
-  it('renders an unbound slot as a silent placeholder — no stream, no error', async () => {
-    const hub = new DashboardHub({ resolver: newResolver() }); // no bindings
-    const sink = { next: vi.fn(), error: vi.fn() };
-
-    hub.subscribeWidget({ kind: 'slot', slot: 'nope', measurements: ['temperature'] }, sink);
-    await flush();
-
-    expect(hub.openStreamCount).toBe(0);
-    expect(sink.error).not.toHaveBeenCalled(); // unbound = placeholder, not an error
-    expect(sink.next).not.toHaveBeenCalled();
-  });
-
-  it('setBindings applies to subsequent slot subscriptions', async () => {
-    const hub = new DashboardHub({ resolver: newResolver() });
-    hub.setBindings({ primary: { kind: 'device', deviceToken: 'therm-001' } });
-
-    hub.subscribeWidget({ kind: 'slot', slot: 'primary', measurements: ['temperature'] }, { next: vi.fn() });
-    await flush();
-    expect(hub.openStreamCount).toBe(1);
-  });
-
   it('disposeAll tears down every open upstream', async () => {
     const hub = new DashboardHub({ resolver: newResolver() });
 
@@ -302,28 +241,17 @@ describe('DashboardHub.isDatasourceAvailable', () => {
     ).resolves.toBe(false);
   });
 
-  it('a slot bound to a device checks that device; an unbound slot is available', async () => {
+  it('an unbound selector is available and never queries existence', async () => {
     const deviceExists = vi.fn(async () => false);
-    const hub = new DashboardHub({
-      resolver: newResolver({ deviceExists }),
-      bindings: { primary: { kind: 'device', deviceToken: 'deleted' } },
-    });
-    await expect(
-      hub.isDatasourceAvailable({ kind: 'slot', slot: 'primary', measurements: [] }),
-    ).resolves.toBe(false);
+    const hub = new DashboardHub({ resolver: newResolver({ deviceExists }) });
     // An unbound slot is a template placeholder, not "unavailable".
-    await expect(
-      hub.isDatasourceAvailable({ kind: 'slot', slot: 'unbound', measurements: [] }),
-    ).resolves.toBe(true);
-    expect(deviceExists).toHaveBeenCalledTimes(1); // only the bound slot queried
+    await expect(hub.isDatasourceAvailable({ kind: 'unbound', measurements: [] })).resolves.toBe(true);
+    expect(deviceExists).not.toHaveBeenCalled();
   });
 
-  it('an anchor, a slot bound to an anchor, and no datasource never query existence', async () => {
+  it('an anchor and no datasource never query existence', async () => {
     const deviceExists = vi.fn(async () => false);
-    const hub = new DashboardHub({
-      resolver: newResolver({ deviceExists }),
-      bindings: { area: { kind: 'anchor', anchor: { relationship: 'in', targetType: 'area', targetToken: 'a1' } } },
-    });
+    const hub = new DashboardHub({ resolver: newResolver({ deviceExists }) });
     await expect(hub.isDatasourceAvailable(undefined)).resolves.toBe(true);
     await expect(
       hub.isDatasourceAvailable({
@@ -331,9 +259,6 @@ describe('DashboardHub.isDatasourceAvailable', () => {
         anchor: { relationship: 'in', targetType: 'area', targetToken: 'a1' },
         measurements: [],
       }),
-    ).resolves.toBe(true);
-    await expect(
-      hub.isDatasourceAvailable({ kind: 'slot', slot: 'area', measurements: [] }),
     ).resolves.toBe(true);
     expect(deviceExists).not.toHaveBeenCalled(); // anchors are self-validating (empty ≠ unavailable)
   });
