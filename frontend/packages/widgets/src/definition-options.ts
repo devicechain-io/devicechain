@@ -31,7 +31,7 @@
 // server-side, ADR-044-style publish gate it superficially resembles, and calling it one
 // would misdescribe exactly which documents are protected.
 
-import { type DashboardDefinition, type WidgetInstance } from '@devicechain/dashboards';
+import { UNKNOWN_WIDGET_TYPE, type DashboardDefinition, type WidgetInstance } from '@devicechain/dashboards';
 
 import { WIDGET_OPTIONS, validateWidgetOptions, type OptionIssue } from './options';
 
@@ -54,9 +54,15 @@ type WidgetCarrier = Pick<DashboardDefinition, 'widgets'>;
 
 // validateDefinitionOptions reports every option issue on the board, in widget order.
 // An empty result means every widget's bag is one the renderer honors in full.
+//
+// A placeholder for a widget type this build does not know reports nothing: it carries
+// no options of its own (its stored object is kept verbatim, options and all), and this
+// build has no schema to judge a newer widget's options against.
 export function validateDefinitionOptions(definition: WidgetCarrier): DefinitionOptionIssue[] {
   return definition.widgets.flatMap((widget) =>
-    validateWidgetOptions(widget.type, widget.options).map((issue) => ({ ...issue, widgetId: widget.id })),
+    widget.type === UNKNOWN_WIDGET_TYPE
+      ? []
+      : validateWidgetOptions(widget.type, widget.options).map((issue) => ({ ...issue, widgetId: widget.id })),
   );
 }
 
@@ -94,6 +100,8 @@ export function stripUnknownOptions<T extends WidgetCarrier>(definition: T): T {
 }
 
 function stripUnknownWidgetOptions(widget: WidgetInstance): WidgetInstance {
+  // A placeholder for an unknown widget type carries no options (they stay in its raw
+  // object, which is never rewritten), so it returns here unchanged.
   const bag = widget.options;
   if (!bag) return widget;
   const specs = WIDGET_OPTIONS[widget.type];

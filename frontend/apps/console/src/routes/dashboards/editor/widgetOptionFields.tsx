@@ -28,7 +28,7 @@
 // directions, per type. This module writes what that table declares; that test proves the
 // table is what the renderer reads.
 
-import type { SlotDefinition, WidgetInstance, WidgetType } from '@devicechain/dashboards';
+import type { KnownWidgetInstance, SlotDefinition, WidgetType } from '@devicechain/dashboards';
 import {
   WIDGET_OPTIONS,
   clampNumberOption,
@@ -286,7 +286,7 @@ function optionFieldsFor(type: WidgetType): OptionField[] {
 }
 
 export interface OptionFieldContext {
-  widget: WidgetInstance;
+  widget: KnownWidgetInstance;
   // Write (or, with undefined/''/false, drop) a single option key.
   setOption: (key: string, value: string | number | boolean | undefined) => void;
   // Write several keys at once, for a control that authors more than one.
@@ -597,7 +597,7 @@ function SlotTargetField({ ctx }: { ctx: OptionFieldContext }) {
 // tiles, not proof of it; a type that declared both and did not discard the unattributed
 // pair at render would be told something untrue here. Nothing declares them today but the
 // map, and the discard rule lives with the widget that does.
-export function WidgetOptionNotices({ widget }: { widget: WidgetInstance }) {
+export function WidgetOptionNotices({ widget }: { widget: KnownWidgetInstance }) {
   const { t } = useTranslation('dashboards');
   if (!declaresTilePair(widget.type)) return null;
   if (optString(widget, KEY_TILE_URL).trim() === '') return null;
@@ -624,12 +624,12 @@ function declaresTilePair(type: WidgetType): boolean {
 
 // ---- options readers (panel-local; strict-typed inputs) ---------------------
 
-function optString(widget: WidgetInstance, key: string): string {
+function optString(widget: KnownWidgetInstance, key: string): string {
   const value = widget.options?.[key];
   return typeof value === 'string' ? value : '';
 }
 
-function optNumber(widget: WidgetInstance, key: string): number | undefined {
+function optNumber(widget: KnownWidgetInstance, key: string): number | undefined {
   const value = widget.options?.[key];
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
 }

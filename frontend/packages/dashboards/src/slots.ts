@@ -10,15 +10,16 @@
 // binds each real entity once, and CompositeWidget-style sharing falls out for free.
 
 import { canScopeSlot } from './definition';
-import type {
-  AnchorTarget,
-  DashboardDefinition,
-  DatasourceSelector,
-  LocationSelection,
-  SlotBinding,
-  SlotDefinition,
-  SlotScope,
-  WidgetInstance,
+import {
+  UNKNOWN_WIDGET_TYPE,
+  type AnchorTarget,
+  type DashboardDefinition,
+  type DatasourceSelector,
+  type LocationSelection,
+  type SlotBinding,
+  type SlotDefinition,
+  type SlotScope,
+  type WidgetInstance,
 } from './types';
 
 // slotSelector builds the slot selector these transforms write, carrying the SERIES the
@@ -151,7 +152,9 @@ export function bindWidgetSlot(
       ? currentSlot
       : findOrAddSlot(slots, binding);
   const widgets = def.widgets.map((w) =>
-    w.id === widgetId ? { ...w, datasource: slotSelector(slot, measurements, location) } : w,
+    // A placeholder for an unknown widget type binds nothing this build can see, so it is
+    // never given a datasource here: its bindings live in its raw object.
+    w.id === widgetId && w.type !== UNKNOWN_WIDGET_TYPE ? { ...w, datasource: slotSelector(slot, measurements, location) } : w,
   );
   return { ...def, widgets, slots };
 }
@@ -165,6 +168,24 @@ export function clearWidgetDatasource(def: DashboardDefinition, widgetId: string
     return rest;
   });
   return { ...def, widgets };
+}
+
+// collectRawSlotReferences adds every slot name a raw (unparsed) widget object names,
+// in the two shapes this release knows a slot reference by — a slot selector
+// `{kind:'slot', slot}` and a `selectionTarget` — at any depth. Over-counting keeps an
+// unused slot, which is harmless; under-counting deletes a newer widget's binding. The
+// depth bound only guards against a hand-built cyclic object (parsed JSON has none).
+const RAW_SLOT_SCAN_DEPTH = 32;
+function collectRawSlotReferences(value: unknown, used: Set<string>, depth: number): void {
+  if (depth > RAW_SLOT_SCAN_DEPTH || typeof value !== 'object' || value === null) return;
+  if (Array.isArray(value)) {
+    for (const item of value) collectRawSlotReferences(item, used, depth + 1);
+    return;
+  }
+  const rec = value as Record<string, unknown>;
+  if (rec.kind === 'slot' && typeof rec.slot === 'string' && rec.slot.length > 0) used.add(rec.slot);
+  if (typeof rec.selectionTarget === 'string' && rec.selectionTarget.length > 0) used.add(rec.selectionTarget);
+  for (const child of Object.values(rec)) collectRawSlotReferences(child, used, depth + 1);
 }
 
 // pruneSlots removes slots no widget references, and omits the `slots` key entirely
@@ -181,6 +202,11 @@ export function pruneSlots(def: DashboardDefinition): DashboardDefinition {
     // under the selector — a silent "No options". Count it as a use.
     const target = w.options?.selectionTarget;
     if (typeof target === 'string' && target.length > 0) used.add(target);
+    // A widget of a type this build does not know uses slots this build cannot see in
+    // its parsed fields: they are inside its raw object, possibly nested (a container's
+    // children). Pruning them would make the next save delete the newer widget's slots
+    // out from under it, so every slot the raw object names counts as a use.
+    if (w.raw) collectRawSlotReferences(w.raw, used, 0);
   }
   // Close `used` over scope.parent: a context-only parent slot (e.g. a root 'building'
   // that no widget binds directly but a scoped child depends on) must be kept, or the

@@ -19,11 +19,11 @@ import { cleanup, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { WidgetConfigPanel } from './WidgetConfigPanel';
-import type { WidgetInstance, WidgetType } from '@devicechain/dashboards';
+import type { KnownWidgetInstance, WidgetType } from '@devicechain/dashboards';
 
 afterEach(cleanup);
 
-function widget(options: Record<string, unknown>, type: WidgetType = 'map'): WidgetInstance {
+function widget(options: Record<string, unknown>, type: WidgetType = 'map'): KnownWidgetInstance {
   // A real layout rather than a cast: `as WidgetInstance` on a wrong shape compiles
   // happily and would leave this suite testing a widget the renderer could not place.
   return {

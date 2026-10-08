@@ -6,6 +6,7 @@ import type {
   DatasourceSelector,
   MeasurementSample,
   WidgetInstance,
+  WidgetType,
   WidgetStreamSink,
 } from '@devicechain/dashboards';
 import { act, cleanup, render, screen } from '@testing-library/react';
@@ -39,7 +40,7 @@ const deviceDs: DatasourceSelector = {
 };
 
 const widget = (
-  type: WidgetInstance['type'],
+  type: WidgetType,
   options: Record<string, unknown> = {},
   datasource: DatasourceSelector | undefined = deviceDs,
 ): WidgetInstance => ({

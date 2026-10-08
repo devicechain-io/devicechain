@@ -8,8 +8,8 @@ import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import type { AlarmRow, CommandRow, MeasurementSample, WidgetInstance } from '@devicechain/dashboards';
-import { parseDashboardDefinition } from '@devicechain/dashboards';
+import type { AlarmRow, CommandRow, KnownWidgetInstance, MeasurementSample } from '@devicechain/dashboards';
+import { parseDashboardDefinition, UNKNOWN_WIDGET_TYPE } from '@devicechain/dashboards';
 import { cleanup, render as rtlRender } from '@testing-library/react';
 import type { ReactElement } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -74,8 +74,16 @@ const FIXTURES = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..',
 const GALLERY = 'wl-gallery';
 const STRESS = 'wl-stress';
 
+// Every widget on these boards is a type this build renders; a placeholder for an
+// unknown type would render nothing worth checking, so it fails here rather than being
+// skipped (sim-dashboard-fixture.test.ts holds the same line).
 function board(token: string) {
-  return parseDashboardDefinition(JSON.parse(readFileSync(join(FIXTURES, `${token}.json`), 'utf8')));
+  const def = parseDashboardDefinition(JSON.parse(readFileSync(join(FIXTURES, `${token}.json`), 'utf8')));
+  const widgets: KnownWidgetInstance[] = def.widgets.map((widget) => {
+    if (widget.type === UNKNOWN_WIDGET_TYPE) throw new Error(`${token}: ${widget.id} has an unknown widget type`);
+    return widget;
+  });
+  return { ...def, widgets };
 }
 
 // The placeholders a widget can reach IN THIS HARNESS.
@@ -220,7 +228,7 @@ function render(ui: ReactElement) {
 }
 
 // renderWidget runs one widget through the registry its channel binds it to.
-function renderWidget(widget: WidgetInstance) {
+function renderWidget(widget: KnownWidgetInstance) {
   switch (WIDGET_CHANNEL[widget.type]) {
     case 'alarm': {
       const Component = ALARM_WIDGET_REGISTRY[widget.type as keyof typeof ALARM_WIDGET_REGISTRY];
@@ -294,7 +302,7 @@ describe('rendering the widgetlab boards', () => {
 // that it renders and that its options reach the renderer.
 
 describe('the gallery widgets draw their data', () => {
-  function galleryWidgets(type: string): WidgetInstance[] {
+  function galleryWidgets(type: string): KnownWidgetInstance[] {
     return board(GALLERY).widgets.filter((w) => w.type === type);
   }
 
@@ -403,7 +411,7 @@ describe('the gallery widgets draw their data', () => {
 // connected to anything.
 
 describe('the widgetlab options reach the rendered output', () => {
-  function widgetsOf(token: string, type: string): WidgetInstance[] {
+  function widgetsOf(token: string, type: string): KnownWidgetInstance[] {
     return board(token).widgets.filter((w) => w.type === type);
   }
 

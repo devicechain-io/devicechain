@@ -1,7 +1,7 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
-import type { AlarmRow, WidgetActions, WidgetInstance } from '@devicechain/dashboards';
+import type { AlarmRow, WidgetActions, WidgetInstance, WidgetType } from '@devicechain/dashboards';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -15,7 +15,7 @@ import { AlarmCount } from './widgets/alarm-count';
 import { AlarmTable } from './widgets/alarm-table';
 
 const widget = (
-  type: WidgetInstance['type'],
+  type: WidgetType,
   options: Record<string, unknown> = {},
 ): WidgetInstance => ({
   id: 'w',

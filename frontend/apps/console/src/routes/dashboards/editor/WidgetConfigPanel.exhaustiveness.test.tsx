@@ -46,7 +46,7 @@ import '@/i18n/config';
 import { cleanup, render, fireEvent, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { WIDGET_TYPES, type SlotDefinition, type WidgetInstance, type WidgetType } from '@devicechain/dashboards';
+import { WIDGET_TYPES, type SlotDefinition, type KnownWidgetInstance, type WidgetType } from '@devicechain/dashboards';
 import {
   WIDGET_OPTIONS,
   numberOptionSpec,
@@ -229,7 +229,7 @@ function fullOptions(type: WidgetType): Record<string, unknown> {
 
 // ---- Rendering ---------------------------------------------------------------
 
-function widgetOf(type: WidgetType, options: Record<string, unknown> = {}): WidgetInstance {
+function widgetOf(type: WidgetType, options: Record<string, unknown> = {}): KnownWidgetInstance {
   // A real layout rather than a cast: `as WidgetInstance` over a wrong shape compiles
   // happily and would leave this suite driving a widget the renderer could not place.
   return {
@@ -246,7 +246,7 @@ function widgetOf(type: WidgetType, options: Record<string, unknown> = {}): Widg
 // author that key"; that reading is right, so the fixture must not be the reason.
 function renderPanel(
   type: WidgetType,
-  onChange: (next: WidgetInstance) => void,
+  onChange: (next: KnownWidgetInstance) => void,
   options: Record<string, unknown> = {},
 ) {
   return render(
@@ -419,7 +419,7 @@ async function optionsWrittenBy(type: WidgetType, id: string): Promise<string[]>
   const entered = await drive(type, field!);
   await waitFor(() => expect(onChange, `driving field ${id} on ${type} changed nothing`).toHaveBeenCalled());
   const calls = onChange.mock.calls;
-  const last = calls[calls.length - 1][0] as WidgetInstance;
+  const last = calls[calls.length - 1][0] as KnownWidgetInstance;
   cleanup();
 
   const bad = validateWidgetOptions(type, last.options).filter((i) => VALUE_ISSUE_CODES.includes(i.code));

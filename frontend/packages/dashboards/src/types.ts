@@ -193,7 +193,15 @@ export interface WidgetBox {
 // widget omitting a breakpoint inherits its 'base' box.
 export type WidgetLayout = Record<string, WidgetBox>;
 
-export interface WidgetInstance {
+// The type a widget is given when its stored type is not one this build knows — one a
+// newer release added. Deliberately NOT a member of WIDGET_TYPES: it is never authored,
+// never offered in an add menu, and has no row in any per-type table. See
+// UnknownWidgetInstance.
+export const UNKNOWN_WIDGET_TYPE = 'unknown-widget';
+export type UnknownWidgetType = typeof UNKNOWN_WIDGET_TYPE;
+
+// A widget of a type this build knows how to render.
+export interface KnownWidgetInstance {
   id: string;
   type: WidgetType;
   layout: WidgetLayout;
@@ -202,7 +210,30 @@ export interface WidgetInstance {
   // Widget-specific options (series colors, unit, thresholds, …). Owned by the
   // widget package; opaque here.
   options?: Record<string, unknown>;
+  raw?: undefined;
 }
+
+// A widget whose stored type this build does not know. The parser keeps the stored
+// object VERBATIM in `raw`, and the serializer writes `raw` back, so a host on an older
+// release that loads a newer board and saves it does not delete or rewrite the widget
+// it cannot read.
+//
+// `id` and `layout` are the only parsed fields, because every widget has them and the
+// canvas needs them to place, select, move and delete the placeholder. An edit to
+// either is written back into `raw` on save; nothing else about the widget is ever
+// read or changed. It carries no datasource and no options: whatever the newer widget
+// binds lives in `raw`, where no hub channel can mistake it for a selector this build
+// understands.
+export interface UnknownWidgetInstance {
+  id: string;
+  type: UnknownWidgetType;
+  layout: WidgetLayout;
+  raw: Record<string, unknown>;
+  datasource?: undefined;
+  options?: undefined;
+}
+
+export type WidgetInstance = KnownWidgetInstance | UnknownWidgetInstance;
 
 export interface CanvasBackground {
   color?: string | null;

@@ -9,7 +9,13 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { parseDashboardDefinition, WIDGET_TYPES, type WidgetType } from '@devicechain/dashboards';
+import {
+  parseDashboardDefinition,
+  UNKNOWN_WIDGET_TYPE,
+  WIDGET_TYPES,
+  type KnownWidgetInstance,
+  type WidgetType,
+} from '@devicechain/dashboards';
 import { describe, expect, it } from 'vitest';
 
 import { validateDefinitionOptions } from './definition-options';
@@ -24,10 +30,12 @@ import { WIDGET_BINDS_DATASOURCE, WIDGET_CHANNEL } from './registry';
 //
 // 🔴 "It parses" is nearly worthless on its own, which is the whole reason this file
 // is longer than that. parseDashboardDefinition throws on only three things — a
-// non-array `widgets`, an unknown widget `type`, and a missing `layout.base` — and
-// degrades everything else silently: a malformed datasource is dropped to undefined,
-// a wrong-typed option is read back as the default, a schemaVersion mismatch is never
-// rejected. A board of ten legal type strings in layout boxes, bound to nothing and
+// non-array `widgets`, a widget with no `type`, and a missing `layout.base` — and
+// degrades everything else silently. That includes a widget type it does not know,
+// which it keeps as a placeholder for a newer viewer, so a misspelled type in a Go
+// builder would parse cleanly; parsed() below refuses any placeholder instead. Likewise
+// a malformed datasource is dropped to undefined, a wrong-typed option is read back as
+// the default, and a schemaVersion mismatch is never rejected. A board of ten legal type strings in layout boxes, bound to nothing and
 // configured with nothing, parses perfectly. So every check below is about what
 // SURVIVED the parse, not about whether it threw.
 
@@ -53,8 +61,19 @@ function raw(token: string): Record<string, unknown> {
   return JSON.parse(readFileSync(join(FIXTURES, `${token}.json`), 'utf8')) as Record<string, unknown>;
 }
 
+// The sim boards are built against THIS release's widget set, so every widget must be
+// a type this build renders. A placeholder here is a misspelled or unregistered type
+// in a Go builder, and it fails every test that reads the board, not one.
 function parsed(token: string) {
-  return parseDashboardDefinition(raw(token));
+  const def = parseDashboardDefinition(raw(token));
+  const widgets: KnownWidgetInstance[] = [];
+  for (const widget of def.widgets) {
+    if (widget.type === UNKNOWN_WIDGET_TYPE) {
+      throw new Error(`${token}: ${widget.id} has a widget type this build does not know: ${JSON.stringify(widget.raw.type)}`);
+    }
+    widgets.push(widget);
+  }
+  return { ...def, widgets };
 }
 
 // The pathological axes each widget type can show as a BOARD PLACEMENT.
