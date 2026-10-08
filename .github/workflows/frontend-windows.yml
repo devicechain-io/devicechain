@@ -21,9 +21,11 @@
 # block merges of changes that have nothing to do with it.
 #
 # SCOPE, so it is not overclaimed. It runs `npm ci`, `build:packages`, the
-# launcher's own tests (scripts/launch.test.mjs, on native Windows paths) and
-# `typecheck`. It does NOT run lint (the apps' lint scripts single-quote their
-# glob, which cmd.exe passes through literally), the unit tests, codegen, the production build or `verify:packages` (which links
+# launcher's own tests (scripts/launch.test.mjs, on native Windows paths),
+# `typecheck` and `lint`. Lint is here because the apps' lint scripts once
+# single-quoted their glob, which cmd.exe passes through literally, so eslint found
+# no files and failed on every Windows machine. It does NOT run the unit tests,
+# codegen, the production build or `verify:packages` (which links
 # with directory symlinks, a privilege Windows does not grant by default). None
 # of those is claimed to work on Windows by this check.
 name: frontend-windows
@@ -83,3 +85,7 @@ jobs:
 
       - name: Typecheck
         run: npm run typecheck
+
+      # Through npm, so the scripts run under cmd.exe exactly as a contributor's do.
+      - name: Lint
+        run: npm run lint
