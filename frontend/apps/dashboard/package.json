@@ -13,7 +13,7 @@
     "typecheck": "tsc --noEmit",
     "pretest": "node ../../scripts/build-packages.mjs",
     "test": "vitest run",
-    "lint": "eslint 'src/**/*.{ts,tsx}'"
+    "lint": "eslint \"src/**/*.{ts,tsx}\""
   },
   "dependencies": {
     "@devicechain/brand": "0.0.0-dev",

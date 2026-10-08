@@ -15,7 +15,7 @@
     "test": "vitest run",
     "codegen": "graphql-codegen --config codegen.ts",
     "i18n:extract": "i18next -c i18next-parser.config.js",
-    "lint": "eslint 'src/**/*.{ts,tsx}'"
+    "lint": "eslint \"src/**/*.{ts,tsx}\""
   },
   "dependencies": {
     "@devicechain/brand": "0.0.0-dev",
