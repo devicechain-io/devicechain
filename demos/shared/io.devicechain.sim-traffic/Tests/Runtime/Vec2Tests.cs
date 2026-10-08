@@ -119,5 +119,53 @@ namespace DeviceChain.Sim.Traffic.Tests
             Assert.That(Vec2.Cross(v, v.Rotate(10)), Is.LessThan(0));
             Assert.That(Vec2.Cross(v, v.Rotate(-10)), Is.GreaterThan(0));
         }
+
+        [Test]
+        public void ToStringIsInvariantXThenZ()
+        {
+            Assert.That(new Vec2(1.5, -2).ToString(), Is.EqualTo("(1.5, -2)"));
+            Assert.That(new Vec2(0.1, 1e21).ToString(), Is.EqualTo("(0.1, 1E+21)"));
+        }
+
+        [Test]
+        public void EqualityIsComponentWise()
+        {
+            var a = new Vec2(1.5, -2);
+            Assert.That(a.Equals(new Vec2(1.5, -2)), Is.True);
+            Assert.That(a.Equals((object)new Vec2(1.5, -2)), Is.True);
+            Assert.That(a.Equals(new Vec2(-2, 1.5)), Is.False, "X and Z swapped");
+            Assert.That(a.Equals(new Vec2(1.5, 2)), Is.False, "Z differs");
+            Assert.That(a.Equals(new Vec2(-1.5, -2)), Is.False, "X differs");
+            Assert.That(a.Equals((object)null), Is.False);
+            Assert.That(a.Equals((object)1.5), Is.False);
+            Assert.That(new Vec2(1.5, -2).GetHashCode(), Is.EqualTo(a.GetHashCode()));
+        }
+
+        [Test]
+        public void HashUsesBothComponents()
+        {
+            // Not a contract (unequal values may collide), but a hash that ignored a component or its order would
+            // send every vehicle in one lane to one bucket.
+            var a = new Vec2(1, 2);
+            Assert.That(new Vec2(1, 3).GetHashCode(), Is.Not.EqualTo(a.GetHashCode()), "Z ignored");
+            Assert.That(new Vec2(3, 2).GetHashCode(), Is.Not.EqualTo(a.GetHashCode()), "X ignored");
+            Assert.That(new Vec2(2, 1).GetHashCode(), Is.Not.EqualTo(a.GetHashCode()), "components unordered");
+        }
+
+        [Test]
+        public void EqualVectorsHashAlikeAtSignedZeroAndNaN()
+        {
+            var zero = new Vec2(0.0, 0.0);
+            var negZero = new Vec2(-0.0, -0.0);
+            Assert.That(zero.Equals(negZero), Is.True);
+            Assert.That(negZero.GetHashCode(), Is.EqualTo(zero.GetHashCode()));
+
+            // two NaNs with different payloads
+            var nanA = new Vec2(double.NaN, 1);
+            var nanB = new Vec2(System.BitConverter.Int64BitsToDouble(unchecked((long)0xFFF8000000000001UL)), 1);
+            Assert.That(double.IsNaN(nanB.X), Is.True);
+            Assert.That(nanA.Equals(nanB), Is.True);
+            Assert.That(nanB.GetHashCode(), Is.EqualTo(nanA.GetHashCode()));
+        }
     }
 }

@@ -1698,18 +1698,17 @@ jobs:
       - name: Test
         run: dotnet test --no-build -c Release --blame-hang-timeout 2m
 
-      # One set of files must mean one behaviour on every runtime, so the shared sources carry
-      # no conditional compilation at all. 🔴 The exit status is checked EXACTLY: grep exits 1
-      # for "no match", 0 for a match, and 2 for a bad path or a read error — and 2 must fail
-      # too, or a renamed folder would turn this into a check of nothing that reports clean.
-      - name: No conditional compilation in the shared sources
-        run: |
-          set +e
-          grep -rnE '^\s*#\s*(el)?if\b' ../Runtime ../Testing ../Tests
-          rc=$?
-          set -e
-          [ "$rc" -eq 1 ] || { echo "::error::grep rc=$rc (0 = found a directive above, 2 = bad path or read error)"; exit 1; }
-          echo "no #if/#elif in Runtime/, Testing/ or Tests/"
+      # Source rules neither compiler enforces: no conditional compilation in Runtime/, Testing/
+      # or Tests/ (one set of files, one behaviour on every runtime), and no async tests. The
+      # self-test runs first, so the green run below is one that could have been red; it covers
+      # indented directives and a missing folder (grep rc=2), which must fail too.
+      - name: Shared source rules self-test
+        working-directory: .
+        run: hack/check-unity-shared-sources.sh --self-test
+
+      - name: No conditional compilation and no async tests in the shared sources
+        working-directory: .
+        run: hack/check-unity-shared-sources.sh demos/shared/io.devicechain.sim-traffic
 
       # Unity imports the package from these files with whatever .meta files are committed;
       # a missing one gets a new GUID on every machine. The self-test runs first so the green

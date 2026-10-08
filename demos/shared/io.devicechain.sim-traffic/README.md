@@ -6,12 +6,14 @@ SPDX-License-Identifier: Apache-2.0
 # io.devicechain.sim-traffic
 
 Plain C# building blocks for drawing plausible vehicle and machine traffic in DeviceChain simulations and
-demos: the shapes bodies occupy on the ground, the lanes they drive, and the rules that keep simulated bodies
-from overlapping or freezing. It is shared by the Unity demos in this repository, and it builds and tests
-without Unity.
+demos. It is shared by the Unity demos in this repository, and it builds and tests without Unity.
 
-This package is at its start: today it holds the 2D vector type (`DeviceChain.Sim.Traffic.Geometry.Vec2`)
-and the build, test and CI scaffolding the rest is added to.
+This package is at its start: today it holds only the 2D vector type
+(`DeviceChain.Sim.Traffic.Geometry.Vec2`) and the build, test and CI scaffolding the rest is added to. It is
+intended to grow to hold the shapes bodies occupy on the ground, the lanes they drive, and rules for moving
+simulated bodies without overlap. None of that is here yet, and nothing here promises it: what those rules
+guarantee, and the conditions under which they guarantee it, will be stated in this README when they are
+added.
 
 ## What it is not
 
@@ -74,15 +76,21 @@ Unity.exe -batchmode -nographics -projectPath <repo>/demos/shared/sim-traffic-un
 ## Rules for the code
 
 These are what let one set of files compile for Unity (Mono in the Editor, IL2CPP in players) and for dotnet.
-CI checks the first four.
+Those marked *(checked)* are enforced in CI; the rest are kept by review.
 
-- **C# 9.** `Dotnet~/Directory.Build.props` pins `LangVersion 9`, as Unity compiles, so a newer construct
-  fails the dotnet build.
-- **No conditional compilation** (`#if`, `#elif`) in `Runtime/`, `Testing/` or `Tests/`. One set of files
-  means one behaviour on every runtime.
+- **C# 9** *(checked)*. `Dotnet~/Directory.Build.props` pins `LangVersion 9`, as Unity compiles, so a newer
+  construct fails the dotnet build.
+- **No conditional compilation** (`#if`, `#elif`) in `Runtime/`, `Testing/` or `Tests/` *(checked by
+  `hack/check-unity-shared-sources.sh`)*. One set of files means one behaviour on every runtime.
 - **The NUnit subset both runners share** in `Tests/`: `[Test]`, `[TestCase]`, `Assert.That` with `Is.`/`Has.`
-  constraints, `Assert.Ignore`, `[Category]`. No async tests and no `[Timeout]`.
-- **Every file and folder has a committed `.meta`.** Add files, run the host project once (above), and
-  commit the `.meta` files Unity writes. `hack/check-unity-metas.sh` fails on a missing or orphaned one.
+  constraints, `Assert.Ignore`, `[Category]`. Partly checked: async tests (an `async` method, or one returning
+  `Task`) are refused by `hack/check-unity-shared-sources.sh`, and an NUnit API newer than 3.6, such as
+  `[Timeout]`, fails the `Tests.Compat` compile. Anything else outside the subset that NUnit 3.6 has is kept
+  out by review.
+- **Every file and folder has a committed `.meta`** *(checked by `hack/check-unity-metas.sh`, which fails on a
+  missing or orphaned one)*. Add files, run the host project once (above), and commit the `.meta` files Unity
+  writes.
 - **AOT-safe:** no reflection, no runtime code generation, no `dynamic`. The `net8.0` build turns on the
-  trim and AOT analyzers.
+  trim and AOT analyzers, which catch some of this but not all of it (for example, a struct that relies on
+  the default `ValueType.Equals`, which compares fields by reflection; `Vec2` implements its own), so the
+  rest is kept by review.

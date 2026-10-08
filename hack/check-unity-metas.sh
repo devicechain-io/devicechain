@@ -61,15 +61,18 @@ check() {
     {
       if (index($0, dir "/") != 1) next
       rel = substr($0, length(dir) + 2)
-      if (rel == "" || ignored(rel)) next
-      if (rel ~ /\.meta$/) { have[rel] = 1; next }
-      want[rel ".meta"] = 1
-      # every enclosing folder below the package root is an asset too
+      if (rel == "") next
+      # Every enclosing folder below the package root that Unity imports is an asset too,
+      # even when the file that puts it in git is one Unity ignores: a folder tracked only
+      # through a .gitkeep is imported, and gets a .meta, all the same.
       path = rel
       while ((i = match(path, /\/[^\/]*$/)) > 0) {
         path = substr(path, 1, i - 1)
-        want[path ".meta"] = 1
+        if (!ignored(path)) want[path ".meta"] = 1
       }
+      if (ignored(rel)) next
+      if (rel ~ /\.meta$/) { have[rel] = 1; next }
+      want[rel ".meta"] = 1
     }
     END {
       for (m in want) if (!(m in have)) print "missing\t" dir "/" m
@@ -113,6 +116,11 @@ self_test() {
     : >"$r/pkg/Dotnet~/Proj/Proj.csproj"                   # Unity ignores ~ folders: no .meta wanted
     : >"$r/pkg/.hidden/notes"                              # nor hidden ones
     : >"$r/pkg/.gitattributes"
+    mkdir -p "$r/pkg/CVS" "$r/pkg/Runtime/Keep"
+    : >"$r/pkg/CVS/Entries"                                # nor a folder named cvs (any case)
+    : >"$r/pkg/Runtime/scratch.tmp"                        # nor a .tmp file
+    : >"$r/pkg/Runtime/Keep/.gitkeep"                      # a folder tracked only by an ignored file...
+    : >"$r/pkg/Runtime/Keep.meta"                          # ...is still imported, so it has a .meta
     git -C "$r" init -q
     git -C "$r" add -A
     echo "$r"
@@ -131,7 +139,7 @@ self_test() {
 
   local r
   r="$(fixture clean)"
-  expect pass "a package with every .meta (and ~/hidden content without one)" "$r"
+  expect pass "a package with every .meta (and ~, hidden, cvs and .tmp content without one)" "$r"
 
   r="$(fixture missing-file)"
   git -C "$r" rm -q --cached pkg/Runtime/Geometry/Vec2.cs.meta
@@ -140,6 +148,10 @@ self_test() {
   r="$(fixture missing-folder)"
   git -C "$r" rm -q --cached pkg/Runtime/Geometry.meta
   expect fail "a folder whose .meta is not committed" "$r"
+
+  r="$(fixture missing-kept-folder)"
+  git -C "$r" rm -q --cached pkg/Runtime/Keep.meta
+  expect fail "a folder holding only an ignored file, whose .meta is not committed" "$r"
 
   r="$(fixture orphan)"
   git -C "$r" rm -q --cached pkg/Runtime/Geometry/Vec2.cs

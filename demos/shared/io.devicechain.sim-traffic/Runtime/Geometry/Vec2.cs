@@ -10,7 +10,13 @@ namespace DeviceChain.Sim.Traffic.Geometry
     /// A point or direction on the ground plane, in metres: X east, Z north, as seen from above (Unity's X/Z with Y up).
     /// Headings are degrees clockwise from north (+Z), so a heading h points along (sin h, cos h).
     /// </summary>
-    public readonly struct Vec2
+    /// <remarks>
+    /// Equality is component-wise and exact, implemented here rather than inherited: the default
+    /// <see cref="ValueType.Equals(object)"/> compares double fields through reflection. 0 and -0 are equal and
+    /// NaN equals NaN (as <see cref="double.Equals(double)"/> has it), and <see cref="GetHashCode"/> agrees with
+    /// that.
+    /// </remarks>
+    public readonly struct Vec2 : IEquatable<Vec2>
     {
         public readonly double X;
         public readonly double Z;
@@ -46,6 +52,15 @@ namespace DeviceChain.Sim.Traffic.Geometry
             double s = Math.Sin(r), c = Math.Cos(r);
             return new Vec2(X * c + Z * s, Z * c - X * s);
         }
+
+        public bool Equals(Vec2 other) => X.Equals(other.X) && Z.Equals(other.Z);
+
+        public override bool Equals(object obj) => obj is Vec2 other && Equals(other);
+
+        // double.GetHashCode already hashes 0 and -0 alike, and every NaN alike, on both runtimes this compiles for
+        // (.NET and Unity's class library), matching double.Equals. EqualVectorsHashAlikeAtSignedZeroAndNaN holds
+        // that in both test runs, so a runtime where it stops being true fails a test rather than a lookup.
+        public override int GetHashCode() => unchecked((X.GetHashCode() * 397) ^ Z.GetHashCode());
 
         public override string ToString() =>
             "(" + X.ToString("R", CultureInfo.InvariantCulture) + ", " + Z.ToString("R", CultureInfo.InvariantCulture) + ")";
