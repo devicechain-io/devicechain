@@ -21,7 +21,6 @@ import { decodeToken, gql, setAuthTokenGetter } from '@devicechain/client';
 import {
   createDeviceResolver,
   createEntityLister,
-  DashboardHub,
   effectiveBindings,
   type SelectionTarget,
   type SlotBinding,
@@ -30,6 +29,7 @@ import {
   DashboardRenderer,
   MapRuntimeProvider,
   TenantBasemapProvider,
+  useDashboardHub,
   useResolvedBindings,
   useSlotCandidates,
 } from '@devicechain/widgets';
@@ -303,7 +303,7 @@ function Load({
 }
 
 // ── Step 3: View ────────────────────────────────────────────────────────────
-// Render the parsed definition read-only through a hub bound to the effective
+// Render the parsed definition read-only, its slots resolved through the effective
 // manifest. VIEW-ONLY — no edit mode, no save, no react-rnd.
 
 function View({
@@ -322,33 +322,26 @@ function View({
 
   // base = definition defaults merged with the pasted manifest override; the cascade
   // (useResolvedBindings) resolves scoped slots from their parent + the selection overlay
-  // and returns the settled manifest the hub + renderer use. The resolver backs both the
-  // hub's anchor→device-token expansion and the cascade's membership lookups.
+  // and returns the settled manifest the renderer resolves every widget's slot through.
+  // The resolver backs both the hub's anchor→device-token expansion and the cascade's
+  // membership lookups.
   const resolver = useMemo(() => createDeviceResolver(), []);
   // The context/entity-selector candidate provider (ADR-039 selection amendment): backs a
   // context-selector so a viewer can re-point the dashboard's top-level context or pick a
   // member within it. Shares the resolver's device-management coupling via one factory.
   const lister = useMemo(() => createEntityLister(), []);
   const base = useMemo(() => effectiveBindings(definition, manifest), [definition, manifest]);
-  // The view-driven selection overlay (an alarm-originator drill). Lives outside the hub
-  // so the hub rebuild a rebind triggers never erases it.
+  // The view-driven selection overlay (an alarm-originator drill, a selector pick).
   const [selection, setSelection] = useState<Record<string, SlotBinding>>({});
   const select = useCallback((t: SelectionTarget) => {
     setSelection((prev) => ({ ...prev, [t.slot]: t.binding }));
   }, []);
   const bindings = useResolvedBindings(definition, base, selection, resolver);
   const candidates = useSlotCandidates(definition, bindings, resolver, lister);
-  const bindingsKey = useMemo(() => JSON.stringify(bindings), [bindings]);
-  const authoritiesKey = authorities.join(',');
-  // One hub for this view's lifetime, rebuilt when the resolved bindings change (the
-  // shipped rebind path) and torn down on unmount.
-  const hub = useMemo(
-    () => new DashboardHub({ resolver, bindings, authorities }),
-    // bindings read via bindingsKey (value identity), authorities via authoritiesKey.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [resolver, bindingsKey, authoritiesKey],
-  );
-  useEffect(() => () => hub.disposeAll(), [hub]);
+  // ONE hub for this view's lifetime (per resolver + authorities), torn down on unmount.
+  // It holds no bindings: a selection reaches the renderer as new `bindings`, and only the
+  // widgets bound to the re-pointed slot re-subscribe.
+  const hub = useDashboardHub(resolver, authorities);
 
   const title = definition.title || t('view:untitled');
   const basemap = useTenantBasemapQuery();

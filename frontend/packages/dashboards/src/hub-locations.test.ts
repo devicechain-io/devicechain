@@ -156,22 +156,6 @@ describe('DashboardHub location channel', () => {
     expect(snap.kind === 'positions' && snap.locations.map((l) => l.deviceToken)).toEqual(['d1', 'd2']);
   });
 
-  it('a slot selector naming the location series resolves through the binding manifest', async () => {
-    h.gql.mockResolvedValue(page([sample({ deviceToken: 'bound-device' })]));
-    const hub = new DashboardHub({
-      resolver: newResolver(),
-      bindings: { fleet: { kind: 'device', deviceToken: 'bound-device' } },
-    });
-
-    hub.subscribeLocations(
-      { datasource: { kind: 'slot', slot: 'fleet', measurements: [], location: { series: 'latest' } } },
-      { next: () => {} },
-    );
-    await settle();
-
-    expect(varsOf(0).deviceTokens).toEqual(['bound-device']);
-  });
-
   it('an unbound slot shows empty — never a refusal', async () => {
     // A template whose host bound nothing resolves to zero devices. It must NOT read as
     // "you are not permitted": there is no permission problem, there is no device.
@@ -179,7 +163,7 @@ describe('DashboardHub location channel', () => {
     const snaps: LocationSnapshot[] = [];
 
     hub.subscribeLocations(
-      { datasource: { kind: 'slot', slot: 'unbound', measurements: [], location: { series: 'latest' } } },
+      { datasource: { kind: 'unbound', measurements: [], location: { series: 'latest' } } },
       { next: (s) => snaps.push(s) },
     );
     await settle();

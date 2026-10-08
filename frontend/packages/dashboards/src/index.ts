@@ -27,6 +27,7 @@ export type {
   DevicesSelector,
   RelatedTraversalSelector,
   SlotSelector,
+  UnboundSelector,
   SlotDefinition,
   SlotScope,
   SlotBinding,
@@ -68,6 +69,7 @@ export {
 export {
   effectiveBindings,
   parseBindingManifest,
+  resolveWidgetDatasource,
   stripDefaultBindings,
   type ParsedBindingManifest,
 } from './bindings';

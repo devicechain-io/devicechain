@@ -33,7 +33,6 @@ import { DashboardHub } from '@devicechain/dashboards';
 
 const hub = new DashboardHub({
   resolver,                 // how a selector becomes device tokens
-  bindings,                 // slot name -> concrete entity, for templated boards
   authorities: user.scopes, // what this viewer may do; drives hub.can(...)
 });
 
@@ -84,8 +83,16 @@ and the `editor-model` transforms (`addWidget`, `setWidgetBox`, `deleteWidget`,
 A board can be written once and pointed at many entities. A widget's datasource
 may name a **slot** instead of a device, and the host supplies a binding for that
 slot at view time — `effectiveBindings`, `resolveContextBindings`,
-`applySelection` and `resolveSlotCandidates` are the machinery, and
-`hub.setBindings()` rebinds a live board.
+`applySelection` and `resolveSlotCandidates` are the machinery.
+
+The hub holds no bindings. A slot is resolved to a concrete selector before it
+is subscribed — `resolveWidgetDatasource(datasource, bindings)`, which the
+`DashboardRenderer` in `@devicechain/widgets` calls for every widget — so one
+hub serves a board for its whole life, and re-pointing a slot re-subscribes only
+the widgets bound to it. A slot with no binding resolves to `{ kind: 'unbound' }`,
+which every channel treats as zero devices; it is never turned into an absent
+datasource, which the alarm channel reads as tenant-wide. A raw `slot` selector
+handed straight to the hub is an error.
 
 ## Synthetic data
 

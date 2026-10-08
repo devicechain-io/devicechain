@@ -126,7 +126,7 @@ describe('DashboardHub alarm channel', () => {
     const snaps: AlarmSnapshot[] = [];
 
     hub.subscribeAlarms(
-      { datasource: { kind: 'slot', slot: 'unbound', measurements: [] }, pageSize: 10 },
+      { datasource: { kind: 'unbound', measurements: [] }, pageSize: 10 },
       { next: (s) => snaps.push(s) },
     );
     await settle();

@@ -120,7 +120,7 @@ The runtime is structured as layered packages:
 | `@devicechain/widgets` | the React widget components (datasource in, pixels out) and the renderer that lays them out |
 | `@devicechain/dashboards` | the `DashboardHub` (owns the connection, resolves selectors, multiplexes telemetry subscriptions) and the definition, selector, slot, and binding-manifest types |
 
-A React application embeds a live dashboard by constructing a hub with a resolver and a binding manifest, then rendering the definition. The console and the standalone `/dash` application both take this path inside this repository, building against the same artifacts an outside consumer downloads. The packages are published to npm, so an external application installs them the same way. See [npm Packages](../reference/npm-packages.md) for the install line, the version and dist-tag policy, and the one piece of host wiring the map widget needs.
+A React application embeds a live dashboard by constructing one hub with a resolver, then rendering the definition with a binding manifest. The renderer resolves each slot through the manifest, so re-pointing a slot, for example when a viewer drills into an alarm, re-subscribes only the widgets bound to that slot; the rest of the board keeps its live values. The console and the standalone `/dash` application both take this path inside this repository, building against the same artifacts an outside consumer downloads. The packages are published to npm, so an external application installs them the same way. See [npm Packages](../reference/npm-packages.md) for the install line, the version and dist-tag policy, and the one piece of host wiring the map widget needs.
 
 ### The `/dash` reference viewer
 

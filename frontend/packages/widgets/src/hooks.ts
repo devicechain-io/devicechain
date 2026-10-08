@@ -10,6 +10,7 @@ import type {
   CommandSubscription,
   DashboardDefinition,
   DatasourceSelector,
+  DeviceResolver,
   EntityCandidateLister,
   LocationSample,
   LocationSubscription,
@@ -21,6 +22,7 @@ import type {
 } from '@devicechain/dashboards';
 import {
   bindingsWithoutScopedSlots,
+  DashboardHub,
   hasScopedSlots,
   resolveContextBindings,
   resolveSlotCandidates,
@@ -30,11 +32,30 @@ import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type RefObj
 import { useWidgetCandidates, type WidgetCandidates } from './frame';
 import { resolveChartTheme, type ChartTheme } from './theme';
 
+// useDashboardHub gives a host ONE live hub per (resolver, authorities) — compared by
+// value, so a re-rendered but equal authorities array keeps the hub — and disposes it when
+// it is replaced or the host unmounts.
+//
+// It deliberately takes no bindings. The hub holds none: the renderer resolves every slot
+// through the settled bindings (resolveWidgetDatasource) before a widget subscribes, so a
+// selection re-subscribes only the widgets bound to the re-pointed slot. A hub rebuilt per
+// selection would tear down every subscription on the board and re-fetch every history.
+export function useDashboardHub(resolver: DeviceResolver, authorities: string[] | undefined): DashboardHub {
+  const authoritiesKey = JSON.stringify(authorities ?? []);
+  const hub = useMemo(
+    () => new DashboardHub({ resolver, authorities }),
+    // authorities read via authoritiesKey (value identity), not reference.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [resolver, authoritiesKey],
+  );
+  useEffect(() => () => hub.disposeAll(), [hub]);
+  return hub;
+}
+
 // useResolvedBindings runs the scoped-slot cascade (ADR-039 selection amendment) for a
 // host: it takes the synchronous base manifest (effectiveBindings) plus the accumulated
-// selection overlay and returns the settled slot→binding map the host feeds to the hub +
-// renderer. Selection state lives in the host (so it survives the hub rebuild a rebind
-// triggers); this hook just derives bindings from it.
+// selection overlay and returns the settled slot→binding map the host feeds to the
+// renderer. Selection state lives in the host; this hook just derives bindings from it.
 //
 // The common scope-FREE dashboard needs no async work — the synchronous overlay (base
 // with the selection laid over it) is already correct, and the hook returns it directly,
@@ -72,7 +93,7 @@ export function useResolvedBindings(
       .then((next) => {
         if (!live || gen !== genRef.current) return;
         // Only swap when the value actually changed, so an equal re-resolve doesn't churn
-        // a new object reference (and rebuild the hub) for nothing.
+        // a new object reference (and re-render every widget) for nothing.
         setResolved((prev) => (sameBindings(prev, next) ? prev : next));
       })
       .catch(() => {
@@ -253,24 +274,37 @@ export function useMeasurementStream(
 ): MeasurementStreamState {
   const windowSize = options.window ?? 300;
   const initialSamples = options.initialSamples;
-  const [live, setLive] = useState<MeasurementStreamState>(EMPTY);
 
   // Value-compare the selector so an unchanged-but-new object reference doesn't
   // resubscribe every render.
   const key = datasource ? JSON.stringify(datasource) : null;
 
+  // The live buffer is TAGGED with the selector it was filled from. The effect below
+  // resets it when the selector changes, but an effect runs after the render that
+  // carried the new selector — so without the tag that render would show the previous
+  // device's values under the new one. A buffer whose tag is not the current key is
+  // treated as empty, synchronously.
+  const [tagged, setTagged] = useState<{ key: string | null; state: MeasurementStreamState }>({
+    key,
+    state: EMPTY,
+  });
+  const live = tagged.key === key ? tagged.state : EMPTY;
+
   useEffect(() => {
-    setLive(EMPTY); // reset the live buffer whenever the datasource changes (or clears)
+    setTagged({ key, state: EMPTY }); // reset the live buffer whenever the datasource changes (or clears)
     if (!datasource) return;
+
+    const update = (fn: (prev: MeasurementStreamState) => MeasurementStreamState) =>
+      setTagged((prev) => ({ key, state: fn(prev.key === key ? prev.state : EMPTY) }));
 
     return hub.subscribeWidget(datasource, {
       next: (sample) =>
-        setLive((prev) => {
+        update((prev) => {
           const samples = prev.samples.concat(sample);
           if (samples.length > windowSize) samples.splice(0, samples.length - windowSize);
           return { latest: { ...prev.latest, [sample.name]: sample }, samples, error: null };
         }),
-      error: (err) => setLive((prev) => ({ ...prev, error: err })),
+      error: (err) => update((prev) => ({ ...prev, error: err })),
     });
     // `datasource` is intentionally read via `key` (value identity), not reference.
     // eslint-disable-next-line react-hooks/exhaustive-deps

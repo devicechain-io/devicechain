@@ -18,7 +18,6 @@ import {
   bindWidgetSlot,
   clearWidgetDatasource,
   createEntityLister,
-  DashboardHub,
   effectiveBindings,
   isDirty,
   migrateToSlots,
@@ -48,6 +47,7 @@ import {
 import {
   DashboardRenderer,
   stripUnknownOptions,
+  useDashboardHub,
   useResolvedBindings,
   useSlotCandidates,
 } from '@devicechain/widgets';
@@ -75,8 +75,8 @@ type SaveState = { kind: 'clean' } | { kind: 'saving' } | { kind: 'error'; messa
 
 // useDebouncedValue returns `value`, but only advances the returned value `ms` after
 // `key` stops changing (rapid changes reset the timer). The initial value applies
-// immediately (no first-load delay). Used to coalesce rapid slot-binding edits before
-// the expensive hub reconstruction.
+// immediately (no first-load delay). Used in edit mode to coalesce rapid slot-binding
+// edits (typing an anchor) into one re-subscription of the affected widgets.
 function useDebouncedValue<T>(value: T, key: string, ms: number): T {
   const [debounced, setDebounced] = useState(value);
   const latest = useRef(value);
@@ -279,8 +279,7 @@ export function DashboardWorkspace({
   const [mode, setMode] = useState<'view' | 'edit'>('view');
   const [working, setWorking] = useState<DashboardDefinition>(loaded);
   // The view-driven selection overlay (ADR-039 selection amendment): an alarm-originator
-  // drill (and, in PR2b, a context-selector) accumulates slot→binding picks here. It
-  // lives OUTSIDE the hub so a hub rebuild (which a rebind triggers) never erases it.
+  // drill (and, in PR2b, a context-selector) accumulates slot→binding picks here.
   // Cleared on mode switch so the author sees their own bindings, not a stale drill.
   const [selection, setSelection] = useState<Record<string, SlotBinding>>({});
   const select = useCallback((t: SelectionTarget) => {
@@ -307,12 +306,8 @@ export function DashboardWorkspace({
   // override — that's the /dash embedder's job, PR I-3); useResolvedBindings runs the
   // scoped-slot cascade over it, resolving each scoped slot from its parent + the
   // selection overlay and returning the settled manifest (a scope-free dashboard passes
-  // straight through, no async). Its JSON key changes ONLY when a binding actually changes
-  // (not on layout edits, which recompute an equal manifest). The hub is CONSTRUCTED WITH
-  // these bindings and re-created when they change, so widgets always subscribe against
-  // current bindings (constructing-with, rather than a post-mount setBindings, avoids a
-  // child-effect-before-parent-effect race) — this is also the path a drill selection
-  // takes: overlay → new manifest → hub rebuild. Torn down when replaced so streams don't leak.
+  // straight through, no async). The RENDERER resolves every widget's slot through it, so
+  // a drill selection re-subscribes only the widgets bound to the re-pointed slot.
   const base = useMemo(() => effectiveBindings(working), [working]);
   const bindings = useResolvedBindings(working, base, selection, resolver);
   const bindingsKey = useMemo(() => JSON.stringify(bindings), [bindings]);
@@ -322,21 +317,15 @@ export function DashboardWorkspace({
   // picker. Passed to the view-mode renderer only (edit mode's canvas wires no selection).
   const entityLister = useMemo(() => createEntityLister(), []);
   const candidates = useSlotCandidates(working, bindings, resolver, entityLister);
-  // Debounce the manifest that drives the (expensive) hub reconstruction so rapid
-  // binding edits (e.g. typing an anchor relationship) coalesce into ONE rebuild rather
-  // than tearing down every widget's stream per keystroke.
-  const hubBindings = useDebouncedValue(bindings, bindingsKey, 250);
-  const hubKey = useMemo(() => JSON.stringify(hubBindings), [hubBindings]);
-  // The hub carries the viewer's authorities so action widgets (alarm ack/clear) can
-  // gate their controls; the server enforces alarm:write regardless.
-  const authorities = claims?.authorities;
-  const liveHub = useMemo(
-    () => new DashboardHub({ resolver, bindings: hubBindings, authorities }),
-    // resolver/bindings read via hubKey, authorities via its stringified value.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [resolver, hubKey, JSON.stringify(authorities ?? [])],
-  );
-  useEffect(() => () => liveHub.disposeAll(), [liveHub]);
+  // EDIT MODE ONLY: debounce the manifest the canvas resolves through, so typing an anchor
+  // relationship in the config panel re-subscribes the affected widgets once rather than
+  // per keystroke. View mode takes `bindings` undebounced: a selection must move the board
+  // at once, and it no longer rebuilds anything that a debounce would protect.
+  const editBindings = useDebouncedValue(bindings, bindingsKey, 250);
+  // ONE live hub per (resolver, authorities). It holds no bindings, so neither a selection
+  // nor a binding edit rebuilds it. It carries the viewer's authorities so action widgets
+  // (alarm ack/clear) can gate their controls; the server enforces alarm:write regardless.
+  const liveHub = useDashboardHub(resolver, claims?.authorities);
   const dataHub = preview ? synthetic : liveHub;
 
   const dirty = isDirty(working, saved);
@@ -673,6 +662,7 @@ export function DashboardWorkspace({
               onChange={(next) => setWorking(pruneSlots(next))}
               hub={dataHub}
               actions={dataHub}
+              bindings={editBindings}
               selectedId={selectedId}
               onSelect={setSelectedId}
             />
@@ -711,7 +701,7 @@ export function DashboardWorkspace({
             hub={dataHub}
             actions={dataHub}
             seedHistory={!preview}
-            bindings={hubBindings}
+            bindings={bindings}
             // No drill in preview: synthetic alarm rows carry fabricated originator
             // tokens, and a drill would poison the live selection overlay with a token
             // that's not a real member (blanking the widgets after preview is turned off).

@@ -5,22 +5,22 @@
 // widgets reference named slots, and each slot declares a `defaultBinding` (the
 // authoring tenant's entity). At MOUNT the host may supply a manifest that overrides
 // any slot's binding — so one definition + two manifests renders as two live
-// dashboards on different entities. effectiveBindings computes the manifest the
-// DashboardHub actually resolves against: the slot defaults, overlaid by the host's
-// overrides.
+// dashboards on different entities. effectiveBindings computes the base manifest: the
+// slot defaults, overlaid by the host's overrides. The renderer resolves each widget's
+// slot through the settled manifest (resolveWidgetDatasource) before the hub sees it.
 
 import { parseSlotBinding } from './definition';
-import type { DashboardDefinition, SlotBinding, SlotDefinition } from './types';
+import type { DashboardDefinition, DatasourceSelector, SlotBinding, SlotDefinition } from './types';
 
 // effectiveBindings merges a definition's slot default bindings with an optional
 // host manifest (manifest wins). Slots without a default and not in the manifest are
-// omitted → the Hub renders them as an empty placeholder.
+// omitted → the renderer hands those widgets an `unbound` selector, an empty placeholder.
 //
 // This is the BASE layer (defaults + manifest), computed synchronously. For a dashboard
 // with SCOPED slots it is NOT the final manifest: a scoped slot's default here is a
 // fallback that resolveContextBindings (the cascade) supersedes with a value derived
 // from the parent. A host with scoped slots feeds this map as `base` into the cascade
-// and hands the hub/renderer the cascade's output, not this map directly.
+// and hands the renderer the cascade's output, not this map directly.
 export function effectiveBindings(
   definition: DashboardDefinition,
   manifest?: Record<string, SlotBinding>,
@@ -90,4 +90,38 @@ export function stripDefaultBindings(def: DashboardDefinition): DashboardDefinit
     slots[name] = rest;
   }
   return { ...def, slots };
+}
+
+// resolveWidgetDatasource turns a widget's datasource into the CONCRETE selector a data
+// source subscribes: a `slot` is looked up in the settled bindings and becomes the device
+// or anchor it is bound to, carrying the widget's own series (measurement names, and the
+// location series when it names one). Every other selector passes through unchanged.
+//
+// This is the renderer's job, not the hub's. The hub keeps no bindings, so a selection
+// that re-points one slot changes the concrete selector of exactly the widgets bound to
+// it — and only those re-subscribe, because every channel keys its subscription on the
+// selector's VALUE. A hub that resolved slots itself had to be rebuilt on every selection,
+// which tore down and re-fetched the whole board.
+//
+// 🔴 A slot with no binding becomes `{kind:'unbound'}`, NEVER `undefined`. An absent
+// datasource is tenant-wide on the alarm channel; an unbound slot is zero devices. The
+// two must not be confused, and this function is the one place they could be.
+//
+// The lookup is own-property only, so a slot named `constructor` or `__proto__` is
+// unbound rather than resolving to something on Object.prototype.
+export function resolveWidgetDatasource(
+  datasource: DatasourceSelector | undefined,
+  bindings: Record<string, SlotBinding> | undefined,
+): DatasourceSelector | undefined {
+  if (!datasource || datasource.kind !== 'slot') return datasource;
+  const binding =
+    bindings && Object.prototype.hasOwnProperty.call(bindings, datasource.slot)
+      ? bindings[datasource.slot]
+      : undefined;
+  const series = datasource.location
+    ? { measurements: datasource.measurements, location: datasource.location }
+    : { measurements: datasource.measurements };
+  if (binding?.kind === 'device') return { kind: 'device', deviceToken: binding.deviceToken, ...series };
+  if (binding?.kind === 'anchor') return { kind: 'anchor', anchor: binding.anchor, ...series };
+  return { kind: 'unbound', ...series };
 }

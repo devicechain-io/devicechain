@@ -105,7 +105,7 @@ describe('DashboardHub control channel', () => {
     const snaps: CommandSnapshot[] = [];
 
     hub.subscribeCommands(
-      { datasource: { kind: 'slot', slot: 'unbound', measurements: [] }, pageSize: 20 },
+      { datasource: { kind: 'unbound', measurements: [] }, pageSize: 20 },
       { next: (s) => snaps.push(s) },
     );
     await settle();

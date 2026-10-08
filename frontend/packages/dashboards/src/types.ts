@@ -9,9 +9,10 @@
 // ---- Datasource selectors ---------------------------------------------------
 //
 // A selector is a tagged union (discriminated on `kind`). The Hub resolves
-// `device`, `anchor`, and `slot` (the last via its binding manifest); the
-// remaining kinds are reserved — present so definitions stay forward-compatible,
-// but the Hub rejects them until implemented.
+// `device` and `anchor`, and treats `unbound` as zero devices. A `slot` never reaches
+// it: the renderer resolves each slot through the settled bindings first (to a device,
+// an anchor, or `unbound`). The remaining kinds are reserved — present so definitions
+// stay forward-compatible, but the Hub rejects them until implemented.
 
 // ---- Location series selection (ADR-078 decision 9) -------------------------
 //
@@ -102,12 +103,36 @@ export interface RelatedTraversalSelector {
 // concrete entity at MOUNT by the host's binding manifest (ADR-039 runtime
 // binding). This makes a definition a reusable TEMPLATE: the widget names the
 // entity role (`slot`) and the measurements it wants, and two mounts of the same
-// definition can bind the slot to two different devices. The Hub resolves it via
-// the binding manifest (a slot's defaultBinding, overridable by the host); an
-// unbound slot renders as an empty placeholder.
+// definition can bind the slot to two different devices. The RENDERER resolves it
+// through the settled bindings (a slot's defaultBinding, overridable by the host and
+// by a selection) before the data source sees it, so re-pointing a slot re-subscribes
+// only the widgets bound to it; an unbound slot becomes an `unbound` selector and
+// renders as an empty placeholder.
 export interface SlotSelector {
   kind: 'slot';
   slot: string;
+  measurements: string[];
+  location?: LocationSelection;
+}
+
+// unbound — a slot that has NO binding, as the renderer hands it to a data source.
+//
+// It is never authored: the renderer produces it when it resolves a widget's `slot`
+// selector through the settled bindings and finds nothing there (see
+// resolveWidgetDatasource). Every live channel resolves it to ZERO devices — no stream,
+// an empty alarm snapshot, no command target, no positions, and no availability check.
+//
+// 🔴 It is the OPPOSITE of an absent datasource, and the difference is not cosmetic. A
+// widget with no datasource at all is tenant-wide on the alarm channel, so an unbound slot
+// that collapsed into `undefined` would show every alarm in the tenant under a subtitle
+// that implies one machine. Unbound is therefore a resolved state of its own, never a
+// missing one.
+//
+// It carries the widget's series (measurement names, and the location series when one is
+// named) so an offline preview source, which never resolves a device, can still fabricate
+// the values a widget asks for. The live hub reads none of it.
+export interface UnboundSelector {
+  kind: 'unbound';
   measurements: string[];
   location?: LocationSelection;
 }
@@ -117,7 +142,8 @@ export type DatasourceSelector =
   | AnchorSelector
   | DevicesSelector
   | RelatedTraversalSelector
-  | SlotSelector;
+  | SlotSelector
+  | UnboundSelector;
 
 // ---- Canvas + widgets -------------------------------------------------------
 

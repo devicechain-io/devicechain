@@ -13,7 +13,7 @@
 // (WYSIWYG) but pointer-inert so the pointer drives react-rnd. Editing targets the
 // 'base' breakpoint; per-breakpoint responsive editing is deferred.
 
-import { useLayoutEffect, useRef, useState } from 'react';
+import { useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   baseBox,
@@ -24,10 +24,11 @@ import {
   setWidgetBox,
   type DashboardDefinition,
   type GridGeometry,
+  type SlotBinding,
   type WidgetActions,
   type WidgetDataSource,
 } from '@devicechain/dashboards';
-import { ConnectedWidget, WidgetSubjectProvider, widgetSubjectLabel } from '@devicechain/widgets';
+import { ConnectedWidget, WidgetSubjectProvider, resolveWidgets, widgetSubjectLabel } from '@devicechain/widgets';
 import { Rnd } from 'react-rnd';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
@@ -40,6 +41,10 @@ export interface DashboardCanvasProps {
   // canvas makes each widget pointer-inert during editing, so the controls are visible
   // but inert — react-rnd owns drag/resize.
   actions?: WidgetActions;
+  // The settled slot manifest each widget's slot is resolved through before it subscribes
+  // (the data source holds no bindings). The workspace passes its edit-mode manifest,
+  // debounced, so typing an anchor re-subscribes the affected widgets once.
+  bindings: Record<string, SlotBinding>;
   // Selection is lifted to the workspace (which owns the config panel); the
   // canvas is fully controlled — it reports clicks and reflects the current id.
   selectedId: string | null;
@@ -64,10 +69,24 @@ function useMeasuredWidth<T extends HTMLElement>(): [React.RefObject<T | null>, 
   return [ref, width];
 }
 
-export function DashboardCanvas({ definition, onChange, hub, actions, selectedId, onSelect }: DashboardCanvasProps) {
+export function DashboardCanvas({
+  definition,
+  onChange,
+  hub,
+  actions,
+  bindings,
+  selectedId,
+  onSelect,
+}: DashboardCanvasProps) {
   const { t } = useTranslation('dashboards');
   const { grid, sizing } = definition.canvas;
   const [contentRef, measuredWidth] = useMeasuredWidth<HTMLDivElement>();
+  // Each widget as it RENDERS: its slot resolved to a concrete selector. Render-only — the
+  // editing transforms below act on `definition`, never on these copies.
+  const resolved = useMemo(
+    () => new Map(resolveWidgets(definition.widgets, bindings).map((w) => [w.id, w])),
+    [definition.widgets, bindings],
+  );
 
   const rowGap = typeof grid.gap === 'number' ? grid.gap : grid.gap.row;
   const colGap = typeof grid.gap === 'number' ? grid.gap : grid.gap.col;
@@ -144,11 +163,11 @@ export function DashboardCanvas({ definition, onChange, hub, actions, selectedId
               <div inert style={{ width: '100%', height: '100%', pointerEvents: 'none' }}>
                 {/* Same resolved-entity subtitle the viewer shows, so the widget's frame
                     (and hence its body height) is WYSIWYG between editing and viewing.
-                    Resolved from the working definition's slot defaults — edit mode has no
+                    Read from the selector the widget subscribes with — edit mode has no
                     live selection overlay (selection is inert here), so the author's own
                     bindings are the right subject. */}
-                <WidgetSubjectProvider label={widgetSubjectLabel(widget, definition.slots, undefined)}>
-                  <ConnectedWidget widget={widget} hub={hub} actions={actions} />
+                <WidgetSubjectProvider label={widgetSubjectLabel(resolved.get(widget.id) ?? widget)}>
+                  <ConnectedWidget widget={resolved.get(widget.id) ?? widget} hub={hub} actions={actions} />
                 </WidgetSubjectProvider>
               </div>
 
