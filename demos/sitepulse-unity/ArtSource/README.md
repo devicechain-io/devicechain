@@ -115,7 +115,7 @@ any point in the loop. Re-run it whenever the terrain changes.
 
 `quarry_fleet.py --live` writes the Live-mode variant, `../Assets/Sitepulse/Data/quarry_fleet_live.json`,
 in the same format with the same 18 machine ids: all six haulers run the haul loop, a sixth of the
-loop apart (about 37.9 s), and there is no scripted refuel visit, because in Live mode a truck goes
+loop apart (about 38.7 s), and there is no scripted refuel visit, because in Live mode a truck goes
 to the refuel bay when the platform sends it `goto-refuel`. The loader's cycle is retimed to the new
 spacing. Three loop constants change (`LIVE_LOAD_STOP`, `LIVE_CUSP_STOP`, `LIVE_TURN_X`: a shorter
 load stop, a longer wait at the dump pad's turn-round, and the turn-round 2 m further from the

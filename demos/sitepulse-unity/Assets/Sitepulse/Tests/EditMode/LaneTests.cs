@@ -44,8 +44,12 @@ namespace DeviceChain.Sitepulse.Tests
 
             Assert.AreEqual(5.0, CommandKit.Site.Roads.First(r => r.Name == "pit-ramp").LaneOffset, 1e-9, "the 20 m ramp's lanes are at its quarter lines");
             Assert.AreEqual(3.5, CommandKit.Site.Roads.First(r => r.Name == "fill-road").LaneOffset, 1e-9, "the 14 m road's are at its quarter lines too");
-            CollectionAssert.AreEquivalent(new[] { "plant-road", "fill-return", "yard-road" }, CommandKit.Site.Roads.Where(r => r.SingleLane).Select(r => r.Name).ToArray(),
-                "the 10 m plant road and the two 12 m roads are too narrow for two trucks");
+            CollectionAssert.AreEquivalent(new[] { "plant-road" }, CommandKit.Site.Roads.Where(r => r.SingleLane).Select(r => r.Name).ToArray(),
+                "only the 10 m plant road is too narrow for two trucks: the fill return and the yard road are 12.5 m, the least that has a lane each way");
+            Assert.AreEqual(12.5, CommandKit.Site.Roads.First(r => r.Name == "fill-return").Width, 1e-9);
+            Assert.AreEqual(12.5, CommandKit.Site.Roads.First(r => r.Name == "yard-road").Width, 1e-9);
+            Assert.AreEqual(3.4, CommandKit.Site.Roads.First(r => r.Name == "fill-return").LaneOffset, 1e-9, "their lanes are at the least offset");
+            Assert.AreEqual(3.4, CommandKit.Site.Roads.First(r => r.Name == "yard-road").LaneOffset, 1e-9);
         }
 
         static RoadLine RoadOfWidth(double width) =>
@@ -97,7 +101,7 @@ namespace DeviceChain.Sitepulse.Tests
                     }
             }
 
-            Assert.AreEqual(2, checkedRoads, "the ramp and the fill road have a lane each way");
+            Assert.AreEqual(4, checkedRoads, "the ramp, the fill road, the fill return and the yard road have a lane each way");
             Assert.Greater(worst, 0.0, $"two haul trucks passing in the lanes of a road have air between them (the least: {worst:0.00} m, {where})");
         }
 
@@ -182,9 +186,9 @@ namespace DeviceChain.Sitepulse.Tests
 
             Assert.Greater(seen, 50, "the roads were read");
             Assert.Greater(lanes, 20, "most of the wide roads carry their lanes");
-            Assert.Greater(narrow, 20, "the narrow roads were read");
+            Assert.Greater(narrow, 0, "the narrow road was read (only the 10 m plant road is narrow now: the 12 m roads were widened to 12.5 m)");
             Assert.Greater(steepSingles, 0, "a stretch of the ramp has a lane too steep to drive");
-            Assert.Greater(nearSingles, 0, "a stretch of the fill road runs close to a light tower");
+            Assert.Greater(nearSingles, 0, "a stretch of a wide road runs close to something standing (the end of the fill return, by a barrier)");
         }
 
         // is a lane of this road, either way, steeper than the limit beside this stretch? Read as the ground under the lane's own line
@@ -828,9 +832,14 @@ namespace DeviceChain.Sitepulse.Tests
                 }
             }
 
-            // this reads each road's lane by its WIDTH only, as the generator lays it: the loop is on its left lane on the ramp and the 14 m road and on
-            // the centreline of the narrow ones. It does not apply the per-stretch rule (a steep or obstacle-adjacent stretch of a wide road is
-            // single-lane in the routes), which the generator does not know yet: there the loop still drives its lane
+            // this reads each road's lane by its WIDTH only: the loop is on its left lane on every road with two (the ramp, the 14 m road and the two
+            // 12.5 m ones) and on the centreline of the plant road. Where the generator eases the loop's lane toward the centreline to keep it within the
+            // grade limit (the inside of the ramp's curve, down to 3.6 m) the frame is not within a metre of the full lane, which is why the test asks 90%
+            // and a median (SiteClearanceTests reads the loop's grade itself).
+            // It does NOT apply RouteGraph's per-stretch rule, which keeps the steep ramp stretches single-lane for a COMMANDED truck (it drives the
+            // centreline there). So a commanded truck on the centreline and a loop truck in the inside lane, 3.6 m off it, overlap by about 2.1 m
+            // (5.7 m wide trucks, 3.6 m apart; it was about 0.7 m with the lane at 5 m), and TaskDirector.Blocked only yields within 3.0 m laterally,
+            // so neither gives way. A known gap, closed by the traffic cutover, which has commanded trucks drive the loop's lanes
             foreach (var name in new[] { "pit-ramp", "fill-return", "yard-road" })
                 Assert.Greater(frameCount.TryGetValue(name, out var n) ? n : 0, 20, $"the loop drives along {name}");
             Assert.Greater(onRoad, 200, "the loop spends much of its time driving along roads");

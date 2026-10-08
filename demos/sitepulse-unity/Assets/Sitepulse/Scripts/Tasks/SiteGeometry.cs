@@ -55,7 +55,7 @@ namespace DeviceChain.Sitepulse.Tasks
 
         /// <summary>
         /// Too narrow for two haul trucks to pass (narrower than <see cref="TwoLaneWidth"/>): a truck drives its centreline, and two
-        /// going opposite ways would overlap on it, so only one may be on it at a time (nothing enforces that yet). On this site: the plant road (10 m), the fill return and the yard road (12 m).
+        /// going opposite ways would overlap on it, so only one may be on it at a time (nothing enforces that yet). On this site: the plant road (10 m).
         /// </summary>
         public bool SingleLane => Width < TwoLaneWidth;
 
@@ -139,6 +139,9 @@ namespace DeviceChain.Sitepulse.Tasks
         }
 
         public string Name { get; }
+
+        /// <summary>A prop (an oriented box, a solid thing), not a pile or the refuel approach (a capsule, a keep-clear zone).</summary>
+        public bool IsBox => isBox;
 
         public static Obstacle Box(string name, double x, double z, double halfX, double halfZ, double headingDegrees) =>
             new Obstacle(name, true, x, z, halfX, halfZ, headingDegrees, 0, 0, 0);
