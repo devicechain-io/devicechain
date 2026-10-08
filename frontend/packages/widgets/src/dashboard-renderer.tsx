@@ -178,7 +178,7 @@ export function resolveWidgets(
   bindings: Record<string, SlotBinding> | undefined,
 ): WidgetInstance[] {
   return widgets.map((widget) => {
-    if (widget.datasource?.kind !== 'slot') return widget;
+    if (widget.type === UNKNOWN_WIDGET_TYPE || widget.datasource?.kind !== 'slot') return widget;
     return { ...widget, datasource: resolveWidgetDatasource(widget.datasource, bindings) };
   });
 }
