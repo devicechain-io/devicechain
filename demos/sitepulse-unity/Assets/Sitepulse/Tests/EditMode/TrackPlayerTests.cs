@@ -7,7 +7,9 @@ using System.IO;
 using System.Linq;
 using System.Text.Json;
 using DeviceChain.Sitepulse.Tasks;
+using DeviceChain.Sitepulse.Visuals;
 using NUnit.Framework;
+using UnityEditor;
 using UnityEngine;
 
 namespace DeviceChain.Sitepulse.Tests
@@ -253,6 +255,78 @@ namespace DeviceChain.Sitepulse.Tests
             var f = p.Sample(body.TrackSeconds);
             Assert.AreEqual(f.X, body.X, 1e-3);
             Assert.AreEqual(f.Z, body.Z, 1e-3);
+        }
+
+        // ---- the scene's own fleet plays at the rate the task layer sets
+
+        [Test]
+        public void AMachineOfTheSceneFleetHeldByItsRateStandsWhereItIsWhileTheSceneClockRunsAndPlaysOnFromThereWhenReleased()
+        {
+            var terrainGo = new GameObject("terrain") { hideFlags = HideFlags.HideAndDontSave };
+            var fleetGo = new GameObject("fleet") { hideFlags = HideFlags.HideAndDontSave };
+            try
+            {
+                terrainGo.SetActive(false);
+                terrainGo.AddComponent<Terrain>();
+                var terrain = terrainGo.AddComponent<QuarryTerrain>();
+                terrain.heightmap = AssetDatabase.LoadAssetAtPath<TextAsset>("Assets/Sitepulse/Art/Terrain/quarry_height.bytes");
+                terrain.features = AssetDatabase.LoadAssetAtPath<TextAsset>("Assets/Sitepulse/Art/Terrain/quarry_features.json");
+                terrainGo.SetActive(true);
+                Assert.IsTrue(terrain.Built, "the terrain the fleet stands on");
+
+                fleetGo.SetActive(false);
+                var fleet = fleetGo.AddComponent<QuarryFleetPreview>();
+                fleet.choreography = AssetDatabase.LoadAssetAtPath<TextAsset>("Assets/Sitepulse/Data/quarry_fleet.json");
+                fleet.terrain = terrain;
+                fleet.hauler = AssetDatabase.LoadAssetAtPath<GameObject>("Assets/Sitepulse/Art/Models/hauler.glb");
+                fleet.haulerLod1 = AssetDatabase.LoadAssetAtPath<GameObject>("Assets/Sitepulse/Art/Models/hauler_LOD1.glb");
+                fleetGo.SetActive(true);
+                Assert.Greater(fleet.Count, 1, "the haulers are spawned");
+
+                var c = Load("quarry_fleet.json");
+                TrackPlayer PlayerOf(string id)
+                {
+                    var (_, track, offset) = c.Machines.First(m => m.Id == id);
+                    return new TrackPlayer(c.Tracks[track].Data, c.Dt, c.Tracks[track].Period, offset);
+                }
+
+                // two that drive in those ten seconds, so a hold is something the test can see
+                bool Drives(MachineRig r)
+                {
+                    var p = PlayerOf(r.name);
+                    float Apart(TrackFrame a, TrackFrame b) => Math.Abs(a.X - b.X) + Math.Abs(a.Z - b.Z);
+                    return Apart(p.SampleAt(20f), p.SampleAt(25f)) > 5f && Apart(p.SampleAt(20f), p.SampleAt(30f)) > 5f;
+                }
+
+                var rigs = fleet.Machines.Where(Drives).ToArray();
+                Assert.GreaterOrEqual(rigs.Length, 2, "two haulers drive between 20 s and 30 s");
+                var held = new FleetBody(fleet, rigs[0]);
+                var free = rigs[1];
+                fleet.Seek(20f);
+                var heldAt = held.Rig.transform.position;
+
+                held.SetTrackRate(0.0);
+                for (var i = 0; i < 40; i++) fleet.Play(0.25f);
+                Assert.AreEqual(30f, fleet.time, "ten seconds of scene time were played");
+                Assert.AreEqual(heldAt.x, held.Rig.transform.position.x, 1e-3, $"{held.Id}: a rate of 0 holds it where it stood for ten seconds");
+                Assert.AreEqual(heldAt.z, held.Rig.transform.position.z, 1e-3);
+                var freeNow = PlayerOf(free.name).SampleAt(30f);
+                Assert.AreEqual(freeNow.X, free.transform.position.x, 1e-3, $"{free.name}: a machine left at its own pace is where its track is at the scene time");
+                Assert.AreEqual(freeNow.Z, free.transform.position.z, 1e-3);
+
+                held.SetTrackRate(1.0);
+                for (var i = 0; i < 20; i++) fleet.Play(0.25f);
+                // it played nothing of the ten seconds it was held, so it is ten seconds behind its loop as the scene began it
+                var heldNow = PlayerOf(held.Id).SampleAt(35f - 10f);
+                Assert.AreEqual(heldNow.X, held.Rig.transform.position.x, 1e-3, $"{held.Id}: released, it plays on from where it stood");
+                Assert.AreEqual(heldNow.Z, held.Rig.transform.position.z, 1e-3);
+                Assert.Greater(Math.Abs(heldAt.x - held.Rig.transform.position.x) + Math.Abs(heldAt.z - held.Rig.transform.position.z), 5f, "and it has moved on");
+            }
+            finally
+            {
+                UnityEngine.Object.DestroyImmediate(fleetGo);
+                UnityEngine.Object.DestroyImmediate(terrainGo);
+            }
         }
 
         [Test]

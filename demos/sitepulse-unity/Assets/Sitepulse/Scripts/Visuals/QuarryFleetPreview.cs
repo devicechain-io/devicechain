@@ -204,14 +204,22 @@ namespace DeviceChain.Sitepulse.Visuals
         void Update()
         {
             if (!Application.isPlaying) return;
-            var step = Time.deltaTime * timeScale;
+            Play(Time.deltaTime * timeScale);
+        }
+
+        /// <summary>
+        /// One frame of play: the scene clock moves on by <paramref name="step"/> seconds and every machine on its track is posed
+        /// at its own clock, which runs at the rate the task layer set for it (<see cref="SetTrackRate"/>).
+        /// </summary>
+        public void Play(float step)
+        {
             time += step;
             // a track held back plays less of itself: its clock is put back by what it did not play
             foreach (var u in units)
                 if (!u.detached) u.player.Advance(step);
             Seek(time);
             foreach (var u in units)
-                if (u.effects != null) u.effects.Step(Time.deltaTime * timeScale, false);
+                if (u.effects != null) u.effects.Step(step, false);
         }
 
         /// <summary>
