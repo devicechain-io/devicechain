@@ -16,6 +16,9 @@ export type {
   CanvasSizing,
   Breakpoints,
   WidgetInstance,
+  KnownWidgetInstance,
+  UnknownWidgetInstance,
+  UnknownWidgetType,
   WidgetType,
   WidgetLayout,
   WidgetBox,
@@ -101,7 +104,7 @@ export {
 export { resolveSlotCandidates } from './candidates';
 export { createEntityLister } from './entity-lister';
 
-export { WIDGET_TYPES } from './types';
+export { WIDGET_TYPES, UNKNOWN_WIDGET_TYPE } from './types';
 
 export {
   DashboardHub,
@@ -133,6 +136,7 @@ export {
   parseDashboardDefinition,
   parseSlotBinding,
   serializeDefinition,
+  storedDefinition,
   isDirty,
   resolveWidgetBox,
   activeBreakpoint,

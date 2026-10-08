@@ -15,6 +15,7 @@ import {
   fetchWidgetHistory,
   resolveWidgetBox,
   resolveWidgetDatasource,
+  UNKNOWN_WIDGET_TYPE,
   type Breakpoints,
   type CanvasBackground,
   type CanvasSizing,
@@ -219,7 +220,7 @@ interface Seed {
 // seedKey is the identity of what a measurement widget's history is OF: its concrete
 // selector, by value. Undefined for a widget that takes no seed.
 function seedKey(widget: WidgetInstance): string | undefined {
-  if (WIDGET_CHANNEL[widget.type] !== 'measurement') return undefined;
+  if (widget.type === UNKNOWN_WIDGET_TYPE || WIDGET_CHANNEL[widget.type] !== 'measurement') return undefined;
   return JSON.stringify(widget.datasource ?? null);
 }
 

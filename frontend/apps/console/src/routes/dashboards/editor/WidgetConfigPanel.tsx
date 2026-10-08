@@ -26,8 +26,9 @@ import type {
   DeviceSelector,
   LocationSelection,
   SlotDefinition,
+  KnownWidgetInstance,
   SlotScope,
-  WidgetInstance,
+  UnknownWidgetInstance,
   WidgetType,
 } from '@devicechain/dashboards';
 import {
@@ -139,7 +140,9 @@ function scopeStrategyOptions(t: TFunction): ComboboxOption[] {
 }
 
 export interface WidgetConfigPanelProps {
-  widget: WidgetInstance;
+  // Only a widget of a type this build knows is configurable here; a placeholder for a
+  // newer widget type gets UnknownWidgetPanel instead.
+  widget: KnownWidgetInstance;
   // The widget's data source resolved to a slot-free entity view (device/anchor +
   // measurements), or undefined when unbound. The panel edits THIS; the workspace
   // maps changes back to slot storage (find-or-create slot, prune).
@@ -155,7 +158,7 @@ export interface WidgetConfigPanelProps {
   // TARGETS for an entity-selector widget. Undefined on a slot-free dashboard.
   slots?: Record<string, SlotDefinition>;
   // Title/text/type-specific option edits (widget-only; datasource is separate).
-  onChange: (next: WidgetInstance) => void;
+  onChange: (next: KnownWidgetInstance) => void;
   // Data-source edits: the new entity view, or undefined for "None".
   onDatasource: (next: ConcreteSelector | undefined) => void;
   // Set (or, with undefined, clear) the scope of the selected widget's slot — the scoped-slot
@@ -556,4 +559,27 @@ function splitMeasurements(value: string): string[] {
     .split(',')
     .map((s) => s.trim())
     .filter((s) => s.length > 0);
+}
+
+// UnknownWidgetPanel is what the side panel shows for a widget whose type this console
+// does not know — one a newer release added. There is nothing here to configure: the
+// widget's stored object is saved back unchanged, and the canvas can still move,
+// resize or delete it. The stored type is named so the author can tell which widget it is.
+export function UnknownWidgetPanel({ widget, onClose }: { widget: UnknownWidgetInstance; onClose: () => void }) {
+  const { t } = useTranslation(['dashboards', 'common']);
+  const storedType = typeof widget.raw.type === 'string' ? widget.raw.type : '';
+  return (
+    <aside className="w-80 shrink-0 overflow-auto border-l bg-card p-4">
+      <div className="mb-4 flex items-center justify-between">
+        <div className="text-sm font-semibold">{t('widgetUnknownTitle')}</div>
+        <IconButton label={t('widgetClosePanel')} onClick={onClose}>
+          <X size={14} />
+        </IconButton>
+      </div>
+      <div className="space-y-2 text-sm text-muted-foreground">
+        {storedType && <p className="font-mono text-xs">{t('widgetUnknownType', { type: storedType })}</p>}
+        <p>{t('widgetUnknownBody')}</p>
+      </div>
+    </aside>
+  );
 }

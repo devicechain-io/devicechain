@@ -8,14 +8,16 @@
 // the data and renders the pure widget with { widget, data }. A dashboard renderer maps
 // over its widgets rendering one ConnectedWidget each.
 
-import type {
-  AlarmSubscription,
-  CommandSubscription,
-  LocationSubscription,
-  MeasurementSample,
-  WidgetActions,
-  WidgetDataSource,
-  WidgetInstance,
+import {
+  UNKNOWN_WIDGET_TYPE,
+  type AlarmSubscription,
+  type CommandSubscription,
+  type LocationSubscription,
+  type MeasurementSample,
+  type UnknownWidgetInstance,
+  type WidgetActions,
+  type WidgetDataSource,
+  type WidgetInstance,
 } from '@devicechain/dashboards';
 import type { ReactNode } from 'react';
 
@@ -63,6 +65,13 @@ export function ConnectedWidget({ widget, hub, actions, initialSamples }: Connec
   const availability = useDatasourceAvailability(hub, widget.datasource);
   if (availability === 'unavailable') {
     return <WidgetUnavailableFrame widget={widget} />;
+  }
+
+  // A widget of a type this build does not know (a newer release added it) is shown as
+  // a placeholder and reads nothing: it has no datasource, so the availability check
+  // above resolves without a query, and no channel is opened for it.
+  if (widget.type === UNKNOWN_WIDGET_TYPE) {
+    return <UnknownWidgetFrame widget={widget} />;
   }
 
   const channel = WIDGET_CHANNEL[widget.type];
@@ -222,6 +231,35 @@ function parseAcknowledged(value: string | undefined): boolean | undefined {
 // deleted device's stable token). Distinct from the error frame: not a transient
 // failure to retry, but a settled "this entity is gone" — so it reads as a state, not
 // an error.
+// The placeholder for a widget this build cannot render. It names the stored type so an
+// author can tell which widget it is and which release added it; the stored object is
+// otherwise untouched (the serializer writes it back verbatim).
+function UnknownWidgetFrame({ widget }: { widget: UnknownWidgetInstance }): ReactNode {
+  const storedType = typeof widget.raw.type === 'string' ? widget.raw.type : '';
+  return (
+    <WidgetFrame>
+      <div
+        style={{
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'center',
+          justifyContent: 'center',
+          gap: 4,
+          width: '100%',
+          height: '100%',
+          padding: 12,
+          boxSizing: 'border-box',
+          textAlign: 'center',
+          color: 'hsl(var(--muted-foreground))',
+        }}
+      >
+        <div style={{ fontSize: 13, fontWeight: 600 }}>This widget needs a newer viewer</div>
+        {storedType && <div style={{ fontSize: 11, opacity: 0.8 }}>Widget type: {storedType}</div>}
+      </div>
+    </WidgetFrame>
+  );
+}
+
 function WidgetUnavailableFrame({ widget }: { widget: WidgetInstance }): ReactNode {
   return (
     <WidgetFrame title={optString(widget.options, 'title')}>

@@ -29,7 +29,9 @@ import {
   setCanvasSizing,
   setSlotScope,
   setTitle,
+  storedDefinition,
   stripDefaultBindings,
+  UNKNOWN_WIDGET_TYPE,
   updateWidget,
   widgetSlotName,
   SyntheticDataSource,
@@ -68,7 +70,7 @@ import { useAuth } from '@/auth/AuthProvider';
 import { updateDashboard, deleteDashboard, CONFLICT_MARKER } from '@/lib/api/dashboards';
 import { errMessage } from '@/routes/common';
 import { DashboardCanvas } from './DashboardCanvas';
-import { WidgetConfigPanel } from './WidgetConfigPanel';
+import { UnknownWidgetPanel, WidgetConfigPanel } from './WidgetConfigPanel';
 import { VersionHistorySheet } from './VersionHistorySheet';
 
 type SaveState = { kind: 'clean' } | { kind: 'saving' } | { kind: 'error'; message: string };
@@ -236,7 +238,9 @@ function applyDatasource(
   // It becomes a default-bound slot as soon as it's complete.
   const token = ds.kind === 'device' ? ds.deviceToken : ds.anchor.targetToken;
   if (!token) {
-    const widgets = def.widgets.map((w) => (w.id === widgetId ? { ...w, datasource: ds } : w));
+    const widgets = def.widgets.map((w) =>
+      w.id === widgetId && w.type !== UNKNOWN_WIDGET_TYPE ? { ...w, datasource: ds } : w,
+    );
     return pruneSlots({ ...def, widgets });
   }
   const binding: SlotBinding =
@@ -495,7 +499,9 @@ export function DashboardWorkspace({
   // bindings (renders as-is); "as template" strips them so a host must supply a binding
   // manifest (the reference /dash viewer). Pretty-printed for a readable file/paste.
   const exportJson = (template: boolean) =>
-    JSON.stringify(template ? stripDefaultBindings(working) : working, null, 2);
+    // storedDefinition, not the parsed model: a widget of a type this console does not
+    // know must be exported as its stored object, exactly as a save writes it.
+    JSON.stringify(storedDefinition(template ? stripDefaultBindings(working) : working), null, 2);
   const copyExport = async (template: boolean) => {
     // navigator.clipboard is undefined on a non-secure context (plain http over a LAN
     // IP) — the optional chain would resolve silently and falsely claim "copied".
@@ -667,7 +673,10 @@ export function DashboardWorkspace({
               onSelect={setSelectedId}
             />
           </div>
-          {selected && (
+          {selected?.type === UNKNOWN_WIDGET_TYPE && (
+            <UnknownWidgetPanel key={selected.id} widget={selected} onClose={() => setSelectedId(null)} />
+          )}
+          {selected && selected.type !== UNKNOWN_WIDGET_TYPE && (
             <WidgetConfigPanel
               // Remount per widget so the config panel's local input buffers (e.g.
               // the measurements text field) don't carry one widget's keystrokes

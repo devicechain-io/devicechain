@@ -9,7 +9,12 @@
 // turns an untrusted parsed value into a DashboardDefinition or throws, so the
 // renderer never has to guess at a missing canvas/breakpoint/box. Kept permissive
 // where a sensible default exists (a bare `{ widgets: [] }` is valid) and strict
-// where a wrong value would silently mis-render (unknown widget type, no base box).
+// where a wrong value would silently mis-render (a widget with no type, no base box).
+//
+// A widget whose type this build does not know is NOT an error: it is a widget a newer
+// release added. It parses to a placeholder that keeps the stored object verbatim, and
+// serializeDefinition writes that object back (see UnknownWidgetInstance), so an older
+// host that loads and saves a newer board leaves the newer widget exactly as it was.
 
 import {
   WIDGET_TYPES,
@@ -19,6 +24,7 @@ import {
   type CanvasGrid,
   type CanvasSizing,
   type DashboardDefinition,
+  type KnownWidgetInstance,
   type LocationSelection,
   type SlotBinding,
   type SlotDefinition,
@@ -26,7 +32,9 @@ import {
   type WidgetBox,
   type WidgetInstance,
   type WidgetLayout,
+  type UnknownWidgetInstance,
   type WidgetType,
+  UNKNOWN_WIDGET_TYPE,
 } from './types';
 
 // The breakpoint every layout must define; a widget/viewport with no more specific
@@ -281,12 +289,15 @@ function parseWidget(raw: unknown, index: number): WidgetInstance {
   if (!isRecord(raw)) throw new DashboardDefinitionError(`widgets[${index}] is not an object`);
 
   const type = raw.type;
-  if (typeof type !== 'string' || !WIDGET_TYPE_SET.has(type)) {
+  // A missing, empty or non-string type names nothing a newer viewer could render: the
+  // document is broken, not newer.
+  if (typeof type !== 'string' || type.length === 0) {
     throw new DashboardDefinitionError(`widgets[${index}] has unknown type ${JSON.stringify(type)}`);
   }
+  if (!WIDGET_TYPE_SET.has(type)) return parseUnknownWidget(raw, index);
 
-  const widget: WidgetInstance = {
-    id: typeof raw.id === 'string' && raw.id.length > 0 ? raw.id : generateWidgetId(),
+  const widget: KnownWidgetInstance = {
+    id: storedWidgetId(raw) ?? generateWidgetId(),
     type: type as WidgetType,
     layout: parseLayout(raw.layout, index),
   };
@@ -298,6 +309,27 @@ function parseWidget(raw: unknown, index: number): WidgetInstance {
   if (ds) widget.datasource = ds;
   if (isRecord(raw.options)) widget.options = raw.options as Record<string, unknown>;
   return widget;
+}
+
+// The id a stored widget carries, or undefined when it has none worth keeping.
+function storedWidgetId(raw: Record<string, unknown>): string | undefined {
+  return typeof raw.id === 'string' && raw.id.length > 0 ? raw.id : undefined;
+}
+
+// parseUnknownWidget builds the placeholder for a widget of a type this build does not
+// know. Only `id` and `layout` are read, through the same rules as every other widget,
+// so the canvas can place it; a layout with no base box still fails the parse, because
+// a widget that cannot be placed cannot be shown even as a placeholder.
+//
+// `raw` is a JSON copy of the stored object: detached from the caller's value (which a
+// host may go on to mutate), and exactly what JSON.stringify will write back.
+function parseUnknownWidget(raw: Record<string, unknown>, index: number): UnknownWidgetInstance {
+  return {
+    id: storedWidgetId(raw) ?? generateWidgetId(),
+    type: UNKNOWN_WIDGET_TYPE,
+    layout: parseLayout(raw.layout, index),
+    raw: JSON.parse(JSON.stringify(raw)) as Record<string, unknown>,
+  };
 }
 
 function stringAt(rec: Record<string, unknown>, key: string): string {
@@ -427,11 +459,91 @@ function parseBox(rec: Record<string, unknown>): WidgetBox {
   return box;
 }
 
+// The stored shape of a definition: what serializeDefinition writes. A placeholder for
+// an unknown widget type is written as the stored object it was parsed from.
+export type StoredDashboardDefinition = Omit<DashboardDefinition, 'widgets'> & {
+  widgets: Array<KnownWidgetInstance | Record<string, unknown>>;
+};
+
+// storedDefinition is the definition as it is stored: every unknown-type placeholder
+// replaced by its raw object (carrying any move or id change the editor made to it).
+// Anything that writes a definition out — a save, a copy-as-JSON export — goes through
+// this, because JSON.stringify of the parsed model would write the placeholder wrapper
+// and lose the widget. Returns the same reference when there is no placeholder.
+export function storedDefinition(def: DashboardDefinition): StoredDashboardDefinition {
+  if (!def.widgets.some((w) => w.type === UNKNOWN_WIDGET_TYPE)) return def as StoredDashboardDefinition;
+  return {
+    ...def,
+    widgets: def.widgets.map((w) => (w.type === UNKNOWN_WIDGET_TYPE ? storedUnknownWidget(w) : w)),
+  };
+}
+
+// storedUnknownWidget writes a placeholder back as its raw object. The raw object is
+// returned untouched unless the editor changed one of the two fields a placeholder
+// exposes: a changed id is written over the stored one, and a moved breakpoint box is
+// written over that breakpoint (every untouched breakpoint keeps its stored bytes). An
+// id the parser GENERATED for an id-less widget is not written, so the stored widget
+// stays id-less exactly as it was.
+function storedUnknownWidget(w: UnknownWidgetInstance): Record<string, unknown> {
+  let out = w.raw;
+  const rawId = storedWidgetId(w.raw);
+  if (rawId !== undefined && rawId !== w.id) out = { ...out, id: w.id };
+  const layout = storedUnknownLayout(w.layout, w.raw.layout);
+  if (layout !== w.raw.layout) out = { ...out, layout };
+  return out;
+}
+
+// storedUnknownLayout merges the placeholder's (parsed, possibly edited) layout into
+// the stored one, breakpoint by breakpoint. A stored box that parses to the same box is
+// kept as stored; a changed one is replaced; a breakpoint the stored layout did not
+// have is appended; a stored entry that is not a box at all (the parser skipped it) is
+// carried. Returns the stored reference when nothing changed.
+function storedUnknownLayout(layout: WidgetLayout, rawLayout: unknown): unknown {
+  const stored = isRecord(rawLayout) ? rawLayout : {};
+  const out: Record<string, unknown> = {};
+  let changed = !isRecord(rawLayout);
+  for (const [bp, box] of Object.entries(stored)) {
+    if (!isRecord(box)) {
+      out[bp] = box;
+      continue;
+    }
+    const current = Object.prototype.hasOwnProperty.call(layout, bp) ? layout[bp] : undefined;
+    if (!current) {
+      changed = true; // the editor removed this breakpoint
+      continue;
+    }
+    if (sameBox(parseBox(box), current)) {
+      out[bp] = box;
+    } else {
+      out[bp] = current;
+      changed = true;
+    }
+  }
+  for (const [bp, box] of Object.entries(layout)) {
+    if (Object.prototype.hasOwnProperty.call(stored, bp) && isRecord(stored[bp])) continue;
+    out[bp] = box;
+    changed = true;
+  }
+  return changed ? out : rawLayout;
+}
+
+function sameBox(a: WidgetBox, b: WidgetBox): boolean {
+  return (
+    a.col === b.col &&
+    a.colSpan === b.colSpan &&
+    a.row === b.row &&
+    a.rowSpan === b.rowSpan &&
+    a.z === b.z &&
+    a.offset?.x === b.offset?.x &&
+    a.offset?.y === b.offset?.y
+  );
+}
+
 // serializeDefinition is the canonical on-the-wire JSON — the inverse of
 // parseDashboardDefinition — that dashboard-management stores. Named (not an inline
 // JSON.stringify) so every consumer that persists a definition shares one format.
 export function serializeDefinition(def: DashboardDefinition): string {
-  return JSON.stringify(def);
+  return JSON.stringify(storedDefinition(def));
 }
 
 // isDirty reports whether two definitions differ. A structural JSON compare is

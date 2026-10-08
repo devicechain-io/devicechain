@@ -116,10 +116,16 @@ describe('parseDashboardDefinition', () => {
     expect(() => parseDashboardDefinition([])).toThrow(DashboardDefinitionError);
   });
 
-  it('rejects an unknown widget type', () => {
-    expect(() =>
-      parseDashboardDefinition({ widgets: [{ type: 'wormhole', layout: { base: box() } }] }),
-    ).toThrow(/unknown type/);
+  // A type this build does not know is a widget a newer release added, not a broken
+  // board: it becomes a placeholder (the full contract is in unknown-widget.test.ts).
+  // A widget with no type at all is still broken.
+  it('degrades an unknown widget type to a placeholder rather than rejecting the board', () => {
+    const def = parseDashboardDefinition({ widgets: [{ type: 'wormhole', layout: { base: box() } }] });
+    expect(def.widgets[0].type).toBe('unknown-widget');
+  });
+
+  it('rejects a widget with no type', () => {
+    expect(() => parseDashboardDefinition({ widgets: [{ layout: { base: box() } }] })).toThrow(/unknown type/);
   });
 
   it('rejects a stored unbound datasource rather than rendering it as an empty widget', () => {
