@@ -761,6 +761,63 @@ func TestAReconnectNoFetchSawIsStillAnAnswer(t *testing.T) {
 	}
 }
 
+// 🔴 ONE RECONNECT EXCUSES ONE ERROR, NOT EVERY ERROR AFTER IT. The reconnect count only ever
+// grows, so a reader that compared it with nothing — or never recorded the count it had
+// credited — would find a reconnect "since" every error from then on, for as long as the
+// client stays connected. A fetch that keeps failing for its own reason (a 409, a leadership
+// change, an API error) would then never exhaust the budget, and the pod would stay Ready
+// consuming nothing: the failure the budget exists to catch.
+func TestAReconnectExcusesOneErrorNotEveryErrorAfterIt(t *testing.T) {
+	r, proxy, nmgr := proxiedReader(t)
+
+	proxy.cut()
+	waitFor(t, "the client to see the broker gone", func() bool { return !nmgr.nc.IsConnected() })
+	_ = r.readError(errors.New("clear the bind's evidence"))
+	proxy.open()
+	waitFor(t, "the client to reconnect", nmgr.nc.IsConnected)
+
+	noProbe(r)
+	for i, want := range []bool{true, false, false} {
+		if err := <-readOnce(r, 1500*time.Millisecond); !errors.Is(err, io.EOF) {
+			t.Fatalf("idle read %d after the reconnect returned %v, want io.EOF at the end of its context", i+1, err)
+		}
+		if got := answeredOn(t, r.readError(errors.New("a fetch error of its own"))); got != want {
+			t.Fatalf("error %d after one reconnect carried a broker answer = %v, want %v: the reconnect is "+
+				"credited to the first error after it and to no other, or a connected client whose fetches "+
+				"keep failing never ends its loop", i+1, got, want)
+		}
+	}
+}
+
+// A reconnect before a reader existed is no answer to it: the reader starts counting from the
+// connection's count when it is built. Without that it would take the client's whole history
+// of reconnects for one that happened since its last error.
+func TestAReconnectBeforeAReaderExistedIsNoAnswerToIt(t *testing.T) {
+	_, proxy, nmgr := proxiedReader(t)
+
+	proxy.cut()
+	waitFor(t, "the client to see the broker gone", func() bool { return !nmgr.nc.IsConnected() })
+	proxy.open()
+	waitFor(t, "the client to reconnect", nmgr.nc.IsConnected)
+	if nmgr.nc.Stats().Reconnects == 0 {
+		t.Fatal("the client reports no reconnect; the case under test was not set up")
+	}
+
+	reader, err := nmgr.NewReader(streams.InboundEvents)
+	if err != nil {
+		t.Fatalf("reader built after the reconnect: %v", err)
+	}
+	r := reader.(*natsReader)
+	_ = r.readError(errors.New("clear the bind's evidence"))
+	noProbe(r)
+	if err := <-readOnce(r, 1500*time.Millisecond); !errors.Is(err, io.EOF) {
+		t.Fatalf("an idle read returned %v, want io.EOF at the end of its context", err)
+	}
+	if answeredOn(t, r.readError(errors.New("the next error"))) {
+		t.Fatal("a reader built after the client reconnected took that reconnect for an answer to it")
+	}
+}
+
 // The other side of that: a reconnect ATTEMPT is no answer. nats.go counts a reconnect once
 // its dial succeeds, before the handshake that shows a broker is there, so an address that
 // accepts and hangs up adds to the count every time the client tries it. Taken for an answer,

@@ -1319,7 +1319,8 @@ type natsReader struct {
 	// 🔴 A PARKED READER GATHERS NO EVIDENCE OF ITS OWN. While it waits on the readiness
 	// gate, on a term gate that is closed, between terms, or on a capacity slot, it neither
 	// fetches nor probes, so an error just before such a park and one just after it still
-	// join one run unless something else (a bind, a backpressure sample) answered in
+	// join one run unless something else (a bind, a backpressure sample, or a reconnect the
+	// client completed during the park, credited at the first fetch after it) answered in
 	// between. The readiness-gate park is left that way on purpose: what is not ready
 	// there is the service's own data plane, which is not something the broker can vouch for.
 	//
