@@ -129,8 +129,22 @@ jobs:
           # backend/services/<name> dir) PLUS the operator at backend/k8s PLUS the Tier-1
           # edge agent at backend/edge/dc-edge-agent. Keep this list in step with ci.yml's
           # discover job -- they are two textual copies of the same set.
+          #
+          # pipefail, and the service list in its OWN statement: `$( { a | b; echo x; } | c )`
+          # has the exit status of `c`, so a failing list-services.sh used to shrink this
+          # to k8s + the edge agent and every job downstream stayed green over less. The
+          # count is then cross-checked against a second reader (every service main.go),
+          # so a list that is merely short fails too.
+          set -euo pipefail
+          services="$(hack/list-services.sh | jq -r '.[] | "backend/services/" + .')"
+          want="$(find backend/services -mindepth 2 -maxdepth 2 -name main.go | wc -l)"
+          got="$(printf '%s\n' "$services" | grep -c . || true)"
+          if [ "$want" -eq 0 ] || [ "$got" -ne "$want" ]; then
+            echo "::error::service discovery disagrees with the tree: list-services.sh gave $got, backend/services/*/main.go counts $want."
+            exit 1
+          fi
           smoke="$(
-            { hack/list-services.sh | jq -r '.[] | "backend/services/" + .'
+            { printf '%s\n' "$services"
               echo "backend/k8s"
               echo "backend/edge/dc-edge-agent"
             } | jq -R . | jq -s -c .
@@ -748,14 +762,19 @@ jobs:
       # which is what the very first release needs.
       - name: Changelog spans from the previous STABLE release
         run: |
+          # The tag listing is its own statement: inside a here-string `<<< "$(a | b)"` a
+          # failing `git tag` is invisible, and the changelog would silently span from the
+          # wrong place. grep finding no stable tag (the very first release) is the one
+          # empty result that is legitimate, hence its `|| true`.
           cur="$(git rev-list -n1 "${GITHUB_REF_NAME}")"
+          tags="$(git tag --list 'v*' --merged "${GITHUB_REF_NAME}" --sort=-v:refname)"
+          tags="$(printf '%s\n' "$tags" | grep -E '^v[0-9]+[.][0-9]+[.][0-9]+$' || true)"
           prev=""
           while read -r t; do
             [ -z "$t" ] && continue
             [ "$(git rev-list -n1 "$t")" = "$cur" ] && continue
             prev="$t"; break
-          done <<< "$(git tag --list 'v*' --merged "${GITHUB_REF_NAME}" --sort=-v:refname \
-                      | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$')"
+          done <<< "$tags"
           if [ -n "$prev" ]; then
             echo "GORELEASER_PREVIOUS_TAG=$prev" >> "$GITHUB_ENV"
             echo "Changelog: $prev..${GITHUB_REF_NAME} ($(git rev-list --count "$prev..${GITHUB_REF_NAME}") commits)"

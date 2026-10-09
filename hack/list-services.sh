@@ -6,5 +6,5 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 for d in backend/services/*/; do
-  [ -f "${d}main.go" ] && basename "$d"
+  if [ -f "${d}main.go" ]; then basename "$d"; fi
 done | jq -R . | jq -s -c .

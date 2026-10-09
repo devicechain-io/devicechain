@@ -210,8 +210,22 @@ jobs:
           # list-services.sh globs backend/services/* only, so it is added explicitly).
           # Keep this list in step with release.yml's guard job (they are two textual
           # copies of the same set).
+          #
+          # pipefail, and the service list in its OWN statement: `$( { a | b; echo x; } | c )`
+          # has the exit status of `c`, so a failing list-services.sh used to shrink this
+          # to k8s + the edge agent and every job downstream stayed green over less. The
+          # count is then cross-checked against a second reader (every service main.go),
+          # so a list that is merely short fails too.
+          set -euo pipefail
+          services="$(hack/list-services.sh | jq -r '.[] | "backend/services/" + .')"
+          want="$(find backend/services -mindepth 2 -maxdepth 2 -name main.go | wc -l)"
+          got="$(printf '%s\n' "$services" | grep -c . || true)"
+          if [ "$want" -eq 0 ] || [ "$got" -ne "$want" ]; then
+            echo "::error::service discovery disagrees with the tree: list-services.sh gave $got, backend/services/*/main.go counts $want."
+            exit 1
+          fi
           smoke="$(
-            { hack/list-services.sh | jq -r '.[] | "backend/services/" + .'
+            { printf '%s\n' "$services"
               echo "backend/k8s"
               echo "backend/edge/dc-edge-agent"
             } | jq -R . | jq -s -c .
