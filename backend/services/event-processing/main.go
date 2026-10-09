@@ -263,6 +263,7 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 		CheckpointTimeout:           time.Duration(Configuration.CheckpointTimeoutSeconds) * time.Second,
 		Lateness:                    lateness,
 		IdleAdvanceGuard:            idleGuard,
+		Shards:                      Configuration.DetectShards,
 		MaxRulesPerTenant:           Configuration.MaxRulesPerTenant,
 		MaxLiveKeysPerTenant:        Configuration.MaxLiveKeysPerTenant,
 		MaxRetainedSamplesPerTenant: Configuration.MaxRetainedSamplesPerTenant,

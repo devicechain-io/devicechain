@@ -284,7 +284,7 @@ func scopedCoreThreshold(tenant, pvt, id string) runtime.ScopedRule {
 }
 
 // fires reports whether feeding the engine one matching event for id produces a detection.
-func fires(e *detectcore.Engine, seq uint64, id string) bool {
+func fires(e detectcore.Detector, seq uint64, id string) bool {
 	e.ProcessEvent(detectcore.Event{Seq: seq, Key: detectcore.SeriesKey{Rule: id, Series: "dev"}, Time: testBase, Match: true})
 	return len(e.Drain()) > 0
 }

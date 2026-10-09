@@ -32,7 +32,7 @@ func absScopedProc(tenant, pvt, id string) runtime.ScopedRule {
 
 // deadmanFires reports whether advancing the engine's watermark past the given series' dead-man
 // deadline produces an absence detection — the observable proof the armer armed it in the engine.
-func deadmanFires(e *detectcore.Engine, id, device string, at time.Time) bool {
+func deadmanFires(e detectcore.Detector, id, device string, at time.Time) bool {
 	e.Advance(at)
 	for _, d := range e.Drain() {
 		if d.RuleID == id && d.Series == device {

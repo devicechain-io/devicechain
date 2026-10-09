@@ -162,3 +162,25 @@ func TestValidateBoundsTheCheckpointTimeout(t *testing.T) {
 		t.Errorf("default = %d, want %d", got, DefaultCheckpointTimeoutSeconds)
 	}
 }
+
+// detectShards defaults to the unsplit engine, and is refused (not clamped) outside 1..64: the
+// engine would otherwise quietly run a count the operator did not write.
+func TestValidateBoundsDetectShards(t *testing.T) {
+	if got := NewEventProcessingConfiguration().DetectShards; got != 1 || DefaultDetectShards != 1 {
+		t.Errorf("default detectShards = %d, want 1", got)
+	}
+	for _, k := range []int{-1, MaxDetectShards + 1} {
+		c := NewEventProcessingConfiguration()
+		c.DetectShards = k
+		if err := c.Validate(); err == nil {
+			t.Errorf("detectShards %d was accepted", k)
+		}
+	}
+	for _, k := range []int{0, 1, 4, MaxDetectShards} {
+		c := NewEventProcessingConfiguration()
+		c.DetectShards = k
+		if err := c.Validate(); err != nil {
+			t.Errorf("detectShards %d was refused: %v", k, err)
+		}
+	}
+}

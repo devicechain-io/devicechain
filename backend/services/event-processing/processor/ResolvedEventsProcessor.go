@@ -119,6 +119,10 @@ type Config struct {
 	// Non-positive means unmeasured (the tests' default); the service always supplies the
 	// fail-safe platform ceiling from config.
 	MaxRetainedSamplesPerTenant int
+	// Shards is K, the number of ways the live engine is split by key (the engine's own series key).
+	// 0 and 1 are the plain single engine. The snapshot format is the same for every K, so it may be
+	// changed at any restart. See newDetector.
+	Shards int
 }
 
 // ResolvedEventsProcessor is event-processing's single-writer tap on the
@@ -436,7 +440,7 @@ type ResolvedEventsProcessor struct {
 	// engine and the checkpoint bookkeeping below are owned exclusively by the
 	// startup goroutine (restore/replay) and then the live loop goroutine; nothing
 	// else reads or writes them.
-	engine         *detectcore.Engine
+	engine         detectcore.Detector
 	pendingAcks    []messaging.Message
 	pendingDets    []pendingDetection
 	lastCheckpoint time.Time
@@ -1403,6 +1407,28 @@ func (rp *ResolvedEventsProcessor) applyFenceSet(fu fenceUpdate) {
 	rp.fenceView.Put(fu.tenant, fu.set)
 }
 
+// newDetector builds an empty live engine split cfg.Shards ways. One shard (or none configured)
+// is the plain single *Engine, not a one-shard wrapper, so the default runs exactly the code it
+// ran before sharding existed.
+func (rp *ResolvedEventsProcessor) newDetector() detectcore.Detector {
+	rp.metrics.recordShards(max(rp.cfg.Shards, 1))
+	if rp.cfg.Shards <= 1 {
+		return detectcore.NewEngine(rp.registry.Cores(), rp.cfg.Lateness)
+	}
+	return detectcore.NewSharded(rp.cfg.Shards, rp.registry.Cores(), rp.cfg.Lateness)
+}
+
+// restoreDetector rebuilds the live engine from a committed snapshot at the CONFIGURED shard
+// count, whatever count wrote it: the snapshot is the same bytes for every K, so a restart is
+// the whole of what changing K takes.
+func (rp *ResolvedEventsProcessor) restoreDetector(payload []byte) (detectcore.Detector, error) {
+	rp.metrics.recordShards(max(rp.cfg.Shards, 1))
+	if rp.cfg.Shards <= 1 {
+		return detectcore.Restore(rp.registry.Cores(), rp.cfg.Lateness, payload)
+	}
+	return detectcore.RestoreSharded(rp.cfg.Shards, rp.registry.Cores(), rp.cfg.Lateness, payload)
+}
+
 // restore loads the durable checkpoint and rebuilds the engine from it, or builds a
 // fresh empty engine when none exists (a new Instance). It runs before any loop, so
 // it needs no synchronization.
@@ -1413,13 +1439,13 @@ func (rp *ResolvedEventsProcessor) restore(ctx context.Context) error {
 		return fmt.Errorf("load snapshot for partition %q: %w", rp.cfg.PartitionId, err)
 	}
 	if !ok {
-		rp.engine = detectcore.NewEngine(rp.registry.Cores(), rp.cfg.Lateness)
+		rp.engine = rp.newDetector()
 		rp.restoredSeq = 0
 		rp.metrics.recordRestore(0, 0)
 		log.Info().Str("partition", rp.cfg.PartitionId).Msg("No prior DETECT snapshot; starting from empty engine.")
 		return nil
 	}
-	engine, err := detectcore.Restore(rp.registry.Cores(), rp.cfg.Lateness, snap.Payload)
+	engine, err := rp.restoreDetector(snap.Payload)
 	if err != nil {
 		return fmt.Errorf("restore engine from snapshot for partition %q: %w", rp.cfg.PartitionId, err)
 	}
@@ -1464,7 +1490,7 @@ func (rp *ResolvedEventsProcessor) replayToHead() error {
 				"leading from that checkpoint", rp.cfg.PartitionId)
 		}
 		observed := rp.restoredSeq
-		rp.engine = detectcore.NewEngine(rp.registry.Cores(), rp.cfg.Lateness)
+		rp.engine = rp.newDetector()
 		rp.dirty = false
 		// Clear the stale row (the deliberate backward move Save's monotonic guard
 		// refuses); live consumption then writes a fresh checkpoint from sequence 1. The
