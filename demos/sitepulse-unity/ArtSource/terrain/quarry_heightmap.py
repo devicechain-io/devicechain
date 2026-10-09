@@ -121,7 +121,9 @@ def plant_xz(lx, lz):
 PADS = [                   # level platforms: name, (x0, x1, z0, z1), corner, elevation, cut and fill batters
                            # (rise per run; cut None: only built up, never cut down)
     dict(name="yard", rect=(-108.0, -46.0, -76.0, -14.0), corner=6.0, elev=100.0, cut=0.67, fill=0.5),
-    dict(name="fill", rect=(78.0, 108.0, -74.0, -36.0), corner=6.0, elev=98.0, cut=0.67, fill=0.73),
+    # the fill pad runs 12 m further south than the loop needs (z0 -86, was -74): with the loop's sweep, the dozer's push and the heaps on it,
+    # a hauler, a loader and a dozer could not stand 1.5 m clear of everything (quarry_fleet.py `stand_room`)
+    dict(name="fill", rect=(78.0, 108.0, -86.0, -36.0), corner=6.0, elev=98.0, cut=0.67, fill=0.73),
     dict(name="plant", rect=(-62.0, 42.0, -130.0, -79.0), corner=6.0, elev=100.0, cut=0.67, fill=0.5),
     # in the pit, a low bench beside the load point for the loader to work from, so that its
     # raised bucket clears the haul truck's body; the truck stands against its edge
@@ -144,18 +146,20 @@ LAYDOWN = dict(rect=(-46.0, 82.0, -60.0, -32.0), corner=6.0)
 # into rising ground and wherever another road, a pad or the pit floor meets it. The pit ramp
 # keeps its windrow inside its running width, on its drop side only, so that its fill does
 # not reach across the pit floor's haul lane.
+# A road of 12.5 m is the narrowest with a lane each way (RoadLine.TwoLaneWidth): the fill return and the yard road carry the haul loop and
+# are exactly that, so a truck sent along either the other way meets the loop's trucks in the other lane instead of on their line.
 ROADS = [
     dict(name="pit-ramp", kind="haul-ramp", width=20.0, cut=2.5, fill=2.5, windrow=True, shoulder=0.0,
          pts=[(-24.0, 30.0, 90.0), (-27.0, 20.0, 90.0), (-14.0, 11.0, None), (20.0, 10.0, None),
               (54.0, 10.5, None), (68.0, 2.0, 100.0), (71.0, -12.0, 100.0)]),
     dict(name="fill-road", kind="haul-road", width=14.0, cut=0.67, fill=0.6, windrow=True,
          pts=[(71.0, -12.0, 100.0), (80.0, -22.0, 99.2), (88.0, -32.0, 98.2), (92.0, -40.0, 98.0)]),
-    dict(name="fill-return", kind="haul-road", width=12.0, cut=0.67, fill=0.5, windrow=True,
+    dict(name="fill-return", kind="haul-road", width=12.5, cut=0.67, fill=0.5, windrow=True,
          pts=[(80.0, -66.0, 98.0), (60.0, -70.0, 98.8), (30.0, -68.0, 99.6), (0.0, -64.0, 100.0),
               (-30.0, -62.0, 100.0), (-44.0, -62.0, 100.0)]),
     dict(name="plant-road", kind="service-road", width=10.0, cut=0.67, fill=0.5, windrow=False,
          pts=[(16.0, -66.0, 100.0), (18.0, -72.0, 100.0), (20.0, -80.0, 100.0)]),
-    dict(name="yard-road", kind="haul-road", width=12.0, cut=0.67, fill=0.5, windrow=True,
+    dict(name="yard-road", kind="haul-road", width=12.5, cut=0.67, fill=0.5, windrow=True,
          pts=[(-44.0, -30.0, 100.0), (-10.0, -30.0, 100.0), (30.0, -26.0, 100.0), (55.0, -20.0, 100.0),
               (71.0, -12.0, 100.0)]),
 ]
@@ -189,7 +193,7 @@ REPOSE_DEG = 37.0
 
 ZONES = [                  # labelled areas (Unity x/z bounds), matching the platform's area tokens
     dict(token="sp-zone-cut", label="Cut", rect=(-38.0, 62.0, 20.0, 56.0)),
-    dict(token="sp-zone-fill", label="Fill", rect=(78.0, 108.0, -74.0, -36.0)),
+    dict(token="sp-zone-fill", label="Fill", rect=(78.0, 108.0, -86.0, -36.0)),
     dict(token="sp-zone-yard", label="Yard", rect=(-108.0, -46.0, -76.0, -14.0)),
 ]
 
@@ -952,14 +956,14 @@ PROPS = [
     ("fuel_tank", -66.5, -56.5, 90.0),          # dispenser faces the refuel bay
     ("light_tower", -71.0, -60.5, 30.0),
     ("light_tower", -48.0, -20.0, 200.0),
-    ("light_tower", 30.0, 26.0, 330.0),
-    ("light_tower", 90.0, -34.0, 160.0),
+    ("light_tower", 30.0, 61.0, 330.0),        # these two, the sign and the barrier line below stand off the haul loop's sweep
+    ("light_tower", 76.0, -40.0, 160.0),       # (quarry_fleet.py `site_checks`): the loop passes them by the travel reach, 3.2 m, at least
     ("light_tower", -58.0, -82.0, 140.0),
-    ("site_sign", -40.0, -24.0, 270.0),
+    ("site_sign", -40.0, -18.0, 270.0),
     # the processing plant
     ("crusher_plant", PLANT["x"], PLANT["z"], PLANT["heading"]),
 ] + [("cone", -55.6, -64.0 + 3.0 * i, 0.0) for i in range(7)] \
-  + [("barrier", -45.0, -40.0 - 3.2 * i, 90.0) for i in range(6)] \
+  + [("barrier", -44.0, -40.0 - 3.2 * i, 90.0) for i in range(6)] \
   + [("barrier", -108.0 + 3.2 * i, -78.5, 0.0) for i in range(5)] \
   + [("barrier", 10.0 + 3.2 * i, -128.0, 0.0) for i in range(5)]
 
@@ -1052,7 +1056,7 @@ def write(q, color, feats, out, raw_dir=None):
         f.write(gzip.compress(resid.tobytes(), compresslevel=9, mtime=0))
     rgba = np.round(np.flipud(color) * 255.0).astype(np.uint8)       # image top row = north
     Image.fromarray(rgba, "RGBA").save(os.path.join(out, "quarry_color.png"), optimize=True)
-    with open(os.path.join(out, "quarry_features.json"), "w") as f:
+    with open(os.path.join(out, "quarry_features.json"), "w", newline="\n") as f:   # LF on every platform
         json.dump(feats, f, separators=(",", ":"))
         f.write("\n")
 

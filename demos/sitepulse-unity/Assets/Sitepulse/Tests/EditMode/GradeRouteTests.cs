@@ -202,8 +202,11 @@ namespace DeviceChain.Sitepulse.Tests
         [Test]
         public void TheTakesRefuelRouteFromThePitUsesTheRampWithinTheLimit()
         {
-            // SP-HL-0006 is at the bottom of the pit when the take sends it to refuel (221 s into the live choreography)
-            var at = CommandKit.MachineAt("SP-HL-0006", 221.0);
+            // SP-HL-0006 is at the foot of the ramp, on the pit floor, when the take sends it to refuel (225.25 s into the live choreography: the
+            // loop is 3.4 s longer than when this was 221 s, and the truck is at the same place at (-15, 5))
+            var at = CommandKit.MachineAt("SP-HL-0006", 225.25);
+            Assert.AreEqual(-15.0, at.X, 1.0, "the truck is at the foot of the ramp at that time");
+            Assert.AreEqual(5.0, at.Z, 1.0, "(a pin that asserts nothing is not a pin)");
             var queue = CommandKit.Site.Spots[RouteGraph.QueueSpot];
             var route = CommandKit.Graph.Plan(at.X, at.Z, queue.X, queue.Z);
             Assert.IsNotNull(route, $"a route from ({at.X:0},{at.Z:0}) to the refuel queue");

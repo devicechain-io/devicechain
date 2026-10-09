@@ -1,0 +1,105 @@
+# Copyright The DeviceChain Authors
+# SPDX-License-Identifier: Apache-2.0
+#
+# The Sitepulse demo's generated site and choreography are checked, and reproduce.
+#
+# The quarry terrain, the site's props and the two fleet files are written by two Python scripts
+# (demos/sitepulse-unity/ArtSource/terrain). `quarry_fleet.py check` holds the haul loop and every
+# other moving machine clear of what stands, the loop's driven line within the grade limit, and
+# room in each zone for a hauler, a loader and a dozer to stand. `selftest` shows each of those
+# checks failing on a site made to break it (and fails if it ran fewer controls than it should).
+# Nothing else ran them: a change to a prop or a road could put the loop through a tower and every
+# other job stayed green. This also regenerates everything into a temp directory and requires it
+# to equal the committed files, so a data file nobody regenerated, or one edited by hand, fails.
+#
+# WHY A SEPARATE WORKFLOW AND NOT A JOB IN ci.yml. See frontend-windows.yml: ci.yml's `ci-complete`
+# gate requires every job in that file and counts a SKIPPED job as a failure, so a path-filtered
+# job there would either break that guard or block every pull request that does not touch the demo.
+# A workflow-level `paths:` filter in its own file has neither problem.
+#
+# NOT in the required-checks set: it covers a demo's generators, and it takes several minutes.
+#
+# The tool versions are pinned because the committed bytes depend on them (a heightmap is rounded
+# floating point, a PNG is a zlib stream). They are the versions the files were generated with.
+name: sitepulse-fleet
+
+on:
+  pull_request:
+    paths:
+      - "demos/sitepulse-unity/ArtSource/**"
+      - "demos/sitepulse-unity/Assets/Sitepulse/Data/quarry_fleet*.json"
+      - "demos/sitepulse-unity/Assets/Sitepulse/Art/Terrain/quarry_*"
+      - ".github/workflows/sitepulse-fleet.yml"
+  push:
+    branches: [main]
+    paths:
+      - "demos/sitepulse-unity/ArtSource/**"
+      - "demos/sitepulse-unity/Assets/Sitepulse/Data/quarry_fleet*.json"
+      - "demos/sitepulse-unity/Assets/Sitepulse/Art/Terrain/quarry_*"
+      - ".github/workflows/sitepulse-fleet.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sitepulse-fleet-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  fleet:
+    name: sitepulse site checks and regeneration
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: demos/sitepulse-unity/ArtSource/terrain
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.10"
+
+      - name: Install numpy and Pillow
+        run: python3 -m pip install numpy==1.24.2 Pillow==9.5.0
+
+      # Both fleets in memory against the committed site; exits 2 on any defect.
+      - name: Site checks on the committed files
+        run: python3 quarry_fleet.py check
+
+      # Each check failing on a site made to break it. The count is asserted here as well as in the
+      # script, so a selftest that is edited to skip a verdict does not pass by saying nothing.
+      - name: Checks fail on a site made to break them
+        run: |
+          python3 quarry_fleet.py selftest | tee selftest.log
+          grep -qx 'selftest: 10 of 10 controls behaved' selftest.log
+          test "$(grep -c ' ok$' selftest.log)" -eq 10
+          ! grep -q 'NOT CAUGHT' selftest.log
+
+      # Regenerate into a temp directory, in the order the README gives, and compare with what is committed.
+      - name: Regenerate into a temp directory
+        run: |
+          T="$RUNNER_TEMP/regen"
+          mkdir -p "$T/terrain"
+          python3 quarry_heightmap.py --out "$T/terrain"
+          python3 quarry_fleet.py --terrain "$T/terrain" --out "$T/quarry_fleet.json"
+          python3 quarry_fleet.py --terrain "$T/terrain" --out "$T/quarry_fleet_live.json" --live
+
+      - name: Regenerated files equal the committed ones
+        run: |
+          T="$RUNNER_TEMP/regen"
+          A=../../Assets/Sitepulse
+          cmp "$T/terrain/quarry_features.json" "$A/Art/Terrain/quarry_features.json"
+          cmp "$T/terrain/quarry_height.bytes" "$A/Art/Terrain/quarry_height.bytes"
+          cmp "$T/quarry_fleet.json" "$A/Data/quarry_fleet.json"
+          cmp "$T/quarry_fleet_live.json" "$A/Data/quarry_fleet_live.json"
+          # a PNG is compared by its pixels: its zlib stream is the encoder's, not the data's
+          python3 - "$T/terrain" "$A/Art/Terrain" <<'EOF'
+          import sys
+          import numpy as np
+          from PIL import Image
+          for name in ("quarry_color.png", "quarry_color_core.png"):
+              a = np.asarray(Image.open(sys.argv[1] + "/" + name))
+              b = np.asarray(Image.open(sys.argv[2] + "/" + name))
+              assert a.shape == b.shape and (a == b).all(), name + " differs from the committed file"
+          EOF
