@@ -261,7 +261,7 @@ func TestCacheClonesPreserveNilAndEmpty(t *testing.T) {
 // hold what the database gave it. A clone that copied only the struct would fail here.
 func TestACachedReadCannotBeChangedByItsCaller(t *testing.T) {
 	r := newProfileResolutionRig(t)
-	for i := 0; i < 3; i++ { // the first read fills; later ones are warm hits
+	for i := 0; i < 6; i++ { // read 0 decodes and attaches; 1.. are attached hits, each read back by the next
 		res := r.read(t)
 		if got := unitOf(t, res); got != "Cel" {
 			t.Fatalf("read %d: unit = %q, want Cel (an earlier caller's write leaked into the cache)", i, got)

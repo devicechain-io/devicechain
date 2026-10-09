@@ -52,6 +52,10 @@ type cacheOptions struct {
 	localTTL   time.Duration // <= 0: no in-process tier
 	maxEntries int
 	maxBytes   int
+	// decodedFactor and decodedBase give the bytes charged against maxBytes for a decoded
+	// value kept by GetCloned: factor times the encoded length, plus base. See
+	// WithDecodedCharge.
+	decodedFactor, decodedBase int
 }
 
 func defaultCacheOptions() cacheOptions {
@@ -59,6 +63,28 @@ func defaultCacheOptions() cacheOptions {
 		localTTL:   DefaultLocalCacheTTL,
 		maxEntries: defaultLocalMaxEntries,
 		maxBytes:   defaultLocalMaxBytes,
+
+		decodedFactor: 1,
+	}
+}
+
+// WithDecodedCharge sets what a decoded value kept for GetCloned costs against this Cache's
+// byte bound: factor times the length of its encoded form, plus base. The default is 1 and
+// 0, which is right only for a value whose decoded form is about as large as its encoding.
+//
+// A decoded struct is usually larger than its JSON (headers for every string and slice, a
+// pointer for every optional field, size-class rounding), and the heap cannot be measured
+// per value on the hot path, so the owner of a cache states the ratio for the types it
+// keeps, measured. The caller that sets it should hold the numbers with a test that
+// measures the heap of representative values, as device-management does. Both must be
+// non-negative and factor positive: it panics otherwise, as WithLocalTTL does.
+func WithDecodedCharge(factor, base int) CacheOption {
+	if factor <= 0 || base < 0 {
+		panic("messaging: WithDecodedCharge needs a positive factor and a non-negative base")
+	}
+	return func(o *cacheOptions) {
+		o.decodedFactor = factor
+		o.decodedBase = base
 	}
 }
 
@@ -112,6 +138,8 @@ type localCache struct {
 	maxEntries int
 	maxBytes   int
 	bytes      int
+
+	decodedFactor, decodedBase int
 	// gen is bumped by every write to this tier made on behalf of the bucket changing (a
 	// Set, a Delete). A Get records it before asking the bucket and fills only if it has
 	// not moved, so a read that was in flight across a change on this replica cannot put
@@ -159,9 +187,12 @@ func newLocalCache(o cacheOptions, obs *cacheObserver) *localCache {
 		ttl:        o.localTTL,
 		maxEntries: o.maxEntries,
 		maxBytes:   o.maxBytes,
-		order:      list.New(),
-		byKey:      map[string]*list.Element{},
-		obs:        obs,
+
+		decodedFactor: o.decodedFactor,
+		decodedBase:   o.decodedBase,
+		order:         list.New(),
+		byKey:         map[string]*list.Element{},
+		obs:           obs,
 	}
 }
 
@@ -227,10 +258,16 @@ func (l *localCache) peekHit(key string, now time.Time) (localHit, bool) {
 }
 
 // attach records val, the decoded form of e's bytes, on e, unless e is no longer the entry
-// held for key or already has one. It charges the entry len(e.data) more against the byte
-// cap as an ESTIMATE of the decoded value's heap (a decoded struct cannot be measured
-// without walking it), evicting from the least recently used end to make room, and does
-// not attach at all when the entry could not fit with it.
+// held for key or already has one. It charges the entry the decoded value's cost
+// (WithDecodedCharge) against the byte cap, evicting from the least recently used end to
+// make room, and does not attach at all when the entry could not fit with it.
+//
+// 🔴 THE IDENTITY CHECK IS THE STALE-READ GUARD. A reader that hit an entry, then lost the
+// race to a Set that replaced it, holds the OLD bytes' decoded form; attaching that to
+// whatever entry the key now names would serve the old value until the TTL. The entry is
+// compared by address, not looked up by key alone. An entry that already has a value keeps
+// it: both are decodes of the same immutable bytes, so replacing it would only charge the
+// entry twice.
 func (l *localCache) attach(key string, e *localEntry, val any) {
 	if l == nil || e == nil {
 		return
@@ -241,15 +278,23 @@ func (l *localCache) attach(key string, e *localEntry, val any) {
 	if !ok || el.Value.(*localEntry) != e || e.val != nil {
 		return
 	}
-	extra := len(e.data)
+	extra := len(e.data)*l.decodedFactor + l.decodedBase
 	if e.size+extra > l.maxBytes {
 		return
 	}
 	e.val = &decodedValue{v: val}
 	e.size += extra
 	l.bytes += extra
-	for l.bytes > l.maxBytes && l.order.Back() != el {
-		l.remove(l.order.Back(), "capacity")
+	// Make room from the least recently used end, never evicting the entry just attached
+	// to: if it is itself the least recently used, the one before it goes. The loop ends
+	// because the entry fits alone (checked above), so while the cap is exceeded another
+	// entry exists.
+	for l.bytes > l.maxBytes {
+		victim := l.order.Back()
+		if victim == el {
+			victim = victim.Prev()
+		}
+		l.remove(victim, "capacity")
 	}
 	l.report()
 }

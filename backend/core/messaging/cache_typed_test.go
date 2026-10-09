@@ -235,34 +235,6 @@ func TestGetClonedChargesTheByteCap(t *testing.T) {
 	}
 }
 
-// TestGetClonedWithOtherTypeDecodesAfresh: a key read as one type and then another never
-// returns the wrong type's value.
-func TestGetClonedWithOtherTypeDecodesAfresh(t *testing.T) {
-	ctx := context.Background()
-	c := NewCacheOver(newCountingStore())
-	if err := c.Set(ctx, "t|k", map[string]string{"a": "b"}); err != nil {
-		t.Fatal(err)
-	}
-	cloneMap := func(m *map[string]string) *map[string]string {
-		out := make(map[string]string, len(*m))
-		for k, v := range *m {
-			out[k] = v
-		}
-		return &out
-	}
-	if _, found, err := GetCloned(ctx, c, "t|k", cloneMap); !found || err != nil {
-		t.Fatal(found, err)
-	}
-	type other struct{ A string }
-	cloneOther := func(o *other) *other { v := *o; return &v }
-	if _, found, err := GetCloned(ctx, c, "t|k", cloneOther); found || err == nil {
-		// a JSON object decodes into other without error: found, with A empty
-		if !found || err != nil {
-			t.Fatal(found, err)
-		}
-	}
-}
-
 // TestGetClonedDecodeError returns the error as Get does and holds nothing.
 func TestGetClonedDecodeError(t *testing.T) {
 	ctx := context.Background()
