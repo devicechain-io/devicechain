@@ -293,6 +293,11 @@ func (jd *JsonDecoder) BuildLocationsPayload(source *JsonEvent) (*model.Unresolv
 	if err != nil {
 		return nil, err
 	}
+	return jd.buildLocationsPayloadFromBytes(locbytes)
+}
+
+// buildLocationsPayloadFromBytes is BuildLocationsPayload from the payload object's JSON bytes.
+func (jd *JsonDecoder) buildLocationsPayloadFromBytes(locbytes []byte) (*model.UnresolvedLocationsPayload, error) {
 	if err := validateEntryTimes("location", locbytes); err != nil {
 		return nil, err
 	}
@@ -317,6 +322,11 @@ func (jd *JsonDecoder) BuildMeasurementsPayload(source *JsonEvent) (*model.Unres
 	if err != nil {
 		return nil, err
 	}
+	return jd.buildMeasurementsPayloadFromBytes(locbytes)
+}
+
+// buildMeasurementsPayloadFromBytes is BuildMeasurementsPayload from the payload object's JSON bytes.
+func (jd *JsonDecoder) buildMeasurementsPayloadFromBytes(locbytes []byte) (*model.UnresolvedMeasurementsPayload, error) {
 	if err := validateEntryTimes("measurement", locbytes); err != nil {
 		return nil, err
 	}
@@ -345,6 +355,11 @@ func (jd *JsonDecoder) BuildAlertsPayload(source *JsonEvent) (*model.UnresolvedA
 	if err != nil {
 		return nil, err
 	}
+	return jd.buildAlertsPayloadFromBytes(locbytes)
+}
+
+// buildAlertsPayloadFromBytes is BuildAlertsPayload from the payload object's JSON bytes.
+func (jd *JsonDecoder) buildAlertsPayloadFromBytes(locbytes []byte) (*model.UnresolvedAlertsPayload, error) {
 	if err := validateEntryTimes("alert", locbytes); err != nil {
 		return nil, err
 	}
@@ -431,8 +446,87 @@ func (jd *JsonDecoder) AssembleEvent(jevent *JsonEvent, receivedAt time.Time) (*
 	return event, nil
 }
 
+// rawJsonEvent is JsonEvent with the payload object left as the device's own bytes. The
+// outer Payload is shallower than the embedded JsonEvent.Payload, so encoding/json binds the
+// "payload" key to it and every other field keeps JsonEvent's tags.
+type rawJsonEvent struct {
+	JsonEvent
+	Payload json.RawMessage `json:"payload"`
+}
+
 // Decode a json payload into an event.
+//
+// The payload is parsed once, with the payload object kept as raw bytes that the
+// typed entry structs are decoded from directly, instead of being decoded into a
+// map, re-marshalled and decoded again. That is only equivalent to the reference
+// path (decodeReference) for input whose canonical form is the input: encoding/json
+// resolves a repeated key by merging into the field or map decoded so far where the
+// map round trip replaces it, and applies same-field keys in sorted order where this
+// applies them in wire order. decodeOnce therefore reports ok=false for any input it
+// cannot prove equivalent, and for EVERY failure, and Decode then runs the reference
+// path on the same bytes, so the error a device is sent is always the reference one.
+// Failures are the cold path; the hot path is a well-formed event.
 func (jd *JsonDecoder) Decode(payload []byte, receivedAt time.Time) (*model.UnresolvedEvent, interface{}, error) {
+	if event, built, ok := jd.decodeOnce(payload, receivedAt); ok {
+		return event, built, nil
+	}
+	return jd.decodeReference(payload, receivedAt)
+}
+
+// decodeOnce is the single-pass decode. ok=false means "run decodeReference": the
+// input is not provably equivalent, or it failed somewhere and the reference path owns
+// the error. It never returns a partial result.
+func (jd *JsonDecoder) decodeOnce(payload []byte, receivedAt time.Time) (*model.UnresolvedEvent, interface{}, bool) {
+	// The cheap scan goes first so input headed for the reference path pays for nothing else.
+	if !canonicalKeys(payload) {
+		return nil, nil, false
+	}
+	raw := &rawJsonEvent{}
+	if err := json.Unmarshal(payload, raw); err != nil {
+		return nil, nil, false
+	}
+	event, err := jd.AssembleEvent(&raw.JsonEvent, receivedAt)
+	if err != nil {
+		return nil, nil, false
+	}
+	// An absent payload is a nil map in the reference path, which marshals as null.
+	body := []byte(raw.Payload)
+	if len(body) == 0 {
+		body = []byte("null")
+	}
+	var built interface{}
+	switch event.EventType {
+	case model.NewRelationship:
+		// Read through the same map decode as before: BuildNewRelationshipPayload
+		// formats the values with %v, which depends on the decoded Go types.
+		source := &JsonEvent{}
+		if err := json.Unmarshal(body, &source.Payload); err != nil {
+			return nil, nil, false
+		}
+		built, err = jd.BuildNewRelationshipPayload(source)
+	case model.Location:
+		built, err = jd.buildLocationsPayloadFromBytes(body)
+	case model.Measurement:
+		built, err = jd.buildMeasurementsPayloadFromBytes(body)
+	case model.Alert:
+		built, err = jd.buildAlertsPayloadFromBytes(body)
+	default:
+		return nil, nil, false
+	}
+	if err != nil {
+		return nil, nil, false
+	}
+	if err := checkBuilt(event, built); err != nil {
+		return nil, nil, false
+	}
+	return event, built, true
+}
+
+// decodeReference is the original decode: envelope into a map, then per kind a
+// re-marshal of that map. It stays in the build as the authority for every input and
+// error the single-pass decode does not take, and decodeOnce is tested against a
+// verbatim copy of it.
+func (jd *JsonDecoder) decodeReference(payload []byte, receivedAt time.Time) (*model.UnresolvedEvent, interface{}, error) {
 	// Parse json payload.
 	jevent, err := jd.ParseEvent(payload)
 	if err != nil {
@@ -481,6 +575,14 @@ func (jd *JsonDecoder) Decode(payload []byte, receivedAt time.Time) (*model.Unre
 	if err != nil {
 		return nil, nil, err
 	}
+	if err := checkBuilt(event, built); err != nil {
+		return nil, nil, err
+	}
+	return event, built, nil
+}
+
+// checkBuilt applies the limits every built payload is held to, whichever path built it.
+func checkBuilt(event *model.UnresolvedEvent, built interface{}) error {
 	// 🔴 ONE CALL, FOR EVERY KIND. The limit used to be checked inside each Build*Payload, so
 	// a new payload kind had to remember the call; here a kind added to the switch above
 	// reaches it without being told, and one model.ReadingCount does not know is refused
@@ -491,7 +593,7 @@ func (jd *JsonDecoder) Decode(payload []byte, receivedAt time.Time) (*model.Unre
 	// truncates: the device is told the count and the limit, and the message routes to the
 	// failed-decode path intact.
 	if err := model.CheckReadingCount(built); err != nil {
-		return nil, nil, err
+		return err
 	}
 	// 🔴 THE AGE FLOOR, at the door so HTTP can answer 400 and a broker transport dead-letters
 	// with the reason. Measured against the event's ProcessedTime, which AssembleEvent set
@@ -500,7 +602,7 @@ func (jd *JsonDecoder) Decode(payload []byte, receivedAt time.Time) (*model.Unre
 	// every producer; it reads the same constant and the same ProcessedTime, so it never
 	// disagrees with this one.
 	if err := model.CheckEventAge(event.OccurredTime, event.ProcessedTime, built); err != nil {
-		return nil, nil, fmt.Errorf("%w: %w", ErrInvalidEventTime, err)
+		return fmt.Errorf("%w: %w", ErrInvalidEventTime, err)
 	}
-	return event, built, nil
+	return nil
 }
