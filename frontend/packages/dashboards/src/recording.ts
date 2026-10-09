@@ -98,8 +98,13 @@ export interface RecordedAlarm {
   ack?: true;
 }
 
+// A snapshot is the whole alarm set as the recorder's query returned it. `requestedAtMs` is
+// when that query was SENT (it answers at `tMs`); an event applied after it is newer than
+// anything the answer can say about that alarm. `total` always equals the alarms listed: a
+// truncated answer cannot be played as if it were complete.
 export interface RecordedAlarmSnapshot {
   tMs: number;
+  requestedAtMs: number;
   total: number;
   alarms: RecordedAlarm[];
 }
@@ -216,12 +221,39 @@ const HEX64 = /^[0-9a-f]{64}$/;
 const HEX40 = /^[0-9a-f]{40}$/;
 const HEX_SHORT = /^[0-9a-f]{7,40}$/;
 
+const INSTANT = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d+))?Z$/;
+
+// Strict: a date that does not exist (2026-02-30) is refused, not rolled over to March.
 function instant(v: unknown, path: string): string {
   const s = str(v, path);
-  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$/.test(s) || Number.isNaN(Date.parse(s))) {
-    throw new RecordingFormatError(path, 'expected an RFC 3339 UTC instant ending in Z');
+  const m = INSTANT.exec(s);
+  if (m) {
+    const [y, mo, d, h, mi, sec] = m.slice(1, 7).map(Number);
+    const t = new Date(Date.UTC(y, mo - 1, d, h, mi, sec));
+    if (
+      t.getUTCFullYear() === y && t.getUTCMonth() === mo - 1 && t.getUTCDate() === d &&
+      t.getUTCHours() === h && t.getUTCMinutes() === mi && t.getUTCSeconds() === sec
+    ) {
+      return s;
+    }
   }
-  return s;
+  throw new RecordingFormatError(path, 'expected an RFC 3339 UTC instant ending in Z that exists on the calendar');
+}
+
+// Orders two instants as parsed times, not as strings: "...:10Z" is BEFORE "...:10.5Z"
+// although it sorts after it as text. Fractions compare to the full digits given (the
+// platform writes up to 7), not just to the millisecond Date can hold.
+export function compareInstants(a: string, b: string): number {
+  const pa = INSTANT.exec(a);
+  const pb = INSTANT.exec(b);
+  if (!pa || !pb) throw new RangeError(`compareInstants: not an instant: ${pa ? b : a}`);
+  const whole = (m: RegExpExecArray): number => Date.parse(`${m[1]}-${m[2]}-${m[3]}T${m[4]}:${m[5]}:${m[6]}Z`);
+  const wa = whole(pa);
+  const wb = whole(pb);
+  if (wa !== wb) return wa < wb ? -1 : 1;
+  const fa = (pa[7] ?? '').padEnd(12, '0');
+  const fb = (pb[7] ?? '').padEnd(12, '0');
+  return fa < fb ? -1 : fa > fb ? 1 : 0;
 }
 
 function column<T>(v: unknown, path: string, item: (x: unknown, p: string) => T, length?: number): T[] {
@@ -338,7 +370,11 @@ export function parseBoardRecording(input: unknown): BoardRecording {
     const o = strict(x, p, ['tMs', 'name', 'note']);
     const tMs = num(o.tMs, `${p}.tMs`);
     if (tMs < 0 || tMs > durationMs) throw new RecordingFormatError(`${p}.tMs`, 'is outside the run');
+    if (excerpt && (tMs < lo || tMs > hi)) throw new RecordingFormatError(`${p}.tMs`, 'is outside the excerpt window');
     return { tMs, name: str(o.name, `${p}.name`), note: str(o.note, `${p}.note`) };
+  });
+  chapters.forEach((c, i) => {
+    if (i > 0 && c.tMs < chapters[i - 1].tMs) throw new RecordingFormatError(`$.chapters[${i}].tMs`, 'chapters must not decrease in time');
   });
 
   const m = strict(root.measurements, '$.measurements', ['d', 'n', 't', 'v', 's']);
@@ -394,11 +430,24 @@ export function parseBoardRecording(input: unknown): BoardRecording {
     return tMs;
   };
   const snapshots = column(al.snapshots, '$.alarms.snapshots', (x, p): RecordedAlarmSnapshot => {
-    const o = strict(x, p, ['tMs', 'total', 'alarms']);
+    const o = strict(x, p, ['tMs', 'requestedAtMs', 'total', 'alarms']);
     const alarms = column(o.alarms, `${p}.alarms`, (a, ap) => alarm(strict(a, ap, ALARM_KEYS, ['ack']), ap));
+    const ids = new Set<string>();
+    alarms.forEach((a, i) => {
+      if (ids.has(a.id)) throw new RecordingFormatError(`${p}.alarms[${i}].id`, `duplicate alarm ${a.id} in one snapshot`);
+      ids.add(a.id);
+    });
+    // A snapshot that lists fewer alarms than its total is a truncated answer. Folding it
+    // as the whole set would erase every alarm it left out.
     const total = nonNegative(o.total, `${p}.total`);
-    if (total < alarms.length) throw new RecordingFormatError(`${p}.total`, 'is smaller than the alarms listed');
-    return { tMs: checkTime(num(o.tMs, `${p}.tMs`), `${p}.tMs`), total, alarms };
+    if (total !== alarms.length) {
+      throw new RecordingFormatError(`${p}.total`, `is ${total} but ${alarms.length} alarms are listed (truncated snapshot)`);
+    }
+    const tMs = checkTime(num(o.tMs, `${p}.tMs`), `${p}.tMs`);
+    const requestedAtMs = nonNegative(o.requestedAtMs, `${p}.requestedAtMs`);
+    if (!Number.isInteger(requestedAtMs)) throw new RecordingFormatError(`${p}.requestedAtMs`, 'expected an integer');
+    if (requestedAtMs > tMs) throw new RecordingFormatError(`${p}.requestedAtMs`, 'a query cannot be sent after its answer');
+    return { tMs, requestedAtMs, total, alarms };
   });
   const events = column(al.events, '$.alarms.events', (x, p): RecordedAlarmEvent => {
     const o = strict(x, p, [...ALARM_KEYS, 'tMs'], ['ack']);
@@ -408,6 +457,19 @@ export function parseBoardRecording(input: unknown): BoardRecording {
     list.forEach((e, i) => {
       if (i > 0 && e.tMs < list[i - 1].tMs) throw new RecordingFormatError(`$.alarms.${name}[${i}].tMs`, 'must not decrease');
     });
+  }
+  // An alarm id names one alarm on one device for the whole recording.
+  const deviceOf = new Map<string, string>();
+  const everyAlarm: Array<[string, RecordedAlarm]> = [
+    ...snapshots.flatMap((s, i) => s.alarms.map((a, j): [string, RecordedAlarm] => [`$.alarms.snapshots[${i}].alarms[${j}]`, a])),
+    ...events.map((e, i): [string, RecordedAlarm] => [`$.alarms.events[${i}]`, e]),
+  ];
+  for (const [path, a] of everyAlarm) {
+    const seen = deviceOf.get(a.id);
+    if (seen !== undefined && seen !== a.dev) {
+      throw new RecordingFormatError(`${path}.dev`, `alarm ${a.id} was on '${seen}' and cannot move to '${a.dev}'`);
+    }
+    deviceOf.set(a.id, a.dev);
   }
   if (!channels.alarms && (snapshots.length > 0 || events.length > 0)) {
     throw new RecordingFormatError('$.alarms', 'history present but $.channels.alarms is false');

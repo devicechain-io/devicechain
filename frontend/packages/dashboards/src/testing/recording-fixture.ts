@@ -84,7 +84,7 @@ export function fixtureJson(): Json {
       s: sorted.map((r) => r[4]),
     },
     alarms: {
-      snapshots: [{ tMs: 0, total: 0, alarms: [] }],
+      snapshots: [{ tMs: 0, requestedAtMs: 0, total: 0, alarms: [] }],
       events: [
         { ...alarm('alarm-1', 'sp-hauler-02', 'low-fuel', 'fuel_pct', 'ACTIVE', 'CRITICAL', 9_700), tMs: 10_000 },
         { ...alarm('alarm-2', 'sp-hauler-01', 'tyre-pressure-low', 'tyre_pressure_kpa', 'ACTIVE', 'MAJOR', 19_700), tMs: 20_000 },

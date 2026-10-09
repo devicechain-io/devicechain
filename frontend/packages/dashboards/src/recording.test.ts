@@ -9,6 +9,7 @@ import {
   recordingBounds,
   RecordingFormatError,
   simulationScaleAt,
+  compareInstants,
 } from './recording';
 import { FIXTURE_START_MS, fixtureJson } from './testing/recording-fixture';
 
@@ -139,6 +140,68 @@ describe('parseBoardRecording', () => {
     expect(refusal((d) => (d.alarms.snapshots[0].total = -1)).path).toBe('$.alarms.snapshots[0].total');
   });
 
+  it('refuses a truncated snapshot: a total larger than the alarms listed', () => {
+    const err = refusal((d) => {
+      d.alarms.snapshots[0].total = 7;
+    });
+    expect(err.path).toBe('$.alarms.snapshots[0].total');
+    expect(err.message).toContain('truncated');
+  });
+
+  it('requires requestedAtMs on a snapshot: an integer, no later than its answer', () => {
+    expect(refusal((d) => delete d.alarms.snapshots[0].requestedAtMs).path).toBe('$.alarms.snapshots[0].requestedAtMs');
+    expect(
+      refusal((d) => {
+        d.alarms.snapshots[0].tMs = 100;
+        d.alarms.snapshots[0].requestedAtMs = 101;
+      }).path,
+    ).toBe('$.alarms.snapshots[0].requestedAtMs');
+    expect(refusal((d) => (d.alarms.snapshots[0].requestedAtMs = -1)).path).toBe('$.alarms.snapshots[0].requestedAtMs');
+    expect(
+      refusal((d) => {
+        d.alarms.snapshots[0].tMs = 100;
+        d.alarms.snapshots[0].requestedAtMs = 50.5;
+      }).path,
+    ).toBe('$.alarms.snapshots[0].requestedAtMs');
+  });
+
+  it('refuses a duplicate alarm id inside one snapshot', () => {
+    const e = (id: string) => ({ id, dev: 'sp-hauler-01', key: 'k', metric: 'fuel_pct', state: 'ACTIVE', sev: 'MAJOR', occ: '2026-01-02T03:04:06Z' });
+    expect(
+      refusal((d) => {
+        d.alarms.snapshots[0] = { tMs: 5, requestedAtMs: 5, total: 2, alarms: [e('alarm-9'), e('alarm-9')] };
+      }).path,
+    ).toBe('$.alarms.snapshots[0].alarms[1].id');
+  });
+
+  it('refuses an alarm id that moves to another device', () => {
+    expect(refusal((d) => (d.alarms.events[2].dev = 'sp-hauler-01')).path).toBe('$.alarms.events[2].dev');
+  });
+
+  it('refuses a date that does not exist instead of rolling it over', () => {
+    expect(refusal((d) => (d.startedAtUtc = '2026-02-30T00:00:00Z')).path).toBe('$.startedAtUtc');
+    expect(refusal((d) => (d.alarms.events[0].occ = '2026-04-31T01:02:03.5Z')).path).toBe('$.alarms.events[0].occ');
+    expect(refusal((d) => (d.alarms.events[0].occ = '2026-01-02T24:00:00Z')).path).toBe('$.alarms.events[0].occ');
+    expect(refusal((d) => (d.startedAtUtc = '2026-01-02T03:04:60Z')).path).toBe('$.startedAtUtc');
+  });
+
+  it('refuses chapters out of order, or outside an excerpt window', () => {
+    expect(
+      refusal((d) => {
+        d.chapters = [
+          { tMs: 30_000, name: 'b', note: 'n' },
+          { tMs: 20_000, name: 'a', note: 'n' },
+        ];
+      }).path,
+    ).toBe('$.chapters[1].tMs');
+    expect(
+      refusal((d) => {
+        d.excerpt = { fromMs: 0, toMs: 50_000 };
+        d.chapters = [{ tMs: 55_000, name: 'late', note: 'n' }];
+      }).path,
+    ).toBe('$.chapters[0].tMs');
+  });
+
   it('refuses a snapshot whose total is smaller than the alarms it lists', () => {
     expect(
       refusal((d) => {
@@ -200,5 +263,20 @@ describe('reading a parsed recording', () => {
     expect(simulationScaleAt(r, 11)).toEqual({ mode: 'real', scale: 1 });
     expect(simulationScaleAt(r, 29_999)).toEqual({ mode: 'real', scale: 1 });
     expect(simulationScaleAt(r, 30_000)).toEqual({ mode: 'scaled', scale: 60 });
+  });
+});
+
+describe('compareInstants', () => {
+  it('orders by time, not by text', () => {
+    // As text "10Z" sorts AFTER "10.5Z" ('Z' is greater than '.').
+    expect(compareInstants('2026-01-02T03:04:10Z', '2026-01-02T03:04:10.5Z')).toBe(-1);
+    expect(compareInstants('2026-01-02T03:04:10.5Z', '2026-01-02T03:04:10Z')).toBe(1);
+    expect(compareInstants('2026-01-02T03:04:10.5Z', '2026-01-02T03:04:10.50Z')).toBe(0);
+    expect(compareInstants('2026-01-02T03:04:10.1234567Z', '2026-01-02T03:04:10.1234568Z')).toBe(-1);
+    expect(compareInstants('2026-01-02T03:04:11Z', '2026-01-02T03:04:10.9999999Z')).toBe(1);
+  });
+
+  it('refuses a string that is not an instant', () => {
+    expect(() => compareInstants('yesterday', '2026-01-02T03:04:10Z')).toThrow(RangeError);
   });
 });

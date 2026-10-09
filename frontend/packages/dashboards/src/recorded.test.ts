@@ -332,7 +332,7 @@ describe('RecordedDataSource: alarm snapshots', () => {
 
   it('a later snapshot replaces the whole set, then events apply on top of it', async () => {
     const mutate = (d: Json) => {
-      d.alarms.snapshots.push({ tMs: 35_000, total: 1, alarms: [alarm('alarm-9', 'ACTIVE', 34_000)] });
+      d.alarms.snapshots.push({ tMs: 35_000, requestedAtMs: 35_000, total: 1, alarms: [alarm('alarm-9', 'ACTIVE', 34_000)] });
       d.alarms.events.push({ ...alarm('alarm-9', 'CLEARED', 36_000), tMs: 36_000 });
       d.alarms.events.sort((a: Json, b: Json) => a.tMs - b.tMs);
     };
@@ -347,10 +347,93 @@ describe('RecordedDataSource: alarm snapshots', () => {
 
   it('a snapshot listing a cleared alarm shows it cleared, with no raise time it never saw', async () => {
     const last = await folded((d) => {
-      d.alarms.snapshots[0] = { tMs: 0, total: 1, alarms: [alarm('alarm-9', 'CLEARED', 100)] };
+      d.alarms.snapshots[0] = { tMs: 0, requestedAtMs: 0, total: 1, alarms: [alarm('alarm-9', 'CLEARED', 100)] };
     }, 5_000);
     expect(last.alarms).toHaveLength(1);
     expect(last.alarms[0]).toMatchObject({ raisedTime: null, clearedTime: fixtureInstant(100), state: 'CLEARED' });
+  });
+});
+
+describe('RecordedDataSource: alarm ordering and acknowledgement', () => {
+  const alarm = (id: string, state: string, occ: string, extra: Json = {}) => ({
+    id, dev: 'sp-hauler-01', key: 'k', metric: 'fuel_pct', state, sev: 'MAJOR', occ, ...extra,
+  });
+
+  async function folded(mutate: (doc: Json) => void, cursor: number) {
+    const doc = fixtureJson();
+    mutate(doc);
+    const rec = parseBoardRecording(doc);
+    const clock = new RecordedClock(FIXTURE_DURATION_MS, { ticker: idleTicker, startMs: cursor });
+    const snaps: AlarmSnapshot[] = [];
+    new RecordedDataSource(rec, clock).subscribeAlarms({ pageSize: 10 }, { next: (x) => snaps.push(x) });
+    await settle();
+    return snaps[snaps.length - 1];
+  }
+
+  const sorted = (d: Json) => d.alarms.events.sort((a: Json, b: Json) => a.tMs - b.tMs);
+
+  it('each record decides its own ack: acknowledgement does not carry over to a later record', async () => {
+    const mutate = (d: Json) => {
+      d.alarms.events.push({ ...alarm('alarm-9', 'ACTIVE', '2026-01-02T03:04:11Z', { ack: true }), tMs: 11_000 });
+      d.alarms.events.push({ ...alarm('alarm-9', 'ACTIVE', '2026-01-02T03:04:11Z'), tMs: 12_000 });
+      sorted(d);
+    };
+    const acked = await folded(mutate, 11_500);
+    expect(acked.alarms.find((a) => a.token === 'alarm-9')?.acknowledged).toBe(true);
+    const later = await folded(mutate, 12_500);
+    expect(later.alarms.find((a) => a.token === 'alarm-9')?.acknowledged).toBe(false);
+  });
+
+  it('orders alarms by the instant they were raised, not by the text of the timestamp', async () => {
+    const last = await folded((d) => {
+      // 03:04:15Z is earlier than 03:04:15.5Z although it sorts after it as text.
+      d.alarms.events.push({ ...alarm('alarm-5', 'ACTIVE', '2026-01-02T03:04:15Z'), tMs: 11_000 });
+      d.alarms.events.push({ ...alarm('alarm-6', 'ACTIVE', '2026-01-02T03:04:15.5Z'), tMs: 11_000 });
+      sorted(d);
+    }, 12_000);
+    expect(last.alarms.map((a) => a.token)).toEqual(['alarm-6', 'alarm-5', 'alarm-1']);
+  });
+
+  it('at an equal time an event applies after the snapshot, so the event wins', async () => {
+    const last = await folded((d) => {
+      d.alarms.snapshots.push({
+        tMs: 35_000,
+        requestedAtMs: 35_000,
+        total: 1,
+        alarms: [alarm('alarm-9', 'ACTIVE', '2026-01-02T03:04:34Z')],
+      });
+      d.alarms.events.push({ ...alarm('alarm-9', 'CLEARED', '2026-01-02T03:04:40Z'), tMs: 35_000 });
+      sorted(d);
+    }, 35_000);
+    expect(last.alarms.map((a) => [a.token, a.state])).toEqual([['alarm-9', 'CLEARED']]);
+  });
+
+  it('a snapshot never erases an alarm that changed after its query was sent', async () => {
+    const mutate = (requestedAtMs: number) => (d: Json) => {
+      d.alarms.events.push({ ...alarm('alarm-7', 'ACTIVE', '2026-01-02T03:04:34Z'), tMs: 34_000 });
+      d.alarms.snapshots.push({ tMs: 35_000, requestedAtMs, total: 0, alarms: [] });
+      sorted(d);
+    };
+    // Query sent at 33 000, before the event at 34 000: the answer cannot speak to it.
+    const kept = await folded(mutate(33_000), 35_500);
+    expect(kept.alarms.map((a) => a.token)).toEqual(['alarm-7']);
+    // Query sent at 34 500, after the event: the answer is authoritative and omits it.
+    const erased = await folded(mutate(34_500), 35_500);
+    expect(erased.alarms).toEqual([]);
+  });
+
+  it('keeps the newer event over a contradicting snapshot entry', async () => {
+    const last = await folded((d) => {
+      d.alarms.events.push({ ...alarm('alarm-7', 'CLEARED', '2026-01-02T03:04:39Z'), tMs: 34_000 });
+      d.alarms.snapshots.push({
+        tMs: 35_000,
+        requestedAtMs: 33_000,
+        total: 1,
+        alarms: [alarm('alarm-7', 'ACTIVE', '2026-01-02T03:04:30Z')],
+      });
+      sorted(d);
+    }, 35_500);
+    expect(last.alarms.map((a) => [a.token, a.state])).toEqual([['alarm-7', 'CLEARED']]);
   });
 });
 
@@ -500,6 +583,26 @@ describe('createRecordedResolver', () => {
     const resolver = createRecordedResolver(rec);
     expect(await resolver.deviceExists('sp-plant-01')).toBe(true);
     expect(await resolver.deviceExists('sp-ghost-99')).toBe(false);
+  });
+});
+
+describe('declared site anchors', () => {
+  const rec = fixtureRecording();
+  const clock = () => new RecordedClock(FIXTURE_DURATION_MS, { ticker: idleTicker });
+  const area = { relationship: 'assigned', targetType: 'area', targetToken: 'north-pit' } as const;
+
+  it('accept exactly one anchor, and only a customer, wherever options are taken', () => {
+    const builders = [
+      (o: { siteAnchors: any }) => createRecordedResolver(rec, o),
+      (o: { siteAnchors: any }) => createRecordedLister(rec, o),
+      (o: { siteAnchors: any }) => new RecordedDataSource(rec, clock(), o),
+    ];
+    for (const build of builders) {
+      expect(() => build({ siteAnchors: [] })).toThrow(/exactly one/);
+      expect(() => build({ siteAnchors: [SITE, { ...SITE, targetToken: 'second' }] })).toThrow(/exactly one/);
+      expect(() => build({ siteAnchors: [area] })).toThrow(/customer/);
+      expect(() => build({ siteAnchors: [SITE] })).not.toThrow();
+    }
   });
 });
 

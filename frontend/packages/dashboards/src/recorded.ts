@@ -57,6 +57,7 @@ import type {
   MeasurementSample,
 } from './types';
 import {
+  compareInstants,
   recordingBounds,
   type BoardRecording,
   type RecordedAlarm,
@@ -286,9 +287,11 @@ export function createRecordedClock(rec: BoardRecording, options: { ticker?: Clo
 
 // The recording does not carry the anchor a board is bound to; it carries the devices. The
 // host names the anchors (taken from the board definition it plays) whose members are the
-// run's devices. Every device of a Sitepulse run is a member of the one site customer, so
-// each anchor listed here expands to ALL of the run's devices; an anchor not listed is
-// unknown and is refused, never answered with an empty set.
+// run's devices. Every device of a Sitepulse run is a member of the one site CUSTOMER, so
+// that anchor expands to ALL of the run's devices. Exactly one anchor may be declared, and
+// it must be a customer: an area or asset anchor would claim every device is in it, which
+// the recording cannot know. An anchor that was not declared is unknown and is refused,
+// never answered with an empty set. Declaring nothing declares no anchor at all.
 export interface RecordedSiteOptions {
   siteAnchors?: readonly AnchorTarget[];
 }
@@ -297,8 +300,25 @@ function sameAnchor(a: AnchorTarget, b: AnchorTarget): boolean {
   return a.relationship === b.relationship && a.targetType === b.targetType && a.targetToken === b.targetToken;
 }
 
-function anchorMembers(rec: BoardRecording, options: RecordedSiteOptions, anchor: AnchorTarget): string[] {
-  if (!(options.siteAnchors ?? []).some((a) => sameAnchor(a, anchor))) {
+// The one declared site anchor, or null when none was declared. Anything else is refused
+// when the source, resolver or lister is built, not at some later lookup.
+function declaredSite(options: RecordedSiteOptions): AnchorTarget | null {
+  const anchors = options.siteAnchors;
+  if (anchors === undefined) return null;
+  if (anchors.length !== 1) {
+    throw new Error(`RecordedSiteOptions.siteAnchors must declare exactly one anchor, got ${anchors.length}`);
+  }
+  if (anchors[0].targetType !== 'customer') {
+    throw new Error(
+      `RecordedSiteOptions.siteAnchors must be a customer anchor, got '${anchors[0].targetType}': ` +
+        'a recording cannot say that every device belongs to an area or an asset',
+    );
+  }
+  return anchors[0];
+}
+
+function anchorMembers(rec: BoardRecording, site: AnchorTarget | null, anchor: AnchorTarget): string[] {
+  if (!site || !sameAnchor(site, anchor)) {
     throw new Error(
       `anchor ${anchor.targetType} '${anchor.targetToken}' (${anchor.relationship}) is not in this recording`,
     );
@@ -312,8 +332,9 @@ function anchorMembers(rec: BoardRecording, options: RecordedSiteOptions, anchor
 // machines").
 export function createRecordedResolver(rec: BoardRecording, options: RecordedSiteOptions = {}): DeviceResolver {
   const devices = new Set(rec.devices.map((d) => d.token));
+  const site = declaredSite(options);
   return {
-    devicesForAnchor: async (anchor) => anchorMembers(rec, options, anchor),
+    devicesForAnchor: async (anchor) => anchorMembers(rec, site, anchor),
     deviceExists: async (token) => devices.has(token),
   };
 }
@@ -328,16 +349,10 @@ export function createRecordedResolver(rec: BoardRecording, options: RecordedSit
 // list the declared site anchors of that type; a kind with none yields an empty list,
 // which is true of the recording.
 export function createRecordedLister(rec: BoardRecording, options: RecordedSiteOptions = {}): EntityCandidateLister {
+  const site = declaredSite(options);
   return async (kind: EntityListKind) => {
     if (kind === 'device') return rec.devices.map((d) => ({ token: d.token, name: null }));
-    const seen = new Set<string>();
-    const rows: Array<{ token: string; name: null }> = [];
-    for (const a of options.siteAnchors ?? []) {
-      if (a.targetType !== kind || seen.has(a.targetToken)) continue;
-      seen.add(a.targetToken);
-      rows.push({ token: a.targetToken, name: null });
-    }
-    return rows;
+    return site && site.targetType === kind ? [{ token: site.targetToken, name: null }] : [];
   };
 }
 
@@ -410,6 +425,9 @@ interface FoldedAlarm {
   raised: string | null;
   cleared: string | null;
   ack: boolean;
+  // The recording time this state is known as of: the event's time, or for an alarm taken
+  // from a snapshot, when that snapshot's query was sent.
+  asOfMs: number;
 }
 
 // ---- the data source ------------------------------------------------------
@@ -427,7 +445,7 @@ interface DeviceNames {
 
 export class RecordedDataSource implements WidgetDataSource {
   private readonly rec: BoardRecording;
-  private readonly options: RecordedSiteOptions;
+  private readonly site: AnchorTarget | null;
   private readonly index: Indexed;
   private readonly startMs: number;
   private readonly devices: ReadonlySet<string>;
@@ -440,7 +458,7 @@ export class RecordedDataSource implements WidgetDataSource {
   // names the site anchors this recording's devices belong to (see RecordedSiteOptions).
   constructor(rec: BoardRecording, clock: RecordedClock, options: RecordedSiteOptions = {}) {
     this.rec = rec;
-    this.options = options;
+    this.site = declaredSite(options);
     this.index = indexOf(rec);
     this.cursor = clock.timeMs;
     this.startMs = Date.parse(rec.startedAtUtc);
@@ -506,7 +524,7 @@ export class RecordedDataSource implements WidgetDataSource {
       case 'device':
         return [{ deviceToken: ds.deviceToken, names: new Set(ds.measurements) }];
       case 'anchor':
-        return anchorMembers(this.rec, this.options, ds.anchor).map((deviceToken) => ({
+        return anchorMembers(this.rec, this.site, ds.anchor).map((deviceToken) => ({
           deviceToken,
           names: new Set(ds.measurements),
         }));
@@ -621,7 +639,7 @@ export class RecordedDataSource implements WidgetDataSource {
     let applied = 0;
     let lastSignature: string | null = null;
 
-    const apply = (a: RecordedAlarm): void => {
+    const apply = (a: RecordedAlarm, asOfMs: number): void => {
       const prior = alarms.get(a.id);
       alarms.set(a.id, {
         id: a.id,
@@ -635,7 +653,10 @@ export class RecordedDataSource implements WidgetDataSource {
         // (null if the history never showed it being raised).
         raised: a.state === 'ACTIVE' ? a.occ : (prior?.raised ?? null),
         cleared: a.state === 'CLEARED' ? a.occ : null,
+        // Each record's own `ack` decides; acknowledgement is not carried over from an
+        // earlier record of the same alarm.
         ack: a.ack === true,
+        asOfMs,
       });
     };
 
@@ -644,10 +665,16 @@ export class RecordedDataSource implements WidgetDataSource {
       for (; applied < upTo; applied++) {
         const entry = timeline[applied];
         if ('snapshot' in entry) {
+          // A snapshot is the answer to a query sent at requestedAtMs, so it knows nothing
+          // of an alarm that changed after that: those keep the event's (newer) state, even
+          // when the snapshot omits or contradicts them. Everything else is replaced.
+          const { requestedAtMs } = entry.snapshot;
+          const newer = [...alarms.values()].filter((a) => a.asOfMs > requestedAtMs);
           alarms.clear();
-          for (const a of entry.snapshot.alarms) apply(a);
+          for (const a of entry.snapshot.alarms) apply(a, requestedAtMs);
+          for (const a of newer) alarms.set(a.id, a);
         } else {
-          apply(entry.event);
+          apply(entry.event, entry.event.tMs);
         }
       }
       const matches = [...alarms.values()].filter(
@@ -657,10 +684,16 @@ export class RecordedDataSource implements WidgetDataSource {
           (!subscription.severity || a.sev === subscription.severity) &&
           (subscription.acknowledged == null || a.ack === subscription.acknowledged),
       );
-      // Newest first by raise time (ISO strings in one format compare as time); the id
-      // breaks ties so the order is deterministic.
-      const when = (a: FoldedAlarm): string => a.raised ?? a.cleared ?? '';
-      matches.sort((a, b) => (when(a) < when(b) ? 1 : when(a) > when(b) ? -1 : a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+      // Newest first by raise time, compared as instants (not as text); the id breaks ties
+      // so the order is deterministic.
+      const when = (a: FoldedAlarm): string | null => a.raised ?? a.cleared;
+      const byTime = (a: FoldedAlarm, b: FoldedAlarm): number => {
+        const wa = when(a);
+        const wb = when(b);
+        if (wa === null || wb === null) return wa === wb ? 0 : wa === null ? 1 : -1;
+        return compareInstants(wb, wa);
+      };
+      matches.sort((a, b) => byTime(a, b) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
       const page = matches.slice(0, subscription.pageSize);
       // Whole snapshots, re-emitted only when the fold actually changed.
       const signature = JSON.stringify([matches.length, page]);
