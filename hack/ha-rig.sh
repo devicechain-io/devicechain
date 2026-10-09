@@ -69,7 +69,8 @@ control_cluster="devicechain-ha-control"
 # also keep the rig clear of any `default` instance already on this machine.
 instance="${DC_INSTANCE:-harig}"
 control_instance="${DC_CONTROL_INSTANCE:-hactl}"
-dcctl="$repo_root/backend/cli/build/dcctl"
+# GOEXE is ".exe" on Windows and empty elsewhere, matching backend/cli/Makefile.
+dcctl="$repo_root/backend/cli/build/dcctl$(go env GOEXE)"
 
 # instance_namespace is the one place this rig spells an instance's namespace, mirroring
 # instanceNamespace() in backend/cli/bootstrap/instancenamespace.go: the instance id behind

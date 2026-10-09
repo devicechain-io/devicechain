@@ -447,7 +447,8 @@ unset _store _lookup
 # docs/deployment/disaster-recovery.md.
 export DCCTL_ESCROW_PASSPHRASE="${DCCTL_ESCROW_PASSPHRASE:-dr-rig-throwaway-passphrase}"
 
-dcctl="$repo_root/backend/cli/build/dcctl"
+# GOEXE is ".exe" on Windows and empty elsewhere, matching backend/cli/Makefile.
+dcctl="$repo_root/backend/cli/build/dcctl$(go env GOEXE)"
 drdrill="$work/bin/drdrill"
 
 # load_exit_codes imports drdrill's exit-code taxonomy instead of repeating it.

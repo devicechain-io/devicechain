@@ -454,11 +454,13 @@ upgrade_tag="${DC_UPGRADE_TAG:-}"
 
 work="${DC_UPGRADE_WORK:-$HOME/.devicechain-upgrade-rig}"
 baseline_src="$work/src"
-baseline_dcctl="$baseline_src/backend/cli/build/dcctl"
+# GOEXE is ".exe" on Windows and empty elsewhere, matching backend/cli/Makefile.
+goexe="$(go env GOEXE)"
+baseline_dcctl="$baseline_src/backend/cli/build/dcctl$goexe"
 # The WORKING TREE's dcctl — the one being released, and the only one that has the
 # `upgrade` verb. Built into the repo's own gitignored build dir, which is where
 # `make -C backend/cli build` puts it and where a developer already looks for it.
-target_dcctl="$repo_root/backend/cli/build/dcctl"
+target_dcctl="$repo_root/backend/cli/build/dcctl$goexe"
 apiprobe="$work/bin/apiprobe"
 receipt="$work/receipt.json"
 sweep_receipt="$work/receipt-coverage.json"
@@ -807,6 +809,8 @@ repoint_baseline_chart_source() {
 build_baseline_dcctl() {
   say "building $baseline_tag's own dcctl (its chart, not the working tree's)"
   make -C "$baseline_src/backend/cli" build >/dev/null
+  # A baseline tag cut before the Makefile added the platform suffix builds a bare "dcctl".
+  [[ -x "$baseline_dcctl" || -z "$goexe" ]] || baseline_dcctl="${baseline_dcctl%"$goexe"}"
   [[ -x "$baseline_dcctl" ]] || fail "the $baseline_tag dcctl was not built at $baseline_dcctl"
   note "$("$baseline_dcctl" version | sed -n 1p)"
 }

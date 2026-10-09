@@ -44,7 +44,13 @@ PLATFORM=${PLATFORM:-linux/amd64}
 #
 # Override with DOCKER_BUILD_NET=default to get docker's ordinary networking back —
 # useful on Docker Desktop, where build-time host networking needs an entitlement the
-# classic path does not. 🔴 `default`, NOT `bridge`: buildkit accepts only default|host|none
+# classic path does not.
+#
+# 🔴 ON NATIVE WINDOWS OR macOS (Docker Desktop) SET DOCKER_BUILD_NET=default. The `host`
+# default exists for the WSL2 bridge defect above; Docker Desktop's engine runs in a VM, so
+# `--network=host` there is the VM's network, not your machine's, and the frontend build
+# fails or stalls on it. The default stays `host` because dcctl's Go path and a test pin
+# the same value, and Linux/WSL2 hosts are what it was chosen for. 🔴 `default`, NOT `bridge`: buildkit accepts only default|host|none
 # and rejects `bridge` outright with "network mode ... not supported by buildkit". The
 # obvious spelling is the one that does not work, which is why it is named here.
 #
