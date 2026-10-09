@@ -282,3 +282,97 @@ func TestRestoreAfterSkipResumesAfterSkippedSeq(t *testing.T) {
 		t.Fatal("full replay with poison in the stream differs from live")
 	}
 }
+
+// A stream that ENDS in poison (an undecodable payload and an untenanted subject) must be
+// deterministic: the live run, a full replay from empty, and a restore from a snapshot taken
+// at the end followed by replay all produce byte-identical engine snapshots, and that snapshot
+// records the final poison's sequence. Without Skip on the decode-failure path the engine
+// would stop at the last valid sequence (5), and the restored replay would start at 6, not 7.
+func TestStreamEndingInPoisonIsDeterministicAcrossLiveReplayAndRestore(t *testing.T) {
+	ctx := context.Background()
+	stream := func() []messaging.Message {
+		return []messaging.Message{
+			msgAt(t, 1, &fakeAck{}),
+			garbageAt(2, &fakeAck{}),
+			msgAt(t, 3, &fakeAck{}),
+			untenantedAt(4, &fakeAck{}, resolvedBytes(t, testBase)),
+			msgAt(t, 5, &fakeAck{}),
+			garbageAt(6, &fakeAck{}),
+			garbageAt(7, &fakeAck{}),
+		}
+	}
+	const last = 7
+
+	// Live.
+	store := newTestStore(t)
+	live := newTestProcessor(store, nil, 100)
+	if err := live.restore(ctx); err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+	for _, m := range stream() {
+		live.handle(m)
+	}
+	live.checkpoint(ctx)
+	if live.engine.LastSeq() != last {
+		t.Fatalf("live lastSeq = %d, want %d", live.engine.LastSeq(), last)
+	}
+	want := snapshotBytes(t, live)
+	if !bytes.Contains(want, []byte(`"lastSeq":7`)) {
+		t.Fatalf("snapshot does not record lastSeq 7: %s", want)
+	}
+
+	// Full replay from empty.
+	full := newTestProcessor(newTestStore(t), nil, 100)
+	if err := full.restore(ctx); err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+	full.Replay = &fakeReplayOpener{msgs: stream(), head: last}
+	if err := full.replayToHead(); err != nil {
+		t.Fatalf("replayToHead: %v", err)
+	}
+	if !bytes.Equal(want, snapshotBytes(t, full)) {
+		t.Fatal("full replay differs from live")
+	}
+
+	// Restore from the live run's final snapshot, then replay: nothing is left to replay.
+	rest := newTestProcessor(store, nil, 100)
+	if err := rest.restore(ctx); err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+	if rest.engine.LastSeq() != last {
+		t.Fatalf("restored lastSeq = %d, want %d", rest.engine.LastSeq(), last)
+	}
+	opener := &fakeReplayOpener{msgs: stream(), head: last}
+	rest.Replay = opener
+	if err := rest.replayToHead(); err != nil {
+		t.Fatalf("replayToHead: %v", err)
+	}
+	if opener.lastStart != last+1 {
+		t.Fatalf("replay started at %d, want %d", opener.lastStart, last+1)
+	}
+	if !bytes.Equal(want, snapshotBytes(t, rest)) {
+		t.Fatal("restore+replay differs from live")
+	}
+
+	// Restore from a snapshot taken mid-stream (ending on poison 4), then replay the rest.
+	store2 := newTestStore(t)
+	pre := newTestProcessor(store2, nil, 100)
+	if err := pre.restore(ctx); err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+	for _, m := range stream()[:4] {
+		pre.handle(m)
+	}
+	pre.checkpoint(ctx)
+	mid := newTestProcessor(store2, nil, 100)
+	if err := mid.restore(ctx); err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+	mid.Replay = &fakeReplayOpener{msgs: stream(), head: last}
+	if err := mid.replayToHead(); err != nil {
+		t.Fatalf("replayToHead: %v", err)
+	}
+	if !bytes.Equal(want, snapshotBytes(t, mid)) {
+		t.Fatal("mid-stream restore+replay differs from live")
+	}
+}

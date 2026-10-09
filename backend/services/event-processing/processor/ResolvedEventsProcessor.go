@@ -1644,9 +1644,10 @@ func (rp *ResolvedEventsProcessor) readPump(items chan<- readItem, done chan<- s
 }
 
 // handle processes one LIVE message: buffer it for a post-checkpoint ack, then feed
-// it to the engine (or drop it if unprocessable). Poison/duplicate messages do not
-// advance the engine; they are acked at the next checkpoint (safe — they carry no
-// new state).
+// it to the engine (or drop it if unprocessable). A duplicate (at or below LastSeq)
+// changes nothing. Poison with a stream sequence records that sequence via Engine.Skip and
+// marks the loop dirty, without applying any state. Every buffered message, either kind, is
+// acked at the next checkpoint.
 func (rp *ResolvedEventsProcessor) handle(msg messaging.Message) {
 	rp.pendingAcks = append(rp.pendingAcks, msg)
 	rp.applyResolved(msg)
@@ -2297,11 +2298,14 @@ func (rp *ResolvedEventsProcessor) ackRuleFact(msg messaging.Message) {
 // note for the full accounting and the deferred determinism fix.
 //
 // The snapshot commit runs only when engine state changed since the last checkpoint (dirty);
-// when it did not — the buffer holds only redelivered duplicates or poison — the acks are
-// released against the already-durable prior snapshot with no redundant write. Because a
+// when it did not — the buffer holds only duplicates at or below LastSeq (the guard drops
+// anything at or below LastSeq; gaps are not detected on the live path) — the acks are
+// released against the already-durable prior snapshot with no redundant write. Poison above
+// LastSeq is not that case: it advances LastSeq (Engine.Skip) and marks the loop dirty, so it
+// is snapshotted. Because a
 // committed snapshot captures engine.LastSeq(), every buffered valid event is at or below the
-// durable sequence and every poison message carries no state, so acking the whole buffer is
-// safe. A commit failure leaves the messages unacked (they redeliver / are re-read on replay).
+// durable sequence and every poison message carries no state beyond its skipped sequence, so
+// acking the whole buffer is safe. A commit failure leaves the messages unacked (they redeliver / are re-read on replay).
 // It reports whether everything buffered is now durable — the snapshot committed (or
 // there was nothing dirty to commit) and every pending detection was handed off. Almost
 // every caller ignores that: a scheduled checkpoint that defers has already logged, and
