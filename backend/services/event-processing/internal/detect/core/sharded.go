@@ -41,7 +41,15 @@ import (
 type Sharded struct {
 	shards   []*Engine
 	lateness time.Duration
-	scratch  [][]Event // per-shard event routing buffers, reused across messages
+	salt     uint32 // perturbs the key hash; 0 in production, varied by tests to prove the hash does not matter
+	// scratch holds each shard's events for the message in flight, reused across messages.
+	//
+	// 🔴 FOR THE CONCURRENT ENGINE: a buffer is lent to its shard for the whole of that shard's
+	// ProcessResolved, which reads it by index. It must not be reset or appended to for the next
+	// message until THAT shard has finished this one. Synchronously that is automatic; with a
+	// goroutine per shard it needs a per-shard buffer that is handed over (or double-buffered),
+	// not a slot the dispatcher rewrites while a slow shard is still reading it.
+	scratch [][]Event
 }
 
 // maxShards bounds K. The limit is a sanity check on a configured value, not a design ceiling.
@@ -50,8 +58,12 @@ const maxShards = 64
 // NewSharded builds an empty K-way engine. K is clamped to [1, maxShards]. allowedLateness has the
 // meaning it has for NewEngine and is the same in every shard.
 func NewSharded(k int, rules []Rule, allowedLateness time.Duration) *Sharded {
+	return newSharded(k, 0, rules, allowedLateness)
+}
+
+func newSharded(k int, salt uint32, rules []Rule, allowedLateness time.Duration) *Sharded {
 	k = clampShards(k)
-	s := &Sharded{lateness: allowedLateness, shards: make([]*Engine, k), scratch: make([][]Event, k)}
+	s := &Sharded{salt: salt, lateness: allowedLateness, shards: make([]*Engine, k), scratch: make([][]Event, k)}
 	for i := range s.shards {
 		s.shards[i] = NewEngine(rules, allowedLateness)
 	}
@@ -74,7 +86,7 @@ func (s *Sharded) Shards() int { return len(s.shards) }
 // shardOf is the owner of a (rule, series). It is an FNV-1a over the two strings with a separator.
 // The hash need only be stable within a process: the snapshot is canonical and carries no shard
 // assignment, so a different hash or a different K simply re-splits it on restore.
-func shardOf(rule, series string, k int) int {
+func shardOf(rule, series string, k int, salt uint32) int {
 	if k == 1 {
 		return 0
 	}
@@ -82,7 +94,7 @@ func shardOf(rule, series string, k int) int {
 		offset = 2166136261
 		prime  = 16777619
 	)
-	h := uint32(offset)
+	h := uint32(offset) ^ salt
 	for i := 0; i < len(rule); i++ {
 		h = (h ^ uint32(rule[i])) * prime
 	}
@@ -94,7 +106,7 @@ func shardOf(rule, series string, k int) int {
 }
 
 func (s *Sharded) owner(key SeriesKey) *Engine {
-	return s.shards[shardOf(key.Rule, key.Series, len(s.shards))]
+	return s.shards[shardOf(key.Rule, key.Series, len(s.shards), s.salt)]
 }
 
 // UpsertRule installs the rule in every shard.
@@ -135,7 +147,7 @@ func (s *Sharded) RemoveMatching(match func(ruleID string) bool) int {
 
 // Descope applies a membership flip in the shard that owns the key.
 func (s *Sharded) Descope(ruleID, series string, at time.Time) bool {
-	return s.shards[shardOf(ruleID, series, len(s.shards))].Descope(ruleID, series, at)
+	return s.shards[shardOf(ruleID, series, len(s.shards), s.salt)].Descope(ruleID, series, at)
 }
 
 // ProcessEvent applies one event, with the same idempotency guard as the engine's.
@@ -154,7 +166,7 @@ func (s *Sharded) ProcessResolved(seq uint64, t time.Time, evs []Event) {
 	}
 	k := len(s.shards)
 	for i := range evs {
-		o := shardOf(evs[i].Key.Rule, evs[i].Key.Series, k)
+		o := shardOf(evs[i].Key.Rule, evs[i].Key.Series, k, s.salt)
 		s.scratch[o] = append(s.scratch[o], evs[i])
 	}
 	for i, e := range s.shards {
@@ -264,7 +276,7 @@ func (s *Sharded) sumCounts(count func(*Engine) map[string]int) map[string]int {
 
 // ExpectedKeys is the union of the shards' dead-man-armed series.
 func (s *Sharded) ExpectedKeys() []SeriesKey {
-	var out []SeriesKey
+	out := make([]SeriesKey, 0) // empty, not nil, as the engine's is
 	for _, e := range s.shards {
 		out = append(out, e.ExpectedKeys()...)
 	}
@@ -361,33 +373,37 @@ func (s *Sharded) Snapshot() ([]byte, error) {
 // or by the plain Engine: it splits the canonical state by key owner and restores one engine from
 // each part. Every part carries the whole snapshot's watermark and position.
 func RestoreSharded(k int, rules []Rule, allowedLateness time.Duration, data []byte) (*Sharded, error) {
+	return restoreSharded(k, 0, rules, allowedLateness, data)
+}
+
+func restoreSharded(k int, salt uint32, rules []Rule, allowedLateness time.Duration, data []byte) (*Sharded, error) {
 	k = clampShards(k)
 	var snap snapshot
 	if err := json.Unmarshal(data, &snap); err != nil {
 		return nil, err
 	}
 	if k == 1 {
-		return &Sharded{lateness: allowedLateness, shards: []*Engine{restoreState(rules, allowedLateness, snap)}, scratch: make([][]Event, 1)}, nil
+		return &Sharded{salt: salt, lateness: allowedLateness, shards: []*Engine{restoreState(rules, allowedLateness, snap)}, scratch: make([][]Event, 1)}, nil
 	}
 	parts := make([]snapshot, k)
 	for i := range parts {
 		parts[i] = snapshot{Watermark: snap.Watermark, LastSeq: snap.LastSeq}
 	}
-	splitBy(snap.Active, k, func(x snapRun) (string, string) { return x.Rule, x.Series }, func(i int, x snapRun) { parts[i].Active = append(parts[i].Active, x) })
-	splitBy(snap.Breaks, k, func(x snapBreak) (string, string) { return x.Rule, x.Series }, func(i int, x snapBreak) { parts[i].Breaks = append(parts[i].Breaks, x) })
-	splitBy(snap.Timers, k, func(x snapTimer) (string, string) { return x.Rule, x.Series }, func(i int, x snapTimer) { parts[i].Timers = append(parts[i].Timers, x) })
-	splitBy(snap.Gens, k, func(x snapGen) (string, string) { return x.Rule, x.Series }, func(i int, x snapGen) { parts[i].Gens = append(parts[i].Gens, x) })
-	splitBy(snap.Sliding, k, func(x snapSliding) (string, string) { return x.Rule, x.Series }, func(i int, x snapSliding) { parts[i].Sliding = append(parts[i].Sliding, x) })
-	splitBy(snap.Panes, k, func(x snapPane) (string, string) { return x.Rule, x.Series }, func(i int, x snapPane) { parts[i].Panes = append(parts[i].Panes, x) })
-	splitBy(snap.Deltas, k, func(x snapDelta) (string, string) { return x.Rule, x.Series }, func(i int, x snapDelta) { parts[i].Deltas = append(parts[i].Deltas, x) })
-	splitBy(snap.Counts, k, func(x snapCount) (string, string) { return x.Rule, x.Series }, func(i int, x snapCount) { parts[i].Counts = append(parts[i].Counts, x) })
-	splitBy(snap.Sessions, k, func(x snapSession) (string, string) { return x.Rule, x.Series }, func(i int, x snapSession) { parts[i].Sessions = append(parts[i].Sessions, x) })
-	splitBy(snap.Slides, k, func(x snapSlide) (string, string) { return x.Rule, x.Series }, func(i int, x snapSlide) { parts[i].Slides = append(parts[i].Slides, x) })
-	splitBy(snap.Corr, k, func(x snapCorr) (string, string) { return x.Rule, x.Series }, func(i int, x snapCorr) { parts[i].Corr = append(parts[i].Corr, x) })
-	splitBy(snap.Expected, k, func(x snapExpected) (string, string) { return x.Rule, x.Series }, func(i int, x snapExpected) { parts[i].Expected = append(parts[i].Expected, x) })
-	splitBy(snap.Raised, k, func(x snapRaised) (string, string) { return x.Rule, x.Series }, func(i int, x snapRaised) { parts[i].Raised = append(parts[i].Raised, x) })
-	splitBy(snap.Presence, k, func(x snapPresence) (string, string) { return x.Rule, x.Series }, func(i int, x snapPresence) { parts[i].Presence = append(parts[i].Presence, x) })
-	s := &Sharded{lateness: allowedLateness, shards: make([]*Engine, k), scratch: make([][]Event, k)}
+	splitBy(snap.Active, k, salt, func(x snapRun) (string, string) { return x.Rule, x.Series }, func(i int, x snapRun) { parts[i].Active = append(parts[i].Active, x) })
+	splitBy(snap.Breaks, k, salt, func(x snapBreak) (string, string) { return x.Rule, x.Series }, func(i int, x snapBreak) { parts[i].Breaks = append(parts[i].Breaks, x) })
+	splitBy(snap.Timers, k, salt, func(x snapTimer) (string, string) { return x.Rule, x.Series }, func(i int, x snapTimer) { parts[i].Timers = append(parts[i].Timers, x) })
+	splitBy(snap.Gens, k, salt, func(x snapGen) (string, string) { return x.Rule, x.Series }, func(i int, x snapGen) { parts[i].Gens = append(parts[i].Gens, x) })
+	splitBy(snap.Sliding, k, salt, func(x snapSliding) (string, string) { return x.Rule, x.Series }, func(i int, x snapSliding) { parts[i].Sliding = append(parts[i].Sliding, x) })
+	splitBy(snap.Panes, k, salt, func(x snapPane) (string, string) { return x.Rule, x.Series }, func(i int, x snapPane) { parts[i].Panes = append(parts[i].Panes, x) })
+	splitBy(snap.Deltas, k, salt, func(x snapDelta) (string, string) { return x.Rule, x.Series }, func(i int, x snapDelta) { parts[i].Deltas = append(parts[i].Deltas, x) })
+	splitBy(snap.Counts, k, salt, func(x snapCount) (string, string) { return x.Rule, x.Series }, func(i int, x snapCount) { parts[i].Counts = append(parts[i].Counts, x) })
+	splitBy(snap.Sessions, k, salt, func(x snapSession) (string, string) { return x.Rule, x.Series }, func(i int, x snapSession) { parts[i].Sessions = append(parts[i].Sessions, x) })
+	splitBy(snap.Slides, k, salt, func(x snapSlide) (string, string) { return x.Rule, x.Series }, func(i int, x snapSlide) { parts[i].Slides = append(parts[i].Slides, x) })
+	splitBy(snap.Corr, k, salt, func(x snapCorr) (string, string) { return x.Rule, x.Series }, func(i int, x snapCorr) { parts[i].Corr = append(parts[i].Corr, x) })
+	splitBy(snap.Expected, k, salt, func(x snapExpected) (string, string) { return x.Rule, x.Series }, func(i int, x snapExpected) { parts[i].Expected = append(parts[i].Expected, x) })
+	splitBy(snap.Raised, k, salt, func(x snapRaised) (string, string) { return x.Rule, x.Series }, func(i int, x snapRaised) { parts[i].Raised = append(parts[i].Raised, x) })
+	splitBy(snap.Presence, k, salt, func(x snapPresence) (string, string) { return x.Rule, x.Series }, func(i int, x snapPresence) { parts[i].Presence = append(parts[i].Presence, x) })
+	s := &Sharded{salt: salt, lateness: allowedLateness, shards: make([]*Engine, k), scratch: make([][]Event, k)}
 	for i := range parts {
 		s.shards[i] = restoreState(rules, allowedLateness, parts[i])
 	}
@@ -395,9 +411,9 @@ func RestoreSharded(k int, rules []Rule, allowedLateness time.Duration, data []b
 }
 
 // splitBy hands each item to the part that owns its (rule, series).
-func splitBy[T any](items []T, k int, key func(T) (string, string), put func(shard int, x T)) {
+func splitBy[T any](items []T, k int, salt uint32, key func(T) (string, string), put func(shard int, x T)) {
 	for _, x := range items {
 		rule, series := key(x)
-		put(shardOf(rule, series, k), x)
+		put(shardOf(rule, series, k, salt), x)
 	}
 }

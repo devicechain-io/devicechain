@@ -64,6 +64,11 @@ type detectEngine interface {
 	HasPendingWork() bool
 	PendingTimerCount() int
 	LiveKeyCounts() map[string]int
+	RetainedSampleCounts() map[string]int
+	DrainLateSamples() uint64
+	ExpectedKeys() []SeriesKey
+	HeartbeatAbsenceKeys() []SeriesKey
+	ProcessEvent(ev Event)
 }
 
 var _ detectEngine = (*Engine)(nil)
@@ -91,14 +96,22 @@ func plainEngineBuilder() engineBuilder {
 
 // shardedUnderTest is THE seam: the production sharded engine at a given shard count, built
 // fresh or restored from a snapshot written by an engine of any other shard count.
-func shardedUnderTest(k int) engineBuilder {
+func shardedUnderTest(k int) engineBuilder { return saltedShardedUnderTest(k, 0) }
+
+// diffSalts are the key-hash salts the differential runs under. The shard hash decides only where a
+// key lives IN MEMORY: the snapshot is canonical and carries no assignment, and a restore re-splits
+// it. So changing the hash must change nothing observable, and running under two of them, including
+// across a restart that changes the salt, is what commits that claim rather than leaving it argued.
+var diffSalts = []uint32{0, 0x9e3779b9}
+
+func saltedShardedUnderTest(k int, salt uint32) engineBuilder {
 	return engineBuilder{
-		name: fmt.Sprintf("sharded(K=%d)", k),
+		name: fmt.Sprintf("sharded(K=%d,salt=%#x)", k, salt),
 		fresh: func(rules []Rule, lateness time.Duration) detectEngine {
-			return NewSharded(k, rules, lateness)
+			return newSharded(k, salt, rules, lateness)
 		},
 		restore: func(rules []Rule, lateness time.Duration, snap []byte) (detectEngine, error) {
-			return RestoreSharded(k, rules, lateness, snap)
+			return restoreSharded(k, salt, rules, lateness, snap)
 		},
 	}
 }
@@ -475,6 +488,17 @@ func firstDiff(a, b []byte) string {
 
 // runDifferential drives `ref` and `other` through nOps seeded operations in lockstep and returns
 // the first disagreement, or nil. crash, if non-nil, restarts both engines mid-run.
+// sortedKeys renders a key list in a canonical order: the order of ExpectedKeys and
+// HeartbeatAbsenceKeys is documented as unspecified, so only the set is compared.
+func sortedKeys(keys []SeriesKey) string {
+	out := make([]string, len(keys))
+	for i, k := range keys {
+		out[i] = k.Rule + "|" + k.Series
+	}
+	sort.Strings(out)
+	return fmt.Sprint(out)
+}
+
 func runDifferential(seed int64, nOps int, ref, other engineBuilder, crash *diffCrash) (*diffStats, error) {
 	g := newDiffGen(seed)
 	a := ref.fresh(g.rulesNow(), diffLateness)
@@ -522,6 +546,18 @@ func runDifferential(seed int64, nOps int, ref, other engineBuilder, crash *diff
 		}
 		if ka, kb := fmt.Sprint(a.LiveKeyCounts()), fmt.Sprint(b.LiveKeyCounts()); ka != kb {
 			return fail("LiveKeyCounts differ:\n    plain:   %s\n    sharded: %s", ka, kb)
+		}
+		if ka, kb := fmt.Sprint(a.RetainedSampleCounts()), fmt.Sprint(b.RetainedSampleCounts()); ka != kb {
+			return fail("RetainedSampleCounts differ:\n    plain:   %s\n    sharded: %s", ka, kb)
+		}
+		if la, lb := a.DrainLateSamples(), b.DrainLateSamples(); la != lb {
+			return fail("DrainLateSamples differ: plain=%d sharded=%d", la, lb)
+		}
+		if ka, kb := sortedKeys(a.ExpectedKeys()), sortedKeys(b.ExpectedKeys()); ka != kb {
+			return fail("ExpectedKeys differ:\n    plain:   %s\n    sharded: %s", ka, kb)
+		}
+		if ka, kb := sortedKeys(a.HeartbeatAbsenceKeys()), sortedKeys(b.HeartbeatAbsenceKeys()); ka != kb {
+			return fail("HeartbeatAbsenceKeys differ:\n    plain:   %s\n    sharded: %s", ka, kb)
 		}
 		return nil
 	}
@@ -583,6 +619,14 @@ func runDifferential(seed int64, nOps int, ref, other engineBuilder, crash *diff
 				}})
 			}
 			steps = append(steps, diffOp{desc: fmt.Sprintf("message seq=%d t=%s events=%d", seq, t.Format("15:04:05.000"), len(evs)), do: func(e detectEngine) string {
+				if len(evs) == 1 && seq%2 == 0 {
+					// A one-event message through the single-event entry point, which must agree with
+					// ProcessResolved: the same tick, the same event, the same position.
+					ev := evs[0]
+					ev.Seq, ev.Time = seq, t
+					e.ProcessEvent(ev)
+					return ""
+				}
 				e.ProcessResolved(seq, t, evs)
 				return ""
 			}})
@@ -708,13 +752,15 @@ var (
 // kind, step by step, down to the snapshot bytes.
 func TestShardedEngineIsTheEngine(t *testing.T) {
 	for _, k := range diffShardKs {
-		for _, seed := range diffSeeds {
-			k, seed := k, seed
-			t.Run(fmt.Sprintf("K=%d/seed=%d", k, seed), func(t *testing.T) {
-				if _, err := runDifferential(seed, diffOpCount, plainEngineBuilder(), shardedUnderTest(k), nil); err != nil {
-					t.Fatal(err)
-				}
-			})
+		for _, salt := range diffSalts {
+			for _, seed := range diffSeeds {
+				k, salt, seed := k, salt, seed
+				t.Run(fmt.Sprintf("K=%d/salt=%#x/seed=%d", k, salt, seed), func(t *testing.T) {
+					if _, err := runDifferential(seed, diffOpCount, plainEngineBuilder(), saltedShardedUnderTest(k, salt), nil); err != nil {
+						t.Fatal(err)
+					}
+				})
+			}
 		}
 	}
 }
@@ -729,8 +775,10 @@ func TestShardedEngineRestoresAcrossShardCounts(t *testing.T) {
 			k, seed := k, seed
 			t.Run(fmt.Sprintf("K=%d-to-K=%d/seed=%d", k, restartAs[k], seed), func(t *testing.T) {
 				at := diffOpCount/4 + int(seed*37)%(diffOpCount/2) // a different restart point per seed
-				_, err := runDifferential(seed, diffOpCount, plainEngineBuilder(), shardedUnderTest(k),
-					&diffCrash{at: at, restoreAs: shardedUnderTest(restartAs[k])})
+				// The salt changes across the restart too: the run resumes under a different shard
+				// count AND a different hash, so nothing but the canonical snapshot can carry state over.
+				_, err := runDifferential(seed, diffOpCount, plainEngineBuilder(), saltedShardedUnderTest(k, diffSalts[0]),
+					&diffCrash{at: at, restoreAs: saltedShardedUnderTest(restartAs[k], diffSalts[1])})
 				if err != nil {
 					t.Fatal(err)
 				}

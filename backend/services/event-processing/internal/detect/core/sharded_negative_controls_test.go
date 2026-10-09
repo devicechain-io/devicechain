@@ -321,6 +321,38 @@ func (p *protoSharded) LiveKeyCounts() map[string]int {
 	return out
 }
 
+func (p *protoSharded) RetainedSampleCounts() map[string]int {
+	out := map[string]int{}
+	for _, s := range p.shards {
+		for r, n := range s.RetainedSampleCounts() {
+			out[r] += n
+		}
+	}
+	return out
+}
+func (p *protoSharded) DrainLateSamples() uint64 {
+	var n uint64
+	for _, s := range p.shards {
+		n += s.DrainLateSamples()
+	}
+	return n
+}
+func (p *protoSharded) ExpectedKeys() []SeriesKey {
+	out := make([]SeriesKey, 0)
+	for _, s := range p.shards {
+		out = append(out, s.ExpectedKeys()...)
+	}
+	return out
+}
+func (p *protoSharded) HeartbeatAbsenceKeys() []SeriesKey {
+	var out []SeriesKey
+	for _, s := range p.shards {
+		out = append(out, s.HeartbeatAbsenceKeys()...)
+	}
+	return out
+}
+func (p *protoSharded) ProcessEvent(ev Event) { p.ProcessResolved(ev.Seq, ev.Time, []Event{ev}) }
+
 func (p *protoSharded) Snapshot() ([]byte, error) {
 	m := snapshot{Active: []snapRun{}, Breaks: []snapBreak{}, Timers: []snapTimer{}, Gens: []snapGen{}, Sliding: []snapSliding{}, Panes: []snapPane{}, Deltas: []snapDelta{}, Counts: []snapCount{}, Sessions: []snapSession{}, Slides: []snapSlide{}, Corr: []snapCorr{}, Expected: []snapExpected{}, Raised: []snapRaised{}, Presence: []snapPresence{}}
 	for i, s := range p.shards {
