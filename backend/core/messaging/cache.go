@@ -101,7 +101,8 @@ var ErrCacheUnavailable = errors.New("messaging: cache unavailable; bypassed aft
 //     never touched the bucket the breaker protects. A memory miss while the breaker is
 //     open returns ErrCacheUnavailable, as before.
 //   - Memory holds encoded bytes and decodes them for each Get, so callers never share an
-//     object. It is bounded per Cache by entry count and bytes (4,096 entries and 4 MiB
+//     object. (GetCloned also keeps the decoded form and hands out a caller-supplied deep
+//     clone, counted against the byte cap.) It is bounded per Cache by entry count and bytes (4,096 entries and 4 MiB
 //     unless built WithLocalBounds), evicting least recently used first, and entries past
 //     their time are dropped from the least recently used end as new ones are stored.
 type Cache struct {
@@ -253,13 +254,31 @@ func (c *Cache) Get(ctx context.Context, key string, dest interface{}) (bool, er
 		}
 		return true, nil
 	}
+	value, gen, found, err := c.fetch(ctx, key)
+	if err != nil || !found {
+		return false, err
+	}
+	// A decode error is returned but not fed to the breaker: the bucket answered.
+	if err := json.Unmarshal(value, dest); err != nil {
+		return false, err
+	}
+	// A copy: the entry's buffer belongs to the client library, and memory must hold
+	// bytes nothing else can write to.
+	c.local.fill(key, bytes.Clone(value), c.now(), gen)
+	return true, nil
+}
+
+// fetch asks the bucket for key, after a miss in memory: the half of Get that is the same
+// whatever the caller decodes into. found is false, with a nil error, for a miss. gen is
+// the in-process tier's generation from before the read, to be handed to fill.
+func (c *Cache) fetch(ctx context.Context, key string) (value []byte, gen uint64, found bool, err error) {
 	// Read before asking the bucket: a Set or Delete that lands while the read is in
-	// flight moves it, and the fill below is then dropped.
-	gen := c.local.generation()
+	// flight moves it, and the fill is then dropped.
+	gen = c.local.generation()
 	probe, ok := c.admit()
 	if !ok {
 		c.obs.bypassed("get")
-		return false, ErrCacheUnavailable
+		return nil, gen, false, ErrCacheUnavailable
 	}
 	opctx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
@@ -269,19 +288,11 @@ func (c *Cache) Get(ctx context.Context, key string, dest interface{}) (bool, er
 	c.settle(ctx, "get", probe, err)
 	if err != nil {
 		if isNotFound(err) {
-			return false, nil
+			return nil, gen, false, nil
 		}
-		return false, err
+		return nil, gen, false, err
 	}
-	// A decode error is returned but not fed to the breaker: the bucket answered.
-	value := entry.Value()
-	if err := json.Unmarshal(value, dest); err != nil {
-		return false, err
-	}
-	// A copy: the entry's buffer belongs to the client library, and memory must hold
-	// bytes nothing else can write to.
-	c.local.fill(key, bytes.Clone(value), c.now(), gen)
-	return true, nil
+	return entry.Value(), gen, true, nil
 }
 
 // GetFromMemory is Get answered from process memory alone: it never asks the bucket and
