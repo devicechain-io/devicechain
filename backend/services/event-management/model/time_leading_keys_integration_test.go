@@ -411,34 +411,46 @@ func TestIntegrationTimeLeadingKeysStartNoAttemptTheBudgetCannotHold(t *testing.
 // swap (pg_cancel_backend raises the same 57014 a statement_timeout does) while it has its
 // whole allowance is not the too-slow verdict. No marker is left, the error is the one
 // retried on the next start, and the next start re-keys.
+//
+// The swap is HELD running until it is cancelled, by an event trigger that sleeps at the
+// start of the ALTER TABLE, inside the swap's statement and its statement_timeout. It used
+// to be caught in flight: a 200,000-row build in 1MB of sort memory, polled for from a
+// connection opened after the migration had started. That build took under half a second,
+// and on a slow machine the connection alone took longer, so the migration finished before
+// the first poll and the test failed reporting the swap was never caught. Now the window is
+// the whole build allowance: were the cancel never to land, the swap would end at its
+// statement_timeout with that allowance spent, and be reported too slow, which fails below.
+// pg_stat_activity is server-wide, so the cancel is scoped to this test's database: unscoped,
+// it cancelled any events_pkey rebuild running in another test's database on the same server.
 func TestIntegrationTimeLeadingKeysACancelledSwapIsNotTooSlow(t *testing.T) {
 	inst := freshInstance(t, "itrekeycancel")
 	mgr := newPostgresManagerWith(t, inst, migrationsBefore(t, rekeyID()))
 	sys := systemDB(mgr)
-	// 200,000 rows a table, sorted in the least memory the server allows: a build long
-	// enough to be caught running.
-	seedEventStore(t, sys, []string{"acme"}, 200, 1000, time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC), time.Minute)
-	timing := testRekeyTiming
-	timing.buildMemory = "1MB"
+	twoChunkSeed(t, sys)
+	require.NoError(t, sys.Exec(`CREATE FUNCTION public.hold_the_swap() RETURNS event_trigger
+		LANGUAGE plpgsql AS $$ BEGIN LOOP PERFORM pg_sleep(0.05); END LOOP; END $$`).Error)
+	require.NoError(t, sys.Exec(`CREATE EVENT TRIGGER hold_the_swap ON ddl_command_start
+		WHEN TAG IN ('ALTER TABLE') EXECUTE FUNCTION public.hold_the_swap()`).Error)
 
 	done := make(chan error, 1)
-	go func() { done <- newTimeLeadingKeysSchema(timing).Migrate(sys) }()
+	go func() { done <- newTimeLeadingKeysSchema(testRekeyTiming).Migrate(sys) }()
 
 	observer := connectInstance(t, inst)
-	cancelled := false
-	for deadline := time.Now().Add(10 * time.Second); !cancelled && time.Now().Before(deadline); {
-		var ok bool
-		err := observer.QueryRow(context.Background(), `SELECT coalesce(bool_or(pg_cancel_backend(pid)), false)
-			FROM pg_stat_activity WHERE state = 'active'
-			AND query LIKE 'ALTER TABLE "event-management".events DROP CONSTRAINT events_pkey%'`).Scan(&ok)
-		require.NoError(t, err)
-		cancelled = ok
+	for cancelled := false; !cancelled; {
+		select {
+		case err := <-done:
+			t.Fatalf("the swap was never caught running; the migration returned %v", err)
+		default:
+		}
+		require.NoError(t, observer.QueryRow(context.Background(), `SELECT coalesce(bool_or(pg_cancel_backend(pid)), false)
+			FROM pg_stat_activity WHERE state = 'active' AND datname = current_database()
+			AND query LIKE 'ALTER TABLE "event-management".events DROP CONSTRAINT events_pkey%'`).Scan(&cancelled))
 		if !cancelled {
-			time.Sleep(2 * time.Millisecond)
+			time.Sleep(5 * time.Millisecond)
 		}
 	}
 	err := <-done
-	require.True(t, cancelled, "the swap was never caught running; the migration returned %v", err)
+	require.NoError(t, sys.Exec(`DROP EVENT TRIGGER hold_the_swap`).Error)
 
 	require.Error(t, err)
 	var pgErr *pgconn.PgError

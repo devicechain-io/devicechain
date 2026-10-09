@@ -12,10 +12,10 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -476,13 +476,30 @@ func holderPIDs(t *testing.T, conn *pgx.Conn, query string) []uint32 {
 }
 
 // TestIntegrationIndexTrimBoundsAnAttemptWhenChunksAreHeld covers the case lock_timeout
-// alone does not: other sessions hold CHUNKS (not the hypertable) and each lets go just
-// before lock_timeout would fire. Each single wait is then under lock_timeout, but a
-// DROP holding the hypertable would add them up — and every write to the table waits
-// on the hypertable for the sum. statement_timeout bounds the whole attempt.
+// alone does not: other sessions hold CHUNKS (not the hypertable) and each lets go before
+// lock_timeout would fire. Each single wait is then under lock_timeout, but a DROP holding
+// the hypertable would add them up — and every write to the table waits on the hypertable
+// for the sum. statement_timeout bounds the whole attempt.
+//
+// The holders let go in step with the DROP, not on a clock of their own: each is released
+// holdEach after the DROP is SEEN waiting on its chunk, and the third chunk the DROP waits on
+// is held until the attempt is over. They used to sleep 400, 800 and 1200 ms from when they
+// were taken, which is before two connections and two catalog queries and the DROP's own
+// start — on a slow machine they had all let go by the time the DROP began, and it simply
+// succeeded. Now the arithmetic holds whatever the setup costs: the first two waits are
+// holdEach each (under lockTimeout), the third begins no earlier than 2·holdEach and could
+// only end at lock_timeout by 2·holdEach + lockTimeout, after statementTimeout; so the
+// attempt ends at statement_timeout (57014), and without it would last until that later
+// bound. Every margin is a second.
 func TestIntegrationIndexTrimBoundsAnAttemptWhenChunksAreHeld(t *testing.T) {
-	timing := indexTrimTiming{lockTimeout: 500 * time.Millisecond, statementTimeout: 700 * time.Millisecond,
+	const holdEach = time.Second
+	timing := indexTrimTiming{lockTimeout: 2 * time.Second, statementTimeout: 3 * time.Second,
 		pause: 100 * time.Millisecond, budget: time.Second, maxChunks: eventStoreMaxChunks, countTimeout: 10 * time.Second}
+	// What the attempt would last, bounded by lock_timeout alone: two released waits, then
+	// the held third chunk until its lock_timeout.
+	unbounded := 2*holdEach + timing.lockTimeout
+	require.Less(t, holdEach, timing.lockTimeout, "each single wait must be under lock_timeout")
+	require.Less(t, timing.statementTimeout, unbounded, "statement_timeout must be what ends the attempt")
 	inst := freshInstance(t, "ittrimchunk")
 	mgr := newPostgresManagerWith(t, inst, migrationsBefore(t, NewIndexTrimSchema().ID))
 	sys := systemDB(mgr)
@@ -496,23 +513,16 @@ func TestIntegrationIndexTrimBoundsAnAttemptWhenChunksAreHeld(t *testing.T) {
 		ORDER BY range_start`).Scan(&chunks).Error)
 	require.Len(t, chunks, 4)
 
-	// Three holders, one per chunk, releasing 400 ms apart: every single wait is under
-	// lock_timeout, and together they span 1.2 s.
-	var wg sync.WaitGroup
+	// Three holders, one per chunk, held until the loop below lets them go.
 	var holders []uint32
+	held := map[string]*pgx.Conn{}
 	for i := 0; i < 3; i++ {
 		conn := connectInstance(t, inst)
 		_, err := conn.Exec(context.Background(), `BEGIN; LOCK TABLE `+chunks[i]+` IN ACCESS SHARE MODE`)
 		require.NoError(t, err)
 		holders = append(holders, conn.PgConn().PID())
-		wg.Add(1)
-		go func(i int, conn *pgx.Conn) {
-			defer wg.Done()
-			time.Sleep(time.Duration(i+1) * 400 * time.Millisecond)
-			_, _ = conn.Exec(context.Background(), `ROLLBACK`)
-		}(i, conn)
+		held[chunks[i]] = conn
 	}
-	defer wg.Wait()
 
 	writer := connectInstance(t, inst)
 	observer := connectInstance(t, inst)
@@ -543,22 +553,80 @@ func TestIntegrationIndexTrimBoundsAnAttemptWhenChunksAreHeld(t *testing.T) {
 	}()
 
 	// A write into the FOURTH chunk — which no holder touches — still has to pass the
-	// hypertable the DROP holds, so it waits for the attempt; that wait must be bounded.
-	waitForLockWaiter(t, observer, 2*time.Second)
-	wctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	_, err := writer.Exec(wctx, `INSERT INTO "event-management".alert_events
-		(tenant_id, event_id, payload_id, device_token, event_type, occurred_time, type, level, message, source)
-		VALUES ('acme', '\x02', '\x02', 'dev-9', 3, '2026-08-22T13:00:00Z', 't', 1, 'm', 's')`)
-	cancel()
-	require.NoError(t, err)
-	writeDone := time.Since(start)
+	// hypertable the DROP holds, so it waits for the attempt; that wait must be bounded. It
+	// is sent once the DROP is first seen waiting on a chunk, so the DROP already holds the
+	// hypertable.
+	type write struct {
+		err  error
+		done time.Duration
+	}
+	written := make(chan write, 1)
+	sendWrite := func() {
+		go func() {
+			wctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+			defer cancel()
+			_, err := writer.Exec(wctx, `INSERT INTO "event-management".alert_events
+				(tenant_id, event_id, payload_id, device_token, event_type, occurred_time, type, level, message, source)
+				VALUES ('acme', '\x02', '\x02', 'dev-9', 3, '2026-08-22T13:00:00Z', 't', 1, 'm', 's')`)
+			written <- write{err, time.Since(start)}
+		}()
+	}
 
-	r := <-done
-	require.Error(t, r.err, "the attempt must end before the holders let go of every chunk")
+	// Drive the holders from what the DROP is waiting on: the first two chunks it waits on
+	// are let go holdEach after it is seen waiting; the third is kept until it returns.
+	var waitedOn []string
+	var r result
+	for over := false; !over; {
+		select {
+		case r = <-done:
+			over = true
+			continue
+		default:
+		}
+		var waiting []string
+		rows, err := observer.Query(context.Background(), `SELECT format('%I.%I', n.nspname, c.relname)
+			FROM pg_locks l JOIN pg_class c ON c.oid = l.relation JOIN pg_namespace n ON n.oid = c.relnamespace
+			WHERE NOT l.granted AND l.locktype = 'relation'
+			AND l.database = (SELECT oid FROM pg_database WHERE datname = current_database())`)
+		require.NoError(t, err)
+		for rows.Next() {
+			var name string
+			require.NoError(t, rows.Scan(&name))
+			waiting = append(waiting, name)
+		}
+		require.NoError(t, rows.Err())
+		var chunk string
+		for _, name := range waiting {
+			if _, ok := held[name]; ok && !slices.Contains(waitedOn, name) {
+				chunk = name
+			}
+		}
+		if chunk == "" {
+			time.Sleep(5 * time.Millisecond)
+			continue
+		}
+		waitedOn = append(waitedOn, chunk)
+		if len(waitedOn) == 1 {
+			sendWrite()
+		}
+		if len(waitedOn) < 3 {
+			time.Sleep(holdEach)
+			_, err := held[chunk].Exec(context.Background(), `ROLLBACK`)
+			require.NoError(t, err)
+		}
+	}
+	w := <-written
+
+	require.Error(t, r.err, "the attempt must end while a chunk is still held")
+	assert.Len(t, waitedOn, 3, "the DROP waited on each held chunk in turn")
+	var pgErr *pgconn.PgError
+	require.True(t, errors.As(r.err, &pgErr), "the server error must stay wrapped: %v", r.err)
+	assert.Equal(t, "57014", pgErr.Code,
+		"statement_timeout ends the attempt, although no single wait reached lock_timeout")
 	assert.True(t, isRetryableDropFailure(r.err), "the attempt must end as a busy table: %v", r.err)
-	assert.Less(t, r.elapsed, timing.statementTimeout+300*time.Millisecond, "one attempt must be bounded")
-	assert.Less(t, writeDone, timing.statementTimeout+400*time.Millisecond,
-		"a write to the table must wait at most one bounded attempt")
+	assert.Less(t, r.elapsed, unbounded, "one attempt must be bounded by statement_timeout, not the sum of its waits")
+	require.NoError(t, w.err)
+	assert.Less(t, w.done, unbounded, "a write to the table must wait at most one bounded attempt")
 }
 
 // TestIntegrationIndexTrimFailsAtOnceOnAnythingButABusyTable proves the retry loop

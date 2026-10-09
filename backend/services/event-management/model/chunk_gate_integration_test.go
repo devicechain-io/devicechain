@@ -170,19 +170,47 @@ func TestIntegrationTimeLeadingKeysRefuseTooManyChunksBeforeLocking(t *testing.T
 	assert.Nil(t, pkeyNote(t, sys), "a chunk refusal leaves no marker: the next start decides again")
 
 	// Negative control: the same table and the same holder, under a ceiling it is within.
-	// The run now counts the rows and then really waits on the holder's lock, ending busy
-	// after at least one lock attempt. That is what makes "under a second" above mean that
-	// no lock was attempted, rather than that the holder blocks nothing.
-	timing := timeLeadingKeysTiming{lockTimeout: 200 * time.Millisecond, lockAttempt: 500 * time.Millisecond,
+	// The run now counts the rows and then really queues its ACCESS EXCLUSIVE behind the
+	// holder. That is what makes "under a second" above mean that no lock was attempted,
+	// rather than that the holder blocks nothing.
+	//
+	// The queued lock is OBSERVED in pg_locks, and the run is then cancelled. It used to be
+	// inferred from the run ending busy inside a 10 s budget, but that budget is shared with
+	// the row count before the first lock attempt (one statement per chunk, over 500 chunks),
+	// and on a loaded runner the count alone spent it: the run then ended "this start's
+	// budget was spent" without trying the lock, and the control failed for a reason that
+	// says nothing about the gate. Here no bound races the count: a lock wait is given
+	// minutes and the budget longer, so once the run reaches the lock it stays queued behind
+	// the holder until it is cancelled.
+	timing := timeLeadingKeysTiming{lockTimeout: 5 * time.Minute, lockAttempt: 5 * time.Minute,
 		pause: 100 * time.Millisecond, tableBuild: 30 * time.Second, minBuild: 10 * time.Millisecond,
-		budget: 10 * time.Second, countTimeout: 10 * time.Second, maxRows: 1_000_000, maxChunks: 2000,
+		budget: 10 * time.Minute, countTimeout: 10 * time.Second, maxRows: 1_000_000, maxChunks: 2000,
 		buildMemory: "64MB"}
-	start = time.Now()
-	err = newTimeLeadingKeysSchema(timing).Migrate(sys)
+	ctx, cancel := context.WithCancel(sys.Statement.Context)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- newTimeLeadingKeysSchema(timing).Migrate(sys.WithContext(ctx)) }()
+	observer := connectInstance(t, inst)
+	for queued := false; !queued; {
+		select {
+		case err := <-done:
+			t.Fatalf("within the ceiling, the run ended without queuing a lock behind the holder: %v", err)
+		default:
+		}
+		require.NoError(t, observer.QueryRow(context.Background(), `SELECT count(*) > 0 FROM pg_locks
+			WHERE NOT granted AND mode = 'AccessExclusiveLock'
+			AND database = (SELECT oid FROM pg_database WHERE datname = current_database())
+			AND relation = '"event-management".events'::regclass`).Scan(&queued))
+		if !queued {
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+	cancel()
+	err = <-done
 	require.Error(t, err)
-	assert.GreaterOrEqual(t, time.Since(start), timing.lockAttempt)
-	assert.Contains(t, err.Error(), "stayed busy")
+	assert.ErrorIs(t, err, context.Canceled, "the run ends at the cancel, not on its own")
 	assert.NotContains(t, err.Error(), "chunks, the most")
+	assertAfterTrimIndexes(t, sys, "after the cancelled run")
 	release()
 
 	// Back at the ceiling (the two oldest chunks removed), the rebuild applies at the default
