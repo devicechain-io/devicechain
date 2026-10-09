@@ -281,7 +281,10 @@ func runTenantUpsertMatrix(t *testing.T, db *gorm.DB) {
 
 	t.Run("a caller's own DO UPDATE condition is kept and the guard is added to it", func(t *testing.T) {
 		upsertTruncate(t, db)
-		skipEqual := clause.Where{Exprs: []clause.Expression{clause.Expr{SQL: "up_pairs.val <> excluded.val"}}}
+		// Spare capacity, so an append into the shared slice would show in the backing array.
+		shared := make([]clause.Expression, 1, 4)
+		shared[0] = clause.Expr{SQL: "up_pairs.val <> excluded.val"}
+		skipEqual := clause.Where{Exprs: shared}
 		upsert := func(ctx context.Context, tenant, v string) error {
 			return db.WithContext(ctx).Clauses(clause.OnConflict{
 				Columns:   []clause.Column{{Name: "tenant_id"}, {Name: "key"}},
@@ -296,7 +299,81 @@ func runTenantUpsertMatrix(t *testing.T, db *gorm.DB) {
 		var pairs []upPair
 		require.NoError(t, db.WithContext(upSystem).Order("tenant_id").Find(&pairs).Error)
 		assert.Equal(t, []upPair{{"tenant-a", "k", "two"}, {"tenant-b", "k", "other"}}, pairs)
-		assert.Len(t, skipEqual.Exprs, 1, "the caller's shared Where must not be appended to")
+		assert.Nil(t, shared[:cap(shared)][1], "the caller's shared Where must not be appended to")
+	})
+
+	t.Run("the caller's condition is parenthesised so it cannot widen the same-tenant limit", func(t *testing.T) {
+		conditions := map[string]clause.Where{
+			"true":         {Exprs: []clause.Expression{clause.Expr{SQL: "1=1"}}},
+			"or":           {Exprs: []clause.Expression{clause.Expr{SQL: "1=1 OR 1=0"}}},
+			"newline or":   {Exprs: []clause.Expression{clause.Expr{SQL: "1=1\nOR 1=0"}}},
+			"leading or":   {Exprs: []clause.Expression{clause.Or(clause.Expr{SQL: "1=1"})}},
+			"two operands": {Exprs: []clause.Expression{clause.Expr{SQL: "1=0"}, clause.Or(clause.Expr{SQL: "1=1"})}},
+		}
+		for name, where := range conditions {
+			upsertTruncate(t, db)
+			require.NoError(t, db.WithContext(upCtxB).Create(&upSlug{ID: 1, Slug: "s", Name: "b-name"}).Error)
+			_ = AllowTenantlessUpsert(db.WithContext(upCtxA), "slug is unique per tenant in this test").
+				Clauses(clause.OnConflict{
+					Columns:   []clause.Column{{Name: "slug"}},
+					DoUpdates: clause.AssignmentColumns([]string{"name", "tenant_id"}),
+					Where:     where,
+				}).Create(&upSlug{ID: 2, Slug: "s", Name: "other"}).Error
+			got, found := upSlugRow(t, db, "s")
+			require.True(t, found, name)
+			assert.Equal(t, upSlug{ID: 1, TenantScoped: TenantScoped{"tenant-b"}, Slug: "s", Name: "b-name"}, got, name)
+		}
+
+		// The same condition on the owner's own row still applies.
+		upsertTruncate(t, db)
+		require.NoError(t, db.WithContext(upCtxA).Create(&upSlug{ID: 1, Slug: "s", Name: "old"}).Error)
+		require.NoError(t, AllowTenantlessUpsert(db.WithContext(upCtxA), "slug is unique per tenant in this test").
+			Clauses(clause.OnConflict{
+				Columns:   []clause.Column{{Name: "slug"}},
+				DoUpdates: clause.AssignmentColumns([]string{"name"}),
+				Where:     conditions["or"],
+			}).Create(&upSlug{ID: 2, Slug: "s", Name: "new"}).Error)
+		got, _ := upSlugRow(t, db, "s")
+		assert.Equal(t, "new", got.Name)
+
+		// And a condition that is false keeps the owner's row as it was.
+		require.NoError(t, AllowTenantlessUpsert(db.WithContext(upCtxA), "slug is unique per tenant in this test").
+			Clauses(clause.OnConflict{
+				Columns:   []clause.Column{{Name: "slug"}},
+				DoUpdates: clause.AssignmentColumns([]string{"name"}),
+				Where:     clause.Where{Exprs: []clause.Expression{clause.Expr{SQL: "1=0"}}},
+			}).Create(&upSlug{ID: 3, Slug: "s", Name: "never"}).Error)
+		got, _ = upSlugRow(t, db, "s")
+		assert.Equal(t, "new", got.Name)
+	})
+
+	t.Run("an upsert may not assign the tenant column to anything but the incoming row's", func(t *testing.T) {
+		upsertTruncate(t, db)
+		require.NoError(t, db.WithContext(upCtxA).Create(&upPair{Key: "k", Val: "old"}).Error)
+		for name, set := range map[string]clause.Set{
+			"literal":    {{Column: clause.Column{Name: "tenant_id"}, Value: "tenant-b"}},
+			"expression": {{Column: clause.Column{Name: "tenant_id"}, Value: gorm.Expr("'tenant-b'")}},
+			"other col":  {{Column: clause.Column{Name: "tenant_id"}, Value: clause.Column{Table: "excluded", Name: "val"}}},
+		} {
+			err := db.WithContext(upCtxA).Clauses(clause.OnConflict{
+				Columns:   []clause.Column{{Name: "tenant_id"}, {Name: "key"}},
+				DoUpdates: append(clause.AssignmentColumns([]string{"val"}), set...),
+			}).Create(&upPair{Key: "k", Val: "new"}).Error
+			assert.ErrorIs(t, err, ErrTenantUpsertReassign, name)
+		}
+		var pairs []upPair
+		require.NoError(t, db.WithContext(upSystem).Find(&pairs).Error)
+		assert.Equal(t, []upPair{{"tenant-a", "k", "old"}}, pairs, "a refused upsert writes nothing")
+	})
+
+	t.Run("a map create is guarded and counted like a struct", func(t *testing.T) {
+		upsertTruncate(t, db)
+		require.NoError(t, db.WithContext(upCtxB).Create(&upWidget{ID: 100, Name: "b-name", Note: "b-note"}).Error)
+		err := db.WithContext(upCtxA).Model(&upWidget{}).Clauses(clause.OnConflict{UpdateAll: true}).
+			Create(map[string]any{"id": 100, "name": "other"}).Error
+		assert.ErrorIs(t, err, ErrTenantUpsertConflict)
+		after, _ := upWidgetRow(t, db, 100)
+		victimUnchanged(t, after)
 	})
 
 	t.Run("a system context and an untenanted model are left alone", func(t *testing.T) {

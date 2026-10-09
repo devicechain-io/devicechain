@@ -77,6 +77,20 @@ func (g tenantUpsertGuard) Build(b clause.Builder) {
 	b.WriteQuoted(clause.Column{Table: "excluded", Name: g.column})
 }
 
+// parenthesised writes a caller's whole Where inside parentheses. gorm joins a clause's
+// expressions with a bare AND and adds no parentheses of its own, so an expression of the
+// caller's that contains an OR (or a leading Or) would otherwise take the tenant guard as an
+// operand of that OR instead of a condition on the whole.
+type parenthesised struct {
+	inner clause.Where
+}
+
+func (p parenthesised) Build(b clause.Builder) {
+	b.WriteByte('(')
+	p.inner.Build(b)
+	b.WriteByte(')')
+}
+
 // upsertClause returns the statement's ON CONFLICT clause when it is a DO UPDATE one.
 func upsertClause(db *gorm.DB) (clause.OnConflict, bool) {
 	c, ok := db.Statement.Clauses["ON CONFLICT"]
@@ -120,22 +134,44 @@ func guardTenantUpsert(db *gorm.DB, column string) {
 		_ = db.AddError(fmt.Errorf("%w (table %q)", ErrTenantlessUpsert, db.Statement.Table))
 		return
 	}
-	for _, e := range oc.Where.Exprs {
-		if _, guarded := e.(tenantUpsertGuard); guarded {
-			return
-		}
+	guard := tenantUpsertGuard{table: db.Statement.Table, column: column}
+	if len(oc.Where.Exprs) > 0 && oc.Where.Exprs[0] == clause.Expression(guard) {
+		return // already guarded: a statement reused for several chunks is built more than once
+	}
+	if err := refuseTenantReassignment(oc, column); err != nil {
+		_ = db.AddError(fmt.Errorf("%w (table %q)", err, db.Statement.Table))
+		return
 	}
 	// A fresh slice: the caller's Where is often a package-level value shared by every
-	// statement, and appending to it in place would be a data race.
-	exprs := make([]clause.Expression, 0, len(oc.Where.Exprs)+1)
-	exprs = append(exprs, oc.Where.Exprs...)
-	exprs = append(exprs, tenantUpsertGuard{table: db.Statement.Table, column: column})
+	// statement, and appending to it in place would be a data race. The guard comes first
+	// and stands alone; the caller's own condition follows, parenthesised.
+	exprs := []clause.Expression{guard}
+	if len(oc.Where.Exprs) > 0 {
+		exprs = append(exprs, parenthesised{inner: oc.Where})
+	}
 	oc.Where = clause.Where{Exprs: exprs}
 	db.Statement.AddClause(oc)
 }
 
+// refuseTenantReassignment rejects an update arm that assigns the tenant column to anything
+// but the incoming row's own value (excluded.<column>), which would move a row between tenants.
+func refuseTenantReassignment(oc clause.OnConflict, column string) error {
+	for _, a := range oc.DoUpdates {
+		if !strings.EqualFold(a.Column.Name, column) {
+			continue
+		}
+		if v, ok := a.Value.(clause.Column); ok && v.Table == "excluded" && strings.EqualFold(v.Name, column) {
+			continue
+		}
+		return ErrTenantUpsertReassign
+	}
+	return nil
+}
+
 // tenantUpsertCheck turns a guarded upsert that wrote fewer rows than it was given into an
 // error. It runs inside the statement's transaction, so the error rolls the statement back.
+// Under SkipDefaultTransaction with no caller transaction there is none to roll back: the
+// rows of a colliding batch that did not collide stay committed.
 //
 // It only speaks when the guard is the clause's sole condition: a DO UPDATE with a condition
 // of its own (a monotonic-clock guard, say) legitimately writes fewer rows than it is given,
@@ -149,10 +185,11 @@ func tenantUpsertCheck(db *gorm.DB) {
 	if !ok || len(oc.Where.Exprs) == 0 {
 		return
 	}
-	for _, e := range oc.Where.Exprs {
-		if _, guarded := e.(tenantUpsertGuard); !guarded {
-			return
-		}
+	if len(oc.Where.Exprs) != 1 {
+		return
+	}
+	if _, guarded := oc.Where.Exprs[0].(tenantUpsertGuard); !guarded {
+		return
 	}
 	if want := createRowCount(db.Statement.Dest); want > 0 && db.RowsAffected < int64(want) {
 		_ = db.AddError(fmt.Errorf("%w (table %q: %d of %d rows written)",
@@ -173,10 +210,15 @@ func createRowCount(dest any) int {
 		return 0
 	}
 	switch v.Kind() {
-	case reflect.Struct:
+	case reflect.Struct, reflect.Map:
 		return 1
 	case reflect.Slice, reflect.Array:
 		return v.Len()
 	}
 	return 0
 }
+
+// ErrTenantUpsertReassign is the refusal for an upsert whose update arm assigns the tenant
+// column to anything but the incoming row's own value.
+var ErrTenantUpsertReassign = errors.New("tenant isolation refused the upsert: its update arm assigns the " +
+	"tenant column to something other than the incoming row's tenant")

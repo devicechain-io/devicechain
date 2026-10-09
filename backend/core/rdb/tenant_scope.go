@@ -98,9 +98,10 @@ var ErrTenantMismatch = errors.New("tenant isolation refused the write: a row be
 //     tenant's rows.
 //   - Create: the tenant from context is stamped onto every row (struct, slice,
 //     or array). A missing tenant aborts with core.ErrNoTenant, and a row naming a
-//     DIFFERENT tenant aborts with ErrTenantMismatch rather than being rewritten. An INSERT ... ON CONFLICT ... DO UPDATE (gorm's Save fallback
-//     included) also has its update arm limited to rows of the same tenant, and a tenant-less
-//     conflict target is refused unless the call site is marked reviewed: see tenant_upsert.go.
+//     DIFFERENT tenant aborts with ErrTenantMismatch rather than being rewritten.
+//     An INSERT ... ON CONFLICT ... DO UPDATE (gorm's Save fallback included) also has its
+//     update arm limited to rows of the same tenant, and a tenant-less conflict target is
+//     refused unless the call site is marked reviewed: see tenant_upsert.go.
 //
 // Models with no tenant field in either spelling (migration bookkeeping tables, and
 // event-processing's partition-keyed DetectSnapshot) pass through untouched.

@@ -71,10 +71,22 @@ func TestTenantUpsertGuardIsInjectedIntoTheDoUpdateArm(t *testing.T) {
 	oc.Where = own
 	tx := db.WithContext(upCtxA).Clauses(oc)
 	sql = dryRunSQL(t, tx, &upPair{Key: "k", Val: "v"})
-	assert.Contains(t, sql, `WHERE up_pairs.val <> excluded.val AND "up_pairs"."tenant_id" = "excluded"."tenant_id"`)
+	assert.Contains(t, sql, `WHERE "up_pairs"."tenant_id" = "excluded"."tenant_id" AND (up_pairs.val <> excluded.val)`)
 	sql = dryRunSQL(t, tx, &upPair{Key: "k", Val: "v"})
 	assert.Equal(t, 1, strings.Count(sql, `"excluded"."tenant_id"`))
 	assert.Len(t, own.Exprs, 1)
+}
+
+// A guard for some other table or column is not this statement's guard.
+func TestTenantUpsertRecognisesOnlyItsOwnGuard(t *testing.T) {
+	db := newUpsertDB(t)
+	foreign := clause.Where{Exprs: []clause.Expression{tenantUpsertGuard{table: "elsewhere", column: "tenant_id"}}}
+	sql := dryRunSQL(t, db.WithContext(upCtxA).Clauses(clause.OnConflict{
+		Columns:   []clause.Column{{Name: "tenant_id"}, {Name: "key"}},
+		DoUpdates: clause.AssignmentColumns([]string{"val"}),
+		Where:     foreign,
+	}), &upPair{Key: "k", Val: "v"})
+	assert.Contains(t, sql, `"up_pairs"."tenant_id" = "excluded"."tenant_id"`)
 }
 
 func TestTenantUpsertLeavesOtherStatementsAlone(t *testing.T) {
@@ -123,7 +135,8 @@ func TestCreateRowCount(t *testing.T) {
 	assert.Equal(t, 3, createRowCount(&[]upPair{{}, {}, {}}))
 	assert.Equal(t, 2, createRowCount([2]upPair{}))
 	assert.Equal(t, 0, createRowCount(nil))
-	assert.Equal(t, 0, createRowCount(map[string]any{"a": 1}))
+	assert.Equal(t, 1, createRowCount(map[string]any{"a": 1}))
+	assert.Equal(t, 2, createRowCount([]map[string]any{{"a": 1}, {"a": 2}}))
 	var nilp *upPair
 	assert.Equal(t, 0, createRowCount(nilp))
 }
