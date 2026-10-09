@@ -69,20 +69,119 @@ func TestShardedClampsK(t *testing.T) {
 	}
 }
 
+// retime stamps every sample of a reused message with the message time, so a workload built once
+// stays current however many times it wraps. The fixed times shardedWorkload assigns are only right
+// for the first pass: after it, Aggregate panes sit behind the watermark and SlidingAgg samples are
+// older than the window, so the engine declines them and the run measures rejection, not upkeep.
+// It rewrites in place (four stores a message, no allocation); the messages are consumed
+// synchronously and the engine keeps times by value, so reuse is safe.
+func retime(evs []Event, t time.Time) {
+	for i := range evs {
+		evs[i].Time = t
+	}
+}
+
+// drivePast runs n messages through process, reusing msgs modulo its length. With fresh set each
+// reused message is retimed to the frontier; without it the original times are replayed, which is
+// the late-data workload.
+func drivePast(msgs [][]Event, n int, fresh bool, process func(seq uint64, t time.Time, evs []Event), drain func()) {
+	for i := 0; i < n; i++ {
+		evs := msgs[i%len(msgs)]
+		t := base.Add(time.Duration(i) * time.Millisecond)
+		if fresh {
+			retime(evs, t)
+		}
+		process(uint64(i+1), t, evs)
+		drain()
+	}
+}
+
+// shardedState is what a sustained run should be holding: open aggregate panes, retained sliding
+// samples, and the late-sample count since the last read.
+func shardedState(engines []*Engine) (panes, sliding int, late uint64) {
+	for _, e := range engines {
+		panes += len(e.panes)
+		sliding += e.RetainedSampleCounts()["t1/sld"]
+		late += e.DrainLateSamples()
+	}
+	return
+}
+
+// TestShardedWorkloadStaysCurrentAcrossWraps pins what BenchmarkShardedProcessResolved measures:
+// well past three wraps of the reused workload the windows still hold live state and nothing is
+// declined as late. Without the retime, the same run ends with no open panes and thousands of
+// late sliding samples (TestShardedStaleWorkloadIsLate), i.e. it would be timing rejection.
+func TestShardedWorkloadStaysCurrentAcrossWraps(t *testing.T) {
+	const devices, messages, wraps = 50, 2048, 4
+	for _, k := range []int{0, 1, 4} { // 0 = the plain engine
+		msgs := shardedWorkload(shardedBenchRules, devices, messages)
+		var engines []*Engine
+		var process func(uint64, time.Time, []Event)
+		var drain func()
+		if k == 0 {
+			e := NewEngine(shardedBenchRules, 0)
+			engines, process, drain = []*Engine{e}, e.ProcessResolved, func() { e.Drain() }
+		} else {
+			s := NewSharded(k, shardedBenchRules, 0)
+			engines, process, drain = s.shards, s.ProcessResolved, func() { s.Drain() }
+		}
+		drivePast(msgs, messages*wraps+17, true, process, drain)
+		panes, sliding, late := shardedState(engines)
+		if late != 0 {
+			t.Errorf("K=%d: %d samples declined as late in a fresh workload", k, late)
+		}
+		if panes == 0 {
+			t.Errorf("K=%d: no open aggregate panes after %d wraps", k, wraps)
+		}
+		if sliding == 0 {
+			t.Errorf("K=%d: no sliding samples retained after %d wraps", k, wraps)
+		}
+	}
+}
+
+// TestShardedStaleWorkloadIsLate is the negative control for the test above, and the reason the
+// late-data benchmark exists: replaying the original times past the first wrap IS rejected, so
+// the fresh test is not passing for want of a way to fail.
+func TestShardedStaleWorkloadIsLate(t *testing.T) {
+	const devices, messages, wraps = 50, 2048, 4
+	msgs := shardedWorkload(shardedBenchRules, devices, messages)
+	e := NewEngine(shardedBenchRules, 0)
+	drivePast(msgs, messages*wraps, false, e.ProcessResolved, func() { e.Drain() })
+	if panes, _, late := shardedState([]*Engine{e}); late == 0 || panes != 0 {
+		t.Errorf("stale replay: %d late samples, %d panes; want late > 0 and no panes", late, panes)
+	}
+}
+
 // The cost of sharding, against the plain engine, on the same stream. K=1 is the production default
 // and must cost ~nothing; K>1 here is the synchronous overhead only (routing, K ticks per message)
 // with no parallelism, so it is expected to be SLOWER than plain until shards run concurrently.
-func BenchmarkShardedProcessResolved(b *testing.B) {
+//
+// The workload is kept current (see retime), so this times sustained window upkeep at any b.N.
+// It is the engine alone: no planning, no checkpoints, so it is not pipeline capacity.
+func BenchmarkShardedProcessResolved(b *testing.B) { benchSharded(b, true) }
+
+// BenchmarkShardedProcessResolvedLate replays the original sample times, so past the first wrap
+// the engine is declining stale samples. It prices late-data rejection and depends on b.N; do not
+// compare it with the fresh benchmark as if they were one workload.
+func BenchmarkShardedProcessResolvedLate(b *testing.B) { benchSharded(b, false) }
+
+// BenchmarkShardedRetime is the cost of the retime step alone, which the fresh benchmark pays
+// inside its timed region.
+func BenchmarkShardedRetime(b *testing.B) {
+	msgs := shardedWorkload(shardedBenchRules, 1000, 4096)
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		retime(msgs[i%len(msgs)], base.Add(time.Duration(i)*time.Millisecond))
+	}
+}
+
+func benchSharded(b *testing.B, fresh bool) {
 	const devices = 1000
 	msgs := shardedWorkload(shardedBenchRules, devices, 4096)
 	run := func(b *testing.B, process func(seq uint64, t time.Time, evs []Event), drain func()) {
 		b.ReportAllocs()
 		b.ResetTimer()
-		for i := 0; i < b.N; i++ {
-			evs := msgs[i%len(msgs)]
-			process(uint64(i+1), base.Add(time.Duration(i)*time.Millisecond), evs)
-			drain()
-		}
+		drivePast(msgs, b.N, fresh, process, drain)
 	}
 	b.Run("plain", func(b *testing.B) {
 		e := NewEngine(shardedBenchRules, 0)
