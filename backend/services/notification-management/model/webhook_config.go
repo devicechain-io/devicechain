@@ -106,8 +106,7 @@ func (c *WebhookConfig) HTTPAuth() httpsink.Auth {
 }
 
 // validateWebhookHeaders grammar-checks a webhook channel's custom headers at SAVE time, with
-// the same httpsink checks the rules path applies to an httpCall action's headers (reserved
-// names, ValidateHeader, post-canonicalization duplicates), so a malformed header is refused
+// httpsink.ValidateHeaders, the one policy the rules path uses too, so a malformed header is refused
 // by the request that wrote it rather than failing every dispatch.
 //
 // It is deliberately NOT part of ParseWebhookConfig: delivery shares that parser, and a row
@@ -116,20 +115,8 @@ func (c *WebhookConfig) HTTPAuth() httpsink.Auth {
 // No migration is needed for the same reason: stored rows are untouched, and are judged only
 // when a save touches the config or enables the channel.
 func validateWebhookHeaders(token string, headers map[string]string) error {
-	seen := make(map[string]struct{}, len(headers))
-	for k, v := range headers {
-		if httpsink.IsReservedHeader(k) {
-			return fmt.Errorf("webhook channel %q config headers: header %q is reserved "+
-				"(Authorization / X-DC-* are set by the sink; use auth for a credential)", token, k)
-		}
-		if err := httpsink.ValidateHeader(k, v); err != nil {
-			return fmt.Errorf("webhook channel %q config headers: %w", token, err)
-		}
-		canonical := http.CanonicalHeaderKey(k)
-		if _, dup := seen[canonical]; dup {
-			return fmt.Errorf("webhook channel %q config headers: two headers canonicalize to %q", token, canonical)
-		}
-		seen[canonical] = struct{}{}
+	if err := httpsink.ValidateHeaders(headers); err != nil {
+		return fmt.Errorf("webhook channel %q config headers: %w", token, err)
 	}
 	return nil
 }

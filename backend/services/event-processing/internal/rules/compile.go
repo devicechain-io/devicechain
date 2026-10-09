@@ -640,19 +640,8 @@ func validateHTTPCall(ruleID string, i int, h *HTTPCallAction) error {
 	// than failing every dispatch (net/http would reject it at send time, post-detection). Two names
 	// that canonicalize to the same header would render last-write-wins in nondeterministic map order
 	// under one idempotency token, so a post-canonicalization duplicate is rejected too.
-	seenHeader := make(map[string]struct{}, len(h.Headers))
-	for k, v := range h.Headers {
-		if httpsink.IsReservedHeader(k) {
-			return invalid(ruleID, "actions", "action %d httpCall header %q is reserved (Authorization / X-DC-* are set by the sink)", i, k)
-		}
-		if err := httpsink.ValidateHeader(k, v); err != nil {
-			return invalid(ruleID, "actions", "action %d httpCall %v", i, err)
-		}
-		canonical := http.CanonicalHeaderKey(k)
-		if _, dup := seenHeader[canonical]; dup {
-			return invalid(ruleID, "actions", "action %d httpCall has two headers that canonicalize to %q", i, canonical)
-		}
-		seenHeader[canonical] = struct{}{}
+	if err := httpsink.ValidateHeaders(h.Headers); err != nil {
+		return invalid(ruleID, "actions", "action %d httpCall %v", i, err)
 	}
 	if err := validateSecretHandle(h.SecretRef); err != nil {
 		return invalid(ruleID, "actions", "action %d httpCall secretRef: %v", i, err)

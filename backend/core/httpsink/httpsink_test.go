@@ -88,6 +88,41 @@ func TestValidateHeader(t *testing.T) {
 	}
 }
 
+func TestValidateHeaders(t *testing.T) {
+	for name, ok := range map[string]map[string]string{
+		"nil":       nil,
+		"empty":     {},
+		"custom":    {"X-Custom": "ok"},
+		"two":       {"X-A": "1", "X-B": "2"},
+		"tab":       {"X-Tab": "a\tb"},
+		"empty val": {"X-Ok": ""},
+	} {
+		if err := ValidateHeaders(ok); err != nil {
+			t.Errorf("%s: unexpected error %v", name, err)
+		}
+	}
+	for name, c := range map[string]struct {
+		in   map[string]string
+		want string
+	}{
+		"empty name":    {map[string]string{"": "v"}, "empty"},
+		"bad name char": {map[string]string{"bad name": "v"}, `"bad name"`},
+		"CR in value":   {map[string]string{"X-A": "a\rb"}, `"X-A"`},
+		"LF in value":   {map[string]string{"X-A": "a\nb"}, `"X-A"`},
+		"NUL in value":  {map[string]string{"X-A": "a\x00b"}, `"X-A"`},
+		"Authorization": {map[string]string{"authorization": "x"}, `"authorization"`},
+		"X-DC-*":        {map[string]string{"X-DC-Tenant": "v"}, `"X-DC-Tenant"`},
+		"canonical dup": {map[string]string{"x-custom": "1", "X-Custom": "2"}, "canonicalizes to"},
+	} {
+		err := ValidateHeaders(c.in)
+		if err == nil {
+			t.Errorf("%s: accepted", name)
+		} else if !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%s: err %q does not mention %s", name, err, c.want)
+		}
+	}
+}
+
 func TestSendPostsWithAuthAndIdempotencyKey(t *testing.T) {
 	var gotAuth, gotCT, gotKey, gotCustom string
 	var gotBody []byte

@@ -271,6 +271,29 @@ func ValidateHeader(name, value string) error {
 	return nil
 }
 
+// ValidateHeaders is THE policy for a configured (tenant-authored) header set, shared by every
+// authoring path that accepts one. It refuses, naming the offending header: a reserved name
+// (Authorization / X-DC-*, which the sink sets itself), a malformed name or value
+// (ValidateHeader), and two names that canonicalize to the same header (they would render
+// last-write-wins in map order). Callers prefix the error with their own field address.
+func ValidateHeaders(headers map[string]string) error {
+	seen := make(map[string]struct{}, len(headers))
+	for k, v := range headers {
+		if IsReservedHeader(k) {
+			return fmt.Errorf("header %q is reserved (Authorization / X-DC-* are set by the sink)", k)
+		}
+		if err := ValidateHeader(k, v); err != nil {
+			return err
+		}
+		canonical := http.CanonicalHeaderKey(k)
+		if _, dup := seen[canonical]; dup {
+			return fmt.Errorf("header %q duplicates another header that canonicalizes to %q", k, canonical)
+		}
+		seen[canonical] = struct{}{}
+	}
+	return nil
+}
+
 // validHeaderNameByte reports whether c is an RFC 7230 token character (the header-name grammar).
 func validHeaderNameByte(c byte) bool {
 	switch {
