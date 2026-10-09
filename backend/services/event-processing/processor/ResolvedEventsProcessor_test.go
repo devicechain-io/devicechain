@@ -320,8 +320,8 @@ func TestRestoreReplayIsIdempotent(t *testing.T) {
 	}
 }
 
-// A poison payload and an untenanted subject are dropped (never advance the engine)
-// but still acked; with no state change the checkpoint writes no snapshot.
+// A poison payload and an untenanted subject are dropped (never applied to the engine)
+// but still acked, and their sequences are recorded as handled.
 func TestPoisonAndUntenantedDroppedAndAcked(t *testing.T) {
 	ctx := context.Background()
 	store := newTestStore(t)
@@ -340,14 +340,19 @@ func TestPoisonAndUntenantedDroppedAndAcked(t *testing.T) {
 	um.StreamSeq = 2
 	rp.handle(um)
 
-	if rp.dirty {
-		t.Fatal("poison/untenanted messages must not mark the engine dirty")
+	// Their sequences are recorded as handled (Engine.Skip): the loop is dirty and the
+	// checkpoint snapshots the advanced LastSeq, with the watermark untouched.
+	if !rp.dirty {
+		t.Fatal("poison/untenanted messages must mark the loop dirty so LastSeq is snapshotted")
+	}
+	if !rp.engine.Watermark().IsZero() {
+		t.Fatal("poison/untenanted messages must not move the watermark")
 	}
 
 	rp.checkpoint(ctx)
 
-	if _, ok, _ := store.Load(ctx, "singleton"); ok {
-		t.Fatal("no snapshot should be written when nothing advanced the engine")
+	if snap, ok, _ := store.Load(ctx, "singleton"); !ok || snap.StreamSeq != 2 {
+		t.Fatalf("snapshot should record the skipped sequence: ok=%v seq=%d", ok, snap.StreamSeq)
 	}
 	if poison.acks != 1 || untenanted.acks != 1 {
 		t.Fatalf("dropped messages not acked: poison=%d untenanted=%d", poison.acks, untenanted.acks)

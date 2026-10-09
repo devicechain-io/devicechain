@@ -503,9 +503,12 @@ type ResolvedEventsProcessor struct {
 	// tear the process down over a healthy one's shoulder.
 	newPacer func(what string) *core.ReadPacer
 
-	procCtx    context.Context
-	procCancel context.CancelFunc
-	readerWG   sync.WaitGroup
+	procCtx context.Context
+	// decodeResolved replaces the protobuf decode of a resolved event. Nil in production; a
+	// test sets it to count decodes and prove the sequence guard runs first.
+	decodeResolved func([]byte) (*dmmodel.ResolvedEvent, error)
+	procCancel     context.CancelFunc
+	readerWG       sync.WaitGroup
 
 	// supCtx bounds the PROCESS, not a term: it is minted once in ExecuteInitialize
 	// and every term context descends from it, so cancelling it ends leadership for
@@ -1644,9 +1647,10 @@ func (rp *ResolvedEventsProcessor) readPump(items chan<- readItem, done chan<- s
 }
 
 // handle processes one LIVE message: buffer it for a post-checkpoint ack, then feed
-// it to the engine (or drop it if unprocessable). Poison/duplicate messages do not
-// advance the engine; they are acked at the next checkpoint (safe — they carry no
-// new state).
+// it to the engine (or drop it if unprocessable). A duplicate (at or below LastSeq)
+// changes nothing. Poison with a stream sequence records that sequence via Engine.Skip and
+// marks the loop dirty, without applying any state. Every buffered message, either kind, is
+// acked at the next checkpoint.
 func (rp *ResolvedEventsProcessor) handle(msg messaging.Message) {
 	rp.pendingAcks = append(rp.pendingAcks, msg)
 	rp.applyResolved(msg)
@@ -1656,7 +1660,8 @@ func (rp *ResolvedEventsProcessor) handle(msg messaging.Message) {
 // (metric-scoped feed, runtime.Plan), and feeds the resulting per-rule events to the engine
 // as ONE message-sequenced batch. It returns true iff the message advanced the engine. A
 // message with no stream sequence (StreamSeq==0), no parseable tenant, or an unparseable
-// payload is unprocessable and dropped — redelivery/replay cannot make it processable. A
+// payload is unprocessable and dropped — redelivery/replay cannot make it processable — and,
+// when it has a sequence, that sequence is recorded as handled (Engine.Skip). A
 // redelivered/replayed message at or below the engine's sequence is skipped before fan-out
 // (the engine's message-level guard would drop it anyway; skipping early avoids the wasted
 // predicate evaluations) — still acked upstream, but not counted or marked dirty.
@@ -1668,20 +1673,26 @@ func (rp *ResolvedEventsProcessor) applyResolved(msg messaging.Message) bool {
 		log.Warn().Str("subject", msg.Subject).Msg("Dropping resolved event with no stream sequence (unreadable metadata).")
 		return false
 	}
+	// The sequence guard runs BEFORE the tenant parse and the protobuf decode: it needs only the
+	// stream sequence, so a redelivered or replayed duplicate costs neither.
+	if msg.StreamSeq <= rp.engine.LastSeq() {
+		return false // duplicate/replayed message — acked, but no re-fan-out
+	}
 	_, tenant, ok := messaging.TenantContextFromSubject(rp.pctx(), msg.Subject)
 	if !ok {
 		log.Warn().Str("correlation", msg.CorrelationID()).
 			Msgf("Dropping resolved event with no parseable tenant in subject %q", msg.Subject)
-		return false
+		return rp.skipPoison(msg.StreamSeq)
 	}
-	event, err := dmproto.UnmarshalResolvedEvent(msg.Value)
+	decode := rp.decodeResolved
+	if decode == nil {
+		decode = dmproto.UnmarshalResolvedEvent
+	}
+	event, err := decode(msg.Value)
 	if err != nil {
 		log.Warn().Err(err).Str("correlation", msg.CorrelationID()).
 			Msgf("Dropping resolved event that could not be parsed from subject %q", msg.Subject)
-		return false
-	}
-	if msg.StreamSeq <= rp.engine.LastSeq() {
-		return false // duplicate/replayed message — acked, but no re-fan-out
+		return rp.skipPoison(msg.StreamSeq)
 	}
 
 	// The event's own time, bounded against the server clock at RESOLUTION and travelling
@@ -1746,6 +1757,18 @@ func (rp *ResolvedEventsProcessor) applyResolved(msg messaging.Message) bool {
 		return true
 	}
 	return false
+}
+
+// skipPoison records an unprocessable message's sequence as handled (Engine.Skip) and marks
+// the loop dirty so the next checkpoint snapshots the advanced LastSeq. Replay re-skips the
+// same poison at the same sequence, so the snapshot is deterministic. No state changes, so it
+// is not counted as an applied event.
+func (rp *ResolvedEventsProcessor) skipPoison(seq uint64) bool {
+	if !rp.engine.Skip(seq) {
+		return false
+	}
+	rp.dirty = true
+	return true
 }
 
 // pendingDetection is a drained detection awaiting publish, with the platform time of the input
@@ -2282,11 +2305,14 @@ func (rp *ResolvedEventsProcessor) ackRuleFact(msg messaging.Message) {
 // note for the full accounting and the deferred determinism fix.
 //
 // The snapshot commit runs only when engine state changed since the last checkpoint (dirty);
-// when it did not — the buffer holds only redelivered duplicates or poison — the acks are
-// released against the already-durable prior snapshot with no redundant write. Because a
+// when it did not — the buffer holds only duplicates at or below LastSeq (the guard drops
+// anything at or below LastSeq; gaps are not detected on the live path) — the acks are
+// released against the already-durable prior snapshot with no redundant write. Poison above
+// LastSeq is not that case: it advances LastSeq (Engine.Skip) and marks the loop dirty, so it
+// is snapshotted. Because a
 // committed snapshot captures engine.LastSeq(), every buffered valid event is at or below the
-// durable sequence and every poison message carries no state, so acking the whole buffer is
-// safe. A commit failure leaves the messages unacked (they redeliver / are re-read on replay).
+// durable sequence and every poison message carries no state beyond its skipped sequence, so
+// acking the whole buffer is safe. A commit failure leaves the messages unacked (they redeliver / are re-read on replay).
 // It reports whether everything buffered is now durable — the snapshot committed (or
 // there was nothing dirty to commit) and every pending detection was handed off. Almost
 // every caller ignores that: a scheduled checkpoint that defers has already logged, and
