@@ -918,8 +918,7 @@ usando la CPU de otro nodo. Los dos pods
 prefieren nodos distintos, pero es una preferencia, no una garantía. Cada pod llena sus propios
 lotes, así que un lote contiene más o menos la mitad de eventos y el almacén de eventos confirma más
 o menos el doble de transacciones por evento; el nodo del almacén de eventos se mantuvo por debajo
-del 70% de CPU. El ritmo sostenido de [Rendimiento medido](#measured-throughput) se midió con un
-pod, y no se ha vuelto a medir con dos. Dos pods solicitan el doble de CPU, 1,8 núcleos entre los dos. Cada pod
+del 70% de CPU. Los 6000 eventos por segundo de la última fila de [Rendimiento medido](#measured-throughput) se midieron con dos pods. Dos pods solicitan el doble de CPU, 1,8 núcleos entre los dos. Cada pod
 tiene además sus propias conexiones al almacén de eventos, así que estas instancias reservan 80 de
 sus conexiones para la plataforma en lugar de 40 (consulta
 [Límite de conexiones](../guides/sql-and-bi-access.md#connection-cap)). Con `--compact --ha`, y sin
@@ -1528,7 +1527,7 @@ de ellos el del almacén de eventos, estaban al 86-95% de CPU. No se aisló cuá
 limitó el ritmo, pero para más rendimiento en ese clúster de tres nodos hacen falta más nodos antes
 que más ajustes por servicio. Una instalación predeterminada con los nuevos valores de persistencia
 se midió en los clústeres divididos de las dos últimas filas, donde sostuvo 6000 eventos por
-segundo con `event-management` en un solo pod; no se ha medido en el clúster de tres nodos de las
+segundo con `event-management` en dos pods en la última fila; no se ha medido en el clúster de tres nodos de las
 demás filas.
 
 #### Volumen del almacén de eventos {#event-store-volume}
