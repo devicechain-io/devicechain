@@ -148,6 +148,15 @@ func (r *DraftRuleResultResolver) Diagnostics() []*DraftDiagnosticResolver {
 	return out
 }
 
+// Warnings resolves the advisory findings on a compiled draft (empty unless ok).
+func (r *DraftRuleResultResolver) Warnings() []*DraftDiagnosticResolver {
+	out := make([]*DraftDiagnosticResolver, 0, len(r.res.Warnings))
+	for _, d := range r.res.Warnings {
+		out = append(out, &DraftDiagnosticResolver{d: d})
+	}
+	return out
+}
+
 // Unavailable reports whether the inference path itself could not run.
 func (r *DraftRuleResultResolver) Unavailable() bool { return r.res.Unavailable }
 
@@ -169,6 +178,12 @@ func (r *DraftDiagnosticResolver) Field() *string { return nilIfEmpty(r.d.Field)
 
 // Message resolves the console-surfaceable reason.
 func (r *DraftDiagnosticResolver) Message() string { return r.d.Message }
+
+// Code resolves the stable warning code (null on a rejection reason).
+func (r *DraftDiagnosticResolver) Code() *string { return nilIfEmpty(r.d.Code) }
+
+// Params resolves the values the code's text interpolates (empty on a rejection reason).
+func (r *DraftDiagnosticResolver) Params() []string { return append([]string{}, r.d.Params...) }
 
 // nilIfEmpty maps "" to a null pointer (an omitted optional String), else a pointer to s.
 func nilIfEmpty(s string) *string {

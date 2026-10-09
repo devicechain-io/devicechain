@@ -114,6 +114,9 @@ type DraftRuleResult {
     rawCandidate: String
     # Compiler rejection reasons from the final failed attempt (empty when ok).
     diagnostics: [DraftDiagnostic!]!
+    # Advisory findings on a draft that compiled (empty unless ok): the rule is accepted and behaves
+    # as written, but the author should read the finding before saving.
+    warnings: [DraftDiagnostic!]!
     # True when the inference path itself could not run — not configured, no active provider, or the
     # tenant has not opted in to external routing (all fail-closed). unavailableReason carries the
     # (coarsened) message.
@@ -127,6 +130,10 @@ type DraftDiagnostic {
     field: String
     # The console-surfaceable reason.
     message: String!
+    # The stable code of a warning (null on a rejection reason). See CanvasDiagnostic.code.
+    code: String
+    # The values the code's text interpolates. Empty when code is null.
+    params: [String!]!
 }
 
 # Input to previewRule. Exactly one of graph or ruleDefinition names the draft.
@@ -159,7 +166,8 @@ type PreviewResult {
     # was hit, the window was capped, the profile is unpublished, or a concurrent-preview refusal) —
     # null on a complete result.
     degraded: String
-    # Compile diagnostics when ok is false (node-anchored, reusing the canvas diagnostic shape).
+    # Compile diagnostics (node-anchored, reusing the canvas diagnostic shape): the rejection
+    # reasons when ok is false, the advisory warnings of the compiled draft when ok is true.
     diagnostics: [CanvasDiagnostic!]!
 }
 
@@ -293,8 +301,14 @@ type CanvasCompileResult {
 type CanvasDiagnostic {
     # The offending node's id, or null for a graph-level problem (a cycle, a dangling edge).
     nodeId: String
-    # The severity ("error" today; "warning" reserved).
+    # The severity: "error" rejects the graph; "warning" is advisory and the graph still compiled.
     severity: String!
+    # The stable code of a rule-compiler warning (e.g. "negatedAttributeGuard"), null for a
+    # diagnostic that has none. The console localises its text from the code + params; message is
+    # the English fallback.
+    code: String
+    # The values the code's text interpolates, in a fixed order per code. Empty when code is null.
+    params: [String!]!
     # Human-readable, console-surfaceable message.
     message: String!
 }
@@ -323,6 +337,23 @@ type DetectionRuleValidationResult {
     # One entry per rejected definition (empty when valid), each naming the offending
     # rule and a console-surfaceable reason.
     errors: [DetectionRuleValidationError!]!
+    # Advisory findings on rules that DID compile. They never make the batch invalid: a rule with a
+    # warning is accepted and evaluates as written.
+    warnings: [DetectionRuleValidationWarning!]!
+}
+
+# A single advisory finding on a detection rule that compiled.
+type DetectionRuleValidationWarning {
+    # Zero-based index of the rule in the submitted list.
+    index: Int!
+    # The rule's token (echoed from the input).
+    token: String!
+    # The stable code (e.g. "negatedAttributeGuard"). The console localises its text from it.
+    code: String!
+    # The values the code's text interpolates, in a fixed order per code.
+    params: [String!]!
+    # English fallback text.
+    message: String!
 }
 
 # A single rejected detection rule.

@@ -45,6 +45,7 @@ import {
   type DetectionRuleCreateRequest,
   type DetectionRuleUpdateRequest,
 } from '@/lib/api/device-management';
+import { paintDiagnostics } from './diagnostics';
 import { compileCanvas, type CanvasCompileResult, type NodeTraceStep } from '@/lib/api/event-processing';
 import {
   CONDITION_TYPES,
@@ -178,10 +179,9 @@ function CanvasEditorInner({
   // open-time check already compiled it, its diagnostics are painted from that result.
   const [seed] = useState(() => {
     const rf = toReactFlow(opened.graph);
-    const byNode = new Map<string, string>();
-    for (const d of opened.compiled?.diagnostics ?? []) if (d.nodeId) byNode.set(d.nodeId, d.message);
+    const byNode = paintDiagnostics(opened.compiled?.diagnostics ?? [], t);
     return {
-      nodes: rf.nodes.map((n) => (byNode.has(n.id) ? { ...n, data: { ...(n.data as CanvasNodeData), diagnostic: byNode.get(n.id) } } : n)),
+      nodes: rf.nodes.map((n) => (byNode.has(n.id) ? { ...n, data: { ...(n.data as CanvasNodeData), ...byNode.get(n.id) } } : n)),
       edges: rf.edges,
     };
   });
@@ -244,13 +244,13 @@ function CanvasEditorInner({
         const res = await compileWithTimeout(JSON.stringify(canvasDefRef.current), profileToken);
         if (cancelled) return;
         setCompile({ status: 'done', result: res, forKey: key });
-        const byNode = new Map<string, string>();
-        for (const d of res.diagnostics) if (d.nodeId) byNode.set(d.nodeId, d.message);
+        const byNode = paintDiagnostics(res.diagnostics, t);
         setNodes((ns) =>
           ns.map((n) => {
-            const diagnostic = byNode.get(n.id);
+            const diagnostic = byNode.get(n.id)?.diagnostic;
+            const warning = byNode.get(n.id)?.warning;
             const d = n.data as CanvasNodeData;
-            return d.diagnostic === diagnostic ? n : { ...n, data: { ...d, diagnostic } };
+            return d.diagnostic === diagnostic && d.warning === warning ? n : { ...n, data: { ...d, diagnostic, warning } };
           }),
         );
       } catch {
@@ -261,7 +261,7 @@ function CanvasEditorInner({
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [key, profileToken, setNodes]);
+  }, [key, profileToken, setNodes, t]);
 
   // Paint the selected firing's per-node trace (slice 9e) onto the canvas: each node carries its
   // disposition for that firing (source delivered · condition raised/resolved · branch passed/blocked ·
@@ -400,7 +400,7 @@ function CanvasEditorInner({
   };
 
   // Graph-level diagnostics (no node to pin them to) surface in the side panel.
-  const graphErrors = (result?.diagnostics ?? []).filter((d) => !d.nodeId);
+  const graphErrors = (result?.diagnostics ?? []).filter((d) => !d.nodeId && d.severity !== 'warning');
 
   return (
     <div className="flex flex-col gap-4">
@@ -499,6 +499,14 @@ function CanvasEditorInner({
               {(selected.data as CanvasNodeData).diagnostic && (
                 <p className="rounded-md border border-destructive/50 bg-destructive/10 px-2 py-1.5 text-xs text-destructive">
                   {(selected.data as CanvasNodeData).diagnostic}
+                </p>
+              )}
+              {!(selected.data as CanvasNodeData).diagnostic && (selected.data as CanvasNodeData).warning && (
+                <p
+                  data-testid="node-warning"
+                  className="rounded-md border border-amber-500/50 bg-amber-500/10 px-2 py-1.5 text-xs text-amber-700 dark:text-amber-500"
+                >
+                  {(selected.data as CanvasNodeData).warning}
                 </p>
               )}
               <NodeInspector

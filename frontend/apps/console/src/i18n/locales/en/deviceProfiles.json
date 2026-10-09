@@ -432,6 +432,7 @@
   "ruleValueMetricDescriptionAgg": "The metric folded by the aggregate.",
   "ruleValueMetricDescriptionDelta": "The metric whose change is measured.",
   "ruleValueMetricLabel": "Value metric",
+  "ruleWarning.negatedAttributeGuard": "This condition tests that the attribute “{{p0}}” is NOT set, so the rule applies to every device without it — including devices where it was never set, was set to something other than a number, or was set with CLIENT scope. If you meant only the devices configured without it, add another test that says so.",
   "ruleWindowLabel": "Window",
   "ruleWindowModeCountDescription": "A window of N events, not time.",
   "ruleWindowModeCountLabel": "Count",

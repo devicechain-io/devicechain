@@ -41,7 +41,7 @@ export type ValidateDetectionRulesQueryVariables = Exact<{
 }>;
 
 
-export type ValidateDetectionRulesQuery = { validateDetectionRules: { valid: boolean, errors: Array<{ index: number, token: string, message: string }> } };
+export type ValidateDetectionRulesQuery = { validateDetectionRules: { valid: boolean, errors: Array<{ index: number, token: string, message: string }>, warnings: Array<{ code: string, params: Array<string>, message: string }> } };
 
 export type CompileCanvasQueryVariables = Exact<{
   graph: string;
@@ -49,21 +49,21 @@ export type CompileCanvasQueryVariables = Exact<{
 }>;
 
 
-export type CompileCanvasQuery = { compileCanvas: { ok: boolean, definition: string | null, estimatedCost: number | null, diagnostics: Array<{ nodeId: string | null, severity: string, message: string }> } };
+export type CompileCanvasQuery = { compileCanvas: { ok: boolean, definition: string | null, estimatedCost: number | null, diagnostics: Array<{ nodeId: string | null, severity: string, message: string, code: string | null, params: Array<string> }> } };
 
 export type DraftDetectionRuleFromTextMutationVariables = Exact<{
   input: DraftRuleFromTextInput;
 }>;
 
 
-export type DraftDetectionRuleFromTextMutation = { draftDetectionRuleFromText: { ok: boolean, definition: string | null, estimatedCost: number | null, model: string | null, provider: string | null, attempts: number, rawCandidate: string | null, unavailable: boolean, unavailableReason: string | null, diagnostics: Array<{ field: string | null, message: string }> } };
+export type DraftDetectionRuleFromTextMutation = { draftDetectionRuleFromText: { ok: boolean, definition: string | null, estimatedCost: number | null, model: string | null, provider: string | null, attempts: number, rawCandidate: string | null, unavailable: boolean, unavailableReason: string | null, diagnostics: Array<{ field: string | null, message: string }>, warnings: Array<{ field: string | null, message: string, code: string | null, params: Array<string> }> } };
 
 export type PreviewRuleQueryVariables = Exact<{
   input: PreviewRuleInput;
 }>;
 
 
-export type PreviewRuleQuery = { previewRule: { ok: boolean, degraded: string | null, firings: Array<{ occurredAt: string, series: string, signal: string, trace: Array<{ nodeId: string, kind: string, disposition: string, detail: string | null }> }>, stats: { eventsScanned: number, firingCount: number, evalErrors: number, wallMs: number }, diagnostics: Array<{ nodeId: string | null, severity: string, message: string }> } };
+export type PreviewRuleQuery = { previewRule: { ok: boolean, degraded: string | null, firings: Array<{ occurredAt: string, series: string, signal: string, trace: Array<{ nodeId: string, kind: string, disposition: string, detail: string | null }> }>, stats: { eventsScanned: number, firingCount: number, evalErrors: number, wallMs: number }, diagnostics: Array<{ nodeId: string | null, severity: string, message: string, code: string | null, params: Array<string> }> } };
 
 export type RuleHealthQueryVariables = Exact<{
   profileToken: string;
@@ -107,6 +107,11 @@ export const ValidateDetectionRulesDocument = new TypedDocumentString(`
       token
       message
     }
+    warnings {
+      code
+      params
+      message
+    }
   }
 }
     `) as unknown as TypedDocumentString<ValidateDetectionRulesQuery, ValidateDetectionRulesQueryVariables>;
@@ -120,6 +125,8 @@ export const CompileCanvasDocument = new TypedDocumentString(`
       nodeId
       severity
       message
+      code
+      params
     }
   }
 }
@@ -137,6 +144,12 @@ export const DraftDetectionRuleFromTextDocument = new TypedDocumentString(`
     diagnostics {
       field
       message
+    }
+    warnings {
+      field
+      message
+      code
+      params
     }
     unavailable
     unavailableReason
@@ -169,6 +182,8 @@ export const PreviewRuleDocument = new TypedDocumentString(`
       nodeId
       severity
       message
+      code
+      params
     }
   }
 }

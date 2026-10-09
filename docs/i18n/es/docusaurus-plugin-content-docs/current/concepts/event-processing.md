@@ -90,6 +90,8 @@ Como esta expresión no puede ser verdadera para un evento sin `temp`, la regla 
 
 Una condición de umbral o de duración que sería verdadera en todos los eventos de **todos** los dispositivos sin los atributos que lee, sea cual sea el contenido del evento, se rechaza al publicar el perfil. Por ejemplo, `!("tempLimit" in attr) || m["temp"] > attr["tempLimit"]` levantaría una alarma para cada uno de esos dispositivos, informara lo que informara, mientras le faltara el atributo. Una condición que sigue dependiendo de la lectura, como `!("tempLimit" in attr) && m["temp"] > 80.0`, se acepta. Tenga en cuenta que también se aplica a los dispositivos cuyo atributo tiene un tipo o un alcance incorrectos, no solo a los que nunca lo establecieron.
 
+La forma aceptada lleva una advertencia. Cuando una condición de umbral o de duración une con `&&` una comprobación de que un atributo **no** está definido y otras comprobaciones, como en `!("tempLimit" in attr) && m["temp"] > 80.0`, el formulario, el lienzo y la puerta «Describir» muestran una advertencia que nombra el atributo e indica que la regla se aplica a todos los dispositivos que no lo tienen. La advertencia es solo un aviso: la regla se guarda y se evalúa exactamente como está escrita. Existe porque «no definido» es más amplio que «no configurado», así que la regla también abarca los dispositivos cuyo atributo tiene un tipo o un alcance incorrectos.
+
 En una regla de repetición, de tasa de cambio, de agregado en ventana o de correlación de área, la condición es un filtro sobre qué eventos cuentan, así que allí se acepta un filtro como `!("maint" in attr)` («dispositivos que no están en mantenimiento»).
 
 ## Acciones automatizadas {#automated-actions}

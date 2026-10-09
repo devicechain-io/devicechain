@@ -219,7 +219,17 @@ func (r *SchemaResolver) PreviewRule(ctx context.Context, args struct{ Input pre
 	if tracePlan != nil && in.Trace != nil && *in.Trace {
 		tb = tracepkg.NewBuilder(*tracePlan)
 	}
-	return newPreviewResult(res, degraded, wallMs, tb), nil
+	out := newPreviewResult(res, degraded, wallMs, tb)
+	// The draft's advisory warnings ride along on a successful preview, anchored on the condition
+	// node when the draft is a canvas graph.
+	condID := ""
+	if tracePlan != nil {
+		condID = tracePlan.ConditionID
+	}
+	for _, d := range graph.WarningDiagnostics(condID, compiled.Warnings) {
+		out.diags = append(out.diags, newCanvasDiagnostic(d))
+	}
+	return out, nil
 }
 
 // compileDraft lowers the draft (a canvas graph OR a rules.Rule definition) to one compiled rule and

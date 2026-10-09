@@ -432,6 +432,7 @@
   "ruleValueMetricDescriptionAgg": "La métrica que combina el agregado.",
   "ruleValueMetricDescriptionDelta": "La métrica cuyo cambio se mide.",
   "ruleValueMetricLabel": "Métrica de valor",
+  "ruleWarning.negatedAttributeGuard": "Esta condición comprueba que el atributo «{{p0}}» NO está definido, por lo que la regla se aplica a todos los dispositivos que no lo tienen: incluidos aquellos en los que nunca se definió, se definió con un valor que no es un número o se definió con ámbito CLIENT. Si querías decir solo los dispositivos configurados sin él, añade otra comprobación que lo exprese.",
   "ruleWindowLabel": "Ventana",
   "ruleWindowModeCountDescription": "Una ventana de N eventos, no de tiempo.",
   "ruleWindowModeCountLabel": "Conteo",

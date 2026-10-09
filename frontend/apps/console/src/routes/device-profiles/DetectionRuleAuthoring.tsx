@@ -18,6 +18,7 @@ import { parseDefinition, unmodelledRuleType } from './rule-model';
 import { DetectionRuleNLDraft } from './DetectionRuleNLDraft';
 import { CanvasEditor } from './canvas/CanvasEditor';
 import type { DetectionRule } from '@/lib/api/device-management';
+import type { RuleWarning } from '@/lib/api/event-processing';
 
 type Mode = 'form' | 'canvas' | 'nl';
 
@@ -35,6 +36,7 @@ export function DetectionRuleAuthoring({
   // A compiled draft handed over from the NL door, used to pre-fill the form for a NEW rule. It
   // is passed as `initialDefinition` (not `entity`), so the form stays on the create path.
   const [nlDraft, setNlDraft] = useState<string | undefined>();
+  const [nlWarnings, setNlWarnings] = useState<RuleWarning[]>([]);
   const creating = entity == null;
 
   // Built above the return, not inline in the attribute: 'form'/'canvas'/'nl' are the
@@ -66,9 +68,10 @@ export function DetectionRuleAuthoring({
       {mode === 'nl' ? (
         <DetectionRuleNLDraft
           profileToken={profileToken}
-          onDrafted={(definition) => {
+          onDrafted={(definition, warnings) => {
             // Land the compiled draft in the form for the human to review and save.
             setNlDraft(definition);
+            setNlWarnings(warnings);
             // eslint-disable-next-line i18next/no-literal-string -- 'form' is the Mode discriminant.
             setMode('form');
           }}
@@ -78,6 +81,7 @@ export function DetectionRuleAuthoring({
           profileToken={profileToken}
           entity={entity}
           initialDefinition={entity ? undefined : nlDraft}
+          initialWarnings={entity ? undefined : nlWarnings}
           onDone={onDone}
         />
       ) : (

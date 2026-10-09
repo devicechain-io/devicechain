@@ -208,6 +208,10 @@ type CompiledRule struct {
 	// positionless event could never have raised. See predicate.ReferencesFences.
 	RequiresPosition bool
 
+	// Warnings are the non-fatal authoring findings (see Warning). They never change evaluation and
+	// are not part of the runtime form: only the authoring doors read them.
+	Warnings []Warning
+
 	// AnchorType is the anchor a correlation rule keys its series on; the runtime resolves
 	// the event's anchor of this type to the series token and uses the device as the
 	// distinct member. Empty for every non-correlation rule (series = the device token).
@@ -324,6 +328,7 @@ func Compile(r Rule, limits Limits) (*CompiledRule, error) {
 		return nil, err
 	}
 	cr.Severity = r.Severity
+	cr.Warnings = compileWarnings(r.Type, pred)
 	return cr, nil
 }
 

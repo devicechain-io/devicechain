@@ -44,7 +44,8 @@ import {
   type ScopeGroupVersion,
 } from '@/lib/api/device-management';
 import { previewSelector } from '@/lib/api/browse';
-import { validateDetectionRule } from '@/lib/api/event-processing';
+import { validateDetectionRule, type RuleWarning } from '@/lib/api/event-processing';
+import { ruleWarningText } from '@/lib/ruleWarnings';
 import { ruleSurvivesRoundTrip, sameLogicalRule } from './rule-equal';
 import {
   MAX_ACTIONS_PER_RULE,
@@ -295,6 +296,7 @@ export function DetectionRuleForm({
   profileToken,
   entity,
   initialDefinition,
+  initialWarnings,
   onDone,
 }: {
   profileToken: string;
@@ -304,6 +306,10 @@ export function DetectionRuleForm({
   // form into edit mode: there is no stored rule yet, so the token stays required/editable and
   // saving runs the create path. Ignored when `entity` is set (editing an existing rule wins).
   initialDefinition?: string;
+  // The compiler's advisory warnings on that draft, shown for review until the inline check (which
+  // needs a token before it runs) takes over — so a "Describe" draft is reviewed with its warnings
+  // from the first render, not only after the author has named it.
+  initialWarnings?: RuleWarning[];
   onDone: (message: string) => void;
 }) {
   const { t } = useTranslation('deviceProfiles');
@@ -491,7 +497,11 @@ export function DetectionRuleForm({
   // draft save (a draft may be a work in progress; publish is the enforcing gate), and a
   // transport/permission error is swallowed rather than surfaced as a rule problem.
   const validateToken = editing ? entity.token : token.trim();
-  const [validation, setValidation] = useState<{ status: 'checking' | 'ok' | 'error'; message?: string } | null>(null);
+  const [validation, setValidation] = useState<{ status: 'checking' | 'ok' | 'error'; message?: string; warnings?: RuleWarning[] } | null>(null);
+  // The warnings to show: the inline check's once it has run, the draft's own until then (the check
+  // does not run while a required field such as the token is still empty), none while it is failing.
+  const shownWarnings: RuleWarning[] =
+    validation?.status === 'ok' ? (validation.warnings ?? []) : validation == null ? (initialWarnings ?? []) : [];
   useEffect(() => {
     if (definition == null) {
       setValidation(null);
@@ -512,7 +522,7 @@ export function DetectionRuleForm({
           new Promise<never>((_, reject) => setTimeout(() => reject(new Error('validate timeout')), 10_000)),
         ]);
         if (cancelled) return;
-        setValidation(res.ok ? { status: 'ok' } : { status: 'error', message: res.message ?? undefined });
+        setValidation(res.ok ? { status: 'ok', warnings: res.warnings } : { status: 'error', message: res.message ?? undefined });
       } catch {
         if (!cancelled) setValidation(null);
       }
@@ -1152,6 +1162,16 @@ export function DetectionRuleForm({
       )}
       {!hint && !scopeHint && validation?.status === 'ok' && (
         <p className="text-sm text-emerald-600 dark:text-emerald-500">{t('ruleCompilesOk')}</p>
+      )}
+      {/* Advisory warnings on a rule that compiled: accepted as written, but worth a read. */}
+      {shownWarnings.length > 0 && (
+        <ul className="space-y-1" data-testid="rule-warnings">
+          {shownWarnings.map((w, i) => (
+            <li key={i} className="text-sm text-amber-600 dark:text-amber-500">
+              {ruleWarningText(t, w)}
+            </li>
+          ))}
+        </ul>
       )}
 
       <div className="flex gap-2 pt-1">

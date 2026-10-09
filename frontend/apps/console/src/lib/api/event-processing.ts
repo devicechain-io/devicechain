@@ -27,6 +27,11 @@ const VALIDATE_DETECTION_RULES = graphql(`
         token
         message
       }
+      warnings {
+        code
+        params
+        message
+      }
     }
   }
 `);
@@ -35,6 +40,17 @@ const VALIDATE_DETECTION_RULES = graphql(`
 export interface RuleValidation {
   ok: boolean;
   message: string | null;
+  // Advisory findings on a rule that compiled. They never make `ok` false: the rule is accepted
+  // and evaluates as written. Render them with ruleWarningText, which localises by code.
+  warnings: RuleWarning[];
+}
+
+// A non-fatal authoring finding. `code` + `params` are the stable contract the console localises
+// from; `message` is the server's English fallback for a code this build does not know.
+export interface RuleWarning {
+  code: string;
+  params: string[];
+  message: string;
 }
 
 // validateDetectionRule compiles + cost-gates a single rule definition through the batch
@@ -52,8 +68,9 @@ export async function validateDetectionRule(
     rules: [{ token, definition, groupScoped }],
   });
   const result = data.validateDetectionRules;
-  if (result.valid) return { ok: true, message: null };
-  return { ok: false, message: result.errors[0]?.message ?? 'The rule did not compile.' };
+  const warnings = result.warnings.map((w) => ({ code: w.code, params: w.params, message: w.message }));
+  if (result.valid) return { ok: true, message: null, warnings };
+  return { ok: false, message: result.errors[0]?.message ?? 'The rule did not compile.', warnings: [] };
 }
 
 // ── Canvas compile (ADR-053 slice 9b) ─────────────────────────────────────
@@ -73,6 +90,8 @@ const COMPILE_CANVAS = graphql(`
         nodeId
         severity
         message
+        code
+        params
       }
     }
   }
@@ -111,6 +130,12 @@ const DRAFT_DETECTION_RULE_FROM_TEXT = graphql(`
       diagnostics {
         field
         message
+      }
+      warnings {
+        field
+        message
+        code
+        params
       }
       unavailable
       unavailableReason
@@ -171,6 +196,8 @@ const PREVIEW_RULE = graphql(`
         nodeId
         severity
         message
+        code
+        params
       }
     }
   }
