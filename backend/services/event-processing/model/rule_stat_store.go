@@ -83,7 +83,10 @@ func (s *RuleStatStore) RecordFire(ctx context.Context, ruleID, tenant string, a
 	// incoming one — both databases agree on that — and CASE stands in for Postgres GREATEST,
 	// which sqlite lacks. last_fired_at/last_edge advance only when the incoming fire is at least
 	// as recent, so replaying an older detection cannot rewind them; fire_count always increments.
-	return s.rdb.DB(dccore.WithTenant(ctx, tenant)).Clauses(clause.OnConflict{
+	// The conflict target is rule_id alone, which cannot collide across tenants (see DetectRuleStore.Upsert).
+	db := rdb.AllowTenantlessUpsert(s.rdb.DB(dccore.WithTenant(ctx, tenant)),
+		"rule_id is {tenant}/... and tokens exclude '/', so it is tenant-unique by construction")
+	return db.Clauses(clause.OnConflict{
 		Columns: []clause.Column{{Name: "rule_id"}},
 		DoUpdates: clause.Assignments(map[string]interface{}{
 			"fire_count":    gorm.Expr("fire_count + 1"),

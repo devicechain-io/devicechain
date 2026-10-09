@@ -46,7 +46,11 @@ func (s *DetectRuleStore) Upsert(ctx context.Context, rules []DetectRule) error 
 	// the context's tenant onto every row of a create, so a spanning batch would otherwise
 	// be rewritten to whichever tenant came first and land each rewritten row on a primary
 	// key this ON CONFLICT target does not name.
-	return s.rdb.DB(dccore.WithTenant(ctx, rules[0].Tenant)).Clauses(clause.OnConflict{
+	// The conflict target is rule_id alone, which cannot collide across tenants: the id is
+	// "{tenant}/{profileVersionToken}/{ruleToken}" and a token never contains "/".
+	db := rdb.AllowTenantlessUpsert(s.rdb.DB(dccore.WithTenant(ctx, rules[0].Tenant)),
+		"rule_id is {tenant}/... and tokens exclude '/', so it is tenant-unique by construction")
+	return db.Clauses(clause.OnConflict{
 		Columns:   []clause.Column{{Name: "rule_id"}},
 		DoUpdates: clause.AssignmentColumns([]string{"definition", "entity_group_token", "entity_group_version", "updated_at"}),
 	}).Create(&rules).Error
