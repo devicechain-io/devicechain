@@ -39,8 +39,8 @@
 ],
 "bay":{"queue":"refuel-queue","bay":"refuel-bay","in":"access/bay/in","hop":"access/bay/hop","out":"access/bay/out"},
 "stations":[
-{"id":"load","lane":"loop","core":[363,380],"buffer":[0,6],"capacity":1,"window_s":38.651,"headway_s":38.651,"ride_through":true,"partner":{"machine":"SP-LD-0001","track":1,"ready_s":34.75,"ready_pose":[-1.7,46.3,349.261],"min_gap_m":0.076},"min_gap_m":14.002},
-{"id":"pad","lane":"loop","core":[124,163],"buffer":[164,176],"capacity":2,"window_s":58.052,"headway_s":38.651,"ride_through":false,"partner":null,"min_gap_m":0.158}
+{"id":"load","lane":"loop","core":[363,380],"buffer":[0,6],"capacity":1,"window_s":38.651,"headway_s":38.651,"ride_through":true,"partner":{"machine":"SP-LD-0001","track":1,"ready_s":34.75,"ready_pose":[-1.7,46.3,349.261],"min_gap_m":0.076},"holds":["oncoming-ramp-bottom"],"min_gap_m":14.002},
+{"id":"pad","lane":"loop","core":[124,163],"buffer":[164,176],"capacity":2,"window_s":58.052,"headway_s":38.651,"ride_through":false,"partner":null,"holds":["oncoming-pad-south","oncoming-ramp-top+pad-gate+pad-south"],"min_gap_m":0.158}
 ],
 "work_areas":[
 {"machine":"SP-LD-0001","polygon":[[-5.266,44.986],[-5.224,43.844],[-5.111,43.389],[-4.882,42.82],[-4.528,42.238],[-4.263,41.916],[-0.601,37.922],[2.311,38.984],[3.643,42.482],[3.919,43.346],[4.046,44.223],[4.044,44.922],[3.962,45.566],[3.346,47.243],[3.178,47.519],[2.181,48.663],[-1.146,51.698],[-4.192,51.12],[-5.227,45.258]]},

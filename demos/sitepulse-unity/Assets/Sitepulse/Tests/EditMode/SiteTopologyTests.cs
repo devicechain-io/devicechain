@@ -639,6 +639,60 @@ namespace DeviceChain.Sitepulse.Tests
             })), "V5 approach", "a box that includes the cell it is approached by");
         }
 
+        // the cells are appended to a lane far from every other and past the cells any box lists, so nothing holds them
+        static SiteTopology Hairpin(int cellsOut) => TopologyKit.Edit(n =>
+        {
+            var cells = TopologyKit.Lane(n, "road/fill-return/east")["cells"].AsArray();
+            for (var i = 0; i < cellsOut; i++) cells.Add(new JsonArray(900.0 + 2.0 * i, 900.0, 900.0 + 2.0 * i + 2.0, 900.0));
+            for (var i = 0; i < cellsOut; i++) cells.Add(new JsonArray(900.0 + 2.0 * cellsOut - 2.0 * i, 900.4, 900.0 + 2.0 * cellsOut - 2.0 * i - 2.0, 900.4));
+        });
+
+        [Test]
+        public void ALaneDoublingBackOverItselfJustPastAFollowersDistanceIsAConflict()
+        {
+            // the overlapping cells are 14 m apart along the lane (the follower's distance is 12.8 m), nowhere near a box or a station: a check that skips
+            // same-lane pairs within twice the span passes it
+            AssertDefect(TopologyKit.Check(v => v.Boxes(), Hairpin(4)),
+                d => d.StartsWith("V5 conflict: road/fill-return/east cell") && d.Contains("and road/fill-return/east cell") && d.Contains("the same lane 14 m apart along it"), "doubled back 14 m apart");
+            // 10 m apart is a machine and its follower
+            Assert.IsFalse(TopologyKit.Check(v => v.Boxes(), Hairpin(3)).Any(d => d.StartsWith("V5 conflict: road/fill-return/east cell") && d.Contains("the same lane")),
+                "doubled back 10 m apart is a follower, not a conflict");
+        }
+
+        // ---- V10: nobody waits in a station core
+
+        static SiteTopology WithHolds(string station, params string[] holds) => TopologyKit.Edit(n =>
+        {
+            var arr = new JsonArray();
+            foreach (var h in holds) arr.Add(h);
+            n["stations"].AsArray().First(s => (string)s["id"] == station)["holds"] = arr;
+        });
+
+        const string MergedBox = "oncoming-ramp-top+pad-gate+pad-south";
+
+        [Test]
+        public void NoBoxMakesATruckWaitInAStationCoreUnlessTheStationHoldsIt()
+        {
+            AssertClean(TopologyKit.Check(v => v.WaitingCells()), "every box with cells in a core is held by that station");
+            var pad = Topology.Stations.First(s => s.Id == "pad");
+            CollectionAssert.AreEquivalent(new[] { "oncoming-pad-south", MergedBox }, pad.Holds, "the pad holds the two boxes beside it");
+
+            var none = TopologyKit.Check(v => v.WaitingCells(), WithHolds("pad")).ToList();
+            AssertDefect(none, "junction oncoming-pad-south has approach cell 151 on loop inside the core of station pad", "pad-south's approach is in the pad core");
+            AssertDefect(none, "has room cell 134-140 on loop inside the core of station pad", "the merged box's room is in the pad core");
+            AssertDefect(TopologyKit.Check(v => v.WaitingCells(), WithHolds("pad", MergedBox)), "junction oncoming-pad-south has approach cell 151", "only the merged box held");
+            AssertDefect(TopologyKit.Check(v => v.WaitingCells(), WithHolds("load")), "junction oncoming-ramp-bottom has room cell 363-366 on loop inside the core of station load", "the load core's first cells");
+        }
+
+        [Test]
+        public void AHoldNothingNeedsOrNothingNamesIsRefused()
+        {
+            AssertDefect(TopologyKit.Check(v => v.WaitingCells(), WithHolds("load", "oncoming-ramp-bottom", "merge-bay")),
+                d => d.Contains("station load holds junction merge-bay") && d.Contains("a hold nothing needs"), "a box that touches nothing of the core");
+            AssertDefect(TopologyKit.Check(v => v.WaitingCells(), WithHolds("pad", "oncoming-pad-south", MergedBox, "no-such-box")),
+                "station pad holds junction no-such-box, which the file does not have", "a box the file lacks");
+        }
+
         // ---- V6: lanes
 
         /// <summary>The light tower with nothing else standing near it.</summary>

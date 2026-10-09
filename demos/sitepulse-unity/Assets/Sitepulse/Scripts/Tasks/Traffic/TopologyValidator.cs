@@ -36,7 +36,7 @@ namespace DeviceChain.Sim.Traffic
             this.world = world;
         }
 
-        /// <summary>Every check, in order: V1 to V9.</summary>
+        /// <summary>Every check, in order: V1 to V10.</summary>
         public List<string> All()
         {
             var all = new List<string>();
@@ -49,6 +49,7 @@ namespace DeviceChain.Sim.Traffic
             all.AddRange(Fresh());
             all.AddRange(Zones());
             all.AddRange(WorkAreas());
+            all.AddRange(WaitingCells());
             return all;
         }
 
@@ -976,6 +977,54 @@ namespace DeviceChain.Sim.Traffic
 
                 foreach (var kv in near.OrderBy(k => k.Key, StringComparer.Ordinal))
                     output.Add(F("V6 reach: {0} cell {1} comes {2:0.00} m from {3} at ({4:0.0}, {5:0.0}); a driving hauler keeps {6:0.0} m", lane.Id, kv.Value.K, kv.Value.D, kv.Key, kv.Value.X, kv.Value.Z, world.TravelReach));
+            }
+
+            return output;
+        }
+
+        // ---- V10
+
+        /// <summary>
+        /// V10: no junction box has an approach cell, a member or a room cell inside a station core unless the station holds the box. V4 measures two
+        /// trucks through a core at every headway, which is only the whole truth while nobody waits in the core: a truck held at a box's approach, or
+        /// standing in its room, inside a core is closed on by the next member the station admits. Where a box cannot lie clear of a core, the station
+        /// holds it (admission takes the box's grant too, before the truck enters the core). A hold must name a box that touches the core.
+        /// </summary>
+        public List<string> WaitingCells()
+        {
+            var output = new List<string>();
+            var ids = new HashSet<string>(topology.Junctions.Select(j => j.Id), StringComparer.Ordinal);
+            foreach (var st in topology.Stations)
+            {
+                var lane = topology.Lane(st.Lane);
+                var n = lane.Cells.Count;
+                var core = new HashSet<int>(RunCells(st.Core, n));
+                var held = new HashSet<string>(st.Holds, StringComparer.Ordinal);
+                foreach (var jid in held.Where(h => !ids.Contains(h)).OrderBy(h => h, StringComparer.Ordinal))
+                    output.Add(F("V10 waiting: station {0} holds junction {1}, which the file does not have", st.Id, jid));
+                foreach (var j in topology.Junctions)
+                {
+                    var touching = new List<(string What, List<int> Inside)>();
+                    var approach = j.Approach.Where(a => a.Lane == lane.Id).Select(a => a.Cell);
+                    var members = JunctionCells(j, lane).OrderBy(k => k);
+                    var room = j.Room.Where(r => r.Lane == lane.Id).SelectMany(r => RunCells(r.Cells, n));
+                    foreach (var (what, cells) in new[] { ("approach cell", approach), ("member cell", members), ("room cell", room) })
+                    {
+                        var inside = cells.Where(core.Contains).Distinct().OrderBy(k => k).ToList();
+                        if (inside.Count > 0) touching.Add((what, inside));
+                    }
+
+                    if (held.Contains(j.Id))
+                    {
+                        if (touching.Count == 0)
+                            output.Add(F("V10 waiting: station {0} holds junction {1}, which has no approach, member or room cell in its core (a hold nothing needs)", st.Id, j.Id));
+                        continue;
+                    }
+
+                    foreach (var (what, inside) in touching)
+                        output.Add(F("V10 waiting: junction {0} has {1} {2} on {3} inside the core of station {4} ({5}-{6}), where a held truck is closed on by the next member and the station does not hold the box",
+                            j.Id, what, inside.Count < 4 ? string.Join(", ", inside) : inside[0] + "-" + inside[inside.Count - 1], lane.Id, st.Id, st.Core.A, st.Core.B));
+                }
             }
 
             return output;

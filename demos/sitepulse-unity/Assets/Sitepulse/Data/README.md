@@ -53,11 +53,25 @@ trucks do it in the pad, which the pad's station holds). The distance is the Euc
 than a turning box sweeps, so a gap reads at most 0.03 m below the gap to the continuous sweep (the worst of 1200 pairs nearest a threshold read
 0.022 m low) and never above it. The nearest pair that does not conflict is 1.004 m (haul), 0.526 m (bay) and 0.056 m (overlap, in the pad).
 
+Two thresholds for the same lane. A pair of cells on the same lane, or on the same route (a stand's way through: in, hop, out), conflicts only if
+the sweeps overlap (`conflict_same_route_m` is 0.0 m), not at the 1.0 m two different haul lanes keep. That is a deliberate departure: the follower
+rule keeps a machine and the one behind it a slot apart, and on a bend the two hulls come to about 0.1 m, which is a follower, not a collision. The
+follower rule therefore has to hold along a whole route, across the lane boundaries of a stand's way through (in, then hop, then out), not lane by lane:
+a rule that restarts at each boundary would let the follower close on the leader there.
+
+A box that lies beside a station. The station checks time two trucks through a core at every headway, and that is only the whole truth while nobody
+waits in the core: a truck held at a box's approach cell, or standing in its room, inside a core is closed on by the next truck the station admits.
+So no box may have an approach, member or room cell in a core unless the station holds the box (the station's `holds`): admission to the station takes
+the box's grant too, before the truck enters the core, so nothing waits on the box inside it. The pad holds the two boxes beside it, because the road
+that serves the pad runs along the pad's core and the box cannot lie clear of it; the load point holds the ramp-bottom box, whose room is the first
+cells of its core. A hold that names a box the core does not touch, or a box the file does not have, is refused. The signalling that follows (the
+grant for a held box is requested with the station's) is a throughput cost: the roads sharing a held box wait while a pad truck is in the core.
+
 The checks: the cycle (the loop and the detour through the refuel bay) holds every machine outside the stations' cores (a slot is a hauler's length
 and the air haul trucks keep, 12.8 m, however long a cell is), the span a box takes on the loop leaves room for everyone else, every stand keeps
 1.5 m from every lane, sweep, box and outline and is driven through (its in and out lanes never overlap along the way through), every station is
 safe at every headway from the design spacing up, every conflict lies in one box (or is a stand's own way through, a station, or a diverge), every
 lane pose is within the grade limit and 3.2 m clear of every outline (the task layer's own reach for a driving hauler; but the bay's own), the
-topology was made from the committed files, every zone has a zone stand for each kind it accepts, and no lane or stand comes within 1.5 m of
-another machine's work area. The refuel queue and bay are service stands: they do not make the yard a place to send a machine to. No zone has a
+topology was made from the committed files, every zone has a zone stand for each kind it accepts, no lane or stand comes within 1.5 m of
+another machine's work area, and no box makes a truck wait inside a station core that does not hold it. The refuel queue and bay are service stands: they do not make the yard a place to send a machine to. No zone has a
 stand yet: the places the choreography leaves room to stand are not places a lane can reach and leave by those rules, so each zone lists no kinds.

@@ -153,8 +153,8 @@ namespace DeviceChain.Sitepulse.App
             var stations = new List<StationSpec>();
             foreach (var s in Array(root, "stations"))
             {
-                Keys(s, "a station", new[] { "id", "lane", "core", "buffer", "capacity", "window_s", "headway_s", "ride_through", "partner", "min_gap_m" },
-                    new[] { "id", "lane", "core", "buffer", "capacity", "window_s", "headway_s", "ride_through", "partner", "min_gap_m" });
+                Keys(s, "a station", new[] { "id", "lane", "core", "buffer", "capacity", "window_s", "headway_s", "ride_through", "partner", "min_gap_m", "holds" },
+                    new[] { "id", "lane", "core", "buffer", "capacity", "window_s", "headway_s", "ride_through", "partner", "min_gap_m", "holds" });
                 var lane = LaneRef(s, "lane", counts, "station " + Str(s, "id"));
                 StationPartner partner = null;
                 var pj = s.GetProperty("partner");
@@ -168,7 +168,7 @@ namespace DeviceChain.Sitepulse.App
 
                 stations.Add(new StationSpec(Str(s, "id"), lane, Run(s.GetProperty("core"), counts[lane], "station " + Str(s, "id") + " core"),
                     Run(s.GetProperty("buffer"), counts[lane], "station " + Str(s, "id") + " buffer"), Int(s, "capacity"), Num(s, "window_s"), Num(s, "headway_s"),
-                    s.GetProperty("ride_through").GetBoolean(), partner, Num(s, "min_gap_m")));
+                    s.GetProperty("ride_through").GetBoolean(), partner, Num(s, "min_gap_m"), Array(s, "holds").Select(h => h.GetString()).ToList()));
             }
 
             var work = new List<WorkArea>();

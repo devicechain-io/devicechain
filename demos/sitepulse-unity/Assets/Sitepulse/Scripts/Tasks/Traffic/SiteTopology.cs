@@ -269,7 +269,7 @@ namespace DeviceChain.Sim.Traffic
     public sealed class StationSpec
     {
         public StationSpec(string id, string lane, CellRun core, CellRun buffer, int capacity, double windowSeconds, double headwaySeconds,
-            bool rideThrough, StationPartner partner, double minGapM)
+            bool rideThrough, StationPartner partner, double minGapM, IReadOnlyList<string> holds)
         {
             Id = id;
             Lane = lane;
@@ -281,6 +281,7 @@ namespace DeviceChain.Sim.Traffic
             RideThrough = rideThrough;
             Partner = partner;
             MinGapM = minGapM;
+            Holds = holds;
         }
 
         public string Id { get; }
@@ -296,6 +297,9 @@ namespace DeviceChain.Sim.Traffic
 
         public StationPartner Partner { get; }
         public double MinGapM { get; }
+
+        /// <summary>The junction boxes admission to this station takes the grant of, before the truck enters the core: the boxes that cannot lie clear of it.</summary>
+        public IReadOnlyList<string> Holds { get; }
     }
 
     /// <summary>The ground another machine works: a convex polygon round its footprint over its whole track.</summary>

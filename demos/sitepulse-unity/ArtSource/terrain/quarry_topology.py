@@ -931,6 +931,12 @@ def partner_ready(inputs, machine):
     return m, tr, i * fl["dt"], (r3(tr["x"][i]), r3(tr["z"][i]), r3(tr["heading"][i]))
 
 
+# The boxes a station holds (see V10): the ones that cannot lie clear of its core. The pad's core is the stretch of the loop inside the fill pad,
+# and the roads that serve the pad run along and across it, so their boxes' cells (and the room beyond one) lie in it; the load core's first cells
+# are the room beyond the ramp-bottom box, where the loop crosses itself.
+STATION_HOLDS = {"load": ["oncoming-ramp-bottom"], "pad": ["oncoming-pad-south", "oncoming-ramp-top+pad-gate+pad-south"]}
+
+
 def build_stations(inputs, loop):
     fl = inputs.live
     tr0 = fl["tracks"][0]
@@ -1432,6 +1438,41 @@ def v5_boxes(t, inputs):
     return out
 
 
+def v10_waiting_cells(t):
+    """V10: no junction box has an approach cell, a member or a room cell inside a station core unless the station holds the box. V4 measures two
+    trucks through a station's core at every headway, which is only the whole truth while nobody WAITS in the core: a truck held at a box's
+    approach, or standing in its room, inside a core is closed on by the next member the station admits, and the station's timing (which assumes
+    that truck keeps moving) never sees it. Where a box cannot lie clear of a core (the road beside the pad runs along it), the station holds the
+    box (its `holds`): admission to the station takes the box's grant too, before the truck enters the core, so nothing waits on the box inside it.
+    A hold must name a box that touches the core - a hold nothing needs is how the list stops meaning anything."""
+    out = []
+    ids = {j["id"] for j in t.junctions}
+    for st in t.stations:
+        lane = t.by[st["lane"]]
+        n = len(lane)
+        core = set(run_cells(st["core"], n))
+        held = set(st["holds"])
+        for jid in sorted(held - ids):
+            out.append("V10 waiting: station %s holds junction %s, which the file does not have" % (st["id"], jid))
+        for j in t.junctions:
+            touching = []
+            for what, cells in (("approach cell", [a["cell"] for a in j["approach"] if a["lane"] == lane.id]),
+                                ("member cell", sorted(junction_cells(j, lane))),
+                                ("room cell", [k for r in j["room"] if r["lane"] == lane.id for k in run_cells(r["cells"], n)])):
+                inside = sorted(set(cells) & core)
+                if inside:
+                    touching.append((what, inside))
+            if j["id"] in held and not touching:
+                out.append("V10 waiting: station %s holds junction %s, which has no approach, member or room cell in its core (a hold nothing needs)" % (st["id"], j["id"]))
+            if j["id"] in held:
+                continue
+            for what, inside in touching:
+                out.append("V10 waiting: junction %s has %s %s on %s inside the core of station %s (%d-%d), where a held truck is closed on by the next member and the station does not hold the box"
+                           % (j["id"], what, ", ".join(str(k) for k in inside) if len(inside) < 4 else "%d-%d" % (inside[0], inside[-1]), lane.id,
+                              st["id"], st["core"][0], st["core"][1]))
+    return out
+
+
 def lane_points(lane):
     """The line a lane is driven on, as arrays: each cell's start, and the last cell's end."""
     xs = [c[0] for c in lane.cells] + [lane.cells[-1][2]]
@@ -1542,7 +1583,7 @@ def v9_work_areas(t, inputs):
     return out
 
 
-VALIDATORS = [v1_cycle_capacity, v2_span_complement, v3_stands, v4_stations, v5_boxes, v6_drivable, v7_fresh, v8_zones, v9_work_areas]
+VALIDATORS = [v1_cycle_capacity, v2_span_complement, v3_stands, v4_stations, v5_boxes, v6_drivable, v7_fresh, v8_zones, v9_work_areas, v10_waiting_cells]
 NEEDS_INPUTS = {v3_stands, v4_stations, v5_boxes, v6_drivable, v7_fresh, v8_zones, v9_work_areas}
 
 
@@ -1574,6 +1615,8 @@ def assemble(inputs):
     stations = build_stations(inputs, loop)
     uncovered, exits = classify_conflicts(lanes, inputs, exits, stands, bay, stations)
     junctions = build_junctions(lanes, uncovered)
+    for st in stations:
+        st["holds"] = sorted(STATION_HOLDS.get(st["id"], []))
     by_id = {l.id: l for l in lanes}
     entries = []
     for p in pend:
@@ -1729,7 +1772,7 @@ def report(t, inputs):
     return lines
 
 
-CONTROLS = 42
+CONTROLS = 49
 
 # The best stand the search for one found in the yard (the one zone with room): the pose stand_room finds in the yard's north-east patch and the two lanes
 # that reach and leave it. selftest builds the topology with it through the generator's own path and the checks refuse it: its lanes run over each other
@@ -1905,6 +1948,35 @@ def selftest(inputs, verbose=False):
     case("V5: a box that includes the cell it is approached by", reach_back, [v5_boxes], "V5 approach")
     case("V5: the haul threshold raised past the nearest pair that does not conflict", lambda d2: d2["rules"].update(conflict_haul_m=clear["haul"][0] + 0.01), [v5_boxes], "V5 conflict")
     case("V5: the same threshold lowered below it (control)", lambda d2: d2["rules"].update(conflict_haul_m=clear["haul"][0] - 0.01), [v5_boxes], None, passes=True)
+
+    # V5, the span's boundary: two cells of one lane that overlap and are 14 m apart along it (just past the 12.8 m a follower is kept at) are a lane folding
+    # back over itself, and nothing here is a box or a station; 10 m apart is a machine and its follower
+    def hairpin(cells_out):
+        def go(d2):
+            x0, z0 = 900.0, 900.0          # far from every other lane, and past the cells a box's members list
+            lane_of(d2, "road/fill-return/east")["cells"] += ([[x0 + 2.0 * i, z0, x0 + 2.0 * i + 2.0, z0] for i in range(cells_out)]
+                                                              + [[x0 + 2.0 * cells_out - 2.0 * i, z0 + 0.4, x0 + 2.0 * cells_out - 2.0 * i - 2.0, z0 + 0.4] for i in range(cells_out)])
+        return go
+    case("V5: a lane that doubles back over itself, the overlapping cells 14 m apart along it (no box, no station)", hairpin(4), [v5_boxes],
+         lambda x: x.startswith("V5 conflict: road/fill-return/east cell") and "and road/fill-return/east cell" in x and "the same lane 14 m apart along it" in x)
+    case("V5: the same doubled back 10 m apart along it (a follower's distance; control)", hairpin(3), [v5_boxes],
+         lambda x: x.startswith("V5 conflict: road/fill-return/east cell") and "the same lane" in x, passes=True)
+
+    # V10: a box with cells in a station core the station does not hold
+    def pad_holds(boxes):
+        return lambda d2: next(s for s in d2["stations"] if s["id"] == "pad").update(holds=boxes)
+    case("V10: the pad holds no box (pad-south's approach cell 151 is in its core)", pad_holds([]), [v10_waiting_cells],
+         lambda x: "junction oncoming-pad-south has approach cell 151 on loop inside the core of station pad" in x)
+    case("V10: the pad holds no box (the merged box's room, loop 134-140, is in its core)", pad_holds([]), [v10_waiting_cells],
+         lambda x: "has room cell 134-140 on loop inside the core of station pad" in x)
+    case("V10: the pad holds the merged box and not pad-south", pad_holds(["oncoming-ramp-top+pad-gate+pad-south"]), [v10_waiting_cells],
+         lambda x: "junction oncoming-pad-south has approach cell 151" in x)
+    case("V10: the load station holds no box (the ramp-bottom box's room is its first cells)", lambda d2: next(s for s in d2["stations"] if s["id"] == "load").update(holds=[]),
+         [v10_waiting_cells], lambda x: "junction oncoming-ramp-bottom has room cell 363-366 on loop inside the core of station load" in x)
+    case("V10: the load station holds a box that touches nothing of its core", lambda d2: next(s for s in d2["stations"] if s["id"] == "load").update(holds=["oncoming-ramp-bottom", "merge-bay"]),
+         [v10_waiting_cells], lambda x: "station load holds junction merge-bay" in x and "a hold nothing needs" in x)
+    case("V10: the pad holds a box the file does not have", pad_holds(["oncoming-pad-south", "oncoming-ramp-top+pad-gate+pad-south", "no-such-box"]), [v10_waiting_cells],
+         lambda x: "station pad holds junction no-such-box, which the file does not have" in x)
 
     # V6: a lane cell on the light tower, 3.1 m and 3.3 m off it, the middle of a long cell, a climb
     towers = [o for o in inputs.obstacles if o[1] == "light_tower"]
