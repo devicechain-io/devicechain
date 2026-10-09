@@ -8,6 +8,12 @@ query {
 }
 ```
 
+## valid with attribute-style info string
+
+```graphql{1}
+query { thingsByToken(tokens: ["a"]) { token } }
+```
+
 ## unknown field
 
 ```graphql
@@ -31,6 +37,50 @@ query { things(criteria: {pageNumber: "one", pageSize: 5}) { token } }
 ```graphql
 # schema: nowhere
 query { thingsByToken(tokens: ["a"]) { token } }
+```
+
+## subscription without a root
+
+```graphql
+subscription { noSuchStream(zzz: 1) { qqq } }
+```
+
+## capitalised keyword
+
+```graphql
+Query { thingsByToken(tokens: ["a"]) { nope } }
+```
+
+## misspelt keyword
+
+```graphql
+qeury { thingsByToken(tokens: ["a"]) { nope } }
+```
+
+## bare selection
+
+```graphql
+thingsByToken(tokens: ["a"]) { nope }
+```
+
+## description lead
+
+```graphql
+"""doc"""
+query { thingsByToken(tokens: ["a"]) { nope } }
+```
+
+## empty block
+
+```graphql
+# only a comment
+```
+
+## sdl then operation
+
+```graphql
+type Thing { token: String! }
+query { thingsByToken(tokens: ["a"]) { nope } }
 ```
 
 ## sdl is skipped
