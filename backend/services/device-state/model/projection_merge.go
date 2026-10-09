@@ -343,8 +343,10 @@ func (e *BatchRefusal) Unwrap() error { return e.Err }
 // locked out of order; the inactivity sweep updates many rows in scan order; and during a
 // rolling upgrade, an older per-event writer locks one device's readings in payload order.
 // A batch that loses is a *BatchRefusal and its tenant's updates are merged again one at a
-// time, which is correct and costs transactions; a sweep that loses is recorded as a failed
-// pass and runs again at the next.
+// time, which costs transactions. That one-event write is a transaction too and can lose a
+// deadlock in its turn: the processor retries it in place a few times, and an event that still
+// loses is left unacknowledged for the broker to redeliver, not applied. A sweep that loses is
+// recorded as a failed pass and runs again at the next.
 func (api *Api) MergeProjectionBatch(ctx context.Context, updates []ProjectionUpdate) error {
 	byTenant := map[string]map[string][]int{}
 	for i, u := range updates {
