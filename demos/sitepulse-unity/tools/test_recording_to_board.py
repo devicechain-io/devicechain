@@ -718,6 +718,20 @@ class ChapterOrder(Base):
         with self.assertRaisesRegex(c.Refusal, "outside the excerpt"):
             c.validate_output(doc)
 
+    def test_a_last_chapter_a_few_ms_past_the_end_is_moved_to_the_end(self):
+        got = c.clamp_chapters([{"tMs": 100, "name": "a", "note": "x"}, {"tMs": 1004, "name": "done", "note": "x"}], 1000)
+        self.assertEqual([100, 1000], [x["tMs"] for x in got])
+
+    def test_a_chapter_far_past_the_end_is_refused(self):
+        with self.assertRaisesRegex(c.Refusal, "after the end of the run"):
+            c.clamp_chapters([{"tMs": 2500, "name": "done", "note": "x"}], 1000)
+
+    def test_a_chapter_after_the_end_of_the_run_fails_output_validation(self):
+        doc, _ = c.convert(make_run(self.run_dir), BOARD)
+        doc["chapters"].append({"tMs": doc["durationMs"] + 1, "name": "late", "note": "ok"})
+        with self.assertRaisesRegex(c.Refusal, "after the end of the run"):
+            c.validate_output(doc)
+
 
 class Scan(unittest.TestCase):
     def test_each_kind_is_found(self):

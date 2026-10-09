@@ -384,7 +384,7 @@ def convert(run_dir, board, excerpt=None):
             counts["otherRowsDropped"] += 1
 
     # --- header
-    chapters = build_chapters(video, presenter, events)
+    chapters = clamp_chapters(build_chapters(video, presenter, events), duration_ms)
     doc = {
         "formatVersion": FORMAT_VERSION,
         "kind": FORMAT_KIND,
@@ -479,6 +479,23 @@ def build_chapters(video, presenter, events):
     return chapters
 
 
+CHAPTER_OVERRUN_MS = 1000
+
+
+def clamp_chapters(chapters, duration_ms):
+    """The chapter clock is an estimate (the mean of the presenter offsets), so the last step,
+    which marks the end of the run, can land a few milliseconds after the recording's own
+    duration. Such a chapter is moved to the end of the run; one more than CHAPTER_OVERRUN_MS
+    beyond it means the clock is wrong, and the conversion is refused."""
+    out = []
+    for ch in chapters:
+        if ch["tMs"] > duration_ms:
+            _require(ch["tMs"] - duration_ms <= CHAPTER_OVERRUN_MS, "chapter %r is %d ms after the end of the run" % (ch["name"], ch["tMs"] - duration_ms))
+            ch = dict(ch, tMs=duration_ms)
+        out.append(ch)
+    return out
+
+
 # --- output validation -----------------------------------------------------
 
 _HEX64 = re.compile(r"[0-9a-f]{64}")
@@ -546,6 +563,7 @@ def validate_output(doc):
         _keys(c, {"tMs", "name", "note"}, "chapter")
         _int(c["tMs"], "chapter tMs")
         _require(c["tMs"] >= last, "chapters are not in time order")
+        _require(c["tMs"] <= doc["durationMs"], "a chapter lies after the end of the run")
         last = c["tMs"]
         _g("chapterName", c["name"], "chapter name")
         _g("chapterNote", c["note"], "chapter note")
