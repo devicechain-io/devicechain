@@ -409,7 +409,7 @@ dcctl bootstrap local my-instance
 
 **需要三个可调度节点，而不只是三个节点。** 服务器使用硬性 anti-affinity。如果不能每节点部署一个，多余 Pod 保持 `Pending`，而不共用节点；共置副本只增加成本，无法提供节点故障保护。`dcctl` 会统计可调度节点，在创建资源前拒绝不足的集群。本地 `kind` 需要三个 worker：kind 只在单节点集群移除控制平面 taint，因此一个控制平面加两个 worker 虽有三个节点，实际只有两个可用。
 
-**`--ha` 还将 `event-management` 运行为两个 Pod。** 它负责存储每个事件。三节点服务池中，一个节点还运行入站事件 stream 的 NATS leader，其 CPU 消耗高于任何服务。测试时，scheduler 将唯一的 `event-management` Pod 与 `device-state` 放在该节点，CPU 达 94–95%；输入每秒 6,800 个事件时，单 Pod 在三分钟内存储速率降至每秒 6,592，成为首个落后阶段。第二个 Pod 让存储使用另一节点 CPU。两者偏好不同节点，但不保证。每个 Pod 独立填充批次，因此批次事件约减半，事件存储每事件事务数约翻倍；事件存储节点 CPU 保持低于 70%。[实测吞吐](#measured-throughput)的持续速率使用单 Pod 测得，尚未在两个 Pod 下重测。两个 Pod 合计请求 1.8 核 CPU，为单 Pod 两倍。每个 Pod 也有自己的事件存储连接，因此这些实例为平台保留 80 个连接，而非 40（参见[连接上限](../guides/sql-and-bi-access.md#connection-cap)）。`--compact --ha` 和不带 `--ha` 时，`event-management` 仍为一个 Pod。
+**`--ha` 还将 `event-management` 运行为两个 Pod。** 它负责存储每个事件。三节点服务池中，一个节点还运行入站事件 stream 的 NATS leader，其 CPU 消耗高于任何服务。测试时，scheduler 将唯一的 `event-management` Pod 与 `device-state` 放在该节点，CPU 达 94–95%；输入每秒 6,800 个事件时，单 Pod 在三分钟内存储速率降至每秒 6,592，成为首个落后阶段。第二个 Pod 让存储使用另一节点 CPU。两者偏好不同节点，但不保证。每个 Pod 独立填充批次，因此批次事件约减半，事件存储每事件事务数约翻倍；事件存储节点 CPU 保持低于 70%。[实测吞吐](#measured-throughput)最后一行的每秒 6,000 个事件使用两个 Pod 测得。两个 Pod 合计请求 1.8 核 CPU，为单 Pod 两倍。每个 Pod 也有自己的事件存储连接，因此这些实例为平台保留 80 个连接，而非 40（参见[连接上限](../guides/sql-and-bi-access.md#connection-cap)）。`--compact --ha` 和不带 `--ha` 时，`event-management` 仍为一个 Pod。
 
 #### `--ha` 下的数据库 {#ha-databases}
 
@@ -617,7 +617,7 @@ kubectl get pods -A -l cnpg.io/cluster -o wide
 
 v0.18.0 两行在该版本测量，最后一行在 v0.19.0 发布候选版本，其余在两者之间的开发构建。负载生成器均在独立节点，事件存储均采用复制式高可用。v0.18.0 默认瓶颈为 `device-management` 解析器池，其后是 `event-sources`、`device-state` 的 CPU 上限，上述配置已提高它们。提高后存储成为瓶颈：5 个写入器、每批最多 32 个事件，从每秒 4,400 个事件起批次全满，每次提交约 38 毫秒，存储止于约每秒 4,200。因此 `event-management` 现默认 10 个写入器、每批最多 64 个，见[事件持久化](./observability.md#event-persistence)。
 
-v0.18.0 调优行使用：`device-management` 两副本，`resolution.workers: 32`、`rdbConfiguration.maxOpenConnections: 48`；`event-sources` 两副本；`event-management` 的 `persistence.writers: 10`、`persistence.maxBatch: 64`，位于无事件存储主实例的节点；`device-state` 的 `projection.writers: 5`、`projection.maxBatch: 64`、`projection.lingerMillis: 25`；CPU 上限 4 核（`event-processing` 为 2 核），内存上限 1Gi。之后调优行保留单副本 `device-management` 默认值，其他事件存储和状态配置相同，对 `device-management`、`event-sources`、`event-management`、`device-state` 设置 4 核 CPU、1Gi 内存上限。`event-management` 最多约用 1.7 核，未在默认 2 核上限下测量。所有测试平均批次小于 32，不能证明 64 比 32 有帮助。每秒 6,000 个事件时平均每批约 21 个；更高输入下平均 28 至 30，尚未达到上限，但存储速度不再增长，三个节点中两个（包括事件存储节点）CPU 达 86% 至 95%。未单独确定哪个限制速率，但此三节点集群需要更多节点后才值得进一步服务调优。采用新持久化默认值的默认安装已在最后两行的分离集群上测量，单 Pod `event-management` 持续每秒 6,000 个事件；未在其他行的三节点集群测量。
+v0.18.0 调优行使用：`device-management` 两副本，`resolution.workers: 32`、`rdbConfiguration.maxOpenConnections: 48`；`event-sources` 两副本；`event-management` 的 `persistence.writers: 10`、`persistence.maxBatch: 64`，位于无事件存储主实例的节点；`device-state` 的 `projection.writers: 5`、`projection.maxBatch: 64`、`projection.lingerMillis: 25`；CPU 上限 4 核（`event-processing` 为 2 核），内存上限 1Gi。之后调优行保留单副本 `device-management` 默认值，其他事件存储和状态配置相同，对 `device-management`、`event-sources`、`event-management`、`device-state` 设置 4 核 CPU、1Gi 内存上限。`event-management` 最多约用 1.7 核，未在默认 2 核上限下测量。所有测试平均批次小于 32，不能证明 64 比 32 有帮助。每秒 6,000 个事件时平均每批约 21 个；更高输入下平均 28 至 30，尚未达到上限，但存储速度不再增长，三个节点中两个（包括事件存储节点）CPU 达 86% 至 95%。未单独确定哪个限制速率，但此三节点集群需要更多节点后才值得进一步服务调优。采用新持久化默认值的默认安装已在最后两行的分离集群上测量，持续每秒 6,000 个事件，最后一行的 `event-management` 为两个 Pod；未在其他行的三节点集群测量。
 
 #### 事件存储卷 {#event-store-volume}
 

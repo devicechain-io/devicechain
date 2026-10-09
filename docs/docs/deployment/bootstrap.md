@@ -854,8 +854,7 @@ offered, with one pod, storage fell to 6,592 per second over three minutes, the 
 behind. A second pod lets storing use another node's CPU. The two pods prefer different nodes, but that is a preference, not a
 guarantee. Each pod fills its own batches, so a batch holds about half as many events and the
 event store commits about twice as many transactions per event; the event store's node stayed
-below 70% CPU. The sustained rate in [Measured throughput](#measured-throughput) was measured with
-one pod, and has not been measured again with two. Two pods request twice the CPU, 1.8 cores together. Each pod
+below 70% CPU. The 6,000 events per second in the last row of [Measured throughput](#measured-throughput) was measured with two pods. Two pods request twice the CPU, 1.8 cores together. Each pod
 also holds its own connections to the event store, so these instances keep 80 of its connections
 for the platform instead of 40 (see
 [Connection cap](../guides/sql-and-bi-access.md#connection-cap)). With `--compact --ha`, and
@@ -1404,7 +1403,7 @@ stopped rising with batches averaging 28 to 30, below the limit, while two of th
 of them the event store's, were at 86 to 95% CPU. Which of those held the rate was not isolated,
 but more throughput on that three-node cluster needs more nodes before more per-service tuning. A
 default installation with the new persistence settings was measured on the split clusters in the
-last two rows, where it sustained 6,000 events per second with `event-management` at one pod; it
+last two rows, where it sustained 6,000 events per second, with `event-management` at two pods in the last row; it
 has not been measured on the three-node cluster of the other rows.
 
 #### Event store volume {#event-store-volume}

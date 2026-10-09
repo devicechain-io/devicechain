@@ -4685,8 +4685,7 @@ ejecuta también el servidor NATS que lidera el stream de eventos entrantes. En 
 rendimiento de la versión, el planificador puso allí el único pod de `event-management` junto con
 `device-state`; ese nodo funcionó al 94-95% de CPU y, con un solo pod, el almacenamiento bajó a 6592
 eventos por segundo con 6800 ofrecidos, la primera etapa en quedarse atrás. Un segundo pod permite
-almacenar usando la CPU de otro nodo. La cifra de [Rendimiento](#v0190-performance) se midió con un
-pod, y no se ha vuelto a medir con dos. Los pods prefieren nodos distintos, pero es una preferencia, no
+almacenar usando la CPU de otro nodo. La cifra de [Rendimiento](#v0190-performance) se midió con dos pods. Los pods prefieren nodos distintos, pero es una preferencia, no
 una garantía. Cada uno llena sus propios lotes, así que el almacén de eventos confirma más o menos
 el doble de transacciones por evento; su nodo se mantuvo por debajo del 70% de CPU. Si instalas el
 chart por tu cuenta, su valor predeterminado sigue siendo una réplica: establece

@@ -4356,7 +4356,7 @@ NATS server that leads the incoming-event stream. In the release benchmark the s
 single `event-management` pod there with `device-state`; that node ran at 94 to 95% CPU, and with
 one pod, storage fell to 6,592 events a second at 6,800 offered, the first stage to fall behind. A
 second pod lets storing use another node's CPU. The figure under [Performance](#v0190-performance)
-was measured with one pod, and has not been measured again with two. The pods prefer different nodes,
+was measured with two pods. The pods prefer different nodes,
 but that is a preference, not a guarantee. Each fills its own batches, so the event store commits
 about twice as many transactions per event; its node stayed below 70% CPU. If you install the chart
 yourself, its default is still one replica: set `functionalAreas.event-management.replicas: 2`,

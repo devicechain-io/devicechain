@@ -2622,7 +2622,7 @@ session ID 超出数据库有符号 64 位的状态变更事件过去同样重�
 
 已显式设置这些值的安装会保留原值；`persistence.lingerMillis: 0` 仍表示不等待。写入工作线程发现事件不足一整批时，现在最多等待 10 毫秒以收集更多事件。因此每个 Pod 每秒不足几百事件时，提交时间比以前最多晚 10 毫秒，`persist_duration_seconds` 也大约增加同样幅度；存在积压时没有变化。发布基准在每秒 3,000 事件下，每个存储事件的事务数降低 37%（从 0.126 到 0.080），存储耗时中位数增加约 5 毫秒，最慢 1% 降低 18%。这次比较也改变了事件存储的键和归档压缩、服务 CPU 请求及放置、`device-state` 写入工作线程数、检测 CPU 限制，以及 NATS 服务器请求和内存限制，因此无法单独归因于等待。在五分钟、每秒提供 6,800 事件的运行中，逐事件提交路径占 `event-management` CPU 的 4.8%，每事件 0.050 个事务；此前基准为 24%，但它使用加入等待之前的构建和不同服务节点。`--compact` 安装获得相同默认值，但不增加第二个 Pod；其请求不变。
 
-**`--ha` 下运行两个 `event-management` Pod。** 三节点服务池中，有一个节点也运行领导入站事件流的 NATS 服务器。发布基准中，调度器将唯一的 `event-management` Pod 和 `device-state` 放在该节点；节点 CPU 达到 94–95%，每秒提供 6,800 事件时，单 Pod 存储速率降至 6,592 事件，成为首个落后阶段。第二个 Pod 能使用另一节点 CPU 存储。[性能](#v0190-performance)中的数据用一个 Pod 测得，尚未用两个重新测试。Pod 倾向不同节点，但并不保证。每个 Pod 分别填充批次，因此事件存储每个事件提交的事务数约翻倍；数据库节点 CPU 保持低于 70%。自行安装 chart 时，默认仍为一个副本：设置 `functionalAreas.event-management.replicas: 2`，若事件存储由本仓库 OpenTofu 构建，还需设置 `event_management_replicas = 2`，以预留第二个 Pod 的连接。
+**`--ha` 下运行两个 `event-management` Pod。** 三节点服务池中，有一个节点也运行领导入站事件流的 NATS 服务器。发布基准中，调度器将唯一的 `event-management` Pod 和 `device-state` 放在该节点；节点 CPU 达到 94–95%，每秒提供 6,800 事件时，单 Pod 存储速率降至 6,592 事件，成为首个落后阶段。第二个 Pod 能使用另一节点 CPU 存储。[性能](#v0190-performance)中的数据用两个 Pod 测得。Pod 倾向不同节点，但并不保证。每个 Pod 分别填充批次，因此事件存储每个事件提交的事务数约翻倍；数据库节点 CPU 保持低于 70%。自行安装 chart 时，默认仍为一个副本：设置 `functionalAreas.event-management.replicas: 2`，若事件存储由本仓库 OpenTofu 构建，还需设置 `event_management_replicas = 2`，以预留第二个 Pod 的连接。
 
 ##### 资源与放置 {#v0190-sizing}
 
