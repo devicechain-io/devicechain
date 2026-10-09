@@ -89,6 +89,9 @@ type Config struct {
 	// TickInterval is how often the live loop wakes to honor the checkpoint interval
 	// on a quiet stream. Defaults to one second.
 	TickInterval time.Duration
+	// CheckpointTimeout bounds one checkpoint (the derived-event publishes plus the snapshot
+	// save). Zero means defaultCheckpointTimeout. See that constant for the reasoning.
+	CheckpointTimeout time.Duration
 	// Lateness bounds how far event time is held back before advancing the watermark
 	// (out-of-orderness tolerance).
 	Lateness time.Duration
@@ -502,6 +505,16 @@ type ResolvedEventsProcessor struct {
 	gapHeld *messaging.Message
 	// gapFailLogged limits the gap-fill failure log to once per park, since the ticker retries.
 	gapFailLogged bool
+	// gapParkedSince is when the current run of consecutive failed fills began; zero when the
+	// last fill succeeded or none is failing. See gapParkLimit.
+	gapParkedSince time.Time
+	// lastSaveDuration is how long the last snapshot Save that completed took; it sizes the next
+	// one's deadline (saveTimeout). snapshotRetryAfter and snapshotBackoff pace the retry of a
+	// failed snapshot (noteSnapshotFailure). All three belong to the single-writer loop.
+	lastSaveDuration   time.Duration
+	snapshotFn         func() ([]byte, error)
+	snapshotRetryAfter time.Time
+	snapshotBackoff    time.Duration
 	// poisonSkipped counts sequences recorded as handled without applying (skipPoison). The gap
 	// fill reads it around each message to tell a skipped poison message from an applied one,
 	// since applyResolved reports both as having advanced the engine.
@@ -1522,6 +1535,10 @@ func (rp *ResolvedEventsProcessor) run() {
 		if rp.idleUncommitted || rp.gapHeld != nil {
 			liveItems = nil
 		}
+		// Stamp progress at the top of EVERY pass. The select below wakes at least once per tick,
+		// so an idle loop still stamps once a tick, and a loop hung inside any case never gets
+		// back here: its heartbeat goes stale while every gauge sampled on the loop freezes.
+		rp.metrics.recordLoopHeartbeat(rp.clock.Now())
 		select {
 		case <-rp.pctx().Done():
 			rp.finalCheckpoint()
@@ -2027,7 +2044,11 @@ func (rp *ResolvedEventsProcessor) idleAdvance(ctx context.Context, now time.Tim
 // the next fence/Save), and the definitive fix is the Slice-6 singleton deploy (one writer, no
 // overlap); this fence + the Save equal-seq/watermark guards are the pre-Slice-6 runtime backstop.
 func (rp *ResolvedEventsProcessor) detectStaleOwner(ctx context.Context) bool {
-	seq, ok, err := rp.Store.LoadCommittedSeq(ctx, rp.cfg.PartitionId)
+	// The same deadline discipline as the checkpoint: this read runs on the loop, and an
+	// unanswered one must come back as the "transient blip" below rather than hold the loop.
+	readCtx, cancel := context.WithTimeout(ctx, rp.checkpointTimeout())
+	seq, ok, err := rp.Store.LoadCommittedSeq(readCtx, rp.cfg.PartitionId)
+	cancel()
 	if err != nil || !ok {
 		return false
 	}
@@ -2375,6 +2396,25 @@ func (rp *ResolvedEventsProcessor) ackRuleFact(msg messaging.Message) {
 // durable truth. Reporting success off a call that silently declined to commit would put
 // a false erasure in the deletion record.
 func (rp *ResolvedEventsProcessor) checkpoint(ctx context.Context) bool {
+	return rp.runCheckpoint(ctx, false)
+}
+
+// forceCheckpoint is checkpoint for the callers that cannot wait out the snapshot retry
+// backoff: the final flush on the way out, and a tenant eviction, whose answer to another
+// service is a claim about what is durable.
+func (rp *ResolvedEventsProcessor) forceCheckpoint(ctx context.Context) bool {
+	return rp.runCheckpoint(ctx, true)
+}
+
+func (rp *ResolvedEventsProcessor) runCheckpoint(ctx context.Context, force bool) bool {
+	// 🔴 EVERY NETWORK CALL IN A CHECKPOINT RUNS UNDER A DEADLINE, each phase under its own (the
+	// publish and the Save below). This is the single-writer loop, and these calls are on a
+	// context that otherwise has none: a black-holed database or broker socket would hold the
+	// loop inside one of them with detect_is_leader and detect_live both reading 1, every gauge
+	// the alerts read frozen at its last value (they are sampled on this very loop), and nothing
+	// logged. With a deadline the same fault returns as an ordinary failed checkpoint, which is
+	// already counted, already retried, and already alerted on. finalCheckpoint's own 5s on the
+	// ctx it passes is shorter and wins.
 	if rp.stale {
 		return false // a split-brain-losing writer: no publish, no commit, no ack (see stale)
 	}
@@ -2404,14 +2444,25 @@ func (rp *ResolvedEventsProcessor) checkpoint(ctx context.Context) bool {
 	// Deliver-before-checkpoint: hand off every buffered detection first. If any fails
 	// (retryable broker error), defer the entire checkpoint so the producing messages stay
 	// unacked and a replay re-derives/re-emits.
-	if !rp.publishPending(ctx) {
+	pubCtx, pubCancel := context.WithTimeout(ctx, rp.checkpointTimeout())
+	published := rp.publishPending(pubCtx)
+	pubCancel()
+	if !published {
 		return false
 	}
 	if rp.dirty {
+		// A snapshot that just failed is not rebuilt and re-sent on every tick: serializing the
+		// whole engine and writing it is the expensive part, and a store that is struggling with
+		// it is the last thing to hammer. Forced callers go through regardless.
+		if !force && rp.clock.Now().Before(rp.snapshotRetryAfter) {
+			return false
+		}
 		start := rp.clock.Now()
-		payload, err := rp.engine.Snapshot()
+		payload, err := rp.snapshotEngine()
 		if err != nil {
 			log.Error().Err(err).Msg("Failed to serialize DETECT snapshot; deferring checkpoint")
+			rp.metrics.recordCheckpointFailure(checkpointStageSerialize)
+			rp.noteSnapshotFailure()
 			return false
 		}
 		wm := rp.engine.Watermark()
@@ -2421,7 +2472,12 @@ func (rp *ResolvedEventsProcessor) checkpoint(ctx context.Context) bool {
 			Watermark:   wm,
 			Payload:     payload,
 		}
-		if err := rp.Store.Save(ctx, snap); err != nil {
+		saveCtx, saveCancel := context.WithTimeout(ctx, rp.saveTimeout())
+		saveStart := time.Now()
+		err = rp.Store.Save(saveCtx, snap)
+		saveDur := time.Since(saveStart)
+		saveCancel()
+		if err != nil {
 			if errors.Is(err, model.ErrStaleCheckpoint) {
 				// Another writer advanced the checkpoint past ours: we are the losing side of a
 				// split brain and must stop — no ack, no further publish. Halt the loop so this
@@ -2435,8 +2491,12 @@ func (rp *ResolvedEventsProcessor) checkpoint(ctx context.Context) bool {
 				return false
 			}
 			log.Error().Err(err).Msg("Failed to commit DETECT snapshot; messages remain unacked and will redeliver")
+			rp.metrics.recordCheckpointFailure(checkpointStageSave)
+			rp.noteSnapshotFailure()
 			return false
 		}
+		rp.lastSaveDuration = saveDur
+		rp.snapshotBackoff, rp.snapshotRetryAfter = 0, time.Time{}
 		rp.dirty = false
 		// A committed snapshot makes any idle-advanced frontier durable, so the loop may resume
 		// applying live events (see the items-branch park).
@@ -2484,10 +2544,12 @@ func (rp *ResolvedEventsProcessor) checkpoint(ctx context.Context) bool {
 func (rp *ResolvedEventsProcessor) haltStaleWriter() {
 	rp.stale = true
 	rp.pcancel()
-	if !rp.leadershipEnabled() {
-		// The unleased path keeps its original behaviour: halt the loop and leave the
-		// process alone. Nothing here took a partition, so nothing is being held from
-		// anyone.
+	if !rp.leadershipEnabled() && rp.Microservice == nil {
+		// Only a struct-literal processor (no Microservice to fail) stops here: halting the
+		// loop is all it can do. Nothing here took a partition, so nothing is being held from
+		// anyone. A processor wired into a service always reaches FailNow below, whether or
+		// not leadership is enabled: a halted writer behind a Ready pod is the shape this
+		// function exists to prevent, and "unleased" is not a reason to allow it.
 		return
 	}
 	if rp.supCancel != nil {
@@ -2704,6 +2766,7 @@ func (rp *ResolvedEventsProcessor) publishPending(ctx context.Context) bool {
 	for i < len(rp.pendingDets) {
 		if err := rp.publisher.Publish(ctx, rp.pendingDets[i].Detection, rp.pendingDets[i].triggeredAt); err != nil {
 			log.Error().Err(err).Msg("Failed to publish a derived event; deferring checkpoint (will retry).")
+			rp.metrics.recordCheckpointFailure(checkpointStagePublish)
 			rp.pendingDets = rp.pendingDets[i:]
 			return false
 		}
@@ -2711,6 +2774,72 @@ func (rp *ResolvedEventsProcessor) publishPending(ctx context.Context) bool {
 	}
 	rp.pendingDets = rp.pendingDets[:0]
 	return true
+}
+
+// defaultCheckpointTimeout bounds one scheduled checkpoint. A healthy one is a handful of
+// milliseconds of publish plus one snapshot upsert, and the largest snapshots are megabytes
+// written in a single transaction, so seconds at the outside; 10s leaves a large multiple of
+// that without letting a hung call hold the loop for longer than the stalled-loop alert's own
+// window. It is twice finalCheckpoint's 5s deliberately: that one runs once, on the way out,
+// where waiting longer delays a shutdown, while this one is retried on the next tick.
+const defaultCheckpointTimeout = 10 * time.Second
+
+// The snapshot Save's deadline adapts to the store it is talking to: the floor above, or
+// checkpointSlowFactor times the last Save that completed, whichever is longer, up to
+// maxSaveTimeout. A fixed 10s would turn a snapshot that is merely large (a whole-engine
+// payload for a big fleet is one UPDATE of hundreds of megabytes) on a throttled database into
+// a checkpoint that can never succeed, and every retry would re-send the whole payload. A Save
+// that is slow but working is let through once one has been seen to complete; a hung one still
+// gives up at the bound. A cold start has no observation, so its first Save is held to the
+// floor (raise checkpointTimeoutSeconds for a store known to be slower).
+const (
+	checkpointSlowFactor = 4
+	maxSaveTimeout       = 2 * time.Minute
+
+	// A failed snapshot is retried no sooner than this, doubling per consecutive failure up to
+	// the cap (under half the broker's ack window, which validateCheckpointInterval protects).
+	snapshotBackoffBase = 2 * time.Second
+	snapshotBackoffMax  = 30 * time.Second
+)
+
+// snapshotEngine serializes the engine. snapshotFn is a test seam for the one failure a real
+// engine cannot be made to produce on demand.
+func (rp *ResolvedEventsProcessor) snapshotEngine() ([]byte, error) {
+	if rp.snapshotFn != nil {
+		return rp.snapshotFn()
+	}
+	return rp.engine.Snapshot()
+}
+
+// saveTimeout is the deadline for one snapshot Save. See checkpointSlowFactor.
+func (rp *ResolvedEventsProcessor) saveTimeout() time.Duration {
+	floor := rp.checkpointTimeout()
+	d := checkpointSlowFactor * rp.lastSaveDuration
+	if d < floor {
+		d = floor
+	}
+	if ceiling := max(maxSaveTimeout, floor); d > ceiling {
+		d = ceiling
+	}
+	return d
+}
+
+// noteSnapshotFailure schedules the earliest next attempt at a snapshot after a failure.
+func (rp *ResolvedEventsProcessor) noteSnapshotFailure() {
+	switch {
+	case rp.snapshotBackoff == 0:
+		rp.snapshotBackoff = snapshotBackoffBase
+	case rp.snapshotBackoff < snapshotBackoffMax:
+		rp.snapshotBackoff = min(rp.snapshotBackoff*2, snapshotBackoffMax)
+	}
+	rp.snapshotRetryAfter = rp.clock.Now().Add(rp.snapshotBackoff)
+}
+
+func (rp *ResolvedEventsProcessor) checkpointTimeout() time.Duration {
+	if rp.cfg.CheckpointTimeout > 0 {
+		return rp.cfg.CheckpointTimeout
+	}
+	return defaultCheckpointTimeout
 }
 
 // finalCheckpoint flushes on a NORMAL shutdown so a clean stop delivers buffered detections,
@@ -2725,7 +2854,7 @@ func (rp *ResolvedEventsProcessor) finalCheckpoint() {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	rp.checkpoint(ctx)
+	rp.forceCheckpoint(ctx)
 }
 
 // Stop component.

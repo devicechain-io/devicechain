@@ -47,12 +47,12 @@ func TestValidateRejectsAnIntervalPastTheAckWindow(t *testing.T) {
 		t.Fatalf("the precondition: a positive ceiling, got %d from AckWait %s", ceiling, messaging.AckWait)
 	}
 
-	at := EventProcessingConfiguration{CheckpointEvents: 100, CheckpointIntervalSeconds: ceiling}
+	at := EventProcessingConfiguration{CheckpointEvents: 100, CheckpointIntervalSeconds: ceiling, CheckpointTimeoutSeconds: 10}
 	if err := at.Validate(); err != nil {
 		t.Fatalf("an interval AT the ceiling (%d) was refused: %v", ceiling, err)
 	}
 
-	past := EventProcessingConfiguration{CheckpointEvents: 100, CheckpointIntervalSeconds: ceiling + 1}
+	past := EventProcessingConfiguration{CheckpointEvents: 100, CheckpointIntervalSeconds: ceiling + 1, CheckpointTimeoutSeconds: 10}
 	err := past.Validate()
 	if err == nil {
 		t.Fatalf("an interval of %d, past the ceiling of %d, was accepted", ceiling+1, ceiling)

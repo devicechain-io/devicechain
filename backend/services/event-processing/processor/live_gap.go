@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"time"
 
 	"github.com/rs/zerolog/log"
 
@@ -62,6 +63,12 @@ var (
 	gapSeqOutcomes  = []string{gapSeqApplied, gapSeqAbsent, gapSeqSkipped}
 )
 
+// gapParkLimit is how long a live gap fill may fail continuously before the term is ended.
+// It sits past the 5m DetectLiveGapFillFailing alert on purpose: an operator is paged for a
+// broker fault before anything restarts on its own, and only a failure that outlasts that is
+// treated as one a retry will not fix.
+const gapParkLimit = 10 * time.Minute
+
 // fillGap is handle's slow path: msg's sequence is more than one past the engine's. It
 // reads and applies the missing range, and reports whether msg may now be applied. On
 // false the loop is parked on msg (see run).
@@ -81,9 +88,32 @@ func (rp *ResolvedEventsProcessor) fillGap(msg messaging.Message) bool {
 		}
 		held := msg
 		rp.gapHeld = &held
+		now := rp.clock.Now()
+		if rp.gapParkedSince.IsZero() {
+			rp.gapParkedSince = now
+		}
+		if parked := now.Sub(rp.gapParkedSince); parked >= gapParkLimit {
+			// A broker fault clears itself and is alert-only; a fill that has failed for this long
+			// is far more likely deterministic (a range reader that returns the wrong sequences, a
+			// poisoned range), and retrying the same read every tick will never change the answer.
+			// Ending the TERM, not the process, is the escalation: the rebuild re-reads the range
+			// through the ordered replay path, and if that cannot read it either, the term-build
+			// fuse takes the process down. The held message was never acked and redelivers.
+			log.Error().Err(err).Dur("parked", parked).Uint64("from", from).Uint64("to", to).
+				Msg("Live gap fill has failed continuously past its bound; ending the term so the rebuild re-reads the range.")
+			rp.gapParkedSince = time.Time{}
+			if !rp.leadershipEnabled() && rp.Microservice != nil {
+				// No supervisor to rebuild the term: ending it alone would leave a Ready pod that
+				// detects nothing, which is the shape haltStaleWriter refuses for the same reason.
+				rp.Microservice.FailNow(fmt.Errorf("event-processing: the live gap %d..%d on partition %q "+
+					"could not be read for %s", from, to, rp.cfg.PartitionId, parked.Round(time.Second)))
+			}
+			rp.pcancel()
+		}
 		return false
 	}
 	rp.gapFailLogged = false
+	rp.gapParkedSince = time.Time{}
 	return true
 }
 

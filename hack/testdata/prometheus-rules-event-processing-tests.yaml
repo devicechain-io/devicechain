@@ -72,6 +72,10 @@ tests:
         values: '0x60'
       - series: 'devicechain_eventprocessing_detect_checkpoints_total{namespace="dci-devicechain", pod="dc-event-processing-6b7d-aaaaa", job="devicechain/event-processing"}'
         values: '0+1x60'
+      - series: 'devicechain_eventprocessing_detect_loop_heartbeat_timestamp_seconds{namespace="dci-devicechain", pod="dc-event-processing-6b7d-aaaaa", job="devicechain/event-processing"}'
+        values: '0+60x60'
+      - series: 'devicechain_eventprocessing_detect_loop_heartbeat_timestamp_seconds{namespace="dci-devicechain", pod="dc-event-processing-6b7d-bbbbb", job="devicechain/event-processing"}'
+        values: '0x60'
       - series: 'devicechain_eventprocessing_detect_checkpoints_total{namespace="dci-devicechain", pod="dc-event-processing-6b7d-bbbbb", job="devicechain/event-processing"}'
         values: '0x60'
       - series: 'devicechain_eventprocessing_detect_consumer_pending{namespace="dci-devicechain", pod="dc-event-processing-6b7d-aaaaa", job="devicechain/event-processing"}'
@@ -108,6 +112,7 @@ tests:
       - {eval_time: 60m, alertname: DetectConsumerBacklogHigh, exp_alerts: []}
       - {eval_time: 60m, alertname: DetectWatermarkLagHigh, exp_alerts: []}
       - {eval_time: 60m, alertname: DetectCheckpointsStalledWithBacklog, exp_alerts: []}
+      - {eval_time: 60m, alertname: DetectLoopStalled, exp_alerts: []}
       - {eval_time: 60m, alertname: DetectFanoutEvalErrors, exp_alerts: []}
       - {eval_time: 60m, alertname: GeoFenceSetPublishFailing, exp_alerts: []}
       - {eval_time: 60m, alertname: DetectFenceGeometryUnresolved, exp_alerts: []}
@@ -137,6 +142,10 @@ tests:
         values: '0x60'
       - series: 'devicechain_eventprocessing_detect_checkpoints_total{namespace="dci-devicechain", pod="dc-event-processing-6b7d-aaaaa", job="devicechain/event-processing"}'
         values: '12x60'
+      - series: 'devicechain_eventprocessing_detect_loop_heartbeat_timestamp_seconds{namespace="dci-devicechain", pod="dc-event-processing-6b7d-aaaaa", job="devicechain/event-processing"}'
+        values: '0+60x60'
+      - series: 'devicechain_eventprocessing_detect_loop_heartbeat_timestamp_seconds{namespace="dci-devicechain", pod="dc-event-processing-6b7d-bbbbb", job="devicechain/event-processing"}'
+        values: '0x60'
       - series: 'devicechain_eventprocessing_detect_checkpoints_total{namespace="dci-devicechain", pod="dc-event-processing-6b7d-bbbbb", job="devicechain/event-processing"}'
         values: '0x60'
       - series: 'devicechain_eventprocessing_detect_consumer_pending{namespace="dci-devicechain", pod="dc-event-processing-6b7d-aaaaa", job="devicechain/event-processing"}'
@@ -165,6 +174,7 @@ tests:
       - {eval_time: 60m, alertname: DetectConsumerBacklogHigh, exp_alerts: []}
       - {eval_time: 60m, alertname: DetectWatermarkLagHigh, exp_alerts: []}
       - {eval_time: 60m, alertname: DetectCheckpointsStalledWithBacklog, exp_alerts: []}
+      - {eval_time: 60m, alertname: DetectLoopStalled, exp_alerts: []}
       - {eval_time: 60m, alertname: DetectFanoutEvalErrors, exp_alerts: []}
       - {eval_time: 60m, alertname: GeoFenceSetPublishFailing, exp_alerts: []}
       - {eval_time: 60m, alertname: DetectFenceGeometryUnresolved, exp_alerts: []}
@@ -287,6 +297,81 @@ tests:
       - eval_time: 25m
         alertname: DetectLeaderIsNotConsuming
         exp_alerts: []
+
+  # ------------------------------------------------------------------
+  # A loop HUNG inside a call. The leader still reads is_leader=1 and detect_live=1 and every
+  # other gauge is frozen at its last value (they are sampled on the hung loop), so only the
+  # heartbeat shows it. It was fresh until minute 10 and is stuck at 600 seconds after that: the
+  # age passes 120s at 13m and the 3m `for` fires it at 16m. The standby next to it reads 0
+  # everywhere, including a heartbeat of 0 that is far older than the threshold: only the
+  # `live == 1` term keeps it quiet (the rule has no `is_leader` term: live is raised only
+  # inside a held term and dropped before the lease is released, so it already implies it).
+  # ------------------------------------------------------------------
+  - name: a live leader whose loop stopped stamping fires DetectLoopStalled
+    interval: 1m
+    input_series:
+      - series: 'devicechain_eventprocessing_detect_is_leader{namespace="dci-devicechain", pod="dc-event-processing-6b7d-aaaaa", job="devicechain/event-processing"}'
+        values: '1x40'
+      - series: 'devicechain_eventprocessing_detect_is_leader{namespace="dci-devicechain", pod="dc-event-processing-6b7d-bbbbb", job="devicechain/event-processing"}'
+        values: '0x40'
+      - series: 'devicechain_eventprocessing_detect_live{namespace="dci-devicechain", pod="dc-event-processing-6b7d-aaaaa", job="devicechain/event-processing"}'
+        values: '1x40'
+      - series: 'devicechain_eventprocessing_detect_live{namespace="dci-devicechain", pod="dc-event-processing-6b7d-bbbbb", job="devicechain/event-processing"}'
+        values: '0x40'
+      - series: 'devicechain_eventprocessing_detect_loop_heartbeat_timestamp_seconds{namespace="dci-devicechain", pod="dc-event-processing-6b7d-aaaaa", job="devicechain/event-processing"}'
+        values: '0+60x10 600x30'
+      - series: 'devicechain_eventprocessing_detect_loop_heartbeat_timestamp_seconds{namespace="dci-devicechain", pod="dc-event-processing-6b7d-bbbbb", job="devicechain/event-processing"}'
+        values: '0x40'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: DetectLoopStalled
+        exp_alerts: []
+      - eval_time: 16m
+        alertname: DetectLoopStalled
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              devicechain_instance: devicechain
+              namespace: dci-devicechain
+              pod: dc-event-processing-6b7d-aaaaa
+              job: devicechain/event-processing
+            exp_annotations:
+              summary: "The DETECT loop on a live leader has stopped making progress"
+              description: "A replica that holds the partition and reports itself live has not completed a pass of its detection loop in over 2m (a healthy loop passes at least once a second). The loop is hung inside a call, most likely against a black-holed database or broker connection, and every other DETECT gauge is sampled on that same loop, so they are frozen at their last values and look healthy. No rule is being evaluated for any tenant. Restart the pod named on the alert. A standby never fires this: it is not leading."
+
+  # ------------------------------------------------------------------
+  # A replica that is not leading, or leads but is still building its term, has no loop passes
+  # to stamp: its heartbeat is stale by construction. Neither may page. The leader here is
+  # mid-build (is_leader=1, live=0) with a heartbeat left over from a previous term.
+  # ------------------------------------------------------------------
+  - name: a stale heartbeat on a leader still building its term stays quiet
+    interval: 1m
+    input_series:
+      - series: 'devicechain_eventprocessing_detect_is_leader{namespace="dci-devicechain", pod="dc-event-processing-6b7d-aaaaa", job="devicechain/event-processing"}'
+        values: '1x40'
+      - series: 'devicechain_eventprocessing_detect_live{namespace="dci-devicechain", pod="dc-event-processing-6b7d-aaaaa", job="devicechain/event-processing"}'
+        values: '0x40'
+      - series: 'devicechain_eventprocessing_detect_loop_heartbeat_timestamp_seconds{namespace="dci-devicechain", pod="dc-event-processing-6b7d-aaaaa", job="devicechain/event-processing"}'
+        values: '0x40'
+    alert_rule_test:
+      - {eval_time: 30m, alertname: DetectLoopStalled, exp_alerts: []}
+
+  # ------------------------------------------------------------------
+  # A loop that stalls briefly and recovers inside the `for` window does not page: stale from
+  # 13m, stamping again from 15m.
+  # ------------------------------------------------------------------
+  - name: a loop that recovers inside the for window stays quiet
+    interval: 1m
+    input_series:
+      - series: 'devicechain_eventprocessing_detect_is_leader{namespace="dci-devicechain", pod="dc-event-processing-6b7d-aaaaa", job="devicechain/event-processing"}'
+        values: '1x40'
+      - series: 'devicechain_eventprocessing_detect_live{namespace="dci-devicechain", pod="dc-event-processing-6b7d-aaaaa", job="devicechain/event-processing"}'
+        values: '1x40'
+      - series: 'devicechain_eventprocessing_detect_loop_heartbeat_timestamp_seconds{namespace="dci-devicechain", pod="dc-event-processing-6b7d-aaaaa", job="devicechain/event-processing"}'
+        values: '0+60x10 600x4 900+60x25'
+    alert_rule_test:
+      - {eval_time: 14m, alertname: DetectLoopStalled, exp_alerts: []}
+      - {eval_time: 30m, alertname: DetectLoopStalled, exp_alerts: []}
 
   # ------------------------------------------------------------------
   # Backlog: sustained above 50000 fires after the 10m `for`.

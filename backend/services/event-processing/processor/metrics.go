@@ -4,6 +4,8 @@
 package processor
 
 import (
+	"time"
+
 	"github.com/devicechain-io/dc-event-processing/internal/rules"
 	"github.com/devicechain-io/dc-event-processing/internal/runtime"
 	"github.com/devicechain-io/dc-microservice/core"
@@ -35,6 +37,17 @@ type DetectMetrics struct {
 	restoreSeconds      prometheus.Gauge
 	isLeader            prometheus.Gauge
 	detectLive          prometheus.Gauge
+
+	// loopHeartbeat is the unix time of the last pass of the single-writer loop. Every other
+	// gauge the DETECT alerts read is sampled ON that loop, so a loop hung inside a call freezes
+	// all of them at their last value and looks healthy; this one is the gauge that goes stale.
+	loopHeartbeat prometheus.Gauge
+	// checkpointFailures counts scheduled checkpoints that did not commit, by stage (the fixed
+	// checkpointStage* enum): publish, serialize, save. A deadline expiring inside a call counts
+	// against the stage that was running.
+	checkpointFailures *prometheus.CounterVec
+	// factPersistRetries counts retries of a fact projection write that failed (persistBeforeAck).
+	factPersistRetries prometheus.Counter
 
 	// Slice-8 consumer-lag gauges (ADR-051 observability thread; the operations board's #1
 	// "falling behind" signal). These exist because the derived-at-the-dashboard alternative does
@@ -142,6 +155,12 @@ func NewDetectMetrics(ms *core.Microservice) *DetectMetrics {
 		isLeader:   ms.NewGauge("detect_is_leader", "1 while this replica holds the DETECT partition lease, from acquisition rather than from the end of the term build."),
 		detectLive: ms.NewGauge("detect_live", "1 while this replica is consuming inside a held leadership term; 0 while standing by OR while building a term it has already acquired."),
 
+		loopHeartbeat: ms.NewGauge("detect_loop_heartbeat_timestamp_seconds", "Unix time of the last pass of the DETECT single-writer loop, refreshed at least once per tick while a term is live. Stale while detect_is_leader and detect_live read 1 means the loop is hung inside a call."),
+		checkpointFailures: ms.NewCounterVec("detect_checkpoint_failures_total",
+			"Scheduled DETECT checkpoints that did not commit, by stage (publish, serialize, save). A checkpoint call that outlives its deadline counts against the stage it was stuck in. A stale-writer refusal is not counted here: that ends the process.",
+			[]string{"stage"}),
+		factPersistRetries: ms.NewCounter("detect_fact_persist_retries_total", "Retries of a fact projection write (rules, roster, attributes, deletions) that failed with a non-terminal error. The fact stays unacked and this consumer is blocked behind it until a retry commits."),
+
 		consumerPending:    ms.NewGauge("detect_consumer_pending", "Undelivered messages waiting on the resolved-events durable consumer (the primary DETECT lag signal)."),
 		consumerAckPending: ms.NewGauge("detect_consumer_ack_pending", "Delivered-but-unacked messages on the resolved-events durable consumer (in-flight work)."),
 
@@ -193,10 +212,46 @@ func NewDetectMetrics(ms *core.Microservice) *DetectMetrics {
 	for _, o := range gapFillOutcomes {
 		m.gapFills.WithLabelValues(o).Add(0)
 	}
+	for _, st := range checkpointStages {
+		m.checkpointFailures.WithLabelValues(st).Add(0)
+	}
 	for _, o := range gapSeqOutcomes {
 		m.gapSequences.WithLabelValues(o).Add(0)
 	}
 	return m
+}
+
+// The checkpoint stages a failure is counted against. Fixed, so the label set is bounded.
+const (
+	checkpointStagePublish   = "publish"
+	checkpointStageSerialize = "serialize"
+	checkpointStageSave      = "save"
+)
+
+var checkpointStages = []string{checkpointStagePublish, checkpointStageSerialize, checkpointStageSave}
+
+// recordCheckpointFailure counts one scheduled checkpoint that did not commit. Nil-safe.
+func (m *DetectMetrics) recordCheckpointFailure(stage string) {
+	if m == nil {
+		return
+	}
+	m.checkpointFailures.WithLabelValues(stage).Inc()
+}
+
+// recordLoopHeartbeat stamps the loop's progress. Nil-safe.
+func (m *DetectMetrics) recordLoopHeartbeat(now time.Time) {
+	if m == nil {
+		return
+	}
+	m.loopHeartbeat.Set(float64(now.Unix()))
+}
+
+// recordFactPersistRetry counts one retried fact projection write. Nil-safe.
+func (m *DetectMetrics) recordFactPersistRetry() {
+	if m == nil {
+		return
+	}
+	m.factPersistRetries.Inc()
 }
 
 // recordGapFill counts one live gap fill by outcome. Nil-safe.

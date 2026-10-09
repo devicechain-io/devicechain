@@ -260,6 +260,7 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 		Suffix:                      streams.ResolvedEvents,
 		CheckpointEvents:            Configuration.CheckpointEvents,
 		CheckpointInterval:          time.Duration(Configuration.CheckpointIntervalSeconds) * time.Second,
+		CheckpointTimeout:           time.Duration(Configuration.CheckpointTimeoutSeconds) * time.Second,
 		Lateness:                    lateness,
 		IdleAdvanceGuard:            idleGuard,
 		MaxRulesPerTenant:           Configuration.MaxRulesPerTenant,

@@ -291,6 +291,7 @@ func (rp *ResolvedEventsProcessor) resetForTerm() {
 	// acked, so it redelivers and the new term's replay covers its range.
 	rp.gapHeld = nil
 	rp.gapFailLogged = false
+	rp.gapParkedSince = time.Time{}
 	drain(rp.ruleUpdates)
 	drain(rp.armUpdates)
 	drain(rp.attrUpdates)
