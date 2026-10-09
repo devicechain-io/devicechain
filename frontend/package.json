@@ -12,7 +12,7 @@
     "dev:dash": "npm run dev -w @devicechain/dashboard",
     "build:packages": "node scripts/build-packages.mjs",
     "verify:packages": "node scripts/verify-packages.mjs",
-    "build": "npm run build -w @devicechain/console -w @devicechain/dashboard",
+    "build": "npm run build -w @devicechain/console -w @devicechain/dashboard -w @devicechain/board-replay",
     "codegen": "npm run codegen -w @devicechain/console",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "test": "npm run test --workspaces --if-present",
