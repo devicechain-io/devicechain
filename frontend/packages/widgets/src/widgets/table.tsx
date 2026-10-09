@@ -8,7 +8,7 @@ import type { CSSProperties } from 'react';
 
 import { FlashValue } from '../flash';
 import { formatTimestamp } from '../format';
-import { WidgetFrame } from '../frame';
+import { WidgetFrame, useWidgetTimeZone } from '../frame';
 import { css } from '../theme';
 import { optBoolean, optNumber, optString, type WidgetProps } from '../widget';
 
@@ -24,6 +24,7 @@ const headCell: CSSProperties = {
 };
 
 export function Table({ widget, data }: WidgetProps) {
+  const timeZone = useWidgetTimeZone();
   const rows = Object.values(data.latest).sort((a, b) => a.name.localeCompare(b.name));
   // Round to a fixed number of decimals when configured; unset keeps the raw value
   // (formatValue's default). A live sensor value is otherwise a wall of digits.
@@ -65,7 +66,7 @@ export function Table({ widget, data }: WidgetProps) {
                         definition's internal id (ADR-016), not a user-facing label —
                         appending it rendered as spurious digits after the value. */}
                   </td>
-                  <td style={{ ...cell, color: css('muted-foreground') }}>{formatTimestamp(row.occurredTime)}</td>
+                  <td style={{ ...cell, color: css('muted-foreground') }}>{formatTimestamp(row.occurredTime, timeZone)}</td>
                 </tr>
               ))
             )}

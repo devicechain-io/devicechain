@@ -13,7 +13,7 @@ import { useState, type CSSProperties } from 'react';
 import type { AlarmStreamState } from '../hooks';
 import { FlashValue } from '../flash';
 import { formatDateTime } from '../format';
-import { WidgetFrame, useWidgetSelect, type WidgetSelect } from '../frame';
+import { WidgetFrame, useWidgetSelect, useWidgetTimeZone, type WidgetSelect } from '../frame';
 import { css } from '../theme';
 import { optBoolean, optNumber, optString, type WidgetProps } from '../widget';
 import { severityColor, severityLabel } from './severity';
@@ -56,6 +56,7 @@ export function AlarmTable({ widget, data, actions }: WidgetProps<AlarmStreamSta
   // re-points that slot — driving the per-device widgets to the clicked thermostat
   // (ADR-039 selection amendment). Absent either, the originator is plain text.
   const select = useWidgetSelect();
+  const timeZone = useWidgetTimeZone();
   const selectionTarget = optString(widget.options, 'selectionTarget');
   const drillTo = select && selectionTarget ? { select, slot: selectionTarget } : undefined;
 
@@ -138,7 +139,7 @@ export function AlarmTable({ widget, data, actions }: WidgetProps<AlarmStreamSta
                         />
                       </td>
                       <td style={{ ...cell, color: css('muted-foreground') }}>
-                        {formatDateTime(alarm.raisedTime)}
+                        {formatDateTime(alarm.raisedTime, timeZone)}
                       </td>
                       {canAct ? (
                         <td style={{ ...cell, textAlign: 'right' }}>

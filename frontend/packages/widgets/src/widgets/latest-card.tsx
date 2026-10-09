@@ -5,7 +5,7 @@
 
 import { flashTextStyle, useFlashOnChange } from '../flash';
 import { formatTimestamp, formatValue } from '../format';
-import { WidgetFrame } from '../frame';
+import { WidgetFrame, useWidgetTimeZone } from '../frame';
 import { useElementSize } from '../hooks';
 import { css } from '../theme';
 import {
@@ -21,6 +21,7 @@ const clamp = (v: number, lo: number, hi: number): number => Math.max(lo, Math.m
 
 export function LatestCard({ widget, data }: WidgetProps) {
   const [sizeRef, size] = useElementSize<HTMLDivElement>();
+  const timeZone = useWidgetTimeZone();
   const name = primaryMeasurementName(widget);
   const sample = pickSample(data.latest, name);
 
@@ -72,7 +73,7 @@ export function LatestCard({ widget, data }: WidgetProps) {
         </div>
         {sample?.occurredTime ? (
           <div style={{ fontSize: 11, color: css('muted-foreground'), marginTop: 4 }}>
-            {formatTimestamp(sample.occurredTime)}
+            {formatTimestamp(sample.occurredTime, timeZone)}
           </div>
         ) : null}
       </div>

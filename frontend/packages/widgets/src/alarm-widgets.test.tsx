@@ -10,7 +10,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 afterEach(cleanup);
 
 import type { AlarmStreamState } from './hooks';
-import { WidgetSelectProvider, type WidgetSelect } from './frame';
+import { WidgetSelectProvider, WidgetTimeZoneProvider, type WidgetSelect } from './frame';
 import { AlarmCount } from './widgets/alarm-count';
 import { AlarmTable } from './widgets/alarm-table';
 
@@ -228,5 +228,25 @@ describe('AlarmCount', () => {
   it('shows an em dash while loading before any total is known', () => {
     render(<AlarmCount widget={widget('alarm-count')} data={state({ total: 0, loading: true })} />);
     expect(screen.getByText('—')).toBeTruthy();
+  });
+});
+
+describe('AlarmTable raised time zone', () => {
+  const alarms = [alarm({ raisedTime: '2026-10-07T02:08:54Z' })];
+
+  it('is the viewer-local rendering when no zone is provided (unchanged default)', () => {
+    render(<AlarmTable widget={widget('alarm-table')} data={state({ alarms, total: 1 })} />);
+    expect(screen.getByText(new Date('2026-10-07T02:08:54Z').toLocaleString())).toBeTruthy();
+  });
+
+  it('is the pinned zone’s clock, with its name, when a host provides one', () => {
+    render(
+      <WidgetTimeZoneProvider timeZone="UTC">
+        <AlarmTable widget={widget('alarm-table')} data={state({ alarms, total: 1 })} />
+      </WidgetTimeZoneProvider>,
+    );
+    const want = new Date('2026-10-07T02:08:54Z').toLocaleString(undefined, { timeZone: 'UTC', timeZoneName: 'short' });
+    expect(screen.getByText(want)).toBeTruthy();
+    expect(want).toContain('UTC');
   });
 });

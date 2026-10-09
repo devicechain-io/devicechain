@@ -21,7 +21,7 @@ import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 
 import type { CommandStreamState } from '../hooks';
 import { formatDateTime } from '../format';
-import { WidgetFrame } from '../frame';
+import { WidgetFrame, useWidgetTimeZone } from '../frame';
 import { css } from '../theme';
 import { optString, type WidgetProps } from '../widget';
 import { commandStatusColor, commandStatusLabel } from './command-status';
@@ -298,6 +298,7 @@ function CommandHistory({
   // blip never tears down the still-usable send form. Last-good rows stay on screen when
   // present; only an empty-and-errored history shows the notice.
   const empty = commands.length === 0;
+  const timeZone = useWidgetTimeZone();
   return (
     <div
       style={{
@@ -331,7 +332,7 @@ function CommandHistory({
                 {command.name}
               </span>
               <span style={{ marginLeft: 'auto', color: css('muted-foreground'), whiteSpace: 'nowrap' }}>
-                {formatDateTime(command.queuedTime)}
+                {formatDateTime(command.queuedTime, timeZone)}
               </span>
             </li>
           ))}

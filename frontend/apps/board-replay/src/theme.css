@@ -1,0 +1,47 @@
+/* Copyright The DeviceChain Authors */
+/* SPDX-License-Identifier: Apache-2.0 */
+
+/*
+ * The design-token contract the @devicechain/widgets package reads (HSL channels), dark
+ * only. EVERY rule here is scoped to .board-replay-root, the app's own root element: the
+ * page that embeds the replay owns :root, <html> and <body>, and its stylesheet defines
+ * tokens of the same names (--muted, --border, ...) that this one must not override.
+ * A test fails the build if a selector here is not under the root.
+ *
+ * The three brand-derived tokens repeat the values in @devicechain/brand's generated
+ * shadcn.css (.dark block). They are repeated rather than @imported because that file sets
+ * them on :root/.dark, i.e. page-wide; a test compares them with the brand file so they
+ * cannot drift.
+ */
+
+.board-replay-root {
+  --primary: 197.2 71.2% 49%;
+  --primary-foreground: 0 0% 100%;
+  --ring: 197.2 71.2% 49%;
+  --background: 210 40% 6%;
+  --foreground: 210 16% 96%;
+  --card: 210 24% 11%;
+  --card-foreground: 210 16% 96%;
+  --muted: 210 20% 16%;
+  --muted-foreground: 210 12% 66%;
+  --destructive: 0 72.2% 65%;
+  --border: 210 20% 17%;
+  --input: 210 22% 42%;
+  --chart-1: 220 70% 50%;
+  --chart-2: 160 60% 45%;
+  --chart-3: 30 80% 55%;
+  --chart-4: 280 65% 60%;
+  --chart-5: 340 75% 55%;
+
+  height: 100%;
+  min-height: 560px;
+  background: hsl(var(--background));
+  color: hsl(var(--foreground));
+  font-family:
+    ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+}
+
+.board-replay-root,
+.board-replay-root * {
+  box-sizing: border-box;
+}

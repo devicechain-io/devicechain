@@ -30,6 +30,45 @@ export function WidgetSubjectProvider({
   return <WidgetSubjectContext.Provider value={label}>{children}</WidgetSubjectContext.Provider>;
 }
 
+// WidgetTimeZone is the zone widgets print instants in. Undefined (the default) means the
+// viewer's own zone, which is what every live host wants; a host replaying a recording
+// pins one so the board's times agree with the recording's own clock.
+const WidgetTimeZoneContext = createContext<string | undefined>(undefined);
+
+export function WidgetTimeZoneProvider({
+  timeZone,
+  children,
+}: {
+  timeZone: string | undefined;
+  children: ReactNode;
+}) {
+  return <WidgetTimeZoneContext.Provider value={timeZone}>{children}</WidgetTimeZoneContext.Provider>;
+}
+
+export function useWidgetTimeZone(): string | undefined {
+  return useContext(WidgetTimeZoneContext);
+}
+
+// WidgetThemeRoot is the element chart colors are read from. Undefined (the default) means
+// the document root, which is where a console or dashboard app sets its tokens. A host that
+// scopes its tokens to a container (an embed on a page whose own stylesheet owns the root)
+// provides that container, and charts resolve their colors there instead.
+const WidgetThemeRootContext = createContext<Element | undefined>(undefined);
+
+export function WidgetThemeRootProvider({
+  root,
+  children,
+}: {
+  root: Element | undefined;
+  children: ReactNode;
+}) {
+  return <WidgetThemeRootContext.Provider value={root}>{children}</WidgetThemeRootContext.Provider>;
+}
+
+export function useWidgetThemeRoot(): Element | undefined {
+  return useContext(WidgetThemeRootContext);
+}
+
 // WidgetSelect is a view-interaction callback (ADR-039 selection amendment): a widget
 // drives a slot selection (an alarm-table originator drill, a context-selector pick) by
 // naming its target slot + the entity to bind. Kept DISTINCT from WidgetActions (the
