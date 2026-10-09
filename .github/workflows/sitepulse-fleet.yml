@@ -87,8 +87,8 @@ jobs:
       - name: Topology checks fail on a site made to break them
         run: |
           python3 quarry_topology.py selftest | tee topology-selftest.log
-          grep -qx 'selftest: 42 of 42 controls behaved' topology-selftest.log
-          test "$(grep -c ' ok$' topology-selftest.log)" -eq 42
+          grep -qx 'selftest: 50 of 50 controls behaved' topology-selftest.log
+          test "$(grep -c ' ok$' topology-selftest.log)" -eq 50
           ! grep -q 'NOT CAUGHT' topology-selftest.log
 
       # Regenerate into a temp directory, in the order the README gives, and compare with what is committed.
