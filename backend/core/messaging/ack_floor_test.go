@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -360,18 +361,25 @@ func TestOrdinaryReaderRetiresNothingAtBindTerm(t *testing.T) {
 func TestAckFloorIsRefusedForAGatingReader(t *testing.T) {
 	srv := startEmbeddedServer(t)
 	ms := testMicroservice(t, srv, "event-management")
+	// The refusal is the NewReader call's own error, captured where it is made: whatever
+	// Initialize and Start go on to report is a different question (a manager with readers
+	// also needs a max-delivery recorder).
+	var built error
 	nmgr := NewNatsManager(ms, core.NewNoOpLifecycleCallbacks(), func(n *NatsManager) error {
-		_, err := n.NewReader(streams.ResolvedEvents, fixedStart(1))
-		return err
+		_, built = n.NewReader(streams.ResolvedEvents, fixedStart(1))
+		return built
 	})
 	ctx := context.Background()
 	err := nmgr.Initialize(ctx)
 	if err == nil {
 		err = nmgr.Start(ctx)
 	}
-	if err == nil {
-		_ = nmgr.Stop(ctx)
-		t.Fatal("an ack-floor reader on the stream whose writers it gates was accepted")
+	defer func() { _ = nmgr.Stop(ctx) }()
+	if built == nil {
+		t.Fatalf("an ack-floor reader on the stream whose writers it gates was accepted (Initialize/Start: %v)", err)
+	}
+	if !strings.Contains(built.Error(), "ReaderWithAckFloor cannot be used by") {
+		t.Fatalf("NewReader failed for another reason than the gating refusal: %v", built)
 	}
 }
 

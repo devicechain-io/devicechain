@@ -515,6 +515,9 @@ type ResolvedEventsProcessor struct {
 	// what each Save wrote. It is the CEILING of the ack at a checkpoint (ackThroughCommitted)
 	// and nothing else is, not the engine's LastSeq, which can be ahead of the row between a
 	// message being applied and the Save that covers it. Owned by the loop, as the engine is.
+	// Under the synchronous loop the ceiling equals LastSeq at ack time, so naming it
+	// separately is defence in depth; it becomes load-bearing once a reader fetches ahead of
+	// the loop, when the engine and the broker's delivered set can differ.
 	committedSeq uint64
 	// idleUncommitted latches when idleAdvance moved the watermark off the wall clock but its
 	// checkpoint could NOT commit (broker/store outage). The wall-clock advance is not
@@ -1522,6 +1525,14 @@ func (rp *ResolvedEventsProcessor) replayToHead() error {
 		// its successor is already committing to.
 		if err := rp.Store.Reset(rp.pctx(), rp.cfg.PartitionId, observed); err != nil {
 			return fmt.Errorf("reset stale snapshot for partition %q: %w", rp.cfg.PartitionId, err)
+		}
+		// The durable was created at the stale row's sequence plus one, past everything the new
+		// stream holds, so it would deliver nothing until the stream's head caught up with it
+		// (and report nothing pending meanwhile). Put it back at the start the cleared row implies.
+		if rr, ok := rp.ResolvedEventsReader.(messaging.AckFloorRecreator); ok {
+			if err := rr.RecreateAtFloor(); err != nil {
+				return fmt.Errorf("recreate the resolved-events durable after resetting the snapshot: %w", err)
+			}
 		}
 		return nil
 	}

@@ -69,6 +69,35 @@ func ReaderWithAckFloor(start func(ctx context.Context) (uint64, error)) ReaderO
 	return func(r *natsReader) { r.ackFloorStart = start }
 }
 
+// AckFloorRecreator is implemented by an ack-floor reader that can have its durable recreated at
+// the start callback's current position. A consumer whose committed position moved BACKWARD
+// (the stream was recreated under a snapshot that is ahead of it) needs this: the durable was
+// created at the old position plus one, past everything the new stream holds.
+type AckFloorRecreator interface {
+	// RecreateAtFloor deletes the durable and creates it again at the start callback's current
+	// answer, then binds to it. Anything handed out before it belongs to the dead consumer and
+	// is skipped by AckThrough.
+	RecreateAtFloor() error
+}
+
+// RecreateAtFloor implements AckFloorRecreator.
+func (r *natsReader) RecreateAtFloor() error {
+	if !r.ackFloor() {
+		return errors.New("messaging: RecreateAtFloor on a reader that was not built with ReaderWithAckFloor")
+	}
+	r.bindMu.Lock()
+	defer r.bindMu.Unlock()
+	if !r.reading.CompareAndSwap(false, true) {
+		return fmt.Errorf("%w: RecreateAtFloor on durable %q while a read is in flight", ErrConcurrentRead, r.durable)
+	}
+	r.dropPending()
+	r.reading.Store(false)
+	if err := r.nmgr.js.DeleteConsumer(r.stream, r.durable); err != nil && !errors.Is(err, nats.ErrConsumerNotFound) {
+		return fmt.Errorf("messaging: deleting ack-floor durable %q to recreate it: %w", r.durable, err)
+	}
+	return r.bindLocked()
+}
+
 // AckFloorDurableName is the durable an ack-floor reader of suffix uses: the ordinary name
 // (DurableName) with an "_ackfloor" tail. The tail is the point, not decoration. A durable's
 // ack policy cannot be changed in place, so a reader moving to the floor policy cannot keep

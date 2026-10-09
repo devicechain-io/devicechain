@@ -561,3 +561,48 @@ type failingSeqLoader struct{}
 func (failingSeqLoader) LoadCommittedSeq(context.Context, string) (int64, bool, error) {
 	return 0, false, errors.New("store down")
 }
+
+// A stream recreated under a snapshot that is ahead of it. The durable is created at the stale
+// row's sequence plus one, past everything the new stream holds; the term build clears the row
+// and must put the durable back at the new stream's start, or nothing is delivered until the
+// head passes the old position.
+func TestAStreamRecreatedUnderAnAheadSnapshotDeliversFromItsStart(t *testing.T) {
+	t.Parallel()
+	b := startDetectBroker(t)
+	store := brokerStore(t)
+	nmgr1, reader1 := b.detectManager(t, store)
+	rp1, _ := b.hotProcessor(t, reader1, nmgr1, store, 1)
+	for n := uint64(1); n <= 3; n++ {
+		b.publishHot(t, n)
+	}
+	waitForCheckpoint(t, store, 3, 10*time.Second)
+	b.waitForAck(t, 3)
+	require.NoError(t, rp1.ExecuteStop(context.Background()))
+	nmgr1.Conn().Close()
+
+	// The stream is recreated: the new one starts again at sequence 1 and the snapshot says 3.
+	js, err := b.nc.JetStream()
+	require.NoError(t, err)
+	require.NoError(t, js.DeleteStream(b.resolvedStream()))
+	nmgr2, reader2 := b.detectManager(t, store)
+	require.EqualValues(t, 4, b.resolvedInfo(t).Config.OptStartSeq, "vacuous: the durable was not created past the new stream's head")
+	b.publishHot(t, 11)
+	b.publishHot(t, 12)
+
+	seen := &recreateSeen{MessageReader: reader2}
+	_, w := b.hotProcessor(t, seen, nmgr2, store, 1)
+	waitForCheckpoint(t, store, 2, 15*time.Second)
+	b.waitForAck(t, 2)
+	require.Equal(t, map[string]int{"dev-11": 1, "dev-12": 1}, w.counts(), "the new stream's events were not derived")
+	require.EqualValues(t, 1, b.resolvedInfo(t).Config.OptStartSeq, "the durable was not recreated at the new stream's start")
+	require.Eventually(t, func() bool { return b.resolvedInfo(t).NumAckPending == 0 },
+		5*time.Second, 50*time.Millisecond)
+}
+
+// recreateSeen forwards the AckFloorRecreator of the reader it wraps, which an embedded
+// interface value does not.
+type recreateSeen struct{ messaging.MessageReader }
+
+func (r *recreateSeen) RecreateAtFloor() error {
+	return r.MessageReader.(messaging.AckFloorRecreator).RecreateAtFloor()
+}
