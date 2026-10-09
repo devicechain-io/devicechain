@@ -91,10 +91,9 @@ func TestTermBuildReplayWithLostDeliveriesMatchesACleanReplay(t *testing.T) {
 	start := time.Now().Add(-time.Hour)
 	for i := 0; i < events; i++ {
 		at := start.Add(time.Duration(i) * time.Second)
-		value := "50"
-		if i%3 == 0 {
-			value = "90"
-		}
+		// Every event breaches the threshold, so every one fires: a replay that skips even
+		// one changes the detection count, not just the engine state.
+		value := "90"
 		ev := &dmmodel.ResolvedEvent{
 			Source: "http1", SourceDeviceToken: fmt.Sprintf("d%03d", i), ProfileVersionToken: "p@1",
 			OccurredTime: at, ProcessedTime: at, EventType: esmodel.Measurement,
@@ -138,7 +137,7 @@ func TestTermBuildReplayWithLostDeliveriesMatchesACleanReplay(t *testing.T) {
 	require.Equal(t, uint64(events), cleanSeq)
 	require.Positive(t, cleanDetections)
 
-	// After the first 256-message batch has been read, 40 deliveries are lost from the next.
+	// After the first four fetch batches (256 messages) have been read, 40 deliveries are lost from the next.
 	lossySnap, lossySeq, lossyDetections := build(&stealingOpener{t: t, b: b, NatsManager: nmgr, afterReads: 256, steal: 40})
 	require.Equal(t, cleanSeq, lossySeq)
 	require.Equal(t, cleanDetections, lossyDetections, "a lost delivery's detection was skipped")
