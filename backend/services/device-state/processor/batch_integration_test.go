@@ -119,13 +119,18 @@ func TestAPoisonWriteDoesNotFailItsBatchMatesOnPostgres(t *testing.T) {
 
 // The inactivity sweep updates many rows in one statement, in scan order, and a batch holds
 // several rows' locks at once, so the two can deadlock — PostgreSQL then aborts one side.
-// Whichever loses, nothing is lost: every event is merged and acknowledged (a batch that
-// loses is merged again one event at a time), and every device ends active at its event's
-// time, since each event is newer than the sweep's deadline.
+// Whichever loses, nothing is lost. A batch that loses is merged again one event at a time,
+// and that one-event write is a transaction too, so it can lose a deadlock in its turn: such
+// an event is deliberately left unacknowledged and the broker redelivers it after AckWait.
+// So the contract is not "every event is acknowledged on its first delivery" but "every
+// event is applied, acknowledged exactly once, and none is dropped", and this test hands the
+// unacknowledged ones back, as the broker would, until they are. Every device ends active at
+// its event's time, since each event is newer than the sweep's deadline.
 func TestTheSweepAndBatchesContendWithoutLosingAnything(t *testing.T) {
 	mgr, _ := newFenceBenchManager(t, "dsbatchsweep", true)
 	ms := &core.Microservice{InstanceId: "test", FunctionalArea: "device-state"}
-	ms.UseMetricsRegistry(prometheus.NewRegistry())
+	reg := prometheus.NewRegistry()
+	ms.UseMetricsRegistry(reg)
 	metrics := NewStateMetrics(ms)
 	sp := NewStateProcessor(ms, nil, core.NewNoOpLifecycleCallbacks(), newBenchProcessor(mgr).Api, metrics,
 		ms.NewPeriodicTaskMetrics("batch_sweep"), WithProjection(config.ProjectionConfiguration{Writers: 5, MaxBatch: 32}))
@@ -138,12 +143,70 @@ func TestTheSweepAndBatchesContendWithoutLosingAnything(t *testing.T) {
 	silent := now.Add(-2 * time.Hour) // far past the 600 s inactivity timeout
 	fresh := now.Add(-time.Minute)    // inside it
 
-	var acked atomic.Int64
-	for i := 0; i < devices; i++ {
-		sp.handOff(context.Background(), benchMeasurement(t, tenant, fmt.Sprintf("sw-%03d", i), silent, countingAck{&acked}))
+	// handed is how many messages have been given to the processor, counting every
+	// redelivery; each one is owed exactly one recorded result.
+	var handed float64
+	var redelivered int
+	// deliverUntilApplied hands the messages in, waits until every one has a recorded result
+	// (a wall-clock wait on acknowledgements would be a verdict on timing), then gives back
+	// the ones left unacknowledged with their delivery count raised, until all are acked.
+	// It fails if an event would need more than the broker's delivery cap.
+	deliverUntilApplied := func(msgs []messaging.Message, acks []*eventAck) {
+		pending := make([]int, len(msgs))
+		for i := range pending {
+			pending[i] = i
+		}
+		for delivery := 1; len(pending) > 0; delivery++ {
+			if delivery > messaging.MaxDeliver {
+				t.Fatalf("%d events still unacknowledged after %d deliveries", len(pending), messaging.MaxDeliver)
+			}
+			for _, i := range pending {
+				sp.handOff(context.Background(), msgs[i])
+			}
+			handed += float64(len(pending))
+			waitDispositions(t, reg, handed)
+			var next []int
+			for _, i := range pending {
+				if acks[i].n.Load() == 0 {
+					m := msgs[i]
+					msgs[i] = messaging.NewConsumedMessage(m.Subject, m.Value, delivery+1, nil, acks[i])
+					next = append(next, i)
+				}
+			}
+			redelivered += len(next)
+			pending = next
+		}
 	}
-	waitAcked(t, &acked, devices)
-	acked.Store(0)
+	build := func(rounds int, descending bool, at func(round int) time.Time) ([]messaging.Message, []*eventAck) {
+		var msgs []messaging.Message
+		var acks []*eventAck
+		for round := 0; round < rounds; round++ {
+			for i := 0; i < devices; i++ {
+				n := i
+				if descending {
+					// Descending token order within a round, so batches and the sweep's scan
+					// meet their rows in different orders.
+					n = devices - 1 - i
+				}
+				a := &eventAck{}
+				acks = append(acks, a)
+				msgs = append(msgs, benchMeasurement(t, tenant, fmt.Sprintf("sw-%03d", n), at(round), a))
+			}
+		}
+		return msgs, acks
+	}
+	exactlyOnce := func(acks []*eventAck) {
+		t.Helper()
+		for i, a := range acks {
+			if n := a.n.Load(); n != 1 {
+				t.Errorf("event %d acknowledged %d times; want exactly 1", i, n)
+			}
+		}
+	}
+
+	seedMsgs, seedAcks := build(1, false, func(int) time.Time { return silent })
+	deliverUntilApplied(seedMsgs, seedAcks)
+	exactlyOnce(seedAcks)
 
 	// Sweeps and batches over the same rows, at once.
 	var wg sync.WaitGroup
@@ -163,19 +226,16 @@ func TestTheSweepAndBatchesContendWithoutLosingAnything(t *testing.T) {
 			}
 		}
 	}()
-	for round := 0; round < 4; round++ {
-		for i := 0; i < devices; i++ {
-			// Descending token order within a round, so batches and the sweep's scan meet
-			// their rows in different orders.
-			sp.handOff(context.Background(), benchMeasurement(t, tenant, fmt.Sprintf("sw-%03d", devices-1-i),
-				fresh.Add(time.Duration(round)*time.Second), countingAck{&acked}))
-		}
-	}
-	waitAcked(t, &acked, 4*devices)
+	msgs, acks := build(4, true, func(round int) time.Time { return fresh.Add(time.Duration(round) * time.Second) })
+	deliverUntilApplied(msgs, acks)
 	close(stop)
 	wg.Wait()
 	if err := sp.ExecuteStop(context.Background()); err != nil {
 		t.Fatalf("stop: %v", err)
+	}
+	exactlyOnce(acks)
+	if v, _, _, _ := gathered(t, reg, "state_messages_total", core.ResultDropped); v != 0 {
+		t.Errorf("state_messages_total{result=dropped} = %v; want 0", v)
 	}
 
 	// A final pass must run cleanly, and flip nothing: every device's activity is fresh.
@@ -196,16 +256,37 @@ func TestTheSweepAndBatchesContendWithoutLosingAnything(t *testing.T) {
 			t.Errorf("%s active=%v activity=%v; want active at %v", ds.DeviceToken, ds.Active, ds.LastActivityTime.Time, want)
 		}
 	}
-	t.Logf("contended sweeps failed %d time(s); batch fallbacks %v; final sweep flipped %d",
-		sweepErrs.Load(), testutil.ToFloat64(metrics.fallbacks), flipped)
+	retried, _, _, _ := gathered(t, reg, "state_messages_total", core.ResultRetry)
+	t.Logf("contended sweeps failed %d time(s); batch fallbacks %v; events left for redelivery %d (result=retry %v); final sweep flipped %d",
+		sweepErrs.Load(), testutil.ToFloat64(metrics.fallbacks), redelivered, retried, flipped)
 }
 
-func waitAcked(t *testing.T, acked *atomic.Int64, want int64) {
+// eventAck counts the acknowledgements of ONE event across all its deliveries, so a test can
+// tell "acknowledged once" from "acknowledged twice and one other never".
+type eventAck struct{ n atomic.Int32 }
+
+func (a *eventAck) Ack() error {
+	a.n.Add(1)
+	return nil
+}
+
+// waitDispositions waits until the merge loop has recorded a result for every one of the
+// want messages handed to it. The deadline is a hang guard, not the verdict: how long the
+// contention takes is not what the test asserts.
+func waitDispositions(t *testing.T, reg *prometheus.Registry, want float64) {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Minute)
-	for acked.Load() < want {
+	for {
+		var got float64
+		for _, r := range []string{core.ResultOK, core.ResultRetry, core.ResultDropped, core.ResultInvalid, core.ResultFailed} {
+			v, _, _, _ := gathered(t, reg, "state_messages_total", r)
+			got += v
+		}
+		if got >= want {
+			return
+		}
 		if time.Now().After(deadline) {
-			t.Fatalf("%d of %d events acknowledged after 2 minutes", acked.Load(), want)
+			t.Fatalf("%v of %v handed-off events have a recorded result after 2 minutes", got, want)
 		}
 		time.Sleep(5 * time.Millisecond)
 	}

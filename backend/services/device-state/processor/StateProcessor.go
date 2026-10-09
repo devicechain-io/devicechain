@@ -8,6 +8,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"math/rand"
 	"strconv"
 	"sync"
 	"time"
@@ -504,14 +505,19 @@ func (sp *StateProcessor) mergeAdmitted(p pendingMerge) {
 	}
 
 	// Update the originating device's live connectivity projection for every event.
-	if _, err := sp.Api.MergeDeviceState(p.ctx, u.DeviceToken, u.OccurredAt, u.Presence, u.Identity); err != nil {
+	if err := retryOnConflict(p.ctx, func() error {
+		_, err := sp.Api.MergeDeviceState(p.ctx, u.DeviceToken, u.OccurredAt, u.Presence, u.Identity)
+		return err
+	}); err != nil {
 		disposeTransient(err, fmt.Sprintf("device state projection update for device %s", u.DeviceToken))
 		return
 	}
 
 	// For a measurement event, also advance the per-key latest-value projection.
 	if event.EventType == esmodel.Measurement {
-		if err := sp.Api.MergeLatestMeasurements(p.ctx, u.DeviceToken, u.Measurements); err != nil {
+		if err := retryOnConflict(p.ctx, func() error {
+			return sp.Api.MergeLatestMeasurements(p.ctx, u.DeviceToken, u.Measurements)
+		}); err != nil {
 			disposeTransient(err, fmt.Sprintf("latest-measurement projection update for device %s", u.DeviceToken))
 			return
 		}
@@ -520,7 +526,9 @@ func (sp *StateProcessor) mergeAdmitted(p pendingMerge) {
 	// For a location event, also advance the last-known-position projection (in addition
 	// to the device state above: a location is a liveness heartbeat too).
 	if event.EventType == esmodel.Location {
-		if err := sp.Api.MergeLatestLocations(p.ctx, u.DeviceToken, u.Locations); err != nil {
+		if err := retryOnConflict(p.ctx, func() error {
+			return sp.Api.MergeLatestLocations(p.ctx, u.DeviceToken, u.Locations)
+		}); err != nil {
 			disposeTransient(err, fmt.Sprintf("latest-location projection update for device %s", u.DeviceToken))
 			return
 		}
@@ -758,4 +766,30 @@ func presenceTransitionFor(event *dmmodel.ResolvedEvent) (*model.PresenceTransit
 		ExpectedSessionId: p.ExpectedSessionId,
 		OccurredAt:        event.OccurredTime,
 	}, nil
+}
+
+// conflictAttempts is how many times one write is tried when PostgreSQL aborts its
+// transaction as a deadlock victim or a serialization failure.
+const conflictAttempts = 3
+
+// retryOnConflict runs write, and runs it again, up to conflictAttempts times in all, while it
+// fails because the database aborted the transaction in a race with another one (see
+// rdb.IsTransactionConflict). The aborted transaction rolled back completely, so running it
+// again is safe, and the transaction it lost to has usually finished by then. Without this a
+// per-message write that loses a deadlock is left unacknowledged and waits a full AckWait for
+// redelivery. Any other error, and a conflict that persists, is returned for the caller's
+// retry-or-drop disposition.
+func retryOnConflict(ctx context.Context, write func() error) error {
+	err := write()
+	for attempt := 1; attempt < conflictAttempts && rdb.IsTransactionConflict(err); attempt++ {
+		// A short, jittered pause, so two writers that just collided do not collide again in step.
+		select {
+		case <-ctx.Done():
+			return err
+		case <-time.After(time.Duration(5+rand.Intn(20)) * time.Millisecond):
+		}
+		log.Warn().Err(err).Int("attempt", attempt).Msg("A device state write lost a transaction conflict; retrying it")
+		err = write()
+	}
+	return err
 }
