@@ -146,12 +146,12 @@ func InitializeCaches(nmgr *messaging.NatsManager, cfg *config.DeviceManagementC
 	perDevice := messaging.WithLocalBounds(cfg.InMemoryCache.PerDeviceCacheEntries,
 		cfg.InMemoryCache.PerDeviceCacheMiB<<20)
 	deviceByToken, err := nmgr.NewCache(CACHE_NAME_DEVICE_BY_TOKEN,
-		time.Duration(cfg.DeviceCacheTtlSeconds)*time.Second, perDevice)
+		time.Duration(cfg.DeviceCacheTtlSeconds)*time.Second, perDevice, deviceCharge.option())
 	if err != nil {
 		return nil, err
 	}
 	relationshipsBySource, err := nmgr.NewCache(CACHE_NAME_RELATIONSHIPS_BY_SOURCE,
-		time.Duration(cfg.RelationshipCacheTtlSeconds)*time.Second, perDevice)
+		time.Duration(cfg.RelationshipCacheTtlSeconds)*time.Second, perDevice, relationshipsCharge.option())
 	if err != nil {
 		return nil, err
 	}
@@ -159,18 +159,18 @@ func InitializeCaches(nmgr *messaging.NatsManager, cfg *config.DeviceManagementC
 	// still holds the metric definitions, and renaming an operator-visible key is not
 	// worth the break.
 	profileResolutionByType, err := nmgr.NewCache(CACHE_NAME_PROFILE_RESOLUTION_BY_TYPE,
-		time.Duration(cfg.MetricDefCacheTtlSeconds)*time.Second)
+		time.Duration(cfg.MetricDefCacheTtlSeconds)*time.Second, resolutionCharge.option())
 	if err != nil {
 		return nil, err
 	}
 	membershipsByEntity, err := nmgr.NewCache(CACHE_NAME_MEMBERSHIPS_BY_ENTITY,
-		time.Duration(cfg.MembershipCacheTtlSeconds)*time.Second, perDevice)
+		time.Duration(cfg.MembershipCacheTtlSeconds)*time.Second, perDevice, membershipsCharge.option())
 	if err != nil {
 		return nil, err
 	}
 	// The scoped-groups-exist gate shares the membership cache's invalidation cadence.
 	scopedGroupsExist, err := nmgr.NewCache(CACHE_NAME_SCOPED_GROUPS_EXIST,
-		time.Duration(cfg.MembershipCacheTtlSeconds)*time.Second)
+		time.Duration(cfg.MembershipCacheTtlSeconds)*time.Second, scopedGroupsCharge.option())
 	if err != nil {
 		return nil, err
 	}
@@ -193,3 +193,27 @@ func InitializeCaches(nmgr *messaging.NatsManager, cfg *config.DeviceManagementC
 		Credentials:             credentials,
 	}, nil
 }
+
+// decodedCharge is what one cache here is charged, against its in-process byte bound, for
+// the decoded copy it keeps beside the encoded bytes: the encoded length times factor, plus
+// base. The factors are the measured ratio of heap to JSON length for what each cache
+// holds, rounded up, and TestDecodedChargeCoversTheHeap measures it again and fails if a
+// charge falls below the heap. A resolution is a slice of structs with pointer fields and
+// holds several times its encoding; the others hold about what they encode, so they are not
+// charged more, which would shrink the per-device caches' capacity for nothing.
+type decodedCharge struct{ factor, base int }
+
+var (
+	deviceCharge        = decodedCharge{factor: 1, base: 64}
+	relationshipsCharge = decodedCharge{factor: 2, base: 64}
+	resolutionCharge    = decodedCharge{factor: 4, base: 64}
+	membershipsCharge   = decodedCharge{factor: 1, base: 64}
+	scopedGroupsCharge  = decodedCharge{factor: 1, base: 64}
+)
+
+func (c decodedCharge) option() messaging.CacheOption {
+	return messaging.WithDecodedCharge(c.factor, c.base)
+}
+
+// bytes is what the cache charges for a decoded value of encoded length n.
+func (c decodedCharge) bytes(n int) int { return n*c.factor + c.base }

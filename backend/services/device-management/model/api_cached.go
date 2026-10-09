@@ -226,27 +226,36 @@ func (capi *CachedApi) AnyScopedGroups(ctx context.Context) (bool, error) {
 // cachedAnyScopedGroups is the cache half of AnyScopedGroups (see readCache for the three
 // results).
 func (capi *CachedApi) cachedAnyScopedGroups(ctx context.Context, tenant string, memoryOnly bool) (value, answered, settled bool) {
-	answered, settled = readCache(ctx, capi.caches.ScopedGroupsExist, tenant, &value, memoryOnly)
+	cached, answered, settled := readCache(ctx, capi.caches.ScopedGroupsExist, tenant, cloneBool, memoryOnly)
+	if cached != nil {
+		value = *cached
+	}
 	return value, answered, settled
 }
 
-// readCache reads key from c into dest: the cache half of every cached read here, so all of
-// them treat a miss and a cache error alike, as not answered, and go on to the database.
+// readCache reads key from c: the cache half of every cached read here, so all of them
+// treat a miss and a cache error alike, as not answered, and go on to the database. It
+// returns a deep clone (see the clone functions) of the decoded value the in-process tier
+// keeps, so a hit costs no JSON decode and no caller can change what the next one reads.
 //
 // With memoryOnly it asks only the in-process copy, and settled reports whether that was
 // enough to decide: false when memory held nothing live, and the caller must ask again
 // without memoryOnly. Without it, settled is always true.
-func readCache(ctx context.Context, c *messaging.Cache, key string, dest any, memoryOnly bool) (answered, settled bool) {
+func readCache[T any](ctx context.Context, c *messaging.Cache, key string, clone func(*T) *T,
+	memoryOnly bool) (value *T, answered, settled bool) {
 	if memoryOnly {
-		found, err := c.GetFromMemory(key, dest)
+		v, found, err := messaging.GetClonedFromMemory(c, key, clone)
 		if err != nil {
 			// Held, but it would not decode: as Get's decode error does, go to the database.
-			return false, true
+			return nil, false, true
 		}
-		return found, found
+		return v, found, found
 	}
-	found, err := c.Get(ctx, key, dest)
-	return err == nil && found, true
+	v, found, err := messaging.GetCloned(ctx, c, key, clone)
+	if err != nil || !found {
+		return nil, false, true
+	}
+	return v, true, true
 }
 
 // loadAnyScopedGroups is the database half of AnyScopedGroups: it reads the database and
@@ -289,7 +298,10 @@ func (capi *CachedApi) MembershipsForEntity(ctx context.Context, entityType stri
 
 // cachedMemberships is the cache half of MembershipsForEntity (see readCache).
 func (capi *CachedApi) cachedMemberships(ctx context.Context, key string, memoryOnly bool) (value []GroupMembership, answered, settled bool) {
-	answered, settled = readCache(ctx, capi.caches.MembershipsByEntity, key, &value, memoryOnly)
+	cached, answered, settled := readCache(ctx, capi.caches.MembershipsByEntity, key, cloneMemberships, memoryOnly)
+	if cached != nil {
+		value = *cached
+	}
 	return value, answered, settled
 }
 
@@ -344,11 +356,8 @@ func (capi *CachedApi) DevicesByToken(ctx context.Context, tokens []string) ([]*
 // getDevice returns the cached device for key, or nil on a miss (or any cache
 // error, which degrades to a DB lookup by the caller).
 func (capi *CachedApi) getDevice(ctx context.Context, key string) *Device {
-	var device Device
-	if found, err := capi.caches.DeviceByToken.Get(ctx, key, &device); err == nil && found {
-		return &device
-	}
-	return nil
+	device, _, _ := readCache(ctx, capi.caches.DeviceByToken, key, cloneCachedDevice, false)
+	return device
 }
 
 // TrackedRelationshipsForDevice serves the resolver's tracked-relationship lookup from
@@ -402,12 +411,12 @@ func (capi *CachedApi) loadRelationships(ctx context.Context, key string,
 // cachedRelationships is the cache half of TrackedRelationshipsForDevice (see readCache).
 func (capi *CachedApi) cachedRelationships(ctx context.Context, key string,
 	memoryOnly bool) (*EntityRelationshipSearchResults, bool, bool) {
-	var results EntityRelationshipSearchResults
-	answered, settled := readCache(ctx, capi.caches.RelationshipsBySource, key, &results, memoryOnly)
+	results, answered, settled := readCache(ctx, capi.caches.RelationshipsBySource, key,
+		cloneRelationshipResults, memoryOnly)
 	if !answered {
 		return nil, false, settled
 	}
-	return &results, true, settled
+	return results, true, settled
 }
 
 // UpdateDevice forwards to the DB then evicts the device's by-token entry so a
@@ -491,12 +500,12 @@ func (capi *CachedApi) ProfileResolutionByDeviceType(ctx context.Context, device
 // readCache).
 func (capi *CachedApi) cachedProfileResolution(ctx context.Context, key string,
 	memoryOnly bool) (*ProfileResolution, bool, bool) {
-	var cached ProfileResolution
-	answered, settled := readCache(ctx, capi.caches.ProfileResolutionByType, key, &cached, memoryOnly)
+	cached, answered, settled := readCache(ctx, capi.caches.ProfileResolutionByType, key,
+		cloneProfileResolution, memoryOnly)
 	if !answered {
 		return nil, false, settled
 	}
-	return &cached, true, settled
+	return cached, true, settled
 }
 
 // loadProfileResolution is the database half of ProfileResolutionByDeviceType.
