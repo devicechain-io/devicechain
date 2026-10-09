@@ -8,6 +8,7 @@ import (
 	"math"
 	"time"
 
+	detectcore "github.com/devicechain-io/dc-event-processing/internal/detect/core"
 	"github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/messaging"
 )
@@ -53,6 +54,10 @@ const (
 	// max(this guard, the checkpoint interval) + one tick — a device that stops reporting is
 	// flagged that long after its last event, not instantly.
 	DefaultIdleAdvanceGuardSeconds = 5
+
+	// DefaultDetectShards is how many ways the live detection engine is split by key: one, the
+	// unsplit engine. The upper bound is detectcore.MaxShards, the largest the engine will build.
+	DefaultDetectShards = 1
 	// DefaultMaxRulesPerTenant and DefaultMaxLiveKeysPerTenant are the per-tenant runtime state
 	// budget ceilings (ADR-023 amendment, ADR-051 slice 6c). DETECT is a shared singleton: all
 	// tenants' rules and keyed window/timer state live in one process, so one tenant's runaway
@@ -151,6 +156,15 @@ type EventProcessingConfiguration struct {
 	// defaults to 5s; a negative value is treated as zero (no tolerance).
 	WatermarkLatenessSeconds int
 
+	// DetectShards is how many ways the live detection engine's keyed state is split (by each
+	// rule's own series key, a device or a correlation anchor). Unset (0) defaults to 1, the
+	// unsplit engine; accepted range 1 to 64, anything else is refused at startup. Detections,
+	// the watermark and the committed snapshot are identical for every value, so it may be changed
+	// at any restart in either direction with no migration: the snapshot is re-split on restore.
+	// In this release the shards are applied one after another, not in parallel: the setting
+	// exists so the shard count can be chosen and observed before it buys anything.
+	DetectShards int
+
 	// IdleAdvanceGuardSeconds is how long the resolved stream must be quiet before DETECT
 	// advances its logical clock off the wall clock so a silent series' absence/duration
 	// timer fires (ADR-051 slice 4c). Unset (0) defaults to 5s; a negative value disables
@@ -227,6 +241,9 @@ func (c *EventProcessingConfiguration) ApplyDefaults() {
 	}
 	if c.WatermarkLatenessSeconds == 0 {
 		c.WatermarkLatenessSeconds = DefaultWatermarkLatenessSeconds
+	}
+	if c.DetectShards == 0 {
+		c.DetectShards = DefaultDetectShards
 	}
 	if c.IdleAdvanceGuardSeconds == 0 {
 		c.IdleAdvanceGuardSeconds = DefaultIdleAdvanceGuardSeconds
@@ -338,6 +355,11 @@ func (c *EventProcessingConfiguration) Validate() error {
 	if c.CheckpointTimeoutSeconds <= 0 || c.CheckpointTimeoutSeconds > MaxCheckpointTimeoutSeconds {
 		return fmt.Errorf("checkpointTimeoutSeconds must be between 1 and %d, got %d",
 			MaxCheckpointTimeoutSeconds, c.CheckpointTimeoutSeconds)
+	}
+	// Refused rather than clamped: the engine would quietly run a count the operator did not write.
+	// 0 is unset, and ApplyDefaults has already made it 1 by the time the service validates.
+	if c.DetectShards < 0 || c.DetectShards > detectcore.MaxShards {
+		return fmt.Errorf("detectShards must be between 1 and %d (or unset), got %d", detectcore.MaxShards, c.DetectShards)
 	}
 	// The per-tenant budgets fail closed: a negative ceiling is rejected rather than silently treated
 	// as unlimited (ADR-023 — an unset budget defaults to the platform ceiling in ApplyDefaults, never

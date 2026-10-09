@@ -248,25 +248,7 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	// resolved stream in order from its snapshot sequence (via the NatsManager's replay
 	// reader) up to the head before consuming live, and applies live rule updates from the
 	// published-rule fact reader on the same loop.
-	lateness := time.Duration(Configuration.WatermarkLatenessSeconds) * time.Second
-	if lateness < 0 {
-		lateness = 0
-	}
-	// A negative guard (operator opt-out) disables idle-advance; the processor treats any
-	// non-positive value as disabled, so a negative seconds value maps straight through.
-	idleGuard := time.Duration(Configuration.IdleAdvanceGuardSeconds) * time.Second
-	cfg := processor.Config{
-		PartitionId:                 singletonPartition,
-		Suffix:                      streams.ResolvedEvents,
-		CheckpointEvents:            Configuration.CheckpointEvents,
-		CheckpointInterval:          time.Duration(Configuration.CheckpointIntervalSeconds) * time.Second,
-		CheckpointTimeout:           time.Duration(Configuration.CheckpointTimeoutSeconds) * time.Second,
-		Lateness:                    lateness,
-		IdleAdvanceGuard:            idleGuard,
-		MaxRulesPerTenant:           Configuration.MaxRulesPerTenant,
-		MaxLiveKeysPerTenant:        Configuration.MaxLiveKeysPerTenant,
-		MaxRetainedSamplesPerTenant: Configuration.MaxRetainedSamplesPerTenant,
-	}
+	cfg := detectProcessorConfig(Configuration)
 	// Its instruments were built once in afterMicroserviceInitialized and are handed in,
 	// because a collector belongs to the process while everything this callback builds
 	// belongs to the connection, and a second registration of the same collector panics.
@@ -822,4 +804,29 @@ func beforeMicroserviceTerminated(ctx context.Context) error {
 	// thing that moved is a no-op, and NATS still terminates before Rdb — which is the pair
 	// that actually closes handles, and which the processor above still precedes.
 	return Svc.Terminate(ctx)
+}
+
+// detectProcessorConfig maps the service's typed configuration onto the DETECT processor's. It is
+// a function of its own so a test can see that every setting it carries arrives.
+func detectProcessorConfig(c *config.EventProcessingConfiguration) processor.Config {
+	lateness := time.Duration(c.WatermarkLatenessSeconds) * time.Second
+	if lateness < 0 {
+		lateness = 0
+	}
+	// A negative guard (operator opt-out) disables idle-advance; the processor treats any
+	// non-positive value as disabled, so a negative seconds value maps straight through.
+	idleGuard := time.Duration(c.IdleAdvanceGuardSeconds) * time.Second
+	return processor.Config{
+		PartitionId:                 singletonPartition,
+		Suffix:                      streams.ResolvedEvents,
+		CheckpointEvents:            c.CheckpointEvents,
+		CheckpointInterval:          time.Duration(c.CheckpointIntervalSeconds) * time.Second,
+		CheckpointTimeout:           time.Duration(c.CheckpointTimeoutSeconds) * time.Second,
+		Lateness:                    lateness,
+		IdleAdvanceGuard:            idleGuard,
+		Shards:                      c.DetectShards,
+		MaxRulesPerTenant:           c.MaxRulesPerTenant,
+		MaxLiveKeysPerTenant:        c.MaxLiveKeysPerTenant,
+		MaxRetainedSamplesPerTenant: c.MaxRetainedSamplesPerTenant,
+	}
 }

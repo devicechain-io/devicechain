@@ -35,8 +35,10 @@ type DetectMetrics struct {
 	snapshotBytes       prometheus.Gauge
 	watermarkLagSeconds prometheus.Gauge
 	restoreSeconds      prometheus.Gauge
-	isLeader            prometheus.Gauge
-	detectLive          prometheus.Gauge
+	// shards is detect_shards: K, how many ways the live engine's keyed state is split.
+	shards     prometheus.Gauge
+	isLeader   prometheus.Gauge
+	detectLive prometheus.Gauge
 
 	// loopHeartbeat is the unix time of the last pass of the single-writer loop. Every other
 	// gauge the DETECT alerts read is sampled ON that loop, so a loop hung inside a call freezes
@@ -153,6 +155,7 @@ func NewDetectMetrics(ms *core.Microservice) *DetectMetrics {
 		snapshotBytes:       ms.NewGauge("detect_snapshot_bytes", "Serialized size of the last DETECT snapshot payload."),
 		watermarkLagSeconds: ms.NewGauge("detect_watermark_lag_seconds", "Wall-clock time minus the engine watermark at the last checkpoint."),
 		restoreSeconds:      ms.NewGauge("detect_restore_seconds", "Time to restore engine state from the snapshot store at startup."),
+		shards:              ms.NewGauge("detect_shards", "How many ways the live detection engine's keyed state is split (the detectShards setting; 1 is the unsplit engine). Set when the engine is built or restored."),
 		// Leadership (ADR-070). Two gauges rather than one, because the interesting
 		// failure is a pod that HAS the partition and is not detecting on it: a term
 		// build runs a snapshot restore, three view builds and a full replay, and a
@@ -533,6 +536,14 @@ func (m *DetectMetrics) recordRestore(seconds float64, appliedSeq uint64) {
 	}
 	m.restoreSeconds.Set(seconds)
 	m.appliedStreamSeq.Set(float64(appliedSeq))
+}
+
+// recordShards records the shard count the live engine was built with.
+func (m *DetectMetrics) recordShards(k int) {
+	if m == nil {
+		return
+	}
+	m.shards.Set(float64(k))
 }
 
 // recordIdleAdvance records one wall-clock idle advance that fired dets detections.
