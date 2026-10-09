@@ -38,7 +38,8 @@
 # (ghcr.io/..., quay.io/..., localhost:5000/...) gets the retry only.
 #
 # Knobs (tests use them; CI leaves the defaults): DC_PULL_ATTEMPTS (3),
-# DC_PULL_BACKOFF seconds (10, multiplied by the attempt number), DC_PULL_MIRRORS
+# DC_PULL_TIMEOUT seconds per Docker Hub attempt (90; a hung auth endpoint must fail fast, a
+# slow-but-moving pull of a few hundred MB must not be killed), DC_PULL_MIRROR_TIMEOUT (600), DC_PULL_BACKOFF seconds (10, multiplied by the attempt number), DC_PULL_MIRRORS
 # (space-separated mirror prefixes tried in order; default `mirror.gcr.io`, plus
 # `public.ecr.aws/docker/library` for official `library/` images).
 set -euo pipefail
@@ -60,7 +61,8 @@ case "$1" in
     case "$ref" in
       mirror.gcr.io/*) [ "${MIRROR_FAIL:-0}" != 0 ] && exit 1 ;;
       public.ecr.aws/*) [ "${MIRROR_FAIL:-0}" = 1 ] && exit 1 ;;
-      *) [ "${HUB_FAIL:-0}" = 1 ] && exit 1 ;;
+      *) [ "${HUB_HANG:-0}" = 1 ] && sleep 30
+         [ "${HUB_FAIL:-0}" = 1 ] && exit 1 ;;
     esac
     exit 0 ;;
   tag) exit 0 ;;
@@ -73,9 +75,9 @@ STUB
   want() { # want <name> <expected rc> <expected stdout> <env...> -- <args...>
     local name="$1" erc="$2" eout="$3" out rc; shift 3
     : >"$STUB_LOG"
-    local envs=()
+    local envs=(DC_SELFTEST=1)
     while [ "$1" != "--" ]; do envs+=("$1"); shift; done; shift
-    set +e; out="$(env ${envs[@]+"${envs[@]}"} "$self" "$@" 2>"$tmp/err")"; rc=$?; set -e
+    set +e; out="$(env "${envs[@]}" "$self" "$@" 2>"$tmp/err")"; rc=$?; set -e
     if [ "$rc" != "$erc" ] || [ "$out" != "$eout" ]; then
       echo "self-test FAIL ($name): rc=$rc (want $erc) stdout='$out' (want '$eout')" >&2
       cat "$tmp/err" >&2; exit 1
@@ -101,6 +103,8 @@ STUB
   unlogged public.ecr.aws
   want platform-passed 0 "x/y:1" HUB_FAIL=1 -- --platform linux/amd64 "x/y:1@$d"
   logged "pull --quiet --platform linux/amd64 mirror.gcr.io/x/y@$d"
+  want hub-hangs-mirror-runs 0 "x/y:1" HUB_HANG=1 DC_PULL_TIMEOUT=1 DC_PULL_ATTEMPTS=2 -- "x/y:1@$d"
+  logged "pull --quiet mirror.gcr.io/x/y@$d"
   want all-down 1 "" HUB_FAIL=1 MIRROR_FAIL=1 -- "x/y:1@$d"
   grep -q "NOTHING WAS VERIFIED" "$tmp/err" || { echo "self-test FAIL: failure message unclear" >&2; exit 1; }
   unlogged "^tag "
@@ -136,18 +140,19 @@ digest="${BASH_REMATCH[2]}"
 attempts="${DC_PULL_ATTEMPTS:-3}"
 backoff="${DC_PULL_BACKOFF:-10}"
 
-# pull_ref <ref>: up to $attempts tries with linear backoff.
+# pull_ref <ref> <seconds per attempt>: up to $attempts tries with linear backoff.
 pull_ref() {
-  local r="$1" a
+  local r="$1" limit="$2" a
   for ((a = 1; a <= attempts; a++)); do
-    if docker pull --quiet ${platform[@]+"${platform[@]}"} "$r" >/dev/null 2>&1; then return 0; fi
+    # A per-attempt timeout: a hung Hub auth endpoint must fail fast so the mirror actually runs.
+    if timeout "$limit" docker pull --quiet "${platform[@]}" "$r" >/dev/null 2>&1; then return 0; fi
     log "pull of $r failed (attempt $a/$attempts)"
     [ "$a" -lt "$attempts" ] && sleep $((a * backoff))
   done
   return 1
 }
 
-if pull_ref "$ref"; then
+if pull_ref "$ref" "${DC_PULL_TIMEOUT:-90}"; then
   echo "$ref"
   exit 0
 fi
@@ -181,14 +186,15 @@ if [ -z "${DC_PULL_MIRRORS:-}" ] && [[ "$name" == library/* ]]; then
   mirrors="$mirrors public.ecr.aws/docker/$(dirname "$name")"
 fi
 
-for m in $mirrors; do
+read -ra mirror_list <<<"$mirrors"
+for m in "${mirror_list[@]}"; do
   mref="$m/${name}@${digest}"
   # public.ecr.aws/docker/library is already the library namespace.
   [[ "$m" == */library && "$name" == library/* ]] && mref="$m/${name#library/}@${digest}"
   log "Docker Hub failed for $ref; trying $mref"
   # Two attempts: the primary already burned the full budget, a mirror is a fallback.
   saved="$attempts"; attempts=2
-  if pull_ref "$mref"; then
+  if pull_ref "$mref" "${DC_PULL_MIRROR_TIMEOUT:-600}"; then
     attempts="$saved"
     local_tag="${tag:-dc-mirror-${digest:7:12}}"
     local_ref="${name#library/}:${local_tag}"
