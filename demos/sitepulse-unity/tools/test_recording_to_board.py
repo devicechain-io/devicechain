@@ -91,6 +91,12 @@ def alarm_row(**kw):
 STEP_NOTE = "SP-HL-0001: prepare low-fuel cycle"
 
 
+def snapshot_row(t=6.0, requested="2026-10-07T02:01:40.0000000Z", **kw):
+    r = {"t": t, "k": "alarmSnapshot", "requested": requested, "total": len(kw.get("alarms", [])), "alarms": []}
+    r.update(kw)
+    return r
+
+
 def make_run(root, observed_extra=(), run_patch=None, video_patch=None, extra_files=None, presenter_rows=None, device_extra=(), drop_ack=False, observed_drop=()):
     run = {
         "formatVersion": 1,
@@ -135,7 +141,7 @@ def make_run(root, observed_extra=(), run_patch=None, video_patch=None, extra_fi
         {"t": 0.1, "k": "status", "source": "alarms", "state": "Connecting"},
         meas("fuel_pct", 77.0, "2026-10-07T02:01:30.0000000Z", 0.4, snap=True),  # a seed row from before the start
         {"t": 0.5, "k": "command", "dev": "sp-hauler-01", "token": "hex:eacd5c2d8d50", "n": "goto-refuel", "state": "SENT"},
-        {"t": 1.0, "k": "alarmSnapshot", "total": 0, "alarms": []},
+        {"t": 1.0, "k": "alarmSnapshot", "requested": "2026-10-07T02:01:36.9000000Z", "total": 0, "alarms": []},
         meas("fuel_pct", 90.5, "2026-10-07T02:01:37.0000009Z", 1.2),  # the device's microsecond, a later 100 ns digit
         meas("tyre_pressure_kpa", 700.0, T1, 1.2),
         meas("engine_hours", 5.0, T1, 1.2),  # real, but not a board metric: dropped from the output
@@ -426,7 +432,7 @@ class FabricationPaths(Base):
 
     def test_a_snapshot_alarm_must_predate_the_run_and_is_reminted(self):
         old = {"dev": "sp-hauler-01", "token": "11111111-2222-3333-4444-555555555555", "key": "low-fuel", "metric": "fuel_pct", "state": "ACTIVE", "sev": "MAJOR"}
-        snap = lambda occ: {"t": 6.0, "k": "alarmSnapshot", "total": 1, "alarms": [dict(old, occ=occ)]}
+        snap = lambda occ: snapshot_row(alarms=[dict(old, occ=occ)])
         make_run(self.run_dir, observed_extra=[snap("2026-10-07T02:01:20.0000000Z")])
         doc, _ = c.convert(self.run_dir, BOARD)
         ids = [a["id"] for sn in doc["alarms"]["snapshots"] for a in sn["alarms"]]
@@ -617,6 +623,100 @@ class Links(Base):
         os.mkdir(os.path.join(self.run_dir, "run.json"))
         with self.assertRaisesRegex(c.Refusal, "plain regular file"):
             c.read_allowed(self.run_dir, "run.json")
+
+
+class Snapshots(Base):
+    OLD = {"dev": "sp-hauler-01", "key": "low-fuel", "metric": "fuel_pct", "state": "ACTIVE", "sev": "MAJOR", "occ": "2026-10-07T02:01:20.0000000Z"}
+
+    def alarm(self, token="u-1", **kw):
+        return dict(self.OLD, token=token, **kw)
+
+    def test_the_query_send_time_is_carried_and_is_not_after_arrival(self):
+        doc, _ = self.convert()
+        sn = doc["alarms"]["snapshots"][0]
+        self.assertEqual({"tMs", "requestedAtMs", "total", "alarms"}, set(sn))
+        self.assertEqual(900, sn["requestedAtMs"])  # 02:01:36.9 against a start of 02:01:36.0
+        self.assertLessEqual(sn["requestedAtMs"], sn["tMs"])
+
+    def test_a_snapshot_with_no_send_time_is_refused(self):
+        row = snapshot_row()
+        del row["requested"]
+        with self.assertRaisesRegex(c.Refusal, "when its query was sent"):
+            self.convert(observed_extra=[row])
+
+    def test_a_query_sent_after_the_snapshot_arrived_is_refused(self):
+        with self.assertRaisesRegex(c.Refusal, "after it arrived"):
+            self.convert(observed_extra=[snapshot_row(t=6.0, requested="2026-10-07T02:01:50.0000000Z")])
+
+    def test_a_truncated_snapshot_is_refused(self):
+        row = snapshot_row(alarms=[self.alarm()], truncated=True)
+        with self.assertRaisesRegex(c.Refusal, "truncated"):
+            self.convert(observed_extra=[row])
+
+    def test_a_total_that_differs_from_the_list_is_refused(self):
+        for total in (3, 0):
+            row = snapshot_row(alarms=[self.alarm()], total=total)
+            with self.subTest(total=total), self.assertRaisesRegex(c.Refusal, "lists 1"):
+                self.convert(observed_extra=[row])
+
+    def test_a_snapshot_with_no_total_is_refused(self):
+        row = snapshot_row(alarms=[self.alarm()])
+        del row["total"]
+        with self.assertRaisesRegex(c.Refusal, "total"):
+            self.convert(observed_extra=[row])
+
+    def test_the_same_alarm_twice_in_a_snapshot_is_refused(self):
+        row = snapshot_row(alarms=[self.alarm(), self.alarm()])
+        with self.assertRaisesRegex(c.Refusal, "twice"):
+            self.convert(observed_extra=[row])
+
+    def test_an_alarm_id_cannot_move_to_another_device(self):
+        snap = snapshot_row(t=4.0, requested="2026-10-07T02:01:39.0000000Z", alarms=[self.alarm(token="tok-y", dev="sp-hauler-02")])
+        make_run(self.run_dir, observed_extra=[snap, alarm_row(t=5.0, token="tok-y", dev="sp-hauler-01")])
+        with self.assertRaisesRegex(c.Refusal, "moves from device"):
+            c.convert(self.run_dir, BOARD)
+
+    def test_the_finished_document_rejects_the_same_shapes(self):
+        doc, _ = self.convert(observed_extra=[snapshot_row(alarms=[self.alarm()])])
+        for name, mutate in (
+            ("total", lambda d: d["alarms"]["snapshots"][-1].update(total=5)),
+            ("send time after arrival", lambda d: d["alarms"]["snapshots"][-1].update(requestedAtMs=10**6)),
+            ("missing send time", lambda d: d["alarms"]["snapshots"][-1].pop("requestedAtMs")),
+            ("duplicate", lambda d: d["alarms"]["snapshots"][-1].update(alarms=d["alarms"]["snapshots"][-1]["alarms"] * 2, total=2)),
+            ("device move", lambda d: d["alarms"]["events"][0].update(dev="sp-hauler-02", id=d["alarms"]["snapshots"][-1]["alarms"][0]["id"])),
+            ("chapter order", lambda d: d["chapters"].reverse()),
+        ):
+            bad = json.loads(json.dumps(doc))
+            mutate(bad)
+            with self.subTest(name), self.assertRaises(c.Refusal):
+                c.validate_output(bad)
+
+
+class Dates(Base):
+    def test_impossible_dates_are_refused_not_rolled_over(self):
+        for ts in ("2026-02-30T02:01:36.0000000Z", "2026-13-01T00:00:00Z", "2026-10-07T24:00:00Z", "2026-10-07T02:61:00Z"):
+            with self.subTest(ts=ts):
+                with self.assertRaises(c.Refusal):
+                    c._us(ts)
+                with self.assertRaises(c.Refusal):
+                    c._g("timestamp", ts, "ts")
+        with self.assertRaises(c.Refusal):
+            self.convert(run_patch={"startedAtUtc": "2026-02-30T02:01:36.0000000Z"})
+        with self.assertRaises(c.Refusal):
+            self.convert(observed_extra=[alarm_row(occ="2026-02-30T02:01:36.0000000Z")])
+
+
+class ChapterOrder(Base):
+    def test_chapters_out_of_time_order_are_refused(self):
+        video = {"steps": [{"name": "low fuel", "atSeconds": 5.0, "note": STEP_NOTE}, {"name": "earlier", "atSeconds": 2.0, "note": "ok"}]}
+        with self.assertRaisesRegex(c.Refusal, "earlier than the chapter before"):
+            self.convert(video_patch=video, presenter_rows=[{"t": 6.5, "k": "action", "text": STEP_NOTE}])
+
+    def test_a_chapter_outside_an_excerpt_window_is_refused(self):
+        doc, _ = c.convert(make_run(self.run_dir), BOARD, excerpt=(1.1, 3.5))
+        doc["chapters"].append({"tMs": 59000, "name": "late", "note": "ok"})
+        with self.assertRaisesRegex(c.Refusal, "outside the excerpt"):
+            c.validate_output(doc)
 
 
 class Scan(unittest.TestCase):

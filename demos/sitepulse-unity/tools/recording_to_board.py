@@ -43,7 +43,12 @@ from the start of the run, as the recording viewer applied them):
   measurements  columns, one entry per row, sorted by t:
            d (index into devices), n (index into channels.measurements),
            t (ms), v (value), s (1 for a platform seed row, else 0)
-  alarms   snapshots[{tMs, total, alarms[alarm]}], events[{tMs, ...alarm}]
+  alarms   snapshots[{tMs, requestedAtMs, total, alarms[alarm]}], events[{tMs, ...alarm}]
+           A snapshot is the platform's whole active-alarm list as of its query. tMs is when the
+           viewer applied it; requestedAtMs (ms from the run start, never after tMs) is when the
+           query was sent, so a reader can refuse to let a snapshot erase an alarm whose event
+           was applied after the query went out. total always equals the number of alarms listed
+           (a truncated snapshot, or one whose total differs from its list, is refused).
            alarm = {id, dev, key, metric, state, sev, occ, ack?}; ack appears only when true
   locations []   (always empty in this converter)
 
@@ -53,6 +58,7 @@ up to the end of its window.
 """
 
 import argparse
+import datetime
 import hashlib
 import json
 import math
@@ -124,13 +130,26 @@ def _sha256(data):
     return hashlib.sha256(data).hexdigest()
 
 
+def _real_date(ts):
+    """The timestamp must be a real instant: 2026-02-30 or hour 24 is refused, never rolled over."""
+    try:
+        datetime.datetime(int(ts[0:4]), int(ts[5:7]), int(ts[8:10]), int(ts[11:13]), int(ts[14:16]), int(ts[17:19]))
+    except ValueError:
+        raise Refusal("not a real date and time: %r" % (ts,))
+
+
 def _us(ts):
     """An ISO UTC time cut to microseconds. The platform stores microseconds while the
     recorder writes 100 ns ticks, so the same instant can differ in the last digit."""
     m = re.fullmatch(r"(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d)(?:\.(\d+))?Z", ts or "")
     if not m:
         raise Refusal("not a UTC timestamp: %r" % (ts,))
+    _real_date(ts)
     return "%s.%sZ" % (m.group(1), (m.group(2) or "").ljust(6, "0")[:6])
+
+
+def _parse_us(us):
+    return datetime.datetime.strptime(us, "%Y-%m-%dT%H:%M:%S.%fZ")
 
 
 def _ms(seconds):
@@ -169,6 +188,8 @@ def _g(name, value, where):
     """`value` must be a string that matches grammar `name` in full."""
     if not isinstance(value, str) or not re.fullmatch(GRAMMAR[name], value):
         raise Refusal("%s does not fit the %s grammar" % (where, name))
+    if name == "timestamp":
+        _real_date(value)
     return value
 
 
@@ -250,6 +271,7 @@ def convert(run_dir, board, excerpt=None):
         "otherRowsDropped": 0,
     }
     alarm_ids = {}
+    alarm_dev = {}
     snapshots, events = [], []
     last_t = -1
     seed_phase = True  # the platform's initial snapshot: over at the first measurement that is not a seed
@@ -275,6 +297,7 @@ def convert(run_dir, board, excerpt=None):
                 "fabricated row: alarm %s on %s at %s has no device-published %s sample" % (a["key"], a["dev"], a["occ"], a["metric"]),
             )
         aid = alarm_ids.setdefault(a["token"], "alarm-%d" % (len(alarm_ids) + 1))
+        _require(alarm_dev.setdefault(aid, a["dev"]) == a["dev"], "alarm %s moves from device %s to %s" % (aid, alarm_dev[aid], a["dev"]))
         o = {"id": aid, "dev": a["dev"], "key": a["key"], "metric": a["metric"], "state": a["state"], "sev": a["sev"], "occ": a["occ"]}
         if a.get("ack") is True:
             o["ack"] = True
@@ -338,7 +361,23 @@ def convert(run_dir, board, excerpt=None):
             o["tMs"] = tm
             events.append(o)
         elif kind == "alarmSnapshot":
-            snapshots.append({"tMs": tm, "total": _int(r.get("total"), "alarm snapshot total"), "alarms": [alarm_obj(a, snapshot=True) for a in r.get("alarms", [])]})
+            # A paged read that did not reach the platform's total says so; a reader must not let it
+            # clear anything, and nothing here can make it complete, so it is refused outright.
+            _require(not r.get("truncated"), "the alarm snapshot at t=%s is truncated: it lists only part of the active alarms" % r["t"])
+            listed = r.get("alarms")
+            _require(isinstance(listed, list), "alarm snapshot has no alarm list")
+            tokens = [a.get("token") for a in listed]
+            _require(len(set(tokens)) == len(tokens), "alarm snapshot at t=%s lists the same alarm twice" % r["t"])
+            # The recorder drops rows that name no device before it lists them, so a total larger than
+            # the list may be truncation or may be such rows; either way the list is not the whole
+            # answer, and the reader would treat anything off it as cleared. Absent total is the same doubt.
+            total = _int(r.get("total"), "alarm snapshot total (absent or invalid: completeness cannot be established)")
+            _require(total == len(listed), "the alarm snapshot at t=%s says %d active alarms but lists %d" % (r["t"], total, len(listed)))
+            req = _us(r["requested"]) if isinstance(r.get("requested"), str) else None
+            _require(req is not None, "the alarm snapshot at t=%s does not record when its query was sent" % r["t"])
+            requested_ms = _ms((_parse_us(req) - _parse_us(start_us)).total_seconds())
+            _require(requested_ms <= tm, "the alarm snapshot at t=%s claims its query was sent after it arrived" % r["t"])
+            snapshots.append({"tMs": tm, "requestedAtMs": requested_ms, "total": total, "alarms": [alarm_obj(a, snapshot=True) for a in listed]})
         elif kind == "command":
             counts["commandRowsDropped"] += 1
         else:
@@ -435,6 +474,7 @@ def build_chapters(video, presenter, events):
             _require(at, "chapter %r says %s is %s but the recording has no such alarm event" % (name, m.group(1), m.group(2)))
             _require(abs(t - min(at)) <= 2000, "chapter %r is %d ms from the alarm it reports" % (name, abs(t - min(at))))
             t = max(t, min(at))
+        _require(not chapters or t >= chapters[-1]["tMs"], "chapter %r is earlier than the chapter before it" % name)
         chapters.append({"tMs": t, "name": name, "note": note})
     return chapters
 
@@ -501,11 +541,16 @@ def validate_output(doc):
         _g("deviceId", d["id"], "device id")
         _g("token", d["token"], "device token")
         _g("kind", d["kind"], "device kind")
+    last = -1
     for c in doc["chapters"]:
         _keys(c, {"tMs", "name", "note"}, "chapter")
         _int(c["tMs"], "chapter tMs")
+        _require(c["tMs"] >= last, "chapters are not in time order")
+        last = c["tMs"]
         _g("chapterName", c["name"], "chapter name")
         _g("chapterNote", c["note"], "chapter note")
+        if "excerpt" in doc and isinstance(doc["excerpt"], dict):
+            _require(doc["excerpt"].get("fromMs", 0) <= c["tMs"] <= doc["excerpt"].get("toMs", 0), "a chapter lies outside the excerpt window")
     if "excerpt" in doc:
         _keys(doc["excerpt"], {"fromMs", "toMs"}, "excerpt")
         _int(doc["excerpt"]["fromMs"], "excerpt fromMs")
@@ -534,17 +579,28 @@ def validate_output(doc):
         _require(a["state"] in ALARM_STATES and a["sev"] in ALARM_SEVERITIES, where + " has a state or severity outside the vocabulary")
         _require(a.get("ack", True) is True, where + " ack must be true when present")
 
+    id_dev = {}
+
+    def same_device(a):
+        _require(id_dev.setdefault(a["id"], a["dev"]) == a["dev"], "alarm %s is on two different devices" % a["id"])
+
     for sn in doc["alarms"]["snapshots"]:
-        _keys(sn, {"tMs", "total", "alarms"}, "alarm snapshot")
+        _keys(sn, {"tMs", "requestedAtMs", "total", "alarms"}, "alarm snapshot")
         _int(sn["tMs"], "snapshot tMs")
+        _int(sn["requestedAtMs"], "snapshot requestedAtMs")
+        _require(sn["requestedAtMs"] <= sn["tMs"], "a snapshot's query was sent after it arrived")
         _int(sn["total"], "snapshot total")
+        _require(isinstance(sn["alarms"], list) and sn["total"] == len(sn["alarms"]), "a snapshot's total differs from the alarms it lists")
+        _require(len({a["id"] for a in sn["alarms"]}) == len(sn["alarms"]), "a snapshot lists the same alarm twice")
         for a in sn["alarms"]:
             _keys(a, alarm_keys, "snapshot alarm", alarm_req)
             check_alarm(a, "snapshot alarm")
+            same_device(a)
     for e in doc["alarms"]["events"]:
         _keys(e, alarm_keys | {"tMs"}, "alarm event", alarm_req | {"tMs"})
         _int(e["tMs"], "event tMs")
         check_alarm(e, "alarm event")
+        same_device(e)
     _require(doc["locations"] == [], "this converter emits no positions")
 
 
