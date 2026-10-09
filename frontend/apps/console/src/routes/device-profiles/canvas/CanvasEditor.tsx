@@ -46,6 +46,7 @@ import {
   type DetectionRuleUpdateRequest,
 } from '@/lib/api/device-management';
 import { paintDiagnostics } from './diagnostics';
+import { ruleWarningText } from '@/lib/ruleWarnings';
 import { compileCanvas, type CanvasCompileResult, type NodeTraceStep } from '@/lib/api/event-processing';
 import {
   CONDITION_TYPES,
@@ -400,7 +401,9 @@ function CanvasEditorInner({
   };
 
   // Graph-level diagnostics (no node to pin them to) surface in the side panel.
+  // Warnings with no node (advisory, the graph still compiled) show beside them, in amber.
   const graphErrors = (result?.diagnostics ?? []).filter((d) => !d.nodeId && d.severity !== 'warning');
+  const graphWarnings = (result?.diagnostics ?? []).filter((d) => !d.nodeId && d.severity === 'warning');
 
   return (
     <div className="flex flex-col gap-4">
@@ -526,6 +529,15 @@ function CanvasEditorInner({
                   {graphErrors.map((d, i) => (
                     <li key={i} className="rounded-md border border-destructive/50 bg-destructive/10 px-2 py-1.5 text-xs text-destructive">
                       {d.message}
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {graphWarnings.length > 0 && (
+                <ul className="space-y-1" data-testid="graph-warnings">
+                  {graphWarnings.map((d, i) => (
+                    <li key={i} className="rounded-md border border-amber-500/50 bg-amber-500/10 px-2 py-1.5 text-xs text-amber-700 dark:text-amber-500">
+                      {ruleWarningText(t, d)}
                     </li>
                   ))}
                 </ul>

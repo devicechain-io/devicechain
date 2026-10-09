@@ -433,6 +433,7 @@
   "ruleValueMetricDescriptionDelta": "La métrica cuyo cambio se mide.",
   "ruleValueMetricLabel": "Métrica de valor",
   "ruleWarning.negatedAttributeGuard": "Esta condición comprueba que el atributo «{{p0}}» NO está definido, por lo que la regla se aplica a todos los dispositivos que no lo tienen: incluidos aquellos en los que nunca se definió, se definió con un valor que no es un número o se definió con ámbito CLIENT. Si querías decir solo los dispositivos configurados sin él, añade otra comprobación que lo exprese.",
+  "ruleWarning.negatedAttributeGuardDisjunct": "Esta condición es verdadera siempre que el atributo «{{p0}}» NO esté definido, sea cual sea la lectura, por lo que se activa para todos los dispositivos que no lo tienen y no se les aplica ningún umbral: incluidos aquellos en los que nunca se definió, se definió con un valor que no es un número o se definió con ámbito CLIENT. Si querías un límite de reserva, usa un condicional: \"t\" in m && (\"{{p0}}\" in attr ? m[\"t\"] > attr[\"{{p0}}\"] : m[\"t\"] > 80.0).",
   "ruleWindowLabel": "Ventana",
   "ruleWindowModeCountDescription": "Una ventana de N eventos, no de tiempo.",
   "ruleWindowModeCountLabel": "Conteo",

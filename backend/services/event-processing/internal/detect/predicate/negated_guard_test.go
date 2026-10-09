@@ -31,7 +31,6 @@ func TestNegatedAttributeGuards(t *testing.T) {
 		{`"t" in m && ("lim" in attr ? m["t"] > attr["lim"] : m["t"] > 80.0)`, nil, "the recommended fallback"},
 		{`!("t" in m) && m["x"] > 1.0`, nil, "negated presence in m, not attr"},
 		{`!(m["t"] > 1.0) && "lim" in attr`, nil, "unrelated negation"},
-		{`!("lim" in attr) || m["t"] > 80.0`, nil, "disjunction is not a conjunct"},
 		{`!(("lim" in attr) && m["t"] > 1.0)`, nil, "negated conjunction"},
 		{`"t" in m && m["t"] > 80.0`, nil, "reads no attr"},
 		{`true`, nil, "constant"},
@@ -43,6 +42,37 @@ func TestNegatedAttributeGuards(t *testing.T) {
 		}
 		if got := p.NegatedAttributeGuards(); !reflect.DeepEqual(got, c.want) {
 			t.Errorf("NegatedAttributeGuards(%s) = %v, want %v (%s)", c.src, got, c.want, c.why)
+		}
+	}
+}
+
+// TestDisjunctiveAttributeGuards pins the worse shape: an absence test that is a DISJUNCT, so the
+// leaf is true for every device lacking the attribute whatever the reading says. It is what an
+// author writes after the compiler refuses a bare `!k || ...` and they prepend the metric guard.
+func TestDisjunctiveAttributeGuards(t *testing.T) {
+	cases := []struct {
+		src  string
+		want []string
+		why  string
+	}{
+		{`"t" in m && (!("lim" in attr) || m["t"] > attr["lim"])`, []string{"lim"}, "the metric-guard prefix"},
+		{`"t" in m && (m["t"] > attr["lim"] || !has(attr.lim))`, []string{"lim"}, "has(), disjunct last"},
+		{`!("lim" in attr) || m["t"] > 80.0`, []string{"lim"}, "bare top-level disjunction"},
+		{`"t" in m && ((m["t"] > 1.0 || ("lim" in attr) == false) && m["t"] < 9.0)`, []string{"lim"}, "nested"},
+		{`"t" in m && (!("b" in attr) || !("a" in attr))`, []string{"a", "b"}, "two, sorted"},
+
+		{`"t" in m && ("lim" in attr) && m["t"] > attr["lim"]`, nil, "guarded positive form"},
+		{`"t" in m && !(("lim" in attr) || m["t"] > 1.0)`, nil, "disjunction under a negation"},
+		{`!("lim" in attr) && "t" in m && m["t"] > 80.0`, nil, "a conjunct is the other list"},
+		{`"t" in m && (("lim" in attr) ? m["t"] > attr["lim"] : true)`, nil, "ternary is not reported"},
+	}
+	for _, c := range cases {
+		p, err := Compile(c.src)
+		if err != nil {
+			t.Fatalf("Compile(%s): %v", c.src, err)
+		}
+		if got := p.DisjunctiveAttributeGuards(); !reflect.DeepEqual(got, c.want) {
+			t.Errorf("DisjunctiveAttributeGuards(%s) = %v, want %v (%s)", c.src, got, c.want, c.why)
 		}
 	}
 }

@@ -7,7 +7,7 @@
 // clean rule shows none, which is what keeps the advice worth reading.
 
 import '@/i18n/config';
-import { cleanup, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import i18n from 'i18next';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -17,6 +17,14 @@ vi.mock('@/lib/api/device-management', async (importOriginal) => ({
   listEntityGroupVersions: vi.fn(async () => []),
   createDetectionRule: vi.fn(async () => undefined),
   updateDetectionRule: vi.fn(async () => undefined),
+  listMetricDefinitions: vi.fn(async () => []),
+}));
+vi.mock('@/lib/api/connectors', () => ({ listConnectors: vi.fn(async () => []) }));
+vi.mock('@xyflow/react', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  ReactFlow: () => null,
+  Background: () => null,
+  Controls: () => null,
 }));
 vi.mock('@/lib/api/browse', () => ({ previewSelector: vi.fn(async () => ({ total: 0, sample: [] })) }));
 vi.mock('@/auth/AuthProvider', async (importOriginal) => ({
@@ -24,9 +32,17 @@ vi.mock('@/auth/AuthProvider', async (importOriginal) => ({
   useAuth: () => ({ tenant: null, identity: null, authorities: [], can: () => true }),
 }));
 const validateDetectionRule = vi.fn();
-vi.mock('@/lib/api/event-processing', () => ({ validateDetectionRule: (...a: unknown[]) => validateDetectionRule(...a) }));
+const draftDetectionRuleFromText = vi.fn();
+vi.mock('@/lib/api/event-processing', () => ({
+  validateDetectionRule: (...a: unknown[]) => validateDetectionRule(...a),
+  draftDetectionRuleFromText: (...a: unknown[]) => draftDetectionRuleFromText(...a),
+  compileCanvas: vi.fn(),
+  previewRule: vi.fn(),
+}));
 
+import { DetectionRuleAuthoring } from './DetectionRuleAuthoring';
 import { DetectionRuleForm } from './DetectionRuleForm';
+import { updateDetectionRule } from '@/lib/api/device-management';
 import { paintDiagnostics } from './canvas/diagnostics';
 import type { DetectionRule } from '@/lib/api/device-management';
 
@@ -96,6 +112,63 @@ describe('the rule form shows compiler warnings', () => {
     render(<DetectionRuleForm profileToken="p" entity={stored} onDone={() => {}} />);
 
     await screen.findByText(/The rule compiles/, undefined, { timeout: 3000 });
+    expect(screen.queryByTestId('rule-warnings')).toBeNull();
+  });
+});
+
+describe('a warning is advice, never a gate', () => {
+  it('leaves Save on, and the rule saves', async () => {
+    validateDetectionRule.mockResolvedValue({ ok: true, message: null, warnings: [negated] });
+    render(<DetectionRuleForm profileToken="p" entity={stored} onDone={() => {}} />);
+    await screen.findByTestId('rule-warnings', undefined, { timeout: 3000 });
+
+    const save = screen.getByRole('button', { name: 'Save changes' }) as HTMLButtonElement;
+    expect(save.disabled).toBe(false);
+    fireEvent.click(save);
+    await waitFor(() => expect(vi.mocked(updateDetectionRule)).toHaveBeenCalledTimes(1));
+  });
+});
+
+describe('the Describe door hands its draft and warnings to the form', () => {
+  it('reviews the draft with its warnings, through the authoring component', async () => {
+    draftDetectionRuleFromText.mockResolvedValue({
+      ok: true,
+      definition: fallbackRule,
+      warnings: [{ field: 'when', code: negated.code, params: negated.params, message: negated.message }],
+      diagnostics: [],
+      unavailable: false,
+    });
+    render(<DetectionRuleAuthoring profileToken="p" onDone={() => {}} />);
+
+    fireEvent.click(screen.getByRole('radio', { name: 'Describe' }));
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: 'alarm when hot unless a limit is set' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Draft rule' }));
+
+    // The form is showing the draft (its name field is filled), with the warning, and no token has
+    // been entered, so the inline check has not run: the warning came with the draft.
+    const list = await screen.findByTestId('rule-warnings');
+    expect(list.textContent).toContain('“lim”');
+    expect((screen.getByPlaceholderText('Overheating') as HTMLInputElement).value).toBe('hot');
+    expect(validateDetectionRule).not.toHaveBeenCalled();
+  });
+});
+
+describe('a handed-off draft warnings do not outlive the draft', () => {
+  it('drop once the author changes the rule, and are not brought back', async () => {
+    validateDetectionRule.mockRejectedValue(new Error('down'));
+    render(
+      <DetectionRuleForm profileToken="p" initialDefinition={fallbackRule} initialWarnings={[negated]} onDone={() => {}} />,
+    );
+    expect(screen.getByTestId('rule-warnings')).toBeTruthy();
+
+    fireEvent.change(screen.getByPlaceholderText('Overheating'), { target: { value: 'renamed' } });
+    await waitFor(() => expect(screen.queryByTestId('rule-warnings')).toBeNull());
+
+    // Naming the rule lets the inline check run; it fails (transport), which clears the check state.
+    // The draft's warnings must stay gone: they describe a rule that is no longer on screen.
+    fireEvent.change(document.getElementById('dr-token') as HTMLElement, { target: { value: 'hot-rule' } });
+    await waitFor(() => expect(validateDetectionRule).toHaveBeenCalled(), { timeout: 3000 });
+    await new Promise((r) => setTimeout(r, 50));
     expect(screen.queryByTestId('rule-warnings')).toBeNull();
   });
 });

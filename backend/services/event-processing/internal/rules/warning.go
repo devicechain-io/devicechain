@@ -28,16 +28,17 @@ type Warning struct {
 // attribute joined by && (`!("k" in attr) && m["t"] > 80.0`). Params: [attribute].
 const WarnNegatedAttributeGuard = "negatedAttributeGuard"
 
+// WarnNegatedAttributeGuardDisjunct is the code of the worse shape: the absence test is a disjunct
+// (`"t" in m && (!("k" in attr) || m["t"] > attr["k"])`), so the condition is true for every device
+// without the attribute whatever its reading, with no threshold at all. Params: [attribute].
+const WarnNegatedAttributeGuardDisjunct = "negatedAttributeGuardDisjunct"
+
 // compileWarnings returns the advisory findings for a compiled leaf.
 //
-// The negated-guard warning is raised for threshold and duration only — the kinds whose leaf IS the
-// alarm condition, the same two kinds ErrTrueWithoutAttributes refuses for. On every other kind the
-// leaf is an optional per-event gate, where `!("maint" in attr)` is the ordinary "not in
-// maintenance" filter and a warning would be noise on the idiom the gate exists to express.
-func compileWarnings(t RuleType, pred *predicate.Predicate) []Warning {
-	if t != TypeThreshold && t != TypeDuration {
-		return nil
-	}
+// It applies to EVERY rule kind. `attr` holds numbers only, so `!("maint" in attr)` is also true for a
+// device whose flag was set as a bool, a string or with CLIENT scope: the "not in maintenance" gate on a
+// repeating or aggregate rule is the same trap as the alarm condition, only quieter.
+func compileWarnings(pred *predicate.Predicate) []Warning {
 	var out []Warning
 	for _, k := range pred.NegatedAttributeGuards() {
 		out = append(out, Warning{
@@ -46,6 +47,15 @@ func compileWarnings(t RuleType, pred *predicate.Predicate) []Warning {
 			Message: fmt.Sprintf("this condition tests that attribute %q is NOT set, so the rule applies to every device "+
 				"without it — including devices where it was never set, was set to something other than a number, "+
 				"or was set with CLIENT scope. If you meant only the devices configured without it, say so with another test.", k),
+		})
+	}
+	for _, k := range pred.DisjunctiveAttributeGuards() {
+		out = append(out, Warning{
+			Code:   WarnNegatedAttributeGuardDisjunct,
+			Params: []string{k},
+			Message: fmt.Sprintf("this condition is true whenever attribute %q is NOT set, whatever the reading, so it "+
+				"fires for every device without it and no threshold applies to them — including devices where it was "+
+				"never set, was set to something other than a number, or was set with CLIENT scope.", k),
 		})
 	}
 	return out

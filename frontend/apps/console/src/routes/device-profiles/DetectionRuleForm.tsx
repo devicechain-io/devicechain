@@ -454,41 +454,48 @@ export function DetectionRuleForm({
     actions,
   });
 
+  // What the form WOULD emit right now, whether or not it passes the local hint. A hint (a missing
+  // token, say) withholds `definition` from the check and from save, but a handed-off draft's
+  // warnings need to know whether the author has since changed the rule, hint or no hint.
+  const candidate = (() => {
+    try {
+      return buildDefinition({
+        definitionName,
+        description,
+        severity,
+        ruleType,
+        condMode,
+        condMetric,
+        condOp,
+        boundKind,
+        condThreshold,
+        condAttr,
+        cel,
+        valueMetric,
+        aggFunc,
+        windowMode,
+        windowStr,
+        holdStr,
+        timeoutStr,
+        gapStr,
+        countStr,
+        rate,
+        aggOp,
+        aggThreshold,
+        anchorType,
+        memberCapStr,
+        actions,
+      });
+    } catch {
+      return null;
+    }
+  })();
   // The emitted rules.Rule JSON, computed only when the form passes the local hint (so an
   // incomplete rule is never sent for validation or save). buildDefinition is a pure
   // object-build + JSON.stringify, so recomputing per render is cheap and the string VALUE
   // is stable across renders when inputs are — which keeps the validation effect below from
   // firing on every render.
-  const definition =
-    hint == null && unmodelledType == null && !unparseable
-      ? buildDefinition({
-          definitionName,
-          description,
-          severity,
-          ruleType,
-          condMode,
-          condMetric,
-          condOp,
-          boundKind,
-          condThreshold,
-          condAttr,
-          cel,
-          valueMetric,
-          aggFunc,
-          windowMode,
-          windowStr,
-          holdStr,
-          timeoutStr,
-          gapStr,
-          countStr,
-          rate,
-          aggOp,
-          aggThreshold,
-          anchorType,
-          memberCapStr,
-          actions,
-        })
-      : null;
+  const definition = hint == null && unmodelledType == null && !unparseable ? candidate : null;
 
   // Inline server-authoritative validation: debounce-compile the emitted rule through
   // event-processing's gate so a type error or cost-over-ceiling the local hint can't see
@@ -500,8 +507,20 @@ export function DetectionRuleForm({
   const [validation, setValidation] = useState<{ status: 'checking' | 'ok' | 'error'; message?: string; warnings?: RuleWarning[] } | null>(null);
   // The warnings to show: the inline check's once it has run, the draft's own until then (the check
   // does not run while a required field such as the token is still empty), none while it is failing.
+  // The draft's warnings describe the draft as handed over. Once the rule differs from it they may no
+  // longer be true, so they go, and they are not brought back by a failed or timed-out check (which
+  // leaves `validation` null again): only a successful check speaks for an edited rule.
+  const draftEdited = initial != null && candidate !== rebuildFrom(initial);
+  // A rule the form cannot edit (an unmodelled type, an unreadable definition) has no editor to put
+  // a warning in front of, and no inline check either, so it shows none.
   const shownWarnings: RuleWarning[] =
-    validation?.status === 'ok' ? (validation.warnings ?? []) : validation == null ? (initialWarnings ?? []) : [];
+    unmodelledType != null || unparseable
+      ? []
+      : validation?.status === 'ok'
+      ? (validation.warnings ?? [])
+      : validation == null && !draftEdited
+        ? (initialWarnings ?? [])
+        : [];
   useEffect(() => {
     if (definition == null) {
       setValidation(null);

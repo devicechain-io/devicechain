@@ -328,7 +328,7 @@ func Compile(r Rule, limits Limits) (*CompiledRule, error) {
 		return nil, err
 	}
 	cr.Severity = r.Severity
-	cr.Warnings = compileWarnings(r.Type, pred)
+	cr.Warnings = compileWarnings(pred)
 	return cr, nil
 }
 

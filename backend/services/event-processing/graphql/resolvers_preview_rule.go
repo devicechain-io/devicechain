@@ -96,6 +96,20 @@ func (r *SchemaResolver) PreviewRule(ctx context.Context, args struct{ Input pre
 	if cerr != nil {
 		return failedPreview(cerr...), nil
 	}
+	// The draft's advisory warnings ride along on EVERY non-failed outcome — a degraded preview
+	// (unpublished profile, concurrency gate, no fence archive) as well as a completed one — so the
+	// author is not told less about the rule just because the replay could not run. They are anchored
+	// on the condition node when the draft is a canvas graph.
+	condID := ""
+	if tracePlan != nil {
+		condID = tracePlan.ConditionID
+	}
+	withWarnings := func(p *PreviewResultResolver) *PreviewResultResolver {
+		for _, d := range graph.WarningDiagnostics(condID, compiled.Warnings) {
+			p.diags = append(p.diags, newCanvasDiagnostic(d))
+		}
+		return p
+	}
 
 	// 🔴🔴 A PREVIEW THAT TESTS CONTAINMENT IS A READ OF POSITION, AND NEEDS THE POSITION
 	// AUTHORITY. device:read alone was proportionate while a preview could only replay
@@ -135,8 +149,8 @@ func (r *SchemaResolver) PreviewRule(ctx context.Context, args struct{ Input pre
 	// compile-time analysis that drives the position-scoped feed), so this fires for the drafts
 	// that need fences and for no others.
 	if compiled.RequiresPosition && r.FenceSets == nil {
-		return degradedPreview("this rule tests geofence containment, and the geofence archive is not " +
-			"reachable from this service, so the rule cannot be previewed"), nil
+		return withWarnings(degradedPreview("this rule tests geofence containment, and the geofence archive is not " +
+			"reachable from this service, so the rule cannot be previewed")), nil
 	}
 
 	// Parse and bound the occurred-time window.
@@ -164,12 +178,12 @@ func (r *SchemaResolver) PreviewRule(ctx context.Context, args struct{ Input pre
 		return nil, err
 	}
 	if !found || active.ActiveVersionToken == "" {
-		return degradedPreview("this profile has no published version yet, so there is no history to preview against"), nil
+		return withWarnings(degradedPreview("this profile has no published version yet, so there is no history to preview against")), nil
 	}
 
 	// Per-tenant concurrency guard.
 	if !globalPreviewGate.acquire(tenant) {
-		return degradedPreview("the maximum number of previews are already running for this tenant; try again in a moment"), nil
+		return withWarnings(degradedPreview("the maximum number of previews are already running for this tenant; try again in a moment")), nil
 	}
 	defer globalPreviewGate.release(tenant)
 
@@ -195,7 +209,11 @@ func (r *SchemaResolver) PreviewRule(ctx context.Context, args struct{ Input pre
 	// reach another tenant's fences however it is stamped. A nil source (the seam unwired) resolves
 	// everything to "unavailable", which surfaces as counted eval errors rather than as a rule that
 	// quietly never fires.
-	res, err := preview.Run(ctx, r.GetNats(ctx), streams.ResolvedEvents, reg,
+	var opener preview.ReplayOpener = r.Replay
+	if opener == nil {
+		opener = r.GetNats(ctx)
+	}
+	res, err := preview.Run(ctx, opener, streams.ResolvedEvents, reg,
 		tenant, active.ActiveVersionToken, preview.TimeRange{Start: start, End: end}, 0, preview.DefaultMaxScan, preview.DefaultMaxRead, r.FenceSets)
 	if err != nil {
 		return nil, err
@@ -219,17 +237,7 @@ func (r *SchemaResolver) PreviewRule(ctx context.Context, args struct{ Input pre
 	if tracePlan != nil && in.Trace != nil && *in.Trace {
 		tb = tracepkg.NewBuilder(*tracePlan)
 	}
-	out := newPreviewResult(res, degraded, wallMs, tb)
-	// The draft's advisory warnings ride along on a successful preview, anchored on the condition
-	// node when the draft is a canvas graph.
-	condID := ""
-	if tracePlan != nil {
-		condID = tracePlan.ConditionID
-	}
-	for _, d := range graph.WarningDiagnostics(condID, compiled.Warnings) {
-		out.diags = append(out.diags, newCanvasDiagnostic(d))
-	}
-	return out, nil
+	return withWarnings(newPreviewResult(res, degraded, wallMs, tb)), nil
 }
 
 // compileDraft lowers the draft (a canvas graph OR a rules.Rule definition) to one compiled rule and

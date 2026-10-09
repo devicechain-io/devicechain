@@ -25,19 +25,35 @@ import (
 // asks whether the leaf is true for EVERY event, this one whether an absence test is conjoined, and
 // partial evaluation cannot tell `!("k" in attr) && x` (unknown) from `("k" in attr) && x` (false)
 // only by the keys involved. Not detected: a test reached through a `cel.bind` compute (the
-// conjunct is then a bound variable, not the presence test) and an absence test that sits under
-// `||`, `?:` or a negated conjunction — none of those is "the rule applies to every device without
-// k".
+// conjunct is then a bound variable, not the presence test) and one under `?:` or a negation. An
+// absence test under `||` is the separate, worse DisjunctiveAttributeGuards.
 func (p *Predicate) NegatedAttributeGuards() []string { return p.negatedAttrGuards }
 
-// negatedAttributeGuards walks the conjunction at the top of the checked AST.
-func negatedAttributeGuards(a *celast.AST) []string {
+// DisjunctiveAttributeGuards returns, sorted and de-duplicated, the attributes whose absence test is
+// a DISJUNCT (`"t" in m && (!("k" in attr) || m["t"] > attr["k"])`). That is the worse shape: the
+// leaf is true for every device lacking the attribute whatever its reading says, so the rule has
+// no threshold at all for those devices. It is what an author writes after the compiler refuses a
+// bare `!k || ...` and they add a metric guard in front. An attribute already reported by
+// NegatedAttributeGuards is not repeated here.
+func (p *Predicate) DisjunctiveAttributeGuards() []string { return p.disjunctiveAttrGuards }
+
+// attributeAbsenceTests walks the &&/|| structure at the top of the checked AST and returns the
+// attributes tested for absence as a conjunct and as a disjunct. It does not look under a
+// negation, a ternary or any other call.
+func attributeAbsenceTests(a *celast.AST) (conj, disj []string) {
 	if a == nil {
-		return nil
+		return nil, nil
 	}
-	seen := map[string]struct{}{}
-	var walk func(e celast.Expr)
-	walk = func(e celast.Expr) {
+	conjSet, disjSet := map[string]struct{}{}, map[string]struct{}{}
+	record := func(k string, inDisj bool) {
+		if inDisj {
+			disjSet[k] = struct{}{}
+		} else {
+			conjSet[k] = struct{}{}
+		}
+	}
+	var walk func(e celast.Expr, inDisj bool)
+	walk = func(e celast.Expr, inDisj bool) {
 		if e.Kind() != celast.CallKind {
 			return
 		}
@@ -45,12 +61,16 @@ func negatedAttributeGuards(a *celast.AST) []string {
 		switch c.FunctionName() {
 		case operators.LogicalAnd:
 			for _, arg := range c.Args() {
-				walk(arg)
+				walk(arg, inDisj)
+			}
+		case operators.LogicalOr:
+			for _, arg := range c.Args() {
+				walk(arg, true)
 			}
 		case operators.LogicalNot:
 			if len(c.Args()) == 1 {
 				if k, ok := attrPresenceKey(c.Args()[0]); ok {
-					seen[k] = struct{}{}
+					record(k, inDisj)
 				}
 			}
 		case operators.Equals:
@@ -61,18 +81,27 @@ func negatedAttributeGuards(a *celast.AST) []string {
 				}
 				if isFalseLiteral(l) {
 					if k, ok := attrPresenceKey(r); ok {
-						seen[k] = struct{}{}
+						record(k, inDisj)
 					}
 				}
 			}
 		}
 	}
-	walk(a.Expr())
-	if len(seen) == 0 {
+	walk(a.Expr(), false)
+	for k := range disjSet {
+		if _, both := conjSet[k]; both {
+			delete(disjSet, k)
+		}
+	}
+	return sortedKeys(conjSet), sortedKeys(disjSet)
+}
+
+func sortedKeys(m map[string]struct{}) []string {
+	if len(m) == 0 {
 		return nil
 	}
-	out := make([]string, 0, len(seen))
-	for k := range seen {
+	out := make([]string, 0, len(m))
+	for k := range m {
 		out = append(out, k)
 	}
 	sort.Strings(out)

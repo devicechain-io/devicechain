@@ -8,6 +8,7 @@ import (
 	_ "embed"
 
 	"github.com/devicechain-io/dc-event-processing/internal/nldraft"
+	"github.com/devicechain-io/dc-event-processing/internal/preview"
 	"github.com/devicechain-io/dc-event-processing/internal/runtime"
 	"github.com/devicechain-io/dc-event-processing/model"
 )
@@ -42,6 +43,10 @@ type SchemaResolver struct {
 	// not wired (no service secret / no device-management coordinate), in which case a geofence
 	// preview degrades loudly rather than silently reporting "never fires".
 	FenceSets runtime.FenceSetSource
+	// Replay opens the time-started replay reader a preview reads history through. Nil in
+	// production, where the NATS manager injected as a graphql provider is used; a test sets it to
+	// preview against canned history without a broker.
+	Replay preview.ReplayOpener
 }
 
 // EventProcessingInfo resolves the scaffold identity query.
