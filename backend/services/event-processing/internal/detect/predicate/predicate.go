@@ -9,6 +9,7 @@ import (
 
 	"github.com/devicechain-io/dc-event-processing/internal/geofence"
 	"github.com/google/cel-go/cel"
+	"github.com/google/cel-go/interpreter"
 )
 
 // Input is one resolved event as seen by a predicate: the neutral view the runtime builds
@@ -35,33 +36,57 @@ type Input struct {
 	Fences *geofence.FenceSet
 }
 
-// activation renders the input as the CEL variable bindings. A nil map is passed as an
-// empty map so `"x" in m` (or `"x" in attr`) is a clean false rather than an evaluation error.
-func (in Input) activation() map[string]any {
-	anchors := in.Anchors
-	if anchors == nil {
-		anchors = map[string]string{}
-	}
-	m := in.M
-	if m == nil {
-		m = map[string]float64{}
-	}
-	attr := in.Attr
-	if attr == nil {
-		attr = map[string]float64{}
-	}
-	return map[string]any{
-		VarDevice:   in.Device,
-		VarAnchors:  anchors,
-		VarOccurred: in.Occurred,
-		VarM:        m,
-		VarAttr:     attr,
+// emptyAnchors, emptyM and emptyAttr stand in for a nil map in the activation, so `"x" in m` (or
+// `"x" in attr`) is a clean false rather than an evaluation error. They are shared and never
+// written: CEL cannot mutate a bound variable.
+var (
+	emptyAnchors = map[string]string{}
+	emptyM       = map[string]float64{}
+	emptyAttr    = map[string]float64{}
+)
+
+// inputActivation renders an Input as the CEL variable bindings without materialising a map: a
+// name is resolved, and its value boxed, only when the expression actually reads it. An
+// expression that touches one of the six variables used to pay for all six (plus three empty
+// maps) on every Eval.
+type inputActivation struct{ in *Input }
+
+// ResolveName implements interpreter.Activation. An unknown name answers (nil, false) — exactly
+// what a map activation does for an absent key — so an undeclared identifier stays the
+// "no such attribute" failure it was.
+func (a inputActivation) ResolveName(name string) (any, bool) {
+	in := a.in
+	switch name {
+	case VarDevice:
+		return in.Device, true
+	case VarAnchors:
+		if in.Anchors == nil {
+			return emptyAnchors, true
+		}
+		return in.Anchors, true
+	case VarOccurred:
+		return in.Occurred, true
+	case VarM:
+		if in.M == nil {
+			return emptyM, true
+		}
+		return in.M, true
+	case VarAttr:
+		if in.Attr == nil {
+			return emptyAttr, true
+		}
+		return in.Attr, true
+	case VarGeo:
 		// The geo binding is always present so `geo.inFence(…)` is never an unbound-identifier
 		// failure; what varies is what it CARRIES. A nil position or a nil fence set makes the
 		// call an error the runtime skips the sample on — never a false, and never a crash.
-		VarGeo: geoValue{position: in.Position, fences: in.Fences},
+		return geoValue{position: in.Position, fences: in.Fences}, true
 	}
+	return nil, false
 }
+
+// Parent implements interpreter.Activation: the input has no enclosing scope.
+func (inputActivation) Parent() interpreter.Activation { return nil }
 
 // Predicate is a compiled, reusable boolean leaf condition. It is compiled once per rule
 // version (compile-once) and evaluated against every event for that rule; cel.Program is
@@ -205,7 +230,7 @@ func compile(source string, costCeiling uint64) (*Predicate, error) {
 // that caused it is the authoring-time preview. Identifying the rule means going to the
 // logs or re-running the predicate against a sample.
 func (p *Predicate) Eval(in Input) (bool, error) {
-	out, _, err := p.program.Eval(in.activation())
+	out, _, err := p.program.Eval(inputActivation{in: &in})
 	if err != nil {
 		return false, err
 	}
