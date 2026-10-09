@@ -98,7 +98,9 @@ var ErrTenantMismatch = errors.New("tenant isolation refused the write: a row be
 //     tenant's rows.
 //   - Create: the tenant from context is stamped onto every row (struct, slice,
 //     or array). A missing tenant aborts with core.ErrNoTenant, and a row naming a
-//     DIFFERENT tenant aborts with ErrTenantMismatch rather than being rewritten.
+//     DIFFERENT tenant aborts with ErrTenantMismatch rather than being rewritten. An INSERT ... ON CONFLICT ... DO UPDATE (gorm's Save fallback
+//     included) also has its update arm limited to rows of the same tenant, and a tenant-less
+//     conflict target is refused unless the call site is marked reviewed: see tenant_upsert.go.
 //
 // Models with no tenant field in either spelling (migration bookkeeping tables, and
 // event-processing's partition-keyed DetectSnapshot) pass through untouched.
@@ -153,6 +155,11 @@ func RegisterTenantScoping(db *gorm.DB) error {
 		},
 		func() error {
 			return db.Callback().Create().Before("gorm:create").Register("dc:tenant_create", tenantScopeCreate)
+		},
+		func() error {
+			// Inside the statement's transaction, so an error here rolls it back.
+			return db.Callback().Create().After("gorm:create").Before("gorm:commit_or_rollback_transaction").
+				Register("dc:tenant_upsert_check", tenantUpsertCheck)
 		},
 	} {
 		if err := register(); err != nil {
@@ -314,6 +321,7 @@ func tenantScopeCreate(db *gorm.DB) {
 		return
 	}
 	db.Statement.SetColumn(field.Name, tenant, true)
+	guardTenantUpsert(db, field.DBName)
 }
 
 // conflictingRowTenant reports a tenant named on one of the rows being created that is
