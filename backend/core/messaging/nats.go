@@ -17,8 +17,8 @@ import (
 	"github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/streams"
-	"github.com/google/uuid"
 	nats "github.com/nats-io/nats.go"
+	"github.com/nats-io/nuid"
 	"github.com/rs/zerolog/log"
 )
 
@@ -1150,9 +1150,13 @@ func natsMsg(subject string, m Message) *nats.Msg {
 	nm := &nats.Msg{Subject: subject, Data: m.Value, Header: nats.Header{}}
 	// Carry the correlation id, generating one when the producer did not
 	// propagate it, so any message can be followed across the pipeline (E15).
+	// A nuid (22 characters: a random per-process prefix plus a sequence, so unique across
+	// processes) rather than a uuid (36, plus a crypto/rand read per publish): the header is
+	// stored at the stream replication factor and delivered to every consumer. Every consumer
+	// treats the id as an opaque string; nothing parses it.
 	cid := m.CorrelationID()
 	if cid == "" {
-		cid = uuid.NewString()
+		cid = nuid.Next()
 	}
 	nm.Header.Set(HeaderCorrelationID, cid)
 	// The dedup id goes on before the caller's own headers are copied, and the
