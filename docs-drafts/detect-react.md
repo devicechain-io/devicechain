@@ -1048,8 +1048,12 @@ Ordered by what they cost.
     the prompt and the compiler are two hand-maintained statements of one grammar, and nothing
     compiles the prompt's own worked examples or diffs its field lists against `validate.go`. The
     next drift is found the same way this one was — by a human reading both.
-12. **Per-tenant compile ceilings are documented but not wired** — every call site passes the
-    defaults (`backend/services/event-processing/internal/rules/compile.go:18-22`).
+12. ~~**Per-tenant compile ceilings are documented but not wired.**~~ — **CLOSED.** The expression
+    cost ceiling is a fixed platform constant (#1179): `predicate.CostCeiling` is 100 for every
+    tenant, with no tier or operator setting, and dynamic-group selectors share the value. This is
+    the decision, not a gap — the published detection-engine page says so — and the item's claim
+    that a tenant "cannot be raised" describes the intended behaviour. A tier-driven rule-count
+    ceiling, checked at publish with existing rules grandfathered, is post-GA work.
 13. **Nothing pins the published alert names to the chart.** `hack/check-prometheus-rules.sh` runs
     promtool over every rendered `PrometheusRule`, which catches a PromQL typo — the failure that
     silently disables a whole group. The unit tests behind it
