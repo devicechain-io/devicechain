@@ -36,9 +36,10 @@ type Input struct {
 	Fences *geofence.FenceSet
 }
 
-// emptyAnchors, emptyM and emptyAttr stand in for a nil map in the activation, so `"x" in m` (or
-// `"x" in attr`) is a clean false rather than an evaluation error. They are shared and never
-// written: CEL cannot mutate a bound variable.
+// emptyAnchors, emptyM and emptyAttr stand in for a nil map in the activation. A typed nil map
+// already reads as empty in CEL (`"x" in m` is false, `size(m)` is 0), so this is defensive: it
+// keeps the binding a real map whatever the field holds. They are shared and never written: CEL
+// cannot mutate a bound variable.
 var (
 	emptyAnchors = map[string]string{}
 	emptyM       = map[string]float64{}

@@ -32,6 +32,8 @@ func TestActivationMissingFieldsBehaveAsEmptyMaps(t *testing.T) {
 		{"nil M, unguarded read", `m["t"] > 1.0`, Input{}, false, "no such key"},
 		{"nil Attr, unguarded read", `m["t"] > attr["t"]`, Input{M: map[string]float64{"t": 2}}, false, "no such key"},
 		{"present key", `m["t"] > 1.0`, Input{M: map[string]float64{"t": 2}}, true, ""},
+		{"present anchor", `anchors["site"] == "s1"`, Input{Anchors: map[string]string{"site": "s1"}}, true, ""},
+		{"present attr", `attr["t"] == 3.0`, Input{Attr: map[string]float64{"t": 3}}, true, ""},
 		{"zero device", `device == ""`, Input{}, true, ""},
 		{"zero time", `occurred == timestamp("0001-01-01T00:00:00Z")`, Input{}, true, ""},
 		{"time bound", `occurred == timestamp("2026-07-09T12:00:00Z")`, Input{Occurred: now}, true, ""},
