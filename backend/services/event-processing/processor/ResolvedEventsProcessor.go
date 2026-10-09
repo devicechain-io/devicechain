@@ -1656,7 +1656,8 @@ func (rp *ResolvedEventsProcessor) handle(msg messaging.Message) {
 // (metric-scoped feed, runtime.Plan), and feeds the resulting per-rule events to the engine
 // as ONE message-sequenced batch. It returns true iff the message advanced the engine. A
 // message with no stream sequence (StreamSeq==0), no parseable tenant, or an unparseable
-// payload is unprocessable and dropped — redelivery/replay cannot make it processable. A
+// payload is unprocessable and dropped — redelivery/replay cannot make it processable — and,
+// when it has a sequence, that sequence is recorded as handled (Engine.Skip). A
 // redelivered/replayed message at or below the engine's sequence is skipped before fan-out
 // (the engine's message-level guard would drop it anyway; skipping early avoids the wasted
 // predicate evaluations) — still acked upstream, but not counted or marked dirty.
@@ -1668,20 +1669,22 @@ func (rp *ResolvedEventsProcessor) applyResolved(msg messaging.Message) bool {
 		log.Warn().Str("subject", msg.Subject).Msg("Dropping resolved event with no stream sequence (unreadable metadata).")
 		return false
 	}
+	// The sequence guard runs BEFORE the tenant parse and the protobuf decode: it needs only the
+	// stream sequence, so a redelivered or replayed duplicate costs neither.
+	if msg.StreamSeq <= rp.engine.LastSeq() {
+		return false // duplicate/replayed message — acked, but no re-fan-out
+	}
 	_, tenant, ok := messaging.TenantContextFromSubject(rp.pctx(), msg.Subject)
 	if !ok {
 		log.Warn().Str("correlation", msg.CorrelationID()).
 			Msgf("Dropping resolved event with no parseable tenant in subject %q", msg.Subject)
-		return false
+		return rp.skipPoison(msg.StreamSeq)
 	}
 	event, err := dmproto.UnmarshalResolvedEvent(msg.Value)
 	if err != nil {
 		log.Warn().Err(err).Str("correlation", msg.CorrelationID()).
 			Msgf("Dropping resolved event that could not be parsed from subject %q", msg.Subject)
-		return false
-	}
-	if msg.StreamSeq <= rp.engine.LastSeq() {
-		return false // duplicate/replayed message — acked, but no re-fan-out
+		return rp.skipPoison(msg.StreamSeq)
 	}
 
 	// The event's own time, bounded against the server clock at RESOLUTION and travelling
@@ -1746,6 +1749,18 @@ func (rp *ResolvedEventsProcessor) applyResolved(msg messaging.Message) bool {
 		return true
 	}
 	return false
+}
+
+// skipPoison records an unprocessable message's sequence as handled (Engine.Skip) and marks
+// the loop dirty so the next checkpoint snapshots the advanced LastSeq. Replay re-skips the
+// same poison at the same sequence, so the snapshot is deterministic. No state changes, so it
+// is not counted as an applied event.
+func (rp *ResolvedEventsProcessor) skipPoison(seq uint64) bool {
+	if !rp.engine.Skip(seq) {
+		return false
+	}
+	rp.dirty = true
+	return true
 }
 
 // pendingDetection is a drained detection awaiting publish, with the platform time of the input

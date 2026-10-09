@@ -811,6 +811,25 @@ func (e *Engine) ProcessEvent(ev Event) {
 	e.lastSeq = ev.Seq
 }
 
+// Skip records seq as handled for a message that carries no state: a poison message the
+// runtime cannot decode or attribute, which no redelivery or replay can make processable.
+// It advances LastSeq to seq — and nothing else: no watermark move, no timer, no pane — so
+// LastSeq stays the single definition of "done" (every sequence at or below it is either
+// applied or was unprocessable) and a snapshot taken afterwards records it. Replay sees the
+// same poison at the same sequence and calls Skip again, so the snapshot is deterministic.
+//
+// It is monotonic like ProcessResolved: seq at or below LastSeq is a no-op, and a message
+// with a LOWER sequence that arrives afterwards (a redelivery) is dropped by the same guard.
+// It reports whether LastSeq moved. A zero seq is refused (false): it is the
+// "unreadable metadata" sentinel, never a position.
+func (e *Engine) Skip(seq uint64) bool {
+	if seq == 0 || seq <= e.lastSeq {
+		return false
+	}
+	e.lastSeq = seq
+	return true
+}
+
 // ProcessResolved applies one resolved MESSAGE that fans out to zero or more per-rule
 // events. The runtime evaluates each applicable rule's leaf predicate for every SAMPLE the
 // message carries and builds one core Event per (sample, rule) — all sharing the message's
