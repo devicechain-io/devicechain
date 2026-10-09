@@ -23,16 +23,17 @@ go 1.26.6
 // cadence, not a dependency one. Conflating them is how a stdlib CVE fix gets blocked on
 // an unrelated language-version argument.
 //
-// At 1.26.6 for seven reachable standard-library advisories — GO-2026-5026, -5972,
-// -6088, -6089, -6090, -6091 and -6218, across net/http, crypto/tls, encoding/asn1,
-// encoding/xml, html/template and net/url — all fixed in this patch release.
+// At 1.26.9 for eleven reachable standard-library advisories published 2026-10-08 —
+// GO-2026-6599, -6600, -6603, -6605, -6607, -6608, -6610, -6611, -6612, -6613 and
+// -6617, across net/http (HTTP/1 and HTTP/2, client and server), html/template,
+// crypto/tls and net/textproto / mime/multipart — all fixed in this patch release.
 //
 // 🔴 THIS IS THE CHECK THAT GOES RED WITHOUT ANYONE TOUCHING THE CODE. govulncheck reads
 // a LIVE advisory database, so the same commit that passed this morning fails this
 // afternoon when an advisory lands. A red govulncheck on a PR therefore says nothing
 // about that PR until you have checked whether main is red too — here every failing
 // module was failing on code the PR never touched, including one byte-identical to main.
-toolchain go1.26.6
+toolchain go1.26.9
 
 use (
 	./backend/cli
