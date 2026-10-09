@@ -101,10 +101,10 @@ func TestAPoisonWriteDoesNotFailItsBatchMates(t *testing.T) {
 				t.Errorf("state_messages_total{result=ok} = %v; want 3", v)
 			}
 			// The first batch was refused for tenant1; tenant1's three went one at a time, and
-			// tenant2's one remaining message is a batch of one, merged on its own. So one
-			// batch attempt and one fallback.
-			if api.batches != 1 {
-				t.Errorf("MergeProjectionBatch ran %d times; want 1", api.batches)
+			// tenant2's one remaining message is a batch of one, committed on its own. So two
+			// batch attempts and one fallback.
+			if api.batches != 2 {
+				t.Errorf("MergeProjectionBatch ran %d times; want 2", api.batches)
 			}
 			if v, _, _, _ := gathered(t, reg, "state_batch_fallbacks_total", ""); v != 1 {
 				t.Errorf("state_batch_fallbacks_total = %v; want 1", v)

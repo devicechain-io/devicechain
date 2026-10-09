@@ -27,6 +27,13 @@ type conflictApi struct {
 	calls     atomic.Int32
 }
 
+// MergeProjectionBatch always declines, with an error that blames no tenant, so that a lone
+// event reaches the per-message writes this file exercises (a batch of one tries the batch
+// first; TestABatchOfOneThatFailsFallsBackToThePerMessagePath covers that hand-off).
+func (c *conflictApi) MergeProjectionBatch(context.Context, []model.ProjectionUpdate) error {
+	return errors.New("batch declined")
+}
+
 func (c *conflictApi) fails(which string) bool {
 	return which == c.target && c.calls.Add(1) <= c.conflicts
 }
