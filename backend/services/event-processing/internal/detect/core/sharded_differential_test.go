@@ -40,9 +40,8 @@ import (
 // operations (descopes, dead-man arming, purges, publish-path latch clears) interleaved with
 // the message stream.
 //
-// 🔴 TO PLUG A SHARDED ENGINE IN, replace shardedUnderTest. Nothing else in this file needs to
-// change; a sharded engine that passes it produces the detections and the snapshot bytes the
-// single engine does.
+// shardedUnderTest is the seam to the production sharded engine (sharded.go). A sharded engine
+// that passes this file produces the detections and the snapshot bytes the single engine does.
 
 // detectEngine is the method set the runtime drives an engine through. *Engine satisfies it, and
 // a sharded engine must too, so the processor, the dead-man armer and the registry keep their
@@ -90,19 +89,19 @@ func plainEngineBuilder() engineBuilder {
 	}
 }
 
-// singleEngineAdapter is the trivially-correct stand-in used until the sharded engine exists: it
-// accepts a shard count and routes everything to ONE engine. It is correct by construction and
-// therefore proves only that the harness is green on a correct implementation — the sensitivity
-// half is proven by running the same harness against deliberately broken K-way implementations
-// (see the pull request that introduced this file).
-func singleEngineAdapter(k int) engineBuilder {
-	b := plainEngineBuilder()
-	b.name = fmt.Sprintf("single-engine-adapter(K=%d)", k)
-	return b
+// shardedUnderTest is THE seam: the production sharded engine at a given shard count, built
+// fresh or restored from a snapshot written by an engine of any other shard count.
+func shardedUnderTest(k int) engineBuilder {
+	return engineBuilder{
+		name: fmt.Sprintf("sharded(K=%d)", k),
+		fresh: func(rules []Rule, lateness time.Duration) detectEngine {
+			return NewSharded(k, rules, lateness)
+		},
+		restore: func(rules []Rule, lateness time.Duration, snap []byte) (detectEngine, error) {
+			return RestoreSharded(k, rules, lateness, snap)
+		},
+	}
 }
-
-// shardedUnderTest is THE seam. Today it returns the single-engine adapter.
-var shardedUnderTest = singleEngineAdapter
 
 // --- the generator ---------------------------------------------------------------------------
 

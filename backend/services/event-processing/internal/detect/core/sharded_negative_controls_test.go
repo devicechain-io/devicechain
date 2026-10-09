@@ -31,7 +31,7 @@ import (
 //   - flips-detection-edges: a raise is reported as a resolve and the reverse
 //
 // The "correct" mode is the control's own control: if it ever fails, the harness or this file is
-// broken rather than the engine. None of this is the sharded engine; that replaces shardedUnderTest.
+// broken rather than the engine. None of this is the sharded engine; that is Sharded, in sharded.go.
 
 // protoMode names the K-way engine's behaviour.
 type protoMode int

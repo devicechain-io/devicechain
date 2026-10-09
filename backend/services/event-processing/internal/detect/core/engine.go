@@ -1250,6 +1250,12 @@ type snapshot struct {
 // those detections on a crash (replay from LastSeq+1 re-derives state, not the already-emitted
 // signals). The checkpoint loop (ADR-051 slice 2a) upholds this by draining on every event.
 func (e *Engine) Snapshot() ([]byte, error) {
+	return json.Marshal(e.snapshotState())
+}
+
+// snapshotState is Snapshot before it is serialized: the canonical, sorted sections. The sharded
+// engine merges K of these rather than round-tripping each shard through bytes.
+func (e *Engine) snapshotState() snapshot {
 	timers, gens := e.wheel.snapshot()
 	active, breaks := e.snapshotRuns()
 	sliding, panes := e.snapshotWindows()
@@ -1285,7 +1291,7 @@ func (e *Engine) Snapshot() ([]byte, error) {
 		}
 		return presenceCursors[i].Series < presenceCursors[j].Series
 	})
-	return json.Marshal(snapshot{
+	return snapshot{
 		Watermark: e.wm.now,
 		LastSeq:   e.lastSeq,
 		Active:    active,
@@ -1302,7 +1308,7 @@ func (e *Engine) Snapshot() ([]byte, error) {
 		Expected:  expected,
 		Raised:    raised,
 		Presence:  presenceCursors,
-	})
+	}
 }
 
 // Restore rebuilds an engine from a snapshot and its rule set. The restored engine
@@ -1313,6 +1319,11 @@ func Restore(rules []Rule, allowedLateness time.Duration, data []byte) (*Engine,
 	if err := json.Unmarshal(data, &s); err != nil {
 		return nil, err
 	}
+	return restoreState(rules, allowedLateness, s), nil
+}
+
+// restoreState is Restore after the bytes are decoded, shared with the sharded engine's restore.
+func restoreState(rules []Rule, allowedLateness time.Duration, s snapshot) *Engine {
 	e := NewEngine(rules, allowedLateness)
 	e.wm.now = s.Watermark
 	e.lastSeq = s.LastSeq
@@ -1335,5 +1346,5 @@ func Restore(rules []Rule, allowedLateness time.Duration, data []byte) (*Engine,
 			SessionId: x.Session, Time: x.At, HasTime: x.HasTime, Connected: x.Connected,
 		}
 	}
-	return e, nil
+	return e
 }
