@@ -54,6 +54,7 @@ import {
   conditionForbidden,
   conditionRequired,
   parseDefinition,
+  unmodelledRuleType,
   rebuildFrom,
   ruleTypeKey,
   scopeUnsupported,
@@ -400,7 +401,13 @@ export function DetectionRuleForm({
   // hold, because the prompt teaches kinds and fields without knowing what this form models.
   // Gating the warnings on `editing` meant the one path that most needed them was the one
   // path that never showed them.
-  const unparseable = source != null && initial == null;
+  //
+  // 🔴 A THIRD, AND IT IS NOT A WARNING: the rule's TYPE is one the form does not model. Every
+  // other lossy case still shows what the form understood; this one has nothing to show that
+  // would be true, and a form built from it would be a different rule. So no editor renders
+  // and nothing can be saved (see the early return below).
+  const unmodelledType = source == null ? null : unmodelledRuleType(source);
+  const unparseable = source != null && initial == null && unmodelledType == null;
   // 🔴 MEMOIZED ON `source` ALONE, WHICH IS THE POINT AND NOT THE COST. The work is small —
   // a rebuild plus two parses, tens of microseconds — so this is not a performance fix. It is
   // that whether a stored rule survives this form is a property of the STORED BYTES, fixed for
@@ -447,7 +454,7 @@ export function DetectionRuleForm({
   // is stable across renders when inputs are — which keeps the validation effect below from
   // firing on every render.
   const definition =
-    hint == null
+    hint == null && unmodelledType == null && !unparseable
       ? buildDefinition({
           definitionName,
           description,
@@ -594,7 +601,7 @@ export function DetectionRuleForm({
   }, [scoped, scopeGroupToken, scopeGroupVersion, scopeVersions, ruleType]);
 
   const submit = async () => {
-    if (definition == null) return; // guarded by the disabled button; satisfies the type narrowing
+    if (definition == null || unmodelledType != null || unparseable) return; // guarded by the disabled button; satisfies the type narrowing
     setFormError(null);
     setBusy(true);
     try {
@@ -667,10 +674,76 @@ export function DetectionRuleForm({
   // click before the versions fetch resolved); the backend would reject the publish anyway.
   const scopeHint = scopeChosen && scopeGroupVersion == null ? t('ruleScopeHalfSetHint') : null;
 
+  if ((unmodelledType != null || unparseable) && source != null) {
+    // Not dismissable and no definition Save: the original stays exactly as stored. The bytes are
+    // shown verbatim, read-only, so the operator can see what the rule says. A STORED rule can
+    // still be enabled/disabled and renamed — those go as a partial update that never names the
+    // definition. A handed-off draft has nothing stored yet, so it gets wording and no controls.
+    let pretty = source;
+    if (!unparseable) {
+      try {
+        pretty = JSON.stringify(JSON.parse(source), null, 2);
+      } catch {
+        // shown as stored
+      }
+    }
+    const draft = !editing;
+    const suffix = draft ? 'Draft' : '';
+    const message = unparseable
+      ? t(`ruleUnparseableWarning${suffix}`)
+      : unmodelledType === ''
+        ? t(`ruleUnmodelledTypeMissing${suffix}`)
+        : t(`ruleUnmodelledType${suffix}`, { type: unmodelledType });
+    const saveMeta = async () => {
+      setFormError(null);
+      setBusy(true);
+      try {
+        // Partial update: no definition, no authoringGraph, no scope — only what this view edits.
+        await updateDetectionRule(entity!.token, {
+          name: name.trim() || null,
+          description: description.trim() || null,
+          enabled,
+        });
+        onDone(t('ruleUpdatedToast', { token: entity!.token }));
+      } catch (err) {
+        setFormError(errMessage(err));
+      } finally {
+        setBusy(false);
+      }
+    };
+    return (
+      <div className="space-y-4">
+        {formError && <ErrorBanner message={formError} onDismiss={() => setFormError(null)} />}
+        <div role="alert" className="rounded-md border border-amber-500/50 bg-amber-500/10 px-3 py-2 text-sm text-amber-700 dark:text-amber-400">
+          {message}
+        </div>
+        <FormField label={t(draft ? 'ruleUnmodelledDraftLabel' : 'ruleUnmodelledStoredLabel')} htmlFor="dr-unmodelled-source">
+          <Textarea id="dr-unmodelled-source" aria-label={t(draft ? 'ruleUnmodelledDraftLabel' : 'ruleUnmodelledStoredLabel')} readOnly value={pretty} className="min-h-48 font-mono text-xs" />
+        </FormField>
+        {editing && (
+          <>
+            <FormField label={t('common:colName')} htmlFor="dr-name">
+              <Input id="dr-name" value={name} onChange={(e) => setName(e.target.value)} />
+            </FormField>
+            <FormField label={t('common:colDescription')} htmlFor="dr-description">
+              <Textarea id="dr-description" value={description} onChange={(e) => setDescription(e.target.value)} />
+            </FormField>
+            <label className="flex items-center gap-2 text-sm">
+              <Checkbox checked={enabled} onCheckedChange={(c) => setEnabled(c === true)} />
+              {t('ruleEnabledCheckboxLabel')}
+            </label>
+            <Button onClick={saveMeta} loading={busy} disabled={busy}>
+              {t('common:saveChanges')}
+            </Button>
+          </>
+        )}
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-4">
       {formError && <ErrorBanner message={formError} onDismiss={() => setFormError(null)} />}
-      {unparseable && <p className="rounded-md border border-amber-500/50 bg-amber-500/10 px-3 py-2 text-sm text-amber-700 dark:text-amber-400">{t('ruleUnparseableWarning')}</p>}
       {lossyOpen && <p className="rounded-md border border-amber-500/50 bg-amber-500/10 px-3 py-2 text-sm text-amber-700 dark:text-amber-400">{t('ruleLossyOpenWarning')}</p>}
 
       <FormField label={t('common:colName')} htmlFor="dr-name" description={t('ruleNameDescription')}>

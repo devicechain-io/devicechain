@@ -25,7 +25,7 @@ import COMPILE_GO from '../../../../../../backend/services/event-processing/inte
 import SCHEMA_GO from '../../../../../../backend/services/event-processing/internal/rules/schema.go?raw';
 // The model comes from the model module; only the picker's option list — which needs
 // translation and is therefore presentation — comes from the component.
-import { MAX_ACTIONS_PER_RULE, RULE_TYPES, conditionForbidden, parseDefinition, rebuildFrom } from './rule-model';
+import { MAX_ACTIONS_PER_RULE, RULE_TYPES, conditionForbidden, parseDefinition, rebuildFrom, unmodelledRuleType } from './rule-model';
 import { ruleTypeOptions } from './DetectionRuleForm';
 import FORM_SRC from './DetectionRuleForm.tsx?raw';
 import { CONDITION_TYPES, NODE_CATALOG, type NodeSpec } from './canvas/model';
@@ -477,6 +477,29 @@ describe('parseDefinition on input that is not a rule object', () => {
   // trivially correct implementation of this whole function.
   it('still parses an actual rule', () => {
     expect(parseDefinition(CORPUS.threshold)).not.toBeNull();
+  });
+});
+
+// 🔴 THE CONTRACT THAT REPLACED THE `threshold` FALLBACK. A type the form does not model is NOT
+// coerced into a form: parseDefinition returns null for it, and unmodelledRuleType is what tells
+// that apart from unreadable input. Both halves are pinned, because either one alone can be
+// undone (back to a coercion, or to "unreadable") without the other noticing.
+describe('an unmodelled rule type is refused, never coerced', () => {
+  it('parseDefinition returns null for an unknown type', () => {
+    expect(parseDefinition('{"type":"frobnicate"}')).toBeNull();
+    expect(parseDefinition('{"name":"no type at all"}')).toBeNull();
+  });
+
+  it.each([
+    ['a known type', '{"type":"threshold"}', null],
+    ['a known type (connectivity)', '{"type":"connectivity"}', null],
+    ['an unknown type', '{"type":"frobnicate"}', 'frobnicate'],
+    ['a missing type', '{"name":"x"}', ''],
+    ['a non-string type', '{"type":5}', ''],
+    ['malformed JSON', '{not json', null],
+    ['an array', '[1,2]', null],
+  ])('unmodelledRuleType for %s', (_label, raw, expected) => {
+    expect(unmodelledRuleType(raw)).toBe(expected);
   });
 });
 

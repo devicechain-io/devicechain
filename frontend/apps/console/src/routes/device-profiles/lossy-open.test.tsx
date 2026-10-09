@@ -11,7 +11,7 @@
 // comment; an enforcer nothing exercises is a comment with a function signature.
 
 import '@/i18n/config';
-import { cleanup, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // The form talks to three areas on mount. None of them is what this file measures, and a real
@@ -34,6 +34,7 @@ vi.mock('@/auth/AuthProvider', async (importOriginal) => ({
 vi.mock('@/lib/api/event-processing', () => ({ validateDetectionRule: vi.fn(async () => ({ errors: [] })) }));
 
 import { DetectionRuleForm } from './DetectionRuleForm';
+import { updateDetectionRule, createDetectionRule } from '@/lib/api/device-management';
 import type { DetectionRule } from '@/lib/api/device-management';
 
 afterEach(cleanup);
@@ -53,7 +54,7 @@ const rule = (definition: string): DetectionRule =>
   }) as unknown as DetectionRule;
 
 const WARNING = /This form cannot express everything this rule/;
-const UNREADABLE = /could not be read into the form/;
+const UNREADABLE = /stored definition can.t be read/i;
 
 const threshold = JSON.stringify({
   name: 'A rule',
@@ -94,13 +95,19 @@ describe('opening a stored rule the form cannot fully hold', () => {
     expect(screen.queryByText(UNREADABLE)).toBeNull();
   });
 
-  it('reports an unreadable definition differently from a lossy one', () => {
-    render(<DetectionRuleForm profileToken="p" entity={rule('{not json at all')} onDone={() => {}} />);
+  // 🔴 AN UNREADABLE DEFINITION USED TO OPEN AS A BLANK THRESHOLD whose Save overwrote the stored
+  // bytes. It now opens read-only: an alert, the raw text verbatim, and no way to save.
+  it.each(['{not json at all', 'null', '[1,2]'])('opens an unreadable definition (%s) read-only', (raw) => {
+    render(<DetectionRuleForm profileToken="p" entity={rule(raw)} onDone={() => {}} />);
 
-    expect(screen.getByText(UNREADABLE)).toBeTruthy();
-    // The two sentences describe different situations and must not both appear: an unparseable
-    // rule opens BLANK, a lossy one opens with everything the form did understand.
+    expect(screen.getByRole('alert').textContent).toMatch(UNREADABLE);
+    // The only Save is the metadata one (enable/rename), which never sends the definition.
+    expect((screen.getByLabelText(/stored definition/i) as HTMLTextAreaElement).readOnly).toBe(true);
+    expect(screen.queryByRole('button', { name: /create/i })).toBeNull();
+    expect(screen.queryByLabelText(/metric/i)).toBeNull();
+    expect((screen.getByLabelText(/stored definition/i) as HTMLTextAreaElement).value).toBe(raw);
     expect(screen.queryByText(WARNING)).toBeNull();
+    expect(updateDetectionRule).not.toHaveBeenCalled();
   });
 
   // 🔴 THE PATH THAT HAD NO WARNING AT ALL. The "Describe" door hands the form a definition a
@@ -120,5 +127,97 @@ describe('opening a stored rule the form cannot fully hold', () => {
 
     expect(screen.queryByText(WARNING)).toBeNull();
     expect(screen.queryByText(UNREADABLE)).toBeNull();
+  });
+});
+
+// 🔴 A TYPE THE FORM DOES NOT MODEL MUST NEVER BECOME A THRESHOLD. parseDefinition used to
+// fall back to `threshold` for any `type` it did not know, so opening (or drafting) a rule of a
+// later release's kind showed a threshold form pre-filled from it, and Save wrote the threshold
+// over the real rule. The form now refuses to render an editor at all.
+describe('opening a rule of a type the form does not model', () => {
+  const NOT_EDITABLE = /can.t be edited in the form/i;
+  const unknown = JSON.stringify({ name: 'A rule', type: 'frobnicate', severity: 'major', window: '5m' });
+
+  it('shows a non-dismissable refusal and no editor, and offers no way to save the definition', () => {
+    render(<DetectionRuleForm profileToken="p" entity={rule(unknown)} onDone={() => {}} />);
+
+    const alert = screen.getByRole('alert');
+    expect(alert.textContent).toMatch(NOT_EDITABLE);
+    expect(alert.textContent).toMatch(/frobnicate/);
+    expect(screen.queryByRole('button', { name: /dismiss|close/i })).toBeNull();
+    expect((screen.getByLabelText(/stored definition/i) as HTMLTextAreaElement).readOnly).toBe(true);
+    expect(screen.queryByRole('button', { name: /create/i })).toBeNull();
+    // No threshold form pre-filled from it.
+    expect(screen.queryByLabelText(/metric/i)).toBeNull();
+    expect(screen.queryByText(WARNING)).toBeNull();
+    // The stored bytes are shown read-only, verbatim.
+    expect(screen.getByLabelText(/stored definition/i).textContent).toContain('frobnicate');
+  });
+
+  it('never writes anything for it', async () => {
+    render(<DetectionRuleForm profileToken="p" entity={rule(unknown)} onDone={() => {}} />);
+    await new Promise((r) => setTimeout(r, 500)); // past the validation debounce
+    expect(updateDetectionRule).not.toHaveBeenCalled();
+    expect(createDetectionRule).not.toHaveBeenCalled();
+  });
+
+  it('refuses a handed-off draft of an unmodelled type too, instead of creating a threshold', () => {
+    render(<DetectionRuleForm profileToken="p" initialDefinition={unknown} onDone={() => {}} />);
+
+    expect(screen.getByRole('alert').textContent).toMatch(NOT_EDITABLE);
+    expect(screen.queryByRole('button', { name: /create/i })).toBeNull();
+  });
+
+  it('treats a definition with no type as unmodelled rather than a threshold', () => {
+    render(<DetectionRuleForm profileToken="p" entity={rule(JSON.stringify({ name: 'x' }))} onDone={() => {}} />);
+
+    // The SPECIFIC sentence: the shared pattern also matches the unreadable and unknown-type
+    // alerts, so asserting only that would pass for a missing type misfiled as either.
+    expect(screen.getByRole('alert').textContent).toMatch(/no recognisable type/);
+  });
+
+  it('lets a read-only rule be disabled and renamed without ever sending its definition', async () => {
+    render(<DetectionRuleForm profileToken="p" entity={rule(unknown)} onDone={() => {}} />);
+
+    fireEvent.click(screen.getByRole('checkbox', { name: /enabled/i }));
+    fireEvent.change(screen.getByLabelText(/^name$/i), { target: { value: 'Renamed' } });
+    fireEvent.click(screen.getByRole('button', { name: /save changes/i }));
+    await waitFor(() => expect(updateDetectionRule).toHaveBeenCalledTimes(1));
+    const [token, body] = vi.mocked(updateDetectionRule).mock.calls[0];
+    expect(token).toBe('r1');
+    expect(body).toMatchObject({ enabled: false, name: 'Renamed' });
+    expect(Object.keys(body as object)).not.toContain('definition');
+    expect(Object.keys(body as object)).not.toContain('authoringGraph');
+  });
+
+  it('words a handed-off draft as a draft, not as a stored rule', () => {
+    render(<DetectionRuleForm profileToken="p" initialDefinition={unknown} onDone={() => {}} />);
+
+    const text = screen.getByRole('alert').textContent ?? '';
+    expect(text).toMatch(/draft/i);
+    expect(text).not.toMatch(/stored rule|through the API/i);
+    // Nothing is stored yet, so there is nothing to enable or rename.
+    expect(screen.queryByRole('checkbox', { name: /enabled/i })).toBeNull();
+  });
+
+  it('treats a differently-cased Type key as the type, as the backend decoder does', () => {
+    render(<DetectionRuleForm profileToken="p" entity={rule(JSON.stringify({ name: 'x', Type: 'frobnicate' }))} onDone={() => {}} />);
+
+    expect(screen.getByRole('alert').textContent).toMatch(/frobnicate/);
+  });
+
+  it('round-trips a connectivity rule exactly through Save', async () => {
+    const connectivity = {
+      name: 'A rule',
+      type: 'connectivity',
+      severity: 'critical',
+      actions: [{ type: 'raiseAlarm', raiseAlarm: { alarmKey: 'offline' } }],
+    };
+    render(<DetectionRuleForm profileToken="p" entity={rule(JSON.stringify(connectivity))} onDone={() => {}} />);
+
+    fireEvent.click(screen.getByRole('button', { name: /save changes/i }));
+    await waitFor(() => expect(updateDetectionRule).toHaveBeenCalledTimes(1));
+    const sent = JSON.parse((vi.mocked(updateDetectionRule).mock.calls[0][1] as { definition: string }).definition);
+    expect(sent).toEqual(connectivity);
   });
 });

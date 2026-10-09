@@ -14,6 +14,7 @@ import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { SegmentedControl, type SegmentedOption } from '@/components/ui/segmented-control';
 import { DetectionRuleForm } from './DetectionRuleForm';
+import { parseDefinition, unmodelledRuleType } from './rule-model';
 import { DetectionRuleNLDraft } from './DetectionRuleNLDraft';
 import { CanvasEditor } from './canvas/CanvasEditor';
 import type { DetectionRule } from '@/lib/api/device-management';
@@ -51,7 +52,14 @@ export function DetectionRuleAuthoring({
       <SegmentedControl<Mode>
         ariaLabel={t('ruleModePicker')}
         value={mode}
-        onValueChange={setMode}
+        onValueChange={(m) => {
+          // A draft the form refuses to open (unmodelled type / unreadable) is dropped when the
+          // author leaves the form, so coming back is not stuck on a read-only view of it.
+          if (m !== 'form' && nlDraft != null && (unmodelledRuleType(nlDraft) != null || parseDefinition(nlDraft) == null)) {
+            setNlDraft(undefined);
+          }
+          setMode(m);
+        }}
         size="md"
         options={modeOptions}
       />

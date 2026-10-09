@@ -314,9 +314,37 @@ export function rebuildFrom(p: ParsedDefinition): string {
   });
 }
 
+// The rule's `type` value, looked up the way the backend's Go JSON decoding does: an exact `type`
+// key wins, otherwise any key that matches case-insensitively (`Type`) is the type. Reading only
+// the exact key would call a rule the backend runs "typeless", or worse, read a known type off
+// one key while the backend reads another.
+function typeValue(d: Record<string, unknown>): unknown {
+  if ('type' in d) return d.type;
+  const k = Object.keys(d).find((key) => key.toLowerCase() === 'type');
+  return k === undefined ? undefined : d[k];
+}
+
+/**
+ * The stored `type` of a definition that parses as a rule object but names a kind this form does
+ * not model, or null when the definition is unparseable (a different failure) or its type is
+ * known. An absent or non-string type is reported as the empty string: it is just as unmodelled.
+ */
+export function unmodelledRuleType(raw: string): string | null {
+  let d: unknown;
+  try {
+    d = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  if (d === null || typeof d !== 'object' || Array.isArray(d)) return null;
+  const type = typeValue(d as Record<string, unknown>);
+  if (isKnownRuleType(type)) return null;
+  return typeof type === 'string' ? type : '';
+}
+
 // Reads a stored definition into form state. It is defensive (a hand- or API-authored rule
 // may carry shapes the form does not model): anything unreadable falls back to a sensible
-// default so the drawer always opens; the compiler re-validates on the next publish.
+// default so the drawer always opens (an unmodelled rule TYPE is the exception: null, see below); the compiler re-validates on the next publish.
 export function parseDefinition(raw: string): ParsedDefinition | null {
   let d: Record<string, unknown>;
   try {
@@ -332,14 +360,15 @@ export function parseDefinition(raw: string): ParsedDefinition | null {
   }
   const str = (v: unknown): string => (typeof v === 'string' ? v : '');
   const numStr = (v: unknown): string => (typeof v === 'number' ? String(v) : '');
-  // 🔴 THE FALLBACK IS STILL HERE, AND IT IS STILL A RELABEL. A type this form does not
-  // know becomes a threshold on screen, which is a lie about a rule that exists. What has
-  // changed is that it can no longer happen SILENTLY: `isKnownRuleType` reads the single
-  // taxonomy above, and the caller compares the rebuilt definition with the stored one and
-  // warns when they differ (see `lossyOpen`). The relabel is kept rather than refused
-  // because the drawer must still open — an operator has to be able to read and rename a
-  // rule the form cannot fully model.
-  const type = isKnownRuleType(d.type) ? d.type : 'threshold';
+  // 🔴 NO FALLBACK, BY DESIGN. A type this form does not model used to become a `threshold`
+  // here, so a rule of a later release's kind (or a typo, or a model's invention) opened as a
+  // threshold form pre-filled from it and Save wrote that threshold over the real rule. An
+  // unmodelled type is now not parsed at all: this returns null for it, and the caller asks
+  // `unmodelledRuleType` first to tell "unreadable" from "readable but not ours" and refuse to
+  // render an editor for the latter.
+  const rawType = typeValue(d);
+  if (!isKnownRuleType(rawType)) return null;
+  const type = rawType;
 
   // Condition.
   const when = (d.when ?? {}) as Record<string, unknown>;
