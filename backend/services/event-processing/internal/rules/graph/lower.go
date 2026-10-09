@@ -19,6 +19,19 @@ type Diagnostic struct {
 	NodeID   string
 	Severity string // "error" | "warning"
 	Message  string
+	// Code and Params are the stable, localisable identity of a rule-compiler warning (see
+	// rules.Warning). Empty for the lowering's own diagnostics, which are English-only.
+	Code   string
+	Params []string
+}
+
+// WarningDiagnostics maps a compiled rule's warnings to diagnostics anchored on its condition node.
+func WarningDiagnostics(nodeID string, ws []rules.Warning) []Diagnostic {
+	out := make([]Diagnostic, 0, len(ws))
+	for _, w := range ws {
+		out = append(out, Diagnostic{NodeID: nodeID, Severity: "warning", Message: w.Message, Code: w.Code, Params: w.Params})
+	}
+	return out
 }
 
 // LoweredRule is one condition node lowered to a compiled, validated DETECT rule: the
@@ -204,6 +217,9 @@ func Compile(def CanvasDefinition, profileToken string, limits rules.Limits) (*R
 	// same-target action pair whose guards may overlap (a possible double-send), and a branch that
 	// routes nothing.
 	var warnings []Diagnostic
+	for _, lr := range lowered {
+		warnings = append(warnings, WarningDiagnostics(lr.NodeID, lr.Compiled.Warnings)...)
+	}
 	warnings = append(warnings, duplicateTargetWarnings(lowered)...)
 	warnings = append(warnings, danglingBranchWarnings(def.Nodes, edges)...)
 	return &Result{Rules: lowered, Diagnostics: warnings}, nil

@@ -432,6 +432,8 @@
   "ruleValueMetricDescriptionAgg": "The metric folded by the aggregate.",
   "ruleValueMetricDescriptionDelta": "The metric whose change is measured.",
   "ruleValueMetricLabel": "Value metric",
+  "ruleWarning.negatedAttributeGuard": "This condition tests that the attribute “{{p0}}” is NOT set, so the rule applies to every device without it — including devices where it was never set, was set to something other than a number, or was set with CLIENT scope. If you meant only the devices configured without it, add another test that says so.",
+  "ruleWarning.negatedAttributeGuardDisjunct": "This condition is true whenever the attribute “{{p0}}” is NOT set, whatever the reading, so it fires for every device without it and no threshold applies to them — including devices where it was never set, was set to something other than a number, or was set with CLIENT scope. If you meant a fallback limit, use a conditional: \"t\" in m && (\"{{p0}}\" in attr ? m[\"t\"] > attr[\"{{p0}}\"] : m[\"t\"] > 80.0).",
   "ruleWindowLabel": "Window",
   "ruleWindowModeCountDescription": "A window of N events, not time.",
   "ruleWindowModeCountLabel": "Count",

@@ -124,7 +124,11 @@ func (r *CanvasCompileResultResolver) Diagnostics() []*CanvasDiagnosticResolver 
 // newCanvasDiagnostic maps a graph.Diagnostic to its resolver, carrying a null nodeId for a
 // graph-level problem.
 func newCanvasDiagnostic(d graph.Diagnostic) *CanvasDiagnosticResolver {
-	res := &CanvasDiagnosticResolver{severity: d.Severity, message: d.Message}
+	res := &CanvasDiagnosticResolver{severity: d.Severity, message: d.Message, params: append([]string{}, d.Params...)}
+	if d.Code != "" {
+		code := d.Code
+		res.code = &code
+	}
 	if d.NodeID != "" {
 		id := d.NodeID
 		res.nodeID = &id
@@ -137,7 +141,15 @@ type CanvasDiagnosticResolver struct {
 	nodeID   *string
 	severity string
 	message  string
+	code     *string
+	params   []string
 }
+
+// Code resolves the stable warning code (null when the diagnostic has none).
+func (r *CanvasDiagnosticResolver) Code() *string { return r.code }
+
+// Params resolves the values the code's text interpolates (empty when there is no code).
+func (r *CanvasDiagnosticResolver) Params() []string { return r.params }
 
 // NodeId resolves the offending node id (null for a graph-level problem).
 func (r *CanvasDiagnosticResolver) NodeId() *string { return r.nodeID }

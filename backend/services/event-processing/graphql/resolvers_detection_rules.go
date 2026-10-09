@@ -44,6 +44,7 @@ func (r *SchemaResolver) ValidateDetectionRules(ctx context.Context, args struct
 	limits := rules.DefaultLimits()
 
 	errs := make([]*DetectionRuleValidationErrorResolver, 0)
+	warns := make([]*DetectionRuleValidationWarningResolver, 0)
 	for i, in := range args.Rules {
 		rule, err := rules.Decode([]byte(in.Definition))
 		if err != nil {
@@ -67,13 +68,19 @@ func (r *SchemaResolver) ValidateDetectionRules(ctx context.Context, args struct
 		// it only to anchor its error messages, so this yields token-named errors without
 		// affecting what is validated.
 		rule.ID = in.Token
-		if _, err := rules.Compile(rule, limits); err != nil {
+		compiled, err := rules.Compile(rule, limits)
+		if err != nil {
 			errs = append(errs, newValidationError(i, in.Token, err))
 			continue
 		}
+		for _, w := range compiled.Warnings {
+			warns = append(warns, &DetectionRuleValidationWarningResolver{
+				index: int32(i), token: in.Token, code: w.Code, params: append([]string{}, w.Params...), message: w.Message,
+			})
+		}
 	}
 
-	return &DetectionRuleValidationResultResolver{errors: errs}, nil
+	return &DetectionRuleValidationResultResolver{errors: errs, warnings: warns}, nil
 }
 
 // newValidationError builds a rejection resolver anchored to the offending rule.
@@ -90,8 +97,38 @@ func newValidationErrorMsg(index int, token, message string) *DetectionRuleValid
 // DetectionRuleValidationResultResolver resolves the batch outcome. It carries only the
 // rejections; valid is derived (no rejections ⇒ valid) so the two can never disagree.
 type DetectionRuleValidationResultResolver struct {
-	errors []*DetectionRuleValidationErrorResolver
+	errors   []*DetectionRuleValidationErrorResolver
+	warnings []*DetectionRuleValidationWarningResolver
 }
+
+// Warnings returns the advisory findings on rules that compiled (never affects Valid).
+func (r *DetectionRuleValidationResultResolver) Warnings() []*DetectionRuleValidationWarningResolver {
+	return r.warnings
+}
+
+// DetectionRuleValidationWarningResolver resolves one advisory finding.
+type DetectionRuleValidationWarningResolver struct {
+	index   int32
+	token   string
+	code    string
+	params  []string
+	message string
+}
+
+// Index resolves the zero-based position of the rule in the input list.
+func (r *DetectionRuleValidationWarningResolver) Index() int32 { return r.index }
+
+// Token resolves the rule's device-management token.
+func (r *DetectionRuleValidationWarningResolver) Token() string { return r.token }
+
+// Code resolves the stable warning code.
+func (r *DetectionRuleValidationWarningResolver) Code() string { return r.code }
+
+// Params resolves the values the code's text interpolates.
+func (r *DetectionRuleValidationWarningResolver) Params() []string { return r.params }
+
+// Message resolves the English fallback text.
+func (r *DetectionRuleValidationWarningResolver) Message() string { return r.message }
 
 // Valid reports whether every submitted rule compiled.
 func (r *DetectionRuleValidationResultResolver) Valid() bool { return len(r.errors) == 0 }

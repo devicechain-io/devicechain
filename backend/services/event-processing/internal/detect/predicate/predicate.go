@@ -123,6 +123,14 @@ type Predicate struct {
 	// device holding none of the attributes it reads. See TrueWithoutAttributes; rules.Compile
 	// decides, per rule kind, whether that is a refusal.
 	trueWithoutAttributes bool
+
+	// negatedAttrGuards records the attributes tested for absence at the top level. See
+	// NegatedAttributeGuards.
+	negatedAttrGuards []string
+
+	// disjunctiveAttrGuards records the attributes whose absence test is a disjunct. See
+	// DisjunctiveAttributeGuards.
+	disjunctiveAttrGuards []string
 }
 
 // Source is the CEL text the predicate compiled from (generated or raw). Useful for
@@ -194,6 +202,7 @@ func compile(source string, costCeiling uint64) (*Predicate, error) {
 			return nil, &CompileError{Source: source, Err: fmt.Errorf("analyze attribute absence: %w", err)}
 		}
 		p.trueWithoutAttributes = alwaysTrue
+		p.negatedAttrGuards, p.disjunctiveAttrGuards = attributeAbsenceTests(ast.NativeRep())
 	}
 
 	// Metric-scoped-feed analysis (review D4), computed once here where the AST and env are in

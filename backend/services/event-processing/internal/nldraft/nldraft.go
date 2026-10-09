@@ -85,6 +85,10 @@ type Diagnostic struct {
 	Field string
 	// Message is the console-surfaceable reason.
 	Message string
+	// Code and Params are the stable identity of a WARNING (see rules.Warning); empty on a
+	// rejection reason.
+	Code   string
+	Params []string
 }
 
 // Result is the outcome of a draft request.
@@ -106,6 +110,8 @@ type Result struct {
 	// RawCandidate is the model's last (rejected) raw output — surfaced on !OK so the author can
 	// see what the AI tried (Derek's steer: diagnostics + raw candidate).
 	RawCandidate string
+	// Warnings are the advisory findings on a draft that compiled (set only when OK).
+	Warnings []Diagnostic
 	// Diagnostics are the compiler rejection reasons from the final failed attempt (set on !OK).
 	Diagnostics []Diagnostic
 	// Unavailable is true when the inference path itself could not run — the ai-inference endpoint
@@ -194,12 +200,13 @@ func (d *Drafter) Draft(ctx context.Context, tenant string, req Request) (Result
 		rounds++
 		last = out
 
-		def, cost, cerr := compileCandidate(out.Candidate, d.limits)
+		def, cost, warns, cerr := compileCandidate(out.Candidate, d.limits)
 		if cerr == nil {
 			return Result{
 				OK:            true,
 				Definition:    def,
 				EstimatedCost: cost,
+				Warnings:      warns,
 				Model:         out.Model,
 				Provider:      out.Provider,
 				Attempts:      int32(rounds),
@@ -225,22 +232,25 @@ func (d *Drafter) Draft(ctx context.Context, tenant string, req Request) (Result
 // returning the canonical (id-blanked) definition and the leaf cost on success. The candidate's
 // id is forced to a placeholder before Compile (Compile requires a non-empty id + name; the real
 // token is assigned at save) and blanked from the returned definition.
-func compileCandidate(candidate string, limits rules.Limits) (definition string, cost int32, err error) {
+func compileCandidate(candidate string, limits rules.Limits) (definition string, cost int32, warnings []Diagnostic, err error) {
 	rule, err := rules.Decode([]byte(extractJSON(candidate)))
 	if err != nil {
-		return "", 0, err
+		return "", 0, nil, err
 	}
 	rule.ID = "draft" // Compile requires a non-empty id; the authoritative token is assigned at save.
 	compiled, err := rules.Compile(rule, limits)
 	if err != nil {
-		return "", 0, err
+		return "", 0, nil, err
+	}
+	for _, w := range compiled.Warnings {
+		warnings = append(warnings, Diagnostic{Field: "when", Message: w.Message, Code: w.Code, Params: w.Params})
 	}
 	rule.ID = "" // omit the placeholder from the draft the author saves.
 	out, err := json.Marshal(rule)
 	if err != nil {
-		return "", 0, fmt.Errorf("nldraft: marshal compiled rule: %w", err)
+		return "", 0, nil, fmt.Errorf("nldraft: marshal compiled rule: %w", err)
 	}
-	return string(out), clampCost(compiled.Predicate.CostMax()), nil
+	return string(out), clampCost(compiled.Predicate.CostMax()), warnings, nil
 }
 
 // diagnosticsFrom maps a compile/decode error to author-facing diagnostics. A structured

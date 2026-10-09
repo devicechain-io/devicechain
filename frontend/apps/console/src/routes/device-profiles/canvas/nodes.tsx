@@ -26,6 +26,8 @@ export interface CanvasNodeData {
   nodeType: NodeType;
   config: Record<string, unknown>;
   diagnostic?: string;
+  // An advisory (amber) finding on this node: the graph compiled, but the author should read it.
+  warning?: string;
   traceDisposition?: string;
   traceDetail?: string;
   [key: string]: unknown;
@@ -136,6 +138,7 @@ export const CanvasNodeView = memo(function CanvasNodeView({ data, selected }: N
   const spec = NODE_CATALOG[d.nodeType];
   const name = str(d.config.name);
   const hasError = !!d.diagnostic;
+  const hasWarning = !hasError && !!d.warning;
   // The slice-9e trace overlay: when a firing is selected in the preview panel, this node carries its
   // disposition for that firing. An error border still wins (a broken node is more urgent than a
   // trace), but the trace border otherwise takes precedence over plain selection.
@@ -145,9 +148,9 @@ export const CanvasNodeView = memo(function CanvasNodeView({ data, selected }: N
     <div
       className={[
         'min-w-44 max-w-64 rounded-md border bg-card px-3 py-2 text-card-foreground shadow-sm transition-colors',
-        hasError ? 'border-destructive' : traceStyle ? traceStyle.border : selected ? 'border-primary' : 'border-border',
+        hasError ? 'border-destructive' : hasWarning ? 'border-amber-500' : traceStyle ? traceStyle.border : selected ? 'border-primary' : 'border-border',
       ].join(' ')}
-      title={d.traceDetail ?? d.diagnostic ?? undefined}
+      title={d.traceDetail ?? d.diagnostic ?? d.warning ?? undefined}
     >
       {/* Target (input) handles on the left. */}
       {Object.entries(spec.in).map(([port, ptype], i) => (
@@ -175,7 +178,7 @@ export const CanvasNodeView = memo(function CanvasNodeView({ data, selected }: N
         {traceStyle ? (
           <span className={['rounded px-1 py-0.5 text-[9px] font-semibold uppercase tracking-wide', traceStyle.badge].join(' ')}>{t(traceStyle.labelKey)}</span>
         ) : (
-          hasError && <span className="h-1.5 w-1.5 rounded-full bg-destructive" />
+          hasError ? <span className="h-1.5 w-1.5 rounded-full bg-destructive" /> : hasWarning && <span className="h-1.5 w-1.5 rounded-full bg-amber-500" />
         )}
       </div>
       {name && <div className="truncate text-sm font-medium">{name}</div>}

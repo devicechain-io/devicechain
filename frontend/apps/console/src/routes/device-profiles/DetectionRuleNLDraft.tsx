@@ -24,6 +24,7 @@ import {
   draftDetectionRuleFromText,
   type DraftRuleResult,
   type MetricHintInput,
+  type RuleWarning,
 } from '@/lib/api/event-processing';
 
 export function DetectionRuleNLDraft({
@@ -33,7 +34,7 @@ export function DetectionRuleNLDraft({
   profileToken: string;
   // Called with the compiled rules.Rule JSON once a draft compiles — the parent hands it to the
   // form (pre-filled, still a NEW rule) for the human to review and save.
-  onDrafted: (definition: string) => void;
+  onDrafted: (definition: string, warnings: RuleWarning[]) => void;
 }) {
   const { t } = useTranslation('deviceProfiles');
   const [text, setText] = useState('');
@@ -91,7 +92,10 @@ export function DetectionRuleNLDraft({
       if (res.ok) {
         if (res.definition) {
           // The compiler accepted it — hand the compiled draft to the form to review + save.
-          onDrafted(res.definition);
+          onDrafted(
+            res.definition,
+            res.warnings.map((w) => ({ code: w.code ?? '', params: w.params, message: w.message })),
+          );
           return;
         }
         // ok with no definition would be a server contract break; surface it rather than

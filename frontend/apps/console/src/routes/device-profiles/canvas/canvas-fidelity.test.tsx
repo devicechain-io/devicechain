@@ -58,7 +58,10 @@ const compileMock = vi.mocked(compileCanvas);
 const updateMock = vi.mocked(updateDetectionRule);
 
 afterEach(cleanup);
-beforeEach(() => vi.clearAllMocks());
+beforeEach(() => {
+  vi.clearAllMocks();
+  injectedDiagnostics = [];
+});
 
 // ── The fake compiler ───────────────────────────────────────────────────────
 
@@ -111,9 +114,12 @@ function lower(graphJson: string): { ok: boolean; definition: string | null } {
   return { ok: true, definition: JSON.stringify(rule) };
 }
 
+// Diagnostics the fake compiler adds to every successful answer (advisory warnings, in the warning tests).
+let injectedDiagnostics: unknown[] = [];
+
 function answer(graph: string) {
   const r = lower(graph);
-  return { ...r, estimatedCost: null, diagnostics: [] } as unknown as Awaited<ReturnType<typeof compileCanvas>>;
+  return { ...r, estimatedCost: null, diagnostics: r.ok ? injectedDiagnostics : [] } as unknown as Awaited<ReturnType<typeof compileCanvas>>;
 }
 
 const compilesFaithfully = () => compileMock.mockImplementation(async (graph) => answer(graph));
@@ -464,5 +470,55 @@ describe('saving from the canvas', () => {
       hasDescription: true,
       description: null,
     });
+  });
+});
+
+// ── Advisory warnings ──────────────────────────────────────────────────────
+
+describe('compiler warnings on the canvas', () => {
+  const negated = { nodeId: 'threshold-0001', severity: 'warning', message: 'english', code: 'negatedAttributeGuard', params: ['lim'] };
+  const graphLevel = { nodeId: null, severity: 'warning', message: 'a graph-wide advisory', code: null, params: [] };
+
+  // The contract: a warning is advice. The graph compiled, so Save stays on and stores the rule.
+  it('never turns Save off, and the rule still saves', async () => {
+    injectedDiagnostics = [negated, graphLevel];
+    compilesFaithfully();
+    open(canvasAuthored(thresholdGraph(30)));
+    await settled();
+
+    expect(saveBtn().disabled).toBe(false);
+    fireEvent.click(saveBtn());
+    await waitFor(() => expect(updateMock).toHaveBeenCalledTimes(1));
+  });
+
+  it('shows a node warning in the inspector when that node is selected', async () => {
+    injectedDiagnostics = [negated];
+    compilesFaithfully();
+    open(canvasAuthored(thresholdGraph(30)));
+    await settled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'node threshold-0001' }));
+    const note = await screen.findByTestId('node-warning');
+    expect(note.textContent).toContain('“lim”');
+  });
+
+  // Nothing is selected, so the side panel is where a warning with no node has to appear.
+  it('shows a graph-level warning (no node) in the side panel', async () => {
+    injectedDiagnostics = [graphLevel];
+    compilesFaithfully();
+    open(canvasAuthored(thresholdGraph(30)));
+    await settled();
+
+    expect((await screen.findByTestId('graph-warnings')).textContent).toBe('a graph-wide advisory');
+    // ...and it is not presented as an error.
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('shows nothing when the compiler had no warnings', async () => {
+    compilesFaithfully();
+    open(canvasAuthored(thresholdGraph(30)));
+    await settled();
+
+    expect(screen.queryByTestId('graph-warnings')).toBeNull();
   });
 });
