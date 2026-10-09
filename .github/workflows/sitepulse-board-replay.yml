@@ -45,6 +45,10 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+          # the excerpt test hashes the board as it was at the commit the fixture pins
+          fetch-depth: 0
 
       # Standard library only; the runner's python3 is enough.
       - name: Unit tests

@@ -14,6 +14,7 @@ import hashlib
 import io
 import json
 import os
+import subprocess
 import tempfile
 import unittest
 from unittest import mock
@@ -63,6 +64,18 @@ def count_sev(doc, t_ms, sev):
     return sum(1 for a in active_alarms(doc, t_ms) if a["sev"] == sev)
 
 
+def assert_alarm_claims_hold(tc, doc):
+    """Every chapter whose note says the platform reported an alarm state is at or after that event."""
+    import re as _re
+
+    for ch in doc["chapters"]:
+        m = _re.search(r"the platform says (\S+) is (ACTIVE|CLEARED)", ch["note"])
+        if m:
+            at = [e["tMs"] for e in doc["alarms"]["events"] if e["key"] == m.group(1) and e["state"] == m.group(2)]
+            tc.assertTrue(at, ch)
+            tc.assertGreaterEqual(ch["tMs"], min(at), ch)
+
+
 # --- a synthetic run folder ----------------------------------------------------
 
 T1 = "2026-10-07T02:01:37.0000001Z"
@@ -70,12 +83,15 @@ T2 = "2026-10-07T02:01:38.0000000Z"
 
 
 def alarm_row(**kw):
-    r = {"t": 5.0, "k": "alarm", "dev": "sp-hauler-01", "token": "tok-x", "key": "k", "metric": "m", "state": "ACTIVE", "sev": "MAJOR", "occ": START}
+    r = {"t": 5.0, "k": "alarm", "dev": "sp-hauler-01", "token": "tok-x", "key": "low-fuel", "metric": "fuel_pct", "state": "ACTIVE", "sev": "MAJOR", "occ": T2}
     r.update(kw)
     return r
 
 
-def make_run(root, observed_extra=(), run_patch=None, video_patch=None, extra_files=None):
+STEP_NOTE = "SP-HL-0001: prepare low-fuel cycle"
+
+
+def make_run(root, observed_extra=(), run_patch=None, video_patch=None, extra_files=None, presenter_rows=None, device_extra=(), drop_ack=False, observed_drop=()):
     run = {
         "formatVersion": 1,
         "runId": "run-20261007T020136Z",
@@ -92,7 +108,13 @@ def make_run(root, observed_extra=(), run_patch=None, video_patch=None, extra_fi
         "end": {"cleanly": True, "durationSeconds": 60.0},
     }
     run.update(run_patch or {})
-    video = {"complete": True, "steps": [{"name": "start", "atSeconds": 0.0, "note": "the fleet works"}]}
+    video = {
+        "complete": True,
+        "steps": [
+            {"name": "fleet observed", "atSeconds": 0.0, "note": "the fleet works"},
+            {"name": "low fuel", "atSeconds": 1.0, "note": STEP_NOTE},
+        ],
+    }
     video.update(video_patch or {})
 
     def sample(occ, **values):
@@ -103,10 +125,10 @@ def make_run(root, observed_extra=(), run_patch=None, video_patch=None, extra_fi
         r.update(kw)
         return r
 
-    device = [
+    device = list(device_extra) + [
         sample(T1, fuel_pct=90.5, tyre_pressure_kpa=700.0, engine_hours=5.0),
         sample(T2, fuel_pct=90.0),
-        {"t": 2.0, "k": "sample", "dev": "SP-HL-0001", "sk": "location", "occ": T2, "speed": 1.5, "elev": 1800.0, "lat": 39.0, "lon": -117.0},
+        {"t": 2.0, "k": "sample", "dev": "SP-HL-0001", "sk": "location", "occ": T2, "ack": T2, "speed": 1.5, "elev": 1800.0, "lat": 39.0, "lon": -117.0},
         {"t": 2.0, "k": "linkState", "dev": "SP-HL-0001", "state": "Live"},
     ]
     observed = [
@@ -122,13 +144,25 @@ def make_run(root, observed_extra=(), run_patch=None, video_patch=None, extra_fi
         alarm_row(t=3.0, token="de35f6eb-1070-466a-8bf3-5dac6162fa6a", key="low-fuel", metric="fuel_pct", occ=T2),
     ] + list(observed_extra)
 
+    observed = [r for r in observed if not any(r.get(k) == v for k, v in observed_drop)]
+    if drop_ack:
+        for r in device:
+            r.pop("ack", None)
     os.makedirs(root, exist_ok=True)
     files = {
         "run.json": json.dumps(run),
         "video-run.json": json.dumps(video),
         "observed.ndjson": "\n".join(json.dumps(r) for r in observed) + "\n",
         "device.ndjson": "\n".join(json.dumps(r) for r in device) + "\n",
-        "presenter.ndjson": json.dumps({"t": 0.0, "k": "clock", "text": "clock: real time", "scale": 1}) + "\n",
+        "presenter.ndjson": "\n".join(
+            json.dumps(r)
+            for r in (
+                presenter_rows
+                if presenter_rows is not None
+                else [{"t": 0.0, "k": "clock", "text": "clock: real time", "scale": 1}, {"t": 2.5, "k": "action", "text": STEP_NOTE}]
+            )
+        )
+        + "\n",
     }
     files.update(extra_files or {})
     for n, body in files.items():
@@ -187,14 +221,24 @@ class Excerpt(unittest.TestCase):
         self.assertNotIn(b"hex:", self.raw)  # a hashed command token
         self.assertTrue(all(e["id"].startswith("alarm-") for e in self.doc["alarms"]["events"]))
 
+    def test_a_chapter_that_reports_an_alarm_is_not_before_it(self):
+        assert_alarm_claims_hold(self, self.doc)
+        self.assertEqual(441124, {x["name"]: x["tMs"] for x in self.doc["chapters"]}["tyre alarm"])
+
     def test_the_sidecar_hash_matches(self):
         with open(EXCERPT + ".sha256", encoding="utf-8") as f:
             want = f.read().split()[0]
         self.assertEqual(want, hashlib.sha256(self.raw).hexdigest())
 
-    def test_the_pinned_board_hash_is_the_committed_boards(self):
-        with open(os.path.join(REPO, BOARD_REL), "rb") as f:
-            body = f.read().replace(b"\r\n", b"\n")  # git may check it out with CRLF
+    def test_the_pinned_board_hash_is_the_board_at_the_pinned_commit(self):
+        # the board at the commit it was pinned from, not the working tree: a later board edit is legitimate
+        commit, path = self.doc["board"]["sourceCommit"], self.doc["board"]["path"]
+        try:
+            body = subprocess.check_output(["git", "-C", REPO, "show", "%s:%s" % (commit, path)], stderr=subprocess.DEVNULL)
+        except (OSError, subprocess.CalledProcessError):
+            if os.environ.get("CI"):
+                self.fail("commit %s is not available: the checkout must fetch full history" % commit)
+            self.skipTest("commit %s is not in this clone (fetch full history to run this check)" % commit)
         self.assertEqual(self.doc["board"]["sha256"], hashlib.sha256(body).hexdigest())
 
     def test_the_board_has_no_command_button(self):
@@ -213,6 +257,7 @@ class Refusals(Base):
         self.assertEqual(1, counts["locationMatched"])
         self.assertEqual(1, counts["commandRowsDropped"])
         self.assertEqual(3, len(doc["measurements"]["t"]))  # seed + fuel + tyre; engine_hours is not a board metric
+        self.assertEqual([1, 0, 0], doc["measurements"]["s"])  # the seed flag is carried, and only on the seed
         self.assertEqual([], doc["locations"])
 
     def test_a_fabricated_measurement_row_is_refused(self):
@@ -242,7 +287,7 @@ class Refusals(Base):
 
     def test_a_planted_jwt_in_an_allowed_alarm_field_is_refused(self):
         for field in ("key", "metric"):
-            with self.subTest(field=field), self.assertRaisesRegex(c.Refusal, "credential"):
+            with self.subTest(field=field), self.assertRaises(c.Refusal):
                 self.convert(observed_extra=[alarm_row(token="u-2", state="CLEARED", **{field: JWT})])
 
     def test_a_planted_credential_in_a_chapter_note_is_refused(self):
@@ -256,13 +301,13 @@ class Refusals(Base):
             "https://example.com/x",
             "10.0.0.7",
         ):
-            video = {"steps": [{"name": "s", "atSeconds": 1.0, "note": "the operator typed " + secret}]}
-            with self.subTest(secret=secret[:12]), self.assertRaisesRegex(c.Refusal, "credential"):
+            video = {"steps": [{"name": "low fuel", "atSeconds": 1.0, "note": STEP_NOTE}, {"name": "s", "atSeconds": 2.0, "note": "the operator typed " + secret}]}
+            with self.subTest(secret=secret[:12]), self.assertRaisesRegex(c.Refusal, "credential|grammar"):
                 self.convert(video_patch=video)
 
     def test_a_planted_credential_in_a_device_field_is_refused(self):
         devices = [{"id": "SP-HL-0001", "token": "sp-hauler-01", "kind": JWT}, {"id": "SP-HL-0002", "token": "sp-hauler-02", "kind": "Hauler"}]
-        with self.assertRaisesRegex(c.Refusal, "credential"):
+        with self.assertRaises(c.Refusal):
             self.convert(run_patch={"devices": devices})
 
     def test_a_dirty_build_is_refused(self):
@@ -363,6 +408,217 @@ class Output(Base):
         self.assertFalse(os.path.exists(out))
 
 
+class FabricationPaths(Base):
+    """Rows the cross-check must not let through, each of which once converted cleanly."""
+
+    def test_an_alarm_with_no_device_sample_behind_it_is_refused(self):
+        for kw in (
+            {"occ": "2026-10-07T02:01:50.0000000Z"},  # no sample at that instant
+            {"metric": "tyre_pressure_kpa"},  # a sample at that instant, but of another metric
+            {"dev": "sp-hauler-02"},  # a sample at that instant, but on another device
+        ):
+            with self.subTest(**kw), self.assertRaisesRegex(c.Refusal, "fabricated row"):
+                self.convert(observed_extra=[alarm_row(token="made-up", key="engine-overheat", sev="CRITICAL", **kw)])
+
+    def test_an_alarm_time_that_is_not_a_timestamp_is_refused(self):
+        with self.assertRaisesRegex(c.Refusal, "timestamp"):
+            self.convert(observed_extra=[alarm_row(occ="yesterday")])
+
+    def test_a_snapshot_alarm_must_predate_the_run_and_is_reminted(self):
+        old = {"dev": "sp-hauler-01", "token": "11111111-2222-3333-4444-555555555555", "key": "low-fuel", "metric": "fuel_pct", "state": "ACTIVE", "sev": "MAJOR"}
+        snap = lambda occ: {"t": 6.0, "k": "alarmSnapshot", "total": 1, "alarms": [dict(old, occ=occ)]}
+        make_run(self.run_dir, observed_extra=[snap("2026-10-07T02:01:20.0000000Z")])
+        doc, _ = c.convert(self.run_dir, BOARD)
+        ids = [a["id"] for sn in doc["alarms"]["snapshots"] for a in sn["alarms"]]
+        self.assertEqual(["alarm-2"], ids)  # alarm-1 is the live alarm already in the run
+        self.assertNotIn("11111111", json.dumps(doc))
+        make_run(self.run_dir, observed_extra=[snap("2026-10-07T02:01:40.0000000Z")])
+        with self.assertRaisesRegex(c.Refusal, "not before the run start"):
+            c.convert(self.run_dir, BOARD)
+
+    def test_a_seed_row_in_the_middle_of_the_run_is_refused(self):
+        row = {"t": 40.0, "k": "measurement", "dev": "sp-hauler-02", "n": "fuel_pct", "v": 3.0, "occ": "2026-10-07T02:01:30.0000000Z", "snap": True}
+        with self.assertRaisesRegex(c.Refusal, "after the initial snapshot"):
+            self.convert(observed_extra=[row])
+
+    def test_a_second_seed_row_for_the_same_device_and_metric_is_refused(self):
+        dup = {"t": 0.4, "k": "measurement", "dev": "sp-hauler-01", "n": "fuel_pct", "v": 5.0, "occ": "2026-10-07T02:01:29.0000000Z", "snap": True}
+        make_run(self.run_dir)
+        # the helper's first row is the seed; put a second one beside it, still inside the initial snapshot
+        with open(os.path.join(self.run_dir, "observed.ndjson"), encoding="utf-8") as f:
+            lines = f.read().splitlines()
+        lines.insert(2, json.dumps(dup))
+        with open(os.path.join(self.run_dir, "observed.ndjson"), "w", encoding="utf-8", newline="\n") as f:
+            f.write("\n".join(lines) + "\n")
+        with self.assertRaisesRegex(c.Refusal, "second seed"):
+            c.convert(self.run_dir, BOARD)
+
+    def test_a_row_with_no_time_is_refused_rather_than_given_the_previous_one(self):
+        row = {"k": "measurement", "dev": "sp-hauler-01", "n": "fuel_pct", "v": 90.0, "occ": T2}
+        with self.assertRaisesRegex(c.Refusal, "no time"):
+            self.convert(observed_extra=[row])
+
+    def test_a_time_one_microsecond_off_is_not_a_match(self):
+        # the platform keeps microseconds; a reading 1 us away from the device's is another reading
+        row = {"t": 4.0, "k": "measurement", "dev": "sp-hauler-01", "n": "fuel_pct", "v": 90.5, "occ": "2026-10-07T02:01:37.0000011Z"}
+        with self.assertRaisesRegex(c.Refusal, "fabricated row"):
+            self.convert(observed_extra=[row])
+
+    def test_a_pre_start_row_without_the_seed_flag_is_refused(self):
+        row = {"t": 4.0, "k": "measurement", "dev": "sp-hauler-02", "n": "fuel_pct", "v": 3.0, "occ": "2026-10-07T02:01:20.0000000Z"}
+        with self.assertRaisesRegex(c.Refusal, "fabricated row"):
+            self.convert(observed_extra=[row])
+
+    def test_a_location_value_that_differs_from_the_device_sample_is_refused(self):
+        for field, value in (("speed", 9.5), ("elev", 1900.0)):
+            row = {"t": 4.0, "k": "location", "dev": "sp-hauler-01", "speed": 1.5, "heading": 90, "elev": 1800.0, "occ": T2}
+            row[field] = value
+            with self.subTest(field=field), self.assertRaisesRegex(c.Refusal, "device published"):
+                self.convert(observed_extra=[row])
+
+    def test_a_location_seed_is_refused_once_the_device_has_reported(self):
+        row = {"t": 4.0, "k": "location", "dev": "sp-hauler-01", "speed": 1.0, "elev": 1.0, "occ": "2026-10-07T02:01:20.0000000Z"}
+        with self.assertRaisesRegex(c.Refusal, "fabricated row"):
+            self.convert(observed_extra=[row])
+
+    def test_a_device_sample_the_platform_never_acknowledged_vouches_for_nothing(self):
+        with self.assertRaisesRegex(c.Refusal, "fabricated row"):
+            self.convert(drop_ack=True)
+
+
+class Chapters(Base):
+    def test_the_chapter_clock_is_the_presenters_not_the_video_runs(self):
+        doc, _ = self.convert()  # the step is at 1.0 s on the video clock and the presenter says 2.5 s
+        by_name = {ch["name"]: ch["tMs"] for ch in doc["chapters"]}
+        self.assertEqual(2500, by_name["low fuel"])
+        self.assertEqual(1500, by_name["fleet observed"])
+
+    def test_no_presenter_action_to_measure_from_is_refused(self):
+        with self.assertRaisesRegex(c.Refusal, "chapter clock"):
+            self.convert(presenter_rows=[{"t": 0.0, "k": "clock", "text": "clock: real time", "scale": 1}])
+
+    def test_offsets_that_disagree_are_refused(self):
+        video = {"steps": [{"name": "a", "atSeconds": 1.0, "note": STEP_NOTE}, {"name": "b", "atSeconds": 2.0, "note": "second"}]}
+        rows = [{"t": 2.5, "k": "action", "text": STEP_NOTE}, {"t": 9.0, "k": "action", "text": "second"}]
+        with self.assertRaisesRegex(c.Refusal, "disagree"):
+            self.convert(video_patch=video, presenter_rows=rows)
+
+    def test_an_offset_beyond_the_fleet_wait_is_refused(self):
+        with self.assertRaisesRegex(c.Refusal, "outside"):
+            self.convert(presenter_rows=[{"t": 500.0, "k": "action", "text": STEP_NOTE}])
+
+    def test_a_chapter_that_reports_an_alarm_is_never_before_the_alarm(self):
+        # the alarm event is at t=3.0 s; the step reports it at 2.96 s on the corrected clock
+        video = {
+            "steps": [
+                {"name": "low fuel", "atSeconds": 1.0, "note": STEP_NOTE},
+                {"name": "alarm", "atSeconds": 1.46, "note": "the platform says low-fuel is ACTIVE; the truck keeps driving"},
+            ]
+        }
+        doc, _ = self.convert(video_patch=video)
+        alarm_t = doc["alarms"]["events"][-1]["tMs"]
+        ch = {x["name"]: x["tMs"] for x in doc["chapters"]}
+        self.assertEqual(3000, alarm_t)
+        self.assertEqual(3000, ch["alarm"])  # 1.46 s + 1.5 s offset = 2.96 s, moved up to the alarm itself
+
+    def test_a_chapter_that_reports_an_alarm_nobody_raised_is_refused(self):
+        video = {"steps": [{"name": "low fuel", "atSeconds": 1.0, "note": STEP_NOTE}, {"name": "x", "atSeconds": 3.0, "note": "the platform says engine-overheat is ACTIVE"}]}
+        with self.assertRaisesRegex(c.Refusal, "no such alarm"):
+            self.convert(video_patch=video)
+
+    def test_a_chapter_far_from_the_alarm_it_reports_is_refused(self):
+        video = {"steps": [{"name": "low fuel", "atSeconds": 1.0, "note": STEP_NOTE}, {"name": "x", "atSeconds": 40.0, "note": "the platform says low-fuel is ACTIVE"}]}
+        with self.assertRaisesRegex(c.Refusal, "from the alarm"):
+            self.convert(video_patch=video)
+
+
+class FieldGrammars(Base):
+    def test_a_structured_or_free_form_header_value_is_refused(self):
+        bad = {
+            "instance": {"id": "sitepulse", "mqtt": "dc-nats.devicechain.svc:4222"},
+            "tenant": "Sim Tenant",
+            "platformVersion": "0.19.0 build 4",
+            "build": {"gitSha": "19cccec06725", "trackedTreeClean": True, "sdkCommit": {"x": 1}},
+            "clock": [{"from": 0.01, "mode": "turbo", "scale": 1}],
+        }
+        for key, value in bad.items():
+            with self.subTest(key=key), self.assertRaises(c.Refusal):
+                self.convert(run_patch={key: value})
+
+    def test_clock_scale_must_be_a_number(self):
+        with self.assertRaises(c.Refusal):
+            self.convert(run_patch={"clock": [{"from": 0.01, "mode": "real", "scale": "1; DROP"}]})
+
+    def test_chapter_text_outside_its_grammar_is_refused(self):
+        for note in ("see {\"a\": 1}", "x" * 300, "mail me @ home", "a=b", "tab\there"):
+            video = {"steps": [{"name": "low fuel", "atSeconds": 1.0, "note": STEP_NOTE}, {"name": "x", "atSeconds": 3.0, "note": note}]}
+            with self.subTest(note=note[:20]), self.assertRaises(c.Refusal):
+                self.convert(video_patch=video)
+        video = {"steps": [{"name": "low fuel", "atSeconds": 1.0, "note": STEP_NOTE}, {"name": "has/slash", "atSeconds": 3.0, "note": "ok"}]}
+        with self.assertRaises(c.Refusal):
+            self.convert(video_patch=video)
+
+    def test_the_finished_document_is_checked_too(self):
+        doc, _ = self.convert()
+        for mutate in (
+            lambda d: d.update(instance={"id": "x"}),
+            lambda d: d.update(tenant="has.dot"),
+            lambda d: d["alarms"]["snapshots"].append({"tMs": 1, "total": 1, "alarms": [dict(d["alarms"]["events"][0], id="de35f6eb-1070-466a-8bf3-5dac6162fa6a")]}),
+            lambda d: d["devices"][0].update(kind="Hauler9"),
+            lambda d: d["clock"][0].update(scale="1"),
+        ):
+            bad = json.loads(json.dumps(doc))
+            mutate(bad)
+            with self.assertRaises(c.Refusal):
+                c.validate_output(bad)
+
+    def test_a_missing_required_key_is_refused(self):
+        doc, _ = self.convert()
+        paths = [("runId",), ("board", "sha256"), ("build", "gitSha"), ("measurements", "s"), ("alarms", "events"), ("devices", 0, "token"), ("channels", "alarms"), ("converter", "version")]
+        for path in paths:
+            bad = json.loads(json.dumps(doc))
+            node = bad
+            for k in path[:-1]:
+                node = node[k]
+            del node[path[-1]]
+            with self.subTest(path=path), self.assertRaises(c.Refusal):
+                c.validate_output(bad)
+
+
+class Links(Base):
+    def test_a_link_in_place_of_an_allowlisted_file_is_refused(self):
+        make_run(self.run_dir)
+        target = os.path.join(self._tmp.name, "elsewhere.json")
+        with open(target, "w", encoding="utf-8") as f:
+            f.write("{}")
+        link = os.path.join(self.run_dir, "run.json")
+        os.remove(link)
+        try:
+            os.symlink(target, link)
+        except (OSError, NotImplementedError):
+            self.skipTest("this machine cannot create symlinks")
+        with self.assertRaisesRegex(c.Refusal, "plain regular file"):
+            c.read_allowed(self.run_dir, "run.json")
+
+    def test_a_windows_reparse_point_is_refused(self):
+        make_run(self.run_dir)
+        real = os.lstat(os.path.join(self.run_dir, "run.json"))
+
+        class Junction:
+            st_mode = real.st_mode
+            st_file_attributes = 0x400
+
+        with mock.patch("os.lstat", return_value=Junction()), self.assertRaisesRegex(c.Refusal, "plain regular file"):
+            c.read_allowed(self.run_dir, "run.json")
+
+    def test_a_directory_in_place_of_an_allowlisted_file_is_refused(self):
+        make_run(self.run_dir)
+        os.remove(os.path.join(self.run_dir, "run.json"))
+        os.mkdir(os.path.join(self.run_dir, "run.json"))
+        with self.assertRaisesRegex(c.Refusal, "plain regular file"):
+            c.read_allowed(self.run_dir, "run.json")
+
+
 class Scan(unittest.TestCase):
     def test_each_kind_is_found(self):
         cases = {
@@ -400,6 +656,34 @@ class Scan(unittest.TestCase):
         self.assertTrue(c.scan_for_credentials({"chapters": [{"note": h}]}))  # the same string anywhere else is a finding
         self.assertTrue(c.scan_for_credentials({"board": {"sha256": h + "ab"}}))  # a longer run in a hash field is not a hash
 
+    def test_the_simulators_32_hex_credential_is_found_beside_other_characters(self):
+        h = "0123456789abcdef0123456789abcdef"
+        for text in (h, "x" + h, "0x" + h * 2, "key" + h * 2, "k=" + h, "g" + h + "g"):
+            with self.subTest(text=text[:12]):
+                self.assertTrue(any(f.startswith("hex-run") for f in c.scan_for_credentials(text)), text)
+
+    def test_a_uuid_is_found(self):
+        self.assertTrue(any(f.startswith("uuid") for f in c.scan_for_credentials("de35f6eb-1070-466a-8bf3-5dac6162fa6a")))
+
+    def test_a_secret_split_in_two_is_found(self):
+        h = "0123456789abcdef"
+        self.assertTrue(c.scan_for_credentials(h + " " + h))
+        self.assertTrue(c.scan_for_credentials(h + "-" + h))
+        self.assertTrue(c.scan_for_credentials({"chapters": [{"tMs": 1, "name": h, "note": h}]}))
+        self.assertTrue(c.scan_for_credentials({"a": [h, h]}))
+
+    def test_in_cluster_names_and_ipv6_are_found(self):
+        for text in ("dc-nats.devicechain.svc:4222", "nats.devicechain.svc", "gke-prod-default-pool-1", "broker:1883", "fe80::1", "2001:db8::8a2e:370:7334", "::1", "1:2:3:4:5:6:7:8"):
+            with self.subTest(text=text):
+                self.assertTrue(c.scan_for_credentials(text), text)
+        for text in ("02:01:36", "T02:01:36.0842212Z", "SP-HL-0006: prepare", "tyre-pressure-low is ACTIVE; ok"):
+            with self.subTest(text=text):
+                self.assertEqual([], c.scan_for_credentials(text), text)
+
+    def test_the_real_excerpt_and_full_sized_hash_pins_stay_clean(self):
+        with open(EXCERPT, encoding="utf-8") as f:
+            self.assertEqual([], c.scan_for_credentials(json.load(f)))
+
     def test_keys_are_scanned_too(self):
         self.assertTrue(c.scan_for_credentials({JWT: 1}))
 
@@ -412,7 +696,10 @@ def _excerpt_board():
         return json.load(f)["board"]
 
 
-@unittest.skipUnless(os.path.isfile(os.path.join(FULL_RUN, "run.json")), "the full take2 recording is not on this machine")
+@unittest.skipUnless(
+    os.path.isfile(os.path.join(FULL_RUN, "run.json")),
+    "SKIPPED: the full take2 recording is not at %s (set SITEPULSE_TAKE2_RUN); the golden values are NOT checked against it in this run" % os.path.normpath(FULL_RUN),
+)
 class FullTake2(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -444,6 +731,10 @@ class FullTake2(unittest.TestCase):
 
     def test_the_whole_output_is_clean(self):
         self.assertEqual([], c.scan_for_credentials(self.doc))
+
+    def test_every_chapter_that_reports_an_alarm_is_not_before_it(self):
+        assert_alarm_claims_hold(self, self.doc)
+        self.assertEqual(8, len(self.doc["chapters"]))
 
 
 if __name__ == "__main__":

@@ -58,10 +58,11 @@ import json
 import math
 import os
 import re
+import stat
 import subprocess
 import sys
 
-CONVERTER_VERSION = 1
+CONVERTER_VERSION = 2
 FORMAT_VERSION = 1
 FORMAT_KIND = "sitepulse-board-recording"
 
@@ -90,11 +91,20 @@ class Refusal(Exception):
 # --- input -----------------------------------------------------------------
 
 
+_REPARSE_POINT = 0x400  # FILE_ATTRIBUTE_REPARSE_POINT: a Windows symlink or junction
+
+
 def read_allowed(run_dir, name):
-    """Read one allowlisted input file as bytes. Any other name is refused."""
+    """Read one allowlisted input file as bytes. Any other name is refused, and so is an
+    allowlisted name that is a link (symlink or Windows junction) or not a regular file:
+    a link could point at one of the files that must never be read."""
     if name not in INPUT_ALLOWLIST:
         raise Refusal("refusing to read %r: not an allowlisted input" % name)
-    with open(os.path.join(run_dir, name), "rb") as f:
+    path = os.path.join(run_dir, name)
+    st = os.lstat(path)
+    if stat.S_ISLNK(st.st_mode) or not stat.S_ISREG(st.st_mode) or getattr(st, "st_file_attributes", 0) & _REPARSE_POINT:
+        raise Refusal("refusing to read %r: not a plain regular file" % name)
+    with open(path, "rb") as f:
         return f.read()
 
 
@@ -134,6 +144,46 @@ def _require(cond, msg):
         raise Refusal(msg)
 
 
+# Every text field that reaches the output has a grammar, checked where it is read and
+# again on the finished document. Anything that does not fit is refused, so a field that
+# later carries a structure or a free-form value cannot slip through as a "string".
+GRAMMAR = {
+    "token": r"[a-z0-9][a-z0-9-]{0,63}",  # device token, instance, tenant
+    "deviceId": r"[A-Z0-9][A-Z0-9-]{0,31}",
+    "kind": r"[A-Z][A-Za-z]{0,31}",
+    "metric": r"[a-z][a-z0-9_]{0,63}",
+    "alarmKey": r"[a-z][a-z0-9-]{0,63}",
+    "semver": r"\d{1,4}\.\d{1,4}\.\d{1,4}(-[0-9A-Za-z.-]{1,32})?",
+    "gitSha": r"[0-9a-f]{7,40}",
+    "runId": r"run-\d{8}T\d{6}Z",
+    "timestamp": r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d{1,7})?Z",
+    "chapterName": r"[A-Za-z][A-Za-z0-9 -]{0,63}",
+    "chapterNote": r"[A-Za-z0-9 .,:;%()'>/+_-]{0,240}",
+    "alarmId": r"alarm-\d{1,6}",
+    "path": r"[A-Za-z0-9_./-]{1,200}",
+}
+CLOCK_MODES = ("real", "accelerated")
+
+
+def _g(name, value, where):
+    """`value` must be a string that matches grammar `name` in full."""
+    if not isinstance(value, str) or not re.fullmatch(GRAMMAR[name], value):
+        raise Refusal("%s does not fit the %s grammar" % (where, name))
+    return value
+
+
+def _int(value, where, lo=0, hi=10**9):
+    if not isinstance(value, int) or isinstance(value, bool) or not lo <= value <= hi:
+        raise Refusal("%s is not an integer in [%d, %d]" % (where, lo, hi))
+    return value
+
+
+def _number(value, where, lo=-1e12, hi=1e12):
+    if not isinstance(value, (int, float)) or isinstance(value, bool) or not math.isfinite(value) or not lo <= value <= hi:
+        raise Refusal("%s is not a number in range" % where)
+    return value
+
+
 # --- conversion ------------------------------------------------------------
 
 
@@ -146,22 +196,24 @@ def convert(run_dir, board, excerpt=None):
     video = json.loads(raw["video-run.json"].decode("utf-8"))
     observed = _ndjson(raw["observed.ndjson"], "observed.ndjson")
     device = _ndjson(raw["device.ndjson"], "device.ndjson")
-    _ndjson(raw["presenter.ndjson"], "presenter.ndjson")  # parsed to be sure it is well formed; nothing is copied from it
+    presenter = _ndjson(raw["presenter.ndjson"], "presenter.ndjson")  # only action rows are used, and only to find the chapter clock
 
     # --- run integrity
     _require(run.get("formatVersion") == 1, "unsupported run.json formatVersion %r" % (run.get("formatVersion"),))
-    _require(re.fullmatch(r"run-\d{8}T\d{6}Z", str(run.get("runId"))), "bad runId")
+    _g("runId", run.get("runId"), "runId")
     _require((run.get("build") or {}).get("trackedTreeClean") is True, "the recording build's tree was not clean")
     end = run.get("end") or {}
     _require(end.get("cleanly") is True, "the run did not end cleanly")
     _require(video.get("complete") is True, "video-run.json says the take is incomplete")
-    start_utc = run["startedAtUtc"]
+    start_utc = _g("timestamp", run.get("startedAtUtc"), "startedAtUtc")
     start_us = _us(start_utc)
     duration_ms = _ms(end.get("durationSeconds"))
 
     devices = []
     for d in run["devices"]:
-        devices.append({"id": d["id"], "token": d["token"], "kind": d["kind"]})
+        devices.append(
+            {"id": _g("deviceId", d.get("id"), "device id"), "token": _g("token", d.get("token"), "device token"), "kind": _g("kind", d.get("kind"), "device kind")}
+        )
     token_of_id = {d["id"]: d["token"] for d in devices}
     index_of_token = {d["token"]: i for i, d in enumerate(devices)}
     _require(len(token_of_id) == len(devices) and len(index_of_token) == len(devices), "duplicate device in run.json")
@@ -174,6 +226,8 @@ def convert(run_dir, board, excerpt=None):
             continue
         tok = token_of_id.get(r.get("dev"))
         _require(tok is not None, "device sample for a device not in run.json: %r" % (r.get("dev"),))
+        if not isinstance(r.get("ack"), str) or not re.fullmatch(GRAMMAR["timestamp"], r["ack"]):
+            continue  # published but never acknowledged by the platform: it vouches for nothing
         if r.get("sk") == "measurement":
             for n, v in r["values"].items():
                 pub_meas[(tok, n, _us(r["occ"]))] = v
@@ -198,13 +252,28 @@ def convert(run_dir, board, excerpt=None):
     alarm_ids = {}
     snapshots, events = [], []
     last_t = -1
+    seed_phase = True  # the platform's initial snapshot: over at the first measurement that is not a seed
+    seeded = set()
+    located = set()  # devices that have had a position matched to a device sample
 
-    def alarm_obj(a):
+    def alarm_obj(a, snapshot):
         for k in ("dev", "token", "key", "metric", "state", "sev", "occ"):
             _require(isinstance(a.get(k), str) and a[k], "alarm row missing %r" % k)
         _require(a["dev"] in index_of_token, "alarm for unknown device %r" % a["dev"])
+        _g("alarmKey", a["key"], "alarm key")
+        _g("metric", a["metric"], "alarm metric")
+        _g("timestamp", a["occ"], "alarm occ")
         _require(a["state"] in ALARM_STATES, "alarm state %r not allowed" % a["state"])
         _require(a["sev"] in ALARM_SEVERITIES, "alarm severity %r not allowed" % a["sev"])
+        if snapshot:
+            # the alarms standing when the viewer subscribed were raised before the run began
+            _require(_us(a["occ"]) < start_us, "fabricated row: snapshot alarm %s was raised at %s, not before the run start" % (a["key"], a["occ"]))
+        else:
+            # a live alarm is the platform's verdict on a reading: that reading must be one the device published
+            _require(
+                (a["dev"], a["metric"], _us(a["occ"])) in pub_meas,
+                "fabricated row: alarm %s on %s at %s has no device-published %s sample" % (a["key"], a["dev"], a["occ"], a["metric"]),
+            )
         aid = alarm_ids.setdefault(a["token"], "alarm-%d" % (len(alarm_ids) + 1))
         o = {"id": aid, "dev": a["dev"], "key": a["key"], "metric": a["metric"], "state": a["state"], "sev": a["sev"], "occ": a["occ"]}
         if a.get("ack") is True:
@@ -213,20 +282,28 @@ def convert(run_dir, board, excerpt=None):
 
     for r in observed:
         kind = r.get("k")
-        if "t" in r:
-            tm = _ms(r["t"])
-            _require(tm >= last_t, "observed.ndjson is not in time order")
-            last_t = tm
+        _require("t" in r, "an observed %s row has no time" % kind)
+        tm = _ms(r["t"])
+        _require(tm >= last_t, "observed.ndjson is not in time order")
+        last_t = tm
         if kind == "measurement":
             counts["measurementRows"] += 1
             dev, n, occ = r["dev"], r["n"], _us(r["occ"])
             _require(dev in index_of_token, "measurement for unknown device %r" % dev)
+            _g("metric", n, "measurement name")
+            is_seed = r.get("snap") is True
+            if is_seed:
+                _require(seed_phase, "fabricated row: a seed row for %s %s at t=%s comes after the initial snapshot" % (dev, n, r["t"]))
+                _require((dev, n) not in seeded, "fabricated row: a second seed row for %s %s" % (dev, n))
+                seeded.add((dev, n))
+            else:
+                seed_phase = False
             pub = pub_meas.get((dev, n, occ), None)
             if (dev, n, occ) in pub_meas:
                 if pub != r["v"]:
                     raise Refusal("observed %s %s at %s is %r but the device published %r" % (dev, n, r["occ"], r["v"], pub))
                 counts["measurementMatched"] += 1
-            elif r.get("snap") is True and occ < start_us:
+            elif is_seed and occ < start_us:
                 counts["measurementSeed"] += 1
             else:
                 raise Refusal("fabricated row: observed %s %s at %s (t=%s) has no device-published sample" % (dev, n, r["occ"], r["t"]))
@@ -238,7 +315,7 @@ def convert(run_dir, board, excerpt=None):
             cols["n"].append(names.index(n))
             cols["t"].append(tm)
             cols["v"].append(r["v"])
-            cols["s"].append(1 if r.get("snap") is True else 0)
+            cols["s"].append(1 if is_seed else 0)
         elif kind == "location":
             counts["locationRows"] += 1
             dev, occ = r["dev"], _us(r["occ"])
@@ -249,35 +326,37 @@ def convert(run_dir, board, excerpt=None):
                     if a is None or b is None or abs(a - b) > SPEED_TOLERANCE:
                         raise Refusal("observed location %s %s at %s is %r but the device published %r" % (dev, what, r["occ"], a, b))
                 counts["locationMatched"] += 1
-            elif occ < start_us:
+                located.add(dev)
+            elif occ < start_us and dev not in located:
+                # the poll's answer for a machine that has not reported yet: the platform's last position from before the run
                 counts["locationSeed"] += 1
             else:
                 raise Refusal("fabricated row: observed location for %s at %s has no device-published sample" % (dev, r["occ"]))
         elif kind == "alarm":
             counts["alarmEvents"] += 1
-            o = alarm_obj(r)
+            o = alarm_obj(r, snapshot=False)
             o["tMs"] = tm
             events.append(o)
         elif kind == "alarmSnapshot":
-            snapshots.append({"tMs": tm, "total": r["total"], "alarms": [alarm_obj(a) for a in r.get("alarms", [])]})
+            snapshots.append({"tMs": tm, "total": _int(r.get("total"), "alarm snapshot total"), "alarms": [alarm_obj(a, snapshot=True) for a in r.get("alarms", [])]})
         elif kind == "command":
             counts["commandRowsDropped"] += 1
         else:
             counts["otherRowsDropped"] += 1
 
     # --- header
-    chapters = [{"tMs": _ms(s["atSeconds"]), "name": s["name"], "note": s["note"]} for s in video.get("steps", [])]
+    chapters = build_chapters(video, presenter, events)
     doc = {
         "formatVersion": FORMAT_VERSION,
         "kind": FORMAT_KIND,
         "runId": run["runId"],
         "startedAtUtc": start_utc,
         "durationMs": duration_ms,
-        "platformVersion": run["platformVersion"],
-        "instance": run["instance"],
-        "tenant": run["tenant"],
-        "build": {"gitSha": run["build"]["gitSha"], "sdkCommit": run["build"]["sdkCommit"]},
-        "clock": [{"fromMs": _ms(c["from"]), "mode": c["mode"], "scale": c["scale"]} for c in run["clock"]],
+        "platformVersion": _g("semver", run.get("platformVersion"), "platformVersion"),
+        "instance": _g("token", run.get("instance"), "instance"),
+        "tenant": _g("token", run.get("tenant"), "tenant"),
+        "build": {"gitSha": _g("gitSha", run["build"].get("gitSha"), "build.gitSha"), "sdkCommit": _g("gitSha", run["build"].get("sdkCommit"), "build.sdkCommit")},
+        "clock": [clock_segment(c) for c in run["clock"]],
         "devices": devices,
         "channels": {"measurements": names, "alarms": True, "locations": False, "commands": False},
         "board": dict(board),
@@ -308,6 +387,58 @@ def convert(run_dir, board, excerpt=None):
     return doc, counts
 
 
+PRESENTER_SPREAD_S = 0.15  # video-run.json rounds its times to 0.1 s, so two offsets may differ by about that
+FLEET_WAIT_S = 300.0  # the most the take waits for the fleet before its own clock starts
+ALARM_CLAIM = re.compile(r"the platform says (\S+) is (ACTIVE|CLEARED)")
+
+
+def clock_segment(c):
+    _require(c.get("mode") in CLOCK_MODES, "clock mode %r not allowed" % (c.get("mode"),))
+    return {"fromMs": _ms(c.get("from")), "mode": c["mode"], "scale": _number(c.get("scale"), "clock scale", 1e-6, 1e6)}
+
+
+def build_chapters(video, presenter, events):
+    """Chapter times in ms from the run start.
+
+    video-run.json counts seconds from the moment the fleet was observed, which is after
+    the run started (by up to the fleet wait), while everything else here counts from the
+    run start. The presenter's own action rows carry run-start times for the steps that
+    are presenter actions (same text as the step note), so the offset between the two
+    clocks is measured from those, and the conversion is refused if it cannot be.
+
+    A step whose note says the platform reported an alarm state is moved to no earlier
+    than that alarm event (its time is only known to 0.1 s), and refused if there is no
+    such event or it is more than 2 s away: the note must not be true only before its
+    own chapter time."""
+    actions = {}
+    for r in presenter:
+        if r.get("k") == "action" and isinstance(r.get("text"), str):
+            actions[r["text"]] = r.get("t")
+    steps = video.get("steps")
+    _require(isinstance(steps, list) and steps, "video-run.json holds no steps")
+    offsets = []
+    for s in steps:
+        if s.get("note") in actions:
+            offsets.append(_number(actions[s["note"]], "presenter time", 0, 1e6) - _number(s.get("atSeconds"), "step atSeconds", 0, 1e6))
+    _require(offsets, "cannot establish the chapter clock: no step note matches a presenter action")
+    _require(max(offsets) - min(offsets) <= PRESENTER_SPREAD_S, "the chapter clock offsets disagree: %s" % ["%.3f" % o for o in offsets])
+    offset = sum(offsets) / len(offsets)
+    _require(0 <= offset <= FLEET_WAIT_S, "chapter clock offset %.3f s is outside [0, %d]" % (offset, FLEET_WAIT_S))
+    chapters = []
+    for s in steps:
+        name = _g("chapterName", s.get("name"), "chapter name")
+        note = _g("chapterNote", s.get("note"), "chapter note")
+        t = _ms(_number(s.get("atSeconds"), "step atSeconds", 0, 1e6) + offset)
+        m = ALARM_CLAIM.search(note)
+        if m:
+            at = [e["tMs"] for e in events if e["key"] == m.group(1) and e["state"] == m.group(2)]
+            _require(at, "chapter %r says %s is %s but the recording has no such alarm event" % (name, m.group(1), m.group(2)))
+            _require(abs(t - min(at)) <= 2000, "chapter %r is %d ms from the alarm it reports" % (name, abs(t - min(at))))
+            t = max(t, min(at))
+        chapters.append({"tMs": t, "name": name, "note": note})
+    return chapters
+
+
 # --- output validation -----------------------------------------------------
 
 _HEX64 = re.compile(r"[0-9a-f]{64}")
@@ -330,43 +461,90 @@ def _keys(obj, allowed, where, required=None):
 
 
 def validate_output(doc):
-    """Schema-strict: an unknown or missing key anywhere means refuse."""
+    """Schema-strict: an unknown or missing key anywhere means refuse, and every value
+    must fit the grammar of its field."""
     _keys(doc, _SCHEMA_TOP, "document", _SCHEMA_REQUIRED)
     _require(doc["kind"] == FORMAT_KIND and doc["formatVersion"] == FORMAT_VERSION, "wrong format identity")
+    _g("runId", doc["runId"], "runId")
+    _g("timestamp", doc["startedAtUtc"], "startedAtUtc")
+    _int(doc["durationMs"], "durationMs")
+    _g("semver", doc["platformVersion"], "platformVersion")
+    _g("token", doc["instance"], "instance")
+    _g("token", doc["tenant"], "tenant")
     _keys(doc["build"], {"gitSha", "sdkCommit"}, "build")
+    _g("gitSha", doc["build"]["gitSha"], "build.gitSha")
+    _g("gitSha", doc["build"]["sdkCommit"], "build.sdkCommit")
     _keys(doc["channels"], {"measurements", "alarms", "locations", "commands"}, "channels")
+    _require(isinstance(doc["channels"]["measurements"], list), "channels.measurements is not a list")
+    for m in doc["channels"]["measurements"]:
+        _g("metric", m, "channel metric")
+    _require(all(isinstance(doc["channels"][k], bool) for k in ("alarms", "locations", "commands")), "channel flags must be booleans")
     _keys(doc["board"], {"path", "sourceCommit", "sha256"}, "board")
-    _require(_HEX40.fullmatch(doc["board"]["sourceCommit"]) and _HEX64.fullmatch(doc["board"]["sha256"]), "bad board pin")
+    _g("path", doc["board"]["path"], "board.path")
+    _require(".." not in doc["board"]["path"].split("/"), "board.path climbs out of the repository")
+    _require(isinstance(doc["board"]["sourceCommit"], str) and _HEX40.fullmatch(doc["board"]["sourceCommit"]), "bad board commit")
+    _require(isinstance(doc["board"]["sha256"], str) and _HEX64.fullmatch(doc["board"]["sha256"]), "bad board hash")
     _keys(doc["converter"], {"version"}, "converter")
+    _int(doc["converter"]["version"], "converter.version", 1, 1000)
     _keys(doc["sourceHashes"], set(INPUT_ALLOWLIST), "sourceHashes")
     for n, h in doc["sourceHashes"].items():
-        _require(_HEX64.fullmatch(h), "bad source hash for %s" % n)
+        _require(isinstance(h, str) and _HEX64.fullmatch(h), "bad source hash for %s" % n)
+    _require(isinstance(doc["clock"], list) and doc["clock"], "clock is empty")
     for c in doc["clock"]:
         _keys(c, {"fromMs", "mode", "scale"}, "clock entry")
+        _int(c["fromMs"], "clock fromMs")
+        _require(c["mode"] in CLOCK_MODES, "clock mode %r not allowed" % (c["mode"],))
+        _number(c["scale"], "clock scale", 1e-6, 1e6)
+    _require(isinstance(doc["devices"], list), "devices is not a list")
     for d in doc["devices"]:
         _keys(d, {"id", "token", "kind"}, "device")
+        _g("deviceId", d["id"], "device id")
+        _g("token", d["token"], "device token")
+        _g("kind", d["kind"], "device kind")
     for c in doc["chapters"]:
         _keys(c, {"tMs", "name", "note"}, "chapter")
+        _int(c["tMs"], "chapter tMs")
+        _g("chapterName", c["name"], "chapter name")
+        _g("chapterNote", c["note"], "chapter note")
     if "excerpt" in doc:
         _keys(doc["excerpt"], {"fromMs", "toMs"}, "excerpt")
+        _int(doc["excerpt"]["fromMs"], "excerpt fromMs")
+        _int(doc["excerpt"]["toMs"], "excerpt toMs")
     cols = doc["measurements"]
     _keys(cols, {"d", "n", "t", "v", "s"}, "measurements")
     n = len(cols["t"])
-    _require(all(len(c) == n for c in cols.values()), "measurement columns differ in length")
-    _require(all(0 <= i < len(doc["devices"]) for i in cols["d"]), "measurement device index out of range")
-    _require(all(0 <= i < len(doc["channels"]["measurements"]) for i in cols["n"]), "measurement name index out of range")
-    _require(all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in cols["v"]), "measurement value not numeric")
-    _require(all(s in (0, 1) for s in cols["s"]), "bad seed flag")
+    _require(all(isinstance(c, list) and len(c) == n for c in cols.values()), "measurement columns differ in length")
+    _require(all(isinstance(i, int) and 0 <= i < len(doc["devices"]) for i in cols["d"]), "measurement device index out of range")
+    _require(all(isinstance(i, int) and 0 <= i < len(doc["channels"]["measurements"]) for i in cols["n"]), "measurement name index out of range")
+    _require(all(isinstance(t, int) and t >= 0 for t in cols["t"]), "measurement time is not a non-negative integer")
+    for v in cols["v"]:
+        _number(v, "measurement value")
+    _require(all(isinstance(x, int) and x in (0, 1) for x in cols["s"]), "bad seed flag")
     _keys(doc["alarms"], {"snapshots", "events"}, "alarms")
     alarm_keys = {"id", "dev", "key", "metric", "state", "sev", "occ", "ack"}
     alarm_req = alarm_keys - {"ack"}
-    for s in doc["alarms"]["snapshots"]:
-        _keys(s, {"tMs", "total", "alarms"}, "alarm snapshot")
-        for a in s["alarms"]:
+    tokens = {d["token"] for d in doc["devices"]}
+
+    def check_alarm(a, where):
+        _g("alarmId", a["id"], where + " id")  # re-minted: a platform uuid does not fit
+        _require(a["dev"] in tokens, where + " is for a device not in the run")
+        _g("alarmKey", a["key"], where + " key")
+        _g("metric", a["metric"], where + " metric")
+        _g("timestamp", a["occ"], where + " occ")
+        _require(a["state"] in ALARM_STATES and a["sev"] in ALARM_SEVERITIES, where + " has a state or severity outside the vocabulary")
+        _require(a.get("ack", True) is True, where + " ack must be true when present")
+
+    for sn in doc["alarms"]["snapshots"]:
+        _keys(sn, {"tMs", "total", "alarms"}, "alarm snapshot")
+        _int(sn["tMs"], "snapshot tMs")
+        _int(sn["total"], "snapshot total")
+        for a in sn["alarms"]:
             _keys(a, alarm_keys, "snapshot alarm", alarm_req)
+            check_alarm(a, "snapshot alarm")
     for e in doc["alarms"]["events"]:
         _keys(e, alarm_keys | {"tMs"}, "alarm event", alarm_req | {"tMs"})
-        _require(re.fullmatch(r"alarm-\d+", e["id"]), "alarm id was not re-minted")
+        _int(e["tMs"], "event tMs")
+        check_alarm(e, "alarm event")
     _require(doc["locations"] == [], "this converter emits no positions")
 
 
@@ -375,18 +553,26 @@ def validate_output(doc):
 _SCAN_PATTERNS = (
     ("jwt", re.compile(r"eyJ[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{4,}(\.[A-Za-z0-9_-]*)?")),
     ("pem", re.compile(r"-----BEGIN|-----END|PRIVATE KEY", re.I)),
-    ("hex-run", re.compile(r"(?<![0-9A-Za-z])[0-9a-fA-F]{32,}(?![0-9A-Za-z])")),
+    # No boundary on either side: the simulator's device credential is 32 hex characters
+    # and nothing says a letter or digit cannot sit beside it (x<hex>, 0x<hex>, key<hex>).
+    ("hex-run", re.compile(r"[0-9a-fA-F]{32,}")),
+    ("uuid", re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")),
     ("base64-run", re.compile(r"[A-Za-z0-9+/_-]{40,}={0,2}")),
     ("keyword", re.compile(r"password|passwd|secret|bearer|credential|api[_-]?key|authorization|client[_-]?secret", re.I)),
     ("email", re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")),
     ("url", re.compile(r"[A-Za-z][A-Za-z0-9+.-]*://")),
     ("ipv4", re.compile(r"(?<![\d.])\d{1,3}(\.\d{1,3}){3}(?![\d.])")),
-    ("hostname", re.compile(r"\b[a-z0-9-]+(\.[a-z0-9-]+)*\.(com|net|org|io|dev|local|internal|cloud|app|edu|gov|info)\b", re.I)),
+    # a "::" address; a clock time such as 02:01:36 has no "::" and is not one
+    ("ipv6", re.compile(r"(?<![\w:])(?:[0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}(?![\w:])|(?<![\w:])(?:[0-9a-fA-F]{1,4}(?::[0-9a-fA-F]{1,4}){0,6})?::(?:[0-9a-fA-F]{1,4}(?::[0-9a-fA-F]{1,4}){0,6})?(?![\w:])")),
+    ("hostname", re.compile(r"\b[a-z0-9-]+(\.[a-z0-9-]+)*\.(com|net|org|io|dev|local|internal|cloud|app|edu|gov|info|svc|lan|corp|home|test|example|invalid|cluster)\b", re.I)),
+    # in-cluster names and host:port, which carry no public TLD
+    ("cluster-name", re.compile(r"\.svc\b|\.cluster\b|\bgke-|\bnode-pool|-pool-\d|\b[a-z][a-z0-9-]*\.[a-z0-9.-]+:\d{2,5}\b|\b[a-z][a-z0-9.-]*:\d{4,5}\b")),
 )
 
 # The only strings allowed to look like a hex run: exactly these fields, and only when
 # they are exactly a SHA-256 / a full git commit.
 _HASH_FIELDS = (("board", "sha256", _HEX64), ("board", "sourceCommit", _HEX40))
+_HEX32 = re.compile(r"[0-9a-fA-F]{32,}")
 
 
 def _is_hit(name, text):
@@ -400,33 +586,47 @@ def _is_hit(name, text):
 def _walk(obj, path=()):
     if isinstance(obj, dict):
         for k, v in obj.items():
-            yield path + (k,), k  # a key is text too
+            yield path + (k,), k, True  # a key is text too
             yield from _walk(v, path + (k,))
     elif isinstance(obj, list):
         for i, v in enumerate(obj):
             yield from _walk(v, path + (i,))
     elif isinstance(obj, str):
-        yield path, obj
+        yield path, obj, False
+
+
+def _exempt(path, s):
+    if len(path) == 2 and path[0] == "sourceHashes" and _HEX64.fullmatch(s):
+        return True
+    return len(path) == 2 and any(path == (a, b) and rx.fullmatch(s) for a, b, rx in _HASH_FIELDS)
 
 
 def scan_for_credentials(doc_or_text):
     """Return a list of findings (empty means clean) for a parsed document or a raw
     string. Every string and every key is checked. The sha256 fields of the board pin
-    and sourceHashes are exempt only when they are exactly a full hash."""
+    and sourceHashes are exempt only when they are exactly a full hash. A secret split
+    across separators or across neighbouring strings is also found: every string is
+    checked with its non-alphanumerics removed, and so is the concatenation of all of
+    them in document order."""
     if isinstance(doc_or_text, str):
-        items = [((), doc_or_text)]
+        items = [((), doc_or_text, False)]
     else:
         items = list(_walk(doc_or_text))
     findings = []
-    for path, s in items:
-        if len(path) == 2 and path[0] == "sourceHashes" and _HEX64.fullmatch(s):
+    kept = []
+    for path, s, is_key in items:
+        if not is_key and _exempt(path, s):
             continue
-        if len(path) == 2 and any(path == (a, b) and rx.fullmatch(s) for a, b, rx in _HASH_FIELDS):
-            continue
+        if not is_key:
+            kept.append(s)
+        where = "/".join(str(p) for p in path) or "text"
         for name, rx in _SCAN_PATTERNS:
             if any(_is_hit(name, m.group(0)) for m in rx.finditer(s)):
-                where = "/".join(str(p) for p in path) or "text"
                 findings.append("%s at %s" % (name, where))
+        if _HEX32.search(re.sub(r"[^0-9A-Za-z]", "", s)):
+            findings.append("hex-run (split by separators) at %s" % where)
+    if len(kept) > 1 and _HEX32.search("".join(re.sub(r"[^0-9A-Za-z]", "", s) for s in kept)):
+        findings.append("hex-run across neighbouring strings")
     return findings
 
 
