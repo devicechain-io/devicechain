@@ -545,6 +545,40 @@ minutes, `DetectHasNoLeader` fires.
 Per-rule status, last-fired time and fire count are available in the console on the device profile's
 **Rule Health** tab, alongside a live feed of detections as they occur.
 
+### Where the detection loop's time goes {#loop-phases}
+
+When the engine is behind (`DetectConsumerBacklogHigh`), the question that decides what to do about it
+is what the loop is spending its time on. `devicechain_eventprocessing_detect_loop_seconds_total`
+answers it: the seconds the loop has spent in each phase, labelled `phase`. The phases divide the
+loop's time between them, so the rate of one is its share of wall time, and the phases other than
+`fetch_wait` adding up to 1 means the loop has no spare time at all. (`parked` and `probe` are waiting,
+not work, but they are time the loop could not spend on messages.)
+
+| `phase` | The loop is |
+|---|---|
+| `fetch_wait` | idle, waiting for the next message or tick. |
+| `decode` | reading a message: the sequence check, the tenant and the payload. |
+| `plan` | working out which rules a reading feeds and evaluating their conditions. |
+| `apply` | running the detection engine on the result. |
+| `publish` | handing a checkpoint's detections to the broker. |
+| `save` | writing the engine's state to the database at a checkpoint. |
+| `ack` | acknowledging the messages a checkpoint made safe. |
+| `gapfill` | reading a range of events the broker said it delivered and the engine never received. |
+| `control` | everything between messages: rule, device and threshold updates, tenant deletions, and the periodic housekeeping. |
+| `parked` | waiting with live messages switched off, either behind a wall-clock advance that could not be committed or behind a gap in the event stream it could not read. It is the engine refusing work until a retry succeeds. |
+| `probe` | waiting on the broker for its backlog count, which the engine asks for to decide whether it is caught up and to report its lag. |
+
+A backlog with most of the time in `fetch_wait` is not the engine's limit: it is waiting for messages
+to arrive, and more engine capacity will not help. Time in `parked` or `probe` is the same kind of
+waiting: on a retry or on the broker, not on the engine. Most of it in `plan` and `apply` means the engine itself is the
+limit. Most of it in `publish`, `save` and `ack` means checkpoints are the cost, and
+`devicechain_eventprocessing_detect_checkpoint_duration_seconds` shows how long each one takes.
+(`devicechain_eventprocessing_detect_checkpoint_seconds` keeps only the latest.)
+
+```promql
+sum by (phase) (rate(devicechain_eventprocessing_detect_loop_seconds_total[5m]))
+```
+
 ## Deleting a tenant
 
 The detection engine holds tenant state as an opaque checkpoint that no query can interpret, so a

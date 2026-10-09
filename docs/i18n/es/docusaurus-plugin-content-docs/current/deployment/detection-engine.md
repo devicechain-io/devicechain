@@ -595,6 +595,40 @@ El estado por regla, la hora del último disparo y el conteo de disparos están 
 consola, en la pestaña **Salud de las reglas** del perfil de dispositivo, junto a un feed en vivo de
 las detecciones a medida que ocurren.
 
+### En qué se va el tiempo del bucle de detección {#loop-phases}
+
+Cuando el motor va con retraso (`DetectConsumerBacklogHigh`), lo que decide qué hacer es saber en qué
+gasta el tiempo el bucle. `devicechain_eventprocessing_detect_loop_seconds_total` lo responde: los
+segundos que el bucle ha pasado en cada fase, con la etiqueta `phase`. Las fases se reparten el tiempo
+del bucle, así que la tasa de una es su parte del tiempo real, y que las fases distintas de
+`fetch_wait` sumen 1 significa que el bucle no tiene tiempo libre. (`parked` y `probe` son espera, no
+trabajo, pero es tiempo que el bucle no pudo dedicar a mensajes.)
+
+| `phase` | El bucle está |
+|---|---|
+| `fetch_wait` | ocioso, esperando el siguiente mensaje o tic. |
+| `decode` | leyendo un mensaje: la comprobación de secuencia, el inquilino y la carga. |
+| `plan` | decidiendo qué reglas alimenta una lectura y evaluando sus condiciones. |
+| `apply` | ejecutando el motor de detección con el resultado. |
+| `publish` | entregando al broker las detecciones de un punto de control. |
+| `save` | escribiendo en la base de datos el estado del motor en un punto de control. |
+| `ack` | confirmando los mensajes que un punto de control dejó a salvo. |
+| `gapfill` | leyendo un rango de eventos que el broker dio por entregados y el motor nunca recibió. |
+| `control` | todo lo que ocurre entre mensajes: actualizaciones de reglas, dispositivos y umbrales, eliminaciones de inquilinos y el mantenimiento periódico. |
+| `parked` | esperando con los mensajes en vivo desactivados, ya sea tras un avance de reloj que no se pudo confirmar o tras un hueco en el flujo de eventos que no se pudo leer. Es el motor negándose a trabajar hasta que un reintento tenga éxito. |
+| `probe` | esperando al broker su recuento de pendientes, que el motor pide para decidir si está al día y para informar de su retraso. |
+
+Un retraso con la mayor parte del tiempo en `fetch_wait` no es el límite del motor: espera a que lleguen
+mensajes, y más capacidad del motor no ayudará. El tiempo en `parked` o `probe` es la misma clase de
+espera: a un reintento o al broker, no al motor. Si la mayor parte está en `plan` y `apply`, el límite es el propio
+motor. Si está en `publish`, `save` y `ack`, el coste son los puntos de control, y
+`devicechain_eventprocessing_detect_checkpoint_duration_seconds` muestra cuánto tarda cada uno.
+(`devicechain_eventprocessing_detect_checkpoint_seconds` conserva solo el último.)
+
+```promql
+sum by (phase) (rate(devicechain_eventprocessing_detect_loop_seconds_total[5m]))
+```
+
 ## Eliminar un inquilino
 
 El motor de detección mantiene el estado del inquilino como un punto de control opaco que ninguna

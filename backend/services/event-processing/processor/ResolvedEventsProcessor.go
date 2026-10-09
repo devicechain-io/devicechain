@@ -417,6 +417,8 @@ type ResolvedEventsProcessor struct {
 	publisher *runtime.Publisher
 	clock     detectcore.Clock
 	metrics   *DetectMetrics
+	// phases is the live loop's stopwatch (loop_phases.go): armed by run, a no-op everywhere else.
+	phases loopPhases
 	// backlogProbe reports the broker-confirmed pending + ack-pending backlog on the resolved-
 	// events consumer, gating idle-advance on positive caught-up evidence (see consumerBacklog).
 	// It is resolved from ResolvedEventsReader in ExecuteStart (a test may pre-set it); a nil
@@ -1519,6 +1521,9 @@ func (rp *ResolvedEventsProcessor) run() {
 	ticker := time.NewTicker(rp.cfg.TickInterval)
 	defer ticker.Stop()
 
+	rp.phases.start(rp.metrics)
+	defer rp.phases.stop()
+
 	for {
 		// While parked on an uncommitted idle advance, STOP receiving live messages by disabling
 		// the items case (a nil channel blocks forever in select). Applying a live event against
@@ -1539,11 +1544,18 @@ func (rp *ResolvedEventsProcessor) run() {
 		// so an idle loop still stamps once a tick, and a loop hung inside any case never gets
 		// back here: its heartbeat goes stale while every gauge sampled on the loop freezes.
 		rp.metrics.recordLoopHeartbeat(rp.clock.Now())
+		if liveItems == nil {
+			rp.phases.enter(phaseParked)
+		} else {
+			rp.phases.enter(phaseWait)
+		}
 		select {
 		case <-rp.pctx().Done():
+			rp.phases.enter(phaseControl)
 			rp.finalCheckpoint()
 			return
 		case upd := <-rp.ruleUpdates:
+			rp.phases.enter(phaseControl)
 			// Rule-set mutation on the single writer: a plain add/replace changes only which rules
 			// run, not the engine's serializable state (the rule set is not in the snapshot — it is
 			// rebuilt from the durable rule projection on restart), so it needs no checkpoint of its
@@ -1552,6 +1564,7 @@ func (rp *ResolvedEventsProcessor) run() {
 			// a checkpoint (otherwise a restart would replay the GC'd state back to life).
 			rp.applyRuleUpdate(upd)
 		case au := <-rp.armUpdates:
+			rp.phases.enter(phaseControl)
 			// Device membership recheck on the single writer: re-read the authoritative roster
 			// projection and arm/disarm. Like a rule update it mutates engine timer state but not the
 			// checkpoint sequence; it is made durable by the next checkpoint (or re-derived by
@@ -1559,12 +1572,14 @@ func (rp *ResolvedEventsProcessor) run() {
 			// (scaffold path) never selects here.
 			rp.applyArmRecheck(au)
 		case at := <-rp.attrUpdates:
+			rp.phases.enter(phaseControl)
 			// Dynamic-threshold recheck on the single writer: re-read the authoritative attribute
 			// projection for the device and replace its view entry (applyAttrRecheck). It mutates only
 			// the in-memory view — NOT engine state or the checkpoint sequence (the view is re-derived
 			// from the durable projection on restart, never snapshotted) — so it needs no checkpoint.
 			rp.applyAttrRecheck(at)
 		case fu := <-rp.fenceUpdates:
+			rp.phases.enter(phaseControl)
 			// A newly-minted FROZEN fence set on the single writer: file it under its version in the
 			// containment projection (ADR-078). Like the rechecks above it mutates only an in-memory
 			// view — never engine state or the checkpoint sequence — so it needs no checkpoint; the
@@ -1572,6 +1587,7 @@ func (rp *ResolvedEventsProcessor) run() {
 			// fenceUpdates channel (scaffold path) never selects here.
 			rp.applyFenceSet(fu)
 		case tp := <-rp.tenantPurges:
+			rp.phases.enter(phaseControl)
 			// ADR-077 tenant eviction on the single writer. Unlike every other case here it
 			// answers, and unlike every other case it FORCES a checkpoint: the eviction is not
 			// re-derivable from a replay (replay re-feeds the tenant's events into a rule set
@@ -1583,6 +1599,7 @@ func (rp *ResolvedEventsProcessor) run() {
 			// an erasure must not be blocked behind an idle-advance commit that is retrying.
 			tp.reply <- rp.applyTenantPurge(tp.tenant)
 		case item := <-liveItems:
+			rp.phases.enter(phaseDecode)
 			// Stamp the read time on ANY pump delivery — a message or a read error. For a
 			// message it means the reader had work; for an error it is the fail-safe posture:
 			// an error (outage / re-bind) is no evidence of an empty tail, so treat it as
@@ -1605,6 +1622,8 @@ func (rp *ResolvedEventsProcessor) run() {
 				rp.checkpoint(rp.pctx())
 			}
 		case <-ticker.C:
+			rp.phases.enter(phaseControl)
+			rp.phases.flush()
 			// Read the clock through cfg.Clock (not the ticker's wall-clock value) so every
 			// time comparison in the loop — the guard, the interval, the idle-advance target —
 			// shares one injectable clock; a ManualClock test then drives the loop coherently.
@@ -1612,6 +1631,7 @@ func (rp *ResolvedEventsProcessor) run() {
 			// A gap the loop could not read is retried before anything else the tick does:
 			// idle-advance below stays off until it has been (it checks gapHeld).
 			rp.retryGapFill()
+			rp.phases.enter(phaseControl) // retryGapFill leaves the stopwatch in whatever phase the retried message ended in
 			// Fire silent-series timers off the wall clock when the stream is caught up, then
 			// checkpoint. idleAdvance itself commits (and delivers) whenever it moved state, so
 			// the interval checkpoint below only handles the case idle-advance did not: buffered
@@ -1774,6 +1794,7 @@ func (rp *ResolvedEventsProcessor) applyResolved(msg messaging.Message) bool {
 	// once for the whole fan-out: the flattened map the loop-owned view holds, bound onto every
 	// sample's Input so a dynamic comparison reads the device's own bound. Nil on the scaffold path
 	// (no view) or for a device with no attributes — a presence-guarded clean non-match either way.
+	rp.phases.enter(phasePlan) // the view lookups below are part of the fan-out
 	var attr map[string]float64
 	if rp.attrView != nil {
 		attr = rp.attrView.For(tenant, event.SourceDeviceToken)
@@ -1803,6 +1824,7 @@ func (rp *ResolvedEventsProcessor) applyResolved(msg messaging.Message) bool {
 	// message already rebuilt. Descope is otherwise idempotent (a series with no state / no
 	// latch is a no-op).
 	descoped := false
+	rp.phases.enter(phaseApply)
 	if msg.StreamSeq > prev {
 		for _, d := range plan.Descopes {
 			if rp.engine.Descope(d.RuleID, d.Series, d.At) {
@@ -1993,9 +2015,11 @@ func (rp *ResolvedEventsProcessor) idleAdvance(ctx context.Context, now time.Tim
 	if rp.backlogProbe == nil {
 		return // no way to confirm the broker tail is empty: fail safe, never advance blind
 	}
+	prevPhase := rp.phases.enter(phaseProbe)
 	pctx, cancel := context.WithTimeout(ctx, backlogProbeTimeout)
 	pending, ackPending, err := rp.backlogProbe.Backlog(pctx)
 	cancel()
+	rp.phases.enter(prevPhase)
 	if err != nil || pending > 0 || ackPending > 0 {
 		// A backlog remains (a pause/outage let messages pile up), a peer holds delivered-unacked
 		// messages, or the broker/consumer is unreachable: we are NOT caught up. Suppress.
@@ -2444,6 +2468,7 @@ func (rp *ResolvedEventsProcessor) runCheckpoint(ctx context.Context, force bool
 	// Deliver-before-checkpoint: hand off every buffered detection first. If any fails
 	// (retryable broker error), defer the entire checkpoint so the producing messages stay
 	// unacked and a replay re-derives/re-emits.
+	defer rp.phases.enter(rp.phases.enter(phasePublish)) // hands the stopwatch back on every return below
 	pubCtx, pubCancel := context.WithTimeout(ctx, rp.checkpointTimeout())
 	published := rp.publishPending(pubCtx)
 	pubCancel()
@@ -2457,6 +2482,7 @@ func (rp *ResolvedEventsProcessor) runCheckpoint(ctx context.Context, force bool
 		if !force && rp.clock.Now().Before(rp.snapshotRetryAfter) {
 			return false
 		}
+		rp.phases.enter(phaseSave)
 		start := rp.clock.Now()
 		payload, err := rp.snapshotEngine()
 		if err != nil {
@@ -2507,6 +2533,7 @@ func (rp *ResolvedEventsProcessor) runCheckpoint(ctx context.Context, force bool
 		rp.metrics.recordCheckpoint(rp.engine.LastSeq(), now.Sub(start).Seconds(), len(payload), now.Sub(wm).Seconds())
 	}
 
+	rp.phases.enter(phaseAck)
 	for _, m := range rp.pendingAcks {
 		if err := m.Ack(); err != nil {
 			// A failed ack redelivers that message; the idempotent replay guard makes
@@ -2516,6 +2543,7 @@ func (rp *ResolvedEventsProcessor) runCheckpoint(ctx context.Context, force bool
 	}
 	rp.pendingAcks = rp.pendingAcks[:0]
 	rp.lastCheckpoint = rp.clock.Now()
+	rp.phases.flush()
 	return true
 }
 
@@ -2599,9 +2627,11 @@ func (rp *ResolvedEventsProcessor) sampleConsumerLag(ctx context.Context) {
 	if rp.backlogProbe == nil {
 		return
 	}
+	prevPhase := rp.phases.enter(phaseProbe)
 	pctx, cancel := context.WithTimeout(ctx, backlogProbeTimeout)
 	pending, ackPending, err := rp.backlogProbe.Backlog(pctx)
 	cancel()
+	rp.phases.enter(prevPhase)
 	if err != nil {
 		if ctx.Err() != nil {
 			log.Debug().Err(err).Msg("Consumer-lag sample skipped: cannot read the resolved-events backlog.")

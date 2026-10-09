@@ -290,6 +290,31 @@ dcctl dead-letters list --server <host> --email <you> --password <secret> \
 
 控制台设备配置的 **Rule Health（规则健康）** 页签提供逐规则状态、最近触发时间、触发计数，以及实时检测结果流。
 
+### 检测循环的时间花在哪里 {#loop-phases}
+
+引擎落后时（`DetectConsumerBacklogHigh`），决定怎么处理的关键是循环把时间花在了什么上。
+`devicechain_eventprocessing_detect_loop_seconds_total` 回答这个问题：循环在各阶段累计花费的秒数，带 `phase` 标签。各阶段瓜分循环的全部时间，因此某一阶段的速率就是它占墙钟时间的比例；除 `fetch_wait` 之外的阶段加起来为 1，意味着循环已没有任何空闲时间。（`parked` 和 `probe` 是等待而非工作，但这是循环无法用于处理消息的时间。）
+
+| `phase` | 循环正在 |
+|---|---|
+| `fetch_wait` | 空闲，等待下一条消息或定时触发。 |
+| `decode` | 读取消息：序列检查、租户和载荷。 |
+| `plan` | 确定一条读数喂给哪些规则，并评估这些规则的条件。 |
+| `apply` | 用结果运行检测引擎。 |
+| `publish` | 把检查点的检测结果交给消息总线。 |
+| `save` | 在检查点把引擎状态写入数据库。 |
+| `ack` | 确认检查点已保证安全的消息。 |
+| `gapfill` | 读取消息总线声称已投递、而引擎从未收到的一段事件。 |
+| `control` | 消息之间的一切：规则、设备和阈值更新、租户删除，以及周期性维护。 |
+| `parked` | 关闭实时消息后的等待：要么卡在无法提交的挂钟推进之后，要么卡在无法读取的事件流缺口之后。这是引擎在重试成功前拒绝工作。 |
+| `probe` | 等待消息总线返回积压数量；引擎用它判断自己是否已追上进度并上报滞后。 |
+
+积压时大部分时间处于 `fetch_wait`，说明瓶颈不在引擎：它在等待消息到达，增加引擎容量没有帮助。`parked` 或 `probe` 中的时间属于同类等待：等重试或等消息总线，而不是等引擎。大部分时间在 `plan` 和 `apply`，说明引擎本身就是上限。大部分时间在 `publish`、`save` 和 `ack`，说明代价在检查点，`devicechain_eventprocessing_detect_checkpoint_duration_seconds` 显示每次检查点的耗时。（`devicechain_eventprocessing_detect_checkpoint_seconds` 只保留最近一次。）
+
+```promql
+sum by (phase) (rate(devicechain_eventprocessing_detect_loop_seconds_total[5m]))
+```
+
 ## 删除租户 {#deleting-a-tenant}
 
 检测引擎将租户状态保存在无法查询解释的不透明检查点中，因此[租户删除](./tenant-deletion.md)直接要求引擎驱逐租户，并等待引擎确认驱逐已**提交**，而不只是修改内存。启用检测的实例必须确保引擎可访问，删除才能完成；引擎停止或不可访问时，删除保持未完成，不会在数据仍存在时宣布完成。

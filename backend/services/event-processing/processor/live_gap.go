@@ -74,6 +74,7 @@ const gapParkLimit = 10 * time.Minute
 // false the loop is parked on msg (see run).
 func (rp *ResolvedEventsProcessor) fillGap(msg messaging.Message) bool {
 	from, to := rp.engine.LastSeq()+1, msg.StreamSeq-1
+	rp.phases.enter(phaseGapFill)
 	if err := rp.fillRange(from, to); err != nil {
 		if rp.pctx().Err() != nil {
 			// The term is ending, which is why the read failed. That is not a gap the loop
@@ -114,6 +115,7 @@ func (rp *ResolvedEventsProcessor) fillGap(msg messaging.Message) bool {
 	}
 	rp.gapFailLogged = false
 	rp.gapParkedSince = time.Time{}
+	rp.phases.enter(phaseDecode) // the held message is decoded next, not applied
 	return true
 }
 
