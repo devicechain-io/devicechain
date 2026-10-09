@@ -72,11 +72,12 @@ type RangeStatser interface {
 // answers "no message found" for several failures that are not an absence (a store being
 // reset, a block that could not be read), and a consumer created without replicas is placed
 // on one peer, which may be a follower still catching up, so neither its answers nor a
-// single "not found" are taken as the stream's.
+// "not found" are taken as the stream's.
 //
 // Ranges of at most 256 sequences are read one by one by sequence, creating no consumer. A
-// sequence reported not found that the leader says should exist (at or above its first
-// retained sequence) is asked for once more before it is counted absent. Wider ranges skip
+// sequence reported not found counts as absent only if the leader accounts for it: below its
+// first retained sequence, or in the deleted set its state reports. A sequence the leader
+// holds but cannot read fails the read. Wider ranges skip
 // the part below the stream's first retained sequence (and create no consumer at all when
 // the whole range is below it) and use one bounded ephemeral pull consumer. That reader
 // verifies that the consumer's delivery sequence advances by one per message and
@@ -103,7 +104,7 @@ func (nmgr *NatsManager) NewRangeReader(suffix string, from, to uint64) (ReplayR
 		return nil, fmt.Errorf("range read of stream %s: range %d..%d reaches past the stream's last sequence %d",
 			name, from, to, info.State.LastSeq)
 	}
-	src := &rangeSource{js: nmgr.js, stream: name, firstSeq: info.State.FirstSeq}
+	src := &rangeSource{js: nmgr.js, stream: name, firstSeq: info.State.FirstSeq, lastSeq: info.State.LastSeq}
 	if !wide {
 		return &seqRangeReader{src: src, from: from, to: to, next: from}, nil
 	}
@@ -133,8 +134,13 @@ type rangeSource struct {
 	// firstSeq is the stream's first retained sequence when the read was opened. It only
 	// ever rises, so a sequence below it is certainly gone.
 	firstSeq uint64
-	// get is the request itself; nil means js.GetMsg. A test replaces it.
-	get func(ctx context.Context, seq uint64) (*nats.RawStreamMsg, error)
+	// lastSeq and deleted are the leader's state as of the last time it was asked (see
+	// leaderConfirmsAbsent); deleted is the set of purged sequences between the two.
+	lastSeq uint64
+	deleted map[uint64]struct{}
+	// get and info are the requests themselves; nil means the real ones. A test replaces them.
+	get  func(ctx context.Context, seq uint64) (*nats.RawStreamMsg, error)
+	info func(ctx context.Context) (*nats.StreamInfo, error)
 }
 
 func (s *rangeSource) rawGet(ctx context.Context, seq uint64) (*nats.RawStreamMsg, error) {
@@ -156,22 +162,69 @@ func (s *rangeSource) rawGet(ctx context.Context, seq uint64) (*nats.RawStreamMs
 	return raw, nil
 }
 
-// getOrAbsent returns the message at seq, or (nil, nil) when the stream does not hold it. A
-// not-found answer is believed outright only below the first retained sequence; at or above
-// it the broker is asked once more, because the server reports several read failures as "no
-// message found" and a purged sequence stays purged on the second ask.
+// getOrAbsent returns the message at seq, or (nil, nil) when the stream does not hold it.
+//
+// A "no message found" answer is NOT taken as an absence by itself: the server gives that
+// answer for every failed read of a sequence it holds (a block that cannot be read or
+// decompressed, a store being reset), and asking again gets the same answer. It counts as an
+// absence only when the stream leader says so: the sequence is below its first retained
+// sequence (evicted), or is in the deleted set its state reports (purged). Anything else is
+// an error, so a stream that holds an event it cannot read fails the read instead of
+// having the event skipped.
 func (s *rangeSource) getOrAbsent(ctx context.Context, seq uint64) (*nats.RawStreamMsg, error) {
-	for attempt := 0; ; attempt++ {
-		raw, err := s.rawGet(ctx, seq)
-		switch {
-		case err == nil:
-			return raw, nil
-		case !errors.Is(err, nats.ErrMsgNotFound):
-			return nil, fmt.Errorf("range read of stream %s seq %d: %w", s.stream, seq, err)
-		case seq < s.firstSeq || attempt > 0:
-			return nil, nil
-		}
+	raw, err := s.rawGet(ctx, seq)
+	switch {
+	case err == nil:
+		return raw, nil
+	case !errors.Is(err, nats.ErrMsgNotFound):
+		return nil, fmt.Errorf("range read of stream %s seq %d: %w", s.stream, seq, err)
+	case seq < s.firstSeq:
+		return nil, nil // evicted before this read began
 	}
+	absent, err := s.leaderConfirmsAbsent(ctx, seq)
+	if err != nil {
+		return nil, err
+	}
+	if !absent {
+		return nil, fmt.Errorf("range read of stream %s: seq %d was reported not found, but the stream leader does not list it as deleted or evicted (first %d, last %d); refusing to count it absent",
+			s.stream, seq, s.firstSeq, s.lastSeq)
+	}
+	return nil, nil
+}
+
+// leaderConfirmsAbsent reports whether the stream leader's own state accounts for seq not
+// being readable. The deleted set from one state request answers every absence in a range;
+// it is asked for again only when a sequence is not in the set already held, which covers a
+// purge or an eviction that happened after the last ask.
+func (s *rangeSource) leaderConfirmsAbsent(ctx context.Context, seq uint64) (bool, error) {
+	if _, ok := s.deleted[seq]; ok {
+		return true, nil
+	}
+	cctx, cancel := context.WithTimeout(ctx, rangeGetTimeout)
+	defer cancel()
+	var info *nats.StreamInfo
+	var err error
+	if s.info != nil {
+		info, err = s.info(cctx)
+	} else {
+		info, err = s.js.StreamInfo(s.stream, &nats.StreamInfoRequest{DeletedDetails: true}, nats.Context(cctx))
+	}
+	if err != nil {
+		return false, fmt.Errorf("range read of stream %s: confirming seq %d with the stream leader: %w", s.stream, seq, err)
+	}
+	if info.State.FirstSeq > s.firstSeq {
+		s.firstSeq = info.State.FirstSeq
+	}
+	s.lastSeq = info.State.LastSeq
+	s.deleted = make(map[uint64]struct{}, len(info.State.Deleted))
+	for _, d := range info.State.Deleted {
+		s.deleted[d] = struct{}{}
+	}
+	if seq < s.firstSeq {
+		return true, nil
+	}
+	_, ok := s.deleted[seq]
+	return ok, nil
 }
 
 // rawToMessage converts a by-sequence read into the consumed-message shape.

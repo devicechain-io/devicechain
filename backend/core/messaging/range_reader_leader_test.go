@@ -64,6 +64,7 @@ func TestRangeReaderOnlyNotFoundIsAbsent(t *testing.T) {
 		}
 		return rawMsg(seq), nil
 	})
+	src.info = (&leaderState{first: 1, last: 40, deleted: []uint64{11}}).info
 	rd := &seqRangeReader{src: src, from: 10, to: 20, next: 10}
 	got, err := readAll(rd)
 	require.ErrorIs(t, err, boom)
@@ -72,28 +73,123 @@ func TestRangeReaderOnlyNotFoundIsAbsent(t *testing.T) {
 		"after a failure the stats count only what was established")
 }
 
-// The server reports several read failures as "no message found". At or above the first
-// retained sequence a not-found is asked again, and a message that turns up on the second ask
-// is delivered rather than counted absent; below it the answer is believed at once.
-func TestRangeReaderAsksAgainBeforeCountingAnAbsence(t *testing.T) {
-	src, calls := fakeSource(11, func(seq uint64, call int) (*nats.RawStreamMsg, error) {
-		switch {
-		case seq == 10: // evicted: gone for good
-			return nil, nats.ErrMsgNotFound
-		case seq == 12 && call == 1: // a transient failure reported as not found
-			return nil, nats.ErrMsgNotFound
-		case seq == 13: // purged
+// leaderState stands in for the stream leader's state request, and counts how often it was
+// asked.
+type leaderState struct {
+	first, last uint64
+	deleted     []uint64
+	asked       int
+}
+
+func (l *leaderState) info(context.Context) (*nats.StreamInfo, error) {
+	l.asked++
+	return &nats.StreamInfo{State: nats.StreamState{FirstSeq: l.first, LastSeq: l.last, Deleted: l.deleted}}, nil
+}
+
+func notFoundFor(missing ...uint64) func(uint64, int) (*nats.RawStreamMsg, error) {
+	gone := map[uint64]bool{}
+	for _, m := range missing {
+		gone[m] = true
+	}
+	return func(seq uint64, _ int) (*nats.RawStreamMsg, error) {
+		if gone[seq] {
 			return nil, nats.ErrMsgNotFound
 		}
 		return rawMsg(seq), nil
-	})
-	rd := &seqRangeReader{src: src, from: 10, to: 14, next: 10}
+	}
+}
+
+// "No message found" is what the server answers for a sequence it holds but cannot read, as
+// well as for a purged one. A sequence counts as absent only if the leader lists it as deleted
+// or below its first retained sequence; one it does not account for fails the read, and is
+// never skipped.
+func TestRangeReaderAnUnaccountedNotFoundIsAnErrorNotAnAbsence(t *testing.T) {
+	src, _ := fakeSource(1, notFoundFor(12))
+	leader := &leaderState{first: 1, last: 40, deleted: []uint64{13, 14}} // 12 is not among them
+	src.info = leader.info
+	rd := &seqRangeReader{src: src, from: 10, to: 20, next: 10}
+	got, err := readAll(rd)
+	require.Error(t, err)
+	require.NotEqual(t, io.EOF, err)
+	require.ErrorContains(t, err, "refusing to count it absent")
+	require.Equal(t, []uint64{10, 11}, got)
+	require.Equal(t, RangeStats{Present: 2, Incomplete: true}, rd.RangeStats())
+}
+
+// Purged sequences are in the leader's deleted set and are absent; the set is asked for once
+// for the whole range, not once per sequence.
+func TestRangeReaderAPurgedSequenceIsAbsentWhenTheLeaderListsIt(t *testing.T) {
+	src, _ := fakeSource(1, notFoundFor(12, 13, 17))
+	leader := &leaderState{first: 1, last: 40, deleted: []uint64{12, 13, 17}}
+	src.info = leader.info
+	rd := &seqRangeReader{src: src, from: 10, to: 20, next: 10}
 	got, err := readAll(rd)
 	require.Equal(t, io.EOF, err)
-	require.Equal(t, []uint64{11, 12, 14}, got, "the sequence that turned up on the second ask is delivered")
-	require.Equal(t, RangeStats{Present: 3, Absent: 2}, rd.RangeStats())
-	require.Equal(t, 1, calls[10], "below the first retained sequence a not-found is believed at once")
-	require.Equal(t, 2, calls[13], "a purged sequence stays absent on the second ask")
+	require.Equal(t, []uint64{10, 11, 14, 15, 16, 18, 19, 20}, got)
+	require.Equal(t, RangeStats{Present: 8, Absent: 3}, rd.RangeStats())
+	require.Equal(t, 1, leader.asked, "one state request answers every absence in the range")
+}
+
+// A message evicted after the read began is not in the deleted set, but the leader's first
+// retained sequence, read after the not-found, is past it.
+func TestRangeReaderASequenceEvictedDuringTheReadIsAbsent(t *testing.T) {
+	src, _ := fakeSource(1, notFoundFor(10, 11))
+	leader := &leaderState{first: 12, last: 40}
+	src.info = leader.info
+	rd := &seqRangeReader{src: src, from: 10, to: 13, next: 10}
+	got, err := readAll(rd)
+	require.Equal(t, io.EOF, err)
+	require.Equal(t, []uint64{12, 13}, got)
+	require.Equal(t, RangeStats{Present: 2, Absent: 2}, rd.RangeStats())
+}
+
+// The boundary: a not-found at exactly the first retained sequence that was current when the
+// read began is not an eviction (that sequence is retained), so the leader has to account for
+// it; one below is certainly gone and needs no question.
+func TestRangeReaderTheFirstRetainedSequenceIsNotPresumedGone(t *testing.T) {
+	src, _ := fakeSource(11, notFoundFor(11))
+	leader := &leaderState{first: 11, last: 40}
+	src.info = leader.info
+	rd := &seqRangeReader{src: src, from: 11, to: 13, next: 11}
+	_, err := readAll(rd)
+	require.ErrorContains(t, err, "refusing to count it absent")
+
+	src, _ = fakeSource(11, notFoundFor(10))
+	leader = &leaderState{first: 11, last: 40}
+	src.info = leader.info
+	rd = &seqRangeReader{src: src, from: 10, to: 12, next: 10}
+	got, err := readAll(rd)
+	require.Equal(t, io.EOF, err)
+	require.Equal(t, []uint64{11, 12}, got)
+	require.Zero(t, leader.asked, "below the first retained sequence nothing needs asking")
+}
+
+// A remainder too long for the leader to be asked about sequence by sequence is not believed
+// either: a lagging consumer's "nothing pending" over more than the verify limit must end in
+// an error, never in an end-of-range with the whole remainder counted absent.
+func TestRangeReaderALongRemainderIsNotBelievedFromALaggingConsumer(t *testing.T) {
+	rig := newRangeRig(t, 1500)
+	rd := rig.open(t, 2, 1400)
+	cr := rd.(*consumerRangeReader)
+	laggingConsumer(cr, -1)
+	_, err := rd.Read(context.Background())
+	require.Error(t, err)
+	require.NotEqual(t, io.EOF, err)
+	require.ErrorContains(t, err, "giving up")
+}
+
+// A range longer than the default pending-ack limit reads through, on a consumer that takes no
+// acknowledgements (one that never acknowledged would stall at that limit).
+func TestRangeReaderAWideRangeBeyondThePendingAckLimitReadsThrough(t *testing.T) {
+	rig := newRangeRig(t, 1500)
+	rd := rig.open(t, 2, 1400)
+	cr := rd.(*consumerRangeReader)
+	cr.fetchWait = 300 * time.Millisecond
+	cr.maxStuck = 3
+	ci, err := cr.sub.ConsumerInfo()
+	require.NoError(t, err)
+	require.Equal(t, nats.AckNonePolicy, ci.Config.AckPolicy, "the throwaway consumer takes no acknowledgements")
+	require.Equal(t, seqRange(2, 1400), drainRange(t, rd))
 }
 
 // A sequence past the stream's last one is not absent, it does not exist yet: refused, on both
