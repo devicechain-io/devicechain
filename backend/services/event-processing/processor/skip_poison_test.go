@@ -9,9 +9,9 @@ import (
 	"testing"
 	"time"
 
+	dmmodel "github.com/devicechain-io/dc-device-management/model"
+	dmproto "github.com/devicechain-io/dc-device-management/proto"
 	"github.com/devicechain-io/dc-microservice/messaging"
-	"github.com/rs/zerolog"
-	"github.com/rs/zerolog/log"
 )
 
 // garbageAt builds an unparseable payload on a tenanted subject at stream sequence seq.
@@ -165,8 +165,7 @@ func TestValidLowerSeqAfterSkippedPoisonIsDropped(t *testing.T) {
 }
 
 // A duplicate at or below LastSeq is dropped, and the drop happens BEFORE the tenant parse
-// and the protobuf decode: an undecodable duplicate logs no decode failure, where the same
-// bytes ABOVE LastSeq do.
+// and the protobuf decode: duplicates never reach the decode, where a message above LastSeq does.
 func TestDuplicateIsDroppedBeforeDecode(t *testing.T) {
 	ctx := context.Background()
 	store := newTestStore(t)
@@ -178,27 +177,31 @@ func TestDuplicateIsDroppedBeforeDecode(t *testing.T) {
 	rp.handle(msgAt(t, 2, &fakeAck{}))
 	rp.checkpoint(ctx)
 
-	var buf bytes.Buffer
-	prev := log.Logger
-	log.Logger = zerolog.New(&buf)
-	defer func() { log.Logger = prev }()
+	decodes := 0
+	rp.decodeResolved = func(b []byte) (*dmmodel.ResolvedEvent, error) {
+		decodes++
+		return dmproto.UnmarshalResolvedEvent(b)
+	}
 
-	if rp.applyResolved(garbageAt(2, &fakeAck{})) {
+	if rp.applyResolved(msgAt(t, 2, &fakeAck{})) {
 		t.Fatal("duplicate must not report an advance")
+	}
+	if rp.applyResolved(garbageAt(1, &fakeAck{})) {
+		t.Fatal("poison duplicate must not report an advance")
 	}
 	if rp.engine.LastSeq() != 2 || rp.dirty {
 		t.Fatalf("duplicate moved state: lastSeq=%d dirty=%v", rp.engine.LastSeq(), rp.dirty)
 	}
-	if buf.Len() != 0 {
-		t.Fatalf("duplicate reached the decode (logged %q); the guard must run first", buf.String())
+	if decodes != 0 {
+		t.Fatalf("duplicates reached the decode %d times; the guard must run first", decodes)
 	}
 
-	// Control: the same garbage above LastSeq does reach the decode.
+	// Control: a message above LastSeq does reach the decode.
 	if !rp.applyResolved(garbageAt(3, &fakeAck{})) {
 		t.Fatal("poison above LastSeq must be skipped (advance)")
 	}
-	if !bytes.Contains(buf.Bytes(), []byte("could not be parsed")) {
-		t.Fatalf("control did not exercise the decode path: %q", buf.String())
+	if decodes != 1 {
+		t.Fatalf("control did not exercise the decode path: decodes=%d", decodes)
 	}
 }
 

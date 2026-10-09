@@ -503,9 +503,12 @@ type ResolvedEventsProcessor struct {
 	// tear the process down over a healthy one's shoulder.
 	newPacer func(what string) *core.ReadPacer
 
-	procCtx    context.Context
-	procCancel context.CancelFunc
-	readerWG   sync.WaitGroup
+	procCtx context.Context
+	// decodeResolved replaces the protobuf decode of a resolved event. Nil in production; a
+	// test sets it to count decodes and prove the sequence guard runs first.
+	decodeResolved func([]byte) (*dmmodel.ResolvedEvent, error)
+	procCancel     context.CancelFunc
+	readerWG       sync.WaitGroup
 
 	// supCtx bounds the PROCESS, not a term: it is minted once in ExecuteInitialize
 	// and every term context descends from it, so cancelling it ends leadership for
@@ -1681,7 +1684,11 @@ func (rp *ResolvedEventsProcessor) applyResolved(msg messaging.Message) bool {
 			Msgf("Dropping resolved event with no parseable tenant in subject %q", msg.Subject)
 		return rp.skipPoison(msg.StreamSeq)
 	}
-	event, err := dmproto.UnmarshalResolvedEvent(msg.Value)
+	decode := rp.decodeResolved
+	if decode == nil {
+		decode = dmproto.UnmarshalResolvedEvent
+	}
+	event, err := decode(msg.Value)
 	if err != nil {
 		log.Warn().Err(err).Str("correlation", msg.CorrelationID()).
 			Msgf("Dropping resolved event that could not be parsed from subject %q", msg.Subject)
