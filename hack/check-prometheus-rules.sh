@@ -139,12 +139,20 @@ else
   # point that exits non-zero is genuinely promtool speaking.
   if ! docker image inspect "$promtool_image" >/dev/null 2>&1; then
     say "pulling $promtool_image"
-    docker pull "$promtool_image" >/dev/null 2>&1 ||
+    # hack/docker-pull.sh retries Docker Hub, then pulls the SAME digest from a mirror
+    # (a digest-verified pull cannot return other bytes) and prints the reference to run.
+    # A PROMTOOL_IMAGE override with no digest has no mirror and keeps the plain pull.
+    if [[ "$promtool_image" == *@sha256:* ]]; then
+      pulled_ref="$("$(dirname "${BASH_SOURCE[0]}")/docker-pull.sh" "$promtool_image" 2>/dev/null)" &&
+        promtool_image="$pulled_ref"
+    else
+      docker pull "$promtool_image" >/dev/null 2>&1
+    fi ||
       fail "could not obtain promtool ($promtool_image) -- THE RULES WERE NOT CHECKED.
 
-This is a failure to get the tool, not a verdict about the rules. The registry
-may be unreachable or the tag may have moved. Re-run, or set PROMTOOL_IMAGE to
-an image you already have."
+This is a failure to get the tool, not a verdict about the rules. Neither Docker
+Hub nor its mirror answered, or the digest is gone. Re-run, or set PROMTOOL_IMAGE
+to an image you already have."
   fi
 
   run_promtool() {

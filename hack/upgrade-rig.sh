@@ -980,8 +980,13 @@ ensure_registry() {
   if [[ "$running" != "true" ]]; then
     say "starting the local registry container $registry_container"
     docker rm -f "$registry_container" >/dev/null 2>&1 || true
+    # Pulled by digest through the Docker Hub mirror fallback; the helper prints the
+    # reference to run (a local tag if a mirror served it).
+    local run_image
+    run_image="$("$repo_root/hack/docker-pull.sh" "$registry_image")" ||
+      fail "could not pull $registry_image from Docker Hub or any mirror"
     docker run -d --restart=always -p "127.0.0.1:$port:5000" \
-      --name "$registry_container" "$registry_image" >/dev/null
+      --name "$registry_container" "$run_image" >/dev/null
   fi
   # Idempotent: ignore "already exists in network".
   docker network connect "$kind_network" "$registry_container" >/dev/null 2>&1 || true
