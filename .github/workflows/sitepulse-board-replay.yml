@@ -1,0 +1,52 @@
+# Copyright The DeviceChain Authors
+# SPDX-License-Identifier: Apache-2.0
+#
+# Tests for the Sitepulse board-replay converter (demos/sitepulse-unity/tools/
+# recording_to_board.py): its refusals (fabricated row, credential in an allowed
+# field, a file outside the input allowlist) and the committed excerpt's golden
+# values and credential scan. The full recording is not in the repository, so the
+# tests that need it skip here and run on the maintainer's machine.
+#
+# WHY A SEPARATE WORKFLOW AND NOT A JOB IN ci.yml. ci.yml's `ci-complete` gate counts
+# a SKIPPED job as a failure, and this job is path-filtered, so as a ci.yml job it
+# would block every pull request that does not touch these paths. A workflow-level
+# `paths:` filter in its own file has neither problem (frontend-windows.yml is the
+# same arrangement). Not in the required-checks set.
+name: sitepulse-board-replay
+
+on:
+  pull_request:
+    paths:
+      - "demos/sitepulse-unity/tools/recording_to_board.py"
+      - "demos/sitepulse-unity/tools/test_recording_to_board.py"
+      - "frontend/testdata/board-replay/**"
+      - "frontend/testdata/sim-dashboards/sp-dashboard.json"
+      - ".github/workflows/sitepulse-board-replay.yml"
+  push:
+    branches: [main]
+    paths:
+      - "demos/sitepulse-unity/tools/recording_to_board.py"
+      - "demos/sitepulse-unity/tools/test_recording_to_board.py"
+      - "frontend/testdata/board-replay/**"
+      - "frontend/testdata/sim-dashboards/sp-dashboard.json"
+      - ".github/workflows/sitepulse-board-replay.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sitepulse-board-replay-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  converter:
+    name: board-replay converter tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      # Standard library only; the runner's python3 is enough.
+      - name: Unit tests
+        working-directory: demos/sitepulse-unity/tools
+        run: python3 -m unittest -v test_recording_to_board
