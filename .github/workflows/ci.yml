@@ -910,6 +910,38 @@ jobs:
         # update is the way that reaches it. This turns the snapshot into a check.
         run: hack/check-bare-table-statements.sh
 
+      # Seven shapes (a Raw and an Exec over a tenant-scoped table, a quoted and
+      # schema-qualified name, three forms of SQL that cannot be read statically, a
+      # split chain) each planted alone and required to be caught and located; five
+      # legitimate forms required to pass; a stale allow-list and an empty tree
+      # refused. The allow-list mechanics run as Go tests against injected lists.
+      - name: raw-sql guard self-test
+        run: hack/check-raw-sql-statements.sh --self-test
+
+      - name: raw SQL over a tenant-scoped table is allow-listed with a reason
+        # The tenant-scope callback injects its predicate into statements it builds.
+        # A Raw statement is finished SQL and an Exec runs with no callbacks, so
+        # whether one is tenant-safe is a property of its text. This keeps every
+        # such statement over a tenant-scoped table either gone or listed beside the
+        # reason it is safe, and refuses an entry that no longer matches anything.
+        # Defence in depth beside the callback, not a replacement for review.
+        run: hack/check-raw-sql-statements.sh
+
+      # Seven shapes (no tenant equality, a left join, the equality on the wrong table,
+      # an association join, a dynamic join string, a second join in one string, a split
+      # chain) each planted alone and required to be caught and located; four joins
+      # that carry the equality or join an unscoped table required to pass; a stale
+      # allow-list and an empty tree refused.
+      - name: raw-join guard self-test
+        run: hack/check-raw-joins.sh --self-test
+
+      - name: tenant-scoped joins carry a tenant equality or are allow-listed
+        # The callback filters the outer table of a statement; a joined table is
+        # filtered by nothing. Each join over a tenant-scoped table either equates
+        # the tenant columns in its ON clause or sits in the allow-list with the
+        # reason its foreign key cannot cross tenants.
+        run: hack/check-raw-joins.sh
+
   # ---------------------------------------------------------------------------
   # Migrations: prove every area's chain still reproduces its golden schema.
   #
