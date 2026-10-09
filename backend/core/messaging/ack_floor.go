@@ -14,7 +14,8 @@ import (
 )
 
 // ackFloorStartTimeout bounds the start callback of a reader that is creating its durable.
-const ackFloorStartTimeout = 30 * time.Second
+// A variable only so a test can shorten it; nothing else assigns it.
+var ackFloorStartTimeout = 30 * time.Second
 
 // ErrAckFloorReader is what Message.Ack returns for a message read from an ack-floor reader
 // (ReaderWithAckFloor). On such a durable a single ack acknowledges EVERY message at or below
@@ -42,6 +43,14 @@ var ErrAckFloorPolicyMismatch = errors.New("messaging: durable exists with an ac
 // plus one). It is called only when the durable has to be CREATED: the first bind, and a
 // self-heal after the durable was deleted. A durable that already exists is bound as it is,
 // at wherever its own ack floor stands.
+//
+// start must be a fast local read. It runs with the reader's bind lock held, under a 30 s
+// context, and UnbindTerm (a lost leadership term) takes the same lock, so a slow start
+// delays term teardown by as long as it takes.
+//
+// Messages handed out before a re-bind that recreated the durable belong to the dead
+// consumer. Their ack reply subjects name the consumer by name, so the server would apply
+// them to the new one, and AckThrough therefore skips them (AckThroughResult.Stale).
 //
 // The server refuses to change an existing consumer's ack policy or start sequence
 // (CreateConsumer reports "consumer already exists"; UpdateConsumer reports "ack policy can
@@ -78,9 +87,17 @@ func (r *natsReader) validateAckFloor() error {
 
 // floorAck is the Acknowledger of a message from an ack-floor reader. Ack refuses; the
 // transport handle is reachable only through AckThrough.
-type floorAck struct{ nm *nats.Msg }
+type floorAck struct {
+	nm *nats.Msg
+	// r and gen identify the bind that delivered the message; nil r means no check (tests).
+	r   *natsReader
+	gen uint64
+}
 
 func (floorAck) Ack() error { return ErrAckFloorReader }
+
+// current reports whether the message was delivered by the reader's current bind.
+func (a floorAck) current() bool { return a.r == nil || a.r.ackGen.Load() == a.gen }
 
 // ackFloorConsumerConfig is the configuration an ack-floor durable is CREATED with.
 func (r *natsReader) ackFloorConsumerConfig(startSeq uint64) *nats.ConsumerConfig {
@@ -132,24 +149,32 @@ func (r *natsReader) bindAckFloorLocked() error {
 	if err != nil {
 		return err
 	}
+	// A new generation: anything delivered by an earlier bind is stale from here on.
+	r.ackGen.Add(1)
 	r.sub.Store(sub)
 	r.answered.Store(true)
 	return nil
 }
 
-// reconcileAckFloorFilter moves an existing ack-floor durable onto this build's filter,
-// carrying its existing configuration (ack policy and start fields included) unchanged.
+// reconcileAckFloorFilter brings an existing ack-floor durable's server-updatable fields
+// (filter, AckWait, MaxDeliver, MaxAckPending) onto this build's values, carrying the rest
+// of its configuration (ack policy and start fields included) unchanged.
 func (r *natsReader) reconcileAckFloorFilter(info *nats.ConsumerInfo) error {
 	want := r.consumerConfig()
-	if info.Config.FilterSubject == want.FilterSubject && sameStrings(info.Config.FilterSubjects, want.FilterSubjects) {
+	if info.Config.FilterSubject == want.FilterSubject && sameStrings(info.Config.FilterSubjects, want.FilterSubjects) &&
+		info.Config.AckWait == want.AckWait && info.Config.MaxDeliver == want.MaxDeliver &&
+		info.Config.MaxAckPending == want.MaxAckPending {
 		return nil
 	}
 	cfg := info.Config
 	cfg.FilterSubject = want.FilterSubject
 	cfg.FilterSubjects = want.FilterSubjects
+	cfg.AckWait = want.AckWait
+	cfg.MaxDeliver = want.MaxDeliver
+	cfg.MaxAckPending = want.MaxAckPending
 	log.Info().Str("stream", r.stream).Str("durable", r.durable).
 		Str("from", info.Config.FilterSubject).Str("to", want.FilterSubject).
-		Msg("Moving an existing ack-floor durable onto this build's filter subject")
+		Msg("Reconciling an existing ack-floor durable with this build's configuration")
 	if _, err := r.nmgr.js.UpdateConsumer(r.stream, &cfg); err != nil {
 		return fmt.Errorf("moving ack-floor durable %q onto filter %q: %w", r.durable, want.FilterSubject, err)
 	}
@@ -174,9 +199,16 @@ func sameStrings(a, b []string) bool {
 
 // AckThroughResult says what AckThrough did.
 type AckThroughResult struct {
-	// AckedSeq is the stream sequence of the message that was acked, which acknowledged
-	// every message at or below it. Zero when nothing was acked.
-	AckedSeq uint64
+	// SentSeq is the stream sequence of the message an ack was SENT for, which the server
+	// applies to every message at or below it. Zero when nothing was sent. The ack is
+	// fire-and-forget: SentSeq says it left this process, not that the broker applied it.
+	// A caller that needs to know can poll the durable's ConsumerInfo until
+	// AckFloor.Stream >= SentSeq.
+	SentSeq uint64
+	// Stale counts messages delivered by an earlier bind of the reader (before the durable
+	// was recreated); they are never acked, because the server would apply their delivery
+	// sequence to the new consumer.
+	Stale int
 	// Above counts messages with a sequence above the ceiling; they are left unacked.
 	Above int
 	// Unsequenced counts messages with no stream sequence (0); they are never acked, and
@@ -201,20 +233,22 @@ func AckThrough(msgs []Message, ceiling uint64) (AckThroughResult, error) {
 			return AckThroughResult{}, ErrNotAckFloorMessage
 		}
 		switch seq := msgs[i].StreamSeq; {
+		case !fa.current():
+			res.Stale++
 		case seq == 0:
 			res.Unsequenced++
 		case seq > ceiling:
 			res.Above++
-		case seq > res.AckedSeq:
-			res.AckedSeq, best = seq, fa.nm
+		case seq > res.SentSeq:
+			res.SentSeq, best = seq, fa.nm
 		}
 	}
 	if best == nil {
-		return AckThroughResult{Above: res.Above, Unsequenced: res.Unsequenced}, nil
+		return AckThroughResult{Above: res.Above, Unsequenced: res.Unsequenced, Stale: res.Stale}, nil
 	}
 	if err := best.Ack(); err != nil {
-		return AckThroughResult{Above: res.Above, Unsequenced: res.Unsequenced},
-			fmt.Errorf("messaging: acking through sequence %d: %w", res.AckedSeq, err)
+		return AckThroughResult{Above: res.Above, Unsequenced: res.Unsequenced, Stale: res.Stale},
+			fmt.Errorf("messaging: acking through sequence %d: %w", res.SentSeq, err)
 	}
 	return res, nil
 }

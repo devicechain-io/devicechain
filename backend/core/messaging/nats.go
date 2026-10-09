@@ -1340,6 +1340,8 @@ type natsReader struct {
 	// ackFloorStart, when set, makes the durable an AckAll consumer created at the position
 	// it returns — see ReaderWithAckFloor.
 	ackFloorStart func(ctx context.Context) (uint64, error)
+	// ackGen counts successful ack-floor binds; see floorAck.
+	ackGen atomic.Uint64
 	// held, when set, is the leadership-term predicate this reader is gated on: no
 	// message is handed out unless it reports true. See ReaderWithTermGate.
 	held func() bool
@@ -2019,6 +2021,10 @@ func (r *natsReader) rebindWithBackoff(ctx context.Context) error {
 			}
 			continue
 		}
+		if r.ackFloor() {
+			// Whatever is buffered came from the consumer that was just replaced.
+			r.dropPending()
+		}
 		log.Info().Str("durable", r.durable).Msg("Re-bound durable consumer")
 		return nil
 	}
@@ -2233,7 +2239,7 @@ func (r *natsReader) ReadMessage(ctx context.Context) (_ Message, err error) {
 		seq, deliv, appended := msgMeta(nm)
 		var ack Acknowledger = natsAck{nm: nm}
 		if r.ackFloor() {
-			ack = floorAck{nm: nm}
+			ack = floorAck{nm: nm, r: r, gen: r.ackGen.Load()}
 		}
 		msg := NewConsumedMessage(nm.Subject, nm.Data, deliv, natsHeaders(nm), ack)
 		msg.StreamSeq = seq

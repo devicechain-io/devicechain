@@ -180,9 +180,9 @@ func TestAckFloorRefusesAZeroStart(t *testing.T) {
 }
 
 // Binding an existing AckAll durable neither recreates nor reconfigures it, and does not even
-// ask for a start position. A default-config AddConsumer against it would be refused by the
-// server, so success is itself proof that the path avoided it; the timestamps and config
-// make that explicit.
+// ask for a start position. The timestamps and config show it was left alone. This does NOT
+// prove AddConsumer was avoided: an AddConsumer carrying the identical ack-floor config is
+// idempotent on the server and would pass here too.
 func TestAckFloorBindsAnExistingDurableWithoutTouchingIt(t *testing.T) {
 	f := newFloorFixture(t, 0)
 	f.publish(4)
@@ -327,7 +327,7 @@ func TestAckThroughAcksExactlyTheFloor(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AckThrough: %v", err)
 	}
-	if res.AckedSeq != 4 || res.Above != 2 || res.Unsequenced != 0 {
+	if res.SentSeq != 4 || res.Above != 2 || res.Unsequenced != 0 {
 		t.Fatalf("result %+v, want acked 4, 2 above", res)
 	}
 	info := f.waitFor("floor 4", func(i *nats.ConsumerInfo) bool { return i.AckFloor.Stream == 4 })
@@ -354,17 +354,17 @@ func TestAckThroughWithNothingToAckDoesNothing(t *testing.T) {
 
 	for name, ceiling := range map[string]uint64{"floor below every message": 1, "ceiling 0": 0} {
 		res, err := AckThrough(msgs, ceiling)
-		if err != nil || res.AckedSeq != 0 {
+		if err != nil || res.SentSeq != 0 {
 			t.Fatalf("%s: result %+v err %v, want nothing acked", name, res, err)
 		}
 	}
-	if res, err := AckThrough(nil, 10); err != nil || res.AckedSeq != 0 {
+	if res, err := AckThrough(nil, 10); err != nil || res.SentSeq != 0 {
 		t.Fatalf("empty batch: %+v %v", res, err)
 	}
 	// A message whose metadata could not be read has sequence 0 and must never be the floor.
 	unreadable := Message{ack: floorAck{}, StreamSeq: 0}
 	res, err := AckThrough([]Message{unreadable}, 10)
-	if err != nil || res.AckedSeq != 0 || res.Unsequenced != 1 {
+	if err != nil || res.SentSeq != 0 || res.Unsequenced != 1 {
 		t.Fatalf("sequence-0 message: %+v %v, want unsequenced 1 and nothing acked", res, err)
 	}
 	settle()
@@ -435,15 +435,171 @@ func TestAckFloorSelfHealRestartsAtTheStartCallback(t *testing.T) {
 	if err := f.nmgr.js.DeleteConsumer(f.stream, f.durable); err != nil {
 		t.Fatalf("delete consumer: %v", err)
 	}
-	// The rest of the first batch (2..5) is already in the reader's buffer. The read after
-	// that fetches from the deleted durable, rebinds, and must land on the NEW start.
-	if drained := f.seqs(f.readN(r, 4)); !reflect.DeepEqual(drained, []uint64{2, 3, 4, 5}) {
+	// The rest of the first batch (2..5) is already in the reader's buffer and is handed out;
+	// the read after that fetches from the deleted durable and rebinds onto the NEW start.
+	stale := f.readN(r, 4)
+	if drained := f.seqs(stale); !reflect.DeepEqual(drained, []uint64{2, 3, 4, 5}) {
 		t.Fatalf("buffered batch %v, want [2 3 4 5]", drained)
 	}
-	if got := f.read(r).StreamSeq; got != 4 {
-		t.Fatalf("first message after self-heal has seq %d, want 4 (the callback's current position)", got)
+	first := f.read(r)
+	if first.StreamSeq != 4 {
+		t.Fatalf("first message after self-heal has seq %d, want 4 (the callback's current position)", first.StreamSeq)
+	}
+	// Everything handed out by the dead durable is now stale and must not be acked.
+	res, err := AckThrough(stale, 5)
+	if err != nil || res.Stale != 4 || res.SentSeq != 0 {
+		t.Fatalf("AckThrough of pre-heal messages: %+v %v, want 4 stale and nothing sent", res, err)
 	}
 	if s := f.info().Config.OptStartSeq; s != 4 {
 		t.Fatalf("recreated durable start = %d, want 4", s)
+	}
+}
+
+// The reviewer's reproduction: messages read from the dead durable, acked after the durable
+// was recreated, are applied by the server to the NEW consumer by name and, with their stale
+// delivery sequence, would lift its floor past later legitimate acks.
+func TestAckThroughSkipsMessagesFromBeforeASelfHeal(t *testing.T) {
+	f := newFloorFixture(t, 2*time.Second)
+	f.publish(10)
+	var next atomic.Uint64
+	next.Store(1)
+	r, err := f.reader(ReaderWithAckFloor(func(context.Context) (uint64, error) { return next.Load(), nil }))
+	if err != nil {
+		t.Fatal(err)
+	}
+	stale := f.readN(r, 10)
+	next.Store(3)
+	if err := f.nmgr.js.DeleteConsumer(f.stream, f.durable); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.bind(); err != nil {
+		t.Fatal(err)
+	}
+	fresh := f.readN(r, 8) // seq 3..10, delivery sequence 1..8 on the new consumer
+	res, err := AckThrough([]Message{stale[7]}, 8)
+	if err != nil || res.Stale != 1 || res.SentSeq != 0 {
+		t.Fatalf("stale ack: %+v %v, want 1 stale and nothing sent", res, err)
+	}
+	settle()
+	if got := f.info().AckFloor.Stream; got != 2 {
+		t.Fatalf("a stale message moved the new durable's floor to %d, want 2", got)
+	}
+	if _, err := AckThrough(fresh[7:], 10); err != nil {
+		t.Fatal(err)
+	}
+	f.waitFor("floor 10", func(i *nats.ConsumerInfo) bool { return i.AckFloor.Stream == 10 })
+}
+
+// Server-updatable fields reach an existing ack-floor durable, and the start fields do not move.
+func TestAckFloorReconcilesAckWaitOnAnExistingDurable(t *testing.T) {
+	js := scratchJetStream(t, "floor-ackwait")
+	if _, err := js.AddStream(&nats.StreamConfig{Name: "FLOORWAIT", Subjects: []string{"test.*.responses"}}); err != nil {
+		t.Fatalf("add stream: %v", err)
+	}
+	if _, err := js.Publish("test.acme.responses", []byte("x")); err != nil {
+		t.Fatalf("publish: %v", err)
+	}
+	mk := func(wait time.Duration, start uint64) *natsReader {
+		r := readerAt(js, "FLOORWAIT", "waiter", "test.*.responses")
+		r.nmgr.ackWaitOverride = wait
+		r.ackFloorStart = func(context.Context) (uint64, error) { return start, nil }
+		return r
+	}
+	if err := mk(7*time.Second, 1).bind(); err != nil {
+		t.Fatalf("first bind: %v", err)
+	}
+	if err := mk(9*time.Second, 5).bind(); err != nil {
+		t.Fatalf("second bind: %v", err)
+	}
+	info, err := js.ConsumerInfo("FLOORWAIT", "waiter")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Config.AckWait != 9*time.Second {
+		t.Fatalf("AckWait = %v, want 9s: a build's AckWait change did not reach the durable", info.Config.AckWait)
+	}
+	if info.Config.OptStartSeq != 1 || info.Config.AckPolicy != nats.AckAllPolicy {
+		t.Fatalf("start %d policy %v after reconcile, want 1 and AckAll", info.Config.OptStartSeq, info.Config.AckPolicy)
+	}
+}
+
+// Two readers racing to create the durable: the loser binds the winner's instead of failing.
+// The winner is made to finish INSIDE the loser's start callback, after the loser looked.
+func TestAckFloorCreationRaceBindsTheWinnersDurable(t *testing.T) {
+	js := scratchJetStream(t, "floor-race")
+	if _, err := js.AddStream(&nats.StreamConfig{Name: "FLOORRACE", Subjects: []string{"test.*.responses"}}); err != nil {
+		t.Fatalf("add stream: %v", err)
+	}
+	for i := 0; i < 8; i++ {
+		if _, err := js.Publish("test.acme.responses", []byte("x")); err != nil {
+			t.Fatalf("publish: %v", err)
+		}
+	}
+	winner := readerAt(js, "FLOORRACE", "racer", "test.*.responses")
+	winner.ackFloorStart = func(context.Context) (uint64, error) { return 5, nil }
+	loser := readerAt(js, "FLOORRACE", "racer", "test.*.responses")
+	loser.ackFloorStart = func(context.Context) (uint64, error) {
+		if err := winner.bind(); err != nil {
+			return 0, err
+		}
+		return 7, nil
+	}
+	if err := loser.bind(); err != nil {
+		t.Fatalf("the loser of a creation race failed instead of binding the winner's durable: %v", err)
+	}
+	info, err := js.ConsumerInfo("FLOORRACE", "racer")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Config.OptStartSeq != 5 {
+		t.Fatalf("durable start = %d, want the winner's 5", info.Config.OptStartSeq)
+	}
+}
+
+// A start callback that never returns is cut off by the bounded context.
+func TestAckFloorStartIsBounded(t *testing.T) {
+	js := scratchJetStream(t, "floor-timeout")
+	if _, err := js.AddStream(&nats.StreamConfig{Name: "FLOORTIME", Subjects: []string{"test.*.responses"}}); err != nil {
+		t.Fatalf("add stream: %v", err)
+	}
+	old := ackFloorStartTimeout
+	ackFloorStartTimeout = 100 * time.Millisecond
+	t.Cleanup(func() { ackFloorStartTimeout = old })
+	r := readerAt(js, "FLOORTIME", "slow", "test.*.responses")
+	r.ackFloorStart = func(ctx context.Context) (uint64, error) {
+		select {
+		case <-ctx.Done():
+			return 0, ctx.Err()
+		case <-time.After(5 * time.Second):
+			return 0, errors.New("start was not cut off")
+		}
+	}
+	err := r.bind()
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("bind err = %v, want a deadline exceeded from the start context", err)
+	}
+}
+
+// fakeJS fails the test on any call that would create or change a consumer.
+type fakeJS struct {
+	nats.JetStreamContext
+	t *testing.T
+}
+
+func (f fakeJS) ConsumerInfo(string, string, ...nats.JSOpt) (*nats.ConsumerInfo, error) {
+	return nil, nats.ErrConsumerNotFound
+}
+
+func (f fakeJS) AddConsumer(string, *nats.ConsumerConfig, ...nats.JSOpt) (*nats.ConsumerInfo, error) {
+	f.t.Error("AddConsumer was called for a refused start position")
+	return nil, errors.New("unexpected")
+}
+
+// A start of sequence 0 is refused before any consumer is created, independent of the server.
+func TestAckFloorZeroStartIsRefusedBeforeAnyServerCall(t *testing.T) {
+	r := readerAt(fakeJS{t: t}, "S", "d", "test.*.x")
+	r.ackFloorStart = func(context.Context) (uint64, error) { return 0, nil }
+	if err := r.bind(); err == nil {
+		t.Fatal("a start of sequence 0 was accepted")
 	}
 }
