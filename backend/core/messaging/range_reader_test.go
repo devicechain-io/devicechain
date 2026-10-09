@@ -208,7 +208,8 @@ func TestRangeReaderRefusesAnInvalidRange(t *testing.T) {
 }
 
 // A broker that goes away mid-range is an error from Read, never a clean end of a short
-// result: a caller that took io.EOF for "the range is done" would advance past a hole.
+// result: a caller that took io.EOF for "the range is done" would advance past a hole. The
+// context outlasts every request, so the error cannot be the test's own deadline.
 func TestRangeReaderBrokerErrorMidRangeIsAnError(t *testing.T) {
 	rig := newRangeRig(t, 40)
 	rd := rig.open(t, 10, 30)
@@ -218,7 +219,7 @@ func TestRangeReaderBrokerErrorMidRangeIsAnError(t *testing.T) {
 	}
 	rig.srv.Shutdown()
 	rig.srv.WaitForShutdown()
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 	for {
 		_, err := rd.Read(ctx)
@@ -226,6 +227,8 @@ func TestRangeReaderBrokerErrorMidRangeIsAnError(t *testing.T) {
 			continue // answered from before the shutdown took hold
 		}
 		require.NotEqual(t, io.EOF, err, "a broker failure must not read as the end of the range")
+		require.NoError(t, ctx.Err(), "the error must come from the broker, not from the test's own deadline")
+		require.True(t, rd.(RangeStatser).RangeStats().Incomplete, "stats after a failed read say they are incomplete")
 		return
 	}
 }
