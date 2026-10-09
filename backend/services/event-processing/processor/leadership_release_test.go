@@ -57,11 +57,22 @@ func startOutageBroker(t *testing.T) *outageBroker {
 	return b
 }
 
+// listenPort is the port to listen on: the one this broker had before when it has been up,
+// and otherwise -1, which nats-server reads as "pick a free one". The zero value is NOT that:
+// nats-server treats Port 0 as its default 4222, so a first start on 0 collides with any other
+// test process doing the same.
+func (b *outageBroker) listenPort() int {
+	if b.port == 0 {
+		return natsserver.RANDOM_PORT
+	}
+	return b.port
+}
+
 // up starts the server, on the port it had before when there was one.
 func (b *outageBroker) up(t *testing.T) {
 	t.Helper()
 	srv, err := natsserver.NewServer(&natsserver.Options{
-		Host: "127.0.0.1", Port: b.port, JetStream: true, StoreDir: b.dir,
+		Host: "127.0.0.1", Port: b.listenPort(), JetStream: true, StoreDir: b.dir,
 		NoLog: true, NoSigs: true,
 	})
 	require.NoError(t, err)
