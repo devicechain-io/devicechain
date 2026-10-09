@@ -584,3 +584,53 @@ func TestNatsTLSConfig(t *testing.T) {
 		}
 	})
 }
+
+// The fetch settings are fixed-plane and fail closed: a batch outside what the readers and
+// the gap fill can serve, or a hold budget the acknowledgement window cannot afford, is
+// refused at startup with the key named.
+func TestValidateRejectsAFetchBatchOutsideItsRange(t *testing.T) {
+	for _, batch := range []int{-1, MaxFetchBatch + 1, 1 << 20} {
+		cfg := NewDefaultInstanceConfiguration()
+		cfg.ApplyDefaults()
+		cfg.Infrastructure.Nats.Fetch.Batch = batch
+		err := cfg.Validate()
+		if err == nil || !strings.Contains(err.Error(), "infrastructure.nats.fetch.batch") {
+			t.Errorf("batch %d: got %v, want a refusal naming infrastructure.nats.fetch.batch", batch, err)
+		}
+	}
+	for _, batch := range []int{0, 1, DefaultFetchBatch, MaxFetchBatch} {
+		cfg := NewDefaultInstanceConfiguration()
+		cfg.ApplyDefaults()
+		cfg.Infrastructure.Nats.Fetch.Batch = batch
+		if err := cfg.Validate(); err != nil {
+			t.Errorf("batch %d is allowed, got %v", batch, err)
+		}
+	}
+}
+
+func TestTheFetchHoldBudgetIsBoundedByTheAcknowledgementWindow(t *testing.T) {
+	const window = 60 * time.Second
+	cfg := NatsFetchConfiguration{AheadHoldBudgetMillis: -1}
+	if err := cfg.ValidateAgainst(window); err == nil {
+		t.Error("a negative hold budget validated")
+	}
+	cfg = NatsFetchConfiguration{AheadHoldBudgetMillis: 6000}
+	if err := cfg.ValidateAgainst(window); err != nil {
+		t.Errorf("a budget of exactly a tenth of the window is allowed, got %v", err)
+	}
+	cfg = NatsFetchConfiguration{AheadHoldBudgetMillis: 6001}
+	err := cfg.ValidateAgainst(window)
+	if err == nil || !strings.Contains(err.Error(), "aheadHoldBudgetMillis") {
+		t.Errorf("a budget over a tenth of the window: got %v, want a refusal naming aheadHoldBudgetMillis", err)
+	}
+	// Unset means the default, capped by the window rather than refused for it.
+	if got := (NatsFetchConfiguration{}).HoldBudget(window); got != time.Second {
+		t.Errorf("default budget = %v, want 1s", got)
+	}
+	if got := (NatsFetchConfiguration{}).HoldBudget(3 * time.Second); got != 300*time.Millisecond {
+		t.Errorf("default budget under a 3s window = %v, want 300ms", got)
+	}
+	if got := (NatsFetchConfiguration{}).BatchSize(); got != DefaultFetchBatch {
+		t.Errorf("default batch = %d, want %d", got, DefaultFetchBatch)
+	}
+}

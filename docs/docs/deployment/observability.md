@@ -478,6 +478,24 @@ The alert reads `devicechain_<area>_reader_held_past_ack_wait_total{durable, sta
 exists at 0 from the moment the reader is created, so `increase()` sees a pod's first occurrence.
 Each pod counts only the messages it held, so combine pods with `sum`, not `max`.
 
+## Fetching ahead {#fetch-ahead}
+
+By default a service pulls 64 messages from the broker, works through them, and only then asks
+for the next 64, so the time each pull takes is added to the work. On a busy broker that time
+is several milliseconds, and it caps how fast one consumer can read. The `infrastructure.nats.fetch`
+settings change that. They are read when a service starts, so a change is a restart, and they
+touch no consumer on the broker.
+
+| Setting | Default | What it does |
+| --- | --- | --- |
+| `batch` | 64 | How many messages one pull asks for, from 1 to 256 (anything else is refused at startup). A larger batch spreads the pull's time over more messages. It is also the most one dropped connection can lose from a single pull, and the detection engine reads that range back from the stream before it carries on. |
+| `ahead` | off | Ask for the next batch while the current one is still being handed out, so the pull overlaps the work. Messages are still handled in the order they arrive. |
+| `aheadHoldBudgetMillis` | 1000 | A batch asked for ahead waits while the one before it is handled, and its acknowledgement window is already running. If recent batches take longer than this to hand out, the service stops asking ahead and goes back to one pull at a time. At most a tenth of the acknowledgement window, or the service refuses to start. |
+
+Services that read only as many messages as they have workers free (alarm notifications and
+outbound connectors) ignore these settings. When a service stops, a batch it had asked for ahead
+is not acknowledged, so the broker hands it to the next reader once its window closes.
+
 ## Messages that ran out of delivery attempts {#max-delivery-records}
 
 After five unacknowledged deliveries the broker stops handing a message out. It publishes a

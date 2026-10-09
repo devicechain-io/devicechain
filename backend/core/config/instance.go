@@ -116,6 +116,96 @@ type NatsConfiguration struct {
 	// (ADR-025): the shared service credential every internal service presents, and
 	// (device-management only) the callout issuer seed.
 	Auth NatsAuthConfiguration
+	// Fetch shapes how every plain durable reader pulls from the broker. It is a FIXED-plane
+	// setting: it is read once when a reader is built and touches no durable consumer
+	// config, so changing it is a restart, never a consumer recreate.
+	Fetch NatsFetchConfiguration
+}
+
+// Bounds and defaults for NatsFetchConfiguration.
+const (
+	// DefaultFetchBatch is how many messages one pull asks for when Batch is unset.
+	DefaultFetchBatch = 64
+	// MaxFetchBatch is the widest pull the platform allows. It is the same number as the
+	// widest range the event-processing gap fill reads one request per sequence
+	// (messaging's rangeDirectMax; a compile-time assertion there keeps the two equal), so
+	// the range a lost pull leaves behind is always one the cheap path reads.
+	MaxFetchBatch = 256
+	// DefaultFetchAheadHoldBudgetMillis is how long a reader's recent batches may take to
+	// drain before it stops fetching ahead, when AheadHoldBudgetMillis is unset.
+	DefaultFetchAheadHoldBudgetMillis = 1000
+	// fetchAheadBudgetDivisor sizes the hold budget against the acknowledgement window: a
+	// batch fetched ahead waits roughly one budget before it is handed out, and that wait
+	// is spent from the same window the handler needs.
+	fetchAheadBudgetDivisor = 10
+)
+
+// NatsFetchConfiguration is the pull shape of the plain durable readers. Readers that
+// fetch only as many messages as they have free workers (the capacity readers) ignore it.
+type NatsFetchConfiguration struct {
+	// Batch is how many messages one pull asks for: 1 to MaxFetchBatch, 0 meaning
+	// DefaultFetchBatch. A larger batch amortizes the round trip over more messages, and
+	// is also the most a single dropped connection can lose from one pull (Batch-1),
+	// which the live gap fill then reads back from the stream.
+	Batch int
+	// Ahead, when true, has a reader ask for its next batch while the caller is still
+	// working through the one in hand, so the round trip overlaps the work instead of
+	// following it. Messages are still handed out in the order they arrive.
+	Ahead bool
+	// AheadHoldBudgetMillis is the longest a reader's batches may take to hand out and
+	// still be fetched ahead; past it the reader falls back to one pull at a time, so a
+	// slow consumer never holds a prefetched batch against the acknowledgement window.
+	// 0 means DefaultFetchAheadHoldBudgetMillis (capped at a tenth of the window); an
+	// explicit value may be at most a tenth of the window.
+	AheadHoldBudgetMillis int
+}
+
+// validate checks the parts of the fetch settings that do not depend on the
+// acknowledgement window.
+func (c NatsFetchConfiguration) validate() error {
+	if c.Batch < 0 || c.Batch > MaxFetchBatch {
+		return fmt.Errorf("infrastructure.nats.fetch.batch is %d; it must be between 1 and %d "+
+			"(0 or absent means %d)", c.Batch, MaxFetchBatch, DefaultFetchBatch)
+	}
+	if c.AheadHoldBudgetMillis < 0 {
+		return fmt.Errorf("infrastructure.nats.fetch.aheadHoldBudgetMillis is %d; it cannot be negative "+
+			"(0 or absent means %d)", c.AheadHoldBudgetMillis, DefaultFetchAheadHoldBudgetMillis)
+	}
+	return nil
+}
+
+// ValidateAgainst adds the check that needs the broker's acknowledgement window, which
+// lives in the messaging package: an explicit hold budget may be at most a tenth of it.
+func (c NatsFetchConfiguration) ValidateAgainst(ackWait time.Duration) error {
+	if err := c.validate(); err != nil {
+		return err
+	}
+	if limit := ackWait / fetchAheadBudgetDivisor; c.AheadHoldBudgetMillis > 0 &&
+		time.Duration(c.AheadHoldBudgetMillis)*time.Millisecond > limit {
+		return fmt.Errorf("infrastructure.nats.fetch.aheadHoldBudgetMillis is %d, which is more than a "+
+			"tenth of the %s acknowledgement window (%d ms at most). A batch fetched ahead waits about "+
+			"one budget before it is handed out, and that wait comes out of the window the handler "+
+			"needs. Lower it to %d or less",
+			c.AheadHoldBudgetMillis, ackWait, limit.Milliseconds(), limit.Milliseconds())
+	}
+	return nil
+}
+
+// HoldBudget is the budget in force for a window: the configured value, or the default
+// capped at a tenth of the window.
+func (c NatsFetchConfiguration) HoldBudget(ackWait time.Duration) time.Duration {
+	if c.AheadHoldBudgetMillis > 0 {
+		return time.Duration(c.AheadHoldBudgetMillis) * time.Millisecond
+	}
+	return min(DefaultFetchAheadHoldBudgetMillis*time.Millisecond, ackWait/fetchAheadBudgetDivisor)
+}
+
+// BatchSize is the pull size in force.
+func (c NatsFetchConfiguration) BatchSize() int {
+	if c.Batch <= 0 {
+		return DefaultFetchBatch
+	}
+	return c.Batch
 }
 
 // NatsAuthConfiguration is the broker-authentication material threaded into the
@@ -930,6 +1020,9 @@ func (c *InstanceConfiguration) Validate() error {
 		return err
 	}
 	if err := c.Infrastructure.Nats.validateStreamReplicas(); err != nil {
+		return err
+	}
+	if err := c.Infrastructure.Nats.Fetch.validate(); err != nil {
 		return err
 	}
 	if err := c.Infrastructure.Shutdown.validate(); err != nil {

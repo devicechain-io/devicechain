@@ -35,6 +35,16 @@ import (
 // serving rule, roster, attribute and fence updates and tenant purges meanwhile.
 //
 // With no gap the cost is the one comparison in handle.
+//
+// HOW WIDE A GAP CAN BE. The reader has one pull request in flight at a time (with fetch-ahead
+// on, the next is issued while the current batch is handed out, and its result is consumed
+// before another is issued), so a dropped connection can cost the deliveries of at most ONE
+// pull: a range of at most one fetch batch, never two ranges. That batch is configured by
+// infrastructure.nats.fetch.batch, which is refused above 256 at startup, and 256 is the widest
+// range NewRangeReader reads one request per sequence (rangeDirectMax). So the fill of a gap
+// the live path itself produced is always the cheap path; a wider one can only mean something
+// other than a lost pull (a stream that lost its head, a purge) and takes the range reader's
+// wide path, which handles any width.
 
 // Outcome label values for detect_live_gap_fills_total.
 const (

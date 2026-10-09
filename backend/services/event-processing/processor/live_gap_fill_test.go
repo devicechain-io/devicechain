@@ -522,3 +522,28 @@ func TestTheLoopParksOnAnUnreadableGapAndStillServesPurges(t *testing.T) {
 		}
 	}
 }
+
+// A WHOLE LOST PULL, AT THE WIDTHS THE FETCH BATCH CAN BE CONFIGURED TO. With one request in
+// flight a dropped connection can cost one full batch, and the batch may be set as high as 256
+// (infrastructure.nats.fetch.batch): the range it leaves must come back in ONE range read, with
+// every sequence applied in order before the message that exposed the gap, and no replay.
+func TestAWholeLostBatchIsFilledByOneRangeRead(t *testing.T) {
+	for _, batch := range []uint64{64, 128, 256} {
+		t.Run(fmt.Sprintf("batch-%d", batch), func(t *testing.T) {
+			last := batch + 1 // the lost pull is 2..batch+1
+			opener := &fakeReplayOpener{msgs: stream(t, span(2, last)...)}
+			g := newGapRig(t, opener)
+
+			g.rp.handle(hot(t, 1, &fakeAck{}))
+			g.rp.handle(hot(t, last+1, &fakeAck{}))
+			g.commit(t)
+
+			equal(t, "range reads", opener.rangeReads, [][2]uint64{{2, last}})
+			equal(t, "published, in order", g.rec.published(), series(span(1, last+1)...))
+			equal(t, "applied", g.seqs(gapSeqApplied), float64(batch))
+			equal(t, "absent", g.seqs(gapSeqAbsent), 0.0)
+			equal(t, "filled", g.fills(gapFillFilled), 1.0)
+			equal(t, "failed", g.fills(gapFillFailed), 0.0)
+		})
+	}
+}

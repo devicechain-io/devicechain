@@ -222,6 +222,20 @@ instance:
         # bound. See kv.All in backend/core/kv for the per-bucket classification.
         kvCacheMaxBytes: 67108864 # 64 MiB per cache bucket (5 buckets)
         kvStateMaxBytes: 134217728 # 128 MiB per state bucket (6 buckets)
+        # How the plain durable readers pull from the broker. Optional; omitted, a reader
+        # asks for 64 messages and waits for them before asking again. This is a fixed
+        # setting read when a reader is built, so changing it is a restart and touches no
+        # consumer. Readers that fetch only as many messages as they have free workers
+        # (outbound connectors, notifications, REACT) ignore it.
+        #   batch                 messages per pull, 1-256 (0 = 64). Also the most one dropped
+        #                         connection can lose from a pull.
+        #   ahead                 ask for the next batch while the current one is handed out.
+        #   aheadHoldBudgetMillis stop asking ahead while recent batches take longer than this
+        #                         to hand out (0 = 1000; at most a tenth of the 60 s ack window).
+        # fetch:
+        #   batch: 64
+        #   ahead: false
+        #   aheadHoldBudgetMillis: 1000
         # Client-side TLS to the broker (ADR-025). MUST match the broker: the
         # OpenTofu nats module terminates TLS on the 4222 + 1883 listeners and
         # emits its CA as the `nats_ca` output, which the bring-up threads in here
