@@ -477,12 +477,12 @@ func (jd *JsonDecoder) Decode(payload []byte, receivedAt time.Time) (*model.Unre
 // input is not provably equivalent, or it failed somewhere and the reference path owns
 // the error. It never returns a partial result.
 func (jd *JsonDecoder) decodeOnce(payload []byte, receivedAt time.Time) (*model.UnresolvedEvent, interface{}, bool) {
-	raw := &rawJsonEvent{}
-	if err := json.Unmarshal(payload, raw); err != nil {
+	// The cheap scan goes first so input headed for the reference path pays for nothing else.
+	if !canonicalKeys(payload) {
 		return nil, nil, false
 	}
-	// The envelope parse has validated the whole document, which canonicalKeys relies on.
-	if !canonicalKeys(payload) {
+	raw := &rawJsonEvent{}
+	if err := json.Unmarshal(payload, raw); err != nil {
 		return nil, nil, false
 	}
 	event, err := jd.AssembleEvent(&raw.JsonEvent, receivedAt)

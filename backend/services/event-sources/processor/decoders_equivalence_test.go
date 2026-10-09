@@ -115,7 +115,7 @@ func equivCases() []equivCase {
 		{"measurement several entries and readings", envelope(m, `{"entries":[{"measurements":{"a":"1","b":"2.50","c":"-0"}},{"measurements":{"a":"3"}}]}`), true},
 		{"measurement entry and envelope times", `{"device":"d","eventType":"Measurement","occurredTime":"2026-10-01T11:59:00Z","payload":{"entries":[{"occurredTime":"2026-10-01T11:58:00+02:00","measurements":{"a":"1"}}]}}`, true},
 		{"measurement envelope extras", `{"altId":"x","device":"d","relationship":"r","credentialType":"t","credentialId":"i","credentialSecret":"s","eventType":"Measurement","payload":{"entries":[{"measurements":{"a":"1"}}]}}`, true},
-		{"measurement unknown fields everywhere", `{"device":"d","eventType":"Measurement","extra":{"x":[1,2,{"y":null}]},"payload":{"unknown":[1,2.5e3,true,null],"entries":[{"junk":{"k":1},"measurements":{"a":"1"}}]}}`, true},
+		{"measurement unknown fields everywhere", `{"device":"d","eventType":"Measurement","extra":{"x":[1,2,{"y":null}]},"payload":{"unknown":[1,2500.5,true,null],"entries":[{"junk":{"k":1},"measurements":{"a":"1"}}]}}`, true},
 		{"measurement null value and empty string", envelope(m, `{"entries":[{"measurements":{"a":null,"b":""}}]}`), true},
 		{"measurement big-integer strings", envelope(m, `{"entries":[{"measurements":{"a":"18446744073709551616","b":"9007199254740993","c":"1e400","d":"0.1000000000000000055511151231257827"}}]}`), true},
 		{"measurement lowercase-distinct keys", envelope(m, `{"entries":[{"measurements":{"Temp":"1","temp":"2"}}]}`), false},
@@ -216,6 +216,19 @@ func equivCases() []equivCase {
 		{"mixed-case struct keys without a collision", `{"Device":"d","EventType":"Measurement","Payload":{"Entries":[{"Measurements":{"a":"1"}}]}}`, true},
 		{"many keys with a duplicate", envelope(m, strings.Replace(bigObject(40), `"m0039":"39"`, `"m0000":"39"`, 1)), false},
 		{"many keys with a respelled duplicate", envelope(m, strings.Replace(bigObject(40), `"m0039":"39"`, `"M0000":"39"`, 1)), false},
+		// A number that overflows float64 inside a field the typed structs ignore: the reference
+		// decodes every value into interface{} and rejects the whole document, so the single-pass
+		// decode must decline rather than skip the field.
+		{"overflow in unknown payload field", `{"device":"dev-1","eventType":"Measurement","payload":{"entries":[{"measurements":{"a":"1"}}],"x":1e400}}`, false},
+		{"overflow in unknown entry field", envelope(m, `{"entries":[{"measurements":{"a":"1"},"x":-1e400}]}`), false},
+		{"overflow in unknown location field", envelope("Location", `{"entries":[{"latitude":"1","longitude":"2","x":[1e999]}]}`), false},
+		{"overflow in unknown alert field", envelope("Alert", `{"entries":[{"type":"t","level":1,"x":{"y":1e400}}]}`), false},
+		{"overflow in unknown envelope field", `{"device":"d","eventType":"Measurement","x":1E+400,"payload":{"entries":[{"measurements":{"a":"1"}}]}}`, false},
+		{"309-digit integer in unknown field", envelope(m, `{"x":1`+strings.Repeat("0", 308)+`,"entries":[{"measurements":{"a":"1"}}]}`), false},
+		{"308-digit integer in unknown field", envelope(m, `{"x":1`+strings.Repeat("0", 307)+`,"entries":[{"measurements":{"a":"1"}}]}`), true},
+		{"underflow in unknown field", envelope(m, `{"x":1e-400,"entries":[{"measurements":{"a":"1"}}]}`), true},
+		{"exponent in alert level", envelope("Alert", `{"entries":[{"type":"t","level":1e0}]}`), false},
+		{"benign exponent in unknown field", envelope(m, `{"x":2.5e3,"entries":[{"measurements":{"a":"1"}}]}`), false},
 		{"many distinct keys", envelope(m, bigObject(40)), true},
 
 		// Keys the scan will not reason about.
@@ -310,6 +323,14 @@ func TestCanonicalKeys(t *testing.T) {
 		{`{"a\"":1}`, false},                // escaped key
 		{"{\"\xc3\xa9\":1}", false},         // non-ascii key
 		{`["a","a"]`, true},                 // array elements are not keys
+		{`{"a":["x","a"]}`, true},           // nor are strings in an array that is an object's value
+		{`{"a":1e400}`, false},
+		{`{"a":1e-400}`, true},
+		{`{"a":[1.5E+3]}`, false},
+		{`{"a":1}}`, false}, // not valid JSON: declined, not followed
+		{`{"a":[1}`, false},
+		{`{"a":"x`, false},
+		{`{"a":1`, false},
 		{`{"a":["x",{"b":1}],"c":1}`, true},
 		{`{"a":1}`, true},
 	} {
