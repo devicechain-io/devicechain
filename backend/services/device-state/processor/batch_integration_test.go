@@ -147,6 +147,12 @@ func TestTheSweepAndBatchesContendWithoutLosingAnything(t *testing.T) {
 	// redelivery; each one is owed exactly one recorded result.
 	var handed float64
 	var redelivered int
+	// Since a deadlocked single write is retried in place, an event is rarely left for
+	// redelivery any more (a run can see none at all), so the loop below seldom does anything.
+	// It stays as a hedge: a write can still lose every in-place attempt, and then the broker's
+	// redelivery, not a wall-clock wait, is what applies the event. The unit tests beside the
+	// processor cover the retry-or-redeliver decision deterministically.
+	//
 	// deliverUntilApplied hands the messages in, waits until every one has a recorded result
 	// (a wall-clock wait on acknowledgements would be a verdict on timing), then gives back
 	// the ones left unacknowledged with their delivery count raised, until all are acked.
@@ -256,9 +262,16 @@ func TestTheSweepAndBatchesContendWithoutLosingAnything(t *testing.T) {
 			t.Errorf("%s active=%v activity=%v; want active at %v", ds.DeviceToken, ds.Active, ds.LastActivityTime.Time, want)
 		}
 	}
+	// Every result=retry is an event left unacknowledged, and every such event was handed
+	// back exactly once: the two counts are the same fact seen from the processor and from
+	// the broker. An event acknowledged yet recorded as retry (or the reverse) breaks this.
 	retried, _, _, _ := gathered(t, reg, "state_messages_total", core.ResultRetry)
-	t.Logf("contended sweeps failed %d time(s); batch fallbacks %v; events left for redelivery %d (result=retry %v); final sweep flipped %d",
-		sweepErrs.Load(), testutil.ToFloat64(metrics.fallbacks), redelivered, retried, flipped)
+	if retried != float64(redelivered) {
+		t.Errorf("state_messages_total{result=retry} = %v; want %d, the events handed back for redelivery", retried, redelivered)
+	}
+	inPlace, _, _, _ := gathered(t, reg, "state_write_conflict_retries_total", "")
+	t.Logf("contended sweeps failed %d time(s); batch fallbacks %v; events left for redelivery %d; writes retried in place %v; final sweep flipped %d",
+		sweepErrs.Load(), testutil.ToFloat64(metrics.fallbacks), redelivered, inPlace, flipped)
 }
 
 // eventAck counts the acknowledgements of ONE event across all its deliveries, so a test can

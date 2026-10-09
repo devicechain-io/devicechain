@@ -683,6 +683,7 @@ it is merged again on its own.
 | --- | --- |
 | `devicechain_devicestate_state_batch_size` | Events per committed transaction. Mostly `1` means the writers are keeping up. |
 | `devicechain_devicestate_state_batch_fallbacks_total` | Batch transactions that did not commit, after which their events were merged again. A steady rate means one tenant's writes are being refused repeatedly, such as a deleted tenant whose devices are still sending. |
+| `devicechain_devicestate_state_write_conflict_retries_total` | Single-event writes run again in place after PostgreSQL aborted them as a deadlock victim or serialization failure. A rate that keeps climbing means the inactivity sweep and the writers are colliding often; an event whose retries are all lost is left for redelivery and counted as `retry` in the message results. |
 | `devicechain_devicestate_state_inflight` | Events writers hold, including those waiting for their batch to commit. |
 
 `state_duration_seconds` measures each event from when a writer takes it until its batch commits.

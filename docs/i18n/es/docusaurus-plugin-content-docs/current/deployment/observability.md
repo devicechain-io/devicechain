@@ -713,6 +713,7 @@ cada uno de sus eventos se vuelve a fusionar por separado.
 | --- | --- |
 | `devicechain_devicestate_state_batch_size` | Eventos por transacción confirmada. Si casi siempre es `1`, los escritores van al día. |
 | `devicechain_devicestate_state_batch_fallbacks_total` | Transacciones de lote que no se confirmaron, tras lo cual sus eventos se volvieron a fusionar. Un ritmo constante indica que las escrituras de un inquilino se rechazan una y otra vez, por ejemplo las de un inquilino eliminado cuyos dispositivos siguen enviando. |
+| `devicechain_devicestate_state_write_conflict_retries_total` | Escrituras de un solo evento que se repitieron en el momento tras abortarlas PostgreSQL como víctima de un interbloqueo o por un fallo de serialización. Un ritmo que sigue subiendo indica que el barrido de inactividad y los escritores colisionan a menudo; un evento cuyos reintentos se pierden todos queda para reentrega y se cuenta como `retry` en los resultados de mensajes. |
 | `devicechain_devicestate_state_inflight` | Eventos que tienen los escritores, incluidos los que esperan a que su lote se confirme. |
 
 `state_duration_seconds` mide cada evento desde que un escritor lo toma hasta que su lote se

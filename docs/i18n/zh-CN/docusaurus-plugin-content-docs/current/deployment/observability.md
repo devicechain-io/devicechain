@@ -330,6 +330,7 @@ kube-state-metrics 本身因节点失效等原因移动期间的重启，只要�
 | --- | --- |
 | `devicechain_devicestate_state_batch_size` | 每提交事务事件数，通常 `1` 表示跟得上。 |
 | `devicechain_devicestate_state_batch_fallbacks_total` | 未提交、随后重合并的批次。持续增长表示某租户写入反复拒绝，例如删除租户设备仍发送。 |
+| `devicechain_devicestate_state_write_conflict_retries_total` | 单事件写入被 PostgreSQL 作为死锁受害者或序列化失败中止后，就地重新执行的次数。持续增长表示不活动扫描与写入方频繁冲突；重试全部失败的事件留待重投递，并在消息结果中计为 `retry`。 |
 | `devicechain_devicestate_state_inflight` | 写入器持有事件，包括等待批提交。 |
 
 `state_duration_seconds` 从写入器取得事件计到批提交。
