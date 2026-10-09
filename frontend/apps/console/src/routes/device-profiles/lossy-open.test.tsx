@@ -54,7 +54,7 @@ const rule = (definition: string): DetectionRule =>
   }) as unknown as DetectionRule;
 
 const WARNING = /This form cannot express everything this rule/;
-const UNREADABLE = /could not be read into the form/;
+const UNREADABLE = /stored definition can.t be read/i;
 
 const threshold = JSON.stringify({
   name: 'A rule',
@@ -95,13 +95,17 @@ describe('opening a stored rule the form cannot fully hold', () => {
     expect(screen.queryByText(UNREADABLE)).toBeNull();
   });
 
-  it('reports an unreadable definition differently from a lossy one', () => {
-    render(<DetectionRuleForm profileToken="p" entity={rule('{not json at all')} onDone={() => {}} />);
+  // 🔴 AN UNREADABLE DEFINITION USED TO OPEN AS A BLANK THRESHOLD whose Save overwrote the stored
+  // bytes. It now opens read-only: an alert, the raw text verbatim, and no way to save.
+  it.each(['{not json at all', 'null', '[1,2]'])('opens an unreadable definition (%s) read-only', (raw) => {
+    render(<DetectionRuleForm profileToken="p" entity={rule(raw)} onDone={() => {}} />);
 
-    expect(screen.getByText(UNREADABLE)).toBeTruthy();
-    // The two sentences describe different situations and must not both appear: an unparseable
-    // rule opens BLANK, a lossy one opens with everything the form did understand.
+    expect(screen.getByRole('alert').textContent).toMatch(UNREADABLE);
+    expect(screen.queryByRole('button', { name: /save changes/i })).toBeNull();
+    expect(screen.queryByLabelText(/metric/i)).toBeNull();
+    expect((screen.getByLabelText(/stored definition/i) as HTMLTextAreaElement).value).toBe(raw);
     expect(screen.queryByText(WARNING)).toBeNull();
+    expect(updateDetectionRule).not.toHaveBeenCalled();
   });
 
   // 🔴 THE PATH THAT HAD NO WARNING AT ALL. The "Describe" door hands the form a definition a

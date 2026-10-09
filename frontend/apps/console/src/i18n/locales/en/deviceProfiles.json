@@ -423,7 +423,7 @@
   "ruleUnmodelledType": "This rule's type (\"{{type}}\") can't be edited in the form. The form does not know this kind of rule, and showing it as another kind would change what it does. The stored rule is left exactly as it is; edit it through the API.",
   "ruleUnmodelledTypeMissing": "This rule has no recognisable type, so it can't be edited in the form. Showing it as a particular kind would change what it does. The stored rule is left exactly as it is; edit it through the API.",
   "ruleUnmodelledStoredLabel": "Stored definition (read-only)",
-  "ruleUnparseableWarning": "This rule's stored definition could not be read into the form. It has been reset to a blank threshold rule — saving will replace the original definition.",
+  "ruleUnparseableWarning": "This rule's stored definition can't be read as a rule, so it can't be edited in the form. The stored definition is left exactly as it is; edit it through the API.",
   "ruleUpdatedToast": "Detection rule “{{token}}” updated",
   "ruleValueMetricDescriptionAgg": "The metric folded by the aggregate.",
   "ruleValueMetricDescriptionDelta": "The metric whose change is measured.",

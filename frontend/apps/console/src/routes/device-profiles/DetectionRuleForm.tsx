@@ -454,7 +454,7 @@ export function DetectionRuleForm({
   // is stable across renders when inputs are — which keeps the validation effect below from
   // firing on every render.
   const definition =
-    hint == null && unmodelledType == null
+    hint == null && unmodelledType == null && !unparseable
       ? buildDefinition({
           definitionName,
           description,
@@ -601,7 +601,7 @@ export function DetectionRuleForm({
   }, [scoped, scopeGroupToken, scopeGroupVersion, scopeVersions, ruleType]);
 
   const submit = async () => {
-    if (definition == null || unmodelledType != null) return; // guarded by the disabled button; satisfies the type narrowing
+    if (definition == null || unmodelledType != null || unparseable) return; // guarded by the disabled button; satisfies the type narrowing
     setFormError(null);
     setBusy(true);
     try {
@@ -674,21 +674,26 @@ export function DetectionRuleForm({
   // click before the versions fetch resolved); the backend would reject the publish anyway.
   const scopeHint = scopeChosen && scopeGroupVersion == null ? t('ruleScopeHalfSetHint') : null;
 
-  if (unmodelledType != null && source != null) {
+  if ((unmodelledType != null || unparseable) && source != null) {
     // Not dismissable and no Save: the original stays exactly as stored. The bytes are shown
     // verbatim, read-only, so the operator can see what the rule says.
+    // Unreadable text is shown byte-for-byte; a readable rule is pretty-printed.
     let pretty = source;
-    try {
-      pretty = JSON.stringify(JSON.parse(source), null, 2);
-    } catch {
-      // shown as stored
+    if (!unparseable) {
+      try {
+        pretty = JSON.stringify(JSON.parse(source), null, 2);
+      } catch {
+        // shown as stored
+      }
     }
     return (
       <div className="space-y-4">
         <div role="alert" className="rounded-md border border-amber-500/50 bg-amber-500/10 px-3 py-2 text-sm text-amber-700 dark:text-amber-400">
-          {unmodelledType === ''
-            ? t('ruleUnmodelledTypeMissing')
-            : t('ruleUnmodelledType', { type: unmodelledType })}
+          {unparseable
+            ? t('ruleUnparseableWarning')
+            : unmodelledType === ''
+              ? t('ruleUnmodelledTypeMissing')
+              : t('ruleUnmodelledType', { type: unmodelledType })}
         </div>
         <FormField label={t('ruleUnmodelledStoredLabel')} htmlFor="dr-unmodelled-source">
           <Textarea id="dr-unmodelled-source" aria-label={t('ruleUnmodelledStoredLabel')} readOnly value={pretty} className="min-h-48 font-mono text-xs" />
@@ -700,7 +705,6 @@ export function DetectionRuleForm({
   return (
     <div className="space-y-4">
       {formError && <ErrorBanner message={formError} onDismiss={() => setFormError(null)} />}
-      {unparseable && <p className="rounded-md border border-amber-500/50 bg-amber-500/10 px-3 py-2 text-sm text-amber-700 dark:text-amber-400">{t('ruleUnparseableWarning')}</p>}
       {lossyOpen && <p className="rounded-md border border-amber-500/50 bg-amber-500/10 px-3 py-2 text-sm text-amber-700 dark:text-amber-400">{t('ruleLossyOpenWarning')}</p>}
 
       <FormField label={t('common:colName')} htmlFor="dr-name" description={t('ruleNameDescription')}>
