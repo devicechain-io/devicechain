@@ -276,6 +276,8 @@ dcctl dead-letters list --server <host> --email <you> --password <secret> \
 | `ReactShedLettersOverBudget` | 租户丢弃动作速度超过逐条记录预算，超出部分每租户每分钟汇总一封死信。 |
 | `RateMeteringClockFallback` | 对外动作缺少触发时间，连续一小时按消息代理或到达时间计量，可能把追赶误认为洪峰。检查事件处理与对外连接器是否运行同一版本。触发时间晚于消息代理时间时另以 `capped` 来源统计，不触发本告警；这是 Pod 与消息代理时钟偏差，不是缺失时间。 |
 | `DetectFactReconcileFailing` | 无法与设备管理比较规则、配置版本、设备和阈值。失败期间不会移除内容，但遗漏变更持续遗漏，直到恢复。 |
+| `DetectLiveGapFillFailing` | 实时检测已停止，因为无法读取事件流的一部分。引擎不会跳过尚未看到的事件，因此在代理恢复响应之前不会应用任何新事件，积压会增长。规则和租户的变更仍会应用，且不会丢失任何数据。请检查代理以及引擎与代理的连接。 |
+| `DetectLiveDeliveriesRecovered` | 代理已投递的事件未到达引擎，引擎已从事件流中读取这些事件并按顺序应用。检测结果是正确的。如果反复出现，说明与代理的连接在断开，或有两个引擎同时在消费。 |
 | `DetectFactsRepaired` | 引擎修复了未收到通知的状态。检测已恢复正确；反复出现说明通知丢失。 |
 | `DeviceFactPublishFailing` | 设备管理无法发送变更通知。变更仍会到达引擎，只延迟几分钟。 |
 | `DetectTenantOverStateBudget` | 租户超过不强制执行的规则数、活动窗口和定时器，或窗口保留读数上限。 |

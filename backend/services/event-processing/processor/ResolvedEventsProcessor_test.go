@@ -107,6 +107,8 @@ type fakeReplayOpener struct {
 	msgs      []messaging.Message
 	head      uint64
 	lastStart uint64
+	// rangeReads records each gap fill the loop asked for, as [from, to].
+	rangeReads [][2]uint64
 }
 
 func (f *fakeReplayOpener) NewReplayReader(suffix string, startSeq uint64) (messaging.ReplayReader, uint64, error) {
@@ -118,6 +120,20 @@ func (f *fakeReplayOpener) NewReplayReader(suffix string, startSeq uint64) (mess
 		}
 	}
 	return &fakeReplayReader{msgs: out}, f.head, nil
+}
+
+// NewRangeReader answers a gap fill from the same preset messages, whatever the head: the
+// fake holds an ordered stream and a range is whatever of it falls inside [from, to]. A
+// sequence it does not hold is absent, as in the broker.
+func (f *fakeReplayOpener) NewRangeReader(_ string, from, to uint64) (messaging.ReplayReader, error) {
+	f.rangeReads = append(f.rangeReads, [2]uint64{from, to})
+	var out []messaging.Message
+	for _, m := range f.msgs {
+		if m.StreamSeq >= from && m.StreamSeq <= to {
+			out = append(out, m)
+		}
+	}
+	return &fakeReplayReader{msgs: out}, nil
 }
 
 type fakeReplayReader struct {

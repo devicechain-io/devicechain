@@ -123,6 +123,23 @@ spec:
           annotations:
             summary: "The detection engine cannot compare its rules and devices with device-management"
             description: "event-processing's comparison with device-management (or the tenant list from user-management) is failing; the projection label says which part. Nothing is removed while it fails; what is lost is the repair — a missed rule, device or threshold change stays missed until the comparison succeeds. The tenant and cause are in event-processing's error log. Check device-management and user-management health and the service secret; during a rolling upgrade a message that device-management is running an older build is expected briefly."
+        - alert: DetectLiveGapFillFailing
+          expr: sum(rate(devicechain_eventprocessing_detect_live_gap_fills_total{namespace="{{ $ns }}",outcome="failed"}[5m])) > 0
+          for: 5m
+          labels:
+            severity: critical
+            devicechain_instance: {{ $id }}
+          annotations:
+            summary: "Live detection has stopped because part of the event stream cannot be read"
+            description: "The detection engine received an event after a stretch of the stream it had not seen, and cannot read that stretch from the broker. It has stopped applying live events rather than skip past it: no new detections are produced until the read succeeds, and the backlog grows (see DetectConsumerBacklogHigh). Rule, device and tenant changes are still being applied. Nothing is lost; the stretch is read as soon as the broker answers. Check the NATS broker health and its connection from event-processing; the cause is in event-processing error log."
+        - alert: DetectLiveDeliveriesRecovered
+          expr: sum(increase(devicechain_eventprocessing_detect_live_gap_sequences_total{namespace="{{ $ns }}",outcome="applied"}[30m])) > 0
+          labels:
+            severity: warning
+            devicechain_instance: {{ $id }}
+          annotations:
+            summary: "Events the broker delivered never reached the detection engine, and were recovered"
+            description: "The detection engine found events the broker had handed out that it never received (a connection dropped mid-delivery, or a second engine took part of the stream), read them from the stream and applied them in order. Detection is correct; without this recovery those events would have been skipped. Recurring means connections between event-processing and the broker are dropping under load, or two engines are consuming at once: check the broker, the network between them, and DetectHasNoLeader / replica counts."
         - alert: DetectFenceGeometryUnresolved
           expr: sum(rate(devicechain_eventprocessing_detect_fence_geometry_unresolved_total{namespace="{{ $ns }}"}[5m])) > 0
           for: 10m

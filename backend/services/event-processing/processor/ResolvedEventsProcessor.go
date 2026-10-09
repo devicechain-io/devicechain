@@ -67,6 +67,10 @@ const maxRulePersistBackoff = 30 * time.Second
 // loop can be tested without a broker.
 type ReplayOpener interface {
 	NewReplayReader(suffix string, startSeq uint64) (messaging.ReplayReader, uint64, error)
+	// NewRangeReader reads exactly the stream sequences [from, to] in order, for the live
+	// loop's gap fill (live_gap.go). A sequence the stream no longer holds produces no
+	// message; any other failure is an error, never a short result.
+	NewRangeReader(suffix string, from, to uint64) (messaging.ReplayReader, error)
 }
 
 // Config tunes the checkpoint loop (ADR-051 correctness spine).
@@ -135,8 +139,9 @@ type Config struct {
 // (streams.Stream.ReplayCovered), so the platform's max-delivery recorder writes no dead
 // letter when this durable's deliveries run out — it counts them instead. That is true only
 // while this processor acks behind a committed checkpoint, applies every delivery on first
-// sight, and replays the stream by sequence on restart; replay_covers_exhausted_test.go
-// proves each against a real broker. A change that breaks any of the three must remove the
+// sight (or, when the broker's delivery order skipped ahead of it, reads what was skipped from
+// the stream and applies that first: see the live loop below), and replays the stream by
+// sequence on restart; replay_covers_exhausted_test.go proves each against a real broker. A change that breaks any of the three must remove the
 // declaration, or an exhausted event is lost with no record anywhere.
 //
 // "Every delivery on first sight" holds only for ONE writer, so the declaration also rests
@@ -145,15 +150,28 @@ type Config struct {
 // loss. A zombie leader that still believes it holds the partition can pull from the shared
 // durable and apply messages whose checkpoint is then refused — by the ownership check in
 // checkpoint, or by SnapshotStore.Save as a backward move (ErrStaleCheckpoint). Those
-// messages stay unacked and redeliver to the real leader, which may already be past their
-// sequence and drop them as duplicates (seq <= engine.LastSeq). That loss exists with or
-// without exhaustion. Exhausting deliveries would further need the zombie to outlive
+// messages stay unacked and redeliver to the real leader. They are not lost to the duplicate
+// guard: the zombie took them out of the delivery order, so the real leader's next message
+// sits past them, and the live gap check reads the range from the stream and applies it
+// before moving on (live_gap.go). Exhausting deliveries would further need the zombie to outlive
 // AckWait x MaxDeliver (5 minutes), and Holder.Held() goes false at the lease's LOCAL
 // deadline (last successful renew + DefaultLeaseTTL, 30s), which makes that unrealistic.
 //
 // Only after replay reaches the head does the live loop run, consuming the durable
-// reader. Redelivered duplicates (seq <= the replayed head) are dropped by the
-// engine's guard and acked; new events advance it.
+// reader. Redelivered duplicates (seq <= the engine's) are dropped by the engine's guard and
+// acked; new events advance it.
+//
+// THE LIVE LOOP'S GUARANTEE: the engine's sequence never passes a stream sequence that exists
+// and has been neither applied nor judged unprocessable. The durable's delivery order is not
+// the stream's: a delivery lost on the way (a Fetch cut short by a dropped connection, a
+// co-writer that took part of the stream) is redelivered only at AckWait, when the engine may
+// be well past it and the guard would drop it as a duplicate. So a live message more than one
+// past the engine's has the missing range read from the stream by position and applied before
+// it, ahead of the decode and the guard; sequences the stream no longer holds (a tenant purge,
+// retention) are counted, not applied. If the range cannot be read the loop parks on the
+// message and retries on the ticker, applying nothing past the gap. A duplicate the guard
+// drops is therefore always one that was applied or already judged unprocessable. live_gap.go has the mechanism and the
+// metrics (detect_live_gap_fills_total, detect_live_gap_sequences_total).
 //
 // Single-writer discipline: all engine mutation AND snapshotting happen on one
 // goroutine (replay runs on the startup goroutine before the live loop launches;
@@ -476,6 +494,18 @@ type ResolvedEventsProcessor struct {
 	// diverge on replay — while it is set, the loop refuses to apply further live events until a
 	// checkpoint commits (see the items branch and checkpoint).
 	idleUncommitted bool
+	// gapHeld is the live message the loop is parked on: its stream sequence was more than one
+	// past the engine's and the range in between could not be read (live_gap.go). While it is
+	// set the loop receives no live messages and idle-advance does not run; the ticker retries
+	// the fill, and on success applies the held message in order. The message is not in
+	// pendingAcks, so it is not acked until it has been applied and checkpointed.
+	gapHeld *messaging.Message
+	// gapFailLogged limits the gap-fill failure log to once per park, since the ticker retries.
+	gapFailLogged bool
+	// poisonSkipped counts sequences recorded as handled without applying (skipPoison). The gap
+	// fill reads it around each message to tell a skipped poison message from an applied one,
+	// since applyResolved reports both as having advanced the engine.
+	poisonSkipped uint64
 	// stale latches when Save refuses a backward checkpoint (ErrStaleCheckpoint) — proof that
 	// another writer owns this partition (split-brain: a rolling-update overlap or operator
 	// error). A stale writer has no legitimate future, so the loop halts: this bounds its
@@ -1485,8 +1515,11 @@ func (rp *ResolvedEventsProcessor) run() {
 		// duplicate AND acked — silently lost. Not receiving instead makes the pump HOLD the next
 		// message in delivery order; the ticker retries the commit and, once it succeeds and
 		// clears the park, the held message is delivered and applied in order, nothing skipped.
+		//
+		// The same park serves a sequence gap the loop could not read (gapHeld): the message in
+		// hand is applied only after the range before it, so nothing later may be received.
 		liveItems := items
-		if rp.idleUncommitted {
+		if rp.idleUncommitted || rp.gapHeld != nil {
 			liveItems = nil
 		}
 		select {
@@ -1559,6 +1592,9 @@ func (rp *ResolvedEventsProcessor) run() {
 			// time comparison in the loop — the guard, the interval, the idle-advance target —
 			// shares one injectable clock; a ManualClock test then drives the loop coherently.
 			now := rp.clock.Now()
+			// A gap the loop could not read is retried before anything else the tick does:
+			// idle-advance below stays off until it has been (it checks gapHeld).
+			rp.retryGapFill()
 			// Fire silent-series timers off the wall clock when the stream is caught up, then
 			// checkpoint. idleAdvance itself commits (and delivers) whenever it moved state, so
 			// the interval checkpoint below only handles the case idle-advance did not: buffered
@@ -1646,12 +1682,22 @@ func (rp *ResolvedEventsProcessor) readPump(items chan<- readItem, done chan<- s
 	}
 }
 
-// handle processes one LIVE message: buffer it for a post-checkpoint ack, then feed
-// it to the engine (or drop it if unprocessable). A duplicate (at or below LastSeq)
-// changes nothing. Poison with a stream sequence records that sequence via Engine.Skip and
-// marks the loop dirty, without applying any state. Every buffered message, either kind, is
-// acked at the next checkpoint.
+// handle processes one LIVE message: first make sure the engine has seen every stream
+// sequence before it (fillGap), then buffer it for a post-checkpoint ack and feed it to the
+// engine (or drop it if unprocessable). A duplicate (at or below LastSeq) changes nothing; it
+// was applied or recorded as handled already, because the gap check ahead of this point reads
+// any range the engine skipped. Poison with a stream sequence records that sequence via
+// Engine.Skip and marks the loop dirty, without applying any state. Every buffered message,
+// either kind, is acked at the next checkpoint.
 func (rp *ResolvedEventsProcessor) handle(msg messaging.Message) {
+	// THE ENGINE'S SEQUENCE NEVER PASSES A MESSAGE IT HAS NOT SEEN, and this is the only place
+	// that is enforced for live traffic, so it comes before the decode, the duplicate guard in
+	// applyResolved and anything that judges the message itself. Without it a delivery lost
+	// on the way (see live_gap.go) is redelivered later at a sequence the guard has already
+	// moved past, dropped as a duplicate, and acked. With no gap this is one comparison.
+	if msg.StreamSeq > rp.engine.LastSeq()+1 && !rp.fillGap(msg) {
+		return // parked on msg: it is applied, in order, once the gap has been read
+	}
 	rp.pendingAcks = append(rp.pendingAcks, msg)
 	rp.applyResolved(msg)
 }
@@ -1676,7 +1722,10 @@ func (rp *ResolvedEventsProcessor) applyResolved(msg messaging.Message) bool {
 	// The sequence guard runs BEFORE the tenant parse and the protobuf decode: it needs only the
 	// stream sequence, so a redelivered or replayed duplicate costs neither.
 	if msg.StreamSeq <= rp.engine.LastSeq() {
-		return false // duplicate/replayed message — acked, but no re-fan-out
+		// A duplicate/replayed message — acked, but no re-fan-out. On the live path this is only
+		// ever a message the engine applied or recorded as handled: a sequence the engine passed
+		// without seeing it is read from the stream by handle's gap check before this is reached.
+		return false
 	}
 	_, tenant, ok := messaging.TenantContextFromSubject(rp.pctx(), msg.Subject)
 	if !ok {
@@ -1768,6 +1817,7 @@ func (rp *ResolvedEventsProcessor) skipPoison(seq uint64) bool {
 		return false
 	}
 	rp.dirty = true
+	rp.poisonSkipped++
 	return true
 }
 
@@ -1910,6 +1960,9 @@ const loopRecheckBudget = 2 * time.Second
 func (rp *ResolvedEventsProcessor) idleAdvance(ctx context.Context, now time.Time) {
 	if rp.stale || rp.cfg.IdleAdvanceGuard <= 0 || rp.idleUncommitted {
 		return // halted / disabled / already parked on an uncommitted advance (a checkpoint owes)
+	}
+	if rp.gapHeld != nil {
+		return // parked on a sequence gap: a wall-clock advance must not run ahead of unapplied events
 	}
 	if !rp.engine.HasPendingWork() {
 		return // nothing armed to fire: leave the frontier at rest (no perpetual idle checkpoint)

@@ -115,6 +115,7 @@ func TestPoisonAtTailEndsLastSeqAtPoison(t *testing.T) {
 	// A batch that is ONLY poison still checkpoints (the loop is dirty), so the floor moves.
 	store2 := newTestStore(t)
 	rp2 := newTestProcessor(store2, nil, 100)
+	rp2.Replay = &fakeReplayOpener{} // sequences 1..6 were purged: the jump to 7 is a read-and-skip, not a loss
 	if err := rp2.restore(ctx); err != nil {
 		t.Fatalf("restore: %v", err)
 	}
@@ -140,6 +141,7 @@ func TestValidLowerSeqAfterSkippedPoisonIsDropped(t *testing.T) {
 	if err := rp.restore(ctx); err != nil {
 		t.Fatalf("restore: %v", err)
 	}
+	rp.Replay = &fakeReplayOpener{} // sequences 1..4 were purged
 	rp.handle(garbageAt(5, &fakeAck{}))
 	rp.checkpoint(ctx)
 	before := snapshotBytes(t, rp)

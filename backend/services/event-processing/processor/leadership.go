@@ -287,6 +287,10 @@ func (rp *ResolvedEventsProcessor) resetForTerm() {
 	rp.pendingDets = rp.pendingDets[:0]
 	rp.dirty = false
 	rp.idleUncommitted = false
+	// A message held for an unread gap belongs to the term that fetched it; it was never
+	// acked, so it redelivers and the new term's replay covers its range.
+	rp.gapHeld = nil
+	rp.gapFailLogged = false
 	drain(rp.ruleUpdates)
 	drain(rp.armUpdates)
 	drain(rp.attrUpdates)
