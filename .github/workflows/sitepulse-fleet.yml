@@ -74,7 +74,6 @@ jobs:
       # script, so a selftest that is edited to skip a verdict does not pass by saying nothing.
       - name: Checks fail on a site made to break them
         run: |
-          set -o pipefail
           python3 quarry_fleet.py selftest | tee selftest.log
           grep -qx 'selftest: 10 of 10 controls behaved' selftest.log
           test "$(grep -c ' ok$' selftest.log)" -eq 10
@@ -87,7 +86,6 @@ jobs:
       # Each topology check failing on a site made to break it, counted here as well as in the script.
       - name: Topology checks fail on a site made to break them
         run: |
-          set -o pipefail
           python3 quarry_topology.py selftest | tee topology-selftest.log
           grep -qx 'selftest: 50 of 50 controls behaved' topology-selftest.log
           test "$(grep -c ' ok$' topology-selftest.log)" -eq 50

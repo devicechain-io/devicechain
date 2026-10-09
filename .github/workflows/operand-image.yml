@@ -246,16 +246,24 @@ jobs:
           # closed.
           set -euo pipefail
           token="$(curl -fsSL "https://ghcr.io/token?scope=repository:devicechain-io/postgresql-timescaledb:pull&service=ghcr.io" | jq -er .token)"
+          # Only an explicit 404 means free. A transport failure makes curl print 000, and
+          # a 401/403/5xx says the registry did not answer the question, so none of those
+          # may read as "free": this guard exists to stop an overwrite, and it must fail closed.
           code="$(curl -sSL -o /dev/null -w '%{http_code}' \
             -H "Authorization: Bearer ${token}" \
             -H "Accept: application/vnd.oci.image.index.v1+json" \
             -H "Accept: application/vnd.docker.distribution.manifest.list.v2+json" \
-            "https://ghcr.io/v2/devicechain-io/postgresql-timescaledb/manifests/${{ steps.tag.outputs.tag }}")"
-          if [ "$code" = "200" ]; then
-            echo "::error::${IMAGE}:${{ steps.tag.outputs.tag }} already exists. Bump IMAGE_REVISION in ${DIR}/versions.conf, or re-run with force=true if you intend to replace it."
-            exit 1
-          fi
-          echo "Tag is free (registry returned ${code})."
+            "https://ghcr.io/v2/devicechain-io/postgresql-timescaledb/manifests/${{ steps.tag.outputs.tag }}" || true)"
+          case "$code" in
+            200)
+              echo "::error::${IMAGE}:${{ steps.tag.outputs.tag }} already exists. Bump IMAGE_REVISION in ${DIR}/versions.conf, or re-run with force=true if you intend to replace it."
+              exit 1 ;;
+            404)
+              echo "Tag is free (registry returned 404)." ;;
+            *)
+              echo "::error::could not tell whether ${IMAGE}:${{ steps.tag.outputs.tag }} exists (registry returned '${code}', expected 200 or 404). Refusing to publish blind; re-run, or use force=true if you intend to replace it."
+              exit 1 ;;
+          esac
 
       - name: Build + push (amd64 + arm64)
         id: push
