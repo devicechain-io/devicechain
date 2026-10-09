@@ -6,6 +6,7 @@ package config
 import (
 	"testing"
 
+	detectcore "github.com/devicechain-io/dc-event-processing/internal/detect/core"
 	"github.com/devicechain-io/dc-microservice/core"
 )
 
@@ -169,14 +170,14 @@ func TestValidateBoundsDetectShards(t *testing.T) {
 	if got := NewEventProcessingConfiguration().DetectShards; got != 1 || DefaultDetectShards != 1 {
 		t.Errorf("default detectShards = %d, want 1", got)
 	}
-	for _, k := range []int{-1, MaxDetectShards + 1} {
+	for _, k := range []int{-1, detectcore.MaxShards + 1} {
 		c := NewEventProcessingConfiguration()
 		c.DetectShards = k
 		if err := c.Validate(); err == nil {
 			t.Errorf("detectShards %d was accepted", k)
 		}
 	}
-	for _, k := range []int{0, 1, 4, MaxDetectShards} {
+	for _, k := range []int{0, 1, 4, detectcore.MaxShards} {
 		c := NewEventProcessingConfiguration()
 		c.DetectShards = k
 		if err := c.Validate(); err != nil {

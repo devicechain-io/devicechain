@@ -52,10 +52,10 @@ type Sharded struct {
 	scratch [][]Event
 }
 
-// maxShards bounds K. The limit is a sanity check on a configured value, not a design ceiling.
-const maxShards = 64
+// MaxShards bounds K. The limit is a sanity check on a configured value, not a design ceiling.
+const MaxShards = 64
 
-// NewSharded builds an empty K-way engine. K is clamped to [1, maxShards]. allowedLateness has the
+// NewSharded builds an empty K-way engine. K is clamped to [1, MaxShards]. allowedLateness has the
 // meaning it has for NewEngine and is the same in every shard.
 func NewSharded(k int, rules []Rule, allowedLateness time.Duration) *Sharded {
 	return newSharded(k, 0, rules, allowedLateness)
@@ -74,8 +74,8 @@ func clampShards(k int) int {
 	switch {
 	case k < 1:
 		return 1
-	case k > maxShards:
-		return maxShards
+	case k > MaxShards:
+		return MaxShards
 	}
 	return k
 }

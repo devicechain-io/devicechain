@@ -8,14 +8,18 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	dmmodel "github.com/devicechain-io/dc-device-management/model"
+	dmproto "github.com/devicechain-io/dc-device-management/proto"
 	detectcore "github.com/devicechain-io/dc-event-processing/internal/detect/core"
 	rules0 "github.com/devicechain-io/dc-event-processing/internal/rules"
 	"github.com/devicechain-io/dc-event-processing/internal/runtime"
 	"github.com/devicechain-io/dc-event-processing/model"
+	esmodel "github.com/devicechain-io/dc-event-sources/model"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/prometheus/client_golang/prometheus"
@@ -50,37 +54,75 @@ func (w *valueCapture) sorted() []string {
 	return out
 }
 
-// shardedRegistry holds a Duration rule (temperature > 80 held 10s) and a threshold rule, both for
-// tenant acme / profile p@1, so raises come from timers (the watermark) and from events (the keys).
-func shardedRegistry(t *testing.T) *runtime.RuleRegistry {
+// upsertSeq is the message before which the late rule is upserted into the running processor.
+const upsertSeq = 120
+
+func compileShardRule(t *testing.T, r rules0.Rule) *rules0.CompiledRule {
 	t.Helper()
-	thr := 80.0
-	hold, err := rules0.Compile(rules0.Rule{
-		ID: "acme/hold", Name: "sustained-heat", Type: rules0.TypeDuration, Hold: rules0.Duration(10 * time.Second),
+	cr, err := rules0.Compile(r, rules0.Limits{})
+	if err != nil {
+		t.Fatalf("compile %s: %v", r.ID, err)
+	}
+	return cr
+}
+
+// lateRule is the rule the stream upserts partway through.
+func lateRule(t *testing.T) runtime.ScopedRule {
+	thr := 90.0
+	return runtime.ScopedRule{Tenant: "acme", ProfileVersionToken: "p@1", Compiled: compileShardRule(t, rules0.Rule{
+		ID: "acme/late", Name: "late", Type: rules0.TypeThreshold,
 		When: rules0.Condition{Metric: "temperature", Op: rules0.OpGt, Threshold: &thr},
-	}, rules0.Limits{})
-	if err != nil {
-		t.Fatalf("compile hold: %v", err)
+	})}
+}
+
+// shardedRegistry holds every rule kind whose routing differs: a group-scoped Duration hold (timers
+// and descopes), a threshold (events), a correlation under an anchor (members of one anchor on
+// different devices) and an absence armed through the dead-man path. late adds the rule the stream
+// upserts at upsertSeq, for a processor that starts after it.
+func shardedRegistry(t *testing.T, late bool) *runtime.RuleRegistry {
+	t.Helper()
+	thr, hot := 80.0, 95.0
+	sr := []runtime.ScopedRule{
+		{Tenant: "acme", ProfileVersionToken: "p@1", GroupToken: "arid-areas", GroupVersion: 1, Compiled: compileShardRule(t, rules0.Rule{
+			ID: "acme/hold", Name: "sustained-heat", Type: rules0.TypeDuration, Hold: rules0.Duration(10 * time.Second),
+			When: rules0.Condition{Metric: "temperature", Op: rules0.OpGt, Threshold: &thr},
+		})},
+		{Tenant: "acme", ProfileVersionToken: "p@1", Compiled: compileShardRule(t, rules0.Rule{
+			ID: "acme/spike", Name: "spike", Type: rules0.TypeThreshold,
+			When: rules0.Condition{Metric: "temperature", Op: rules0.OpGt, Threshold: &hot},
+		})},
+		{Tenant: "acme", ProfileVersionToken: "p@1", Compiled: compileShardRule(t, rules0.Rule{
+			ID: "acme/corr", Name: "many in area", Type: rules0.TypeCorrelation, AnchorType: "area",
+			Count: 3, Window: rules0.Duration(5 * time.Minute),
+		})},
+		{Tenant: "acme", ProfileVersionToken: "p@1", Compiled: compileShardRule(t, rules0.Rule{
+			ID: "acme/silent", Name: "silent", Type: rules0.TypeAbsence, Ttl: rules0.Duration(40 * time.Second),
+		})},
 	}
-	hot := 95.0
-	spike, err := rules0.Compile(rules0.Rule{
-		ID: "acme/spike", Name: "spike", Type: rules0.TypeThreshold,
-		When: rules0.Condition{Metric: "temperature", Op: rules0.OpGt, Threshold: &hot},
-	}, rules0.Limits{})
-	if err != nil {
-		t.Fatalf("compile spike: %v", err)
+	if late {
+		sr = append(sr, lateRule(t))
 	}
-	return runtime.NewRuleRegistry([]runtime.ScopedRule{
-		{Tenant: "acme", ProfileVersionToken: "p@1", Compiled: hold},
-		{Tenant: "acme", ProfileVersionToken: "p@1", Compiled: spike},
-	})
+	return runtime.NewRuleRegistry(sr)
+}
+
+// shardedRoster is every device the absence rule watches: the 24 that report, and five that never do.
+func shardedRoster() ([]runtime.RosterEntry, []runtime.ActiveEntry) {
+	var ros []runtime.RosterEntry
+	for i := 0; i < 24; i++ {
+		ros = append(ros, runtime.RosterEntry{Tenant: "acme", DeviceToken: fmt.Sprintf("dev-%02d", i), ProfileToken: "p", ExpectedSince: testBase})
+	}
+	for i := 0; i < 5; i++ {
+		ros = append(ros, runtime.RosterEntry{Tenant: "acme", DeviceToken: fmt.Sprintf("silent-%d", i), ProfileToken: "p", ExpectedSince: testBase})
+	}
+	return ros, []runtime.ActiveEntry{{Tenant: "acme", ProfileToken: "p", ActiveVersionToken: "p@1", PublishedAt: testBase}}
 }
 
 // shardedProcessor is a processor over a shared snapshot store, configured for k shards, that
-// publishes into w. A fresh one stands for a restart.
-func shardedProcessor(t *testing.T, ctx context.Context, store *model.SnapshotStore, w *valueCapture, k int) *ResolvedEventsProcessor {
+// publishes into w, with the dead-man armer reconciled as a term build does. A fresh one stands for
+// a restart.
+func shardedProcessor(t *testing.T, ctx context.Context, store *model.SnapshotStore, w *valueCapture, k int, late bool) *ResolvedEventsProcessor {
 	t.Helper()
-	reg := shardedRegistry(t)
+	reg := shardedRegistry(t, late)
 	rp := &ResolvedEventsProcessor{
 		Store:  store,
 		Replay: &fakeReplayOpener{},
@@ -96,14 +138,22 @@ func shardedProcessor(t *testing.T, ctx context.Context, store *model.SnapshotSt
 	if err := rp.restore(ctx); err != nil {
 		t.Fatalf("restore (k=%d): %v", k, err)
 	}
+	rp.armer = runtime.NewDeadmanArmer(reg, rp.engine)
+	rp.armer.Reconcile(shardedRoster())
 	return rp
 }
 
-// shardedMessage is message seq of the one input every run shares: 24 devices, a reading per
-// message, the value stepping through a pattern that opens holds, ends some early, and spikes.
+// shardedMessage is message seq of the one input every run shares: 24 devices (the last four stop
+// reporting after message 100), each under one of three areas, a reading per message, the value
+// stepping through a pattern that opens holds, ends some early, and spikes. Every eleventh message
+// is from outside the hold rule's group, which descopes that device.
 func shardedMessage(t *testing.T, seq uint64) messaging.Message {
 	t.Helper()
-	dev := fmt.Sprintf("dev-%02d", seq%24)
+	n := seq % 24
+	if n >= 20 && seq > 100 {
+		n = seq % 20
+	}
+	dev := fmt.Sprintf("dev-%02d", n)
 	val := "70"
 	switch {
 	case seq%7 == 0:
@@ -111,7 +161,28 @@ func shardedMessage(t *testing.T, seq uint64) messaging.Message {
 	case seq%5 != 0:
 		val = "85"
 	}
-	return measuredMsgScoped(t, seq, "acme", dev, "p@1", "temperature", val, &fakeAck{}, nil)
+	var refs []dmmodel.GroupRef
+	if seq%11 != 0 {
+		refs = []dmmodel.GroupRef{{GroupToken: "arid-areas", Version: 1}}
+	}
+	occurred := testBase.Add(time.Duration(seq) * time.Second)
+	ev := &dmmodel.ResolvedEvent{
+		Source: "http1", SourceDeviceToken: dev, ProfileVersionToken: "p@1",
+		OccurredTime: occurred, ProcessedTime: occurred, EventType: esmodel.Measurement,
+		ScopeMemberships: refs,
+		Anchors:          []dmmodel.ResolvedAnchor{{AnchorType: "area", AnchorToken: fmt.Sprintf("zone-%d", n%3)}},
+		Payload: &dmmodel.ResolvedMeasurementsPayload{Entries: []dmmodel.ResolvedMeasurementsEntry{{
+			OccurredTime: occurred,
+			Entries:      []dmmodel.ResolvedMeasurementEntry{{Name: "temperature", Value: val}},
+		}}},
+	}
+	b, err := dmproto.MarshalResolvedEvent(ev)
+	if err != nil {
+		t.Fatalf("marshal resolved event: %v", err)
+	}
+	m := messaging.NewConsumedMessage("dc.acme.resolved-events", b, 0, nil, &fakeAck{})
+	m.StreamSeq = seq
+	return m
 }
 
 // shardCount is K as the processor is actually running it.
@@ -132,11 +203,14 @@ func runSegments(t *testing.T, ks []int, cuts []uint64) ([]string, []byte) {
 	w := &valueCapture{}
 	next := uint64(1)
 	for i, k := range ks {
-		rp := shardedProcessor(t, ctx, store, w, k)
+		rp := shardedProcessor(t, ctx, store, w, k, next > upsertSeq)
 		if k > 1 && shardCount(rp) != k {
 			t.Fatalf("segment %d: configured %d shards but the processor is running %d", i, k, shardCount(rp))
 		}
 		for ; next <= cuts[i]; next++ {
+			if next == upsertSeq {
+				rp.applyRuleUpdate(ruleUpdate{upserts: []runtime.ScopedRule{lateRule(t)}})
+			}
 			rp.handle(shardedMessage(t, next))
 		}
 		rp.checkpoint(ctx)
@@ -155,10 +229,14 @@ func runSegments(t *testing.T, ks []int, cuts []uint64) ([]string, []byte) {
 // restart re-splits it, and the run raises exactly what an unbroken K=1 run over the same stream
 // raises, ending in the same snapshot, byte for byte.
 func TestChangingShardCountAcrossRestartsMatchesSingleEngine(t *testing.T) {
-	const total = 240
+	const total = 300
 	control, controlSnap := runSegments(t, []int{1}, []uint64{total})
-	if len(control) < 20 {
-		t.Fatalf("the stream raised only %d derived events: too little for a comparison to mean anything", len(control))
+	// The comparison means nothing for a rule kind the stream never fires, so name each one.
+	all := strings.Join(control, "\n")
+	for _, want := range []string{"acme/hold", "acme/spike", "acme/corr", "acme/silent", "silent-0", "acme/late"} {
+		if !strings.Contains(all, want) {
+			t.Fatalf("the control run never raised %q, so a sharded run matching it proves nothing about that rule", want)
+		}
 	}
 	cases := []struct {
 		name string
@@ -198,7 +276,7 @@ func TestShardCountGauge(t *testing.T) {
 	metrics := NewDetectMetrics(ms)
 	store := newTestStore(t)
 	for _, k := range []int{0, 1, 4, 4, 2} {
-		rp := shardedProcessor(t, ctx, store, &valueCapture{}, k)
+		rp := shardedProcessor(t, ctx, store, &valueCapture{}, k, false)
 		rp.metrics = metrics
 		if err := rp.restore(ctx); err != nil {
 			t.Fatalf("restore: %v", err)
@@ -209,5 +287,35 @@ func TestShardCountGauge(t *testing.T) {
 		if got := testutil.ToFloat64(metrics.shards); got != want {
 			t.Fatalf("detect_shards = %v with detectShards %d, want %v", got, k, want)
 		}
+	}
+}
+
+// The reset a term build makes when the stream head is behind the snapshot builds an empty engine,
+// and it must build it at the configured shard count: an engine reset to a single shard would
+// quietly run unsplit for the rest of the term.
+func TestReplayResetKeepsTheConfiguredShardCount(t *testing.T) {
+	ctx := context.Background()
+	store := newTestStore(t)
+	p1 := shardedProcessor(t, ctx, store, &valueCapture{}, 4, false)
+	for i := uint64(1); i <= 5; i++ {
+		p1.handle(shardedMessage(t, i))
+	}
+	p1.checkpoint(ctx)
+
+	// Restart against a stream whose head (2) is behind the snapshot (5).
+	p2 := shardedProcessor(t, ctx, store, &valueCapture{}, 4, false)
+	p2.Replay = &fakeReplayOpener{head: 2}
+	p2.cfg.Suffix = "resolved-events"
+	if got := shardCount(p2); got != 4 {
+		t.Fatalf("before the reset: %d shards, want 4", got)
+	}
+	if err := p2.replayToHead(); err != nil {
+		t.Fatalf("replayToHead: %v", err)
+	}
+	if p2.engine.LastSeq() != 0 {
+		t.Fatalf("engine not reset: lastSeq = %d, want 0", p2.engine.LastSeq())
+	}
+	if got := shardCount(p2); got != 4 {
+		t.Fatalf("after the reset: %d shards, want 4", got)
 	}
 }

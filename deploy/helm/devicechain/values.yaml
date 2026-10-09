@@ -1551,7 +1551,7 @@ functionalAreas:
     # ack/redelivery latency on a crash. checkpointIntervalSeconds is at most 30 — half
     # the broker's acknowledgement window, since a quiet stream is acked only at a
     # checkpoint; a larger value is refused at startup.
-    # detectShards: 1                 # how many ways the detection engine's per-device state is split
+    # detectShards: 1                 # how many ways the detection engine's state is split, by each rule's series (a device, or the anchor for a correlation rule)
     # (1 to 64; anything else is refused at startup). Detections and the saved checkpoint are identical at
     # every value, so it may change at any restart with nothing to migrate. The shards are processed one
     # after another in this release, so raising it does not speed detection up yet. Reported as detect_shards.

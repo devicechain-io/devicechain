@@ -8,6 +8,7 @@ import (
 	"math"
 	"time"
 
+	detectcore "github.com/devicechain-io/dc-event-processing/internal/detect/core"
 	"github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/messaging"
 )
@@ -55,10 +56,8 @@ const (
 	DefaultIdleAdvanceGuardSeconds = 5
 
 	// DefaultDetectShards is how many ways the live detection engine is split by key: one, the
-	// unsplit engine. MaxDetectShards bounds a configured value (it is also the largest the engine
-	// itself will build, and the bound on the shard label of any per-shard metric).
+	// unsplit engine. The upper bound is detectcore.MaxShards, the largest the engine will build.
 	DefaultDetectShards = 1
-	MaxDetectShards     = 64
 	// DefaultMaxRulesPerTenant and DefaultMaxLiveKeysPerTenant are the per-tenant runtime state
 	// budget ceilings (ADR-023 amendment, ADR-051 slice 6c). DETECT is a shared singleton: all
 	// tenants' rules and keyed window/timer state live in one process, so one tenant's runaway
@@ -359,8 +358,8 @@ func (c *EventProcessingConfiguration) Validate() error {
 	}
 	// Refused rather than clamped: the engine would quietly run a count the operator did not write.
 	// 0 is unset, and ApplyDefaults has already made it 1 by the time the service validates.
-	if c.DetectShards < 0 || c.DetectShards > MaxDetectShards {
-		return fmt.Errorf("detectShards must be between 1 and %d (or unset), got %d", MaxDetectShards, c.DetectShards)
+	if c.DetectShards < 0 || c.DetectShards > detectcore.MaxShards {
+		return fmt.Errorf("detectShards must be between 1 and %d (or unset), got %d", detectcore.MaxShards, c.DetectShards)
 	}
 	// The per-tenant budgets fail closed: a negative ceiling is rejected rather than silently treated
 	// as unlimited (ADR-023 — an unset budget defaults to the platform ceiling in ApplyDefaults, never
