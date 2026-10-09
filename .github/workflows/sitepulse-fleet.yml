@@ -1,7 +1,7 @@
 # Copyright The DeviceChain Authors
 # SPDX-License-Identifier: Apache-2.0
 #
-# The Sitepulse demo's generated site and choreography are checked, and reproduce.
+# The Sitepulse demo's generated site, choreography and topology are checked, and reproduce.
 #
 # The quarry terrain, the site's props and the two fleet files are written by two Python scripts
 # (demos/sitepulse-unity/ArtSource/terrain). `quarry_fleet.py check` holds the haul loop and every
@@ -11,6 +11,9 @@
 # Nothing else ran them: a change to a prop or a road could put the loop through a tower and every
 # other job stayed green. This also regenerates everything into a temp directory and requires it
 # to equal the committed files, so a data file nobody regenerated, or one edited by hand, fails.
+#
+# The site topology (`quarry_topology.py`: lanes, junction boxes, the refuel bay's stands, the stations) is made from those files and checked the same
+# way: `check` runs its nine checks on the committed file, `selftest` shows each failing on a site made to break it, and it is regenerated and compared.
 #
 # WHY A SEPARATE WORKFLOW AND NOT A JOB IN ci.yml. See frontend-windows.yml: ci.yml's `ci-complete`
 # gate requires every job in that file and counts a SKIPPED job as a failure, so a path-filtered
@@ -27,14 +30,14 @@ on:
   pull_request:
     paths:
       - "demos/sitepulse-unity/ArtSource/**"
-      - "demos/sitepulse-unity/Assets/Sitepulse/Data/quarry_fleet*.json"
+      - "demos/sitepulse-unity/Assets/Sitepulse/Data/quarry_*.json"
       - "demos/sitepulse-unity/Assets/Sitepulse/Art/Terrain/quarry_*"
       - ".github/workflows/sitepulse-fleet.yml"
   push:
     branches: [main]
     paths:
       - "demos/sitepulse-unity/ArtSource/**"
-      - "demos/sitepulse-unity/Assets/Sitepulse/Data/quarry_fleet*.json"
+      - "demos/sitepulse-unity/Assets/Sitepulse/Data/quarry_*.json"
       - "demos/sitepulse-unity/Assets/Sitepulse/Art/Terrain/quarry_*"
       - ".github/workflows/sitepulse-fleet.yml"
 
@@ -76,6 +79,18 @@ jobs:
           test "$(grep -c ' ok$' selftest.log)" -eq 10
           ! grep -q 'NOT CAUGHT' selftest.log
 
+      # The topology's nine checks on the committed file (and on a fresh build of it, which must equal it).
+      - name: Topology checks on the committed file
+        run: python3 quarry_topology.py check
+
+      # Each topology check failing on a site made to break it, counted here as well as in the script.
+      - name: Topology checks fail on a site made to break them
+        run: |
+          python3 quarry_topology.py selftest | tee topology-selftest.log
+          grep -qx 'selftest: 18 of 18 controls behaved' topology-selftest.log
+          test "$(grep -c ' ok$' topology-selftest.log)" -eq 18
+          ! grep -q 'NOT CAUGHT' topology-selftest.log
+
       # Regenerate into a temp directory, in the order the README gives, and compare with what is committed.
       - name: Regenerate into a temp directory
         run: |
@@ -84,6 +99,7 @@ jobs:
           python3 quarry_heightmap.py --out "$T/terrain"
           python3 quarry_fleet.py --terrain "$T/terrain" --out "$T/quarry_fleet.json"
           python3 quarry_fleet.py --terrain "$T/terrain" --out "$T/quarry_fleet_live.json" --live
+          python3 quarry_topology.py --terrain "$T/terrain" --data "$T" --out "$T/quarry_topology.json" generate
 
       - name: Regenerated files equal the committed ones
         run: |
@@ -93,6 +109,7 @@ jobs:
           cmp "$T/terrain/quarry_height.bytes" "$A/Art/Terrain/quarry_height.bytes"
           cmp "$T/quarry_fleet.json" "$A/Data/quarry_fleet.json"
           cmp "$T/quarry_fleet_live.json" "$A/Data/quarry_fleet_live.json"
+          cmp "$T/quarry_topology.json" "$A/Data/quarry_topology.json"
           # a PNG is compared by its pixels: its zlib stream is the encoder's, not the data's
           python3 - "$T/terrain" "$A/Art/Terrain" <<'EOF'
           import sys
