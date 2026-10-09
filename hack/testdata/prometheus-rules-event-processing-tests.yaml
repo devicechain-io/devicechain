@@ -554,6 +554,98 @@ tests:
               description: "event-processing's comparison with device-management (or the tenant list from user-management) is failing; the projection label says which part. Nothing is removed while it fails; what is lost is the repair — a missed rule, device or threshold change stays missed until the comparison succeeds. The tenant and cause are in event-processing's error log. Check device-management and user-management health and the service secret; during a rolling upgrade a message that device-management is running an older build is expected briefly."
 
   # ------------------------------------------------------------------
+  # The live loop gap fill. A failed read of the skipped range parks live detection, which is
+  # critical once it lasts; a recovered delivery is the warning that deliveries are being lost.
+  # ------------------------------------------------------------------
+  - name: a sustained failing gap fill fires DetectLiveGapFillFailing after 5m
+    interval: 1m
+    input_series:
+      # Failing every tick from minute 2 on (the loop retries each tick while parked).
+      - series: 'devicechain_eventprocessing_detect_live_gap_fills_total{namespace="dci-devicechain", pod="dc-event-processing-6b7d-aaaaa", job="devicechain/event-processing", outcome="failed"}'
+        values: '0 0 1+1x40'
+      # Fills that succeed, and a standby that fails nothing: neither may matter.
+      - series: 'devicechain_eventprocessing_detect_live_gap_fills_total{namespace="dci-devicechain", pod="dc-event-processing-6b7d-aaaaa", job="devicechain/event-processing", outcome="filled"}'
+        values: '0+1x40'
+      - series: 'devicechain_eventprocessing_detect_live_gap_fills_total{namespace="dci-devicechain", pod="dc-event-processing-6b7d-bbbbb", job="devicechain/event-processing", outcome="failed"}'
+        values: '0x40'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: DetectLiveGapFillFailing
+        exp_alerts: []
+      - eval_time: 9m
+        alertname: DetectLiveGapFillFailing
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              devicechain_instance: devicechain
+            exp_annotations:
+              summary: "Live detection has stopped because part of the event stream cannot be read"
+              description: "The detection engine received an event after a stretch of the stream it had not seen, and cannot read that stretch from the broker. It has stopped applying live events rather than skip past it: no new detections are produced until the read succeeds, and the backlog grows (see DetectConsumerBacklogHigh). Rule, device and tenant changes are still being applied. Nothing is lost; the stretch is read as soon as the broker answers. Check the NATS broker health and its connection from event-processing; the cause is in event-processing error log."
+
+  - name: a gap fill that only reads purged sequences or succeeds never fires DetectLiveGapFillFailing
+    interval: 1m
+    input_series:
+      - series: 'devicechain_eventprocessing_detect_live_gap_fills_total{namespace="dci-devicechain", pod="dc-event-processing-6b7d-aaaaa", job="devicechain/event-processing", outcome="failed"}'
+        values: '0x40'
+      - series: 'devicechain_eventprocessing_detect_live_gap_fills_total{namespace="dci-devicechain", pod="dc-event-processing-6b7d-aaaaa", job="devicechain/event-processing", outcome="absent_only"}'
+        values: '0+3x40'
+      - series: 'devicechain_eventprocessing_detect_live_gap_fills_total{namespace="dci-devicechain", pod="dc-event-processing-6b7d-aaaaa", job="devicechain/event-processing", outcome="filled"}'
+        values: '0+1x40'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: DetectLiveGapFillFailing
+        exp_alerts: []
+
+  - name: a failure shorter than the window does not fire DetectLiveGapFillFailing
+    interval: 1m
+    input_series:
+      # Three failed attempts, then the broker answers.
+      - series: 'devicechain_eventprocessing_detect_live_gap_fills_total{namespace="dci-devicechain", pod="dc-event-processing-6b7d-aaaaa", job="devicechain/event-processing", outcome="failed"}'
+        values: '0 0 1 2 3 3x40'
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: DetectLiveGapFillFailing
+        exp_alerts: []
+
+  - name: recovered deliveries fire DetectLiveDeliveriesRecovered
+    interval: 1m
+    input_series:
+      - series: 'devicechain_eventprocessing_detect_live_gap_sequences_total{namespace="dci-devicechain", pod="dc-event-processing-6b7d-aaaaa", job="devicechain/event-processing", outcome="applied"}'
+        values: '0 0 0 44x40'
+      # Purged sequences are a normal thing to count and must not fire it.
+      - series: 'devicechain_eventprocessing_detect_live_gap_sequences_total{namespace="dci-devicechain", pod="dc-event-processing-6b7d-aaaaa", job="devicechain/event-processing", outcome="absent"}'
+        values: '0+5x40'
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: DetectLiveDeliveriesRecovered
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: DetectLiveDeliveriesRecovered
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              devicechain_instance: devicechain
+            exp_annotations:
+              summary: "Events the broker delivered never reached the detection engine, and were recovered"
+              description: "The detection engine found events the broker had handed out that it never received (a connection dropped mid-delivery, or a second engine took part of the stream), read them from the stream and applied them in order. Detection is correct; without this recovery those events would have been skipped. Recurring means connections between event-processing and the broker are dropping under load, or two engines are consuming at once: check the broker, the network between them, and DetectHasNoLeader / replica counts."
+      # Thirty minutes after the last increase the window has passed.
+      - eval_time: 40m
+        alertname: DetectLiveDeliveriesRecovered
+        exp_alerts: []
+
+  - name: only purged sequences never fire DetectLiveDeliveriesRecovered
+    interval: 1m
+    input_series:
+      - series: 'devicechain_eventprocessing_detect_live_gap_sequences_total{namespace="dci-devicechain", pod="dc-event-processing-6b7d-aaaaa", job="devicechain/event-processing", outcome="applied"}'
+        values: '0x40'
+      - series: 'devicechain_eventprocessing_detect_live_gap_sequences_total{namespace="dci-devicechain", pod="dc-event-processing-6b7d-aaaaa", job="devicechain/event-processing", outcome="absent"}'
+        values: '0+7x40'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: DetectLiveDeliveriesRecovered
+        exp_alerts: []
+
+  # ------------------------------------------------------------------
   # Fence geometry the engine cannot fetch.
   # ------------------------------------------------------------------
   - name: sustained unresolved fence geometry fires DetectFenceGeometryUnresolved

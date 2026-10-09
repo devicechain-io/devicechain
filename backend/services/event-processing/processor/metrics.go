@@ -107,6 +107,13 @@ type DetectMetrics struct {
 	// never a tenant.
 	factRepairs  *prometheus.CounterVec
 	factFailures *prometheus.CounterVec
+
+	// The live loop's gap fill (live_gap.go). gapFills counts fills by outcome and gapSequences
+	// counts the sequences inside them by outcome; the label sets are the fixed gapFill* and
+	// gapSeq* enums, never a tenant. gapSequences{applied} above zero means a delivery was lost
+	// on the way to this loop and the fill recovered it.
+	gapFills     *prometheus.CounterVec
+	gapSequences *prometheus.CounterVec
 }
 
 // NewDetectMetrics registers the checkpoint-loop metrics under the service's
@@ -168,6 +175,12 @@ func NewDetectMetrics(ms *core.Microservice) *DetectMetrics {
 		factFailures: ms.NewCounterVec("detect_fact_reconcile_failures_total",
 			"Reconcile attempts against device-management that did not complete, by projection (tenants, rules, roster, attributes). The projection is left exactly as it was — a failed read never deletes — and the next sweep retries.",
 			[]string{"projection"}),
+		gapFills: ms.NewCounterVec("detect_live_gap_fills_total",
+			"Times live consumption met a message whose stream sequence was more than one past the engine's and read the missing range from the stream, by outcome: filled (the range was read and held messages), absent_only (the stream held none of it: purged or evicted), failed (an attempt to read the range did not complete; live consumption parks and the attempt repeats every tick, so a sustained outage counts every attempt, not once).",
+			[]string{"outcome"}),
+		gapSequences: ms.NewCounterVec("detect_live_gap_sequences_total",
+			"Stream sequences inside live gap fills, by outcome: applied (a message the broker had counted as delivered that never reached the loop, now applied), absent (not in the stream: purged or evicted), skipped (read back unprocessable, and recorded as handled without applying anything). A non-zero applied rate means deliveries are being lost between the broker and this loop.",
+			[]string{"outcome"}),
 	}
 	// Every label value exists from startup, so an alert on the rate sees a zero series rather
 	// than no series on a healthy instance.
@@ -177,7 +190,29 @@ func NewDetectMetrics(ms *core.Microservice) *DetectMetrics {
 	for _, p := range failureProjections {
 		m.factFailures.WithLabelValues(string(p)).Add(0)
 	}
+	for _, o := range gapFillOutcomes {
+		m.gapFills.WithLabelValues(o).Add(0)
+	}
+	for _, o := range gapSeqOutcomes {
+		m.gapSequences.WithLabelValues(o).Add(0)
+	}
 	return m
+}
+
+// recordGapFill counts one live gap fill by outcome. Nil-safe.
+func (m *DetectMetrics) recordGapFill(outcome string) {
+	if m == nil {
+		return
+	}
+	m.gapFills.WithLabelValues(outcome).Inc()
+}
+
+// recordGapSequences counts n sequences of a live gap fill by outcome. Nil-safe.
+func (m *DetectMetrics) recordGapSequences(outcome string, n uint64) {
+	if m == nil || n == 0 {
+		return
+	}
+	m.gapSequences.WithLabelValues(outcome).Add(float64(n))
 }
 
 // factRepaired counts n projection rows the fact reconcile actually repaired. Nil-safe.

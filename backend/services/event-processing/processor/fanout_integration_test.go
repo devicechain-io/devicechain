@@ -223,12 +223,19 @@ func scopedDurationReg(t *testing.T) *runtime.RuleRegistry {
 	})
 }
 
+// newScopedDurationProcessor's tests space their messages by sequence number (a message's
+// event time is its sequence in seconds), so the stream they model has sequences between the
+// two it carries. The processor is given an opener whose stream holds none of them: the
+// sequences were purged, which the live loop reads as an absent range and moves past. Without
+// an opener the loop would refuse to apply the second message at all, since it cannot tell
+// that range from a lost delivery.
 func newScopedDurationProcessor(t *testing.T, ctx context.Context, w *captureWriter) *ResolvedEventsProcessor {
 	t.Helper()
 	store := newTestStore(t)
 	reg := scopedDurationReg(t)
 	rp := &ResolvedEventsProcessor{
-		Store: store,
+		Store:  store,
+		Replay: &fakeReplayOpener{},
 		cfg: Config{
 			PartitionId: "singleton", CheckpointEvents: 100, CheckpointInterval: time.Hour,
 			TickInterval: time.Hour, Clock: detectcore.RealClock{},
@@ -260,6 +267,10 @@ func TestScopedDurationDescopeSuppressesStaleTimer(t *testing.T) {
 	rp.handle(measuredMsgScoped(t, 12, "acme", "d1", "p@1", "temperature", "90", &fakeAck{}, nil))
 
 	rp.checkpoint(ctx)
+	// The second message was applied (it is what descoped the hold), or the zero below says nothing.
+	if rp.gapHeld != nil || rp.engine.LastSeq() != 12 {
+		t.Fatalf("the second message was not applied: parked=%v lastSeq=%d, want applied at 12", rp.gapHeld != nil, rp.engine.LastSeq())
+	}
 	if w.writes != 0 {
 		t.Fatalf("a descoped hold must not raise a spurious alarm; got %d derived writes", w.writes)
 	}
@@ -277,6 +288,9 @@ func TestScopedDurationStaysInScopeRaises(t *testing.T) {
 	rp.handle(measuredMsgScoped(t, 12, "acme", "d1", "p@1", "temperature", "90", &fakeAck{}, arid))
 
 	rp.checkpoint(ctx)
+	if rp.gapHeld != nil || rp.engine.LastSeq() != 12 {
+		t.Fatalf("the second message was not applied: parked=%v lastSeq=%d, want applied at 12", rp.gapHeld != nil, rp.engine.LastSeq())
+	}
 	if w.writes != 1 {
 		t.Fatalf("an in-scope matured hold must raise once; got %d derived writes", w.writes)
 	}
