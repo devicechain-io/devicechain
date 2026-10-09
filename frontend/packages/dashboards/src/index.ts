@@ -132,6 +132,42 @@ export {
   type SyntheticDataSourceConfig,
 } from './synthetic';
 
+// Playback of a recorded run through the same data-source contract: the recording format and
+// its fail-closed parser, the replay clock, the source itself and the recorded resolver/lister.
+export {
+  RECORDING_FORMAT_VERSION,
+  RECORDING_KIND,
+  RecordingFormatError,
+  parseBoardRecording,
+  recordedWallTimeMs,
+  recordingBounds,
+  simulationScaleAt,
+  type BoardRecording,
+  type RecordedAlarm,
+  type RecordedAlarmEvent,
+  type RecordedAlarmSnapshot,
+  type RecordedChannels,
+  type RecordedChapter,
+  type RecordedClockSegment,
+  type RecordedDevice,
+  type RecordedMeasurementColumns,
+} from './recording';
+export {
+  PLAYBACK_RATES,
+  RECORDED_HISTORY_WINDOW_MS,
+  NotInRecordingError,
+  RecordedClock,
+  RecordedDataSource,
+  createRecordedClock,
+  createRecordedLister,
+  createRecordedResolver,
+  type ClockEvent,
+  type ClockTicker,
+  type PlaybackRate,
+  type RecordedChannel,
+  type RecordedSiteOptions,
+} from './recorded';
+
 export {
   parseDashboardDefinition,
   parseSlotBinding,
