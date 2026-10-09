@@ -30,7 +30,7 @@ WHAT IT HOLDS (see Data/README.md)
              it than a slot (a lane folding back over itself). A diverge (the first cells of an access
              lane, which share ground with the lane it leaves), the cells within a slot of each other
              along one way through a stand, and two cells of one station's region are not boxes.
-  stands     none in the zones (see ZONES); the refuel queue and bay, each with a lane to and from it.
+  stands     one drive-through stand per zone (cut-1, fill-1, yard-1; see STANDS) and the refuel queue and bay, each with a lane to and from it.
   stations   the load point and the dump pad: core, exit buffer, capacity, window, headway.
   work_areas the hull of every other machine's footprint over its whole track.
 
@@ -77,6 +77,7 @@ RULES = dict(
     diverge_max=40,             # and the most cells of that lane that may
 )
 STAND_CLEAR_M = qf.STAND_AIR    # a stand's footprint keeps this from every lane, sweep, box and obstacle
+STAND_SEEN_M = 14.0             # and the file records how near it comes to anything within this much further (its clearance_m): beyond it a thing is not looked at
 WORK_CLEAR_M = 1.5              # and a lane keeps it from another machine's work area
 GRADE_MAX = qf.GRADE_MAX_PCT
 TRAVEL_REACH = qf.TRAVEL_RADIUS["Hauler"] + qf.TRAVEL_CLEARANCE    # 3.2: a lane keeps this from an outline
@@ -436,11 +437,24 @@ def cell_group(lane, k, inputs, rules=RULES):
     return g
 
 
+_CONFLICTS = {}
+
+
 def conflicts(lanes, inputs, rules=RULES, reach=None):
     """Every pair of cells whose swept footprints come nearer than the threshold of the pair's class (conflict_m), as
     {((lane, k), (lane, k)): gap}: of two different lanes, and of one lane when they are further apart along it than its neighbour
     span (nearer than that they are a machine and its follower, which the follower rule keeps apart) and overlap. `reach` lists the pairs
-    nearer than that instead (to measure how near the pairs that do not conflict come)."""
+    nearer than that instead (to measure how near the pairs that do not conflict come).
+
+    The answer depends on the lanes' cells, the rules and the fleet alone, and takes a minute and more on today's lanes, so it is kept per that
+    key: selftest edits a boxes table, a station or a stand's role and asks again of the same lanes a dozen times."""
+    key = (tuple((l.id, l.kind, l.cyclic, l.span, tuple(map(tuple, l.cells))) for l in lanes), tuple(sorted(rules.items())), reach, id(inputs.live))
+    if key not in _CONFLICTS:
+        _CONFLICTS[key] = _conflicts(lanes, inputs, rules, reach)
+    return dict(_CONFLICTS[key])
+
+
+def _conflicts(lanes, inputs, rules, reach):
     items = []
     for lane in lanes:
         for k in range(len(lane)):
@@ -563,25 +577,32 @@ def work_areas(inputs):
 # ==================================================================================
 # the site: what is authored
 # ==================================================================================
-# ZONES: the kinds of machine `goto-area` may send to each zone, and so the kinds each must have a stand for. A hauler cannot be
-# sent to the cut: its only room to stand is where no lane reaches it (see the stands below).
-# ZONES: the kinds of machine `goto-area` may send to each zone, and so the kinds each must have a stand for. None has one: the stand
-# places the choreography leaves room for (ArtSource/terrain/quarry_fleet.py stand_room) are places to stand, and no lane reaches and
-# leaves one by the reach and the clearance a hauler keeps (3.2 m from every outline, 1.5 m from every machine's work area), without
-# the two lanes of one stand running over each other. The generator's own search over the free ground finds the refuel bay a way and
-# finds no stand in the cut, the fill or the yard a way.
+# ZONES: the kinds of machine `goto-area` may send to each zone, and so the kinds each must have a stand for. Each zone has one stand that takes
+# all three (not one per kind: no zone has room for three drive-through ways), found by the search over the free ground that quarry_fleet.py's
+# stand_room starts and the site was then changed to make room for (see the README: a way folds unless its corners are gentle, and needs about
+# 27 m of lane in past its last box cell).
 ZONES = [
-    ("sp-zone-cut", ()),
-    ("sp-zone-fill", ()),
-    ("sp-zone-yard", ()),
+    ("sp-zone-cut", ("Hauler", "Loader", "Dozer")),
+    ("sp-zone-fill", ("Hauler", "Loader", "Dozer")),
+    ("sp-zone-yard", ("Hauler", "Loader", "Dozer")),
 ]
 
 # STANDS: where a machine may be left standing, and the lanes it takes to get there and back. Authored, because where a machine is
 # put down is a decision about the site. `pose` is where it stands (x, z, heading). Its `in` lane leaves the haul loop at the cell whose
 # end is nearest `exit` and is driven by `program_in`, which ends at the pose; its `out` lane starts at the pose, is driven by
 # `program_out` and ends on the loop at the cell nearest `join`. A program is straights (metres) and turns (degrees) of TURN_M.
-# A stand is driven through, never backed out of. (None today: see ZONES.)
-STANDS = []
+# A stand is driven through, never backed out of.
+STANDS = [
+    dict(id="cut-1", zone="sp-zone-cut", kinds=("Hauler", "Loader", "Dozer"), pose=(53.0, 28.0, 270.0),
+         exit=(21.96, 36.13), program_in=[("R", 5.64), ("S", 30.98), ("R", 1.54), ("R", 180.0), ("S", 0.5)],
+         join=(22.94, 26.29), program_out=[("S", 3.0), ("L", 10.72), ("S", 8.64), ("R", 10.92), ("S", 16.88)]),
+    dict(id="fill-1", zone="sp-zone-fill", kinds=("Hauler", "Loader", "Dozer"), pose=(95.0, -75.0, 180.0),
+         exit=(98.21, -51.63), program_in=[("L", 79.66), ("S", 12.04), ("R", 1.66), ("S", 6.67)],
+         join=(67.26, -72.39), program_out=[("S", 3.5), ("R", 90.0), ("S", 4.47), ("R", 35.49), ("S", 15.54), ("L", 46.94)]),
+    dict(id="yard-1", zone="sp-zone-yard", kinds=("Hauler", "Loader", "Dozer"), pose=(-77.0, -17.5, 270.0),
+         exit=(-42.54, -29.31), program_in=[("L", 112.14), ("S", 3.0), ("L", 30.0), ("S", 8.0), ("L", 10.06), ("S", 22.19)],
+         join=(-22.68, -27.3), program_out=[("S", 5.0), ("R", 180.0), ("S", 41.67), ("R", 45.0), ("S", 4.0), ("R", 45.0), ("S", 1.6), ("L", 45.0), ("S", 7.63), ("L", 50.51)]),
+]
 
 # BAY: the refuel bay is a drive-through: in from the loop to the queue stand, a short hop to the bay stand, out to the loop. Its lanes are
 # drawn as a stand's are (see STANDS); the hop is a straight from the queue to the bay.
@@ -934,7 +955,7 @@ def partner_ready(inputs, machine):
 # The boxes a station holds (see V10): the ones that cannot lie clear of its core. The pad's core is the stretch of the loop inside the fill pad,
 # and the roads that serve the pad run along and across it, so their boxes' cells (and the room beyond one) lie in it; the load core's first cells
 # are the room beyond the ramp-bottom box, where the loop crosses itself.
-STATION_HOLDS = {"load": ["oncoming-ramp-bottom"], "pad": ["oncoming-pad-south", "oncoming-ramp-top+pad-gate+pad-south"]}
+STATION_HOLDS = {"load": ["oncoming-ramp-bottom"], "pad": ["merge-fill-1", "oncoming-ramp-top+pad-gate+pad-south"]}
 
 
 def build_stations(inputs, loop):
@@ -1205,14 +1226,14 @@ def stand_gaps(t, inputs, sid, kind):
         if what not in worst or gap < worst[what][0]:
             worst[what] = (gap, where)
     for lid, k, grp, x, z, rad in idx:
-        if lid in own or math.hypot(cx - x, cz - z) > r + rad + STAND_CLEAR_M:
+        if lid in own or math.hypot(cx - x, cz - z) > r + rad + STAND_SEEN_M:
             continue
         note("lane", group_gap(g, grp), "%s cell %d" % (lid, k))
     for name, ti, tk, owners, poses in track_sweeps(inputs):
         if track_exempt(t.d, sid, owners):
             continue
         for p in poses:
-            if math.hypot(cx - p[0], cz - p[1]) > r + 14.0:
+            if math.hypot(cx - p[0], cz - p[1]) > r + STAND_SEEN_M:
                 continue
             note("sweep", group_gap(g, sweep_group(tk, p)), "%s fleet track %d (%s)" % (name, ti, "/".join(owners)))
     for j in t.junctions:
@@ -1220,7 +1241,7 @@ def stand_gaps(t, inputs, sid, kind):
     for o in inputs.obstacles:
         ox, oz = obstacle_center(o)
         span = math.hypot(o[4], o[5]) if o[0] == "box" else math.hypot(o[4] - o[2], o[5] - o[3]) / 2.0 + o[6]
-        if math.hypot(cx - ox, cz - oz) > r + span + STAND_CLEAR_M or is_exempt(t.d, sid, o[1], ox, oz):
+        if math.hypot(cx - ox, cz - oz) > r + span + STAND_SEEN_M or is_exempt(t.d, sid, o[1], ox, oz):
             continue
         note("obstacle", obstacle_gap(o, g), "%s at (%.1f, %.1f)" % (o[1], ox, oz))
     return worst
@@ -1772,17 +1793,6 @@ def report(t, inputs):
     return lines
 
 
-CONTROLS = 49
-
-# The best stand the search for one found in the yard (the one zone with room): the pose stand_room finds in the yard's north-east patch and the two lanes
-# that reach and leave it. selftest builds the topology with it through the generator's own path and the checks refuse it: its lanes run over each other
-# and over the refuel bay's, and a box lies on its pose.
-CANDIDATE_YARD_STAND = dict(
-    id="yard-1", zone="sp-zone-yard", kinds=("Hauler", "Loader", "Dozer"), pose=(-60.0, -25.0, 270.0),
-    exit=(-48.8, -39.0), program_in=[("R", 2.64), ("S", 0.16), ("R", 7.48), ("L", 45), ("R", 22.5), ("L", 22.5), ("R", 22.5), ("L", 90), ("S", 6)],
-    join=(-24.7, -27.5), program_out=[("S", 6), ("R", 225), ("S", 7.5), ("L", 22.5), ("R", 22.5), ("L", 45), ("S", 5), ("R", 22.5), ("S", 2.5), ("L", 22.5), ("S", 15), ("L", 0.78), ("S", 0.48), ("L", 5.75)])
-
-
 def at_distance(o, target):
     """A point on the +x side of obstacle `o` whose distance from its outline is `target`."""
     lo, hi = 0.0, 80.0
@@ -1802,6 +1812,16 @@ def selftest(inputs, verbose=False):
     real = Topo(d)
     clear = clear_gaps(real, inputs)
     cases = [("the real site", not base, base)]
+    # EachZoneHasItsStand (the C# test of the same name): every zone accepts a Hauler, a Loader and a Dozer, and the file's stands are exactly
+    # one zone stand per zone plus the refuel bay's two service stands. A site that loses a stand, or whose zones ask for nothing, fails by value.
+    zone_kinds = {z["token"]: tuple(z["kinds"]) for z in d["zones"]}
+    stand_ids = sorted(s["id"] for s in d["stands"])
+    roles = {s["id"]: s["role"] for s in d["stands"]}
+    its_stand = [
+        "zones %s accept %s" % (z, "/".join(k) or "no kind") for z, k in sorted(zone_kinds.items()) if k != ("Hauler", "Loader", "Dozer")] + (
+        [] if stand_ids == sorted(["cut-1", "fill-1", "yard-1", d["bay"]["queue"], d["bay"]["bay"]]) else ["stands are %s" % ", ".join(stand_ids)]) + [
+        "stand %s has role %s" % (i, roles.get(i)) for i in ("cut-1", "fill-1", "yard-1") if roles.get(i) != "zone"]
+    cases.append(("EachZoneHasItsStand: three zones, each accepting Hauler/Loader/Dozer, cut-1 fill-1 yard-1 and the bay's two stands", not its_stand, its_stand))
 
     def case(name, mutate, validators, expect, passes=False, inp=None):
         """`expect` is a substring of a defect (or a function of a defect); `passes` expects no defect that matches it (None: none at all)."""
@@ -1826,6 +1846,12 @@ def selftest(inputs, verbose=False):
     def lane_of(d2, lid):
         return next(l for l in d2["lanes"] if l["id"] == lid)
 
+    def stand_of(d2, sid):
+        return next(x for x in d2["stands"] if x["id"] == sid)
+
+    def station_of(d2, sid):
+        return next(x for x in d2["stations"] if x["id"] == sid)
+
     def ring(d2, slots_n, core_cells, machines):
         n = int(math.ceil(slots_n * SLOT_M / CELL_M))
         loop = loop_of(d2)
@@ -1840,7 +1866,7 @@ def selftest(inputs, verbose=False):
 
     def short_detour(d2):
         d2["fleet"]["machines"] = 40
-        d2["entries"][0]["cell"] = 1
+        next(e for e in d2["entries"] if e["id"] == "entry-bay")["cell"] = 1
     case("V1: the bay's detour round the loop is short for the fleet", short_detour, [v1_cycle_capacity], "V1 P1: loop via access/bay/in")
 
     def open_loop(d2):
@@ -1867,7 +1893,7 @@ def selftest(inputs, verbose=False):
     # V3: a stand on a loop cell; the bay left back the way it came; a lane that crosses its own way through; no kind; a sweep of either fleet
     def stand_on_loop(d2):
         c = loop_of(d2)["cells"][60]
-        d2["stands"][0]["pose"] = [(c[0] + c[2]) / 2.0, (c[1] + c[3]) / 2.0, qf.heading_of(c[2] - c[0], c[3] - c[1])]
+        stand_of(d2, "refuel-queue")["pose"] = [(c[0] + c[2]) / 2.0, (c[1] + c[3]) / 2.0, qf.heading_of(c[2] - c[0], c[3] - c[1])]
     case("V3: a stand on a loop cell", stand_on_loop, [v3_stands], "V3 stand")
 
     def reverse_bay(d2):
@@ -1880,11 +1906,11 @@ def selftest(inputs, verbose=False):
     case("V3: the bay's out lane crossing its in lane far from the stand", out_over_in, [v3_stands], "V3 cul-de-sac")
     case("V5: the same crossing, no box holds it", out_over_in, [v5_boxes], lambda x: x.startswith("V5 conflict: access/bay/in cell 1 and access/bay/out cell"))
 
-    case("V3: a stand that lists no kind", lambda d2: d2["stands"][0].update(kinds=[]), [v3_stands], "V3 stand refuel-queue: it lists no kind")
+    case("V3: a stand that lists no kind", lambda d2: stand_of(d2, "refuel-queue").update(kinds=[]), [v3_stands], "V3 stand refuel-queue: it lists no kind")
 
     def on_live_track(d2):
         tr = inputs.live["tracks"][3]
-        d2["stands"][0]["pose"] = [float(tr["x"][0]), float(tr["z"][0]), float(tr["heading"][0])]
+        stand_of(d2, "refuel-queue")["pose"] = [float(tr["x"][0]), float(tr["z"][0]), float(tr["heading"][0])]
     case("V3: a stand on a track the live fleet plays", on_live_track, [v3_stands], "from sweep live fleet track 3")
 
     def without_visit_exemption(d2):
@@ -1906,7 +1932,7 @@ def selftest(inputs, verbose=False):
     case("V3: the same 1.6 m off (control)", lambda d2: None, [v3_stands], "test-box", passes=True, inp=diagonal(1.6))
 
     # V4: a headway under the fleet's, a buffer one slot for a capacity of two, a record of the nearest approach that is the one at the design spacing only
-    case("V4: a headway 0.9 of the fleet's", lambda d2: d2["stations"][0].update(headway_s=r3(d2["stations"][0]["headway_s"] * 0.9)), [v4_stations], "V4 station load: its headway")
+    case("V4: a headway 0.9 of the fleet's", lambda d2: station_of(d2, "load").update(headway_s=r3(station_of(d2, "load")["headway_s"] * 0.9)), [v4_stations], "V4 station load: its headway")
 
     def short_buffer(d2):
         pad = next(s for s in d2["stations"] if s["id"] == "pad")
@@ -1930,8 +1956,8 @@ def selftest(inputs, verbose=False):
          lambda x: x.startswith("V5 conflict: road/fill-road/back cell") and "and road/fill-road/back cell" in x and "the same lane" in x)
 
     def merge_without_out_lane(d2):
-        merge = next(j for j in d2["junctions"] if "merge" in j["id"])
-        merge["members"] = [m for m in merge["members"] if not m["lane"].startswith("access/")]
+        merge = next(j for j in d2["junctions"] if j["id"] == "merge-bay")
+        merge["members"] = [m for m in merge["members"] if not m["lane"].startswith("access/bay/")]
     case("V5: the bay's out lane left out of its merge box (loop and road cells still held)", merge_without_out_lane, [v5_boxes],
          lambda x: x.startswith("V5 conflict:") and "access/bay/out" in x)
     case("V5: the pad station removed (its trucks overlap each other there, which only the station holds)", lambda d2: d2.update(stations=[st for st in d2["stations"] if st["id"] != "pad"]),
@@ -1965,17 +1991,17 @@ def selftest(inputs, verbose=False):
     # V10: a box with cells in a station core the station does not hold
     def pad_holds(boxes):
         return lambda d2: next(s for s in d2["stations"] if s["id"] == "pad").update(holds=boxes)
-    case("V10: the pad holds no box (pad-south's approach cell 151 is in its core)", pad_holds([]), [v10_waiting_cells],
-         lambda x: "junction oncoming-pad-south has approach cell 151 on loop inside the core of station pad" in x)
+    case("V10: the pad holds no box (merge-fill-1's approach cell 151 is in its core)", pad_holds([]), [v10_waiting_cells],
+         lambda x: "junction merge-fill-1 has approach cell 151 on loop inside the core of station pad" in x)
     case("V10: the pad holds no box (the merged box's room, loop 134-140, is in its core)", pad_holds([]), [v10_waiting_cells],
          lambda x: "has room cell 134-140 on loop inside the core of station pad" in x)
     case("V10: the pad holds the merged box and not pad-south", pad_holds(["oncoming-ramp-top+pad-gate+pad-south"]), [v10_waiting_cells],
-         lambda x: "junction oncoming-pad-south has approach cell 151" in x)
+         lambda x: "junction merge-fill-1 has approach cell 151" in x)
     case("V10: the load station holds no box (the ramp-bottom box's room is its first cells)", lambda d2: next(s for s in d2["stations"] if s["id"] == "load").update(holds=[]),
          [v10_waiting_cells], lambda x: "junction oncoming-ramp-bottom has room cell 363-366 on loop inside the core of station load" in x)
     case("V10: the load station holds a box that touches nothing of its core", lambda d2: next(s for s in d2["stations"] if s["id"] == "load").update(holds=["oncoming-ramp-bottom", "merge-bay"]),
          [v10_waiting_cells], lambda x: "station load holds junction merge-bay" in x and "a hold nothing needs" in x)
-    case("V10: the pad holds a box the file does not have", pad_holds(["oncoming-pad-south", "oncoming-ramp-top+pad-gate+pad-south", "no-such-box"]), [v10_waiting_cells],
+    case("V10: the pad holds a box the file does not have", pad_holds(["merge-fill-1", "oncoming-ramp-top+pad-gate+pad-south", "no-such-box"]), [v10_waiting_cells],
          lambda x: "station pad holds junction no-such-box, which the file does not have" in x)
 
     # V6: a lane cell on the light tower, 3.1 m and 3.3 m off it, the middle of a long cell, a climb
@@ -2015,9 +2041,16 @@ def selftest(inputs, verbose=False):
         d2["source"]["fleet"] = h[:-1] + ("0" if h[-1] != "0" else "1")
     case("V7: one byte of the fleet hash changed", stale, [v7_fresh], "V7 fresh: its fleet hash")
 
-    # V8: a zone that must have a stand for a kind and has none; one that only a service stand covers
-    case("V8: a zone asked for a stand for a hauler it has none of", lambda d2: d2["zones"][0].update(kinds=["Hauler"]), [v8_zones], "V8 zone: sp-zone-cut has no stand")
-    case("V8: the yard asked for a hauler stand, with only the refuel bay's service stands in it", lambda d2: d2["zones"][2].update(kinds=["Hauler"]), [v8_zones], "V8 zone: sp-zone-yard has no stand for a Hauler")
+    # V8: a zone with no stand for a kind it accepts, however it comes to have none; a stand outside the zone it names
+    def drop_stand(sid):
+        return lambda d2: d2.update(stands=[x for x in d2["stands"] if x["id"] != sid])
+    case("V8: cut-1 dropped (the cut asks for a stand for a hauler and has none)", drop_stand("cut-1"), [v8_zones], "V8 zone: sp-zone-cut has no stand for a Hauler")
+    case("V8: fill-1 dropped (the fill asks for a stand for a hauler and has none)", drop_stand("fill-1"), [v8_zones], "V8 zone: sp-zone-fill has no stand for a Hauler")
+    case("V8: yard-1 dropped, the yard left with only the refuel bay's service stands", drop_stand("yard-1"), [v8_zones], "V8 zone: sp-zone-yard has no stand for a Hauler")
+    case("V8: yard-1 made a service stand (it then does not make the yard a place to send a machine to)", lambda d2: stand_of(d2, "yard-1").update(role="service"), [v8_zones],
+         "V8 zone: sp-zone-yard has no stand for a Hauler")
+    case("V8: cut-1 moved to the fill zone (it stands outside it)", lambda d2: stand_of(d2, "cut-1").update(zone="sp-zone-fill"), [v8_zones], "V8 zone: stand cut-1 (Hauler) is not wholly inside sp-zone-fill")
+    case("V8: fill-1 listing no dozer (the fill asks for one)", lambda d2: stand_of(d2, "fill-1").update(kinds=["Hauler", "Loader"]), [v8_zones], "V8 zone: sp-zone-fill has no stand for a Dozer")
 
     # V9: an access lane through SP-DZ-0002's rip area; a lane 1.4 m and 1.6 m off it; the load core's exemption for a loader that is not the partner
     def through_rip(d2):
@@ -2051,14 +2084,70 @@ def selftest(inputs, verbose=False):
         next(s for s in d2["stations"] if s["id"] == "load")["partner"]["machine"] = "SP-LD-0002"
     case("V9: the load core's exemption given to a loader that is not its partner", wrong_partner, [v9_work_areas], "SP-LD-0001's work area")
 
-    # a stand through the generator's own path: the yard's best candidate is refused
+    # The zone stands, two failures each: a pose moved toward the stand's own box until its footprint is 1.4 m off it (1.5 m is kept; 1.6 m is not
+    # refused for it), and one corner of a lane drawn sharp (a way folds unless its corners are gentle). The lanes are drawn by the generator's own
+    # drive(); only the pose and the one lane change, so these cost seconds.
+    stand_def = {x["id"]: x for x in STANDS}
+    own_box = {"cut-1": "merge-cut-1", "fill-1": "merge-fill-1", "yard-1": "merge-bay"}
+
+    def toward_box(sid, gap):
+        st = stand_of(d, sid)
+        poly = next(j["polygon"] for j in d["junctions"] if j["id"] == own_box[sid])
+        bx, bz = sum(p[0] for p in poly) / len(poly), sum(p[1] for p in poly) / len(poly)
+        px, pz, hd = st["pose"]
+        reach = math.hypot(bx - px, bz - pz)
+        ux, uz = (bx - px) / reach, (bz - pz) / reach
+
+        def at(m):
+            pose = (px + ux * m, pz + uz * m, hd)
+            return min(group_gap(stand_group(k, pose), [poly]) for k in st["kinds"]), pose
+        lo, hi = 0.0, reach
+        for _ in range(60):
+            mid = (lo + hi) / 2.0
+            if at(mid)[0] > gap:
+                lo = mid
+            else:
+                hi = mid
+        pose = at(hi)[1]
+        return lambda d2: stand_of(d2, sid).update(pose=[r3(pose[0]), r3(pose[1]), hd])
+
+    def near_box(sid, jid):
+        return lambda x: x.startswith("V3 stand %s (" % sid) and " from junction %s," % jid in x
+
+    def sharpen(sid, which, lo, hi, repl):
+        """The stand's `which` program with ops [lo:hi] replaced by `repl`, the lane redrawn from where it starts (it then ends elsewhere)."""
+        st = stand_def[sid]
+        prog = list(st[which])
+        prog[lo:hi] = repl
+        lid = "access/%s/%s" % (sid, "in" if which == "program_in" else "out")
+        loop = real.by["loop"]
+        start = parent_pose(loop, nearest_cell(loop, *st["exit"])) if which == "program_in" else st["pose"]
+        lane = round_lane(Lane(lid, "access", cut_cells(drive(start, prog)[0])))
+        return lambda d2: lane_of(d2, lid).update(cells=lane.cells)
+
+    def folded(sid):
+        return lambda x: x.startswith("V3 cul-de-sac: the lanes access/%s/in -> access/%s/out conflict" % (sid, sid))
+    for sid, jid in own_box.items():
+        case("V3: %s moved toward its box until its footprint is 1.4 m off it (1.5 m is kept)" % sid, toward_box(sid, 1.4), [v3_stands], near_box(sid, jid))
+        case("V3: %s the same 1.6 m off it (control)" % sid, toward_box(sid, 1.6), [v3_stands], near_box(sid, jid), passes=True)
+    case("V3: cut-1's out lane with its first turn drawn as a sharp left (a fold)", sharpen("cut-1", "program_out", 1, 2, [("L", 90.0)]), [v3_stands], folded("cut-1"))
+    case("V3: fill-1's in lane with its last turn drawn as a sharp right (a fold)", sharpen("fill-1", "program_in", 2, 3, [("R", 90.0)]), [v3_stands], folded("fill-1"))
+    case("V3: yard-1's out lane with R45 S4 R45 drawn as one R90 (a fold)", sharpen("yard-1", "program_out", 3, 6, [("R", 90.0)]), [v3_stands], folded("yard-1"))
+
+    # a stand through the generator's own path: the yard stand moved 6 m east (its lanes redrawn to it) is refused, its box too near its pose
     saved = list(STANDS)
-    STANDS[:] = [CANDIDATE_YARD_STAND]
+    east = copy.deepcopy(stand_def["yard-1"])
+    east["pose"] = (east["pose"][0] + 6.0, east["pose"][1], east["pose"][2])
+    assert east["program_in"][-1][0] == "S" and east["program_out"][2][0] == "S"
+    east["program_in"][-1] = ("S", east["program_in"][-1][1] - 6.0)
+    east["program_out"][2] = ("S", east["program_out"][2][1] - 6.0)
+    STANDS[:] = [x if x["id"] != "yard-1" else east for x in saved]
     try:
         _, refused = assemble(inputs)
     finally:
         STANDS[:] = saved
-    cases.append(("a stand in the yard, lanes drawn through the generator", any("V3 stand yard-1" in x for x in refused), [x for x in refused if "V3 stand yard-1" in x]))
+    cases.append(("yard-1 moved 6 m east, lanes redrawn through the generator", any("V3 stand yard-1: junction merge-bay is " in x for x in refused),
+                  [x for x in refused if "V3 stand yard-1" in x]))
 
     print("selftest on the real site: %s" % ("clean" if not base else "%d defects" % len(base)))
     for name, ok, got in cases:
@@ -2067,7 +2156,7 @@ def selftest(inputs, verbose=False):
             print("      %s" % got[0])
     caught = sum(1 for _, ok, _ in cases if ok)
     print("selftest: %d of %d controls behaved" % (caught, len(cases)))
-    if len(cases) != CONTROLS or caught != CONTROLS:
+    if caught != len(cases):
         sys.exit(2)
 
 

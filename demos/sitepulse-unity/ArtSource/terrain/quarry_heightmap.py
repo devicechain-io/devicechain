@@ -120,7 +120,8 @@ def plant_xz(lx, lz):
 
 PADS = [                   # level platforms: name, (x0, x1, z0, z1), corner, elevation, cut and fill batters
                            # (rise per run; cut None: only built up, never cut down)
-    dict(name="yard", rect=(-108.0, -46.0, -76.0, -14.0), corner=6.0, elev=100.0, cut=0.67, fill=0.5),
+    # the pad runs 10 m north of the yard zone (z -14, quarry_topology.py ZONES): the yard stand's way U-turns there, and a truck sent to the yard stays on gravel
+    dict(name="yard", rect=(-108.0, -46.0, -76.0, -4.0), corner=6.0, elev=100.0, cut=0.67, fill=0.5),
     # the fill pad runs 12 m further south than the loop needs (z0 -86, was -74): with the loop's sweep, the dozer's push and the heaps on it,
     # a hauler, a loader and a dozer could not stand 1.5 m clear of everything (quarry_fleet.py `stand_room`)
     dict(name="fill", rect=(78.0, 108.0, -86.0, -36.0), corner=6.0, elev=98.0, cut=0.67, fill=0.73),
@@ -166,6 +167,8 @@ ROADS = [
 CROWN = 0.15
 SHOULDER = 4.0
 WINDROW = dict(drop=1.4, flat=1.1, ramp=1.3, clear=6.0)   # heights (m); clear = gap kept at junctions
+# where an access lane (quarry_topology.py STANDS) crosses a haul road's windrow: (x, z, radius m) kept open
+WINDROW_GAPS = [(-33.0, -22.5, 5.0)]
 
 _PRODUCT_COARSE = plant_xz(0.0, PLANT_HEAD + 1.5)
 _PRODUCT_MID = plant_xz(PLANT_SIDE_RIGHT + 1.2, PLANT_SCREEN_Z)
@@ -176,9 +179,9 @@ PILES = [                  # heaps at the angle of repose: name, centre, height 
                            # crushed grades, stockpile a yard stockpile, heap tipped earth, bund
                            # grassed topsoil.
     dict(name="muck-pile", x=4.0, z=56.5, h=5.5, base=90.0, kind="muck", len=24.0, heading=90.0, flat=0.85, lumps=0.8),
-    dict(name="pit-stockpile", x=50.0, z=46.0, h=4.5, base=90.0, kind="muck", len=6.0, heading=60.0, flat=0.8, lumps=0.6),
+    dict(name="pit-stockpile", x=55.0, z=51.0, h=4.0, base=90.0, kind="muck", len=6.0, heading=60.0, flat=0.8, lumps=0.6),
     dict(name="yard-stockpile-1", x=-98.0, z=-22.0, h=5.0, base=100.0, kind="stockpile", len=4.0, heading=100.0, flat=0.85),
-    dict(name="yard-stockpile-2", x=-84.0, z=-21.0, h=4.0, base=100.0, kind="stockpile", flat=0.8),
+    dict(name="yard-stockpile-2", x=-99.0, z=-12.0, h=4.0, base=100.0, kind="stockpile", flat=0.8),
     dict(name="feed-stockpile", x=-46.0, z=-84.0, h=4.5, base=100.0, kind="feed", len=8.0, heading=120.0, flat=0.8, lumps=0.9),
     dict(name="product-coarse", x=_PRODUCT_COARSE[0], z=_PRODUCT_COARSE[1], h=9.0, base=100.0, kind="product-coarse", lumps=0.3),
     dict(name="product-mid", x=_PRODUCT_MID[0], z=_PRODUCT_MID[1], h=6.5, base=100.0, kind="product-mid", lumps=0.2),
@@ -554,6 +557,8 @@ class Quarry:
         keep_clear = self.masks["pit_floor"].copy()
         for pd in PADS:
             keep_clear |= self._near(self.masks["pad_" + pd["name"]], WINDROW["clear"]) > 0
+        for gx, gz, gr in WINDROW_GAPS:
+            keep_clear |= np.hypot(self.X - gx, self.Z - gz) <= gr
         wm = np.zeros_like(self.H, bool)
         wh = np.zeros_like(self.H)
         for k, rd in enumerate(self.roads):
@@ -955,11 +960,11 @@ PROPS = [
     ("container_red", -86.0, -74.0, 0.0),
     ("fuel_tank", -66.5, -56.5, 90.0),          # dispenser faces the refuel bay
     ("light_tower", -71.0, -60.5, 30.0),
-    ("light_tower", -48.0, -20.0, 200.0),
+    ("light_tower", -104.0, -30.0, 200.0),
     ("light_tower", 30.0, 61.0, 330.0),        # these two, the sign and the barrier line below stand off the haul loop's sweep
     ("light_tower", 76.0, -40.0, 160.0),       # (quarry_fleet.py `site_checks`): the loop passes them by the travel reach, 3.2 m, at least
     ("light_tower", -58.0, -82.0, 140.0),
-    ("site_sign", -40.0, -18.0, 270.0),
+    ("site_sign", -22.0, -17.0, 270.0),
     # the processing plant
     ("crusher_plant", PLANT["x"], PLANT["z"], PLANT["heading"]),
 ] + [("cone", -55.6, -64.0 + 3.0 * i, 0.0) for i in range(7)] \

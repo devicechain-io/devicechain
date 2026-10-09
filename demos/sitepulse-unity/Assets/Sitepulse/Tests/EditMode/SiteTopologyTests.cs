@@ -211,14 +211,15 @@ namespace DeviceChain.Sitepulse.Tests
         public void P1HoldsOnEveryDirectedCycleNotOnlyTheLoop()
         {
             var cycles = new TopologyValidator(Topology, World).DirectedCycles();
-            Assert.AreEqual(2, cycles.Count, "the loop, and the detour through the refuel bay");
+            Assert.AreEqual(5, cycles.Count, "the loop, and the detour through each of the three zone stands and the refuel bay");
             Assert.IsTrue(cycles.Any(c => c.Name == "loop"));
-            Assert.IsTrue(cycles.Any(c => c.Name.StartsWith("loop via access/bay/in")), "the bay's detour is a cycle of its own");
+            foreach (var lane in new[] { "access/cut-1/in", "access/fill-1/in", "access/yard-1/in", "access/bay/in" })
+                Assert.IsTrue(cycles.Any(c => c.Name.StartsWith("loop via " + lane)), lane + "'s detour is a cycle of its own");
             // the detour round the loop that skips most of it, with a fleet the loop itself still holds
             AssertDefect(TopologyKit.Check(v => v.CycleCapacity(), TopologyKit.Edit(n =>
             {
                 n["fleet"]["machines"] = 40;
-                n["entries"][0]["cell"] = 1;
+                TopologyKit.ById(n["entries"], "entry-bay")["cell"] = 1;
             })), "V1 P1: loop via access/bay/in", "the bay's detour short for the fleet");
         }
 
@@ -276,7 +277,7 @@ namespace DeviceChain.Sitepulse.Tests
             {
                 var c = TopologyKit.Lane(n, "loop")["cells"][60].AsArray();
                 var h = new Cell((double)c[0], (double)c[1], (double)c[2], (double)c[3], 0.0).HeadingDegrees;
-                n["stands"][0]["pose"] = new JsonArray(((double)c[0] + (double)c[2]) / 2.0, ((double)c[1] + (double)c[3]) / 2.0, h);
+                TopologyKit.ById(n["stands"], "refuel-queue")["pose"] = new JsonArray(((double)c[0] + (double)c[2]) / 2.0, ((double)c[1] + (double)c[3]) / 2.0, h);
             })), "V3 stand", "a stand on a loop cell");
         }
 
@@ -296,7 +297,26 @@ namespace DeviceChain.Sitepulse.Tests
         [Test]
         public void AStandThatListsNoKindIsRefused()
         {
-            AssertDefect(TopologyKit.Check(v => v.Stands(), TopologyKit.Edit(n => n["stands"][0]["kinds"] = new JsonArray())), "V3 stand refuel-queue: it lists no kind", "a stand with no kind");
+            AssertDefect(TopologyKit.Check(v => v.Stands(), TopologyKit.Edit(n => TopologyKit.ById(n["stands"], "refuel-queue")["kinds"] = new JsonArray())), "V3 stand refuel-queue: it lists no kind", "a stand with no kind");
+        }
+
+        [Test]
+        public void AZoneStandMovedOntoItsOwnBoxIsRefused()
+        {
+            // each zone stand's way runs through a box (merge-bay carries the yard stand's lanes); a pose put at the middle of that box keeps no air from it
+            foreach (var (stand, box) in new[] { ("cut-1", "merge-cut-1"), ("fill-1", "merge-fill-1"), ("yard-1", "merge-bay") })
+            {
+                var s = stand;
+                var b = box;
+                AssertDefect(TopologyKit.Check(v => v.Stands(), TopologyKit.Edit(n =>
+                {
+                    var poly = TopologyKit.ById(n["junctions"], b)["polygon"].AsArray();
+                    var cx = poly.Average(p => (double)p[0]);
+                    var cz = poly.Average(p => (double)p[1]);
+                    var pose = TopologyKit.ById(n["stands"], s)["pose"];
+                    TopologyKit.ById(n["stands"], s)["pose"] = new JsonArray(cx, cz, (double)pose[2]);
+                })), d => d.StartsWith("V3 stand " + s + " (") && d.Contains("from junction " + b + ","), s + " moved onto " + b);
+            }
         }
 
         [Test]
@@ -304,7 +324,7 @@ namespace DeviceChain.Sitepulse.Tests
         {
             // on a track the live fleet plays
             var tr = World.Live.Tracks[3];
-            AssertDefect(TopologyKit.Check(v => v.Stands(), TopologyKit.Edit(n => n["stands"][0]["pose"] = new JsonArray(tr.X[0], tr.Z[0], tr.Heading[0]))),
+            AssertDefect(TopologyKit.Check(v => v.Stands(), TopologyKit.Edit(n => TopologyKit.ById(n["stands"], "refuel-queue")["pose"] = new JsonArray(tr.X[0], tr.Z[0], tr.Heading[0]))),
                 "from sweep live fleet track 3", "a stand on the live fleet's third track");
             // the scripted refuel visit's track is played by the preview fleet alone: the table exempts the queue and the bay from it, and without that the preview fleet's sweep is found
             AssertDefect(TopologyKit.Check(v => v.Stands(), TopologyKit.Edit(n =>
@@ -489,7 +509,7 @@ namespace DeviceChain.Sitepulse.Tests
             Assert.IsTrue(load.RideThrough, "and the station admits trucks without loading while that loader is away");
             Assert.AreEqual(2, Topology.Stations.First(s => s.Id == "pad").Capacity, "two trucks at the pad");
             // a headway under the fleet's, a buffer of one slot for a capacity of two
-            AssertDefect(TopologyKit.Check(v => v.Stations(), TopologyKit.Edit(n => n["stations"][0]["headway_s"] = (double)n["stations"][0]["headway_s"] * 0.9)), "its headway", "a headway 0.9 of the fleet's");
+            AssertDefect(TopologyKit.Check(v => v.Stations(), TopologyKit.Edit(n => TopologyKit.ById(n["stations"], "load")["headway_s"] = (double)TopologyKit.ById(n["stations"], "load")["headway_s"] * 0.9)), "its headway", "a headway 0.9 of the fleet's");
             AssertDefect(TopologyKit.Check(v => v.Stations(), TopologyKit.Edit(n =>
             {
                 var pad = n["stations"].AsArray().First(s => (string)s["id"] == "pad");
@@ -529,13 +549,13 @@ namespace DeviceChain.Sitepulse.Tests
         {
             // the merge box holds the bay's out lane, the loop and the yard road together; take the out lane's cells out of it and what is left unheld is the out lane's
             // conflicts with the others (the loop and the road are still in the box together)
-            var merge = Topology.Junctions.First(j => j.Id.StartsWith("merge-")).Id;
+            var merge = Topology.Junctions.First(j => j.Id == "merge-bay").Id;
             var without = TopologyKit.Edit(n =>
             {
                 var j = n["junctions"].AsArray().First(x => (string)x["id"] == merge);
                 var keep = new JsonArray();
                 foreach (var m in j["members"].AsArray())
-                    if (!((string)m["lane"]).StartsWith("access/")) keep.Add(m.DeepClone());
+                    if (!((string)m["lane"]).StartsWith("access/bay/")) keep.Add(m.DeepClone());
                 j["members"] = keep;
             });
             var defects = TopologyKit.Check(v => v.Boxes(), without).Where(d => d.StartsWith("V5 conflict")).ToList();
@@ -613,7 +633,8 @@ namespace DeviceChain.Sitepulse.Tests
             AssertDefect(TopologyKit.Check(x => x.Boxes(), TopologyKit.Edit(n => n["rules"]["conflict_haul_m"] = haul + 0.01)), "V5 conflict", "the threshold raised past it");
             AssertClean(TopologyKit.Check(x => x.Boxes(), TopologyKit.Edit(n => n["rules"]["conflict_haul_m"] = haul - 0.01)), "the threshold lowered below it");
             var access = NearestClear(v, (a, b) => a.Kind == "access" || b.Kind == "access", Topology.Rules.ConflictAccessM);
-            Assert.AreEqual(0.526, access, 0.005, "the nearest pair with a bay lane that does not conflict");
+            // the loop's cell 150 and the sixth cell of fill-1's in lane (the nearest used to be a bay lane's, 0.526 m)
+            Assert.AreEqual(0.328, access, 0.005, "the nearest pair with an access lane that does not conflict");
         }
 
         [Test]
@@ -675,12 +696,12 @@ namespace DeviceChain.Sitepulse.Tests
         {
             AssertClean(TopologyKit.Check(v => v.WaitingCells()), "every box with cells in a core is held by that station");
             var pad = Topology.Stations.First(s => s.Id == "pad");
-            CollectionAssert.AreEquivalent(new[] { "oncoming-pad-south", MergedBox }, pad.Holds, "the pad holds the two boxes beside it");
+            CollectionAssert.AreEquivalent(new[] { "merge-fill-1", MergedBox }, pad.Holds, "the pad holds the two boxes beside it");
 
             var none = TopologyKit.Check(v => v.WaitingCells(), WithHolds("pad")).ToList();
-            AssertDefect(none, "junction oncoming-pad-south has approach cell 151 on loop inside the core of station pad", "pad-south's approach is in the pad core");
+            AssertDefect(none, "junction merge-fill-1 has approach cell 151 on loop inside the core of station pad", "merge-fill-1's approach is in the pad core");
             AssertDefect(none, "has room cell 134-140 on loop inside the core of station pad", "the merged box's room is in the pad core");
-            AssertDefect(TopologyKit.Check(v => v.WaitingCells(), WithHolds("pad", MergedBox)), "junction oncoming-pad-south has approach cell 151", "only the merged box held");
+            AssertDefect(TopologyKit.Check(v => v.WaitingCells(), WithHolds("pad", MergedBox)), "junction merge-fill-1 has approach cell 151", "only the merged box held");
             AssertDefect(TopologyKit.Check(v => v.WaitingCells(), WithHolds("load")), "junction oncoming-ramp-bottom has room cell 363-366 on loop inside the core of station load", "the load core's first cells");
         }
 
@@ -689,7 +710,7 @@ namespace DeviceChain.Sitepulse.Tests
         {
             AssertDefect(TopologyKit.Check(v => v.WaitingCells(), WithHolds("load", "oncoming-ramp-bottom", "merge-bay")),
                 d => d.Contains("station load holds junction merge-bay") && d.Contains("a hold nothing needs"), "a box that touches nothing of the core");
-            AssertDefect(TopologyKit.Check(v => v.WaitingCells(), WithHolds("pad", "oncoming-pad-south", MergedBox, "no-such-box")),
+            AssertDefect(TopologyKit.Check(v => v.WaitingCells(), WithHolds("pad", "merge-fill-1", MergedBox, "no-such-box")),
                 "station pad holds junction no-such-box, which the file does not have", "a box the file lacks");
         }
 
@@ -812,25 +833,32 @@ namespace DeviceChain.Sitepulse.Tests
             foreach (var z in Topology.Zones)
                 foreach (var kind in z.Kinds)
                     Assert.IsTrue(Topology.Stands.Any(s => s.Zone == z.Token && s.Role == "zone" && s.Kinds.Contains(kind)), $"{z.Token} has a zone stand for a {kind}");
-            // a zone asked for a stand for a kind it has none of
-            AssertDefect(TopologyKit.Check(v => v.Zones(), TopologyKit.Edit(n => n["zones"][0]["kinds"] = new JsonArray("Hauler"))), "V8 zone: sp-zone-cut has no stand", "a zone with no stand for a hauler");
-            // the yard has the refuel bay's two stands, which are service stands and do not make it a place to send a hauler to
-            Assert.IsTrue(Topology.Stands.All(s => s.Role == "service"), "the bay's stands are service stands");
-            AssertDefect(TopologyKit.Check(v => v.Zones(), TopologyKit.Edit(n => n["zones"][2]["kinds"] = new JsonArray("Hauler"))), "V8 zone: sp-zone-yard has no stand for a Hauler", "the yard asked for a hauler with only the bay's stands in it");
+            // a zone whose stand is gone, however it came to be
+            JsonNode Without(JsonNode n, string id) => new JsonArray(n["stands"].AsArray().Where(s => (string)s["id"] != id).Select(s => s.DeepClone()).ToArray());
+            AssertDefect(TopologyKit.Check(v => v.Zones(), TopologyKit.Edit(n => n["stands"] = Without(n, "cut-1"))), "V8 zone: sp-zone-cut has no stand for a Hauler", "the cut without cut-1");
+            AssertDefect(TopologyKit.Check(v => v.Zones(), TopologyKit.Edit(n => n["stands"] = Without(n, "fill-1"))), "V8 zone: sp-zone-fill has no stand for a Hauler", "the fill without fill-1");
+            // the yard has the refuel bay's two stands too, which are service stands and do not make it a place to send a hauler to
+            AssertDefect(TopologyKit.Check(v => v.Zones(), TopologyKit.Edit(n => n["stands"] = Without(n, "yard-1"))), "V8 zone: sp-zone-yard has no stand for a Hauler", "the yard with only the bay's stands in it");
+            AssertDefect(TopologyKit.Check(v => v.Zones(), TopologyKit.Edit(n => TopologyKit.ById(n["stands"], "yard-1")["role"] = "service")), "V8 zone: sp-zone-yard has no stand", "yard-1 a service stand");
+            AssertDefect(TopologyKit.Check(v => v.Zones(), TopologyKit.Edit(n => TopologyKit.ById(n["stands"], "fill-1")["kinds"] = new JsonArray("Hauler", "Loader"))),
+                "V8 zone: sp-zone-fill has no stand for a Dozer", "a kind the zone asks for and its stand does not list");
             // a stand outside the zone it names is refused
-            AssertDefect(TopologyKit.Check(v => v.Zones(), TopologyKit.Edit(n => n["stands"][0]["zone"] = "sp-zone-cut")), "not wholly inside", "a stand in the wrong zone");
+            AssertDefect(TopologyKit.Check(v => v.Zones(), TopologyKit.Edit(n => TopologyKit.ById(n["stands"], "cut-1")["zone"] = "sp-zone-fill")), "not wholly inside", "a stand in the wrong zone");
         }
 
         [Test]
-        public void NoZoneHasAStandYetAndTheTopologySaysSo()
+        public void EachZoneHasItsStand()
         {
-            // The room the choreography leaves to stand in (quarry_fleet.py stand_room) is not a way in and out: with the clearances a hauler keeps
-            // from outlines and from every machine's work area, no lane reaches a stand in the cut, the fill or the yard and leaves it without
-            // its two lanes running over each other. The topology therefore lists every zone as accepting no kind, and holds the refuel
-            // bay's two stands only. This test is the record: it fails when a stand is added, so that the zones' kinds are decided then.
+            // One drive-through stand per zone, each accepting a hauler, a loader and a dozer, plus the refuel bay's two service stands.
             CollectionAssert.AreEquivalent(new[] { "sp-zone-cut", "sp-zone-fill", "sp-zone-yard" }, Topology.Zones.Select(z => z.Token).ToArray());
-            foreach (var z in Topology.Zones) CollectionAssert.IsEmpty(z.Kinds, z.Token + " accepts no kind until it has a stand");
-            CollectionAssert.AreEquivalent(new[] { Topology.Bay.Queue, Topology.Bay.BayStand }, Topology.Stands.Select(s => s.Id).ToArray(), "the stands are the bay's");
+            foreach (var z in Topology.Zones) CollectionAssert.AreEquivalent(new[] { "Hauler", "Loader", "Dozer" }, z.Kinds.ToArray(), z.Token + " accepts all three kinds");
+            CollectionAssert.AreEquivalent(new[] { "cut-1", "fill-1", "yard-1", Topology.Bay.Queue, Topology.Bay.BayStand }, Topology.Stands.Select(s => s.Id).ToArray(), "the stands");
+            foreach (var id in new[] { "cut-1", "fill-1", "yard-1" })
+            {
+                var s = Topology.Stands.First(x => x.Id == id);
+                Assert.AreEqual("zone", s.Role, id + " is a zone stand");
+                Assert.AreEqual("sp-zone-" + id.Substring(0, id.IndexOf('-')), s.Zone, id + " is in its own zone");
+            }
         }
 
         [Test]
