@@ -127,6 +127,12 @@ type DetectMetrics struct {
 	// on the way to this loop and the fill recovered it.
 	gapFills     *prometheus.CounterVec
 	gapSequences *prometheus.CounterVec
+
+	// loopSeconds is detect_loop_seconds_total: where the live loop's wall time goes, one counter
+	// per phase (loop_phases.go), already resolved from the label so the loop never looks one up.
+	// checkpointDuration is the distribution behind the last-value checkpointSeconds gauge.
+	loopSeconds        [numLoopPhases]prometheus.Counter
+	checkpointDuration prometheus.Observer
 }
 
 // NewDetectMetrics registers the checkpoint-loop metrics under the service's
@@ -201,6 +207,15 @@ func NewDetectMetrics(ms *core.Microservice) *DetectMetrics {
 			"Stream sequences inside live gap fills, by outcome: applied (a message the broker had counted as delivered that never reached the loop, now applied), absent (not in the stream: purged or evicted), skipped (read back unprocessable, and recorded as handled without applying anything). A non-zero applied rate means deliveries are being lost between the broker and this loop.",
 			[]string{"outcome"}),
 	}
+	loopSeconds := ms.NewCounterVec("detect_loop_seconds_total",
+		"Wall-clock seconds the live detection loop has spent in each phase, by phase: fetch_wait (idle, waiting for the next message or tick), decode, plan (rule fan-out), apply (the engine), publish (a checkpoint handing detections to the broker), save (a checkpoint committing the snapshot), ack, gapfill (reading missed sequences), control (rule and roster updates, purges, ticker housekeeping), parked (live messages switched off behind an uncommitted idle advance or an unreadable gap), probe (the ticker's broker backlog round trips). The phases partition the loop's time, so a phase's rate is its share of wall time and the non-wait phases summing to 1 means the loop is saturated.",
+		[]string{"phase"})
+	for i := range m.loopSeconds {
+		m.loopSeconds[i] = loopSeconds.WithLabelValues(loopPhaseNames[i])
+	}
+	m.checkpointDuration = ms.NewHistogramVec("detect_checkpoint_duration_seconds",
+		"Wall-clock cost of each committed snapshot (serialize plus store), as a distribution. detect_checkpoint_seconds keeps only the last one.",
+		nil, []float64{0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30}).WithLabelValues()
 	// Every label value exists from startup, so an alert on the rate sees a zero series rather
 	// than no series on a healthy instance.
 	for _, p := range repairProjections {
@@ -555,6 +570,7 @@ func (m *DetectMetrics) recordCheckpoint(appliedSeq uint64, seconds float64, byt
 	m.checkpointsTotal.Inc()
 	m.appliedStreamSeq.Set(float64(appliedSeq))
 	m.checkpointSeconds.Set(seconds)
+	m.checkpointDuration.Observe(seconds)
 	m.snapshotBytes.Set(float64(bytes))
 	m.watermarkLagSeconds.Set(lagSeconds)
 }
