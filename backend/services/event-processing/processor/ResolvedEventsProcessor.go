@@ -164,6 +164,20 @@ type Config struct {
 // AckWait x MaxDeliver (5 minutes), and Holder.Held() goes false at the lease's LOCAL
 // deadline (last successful renew + DefaultLeaseTTL, 30s), which makes that unrealistic.
 //
+// 🔴 THE DURABLE ACKNOWLEDGES AT A FLOOR, not per message (messaging.ReaderWithAckFloor). A
+// checkpoint sends ONE ack, for the snapshot's sequence, and the broker deletes the pending entry
+// of every message at or below it, whether this process handled it or not (ackThroughCommitted).
+// That is safe because of the guarantee below: the engine's sequence never passes a stream
+// sequence that exists and was neither applied nor judged unprocessable, and the snapshot holds
+// the engine as of that sequence. So the ceiling is the committed row's sequence and nothing
+// else, and it rests on the LAST MESSAGE PROCESSED, never the last one fetched: a reader that
+// fetched ahead of the loop must leave what it has not processed pending. The durable is created
+// at the committed sequence plus one (CommittedFloorStart) and has its own name
+// (messaging.AckFloorDurableName); the explicit-ack durable of the previous release is deleted
+// when a term starts. A crash between the snapshot and the ack costs nothing: the restart restores
+// the snapshot and replays by sequence, and the broker's redelivery from the old floor is
+// guard-dropped.
+//
 // Only after replay reaches the head does the live loop run, consuming the durable
 // reader. Redelivered duplicates (seq <= the engine's) are dropped by the engine's guard and
 // acked; new events advance it.
@@ -497,6 +511,11 @@ type ResolvedEventsProcessor struct {
 	// checkpoint its successor has already committed to. Written by restore, read by
 	// replayToHead — both on the build path, before any loop starts.
 	restoredSeq int64
+	// committedSeq is the stream sequence the checkpoint row holds: what restore read, then
+	// what each Save wrote. It is the CEILING of the ack at a checkpoint (ackThroughCommitted)
+	// and nothing else is, not the engine's LastSeq, which can be ahead of the row between a
+	// message being applied and the Save that covers it. Owned by the loop, as the engine is.
+	committedSeq uint64
 	// idleUncommitted latches when idleAdvance moved the watermark off the wall clock but its
 	// checkpoint could NOT commit (broker/store outage). The wall-clock advance is not
 	// replayable, so a live event applied against the uncommitted inflated frontier would
@@ -1441,6 +1460,7 @@ func (rp *ResolvedEventsProcessor) restore(ctx context.Context) error {
 	if !ok {
 		rp.engine = rp.newDetector()
 		rp.restoredSeq = 0
+		rp.committedSeq = 0
 		rp.metrics.recordRestore(0, 0)
 		log.Info().Str("partition", rp.cfg.PartitionId).Msg("No prior DETECT snapshot; starting from empty engine.")
 		return nil
@@ -1454,6 +1474,7 @@ func (rp *ResolvedEventsProcessor) restore(ctx context.Context) error {
 	// of it. They agree today, and the store's compare-and-swap is worth nothing if they
 	// ever stop: it has to compare what was actually read from the table.
 	rp.restoredSeq = snap.StreamSeq
+	rp.committedSeq = uint64(snap.StreamSeq)
 	rp.metrics.recordRestore(rp.clock.Now().Sub(start).Seconds(), uint64(snap.StreamSeq))
 	log.Info().Str("partition", rp.cfg.PartitionId).Uint64("lastSeq", engine.LastSeq()).
 		Time("watermark", engine.Watermark()).Msg("Restored DETECT engine from snapshot.")
@@ -1492,6 +1513,7 @@ func (rp *ResolvedEventsProcessor) replayToHead() error {
 		observed := rp.restoredSeq
 		rp.engine = rp.newDetector()
 		rp.dirty = false
+		rp.committedSeq = 0
 		// Clear the stale row (the deliberate backward move Save's monotonic guard
 		// refuses); live consumption then writes a fresh checkpoint from sequence 1. The
 		// sequence is the row we RESTORED from, captured before the engine above replaced
@@ -2413,7 +2435,7 @@ func (rp *ResolvedEventsProcessor) ackRuleFact(msg messaging.Message) {
 }
 
 // checkpoint durably delivers buffered detections, commits any new engine state to the
-// snapshot store, and then acks every buffered message — IN THAT ORDER (deliver-before-
+// snapshot store, and then acks through the committed sequence — IN THAT ORDER (deliver-before-
 // checkpoint). Publishing the detections first is the correctness contract: a detection is
 // re-derivable by replaying from the last checkpoint, so as long as the acked/committed
 // sequence never advances PAST a message whose detections are not yet published, a crash
@@ -2430,13 +2452,14 @@ func (rp *ResolvedEventsProcessor) ackRuleFact(msg messaging.Message) {
 //
 // The snapshot commit runs only when engine state changed since the last checkpoint (dirty);
 // when it did not — the buffer holds only duplicates at or below LastSeq (the guard drops
-// anything at or below LastSeq; gaps are not detected on the live path) — the acks are
-// released against the already-durable prior snapshot with no redundant write. Poison above
+// anything at or below LastSeq) — the ack is released against the already-durable prior
+// snapshot with no redundant write. Poison above
 // LastSeq is not that case: it advances LastSeq (Engine.Skip) and marks the loop dirty, so it
 // is snapshotted. Because a
 // committed snapshot captures engine.LastSeq(), every buffered valid event is at or below the
 // durable sequence and every poison message carries no state beyond its skipped sequence, so
-// acking the whole buffer is safe. A commit failure leaves the messages unacked (they redeliver / are re-read on replay).
+// acking through the committed sequence is safe (ackThroughCommitted: one ack, for the highest
+// buffered message at or below it). A commit failure leaves the messages unacked (they redeliver / are re-read on replay).
 // It reports whether everything buffered is now durable — the snapshot committed (or
 // there was nothing dirty to commit) and every pending detection was handed off. Almost
 // every caller ignores that: a scheduled checkpoint that defers has already logged, and
@@ -2548,6 +2571,7 @@ func (rp *ResolvedEventsProcessor) runCheckpoint(ctx context.Context, force bool
 			return false
 		}
 		rp.lastSaveDuration = saveDur
+		rp.committedSeq = uint64(snap.StreamSeq)
 		rp.snapshotBackoff, rp.snapshotRetryAfter = 0, time.Time{}
 		rp.dirty = false
 		// A committed snapshot makes any idle-advanced frontier durable, so the loop may resume
@@ -2560,17 +2584,65 @@ func (rp *ResolvedEventsProcessor) runCheckpoint(ctx context.Context, force bool
 	}
 
 	rp.phases.enter(phaseAck)
-	for _, m := range rp.pendingAcks {
-		if err := m.Ack(); err != nil {
-			// A failed ack redelivers that message; the idempotent replay guard makes
-			// reprocessing safe, so log and move on rather than unwinding the commit.
-			log.Warn().Err(err).Msg("Failed to ack a checkpointed resolved event; it will redeliver (idempotent).")
-		}
-	}
+	rp.ackThroughCommitted()
 	rp.pendingAcks = rp.pendingAcks[:0]
 	rp.lastCheckpoint = rp.clock.Now()
 	rp.phases.flush()
 	return true
+}
+
+// ackThroughCommitted acknowledges everything the checkpoint just made durable, with ONE
+// ack. The resolved-events durable is an ack-floor consumer (messaging.ReaderWithAckFloor): an
+// ack of a message deletes the pending entry of every message at or below its stream sequence,
+// handled or not, so what is acked is decided by the ceiling and the ceiling is the committed
+// snapshot sequence, never the last message handled and never the engine's LastSeq.
+//
+// WHY EVERYTHING AT OR BELOW THE CEILING MAY GO. The engine's sequence never passes a stream
+// sequence that exists and was neither applied nor judged unprocessable (the live gap fill, and
+// Engine.Skip for poison), and the snapshot holds the engine as of that sequence. So every
+// sequence at or below committedSeq is either inside the snapshot or absent from the stream,
+// including one the broker had sent and this process never received (a delivery lost on the way,
+// a zombie's share): the gap fill read it from the stream before LastSeq moved past it. Acking
+// such a sequence at the broker deletes a pending entry whose message the snapshot already
+// holds, which is what an ack means.
+//
+// 🔴 THE FLOOR IS THE LAST MESSAGE PROCESSED AND COMMITTED, NEVER THE LAST ONE FETCHED. A
+// reader that fetched ahead of the loop (pipelined fetch) would hold messages above the
+// ceiling that the broker has already sent; they must stay pending, and they do, because
+// AckThrough never acks above the ceiling. Moving this ceiling to anything the reader has
+// merely seen would delete unread messages outright.
+//
+// It is also the only place the floor moves, and it moves only inside a held term: a floor ack
+// from any replica moves the floor for all of them, so the ownership check is repeated here,
+// microseconds before the ack, instead of relying on the one at the top of the checkpoint
+// (before a publish and a Save that can take seconds).
+//
+// Messages the call does not ack are dropped from the buffer with it: those above the ceiling
+// (none by construction) and any with no stream sequence stay pending at the broker, and the next
+// checkpoint's floor, which is above them, deletes them.
+func (rp *ResolvedEventsProcessor) ackThroughCommitted() {
+	if len(rp.pendingAcks) == 0 {
+		return
+	}
+	if rp.leadershipEnabled() && !rp.heldNow() {
+		log.Warn().Str("partition", rp.cfg.PartitionId).Uint64("committedSeq", rp.committedSeq).
+			Msg("DETECT lost the partition between committing its snapshot and acknowledging; the messages stay " +
+				"unacked and redeliver to the leader, which drops them as already applied")
+		return
+	}
+	res, err := messaging.AckThrough(rp.pendingAcks, rp.committedSeq)
+	if err != nil {
+		// A failed ack leaves the floor where it was: the messages redeliver, and the sequence
+		// guard drops them. The next checkpoint's floor covers them.
+		log.Warn().Err(err).Uint64("committedSeq", rp.committedSeq).
+			Msg("Failed to acknowledge through the committed sequence; the messages will redeliver (idempotent).")
+		return
+	}
+	if res.Above > 0 {
+		log.Error().Int("above", res.Above).Uint64("committedSeq", rp.committedSeq).
+			Msg("A buffered resolved event is above the committed sequence at a checkpoint; it was left unacked. " +
+				"The engine applies every message it buffers, so this is a bug.")
+	}
 }
 
 // haltStaleWriter stops this writer for good after a checkpoint has been refused as

@@ -833,6 +833,8 @@ tests:
         values: '0x50'
       - series: 'devicechain_eventprocessing_jetstream_consumer_pending_messages{namespace="dci-devicechain", job="devicechain/event-processing", stream="devicechain_resolved-events", durable="devicechain_event-processing_resolved-events", pod="dc-event-processing-5c4b-aaaaa"}'
         values: '60000x50'
+      - series: 'devicechain_eventprocessing_jetstream_consumer_pending_messages{namespace="dci-devicechain", job="devicechain/event-processing", stream="devicechain_resolved-events", durable="devicechain_event-processing_resolved-events_ackfloor", pod="dc-event-processing-5c4b-bbbbb"}'
+        values: '60000x50'
       - series: 'devicechain_devicestate_jetstream_consumer_pending_messages{namespace="dci-other", job="other/device-state", stream="other_resolved-events", durable="other_device-state_resolved-events", pod="dc-device-state-7c9f-zzzzz"}'
         values: '60000x50'
     alert_rule_test:

@@ -84,7 +84,7 @@ func (r *stealingReader) steal() {
 func TestTermBuildReplayWithLostDeliveriesMatchesACleanReplay(t *testing.T) {
 	const events = 600
 	b := startDetectBroker(t)
-	nmgr, _ := b.detectManager(t)
+	nmgr, _ := b.detectManager(t, newTestStore(t))
 
 	js, err := b.nc.JetStream()
 	require.NoError(t, err)

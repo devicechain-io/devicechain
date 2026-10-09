@@ -1553,7 +1553,11 @@ func (r *natsReader) BindTerm() error {
 	// A new term re-opens the reader the last UnbindTerm closed. This is the ONLY
 	// thing that clears the flag, so nothing between the two terms can re-attach.
 	r.unbound = false
-	return r.bindLocked()
+	if err := r.bindLocked(); err != nil {
+		return err
+	}
+	r.retireLegacyDurable()
+	return nil
 }
 
 // UnbindTerm drops the pull subscription at the end of a leadership term.
@@ -1769,6 +1773,9 @@ func (nmgr *NatsManager) NewReader(suffix string, opts ...ReaderOption) (Message
 	}
 	if err := r.validateAckFloor(); err != nil {
 		return nil, err
+	}
+	if r.ackFloor() {
+		r.durable = AckFloorDurableName(nmgr.Microservice.InstanceId, nmgr.Microservice.FunctionalArea, suffix)
 	}
 	if r.downstream != "" {
 		nmgr.registerBackpressure(r.downstream)

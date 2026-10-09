@@ -43,6 +43,7 @@ func measuredMsgAt(t *testing.T, seq uint64, occurred time.Time, tenant, device,
 	}
 	m := messaging.NewConsumedMessage("dc."+tenant+".resolved-events", b, 0, nil, ack)
 	m.StreamSeq = seq
+	registerPending(t, ack, seq)
 	return m
 }
 

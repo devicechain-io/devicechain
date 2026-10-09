@@ -60,10 +60,56 @@ var ErrAckFloorPolicyMismatch = errors.New("messaging: durable exists with an ac
 // is not AckAll the bind fails with ErrAckFloorPolicyMismatch; use a new durable name to
 // move a reader onto this option.
 //
+// The durable is named AckFloorDurableName, not DurableName: see there. The ordinary-named
+// durable the reader replaced is deleted at the start of each leadership term (BindTerm).
+//
 // Messages from such a reader refuse Message.Ack (ErrAckFloorReader). It cannot be combined
 // with ReaderWithDeliverNew or ReaderWithCapacity; NewReader rejects the combination.
 func ReaderWithAckFloor(start func(ctx context.Context) (uint64, error)) ReaderOption {
 	return func(r *natsReader) { r.ackFloorStart = start }
+}
+
+// AckFloorDurableName is the durable an ack-floor reader of suffix uses: the ordinary name
+// (DurableName) with an "_ackfloor" tail. The tail is the point, not decoration. A durable's
+// ack policy cannot be changed in place, so a reader moving to the floor policy cannot keep
+// its old name: it takes a new one, created at its committed position, and retires the old
+// one (see retireLegacyDurable). And a name that says which policy a durable has is one a
+// reader of the other policy can never collide with. Dashboards and alert selectors match on
+// the name, so anything that names a durable by its ordinary form must know this one too.
+func AckFloorDurableName(instanceId, functionalArea, suffix string) string {
+	return DurableName(instanceId, functionalArea, suffix) + ackFloorDurableTail
+}
+
+// ackFloorDurableTail ends the name of every ack-floor durable; see AckFloorDurableName.
+const ackFloorDurableTail = "_ackfloor"
+
+// retireLegacyDurable deletes the explicit-ack durable this reader replaced, if it is still
+// there. It is idempotent, and a durable that cannot be deleted is logged and left: it is
+// harmless (resolved-events retains by limits, so an orphaned consumer pins nothing, and
+// nothing samples or pulls from it), and the next term tries again.
+//
+// It runs at term start, not at construction, so that only the replica that leads deletes
+// anything. A replica running the previous build (which binds the legacy name with
+// AddConsumer on every re-bind) would otherwise recreate it behind a deleter that ran at
+// every process start.
+func (r *natsReader) retireLegacyDurable() {
+	if !r.ackFloor() {
+		return
+	}
+	legacy := DurableName(r.nmgr.Microservice.InstanceId, r.nmgr.Microservice.FunctionalArea, r.suffix)
+	if legacy == r.durable {
+		return
+	}
+	err := r.nmgr.js.DeleteConsumer(r.stream, legacy)
+	switch {
+	case err == nil:
+		log.Info().Str("stream", r.stream).Str("durable", legacy).Str("replacedBy", r.durable).
+			Msg("Deleted the explicit-ack durable this ack-floor reader replaced")
+	case errors.Is(err, nats.ErrConsumerNotFound):
+	default:
+		log.Warn().Err(err).Str("stream", r.stream).Str("durable", legacy).
+			Msg("Could not delete the explicit-ack durable this ack-floor reader replaced; it is unused and harmless, and the next term retries")
+	}
 }
 
 // ackFloor reports whether this reader was built with ReaderWithAckFloor.
@@ -82,11 +128,33 @@ func (r *natsReader) validateAckFloor() error {
 		return errors.New("messaging: ReaderWithAckFloor cannot be combined with ReaderWithCapacity; " +
 			"capacity slots are released per message ack")
 	}
+	if gatesItsStream(r.suffix, r.nmgr.Microservice.FunctionalArea) {
+		// The stream's writers measure this area's backlog on the durable's ORDINARY name
+		// (gatingDurables). An ack-floor durable has another, so the gate would read a
+		// durable that does not exist and never close.
+		return fmt.Errorf("messaging: ReaderWithAckFloor cannot be used by %q on %q: its backlog gates the stream's writers, "+
+			"and the gate reads the ordinary durable name", r.nmgr.Microservice.FunctionalArea, r.suffix)
+	}
 	return nil
 }
 
+// FloorAcknowledger is what AckThrough needs of a message's Acknowledger. The transport's
+// is the only production implementation; the interface exists so a consumer's unit tests can
+// stand a fake in for the broker and still go through AckThrough (the code under test) rather
+// than around it.
+type FloorAcknowledger interface {
+	Acknowledger
+	// AckFloor acknowledges this message and, with it, every message at or below its stream
+	// sequence. It is the only acknowledgement an ack-floor message permits.
+	AckFloor() error
+	// Current reports whether the message was delivered by the reader's current bind. One
+	// delivered before the durable was recreated names a consumer that no longer exists, so
+	// acking it would apply its delivery sequence to the new one.
+	Current() bool
+}
+
 // floorAck is the Acknowledger of a message from an ack-floor reader. Ack refuses; the
-// transport handle is reachable only through AckThrough.
+// transport handle is reachable only through AckFloor.
 type floorAck struct {
 	nm *nats.Msg
 	// r and gen identify the bind that delivered the message; nil r means no check (tests).
@@ -96,8 +164,10 @@ type floorAck struct {
 
 func (floorAck) Ack() error { return ErrAckFloorReader }
 
-// current reports whether the message was delivered by the reader's current bind.
-func (a floorAck) current() bool { return a.r == nil || a.r.ackGen.Load() == a.gen }
+func (a floorAck) AckFloor() error { return a.nm.Ack() }
+
+// Current reports whether the message was delivered by the reader's current bind.
+func (a floorAck) Current() bool { return a.r == nil || a.r.ackGen.Load() == a.gen }
 
 // ackFloorConsumerConfig is the configuration an ack-floor durable is CREATED with.
 func (r *natsReader) ackFloorConsumerConfig(startSeq uint64) *nats.ConsumerConfig {
@@ -226,27 +296,27 @@ type AckThroughResult struct {
 // ErrNotAckFloorMessage is returned.
 func AckThrough(msgs []Message, ceiling uint64) (AckThroughResult, error) {
 	var res AckThroughResult
-	var best *nats.Msg
+	var best FloorAcknowledger
 	for i := range msgs {
-		fa, ok := msgs[i].ack.(floorAck)
+		fa, ok := msgs[i].ack.(FloorAcknowledger)
 		if !ok {
 			return AckThroughResult{}, ErrNotAckFloorMessage
 		}
 		switch seq := msgs[i].StreamSeq; {
-		case !fa.current():
+		case !fa.Current():
 			res.Stale++
 		case seq == 0:
 			res.Unsequenced++
 		case seq > ceiling:
 			res.Above++
 		case seq > res.SentSeq:
-			res.SentSeq, best = seq, fa.nm
+			res.SentSeq, best = seq, fa
 		}
 	}
 	if best == nil {
 		return AckThroughResult{Above: res.Above, Unsequenced: res.Unsequenced, Stale: res.Stale}, nil
 	}
-	if err := best.Ack(); err != nil {
+	if err := best.AckFloor(); err != nil {
 		return AckThroughResult{Above: res.Above, Unsequenced: res.Unsequenced, Stale: res.Stale},
 			fmt.Errorf("messaging: acking through sequence %d: %w", res.SentSeq, err)
 	}

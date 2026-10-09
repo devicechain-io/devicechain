@@ -177,7 +177,11 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	// repairs — but a row a zombie wrote CORRECTLY after the new leader's catch-up differs
 	// from nothing, so the reconcile never re-reads it into the live registry, attribute view
 	// or dead-man arming. That residual (a split brain) still lasts until the next term build.
-	revents, err := nmgr.NewReader(streams.ResolvedEvents, gated)
+	//
+	// It acknowledges at a FLOOR: one ack per checkpoint that deletes everything at or below the
+	// committed snapshot's sequence, on a durable created at that sequence (ResolvedEventsReaderOptions).
+	revents, err := nmgr.NewReader(streams.ResolvedEvents,
+		append([]messaging.ReaderOption{gated}, processor.ResolvedEventsReaderOptions(SnapshotStore, singletonPartition)...)...)
 	if err != nil {
 		return err
 	}

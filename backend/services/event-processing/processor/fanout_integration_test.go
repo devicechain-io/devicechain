@@ -64,6 +64,7 @@ func measuredMsg(t *testing.T, seq uint64, tenant, device, profileVersion, metri
 	}
 	m := messaging.NewConsumedMessage("dc."+tenant+".resolved-events", b, 0, nil, ack)
 	m.StreamSeq = seq
+	registerPending(t, ack, seq)
 	return m
 }
 
@@ -200,6 +201,7 @@ func measuredMsgScoped(t *testing.T, seq uint64, tenant, device, profileVersion,
 	}
 	m := messaging.NewConsumedMessage("dc."+tenant+".resolved-events", b, 0, nil, ack)
 	m.StreamSeq = seq
+	registerPending(t, ack, seq)
 	return m
 }
 
