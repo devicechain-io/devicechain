@@ -11,7 +11,7 @@
 // comment; an enforcer nothing exercises is a comment with a function signature.
 
 import '@/i18n/config';
-import { cleanup, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // The form talks to three areas on mount. None of them is what this file measures, and a real
@@ -34,6 +34,7 @@ vi.mock('@/auth/AuthProvider', async (importOriginal) => ({
 vi.mock('@/lib/api/event-processing', () => ({ validateDetectionRule: vi.fn(async () => ({ errors: [] })) }));
 
 import { DetectionRuleForm } from './DetectionRuleForm';
+import { updateDetectionRule, createDetectionRule } from '@/lib/api/device-management';
 import type { DetectionRule } from '@/lib/api/device-management';
 
 afterEach(cleanup);
@@ -120,5 +121,64 @@ describe('opening a stored rule the form cannot fully hold', () => {
 
     expect(screen.queryByText(WARNING)).toBeNull();
     expect(screen.queryByText(UNREADABLE)).toBeNull();
+  });
+});
+
+// 🔴 A TYPE THE FORM DOES NOT MODEL MUST NEVER BECOME A THRESHOLD. parseDefinition used to
+// fall back to `threshold` for any `type` it did not know, so opening (or drafting) a rule of a
+// later release's kind showed a threshold form pre-filled from it, and Save wrote the threshold
+// over the real rule. The form now refuses to render an editor at all.
+describe('opening a rule of a type the form does not model', () => {
+  const NOT_EDITABLE = /can.t be edited in the form/i;
+  const unknown = JSON.stringify({ name: 'A rule', type: 'frobnicate', severity: 'major', window: '5m' });
+
+  it('shows a non-dismissable refusal and no editor, and never offers Save', () => {
+    render(<DetectionRuleForm profileToken="p" entity={rule(unknown)} onDone={() => {}} />);
+
+    const alert = screen.getByRole('alert');
+    expect(alert.textContent).toMatch(NOT_EDITABLE);
+    expect(alert.textContent).toMatch(/frobnicate/);
+    expect(screen.queryByRole('button', { name: /dismiss|close/i })).toBeNull();
+    expect(screen.queryByRole('button', { name: /save changes/i })).toBeNull();
+    // No threshold form pre-filled from it.
+    expect(screen.queryByLabelText(/metric/i)).toBeNull();
+    expect(screen.queryByText(WARNING)).toBeNull();
+    // The stored bytes are shown read-only, verbatim.
+    expect(screen.getByLabelText(/stored definition/i).textContent).toContain('frobnicate');
+  });
+
+  it('never writes anything for it', async () => {
+    render(<DetectionRuleForm profileToken="p" entity={rule(unknown)} onDone={() => {}} />);
+    await new Promise((r) => setTimeout(r, 500)); // past the validation debounce
+    expect(updateDetectionRule).not.toHaveBeenCalled();
+    expect(createDetectionRule).not.toHaveBeenCalled();
+  });
+
+  it('refuses a handed-off draft of an unmodelled type too, instead of creating a threshold', () => {
+    render(<DetectionRuleForm profileToken="p" initialDefinition={unknown} onDone={() => {}} />);
+
+    expect(screen.getByRole('alert').textContent).toMatch(NOT_EDITABLE);
+    expect(screen.queryByRole('button', { name: /create/i })).toBeNull();
+  });
+
+  it('treats a definition with no type as unmodelled rather than a threshold', () => {
+    render(<DetectionRuleForm profileToken="p" entity={rule(JSON.stringify({ name: 'x' }))} onDone={() => {}} />);
+
+    expect(screen.getByRole('alert').textContent).toMatch(NOT_EDITABLE);
+  });
+
+  it('round-trips a connectivity rule exactly through Save', async () => {
+    const connectivity = {
+      name: 'A rule',
+      type: 'connectivity',
+      severity: 'critical',
+      actions: [{ type: 'raiseAlarm', raiseAlarm: { alarmKey: 'offline' } }],
+    };
+    render(<DetectionRuleForm profileToken="p" entity={rule(JSON.stringify(connectivity))} onDone={() => {}} />);
+
+    fireEvent.click(screen.getByRole('button', { name: /save changes/i }));
+    await waitFor(() => expect(updateDetectionRule).toHaveBeenCalledTimes(1));
+    const sent = JSON.parse((vi.mocked(updateDetectionRule).mock.calls[0][1] as { definition: string }).definition);
+    expect(sent).toEqual(connectivity);
   });
 });
