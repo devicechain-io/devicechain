@@ -1337,6 +1337,9 @@ type natsReader struct {
 	// deliverNew, when set, creates the durable at the stream tail (DeliverNewPolicy)
 	// instead of the default DeliverAll — see ReaderWithDeliverNew.
 	deliverNew bool
+	// ackFloorStart, when set, makes the durable an AckAll consumer created at the position
+	// it returns — see ReaderWithAckFloor.
+	ackFloorStart func(ctx context.Context) (uint64, error)
 	// held, when set, is the leadership-term predicate this reader is gated on: no
 	// message is handed out unless it reports true. See ReaderWithTermGate.
 	held func() bool
@@ -1658,6 +1661,9 @@ func (r *natsReader) bindLocked() error {
 	if old := r.sub.Load(); old != nil {
 		_ = old.Unsubscribe()
 	}
+	if r.ackFloor() {
+		return r.bindAckFloorLocked()
+	}
 	if _, err := r.nmgr.js.AddConsumer(r.stream, r.consumerConfig()); err != nil {
 		return err
 	}
@@ -1754,6 +1760,9 @@ func (nmgr *NatsManager) NewReader(suffix string, opts ...ReaderOption) (Message
 	}
 	for _, opt := range opts {
 		opt(r)
+	}
+	if err := r.validateAckFloor(); err != nil {
+		return nil, err
 	}
 	if r.downstream != "" {
 		nmgr.registerBackpressure(r.downstream)
@@ -2222,7 +2231,11 @@ func (r *natsReader) ReadMessage(ctx context.Context) (_ Message, err error) {
 			}
 		}
 		seq, deliv, appended := msgMeta(nm)
-		msg := NewConsumedMessage(nm.Subject, nm.Data, deliv, natsHeaders(nm), natsAck{nm: nm})
+		var ack Acknowledger = natsAck{nm: nm}
+		if r.ackFloor() {
+			ack = floorAck{nm: nm}
+		}
+		msg := NewConsumedMessage(nm.Subject, nm.Data, deliv, natsHeaders(nm), ack)
 		msg.StreamSeq = seq
 		msg.AppendTime = appended
 		msg.slot = sl
