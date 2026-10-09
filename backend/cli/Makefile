@@ -1,6 +1,10 @@
 GIT_COMMIT := $(shell git rev-list -1 HEAD)
 BUILDDIR ?= $(CURDIR)/build
 
+# ".exe" on Windows, empty on Linux/macOS, so the binary is directly runnable
+# everywhere. Scripts that name the binary append `$(go env GOEXE)` to match.
+EXE := $(shell go env GOEXE)
+
 # "clean"/"dirty", or "unknown" when git itself fails (e.g. a container build
 # tripping git's dubious-ownership check). Branch on git's exit status rather
 # than on empty output: `git status` printing nothing because it errored is
@@ -81,7 +85,7 @@ LDFLAGS := -X github.com/devicechain-io/dcctl/cmd.gitCommit=$(GIT_COMMIT) \
 # tree is ever needed.)
 .PHONY: build
 build:
-	go build -ldflags "$(LDFLAGS)" -o $(BUILDDIR)/dcctl .
+	go build -ldflags "$(LDFLAGS)" -o $(BUILDDIR)/dcctl$(EXE) .
 
 .PHONY: clean
 clean:

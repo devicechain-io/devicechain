@@ -88,6 +88,11 @@ after it, needs 1.9, and `dcctl` does not check the version before it starts.
    gcloud config set project <project-id>
    ```
 
+   `gcloud` opens your default browser for the sign-in on native Windows, macOS and
+   Linux; approve it there and return to the terminal. On a machine with no browser
+   (a remote shell, a container), add `--no-launch-browser` and open the printed link
+   yourself.
+
    On WSL, `gcloud` opens a browser inside Linux rather than your Windows one. Use
    `BROWSER=wslview gcloud auth login` (from the `wslu` package), or add
    `--no-launch-browser` and open the printed link yourself.
