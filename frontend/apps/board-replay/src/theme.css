@@ -3,13 +3,21 @@
 
 /*
  * The design-token contract the @devicechain/widgets package reads (HSL channels), dark
- * only: the replay page forces the dark theme, so there is one block and no light one.
- * Brand-derived tokens come from the same generated stylesheet the console and /dash import.
+ * only. EVERY rule here is scoped to .board-replay-root, the app's own root element: the
+ * page that embeds the replay owns :root, <html> and <body>, and its stylesheet defines
+ * tokens of the same names (--muted, --border, ...) that this one must not override.
+ * A test fails the build if a selector here is not under the root.
+ *
+ * The three brand-derived tokens repeat the values in @devicechain/brand's generated
+ * shadcn.css (.dark block). They are repeated rather than @imported because that file sets
+ * them on :root/.dark, i.e. page-wide; a test compares them with the brand file so they
+ * cannot drift.
  */
-@import '@devicechain/brand/css/shadcn.css';
 
-:root,
-.dark {
+.board-replay-root {
+  --primary: 197.2 71.2% 49%;
+  --primary-foreground: 0 0% 100%;
+  --ring: 197.2 71.2% 49%;
   --background: 210 40% 6%;
   --foreground: 210 16% 96%;
   --card: 210 24% 11%;
@@ -24,26 +32,16 @@
   --chart-3: 30 80% 55%;
   --chart-4: 280 65% 60%;
   --chart-5: 340 75% 55%;
-}
 
-* {
-  box-sizing: border-box;
-}
-
-html,
-body {
-  margin: 0;
   height: 100%;
-}
-
-body {
+  min-height: 560px;
   background: hsl(var(--background));
   color: hsl(var(--foreground));
   font-family:
     ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
 }
 
-#board-replay {
-  height: 100%;
-  min-height: 560px;
+.board-replay-root,
+.board-replay-root * {
+  box-sizing: border-box;
 }

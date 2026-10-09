@@ -52,7 +52,8 @@ void i18n.use(initReactI18next).init({
 export async function setReplayLocale(tag: string | null | undefined): Promise<ReplayLocale> {
   const locale = resolveLocale(tag);
   await i18n.changeLanguage(locale);
-  if (typeof document !== 'undefined') document.documentElement.lang = locale;
+  // 🔴 Deliberately does NOT write <html lang>: the page that embeds the replay owns it.
+  // The language is declared on the replay's own root element (App.tsx).
   return locale;
 }
 

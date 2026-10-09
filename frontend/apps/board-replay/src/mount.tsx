@@ -29,19 +29,23 @@ export function defaultBoardUrl(recordingUrl: string | null): string | null {
 
 // The theme is injected as a style element rather than linked, so the page needs only the
 // one module script. (Inline styles are within the site's content-security policy.)
+//
+// 🔴 THE HOST PAGE OWNS :root, <html> AND <body>. Every rule in theme.css is scoped under
+// .board-replay-root (the app's own root element), and this file touches nothing outside
+// the mount element: no class, attribute or style on <html> or <body>, and the language is
+// set on the app root, not on the document.
 function installTheme(): void {
   if (document.getElementById('board-replay-theme')) return;
   const style = document.createElement('style');
   style.id = 'board-replay-theme';
   style.textContent = themeCss;
   document.head.appendChild(style);
-  // The widgets read the dark token set off <html>.
-  document.documentElement.classList.add('dark');
 }
 
 export async function mountBoardReplay(el: HTMLElement): Promise<Root> {
   installTheme();
   await setReplayLocale(el.dataset.locale ?? document.documentElement.lang);
+  // (Read-only: the page's language is a default for the replay, never something it sets.)
   const recordingUrl = el.dataset.recording ?? null;
   const boardUrl = el.dataset.board ?? defaultBoardUrl(recordingUrl);
   const root = createRoot(el);

@@ -25,6 +25,7 @@
   "playbackRate": "播放速度 {{rate}}×",
   "recordedTime": "录制时间 {{time}} UTC",
   "simulationScale": "加速的模拟时钟 ×{{scale}}",
+  "simulationScaleSlow": "减速的模拟时钟 ×{{scale}}",
   "chapters": "章节",
   "chapterNote": "{{name}}：{{note}}",
   "provenanceShow": "关于此录制",
@@ -40,7 +41,7 @@
   "provenanceConverter": "转换器格式",
   "provenanceExcerpt": "节选区间",
   "provenanceSources": "源文件（SHA-256）",
-  "provenanceMachines": "{{count}} 台模拟机器，每台都是一个独立的 DeviceChain 设备。",
+  "provenanceMachines_other": "{{count}} 台模拟机器，每台都是一个独立的 DeviceChain 设备。",
   "provenanceRecordedAgainst": "录制自一个正在运行的 DeviceChain 实例。",
   "provenanceValues": "数值即平台所报告的值，由录制如实观测，从未做过插值。",
   "widgetsEnglish": "组件文本和面板标题以英文显示。"

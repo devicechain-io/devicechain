@@ -33,6 +33,8 @@ import { ConnectedWidget } from './connected-widget';
 import {
   WidgetCandidatesProvider,
   WidgetSelectProvider,
+  WidgetThemeRootProvider,
+  WidgetTimeZoneProvider,
   WidgetSubjectProvider,
   type WidgetCandidates,
   type WidgetSelect,
@@ -69,6 +71,12 @@ export interface DashboardRendererProps {
   // target slot's options. Omit alongside `select` for a static/edit/preview mount — the
   // selector then renders inert.
   candidates?: WidgetCandidates;
+  // The IANA zone widgets print instants in. Omit for the viewer's own zone (every live
+  // host); a host replaying a recording pins one so the board agrees with the recording.
+  timeZone?: string;
+  // The element chart colors are read from, when the host scopes its design tokens to a
+  // container rather than the document root. Omit for the document root (every other host).
+  themeRoot?: Element;
 }
 
 export function DashboardRenderer({
@@ -80,6 +88,8 @@ export function DashboardRenderer({
   sizing,
   select,
   candidates,
+  timeZone,
+  themeRoot,
 }: DashboardRendererProps) {
   const breakpoint = useActiveBreakpoint(definition.canvas.breakpoints);
   // Each widget with its slot resolved to a concrete selector. Recomputed per render;
@@ -95,6 +105,8 @@ export function DashboardRenderer({
 
   return (
     <div style={sizingStyle(effectiveSizing, bg)}>
+      <WidgetThemeRootProvider root={themeRoot}>
+      <WidgetTimeZoneProvider timeZone={timeZone}>
       <WidgetSelectProvider select={select}>
         <WidgetCandidatesProvider candidates={candidates}>
         <div
@@ -125,6 +137,8 @@ export function DashboardRenderer({
         </div>
         </WidgetCandidatesProvider>
       </WidgetSelectProvider>
+      </WidgetTimeZoneProvider>
+      </WidgetThemeRootProvider>
     </div>
   );
 }

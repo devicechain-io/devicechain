@@ -2,10 +2,18 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // The "never live" scanner shared by the catalog test and the rendered-DOM test. A replay
-// must not describe itself, in any language, as live: English "live", Spanish "en vivo",
-// and the Chinese words for real-time / live broadcast.
+// must not describe itself, in any language, as live: English "live" and "real-time",
+// Spanish "en vivo", "en directo" and "tiempo real", and the Chinese words for real-time /
+// live broadcast.
 
-export const LIVE_PATTERNS: RegExp[] = [/\blive\b/i, /\ben vivo\b/i, /实时|直播/];
+export const LIVE_PATTERNS: RegExp[] = [
+  /\blive\b/i,
+  /\breal[- ]time\b/i,
+  /\ben vivo\b/i,
+  /\ben directo\b/i,
+  /\btiempo real\b/i,
+  /实时|直播/,
+];
 
 export function liveMatches(text: string): string[] {
   return LIVE_PATTERNS.filter((re) => re.test(text)).map(String);
@@ -28,4 +36,10 @@ export function readableStrings(root: ParentNode): string[] {
     }
   }
   return out;
+}
+
+// The text the chart widgets drew on their canvases (captured by vitest.setup.ts): a
+// gauge's reading and labels live nowhere in the DOM.
+export function canvasStrings(): string[] {
+  return (globalThis as unknown as { __canvasText: string[] }).__canvasText.slice();
 }

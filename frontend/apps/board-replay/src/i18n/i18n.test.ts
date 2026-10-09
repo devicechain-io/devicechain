@@ -3,7 +3,7 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { DEFAULT_LOCALE, RESOURCES, SUPPORTED_LOCALES, resolveLocale } from './config';
+import i18n, { DEFAULT_LOCALE, RESOURCES, SUPPORTED_LOCALES, resolveLocale } from './config';
 import { LIVE_PATTERNS, liveMatches } from '../testing/live-scan';
 
 // The catalogs as they sit on disk (what a translator edits), not the registry in config.ts:
@@ -20,13 +20,22 @@ describe('chrome catalogs', () => {
     expect(Object.keys(files).sort()).toEqual(SUPPORTED_LOCALES.map((l) => `./locales/${l}/chrome.json`).sort());
   });
 
+  // Plural forms differ by language (Chinese has only "other"), so keys are compared by
+  // their base name, and every plural key must at least carry its "other" form.
+  const base = (k: string) => k.replace(/_(zero|one|two|few|many|other)$/, '');
+  const baseKeys = (c: Record<string, string>) => [...new Set(Object.keys(c).map(base))].sort();
+
   it.each(SUPPORTED_LOCALES)('%s carries exactly the keys English does, with the same placeholders', (locale) => {
     const en = files['./locales/en/chrome.json'].default;
     const other = files[`./locales/${locale}/chrome.json`].default;
-    expect(Object.keys(other).sort()).toEqual(Object.keys(en).sort());
-    for (const key of Object.keys(en)) {
-      expect(placeholders(other[key]), `${locale}:${key}`).toEqual(placeholders(en[key]));
-      expect(other[key].trim(), `${locale}:${key} is empty`).not.toBe('');
+    expect(baseKeys(other)).toEqual(baseKeys(en));
+    for (const [key, value] of Object.entries(other)) {
+      const reference = en[key] ?? en[`${base(key)}_other`];
+      expect(placeholders(value), `${locale}:${key}`).toEqual(placeholders(reference));
+      expect(value.trim(), `${locale}:${key} is empty`).not.toBe('');
+    }
+    for (const key of baseKeys(other).filter((k) => Object.keys(other).includes(`${k}_other`) || Object.keys(en).includes(`${k}_other`))) {
+      expect(other[`${key}_other`], `${locale}:${key}_other`).toBeTruthy();
     }
   });
 
@@ -57,11 +66,26 @@ describe('the "live" scanner', () => {
     expect(liveMatches('Selection is available on the live dashboard.')).not.toEqual([]);
     expect(liveMatches('Datos en vivo')).not.toEqual([]);
     expect(liveMatches('实时数据')).not.toEqual([]);
+    expect(liveMatches('Datos en directo')).not.toEqual([]);
+    expect(liveMatches('Datos en tiempo real')).not.toEqual([]);
     expect(LIVE_PATTERNS.length).toBeGreaterThan(2);
   });
 
   it('does not flag words that merely contain it', () => {
     expect(liveMatches('delivered, olives, Olivera')).toEqual([]);
+  });
+});
+
+describe('plural forms', () => {
+  it('count the machines in the singular where the language has one', async () => {
+    await i18n.changeLanguage('en');
+    expect(i18n.t('provenanceMachines', { count: 1 })).toBe('1 simulated machine, its own DeviceChain device.');
+    expect(i18n.t('provenanceMachines', { count: 19 })).toBe('19 simulated machines, each its own DeviceChain device.');
+    await i18n.changeLanguage('es');
+    expect(i18n.t('provenanceMachines', { count: 1 })).toContain('1 máquina simulada');
+    await i18n.changeLanguage('zh-CN');
+    expect(i18n.t('provenanceMachines', { count: 1 })).toContain('1 台模拟机器');
+    await i18n.changeLanguage('en');
   });
 });
 

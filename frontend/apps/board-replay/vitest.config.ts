@@ -8,6 +8,8 @@ import { defineConfig } from 'vitest/config';
 export default defineConfig({
   test: {
     environment: 'jsdom',
+    // Process stylesheets (the replay's theme is imported `?inline` and tested as text).
+    css: { include: [/.+/] },
     setupFiles: ['./vitest.setup.ts'],
   },
 });

@@ -34,11 +34,13 @@ function BoardView({
   source,
   resolver,
   lister,
+  themeRoot,
 }: {
   definition: DashboardDefinition;
   source: WidgetDataSource;
   resolver: DeviceResolver;
   lister: EntityCandidateLister;
+  themeRoot: Element | undefined;
 }) {
   const base = useMemo(() => effectiveBindings(definition), [definition]);
   const [selection, setSelection] = useState<Record<string, SlotBinding>>({});
@@ -46,8 +48,9 @@ function BoardView({
     setSelection((prev) => ({ ...prev, [target.slot]: target.binding }));
   }, []);
   const bindings = useResolvedBindings(definition, base, selection, resolver);
-  // 🔴 The lister is what switches the entity selector ON. Without it the widget prints
-  // its "live dashboard only" notice, which a replay must never say.
+  // The lister is what makes the entity selector offer machines; without candidates the
+  // widget is inert. (Its "live dashboard" notice, which a replay must never print, is what
+  // it shows when NO `select` callback is wired, so `select` below is load-bearing too.)
   const candidates = useSlotCandidates(definition, bindings, resolver, lister);
 
   return (
@@ -57,6 +60,9 @@ function BoardView({
           definition={definition}
           hub={source}
           seedHistory={false}
+          // Recorded instants print on the recording's own clock, not the viewer's.
+          timeZone="UTC"
+          themeRoot={themeRoot}
           bindings={bindings}
           select={select}
           candidates={candidates}

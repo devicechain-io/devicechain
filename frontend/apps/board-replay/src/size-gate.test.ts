@@ -21,8 +21,14 @@ function fakeDist(): string {
   const dist = mkdtempSync(path.join(tmpdir(), 'size-gate-'));
   dirs.push(dist);
   mkdirSync(path.join(dist, 'chunks'));
-  writeFileSync(path.join(dist, 'main.js'), 'import{a}from"./chunks/static-1.js";const m=()=>import("./chunks/lazy-1.js");');
+  // A named static import, a BARE side-effect import (`import"./x.js"`, which has no
+  // `from`), and a lazy dynamic import.
+  writeFileSync(
+    path.join(dist, 'main.js'),
+    'import{a}from"./chunks/static-1.js";import"./chunks/bare-1.js";const m=()=>import("./chunks/lazy-1.js");',
+  );
   writeFileSync(path.join(dist, 'chunks/static-1.js'), randomBytes(5000));
+  writeFileSync(path.join(dist, 'chunks/bare-1.js'), randomBytes(7000));
   writeFileSync(path.join(dist, 'chunks/lazy-1.js'), randomBytes(20000));
   return dist;
 }
@@ -33,11 +39,11 @@ describe('bundle size gate', () => {
   it('counts statically imported chunks in the initial load and not lazily imported ones', () => {
     const dist = fakeDist();
     const names = initialFiles(dist).map((f) => path.basename(f)).sort();
-    expect(names).toEqual(['main.js', 'static-1.js']);
+    expect(names).toEqual(['bare-1.js', 'main.js', 'static-1.js']);
     const m = measure(dist);
-    expect(m.initial).toBeGreaterThan(5000);
-    expect(m.initial).toBeLessThan(6000);
-    expect(m.total).toBeGreaterThan(25_000);
+    expect(m.initial).toBeGreaterThan(12_000);
+    expect(m.initial).toBeLessThan(13_000);
+    expect(m.total).toBeGreaterThan(32_000);
   });
 
   it('passes inside the budget', () => {

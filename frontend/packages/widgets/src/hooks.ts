@@ -29,7 +29,7 @@ import {
 } from '@devicechain/dashboards';
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type RefObject } from 'react';
 
-import { useWidgetCandidates, type WidgetCandidates } from './frame';
+import { useWidgetThemeRoot, useWidgetCandidates, type WidgetCandidates } from './frame';
 import { resolveChartTheme, type ChartTheme } from './theme';
 
 // useDashboardHub gives a host ONE live hub per (resolver, authorities) — compared by
@@ -608,5 +608,10 @@ function getThemeSnapshot(): ChartTheme {
 // useChartTheme returns the current chart colors and re-renders the caller when
 // the document theme changes (a light/dark class or inline-style swap on <html>).
 export function useChartTheme(): ChartTheme {
-  return useSyncExternalStore(subscribeTheme, getThemeSnapshot, getThemeSnapshot);
+  const shared = useSyncExternalStore(subscribeTheme, getThemeSnapshot, getThemeSnapshot);
+  // A host that scopes its tokens to a container says so (WidgetThemeRoot); its tokens are
+  // fixed for the container's life, so they are read once there rather than observed.
+  const root = useWidgetThemeRoot();
+  const scoped = useMemo(() => (root ? resolveChartTheme(root) : null), [root]);
+  return scoped ?? shared;
 }

@@ -3,7 +3,7 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { formatValue } from './format';
+import { formatDateTime, formatTimestamp, formatValue } from './format';
 
 describe('formatValue', () => {
   it('shows an em dash for a missing value', () => {
@@ -36,5 +36,29 @@ describe('formatValue', () => {
 
   it('truncates a fractional precision the way toFixed already would', () => {
     expect(formatValue(1.2345, 2.7)).toBe('1.23');
+  });
+});
+
+describe('formatDateTime / formatTimestamp time zone', () => {
+  const iso = '2026-10-07T02:08:54.423Z';
+
+  it('without a zone is exactly the viewer-local rendering it always was', () => {
+    expect(formatDateTime(iso)).toBe(new Date(iso).toLocaleString());
+    expect(formatTimestamp(iso)).toBe(new Date(iso).toLocaleTimeString());
+  });
+
+  it('with a zone prints that zone’s clock and names it', () => {
+    expect(formatDateTime(iso, 'UTC')).toBe(new Date(iso).toLocaleString(undefined, { timeZone: 'UTC', timeZoneName: 'short' }));
+    expect(formatDateTime(iso, 'UTC')).toContain('UTC');
+    // Not the same instant on the wall in a zone a day behind: the date differs.
+    const ny = formatDateTime(iso, 'America/New_York');
+    expect(ny).not.toBe(formatDateTime(iso, 'UTC'));
+    expect(formatTimestamp(iso, 'Asia/Tokyo')).toMatch(/JST|GMT[+]9/);
+  });
+
+  it('leaves an unparseable value or an absent one as before, zone or not', () => {
+    expect(formatDateTime('not a date', 'UTC')).toBe('not a date');
+    expect(formatDateTime(null, 'UTC')).toBe('');
+    expect(formatTimestamp(null, 'UTC')).toBe('');
   });
 });

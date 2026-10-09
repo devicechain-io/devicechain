@@ -25,6 +25,7 @@
   "playbackRate": "Reproducción {{rate}}×",
   "recordedTime": "Hora grabada {{time}} UTC",
   "simulationScale": "Reloj de simulación acelerado ×{{scale}}",
+  "simulationScaleSlow": "Reloj de simulación ralentizado ×{{scale}}",
   "chapters": "Capítulos",
   "chapterNote": "{{name}}: {{note}}",
   "provenanceShow": "Acerca de esta grabación",
@@ -40,7 +41,9 @@
   "provenanceConverter": "Formato del conversor",
   "provenanceExcerpt": "Ventana del extracto",
   "provenanceSources": "Archivos de origen (SHA-256)",
-  "provenanceMachines": "{{count}} máquinas simuladas, cada una un dispositivo propio de DeviceChain.",
+  "provenanceMachines_one": "{{count}} máquina simulada, un dispositivo propio de DeviceChain.",
+  "provenanceMachines_many": "{{count}} máquinas simuladas, cada una un dispositivo propio de DeviceChain.",
+  "provenanceMachines_other": "{{count}} máquinas simuladas, cada una un dispositivo propio de DeviceChain.",
   "provenanceRecordedAgainst": "Grabada contra una instancia de DeviceChain en funcionamiento.",
   "provenanceValues": "Los valores son los que informó la plataforma, tal como los observó la grabación, sin interpolar.",
   "widgetsEnglish": "El texto de los widgets y los títulos del panel se muestran en inglés."

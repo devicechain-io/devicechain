@@ -51,20 +51,31 @@ export function excerptText(): string {
 export interface FetchStub {
   fetchFn: typeof fetch;
   calls: string[];
+  // The options each call was made with.
+  inits: Array<RequestInit | undefined>;
 }
 
 // A fetch that serves the two named files and records every URL it was asked for. Anything
 // else is a 404, and counts as a call.
+//
+// 🔴 IT ENFORCES THE REQUEST OPTIONS, not just the URL: a call without `credentials: 'omit'`
+// and `redirect: 'error'` throws. A stub that ignored its second argument could not tell a
+// loader that follows a redirect off the origin from one that refuses to.
 export function stubFetch(files: Record<string, string | Buffer>): FetchStub {
   const calls: string[] = [];
-  const fetchFn = (async (input: RequestInfo | URL) => {
+  const inits: Array<RequestInit | undefined> = [];
+  const fetchFn = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
     calls.push(url);
+    inits.push(init);
+    if (init?.redirect !== 'error' || init?.credentials !== 'omit') {
+      throw new Error(`fetch(${url}) must pass { redirect: 'error', credentials: 'omit' }, got ${JSON.stringify(init)}`);
+    }
     const body = files[url];
     if (body === undefined) return new Response('not found', { status: 404 });
     return new Response(typeof body === 'string' ? body : bufferToArrayBuffer(body), { status: 200 });
   }) as typeof fetch;
-  return { fetchFn, calls };
+  return { fetchFn, calls, inits };
 }
 
 // A clock ticker the test drives by hand: frame(ms) delivers one animation frame.

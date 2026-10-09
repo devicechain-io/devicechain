@@ -71,6 +71,15 @@ export function TransportBar({
   const shown = scrub ?? view.timeMs;
   const state = replayState(view, seeking);
 
+  // A cancelled gesture (a touch the browser took over, a lost pointer capture) abandons the
+  // scrub: nothing was released at a position, so nothing is sought.
+  const abandon = () => {
+    if (pending.current === null) return;
+    pending.current = null;
+    setScrub(null);
+    onSeeking(false);
+  };
+
   const commit = () => {
     const at = pending.current;
     if (at === null) return;
@@ -129,6 +138,8 @@ export function TransportBar({
             onSeeking(true);
           }}
           onPointerUp={commit}
+          onPointerCancel={abandon}
+          onLostPointerCapture={abandon}
           onKeyUp={commit}
           onBlur={commit}
           style={{ flex: '1 1 240px', minWidth: 120 }}
@@ -166,7 +177,8 @@ export function TransportBar({
         <span data-testid="replay-state">{stateLabel}</span>
         <span>{t('recordedTime', { time: formatRecordedClock(recording, shown) })}</span>
         {view.rate !== 1 && <span>{t('playbackRate', { rate: view.rate })}</span>}
-        {sim && sim.scale !== 1 && <span>{t('simulationScale', { scale: sim.scale })}</span>}
+        {sim && sim.scale > 1 && <span>{t('simulationScale', { scale: sim.scale })}</span>}
+        {sim && sim.scale > 0 && sim.scale < 1 && <span>{t('simulationScaleSlow', { scale: sim.scale })}</span>}
       </div>
       {recording.chapters.length > 0 && (
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', fontSize: 13 }}>

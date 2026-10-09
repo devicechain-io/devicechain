@@ -5,7 +5,8 @@
 
 // The replay page, rendered with the REAL dashboard widgets over a recorded data source.
 
-import { RecordedDataSource, createRecordedClock, effectiveBindings } from '@devicechain/dashboards';
+import { createRecordedClock, effectiveBindings } from '@devicechain/dashboards';
+import * as dashboards from '@devicechain/dashboards';
 import { DashboardRenderer } from '@devicechain/widgets';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -24,7 +25,21 @@ import {
   manualTicker,
   stubFetch,
 } from './testing/harness';
-import { liveMatches, readableStrings } from './testing/live-scan';
+import { canvasStrings, liveMatches, readableStrings } from './testing/live-scan';
+
+// Counts every data source the app builds (a seek must build exactly one).
+const built = vi.hoisted(() => ({ count: 0 }));
+vi.mock('@devicechain/dashboards', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@devicechain/dashboards')>();
+  class CountingSource extends actual.RecordedDataSource {
+    constructor(...args: ConstructorParameters<typeof actual.RecordedDataSource>) {
+      super(...args);
+      built.count++;
+    }
+  }
+  return { ...actual, RecordedDataSource: CountingSource };
+});
+const { RecordedDataSource } = dashboards;
 
 const canvasText = (globalThis as unknown as { __canvasText: string[] }).__canvasText;
 
@@ -176,6 +191,8 @@ describe('the word "live" is not on the page', () => {
       const strings = readableStrings(view.container);
       expect(strings.length).toBeGreaterThan(100);
       expect(strings.flatMap(liveMatches), `${locale} ready`).toEqual([]);
+      expect(canvasStrings().flatMap(liveMatches), `${locale} canvas`).toEqual([]);
+      expect(canvasStrings().length).toBeGreaterThan(0);
       cleanup();
     }
   });
@@ -264,6 +281,96 @@ describe('transport', () => {
   it('shows the playback rate chip only when it differs from 1x', async () => {
     await mountApp(await fixtureRecordingText());
     expect(screen.queryByText(/^Playback /)).toBeNull();
+  });
+});
+
+describe('scrubbing', () => {
+  it('commits one seek on release, not one per input event', async () => {
+    await mountApp(await fixtureRecordingText());
+    const before = built.count;
+    await act(async () => {
+      for (const v of [5000, 10_000, 15_000, 20_000, 25_000]) fireEvent.change(range(), { target: { value: String(v) } });
+    });
+    expect(built.count).toBe(before);
+    expect(bodyState()).toBe('seeking');
+    await act(async () => {
+      fireEvent.pointerUp(range());
+    });
+    expect(built.count).toBe(before + 1);
+    expect(range().value).toBe('25000');
+    // Later release events with nothing pending do not seek again.
+    await act(async () => {
+      fireEvent.keyUp(range());
+      fireEvent.blur(range());
+    });
+    expect(built.count).toBe(before + 1);
+  });
+
+  it.each([
+    ['pointercancel', (el: Element) => fireEvent.pointerCancel(el)],
+    ['lostpointercapture', (el: Element) => fireEvent.lostPointerCapture(el)],
+  ])('abandons the scrub on %s: no seek, no stuck "Seeking…"', async (_name, cancel) => {
+    await mountApp(await fixtureRecordingText());
+    await seekTo(10_000);
+    const before = built.count;
+    await act(async () => {
+      fireEvent.change(range(), { target: { value: '40000' } });
+    });
+    expect(bodyState()).toBe('seeking');
+    await act(async () => {
+      cancel(range());
+    });
+    expect(bodyState()).toBe('paused');
+    expect(range().value).toBe('10000');
+    expect(built.count).toBe(before);
+  });
+});
+
+describe('simulation clock chip', () => {
+  const withScale = (scale: number) =>
+    fixtureRecordingText((d) => {
+      d.clock = [{ fromMs: 11, mode: 'accelerated', scale }];
+    });
+
+  it('names an accelerated clock, a slowed one, and says nothing at 1x', async () => {
+    await mountApp(await withScale(4));
+    await seekTo(1000);
+    expect(screen.getByText('Accelerated simulation clock ×4')).toBeTruthy();
+    cleanup();
+    await mountApp(await withScale(0.5));
+    await seekTo(1000);
+    expect(screen.getByText('Slowed simulation clock ×0.5')).toBeTruthy();
+    expect(screen.queryByText(/Accelerated/)).toBeNull();
+    cleanup();
+    await mountApp(await withScale(1));
+    await seekTo(1000);
+    expect(screen.queryByText(/simulation clock/)).toBeNull();
+  });
+});
+
+describe('times are on the recording clock, not the viewer clock', () => {
+  const TZ = process.env.TZ;
+  afterEach(() => {
+    if (TZ === undefined) delete process.env.TZ;
+    else process.env.TZ = TZ;
+  });
+
+  it('prints the raised time of an alarm in UTC even when the viewer is a day behind', async () => {
+    process.env.TZ = 'America/New_York';
+    const occ = new Date(Date.UTC(2026, 0, 2, 3, 4, 24, 700)).toISOString();
+    // The viewer's own rendering is a different wall time (the control: the zone took effect).
+    const local = new Date(occ).toLocaleString();
+    const utc = new Date(occ).toLocaleString(undefined, { timeZone: 'UTC', timeZoneName: 'short' });
+    expect(local).not.toBe(new Date(occ).toLocaleString(undefined, { timeZone: 'UTC' }));
+
+    await mountApp(await fixtureRecordingText());
+    await seekTo(25_000);
+    expect(screen.getByText(utc)).toBeTruthy();
+    expect(screen.queryByText(local)).toBeNull();
+    // The header, the transport and the table agree on the date and the clock.
+    expect(label()).toContain('Jan 2, 2026');
+    expect(utc).toContain('UTC');
+    expect(screen.getByText(/Recorded time 03:04:30 UTC/)).toBeTruthy();
   });
 });
 

@@ -25,6 +25,7 @@
   "playbackRate": "Playback {{rate}}×",
   "recordedTime": "Recorded time {{time}} UTC",
   "simulationScale": "Accelerated simulation clock ×{{scale}}",
+  "simulationScaleSlow": "Slowed simulation clock ×{{scale}}",
   "chapters": "Chapters",
   "chapterNote": "{{name}}: {{note}}",
   "provenanceShow": "About this recording",
@@ -40,7 +41,8 @@
   "provenanceConverter": "Converter format",
   "provenanceExcerpt": "Excerpt window",
   "provenanceSources": "Source files (SHA-256)",
-  "provenanceMachines": "{{count}} simulated machines, each its own DeviceChain device.",
+  "provenanceMachines_one": "{{count}} simulated machine, its own DeviceChain device.",
+  "provenanceMachines_other": "{{count}} simulated machines, each its own DeviceChain device.",
   "provenanceRecordedAgainst": "Recorded against a running DeviceChain instance.",
   "provenanceValues": "Values are what the platform reported, as observed by the recording, never interpolated.",
   "widgetsEnglish": "Widget text and board titles are shown in English."

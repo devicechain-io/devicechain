@@ -41,6 +41,8 @@ export interface ReplayAppProps {
 export default function ReplayApp({ recordingUrl, boardUrl, fetchFn, origin, ticker }: ReplayAppProps) {
   const [load, setLoad] = useState<Load>({ status: 'loading' });
   const [provenanceOpen, setProvenanceOpen] = useState(false);
+  const [rootEl, setRootEl] = useState<HTMLElement | null>(null);
+  const { i18n } = useTranslation();
 
   useEffect(() => {
     let cancelled = false;
@@ -61,7 +63,13 @@ export default function ReplayApp({ recordingUrl, boardUrl, fetchFn, origin, tic
 
   const recording = load.status === 'ready' ? load.replay.recording : null;
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }} data-testid="replay-root">
+    <div
+      ref={setRootEl}
+      className="board-replay-root"
+      lang={i18n.language}
+      style={{ display: 'flex', flexDirection: 'column' }}
+      data-testid="replay-root"
+    >
       <ReplayHeader
         recording={recording}
         provenanceOpen={provenanceOpen}
@@ -70,7 +78,7 @@ export default function ReplayApp({ recordingUrl, boardUrl, fetchFn, origin, tic
       {recording && provenanceOpen && <ProvenancePanel recording={recording} />}
       {load.status === 'loading' && <StatusBody />}
       {load.status === 'error' && <ErrorBody error={load.error} />}
-      {load.status === 'ready' && <Player replay={load.replay} ticker={ticker} />}
+      {load.status === 'ready' && <Player replay={load.replay} ticker={ticker} themeRoot={rootEl ?? undefined} />}
     </div>
   );
 }
@@ -126,7 +134,15 @@ function ErrorBody({ error }: { error: ReplayLoadError | null }) {
 // The player owns the clock and the CURRENT data source. A seek retires a source (widget
 // streams only append, so a backwards jump cannot be retracted through one), and the player
 // builds a new one at the new cursor; the board, which holds the selection, stays mounted.
-function Player({ replay, ticker }: { replay: LoadedReplay; ticker?: ClockTicker }) {
+function Player({
+  replay,
+  ticker,
+  themeRoot,
+}: {
+  replay: LoadedReplay;
+  ticker?: ClockTicker;
+  themeRoot: Element | undefined;
+}) {
   const { recording, definition, siteAnchors } = replay;
   const clock: RecordedClock = useMemo(() => createRecordedClock(recording, { ticker }), [recording, ticker]);
   const site = useMemo(() => ({ siteAnchors }), [siteAnchors]);
@@ -153,7 +169,7 @@ function Player({ replay, ticker }: { replay: LoadedReplay; ticker?: ClockTicker
         data-state={replayState(view, seeking)}
         style={{ flex: '1 1 auto', minHeight: 0, overflow: 'auto' }}
       >
-        <Board definition={definition} source={source} resolver={resolver} lister={lister} />
+        <Board definition={definition} source={source} resolver={resolver} lister={lister} themeRoot={themeRoot} />
       </main>
       <TransportBar clock={clock} recording={recording} seeking={seeking} onSeeking={setSeeking} />
     </>

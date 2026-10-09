@@ -1,7 +1,7 @@
 {
   "maxInitial": 308224,
   "maxTotal": 840704,
-  "recordingGzip": 230000,
+  "recordingGzip": 81000,
   "hardInitial": 400000,
   "hardTotal": 1200000
 }

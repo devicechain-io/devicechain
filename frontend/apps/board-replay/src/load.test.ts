@@ -35,6 +35,35 @@ describe('loadReplay', () => {
     ]);
   });
 
+  it('asks for each file without credentials and with redirects refused', async () => {
+    const stub = stubFetch({ [RECORDING_URL]: await fixtureRecordingText(), [BOARD_URL]: boardBytes() });
+    await loadReplay({ recordingUrl: RECORDING_URL, boardUrl: BOARD_URL, fetchFn: stub.fetchFn, origin: ORIGIN });
+    expect(stub.inits).toHaveLength(2);
+    for (const init of stub.inits) expect(init).toMatchObject({ redirect: 'error', credentials: 'omit' });
+  });
+
+  it('turns a refused redirect into a fetch failure, not a silent follow', async () => {
+    const redirecting = (async (_u: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.redirect === 'error') throw new TypeError('redirect mode is set to error');
+      return new Response('{}');
+    }) as typeof fetch;
+    const err = await failure(loadReplay({ recordingUrl: RECORDING_URL, boardUrl: BOARD_URL, fetchFn: redirecting, origin: ORIGIN }));
+    expect(err.code).toBe('fetch');
+  });
+
+  it('compares the whole hash: one differing only in its last character is refused', async () => {
+    const real = await boardSha256();
+    const flipped = real.slice(0, -1) + (real.endsWith('0') ? '1' : '0');
+    expect(flipped).not.toBe(real);
+    expect(flipped.slice(0, 63)).toBe(real.slice(0, 63));
+    const text = await fixtureRecordingText((d) => {
+      d.board.sha256 = flipped;
+    });
+    const stub = stubFetch({ [RECORDING_URL]: text, [BOARD_URL]: boardBytes() });
+    const err = await failure(loadReplay({ recordingUrl: RECORDING_URL, boardUrl: BOARD_URL, fetchFn: stub.fetchFn, origin: ORIGIN }));
+    expect(err.code).toBe('boardMismatch');
+  });
+
   it('refuses a board whose SHA-256 differs from the recording header, naming the mismatch', async () => {
     const changed = Buffer.concat([boardBytes(), Buffer.from(' ')]);
     const stub = stubFetch({ [RECORDING_URL]: await fixtureRecordingText(), [BOARD_URL]: changed });
