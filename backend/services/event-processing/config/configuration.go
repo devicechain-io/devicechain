@@ -22,6 +22,10 @@ import (
 const (
 	DefaultCheckpointEvents          = 1000
 	DefaultCheckpointIntervalSeconds = 10
+	// DefaultCheckpointTimeoutSeconds is the floor of the deadline on each network call a
+	// checkpoint makes; MaxCheckpointTimeoutSeconds is the most it may be set to.
+	DefaultCheckpointTimeoutSeconds = 10
+	MaxCheckpointTimeoutSeconds     = 120
 	// DefaultWatermarkLatenessSeconds is how far the event-time watermark is held back from
 	// the newest event before windows close and timers fire — the out-of-orderness tolerance.
 	// The resolved stream is largely ordered, but network/ingest reordering is real; a small
@@ -134,6 +138,14 @@ type EventProcessingConfiguration struct {
 	// validateCheckpointInterval.
 	CheckpointIntervalSeconds int
 
+	// CheckpointTimeoutSeconds is the floor of the deadline on each network call a checkpoint
+	// makes (the derived-event publish, and the snapshot save), so a database or broker that
+	// stops answering fails the checkpoint instead of hanging the detection loop. The save's
+	// deadline grows past this on its own once a slow save has been seen to complete (see
+	// saveTimeout), so this needs raising only for a store whose FIRST save is slower than it,
+	// such as a very large engine on a throttled database. Unset (0) defaults to 10s; at most 120.
+	CheckpointTimeoutSeconds int
+
 	// WatermarkLatenessSeconds is the event-time out-of-orderness tolerance: how far the
 	// watermark lags the newest event before windows close and timers fire. Unset (0)
 	// defaults to 5s; a negative value is treated as zero (no tolerance).
@@ -209,6 +221,9 @@ func (c *EventProcessingConfiguration) ApplyDefaults() {
 	}
 	if c.CheckpointIntervalSeconds == 0 {
 		c.CheckpointIntervalSeconds = DefaultCheckpointIntervalSeconds
+	}
+	if c.CheckpointTimeoutSeconds == 0 {
+		c.CheckpointTimeoutSeconds = DefaultCheckpointTimeoutSeconds
 	}
 	if c.WatermarkLatenessSeconds == 0 {
 		c.WatermarkLatenessSeconds = DefaultWatermarkLatenessSeconds
@@ -319,6 +334,10 @@ func (c *EventProcessingConfiguration) Validate() error {
 	}
 	if err := validateCheckpointInterval(c.CheckpointIntervalSeconds, messaging.AckWait); err != nil {
 		return err
+	}
+	if c.CheckpointTimeoutSeconds <= 0 || c.CheckpointTimeoutSeconds > MaxCheckpointTimeoutSeconds {
+		return fmt.Errorf("checkpointTimeoutSeconds must be between 1 and %d, got %d",
+			MaxCheckpointTimeoutSeconds, c.CheckpointTimeoutSeconds)
 	}
 	// The per-tenant budgets fail closed: a negative ceiling is rejected rather than silently treated
 	// as unlimited (ADR-023 — an unset budget defaults to the platform ceiling in ApplyDefaults, never

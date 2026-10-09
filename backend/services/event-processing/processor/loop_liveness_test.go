@@ -11,13 +11,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/glebarez/sqlite"
 	"github.com/prometheus/client_golang/prometheus/testutil"
-	"gorm.io/gorm"
 
 	"github.com/devicechain-io/dc-event-processing/model"
 	"github.com/devicechain-io/dc-microservice/messaging"
-	"github.com/devicechain-io/dc-microservice/rdb"
 )
 
 // These tests pin the ways the single-writer loop can stop making progress while every health
@@ -39,26 +36,8 @@ func (c *atomicClock) add(d time.Duration) { c.ns.Add(int64(d)) }
 // a black-holed database socket does.
 func newBlockingStore(t *testing.T) (*model.SnapshotStore, *atomic.Int32) {
 	t.Helper()
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
-	if err != nil {
-		t.Fatalf("open sqlite: %v", err)
-	}
-	if err := rdb.RegisterTenantScoping(db); err != nil {
-		t.Fatalf("register tenant scoping: %v", err)
-	}
-	if err := db.AutoMigrate(&model.DetectSnapshot{}); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
-	var entered atomic.Int32
-	err = db.Callback().Query().Before("gorm:query").Register("test:black-hole", func(tx *gorm.DB) {
-		entered.Add(1)
-		<-tx.Statement.Context.Done()
-		_ = tx.AddError(tx.Statement.Context.Err())
-	})
-	if err != nil {
-		t.Fatalf("register callback: %v", err)
-	}
-	return model.NewSnapshotStore(&rdb.RdbManager{Database: db}), &entered
+	store, entered, _ := newSlowStore(t, hang)
+	return store, entered
 }
 
 // A Save that never returns must not hold the loop: the checkpoint gives up at its deadline,

@@ -102,6 +102,12 @@ func (rp *ResolvedEventsProcessor) fillGap(msg messaging.Message) bool {
 			log.Error().Err(err).Dur("parked", parked).Uint64("from", from).Uint64("to", to).
 				Msg("Live gap fill has failed continuously past its bound; ending the term so the rebuild re-reads the range.")
 			rp.gapParkedSince = time.Time{}
+			if !rp.leadershipEnabled() && rp.Microservice != nil {
+				// No supervisor to rebuild the term: ending it alone would leave a Ready pod that
+				// detects nothing, which is the shape haltStaleWriter refuses for the same reason.
+				rp.Microservice.FailNow(fmt.Errorf("event-processing: the live gap %d..%d on partition %q "+
+					"could not be read for %s", from, to, rp.cfg.PartitionId, parked.Round(time.Second)))
+			}
 			rp.pcancel()
 		}
 		return false

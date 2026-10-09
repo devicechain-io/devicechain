@@ -1551,6 +1551,9 @@ functionalAreas:
     # ack/redelivery latency on a crash. checkpointIntervalSeconds is at most 30 — half
     # the broker's acknowledgement window, since a quiet stream is acked only at a
     # checkpoint; a larger value is refused at startup.
+    # checkpointTimeoutSeconds: 10    # floor of the deadline on each network call a checkpoint
+    # makes (publish, snapshot save); at most 120. The save's deadline grows on its own once a
+    # slow save has completed, so raise this only for a store whose first save is slower.
     # --- REACT SOURCE-side outbound egress cost-gate (ADR-060 SD-3): REACT charges the tenant's
     # outbound budget before publishing a connector-dispatch, metered on the time the triggering
     # telemetry reached the platform (so a backlog drained after a restart is not mistaken for a

@@ -89,7 +89,7 @@ func TestValidateRejectsNonPositiveCadence(t *testing.T) {
 		})
 	}
 
-	valid := EventProcessingConfiguration{CheckpointEvents: 100, CheckpointIntervalSeconds: 10}
+	valid := EventProcessingConfiguration{CheckpointEvents: 100, CheckpointIntervalSeconds: 10, CheckpointTimeoutSeconds: 10}
 	if err := valid.Validate(); err != nil {
 		t.Fatalf("valid config rejected: %v", err)
 	}
@@ -142,5 +142,23 @@ func TestRetiredSkewValueIsNotHonoured(t *testing.T) {
 	if cfg.WatermarkLatenessSeconds != DefaultWatermarkLatenessSeconds {
 		t.Errorf("watermarkLatenessSeconds = %d, want the default %d — the retired value must reach no live setting",
 			cfg.WatermarkLatenessSeconds, DefaultWatermarkLatenessSeconds)
+	}
+}
+
+// The checkpoint call deadline fails closed on both sides: zero would mean no deadline at all
+// (the hang it exists to prevent) and an unbounded value is the same thing said slowly.
+func TestValidateBoundsTheCheckpointTimeout(t *testing.T) {
+	for _, secs := range []int{0, -1, MaxCheckpointTimeoutSeconds + 1} {
+		c := EventProcessingConfiguration{CheckpointEvents: 100, CheckpointIntervalSeconds: 10, CheckpointTimeoutSeconds: secs}
+		if err := c.Validate(); err == nil {
+			t.Errorf("checkpointTimeoutSeconds %d was accepted", secs)
+		}
+	}
+	c := EventProcessingConfiguration{CheckpointEvents: 100, CheckpointIntervalSeconds: 10, CheckpointTimeoutSeconds: MaxCheckpointTimeoutSeconds}
+	if err := c.Validate(); err != nil {
+		t.Errorf("the maximum was refused: %v", err)
+	}
+	if got := NewEventProcessingConfiguration().CheckpointTimeoutSeconds; got != DefaultCheckpointTimeoutSeconds {
+		t.Errorf("default = %d, want %d", got, DefaultCheckpointTimeoutSeconds)
 	}
 }

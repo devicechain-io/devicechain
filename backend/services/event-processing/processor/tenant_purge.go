@@ -279,7 +279,7 @@ func (rp *ResolvedEventsProcessor) applyTenantPurge(tenant string) tenantPurgeRe
 	if !rp.dirty {
 		return tenantPurgeResult{evicted: n}
 	}
-	if !rp.checkpoint(rp.pctx()) {
+	if !rp.forceCheckpoint(rp.pctx()) {
 		return tenantPurgeResult{evicted: n, err: errors.New("the DETECT engine could not " +
 			"commit a checkpoint, so it cannot establish that its durable snapshot is free of " +
 			"this tenant — anything evicted from memory would be restored by a restart")}

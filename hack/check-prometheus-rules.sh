@@ -203,12 +203,12 @@ rendered, outdir = sys.argv[1], sys.argv[2]
 required = set(sys.argv[3:])
 
 names = []
-for doc in yaml.safe_load_all(open(rendered)):
+for doc in yaml.safe_load_all(open(rendered, encoding="utf-8")):
     if not doc or doc.get("kind") != "PrometheusRule":
         continue
     name = doc["metadata"]["name"]
     names.append(name)
-    with open(os.path.join(outdir, "rule-%s.yaml" % name), "w") as f:
+    with open(os.path.join(outdir, "rule-%s.yaml" % name), "w", encoding="utf-8") as f:
         yaml.safe_dump({"groups": doc["spec"]["groups"]}, f)
 
 # 🔴 THE POSITIVE CONTROL. Everything downstream is a loop over whatever was
@@ -354,7 +354,7 @@ for path in (rendered, tests):
                  % (path, group))
 
 defined = set()
-for g in yaml.safe_load(open(rendered))["groups"]:
+for g in yaml.safe_load(open(rendered, encoding="utf-8"))["groups"]:
     for rule in g.get("rules", []):
         if "alert" in rule:
             defined.add(rule["alert"])
@@ -362,7 +362,7 @@ for g in yaml.safe_load(open(rendered))["groups"]:
 if not defined:
     sys.exit("the rendered %s group defines no alerts at all; this check would pass vacuously" % group)
 
-doc = yaml.safe_load(open(tests)) or {}
+doc = yaml.safe_load(open(tests, encoding="utf-8")) or {}
 
 staged = "rendered-rules.yaml"
 if doc.get("rule_files") != [staged]:
@@ -448,7 +448,7 @@ if not files:
 counts = {}
 for path in files:
     n = 0
-    for doc in yaml.safe_load_all(open(path)):
+    for doc in yaml.safe_load_all(open(path, encoding="utf-8")):
         for g in (doc or {}).get("groups") or []:
             n += sum(1 for r in g.get("rules") or [] if "alert" in r)
     counts[os.path.basename(path)] = n
@@ -1072,9 +1072,9 @@ EOF
   python3 - "$d/alpha-tests.yaml" <<'PY'
 import sys, yaml
 p = sys.argv[1]
-doc = yaml.safe_load(open(p))
+doc = yaml.safe_load(open(p, encoding="utf-8"))
 doc["tests"] = [c for c in doc["tests"] if not any(a.get("exp_alerts") for a in c["alert_rule_test"])]
-yaml.safe_dump(doc, open(p, "w"))
+yaml.safe_dump(doc, open(p, "w", encoding="utf-8"))
 PY
   grep -q 'exp_labels' "$d/alpha-tests.yaml" &&
     st_fail "the no-firing mutation did not apply -- believe no verdict from this run"
@@ -1093,9 +1093,9 @@ PY
   python3 - "$d/alpha-tests.yaml" <<'PY'
 import sys, yaml
 p = sys.argv[1]
-doc = yaml.safe_load(open(p))
+doc = yaml.safe_load(open(p, encoding="utf-8"))
 doc["tests"] = [c for c in doc["tests"] if all(a.get("exp_alerts") for a in c["alert_rule_test"])]
-yaml.safe_dump(doc, open(p, "w"))
+yaml.safe_dump(doc, open(p, "w", encoding="utf-8"))
 PY
   grep -q 'exp_alerts: \[\]' "$d/alpha-tests.yaml" &&
     st_fail "the no-quiet mutation did not apply -- believe no verdict from this run"
@@ -1327,7 +1327,7 @@ note "the snapshot-backup rules fire on the states they claim to"
 base_backup_threshold() { # <rule-file> -> the threshold in seconds, or nothing
   python3 - "$1" <<'PY'
 import re, sys, yaml
-for g in yaml.safe_load(open(sys.argv[1]))["groups"]:
+for g in yaml.safe_load(open(sys.argv[1], encoding="utf-8"))["groups"]:
     for r in g.get("rules", []):
         if r.get("alert") == "PostgresNoRecentBaseBackup":
             m = re.search(r">\s*(\d+)\s*$", r["expr"].strip())

@@ -304,8 +304,8 @@ tests:
   # heartbeat shows it. It was fresh until minute 10 and is stuck at 600 seconds after that: the
   # age passes 120s at 13m and the 3m `for` fires it at 16m. The standby next to it reads 0
   # everywhere, including a heartbeat of 0 that is far older than the threshold: only the
-  # `is_leader == 1` and `live == 1` terms keep it quiet, so this is also the case that tells a
-  # pod-matched `and` from an aggregate that would page for the standby.
+  # `live == 1` term keeps it quiet (the rule has no `is_leader` term: live is raised only
+  # inside a held term and dropped before the lease is released, so it already implies it).
   # ------------------------------------------------------------------
   - name: a live leader whose loop stopped stamping fires DetectLoopStalled
     interval: 1m

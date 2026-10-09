@@ -78,7 +78,6 @@ spec:
         - alert: DetectLoopStalled
           expr: |
             (time() - devicechain_eventprocessing_detect_loop_heartbeat_timestamp_seconds{namespace="{{ $ns }}"} > 120)
-            and on (namespace, pod) (devicechain_eventprocessing_detect_is_leader{namespace="{{ $ns }}"} == 1)
             and on (namespace, pod) (devicechain_eventprocessing_detect_live{namespace="{{ $ns }}"} == 1)
           for: 3m
           labels:
