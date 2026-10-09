@@ -675,9 +675,10 @@ export function DetectionRuleForm({
   const scopeHint = scopeChosen && scopeGroupVersion == null ? t('ruleScopeHalfSetHint') : null;
 
   if ((unmodelledType != null || unparseable) && source != null) {
-    // Not dismissable and no Save: the original stays exactly as stored. The bytes are shown
-    // verbatim, read-only, so the operator can see what the rule says.
-    // Unreadable text is shown byte-for-byte; a readable rule is pretty-printed.
+    // Not dismissable and no definition Save: the original stays exactly as stored. The bytes are
+    // shown verbatim, read-only, so the operator can see what the rule says. A STORED rule can
+    // still be enabled/disabled and renamed — those go as a partial update that never names the
+    // definition. A handed-off draft has nothing stored yet, so it gets wording and no controls.
     let pretty = source;
     if (!unparseable) {
       try {
@@ -686,18 +687,56 @@ export function DetectionRuleForm({
         // shown as stored
       }
     }
+    const draft = !editing;
+    const suffix = draft ? 'Draft' : '';
+    const message = unparseable
+      ? t(`ruleUnparseableWarning${suffix}`)
+      : unmodelledType === ''
+        ? t(`ruleUnmodelledTypeMissing${suffix}`)
+        : t(`ruleUnmodelledType${suffix}`, { type: unmodelledType });
+    const saveMeta = async () => {
+      setFormError(null);
+      setBusy(true);
+      try {
+        // Partial update: no definition, no authoringGraph, no scope — only what this view edits.
+        await updateDetectionRule(entity!.token, {
+          name: name.trim() || null,
+          description: description.trim() || null,
+          enabled,
+        });
+        onDone(t('ruleUpdatedToast', { token: entity!.token }));
+      } catch (err) {
+        setFormError(errMessage(err));
+      } finally {
+        setBusy(false);
+      }
+    };
     return (
       <div className="space-y-4">
+        {formError && <ErrorBanner message={formError} onDismiss={() => setFormError(null)} />}
         <div role="alert" className="rounded-md border border-amber-500/50 bg-amber-500/10 px-3 py-2 text-sm text-amber-700 dark:text-amber-400">
-          {unparseable
-            ? t('ruleUnparseableWarning')
-            : unmodelledType === ''
-              ? t('ruleUnmodelledTypeMissing')
-              : t('ruleUnmodelledType', { type: unmodelledType })}
+          {message}
         </div>
-        <FormField label={t('ruleUnmodelledStoredLabel')} htmlFor="dr-unmodelled-source">
-          <Textarea id="dr-unmodelled-source" aria-label={t('ruleUnmodelledStoredLabel')} readOnly value={pretty} className="min-h-48 font-mono text-xs" />
+        <FormField label={t(draft ? 'ruleUnmodelledDraftLabel' : 'ruleUnmodelledStoredLabel')} htmlFor="dr-unmodelled-source">
+          <Textarea id="dr-unmodelled-source" aria-label={t(draft ? 'ruleUnmodelledDraftLabel' : 'ruleUnmodelledStoredLabel')} readOnly value={pretty} className="min-h-48 font-mono text-xs" />
         </FormField>
+        {editing && (
+          <>
+            <FormField label={t('common:colName')} htmlFor="dr-name">
+              <Input id="dr-name" value={name} onChange={(e) => setName(e.target.value)} />
+            </FormField>
+            <FormField label={t('common:colDescription')} htmlFor="dr-description">
+              <Textarea id="dr-description" value={description} onChange={(e) => setDescription(e.target.value)} />
+            </FormField>
+            <label className="flex items-center gap-2 text-sm">
+              <Checkbox checked={enabled} onCheckedChange={(c) => setEnabled(c === true)} />
+              {t('ruleEnabledCheckboxLabel')}
+            </label>
+            <Button onClick={saveMeta} loading={busy} disabled={busy}>
+              {t('common:saveChanges')}
+            </Button>
+          </>
+        )}
       </div>
     );
   }

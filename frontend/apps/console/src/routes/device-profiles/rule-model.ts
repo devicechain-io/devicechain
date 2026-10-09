@@ -314,6 +314,16 @@ export function rebuildFrom(p: ParsedDefinition): string {
   });
 }
 
+// The rule's `type` value, looked up the way the backend's Go JSON decoding does: an exact `type`
+// key wins, otherwise any key that matches case-insensitively (`Type`) is the type. Reading only
+// the exact key would call a rule the backend runs "typeless", or worse, read a known type off
+// one key while the backend reads another.
+function typeValue(d: Record<string, unknown>): unknown {
+  if ('type' in d) return d.type;
+  const k = Object.keys(d).find((key) => key.toLowerCase() === 'type');
+  return k === undefined ? undefined : d[k];
+}
+
 /**
  * The stored `type` of a definition that parses as a rule object but names a kind this form does
  * not model, or null when the definition is unparseable (a different failure) or its type is
@@ -327,7 +337,7 @@ export function unmodelledRuleType(raw: string): string | null {
     return null;
   }
   if (d === null || typeof d !== 'object' || Array.isArray(d)) return null;
-  const type = (d as Record<string, unknown>).type;
+  const type = typeValue(d as Record<string, unknown>);
   if (isKnownRuleType(type)) return null;
   return typeof type === 'string' ? type : '';
 }
@@ -356,8 +366,9 @@ export function parseDefinition(raw: string): ParsedDefinition | null {
   // unmodelled type is now not parsed at all: this returns null for it, and the caller asks
   // `unmodelledRuleType` first to tell "unreadable" from "readable but not ours" and refuse to
   // render an editor for the latter.
-  if (!isKnownRuleType(d.type)) return null;
-  const type = d.type;
+  const rawType = typeValue(d);
+  if (!isKnownRuleType(rawType)) return null;
+  const type = rawType;
 
   // Condition.
   const when = (d.when ?? {}) as Record<string, unknown>;

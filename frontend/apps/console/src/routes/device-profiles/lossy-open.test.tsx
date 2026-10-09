@@ -101,7 +101,9 @@ describe('opening a stored rule the form cannot fully hold', () => {
     render(<DetectionRuleForm profileToken="p" entity={rule(raw)} onDone={() => {}} />);
 
     expect(screen.getByRole('alert').textContent).toMatch(UNREADABLE);
-    expect(screen.queryByRole('button', { name: /save changes/i })).toBeNull();
+    // The only Save is the metadata one (enable/rename), which never sends the definition.
+    expect((screen.getByLabelText(/stored definition/i) as HTMLTextAreaElement).readOnly).toBe(true);
+    expect(screen.queryByRole('button', { name: /create/i })).toBeNull();
     expect(screen.queryByLabelText(/metric/i)).toBeNull();
     expect((screen.getByLabelText(/stored definition/i) as HTMLTextAreaElement).value).toBe(raw);
     expect(screen.queryByText(WARNING)).toBeNull();
@@ -136,14 +138,15 @@ describe('opening a rule of a type the form does not model', () => {
   const NOT_EDITABLE = /can.t be edited in the form/i;
   const unknown = JSON.stringify({ name: 'A rule', type: 'frobnicate', severity: 'major', window: '5m' });
 
-  it('shows a non-dismissable refusal and no editor, and never offers Save', () => {
+  it('shows a non-dismissable refusal and no editor, and offers no way to save the definition', () => {
     render(<DetectionRuleForm profileToken="p" entity={rule(unknown)} onDone={() => {}} />);
 
     const alert = screen.getByRole('alert');
     expect(alert.textContent).toMatch(NOT_EDITABLE);
     expect(alert.textContent).toMatch(/frobnicate/);
     expect(screen.queryByRole('button', { name: /dismiss|close/i })).toBeNull();
-    expect(screen.queryByRole('button', { name: /save changes/i })).toBeNull();
+    expect((screen.getByLabelText(/stored definition/i) as HTMLTextAreaElement).readOnly).toBe(true);
+    expect(screen.queryByRole('button', { name: /create/i })).toBeNull();
     // No threshold form pre-filled from it.
     expect(screen.queryByLabelText(/metric/i)).toBeNull();
     expect(screen.queryByText(WARNING)).toBeNull();
@@ -168,7 +171,39 @@ describe('opening a rule of a type the form does not model', () => {
   it('treats a definition with no type as unmodelled rather than a threshold', () => {
     render(<DetectionRuleForm profileToken="p" entity={rule(JSON.stringify({ name: 'x' }))} onDone={() => {}} />);
 
-    expect(screen.getByRole('alert').textContent).toMatch(NOT_EDITABLE);
+    // The SPECIFIC sentence: the shared pattern also matches the unreadable and unknown-type
+    // alerts, so asserting only that would pass for a missing type misfiled as either.
+    expect(screen.getByRole('alert').textContent).toMatch(/no recognisable type/);
+  });
+
+  it('lets a read-only rule be disabled and renamed without ever sending its definition', async () => {
+    render(<DetectionRuleForm profileToken="p" entity={rule(unknown)} onDone={() => {}} />);
+
+    fireEvent.click(screen.getByRole('checkbox', { name: /enabled/i }));
+    fireEvent.change(screen.getByLabelText(/^name$/i), { target: { value: 'Renamed' } });
+    fireEvent.click(screen.getByRole('button', { name: /save changes/i }));
+    await waitFor(() => expect(updateDetectionRule).toHaveBeenCalledTimes(1));
+    const [token, body] = vi.mocked(updateDetectionRule).mock.calls[0];
+    expect(token).toBe('r1');
+    expect(body).toMatchObject({ enabled: false, name: 'Renamed' });
+    expect(Object.keys(body as object)).not.toContain('definition');
+    expect(Object.keys(body as object)).not.toContain('authoringGraph');
+  });
+
+  it('words a handed-off draft as a draft, not as a stored rule', () => {
+    render(<DetectionRuleForm profileToken="p" initialDefinition={unknown} onDone={() => {}} />);
+
+    const text = screen.getByRole('alert').textContent ?? '';
+    expect(text).toMatch(/draft/i);
+    expect(text).not.toMatch(/stored rule|through the API/i);
+    // Nothing is stored yet, so there is nothing to enable or rename.
+    expect(screen.queryByRole('checkbox', { name: /enabled/i })).toBeNull();
+  });
+
+  it('treats a differently-cased Type key as the type, as the backend decoder does', () => {
+    render(<DetectionRuleForm profileToken="p" entity={rule(JSON.stringify({ name: 'x', Type: 'frobnicate' }))} onDone={() => {}} />);
+
+    expect(screen.getByRole('alert').textContent).toMatch(/frobnicate/);
   });
 
   it('round-trips a connectivity rule exactly through Save', async () => {
