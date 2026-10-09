@@ -29,6 +29,9 @@ export interface ContractCaps {
   scopesToSelector: boolean;
   // Refuses a `slot` selector that was never resolved, through the sink's error path.
   rejectsUnresolvedSlot: boolean;
+  // Holds positions. A source that does not must answer a selector naming a location
+  // series with an error, never an empty snapshot (which would read as "nothing located").
+  recordsPositions: boolean;
 }
 
 // The device the scenario's samples and positions belong to.
@@ -170,7 +173,17 @@ export function describeDataSourceContract(
       expect([...raised].sort().reverse()).toEqual(raised);
     });
 
-    it('answers a located selector with a positions snapshot that carries its device tokens', async () => {
+    it.skipIf(caps.recordsPositions)('refuses a located selector it holds no positions for, instead of answering empty', async () => {
+      const { source, subject: s } = await start();
+      const l = collector<LocationSnapshot>();
+      track(source.subscribeLocations({ datasource: LOCATED }, l.sink));
+      await s.deliver();
+      await settle();
+      expect(l.next).toEqual([]);
+      expect(l.errors).toHaveLength(1);
+    });
+
+    it.skipIf(!caps.recordsPositions)('answers a located selector with a positions snapshot that carries its device tokens', async () => {
       const { source, subject: s } = await start();
       const l = collector<LocationSnapshot>();
       track(source.subscribeLocations({ datasource: LOCATED }, l.sink));

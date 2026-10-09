@@ -43,7 +43,6 @@ import type {
   CommandStreamSink,
   CommandSubscription,
   DeviceResolver,
-  LocationSnapshot,
   LocationStreamSink,
   LocationSubscription,
   WidgetDataSource,
@@ -55,10 +54,15 @@ import type {
   DatasourceSelector,
   EntityCandidateLister,
   EntityListKind,
-  LocationSample,
   MeasurementSample,
 } from './types';
-import type { BoardRecording, RecordedAlarmRow, RecordedLocationSeries, RecordedMeasurementSeries } from './recording';
+import {
+  recordingBounds,
+  type BoardRecording,
+  type RecordedAlarm,
+  type RecordedAlarmEvent,
+  type RecordedAlarmSnapshot,
+} from './recording';
 
 // How far back from the cursor a fresh subscription back-fills measurement rows. Raw rows,
 // not buckets: a recording has no aggregate to show honestly.
@@ -138,7 +142,10 @@ function defaultTicker(): ClockTicker {
 }
 
 export class RecordedClock {
+  // The end of the playable span, and its beginning (0 for a whole run; an excerpt starts
+  // at its window).
   readonly durationMs: number;
+  readonly minMs: number;
   private time: number;
   private isPlaying = false;
   private playbackRate: PlaybackRate = 1;
@@ -146,13 +153,17 @@ export class RecordedClock {
   private readonly ticker: ClockTicker;
   private readonly listeners = new Set<(ev: ClockEvent) => void>();
 
-  constructor(durationMs: number, options: { ticker?: ClockTicker; startMs?: number } = {}) {
+  constructor(durationMs: number, options: { ticker?: ClockTicker; startMs?: number; minMs?: number } = {}) {
     if (!Number.isFinite(durationMs) || durationMs <= 0) {
       throw new RangeError(`RecordedClock: durationMs must be positive and finite, got ${durationMs}`);
     }
     this.durationMs = durationMs;
+    this.minMs = options.minMs ?? 0;
+    if (!Number.isFinite(this.minMs) || this.minMs < 0 || this.minMs >= durationMs) {
+      throw new RangeError(`RecordedClock: minMs must be in [0, ${durationMs}), got ${this.minMs}`);
+    }
     this.ticker = options.ticker ?? defaultTicker();
-    this.time = this.clampTime(options.startMs ?? 0);
+    this.time = this.clampTime(options.startMs ?? this.minMs);
   }
 
   get timeMs(): number {
@@ -186,7 +197,7 @@ export class RecordedClock {
     this.emit('state');
   }
 
-  // seek moves the cursor, clamped to [0, durationMs]. Playback state is unchanged, except
+  // seek moves the cursor, clamped to [minMs, durationMs]. Playback state is unchanged, except
   // that seeking to the very end stops it (there is nothing left to play).
   seek(tMs: number): void {
     if (!Number.isFinite(tMs)) throw new RangeError(`RecordedClock.seek: not a finite time: ${tMs}`);
@@ -230,7 +241,7 @@ export class RecordedClock {
   }
 
   private clampTime(t: number): number {
-    return t < 0 ? 0 : t > this.durationMs ? this.durationMs : t;
+    return t < this.minMs ? this.minMs : t > this.durationMs ? this.durationMs : t;
   }
 
   private emit(reason: ClockEvent['reason']): void {
@@ -264,30 +275,45 @@ function upperBound(a: readonly number[], x: number): number {
   return lo;
 }
 
-function anchorKey(a: AnchorTarget): string {
-  return `${a.relationship}|${a.targetType}|${a.targetToken}`;
+// createRecordedClock builds a clock covering exactly what the recording can play: the
+// whole run, or an excerpt's window (starting at its beginning).
+export function createRecordedClock(rec: BoardRecording, options: { ticker?: ClockTicker } = {}): RecordedClock {
+  const { fromMs, toMs } = recordingBounds(rec);
+  return new RecordedClock(toMs, { minMs: fromMs, ticker: options.ticker });
 }
 
-function anchorMembers(rec: BoardRecording, anchor: AnchorTarget): string[] {
-  const hit = rec.anchors.find((a) => anchorKey(a) === anchorKey(anchor));
-  if (!hit) {
+// ---- anchors, resolver and lister -----------------------------------------
+
+// The recording does not carry the anchor a board is bound to; it carries the devices. The
+// host names the anchors (taken from the board definition it plays) whose members are the
+// run's devices. Every device of a Sitepulse run is a member of the one site customer, so
+// each anchor listed here expands to ALL of the run's devices; an anchor not listed is
+// unknown and is refused, never answered with an empty set.
+export interface RecordedSiteOptions {
+  siteAnchors?: readonly AnchorTarget[];
+}
+
+function sameAnchor(a: AnchorTarget, b: AnchorTarget): boolean {
+  return a.relationship === b.relationship && a.targetType === b.targetType && a.targetToken === b.targetToken;
+}
+
+function anchorMembers(rec: BoardRecording, options: RecordedSiteOptions, anchor: AnchorTarget): string[] {
+  if (!(options.siteAnchors ?? []).some((a) => sameAnchor(a, anchor))) {
     throw new Error(
       `anchor ${anchor.targetType} '${anchor.targetToken}' (${anchor.relationship}) is not in this recording`,
     );
   }
-  return [...hit.members];
+  return rec.devices.map((d) => d.token);
 }
 
-// ---- resolver and lister --------------------------------------------------
-
-// createRecordedResolver answers the hub's DeviceResolver questions from the recording:
-// an anchor expands to the members the run recorded, and a device exists if the run has
-// it. An anchor the recording does not know THROWS (an empty answer would read as "the
-// site had no machines").
-export function createRecordedResolver(rec: BoardRecording): DeviceResolver {
-  const devices = new Set(rec.devices);
+// createRecordedResolver answers the hub's DeviceResolver questions from the recording: a
+// site anchor expands to the run's devices, and a device exists if the run has it. An
+// anchor the host did not declare THROWS (an empty answer would read as "the site had no
+// machines").
+export function createRecordedResolver(rec: BoardRecording, options: RecordedSiteOptions = {}): DeviceResolver {
+  const devices = new Set(rec.devices.map((d) => d.token));
   return {
-    devicesForAnchor: async (anchor) => anchorMembers(rec, anchor),
+    devicesForAnchor: async (anchor) => anchorMembers(rec, options, anchor),
     deviceExists: async (token) => devices.has(token),
   };
 }
@@ -299,20 +325,91 @@ export function createRecordedResolver(rec: BoardRecording): DeviceResolver {
 // selection on, so a host that mounts a recording passes this one.
 //
 // Devices are listed by token (the recording carries no display names). The other kinds
-// list the anchor targets the run recorded; a kind with none yields an empty list, which
-// is true of the recording.
-export function createRecordedLister(rec: BoardRecording): EntityCandidateLister {
+// list the declared site anchors of that type; a kind with none yields an empty list,
+// which is true of the recording.
+export function createRecordedLister(rec: BoardRecording, options: RecordedSiteOptions = {}): EntityCandidateLister {
   return async (kind: EntityListKind) => {
-    if (kind === 'device') return rec.devices.map((token) => ({ token, name: null }));
+    if (kind === 'device') return rec.devices.map((d) => ({ token: d.token, name: null }));
     const seen = new Set<string>();
     const rows: Array<{ token: string; name: null }> = [];
-    for (const a of rec.anchors) {
+    for (const a of options.siteAnchors ?? []) {
       if (a.targetType !== kind || seen.has(a.targetToken)) continue;
       seen.add(a.targetToken);
       rows.push({ token: a.targetToken, name: null });
     }
     return rows;
   };
+}
+
+// ---- the recording, indexed -----------------------------------------------
+
+interface Series {
+  device: string;
+  name: string;
+  // Row indices into the measurement columns, ascending in time, and the same rows' times.
+  rows: number[];
+  times: number[];
+}
+
+// One alarm record on the merged history timeline. A snapshot REPLACES the whole alarm set;
+// an event sets one alarm. At equal times a snapshot comes first.
+type TimelineEntry =
+  | { tMs: number; snapshot: RecordedAlarmSnapshot }
+  | { tMs: number; event: RecordedAlarmEvent };
+
+interface Indexed {
+  byDevice: Map<string, Series[]>;
+  timeline: TimelineEntry[];
+  timelineTimes: number[];
+}
+
+// A view is rebuilt after every seek, so the index is built once per parsed recording.
+const indexCache = new WeakMap<BoardRecording, Indexed>();
+
+function indexOf(rec: BoardRecording): Indexed {
+  const cached = indexCache.get(rec);
+  if (cached) return cached;
+
+  const bySeries = new Map<string, Series>();
+  const byDevice = new Map<string, Series[]>();
+  const { d, n, t } = rec.measurements;
+  for (let i = 0; i < t.length; i++) {
+    const key = d[i] * rec.channels.measurements.length + n[i];
+    let s = bySeries.get(String(key));
+    if (!s) {
+      s = { device: rec.devices[d[i]].token, name: rec.channels.measurements[n[i]], rows: [], times: [] };
+      bySeries.set(String(key), s);
+      const list = byDevice.get(s.device);
+      if (list) list.push(s);
+      else byDevice.set(s.device, [s]);
+    }
+    s.rows.push(i);
+    s.times.push(t[i]);
+  }
+
+  const timeline: TimelineEntry[] = [
+    ...rec.alarms.snapshots.map((snapshot): TimelineEntry => ({ tMs: snapshot.tMs, snapshot })),
+    ...rec.alarms.events.map((event): TimelineEntry => ({ tMs: event.tMs, event })),
+  ];
+  // Array.prototype.sort is stable: snapshots were listed first, so they stay first at ties.
+  timeline.sort((a, b) => a.tMs - b.tMs);
+
+  const indexed: Indexed = { byDevice, timeline, timelineTimes: timeline.map((e) => e.tMs) };
+  indexCache.set(rec, indexed);
+  return indexed;
+}
+
+// An alarm as the fold holds it.
+interface FoldedAlarm {
+  id: string;
+  dev: string;
+  key: string;
+  metric: string;
+  state: string;
+  sev: string;
+  raised: string | null;
+  cleared: string | null;
+  ack: boolean;
 }
 
 // ---- the data source ------------------------------------------------------
@@ -330,26 +427,24 @@ interface DeviceNames {
 
 export class RecordedDataSource implements WidgetDataSource {
   private readonly rec: BoardRecording;
+  private readonly options: RecordedSiteOptions;
+  private readonly index: Indexed;
   private readonly startMs: number;
-  private readonly series = new Map<string, RecordedMeasurementSeries[]>();
-  private readonly locationSeries = new Map<string, RecordedLocationSeries>();
   private readonly devices: ReadonlySet<string>;
   private readonly subs = new Set<Subscription>();
   private readonly unlisten: () => void;
   private cursor: number;
   private stale = false;
 
-  constructor(rec: BoardRecording, clock: RecordedClock) {
+  // `clock` is the shared replay clock; the view starts at its current time. `options`
+  // names the site anchors this recording's devices belong to (see RecordedSiteOptions).
+  constructor(rec: BoardRecording, clock: RecordedClock, options: RecordedSiteOptions = {}) {
     this.rec = rec;
+    this.options = options;
+    this.index = indexOf(rec);
     this.cursor = clock.timeMs;
     this.startMs = Date.parse(rec.startedAtUtc);
-    this.devices = new Set(rec.devices);
-    for (const s of rec.measurements) {
-      const list = this.series.get(s.device);
-      if (list) list.push(s);
-      else this.series.set(s.device, [s]);
-    }
-    for (const s of rec.locations) this.locationSeries.set(s.device, s);
+    this.devices = new Set(rec.devices.map((d) => d.token));
     this.unlisten = clock.subscribe((ev) => this.onClock(ev));
   }
 
@@ -411,7 +506,7 @@ export class RecordedDataSource implements WidgetDataSource {
       case 'device':
         return [{ deviceToken: ds.deviceToken, names: new Set(ds.measurements) }];
       case 'anchor':
-        return anchorMembers(this.rec, ds.anchor).map((deviceToken) => ({
+        return anchorMembers(this.rec, this.options, ds.anchor).map((deviceToken) => ({
           deviceToken,
           names: new Set(ds.measurements),
         }));
@@ -455,30 +550,33 @@ export class RecordedDataSource implements WidgetDataSource {
       return this.failLater(err, sink);
     }
 
-    // Each selected series keeps its own next-row index, so a tick delivers exactly the
+    // Each selected series keeps its own next-row position, so a tick delivers exactly the
     // rows the cursor has newly passed.
-    const picked: Array<{ s: RecordedMeasurementSeries; next: number }> = [];
+    const picked: Array<{ s: Series; next: number }> = [];
     for (const g of groups) {
-      for (const s of this.series.get(g.deviceToken) ?? []) {
+      for (const s of this.index.byDevice.get(g.deviceToken) ?? []) {
         if (g.names.size === 0 || g.names.has(s.name)) picked.push({ s, next: 0 });
       }
     }
 
+    const { t, v } = this.rec.measurements;
     const flush = (cursor: number, isDisposed: () => boolean): void => {
       const due: Array<{ t: number; sample: MeasurementSample }> = [];
       for (const p of picked) {
         const { s } = p;
-        while (p.next < s.t.length && s.t[p.next] <= cursor) {
-          const i = p.next++;
+        while (p.next < s.times.length && s.times[p.next] <= cursor) {
+          const row = s.rows[p.next++];
           due.push({
-            t: s.t[i],
+            t: t[row],
             sample: {
-              id: `${s.device}|${s.name}|${i}`,
+              id: `${s.device}|${s.name}|${row}`,
               deviceToken: s.device,
               eventType: 0,
-              occurredTime: this.iso(s.occ[i]),
+              // The time the viewer applied the row: the recording holds no separate
+              // occurred time for measurements.
+              occurredTime: this.iso(t[row]),
               name: s.name,
-              value: s.v[i],
+              value: v[row],
               classifier: null,
             },
           });
@@ -496,7 +594,7 @@ export class RecordedDataSource implements WidgetDataSource {
     return this.open({
       // Back-fill: rows from the preceding window up to the cursor, then play on.
       start: (cursor, isDisposed) => {
-        for (const p of picked) p.next = lowerBound(p.s.t, cursor - RECORDED_HISTORY_WINDOW_MS);
+        for (const p of picked) p.next = lowerBound(p.s.times, cursor - RECORDED_HISTORY_WINDOW_MS);
         flush(cursor, isDisposed);
       },
       advance: flush,
@@ -516,56 +614,63 @@ export class RecordedDataSource implements WidgetDataSource {
       return this.failLater(err, sink);
     }
 
-    // The fold is monotone because a view only moves forward: apply each alarm row once,
-    // in order, keeping the latest row per token.
-    const rows = this.rec.alarms;
-    const times = rows.map((r) => r.t);
-    const latest = new Map<string, RecordedAlarmRow>();
+    // The fold is monotone because a view only moves forward: apply each history entry
+    // once, in order. A snapshot replaces the set; an event sets one alarm.
+    const { timeline, timelineTimes } = this.index;
+    const alarms = new Map<string, FoldedAlarm>();
     let applied = 0;
     let lastSignature: string | null = null;
 
+    const apply = (a: RecordedAlarm): void => {
+      const prior = alarms.get(a.id);
+      alarms.set(a.id, {
+        id: a.id,
+        dev: a.dev,
+        key: a.key,
+        metric: a.metric,
+        state: a.state,
+        sev: a.sev,
+        // `occ` is the time of THIS state: the raise time for an ACTIVE row, the clear time
+        // for a CLEARED one. A cleared alarm keeps the raise time its ACTIVE row gave it
+        // (null if the history never showed it being raised).
+        raised: a.state === 'ACTIVE' ? a.occ : (prior?.raised ?? null),
+        cleared: a.state === 'CLEARED' ? a.occ : null,
+        ack: a.ack === true,
+      });
+    };
+
     const emit = (cursor: number, isDisposed: () => boolean): void => {
-      const upTo = upperBound(times, cursor);
-      for (; applied < upTo; applied++) latest.set(rows[applied].token, rows[applied]);
-      const matching = [...latest.values()].filter(
-        (r) =>
-          (scope === null || scope.has(r.device)) &&
-          (!subscription.state || r.state === subscription.state) &&
-          (!subscription.severity || r.severity === subscription.severity) &&
-          (subscription.acknowledged == null || r.acknowledged === subscription.acknowledged),
+      const upTo = upperBound(timelineTimes, cursor);
+      for (; applied < upTo; applied++) {
+        const entry = timeline[applied];
+        if ('snapshot' in entry) {
+          alarms.clear();
+          for (const a of entry.snapshot.alarms) apply(a);
+        } else {
+          apply(entry.event);
+        }
+      }
+      const matches = [...alarms.values()].filter(
+        (a) =>
+          (scope === null || scope.has(a.dev)) &&
+          (!subscription.state || a.state === subscription.state) &&
+          (!subscription.severity || a.sev === subscription.severity) &&
+          (subscription.acknowledged == null || a.ack === subscription.acknowledged),
       );
-      // Newest first by raised time; the token breaks ties so the order is deterministic.
-      matching.sort((a, b) => b.raised - a.raised || (a.token < b.token ? -1 : a.token > b.token ? 1 : 0));
-      const page = matching.slice(0, subscription.pageSize);
+      // Newest first by raise time (ISO strings in one format compare as time); the id
+      // breaks ties so the order is deterministic.
+      const when = (a: FoldedAlarm): string => a.raised ?? a.cleared ?? '';
+      matches.sort((a, b) => (when(a) < when(b) ? 1 : when(a) > when(b) ? -1 : a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+      const page = matches.slice(0, subscription.pageSize);
       // Whole snapshots, re-emitted only when the fold actually changed.
-      const signature = JSON.stringify([matching.length, page]);
+      const signature = JSON.stringify([matches.length, page]);
       if (signature === lastSignature || isDisposed()) return;
       lastSignature = signature;
-      const snapshot: AlarmSnapshot = { alarms: page.map((r) => this.alarmRow(r)), total: matching.length };
+      const snapshot: AlarmSnapshot = { alarms: page.map(toAlarmRow), total: matches.length };
       sink.next(snapshot);
     };
 
     return this.open({ start: emit, advance: emit });
-  }
-
-  private alarmRow(r: RecordedAlarmRow): AlarmRow {
-    return {
-      token: r.token,
-      originatorType: 'device',
-      originatorToken: r.device,
-      alarmKey: r.alarmKey,
-      metricKey: r.metricKey,
-      state: r.state,
-      acknowledged: r.acknowledged,
-      severity: r.severity,
-      raisedTime: this.iso(r.raised),
-      clearedTime: r.cleared === null ? null : this.iso(r.cleared),
-      acknowledgedTime: r.acked === null ? null : this.iso(r.acked),
-      acknowledgedBy: null,
-      // The stored alarm's last value is not recorded, and a nearby measurement would
-      // invent the integrator's state. Null renders as an em dash.
-      lastValue: null,
-    };
   }
 
   // ── commands ──────────────────────────────────────────────────────────────
@@ -577,57 +682,29 @@ export class RecordedDataSource implements WidgetDataSource {
 
   // ── locations ─────────────────────────────────────────────────────────────
 
+  // This format version records no positions. A selector that names no location series
+  // asks for nothing, and one that resolves to no device has nothing to place: both get the
+  // empty snapshot, as from the hub. Naming a location series for devices that exist is a
+  // request for data the recording does not have, which is an error, never an empty map.
   subscribeLocations(subscription: LocationSubscription, sink: LocationStreamSink): () => void {
     const ds = subscription.datasource;
-    // A selector that names no location series asks for nothing: the empty snapshot, as
-    // the hub gives it. Naming one against a recording without positions is NOT empty.
-    if (!ds?.location) {
-      return this.open({
-        start: (_cursor, isDisposed) => {
-          if (!isDisposed()) sink.next({ kind: 'positions', deviceTokens: [], locations: [] });
-        },
-        advance: () => {},
-      });
-    }
-    let tokens: string[];
-    try {
-      if (!this.rec.channels.locations) throw new NotInRecordingError('locations', 'no positions were recorded');
-      tokens = this.resolve(ds).map((g) => g.deviceToken);
-    } catch (err) {
-      return this.failLater(err, sink);
-    }
-
-    // Positions are stepped, never interpolated: the last row at or before the cursor.
-    let lastSignature: string | null = null;
-    const emit = (cursor: number, isDisposed: () => boolean): void => {
-      const locations: LocationSample[] = [];
-      const picks: string[] = [];
-      for (const token of tokens) {
-        const s = this.locationSeries.get(token);
-        if (!s) continue;
-        const i = upperBound(s.t, cursor) - 1;
-        if (i < 0) continue;
-        picks.push(`${token}:${i}`);
-        locations.push({
-          id: `${token}|location|${i}`,
-          deviceToken: token,
-          latitude: s.lat[i],
-          longitude: s.lon[i],
-          elevation: s.elevation[i],
-          // Accuracy is not recorded; absent is not zero.
-          accuracy: null,
-          speed: s.speed[i],
-          heading: s.heading[i],
-          occurredTime: this.iso(s.occ[i]),
-        });
+    let tokens: string[] = [];
+    if (ds?.location) {
+      try {
+        tokens = this.resolve(ds).map((g) => g.deviceToken);
+      } catch (err) {
+        return this.failLater(err, sink);
       }
-      const signature = picks.join(',');
-      if (signature === lastSignature || isDisposed()) return;
-      lastSignature = signature;
-      const snapshot: LocationSnapshot = { kind: 'positions', deviceTokens: tokens, locations };
-      sink.next(snapshot);
-    };
-    return this.open({ start: emit, advance: emit });
+      if (tokens.length > 0) {
+        return this.failLater(new NotInRecordingError('locations', 'no positions were recorded'), sink);
+      }
+    }
+    return this.open({
+      start: (_cursor, isDisposed) => {
+        if (!isDisposed()) sink.next({ kind: 'positions', deviceTokens: [], locations: [] });
+      },
+      advance: () => {},
+    });
   }
 
   // ── availability ──────────────────────────────────────────────────────────
@@ -644,4 +721,25 @@ export class RecordedDataSource implements WidgetDataSource {
     this.unlisten();
     for (const sub of [...this.subs]) sub.dispose();
   }
+}
+
+function toAlarmRow(a: FoldedAlarm): AlarmRow {
+  return {
+    token: a.id,
+    originatorType: 'device',
+    originatorToken: a.dev,
+    alarmKey: a.key,
+    metricKey: a.metric,
+    state: a.state,
+    acknowledged: a.ack,
+    severity: a.sev,
+    raisedTime: a.raised,
+    clearedTime: a.cleared,
+    // The recording notes THAT an alarm was acknowledged, not when or by whom.
+    acknowledgedTime: null,
+    acknowledgedBy: null,
+    // The stored alarm's last value is not recorded, and a nearby measurement would
+    // invent the integrator's state. Null renders as an em dash.
+    lastValue: null,
+  };
 }

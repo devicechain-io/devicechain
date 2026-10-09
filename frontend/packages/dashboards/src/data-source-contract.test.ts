@@ -20,7 +20,7 @@ import {
   settle,
   type ContractSubject,
 } from './testing/data-source-contract';
-import { FIXTURE_DURATION_MS, fixtureRecording } from './testing/recording-fixture';
+import { FIXTURE_DURATION_MS, SITE, fixtureRecording } from './testing/recording-fixture';
 import type { AlarmRow, LocationSample } from './types';
 
 // The SDK's WIRE only: gql() is answered by a stand-in for the services, and subscribe()
@@ -129,7 +129,7 @@ function hubSubject(): ContractSubject {
   };
 }
 
-describeDataSourceContract('DashboardHub', hubSubject, { scopesToSelector: true, rejectsUnresolvedSlot: true });
+describeDataSourceContract('DashboardHub', hubSubject, { scopesToSelector: true, rejectsUnresolvedSlot: true, recordsPositions: true });
 
 // ---- synthetic ------------------------------------------------------------
 
@@ -141,7 +141,7 @@ describeDataSourceContract(
   },
   // Preview never resolves a device (it generates data for any selector), so it cannot
   // honour scope and does not refuse an unresolved slot. Both are deliberate.
-  { scopesToSelector: false, rejectsUnresolvedSlot: false },
+  { scopesToSelector: false, rejectsUnresolvedSlot: false, recordsPositions: true },
 );
 
 // ---- recorded -------------------------------------------------------------
@@ -149,9 +149,9 @@ describeDataSourceContract(
 describeDataSourceContract(
   'RecordedDataSource',
   () => {
-    const rec = fixtureRecording({ locations: true });
+    const rec = fixtureRecording();
     const clock = new RecordedClock(FIXTURE_DURATION_MS, { ticker: { start: () => () => {} } });
-    const source = new RecordedDataSource(rec, clock);
+    const source = new RecordedDataSource(rec, clock, { siteAnchors: [SITE] });
     return {
       source,
       deliver: async () => {
@@ -163,5 +163,6 @@ describeDataSourceContract(
       close: () => source.disposeAll(),
     };
   },
-  { scopesToSelector: true, rejectsUnresolvedSlot: true },
+  // This format version records no positions: a located selector is an error here.
+  { scopesToSelector: true, rejectsUnresolvedSlot: true, recordsPositions: false },
 );

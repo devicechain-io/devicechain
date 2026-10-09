@@ -136,16 +136,21 @@ export {
 // its fail-closed parser, the replay clock, the source itself and the recorded resolver/lister.
 export {
   RECORDING_FORMAT_VERSION,
+  RECORDING_KIND,
   RecordingFormatError,
   parseBoardRecording,
+  recordedWallTimeMs,
+  recordingBounds,
+  simulationScaleAt,
   type BoardRecording,
-  type RecordedAlarmRow,
-  type RecordedAnchor,
+  type RecordedAlarm,
+  type RecordedAlarmEvent,
+  type RecordedAlarmSnapshot,
   type RecordedChannels,
   type RecordedChapter,
   type RecordedClockSegment,
-  type RecordedLocationSeries,
-  type RecordedMeasurementSeries,
+  type RecordedDevice,
+  type RecordedMeasurementColumns,
 } from './recording';
 export {
   PLAYBACK_RATES,
@@ -153,12 +158,14 @@ export {
   NotInRecordingError,
   RecordedClock,
   RecordedDataSource,
+  createRecordedClock,
   createRecordedLister,
   createRecordedResolver,
   type ClockEvent,
   type ClockTicker,
   type PlaybackRate,
   type RecordedChannel,
+  type RecordedSiteOptions,
 } from './recorded';
 
 export {

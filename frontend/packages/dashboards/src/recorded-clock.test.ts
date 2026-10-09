@@ -136,6 +136,17 @@ describe('RecordedClock', () => {
     expect(events).toHaveLength(5);
   });
 
+  it('covers only [minMs, durationMs] when given a lower bound, starting at it', () => {
+    const clock = new RecordedClock(50_000, { minMs: 20_000, ticker: manualTicker() });
+    expect(clock.timeMs).toBe(20_000);
+    clock.seek(0);
+    expect(clock.timeMs).toBe(20_000);
+    clock.seek(99_000);
+    expect(clock.timeMs).toBe(50_000);
+    expect(() => new RecordedClock(50_000, { minMs: 50_000 })).toThrow(RangeError);
+    expect(() => new RecordedClock(50_000, { minMs: -1 })).toThrow(RangeError);
+  });
+
   it('starts at a given position', () => {
     expect(new RecordedClock(10_000, { startMs: 3_000, ticker: manualTicker() }).timeMs).toBe(3_000);
   });

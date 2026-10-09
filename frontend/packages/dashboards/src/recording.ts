@@ -1,34 +1,41 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// The recorded-run format: one captured run of a board, as a plain JSON document a
-// RecordedDataSource can play back. This file owns the SHAPE and the parser; the playback
-// machinery is in recorded.ts.
+// The board-recording format: one captured run of a board, as a plain JSON document a
+// RecordedDataSource can play back. This file owns the SHAPE and the parser; playback is in
+// recorded.ts. The document is produced by the Sitepulse recording converter
+// (demos/sitepulse-unity/tools/recording_to_board.py), whose module docstring is the
+// writer's side of this contract; the two must change together.
 //
 // 🔴 THE PARSER IS FAIL-CLOSED, AND THAT IS ITS WHOLE JOB. A recording is data produced by
 // another tool and published as a static file, so the reader is the last place a bad one
 // can be stopped before it is shown to a person as "what the platform reported". An
-// unknown key, a wrong version, a ragged column, an unsorted time axis or a value of the
-// wrong type is therefore a thrown RecordingFormatError that names the path, never a
-// best-effort read. In particular an unknown key is refused rather than ignored: an
-// ignored key is a field somebody believed was being honoured.
+// unknown key, a wrong kind or version, a ragged column, an unsorted time axis, a device or
+// metric index out of range, or a channel claim the document cannot honour is a thrown
+// RecordingFormatError naming the path, never a best-effort read. In particular an unknown
+// key is refused rather than ignored: an ignored key is a field somebody believed was being
+// honoured.
 //
-// Layout. Everything is keyed by `t`, in milliseconds since the run started, which is the
-// moment the recording viewer APPLIED an update (the first moment a viewer could have seen
-// it). That is not the event's own time: each row also carries `occ`, the platform's
-// occurred-time as a millisecond offset from the same origin, and that is what a widget
-// shows on its time axis. Series are columnar (parallel arrays) so a long run stays small.
+// Layout (formatVersion 1). Every time is `t`/`tMs`, in milliseconds from the START of the
+// run, as the recording viewer APPLIED the update (the first moment a viewer could have
+// seen it). Measurements are COLUMNS (one entry per row, parallel arrays): `d` indexes
+// `devices`, `n` indexes `channels.measurements`, `t` is the time, `v` the value and `s` is
+// 1 for a row the platform itself seeded at the start of the run. Alarms are a fold over
+// history: `snapshots` (the whole alarm set at a moment) plus `events` (one alarm's new
+// state), with ids re-minted as alarm-N. An excerpt carries `excerpt{fromMs,toMs}`: it
+// holds only the measurement rows of that window, but ALL alarm history up to its end.
 //
-// What a recording does NOT hold is declared, not implied: `channels` says which data
-// channels were recorded at all, and a player must treat an undeclared channel as "not in
-// this recording" rather than as empty. An empty answer would read as a fact about the
-// machines ("none has a position") when it is a fact about the recording.
+// What a recording does NOT hold is declared, not implied: `channels` says which channels
+// were recorded at all. This version records no positions and no command data
+// (`channels.locations` and `channels.commands` are false and `locations` is empty), and a
+// player must answer those channels with "not in this recording" rather than with empty
+// data, which would read as a fact about the machines.
 
 export const RECORDING_FORMAT_VERSION = 1;
+export const RECORDING_KIND = 'sitepulse-board-recording';
 
 const ALARM_STATES = ['ACTIVE', 'CLEARED'] as const;
-const ALARM_SEVERITIES = ['CRITICAL', 'MAJOR', 'MINOR', 'WARNING', 'INDETERMINATE'] as const;
-const ANCHOR_TARGET_TYPES = ['customer', 'area', 'asset'] as const;
+const ALARM_SEVERITIES = ['CRITICAL', 'MAJOR', 'MINOR', 'WARNING'] as const;
 
 export class RecordingFormatError extends Error {
   constructor(
@@ -40,97 +47,113 @@ export class RecordingFormatError extends Error {
   }
 }
 
-// One simulated-clock segment of the run: from `fromMs` on, the platform's clock advanced
-// at `scale` times real time (1 = real time). Disclosed by the host; no playback logic
-// depends on it.
+// One segment of the platform's simulation clock: from `fromMs` on, it ran in `mode` at
+// `scale` times real time (1 = real time). Disclosed by the host; playback does not use it.
 export interface RecordedClockSegment {
   fromMs: number;
+  mode: string;
   scale: number;
 }
 
-// An anchor (customer / area / asset) and the devices that were its members during the run.
-// This is what a dashboard's anchor-bound widgets expand to.
-export interface RecordedAnchor {
-  relationship: string;
-  targetType: 'customer' | 'area' | 'asset';
-  targetToken: string;
-  members: string[];
+export interface RecordedDevice {
+  id: string;
+  token: string;
+  kind: string;
 }
 
-// Which channels the run recorded. `measurements` lists the series NAMES recorded;
-// `alarms` / `locations` say whether that channel was recorded at all. `commands` is
-// always false in this version: the recording holds no command data, and the parser
-// refuses a document that claims otherwise rather than play back a channel it cannot.
 export interface RecordedChannels {
   measurements: string[];
   alarms: boolean;
-  locations: boolean;
+  // Always false in this version: the format carries no positions and no command data.
+  locations: false;
   commands: false;
-}
-
-// One measurement series: every row of one named measurement of one device.
-export interface RecordedMeasurementSeries {
-  device: string;
-  name: string;
-  t: number[];
-  occ: number[];
-  v: Array<number | null>;
-}
-
-// One row of alarm history: the FULL state of one alarm as of `t`. The alarms visible at
-// a cursor are the latest row per token with `t <= cursor`; the initial set at the start
-// of the run is simply rows with `t = 0`.
-export interface RecordedAlarmRow {
-  t: number;
-  token: string;
-  device: string;
-  alarmKey: string;
-  metricKey: string;
-  state: (typeof ALARM_STATES)[number];
-  severity: (typeof ALARM_SEVERITIES)[number];
-  acknowledged: boolean;
-  raised: number;
-  cleared: number | null;
-  acked: number | null;
-}
-
-// One device's position track. Latitude and longitude are required (a recording that has
-// no coordinates declares `channels.locations: false` instead of writing nulls); the
-// other fields are nullable because a receiver reports what it knows.
-export interface RecordedLocationSeries {
-  device: string;
-  t: number[];
-  occ: number[];
-  lat: number[];
-  lon: number[];
-  elevation: Array<number | null>;
-  speed: Array<number | null>;
-  heading: Array<number | null>;
 }
 
 export interface RecordedChapter {
   tMs: number;
-  title: string;
-  note?: string;
+  name: string;
+  note: string;
+}
+
+// The measurement rows, as parallel columns sorted by `t`.
+export interface RecordedMeasurementColumns {
+  d: number[];
+  n: number[];
+  t: number[];
+  v: number[];
+  s: Array<0 | 1>;
+}
+
+// One alarm as the recording saw it. `occ` is the platform's own time for THIS state: when
+// the alarm was raised for an ACTIVE row, when it cleared for a CLEARED row. `ack` is
+// present only when the alarm was acknowledged. `dev` is a device token.
+export interface RecordedAlarm {
+  id: string;
+  dev: string;
+  key: string;
+  metric: string;
+  state: (typeof ALARM_STATES)[number];
+  sev: (typeof ALARM_SEVERITIES)[number];
+  occ: string;
+  ack?: true;
+}
+
+export interface RecordedAlarmSnapshot {
+  tMs: number;
+  total: number;
+  alarms: RecordedAlarm[];
+}
+
+export interface RecordedAlarmEvent extends RecordedAlarm {
+  tMs: number;
 }
 
 export interface BoardRecording {
+  kind: typeof RECORDING_KIND;
   formatVersion: typeof RECORDING_FORMAT_VERSION;
   runId: string;
   startedAtUtc: string;
-  platformVersion: string;
-  buildSha: string;
   durationMs: number;
+  platformVersion: string;
+  instance: string;
+  tenant: string;
+  build: { gitSha: string; sdkCommit: string };
   clock: RecordedClockSegment[];
-  devices: string[];
-  anchors: RecordedAnchor[];
+  devices: RecordedDevice[];
   channels: RecordedChannels;
-  boardHash: string;
+  board: { path: string; sourceCommit: string; sha256: string };
   sourceHashes: Record<string, string>;
+  converter: { version: number };
   chapters: RecordedChapter[];
-  measurements: RecordedMeasurementSeries[];
-  alarms: RecordedAlarmRow[];
-  locations: RecordedLocationSeries[];
+  excerpt?: { fromMs: number; toMs: number };
+  measurements: RecordedMeasurementColumns;
+  alarms: { snapshots: RecordedAlarmSnapshot[]; events: RecordedAlarmEvent[] };
+  locations: [];
+}
+
+// ---- helpers that read a parsed recording ---------------------------------
+
+// The span a player may cover: the whole run, or the excerpt's window.
+export function recordingBounds(rec: BoardRecording): { fromMs: number; toMs: number } {
+  return rec.excerpt ? { ...rec.excerpt } : { fromMs: 0, toMs: rec.durationMs };
+}
+
+// The wall-clock instant (epoch ms) a recording offset corresponds to. Offsets are
+// measured in real elapsed time from the run's start, so this is the start plus the offset;
+// an accelerated SIMULATION clock changes what the platform's own timestamps say, not how
+// long the recording took (see simulationScaleAt for disclosing that).
+export function recordedWallTimeMs(rec: BoardRecording, tMs: number): number {
+  return Date.parse(rec.startedAtUtc) + tMs;
+}
+
+// The simulation clock's scale at a recording offset, or null before the first segment
+// begins (the recorder had not yet reported its clock).
+export function simulationScaleAt(rec: BoardRecording, tMs: number): { mode: string; scale: number } | null {
+  let hit: RecordedClockSegment | null = null;
+  for (const seg of rec.clock) {
+    if (seg.fromMs <= tMs) hit = seg;
+  }
+  return hit ? { mode: hit.mode, scale: hit.scale } : null;
 }
 
 // ---- parser ---------------------------------------------------------------
@@ -141,8 +164,8 @@ function isObj(v: unknown): v is Obj {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
 }
 
-// strict returns `v` as an object after checking it carries every required key, no key
-// outside required + optional. Own-key checks only, so a prototype name cannot satisfy one.
+// strict returns `v` as an object after checking it carries every required key and no key
+// outside required + optional.
 function strict(v: unknown, path: string, required: readonly string[], optional: readonly string[] = []): Obj {
   if (!isObj(v)) throw new RecordingFormatError(path, 'expected an object');
   const allowed = new Set([...required, ...optional]);
@@ -172,10 +195,6 @@ function num(v: unknown, path: string): number {
   return v;
 }
 
-function numOrNull(v: unknown, path: string): number | null {
-  return v === null ? null : num(v, path);
-}
-
 function arr(v: unknown, path: string): unknown[] {
   if (!Array.isArray(v)) throw new RecordingFormatError(path, 'expected an array');
   return v;
@@ -188,11 +207,14 @@ function oneOf<T extends string>(v: unknown, path: string, allowed: readonly T[]
   return v as T;
 }
 
-const HASH = /^[0-9a-f]{64}$/;
-function hash(v: unknown, path: string): string {
-  if (typeof v !== 'string' || !HASH.test(v)) throw new RecordingFormatError(path, 'expected a lowercase hex SHA-256');
+function matching(v: unknown, path: string, re: RegExp, what: string): string {
+  if (typeof v !== 'string' || !re.test(v)) throw new RecordingFormatError(path, `expected ${what}`);
   return v;
 }
+
+const HEX64 = /^[0-9a-f]{64}$/;
+const HEX40 = /^[0-9a-f]{40}$/;
+const HEX_SHORT = /^[0-9a-f]{7,40}$/;
 
 function instant(v: unknown, path: string): string {
   const s = str(v, path);
@@ -202,47 +224,35 @@ function instant(v: unknown, path: string): string {
   return s;
 }
 
-// column parses one parallel array and checks its length against the others in its record.
 function column<T>(v: unknown, path: string, item: (x: unknown, p: string) => T, length?: number): T[] {
   const a = arr(v, path);
   if (length !== undefined && a.length !== length) {
-    throw new RecordingFormatError(path, `length ${a.length} does not match the time axis (${length})`);
+    throw new RecordingFormatError(path, `length ${a.length} does not match the time column (${length})`);
   }
   return a.map((x, i) => item(x, `${path}[${i}]`));
 }
 
-// timeAxis parses a `t` column: finite, within the run, and never decreasing.
-function timeAxis(v: unknown, path: string, durationMs: number): number[] {
-  const t = column(v, path, num);
-  let prev = 0;
-  t.forEach((x, i) => {
-    if (x < 0 || x > durationMs) throw new RecordingFormatError(`${path}[${i}]`, `${x} is outside the run [0, ${durationMs}]`);
-    if (x < prev) throw new RecordingFormatError(`${path}[${i}]`, 'time axis must not decrease');
-    prev = x;
-  });
-  return t;
+function nonNegative(v: unknown, path: string): number {
+  const n = num(v, path);
+  if (n < 0) throw new RecordingFormatError(path, 'must not be negative');
+  return n;
 }
 
 export function parseBoardRecording(input: unknown): BoardRecording {
-  const root = strict(input, '$', [
-    'formatVersion',
-    'runId',
-    'startedAtUtc',
-    'platformVersion',
-    'buildSha',
-    'durationMs',
-    'clock',
-    'devices',
-    'anchors',
-    'channels',
-    'boardHash',
-    'sourceHashes',
-    'chapters',
-    'measurements',
-    'alarms',
-    'locations',
-  ]);
+  const root = strict(
+    input,
+    '$',
+    [
+      'kind', 'formatVersion', 'runId', 'startedAtUtc', 'durationMs', 'platformVersion', 'instance', 'tenant',
+      'build', 'clock', 'devices', 'channels', 'board', 'sourceHashes', 'converter', 'chapters',
+      'measurements', 'alarms', 'locations',
+    ],
+    ['excerpt'],
+  );
 
+  if (root.kind !== RECORDING_KIND) {
+    throw new RecordingFormatError('$.kind', `expected ${JSON.stringify(RECORDING_KIND)}`);
+  }
   if (root.formatVersion !== RECORDING_FORMAT_VERSION) {
     throw new RecordingFormatError(
       '$.formatVersion',
@@ -252,52 +262,54 @@ export function parseBoardRecording(input: unknown): BoardRecording {
   const durationMs = num(root.durationMs, '$.durationMs');
   if (durationMs <= 0) throw new RecordingFormatError('$.durationMs', 'must be positive');
 
-  const buildSha = str(root.buildSha, '$.buildSha');
-  if (!/^[0-9a-f]{7,40}$/.test(buildSha)) throw new RecordingFormatError('$.buildSha', 'expected a lowercase hex commit id');
+  const b = strict(root.build, '$.build', ['gitSha', 'sdkCommit']);
+  const build = {
+    gitSha: matching(b.gitSha, '$.build.gitSha', HEX_SHORT, 'a lowercase hex commit id'),
+    sdkCommit: matching(b.sdkCommit, '$.build.sdkCommit', HEX_SHORT, 'a lowercase hex commit id'),
+  };
 
   const clock = column(root.clock, '$.clock', (x, p): RecordedClockSegment => {
-    const o = strict(x, p, ['fromMs', 'scale']);
+    const o = strict(x, p, ['fromMs', 'mode', 'scale']);
     const scale = num(o.scale, `${p}.scale`);
     if (scale <= 0) throw new RecordingFormatError(`${p}.scale`, 'must be positive');
-    return { fromMs: num(o.fromMs, `${p}.fromMs`), scale };
+    return { fromMs: nonNegative(o.fromMs, `${p}.fromMs`), mode: str(o.mode, `${p}.mode`), scale };
   });
-  if (clock.length === 0 || clock[0].fromMs !== 0) {
-    throw new RecordingFormatError('$.clock', 'must start with a segment at fromMs 0');
-  }
   clock.forEach((seg, i) => {
     if (i > 0 && seg.fromMs <= clock[i - 1].fromMs) throw new RecordingFormatError(`$.clock[${i}].fromMs`, 'must increase');
   });
 
-  const devices = column(root.devices, '$.devices', str);
-  const deviceSet = new Set(devices);
-  if (deviceSet.size !== devices.length) throw new RecordingFormatError('$.devices', 'duplicate device token');
-  const requireDevice = (token: string, path: string): void => {
-    if (!deviceSet.has(token)) throw new RecordingFormatError(path, `device '${token}' is not in $.devices`);
-  };
-
-  const anchors = column(root.anchors, '$.anchors', (x, p): RecordedAnchor => {
-    const o = strict(x, p, ['relationship', 'targetType', 'targetToken', 'members']);
-    const members = column(o.members, `${p}.members`, str);
-    members.forEach((m, i) => requireDevice(m, `${p}.members[${i}]`));
-    return {
-      relationship: str(o.relationship, `${p}.relationship`),
-      targetType: oneOf(o.targetType, `${p}.targetType`, ANCHOR_TARGET_TYPES),
-      targetToken: str(o.targetToken, `${p}.targetToken`),
-      members,
-    };
+  const devices = column(root.devices, '$.devices', (x, p): RecordedDevice => {
+    const o = strict(x, p, ['id', 'token', 'kind']);
+    return { id: str(o.id, `${p}.id`), token: str(o.token, `${p}.token`), kind: str(o.kind, `${p}.kind`) };
   });
+  const tokens = new Set(devices.map((d) => d.token));
+  if (tokens.size !== devices.length || new Set(devices.map((d) => d.id)).size !== devices.length) {
+    throw new RecordingFormatError('$.devices', 'duplicate device id or token');
+  }
 
   const ch = strict(root.channels, '$.channels', ['measurements', 'alarms', 'locations', 'commands']);
+  if (ch.locations !== false) {
+    throw new RecordingFormatError('$.channels.locations', 'this version records no positions; must be false');
+  }
   if (ch.commands !== false) {
-    throw new RecordingFormatError('$.channels.commands', 'this format records no command data; must be false');
+    throw new RecordingFormatError('$.channels.commands', 'this version records no command data; must be false');
   }
   const channels: RecordedChannels = {
     measurements: column(ch.measurements, '$.channels.measurements', str),
     alarms: bool(ch.alarms, '$.channels.alarms'),
-    locations: bool(ch.locations, '$.channels.locations'),
+    locations: false,
     commands: false,
   };
-  const measurementNames = new Set(channels.measurements);
+  if (new Set(channels.measurements).size !== channels.measurements.length) {
+    throw new RecordingFormatError('$.channels.measurements', 'duplicate measurement name');
+  }
+
+  const bd = strict(root.board, '$.board', ['path', 'sourceCommit', 'sha256']);
+  const board = {
+    path: str(bd.path, '$.board.path'),
+    sourceCommit: matching(bd.sourceCommit, '$.board.sourceCommit', HEX40, 'a full lowercase hex commit id'),
+    sha256: matching(bd.sha256, '$.board.sha256', HEX64, 'a lowercase hex SHA-256'),
+  };
 
   const sh = root.sourceHashes;
   if (!isObj(sh)) throw new RecordingFormatError('$.sourceHashes', 'expected an object');
@@ -305,126 +317,127 @@ export function parseBoardRecording(input: unknown): BoardRecording {
   for (const key of Object.keys(sh)) {
     // Assigning '__proto__' on a plain object swaps its prototype instead of adding a key.
     if (key === '__proto__') throw new RecordingFormatError(`$.sourceHashes.${key}`, 'reserved key');
-    sourceHashes[key] = hash(sh[key], `$.sourceHashes.${key}`);
+    sourceHashes[key] = matching(sh[key], `$.sourceHashes.${key}`, HEX64, 'a lowercase hex SHA-256');
   }
+
+  const cv = strict(root.converter, '$.converter', ['version']);
+  const converter = { version: num(cv.version, '$.converter.version') };
+
+  let excerpt: { fromMs: number; toMs: number } | undefined;
+  if (root.excerpt !== undefined) {
+    const e = strict(root.excerpt, '$.excerpt', ['fromMs', 'toMs']);
+    excerpt = { fromMs: nonNegative(e.fromMs, '$.excerpt.fromMs'), toMs: nonNegative(e.toMs, '$.excerpt.toMs') };
+    if (excerpt.fromMs >= excerpt.toMs || excerpt.toMs > durationMs) {
+      throw new RecordingFormatError('$.excerpt', 'must be a non-empty window inside the run');
+    }
+  }
+  const lo = excerpt ? excerpt.fromMs : 0;
+  const hi = excerpt ? excerpt.toMs : durationMs;
 
   const chapters = column(root.chapters, '$.chapters', (x, p): RecordedChapter => {
-    const o = strict(x, p, ['tMs', 'title'], ['note']);
+    const o = strict(x, p, ['tMs', 'name', 'note']);
     const tMs = num(o.tMs, `${p}.tMs`);
     if (tMs < 0 || tMs > durationMs) throw new RecordingFormatError(`${p}.tMs`, 'is outside the run');
-    const chapter: RecordedChapter = { tMs, title: str(o.title, `${p}.title`) };
-    if (o.note !== undefined) chapter.note = str(o.note, `${p}.note`);
-    return chapter;
+    return { tMs, name: str(o.name, `${p}.name`), note: str(o.note, `${p}.note`) };
   });
 
-  const seen = new Set<string>();
-  const measurements = column(root.measurements, '$.measurements', (x, p): RecordedMeasurementSeries => {
-    const o = strict(x, p, ['device', 'name', 't', 'occ', 'v']);
-    const device = str(o.device, `${p}.device`);
-    requireDevice(device, `${p}.device`);
-    const name = str(o.name, `${p}.name`);
-    if (!measurementNames.has(name)) {
-      throw new RecordingFormatError(`${p}.name`, `'${name}' is not declared in $.channels.measurements`);
-    }
-    const key = `${device}\u0000${name}`;
-    if (seen.has(key)) throw new RecordingFormatError(p, `duplicate series for ${device}/${name}`);
-    seen.add(key);
-    const t = timeAxis(o.t, `${p}.t`, durationMs);
-    return {
-      device,
-      name,
-      t,
-      occ: column(o.occ, `${p}.occ`, num, t.length),
-      v: column(o.v, `${p}.v`, numOrNull, t.length),
-    };
+  const m = strict(root.measurements, '$.measurements', ['d', 'n', 't', 'v', 's']);
+  const t = column(m.t, '$.measurements.t', num);
+  let prev = lo;
+  t.forEach((x, i) => {
+    if (x < lo || x > hi) throw new RecordingFormatError(`$.measurements.t[${i}]`, `${x} is outside [${lo}, ${hi}]`);
+    if (x < prev) throw new RecordingFormatError(`$.measurements.t[${i}]`, 'time column must not decrease');
+    prev = x;
   });
+  const index = (name: string, limit: number) => (x: unknown, p: string): number => {
+    const n = num(x, p);
+    if (!Number.isInteger(n) || n < 0 || n >= limit) throw new RecordingFormatError(p, `${name} index out of range`);
+    return n;
+  };
+  const measurements: RecordedMeasurementColumns = {
+    d: column(m.d, '$.measurements.d', index('device', devices.length), t.length),
+    n: column(m.n, '$.measurements.n', index('measurement', channels.measurements.length), t.length),
+    t,
+    v: column(m.v, '$.measurements.v', num, t.length),
+    s: column(
+      m.s,
+      '$.measurements.s',
+      (x, p): 0 | 1 => {
+        if (x !== 0 && x !== 1) throw new RecordingFormatError(p, 'expected 0 or 1');
+        return x;
+      },
+      t.length,
+    ),
+  };
 
-  const alarms = column(root.alarms, '$.alarms', (x, p): RecordedAlarmRow => {
-    const o = strict(x, p, [
-      't', 'token', 'device', 'alarmKey', 'metricKey', 'state', 'severity', 'acknowledged', 'raised', 'cleared', 'acked',
-    ]);
-    const t = num(o.t, `${p}.t`);
-    if (t < 0 || t > durationMs) throw new RecordingFormatError(`${p}.t`, 'is outside the run');
-    const device = str(o.device, `${p}.device`);
-    requireDevice(device, `${p}.device`);
-    const state = oneOf(o.state, `${p}.state`, ALARM_STATES);
-    const acknowledged = bool(o.acknowledged, `${p}.acknowledged`);
-    const cleared = numOrNull(o.cleared, `${p}.cleared`);
-    const acked = numOrNull(o.acked, `${p}.acked`);
-    if ((state === 'CLEARED') !== (cleared !== null)) {
-      throw new RecordingFormatError(`${p}.cleared`, 'must be set exactly when the state is CLEARED');
-    }
-    if (acknowledged !== (acked !== null)) {
-      throw new RecordingFormatError(`${p}.acked`, 'must be set exactly when acknowledged is true');
-    }
-    return {
-      t,
-      token: str(o.token, `${p}.token`),
-      device,
-      alarmKey: str(o.alarmKey, `${p}.alarmKey`),
-      metricKey: str(o.metricKey, `${p}.metricKey`),
-      state,
-      severity: oneOf(o.severity, `${p}.severity`, ALARM_SEVERITIES),
-      acknowledged,
-      raised: num(o.raised, `${p}.raised`),
-      cleared,
-      acked,
+  const al = strict(root.alarms, '$.alarms', ['snapshots', 'events']);
+  const alarm = (o: Obj, p: string): RecordedAlarm => {
+    const id = matching(o.id, `${p}.id`, /^alarm-\d+$/, 'a re-minted id (alarm-N)');
+    const dev = str(o.dev, `${p}.dev`);
+    if (!tokens.has(dev)) throw new RecordingFormatError(`${p}.dev`, `device '${dev}' is not in $.devices`);
+    if (o.ack !== undefined && o.ack !== true) throw new RecordingFormatError(`${p}.ack`, 'present only when true');
+    const out: RecordedAlarm = {
+      id,
+      dev,
+      key: str(o.key, `${p}.key`),
+      metric: str(o.metric, `${p}.metric`),
+      state: oneOf(o.state, `${p}.state`, ALARM_STATES),
+      sev: oneOf(o.sev, `${p}.sev`, ALARM_SEVERITIES),
+      occ: instant(o.occ, `${p}.occ`),
     };
+    if (o.ack === true) out.ack = true;
+    return out;
+  };
+  const ALARM_KEYS = ['id', 'dev', 'key', 'metric', 'state', 'sev', 'occ'];
+  const checkTime = (tMs: number, p: string): number => {
+    if (tMs < 0 || tMs > hi) throw new RecordingFormatError(p, `${tMs} is outside [0, ${hi}]`);
+    return tMs;
+  };
+  const snapshots = column(al.snapshots, '$.alarms.snapshots', (x, p): RecordedAlarmSnapshot => {
+    const o = strict(x, p, ['tMs', 'total', 'alarms']);
+    const alarms = column(o.alarms, `${p}.alarms`, (a, ap) => alarm(strict(a, ap, ALARM_KEYS, ['ack']), ap));
+    const total = nonNegative(o.total, `${p}.total`);
+    if (total < alarms.length) throw new RecordingFormatError(`${p}.total`, 'is smaller than the alarms listed');
+    return { tMs: checkTime(num(o.tMs, `${p}.tMs`), `${p}.tMs`), total, alarms };
   });
-  alarms.forEach((row, i) => {
-    if (i > 0 && row.t < alarms[i - 1].t) throw new RecordingFormatError(`$.alarms[${i}].t`, 'alarm rows must not decrease in time');
+  const events = column(al.events, '$.alarms.events', (x, p): RecordedAlarmEvent => {
+    const o = strict(x, p, [...ALARM_KEYS, 'tMs'], ['ack']);
+    return { ...alarm(o, p), tMs: checkTime(num(o.tMs, `${p}.tMs`), `${p}.tMs`) };
   });
-  if (alarms.length > 0 && !channels.alarms) {
-    throw new RecordingFormatError('$.alarms', 'rows present but $.channels.alarms is false');
+  for (const [name, list] of [['snapshots', snapshots], ['events', events]] as const) {
+    list.forEach((e, i) => {
+      if (i > 0 && e.tMs < list[i - 1].tMs) throw new RecordingFormatError(`$.alarms.${name}[${i}].tMs`, 'must not decrease');
+    });
+  }
+  if (!channels.alarms && (snapshots.length > 0 || events.length > 0)) {
+    throw new RecordingFormatError('$.alarms', 'history present but $.channels.alarms is false');
   }
 
-  const seenLoc = new Set<string>();
-  const locations = column(root.locations, '$.locations', (x, p): RecordedLocationSeries => {
-    const o = strict(x, p, ['device', 't', 'occ', 'lat', 'lon', 'elevation', 'speed', 'heading']);
-    const device = str(o.device, `${p}.device`);
-    requireDevice(device, `${p}.device`);
-    if (seenLoc.has(device)) throw new RecordingFormatError(p, `duplicate location series for ${device}`);
-    seenLoc.add(device);
-    const t = timeAxis(o.t, `${p}.t`, durationMs);
-    const lat = column(o.lat, `${p}.lat`, num, t.length);
-    const lon = column(o.lon, `${p}.lon`, num, t.length);
-    lat.forEach((x, i) => {
-      if (x < -90 || x > 90) throw new RecordingFormatError(`${p}.lat[${i}]`, 'latitude outside [-90, 90]');
-    });
-    lon.forEach((x, i) => {
-      if (x < -180 || x > 180) throw new RecordingFormatError(`${p}.lon[${i}]`, 'longitude outside [-180, 180]');
-    });
-    return {
-      device,
-      t,
-      occ: column(o.occ, `${p}.occ`, num, t.length),
-      lat,
-      lon,
-      elevation: column(o.elevation, `${p}.elevation`, numOrNull, t.length),
-      speed: column(o.speed, `${p}.speed`, numOrNull, t.length),
-      heading: column(o.heading, `${p}.heading`, numOrNull, t.length),
-    };
-  });
-  if (locations.length > 0 && !channels.locations) {
-    throw new RecordingFormatError('$.locations', 'series present but $.channels.locations is false');
+  if (!Array.isArray(root.locations) || root.locations.length !== 0) {
+    throw new RecordingFormatError('$.locations', 'this version carries no positions; must be an empty array');
   }
 
-  return {
+  const rec: BoardRecording = {
+    kind: RECORDING_KIND,
     formatVersion: RECORDING_FORMAT_VERSION,
     runId: str(root.runId, '$.runId'),
     startedAtUtc: instant(root.startedAtUtc, '$.startedAtUtc'),
-    platformVersion: str(root.platformVersion, '$.platformVersion'),
-    buildSha,
     durationMs,
+    platformVersion: str(root.platformVersion, '$.platformVersion'),
+    instance: str(root.instance, '$.instance'),
+    tenant: str(root.tenant, '$.tenant'),
+    build,
     clock,
     devices,
-    anchors,
     channels,
-    boardHash: hash(root.boardHash, '$.boardHash'),
+    board,
     sourceHashes,
+    converter,
     chapters,
     measurements,
-    alarms,
-    locations,
+    alarms: { snapshots, events },
+    locations: [],
   };
+  if (excerpt) rec.excerpt = excerpt;
+  return rec;
 }
