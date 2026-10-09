@@ -51,7 +51,7 @@ one stand's way through it, within a slot (12.8 m, `neighbour_span_m`) of each o
 that they conflict only if they overlap, which is a lane folding back over itself (the loop does it at the ramp bottom, near (-22, 15); the pad's
 trucks do it in the pad, which the pad's station holds). The distance is the Euclidean one between the swept polygons. A hull covers a little more
 than a turning box sweeps, so a gap reads at most 0.03 m below the gap to the continuous sweep (the worst of 1200 pairs nearest a threshold read
-0.022 m low) and never above it. The nearest pair that does not conflict is 1.004 m (haul), 0.526 m (bay) and 0.056 m (overlap, in the pad).
+0.022 m low) and never above it by more than the 0.001 m a rotated hull's sagitta can add. The nearest pair that does not conflict is 1.004 m (haul), 0.328 m (an access lane: the loop and fill-1's in lane) and 0.009 m (one route: fill-1's in and out lanes).
 
 Two thresholds for the same lane. A pair of cells on the same lane, or on the same route (a stand's way through: in, hop, out), conflicts only if
 the sweeps overlap (`conflict_same_route_m` is 0.0 m), not at the 1.0 m two different haul lanes keep. That is a deliberate departure: the follower
@@ -73,5 +73,16 @@ and the air haul trucks keep, 12.8 m, however long a cell is), the span a box ta
 safe at every headway from the design spacing up, every conflict lies in one box (or is a stand's own way through, a station, or a diverge), every
 lane pose is within the grade limit and 3.2 m clear of every outline (the task layer's own reach for a driving hauler; but the bay's own), the
 topology was made from the committed files, every zone has a zone stand for each kind it accepts, no lane or stand comes within 1.5 m of
-another machine's work area, and no box makes a truck wait inside a station core that does not hold it. The refuel queue and bay are service stands: they do not make the yard a place to send a machine to. No zone has a
-stand yet: the places the choreography leaves room to stand are not places a lane can reach and leave by those rules, so each zone lists no kinds.
+another machine's work area, and no box makes a truck wait inside a station core that does not hold it. The refuel queue and bay are service stands: they do not make the yard a place to send a machine to.
+
+The zone stands. Each zone has one drive-through stand that takes a hauler, a loader and a dozer (so each of V3 and V8 checks every kind's footprint): `cut-1`
+on the east pit floor, `fill-1` in the middle of the tipping pad, south of the dump, and `yard-1` north of the workshop. It is one stand per zone, not one per
+kind: no zone has room for three drive-through ways, and a second machine sent to an occupied stand waits for it, as a second truck at the refuel bay does.
+Each stand leaves the loop at its `exit` cell, is driven in to its pose and out to the loop at its `join` cell, and its way through is held by a junction box
+like the bay's (`merge-bay` carries the yard stand's lanes, `merge-cut-1` and `merge-fill-1` the others). Two things to know when authoring one:
+
+- A way folds unless its corners are gentle. The same-route rule (overlap beyond a 12.8 m span) catches a hauler's hull across almost any 90 degree turn within
+  about 14 m of lane; two 45 degree turns with 4 m between them are clean, a single 90 degree turn is not. Scan a program for folds before a full `assemble`, which
+  takes minutes.
+- A stand needs about 27 m of lane in past its last box cell: the box's members, the room cells beyond it and one slot. A box is the hull of the conflicting cells'
+  ends and its members are every cell with an end inside it, so it swallows more lane than the conflicts alone; read the members, not the conflicts.

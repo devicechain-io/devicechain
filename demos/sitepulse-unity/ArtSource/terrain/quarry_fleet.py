@@ -542,7 +542,7 @@ def fleet(ground, live=False):
     tracks[hl]["load_from"] = t_want + 0.6
 
     # loader rehandling the pit stockpile
-    li2 = add_track("Loader", loader_rehandle((38.0, 40.5), (42.0, 42.5)))
+    li2 = add_track("Loader", loader_rehandle((46.0, 47.0), (49.0, 48.5)))
     machines.append(dict(id="SP-LD-0002", kind="Loader", track=li2, offset=3.0))
     # the plant: one loader feeds the crusher's hopper from the feed stockpile...
     feed = ground.f["spots"]["plant-feed"]
@@ -561,8 +561,8 @@ def fleet(ground, live=False):
     # floor, one spreading on the dump pad; the other three are parked in the yard
     for k, (a, b, rip) in enumerate([
         ((-30.0, 51.0), (-16.5, 51.0), False),
-        ((45.0, 28.0), (57.0, 28.0), True),
-        ((90.0, -70.0), (100.0, -69.0), False),
+        ((-30.0, 44.0), (-20.0, 44.0), True),
+        ((102.0, -81.0), (102.0, -70.0), False),
     ]):
         di = add_track("Dozer", dozer_push(a, b, rip))
         machines.append(dict(id=f"SP-DZ-{k + 1:04d}", kind="Dozer", track=di, offset=round(k * 2.7, 3)))

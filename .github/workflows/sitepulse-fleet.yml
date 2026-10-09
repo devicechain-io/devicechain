@@ -52,7 +52,7 @@ jobs:
   fleet:
     name: sitepulse site checks and regeneration
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     defaults:
       run:
         working-directory: demos/sitepulse-unity/ArtSource/terrain
@@ -70,10 +70,12 @@ jobs:
       - name: Site checks on the committed files
         run: python3 quarry_fleet.py check
 
-      # Each check failing on a site made to break it. The count is asserted here as well as in the
-      # script, so a selftest that is edited to skip a verdict does not pass by saying nothing.
+      # Each check failing on a site made to break it. `set -o pipefail` is load-bearing: a step's default shell has
+      # none, so without it the step's status is `tee`'s and a selftest that exits 2 passes. The script exits 2 unless
+      # every case it ran behaved, but it does not know how many it should run: the literal count here is what catches a control that was dropped.
       - name: Checks fail on a site made to break them
         run: |
+          set -o pipefail
           python3 quarry_fleet.py selftest | tee selftest.log
           grep -qx 'selftest: 10 of 10 controls behaved' selftest.log
           test "$(grep -c ' ok$' selftest.log)" -eq 10
@@ -82,14 +84,6 @@ jobs:
       # The topology's nine checks on the committed file (and on a fresh build of it, which must equal it).
       - name: Topology checks on the committed file
         run: python3 quarry_topology.py check
-
-      # Each topology check failing on a site made to break it, counted here as well as in the script.
-      - name: Topology checks fail on a site made to break them
-        run: |
-          python3 quarry_topology.py selftest | tee topology-selftest.log
-          grep -qx 'selftest: 50 of 50 controls behaved' topology-selftest.log
-          test "$(grep -c ' ok$' topology-selftest.log)" -eq 50
-          ! grep -q 'NOT CAUGHT' topology-selftest.log
 
       # Regenerate into a temp directory, in the order the README gives, and compare with what is committed.
       - name: Regenerate into a temp directory
@@ -120,3 +114,31 @@ jobs:
               b = np.asarray(Image.open(sys.argv[2] + "/" + name))
               assert a.shape == b.shape and (a == b).all(), name + " differs from the committed file"
           EOF
+
+  # The topology's controls are a job of their own: each one rebuilds the checks on a site made to break it, and together they take longer than every
+  # other step here put together (about a quarter of an hour), so they run beside the rest and not after it.
+  topology-selftest:
+    name: sitepulse topology checks fail on a site made to break them
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: demos/sitepulse-unity/ArtSource/terrain
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.10"
+
+      - name: Install numpy and Pillow
+        run: python3 -m pip install numpy==1.24.2 Pillow==9.5.0
+
+      # Each topology check failing on a site made to break it, counted here as well as in the script.
+      - name: Topology checks fail on a site made to break them
+        run: |
+          set -o pipefail
+          python3 quarry_topology.py selftest | tee topology-selftest.log
+          grep -qx 'selftest: 67 of 67 controls behaved' topology-selftest.log
+          test "$(grep -c ' ok$' topology-selftest.log)" -eq 67
+          ! grep -q 'NOT CAUGHT' topology-selftest.log

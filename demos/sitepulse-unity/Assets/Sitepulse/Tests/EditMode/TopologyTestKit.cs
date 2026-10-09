@@ -199,6 +199,9 @@ namespace DeviceChain.Sitepulse.Tests
             return SiteTopologyReader.Parse(node.ToJsonString());
         }
 
+        /// <summary>The element of a JSON array (stands, entries, stations, zones, junctions) with a given id: edits select by id, never by position.</summary>
+        public static JsonNode ById(JsonNode array, string id) => array.AsArray().First(x => (string)(x["id"] ?? x["token"]) == id);
+
         public static JsonNode Lane(JsonNode root, string id) => root["lanes"].AsArray().First(l => (string)l["id"] == id);
 
         public static IEnumerable<string> Check(Func<TopologyValidator, List<string>> check, SiteTopology t = null) => check(new TopologyValidator(t ?? Topology, World));

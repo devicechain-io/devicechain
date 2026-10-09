@@ -356,7 +356,7 @@ namespace DeviceChain.Sim.Traffic
     /// </summary>
     public sealed class TopologyRules
     {
-        public TopologyRules(double conflictHaulM, double conflictAccessM, double conflictSameRouteM, double poseStepM, double poseStepDegrees, int divergeWindow, int divergeMax)
+        public TopologyRules(double conflictHaulM, double conflictAccessM, double conflictSameRouteM, double poseStepM, double poseStepDegrees, int divergeWindow, int divergeMax, double standSeenM)
         {
             ConflictHaulM = conflictHaulM;
             ConflictAccessM = conflictAccessM;
@@ -365,7 +365,11 @@ namespace DeviceChain.Sim.Traffic
             PoseStepDegrees = poseStepDegrees;
             DivergeWindow = divergeWindow;
             DivergeMax = divergeMax;
+            StandSeenM = standSeenM;
         }
+
+        /// <summary>How far past its footprint's reach a stand looks for the nearest thing when it records its clearance: lanes, sweeps and outlines alike.</summary>
+        public double StandSeenM { get; }
 
         /// <summary>Two cells of two haul lanes (the loop and the roads) whose swept footprints come nearer than this conflict, in metres.</summary>
         public double ConflictHaulM { get; }

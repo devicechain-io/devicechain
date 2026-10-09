@@ -640,7 +640,7 @@ namespace DeviceChain.Sim.Traffic
             {
                 if (own.Contains(it.Lane)) continue;
                 var d = Math.Sqrt((cx - it.Group.Cx) * (cx - it.Group.Cx) + (cz - it.Group.Cz) * (cz - it.Group.Cz));
-                if (d > r + it.Group.Radius + StandClearM) continue;
+                if (d > r + it.Group.Radius + topology.Rules.StandSeenM) continue;
                 Note("lane", Geometry.GroupGap(g, it.Group.Boxes), F("{0} cell {1}", it.Lane, it.Cell));
             }
 
@@ -649,7 +649,7 @@ namespace DeviceChain.Sim.Traffic
                 if (TrackExempt(s.Id, sw.Owners)) continue;
                 foreach (var p in sw.Poses)
                 {
-                    if (Math.Sqrt((cx - p[0]) * (cx - p[0]) + (cz - p[1]) * (cz - p[1])) > r + 14.0) continue;
+                    if (Math.Sqrt((cx - p[0]) * (cx - p[0]) + (cz - p[1]) * (cz - p[1])) > r + topology.Rules.StandSeenM) continue;
                     Note("sweep", Geometry.GroupGap(g, world.Footprint(sw.Kind, p[0], p[1], p[2], p[3])), F("{0} fleet track {1} ({2})", sw.Fleet, sw.Track, string.Join("/", sw.Owners)));
                 }
             }
@@ -659,7 +659,7 @@ namespace DeviceChain.Sim.Traffic
             foreach (var o in world.Obstacles)
             {
                 var d = Math.Sqrt((cx - o.CenterX) * (cx - o.CenterX) + (cz - o.CenterZ) * (cz - o.CenterZ));
-                if (d > r + o.Reach + StandClearM || IsExempt(s.Id, o.Name, o.CenterX, o.CenterZ)) continue;
+                if (d > r + o.Reach + topology.Rules.StandSeenM || IsExempt(s.Id, o.Name, o.CenterX, o.CenterZ)) continue;
                 Note("obstacle", o.Gap(g), F("{0} at ({1:0.0}, {2:0.0})", o.Name, o.CenterX, o.CenterZ));
             }
 
