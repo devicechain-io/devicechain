@@ -75,9 +75,9 @@ RULES = dict(
     pose_step_deg=1.0,          # ... and turned at most this much between poses (see cell_poses for the error this leaves)
     diverge_window=12,          # cells either side of an exit that the lane leaving shares ground with
     diverge_max=40,             # and the most cells of that lane that may
+    stand_seen_m=14.0,          # a stand's clearance_m is the nearest it comes to anything of its footprint's reach and this far more: lanes, sweeps and outlines alike
 )
 STAND_CLEAR_M = qf.STAND_AIR    # a stand's footprint keeps this from every lane, sweep, box and obstacle
-STAND_SEEN_M = 14.0             # and the file records how near it comes to anything within this much further (its clearance_m): beyond it a thing is not looked at
 WORK_CLEAR_M = 1.5              # and a lane keeps it from another machine's work area
 GRADE_MAX = qf.GRADE_MAX_PCT
 TRAVEL_REACH = qf.TRAVEL_RADIUS["Hauler"] + qf.TRAVEL_CLEARANCE    # 3.2: a lane keeps this from an outline
@@ -429,10 +429,11 @@ def cell_group(lane, k, inputs, rules=RULES):
         else:
             dep = tuple(tuple(cells[j]) if 0 <= j < len(cells) else None for j in (k - 1, k, k + 1))
         key = (id(inputs.live), lane.kind, tuple(sorted(rules.items())), dep)
-        g = _GROUPS.get(key)
-        if g is None:
-            g = swept([boxes("Hauler", *p) for p in cell_poses(lane, k, inputs, rules)])
-            _GROUPS[key] = g
+        hit = _GROUPS.get(key)
+        if hit is None:
+            # the fleet is kept beside the answer: the key holds its id, which is only one thing's while the object is alive
+            hit = _GROUPS[key] = (inputs.live, swept([boxes("Hauler", *p) for p in cell_poses(lane, k, inputs, rules)]))
+        g = hit[1]
         lane._boxes[k] = g
     return g
 
@@ -450,8 +451,8 @@ def conflicts(lanes, inputs, rules=RULES, reach=None):
     key: selftest edits a boxes table, a station or a stand's role and asks again of the same lanes a dozen times."""
     key = (tuple((l.id, l.kind, l.cyclic, l.span, tuple(map(tuple, l.cells))) for l in lanes), tuple(sorted(rules.items())), reach, id(inputs.live))
     if key not in _CONFLICTS:
-        _CONFLICTS[key] = _conflicts(lanes, inputs, rules, reach)
-    return dict(_CONFLICTS[key])
+        _CONFLICTS[key] = (inputs.live, _conflicts(lanes, inputs, rules, reach))     # the fleet kept beside the answer, so its id in the key stays its own
+    return dict(_CONFLICTS[key][1])
 
 
 def _conflicts(lanes, inputs, rules, reach):
@@ -1226,14 +1227,14 @@ def stand_gaps(t, inputs, sid, kind):
         if what not in worst or gap < worst[what][0]:
             worst[what] = (gap, where)
     for lid, k, grp, x, z, rad in idx:
-        if lid in own or math.hypot(cx - x, cz - z) > r + rad + STAND_SEEN_M:
+        if lid in own or math.hypot(cx - x, cz - z) > r + rad + t.rules["stand_seen_m"]:
             continue
         note("lane", group_gap(g, grp), "%s cell %d" % (lid, k))
     for name, ti, tk, owners, poses in track_sweeps(inputs):
         if track_exempt(t.d, sid, owners):
             continue
         for p in poses:
-            if math.hypot(cx - p[0], cz - p[1]) > r + STAND_SEEN_M:
+            if math.hypot(cx - p[0], cz - p[1]) > r + t.rules["stand_seen_m"]:
                 continue
             note("sweep", group_gap(g, sweep_group(tk, p)), "%s fleet track %d (%s)" % (name, ti, "/".join(owners)))
     for j in t.junctions:
@@ -1241,7 +1242,7 @@ def stand_gaps(t, inputs, sid, kind):
     for o in inputs.obstacles:
         ox, oz = obstacle_center(o)
         span = math.hypot(o[4], o[5]) if o[0] == "box" else math.hypot(o[4] - o[2], o[5] - o[3]) / 2.0 + o[6]
-        if math.hypot(cx - ox, cz - oz) > r + span + STAND_SEEN_M or is_exempt(t.d, sid, o[1], ox, oz):
+        if math.hypot(cx - ox, cz - oz) > r + span + t.rules["stand_seen_m"] or is_exempt(t.d, sid, o[1], ox, oz):
             continue
         note("obstacle", obstacle_gap(o, g), "%s at (%.1f, %.1f)" % (o[1], ox, oz))
     return worst
@@ -2133,6 +2134,37 @@ def selftest(inputs, verbose=False):
     case("V3: cut-1's out lane with its first turn drawn as a sharp left (a fold)", sharpen("cut-1", "program_out", 1, 2, [("L", 90.0)]), [v3_stands], folded("cut-1"))
     case("V3: fill-1's in lane with its last turn drawn as a sharp right (a fold)", sharpen("fill-1", "program_in", 2, 3, [("R", 90.0)]), [v3_stands], folded("fill-1"))
     case("V3: yard-1's out lane with R45 S4 R45 drawn as one R90 (a fold)", sharpen("yard-1", "program_out", 3, 6, [("R", 90.0)]), [v3_stands], folded("yard-1"))
+
+    # A stand's last stretch of in lane cut short, which is the pose moved toward its box: a pose is a slot (12.8 m) past the last cell of any box on the lane
+    # it is reached by. The message names the distance ("is N m from its pose").
+    def pose_nearer(sid, m):
+        lid = "access/%s/in" % sid
+
+        def go(d2):
+            cells = lane_of(d2, lid)["cells"]
+            left = m
+            while left > 0.0:
+                c = cells[-1]
+                ln = math.hypot(c[2] - c[0], c[3] - c[1])
+                if ln <= left:
+                    cells.pop()
+                    left -= ln
+                else:
+                    c[2], c[3] = c[2] - (c[2] - c[0]) / ln * left, c[3] - (c[3] - c[1]) / ln * left
+                    left = 0.0
+        return go
+    case("V3: yard-1's pose 3 m nearer its box along its in lane (a slot is kept past a box)", pose_nearer("yard-1", 3.0), [v3_stands],
+         lambda x: x.startswith("V3 stand yard-1: junction merge-bay is 12.") and "m from its pose along access/yard-1/in" in x)
+    case("V3: cut-1's pose 16 m nearer its box along its in lane", pose_nearer("cut-1", 16.0), [v3_stands],
+         lambda x: x.startswith("V3 stand cut-1: junction merge-cut-1 is ") and "m from its pose along access/cut-1/in" in x)
+
+    # the stand's recorded clearance looks as far as the file says (rules.stand_seen_m), not only as far as the air it keeps: with a lane put 2.9 m off yard-1's hauler
+    # footprint the lane is its nearest thing, found and measured. The C# test AStandSeesALaneBetweenItsAirAndItsRecordedReach builds the same site and expects the same number.
+    d2 = copy.deepcopy(d)
+    lane_of(d2, "road/fill-road/back")["cells"] = [[-77.0, -9.5, -76.0, -9.5]]
+    seen = stand_gaps(Topo(d2), inputs, "yard-1", "Hauler").get("lane")
+    cases.append(("a lane 2.9 m off yard-1's footprint, past the air it keeps and inside the reach it records, is its nearest lane",
+                  bool(seen) and seen[1] == "road/fill-road/back cell 0" and abs(seen[0] - 2.9) < 0.05, [str(seen)]))
 
     # a stand through the generator's own path: the yard stand moved 6 m east (its lanes redrawn to it) is refused, its box too near its pose
     saved = list(STANDS)

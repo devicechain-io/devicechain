@@ -51,7 +51,7 @@ one stand's way through it, within a slot (12.8 m, `neighbour_span_m`) of each o
 that they conflict only if they overlap, which is a lane folding back over itself (the loop does it at the ramp bottom, near (-22, 15); the pad's
 trucks do it in the pad, which the pad's station holds). The distance is the Euclidean one between the swept polygons. A hull covers a little more
 than a turning box sweeps, so a gap reads at most 0.03 m below the gap to the continuous sweep (the worst of 1200 pairs nearest a threshold read
-0.022 m low) and never above it. The nearest pair that does not conflict is 1.004 m (haul), 0.328 m (an access lane: the loop and fill-1's in lane) and 0.009 m (one route: fill-1's in and out lanes).
+0.022 m low) and never above it by more than the 0.001 m a rotated hull's sagitta can add. The nearest pair that does not conflict is 1.004 m (haul), 0.328 m (an access lane: the loop and fill-1's in lane) and 0.009 m (one route: fill-1's in and out lanes).
 
 Two thresholds for the same lane. A pair of cells on the same lane, or on the same route (a stand's way through: in, hop, out), conflicts only if
 the sweeps overlap (`conflict_same_route_m` is 0.0 m), not at the 1.0 m two different haul lanes keep. That is a deliberate departure: the follower

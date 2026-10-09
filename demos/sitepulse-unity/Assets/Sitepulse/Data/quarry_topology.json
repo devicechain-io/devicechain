@@ -3,7 +3,7 @@
 "source":{"features":"2ca535ecf30e9165484b4b9e0d1dcc234a5fe514e636b6925fa327ad779e7653","heights":"b510cf4207f5481ba52b1418531f5dee6c6af706a6334877931192708545e50b","fleet":"30de10fef57bfd4ec98f29fc239bb45954dd1406cb764ca824cae8a751058138","fleet_preview":"b2a918887cced08f7ceafaac2eb2d5618ffb7dd9a22145bcbe84b831292617a6"},
 "cell_m":2.0,
 "slot_m":12.8,
-"rules":{"conflict_haul_m":1.0,"conflict_access_m":0.3,"conflict_same_route_m":0.0,"pose_step_m":0.25,"pose_step_deg":1.0,"diverge_window":12,"diverge_max":40},
+"rules":{"conflict_haul_m":1.0,"conflict_access_m":0.3,"conflict_same_route_m":0.0,"pose_step_m":0.25,"pose_step_deg":1.0,"diverge_window":12,"diverge_max":40,"stand_seen_m":14.0},
 "fleet":{"loop_trucks":6,"machines":18,"period_s":231.903},
 "zones":[
 {"token":"sp-zone-cut","kinds":["Hauler","Loader","Dozer"]},

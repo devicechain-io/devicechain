@@ -36,10 +36,10 @@ namespace DeviceChain.Sitepulse.App
             var source = new SourceHashes(Str(src, "features"), Str(src, "heights"), Str(src, "fleet"), Str(src, "fleet_preview"));
 
             var rj = root.GetProperty("rules");
-            var ruleKeys = new[] { "conflict_haul_m", "conflict_access_m", "conflict_same_route_m", "pose_step_m", "pose_step_deg", "diverge_window", "diverge_max" };
+            var ruleKeys = new[] { "conflict_haul_m", "conflict_access_m", "conflict_same_route_m", "pose_step_m", "pose_step_deg", "diverge_window", "diverge_max", "stand_seen_m" };
             Keys(rj, "rules", ruleKeys, ruleKeys);
             var rules = new TopologyRules(Num(rj, "conflict_haul_m"), Num(rj, "conflict_access_m"), Num(rj, "conflict_same_route_m"), Num(rj, "pose_step_m"),
-                Num(rj, "pose_step_deg"), Int(rj, "diverge_window"), Int(rj, "diverge_max"));
+                Num(rj, "pose_step_deg"), Int(rj, "diverge_window"), Int(rj, "diverge_max"), Num(rj, "stand_seen_m"));
             if (rules.PoseStepM <= 0.0 || rules.PoseStepDegrees <= 0.0) throw new FormatException("rules: a pose step is not a positive number");
 
             var fl = root.GetProperty("fleet");

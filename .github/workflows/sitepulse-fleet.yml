@@ -71,8 +71,8 @@ jobs:
         run: python3 quarry_fleet.py check
 
       # Each check failing on a site made to break it. `set -o pipefail` is load-bearing: a step's default shell has
-      # none, so without it the step's status is `tee`'s and a selftest that exits 2 passes. The count is asserted
-      # here as well as in the script (which derives it from its own case list), so a selftest that is edited to skip a verdict does not pass by saying nothing.
+      # none, so without it the step's status is `tee`'s and a selftest that exits 2 passes. The script exits 2 unless
+      # every case it ran behaved, but it does not know how many it should run: the literal count here is what catches a control that was dropped.
       - name: Checks fail on a site made to break them
         run: |
           set -o pipefail
@@ -139,6 +139,6 @@ jobs:
         run: |
           set -o pipefail
           python3 quarry_topology.py selftest | tee topology-selftest.log
-          grep -qx 'selftest: 64 of 64 controls behaved' topology-selftest.log
-          test "$(grep -c ' ok$' topology-selftest.log)" -eq 64
+          grep -qx 'selftest: 67 of 67 controls behaved' topology-selftest.log
+          test "$(grep -c ' ok$' topology-selftest.log)" -eq 67
           ! grep -q 'NOT CAUGHT' topology-selftest.log

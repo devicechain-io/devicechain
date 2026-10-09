@@ -71,6 +71,7 @@ namespace DeviceChain.Sitepulse.Tests
             Assert.AreEqual(0.0, r.ConflictSameRouteM, "a lane or a stand's way through it conflicts with itself only where it overlaps");
             Assert.AreEqual(12, r.DivergeWindow);
             Assert.AreEqual(40, r.DivergeMax);
+            Assert.AreEqual(14.0, r.StandSeenM, "a stand records its nearest thing out to its reach and this far more, in both languages");
             foreach (var l in Topology.Lanes) Assert.AreEqual(Topology.SlotM, l.NeighbourSpanM, 1e-9, l.Id + ": cells within a slot of each other along the lane are a machine and its follower");
             Assert.AreEqual(1.0, r.ConflictM("loop", "road"));
             Assert.AreEqual(1.0, r.ConflictM("road", "road"));
@@ -292,6 +293,19 @@ namespace DeviceChain.Sitepulse.Tests
                 var measured = s.Kinds.Min(kind => v.StandGaps(s, kind).Values.Min(g => g.Gap));
                 Assert.AreEqual(s.ClearanceM, measured, 0.01, s.Id + ": the recorded clearance and the measured one");
             }
+        }
+
+        [Test]
+        public void AStandSeesALaneBetweenItsAirAndItsRecordedReach()
+        {
+            // yard-1's nearest lane is put 2.9 m off its hauler footprint: nearer than the 14 m it records out to, further than the 1.5 m air it keeps.
+            // The python selftest builds the same site and expects the same number; a checker that looked only as far as the air would not find the lane.
+            var t = WithSingleCellLane("road/fill-road/back", -77.0, -9.5, -76.0, -9.5);
+            var yard = t.Stands.First(x => x.Id == "yard-1");
+            var gaps = new TopologyValidator(t, World).StandGaps(yard, "Hauler");
+            Assert.IsTrue(gaps.ContainsKey("lane"), "the lane is seen");
+            Assert.AreEqual("road/fill-road/back cell 0", gaps["lane"].Where);
+            Assert.AreEqual(2.9, gaps["lane"].Gap, 0.05, "and measured, not just noticed");
         }
 
         [Test]
