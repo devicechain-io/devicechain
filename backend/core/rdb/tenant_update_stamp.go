@@ -6,6 +6,7 @@ package rdb
 import (
 	"fmt"
 	"reflect"
+	"strings"
 
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -21,8 +22,9 @@ import (
 //
 //   - a tenant column being written with a blank value is stamped with the context's tenant;
 //   - one naming a different tenant is refused with ErrTenantMismatch;
-//   - a map that sets the tenant column (by column or field name) follows the same rule,
-//     and a value that is not a plain string cannot be checked and is refused.
+//   - a map key or SET clause that names the tenant column, in any spelling gorm resolves,
+//     follows the same rule, and a value that is not a plain string cannot be checked and is
+//     refused; so is a destination that holds the column as anything but a string.
 //
 // A system context stays exempt, as everywhere else in this file's callbacks.
 
@@ -39,32 +41,36 @@ func tenantScopeUpdate(db *gorm.DB) {
 	}
 }
 
+// checkUpdatedTenant looks at every way a statement can set the tenant column and applies the
+// rule to each. It asks gorm the questions gorm itself asks of the same statement: which
+// column a map key or SET column names (Schema.LookUpField, with a raw column's quotes
+// stripped, since gorm passes a name it cannot resolve through as a raw column), which
+// columns are written (Statement.SelectAndOmitColumns), and which field of the destination
+// is the column (the destination's own schema), rather than spelling the possibilities out.
+//
+// Stamping a blank writes into the caller's map or struct, the way the create path writes the
+// tenant onto the caller's rows; a destination passed by value is stamped on a copy.
 func checkUpdatedTenant(db *gorm.DB, field *schema.Field, tenant string) error {
-	mismatch := func(named string) error {
-		return fmt.Errorf("%w: an update sets the tenant column to %q while the context names %q",
-			ErrTenantMismatch, named, tenant)
+	if err := checkSetClause(db, field, tenant); err != nil {
+		return err
 	}
-	dest := db.Statement.Dest
-	if m, ok := dest.(map[string]interface{}); ok {
-		for _, key := range []string{field.DBName, field.Name} {
-			v, present := m[key]
-			if !present {
+	if m, ok := db.Statement.Dest.(map[string]interface{}); ok {
+		for k, v := range m {
+			if !isTenantColumnName(db, field, k) {
 				continue
 			}
-			named, isString := v.(string)
-			switch {
-			case !isString:
-				return mismatch(fmt.Sprintf("%v", v))
-			case named == "":
-				m[key] = tenant
-			case named != tenant:
-				return mismatch(named)
+			stamp, err := resolveTenantValue(v, tenant)
+			if err != nil {
+				return err
+			}
+			if stamp {
+				m[k] = tenant
 			}
 		}
 		return nil
 	}
 
-	v := reflect.ValueOf(dest)
+	v := reflect.ValueOf(db.Statement.Dest)
 	for v.IsValid() && v.Kind() == reflect.Ptr {
 		if v.IsNil() {
 			return nil
@@ -74,15 +80,26 @@ func checkUpdatedTenant(db *gorm.DB, field *schema.Field, tenant string) error {
 	if !v.IsValid() || v.Kind() != reflect.Struct {
 		return nil
 	}
-	f := v.FieldByName(field.Name)
-	if !f.IsValid() || f.Kind() != reflect.String {
+	// The destination may be a different type from the model, so the column is looked up in
+	// its own schema, exactly as gorm does when it builds the SET list.
+	dest := &gorm.Statement{DB: db}
+	if err := dest.Parse(db.Statement.Dest); err != nil || dest.Schema == nil {
 		return nil
 	}
-	switch named := f.String(); {
+	f := dest.Schema.LookUpField(field.DBName)
+	if f == nil {
+		return nil
+	}
+	if f.FieldType.Kind() != reflect.String {
+		return fmt.Errorf("%w: the update destination holds the tenant column as %s, which cannot be checked "+
+			"against the context's tenant; use a plain string field", ErrTenantMismatch, f.FieldType)
+	}
+	named := f.ReflectValueOf(db.Statement.Context, v).String()
+	switch {
 	case named == tenant:
 		return nil
 	case named != "":
-		return mismatch(named)
+		return updatedTenantMismatch(named, tenant)
 	case !tenantColumnIsWritten(db, field):
 		return nil // a zero field is skipped by Updates, so nothing blank reaches the row
 	}
@@ -92,17 +109,88 @@ func checkUpdatedTenant(db *gorm.DB, field *schema.Field, tenant string) error {
 		cp.Elem().Set(v)
 		db.Statement.Dest = cp.Interface()
 		v = cp.Elem()
-		f = v.FieldByName(field.Name)
 	}
-	f.SetString(tenant)
+	return f.Set(db.Statement.Context, v, tenant)
+}
+
+// checkSetClause covers a SET handed to the statement as a clause (Clauses(clause.Set{...}),
+// clause.Assignments): gorm builds no assignments of its own when one is present.
+func checkSetClause(db *gorm.DB, field *schema.Field, tenant string) error {
+	c, ok := db.Statement.Clauses["SET"]
+	if !ok {
+		return nil
+	}
+	set, ok := c.Expression.(clause.Set)
+	if !ok {
+		return nil
+	}
+	var stamped clause.Set
+	for i, a := range set {
+		if !isTenantColumnName(db, field, a.Column.Name) {
+			continue
+		}
+		stamp, err := resolveTenantValue(a.Value, tenant)
+		if err != nil {
+			return err
+		}
+		if stamp {
+			if stamped == nil {
+				stamped = append(clause.Set(nil), set...)
+			}
+			stamped[i].Value = tenant
+		}
+	}
+	if stamped != nil {
+		db.Statement.AddClause(stamped)
+	}
 	return nil
 }
 
-// tenantColumnIsWritten reports whether a blank tenant would be written: Save selects every
-// column, and a caller may select the tenant column by either name.
+// resolveTenantValue applies the rule to one value being assigned to the tenant column: it
+// reports whether a blank is to be replaced by the context's tenant, and refuses a different
+// tenant and any value that is not a plain string (an expression, a nil, a pointer).
+func resolveTenantValue(v interface{}, tenant string) (stamp bool, err error) {
+	named, isString := v.(string)
+	switch {
+	case !isString:
+		return false, updatedTenantMismatch(fmt.Sprintf("%v", v), tenant)
+	case named == "":
+		return true, nil
+	case named != tenant:
+		return false, updatedTenantMismatch(named, tenant)
+	}
+	return false, nil
+}
+
+func updatedTenantMismatch(named, tenant string) error {
+	return fmt.Errorf("%w: an update sets the tenant column to %q while the context names %q",
+		ErrTenantMismatch, named, tenant)
+}
+
+// isTenantColumnName reports whether name, as a map key or a SET column, is the tenant
+// column: either gorm resolves it to that field, or, as a name gorm would pass through as a
+// raw column, it is the column once its quoting and any table prefix are removed.
+func isTenantColumnName(db *gorm.DB, field *schema.Field, name string) bool {
+	if db.Statement.Schema != nil && db.Statement.Schema.LookUpField(name) == field {
+		return true
+	}
+	n := strings.Trim(name, "\"`[] ")
+	if i := strings.LastIndex(n, "."); i >= 0 {
+		n = strings.Trim(n[i+1:], "\"`[] ")
+	}
+	return strings.EqualFold(n, field.DBName) || strings.EqualFold(n, field.Name)
+}
+
+// tenantColumnIsWritten reports whether a blank tenant would be written, by asking gorm which
+// columns the statement writes: Save selects everything, and Select may name the column in
+// any of the forms gorm resolves.
 func tenantColumnIsWritten(db *gorm.DB, field *schema.Field) bool {
-	for _, s := range db.Statement.Selects {
-		if s == "*" || s == field.Name || s == field.DBName {
+	selected, _ := db.Statement.SelectAndOmitColumns(false, true)
+	if selected[field.DBName] {
+		return true
+	}
+	for name, on := range selected {
+		if on && isTenantColumnName(db, field, name) {
 			return true
 		}
 	}

@@ -4,12 +4,41 @@
 package rdb
 
 import (
+	"database/sql"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
+
+// upWidgetPatch is a destination of another type than the model, whose tenant column is
+// reached through a column tag rather than the model's field name.
+type upWidgetPatch struct {
+	ID   uint
+	Tid  string `gorm:"column:tenant_id"`
+	Name string
+}
+
+func (upWidgetPatch) TableName() string { return "up_widgets" }
+
+// upWidgetPtrPatch spells the same column as a pointer, which cannot be checked as a string.
+type upWidgetPtrPatch struct {
+	ID   uint
+	Tid  *string `gorm:"column:tenant_id"`
+	Name string
+}
+
+func (upWidgetPtrPatch) TableName() string { return "up_widgets" }
+
+type upWidgetNullPatch struct {
+	ID   uint
+	Tid  sql.NullString `gorm:"column:tenant_id"`
+	Name string
+}
+
+func (upWidgetNullPatch) TableName() string { return "up_widgets" }
 
 // runTenantUpdateMatrix is the update-path counterpart of the create path's stamp-and-refuse
 // rule, written once against *gorm.DB and run on SQLite and on PostgreSQL. Every case reads
@@ -80,6 +109,101 @@ func runTenantUpdateMatrix(t *testing.T, db *gorm.DB) {
 		require.NoError(t, ctxA().Save(&upWidget{ID: 1, TenantScoped: TenantScoped{"tenant-a"}, Name: "a-saved"}).Error)
 		aIs(t, "a-saved", "")
 		bUntouched(t)
+	})
+
+	t.Run("every spelling gorm resolves to the tenant column is checked in a map", func(t *testing.T) {
+		for _, key := range []string{"TENANT_ID", "TenantID", "tenantId", "TenantId", `"tenant_id"`, "`tenant_id`", "\"TenantId\""} {
+			seed(t)
+			err := ctxA().Model(&upWidget{ID: 1}).Updates(map[string]any{key: "tenant-b", "name": "x"}).Error
+			assert.ErrorIs(t, err, ErrTenantMismatch, key)
+			aIs(t, "a-old", "a-note")
+			bUntouched(t)
+		}
+		seed(t)
+		// Every key is looked at, not the first match.
+		err := ctxA().Model(&upWidget{ID: 1}).Updates(map[string]any{"tenant_id": "tenant-a", "TenantID": "tenant-b"}).Error
+		assert.ErrorIs(t, err, ErrTenantMismatch)
+		aIs(t, "a-old", "a-note")
+		// A blank under a spelling gorm resolves is stamped.
+		require.NoError(t, ctxA().Model(&upWidget{ID: 1}).Updates(map[string]any{"TENANT_ID": "", "name": "a-up"}).Error)
+		aIs(t, "a-up", "a-note")
+		bUntouched(t)
+	})
+
+	t.Run("a blank tenant is stamped however the column is selected", func(t *testing.T) {
+		for _, sel := range []string{"tenant_id", "TenantId", "up_widgets.tenant_id", `"tenant_id"`, "`tenant_id`", "up_widgets.*"} {
+			seed(t)
+			require.NoError(t, ctxA().Select(sel, "name").Save(&upWidget{ID: 1, Name: "a-sel"}).Error, sel)
+			got, found := upWidgetRow(t, db, 1)
+			require.True(t, found, sel)
+			assert.Equal(t, "tenant-a", got.TenantId, sel)
+			bUntouched(t)
+		}
+	})
+
+	t.Run("a value update with the tenant selected and blank is stamped on a copy", func(t *testing.T) {
+		seed(t)
+		require.NoError(t, ctxA().Model(&upWidget{ID: 1}).Select("tenant_id", "name").Updates(upWidget{Name: "a-copy"}).Error)
+		aIs(t, "a-copy", "a-note")
+		bUntouched(t)
+	})
+
+	t.Run("a SET clause is checked like the other ways of setting a column", func(t *testing.T) {
+		set := func(v any) *gorm.DB {
+			return ctxA().Model(&upWidget{ID: 1}).Clauses(clause.Set{{Column: clause.Column{Name: "tenant_id"}, Value: v}}).
+				Updates(map[string]any{"name": "ignored"})
+		}
+		seed(t)
+		assert.ErrorIs(t, set("tenant-b").Error, ErrTenantMismatch)
+		assert.ErrorIs(t, set(gorm.Expr("'tenant-b'")).Error, ErrTenantMismatch)
+		assert.ErrorIs(t, ctxA().Model(&upWidget{ID: 1}).Clauses(clause.Assignments(map[string]any{"tenant_id": "tenant-b"})).
+			Updates(map[string]any{"name": "ignored"}).Error, ErrTenantMismatch)
+		aIs(t, "a-old", "a-note")
+		require.NoError(t, set("").Error)
+		require.NoError(t, set("tenant-a").Error)
+		aIs(t, "a-old", "a-note")
+		bUntouched(t)
+	})
+
+	t.Run("a destination of another type is checked through its column", func(t *testing.T) {
+		seed(t)
+		assert.ErrorIs(t, ctxA().Model(&upWidget{ID: 1}).Updates(upWidgetPatch{Tid: "tenant-b", Name: "x"}).Error, ErrTenantMismatch)
+		assert.ErrorIs(t, ctxA().Model(&upWidget{ID: 1}).Updates(&upWidgetPatch{Tid: "tenant-b", Name: "x"}).Error, ErrTenantMismatch)
+		other := "tenant-b"
+		assert.ErrorIs(t, ctxA().Model(&upWidget{ID: 1}).Updates(upWidgetPtrPatch{Tid: &other, Name: "x"}).Error, ErrTenantMismatch)
+		// A column held as anything but a string cannot be checked, even when it is unset.
+		assert.ErrorContains(t, ctxA().Model(&upWidget{ID: 1}).Updates(upWidgetPtrPatch{Name: "x"}).Error, "plain string")
+		assert.ErrorContains(t, ctxA().Model(&upWidget{ID: 1}).Updates(upWidgetNullPatch{Name: "x"}).Error, "plain string")
+		assert.ErrorIs(t, ctxA().Model(&upWidget{ID: 1}).Updates(upWidgetNullPatch{Tid: sql.NullString{String: "tenant-b", Valid: true}}).Error, ErrTenantMismatch)
+		aIs(t, "a-old", "a-note")
+		require.NoError(t, ctxA().Model(&upWidget{ID: 1}).Select("tenant_id", "name").Updates(upWidgetPatch{Name: "a-patch"}).Error)
+		aIs(t, "a-patch", "a-note")
+		bUntouched(t)
+	})
+
+	t.Run("UpdateColumn and UpdateColumns follow the same rule", func(t *testing.T) {
+		seed(t)
+		assert.ErrorIs(t, ctxA().Model(&upWidget{ID: 1}).UpdateColumn("tenant_id", "tenant-b").Error, ErrTenantMismatch)
+		assert.ErrorIs(t, ctxA().Model(&upWidget{ID: 1}).UpdateColumns(map[string]any{"tenant_id": "tenant-b"}).Error, ErrTenantMismatch)
+		assert.ErrorIs(t, ctxA().Model(&upWidget{ID: 1}).UpdateColumns(upWidget{TenantScoped: TenantScoped{"tenant-b"}}).Error, ErrTenantMismatch)
+		aIs(t, "a-old", "a-note")
+		require.NoError(t, ctxA().Model(&upWidget{ID: 1}).UpdateColumns(map[string]any{"tenant_id": "", "name": "a-col"}).Error)
+		aIs(t, "a-col", "a-note")
+		bUntouched(t)
+	})
+
+	t.Run("the plain tenant spelling follows the same rule", func(t *testing.T) {
+		upsertTruncate(t, db)
+		require.NoError(t, db.WithContext(upCtxA).Create(&upPlain{Key: "k", Val: "a-old"}).Error)
+		require.NoError(t, db.WithContext(upCtxB).Create(&upPlain{Key: "k", Val: "b-val"}).Error)
+		key := func() *gorm.DB { return ctxA().Model(&upPlain{Tenant: "tenant-a", Key: "k"}) }
+		assert.ErrorIs(t, key().Updates(upPlain{Tenant: "tenant-b", Val: "x"}).Error, ErrTenantMismatch)
+		assert.ErrorIs(t, key().Updates(map[string]any{"tenant": "tenant-b"}).Error, ErrTenantMismatch)
+		assert.ErrorIs(t, key().Update("Tenant", "tenant-b").Error, ErrTenantMismatch)
+		require.NoError(t, key().Select("tenant", "val").Updates(upPlain{Val: "a-new"}).Error)
+		var rows []upPlain
+		require.NoError(t, db.WithContext(upSystem).Order("tenant").Find(&rows).Error)
+		assert.Equal(t, []upPlain{{"tenant-a", "k", "a-new"}, {"tenant-b", "k", "b-val"}}, rows)
 	})
 
 	t.Run("a system context is exempt", func(t *testing.T) {

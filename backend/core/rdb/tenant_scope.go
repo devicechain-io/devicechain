@@ -78,12 +78,12 @@ var ErrUnscopedStatement = errors.New("tenant isolation could not be applied: go
 	"it under core.WithSystemContext if it is genuinely instance-scoped — schema migration is, including " +
 	"gorm's own AutoMigrate, which reads an existing table's columns through a statement of exactly this shape")
 
-// ErrTenantMismatch is the refusal for a create whose row names one tenant while the
-// context names another. See conflictingRowTenant for why this is an error rather than
+// ErrTenantMismatch is the refusal for a write (a create, or an update that sets the tenant
+// column) that names one tenant while the context names another. See conflictingRowTenant for why this is an error rather than
 // the silent overwrite it used to be.
-var ErrTenantMismatch = errors.New("tenant isolation refused the write: a row being created names a " +
-	"different tenant from the one in context. Create it under that tenant's context, or leave the " +
-	"tenant unset on the row and let the callback stamp it")
+var ErrTenantMismatch = errors.New("tenant isolation refused the write: it names a " +
+	"different tenant from the one in context. Write it under that tenant's context, or leave the " +
+	"tenant unset and let the callback stamp it")
 
 // RegisterTenantScoping installs global GORM callbacks that enforce per-tenant
 // row-level isolation for any model carrying a tenant field — TenantId from the
