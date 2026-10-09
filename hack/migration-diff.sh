@@ -123,6 +123,12 @@ fi
 echo "==> Starting throwaway TimescaleDB ($IMAGE, launch=$LAUNCH) as $CONTAINER"
 case "$LAUNCH" in
   entrypoint)
+    # Pulled by digest with a Docker Hub outage fallback (hack/docker-pull.sh); it prints
+    # the reference to run, which is a local tag when a mirror served the pull. An
+    # MDIFF_IMAGE override with no digest keeps docker's implicit pull.
+    if [[ "$IMAGE" == *@sha256:* ]]; then
+      IMAGE="$("$ROOT/hack/docker-pull.sh" "$IMAGE")" || exit 1
+    fi
     docker run -d --name "$CONTAINER" \
       -e POSTGRES_PASSWORD="$PASSWORD" \
       -p "$PUBLISH" \

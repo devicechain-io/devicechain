@@ -88,6 +88,12 @@ jobs:
       - name: govulncheck wrapper self-test
         run: hack/govulncheck.sh --self-test
 
+      # The Docker Hub mirror fallback every digest-pinned image pull goes through. Stubbed
+      # docker, no network: Hub down + mirror up succeeds, both down fails loudly, no digest
+      # is refused.
+      - name: docker-pull fallback self-test
+        run: hack/docker-pull.sh --self-test
+
       # The upgrade drill needs an hour and a kind cluster, so no part of it runs
       # on a PR -- which makes its string handling exactly the code that rots
       # unwatched, correct the day it was written and next exercised while a

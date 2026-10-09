@@ -62,15 +62,22 @@ if [ "$CONTAINER" = "1" ]; then
   # core/rdb's and migrationdiff's suites hardcode it; event-management's alone DEFAULTS to
   # "devicechain" but honours DC_IT_PGPASSWORD, which is why that is exported below rather than
   # left to each suite's default.
-  # Pulled explicitly and retried: this reaches a third-party registry on every pull request,
-  # and a transient 5xx there would otherwise red-line a run that has nothing to do with it.
-  pulled=0
-  for attempt in 1 2 3; do
-    if docker pull --quiet "$IMAGE" >/dev/null 2>&1; then pulled=1; break; fi
-    echo "docker pull attempt $attempt failed; retrying"
-    sleep $((attempt * 10))
-  done
-  [ "$pulled" = "1" ] || { echo "could not pull $IMAGE after 3 attempts"; exit 1; }
+  # Pulled explicitly, retried, and mirrored: this reaches a third-party registry on every pull
+  # request, and a Docker Hub outage would otherwise red-line a run that has nothing to do with
+  # it. hack/docker-pull.sh falls back to a mirror BY DIGEST (so the bytes are the pinned ones)
+  # and prints the reference to run, which is a local tag when a mirror served it. An override
+  # without a digest has no mirror and keeps the plain retried pull.
+  if [[ "$IMAGE" == *@sha256:* ]]; then
+    IMAGE="$("$(dirname "${BASH_SOURCE[0]}")/docker-pull.sh" "$IMAGE")" || exit 1
+  else
+    pulled=0
+    for attempt in 1 2 3; do
+      if docker pull --quiet "$IMAGE" >/dev/null 2>&1; then pulled=1; break; fi
+      echo "docker pull attempt $attempt failed; retrying"
+      sleep $((attempt * 10))
+    done
+    [ "$pulled" = "1" ] || { echo "could not pull $IMAGE after 3 attempts"; exit 1; }
+  fi
   docker run -d --name "$NAME" -e POSTGRES_PASSWORD=postgres -P "$IMAGE" >/dev/null || {
     echo "failed to start $IMAGE"; exit 1; }
   trap 'docker rm -f "$NAME" >/dev/null 2>&1' EXIT
