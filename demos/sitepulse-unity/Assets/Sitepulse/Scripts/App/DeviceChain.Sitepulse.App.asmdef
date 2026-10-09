@@ -7,6 +7,7 @@
         "DeviceChain.Sitepulse.DevicePlane",
         "DeviceChain.Sitepulse.Replay",
         "DeviceChain.Sitepulse.Recording",
+        "DeviceChain.Sim.Traffic",
         "DeviceChain.Sdk.Unity",
         "Unity.InputSystem"
     ],
