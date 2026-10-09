@@ -28,6 +28,12 @@ namespace DeviceChain.Sitepulse.Tests
             Assert.IsTrue(list.Any(d => d.Contains(expect)), $"{what}: expected a defect containing \"{expect}\", got: {(list.Count == 0 ? "none" : string.Join("; ", list.Take(3)))}");
         }
 
+        static void AssertDefect(IEnumerable<string> defects, Func<string, bool> expect, string what)
+        {
+            var list = defects.ToList();
+            Assert.IsTrue(list.Any(expect), $"{what}: expected a matching defect, got: {(list.Count == 0 ? "none" : string.Join("; ", list.Take(3)))}");
+        }
+
         // ---- the file
 
         [Test]
@@ -57,6 +63,22 @@ namespace DeviceChain.Sitepulse.Tests
         }
 
         [Test]
+        public void TheFileStatesItsThresholdsAndTheChecksReadThemFromIt()
+        {
+            var r = Topology.Rules;
+            Assert.AreEqual(1.0, r.ConflictHaulM, "a metre of air between two haul lanes");
+            Assert.AreEqual(0.3, r.ConflictAccessM, "0.3 m for a pair with a lane of the bay's");
+            Assert.AreEqual(0.0, r.ConflictSameRouteM, "a lane or a stand's way through it conflicts with itself only where it overlaps");
+            Assert.AreEqual(12, r.DivergeWindow);
+            Assert.AreEqual(40, r.DivergeMax);
+            foreach (var l in Topology.Lanes) Assert.AreEqual(Topology.SlotM, l.NeighbourSpanM, 1e-9, l.Id + ": cells within a slot of each other along the lane are a machine and its follower");
+            Assert.AreEqual(1.0, r.ConflictM("loop", "road"));
+            Assert.AreEqual(1.0, r.ConflictM("road", "road"));
+            Assert.AreEqual(0.3, r.ConflictM("loop", "access"));
+            Assert.AreEqual(0.3, r.ConflictM("access", "access"));
+        }
+
+        [Test]
         public void ReaderRefusesUnknownKeysAndDanglingReferencesAndRaggedCells()
         {
             // an unknown key
@@ -64,22 +86,38 @@ namespace DeviceChain.Sitepulse.Tests
             StringAssert.Contains("colour", unknown.Message);
             var root = Assert.Throws<FormatException>(() => TopologyKit.Edit(n => n["extras"] = 1));
             StringAssert.Contains("extras", root.Message);
-            // a missing block
+            var rule = Assert.Throws<FormatException>(() => TopologyKit.Edit(n => n["rules"]["colour"] = 1));
+            StringAssert.Contains("colour", rule.Message);
+            // a missing block, rule or span
             var missing = Assert.Throws<FormatException>(() => TopologyKit.Edit(n => n.AsObject().Remove("junctions")));
             StringAssert.Contains("junctions", missing.Message);
+            Assert.Throws<FormatException>(() => TopologyKit.Edit(n => n["rules"].AsObject().Remove("conflict_haul_m")));
+            Assert.Throws<FormatException>(() => TopologyKit.Edit(n => TopologyKit.Lane(n, "loop").AsObject().Remove("neighbour_span_m")));
             // a junction member naming a lane the file does not hold
             var dangling = Assert.Throws<FormatException>(() => TopologyKit.Edit(n => n["junctions"][0]["members"][0]["lane"] = "road/nowhere"));
             StringAssert.Contains("road/nowhere", dangling.Message);
             // a stand's lane, an exit's target and an entry's junction likewise
             Assert.Throws<FormatException>(() => TopologyKit.Edit(n => n["stands"][0]["in"] = "access/nowhere/in"));
             Assert.Throws<FormatException>(() => TopologyKit.Edit(n => n["exits"][0]["to"] = "access/nowhere/in"));
+            // a stand's role is one of two
+            var role = Assert.Throws<FormatException>(() => TopologyKit.Edit(n => n["stands"][0]["role"] = "parking"));
+            StringAssert.Contains("parking", role.Message);
             // a cell array of the wrong arity: a loop cell has five numbers, any other lane's four
             var ragged = Assert.Throws<FormatException>(() => TopologyKit.Edit(n => TopologyKit.Lane(n, "loop")["cells"][5].AsArray().RemoveAt(4)));
             StringAssert.Contains("loop", ragged.Message);
             Assert.Throws<FormatException>(() => TopologyKit.Edit(n => TopologyKit.Lane(n, "road/fill-road/back")["cells"][0].AsArray().Add(0.0)));
             // a run of cells outside its lane
             Assert.Throws<FormatException>(() => TopologyKit.Edit(n => n["junctions"][0]["members"][0]["cells"][1] = 100000));
+            // a loop lane that is not cyclic would make the capacity checks pass for nothing
+            var open = Assert.Throws<FormatException>(() => TopologyKit.Edit(n => TopologyKit.Lane(n, "loop")["cyclic"] = false));
+            StringAssert.Contains("not cyclic", open.Message);
             Assert.Throws<FormatException>(() => SiteTopologyReader.Parse(""));
+        }
+
+        [Test]
+        public void TheTestKitRefusesAMachineKindTheQuarryHasNone()
+        {
+            Assert.Throws<ArgumentException>(() => World.Footprint("Crane", 0.0, 0.0, 0.0, 0.0));
         }
 
         [Test]
@@ -115,6 +153,20 @@ namespace DeviceChain.Sitepulse.Tests
             n["junctions"] = keep;
             foreach (var e in n["entries"].AsArray())
                 if (e["junction"] != null && gone.Contains((string)e["junction"])) e["junction"] = null;
+        });
+
+        /// <summary>The topology with one lane replaced by a single cell, and every box member and room that named the lane dropped (the reader refuses a run outside its lane).</summary>
+        static SiteTopology WithSingleCellLane(string lane, double x0, double z0, double x1, double z1) => TopologyKit.Edit(n =>
+        {
+            TopologyKit.Lane(n, lane)["cells"] = new JsonArray(new JsonArray(x0, z0, x1, z1));
+            foreach (var j in n["junctions"].AsArray())
+                foreach (var key in new[] { "members", "room" })
+                {
+                    var keep = new JsonArray();
+                    foreach (var m in j[key].AsArray())
+                        if ((string)m["lane"] != lane) keep.Add(m.DeepClone());
+                    j[key] = keep;
+                }
         });
 
         // ---- V1, V2: the cycle
@@ -155,6 +207,21 @@ namespace DeviceChain.Sitepulse.Tests
             Assert.Greater(nmax, 6, "the real fleet is larger than the crafted one");
         }
 
+        [Test]
+        public void P1HoldsOnEveryDirectedCycleNotOnlyTheLoop()
+        {
+            var cycles = new TopologyValidator(Topology, World).DirectedCycles();
+            Assert.AreEqual(2, cycles.Count, "the loop, and the detour through the refuel bay");
+            Assert.IsTrue(cycles.Any(c => c.Name == "loop"));
+            Assert.IsTrue(cycles.Any(c => c.Name.StartsWith("loop via access/bay/in")), "the bay's detour is a cycle of its own");
+            // the detour round the loop that skips most of it, with a fleet the loop itself still holds
+            AssertDefect(TopologyKit.Check(v => v.CycleCapacity(), TopologyKit.Edit(n =>
+            {
+                n["fleet"]["machines"] = 40;
+                n["entries"][0]["cell"] = 1;
+            })), "V1 P1: loop via access/bay/in", "the bay's detour short for the fleet");
+        }
+
         static SiteTopology WidenFirstLoopJunction(int complementCells) => TopologyKit.Edit(n =>
         {
             var loop = TopologyKit.Lane(n, "loop");
@@ -186,6 +253,16 @@ namespace DeviceChain.Sitepulse.Tests
             AssertDefect(TopologyKit.Check(v => v.SpanComplement(), WidenFirstLoopJunction(cellsFor - 2)), "V2 P2", "a complement a cell or two short of it");
         }
 
+        [Test]
+        public void P2IsRunOnTheBoxWhereTheLoopCrossesItself()
+        {
+            var rows = new TopologyValidator(Topology, World).SpanComplements();
+            var bottom = Topology.Junctions.First(j => j.Id.Contains("ramp-bottom"));
+            Assert.AreEqual(2, bottom.Members.Count(m => m.Lane == "loop"), "the loop is in that box twice: the stretch leaving the load and the stretch queueing for it");
+            var row = rows.First(r => r.Junction == bottom.Id);
+            Assert.GreaterOrEqual(row.Free, Topology.Fleet.Machines - 1, "its complement holds everyone else");
+        }
+
         // ---- V3: stands
 
         [Test]
@@ -203,18 +280,66 @@ namespace DeviceChain.Sitepulse.Tests
             })), "V3 stand", "a stand on a loop cell");
         }
 
+        [Test]
+        public void AStandsClearanceIsTheSameNumberInBothLanguages()
+        {
+            // the python side records the nearest each stand comes to anything it keeps clear of (its exact distance to an outline); this side measures it
+            // again by sampling the footprint's edges against the outline, and the two agree to a centimetre
+            var v = new TopologyValidator(Topology, World);
+            foreach (var s in Topology.Stands)
+            {
+                var measured = s.Kinds.Min(kind => v.StandGaps(s, kind).Values.Min(g => g.Gap));
+                Assert.AreEqual(s.ClearanceM, measured, 0.01, s.Id + ": the recorded clearance and the measured one");
+            }
+        }
+
+        [Test]
+        public void AStandThatListsNoKindIsRefused()
+        {
+            AssertDefect(TopologyKit.Check(v => v.Stands(), TopologyKit.Edit(n => n["stands"][0]["kinds"] = new JsonArray())), "V3 stand refuel-queue: it lists no kind", "a stand with no kind");
+        }
+
+        [Test]
+        public void AStandOnATrackEitherFleetPlaysIsRefused()
+        {
+            // on a track the live fleet plays
+            var tr = World.Live.Tracks[3];
+            AssertDefect(TopologyKit.Check(v => v.Stands(), TopologyKit.Edit(n => n["stands"][0]["pose"] = new JsonArray(tr.X[0], tr.Z[0], tr.Heading[0]))),
+                "from sweep live fleet track 3", "a stand on the live fleet's third track");
+            // the scripted refuel visit's track is played by the preview fleet alone: the table exempts the queue and the bay from it, and without that the preview fleet's sweep is found
+            AssertDefect(TopologyKit.Check(v => v.Stands(), TopologyKit.Edit(n =>
+            {
+                var keep = new JsonArray();
+                foreach (var e in n["exempt"].AsArray())
+                    if (e["machine"] == null) keep.Add(e.DeepClone());
+                n["exempt"] = keep;
+            })), "from sweep preview fleet track 1 (SP-HL-0006)", "the visit's track not exempted");
+        }
+
         /// <summary>The world with one more box standing at a given distance from a stand's footprint.</summary>
         sealed class WorldWithBox : ISiteWorld
         {
             readonly ISiteWorld inner;
             readonly List<IWorldObstacle> extra;
 
-            public WorldWithBox(ISiteWorld inner, string stand, string kind, double air)
+            /// <summary>A box whose near face is <paramref name="air"/> metres from the footprint's side, or (<paramref name="diagonal"/>) whose near corner is that far from the footprint's far corner along the diagonal.</summary>
+            public WorldWithBox(ISiteWorld inner, string stand, string kind, double air, bool diagonal = false)
             {
                 this.inner = inner;
                 var s = Topology.Stands.First(x => x.Id == stand);
-                // a tall thin box whose near face is `air` metres from the footprint's side: the footprint's half width and the box's own
                 var fp = inner.Footprint(kind, s.X, s.Z, s.HeadingDegrees, 0.0);
+                if (diagonal)
+                {
+                    // the stand faces north: its far corner is the greatest x of the box with the greatest z
+                    var top = fp.OrderByDescending(p => Enumerable.Range(0, p.Count).Max(i => p.Z[i])).First();
+                    var cx = Enumerable.Range(0, top.Count).Max(i => top.X[i]);
+                    var cz = Enumerable.Range(0, top.Count).Max(i => top.Z[i]);
+                    var off = 0.5 + air / Math.Sqrt(2.0);
+                    extra = new List<IWorldObstacle> { new BoxOutline("test-box", cx + off, cz + off, 0.5, 0.5, 0.0) };
+                    return;
+                }
+
+                // a tall thin box whose near face is `air` metres from the footprint's side: the footprint's half width and the box's own
                 var h = s.HeadingDegrees * Math.PI / 180.0;
                 double rx = Math.Cos(h), rz = -Math.Sin(h);
                 var side = fp.SelectMany(p => Enumerable.Range(0, p.Count).Select(i => p.X[i] * rx + p.Z[i] * rz)).Max() - (s.X * rx + s.Z * rz);
@@ -293,10 +418,22 @@ namespace DeviceChain.Sitepulse.Tests
         }
 
         [Test]
+        public void AnOutlineFacingAStandsCornerIsMeasuredByDistanceNotByEdgeNormal()
+        {
+            // a box standing corner to corner with the bay's footprint, 1.4 m and 1.6 m off along the diagonal: the gap along an edge normal would read
+            // 1.0 m and 1.13 m for those and refuse both; the distance is what the python side measures too
+            var stand = Topology.Bay.BayStand;
+            var near = new TopologyValidator(Topology, new WorldWithBox(World, stand, "Hauler", 1.4, true)).Stands();
+            AssertDefect(near, "V3 stand refuel-bay (Hauler): 1.40 m from obstacle test-box", "an outline 1.4 m off a stand's corner");
+            var far = new TopologyValidator(Topology, new WorldWithBox(World, stand, "Hauler", 1.6, true)).Stands();
+            Assert.IsFalse(far.Any(d => d.Contains("test-box")), "an outline 1.6 m off the corner is clear: " + string.Join("; ", far.Where(d => d.Contains("test-box"))));
+        }
+
+        [Test]
         public void NoStandIsACulDeSac()
         {
             Assert.IsNotNull(Topology.Bay, "the site has a refuel bay");
-            AssertClean(TopologyKit.Check(v => v.Stands()).Where(d => d.Contains("cul-de-sac")), "no stand's in and out lanes conflict beyond the machine's length");
+            AssertClean(TopologyKit.Check(v => v.Stands()).Where(d => d.Contains("cul-de-sac")), "no stand's in and out lanes overlap along the whole way through");
             // the bay left back the way it came: out is in reversed
             AssertDefect(TopologyKit.Check(v => v.Stands(), TopologyKit.Edit(n =>
             {
@@ -307,6 +444,27 @@ namespace DeviceChain.Sitepulse.Tests
                 n["junctions"] = new JsonArray();
                 foreach (var e in n["entries"].AsArray()) e["junction"] = null;
             })), "V3 cul-de-sac", "the bay with out = the reverse of in");
+        }
+
+        /// <summary>The bay's out lane laid over its in lane far from either stand: out cell 30 copied onto in cell 1 (the two cross 74 m along the way through).</summary>
+        static SiteTopology OutOverIn() => TopologyKit.Edit(n =>
+        {
+            var from = TopologyKit.Lane(n, Topology.Bay.Out)["cells"][30].AsArray();
+            TopologyKit.Lane(n, Topology.Bay.In)["cells"][1] = new JsonArray((double)from[0], (double)from[1], (double)from[2], (double)from[3]);
+        });
+
+        [Test]
+        public void ALaneCrossingItsOwnWayThroughFarFromTheStandIsACulDeSacAndAConflict()
+        {
+            AssertDefect(TopologyKit.Check(v => v.Stands(), OutOverIn()), "V3 cul-de-sac", "the out lane crossing the in lane far from the stand");
+            AssertDefect(TopologyKit.Check(v => v.Boxes(), OutOverIn()), d => d.StartsWith("V5 conflict: access/bay/in cell 1 and access/bay/out cell"), "and no box holds the crossing");
+        }
+
+        [Test]
+        public void TheBayIsKnownAsOneWayThroughOrItsLanesConflictNearTheStand()
+        {
+            // without the bay's chain the in and out lanes, which lie within a slot of each other along the way through, are two lanes that overlap
+            AssertDefect(TopologyKit.Check(v => v.Boxes(), TopologyKit.Edit(n => n["bay"] = null)), d => d.StartsWith("V5 conflict: access/bay/in cell"), "the bay not known as a way through");
         }
 
         // ---- V4: stations
@@ -341,17 +499,121 @@ namespace DeviceChain.Sitepulse.Tests
             AssertDefect(TopologyKit.Check(v => v.Stations(), TopologyKit.Edit(n => n["stations"][0]["min_gap_m"] = 99.0)), "it records a nearest approach", "a record that is not the measurement");
         }
 
+        [Test]
+        public void TheNearestApproachIsTheOneOverEveryHeadwayNotTheOneAtTheDesignSpacing()
+        {
+            // the pad's trucks come nearest at a spacing longer than the design one: a record made as if only the design spacing were swept is refused
+            var pad = Topology.Stations.First(s => s.Id == "pad");
+            var v = new TopologyValidator(Topology, World);
+            v.StationTimes(pad, out var tIn, out _, out var tOut);
+            var atDesign = v.StationMinGap(tIn, tOut, pad.HeadwaySeconds, 0.0, out _, out _);
+            var swept = v.StationMinGap(tIn, tOut, pad.HeadwaySeconds, pad.WindowSeconds, out var atHeadway, out _);
+            Assert.Less(swept, atDesign - 0.01, "sweeping the window finds a nearer approach than the design spacing alone");
+            Assert.Greater(atHeadway, pad.HeadwaySeconds, "at a spacing longer than the design one");
+            AssertDefect(TopologyKit.Check(x => x.Stations(), TopologyKit.Edit(n => n["stations"].AsArray().First(s => (string)s["id"] == "pad")["min_gap_m"] = atDesign)),
+                "V4 station pad: it records a nearest approach", "a record made at the design spacing alone");
+        }
+
         // ---- V5: boxes
 
         [Test]
         public void EveryConflictIsInsideOneBox()
         {
-            AssertClean(TopologyKit.Check(v => v.Boxes()), "every conflict between two lanes is held by a box, a diverge or a stand's own way through");
-            Assert.GreaterOrEqual(Topology.Junctions.Count, 3, "there are boxes");
+            AssertClean(TopologyKit.Check(v => v.Boxes()), "every conflict between two cells is held by a box, a diverge, a station or a stand's own way through");
+            Assert.GreaterOrEqual(Topology.Junctions.Count, 5, "there are boxes");
             AssertDefect(TopologyKit.Check(v => v.Boxes(), WithoutJunctions(j => ((string)j["id"]).Contains("ramp-top"))), "V5 conflict", "the ramp-top box deleted");
-            // a conflict between a loop cell and an access lane is held too: delete a stand's merge and its out lane conflicts with the loop
+        }
+
+        [Test]
+        public void ABayLaneIsHeldByItsMergeBoxAndNotByTheLoopAndRoadCellsAlone()
+        {
+            // the merge box holds the bay's out lane, the loop and the yard road together; take the out lane's cells out of it and what is left unheld is the out lane's
+            // conflicts with the others (the loop and the road are still in the box together)
             var merge = Topology.Junctions.First(j => j.Id.StartsWith("merge-")).Id;
-            AssertDefect(TopologyKit.Check(v => v.Boxes(), WithoutJunctions(j => (string)j["id"] == merge)), "V5 conflict", "a stand's merge deleted");
+            var without = TopologyKit.Edit(n =>
+            {
+                var j = n["junctions"].AsArray().First(x => (string)x["id"] == merge);
+                var keep = new JsonArray();
+                foreach (var m in j["members"].AsArray())
+                    if (!((string)m["lane"]).StartsWith("access/")) keep.Add(m.DeepClone());
+                j["members"] = keep;
+            });
+            var defects = TopologyKit.Check(v => v.Boxes(), without).Where(d => d.StartsWith("V5 conflict")).ToList();
+            Assert.IsTrue(defects.Any(d => d.Contains("access/bay/out")), "the out lane's conflicts are found: " + string.Join("; ", defects.Take(3)));
+            Assert.IsFalse(defects.Any(d => !d.Contains("access/bay/")), "and only the out lane's: " + string.Join("; ", defects.Where(d => !d.Contains("access/bay/")).Take(3)));
+        }
+
+        [Test]
+        public void TheLoopCrossingItselfAtTheRampBottomIsHeldByABox()
+        {
+            // the loop leaving the load and the loop queueing for it overlap by up to five metres near (-22, 15), 160 m apart along the lane: a box holds them
+            AssertDefect(TopologyKit.Check(v => v.Boxes(), WithoutJunctions(j => ((string)j["id"]).Contains("ramp-bottom"))),
+                d => d.StartsWith("V5 conflict: loop cell") && d.Contains("the same lane"), "the ramp-bottom box deleted");
+        }
+
+        [Test]
+        public void ALaneThatFoldsBackOverItselfWithNoBoxIsAConflict()
+        {
+            AssertDefect(TopologyKit.Check(v => v.Boxes(), TopologyKit.Edit(n =>
+            {
+                var cells = new JsonArray();
+                for (var i = 0; i < 10; i++) cells.Add(new JsonArray(2.0 * i, 0.0, 2.0 * i + 2.0, 0.0));
+                for (var i = 0; i < 10; i++) cells.Add(new JsonArray(20.0 - 2.0 * i, 0.4, 18.0 - 2.0 * i, 0.4));
+                TopologyKit.Lane(n, "road/fill-road/back")["cells"] = cells;
+            })), d => d.StartsWith("V5 conflict: road/fill-road/back cell") && d.Contains("and road/fill-road/back cell") && d.Contains("the same lane"), "a lane driving out and back over itself");
+        }
+
+        [Test]
+        public void TheDumpPadsTrucksOverlapEachOtherAndOnlyTheStationHoldsThat()
+        {
+            AssertDefect(TopologyKit.Check(v => v.Boxes(), TopologyKit.Edit(n =>
+            {
+                var keep = new JsonArray();
+                foreach (var s in n["stations"].AsArray())
+                    if ((string)s["id"] != "pad") keep.Add(s.DeepClone());
+                n["stations"] = keep;
+            })), d => d.StartsWith("V5 conflict: loop cell") && d.Contains("the same lane"), "the pad station removed");
+        }
+
+        /// <summary>The nearest two cells of the classes come that do not conflict and no box holds, as the python report prints them.</summary>
+        static double NearestClear(TopologyValidator v, Func<Lane, Lane, bool> klass, double threshold)
+        {
+            var held = new Dictionary<(string, int), HashSet<string>>();
+            foreach (var j in Topology.Junctions)
+                foreach (var m in j.Members)
+                    foreach (var k in TopologyValidator.RunCells(m.Cells, Topology.Lane(m.Lane).Cells.Count))
+                    {
+                        if (!held.TryGetValue((m.Lane, k), out var set)) held[(m.Lane, k)] = set = new HashSet<string>();
+                        set.Add(j.Id);
+                    }
+
+            var routes = v.RouteIndex();
+            var best = double.MaxValue;
+            foreach (var c in v.Conflicts(3.0))
+            {
+                var a = Topology.Lane(c.LaneA);
+                var b = Topology.Lane(c.LaneB);
+                if (a.Id == b.Id || !klass(a, b) || c.Gap < threshold) continue;
+                if (routes.TryGetValue((c.LaneA, c.CellA), out var ra) && routes.TryGetValue((c.LaneB, c.CellB), out var rb) && ra.Any(x => rb.Any(y => x.Chain == y.Chain))) continue;
+                if (held.TryGetValue((c.LaneA, c.CellA), out var sa) && held.TryGetValue((c.LaneB, c.CellB), out var sb) && sa.Overlaps(sb)) continue;
+                best = Math.Min(best, c.Gap);
+            }
+
+            return best;
+        }
+
+        [Test]
+        public void TheHaulThresholdIsReadFromTheFileAndSitsJustUnderTheNearestPairThatDoesNotConflict()
+        {
+            var v = new TopologyValidator(Topology, World);
+            var haul = NearestClear(v, (a, b) => (a.Kind == "loop" || a.Kind == "road") && (b.Kind == "loop" || b.Kind == "road"), Topology.Rules.ConflictHaulM);
+            // the python report prints the same pair: 1.004 m against the metre (the loop's cell 217 and the first cell of the fill road's return lane)
+            Assert.AreEqual(1.004, haul, 0.005, "the nearest haul pair that does not conflict");
+            Assert.Greater(haul, Topology.Rules.ConflictHaulM);
+            AssertDefect(TopologyKit.Check(x => x.Boxes(), TopologyKit.Edit(n => n["rules"]["conflict_haul_m"] = haul + 0.01)), "V5 conflict", "the threshold raised past it");
+            AssertClean(TopologyKit.Check(x => x.Boxes(), TopologyKit.Edit(n => n["rules"]["conflict_haul_m"] = haul - 0.01)), "the threshold lowered below it");
+            var access = NearestClear(v, (a, b) => a.Kind == "access" || b.Kind == "access", Topology.Rules.ConflictAccessM);
+            Assert.AreEqual(0.526, access, 0.005, "the nearest pair with a bay lane that does not conflict");
         }
 
         [Test]
@@ -379,10 +641,27 @@ namespace DeviceChain.Sitepulse.Tests
 
         // ---- V6: lanes
 
+        /// <summary>The light tower with nothing else standing near it.</summary>
+        static IWorldObstacle QuietTower => World.Obstacles.Where(o => o.Name == "light_tower").ElementAt(2);
+
+        /// <summary>A point on the +x side of an obstacle whose distance from its outline is <paramref name="target"/>.</summary>
+        static (double X, double Z) AtDistance(IWorldObstacle o, double target)
+        {
+            double lo = 0.0, hi = 80.0;
+            for (var i = 0; i < 60; i++)
+            {
+                var mid = (lo + hi) / 2.0;
+                if (o.Distance(o.CenterX + mid, o.CenterZ) < target) lo = mid;
+                else hi = mid;
+            }
+
+            return (o.CenterX + hi, o.CenterZ);
+        }
+
         [Test]
         public void EveryLaneIsDrivable()
         {
-            AssertClean(TopologyKit.Check(v => v.Drivable()), "every lane is within the grade limit and clear of every outline by the reach a hauler keeps");
+            AssertClean(TopologyKit.Check(v => v.Drivable()), "every lane is within the grade limit and every pose on it clear of every outline by the reach a hauler keeps");
             // a lane cell moved onto a light tower
             var lane5 = Topology.Lane("road/fill-road/back").Cells[5];
             var tower = World.Obstacles.Where(o => o.Name == "light_tower").OrderBy(o => Math.Sqrt(Math.Pow(o.CenterX - lane5.X0, 2) + Math.Pow(o.CenterZ - lane5.Z0, 2))).First();
@@ -404,6 +683,32 @@ namespace DeviceChain.Sitepulse.Tests
                     cells[k][3] = 58.0 + 2.0 * k;
                 }
             })), "V6 grade", "a lane run straight up the pit's north wall");
+        }
+
+        [Test]
+        public void TheReachAHaulerKeepsFromAnOutlineIsHeldAtItsBoundary()
+        {
+            // a driving hauler keeps its half width and 0.2 m of air from an outline: 3.2 m. A lane cell 3.1 m off a tower is inside that, one 3.3 m off is not
+            // (the 0.2 m of air is the part that is easy to leave out: without it the line would sit at 3.0 m)
+            var tower = QuietTower;
+            Assert.AreEqual(3.2, World.TravelReach, 1e-9);
+            var near = AtDistance(tower, 3.1);
+            AssertDefect(TopologyKit.Check(v => v.Drivable(), WithSingleCellLane("road/fill-road/back", near.X, near.Z, near.X + 1.0, near.Z)),
+                "V6 reach: road/fill-road/back cell 0 comes 3.10 m from light_tower", "a lane cell 3.1 m off a light tower");
+            var far = AtDistance(tower, 3.3);
+            var clear = TopologyKit.Check(v => v.Drivable(), WithSingleCellLane("road/fill-road/back", far.X, far.Z, far.X + 1.0, far.Z));
+            Assert.IsFalse(clear.Any(d => d.StartsWith("V6 reach: road/fill-road/back cell 0") && d.Contains("light_tower")), "a lane cell 3.3 m off it is clear: " + string.Join("; ", clear.Take(3)));
+        }
+
+        [Test]
+        public void EveryPoseOnACellIsHeldToTheReachNotOnlyItsEnds()
+        {
+            // a long cell whose two ends are well clear of a tower and whose middle is 2.0 m from it
+            var p = AtDistance(QuietTower, 2.0);
+            AssertDefect(TopologyKit.Check(v => v.Drivable(), WithSingleCellLane("road/fill-road/back", p.X, p.Z + 8.0, p.X, p.Z - 8.0)),
+                d => d.StartsWith("V6 reach: road/fill-road/back cell 0 comes") && d.Contains("light_tower")
+                    && double.Parse(d.Substring(d.IndexOf("comes ") + 6, 4), System.Globalization.CultureInfo.InvariantCulture) is var m && m >= 1.95 && m <= 2.01,
+                "the middle of a long cell");
         }
 
         [Test]
@@ -429,6 +734,20 @@ namespace DeviceChain.Sitepulse.Tests
             Assert.Greater(tested, 0, "the exemptions are read");
         }
 
+        [Test]
+        public void TheBaysConeExemptionNamesTheConeLineNotARadiusRoundTheBay()
+        {
+            // seven cones 3 m apart down x = -55.6; the exemption's spot is the line's middle and its radius the line's half length and a cone's half width
+            var cones = World.Obstacles.Where(o => o.Name == "cone" && Math.Abs(o.CenterX + 55.6) < 0.01).ToList();
+            Assert.AreEqual(7, cones.Count, "the cone line");
+            var row = Topology.Exempt.First(e => e.To == "access/bay/out" && e.Obstacle == "cone");
+            Assert.AreEqual(-55.6, row.SpotX, 1e-9);
+            Assert.AreEqual(-55.0, row.SpotZ, 1e-9);
+            Assert.AreEqual(9.5, row.RadiusM, 1e-9);
+            foreach (var c in cones) Assert.LessOrEqual(Math.Sqrt(Math.Pow(c.CenterX - row.SpotX, 2) + Math.Pow(c.CenterZ - row.SpotZ, 2)), row.RadiusM, "the exemption covers the cone at " + c.CenterZ);
+            Assert.AreEqual(7, World.Obstacles.Count(o => o.Name == "cone" && Math.Sqrt(Math.Pow(o.CenterX - row.SpotX, 2) + Math.Pow(o.CenterZ - row.SpotZ, 2)) <= row.RadiusM), "and no other cone on the site");
+        }
+
         // ---- V8, V9: zones and work areas
 
         [Test]
@@ -438,11 +757,12 @@ namespace DeviceChain.Sitepulse.Tests
             Assert.GreaterOrEqual(Topology.Zones.Count, 3, "the zones are listed");
             foreach (var z in Topology.Zones)
                 foreach (var kind in z.Kinds)
-                    Assert.IsTrue(Topology.Stands.Any(s => s.Zone == z.Token && s.Kinds.Contains(kind)), $"{z.Token} has a stand for a {kind}");
+                    Assert.IsTrue(Topology.Stands.Any(s => s.Zone == z.Token && s.Role == "zone" && s.Kinds.Contains(kind)), $"{z.Token} has a zone stand for a {kind}");
             // a zone asked for a stand for a kind it has none of
             AssertDefect(TopologyKit.Check(v => v.Zones(), TopologyKit.Edit(n => n["zones"][0]["kinds"] = new JsonArray("Hauler"))), "V8 zone: sp-zone-cut has no stand", "a zone with no stand for a hauler");
-            // and one for a kind the zone's stands do have is satisfied: the bay's two stands are hauler places in the yard
-            AssertClean(TopologyKit.Check(v => v.Zones(), TopologyKit.Edit(n => n["zones"][2]["kinds"] = new JsonArray("Hauler"))), "a zone with a stand for the kind");
+            // the yard has the refuel bay's two stands, which are service stands and do not make it a place to send a hauler to
+            Assert.IsTrue(Topology.Stands.All(s => s.Role == "service"), "the bay's stands are service stands");
+            AssertDefect(TopologyKit.Check(v => v.Zones(), TopologyKit.Edit(n => n["zones"][2]["kinds"] = new JsonArray("Hauler"))), "V8 zone: sp-zone-yard has no stand for a Hauler", "the yard asked for a hauler with only the bay's stands in it");
             // a stand outside the zone it names is refused
             AssertDefect(TopologyKit.Check(v => v.Zones(), TopologyKit.Edit(n => n["stands"][0]["zone"] = "sp-zone-cut")), "not wholly inside", "a stand in the wrong zone");
         }
@@ -481,6 +801,36 @@ namespace DeviceChain.Sitepulse.Tests
             {
                 n["stations"].AsArray().First(s => (string)s["id"] == "load")["partner"]["machine"] = "SP-LD-0002";
             })), "SP-LD-0001", "the load core's exemption applied to a loader that is not its partner");
+        }
+
+        [Test]
+        public void ALanesAirFromAWorkAreaIsHeldAtItsBoundary()
+        {
+            // an authored lane keeps 1.5 m from another machine's work area: a cell 1.4 m off SP-DZ-0002's is inside that, one 1.6 m off is not
+            // (the haul loop is held only to stay out, so a lane held to 0 m instead of 1.5 would pass the first)
+            var rip = Topology.WorkAreas.First(w => w.Machine == "SP-DZ-0002");
+            double cx = rip.Polygon.X.Average(), cz = rip.Polygon.Z.Average();
+            var probe = new TopologyValidator(Topology, World);
+            (double X, double Z) At(double gap)
+            {
+                double lo = 0.0, hi = 120.0;
+                for (var i = 0; i < 60; i++)
+                {
+                    var mid = (lo + hi) / 2.0;
+                    var lane = new Lane("probe", "road", false, new[] { new Cell(cx + mid, cz, cx + mid, cz + 1.0, double.NaN) }, -1, null, Topology.SlotM);
+                    if (Geometry.GroupGap(probe.CellSwept(lane, 0), new[] { rip.Polygon }) < gap) lo = mid;
+                    else hi = mid;
+                }
+
+                return (cx + hi, cz);
+            }
+
+            var near = At(1.4);
+            AssertDefect(TopologyKit.Check(v => v.WorkAreas(), WithSingleCellLane("road/fill-road/back", near.X, near.Z, near.X, near.Z + 1.0)),
+                "V9 work area: road/fill-road/back cell 0 is 1.4", "a lane cell 1.4 m off SP-DZ-0002's area");
+            var far = At(1.6);
+            var clear = TopologyKit.Check(v => v.WorkAreas(), WithSingleCellLane("road/fill-road/back", far.X, far.Z, far.X, far.Z + 1.0));
+            Assert.IsFalse(clear.Any(d => d.StartsWith("V9 work area: road/fill-road/back cell 0") && d.Contains("SP-DZ-0002")), "a cell 1.6 m off it is clear: " + string.Join("; ", clear.Take(3)));
         }
 
         [Test]

@@ -36,7 +36,11 @@ namespace DeviceChain.Sitepulse.Tests
 
         public double Distance(double x, double z) => obstacle.Distance(x, z);
 
-        /// <summary>The nearest a footprint's edge or inside comes to the outline, a quarter metre apart (negative when the outline's middle is inside it).</summary>
+        /// <summary>
+        /// The nearest a footprint's edge or inside comes to the outline, sampled a tenth of a metre apart along every edge (negative when the outline's
+        /// middle is inside it). The distance to a convex outline is convex along an edge, so sampling can only read it a little too far: by less than
+        /// 0.05^2 / 2 / 1.5 m = 1 mm at the distances the checks hold, which is the tolerance the Python side's exact distance is compared at.
+        /// </summary>
         public double Gap(IReadOnlyList<Polygon> footprint)
         {
             foreach (var p in footprint)
@@ -49,7 +53,7 @@ namespace DeviceChain.Sitepulse.Tests
                     int j = (i + 1) % p.Count;
                     double dx = p.X[j] - p.X[i], dz = p.Z[j] - p.Z[i];
                     var len = Math.Sqrt(dx * dx + dz * dz);
-                    var n = Math.Max(1, (int)Math.Ceiling(len / 0.25));
+                    var n = Math.Max(1, (int)Math.Ceiling(len / 0.1));
                     for (var k = 0; k <= n; k++) best = Math.Min(best, obstacle.Distance(p.X[i] + dx * k / n, p.Z[i] + dz * k / n));
                 }
             }
@@ -112,7 +116,9 @@ namespace DeviceChain.Sitepulse.Tests
             return new FleetView(root.GetProperty("dt").GetDouble(), machines, tracks);
         }
 
-        static EquipmentKind KindOf(string kind) => kind == "Hauler" ? EquipmentKind.Hauler : kind == "Loader" ? EquipmentKind.Loader : EquipmentKind.Dozer;
+        static EquipmentKind KindOf(string kind) =>
+            kind == "Hauler" ? EquipmentKind.Hauler : kind == "Loader" ? EquipmentKind.Loader : kind == "Dozer" ? EquipmentKind.Dozer
+            : throw new ArgumentException("the quarry has no machine of kind \"" + kind + "\"");
 
         static Polygon Of(in Quad q) => new Polygon(new[] { q.Ax, q.Bx, q.Cx, q.Dx }, new[] { q.Az, q.Bz, q.Cz, q.Dz });
 

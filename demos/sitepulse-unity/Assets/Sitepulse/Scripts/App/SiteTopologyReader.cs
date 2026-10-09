@@ -20,7 +20,7 @@ namespace DeviceChain.Sitepulse.App
     {
         static readonly string[] RootKeys =
         {
-            "generator", "source", "cell_m", "slot_m", "fleet", "zones", "lanes", "exits", "entries", "junctions", "stands", "bay", "stations", "work_areas", "exempt",
+            "generator", "source", "cell_m", "slot_m", "rules", "fleet", "zones", "lanes", "exits", "entries", "junctions", "stands", "bay", "stations", "work_areas", "exempt",
         };
 
         public static SiteTopology Parse(string json)
@@ -34,6 +34,13 @@ namespace DeviceChain.Sitepulse.App
             var src = root.GetProperty("source");
             Keys(src, "source", new[] { "features", "heights", "fleet", "fleet_preview" }, new[] { "features", "heights", "fleet", "fleet_preview" });
             var source = new SourceHashes(Str(src, "features"), Str(src, "heights"), Str(src, "fleet"), Str(src, "fleet_preview"));
+
+            var rj = root.GetProperty("rules");
+            var ruleKeys = new[] { "conflict_haul_m", "conflict_access_m", "conflict_same_route_m", "pose_step_m", "pose_step_deg", "diverge_window", "diverge_max" };
+            Keys(rj, "rules", ruleKeys, ruleKeys);
+            var rules = new TopologyRules(Num(rj, "conflict_haul_m"), Num(rj, "conflict_access_m"), Num(rj, "conflict_same_route_m"), Num(rj, "pose_step_m"),
+                Num(rj, "pose_step_deg"), Int(rj, "diverge_window"), Int(rj, "diverge_max"));
+            if (rules.PoseStepM <= 0.0 || rules.PoseStepDegrees <= 0.0) throw new FormatException("rules: a pose step is not a positive number");
 
             var fl = root.GetProperty("fleet");
             Keys(fl, "fleet", new[] { "loop_trucks", "machines", "period_s" }, new[] { "loop_trucks", "machines", "period_s" });
@@ -50,7 +57,7 @@ namespace DeviceChain.Sitepulse.App
             var ids = new HashSet<string>(StringComparer.Ordinal);
             foreach (var l in Array(root, "lanes"))
             {
-                Keys(l, "a lane", new[] { "id", "kind", "cyclic", "cells" }, new[] { "id", "kind", "cyclic", "cells", "track", "road" });
+                Keys(l, "a lane", new[] { "id", "kind", "cyclic", "neighbour_span_m", "cells" }, new[] { "id", "kind", "cyclic", "neighbour_span_m", "cells", "track", "road" });
                 var id = Str(l, "id");
                 if (!ids.Add(id)) throw new FormatException("lane " + id + " is listed twice");
                 var kind = Str(l, "kind");
@@ -69,7 +76,9 @@ namespace DeviceChain.Sitepulse.App
                 if (cells.Count == 0) throw new FormatException("lane " + id + " has no cells");
                 var cyclic = l.GetProperty("cyclic").GetBoolean();
                 if (cyclic && kind != "loop") throw new FormatException("lane " + id + " is cyclic and is not the loop");
-                lanes.Add(new Lane(id, kind, cyclic, cells, l.TryGetProperty("track", out var tr) ? tr.GetInt32() : -1, l.TryGetProperty("road", out var rd) ? rd.GetString() : null));
+                if (!cyclic && kind == "loop") throw new FormatException("lane " + id + " is the loop and is not cyclic (the capacity checks would pass vacuously)");
+                lanes.Add(new Lane(id, kind, cyclic, cells, l.TryGetProperty("track", out var tr) ? tr.GetInt32() : -1, l.TryGetProperty("road", out var rd) ? rd.GetString() : null,
+                    Num(l, "neighbour_span_m")));
             }
 
             if (lanes.Count(l => l.Kind == "loop") != 1) throw new FormatException("the topology holds " + lanes.Count(l => l.Kind == "loop") + " loop lanes (it needs exactly one)");
@@ -117,14 +126,16 @@ namespace DeviceChain.Sitepulse.App
             var sids = new HashSet<string>(StringComparer.Ordinal);
             foreach (var s in Array(root, "stands"))
             {
-                Keys(s, "a stand", new[] { "id", "zone", "kinds", "pose", "in", "out", "clearance_m" }, new[] { "id", "zone", "kinds", "pose", "in", "out", "clearance_m" });
+                Keys(s, "a stand", new[] { "id", "role", "zone", "kinds", "pose", "in", "out", "clearance_m" }, new[] { "id", "role", "zone", "kinds", "pose", "in", "out", "clearance_m" });
                 var sid = Str(s, "id");
                 if (!sids.Add(sid)) throw new FormatException("stand " + sid + " is listed twice");
+                var role = Str(s, "role");
+                if (role != "zone" && role != "service") throw new FormatException("stand " + sid + " has an unknown role \"" + role + "\"");
                 var zone = Str(s, "zone");
                 if (!zones.Any(z => z.Token == zone)) throw new FormatException("stand " + sid + " is in zone " + zone + ", which the file does not list");
                 var pose = s.GetProperty("pose");
                 if (pose.ValueKind != JsonValueKind.Array || pose.GetArrayLength() != 3) throw new FormatException("stand " + sid + " pose is not [x, z, heading]");
-                stands.Add(new StandPlace(sid, zone, Strings(s, "kinds"), pose[0].GetDouble(), pose[1].GetDouble(), pose[2].GetDouble(),
+                stands.Add(new StandPlace(sid, role, zone, Strings(s, "kinds"), pose[0].GetDouble(), pose[1].GetDouble(), pose[2].GetDouble(),
                     LaneRef(s, "in", counts, "stand " + sid), LaneRef(s, "out", counts, "stand " + sid), Num(s, "clearance_m")));
             }
 
@@ -178,7 +189,7 @@ namespace DeviceChain.Sitepulse.App
                     hasSpot ? spot[1].GetDouble() : 0.0, e.TryGetProperty("radius_m", out var r) ? r.GetDouble() : 0.0, e.TryGetProperty("machine", out var m) ? m.GetString() : null));
             }
 
-            return new SiteTopology(Str(root, "generator"), source, Num(root, "cell_m"), Num(root, "slot_m"), fleet, zones, lanes, exits, entries, junctions, stands, bay, stations, work, exempt);
+            return new SiteTopology(Str(root, "generator"), source, Num(root, "cell_m"), Num(root, "slot_m"), rules, fleet, zones, lanes, exits, entries, junctions, stands, bay, stations, work, exempt);
         }
 
         // ---- reading

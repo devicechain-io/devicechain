@@ -11,21 +11,16 @@ namespace DeviceChain.Sim.Traffic
     /// <summary>
     /// The checks that say a <see cref="SiteTopology"/> is sound, one per property the interlocking rests on. Each returns a list of named
     /// defects, empty when the property holds; a defect says what is wrong and where. They are the C# half of the checks
-    /// <c>ArtSource/terrain/quarry_topology.py</c> makes when it writes the file: the same thresholds, read off the committed file.
+    /// <c>ArtSource/terrain/quarry_topology.py</c> makes when it writes the file: the same thresholds (the ones the file states in its
+    /// <c>rules</c>, and the stand and work-area air below), read off the committed file.
     /// </summary>
     public sealed class TopologyValidator
     {
-        /// <summary>Two cells of different lanes whose swept footprints come nearer than this conflict, in metres.</summary>
-        public const double ConflictM = 0.3;
-
         /// <summary>The air a stand's footprint keeps from every lane, sweep, junction and outline, in metres.</summary>
         public const double StandClearM = 1.5;
 
         /// <summary>The air a lane or a stand keeps from another machine's work area, in metres.</summary>
         public const double WorkClearM = 1.5;
-
-        /// <summary>The cells either side of an exit that the lane leaving shares ground with, and the most of that lane that may.</summary>
-        public const int DivergeWindow = 12, DivergeMax = 40;
 
         /// <summary>The cells a granted machine needs beyond a junction to stand in: a slot of them.</summary>
         public int RoomCells => (int)Math.Ceiling(topology.SlotM / topology.CellM);
@@ -127,18 +122,79 @@ namespace DeviceChain.Sim.Traffic
 
         // ---- V1 and V2
 
-        /// <summary>V1 (P1): on every cyclic lane the slots outside station cores hold every machine that can be on it, and one more.</summary>
+        /// <summary>A directed cycle of lanes a machine can circulate on, and the cells of each lane it drives.</summary>
+        public sealed class LaneCycle
+        {
+            public LaneCycle(string name, List<(string Lane, List<int> Cells)> parts)
+            {
+                Name = name;
+                Parts = parts;
+            }
+
+            public string Name { get; }
+            public List<(string Lane, List<int> Cells)> Parts { get; }
+        }
+
+        /// <summary>
+        /// Every directed cycle of lanes a machine can circulate on: each cyclic lane itself, and for each stand's way through it the cycle that leaves
+        /// the lane at the stand's exit, drives the way through and rejoins at its entry. A machine goes round such a cycle forever as readily as round
+        /// the loop, so each must hold everyone that can be on it.
+        /// </summary>
+        public List<LaneCycle> DirectedCycles()
+        {
+            var output = new List<LaneCycle>();
+            foreach (var lane in topology.Lanes)
+                if (lane.Cyclic) output.Add(new LaneCycle(lane.Id, new List<(string, List<int>)> { (lane.Id, Enumerable.Range(0, lane.Cells.Count).ToList()) }));
+            foreach (var chain in StandChains())
+            {
+                var ex = topology.Exits.FirstOrDefault(e => e.To == chain[0]);
+                var en = topology.Entries.FirstOrDefault(e => e.From == chain[chain.Length - 1]);
+                if (ex == null || en == null || ex.Lane != en.Lane) continue;
+                var host = topology.Lane(ex.Lane);
+                var n = host.Cells.Count;
+                var skipped = new HashSet<int>();
+                var k = (ex.Cell + 1) % n;
+                while (true)
+                {
+                    skipped.Add(k);
+                    if (k == en.Cell % n) break;
+                    k = (k + 1) % n;
+                }
+
+                var parts = new List<(string, List<int>)> { (host.Id, Enumerable.Range(0, n).Where(c => !skipped.Contains(c)).ToList()) };
+                foreach (var lid in chain) parts.Add((lid, Enumerable.Range(0, topology.Lane(lid).Cells.Count).ToList()));
+                output.Add(new LaneCycle(host.Id + " via " + string.Join("/", chain), parts));
+            }
+
+            return output;
+        }
+
+        /// <summary>The slots a cycle holds outside the station cores that lie on it.</summary>
+        public int CycleFreeSlots(LaneCycle cycle)
+        {
+            var length = 0.0;
+            foreach (var part in cycle.Parts)
+            {
+                var lane = topology.Lane(part.Lane);
+                var core = new HashSet<int>();
+                foreach (var st in topology.Stations.Where(s => s.Lane == part.Lane))
+                    foreach (var k in RunCells(st.Core, lane.Cells.Count)) core.Add(k);
+                length += part.Cells.Where(k => !core.Contains(k)).Sum(k => lane.Cells[k].Length);
+            }
+
+            return Slots(length);
+        }
+
+        /// <summary>V1 (P1): on every directed cycle (the loop, and each detour through a stand's way through) the slots outside station cores hold every machine that can be on it, and one more.</summary>
         public List<string> CycleCapacity()
         {
             var output = new List<string>();
             var nmax = topology.Fleet.Machines;
-            foreach (var lane in topology.Lanes)
+            foreach (var cycle in DirectedCycles())
             {
-                if (!lane.Cyclic) continue;
-                var cores = topology.Stations.Where(s => s.Lane == lane.Id).Sum(s => RangeLength(lane, s.Core));
-                var free = Slots(lane.Length() - cores);
+                var free = CycleFreeSlots(cycle);
                 if (free < nmax + 1)
-                    output.Add(F("V1 P1: {0} has {1} slots outside its station cores for {2} machines (needs {3})", lane.Id, free, nmax, nmax + 1));
+                    output.Add(F("V1 P1: {0} has {1} slots outside its station cores for {2} machines (needs {3})", cycle.Name, free, nmax, nmax + 1));
             }
 
             return output;
@@ -176,11 +232,10 @@ namespace DeviceChain.Sim.Traffic
             gap = RunCells(best, n);
         }
 
-        /// <summary>V2 (P2): the complement of every junction's span on a cyclic lane holds everyone who can be on the lane but the requester.</summary>
-        public List<string> SpanComplement()
+        /// <summary>The slots every junction's complement holds outside the station cores, on each cyclic lane it has members on: (junction id, lane id, free slots).</summary>
+        public List<(string Junction, string Lane, int Free)> SpanComplements()
         {
-            var output = new List<string>();
-            var nmax = topology.Fleet.Machines;
+            var output = new List<(string, string, int)>();
             foreach (var junc in topology.Junctions)
                 foreach (var lane in topology.Lanes)
                 {
@@ -191,11 +246,20 @@ namespace DeviceChain.Sim.Traffic
                     var core = 0.0;
                     foreach (var st in topology.Stations.Where(s => s.Lane == lane.Id))
                         core += RunCells(st.Core, lane.Cells.Count).Where(gapSet.Contains).Sum(k => lane.Cells[k].Length);
-                    var free = Slots(length - core);
-                    if (free < nmax - 1)
-                        output.Add(F("V2 P2: {0} leaves {1} slots outside station cores on {2} for the {3} other machines (needs {3})", junc.Id, free, lane.Id, nmax - 1));
+                    output.Add((junc.Id, lane.Id, Slots(length - core)));
                 }
 
+            return output;
+        }
+
+        /// <summary>V2 (P2): the complement of every junction's span on a cyclic lane holds everyone who can be on the lane but the requester.</summary>
+        public List<string> SpanComplement()
+        {
+            var output = new List<string>();
+            var nmax = topology.Fleet.Machines;
+            foreach (var c in SpanComplements())
+                if (c.Free < nmax - 1)
+                    output.Add(F("V2 P2: {0} leaves {1} slots outside station cores on {2} for the {3} other machines (needs {3})", c.Junction, c.Free, c.Lane, nmax - 1));
             return output;
         }
 
@@ -210,6 +274,7 @@ namespace DeviceChain.Sim.Traffic
         sealed class CellItem
         {
             public string Lane;
+            public Lane LaneObj;
             public int Cell;
             public CellGroup Group;
         }
@@ -247,8 +312,28 @@ namespace DeviceChain.Sim.Traffic
             && Math.Round(a[1], 2, MidpointRounding.ToEven) == Math.Round(b[1], 2, MidpointRounding.ToEven)
             && Math.Round(a[2], 0, MidpointRounding.ToEven) == Math.Round(b[2], 0, MidpointRounding.ToEven);
 
-        /// <summary>The poses a hauler takes crossing a cell: on the loop every frame of the track from its start to the next cell's, on any other lane its two ends facing the way the cell points.</summary>
-        List<double[]> CellPoses(Lane lane, int k)
+        static double HeadingOf(double dx, double dz) => (Math.Atan2(dx, dz) * 180.0 / Math.PI + 360.0) % 360.0;
+
+        /// <summary>
+        /// The headings (degrees clockwise from north) a hauler points at the start and at the end of cell k: along the line through the neighbouring
+        /// vertices of the lane (a central difference, the tangent of a circle cut at equal steps), and along the cell itself where the lane ends. A
+        /// cell is a chord of a curve; its two ends do not point the way the chord does.
+        /// </summary>
+        public static void CellTangents(Lane lane, int k, out double h0, out double h1)
+        {
+            var cells = lane.Cells;
+            var c = cells[k];
+            var chord = c.HeadingDegrees;
+            h0 = k > 0 ? HeadingOf(c.X1 - cells[k - 1].X0, c.Z1 - cells[k - 1].Z0) : chord;
+            h1 = k + 1 < cells.Count ? HeadingOf(cells[k + 1].X1 - c.X0, cells[k + 1].Z1 - c.Z0) : chord;
+        }
+
+        /// <summary>
+        /// The poses a hauler takes crossing cell k. On the loop, every frame of the track from the cell's start to the next cell's. On any other lane,
+        /// poses along the cell at most <see cref="TopologyRules.PoseStepM"/> apart and turned at most <see cref="TopologyRules.PoseStepDegrees"/> between
+        /// poses, each at the tangent heading turned evenly between the cell's two ends.
+        /// </summary>
+        public List<double[]> CellPoses(Lane lane, int k)
         {
             var c = lane.Cells[k];
             var poses = new List<double[]>();
@@ -277,11 +362,39 @@ namespace DeviceChain.Sim.Traffic
                 return poses;
             }
 
-            var h = c.HeadingDegrees;
-            poses.Add(new[] { c.X0, c.Z0, h });
-            poses.Add(new[] { c.X1, c.Z1, h });
+            CellTangents(lane, k, out var h0, out var h1);
+            var dh = Geometry.Wrap(h1 - h0);
+            var rules = topology.Rules;
+            var n = Math.Max(1, Math.Max((int)Math.Ceiling(c.Length / rules.PoseStepM - 1e-9), (int)Math.Ceiling(Math.Abs(dh) / rules.PoseStepDegrees - 1e-9)));
+            for (var i = 0; i <= n; i++)
+                poses.Add(new[] { c.X0 + (c.X1 - c.X0) * i / n, c.Z0 + (c.Z1 - c.Z0) * i / n, (((h0 + dh * i / n) % 360.0) + 360.0) % 360.0 });
             return poses;
         }
+
+        /// <summary>
+        /// The ground a hauler covers over a run of poses, as convex polygons: for each of its boxes, the hull of that box at one pose and the next (what
+        /// a box passes over turning and moving between the two). The hull covers a little more than the box sweeps, so the gap read is never more than
+        /// the gap to the continuous sweep and at most 0.03 m less.
+        /// </summary>
+        List<Polygon> Swept(List<double[]> poses)
+        {
+            var at = poses.Select(p => world.Footprint("Hauler", p[0], p[1], p[2], 0.0)).ToList();
+            if (at.Count == 1) return at[0].ToList();
+            var boxes = new List<Polygon>();
+            for (var i = 0; i + 1 < at.Count; i++)
+                for (var b = 0; b < at[i].Count; b++)
+                {
+                    var pts = new List<(double X, double Z)>();
+                    foreach (var poly in new[] { at[i][b], at[i + 1][b] })
+                        for (var q = 0; q < poly.Count; q++) pts.Add((poly.X[q], poly.Z[q]));
+                    boxes.Add(Geometry.Hull(pts));
+                }
+
+            return boxes;
+        }
+
+        /// <summary>The swept ground of cell k of a lane (which need not be one of the topology's), as the checks measure it.</summary>
+        public List<Polygon> CellSwept(Lane lane, int k) => Swept(CellPoses(lane, k));
 
         CellGroup[] GroupsOf(Lane lane)
         {
@@ -289,8 +402,7 @@ namespace DeviceChain.Sim.Traffic
             var arr = new CellGroup[lane.Cells.Count];
             for (var k = 0; k < arr.Length; k++)
             {
-                var boxes = new List<Polygon>();
-                foreach (var p in CellPoses(lane, k)) boxes.AddRange(world.Footprint("Hauler", p[0], p[1], p[2], 0.0));
+                var boxes = Swept(CellPoses(lane, k));
                 Geometry.CenterRadius(boxes, out var cx, out var cz, out var r);
                 arr[k] = new CellGroup { Boxes = boxes, Cx = cx, Cz = cz, Radius = r };
             }
@@ -306,16 +418,23 @@ namespace DeviceChain.Sim.Traffic
             foreach (var lane in topology.Lanes)
             {
                 var gs = GroupsOf(lane);
-                for (var k = 0; k < gs.Length; k++) index.Add(new CellItem { Lane = lane.Id, Cell = k, Group = gs[k] });
+                for (var k = 0; k < gs.Length; k++) index.Add(new CellItem { Lane = lane.Id, LaneObj = lane, Cell = k, Group = gs[k] });
             }
 
             return index;
         }
 
-        /// <summary>Every pair of cells of two different lanes whose swept footprints come nearer than <see cref="ConflictM"/>.</summary>
-        public List<(string LaneA, int CellA, string LaneB, int CellB, double Gap)> Conflicts()
+        /// <summary>
+        /// Every pair of cells whose swept footprints come nearer than the threshold of the pair's class (<see cref="TopologyRules.ConflictM"/>): of two
+        /// different lanes, and of one lane when they are further apart along it than its neighbour span (nearer than that they are a machine and its
+        /// follower, which the follower rule keeps apart) and overlap. <paramref name="reach"/> lists the pairs nearer than that instead (to measure how
+        /// near the pairs that do not conflict come).
+        /// </summary>
+        public List<(string LaneA, int CellA, string LaneB, int CellB, double Gap)> Conflicts(double? reach = null)
         {
             var items = CellIndex();
+            var rules = topology.Rules;
+            var far = Math.Max(Math.Max(rules.ConflictHaulM, rules.ConflictAccessM), Math.Max(rules.ConflictSameRouteM, reach ?? 0.0));
             var grid = new Dictionary<(long, long), List<int>>();
             for (var n = 0; n < items.Count; n++)
             {
@@ -337,16 +456,69 @@ namespace DeviceChain.Sim.Traffic
                         {
                             if (m <= n) continue;
                             var jt = items[m];
-                            if (it.Lane == jt.Lane) continue;
+                            var same = it.Lane == jt.Lane;
+                            if (same && it.LaneObj.Along(it.Cell, jt.Cell) <= it.LaneObj.NeighbourSpanM) continue;
+                            var thr = reach ?? (same ? rules.ConflictSameRouteM : rules.ConflictM(it.LaneObj.Kind, jt.LaneObj.Kind));
                             var d = Math.Sqrt((it.Group.Cx - jt.Group.Cx) * (it.Group.Cx - jt.Group.Cx) + (it.Group.Cz - jt.Group.Cz) * (it.Group.Cz - jt.Group.Cz));
-                            if (d > it.Group.Radius + jt.Group.Radius + ConflictM) continue;
-                            var gap = Geometry.GroupGap(it.Group.Boxes, jt.Group.Boxes);
-                            if (gap < ConflictM) found.Add((it.Lane, it.Cell, jt.Lane, jt.Cell, gap));
+                            if (d > it.Group.Radius + jt.Group.Radius + far) continue;
+                            var gap = Geometry.GroupGap(it.Group.Boxes, jt.Group.Boxes, thr);
+                            if (gap < thr) found.Add((it.Lane, it.Cell, jt.Lane, jt.Cell, gap));
                         }
                     }
             }
 
             return found.OrderBy(f => f.Item1, StringComparer.Ordinal).ThenBy(f => f.Item2).ThenBy(f => f.Item3, StringComparer.Ordinal).ThenBy(f => f.Item4).ToList();
+        }
+
+        /// <summary>{(lane, cell): [(chain, arc length along it to the middle of the cell)]} for every cell of every stand's way through it.</summary>
+        public Dictionary<(string, int), List<(string Chain, double S)>> RouteIndex()
+        {
+            var routes = new Dictionary<(string, int), List<(string, double)>>();
+            foreach (var chain in StandChains())
+                foreach (var kv in ChainCoords(chain))
+                {
+                    if (!routes.TryGetValue(kv.Key, out var l)) routes[kv.Key] = l = new List<(string, double)>();
+                    l.Add((string.Join("|", chain), kv.Value));
+                }
+
+            return routes.ToDictionary(kv => kv.Key, kv => kv.Value);
+        }
+
+        /// <summary>The cells a station's trucks are timed through, its core and its exit buffer, on its lane. V4 measures two trucks there at every headway.</summary>
+        public List<(string Id, string Lane, HashSet<int> Cells)> StationRegions()
+        {
+            var output = new List<(string, string, HashSet<int>)>();
+            foreach (var st in topology.Stations)
+            {
+                var n = topology.Lane(st.Lane).Cells.Count;
+                var cells = new HashSet<int>(RunCells(st.Core, n));
+                foreach (var k in RunCells(st.Buffer, n)) cells.Add(k);
+                output.Add((st.Id, st.Lane, cells));
+            }
+
+            return output;
+        }
+
+        /// <summary>
+        /// What holds a conflict between cells a and b other than a junction box, or null when only a box can: "route" (the two are on one stand's way
+        /// through it, within a neighbour span of each other along it or not overlapping), "station" (both lie in one station's region on its lane) or
+        /// "diverge" (one is on the lane leaving an exit, in the part it shares with the lane it leaves).
+        /// </summary>
+        public string Covering((string, int) a, (string, int) b, double gap, Dictionary<(string, int), List<(string Chain, double S)>> routes, List<(string Id, string Lane, HashSet<int> Cells)> regions)
+        {
+            var span = topology.Lane(a.Item1).NeighbourSpanM;
+            if (routes.TryGetValue(a, out var la) && routes.TryGetValue(b, out var lb)
+                && la.Any(x => lb.Any(y => x.Chain == y.Chain && (Math.Abs(x.S - y.S) <= span || gap >= topology.Rules.ConflictSameRouteM)))) return "route";
+            if (a.Item1 == b.Item1 && regions.Any(r => r.Lane == a.Item1 && r.Cells.Contains(a.Item2) && r.Cells.Contains(b.Item2))) return "station";
+            foreach (var ex in topology.Exits)
+                foreach (var pair in new[] { (a, b), (b, a) })
+                {
+                    var x = pair.Item1;
+                    var y = pair.Item2;
+                    if (x.Item1 == ex.To && y.Item1 == ex.Lane && x.Item2 < ex.Shared && CycDist(y.Item2, ex.Cell, topology.Lane(ex.Lane).Cells.Count) <= topology.Rules.DivergeWindow) return "diverge";
+                }
+
+            return null;
         }
 
         // ---- the way through a stand
@@ -481,12 +653,7 @@ namespace DeviceChain.Sim.Traffic
                 }
             }
 
-            foreach (var j in topology.Junctions)
-            {
-                var gap = double.MaxValue;
-                foreach (var b in g) gap = Math.Min(gap, Geometry.SatGap(b, j.Polygon));
-                Note("junction", gap, j.Id);
-            }
+            foreach (var j in topology.Junctions) Note("junction", Geometry.GroupGap(g, new[] { j.Polygon }), j.Id);
 
             foreach (var o in world.Obstacles)
             {
@@ -506,10 +673,13 @@ namespace DeviceChain.Sim.Traffic
             var output = new List<string>();
             var idx = CellIndex();
             foreach (var s in topology.Stands)
+            {
+                if (s.Kinds.Count == 0) output.Add(F("V3 stand {0}: it lists no kind of machine, so nothing would be checked of its footprint", s.Id));
                 foreach (var kind in s.Kinds)
                     foreach (var kv in StandGaps(s, kind).OrderBy(k => k.Key, StringComparer.Ordinal))
                         if (kv.Value.Gap < StandClearM)
                             output.Add(F("V3 stand {0} ({1}): {2:0.00} m from {3} {4}, {5:0.0} m is kept", s.Id, kind, kv.Value.Gap, kv.Key, kv.Value.Where, StandClearM));
+            }
 
             var ids = topology.Stands.OrderBy(s => s.Id, StringComparer.Ordinal).ToList();
             for (var i = 0; i < ids.Count; i++)
@@ -518,15 +688,21 @@ namespace DeviceChain.Sim.Traffic
                     var a = ids[i];
                     var b = ids[j];
                     if (topology.Bay != null && ((a.Id == topology.Bay.Queue && b.Id == topology.Bay.BayStand) || (b.Id == topology.Bay.Queue && a.Id == topology.Bay.BayStand))) continue;
+                    if (a.Kinds.Count == 0 || b.Kinds.Count == 0) continue;
                     var ka = a.Kinds.OrderBy(KindRank).First();
                     var kb = b.Kinds.OrderBy(KindRank).First();
                     var gap = Geometry.GroupGap(world.Footprint(ka, a.X, a.Z, a.HeadingDegrees, 0.0), world.Footprint(kb, b.X, b.Z, b.HeadingDegrees, 0.0));
                     if (gap < 0.0) output.Add(F("V3 stand {0}: overlaps stand {1} by {2:0.00} m", a.Id, b.Id, -gap));
                 }
 
+            // a stand is driven through, never backed out of: along the whole way through it (in, hop, out) the lanes do not conflict beyond a machine's
+            // own length (a follower a slot behind keeps what air the bend leaves it: the lanes may not overlap). A way through that crosses itself
+            // anywhere is a cul-de-sac for whoever waits at the crossing, whether or not a box holds the crossing
             foreach (var chain in StandChains())
             {
                 var coords = ChainCoords(chain);
+                var span = topology.Lane(chain[0]).NeighbourSpanM;
+                var thr = topology.Rules.ConflictSameRouteM;
                 var cells = new List<(string, int)>();
                 foreach (var lid in chain)
                     for (var k = 0; k < topology.Lane(lid).Cells.Count; k++) cells.Add((lid, k));
@@ -537,12 +713,12 @@ namespace DeviceChain.Sim.Traffic
                     {
                         var a = cells[i];
                         var b = cells[j];
-                        if (a.Item1 == b.Item1 || Math.Abs(coords[a] - coords[b]) <= topology.SlotM) continue;
+                        if (a.Item1 == b.Item1 || Math.Abs(coords[a] - coords[b]) <= span) continue;
                         var ga = pos[a];
                         var gb = pos[b];
                         var d = Math.Sqrt((ga.Cx - gb.Cx) * (ga.Cx - gb.Cx) + (ga.Cz - gb.Cz) * (ga.Cz - gb.Cz));
-                        if (d > ga.Radius + gb.Radius + ConflictM) continue;
-                        if (Geometry.GroupGap(ga.Boxes, gb.Boxes) < ConflictM)
+                        if (d > ga.Radius + gb.Radius + thr) continue;
+                        if (Geometry.GroupGap(ga.Boxes, gb.Boxes, thr) < thr)
                         {
                             output.Add(F("V3 cul-de-sac: the lanes {0} conflict at {1} cell {2} and {3} cell {4}, {5:0} m apart along the way through",
                                 string.Join(" -> ", chain), a.Item1, a.Item2, b.Item1, b.Item2, Math.Abs(coords[a] - coords[b])));
@@ -718,42 +894,30 @@ namespace DeviceChain.Sim.Traffic
             return set;
         }
 
-        /// <summary>V5: every conflict lies inside one junction box (or is a diverge, or a stand's own way through); no box holds the approach cell where its own requester waits; a box's members are exactly the cells with an end in its polygon.</summary>
+        /// <summary>
+        /// V5: every conflict between two cells lies inside one junction box (or is held by what <see cref="Covering"/> says: a stand's own way through
+        /// it, a station, a diverge) - including two cells of one lane further apart along it than its neighbour span that overlap, which is a lane
+        /// folding back over itself; no box holds the approach cell where its own requester waits; a box's members are exactly the cells with an end in
+        /// its polygon.
+        /// </summary>
         public List<string> Boxes()
         {
             var output = new List<string>();
             var byJunc = topology.Junctions.ToDictionary(j => j.Id, j => j.Members.Select(m => m.Lane).Distinct().ToDictionary(l => l, l => JunctionCells(j, topology.Lane(l))));
-            var chains = new Dictionary<(string, int), List<(string Chain, double S)>>();
-            foreach (var chain in StandChains())
-                foreach (var kv in ChainCoords(chain))
-                {
-                    if (!chains.TryGetValue(kv.Key, out var l)) chains[kv.Key] = l = new List<(string, double)>();
-                    l.Add((string.Join("|", chain), kv.Value));
-                }
-
+            var routes = RouteIndex();
+            var regions = StationRegions();
             var seen = new HashSet<(string, string)>();
             foreach (var cf in Conflicts())
             {
                 var a = (cf.LaneA, cf.CellA);
                 var b = (cf.LaneB, cf.CellB);
                 if (byJunc.Values.Any(cells => cells.TryGetValue(a.Item1, out var ca) && ca.Contains(a.Item2) && cells.TryGetValue(b.Item1, out var cb) && cb.Contains(b.Item2))) continue;
-                if (chains.TryGetValue(a, out var la) && chains.TryGetValue(b, out var lb)
-                    && la.Any(x => lb.Any(y => x.Chain == y.Chain && Math.Abs(x.S - y.S) <= topology.SlotM))) continue;
-                var covered = false;
-                foreach (var ex in topology.Exits)
-                {
-                    foreach (var pair in new[] { (a, b), (b, a) })
-                    {
-                        var x = pair.Item1;
-                        var y = pair.Item2;
-                        if (x.Item1 == ex.To && y.Item1 == ex.Lane && x.Item2 < ex.Shared && CycDist(y.Item2, ex.Cell, topology.Lane(ex.Lane).Cells.Count) <= DivergeWindow) covered = true;
-                    }
-                }
-
-                if (covered || !seen.Add((a.Item1, b.Item1))) continue;
+                if (Covering(a, b, cf.Gap, routes, regions) != null) continue;
+                if (!seen.Add((a.Item1, b.Item1))) continue;
                 var c = topology.Lane(a.Item1).Cells[a.Item2];
-                output.Add(F("V5 conflict: {0} cell {1} and {2} cell {3} come within {4:0.00} m of each other at ({5:0.0}, {6:0.0}) and no junction holds both",
-                    a.Item1, a.Item2, b.Item1, b.Item2, cf.Gap, c.X0, c.Z0));
+                var same = a.Item1 == b.Item1 ? F(", the same lane {0:0} m apart along it", topology.Lane(a.Item1).Along(a.Item2, b.Item2)) : "";
+                output.Add(F("V5 conflict: {0} cell {1} and {2} cell {3} come within {4:0.00} m of each other at ({5:0.0}, {6:0.0}){7} and no junction holds both",
+                    a.Item1, a.Item2, b.Item1, b.Item2, cf.Gap, c.X0, c.Z0, same));
             }
 
             foreach (var j in topology.Junctions)
@@ -784,7 +948,12 @@ namespace DeviceChain.Sim.Traffic
 
         // ---- V6
 
-        /// <summary>V6: every lane's driven line is within the grade a planned route is held to and clear of every outline by the reach a driving hauler keeps, but what the table says a lane is laid out between.</summary>
+        /// <summary>
+        /// V6: every lane's driven line is within the grade a planned route is held to, and every pose a hauler takes along it (every pose of
+        /// <see cref="CellPoses"/>: each cell's start, its middle where the cell is long or turns, its end, and on the loop every frame of the track) is
+        /// clear of every outline by the reach a driving hauler keeps (<see cref="ISiteWorld.TravelReach"/>: its half width and the air kept - the task
+        /// layer's own rule for a driving machine, which the lanes are held to), except what the table says a lane is laid out between.
+        /// </summary>
         public List<string> Drivable()
         {
             var output = new List<string>();
@@ -797,15 +966,13 @@ namespace DeviceChain.Sim.Traffic
                     output.Add(F("V6 grade: {0} climbs {1:0.00} % sustained at ({2:0.0}, {3:0.0}); a planned route is held to {4:0} %", lane.Id, grade.Percent, grade.X, grade.Z, world.MaxGradePercent));
                 var near = new Dictionary<string, (double D, int K, double X, double Z)>();
                 for (var k = 0; k < lane.Cells.Count; k++)
-                {
-                    var c = lane.Cells[k];
-                    foreach (var o in world.Obstacles)
-                    {
-                        var d = o.Distance(c.X0, c.Z0);
-                        if (d >= world.TravelReach || IsExempt(lane.Id, o.Name, c.X0, c.Z0)) continue;
-                        if (!near.TryGetValue(o.Name, out var cur) || d < cur.D) near[o.Name] = (d, k, c.X0, c.Z0);
-                    }
-                }
+                    foreach (var p in CellPoses(lane, k))
+                        foreach (var o in world.Obstacles)
+                        {
+                            var d = o.Distance(p[0], p[1]);
+                            if (d >= world.TravelReach || IsExempt(lane.Id, o.Name, o.CenterX, o.CenterZ)) continue;
+                            if (!near.TryGetValue(o.Name, out var cur) || d < cur.D) near[o.Name] = (d, k, p[0], p[1]);
+                        }
 
                 foreach (var kv in near.OrderBy(k => k.Key, StringComparer.Ordinal))
                     output.Add(F("V6 reach: {0} cell {1} comes {2:0.00} m from {3} at ({4:0.0}, {5:0.0}); a driving hauler keeps {6:0.0} m", lane.Id, kv.Value.K, kv.Value.D, kv.Key, kv.Value.X, kv.Value.Z, world.TravelReach));
@@ -851,13 +1018,16 @@ namespace DeviceChain.Sim.Traffic
             return output;
         }
 
-        /// <summary>V8: every zone has a stand for each kind goto-area may send there, inside the zone.</summary>
+        /// <summary>
+        /// V8: every zone has a stand for each kind goto-area may send there, inside the zone. Only a zone stand counts: the refuel queue and bay are
+        /// service stands (a machine goes there to be refuelled and moves on), so a zone is not covered by the yard having one.
+        /// </summary>
         public List<string> Zones()
         {
             var output = new List<string>();
             foreach (var z in topology.Zones)
                 foreach (var kind in z.Kinds)
-                    if (!topology.Stands.Any(s => s.Zone == z.Token && s.Kinds.Contains(kind)))
+                    if (!topology.Stands.Any(s => s.Zone == z.Token && s.Role == "zone" && s.Kinds.Contains(kind)))
                         output.Add(F("V8 zone: {0} has no stand for a {1}", z.Token, kind));
             foreach (var s in topology.Stands)
             {
@@ -890,8 +1060,7 @@ namespace DeviceChain.Sim.Traffic
                 foreach (var it in idx)
                 {
                     if (exempt.Contains((wa.Machine, it.Lane, it.Cell))) continue;
-                    var gap = double.MaxValue;
-                    foreach (var b in it.Group.Boxes) gap = Math.Min(gap, Geometry.SatGap(b, wa.Polygon));
+                    var gap = Geometry.GroupGap(it.Group.Boxes, new[] { wa.Polygon });
                     var keep = topology.Lane(it.Lane).Kind == "loop" ? 0.0 : WorkClearM;
                     if (gap < keep && (!near.TryGetValue(it.Lane, out var cur) || gap < cur.Gap)) near[it.Lane] = (gap, it.Cell, keep);
                 }
@@ -901,8 +1070,7 @@ namespace DeviceChain.Sim.Traffic
                 foreach (var s in topology.Stands)
                     foreach (var kind in s.Kinds)
                     {
-                        var gap = double.MaxValue;
-                        foreach (var b in world.Footprint(kind, s.X, s.Z, s.HeadingDegrees, 0.0)) gap = Math.Min(gap, Geometry.SatGap(b, wa.Polygon));
+                        var gap = Geometry.GroupGap(world.Footprint(kind, s.X, s.Z, s.HeadingDegrees, 0.0), new[] { wa.Polygon });
                         if (gap < WorkClearM) output.Add(F("V9 work area: stand {0} ({1}) is {2:0.00} m from {3}'s work area ({4:0.0} m is kept)", s.Id, kind, gap, wa.Machine, WorkClearM));
                     }
             }

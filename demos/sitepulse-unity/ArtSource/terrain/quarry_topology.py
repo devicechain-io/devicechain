@@ -23,9 +23,13 @@ WHAT IT HOLDS (see Data/README.md)
              hauler's length and the air haul trucks keep), whatever the cell length.
   junctions  one box per cluster of conflicting cells nothing else covers: a convex polygon, its member
              cells, the approach cell where a requester waits and the room a granted machine needs.
-             Two cells of different lanes conflict when their swept hauler footprints come within
-             CONFLICT_M. A diverge (the first cells of an access lane, which share ground with the lane
-             it leaves) and the lanes through one stand (within a slot of each other) are not boxes.
+             Two cells conflict when their swept hauler footprints (the hull of the hauler over each
+             step of a cell, at the lane's tangent heading) come nearer than the threshold of the pair's
+             class (RULES, written into the file): a metre between haul lanes, 0.3 m with a bay lane,
+             overlap for two cells of one lane or one stand's way through it that are further apart along
+             it than a slot (a lane folding back over itself). A diverge (the first cells of an access
+             lane, which share ground with the lane it leaves), the cells within a slot of each other
+             along one way through a stand, and two cells of one station's region are not boxes.
   stands     none in the zones (see ZONES); the refuel queue and bay, each with a lane to and from it.
   stations   the load point and the dump pad: core, exit buffer, capacity, window, headway.
   work_areas the hull of every other machine's footprint over its whole track.
@@ -54,10 +58,24 @@ CELL_M = 2.0                    # a lane is cut every CELL_M along the line a ma
 # buffer) are counted in slots, whatever the cell length is
 HAULER_LENGTH = qf.FOOT["Hauler"][1] + qf.FOOT["Hauler"][2]
 SLOT_M = round(HAULER_LENGTH + qf.HAULER_CLEARANCE, 3)
-CONFLICT_M = 0.3                # two cells of different lanes whose swept footprints come nearer than this conflict. Not
-                                # HAULER_CLEARANCE: the two lanes of a 12.5 m road are 1.1 m apart at the least offset and
-                                # must not conflict (an opposing machine never holds), while 0.3 m is the air the model checker's
-                                # conflict table kept
+# The thresholds below are written into the file (its "rules" block) and the C# checks read them from it: nothing about the site is a
+# constant of the checker. Two cells of different lanes conflict when their swept hauler footprints come nearer than the threshold of
+# the pair's class. Haul lanes (the loop and the two lanes of each wide road) are held to a metre of air, the air the roads are laid
+# out with; the refuel bay's lanes turn at TURN_M and cannot keep a metre from the lane they leave and join, so a pair with one of
+# them is held to the 0.3 m the design's prototype used. (Not HAULER_CLEARANCE, the 2.5 m two trucks keep end to end: the opposing
+# lanes of a 12.5 m road are about a metre apart, which is the air they are drawn with.) Two cells of one lane, or of one stand's way
+# through it, are a machine and the one following it while they are within a slot of each other along the way (the neighbour span:
+# the follower rule keeps them apart); further apart than that they conflict only if they overlap, because a follower a slot behind
+# keeps what air the bend leaves it, and a lane that folds back over itself does not leave it any.
+RULES = dict(
+    conflict_haul_m=1.0,        # a pair of cells of two haul lanes (loop or road)
+    conflict_access_m=0.3,      # a pair with a cell of an access lane (the bay's)
+    conflict_same_route_m=0.0,  # a pair of cells of one lane, or of one stand's way through it, beyond the neighbour span
+    pose_step_m=0.25,           # a cell off the loop is swept by a hauler posed at most this far apart along it ...
+    pose_step_deg=1.0,          # ... and turned at most this much between poses (see cell_poses for the error this leaves)
+    diverge_window=12,          # cells either side of an exit that the lane leaving shares ground with
+    diverge_max=40,             # and the most cells of that lane that may
+)
 STAND_CLEAR_M = qf.STAND_AIR    # a stand's footprint keeps this from every lane, sweep, box and obstacle
 WORK_CLEAR_M = 1.5              # and a lane keeps it from another machine's work area
 GRADE_MAX = qf.GRADE_MAX_PCT
@@ -153,9 +171,45 @@ def sat_gap(a, b):
     return best
 
 
-def group_gap(ga, gb):
-    """The smallest separation between two groups of convex polygons."""
-    return min(sat_gap(p, q) for p in ga for q in gb)
+def _point_segment(px, pz, ax, az, bx, bz):
+    sx, sz = bx - ax, bz - az
+    l2 = sx * sx + sz * sz
+    t = 0.0 if l2 <= 0 else max(0.0, min(1.0, ((px - ax) * sx + (pz - az) * sz) / l2))
+    return math.hypot(px - (ax + t * sx), pz - (az + t * sz))
+
+
+def _separated(a, b):
+    """The distance between two convex polygons known not to overlap: the nearest corner of either to an edge of the other."""
+    best = 1e9
+    for p, q in ((a, b), (b, a)):
+        for i in range(len(q)):
+            c, d = q[i], q[(i + 1) % len(q)]
+            for pt in p:
+                best = min(best, _point_segment(pt[0], pt[1], c[0], c[1], d[0], d[1]))
+    return best
+
+
+def polygon_distance(a, b):
+    """The clear distance between two convex polygons (Euclidean: the nearest point of one to the other), negative when they overlap (then
+    sat_gap's depth). sat_gap alone answers with the gap along the best EDGE normal, which is less than the true distance where two
+    polygons face each other corner to corner; every comparison of ground in these checks is this distance."""
+    g = sat_gap(a, b)
+    return g if g <= 0.0 else _separated(a, b)
+
+
+def group_gap(ga, gb, limit=1e9):
+    """The smallest distance between two groups of convex polygons (polygon_distance). It is exact when it is less than `limit`; otherwise it
+    is `limit` or more (the edge-normal gap, which is never more than the distance, is enough to rule a pair out)."""
+    best = 1e9
+    for p in ga:
+        for q in gb:
+            s = sat_gap(p, q)
+            if s >= best or s >= limit:
+                continue
+            e = s if s <= 0.0 else _separated(p, q)
+            if e < best:
+                best = e
+    return min(best, limit) if limit < 1e9 else best
 
 
 def center_radius(group):
@@ -189,18 +243,52 @@ def hull(points):
 # lanes
 # ==================================================================================
 class Lane:
-    """A directed lane: its cells in travel order, [x0, z0, x1, z1] (the loop's also carry t0, the track time at the cell's start)."""
+    """A directed lane: its cells in travel order, [x0, z0, x1, z1] (the loop's also carry t0, the track time at the cell's start).
+    `span` is the along-lane distance within which two cells of the lane are one machine's business (the follower rule's), not a conflict."""
 
-    def __init__(self, lid, kind, cells, cyclic=False, **meta):
+    def __init__(self, lid, kind, cells, cyclic=False, span=None, **meta):
         self.id, self.kind, self.cells, self.cyclic = lid, kind, cells, cyclic
+        self.span = span
         self.meta = meta
         self._boxes = {}
+        self._arc = None
 
     def __len__(self):
         return len(self.cells)
 
     def length(self):
         return sum(math.hypot(c[2] - c[0], c[3] - c[1]) for c in self.cells)
+
+    def arc(self):
+        """The arc length from the lane's first cell's start to the start of each cell, and the lane's length: ([s0, s1, ...], total)."""
+        if self._arc is None:
+            s, out = 0.0, []
+            for c in self.cells:
+                out.append(s)
+                s += math.hypot(c[2] - c[0], c[3] - c[1])
+            self._arc = (out, s)
+        return self._arc
+
+    def along(self, a, b):
+        """How far apart cells a and b are along the lane (the shorter way round on the cyclic loop)."""
+        s, total = self.arc()
+        d = abs(s[a] - s[b])
+        return min(d, total - d) if self.cyclic else d
+
+
+def haul_lane(kind):
+    return kind in ("loop", "road")
+
+
+def conflict_m(rules, kind_a, kind_b):
+    """The threshold a pair of cells is held to: a metre between two haul lanes, 0.3 m when either is an access lane."""
+    return rules["conflict_haul_m"] if haul_lane(kind_a) and haul_lane(kind_b) else rules["conflict_access_m"]
+
+
+def neighbour_span(rules, kind):
+    """The along-lane distance within which two cells of one lane are a machine and its follower, not a conflict: a slot, the spacing the
+    follower rule keeps (on a straight lane the footprints of cells a slot apart are 0.5 m apart, clear)."""
+    return SLOT_M
 
 
 def cut_cells(pts, cell=CELL_M):
@@ -273,9 +361,29 @@ def _dedupe(poses):
     return out
 
 
-def cell_poses(lane, k, inputs):
-    """The poses a hauler takes crossing cell k: on the loop, every frame of the track from the cell's start to the next cell's
-    (the whole standing stop included, the heading it turns through too); on any other lane, its two ends facing the way the cell points."""
+def cell_tangents(lane, k):
+    """The headings (degrees clockwise from north) a hauler points at the start and at the end of cell k: along the line through the
+    neighbouring vertices of the lane (a central difference, the tangent of a circle cut at equal steps), and along the cell itself where
+    the lane ends. A cell is a chord of a curve; its two ends do not point the way the chord does."""
+    cells = lane.cells
+    c = cells[k]
+    chord = qf.heading_of(c[2] - c[0], c[3] - c[1])
+    h0 = qf.heading_of(c[2] - cells[k - 1][0], c[3] - cells[k - 1][1]) if k > 0 else chord
+    h1 = qf.heading_of(cells[k + 1][2] - c[0], cells[k + 1][3] - c[1]) if k + 1 < len(cells) else chord
+    return h0, h1
+
+
+def cell_poses(lane, k, inputs, rules=RULES):
+    """The poses a hauler takes crossing cell k. On the loop, every frame of the track from the cell's start to the next cell's (the whole
+    standing stop included, the heading it turns through too). On any other lane, poses along the cell at most rules.pose_step_m apart and
+    turned at most rules.pose_step_deg between poses, each at the tangent heading (cell_tangents) turned evenly between the cell's two ends.
+
+    The swept footprint is the hull of each box over each pair of consecutive poses (swept). The hull of a box turned through a step covers
+    a little more than the box sweeps (about the hauler's half width times the step angle, over two): the gap the checks read is never more
+    than the gap to the continuous sweep and at most 0.03 m less (measured against poses 0.05 m and 0.1 degrees apart, over the 1200
+    sampled pairs nearest a threshold: the worst difference is 0.022 m, a pair of 1.585 m read for 1.607 m), and the true sweep pokes out
+    of the hull by an arc's sagitta, 0.001 m. A conflict is therefore never missed by this, and a pair may read up to 0.03 m nearer than it is.
+    """
     c = lane.cells[k]
     if lane.kind == "loop":
         fl = inputs.live
@@ -290,30 +398,58 @@ def cell_poses(lane, k, inputs):
             i += 1
         poses.append(pose_at(tr, dt, min(t1, tr["period"] - 1e-6)))
         return _dedupe(poses)
-    h = qf.heading_of(c[2] - c[0], c[3] - c[1])
-    return [(c[0], c[1], h), (c[2], c[3], h)]
+    h0, h1 = cell_tangents(lane, k)
+    dh = qf.wrap(h1 - h0)
+    ln = math.hypot(c[2] - c[0], c[3] - c[1])
+    n = max(1, int(math.ceil(ln / rules["pose_step_m"] - 1e-9)), int(math.ceil(abs(dh) / rules["pose_step_deg"] - 1e-9)))
+    return [(c[0] + (c[2] - c[0]) * i / n, c[1] + (c[3] - c[1]) * i / n, (h0 + dh * i / n) % 360.0) for i in range(n + 1)]
 
 
-def cell_group(lane, k, inputs):
-    """The swept footprint of cell k: the hauler's boxes at each pose of cell_poses. Cached on the lane."""
+def swept(at_poses):
+    """The ground a machine covers over a run of poses, as convex polygons: for each of its boxes, the hull of that box at one pose and the next
+    (what a box passes over turning and moving between the two, to the arc its far corner takes: 6 m x (1 - cos 1 degree) = 0.001 m at the
+    steps RULES allows). Several boxes of one pose and a single pose give the boxes as they are."""
+    if len(at_poses) == 1:
+        return at_poses[0]
+    return [hull(at_poses[i][b] + at_poses[i + 1][b]) for i in range(len(at_poses) - 1) for b in range(len(at_poses[i]))]
+
+
+_GROUPS = {}
+
+
+def cell_group(lane, k, inputs, rules=RULES):
+    """The swept footprint of cell k: the hauler's boxes at each pose of cell_poses. Cached on the lane, and across lanes by what the
+    poses depend on (the cell and the two beside it; on the loop its track time and the next cell's)."""
     g = lane._boxes.get(k)
     if g is None:
-        g = [b for p in cell_poses(lane, k, inputs) for b in boxes("Hauler", *p)]
+        cells = lane.cells
+        if lane.kind == "loop":
+            dep = (cells[k][4], cells[k + 1][4] if k + 1 < len(cells) else None)
+        else:
+            dep = tuple(tuple(cells[j]) if 0 <= j < len(cells) else None for j in (k - 1, k, k + 1))
+        key = (id(inputs.live), lane.kind, tuple(sorted(rules.items())), dep)
+        g = _GROUPS.get(key)
+        if g is None:
+            g = swept([boxes("Hauler", *p) for p in cell_poses(lane, k, inputs, rules)])
+            _GROUPS[key] = g
         lane._boxes[k] = g
     return g
 
 
-def conflicts(lanes, inputs, only=None, threshold=CONFLICT_M):
-    """Every pair of cells of two different lanes whose swept footprints come nearer than `threshold`: {((lane, k), (lane, k)): gap}.
-    `only` limits the pairs to those with at least one cell on a lane of that set."""
+def conflicts(lanes, inputs, rules=RULES, reach=None):
+    """Every pair of cells whose swept footprints come nearer than the threshold of the pair's class (conflict_m), as
+    {((lane, k), (lane, k)): gap}: of two different lanes, and of one lane when they are further apart along it than its neighbour
+    span (nearer than that they are a machine and its follower, which the follower rule keeps apart) and overlap. `reach` lists the pairs
+    nearer than that instead (to measure how near the pairs that do not conflict come)."""
     items = []
     for lane in lanes:
         for k in range(len(lane)):
-            g = cell_group(lane, k, inputs)
-            items.append((lane.id, k, g) + center_radius(g))
+            g = cell_group(lane, k, inputs, rules)
+            items.append((lane, k, g) + center_radius(g))
     grid = {}
     for n, it in enumerate(items):
         grid.setdefault((int(it[3] // 30), int(it[4] // 30)), []).append(n)
+    far = max(rules["conflict_haul_m"], rules["conflict_access_m"], rules["conflict_same_route_m"], reach or 0.0)
     out = {}
     for n, it in enumerate(items):
         gx, gz = int(it[3] // 30), int(it[4] // 30)
@@ -323,15 +459,19 @@ def conflicts(lanes, inputs, only=None, threshold=CONFLICT_M):
                     if m <= n:
                         continue
                     jt = items[m]
-                    if it[0] == jt[0]:
+                    if it[0] is jt[0] and it[0].along(it[1], jt[1]) <= it[0].span:
                         continue
-                    if only is not None and it[0] not in only and jt[0] not in only:
+                    if reach is not None:
+                        thr = reach
+                    elif it[0] is jt[0]:
+                        thr = rules["conflict_same_route_m"]
+                    else:
+                        thr = conflict_m(rules, it[0].kind, jt[0].kind)
+                    if math.hypot(it[3] - jt[3], it[4] - jt[4]) > it[5] + jt[5] + far:
                         continue
-                    if math.hypot(it[3] - jt[3], it[4] - jt[4]) > it[5] + jt[5] + threshold:
-                        continue
-                    gap = group_gap(it[2], jt[2])
-                    if gap < threshold:
-                        out[((it[0], it[1]), (jt[0], jt[1]))] = gap
+                    gap = group_gap(it[2], jt[2], thr)
+                    if gap < thr:
+                        out[((it[0].id, it[1]), (jt[0].id, jt[1]))] = gap
     return out
 
 
@@ -451,13 +591,20 @@ BAY = dict(queue=("refuel-queue", (-59.5, -64.0, 0.0)), bay=("refuel-bay", (-59.
            join=(-16.7, -26.9), program_out=[("S", 6), ("R", 22.5), ("S", 7.5), ("L", 22.5), ("S", 2.5), ("R", 22.5), ("S", 7.5), ("R", 67.5), ("S", 2.5), ("R", 22.5), ("L", 22.5), ("S", 25), ("R", 0.38), ("S", 0.6), ("L", 3.97)])
 
 # EXEMPT: what a lane or a stand is held to is not everything standing: the refuel bay's own approach, tank and cones are what it
-# is laid out between (quarry_fleet.WORKS_AT says the same of the scripted visit), and that visit's track is the bay's own.
+# is laid out between (quarry_fleet.WORKS_AT says the same of the scripted visit), and that visit's track is the bay's own. The cones
+# are the bay's cone line (seven cones 3 m apart down x = -55.6, 9.0 m either side of its middle), named by that line, not by a radius
+# round the bay that would exempt any other cone that came to stand near it.
+CONE_LINE = (-55.6, -55.0)      # the middle of the cone line
+CONE_LINE_RADIUS_M = 9.5        # the cone line's half length (9 m) and a cone's half width
 EXEMPT = [
     dict(to=who, obstacle="refuel-approach", spot=None, radius_m=0.0)
     for who in ("access/bay/in", "access/bay/hop", "access/bay/out", "refuel-queue", "refuel-bay")
 ] + [
-    dict(to=who, obstacle=ob, spot=(-59.5, -56.5), radius_m=14.0)
-    for who, ob in (("refuel-queue", "fuel_tank"), ("refuel-queue", "cone"), ("refuel-bay", "fuel_tank"), ("refuel-bay", "cone"), ("access/bay/out", "cone"))
+    dict(to=who, obstacle="fuel_tank", spot=(-66.5, -56.5), radius_m=0.5)
+    for who in ("refuel-queue", "refuel-bay")
+] + [
+    dict(to=who, obstacle="cone", spot=CONE_LINE, radius_m=CONE_LINE_RADIUS_M)
+    for who in ("refuel-queue", "refuel-bay", "access/bay/out")
 ] + [dict(to=who, machine="SP-HL-0006") for who in ("refuel-queue", "refuel-bay")]
 EXEMPT_ROWS = [dict(e, spot=list(e["spot"])) if e.get("spot") else e for e in EXEMPT]
 
@@ -470,11 +617,9 @@ ROAD_LANES = [                  # the lane the haul loop does NOT drive on each 
     ("road/fill-return/east", "fill-return", True, 0.0, 8.0),       # it starts 8 m on, clear of the barrier line's end
     ("road/yard-road/west", "yard-road", True, 24.0, 0.0),
 ]
-DIVERGE_WINDOW = 12             # cells either side of an exit that the lane leaving shares ground with
-DIVERGE_MAX = 40                # and the most cells of that lane that may
 ROOM_CELLS = int(math.ceil(SLOT_M / CELL_M))     # a granted machine needs a slot to stand in beyond a box
-PLACES = [("ramp-top", (72.0, -13.0)), ("pad-gate", (91.0, -42.0)), ("pad-south", (81.0, -68.0)),
-          ("yard-corner", (-46.0, -58.0)), ("yard-north", (-47.0, -36.0))]
+PLACES = [("load-exit", (28.0, 31.5)), ("ramp-bottom", (-22.0, 15.0)), ("ramp-top", (72.0, -13.0)), ("pad-gate", (91.0, -42.0)),
+          ("pad-south", (81.0, -68.0)), ("yard-corner", (-46.0, -58.0)), ("yard-north", (-47.0, -36.0))]
 
 
 def r3(v):
@@ -485,6 +630,8 @@ def round_lane(lane):
     """The lane as it is written: every number to a millimetre. Everything derived afterwards reads these, so the file and the checks agree."""
     lane.cells = [[r3(v) for v in c] for c in lane.cells]
     lane._boxes = {}
+    lane._arc = None
+    lane.span = neighbour_span(RULES, lane.kind)
     return lane
 
 
@@ -539,7 +686,7 @@ def build_lanes(inputs):
         li = program_lane("access/%s/in" % s["id"], parent_pose(loop, e), s["program_in"], s["pose"], "its stand")
         lo = program_lane("access/%s/out" % s["id"], s["pose"], s["program_out"], parent_pose(loop, j), "the loop")
         lanes += [round_lane(li), round_lane(lo)]
-        stands.append(dict(id=s["id"], zone=s["zone"], kinds=list(s["kinds"]), pose=[r3(v) for v in s["pose"]], **{"in": li.id, "out": lo.id}))
+        stands.append(dict(id=s["id"], role="zone", zone=s["zone"], kinds=list(s["kinds"]), pose=[r3(v) for v in s["pose"]], **{"in": li.id, "out": lo.id}))
         exits.append(dict(id="exit-" + s["id"], lane="loop", cell=e, to=li.id))
         pend.append(dict(id="entry-" + s["id"], frm=lo.id, lane="loop", cell=j))
     bay = None
@@ -551,8 +698,8 @@ def build_lanes(inputs):
         hop = program_lane("access/bay/hop", q[1], BAY["program_hop"], b[1], "the bay")
         lo = program_lane("access/bay/out", b[1], BAY["program_out"], parent_pose(loop, j), "the loop")
         lanes += [round_lane(li), round_lane(hop), round_lane(lo)]
-        stands.append(dict(id=q[0], zone="sp-zone-yard", kinds=["Hauler"], pose=[r3(v) for v in q[1]], **{"in": li.id, "out": hop.id}))
-        stands.append(dict(id=b[0], zone="sp-zone-yard", kinds=["Hauler"], pose=[r3(v) for v in b[1]], **{"in": hop.id, "out": lo.id}))
+        stands.append(dict(id=q[0], role="service", zone="sp-zone-yard", kinds=["Hauler"], pose=[r3(v) for v in q[1]], **{"in": li.id, "out": hop.id}))
+        stands.append(dict(id=b[0], role="service", zone="sp-zone-yard", kinds=["Hauler"], pose=[r3(v) for v in b[1]], **{"in": hop.id, "out": lo.id}))
         exits.append(dict(id="exit-bay", lane="loop", cell=e, to=li.id))
         pend.append(dict(id="entry-bay", frm=lo.id, lane="loop", cell=j))
         bay = {"queue": q[0], "bay": b[0], "in": li.id, "hop": hop.id, "out": lo.id}
@@ -579,40 +726,66 @@ def chain_coords(lanes_by_id, chain):
     return out
 
 
-def classify_conflicts(lanes, inputs, exits, stands, bay):
-    """Every conflict between two lanes, and what covers it. A conflict is covered when it is a diverge (the first cells of an access
-    lane run with the lane it leaves) or the lanes through one stand, within a slot of each other along the way through it (one machine's way through, and the
-    spacing a following truck keeps). Returns (uncovered, exits with `shared` filled in)."""
+def route_index(lanes_by_id, chains):
+    """{(lane, cell): [(chain, arc length along it to the middle of the cell)]} for every cell of every stand's way through."""
+    out = {}
+    for chain in chains:
+        for key, v in chain_coords(lanes_by_id, chain).items():
+            out.setdefault(key, []).append((tuple(chain), v))
+    return out
+
+
+def station_regions(stations, lanes_by_id):
+    """[(station id, lane id, set of cell indices)]: the cells a station's trucks are timed through, its core and its exit buffer. V4 measures
+    two trucks there at every headway, so a pair of cells of the lane that both lie in one region is held by the station."""
+    out = []
+    for st in stations:
+        n = len(lanes_by_id[st["lane"]])
+        out.append((st["id"], st["lane"], set(run_cells(st["core"], n)) | set(run_cells(st["buffer"], n))))
+    return out
+
+
+def covering(a, b, gap, lanes_by_id, routes, regions, exits, rules):
+    """What holds a conflict between cells a and b (each (lane, cell)) other than a junction box, or None when only a box can:
+    ("route",) the two are on one stand's way through it, within a neighbour span of each other along it or not overlapping; ("station", id)
+    both lie in one station's region on its lane; ("diverge", exit id, cell) one is on the lane leaving an exit, in the part it shares with
+    the lane it leaves. The one definition the generator and the check share."""
+    span = lanes_by_id[a[0]].span
+    for ca, sa in routes.get(a, ()):
+        for cb, sb in routes.get(b, ()):
+            if ca == cb and (abs(sa - sb) <= span or gap >= rules["conflict_same_route_m"]):
+                return ("route",)
+    if a[0] == b[0]:
+        for sid, lid, cells in regions:
+            if lid == a[0] and a[1] in cells and b[1] in cells:
+                return ("station", sid)
+    for ex in exits:
+        for x, y in ((a, b), (b, a)):
+            if (x[0] == ex["to"] and y[0] == ex["lane"] and x[1] < ex.get("shared", 1 << 30)
+                    and cyc_dist(y[1], ex["cell"], len(lanes_by_id[ex["lane"]])) <= rules["diverge_window"]):
+                return ("diverge", ex["id"], x[1])
+    return None
+
+
+def classify_conflicts(lanes, inputs, exits, stands, bay, stations):
+    """Every conflict between two cells, and what covers it. Returns (uncovered, exits with `shared` filled in): the uncovered ones are what
+    the junction boxes are built to hold."""
     by_id = {l.id: l for l in lanes}
     cf = conflicts(lanes, inputs)
-    coords = {}
-    for chain in stand_chains(stands, bay):
-        c = chain_coords(by_id, chain)
-        for key, v in c.items():
-            coords.setdefault(key, []).append((tuple(chain), v))
+    routes = route_index(by_id, stand_chains(stands, bay))
+    regions = station_regions(stations, by_id)
     uncovered, diverge = {}, {}
     for (a, b), gap in cf.items():
-        same_chain = False
-        for ca, sa in coords.get(a, ()):
-            for cb, sb in coords.get(b, ()):
-                if ca == cb and abs(sa - sb) <= SLOT_M:
-                    same_chain = True
-        if same_chain:
-            continue
-        hit = None
-        for ex in exits:
-            for x, y in ((a, b), (b, a)):
-                if x[0] == ex["to"] and y[0] == ex["lane"] and cyc_dist(y[1], ex["cell"], len(by_id[ex["lane"]])) <= DIVERGE_WINDOW:
-                    hit = (ex["id"], x[1])
-        if hit:
-            diverge.setdefault(hit[0], []).append(hit[1])
-            continue
-        uncovered[(a, b)] = gap
+        hit = covering(a, b, gap, by_id, routes, regions, exits, RULES)
+        if hit and hit[0] == "diverge":
+            diverge.setdefault(hit[1], []).append(hit[2])
+        elif not hit:
+            uncovered[(a, b)] = gap
     out = []
     for ex in exits:
         shared = 1 + max(diverge.get(ex["id"], [-1]))
-        if shared > DIVERGE_MAX:
-            raise SystemExit("%s: the lane leaving shares ground with the loop for %d cells (at most %d)" % (ex["id"], shared, DIVERGE_MAX))
+        if shared > RULES["diverge_max"]:
+            raise SystemExit("%s: the lane leaving shares ground with the loop for %d cells (at most %d)" % (ex["id"], shared, RULES["diverge_max"]))
         out.append(dict(ex, shared=shared))
     return uncovered, out
 
@@ -665,14 +838,33 @@ def build_junctions(lanes, uncovered):
     for node in sorted(parent):
         comps.setdefault(find(node), []).append(node)
     order = {l.id: i for i, l in enumerate(lanes)}
-    out, used = [], {}
-    for nodes in sorted(comps.values(), key=lambda ns: min((order[n[0]], n[1]) for n in ns)):
+
+    def shape(nodes):
         pts = []
         for lid, k in nodes:
             c = by_id[lid].cells[k]
             pts += [(c[0], c[1]), (c[2], c[3])]
         poly = box_polygon(pts)
-        members = members_of(poly, lanes)
+        return poly, members_of(poly, lanes)
+    # two clusters whose boxes would hold a cell in common are one box: a cell is in one box's members or another's, never both, or the
+    # machine on it would be asking two boxes for the same ground
+    groups = [sorted(ns) for ns in comps.values()]
+    shapes = [shape(ns) for ns in groups]
+    merged = True
+    while merged:
+        merged = False
+        for i in range(len(groups)):
+            for j in range(i + 1, len(groups)):
+                if any(set(shapes[i][1][lid]) & set(cells) for lid, cells in shapes[j][1].items() if lid in shapes[i][1]):
+                    groups[i] = sorted(groups[i] + groups[j])
+                    shapes[i] = shape(groups[i])
+                    del groups[j], shapes[j]
+                    merged = True
+                    break
+            if merged:
+                break
+    out, used = [], {}
+    for nodes, (poly, members) in sorted(zip(groups, shapes), key=lambda gs: min((order[n[0]], n[1]) for n in gs[0])):
         heads = [abs(qf.wrap(heading_of_cell(by_id[a[0]], a[1]) - heading_of_cell(by_id[b[0]], b[1]))) for a, b in uncovered if a in nodes]
         worst = max(heads)
         kind = "merge" if worst < 60.0 else "crossing" if worst < 135.0 else "oncoming"
@@ -682,8 +874,9 @@ def build_junctions(lanes, uncovered):
         if outs:
             base = "merge-" + outs[0].split("/")[1]
         else:
-            place = min(PLACES, key=lambda p: math.hypot(p[1][0] - cx, p[1][1] - cz))
-            base = "%s-%s" % (kind, place[0])
+            radius = max(math.hypot(p[0] - cx, p[1] - cz) for p in poly)
+            inside = [p[0] for p in PLACES if math.hypot(p[1][0] - cx, p[1][1] - cz) <= radius]
+            base = "%s-%s" % (kind, "+".join(inside) if inside else min(PLACES, key=lambda p: math.hypot(p[1][0] - cx, p[1][1] - cz))[0])
         used[base] = used.get(base, 0) + 1
         jid = base if used[base] == 1 else "%s-%d" % (base, used[base])
         mem, appr, room = [], [], []
@@ -774,9 +967,12 @@ class Topo:
 
     def __init__(self, d):
         self.d = d
+        self.rules = d["rules"]
         self.lanes = []
         for l in d["lanes"]:
-            self.lanes.append(Lane(l["id"], l["kind"], l["cells"], cyclic=l["cyclic"]))
+            if l["kind"] == "loop" and not l["cyclic"]:
+                raise ValueError("the topology's loop lane %s is not cyclic: the capacity checks would pass vacuously" % l["id"])
+            self.lanes.append(Lane(l["id"], l["kind"], l["cells"], cyclic=l["cyclic"], span=l["neighbour_span_m"]))
         self.by = {l.id: l for l in self.lanes}
         self.loop = self.by["loop"]
         self.stands = {s["id"]: s for s in d["stands"]}
@@ -795,12 +991,17 @@ def lane_length(lane):
     return sum(math.hypot(c[2] - c[0], c[3] - c[1]) for c in lane.cells)
 
 
+def obstacle_center(o):
+    """A point in an obstacle, as an exemption names it: a box's middle, a capsule's."""
+    return (o[2], o[3]) if o[0] == "box" else ((o[2] + o[4]) / 2.0, (o[3] + o[5]) / 2.0)
+
+
 def exempt_for(d, who):
     return [e for e in d["exempt"] if e["to"] == who]
 
 
 def is_exempt(d, who, o_name, x, z):
-    """Whether `who` (a lane or stand id) is not held to the outline called `o_name` at (x, z): the table says so (EXEMPT)."""
+    """Whether `who` (a lane or stand id) is not held to the outline called `o_name` whose middle is (x, z): the table says so (EXEMPT)."""
     for e in exempt_for(d, who):
         if e.get("obstacle") != o_name:
             continue
@@ -814,7 +1015,9 @@ def is_exempt(d, who, o_name, x, z):
 # ==================================================================================
 def obstacle_gap(o, group):
     """Clear distance between a footprint (a group of convex polygons) and an obstacle; negative when they overlap. A box prop is judged
-    at the worse of its two possible turns, as quarry_fleet.footprint_gap does."""
+    at the worse of its two possible turns, as quarry_fleet.footprint_gap does, but by the true distance (polygon_distance), not the gap
+    along an edge normal: that is what the C# checks measure (sampling the footprint's edges against the outline), the two agreeing to
+    well under a centimetre (the C# side samples every 0.1 m: at most 0.1^2 / 8 / 1.5 m = 1 mm of overestimate at the distances held)."""
     if o[0] == "capsule":
         return min(qf._poly_seg_gap(q, o[2], o[3], o[4], o[5]) - o[6] for q in group)
     cx, cz, hx, hz, hd = o[2], o[3], o[4], o[5], o[6]
@@ -823,7 +1026,7 @@ def obstacle_gap(o, group):
         h = math.radians(hd) * sign
         c, s = math.cos(h), math.sin(h)
         quad = [(cx + lx * c + lz * s, cz - lx * s + lz * c) for lx, lz in ((hx, hz), (hx, -hz), (-hx, -hz), (-hx, hz))]
-        worst = min(worst, min(sat_gap(q, quad) for q in group))
+        worst = min(worst, min(polygon_distance(q, quad) for q in group))
     return worst
 
 
@@ -856,17 +1059,54 @@ def sweep_group(kind, p):
     return [[(float(c[0]), float(c[1])) for c in b] for b in qf.corners(kind, p[0], p[1], p[2], p[3])]
 
 
+def directed_cycles(t):
+    """Every directed cycle of lanes a machine can circulate on: the cyclic lane itself, and for each stand's way through it the cycle that
+    leaves the lane at the stand's exit, drives the way through and rejoins at its entry: [(name, [(lane id, [cells...]), ...])]. A machine
+    goes round such a cycle forever as readily as round the loop, so each must hold everyone that can be on it."""
+    out = []
+    for lane in t.lanes:
+        if lane.cyclic:
+            out.append((lane.id, [(lane.id, list(range(len(lane))))]))
+    for chain in t.chains():
+        ex = next((e for e in t.d["exits"] if e["to"] == chain[0]), None)
+        en = next((e for e in t.d["entries"] if e["from"] == chain[-1]), None)
+        if not ex or not en or ex["lane"] != en["lane"]:
+            continue
+        host = t.by[ex["lane"]]
+        n = len(host)
+        # the host's cells the detour skips: after the exit cell up to and including the entry cell
+        skipped = set()
+        k = (ex["cell"] + 1) % n
+        while True:
+            skipped.add(k)
+            if k == en["cell"] % n:
+                break
+            k = (k + 1) % n
+        out.append(("%s via %s" % (host.id, "/".join(chain)), [(host.id, [k for k in range(n) if k not in skipped])] + [(lid, list(range(len(t.by[lid])))) for lid in chain]))
+    return out
+
+
+def cycle_free_slots(t, cycle):
+    """The slots a cycle holds outside the station cores that lie on it."""
+    length = 0.0
+    for lid, cells in cycle:
+        lane = t.by[lid]
+        core = set()
+        for run in t.core_runs(lid):
+            core.update(run_cells(run, len(lane)))
+        length += sum(math.hypot(lane.cells[k][2] - lane.cells[k][0], lane.cells[k][3] - lane.cells[k][1]) for k in cells if k not in core)
+    return slots(length)
+
+
 def v1_cycle_capacity(t):
-    """V1 (P1): on every cyclic lane the slots outside station cores hold every machine that can be on it, and one more."""
+    """V1 (P1): on every directed cycle (the loop, and each detour through a stand's way through) the slots outside station cores hold every
+    machine that can be on it, and one more."""
     out = []
     nmax = t.d["fleet"]["machines"]
-    for lane in t.lanes:
-        if not lane.cyclic:
-            continue
-        cores = sum(range_len(lane, run) for run in t.core_runs(lane.id))
-        free = slots(lane_length(lane) - cores)
+    for name, cycle in directed_cycles(t):
+        free = cycle_free_slots(t, cycle)
         if free < nmax + 1:
-            out.append("V1 P1: %s has %d slots outside its station cores for %d machines (needs %d)" % (lane.id, free, nmax, nmax + 1))
+            out.append("V1 P1: %s has %d slots outside its station cores for %d machines (needs %d)" % (name, free, nmax, nmax + 1))
     return out
 
 
@@ -891,10 +1131,10 @@ def junction_span(t, junc, lane):
     return taken, run_cells(gap, n)
 
 
-def v2_span_complement(t):
-    """V2 (P2): the complement of every junction's span on a cyclic lane holds everyone who can be on the lane but the requester."""
+def span_complements(t):
+    """[(junction id, lane id, free slots, gap cells)] for every junction on a cyclic lane: the slots the junction's complement holds outside the
+    station cores. The one measurement V2 checks and the report prints."""
     out = []
-    nmax = t.d["fleet"]["machines"]
     for junc in t.junctions:
         for lane in t.lanes:
             if not lane.cyclic or not any(m["lane"] == lane.id for m in junc["members"]):
@@ -905,10 +1145,17 @@ def v2_span_complement(t):
             core = 0.0
             for run in t.core_runs(lane.id):
                 core += sum(math.hypot(lane.cells[k][2] - lane.cells[k][0], lane.cells[k][3] - lane.cells[k][1]) for k in run_cells(run, len(lane)) if k in gapset)
-            free = slots(length - core)
-            if free < nmax - 1:
-                out.append("V2 P2: %s leaves %d slots outside station cores on %s for the %d other machines (needs %d)"
-                           % (junc["id"], free, lane.id, nmax - 1, nmax - 1))
+            out.append((junc["id"], lane.id, slots(length - core), gap))
+    return out
+
+
+def v2_span_complement(t):
+    """V2 (P2): the complement of every junction's span on a cyclic lane holds everyone who can be on the lane but the requester."""
+    out = []
+    nmax = t.d["fleet"]["machines"]
+    for jid, lid, free, _ in span_complements(t):
+        if free < nmax - 1:
+            out.append("V2 P2: %s leaves %d slots outside station cores on %s for the %d other machines (needs %d)" % (jid, free, lid, nmax - 1, nmax - 1))
     return out
 
 
@@ -918,7 +1165,7 @@ def cell_index(t, inputs):
         items = []
         for lane in t.lanes:
             for k in range(len(lane)):
-                g = cell_group(lane, k, inputs)
+                g = cell_group(lane, k, inputs, t.rules)
                 items.append((lane.id, k, g) + center_radius(g))
         t._index = items
     return t._index
@@ -963,9 +1210,9 @@ def stand_gaps(t, inputs, sid, kind):
                 continue
             note("sweep", group_gap(g, sweep_group(tk, p)), "%s fleet track %d (%s)" % (name, ti, "/".join(owners)))
     for j in t.junctions:
-        note("junction", min(sat_gap(b, j["polygon"]) for b in g), j["id"])
+        note("junction", group_gap(g, [j["polygon"]]), j["id"])
     for o in inputs.obstacles:
-        ox, oz = ((o[2], o[3]) if o[0] == "box" else ((o[2] + o[4]) / 2.0, (o[3] + o[5]) / 2.0))
+        ox, oz = obstacle_center(o)
         span = math.hypot(o[4], o[5]) if o[0] == "box" else math.hypot(o[4] - o[2], o[5] - o[3]) / 2.0 + o[6]
         if math.hypot(cx - ox, cz - oz) > r + span + STAND_CLEAR_M or is_exempt(t.d, sid, o[1], ox, oz):
             continue
@@ -980,6 +1227,8 @@ def v3_stands(t, inputs):
     out = []
     idx = cell_index(t, inputs)
     for sid, s in t.stands.items():
+        if not s["kinds"]:
+            out.append("V3 stand %s: it lists no kind of machine, so nothing would be checked of its footprint" % sid)
         for kind in s["kinds"]:
             for what, (gap, where) in sorted(stand_gaps(t, inputs, sid, kind).items()):
                 if gap < STAND_CLEAR_M:
@@ -987,32 +1236,30 @@ def v3_stands(t, inputs):
     ids = sorted(t.stands)
     for i, a in enumerate(ids):
         for b in ids[i + 1:]:
-            if t.bay and {a, b} == {t.bay["queue"], t.bay["bay"]}:
+            if t.bay and {a, b} == {t.bay["queue"], t.bay["bay"]} or not t.stands[a]["kinds"] or not t.stands[b]["kinds"]:
                 continue
             gap = group_gap(stand_group(max(t.stands[a]["kinds"], key=lambda k: qf.FOOT[k][1]), t.stands[a]["pose"]),
                             stand_group(max(t.stands[b]["kinds"], key=lambda k: qf.FOOT[k][1]), t.stands[b]["pose"]))
             if gap < 0.0:
                 out.append("V3 stand %s: overlaps stand %s by %.2f m" % (a, b, -gap))
-    # a stand is driven through: near it (within two slots of its pose) the lanes through it do not conflict beyond a slot of the way through
-    # it. Further off two lanes of one stand may cross: that is a junction like any other, and V5 sees it held
+    # a stand is driven through, never backed out of: along the whole way through it (in, hop, out) the lanes do not conflict beyond a
+    # machine's own length (a follower a slot behind keeps what air the bend leaves it: the lanes may not overlap). A way through that
+    # crosses itself anywhere is a cul-de-sac for whoever waits at the crossing, whether or not a box holds the crossing
     for chain in t.chains():
         coords = chain_coords(t.by, chain)
-        poses, run = [], 0.0
-        for lid in chain[:-1]:
-            run += lane_length(t.by[lid])
-            poses.append(run)
-        near = lambda key: min(abs(coords[key] - p) for p in poses) <= 2.0 * SLOT_M
-        seen = False
-        cells = [(lid, k) for lid in chain for k in range(len(t.by[lid])) if near((lid, k))]
+        span = t.by[chain[0]].span
+        cells = [(lid, k) for lid in chain for k in range(len(t.by[lid]))]
         pos = {(lid, k): (g, cx, cz, r) for lid, k, g, cx, cz, r in idx if lid in chain}
+        thr = t.rules["conflict_same_route_m"]
+        seen = False
         for i, a in enumerate(cells):
             for b in cells[i + 1:]:
-                if a[0] == b[0] or abs(coords[a] - coords[b]) <= SLOT_M:
+                if a[0] == b[0] or abs(coords[a] - coords[b]) <= span:
                     continue
                 ga, gb = pos[a], pos[b]
-                if math.hypot(ga[1] - gb[1], ga[2] - gb[2]) > ga[3] + gb[3] + CONFLICT_M:
+                if math.hypot(ga[1] - gb[1], ga[2] - gb[2]) > ga[3] + gb[3] + thr:
                     continue
-                if group_gap(ga[0], gb[0]) < CONFLICT_M:
+                if group_gap(ga[0], gb[0], thr) < thr:
                     out.append("V3 cul-de-sac: the lanes %s conflict at %s cell %d and %s cell %d, %.0f m apart along the way through"
                                % (" -> ".join(chain), a[0], a[1], b[0], b[1], abs(coords[a] - coords[b])))
                     seen = True
@@ -1146,36 +1393,29 @@ def junction_cells(junc, lane):
 
 
 def v5_boxes(t, inputs):
-    """V5: every conflict between two lanes lies inside one junction box (or is a diverge, or a stand's own way through); no box's members
-    include the approach cell where its own requester waits (a box reaching back over its approach is how two machines come to wait on
-    each other); and a box's members are exactly the cells with an end in its polygon."""
+    """V5: every conflict between two cells lies inside one junction box (or is held by what covers() says: a stand's own way through, a
+    station, a diverge) - including two cells of one lane that are further apart along it than its neighbour span and overlap, which is
+    a lane folding back over itself; no box's members include the approach cell where its own requester waits (a box reaching back over
+    its approach is how two machines come to wait on each other); and a box's members are exactly the cells with an end in its polygon."""
     out = []
     by_junc = {j["id"]: {lid: junction_cells(j, t.by[lid]) for lid in {m["lane"] for m in j["members"]}} for j in t.junctions}
-    chains = {}
-    for chain in t.chains():
-        for key, v in chain_coords(t.by, chain).items():
-            chains.setdefault(key, []).append((tuple(chain), v))
-    cf = conflicts(t.lanes, inputs)
+    routes = route_index(t.by, t.chains())
+    regions = station_regions(t.stations, t.by)
+    cf = conflicts(t.lanes, inputs, t.rules)
     seen = set()
     for (a, b), gap in sorted(cf.items()):
         if any(a[1] in cells.get(a[0], ()) and b[1] in cells.get(b[0], ()) for cells in by_junc.values()):
             continue
-        if any(ca == cb and abs(sa - sb) <= SLOT_M for ca, sa in chains.get(a, ()) for cb, sb in chains.get(b, ())):
-            continue
-        covered = False
-        for ex in t.d["exits"]:
-            for x, y in ((a, b), (b, a)):
-                if x[0] == ex["to"] and y[0] == ex["lane"] and x[1] < ex["shared"] and cyc_dist(y[1], ex["cell"], len(t.by[ex["lane"]])) <= DIVERGE_WINDOW:
-                    covered = True
-        if covered:
+        if covering(a, b, gap, t.by, routes, regions, t.d["exits"], t.rules):
             continue
         key = (a[0], b[0])
         if key in seen:
             continue
         seen.add(key)
         c = t.by[a[0]].cells[a[1]]
-        out.append("V5 conflict: %s cell %d and %s cell %d come within %.2f m of each other at (%.1f, %.1f) and no junction holds both"
-                   % (a[0], a[1], b[0], b[1], gap, c[0], c[1]))
+        same = ", the same lane %.0f m apart along it" % t.by[a[0]].along(a[1], b[1]) if a[0] == b[0] else ""
+        out.append("V5 conflict: %s cell %d and %s cell %d come within %.2f m of each other at (%.1f, %.1f)%s and no junction holds both"
+                   % (a[0], a[1], b[0], b[1], gap, c[0], c[1], same))
     for j in t.junctions:
         for ap in j["approach"]:
             lane = t.by[ap["lane"]]
@@ -1200,8 +1440,11 @@ def lane_points(lane):
 
 
 def v6_drivable(t, inputs):
-    """V6: every lane's driven line is within the grade limit a planned route is held to (12 % over 10 m, and its step rule), and clear of every
-    outline by the reach a driving hauler keeps (3.2 m), except what the table says a lane is laid out between."""
+    """V6: every lane's driven line is within the grade limit a planned route is held to (12 % over 10 m, and its step rule), and every
+    pose a hauler takes along it (every pose of cell_poses: each cell's start, its middle where the cell is long or turns, its end, and on
+    the loop every frame of the track) is clear of every outline by the reach a driving hauler keeps (TRAVEL_REACH: its half width and the
+    air kept, 3.2 m - the task layer's own rule for a driving machine, which the lanes are held to), except what the table says a lane is
+    laid out between."""
     out = []
     for lane in t.lanes:
         xs, zs = lane_points(lane)
@@ -1209,13 +1452,14 @@ def v6_drivable(t, inputs):
         if worst[0] > GRADE_MAX + 1e-9:
             out.append("V6 grade: %s climbs %.2f %% sustained at (%.1f, %.1f); a planned route is held to %.0f %%" % (lane.id, worst[0], worst[2], worst[3], GRADE_MAX))
         near = {}
-        for k, c in enumerate(lane.cells):
-            for o in inputs.obstacles:
-                d = qf.obstacle_distance(o, c[0], c[1])
-                if d >= TRAVEL_REACH or is_exempt(t.d, lane.id, o[1], c[0], c[1]):
-                    continue
-                if o[1] not in near or d < near[o[1]][0]:
-                    near[o[1]] = (d, k, c[0], c[1])
+        for k in range(len(lane)):
+            for p in cell_poses(lane, k, inputs, t.rules):
+                for o in inputs.obstacles:
+                    d = qf.obstacle_distance(o, p[0], p[1])
+                    if d >= TRAVEL_REACH or is_exempt(t.d, lane.id, o[1], *obstacle_center(o)):
+                        continue
+                    if o[1] not in near or d < near[o[1]][0]:
+                        near[o[1]] = (d, k, p[0], p[1])
         for name, (d, k, x, z) in sorted(near.items()):
             out.append("V6 reach: %s cell %d comes %.2f m from %s at (%.1f, %.1f); a driving hauler keeps %.1f m" % (lane.id, k, d, name, x, z, TRAVEL_REACH))
     return out
@@ -1246,12 +1490,14 @@ def v7_fresh(t, inputs):
 
 
 def v8_zones(t, inputs):
-    """V8: every zone has a stand for each kind goto-area may send there, inside the zone."""
+    """V8: every zone has a stand for each kind goto-area may send there, inside the zone. Only a zone stand counts: the refuel queue and bay
+    are service stands (a machine goes there to be refuelled, on the way round, and does not stay), so a zone is not covered by the yard
+    having one."""
     out = []
     rects = {z["token"]: z for z in inputs.feats["zones"]}
     for z in t.d["zones"]:
         for kind in z["kinds"]:
-            if not any(s["zone"] == z["token"] and kind in s["kinds"] for s in t.stands.values()):
+            if not any(s["zone"] == z["token"] and s["role"] == "zone" and kind in s["kinds"] for s in t.stands.values()):
                 out.append("V8 zone: %s has no stand for a %s" % (z["token"], kind))
     for sid, s in t.stands.items():
         zr = rects[s["zone"]]
@@ -1282,7 +1528,7 @@ def v9_work_areas(t, inputs):
         for lid, k, g, cx, cz, r in idx:
             if (wa["machine"], lid, k) in exempt:
                 continue
-            gap = min(sat_gap(b, poly) for b in g)
+            gap = group_gap(g, [poly])
             keep = 0.0 if lid == "loop" else WORK_CLEAR_M
             if gap < keep and (lid not in near or gap < near[lid][0]):
                 near[lid] = (gap, k, keep)
@@ -1290,7 +1536,7 @@ def v9_work_areas(t, inputs):
             out.append("V9 work area: %s cell %d is %.2f m from %s's work area (%.1f m is kept)" % (lid, k, gap, wa["machine"], keep))
         for sid, s in t.stands.items():
             for kind in s["kinds"]:
-                gap = min(sat_gap(b, poly) for b in stand_group(kind, s["pose"]))
+                gap = group_gap(stand_group(kind, s["pose"]), [poly])
                 if gap < WORK_CLEAR_M:
                     out.append("V9 work area: stand %s (%s) is %.2f m from %s's work area (%.1f m is kept)" % (sid, kind, gap, wa["machine"], WORK_CLEAR_M))
     return out
@@ -1313,7 +1559,7 @@ def run_checks(t, inputs, only=None):
 # assembling the file
 # ==================================================================================
 def lane_row(lane):
-    row = {"id": lane.id, "kind": lane.kind, "cyclic": lane.cyclic}
+    row = {"id": lane.id, "kind": lane.kind, "cyclic": lane.cyclic, "neighbour_span_m": lane.span}
     for key in ("track", "road"):
         if key in lane.meta:
             row[key] = lane.meta[key]
@@ -1325,7 +1571,8 @@ def assemble(inputs):
     """The topology of the site as the file will hold it, with every check run on it: (dict, defects)."""
     lanes, stands, exits, pend, bay = build_lanes(inputs)
     loop = lanes[0]
-    uncovered, exits = classify_conflicts(lanes, inputs, exits, stands, bay)
+    stations = build_stations(inputs, loop)
+    uncovered, exits = classify_conflicts(lanes, inputs, exits, stands, bay, stations)
     junctions = build_junctions(lanes, uncovered)
     by_id = {l.id: l for l in lanes}
     entries = []
@@ -1335,10 +1582,10 @@ def assemble(inputs):
         entries.append(dict(id=p["id"], **{"from": p["frm"]}, lane=p["lane"], cell=p["cell"], junction=jid))
     fl = inputs.live
     fleet = dict(loop_trucks=sum(1 for m in fl["machines"] if m["track"] == 0), machines=len(fl["machines"]), period_s=r3(fl["tracks"][0]["period"]))
-    d = dict(generator="ArtSource/terrain/quarry_topology.py", source=inputs.hashes(), cell_m=CELL_M, slot_m=SLOT_M, fleet=fleet,
+    d = dict(generator="ArtSource/terrain/quarry_topology.py", source=inputs.hashes(), cell_m=CELL_M, slot_m=SLOT_M, rules=dict(RULES), fleet=fleet,
              zones=[dict(token=tok, kinds=list(kinds)) for tok, kinds in ZONES],
              lanes=[lane_row(l) for l in lanes], exits=exits, entries=entries, junctions=junctions, stands=stands, bay=bay,
-             stations=build_stations(inputs, loop), work_areas=work_area_rows(inputs), exempt=EXEMPT_ROWS)
+             stations=stations, work_areas=work_area_rows(inputs), exempt=EXEMPT_ROWS)
     t = Topo(d)
     # what the checks measure and the file records beside it
     for st in d["stations"]:
@@ -1388,39 +1635,101 @@ def exemptions_needed(t, inputs):
 # ==================================================================================
 # the report, the selftest and the command line
 # ==================================================================================
+def clear_gaps(t, inputs):
+    """How near the cells come that do NOT conflict, by the class of pair: {class: (gap, a, b)} for the nearest pair no box holds whose gap
+    is at least its threshold. 'haul' is a pair of cells of two haul lanes, 'access' a pair of two lanes one of which is the bay's, 'route'
+    a pair of cells of one lane or one stand's way through it, beyond the neighbour span. The distance every threshold keeps from a real pair."""
+    held = {}
+    for j in t.junctions:
+        for m in j["members"]:
+            for k in run_cells(m["cells"], len(t.by[m["lane"]])):
+                held.setdefault((m["lane"], k), set()).add(j["id"])
+    routes = route_index(t.by, t.chains())
+    near = conflicts(t.lanes, inputs, t.rules, reach=3.0)
+    out = {}
+    for (a, b), gap in near.items():
+        if held.get(a, set()) & held.get(b, set()):
+            continue
+        same_route = any(ca == cb for ca, sa in routes.get(a, ()) for cb, sb in routes.get(b, ()) if abs(sa - sb) > t.by[a[0]].span)
+        if a[0] == b[0] or same_route:
+            cls, thr = "route", t.rules["conflict_same_route_m"]
+        else:
+            cls = "haul" if haul_lane(t.by[a[0]].kind) and haul_lane(t.by[b[0]].kind) else "access"
+            thr = conflict_m(t.rules, t.by[a[0]].kind, t.by[b[0]].kind)
+            if any(ca == cb and abs(sa - sb) <= t.by[a[0]].span for ca, sa in routes.get(a, ()) for cb, sb in routes.get(b, ())):
+                continue
+        if gap >= thr and (cls not in out or gap < out[cls][0]):
+            out[cls] = (gap, a, b)
+    return out
+
+
+def measurements(t, inputs):
+    """What V6, V7 and V9 measured on the real site: grade, the nearest a driven pose comes to an outline it is held to, the loop's worst offset
+    from its track, and the nearest a lane or stand comes to another machine's work area."""
+    m = {}
+    m["grade"] = max((qf.sustained_grade(inputs.ground, *lane_points(l))[0], l.id) for l in t.lanes)
+    margin = (1e9, None)
+    for lane in t.lanes:
+        for k in range(len(lane)):
+            for p in cell_poses(lane, k, inputs, t.rules):
+                for o in inputs.obstacles:
+                    if is_exempt(t.d, lane.id, o[1], *obstacle_center(o)):
+                        continue
+                    d = qf.obstacle_distance(o, p[0], p[1]) - TRAVEL_REACH
+                    if d < margin[0]:
+                        margin = (d, "%s cell %d, %s" % (lane.id, k, o[1]))
+    m["reach"] = margin
+    fl, tr = inputs.live, inputs.live["tracks"][0]
+    m["offset"] = max(math.hypot(pose_at(tr, fl["dt"], c[4])[0] - c[0], pose_at(tr, fl["dt"], c[4])[1] - c[1]) for c in t.loop.cells)
+    idx = cell_index(t, inputs)
+    exempt = {(st["partner"]["machine"], st["lane"], k) for st in t.stations if st["partner"] for k in run_cells(st["core"], len(t.by[st["lane"]]))}
+    best = {}
+    for wa in t.d["work_areas"]:
+        for lid, k, g, cx, cz, r in idx:
+            if (wa["machine"], lid, k) in exempt:
+                continue
+            gap = group_gap(g, [wa["polygon"]])
+            if lid not in best or gap < best[lid][0]:
+                best[lid] = (gap, wa["machine"], k)
+    m["work"] = best
+    m["work_stands"] = min((group_gap(stand_group(kind, s["pose"]), [wa["polygon"]]), s["id"], wa["machine"])
+                           for wa in t.d["work_areas"] for s in t.stands.values() for kind in s["kinds"])
+    return m
+
+
 def report(t, inputs):
     """What each check measured on the real site, as lines."""
     d = t.d
     lines = []
     nmax = d["fleet"]["machines"]
-    for lane in t.lanes:
-        if lane.cyclic:
-            cores = sum(range_len(lane, run) for run in t.core_runs(lane.id))
-            lines.append("V1 %s: %d slots outside station cores for %d machines (needs %d)" % (lane.id, slots(lane_length(lane) - cores), nmax, nmax + 1))
-    worst = None
-    for junc in t.junctions:
-        for lane in t.lanes:
-            if lane.cyclic and any(m["lane"] == lane.id for m in junc["members"]):
-                _, gap = junction_span(t, junc, lane)
-                length = sum(math.hypot(lane.cells[k][2] - lane.cells[k][0], lane.cells[k][3] - lane.cells[k][1]) for k in gap)
-                free = slots(length)
-                if worst is None or free < worst[0]:
-                    worst = (free, junc["id"])
-    if worst:
-        lines.append("V2 smallest complement of a junction's span: %d slots (%s), needs %d" % (worst[0], worst[1], nmax - 1))
+    for name, cycle in directed_cycles(t):
+        lines.append("V1 %s: %d slots outside station cores for %d machines (needs %d)" % (name, cycle_free_slots(t, cycle), nmax, nmax + 1))
+    comp = span_complements(t)
+    if comp:
+        worst = min(comp, key=lambda c: c[2])
+        lines.append("V2 smallest complement of a junction's span: %d slots (%s on %s), needs %d" % (worst[2], worst[0], worst[1], nmax - 1))
     for s in d["stands"]:
-        lines.append("V3 stand %s (%s) in %s: clearance %.2f m, lanes %s, %s" % (s["id"], "/".join(s["kinds"]), s["zone"], s["clearance_m"], s["in"], s["out"]))
+        lines.append("V3 stand %s (%s, %s) in %s: clearance %.2f m, lanes %s, %s" % (s["id"], "/".join(s["kinds"]), s["role"], s["zone"], s["clearance_m"], s["in"], s["out"]))
     for st in d["stations"]:
         lines.append("V4 station %s: core %s, buffer %s, capacity %d, window %.3f s, headway %.3f s, nearest approach %.3f m%s"
                      % (st["id"], st["core"], st["buffer"], st["capacity"], st["window_s"], st["headway_s"], st["min_gap_m"],
                         (", loader %s %.3f m" % (st["partner"]["machine"], st["partner"]["min_gap_m"])) if st["partner"] else ""))
     lines.append("V5 %d junction boxes: %s" % (len(d["junctions"]), ", ".join("%s (%s)" % (j["id"], j["kind"]) for j in d["junctions"])))
+    gaps = clear_gaps(t, inputs)
+    thr = dict(haul=t.rules["conflict_haul_m"], access=t.rules["conflict_access_m"], route=t.rules["conflict_same_route_m"])
+    lines.append("V5 nearest pair of cells that do not conflict, by class: %s" % "; ".join(
+        "%s %.3f m (threshold %.1f m, %s cell %d - %s cell %d)" % (c, gaps[c][0], thr[c], gaps[c][1][0], gaps[c][1][1], gaps[c][2][0], gaps[c][2][1]) for c in ("haul", "access", "route") if c in gaps))
+    m = measurements(t, inputs)
+    lines.append("V6 steepest lane %.2f %% (%s); nearest a driven pose comes to an outline it is held to: %+.2f m past the %.1f m reach (%s)" % (m["grade"][0], m["grade"][1], m["reach"][0], TRAVEL_REACH, m["reach"][1]))
+    lines.append("V7 the loop's worst cell is %.4f m off its track" % m["offset"])
     lines.append("V8 zones: %s" % "; ".join("%s %s" % (z["token"], "/".join(z["kinds"])) for z in d["zones"]))
+    lines.append("V9 nearest to another machine's work area: %s; stands %.2f m (%s, %s)" % (
+        ", ".join("%s %.2f m (%s)" % (lid, g[0], g[1]) for lid, g in sorted(m["work"].items())), m["work_stands"][0], m["work_stands"][1], m["work_stands"][2]))
     lines.append("lanes: %s" % ", ".join("%s %d" % (l.id, len(l)) for l in t.lanes))
     return lines
 
 
-CONTROLS = 18
+CONTROLS = 42
 
 # The best stand the search for one found in the yard (the one zone with room): the pose stand_room finds in the yard's north-east patch and the two lanes
 # that reach and leave it. selftest builds the topology with it through the generator's own path and the checks refuse it: its lanes run over each other
@@ -1431,33 +1740,69 @@ CANDIDATE_YARD_STAND = dict(
     join=(-24.7, -27.5), program_out=[("S", 6), ("R", 225), ("S", 7.5), ("L", 22.5), ("R", 22.5), ("L", 45), ("S", 5), ("R", 22.5), ("S", 2.5), ("L", 22.5), ("S", 15), ("L", 0.78), ("S", 0.48), ("L", 5.75)])
 
 
+def at_distance(o, target):
+    """A point on the +x side of obstacle `o` whose distance from its outline is `target`."""
+    lo, hi = 0.0, 80.0
+    for _ in range(60):
+        mid = (lo + hi) / 2.0
+        if qf.obstacle_distance(o, o[2] + mid, o[3]) < target:
+            lo = mid
+        else:
+            hi = mid
+    return o[2] + hi, o[3]
+
+
 def selftest(inputs, verbose=False):
     """Each check must FAIL on a site made to break it, with its own message, and pass one that breaks nothing."""
     import copy
     d, base = assemble(inputs)
+    real = Topo(d)
+    clear = clear_gaps(real, inputs)
     cases = [("the real site", not base, base)]
-    pre = len(cases)
 
-    def case(name, mutate, validators, expect, passes=False):
+    def case(name, mutate, validators, expect, passes=False, inp=None):
+        """`expect` is a substring of a defect (or a function of a defect); `passes` expects no defect that matches it (None: none at all)."""
         d2 = copy.deepcopy(d)
         mutate(d2)
-        got = run_checks(Topo(d2), inputs, only=validators)
-        ok = (not got) if passes else any(expect in x for x in got)
-        cases.append((name, ok, [x for x in got if expect in x] + [x for x in got if expect not in x] if expect else got))
+        try:
+            got = run_checks(Topo(d2), inp or inputs, only=validators)
+        except ValueError as e:
+            got = [str(e)]
+        match = (lambda x: expect(x)) if callable(expect) else (lambda x: expect in x)
+        if passes:
+            ok = not any(match(x) for x in got) if expect is not None else not got
+            shown = [x for x in got if match(x)] if expect is not None else got
+        else:
+            ok = any(match(x) for x in got)
+            shown = [x for x in got if match(x)] + [x for x in got if not match(x)]
+        cases.append((name, ok, shown))
 
     def loop_of(d2):
         return next(l for l in d2["lanes"] if l["id"] == "loop")
+
+    def lane_of(d2, lid):
+        return next(l for l in d2["lanes"] if l["id"] == lid)
 
     def ring(d2, slots_n, core_cells, machines):
         n = int(math.ceil(slots_n * SLOT_M / CELL_M))
         loop = loop_of(d2)
         loop["cells"] = [[0.0, 0.0, 2.0, 0.0, 0.0] for _ in range(n)]
+        d2["lanes"] = [loop]
         d2["fleet"]["machines"] = machines
         d2["stations"] = [dict(st, core=[0, core_cells - 1]) for st in d2["stations"][:1]]
-        d2["junctions"] = []
+        d2["junctions"], d2["exits"], d2["entries"], d2["stands"], d2["bay"] = [], [], [], [], None
     # V1: a 6-truck loop of 7 slots with a one-slot core is short; one of 9 is not
     case("V1: a 6-truck loop of 7 slots with a 1-slot core", lambda d2: ring(d2, 7, 6, 6), [v1_cycle_capacity], "V1 P1")
     case("V1: the same with 9 slots (control)", lambda d2: ring(d2, 9, 6, 6), [v1_cycle_capacity], None, passes=True)
+
+    def short_detour(d2):
+        d2["fleet"]["machines"] = 40
+        d2["entries"][0]["cell"] = 1
+    case("V1: the bay's detour round the loop is short for the fleet", short_detour, [v1_cycle_capacity], "V1 P1: loop via access/bay/in")
+
+    def open_loop(d2):
+        loop_of(d2)["cyclic"] = False
+    case("Topo: a loop lane that is not cyclic is refused", open_loop, [v1_cycle_capacity], "is not cyclic")
 
     # V2: a junction span that leaves too little of the loop
     def widen(complement_cells):
@@ -1476,7 +1821,7 @@ def selftest(inputs, verbose=False):
     case("V2: a complement of exactly N-1 slots (control)", widen(cells_for), [v2_span_complement], None, passes=True)
     case("V2: one cell short of it", widen(cells_for - 2), [v2_span_complement], "V2 P2")
 
-    # V3: a stand on a loop cell; the bay left back the way it came
+    # V3: a stand on a loop cell; the bay left back the way it came; a lane that crosses its own way through; no kind; a sweep of either fleet
     def stand_on_loop(d2):
         c = loop_of(d2)["cells"][60]
         d2["stands"][0]["pose"] = [(c[0] + c[2]) / 2.0, (c[1] + c[3]) / 2.0, qf.heading_of(c[2] - c[0], c[3] - c[1])]
@@ -1487,7 +1832,37 @@ def selftest(inputs, verbose=False):
         by[d2["bay"]["out"]]["cells"] = [[c[2], c[3], c[0], c[1]] for c in reversed(by[d2["bay"]["in"]]["cells"])]
     case("V3: the bay with out = the reverse of in", reverse_bay, [v3_stands], "V3 cul-de-sac")
 
-    # V4: a headway under the fleet's, a buffer one slot for a capacity of two
+    def out_over_in(d2):
+        lane_of(d2, d2["bay"]["in"])["cells"][1] = list(lane_of(d2, d2["bay"]["out"])["cells"][30])
+    case("V3: the bay's out lane crossing its in lane far from the stand", out_over_in, [v3_stands], "V3 cul-de-sac")
+    case("V5: the same crossing, no box holds it", out_over_in, [v5_boxes], lambda x: x.startswith("V5 conflict: access/bay/in cell 1 and access/bay/out cell"))
+
+    case("V3: a stand that lists no kind", lambda d2: d2["stands"][0].update(kinds=[]), [v3_stands], "V3 stand refuel-queue: it lists no kind")
+
+    def on_live_track(d2):
+        tr = inputs.live["tracks"][3]
+        d2["stands"][0]["pose"] = [float(tr["x"][0]), float(tr["z"][0]), float(tr["heading"][0])]
+    case("V3: a stand on a track the live fleet plays", on_live_track, [v3_stands], "from sweep live fleet track 3")
+
+    def without_visit_exemption(d2):
+        d2["exempt"] = [e for e in d2["exempt"] if "machine" not in e]
+    case("V3: the scripted visit's track, which only the preview fleet plays, not exempted", without_visit_exemption, [v3_stands], "from sweep preview fleet track 1 (SP-HL-0006)")
+
+    # the gap to an outline is the true distance: a box standing corner to corner with a stand's footprint, 1.4 m and 1.6 m off along the diagonal
+    # (the gap along an edge normal would read 1.0 and 1.13)
+    bay_stand = next(s for s in d["stands"] if s["id"] == "refuel-bay")
+    fb = [b for b in stand_group("Hauler", bay_stand["pose"])]
+    top = max(fb, key=lambda b: max(p[1] for p in b))
+    corner = (max(p[0] for p in top), max(p[1] for p in top))
+
+    def diagonal(dist):
+        inp2 = copy.copy(inputs)
+        inp2.obstacles = list(inputs.obstacles) + [("box", "test-box", corner[0] + 0.5 + dist / math.sqrt(2.0), corner[1] + 0.5 + dist / math.sqrt(2.0), 0.5, 0.5, 0.0)]
+        return inp2
+    case("V3: an outline 1.4 m off a stand's corner, along the diagonal", lambda d2: None, [v3_stands], "test-box", inp=diagonal(1.4))
+    case("V3: the same 1.6 m off (control)", lambda d2: None, [v3_stands], "test-box", passes=True, inp=diagonal(1.6))
+
+    # V4: a headway under the fleet's, a buffer one slot for a capacity of two, a record of the nearest approach that is the one at the design spacing only
     case("V4: a headway 0.9 of the fleet's", lambda d2: d2["stations"][0].update(headway_s=r3(d2["stations"][0]["headway_s"] * 0.9)), [v4_stations], "V4 station load: its headway")
 
     def short_buffer(d2):
@@ -1495,8 +1870,31 @@ def selftest(inputs, verbose=False):
         pad["buffer"] = [pad["buffer"][0], pad["buffer"][0] + 6]
     case("V4: a buffer of one slot for a capacity of two", short_buffer, [v4_stations], "exit buffer holds")
 
-    # V5: the ramp top's box deleted; an approach cell made a member
+    def only_the_design_spacing(d2):
+        pad = next(s for s in d2["stations"] if s["id"] == "pad")
+        t_in, _, t_out = station_times(real, pad)
+        pad["min_gap_m"] = r3(station_min_gap(inputs, t_in, t_out, pad["headway_s"], 0.0)[0])
+    case("V4: a nearest approach recorded as the one at the design spacing alone", only_the_design_spacing, [v4_stations], "V4 station pad: it records a nearest approach")
+
+    # V5: a box deleted; an approach cell made a member; a lane that folds back on itself; the thresholds as the file states them
     case("V5: the ramp-top box deleted", lambda d2: d2.update(junctions=[j for j in d2["junctions"] if "ramp-top" not in j["id"]]), [v5_boxes], "V5 conflict")
+    case("V5: the ramp-bottom box deleted (the loop crosses itself there)", lambda d2: d2.update(junctions=[j for j in d2["junctions"] if "ramp-bottom" not in j["id"]]),
+         [v5_boxes], lambda x: x.startswith("V5 conflict: loop cell") and "the same lane" in x)
+
+    def folds_back(d2):
+        lane_of(d2, "road/fill-road/back")["cells"] = [[2.0 * i, 0.0, 2.0 * i + 2.0, 0.0] for i in range(10)] + [[20.0 - 2.0 * i, 0.4, 18.0 - 2.0 * i, 0.4] for i in range(10)]
+    case("V5: a lane that drives out and back over itself, no box", folds_back, [v5_boxes],
+         lambda x: x.startswith("V5 conflict: road/fill-road/back cell") and "and road/fill-road/back cell" in x and "the same lane" in x)
+
+    def merge_without_out_lane(d2):
+        merge = next(j for j in d2["junctions"] if "merge" in j["id"])
+        merge["members"] = [m for m in merge["members"] if not m["lane"].startswith("access/")]
+    case("V5: the bay's out lane left out of its merge box (loop and road cells still held)", merge_without_out_lane, [v5_boxes],
+         lambda x: x.startswith("V5 conflict:") and "access/bay/out" in x)
+    case("V5: the pad station removed (its trucks overlap each other there, which only the station holds)", lambda d2: d2.update(stations=[st for st in d2["stations"] if st["id"] != "pad"]),
+         [v5_boxes], lambda x: x.startswith("V5 conflict: loop cell") and "the same lane" in x)
+    case("V5: the bay not known as a way through (its in and out lanes then overlap near the stand)", lambda d2: d2.update(bay=None), [v5_boxes],
+         lambda x: x.startswith("V5 conflict: access/bay/in cell"))
 
     def reach_back(d2):
         j = next(j for j in d2["junctions"] if any(a["lane"] == "loop" for a in j["approach"]))
@@ -1505,17 +1903,36 @@ def selftest(inputs, verbose=False):
             if m["lane"] == "loop" and (m["cells"][0] - 1) % len(loop_of(d2)["cells"]) == ap["cell"]:
                 m["cells"][0] = ap["cell"]
     case("V5: a box that includes the cell it is approached by", reach_back, [v5_boxes], "V5 approach")
+    case("V5: the haul threshold raised past the nearest pair that does not conflict", lambda d2: d2["rules"].update(conflict_haul_m=clear["haul"][0] + 0.01), [v5_boxes], "V5 conflict")
+    case("V5: the same threshold lowered below it (control)", lambda d2: d2["rules"].update(conflict_haul_m=clear["haul"][0] - 0.01), [v5_boxes], None, passes=True)
 
-    # V6: a lane cell on the light tower
+    # V6: a lane cell on the light tower, 3.1 m and 3.3 m off it, the middle of a long cell, a climb
+    towers = [o for o in inputs.obstacles if o[1] == "light_tower"]
+    tower = towers[2]                       # the one with nothing else standing near it
+
     def onto_tower(d2):
-        lane = next(l for l in d2["lanes"] if l["id"] == "road/fill-road/back")
+        lane = lane_of(d2, "road/fill-road/back")
         c = lane["cells"][5]
-        tower = min((p for p in inputs.feats["props"] if p["p"] == "light_tower"), key=lambda p: math.hypot(p["x"] - c[0], p["z"] - c[1]))
-        c[0], c[1] = tower["x"], tower["z"]
+        tower = min(towers, key=lambda o: math.hypot(o[2] - c[0], o[3] - c[1]))
+        c[0], c[1] = tower[2], tower[3]
     case("V6: a lane cell moved onto a light tower", onto_tower, [v6_drivable], "V6 reach")
 
+    def off_tower(dist):
+        def go(d2):
+            x, z = at_distance(tower, dist)
+            lane_of(d2, "road/fill-road/back")["cells"] = [[x, z, x + 1.0, z]]
+        return go
+    case("V6: a lane cell 3.1 m off a light tower (a driving hauler keeps 3.2 m)", off_tower(3.1), [v6_drivable], "V6 reach: road/fill-road/back cell 0 comes 3.10 m from light_tower")
+    case("V6: the same 3.3 m off (control)", off_tower(3.3), [v6_drivable], lambda x: x.startswith("V6 reach: road/fill-road/back cell 0") and "light_tower" in x, passes=True)
+
+    def mid_cell(d2):
+        x, z = at_distance(tower, 2.0)
+        lane_of(d2, "road/fill-road/back")["cells"] = [[x, z + 8.0, x, z - 8.0]]
+    case("V6: a long cell whose ends are clear of a light tower and whose middle is 2.0 m from it", mid_cell, [v6_drivable],
+         lambda x: x.startswith("V6 reach: road/fill-road/back cell 0 comes") and "light_tower" in x and 1.95 <= float(x.split("comes ")[1].split(" m")[0]) <= 2.01)
+
     def up_the_wall(d2):
-        lane = next(l for l in d2["lanes"] if l["id"] == "road/fill-road/back")
+        lane = lane_of(d2, "road/fill-road/back")
         for k, c in enumerate(lane["cells"]):
             c[0], c[1], c[2], c[3] = 0.0, 56.0 + 2.0 * k, 0.0, 58.0 + 2.0 * k
     case("V6: a lane run straight up the pit's north wall", up_the_wall, [v6_drivable], "V6 grade")
@@ -1526,10 +1943,11 @@ def selftest(inputs, verbose=False):
         d2["source"]["fleet"] = h[:-1] + ("0" if h[-1] != "0" else "1")
     case("V7: one byte of the fleet hash changed", stale, [v7_fresh], "V7 fresh: its fleet hash")
 
-    # V8: a zone that must have a stand for a kind and has none
+    # V8: a zone that must have a stand for a kind and has none; one that only a service stand covers
     case("V8: a zone asked for a stand for a hauler it has none of", lambda d2: d2["zones"][0].update(kinds=["Hauler"]), [v8_zones], "V8 zone: sp-zone-cut has no stand")
+    case("V8: the yard asked for a hauler stand, with only the refuel bay's service stands in it", lambda d2: d2["zones"][2].update(kinds=["Hauler"]), [v8_zones], "V8 zone: sp-zone-yard has no stand for a Hauler")
 
-    # V9: an access lane through SP-DZ-0002's rip area
+    # V9: an access lane through SP-DZ-0002's rip area; a lane 1.4 m and 1.6 m off it; the load core's exemption for a loader that is not the partner
     def through_rip(d2):
         wa = next(w for w in d2["work_areas"] if w["machine"] == "SP-DZ-0002")
         cx = sum(p[0] for p in wa["polygon"]) / len(wa["polygon"])
@@ -1537,6 +1955,29 @@ def selftest(inputs, verbose=False):
         lane = next(l for l in d2["lanes"] if l["id"].startswith("access/"))
         lane["cells"][3][0], lane["cells"][3][1] = cx, cz
     case("V9: an access lane through SP-DZ-0002's rip area", through_rip, [v9_work_areas], "V9 work area")
+    rip = next(w for w in d["work_areas"] if w["machine"] == "SP-DZ-0002")
+    rcx = sum(p[0] for p in rip["polygon"]) / len(rip["polygon"])
+    rcz = sum(p[1] for p in rip["polygon"]) / len(rip["polygon"])
+
+    def off_rip(gap):
+        def go(d2):
+            lo, hi = 0.0, 120.0
+            for _ in range(60):
+                mid = (lo + hi) / 2.0
+                probe = Lane("probe", "road", [[rcx + mid, rcz, rcx + mid, rcz + 1.0]])
+                g = min(sat_gap(b, rip["polygon"]) for b in cell_group(probe, 0, inputs, d["rules"]))
+                if g < gap:
+                    lo = mid
+                else:
+                    hi = mid
+            lane_of(d2, "road/fill-road/back")["cells"] = [[rcx + hi, rcz, rcx + hi, rcz + 1.0]]
+        return go
+    case("V9: a lane cell 1.4 m off SP-DZ-0002's work area (1.5 m is kept)", off_rip(1.4), [v9_work_areas], "V9 work area: road/fill-road/back cell 0 is 1.4")
+    case("V9: the same 1.6 m off (control)", off_rip(1.6), [v9_work_areas], lambda x: x.startswith("V9 work area: road/fill-road/back cell 0") and "SP-DZ-0002" in x, passes=True)
+
+    def wrong_partner(d2):
+        next(s for s in d2["stations"] if s["id"] == "load")["partner"]["machine"] = "SP-LD-0002"
+    case("V9: the load core's exemption given to a loader that is not its partner", wrong_partner, [v9_work_areas], "SP-LD-0001's work area")
 
     # a stand through the generator's own path: the yard's best candidate is refused
     saved = list(STANDS)
@@ -1549,7 +1990,7 @@ def selftest(inputs, verbose=False):
 
     print("selftest on the real site: %s" % ("clean" if not base else "%d defects" % len(base)))
     for name, ok, got in cases:
-        print("  %-62s %s%s" % (name, "ok" if ok else "NOT CAUGHT", "" if ok or not got else "  " + "; ".join(got[:2])))
+        print("  %-90s %s%s" % (name, "ok" if ok else "NOT CAUGHT", "" if ok or not got else "  " + "; ".join(got[:2])))
         if verbose and ok and got:
             print("      %s" % got[0])
     caught = sum(1 for _, ok, _ in cases if ok)

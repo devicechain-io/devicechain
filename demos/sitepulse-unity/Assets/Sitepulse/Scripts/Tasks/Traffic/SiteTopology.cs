@@ -36,7 +36,7 @@ namespace DeviceChain.Sim.Traffic
     /// <summary>A directed lane: its cells in the order they are driven.</summary>
     public sealed class Lane
     {
-        public Lane(string id, string kind, bool cyclic, IReadOnlyList<Cell> cells, int track, string road)
+        public Lane(string id, string kind, bool cyclic, IReadOnlyList<Cell> cells, int track, string road, double neighbourSpanM)
         {
             Id = id;
             Kind = kind;
@@ -44,6 +44,17 @@ namespace DeviceChain.Sim.Traffic
             Cells = cells;
             Track = track;
             Road = road;
+            NeighbourSpanM = neighbourSpanM;
+            var arc = new double[cells.Count];
+            var sum = 0.0;
+            for (var k = 0; k < cells.Count; k++)
+            {
+                arc[k] = sum;
+                sum += cells[k].Length;
+            }
+
+            ArcStarts = arc;
+            TotalLength = sum;
         }
 
         public string Id { get; }
@@ -60,12 +71,25 @@ namespace DeviceChain.Sim.Traffic
         /// <summary>The road a road lane runs along (null for any other lane).</summary>
         public string Road { get; }
 
-        public double Length()
+        /// <summary>
+        /// The along-lane distance within which two cells of this lane are a machine and the one following it, which the follower rule keeps
+        /// apart, and not a conflict.
+        /// </summary>
+        public double NeighbourSpanM { get; }
+
+        /// <summary>The distance along the lane from its first cell's start to the start of each cell.</summary>
+        public IReadOnlyList<double> ArcStarts { get; }
+
+        public double TotalLength { get; }
+
+        /// <summary>How far apart two cells are along the lane (the shorter way round on the cyclic loop).</summary>
+        public double Along(int a, int b)
         {
-            var sum = 0.0;
-            foreach (var c in Cells) sum += c.Length;
-            return sum;
+            var d = Math.Abs(ArcStarts[a] - ArcStarts[b]);
+            return Cyclic ? Math.Min(d, TotalLength - d) : d;
         }
+
+        public double Length() => TotalLength;
     }
 
     /// <summary>A run of cells of one lane, both ends inclusive; on a cyclic lane a run may wrap past the end (<see cref="A"/> greater than <see cref="B"/>).</summary>
@@ -170,9 +194,10 @@ namespace DeviceChain.Sim.Traffic
     /// <summary>A place a machine is left standing, off every lane, reached by <see cref="In"/> and left by <see cref="Out"/>.</summary>
     public sealed class StandPlace
     {
-        public StandPlace(string id, string zone, IReadOnlyList<string> kinds, double x, double z, double headingDegrees, string inLane, string outLane, double clearanceM)
+        public StandPlace(string id, string role, string zone, IReadOnlyList<string> kinds, double x, double z, double headingDegrees, string inLane, string outLane, double clearanceM)
         {
             Id = id;
+            Role = role;
             Zone = zone;
             Kinds = kinds;
             X = x;
@@ -184,6 +209,10 @@ namespace DeviceChain.Sim.Traffic
         }
 
         public string Id { get; }
+
+        /// <summary>"zone" (a place goto-area may send a machine to stay) or "service" (the refuel queue and bay: a machine goes there to be served and moves on).</summary>
+        public string Role { get; }
+
         public string Zone { get; }
         public IReadOnlyList<string> Kinds { get; }
         public double X { get; }
@@ -317,6 +346,49 @@ namespace DeviceChain.Sim.Traffic
         public IReadOnlyList<string> Kinds { get; }
     }
 
+    /// <summary>
+    /// The thresholds the topology was made with and is checked by: the file states them and the checks read them from it, so that nothing about
+    /// the site is a constant of the checker.
+    /// </summary>
+    public sealed class TopologyRules
+    {
+        public TopologyRules(double conflictHaulM, double conflictAccessM, double conflictSameRouteM, double poseStepM, double poseStepDegrees, int divergeWindow, int divergeMax)
+        {
+            ConflictHaulM = conflictHaulM;
+            ConflictAccessM = conflictAccessM;
+            ConflictSameRouteM = conflictSameRouteM;
+            PoseStepM = poseStepM;
+            PoseStepDegrees = poseStepDegrees;
+            DivergeWindow = divergeWindow;
+            DivergeMax = divergeMax;
+        }
+
+        /// <summary>Two cells of two haul lanes (the loop and the roads) whose swept footprints come nearer than this conflict, in metres.</summary>
+        public double ConflictHaulM { get; }
+
+        /// <summary>The same for a pair with a cell of an access lane (the bay's).</summary>
+        public double ConflictAccessM { get; }
+
+        /// <summary>Two cells of one lane, or of one stand's way through it, further apart along it than the neighbour span conflict when they come nearer than this (overlap).</summary>
+        public double ConflictSameRouteM { get; }
+
+        /// <summary>A cell off the loop is swept by a hauler posed at most this far apart along it ...</summary>
+        public double PoseStepM { get; }
+
+        /// <summary>... and turned at most this much between poses, in degrees.</summary>
+        public double PoseStepDegrees { get; }
+
+        /// <summary>The cells either side of an exit that the lane leaving shares ground with, and the most of that lane that may.</summary>
+        public int DivergeWindow { get; }
+
+        public int DivergeMax { get; }
+
+        /// <summary>The threshold a pair of cells of two different lanes is held to: the haul one between two haul lanes, the access one when either is an access lane.</summary>
+        public double ConflictM(string kindA, string kindB) => IsHaul(kindA) && IsHaul(kindB) ? ConflictHaulM : ConflictAccessM;
+
+        static bool IsHaul(string kind) => kind == "loop" || kind == "road";
+    }
+
     /// <summary>The SHA-256 of the files the topology was made from.</summary>
     public sealed class SourceHashes
     {
@@ -357,7 +429,7 @@ namespace DeviceChain.Sim.Traffic
     {
         readonly Dictionary<string, Lane> byId;
 
-        public SiteTopology(string generator, SourceHashes source, double cellM, double slotM, FleetBlock fleet, IReadOnlyList<ZoneKinds> zones,
+        public SiteTopology(string generator, SourceHashes source, double cellM, double slotM, TopologyRules rules, FleetBlock fleet, IReadOnlyList<ZoneKinds> zones,
             IReadOnlyList<Lane> lanes, IReadOnlyList<LaneExit> exits, IReadOnlyList<LaneEntry> entries, IReadOnlyList<Junction> junctions,
             IReadOnlyList<StandPlace> stands, Bay bay, IReadOnlyList<StationSpec> stations, IReadOnlyList<WorkArea> workAreas,
             IReadOnlyList<Exemption> exempt)
@@ -366,6 +438,7 @@ namespace DeviceChain.Sim.Traffic
             Source = source;
             CellM = cellM;
             SlotM = slotM;
+            Rules = rules;
             Fleet = fleet;
             Zones = zones;
             Lanes = lanes;
@@ -390,6 +463,7 @@ namespace DeviceChain.Sim.Traffic
         /// <summary>A hauler's length and the air haul trucks keep: what every capacity (a cycle, a span's complement, a buffer) is counted in, in metres.</summary>
         public double SlotM { get; }
 
+        public TopologyRules Rules { get; }
         public FleetBlock Fleet { get; }
         public IReadOnlyList<ZoneKinds> Zones { get; }
         public IReadOnlyList<Lane> Lanes { get; }

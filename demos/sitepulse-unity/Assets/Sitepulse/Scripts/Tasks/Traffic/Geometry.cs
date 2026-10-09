@@ -3,6 +3,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Linq;
 
 namespace DeviceChain.Sim.Traffic
 {
@@ -60,14 +61,92 @@ namespace DeviceChain.Sim.Traffic
             }
         }
 
-        /// <summary>The smallest separation between any polygon of one group and any of the other.</summary>
-        public static double GroupGap(IReadOnlyList<Polygon> a, IReadOnlyList<Polygon> b)
+        static double PointSegment(double px, double pz, double ax, double az, double bx, double bz)
+        {
+            double sx = bx - ax, sz = bz - az;
+            var l2 = sx * sx + sz * sz;
+            var t = l2 <= 0.0 ? 0.0 : Math.Max(0.0, Math.Min(1.0, ((px - ax) * sx + (pz - az) * sz) / l2));
+            var qx = px - (ax + t * sx);
+            var qz = pz - (az + t * sz);
+            return Math.Sqrt(qx * qx + qz * qz);
+        }
+
+        /// <summary>The distance between two convex polygons known not to overlap: the nearest corner of either to an edge of the other.</summary>
+        static double Separated(Polygon a, Polygon b)
+        {
+            var best = double.MaxValue;
+            for (var pass = 0; pass < 2; pass++)
+            {
+                var p = pass == 0 ? a : b;
+                var q = pass == 0 ? b : a;
+                for (var i = 0; i < q.Count; i++)
+                {
+                    var j = (i + 1) % q.Count;
+                    for (var k = 0; k < p.Count; k++)
+                        best = Math.Min(best, PointSegment(p.X[k], p.Z[k], q.X[i], q.Z[i], q.X[j], q.Z[j]));
+                }
+            }
+
+            return best;
+        }
+
+        /// <summary>
+        /// The clear distance between two convex polygons (Euclidean: the nearest point of one to the other), negative when they overlap (then
+        /// <see cref="SatGap"/>'s depth). The gap along an edge normal alone is less than the distance where two polygons face each other corner
+        /// to corner; every comparison of ground in the checks is this distance.
+        /// </summary>
+        public static double Distance(Polygon a, Polygon b)
+        {
+            var g = SatGap(a, b);
+            return g <= 0.0 ? g : Separated(a, b);
+        }
+
+        /// <summary>
+        /// The smallest distance between any polygon of one group and any of the other. Exact when it is less than <paramref name="limit"/>;
+        /// otherwise <paramref name="limit"/> or more (the edge-normal gap, never more than the distance, is enough to rule a pair out).
+        /// </summary>
+        public static double GroupGap(IReadOnlyList<Polygon> a, IReadOnlyList<Polygon> b, double limit = double.MaxValue)
         {
             var best = double.MaxValue;
             foreach (var p in a)
                 foreach (var q in b)
-                    best = Math.Min(best, SatGap(p, q));
-            return best;
+                {
+                    var s = SatGap(p, q);
+                    if (s >= best || s >= limit) continue;
+                    var e = s <= 0.0 ? s : Separated(p, q);
+                    if (e < best) best = e;
+                }
+
+            return limit < double.MaxValue ? Math.Min(best, limit) : best;
+        }
+
+        /// <summary>The convex hull of a set of points, counter-clockwise (Andrew's monotone chain, corners rounded to a millimetre as the generator does).</summary>
+        public static Polygon Hull(IEnumerable<(double X, double Z)> points)
+        {
+            var pts = new SortedSet<(double, double)>();
+            foreach (var p in points) pts.Add((Math.Round(p.X, 3, MidpointRounding.ToEven), Math.Round(p.Z, 3, MidpointRounding.ToEven)));
+            var list = new List<(double X, double Z)>(pts.Select(p => (p.Item1, p.Item2)));
+            if (list.Count < 3) throw new ArgumentException("a hull needs three distinct points");
+            double Cross((double X, double Z) o, (double X, double Z) a, (double X, double Z) b) => (a.X - o.X) * (b.Z - o.Z) - (a.Z - o.Z) * (b.X - o.X);
+            var lo = new List<(double X, double Z)>();
+            foreach (var p in list)
+            {
+                while (lo.Count >= 2 && Cross(lo[lo.Count - 2], lo[lo.Count - 1], p) <= 0) lo.RemoveAt(lo.Count - 1);
+                lo.Add(p);
+            }
+
+            var up = new List<(double X, double Z)>();
+            for (var i = list.Count - 1; i >= 0; i--)
+            {
+                var p = list[i];
+                while (up.Count >= 2 && Cross(up[up.Count - 2], up[up.Count - 1], p) <= 0) up.RemoveAt(up.Count - 1);
+                up.Add(p);
+            }
+
+            lo.RemoveAt(lo.Count - 1);
+            up.RemoveAt(up.Count - 1);
+            lo.AddRange(up);
+            return new Polygon(lo.Select(p => p.X).ToArray(), lo.Select(p => p.Z).ToArray());
         }
 
         /// <summary>The middle of a group's corners and the radius of the circle round them from there.</summary>
