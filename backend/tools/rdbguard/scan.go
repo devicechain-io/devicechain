@@ -59,7 +59,7 @@ type Finding struct {
 }
 
 func (f Finding) String() string {
-	return fmt.Sprintf("%s:%d:%d: %s: %s", f.Pos.Filename, f.Pos.Line, f.Pos.Column, f.Message, f.Source)
+	return fmt.Sprintf("%s:%d:%d: %s: %s", filepath.ToSlash(f.Pos.Filename), f.Pos.Line, f.Pos.Column, f.Message, f.Source)
 }
 
 // Result is what a scan saw, including how much it saw. PerRoot is the number of files
@@ -73,6 +73,10 @@ type Result struct {
 	PerRoot  map[string]int
 	Allowed  map[string]int
 	Findings []Finding
+	// Stale lists allow-list entries whose absorbed-site count is not what the entry
+	// declares. A non-empty Stale means the INSTRUMENT is out of step with the tree (exit
+	// 2), not that the tree broke the rule. Only the site-based checks fill it.
+	Stale []string
 }
 
 // Files is the total parsed across every root.

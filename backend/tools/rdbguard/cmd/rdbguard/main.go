@@ -1,11 +1,13 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// Command rdbguard runs one of two source checks about how code reaches the relational
+// Command rdbguard runs one of several source checks about how code reaches the relational
 // database, over the given roots.
 //
 //	rdbguard -check=index-helpers backend=400 deploy=1
 //	rdbguard -check=bare-table    backend=400 deploy=1
+//	rdbguard -check=raw-sql       backend/core=150 backend/services=500 backend/cli=50 deploy=1
+//	rdbguard -check=raw-join      backend/core=150 backend/services=500 backend/cli=50 deploy=1
 //
 // Each argument is a root, optionally with the minimum number of non-test Go files that
 // root must yield.
@@ -51,6 +53,23 @@ var checks = map[string]check{
 			"existing database keeps another, and both report a clean migration.\n" +
 			"Declare the index inside the migration itself, against the migration's own snapshot\n" +
 			"struct and a literal index name. Six areas already do; copy one of those.",
+	},
+	"raw-sql": {
+		scan:      rdbguard.RawSQLScan,
+		allowKeys: rdbguard.RawSQLAllowKeys,
+		remedy: "A raw statement (Raw/Exec) over a tenant-scoped table, or one whose SQL cannot be read\n" +
+			"statically, is not filtered by the tenant-scope callback: it sees only statements it\n" +
+			"builds. Express the query through the model (db.WithContext(ctx).Model(&Thing{})...) so\n" +
+			"the predicate is injected, or bind the tenant explicitly and add an allow-list entry in\n" +
+			"backend/tools/rdbguard/rawsql_allow.go that says why the statement is safe.",
+	},
+	"raw-join": {
+		scan:      rdbguard.RawJoinScan,
+		allowKeys: rdbguard.RawJoinAllowKeys,
+		remedy: "The tenant-scope callback filters the OUTER table of a statement; a joined table is\n" +
+			"filtered by nothing. Add a tenant-column equality to the ON clause\n" +
+			"(JOIN t ON t.id = o.t_id AND t.tenant_id = o.tenant_id), or add an allow-list entry in\n" +
+			"backend/tools/rdbguard/rawsql_allow.go that says why the join cannot cross tenants.",
 	},
 	"bare-table": {
 		scan:      rdbguard.BareTableScan,
@@ -131,6 +150,10 @@ func main() {
 	// things, both of which invalidate the run: the matcher has gone blind, or the code
 	// the rule was derived from has moved and the rule has not been re-derived.
 	if *strictAllowList {
+		for _, msg := range res.Stale {
+			fmt.Fprintf(os.Stderr, "rdbguard: %s\n", msg)
+			broken = true
+		}
 		for _, key := range c.allowKeys() {
 			if res.Allowed[key] == 0 {
 				fmt.Fprintf(os.Stderr,
