@@ -59,3 +59,7 @@ func TestTenantUpsertNegativeControlPostgres(t *testing.T) {
 	sabotageUpsertGuard(t, db)
 	runUpsertNegativeControl(t, db)
 }
+
+func TestTenantUpdateMatrixPostgres(t *testing.T) {
+	runTenantUpdateMatrix(t, upsertItDB(t, "rdbtenantupsert"))
+}
