@@ -53,7 +53,9 @@ import (
 //     not attributed again once the cluster has formed, and that rests on an argument,
 //     not a test: the only route a server makes that it was not given is one it hears of
 //     from gossip, dialled at the address the gossip carries (processImplicitRoute in
-//     nats-server's route.go), and every server advertises an address that refuses.
+//     nats-server's route.go), and every server advertises an address that refuses. That
+//     is checked at startup, not assumed: checkAdvertisedAddresses fails a start in which
+//     any server advertises anything but its held refusing address (errRealAdvertise).
 //
 // The isolation covers ROUTES. A client that connected to a server that is later shut
 // down keeps that server's client URL in its reconnect list, and the freed client port can
@@ -118,6 +120,11 @@ const clusterRoutesBudget = 30 * time.Second
 // second construction would not be given anything a first one lacked.
 var errListenerFailed = errors.New("a server could not open its route listener")
 
+// errRealAdvertise marks a cluster in which a server advertises an address other than the
+// held, refusing one the fixture gave it. Such a server gossips an address a later
+// reconnect can dial, forming a route around the proxies that no silence can cut.
+var errRealAdvertise = errors.New("a server advertises a route address other than its held refusing one")
+
 // clusterHooks are the parts of a construction that this package's tests replace.
 type clusterHooks struct {
 	// configure, when set, has the last word on server i's options before it is created.
@@ -130,6 +137,9 @@ type clusterHooks struct {
 	// routesTo, when set, names the servers server i is given a route to; nil gives it one
 	// to every other server.
 	routesTo func(i, size int) []int
+	// allowRealAdvertise skips checkAdvertisedAddresses. Only a test that builds a route
+	// around the proxies on purpose, to exercise their detection, sets it.
+	allowRealAdvertise bool
 }
 
 func defaultClusterHooks() clusterHooks {
@@ -245,6 +255,11 @@ func startCluster(tb testing.TB, size int, h clusterHooks, within time.Duration)
 	if err != nil {
 		return fail(err)
 	}
+	if !h.allowRealAdvertise {
+		if err := checkAdvertisedAddresses(opts, faults); err != nil {
+			return fail(err)
+		}
+	}
 	if err := faults.awaitAllRoutesProxied(servers, min(h.routesWithin, time.Until(deadline))); err != nil {
 		return fail(err)
 	}
@@ -252,6 +267,20 @@ func startCluster(tb testing.TB, size int, h clusterHooks, within time.Duration)
 		return fail(err)
 	}
 	return &cluster{servers: servers, logs: logs, faults: faults, opts: opts, name: name}, nil
+}
+
+// checkAdvertisedAddresses fails unless every server advertises exactly the refusing
+// address the fixture holds for it (faults.refuserAddr). The address is read from the
+// options each server was created with: the server keeps that very pointer (NewServer
+// stores it as s.opts) and its monitoring output (Varz) does not report the advertised
+// route address, so this is the one place the configured value can be read.
+func checkAdvertisedAddresses(opts []*natsserver.Options, faults *RouteFaults) error {
+	for i, o := range opts {
+		if got, want := o.Cluster.Advertise, faults.refuserAddr(i); got != want {
+			return fmt.Errorf("server n%d: %w: advertises %q, want %q", i+1, errRealAdvertise, got, want)
+		}
+	}
+	return nil
 }
 
 // startListening creates a server for each of opts, gives each a serverLog, hands them

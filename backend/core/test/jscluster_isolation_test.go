@@ -319,6 +319,33 @@ func hubRoutes(i, size int) []int {
 	return peers
 }
 
+// A server that advertises its real route listener fails the start at once, by the
+// advertise check, without waiting for a route to form around the proxies. This is the
+// negative control for checkAdvertisedAddresses: it clears Advertise WITHOUT the opt-out.
+func TestAServerAdvertisingItsRealRouteAddressFailsToStart(t *testing.T) {
+	rec := &recordingTB{TB: t}
+	defer rec.runCleanups()
+	h := defaultClusterHooks()
+	h.configure = func(i int, o *natsserver.Options) {
+		if i == 1 {
+			o.Cluster.Advertise = ""
+		}
+	}
+
+	c, err := startCluster(rec, 3, h, clusterStartBudget)
+	if err == nil {
+		defer c.faults.close()
+		defer shutdownServers(c.servers)
+		t.Fatal("a cluster with a server advertising its real route address was reported started")
+	}
+	if !errors.Is(err, errRealAdvertise) {
+		t.Fatalf("the start failed, but not on the advertised address: %v", err)
+	}
+	if !strings.Contains(err.Error(), "server n2") {
+		t.Fatalf("the error does not name the server that advertises its real address (n2): %v", err)
+	}
+}
+
 // A cluster with a route around its proxies fails to start, naming that route, as soon as
 // it is seen. The bypass is built, not hoped for: n2 and n3 are each given a route to n1
 // alone, and advertise their real route listeners, so they learn of each other only from
@@ -332,6 +359,9 @@ func TestAClusterWhoseRoutesBypassTheProxiesFailsToStart(t *testing.T) {
 	h := defaultClusterHooks()
 	h.routesTo = hubRoutes
 	h.configure = func(_ int, o *natsserver.Options) { o.Cluster.Advertise = "" }
+	// The advertise check would refuse this start before any route formed; this test is
+	// about the per-connection bypass detection, which needs the bypass to be built.
+	h.allowRealAdvertise = true
 
 	c, err := startCluster(rec, 3, h, clusterStartBudget)
 	if err == nil {
