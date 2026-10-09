@@ -1424,6 +1424,22 @@ jobs:
       - name: GraphQL schemas reconcile with the publish manifest
         run: node docs/scripts/generate-schema.mjs --check
 
+      # A docs example is a string no compiler reads, so a renamed field or a changed
+      # argument leaves the page that teaches it building and wrong. This validates every
+      # fenced graphql block, in every locale, against the SDL the services serve, with
+      # the services' own validator, and lists every block it deliberately skipped. The
+      # same check runs as a test in the `go` job (module backend/tools/docsgql); it is
+      # repeated here so a docs-only change fails in the docs job, next to the other
+      # docs gates, with the skip list in the log.
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version-file: go.work
+          cache: false
+
+      - name: GraphQL examples validate against the served schemas
+        working-directory: backend/tools/docsgql
+        run: go run . ../../..
+
   # ---------------------------------------------------------------------------
   # Frontend: codegen drift check, typecheck, unit tests, build.
   # ---------------------------------------------------------------------------
