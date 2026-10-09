@@ -9,7 +9,6 @@ import (
 
 	"github.com/devicechain-io/dc-microservice/core"
 	"gorm.io/gorm"
-	"gorm.io/gorm/clause"
 	"gorm.io/gorm/schema"
 )
 
@@ -102,6 +101,9 @@ var ErrTenantMismatch = errors.New("tenant isolation refused the write: a row be
 //     An INSERT ... ON CONFLICT ... DO UPDATE (gorm's Save fallback included) also has its
 //     update arm limited to rows of the same tenant, and a tenant-less conflict target is
 //     refused unless the call site is marked reviewed: see tenant_upsert.go.
+//   - Update: the same rule as create for the tenant column a statement SETS. A blank value
+//     being written (a Save, or a map) is stamped with the context's tenant and a different
+//     one is refused with ErrTenantMismatch: see tenant_update_stamp.go.
 //
 // Models with no tenant field in either spelling (migration bookkeeping tables, and
 // event-processing's partition-keyed DetectSnapshot) pass through untouched.
@@ -149,7 +151,7 @@ func RegisterTenantScoping(db *gorm.DB) error {
 			return db.Callback().Row().Before("gorm:row").Register("dc:tenant_row", tenantScopeQuery)
 		},
 		func() error {
-			return db.Callback().Update().Before("gorm:update").Register("dc:tenant_update", tenantScopeQuery)
+			return db.Callback().Update().Before("gorm:update").Register("dc:tenant_update", tenantScopeUpdate)
 		},
 		func() error {
 			return db.Callback().Delete().Before("gorm:delete").Register("dc:tenant_delete", tenantScopeQuery)
@@ -294,18 +296,7 @@ func tenantScopeQuery(db *gorm.DB) {
 	if !ok {
 		return
 	}
-	db.Statement.AddClause(clause.Where{
-		Exprs: []clause.Expression{
-			clause.Eq{
-				// The column comes from the schema, not from a literal. A literal
-				// "tenant_id" here silently produced NO predicate at all for a model
-				// spelling it "tenant" — the statement would have referenced a column
-				// that does not exist on the table.
-				Column: clause.Column{Table: db.Statement.Table, Name: field.DBName},
-				Value:  tenant,
-			},
-		},
-	})
+	addTenantPredicate(db, field, tenant)
 }
 
 // tenantScopeCreate stamps the tenant id onto every row being created (SetColumn
