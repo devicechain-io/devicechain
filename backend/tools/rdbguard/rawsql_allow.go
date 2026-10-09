@@ -15,7 +15,8 @@ package rdbguard
 //     tenant predicate, under a system context.
 //   - ddl-catalog: DDL, grants, catalog and Timescale policy statements. They touch no
 //     tenant row at all; the SQL is "dynamic" only because the identifier is formatted in.
-//   - control-plane: user-management statements over instance-scoped rows.
+//   - control-plane: user-management statements over instance-scoped rows (including a join
+//     table that is tenant-bearing only through its parent).
 //   - not-sql: an Exec that is not a database call (the GraphQL executor).
 var rawSQLAllowList = []siteEntry{
 	// --- not-sql ---
@@ -49,12 +50,14 @@ var rawSQLAllowList = []siteEntry{
 	},
 	{
 		Path: "backend/services/event-management/model/analytics.go", Func: "execAnalyticsSurface", Count: 1,
-		Why: "DDL creating and granting the analytics views; touches no rows",
+		Why: "DDL (re)creating the analytics views; issues no grants and touches no rows",
 	},
 	{
-		Path: "backend/services/event-management/model/lifecycle.go", Func: "applyOne", Count: 2,
-		Why: "TimescaleDB retention/compression/continuous-aggregate policy functions; table-level " +
-			"configuration, no per-tenant row is read or written",
+		Path: "backend/services/event-management/model/lifecycle.go", Func: "applyOne", Count: 7,
+		Why: "installs INSTANCE-WIDE TimescaleDB chunk, compression and retention policies, one call " +
+			"per policy statement (each call to the exec closure counts as a site). The retention " +
+			"policy deletes every tenant's rows by age, by operator opt-in; it is table-level " +
+			"configuration with no tenant predicate by design",
 	},
 
 	// --- erasure ---
@@ -82,8 +85,15 @@ var rawSQLAllowList = []siteEntry{
 	// --- control-plane ---
 	{
 		Path: "backend/services/user-management/purge/detect.go", Func: "Detect.checkpointedPartitions", Count: 1,
-		Why: "reads the partition-keyed detect snapshot table, a declared erasure exemption that is not " +
-			"tenant-scoped, through a query constant owned by tenantpurge; system path",
+		Why: "reads the partition-keyed detect snapshot table, which the purge catalog classes external " +
+			"(the detect store erases it out of band) rather than tenant-scoped, through a query " +
+			"constant owned by tenantpurge; system path",
+	},
+	{
+		Path: "backend/services/user-management/iam/store.go", Func: "Store.DeleteRole", Count: 1,
+		Why: "deletes the membership-to-role join rows of the role being deleted. Roles are instance-" +
+			"global, the statement runs under the system context, and the caller authorises the role " +
+			"before this runs; the join table is tenant-bearing only through its membership",
 	},
 }
 

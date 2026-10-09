@@ -71,10 +71,11 @@ const (
 )
 
 type siteScanner struct {
-	kind   siteKind
-	facts  *facts
-	allow  []siteEntry
-	srcDir string
+	kind  siteKind
+	facts *facts
+	allow []siteEntry
+	// locals are the names declared inside the declaration being scanned; see localNames.
+	locals map[string]bool
 }
 
 // RawSQLScan reports every non-test, non-migration `.Raw(` / `.Exec(` whose SQL names a
@@ -106,6 +107,13 @@ type siteScanner struct {
 //   - The tenant-table set is DERIVED from the models under the same roots (see
 //     TenantTables), so a model outside the roots is invisible, and a table with a tenant
 //     column but no Go struct is not in the set.
+//   - OUT OF SCOPE: database/sql's *Context calls (ExecContext, QueryContext, QueryRowContext)
+//     on a raw *sql.DB / *sql.Tx, and SQL fragments inside an ORM statement — a subquery in
+//     Where, gorm.Expr, Select or Clauses. Only gorm's Raw and Exec are read.
+//   - Statements routed through a local closure that forwards a parameter to Exec/Raw are
+//     counted at each CALL of the closure, with the argument resolved there. A helper
+//     function or method that does the same is not followed; its own body is flagged as
+//     dynamic SQL instead.
 //   - Only the SQL TEXT is read. A statement that names no tenant table but reaches one
 //     through a view, function or foreign table is out of reach.
 func RawSQLScan(roots ...string) (Result, error) {
@@ -165,9 +173,28 @@ func (s *siteScanner) scanFile(fset *token.FileSet, file *ast.File, rel string, 
 
 	for _, decl := range file.Decls {
 		fn := declName(decl)
+		s.locals = localNames(decl)
+		closures, inner := s.sqlClosures(decl)
 		ast.Inspect(decl, func(n ast.Node) bool {
 			call, ok := n.(*ast.CallExpr)
-			if !ok || len(call.Args) == 0 {
+			if !ok || len(call.Args) == 0 || inner[call] {
+				return true
+			}
+			// A call to a local closure that forwards a parameter to Exec/Raw IS the site:
+			// the statement's text is the argument at the call, not the closure's parameter.
+			if id, ok := call.Fun.(*ast.Ident); ok && s.kind == kindRawSQL {
+				if idx, ok := closures[id.Name]; ok && idx < len(call.Args) {
+					if reason := s.rawSQLReason(call.Args[idx], p); reason != "" {
+						if s.absorb(rel, fn, res) {
+							return true
+						}
+						out = append(out, Finding{
+							Pos:     fset.Position(id.Pos()),
+							Message: reason + " (via closure " + id.Name + ", in " + fn + ")",
+							Source:  id.Name + "(…)",
+						})
+					}
+				}
 				return true
 			}
 			sel, ok := call.Fun.(*ast.SelectorExpr)
@@ -190,11 +217,8 @@ func (s *siteScanner) scanFile(fset *token.FileSet, file *ast.File, rel string, 
 			if reason == "" {
 				return true
 			}
-			for _, e := range s.allow {
-				if matchesAllowPath(rel, e.Path) && e.Func == fn {
-					res.Allowed[e.key()]++
-					return true
-				}
+			if s.absorb(rel, fn, res) {
+				return true
 			}
 			out = append(out, Finding{
 				Pos:     fset.Position(sel.Sel.Pos()),
@@ -205,6 +229,120 @@ func (s *siteScanner) scanFile(fset *token.FileSet, file *ast.File, rel string, 
 		})
 	}
 	return out
+}
+
+// absorb counts a flagged site against the allow-list entry for (rel, fn), if any.
+func (s *siteScanner) absorb(rel, fn string, res *Result) bool {
+	for _, e := range s.allow {
+		if matchesAllowPath(rel, e.Path) && e.Func == fn {
+			res.Allowed[e.key()]++
+			return true
+		}
+	}
+	return false
+}
+
+// localNames is every name declared inside a declaration: parameters, results, receivers,
+// := targets, var/const specs and range variables. An identifier in this set is NOT the
+// package-level constant of the same name.
+func localNames(d ast.Decl) map[string]bool {
+	out := map[string]bool{}
+	fields := func(fl *ast.FieldList) {
+		if fl == nil {
+			return
+		}
+		for _, f := range fl.List {
+			for _, n := range f.Names {
+				out[n.Name] = true
+			}
+		}
+	}
+	ast.Inspect(d, func(n ast.Node) bool {
+		switch x := n.(type) {
+		case *ast.FuncDecl:
+			fields(x.Recv)
+			fields(x.Type.Params)
+			fields(x.Type.Results)
+		case *ast.FuncLit:
+			fields(x.Type.Params)
+			fields(x.Type.Results)
+		case *ast.AssignStmt:
+			if x.Tok == token.DEFINE {
+				for _, l := range x.Lhs {
+					if id, ok := l.(*ast.Ident); ok {
+						out[id.Name] = true
+					}
+				}
+			}
+		case *ast.RangeStmt:
+			if x.Tok == token.DEFINE {
+				for _, e := range []ast.Expr{x.Key, x.Value} {
+					if id, ok := e.(*ast.Ident); ok {
+						out[id.Name] = true
+					}
+				}
+			}
+		case *ast.ValueSpec:
+			// Package-level specs never reach here: only a function declaration is walked.
+			for _, id := range x.Names {
+				out[id.Name] = true
+			}
+		}
+		return true
+	})
+	return out
+}
+
+// sqlClosures finds local closures (`exec := func(step, stmt string, ...) { db.Exec(stmt, ...) }`)
+// that forward one of their own parameters to Exec/Raw. It returns the closure's name ->
+// the index of the forwarded parameter, and the set of inner Exec/Raw calls, which are not
+// sites themselves: each CALL of the closure is.
+//
+// 🔴 WITHOUT THIS an allow-listed function that routes its statements through a closure
+// hides every new statement behind the one counted site inside the closure.
+func (s *siteScanner) sqlClosures(d ast.Decl) (map[string]int, map[*ast.CallExpr]bool) {
+	closures, inner := map[string]int{}, map[*ast.CallExpr]bool{}
+	if s.kind != kindRawSQL {
+		return closures, inner
+	}
+	ast.Inspect(d, func(n ast.Node) bool {
+		as, ok := n.(*ast.AssignStmt)
+		if !ok || len(as.Lhs) != 1 || len(as.Rhs) != 1 {
+			return true
+		}
+		name, ok := as.Lhs[0].(*ast.Ident)
+		lit, isLit := as.Rhs[0].(*ast.FuncLit)
+		if !ok || !isLit {
+			return true
+		}
+		var params []string
+		for _, f := range lit.Type.Params.List {
+			for _, pn := range f.Names {
+				params = append(params, pn.Name)
+			}
+		}
+		ast.Inspect(lit.Body, func(m ast.Node) bool {
+			c, ok := m.(*ast.CallExpr)
+			if !ok || len(c.Args) == 0 {
+				return true
+			}
+			sel, ok := c.Fun.(*ast.SelectorExpr)
+			if !ok || (sel.Sel.Name != "Exec" && sel.Sel.Name != "Raw") {
+				return true
+			}
+			if id, ok := c.Args[0].(*ast.Ident); ok {
+				for i, pn := range params {
+					if pn == id.Name {
+						closures[name.Name] = i
+						inner[c] = true
+					}
+				}
+			}
+			return true
+		})
+		return true
+	})
+	return closures, inner
 }
 
 func declName(d ast.Decl) string {
@@ -284,7 +422,7 @@ func (s *siteScanner) resolve(e ast.Expr, p *pkgFacts, depth int, t *sqlText) {
 			s.resolve(a, p, depth, t)
 		}
 	case *ast.Ident:
-		if init, ok := p.strs[x.Name]; ok && depth < 8 {
+		if init, ok := p.strs[x.Name]; ok && depth < 8 && !s.locals[x.Name] {
 			s.resolve(init, p, depth+1, t)
 			return
 		}
@@ -381,3 +519,35 @@ func unquote(lit string) (string, bool) {
 // declare, in the form Result.Allowed is keyed by.
 func RawSQLAllowKeys() []string  { return siteAllowKeys(rawSQLAllowList) }
 func RawJoinAllowKeys() []string { return siteAllowKeys(rawJoinAllowList) }
+
+// SetAllowListForSelfTest REPLACES the named check's allow-list with the given specs, each
+// "path|func|count". It exists so the binary's own exit-code behaviour on stale and grown
+// entries can be exercised against a fixture tree with the liveness check ON; the real
+// lists are in-tree and a fixture can name none of their files. The scripts never pass it
+// on a run over the repository.
+func SetAllowListForSelfTest(check, specs string) error {
+	var entries []siteEntry
+	for _, spec := range strings.Split(specs, ";") {
+		if strings.TrimSpace(spec) == "" {
+			continue
+		}
+		parts := strings.Split(spec, "|")
+		if len(parts) != 3 {
+			return fmt.Errorf("bad allow-list spec %q, want path|func|count", spec)
+		}
+		n, err := strconv.Atoi(parts[2])
+		if err != nil || n < 1 {
+			return fmt.Errorf("bad count in %q", spec)
+		}
+		entries = append(entries, siteEntry{Path: parts[0], Func: parts[1], Count: n, Why: "self-test"})
+	}
+	switch check {
+	case "raw-sql":
+		rawSQLAllowList = entries
+	case "raw-join":
+		rawJoinAllowList = entries
+	default:
+		return fmt.Errorf("check %q has no site allow-list", check)
+	}
+	return nil
+}

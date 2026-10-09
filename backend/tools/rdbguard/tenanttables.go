@@ -77,9 +77,10 @@ func (f *facts) collect(_ *token.FileSet, file *ast.File, rel string, _ *Result)
 						p.structs[s.Name.Name] = st
 					}
 				case *ast.ValueSpec:
-					// Only the 1:1 shape `name = expr` is recorded; a multi-value spec has no
+					// Only CONSTS are followed: a package var can be reassigned (init(), a
+					// test hook) so its initialiser is not its value. A multi-value spec has no
 					// single expression per name.
-					if len(s.Names) == len(s.Values) {
+					if d.Tok == token.CONST && len(s.Names) == len(s.Values) {
 						for i, n := range s.Names {
 							p.strs[n.Name] = s.Values[i]
 						}
@@ -140,8 +141,36 @@ func (f *facts) derive() {
 			if _, seen := f.tables[table]; !seen {
 				f.tables[table] = d + "." + name
 			}
+			// A many2many join table has no struct of its own, but it hangs off this tenant-
+			// bearing owner: the purge classes it transitive, and a raw statement over it
+			// touches tenant rows. Its name is in the owner's tag.
+			for _, j := range many2manyTables(st) {
+				if _, seen := f.tables[j]; !seen {
+					f.tables[j] = d + "." + name + " (many2many)"
+				}
+			}
 		}
 	}
+}
+
+// many2manyTables returns the join-table names in a struct's `gorm:"many2many:<name>"` tags.
+func many2manyTables(st *ast.StructType) []string {
+	var out []string
+	for _, fld := range st.Fields.List {
+		if fld.Tag == nil {
+			continue
+		}
+		tag, ok := unquote(fld.Tag.Value)
+		if !ok {
+			continue
+		}
+		for _, part := range strings.Split(reflect.StructTag(tag).Get("gorm"), ";") {
+			if k, v, ok := strings.Cut(strings.TrimSpace(part), ":"); ok && strings.EqualFold(k, "many2many") && v != "" {
+				out = append(out, strings.ToLower(v))
+			}
+		}
+	}
+	return out
 }
 
 func (f *facts) bearsTenant(st *ast.StructType) bool {
@@ -221,9 +250,11 @@ func recvTypeName(recv *ast.FieldList) string {
 // derived on every run rather than kept as a list, so there is no second list to drift:
 // a model that gains a tenant field is protected the moment it compiles.
 //
-// What this cannot see is a table with a tenant column and no Go struct (a join table
-// built by gorm's many2many tag): such a table has no model for the callback to scope
-// either, so the guards cannot be more precise than the thing they stand in for.
+// A many2many join table has no struct, so it is added from the tag on its tenant-bearing
+// owner (the tenant purge classes it transitive). What this still cannot see is a table
+// with a tenant column and no Go struct and no such owner: it has no model for the callback
+// to scope either, so the guards cannot be more precise than the thing they stand in for.
+// TestDerivedSetCoversGoldenSchemas checks the derived set against the frozen schemas.
 func TenantTables(roots ...string) (map[string]string, error) {
 	f, err := collectTenantFacts(roots)
 	if err != nil {

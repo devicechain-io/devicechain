@@ -29,7 +29,7 @@ func fixture(t *testing.T, files map[string]string) string {
 }
 
 // models gives every fixture a tenant-scoped table (widgets, through the embed), a
-// tenant-scoped table spelled the plain way (rule_stats, through a TableName override)
+// tenant-scoped table spelled the plain way (rule_statistics, through a TableName override)
 // and an unscoped one (gadgets).
 const models = `package model
 
@@ -46,7 +46,7 @@ type RuleStat struct {
 	Tenant string ` + "`gorm:\"primaryKey\"`" + `
 }
 
-func (RuleStat) TableName() string { return "rule_stats" }
+func (RuleStat) TableName() string { return "rule_statistics" }
 
 type Gadget struct {
 	ID   uint
@@ -83,7 +83,7 @@ func f(tx DB) error { return tx.Exec("UPDATE widgets SET name = ?", "x").Error }
 		"exec delete, quoted and schema-qualified": `package model
 func f(tx DB) error { return tx.Exec("DELETE FROM \"area\".\"widgets\"").Error }`,
 		"plain-spelled tenant table via TableName": `package model
-func f(tx DB) error { return tx.Exec("DELETE FROM rule_stats").Error }`,
+func f(tx DB) error { return tx.Exec("DELETE FROM rule_statistics").Error }`,
 		"dynamic sql from a variable": `package model
 func f(tx DB, q string) error { return tx.Exec(q).Error }`,
 		"dynamic sql from sprintf of a variable": `package model
@@ -158,6 +158,86 @@ func f(tx DB, v string) error { return tx.Exec("SELECT 1 FROM gadgets WHERE a = 
 	}
 }
 
+// TestRawSQLFollowsOnlyConstants: a package var can be reassigned (init, a test hook) and a
+// local can shadow a const, so neither resolves to the initialiser's text.
+func TestRawSQLFollowsOnlyConstants(t *testing.T) {
+	flagged := map[string]string{
+		"var reassigned in init": `package model
+var q = "SELECT 1 FROM gadgets"
+func init() { q = "DELETE FROM widgets" }
+func f(tx DB) { tx.Raw(q) }`,
+		"param shadowing a const": `package model
+const q = "SELECT 1 FROM gadgets"
+func f(tx DB, q string) { tx.Exec(q) }`,
+		"local shadowing a const": `package model
+const q = "SELECT 1 FROM gadgets"
+func f(tx DB) {
+	q := build()
+	tx.Exec(q)
+}`,
+	}
+	for name, src := range flagged {
+		t.Run(name, func(t *testing.T) {
+			res := scanSQL(t, src, nil)
+			if len(res.Findings) != 1 || !strings.Contains(res.Findings[0].Message, "dynamically") {
+				t.Fatalf("want one dynamic-SQL finding, got %v", res.Findings)
+			}
+		})
+	}
+	// The counterweight: a const IS followed.
+	if res := scanSQL(t, `package model
+const q = "SELECT 1 FROM gadgets"
+func f(tx DB) { tx.Raw(q) }`, nil); len(res.Findings) != 0 {
+		t.Fatalf("a const naming an unscoped table must pass: %v", res.Findings)
+	}
+}
+
+// TestRawSQLClosureCallsAreSites: an allow-listed function routing statements through a
+// local closure must not hide new statements behind one counted site.
+func TestRawSQLClosureCallsAreSites(t *testing.T) {
+	src := `package model
+func f(db DB) {
+	exec := func(step, stmt string) { db.Exec(stmt) }
+	exec("a", "SELECT 1 FROM gadgets")
+	exec("b", "DELETE FROM widgets")
+	exec("c", "UPDATE widgets SET a = 1")
+}`
+	res := scanSQL(t, src, nil)
+	if len(res.Findings) != 2 {
+		t.Fatalf("want the two tenant-table closure calls flagged (not the inner Exec, not the clean call), got %v", res.Findings)
+	}
+	root := fixture(t, map[string]string{"models.go": models, "x.go": src})
+	// An entry written for ONE statement does not cover the second.
+	res, _ = rawSQLScan([]siteEntry{{Path: root + "/x.go", Func: "f", Count: 1, Why: "t"}}, root)
+	if len(res.Stale) != 1 {
+		t.Fatalf("a statement added through the closure must break the count, got stale=%v", res.Stale)
+	}
+	res, _ = rawSQLScan([]siteEntry{{Path: root + "/x.go", Func: "f", Count: 2, Why: "t"}}, root)
+	if len(res.Findings) != 0 || len(res.Stale) != 0 {
+		t.Fatalf("exact count must pass: %v %v", res.Findings, res.Stale)
+	}
+}
+
+// TestRawSQLCaseAndFileNames kills three mutants: names are matched case-insensitively, and
+// only the migration_/baseline prefixes exempt a file — not any file whose name starts "m".
+func TestRawSQLCaseAndFileNames(t *testing.T) {
+	if res := scanSQL(t, `package model
+func f(tx DB) { tx.Exec("DELETE FROM WIDGETS") }`, nil); len(res.Findings) != 1 {
+		t.Fatalf("an upper-case table name must be flagged: %v", res.Findings)
+	}
+	body := "package model\nfunc f(tx DB) { tx.Exec(\"UPDATE widgets SET a = 1\") }"
+	for _, name := range []string{"main.go", "mig.go", "migration.go", "base.go", "baselin.go"} {
+		root := fixture(t, map[string]string{"models.go": models, name: body})
+		res, err := rawSQLScan(nil, root)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(res.Findings) != 1 {
+			t.Errorf("%s must still be scanned, got %v", name, res.Findings)
+		}
+	}
+}
+
 func TestRawSQLAllowList(t *testing.T) {
 	src := `package model
 func f(tx DB) error { return tx.Exec("UPDATE widgets SET a = 1").Error }
@@ -229,7 +309,7 @@ func f(db DB) { db.Joins("JOIN widgets w ON w.id = g.widget_id AND g.tenant_id =
 		"tenant column compared with a literal": `package model
 func f(db DB) { db.Joins("JOIN widgets w ON w.id = g.widget_id AND w.tenant_id = 'x'") }`,
 		"plain-spelled tenant table": `package model
-func f(db DB) { db.Joins("JOIN rule_stats r ON r.rule_id = g.rule_id") }`,
+func f(db DB) { db.Joins("JOIN rule_statistics r ON r.rule_id = g.rule_id") }`,
 		"association join": `package model
 func f(db DB) { db.Joins("Widget") }`,
 		"dynamic join": `package model
@@ -258,11 +338,11 @@ func f(db DB) { db.Joins("JOIN widgets w ON w.id = g.widget_id AND w.tenant_id =
 		"quoted columns": `package model
 func f(db DB) { db.Joins("JOIN widgets w ON w.id = g.widget_id AND \"w\".\"tenant_id\" = \"g\".\"tenant_id\"") }`,
 		"plain spelling": `package model
-func f(db DB) { db.Joins("JOIN rule_stats r ON r.rule_id = g.rule_id AND r.tenant = g.tenant") }`,
+func f(db DB) { db.Joins("JOIN rule_statistics r ON r.rule_id = g.rule_id AND r.tenant = g.tenant") }`,
 		"unscoped joined table": `package model
 func f(db DB) { db.Joins("JOIN gadgets g2 ON g2.id = widgets.gadget_id") }`,
 		"two joins, both equated": `package model
-func f(db DB) { db.Joins("JOIN widgets w ON w.id = g.a AND w.tenant_id = g.tenant_id JOIN rule_stats r ON r.x = g.b AND r.tenant = g.tenant_id") }`,
+func f(db DB) { db.Joins("JOIN widgets w ON w.id = g.a AND w.tenant_id = g.tenant_id JOIN rule_statistics r ON r.x = g.b AND r.tenant = g.tenant_id") }`,
 	}
 	for name, src := range clean {
 		t.Run("clean/"+name, func(t *testing.T) {
@@ -274,7 +354,7 @@ func f(db DB) { db.Joins("JOIN widgets w ON w.id = g.a AND w.tenant_id = g.tenan
 
 	// One of two joins in a single string lacking the equality is still a finding.
 	res := scanJoin(t, `package model
-func f(db DB) { db.Joins("JOIN widgets w ON w.id = g.a AND w.tenant_id = g.tenant_id JOIN rule_stats r ON r.x = g.b") }`, nil)
+func f(db DB) { db.Joins("JOIN widgets w ON w.id = g.a AND w.tenant_id = g.tenant_id JOIN rule_statistics r ON r.x = g.b") }`, nil)
 	if len(res.Findings) != 1 {
 		t.Fatalf("want the second join flagged, got %v", res.Findings)
 	}
@@ -323,12 +403,14 @@ type Derived struct {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"widgets", "rule_stats", "deriveds", "bases"} {
+	for _, want := range []string{"widgets", "rule_statistics", "deriveds", "bases"} {
 		if _, ok := tables[want]; !ok {
 			t.Errorf("table %q missing from %v", want, tables)
 		}
 	}
-	for _, not := range []string{"gadgets", "claims", "tenant_scopeds"} {
+	// M13: a TableName() literal that differs from gorm's default must be honoured, and the
+	// default spelling of that type must NOT be what was recorded.
+	for _, not := range []string{"gadgets", "claims", "tenant_scopeds", "rule_stats"} {
 		if _, ok := tables[not]; ok {
 			t.Errorf("table %q must not be classified tenant-scoped", not)
 		}
@@ -370,30 +452,90 @@ func TestTenantFieldNamesMatchCore(t *testing.T) {
 	}
 }
 
-// TestRepositoryTenantTables derives the set from the real tree and checks it holds the
-// tables the allow-lists and the callback's own tests treat as tenant-scoped. A derivation
-// that quietly found nothing would make every raw-sql / raw-join verdict clean.
-func TestRepositoryTenantTables(t *testing.T) {
+// goldenTables parses the frozen per-area schemas under migrationdiff/golden and returns
+// every table with a tenant column (direct), and every table with a foreign key into one of
+// those (transitive — the class the tenant purge sweeps through its parent).
+func goldenTables(t *testing.T) (direct, transitive map[string]bool) {
+	t.Helper()
+	files, err := filepath.Glob("../migrationdiff/golden/*.sql")
+	if err != nil || len(files) < 10 {
+		t.Fatalf("expected the golden schemas (>=10), got %d files, err=%v", len(files), err)
+	}
+	create := regexp.MustCompile(`^CREATE TABLE (?:"[^"]+"|\w+)\.("?[\w-]+"?) \($`)
+	col := regexp.MustCompile(`^\s+"?(tenant_id|tenant)"?\s`)
+	alter := regexp.MustCompile(`^ALTER TABLE (?:ONLY )?(?:"[^"]+"|\w+)\.("?[\w-]+"?)$`)
+	fk := regexp.MustCompile(`FOREIGN KEY .* REFERENCES (?:"[^"]+"|\w+)\.("?[\w-]+"?)\(`)
+	direct, transitive = map[string]bool{}, map[string]bool{}
+	type edge struct{ child, parent string }
+	var edges []edge
+	for _, f := range files {
+		raw, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		cur, alt := "", ""
+		for _, line := range strings.Split(string(raw), "\n") {
+			line = strings.TrimRight(line, "\r")
+			if m := create.FindStringSubmatch(line); m != nil {
+				cur = strings.Trim(m[1], `"`)
+				continue
+			}
+			if cur != "" {
+				if line == ");" {
+					cur = ""
+				} else if col.MatchString(line) {
+					direct[cur] = true
+				}
+				continue
+			}
+			if m := alter.FindStringSubmatch(line); m != nil {
+				alt = strings.Trim(m[1], `"`)
+				continue
+			}
+			if m := fk.FindStringSubmatch(line); m != nil && alt != "" {
+				edges = append(edges, edge{alt, strings.Trim(m[1], `"`)})
+			}
+		}
+	}
+	for _, e := range edges {
+		if direct[e.parent] && !direct[e.child] {
+			transitive[e.child] = true
+		}
+	}
+	return direct, transitive
+}
+
+// TestDerivedSetCoversGoldenSchemas is the cross-check against the catalog the tenant purge
+// classifies from: every golden table with a tenant column, and every table with a foreign
+// key into one, must be in the derived set. Extra derived names are allowed — over-flagging
+// is the safe direction.
+func TestDerivedSetCoversGoldenSchemas(t *testing.T) {
 	tables, err := TenantTables("../../core", "../../services")
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{
-		"devices", "device_types", "device_profiles", "entity_attributes", "entity_relationships",
-		"entity_relationship_types", "commands", "device_states", "secrets", "alarms",
-	} {
-		if _, ok := tables[want]; !ok {
-			t.Errorf("expected tenant-scoped table %q is missing from the derived set (%d tables)", want, len(tables))
+	direct, transitive := goldenTables(t)
+	if len(direct) < 40 {
+		t.Fatalf("only %d direct tenant tables parsed from the golden schemas; the parser is blind", len(direct))
+	}
+	if !transitive["iam_membership_tenant_roles"] {
+		t.Fatalf("the golden parser did not find the known transitive join table; transitive=%v", transitive)
+	}
+	for name := range direct {
+		if _, ok := tables[name]; !ok {
+			t.Errorf("golden table %q has a tenant column but is not in the derived set", name)
 		}
 	}
-	// Tables known NOT to carry a tenant column must not be classified as tenant-scoped.
+	for name := range transitive {
+		if _, ok := tables[name]; !ok {
+			t.Errorf("golden table %q has a foreign key into a tenant table but is not in the derived set", name)
+		}
+	}
+	// Tables known NOT to carry a tenant column must not be classified tenant-scoped.
 	for _, not := range []string{"iam_tenants", "iam_roles", "system_settings", "signing_keys"} {
 		if _, ok := tables[not]; ok {
 			t.Errorf("%q has no tenant column but was classified tenant-scoped", not)
 		}
-	}
-	if len(tables) < 50 {
-		t.Errorf("only %d tenant tables derived; the repository has far more", len(tables))
 	}
 }
 

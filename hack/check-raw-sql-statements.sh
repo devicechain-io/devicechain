@@ -173,16 +173,35 @@ func f(ctx context.Context, q Q) { q.Exec(ctx, "DELETE FROM widgets") }'
     fi
   done
 
-  # --- a stale allow-list must FAIL. A fixture tree contains none of the real entries, so with
-  #     the liveness check ON (the default, and the only mode used on the repository) the run
-  #     must be refused as a broken instrument (exit 2), even on a tree with no findings.
-  status=0
-  out="$("$BIN" -check=raw-sql "$fx/cleanunscoped=2" 2>&1)" || status=$?
-  if [ "$status" -ne 2 ] || ! grep -q "matched nothing\|covers" <<<"$out"; then
-    echo "self-test: stale allow-list entries exited $status, want 2 naming the entry" >&2
-    echo "$out" >&2
-    rc=1
-  fi
+  # --- allow-list counts, exercised THROUGH THE BINARY with the liveness check on. The lists are
+  #     replaced (-self-test-allow) so the only thing that can fail the run is the count itself;
+  #     with the real entries in place their "matched nothing" would fail it first and a binary
+  #     that stopped honouring a stale or grown count would go unnoticed. The fixture is scanned
+  #     from inside its directory so the entry's path is the plain relative one.
+  plant grown 'package model
+
+func f(tx *gorm.DB) {
+	tx.Exec("UPDATE widgets SET name = 1")
+	tx.Exec("DELETE FROM widgets")
+}'
+
+  count_case() { # count_case <label> <spec> <want-exit> <want-message-regex>
+    status=0
+    out="$(cd "$fx" && "$BIN" -check=raw-sql -self-test-allow "$2" grown=2 2>&1)" || status=$?
+    if [ "$status" -ne "$3" ] || { [ -n "$4" ] && ! grep -q "$4" <<<"$out"; }; then
+      echo "self-test: allow-list case '$1' exited $status, want $3 matching '$4'" >&2
+      echo "$out" >&2
+      rc=1
+    fi
+  }
+  # a function that GREW past its declared count must fail the run (exit 2)
+  count_case grown 'grown/x.go|f|1' 2 'covers 1 flagged site(s), but the scan found 2'
+  # a function that no longer matches (entry for a name that is absent) is stale
+  count_case stale 'grown/x.go|gone|1' 2 'covers 1 flagged site(s), but the scan found 0'
+  # an entry that declares MORE sites than exist (the site stopped matching) is stale
+  count_case shrunk 'grown/x.go|f|3' 2 'covers 3 flagged site(s), but the scan found 2'
+  # the exact count is accepted and the sites are not reported
+  count_case exact 'grown/x.go|f|2' 0 'no findings'
 
   # --- a scan that read nothing must FAIL, not report clean ---
   mkdir -p "$fx/empty"
@@ -204,7 +223,7 @@ func f(ctx context.Context, q Q) { q.Exec(ctx, "DELETE FROM widgets") }'
     echo "self-test FAILED" >&2
     exit 1
   fi
-  echo "self-test passed: 7 shapes caught, 5 legitimate forms allowed, a stale allow-list and an empty tree refused."
+  echo "self-test passed: 7 shapes caught, 5 legitimate forms allowed, allow-list counts (grown, stale, shrunk, exact) and an empty tree enforced."
 }
 
 case "${1-}" in

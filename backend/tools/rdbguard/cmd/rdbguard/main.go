@@ -90,7 +90,15 @@ func main() {
 	// the liveness note below.
 	strictAllowList := flag.Bool("strict-allowlist", true,
 		"fail when an allow-list entry matched nothing (off only for fixture scans)")
+	selfTestAllow := flag.String("self-test-allow", "",
+		"SELF-TESTS ONLY: replace the raw-sql/raw-join allow-list with path|func|count[;...]")
 	flag.Parse()
+	if *selfTestAllow != "" {
+		if err := rdbguard.SetAllowListForSelfTest(*name, *selfTestAllow); err != nil {
+			fmt.Fprintf(os.Stderr, "rdbguard: %v\n", err)
+			os.Exit(2)
+		}
+	}
 
 	c, found := checks[*name]
 	if !found {
