@@ -153,6 +153,20 @@ describe('the Describe door hands its draft and warnings to the form', () => {
   });
 });
 
+describe('a rule the form cannot edit', () => {
+  it('shows no warnings and does not crash, whether its type is unmodelled or it is unreadable', () => {
+    const unmodelled = JSON.stringify({ name: 'x', type: 'frobnicate' });
+    for (const def of [unmodelled, '{not json']) {
+      const { unmount } = render(
+        <DetectionRuleForm profileToken="p" initialDefinition={def} initialWarnings={[negated]} onDone={() => {}} />,
+      );
+      expect(screen.queryByTestId('rule-warnings')).toBeNull();
+      unmount();
+    }
+    expect(validateDetectionRule).not.toHaveBeenCalled();
+  });
+});
+
 describe('a handed-off draft warnings do not outlive the draft', () => {
   it('drop once the author changes the rule, and are not brought back', async () => {
     validateDetectionRule.mockRejectedValue(new Error('down'));
