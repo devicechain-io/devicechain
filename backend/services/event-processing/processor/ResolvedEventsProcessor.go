@@ -89,6 +89,9 @@ type Config struct {
 	// TickInterval is how often the live loop wakes to honor the checkpoint interval
 	// on a quiet stream. Defaults to one second.
 	TickInterval time.Duration
+	// CheckpointTimeout bounds one checkpoint (the derived-event publishes plus the snapshot
+	// save). Zero means defaultCheckpointTimeout. See that constant for the reasoning.
+	CheckpointTimeout time.Duration
 	// Lateness bounds how far event time is held back before advancing the watermark
 	// (out-of-orderness tolerance).
 	Lateness time.Duration
@@ -502,6 +505,9 @@ type ResolvedEventsProcessor struct {
 	gapHeld *messaging.Message
 	// gapFailLogged limits the gap-fill failure log to once per park, since the ticker retries.
 	gapFailLogged bool
+	// gapParkedSince is when the current run of consecutive failed fills began; zero when the
+	// last fill succeeded or none is failing. See gapParkLimit.
+	gapParkedSince time.Time
 	// poisonSkipped counts sequences recorded as handled without applying (skipPoison). The gap
 	// fill reads it around each message to tell a skipped poison message from an applied one,
 	// since applyResolved reports both as having advanced the engine.
@@ -1522,6 +1528,10 @@ func (rp *ResolvedEventsProcessor) run() {
 		if rp.idleUncommitted || rp.gapHeld != nil {
 			liveItems = nil
 		}
+		// Stamp progress at the top of EVERY pass. The select below wakes at least once per tick,
+		// so an idle loop still stamps once a tick, and a loop hung inside any case never gets
+		// back here: its heartbeat goes stale while every gauge sampled on the loop freezes.
+		rp.metrics.recordLoopHeartbeat(rp.clock.Now())
 		select {
 		case <-rp.pctx().Done():
 			rp.finalCheckpoint()
@@ -2375,6 +2385,15 @@ func (rp *ResolvedEventsProcessor) ackRuleFact(msg messaging.Message) {
 // durable truth. Reporting success off a call that silently declined to commit would put
 // a false erasure in the deletion record.
 func (rp *ResolvedEventsProcessor) checkpoint(ctx context.Context) bool {
+	// 🔴 EVERY CHECKPOINT RUNS UNDER A DEADLINE. This is the single-writer loop, and the publish
+	// and the Save below are network calls on a context that otherwise has none: a black-holed
+	// database or broker socket would hold the loop inside one of them with detect_is_leader and
+	// detect_live both reading 1, every gauge the alerts read frozen at its last value (they are
+	// sampled on this very loop), and nothing logged. With a deadline the same fault returns as
+	// an ordinary failed checkpoint, which is already counted, already retried on the next tick,
+	// and already alerted on. finalCheckpoint's own 5s is shorter and wins.
+	ctx, cancel := context.WithTimeout(ctx, rp.checkpointTimeout())
+	defer cancel()
 	if rp.stale {
 		return false // a split-brain-losing writer: no publish, no commit, no ack (see stale)
 	}
@@ -2412,6 +2431,7 @@ func (rp *ResolvedEventsProcessor) checkpoint(ctx context.Context) bool {
 		payload, err := rp.engine.Snapshot()
 		if err != nil {
 			log.Error().Err(err).Msg("Failed to serialize DETECT snapshot; deferring checkpoint")
+			rp.metrics.recordCheckpointFailure(checkpointStageSerialize)
 			return false
 		}
 		wm := rp.engine.Watermark()
@@ -2435,6 +2455,7 @@ func (rp *ResolvedEventsProcessor) checkpoint(ctx context.Context) bool {
 				return false
 			}
 			log.Error().Err(err).Msg("Failed to commit DETECT snapshot; messages remain unacked and will redeliver")
+			rp.metrics.recordCheckpointFailure(checkpointStageSave)
 			return false
 		}
 		rp.dirty = false
@@ -2484,10 +2505,12 @@ func (rp *ResolvedEventsProcessor) checkpoint(ctx context.Context) bool {
 func (rp *ResolvedEventsProcessor) haltStaleWriter() {
 	rp.stale = true
 	rp.pcancel()
-	if !rp.leadershipEnabled() {
-		// The unleased path keeps its original behaviour: halt the loop and leave the
-		// process alone. Nothing here took a partition, so nothing is being held from
-		// anyone.
+	if !rp.leadershipEnabled() && rp.Microservice == nil {
+		// Only a struct-literal processor (no Microservice to fail) stops here: halting the
+		// loop is all it can do. Nothing here took a partition, so nothing is being held from
+		// anyone. A processor wired into a service always reaches FailNow below, whether or
+		// not leadership is enabled: a halted writer behind a Ready pod is the shape this
+		// function exists to prevent, and "unleased" is not a reason to allow it.
 		return
 	}
 	if rp.supCancel != nil {
@@ -2704,6 +2727,7 @@ func (rp *ResolvedEventsProcessor) publishPending(ctx context.Context) bool {
 	for i < len(rp.pendingDets) {
 		if err := rp.publisher.Publish(ctx, rp.pendingDets[i].Detection, rp.pendingDets[i].triggeredAt); err != nil {
 			log.Error().Err(err).Msg("Failed to publish a derived event; deferring checkpoint (will retry).")
+			rp.metrics.recordCheckpointFailure(checkpointStagePublish)
 			rp.pendingDets = rp.pendingDets[i:]
 			return false
 		}
@@ -2711,6 +2735,21 @@ func (rp *ResolvedEventsProcessor) publishPending(ctx context.Context) bool {
 	}
 	rp.pendingDets = rp.pendingDets[:0]
 	return true
+}
+
+// defaultCheckpointTimeout bounds one scheduled checkpoint. A healthy one is a handful of
+// milliseconds of publish plus one snapshot upsert, and the largest snapshots are megabytes
+// written in a single transaction, so seconds at the outside; 10s leaves a large multiple of
+// that without letting a hung call hold the loop for longer than the stalled-loop alert's own
+// window. It is twice finalCheckpoint's 5s deliberately: that one runs once, on the way out,
+// where waiting longer delays a shutdown, while this one is retried on the next tick.
+const defaultCheckpointTimeout = 10 * time.Second
+
+func (rp *ResolvedEventsProcessor) checkpointTimeout() time.Duration {
+	if rp.cfg.CheckpointTimeout > 0 {
+		return rp.cfg.CheckpointTimeout
+	}
+	return defaultCheckpointTimeout
 }
 
 // finalCheckpoint flushes on a NORMAL shutdown so a clean stop delivers buffered detections,

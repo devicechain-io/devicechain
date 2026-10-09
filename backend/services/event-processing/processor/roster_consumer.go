@@ -83,7 +83,8 @@ func (rp *ResolvedEventsProcessor) persistBeforeAck(desc string, op func() error
 				Msg("Dropping a fact projection for a deleted tenant; its rows are being erased.")
 			return true
 		}
-		log.Error().Str("what", desc).Msg("Failed to persist a fact projection; retrying (fact stays unacked).")
+		rp.metrics.recordFactPersistRetry()
+		log.Error().Err(err).Str("what", desc).Dur("backoff", backoff).Msg("Failed to persist a fact projection; retrying (fact stays unacked).")
 		select {
 		case <-time.After(backoff):
 		case <-rp.pctx().Done():

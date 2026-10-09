@@ -75,6 +75,18 @@ spec:
           annotations:
             summary: "DETECT is not checkpointing while a backlog exists"
             description: "No committed checkpoint in 15m while undelivered work waits — the single-writer loop is likely stuck (a broker or store outage). A replica that lost a split-brain race does not cause this: it exits to be replaced, and DetectHasNoLeader covers the gap."
+        - alert: DetectLoopStalled
+          expr: |
+            (time() - devicechain_eventprocessing_detect_loop_heartbeat_timestamp_seconds{namespace="{{ $ns }}"} > 120)
+            and on (namespace, pod) (devicechain_eventprocessing_detect_is_leader{namespace="{{ $ns }}"} == 1)
+            and on (namespace, pod) (devicechain_eventprocessing_detect_live{namespace="{{ $ns }}"} == 1)
+          for: 3m
+          labels:
+            severity: critical
+            devicechain_instance: {{ $id }}
+          annotations:
+            summary: "The DETECT loop on a live leader has stopped making progress"
+            description: "A replica that holds the partition and reports itself live has not completed a pass of its detection loop in over 2m (a healthy loop passes at least once a second). The loop is hung inside a call, most likely against a black-holed database or broker connection, and every other DETECT gauge is sampled on that same loop, so they are frozen at their last values and look healthy. No rule is being evaluated for any tenant. Restart the pod named on the alert. A standby never fires this: it is not leading."
         - alert: DetectFanoutEvalErrors
           expr: sum(rate(devicechain_eventprocessing_detect_fanout_eval_errors_total{namespace="{{ $ns }}"}[5m])) > 0
           for: 15m

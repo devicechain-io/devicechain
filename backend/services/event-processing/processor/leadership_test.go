@@ -367,14 +367,14 @@ func TestFailProcessEndsTheProcessNamingThePartitionAndCause(t *testing.T) {
 	requireProcessEnded(t, logged, rp.cfg.PartitionId, "cannot resume", "the term build was refused five times")
 }
 
-// The unleased path keeps its original behaviour: a stale refusal halts the loop and
-// leaves the process alone. Nothing there took a partition, so nothing is being held
-// from anyone — and every unit test and the scaffold run this way.
-func TestAnUnleasedStaleWriterHaltsWithoutEndingTheProcess(t *testing.T) {
+// A processor wired into a service ends the process on a stale refusal even when it takes
+// no lease. Staying up would be the one shape this exists to prevent: a Ready pod that halted
+// its own loop, with every gauge frozen at its last value and nothing to say so. Production
+// always takes a lease, so this path is reached only by the scaffold and by tests, which is
+// exactly why it must fail loudly rather than carry its own, quieter behaviour.
+func TestAnUnleasedStaleWriterWiredToAServiceEndsTheProcess(t *testing.T) {
 	ctx := context.Background()
 	rp := newTestProcessor(newTestStore(t), nil, 1)
-	// A Microservice FailNow could act on, so a FailNow here would log that it ended the
-	// process rather than that it could not.
 	logged := observeProcessEnd(t, rp)
 	rp.supCtx, rp.supCancel = context.WithCancel(context.Background())
 	rp.newTermContext()
@@ -390,16 +390,27 @@ func TestAnUnleasedStaleWriterHaltsWithoutEndingTheProcess(t *testing.T) {
 	if !rp.stale {
 		t.Fatal("the unleased path did not latch stale")
 	}
-	select {
-	case <-rp.supCtx.Done():
-		t.Fatal("a processor that takes no lease ended its own leadership on a stale refusal; it holds no " +
-			"partition, so there is nothing for a replacement to take over")
-	default:
+	requireProcessEnded(t, logged, rp.cfg.PartitionId, "refused as stale")
+}
+
+// A bare struct-literal processor has no service to fail, so a stale refusal can only halt its
+// loop. It must still latch, and it must not reach FailNow with a nil Microservice.
+func TestAnUnleasedStaleWriterWithNoServiceOnlyHaltsItsLoop(t *testing.T) {
+	rp := newTestProcessor(newTestStore(t), nil, 1)
+	logged := logSink.Capture(t)
+	rp.supCtx, rp.supCancel = context.WithCancel(context.Background())
+	rp.newTermContext()
+
+	rp.haltStaleWriter()
+
+	if !rp.stale {
+		t.Fatal("the processor did not latch stale")
 	}
-	out := logged.String()
-	if strings.Contains(out, processEndedLine) || strings.Contains(out, noMicroserviceLine) {
-		t.Fatalf("a processor that takes no lease called FailNow on a stale refusal; it holds no "+
-			"partition, so there is nothing for a replacement to take over. Logs were:\n%s", out)
+	if rp.pctx().Err() == nil {
+		t.Fatal("the loop was not halted")
+	}
+	if out := logged.String(); strings.Contains(out, processEndedLine) || strings.Contains(out, noMicroserviceLine) {
+		t.Fatalf("a processor with no service reached FailNow; logs were:\n%s", out)
 	}
 }
 
