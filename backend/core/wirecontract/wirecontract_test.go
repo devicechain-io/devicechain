@@ -5,6 +5,7 @@ package wirecontract
 
 import (
 	"encoding/json"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -142,4 +143,114 @@ func TestPointerThatResolvesNowhereIsAnError(t *testing.T) {
 	if _, err := SchemaMembers([]byte(schema), "/$defs/missing"); err == nil {
 		t.Fatal("a pointer to nothing was accepted")
 	}
+}
+
+// ---- Nested structure: items, additionalProperties and $ref are followed. ----
+
+type renamedEntry struct {
+	EntryName string `json:"entryName"`
+}
+
+type nestedRenamed struct {
+	Token   string           `json:"token"`
+	Count   *uint32          `json:"count,omitempty"`
+	OK      bool             `json:"ok"`
+	At      *time.Time       `json:"at,omitempty"`
+	Body    *json.RawMessage `json:"body,omitempty"`
+	Entries []renamedEntry   `json:"entries,omitempty"`
+}
+
+func TestNestedStructDriftIsReported(t *testing.T) {
+	diff := strings.Join(mustCompare(t, "", nestedRenamed{}), "\n")
+	if !strings.Contains(diff, `entries[]: "entryName" is on the struct but not in the schema`) {
+		t.Fatalf("a field renamed inside an array element was not reported:\n%s", diff)
+	}
+}
+
+func TestInlineItemsWithoutPropertiesIsNotVacuous(t *testing.T) {
+	// The reviewer's case: entries.items replaced by a bare {"type":"object"}. That schema
+	// says nothing about the element's members, so it cannot be passed as matching.
+	inline := strings.Replace(schema, `"items": {"$ref": "#/$defs/entry"}`, `"items": {"type": "object"}`, 1)
+	diff, err := Compare([]byte(inline), "", matching{})
+	if err == nil && len(diff) == 0 {
+		t.Fatal("an inline element schema with no properties passed against a struct element")
+	}
+}
+
+func TestArrayWithoutItemsIsReported(t *testing.T) {
+	bare := strings.Replace(schema, `, "items": {"$ref": "#/$defs/entry"}`, ``, 1)
+	diff := strings.Join(mustCompareDoc(t, bare, matching{}), "\n")
+	if !strings.Contains(diff, "declares no items") {
+		t.Fatalf("an array schema with no items passed against a struct slice:\n%s", diff)
+	}
+}
+
+const mapSchema = `{
+  "type": "object",
+  "properties": {"values": {"type": "object", "additionalProperties": {"type": "string"}}},
+  "required": ["values"]
+}`
+
+type mapOfStrings struct {
+	Values map[string]string `json:"values"`
+}
+
+type mapOfInts struct {
+	Values map[string]int `json:"values"`
+}
+
+func TestMapValueTypesAreCompared(t *testing.T) {
+	if diff := mustCompareDoc(t, mapSchema, mapOfStrings{}); len(diff) != 0 {
+		t.Fatalf("matching map reported drift: %v", diff)
+	}
+	diff := strings.Join(mustCompareDoc(t, mapSchema, mapOfInts{}), "\n")
+	if !strings.Contains(diff, `values{}: elements are JSON type "integer" on the struct but "string" in the schema`) {
+		t.Fatalf("a map value type change was not reported:\n%s", diff)
+	}
+	noAP := strings.Replace(mapSchema, `, "additionalProperties": {"type": "string"}`, ``, 1)
+	if diff := mustCompareDoc(t, noAP, mapOfStrings{}); len(diff) == 0 {
+		t.Fatal("a typed map passed against a schema declaring no additionalProperties")
+	}
+}
+
+// ---- Tag branches. ----
+
+func TestDuplicateJSONNameIsAnError(t *testing.T) {
+	// Built at run time: go vet refuses a literal struct that repeats a json tag, which is
+	// exactly why this branch could otherwise go untested.
+	dup := reflect.StructOf([]reflect.StructField{
+		{Name: "A", Type: reflect.TypeOf(""), Tag: `json:"token"`},
+		{Name: "B", Type: reflect.TypeOf(""), Tag: `json:"token,omitempty"`},
+	})
+	_, err := StructMembers(dup)
+	if err == nil || !strings.Contains(err.Error(), "twice") {
+		t.Fatalf("want a duplicate-name error, got %v", err)
+	}
+}
+
+type skipped struct {
+	Token    string `json:"token"`
+	Internal string `json:"-"`
+}
+
+func TestDashTaggedFieldIsNotOnTheWire(t *testing.T) {
+	m, err := StructMembers(reflect.TypeOf(skipped{}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(m) != 1 {
+		t.Fatalf(`a json:"-" field was counted as a member: %v`, m)
+	}
+	if _, ok := m["Internal"]; ok {
+		t.Fatal(`a json:"-" field appeared under its Go name`)
+	}
+}
+
+func mustCompareDoc(t *testing.T, doc string, v any) []string {
+	t.Helper()
+	diff, err := Compare([]byte(doc), "", v)
+	if err != nil {
+		t.Fatalf("Compare: %v", err)
+	}
+	return diff
 }

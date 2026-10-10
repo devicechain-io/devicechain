@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://docs.devicechain.io/schema/device/new-relationship-payload.schema.json",
   "title": "DeviceChain NewRelationship payload",
-  "description": "The payload of a device event whose eventType is NewRelationship: it creates one relationship from the sending device to another entity in the same tenant. Unlike the other payloads it has no entries array. The three members are read by their exact names, so their case matters. A relationship the platform cannot create (an unknown target type, a target that does not exist, an unknown relationship type) is not created, and the event is dead-lettered after its delivery attempts.",
+  "description": "The payload of a device event whose eventType is NewRelationship: it creates one relationship from the sending device to another entity in the same tenant. Unlike the other payloads it has no entries array. The three members are read by their exact names, so their case matters. Required describes what a device must send: a missing payload or member is not refused when the message is decoded but reads as an empty string, and the event then fails at resolution. A relationship the platform cannot create (an unknown target type, a target that does not exist, an unknown relationship type) is not created, and the event is dead-lettered after its delivery attempts.",
   "type": "object",
   "properties": {
     "relationshipType": {

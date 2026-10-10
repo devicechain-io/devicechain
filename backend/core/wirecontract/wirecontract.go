@@ -250,15 +250,184 @@ func orAny(t string) string {
 	return t
 }
 
-// Compare is Diff over a schema document and a value of the struct type it publishes.
+// Compare is Diff over a schema document and a value of the struct type it publishes,
+// applied recursively: a member whose Go type is a struct, or a slice, array or map of
+// anything, is followed into the schema that describes it (`items` for a slice or array,
+// `additionalProperties` for a map, a local `$ref` wherever one appears), so a nested struct
+// is held to its schema too rather than passing because its parent's member is "an array".
 func Compare(doc []byte, pointer string, v any) ([]string, error) {
-	schema, err := SchemaMembers(doc, pointer)
+	var root any
+	if err := json.Unmarshal(doc, &root); err != nil {
+		return nil, fmt.Errorf("schema is not JSON: %w", err)
+	}
+	node, err := resolve(root, pointer)
 	if err != nil {
 		return nil, err
 	}
-	strct, err := StructMembers(reflect.TypeOf(v))
-	if err != nil {
-		return nil, err
+	c := &comparer{root: root}
+	c.object(node, reflect.TypeOf(v), "")
+	if c.err != nil {
+		return nil, c.err
 	}
-	return Diff(schema, strct), nil
+	sort.Strings(c.out)
+	return c.out, nil
+}
+
+type comparer struct {
+	root any
+	out  []string
+	err  error
+}
+
+func (c *comparer) drift(path, format string, args ...any) {
+	line := fmt.Sprintf(format, args...)
+	if path != "" {
+		line = path + ": " + line
+	}
+	c.out = append(c.out, line)
+}
+
+// follow resolves a schema node through any local $refs. A non-local $ref is an error:
+// this package does not fetch documents, and silently skipping one would pass vacuously.
+func (c *comparer) follow(node any) (map[string]any, error) {
+	for i := 0; i < 32; i++ {
+		obj, ok := node.(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("schema node %v is not an object", node)
+		}
+		ref, ok := obj["$ref"].(string)
+		if !ok {
+			return obj, nil
+		}
+		if !strings.HasPrefix(ref, "#") {
+			return nil, fmt.Errorf("non-local $ref %q is not followed here", ref)
+		}
+		if node, ok = mustResolve(c.root, ref[1:]); !ok {
+			return nil, fmt.Errorf("$ref %q resolves to nothing", ref)
+		}
+	}
+	return nil, fmt.Errorf("$ref chain too deep")
+}
+
+func mustResolve(root any, pointer string) (any, bool) {
+	n, err := resolve(root, pointer)
+	return n, err == nil
+}
+
+func (c *comparer) object(node any, t reflect.Type, path string) {
+	if c.err != nil {
+		return
+	}
+	obj, err := c.follow(node)
+	if err != nil {
+		c.err = fmt.Errorf("%s: %w", orRoot(path), err)
+		return
+	}
+	raw, err := json.Marshal(obj)
+	if err != nil {
+		c.err = err
+		return
+	}
+	schema, err := SchemaMembers(raw, "")
+	if err != nil {
+		c.err = fmt.Errorf("%s: %w", orRoot(path), err)
+		return
+	}
+	for t.Kind() == reflect.Pointer {
+		t = t.Elem()
+	}
+	strct, err := StructMembers(t)
+	if err != nil {
+		c.err = err
+		return
+	}
+	for _, line := range Diff(schema, strct) {
+		c.drift(path, "%s", line)
+	}
+	props, _ := obj["properties"].(map[string]any)
+	for i := 0; i < t.NumField(); i++ {
+		f := t.Field(i)
+		name := strings.Split(f.Tag.Get("json"), ",")[0]
+		if !f.IsExported() || name == "" || name == "-" {
+			continue
+		}
+		prop, ok := props[name]
+		if !ok {
+			continue // already reported by Diff
+		}
+		c.value(prop, f.Type, join(path, name))
+	}
+}
+
+// value holds the schema of one member to the Go type that decodes it, below the level
+// Diff compares: into structs, and into the elements of slices, arrays and maps.
+func (c *comparer) value(node any, t reflect.Type, path string) {
+	for t.Kind() == reflect.Pointer {
+		t = t.Elem()
+	}
+	if t == rawMessageType || t == timeType || t.Kind() == reflect.Interface {
+		return
+	}
+	switch t.Kind() {
+	case reflect.Struct:
+		c.object(node, t, path)
+	case reflect.Slice, reflect.Array:
+		if t.Elem().Kind() == reflect.Uint8 {
+			return
+		}
+		c.element(node, "items", t.Elem(), path+"[]")
+	case reflect.Map:
+		if t.Key().Kind() != reflect.String {
+			c.err = fmt.Errorf("%s: map keys of kind %s are not supported", path, t.Key().Kind())
+			return
+		}
+		c.element(node, "additionalProperties", t.Elem(), path+"{}")
+	}
+}
+
+// element compares the schema under keyword (items / additionalProperties) with the Go
+// element type, then descends into it.
+func (c *comparer) element(node any, keyword string, elem reflect.Type, path string) {
+	obj, err := c.follow(node)
+	if err != nil {
+		c.err = fmt.Errorf("%s: %w", path, err)
+		return
+	}
+	want, err := jsonType(elem)
+	if err != nil {
+		c.err = fmt.Errorf("%s: %w", path, err)
+		return
+	}
+	sub, present := obj[keyword]
+	if !present {
+		if want != "" {
+			c.drift(path, "the struct's elements are JSON type %q but the schema declares no %s", want, keyword)
+		}
+		return
+	}
+	subObj, err := c.follow(sub)
+	if err != nil {
+		c.err = fmt.Errorf("%s: %w", path, err)
+		return
+	}
+	got, _ := subObj["type"].(string)
+	if got != want {
+		c.drift(path, "elements are JSON type %q on the struct but %q in the schema", orAny(want), orAny(got))
+		return
+	}
+	c.value(subObj, elem, path)
+}
+
+func join(path, name string) string {
+	if path == "" {
+		return name
+	}
+	return path + "." + name
+}
+
+func orRoot(path string) string {
+	if path == "" {
+		return "(root)"
+	}
+	return path
 }

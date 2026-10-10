@@ -27,10 +27,13 @@ LwM2M 和 Sparkplug B 设备不使用这些消息。它们的协议网关会将�
 
 这些 Schema 与解码这些消息的代码一同提交到代码库中；如果某个字段在一侧被重命名、新增或删除而另一侧没有，测试会让平台构建失败。
 
-Schema 表达不了的两点：
+Schema 表达不了的内容：
 
 - **未知成员会被忽略，而不是被拒绝。** 拼错的可选字段（把 `altId` 写成 `altID` 没问题，写成 `alt_id` 则不行）会被静默丢弃，而不是被拒绝。在本地校验时额外加上 `additionalProperties: false`，可以在测试中发现这类问题。
-- **"必填"描述的是设备必须发送的内容。** 其中大部分由平台自行强制执行，[拒绝表](#rejections)准确列出了平台会拒绝什么。平台唯一容忍缺失的字段在其所在行中注明。
+- **"必填"描述的是设备必须发送的内容，而不是平台在入口处会拒绝的全部情形。** 大多数必填字段都会被强制执行，见[拒绝表](#rejections)。以下几项不会：
+  - 当凭据认证了事件时，`device` 可以缺失；事件归属于该凭据所属的设备。
+  - 缺少 `payload`，或缺少 `relationshipType`、`targetType` 或 `target` 的 `NewRelationship` 事件会被接受（HTTP `202`）：每个缺失的值都按空字符串读取，随后事件在解析时失败，并以原因 `ApiCallFailed` 进入死信。
+  - 在命令响应中，缺少 `success` 按 `false` 处理，命令结束为 `FAILED`；缺少 `commandToken` 则不对应任何命令，重试后以原因 `exhausted` 进入死信。
 
 ## 版本 {#versioning}
 
@@ -62,7 +65,7 @@ Schema 表达不了的两点：
 | `eventType` | string | 是 | `Measurement`、`Location`、`Alert` 或 `NewRelationship`，区分大小写。决定载荷结构。 | `"Measurement"` |
 | `payload` | object | 是 | 事件内容。其结构取决于 `eventType`；见[载荷](#payloads)。 | `{"entries":[…]}` |
 | `occurredTime` | string，RFC 3339 | 否 | 事件发生的时间。省略时，以平台收到消息的时间作为事件时间。 | `"2026-08-09T12:00:00.125Z"` |
-| `altId` | string | 否 | 由设备选定的幂等键。如果事件的 `altId` **和**信封 `occurredTime` 都与同一租户中已存储的某个事件相同，它会被当作重复投递而跳过。见[下文](#altid)。 | `"sensor-001-4417"` |
+| `altId` | string | 否 | 由设备选定的幂等键：携带相同 `altId` **和**相同信封 `occurredTime` 的重复投递事件会被跳过。目前按租户而非按设备匹配，这是一个已知限制；见[下文](#altid)。 | `"sensor-001-4417"` |
 | `relationship` | string | 否 | 会被接受并沿处理链路传递，但**不会被使用**。无论此字段为何值，平台都会在事件上记录该设备所有被跟踪的关系。不要依赖它。 | — |
 | `credentialType` | string | 见下文 | `ACCESS_TOKEN` 或 `MQTT_BASIC`。与 `credentialId` 一起认证该事件。 | `"ACCESS_TOKEN"` |
 | `credentialId` | string | 见下文 | 对 `ACCESS_TOKEN` 而言就是令牌本身。对 `MQTT_BASIC` 而言是用户名，不带 MQTT 连接所用的 `{tenant}:` 前缀。 | `"5f98…98b2"` |
@@ -80,8 +83,12 @@ Schema 表达不了的两点：
 
 - 匹配同时基于 `altId` **和**信封的 `occurredTime`。条目上的 `occurredTime` 不计入匹配。
 - 请在信封上发送 `occurredTime`。没有它，每份副本都以到达时间为准，两个时间不同，两份都会被存储。
-- 匹配范围是**按租户**，而不是按设备。两台设备在同一时刻使用相同的 `altId` 会发生冲突，其中一个事件会被跳过。请让该值在整个设备群中唯一，例如以设备令牌作为前缀。
+- 目前按租户而非按设备进行匹配；见下方的限制说明。
 - 与已有事件 `altId` 和 `occurredTime` 都相同的第二个事件即使内容不同也会被跳过。
+
+:::caution 已知限制
+目前重复检测是按**租户**基于（`altId`，`occurredTime`）进行的，而不是按设备，因此两台设备在同一时刻发送相同的 `altId` 会发生冲突，其中一个事件会被跳过。这是一个缺陷，修复正在进行中。在修复发布之前，请让该值在整个设备群中唯一，例如以设备令牌作为前缀。
+:::
 
 ### 载荷 {#payloads}
 
@@ -125,7 +132,7 @@ Schema 表达不了的两点：
 
 #### NewRelationship {#new-relationship-payload}
 
-从发送事件的设备到同一租户中另一实体创建一条关系。此载荷没有 `entries` 数组，且三个键按确切名称读取，因此大小写有影响。
+从发送事件的设备到同一租户中另一实体创建一条关系。此载荷没有 `entries` 数组，且三个键按确切名称读取，因此大小写有影响。缺失的键在解码消息时不会被拒绝：它按空字符串读取，随后事件会像下文所述情形一样在解析时失败。
 
 | 字段 | 类型 | 必填 | 含义 | 示例 |
 | --- | --- | --- | --- | --- |
@@ -156,7 +163,7 @@ Schema 表达不了的两点：
 | `commandToken` | string | 是 | 所响应的那次下发中的 `token`：命令的令牌，而不是设备的令牌。 | `"6f1c0f8e-…"` |
 | `dispatchNonce` | string | 是 | 所响应的那次下发中的 `dispatchNonce`。 | `"0f6f4a2c-…"` |
 | `success` | boolean | 是 | `true` 将命令结束为 `SUCCESSFUL`，`false` 结束为 `FAILED`。省略时按 `false` 处理。 | `true` |
-| `payload` | **string** | 否 | 结果文本，随命令存储并由 API 返回。它是 JSON **字符串**，不是对象：要返回结构化数据，请将其编码进字符串。此处若为对象，整条响应都无法解码，并会被丢弃（见下文）。 | `"rebooting in 5s"` |
+| `payload` | **string** | 否 | 结果文本，随命令存储并由 API 返回。它是 JSON **字符串**，不是对象：要返回结构化数据，请将其编码进字符串。此处若为对象，整条响应都无法解码：它会被丢弃，不进入死信，命令保持 `SENT`。这是一个已知限制，修复正在进行中。 | `"rebooting in 5s"` |
 | `error` | string | 否 | 命令失败的原因。仅在 `success` 为 `false` 时存储；为 `true` 时被忽略。 | `"actuator jammed"` |
 
 ```json
@@ -208,7 +215,7 @@ Schema 表达不了的两点：
 | --- | --- |
 | 对应该设备拥有的命令，且带有其当前派发的 `dispatchNonce` | 命令结束为 `SUCCESSFUL` 或 `FAILED`。 |
 | 响应一条已经结束的命令 | 被忽略；命令保持原有结果。 |
-| 无法解码：不是 JSON，或字段类型错误，例如 `payload` 是对象或 `success` 带引号 | **被丢弃**：会记录日志并计数，但不进入死信。命令保持 `SENT` 直至超时，除非设备再次正确响应。 |
+| 无法解码：不是 JSON，或字段类型错误，例如 `payload` 是对象或 `success` 带引号 | **被丢弃**：会记录日志并计数，但不进入死信。命令保持 `SENT` 直至超时，除非设备再次正确响应。已知限制：记录这类响应的修复正在进行中。 |
 | 没有 `dispatchNonce` | 不结束命令；以原因 `unprocessable` 记录到 `dead-letters` 流。 |
 | 带有命令已经弃用的那次派发的 `dispatchNonce` | 不结束命令；以原因 `unprocessable` 进入死信。 |
 | `commandToken` 不对应任何命令（最常见的是误发了设备自己的令牌） | 重试到第五次投递，然后以原因 `exhausted` 进入死信。 |

@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://docs.devicechain.io/schema/device/command-response.schema.json",
   "title": "DeviceChain command response",
-  "description": "The JSON message a device publishes on MQTT topic {instanceId}/{tenant}/command-responses/{deviceToken} to report the outcome of a command it was delivered. The responding device is taken from the topic, never from the body. A message that is not valid JSON for this shape (for example a payload that is an object rather than a string) is discarded: it is logged and counted, but not dead-lettered, and unless the device answers again the command stays SENT until it times out.",
+  "description": "The JSON message a device publishes on MQTT topic {instanceId}/{tenant}/command-responses/{deviceToken} to report the outcome of a command it was delivered. The responding device is taken from the topic, never from the body. A message that is not valid JSON for this shape (for example a payload that is an object rather than a string) is discarded: it is logged and counted, but not dead-lettered, and unless the device answers again the command stays SENT until it times out. That is a known limitation, and a fix is under way. Required describes what a device must send: an omitted success reads as false, and an omitted commandToken matches no command.",
   "type": "object",
   "properties": {
     "commandToken": {
@@ -15,7 +15,7 @@
     },
     "payload": {
       "type": "string",
-      "description": "Free-form result text, stored with the command and returned by the API. A JSON string, not an object: to return structured data, encode it into the string."
+      "description": "Free-form result text, stored with the command and returned by the API. A JSON string, not an object: to return structured data, encode it into the string. An object here makes the whole response undecodable, so it is discarded as described above."
     },
     "error": {
       "type": "string",

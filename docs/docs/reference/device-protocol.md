@@ -27,10 +27,13 @@ The same list, with absolute URLs, is under `deviceProtocol` in [`/schema/index.
 
 The schemas are committed beside the code that decodes these messages, and a test fails the platform's build if a field is renamed, added or removed on one side and not the other.
 
-Two things a schema cannot say:
+What a schema cannot say:
 
 - **Unknown members are ignored, not refused.** A misspelled optional field (`altID` for `altId` is fine, `alt_id` is not) is silently dropped rather than rejected. A validator run with `additionalProperties: false` added locally catches that in testing.
-- **"Required" describes what a device must send.** The platform enforces most of it on its own, and the [rejection table](#rejections) lists exactly what it refuses. The one field it tolerates missing is noted in its row.
+- **"Required" describes what a device must send, not everything the platform refuses at the door.** Most required fields are enforced, as the [rejection tables](#rejections) list. These are not:
+  - `device` may be missing when a credential authenticates the event; the event is attributed to the credential's device.
+  - A `NewRelationship` event with no `payload`, or with `relationshipType`, `targetType` or `target` missing, is accepted (HTTP `202`): each missing value reads as an empty string, and the event then fails at resolution and is dead-lettered with reason `ApiCallFailed`.
+  - In a command response, a missing `success` reads as `false` and settles the command as `FAILED`; a missing `commandToken` matches no command and is dead-lettered with reason `exhausted` after its retries.
 
 ## Versioning {#versioning}
 
@@ -62,7 +65,7 @@ One JSON object per MQTT message or HTTP request. One message is one event.
 | `eventType` | string | yes | `Measurement`, `Location`, `Alert` or `NewRelationship`, case-sensitive. Selects the payload shape. | `"Measurement"` |
 | `payload` | object | yes | The event's content. Its shape depends on `eventType`; see [Payloads](#payloads). | `{"entries":[…]}` |
 | `occurredTime` | string, RFC 3339 | no | When the event happened. Omitted, the event is dated when the platform received the message. | `"2026-08-09T12:00:00.125Z"` |
-| `altId` | string | no | A device-chosen idempotency key. An event whose `altId` **and** envelope `occurredTime` both match an event already stored in the same tenant is skipped as a redelivery. See [below](#altid). | `"sensor-001-4417"` |
+| `altId` | string | no | A device-chosen idempotency key: a redelivered event carrying the same `altId` **and** envelope `occurredTime` is skipped. Currently matched per tenant, not per device, which is a known limitation; see [below](#altid). | `"sensor-001-4417"` |
 | `relationship` | string | no | Accepted, carried through the pipeline, and **not used**. The platform records every one of the device's tracked relationships on the event, whatever this says. Do not rely on it. | — |
 | `credentialType` | string | see below | `ACCESS_TOKEN` or `MQTT_BASIC`. With `credentialId`, authenticates the event. | `"ACCESS_TOKEN"` |
 | `credentialId` | string | see below | For `ACCESS_TOKEN`, the token itself. For `MQTT_BASIC`, the username, without the `{tenant}:` prefix the MQTT connection uses. | `"5f98…98b2"` |
@@ -80,8 +83,12 @@ At-least-once delivery (MQTT QoS 1, an HTTP retry after a `503`) can deliver one
 
 - The match is on `altId` **and** the envelope `occurredTime` together. An entry's `occurredTime` does not count.
 - Send an `occurredTime` on the envelope. Without one, each copy is dated on arrival, the two times differ, and both are stored.
-- The match is **per tenant**, not per device. Two devices that use the same `altId` for the same instant collide, and one of the events is skipped. Make the value unique across the fleet, for example by prefixing it with the device token.
+- The match is currently made per tenant rather than per device; see the limitation below.
 - A second event with the same `altId` and `occurredTime` is skipped even if its content is different.
+
+:::caution Known limitation
+Duplicates are currently detected per **tenant** on (`altId`, `occurredTime`), not per device, so two devices that send the same `altId` for the same instant collide, and one of the events is skipped. This is a defect, and a fix is under way. Until it ships, make the value unique across the fleet, for example by prefixing the device token.
+:::
 
 ### Payloads {#payloads}
 
@@ -125,7 +132,7 @@ Every location field is a JSON **string**, including the numeric ones. Each must
 
 #### NewRelationship {#new-relationship-payload}
 
-Creates one relationship from the sending device to another entity in the same tenant. This payload has no `entries` array, and its three keys are read by their exact names, so their case matters.
+Creates one relationship from the sending device to another entity in the same tenant. This payload has no `entries` array, and its three keys are read by their exact names, so their case matters. A missing key is not refused when the message is decoded: it reads as an empty string, and the event then fails at resolution like the cases below.
 
 | Field | Type | Required | Meaning | Example |
 | --- | --- | --- | --- | --- |
@@ -156,7 +163,7 @@ What a device publishes on its `command-responses` topic to settle a command. Th
 | `commandToken` | string | yes | The `token` of the delivery being answered: the command's token, not the device's. | `"6f1c0f8e-…"` |
 | `dispatchNonce` | string | yes | The `dispatchNonce` of the delivery being answered. | `"0f6f4a2c-…"` |
 | `success` | boolean | yes | `true` settles the command as `SUCCESSFUL`, `false` as `FAILED`. Omitted, it reads as `false`. | `true` |
-| `payload` | **string** | no | Result text, stored with the command and returned by the API. It is a JSON **string**, not an object: to return structured data, encode it into the string. An object here makes the whole response undecodable, and it is discarded (see below). | `"rebooting in 5s"` |
+| `payload` | **string** | no | Result text, stored with the command and returned by the API. It is a JSON **string**, not an object: to return structured data, encode it into the string. An object here makes the whole response undecodable: it is discarded, not dead-lettered, and the command stays `SENT`. That is a known limitation, and a fix is under way. | `"rebooting in 5s"` |
 | `error` | string | no | Why the command failed. Stored only when `success` is `false`; ignored when it is `true`. | `"actuator jammed"` |
 
 ```json
@@ -208,7 +215,7 @@ A command response is never answered, on any transport. What happens to it:
 | --- | --- |
 | Matches a command the device owns, with the `dispatchNonce` of its current dispatch | The command is settled `SUCCESSFUL` or `FAILED`. |
 | Answers a command that is already finished | Ignored; the command keeps its outcome. |
-| Not decodable: not JSON, or a field of the wrong type, such as an object `payload` or a quoted `success` | **Discarded**: logged and counted, but not dead-lettered. The command stays `SENT` until it times out, unless the device answers again correctly. |
+| Not decodable: not JSON, or a field of the wrong type, such as an object `payload` or a quoted `success` | **Discarded**: logged and counted, but not dead-lettered. The command stays `SENT` until it times out, unless the device answers again correctly. Known limitation: a fix that records these responses is under way. |
 | No `dispatchNonce` | Not settled; recorded on the `dead-letters` stream with reason `unprocessable`. |
 | A `dispatchNonce` from a dispatch the command has moved off | Not settled; dead-lettered with reason `unprocessable`. |
 | A `commandToken` that matches no command (most often the device's own token sent by mistake) | Retried until the fifth delivery, then dead-lettered with reason `exhausted`. |

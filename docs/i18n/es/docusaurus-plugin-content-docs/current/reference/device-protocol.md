@@ -27,10 +27,13 @@ La misma lista, con URL absolutas, está bajo `deviceProtocol` en [`/schema/inde
 
 Los esquemas se guardan en el repositorio junto al código que decodifica estos mensajes, y una prueba hace fallar la compilación de la plataforma si un campo se renombra, se añade o se elimina en un lado y no en el otro.
 
-Dos cosas que un esquema no puede decir:
+Lo que un esquema no puede decir:
 
 - **Los miembros desconocidos se ignoran, no se rechazan.** Un campo opcional mal escrito (`altID` en lugar de `altId` funciona; `alt_id` no) se descarta sin aviso en vez de rechazarse. Un validador al que añadas localmente `additionalProperties: false` lo detecta en las pruebas.
-- **"Obligatorio" describe lo que un dispositivo debe enviar.** La plataforma hace cumplir la mayor parte por sí misma, y la [tabla de rechazos](#rejections) enumera exactamente qué rechaza. El único campo cuya ausencia tolera se indica en su fila.
+- **"Obligatorio" describe lo que un dispositivo debe enviar, no todo lo que la plataforma rechaza en la entrada.** La mayoría de los campos obligatorios se hacen cumplir, como enumeran las [tablas de rechazos](#rejections). Estos no:
+  - `device` puede faltar cuando una credencial autentica el evento; el evento se atribuye al dispositivo de la credencial.
+  - Un evento `NewRelationship` sin `payload`, o sin `relationshipType`, `targetType` o `target`, se acepta (HTTP `202`): cada valor ausente se lee como un string vacío, y después el evento falla en la resolución y pasa a dead-letter con el motivo `ApiCallFailed`.
+  - En una respuesta a comando, un `success` ausente se lee como `false` y cierra el comando como `FAILED`; un `commandToken` ausente no corresponde a ningún comando y pasa a dead-letter con el motivo `exhausted` tras sus reintentos.
 
 ## Versionado {#versioning}
 
@@ -62,7 +65,7 @@ Un objeto JSON por mensaje MQTT o petición HTTP. Un mensaje es un evento.
 | `eventType` | string | sí | `Measurement`, `Location`, `Alert` o `NewRelationship`, distinguiendo mayúsculas. Selecciona la forma del payload. | `"Measurement"` |
 | `payload` | object | sí | El contenido del evento. Su forma depende de `eventType`; consulta [Payloads](#payloads). | `{"entries":[…]}` |
 | `occurredTime` | string, RFC 3339 | no | Cuándo ocurrió el evento. Si se omite, el evento se fecha cuando la plataforma recibió el mensaje. | `"2026-08-09T12:00:00.125Z"` |
-| `altId` | string | no | Una clave de idempotencia elegida por el dispositivo. Un evento cuyo `altId` **y** cuyo `occurredTime` del sobre coinciden con los de un evento ya almacenado en el mismo tenant se omite como reentrega. Consulta [más abajo](#altid). | `"sensor-001-4417"` |
+| `altId` | string | no | Una clave de idempotencia elegida por el dispositivo: un evento reentregado con el mismo `altId` **y** el mismo `occurredTime` del sobre se omite. Hoy la coincidencia es por tenant, no por dispositivo, lo cual es una limitación conocida; consulta [más abajo](#altid). | `"sensor-001-4417"` |
 | `relationship` | string | no | Se acepta, se transporta por la cadena de proceso y **no se usa**. La plataforma registra en el evento todas las relaciones con seguimiento del dispositivo, diga lo que diga este campo. No dependas de él. | — |
 | `credentialType` | string | ver abajo | `ACCESS_TOKEN` o `MQTT_BASIC`. Junto con `credentialId`, autentica el evento. | `"ACCESS_TOKEN"` |
 | `credentialId` | string | ver abajo | Para `ACCESS_TOKEN`, el propio token. Para `MQTT_BASIC`, el nombre de usuario, sin el prefijo `{tenant}:` que usa la conexión MQTT. | `"5f98…98b2"` |
@@ -80,8 +83,12 @@ La entrega al menos una vez (MQTT QoS 1, un reintento HTTP tras un `503`) puede 
 
 - La coincidencia es sobre `altId` **y** el `occurredTime` del sobre a la vez. El `occurredTime` de una entrada no cuenta.
 - Envía un `occurredTime` en el sobre. Sin él, cada copia se fecha al llegar, las dos horas difieren y se almacenan ambas.
-- La coincidencia es **por tenant**, no por dispositivo. Dos dispositivos que usan el mismo `altId` para el mismo instante colisionan, y uno de los eventos se omite. Haz que el valor sea único en toda la flota, por ejemplo anteponiéndole el token del dispositivo.
+- Hoy la coincidencia se hace por tenant y no por dispositivo; consulta la limitación más abajo.
 - Un segundo evento con el mismo `altId` y `occurredTime` se omite aunque su contenido sea distinto.
+
+:::caution Limitación conocida
+Hoy los duplicados se detectan por **tenant** sobre (`altId`, `occurredTime`), no por dispositivo, así que dos dispositivos que envían el mismo `altId` para el mismo instante colisionan, y uno de los eventos se omite. Es un defecto, y se está preparando una corrección. Hasta que llegue, haz que el valor sea único en toda la flota, por ejemplo anteponiéndole el token del dispositivo.
+:::
 
 ### Payloads {#payloads}
 
@@ -125,7 +132,7 @@ Cada campo de ubicación es un **string** JSON, incluidos los numéricos. Cada u
 
 #### NewRelationship {#new-relationship-payload}
 
-Crea una relación desde el dispositivo emisor hacia otra entidad del mismo tenant. Este payload no tiene array `entries`, y sus tres claves se leen por su nombre exacto, así que las mayúsculas importan.
+Crea una relación desde el dispositivo emisor hacia otra entidad del mismo tenant. Este payload no tiene array `entries`, y sus tres claves se leen por su nombre exacto, así que las mayúsculas importan. Una clave ausente no se rechaza al decodificar el mensaje: se lee como un string vacío, y el evento falla después en la resolución, como en los casos siguientes.
 
 | Campo | Tipo | Obligatorio | Significado | Ejemplo |
 | --- | --- | --- | --- | --- |
@@ -156,7 +163,7 @@ Lo que un dispositivo publica en su topic `command-responses` para cerrar un com
 | `commandToken` | string | sí | El `token` de la entrega a la que se responde: el token del comando, no el del dispositivo. | `"6f1c0f8e-…"` |
 | `dispatchNonce` | string | sí | El `dispatchNonce` de la entrega a la que se responde. | `"0f6f4a2c-…"` |
 | `success` | boolean | sí | `true` cierra el comando como `SUCCESSFUL`; `false`, como `FAILED`. Si se omite, se lee como `false`. | `true` |
-| `payload` | **string** | no | Texto de resultado, almacenado con el comando y devuelto por la API. Es un **string** JSON, no un objeto: para devolver datos estructurados, codifícalos dentro del string. Un objeto aquí hace que toda la respuesta sea indecodificable, y se descarta (ver abajo). | `"rebooting in 5s"` |
+| `payload` | **string** | no | Texto de resultado, almacenado con el comando y devuelto por la API. Es un **string** JSON, no un objeto: para devolver datos estructurados, codifícalos dentro del string. Un objeto aquí hace que toda la respuesta sea indecodificable: se descarta, no pasa a dead-letter y el comando sigue en `SENT`. Es una limitación conocida, y se está preparando una corrección. | `"rebooting in 5s"` |
 | `error` | string | no | Por qué falló el comando. Solo se almacena cuando `success` es `false`; se ignora cuando es `true`. | `"actuator jammed"` |
 
 ```json
@@ -208,7 +215,7 @@ Una respuesta a comando nunca recibe contestación, en ningún transporte. Lo qu
 | --- | --- |
 | Corresponde a un comando del dispositivo, con el `dispatchNonce` de su despacho actual | El comando se cierra como `SUCCESSFUL` o `FAILED`. |
 | Responde a un comando ya terminado | Se ignora; el comando conserva su resultado. |
-| No es decodificable: no es JSON, o un campo tiene el tipo equivocado, como un `payload` objeto o un `success` entre comillas | **Se descarta**: se registra en el log y se cuenta, pero no pasa a dead-letter. El comando sigue en `SENT` hasta que vence, salvo que el dispositivo vuelva a responder correctamente. |
+| No es decodificable: no es JSON, o un campo tiene el tipo equivocado, como un `payload` objeto o un `success` entre comillas | **Se descarta**: se registra en el log y se cuenta, pero no pasa a dead-letter. El comando sigue en `SENT` hasta que vence, salvo que el dispositivo vuelva a responder correctamente. Limitación conocida: se está preparando una corrección que registre estas respuestas. |
 | Sin `dispatchNonce` | No se cierra; se registra en el stream `dead-letters` con el motivo `unprocessable`. |
 | Un `dispatchNonce` de un despacho que el comando ya dejó atrás | No se cierra; pasa a dead-letter con el motivo `unprocessable`. |
 | Un `commandToken` que no corresponde a ningún comando (casi siempre el propio token del dispositivo enviado por error) | Se reintenta hasta la quinta entrega y después pasa a dead-letter con el motivo `exhausted`. |

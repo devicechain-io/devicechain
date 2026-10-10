@@ -7,7 +7,7 @@
   "properties": {
     "altId": {
       "type": "string",
-      "description": "A device-chosen idempotency key. An event whose altId and envelope occurredTime both match an event already stored for the same tenant is skipped as a redelivery. The match is per tenant, not per device, so make the value unique across the fleet (prefix it with the device token, for example). Without an envelope occurredTime the event is dated on arrival, so a resend gets a different time and is stored again."
+      "description": "A device-chosen idempotency key: a redelivered event carrying the same altId and envelope occurredTime is skipped rather than stored twice. Known limitation: duplicates are currently detected per tenant on (altId, occurredTime), not per device; until that is fixed, make the value unique across the fleet, for example by prefixing the device token. Without an envelope occurredTime the event is dated on arrival, so a resend gets a different time and is stored again."
     },
     "device": {
       "type": "string",
