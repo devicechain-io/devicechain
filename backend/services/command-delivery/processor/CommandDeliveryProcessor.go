@@ -44,36 +44,32 @@ type deliveryEnvelope struct {
 	DispatchNonce string `json:"dispatchNonce"`
 }
 
-// responsePayload is a device's answer data: any JSON value. The delivery envelope's payload
-// accepts any JSON, so the response that mirrors it must too; reading it as a Go string
-// refused the whole envelope the moment a device answered with an object, and the refusal
-// was an ack with no dead letter, leaving the command SENT until it timed out.
+// responsePayloadText is a device's answer data as the *string MarkResponse takes: nil when
+// the device sent none (absent or null). The payload is any JSON value, as the delivery
+// envelope's is, so the response that mirrors it must accept the same; reading it as a Go
+// string refused the whole envelope the moment a device answered with an object, and the
+// refusal was an ack with no dead letter, leaving the command SENT until it timed out.
 //
-// A JSON string decodes to its text exactly as before (so what is stored for a device that
-// answers with a string is unchanged, byte for byte). Any other JSON value is kept as its own
-// JSON text, which the response_payload column, a JSON column, stores as that value.
-type responsePayload string
-
-func (p *responsePayload) UnmarshalJSON(data []byte) error {
-	data = bytes.TrimSpace(data)
-	if len(data) > 0 && data[0] == '"' {
-		var s string
-		if err := json.Unmarshal(data, &s); err != nil {
-			return err
-		}
-		*p = responsePayload(s)
-		return nil
-	}
-	*p = responsePayload(data)
-	return nil
-}
-
-// text is the payload as the *string MarkResponse takes, nil when the device sent none.
-func (p *responsePayload) text() *string {
+// A JSON string yields its text exactly as before (so what is stored for a device that
+// answers with a string is unchanged, byte for byte). Any other JSON value is kept as its
+// own JSON text, which the response_payload column, a JSON column, stores as that value.
+//
+// The field is a json.RawMessage so the published schema (which declares no type for it)
+// and wirecontract see "any JSON value" rather than a Go string.
+func responsePayloadText(p *json.RawMessage) *string {
 	if p == nil {
 		return nil
 	}
-	s := string(*p)
+	data := bytes.TrimSpace(*p)
+	if len(data) > 0 && data[0] == '"' {
+		var s string
+		if err := json.Unmarshal(data, &s); err != nil {
+			// Unreachable: the envelope decoded, so a quoted value is a valid JSON string.
+			s = string(data)
+		}
+		return &s
+	}
+	s := string(data)
 	return &s
 }
 
@@ -82,7 +78,7 @@ func (p *responsePayload) text() *string {
 type responseEnvelope struct {
 	CommandToken string           `json:"commandToken"`
 	Success      bool             `json:"success"`
-	Payload      *responsePayload `json:"payload,omitempty"`
+	Payload      *json.RawMessage `json:"payload,omitempty"`
 	Error        *string          `json:"error,omitempty"`
 
 	// DispatchNonce is the value the device echoes from the delivery envelope it acted on,
@@ -839,7 +835,7 @@ func (cproc *CommandDeliveryProcessor) handleResponse(ctx context.Context, msg m
 	}
 
 	if _, err := cproc.Api.MarkResponse(tenantCtx, response.CommandToken, responder,
-		response.DispatchNonce, response.Success, response.Payload.text(), response.Error); err != nil {
+		response.DispatchNonce, response.Success, responsePayloadText(response.Payload), response.Error); err != nil {
 		// A device answering for a command it does not own is refused, and the refusal is
 		// TERMINAL, not transient: the same message would be refused on every redelivery,
 		// so retrying it only burns the delivery budget. Ack it, count it as invalid, and

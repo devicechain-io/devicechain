@@ -163,7 +163,7 @@ What a device publishes on its `command-responses` topic to settle a command. Th
 | `commandToken` | string | yes | The `token` of the delivery being answered: the command's token, not the device's. | `"6f1c0f8e-…"` |
 | `dispatchNonce` | string | yes | The `dispatchNonce` of the delivery being answered. | `"0f6f4a2c-…"` |
 | `success` | boolean | yes | `true` settles the command as `SUCCESSFUL`, `false` as `FAILED`. Omitted, it reads as `false`. | `true` |
-| `payload` | **string** | no | Result text, stored with the command and returned by the API. It is a JSON **string**, not an object: to return structured data, encode it into the string. An object here makes the whole response undecodable: it is discarded, not dead-lettered, and the command stays `SENT`. That is a known limitation, and a fix is under way. | `"rebooting in 5s"` |
+| `payload` | any JSON value | no | The command's result data, stored with the command and returned by the API. A string is stored as its text; an object, array, number or boolean is stored as that JSON value, exactly as sent, so a device can return structured data directly. Omitted or `null`, the command has no response payload. | `"rebooting in 5s"` or `{"level":3}` |
 | `error` | string | no | Why the command failed. Stored only when `success` is `false`; ignored when it is `true`. | `"actuator jammed"` |
 
 ```json
@@ -215,7 +215,7 @@ A command response is never answered, on any transport. What happens to it:
 | --- | --- |
 | Matches a command the device owns, with the `dispatchNonce` of its current dispatch | The command is settled `SUCCESSFUL` or `FAILED`. |
 | Answers a command that is already finished | Ignored; the command keeps its outcome. |
-| Not decodable: not JSON, or a field of the wrong type, such as an object `payload` or a quoted `success` | **Discarded**: logged and counted, but not dead-lettered. The command stays `SENT` until it times out, unless the device answers again correctly. Known limitation: a fix that records these responses is under way. |
+| Not decodable: not JSON, or a field of the wrong type, such as a quoted `success` | Not settled; recorded on the `dead-letters` stream with reason `unprocessable`, naming the responding device. The command stays `SENT` until it times out, unless the device answers again correctly. |
 | No `dispatchNonce` | Not settled; recorded on the `dead-letters` stream with reason `unprocessable`. |
 | A `dispatchNonce` from a dispatch the command has moved off | Not settled; dead-lettered with reason `unprocessable`. |
 | A `commandToken` that matches no command (most often the device's own token sent by mistake) | Retried until the fifth delivery, then dead-lettered with reason `exhausted`. |
