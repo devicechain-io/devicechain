@@ -178,18 +178,20 @@ func TestEveryControlNamesSomethingTheSchemaDeclares(t *testing.T) {
 		if !ok {
 			continue
 		}
-		schema := stripSpace(schemaFor(t, e.Area))
-		if !strings.Contains(schema, tm.Mutation+"("+tm.Arg+":") {
+		schema := parsedArea(t, e.Area)
+		if !rootFieldTakes(schema, "mutation", tm.Mutation, tm.Arg) {
 			t.Errorf("the %s control calls %s(%s:…), which %s does not declare", tm.Mode, tm.Mutation, tm.Arg, e.Area)
 		}
 		if tm.Input != "" {
 			typeName := strings.TrimSuffix(tm.Input, "!")
-			if !strings.Contains(schemaFor(t, e.Area), "input "+typeName+" {") {
+			if !declaresInput(schema, typeName) {
 				t.Errorf("the %s control sends %s, which %s does not declare", tm.Mode, typeName, e.Area)
 			}
 			// The request has to reach the mutation under the name the document
 			// uses, and `request` is hard-coded in doc().
-			if !strings.Contains(schema, tm.Mutation+"("+tm.Arg+":String!,request:") {
+			f := rootField(schema, "mutation", tm.Mutation)
+			if f == nil || f.Arguments.Get(tm.Arg) == nil || f.Arguments.Get(tm.Arg).Type.String() != "String!" ||
+				f.Arguments.Get("request") == nil {
 				t.Errorf("the %s control passes request:, which %s does not declare on %s", tm.Mode, e.Area, tm.Mutation)
 			}
 		}

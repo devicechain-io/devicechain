@@ -187,7 +187,10 @@ func elements(s *ast.Schema) []Element {
 			add(name, KindType, t.Desc)
 		default:
 			// A kind this check does not know how to enumerate must not be passed over
-			// as described: fail loudly through a coordinate nobody can allowlist.
+			// as described: it is reported as an undescribed element whose coordinate
+			// names the unhandled kind, so the run fails until the enumeration learns it.
+			// (That coordinate could be allowlisted by hand; a reviewer would see a line
+			// reading "unhandled kind" go into the list.)
 			add(name+" (unhandled kind "+t.Kind()+")", KindType, "")
 		}
 	}
