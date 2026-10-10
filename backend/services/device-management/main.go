@@ -87,6 +87,11 @@ var (
 	// CredentialChecks counts the auth callout's MQTT password checks by outcome. The
 	// callout's credential.Checker exports its store_full series at zero when it is built.
 	CredentialChecks *prometheus.CounterVec
+	// CredentialMisconfigured counts device credential checks refused because the stored
+	// secret is one no presented secret can match (none stored, or a digest this key did
+	// not make), by path. It is separate from wrong passwords on purpose: those are the
+	// device's mistake, these are the operator's.
+	CredentialMisconfigured *prometheus.CounterVec
 
 	// DeadLetters is this service's identity as a dead-letter producer: the source its
 	// letters are stamped with and the ONE dead_letter_lost_total both of its arms count
@@ -150,6 +155,16 @@ func buildMetrics() {
 			"attempt store could not be reached and the connect was refused; outcome=\"store_full\" "+
 			"means the attempt store was full and the connect was checked WITHOUT its backoff.",
 		[]string{"kind", "outcome"})
+	CredentialMisconfigured = Microservice.NewCounterVec("credential_misconfigured_total",
+		"Device credential checks refused because the stored secret can never match: none is "+
+			"stored, or its digest was made under a different key than this instance's root key "+
+			"derives (most likely a database restored next to the wrong root key). path=\"connect\" "+
+			"is the MQTT auth callout, path=\"event\" the per-event check. Wrong passwords are not "+
+			"counted here.",
+		[]string{"path"})
+	for _, path := range []string{model.CredentialPathConnect, model.CredentialPathEvent} {
+		CredentialMisconfigured.WithLabelValues(path)
+	}
 	GeoFencePublishFails = Microservice.NewCounter(
 		"geofence_set_publish_failures_total",
 		"Geofence-set manifests that could not be published — a marshal error, a broker refusal, or a transport fault. Each one means event-processing was not told about a fence edit, so containment for that tenant holds its previous fence set until a reconcile sweep repairs it. A sustained non-zero rate means fence edits are not reaching the detection engine.")
@@ -226,6 +241,7 @@ func buildApis(nmgr *messaging.NatsManager, rdbm *rdb.RdbManager, key *credentia
 	api := model.NewApi(rdbm)
 	api.EnableCeilingMetrics(nmgr.Microservice)
 	api.DeviceSecretKey = key
+	api.MisconfiguredSecrets = CredentialMisconfigured
 	cached := model.NewCachedApi(api, caches)
 	// The write paths evict the hot-path caches through this seam (ADR-044 F2). The GraphQL
 	// mutations run on the plain *Api, so the evictor is wired onto it.

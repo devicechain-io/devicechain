@@ -12,6 +12,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/entity"
 	"github.com/devicechain-io/dc-microservice/governance"
 	"github.com/devicechain-io/dc-microservice/rdb"
+	"github.com/prometheus/client_golang/prometheus"
 )
 
 // GeoFenceCapsResolver reads a tenant's three RESOLVED geofence caps — the per-tenant
@@ -100,6 +101,10 @@ type Api struct {
 	// cannot be stored (the write is refused) and no stored digest can be checked
 	// (ErrCredentialMisconfigured); nothing falls back to storing or comparing plaintext.
 	DeviceSecretKey *credential.DeviceSecretKey
+
+	// MisconfiguredSecrets counts checks refused with ErrCredentialMisconfigured, by path
+	// (CredentialPathConnect, CredentialPathEvent). Nil counts nothing (tests).
+	MisconfiguredSecrets *prometheus.CounterVec
 
 	// DetectionRuleValidator compiles a profile's draft detection rules against
 	// event-processing at publish (ADR-044 sync gate / ADR-051 slice 4b); a rule that

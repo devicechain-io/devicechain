@@ -77,3 +77,21 @@ func TestAuthorizeLogsRefusalsAtDebugAndRealFailuresAtWarn(t *testing.T) {
 		})
 	}
 }
+
+// A stored credential that can never authenticate is logged at Warn at most once a
+// minute: a restore next to the wrong root key makes that every MQTT_BASIC device, each
+// reconnecting on its own backoff, and a line per connect would flood the log.
+func TestAMisconfiguredCredentialWarnIsRateLimited(t *testing.T) {
+	logs := captureWarnings(t)
+	r, _ := newTestResponder(t, func(context.Context, *model.PresentedCredential) (*model.Device, error) {
+		return nil, model.ErrCredentialMisconfigured
+	})
+	for i := 0; i < 3; i++ {
+		if jwt, _ := r.authorize(testRequest(t, "acme-corp:dev1", "s3cret")); jwt != "" {
+			t.Fatal("a misconfigured credential was granted")
+		}
+	}
+	if levels := calloutAuthLevels(t, logs.String()); len(levels) != 1 || levels[0] != "warn" {
+		t.Fatalf("want exactly one warn line for three refusals, got %v\n%s", levels, logs.String())
+	}
+}

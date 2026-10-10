@@ -17,9 +17,9 @@ func DeviceSecretKey() *credential.DeviceSecretKey {
 	return k
 }
 
-// SecretDigest is secret's stored form under DeviceSecretKey.
-func SecretDigest(secret string) string {
-	d, err := DeviceSecretKey().Digest(secret)
+// SecretDigest is tenant's secret's stored form under DeviceSecretKey.
+func SecretDigest(tenant, secret string) string {
+	d, err := DeviceSecretKey().Digest(tenant, secret)
 	if err != nil {
 		panic(err)
 	}

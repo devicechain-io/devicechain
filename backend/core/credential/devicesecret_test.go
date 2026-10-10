@@ -5,10 +5,13 @@ package credential_test
 
 import (
 	"bytes"
+	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/devicechain-io/dc-microservice/credential"
+	"github.com/devicechain-io/dc-microservice/credential/credentialtest"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -16,11 +19,11 @@ import (
 // A digest verifies the secret it was made from and nothing else, byte for byte.
 func TestDeviceSecretDigestVerifiesOnlyItsSecret(t *testing.T) {
 	k := testDeviceKey(t)
-	d, err := k.Digest("s3cret")
+	d, err := k.Digest("acme", "s3cret")
 	require.NoError(t, err)
-	require.NoError(t, credential.VerifyDeviceSecret(k, d, "s3cret"))
+	require.NoError(t, credential.VerifyDeviceSecret(k, "acme", d, "s3cret"))
 	for _, wrong := range []string{"", "s3creT", "s3cret ", " s3cret", "s3cre", "s3cret\x00"} {
-		require.ErrorIs(t, credential.VerifyDeviceSecret(k, d, wrong), credential.ErrMismatch, "presented %q", wrong)
+		require.ErrorIs(t, credential.VerifyDeviceSecret(k, "acme", d, wrong), credential.ErrMismatch, "presented %q", wrong)
 	}
 }
 
@@ -28,32 +31,32 @@ func TestDeviceSecretDigestVerifiesOnlyItsSecret(t *testing.T) {
 // (the salt), so a reader of the table cannot see which devices share a password.
 func TestDeviceSecretDigestIsSaltedAndOpaque(t *testing.T) {
 	k := testDeviceKey(t)
-	a, err := k.Digest("correct horse battery staple")
+	a, err := k.Digest("acme", "correct horse battery staple")
 	require.NoError(t, err)
-	b, err := k.Digest("correct horse battery staple")
+	b, err := k.Digest("acme", "correct horse battery staple")
 	require.NoError(t, err)
 	assert.NotEqual(t, a, b)
-	require.NoError(t, credential.VerifyDeviceSecret(k, a, "correct horse battery staple"))
-	require.NoError(t, credential.VerifyDeviceSecret(k, b, "correct horse battery staple"))
+	require.NoError(t, credential.VerifyDeviceSecret(k, "acme", a, "correct horse battery staple"))
+	require.NoError(t, credential.VerifyDeviceSecret(k, "acme", b, "correct horse battery staple"))
 	for _, d := range []string{a, b} {
 		assert.NotContains(t, d, "horse")
 		assert.True(t, strings.HasPrefix(d, "v1$"+k.KeyId()+"$"), d)
 	}
 }
 
-// Known-answer vector: pins the HKDF info, the key id label, the salt-then-secret order and
-// the encoding. Changing any of them changes every stored digest, which makes every
+// Known-answer vector: pins the HKDF info, the key id label, the tenant-NUL-salt-secret
+// input order and the encoding. Changing any of them changes every stored digest, which makes every
 // device password in every instance stop working, so it must be a deliberate new version.
 func TestDeviceSecretKnownAnswer(t *testing.T) {
 	k := testDeviceKey(t)
 	salt := bytes.Repeat([]byte{0xA5}, 16)
-	got := credential.DigestWithSalt(k, salt, "s3cret")
+	got := credential.DigestWithSalt(k, "acme", salt, "s3cret")
 	assert.Equal(t, knownDigest, got)
-	require.NoError(t, credential.VerifyDeviceSecret(k, knownDigest, "s3cret"))
+	require.NoError(t, credential.VerifyDeviceSecret(k, "acme", knownDigest, "s3cret"))
 }
 
 // Computed outside Go (RFC 5869 HKDF and HMAC-SHA-256 with Python's hmac module).
-const knownDigest = "v1$45e11a26$paWlpaWlpaWlpaWlpaWlpQ$IklfTBiHxaIdmgfcwJ5cuc85xlf4PNivyYqrqtXdZQU"
+const knownDigest = "v1$45e11a26$paWlpaWlpaWlpaWlpaWlpQ$vtkEK9jgUZETsq/ex1vvjeDG3zFPkZIWlqokpYuqLP8"
 
 // A digest is refused as unrecognized — and never matches — when it is malformed, of
 // another version, or made under another root key. The last is what a database restored
@@ -63,9 +66,9 @@ func TestDeviceSecretUnrecognizedDigests(t *testing.T) {
 	other, err := credential.DeriveDeviceSecretKey(bytes.Repeat([]byte{7}, 32))
 	require.NoError(t, err)
 	require.NotEqual(t, k.KeyId(), other.KeyId())
-	foreign, err := other.Digest("s3cret")
+	foreign, err := other.Digest("acme", "s3cret")
 	require.NoError(t, err)
-	good, err := k.Digest("s3cret")
+	good, err := k.Digest("acme", "s3cret")
 	require.NoError(t, err)
 	parts := strings.Split(good, "$")
 
@@ -81,7 +84,7 @@ func TestDeviceSecretUnrecognizedDigests(t *testing.T) {
 		"missing a field": strings.Join(parts[:3], "$"),
 	} {
 		require.ErrorIs(t, k.Recognizes(stored), credential.ErrDeviceSecretUnrecognized, name)
-		require.ErrorIs(t, credential.VerifyDeviceSecret(k, stored, "s3cret"), credential.ErrMismatch, name)
+		require.ErrorIs(t, credential.VerifyDeviceSecret(k, "acme", stored, "s3cret"), credential.ErrMismatch, name)
 	}
 	require.NoError(t, k.Recognizes(good))
 }
@@ -93,17 +96,17 @@ func TestDeviceSecretUnrecognizedDigests(t *testing.T) {
 // once on a length difference, which is why the widths are what is asserted.
 func TestDeviceSecretVerifyComparesFixedWidthInConstantTime(t *testing.T) {
 	k := testDeviceKey(t)
-	d, err := k.Digest("short")
+	d, err := k.Digest("acme", "short")
 	require.NoError(t, err)
 
 	var lengths [][2]int
 	restore := credential.RecordConstantTimeCompareLengths(func(a, b int) { lengths = append(lengths, [2]int{a, b}) })
 	defer restore()
 
-	require.NoError(t, credential.VerifyDeviceSecret(k, d, "short"))
-	require.ErrorIs(t, credential.VerifyDeviceSecret(k, d, "a much longer presented secret than the stored one"), credential.ErrMismatch)
-	require.ErrorIs(t, credential.VerifyDeviceSecret(k, d, ""), credential.ErrMismatch)
-	require.ErrorIs(t, credential.VerifyDeviceSecret(k, "garbage", "short"), credential.ErrMismatch)
+	require.NoError(t, credential.VerifyDeviceSecret(k, "acme", d, "short"))
+	require.ErrorIs(t, credential.VerifyDeviceSecret(k, "acme", d, "a much longer presented secret than the stored one"), credential.ErrMismatch)
+	require.ErrorIs(t, credential.VerifyDeviceSecret(k, "acme", d, ""), credential.ErrMismatch)
+	require.ErrorIs(t, credential.VerifyDeviceSecret(k, "acme", "garbage", "short"), credential.ErrMismatch)
 	assert.Equal(t, [][2]int{{32, 32}, {32, 32}, {32, 32}, {32, 32}}, lengths,
 		"every Verify must reach the constant-time compare with two 32-byte inputs")
 }
@@ -112,11 +115,11 @@ func TestDeviceSecretVerifyComparesFixedWidthInConstantTime(t *testing.T) {
 // a secret over the limit the plaintext column used to enforce.
 func TestDeviceSecretDigestRefusesEmptyAndOverlong(t *testing.T) {
 	k := testDeviceKey(t)
-	_, err := k.Digest("")
+	_, err := k.Digest("acme", "")
 	require.Error(t, err)
-	_, err = k.Digest(strings.Repeat("x", credential.MaxDeviceSecretBytes+1))
+	_, err = k.Digest("acme", strings.Repeat("x", credential.MaxDeviceSecretBytes+1))
 	require.Error(t, err)
-	_, err = k.Digest(strings.Repeat("x", credential.MaxDeviceSecretBytes))
+	_, err = k.Digest("acme", strings.Repeat("x", credential.MaxDeviceSecretBytes))
 	require.NoError(t, err)
 }
 
@@ -126,4 +129,37 @@ func TestDeriveDeviceSecretKeyNeedsA32ByteRootKey(t *testing.T) {
 		_, err := credential.DeriveDeviceSecretKey(make([]byte, n))
 		require.Error(t, err, "%d bytes", n)
 	}
+}
+
+// 🔴 NO KEY NEVER MATCHES. A nil key — a caller that was never given one — fails closed,
+// whatever is stored and presented.
+func TestVerifyDeviceSecretWithNoKeyIsAMismatch(t *testing.T) {
+	d, err := testDeviceKey(t).Digest("acme", "s3cret")
+	require.NoError(t, err)
+	for _, stored := range []string{d, "", "s3cret"} {
+		require.ErrorIs(t, credential.VerifyDeviceSecret(nil, "acme", stored, "s3cret"), credential.ErrMismatch, "stored %q", stored)
+	}
+}
+
+// The digest is bound to its tenant: copied into another tenant's row it verifies
+// nothing there, the right password included; and an empty tenant never matches.
+func TestDeviceSecretDigestIsBoundToItsTenant(t *testing.T) {
+	k := testDeviceKey(t)
+	d, err := k.Digest("acme", "s3cret")
+	require.NoError(t, err)
+	require.NoError(t, credential.VerifyDeviceSecret(k, "acme", d, "s3cret"))
+	require.NoError(t, k.Recognizes(d), "the digest is still this key's; only the tenant differs")
+	for _, tenant := range []string{"beta", "acme ", "Acme", ""} {
+		require.ErrorIs(t, credential.VerifyDeviceSecret(k, tenant, d, "s3cret"), credential.ErrMismatch, "tenant %q", tenant)
+	}
+	_, err = k.Digest("", "s3cret")
+	require.Error(t, err, "a digest with no tenant must be refused")
+}
+
+// Through the Checker, the principal's Tenant is what the digest is checked against.
+func TestCheckerBindsTheDeviceDigestToThePrincipalsTenant(t *testing.T) {
+	c := newCheckerFor(t, credentialtest.NewStore(), allKinds(credential.Policy{Free: 10, Base: time.Second, Cap: time.Minute}))
+	require.NoError(t, c.Check(context.Background(), device, "s3cret", digestOf(t, "s3cret")))
+	other := credential.Principal{Kind: credential.KindDeviceCredential, ID: "beta:dev-1", Tenant: "beta"}
+	require.ErrorIs(t, c.Check(context.Background(), other, "s3cret", digestOf(t, "s3cret")), credential.ErrMismatch)
 }

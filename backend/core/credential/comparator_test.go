@@ -21,7 +21,7 @@ import (
 // Each kind's comparator is fixed in core. These tests pin which compare each kind
 // gets, from the outcomes a caller sees.
 
-var device = credential.Principal{Kind: credential.KindDeviceCredential, ID: "acme:dev-1"}
+var device = credential.Principal{Kind: credential.KindDeviceCredential, ID: "acme:dev-1", Tenant: "acme"}
 
 // plaintext is a lookup returning a stored value as it is.
 func plaintext(stored string) func(context.Context) (string, error) {
@@ -42,7 +42,7 @@ func testDeviceKey(t testing.TB) *credential.DeviceSecretKey {
 // digestOf is a lookup returning secret's stored digest under the test key.
 func digestOf(t testing.TB, secret string) func(context.Context) (string, error) {
 	t.Helper()
-	d, err := testDeviceKey(t).Digest(secret)
+	d, err := testDeviceKey(t).Digest("acme", secret)
 	require.NoError(t, err)
 	return plaintext(d)
 }

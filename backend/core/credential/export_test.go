@@ -10,8 +10,8 @@ func ObserveCompares(c *Checker, seen func(hash []byte)) { c.observeCompares(see
 func Dummy(c *Checker, k Kind) []byte { return c.dummies[k] }
 
 // DigestWithSalt is Digest under a chosen salt, for a known-answer vector.
-func DigestWithSalt(k *DeviceSecretKey, salt []byte, secret string) string {
-	return k.digestWithSalt(salt, secret)
+func DigestWithSalt(k *DeviceSecretKey, tenant string, salt []byte, secret string) string {
+	return k.digestWithSalt(tenant, salt, secret)
 }
 
 // RecordConstantTimeCompareLengths replaces the constant-time compare DeviceSecretKey.Verify

@@ -190,6 +190,10 @@ var ErrUndeclaredKind = errors.New("credential: kind was not declared to this Ch
 type Principal struct {
 	Kind Kind
 	ID   string
+	// Tenant is the tenant a KindDeviceCredential principal presented: its stored digest
+	// is bound to it, so it is part of the compare. It is not part of Key (ID already
+	// carries it) and is unused by the other kinds. Empty never matches a device secret.
+	Tenant string
 }
 
 // Policy is one kind's backoff schedule.
@@ -428,7 +432,7 @@ type Checker struct {
 	// observe WHICH stored value each check paid for (export_test.go): the dummy
 	// compare is the timing equalizer, and an outcome-level test cannot see it being
 	// skipped.
-	compares map[Kind]func(stored, secret []byte) error
+	compares map[Kind]func(p Principal, stored, secret []byte) error
 
 	// deviceKey is what KindDeviceCredential's digests are made under (WithDeviceSecretKey).
 	deviceKey *DeviceSecretKey
@@ -469,9 +473,9 @@ func WithDeviceSecretKey(k *DeviceSecretKey) Option {
 // value first.
 func (c *Checker) observeCompares(seen func(stored []byte)) {
 	for k, inner := range c.compares {
-		c.compares[k] = func(stored, secret []byte) error {
+		c.compares[k] = func(p Principal, stored, secret []byte) error {
 			seen(stored)
-			return inner(stored, secret)
+			return inner(p, stored, secret)
 		}
 	}
 }
@@ -516,7 +520,7 @@ func NewChecker(store Store, policies map[Kind]Policy, opts ...Option) (*Checker
 
 	c := &Checker{store: store, policies: policies, now: time.Now,
 		dummies:  map[Kind][]byte{},
-		compares: map[Kind]func(stored, secret []byte) error{}}
+		compares: map[Kind]func(p Principal, stored, secret []byte) error{}}
 	for _, o := range opts {
 		o(c)
 	}
@@ -537,15 +541,20 @@ func NewChecker(store Store, policies map[Kind]Policy, opts ...Option) (*Checker
 				return nil, fmt.Errorf("%w: kind %q", ErrNoDeviceSecretKey, k)
 			}
 			key := c.deviceKey
-			c.compares[k] = func(stored, secret []byte) error { return key.verify(string(stored), string(secret)) }
-			dummy, err := key.Digest(dummySecret)
+			c.compares[k] = func(p Principal, stored, secret []byte) error {
+				return key.verify(p.Tenant, string(stored), string(secret))
+			}
+			// The dummy is a digest for a tenant no principal can name (the token grammar
+			// refuses the space), so it costs a real verify and never matches.
+			dummy, err := key.Digest(" dummy", dummySecret)
 			if err != nil {
 				return nil, err
 			}
 			c.dummies[k] = []byte(dummy)
 			continue
 		}
-		c.compares[k] = cmp.compare
+		bcryptCompare := cmp.compare
+		c.compares[k] = func(_ Principal, stored, secret []byte) error { return bcryptCompare(stored, secret) }
 		if bcryptDummy == nil {
 			h, err := bcrypt.GenerateFromPassword([]byte(dummySecret), bcrypt.DefaultCost)
 			if err != nil {
@@ -666,7 +675,7 @@ func (c *Checker) check(ctx context.Context, p Principal, secret string, lookup 
 	if hash == "" {
 		stored = c.dummies[p.Kind]
 	}
-	if compare(stored, []byte(secret)) != nil || hash == "" {
+	if compare(p, stored, []byte(secret)) != nil || hash == "" {
 		return failedOpen, ErrMismatch
 	}
 	if policy.Unthrottled || !hadRecord {

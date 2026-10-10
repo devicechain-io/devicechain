@@ -90,7 +90,7 @@ func TestResolveDeviceCredential_RefusesWhatAuthenticateDeviceRefuses(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	foreign, err := foreignKey.Digest("s3cret")
+	foreign, err := foreignKey.Digest(partialUpdateTenant, "s3cret")
 	if err != nil {
 		t.Fatal(err)
 	}

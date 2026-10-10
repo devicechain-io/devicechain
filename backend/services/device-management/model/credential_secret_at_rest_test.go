@@ -4,15 +4,19 @@
 package model
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/credential"
 	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/limit"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
 )
 
@@ -115,6 +119,8 @@ func TestADigestUnderAnotherKeyIsMisconfiguredOnBothPaths(t *testing.T) {
 	other, err := credential.DeriveDeviceSecretKey([]byte("a-different-instance-root-key-32"))
 	require.NoError(t, err)
 	api.DeviceSecretKey = other
+	counted := prometheus.NewCounterVec(prometheus.CounterOpts{Name: "misconfigured"}, []string{"path"})
+	api.MisconfiguredSecrets = counted
 
 	_, err = api.AuthenticateDevice(ctx, basic("cred-1", "s3cret"), time.Now())
 	require.ErrorIs(t, err, ErrCredentialMisconfigured)
@@ -123,8 +129,45 @@ func TestADigestUnderAnotherKeyIsMisconfiguredOnBothPaths(t *testing.T) {
 	_, _, err = api.ResolveDeviceCredential(ctx, basic("cred-1", "s3cret"), time.Now())
 	require.ErrorIs(t, err, ErrCredentialMisconfigured)
 
-	// Control: under the key that made it, the same row authenticates.
+	// Counted, by path, apart from wrong passwords.
+	require.Equal(t, 1.0, testutil.ToFloat64(counted.WithLabelValues(CredentialPathEvent)))
+	require.Equal(t, 1.0, testutil.ToFloat64(counted.WithLabelValues(CredentialPathConnect)))
+
+	// Control: under the key that made it, the same row authenticates, and a wrong password
+	// is a mismatch that is not counted as misconfigured.
 	api.DeviceSecretKey = testSecretKey
+	_, err = api.AuthenticateDevice(ctx, basic("cred-1", "s3cret"), time.Now())
+	require.NoError(t, err)
+	_, err = api.AuthenticateDevice(ctx, basic("cred-1", "wrong"), time.Now())
+	require.ErrorIs(t, err, ErrCredentialSecretMismatch)
+	require.Equal(t, 1.0, testutil.ToFloat64(counted.WithLabelValues(CredentialPathEvent)))
+}
+
+// 🔴 A DIGEST CANNOT BE TRANSPLANTED ACROSS TENANTS. Copied from one tenant's row into
+// another tenant's credential, a digest of a known password verifies nothing there.
+func TestADigestCopiedIntoAnotherTenantVerifiesNothing(t *testing.T) {
+	api, ctx := resolveFixture(t) // acme's cred-1 stores "s3cret"
+	beta := core.WithTenant(context.Background(), "beta")
+	_, err := api.CreateDeviceType(beta, &DeviceTypeCreateRequest{Token: "dt"})
+	require.NoError(t, err)
+	_, err = api.CreateDevice(beta, &DeviceCreateRequest{Token: "dev", DeviceTypeToken: "dt"})
+	require.NoError(t, err)
+	_, err = api.CreateDeviceCredential(beta, &DeviceCredentialCreateRequest{
+		Token: "b-1", DeviceToken: "dev", CredentialType: string(CredentialMqttBasic),
+		CredentialId: "cred-b", CredentialValue: strPtr("beta-secret"), Enabled: true,
+	})
+	require.NoError(t, err)
+
+	var acmeDigest string
+	require.NoError(t, api.RDB.Database.Raw("SELECT secret_digest FROM device_credentials WHERE token = ?", "c-1").Scan(&acmeDigest).Error)
+	require.NoError(t, api.RDB.Database.Exec("UPDATE device_credentials SET secret_digest = ? WHERE token = ?", acmeDigest, "b-1").Error)
+
+	_, err = api.AuthenticateDevice(beta, basic("cred-b", "s3cret"), time.Now())
+	require.ErrorIs(t, err, ErrCredentialSecretMismatch)
+	_, stored, err := api.ResolveDeviceCredential(beta, basic("cred-b", "s3cret"), time.Now())
+	require.NoError(t, err)
+	require.ErrorIs(t, credential.VerifyDeviceSecret(testSecretKey, "beta", stored, "s3cret"), credential.ErrMismatch)
+	// Control: in its own tenant the digest still verifies.
 	_, err = api.AuthenticateDevice(ctx, basic("cred-1", "s3cret"), time.Now())
 	require.NoError(t, err)
 }

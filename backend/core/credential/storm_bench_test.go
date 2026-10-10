@@ -61,7 +61,7 @@ func BenchmarkDeviceConnectStormOnReplicatedJetStream(b *testing.B) {
 						defer wg.Done()
 						<-start
 						p := credential.Principal{Kind: credential.KindDeviceCredential,
-							ID: fmt.Sprintf("acme:dev-%d-%d", i, d)}
+							ID: fmt.Sprintf("acme:dev-%d-%d", i, d), Tenant: "acme"}
 						t0 := time.Now()
 						err := c.Check(context.Background(), p, "s3cret", stored)
 						lat[d] = time.Since(t0)

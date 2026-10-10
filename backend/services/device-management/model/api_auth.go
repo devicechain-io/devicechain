@@ -113,7 +113,7 @@ func evaluateCredential(key *credential.DeviceSecretKey, cred *DeviceCredential,
 		// row, never the verdict. The MQTT auth callout, which DOES answer, does not come
 		// here for a password: it resolves the credential with ResolveDeviceCredential and
 		// compares through credential.Checker, under a per-credential backoff.
-		if credential.VerifyDeviceSecret(key, stored, *presented.Secret) != nil {
+		if credential.VerifyDeviceSecret(key, cred.TenantId, stored, *presented.Secret) != nil {
 			return ErrCredentialSecretMismatch
 		}
 	}
@@ -147,6 +147,19 @@ func storedSecret(key *credential.DeviceSecretKey, cred *DeviceCredential) (stri
 		return "", fmt.Errorf("%w: %v", ErrCredentialMisconfigured, err)
 	}
 	return cred.SecretDigest.String, nil
+}
+
+// The paths a device credential is checked on, as MisconfiguredSecrets labels them.
+const (
+	CredentialPathConnect = "connect"
+	CredentialPathEvent   = "event"
+)
+
+// countMisconfigured counts err on path when it is ErrCredentialMisconfigured.
+func (api *Api) countMisconfigured(path string, err error) {
+	if api.MisconfiguredSecrets != nil && errors.Is(err, ErrCredentialMisconfigured) {
+		api.MisconfiguredSecrets.WithLabelValues(path).Inc()
+	}
 }
 
 // AuthenticateDevice resolves a presented credential to its owning device and
@@ -202,6 +215,7 @@ func (api *Api) authenticateCredential(ctx context.Context, presented *Presented
 		return nil, nil, err
 	}
 	if err := evaluateCredential(api.DeviceSecretKey, cred, presented, now); err != nil {
+		api.countMisconfigured(CredentialPathEvent, err)
 		return nil, nil, err
 	}
 	device, err := credentialDevice(cred)
@@ -245,6 +259,7 @@ func (api *Api) ResolveDeviceCredential(ctx context.Context, presented *Presente
 	}
 	stored, err := storedSecret(api.DeviceSecretKey, cred)
 	if err != nil {
+		api.countMisconfigured(CredentialPathConnect, err)
 		return nil, "", err
 	}
 	device, err := credentialDevice(cred)

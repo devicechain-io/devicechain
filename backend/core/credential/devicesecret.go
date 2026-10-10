@@ -16,8 +16,8 @@ import (
 )
 
 // A device's MQTT password (an MQTT_BASIC credential) is stored as a KEYED DIGEST, never
-// as the password. The digest is HMAC-SHA-256 over a per-row random salt and the
-// password, under a key derived from the instance root key, which is not in the
+// as the password. The digest is HMAC-SHA-256 over the credential's TENANT, a per-row
+// random salt and the password, under a key derived from the instance root key, which is not in the
 // database: a copy of the database alone gives nothing that can be presented, or even
 // guessed against offline.
 //
@@ -32,6 +32,11 @@ import (
 // The stored form is
 //
 //	v1$<key id, 8 hex>$<salt, base64 raw std>$<mac, base64 raw std>
+//
+// The tenant is bound in so that a digest copied from one tenant's row into another's
+// verifies nothing there: a known password's digest cannot be transplanted across
+// tenants. A credential never changes tenant. Its id is NOT bound, because an update may
+// change the id without carrying the password to re-digest.
 //
 // The key id names the key that made the digest, so a digest made under another key (a
 // database restored next to the wrong root key) is reported as misconfigured rather than
@@ -93,10 +98,13 @@ func DeriveDeviceSecretKey(rootKey []byte) (*DeviceSecretKey, error) {
 // KeyId is the key's id, as it appears in every digest it makes. It is not secret.
 func (k *DeviceSecretKey) KeyId() string { return k.id }
 
-// Digest returns the stored form of secret, under a fresh random salt. An empty secret
-// and one over MaxDeviceSecretBytes are refused: "no secret" is stored as NULL, never as a
-// digest of nothing.
-func (k *DeviceSecretKey) Digest(secret string) (string, error) {
+// Digest returns the stored form of tenant's secret, under a fresh random salt. An empty
+// secret and one over MaxDeviceSecretBytes are refused: "no secret" is stored as NULL,
+// never as a digest of nothing. An empty tenant is refused: every credential has one.
+func (k *DeviceSecretKey) Digest(tenant, secret string) (string, error) {
+	if tenant == "" {
+		return "", errors.New("credential: a device secret digest needs the credential's tenant")
+	}
 	if secret == "" {
 		return "", errors.New("credential: an empty device secret has no digest")
 	}
@@ -107,17 +115,21 @@ func (k *DeviceSecretKey) Digest(secret string) (string, error) {
 	if _, err := rand.Read(salt); err != nil {
 		return "", err
 	}
-	return k.digestWithSalt(salt, secret), nil
+	return k.digestWithSalt(tenant, salt, secret), nil
 }
 
-func (k *DeviceSecretKey) digestWithSalt(salt []byte, secret string) string {
+func (k *DeviceSecretKey) digestWithSalt(tenant string, salt []byte, secret string) string {
 	return strings.Join([]string{deviceSecretVersion, k.id,
 		base64.RawStdEncoding.EncodeToString(salt),
-		base64.RawStdEncoding.EncodeToString(k.mac(salt, []byte(secret)))}, deviceSecretSep)
+		base64.RawStdEncoding.EncodeToString(k.mac(tenant, salt, []byte(secret)))}, deviceSecretSep)
 }
 
-func (k *DeviceSecretKey) mac(salt, secret []byte) []byte {
+// mac is HMAC(key, tenant ‖ 0x00 ‖ salt ‖ secret). The token grammar excludes NUL from a
+// tenant id, and the salt is fixed-width, so the input splits one way only.
+func (k *DeviceSecretKey) mac(tenant string, salt, secret []byte) []byte {
 	m := hmac.New(sha256.New, k.key[:])
+	m.Write([]byte(tenant))
+	m.Write([]byte{0})
 	m.Write(salt)
 	m.Write(secret)
 	return m.Sum(nil)
@@ -149,9 +161,10 @@ func (k *DeviceSecretKey) Recognizes(stored string) error {
 	return err
 }
 
-// VerifyDeviceSecret compares a presented secret against a stored digest in constant
-// time: nil on a match, ErrMismatch otherwise, including for a stored value Recognizes
-// refuses. The two inputs to the compare are always 32-byte MACs, so neither the stored
+// VerifyDeviceSecret compares a presented secret against a stored digest of tenant's
+// credential in constant time: nil on a match, ErrMismatch otherwise, including for a
+// stored value Recognizes refuses, a nil key, an empty tenant, and a digest made for
+// another tenant. The two inputs to the compare are always 32-byte MACs, so neither the stored
 // nor the presented secret's length shows in its timing.
 //
 // 🔴 IT IS UNTHROTTLED. A caller that answers the sender must compare through Checker
@@ -159,25 +172,25 @@ func (k *DeviceSecretKey) Recognizes(stored string) error {
 // It is exported for the per-event resolver alone, whose verdict never reaches the
 // sender, and hack/check-credential-compare.sh refuses any other production caller
 // without a stated exemption.
-func VerifyDeviceSecret(k *DeviceSecretKey, stored, secret string) error {
+func VerifyDeviceSecret(k *DeviceSecretKey, tenant, stored, secret string) error {
 	if k == nil {
 		return ErrMismatch
 	}
-	return k.verify(stored, secret)
+	return k.verify(tenant, stored, secret)
 }
 
-func (k *DeviceSecretKey) verify(stored, secret string) error {
+func (k *DeviceSecretKey) verify(tenant, stored, secret string) error {
 	salt, want, err := k.parse(stored)
 	if err != nil {
 		// Still pay a MAC and a compare, so a malformed stored value costs what a real one
 		// does. The answer is a mismatch either way.
 		salt, want = make([]byte, deviceSecretSaltSize), make([]byte, sha256.Size)
-		got := k.mac(salt, []byte(secret))
+		got := k.mac(tenant, salt, []byte(secret))
 		constantTimeCompare(got, want)
 		return ErrMismatch
 	}
-	got := k.mac(salt, []byte(secret))
-	if constantTimeCompare(got, want) != 1 {
+	got := k.mac(tenant, salt, []byte(secret))
+	if constantTimeCompare(got, want) != 1 || tenant == "" {
 		return ErrMismatch
 	}
 	return nil

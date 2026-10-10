@@ -64,7 +64,7 @@ func TestDeviceCredentialCheckerUsesTheDeviceBucket(t *testing.T) {
 	}
 	p := credential.Principal{Kind: credential.KindDeviceCredential, ID: "acme:sensor-001"}
 	err = checker.Check(context.Background(), p, "wrong", func(context.Context) (string, error) {
-		return dmtest.SecretDigest("right"), nil
+		return dmtest.SecretDigest("acme", "right"), nil
 	})
 	if err == nil {
 		t.Fatal("a wrong password was accepted")
