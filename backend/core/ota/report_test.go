@@ -46,7 +46,8 @@ func TestGoldenReportFixtures(t *testing.T) {
 	// The required invalid cases are present by name.
 	for _, name := range []string{"unknown-field", "device-token-field", "unknown-kind", "version-2", "oversized",
 		"bad-digest-uppercase", "detail-513", "failed-without-result", "running-without-running",
-		"inventory-with-seq", "bytes-over-total"} {
+		"inventory-with-seq", "bytes-over-total", "uppercase-key", "duplicate-key", "case-variant-duplicate",
+		"kelvin-key", "nested-uppercase-key", "inventory-seq-zero", "inventory-seq-null", "progress-on-running", "version-control-char"} {
 		_, err := os.Stat("testdata/reports/invalid/" + name + ".json")
 		assert.NoError(t, err, name)
 	}
@@ -82,8 +83,25 @@ func TestDecodeReportEdges(t *testing.T) {
 	assert.Error(t, mut(func(c *Report) { c.Running.Digest = "sha256:xyz" }))
 	assert.Error(t, mut(func(c *Report) { c.Running.Version = "" }))
 	assert.Error(t, mut(func(c *Report) { c.Stage = StageVerified }), "running outside RUNNING")
-	assert.Error(t, mut(func(c *Report) { c.Progress = &Progress{Bytes: -1} }))
-	assert.NoError(t, mut(func(c *Report) { c.Progress = &Progress{Bytes: 5, Total: 0} }), "unknown total")
+	assert.Error(t, mut(func(c *Report) { c.Running.Version = "2.0\x00" }), "NUL in version")
+	assert.Error(t, mut(func(c *Report) { c.Running.Version = "2.0\n0" }), "control character in version")
+	assert.Error(t, mut(func(c *Report) { c.Running.Version = repeat('v', 65) }), "version cap")
+	assert.NoError(t, mut(func(c *Report) { c.Running.Version = repeat('v', 64) }))
+	assert.Error(t, mut(func(c *Report) { c.BootID = "boot\x01a" }), "control character in bootId")
+	assert.Error(t, mut(func(c *Report) { c.BootID = "boot\x7fa" }), "DEL in bootId")
+	assert.Error(t, mut(func(c *Report) { c.BootID = repeat('b', 129) }), "bootId cap")
+	assert.NoError(t, mut(func(c *Report) { c.BootID = repeat('b', 128) }))
+	assert.Error(t, mut(func(c *Report) { c.Progress = &Progress{Bytes: 1, Total: 2} }), "progress only on DOWNLOADING")
+
+	dl, err := os.ReadFile("testdata/reports/valid/downloading.json")
+	require.NoError(t, err)
+	d, err := DecodeReport(dl)
+	require.NoError(t, err)
+	dmut := func(f func(*Report)) error { c := d.cloneForTest(); f(&c); return c.Validate() }
+	assert.NoError(t, d.Validate())
+	assert.Error(t, dmut(func(c *Report) { c.Progress = &Progress{Bytes: -1} }))
+	assert.NoError(t, dmut(func(c *Report) { c.Progress = &Progress{Bytes: 5, Total: 0} }), "unknown total")
+	assert.Error(t, dmut(func(c *Report) { c.Stage = StageDownloaded }), "progress on DOWNLOADED")
 
 	failed := Report{V: 1, Kind: KindProgress, AttemptID: "a", AssignmentID: "b", Component: "firmware",
 		ArtifactDigest: digestA, Seq: 1, Stage: StageFailed, BootID: "x", Result: &Result{Code: "bad code", Detail: "d"}}

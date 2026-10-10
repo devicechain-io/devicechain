@@ -38,12 +38,14 @@ func TestRebootWithoutConfirmationIsUnknownNotUpdated(t *testing.T) {
 	a := attemptIn(StateRebooting, 6)
 
 	at := t0.Add(testPolicy.Confirm + time.Second)
-	a, changed := Tick(a, testPolicy, at)
+	a, changed, err := Tick(a, testPolicy, at)
+	require.NoError(t, err)
 	require.True(t, changed)
 	assert.Equal(t, StateUnknown, a.State)
 	assert.False(t, a.State.Terminal())
 
-	again, changed := Tick(a, testPolicy, at.Add(24*time.Hour))
+	again, changed, err := Tick(a, testPolicy, at.Add(24*time.Hour))
+	require.NoError(t, err)
 	assert.False(t, changed)
 	assert.Equal(t, a, again)
 
@@ -110,9 +112,14 @@ func TestDuplicateReportIsIdempotent(t *testing.T) {
 	assert.Equal(t, VerdictDuplicate, v)
 	assert.True(t, reflect.DeepEqual(before, twice), "a duplicate must leave the attempt byte-identical")
 
-	// Same seq with a different stage is still a duplicate: seq identifies the report.
-	_, v = Apply(once, progressReport(StageVerified, 2), t0)
-	assert.Equal(t, VerdictDuplicate, v)
+	// The same seq carrying different content is not a retransmission: it is a CONFLICT.
+	mustApply(t, once, progressReport(StageVerified, 2), VerdictConflict)
+	r2 := r
+	r2.Progress = &Progress{Bytes: 11, Total: 100}
+	mustApply(t, once, r2, VerdictConflict)
+	r3 := r
+	r3.BootID = "boot-z"
+	mustApply(t, once, r3, VerdictConflict)
 }
 
 func TestRegressionIsRejected(t *testing.T) {
@@ -181,11 +188,13 @@ func TestDeadlinesTimedOutBeforeInstallUnknownAfter(t *testing.T) {
 		t.Run(string(c.state), func(t *testing.T) {
 			a := attemptIn(c.state, 3)
 
-			same, changed := Tick(a, testPolicy, t0.Add(c.deadline)) // exactly on the deadline: not yet
+			same, changed, err := Tick(a, testPolicy, t0.Add(c.deadline)) // exactly on the deadline: not yet
+			require.NoError(t, err)
 			assert.False(t, changed)
 			assert.Equal(t, a, same)
 
-			out, changed := Tick(a, testPolicy, t0.Add(c.deadline+time.Nanosecond))
+			out, changed, err := Tick(a, testPolicy, t0.Add(c.deadline+time.Nanosecond))
+			require.NoError(t, err)
 			require.True(t, changed)
 			assert.Equal(t, c.want, out.State)
 			assert.NotEqual(t, StateUpdated, out.State)
@@ -203,7 +212,8 @@ func TestDeadlinesTimedOutBeforeInstallUnknownAfter(t *testing.T) {
 
 	for _, s := range []State{StateUpdated, StateFailed, StateTimedOut, StateCancelled, StateUnknown} {
 		a := attemptIn(s, 3)
-		out, changed := Tick(a, testPolicy, t0.Add(1000*time.Hour))
+		out, changed, err := Tick(a, testPolicy, t0.Add(1000*time.Hour))
+		assert.NoError(t, err)
 		assert.False(t, changed, string(s))
 		assert.Equal(t, a, out, string(s))
 	}
@@ -213,7 +223,8 @@ func TestDeadlinesTimedOutBeforeInstallUnknownAfter(t *testing.T) {
 	bad.Install = 0
 	assert.Error(t, bad.Validate())
 	a := attemptIn(StateUpdating, 3)
-	out, changed := Tick(a, bad, t0.Add(time.Hour))
+	out, changed, err := Tick(a, bad, t0.Add(time.Hour))
+	assert.Error(t, err, "an invalid policy must be an error, not a silent no-op")
 	assert.False(t, changed)
 	assert.Equal(t, a, out)
 }
@@ -267,7 +278,7 @@ func TestUnknownLeavesOnlyOnEvidence(t *testing.T) {
 	})
 	t.Run("inventory with no starting boot cannot show a reboot", func(t *testing.T) {
 		nb := u
-		nb.BootIDAtStart = ""
+		nb.BootIDAtStart, nb.InstallBootID, nb.LastBootID = "", "", ""
 		out, v := Reconcile(nb, inventoryReport("1.0.0", "boot-b"), t0)
 		assert.Equal(t, VerdictUnconfirmed, v)
 		assert.Equal(t, nb, out)
@@ -357,7 +368,16 @@ func TestTerminalIsTerminal(t *testing.T) {
 			}
 			mustApply(t, a, r, VerdictLate)
 			r.Seq = 5
-			mustApply(t, a, r, VerdictDuplicate)
+			// Same seq as the last applied report: identical content is a DUPLICATE, anything else a CONFLICT.
+			same := a
+			same.LastStage = st
+			mustApply(t, same, r, VerdictDuplicate)
+			diff := a
+			diff.LastStage = StageReceived
+			if st == StageReceived {
+				diff.LastStage = StageDownloading
+			}
+			mustApply(t, diff, r, VerdictConflict)
 		}
 	}
 }
@@ -432,7 +452,7 @@ func TestApplyIsPure(t *testing.T) {
 			}
 		}
 
-		if _, changed := Tick(a, testPolicy, t0.Add(time.Duration(rng.Intn(3600))*time.Second)); changed {
+		if _, changed, _ := Tick(a, testPolicy, t0.Add(time.Duration(rng.Intn(3600))*time.Second)); changed {
 			ticked++
 		}
 		Cancel(a, t0)

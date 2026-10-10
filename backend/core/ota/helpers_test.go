@@ -39,6 +39,12 @@ func attemptIn(s State, seq uint64) Attempt {
 	}
 	if s != StateQueued {
 		a.BootIDAtStart = "boot-a"
+		a.LastBootID = "boot-a"
+		a.LastStage = stageForState(s)
+	}
+	switch s {
+	case StateUpdating, StateRebooting, StateUnknown:
+		a.InstallBootID = "boot-a"
 	}
 	return a
 }

@@ -16,6 +16,8 @@ var (
 	ErrBeyondRecall = errors.New("ota: update is beyond recall")
 	// ErrTerminal is returned by Cancel on an attempt that has already finished.
 	ErrTerminal = errors.New("ota: update attempt is already terminal")
+	// ErrInvalidAttempt is returned when an Attempt is in a state this package does not define.
+	ErrInvalidAttempt = errors.New("ota: attempt is in an undefined state")
 )
 
 // Target is what the attempt is meant to leave the component running.
@@ -64,8 +66,11 @@ type Attempt struct {
 	Target                             Target
 	State                              State
 	LastSeq                            uint64
-	LastReportAt                       time.Time // platform receive time of the last APPLIED report (or creation)
-	BootIDAtStart                      string    // first bootId seen on this attempt
+	LastReportAt                       time.Time   // platform receive time of the last APPLIED report (or creation)
+	BootIDAtStart                      string      // first bootId seen on this attempt
+	InstallBootID                      string      // bootId of the first applied report at UPDATING or later
+	LastBootID                         string      // bootId of the last APPLIED report
+	LastStage                          ReportStage // stage of the last APPLIED report
 	CancelRequested                    bool
 	Reconciled                         bool // reached UPDATED/FAILED from UNKNOWN via evidence
 	Progress                           *Progress
@@ -117,6 +122,8 @@ const (
 	VerdictUnconfirmed    Verdict = "UNCONFIRMED"     // no valid evidence that the target is running
 	VerdictNotCancellable Verdict = "NOT_CANCELLABLE" // ABANDONED without a cancel request, or past VERIFIED
 	VerdictLate           Verdict = "LATE"            // progress on a terminal attempt, or on UNKNOWN
+	VerdictConflict       Verdict = "CONFLICT"        // same seq as LastSeq but different content
+	VerdictInvalidAttempt Verdict = "INVALID_ATTEMPT" // the attempt is in an undefined state
 	VerdictWrongKind      Verdict = "WRONG_KIND"      // wrong kind for this function, or a malformed report
 )
 
@@ -258,12 +265,12 @@ func deadline(p Policy, s State) time.Duration {
 // because the device may well have finished — silence is not failure, and Tick never yields UPDATED.
 // Terminal and UNKNOWN attempts are untouched. An invalid Policy changes nothing (check it with
 // Policy.Validate when it is loaded): a zero deadline must not time everything out.
-func Tick(a Attempt, p Policy, now time.Time) (Attempt, bool) {
+func Tick(a Attempt, p Policy, now time.Time) (Attempt, bool, error) {
 	if p.Validate() != nil || a.State.Terminal() || a.State == StateUnknown {
-		return a, false
+		return a, false, nil
 	}
 	if !(now.Sub(a.LastReportAt) > deadline(p, a.State)) {
-		return a, false
+		return a, false, nil
 	}
 	out := a.clone()
 	if mustRank(a.State) <= mustRank(StateVerified) {
@@ -272,7 +279,7 @@ func Tick(a Attempt, p Policy, now time.Time) (Attempt, bool) {
 	} else {
 		out.State = StateUnknown
 	}
-	return out, true
+	return out, true, nil
 }
 
 // Cancel asks to stop an attempt. QUEUED is cancelled outright (nothing was ever sent to a device
