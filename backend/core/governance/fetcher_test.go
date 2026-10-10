@@ -24,8 +24,8 @@ func resolve(t *testing.T, fields map[string]json.RawMessage, dim Dimension) Lim
 // The query names exactly the dimension's two fields — reading the wrong pair
 // would silently govern a different resource.
 func TestGovernanceQuery_NamesDimensionFields(t *testing.T) {
-	assert.Equal(t, `query { tenantGovernance { ingestMessagesPerSecond ingestBurst } }`, governanceQuery(Ingest))
-	assert.Equal(t, `query { tenantGovernance { outboundMessagesPerSecond outboundBurst } }`, governanceQuery(Outbound))
+	assert.Equal(t, `query { tenantGovernance { ingestReadingsPerSecond ingestBurst } }`, governanceQuery(Ingest))
+	assert.Equal(t, `query { tenantGovernance { outboundCallsPerSecond outboundBurst } }`, governanceQuery(Outbound))
 }
 
 // A tenant that declared overrides is metered at them.
