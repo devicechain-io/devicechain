@@ -43,6 +43,18 @@ import (
 )
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "-providers" {
+		// The provider-coverage check of hack/check-egress-ranges.sh --providers: exit 1 and list
+		// every gap, 0 and print nothing when the provider table and the guard agree.
+		gaps := egress.ProviderGaps(egress.MetadataProviders, egress.NewGuard(nil))
+		for _, g := range gaps {
+			fmt.Fprintln(os.Stderr, g)
+		}
+		if len(gaps) > 0 {
+			os.Exit(1)
+		}
+		return
+	}
 	w := bufio.NewWriter(os.Stdout)
 	defer w.Flush()
 	for _, p := range egress.DeniedPrefixes() {
