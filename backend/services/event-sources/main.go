@@ -17,6 +17,7 @@ import (
 	processor "github.com/devicechain-io/dc-event-sources/processor"
 	esproto "github.com/devicechain-io/dc-event-sources/proto"
 	"github.com/devicechain-io/dc-microservice/auth"
+	mscfg "github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/deadletter"
 	"github.com/devicechain-io/dc-microservice/governance"
@@ -443,7 +444,7 @@ func buildEventSources() error {
 	// minted JWT for its full TTL), and HTTP ingest has no transport auth at all.
 	infra := Microservice.InstanceConfiguration.Infrastructure
 	ingestGate = processor.RefuseDeletedTenants(
-		governance.NewTenantLifecycleGate(infra.UserManagement, infra.ServiceAuth.Secret, "event-sources", safetyGates),
+		ingestTenantGate(infra, safetyGates),
 		processor.NewRateGate(RateLimiter, BacklogRateLimiter, HttpRateLimiter, onRateShed),
 		onTenantGone)
 	// The reading stage, charged after decode on every transport. One gate, built once,
@@ -871,6 +872,12 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 // safetyGates reports whether this service's optional safety gates are wired
 // (<area>_safety_gate_enabled). Built once in afterMicroserviceInitialized.
 var safetyGates *governance.SafetyGates
+
+// ingestTenantGate is the deleted-tenant gate every ingest transport refuses work through: nil when
+// user-management is unconfigured, with the tenant_lifecycle safety gate recorded either way.
+func ingestTenantGate(infra mscfg.InfrastructureConfiguration, gates *governance.SafetyGates) func(string) bool {
+	return governance.NewTenantLifecycleGate(infra.UserManagement, infra.ServiceAuth.Secret, "event-sources", gates)
+}
 
 func afterMicroserviceInitialized(ctx context.Context) error {
 	// Built ONCE, here on the initialize path: the gauge registers on construction and a second

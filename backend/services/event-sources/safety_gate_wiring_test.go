@@ -1,0 +1,69 @@
+// Copyright The DeviceChain Authors
+// SPDX-License-Identifier: Apache-2.0
+
+package main
+
+import (
+	"testing"
+
+	mscfg "github.com/devicechain-io/dc-microservice/config"
+	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/governance"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+// gateReading builds the safety-gate gauge the way the service does (once, on a registry) and
+// returns the handle with a reader for one gate's value. present=false is a different answer
+// from 0: an absent series is a gate nobody reported, which no alert can see.
+func gateReading(t *testing.T, area string) (*governance.SafetyGates, func(gate string) (float64, bool)) {
+	t.Helper()
+	ms := &core.Microservice{InstanceId: "test", FunctionalArea: area}
+	reg := prometheus.NewRegistry()
+	ms.UseMetricsRegistry(reg)
+	gates := governance.NewSafetyGates(ms)
+	return gates, func(gate string) (float64, bool) {
+		families, err := reg.Gather()
+		require.NoError(t, err)
+		for _, f := range families {
+			for _, m := range f.GetMetric() {
+				for _, l := range m.GetLabel() {
+					if l.GetName() == "gate" && l.GetValue() == gate {
+						return m.GetGauge().GetValue(), true
+					}
+				}
+			}
+		}
+		return 0, false
+	}
+}
+
+func fullInfra() mscfg.InfrastructureConfiguration {
+	var infra mscfg.InfrastructureConfiguration
+	infra.ServiceAuth.Secret = "s3cret"
+	infra.UserManagement.Hostname, infra.UserManagement.Port = "user-management", 8080
+	infra.DeviceState.Hostname, infra.DeviceState.Port = "device-state", 8080
+	infra.EventProcessing.Hostname, infra.EventProcessing.Port = "event-processing", 8080
+	return infra
+}
+
+// The ingest tenant gate is nil with tenant_lifecycle at 0 when user-management is unconfigured, and a
+// real gate at 1 when it is configured; nothing is recorded on the other gates.
+func TestIngestTenantGateRecordsItsDecision(t *testing.T) {
+	infra := fullInfra()
+	infra.UserManagement.Hostname = ""
+	gates, read := gateReading(t, "event-sources")
+	assert.Nil(t, ingestTenantGate(infra, gates))
+	v, ok := read(governance.GateTenantLifecycle)
+	assert.True(t, ok, "an OFF gate must be a present series")
+	assert.Equal(t, 0.0, v)
+
+	gates, read = gateReading(t, "event-sources")
+	assert.NotNil(t, ingestTenantGate(fullInfra(), gates))
+	v, ok = read(governance.GateTenantLifecycle)
+	assert.True(t, ok)
+	assert.Equal(t, 1.0, v)
+	_, other := read(governance.GatePresence)
+	assert.False(t, other)
+}

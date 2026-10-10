@@ -15,6 +15,7 @@ import (
 	"github.com/devicechain-io/dc-device-management/ruleverify"
 	"github.com/devicechain-io/dc-device-management/schema"
 	"github.com/devicechain-io/dc-microservice/auth"
+	mscfg "github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/credential"
 	"github.com/devicechain-io/dc-microservice/deadletter"
@@ -386,22 +387,37 @@ func newRaiseAlarmConsumer(reader messaging.MessageReader, dead *deadletter.Sink
 // misconfigured deploy (empty secret, or a config predating this feature) is visible
 // rather than silently skipping validation — mirroring command-delivery's device check.
 func wireDetectionRuleValidator(gates *governance.SafetyGates) {
-	infra := Microservice.InstanceConfiguration.Infrastructure
+	if v := detectionRuleValidator(Microservice.InstanceConfiguration.Infrastructure, gates); v != nil {
+		Api.DetectionRuleValidator = v
+	}
+}
+
+// detectionRuleValidator is the decision wireDetectionRuleValidator applies: the validator, or nil
+// (the gate is OFF) when the service secret or event-processing's coordinate is absent. It records
+// the decision on the rule_validation safety gate either way. A separate function, taking the
+// configuration and the gates, so the decision is testable without a started service.
+func detectionRuleValidator(infra mscfg.InfrastructureConfiguration, gates *governance.SafetyGates) *ruleverify.Validator {
 	if infra.ServiceAuth.Secret == "" {
 		log.Warn().Msg("Service secret not configured — device profile publish will NOT validate detection rules against event-processing (ADR-051 slice 4b disabled).")
 		gates.Set(governance.GateRuleValidation, false)
-		return
+		return nil
 	}
 	if infra.EventProcessing.Hostname == "" || infra.EventProcessing.Port == 0 {
 		log.Warn().Msg("event-processing endpoint not configured (infrastructure.eventProcessing) — device profile publish will NOT validate detection rules (ADR-051 slice 4b disabled).")
 		gates.Set(governance.GateRuleValidation, false)
-		return
+		return nil
 	}
 	client := svcclient.New(infra.UserManagement, infra.ServiceAuth.Secret, "device-management", []string{string(auth.DeviceRead)})
 	url := fmt.Sprintf("http://%s:%d/graphql", infra.EventProcessing.Hostname, infra.EventProcessing.Port)
-	Api.DetectionRuleValidator = ruleverify.NewValidator(client, url)
 	gates.Set(governance.GateRuleValidation, true)
 	log.Info().Str("eventProcessing", url).Msg("Device profile publish will validate detection rules against event-processing (ADR-051 slice 4b).")
+	return ruleverify.NewValidator(client, url)
+}
+
+// calloutTenantGate is the deleted-tenant gate the device auth callout refuses connects through:
+// nil when user-management is unconfigured, with the tenant_lifecycle safety gate recorded.
+func calloutTenantGate(infra mscfg.InfrastructureConfiguration, gates *governance.SafetyGates) func(string) bool {
+	return governance.NewTenantLifecycleGate(infra.UserManagement, infra.ServiceAuth.Secret, "device-management", gates)
 }
 
 // wireGeoFenceCapsResolver injects the PER-TENANT geofence caps onto the shared Api: an
@@ -601,7 +617,7 @@ func afterMicroserviceStarted(ctx context.Context) error {
 		// reclaimed. Nil when user-management is unconfigured — the gate is off, matching
 		// the resolver's own fail-open, since the erasure guarantee is the per-area fence.
 		infra := Microservice.InstanceConfiguration.Infrastructure
-		gate := governance.NewTenantLifecycleGate(infra.UserManagement, infra.ServiceAuth.Secret, "device-management", safetyGates)
+		gate := calloutTenantGate(infra, safetyGates)
 		// Every MQTT password connect is compared through this Checker, behind a
 		// per-username backoff whose counts every replica shares through the device
 		// credential-attempt bucket. It fails closed when that bucket cannot be reached,
