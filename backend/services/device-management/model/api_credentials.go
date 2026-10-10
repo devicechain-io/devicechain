@@ -314,6 +314,48 @@ func (api *Api) deviceCredentialForConnect(ctx context.Context, credentialType s
 	return oneLiveCredential(result, found, credentialType, credentialId)
 }
 
+// authCredentialColumns and authDeviceFields are everything the per-event credential
+// check and the access-token connect read from a resolved credential and its device.
+// On the credential: evaluateCredential and credentialDevice (id, tenant, device id, type,
+// stored secret, expiry), the enabled flag and type CredentialCache.fill requires before it
+// keeps a row. On the device: what the event resolver reads of the authenticated device
+// (id, tenant, token, device type, external id) and what the callout reads (token).
+//
+// The credential's columns are table-qualified for the reason connectCredentialColumns
+// states. An allowlist on purpose: a column added to either model later is not read, and
+// not copied into the credential cache, until it is added here; the golden test
+// TestTheEventLookupResolvesWhatTheFullReadResolves fails if the resolver starts reading a
+// device field this set leaves out.
+var (
+	authCredentialColumns = []string{
+		"device_credentials.id",
+		"device_credentials.tenant_id",
+		"device_credentials.device_id",
+		"device_credentials.credential_type",
+		"device_credentials.credential_value",
+		"device_credentials.enabled",
+		"device_credentials.expires_at",
+	}
+	authDeviceFields = []string{"ID", "TenantId", "Token", "DeviceTypeId", "ExternalId"}
+)
+
+// deviceCredentialForAuth is DeviceCredentialByCredentialId reading only
+// authCredentialColumns and authDeviceFields: the lookup behind authenticateCredential,
+// which is to say every cache miss of the per-event credential check and every access-token
+// connect. Metadata, name and description of both rows are not read, so a miss costs the
+// same however much the device stores, and the row the credential cache keeps is smaller.
+//
+// It is the same statement as the full finder, tenant-scoped by the same callback on the
+// credential's own table and with the same soft-delete predicate on the device join.
+func (api *Api) deviceCredentialForAuth(ctx context.Context, credentialType string, credentialId string) (*DeviceCredential, error) {
+	found := make([]*DeviceCredential, 0)
+	device := api.RDB.Database.Session(&gorm.Session{NewDB: true}).Select(authDeviceFields)
+	result := api.presentedCredentialStatement(ctx, credentialType, credentialId, device).
+		Select(authCredentialColumns).
+		Find(&found)
+	return oneLiveCredential(result, found, credentialType, credentialId)
+}
+
 // presentedCredentialStatement is the one statement that resolves a presented
 // credential: enabled-only, matched on type and id, tenant-scoped by the callback on the
 // credential's own table, with the owning device on a LEFT JOIN carrying the device's

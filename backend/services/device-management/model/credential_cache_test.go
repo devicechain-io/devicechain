@@ -449,16 +449,35 @@ func TestFillRefusesADisabledOrDevicelessRow(t *testing.T) {
 // What a hit returns is the caller's own: changing it does not change the next hit.
 func TestAHitHandsBackADeviceTheCallerCannotChangeInTheCache(t *testing.T) {
 	f := newCredentialCacheFixture(t)
+	// The event lookup does not read metadata, so the entry holds none however much the
+	// device stores; the copy a hit hands back is still the caller's own.
 	_, err := f.api.UpdateDevice(f.ctx, "dev", &DeviceUpdateRequest{Metadata: dcgraphql.OptionalStringOf(`{"a":1}`)})
 	require.NoError(t, err)
 	f.mustAuthenticate(t, basic("cred-1", "s3cret"), 1, "fill")
 	d := f.mustAuthenticate(t, basic("cred-1", "s3cret"), 0, "hit")
-	require.NotNil(t, d.Metadata)
+	require.Nil(t, d.Metadata)
 	d.Token = "tampered"
-	(*d.Metadata)[2] = 'Z'
+	d.DeviceTypeId = 99
 	again := f.mustAuthenticate(t, basic("cred-1", "s3cret"), 0, "next hit")
 	require.Equal(t, "dev", again.Token)
-	require.Equal(t, `{"a":1}`, string(*again.Metadata))
+	require.NotEqual(t, uint(99), again.DeviceTypeId)
+}
+
+// A hit's device copies the entry's metadata. A real lookup no longer reads metadata, so
+// this fills the cache directly with a row that has some, as cloneDevice must still cope
+// with one.
+func TestAHitCopiesTheEntrysDeviceMetadata(t *testing.T) {
+	c := NewCredentialCache(16, 1<<20)
+	key := fillSynth(c, "acme", "tok", synthCred("acme", 1, 8))
+	first, ok := c.lookup("acme", key)
+	require.True(t, ok)
+	require.NotNil(t, first.Device.Metadata)
+	(*first.Device.Metadata)[0] = 'Z'
+	first.Device.Token = "tampered"
+	again, ok := c.lookup("acme", key)
+	require.True(t, ok)
+	require.Equal(t, byte(0), (*again.Device.Metadata)[0])
+	require.Equal(t, "d1", again.Device.Token)
 }
 
 // synthCred is a row as the per-event finder returns it, for exercising the cache directly.
