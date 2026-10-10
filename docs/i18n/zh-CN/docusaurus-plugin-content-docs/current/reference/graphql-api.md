@@ -630,6 +630,20 @@ token 会拼入基础设施命名空间：租户 ID 成为 NATS subject 中按 `
 
 WebSocket 同样遵循此规则：服务器无法读取的订阅会得到语法错误，而非[仅订阅提示](#subscriptions-over-websocket)。
 
+### device-management 的数量上限 {#device-management-count-ceilings}
+
+有两类集合每次都会被完整读取，因此各自设有成员数量上限。会使集合超过上限的写入将被拒绝，
+`extensions.code` 为 `LIMIT_EXCEEDED`，且不会存储任何内容。读取从不截断：已经超过上限的所有者
+保留全部行，每次读取都返回全部。删除行后即可重新腾出空间。
+
+| 上限 | 数值 | 适用范围 |
+| --- | --- | --- |
+| 每台设备的跟踪关系数 | 256 | 源为同一台设备、且关系类型为跟踪类型的关系，适用于 `createEntityRelationship`、`createEntityRelationships` 和 `claimDevice`。事件解析处理每个事件时都会读取该设备的全部跟踪关系。 |
+| 每个设备配置文件的定义数 | 每种 1,000 | 指标定义、命令定义和检测规则，各自单独计数，适用于 `createMetricDefinition`、`createCommandDefinition` 和 `createDetectionRule`。 |
+
+服务以直方图形式导出 `tracked_relationships_per_device` 和 `profile_children`（带 `kind` 标签：
+`metric`、`command` 或 `rule`），记录读取到的规模，便于了解真实数据距离上限有多近。
+
 ### 每请求凭据检查 {#credential-checks-per-request}
 
 无论如何书写，一次请求只能检查有限个密码，默认一个。

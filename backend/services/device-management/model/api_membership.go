@@ -163,6 +163,11 @@ func (api *Api) CreateEntityRelationships(ctx context.Context,
 				request.SourceType, sourceId, request.TargetType, targetId); err != nil {
 				return fmt.Errorf("relationship %q: %w", request.Token, err)
 			}
+			// Counted on the transaction, so edges this batch already created for the same
+			// device are in the total.
+			if err := api.checkTrackedCeiling(ctx, tx, rt, request.SourceType, sourceId, 1); err != nil {
+				return fmt.Errorf("relationship %q: %w", request.Token, err)
+			}
 			// Named, for the same reason "source:"/"target:" above are: the batch is
 			// all-or-nothing, so a refusal that does not say which edge is a refusal the
 			// caller cannot act on.

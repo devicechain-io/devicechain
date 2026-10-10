@@ -67,6 +67,10 @@ func (api *Api) CreateCommandDefinition(ctx context.Context,
 		return nil, err
 	}
 
+	if err := api.checkProfileChildCeiling(ctx, &CommandDefinition{}, childKindCommand, matches[0].ID); err != nil {
+		return nil, err
+	}
+
 	metadataJSON, err := rdb.JSONInputOf("metadata", request.Metadata)
 	if err != nil {
 		return nil, err
@@ -231,6 +235,7 @@ func (api *Api) CommandDefinitionsByDeviceProfile(ctx context.Context, profileId
 	if result.Error != nil {
 		return nil, result.Error
 	}
+	api.ceilings.observeChildren(childKindCommand, len(found))
 	return found, nil
 }
 

@@ -34,6 +34,10 @@ func (api *Api) CreateMetricDefinition(ctx context.Context,
 			"model string-valued telemetry as device state (ADR-016 amd)", request.DataType)
 	}
 
+	if err := api.checkProfileChildCeiling(ctx, &MetricDefinition{}, childKindMetric, matches[0].ID); err != nil {
+		return nil, err
+	}
+
 	metadataJSON, err := rdb.JSONInputOf("metadata", request.Metadata)
 	if err != nil {
 		return nil, err
@@ -195,5 +199,6 @@ func (api *Api) MetricDefinitionsByDeviceProfile(ctx context.Context, profileId 
 	if result.Error != nil {
 		return nil, result.Error
 	}
+	api.ceilings.observeChildren(childKindMetric, len(found))
 	return found, nil
 }

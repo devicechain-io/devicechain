@@ -141,6 +141,10 @@ func (api *Api) CreateEntityRelationship(ctx context.Context,
 		return nil, err
 	}
 
+	if err := api.checkTrackedCeiling(ctx, api.RDB.DB(ctx), rtmatches[0], request.SourceType, sourceId, 1); err != nil {
+		return nil, err
+	}
+
 	metadataJSON, err := rdb.JSONInputOf("metadata", request.Metadata)
 	if err != nil {
 		return nil, err

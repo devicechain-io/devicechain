@@ -203,6 +203,9 @@ func (api *Api) ClaimDevice(ctx context.Context, request *DeviceClaimRequest, no
 			rel.SourceType, rel.SourceId, rel.TargetType, rel.TargetId); err != nil {
 			return err
 		}
+		if err := api.checkTrackedCeiling(ctx, tx, rtMatches[0], rel.SourceType, rel.SourceId, 1); err != nil {
+			return err
+		}
 		return tx.Create(rel).Error
 	})
 	if err != nil {

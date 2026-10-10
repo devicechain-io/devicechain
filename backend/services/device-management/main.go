@@ -218,6 +218,7 @@ func buildApis(nmgr *messaging.NatsManager, rdbm *rdb.RdbManager,
 	// Wrap api around rdb manager, then wrap a caching decorator over it for the hot
 	// inbound-event resolution path.
 	api := model.NewApi(rdbm)
+	api.EnableCeilingMetrics(nmgr.Microservice)
 	cached := model.NewCachedApi(api, caches)
 	// The write paths evict the hot-path caches through this seam (ADR-044 F2). The GraphQL
 	// mutations run on the plain *Api, so the evictor is wired onto it.

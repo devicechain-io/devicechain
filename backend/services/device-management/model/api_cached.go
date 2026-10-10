@@ -394,9 +394,16 @@ func (capi *CachedApi) TrackedRelationshipsForDevice(ctx context.Context,
 
 	key := relationshipsBySourceKey(tenant, deviceId)
 	if results, answered, _ := capi.cachedRelationships(ctx, key, false); answered {
+		if results != nil {
+			capi.ceilings.observeTracked(len(results.Results))
+		}
 		return results, nil
 	}
-	return capi.loadRelationships(ctx, key, deviceId)
+	results, err := capi.loadRelationships(ctx, key, deviceId)
+	if err == nil && results != nil {
+		capi.ceilings.observeTracked(len(results.Results))
+	}
+	return results, err
 }
 
 // loadRelationships is the database half of TrackedRelationshipsForDevice.
