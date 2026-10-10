@@ -210,6 +210,9 @@ func (api *Api) RemoveEntityRelationships(ctx context.Context, tokens []string) 
 	if len(tokens) == 0 {
 		return false, nil
 	}
+	if len(tokens) > rdb.MaxLookupKeys {
+		return false, limit.Exceeded("lookup keys", len(tokens), rdb.MaxLookupKeys)
+	}
 	// Capture the source devices before the edges are gone so their cached tracked
 	// sets can be evicted (ADR-044 F2); the targets survive, so the sweep won't
 	// repair a stale set here.

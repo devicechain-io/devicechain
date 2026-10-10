@@ -264,3 +264,43 @@ func TestAcknowledgeAlarmsFailsClosedWithNoTenant(t *testing.T) {
 		t.Fatalf("%d alarms left unacknowledged after a tenantless call, want 3", got)
 	}
 }
+
+// A request above the per-lookup key bound (rdb.MaxLookupKeys) is looked up in chunks, and an
+// alarm named only in a LATER chunk is acknowledged like one in the first: a version that
+// dropped or mis-sliced the second chunk would refuse it as not found instead.
+func TestAcknowledgeAlarmsFindsAnAlarmNamedInALaterLookupChunk(t *testing.T) {
+	ctx, api := alarmAckTestCtx(t)
+	ctx = withAuthorities(ctx, auth.AlarmWrite)
+	r := &SchemaResolver{}
+
+	tokens := make([]string, rdb.MaxLookupKeys+500)
+	for i := range tokens {
+		tokens[i] = "missing-" + strconv.Itoa(i)
+	}
+	tokens[0] = "alarm-01"
+	late := rdb.MaxLookupKeys + 200
+	tokens[late] = "alarm-02"
+
+	result, err := r.AcknowledgeAlarms(ctx, struct{ Tokens []string }{Tokens: tokens})
+	if err != nil {
+		t.Fatalf("acknowledgeAlarms: %v", err)
+	}
+	acked := map[string]bool{}
+	for _, a := range result.Acknowledged() {
+		acked[a.Token()] = true
+	}
+	if !acked["alarm-01"] || !acked["alarm-02"] || len(acked) != 2 {
+		t.Fatalf("acknowledged %v, want exactly alarm-01 (chunk 1) and alarm-02 (index %d, chunk 2)", acked, late)
+	}
+	for _, ref := range result.Refusals() {
+		if ref.Token() == "alarm-02" || ref.Token() == "alarm-01" {
+			t.Fatalf("%s was refused (%s), but it names a seeded alarm", ref.Token(), ref.Code())
+		}
+	}
+	if got, want := len(result.Refusals()), len(tokens)-2; got != want {
+		t.Fatalf("got %d refusals, want %d", got, want)
+	}
+	if got := unackedCount(t, ctx, api); got != 1 {
+		t.Fatalf("%d alarms left unacknowledged, want 1 (alarm-03 untouched)", got)
+	}
+}

@@ -262,9 +262,8 @@ func (api *Api) DetectionRulesById(ctx context.Context, ids []uint) ([]*Detectio
 // Get detection rules by token.
 func (api *Api) DetectionRulesByToken(ctx context.Context, tokens []string) ([]*DetectionRule, error) {
 	found := make([]*DetectionRule, 0)
-	result := api.RDB.DB(ctx).Preload("DeviceProfile").Find(&found, "token in ?", tokens)
-	if result.Error != nil {
-		return nil, result.Error
+	if err := rdb.FindByKeys(api.RDB.DB(ctx).Preload("DeviceProfile"), &found, "token", tokens); err != nil {
+		return nil, err
 	}
 	return found, nil
 }

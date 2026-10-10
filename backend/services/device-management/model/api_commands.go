@@ -197,11 +197,8 @@ func (api *Api) CommandDefinitionsById(ctx context.Context, ids []uint) ([]*Comm
 // Get command definitions by token.
 func (api *Api) CommandDefinitionsByToken(ctx context.Context, tokens []string) ([]*CommandDefinition, error) {
 	found := make([]*CommandDefinition, 0)
-	result := api.RDB.DB(ctx)
-	result = result.Preload("DeviceProfile")
-	result = result.Find(&found, "token in ?", tokens)
-	if result.Error != nil {
-		return nil, result.Error
+	if err := rdb.FindByKeys(api.RDB.DB(ctx).Preload("DeviceProfile"), &found, "token", tokens); err != nil {
+		return nil, err
 	}
 	return found, nil
 }

@@ -117,9 +117,8 @@ func (api *Api) AssetTypesById(ctx context.Context, ids []uint) ([]*AssetType, e
 // Get asset types by token.
 func (api *Api) AssetTypesByToken(ctx context.Context, tokens []string) ([]*AssetType, error) {
 	found := make([]*AssetType, 0)
-	result := api.RDB.DB(ctx).Find(&found, "token in ?", tokens)
-	if result.Error != nil {
-		return nil, result.Error
+	if err := rdb.FindByKeys(api.RDB.DB(ctx), &found, "token", tokens); err != nil {
+		return nil, err
 	}
 	return found, nil
 }
@@ -292,11 +291,8 @@ func (api *Api) AssetsById(ctx context.Context, ids []uint) ([]*Asset, error) {
 // Get assets by token.
 func (api *Api) AssetsByToken(ctx context.Context, tokens []string) ([]*Asset, error) {
 	found := make([]*Asset, 0)
-	result := api.RDB.DB(ctx)
-	result = result.Preload("AssetType")
-	result = result.Find(&found, "token in ?", tokens)
-	if result.Error != nil {
-		return nil, result.Error
+	if err := rdb.FindByKeys(api.RDB.DB(ctx).Preload("AssetType"), &found, "token", tokens); err != nil {
+		return nil, err
 	}
 	return found, nil
 }

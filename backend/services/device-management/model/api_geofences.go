@@ -659,9 +659,8 @@ func (api *Api) GeoFencesById(ctx context.Context, ids []uint) ([]*GeoFence, err
 // Get geofences by token.
 func (api *Api) GeoFencesByToken(ctx context.Context, tokens []string) ([]*GeoFence, error) {
 	found := make([]*GeoFence, 0)
-	result := api.RDB.DB(ctx).Find(&found, "token in ?", tokens)
-	if result.Error != nil {
-		return nil, result.Error
+	if err := rdb.FindByKeys(api.RDB.DB(ctx), &found, "token", tokens); err != nil {
+		return nil, err
 	}
 	return found, nil
 }
