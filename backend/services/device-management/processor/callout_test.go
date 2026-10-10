@@ -208,10 +208,11 @@ func TestAuthorizeGrant(t *testing.T) {
 		t.Errorf("audience = %q, want %q", uc.Audience, natsauth.AppAccount)
 	}
 	// The grant is per-device, not tenant-wide: the device may publish its own events
-	// and command responses, and nothing else.
+	// command responses and reports, and nothing else.
 	want := []string{
 		"inst-1.acme-corp.devices.sensor-001.events",
 		"inst-1.acme-corp.command-responses.sensor-001",
+		"inst-1.acme-corp.device-reports.sensor-001",
 	}
 	if got := []string(uc.Permissions.Pub.Allow); !slices.Equal(got, want) {
 		t.Errorf("pub allow = %v, want %v", got, want)

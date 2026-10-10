@@ -353,9 +353,14 @@ func DevicePermissions(instanceId, tenant, deviceToken string) (jwt.Permissions,
 	responses := messaging.DeviceScopedSubject(instanceId, tenant, messaging.SubjectCommandResponses, deviceToken)
 	commands := messaging.DeviceScopedSubject(instanceId, tenant, messaging.SubjectDeviceCommands, deviceToken)
 
+	// The reserved configuration/update channels: the device reports on its own subject
+	// and reads desired state from its own, and from nothing else.
+	reports := messaging.DeviceScopedSubject(instanceId, tenant, messaging.SubjectDeviceReports, deviceToken)
+	desired := messaging.DeviceScopedSubject(instanceId, tenant, messaging.SubjectDeviceDesired, deviceToken)
+
 	var p jwt.Permissions
-	p.Pub.Allow.Add(events, responses)
-	p.Sub.Allow.Add(commands, MqttDeliverySubject)
+	p.Pub.Allow.Add(events, responses, reports)
+	p.Sub.Allow.Add(commands, desired, MqttDeliverySubject)
 	return p, nil
 }
 

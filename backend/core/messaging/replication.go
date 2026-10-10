@@ -47,6 +47,9 @@ func leaseHolderDeployed(deployedAreas []string) bool {
 // because the alternative is that forgetting to annotate a new stream silently
 // removes it from the check.
 func streamIsDeployed(st streams.Stream, deployedAreas []string) bool {
+	if st.Dormant {
+		return false
+	}
 	if len(deployedAreas) == 0 || len(st.Areas) == 0 {
 		return true
 	}
