@@ -446,15 +446,15 @@ type NotificationState {
     alarmToken: String!
     """The alarm's logical key, which identifies a kind of alarm on its originator."""
     alarmKey: String!
-    """The alarm's current severity, as last notified."""
+    """The alarm's most recent severity known to this service, including a de-escalation, which is recorded without a notification."""
     severity: String!
-    """When the first notification about the alarm was delivered, as an RFC 3339 timestamp; null if none has been."""
+    """Time of the alarm transition whose notification was the first delivered, as an RFC 3339 timestamp; null if none has been."""
     firstNotifiedAt: String
-    """When the most recent notification about the alarm was delivered, as an RFC 3339 timestamp; null if none has been."""
+    """Time of the most recent notification: the alarm transition's time, or when an escalation step started. RFC 3339; null if none."""
     lastNotifiedAt: String
-    """Number of notifications recorded about the alarm, escalations included."""
+    """Number of notifications recorded about the alarm, escalations included. An escalation step is counted when it starts, even if its delivery then fails."""
     notifyCount: Int!
-    """When the alarm was acknowledged, as an RFC 3339 timestamp; null if it has not been. Escalation stops once it is set."""
+    """When the alarm was acknowledged, as an RFC 3339 timestamp; null if it has not been. Escalation stops once it is set, and the record is removed after a retention period."""
     acknowledgedAt: String
     """When the alarm was cleared, as an RFC 3339 timestamp; null if it has not been. Escalation stops once it is set, and the record is removed after a retention period."""
     clearedAt: String
@@ -539,9 +539,9 @@ type Query {
 
     # Per-alarm notification state (read-only).
     """
-    Returns the notification records for the given alarm tokens. Alarms that have not been
-    notified about, or whose record has been removed, are left out. Requires
-    notification:read.
+    Returns the notification records for the given alarm tokens. An alarm with no record
+    (never notified, acknowledged or cleared, or whose record has been removed) is left
+    out. Requires notification:read.
     """
     notificationStatesByAlarmToken(
         """Tokens of the alarms."""

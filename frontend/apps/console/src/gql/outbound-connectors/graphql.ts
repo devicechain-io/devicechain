@@ -16,9 +16,10 @@ export type ConnectorCreateRequest = {
    * username; kafka takes addresses (required, host:port each), topic (required),
    * clientId, tls and sasl ({mechanism: PLAIN, SCRAM-SHA-256 or SCRAM-SHA-512, username});
    * aws_sns takes region, accessKeyId and topicArn (all required) and endpoint; aws_sqs
-   * takes region, accessKeyId and url (all required) and endpoint. Destinations must be
-   * network host:port endpoints, and the platform restricts which addresses a connector
-   * may reach.
+   * takes region, accessKeyId and url (all required) and endpoint. mqtt urls
+   * (scheme://host:port) and kafka addresses must give an explicit port; the AWS endpoint
+   * and the SQS url are http or https URLs. The platform restricts which addresses a
+   * connector may reach.
    */
   config: string;
   /** Free-text description of what the connector delivers to. */
@@ -29,7 +30,7 @@ export type ConnectorCreateRequest = {
    * The credential: the broker password for mqtt, the SASL password for kafka, the secret
    * access key for aws_sns and aws_sqs. Write-only; stored encrypted and never returned.
    * Omit it, or send an empty string, for no credential. aws_sns and aws_sqs require one
-   * at delivery time.
+   * at delivery time, as does kafka when sasl is set.
    */
   secret?: string | null | undefined;
   /**
