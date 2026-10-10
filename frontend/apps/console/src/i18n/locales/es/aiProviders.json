@@ -39,7 +39,7 @@
   "noApiKeyWarning": "No hay ninguna clave de API configurada — configura y guarda una en la pestaña Conexión antes de probar.",
   "noKindsMessage": "No hay tipos de proveedor.",
   "packagingButton": "Empaquetado",
-  "paramsDescription": "Ajustes opacos específicos del tipo, como objeto JSON (por ejemplo, límite de tokens de salida), o en blanco.",
+  "paramsDescription": "Aún no es compatible: ningún proveedor aplica estos ajustes, por lo que no se pueden editar.",
   "paramsInvalidJsonError": "Params debe ser un JSON válido, o estar en blanco.",
   "paramsLabel": "Params (JSON)",
   "paramsNotObjectError": "Params debe ser un objeto JSON (como { \"temperature\": 0.2 }).",

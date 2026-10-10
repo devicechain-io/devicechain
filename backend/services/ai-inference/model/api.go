@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"reflect"
 	"strings"
 
 	"github.com/devicechain-io/dc-microservice/conflict"
@@ -54,6 +55,18 @@ func (*ParamsNotAppliedError) Error() string {
 // Extensions types the refusal for the GraphQL layer.
 func (*ParamsNotAppliedError) Extensions() map[string]any {
 	return map[string]any{"code": "UNSUPPORTED"}
+}
+
+// sameParams reports whether raw is the same JSON document as the stored column value.
+func sameParams(raw *string, stored datatypes.JSON) bool {
+	if raw == nil || len(stored) == 0 {
+		return false
+	}
+	var a, b any
+	if json.Unmarshal([]byte(*raw), &a) != nil || json.Unmarshal(stored, &b) != nil {
+		return false
+	}
+	return reflect.DeepEqual(a, b)
 }
 
 // refuseParams refuses a request whose params document would SET something: a JSON
@@ -283,12 +296,15 @@ func (api *Api) UpdateAIProvider(ctx context.Context, token string, request *AIP
 	// The endpoint folds through the POINTER shape on purpose: the pair is re-validated
 	// even when the request names neither half, and validation needs the value it would
 	// hold. endpointValue is idempotent on anything it has already stored.
-	if request.Params.Set {
+	storedParams := providerParamsStr(current.Params)
+	// Sending back what is already stored changes nothing, so it is accepted: a client
+	// that resends the whole record (the console did) must not be locked out of editing a
+	// provider that was written before params were refused.
+	if request.Params.Set && !sameParams(request.Params.Value, current.Params) {
 		if err := refuseParams(request.Params.Value); err != nil {
 			return nil, err
 		}
 	}
-	storedParams := providerParamsStr(current.Params)
 	params, endpoint, err := api.validateProviderFields(kind, modelID,
 		request.Endpoint.ApplyTo(dcgraphql.NullStr(current.Endpoint)), request.Params.ApplyTo(storedParams))
 	if err != nil {

@@ -39,7 +39,7 @@
   "noApiKeyWarning": "No API key is configured — set and save one on the Connection tab before testing.",
   "noKindsMessage": "No provider kinds.",
   "packagingButton": "Packaging",
-  "paramsDescription": "Opaque per-kind tuning as a JSON object (e.g. output-token cap), or blank.",
+  "paramsDescription": "Not supported yet: no provider applies these settings, so they cannot be edited.",
   "paramsInvalidJsonError": "Params must be valid JSON, or blank.",
   "paramsLabel": "Params (JSON)",
   "paramsNotObjectError": "Params must be a JSON object (like { \"temperature\": 0.2 }).",
