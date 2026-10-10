@@ -120,8 +120,8 @@ type Mutation {
     you review the returned draft and save it through the normal rule-creation path.
 
     When inference is not enabled on the deployment, no provider is active, the tenant has not
-    opted in to external AI, or the tenant is over its drafting rate limit before a first
-    candidate is produced, the result has unavailable=true rather than a GraphQL error. Each
+    opted in to external AI, the inference service could not be reached, or the tenant is over
+    its drafting rate limit before a first candidate is produced, the result has unavailable=true rather than a GraphQL error. Each
     call spends inference budget, so it is a mutation and should not be retried blindly.
     Requires device:write.
     """
@@ -224,8 +224,8 @@ type DraftRuleResult {
     warnings: [DraftDiagnostic!]!
     """
     True when inference could not run: not enabled on the deployment, no active provider, the
-    tenant has not opted in to external AI, or the tenant is over its drafting rate limit before
-    a first candidate was produced.
+    tenant has not opted in to external AI, the inference service could not be reached, or the
+    tenant is over its drafting rate limit before a first candidate was produced.
     """
     # True when the inference path itself could not run — not configured, no active provider, or the
     # tenant has not opted in to external routing (all fail-closed). unavailableReason carries the
@@ -311,8 +311,8 @@ type PreviewResult {
     stats: PreviewStats!
     """
     Why the result is partial: for example history before the window is no longer retained, a
-    read or scan limit was reached, the window was shortened, the profile is unpublished, or too
-    many previews are already running for the tenant. Null for a complete result.
+    read or scan limit was reached, the window was shortened, the profile is unpublished, the geofence archive is unreachable, or
+    too many previews are already running for the tenant. Null for a complete result.
     """
     # A human-readable reason the result is PARTIAL (history aged out below the window, the scan cap
     # was hit, the window was capped, the profile is unpublished, or a concurrent-preview refusal) —

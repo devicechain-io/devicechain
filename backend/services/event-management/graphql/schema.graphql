@@ -128,10 +128,10 @@ type LocationEvent {
 }
 
 """
-A stored measurement: one named reading from a device (a message carrying several readings
-produces one row each). Unit and data type are copied from the bound metric definition when the
-reading is stored, so the row describes itself and does not change if the definition is later
-edited.
+A measurement: one named reading from a device (a message carrying several readings produces
+one row each). Returned by measurementEvents (stored rows) and measurementStream (live
+readings). Unit and data type are copied from the bound metric definition when the reading is
+stored, so the row describes itself and does not change if the definition is later edited.
 """
 # A persisted measurement event (one row per measurement entry). unit and dataType
 # are denormalized from the bound metric definition (ADR-016) so the reading is
@@ -154,7 +154,11 @@ type MeasurementEvent {
     occurredTime: String
     """Name of the measurement, for example a metric key such as temperature."""
     name: String!
-    """The numeric value of the reading; null when the reading was not numeric."""
+    """
+    The numeric value of the reading. A stored measurement always has one, because a non-numeric
+    reading is rejected and not stored; on measurementStream such a reading is delivered with a
+    null value.
+    """
     value: Float
     """
     Id of the metric definition the reading was bound to, as a decimal string; null for an
@@ -322,8 +326,8 @@ input MeasurementAggregationCriteria {
     anchor: EventAnchor
     """
     Width of each time bucket in seconds; must be 1 or more (smaller is an error). A width that
-    is a multiple of 60 without an anchor filter is served from pre-computed one-minute
-    summaries; any other width is computed from the individual readings. Bucket boundaries are
+    is a multiple of 60 without an anchor filter is normally served from pre-computed one-minute
+    summaries (an operator setting can turn that off); any other width is computed from the individual readings. Bucket boundaries are
     fixed instants shared by every query of the same width, not aligned to startTime.
     """
     intervalSeconds: Int!
