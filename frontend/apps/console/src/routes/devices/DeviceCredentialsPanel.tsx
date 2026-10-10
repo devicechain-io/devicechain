@@ -46,7 +46,7 @@ const needsSecret = (t: CredentialType) => t === 'MQTT_BASIC';
 // a copy button.
 //
 // 🔴 Every operation here — the list included — requires device:write. For
-// ACCESS_TOKEN and X509_CERTIFICATE the credential id IS the bearer secret, so
+// ACCESS_TOKEN the credential id IS the bearer secret, so
 // reading a credential confers device impersonation and the list query is gated on
 // the write authority server-side. This panel therefore assumes its caller has
 // already checked hasAuthority(claims, 'device:write') and renders it only then —
@@ -190,17 +190,6 @@ export function DeviceCredentialsPanel({ deviceToken }: { deviceToken: string })
               />
             </FormField>
           </div>
-        )}
-
-        {type === 'X509_CERTIFICATE' && (
-          <FormField label={t('certificateIdLabel')} description={t('certificateIdHint')}>
-            <Input
-              value={credentialId}
-              onChange={(e) => setCredentialId(e.target.value)}
-              placeholder={t('certificateIdPlaceholder')}
-              {...noAutofill}
-            />
-          </FormField>
         )}
 
         <Button onClick={add} loading={submitting} disabled={submitting}>

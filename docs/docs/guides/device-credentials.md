@@ -17,13 +17,16 @@ Available. You manage credentials from the **Credentials** tab of the device det
 | --- | --- | --- |
 | `ACCESS_TOKEN` | a bearer token (the credential id) | none — possession of the id is the proof |
 | `MQTT_BASIC` | a username (the credential id) + password | the password |
-| `X509_CERTIFICATE` | a certificate subject/fingerprint (the credential id) | none — possession is proved out of band |
+
+:::note X.509 credentials are not accepted
+The `X509_CERTIFICATE` type is not supported until certificate verification ships. Creating or updating a credential of that type is refused (`UNSUPPORTED`), and a credential of that type that already exists no longer authenticates. Use `ACCESS_TOKEN` or `MQTT_BASIC`.
+:::
 
 ## Reading a credential requires `device:write` {#reading-a-credential}
 
 A secret, where a type has one, is **write-only**. Only `MQTT_BASIC` has one: its password. You submit the password when you register the credential, and it is never returned on read. The console never displays it: you enter it in a masked field, and the field is cleared once the credential is created. From then on the API returns `null` for it.
 
-That protects the `MQTT_BASIC` password and nothing else. `ACCESS_TOKEN` and `X509_CERTIFICATE` store no secret to withhold, because the **`credentialId` is itself the bearer**. The table above says so for the access token, and the per-event check also accepts a certificate credential on its id alone. `credentialId` is a plainly readable field. So whatever the type, reading a device's credentials gives you what you need to authenticate as that device.
+That protects the `MQTT_BASIC` password and nothing else. `ACCESS_TOKEN` stores no secret to withhold, because the **`credentialId` is itself the bearer**. `credentialId` is a plainly readable field. So whatever the type, reading a device's credentials gives you what you need to authenticate as that device.
 
 For that reason, every query that returns a credential requires **`device:write`**, not `device:read`. A read-only user cannot list a device's credentials, which is why the console does not show them the **Credentials** tab. The requirement takes nothing away from a `device:write` holder: they can already register a credential for any device in the tenant and impersonate it. What it prevents is that capability reaching the read-only baseline that every enabled tenant member receives.
 
@@ -97,7 +100,7 @@ The `devicechain_devicemanagement_credential_checks_total` metric counts every p
 ## Register a credential (console)
 
 1. Open the device's detail page and select the **Credentials** tab.
-2. Choose the credential **type** and fill in the fields for that type: generate or paste an access token, enter a username and password for MQTT-basic, or enter a certificate id for X.509.
+2. Choose the credential **type** and fill in the fields for that type: generate or paste an access token, or enter a username and password for MQTT-basic.
 3. For `MQTT_BASIC`, record the password before you continue. The field is cleared on success and the password is never shown again.
 4. Click **Add credential**.
 

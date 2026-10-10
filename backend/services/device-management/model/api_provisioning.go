@@ -31,7 +31,7 @@ var (
 // provisionableCredentialType reports whether provisioning can mint a credential
 // of the given type. Only ACCESS_TOKEN is mintable today: its id is a generated
 // bearer token, needing no out-of-band material. Minting MQTT_BASIC (a generated
-// password) or X509 (a CA-signed cert) is a later onboarding slice.
+// password) is a later onboarding slice.
 func provisionableCredentialType(ctype string) bool {
 	return CredentialType(ctype) == CredentialAccessToken
 }

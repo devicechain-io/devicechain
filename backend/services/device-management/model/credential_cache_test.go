@@ -308,11 +308,11 @@ func TestTheCacheIsTenantScoped(t *testing.T) {
 func TestTheSameIdUnderTwoTypesIsTwoEntries(t *testing.T) {
 	f := newCredentialCacheFixture(t)
 	_, err := f.api.CreateDeviceCredential(f.ctx, &DeviceCredentialCreateRequest{
-		Token: "c-x", DeviceToken: "dev2", CredentialType: string(CredentialX509Certificate), CredentialId: "tok-1", Enabled: true,
+		Token: "c-x", DeviceToken: "dev2", CredentialType: string(CredentialMqttBasic), CredentialId: "tok-1", CredentialValue: strptr("pw"), Enabled: true,
 	})
 	require.NoError(t, err)
 	require.Equal(t, "dev", f.mustAuthenticate(t, accessToken("tok-1"), 1, "token").Token)
-	cert := &PresentedCredential{CredentialType: string(CredentialX509Certificate), CredentialId: "tok-1"}
+	cert := &PresentedCredential{CredentialType: string(CredentialMqttBasic), CredentialId: "tok-1", Secret: strptr("pw")}
 	require.Equal(t, "dev2", f.mustAuthenticate(t, cert, 1, "certificate").Token)
 	require.Equal(t, "dev", f.mustAuthenticate(t, accessToken("tok-1"), 0, "token again").Token)
 	require.Equal(t, "dev2", f.mustAuthenticate(t, cert, 0, "certificate again").Token)

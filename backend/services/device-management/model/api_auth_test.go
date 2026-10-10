@@ -43,15 +43,15 @@ func TestEvaluateCredential_NoSecretType(t *testing.T) {
 	assert.NoError(t, err)
 }
 
-// An X.509 credential may store the (non-secret) PEM in CredentialValue; that
-// must not be treated as a secret the device has to present.
-func TestEvaluateCredential_X509IgnoresStoredValue(t *testing.T) {
+// A stored X.509 row can never authenticate: nothing verifies a certificate, so the
+// type is refused even when the row is present and enabled.
+func TestEvaluateCredential_X509IsRefused(t *testing.T) {
 	now := time.Date(2026, 6, 25, 12, 0, 0, 0, time.UTC)
 	cred := credential(CredentialX509Certificate, strptr("-----BEGIN CERTIFICATE-----"), nil)
 
 	err := evaluateCredential(cred, &PresentedCredential{CredentialType: string(CredentialX509Certificate), CredentialId: "cred-1"}, now)
 
-	assert.NoError(t, err)
+	assert.ErrorIs(t, err, ErrCredentialTypeInvalid)
 }
 
 // MQTT_BASIC carries a secret that must be presented and must match.

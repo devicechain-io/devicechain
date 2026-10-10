@@ -5,6 +5,8 @@ package model
 
 import (
 	"database/sql"
+	"errors"
+	"fmt"
 
 	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/rdb"
@@ -237,19 +239,57 @@ type DeviceSearchResults struct {
 type CredentialType string
 
 const (
-	CredentialAccessToken     CredentialType = "ACCESS_TOKEN"
+	CredentialAccessToken CredentialType = "ACCESS_TOKEN"
+	CredentialMqttBasic   CredentialType = "MQTT_BASIC"
+
+	// CredentialX509Certificate is RETIRED, not part of the vocabulary: it is not accepted
+	// until certificate verification ships, so the type is refused at create and update
+	// (typed UNSUPPORTED) and at authentication (a stored row can never authenticate). The
+	// constant survives only so that refusal can name it, and so a test can seed a stored
+	// row. It returns to Valid() when certificate verification ships.
 	CredentialX509Certificate CredentialType = "X509_CERTIFICATE"
-	CredentialMqttBasic       CredentialType = "MQTT_BASIC"
 )
 
-// Valid reports whether the credential type names one of the known types.
+// Valid reports whether the credential type names one of the supported types.
 func (t CredentialType) Valid() bool {
 	switch t {
-	case CredentialAccessToken, CredentialX509Certificate, CredentialMqttBasic:
+	case CredentialAccessToken, CredentialMqttBasic:
 		return true
 	default:
 		return false
 	}
+}
+
+// Retired reports whether the type is a recognized but unsupported member of the
+// vocabulary: refused with a typed code rather than as an unknown type.
+func (t CredentialType) Retired() bool {
+	return t == CredentialX509Certificate
+}
+
+// UnsupportedCredentialTypeError is the typed refusal of a retired credential type. It
+// carries extensions.code UNSUPPORTED, and must reach graphql-go UNWRAPPED for the code to
+// be served (see UnsupportedCredentialTypeOf).
+type UnsupportedCredentialTypeError struct {
+	Type CredentialType
+}
+
+func (e *UnsupportedCredentialTypeError) Error() string {
+	return fmt.Sprintf("credential type %s is not supported until certificate verification ships; use ACCESS_TOKEN or MQTT_BASIC", e.Type)
+}
+
+// Extensions gives the refusal its wire code.
+func (e *UnsupportedCredentialTypeError) Extensions() map[string]any {
+	return map[string]any{"code": "UNSUPPORTED"}
+}
+
+// UnsupportedCredentialTypeOf returns the typed refusal found anywhere in err's chain, or
+// err unchanged. A resolver returns its result so the code reaches the wire.
+func UnsupportedCredentialTypeOf(err error) error {
+	var unsupported *UnsupportedCredentialTypeError
+	if errors.As(err, &unsupported) {
+		return unsupported
+	}
+	return err
 }
 
 // String returns the underlying string value.
@@ -305,7 +345,7 @@ type DeviceCredentialUpdateRequest struct {
 // DeviceCredential holds authentication material for a device (ADR-014).
 // Identity (Device) is stable and never rotates; credentials are rotatable and
 // a device may hold several. CredentialId is the identifier a device presents
-// at connect time (access token string, X.509 cert thumbprint/CN, or MQTT
+// at connect time (access token string or MQTT
 // username); it resolves to the owning device. CredentialValue is the secret
 // material (token secret, MQTT password, or certificate PEM).
 type DeviceCredential struct {

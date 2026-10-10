@@ -50,8 +50,8 @@ export default function DeviceDetailPage() {
   const { toast } = useToast();
   const confirm = useConfirm();
   const { claims } = useAuth();
-  // Credentials are device:write, list included: for ACCESS_TOKEN and
-  // X509_CERTIFICATE the readable credential id IS the bearer secret, so reading
+  // Credentials are device:write, list included: for ACCESS_TOKEN the
+  // readable credential id IS the bearer secret, so reading
   // one confers device impersonation. The panel only ever managed credentials and
   // its list content is privileged, so a caller without the authority gets no tab
   // at all rather than an empty one or a 403.

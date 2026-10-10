@@ -18,8 +18,8 @@ import (
 
 // ErrCredentialIdRequired is returned when a replacement asks for a credential type
 // the server cannot invent an identifier for. Only ACCESS_TOKEN is mintable — its id
-// IS the bearer, so a random UUID is a complete credential — while X509_CERTIFICATE
-// needs a CA-signed thumbprint and MQTT_BASIC a chosen username. It is a sentinel so
+// IS the bearer, so a random UUID is a complete credential — while MQTT_BASIC
+// needs a chosen username. It is a sentinel so
 // a caller can distinguish "you forgot the id" from "that type does not exist",
 // which are different operator mistakes with different fixes.
 //

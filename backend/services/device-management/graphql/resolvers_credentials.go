@@ -51,13 +51,13 @@ func (r *DeviceCredentialResolver) CredentialType() string {
 	return r.M.CredentialType
 }
 
-// CredentialId is readable, and for ACCESS_TOKEN and X509_CERTIFICATE it IS the
-// bearer — those types prove possession out of band and compare no stored secret
+// CredentialId is readable, and for ACCESS_TOKEN it IS the
+// bearer — that type proves possession out of band and compares no stored secret
 // (model.credentialRequiresSecret). That is why the queries returning this type
 // are gated on device:WRITE rather than device:read; see queries_credentials.go
 // for the reasoning. Do not relax that gate on the assumption that withholding
-// credentialValue below is what protects a credential: for two of the three
-// types there is nothing in credentialValue to withhold.
+// credentialValue below is what protects a credential: for an
+// access token there is nothing in credentialValue to withhold.
 func (r *DeviceCredentialResolver) CredentialId() string {
 	return r.M.CredentialId
 }

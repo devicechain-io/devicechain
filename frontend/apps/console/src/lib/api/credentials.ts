@@ -15,7 +15,7 @@ export type DeviceCredential = DeviceCredentialsQuery['deviceCredentials']['resu
 export type { DeviceCredentialCreateRequest };
 
 // The credential types the platform understands (ADR-014).
-export const CREDENTIAL_TYPES = ['ACCESS_TOKEN', 'MQTT_BASIC', 'X509_CERTIFICATE'] as const;
+export const CREDENTIAL_TYPES = ['ACCESS_TOKEN', 'MQTT_BASIC'] as const;
 export type CredentialType = (typeof CREDENTIAL_TYPES)[number];
 
 const DEVICE_CREDENTIALS = graphql(`
@@ -57,7 +57,7 @@ const DELETE_DEVICE_CREDENTIAL = graphql(`
 
 // List a device's credentials (newest-first is not guaranteed; the set is small).
 // Requires device:write, not device:read: the returned credentialId is the bearer
-// secret for ACCESS_TOKEN and X509_CERTIFICATE, so reading confers impersonation.
+// secret for ACCESS_TOKEN, so reading confers impersonation.
 export async function listDeviceCredentials(deviceToken: string): Promise<DeviceCredential[]> {
   const data = await gql('device-management', DEVICE_CREDENTIALS, {
     criteria: { pageNumber: 1, pageSize: 100, device: deviceToken },

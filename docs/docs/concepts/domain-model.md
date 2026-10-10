@@ -57,9 +57,9 @@ A device profile declares the commands its devices accept. An issued command is 
 
 ## Identity and credentials
 
-A device has a stable **identity** that everything else references, kept separate from its **credentials**, the material it uses to authenticate. Credentials are pluggable: access token, MQTT-basic (username + password), and X.509 certificate. A device can therefore rotate credentials or hold several without changing its identity.
+A device has a stable **identity** that everything else references, kept separate from its **credentials**, the material it uses to authenticate. Credentials are pluggable: access token and MQTT-basic (username + password). A device can therefore rotate credentials or hold several without changing its identity.
 
-A credential's secret is **write-only**: you submit it when you register the credential, and it is never returned on read. That covers only the MQTT-basic password. For an access token or a certificate, the credential id is itself the proof of possession, so reading a device's credentials at all requires the `device:write` authority rather than `device:read`. See [Device credentials](../guides/device-credentials.md#reading-a-credential).
+A credential's secret is **write-only**: you submit it when you register the credential, and it is never returned on read. That covers only the MQTT-basic password. For an access token, the credential id is itself the proof of possession, so reading a device's credentials at all requires the `device:write` authority rather than `device:read`. See [Device credentials](../guides/device-credentials.md#reading-a-credential).
 
 A device may also carry an optional **`externalId`**: a customer-owned business key such as a VIN, serial number, GS1 code, or asset tag. It is distinct from both the internal identity and the credential. It is:
 

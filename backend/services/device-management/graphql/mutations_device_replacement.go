@@ -36,7 +36,7 @@ func (r *SchemaResolver) ReplaceDevice(ctx context.Context, args struct {
 	api := r.GetApi(ctx)
 	result, err := api.ReplaceDevice(ctx, &args.Request, publisher(ctx), time.Now())
 	if err != nil {
-		return nil, err
+		return nil, model.UnsupportedCredentialTypeOf(err)
 	}
 	return &DeviceReplaceResultResolver{M: *result, S: r, C: ctx}, nil
 }
