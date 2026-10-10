@@ -34,7 +34,7 @@ var haVerifyCmd = &cobra.Command{
 	Short: "Assert an instance's broker actually holds the replication it declares",
 	Long: `Assert, from live broker state, that an instance's JetStream streams, KV
 buckets, durable consumers and NATS pods are replicated the way the instance
-declares (ADR-020 A0).
+declares.
 
 This reads the broker, not the deployment. The failure it exists to catch is an
 instance that looks highly available from every rendered artifact -- a three-node
@@ -107,7 +107,7 @@ var haVerifyDbCmd = &cobra.Command{
 	Use:   "verify-db",
 	Short: "Assert a database store actually holds the replication it declares",
 	Long: `Assert, from live PostgreSQL and Kubernetes state, that a CloudNativePG
-database store is replicated the way it is expected to be (ADR-020 A2.3).
+database store is replicated the way it is expected to be.
 
 This is the database sibling of "ha verify", and it exists for the same reason:
 every artifact that describes the store describes what was ASKED for. A Cluster
