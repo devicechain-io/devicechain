@@ -1136,6 +1136,31 @@ func startOnUnassignablePort(t *testing.T, ms *Microservice, lo, hi, round int) 
 	return nil, nil, ""
 }
 
+// listenOutsideAutoAssignRange listens on loopback at a port the kernel never auto-assigns,
+// so no ephemeral client socket of this process can share its local port.
+func listenOutsideAutoAssignRange(t *testing.T) net.Listener {
+	t.Helper()
+	lo, hi, err := ephemeralPortRange()
+	if err != nil {
+		t.Fatalf("reading the auto-assign range: %v", err)
+	}
+	for attempt := 0; attempt < startBindAttempts; attempt++ {
+		port, err := pickPortOutside(lo, hi, unassignablePortFloor, rand.IntN)
+		if err != nil {
+			t.Fatal(err)
+		}
+		l, err := net.Listen("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
+		if err == nil {
+			return l
+		}
+		if !errors.Is(err, syscall.EADDRINUSE) {
+			t.Fatalf("listen on port %d: %v", port, err)
+		}
+	}
+	t.Fatalf("%d picks in a row were already in use", startBindAttempts)
+	return nil
+}
+
 func TestPickPortOutsideTheAutoAssignRange(t *testing.T) {
 	at := func(n int) func(int) int { return func(int) int { return n } }
 	last := func(n int) int { return n - 1 }
@@ -1249,10 +1274,11 @@ func TestPortHolderProbeNamesTheHolderOfALivePort(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("reads /proc/net/tcp")
 	}
-	l, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
+	// Not port 0: the kernel hands out ports from the range other sockets in this process
+	// (every client connection an earlier test dialled) take their local port from, so a
+	// lingering TIME_WAIT or ESTABLISHED row on the same port reads as a foreign holder and
+	// flips the verdicts below. A port outside the auto-assign range cannot be one.
+	l := listenOutsideAutoAssignRange(t)
 	defer l.Close()
 	port := l.Addr().(*net.TCPAddr).Port
 	inode, err := socketInode(l)
