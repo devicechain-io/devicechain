@@ -161,6 +161,8 @@ puede cambiar.
 | `BATCH_TOO_LARGE` | Más dispositivos de los que un lote puede comandar, nombrados explícitamente o resueltos del grupo. | No; divide la operación o acota el grupo |
 | `BATCH_GROUP_UNUSABLE` | El grupo no existe, agrupa algo que no son dispositivos, nunca se publicó o la versión nombrada no existe (o se nombró una versión para un grupo estático). El código propio del servicio de grupos viaja en la razón. | No |
 | `PAYLOAD_NOT_JSON` / `METADATA_NOT_JSON` | La cadena no es JSON válido. | No |
+| `PAYLOAD_TOO_LARGE` / `METADATA_TOO_LARGE` | La cadena de carga útil o de metadatos supera los 64 KiB. | No |
+| `COMMAND_NAME_TOO_LONG` | El nombre del comando supera los 128 bytes. | No |
 | `EXPIRES_AT_INVALID` | `expiresAt` no es una marca de tiempo RFC3339. | No |
 
 La lista es abierta. Trata un código que no reconozcas como un rechazo que no puedes clasificar,

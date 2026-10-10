@@ -103,6 +103,8 @@ change.
 | `COMMAND_NOT_IN_VOCABULARY` | The profile constrains commands and this key is not one. Check the casing. | No |
 | `PAYLOAD_SCHEMA_VIOLATION` | The payload broke the command's parameter schema — unknown parameter, wrong type, out of range, or a required one missing. | No |
 | `PAYLOAD_NOT_JSON` / `METADATA_NOT_JSON` | The string is not valid JSON. | No |
+| `PAYLOAD_TOO_LARGE` / `METADATA_TOO_LARGE` | The payload or metadata string is over 64 KiB. | No |
+| `COMMAND_NAME_TOO_LONG` | The command name is over 128 bytes. | No |
 | `EXPIRES_AT_INVALID` | `expiresAt` is not an RFC3339 timestamp. | No |
 | `TOKEN_IN_USE` | The token is held by a command you do not own — in practice one the platform minted for a batch. | No — pick another token |
 | `COMMAND_REJECTED` | A rejection arrived carrying no classification. | No |

@@ -36,6 +36,30 @@ import (
 // working while the copy claiming to enumerate it quietly went stale.
 type RejectionCode string
 
+// MaxCommandNameLength is the longest command name accepted. Names are vocabulary keys
+// (a handful of characters in practice); the bound keeps a request from storing and
+// logging an arbitrarily long one.
+const MaxCommandNameLength = 128
+
+// validateCommandInputBounds refuses a command whose name, payload or metadata is over
+// its size bound, with a coded rejection. It runs before the JSON validity checks so an
+// oversized value is reported as too large, not parsed first.
+func validateCommandInputBounds(name string, payload, metadata *string) error {
+	if len(name) > MaxCommandNameLength {
+		return rejected(RejectNameTooLong, "command name is %d bytes; the most allowed is %d",
+			len(name), MaxCommandNameLength)
+	}
+	if payload != nil && len(*payload) > rdb.MaxJSONInputBytes {
+		return rejected(RejectPayloadTooLarge, "command payload is %d bytes; the most allowed is %d",
+			len(*payload), rdb.MaxJSONInputBytes)
+	}
+	if metadata != nil && len(*metadata) > rdb.MaxJSONInputBytes {
+		return rejected(RejectMetadataTooLarge, "command metadata is %d bytes; the most allowed is %d",
+			len(*metadata), rdb.MaxJSONInputBytes)
+	}
+	return nil
+}
+
 const (
 	// RejectPayloadNotJSON: the payload is not well-formed JSON. Caught locally,
 	// before the remote gate, because a malformed body would otherwise be persisted
@@ -43,6 +67,12 @@ const (
 	RejectPayloadNotJSON RejectionCode = "PAYLOAD_NOT_JSON"
 	// RejectMetadataNotJSON: the metadata blob is not well-formed JSON.
 	RejectMetadataNotJSON RejectionCode = "METADATA_NOT_JSON"
+	// RejectPayloadTooLarge / RejectMetadataTooLarge: the payload or metadata string is
+	// over rdb.MaxJSONInputBytes. Refused rather than truncated.
+	RejectPayloadTooLarge  RejectionCode = "PAYLOAD_TOO_LARGE"
+	RejectMetadataTooLarge RejectionCode = "METADATA_TOO_LARGE"
+	// RejectNameTooLong: the command name is over MaxCommandNameLength.
+	RejectNameTooLong RejectionCode = "COMMAND_NAME_TOO_LONG"
 	// RejectExpiresAtInvalid: expiresAt is not an RFC3339 timestamp.
 	RejectExpiresAtInvalid RejectionCode = "EXPIRES_AT_INVALID"
 	// RejectHeldCeilingExceeded: the tenant already holds its ceiling of withheld
@@ -326,6 +356,9 @@ func (api *Api) CreateCommand(ctx context.Context, request *CommandCreateRequest
 	// the only thing standing between a bad payload and the column, but it is still the
 	// layer that names WHICH rejection it is, and it runs before the remote verification
 	// below rather than after it.
+	if err := validateCommandInputBounds(request.Name, request.Payload, request.Metadata); err != nil {
+		return nil, err
+	}
 	if request.Payload != nil && !json.Valid([]byte(*request.Payload)) {
 		return nil, rejected(RejectPayloadNotJSON, "command payload is not valid JSON")
 	}

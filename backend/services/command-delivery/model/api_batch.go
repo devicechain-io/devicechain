@@ -413,6 +413,9 @@ func validateBatchRequest(request *CommandBatchCreateRequest) error {
 		return rejected(RejectBatchTargetAmbiguous,
 			"a group version was named without a group")
 	}
+	if err := validateCommandInputBounds(request.Name, request.Payload, request.Metadata); err != nil {
+		return err
+	}
 	if request.Payload != nil && !json.Valid([]byte(*request.Payload)) {
 		return rejected(RejectPayloadNotJSON, "command payload is not valid JSON")
 	}
