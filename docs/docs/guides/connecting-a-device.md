@@ -339,7 +339,7 @@ Two further per-device topics are reserved as groundwork for device configuratio
 {instanceId}/{tenant}/device-reports/{deviceToken}    (device to platform; a device may publish to its own)
 ```
 
-As with commands, a device is authorized only for its own topic of each pair.
+As with commands, a device is authorized only for the topic carrying its own device token, and only in the direction shown.
 :::
 
 ### Why the nonce is required {#why-the-nonce-is-required}

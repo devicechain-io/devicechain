@@ -330,17 +330,17 @@ Este topic era antes de alcance de inquilino (`{instanceId}/{tenant}/command-res
 Un comando que nunca se responde permanece en `SENT` hasta que su TTL lo convierte en `TIMEOUT`. Sin una respuesta, la plataforma solo sabe que el comando se despachó, no que el dispositivo actuó sobre él. Si tus dispositivos no responden, configura un `expiresAt` al emitir comandos para que alcancen un estado terminal en tu propio plazo y no en el predeterminado de siete días de la plataforma.
 :::
 
-### Temas reservados para la entrega de configuración {#reserved-device-topics}
+### Topics reservados para la entrega de configuración {#reserved-device-topics}
 
 :::note Reservado, aún no activo
-Se reservan dos temas adicionales por dispositivo como base para la entrega de configuración a los dispositivos. Todavía nada publica en ellos ni lee de ellos, así que no construyas sobre ellos. Se listan para que tus dispositivos no usen esos nombres para otra cosa.
+Se reservan dos topics adicionales por dispositivo como base para la entrega de configuración a los dispositivos. Todavía nada publica en ellos ni lee de ellos, así que no construyas sobre ellos. Se listan para que tus dispositivos no usen esos nombres para otra cosa.
 
 ```
 {instanceId}/{tenant}/device-desired/{deviceToken}    (de la plataforma al dispositivo; un dispositivo puede suscribirse al suyo)
 {instanceId}/{tenant}/device-reports/{deviceToken}    (del dispositivo a la plataforma; un dispositivo puede publicar en el suyo)
 ```
 
-Igual que con los comandos, un dispositivo solo está autorizado para su propio tema de cada par.
+Igual que con los comandos, un dispositivo solo está autorizado para el topic que lleva su propio token de dispositivo, y únicamente en el sentido indicado.
 :::
 
 ### Por qué el nonce es obligatorio {#why-the-nonce-is-required}

@@ -323,15 +323,15 @@ mosquitto_pub \
 
 ### 为配置下发预留的主题 {#reserved-device-topics}
 
-:::note 已预留,尚未启用
-为设备配置下发预留了另外两个按设备划分的主题。目前没有任何组件向它们发布或从中读取,请勿基于它们开发。在此列出,是为了避免设备将这些名称用于其他用途。
+:::note 已预留，尚未启用
+为设备配置下发预留了另外两个按设备划分的主题。目前没有任何组件向它们发布或从中读取，请勿基于它们开发。在此列出，是为了避免设备将这些名称用于其他用途。
 
 ```
-{instanceId}/{tenant}/device-desired/{deviceToken}    (平台到设备;设备可订阅属于自己的主题)
-{instanceId}/{tenant}/device-reports/{deviceToken}    (设备到平台;设备可向属于自己的主题发布)
+{instanceId}/{tenant}/device-desired/{deviceToken}    （平台到设备；设备可订阅属于自己的主题）
+{instanceId}/{tenant}/device-reports/{deviceToken}    （设备到平台；设备可向属于自己的主题发布）
 ```
 
-与命令一样,设备只被授权使用每一对主题中属于自己的那一个。
+与命令一样，设备只被授权使用带有自身设备令牌的主题，且仅限所示方向。
 :::
 
 ### 为何需要 nonce {#why-the-nonce-is-required}
