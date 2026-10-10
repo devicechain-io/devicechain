@@ -1432,6 +1432,20 @@ jobs:
       - name: Translation freshness self-tests
         run: node --test docs/scripts/translation-freshness.test.mjs
 
+      # The per-schema GraphQL reference pages are generated at docs build time, so —
+      # like the published SDL above — they exist only on Netlify. These tests are what
+      # a pull request sees: every served schema has a page in every locale (asserted
+      # from the tree, so a new service cannot be silently missed), descriptions come
+      # from """ strings and never # comments, and every page compiles as MDX. Unlike
+      # the tests above they need the docs dependencies (graphql, and the MDX compiler).
+      - name: Install docs dependencies
+        working-directory: docs
+        run: npm ci --no-audit --no-fund
+
+      - name: GraphQL reference generator self-tests
+        working-directory: docs
+        run: node --test scripts/graphql-reference.test.mjs
+
       # English remains the reference; locale refreshes may happen in batches.
       # Report changed source pages without blocking unrelated English edits.
       - name: Chinese translation review status

@@ -11,3 +11,8 @@
 # from the schemas the services actually parse, and the whole point of generating
 # them is that it cannot.
 /static/schema/
+
+# The GraphQL reference pages, written by scripts/generate-graphql-reference.mjs on
+# every start and build from the same SDL — never committed, for the same reason.
+/generated/
+/i18n/*/docusaurus-plugin-content-docs-graphql-reference/
