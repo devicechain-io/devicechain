@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/devicechain-io/dc-microservice/limit"
 	"github.com/devicechain-io/dc-microservice/sqlnull"
 	"gorm.io/datatypes"
 	"gorm.io/gorm"
@@ -84,6 +85,12 @@ type MetadataEntity struct {
 	Metadata *datatypes.JSON
 }
 
+// MaxJSONInputBytes is the most a caller-supplied JSON column value (metadata, payloads,
+// configuration, ...) may be, enforced by JSONInputOf for every field that goes through
+// it. A field that legitimately needs more has its own larger explicit bound, checked
+// before it reaches here. Over the bound is refused (LIMIT_EXCEEDED), never truncated.
+const MaxJSONInputBytes = 64 << 10
+
 // JSONInputOf creates a JSON column value from a string an API CALLER supplied,
 // refusing the write when that string is not valid JSON. field names the request
 // field in the error, because a request can carry several of these — metadata,
@@ -141,6 +148,9 @@ func JSONInputOf(field string, value *string) (*datatypes.JSON, error) {
 	}
 	if strings.TrimSpace(*value) == "" {
 		return nil, nil
+	}
+	if len(*value) > MaxJSONInputBytes {
+		return nil, limit.Exceeded(field+" bytes", len(*value), MaxJSONInputBytes)
 	}
 	if !json.Valid([]byte(*value)) {
 		return nil, fmt.Errorf("%s must be valid JSON", field)

@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+
+	"github.com/devicechain-io/dc-microservice/limit"
 )
 
 // IsKnownChannelType reports whether id names a channel type in the catalog
@@ -146,5 +148,11 @@ func validateStringArray(s *string, field string) error {
 	if err := json.Unmarshal([]byte(trimmed), &arr); err != nil {
 		return fmt.Errorf("%s must be a JSON array of strings: %w", field, err)
 	}
+	if len(arr) > MaxRecipientsPerRule {
+		return limit.Exceeded(field, len(arr), MaxRecipientsPerRule)
+	}
 	return nil
 }
+
+// MaxRecipientsPerRule is the most recipients one notification rule may list.
+const MaxRecipientsPerRule = 100

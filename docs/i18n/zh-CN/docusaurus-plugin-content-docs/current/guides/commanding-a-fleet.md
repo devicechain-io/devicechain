@@ -113,6 +113,8 @@ mutation {
 | `BATCH_TOO_LARGE` | 设备数量超过单批次允许控制的数量，无论是直接指定还是从组解析。 | 不应原样重试：拆分操作或缩小组 |
 | `BATCH_GROUP_UNUSABLE` | 组不存在、包含的不是设备、从未发布、指定版本不存在，或为静态组指定了版本。组服务自身的代码随原因返回。 | 不应重试 |
 | `PAYLOAD_NOT_JSON` / `METADATA_NOT_JSON` | 字符串不是有效 JSON。 | 不应重试 |
+| `PAYLOAD_TOO_LARGE` / `METADATA_TOO_LARGE` | 载荷或元数据字符串超过 64 KiB。 | 否 |
+| `COMMAND_NAME_TOO_LONG` | 命令名称超过 128 字节。 | 否 |
 | `EXPIRES_AT_INVALID` | `expiresAt` 不是 RFC3339 时间戳。 | 不应重试 |
 
 该列表可扩展。将无法识别的代码视为无法分类的拒绝，**绝不能视为成功**。
