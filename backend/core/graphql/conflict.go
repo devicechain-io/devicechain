@@ -8,6 +8,7 @@ import (
 
 	"github.com/devicechain-io/dc-microservice/conflict"
 	"github.com/devicechain-io/dc-microservice/integrity"
+	"github.com/devicechain-io/dc-microservice/limit"
 	gqlerrors "github.com/graph-gophers/graphql-go/errors"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
@@ -31,6 +32,8 @@ import (
 //
 // The code, in order:
 //
+//  0. a limit refusal (core/limit) in the chain answers LIMIT_EXCEEDED, ahead of the
+//     integrity classes below (but still behind a code a typed error already set, step 1);
 //  1. an extensions.code a typed error already set is kept: the outermost typed error
 //     chose its code;
 //  2. otherwise the first non-unique refusal in the chain — a service's
@@ -53,7 +56,9 @@ func answerIntegrity(errs []*gqlerrors.QueryError) {
 		}
 		err := qe.ResolverError
 		chosen := ""
-		if class, ok := integrity.Refused(err); ok {
+		if _, ok := limit.As(err); ok {
+			chosen = limit.Code
+		} else if class, ok := integrity.Refused(err); ok {
 			chosen, _, _ = integrity.Answer(class)
 		} else if conflict.Is(err) {
 			chosen = conflict.Code
