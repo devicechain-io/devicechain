@@ -260,7 +260,7 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 		// replay the stream's up-to-7-day retained backlog and dispatch already-TIMEOUT commands as
 		// live actuations (B1). Only the leader's Dispatcher pulls from it; a standby binds it (a
 		// harmless idempotent AddConsumer) but never reads.
-		commandReader, err := NatsManager.NewReader(streams.DeviceCommands, messaging.ReaderWithDeliverNew())
+		commandReader, err := newCommandReader(NatsManager)
 		if err != nil {
 			return err
 		}
@@ -284,6 +284,18 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+// newCommandReader builds the durable device-commands consumer the downlink dispatcher reads.
+//
+// 🔴 IT IS A NAMED CONSTRUCTOR SO THE DELIVER POLICY HAS SOMETHING TO BE TESTED THROUGH. The
+// reader MUST start at the stream tail (ReaderWithDeliverNew): a durable created without it
+// replays the stream's retained backlog and dispatches already-TIMEOUT commands to devices
+// as live actuations. Dropping the option changes nothing a compiler or a unit test of the
+// dispatcher can see, so TestCommandReaderStartsAtTheStreamTail reads the policy off the
+// broker's own consumer.
+func newCommandReader(m *messaging.NatsManager) (messaging.MessageReader, error) {
+	return m.NewReader(streams.DeviceCommands, messaging.ReaderWithDeliverNew())
 }
 
 // buildMetrics creates every Prometheus instrument exactly once. All are shared across
