@@ -326,7 +326,16 @@ type Metrics interface {
 	// retries it replaces. The label is the same fixed action enum, never a tenant or rule
 	// value, and never the rejection code (that is logged, not labelled).
 	RecordPermanentlyRejected(action string)
+	// RecordDropped: one action SKIPPED without being attempted, by a fixed reason enum
+	// (never a tenant, rule or action-type value). Today the one reason is "unknown_kind": the
+	// definition carries an action type no case handles — unreachable for a gate-validated rule,
+	// so any non-zero count means a forged or hand-edited definition (or a build older than the
+	// rule) and must be visible rather than a silent return.
+	RecordDropped(reason string)
 }
+
+// DropUnknownKind is the RecordDropped reason for an action whose type no dispatch case handles.
+const DropUnknownKind = "unknown_kind"
 
 // Dispatcher turns a derived event into its authored actions. It holds no per-detection state —
 // idempotency lives in the deterministic token the command sink dedups on (and the upsert-keyed
@@ -674,7 +683,10 @@ func (d *Dispatcher) dispatchAction(ctx context.Context, ev runtime.DerivedEvent
 	default:
 		// The publish gate (rules.Compile) rejects unknown action types, so this is unreachable for
 		// a gate-validated rule; a forged/hand-edited definition's unknown action is skipped (not a
-		// wedge). No metric — it cannot happen through the supported authoring path.
+		// wedge) — but loudly: an error log and a counted drop, so the skip is never silent.
+		log.Error().Str("rule", ev.RuleID).Str("action", string(a.Type)).
+			Msg("REACT: skipping an action of an unknown type; the rule definition carries an action this build cannot dispatch.")
+		d.metrics.RecordDropped(DropUnknownKind)
 		return
 	}
 }

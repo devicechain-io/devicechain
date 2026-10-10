@@ -68,11 +68,12 @@ type fakeMetrics struct {
 	notEnabled    map[string]int
 	connectorShed map[string]int
 	permanent     map[string]int
+	dropped       map[string]int
 }
 
 func newFakeMetrics() *fakeMetrics {
 	return &fakeMetrics{dispatched: map[string]int{}, notEnabled: map[string]int{},
-		connectorShed: map[string]int{}, permanent: map[string]int{}}
+		connectorShed: map[string]int{}, permanent: map[string]int{}, dropped: map[string]int{}}
 }
 
 func (m *fakeMetrics) RecordDispatched(a string)    { m.dispatched[a]++ }
@@ -81,6 +82,7 @@ func (m *fakeMetrics) RecordNotEnabled(a string)    { m.notEnabled[a]++ }
 func (m *fakeMetrics) RecordConnectorShed(a string) { m.connectorShed[a]++ }
 
 func (m *fakeMetrics) RecordPermanentlyRejected(a string) { m.permanent[a]++ }
+func (m *fakeMetrics) RecordDropped(reason string)        { m.dropped[reason]++ }
 
 func evt() runtime.DerivedEvent {
 	return runtime.DerivedEvent{
@@ -442,4 +444,21 @@ func (s *failOnCallSink) Send(_ context.Context, req CommandRequest) error {
 	}
 	s.sent = append(s.sent, req)
 	return nil
+}
+
+// TestDispatchUnknownActionKindIsCountedNotSilent: an action whose type no case handles (a
+// forged or hand-edited definition) is skipped without wedging the event, but the skip must be
+// visible as a counted drop, not a silent return.
+func TestDispatchUnknownActionKindIsCountedNotSilent(t *testing.T) {
+	rule := rules.Rule{ID: "acme/p@1/r1", Name: "r", Type: rules.TypeThreshold,
+		Actions: []rules.Action{{Type: rules.ActionType("teleport")}}}
+	m := newFakeMetrics()
+	d := NewDispatcher(fakeResolver{rule: rule, found: true}, &fakeSink{}, nil, nil, nil, m)
+	res := d.Dispatch(context.Background(), evt())
+	if res.Outcome != Done {
+		t.Fatalf("an unknown action must not wedge the event: %v", res.Outcome)
+	}
+	if m.dropped["unknown_kind"] != 1 {
+		t.Fatalf("an unknown action kind must be counted as dropped: %+v", m.dropped)
+	}
 }

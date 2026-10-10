@@ -68,7 +68,8 @@ func sendOne(t *testing.T, sink react.CommandSink) error {
 func TestSendClassifiesAPermanentRejection(t *testing.T) {
 	for _, code := range []string{
 		"DEVICE_NOT_FOUND", "COMMAND_NOT_IN_VOCABULARY", "PAYLOAD_SCHEMA_VIOLATION",
-		"PAYLOAD_NOT_JSON", "METADATA_NOT_JSON", "EXPIRES_AT_INVALID",
+		"PAYLOAD_NOT_JSON", "METADATA_NOT_JSON", "EXPIRES_AT_INVALID", "TOKEN_IN_USE",
+		"PAYLOAD_TOO_LARGE", "METADATA_TOO_LARGE", "COMMAND_NAME_TOO_LONG",
 	} {
 		t.Run(code, func(t *testing.T) {
 			sink, _ := newCommandSink(t, map[string]any{
