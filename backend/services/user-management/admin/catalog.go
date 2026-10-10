@@ -13,9 +13,11 @@ import (
 
 	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-microservice/conflict"
+	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/governance"
 	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/integrity"
+	"github.com/devicechain-io/dc-microservice/limit"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-user-management/iam"
 	"gorm.io/gorm"
@@ -725,12 +727,28 @@ func (s *Service) CountTenantsAtTier(ctx context.Context, tierID uint) (int64, e
 	return s.iam.CountTenantsAtTier(ctx, tierID)
 }
 
+// MaxTenantTiers bounds the tier catalog, and with it the list reorderTenantTiers
+// takes. The two are one bound because a reorder must name every tier: a catalog
+// allowed to grow past the reorder cap would be one nobody could reorder. Tiers are
+// operator packaging (a free/standard/enterprise ladder), so a hundred is far more
+// than any catalog needs. The count is read before the insert, so two creates racing
+// at the bound can both land; the only consequence is a catalog one or two over, which
+// reorderTenantTiers then refuses (loudly, with this code) until a tier is deleted.
+const MaxTenantTiers = 100
+
 // CreateTenantTier registers a new tier. Its config is validated against the key
 // registry (ADR-065 decision 8): an unknown key is rejected here rather than
 // accepted and silently ignored at read.
 func (s *Service) CreateTenantTier(ctx context.Context, in TierInput) (*iam.TenantTier, error) {
 	if in.Token == "" {
 		return nil, fmt.Errorf("token is required")
+	}
+	tiers, err := s.iam.ListTenantTiers(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if len(tiers) >= MaxTenantTiers {
+		return nil, limit.Exceeded("tenant tiers", len(tiers)+1, MaxTenantTiers)
 	}
 	if err := iam.ValidateTierConfig(in.Config); err != nil {
 		return nil, err
@@ -802,7 +820,20 @@ func (s *Service) UpdateTenantTier(ctx context.Context, token string, request *T
 // S5c). orderedTokens must be exactly the current tiers — a stale client is refused
 // (iam.ErrTierReorderMismatch) rather than silently dropping a tier it had not loaded.
 // Presentation only: it moves nothing but where tiers appear in a list.
+//
+// The list is bounded before it reaches the store, as a count (MaxTenantTiers, the
+// catalog's own bound) and per token (a tier token's own maximum length), so an
+// oversized request is refused with LIMIT_EXCEEDED rather than walked, or echoed in a
+// mismatch error.
 func (s *Service) ReorderTenantTiers(ctx context.Context, orderedTokens []string) error {
+	if len(orderedTokens) > MaxTenantTiers {
+		return limit.Exceeded("orderedTokens", len(orderedTokens), MaxTenantTiers)
+	}
+	for _, tok := range orderedTokens {
+		if len(tok) > core.MaxTokenLen {
+			return limit.Exceeded("orderedTokens entry length", len(tok), core.MaxTokenLen)
+		}
+	}
 	return s.iam.ReorderTenantTiers(ctx, orderedTokens)
 }
 

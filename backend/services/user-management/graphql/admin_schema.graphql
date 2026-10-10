@@ -564,7 +564,18 @@ input AdminOAuthClientCreateRequest {
     clientId: String!
     name: String
     description: String
+    """
+    The redirect addresses the client may use; at least one and at most 16, each at most
+    2048 characters. Each must be an absolute https URL with no fragment and no embedded
+    credentials. Plain http is accepted only for loopback hosts (`localhost`, `127.0.0.1`,
+    `::1`). A longer list or entry is refused with error code LIMIT_EXCEEDED.
+    """
     redirectUris: [String!]!
+    """
+    The scopes the client may request; at least one and at most 16, each at most 64
+    characters. Supported scopes are `read-only` and `location`. A longer list or entry is
+    refused with error code LIMIT_EXCEEDED.
+    """
     scopes: [String!]!
     confidential: Boolean
 }
@@ -586,7 +597,19 @@ input AdminOAuthClientUpdateRequest {
     # no redirect URI can never complete an authorization, and one registered for no scope
     # describes a permission set nobody can read. Null and [] are the same request here,
     # and both are rejected rather than one being quietly read as "leave it alone".
+    """
+    The complete new list of redirect addresses, replacing the current list and validated as
+    for registration, including its bounds (at most 16, each at most 2048 characters; more
+    is refused with error code LIMIT_EXCEEDED). It cannot be emptied: null or an empty list
+    is rejected, so to keep the list unchanged omit the field.
+    """
     redirectUris: [String!]
+    """
+    The complete new list of scopes the client may request, replacing the current list and
+    validated as for registration, including its bounds (at most 16, each at most 64
+    characters; more is refused with error code LIMIT_EXCEEDED). It cannot be emptied: null
+    or an empty list is rejected, so to keep the list unchanged omit the field.
+    """
     scopes: [String!]
 }
 
@@ -779,6 +802,12 @@ type Mutation {
     # superuser system role is protected (requires role:write).
     deleteRole(scope: String!, token: String!): Boolean!
 
+    """
+    Creates a tier and returns it. It is placed at display order 0. Fails if the config has
+    an unknown key or an out-of-range value, if the color is not in the palette, or if the
+    token is already used (error code CONFLICT). The catalog holds at most 100 tiers; a
+    create beyond that is refused with error code LIMIT_EXCEEDED. Requires tenant:write.
+    """
     # Create a tenant tier (requires tenant:write).
     createTenantTier(request: AdminTenantTierCreateRequest!): AdminTenantTier!
     # Apply a partial update to a tier by token: an omitted field is left alone, a
@@ -793,7 +822,18 @@ type Mutation {
     # (one that has not seen a tier just added or deleted) is refused rather than
     # silently dropping it. Presentation only: it changes where tiers appear, nothing
     # about what any tier grants.
-    reorderTenantTiers(orderedTokens: [String!]!): [AdminTenantTier!]!
+    """
+    Sets the listing order of the tiers and returns them in the new order. The list must
+    name every existing tier exactly once; if it omits, repeats or invents a tier the
+    request fails and nothing changes, which also catches a client working from a stale
+    list. A list longer than 100 (the catalog's own bound), or a token longer than 128
+    characters, is refused with error code LIMIT_EXCEEDED. It changes only how tiers are
+    ordered in lists, not what any tier grants. Requires tenant:write.
+    """
+    reorderTenantTiers(
+        """Tokens of every tier, in the desired order, first to last."""
+        orderedTokens: [String!]!
+    ): [AdminTenantTier!]!
 
     # Create a tenant, enabled by default, at the requested tier (requires tenant:write).
     createTenant(request: AdminTenantCreateRequest!): AdminTenant!
