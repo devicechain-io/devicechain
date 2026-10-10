@@ -1,6 +1,20 @@
 import type { Config } from '@docusaurus/types';
 import type * as Preset from '@docusaurus/preset-classic';
+import { existsSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { themes as prismThemes } from 'prism-react-renderer';
+
+// Every markdown tree a docs page is built from, for the search index's content hash.
+// A generated GraphQL reference (a second docs plugin instance, written into
+// generated/graphql-reference at prebuild) is added to the list when that folder exists,
+// because the plugin warns on a `docsDir` that is missing. Resolved against this file, not
+// the working directory, so it does not depend on where the build is started.
+const generatedReference = resolve(__dirname, 'generated/graphql-reference');
+const searchDocsDirs = [
+  'docs',
+  'i18n',
+  ...(existsSync(generatedReference) ? ['generated/graphql-reference'] : []),
+];
 
 const config: Config = {
   title: 'DeviceChain',
@@ -15,6 +29,7 @@ const config: Config = {
   // posthog-docusaurus plugin, and static/_redirects for the /ingest proxy.
   scripts: [
     { src: '/posthog/posthog-1.436.1.js', defer: true },
+    { src: '/analytics-scrub.js', defer: true },
     { src: '/analytics.js', defer: true },
   ],
 
@@ -83,6 +98,38 @@ const config: Config = {
           customCss: './src/css/custom.css',
         },
       } satisfies Preset.Options,
+    ],
+  ],
+
+  themes: [
+    // Local full-text search: the index is built at `docusaurus build` from the rendered
+    // HTML of every locale and served as static files, so there is no third-party service.
+    [
+      '@easyops-cn/docusaurus-search-local',
+      {
+        // Content-hashed index file names (search-index-<hash>.json).
+        //
+        // The hash covers the .md/.mdx files under `docsDir` ONLY, nothing else (not
+        // sidebars, config or other generated content), so `docsDir` must list every
+        // markdown tree the index is built from: the default ('docs') alone would leave the
+        // hash unchanged when only a translation changed.
+        hashed: 'filename',
+        docsDir: searchDocsDirs,
+        // `language` is one list for the whole build, not one per locale, and the build
+        // produces all three locales at once. `zh` is the tokenizer Chinese needs (no
+        // spaces between words); `es` is the Spanish stemmer.
+        language: ['en', 'es', 'zh'],
+        // Docs are served at the site root. The plugin collects the pages of EVERY docs
+        // plugin instance by permalink, so a second instance (such as a generated
+        // GraphQL reference) is picked up under this same root when it is added, with no
+        // further configuration. There is no blog.
+        docsRouteBasePath: '/',
+        indexBlog: false,
+        // Off: highlighting appends the typed words to a result's URL (?_highlight=), which
+        // would put raw queries into shared links and analytics URLs.
+        highlightSearchTermsOnTargetPage: false,
+        explicitSearchResultPath: true,
+      },
     ],
   ],
 
