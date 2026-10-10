@@ -686,7 +686,8 @@ CREATE TABLE "device-management".device_profiles (
  provenance character varying(256),
  active_version integer,
  location_declaration jsonb,
- active_since timestamp with time zone
+ active_since timestamp with time zone,
+ configuration_declaration jsonb
 );
 CREATE TABLE "device-management".device_replacements (
  id bigint NOT NULL,

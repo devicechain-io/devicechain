@@ -40,6 +40,10 @@ func (api *Api) buildProfileSnapshot(ctx context.Context, profileId uint) (datat
 	if err != nil {
 		return nil, err
 	}
+	configuration, err := api.configurationDeclarationForProfile(ctx, profileId)
+	if err != nil {
+		return nil, err
+	}
 	metrics, err := api.MetricDefinitionsByDeviceProfile(ctx, profileId)
 	if err != nil {
 		return nil, err
@@ -61,7 +65,8 @@ func (api *Api) buildProfileSnapshot(ctx context.Context, profileId uint) (datat
 	for _, dr := range rules {
 		dr.DeviceProfile = nil
 	}
-	raw, err := json.Marshal(ProfileSnapshot{Metrics: metrics, Commands: commands, Rules: rules, Location: location})
+	raw, err := json.Marshal(ProfileSnapshot{Metrics: metrics, Commands: commands, Rules: rules, Location: location,
+		Configuration: configuration})
 	if err != nil {
 		return nil, err
 	}
