@@ -26,7 +26,17 @@ type Dashboard {
     token: String!
     name: String
     description: String
+    """
+    The current DRAFT definition. The draft is author-only: reading it requires
+    dashboard:write, and a caller holding only dashboard:read is refused (FORBIDDEN)
+    rather than served an empty string. Viewers read the published snapshot with the
+    publishedDashboard query instead.
+    """
     definition: String!
+    """The version number viewers are served, or null if the dashboard has never been published."""
+    publishedVersion: Int
+    """When the served version was published, as an RFC 3339 timestamp; null if never published."""
+    publishedAt: String
 }
 
 # A dashboard as listed by the `dashboards` search: the metadata of Dashboard without the
@@ -39,6 +49,8 @@ type DashboardSummary {
     token: String!
     name: String
     description: String
+    """The version number viewers are served, or null if the dashboard has never been published."""
+    publishedVersion: Int
 }
 
 # Data required to create a dashboard.
@@ -92,6 +104,57 @@ type DashboardVersion {
     publishedBy: String
 }
 
+"""
+The snapshot of a dashboard that viewers are served: the version the dashboard's
+published pointer names, with its definition. Unlike the draft, this is readable with
+dashboard:read.
+"""
+type PublishedDashboard {
+    """Token of the dashboard."""
+    token: String!
+    """Human-readable name of the dashboard, as it is now."""
+    name: String
+    """Free-text description of the dashboard, as it is now."""
+    description: String
+    """The served version number."""
+    version: Int!
+    """When the served version was published, as an RFC 3339 timestamp."""
+    publishedAt: String!
+    """The served version's definition: a JSON document in the format defined by the @devicechain/dashboards package."""
+    definition: String!
+}
+
+"""
+One published version including its definition snapshot. Reading a version body is
+author-only and requires dashboard:write.
+"""
+type DashboardVersionDetail {
+    """Version number, increasing by one with each publish of this dashboard."""
+    version: Int!
+    """Optional label given at publish time. Not interpreted."""
+    label: String
+    """Optional notes given at publish time."""
+    description: String
+    """When the version was published, as an RFC 3339 timestamp."""
+    publishedAt: String!
+    """Who published it: their username, or their email when there is no username."""
+    publishedBy: String
+    """The frozen definition of this version, as a JSON document."""
+    definition: String!
+}
+
+"""
+What a publish returns: the version it minted, and the dashboard as it stands. A publish
+does not edit the draft, so the dashboard's updatedAt is unchanged by it; keep using it
+as your expectedUpdatedAt baseline.
+"""
+type DashboardPublication {
+    """The version the publish created; it is now the version viewers are served."""
+    version: DashboardVersion!
+    """The dashboard after the publish, with its unchanged updatedAt and its new publishedVersion."""
+    dashboard: DashboardSummary!
+}
+
 type Query {
     # Look up a single dashboard by its token.
     dashboard(token: String!): Dashboard
@@ -101,6 +164,25 @@ type Query {
     # clamped to the platform's maximum page size (1000) and defaults to 100; offset
     # skips that many of the newest versions.
     dashboardVersions(token: String!, limit: Int, offset: Int): [DashboardVersion!]!
+    """
+    Returns the version of the dashboard that viewers are served, with its definition, or
+    null if there is no dashboard with the token. Fails with code NOT_PUBLISHED if the
+    dashboard exists but has never been published. Requires dashboard:read.
+    """
+    publishedDashboard(
+        """Token of the dashboard."""
+        token: String!
+    ): PublishedDashboard
+    """
+    Returns one published version of a dashboard including its definition. Fails if the
+    dashboard or the version does not exist. Requires dashboard:write.
+    """
+    dashboardVersion(
+        """Token of the dashboard."""
+        token: String!
+        """Version number to read."""
+        version: Int!
+    ): DashboardVersionDetail
 }
 
 type Mutation {
@@ -115,7 +197,9 @@ type Mutation {
     # writes nothing and does not move updatedAt, but a stale precondition on it is
     # still a conflict.
     updateDashboard(token: String!, request: DashboardUpdateRequest!, expectedUpdatedAt: String): Dashboard!
-    # Freeze the current draft into a new immutable version (N+1) and return it.
+    # Freeze the current draft into a new immutable version (N+1), make it the version
+    # viewers are served (publish activates), and return it with the dashboard.
+    # The draft's updatedAt is NOT moved by a publish.
     # expectedUpdatedAt is the same optimistic-concurrency precondition as
     # updateDashboard: publish is refused if the draft changed since ("dashboard was
     # modified by another writer; reload and try again"; this is not the CONFLICT code).
@@ -124,13 +208,25 @@ type Mutation {
         label: String
         description: String
         expectedUpdatedAt: String
-    ): DashboardVersion!
+    ): DashboardPublication!
     # Re-draft: copy a published version's definition back into the draft. Returns
     # the updated dashboard. History is append-only; nothing is deleted. When
     # expectedUpdatedAt is supplied it is the same optimistic-concurrency precondition as
     # updateDashboard: a rollback replaces the whole draft, so it is refused if the draft
     # changed since ("dashboard was modified by another writer; reload and try again").
     rollbackDashboard(token: String!, version: Int!, expectedUpdatedAt: String): Dashboard!
+    """
+    Makes an existing published version the one viewers are served, without touching the
+    draft (its definition and updatedAt are unchanged). Use it to re-serve an older
+    version; rollbackDashboard, by contrast, overwrites the draft. Fails if the dashboard
+    or the version does not exist. Requires dashboard:write.
+    """
+    activateDashboardVersion(
+        """Token of the dashboard."""
+        token: String!
+        """Version number to serve."""
+        version: Int!
+    ): DashboardSummary!
     # Delete the dashboard with the given token. Returns whether a row was deleted.
     deleteDashboard(token: String!): Boolean!
 }

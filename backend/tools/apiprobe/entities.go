@@ -123,6 +123,12 @@ type entity struct {
 	// arrives with its reason attached rather than as a bare absent object.
 	Wrap   string
 	Reject string
+	// WrapMarker names a field that only the ENVELOPE type declares, for an envelope
+	// whose Wrap field also exists on the bare type it replaced. publishDashboard
+	// used to return DashboardVersion, which has a `version` of its own, so asking
+	// whether the baseline's result type declares `version` cannot tell the two shapes
+	// apart; `dashboard` can. Empty means Wrap itself is the discriminator.
+	WrapMarker string
 
 	// Fields is the selection set, used VERBATIM in BOTH documents.
 	//
@@ -163,8 +169,12 @@ func (e entity) createDoc() string {
 		// out per op — see publishes.go. `description` is deliberately not sent: it
 		// defaults to the parent's, and sending one would make the comparison assert
 		// this tool's own literal rather than what publishing preserved.
+		selection := e.Fields
+		if e.Wrap != "" {
+			selection = e.Wrap + "{" + e.Fields + "}"
+		}
 		return "mutation($token:String!,$label:String){" + e.Mutation +
-			"(token:$token,label:$label){" + e.Fields + "}}"
+			"(token:$token,label:$label){" + selection + "}}"
 	}
 	selection := e.Fields
 	if e.Wrap != "" {

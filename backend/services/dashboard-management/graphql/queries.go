@@ -5,10 +5,49 @@ package graphql
 
 import (
 	"context"
+	"errors"
 
 	"github.com/devicechain-io/dc-dashboard-management/model"
 	"github.com/devicechain-io/dc-microservice/auth"
+	"gorm.io/gorm"
 )
+
+// PublishedDashboard returns the snapshot viewers are served. Null when the dashboard
+// does not exist (as Dashboard); the typed NOT_PUBLISHED error when it exists but was
+// never published, so a viewer never gets a plausible blank board.
+func (r *SchemaResolver) PublishedDashboard(ctx context.Context, args struct {
+	Token string
+}) (*PublishedDashboardResolver, error) {
+	if err := auth.Authorize(ctx, auth.DashboardRead); err != nil {
+		return nil, err
+	}
+
+	dash, version, err := r.GetApi(ctx).PublishedDashboard(ctx, args.Token)
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &PublishedDashboardResolver{D: *dash, V: *version}, nil
+}
+
+// DashboardVersion reads one version including its definition. Author-only: a published
+// version body is a frozen copy of a draft, and the draft is not a viewer's to read.
+func (r *SchemaResolver) DashboardVersion(ctx context.Context, args struct {
+	Token   string
+	Version int32
+}) (*DashboardVersionDetailResolver, error) {
+	if err := auth.Authorize(ctx, auth.DashboardWrite); err != nil {
+		return nil, err
+	}
+
+	version, err := r.GetApi(ctx).DashboardVersion(ctx, args.Token, args.Version)
+	if err != nil {
+		return nil, err
+	}
+	return &DashboardVersionDetailResolver{M: *version}, nil
+}
 
 // Dashboard looks up a single dashboard by its token. Returns nil when not found.
 func (r *SchemaResolver) Dashboard(ctx context.Context, args struct {
