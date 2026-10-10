@@ -1460,6 +1460,14 @@ jobs:
         working-directory: backend/tools/docsgql
         run: go run . ../../..
 
+      # The served SDL is the API reference, and its descriptions are what every tool and
+      # the published schema show a reader. Every element must carry a """description"""
+      # (a # comment is a maintainer note and does not count), except those still listed in
+      # sdldesc/undescribed/ — a list that may only shrink. Also runs as a test in the go job.
+      - name: Every served schema element is described
+        working-directory: backend/tools/docsgql
+        run: go run ./cmd/sdldesc -coverage ../../..
+
   # ---------------------------------------------------------------------------
   # Frontend: codegen drift check, typecheck, unit tests, build.
   # ---------------------------------------------------------------------------

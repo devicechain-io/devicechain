@@ -2,135 +2,253 @@
 # SPDX-License-Identifier: Apache-2.0
 
 # Dashboard Management GraphQL Schema (ADR-039).
+#
+# Descriptions: a """string""" above an element is its PUBLIC description — served by
+# introspection, read by every GraphQL tool, published on the docs site — and may not
+# cite a decision record. A # comment is a maintainer note. backend/tools/docsgql/sdldesc
+# enforces both.
 
 schema {
     query: Query
     mutation: Mutation
 }
 
-# Pagination info for search results.
+"""
+Where a page of search results sits in the full result set. Positions are 1-based and
+inclusive.
+"""
 type SearchResultsPagination {
+    """Position of the first result on this page within the full result set (1-based)."""
     pageStart: Int
+    """Position of the last result on this page within the full result set (1-based, inclusive)."""
     pageEnd: Int
+    """Number of records matching the criteria across all pages."""
     totalRecords: Int
 }
 
-# A persisted dashboard definition. The layout, widgets, and datasource selectors
-# live inside the JSON `definition` document (owned by the @devicechain/dashboards
-# TypeScript types); the backend stores it opaquely, validated only as well-formed
-# JSON.
+"""
+A dashboard: a named, tenant-owned layout of widgets and the data each widget shows.
+What you edit is the draft; publishDashboard freezes it into an immutable
+DashboardVersion.
+"""
+# The layout, widgets, and datasource selectors live inside the JSON `definition`
+# document (owned by the @devicechain/dashboards TypeScript types); the backend stores
+# it opaquely, validated only as well-formed JSON.
 type Dashboard {
+    """Server-assigned identifier. Address a dashboard by its token, not by this."""
     id: ID!
+    """When the dashboard was created, as an RFC 3339 timestamp."""
     createdAt: String
+    """
+    When the dashboard was last written, as an RFC 3339 timestamp. Pass it back as
+    expectedUpdatedAt to make an update, publish or rollback conditional on nobody else
+    having changed the dashboard since you read it.
+    """
     updatedAt: String
+    """Unique, caller-chosen identifier of the dashboard within the tenant."""
     token: String!
+    """Human-readable name shown in dashboard lists."""
     name: String
+    """Free-text description of what the dashboard is for."""
     description: String
+    """
+    The current draft definition: a JSON document describing the layout, widgets and
+    their data bindings, in the format defined by the @devicechain/dashboards package.
+    The server checks only that it is well-formed JSON of at most 1 MiB.
+    """
     definition: String!
 }
 
-# A dashboard as listed by the `dashboards` search: the metadata of Dashboard without the
-# definition document, which can be up to 1 MiB per row. Look a dashboard up by token to
-# read its definition.
+"""
+A dashboard as listed by the dashboards search: the same metadata as Dashboard, without
+the definition document. Look a dashboard up by token with the dashboard query to read
+its definition.
+"""
+# The definition is up to 1 MiB per row, which a list must not read on a table view's
+# behalf; see DashboardResolver.Definition for the refusal on a list-read row.
 type DashboardSummary {
+    """Server-assigned identifier. Address a dashboard by its token, not by this."""
     id: ID!
+    """When the dashboard was created, as an RFC 3339 timestamp."""
     createdAt: String
+    """When the dashboard was last written, as an RFC 3339 timestamp."""
     updatedAt: String
+    """Unique, caller-chosen identifier of the dashboard within the tenant."""
     token: String!
+    """Human-readable name shown in dashboard lists."""
     name: String
+    """Free-text description of what the dashboard is for."""
     description: String
 }
 
-# Data required to create a dashboard.
+"""Fields for a new dashboard."""
 input DashboardCreateRequest {
+    """Unique identifier for the new dashboard within the tenant."""
     token: String!
+    """Human-readable name shown in dashboard lists."""
     name: String
+    """Free-text description of what the dashboard is for."""
     description: String
+    """The initial draft definition, as a JSON document of at most 1 MiB."""
     definition: String!
 }
 
-# Data required to update a dashboard. Every field is three-state: omit it to leave the
-# stored value alone, send a value to set it, send an explicit null to clear it.
-#
-# There is no `token`: the mutation's own `token` argument names the dashboard, so no
-# request can name a second one.
-#
+"""
+A partial update to a dashboard's draft. Omit a field to leave the stored value alone,
+send a value to set it, or send an explicit null to clear it. The dashboard is named by
+the mutation's token argument, so there is no token here.
+"""
 # `definition` is the exception to the clearing rule — omit it to keep the stored
 # document, but an explicit null is REFUSED, because a dashboard with no definition is
 # not a thing. It is declared nullable only so that omitting it stays expressible.
 input DashboardUpdateRequest {
+    """New name, or null to clear it."""
     name: String
+    """New description, or null to clear it."""
     description: String
+    """
+    New draft definition (JSON, at most 1 MiB). Omit it to keep the stored definition;
+    an explicit null is refused, because a dashboard must have a definition.
+    """
     definition: String
 }
 
-# Criteria used when searching for dashboards.
+"""Criteria for searching dashboards."""
 input DashboardSearchCriteria {
+    """Page to return, starting at 1."""
     pageNumber: Int!
+    """Results per page. Below 1 means the default of 100; above 1000 is capped at 1000."""
     pageSize: Int!
+    """
+    Return only dashboards whose name contains this text. The match is case-sensitive,
+    and % and _ in the text match any run of characters and any single character.
+    """
+    # The text goes into LIKE unescaped (core/rdb's likeEscaper is not applied here).
     name: String
 }
 
-# Search results returned from a dashboard query.
+"""One page of dashboards matching a search."""
 type DashboardSearchResults {
+    """The dashboards on this page, without their definitions."""
     results: [DashboardSummary!]!
+    """Where this page sits in the full result set."""
     pagination: SearchResultsPagination!
 }
 
-# An immutable published snapshot of a dashboard's definition (ADR-039 versioning).
-# The definition blob is deliberately omitted here — the list stays light; rollback
-# resolves a snapshot server-side by its integer version.
+"""
+An immutable published snapshot of a dashboard's definition. Versions are append-only:
+rolling back copies a version into the draft and deletes nothing.
+"""
+# The definition blob is deliberately omitted here (ADR-039 versioning) — the list
+# stays light; rollback resolves a snapshot server-side by its integer version.
 type DashboardVersion {
-    # Monotonic per-dashboard version number.
+    """Version number, increasing by one with each publish of this dashboard."""
     version: Int!
-    # Optional user-supplied label (may embed a semver string; not parsed).
+    """Optional label given at publish time, such as a release name. Not interpreted."""
     label: String
+    """Optional notes given at publish time."""
     description: String
-    # When the version was published (the row's creation time).
+    """When the version was published, as an RFC 3339 timestamp."""
     publishedAt: String!
-    # The identity that published it (username, falling back to email).
+    """Who published it: their username, or their email when there is no username."""
     publishedBy: String
 }
 
 type Query {
-    # Look up a single dashboard by its token.
-    dashboard(token: String!): Dashboard
-    # Search dashboards by criteria.
-    dashboards(criteria: DashboardSearchCriteria!): DashboardSearchResults!
-    # List a dashboard's published versions, newest first, one page at a time. limit is
-    # clamped to the platform's maximum page size (1000) and defaults to 100; offset
-    # skips that many of the newest versions.
-    dashboardVersions(token: String!, limit: Int, offset: Int): [DashboardVersion!]!
+    """Returns the dashboard with the given token, or null if there is none. Requires dashboard:read."""
+    dashboard(
+        """Token of the dashboard."""
+        token: String!
+    ): Dashboard
+    """
+    Searches the tenant's dashboards, one page at a time. Results carry metadata only;
+    read a definition with the dashboard query. Requires dashboard:read.
+    """
+    dashboards(
+        """Filter and page to return."""
+        criteria: DashboardSearchCriteria!
+    ): DashboardSearchResults!
+    """
+    Lists a dashboard's published versions, newest first, one page at a time. Fails if no
+    dashboard has the token. Requires dashboard:read.
+    """
+    dashboardVersions(
+        """Token of the dashboard."""
+        token: String!
+        """
+        Maximum number of versions to return. Omitted or below 1 means 100; above 1000 is
+        capped at 1000.
+        """
+        limit: Int
+        """Number of the newest versions to skip before the page starts. Omitted or below 1 means 0."""
+        offset: Int
+    ): [DashboardVersion!]!
 }
 
 type Mutation {
-    # Create a new dashboard.
-    createDashboard(request: DashboardCreateRequest!): Dashboard!
-    # Update the dashboard (draft) with the given token. The request is a PARTIAL
-    # update: a field you omit is left alone, a field you send is written, and an
-    # explicit null clears it (except definition, which refuses one). When
-    # expectedUpdatedAt is supplied it is an optimistic-concurrency precondition:
-    # the update fails if the dashboard's updatedAt has changed since (a concurrent
-    # edit). Pass the updatedAt the caller last read. An update that names no field
-    # writes nothing and does not move updatedAt, but a stale precondition on it is
-    # still a conflict.
-    updateDashboard(token: String!, request: DashboardUpdateRequest!, expectedUpdatedAt: String): Dashboard!
-    # Freeze the current draft into a new immutable version (N+1) and return it.
-    # expectedUpdatedAt is the same optimistic-concurrency precondition as
-    # updateDashboard: publish is refused if the draft changed since ("dashboard was
-    # modified by another writer; reload and try again"; this is not the CONFLICT code).
-    publishDashboard(
+    """Creates a dashboard and returns it. Requires dashboard:write."""
+    createDashboard(
+        """The new dashboard's fields."""
+        request: DashboardCreateRequest!
+    ): Dashboard!
+    """
+    Partially updates a dashboard's draft and returns it. Requires dashboard:write.
+    An update that names no field writes nothing and leaves updatedAt unchanged.
+    """
+    updateDashboard(
+        """Token of the dashboard to update."""
         token: String!
+        """The fields to change; see DashboardUpdateRequest for omit, set and clear."""
+        request: DashboardUpdateRequest!
+        """
+        Optional optimistic-concurrency precondition: the updatedAt you last read. If the
+        dashboard has changed since, the update is refused with "dashboard was modified by
+        another writer; reload and try again" (not the CONFLICT error code) — even when the
+        request names no field.
+        """
+        expectedUpdatedAt: String
+    ): Dashboard!
+    """
+    Freezes the current draft into a new immutable version, numbered one above the
+    latest, and returns it. Requires dashboard:write.
+    """
+    publishDashboard(
+        """Token of the dashboard to publish."""
+        token: String!
+        """Optional label for the version, such as a release name."""
         label: String
+        """Optional notes for the version."""
         description: String
+        """
+        Optional precondition: the updatedAt you last read. If the draft has changed
+        since, publishing is refused with the same error as updateDashboard.
+        """
         expectedUpdatedAt: String
     ): DashboardVersion!
-    # Re-draft: copy a published version's definition back into the draft. Returns
-    # the updated dashboard. History is append-only; nothing is deleted. When
-    # expectedUpdatedAt is supplied it is the same optimistic-concurrency precondition as
-    # updateDashboard: a rollback replaces the whole draft, so it is refused if the draft
-    # changed since ("dashboard was modified by another writer; reload and try again").
-    rollbackDashboard(token: String!, version: Int!, expectedUpdatedAt: String): Dashboard!
-    # Delete the dashboard with the given token. Returns whether a row was deleted.
-    deleteDashboard(token: String!): Boolean!
+    """
+    Copies a published version's definition back into the draft, replacing the whole
+    draft definition, and returns the dashboard. The version history is unchanged.
+    Requires dashboard:write.
+    """
+    rollbackDashboard(
+        """Token of the dashboard."""
+        token: String!
+        """The published version to restore into the draft."""
+        version: Int!
+        """
+        Optional precondition: the updatedAt you last read. Because a rollback replaces
+        the whole draft, it is refused with the same error as updateDashboard if the
+        draft has changed since.
+        """
+        expectedUpdatedAt: String
+    ): Dashboard!
+    """
+    Permanently deletes a dashboard and all of its published versions. Returns false if
+    no dashboard has the token. The token can be reused immediately. Requires
+    dashboard:write.
+    """
+    deleteDashboard(
+        """Token of the dashboard to delete."""
+        token: String!
+    ): Boolean!
 }
