@@ -42,7 +42,7 @@ func TestRebootConfirmationAnchorsOnTheInstallBoot(t *testing.T) {
 	assert.Equal(t, StateUpdated, out.State)
 
 	// The same holds when the attempt went UNKNOWN and is settled by inventory.
-	u, changed, err := Tick(a, testPolicy, t0.Add(testPolicy.Install+time.Second))
+	u, changed, err := Tick(a, testPolicy, t0.Add(testPolicy.Install+time.Minute))
 	require.NoError(t, err)
 	require.True(t, changed)
 	require.Equal(t, StateUnknown, u.State)

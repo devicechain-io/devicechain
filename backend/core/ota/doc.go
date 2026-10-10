@@ -42,10 +42,13 @@
 //   - Forward only. A later stage may skip lost reports; an earlier one is a REGRESSION. The same
 //     stage with a higher seq is progress; the same seq again is a DUPLICATE.
 //   - Only confirmation evidence reaches UPDATED: the target version is running, any digest the
-//     device volunteers matches, and when the target requires a reboot, the boot is not the one the
-//     attempt started on. No command acknowledgement and no INSTALLING "success" is evidence.
+//     device volunteers matches, and when the target requires a reboot, the boot differs from the
+//     install boot (the boot of the first report at UPDATING or later; the last reported boot when no
+//     install report arrived). An unrelated restart earlier in the attempt does not count. No command acknowledgement and no INSTALLING "success" is evidence.
 //   - Deadlines are platform time, measured from the last accepted report. Silence while installing
 //     or rebooting is UNKNOWN, never failure and never success.
+//   - A repeated seq with the same content is a DUPLICATE; with different content it is a CONFLICT.
+//     Report keys must match exactly (no case folding, no repeats).
 //   - Terminal is terminal. Late progress is reported as LATE, not applied.
 //
 // # What VERIFIED means

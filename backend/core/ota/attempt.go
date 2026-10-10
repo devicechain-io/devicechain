@@ -144,15 +144,44 @@ func runsTarget(t Target, run *Running) bool {
 	return run != nil && run.Version == t.Version && (run.Digest == "" || run.Digest == t.Digest)
 }
 
+// bootAnchor is the boot a reboot must differ from: the boot of the first applied report at
+// UPDATING or later (the install boot), or, when no install-stage report ever arrived, the boot of
+// the last applied report. It is deliberately not the attempt's first boot: an unrelated power
+// cycle while downloading would otherwise count as the reboot the update needed. Empty means no
+// boot was ever seen, so nothing can be shown.
+func (a Attempt) bootAnchor() string {
+	if a.InstallBootID != "" {
+		return a.InstallBootID
+	}
+	return a.LastBootID
+}
+
 // confirms is the confirmation evidence for UPDATED: the target is running and, when the target
-// needs a reboot, the device is on a different boot than the one the attempt started on. With no
-// recorded starting boot there is nothing to compare with, so a reboot cannot be shown.
-func confirms(t Target, run *Running, bootID, bootAtStart string) bool {
+// needs a reboot, the device is on a different boot than the anchor. With no anchor there is
+// nothing to compare with, so a reboot cannot be shown.
+func confirms(t Target, run *Running, bootID, anchor string) bool {
 	if !runsTarget(t, run) {
 		return false
 	}
 	if t.RequiresReboot {
-		return bootAtStart != "" && bootID != "" && bootID != bootAtStart
+		return anchor != "" && bootID != "" && bootID != anchor
+	}
+	return true
+}
+
+// sameReport reports whether r carries the content of the last applied report, so a repeated seq is
+// a retransmission rather than a different report claiming the same number.
+func (a Attempt) sameReport(r Report) bool {
+	if a.LastStage != r.Stage || a.LastBootID != r.BootID {
+		return false
+	}
+	if r.Stage == StageDownloading {
+		switch {
+		case a.Progress == nil || r.Progress == nil:
+			return a.Progress == r.Progress
+		default:
+			return *a.Progress == *r.Progress
+		}
 	}
 	return true
 }
@@ -162,6 +191,9 @@ func confirms(t Target, run *Running, bootID, bootAtStart string) bool {
 // DecodeReport; Apply checks only the bindings it needs. Any verdict other than APPLIED returns the
 // attempt unchanged.
 func Apply(a Attempt, r Report, receivedAt time.Time) (Attempt, Verdict) {
+	if !a.State.Valid() {
+		return a, VerdictInvalidAttempt
+	}
 	if r.Kind != KindProgress || !r.Stage.Valid() {
 		return a, VerdictWrongKind
 	}
@@ -176,12 +208,12 @@ func Apply(a Attempt, r Report, receivedAt time.Time) (Attempt, Verdict) {
 	}
 	if a.State.Terminal() {
 		if r.Seq == a.LastSeq {
-			return a, VerdictDuplicate
+			return a, duplicateOrConflict(a, r)
 		}
 		return a, VerdictLate
 	}
 	if r.Seq == a.LastSeq {
-		return a, VerdictDuplicate
+		return a, duplicateOrConflict(a, r)
 	}
 	if r.Seq < a.LastSeq {
 		return a, VerdictRegression
@@ -206,7 +238,7 @@ func Apply(a Attempt, r Report, receivedAt time.Time) (Attempt, Verdict) {
 			out.Progress = &p
 		}
 	case ruleEvidence:
-		if !confirms(a.Target, r.Running, r.BootID, a.BootIDAtStart) {
+		if !confirms(a.Target, r.Running, r.BootID, a.bootAnchor()) {
 			return a, VerdictUnconfirmed
 		}
 		out.State = StateUpdated
@@ -230,9 +262,30 @@ func Apply(a Attempt, r Report, receivedAt time.Time) (Attempt, Verdict) {
 	if out.BootIDAtStart == "" {
 		out.BootIDAtStart = r.BootID
 	}
+	if out.InstallBootID == "" && out.State != StateQueued && mustRankOr(out.State) >= mustRank(StateUpdating) {
+		out.InstallBootID = r.BootID
+	}
+	out.LastBootID = r.BootID
+	out.LastStage = r.Stage
 	out.LastSeq = r.Seq
 	out.LastReportAt = receivedAt
 	return out, VerdictApplied
+}
+
+// mustRankOr is the rank of an in-flight state, or -1 for any other (UPDATED, FAILED, ...), which
+// never anchor an install boot.
+func mustRankOr(s State) int {
+	if r, ok := rank(s); ok {
+		return r
+	}
+	return -1
+}
+
+func duplicateOrConflict(a Attempt, r Report) Verdict {
+	if a.sameReport(r) {
+		return VerdictDuplicate
+	}
+	return VerdictConflict
 }
 
 func mustRank(s State) int {
@@ -263,10 +316,16 @@ func deadline(p Policy, s State) time.Duration {
 // Tick enforces the stage deadlines, measured from the last accepted report. Before installation
 // is reported started an elapsed deadline is TIMED_OUT; during UPDATING or REBOOTING it is UNKNOWN,
 // because the device may well have finished — silence is not failure, and Tick never yields UPDATED.
-// Terminal and UNKNOWN attempts are untouched. An invalid Policy changes nothing (check it with
-// Policy.Validate when it is loaded): a zero deadline must not time everything out.
+// Terminal and UNKNOWN attempts are untouched. An invalid Policy or an attempt in an undefined
+// state is an error and changes nothing: a zero deadline must not time everything out.
 func Tick(a Attempt, p Policy, now time.Time) (Attempt, bool, error) {
-	if p.Validate() != nil || a.State.Terminal() || a.State == StateUnknown {
+	if !a.State.Valid() {
+		return a, false, ErrInvalidAttempt
+	}
+	if err := p.Validate(); err != nil {
+		return a, false, err
+	}
+	if a.State.Terminal() || a.State == StateUnknown {
 		return a, false, nil
 	}
 	if !(now.Sub(a.LastReportAt) > deadline(p, a.State)) {
@@ -316,6 +375,9 @@ func Cancel(a Attempt, _ time.Time) (Attempt, error) {
 // attempt is not UNKNOWN (there is nothing to reconcile) or the inventory proves nothing either
 // way (the target is not running but the device has not rebooted since the attempt began).
 func Reconcile(a Attempt, inv Report, receivedAt time.Time) (Attempt, Verdict) {
+	if !a.State.Valid() {
+		return a, VerdictInvalidAttempt
+	}
 	if inv.Kind != KindInventory {
 		return a, VerdictWrongKind
 	}
@@ -329,10 +391,11 @@ func Reconcile(a Attempt, inv Report, receivedAt time.Time) (Attempt, Verdict) {
 		return a, VerdictUnconfirmed
 	}
 	out := a.clone()
+	anchor := a.bootAnchor()
 	switch {
-	case confirms(a.Target, inv.Running, inv.BootID, a.BootIDAtStart):
+	case confirms(a.Target, inv.Running, inv.BootID, anchor):
 		out.State = StateUpdated
-	case !runsTarget(a.Target, inv.Running) && a.BootIDAtStart != "" && inv.BootID != "" && inv.BootID != a.BootIDAtStart:
+	case !runsTarget(a.Target, inv.Running) && anchor != "" && inv.BootID != "" && inv.BootID != anchor:
 		// The device rebooted and is not on the target: rolled back, or never applied.
 		out.State = StateFailed
 		out.Failure = &Failure{Code: "NOT_RUNNING_TARGET", Platform: true}

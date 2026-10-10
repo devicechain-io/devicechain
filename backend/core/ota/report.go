@@ -74,12 +74,118 @@ type Report struct {
 	BootID         string      `json:"bootId,omitempty"`
 }
 
+// shape describes the keys an object may carry; a nil child is a leaf value.
+type shape map[string]shape
+
+var reportShape = shape{
+	"v": nil, "kind": nil, "attemptId": nil, "assignmentId": nil, "component": nil, "artifactDigest": nil,
+	"seq": nil, "stage": nil, "bootId": nil,
+	"progress": {"bytes": nil, "total": nil},
+	"result":   {"code": nil, "detail": nil},
+	"running":  {"version": nil, "digest": nil},
+}
+
+// inventoryForbidden are the keys that may not appear at all on an update.inventory report. They
+// are refused by presence, because a decoded struct cannot tell an absent "seq" from "seq":0.
+var inventoryForbidden = []string{"attemptId", "assignmentId", "seq", "stage", "artifactDigest", "progress", "result"}
+
+// scanKeys walks the raw JSON before the struct decode and enforces what encoding/json does not:
+// every key must match a field EXACTLY (the standard decoder folds case, so "ATTEMPTID" and the
+// Kelvin sign in "Kind" would be accepted), and no key may repeat within one object (the standard
+// decoder keeps the last). It returns the top-level keys present and the value of "kind".
+func scanKeys(b []byte) (top map[string]bool, kind string, err error) {
+	dec := json.NewDecoder(bytes.NewReader(b))
+	t, err := dec.Token()
+	if err != nil {
+		return nil, "", err
+	}
+	if d, ok := t.(json.Delim); !ok || d != '{' {
+		return nil, "", fmt.Errorf("report must be a JSON object")
+	}
+	top = map[string]bool{}
+	if err := scanObject(dec, reportShape, top, &kind); err != nil {
+		return nil, "", err
+	}
+	return top, kind, nil
+}
+
+// scanObject consumes an object whose opening brace has been read.
+func scanObject(dec *json.Decoder, sh shape, seen map[string]bool, kind *string) error {
+	for dec.More() {
+		kt, err := dec.Token()
+		if err != nil {
+			return err
+		}
+		key, _ := kt.(string)
+		child, ok := sh[key]
+		if !ok {
+			return fmt.Errorf("json: unknown field %q", key)
+		}
+		if seen[key] {
+			return fmt.Errorf("duplicate field %q", key)
+		}
+		seen[key] = true
+		vt, err := dec.Token()
+		if err != nil {
+			return err
+		}
+		switch v := vt.(type) {
+		case json.Delim:
+			if v == '{' && child != nil {
+				if err := scanObject(dec, child, map[string]bool{}, nil); err != nil {
+					return err
+				}
+				continue
+			}
+			// An object or array where a scalar belongs: skip it; the struct decode rejects the type.
+			if err := skipValue(dec); err != nil {
+				return err
+			}
+		case string:
+			if key == "kind" && kind != nil {
+				*kind = v
+			}
+		}
+	}
+	_, err := dec.Token() // the closing brace
+	return err
+}
+
+// skipValue consumes the remainder of a composite whose opening delimiter has been read.
+func skipValue(dec *json.Decoder) error {
+	for depth := 1; depth > 0; {
+		t, err := dec.Token()
+		if err != nil {
+			return err
+		}
+		if d, ok := t.(json.Delim); ok {
+			if d == '{' || d == '[' {
+				depth++
+			} else {
+				depth--
+			}
+		}
+	}
+	return nil
+}
+
 // DecodeReport parses and validates one report. It enforces the size cap first, rejects unknown
 // fields and trailing data, and then runs Validate. A body shaped like anything else (a command
 // response, say) fails here and can never reach the reducer.
 func DecodeReport(b []byte) (Report, error) {
 	if len(b) > MaxReportBytes {
 		return Report{}, fmt.Errorf("ota: report is %d bytes, exceeds the %d byte limit", len(b), MaxReportBytes)
+	}
+	top, kind, err := scanKeys(b)
+	if err != nil {
+		return Report{}, fmt.Errorf("ota: decode report: %w", err)
+	}
+	if kind == KindInventory {
+		for _, k := range inventoryForbidden {
+			if top[k] {
+				return Report{}, fmt.Errorf("ota: %s is not allowed on an update.inventory report", k)
+			}
+		}
 	}
 	dec := json.NewDecoder(bytes.NewReader(b))
 	dec.DisallowUnknownFields()
@@ -146,6 +252,9 @@ func (r Report) validateProgress() error {
 		return fmt.Errorf("ota: unknown stage %q", r.Stage)
 	}
 	if r.Progress != nil {
+		if r.Stage != StageDownloading {
+			return fmt.Errorf("ota: progress is only allowed when stage is DOWNLOADING")
+		}
 		p := r.Progress
 		if p.Bytes < 0 || p.Total < 0 {
 			return fmt.Errorf("ota: progress bytes and total must not be negative")
@@ -207,6 +316,9 @@ func checkRunning(run *Running) error {
 	if err := checkLen("running.version", run.Version, maxVersionLen); err != nil {
 		return err
 	}
+	if err := checkPrintable("running.version", run.Version); err != nil {
+		return err
+	}
 	return checkDigest("running.digest", run.Digest, false)
 }
 
@@ -214,12 +326,17 @@ func checkBootID(id string) error {
 	if err := checkLen("bootId", id, maxBootIDLen); err != nil {
 		return err
 	}
-	if !utf8.ValidString(id) {
-		return fmt.Errorf("ota: bootId is not valid UTF-8")
+	return checkPrintable("bootId", id)
+}
+
+// checkPrintable requires valid UTF-8 with no control characters (NUL, newlines, DEL and the rest).
+func checkPrintable(name, v string) error {
+	if !utf8.ValidString(v) {
+		return fmt.Errorf("ota: %s is not valid UTF-8", name)
 	}
-	for _, c := range id {
+	for _, c := range v {
 		if c < 0x20 || c == 0x7f {
-			return fmt.Errorf("ota: bootId contains a control character")
+			return fmt.Errorf("ota: %s contains a control character", name)
 		}
 	}
 	return nil

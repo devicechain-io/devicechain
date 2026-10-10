@@ -371,6 +371,7 @@ func TestTerminalIsTerminal(t *testing.T) {
 			// Same seq as the last applied report: identical content is a DUPLICATE, anything else a CONFLICT.
 			same := a
 			same.LastStage = st
+			same.LastBootID = r.BootID
 			mustApply(t, same, r, VerdictDuplicate)
 			diff := a
 			diff.LastStage = StageReceived
