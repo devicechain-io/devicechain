@@ -58,6 +58,11 @@ func (api *Api) UpdateEntityRelationshipType(ctx context.Context, token string,
 	if err != nil {
 		return nil, err
 	}
+	if tracked && !updated.Tracked {
+		if err := api.checkTrackedFlipCeiling(ctx, updated.ID); err != nil {
+			return nil, err
+		}
+	}
 	updated.Name = request.Name.ApplyToNullString(updated.Name)
 	updated.Description = request.Description.ApplyToNullString(updated.Description)
 	metadataJSON, err := rdb.JSONInputOf("metadata", request.Metadata.ApplyTo(dcgraphql.MetadataStr(updated.Metadata)))
@@ -138,6 +143,10 @@ func (api *Api) CreateEntityRelationship(ctx context.Context,
 	// invariant with a public bypass. No-op for every other relationship type.
 	if err := api.admitContainmentEdge(api.RDB.DB(ctx), request.RelationshipType,
 		request.SourceType, sourceId, request.TargetType, targetId); err != nil {
+		return nil, err
+	}
+
+	if err := api.checkTrackedCeiling(ctx, api.RDB.DB(ctx), rtmatches[0], request.SourceType, sourceId, 1); err != nil {
 		return nil, err
 	}
 

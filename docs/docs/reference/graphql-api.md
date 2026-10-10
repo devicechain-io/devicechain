@@ -743,6 +743,23 @@ with a syntax error, and nothing runs:
 The same rule applies over WebSocket, where a subscription the server cannot read gets the syntax
 error rather than the [subscriptions-only message](#subscriptions-over-websocket).
 
+### Count ceilings on device-management {#device-management-count-ceilings}
+
+Two collections are read whole, so each has a ceiling on how many members it can hold. A write that
+would take a collection past its ceiling is refused with `extensions.code` set to `LIMIT_EXCEEDED`,
+and nothing is stored. Reads are never truncated: an owner already over a ceiling keeps every row
+and every read returns all of them. Deleting rows makes room again.
+
+| Ceiling | Limit | Applies to |
+| --- | --- | --- |
+| Tracked relationships per device | 256 | Relationships of a tracked relationship type whose source is one device, on `createEntityRelationship`, `createEntityRelationships` and `claimDevice`, and on `updateEntityRelationshipType` when it sets `tracked` to true and that would put any device over the ceiling. One `createEntityRelationships` call carries at most 1,000 relationships. Event resolution reads all of a device's tracked relationships for every event. |
+| Definitions per device profile | 1,000 per kind | Metric definitions, command definitions and detection rules, each counted on its own, on `createMetricDefinition`, `createCommandDefinition` and `createDetectionRule`. |
+
+The service exports `devicechain_devicemanagement_tracked_relationships_per_device` (observed each
+time a device's tracked set is loaded from the database) and `devicechain_devicemanagement_profile_children`
+(labelled by `kind`: `metric`, `command` or `rule`) as histograms of the sizes it reads, so you can
+see how close real data comes to a ceiling.
+
 ### Credential checks per request {#credential-checks-per-request}
 
 One request can have only a limited number of passwords checked, however it is written: one by

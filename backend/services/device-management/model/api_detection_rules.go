@@ -128,6 +128,10 @@ func (api *Api) CreateDetectionRule(ctx context.Context,
 		return nil, err
 	}
 
+	if err := api.checkProfileChildCeiling(ctx, &DetectionRule{}, childKindRule, matches[0].ID); err != nil {
+		return nil, err
+	}
+
 	scopeToken, scopeVersion := normalizedRuleScope(request.EntityGroupToken, request.EntityGroupVersion)
 	metadataJSON, err := rdb.JSONInputOf("metadata", request.Metadata)
 	if err != nil {
@@ -179,6 +183,12 @@ func (api *Api) UpdateDetectionRule(ctx context.Context, token string,
 	reparent, err := api.resolveProfileRef(ctx, request.DeviceProfileToken, updated.DeviceProfile)
 	if err != nil {
 		return nil, err
+	}
+	// Moving a definition onto another profile adds one to it.
+	if reparent != nil {
+		if err := api.checkProfileChildCeiling(ctx, &DetectionRule{}, childKindRule, reparent.ID); err != nil {
+			return nil, err
+		}
 	}
 	definition, err := request.Definition.ApplyToRequired("definition", string(updated.Definition))
 	if err != nil {
@@ -285,5 +295,6 @@ func (api *Api) DetectionRulesByDeviceProfile(ctx context.Context, profileId uin
 	if result.Error != nil {
 		return nil, result.Error
 	}
+	api.ceilings.observeChildren(childKindRule, len(found))
 	return found, nil
 }

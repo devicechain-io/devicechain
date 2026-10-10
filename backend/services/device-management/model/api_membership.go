@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/devicechain-io/dc-microservice/limit"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -114,6 +115,9 @@ func (api *Api) CreateEntityRelationships(ctx context.Context,
 	// Resolve each distinct relationship type once up front — a bulk add of N
 	// edges of the same type does one lookup, not N. The reserved types (member,
 	// assigned) are auto-provisioned on first use and seeded into the map.
+	if len(requests) > MaxRelationshipBatch {
+		return nil, limit.Exceeded("relationships in one request", len(requests), MaxRelationshipBatch)
+	}
 	typesByToken := make(map[string]*EntityRelationshipType)
 	plainTokens := make([]string, 0)
 	for _, request := range requests {
@@ -161,6 +165,11 @@ func (api *Api) CreateEntityRelationships(ctx context.Context,
 			// otherwise pass, each edge legal against the state before the batch.
 			if err := api.admitContainmentEdge(tx, request.RelationshipType,
 				request.SourceType, sourceId, request.TargetType, targetId); err != nil {
+				return fmt.Errorf("relationship %q: %w", request.Token, err)
+			}
+			// Counted on the transaction, so edges this batch already created for the same
+			// device are in the total.
+			if err := api.checkTrackedCeiling(ctx, tx, rt, request.SourceType, sourceId, 1); err != nil {
 				return fmt.Errorf("relationship %q: %w", request.Token, err)
 			}
 			// Named, for the same reason "source:"/"target:" above are: the batch is

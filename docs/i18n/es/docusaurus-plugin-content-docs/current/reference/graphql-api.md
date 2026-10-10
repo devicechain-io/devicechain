@@ -789,6 +789,24 @@ La misma regla se aplica por WebSocket, donde una suscripción que el servidor n
 error de sintaxis en lugar del [mensaje de que solo se aceptan
 suscripciones](#subscriptions-over-websocket).
 
+### Techos de cantidad en device-management {#device-management-count-ceilings}
+
+Dos colecciones se leen completas, así que cada una tiene un techo sobre cuántos miembros puede
+contener. Una escritura que llevaría una colección por encima de su techo se rechaza con
+`extensions.code` igual a `LIMIT_EXCEEDED`, y no se guarda nada. Las lecturas nunca se truncan: un
+propietario que ya supera un techo conserva todas sus filas y cada lectura las devuelve todas.
+Borrar filas vuelve a dejar espacio.
+
+| Techo | Límite | Se aplica a |
+| --- | --- | --- |
+| Relaciones rastreadas por dispositivo | 256 | Relaciones de un tipo de relación rastreado cuyo origen es un dispositivo, en `createEntityRelationship`, `createEntityRelationships` y `claimDevice`, y en `updateEntityRelationshipType` cuando pone `tracked` en verdadero y eso dejaría a algún dispositivo por encima del techo. Una llamada a `createEntityRelationships` admite como máximo 1.000 relaciones. La resolución de eventos lee todas las relaciones rastreadas de un dispositivo en cada evento. |
+| Definiciones por perfil de dispositivo | 1.000 por tipo | Definiciones de métricas, definiciones de comandos y reglas de detección, cada una contada por separado, en `createMetricDefinition`, `createCommandDefinition` y `createDetectionRule`. |
+
+El servicio exporta `devicechain_devicemanagement_tracked_relationships_per_device` (se observa cada
+vez que el conjunto rastreado de un dispositivo se carga desde la base de datos) y
+`devicechain_devicemanagement_profile_children` (con la etiqueta `kind`: `metric`, `command` o `rule`)
+como histogramas de los tamaños que lee, para que pueda ver cuánto se acercan los datos reales a un techo.
+
 ### Comprobaciones de credenciales por petición {#credential-checks-per-request}
 
 En una petición solo se puede comprobar un número limitado de contraseñas, se escriba como se
