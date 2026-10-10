@@ -39,7 +39,7 @@ func (colReading) TableName() string { return "col_readings" }
 
 func colReadingTenant(r *colReading) *string { return &r.TenantId }
 
-var colReadings = NewColumnTable(&colReading{}, colReadingTenant, []string{"tenant_id", "key"},
+var colReadings = NewColumnTable(colReadingTenant, []string{"tenant_id", "key"},
 	TextColumn("key", func(r *colReading) string { return r.Key }),
 	Int64Column("seq", func(r *colReading) int64 { return r.Seq }),
 	TimeColumn("at", func(r *colReading) time.Time { return r.At }),
@@ -390,33 +390,33 @@ func TestColumnarInsertRefusesAModelACreateWouldWriteDifferently(t *testing.T) {
 	db, _ := newColumnsDB(t, false)
 	key := func(name string) []string { return []string{"tenant_id", name} }
 	cases := map[string]error{
-		"no tenant field": refusal(t, db, NewColumnTable(&colNoTenant{}, func(r *colNoTenant) *string { return &r.Key },
+		"no tenant field": refusal(t, db, NewColumnTable(func(r *colNoTenant) *string { return &r.Key },
 			[]string{"key"}, TextColumn("key", func(r *colNoTenant) string { return r.Key })), &colNoTenant{}),
-		"token field": refusal(t, db, NewColumnTable(&colTokened{}, func(r *colTokened) *string { return &r.TenantId },
+		"token field": refusal(t, db, NewColumnTable(func(r *colTokened) *string { return &r.TenantId },
 			key("token"), TextColumn("token", func(r *colTokened) string { return r.Token })), &colTokened{}),
-		"audited": refusal(t, db, NewColumnTable(&colAudited{}, func(r *colAudited) *string { return &r.TenantId },
+		"audited": refusal(t, db, NewColumnTable(func(r *colAudited) *string { return &r.TenantId },
 			key("key"), TextColumn("key", func(r *colAudited) string { return r.Key })), &colAudited{}),
-		"create hook": refusal(t, db, NewColumnTable(&colHooked{}, func(r *colHooked) *string { return &r.TenantId },
+		"create hook": refusal(t, db, NewColumnTable(func(r *colHooked) *string { return &r.TenantId },
 			key("key"), TextColumn("key", func(r *colHooked) string { return r.Key })), &colHooked{}),
-		"column default": refusal(t, db, NewColumnTable(&colDefaulted{}, func(r *colDefaulted) *string { return &r.TenantId },
+		"column default": refusal(t, db, NewColumnTable(func(r *colDefaulted) *string { return &r.TenantId },
 			key("key"), TextColumn("key", func(r *colDefaulted) string { return r.Key }),
 			Int64Column("n", func(r *colDefaulted) int64 { return r.N })), &colDefaulted{}),
-		"auto create time": refusal(t, db, NewColumnTable(&colStamped{}, func(r *colStamped) *string { return &r.TenantId },
+		"auto create time": refusal(t, db, NewColumnTable(func(r *colStamped) *string { return &r.TenantId },
 			key("key"), TextColumn("key", func(r *colStamped) string { return r.Key }),
 			TimeColumn("created_at", func(r *colStamped) time.Time { return r.CreatedAt })), &colStamped{}),
-		"fence exempt": refusal(t, db, NewColumnTable(&colFenceExempt{}, func(r *colFenceExempt) *string { return &r.TenantId },
+		"fence exempt": refusal(t, db, NewColumnTable(func(r *colFenceExempt) *string { return &r.TenantId },
 			key("key"), TextColumn("key", func(r *colFenceExempt) string { return r.Key })), &colFenceExempt{}),
-		"uncovered column": refusal(t, db, NewColumnTable(&colReading{}, colReadingTenant, key("key"),
+		"uncovered column": refusal(t, db, NewColumnTable(colReadingTenant, key("key"),
 			TextColumn("key", func(r *colReading) string { return r.Key })), &colReading{}),
-		"unknown column": refusal(t, db, NewColumnTable(&colReading{}, colReadingTenant, key("key"),
+		"unknown column": refusal(t, db, NewColumnTable(colReadingTenant, key("key"),
 			append(colReadings.columns, TextColumn("nope", func(r *colReading) string { return "" }))...), &colReading{}),
-		"tenant as a column": refusal(t, db, NewColumnTable(&colReading{}, colReadingTenant, key("key"),
+		"tenant as a column": refusal(t, db, NewColumnTable(colReadingTenant, key("key"),
 			append(colReadings.columns, TextColumn("tenant_id", func(r *colReading) string { return "" }))...), &colReading{}),
-		"column twice": refusal(t, db, NewColumnTable(&colReading{}, colReadingTenant, key("key"),
+		"column twice": refusal(t, db, NewColumnTable(colReadingTenant, key("key"),
 			append(colReadings.columns, colReadings.columns[0])...), &colReading{}),
-		"tenantless conflict target": refusal(t, db, NewColumnTable(&colReading{}, colReadingTenant, []string{"key"},
+		"tenantless conflict target": refusal(t, db, NewColumnTable(colReadingTenant, []string{"key"},
 			colReadings.columns...), &colReading{}),
-		"no conflict target": refusal(t, db, NewColumnTable(&colReading{}, colReadingTenant, nil,
+		"no conflict target": refusal(t, db, NewColumnTable(colReadingTenant, nil,
 			colReadings.columns...), &colReading{}),
 	}
 	for name, err := range cases {
@@ -493,12 +493,10 @@ func TestColumnarInsertAccountsForEveryCreateCallback(t *testing.T) {
 	if err != nil {
 		t.Fatalf("opening sqlite: %v", err)
 	}
-	for _, register := range []func(*gorm.DB) error{
-		RegisterTenantScoping, RegisterTokenGrammar, RegisterAuditJournal, RegisterTenantFence,
-	} {
-		if err := register(db); err != nil {
-			t.Fatalf("registering: %v", err)
-		}
+	// The same registration every service's handle gets (postgres.go), so a chain added
+	// there is a chain this test sees.
+	if err := registerCallbacks(db); err != nil {
+		t.Fatalf("registering: %v", err)
 	}
 	// gorm keeps its processor's callbacks unexported; their names are read, not called.
 	cbs := reflect.ValueOf(db.Callback().Create()).Elem().FieldByName("callbacks")
@@ -520,5 +518,69 @@ func TestColumnarInsertAccountsForEveryCreateCallback(t *testing.T) {
 			t.Errorf("the column-array insert accounts for create callback %q, which is not registered: "+
 				"renamed or removed — update the list and what the insert does for it", name)
 		}
+	}
+}
+
+// A column whose array does not carry one element per row is refused before anything is
+// written: unnest pads the shorter arrays with NULL, so a short array would store rows with
+// NULLs in place of values instead of failing.
+func TestColumnarInsertRefusesAColumnArrayOfTheWrongLength(t *testing.T) {
+	db, _ := newColumnsDB(t, true)
+	short := Column[colReading]{name: "seq", pgType: "int8",
+		array: func(rows []*colReading) (any, error) { return make([]int64, len(rows)-1), nil },
+		value: func(r *colReading) any { return r.Seq }}
+	cols := append([]Column[colReading](nil), colReadings.columns...)
+	cols[1] = short
+	table := NewColumnTable(colReadingTenant, []string{"tenant_id", "key"}, cols...)
+	_, err := table.Insert(db.WithContext(tenantCtx("acme")), colRows("a", "b", "c"))
+	if !errors.Is(err, ErrColumnValue) {
+		t.Errorf("err = %v; want ErrColumnValue", err)
+	}
+	if got := storedReadings(t, db); len(got) != 0 {
+		t.Errorf("a refused insert stored %d row(s)", len(got))
+	}
+}
+
+// The tenant accessor must point at the model's tenant field: one pointing anywhere else
+// would check and stamp the tenant into that other column.
+func TestColumnarInsertRefusesATenantAccessorOnAnotherField(t *testing.T) {
+	db, _ := newColumnsDB(t, true)
+	table := NewColumnTable(func(r *colReading) *string { return &r.Key },
+		[]string{"tenant_id", "key"}, colReadings.columns...)
+	rows := colRows("a")
+	_, err := table.Insert(db.WithContext(tenantCtx("acme")), rows)
+	if !errors.Is(err, ErrColumnarModel) {
+		t.Errorf("err = %v; want ErrColumnarModel", err)
+	}
+	if rows[0].Key != "a" {
+		t.Errorf("the accessor's field was stamped: key = %q", rows[0].Key)
+	}
+}
+
+// A system context refuses the write even when a tenant context lies beneath it: the
+// system marker is what a Create would honour, and this write has no system mode.
+func TestColumnarInsertRefusesASystemContextOverATenant(t *testing.T) {
+	db, _ := newColumnsDB(t, true)
+	ctx := core.WithSystemContext(tenantCtx("acme"))
+	_, err := colReadings.Insert(db.WithContext(ctx), colRows("a"))
+	if !errors.Is(err, core.ErrNoTenant) {
+		t.Errorf("err = %v; want core.ErrNoTenant", err)
+	}
+	if got := storedReadings(t, db); len(got) != 0 {
+		t.Errorf("a refused insert stored %d row(s)", len(got))
+	}
+}
+
+// A refused model stays refused: the refusal is not cached away as a usable plan.
+func TestColumnarInsertRefusesARefusedModelEveryTime(t *testing.T) {
+	db, _ := newColumnsDB(t, true)
+	table := NewColumnTable(colReadingTenant, []string{"key"}, colReadings.columns...)
+	for call := 1; call <= 3; call++ {
+		if _, err := table.Insert(db.WithContext(tenantCtx("acme")), colRows("a")); !errors.Is(err, ErrColumnarModel) {
+			t.Errorf("call %d: err = %v; want ErrColumnarModel", call, err)
+		}
+	}
+	if got := storedReadings(t, db); len(got) != 0 {
+		t.Errorf("a refused model stored %d row(s)", len(got))
 	}
 }

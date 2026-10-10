@@ -27,7 +27,7 @@ func nullText(v sql.NullString) *string {
 	return &v.String
 }
 
-var eventColumns = rdb.NewColumnTable(&Event{},
+var eventColumns = rdb.NewColumnTable(
 	func(e *Event) *string { return &e.TenantId },
 	[]string{"tenant_id", "event_id", "occurred_time"},
 	rdb.BytesColumn("event_id", func(e *Event) []byte { return e.EventId }),
@@ -43,7 +43,7 @@ var eventColumns = rdb.NewColumnTable(&Event{},
 // (tenant_id, occurred_time, payload_id). See payloadConflict.
 var payloadTarget = []string{"tenant_id", "payload_id", "occurred_time"}
 
-var measurementColumns = rdb.NewColumnTable(&MeasurementEvent{},
+var measurementColumns = rdb.NewColumnTable(
 	func(m *MeasurementEvent) *string { return &m.TenantId },
 	payloadTarget,
 	rdb.BytesColumn("event_id", func(m *MeasurementEvent) []byte { return m.EventId }),
@@ -53,18 +53,13 @@ var measurementColumns = rdb.NewColumnTable(&MeasurementEvent{},
 	rdb.TimeColumn("occurred_time", func(m *MeasurementEvent) time.Time { return m.OccurredTime }),
 	rdb.TextColumn("name", func(m *MeasurementEvent) string { return m.Name }),
 	rdb.NumericColumn("value", func(m *MeasurementEvent) sql.NullFloat64 { return m.Value }),
-	rdb.NullInt64Column("classifier", func(m *MeasurementEvent) *int64 {
-		if m.Classifier == nil {
-			return nil
-		}
-		c := int64(*m.Classifier)
-		return &c
-	}),
+	// A uint in a bigint: refused above the bigint range rather than wrapped.
+	rdb.NullUintColumn("classifier", func(m *MeasurementEvent) *uint { return m.Classifier }),
 	rdb.NullTextColumn("unit", func(m *MeasurementEvent) *string { return m.Unit }),
 	rdb.NullTextColumn("data_type", func(m *MeasurementEvent) *string { return m.DataType }),
 )
 
-var locationColumns = rdb.NewColumnTable(&LocationEvent{},
+var locationColumns = rdb.NewColumnTable(
 	func(l *LocationEvent) *string { return &l.TenantId },
 	payloadTarget,
 	rdb.BytesColumn("event_id", func(l *LocationEvent) []byte { return l.EventId }),
@@ -80,7 +75,7 @@ var locationColumns = rdb.NewColumnTable(&LocationEvent{},
 	rdb.NumericColumn("heading", func(l *LocationEvent) sql.NullFloat64 { return l.Heading }),
 )
 
-var alertColumns = rdb.NewColumnTable(&AlertEvent{},
+var alertColumns = rdb.NewColumnTable(
 	func(a *AlertEvent) *string { return &a.TenantId },
 	payloadTarget,
 	rdb.BytesColumn("event_id", func(a *AlertEvent) []byte { return a.EventId }),
@@ -96,7 +91,7 @@ var alertColumns = rdb.NewColumnTable(&AlertEvent{},
 
 // anchorColumns conflicts on uq_event_anchors_idem: (tenant_id, occurred_time, event_id,
 // anchor_type, anchor_token). See CreateEventAnchors.
-var anchorColumns = rdb.NewColumnTable(&EventAnchor{},
+var anchorColumns = rdb.NewColumnTable(
 	func(a *EventAnchor) *string { return &a.TenantId },
 	[]string{"tenant_id", "event_id", "occurred_time", "anchor_type", "anchor_token"},
 	rdb.BytesColumn("event_id", func(a *EventAnchor) []byte { return a.EventId }),

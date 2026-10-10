@@ -195,16 +195,30 @@ func (rdb *RdbManager) initializePostgres(ctx context.Context) error {
 		rdb.Database = rdb.Database.Debug()
 	}
 
+	// The callback chain every service's handle carries: see registerCallbacks.
+	if err := registerCallbacks(rdb.Database); err != nil {
+		return err
+	}
+
+	return applyPoolSizing(rdb.Database, rdb.MicroserviceConfig, log.Info())
+}
+
+// registerCallbacks installs, on a service's root handle, every global callback chain the
+// rdb package enforces: tenant scoping, token grammar, the audit journal and the erasure
+// fence, in that order. It is the ONE list — the column-array insert's callback test
+// (TestColumnarInsertAccountsForEveryCreateCallback) registers through it too, so a chain
+// added here is a chain that test sees.
+func registerCallbacks(db *gorm.DB) error {
 	// Register tenant-scoping callbacks so row-level isolation is enforced for
 	// every tenant-scoped model, un-skippable at the call site.
-	if err := RegisterTenantScoping(rdb.Database); err != nil {
+	if err := RegisterTenantScoping(db); err != nil {
 		return err
 	}
 
 	// Register the token-grammar callbacks so every entity token is validated
 	// fail-closed at create/update (ADR-042 P2): a token carrying a NATS/MQTT
 	// metacharacter can never reach storage, and thus never a subject/topic.
-	if err := RegisterTokenGrammar(rdb.Database); err != nil {
+	if err := RegisterTokenGrammar(db); err != nil {
 		return err
 	}
 
@@ -223,7 +237,7 @@ func (rdb *RdbManager) initializePostgres(ctx context.Context) error {
 	// The table is created there rather than here because it is DDL, and every DDL
 	// statement this service issues must be serialized behind the migration advisory
 	// lock — see ExecuteInitialize.
-	if err := RegisterAuditJournal(rdb.Database); err != nil {
+	if err := RegisterAuditJournal(db); err != nil {
 		return err
 	}
 
@@ -231,7 +245,7 @@ func (rdb *RdbManager) initializePostgres(ctx context.Context) error {
 	// already reclaimed is refused inside the writing transaction.
 	//
 	// Registering it also installs the connection pool whose transactions remember a
-	// clear fence read (tenant_fence_memo.go), which is why it is called on rdb.Database
+	// clear fence read (tenant_fence_memo.go), which is why it is called on db
 	// itself, before any session is derived from it, and before applyPoolSizing, whose
 	// db.DB() goes through that pool.
 	//
@@ -249,11 +263,10 @@ func (rdb *RdbManager) initializePostgres(ctx context.Context) error {
 	// gorm row operation runs in the gap. The fence FAILS CLOSED on an unreadable
 	// table, so getting that order wrong would wedge startup loudly rather than
 	// silently disarming the fence — which is the direction this check should fail in.
-	if err := RegisterTenantFence(rdb.Database); err != nil {
+	if err := RegisterTenantFence(db); err != nil {
 		return err
 	}
-
-	return applyPoolSizing(rdb.Database, rdb.MicroserviceConfig, log.Info())
+	return nil
 }
 
 // ownedGormConfig is the gorm configuration of every connection a service opens on its

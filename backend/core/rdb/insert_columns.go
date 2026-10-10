@@ -71,7 +71,6 @@ import (
 // the write path on an in-memory database exercise this code rather than a different one.
 // Any other dialect is refused.
 type ColumnTable[R any] struct {
-	model    any
 	tenant   func(*R) *string
 	conflict []string
 	columns  []Column[R]
@@ -87,8 +86,9 @@ type ColumnTable[R any] struct {
 type Column[R any] struct {
 	name   string
 	pgType string
-	// array builds the column's values for every row, as the slice the driver binds.
-	array func(rows []*R) any
+	// array builds the column's values for every row, as the slice the driver binds, or
+	// refuses a value the column cannot hold (ErrColumnValue).
+	array func(rows []*R) (any, error)
 	// value reads one row's value, for the VALUES rendering.
 	value func(row *R) any
 }
@@ -97,12 +97,12 @@ func typedColumn[R, V any](name, pgType string, get func(*R) V) Column[R] {
 	return Column[R]{
 		name:   name,
 		pgType: pgType,
-		array: func(rows []*R) any {
+		array: func(rows []*R) (any, error) {
 			out := make([]V, len(rows))
 			for i, r := range rows {
 				out[i] = get(r)
 			}
-			return out
+			return out, nil
 		},
 		value: func(r *R) any { return get(r) },
 	}
@@ -133,6 +133,41 @@ func NullInt64Column[R any](name string, get func(*R) *int64) Column[R] {
 	return typedColumn(name, "int8", get)
 }
 
+// NullUintColumn binds a nullable unsigned integer stored in a bigint column as int8[]; a
+// nil pointer is NULL. A value above the bigint range is REFUSED (ErrColumnValue), never
+// converted: a plain int64 conversion would wrap it into a negative number and store that,
+// where binding the uint as a single parameter fails in the driver.
+func NullUintColumn[R any](name string, get func(*R) *uint) Column[R] {
+	conv := func(r *R) (*int64, error) {
+		v := get(r)
+		if v == nil {
+			return nil, nil
+		}
+		if uint64(*v) > math.MaxInt64 {
+			return nil, fmt.Errorf("%w: column %q: %d is above the bigint range", ErrColumnValue, name, *v)
+		}
+		c := int64(*v)
+		return &c, nil
+	}
+	return Column[R]{
+		name:   name,
+		pgType: "int8",
+		array: func(rows []*R) (any, error) {
+			out := make([]*int64, len(rows))
+			for i, r := range rows {
+				c, err := conv(r)
+				if err != nil {
+					return nil, err
+				}
+				out[i] = c
+			}
+			return out, nil
+		},
+		// Only reached after array has accepted every row (see Insert).
+		value: func(r *R) any { c, _ := conv(r); return c },
+	}
+}
+
 // TimeColumn binds a timestamptz column as timestamptz[].
 func TimeColumn[R any](name string, get func(*R) time.Time) Column[R] {
 	return typedColumn(name, "timestamptz", get)
@@ -152,7 +187,7 @@ func NumericColumn[R any](name string, get func(*R) sql.NullFloat64) Column[R] {
 	return Column[R]{
 		name:   name,
 		pgType: "numeric",
-		array: func(rows []*R) any {
+		array: func(rows []*R) (any, error) {
 			out := make([]*string, len(rows))
 			for i, r := range rows {
 				if v := get(r); v.Valid {
@@ -160,7 +195,7 @@ func NumericColumn[R any](name string, get func(*R) sql.NullFloat64) Column[R] {
 					out[i] = &s
 				}
 			}
-			return out
+			return out, nil
 		},
 		value: func(r *R) any { return get(r) },
 	}
@@ -185,14 +220,20 @@ func numericText(v float64) string {
 // same way — and names what disqualified the model.
 var ErrColumnarModel = errors.New("the column-array insert cannot write this model the way a gorm Create would")
 
-// NewColumnTable describes the column-array insert of model (a pointer to a zero value,
-// e.g. &Event{}): tenant returns a row's own tenant field, which is checked and stamped;
+// ErrColumnValue is the refusal for a batch the insert cannot bind as its columns: a
+// value the column's type cannot hold (an unsigned integer above the bigint range), or a
+// column array that does not carry exactly one element per row. Nothing is written.
+var ErrColumnValue = errors.New("the column-array insert cannot bind this batch")
+
+// NewColumnTable describes the column-array insert of the model R (a struct type, e.g.
+// Event): tenant returns a row's own tenant field — it must be the model's tenant field,
+// which is checked when the table is built — and that field is checked and stamped;
 // conflict is the ON CONFLICT … DO NOTHING target, by column name; columns are every other
 // creatable column of the model, each once. Nothing is checked here: the model is
 // validated against the handle's schema the first time Insert runs on it, and refused
 // there (ErrColumnarModel) if a Create would write anything different.
-func NewColumnTable[R any](model any, tenant func(*R) *string, conflict []string, columns ...Column[R]) *ColumnTable[R] {
-	return &ColumnTable[R]{model: model, tenant: tenant, conflict: conflict, columns: columns}
+func NewColumnTable[R any](tenant func(*R) *string, conflict []string, columns ...Column[R]) *ColumnTable[R] {
+	return &ColumnTable[R]{tenant: tenant, conflict: conflict, columns: columns}
 }
 
 // columnPlan is a ColumnTable validated against one resolved table.
@@ -245,6 +286,10 @@ func (t *ColumnTable[R]) Insert(db *gorm.DB, rows []*R) (int64, error) {
 				ErrTenantMismatch, named, tenant)
 		}
 	}
+	arrays, err := t.arrays(rows)
+	if err != nil {
+		return 0, err
+	}
 	for _, r := range rows {
 		*t.tenant(r) = tenant
 	}
@@ -255,7 +300,7 @@ func (t *ColumnTable[R]) Insert(db *gorm.DB, rows []*R) (int64, error) {
 				return 0, err
 			}
 		}
-		return t.exec(tx, plan, tenant, rows)
+		return t.exec(tx, plan, tenant, rows, arrays)
 	}
 	session := db.Session(&gorm.Session{NewDB: true, Context: ctx})
 	if _, inTx := session.Statement.ConnPool.(gorm.TxCommitter); inTx {
@@ -273,14 +318,31 @@ func (t *ColumnTable[R]) Insert(db *gorm.DB, rows []*R) (int64, error) {
 	return affected, nil
 }
 
-// exec issues the statement(s) for rows on tx.
-func (t *ColumnTable[R]) exec(tx *gorm.DB, plan *columnPlan, tenant string, rows []*R) (int64, error) {
+// arrays builds every column's array for rows and checks it carries exactly one element
+// per row. unnest pads a shorter array with NULLs and the statement would succeed, so a
+// short array is refused here rather than stored as missing values. It runs for every
+// dialect, so a value a column refuses is refused on sqlite too.
+func (t *ColumnTable[R]) arrays(rows []*R) ([]any, error) {
+	out := make([]any, len(t.columns))
+	for i, c := range t.columns {
+		a, err := c.array(rows)
+		if err != nil {
+			return nil, err
+		}
+		if n := reflect.ValueOf(a).Len(); n != len(rows) {
+			return nil, fmt.Errorf("%w: column %q has %d values for %d rows", ErrColumnValue, c.name, n, len(rows))
+		}
+		out[i] = a
+	}
+	return out, nil
+}
+
+// exec issues the statement(s) for rows on tx; arrays are the checked column arrays.
+func (t *ColumnTable[R]) exec(tx *gorm.DB, plan *columnPlan, tenant string, rows []*R, arrays []any) (int64, error) {
 	if plan.unnest != "" {
 		args := make([]any, 0, len(t.columns)+1)
 		args = append(args, tenant)
-		for _, c := range t.columns {
-			args = append(args, c.array(rows))
-		}
+		args = append(args, arrays...)
 		res := tx.Exec(plan.unnest, args...)
 		return res.RowsAffected, res.Error
 	}
@@ -315,7 +377,7 @@ func (t *ColumnTable[R]) exec(tx *gorm.DB, plan *columnPlan, tenant string, rows
 // and returns the statement to issue.
 func (t *ColumnTable[R]) plan(db *gorm.DB) (*columnPlan, error) {
 	stmt := &gorm.Statement{DB: db}
-	if err := stmt.Parse(t.model); err != nil {
+	if err := stmt.Parse(new(R)); err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrColumnarModel, err)
 	}
 	// The statement is the dialect's as much as the table's: its quoting and its shape.
@@ -344,7 +406,17 @@ func (t *ColumnTable[R]) build(db *gorm.DB, stmt *gorm.Statement) (*columnPlan, 
 		return nil, refuse("it has a %s field, whose grammar a Create validates and this write would not",
 			tokenFieldName)
 	}
-	probe := reflect.New(s.ModelType).Interface()
+	if s.ModelType != reflect.TypeFor[R]() {
+		return nil, refuse("the row type is not the model's struct type")
+	}
+	// The accessor must hand back the model's own tenant field: one pointing at any other
+	// field would check, stamp and bind the tenant through that column instead.
+	row := new(R)
+	want := reflect.ValueOf(row).Elem().FieldByIndex(tenantField.StructField.Index).Addr().Pointer()
+	if got := t.tenant(row); got == nil || reflect.ValueOf(got).Pointer() != want {
+		return nil, refuse("the tenant accessor does not return the model's %s field", tenantField.Name)
+	}
+	probe := any(row)
 	if exempt, ok := probe.(AuditExempt); !ok || !exempt.AuditExempt() {
 		return nil, refuse("it is audited, and this write would leave no audit-journal row")
 	}

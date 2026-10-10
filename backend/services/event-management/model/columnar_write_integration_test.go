@@ -484,3 +484,29 @@ func TestEventStoreInsertsBindAFixedNumberOfParameters(t *testing.T) {
 		}
 	}
 }
+
+// A classifier above the bigint range is refused on Postgres, as the VALUES write refused
+// it, and nothing of its batch is stored — rather than wrapped into a negative number.
+func TestColumnarWriteRefusesAClassifierAboveTheBigintRange(t *testing.T) {
+	api := newPostgresApi(t, "itcolumnarclassifier")
+	db := api.RDB.Database
+	at := time.Date(2026, 9, 6, 0, 0, 0, 0, time.UTC)
+	big := uint(math.MaxInt64) + 5
+	build := func() *EventRows {
+		ev := Event{EventId: []byte("classified"), DeviceToken: "d", EventType: esmodel.Measurement,
+			OccurredTime: at, ProcessedTime: at}
+		parents, ms, err := BuildMeasurementRows([]*MeasurementEventCreateRequest{
+			{Event: ev, EntryOccurredTime: at, Name: "m", Value: ptr(1.0), Classifier: &big}})
+		require.NoError(t, err)
+		return &EventRows{Parents: parents, Measurements: ms}
+	}
+	ctx := core.WithTenant(context.Background(), "via-values")
+	oldErr := db.WithContext(ctx).Transaction(func(tx *gorm.DB) error { return valuesWrite(ctx, tx, build(), nil) })
+	require.Error(t, oldErr, "precondition: the VALUES write refuses the classifier")
+	ctx = core.WithTenant(context.Background(), "via-grouped")
+	newErr := api.PersistInTx(ctx, func(tx *gorm.DB) error { return api.CreateEventRows(ctx, tx, build()) })
+	require.ErrorIs(t, newErr, rdb.ErrColumnValue)
+	for _, table := range columnarTables {
+		require.Empty(t, storedFor(t, db, table, "via-grouped"), "a refused batch stored rows in %s", table)
+	}
+}

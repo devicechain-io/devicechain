@@ -18,6 +18,9 @@ package rdbguard
 //   - control-plane: user-management statements over instance-scoped rows (including a join
 //     table that is tenant-bearing only through its parent).
 //   - not-sql: an Exec that is not a database call (the GraphQL executor).
+//   - tenant-write: the column-array insert, the one raw statement that WRITES tenant
+//     rows. Its text is built from the model's schema, and its tenant is bound from the
+//     context after the checks a gorm Create runs; see core/rdb/insert_columns.go.
 var rawSQLAllowList = []siteEntry{
 	// --- not-sql ---
 	{
@@ -27,13 +30,6 @@ var rawSQLAllowList = []siteEntry{
 	},
 
 	// --- ddl-catalog ---
-	{
-		Path: "backend/core/rdb/insert_columns.go", Func: "ColumnTable.exec", Count: 2,
-		Why: "the column-array insert (one statement on Postgres, its VALUES rendering on sqlite): an " +
-			"INSERT ... ON CONFLICT DO NOTHING whose text is built from the model's own gorm schema, never " +
-			"from a caller, and whose tenant column is bound from the context after the tenant-mismatch " +
-			"check and the erasure fence have run (ColumnTable.Insert)",
-	},
 	{
 		Path: "backend/core/rdb/storage_growth.go", Func: "measureFromCatalog", Count: 1,
 		Why: "reads relation sizes from the pg_class catalog for one table name; returns no tenant rows",
@@ -65,6 +61,15 @@ var rawSQLAllowList = []siteEntry{
 			"per policy statement (each call to the exec closure counts as a site). The retention " +
 			"policy deletes every tenant's rows by age, by operator opt-in; it is table-level " +
 			"configuration with no tenant predicate by design",
+	},
+
+	// --- tenant-write ---
+	{
+		Path: "backend/core/rdb/insert_columns.go", Func: "ColumnTable.exec", Count: 2,
+		Why: "the column-array insert (one statement on Postgres, its VALUES rendering on sqlite): an " +
+			"INSERT ... ON CONFLICT DO NOTHING whose text is built from the model's own gorm schema, never " +
+			"from a caller, and whose tenant column is bound from the context after the tenant-mismatch " +
+			"check and the erasure fence have run (ColumnTable.Insert)",
 	},
 
 	// --- erasure ---
