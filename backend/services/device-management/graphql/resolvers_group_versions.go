@@ -86,7 +86,7 @@ func (r *EntityGroupResolver) Versions(ctx context.Context) ([]*EntityGroupVersi
 		return nil, err
 	}
 	api := r.S.GetApi(ctx)
-	versions, err := api.EntityGroupVersions(ctx, r.M.Token)
+	versions, err := api.EntityGroupVersions(ctx, r.M.Token, nil)
 	if err != nil {
 		return nil, err
 	}

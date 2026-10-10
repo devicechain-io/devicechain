@@ -154,16 +154,18 @@ func (api *Api) RollbackEntityGroup(ctx context.Context, token string, version i
 	return api.entityGroupByToken(ctx, token)
 }
 
-// EntityGroupVersions lists a group's published versions, newest first. Returns
+// EntityGroupVersions lists a group's published versions, newest first, at most
+// rdb.MaxPageSize per call (page narrows or pages further). Returns
 // gorm.ErrRecordNotFound if the group does not exist.
-func (api *Api) EntityGroupVersions(ctx context.Context, token string) ([]*EntityGroupVersion, error) {
+func (api *Api) EntityGroupVersions(ctx context.Context, token string, page *VersionListArgs) ([]*EntityGroupVersion, error) {
 	group, err := api.entityGroupByToken(ctx, token)
 	if err != nil {
 		return nil, err
 	}
 	versions := make([]*EntityGroupVersion, 0)
+	limit, offset := page.window()
 	result := api.RDB.DB(ctx).Where("entity_group_id = ?", group.ID).
-		Order("version DESC").Find(&versions)
+		Order("version DESC").Limit(limit).Offset(offset).Find(&versions)
 	if result.Error != nil {
 		return nil, result.Error
 	}

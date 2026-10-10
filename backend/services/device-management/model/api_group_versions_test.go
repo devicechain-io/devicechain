@@ -91,7 +91,7 @@ func TestPublishEntityGroup_MonotonicAndActivePointer(t *testing.T) {
 	assert.Equal(t, `attr["climate"] == "arid"`, frozenV1.Selector, "an earlier version is immutable")
 
 	// Versions list is newest-first.
-	versions, err := api.EntityGroupVersions(ctx, "g1")
+	versions, err := api.EntityGroupVersions(ctx, "g1", nil)
 	assert.NoError(t, err)
 	if assert.Len(t, versions, 2) {
 		assert.EqualValues(t, 2, versions[0].Version)
@@ -140,7 +140,7 @@ func TestRollbackEntityGroup(t *testing.T) {
 	assert.EqualValues(t, 1, rolled.ActiveVersion.Int32)
 
 	// Both versions still exist (non-destructive).
-	versions, err := api.EntityGroupVersions(ctx, "g1")
+	versions, err := api.EntityGroupVersions(ctx, "g1", nil)
 	assert.NoError(t, err)
 	assert.Len(t, versions, 2)
 
@@ -245,11 +245,11 @@ func TestEntityGroupVersions_TenantIsolation(t *testing.T) {
 		t.Fatalf("B publish v1: %v", err)
 	}
 
-	aVersions, err := api.EntityGroupVersions(ctxA, "shared")
+	aVersions, err := api.EntityGroupVersions(ctxA, "shared", nil)
 	assert.NoError(t, err)
 	assert.Len(t, aVersions, 2, "tenant A sees only its two versions")
 
-	bVersions, err := api.EntityGroupVersions(ctxB, "shared")
+	bVersions, err := api.EntityGroupVersions(ctxB, "shared", nil)
 	assert.NoError(t, err)
 	assert.Len(t, bVersions, 1, "tenant B sees only its one version")
 	assert.Equal(t, `attr["climate"] == "humid"`, bVersions[0].Selector, "B reads its own frozen selector, not A's")
