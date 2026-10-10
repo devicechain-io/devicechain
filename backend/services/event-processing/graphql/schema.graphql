@@ -11,9 +11,19 @@
 #
 
 type Query {
+    """
+    Returns the identity of the event-processing service. Useful as a liveness check; it reads
+    no tenant data.
+    """
     # Identity/liveness probe for the event-processing service.
     eventProcessingInfo: EventProcessingInfo!
 
+    """
+    Checks a batch of detection-rule definitions by decoding, compiling and cost-checking each
+    one, without saving anything. Returns valid=false with one error per rejected rule; rules
+    that compile may still produce advisory warnings. Pure validation: no state is read or
+    written, so it is safe to call repeatedly. Requires device:read.
+    """
     # Validate a batch of detection-rule definitions (opaque rules.Rule JSON) by
     # decoding, compiling, and cost-gating each through the DETECT compiler — the
     # single-homed authority for rule structure, type coherence, CEL type-checking, and
@@ -22,8 +32,18 @@ type Query {
     # svcclient), submitting the profile's ENABLED draft rules, and refuses to publish
     # if any of them does not compile (a disabled rule is inert and is not submitted).
     # Pure validation — no state is read or written, so it is safe to call repeatedly.
-    validateDetectionRules(rules: [DetectionRuleInput!]!): DetectionRuleValidationResult!
+    validateDetectionRules(
+        """The rules to check, in order; the index in each error and warning refers to this list."""
+        rules: [DetectionRuleInput!]!
+    ): DetectionRuleValidationResult!
 
+    """
+    Compiles a visual automation canvas into its detection-rule definition, without saving
+    anything. A canvas must author exactly one rule; a graph with zero or several condition
+    nodes is rejected with a diagnostic. The same compiler and cost check as the form builder
+    are used, so the definition is equivalent to the form-authored rule. Problems are reported
+    as diagnostics with ok=false, not as GraphQL errors. Requires device:read.
+    """
     # Compile a visual automation canvas (ADR-053) to its DETECT rule definition — the
     # server-authoritative graph→schema pass (slice 9a). The graph is the opaque
     # CanvasDefinition JSON the console editor emits; profileToken scopes it (every Source
@@ -34,16 +54,46 @@ type Query {
     # graph with zero or many condition nodes is rejected with a diagnostic. Pure validation —
     # no state is read or written; the browser never authors the definition directly. Gated
     # on device:read.
-    compileCanvas(graph: String!, profileToken: String!): CanvasCompileResult!
+    compileCanvas(
+        """
+        The canvas definition, as the JSON document the console editor emits, serialized to a
+        string.
+        """
+        graph: String!
+        """
+        Token of the device profile the rule belongs to; every source node in the graph must be
+        scoped to this profile.
+        """
+        profileToken: String!
+    ): CanvasCompileResult!
 
+    """
+    Returns the health of each live detection rule of a profile's active published version:
+    status, last fire and lifetime fire count. Returns an empty list for a profile with no
+    published version. Read-only. Requires device:read.
+    """
     # Per-rule health for a device profile's ACTIVE published version (ADR-051 slice 7b):
     # for each live DETECT rule, its status, last-fired time, and lifetime fire count. It
     # joins the durable rule projection (the engine's live rule set) with the RuleStat firing
     # projection, resolving the profile's active version from the ProfileActive projection.
     # Tenant-scoped to the caller's tenant. An unpublished profile (no active version) returns
     # an empty list. Read-only; gated on device:read.
-    ruleHealth(profileToken: String!): [RuleHealth!]!
+    ruleHealth(
+        """Token of the device profile."""
+        profileToken: String!
+    ): [RuleHealth!]!
 
+    """
+    Runs a draft detection rule against replayed history and reports the raise and resolve edges
+    it would have produced: what the rule would have done. The draft is named by exactly one of
+    graph and ruleDefinition. Nothing is saved or published and live detection is not affected.
+
+    Problems with the request or the draft (bad window, compile failure, both or neither draft
+    given) come back as ok=false with diagnostics. An unpublished profile, history that has aged
+    out, a scan limit or too many concurrent previews return ok=true with the reason in
+    degraded. Requires device:read, and also location:read when the draft tests geofence
+    containment, because the result reveals when a device was inside a region.
+    """
     # Run a DRAFT detection rule against REPLAYED history and report the RAISE/RESOLVE edges it
     # WOULD have produced (ADR-053 slice 9d) — the "what would this rule have done?" headline. The
     # draft is named by exactly one of `graph` (a CanvasDefinition JSON) or `ruleDefinition` (a
@@ -56,10 +106,25 @@ type Query {
     # AND on location:read when the draft tests geofence containment, because the timeline such a
     # preview returns names, per device, when it entered and left a region, which is a read of
     # position however it was asked for. A draft that tests no containment needs only device:read.
-    previewRule(input: PreviewRuleInput!): PreviewResult!
+    previewRule(
+        """The draft rule, the profile and the time window to replay."""
+        input: PreviewRuleInput!
+    ): PreviewResult!
 }
 
 type Mutation {
+    """
+    Drafts a detection rule from a plain-language description using the tenant's configured AI
+    provider. The candidate is run through the same compiler as every other authoring path and,
+    if it does not compile, repaired up to three inference rounds in total. Nothing is saved:
+    you review the returned draft and save it through the normal rule-creation path.
+
+    When inference is not enabled on the deployment, no provider is active, the tenant has not
+    opted in to external AI, or the tenant is over its drafting rate limit before a first
+    candidate is produced, the result has unavailable=true rather than a GraphQL error. Each
+    call spends inference budget, so it is a mutation and should not be retried blindly.
+    Requires device:write.
+    """
     # Draft a detection rule from a natural-language description (ADR-056 slice 1) — the THIRD
     # authoring front door, alongside the form builder and the visual canvas. It carries the
     # author's prompt to the active inference provider (over an ai:infer service token, per-tenant
@@ -72,153 +137,280 @@ type Mutation {
     # error. Modeled as a Mutation (not a Query): it is non-idempotent and spends inference budget, so
     # it must not be a retriable/parallelizable read. Gated on device:write — drafting is a precursor
     # to authoring, so a read-only viewer cannot invoke it.
-    draftDetectionRuleFromText(input: DraftRuleFromTextInput!): DraftRuleResult!
+    draftDetectionRuleFromText(
+        """The description to draft from, the target profile, and optional metric hints."""
+        input: DraftRuleFromTextInput!
+    ): DraftRuleResult!
 }
 
+"""Input to draftDetectionRuleFromText."""
 # Input to draftDetectionRuleFromText.
 input DraftRuleFromTextInput {
+    """The author's plain-language description of the rule they want."""
     # The author's plain-language description of the rule they want.
     text: String!
+    """Token of the target device profile."""
     # The target device profile (carried for provenance/context).
     profileToken: String!
+    """
+    Optional metric vocabulary of the target profile, so the model refers to real metric keys.
+    Omit it and the model works from the description alone.
+    """
     # Optional: the profile's metric vocabulary, so the model references REAL metric keys. The
     # console supplies it (event-processing holds no metric definitions locally); omitting it just
     # means the model works from the description alone.
     metrics: [MetricHintInput!]
 }
 
+"""
+One metric of the target profile's vocabulary, offered to the model as context. Only key is
+required.
+"""
 # One metric of the target profile's vocabulary, as prompt context. Only key is required; the
 # rest are advisory hints that improve the draft.
 input MetricHintInput {
+    """The metric's key."""
     key: String!
+    """The metric's data type, as a hint."""
     dataType: String
+    """The metric's unit, as a hint."""
     unit: String
+    """What the metric measures, as a hint."""
     description: String
 }
 
+"""The outcome of a natural-language drafting request."""
 # The outcome of an NL drafting request.
 type DraftRuleResult {
+    """True when a candidate compiled."""
     # True when a candidate compiled through the DETECT firewall.
     ok: Boolean!
+    """
+    The compiled rule definition, as a JSON document serialized to a string, without a token
+    (assigned when saved). Null unless ok.
+    """
     # The compiled, canonical rules.Rule JSON (id omitted — the token is assigned at save). Null
     # unless ok.
     definition: String
+    """
+    The compiled predicate's worst-case evaluation cost, in the engine's cost units. Null unless
+    ok.
+    """
     # The compiled leaf predicate's worst-case cost. Null unless ok.
     estimatedCost: Int
+    """The model that produced the candidate; null if no candidate was produced."""
     # Provenance of the answering provider (set whenever a candidate was produced).
     model: String
+    """The AI provider that produced the candidate; null if no candidate was produced."""
     provider: String
+    """Number of inference rounds that produced a candidate (at most 3); 0 when unavailable."""
     # Number of inference rounds performed.
     attempts: Int!
+    """
+    The model's last rejected output, so the author can see what it tried. Set only when ok is
+    false and a candidate was produced.
+    """
     # The model's last rejected raw output, surfaced on !ok so the author can see what the AI tried.
     rawCandidate: String
+    """The compiler's reasons for rejecting the last candidate. Empty when ok."""
     # Compiler rejection reasons from the final failed attempt (empty when ok).
     diagnostics: [DraftDiagnostic!]!
+    """
+    Advisory findings on a draft that compiled. The rule is accepted and behaves as written, but
+    the author should read them before saving. Empty unless ok.
+    """
     # Advisory findings on a draft that compiled (empty unless ok): the rule is accepted and behaves
     # as written, but the author should read the finding before saving.
     warnings: [DraftDiagnostic!]!
+    """
+    True when inference could not run: not enabled on the deployment, no active provider, the
+    tenant has not opted in to external AI, or the tenant is over its drafting rate limit before
+    a first candidate was produced.
+    """
     # True when the inference path itself could not run — not configured, no active provider, or the
     # tenant has not opted in to external routing (all fail-closed). unavailableReason carries the
     # (coarsened) message.
     unavailable: Boolean!
+    """A fixed, non-technical explanation when unavailable is true; null otherwise."""
     unavailableReason: String
 }
 
+"""One reason a drafted rule was rejected, or one advisory finding on a draft that compiled."""
 # One compiler rejection reason surfaced to the author.
 type DraftDiagnostic {
+    """
+    The rule field the finding is about (for example "when" or "threshold"); null when it is not
+    tied to a field.
+    """
     # The rules.Rule field the rejection anchors to (e.g. "when", "threshold"), null when unanchored.
     field: String
+    """English text suitable for showing to the author."""
     # The console-surfaceable reason.
     message: String!
+    """
+    Stable code of an advisory finding, as in CanvasDiagnostic.code; null on a rejection reason.
+    """
     # The stable code of a warning (null on a rejection reason). See CanvasDiagnostic.code.
     code: String
+    """The values the code's text interpolates. Empty when code is null."""
     # The values the code's text interpolates. Empty when code is null.
     params: [String!]!
 }
 
+"""Input to previewRule. Exactly one of graph and ruleDefinition names the draft."""
 # Input to previewRule. Exactly one of graph or ruleDefinition names the draft.
 input PreviewRuleInput {
+    """
+    A canvas definition, as the JSON document the console editor emits, serialized to a string.
+    """
     # A CanvasDefinition JSON (the console canvas editor's graph).
     graph: String
+    """A rule definition, as a JSON document serialized to a string (the form builder's output)."""
     # A rules.Rule JSON (the form builder's definition).
     ruleDefinition: String
+    """Token of the device profile whose published history the draft is replayed against."""
     # The profile whose published history the draft previews against.
     profileToken: String!
+    """Start of the replay window by event occurred time, as an RFC 3339 timestamp."""
     # RFC3339 occurred-time window bounds.
     start: String!
+    """
+    End of the replay window by event occurred time, as an RFC 3339 timestamp. Must be after
+    start. A window longer than 24 hours is shortened to the 24 hours ending at end, and the
+    result says so in degraded.
+    """
     end: String!
+    """
+    When true and the draft is a canvas graph, each firing carries a per-node trace of what
+    every canvas node did for it. Off by default; ignored for a ruleDefinition draft.
+    """
     # When true, each firing carries a per-node trace (slice 9e) reconstructing what each canvas node
     # did for that firing — for the console's canvas overlay. Off by default (the trace is only useful
     # to the graph editor); ignored for a ruleDefinition draft, which has no canvas node map.
     trace: Boolean
 }
 
+"""The outcome of a replay preview."""
 # The outcome of a replay preview.
 type PreviewResult {
+    """
+    True when the draft compiled and the replay ran, even if it found no firings. False when the
+    request or draft was rejected; the reasons are in diagnostics.
+    """
     # True when the draft compiled and the replay ran (even if it found zero firings). False only on
     # a compile failure, whose reasons are in diagnostics.
     ok: Boolean!
+    """
+    The edges the draft would have produced, ordered by time, then series, with raised before
+    resolved at the same instant.
+    """
     # The RAISE/RESOLVE timeline the draft would have produced, ordered by time.
     firings: [PreviewFiring!]!
+    """Coverage counters for the run."""
     # Coverage counters for the run.
     stats: PreviewStats!
+    """
+    Why the result is partial: for example history before the window is no longer retained, a
+    read or scan limit was reached, the window was shortened, the profile is unpublished, or too
+    many previews are already running for the tenant. Null for a complete result.
+    """
     # A human-readable reason the result is PARTIAL (history aged out below the window, the scan cap
     # was hit, the window was capped, the profile is unpublished, or a concurrent-preview refusal) —
     # null on a complete result.
     degraded: String
+    """
+    When ok is false, the reasons the request or draft was rejected; when ok is true, advisory
+    warnings about the compiled draft.
+    """
     # Compile diagnostics (node-anchored, reusing the canvas diagnostic shape): the rejection
     # reasons when ok is false, the advisory warnings of the compiled draft when ok is true.
     diagnostics: [CanvasDiagnostic!]!
 }
 
+"""One edge the draft would have produced."""
 # One edge the draft would have emitted.
 type PreviewFiring {
+    """Event time of the edge, as an RFC 3339 timestamp."""
     # RFC3339 occurred time of the edge.
     occurredAt: String!
+    """What the edge is for: a device token, or the anchor's token for a correlation rule."""
     # The series (device token, or anchor token for a correlation rule) the edge is for.
     series: String!
+    """"raised" for a rising edge or "resolved" for a falling edge."""
     # "raised" (rising edge) or "resolved" (falling edge).
     signal: String!
+    """
+    What each canvas node did for this firing, from source through condition and branches to
+    actions. Empty unless the request set trace and the draft is a canvas graph. A branch that
+    feeds two actions appears once per action path.
+    """
     # The per-node trace for this firing (slice 9e) — what each canvas node did, source→condition→
     # (branch…)→action. Empty unless the request set input.trace and the draft is a canvas graph. A
     # branch feeding two actions appears once per action path (its disposition is identical across them).
     trace: [NodeTraceStep!]!
 }
 
+"""What one canvas node did for a single firing."""
 # One canvas node's disposition for a single firing (slice 9e node trace).
 type NodeTraceStep {
+    """Id of the canvas node, matching a node in the request's graph."""
     # The canvas node id this step is about (matches a node in the request's graph).
     nodeId: String!
+    """The node's category: "source", "condition", "branch" or "action"."""
     # The node category: "source" | "condition" | "branch" | "action".
     kind: String!
+    """
+    What the node did: "delivered" (source); "raised" or "resolved" (condition); "passed",
+    "blocked" or "skipped" (branch); "raised", "sent", "cleared", "inert" or "skipped" (action).
+    """
     # What the node did for this firing: "delivered" (source); "raised"/"resolved" (condition, and
     # "raised" for a raiseAlarm that fired); "passed"/"blocked"/"skipped" (branch); "sent"/"cleared"/
     # "inert"/"skipped" (action).
     disposition: String!
+    """
+    Short explanation, for example why a branch blocked or an action was inert; null when the
+    disposition is self-explanatory.
+    """
     # Optional human context (why a branch blocked, why an action was inert) — null when the
     # disposition is self-explanatory.
     detail: String
 }
 
+"""Coverage counters for a preview run."""
 # Coverage counters for a preview run.
 type PreviewStats {
+    """How many in-scope events were processed."""
     # How many in-scope events were processed.
     eventsScanned: Int!
+    """How many edges were produced."""
     # How many edges were produced.
     firingCount: Int!
+    """
+    How many in-scope samples the rule could not evaluate because of a predicate error. A
+    nonzero value adds a note to degraded, so a rule that errors is not mistaken for a quiet
+    one.
+    """
     # How many in-scope samples a rule's leaf could not evaluate (a predicate error). Nonzero drives
     # a degraded note so a rule that errors is not mistaken for a quiet one.
     evalErrors: Int!
+    """Server-side wall-clock time the replay took, in milliseconds."""
     # Wall-clock milliseconds the replay took (server-side).
     wallMs: Int!
 }
 
+"""The status of a live detection rule."""
 # The lifecycle status of a live detection rule (ADR-051 slice 7b). DISABLED_BY_BUDGET is
 # reserved for when state-budget enforcement lands (slice 6c-2 — unbuilt today, so never
 # returned yet); until then a projected rule is ACTIVE unless it no longer compiles.
 enum RuleStatus {
+    """The rule compiles under the current limits and is running."""
     # The rule compiles under the current limits and is running.
     ACTIVE
+    """
+    The published rule no longer compiles under the current limits (for example after a maximum
+    rule duration was lowered). It is surfaced so its author can re-author it. A rule that
+    failed to compile at publish time never reaches this state, because publishing is refused.
+    """
     # The projected rule no longer compiles under the current compile limits (e.g. a lowered
     # maximum rule duration) — it is surfaced so the author can see and re-author it, rather than failing
     # silently. A rule that failed to compile at publish never reaches the projection (publish
@@ -226,102 +418,191 @@ enum RuleStatus {
     COMPILE_ERROR
 }
 
+"""Health of one live detection rule."""
 # Health of one live detection rule.
 type RuleHealth {
+    """The rule's runtime id, composed as {tenant}/{profileVersionToken}/{ruleToken}."""
     # The composed runtime rule id "{tenant}/{profileVersionToken}/{ruleToken}".
     ruleId: String!
+    """The rule's token, its stable id within the profile."""
     # The rule's device-management token (its stable authoring id within the profile).
     ruleToken: String!
+    """The rule's display name from its definition, or its token when it has none."""
     # The rule's display name (from the authored definition), falling back to its token.
     name: String!
+    """Whether the rule is running or no longer compiles."""
     # The composed status (ACTIVE / COMPILE_ERROR).
     status: RuleStatus!
+    """
+    When the rule last fired, as an RFC 3339 timestamp of the event time; null if it has never
+    fired.
+    """
     # RFC3339 logical time of the most recent fire, or null if the rule has never fired.
     lastFiredAt: String
+    """
+    How many times the rule has fired over its lifetime; 0 if never. Approximate, since a replay
+    can count a firing again, and capped at 2147483647.
+    """
     # Lifetime fire count (approximate — a replay may re-count; see RuleStat). Zero if never fired.
     fireCount: Int!
+    """
+    The edge of the most recent fire, "raised" or "resolved"; null if the rule has never fired.
+    """
     # The edge of the most recent fire ("raised"/"resolved"), or null if never fired.
     lastSignal: String
+    """Why the rule does not compile when status is COMPILE_ERROR; null otherwise."""
     # A human-readable diagnostic when status is COMPILE_ERROR, else null.
     message: String
 }
 
 type Subscription {
+    """
+    Streams a device profile's detections as they fire: every raised or resolved edge of a rule
+    belonging to the profile, including rules with no alarm action. Live from the moment of
+    subscription, with no backfill; use ruleHealth or previewRule for history. Scoped to the
+    caller's tenant. An empty profileToken is an error. Requires device:read.
+    """
     # Streams a device profile's DETECT detections as they fire (ADR-037 / ADR-057, slice 7c):
     # every firing whose rule belongs to the profile, RAISED or RESOLVED, including a rule with
     # no alarm action (a pure signal the alarm stream would miss). Live from subscribe time
     # onward, no backfill; torn down on disconnect. Tenant-scoped; gated on device:read.
-    detectionStream(profileToken: String!): DetectionEvent!
+    detectionStream(
+        """Token of the device profile whose detections to stream."""
+        profileToken: String!
+    ): DetectionEvent!
 }
 
+"""One detection on the live feed."""
 # One DETECT detection on the live feed.
 type DetectionEvent {
+    """Runtime id of the rule that fired."""
     # The composed runtime rule id that fired.
     ruleId: String!
+    """Token of the rule that fired, which links the detection to its rule in the profile."""
     # The firing rule's device-management token (parsed from the id) — links a firing to its rule.
     ruleToken: String!
+    """
+    The rule's type, for example threshold, deltaRate, repeating, duration, absence, aggregate,
+    correlation or connectivity.
+    """
     # The rule type ("threshold", "absence", …).
     kind: String!
+    """The transition: "raised" or "resolved"."""
     # The transition ("raised" / "resolved", ADR-057).
     edge: String!
+    """
+    What the detection is keyed on: a device token, or the anchor's token for a correlation
+    rule.
+    """
     # The keyed series — the device token, or the anchor token for a correlation rule.
     series: String!
+    """Event time the detection is stamped at, as an RFC 3339 timestamp."""
     # RFC3339 logical (event) time the detection is stamped at.
     occurredTime: String!
+    """
+    The rule's severity: critical, major, minor, warning or indeterminate; null when the rule
+    declares none.
+    """
     # The detection tier (ADR-041), null when the rule declares none.
     severity: String
+    """
+    The value that triggered a raised edge; null on a resolved edge and for rules with no
+    triggering scalar.
+    """
     # The triggering scalar (raised edge only), null otherwise.
     value: Float
 }
 
+"""Identity of the event-processing service."""
 # Service identity returned by the scaffold query.
 type EventProcessingInfo {
+    """The functional area this service serves; always "event-processing"."""
     # The functional area this service serves ("event-processing").
     functionalArea: String!
 }
 
+"""The outcome of compiling one automation canvas."""
 # The outcome of compiling one automation canvas (ADR-053 slice 9a).
 type CanvasCompileResult {
+    """
+    True only if the graph compiled to exactly one rule and passed the cost check. Save or
+    publish only when true.
+    """
     # True only if the graph partitioned, lowered to exactly one rule, and passed the cost
     # gate. A save/publish proceeds only when this is true.
     ok: Boolean!
+    """
+    The compiled rule definition, as a JSON document serialized to a string. Null when ok is
+    false.
+    """
     # The compiled rules.Rule JSON the console stores on DetectionRule.Definition — null when
     # !ok. It decodes to the same rules.Rule as the equivalent form-authored rule and
     # re-marshals to identical canonical bytes (§3.2); the two surfaces' verbatim stored
     # strings may differ in key order, since nothing compares rule bytes.
     definition: String
+    """
+    The compiled predicate's worst-case evaluation cost, in the engine's cost units. Null when
+    ok is false.
+    """
     # The compiled predicate's static worst-case cost (the ADR-023 gate cleared) — null when !ok.
     estimatedCost: Int
+    """One entry per problem or advisory finding. Empty when there is nothing to report."""
     # One entry per problem, each anchored to the offending node (null nodeId ⇒ a graph-level
     # problem). Empty when ok.
     diagnostics: [CanvasDiagnostic!]!
 }
 
+"""A compile diagnostic about a canvas or a draft rule, anchored to a node where it can be."""
 # A single canvas compile diagnostic the console surfaces on its node.
 type CanvasDiagnostic {
+    """
+    Id of the offending canvas node; null for a problem with the graph as a whole (for example a
+    cycle or a dangling edge) or when the draft was not a canvas.
+    """
     # The offending node's id, or null for a graph-level problem (a cycle, a dangling edge).
     nodeId: String
+    """
+    Either "error", which rejects the graph, or "warning", which is advisory and the graph still
+    compiled.
+    """
     # The severity: "error" rejects the graph; "warning" is advisory and the graph still compiled.
     severity: String!
+    """
+    Stable code identifying a rule-compiler warning (for example negatedAttributeGuard); null
+    for a diagnostic that has none.
+    """
     # The stable code of a rule-compiler warning (e.g. "negatedAttributeGuard"), null for a
     # diagnostic that has none. The console localises its text from the code + params; message is
     # the English fallback.
     code: String
+    """
+    The values the code's text interpolates, in a fixed order per code. Empty when code is null.
+    """
     # The values the code's text interpolates, in a fixed order per code. Empty when code is null.
     params: [String!]!
+    """
+    English text for the diagnostic, which is also the fallback when the code is not localized.
+    """
     # Human-readable, console-surfaceable message.
     message: String!
 }
 
+"""One detection rule submitted for validation."""
 # A single detection rule handed to the validation gate: the authoring token (used to
 # anchor error messages and as the compile-time rule-id placeholder — the authoritative
 # runtime id is composed when the published-rule fact is emitted) plus the opaque
 # rules.Rule JSON definition to compile.
 input DetectionRuleInput {
+    """The rule's token, used to name the rule in errors and warnings."""
     # The rule's device-management token, for error anchoring.
     token: String!
+    """The rule definition, as a JSON document serialized to a string."""
     # The opaque rules.Rule JSON definition to compile.
     definition: String!
+    """
+    Whether the rule is scoped to a device group. Some rule kinds (absence and correlation)
+    cannot be group-scoped and are rejected if this is true. Defaults to false.
+    """
     # Whether the rule carries a group scope (ADR-062 S4). device-management forwards this so
     # the gate — which parses the taxonomy — can reject a scope on a kind it cannot apply to
     # (absence / correlation) with an author-facing error, rather than the runtime silently
@@ -329,39 +610,62 @@ input DetectionRuleInput {
     groupScoped: Boolean = false
 }
 
+"""The outcome of validating a batch of detection rules."""
 # The outcome of validating a batch of detection-rule definitions.
 type DetectionRuleValidationResult {
+    """
+    True only if every submitted rule decoded, compiled and passed the cost check; equivalent to
+    errors being empty.
+    """
     # True only if every submitted definition decoded, compiled, and passed the cost
     # gate. A publish proceeds only when this is true.
     valid: Boolean!
+    """One entry per rejected rule. Empty when valid."""
     # One entry per rejected definition (empty when valid), each naming the offending
     # rule and a console-surfaceable reason.
     errors: [DetectionRuleValidationError!]!
+    """
+    Advisory findings on rules that did compile. A warning never makes the batch invalid: the
+    rule is accepted and evaluates as written.
+    """
     # Advisory findings on rules that DID compile. They never make the batch invalid: a rule with a
     # warning is accepted and evaluates as written.
     warnings: [DetectionRuleValidationWarning!]!
 }
 
+"""An advisory finding on a rule that compiled."""
 # A single advisory finding on a detection rule that compiled.
 type DetectionRuleValidationWarning {
+    """Zero-based position of the rule in the submitted list."""
     # Zero-based index of the rule in the submitted list.
     index: Int!
+    """The rule's token, as submitted."""
     # The rule's token (echoed from the input).
     token: String!
+    """
+    Stable code identifying the finding (for example negatedAttributeGuard). Localize text from
+    the code and params.
+    """
     # The stable code (e.g. "negatedAttributeGuard"). The console localises its text from it.
     code: String!
+    """The values the code's text interpolates, in a fixed order per code."""
     # The values the code's text interpolates, in a fixed order per code.
     params: [String!]!
+    """English fallback text for the finding."""
     # English fallback text.
     message: String!
 }
 
+"""A rule that was rejected."""
 # A single rejected detection rule.
 type DetectionRuleValidationError {
+    """Zero-based position of the rejected rule in the submitted list."""
     # Zero-based index of the offending definition in the submitted list.
     index: Int!
+    """The rejected rule's token, as submitted."""
     # The rejected rule's token (echoed from the input), for the console to name it.
     token: String!
+    """Why the rule was rejected, in English, suitable for showing to the rule's author."""
     # Human-readable, console-surfaceable reason the rule did not compile.
     message: String!
 }

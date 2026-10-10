@@ -5,168 +5,406 @@
 # Event Management GraphQL Schema
 #
 
+"""
+Where one page of search results sits within the full result set. Positions are 1-based and
+inclusive.
+"""
 # Pagination info for search results.
 type SearchResultsPagination {
+    """Position of the first result of this page within the full result set (1-based)."""
     pageStart: Int
+    """
+    Position of the last result of this page within the full result set (1-based, inclusive).
+    Capped at totalRecords.
+    """
     pageEnd: Int
+    """Number of records matching the criteria across all pages."""
     totalRecords: Int
 }
 
+"""
+One relationship anchor of an event: an entity the event is queryable by, such as the customer
+or area the device was assigned to when the event arrived.
+"""
 # One anchor of an event: a tracked-relationship target the event is queryable by.
 # Both the type (an entity class, e.g. "customer") and the token (that entity's
 # stable per-tenant token) name the target across the service seam — never a
 # device-management row id (ADR-044).
 type EventAnchorRef {
+    """The entity class of the anchor: one of device, asset, area, customer or group."""
     type: String!
+    """The anchored entity's token, unique within the tenant."""
     token: String!
 }
 
+"""
+A stored event envelope: one message from one device, identified by the device's token. The
+readings it carries are stored separately and are read with locationEvents, measurementEvents
+and alertEvents.
+"""
 # A persisted base event with token references resolved. The originating device is
 # named by its token (ADR-044). Its tracked-relationship targets are recorded as a
 # set of anchors in event_anchors (ADR-013 addendum 2026-07-01), exposed as `anchors`
 # and queryable via the (type, token) search filter below; an event with no
 # assignment simply has no anchor rows.
 type Event {
+    """
+    Opaque identifier of the event, derived from its content: the same event delivered twice has
+    the same id. Serialized as a hexadecimal string.
+    """
     id: ID!
+    """Token of the device that sent the event."""
     deviceToken: String!
+    """
+    Kind of event, as an integer: 0 new relationship, 1 location, 2 measurement, 3 alert, 4
+    state change, 5 command invocation, 6 command response.
+    """
     eventType: Int!
+    """
+    When the event happened, as an RFC 3339 timestamp: the device's own time where it reported
+    one, otherwise the time the platform received it.
+    """
     occurredTime: String
+    """
+    When the platform received the event, as an RFC 3339 timestamp. For events arriving on the
+    platform's MQTT broker this is the time the broker stored the message; otherwise the time
+    the ingest path took the event in.
+    """
     # When the platform RECEIVED the event: for MQTT on the platform broker, the time the
     # broker stored the message; otherwise when the ingest path took it in.
     processedTime: String
+    """Identifier of the event source (inbound transport) that received the event."""
     source: String!
+    """
+    Alternate identifier supplied by the sender, which is part of the event's identity: it lets
+    a device keep apart two otherwise identical events. Null if none was supplied.
+    """
     altId: String
+    """
+    The relationship anchors recorded for this event. Empty for an event from a device that had
+    no assignment when it arrived.
+    """
     anchors: [EventAnchorRef!]!
 }
 
+"""
+A stored location fix. Coordinates are WGS84 decimal degrees; every coordinate is optional
+because a device reports only what its receiver knows, and null means not reported (not 0).
+"""
 # A persisted location event.
 type LocationEvent {
+    """
+    Opaque identifier of this location row, derived from its content. Serialized as a
+    hexadecimal string.
+    """
     id: ID!
+    """Token of the device that reported the fix."""
     deviceToken: String!
+    """Kind of event, as an integer; always 1 for a location event."""
     eventType: Int!
+    """
+    When the fix was taken, as an RFC 3339 timestamp: the sample's own time where the device
+    reported one, otherwise the time of the message that carried it.
+    """
     occurredTime: String
+    """Latitude in decimal degrees; null when not reported."""
     latitude: Float
+    """Longitude in decimal degrees; null when not reported."""
     longitude: Float
+    """Elevation in metres; null when not reported."""
     elevation: Float
+    """Horizontal accuracy of the fix in metres; null when not reported."""
     # Horizontal accuracy in metres, ground speed in metres per second, and
     # heading in degrees clockwise from true north in [0, 360). All optional:
     # a device reports what its receiver knows.
     accuracy: Float
+    """Ground speed in metres per second; null when not reported."""
     speed: Float
+    """
+    Heading in degrees clockwise from true north, in the range 0 to 360 (360 excluded); null
+    when not reported.
+    """
     heading: Float
 }
 
+"""
+A stored measurement: one named reading from a device (a message carrying several readings
+produces one row each). Unit and data type are copied from the bound metric definition when the
+reading is stored, so the row describes itself and does not change if the definition is later
+edited.
+"""
 # A persisted measurement event (one row per measurement entry). unit and dataType
 # are denormalized from the bound metric definition (ADR-016) so the reading is
 # self-describing; both are null for an undeclared measurement. dataType lets a
 # consumer interpret value — e.g. render a 0/1 BOOLEAN measurement as false/true.
 type MeasurementEvent {
+    """
+    Opaque identifier of this measurement row, derived from its content. Serialized as a
+    hexadecimal string.
+    """
     id: ID!
+    """Token of the device that reported the reading."""
     deviceToken: String!
+    """Kind of event, as an integer; always 2 for a measurement."""
     eventType: Int!
+    """
+    When the reading was taken, as an RFC 3339 timestamp: the sample's own time where the device
+    reported one, otherwise the time of the message that carried it.
+    """
     occurredTime: String
+    """Name of the measurement, for example a metric key such as temperature."""
     name: String!
+    """The numeric value of the reading; null when the reading was not numeric."""
     value: Float
+    """
+    Id of the metric definition the reading was bound to, as a decimal string; null for an
+    undeclared measurement.
+    """
     classifier: String
+    """
+    Unit of measure copied from the bound metric definition; null for an undeclared measurement.
+    """
     unit: String
+    """
+    Data type copied from the bound metric definition; it tells a consumer how to read value,
+    for example to render a 0/1 BOOLEAN as false/true. Null for an undeclared measurement.
+    """
     dataType: String
 }
 
+"""
+A stored alert reported by a device (a message carrying several alerts produces one row each).
+This is an alert the device sent, not an alarm raised by a detection rule.
+"""
 # A persisted alert event (one row per alert entry).
 type AlertEvent {
+    """
+    Opaque identifier of this alert row, derived from its content. Serialized as a hexadecimal
+    string.
+    """
     id: ID!
+    """Token of the device that reported the alert."""
     deviceToken: String!
+    """Kind of event, as an integer; always 3 for an alert."""
     eventType: Int!
+    """
+    When the alert happened, as an RFC 3339 timestamp: the alert's own time where the device
+    reported one, otherwise the time of the message that carried it.
+    """
     occurredTime: String
+    """The alert's type, as named by the device."""
     type: String!
+    """The alert's level, a non-negative integer as reported by the device."""
     level: Int!
+    """The alert's text, as sent by the device; an empty string when it sent none."""
     message: String
+    """The alert's source, as sent by the device; an empty string when it sent none."""
     source: String
 }
 
+"""A relationship anchor to filter events by: events recorded against this entity."""
 # Relationship anchor used to filter events. The type names an entity class
 # (e.g. "customer", "area") and the token is that entity's stable per-tenant token;
 # together they filter the (anchorType, anchorToken) columns on event_anchors
 # (ADR-044).
 input EventAnchor {
+    """Entity class: one of device, asset, area, customer or group. Any other value is an error."""
     type: String!
+    """Token of the entity, unique within the tenant."""
     token: String!
 }
 
+"""
+Filters and paging for event searches. All supplied filters must match. Results are newest first
+by occurred time.
+"""
 # Criteria used when searching for events. Times are RFC3339 strings.
 input EventSearchCriteria {
+    """Page to return, starting at 1; values below 1 are treated as 1."""
     pageNumber: Int!
+    """Results per page. Values below 1 become 100; values above 1000 are capped at 1000."""
     pageSize: Int!
+    """Only events from this device."""
     deviceToken: String
+    """
+    Only events of these types, as integers (0 new relationship, 1 location, 2 measurement, 3
+    alert, 4 state change, 5 command invocation, 6 command response). An empty list applies no
+    type filter.
+    """
     eventTypes: [Int!]
+    """
+    Only events that occurred at or after this instant (inclusive), as an RFC 3339 timestamp.
+    Omit for no lower bound. A value that is not RFC 3339 is an error.
+    """
     startTime: String
+    """
+    Only events that occurred at or before this instant (inclusive), as an RFC 3339 timestamp.
+    Omit for no upper bound. A value that is not RFC 3339 is an error.
+    """
     endTime: String
+    """Only events recorded against this entity."""
     anchor: EventAnchor
 }
 
+"""One page of event envelopes."""
 # Search results returned from a base event query.
 type EventSearchResults {
+    """The events on this page, newest first."""
     results: [Event!]!
+    """Where this page sits within all matching events."""
     pagination: SearchResultsPagination!
 }
 
+"""One page of location events."""
 # Search results returned from a location event query.
 type LocationEventSearchResults {
+    """The location events on this page, newest first."""
     results: [LocationEvent!]!
+    """Where this page sits within all matching location events."""
     pagination: SearchResultsPagination!
 }
 
+"""One page of measurement events."""
 # Search results returned from a measurement event query.
 type MeasurementEventSearchResults {
+    """The measurement events on this page, newest first."""
     results: [MeasurementEvent!]!
+    """Where this page sits within all matching measurement events."""
     pagination: SearchResultsPagination!
 }
 
+"""One page of alert events."""
 # Search results returned from an alert event query.
 type AlertEventSearchResults {
+    """The alert events on this page, newest first."""
     results: [AlertEvent!]!
+    """Where this page sits within all matching alert events."""
     pagination: SearchResultsPagination!
 }
 
+"""
+Filters for a server-side, time-bucketed measurement aggregation. The device, event type, time
+range and anchor filters work as in EventSearchCriteria, with an added filter on measurement
+name. The result contains every matching bucket, so bound it with a time range.
+"""
 # Criteria for a server-side, time-bucketed measurement aggregation. Reuses the
 # event search filters (device, event types, time range, anchor) plus an optional
 # measurement-name filter. intervalSeconds is the time_bucket width and must be
 # >= 1. Always bound this with a time range — it returns every matching bucket.
 input MeasurementAggregationCriteria {
+    """Only measurements from this device."""
     deviceToken: String
+    """Only measurements with this name. Omit to aggregate every measurement name separately."""
     name: String
+    """
+    Only readings whose event type is in this list, as integers. An empty list applies no type
+    filter.
+    """
     eventTypes: [Int!]
+    """
+    Only readings that occurred at or after this instant, as an RFC 3339 timestamp. Omit for no
+    lower bound. When the aggregation is served from one-minute summaries (see intervalSeconds)
+    the bound is applied at whole-minute granularity, so readings earlier in the same minute are
+    included.
+    """
     startTime: String
+    """
+    Only readings that occurred at or before this instant, as an RFC 3339 timestamp. Omit for no
+    upper bound. When the aggregation is served from one-minute summaries (see intervalSeconds)
+    the bound is applied at whole-minute granularity, so readings later in the same minute are
+    included.
+    """
     endTime: String
+    """
+    Only measurements recorded against this entity. Anchored aggregations are computed from the
+    individual readings.
+    """
     anchor: EventAnchor
+    """
+    Width of each time bucket in seconds; must be 1 or more (smaller is an error). A width that
+    is a multiple of 60 without an anchor filter is served from pre-computed one-minute
+    summaries; any other width is computed from the individual readings. Bucket boundaries are
+    fixed instants shared by every query of the same width, not aligned to startTime.
+    """
     intervalSeconds: Int!
 }
 
+"""
+Aggregated values of one measurement name over one time bucket. Every standard aggregate is
+returned so a single query can drive a chart under any aggregation.
+"""
 # One time bucket of aggregated measurement values for a single measurement name.
 # bucketStart is the RFC3339 bucket start. Every standard aggregate is returned
 # so one query can drive a chart under any aggregation; avg/min/max/sum are null
 # for an all-null bucket and count is the number of non-null values.
 type MeasurementBucket {
+    """Start of the bucket, as an RFC 3339 timestamp."""
     bucketStart: String!
+    """Name of the measurement the bucket aggregates."""
     name: String!
+    """Average of the bucket's values; null when the bucket holds no non-null values."""
     avg: Float
+    """Smallest value in the bucket; null when the bucket holds no non-null values."""
     min: Float
+    """Largest value in the bucket; null when the bucket holds no non-null values."""
     max: Float
+    """Sum of the bucket's values; null when the bucket holds no non-null values."""
     sum: Float
+    """Number of non-null values in the bucket."""
     count: Int!
 }
 
 # Contains queries executed against model.
 type Query {
-    events(criteria: EventSearchCriteria!): EventSearchResults!
-    locationEvents(criteria: EventSearchCriteria!): LocationEventSearchResults!
-    measurementEvents(criteria: EventSearchCriteria!): MeasurementEventSearchResults!
-    alertEvents(criteria: EventSearchCriteria!): AlertEventSearchResults!
-    bucketedMeasurements(criteria: MeasurementAggregationCriteria!): [MeasurementBucket!]!
+    """
+    Searches stored event envelopes, newest first by occurred time, one page at a time. Requires
+    event:read.
+    """
+    events(
+        """Filters and page to return."""
+        criteria: EventSearchCriteria!
+    ): EventSearchResults!
+    """
+    Searches stored location fixes, newest first by occurred time, one page at a time. Requires
+    location:read, which is separate from event:read.
+    """
+    locationEvents(
+        """Filters and page to return."""
+        criteria: EventSearchCriteria!
+    ): LocationEventSearchResults!
+    """
+    Searches stored measurements, newest first by occurred time, one page at a time. Requires
+    event:read.
+    """
+    measurementEvents(
+        """Filters and page to return."""
+        criteria: EventSearchCriteria!
+    ): MeasurementEventSearchResults!
+    """
+    Searches stored device alerts, newest first by occurred time, one page at a time. Requires
+    event:read.
+    """
+    alertEvents(
+        """Filters and page to return."""
+        criteria: EventSearchCriteria!
+    ): AlertEventSearchResults!
+    """
+    Aggregates measurements into fixed-width time buckets (average, minimum, maximum, sum and
+    count) per measurement name, ordered by bucket start and then name. Returns an empty list
+    when nothing matches. Requires event:read.
+    """
+    bucketedMeasurements(
+        """Filters and bucket width."""
+        criteria: MeasurementAggregationCriteria!
+    ): [MeasurementBucket!]!
 }
 
 # Events are written by the persistence pipeline, not via the API.
 type Mutation {
+    """
+    Placeholder that does nothing and always returns null. This service has no mutations: events
+    are written by the ingest pipeline, not through the API.
+    """
     _empty: Boolean
 }
 
@@ -175,11 +413,21 @@ type Mutation {
 # persisted — scoped to the subscriber's tenant. A subscription streams from
 # subscribe time onward with no historical backfill; use the queries for history.
 type Subscription {
+    """
+    Streams measurements as they arrive, live from the moment of subscription: there is no
+    historical backfill, so use measurementEvents for history. Scoped to the caller's tenant and
+    optionally filtered to one device and/or one measurement name. Requires event:read.
+    """
     # Streams measurement events as they resolve, optionally filtered to one
     # device (by token) and/or one measurement name. Drives live charts, gauges,
     # and cards. Named measurementStream (not measurementEvents, the historical
     # query) since both fields resolve off the one root resolver.
-    measurementStream(deviceToken: String, name: String): MeasurementEvent!
+    measurementStream(
+        """Only measurements from this device. Omit for all devices."""
+        deviceToken: String
+        """Only measurements with this name. Omit for all names."""
+        name: String
+    ): MeasurementEvent!
 }
 
 schema {
