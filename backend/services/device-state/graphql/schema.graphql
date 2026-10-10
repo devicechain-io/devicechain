@@ -8,11 +8,7 @@
 """Fields common to every stored row."""
 # Base elements in gorm RDB model.
 interface Model {
-    """
-    Server-assigned numeric identifier of the row, serialized as a string. Rows are addressed by
-    device token; this id is also the cursor for assertedDeviceStates and
-    demoteAssertedPresence.
-    """
+    """Server-assigned numeric identifier of the row, serialized as a string. Rows are addressed by device token."""
     id: ID!
     """When the row was first created, as an RFC 3339 timestamp."""
     createdAt: String
@@ -31,14 +27,14 @@ inclusive.
 """
 # Pagination info for search results.
 type SearchResultsPagination {
- """Position of the first result of this page within the full result set (1-based)."""
+	"""Position of the first result of this page within the full result set (1-based)."""
 	pageStart: Int
- """
- Position of the last result of this page within the full result set (1-based, inclusive).
- Capped at totalRecords.
- """
+	"""
+	Position of the last result of this page within the full result set (1-based, inclusive).
+	Capped at totalRecords.
+	"""
 	pageEnd: Int
- """Number of records matching the criteria across all pages."""
+	"""Number of records matching the criteria across all pages."""
 	totalRecords: Int
 }
 
@@ -170,11 +166,7 @@ that sits beside the append-only measurement history. One row per device and mea
 # is the RFC3339 time of the reading; value is null only for a non-numeric reading
 # (not stored in v1).
 type LatestMeasurement implements Model {
-    """
-    Server-assigned numeric identifier of the row, serialized as a string. Rows are addressed by
-    device token; this id is also the cursor for assertedDeviceStates and
-    demoteAssertedPresence.
-    """
+    """Server-assigned numeric identifier of the row, serialized as a string. Rows are addressed by device token."""
     id: ID!
     """When the row was first created, as an RFC 3339 timestamp."""
     createdAt: String
@@ -236,11 +228,7 @@ from true north. Reading it requires location:read, which is separate from state
 # state:read that covers the rest of this API and is not part of the read-only
 # baseline: where a device is differs in kind from what it is measuring.
 type LatestLocation implements Model {
-    """
-    Server-assigned numeric identifier of the row, serialized as a string. Rows are addressed by
-    device token; this id is also the cursor for assertedDeviceStates and
-    demoteAssertedPresence.
-    """
+    """Server-assigned numeric identifier of the row, serialized as a string. Rows are addressed by device token."""
     id: ID!
     """When the row was first created, as an RFC 3339 timestamp."""
     createdAt: String
