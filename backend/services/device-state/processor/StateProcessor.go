@@ -422,7 +422,10 @@ func (sp *StateProcessor) admit(ctx context.Context, msg messaging.Message) (pen
 //
 // ctx is the WORKER's context and carries no tenant (see model.MergeProjectionBatch).
 func (sp *StateProcessor) mergeBatch(ctx context.Context, batch []pendingMerge) {
-	for len(batch) > 1 {
+	// A batch of ONE goes through the same single transaction as any other: the per-message
+	// path costs two (device state, then latest values), and under paced load a lone event is
+	// a few percent of all of them. It reaches the per-message path only by failing here.
+	for len(batch) > 0 {
 		updates := make([]model.ProjectionUpdate, len(batch))
 		for i := range batch {
 			updates[i] = batch[i].update
@@ -468,9 +471,6 @@ func (sp *StateProcessor) mergeBatch(ctx context.Context, batch []pendingMerge) 
 		}
 		batch = rest
 	}
-	if len(batch) == 1 {
-		sp.mergeAdmitted(batch[0])
-	}
 }
 
 // mergeOne merges a single message on its own: admission, then the per-message path.
@@ -482,7 +482,8 @@ func (sp *StateProcessor) mergeOne(ctx context.Context, msg messaging.Message) {
 
 // mergeAdmitted is the per-message path: the originating device's live state, then its
 // latest values or position, each in a transaction of its own, and the A3 disposition of the
-// outcome. A batch of one takes it, and so does every message a batch gives up on.
+// outcome. A message takes it when the batch it was in (a batch of one included) gave up on it,
+// or when it is merged alone (mergeOne).
 //
 // Its latest-value write is the guarded upsert, issued whether or not any reading is newer
 // than what is stored: the guard, not a read in Go, leaves an older reading alone. So a

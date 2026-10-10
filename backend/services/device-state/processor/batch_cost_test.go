@@ -207,7 +207,8 @@ func TestEventsForOneDeviceInABatchFoldInArrivalOrder(t *testing.T) {
 
 // A processor assembled by literal — no constructor, so no metrics and a zero projection
 // configuration — still merges: zero instruments are no-ops and a zero maxBatch is a batch of
-// one. Several tests in this package build processors that way.
+// one — which is one transaction (one fence read) for each. Several tests in this package build
+// processors that way.
 func TestALiteralProcessorMergesOneAtATime(t *testing.T) {
 	built, _, counter := newFencedStateProcessor(t)
 	sp := &StateProcessor{Api: built.Api}
@@ -219,9 +220,9 @@ func TestALiteralProcessorMergesOneAtATime(t *testing.T) {
 			t.Errorf("message %d acknowledged %d times; want 1", i, n)
 		}
 	}
-	// Two events on the per-message path: two transactions each.
-	if _, fence := counter.Counts(); fence != 4 {
-		t.Errorf("two events made %d fence reads; want 4 (two transactions each, one at a time)", fence)
+	// Two batches of one: one transaction, so one fence read, each.
+	if _, fence := counter.Counts(); fence != 2 {
+		t.Errorf("two events made %d fence reads; want 2 (one transaction each, one at a time)", fence)
 	}
 	assertProjectedAt(t, built, "bl-01", t0)
 	assertProjectedAt(t, built, "bl-02", t0)
