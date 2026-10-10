@@ -5,6 +5,8 @@ package model
 
 import (
 	"context"
+
+	"github.com/devicechain-io/dc-microservice/rdb"
 )
 
 // BatchEnqueueRefusal names one device a batch enqueue gate refused, and why. It is the
@@ -34,8 +36,9 @@ type BatchEnqueueRefusal struct {
 // default), and a single ten-thousand-element IN list is a large query to plan and a
 // large statement to log. Chunking costs a handful of extra round trips on the largest
 // batches and nothing at all on ordinary ones, which is the right trade for a gate on
-// the enqueue path.
-const deviceLookupChunk = 1000
+// the enqueue path. It is the per-lookup key bound itself: DevicesByToken refuses a
+// longer list, so a chunk any larger would turn every big batch into a refusal.
+const deviceLookupChunk = rdb.MaxLookupKeys
 
 // ValidateCommandEnqueueBatch decides, for MANY devices at once, whether one command
 // with one payload may be enqueued to each — the fan-out counterpart of

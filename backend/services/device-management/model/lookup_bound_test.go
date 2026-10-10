@@ -96,3 +96,27 @@ func TestDevicesByTokenRowsAndOrder(t *testing.T) {
 	}
 	require.Equal(t, []string{"fleet-0001", "fleet-0003"}, got)
 }
+
+// DevicesByExternalId matches on the external_id column, not the token: a device whose
+// external id differs from its token is found by the former and not by the latter, in
+// storage order, with the DeviceType preload still applied.
+func TestDevicesByExternalIdRowsAndOrder(t *testing.T) {
+	api := newBulkDeviceTestApi(t)
+	ctx := core.WithTenant(context.Background(), "acme")
+	seedType(t, api, ctx, "tracker", "tracker-profile")
+	_, err := api.CreateDevicesFromTemplate(ctx, &DeviceBulkCreateRequest{
+		DeviceTypeToken: "tracker", Count: 3, TokenTemplate: "fleet-{n:04d}",
+		ExternalIdTemplate: strp("vin-{n:04d}"),
+	})
+	require.NoError(t, err)
+
+	found, err := api.DevicesByExternalId(ctx, []string{"vin-0003", "zz", "fleet-0002", "vin-0001"})
+	require.NoError(t, err)
+	got := make([]string, 0, len(found))
+	for _, d := range found {
+		got = append(got, d.Token+"="+d.ExternalId.String)
+		require.Equal(t, "tracker", d.DeviceType.Token, "the DeviceType preload must still apply")
+	}
+	require.Equal(t, []string{"fleet-0001=vin-0001", "fleet-0003=vin-0003"}, got,
+		"a token must not match the external_id lookup")
+}
