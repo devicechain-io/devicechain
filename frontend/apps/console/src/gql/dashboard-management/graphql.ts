@@ -4,22 +4,42 @@ type Exact<T extends { [key: string]: unknown }> = { [K in keyof T]: T[K] };
 /** Internal type. DO NOT USE DIRECTLY. */
 export type Incremental<T> = T | { [P in keyof T]?: P extends ' $fragmentName' | '__typename' ? T[P] : never };
 import { DocumentTypeDecoration } from '@graphql-typed-document-node/core';
+/** Fields for a new dashboard. */
 export type DashboardCreateRequest = {
+  /** The initial draft definition, as a JSON document of at most 1 MiB. */
   definition: string;
+  /** Free-text description of what the dashboard is for. */
   description?: string | null | undefined;
+  /** Human-readable name shown in dashboard lists. */
   name?: string | null | undefined;
+  /** Unique identifier for the new dashboard within the tenant. */
   token: string;
 };
 
+/** Criteria for searching dashboards. */
 export type DashboardSearchCriteria = {
+  /** Return only dashboards whose name contains this text. */
   name?: string | null | undefined;
+  /** Page to return, starting at 1. */
   pageNumber: number;
+  /** Results per page. Below 1 means the default of 100; above 1000 is capped at 1000. */
   pageSize: number;
 };
 
+/**
+ * A partial update to a dashboard's draft. Omit a field to leave the stored value alone,
+ * send a value to set it, or send an explicit null to clear it. The dashboard is named by
+ * the mutation's token argument, so there is no token here.
+ */
 export type DashboardUpdateRequest = {
+  /**
+   * New draft definition (JSON, at most 1 MiB). Omit it to keep the stored definition;
+   * an explicit null is refused, because a dashboard must have a definition.
+   */
   definition?: string | null | undefined;
+  /** New description, or null to clear it. */
   description?: string | null | undefined;
+  /** New name, or null to clear it. */
   name?: string | null | undefined;
 };
 
