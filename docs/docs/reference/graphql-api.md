@@ -712,6 +712,18 @@ dashboard app, the SDKs, `dcctl` and the MCP server send one mutation field per 
 two query fields. The limit applies to top-level fields only; aliases of a nested field are not
 counted.
 
+### Size bounds on lists, inputs and aggregations {#size-bounds}
+
+Separately from the request-shape limits above, some reads and inputs have a size bound. A request
+over one is refused with `extensions.code` set to `LIMIT_EXCEEDED`. Nothing is truncated and nothing
+is partly applied, so narrow the request and send it again.
+
+| Bound | Limit | Applies to |
+| --- | --- | --- |
+| Buckets per aggregation | 10,000 | `bucketedMeasurements`: the range divided by `intervalSeconds`, rounded up. |
+
+`bucketedMeasurements` also requires `startTime`; `endTime` defaults to the current time.
+
 ### GraphQL syntax only {#graphql-syntax-only}
 
 **Documents must use GraphQL's own syntax.** A document containing any of the following is refused

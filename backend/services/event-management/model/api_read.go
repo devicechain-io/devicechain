@@ -7,6 +7,8 @@ import (
 	"context"
 	"time"
 
+	"github.com/devicechain-io/dc-microservice/integrity"
+	"github.com/devicechain-io/dc-microservice/limit"
 	"gorm.io/gorm"
 )
 
@@ -200,6 +202,46 @@ func useMeasurementRollup(criteria MeasurementAggregationCriteria) bool {
 		criteria.IntervalSeconds%rollupBucketSeconds == 0
 }
 
+// MaxMeasurementBuckets is the most time buckets one aggregation read may produce:
+// ceil((endTime - startTime) / intervalSeconds). A read that would produce more is
+// refused (LIMIT_EXCEEDED) rather than truncated, so the caller narrows the range or
+// widens the interval. 10,000 points is far beyond what a chart can draw.
+const MaxMeasurementBuckets = 10_000
+
+// errStartTimeRequired refuses an aggregation with no start of range: without one the
+// read covers a tenant's whole measurement history.
+var errStartTimeRequired = integrity.NewRefusal(integrity.ClassInvalid,
+	"startTime is required: an aggregation must name the range it covers")
+
+// boundBucketedRange applies the range rules to an aggregation read: startTime is
+// required, endTime defaults to now, the range must not run backwards, and the number
+// of buckets it produces is capped at MaxMeasurementBuckets. It returns the criteria
+// with endTime filled in.
+func boundBucketedRange(criteria MeasurementAggregationCriteria, now time.Time) (MeasurementAggregationCriteria, error) {
+	if criteria.IntervalSeconds < 1 {
+		return criteria, integrity.NewRefusal(integrity.ClassInvalid, "intervalSeconds must be >= 1")
+	}
+	if criteria.StartTime == nil {
+		return criteria, errStartTimeRequired
+	}
+	if criteria.EndTime == nil {
+		end := now
+		criteria.EndTime = &end
+	}
+	if criteria.EndTime.Before(*criteria.StartTime) {
+		return criteria, integrity.NewRefusal(integrity.ClassInvalid, "endTime must not be before startTime")
+	}
+	rangeSeconds := int64(criteria.EndTime.Sub(*criteria.StartTime) / time.Second)
+	buckets := rangeSeconds / criteria.IntervalSeconds
+	if rangeSeconds%criteria.IntervalSeconds != 0 {
+		buckets++
+	}
+	if buckets > MaxMeasurementBuckets {
+		return criteria, limit.Exceeded("buckets", int(buckets), MaxMeasurementBuckets)
+	}
+	return criteria, nil
+}
+
 // BucketedMeasurements returns measurement values aggregated into fixed-width
 // time_bucket intervals (TimescaleDB), grouped by measurement name. Every
 // standard aggregate (avg/min/max/sum/count) is computed per bucket so a single
@@ -214,6 +256,10 @@ func useMeasurementRollup(criteria MeasurementAggregationCriteria) bool {
 // immaterial for charts. The rollup is a read optimization, not a separate source of
 // truth — an operator who needs the exact raw path can force it with the kill-switch.
 func (api *Api) BucketedMeasurements(ctx context.Context, criteria MeasurementAggregationCriteria) ([]MeasurementBucket, error) {
+	criteria, err := boundBucketedRange(criteria, time.Now())
+	if err != nil {
+		return nil, err
+	}
 	if !api.RollupReadsDisabled && useMeasurementRollup(criteria) {
 		return api.bucketedMeasurementsFromRollup(ctx, criteria)
 	}
