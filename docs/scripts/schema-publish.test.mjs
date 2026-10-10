@@ -518,7 +518,9 @@ test('the device contract is published by name, verbatim, under device/', () => 
   const index = JSON.parse(artifacts.find((a) => a.name === 'index.json').text);
   assert.equal(index.deviceProtocol.schemas.length, DEVICE_SCHEMAS.length);
   for (const d of index.deviceProtocol.schemas) {
-    assert.match(d.schema, new RegExp(`^${SITE.replace(/[.]/g, '\.')}/schema/device/[a-z-]+\.schema\.json$`));
+    // Prefix compared as a string, not interpolated into a RegExp, so no escaping is needed.
+    assert.ok(d.schema.startsWith(`${SITE}/schema/device/`), `${d.schema}: not under ${SITE}`);
+    assert.match(d.schema.slice(SITE.length), /^\/schema\/device\/[a-z-]+\.schema\.json$/);
     assert.ok(d.title && d.role, `${d.schema}: no title or role`);
   }
 });
