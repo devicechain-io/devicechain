@@ -1,0 +1,42 @@
+{{/*
+Alerting rule for safety gates that have switched themselves off.
+
+WHY THIS GROUP EXISTS. A few services carry a safety gate that depends on another service and
+comes up OFF, with a single WARN at startup, when its configuration is absent: refusing work for a
+tenant that has been deleted, withholding commands for devices a transport reports as absent, and
+compiling a profile's detection rules against event-processing at publish. Off is a deliberate
+availability trade -- the device plane must not hard-depend on those services -- and it is
+invisible in every other way: work keeps flowing, nothing errors, and what the gate exists to
+prevent resumes. A chart install always supplies the configuration, so an OFF gate means a
+misconfigured or hand-edited install, and only a metric can say so.
+
+Each service exports <area>_safety_gate_enabled{gate}: 1 when the gate is wired, 0 when it is off.
+The series is present in both states, which is what lets this alert read 0 rather than infer it
+from an absence.
+*/}}
+{{- if and .Values.metrics.enabled .Values.metrics.alerts }}
+{{- $ns := include "devicechain.instanceNamespace" . }}
+{{- $id := .Values.instance.id }}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: safety-gates
+  namespace: {{ $ns }}
+  labels:
+    {{- include "devicechain.instanceLabels" . | nindent 4 }}
+spec:
+  groups:
+    - name: devicechain.safety-gates
+      rules:
+        # `min`, not `max`: one replica started without its configuration is already a gate that is
+        # off for the share of traffic it serves.
+        - alert: SafetyGateDisabled
+          expr: min by (job, gate) ({__name__=~"devicechain_[a-z0-9]+_safety_gate_enabled", namespace="{{ $ns }}"}) == 0
+          for: 5m
+          labels:
+            severity: warning
+            devicechain_instance: {{ $id }}
+          annotations:
+            summary: "A safety gate is switched off in a running service"
+            description: "For at least 5 minutes, {{ "{{ $labels.job }}" }} has run with its {{ "{{ $labels.gate }}" }} safety gate OFF because the configuration it needs is absent (the service secret, or the endpoint of the service the gate consults). Work the gate exists to refuse is being let through: tenant_lifecycle admits work for deleted tenants, presence lets commands to absent devices be published and dropped, rule_validation lets uncompilable detection rules publish and be skipped at load. The service logged a WARN at startup naming what is missing. Restore the missing configuration and restart the service."
+{{- end }}

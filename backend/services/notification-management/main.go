@@ -248,7 +248,7 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 			buildMetrics()
 			Notifier = processor.NewPolicyNotifier(Api, secretStore, Configuration.DeliveryAttempts,
 				Configuration.DeliveryTimeout(),
-				governance.NewTenantLifecycleGate(infra.UserManagement, infra.ServiceAuth.Secret, "notification-management"),
+				governance.NewTenantLifecycleGate(infra.UserManagement, infra.ServiceAuth.Secret, "notification-management", governance.NewSafetyGates(Microservice)),
 				egressGuard, NotifyMetrics)
 
 			// Retention sweep: prune cleared per-alarm state older than the retention window so

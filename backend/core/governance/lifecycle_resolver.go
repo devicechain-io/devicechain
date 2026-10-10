@@ -107,12 +107,17 @@ func NewTenantLifecycleResolver(client *svcclient.Client, umURL string) *TenantL
 //     the same availability trade the resolver's fail-open rejects, only louder.
 //
 // subject names the calling service in the minted token, as svcclient.New expects.
-func NewTenantLifecycleGate(umCfg config.UserManagementConfiguration, serviceSecret, subject string) func(string) bool {
+//
+// gates records whether the gate came up (GateTenantLifecycle), so a service that started with it
+// OFF is visible as safety_gate_enabled == 0 rather than only as a startup WARN. It may be nil.
+func NewTenantLifecycleGate(umCfg config.UserManagementConfiguration, serviceSecret, subject string, gates *SafetyGates) func(string) bool {
 	if serviceSecret == "" || umCfg.Hostname == "" || umCfg.Port == 0 {
 		log.Warn().Str("service", subject).
 			Msg("user-management endpoint or service secret not configured — this service will NOT refuse work for tenants that have been deleted.")
+		gates.Set(GateTenantLifecycle, false)
 		return nil
 	}
+	gates.Set(GateTenantLifecycle, true)
 	client := svcclient.New(umCfg, serviceSecret, subject, []string{string(auth.TenantRead)})
 	umURL := fmt.Sprintf("http://%s:%d/graphql", umCfg.Hostname, umCfg.Port)
 	log.Info().Str("service", subject).Str("userManagement", umURL).

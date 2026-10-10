@@ -386,18 +386,22 @@ func newRaiseAlarmConsumer(reader messaging.MessageReader, dead *deadletter.Sink
 // misconfigured deploy (empty secret, or a config predating this feature) is visible
 // rather than silently skipping validation — mirroring command-delivery's device check.
 func wireDetectionRuleValidator() {
+	gates := governance.NewSafetyGates(Microservice)
 	infra := Microservice.InstanceConfiguration.Infrastructure
 	if infra.ServiceAuth.Secret == "" {
 		log.Warn().Msg("Service secret not configured — device profile publish will NOT validate detection rules against event-processing (ADR-051 slice 4b disabled).")
+		gates.Set(governance.GateRuleValidation, false)
 		return
 	}
 	if infra.EventProcessing.Hostname == "" || infra.EventProcessing.Port == 0 {
 		log.Warn().Msg("event-processing endpoint not configured (infrastructure.eventProcessing) — device profile publish will NOT validate detection rules (ADR-051 slice 4b disabled).")
+		gates.Set(governance.GateRuleValidation, false)
 		return
 	}
 	client := svcclient.New(infra.UserManagement, infra.ServiceAuth.Secret, "device-management", []string{string(auth.DeviceRead)})
 	url := fmt.Sprintf("http://%s:%d/graphql", infra.EventProcessing.Hostname, infra.EventProcessing.Port)
 	Api.DetectionRuleValidator = ruleverify.NewValidator(client, url)
+	gates.Set(governance.GateRuleValidation, true)
 	log.Info().Str("eventProcessing", url).Msg("Device profile publish will validate detection rules against event-processing (ADR-051 slice 4b).")
 }
 
@@ -591,7 +595,7 @@ func afterMicroserviceStarted(ctx context.Context) error {
 		// reclaimed. Nil when user-management is unconfigured — the gate is off, matching
 		// the resolver's own fail-open, since the erasure guarantee is the per-area fence.
 		infra := Microservice.InstanceConfiguration.Infrastructure
-		gate := governance.NewTenantLifecycleGate(infra.UserManagement, infra.ServiceAuth.Secret, "device-management")
+		gate := governance.NewTenantLifecycleGate(infra.UserManagement, infra.ServiceAuth.Secret, "device-management", governance.NewSafetyGates(Microservice))
 		// Every MQTT password connect is compared through this Checker, behind a
 		// per-username backoff whose counts every replica shares through the device
 		// credential-attempt bucket. It fails closed when that bucket cannot be reached,

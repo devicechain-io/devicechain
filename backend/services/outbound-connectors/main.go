@@ -156,7 +156,7 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	// resolver cache — the same MECHANISM the egress limiter uses, not the same instance, so the two
 	// do not share a cache and neither one's misses warm the other.
 	infra := Microservice.InstanceConfiguration.Infrastructure
-	tenantDeleted := governance.NewTenantLifecycleGate(infra.UserManagement, infra.ServiceAuth.Secret, "outbound-connectors")
+	tenantDeleted := governance.NewTenantLifecycleGate(infra.UserManagement, infra.ServiceAuth.Secret, "outbound-connectors", governance.NewSafetyGates(Microservice))
 
 	executor, err := newExecutor(infra, processor.NewSecretResolver(SecretStore), Api,
 		time.Duration(Configuration.SendTimeoutMs)*time.Millisecond)

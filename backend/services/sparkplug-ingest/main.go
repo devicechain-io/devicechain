@@ -319,7 +319,7 @@ func buildIngester(writer messaging.MessageWriter) (*host.Ingester, *host.Reconc
 	// CONNECT, and a Sparkplug host application publishes on behalf of devices over its
 	// own long-lived connection, which a purge does not interrupt. A SEPARATE service
 	// token from the client above, scoped to tenant:read alone.
-	tenantGate := governance.NewTenantLifecycleGate(infra.UserManagement, infra.ServiceAuth.Secret, "sparkplug-ingest")
+	tenantGate := governance.NewTenantLifecycleGate(infra.UserManagement, infra.ServiceAuth.Secret, "sparkplug-ingest", governance.NewSafetyGates(Microservice))
 	registrar := host.NewRegistrar(client, graphqlURL, tenantGate)
 	emitter := host.NewEmitter(writer, time.Now)
 	reconciler := host.NewReconciler(client, deviceStateURL)

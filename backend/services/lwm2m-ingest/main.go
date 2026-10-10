@@ -529,7 +529,7 @@ func buildPresenceLayer(leaderCtx context.Context, bindings map[string]config.Ps
 	// been reclaimed. This gate stops the inflow; the fence is the correctness path, and
 	// it is at the area that owns the row rather than at the transport that would have
 	// caused it.
-	tenantGate := governance.NewTenantLifecycleGate(infra.UserManagement, infra.ServiceAuth.Secret, "lwm2m-ingest")
+	tenantGate := governance.NewTenantLifecycleGate(infra.UserManagement, infra.ServiceAuth.Secret, "lwm2m-ingest", governance.NewSafetyGates(Microservice))
 	registrar := adapter.NewRegistrar(client, ingestURL, "lw-", tenantGate)
 	// authenticatedTransport=true: LwM2M devices authenticate at the DTLS-PSK
 	// handshake, and the device token is bound to that authenticated PSK identity

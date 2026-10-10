@@ -154,7 +154,7 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	infra := Microservice.InstanceConfiguration.Infrastructure
 	CommandDeliveryProcessor = processor.NewCommandDeliveryProcessor(Microservice, CommandResponsesReader,
 		DeviceCommandsWriter, core.NewNoOpLifecycleCallbacks(), Api,
-		governance.NewTenantLifecycleGate(infra.UserManagement, infra.ServiceAuth.Secret, "command-delivery"),
+		governance.NewTenantLifecycleGate(infra.UserManagement, infra.ServiceAuth.Secret, "command-delivery", governance.NewSafetyGates(Microservice)),
 		presenceReader(infra), deadLetters, DeliveryMetrics)
 	// 🔴 SET HERE, WHERE THE PROCESSOR EXISTS, AND NOT BESIDE THE Api.* ASSIGNMENTS IN
 	// afterMicroserviceInitialized -- WHICH IS WHERE THEY BELONG BY APPEARANCE AND WHERE
@@ -230,12 +230,15 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 // invisible in every other way — commands flow, nothing is held, and the silent losses it
 // exists to prevent resume without a single error.
 func presenceReader(infra mscfg.InfrastructureConfiguration) presence.Reader {
+	gates := governance.NewSafetyGates(Microservice)
 	if infra.ServiceAuth.Secret == "" {
 		log.Warn().Msg("Service secret not configured — the presence gate is OFF; commands to devices known to be offline will be published and silently dropped by the broker.")
+		gates.Set(governance.GatePresence, false)
 		return nil
 	}
 	if infra.DeviceState.Hostname == "" || infra.DeviceState.Port == 0 {
 		log.Warn().Msg("device-state endpoint not configured (infrastructure.deviceState) — the presence gate is OFF; commands to devices known to be offline will be published and silently dropped by the broker.")
+		gates.Set(governance.GatePresence, false)
 		return nil
 	}
 	client := svcclient.New(infra.UserManagement, infra.ServiceAuth.Secret, "command-delivery",
@@ -243,6 +246,7 @@ func presenceReader(infra mscfg.InfrastructureConfiguration) presence.Reader {
 	url := fmt.Sprintf("http://%s:%d/graphql", infra.DeviceState.Hostname, infra.DeviceState.Port)
 	log.Info().Str("deviceState", url).
 		Msg("Presence gate enabled; commands to devices a transport reports as absent will be withheld rather than published.")
+	gates.Set(governance.GatePresence, true)
 	return presence.NewGraphQLReader(client, url)
 }
 

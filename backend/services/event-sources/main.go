@@ -443,7 +443,7 @@ func buildEventSources() error {
 	// minted JWT for its full TTL), and HTTP ingest has no transport auth at all.
 	infra := Microservice.InstanceConfiguration.Infrastructure
 	ingestGate = processor.RefuseDeletedTenants(
-		governance.NewTenantLifecycleGate(infra.UserManagement, infra.ServiceAuth.Secret, "event-sources"),
+		governance.NewTenantLifecycleGate(infra.UserManagement, infra.ServiceAuth.Secret, "event-sources", governance.NewSafetyGates(Microservice)),
 		processor.NewRateGate(RateLimiter, BacklogRateLimiter, HttpRateLimiter, onRateShed),
 		onTenantGone)
 	// The reading stage, charged after decode on every transport. One gate, built once,
