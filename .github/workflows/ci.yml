@@ -1797,7 +1797,16 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
+      # Pinned, because the unpinned action asks GitHub for the latest Helm and, when that
+      # request fails, silently installs its own built-in default (v3.18.4) instead. The
+      # chart guards below match Helm's schema-validation WORDING ("additional properties
+      # 'limit' not allowed"), which differs between Helm 3 and Helm 4, so a fallback turned
+      # a network blip into a red helm job on an unrelated pull request. A pinned version
+      # fails closed: a Helm upgrade is a deliberate bump that re-runs these guards, never a
+      # side effect of an API call. v4.3.0 is the version these guards have been passing on.
       - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
+        with:
+          version: v4.3.0
 
       # The egress drift check needs a Go toolchain as well as helm: it compares the
       # COMPILED deny table against the RENDERED policy, so it runs two small commands
