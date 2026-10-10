@@ -255,9 +255,8 @@ func (api *Api) DeviceProfilesById(ctx context.Context, ids []uint) ([]*DevicePr
 // Get device profiles by token.
 func (api *Api) DeviceProfilesByToken(ctx context.Context, tokens []string) ([]*DeviceProfile, error) {
 	found := make([]*DeviceProfile, 0)
-	result := api.RDB.DB(ctx).Find(&found, "token in ?", tokens)
-	if result.Error != nil {
-		return nil, result.Error
+	if err := rdb.FindByKeys(api.RDB.DB(ctx), &found, "token", tokens); err != nil {
+		return nil, err
 	}
 	return found, nil
 }

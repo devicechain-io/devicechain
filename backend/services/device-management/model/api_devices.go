@@ -214,9 +214,8 @@ func (api *Api) DeviceTypesById(ctx context.Context, ids []uint) ([]*DeviceType,
 // Get device types by token.
 func (api *Api) DeviceTypesByToken(ctx context.Context, tokens []string) ([]*DeviceType, error) {
 	found := make([]*DeviceType, 0)
-	result := api.RDB.DB(ctx).Find(&found, "token in ?", tokens)
-	if result.Error != nil {
-		return nil, result.Error
+	if err := rdb.FindByKeys(api.RDB.DB(ctx), &found, "token", tokens); err != nil {
+		return nil, err
 	}
 	return found, nil
 }
@@ -700,11 +699,8 @@ func (api *Api) DevicesById(ctx context.Context, ids []uint) ([]*Device, error) 
 // Get devices by token.
 func (api *Api) DevicesByToken(ctx context.Context, tokens []string) ([]*Device, error) {
 	found := make([]*Device, 0)
-	result := api.RDB.DB(ctx)
-	result = result.Preload("DeviceType")
-	result = result.Find(&found, "token in ?", tokens)
-	if result.Error != nil {
-		return nil, result.Error
+	if err := rdb.FindByKeys(api.RDB.DB(ctx).Preload("DeviceType"), &found, "token", tokens); err != nil {
+		return nil, err
 	}
 	return found, nil
 }
@@ -713,11 +709,8 @@ func (api *Api) DevicesByToken(ctx context.Context, tokens []string) ([]*Device,
 // a matching non-null external id are returned; the token remains the addressing id.
 func (api *Api) DevicesByExternalId(ctx context.Context, externalIds []string) ([]*Device, error) {
 	found := make([]*Device, 0)
-	result := api.RDB.DB(ctx)
-	result = result.Preload("DeviceType")
-	result = result.Find(&found, "external_id in ?", externalIds)
-	if result.Error != nil {
-		return nil, result.Error
+	if err := rdb.FindByKeys(api.RDB.DB(ctx).Preload("DeviceType"), &found, "external_id", externalIds); err != nil {
+		return nil, err
 	}
 	return found, nil
 }

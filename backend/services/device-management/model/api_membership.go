@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/devicechain-io/dc-microservice/limit"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -200,6 +201,9 @@ func (api *Api) CreateEntityRelationships(ctx context.Context,
 func (api *Api) RemoveEntityRelationships(ctx context.Context, tokens []string) (bool, error) {
 	if len(tokens) == 0 {
 		return false, nil
+	}
+	if len(tokens) > rdb.MaxLookupKeys {
+		return false, limit.Exceeded("lookup keys", len(tokens), rdb.MaxLookupKeys)
 	}
 	// Capture the source devices before the edges are gone so their cached tracked
 	// sets can be evicted (ADR-044 F2); the targets survive, so the sweep won't

@@ -198,11 +198,8 @@ func (api *Api) DeviceCredentialsById(ctx context.Context, ids []uint) ([]*Devic
 // Get device credentials by token.
 func (api *Api) DeviceCredentialsByToken(ctx context.Context, tokens []string) ([]*DeviceCredential, error) {
 	found := make([]*DeviceCredential, 0)
-	result := api.RDB.DB(ctx)
-	result = result.Preload("Device")
-	result = result.Find(&found, "token in ?", tokens)
-	if result.Error != nil {
-		return nil, result.Error
+	if err := rdb.FindByKeys(api.RDB.DB(ctx).Preload("Device"), &found, "token", tokens); err != nil {
+		return nil, err
 	}
 	return found, nil
 }

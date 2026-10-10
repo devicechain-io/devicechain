@@ -183,9 +183,8 @@ func (api *Api) EntityGroupsById(ctx context.Context, ids []uint) ([]*EntityGrou
 // EntityGroupsByToken gets entity groups by token.
 func (api *Api) EntityGroupsByToken(ctx context.Context, tokens []string) ([]*EntityGroup, error) {
 	found := make([]*EntityGroup, 0)
-	result := api.RDB.DB(ctx).Find(&found, "token in ?", tokens)
-	if result.Error != nil {
-		return nil, result.Error
+	if err := rdb.FindByKeys(api.RDB.DB(ctx), &found, "token", tokens); err != nil {
+		return nil, err
 	}
 	return found, nil
 }
