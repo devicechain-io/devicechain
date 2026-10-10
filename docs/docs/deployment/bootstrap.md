@@ -1225,7 +1225,7 @@ instead, and the limits stay as above. The console is sized separately.
 The first four services do the per-event work: receiving, resolving and storing every event, and
 merging it into each device's live state. `event-processing` runs detection on every event; its
 limit is twice what it was measured to use (see below). The first four services' limits are
-sized for live device traffic at a tenant's default ingest ceiling of 1000 messages per second,
+sized for live device traffic at a tenant's default ingest ceiling of 1000 readings per second,
 one reading per message, and for about 4,000 events per second, the rate a default installation
 sustained before `event-management`'s persistence defaults were raised (see
 [Measured throughput](#measured-throughput)).

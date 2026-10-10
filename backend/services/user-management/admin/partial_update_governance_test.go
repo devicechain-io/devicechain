@@ -40,7 +40,7 @@ func TestClearingAnOverrideResolvesToTheTierThenThePlatformDefault(t *testing.T)
 	// the way through" are distinguishable. Without a tier value, a cleared override would
 	// resolve to the platform default either way and the middle rung of the cascade would
 	// be unmeasured.
-	tierConfig := `{"ingestMessagesPerSecond":2000}`
+	tierConfig := `{"ingestReadingsPerSecond":2000}`
 	cfg, err := ParseConfigJSON(&tierConfig)
 	require.NoError(t, err)
 	_, err = s.CreateTenantTier(ctx, TierInput{Token: "gold-fixture", Config: cfg})
@@ -49,7 +49,7 @@ func TestClearingAnOverrideResolvesToTheTierThenThePlatformDefault(t *testing.T)
 	_, err = s.CreateTenant(ctx, TenantInput{
 		Token: "acme-co", TierToken: "gold-fixture",
 		GovernanceOverrides: GovernanceOverrides{
-			IngestMessagesPerSecond: fptr(50),
+			IngestReadingsPerSecond: fptr(50),
 			IngestBurst:             iptr(60),
 			ShedPriority:            iptr(70),
 		},
@@ -84,11 +84,11 @@ func TestClearingAnOverrideResolvesToTheTierThenThePlatformDefault(t *testing.T)
 	// 🔴 THE CLEAR, AND WHERE IT LANDS. An explicit null removes the override, and the
 	// tenant then resolves to ITS TIER — 2000/s, not 0/s, and not "unlimited".
 	_, err = s.UpdateTenant(ctx, "acme-co", &TenantUpdateRequest{
-		IngestMessagesPerSecond: dcgraphql.ClearedFloat64(),
+		IngestReadingsPerSecond: dcgraphql.ClearedFloat64(),
 	})
 	require.NoError(t, err)
 	after := reload()
-	require.Nil(t, after.IngestMessagesPerSecond,
+	require.Nil(t, after.IngestReadingsPerSecond,
 		"the column still holds a value, so the clear did not reach storage")
 	rate, source = after.EffectiveRate(governance.Ingest)
 	require.NotNil(t, rate, "a removed override resolved to nothing rather than to the tier")
@@ -144,12 +144,12 @@ func TestAZeroOverrideIsStillRefusedOnUpdate(t *testing.T) {
 	require.NoError(t, err)
 	_, err = s.CreateTenant(ctx, TenantInput{
 		Token: "acme-co", TierToken: "gold-fixture",
-		GovernanceOverrides: GovernanceOverrides{IngestMessagesPerSecond: fptr(50)},
+		GovernanceOverrides: GovernanceOverrides{IngestReadingsPerSecond: fptr(50)},
 	})
 	require.NoError(t, err)
 
 	_, err = s.UpdateTenant(ctx, "acme-co", &TenantUpdateRequest{
-		IngestMessagesPerSecond: dcgraphql.OptionalFloat64Of(0),
+		IngestReadingsPerSecond: dcgraphql.OptionalFloat64Of(0),
 	})
 	require.Error(t, err, "a zero ingest ceiling was accepted, which meters the tenant at nothing")
 	require.Contains(t, err.Error(), "must be positive")
@@ -157,6 +157,6 @@ func TestAZeroOverrideIsStillRefusedOnUpdate(t *testing.T) {
 	// And the refusal wrote nothing.
 	tn, err := s.iam.TenantByToken(ctx, "acme-co")
 	require.NoError(t, err)
-	require.NotNil(t, tn.IngestMessagesPerSecond)
-	require.Equal(t, float64(50), *tn.IngestMessagesPerSecond)
+	require.NotNil(t, tn.IngestReadingsPerSecond)
+	require.Equal(t, float64(50), *tn.IngestReadingsPerSecond)
 }

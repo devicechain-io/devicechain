@@ -32,15 +32,15 @@ const (
 	// broker's redelivery clock runs. There is no separate hand-off buffer to size.
 	DefaultMaxConcurrentSends = 32
 
-	// DefaultOutboundMessagesPerSecond / DefaultOutboundBurst are the platform-default per-tenant
+	// DefaultOutboundCallsPerSecond / DefaultOutboundBurst are the platform-default per-tenant
 	// OUTBOUND egress rate ceiling (ADR-060 SD-3), applied to any tenant with no override in
 	// user-management (fetched via governance) and as the whole ceiling when overrides are not wired.
 	// Deliberately LOWER than the ingest default (1000/s): an outbound connector call is far more
 	// expensive than an inbound event (a per-event webhook is a self-DoS / cost bomb against the
 	// external target and our egress), so ADR-060 prices it strictly above an in-process action.
 	// Fail-safe: a missing/zero override resolves to this default, never to unlimited.
-	DefaultOutboundMessagesPerSecond = 100
-	DefaultOutboundBurst             = 200
+	DefaultOutboundCallsPerSecond = 100
+	DefaultOutboundBurst          = 200
 
 	// DefaultEgressWaitBudgetMs is how long a worker will BLOCK waiting for a token before a dispatch
 	// is admitted, so a brief burst just over a tenant's rate is smoothed into pacing rather than
@@ -84,13 +84,13 @@ type OutboundConnectorsConfiguration struct {
 	// rejected.
 	MaxConcurrentSends int
 
-	// OutboundMessagesPerSecond / OutboundBurst are the platform-default per-tenant egress ceiling
-	// (ADR-060 SD-3). Unset (0) defaults to DefaultOutboundMessagesPerSecond / DefaultOutboundBurst;
+	// OutboundCallsPerSecond / OutboundBurst are the platform-default per-tenant egress ceiling
+	// (ADR-060 SD-3). Unset (0) defaults to DefaultOutboundCallsPerSecond / DefaultOutboundBurst;
 	// a non-positive value is rejected (never unlimited). A per-tenant override in user-management,
 	// fetched via the governance resolver, raises or lowers this for that tenant; a tenant with no
 	// override is metered at this default.
-	OutboundMessagesPerSecond float64
-	OutboundBurst             int
+	OutboundCallsPerSecond float64
+	OutboundBurst          int
 
 	// EgressWaitBudgetMs is the per-dispatch smoothing wait before a shed (see DefaultEgressWaitBudgetMs).
 	// Unset (0) defaults to DefaultEgressWaitBudgetMs; a non-positive value or one above
@@ -113,8 +113,8 @@ func (c *OutboundConnectorsConfiguration) ApplyDefaults() {
 	if c.MaxConcurrentSends == 0 {
 		c.MaxConcurrentSends = DefaultMaxConcurrentSends
 	}
-	if c.OutboundMessagesPerSecond == 0 {
-		c.OutboundMessagesPerSecond = DefaultOutboundMessagesPerSecond
+	if c.OutboundCallsPerSecond == 0 {
+		c.OutboundCallsPerSecond = DefaultOutboundCallsPerSecond
 	}
 	if c.OutboundBurst == 0 {
 		c.OutboundBurst = DefaultOutboundBurst
@@ -140,8 +140,8 @@ func (c *OutboundConnectorsConfiguration) Validate() error {
 	if c.MaxConcurrentSends <= 0 {
 		return fmt.Errorf("maxConcurrentSends must be positive, got %d", c.MaxConcurrentSends)
 	}
-	if c.OutboundMessagesPerSecond <= 0 {
-		return fmt.Errorf("outboundMessagesPerSecond must be positive, got %v", c.OutboundMessagesPerSecond)
+	if c.OutboundCallsPerSecond <= 0 {
+		return fmt.Errorf("outboundCallsPerSecond must be positive, got %v", c.OutboundCallsPerSecond)
 	}
 	if c.OutboundBurst <= 0 {
 		return fmt.Errorf("outboundBurst must be positive, got %d", c.OutboundBurst)
@@ -150,4 +150,12 @@ func (c *OutboundConnectorsConfiguration) Validate() error {
 		return fmt.Errorf("egressWaitBudgetMs must be in (0, %d], got %d", MaxEgressWaitBudgetMs, c.EgressWaitBudgetMs)
 	}
 	return nil
+}
+
+// RenamedConfigKeys refuses the old spelling of a renamed key with the new one named
+// (core.ConfigRenamer): the outbound ceiling meters connector CALLS, and the key now says so. It is refused rather than
+// retired because the setting still exists — stripping it would start the service on
+// the platform default instead of the ceiling the operator chose.
+func (c *OutboundConnectorsConfiguration) RenamedConfigKeys() map[string]string {
+	return map[string]string{"outboundMessagesPerSecond": "outboundCallsPerSecond"}
 }

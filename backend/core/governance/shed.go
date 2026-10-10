@@ -151,11 +151,11 @@ func (l Limits) Shed(factor float64) Limits {
 		return l
 	}
 	if factor <= 0 {
-		return Limits{MessagesPerSecond: 0, Burst: 0}
+		return Limits{RatePerSecond: 0, Burst: 0}
 	}
 	burst := int(math.Round(float64(l.Burst) * factor))
 	if burst < 1 {
 		burst = 1
 	}
-	return Limits{MessagesPerSecond: l.MessagesPerSecond * factor, Burst: burst}
+	return Limits{RatePerSecond: l.RatePerSecond * factor, Burst: burst}
 }

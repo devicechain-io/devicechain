@@ -14,7 +14,7 @@ import (
 )
 
 const (
-	// DefaultIngestMessagesPerSecond and DefaultIngestBurst are the platform
+	// DefaultIngestReadingsPerSecond and DefaultIngestBurst are the platform
 	// per-tenant ingest ceiling applied when none is configured, counted in READINGS
 	// after decode and in messages before it, at the same number (see
 	// governance.ReadingCeiling). High enough not to shed a normally busy fleet, low
@@ -22,7 +22,7 @@ const (
 	// was measured to store; the measurement and the arithmetic are in the chart's
 	// values.yaml, event-sources block. A genuinely high-volume tenant is raised past
 	// this on its tier; the platform default is deliberately never unlimited.
-	DefaultIngestMessagesPerSecond = 1000
+	DefaultIngestReadingsPerSecond = 1000
 	DefaultIngestBurst             = 2000
 
 	// Broker-presence defaults.
@@ -77,10 +77,10 @@ type EventSource struct {
 // misconfiguration cannot silently remove the protection. A tenant's tier overrides
 // both numbers.
 type IngestRateLimit struct {
-	// MessagesPerSecond is the sustained per-tenant rate, in readings per second (and
-	// in messages per second before decode). The name predates the reading count and is
-	// kept so no configuration has to change.
-	MessagesPerSecond float64
+	// ReadingsPerSecond is the sustained per-tenant rate, in readings per second (and,
+	// at the same number, in messages per second before decode). The key names the
+	// reading because that is what a tenant's budget is spent in.
+	ReadingsPerSecond float64
 	// Burst is the largest instantaneous batch a tenant may send before the
 	// sustained rate applies — it absorbs bursty devices without raising the
 	// sustained ceiling.
@@ -245,8 +245,8 @@ func (c *EventSourcesConfiguration) ApplyDefaults() {
 	// Fail-safe defaulting: a non-positive rate or burst falls back to the
 	// platform ceiling, never to unlimited, so an omitted or zeroed limit still
 	// meters every tenant.
-	if c.IngestRateLimit.MessagesPerSecond <= 0 {
-		c.IngestRateLimit.MessagesPerSecond = DefaultIngestMessagesPerSecond
+	if c.IngestRateLimit.ReadingsPerSecond <= 0 {
+		c.IngestRateLimit.ReadingsPerSecond = DefaultIngestReadingsPerSecond
 	}
 	if c.IngestRateLimit.Burst <= 0 {
 		c.IngestRateLimit.Burst = DefaultIngestBurst
@@ -404,4 +404,12 @@ func (c *EventSourcesConfiguration) validateSourceIds() error {
 		seen[src.Id] = i
 	}
 	return nil
+}
+
+// RenamedConfigKeys refuses the old spelling of a renamed key with the new one named
+// (core.ConfigRenamer): the ingest ceiling meters READINGS, and the key now says so. It is refused rather than
+// retired because the setting still exists — stripping it would start the service on
+// the platform default instead of the ceiling the operator chose.
+func (c *EventSourcesConfiguration) RenamedConfigKeys() map[string]string {
+	return map[string]string{"ingestRateLimit.messagesPerSecond": "ingestRateLimit.readingsPerSecond"}
 }

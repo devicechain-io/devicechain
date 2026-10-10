@@ -75,7 +75,7 @@ func TestBuildEgressLimiterCountsUnresolvedAdmissions(t *testing.T) {
 	ms.UseMetricsRegistry(reg)
 	unresolved := governance.NewUnresolvedAdmissions(ms, governance.Outbound)
 
-	limiter := buildEgressLimiter(&config.EventProcessingConfiguration{OutboundMessagesPerSecond: 1, OutboundBurst: 1000},
+	limiter := buildEgressLimiter(&config.EventProcessingConfiguration{OutboundCallsPerSecond: 1, OutboundBurst: 1000},
 		infra, unresolved)
 
 	const series = "devicechain_eventprocessing_governance_unresolved_admissions_total"

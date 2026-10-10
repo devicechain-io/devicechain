@@ -147,7 +147,7 @@ func TestTheBasemapMigrationRollbackDropsOnlyItsOwnColumns(t *testing.T) {
 	}
 	for _, kept := range []string{
 		"branding_title", "branding_primary", "branding_logo_max_height",
-		"ingest_messages_per_second", "outbound_burst", "token", "name",
+		"ingest_readings_per_second", "outbound_burst", "token", "name",
 	} {
 		require.Truef(t, db.Migrator().HasColumn(&basemapTenantRow{}, kept),
 			"the rollback dropped %q, which this migration never added", kept)

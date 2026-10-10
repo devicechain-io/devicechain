@@ -45,8 +45,8 @@ func TestTierConfigKeysCoverEveryDimension(t *testing.T) {
 // vocabulary changes — that is the point of it.
 func TestTierConfigKeysMatchTheKnownDimensions(t *testing.T) {
 	require.ElementsMatch(t, []string{
-		"ingestMessagesPerSecond", "ingestBurst",
-		"outboundMessagesPerSecond", "outboundBurst",
+		"ingestReadingsPerSecond", "ingestBurst",
+		"outboundCallsPerSecond", "outboundBurst",
 		"aiInferenceRequestsPerMinute", "aiInferenceBurst",
 		// The ADR-063 shed priority — a standalone key, NOT a dimension (it has no
 		// burst and no rate unit), registered outside the dimension loop.
@@ -80,7 +80,7 @@ func TestValidateTierConfigRejectsUnknownKeys(t *testing.T) {
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "unknown tier setting")
 	// The error names the real keys: the operator needs the right spelling.
-	require.Contains(t, err.Error(), "ingestMessagesPerSecond")
+	require.Contains(t, err.Error(), "ingestReadingsPerSecond")
 
 	// A key no subsystem has registered is equally unknown — no key gets in ahead of
 	// its validator.
@@ -100,10 +100,10 @@ func TestValidateTierConfigRejectsUnusableValues(t *testing.T) {
 		name string
 		cfg  map[string]any
 	}{
-		{"zero rate", map[string]any{"ingestMessagesPerSecond": float64(0)}},
-		{"negative rate", map[string]any{"ingestMessagesPerSecond": float64(-1)}},
-		{"string rate", map[string]any{"ingestMessagesPerSecond": "fast"}},
-		{"bool rate", map[string]any{"ingestMessagesPerSecond": true}},
+		{"zero rate", map[string]any{"ingestReadingsPerSecond": float64(0)}},
+		{"negative rate", map[string]any{"ingestReadingsPerSecond": float64(-1)}},
+		{"string rate", map[string]any{"ingestReadingsPerSecond": "fast"}},
+		{"bool rate", map[string]any{"ingestReadingsPerSecond": true}},
 		{"zero burst", map[string]any{"ingestBurst": float64(0)}},
 		{"negative burst", map[string]any{"ingestBurst": float64(-5)}},
 		{"fractional burst", map[string]any{"ingestBurst": float64(1.5)}},
@@ -115,7 +115,7 @@ func TestValidateTierConfigRejectsUnusableValues(t *testing.T) {
 	}
 
 	// A fractional RATE is legal — 0.5/s is one call every two seconds.
-	require.NoError(t, ValidateTierConfig(map[string]any{"outboundMessagesPerSecond": float64(0.5)}))
+	require.NoError(t, ValidateTierConfig(map[string]any{"outboundCallsPerSecond": float64(0.5)}))
 }
 
 // TestTierRateAndBurstReads pins the typed read path, including the defensive
@@ -123,7 +123,7 @@ func TestValidateTierConfigRejectsUnusableValues(t *testing.T) {
 // never as a live ceiling of zero (which would admit nothing).
 func TestTierRateAndBurstReads(t *testing.T) {
 	tier := &TenantTier{Config: map[string]any{
-		"ingestMessagesPerSecond": float64(2000),
+		"ingestReadingsPerSecond": float64(2000),
 		"ingestBurst":             float64(4000),
 	}}
 	require.Equal(t, float64(2000), *tier.RateFor(governance.Ingest))
@@ -141,7 +141,7 @@ func TestTierRateAndBurstReads(t *testing.T) {
 
 	// Out-of-band garbage reads as inherit, NOT as zero.
 	junk := &TenantTier{Config: map[string]any{
-		"ingestMessagesPerSecond": float64(0),
+		"ingestReadingsPerSecond": float64(0),
 		"ingestBurst":             "lots",
 	}}
 	require.Nil(t, junk.RateFor(governance.Ingest))
