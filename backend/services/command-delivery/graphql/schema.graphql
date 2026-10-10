@@ -5,49 +5,145 @@
 # Command Delivery GraphQL Schema
 #
 
+"""Fields common to every stored record."""
 # Base elements in gorm RDB model.
 interface Model {
+    """
+    Server-assigned numeric identifier, serialized as a string. Look entities up by token where
+    one exists.
+    """
     id: ID!
+    """When the record was created, as an RFC 3339 timestamp."""
     createdAt: String
+    """When the record was last modified, as an RFC 3339 timestamp."""
     updatedAt: String
+    """
+    When the record was deleted, as an RFC 3339 timestamp. Deleted records are not returned by
+    this API, so this is null in practice.
+    """
     deletedAt: String
 }
 
+"""An entity addressed by a tenant-unique token."""
 # Entity referenced by unique token.
 interface TokenReference {
+    """Tenant-unique token that identifies the entity."""
     token: String!
 }
 
+"""An entity that carries free-form metadata."""
 # Entity that provides metadata.
 interface MetadataEntity {
+    """Free-form metadata as a JSON document serialized to a string; null when none was supplied."""
     metadata: String
 }
 
+"""
+Where one page of search results sits within the full result set. Positions are 1-based and
+inclusive.
+"""
 # Pagination info for search results.
 type SearchResultsPagination {
+    """Position of the first result of this page within the full result set (1-based)."""
     pageStart: Int
+    """
+    Position of the last result of this page within the full result set (1-based, inclusive).
+    Capped at totalRecords.
+    """
     pageEnd: Int
+    """Number of records matching the criteria across all pages."""
     totalRecords: Int
 }
 
+"""
+A persisted command to one device. It is stored when accepted and moves through the lifecycle
+states in status until it settles; it is never fire-and-forget.
+"""
 # A persisted, lifecycle-tracked command to a device (ADR-012).
 type Command implements Model & TokenReference & MetadataEntity {
+    """
+    Server-assigned numeric identifier, serialized as a string. Look entities up by token where
+    one exists.
+    """
     id: ID!
+    """When the record was created, as an RFC 3339 timestamp."""
     createdAt: String
+    """When the record was last modified, as an RFC 3339 timestamp."""
     updatedAt: String
+    """
+    When the record was deleted, as an RFC 3339 timestamp. Deleted records are not returned by
+    this API, so this is null in practice.
+    """
     deletedAt: String
+    """
+    Tenant-unique token. For a command created with createCommand it is the idempotency key the
+    caller chose; for a command created by a batch it is chosen by the platform.
+    """
     token: String!
+    """
+    Free-form metadata supplied when the command was created, as a JSON document serialized to a
+    string; null when none was supplied.
+    """
     metadata: String
+    """Token of the device the command is addressed to."""
     deviceToken: String!
+    """The command's name, as defined in the command vocabulary of the device's profile."""
     name: String!
+    """
+    The command's arguments, as a JSON document serialized to a string; null when none was
+    supplied.
+    """
     payload: String
+    """
+    Lifecycle state: one of QUEUED, HELD, SENT, PARKED, SUCCESSFUL, FAILED, TIMEOUT, EXPIRED or
+    CANCELLED.
+
+    QUEUED: accepted and awaiting its first dispatch decision. HELD: withheld because the device
+    is known to be absent; it returns to QUEUED when the device comes back. SENT: dispatched
+    toward the device and awaiting its response. PARKED: dispatched, but the transport found the
+    device unreachable so nothing reached it; it is delivered on the device's next wake.
+
+    SUCCESSFUL and FAILED: the device answered, reporting success or failure (FAILED is also set
+    when the platform gives up publishing the command, or loses the device's answer; see error).
+    TIMEOUT: the command expired while SENT without an answer. EXPIRED: the command expired
+    while QUEUED, HELD or PARKED, so it never reached the device. CANCELLED: called off by a
+    caller or by cancelling its batch.
+
+    SUCCESSFUL, FAILED, TIMEOUT, EXPIRED and CANCELLED are terminal: no further transition
+    occurs.
+    """
     status: String!
+    """When the command was accepted, as an RFC 3339 timestamp."""
     queuedTime: String
+    """
+    When the command was last dispatched toward the device, as an RFC 3339 timestamp. Null if it
+    has not been dispatched, or if the dispatch was handed back (the command returned to QUEUED
+    or PARKED).
+    """
     sentTime: String
+    """
+    When the device's answer was recorded, as an RFC 3339 timestamp; null until a device
+    answers.
+    """
     respondedTime: String
+    """
+    Instant after which an undelivered command expires, as an RFC 3339 timestamp. When none was
+    given at creation the platform stamps its default time-to-live (7 days unless the deployment
+    configures another). Null means the command does not expire.
+    """
     expiresAt: String
+    """
+    The payload the device returned with its answer, as a JSON document serialized to a string;
+    null until the device answers or when it returned none.
+    """
     responsePayload: String
+    """
+    Why the command failed. Set when status is FAILED and a reason exists: the message the
+    device reported, or the platform's own explanation when it gave up publishing or lost the
+    answer. Null otherwise.
+    """
     error: String
+    """Token of the batch that created this command; null for a command issued one at a time."""
     # The batch that created this command; null for a command issued one at a time.
     #
     # It is the inverse of `CommandSearchCriteria.batchToken`, and it exists because the
@@ -60,16 +156,41 @@ type Command implements Model & TokenReference & MetadataEntity {
     batchToken: String
 }
 
+"""Fields for issuing a command to one device."""
 # Data required to issue a command.
 input CommandCreateRequest {
+    """
+    Idempotency key for the command, unique within the tenant. Re-sending a token you already
+    used returns the original command instead of creating a second one.
+    """
     token: String!
+    """Token of the device to command."""
     deviceToken: String!
+    """
+    Name of the command, which must exist in the command vocabulary of the device's profile;
+    otherwise the request is refused with COMMAND_NOT_IN_VOCABULARY.
+    """
     name: String!
+    """
+    The command's arguments as a JSON document serialized to a string. Must be valid JSON and,
+    when the command definition declares a schema, conform to it. Optional.
+    """
     payload: String
+    """
+    RFC 3339 timestamp after which the command expires if undelivered. Optional; when omitted
+    the platform's default time-to-live applies.
+    """
     expiresAt: String
+    """
+    Free-form metadata as a JSON document serialized to a string. Must be valid JSON. Optional.
+    """
     metadata: String
 }
 
+"""
+Why an enqueue was refused. A refusal is a decided answer about the request, not a failure of
+the platform.
+"""
 # Why an enqueue was REFUSED — a decided verdict, not a failure.
 #
 # It is a payload rather than a GraphQL error because the two mean opposite things to
@@ -78,6 +199,19 @@ input CommandCreateRequest {
 # them apart retries a permanently-invalid command until its redelivery cap gives up,
 # which is indistinguishable from an outage.
 type CommandEnqueueRejection {
+    """
+    Stable, machine-readable classification: PAYLOAD_NOT_JSON, METADATA_NOT_JSON,
+    EXPIRES_AT_INVALID, HELD_CEILING_EXCEEDED, TOKEN_IN_USE, DEVICE_NOT_FOUND,
+    COMMAND_NOT_IN_VOCABULARY, PAYLOAD_SCHEMA_VIOLATION, or COMMAND_REJECTED when a refusal
+    arrived without a classification.
+
+    Branch on this, never on reason. The list is open: treat an unrecognized code as a refusal
+    you cannot classify, never as success. HELD_CEILING_EXCEEDED is the only temporary one (the
+    tenant is holding its limit of commands for absent devices and the limit frees as they
+    return); the rest will be refused again if re-sent unchanged. TOKEN_IN_USE means the token
+    belongs to a command you do not own, which in practice is one the platform created for a
+    batch; choose another token.
+    """
     # The stable, machine-readable classification. Branch on this, never on `reason`
     # — the reason is prose for a person and its wording may change.
     #
@@ -99,25 +233,46 @@ type CommandEnqueueRejection {
     # of commands for absent devices, and the limit frees as those devices return. The
     # rest describe a request that will be just as wrong on the next attempt.
     code: String!
+    """
+    Human-readable explanation, safe to show to a user. Its wording may change; do not parse it.
+    """
     # Why it was refused, in client-safe terms: it names only the device token, the
     # command key and the offending parameter — never a service, host or internal id.
     reason: String!
 }
 
+"""The outcome of createCommand. Exactly one of command and rejection is non-null."""
 # The outcome of an enqueue attempt. EXACTLY ONE of the two fields is non-null:
 # `command` for a command that was created (or the ORIGINAL one returned by an
 # idempotent replay of a token already in use), `rejection` for a request that was
 # refused. A GraphQL error instead of either means the enqueue could not be decided.
 type CreateCommandResult {
+    """
+    The command that was created, or the original command when the token was already in use by
+    one of your own commands. Null when the request was refused.
+    """
     command: Command
+    """Why the request was refused. Null when a command was created."""
     rejection: CommandEnqueueRejection
 }
 
+"""
+Filters and paging for searching commands. All supplied filters must match. Results are newest
+first.
+"""
 # Criteria used when searching for commands.
 input CommandSearchCriteria {
+    """Page to return, starting at 1; values below 1 are treated as 1."""
     pageNumber: Int!
+    """Results per page. Values below 1 become 100; values above 1000 are capped at 1000."""
     pageSize: Int!
+    """Only commands addressed to this device."""
     deviceToken: String
+    """
+    Only commands created by this batch. This is how to ask what a fleet write is doing now,
+    since the batch record keeps only counts from the moment it fired. Combine with status or
+    statuses. Rows come back in the order the batch admitted its devices.
+    """
     # Narrow to the commands one batch created.
     #
     # This is how you ask what a fleet write is DOING. A CommandBatch record carries
@@ -132,8 +287,13 @@ input CommandSearchCriteria {
     # batch and the token tiebreak, minted from each device's position, carries that
     # order. Page 1 is therefore the head of the batch, not an arbitrary slice of it.
     batchToken: String
+    """Only commands in exactly this lifecycle state (for example HELD)."""
     # Match a single lifecycle state exactly.
     status: String
+    """
+    Only commands in any of these lifecycle states. Combined with status, a command must satisfy
+    both. An empty list is ignored rather than matching nothing.
+    """
     # Match any of several lifecycle states. ANDed with `status` if both are given;
     # an empty list is ignored rather than matching nothing. Use this when the states
     # you care about are a set — a device waking from sleep drains everything the
@@ -144,35 +304,56 @@ input CommandSearchCriteria {
     statuses: [String!]
 }
 
+"""One page of commands."""
 # Search results returned from command query.
 type CommandSearchResults {
+    """The commands on this page, newest first."""
     results: [Command!]!
+    """Where this page sits within all matching commands."""
     pagination: SearchResultsPagination!
 }
 
+"""One device a batch did not enqueue to, and why."""
 # One device a batch did NOT enqueue to, and why.
 type CommandBatchDeviceRefusal {
+    """Token of the refused device, as it was named or resolved."""
     # The device this refusal is about, exactly as it was resolved or named.
     deviceToken: String!
+    """
+    Machine-readable classification, from the same open vocabulary as
+    CommandEnqueueRejection.code (for example DEVICE_NOT_FOUND, COMMAND_NOT_IN_VOCABULARY,
+    PAYLOAD_SCHEMA_VIOLATION or HELD_CEILING_EXCEEDED). Branch on this, not on reason.
+    """
     # The machine-readable classification. It is the SAME open vocabulary a single
     # enqueue rejection uses — DEVICE_NOT_FOUND, COMMAND_NOT_IN_VOCABULARY,
     # PAYLOAD_SCHEMA_VIOLATION relayed from the device's owner, HELD_CEILING_EXCEEDED
     # produced here. Branch on this, never on `reason`.
     code: String!
+    """Human-readable explanation, safe to show to a user. Do not parse it."""
     # Why this device was refused, in client-safe terms.
     reason: String!
 }
 
+"""
+The exact number of devices refused for one code. Unlike the refusals sample, a count is never
+truncated.
+"""
 # The COMPLETE number of devices refused for one code — never truncated.
 #
 # It is the counterweight to the bounded `refusals` sample: a batch fired at a large
 # group can refuse more devices than anyone can read, so the individual names are
 # capped while these totals stay exact. `resolved` = `accepted` + the sum of these.
 type CommandBatchRefusalCount {
+    """The refusal code being counted."""
     code: String!
+    """How many devices were refused with that code."""
     count: Int!
 }
 
+"""
+One command fanned out to many devices, kept as a record. A device the batch refused gets no
+command row, so this record is the only trace of what was attempted and what was refused.
+"""
 # One command fanned out to many devices, as a persisted record.
 #
 # It exists because the mutation response is consumed once. A refused device is given no
@@ -180,26 +361,63 @@ type CommandBatchRefusalCount {
 # record a refusal would leave no trace, and an operator who fires a fleet push and comes
 # back in the morning would have nothing to read.
 type CommandBatch implements Model & TokenReference & MetadataEntity {
+    """
+    Server-assigned numeric identifier, serialized as a string. Look entities up by token where
+    one exists.
+    """
     id: ID!
+    """When the record was created, as an RFC 3339 timestamp."""
     createdAt: String
+    """When the record was last modified, as an RFC 3339 timestamp."""
     updatedAt: String
+    """
+    When the record was deleted, as an RFC 3339 timestamp. Deleted records are not returned by
+    this API, so this is null in practice.
+    """
     deletedAt: String
+    """Tenant-unique token; the idempotency key supplied when the batch was created."""
     token: String!
+    """
+    Free-form metadata supplied when the batch was created, as a JSON document serialized to a
+    string; null when none was supplied.
+    """
     metadata: String
+    """The command name every device in the batch received."""
     # The command key every member of the batch received, and its payload. One key and
     # one payload for the whole batch is what makes validating a fleet affordable.
     name: String!
+    """
+    The payload every device in the batch received, as a JSON document serialized to a string;
+    null when none was supplied.
+    """
     payload: String
+    """
+    How the target was specified: DEVICE_LIST (devices named explicitly) or GROUP (an entity
+    group resolved when the batch fired).
+    """
     # How the target was named: DEVICE_LIST or GROUP.
     targetKind: String!
+    """Token of the entity group the batch was fired at; null for a device-list batch."""
     # The entity group this was fired at; null for a device-list batch.
     groupToken: String
+    """
+    The frozen version of the group that the target set was resolved against. Null for a
+    device-list batch and for a static group, which is not versioned.
+    """
     # The FROZEN group version the target set was resolved against; null for a
     # device-list batch or a static group, which is never versioned. It is what lets an
     # audit answer what the group MEANT when this fired, after someone edits the selector.
     groupVersion: Int
+    """
+    Whether the caller accepted a partial fan-out, in which devices that could not be enqueued
+    were skipped rather than failing the whole batch.
+    """
     # Whether the caller accepted a partial fan-out.
     allowPartial: Boolean!
+    """
+    How many devices the target resolved to when the batch fired. A stored fact about that
+    moment, not a live count.
+    """
     # How many devices the target resolved to, and how many were actually enqueued to.
     #
     # 🔴 BOTH ARE STORED FACTS ABOUT THE MOMENT THE BATCH FIRED, NOT LIVE COUNTS. Command
@@ -208,12 +426,26 @@ type CommandBatch implements Model & TokenReference & MetadataEntity {
     # truth with no refusal explaining the gap. For present-tense delivery state, search
     # commands with `batchToken`.
     resolved: Int!
+    """
+    How many devices a command was enqueued for when the batch fired. A stored fact about that
+    moment, not a live count; to see what those commands are doing now, search commands by
+    batchToken. resolved equals accepted plus the sum of refusalCounts.
+    """
     accepted: Int!
+    """
+    A bounded sample of the devices that were refused (at most 100 per refusal code). Use
+    refusalCounts for exact totals.
+    """
     # A BOUNDED sample of the devices that were refused — enough to act on, capped so one
     # fleet write cannot store an unbounded blob. Use `refusalCounts` for exact totals.
     refusals: [CommandBatchDeviceRefusal!]!
+    """The exact number of refused devices per refusal code."""
     # The complete per-code totals for every device refused.
     refusalCounts: [CommandBatchRefusalCount!]!
+    """
+    When the batch was first cancelled, as an RFC 3339 timestamp; null until it is cancelled.
+    Cancelling again does not change it.
+    """
     # When someone called this batch off, and how many commands that call caught.
     # Both null until a batch is cancelled.
     #
@@ -227,9 +459,17 @@ type CommandBatch implements Model & TokenReference & MetadataEntity {
     # finds and leaves these two alone, so they keep describing the intervention that
     # actually stopped something.
     cancelledAt: String
+    """
+    How many commands the first cancel call stopped; null until the batch is cancelled. A
+    snapshot from that call, not a live count of CANCELLED commands.
+    """
     cancelledCount: Int
 }
 
+"""
+Fields for issuing one command to many devices. Supply exactly one of deviceTokens and
+groupToken; both or neither is refused with BATCH_TARGET_AMBIGUOUS.
+"""
 # Data required to issue a command to many devices at once.
 #
 # `deviceTokens` and `groupToken` are ALTERNATIVES: supply exactly one. Both or neither is
@@ -237,26 +477,62 @@ type CommandBatch implements Model & TokenReference & MetadataEntity {
 # what it asked for, and silently preferring one would fan a physical actuation across
 # whichever set this service happened to favour.
 input CommandBatchCreateRequest {
+    """
+    Idempotency key for the whole batch, unique within the tenant. Re-sending a token that
+    already names a batch returns that batch unchanged and admits no further devices.
+    """
     # The idempotency key for the whole operation. Re-issuing a token that already names a
     # batch returns THAT batch unchanged; it is never topped up, because admitting more
     # devices under the same token would make `accepted` a moving number.
     token: String!
+    """
+    Name of the command every targeted device receives, as defined in each device's command
+    vocabulary.
+    """
     # The command key every targeted device receives, and the payload it carries.
     name: String!
+    """
+    The payload every device receives, as a JSON document serialized to a string. Must be valid
+    JSON. Optional.
+    """
     payload: String
+    """
+    RFC 3339 timestamp after which the batch's undelivered commands expire. Optional; when
+    omitted the platform's default time-to-live applies.
+    """
     expiresAt: String
+    """
+    Free-form metadata as a JSON document serialized to a string. Must be valid JSON. Optional.
+    """
     metadata: String
+    """
+    Tokens of the devices to command, at most 10000. The order is the order devices are admitted
+    in when the batch is partially admitted. An empty list counts as not supplied.
+    """
     # Name the devices explicitly. Order is meaningful: a partially-admitted batch admits
     # in this order, so it can express priority.
     deviceTokens: [String!]
+    """
+    Token of an entity group of devices, resolved to its members when the batch fires. A dynamic
+    group must have been published. Requires device:read in addition to command:write.
+    """
     # Or name an entity group, resolved to its devices when the batch fires. The group
     # must collect DEVICES, and a dynamic group must have been published — its draft
     # selector is mutable, and a fleet actuation must not follow whatever someone last
     # typed.
     groupToken: String
+    """
+    A specific frozen version of a dynamic group to resolve against. Omit for the group's active
+    published version. Naming a version without a group, or for a static group, is refused.
+    """
     # Pin a specific frozen version of a dynamic group. Omit for the active published
     # version. Naming one for a static group is refused rather than ignored.
     groupVersion: Int
+    """
+    Required. When true, devices that cannot receive the command are skipped and recorded as
+    refusals. When false, a batch in which any device cannot receive the command is refused
+    whole (BATCH_PARTIAL_REFUSED) and nothing is created.
+    """
     # Accept a partial fan-out. When false, a batch in which ANY device cannot receive the
     # command is refused whole and NOTHING is created — including the batch record, since
     # nothing happened to record.
@@ -268,8 +544,23 @@ input CommandBatchCreateRequest {
     allowPartial: Boolean!
 }
 
+"""
+Why a batch was refused. A refusal is a decided answer about the request, not a failure of the
+platform.
+"""
 # Why a batch was REFUSED — a decided verdict, not a failure.
 type CommandBatchRejection {
+    """
+    Stable, machine-readable classification: BATCH_TARGET_AMBIGUOUS, BATCH_TOO_LARGE,
+    BATCH_GROUP_UNUSABLE (the group does not exist, collects something other than devices, or
+    was never published), PAYLOAD_NOT_JSON, METADATA_NOT_JSON, EXPIRES_AT_INVALID,
+    BATCH_PARTIAL_REFUSED or HELD_CEILING_EXCEEDED.
+
+    Branch on this, never on reason. The list is open: treat an unrecognized code as a refusal
+    you cannot classify. HELD_CEILING_EXCEEDED is temporary; the others will be refused again if
+    re-sent unchanged. There is no TOKEN_IN_USE here: re-sending a batch token returns the
+    original batch.
+    """
     # The stable, machine-readable classification. Branch on this, never on `reason`.
     #
     # BATCH_TARGET_AMBIGUOUS (both or neither target given, or a version with no group),
@@ -288,14 +579,24 @@ type CommandBatchRejection {
     # devices come back. The rest describe a request that will be just as wrong next time.
     # The list is open; treat an unrecognized code as a refusal you cannot classify.
     code: String!
+    """Human-readable explanation, safe to show to a user. Do not parse it."""
     # Why the batch was refused, in client-safe terms.
     reason: String!
+    """
+    How many devices the target resolved to before the refusal. Null means no target set was
+    established (the refusal came first); zero means the target genuinely resolved to no
+    devices.
+    """
     # How many devices the target resolved to before the refusal.
     #
     # NULL IS NOT ZERO. Null means no target set was ever established — the refusal
     # happened first. Zero would mean a target that genuinely resolved to no devices,
     # which is a real (and successful) batch, not a refusal.
     resolved: Int
+    """
+    A bounded sample (at most 100) of the devices responsible. Populated only for
+    BATCH_PARTIAL_REFUSED and empty for every other code.
+    """
     # A bounded sample of the devices responsible. It is populated for exactly ONE code —
     # BATCH_PARTIAL_REFUSED — and empty for every other, including HELD_CEILING_EXCEEDED.
     #
@@ -311,20 +612,32 @@ type CommandBatchRejection {
     # was allowed to fan out partially, where they say which devices did not fit. That is
     # a different object answering a different question.)
     refusals: [CommandBatchDeviceRefusal!]!
+    """The exact per-code totals behind the refusals sample."""
     # The complete per-code totals behind that sample.
     refusalCounts: [CommandBatchRefusalCount!]!
 }
 
+"""The outcome of createCommandBatch. Exactly one of batch and rejection is non-null."""
 # The outcome of a batch attempt. EXACTLY ONE of the two fields is non-null: `batch` for
 # one that was created (or the ORIGINAL returned by an idempotent replay), `rejection` for
 # one that was refused. A GraphQL error instead of either means the batch could not be
 # decided at all — device-management unreachable, group resolution unavailable — and
 # NOTHING was created, so the token is unspent and the request can simply be retried.
 type CreateCommandBatchResult {
+    """
+    The batch that was created, or the original batch when the token was already in use. Null
+    when the request was refused.
+    """
     batch: CommandBatch
+    """Why the batch was refused. Null when a batch was created."""
     rejection: CommandBatchRejection
 }
 
+"""
+What cancelling a batch was able to do. The four counts are not guaranteed to sum to matched; if
+matched exceeds their sum, some commands returned to the delivery queue after the cancel, and
+calling cancelCommandBatch again stops them.
+"""
 # What cancelling a fleet write was able to do.
 #
 # 🔴 `cancelled` IS MEASURED; THE OTHER THREE ARE OBSERVED A MOMENT LATER. `cancelled` is
@@ -343,15 +656,28 @@ type CreateCommandBatchResult {
 # failed delivery retires its command rather than requeueing it, so the second call finds
 # a settled batch.
 type CancelCommandBatchResult {
+    """Commands the platform still held and has now stopped. They will not be delivered."""
     # Commands the platform still held and has now stopped. They will not be delivered.
     cancelled: Int!
+    """
+    Commands already handed to their devices. They cannot be recalled and the devices will still
+    act on them.
+    """
     # Commands already handed to their devices. 🔴 THOSE DEVICES WILL STILL ACT ON THEM.
     # A command in flight cannot be recalled, and reporting it as cancelled would say the
     # fleet was stopped when part of it was not.
     alreadySent: Int!
+    """
+    Commands that had already succeeded, failed, timed out, expired or been cancelled before
+    this call. Nothing to do.
+    """
     # Commands that had already succeeded, failed, timed out, expired or been cancelled
     # before this call. Nothing to do.
     alreadyFinished: Int!
+    """
+    How many of the batch's commands exist right now. May be lower than the batch's accepted
+    count, because commands can be deleted.
+    """
     # How many of the batch's commands exist right now.
     #
     # It is NOT the batch's `accepted`, which is a stored fact about the moment the batch
@@ -360,37 +686,99 @@ type CancelCommandBatchResult {
     matched: Int!
 }
 
+"""
+Filters and paging for searching command batches. All supplied filters must match. Results are
+newest first.
+"""
 # Criteria used when searching for command batches.
 input CommandBatchSearchCriteria {
+    """Page to return, starting at 1; values below 1 are treated as 1."""
     pageNumber: Int!
+    """Results per page. Values below 1 become 100; values above 1000 are capped at 1000."""
     pageSize: Int!
+    """Only batches that fanned out this command name."""
     # The command key the batch fanned out.
     name: String
+    """Only batches fired at this entity group. Device-list batches never match."""
     # The entity group it was fired at. Matches nothing for device-list batches.
     groupToken: String
+    """
+    Only batches of this kind: DEVICE_LIST or GROUP. An unrecognized value matches nothing
+    rather than raising an error.
+    """
     # DEVICE_LIST or GROUP. An unrecognized value matches nothing rather than erroring.
     targetKind: String
 }
 
+"""One page of command batches."""
 # Search results returned from command batch query.
 type CommandBatchSearchResults {
+    """The batches on this page, newest first."""
     results: [CommandBatch!]!
+    """Where this page sits within all matching batches."""
     pagination: SearchResultsPagination!
 }
 
 type Query {
+    """
+    Returns the commands with the given ids, in no particular order. Ids that match nothing are
+    omitted; a non-numeric id is an error. Requires command:read.
+    """
     # Find commands by unique id.
-    commandsById(ids: [String!]!): [Command!]!
+    commandsById(
+        """Numeric ids of the commands, as strings."""
+        ids: [String!]!
+    ): [Command!]!
+    """
+    Returns the commands with the given tokens, in no particular order. Tokens that match
+    nothing are omitted. Requires command:read.
+    """
     # Find commands by unique token.
-    commandsByToken(tokens: [String!]!): [Command!]!
+    commandsByToken(
+        """Tokens of the commands."""
+        tokens: [String!]!
+    ): [Command!]!
+    """Searches the tenant's commands, newest first, one page at a time. Requires command:read."""
     # List all commands that match the given criteria.
-    commands(criteria: CommandSearchCriteria!): CommandSearchResults!
+    commands(
+        """Filters and page to return."""
+        criteria: CommandSearchCriteria!
+    ): CommandSearchResults!
+    """
+    Returns the command batches with the given ids, in no particular order. Ids that match
+    nothing are omitted; a non-numeric id is an error. Requires command:read. Reading a batch
+    that targeted a group additionally requires device:read.
+    """
     # Find command batches by unique id.
-    commandBatchesById(ids: [String!]!): [CommandBatch!]!
+    commandBatchesById(
+        """Numeric ids of the batches, as strings."""
+        ids: [String!]!
+    ): [CommandBatch!]!
+    """
+    Returns the command batches with the given tokens, in no particular order. Tokens that match
+    nothing are omitted. Requires command:read. Reading a batch that targeted a group
+    additionally requires device:read.
+    """
     # Find command batches by unique token.
-    commandBatchesByToken(tokens: [String!]!): [CommandBatch!]!
+    commandBatchesByToken(
+        """Tokens of the batches."""
+        tokens: [String!]!
+    ): [CommandBatch!]!
+    """
+    Searches the tenant's command batches, newest first, one page at a time. Requires
+    command:read. Reading a batch that targeted a group additionally requires device:read.
+    """
     # List all command batches that match the given criteria.
-    commandBatches(criteria: CommandBatchSearchCriteria!): CommandBatchSearchResults!
+    commandBatches(
+        """Filters and page to return."""
+        criteria: CommandBatchSearchCriteria!
+    ): CommandBatchSearchResults!
+    """
+    Returns a device's still-waiting commands (HELD and PARKED) that have not expired, oldest
+    first, for a transport delivering the backlog when the device comes back. Dispatch the list
+    in the order given. Empty when nothing is waiting. Requires command:claim, a system-tier
+    authority: tenant user tokens cannot call it.
+    """
     # The head of one device's still-waiting command backlog, for a transport draining it
     # when the device comes back: HELD and PARKED commands that have not passed their
     # expiry horizon, OLDEST FIRST.
@@ -409,14 +797,37 @@ type Query {
     # (they take the tenant-tier `command:read`): the answer to this query is the list a
     # machine is about to actuate hardware from, and its only caller is a transport that
     # already holds `command:claim` to claim each row it drains.
-    drainableCommands(deviceToken: String!, limit: Int): [Command!]!
+    drainableCommands(
+        """Token of the device whose backlog to read."""
+        deviceToken: String!
+        """
+        Maximum commands to return. Absent, null or 0 or less means 32; values above 1000 are
+        capped at 1000. A device with more waiting returns the rest on a later call.
+        """
+        limit: Int
+    ): [Command!]!
 }
 
 type Mutation {
+    """
+    Issues a command to one device. Returns the created command, or a typed rejection when the
+    request is refused; a GraphQL error means the enqueue could not be decided at all.
+    Re-sending a token you already used returns the original command. Requires command:write.
+    """
     # Issue (persist) a new command to a device. Returns either the command or a
     # typed rejection (see CreateCommandResult); a GraphQL error means the enqueue
     # could not be decided at all.
-    createCommand(request: CommandCreateRequest!): CreateCommandResult!
+    createCommand(
+        """The command to issue."""
+        request: CommandCreateRequest!
+    ): CreateCommandResult!
+    """
+    Issues one command to many devices, named explicitly or resolved from an entity group, as a
+    single recorded and cancellable operation. Returns the batch or a typed rejection; a GraphQL
+    error means the batch could not be decided and nothing was created, so the token is unspent
+    and the request can be retried. Requires command:write, and also device:read when targeting
+    a group.
+    """
     # Issue one command to MANY devices as a single, recorded operation — named
     # explicitly or resolved from an entity group.
     #
@@ -434,7 +845,16 @@ type Mutation {
     # caller doing that already knows them.
     #
     # Returns either the batch or a typed rejection (see CreateCommandBatchResult).
-    createCommandBatch(request: CommandBatchCreateRequest!): CreateCommandBatchResult!
+    createCommandBatch(
+        """The batch to issue."""
+        request: CommandBatchCreateRequest!
+    ): CreateCommandBatchResult!
+    """
+    Cancels a command the platform still holds (QUEUED, HELD or PARKED) and returns it. A
+    command in any other state is returned unchanged, so check the status you get back: a SENT
+    command is already at the device and cannot be recalled. An unknown token is an error.
+    Requires command:write.
+    """
     # Cancel a command the platform still holds, by token: QUEUED, HELD or PARKED.
     #
     # A command that has been SENT is returned UNCHANGED rather than cancelled. It is at
@@ -444,7 +864,16 @@ type Mutation {
     # cancelling an already-finished command does, and describes a race a caller cannot
     # avoid: the command may have been dispatched a millisecond before the request landed.
     # Check the `status` you get back.
-    cancelCommand(token: String!): Command!
+    cancelCommand(
+        """Token of the command to cancel."""
+        token: String!
+    ): Command!
+    """
+    Calls off a fleet write: stops every command of the batch the platform still holds (QUEUED,
+    HELD or PARKED) and reports what it did. Commands already sent cannot be recalled. An
+    unknown batch token is an error. Requires command:write, and also device:read when the batch
+    targeted a group.
+    """
     # Call off a fleet write: every command the platform still holds for the batch is
     # stopped. Reports what it was able to do, and never refuses — a brake that declined
     # to engage because part of the fleet had already moved would leave the rest of the
@@ -461,7 +890,17 @@ type Mutation {
     # device registry owns. The check happens BEFORE anything is cancelled.
     #
     # An unknown batch token is an error, not a result.
-    cancelCommandBatch(token: String!): CancelCommandBatchResult!
+    cancelCommandBatch(
+        """Token of the batch to cancel."""
+        token: String!
+    ): CancelCommandBatchResult!
+    """
+    For a transport that dispatches a backlog itself: claims a QUEUED, HELD or PARKED command
+    for immediate delivery and moves it to SENT. Claim before dispatching. Returns the dispatch
+    nonce, which must be quoted back when reporting the outcome; returns null if the command
+    could not be claimed (already sent, answered or cancelled). Requires command:claim, a
+    system-tier authority.
+    """
     # Claim a still-dispatchable command (QUEUED, HELD or PARKED) for immediate delivery,
     # moving it to SENT. For a transport that dispatches a device's backlog itself
     # rather than waiting for the delivery sweep — an LwM2M device draining its held
@@ -475,7 +914,17 @@ type Mutation {
     # Returns null if the command was not claimable (already sent, answered or cancelled),
     # which is a benign race: there is no dispatch, so there is nothing to name and nothing
     # to deliver.
-    markCommandSent(token: String!): String
+    markCommandSent(
+        """Token of the command to claim."""
+        token: String!
+    ): String
+    """
+    For a transport that received a command on the live delivery stream: confirms, just before
+    actuating, that the delivery is still the dispatch the platform holds. Returns a new
+    dispatch nonce to quote when reporting the outcome, or null when the delivery is stale
+    (re-armed, re-sent, answered, cancelled or its batch cancelled), in which case discard it
+    without actuating. Requires command:claim, a system-tier authority.
+    """
     # Confirm, immediately before actuating it, that a command a transport RECEIVED on the
     # live delivery stream is still the dispatch the platform is holding. For a transport that
     # delivers over its own session: a delivery can arrive late (redelivered after a timeout,
@@ -488,7 +937,18 @@ type Mutation {
     # naming the old one is refused. Returns null when the delivery names a dispatch the
     # command is no longer on (re-armed, re-sent, answered, cancelled, or its batch called
     # off); the caller must then discard it without actuating.
-    confirmCommandDispatch(token: String!, dispatchNonce: String!): String
+    confirmCommandDispatch(
+        """Token of the command."""
+        token: String!
+        """The dispatch nonce carried in the delivery."""
+        dispatchNonce: String!
+    ): String
+    """
+    For a transport that found the device unreachable: hands a SENT command back, moving it to
+    PARKED to be delivered on the device's next wake. Returns false, a settled outcome that must
+    not be retried, when the command moved on (answered, cancelled, expired or re-claimed) or
+    the nonce names a superseded dispatch. Requires command:park, a system-tier authority.
+    """
     # Hand back a command whose transport found the device UNREACHABLE, moving it
     # SENT -> PARKED so the record says it went nowhere. The platform decides to publish
     # from presence — is the device registered — but a queue-mode device can be registered
@@ -505,7 +965,18 @@ type Mutation {
     # Returns false when the command moved on under the request — answered, cancelled,
     # expired, or re-claimed by a wake drain. That is a settled outcome, not a failure,
     # and must not be retried.
-    parkCommand(token: String!, dispatchNonce: String!): Boolean!
+    parkCommand(
+        """Token of the command."""
+        token: String!
+        """The dispatch nonce carried in the delivery this command arrived in."""
+        dispatchNonce: String!
+    ): Boolean!
+    """
+    Returns a device's HELD commands to the delivery queue (QUEUED) because the device has come
+    back, and returns how many were released; zero when nothing was waiting. It queues rather
+    than delivers: the delivery sweep still decides whether each command goes out. Requires
+    command:wake, a system-tier authority.
+    """
     # Return a device's WITHHELD commands to the delivery queue because the device has
     # come back. For a transport that owns the device's connection and therefore learns
     # of its return the instant it happens, rather than waiting for the periodic pass
@@ -515,7 +986,10 @@ type Mutation {
     # It queues rather than delivers: the delivery sweep still decides whether each
     # command goes out, re-reading presence and re-applying every other gate. So a wake
     # changes WHEN that question is asked, never what the answer is.
-    releaseHeldCommands(deviceToken: String!): Int!
+    releaseHeldCommands(
+        """Token of the device that came back."""
+        deviceToken: String!
+    ): Int!
 }
 
 schema {
