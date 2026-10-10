@@ -13,12 +13,13 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readdirSync } from 'node
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { compile } from '@mdx-js/mdx';
+import { compile, createProcessor } from '@mdx-js/mdx';
+import { buildSchema } from 'graphql';
 import remarkGfm from 'remark-gfm';
 
 import {
   CHROME, LOCALES, DOCS, buildPages, assertCoverage, configuredLocales, pageName,
-  escapeBlock, escapeCell, escapeInline,
+  escapeBlock, escapeCell, escapeInline, escapeEsm, defaultOf,
 } from './generate-graphql-reference.mjs';
 import { GenerateError, discover, resolve } from './generate-schema.mjs';
 import { SCHEMAS, REQUIRED_OUTPUTS } from './schemas.manifest.mjs';
@@ -175,11 +176,40 @@ const NASTY = [
   '```',
   '',
   'After <the> fence.',
+  '',
+  // An inline span at line start is not a fence (a backtick fence's info string
+  // cannot hold a backtick); its expression must still be escaped.
+  '```inline``` at start {"LEAK:"+Object.keys(process.env).length}',
+  '',
+  'Text after the fake fence {still escaped}.',
+  '',
+  'export const leaked = process.env.PATH',
+  'import fs from "node:fs"',
+  'export the data as CSV.',
 ].join('\n');
 
-test('every real page compiles as MDX', async () => {
+// Docusaurus-equivalent parse, listing every node MDX would EXECUTE: an expression,
+// ESM, or JSX. A page that compiles can still run code at build time, so compiling is
+// not the check — the absence of these nodes is.
+const processor = createProcessor({ remarkPlugins: [remarkGfm] });
+function executableNodes(text) {
+  const tree = processor.parse(
+    text.replace(/^---\n[\s\S]*?\n---\n/, '').replace(/ \{#[^}\n]+\}$/gm, ''),
+  );
+  const found = [];
+  (function walk(n) {
+    // The generator's own <br />, attribute-free, is the one JSX it writes on purpose.
+    const ownBreak = n.name === 'br' && !n.attributes?.length && !n.children?.length;
+    if (/^mdx/.test(n.type) && !ownBreak) found.push(`${n.type}: ${String(n.value ?? n.name ?? '').slice(0, 60)}`);
+    for (const c of n.children ?? []) walk(c);
+  })(tree);
+  return found;
+}
+
+test('every real page compiles as MDX and executes nothing', async () => {
   for (const p of pages.filter((x) => x.locale === 'en')) {
     await assert.doesNotReject(compileLikeDocusaurus(p.text), p.path);
+    assert.deepEqual(executableNodes(p.text), [], p.path);
   }
 });
 
@@ -202,8 +232,65 @@ test('MDX-hostile descriptions are escaped, in blocks and in table cells', async
   ].join('\n');
   const page = renderAlpha(sdl);
   await assert.doesNotReject(compileLikeDocusaurus(page));
+  assert.deepEqual(executableNodes(page), []);
+  // The prose survives as prose.
+  assert.ok(page.includes('&#101;xport the data as CSV.'));
+  assert.ok(page.includes('fake fence \\{still escaped\\}.'));
   // The indented example became a fence rather than a heading.
   assert.match(page, /```\n {4}query \{ devices \{ token \} \}\n {4}# not a heading\n```/);
+});
+
+test('NEGATIVE CONTROL: unescaped, these lines execute or break the build', async () => {
+  for (const raw of [
+    '```inline``` at start {1+1}',
+    'export const leaked = process.env.PATH',
+    'import fs from "node:fs"',
+  ]) {
+    assert.notDeepEqual(executableNodes(`Text\n\n${raw}\n`), [], raw);
+    assert.deepEqual(executableNodes(`Text\n\n${escapeBlock(raw)}\n`), [], raw);
+  }
+  // Prose MDX cannot parse as ESM fails the whole site build.
+  await assert.rejects(compileLikeDocusaurus('Text\n\nexport the data as CSV.\n'));
+  await assert.doesNotReject(compileLikeDocusaurus(`Text\n\n${escapeBlock('export the data as CSV.')}\n`));
+});
+
+test('a leading import or export is escaped, and nothing else is', () => {
+  assert.equal(escapeEsm('export const x = 1'), '&#101;xport const x = 1');
+  assert.equal(escapeEsm('  import x'), '  &#105;mport x');
+  assert.equal(escapeEsm('exporter of data'), 'exporter of data');
+  assert.equal(escapeEsm('we export it'), 'we export it');
+  assert.equal(escapeBlock('```a``` {b}'), '```a``` \\{b\\}');
+});
+
+test('defaults are printed for arguments and input fields', () => {
+  const page = renderAlpha([
+    'input Filter { size: Int = 10 tags: [String!] = ["a"] }',
+    'type Query { find(limit: Int = 25, filter: Filter = {size: 3}): Boolean }',
+  ].join('\n'));
+  assert.ok(page.includes('| `limit` | `Int` = `25` |'), 'argument default');
+  assert.ok(page.includes('| `filter` | [`Filter`](#Filter) = `{ size: 3 }` |'), 'object default');
+  assert.ok(page.includes('| `size` | `Int` = `10` |'), 'input field default');
+  assert.ok(page.includes('| `tags` | `[String!]` = `["a"]` |'), 'list default');
+  const s = buildSchema('type Query { f(x: Int): Int }');
+  assert.equal(defaultOf(s.getQueryType().getFields().f.args[0]), undefined);
+});
+
+test('the citation gate fires on what the generator itself writes', () => {
+  // Page chrome never passes through the SDL publisher's gate, so only the page-level
+  // scan can catch a citation there.
+  const repo = fixture(TRIVIAL);
+  try {
+    const chrome = { en: { ...CHROME.en, pageIntro: 'Generated per ADR-047.' } };
+    assert.throws(() => buildPages(repo, FIXTURE_SCHEMAS, chrome), (err) => {
+      assert.ok(err instanceof GenerateError);
+      assert.match(err.message, /unpublishable reference/);
+      assert.match(err.message, /ADR-047/);
+      return true;
+    });
+    assert.doesNotThrow(() => buildPages(repo, FIXTURE_SCHEMAS, { en: CHROME.en }));
+  } finally {
+    rmSync(repo, { recursive: true, force: true });
+  }
 });
 
 test('NEGATIVE CONTROL: the same descriptions unescaped do not compile', async () => {

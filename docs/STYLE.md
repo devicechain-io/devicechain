@@ -84,6 +84,21 @@ If you believe a claim is false, do not fix it by rewording. Record it; the fact
 - A **Status** note says what is available, what is planned, and nothing else. Mechanism goes in
   the body.
 
+## GraphQL descriptions
+
+A `"""` description in a schema file is published three ways: by introspection, in the schema
+files under `/schema/`, and on the generated GraphQL reference pages, which render it as
+**Markdown**. Write it for all three.
+
+- Plain sentences, with `code` for field, argument, type and enum names. Lists and links are fine.
+- No headings and no admonitions (`:::note`). On the reference page a description sits under the
+  element's own heading, so a heading inside it breaks the page outline, and an admonition is
+  Docusaurus syntax that every other GraphQL tool shows as literal colons.
+- Characters MDX would treat as code — `<`, `{`, a line starting with `import` or `export` — are
+  escaped by the generator, so write them naturally. An example longer than a line goes in a
+  fenced block.
+- A `#` comment is a maintainer note. It is never published on the reference pages.
+
 ## Length
 
 Most pages come out 10–30% shorter. That is a result, not a target: never cut a fact, a warning or a

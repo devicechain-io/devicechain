@@ -31,7 +31,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import {
   buildSchema, isObjectType, isInterfaceType, isUnionType, isEnumType, isInputObjectType,
-  isScalarType, isSpecifiedScalarType, isIntrospectionType, getNamedType,
+  isScalarType, isSpecifiedScalarType, isIntrospectionType, getNamedType, print,
 } from 'graphql';
 
 import { REPO, GenerateError, buildArtifacts, resolve } from './generate-schema.mjs';
@@ -183,7 +183,22 @@ function fenceRun(s) {
   if (!s || (s[0] !== '`' && s[0] !== '~')) return [null, 0];
   let n = 0;
   while (s[n] === s[0]) n++;
-  return n < 3 ? [null, 0] : [s[0], n];
+  if (n < 3) return [null, 0];
+  // CommonMark: a backtick fence's info string cannot contain a backtick. A line like
+  // ```code``` {x} is an inline span, not a fence — taking it for one would leave its
+  // {x} unescaped (MDX evaluates it at build time) and let the next ``` "close" a
+  // fence that never opened, swallowing the page.
+  if (s[0] === '`' && s.slice(n).includes('`')) return [null, 0];
+  return [s[0], n];
+}
+
+// A line starting with `import` or `export` is MDX ESM: it is executed at build time,
+// and ordinary prose ("export the data as CSV.") fails to parse and breaks the whole
+// site build. A character reference for the first letter keeps the word on the page
+// and out of the ESM grammar.
+const ESM_LINE = /^([ \t]*)(?:(i)(?=mport\b)|(e)(?=xport\b))/;
+export function escapeEsm(line) {
+  return line.replace(ESM_LINE, (_, indent, i) => `${indent}${i ? '&#105;' : '&#101;'}`);
 }
 
 const isIndented = (line) => line.startsWith('    ') || line.startsWith('\t');
@@ -220,7 +235,7 @@ export function escapeBlock(text) {
       i = j;
       continue;
     }
-    out.push(escapeInline(line));
+    out.push(escapeEsm(escapeInline(line)));
   }
   // An unterminated fence would swallow the rest of the page, so close it here.
   if (fenceLen > 0) out.push(fenceCh.repeat(fenceLen));
@@ -281,11 +296,29 @@ const byName = (a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
 
 function argsTable(args) {
   if (!args.length) return '';
-  const rows = [...args].sort(byName).map((a) => {
-    const dflt = a.defaultValue === undefined ? '' : ` = \`${JSON.stringify(a.defaultValue)}\``;
-    return `| \`${a.name}\` | ${typeRef(a.type)}${dflt.replace(/\|/g, '\\|')} | ${cell(a)} |`;
-  });
+  const rows = [...args].sort(byName)
+    .map((a) => `| \`${a.name}\` | ${typeRef(a.type)}${defaultSuffix(a)} | ${cell(a)} |`);
   return ['| Argument | Type | Description |', '|---|---|---|', ...rows].join('\n');
+}
+
+/**
+ * The SDL default of an argument or input field, printed as GraphQL, or undefined.
+ * graphql 17 keeps it as the parsed literal (`default.literal`); `defaultValue` is the
+ * graphql 16 coerced form, read only as a fallback.
+ */
+export function defaultOf(el) {
+  if (el.default?.literal) return print(el.default.literal);
+  if (el.default && 'value' in el.default) return JSON.stringify(el.default.value);
+  if (el.defaultValue !== undefined) return JSON.stringify(el.defaultValue);
+  return undefined;
+}
+
+/** ` = `value`` for a table cell, or ''. A default holding backticks gets a wider span. */
+function defaultSuffix(el) {
+  const d = defaultOf(el);
+  if (d === undefined) return '';
+  const span = d.includes('`') ? `\`\` ${d} \`\`` : `\`${d}\``;
+  return ` = ${span}`.replace(/\|/g, '\\|');
 }
 
 /** A field cell that names its arguments, for the rare non-root field that takes some. */
@@ -293,14 +326,14 @@ function fieldCell(f) {
   const base = cell(f);
   if (!f.args?.length) return base;
   const args = [...f.args].sort(byName)
-    .map((a) => `\`${a.name}\`: ${typeRef(a.type)} — ${cell(a)}`)
+    .map((a) => `\`${a.name}\`: ${typeRef(a.type)}${defaultSuffix(a)} — ${cell(a)}`)
     .join('<br />');
   return `${base}<br /><br />**Arguments:**<br />${args}`;
 }
 
 function fieldsTable(fields, head = 'Field') {
   const rows = [...fields].sort(byName)
-    .map((f) => `| \`${f.name}\` | ${typeRef(f.type)} | ${fieldCell(f)} |`);
+    .map((f) => `| \`${f.name}\` | ${typeRef(f.type)}${defaultSuffix(f)} | ${fieldCell(f)} |`);
   return [`| ${head} | Type | Description |`, '|---|---|---|', ...rows].join('\n');
 }
 
@@ -401,8 +434,7 @@ const frontMatter = (fields) => [
 /** Name a page is published under: the schema file's name without its extension. */
 export const pageName = (published) => published.replace(/\.graphql$/, '');
 
-function renderPage(locale, s, schema, body, position) {
-  const c = CHROME[locale];
+function renderPage(c, s, schema, body, position) {
   const name = pageName(s.published);
   const { described, total } = coverage(schema);
   const plane = PLANES[s.plane];
@@ -433,8 +465,7 @@ function renderPage(locale, s, schema, body, position) {
   ].join('\n');
 }
 
-function renderIndex(locale, entries) {
-  const c = CHROME[locale];
+function renderIndex(c, entries) {
   const rows = entries.map(({ s, cov }) => {
     const name = pageName(s.published);
     return `| [${name}](./${name}.md) | ${s.plane} | \`${s.endpoint}\` | ${c.coverage(cov.described, cov.total)} |`;
@@ -460,7 +491,7 @@ function renderIndex(locale, entries) {
  * Every page, in every locale, as { path (relative to docs/), text }. Throws rather
  * than returning a partial set.
  */
-export function buildPages(repo = REPO, schemas = SCHEMAS) {
+export function buildPages(repo = REPO, schemas = SCHEMAS, chrome = CHROME) {
   // The same artifacts /schema/ publishes: reconciled against the tree, sanitized, gated.
   const artifacts = new Map(buildArtifacts(repo, schemas).map((a) => [a.name, a.text]));
   const published = schemas.map(resolve).filter((s) => s.publish !== false)
@@ -481,16 +512,17 @@ export function buildPages(repo = REPO, schemas = SCHEMAS) {
   });
 
   const pages = [];
-  for (const locale of LOCALES) {
+  const locales = Object.keys(chrome);
+  for (const locale of locales) {
     const dir = localeDir(locale);
-    pages.push({ locale, name: 'index', path: join(dir, 'index.md'), text: renderIndex(locale, entries) });
+    pages.push({ locale, name: 'index', path: join(dir, 'index.md'), text: renderIndex(chrome[locale], entries) });
     entries.forEach(({ s, schema, body }, i) => {
       const name = pageName(s.published);
-      pages.push({ locale, name, path: join(dir, `${name}.md`), text: renderPage(locale, s, schema, body, i + 1) });
+      pages.push({ locale, name, path: join(dir, `${name}.md`), text: renderPage(chrome[locale], s, schema, body, i + 1) });
     });
   }
 
-  assertCoverage(pages, published);
+  assertCoverage(pages, published, locales);
 
   const findings = pages.flatMap((p) => scan(p.path, p.text));
   if (findings.length) {
@@ -506,7 +538,7 @@ export function buildPages(repo = REPO, schemas = SCHEMAS) {
  * The floor: every published schema has a page in every locale, checked BY NAME — a
  * count would look just as complete with one schema missing and another doubled.
  */
-export function assertCoverage(pages, published) {
+export function assertCoverage(pages, published, locales = LOCALES) {
   const want = published.map((s) => pageName(s.published));
   for (const required of REQUIRED_OUTPUTS) {
     if (!want.includes(pageName(required))) {
@@ -514,7 +546,7 @@ export function assertCoverage(pages, published) {
     }
   }
   const missing = [];
-  for (const locale of LOCALES) {
+  for (const locale of locales) {
     const have = new Set(pages.filter((p) => p.locale === locale).map((p) => p.name));
     for (const name of ['index', ...want]) if (!have.has(name)) missing.push(`${locale}: ${name}`);
   }
