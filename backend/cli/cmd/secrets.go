@@ -26,7 +26,7 @@ var secretsCmd = &cobra.Command{
 
 var secretsEscrowCmd = &cobra.Command{
 	Use:   "escrow",
-	Short: "Work with root-key escrow artifacts (ADR-059)",
+	Short: "Work with root-key escrow artifacts",
 	Long: "The instance secret-store root key wraps every stored secret. Its only copy inside the\n" +
 		"cluster lives in etcd, which no DeviceChain backup contains — so `dcctl bootstrap` writes an\n" +
 		"encrypted escrow artifact, and these commands are how you check that artifact is the right\n" +
@@ -41,7 +41,13 @@ var secretsEscrowCmd = &cobra.Command{
 var secretsEscrowShowCmd = &cobra.Command{
 	Use:   "show <file>",
 	Short: "Print what an escrow artifact says about itself (no passphrase needed)",
-	Args:  cobra.ExactArgs(1),
+	Long: `Print the cleartext header of a root-key escrow artifact: the instance it belongs to, when it
+was created, its cipher and key-derivation parameters, and the digest of the root key it holds.
+
+Everything printed is cleartext and needs no passphrase; nothing is decrypted. The header is
+bound to the encrypted key, so an edit to it fails at restore, but show does not check that. Use it to tell which of several files belongs to which instance. To check an
+artifact against a live instance, use "dcctl secrets escrow verify".`,
+	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		art, err := readEscrowArtifact(args[0])
 		if err != nil {
@@ -73,7 +79,19 @@ var secretsEscrowShowCmd = &cobra.Command{
 var secretsEscrowVerifyCmd = &cobra.Command{
 	Use:   "verify <file>",
 	Short: "Check that an escrow artifact holds the root key a live instance is running",
-	Args:  cobra.ExactArgs(1),
+	Long: `Check that a root-key escrow artifact holds the root key a live instance is running.
+
+The check compares key digests: the artifact's against the digest of the key in the instance's
+configuration Secret (read through --kube-context, or the current context). It needs no
+passphrase and decrypts nothing, so it is safe to run as often as you like, from a scheduled
+job or a CI gate.
+
+A mismatch means the artifact is intact but belongs to a different key (usually the instance
+was re-bootstrapped after the file was written, or the file belongs to another instance), so
+the instance has no usable escrow. The command exits non-zero in that case.
+
+  dcctl secrets escrow verify --instance prod ./prod-rootkey.escrow`,
+	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if escrowInstance == "" {
 			return fmt.Errorf("--instance is required: the check is against a live instance's config Secret")

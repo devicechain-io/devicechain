@@ -20,7 +20,7 @@ import (
 var simCmd = &cobra.Command{
 	Use:   "sim",
 	Short: "Create and drive DeviceChain simulations",
-	Long: `Create and drive standalone DeviceChain simulations (ADR-035).
+	Long: `Create and drive standalone DeviceChain simulations.
 
 'sim create' mints a scoped per-sim identity + tenant on the instance and writes a
 handshake file the dc-simulator process reads to come up. 'sim start/stop/status'

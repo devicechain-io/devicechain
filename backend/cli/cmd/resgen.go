@@ -20,7 +20,12 @@ const GenResFolder = "resources"
 var resgenCmd = &cobra.Command{
 	Use:   "resgen",
 	Short: "Generate configuration resources",
-	Long:  `Generates configuration resources directly from the microservice codebase`,
+	Long: `Generates configuration resources directly from the microservice codebase.
+
+Writes the default instance configuration as a YAML file under ./resources (created in
+the current directory if it does not exist), named <group>_<name>.yaml. The files are
+rendered from the same typed configuration the services validate at startup, so they
+are a starting point for an instance declaration that is known to parse.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		fmt.Println("Generating resources from source code...")
 		os.MkdirAll(GenResFolder, 0777)

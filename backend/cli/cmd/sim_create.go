@@ -36,8 +36,8 @@ func init() {
 	registerMqttFlags(simCreateCmd.Flags())
 	simCreateCmd.Flags().String("manifest", "devicepulse",
 		"built-in scenario to run ("+strings.Join(sim.KnownManifestIds, ", ")+")")
-	simCreateCmd.Flags().String("tier", sim.DefaultTenantTier, "tenant tier to package the sim at (ADR-065)")
-	simCreateCmd.Flags().Int("shed-priority", 0, "ADR-063 shed-priority override 1-100 (0 = inherit the tier's); a load-test lever to place a probe tenant in a shed band")
+	simCreateCmd.Flags().String("tier", sim.DefaultTenantTier, "tenant tier to package the sim at")
+	simCreateCmd.Flags().Int("shed-priority", 0, "shed-priority override 1-100 (0 = inherit the tier's); a load-test lever to place a probe tenant in a shed band")
 	simCmd.AddCommand(simCreateCmd)
 }
 
