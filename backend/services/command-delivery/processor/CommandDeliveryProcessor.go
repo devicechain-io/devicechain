@@ -36,7 +36,12 @@ type deliveryEnvelope struct {
 	// device unreachable quotes it back when handing the command over, so a request still
 	// in redelivery cannot park a row that has since been re-claimed and actuated. It is
 	// opaque to a device and nothing needs to read it except the transport that may park.
-	DispatchNonce string `json:"dispatchNonce,omitempty"`
+	//
+	// Not `omitempty`: every publish carries the nonce its claim minted (deliverCommand
+	// builds the envelope after MarkSent), and the published contract says so, because a
+	// device must echo it. The json tags of both envelopes are held to the committed
+	// schemas in ../contract by contract_test.go.
+	DispatchNonce string `json:"dispatchNonce"`
 }
 
 // responsePayload is a device's answer data: any JSON value. The delivery envelope's payload

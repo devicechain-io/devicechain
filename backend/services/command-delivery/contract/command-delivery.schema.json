@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://docs.devicechain.io/schema/device/command-delivery.schema.json",
+  "title": "DeviceChain command delivery",
+  "description": "The JSON message the platform publishes to a device on MQTT topic {instanceId}/{tenant}/device-commands/{deviceToken}, once per dispatch of a command. A device answers it with a command response. Delivery is live-only: a device that is not connected and subscribed when it is published does not receive it.",
+  "type": "object",
+  "properties": {
+    "token": {
+      "type": "string",
+      "description": "The command's token. It identifies the command, not the device, and it is what the response sends back as commandToken."
+    },
+    "deviceToken": {
+      "type": "string",
+      "description": "The token of the device the command is addressed to: always the device whose topic it was published on."
+    },
+    "name": {
+      "type": "string",
+      "description": "The command key. When the device's profile declares a command vocabulary, it is one of that vocabulary's published commands."
+    },
+    "payload": {
+      "description": "The command's parameters, exactly as they were issued: any JSON value. When the profile declares a parameter schema for the command, it has already been validated against it. Absent when the command was issued without parameters."
+    },
+    "dispatchNonce": {
+      "type": "string",
+      "description": "Names this dispatch of the command. Opaque: do not parse it. The response must echo it. If the same command is delivered again, answer with the nonce from the latest delivery."
+    }
+  },
+  "required": ["token", "deviceToken", "name", "dispatchNonce"],
+  "examples": [
+    {
+      "token": "6f1c0f8e-6d1e-4a1a-9a3f-1f2b0d0a5c11",
+      "deviceToken": "sensor-001",
+      "name": "reboot",
+      "payload": { "delaySeconds": 5 },
+      "dispatchNonce": "0f6f4a2c-9b71-4d0e-8a5b-3c2d1e0f7a94"
+    }
+  ]
+}
