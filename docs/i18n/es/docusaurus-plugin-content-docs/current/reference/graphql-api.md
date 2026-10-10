@@ -757,6 +757,18 @@ consola, la aplicación de paneles, los SDK, `dcctl` y el servidor MCP envían u
 mutación por solicitud y como mucho dos campos de consulta. El límite se aplica solo a los campos de
 primer nivel; los alias de un campo anidado no se cuentan.
 
+### Límites de tamaño en listas, entradas y agregaciones {#size-bounds}
+
+Aparte de los límites de forma de la solicitud, algunas lecturas y entradas tienen un límite de
+tamaño. Una solicitud que lo supera se rechaza con `extensions.code` igual a `LIMIT_EXCEEDED`. No se
+trunca nada ni se aplica nada a medias, así que reduzca la solicitud y envíela de nuevo.
+
+| Límite | Valor | Se aplica a |
+| --- | --- | --- |
+| Intervalos por agregación | 10 000 | `bucketedMeasurements`: el rango dividido por `intervalSeconds`, redondeado hacia arriba. |
+
+`bucketedMeasurements` también exige `startTime`; `endTime` toma por defecto la hora actual.
+
 ### Solo sintaxis de GraphQL {#graphql-syntax-only}
 
 **Los documentos deben usar la sintaxis propia de GraphQL.** Un documento que contenga cualquiera de

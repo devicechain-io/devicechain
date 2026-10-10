@@ -29,7 +29,7 @@ The server exposes eleven **read** tools. Each one is a query against the same G
 - `get_device_state` — the device's current last-known state, including whether that state was *reported by the transport* or *inferred from silence*. The difference changes what "not active" means. Reported means the device is known to be disconnected. Inferred means only that nothing has arrived recently, which is also what a healthy device on a slow reporting interval looks like.
 - `get_latest_measurements` — the most recent value per measurement.
 - `query_measurements` — raw time-series readings over a time range.
-- `aggregate_measurements` — bucketed aggregates (min/max/avg and the like) over a range.
+- `aggregate_measurements` — bucketed aggregates (min/max/avg and the like) over a range. `startTime` and `intervalSeconds` are required, `endTime` defaults to now, and a request is capped at 10,000 buckets.
 
 **Position**
 

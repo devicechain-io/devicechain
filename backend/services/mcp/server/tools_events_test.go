@@ -9,6 +9,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -45,7 +47,7 @@ func TestAggregateMeasurements(t *testing.T) {
 	tools, captured, done := toolsCapturing(t, `{"data":{"bucketedMeasurements":[{"bucketStart":"2026-07-12T00:00:00Z","name":"temp","avg":20.5,"count":6}]}}`)
 	defer done()
 	_, out, err := tools.AggregateMeasurements(context.Background(), authedReq("tok"),
-		AggregateMeasurementsInput{DeviceToken: "d1", Name: "temp", IntervalSeconds: 3600})
+		AggregateMeasurementsInput{DeviceToken: "d1", Name: "temp", IntervalSeconds: 3600, StartTime: "2026-07-12T00:00:00Z"})
 	if err != nil {
 		t.Fatalf("AggregateMeasurements: %v", err)
 	}
@@ -134,5 +136,24 @@ func TestListCommands(t *testing.T) {
 	crit := (*captured)["variables"].(map[string]any)["criteria"].(map[string]any)
 	if crit["deviceToken"] != "d1" || crit["status"] != "SENT" {
 		t.Errorf("command criteria not forwarded: %v", crit)
+	}
+}
+
+// startTime is required: refused before any call, and declared required in the tool's input
+// schema (a json tag without omitempty is what makes the schema list it as required).
+func TestAggregateMeasurementsRequiresStartTime(t *testing.T) {
+	tools, _, done := toolsCapturing(t, `{"data":{"bucketedMeasurements":[]}}`)
+	defer done()
+	_, _, err := tools.AggregateMeasurements(context.Background(), authedReq("tok"),
+		AggregateMeasurementsInput{DeviceToken: "d1", IntervalSeconds: 3600})
+	if err == nil || !strings.Contains(err.Error(), "startTime is required") {
+		t.Fatalf("a call with no startTime must be refused, got %v", err)
+	}
+	f, _ := reflect.TypeOf(AggregateMeasurementsInput{}).FieldByName("StartTime")
+	if tag := f.Tag.Get("json"); tag != "startTime" {
+		t.Fatalf("startTime must be a required schema property (json tag without omitempty), got %q", tag)
+	}
+	if tag := f.Tag.Get("jsonschema"); !strings.Contains(tag, "required") {
+		t.Fatalf("the startTime description must say it is required, got %q", tag)
 	}
 }

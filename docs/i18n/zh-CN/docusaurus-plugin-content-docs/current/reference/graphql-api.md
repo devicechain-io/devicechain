@@ -618,6 +618,17 @@ token 会拼入基础设施命名空间：租户 ID 成为 NATS subject 中按 `
 控制台、仪表盘应用、SDK、`dcctl` 和 MCP 服务器每个请求发送一个变更字段，最多两个查询字段。
 限制只针对顶层字段，嵌套字段的别名不计数。
 
+### 列表、输入和聚合的大小限制 {#size-bounds}
+
+除上述请求形态限制外，部分读取和输入还有大小限制。超出限制的请求会被拒绝，`extensions.code`
+为 `LIMIT_EXCEEDED`。不会截断，也不会部分应用，请缩小请求后重新发送。
+
+| 限制 | 数值 | 适用于 |
+| --- | --- | --- |
+| 每次聚合的时间桶数 | 10,000 | `bucketedMeasurements`：时间范围除以 `intervalSeconds`，向上取整。 |
+
+`bucketedMeasurements` 还要求提供 `startTime`；`endTime` 默认为当前时间。
+
 ### 仅接受 GraphQL 语法 {#graphql-syntax-only}
 
 **文档必须使用 GraphQL 自身语法。**包含以下任一内容的文档会因语法错误被拒绝，不执行任何内容：
