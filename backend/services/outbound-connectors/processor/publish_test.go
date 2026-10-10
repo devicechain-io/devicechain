@@ -149,17 +149,23 @@ func TestExecutePublishNotPublished(t *testing.T) {
 
 // TestExecutePublishUnsupportedType is terminal: a connector whose type is in the model
 // vocabulary but has no generator shipped yet (gcp_pubsub, deferred) is recognized but
-// dead-lettered as unsupported, never silently dropped. gcp_pubsub is not connectorspec-
-// Supported, so write-time validation is JSON-object-only and the connector is creatable.
+// dead-lettered as unsupported, never silently dropped. The write path now refuses
+// gcp_pubsub, so the row is seeded as one stored before that refusal existed.
 func TestExecutePublishUnsupportedType(t *testing.T) {
 	e, api, cap := newPublishTestExecutor(t)
 	ctx := core.WithTenant(context.Background(), "acme")
 	_, err := api.CreateConnector(ctx, &model.ConnectorCreateRequest{
 		Token: "g", Type: "gcp_pubsub", Config: `{"project":"p","topic":"t"}`,
 	})
-	require.NoError(t, err)
-	_, err = api.PublishConnector(ctx, "g", nil, nil, "alice", nil)
-	require.NoError(t, err)
+	require.Error(t, err, "the write path refuses an unsupported type")
+	conn := &model.Connector{
+		TokenReference: rdb.TokenReference{Token: "g"}, Type: "gcp_pubsub",
+		Config: []byte(`{"project":"p","topic":"t"}`),
+	}
+	require.NoError(t, api.RDB.DB(ctx).Create(conn).Error)
+	require.NoError(t, api.RDB.DB(ctx).Create(&model.ConnectorVersion{
+		ConnectorID: conn.ID, Version: 1, Type: conn.Type, Config: conn.Config, PublishedBy: "alice",
+	}).Error)
 
 	res := e.Execute(ctx, publishReq("g"))
 	assert.False(t, res.retryable)

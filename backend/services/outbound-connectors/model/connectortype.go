@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+
+	"github.com/devicechain-io/dc-outbound-connectors/connectorspec"
 )
 
 // ConnectorType is a registered outbound-connector kind. It is DeviceChain's stable
@@ -44,6 +46,28 @@ var registeredConnectorTypes = map[ConnectorType]struct{}{
 // registered vocabulary. Failing closed at write keeps an unroutable connector — one
 // no generator could ever execute — out of the store entirely.
 var ErrUnknownConnectorType = errors.New("connector type is not one of the registered outbound targets")
+
+// CodeUnsupported is the GraphQL extensions.code served when a write names a connector
+// type that is in the vocabulary but has no delivery client in this build: recognized,
+// not executable.
+const CodeUnsupported = "UNSUPPORTED"
+
+// UnsupportedTypeError refuses a write of a connector type this build cannot deliver to.
+// It unwraps to connectorspec.ErrUnsupportedType, the same sentinel dispatch dead-letters
+// on, so one error names the condition at both ends: refused at write for new work,
+// dead-lettered at dispatch for a row stored before the refusal existed.
+type UnsupportedTypeError struct{ Type string }
+
+func (e *UnsupportedTypeError) Error() string {
+	return fmt.Sprintf("connector type %q is recognized but cannot be used in this build: it has no delivery client", e.Type)
+}
+
+func (e *UnsupportedTypeError) Unwrap() error { return connectorspec.ErrUnsupportedType }
+
+// Extensions is read by the GraphQL server and served as the error's extensions.
+func (e *UnsupportedTypeError) Extensions() map[string]any {
+	return map[string]any{"code": CodeUnsupported}
+}
 
 // ValidConnectorType reports whether s names a registered connector type.
 func ValidConnectorType(s string) bool {

@@ -15,7 +15,7 @@ Todo lo que describe esta página se aplica una vez desplegada el área. Para a�
 :::
 
 :::note Estado
-**Disponible hoy:** la acción de webhook `httpCall`, y una acción `publish` que entrega a MQTT, Apache Kafka, AWS SNS y AWS SQS a través de un conector versionado con alcance de inquilino, cuyas credenciales se guardan en el almacén de secretos cifrado. Ambas se pueden configurar como nodos de acción en el lienzo de automatización. Un conector `gcp_pubsub` se puede crear a través de la API, pero todavía no se puede despachar (consulta [más abajo](#publish--send-to-a-connector)).
+**Disponible hoy:** la acción de webhook `httpCall`, y una acción `publish` que entrega a MQTT, Apache Kafka, AWS SNS y AWS SQS a través de un conector versionado con alcance de inquilino, cuyas credenciales se guardan en el almacén de secretos cifrado. Ambas se pueden configurar como nodos de acción en el lienzo de automatización. `gcp_pubsub` es un tipo reconocido que todavía no se puede crear (consulta [más abajo](#publish--send-to-a-connector)).
 
 **Planificado:** más destinos de `publish` (RabbitMQ, Azure, NATS, Redis, Slack, Splunk) bajo el mismo modelo. Este repositorio es la fuente de verdad de lo que se construye actualmente.
 :::
@@ -46,7 +46,7 @@ Para brokers de mensajes y colas en la nube, el destino es un **conector** reuti
 
 Una única acción `publish` genérica cubre todos los tipos de broker y de cola; el **tipo del conector** selecciona el transporte. Los tipos admitidos hoy son `mqtt`, `kafka`, `aws_sns` y `aws_sqs`.
 
-Un conector `gcp_pubsub` se puede crear a través de la API, pero todavía no se puede despachar: un `publish` hacia uno de ellos se envía a la cola de mensajes no entregados (dead letter) como no soportado. La consola no ofrece ese tipo.
+`gcp_pubsub` es un tipo reconocido sin cliente de entrega en esta versión, así que crear, actualizar a ese tipo o publicar un conector de ese tipo se rechaza con el código de error `UNSUPPORTED`. La consola no ofrece ese tipo. Un conector de ese tipo guardado por una versión anterior sigue enviándose a la cola de mensajes no entregados (dead letter) como no soportado si un `publish` lo apunta, nunca se descarta en silencio.
 
 ## Los conectores son recursos versionados
 

@@ -226,3 +226,24 @@ mutation ($request: ConnectorCreateRequest!) {
 		}
 	})
 }
+
+// A type that is in the vocabulary but has no delivery client is refused over the wire
+// with the typed UNSUPPORTED code, not stored as a connector that can only dead-letter.
+func TestCreateConnectorRefusesAnUnsupportedTypeOverTheWire(t *testing.T) {
+	ctx := connectorWireCtx(t)
+	schema := gql.MustParseSchema(SchemaContent, &SchemaResolver{})
+	res := schema.Exec(ctx, `
+mutation ($request: ConnectorCreateRequest!) {
+  createConnector(request: $request) { token }
+}`, "", map[string]any{
+		"request": map[string]any{
+			"token": "pubsub", "type": "gcp_pubsub", "config": `{"project":"p","topic":"t"}`,
+		},
+	})
+	if len(res.Errors) != 1 {
+		t.Fatalf("want exactly one error, got %v (data %s)", res.Errors, res.Data)
+	}
+	if code, _ := res.Errors[0].Extensions["code"].(string); code != "UNSUPPORTED" {
+		t.Fatalf("want extensions.code UNSUPPORTED, got %v", res.Errors[0].Extensions)
+	}
+}

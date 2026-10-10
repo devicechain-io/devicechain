@@ -15,7 +15,7 @@ Everything on this page applies once the area is deployed. To add it, bring the 
 :::
 
 :::note Status
-**Available today:** the `httpCall` webhook action, and a `publish` action that delivers to MQTT, Apache Kafka, AWS SNS and AWS SQS through a tenant-scoped, versioned connector whose credentials are held in the encrypted secret store. Both are configurable as action nodes on the automation canvas. A `gcp_pubsub` connector can be created through the API but cannot be dispatched yet (see [below](#publish--send-to-a-connector)).
+**Available today:** the `httpCall` webhook action, and a `publish` action that delivers to MQTT, Apache Kafka, AWS SNS and AWS SQS through a tenant-scoped, versioned connector whose credentials are held in the encrypted secret store. Both are configurable as action nodes on the automation canvas. A `gcp_pubsub` connector is a recognized type that cannot be created yet (see [below](#publish--send-to-a-connector)).
 
 **Planned:** more `publish` targets (RabbitMQ, Azure, NATS, Redis, Slack, Splunk) behind the same model. This repository is the source of truth for what currently builds.
 :::
@@ -46,7 +46,7 @@ For message brokers and cloud queues, the target is a reusable **connector** (be
 
 One generic `publish` action covers every broker and queue type; the **connector's type** selects the transport. The supported types today are `mqtt`, `kafka`, `aws_sns` and `aws_sqs`.
 
-A `gcp_pubsub` connector can be created through the API but cannot be dispatched yet: a `publish` to one is dead-lettered as unsupported. The console does not offer the type.
+`gcp_pubsub` is a recognized type with no delivery client in this release, so creating, updating to or publishing a connector of that type is refused with the error code `UNSUPPORTED`. The console does not offer the type. A connector of that type stored by an earlier release is still dead-lettered as unsupported if a `publish` targets it, never silently dropped.
 
 ## Connectors are versioned resources
 
