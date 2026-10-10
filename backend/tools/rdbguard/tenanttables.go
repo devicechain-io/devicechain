@@ -230,6 +230,13 @@ func recvTypeName(recv *ast.FieldList) string {
 	if s, ok := t.(*ast.StarExpr); ok {
 		t = s.X
 	}
+	// A generic type's receiver carries its type parameters: Table[R], Pair[K, V].
+	switch g := t.(type) {
+	case *ast.IndexExpr:
+		t = g.X
+	case *ast.IndexListExpr:
+		t = g.X
+	}
 	if id, ok := t.(*ast.Ident); ok {
 		return id.Name
 	}

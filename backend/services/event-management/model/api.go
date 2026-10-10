@@ -244,8 +244,8 @@ func canonicalPayloadEntry(v any) ([]byte, error) {
 // a composite-primary-key hypertable emitted an `ON CONFLICT DO UPDATE` with no
 // inference target — invalid SQL, SQLSTATE 42601.)
 //
-// The insert is split by rdb.CreateChunked, so no number of events can make one statement
-// bind more parameters than the database driver accepts.
+// The insert is one column-array statement (eventColumns), which binds one array per
+// column, so no number of events can make it bind more parameters than the driver accepts.
 func upsertParentEvents(ctx context.Context, db *gorm.DB, events []*Event) error {
 	if len(events) == 0 {
 		return nil
@@ -267,17 +267,15 @@ func upsertParentEvents(ctx context.Context, db *gorm.DB, events []*Event) error
 	// The conflict target is the full primary key including tenant_id: a device
 	// token is unique only per tenant (ADR-042), so omitting tenant_id here would
 	// let one tenant's parent event suppress another tenant's identical-key event.
-	// tenant_id is stamped onto each row by the tenant-scope create callback before
-	// the insert, so the value is present when the conflict is evaluated.
+	// tenant_id is bound from the context by the column-array insert, which also refuses
+	// a row naming another tenant, so the value is present when the conflict is evaluated.
 	//
-	// ON CONFLICT infers the key by its column SET, so this list need not follow the
-	// key's (tenant_id, occurred_time, event_id) order. A pod still running the previous
-	// release, whose list is the same set, infers the rebuilt key the same way, which is
-	// what keeps a rolling upgrade writing (NewTimeLeadingKeysSchema).
-	return rdb.CreateChunked(db.WithContext(ctx).Clauses(clause.OnConflict{
-		Columns:   []clause.Column{{Name: "tenant_id"}, {Name: "event_id"}, {Name: "occurred_time"}},
-		DoNothing: true,
-	}), distinct).Error
+	// ON CONFLICT infers the key by its column SET, so the target (eventColumns) need not
+	// follow the key's (tenant_id, occurred_time, event_id) order. A pod still running the
+	// previous release, whose list is the same set, infers the rebuilt key the same way,
+	// which is what keeps a rolling upgrade writing (NewTimeLeadingKeysSchema).
+	_, err := eventColumns.Insert(db.WithContext(ctx), distinct)
+	return err
 }
 
 // ErrZeroEntryTime is the fail-closed rejection for a payload create request whose own
@@ -332,7 +330,8 @@ func (api *Api) CreateAlertEvent(ctx context.Context, request *AlertEventCreateR
 	return created[0], nil
 }
 
-// payloadConflict is the arbiter every payload table shares: a row's own identity.
+// payloadTarget (event_columns.go) is the arbiter every payload table shares: a row's own
+// identity.
 //
 // ON CONFLICT on the row's own identity, for the same reason the parent has one: the
 // base-event key cannot cover payload rows, so a redelivery of an event carrying no
@@ -340,18 +339,14 @@ func (api *Api) CreateAlertEvent(ctx context.Context, request *AlertEventCreateR
 // envelope owning N copies of its own rows.
 //
 // The key is (tenant_id, occurred_time, payload_id); ON CONFLICT infers it by the column
-// SET, so this list's order is not the key's, and need not be (NewTimeLeadingKeysSchema).
-var payloadConflict = clause.OnConflict{
-	Columns:   []clause.Column{{Name: "tenant_id"}, {Name: "payload_id"}, {Name: "occurred_time"}},
-	DoNothing: true,
-}
-
-// insertPayloadRows inserts payload rows (a pointer to a slice of a payload model) ON
-// CONFLICT on their identity, split by rdb.CreateChunked. The caller upserts the parent
-// events first; the payload rows relate to them by event_id, with no association or
-// foreign key (ADR-026 amd, see events.go).
-func insertPayloadRows(ctx context.Context, db *gorm.DB, rows any) error {
-	return rdb.CreateChunked(db.WithContext(ctx).Clauses(payloadConflict), rows).Error
+// SET, so the target's order is not the key's, and need not be (NewTimeLeadingKeysSchema).
+//
+// insertPayloadRows inserts payload rows ON CONFLICT on their identity, in one column-array
+// statement. The caller upserts the parent events first; the payload rows relate to them
+// by event_id, with no association or foreign key (ADR-026 amd, see events.go).
+func insertPayloadRows[R any](ctx context.Context, db *gorm.DB, table *rdb.ColumnTable[R], rows []*R) error {
+	_, err := table.Insert(db.WithContext(ctx), rows)
+	return err
 }
 
 // BuildLocationRows maps requests to their parent events and location rows without
@@ -451,11 +446,10 @@ func BuildAlertRows(requests []*AlertEventCreateRequest) ([]*Event, []*AlertEven
 	return parents, rows, nil
 }
 
-// Create a batch of location events in multi-row INSERTs of at most rdb.RowsPerInsert
-// rows each (rdb.CreateChunked), all or nothing on the given db handle (which may be a
-// transaction). The per-row request->row mapping is BuildLocationRows; tenant scoping is
-// applied by the global tenant-scope create callback, which stamps the tenant onto every
-// slice entry.
+// Create a batch of location events in one column-array INSERT per table (the parents,
+// then the rows) on the given db handle (which may be a transaction). The per-row
+// request->row mapping is BuildLocationRows; the insert stamps the context's tenant onto
+// every slice entry, and refuses a row naming another (rdb.ColumnTable).
 func (api *Api) CreateLocationEvents(ctx context.Context, db *gorm.DB, requests []*LocationEventCreateRequest) ([]*LocationEvent, error) {
 	if len(requests) == 0 {
 		return []*LocationEvent{}, nil
@@ -467,16 +461,14 @@ func (api *Api) CreateLocationEvents(ctx context.Context, db *gorm.DB, requests 
 	if err := upsertParentEvents(ctx, db, parents); err != nil {
 		return nil, err
 	}
-	if err := insertPayloadRows(ctx, db, &created); err != nil {
+	if err := insertPayloadRows(ctx, db, locationColumns, created); err != nil {
 		return nil, err
 	}
 	return created, nil
 }
 
-// Create a batch of measurement events in multi-row INSERTs of at most rdb.RowsPerInsert
-// rows each (rdb.CreateChunked), all or nothing on the given db handle (which may be a
-// transaction). The per-row request->row mapping is BuildMeasurementRows; tenant scoping
-// is applied by the global tenant-scope create callback.
+// Create a batch of measurement events in one column-array INSERT per table, as
+// CreateLocationEvents. The per-row request->row mapping is BuildMeasurementRows.
 func (api *Api) CreateMeasurementEvents(ctx context.Context, db *gorm.DB, requests []*MeasurementEventCreateRequest) ([]*MeasurementEvent, error) {
 	if len(requests) == 0 {
 		return []*MeasurementEvent{}, nil
@@ -488,16 +480,14 @@ func (api *Api) CreateMeasurementEvents(ctx context.Context, db *gorm.DB, reques
 	if err := upsertParentEvents(ctx, db, parents); err != nil {
 		return nil, err
 	}
-	if err := insertPayloadRows(ctx, db, &created); err != nil {
+	if err := insertPayloadRows(ctx, db, measurementColumns, created); err != nil {
 		return nil, err
 	}
 	return created, nil
 }
 
-// Create a batch of alert events in multi-row INSERTs of at most rdb.RowsPerInsert
-// rows each (rdb.CreateChunked), all or nothing on the given db handle (which may be a
-// transaction). The per-row request->row mapping is BuildAlertRows; tenant scoping is
-// applied by the global tenant-scope create callback.
+// Create a batch of alert events in one column-array INSERT per table, as
+// CreateLocationEvents. The per-row request->row mapping is BuildAlertRows.
 func (api *Api) CreateAlertEvents(ctx context.Context, db *gorm.DB, requests []*AlertEventCreateRequest) ([]*AlertEvent, error) {
 	if len(requests) == 0 {
 		return []*AlertEvent{}, nil
@@ -509,7 +499,7 @@ func (api *Api) CreateAlertEvents(ctx context.Context, db *gorm.DB, requests []*
 	if err := upsertParentEvents(ctx, db, parents); err != nil {
 		return nil, err
 	}
-	if err := insertPayloadRows(ctx, db, &created); err != nil {
+	if err := insertPayloadRows(ctx, db, alertColumns, created); err != nil {
 		return nil, err
 	}
 	return created, nil
@@ -517,7 +507,7 @@ func (api *Api) CreateAlertEvents(ctx context.Context, db *gorm.DB, requests []*
 
 // EventRows is every parent and payload row a group of ONE tenant's events writes, built
 // without touching the database (Build*Rows). A caller that builds it for several events
-// must give every row that tenant's TenantId: the tenant-scope create callback then refuses
+// must give every row that tenant's TenantId: the column-array insert then refuses
 // a row filed under the wrong group (rdb.ErrTenantMismatch) instead of stamping it with the
 // context's.
 type EventRows struct {
@@ -529,25 +519,24 @@ type EventRows struct {
 
 // CreateEventRows writes rows on db under the tenant in ctx: the parents first
 // (deduplicated on their event id, as upsertParentEvents always has), then each payload
-// table that has rows. It makes one rdb.CreateChunked call per table, so one INSERT per
-// table unless that table's rows exceed rdb.RowsPerInsert, and at most one held savepoint
-// per table when they do. Every statement keeps its ON CONFLICT arbiter.
+// table that has rows. It makes one column-array INSERT per table (rdb.ColumnTable),
+// whatever the number of rows, and every statement keeps its ON CONFLICT arbiter.
 func (api *Api) CreateEventRows(ctx context.Context, db *gorm.DB, rows *EventRows) error {
 	if err := upsertParentEvents(ctx, db, rows.Parents); err != nil {
 		return err
 	}
 	if len(rows.Locations) > 0 {
-		if err := insertPayloadRows(ctx, db, &rows.Locations); err != nil {
+		if err := insertPayloadRows(ctx, db, locationColumns, rows.Locations); err != nil {
 			return err
 		}
 	}
 	if len(rows.Measurements) > 0 {
-		if err := insertPayloadRows(ctx, db, &rows.Measurements); err != nil {
+		if err := insertPayloadRows(ctx, db, measurementColumns, rows.Measurements); err != nil {
 			return err
 		}
 	}
 	if len(rows.Alerts) > 0 {
-		if err := insertPayloadRows(ctx, db, &rows.Alerts); err != nil {
+		if err := insertPayloadRows(ctx, db, alertColumns, rows.Alerts); err != nil {
 			return err
 		}
 	}
@@ -620,8 +609,8 @@ func (api *Api) CreateStateChangeEvents(ctx context.Context, db *gorm.DB, reques
 // outlived the change that falsified it — the same way the sibling claim in
 // EventPersistenceResults.Deduped did.
 //
-// The insert is split by rdb.CreateChunked, so no number of anchors can make one statement
-// bind more parameters than the database driver accepts.
+// The insert is one column-array statement (anchorColumns), so no number of anchors can
+// make it bind more parameters than the database driver accepts.
 func (api *Api) CreateEventAnchors(ctx context.Context, db *gorm.DB, anchors []*EventAnchor) error {
 	if len(anchors) == 0 {
 		return nil
@@ -639,14 +628,9 @@ func (api *Api) CreateEventAnchors(ctx context.Context, db *gorm.DB, anchors []*
 	// the four paths that reach here.
 	//
 	// The key is (tenant_id, occurred_time, event_id, anchor_type, anchor_token); ON
-	// CONFLICT infers it by the column SET, so this list's order need not match it.
-	return rdb.CreateChunked(db.WithContext(ctx).Clauses(clause.OnConflict{
-		Columns: []clause.Column{
-			{Name: "tenant_id"}, {Name: "event_id"}, {Name: "occurred_time"},
-			{Name: "anchor_type"}, {Name: "anchor_token"},
-		},
-		DoNothing: true,
-	}), anchors).Error
+	// CONFLICT infers it by the column SET, so anchorColumns' order need not match it.
+	_, err := anchorColumns.Insert(db.WithContext(ctx), anchors)
+	return err
 }
 
 // DeleteAnchorsForEntity removes event_anchors rows referencing a deleted entity

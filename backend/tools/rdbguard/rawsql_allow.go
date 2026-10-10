@@ -28,6 +28,13 @@ var rawSQLAllowList = []siteEntry{
 
 	// --- ddl-catalog ---
 	{
+		Path: "backend/core/rdb/insert_columns.go", Func: "ColumnTable.exec", Count: 2,
+		Why: "the column-array insert (one statement on Postgres, its VALUES rendering on sqlite): an " +
+			"INSERT ... ON CONFLICT DO NOTHING whose text is built from the model's own gorm schema, never " +
+			"from a caller, and whose tenant column is bound from the context after the tenant-mismatch " +
+			"check and the erasure fence have run (ColumnTable.Insert)",
+	},
+	{
 		Path: "backend/core/rdb/storage_growth.go", Func: "measureFromCatalog", Count: 1,
 		Why: "reads relation sizes from the pg_class catalog for one table name; returns no tenant rows",
 	},
