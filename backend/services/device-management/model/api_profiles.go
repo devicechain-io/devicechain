@@ -109,7 +109,10 @@ func (api *Api) UpdateDeviceProfile(ctx context.Context, token string,
 	// statement — so it is omitted with it: writing back a stale instant beside a current
 	// version would make the reconcile door answer an activation the fact never carried, and
 	// would lower the floor the next activation is minted above.
-	result := api.RDB.DB(ctx).Omit("ActiveVersion", "ActiveSince").Save(found)
+	// configuration_declaration is omitted for the same reason: it is written only by
+	// SetDeviceProfileConfigurationDeclaration, so an edit built from a stale read must not
+	// write a stale declaration back over one set in between.
+	result := api.RDB.DB(ctx).Omit("ActiveVersion", "ActiveSince", "ConfigurationDeclaration").Save(found)
 	if result.Error != nil {
 		return nil, result.Error
 	}

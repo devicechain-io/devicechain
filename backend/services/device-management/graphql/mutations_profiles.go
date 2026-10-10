@@ -44,6 +44,38 @@ func (r *SchemaResolver) UpdateDeviceProfile(ctx context.Context, args struct {
 	return &DeviceProfileResolver{M: *updated, S: r, C: ctx}, nil
 }
 
+// ConfigurationKeyInput is one key of a configuration declaration.
+type ConfigurationKeyInput struct {
+	Key         string
+	ValueType   string
+	Description *string
+}
+
+// SetDeviceProfileConfigurationDeclaration replaces a profile's DRAFT device-visible
+// configuration declaration. Same authority as any other profile edit.
+func (r *SchemaResolver) SetDeviceProfileConfigurationDeclaration(ctx context.Context, args struct {
+	Token string
+	Keys  []ConfigurationKeyInput
+}) (*DeviceProfileResolver, error) {
+	if err := auth.Authorize(ctx, auth.DeviceWrite); err != nil {
+		return nil, err
+	}
+
+	keys := make([]model.ConfigurationKey, 0, len(args.Keys))
+	for _, k := range args.Keys {
+		key := model.ConfigurationKey{Key: k.Key, ValueType: k.ValueType}
+		if k.Description != nil {
+			key.Description = *k.Description
+		}
+		keys = append(keys, key)
+	}
+	updated, err := r.GetApi(ctx).SetDeviceProfileConfigurationDeclaration(ctx, args.Token, keys)
+	if err != nil {
+		return nil, err
+	}
+	return &DeviceProfileResolver{M: *updated, S: r, C: ctx}, nil
+}
+
 // RenameDeviceProfile changes a profile's token and nothing else. It is the capability
 // updateDeviceProfile's payload token used to carry, given a mutation where the new
 // token can mean only one thing. The authority is updateDeviceProfile's — a rename is

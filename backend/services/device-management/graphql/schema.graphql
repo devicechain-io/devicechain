@@ -117,6 +117,31 @@ type DeviceProfile implements Model & TokenReference & NamedEntity & MetadataEnt
     # and not a list — a device reports its position once — so null is the whole
     # display rule: no declaration means no map, no track, no last-fix panel.
     location: DeviceLocationDeclaration
+    # The profile's DRAFT device-visible configuration declaration: the shared attribute
+    # keys a device of this profile may see. Empty when nothing is declared, in which case
+    # a device sees an empty document. Like every draft field, it reaches devices only
+    # when the profile is published; the declaration frozen into each published version
+    # never changes.
+    configurationDeclaration: [ConfigurationKey!]!
+}
+
+# One shared attribute key declared as device-visible configuration on a device profile.
+type ConfigurationKey {
+    # The shared attribute key.
+    key: String!
+    # How the key's value is typed: STRING, LONG, DOUBLE, BOOLEAN or JSON.
+    valueType: String!
+    # An optional human-readable note.
+    description: String
+}
+
+# One key of a configuration declaration. The key must follow the attribute-key grammar
+# (letters, digits, hyphens and underscores, starting with a letter or digit), be unique
+# within the declaration, and carry a valid value type.
+input ConfigurationKeyInput {
+    key: String!
+    valueType: String!
+    description: String
 }
 
 # Declares that devices built on a profile report THEIR OWN position, and what an
@@ -2404,6 +2429,12 @@ type Mutation {
     # under and rostered devices are tracked by, so a rename would silently stop
     # detections and orphan dead-man entries.
     renameDeviceProfile(token: String!, newToken: String!): DeviceProfile!
+    # Replace a profile's DRAFT device-visible configuration declaration with the given
+    # keys; an empty list withdraws it. At most 256 keys; each key must follow the
+    # attribute-key grammar, be unique, and carry a valid value type. Refused as a whole
+    # if any key is invalid. Published versions are immutable: this changes only what the
+    # next publish freezes. Returns the updated profile.
+    setDeviceProfileConfigurationDeclaration(token: String!, keys: [ConfigurationKeyInput!]!): DeviceProfile!
     # Delete a device profile (ADR-045). Refused while any device type references
     # it; its owned metric, command, and detection-rule definitions are cascade-removed.
     # Returns whether a row was deleted.

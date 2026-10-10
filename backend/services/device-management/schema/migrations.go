@@ -36,5 +36,6 @@ var (
 		NewAssetPropertySchemaSchema(),
 		NewDropAlarmMessageSchema(),
 		NewDetectReconcileInstantsSchema(),
+		NewProfileConfigurationDeclarationSchema(),
 	}
 )
