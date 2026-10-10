@@ -33,11 +33,24 @@ var deviceAltIdKey = deviceAltIdKeySnapshot{
 	replaces: "idx_events_tenant_alt_id",
 }
 
-const deviceAltIdKeyManualAdvice = "To finish it in place, run these on the event store's primary at a quiet time, " +
-	"outside event-management's startup: DROP INDEX IF EXISTS \"event-management\".idx_events_tenant_device_alt_id; " +
-	"CREATE UNIQUE INDEX idx_events_tenant_device_alt_id ON \"event-management\".events " +
-	"(tenant_id, device_token, alt_id, occurred_time) WHERE alt_id IS NOT NULL. Then restart event-management, " +
-	"which removes the index it replaces"
+// deviceAltIdKeyManualDrop and deviceAltIdKeyManualBuild are the two statements every refusal
+// hands the operator. The build goes chunk by chunk (timescaledb.transaction_per_chunk), as
+// the per-device index's hand-run build does, so a write waits only while the chunk it
+// targets is indexed. It has no IF NOT EXISTS on purpose: an index of that name already
+// there, including the INVALID one an interrupted build leaves, must fail the statement
+// loudly rather than be skipped as though it were built; the DROP first removes exactly that.
+const (
+	deviceAltIdKeyManualDrop  = `DROP INDEX IF EXISTS "event-management".idx_events_tenant_device_alt_id`
+	deviceAltIdKeyManualBuild = `CREATE UNIQUE INDEX idx_events_tenant_device_alt_id ` +
+		`ON "event-management".events (tenant_id, device_token, alt_id, occurred_time) ` +
+		`WHERE alt_id IS NOT NULL WITH (timescaledb.transaction_per_chunk)`
+)
+
+const deviceAltIdKeyManualAdvice = "To finish it in place, run these on the event store's primary, outside " +
+	"event-management's startup and at a quiet time: " + deviceAltIdKeyManualDrop + "; " +
+	deviceAltIdKeyManualBuild + ". If it is interrupted it leaves an invalid index of that name, which " +
+	"the DROP removes before the next try. Then restart event-management, which removes the index it " +
+	"replaces. The same statements can be run before upgrading"
 
 // NewDeviceAltIdKeySchema scopes the alternate-id idempotency key to the DEVICE. The key was
 // (tenant_id, alt_id, occurred_time), so two devices of one tenant that sent the same

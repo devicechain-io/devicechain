@@ -43,14 +43,39 @@ var eventStoreIndexes = func() map[string]map[string]string {
 	return out
 }()
 
+// storeIndexesFor is eventStoreIndexes as the database in hand should carry it: the chain
+// through the per-device index leaves the tenant-wide alternate-id key, and the device-scoped
+// migration after it swaps that one index for the device-scoped key. Both are the final set
+// of the migration under test, so the check follows whichever the database has reached.
+func storeIndexesFor(t *testing.T, db *gorm.DB) map[string]map[string]string {
+	t.Helper()
+	if !hasIndex(t, db, deviceAltIdKey.name) {
+		return eventStoreIndexes
+	}
+	out := map[string]map[string]string{}
+	for table, idx := range eventStoreIndexes {
+		out[table] = idx
+	}
+	events := map[string]string{}
+	for name, def := range eventStoreIndexes["events"] {
+		if name != deviceAltIdKey.replaces {
+			events[name] = def
+		}
+	}
+	events[deviceAltIdKey.name] = newAltIdIndexDef
+	out["events"] = events
+	return out
+}
+
 // assertFinalIndexes asserts every event hypertable, and every chunk of it, carries exactly
 // the final set.
 func assertFinalIndexes(t *testing.T, db *gorm.DB, minChunks int) {
 	t.Helper()
+	want := storeIndexesFor(t, db)
 	for _, table := range LifecycleHypertables {
-		assert.Equalf(t, eventStoreIndexes[table], hypertableIndexes(t, db, table), "indexes on %s", table)
+		assert.Equalf(t, want[table], hypertableIndexes(t, db, table), "indexes on %s", table)
 	}
-	assertChunkSets(t, db, minChunks, func(table string) []string { return sortedNames(eventStoreIndexes[table]) })
+	assertChunkSets(t, db, minChunks, func(table string) []string { return sortedNames(want[table]) })
 }
 
 // afterRekey is a fresh database at the schema v0.19.0 shipped: the chain through the key

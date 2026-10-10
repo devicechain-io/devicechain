@@ -27,3 +27,13 @@ func TestDeviceAltIdKeySnapshot(t *testing.T) {
 	assert.Nil(t, m.Rollback)
 	assert.Contains(t, deviceAltIdKeyManualAdvice, deviceAltIdKey.name)
 }
+
+// The hand-run build is chunk by chunk and, like the migration's own, has no IF NOT EXISTS: a
+// leftover of that name must fail the statement loudly rather than be skipped as built.
+func TestDeviceAltIdKeyManualStatements(t *testing.T) {
+	assert.Contains(t, deviceAltIdKeyManualBuild, "CREATE UNIQUE INDEX idx_events_tenant_device_alt_id")
+	assert.Contains(t, deviceAltIdKeyManualBuild, "(tenant_id, device_token, alt_id, occurred_time) WHERE alt_id IS NOT NULL")
+	assert.Contains(t, deviceAltIdKeyManualBuild, "timescaledb.transaction_per_chunk")
+	assert.NotContains(t, deviceAltIdKeyManualBuild, "IF NOT EXISTS")
+	assert.Equal(t, `DROP INDEX IF EXISTS "event-management".idx_events_tenant_device_alt_id`, deviceAltIdKeyManualDrop)
+}

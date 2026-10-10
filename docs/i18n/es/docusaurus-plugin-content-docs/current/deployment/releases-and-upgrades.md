@@ -3820,6 +3820,129 @@ incluye el inquilino.
   `hypertable_name IN ('events')`.
 - Volver a `v0.19.0` conserva el nuevo índice, y `v0.19.0` funciona con él.
 
+#### Dos dispositivos pueden enviar el mismo `altId` en el mismo instante y se guardan ambos eventos {#device-alt-id-key}
+
+El `altId` de un evento es el identificador de mensaje del propio emisor, y el lado de escritura lo
+usaba, junto con el `occurredTime` del evento, para descartar una copia reentregada. Esa clave era
+por inquilino, así que cuando dos dispositivos del mismo inquilino enviaban el mismo `altId` en el
+mismo instante, el segundo evento se tomaba por una reentrega del primero y se descartaba sin aviso.
+Ahora la clave incluye el dispositivo: se guardan ambos eventos, y un dispositivo que vuelve a
+enviar el mismo `altId` en el mismo instante sigue siendo deduplicado. Si dependía de que el `altId`
+de un dispositivo suprimiera el de otro, eso ya no ocurre; haga usted mismo que el `altId` sea único
+entre sus dispositivos si lo necesita.
+
+- **En la actualización.** El primer arranque del nuevo `event-management` construye el nuevo índice
+  único sobre los eventos base que aún no están comprimidos y después elimina el índice por inquilino
+  que reemplaza; no hay ningún momento sin una protección de deduplicación. Mientras se construye,
+  las escrituras de eventos base esperan y las lecturas no; la construcción está acotada a 40
+  segundos una vez bloqueada la tabla. Se rehúsa, sin cambiar nada, cuando hay más de 4.000.000 de
+  filas por indexar o la tabla tiene más de 500 fragmentos, y un arranque que no consigue bloquear la
+  tabla o terminar a tiempo no cambia nada y el siguiente arranque lo intenta de nuevo. Nada de esto
+  requiere recrear: el error incluye las sentencias que construyen el índice a mano. El
+  `event-management` anterior sigue guardando eventos mientras tanto.
+- **Para construirlo a mano, en un momento tranquilo.** Ejecute esto en el primario del almacén de
+  eventos y reinicie `event-management`, que encuentra el índice y solo elimina el que reemplaza. La
+  primera sentencia elimina un índice inacabado del mismo nombre que deja una construcción
+  interrumpida, y no hace nada si no hay ninguno:
+
+  ```sql
+  DROP INDEX IF EXISTS "event-management".idx_events_tenant_device_alt_id;
+  CREATE UNIQUE INDEX idx_events_tenant_device_alt_id
+    ON "event-management".events (tenant_id, device_token, alt_id, occurred_time)
+    WHERE alt_id IS NOT NULL
+    WITH (timescaledb.transaction_per_chunk);
+  ```
+
+  La construcción avanza fragmento a fragmento, de modo que una escritura solo espera mientras se
+  indexa el fragmento al que se dirige. Un evento retenido más que la espera de confirmación de 60
+  segundos del broker se entrega de nuevo, lo cual es seguro. En una instancia ocupada, elija un
+  momento tranquilo.
+- **Para evitar el rechazo, construya el índice antes de actualizar.** En una instancia `v0.19.0`
+  con más de `4000000` eventos base sin comprimir, ejecute primero las dos sentencias anteriores;
+  `v0.19.0` funciona con ellas y la actualización solo elimina el índice antiguo. Para contar los
+  eventos base, use la consulta de [Comprobar el número de filas](#v0190-row-count) con
+  `hypertable_name IN ('events')`.
+- Volver a `v0.19.0` conserva el nuevo índice y `v0.19.0` funciona con él: los eventos reentregados
+  siguen deduplicándose, pero esa versión sigue comprobando por inquilino, así que vuelve a
+  descartar el evento del segundo dispositivo.
+
+#### Un evento entrante cuyo registro de fallo no se puede codificar ya no se guarda como un registro vacío {#next-upgrade-failed-record-encode}
+
+Cuando device-management no podía codificar el registro de un evento entrante que había fallado,
+guardaba de todos modos un registro vacío y confirmaba el evento. El registro se leía como un fallo
+sin motivo ni texto, y el fallo real no quedaba registrado en ningún sitio. Ahora no publica nada
+para ese evento, lo confirma y cuenta la pérdida en `dead_letter_lost_total`, por lo que se dispara
+`DeadLetterWriteLost` y la línea `LOST` del registro del pod indica de qué evento se trata. Ningún
+evento que pueda enviar un dispositivo llega hoy hasta ahí; es una ruta de defecto, y la alerta es
+la forma de enterarse de uno. Por eso `DeadLetterWriteLost` tiene una cuarta causa, indicada en
+[la tabla de alertas](./detection-engine.md#what-to-watch).
+
+#### `dcctl install --dry-run` aplica los rechazos de reinstalación que aplica la instalación
+
+En un clúster que responde, una ejecución en seco ahora lee el registro de instalación, pregunta
+qué instancias se ejecutan en el clúster cuando cambian los ajustes, y falla con el mismo mensaje que la instalación cuando
+esta se rechazaría por lo que el clúster ya contiene: una reinstalación desde una máquina sin
+estado del clúster, ajustes cambiados mientras hay instancias en ejecución, o un
+`--backup-snapshot-class` que no puede funcionar. Antes imprimía un plan y salía con 0. Una
+ejecución en seco contra un clúster que aún no existe, o al que no llega, sigue imprimiendo su plan
+e indica que esas comprobaciones no se hicieron. Una ejecución en seco no comprueba todo lo que la
+instalación rechaza; por ejemplo, un clúster cuyo almacén relacional fue creado por una versión
+anterior se sigue rechazando solo cuando la instalación se ejecuta.
+
+No hay nada que hacer.
+
+#### `dcctl install` y `dcctl bootstrap` esperan a que se hayan unido todas las instancias de la base de datos {#next-upgrade-wait-database-instances}
+
+Antes, `dcctl install` volvía en cuanto el primario de la base de datos relacional aceptaba una
+conexión, y `dcctl bootstrap` solo esperaba a los servicios, de modo que cualquiera de los dos
+podía informar de éxito, y bootstrap imprimir que ambas bases de datos estaban replicadas, mientras
+una réplica aún se estaba creando. Ahora install se registra, libera el bloqueo del clúster y espera
+hasta 15 minutos a que se hayan unido todas las instancias de la base de datos relacional. Bootstrap
+espera a los servicios y después, hasta 15 minutos, a todas las instancias del almacén de eventos de
+la instancia. Si alguna no se ha unido a tiempo, el comando termina con un error que nombra la base
+de datos y cuántas de sus instancias están listas. Ejecute de nuevo el mismo comando para seguir
+esperando (en install, eso vuelve a aplicar los requisitos previos y rechaza los bootstraps mientras
+se ejecuta, así que si solo quiere seguir la base de datos obsérvela con `kubectl`); un bootstrap
+que terminó así no se deshace, y la instalación ya está registrada, así que mientras tanto se
+pueden hacer bootstrap de instancias. Una instalación sana añade unos segundos.
+
+No hace falta nada más.
+
+#### Los techos de tasa se renombran según lo que cuentan {#next-upgrade-rate-key-rename}
+
+El techo de ingesta cuenta lecturas desde hace tiempo, y el techo de salida cuenta llamadas de
+conector, pero ambos seguían nombrados por mensajes. Se renombran en todas partes, sin conservar la
+grafía anterior:
+
+| Antes | Ahora |
+| --- | --- |
+| `ingestRateLimit.messagesPerSecond` (configuración de `event-sources`, `lwm2m-ingest`, `sparkplug-ingest`) | `ingestRateLimit.readingsPerSecond` |
+| `outboundMessagesPerSecond` (configuración de `event-processing`, `outbound-connectors`) | `outboundCallsPerSecond` |
+| `ingestMessagesPerSecond` (campo GraphQL, clave de configuración de nivel) | `ingestReadingsPerSecond` |
+| `outboundMessagesPerSecond` (campo GraphQL, clave de configuración de nivel) | `outboundCallsPerSecond` |
+
+- **Antes de actualizar, renombre las claves de configuración de los servicios.** Si sus valores
+  fijan alguna de las claves anteriores en el `config` de un servicio, cámbiela por el nombre
+  nuevo. Un servicio que aún encuentra una clave anterior se niega a arrancar, y su error indica la
+  clave que debe usar. No recurre al valor predeterminado de la plataforma, porque eso sustituiría
+  en silencio el techo que usted fijó.
+- **Clientes de la API.** Se renombran los campos de `tenantGovernance`, del tipo de inquilino de
+  la API de administración y de sus entradas de creación y actualización. Una petición que
+  selecciona o envía un nombre anterior ahora falla, así que actualice cualquier script o
+  integración que gestione techos de inquilinos. Una configuración de nivel que usa una clave
+  anterior se rechaza, y su error enumera las claves aceptadas.
+- **Los datos guardados se convierten solos.** La actualización renombra las columnas de
+  sobrescritura del inquilino y cambia las claves de cada configuración de nivel guardada, incluidos
+  los niveles de serie y los eliminados, con los mismos valores.
+- **Durante el despliegue.** Hasta que todos los pods ejecutan la nueva versión, un pod anterior y
+  un `user-management` nuevo no se entienden. Un pod de ingesta o de salida anterior pide los campos
+  anteriores de `tenantGovernance`, la petición falla y ese pod mide a todos los inquilinos con el
+  valor predeterminado de la plataforma; `TenantsMeteredAtPlatformDefault` puede dispararse por
+  él. Un pod de `user-management` anterior sigue usando los nombres de columna anteriores una vez
+  que el pod nuevo los ha renombrado, así que las lecturas y escrituras de inquilinos que atiende
+  fallan hasta que se sustituye. Ambas cosas terminan al acabar el despliegue; evite modificar
+  inquilinos o niveles hasta entonces.
+
 ### v0.19.0 — dimensionada a partir de lo medido a 6000 eventos por segundo; un stream lleno rechaza {#v0190-upgrade}
 
 `v0.19.0` es una actualización en su sitio desde `v0.18.0`: `dcctl install` para el clúster y
@@ -5171,87 +5294,6 @@ durante esos 10 minutos, y la cola se había vaciado en los 3 segundos siguiente
 carga. La detección, que esa comprobación no cubre, siguió el ritmo a 6000 (cola máxima por debajo
 de 1000) y se quedó atrás a partir de 7600 ofrecidos. No se afirma ningún ritmo sostenido por encima
 de 6000. Consulta [Rendimiento medido](./bootstrap.md#measured-throughput).
-
-### Próxima versión {#next-upgrade}
-
-Lo que cambia la versión posterior a `v0.19.0`, reunido a medida que llega.
-
-#### Un evento entrante cuyo registro de fallo no se puede codificar ya no se guarda como un registro vacío {#next-upgrade-failed-record-encode}
-
-Cuando device-management no podía codificar el registro de un evento entrante que había fallado,
-guardaba de todos modos un registro vacío y confirmaba el evento. El registro se leía como un fallo
-sin motivo ni texto, y el fallo real no quedaba registrado en ningún sitio. Ahora no publica nada
-para ese evento, lo confirma y cuenta la pérdida en `dead_letter_lost_total`, por lo que se dispara
-`DeadLetterWriteLost` y la línea `LOST` del registro del pod indica de qué evento se trata. Ningún
-evento que pueda enviar un dispositivo llega hoy hasta ahí; es una ruta de defecto, y la alerta es
-la forma de enterarse de uno. Por eso `DeadLetterWriteLost` tiene una cuarta causa, indicada en
-[la tabla de alertas](./detection-engine.md#what-to-watch).
-
-#### `dcctl install --dry-run` aplica los rechazos de reinstalación que aplica la instalación
-
-En un clúster que responde, una ejecución en seco ahora lee el registro de instalación, pregunta
-qué instancias se ejecutan en el clúster cuando cambian los ajustes, y falla con el mismo mensaje que la instalación cuando
-esta se rechazaría por lo que el clúster ya contiene: una reinstalación desde una máquina sin
-estado del clúster, ajustes cambiados mientras hay instancias en ejecución, o un
-`--backup-snapshot-class` que no puede funcionar. Antes imprimía un plan y salía con 0. Una
-ejecución en seco contra un clúster que aún no existe, o al que no llega, sigue imprimiendo su plan
-e indica que esas comprobaciones no se hicieron. Una ejecución en seco no comprueba todo lo que la
-instalación rechaza; por ejemplo, un clúster cuyo almacén relacional fue creado por una versión
-anterior se sigue rechazando solo cuando la instalación se ejecuta.
-
-No hay nada que hacer.
-
-#### `dcctl install` y `dcctl bootstrap` esperan a que se hayan unido todas las instancias de la base de datos {#next-upgrade-wait-database-instances}
-
-Antes, `dcctl install` volvía en cuanto el primario de la base de datos relacional aceptaba una
-conexión, y `dcctl bootstrap` solo esperaba a los servicios, de modo que cualquiera de los dos
-podía informar de éxito, y bootstrap imprimir que ambas bases de datos estaban replicadas, mientras
-una réplica aún se estaba creando. Ahora install se registra, libera el bloqueo del clúster y espera
-hasta 15 minutos a que se hayan unido todas las instancias de la base de datos relacional. Bootstrap
-espera a los servicios y después, hasta 15 minutos, a todas las instancias del almacén de eventos de
-la instancia. Si alguna no se ha unido a tiempo, el comando termina con un error que nombra la base
-de datos y cuántas de sus instancias están listas. Ejecute de nuevo el mismo comando para seguir
-esperando (en install, eso vuelve a aplicar los requisitos previos y rechaza los bootstraps mientras
-se ejecuta, así que si solo quiere seguir la base de datos obsérvela con `kubectl`); un bootstrap
-que terminó así no se deshace, y la instalación ya está registrada, así que mientras tanto se
-pueden hacer bootstrap de instancias. Una instalación sana añade unos segundos.
-
-No hace falta nada más.
-
-#### Los techos de tasa se renombran según lo que cuentan {#next-upgrade-rate-key-rename}
-
-El techo de ingesta cuenta lecturas desde hace tiempo, y el techo de salida cuenta llamadas de
-conector, pero ambos seguían nombrados por mensajes. Se renombran en todas partes, sin conservar la
-grafía anterior:
-
-| Antes | Ahora |
-| --- | --- |
-| `ingestRateLimit.messagesPerSecond` (configuración de `event-sources`, `lwm2m-ingest`, `sparkplug-ingest`) | `ingestRateLimit.readingsPerSecond` |
-| `outboundMessagesPerSecond` (configuración de `event-processing`, `outbound-connectors`) | `outboundCallsPerSecond` |
-| `ingestMessagesPerSecond` (campo GraphQL, clave de configuración de nivel) | `ingestReadingsPerSecond` |
-| `outboundMessagesPerSecond` (campo GraphQL, clave de configuración de nivel) | `outboundCallsPerSecond` |
-
-- **Antes de actualizar, renombre las claves de configuración de los servicios.** Si sus valores
-  fijan alguna de las claves anteriores en el `config` de un servicio, cámbiela por el nombre
-  nuevo. Un servicio que aún encuentra una clave anterior se niega a arrancar, y su error indica la
-  clave que debe usar. No recurre al valor predeterminado de la plataforma, porque eso sustituiría
-  en silencio el techo que usted fijó.
-- **Clientes de la API.** Se renombran los campos de `tenantGovernance`, del tipo de inquilino de
-  la API de administración y de sus entradas de creación y actualización. Una petición que
-  selecciona o envía un nombre anterior ahora falla, así que actualice cualquier script o
-  integración que gestione techos de inquilinos. Una configuración de nivel que usa una clave
-  anterior se rechaza, y su error enumera las claves aceptadas.
-- **Los datos guardados se convierten solos.** La actualización renombra las columnas de
-  sobrescritura del inquilino y cambia las claves de cada configuración de nivel guardada, incluidos
-  los niveles de serie y los eliminados, con los mismos valores.
-- **Durante el despliegue.** Hasta que todos los pods ejecutan la nueva versión, un pod anterior y
-  un `user-management` nuevo no se entienden. Un pod de ingesta o de salida anterior pide los campos
-  anteriores de `tenantGovernance`, la petición falla y ese pod mide a todos los inquilinos con el
-  valor predeterminado de la plataforma; `TenantsMeteredAtPlatformDefault` puede dispararse por
-  él. Un pod de `user-management` anterior sigue usando los nombres de columna anteriores una vez
-  que el pod nuevo los ha renombrado, así que las lecturas y escrituras de inquilinos que atiende
-  fallan hasta que se sustituye. Ambas cosas terminan al acabar el despliegue; evite modificar
-  inquilinos o niveles hasta entonces.
 
 ### La transición única a la ingesta duradera
 
