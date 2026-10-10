@@ -25,14 +25,30 @@
 # API keys are write-only. A `secret` goes IN on create/update and is sealed in the
 # ADR-059 envelope-encrypted secret store; it never comes back out — the read side
 # exposes only `hasSecret`.
+#
+# Descriptions: a """string""" above an element is its PUBLIC description — served by
+# introspection, read by every GraphQL tool, published on the docs site — and may not
+# cite a decision record. A # comment is a maintainer note.
 
-# Pagination info for search results.
+"""
+Where a page of search results sits in the full result set. Positions are 1-based and
+inclusive.
+"""
 type SearchResultsPagination {
+    """Position of the first result on this page within the full result set (1-based)."""
     pageStart: Int
+    """Position of the last result on this page within the full result set (1-based, inclusive)."""
     pageEnd: Int
+    """Number of records matching the criteria across all pages."""
     totalRecords: Int
 }
 
+"""
+A registered AI model provider: where a model is reached, which model to ask for, and
+whether it may be used. It is configuration for the whole instance, not for one tenant.
+Registering a provider offers it to nobody; tenants can use it only once it is granted
+to their tier or to the tenant. The API key is write-only and is never returned.
+"""
 # An instance-scoped, operator-managed inference-provider config (ADR-056 §4). The
 # `kind` selects the provider implementation; `params` is the opaque per-kind tuning
 # document. The API key is never returned — `hasSecret` reports only whether one is
@@ -45,38 +61,86 @@ type SearchResultsPagination {
 # the chat-completions API) there is no default to override and it is REQUIRED: a
 # provider of that kind written without one is refused rather than stored unusable.
 type AiProvider {
+    """Server-assigned identifier. Address a provider by its token, not by this."""
     id: ID!
+    """When the provider was created, as an RFC 3339 timestamp."""
     createdAt: String
+    """
+    When the provider was last written, as an RFC 3339 timestamp. Pass it back as
+    expectedUpdatedAt to make an update conditional on nobody else having changed the
+    provider since you read it.
+    """
     updatedAt: String
+    """
+    Unique, caller-chosen identifier of the provider. Letters, digits, hyphens and
+    underscores, starting with a letter or digit, at most 128 characters. Grants and
+    function assignments refer to the provider by it.
+    """
     token: String!
+    """Human-readable name shown in provider lists."""
     name: String
+    """Free-text description of the provider."""
     description: String
+    """
+    The provider kind: one of the values returned by aiProviderKinds. It selects the
+    protocol used to call the model.
+    """
     # One of the registered provider kinds (see the aiProviderKinds query).
     kind: String!
+    """
+    Base URL of the provider's API, or null to use the kind's built-in address. Always set
+    for openai-compatible providers.
+    """
     # The provider API base URL, or null for the kind's built-in default.
     endpoint: String
+    """The model identifier sent to the provider, such as a model name the provider recognizes."""
     # The provider model id (e.g. "claude-opus-4-8").
     model: String!
+    """
+    Free-form settings for the kind, as a JSON object serialized to a string, or null if
+    none. They are stored and returned as supplied; inference calls do not currently read
+    them.
+    """
     # The opaque per-kind inference params (a JSON object), or null.
     params: String
+    """
+    Whether the provider may be used. A disabled provider keeps its grants but never serves
+    a tenant call, so a model can be taken out of service without removing its grants.
+    """
     # Whether this provider may be resolved and used. A disabled provider keeps its
     # grants but never serves a call, so a model can be taken out of service without
     # unpicking its packaging.
     enabled: Boolean!
+    """True when an API key is stored for the provider. The key itself is never returned."""
     # Whether an API key is configured, without exposing it.
     hasSecret: Boolean!
 }
 
+"""
+An offer of one provider to every tenant on one tier, optionally marked as the tier's
+default model.
+"""
 # One tier→provider offer: this provider is on the menu of every tenant at this tier
 # (ADR-065 decision 10).
 type AiProviderTierGrant {
+    """
+    Token of the tier. It is returned as stored even when no such tier exists, because
+    this service cannot check the tier catalog; that lets a stale grant stay visible.
+    """
     # The user-management tier token. Returned verbatim even when no such tier exists:
     # this service cannot validate it (the tier catalog is on user-management's
     # identity-only admin plane, and this service holds a service token), so an unknown
     # tier stays visible to the operator instead of being filtered out of the one
     # screen that could reveal it.
     tier: String!
+    """The provider offered to the tier."""
     provider: AiProvider!
+    """
+    True when this provider is the tier's default model: the one a tenant on the tier gets
+    for a function it has not assigned a model to, as long as the tenant is still offered
+    it. At most one grant per tier is the default, and only because an operator marked it
+    with setAiTierDefault; granting never marks a default, and a tier can have none.
+    """
     # Whether this grant is the tier's default model: what a tenant at this tier gets for
     # a function it never assigned, if the model is still on its menu. At most one grant
     # per tier carries it, and only because an operator said so (setAiTierDefault) — a
@@ -85,57 +149,105 @@ type AiProviderTierGrant {
     isDefault: Boolean!
 }
 
+"""
+An offer of one provider to a single tenant, in addition to what its tier offers. It
+can only add to a tenant's choices, never remove any.
+"""
 # One per-tenant additive grant: a model this tenant may use over and above what its
 # tier offers (ADR-065 decision 7's audited exception). Additive-only — there is no
 # matching deny, so an exception can never undercut what the tier sold.
 type AiProviderTenantGrant {
+    """Token of the tenant the provider is offered to."""
     tenant: String!
+    """The provider offered to the tenant."""
     provider: AiProvider!
 }
 
+"""
+A job that a model can be assigned to. The set of functions is fixed by the platform and
+cannot be edited; currently it has one member, rule-drafting.
+"""
 # One member of the platform's AI-function vocabulary: a job a model can be assigned to
 # (ADR-065 S5c′). Platform-declared, never operator-authored — the tokens here are what a
 # tenant's function assignment names. GA declares exactly one (rule-drafting); a second is
 # a code declaration, never a schema change.
 type AiFunction {
+    """The identifier used when assigning a model to the function, such as rule-drafting."""
     # The stable token stored in an assignment and validated at write.
     token: String!
+    """Short human-readable name of the function."""
     # The human label for the operator's picker.
     name: String!
+    """What the function does."""
     # What the function does, for the same picker.
     description: String!
 }
 
+"""
+The model an operator has chosen for one tenant to use for one function. This is the
+stored choice, not necessarily what the tenant gets: if the tenant is no longer offered
+the model it still appears here, and the function then has no model until the model is
+offered again.
+"""
 # One tenant's stored choice of model for a function (ADR-065 S5c′). This is what the
 # tenant CHOSE, not necessarily what it GETS: an assignment naming a model the tenant is
 # no longer entitled to still appears here (so an operator can see and fix the stale
 # choice), and resolves to no model until the entitlement returns. Entitlement is applied
 # at resolve time, never here.
 type AiFunctionAssignment {
+    """The function, one of the tokens returned by aiFunctions."""
     # The assigned function's token (one of the aiFunctions vocabulary).
     function: String!
+    """The provider chosen for the function, shown even if the tenant is no longer offered it."""
     # The provider the tenant chose for it. Present even when off the tenant's current
     # menu — the operator surface shows the choice regardless of entitlement.
     provider: AiProvider!
 }
 
+"""
+Fields for a new provider. The kind must be one returned by aiProviderKinds. A new
+provider is offered to no tenant until it is granted.
+"""
 # Data to create or update a provider. `secret` (the API key) is write-only: omit it
 # on update to preserve the stored key, send a value to replace it, or send an empty
 # string to clear it. On create, omit or empty means no key yet.
 input AiProviderCreateRequest {
+    """
+    Unique identifier for the new provider. Letters, digits, hyphens and underscores,
+    starting with a letter or digit, at most 128 characters.
+    """
     token: String!
+    """Human-readable name shown in provider lists."""
     name: String
+    """Free-text description of the provider."""
     description: String
+    """The provider kind: one of the values returned by aiProviderKinds."""
     kind: String!
+    """
+    Base URL of the provider's API: an absolute http or https URL with a host and no query
+    or fragment, to which the provider's API path is appended. Optional for anthropic,
+    where it overrides the built-in address; required for openai-compatible. A blank value
+    counts as omitted.
+    """
     # The provider API base URL. Optional for a kind with a built-in default; REQUIRED
     # for a kind defined by its address, such as `openai-compatible`.
     endpoint: String
+    """The model identifier to request from the provider. Required and must not be blank."""
     model: String!
+    """Free-form settings for the kind, as a JSON object serialized to a string of at most 16 KiB. Currently stored but not read by inference calls. A blank value counts as omitted."""
     params: String
+    """Whether the provider may be used. A disabled provider never serves a tenant call."""
     enabled: Boolean!
+    """The provider's API key. Write-only; stored encrypted and never returned. Omit it, or send an empty string, to store no key yet; a provider with no key cannot serve calls."""
     secret: String
 }
 
+"""
+A partial update to a provider. Omit a field to leave the stored value alone, send a
+value to set it, or send an explicit null to clear it (except where noted). The provider
+is named by the mutation's token argument, so there is no token here; use renameAiProvider
+to change the token. Grants are not affected.
+"""
 # Fields to change on an existing provider. Every field is three-state: OMIT it to
 # leave the stored value alone, send NULL to clear it, or send a value to set it.
 #
@@ -143,103 +255,207 @@ input AiProviderCreateRequest {
 # provider is renamed through renameAiProvider — where the new token can mean only one
 # thing.
 input AiProviderUpdateRequest {
+    """New name, or null to clear it."""
     name: String
+    """New description, or null to clear it."""
     description: String
+    """New provider kind. Omit it to keep the stored kind; an explicit null is refused."""
     # The provider kind. It cannot be cleared: a null is refused rather than stored as
     # a kind nothing can serve.
     kind: String
+    """
+    New base URL, in the format described on AiProviderCreateRequest.endpoint, or null to
+    remove the override and use the kind's built-in address. Null is refused for
+    openai-compatible, which has no built-in address; a change of kind is checked against
+    the stored endpoint in the same way.
+    """
     # The provider API base URL. Null clears the override, returning the provider to
     # its kind's built-in default — REFUSED for a kind that has no default and is
     # defined by its address, such as `openai-compatible`. Changing `kind` alone is
     # checked against the STORED endpoint for the same reason.
     endpoint: String
+    """New model identifier. Omit it to keep the stored one; an explicit null is refused."""
     # The provider model id. It cannot be cleared — a provider with no model can serve
     # nothing.
     model: String
+    """New free-form settings as a JSON object serialized to a string of at most 16 KiB, or null to clear them."""
     # The opaque per-kind inference params (a JSON object). Null clears them.
     params: String
+    """Whether the provider may be used. Omit it to keep the stored value; an explicit null is refused."""
     # Whether the provider may be resolved and used. It cannot be cleared: folding a
     # null to `false` would take a model out of service and report success, and false
     # is a value the caller could legitimately have sent.
     enabled: Boolean
+    """
+    The write-only API key. Omit it to keep the stored key, send a value to replace it, or
+    send null or an empty string to delete it.
+    """
     # The write-only API key. Omit it to PRESERVE the stored one (it can never be read
     # back to resend), send a value to ROTATE it, or send null — or an empty string —
     # to DELETE it.
     secret: String
 }
 
+"""Filter and paging for the aiProviders query."""
 # Criteria used when searching for providers.
 input AiProviderSearchCriteria {
+    """Page to return, starting at 1. A value below 1 is treated as 1."""
     pageNumber: Int!
+    """Providers per page. A value below 1 is treated as 100; a value above 1000 is capped at 1000."""
     pageSize: Int!
+    """Return only providers of this kind. Omit it to return every kind."""
     kind: String
 }
 
+"""One page of providers and where it sits in the full result set."""
 # Search results returned from a provider query.
 type AiProviderSearchResults {
+    """The providers on this page, newest created first (ties broken by token)."""
     results: [AiProvider!]!
+    """Position of this page within the full result set."""
     pagination: SearchResultsPagination!
 }
 
+"""A prompt to send to the model. The output-token limit, endpoint and timeout are fixed by the server."""
 # An inference request: the user prompt plus an optional system prompt. The
 # output-token cap, the provider endpoint, and the call timeout are server-side,
 # never caller-supplied.
 input InferenceRequest {
+    """The user prompt. Required, and must not be blank. The prompt and system prompt together may not exceed 128 KiB unless the operator configured a different limit."""
     # The user prompt (required).
     prompt: String!
+    """Optional system prompt (instructions or persona) sent ahead of the prompt."""
     # An optional system prompt (instructions/persona).
     system: String
 }
 
+"""The model's answer to an inference request."""
 # The result of an inference call.
 type InferenceResult {
+    """The model's text output, as produced."""
     candidate: String!
+    """Identifier of the model that answered, as reported by the provider."""
     model: String!
+    """Token of the provider that served the call."""
     provider: String!
 }
 
 type Query {
+    """Returns the provider with the given token, or null if there is none. Requires ai:admin."""
     # Look up a single provider by its token (requires ai:admin).
-    aiProvider(token: String!): AiProvider
+    aiProvider(
+        """Token of the provider."""
+        token: String!
+    ): AiProvider
+    """Searches providers, newest created first, optionally by kind. Returns an empty page when nothing matches. Requires ai:admin."""
     # Search providers by criteria (requires ai:admin).
-    aiProviders(criteria: AiProviderSearchCriteria!): AiProviderSearchResults!
+    aiProviders(
+        """Filter and paging."""
+        criteria: AiProviderSearchCriteria!
+    ): AiProviderSearchResults!
+    """Lists the provider kinds this build can call, sorted alphabetically: anthropic and openai-compatible. Requires ai:admin."""
     # The registered provider-kind vocabulary, for a console picker (requires ai:admin).
     aiProviderKinds: [String!]!
+    """
+    Lists every tier grant on the instance, ordered by tier and then provider token. It
+    includes grants whose tier no longer exists. Requires ai:admin.
+    """
     # Every tier→provider grant on this instance: the packaging matrix (requires
     # ai:admin). Includes grants naming a tier that no longer exists.
     aiProviderTierGrants: [AiProviderTierGrant!]!
+    """Lists the providers granted to one tenant individually, in addition to its tier. Returns an empty list if there are none. Requires ai:admin."""
     # One tenant's additive grants (requires ai:admin).
-    aiProviderTenantGrants(tenant: String!): [AiProviderTenantGrant!]!
+    aiProviderTenantGrants(
+        """Token of the tenant."""
+        tenant: String!
+    ): [AiProviderTenantGrant!]!
+    """Lists the functions a model can be assigned to. Currently only rule-drafting. Requires ai:admin."""
     # The platform's AI-function vocabulary, for the per-tenant assignment picker
     # (requires ai:admin). GA declares exactly one function.
     aiFunctions: [AiFunction!]!
+    """
+    Lists the models chosen for one tenant, one per function, ordered by function. A choice
+    is listed even if the tenant is no longer offered that model, so a stale choice can be
+    found and fixed. Returns an empty list if the tenant has made none. Requires ai:admin.
+    """
     # One tenant's stored per-function model choices (requires ai:admin). Lists what the
     # tenant CHOSE, including a choice it is no longer entitled to — resolution applies
     # entitlement, this surface does not, so the operator can see a stale choice to fix it.
-    aiFunctionAssignments(tenant: String!): [AiFunctionAssignment!]!
+    aiFunctionAssignments(
+        """Token of the tenant."""
+        tenant: String!
+    ): [AiFunctionAssignment!]!
 }
 
 type Mutation {
+    """
+    Registers a provider. It is offered to no tenant until granted to a tier or tenant.
+    Rejects an unknown kind, a blank model, an invalid endpoint or params, an openai-compatible
+    provider with no endpoint, and a token already in use. Requires ai:admin.
+    """
     # Create a new provider. It is offered to nobody until granted to a tier.
-    createAiProvider(request: AiProviderCreateRequest!): AiProvider!
+    createAiProvider(
+        """The new provider's fields."""
+        request: AiProviderCreateRequest!
+    ): AiProvider!
+    """
+    Partially updates a provider. Its grants are not changed. The whole update is rejected,
+    with nothing written, if any part is invalid. Fails if no provider has the token. If
+    expectedUpdatedAt is given and the provider has changed since, nothing is written and
+    the call fails with "provider was modified by another writer; reload and try again"
+    (no error code). Requires ai:admin.
+    """
     # Partially update the provider with the given (current) token: an omitted field is
     # left alone, an explicit null clears it. When expectedUpdatedAt is supplied it is
     # an optimistic-concurrency precondition: the update is refused if the provider's
     # updatedAt has changed since ("provider was modified by another writer; reload and
     # try again"; this is not the CONFLICT code). Grants are not changed here.
-    updateAiProvider(token: String!, request: AiProviderUpdateRequest!, expectedUpdatedAt: String): AiProvider!
+    updateAiProvider(
+        """Current token of the provider to update."""
+        token: String!
+        """The fields to change."""
+        request: AiProviderUpdateRequest!
+        """The updatedAt value you last read, as an RFC 3339 timestamp. Omit it to overwrite unconditionally."""
+        expectedUpdatedAt: String
+    ): AiProvider!
+    """
+    Changes a provider's token and nothing else. Its API key, grants and function
+    assignments stay attached. Renaming to the token it already has succeeds without
+    change. Fails if the new token is blank or already used by another provider
+    (extensions.code CONFLICT), or if no provider has the old token. Requires ai:admin.
+    """
     # Rename a provider. A blank newToken is refused; renaming to the token the provider
     # already has is an idempotent success; a token another provider holds is refused by
     # name. The API key is keyed by the provider's immutable id, and so are its grants
     # and every tenant's function assignment, so a rename orphans none of them.
-    renameAiProvider(token: String!, newToken: String!): AiProvider!
+    renameAiProvider(
+        """Current token of the provider."""
+        token: String!
+        """The new token, which must be unused."""
+        newToken: String!
+    ): AiProvider!
+    """
+    Permanently deletes a provider and its API key. Returns true if one was deleted and
+    false if none has the token. Refused, with extensions.code REFERENCE_VIOLATION, while
+    the provider is granted to any tier or tenant or assigned to any function; the error
+    lists every reason. Requires ai:admin.
+    """
     # Delete the provider with the given token (and its key). Returns whether a row was
     # deleted. REFUSED while anything still points at the provider — a tier or tenant
     # grant, or a tenant's function assignment — so an operator cannot silently strip a
     # model from live tenants with one delete. The refusal names every reason at once. A
     # tier's default needs no reason of its own: the mark rides a grant row, so a default
     # is always caught by the grant it belongs to.
-    deleteAiProvider(token: String!): Boolean!
+    deleteAiProvider(
+        """Token of the provider to delete."""
+        token: String!
+    ): Boolean!
+    """
+    Offers a provider to every tenant on a tier. It adds to what the tier offers and does
+    not change which model any tenant uses, and it never marks the provider as the tier's
+    default; use setAiTierDefault for that. Granting twice is harmless. Always returns true.
+    Fails if no provider has the token or the tier token is not valid. Requires ai:admin.
+    """
     # Offer a provider to every tenant at a tier: an ENTITLEMENT, and nothing about
     # which model anything uses. Idempotent. Granting only ever widens what tenants at
     # the tier may use — it never re-points what any of them gets.
@@ -249,32 +465,103 @@ type Mutation {
     # the auto-mark bug lived: it made the default a property of the grant call, so a later
     # grant could silently overturn an operator's explicit "no default". Granting a tier its
     # first model does not mark it either.
-    grantAiProviderToTier(tier: String!, provider: String!): Boolean!
+    grantAiProviderToTier(
+        """Token of the tier."""
+        tier: String!
+        """Token of the provider."""
+        provider: String!
+    ): Boolean!
+    """
+    Withdraws a tier's offer of a provider. Returns true if a grant was removed and false if
+    there was none. If it was the tier's default, the tier is left with no default. Fails if
+    no provider has the token. Requires ai:admin.
+    """
     # Withdraw a tier's offer of a provider. Returns whether a grant was removed. Revoking
     # the tier's default leaves the tier with NO default — nothing is promoted in its
     # place.
-    revokeAiProviderFromTier(tier: String!, provider: String!): Boolean!
+    revokeAiProviderFromTier(
+        """Token of the tier."""
+        tier: String!
+        """Token of the provider."""
+        provider: String!
+    ): Boolean!
+    """
+    Marks a provider that is already granted to the tier as the tier's default model,
+    replacing any previous default. Fails, changing nothing, if the provider is not granted
+    to the tier. Always returns true on success. Requires ai:admin.
+    """
     # Mark an ALREADY-GRANTED provider as the tier's default: what a tenant at that tier
     # gets for a function it never assigned, PROVIDED its menu includes that model.
     # Demotes any previous default. At most one per tier. Refused when the pair is not
     # granted — a default must be something the tier actually offers, and this never
     # creates the grant as a side effect.
-    setAiTierDefault(tier: String!, provider: String!): Boolean!
+    setAiTierDefault(
+        """Token of the tier."""
+        tier: String!
+        """Token of the provider, which must already be granted to the tier."""
+        provider: String!
+    ): Boolean!
+    """
+    Removes the tier's default marking, keeping every grant. Afterwards a tenant on the
+    tier that has no model assigned for a function has no model for it and must be
+    assigned one. Harmless if there is no default. Always returns true. Requires ai:admin.
+    """
     # Mark none of a tier's grants as its default, leaving every grant in place.
     # Idempotent. Afterwards a tenant at that tier which assigned no model for a function
     # resolves to none and must choose explicitly.
-    clearAiTierDefault(tier: String!): Boolean!
+    clearAiTierDefault(
+        """Token of the tier."""
+        tier: String!
+    ): Boolean!
+    """
+    Offers a provider to one tenant in addition to what its tier offers. It only adds
+    choices. Granting twice is harmless. Always returns true. Fails if no provider has the
+    token or the tenant token is not valid. Requires ai:admin.
+    """
     # Add a provider to ONE tenant's menu over and above its tier. Idempotent. Additive
     # by construction: it widens what the tenant may use and re-points nothing.
-    grantAiProviderToTenant(tenant: String!, provider: String!): Boolean!
+    grantAiProviderToTenant(
+        """Token of the tenant."""
+        tenant: String!
+        """Token of the provider."""
+        provider: String!
+    ): Boolean!
+    """
+    Withdraws a tenant's individual grant of a provider. Returns true if a grant was removed
+    and false if there was none. What the tenant's tier offers is not affected. Fails if no
+    provider has the token. Requires ai:admin.
+    """
     # Remove a tenant's additive grant. Returns whether one was removed. This withdraws
     # an exception, not an entitlement — what the tenant's tier offers is untouched.
-    revokeAiProviderFromTenant(tenant: String!, provider: String!): Boolean!
+    revokeAiProviderFromTenant(
+        """Token of the tenant."""
+        tenant: String!
+        """Token of the provider."""
+        provider: String!
+    ): Boolean!
+    """
+    Sends a prompt to one specific provider to check that its endpoint and key work, even
+    if the provider is disabled or granted to nobody. It does not require any tenant's
+    consent to external routing. The provider must have an API key. Errors are returned in
+    full detail. Token usage is counted like any other call. Requires ai:admin.
+    """
     # Smoke-test a SPECIFIC provider (by token) with an operator-supplied prompt — the
     # affordance to validate a provider's endpoint + key before promoting it. It applies
     # no tenant-consent gate (operator config, an operator prompt, no tenant data
     # crosses the boundary), but the provider's key must still resolve.
-    testAiProvider(token: String!, request: InferenceRequest!): InferenceResult!
+    testAiProvider(
+        """Token of the provider to test."""
+        token: String!
+        """The test prompt."""
+        request: InferenceRequest!
+    ): InferenceResult!
+    """
+    Chooses the model a tenant uses for a function, replacing any earlier choice for the
+    pair. The choice is accepted even if the tenant is not currently offered the model; it
+    takes effect when it is, and until then the function has no model for that tenant.
+    Always returns true. Fails if the function is not one returned by aiFunctions, the
+    provider token matches nothing, or the tenant token is not valid. Requires ai:admin.
+    """
     # Assign a tenant's model for one function — the operator's per-tenant choice
     # (ADR-065 S5c′). One row per (tenant, function); a second call replaces the first.
     #
@@ -283,12 +570,30 @@ type Mutation {
     # model and grants it back has not silently destroyed the tenant's choice. An
     # assignment naming a model the tenant is not entitled to simply resolves to no model
     # until the entitlement returns — it never falls through to a substitute.
-    setAiFunctionModel(tenant: String!, function: String!, provider: String!): Boolean!
+    setAiFunctionModel(
+        """Token of the tenant."""
+        tenant: String!
+        """The function, one of the tokens returned by aiFunctions."""
+        function: String!
+        """Token of the provider to use."""
+        provider: String!
+    ): Boolean!
+    """
+    Removes the tenant's chosen model for a function. Returns true if a choice was removed
+    and false if there was none. Afterwards the tenant gets its tier's default model for the
+    function, if the tier has one and the tenant is still offered it. Fails if the function
+    is not one returned by aiFunctions. Requires ai:admin.
+    """
     # Clear a tenant's choice for one function, reporting whether a row was removed.
     # Idempotent. Afterwards the tenant falls back to its tier's default (if the tier
     # marked one and the tenant is still entitled to it), which is the state it was in
     # before it ever chose.
-    clearAiFunctionModel(tenant: String!, function: String!): Boolean!
+    clearAiFunctionModel(
+        """Token of the tenant."""
+        tenant: String!
+        """The function, one of the tokens returned by aiFunctions."""
+        function: String!
+    ): Boolean!
 }
 
 schema {

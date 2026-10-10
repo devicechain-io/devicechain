@@ -4,37 +4,87 @@ type Exact<T extends { [key: string]: unknown }> = { [K in keyof T]: T[K] };
 /** Internal type. DO NOT USE DIRECTLY. */
 export type Incremental<T> = T | { [P in keyof T]?: P extends ' $fragmentName' | '__typename' ? T[P] : never };
 import { DocumentTypeDecoration } from '@graphql-typed-document-node/core';
+/**
+ * Fields for a new provider. The kind must be one returned by aiProviderKinds. A new
+ * provider is offered to no tenant until it is granted.
+ */
 export type AiProviderCreateRequest = {
+  /** Free-text description of the provider. */
   description?: string | null | undefined;
+  /** Whether the provider may be used. A disabled provider never serves a tenant call. */
   enabled: boolean;
+  /**
+   * Base URL of the provider's API: an absolute http or https URL with a host and no query
+   * or fragment, to which the provider's API path is appended. Optional for anthropic,
+   * where it overrides the built-in address; required for openai-compatible. A blank value
+   * counts as omitted.
+   */
   endpoint?: string | null | undefined;
+  /** The provider kind: one of the values returned by aiProviderKinds. */
   kind: string;
+  /** The model identifier to request from the provider. Required and must not be blank. */
   model: string;
+  /** Human-readable name shown in provider lists. */
   name?: string | null | undefined;
+  /** Free-form settings for the kind, as a JSON object serialized to a string of at most 16 KiB. Currently stored but not read by inference calls. A blank value counts as omitted. */
   params?: string | null | undefined;
+  /** The provider's API key. Write-only; stored encrypted and never returned. Omit it, or send an empty string, to store no key yet; a provider with no key cannot serve calls. */
   secret?: string | null | undefined;
+  /**
+   * Unique identifier for the new provider. Letters, digits, hyphens and underscores,
+   * starting with a letter or digit, at most 128 characters.
+   */
   token: string;
 };
 
+/** Filter and paging for the aiProviders query. */
 export type AiProviderSearchCriteria = {
+  /** Return only providers of this kind. Omit it to return every kind. */
   kind?: string | null | undefined;
+  /** Page to return, starting at 1. A value below 1 is treated as 1. */
   pageNumber: number;
+  /** Providers per page. A value below 1 is treated as 100; a value above 1000 is capped at 1000. */
   pageSize: number;
 };
 
+/**
+ * A partial update to a provider. Omit a field to leave the stored value alone, send a
+ * value to set it, or send an explicit null to clear it (except where noted). The provider
+ * is named by the mutation's token argument, so there is no token here; use renameAiProvider
+ * to change the token. Grants are not affected.
+ */
 export type AiProviderUpdateRequest = {
+  /** New description, or null to clear it. */
   description?: string | null | undefined;
+  /** Whether the provider may be used. Omit it to keep the stored value; an explicit null is refused. */
   enabled?: boolean | null | undefined;
+  /**
+   * New base URL, in the format described on AiProviderCreateRequest.endpoint, or null to
+   * remove the override and use the kind's built-in address. Null is refused for
+   * openai-compatible, which has no built-in address; a change of kind is checked against
+   * the stored endpoint in the same way.
+   */
   endpoint?: string | null | undefined;
+  /** New provider kind. Omit it to keep the stored kind; an explicit null is refused. */
   kind?: string | null | undefined;
+  /** New model identifier. Omit it to keep the stored one; an explicit null is refused. */
   model?: string | null | undefined;
+  /** New name, or null to clear it. */
   name?: string | null | undefined;
+  /** New free-form settings as a JSON object serialized to a string of at most 16 KiB, or null to clear them. */
   params?: string | null | undefined;
+  /**
+   * The write-only API key. Omit it to keep the stored key, send a value to replace it, or
+   * send null or an empty string to delete it.
+   */
   secret?: string | null | undefined;
 };
 
+/** A prompt to send to the model. The output-token limit, endpoint and timeout are fixed by the server. */
 export type InferenceRequest = {
+  /** The user prompt. Required, and must not be blank. The prompt and system prompt together may not exceed 128 KiB unless the operator configured a different limit. */
   prompt: string;
+  /** Optional system prompt (instructions or persona) sent ahead of the prompt. */
   system?: string | null | undefined;
 };
 

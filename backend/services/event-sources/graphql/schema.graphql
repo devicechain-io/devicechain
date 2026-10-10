@@ -6,12 +6,14 @@
 # its own (it is an ingest transport); the placeholder field keeps the type
 # non-empty, which the GraphQL runtime (graphql-go 1.10) requires.
 type Query {
+    """Placeholder with no meaning; the service has no GraphQL API. Always returns null. Requires no specific authority."""
     _empty: Boolean
 }
 
 # Contains mutations executed against model. Ingest happens over the device-plane
 # transports, not this API; the placeholder keeps the type non-empty.
 type Mutation {
+    """Placeholder with no meaning; the service has no GraphQL API, and devices send data over the ingest transports instead. Always returns null and changes nothing."""
     _empty: Boolean
 }
 
