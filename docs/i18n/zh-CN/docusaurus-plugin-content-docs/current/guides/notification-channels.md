@@ -64,7 +64,7 @@ webhook 渠道向 URL POST 渲染后的通知。创建方式相同，使用 `cha
 
 `auth` 与 `secret` 不一致的渠道保存时就会被拒绝，不等告警触发。包括缺少 `auth`、`bearer`/`header` 没有密钥，以及 `none` 带密钥。要让 `bearer` 渠道匿名，请在同一更新发送 `auth` 为 `none` 和 `secret: null`。只重命名、修改描述或禁用的更新不检查，因此总能关闭配置错误的渠道；启用时会检查。
 
-如果渠道仍以这种状态进入投递，例如在 `auth` 字段出现前保存的渠道，不会发送。第一次投递拒绝且不重试，通知服务记录租户、渠道令牌和原因。拒绝计入 `devicechain_notificationmanagement_deliveries_refused_total{reason="credential"}`，可设置告警。同一计数器还用 `reason="egress"` 记录目标地址不可达的 webhook 或 SMTP 渠道，例如私有、环回或云元数据地址。两种原因都是终止结果，不重试。
+如果渠道仍以这种状态进入投递，例如在 `auth` 字段出现前保存的渠道，不会发送。第一次投递拒绝且不重试，通知服务记录租户、渠道令牌和原因。拒绝计入 `devicechain_notificationmanagement_deliveries_refused_total{reason="credential"}`，可设置告警。同一计数器还用 `reason="egress"` 记录目标地址不可达的 webhook 或 SMTP 渠道，例如私有、环回或云元数据地址。它还带有 `reason="no_adapter"`：当某个渠道的类型在此版本中没有投递适配器而被跳过时计数，也就是无人会通过该渠道收到通知。`credential` 和 `egress` 的拒绝是终止结果，不重试。
 
 ```graphql
 mutation {

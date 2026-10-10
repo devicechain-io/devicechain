@@ -305,23 +305,19 @@ func (np *NotificationProcessor) dispatchOne(ctx context.Context, msg messaging.
 			done(core.ResultInvalid)
 			return
 		}
-		// 🔴 THE OTHER PERMANENT ERROR: an event type this build does not know. No redelivery
-		// can teach the consumer a new type, so it is dead-lettered on the first delivery
-		// (acked once recorded) instead of spending the cap, and it is never dropped silently.
-		if errors.Is(err, ErrUnknownAlarmEventType) {
-			log.Error().Err(err).Str("correlation", msg.CorrelationID()).Str("alarm", event.AlarmToken).
-				Msg("Dead-lettering an alarm event of an unknown type; nobody was paged")
-			np.deadLetterAs(msgctx, msg, event.AlarmToken, err, deadletter.ReasonUnprocessable,
-				"an alarm event carried a type this service does not recognise, so nobody was paged about it")
-			msg.Ack()
-			done(core.ResultInvalid)
-			return
-		}
 		log.Error().Err(err).Str("correlation", msg.CorrelationID()).Str("alarm", event.AlarmToken).Msg("Notification dispatch failed")
 		if msg.NumDelivered >= messaging.MaxDeliver {
 			log.Error().Str("correlation", msg.CorrelationID()).Str("alarm", event.AlarmToken).
 				Msgf("Dead-lettering notification after %d failed attempts; nobody was paged", msg.NumDelivered)
-			np.deadLetter(msgctx, msg, event.AlarmToken, err)
+			if errors.Is(err, ErrUnknownAlarmEventType) {
+				// An event type this build never learned in a whole redelivery budget: not a
+				// delivery failure but work it cannot process. Retried first, because during a
+				// rolling upgrade the type may simply not have been rolled out here yet.
+				np.deadLetterAs(msgctx, msg, event.AlarmToken, err, deadletter.ReasonUnprocessable,
+					"an alarm event carried a type this service does not recognise, so nobody was paged about it")
+			} else {
+				np.deadLetter(msgctx, msg, event.AlarmToken, err)
+			}
 			msg.Ack()
 			done(core.ResultFailed)
 		} else {
@@ -397,9 +393,8 @@ func (np *NotificationProcessor) deadLetterAs(ctx context.Context, msg messaging
 	// WriteFor fills the kind (alarm-events' declared one), subject, sequence, attempts and
 	// correlation from msg, and the dedup id the max-delivery recorder shares.
 	err := np.dead.WriteFor(ctx, msg, deadletter.Envelope{
-		Reason: deadletter.ReasonExhausted,
-		Summary: "an alarm could not be delivered to any configured channel after every " +
-			"delivery attempt, so nobody was paged about it",
+		Reason:     reason,
+		Summary:    summary,
 		Detail:     detail,
 		Reference:  alarm,
 		OccurredAt: time.Now().UTC(),
