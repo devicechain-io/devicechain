@@ -5,6 +5,7 @@ package config
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/devicechain-io/dc-microservice/config"
 )
@@ -28,8 +29,11 @@ const (
 	DefaultMaxOutputTokens = 2_048
 
 	// MaxInferenceTimeoutMs caps the configurable per-call timeout at startup so an
-	// operator cannot set an unbounded wait.
-	MaxInferenceTimeoutMs = 120_000
+	// operator cannot set an unbounded wait. It is the shared ceiling event-processing
+	// sizes its own call timeout from, so it is defined in core and derived here: a
+	// ceiling raised on one side only would let the caller cut a configured inference off
+	// before it could time out on its own and say so.
+	MaxInferenceTimeoutMs = int(config.AiInferenceMaxCallTimeout / time.Millisecond)
 
 	// DefaultInferenceRequestsPerMinute / DefaultInferenceBurst are the PLATFORM
 	// per-tenant rate ceiling for inference calls (ADR-056 §6 / ADR-023) — the

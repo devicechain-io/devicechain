@@ -37,6 +37,16 @@ var ErrUnavailable = errors.New("inference is unavailable")
 // opt in rather than tell an operator to fix configuration.
 var ErrConsentRequired = errors.New("tenant has not opted in to external AI routing")
 
+// ErrTimedOut is returned when the provider did not answer inside the configured
+// inference timeout. Distinct from ErrUnavailable because nothing is misconfigured
+// and nothing is down: the model was reached and was slow, and the author's next
+// move is to try again — not to find an operator. It reveals only that the call ran
+// long, never the provider or its endpoint.
+//
+// Its text is a WIRE CONTRACT: event-processing classifies it by the prefix
+// "inference timed out" (svcclient surfaces a GraphQL error only as message text).
+var ErrTimedOut = errors.New("inference timed out before the model answered; retry, or shorten the request")
+
 // ErrRateLimited is returned when the tenant is over its per-tenant inference rate
 // ceiling (ADR-056 §6 / ADR-023). Distinct from ErrUnavailable because it is
 // TRANSIENT and actionable in a way the others are not: nothing is misconfigured and

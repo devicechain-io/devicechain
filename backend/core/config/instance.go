@@ -263,6 +263,28 @@ type AiInferenceConfiguration struct {
 	Port     uint32
 }
 
+// The two timeouts on the ai-inference call, defined together because they are only
+// correct as a PAIR: the caller must outwait the slowest answer the callee can be
+// configured to give.
+//
+// The deadline belongs to ai-inference, which is the side that knows what ran out —
+// it answers a provider that overran its own deadline with a typed "timed out", and a
+// caller that gives up first replaces that answer with its own transport error, so a
+// slow model reads to the author as an outage. So the caller's bound is derived from
+// the callee's CEILING, not its default: an operator may raise the inference timeout
+// up to the ceiling, and the pair stays correct without either side reading the
+// other's config.
+const (
+	// AiInferenceMaxCallTimeout is the ceiling ai-inference's configured per-call
+	// inference timeout is validated against at startup.
+	AiInferenceMaxCallTimeout = 120 * time.Second
+	// AiInferenceCallerTimeout bounds one whole call TO ai-inference: the inference
+	// ceiling plus a margin for the work ai-inference does before its inference
+	// deadline starts (resolving the tenant's model and consent, which includes a
+	// cross-service read bounded at 10s) and for carrying the answer back.
+	AiInferenceCallerTimeout = AiInferenceMaxCallTimeout + 30*time.Second
+)
+
 // ServiceAuthConfiguration carries the shared secret backing the synchronous
 // cross-service call primitive (ADR-044 amendment). A caller presents Secret to
 // user-management's mint endpoint to obtain a short-lived service token; the mint

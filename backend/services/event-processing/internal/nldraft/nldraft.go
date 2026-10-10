@@ -44,6 +44,16 @@ const unavailableReason = "the inference provider is unavailable, or this tenant
 // set, and reveals no topology.
 const rateLimitedReason = "this tenant has reached its AI drafting rate limit; wait a moment and try again"
 
+// timedOutReason is the safe message for a model that was reached but did not answer
+// in time. Distinct from unavailableReason for the same reason rateLimitedReason is:
+// nothing is misconfigured, so pointing the author at an operator is wrong — the fix
+// is to try again, or to ask for something smaller. It carries no provider detail.
+const timedOutReason = "the AI model did not answer in time; try again, or shorten the description"
+
+// repairTimedOutMessage is timedOutReason's counterpart to repairTruncatedMessage: a
+// timeout on a REPAIR turn, after a candidate was already produced.
+const repairTimedOutMessage = "the AI model did not answer in time to repair this draft; try again"
+
 // repairTruncatedMessage is surfaced as an unanchored diagnostic when the repair loop
 // is cut short by the rate limit AFTER a candidate was already produced. Without it a
 // truncated loop is indistinguishable from a model that simply could not write a
@@ -56,6 +66,11 @@ const repairTruncatedMessage = "the AI drafting rate limit was reached before th
 // processor's inference client), so the drafter can report the transient, retryable
 // outcome without depending on the transport.
 var ErrRateLimited = errors.New("inference rate limited")
+
+// ErrTimedOut marks an inference call that ran out of time — ai-inference's own
+// inference deadline, or this caller's bound on the whole call. Like ErrRateLimited,
+// the Inferer classifies the transport error into it.
+var ErrTimedOut = errors.New("inference timed out")
 
 // MetricHint is one entry of the target profile's metric vocabulary, supplied by the caller
 // (the console already loads it) so the prompt can reference real metric keys. All fields but
@@ -116,7 +131,8 @@ type Result struct {
 	Diagnostics []Diagnostic
 	// Unavailable is true when the inference path itself could not run — the ai-inference endpoint
 	// is not configured, no provider is active, or the tenant has not opted in to external routing
-	// (all fail-closed, ADR-056). UnavailableReason carries the (already-coarsened) message.
+	// (all fail-closed, ADR-056) — or when the model was reached but did not answer in time.
+	// UnavailableReason carries the (already-coarsened) message, which tells those apart.
 	Unavailable       bool
 	UnavailableReason string
 }
@@ -181,6 +197,8 @@ func (d *Drafter) Draft(ctx context.Context, tenant string, req Request) (Result
 					// compiling rule". The repair turn that would likely have fixed it never ran,
 					// and the author's next move is to wait — not to rewrite their description.
 					lastDiags = append(lastDiags, Diagnostic{Message: repairTruncatedMessage})
+				} else if errors.Is(err, ErrTimedOut) {
+					lastDiags = append(lastDiags, Diagnostic{Message: repairTimedOutMessage})
 				}
 				break
 			}
@@ -188,8 +206,11 @@ func (d *Drafter) Draft(ctx context.Context, tenant string, req Request) (Result
 			// fixes it by waiting, whereas the generic reason points at configuration and
 			// would send them to an operator for nothing.
 			reason := unavailableReason
-			if errors.Is(err, ErrRateLimited) {
+			switch {
+			case errors.Is(err, ErrRateLimited):
 				reason = rateLimitedReason
+			case errors.Is(err, ErrTimedOut):
+				reason = timedOutReason
 			}
 			return Result{
 				Unavailable:       true,
