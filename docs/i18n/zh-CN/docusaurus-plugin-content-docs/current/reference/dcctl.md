@@ -53,7 +53,7 @@ dcctl bootstrap <provider> <instance> [flags]
       --allow-legacy-db-removal         proceed even though this cluster still runs the pre-CloudNativePG event-store StatefulSet (dc-timescaledb-single). 🔴 This ASSERTS THAT YOU HAVE HANDLED THE DATA — it is not a migration, nothing verifies it, and applying with it set destroys that StatefulSet and brings up an empty database on the same hostname. Dump first, or use it deliberately to discard a local instance
       --build                           build images from source into a local registry (developer path; requires source + ko)
       --cluster string                  local provider: the kind cluster 'dcctl install local' prepared (default "devicechain")
-      --dev                             local-developer preset: --build --host localhost --no-tls --yes (a zero-config http://localhost/ bring-up); rejects contradictory flags
+      --dev                             local-developer preset: --build --host localhost --no-tls --yes, and implies --no-escrow (a zero-config http://localhost/ bring-up); rejects contradictory flags
       --dry-run                         print what would happen without applying changes
       --enable-area strings             additionally deploy a functional area on TOP of the profile (repeatable, e.g. --enable-area lwm2m-ingest --enable-area sparkplug-ingest). Composes with the cluster's --compact setting; validated against the area catalog (unknown area or unmet hard dependency fails before any cluster spin-up)
       --escrow-file string              where to write the encrypted root-key escrow artifact (default ~/.devicechain/escrow/<instance>-rootkey.escrow). Refuses a path inside ~/.devicechain/instances/<instance>, which 'dcctl destroy' deletes
@@ -258,13 +258,17 @@ so the comparison is between what this instance claims and what its broker holds
 
 Exit status is the result: 0 when every assertion holds, 1 when any does not.
 
+```
   dcctl ha verify --instance default
+```
 
 Use --expect-fail to invert that, for the negative control. A check suite that
 cannot fail asserts nothing, so the drill runs the SAME command against a
 single-node instance and requires it to report failures:
 
+```
   dcctl ha verify --instance default --replicas 3 --expect-fail
+```
 
 ```
 dcctl ha verify [flags]
@@ -280,7 +284,7 @@ dcctl ha verify [flags]
       --nats-url string       dial this NATS URL instead of opening a port-forward
       --probe-mqtt            open one MQTT connection first so the broker's $MQTT_* streams exist and their replica factor can be observed. MUTATES the broker (it creates those streams if no client has ever connected), so it is off by default
       --replicas int          override the declared replica factor (default: read from the instance's deployed configuration)
-      --settle duration       keep re-checking for this long while assertions fail, for the interval in which a RAFT peer set is reconfiguring or a consumer group is remapping. Never turns a failure into a pass: on expiry the LAST report is returned in full. 0 disables it (default 1m30s)
+      --settle duration       keep re-checking for this long while assertions fail, for the interval in which a RAFT peer set is reconfiguring or a consumer group is remapping. Never turns a failure into a pass: on expiry the last assertion report is returned in full (if the last attempt could not collect state at all, that collection error is returned instead). 0 disables it (default 1m30s)
       --timeout duration      bound the whole check (default 5m0s)
 ```
 
@@ -306,19 +310,25 @@ removes synchronous replication without removing anything visible.
 
 So the checks run against the running server:
 
-  the instance count and pod placement  \<- the Kubernetes API
-  the alias Service and its endpoints   \<- the Kubernetes API
-  synchronous_standby_names             \<- PostgreSQL
-  connected + synchronous standbys      \<- PostgreSQL
+```
+  the instance count and pod placement  <- the Kubernetes API
+  the alias Service and its endpoints   <- the Kubernetes API
+  synchronous_standby_names             <- PostgreSQL
+  connected + synchronous standbys      <- PostgreSQL
+```
 
 Exit status is the result: 0 when every assertion holds, 1 when any does not.
 
+```
   dcctl ha verify-db --cluster dc-rdb --require-synchronous
+```
 
 Use --expect-fail for the negative control, stating the topology the store is
 expected NOT to hold:
 
+```
   dcctl ha verify-db --cluster dc-rdb --instances 3 --require-synchronous --expect-fail
+```
 
 ```
 dcctl ha verify-db [flags]
@@ -336,7 +346,7 @@ dcctl ha verify-db [flags]
       --kube-context string    kubeconfig context (default: current context)
       --namespace string       namespace holding the CloudNativePG Cluster: dc-system for the shared relational store (dc-rdb), dci-<instance> for that instance's event store (dc-tsdb) (default "dc-system")
       --require-synchronous    demand synchronous replication. Deliberately NOT derived from the Cluster spec: a pruned or misspelled field leaves a spec that asks for nothing, which a spec-derived check would happily confirm
-      --settle duration        keep re-checking for this long while assertions fail, for the interval in which a failover is completing or a standby rejoining. Never turns a failure into a pass: on expiry the LAST report is returned in full. 0 disables it (default 1m30s)
+      --settle duration        keep re-checking for this long while assertions fail, for the interval in which a failover is completing or a standby rejoining. Never turns a failure into a pass: on expiry the last assertion report is returned in full (if the last attempt could not collect state at all, that collection error is returned instead). 0 disables it (default 1m30s)
       --timeout duration       bound the whole check (default 5m0s)
       --timescale-jobs         also assert TimescaleDB background-job health across every database on the server. Continuous aggregates, retention and compression are all background jobs: if the scheduler stops, the database stays up, replicates, fails over and passes every other check here while silently no longer aggregating
 ```
@@ -733,8 +743,8 @@ Print what an escrow artifact says about itself (no passphrase needed)
 Print the cleartext header of a root-key escrow artifact: the instance it belongs to, when it
 was created, its cipher and key-derivation parameters, and the digest of the root key it holds.
 
-Everything printed is authenticated but not encrypted, so no passphrase is needed and nothing
-is decrypted. Use it to tell which of several files belongs to which instance. To check an
+Everything printed is cleartext and needs no passphrase; nothing is decrypted. The header is
+bound to the encrypted key, so an edit to it fails at restore, but show does not check that. Use it to tell which of several files belongs to which instance. To check an
 artifact against a live instance, use "dcctl secrets escrow verify".
 
 ```
@@ -768,7 +778,9 @@ A mismatch means the artifact is intact but belongs to a different key (usually 
 was re-bootstrapped after the file was written, or the file belongs to another instance), so
 the instance has no usable escrow. The command exits non-zero in that case.
 
+```
   dcctl secrets escrow verify --instance prod ./prod-rootkey.escrow
+```
 
 ```
 dcctl secrets escrow verify <file> [flags]
@@ -1050,8 +1062,10 @@ upgrading whichever instance came first.
 
 So an upgrade is two commands, in this order:
 
-  dcctl install \<provider> --version \<tag>     # once, moves the cluster
-  dcctl upgrade \<provider> \<instance> --version \<tag>   # per instance
+```
+  dcctl install <provider> --version <tag>     # once, moves the cluster
+  dcctl upgrade <provider> <instance> --version <tag>   # per instance
+```
 
 This command checks the cluster's operator and never moves it. It REFUSES when the
 cluster has no operator, or has one identifiably from another release, naming the
@@ -1082,6 +1096,7 @@ when they are in a terraform.tfvars beside its state
 (~/.devicechain/instances/\<instance>/infra/instance/), and not otherwise.
 --skip-infrastructure moves only the services, and says what it left.
 
+```
   # Move an instance onto a published release
   dcctl upgrade local devicechain --version v1.3.0
 
@@ -1093,6 +1108,7 @@ when they are in a terraform.tfvars beside its state
 
   # Move only the services, leaving the broker and event store as they are
   dcctl upgrade local devicechain --version v1.3.0 --skip-infrastructure
+```
 
 ```
 dcctl upgrade <provider> <instance> [flags]

@@ -87,30 +87,124 @@ func collectDocumented(c *cobra.Command, out *[]*cobra.Command) {
 }
 
 // escapeMDX makes help text safe for a Docusaurus page, which parses .md as MDX: a bare
-// `<instance>` is an unclosed JSX tag and a bare `{` opens an expression, and either one
-// fails the whole site build. Fenced blocks and inline code are literal and are left
-// alone; everything else gets the three characters backslash-escaped.
+// `<instance>` is an unclosed JSX tag, a bare `{` opens an expression, and either one
+// fails the whole site build. MDX also has no indented code blocks, so a run of indented
+// lines (the examples and aligned tables in long help) would reflow into a paragraph or,
+// for a `#` line, a heading: each such run is wrapped in a fence instead. Existing fences
+// (backtick or tilde, any length) and inline code spans are literal and left alone;
+// everything else gets `<`, `{`, `}` and `&` backslash-escaped.
 func escapeMDX(text string) string {
 	lines := strings.Split(text, "\n")
-	inFence := false
-	for i, line := range lines {
-		if strings.HasPrefix(strings.TrimSpace(line), "```") {
-			inFence = !inFence
+	var out []string
+	var fenceCh byte
+	fenceLen := 0
+	for i := 0; i < len(lines); i++ {
+		line := lines[i]
+		trimmed := strings.TrimLeft(line, " ")
+		if fenceLen > 0 {
+			out = append(out, line)
+			if ch, n := fenceRun(trimmed); ch == fenceCh && n >= fenceLen && strings.TrimSpace(trimmed[n:]) == "" {
+				fenceLen = 0
+			}
 			continue
 		}
-		if inFence {
+		if ch, n := fenceRun(trimmed); n >= 3 {
+			fenceCh, fenceLen = ch, n
+			out = append(out, line)
 			continue
 		}
-		parts := strings.Split(line, "`")
-		for j := 0; j < len(parts); j += 2 { // even segments are outside inline code
-			parts[j] = mdxEscaper.Replace(parts[j])
+		if isIndented(line) {
+			// Take the whole run, including blank lines that are followed by more
+			// indented text, and fence it verbatim.
+			j := i
+			for k := i; k < len(lines); k++ {
+				if isIndented(lines[k]) {
+					j = k
+				} else if strings.TrimSpace(lines[k]) != "" {
+					break
+				}
+			}
+			out = append(out, "```")
+			out = append(out, lines[i:j+1]...)
+			out = append(out, "```")
+			i = j
+			continue
 		}
-		lines[i] = strings.Join(parts, "`")
+		out = append(out, escapeInline(line))
 	}
-	return strings.Join(lines, "\n")
+	return strings.Join(out, "\n")
 }
 
-var mdxEscaper = strings.NewReplacer("<", `\<`, "{", `\{`, "}", `\}`)
+// fenceRun reports the fence character and length a line opens with (0 if none).
+func fenceRun(s string) (byte, int) {
+	if s == "" || (s[0] != '`' && s[0] != '~') {
+		return 0, 0
+	}
+	n := 0
+	for n < len(s) && s[n] == s[0] {
+		n++
+	}
+	if n < 3 {
+		return 0, 0
+	}
+	return s[0], n
+}
+
+func isIndented(line string) bool {
+	return strings.HasPrefix(line, "  ") || strings.HasPrefix(line, "\t")
+}
+
+// escapeInline escapes one line of prose, skipping inline code spans. A span opens at a
+// run of N backticks and closes at the next run of exactly N; a run with no closer is
+// literal text, as in CommonMark.
+func escapeInline(line string) string {
+	var b strings.Builder
+	for i := 0; i < len(line); {
+		if line[i] != '`' {
+			j := strings.IndexByte(line[i:], '`')
+			if j < 0 {
+				j = len(line) - i
+			}
+			b.WriteString(mdxEscaper.Replace(line[i : i+j]))
+			i += j
+			continue
+		}
+		n := 0
+		for i+n < len(line) && line[i+n] == '`' {
+			n++
+		}
+		end := closingRun(line, i+n, n)
+		if end < 0 {
+			b.WriteString(line[i : i+n])
+			i += n
+			continue
+		}
+		b.WriteString(line[i : end+n])
+		i = end + n
+	}
+	return b.String()
+}
+
+// closingRun returns the index of the next backtick run of exactly n, or -1.
+func closingRun(line string, from, n int) int {
+	for i := from; i < len(line); {
+		if line[i] != '`' {
+			i++
+			continue
+		}
+		m := 0
+		for i+m < len(line) && line[i+m] == '`' {
+			m++
+		}
+		if m == n {
+			return i
+		}
+		i += m
+	}
+	return -1
+}
+
+var mdxEscaper = strings.NewReplacer("<", `\<`, "{", `\{`, "}", `\}`, "&", `\&`)
 
 // renderReferenceBody renders every documented command as one markdown body. The
 // body is identical in every locale: it is the binary's own English text.

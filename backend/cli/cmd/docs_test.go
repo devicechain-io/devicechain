@@ -89,3 +89,51 @@ func TestUndocumentedCommandsNowHaveHelpText(t *testing.T) {
 		}
 	}
 }
+
+// TestHelpAndCompletionAreFilteredOut: cobra only adds `help` and `completion` once a
+// command executes, so without forcing them in, the filter never has anything to
+// remove and its removal is untested.
+func TestHelpAndCompletionAreFilteredOut(t *testing.T) {
+	rootCmd.InitDefaultHelpCmd()
+	rootCmd.InitDefaultCompletionCmd()
+	present := map[string]bool{}
+	for _, c := range rootCmd.Commands() {
+		present[c.Name()] = true
+	}
+	if !present["help"] || !present["completion"] {
+		t.Fatalf("precondition: cobra did not add help/completion (%v); the filter would go untested", present)
+	}
+	body, err := renderReferenceBody()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, banned := range []string{"{#dcctl-help}", "{#dcctl-completion", "dcctl completion"} {
+		if strings.Contains(string(body), banned) {
+			t.Errorf("page contains %q", banned)
+		}
+	}
+}
+
+func TestEscapeMDX(t *testing.T) {
+	cases := []struct{ name, in, want string }{
+		{"angle", "use <instance> here", `use \<instance> here`},
+		{"braces", "a {b} c", `a \{b\} c`},
+		{"entity", "fish &amp; chips", `fish \&amp; chips`},
+		{"html comment", "<!-- hidden -->", `\<!-- hidden -->`},
+		{"inline code untouched", "run `dcctl <x> {y}` now", "run `dcctl <x> {y}` now"},
+		{"double backtick span", "see ``a ` <b>`` and <c>", "see ``a ` <b>`` and " + `\<c>`},
+		{"odd backticks: unclosed run is literal", "tick ` then <x>", "tick ` then " + `\<x>`},
+		{"mismatched run lengths", "``a` <x>", "``a` " + `\<x>`},
+		{"backtick fence untouched", "```\n<x> {y}\n```", "```\n<x> {y}\n```"},
+		{"four backtick fence holds a three backtick line", "````\n```\n<x>\n````\n<y>", "````\n```\n<x>\n````\n" + `\<y>`},
+		{"tilde fence untouched", "~~~\n<x> {y}\n~~~\n<z>", "~~~\n<x> {y}\n~~~\n" + `\<z>`},
+		{"indented run is fenced, not escaped", "intro\n  # a comment\n  dcctl x <y>\nafter <z>", "intro\n```\n  # a comment\n  dcctl x <y>\n```\nafter " + `\<z>`},
+		{"blank line inside an indented run stays in it", "  a\n\n  b\nend", "```\n  a\n\n  b\n```\nend"},
+		{"tab indented", "\tx <y>", "```\n\tx <y>\n```"},
+	}
+	for _, c := range cases {
+		if got := escapeMDX(c.in); got != c.want {
+			t.Errorf("%s:\n  in:   %q\n  got:  %q\n  want: %q", c.name, c.in, got, c.want)
+		}
+	}
+}

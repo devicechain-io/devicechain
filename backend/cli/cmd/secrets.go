@@ -44,8 +44,8 @@ var secretsEscrowShowCmd = &cobra.Command{
 	Long: `Print the cleartext header of a root-key escrow artifact: the instance it belongs to, when it
 was created, its cipher and key-derivation parameters, and the digest of the root key it holds.
 
-Everything printed is authenticated but not encrypted, so no passphrase is needed and nothing
-is decrypted. Use it to tell which of several files belongs to which instance. To check an
+Everything printed is cleartext and needs no passphrase; nothing is decrypted. The header is
+bound to the encrypted key, so an edit to it fails at restore, but show does not check that. Use it to tell which of several files belongs to which instance. To check an
 artifact against a live instance, use "dcctl secrets escrow verify".`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {

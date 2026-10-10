@@ -219,7 +219,7 @@ func init() {
 	haVerifyDbCmd.Flags().DurationVar(&haSettle, "settle", 90*time.Second,
 		"keep re-checking for this long while assertions fail, for the interval in which "+
 			"a failover is completing or a standby rejoining. Never turns a failure into a "+
-			"pass: on expiry the LAST report is returned in full. 0 disables it")
+			"pass: on expiry the last assertion report is returned in full (if the last attempt could not collect state at all, that collection error is returned instead). 0 disables it")
 	haVerifyDbCmd.Flags().DurationVar(&haTimeout, "timeout", 5*time.Minute,
 		"bound the whole check")
 	haVerifyDbCmd.Flags().BoolVar(&haExpectFail, "expect-fail", false,
@@ -236,7 +236,7 @@ func init() {
 	haVerifyCmd.Flags().DurationVar(&haSettle, "settle", 90*time.Second,
 		"keep re-checking for this long while assertions fail, for the interval in which a "+
 			"RAFT peer set is reconfiguring or a consumer group is remapping. Never turns a "+
-			"failure into a pass: on expiry the LAST report is returned in full. 0 disables it")
+			"failure into a pass: on expiry the last assertion report is returned in full (if the last attempt could not collect state at all, that collection error is returned instead). 0 disables it")
 	haVerifyCmd.Flags().DurationVar(&haTimeout, "timeout", 5*time.Minute,
 		"bound the whole check")
 	haVerifyCmd.Flags().BoolVar(&haExpectFail, "expect-fail", false,
