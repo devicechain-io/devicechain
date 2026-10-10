@@ -27,6 +27,10 @@
     "message": "参考资料：GraphQL API 和配置。",
     "description": "The generated-index page description for category 'Reference' in sidebar 'docs'"
   },
+  "sidebar.docs.link.GraphQL schema reference": {
+    "message": "GraphQL Schema 参考",
+    "description": "The label for link 'GraphQL schema reference' in sidebar 'docs', linking to '/reference/graphql/'"
+  },
   "sidebar.docs.category.Deployment": {
     "message": "部署",
     "description": "The label for category 'Deployment' in sidebar 'docs'"

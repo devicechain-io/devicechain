@@ -22,6 +22,7 @@ arrancar:
 
 | | |
 |---|---|
+| **Páginas de referencia** | [Referencia de los esquemas GraphQL](/reference/graphql/): una página por esquema, con cada consulta, mutación, suscripción y tipo, y su descripción |
 | **Índice** | [`/schema/index.json`](pathname:///schema/index.json) — cada área, su plano de autenticación, su endpoint y su archivo de esquema |
 | **Esquemas** | `/schema/<area>.graphql`, más `-admin` y `-settings` para las dos áreas que sirven esos planos |
 
