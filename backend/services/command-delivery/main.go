@@ -154,8 +154,8 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	infra := Microservice.InstanceConfiguration.Infrastructure
 	CommandDeliveryProcessor = processor.NewCommandDeliveryProcessor(Microservice, CommandResponsesReader,
 		DeviceCommandsWriter, core.NewNoOpLifecycleCallbacks(), Api,
-		governance.NewTenantLifecycleGate(infra.UserManagement, infra.ServiceAuth.Secret, "command-delivery", governance.NewSafetyGates(Microservice)),
-		presenceReader(infra), deadLetters, DeliveryMetrics)
+		governance.NewTenantLifecycleGate(infra.UserManagement, infra.ServiceAuth.Secret, "command-delivery", safetyGates),
+		presenceReader(infra, safetyGates), deadLetters, DeliveryMetrics)
 	// 🔴 SET HERE, WHERE THE PROCESSOR EXISTS, AND NOT BESIDE THE Api.* ASSIGNMENTS IN
 	// afterMicroserviceInitialized -- WHICH IS WHERE THEY BELONG BY APPEARANCE AND WHERE
 	// THEY WOULD NIL-PANIC. This function is the NatsManager's construction callback, and
@@ -229,8 +229,7 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 // deviceState block. Each logs at WARN with what is lost, because a gate that is off is
 // invisible in every other way — commands flow, nothing is held, and the silent losses it
 // exists to prevent resume without a single error.
-func presenceReader(infra mscfg.InfrastructureConfiguration) presence.Reader {
-	gates := governance.NewSafetyGates(Microservice)
+func presenceReader(infra mscfg.InfrastructureConfiguration, gates *governance.SafetyGates) presence.Reader {
 	if infra.ServiceAuth.Secret == "" {
 		log.Warn().Msg("Service secret not configured — the presence gate is OFF; commands to devices known to be offline will be published and silently dropped by the broker.")
 		gates.Set(governance.GatePresence, false)
@@ -327,7 +326,14 @@ func wireHeldCeilingResolver() {
 }
 
 // Called after microservice has been initialized.
+// safetyGates reports whether this service's optional safety gates are wired
+// (<area>_safety_gate_enabled). Built once in afterMicroserviceInitialized.
+var safetyGates *governance.SafetyGates
+
 func afterMicroserviceInitialized(ctx context.Context) error {
+	// Built ONCE, here on the initialize path: the gauge registers on construction and a second
+	// registration panics, and the gates below are decided in callbacks that can run again.
+	safetyGates = governance.NewSafetyGates(Microservice)
 	// Parse configuration.
 	err := parseConfiguration()
 	if err != nil {

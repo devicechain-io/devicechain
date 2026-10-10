@@ -77,23 +77,35 @@ func TestAConfiguredLifecycleGateReportsOne(t *testing.T) {
 	assert.Equal(t, 1.0, v)
 }
 
-// A service builds its gates inside lifecycle callbacks that can be entered again; a second
-// registration must hand back the same gauge, not panic.
-func TestNewSafetyGatesIsIdempotentPerService(t *testing.T) {
+// The gauge is built ONCE (initialize path) and the handle is what a restarting service passes
+// around: deciding every gate again on a second start re-sets the same series without
+// registering anything, so it cannot panic and the gauge follows the latest decision.
+func TestTheSameGatesHandleSurvivesASecondStart(t *testing.T) {
 	ms := &core.Microservice{InstanceId: "test", FunctionalArea: "command-delivery"}
 	reg := prometheus.NewRegistry()
 	ms.UseMetricsRegistry(reg)
+	gates := NewSafetyGates(ms)
+	user := config.UserManagementConfiguration{Hostname: "um", Port: 8080}
 
-	first := NewSafetyGates(ms)
-	second := NewSafetyGates(ms)
-	first.Set(GatePresence, false)
-	second.Set(GateRuleValidation, true)
-
-	for gate, want := range map[string]float64{GatePresence: 0, GateRuleValidation: 1} {
-		v, ok := gateValue(t, reg, gate)
-		require.Truef(t, ok, "%s must be present through either handle", gate)
-		assert.Equal(t, want, v)
+	for start := 0; start < 2; start++ {
+		NewTenantLifecycleGate(user, "s3cret", "command-delivery", gates)
+		gates.Set(GatePresence, start == 1)
 	}
+	if v, _ := gateValue(t, reg, GateTenantLifecycle); v != 1 {
+		t.Fatalf("lifecycle gate after two starts = %v, want 1", v)
+	}
+	if v, _ := gateValue(t, reg, GatePresence); v != 1 {
+		t.Fatalf("presence gate must follow the latest decision, got %v", v)
+	}
+}
+
+// Building the gauge a second time for one service is the mistake the initialize-once rule
+// exists to catch, and it must be loud rather than quietly returning the first gauge.
+func TestBuildingSafetyGatesTwiceForOneServicePanics(t *testing.T) {
+	ms := &core.Microservice{InstanceId: "test", FunctionalArea: "command-delivery"}
+	ms.UseMetricsRegistry(prometheus.NewRegistry())
+	NewSafetyGates(ms)
+	assert.Panics(t, func() { NewSafetyGates(ms) })
 }
 
 // A caller built without metrics runs unmeasured rather than panicking.

@@ -385,8 +385,7 @@ func newRaiseAlarmConsumer(reader messaging.MessageReader, dead *deadletter.Sink
 // event-processing (ADR-051 slice 4b). It logs the enabled/disabled mode at startup so a
 // misconfigured deploy (empty secret, or a config predating this feature) is visible
 // rather than silently skipping validation — mirroring command-delivery's device check.
-func wireDetectionRuleValidator() {
-	gates := governance.NewSafetyGates(Microservice)
+func wireDetectionRuleValidator(gates *governance.SafetyGates) {
 	infra := Microservice.InstanceConfiguration.Infrastructure
 	if infra.ServiceAuth.Secret == "" {
 		log.Warn().Msg("Service secret not configured — device profile publish will NOT validate detection rules against event-processing (ADR-051 slice 4b disabled).")
@@ -450,7 +449,14 @@ func wireGeoFenceCapsResolver() {
 }
 
 // Called after microservice has been initialized.
+// safetyGates reports whether this service's optional safety gates are wired
+// (<area>_safety_gate_enabled). Built once in afterMicroserviceInitialized.
+var safetyGates *governance.SafetyGates
+
 func afterMicroserviceInitialized(ctx context.Context) error {
+	// Built ONCE, here on the initialize path: the gauge registers on construction and a second
+	// registration panics, and the gates below are decided in callbacks that can run again.
+	safetyGates = governance.NewSafetyGates(Microservice)
 	// Parse configuration.
 	err := parseConfiguration()
 	if err != nil {
@@ -516,7 +522,7 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 
 			// Wire the detection-rule validator (ADR-044 sync gate) so profile publish compiles
 			// its draft rules against event-processing and fails closed on an uncompilable one.
-			wireDetectionRuleValidator()
+			wireDetectionRuleValidator(safetyGates)
 
 			// Wire the per-tenant geofence caps and the counter that reports their refusals. The
 			// counter is set unconditionally, unlike the resolver: with no resolver the platform
@@ -595,7 +601,7 @@ func afterMicroserviceStarted(ctx context.Context) error {
 		// reclaimed. Nil when user-management is unconfigured — the gate is off, matching
 		// the resolver's own fail-open, since the erasure guarantee is the per-area fence.
 		infra := Microservice.InstanceConfiguration.Infrastructure
-		gate := governance.NewTenantLifecycleGate(infra.UserManagement, infra.ServiceAuth.Secret, "device-management", governance.NewSafetyGates(Microservice))
+		gate := governance.NewTenantLifecycleGate(infra.UserManagement, infra.ServiceAuth.Secret, "device-management", safetyGates)
 		// Every MQTT password connect is compared through this Checker, behind a
 		// per-username backoff whose counts every replica shares through the device
 		// credential-attempt bucket. It fails closed when that bucket cannot be reached,

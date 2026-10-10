@@ -114,7 +114,14 @@ func parseConfiguration() error {
 // client per configured source. It starts no auth gate: this service validates no bearer
 // tokens — it is a transport that connects out to customer brokers — so readiness
 // is opened by the Manager once it is supervising (afterMicroserviceStarted).
+// safetyGates reports whether this service's optional safety gates are wired
+// (<area>_safety_gate_enabled). Built once in afterMicroserviceInitialized.
+var safetyGates *governance.SafetyGates
+
 func afterMicroserviceInitialized(ctx context.Context) error {
+	// Built ONCE, here on the initialize path: the gauge registers on construction and a second
+	// registration panics, and the gates below are decided in callbacks that can run again.
+	safetyGates = governance.NewSafetyGates(Microservice)
 	if err := parseConfiguration(); err != nil {
 		return err
 	}
@@ -319,7 +326,7 @@ func buildIngester(writer messaging.MessageWriter) (*host.Ingester, *host.Reconc
 	// CONNECT, and a Sparkplug host application publishes on behalf of devices over its
 	// own long-lived connection, which a purge does not interrupt. A SEPARATE service
 	// token from the client above, scoped to tenant:read alone.
-	tenantGate := governance.NewTenantLifecycleGate(infra.UserManagement, infra.ServiceAuth.Secret, "sparkplug-ingest", governance.NewSafetyGates(Microservice))
+	tenantGate := governance.NewTenantLifecycleGate(infra.UserManagement, infra.ServiceAuth.Secret, "sparkplug-ingest", safetyGates)
 	registrar := host.NewRegistrar(client, graphqlURL, tenantGate)
 	emitter := host.NewEmitter(writer, time.Now)
 	reconciler := host.NewReconciler(client, deviceStateURL)

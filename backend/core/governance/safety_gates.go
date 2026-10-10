@@ -4,8 +4,6 @@
 package governance
 
 import (
-	"errors"
-
 	core "github.com/devicechain-io/dc-microservice/core"
 	"github.com/prometheus/client_golang/prometheus"
 )
@@ -28,29 +26,20 @@ const (
 type SafetyGates struct{ vec *prometheus.GaugeVec }
 
 // NewSafetyGates registers <area>_safety_gate_enabled{gate} (1 when the gate is wired, 0 when it
-// is off). It is safe to call more than once for the same service: the second call returns the
-// gauge the first registered, so a caller inside a lifecycle callback that can be entered again
-// cannot panic on a duplicate registration.
+// is off).
+//
+// 🔴 CALL IT ONCE, FROM THE INITIALIZE PHASE, AND PASS THE RESULT TO WHATEVER DECIDES A GATE. It
+// registers on construction and a second call for the same service panics on the duplicate
+// collector, which is the point: the gates are decided in callbacks that run again on a restart,
+// and a gauge built there would panic on the second start. (An earlier version swallowed the
+// duplicate and returned the existing gauge, which hid exactly that mistake.)
 func NewSafetyGates(ms *core.Microservice) *SafetyGates {
-	vec := prometheus.NewGaugeVec(prometheus.GaugeOpts{
-		Namespace: core.METRICS_NAMESPACE,
-		Subsystem: ms.MetricsSubsystem(),
-		Name:      "safety_gate_enabled",
-		Help: "1 when an optional safety gate is wired in this service, 0 when it is OFF because its " +
-			"configuration is absent. An OFF gate lets work through that the gate exists to refuse " +
-			"(tenant_lifecycle: work for a deleted tenant; presence: commands to absent devices; " +
+	return &SafetyGates{vec: ms.NewGaugeVec("safety_gate_enabled",
+		"1 when an optional safety gate is wired in this service, 0 when it is OFF because its "+
+			"configuration is absent. An OFF gate lets work through that the gate exists to refuse "+
+			"(tenant_lifecycle: work for a deleted tenant; presence: commands to absent devices; "+
 			"rule_validation: uncompilable detection rules at profile publish).",
-	}, []string{"gate"})
-	if reg := ms.MetricsRegisterer(); reg != nil {
-		if err := reg.Register(vec); err != nil {
-			var already prometheus.AlreadyRegisteredError
-			if !errors.As(err, &already) {
-				panic(err)
-			}
-			vec = already.ExistingCollector.(*prometheus.GaugeVec)
-		}
-	}
-	return &SafetyGates{vec: vec}
+		[]string{"gate"})}
 }
 
 // Set records whether a gate is wired. A nil receiver is a no-op, so a caller built without

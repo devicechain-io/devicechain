@@ -156,7 +156,7 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	// resolver cache — the same MECHANISM the egress limiter uses, not the same instance, so the two
 	// do not share a cache and neither one's misses warm the other.
 	infra := Microservice.InstanceConfiguration.Infrastructure
-	tenantDeleted := governance.NewTenantLifecycleGate(infra.UserManagement, infra.ServiceAuth.Secret, "outbound-connectors", governance.NewSafetyGates(Microservice))
+	tenantDeleted := governance.NewTenantLifecycleGate(infra.UserManagement, infra.ServiceAuth.Secret, "outbound-connectors", safetyGates)
 
 	executor, err := newExecutor(infra, processor.NewSecretResolver(SecretStore), Api,
 		time.Duration(Configuration.SendTimeoutMs)*time.Millisecond)
@@ -240,7 +240,14 @@ func buildEgressLimiter(cfg *config.OutboundConnectorsConfiguration, infra mscfg
 }
 
 // afterMicroserviceInitialized initializes components after the microservice is up.
+// safetyGates reports whether this service's optional safety gates are wired
+// (<area>_safety_gate_enabled). Built once in afterMicroserviceInitialized.
+var safetyGates *governance.SafetyGates
+
 func afterMicroserviceInitialized(ctx context.Context) error {
+	// Built ONCE, here on the initialize path: the gauge registers on construction and a second
+	// registration panics, and the gates below are decided in callbacks that can run again.
+	safetyGates = governance.NewSafetyGates(Microservice)
 	if err := parseConfiguration(); err != nil {
 		return err
 	}

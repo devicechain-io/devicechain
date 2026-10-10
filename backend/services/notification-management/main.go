@@ -174,7 +174,14 @@ func newAlarmEventsReader(nmgr *messaging.NatsManager) (messaging.MessageReader,
 }
 
 // afterMicroserviceInitialized initializes components after the microservice is up.
+// safetyGates reports whether this service's optional safety gates are wired
+// (<area>_safety_gate_enabled). Built once in afterMicroserviceInitialized.
+var safetyGates *governance.SafetyGates
+
 func afterMicroserviceInitialized(ctx context.Context) error {
+	// Built ONCE, here on the initialize path: the gauge registers on construction and a second
+	// registration panics, and the gates below are decided in callbacks that can run again.
+	safetyGates = governance.NewSafetyGates(Microservice)
 	// Parse configuration.
 	if err := parseConfiguration(); err != nil {
 		return err
@@ -248,7 +255,7 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 			buildMetrics()
 			Notifier = processor.NewPolicyNotifier(Api, secretStore, Configuration.DeliveryAttempts,
 				Configuration.DeliveryTimeout(),
-				governance.NewTenantLifecycleGate(infra.UserManagement, infra.ServiceAuth.Secret, "notification-management", governance.NewSafetyGates(Microservice)),
+				governance.NewTenantLifecycleGate(infra.UserManagement, infra.ServiceAuth.Secret, "notification-management", safetyGates),
 				egressGuard, NotifyMetrics)
 
 			// Retention sweep: prune cleared per-alarm state older than the retention window so
