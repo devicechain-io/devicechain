@@ -677,6 +677,7 @@ default: none of them can be switched off.
 | Limit | Default | Variable | What is refused |
 | --- | --- | --- | --- |
 | Request body | 4 MiB | `DC_GRAPHQL_MAX_BODY_BYTES` | The whole HTTP body, including variables. Answered with HTTP 400. |
+| Execution time | 60 seconds | `DC_GRAPHQL_EXEC_TIMEOUT` (whole seconds) | A query or mutation still running at the deadline is cancelled, and the database statement in flight with it; the response carries an error. Does not apply to subscriptions. A client must also deliver the request body within 30 seconds. |
 | Query length | 100,000 bytes | `DC_GRAPHQL_MAX_QUERY_LENGTH` | The query string itself. |
 | Nesting depth | 15 | `DC_GRAPHQL_MAX_DEPTH` | Selections nested deeper than this. |
 | Root fields per query | 20 | `DC_GRAPHQL_MAX_QUERY_ROOT_FIELDS` | A query operation selecting more top-level fields than this. |
