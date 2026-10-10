@@ -349,7 +349,7 @@ func TestRosterFactsAndRosterPageAgree(t *testing.T) {
 }
 
 // A re-type and a re-point STORE the instant membership began, and it is that stored value the
-// fact carries — later than the device's creation, so a moved device gets a fresh grace window.
+// fact carries — no earlier than the device's creation, so a moved device gets a fresh grace window.
 func TestRetypeAndRepointStoreTheMembershipInstant(t *testing.T) {
 	api, ctx, _, facts, _ := newReconcileDoorApi(t)
 	seedType(t, api, ctx, "sensor", "sensor-profile")
@@ -370,7 +370,13 @@ func TestRetypeAndRepointStoreTheMembershipInstant(t *testing.T) {
 	retype := facts.events[len(facts.events)-1]
 	assert.Equal(t, "d1", retype.DeviceToken)
 	assert.True(t, retype.ExpectedSince.Equal(stored("d1")), "re-type fact %s, stored %s", retype.ExpectedSince, stored("d1"))
-	assert.True(t, retype.ExpectedSince.After(created.CreatedAt))
+	// Never BEFORE the creation instant. Not strictly after: the wall clock ticks coarsely on
+	// some hosts (Windows), so a re-type straight after a create can read the same instant, and
+	// that is legitimate -- a NULL instant resolves to created_at, so equal means the same
+	// grace window. The stored value is truncated to the microsecond, so the creation instant
+	// is compared at that precision too.
+	assert.False(t, retype.ExpectedSince.Before(created.CreatedAt.Truncate(time.Microsecond)),
+		"re-type instant %s precedes creation %s", retype.ExpectedSince, created.CreatedAt)
 
 	_, err = api.CreateDeviceProfile(ctx, &DeviceProfileCreateRequest{Token: "other-profile"})
 	require.NoError(t, err)
