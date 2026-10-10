@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/devicechain-io/dc-microservice/auth"
 	gql "github.com/graph-gophers/graphql-go"
 )
 
@@ -90,5 +91,29 @@ func TestGraphQLRefusesInvalidConfigurationDeclaration(t *testing.T) {
 	data := execProfileGql(t, ctx, `query { deviceProfilesByToken(tokens: ["thermostat"]) { configurationDeclaration { key } } }`, nil)
 	if string(data) != `{"deviceProfilesByToken":[{"configurationDeclaration":[]}]}` {
 		t.Fatalf("a refused declaration left state behind: %s", data)
+	}
+}
+
+// The declaration setter takes the same authority as every other profile edit. The
+// read-only refusal and the device:write success are asserted together so neither can
+// be bought by breaking the mutation for everyone.
+func TestGraphQLSetConfigurationDeclarationRequiresDeviceWrite(t *testing.T) {
+	ctx := profileLocationCtx(t)
+	execProfileGql(t, ctx, createProfileMutation, map[string]any{
+		"request": map[string]any{"token": "tracker"},
+	})
+	vars := map[string]any{
+		"token": "tracker",
+		"keys":  []any{map[string]any{"key": "mode", "valueType": "STRING"}},
+	}
+	schema := gql.MustParseSchema(SchemaContent, &SchemaResolver{})
+
+	readOnly := withAuthorities(ctx, viewerBaseline...)
+	if resp := schema.Exec(readOnly, setConfigDeclMutation, "", vars); len(resp.Errors) == 0 {
+		t.Fatal("a read-only caller was allowed to set a configuration declaration")
+	}
+	writer := withAuthorities(ctx, auth.DeviceWrite, auth.DeviceRead)
+	if resp := schema.Exec(writer, setConfigDeclMutation, "", vars); len(resp.Errors) > 0 {
+		t.Fatalf("a device:write caller was refused: %v", resp.Errors)
 	}
 }

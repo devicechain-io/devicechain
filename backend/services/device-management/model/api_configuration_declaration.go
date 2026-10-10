@@ -17,7 +17,8 @@ import (
 // It writes the draft only. Published versions are immutable, so a declaration change
 // reaches devices only through the next publish; the version a device currently
 // resolves, and the declaration frozen in it, are untouched. Only the declaration column
-// is written, so a racing publish or edit of other profile fields is not reverted.
+// is written, so a racing publish or edit does not revert other profile fields; the
+// converse holds because UpdateDeviceProfile omits this column from its save.
 func (api *Api) SetDeviceProfileConfigurationDeclaration(ctx context.Context, token string,
 	keys []ConfigurationKey) (*DeviceProfile, error) {
 	profile, err := api.deviceProfileByToken(ctx, token)

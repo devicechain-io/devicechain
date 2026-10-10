@@ -10,7 +10,9 @@ import (
 	"testing"
 
 	"github.com/devicechain-io/dc-microservice/core"
+	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
 	"gorm.io/datatypes"
+	"gorm.io/gorm"
 )
 
 func configCtx() context.Context { return core.WithTenant(context.Background(), "acme") }
@@ -153,5 +155,47 @@ func TestPublishRefusesAnInvalidStoredDeclaration(t *testing.T) {
 	}
 	if _, err := api.PublishDeviceProfile(ctx, "prof", nil, nil, "tester"); err == nil {
 		t.Fatal("publish froze an invalid declaration")
+	}
+}
+
+// UpdateDeviceProfile reads the profile, then saves it whole. A declaration set between
+// that read and the save must survive: the column is written only by its own setter.
+func TestUpdateDeviceProfileDoesNotRevertAConcurrentDeclaration(t *testing.T) {
+	api := newPublishEmitTestApi(t)
+	ctx := configCtx()
+	seedProfileWithRule(t, api, ctx, "prof", "r1", false)
+
+	want := `[{"key":"mode","valueType":"STRING"}]`
+	fired := false
+	cb := api.RDB.DB(ctx).Callback().Update().Before("gorm:update")
+	if err := cb.Register("test:set_declaration_mid_update", func(tx *gorm.DB) {
+		if fired {
+			return
+		}
+		fired = true
+		// The racing writer: lands after UpdateDeviceProfile's read, before its save.
+		if err := tx.Session(&gorm.Session{NewDB: true}).Exec(
+			"UPDATE device_profiles SET configuration_declaration = ? WHERE token = ?", want, "prof").Error; err != nil {
+			t.Errorf("racing write: %v", err)
+		}
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := api.UpdateDeviceProfile(ctx, "prof", &DeviceProfileUpdateRequest{
+		Name: dcgraphql.OptionalStringOf("Renamed"),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if !fired {
+		t.Fatal("the racing write never ran, so nothing was proved")
+	}
+	reloaded, err := api.deviceProfileByToken(ctx, "prof")
+	if err != nil {
+		t.Fatal(err)
+	}
+	keys, _ := reloaded.ConfigurationKeys()
+	if len(keys) != 1 || keys[0].Key != "mode" {
+		t.Fatalf("UpdateDeviceProfile reverted the declaration set in between: %+v", keys)
 	}
 }
