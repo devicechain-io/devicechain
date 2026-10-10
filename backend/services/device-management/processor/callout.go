@@ -8,6 +8,7 @@ import (
 	"errors"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/devicechain-io/dc-device-management/model"
@@ -17,6 +18,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/natsauth"
 	"github.com/nats-io/jwt/v2"
 	"github.com/nats-io/nats.go"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/rs/zerolog/log"
 )
 
@@ -82,7 +84,84 @@ type CalloutResponder struct {
 	// reached. While it is down EVERY password connect is refused, so a line per
 	// connect would be one per device in a reconnecting fleet.
 	unavailableLog rateLimitedLog
+
+	// maxInFlight bounds how many requests are being authorized at once. A request over
+	// the bound is answered with the generic denial at once (see dispatch) instead of
+	// queueing on the credential store's connection pool until the broker has already
+	// given up on it. sem holds one token per request in flight.
+	maxInFlight int
+	sem         chan struct{}
+	// lookupTimeout bounds one request's credential work (database lookups and the
+	// attempt store), below the broker's authorization timeout: past that the broker has
+	// already refused the connect, so finishing the work only loads the store.
+	lookupTimeout time.Duration
+	// stopWait bounds how long Stop waits for handlers still in flight.
+	stopWait time.Duration
+
+	// base is the parent of every request's context; Stop cancels it after the drain
+	// wait so a handler still blocked on a dependency is released.
+	base   context.Context
+	cancel context.CancelFunc
+
+	// mu guards stopped against wg.Add, so a dispatch cannot add to the group after Stop
+	// has begun waiting on it.
+	mu      sync.Mutex
+	stopped bool
+	wg      sync.WaitGroup
+
+	inFlight    atomic.Int64
+	refusedBusy atomic.Int64
+	metrics     *CalloutMetrics
 }
+
+// Defaults for the bounds above. The lookup timeout sits under the broker's 5 s
+// authorization timeout (deploy/opentofu/modules/nats).
+const (
+	DefaultCalloutMaxInFlight   = 256
+	DefaultCalloutLookupTimeout = 3 * time.Second
+	DefaultCalloutStopWait      = 5 * time.Second
+)
+
+// CalloutMetrics are the callout's load metrics. Optional: a responder without them
+// still enforces the bounds.
+type CalloutMetrics struct {
+	InFlight    prometheus.Gauge
+	RefusedBusy prometheus.Counter
+}
+
+// NewCalloutMetrics registers the callout's metrics on the microservice.
+func NewCalloutMetrics(ms *core.Microservice) *CalloutMetrics {
+	return &CalloutMetrics{
+		InFlight: ms.NewGauge("callout_in_flight",
+			"Device auth-callout requests being authorized right now."),
+		RefusedBusy: ms.NewCounter("callout_refused_busy_total",
+			"Device auth-callout requests refused with the generic denial because the in-flight bound was reached."),
+	}
+}
+
+// Configure overrides the bounds; a non-positive value keeps the current one. Call it
+// before Start.
+func (c *CalloutResponder) Configure(maxInFlight int, lookupTimeout, stopWait time.Duration, metrics *CalloutMetrics) {
+	if maxInFlight > 0 {
+		c.maxInFlight = maxInFlight
+		c.sem = make(chan struct{}, maxInFlight)
+	}
+	if lookupTimeout > 0 {
+		c.lookupTimeout = lookupTimeout
+	}
+	if stopWait > 0 {
+		c.stopWait = stopWait
+	}
+	if metrics != nil {
+		c.metrics = metrics
+	}
+}
+
+// InFlight is how many requests are being authorized right now.
+func (c *CalloutResponder) InFlight() int64 { return c.inFlight.Load() }
+
+// RefusedBusy is how many requests the in-flight bound has refused.
+func (c *CalloutResponder) RefusedBusy() int64 { return c.refusedBusy.Load() }
 
 // rateLimitedLog lets one line through per interval and counts the ones it held back.
 type rateLimitedLog struct {
@@ -135,6 +214,7 @@ func NewCalloutResponder(conn *nats.Conn, api model.DeviceManagementApi, creds *
 	if tenantDeleted == nil {
 		tenantDeleted = func(string) bool { return false }
 	}
+	base, cancel := context.WithCancel(context.Background())
 	return &CalloutResponder{
 		conn:          conn,
 		api:           api,
@@ -144,6 +224,12 @@ func NewCalloutResponder(conn *nats.Conn, api model.DeviceManagementApi, creds *
 		ttl:           natsauth.DefaultUserJWTTTL,
 		now:           time.Now,
 		tenantDeleted: tenantDeleted,
+		maxInFlight:   DefaultCalloutMaxInFlight,
+		sem:           make(chan struct{}, DefaultCalloutMaxInFlight),
+		lookupTimeout: DefaultCalloutLookupTimeout,
+		stopWait:      DefaultCalloutStopWait,
+		base:          base,
+		cancel:        cancel,
 	}, nil
 }
 
@@ -152,9 +238,10 @@ func NewCalloutResponder(conn *nats.Conn, api model.DeviceManagementApi, creds *
 // goroutine so one slow check (for a password, attempt-store reads and writes on
 // JetStream plus a DB round-trip; for an access token, the DB round-trip) does not
 // stall the whole queue — nats.go dispatches a subscription's callbacks serially, and
-// a connect storm within the broker's auth window otherwise backs up. The DB
-// connection pool and JetStream's own request handling are the backpressure on
-// concurrency.
+// a connect storm within the broker's auth window otherwise backs up. Concurrency is
+// bounded (maxInFlight): a request over the bound is denied at once rather than queued
+// behind the credential store, and every request's work carries a deadline below the
+// broker's authorization timeout (lookupTimeout).
 //
 // 🔴 SYNCED, and this is the sharpest instance of that rule on the platform. A bare
 // QueueSubscribe returns before the server has registered anything, and the publisher
@@ -169,9 +256,7 @@ func NewCalloutResponder(conn *nats.Conn, api model.DeviceManagementApi, creds *
 // the COLD START of the whole responder pool — which is precisely when a fleet-wide
 // reconnect storm arrives.
 func (c *CalloutResponder) Start() error {
-	sub, err := messaging.QueueSubscribeSynced(c.conn, AuthCalloutSubject, authCalloutQueue, func(msg *nats.Msg) {
-		go c.handle(msg)
-	})
+	sub, err := messaging.QueueSubscribeSynced(c.conn, AuthCalloutSubject, authCalloutQueue, c.dispatch)
 	if err != nil {
 		return err
 	}
@@ -180,12 +265,80 @@ func (c *CalloutResponder) Start() error {
 	return nil
 }
 
-// Stop tears down the subscription.
-func (c *CalloutResponder) Stop() error {
-	if c.sub != nil {
-		return c.sub.Unsubscribe()
+// dispatch admits a request to a handler goroutine, or denies it at once when
+// maxInFlight requests are already being authorized.
+func (c *CalloutResponder) dispatch(msg *nats.Msg) {
+	c.mu.Lock()
+	if c.stopped {
+		c.mu.Unlock()
+		return // the broker times the connect out; another replica's queue member answers
 	}
-	return nil
+	select {
+	case c.sem <- struct{}{}:
+		c.wg.Add(1)
+		c.mu.Unlock()
+	default:
+		c.mu.Unlock()
+		c.refuseBusy(msg)
+		return
+	}
+	c.inFlight.Add(1)
+	if c.metrics != nil {
+		c.metrics.InFlight.Inc()
+	}
+	go func() {
+		defer func() {
+			c.inFlight.Add(-1)
+			if c.metrics != nil {
+				c.metrics.InFlight.Dec()
+			}
+			<-c.sem
+			c.wg.Done()
+		}()
+		c.handle(msg)
+	}()
+}
+
+// refuseBusy answers a request the bound turned away with the generic denial, the same
+// answer every other refusal gets, so the bound is not an oracle for anything.
+func (c *CalloutResponder) refuseBusy(msg *nats.Msg) {
+	c.refusedBusy.Add(1)
+	if c.metrics != nil {
+		c.metrics.RefusedBusy.Inc()
+	}
+	reqClaims, err := jwt.DecodeAuthorizationRequestClaims(string(msg.Data))
+	if err != nil || reqClaims.AuthorizationRequest.UserNkey == "" {
+		return
+	}
+	req := reqClaims.AuthorizationRequest
+	c.respond(msg, req.Server.ID, req.UserNkey, "", genericAuthFailure)
+}
+
+// Stop tears down the subscription, then waits up to stopWait for requests still being
+// authorized; whatever outlasts that is cancelled through its context.
+func (c *CalloutResponder) Stop() error {
+	c.mu.Lock()
+	c.stopped = true
+	c.mu.Unlock()
+	var err error
+	if c.sub != nil {
+		err = c.sub.Unsubscribe()
+	}
+	done := make(chan struct{})
+	go func() {
+		c.wg.Wait()
+		close(done)
+	}()
+	timer := time.NewTimer(c.stopWait)
+	defer timer.Stop()
+	select {
+	case <-done:
+	case <-timer.C:
+		log.Warn().Int64("inFlight", c.inFlight.Load()).
+			Msg("Auth-callout stop gave up waiting for in-flight requests; cancelling them.")
+	}
+	c.cancel()
+	return err
 }
 
 // handle processes one authorization request: decode, decide, and reply with a
@@ -244,7 +397,8 @@ func (c *CalloutResponder) authorize(req jwt.AuthorizationRequest) (userJWT stri
 
 	// The credential lookup is tenant-scoped via the context tenant (the fail-closed
 	// DB callback), so a credential is only ever resolved within its own tenant.
-	ctx := core.WithTenant(context.Background(), tenant)
+	ctx, cancel := context.WithTimeout(core.WithTenant(c.base, tenant), c.lookupTimeout)
+	defer cancel()
 	// The authenticated DEVICE — not just "some device in this tenant" — decides the
 	// grant, so the JWT can confine this connection to its own command subject and its
 	// own events topic. The result was previously discarded, which is why the grant
