@@ -426,7 +426,7 @@ func (api *Api) Dashboards(ctx context.Context, criteria DashboardSearchCriteria
 	results := make([]Dashboard, 0)
 	db, pag := api.RDB.ListOf(ctx, &Dashboard{}, func(result *gorm.DB) *gorm.DB {
 		if criteria.Name != nil {
-			result = result.Where("name LIKE ?", "%"+*criteria.Name+"%")
+			result = result.Where(`name LIKE ? ESCAPE '\'`, rdb.ContainsPattern(*criteria.Name))
 		}
 		return result
 	}, criteria.Pagination)

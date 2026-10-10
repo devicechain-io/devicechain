@@ -337,3 +337,39 @@ func TestDeleteRemovesVersions(t *testing.T) {
 	require.NoError(t, api.RDB.DB(ctx).Unscoped().Model(&DashboardVersion{}).Count(&count).Error)
 	assert.Equal(t, int64(0), count)
 }
+
+// TestDashboardsNameFilterIsLiteral pins that the name filter is a literal substring
+// search: `%` and `_` in the filter text are characters to find, not LIKE wildcards.
+// Unescaped, "50%" matches "500 sensors" too, and "e_a" matches "linexa". (A literal
+// backslash is pinned in core's TestContainsPattern rather than here: the SQLite test
+// driver does not match a doubled escape character as one literal, Postgres does.)
+func TestDashboardsNameFilterIsLiteral(t *testing.T) {
+	api := newTestApi(t)
+	ctx := core.WithTenant(context.Background(), "acme")
+	for token, name := range map[string]string{
+		"pct":    "50% load",
+		"digits": "500 sensors",
+		"under":  "line_a",
+		"letter": "linexa",
+	} {
+		_, err := api.CreateDashboard(ctx, &DashboardCreateRequest{
+			Token: token, Name: strp(name), Definition: `{"schemaVersion":1,"widgets":[]}`,
+		})
+		require.NoError(t, err)
+	}
+	names := func(filter string) []string {
+		page, err := api.Dashboards(ctx, DashboardSearchCriteria{
+			Name: strp(filter), Pagination: rdb.Pagination{PageNumber: 1, PageSize: 10},
+		})
+		require.NoError(t, err)
+		out := make([]string, 0, len(page.Results))
+		for _, d := range page.Results {
+			out = append(out, d.Name.String)
+		}
+		return out
+	}
+	assert.ElementsMatch(t, []string{"50% load"}, names("50%"))
+	assert.ElementsMatch(t, []string{"line_a"}, names("e_a"))
+	// The counterweight: an ordinary substring still matches across rows.
+	assert.ElementsMatch(t, []string{"line_a", "linexa"}, names("line"))
+}
