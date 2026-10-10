@@ -320,7 +320,7 @@ sentido sin direcciones de dispositivo, así que **Lectura** y **Suscripción** 
 | `publish` → Kafka | — | ● | — | TLS; SASL `PLAIN`, `SCRAM-SHA-256`, `SCRAM-SHA-512` |
 | `publish` → AWS SNS | — | ● | — | Solo credenciales estáticas por inquilino |
 | `publish` → AWS SQS | — | ● | — | Solo credenciales estáticas por inquilino |
-| `publish` → Google Pub/Sub | — | ○ | — | **Creable pero no despachable** (consulta más abajo) |
+| `publish` → Google Pub/Sub | — | ○ | — | **No disponible**: se rechaza al escribir (consulta más abajo) |
 
 A diferencia de Kafka, que tiene un conmutador `tls` real, la configuración del conector MQTT **no
 tiene campos de TLS de ningún tipo**, y rechaza claves desconocidas, así que no hay nada que
@@ -338,11 +338,12 @@ dirección privada o de metadatos de nube se rechaza salvo que un operador haya 
 explícitamente esa dirección; consulta
 [a dónde puede enviar un conector](../concepts/outbound-connectors.md#destinations).
 
-:::warning Un conector de Google Pub/Sub se puede crear y nunca enviará nada
-`gcp_pubsub` es un tipo de conector válido: la API lo acepta, y el conector se guarda y se publica
-como cualquier otro. **No tiene implementación de entrega** en esta versión, así que todo despacho
-hacia él falla de forma terminal y acaba en la cola de mensajes muertos: reconocido pero no
-ejecutable, nunca descartado en silencio. Cuando se publique, se autenticará con una credencial
+:::warning Un conector de Google Pub/Sub se rechaza en lugar de aceptarse y nunca envía nada
+`gcp_pubsub` es un tipo de conector reconocido, pero **no tiene implementación de entrega** en esta
+versión. Crear un conector de ese tipo, actualizar uno a ese tipo o publicarlo se rechaza con el
+código de error `UNSUPPORTED`. Un conector de ese tipo guardado por una versión anterior sigue
+acabando en la cola de mensajes muertos como no soportado si un `publish` lo apunta: reconocido
+pero no ejecutable, nunca descartado en silencio. Cuando se publique, se autenticará con una credencial
 guardada en el conector, como hacen los conectores de AWS, nunca con la identidad del pod.
 :::
 

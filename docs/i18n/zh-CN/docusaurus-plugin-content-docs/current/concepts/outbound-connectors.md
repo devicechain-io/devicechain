@@ -15,7 +15,7 @@ title: 出站连接器
 :::
 
 :::note 状态
-**目前可用：**`httpCall` webhook 动作，以及通过租户作用域、支持版本管理的连接器向 MQTT、Apache Kafka、AWS SNS 和 AWS SQS 投递的 `publish` 动作；连接器凭据保存在加密密钥存储中。两者都可以在自动化画布上配置为动作节点。可以通过 API 创建 `gcp_pubsub` 连接器，但目前无法派发（见[下文](#publish--send-to-a-connector)）。
+**目前可用：**`httpCall` webhook 动作，以及通过租户作用域、支持版本管理的连接器向 MQTT、Apache Kafka、AWS SNS 和 AWS SQS 投递的 `publish` 动作；连接器凭据保存在加密密钥存储中。两者都可以在自动化画布上配置为动作节点。`gcp_pubsub` 是可识别的类型，但目前无法创建（见[下文](#publish--send-to-a-connector)）。
 
 **计划中：**更多 `publish` 目标（RabbitMQ、Azure、NATS、Redis、Slack、Splunk），采用同一模型。本仓库是判断当前哪些功能能够构建的权威依据。
 :::
@@ -46,7 +46,7 @@ webhook 投递通过以下方式加固：
 
 一个通用 `publish` 动作覆盖所有消息代理和队列类型；**连接器类型**选择传输方式。目前支持 `mqtt`、`kafka`、`aws_sns` 和 `aws_sqs`。
 
-可以通过 API 创建 `gcp_pubsub` 连接器，但目前无法派发：向它执行 `publish` 会因不受支持而进入死信。控制台不提供该类型。
+`gcp_pubsub` 是可识别的类型，但本版本没有投递客户端，因此创建、更新为该类型或发布该类型的连接器都会被拒绝，错误代码为 `UNSUPPORTED`。控制台不提供该类型。早期版本已存储的该类型连接器，如果有 `publish` 指向它，仍会因不受支持而进入死信，不会被无声丢弃。
 
 ## 连接器是支持版本管理的资源 {#connectors-are-versioned-resources}
 

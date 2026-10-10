@@ -14,6 +14,7 @@ import (
 	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-microservice/secrets"
+	"github.com/devicechain-io/dc-outbound-connectors/connectorspec"
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -488,4 +489,40 @@ func TestTenantIsolation(t *testing.T) {
 	require.ErrorIs(t, err, gorm.ErrRecordNotFound)
 	_, err = api.RollbackConnector(globex, "shared", 1)
 	require.ErrorIs(t, err, gorm.ErrRecordNotFound)
+}
+
+// TestGCPPubSubIsRefusedAtEveryWrite: a type that is in the vocabulary but has no delivery
+// client in this build must be refused where it is written — create, update and publish —
+// not accepted and left to dead-letter at its first dispatch.
+func TestGCPPubSubIsRefusedAtEveryWrite(t *testing.T) {
+	api := newTestApi(t)
+	ctx := core.WithTenant(context.Background(), "acme")
+	requireUnsupported := func(err error) {
+		t.Helper()
+		require.ErrorIs(t, err, connectorspec.ErrUnsupportedType)
+		var u *UnsupportedTypeError
+		require.ErrorAs(t, err, &u)
+		assert.Equal(t, map[string]any{"code": "UNSUPPORTED"}, u.Extensions())
+	}
+
+	_, err := api.CreateConnector(ctx, &ConnectorCreateRequest{
+		Token: "g", Type: string(ConnectorTypeGCPPubSub), Config: `{"project":"p","topic":"t"}`,
+	})
+	requireUnsupported(err)
+
+	// Update: re-pointing a supported connector at the unsupported type is refused.
+	_, err = api.CreateConnector(ctx, &ConnectorCreateRequest{
+		Token: "m", Type: string(ConnectorTypeMQTT), Config: mqttConfig,
+	})
+	require.NoError(t, err)
+	gcp := string(ConnectorTypeGCPPubSub)
+	_, err = api.UpdateConnector(ctx, "m", &ConnectorUpdateRequest{Type: dcgraphql.OptionalStringOf(gcp)}, nil)
+	requireUnsupported(err)
+
+	// Publish: a row stored before the refusal existed cannot be frozen into a version.
+	require.NoError(t, api.RDB.DB(ctx).Create(&Connector{
+		TokenReference: rdb.TokenReference{Token: "legacy"}, Type: gcp, Config: []byte(`{}`),
+	}).Error)
+	_, err = api.PublishConnector(ctx, "legacy", nil, nil, "alice", nil)
+	requireUnsupported(err)
 }

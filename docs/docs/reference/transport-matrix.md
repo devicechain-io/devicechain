@@ -300,7 +300,7 @@ directions, so **Read** and **Subscribe** are `—` rather than `None`.
 | `publish` → Kafka | — | ● | — | TLS; SASL `PLAIN`, `SCRAM-SHA-256`, `SCRAM-SHA-512` |
 | `publish` → AWS SNS | — | ● | — | Static per-tenant credentials only |
 | `publish` → AWS SQS | — | ● | — | Static per-tenant credentials only |
-| `publish` → Google Pub/Sub | — | ○ | — | **Creatable but not dispatchable** — see below |
+| `publish` → Google Pub/Sub | — | ○ | — | **Not available** — refused at write, see below |
 
 Unlike Kafka, which has a real `tls` toggle, the MQTT connector config has **no TLS fields of any
 kind**, and it rejects unknown keys, so there is nothing to author. TLS happens only implicitly,
@@ -317,10 +317,12 @@ private or cloud-metadata address is refused unless an operator has explicitly a
 address — see
 [where a connector may send](../concepts/outbound-connectors.md#destinations).
 
-:::warning A Google Pub/Sub connector can be created and will never send
-`gcp_pubsub` is a valid connector type: the API accepts it, and the connector saves and publishes
-like any other. It has **no delivery implementation** in this release, so every dispatch to it
-fails terminally and is dead-lettered — recognized but not executable, never silently dropped.
+:::warning A Google Pub/Sub connector is refused rather than accepted and never sent
+`gcp_pubsub` is a recognized connector type, but it has **no delivery implementation** in this
+release. Creating a connector of that type, updating one to it, or publishing one is refused with
+the error code `UNSUPPORTED`. A connector of that type stored by an earlier release is still
+dead-lettered as unsupported if a `publish` targets it — recognized but not executable, never
+silently dropped.
 When it ships, it will authenticate with a credential stored on the connector, as the AWS
 connectors do, never with the pod's identity.
 :::

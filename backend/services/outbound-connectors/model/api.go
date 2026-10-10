@@ -100,14 +100,18 @@ func (api *Api) validateTypeAndConfig(connectorType, config string) (datatypes.J
 	if err := validateConnectorType(connectorType); err != nil {
 		return nil, err
 	}
+	// A vocabulary type with no delivery client in this build (gcp_pubsub) is refused
+	// here: accepting it would let an author create, select and publish a connector that
+	// can only dead-letter at its first dispatch.
+	if !connectorspec.Supported(connectorType) {
+		return nil, &UnsupportedTypeError{Type: connectorType}
+	}
 	cfg, err := configJSON(config)
 	if err != nil {
 		return nil, err
 	}
-	if connectorspec.Supported(connectorType) {
-		if err := connectorspec.ValidateConfig(connectorType, cfg); err != nil {
-			return nil, err
-		}
+	if err := connectorspec.ValidateConfig(connectorType, cfg); err != nil {
+		return nil, err
 	}
 	return cfg, nil
 }
@@ -427,6 +431,12 @@ func (api *Api) PublishConnector(ctx context.Context, token string, label, descr
 		return nil, gorm.ErrRecordNotFound
 	}
 	conn := matches[0]
+
+	// A stored row of a type this build cannot deliver to must not be frozen into a
+	// version a rule can then select.
+	if !connectorspec.Supported(conn.Type) {
+		return nil, &UnsupportedTypeError{Type: conn.Type}
+	}
 
 	// The same check as UpdateConnector's, rdb.RefuseIfMoved.
 	if err := rdb.RefuseIfMoved(conn.UpdatedAt, expectedUpdatedAt, ErrConflict); err != nil {
