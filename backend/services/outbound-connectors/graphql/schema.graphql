@@ -113,8 +113,9 @@ type Query {
     connector(token: String!): Connector
     # Search connectors by criteria.
     connectors(criteria: ConnectorSearchCriteria!): ConnectorSearchResults!
-    # List a connector's published versions, newest first.
-    connectorVersions(token: String!): [ConnectorVersion!]!
+    # List a connector's published versions, newest first. Always bounded: at most 1000 are
+    # returned (the newest unless offset pages past them); limit and offset are optional.
+    connectorVersions(token: String!, limit: Int, offset: Int): [ConnectorVersion!]!
     # The registered connector-type vocabulary (for a console picker).
     connectorTypes: [String!]!
 }

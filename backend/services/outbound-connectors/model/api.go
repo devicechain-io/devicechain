@@ -542,7 +542,13 @@ func (api *Api) LatestPublishedConnector(ctx context.Context, token string) (*Co
 
 // ConnectorVersions lists a connector's published versions, newest first. Returns
 // gorm.ErrRecordNotFound if the connector does not exist.
-func (api *Api) ConnectorVersions(ctx context.Context, token string) ([]*ConnectorVersion, error) {
+//
+// The list is always bounded: every publish adds a snapshot row and nothing caps versions per
+// connector, so an unbounded read grows with the connector's age. limit nil, below 1 or above
+// rdb.MaxPageSize is rdb.MaxPageSize (newest first, so the newest versions are the ones kept);
+// offset nil or negative is 0. Both are optional so a caller that names neither still gets the
+// newest page.
+func (api *Api) ConnectorVersions(ctx context.Context, token string, limit, offset *int32) ([]*ConnectorVersion, error) {
 	matches, err := api.ConnectorsByToken(ctx, []string{token})
 	if err != nil {
 		return nil, err
@@ -555,10 +561,27 @@ func (api *Api) ConnectorVersions(ctx context.Context, token string) ([]*Connect
 	versions := make([]*ConnectorVersion, 0)
 	if err := api.RDB.DB(ctx).
 		Where("connector_id = ?", conn.ID).
-		Order("version DESC").Find(&versions).Error; err != nil {
+		Order("version DESC").Limit(versionListLimit(limit)).Offset(versionListOffset(offset)).
+		Find(&versions).Error; err != nil {
 		return nil, err
 	}
 	return versions, nil
+}
+
+// versionListLimit resolves the optional limit of a version list.
+func versionListLimit(limit *int32) int {
+	if limit == nil || *limit < 1 || *limit > rdb.MaxPageSize {
+		return rdb.MaxPageSize
+	}
+	return int(*limit)
+}
+
+// versionListOffset resolves the optional offset of a version list.
+func versionListOffset(offset *int32) int {
+	if offset == nil || *offset < 0 {
+		return 0
+	}
+	return int(*offset)
 }
 
 // ConnectorsByToken looks up connectors by their current tokens.
