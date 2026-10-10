@@ -317,7 +317,7 @@ mosquitto_pub \
 - **`commandToken` must be the `token` from the delivery envelope**, the command's token, not the device's. Sending the device token here is the single most common mistake. It matches no command, so the response settles nothing: it is redelivered until the broker's delivery ceiling (five attempts), then recorded on the dead-letter stream with reason `exhausted`, visible to an operator, while the command stays outstanding.
 - **`dispatchNonce` must be the `dispatchNonce` from the delivery envelope you are answering.** It is required. A response that omits it, or that quotes a nonce from an earlier delivery of the same command, does not settle the command. See [Why the nonce is required](#why-the-nonce-is-required).
 - **`success`** moves the command to `SUCCESSFUL` or `FAILED`.
-- **`payload`** / **`error`** are optional strings, surfaced in the console's command history and returned by the API.
+- **`payload`** is optional and may be any JSON value (a string is stored as its text, an object or array as that JSON); **`error`** is an optional string. Both are surfaced in the console's command history and returned by the API.
 
 Like the events and command topics, this one is per-device, and a device is authorized to publish only to its own. Both the tenant and the responding device are taken from the topic rather than the body, so a device can answer only for **its own** commands. A response naming a command that belongs to a different device is rejected, not recorded.
 

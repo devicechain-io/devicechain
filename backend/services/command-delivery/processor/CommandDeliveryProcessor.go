@@ -821,6 +821,13 @@ func (cproc *CommandDeliveryProcessor) handleResponse(ctx context.Context, msg m
 	var response responseEnvelope
 	if err := json.Unmarshal(msg.Value, &response); err != nil {
 		log.Warn().Err(err).Str("correlation", msg.CorrelationID()).Msg("Skipping undecodable command response")
+		// Acked, not retried (the same bytes decode the same way), but RECORDED: the subject
+		// gave a tenant and a device, so the letter can be filed truthfully, and it is the
+		// only trace that the device answered at all. The command it was answering is
+		// unknown, so the letter names the responding device instead.
+		cproc.deadLetterResponse(tenantCtx, msg, responder, err, deadletter.ReasonUnprocessable,
+			"a device published a command response that is not a decodable response envelope, "+
+				"so it could not be matched to a command and was not recorded against one")
 		_ = msg.Ack()
 		done(core.ResultInvalid)
 		return true
