@@ -463,6 +463,23 @@ func TestAHitHandsBackADeviceTheCallerCannotChangeInTheCache(t *testing.T) {
 	require.NotEqual(t, uint(99), again.DeviceTypeId)
 }
 
+// A hit's device copies the entry's metadata. A real lookup no longer reads metadata, so
+// this fills the cache directly with a row that has some, as cloneDevice must still cope
+// with one.
+func TestAHitCopiesTheEntrysDeviceMetadata(t *testing.T) {
+	c := NewCredentialCache(16, 1<<20)
+	key := fillSynth(c, "acme", "tok", synthCred("acme", 1, 8))
+	first, ok := c.lookup("acme", key)
+	require.True(t, ok)
+	require.NotNil(t, first.Device.Metadata)
+	(*first.Device.Metadata)[0] = 'Z'
+	first.Device.Token = "tampered"
+	again, ok := c.lookup("acme", key)
+	require.True(t, ok)
+	require.Equal(t, byte(0), (*again.Device.Metadata)[0])
+	require.Equal(t, "d1", again.Device.Token)
+}
+
 // synthCred is a row as the per-event finder returns it, for exercising the cache directly.
 func synthCred(tenant string, deviceId uint, metadataBytes int) *DeviceCredential {
 	d := &Device{}

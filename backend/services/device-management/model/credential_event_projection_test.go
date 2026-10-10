@@ -224,3 +224,48 @@ func TestTheEventLookupResolvesWhatTheFullReadResolves(t *testing.T) {
 		})
 	}
 }
+
+// The same (type, id) stored in two tenants resolves, through the narrow read, to each
+// tenant's OWN device and only that one: the tenant predicate decides which row is found,
+// not the order the rows happen to come back in.
+func TestTheSameCredentialInTwoTenantsResolvesToEachTenantsOwnDevice(t *testing.T) {
+	f := newSQLiteCredentialFixture(t)
+	other := core.WithTenant(context.Background(), "other")
+	if _, err := f.api.CreateDeviceType(other, &DeviceTypeCreateRequest{Token: "dt"}); err != nil {
+		t.Fatal(err)
+	}
+	theirs, err := f.api.CreateDevice(other, &DeviceCreateRequest{Token: "theirs", DeviceTypeToken: "dt"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.api.CreateDeviceCredential(other, &DeviceCredentialCreateRequest{Token: "oc-1", DeviceToken: "theirs",
+		CredentialType: string(CredentialAccessToken), CredentialId: "tok-1", Enabled: true}); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	for _, tc := range []struct {
+		name   string
+		ctx    context.Context
+		tenant string
+		token  string
+		id     uint
+	}{
+		{"acme", f.ctx, "acme", "dev", f.devId},
+		{"other", other, "other", "theirs", theirs.ID},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := &PresentedCredential{CredentialType: string(CredentialAccessToken), CredentialId: "tok-1"}
+			for _, check := range []func(context.Context, *PresentedCredential, time.Time) (*Device, error){
+				f.api.AuthenticateDevice, f.api.AuthenticateDeviceConnect, f.capi.AuthenticateDevice, f.capi.AuthenticateDevice,
+			} {
+				d, err := check(tc.ctx, p, now)
+				if err != nil {
+					t.Fatalf("authenticate: %v", err)
+				}
+				if d.TenantId != tc.tenant || d.Token != tc.token || d.ID != tc.id {
+					t.Fatalf("resolved %s/%s/%d, want %s/%s/%d", d.TenantId, d.Token, d.ID, tc.tenant, tc.token, tc.id)
+				}
+			}
+		})
+	}
+}
