@@ -507,3 +507,18 @@ func TestNBirthCascadesOnlyWhenAnOnlineSessionIsReplaced(t *testing.T) {
 	assert.Len(t, after.Presence, 1,
 		"the death already disconnected sensor-7; a birth after a clean death must not disconnect it again")
 }
+
+// Skips are reported once, with the message that produced them. Draining them in Observe is what
+// stops a later, clean message from re-reporting an earlier message's skips.
+func TestSkipsAreReportedOnceNotOnEveryLaterMessage(t *testing.T) {
+	h := newHarness(defaultRebirthBackoff)
+	first := h.tr.Observe(nTop(NBIRTH), pl(0, bdSeqM(1), valuedBirth("t", 1, 20),
+		namedMetric("door", datatypeBoolean, true)))
+	if first.Skipped.NonNumeric != 1 {
+		t.Fatalf("the birth's boolean metric must be reported once, got %+v", first.Skipped)
+	}
+	second := h.tr.Observe(nTop(NDATA), pl(1, valuedData(1, 21)))
+	if second.Skipped.Total() != 0 {
+		t.Fatalf("a clean later message must report no skips, got %+v", second.Skipped)
+	}
+}
