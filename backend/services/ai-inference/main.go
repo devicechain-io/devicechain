@@ -218,20 +218,18 @@ func registerAdminHandler(providers map[gqlcore.ContextKey]interface{}, metrics 
 	Microservice.Mux().Handle("/admin/graphql", admin)
 }
 
-// inferenceDraftCalls is the most provider calls one draft makes (the bounded
-// compile/repair loop).
-const inferenceDraftCalls = 3
-
-// graphQLExecTimeout is this service's request execution deadline. The platform default
-// would end a draft that is still legitimately waiting on its provider, so it is the
-// worst-case draft (every call at the configured per-call timeout) plus a margin; it is
-// still a bound, just one that sits above the inference ceiling.
+// graphQLExecTimeout is this service's request execution deadline. One request makes at
+// most one provider call (the compile/repair loop that can make several runs in the
+// caller, event-processing, one request per attempt), so the deadline is the configured
+// per-call timeout plus a margin for the rest of the request. The platform default
+// would end a call that is still legitimately waiting on its provider; this is still a
+// bound, just one that sits above the inference ceiling.
 func graphQLExecTimeout() time.Duration {
 	perCallMs := config.MaxInferenceTimeoutMs // the ceiling, when no configuration is loaded
 	if Configuration != nil {
 		perCallMs = Configuration.InferenceTimeoutMs
 	}
-	return inferenceDraftCalls*time.Duration(perCallMs)*time.Millisecond + 30*time.Second
+	return time.Duration(perCallMs)*time.Millisecond + 30*time.Second
 }
 
 // afterMicroserviceStarted starts components after the microservice is started.

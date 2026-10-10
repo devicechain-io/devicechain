@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -243,6 +244,13 @@ func (h *HttpHandler) serveExec(w http.ResponseWriter, r *http.Request) {
 	_ = rc.SetReadDeadline(time.Now().Add(bodyReadTimeout))
 	var params execRequest
 	err := json.NewDecoder(r.Body).Decode(&params)
+	if err == nil {
+		// Read the body to its end under the same deadline. A client that sends a
+		// complete value, declares a longer body and stalls would otherwise be waited
+		// on by the server, with no deadline, when it discards the unread rest. The
+		// read is already capped by the body-size ceiling.
+		_, err = io.Copy(io.Discard, r.Body)
+	}
 	_ = rc.SetReadDeadline(time.Time{})
 	if err != nil {
 		// The body may be unfinished. Closing after the reply keeps the server from

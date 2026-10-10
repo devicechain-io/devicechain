@@ -166,3 +166,29 @@ func TestExecDeadlineDoesNotApplyToSubscriptions(t *testing.T) {
 	require.Equal(t, msgNext, msg.Type, "payload: %s", msg.Payload)
 	assert.EqualValues(t, 7, nextData(t, msg)["late"])
 }
+
+// A client that sends a complete JSON value, declares a longer body and stops is cut off
+// at the body deadline too: the server does not wait for the rest with no deadline.
+func TestStalledBodyAfterACompleteValueIsCutOffAtTheReadDeadline(t *testing.T) {
+	old := bodyReadTimeout
+	bodyReadTimeout = 300 * time.Millisecond
+	defer func() { bodyReadTimeout = old }()
+
+	schema := MustParseSchema(deadlineSDL, &deadlineRoot{})
+	srv := httptest.NewServer(NewHttpHandler(schema, nil, nil))
+	defer srv.Close()
+
+	conn, err := net.Dial("tcp", strings.TrimPrefix(srv.URL, "http://"))
+	require.NoError(t, err)
+	defer conn.Close()
+	body := `{"query":"{ hello }"}`
+	_, err = conn.Write([]byte("POST / HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\nContent-Length: 500\r\n\r\n" + body))
+	require.NoError(t, err)
+
+	_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	start := time.Now()
+	buf := make([]byte, 512)
+	n, _ := conn.Read(buf)
+	assert.Less(t, time.Since(start), 3*time.Second, "the server must answer or close at the body deadline")
+	assert.Contains(t, string(buf[:n]), "400")
+}
