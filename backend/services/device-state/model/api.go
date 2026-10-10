@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/devicechain-io/dc-device-state/config"
+	dclimit "github.com/devicechain-io/dc-microservice/limit"
 	"github.com/devicechain-io/dc-microservice/presence"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"gorm.io/gorm"
@@ -498,6 +499,9 @@ func (api *Api) AssertedStatesForDemotion(ctx context.Context, source string, to
 	}
 	if tokens != nil && len(*tokens) == 0 {
 		return nil, nil
+	}
+	if tokens != nil && len(*tokens) > rdb.MaxLookupKeys {
+		return nil, dclimit.Exceeded("device tokens", len(*tokens), rdb.MaxLookupKeys)
 	}
 	found := make([]*DeviceState, 0, limit)
 	db := api.RDB.DB(ctx).
