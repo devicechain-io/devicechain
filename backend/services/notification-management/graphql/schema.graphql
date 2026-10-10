@@ -11,61 +11,137 @@
 # channels + recipients. It also exposes read-only per-alarm notification state —
 # the substrate the dispatcher (N.C) writes and the escalation scheduler (N.D)
 # reads; population lands in those slices.
+#
+# Descriptions: a """string""" above an element is its PUBLIC description — served by
+# introspection, read by every GraphQL tool, published on the docs site — and may not
+# cite a decision record. A # comment is a maintainer note.
 
-# Pagination info for search results.
+"""
+Where a page of search results sits in the full result set. Positions are 1-based and
+inclusive.
+"""
 type SearchResultsPagination {
+    """Position of the first result on this page within the full result set (1-based)."""
     pageStart: Int
+    """Position of the last result on this page within the full result set (1-based, inclusive)."""
     pageEnd: Int
+    """Number of records matching the criteria across all pages."""
     totalRecords: Int
 }
 
+"""
+A kind of delivery channel the service can send notifications through. You pick a
+type when you create a channel.
+"""
 # A delivery-channel TYPE the notification subsystem defines. `id` is the stable
 # key a channel is configured against; `label`/`description` drive the channel-type
 # picker in the console. `available` is false until a working adapter for the type
 # ships (a channel may still be configured against a defined type, but nothing is
 # delivered through it until its adapter lands).
 type NotificationChannelType {
+    """The identifier to pass as channelType when creating a channel: smtp or webhook."""
     id: String!
+    """Short human-readable name for the type, for pickers."""
     label: String!
+    """One-sentence explanation of what delivering through this type does."""
     description: String!
+    """True when this build can actually deliver through the type. Both listed types are available."""
     available: Boolean!
 }
 
+"""
+A delivery channel: a configured email (SMTP) server or webhook endpoint that
+notifications are sent through. Routing policies refer to channels by token.
+"""
 # A tenant's configured delivery endpoint: a concrete instance of a channel type
 # (smtp, webhook) with the non-secret connection config a policy delivers through.
 type NotificationChannel {
+    """Server-assigned identifier. Address a channel by its token, not by this."""
     id: ID!
+    """When the channel was created, as an RFC 3339 timestamp."""
     createdAt: String
+    """When the channel was last written, as an RFC 3339 timestamp."""
     updatedAt: String
+    """Always null: deleting a channel removes it permanently rather than marking it deleted."""
     deletedAt: String
+    """
+    Unique, caller-chosen identifier of the channel within the tenant. Letters, digits,
+    hyphens and underscores, starting with a letter or digit, at most 128 characters.
+    """
     token: String!
+    """Human-readable name shown in channel lists."""
     name: String
+    """Free-text description of what the channel is for."""
     description: String
+    """The channel type: smtp or webhook, as listed by notificationChannelTypes."""
     channelType: String!
+    """
+    The channel's non-secret connection settings as a JSON object serialized to a string,
+    or null if none are set. The shape depends on channelType; see
+    NotificationChannelCreateRequest.config.
+    """
     # Non-secret, type-specific connection config as a JSON document (SMTP
     # host/port/from; webhook url/method/headers and a REQUIRED `auth`: none, bearer
     # or header, with authHeader/authScheme for header).
     config: String
+    """True when a delivery secret is stored for the channel. The secret itself is never returned."""
     # Whether a delivery secret (SMTP password, bearer token) is configured. The
     # secret itself is write-only and is never returned on read.
     hasSecret: Boolean!
+    """Whether the channel is in use. Notifications are not sent through a disabled channel."""
     enabled: Boolean!
+    """Free-form caller-defined metadata as a JSON object serialized to a string, or null if none is set."""
     metadata: String
 }
 
+"""
+Fields for a new delivery channel. The type must be one listed by
+notificationChannelTypes and the config must be valid for it.
+"""
 # Data required to CREATE a delivery channel. `secret` is write-only: it sets the
 # channel's delivery secret, which is never returned on read.
 input NotificationChannelCreateRequest {
+    """
+    Unique identifier for the new channel within the tenant. Letters, digits, hyphens and
+    underscores, starting with a letter or digit, at most 128 characters.
+    """
     token: String!
+    """Human-readable name shown in channel lists."""
     name: String
+    """Free-text description of what the channel is for."""
     description: String
+    """The channel type: smtp or webhook, as listed by notificationChannelTypes."""
     channelType: String!
+    """
+    The non-secret connection settings as a JSON object serialized to a string. For smtp:
+    host, port, from, username (optional; requires a secret) and security (starttls, the
+    default; tls; or none for cleartext). For webhook: url (http or https, required),
+    method (POST only), headers (an object of extra request headers) and auth (required:
+    none when the URL itself carries the credential, bearer to send the secret as a bearer
+    token, or header to send it in the header named by authHeader, optionally prefixed
+    with authScheme). A webhook with auth bearer or header must have a secret, and one
+    with auth none must not. The platform restricts which destinations a channel may
+    reach.
+    """
     config: String
+    """
+    The delivery credential: the SMTP password or the webhook bearer or header value.
+    Write-only; stored encrypted and never returned. Omit it, or send an empty string, for
+    no secret.
+    """
     secret: String
+    """Whether the channel is active. Notifications are not sent through a disabled channel."""
     enabled: Boolean!
+    """Free-form caller-defined metadata as a JSON object serialized to a string."""
     metadata: String
 }
 
+"""
+A partial update to a delivery channel. Omit a field to leave the stored value alone,
+send a value to set it, or send an explicit null to clear it (except where noted). The
+channel is named by the mutation's token argument, so there is no token here; use
+renameNotificationChannel to change the token.
+"""
 # Fields to change on an existing delivery channel. Every field is OPTIONAL and carries
 # three states: OMIT it to leave the stored value alone, send it as `null` to clear it,
 # or send a value to set it. Nothing you do not mention is written.
@@ -82,40 +158,81 @@ input NotificationChannelCreateRequest {
 # CLEARS it; sending a value rotates it. A webhook channel whose config declares bearer or
 # header auth refuses to be left without a secret.
 input NotificationChannelUpdateRequest {
+    """New name, or null to clear it."""
     name: String
+    """New description, or null to clear it."""
     description: String
+    """New channel type (smtp or webhook). Omit it to keep the stored type; an explicit null is refused."""
     channelType: String
+    """
+    New connection settings as a JSON object serialized to a string, in the format
+    described on NotificationChannelCreateRequest.config, or null to clear them. For a
+    webhook channel the result must still be valid, including its auth setting.
+    """
     config: String
+    """
+    The write-only delivery credential. Omit it to keep the stored secret, send a value to
+    replace it, or send null or an empty string to delete it. A webhook channel whose auth
+    is bearer or header cannot be left without a secret, and one whose auth is none cannot
+    have one.
+    """
     secret: String
+    """Whether the channel is active. Omit it to keep the stored value; an explicit null is refused."""
     enabled: Boolean
+    """New metadata as a JSON object serialized to a string, or null to clear it."""
     metadata: String
 }
 
+"""Filters and paging for the notificationChannels query."""
 # Criteria used when searching for delivery channels.
 input NotificationChannelSearchCriteria {
+    """Page to return, starting at 1. A value below 1 is treated as 1."""
     pageNumber: Int!
+    """Channels per page. A value below 1 is treated as 100; a value above 1000 is capped at 1000."""
     pageSize: Int!
+    """Return only channels of this type (smtp or webhook). Omit it to return every type."""
     channelType: String
+    """Return only enabled (true) or only disabled (false) channels. Omit it to return both."""
     enabled: Boolean
 }
 
+"""One page of delivery channels and where it sits in the full result set."""
 # Search results returned from a delivery-channel query.
 type NotificationChannelSearchResults {
+    """The channels on this page, newest created first (ties broken by token)."""
     results: [NotificationChannel!]!
+    """Position of this page within the full result set."""
     pagination: SearchResultsPagination!
 }
 
+"""
+One routing rule inside a policy: alarms of a matching severity are sent through a
+channel to a list of recipients.
+"""
 # A single routing rule within a policy: for alarms matching `severity` (exact, or
 # "*" for any), deliver through `channel` to `recipients`.
 type NotificationRule {
+    """Server-assigned identifier. A policy update that supplies rules replaces them all, so rule ids change."""
     id: ID!
+    """The alarm severity this rule matches: CRITICAL, MAJOR, MINOR, WARNING, INDETERMINATE, or * for any severity."""
     severity: String!
+    """The channel the rule sends through; null if the channel no longer exists."""
     channel: NotificationChannel
+    """
+    The recipients as a JSON array of strings serialized to a string, or null if none. For
+    an smtp channel they are email addresses; a webhook rule needs none because the
+    channel's endpoint is the destination.
+    """
     # Opaque JSON array of recipient strings the channel adapter interprets (email
     # addresses for SMTP; may be empty for a webhook whose endpoint is the channel).
     recipients: String
 }
 
+"""
+A routing policy: which raised alarms are sent to whom, through which channels, and
+whether an alarm that nobody acknowledges is re-sent. Policies apply to every device in
+the tenant.
+"""
 # A tenant's routing policy: which raised alarms get delivered, to whom, through
 # which channels. Every policy is tenant-wide: `deviceTypeToken` is NOT honoured
 # yet and is refused at write (see NotificationPolicyCreateRequest), so it is null
@@ -128,53 +245,119 @@ type NotificationRule {
 # the shortest window sets the re-notification cadence and each cap counts against the
 # shared tier.
 type NotificationPolicy {
+    """Server-assigned identifier. Address a policy by its token, not by this."""
     id: ID!
+    """When the policy was created, as an RFC 3339 timestamp."""
     createdAt: String
+    """
+    When the policy was last written, as an RFC 3339 timestamp. Pass it back as
+    expectedUpdatedAt to make an update conditional on nobody else having changed the
+    policy since you read it. Any update, including one that only replaces rules, moves it.
+    """
     updatedAt: String
+    """Always null: deleting a policy removes it permanently rather than marking it deleted."""
     deletedAt: String
+    """
+    Unique, caller-chosen identifier of the policy within the tenant. Letters, digits,
+    hyphens and underscores, starting with a letter or digit, at most 128 characters.
+    """
     token: String!
+    """Human-readable name shown in policy lists."""
     name: String
+    """Free-text description of what the policy is for."""
     description: String
+    """Always null: policies cannot yet be limited to a device type, and a request that tries is refused."""
     deviceTypeToken: String
+    """
+    Minimum number of seconds between notifications about the same alarm; a notification
+    inside the window is suppressed, except when the alarm's severity has escalated. Null
+    means no throttle.
+    """
     throttleSeconds: Int
+    """
+    Re-notify an alarm still neither acknowledged nor cleared this many seconds after its
+    last notification. Null or 0 disables escalation for the policy. When several
+    escalating policies match one alarm they share a single clock, driven by the shortest
+    window.
+    """
     escalateAfterSeconds: Int
+    """
+    Maximum number of re-notifications per alarm. Null or 0 uses the service-wide default
+    (5 unless the operator changed it).
+    """
     maxEscalations: Int
+    """Whether the policy is active. A disabled policy sends nothing."""
     enabled: Boolean!
+    """The policy's routing rules."""
     rules: [NotificationRule!]!
+    """Free-form caller-defined metadata as a JSON object serialized to a string, or null if none is set."""
     metadata: String
 }
 
+"""
+A routing rule supplied when creating or updating a policy. The channel is referred to
+by token; a token that matches no channel fails the whole write.
+"""
 # A rule inside a policy create/update. The channel is named by token and resolved
 # on write; an unknown channel token fails the whole policy write.
 input NotificationRuleCreateRequest {
+    """
+    The alarm severity to match: CRITICAL, MAJOR, MINOR, WARNING or INDETERMINATE, or * for
+    any. The match is exact and case-sensitive, so lowercase values are rejected.
+    """
     # One of CRITICAL, MAJOR, MINOR, WARNING, INDETERMINATE, or "*" for any. Checked
     # on write: this is the ALARM's tier, which is uppercase, and it is matched
     # exactly — so a lowercase severity (what a detection rule is authored with)
     # would produce a rule that writes, reads back unchanged, and never delivers.
     severity: String!
+    """Token of the channel to send through."""
     channelToken: String!
+    """
+    The recipients as a JSON array of strings serialized to a string. For an smtp channel
+    these are email addresses; a webhook rule needs none.
+    """
     recipients: String
 }
 
+"""Fields for a new routing policy, including its complete rule set."""
 # Data required to CREATE a routing policy together with its full rule set.
 input NotificationPolicyCreateRequest {
+    """
+    Unique identifier for the new policy within the tenant. Letters, digits, hyphens and
+    underscores, starting with a letter or digit, at most 128 characters.
+    """
     token: String!
+    """Human-readable name shown in policy lists."""
     name: String
+    """Free-text description of what the policy is for."""
     description: String
+    """Not supported yet: any non-blank value is rejected. Leave it unset to create a policy that applies to every device."""
     # NOT HONOURED YET — a non-empty value is REJECTED at write. The dispatcher
     # skips a device-type-scoped policy rather than applying it tenant-wide, so
     # accepting this would return success on a policy that delivers nothing.
     # Leave it unset for a tenant-wide policy.
     deviceTypeToken: String
+    """Minimum seconds between notifications about the same alarm. Omit it for no throttle."""
     throttleSeconds: Int
+    """Seconds after an alarm's last notification before an unacknowledged, uncleared alarm is re-sent. Omit it or use 0 for no escalation."""
     escalateAfterSeconds: Int
+    """Maximum number of re-notifications per alarm. Omit it to use the service-wide default."""
     maxEscalations: Int
+    """Whether the policy is active. A disabled policy sends nothing."""
     enabled: Boolean!
+    """The policy's complete rule set; pass an empty list for a policy with no rules yet."""
     # The policy's full rule set; pass [] for a policy with no rules yet.
     rules: [NotificationRuleCreateRequest!]!
+    """Free-form caller-defined metadata as a JSON object serialized to a string."""
     metadata: String
 }
 
+"""
+A partial update to a routing policy. Omit a field to leave the stored value alone, send
+a value to set it, or send an explicit null to clear it (except where noted). The policy
+is named by the mutation's token argument, so there is no token here, and a policy's
+token cannot be changed.
+"""
 # Fields to change on an existing routing policy. Every field is OPTIONAL and carries
 # three states: OMIT it to leave the stored value alone, send it as `null` to clear it,
 # or send a value to set it. Nothing you do not mention is written.
@@ -192,12 +375,23 @@ input NotificationPolicyCreateRequest {
 # `enabled` cannot be cleared: `null` is refused rather than written as false, because a
 # silently disabled policy stops delivering and reports success.
 input NotificationPolicyUpdateRequest {
+    """New name, or null to clear it."""
     name: String
+    """New description, or null to clear it."""
     description: String
+    """New minimum seconds between notifications about the same alarm, or null to remove the throttle."""
     throttleSeconds: Int
+    """New escalation window in seconds, or null to disable escalation."""
     escalateAfterSeconds: Int
+    """New maximum number of re-notifications per alarm, or null to use the service-wide default."""
     maxEscalations: Int
+    """Whether the policy is active. Omit it to keep the stored value; an explicit null is refused."""
     enabled: Boolean
+    """
+    The policy's complete rule set. Omit it to leave the stored rules untouched. Send a
+    list to replace all the rules with it, or send null or an empty list to remove all
+    rules. Rules are replaced wholesale, never merged, and each rule gets a new id.
+    """
     # The policy's rule set, and the only field here whose three states collapse to two:
     # OMIT it and the stored rules are untouched, ids and all; send `null` OR `[]` and
     # the policy is left with no rules; send a list and it replaces the stored set
@@ -210,79 +404,185 @@ input NotificationPolicyUpdateRequest {
     # $r }`) cannot express "omitted": an unsupplied `$r` arrives as an explicit null, and
     # for this field that empties the policy's whole rule set and returns success.
     rules: [NotificationRuleCreateRequest!]
+    """New metadata as a JSON object serialized to a string, or null to clear it."""
     metadata: String
 }
 
+"""Filters and paging for the notificationPolicies query."""
 # Criteria used when searching for routing policies.
 input NotificationPolicySearchCriteria {
+    """Page to return, starting at 1. A value below 1 is treated as 1."""
     pageNumber: Int!
+    """Policies per page. A value below 1 is treated as 100; a value above 1000 is capped at 1000."""
     pageSize: Int!
+    """Return only policies scoped to this device type. Policies cannot yet be scoped, so any value matches nothing."""
     deviceTypeToken: String
+    """Return only enabled (true) or only disabled (false) policies. Omit it to return both."""
     enabled: Boolean
 }
 
+"""One page of routing policies and where it sits in the full result set."""
 # Search results returned from a routing-policy query.
 type NotificationPolicySearchResults {
+    """The policies on this page, newest created first (ties broken by token), each with its rules."""
     results: [NotificationPolicy!]!
+    """Position of this page within the full result set."""
     pagination: SearchResultsPagination!
 }
 
+"""
+What the service has done about one raised alarm: when it was notified, how many times,
+and how far escalation has gone. There is one record per alarm. It records notification
+activity, not the alarm itself; read the alarm from the alarms API.
+"""
 # The per-alarm notification/escalation state: one row per raised alarm, tracking
 # what the service has done about it. Read-only in this slice — the notified
 # timestamps are written by the dispatcher (N.C) and the escalation fields by the
 # scheduler (N.D).
 type NotificationState {
+    """Server-assigned identifier of this record."""
     id: ID!
+    """Token of the alarm this record is about."""
     alarmToken: String!
+    """The alarm's logical key, which identifies a kind of alarm on its originator."""
     alarmKey: String!
+    """The alarm's current severity, as last notified."""
     severity: String!
+    """When the first notification about the alarm was delivered, as an RFC 3339 timestamp; null if none has been."""
     firstNotifiedAt: String
+    """When the most recent notification about the alarm was delivered, as an RFC 3339 timestamp; null if none has been."""
     lastNotifiedAt: String
+    """Number of notifications recorded about the alarm, escalations included."""
     notifyCount: Int!
+    """When the alarm was acknowledged, as an RFC 3339 timestamp; null if it has not been. Escalation stops once it is set."""
     acknowledgedAt: String
+    """When the alarm was cleared, as an RFC 3339 timestamp; null if it has not been. Escalation stops once it is set, and the record is removed after a retention period."""
     clearedAt: String
+    """Number of escalation steps taken for the alarm so far; 0 if none. A step is counted when it starts, so it is counted even if its delivery then fails."""
     escalationLevel: Int!
+    """When the alarm was last escalated, as an RFC 3339 timestamp; null if it never has been."""
     lastEscalatedAt: String
 }
 
+"""Filters and paging for the notificationStates query."""
 # Criteria used when searching per-alarm notification state.
 input NotificationStateSearchCriteria {
+    """Page to return, starting at 1. A value below 1 is treated as 1."""
     pageNumber: Int!
+    """Records per page. A value below 1 is treated as 100; a value above 1000 is capped at 1000."""
     pageSize: Int!
+    """Return only records for alarms with this logical key."""
     alarmKey: String
+    """Return only records with this severity, such as CRITICAL. Omit it to return all."""
     severity: String
 }
 
+"""One page of notification state records and where it sits in the full result set."""
 # Search results returned from a notification-state query.
 type NotificationStateSearchResults {
+    """The records on this page, newest created first."""
     results: [NotificationState!]!
+    """Position of this page within the full result set."""
     pagination: SearchResultsPagination!
 }
 
 type Query {
+    """
+    Lists the channel types the service can deliver through. The list is fixed: smtp and
+    webhook. Requires no specific authority.
+    """
     # The channel-adapter types the notification subsystem defines (a static
     # capability list — a channel picks its type from these; see `available`).
     notificationChannelTypes: [NotificationChannelType!]!
 
     # Delivery channels.
-    notificationChannelsById(ids: [String!]!): [NotificationChannel!]!
-    notificationChannelsByToken(tokens: [String!]!): [NotificationChannel!]!
-    notificationChannels(criteria: NotificationChannelSearchCriteria!): NotificationChannelSearchResults!
+    """
+    Returns the channels with the given server-assigned ids. Ids that match nothing are
+    left out; an id that is not a non-negative integer fails the request. Requires
+    notification:read.
+    """
+    notificationChannelsById(
+        """Channel ids, as returned in id."""
+        ids: [String!]!
+    ): [NotificationChannel!]!
+    """Returns the channels with the given tokens. Tokens that match nothing are left out. Requires notification:read."""
+    notificationChannelsByToken(
+        """Channel tokens."""
+        tokens: [String!]!
+    ): [NotificationChannel!]!
+    """Searches the tenant's channels, newest created first. Returns an empty page when nothing matches. Requires notification:read."""
+    notificationChannels(
+        """Filters and paging."""
+        criteria: NotificationChannelSearchCriteria!
+    ): NotificationChannelSearchResults!
 
     # Routing policies.
-    notificationPoliciesById(ids: [String!]!): [NotificationPolicy!]!
-    notificationPoliciesByToken(tokens: [String!]!): [NotificationPolicy!]!
-    notificationPolicies(criteria: NotificationPolicySearchCriteria!): NotificationPolicySearchResults!
+    """
+    Returns the policies, with their rules, that have the given server-assigned ids. Ids
+    that match nothing are left out; an id that is not a non-negative integer fails the
+    request. Requires notification:read.
+    """
+    notificationPoliciesById(
+        """Policy ids, as returned in id."""
+        ids: [String!]!
+    ): [NotificationPolicy!]!
+    """Returns the policies, with their rules, that have the given tokens. Tokens that match nothing are left out. Requires notification:read."""
+    notificationPoliciesByToken(
+        """Policy tokens."""
+        tokens: [String!]!
+    ): [NotificationPolicy!]!
+    """Searches the tenant's policies, newest created first, each with its rules. Returns an empty page when nothing matches. Requires notification:read."""
+    notificationPolicies(
+        """Filters and paging."""
+        criteria: NotificationPolicySearchCriteria!
+    ): NotificationPolicySearchResults!
 
     # Per-alarm notification state (read-only).
-    notificationStatesByAlarmToken(alarmTokens: [String!]!): [NotificationState!]!
-    notificationStates(criteria: NotificationStateSearchCriteria!): NotificationStateSearchResults!
+    """
+    Returns the notification records for the given alarm tokens. Alarms that have not been
+    notified about, or whose record has been removed, are left out. Requires
+    notification:read.
+    """
+    notificationStatesByAlarmToken(
+        """Tokens of the alarms."""
+        alarmTokens: [String!]!
+    ): [NotificationState!]!
+    """Searches the notification records, newest created first. Returns an empty page when nothing matches. Requires notification:read."""
+    notificationStates(
+        """Filters and paging."""
+        criteria: NotificationStateSearchCriteria!
+    ): NotificationStateSearchResults!
 }
 
 type Mutation {
     # Delivery channels.
-    createNotificationChannel(request: NotificationChannelCreateRequest!): NotificationChannel!
-    updateNotificationChannel(token: String!, request: NotificationChannelUpdateRequest!): NotificationChannel!
+    """
+    Creates a delivery channel. Rejects an unknown channel type, a config or metadata that
+    is not a JSON object, a webhook config that is invalid or whose auth does not match
+    whether a secret was supplied, and a token already in use. Requires
+    notification:write.
+    """
+    createNotificationChannel(
+        """The new channel's fields."""
+        request: NotificationChannelCreateRequest!
+    ): NotificationChannel!
+    """
+    Partially updates a channel. The whole update is rejected, with nothing written, if
+    any part of it is invalid. Fails if no channel has the token. Last write wins; there
+    is no concurrent-edit check. Requires notification:write.
+    """
+    updateNotificationChannel(
+        """Current token of the channel to update."""
+        token: String!
+        """The fields to change."""
+        request: NotificationChannelUpdateRequest!
+    ): NotificationChannel!
+    """
+    Changes a channel's token and nothing else. Its secret and the policy rules that use it
+    are unaffected. Renaming to the token it already has succeeds without change. Fails if
+    the new token is blank or is already used by another channel (extensions.code
+    CONFLICT), or if no channel has the old token. Requires notification:write.
+    """
     # Moves a channel to a new token, and the only way a channel's token changes. The
     # delivery secret is keyed by the channel's immutable id and a policy's rules store
     # that id rather than the token, so a rename orphans nothing.
@@ -291,11 +591,38 @@ type Mutation {
     # channel addressable by nothing. `newToken` equal to the current token is an
     # idempotent no-op that returns the channel, so a retry is safe. A `newToken` already
     # held by another of your channels is refused by name.
-    renameNotificationChannel(token: String!, newToken: String!): NotificationChannel!
-    deleteNotificationChannel(token: String!): Boolean!
+    renameNotificationChannel(
+        """Current token of the channel."""
+        token: String!
+        """The new token, which must be unused in the tenant."""
+        newToken: String!
+    ): NotificationChannel!
+    """
+    Permanently deletes a channel and its stored secret. Returns true if a channel was
+    deleted and false if none has the token. Refused, with extensions.code
+    REFERENCE_VIOLATION, while any policy rule still uses the channel. Requires
+    notification:write.
+    """
+    deleteNotificationChannel(
+        """Token of the channel to delete."""
+        token: String!
+    ): Boolean!
 
     # Routing policies.
-    createNotificationPolicy(request: NotificationPolicyCreateRequest!): NotificationPolicy!
+    """
+    Creates a routing policy together with its rules, all or nothing. Rejects a non-blank
+    deviceTypeToken, a rule whose severity is not valid or whose channelToken matches no
+    channel, and a token already in use. Requires notification:write.
+    """
+    createNotificationPolicy(
+        """The new policy's fields and rules."""
+        request: NotificationPolicyCreateRequest!
+    ): NotificationPolicy!
+    """
+    Partially updates a policy. Omitted fields are left alone; a rules list replaces the
+    whole rule set. The whole update is rejected, with nothing written, if any part of it
+    is invalid. Fails if no policy has the token. Requires notification:write.
+    """
     # Partially update the routing policy with the given token: an omitted field is left
     # alone, an explicit null clears it, and a `rules` list replaces the whole rule set.
     # expectedUpdatedAt is an optional optimistic-concurrency precondition: pass the
@@ -303,8 +630,27 @@ type Mutation {
     # with nothing written if the policy has changed since ("notification policy was
     # modified by another writer; reload and try again"; this is not the CONFLICT code).
     # Omit it and the last write wins.
-    updateNotificationPolicy(token: String!, request: NotificationPolicyUpdateRequest!, expectedUpdatedAt: String): NotificationPolicy!
-    deleteNotificationPolicy(token: String!): Boolean!
+    updateNotificationPolicy(
+        """Token of the policy to update."""
+        token: String!
+        """The fields to change."""
+        request: NotificationPolicyUpdateRequest!
+        """
+        The updatedAt value you last read, as an RFC 3339 timestamp. If the policy has
+        changed since, nothing is written and the call fails with "notification policy was
+        modified by another writer; reload and try again" (no error code). Omit it to
+        overwrite unconditionally.
+        """
+        expectedUpdatedAt: String
+    ): NotificationPolicy!
+    """
+    Permanently deletes a policy and its rules. Returns true if a policy was deleted and
+    false if none has the token. Requires notification:write.
+    """
+    deleteNotificationPolicy(
+        """Token of the policy to delete."""
+        token: String!
+    ): Boolean!
 }
 
 schema {
