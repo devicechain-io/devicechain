@@ -1,0 +1,1 @@
+{"v":1,"kind":"update.progress","attemptId":"att-1","assignmentId":"asg-1","component":"firmware","artifactDigest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","seq":2,"stage":"DOWNLOADING","progress":{"bytes":1048576,"total":8388608},"bootId":"boot-a"}
