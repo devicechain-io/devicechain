@@ -232,3 +232,34 @@ func TestIngestSamplesDropsAndCountsWhenCancelled(t *testing.T) {
 	assert.Equal(t, float64(1), testutil.ToFloat64(failures), "the drop is counted")
 	assert.Equal(t, 1, fake.count(), "a cancelled connection stops retrying immediately")
 }
+
+// A node whose metrics are all booleans or strings used to look identical to an idle one: the
+// metrics were dropped from the sample set and nothing counted them. Every metric of an accepted
+// message that yields no sample is now counted by reason, through the real receive path.
+func TestOnMessageCountsMetricsThatYieldNoSample(t *testing.T) {
+	skipped := prometheus.NewCounterVec(prometheus.CounterOpts{Name: "skipped_test"}, []string{"reason"})
+	c := NewClient(config.SparkplugSource{Tenant: "acme", HostId: "h1"}, Broker{}, &fakeIngester{},
+		admitAllSamples{}, fixedNow, Metrics{SamplesSkipped: skipped})
+
+	null := namedMetric("gone", datatypeDouble, float64(1))
+	null.IsNull = proto.Bool(true)
+	enc, err := codec.Encode(&sppb.Payload{
+		Seq: proto.Uint64(0),
+		Metrics: []*sppb.Payload_Metric{
+			bdSeqM(1),
+			valuedBirth("temperature", 1, 20),
+			namedMetric("door", datatypeBoolean, true),
+			namedMetric("state", 12 /* String */, "RUNNING"),
+			namedMetric("firmware", 12 /* String */, "1.2.3"),
+			null,
+			{Alias: proto.Uint64(99), Datatype: proto.Uint32(datatypeDouble),
+				Value: &sppb.Payload_Metric_DoubleValue{DoubleValue: 1}},
+		},
+	})
+	require.NoError(t, err)
+	c.onMessage(nil, fakeMessage{topic: "spBv1.0/plant-a/NBIRTH/node-3", payload: enc})
+
+	assert.Equal(t, 3.0, testutil.ToFloat64(skipped.WithLabelValues(SkipNonNumeric)), "boolean + two strings")
+	assert.Equal(t, 1.0, testutil.ToFloat64(skipped.WithLabelValues(SkipNull)))
+	assert.Equal(t, 1.0, testutil.ToFloat64(skipped.WithLabelValues(SkipUnnamed)))
+}

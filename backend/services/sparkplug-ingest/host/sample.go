@@ -22,31 +22,66 @@ const (
 	datatypeInt64 = 4
 )
 
+// Reasons a metric of an accepted message produced no Sample, for the samples-skipped counter.
+// A closed set: the label is never fed from a metric name or an error string.
+const (
+	// SkipNonNumeric: the metric carries a boolean, string, bytes, dataset, template or extension
+	// value, none of which this service stores as a measurement.
+	SkipNonNumeric = "non_numeric"
+	// SkipNull: the metric is flagged is_null, so it carries no value this message.
+	SkipNull = "null"
+	// SkipUnnamed: the metric has no name and no alias that resolves to one.
+	SkipUnnamed = "unnamed"
+)
+
+// Skips counts, by reason, the metrics of one accepted message that produced no Sample.
+// Reserved control metrics (bdSeq, Node Control/*, Device Control/*) are not counted: they
+// are protocol, not telemetry that was lost.
+type Skips struct{ NonNumeric, Null, Unnamed int }
+
+// Total is every skipped metric.
+func (k Skips) Total() int { return k.NonNumeric + k.Null + k.Unnamed }
+
+// add folds o into k.
+func (k *Skips) add(o Skips) {
+	k.NonNumeric += o.NonNumeric
+	k.Null += o.Null
+	k.Unnamed += o.Unnamed
+}
+
 // samplesFrom extracts the numeric measurements from an ACCEPTED Sparkplug payload:
 // one Sample per numeric, non-null, non-reserved metric. It is called only for a
 // message the session machine accepted (valid seq, aliases resolve), under the
 // tracker lock, so it never races the session state it reads. Each Sample carries
 // its own timestamp via the M9 fallback (metric-ts → payload-ts → receipt), never
 // truncated and never defaulted to 1970. aliases resolves a metric sent by alias
-// (DATA) to the name its birth declared.
-func samplesFrom(p *sppb.Payload, aliases map[uint64]string, now func() time.Time) []Sample {
+// (DATA) to the name its birth declared. Every metric that yields no Sample is accounted
+// in the returned Skips rather than vanishing.
+func samplesFrom(p *sppb.Payload, aliases map[uint64]string, now func() time.Time) ([]Sample, Skips) {
 	payloadTs := p.GetTimestamp()
 	var out []Sample
+	var skips Skips
 	for _, m := range p.GetMetrics() {
 		if m.GetIsNull() {
+			skips.Null++
 			continue
 		}
 		name := metricName(m, aliases)
-		if name == "" || isReservedMetric(name) {
+		if name == "" {
+			skips.Unnamed++
+			continue
+		}
+		if isReservedMetric(name) {
 			continue
 		}
 		v, ok := numericValue(m)
 		if !ok {
-			continue // boolean/string/bytes/dataset/template — not a measurement
+			skips.NonNumeric++ // boolean/string/bytes/dataset/template — not a measurement
+			continue
 		}
 		out = append(out, Sample{Name: name, Value: v, Time: metricTime(m, payloadTs, now)})
 	}
-	return out
+	return out, skips
 }
 
 // metricName resolves a metric's name: its explicit name if present, else its

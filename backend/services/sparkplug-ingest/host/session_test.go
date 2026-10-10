@@ -455,3 +455,70 @@ func TestRedeliveredBirthStillSkipped(t *testing.T) {
 	assert.Len(t, out.Samples, 1, "the live DATA stream is uninterrupted")
 	assert.Equal(t, 0, h.rec.count(), "no rebirth")
 }
+
+// A node that re-births under a NEW bdSeq without an NDEATH ever arriving (its will lost, a broker
+// bounce, a Host that was down for the death) starts a new session. The old session's child
+// devices are no longer in any session's born set, so unless they are disconnected at that moment
+// they read online forever: the new session's own NDEATH cascades only over ITS children.
+//
+// Each cascaded DISCONNECTED carries the device's OWN epoch from the session it ends, so a device
+// the node re-announces afterwards mints a later epoch and supersedes it.
+func TestNBirthOfANewSessionDisconnectsThePreviousSessionsChildren(t *testing.T) {
+	h := newHarness(defaultRebirthBackoff)
+	h.tr.Observe(nTop(NBIRTH), pl(0, bdSeqM(1), birthMetric("t", 1)))
+	b7 := h.tr.Observe(dTop(DBIRTH, "sensor-7"), pl(1, birthMetric("a", 10)))
+	b8 := h.tr.Observe(dTop(DBIRTH, "sensor-8"), pl(2, birthMetric("b", 20)))
+	epoch7 := presenceFor(b7, "g/n/sensor-7").SessionId
+	epoch8 := presenceFor(b8, "g/n/sensor-8").SessionId
+
+	// The node comes back as a NEW session (bdSeq 2) and, this time, has only sensor-7.
+	rebirth := h.tr.Observe(nTop(NBIRTH), pl(0, bdSeqM(2), birthMetric("t", 1)))
+
+	node := presenceFor(rebirth, "g/n")
+	if assert.NotNil(t, node, "the new session announces the node") {
+		assert.True(t, node.Connected)
+	}
+	for ext, epoch := range map[string]uint64{"g/n/sensor-7": epoch7, "g/n/sensor-8": epoch8} {
+		ev := presenceFor(rebirth, ext)
+		if assert.NotNilf(t, ev, "the ended session's child %s must be disconnected", ext) {
+			assert.Falsef(t, ev.Connected, "%s must read DISCONNECTED", ext)
+			assert.Equalf(t, epoch, ev.SessionId, "%s is disconnected under its OWN epoch, so a later birth supersedes it", ext)
+		}
+	}
+
+	// sensor-7 re-announces and supersedes; the later NDEATH cascades only over what is born NOW.
+	re7 := h.tr.Observe(dTop(DBIRTH, "sensor-7"), pl(1, birthMetric("a", 10)))
+	assert.Greater(t, presenceFor(re7, "g/n/sensor-7").SessionId, epoch7)
+	death := h.tr.Observe(nTop(NDEATH), pl(-1, bdSeqM(2)))
+	assert.Len(t, death.Presence, 2, "the new session's death cascades to the node and its one child")
+	assert.Nil(t, presenceFor(death, "g/n/sensor-8"), "sensor-8 was already disconnected by the re-birth")
+}
+
+// The counterweight: the first birth of a node, a redelivered birth and a node that died cleanly
+// before re-birthing disconnect nothing, so the cascade is not "disconnect on every birth".
+func TestNBirthCascadesOnlyWhenAnOnlineSessionIsReplaced(t *testing.T) {
+	h := newHarness(defaultRebirthBackoff)
+	first := h.tr.Observe(nTop(NBIRTH), pl(0, bdSeqM(1), birthMetric("t", 1)))
+	assert.Len(t, first.Presence, 1, "a first birth announces only the node")
+	h.tr.Observe(dTop(DBIRTH, "sensor-7"), pl(1, birthMetric("a", 10)))
+
+	h.tr.Observe(nTop(NDEATH), pl(-1, bdSeqM(1)))
+	after := h.tr.Observe(nTop(NBIRTH), pl(0, bdSeqM(2), birthMetric("t", 1)))
+	assert.Len(t, after.Presence, 1,
+		"the death already disconnected sensor-7; a birth after a clean death must not disconnect it again")
+}
+
+// Skips are reported once, with the message that produced them. Draining them in Observe is what
+// stops a later, clean message from re-reporting an earlier message's skips.
+func TestSkipsAreReportedOnceNotOnEveryLaterMessage(t *testing.T) {
+	h := newHarness(defaultRebirthBackoff)
+	first := h.tr.Observe(nTop(NBIRTH), pl(0, bdSeqM(1), valuedBirth("t", 1, 20),
+		namedMetric("door", datatypeBoolean, true)))
+	if first.Skipped.NonNumeric != 1 {
+		t.Fatalf("the birth's boolean metric must be reported once, got %+v", first.Skipped)
+	}
+	second := h.tr.Observe(nTop(NDATA), pl(1, valuedData(1, 21)))
+	if second.Skipped.Total() != 0 {
+		t.Fatalf("a clean later message must report no skips, got %+v", second.Skipped)
+	}
+}

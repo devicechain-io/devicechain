@@ -4,6 +4,7 @@
 package host
 
 import (
+	"sort"
 	"sync"
 	"time"
 
@@ -121,6 +122,10 @@ type SessionTracker struct {
 	// it under tr.mu, so its mutex is a LEAF under tr.mu; SetEpochFloor/MintEpoch forward
 	// to it off the hot path.
 	epoch *adapter.EpochSource
+
+	// skipped accumulates, under mu, the metrics the current step extracted no Sample from;
+	// Observe drains it into the Observation it returns.
+	skipped Skips
 }
 
 // Observation is everything a single decoded Sparkplug message contributes to the
@@ -130,6 +135,8 @@ type SessionTracker struct {
 type Observation struct {
 	Samples  []Sample
 	Presence []PresenceEvent
+	// Skipped accounts for the metrics of this message that produced no Sample.
+	Skipped Skips
 }
 
 // nodeExternalId / deviceExternalId build the ADR-049 external id the projection keys
@@ -219,7 +226,18 @@ func (tr *SessionTracker) Observe(top Topic, p *sppb.Payload) Observation {
 	if rebirth && tr.rebirth != nil {
 		tr.rebirth(key.group, key.node)
 	}
-	return Observation{Samples: samples, Presence: presence}
+	tr.mu.Lock()
+	skipped := tr.skipped
+	tr.skipped = Skips{}
+	tr.mu.Unlock()
+	return Observation{Samples: samples, Presence: presence, Skipped: skipped}
+}
+
+// extract is samplesFrom plus the accounting of what it skipped. The caller holds tr.mu.
+func (tr *SessionTracker) extract(p *sppb.Payload, aliases map[uint64]string) []Sample {
+	samples, skips := samplesFrom(p, aliases, tr.now)
+	tr.skipped.add(skips)
+	return samples
 }
 
 // step applies one message under the lock and returns the samples to ingest, the
@@ -298,8 +316,9 @@ func (tr *SessionTracker) onNBirth(key nodeKey, p *sppb.Payload) ([]Sample, []Pr
 		prev.rebirthPending = false
 		prev.lastSeq = uint8(p.GetSeq())
 		addAliases(prev.aliases, p)
-		return samplesFrom(p, prev.aliases, tr.now), nil
+		return tr.extract(p, prev.aliases), nil
 	}
+	replaced := tr.sessions[key]
 	epoch := tr.nextEpoch()
 	s := &nodeSession{
 		online:       true,
@@ -314,17 +333,38 @@ func (tr *SessionTracker) onNBirth(key nodeKey, p *sppb.Payload) ([]Sample, []Pr
 	s.lastSeq = uint8(p.GetSeq())
 	addAliases(s.aliases, p)
 	tr.sessions[key] = s
-	presence := []PresenceEvent{{
+	// 🔴 A NEW SESSION REPLACING AN ONLINE ONE ENDS THAT ONE'S CHILDREN. The previous session
+	// never saw its NDEATH (a lost will, a broker bounce, a Host that was down for it), so its
+	// born devices are about to be dropped with it — and the new session's own NDEATH cascades
+	// only over the devices IT has seen. Without this a child the node no longer has reads
+	// online for good. Each is disconnected under its OWN epoch, exactly as an NDEATH would,
+	// so a device the node re-announces mints a later epoch and supersedes the disconnect.
+	var presence []PresenceEvent
+	if replaced != nil && replaced.online {
+		now := tr.now()
+		devices := make([]string, 0, len(replaced.devices))
+		for device := range replaced.devices {
+			devices = append(devices, device)
+		}
+		sort.Strings(devices)
+		for _, device := range devices {
+			presence = append(presence, PresenceEvent{
+				ExternalId: deviceExternalId(key, device), Connected: false, Reason: "nbirth-new-session",
+				SessionId: replaced.devices[device], OccurredAt: now,
+			})
+		}
+	}
+	presence = append(presence, PresenceEvent{
 		ExternalId: nodeExternalId(key),
 		Connected:  true,
 		Reason:     "nbirth",
 		SessionId:  epoch,
 		OccurredAt: tr.now(),
-	}}
+	})
 	// A birth carries the node's current metric values (Sparkplug is report-by-
 	// exception, so the birth is the ONLY place a rarely-changing metric appears) —
 	// ingest them.
-	return samplesFrom(p, s.aliases, tr.now), presence
+	return tr.extract(p, s.aliases), presence
 }
 
 // onNDeath applies an edge-node death, guarded by bdSeq (B3): the will is
@@ -385,7 +425,7 @@ func (tr *SessionTracker) onDBirth(key nodeKey, s *nodeSession, device string, p
 		ExternalId: deviceExternalId(key, device), Connected: true, Reason: "dbirth",
 		SessionId: epoch, OccurredAt: tr.now(),
 	}}
-	return samplesFrom(p, s.aliases, tr.now), presence, false
+	return tr.extract(p, s.aliases), presence, false
 }
 
 // onDDeath applies a device death: requires a live node, advances the seq, and
@@ -421,7 +461,7 @@ func (tr *SessionTracker) onNData(key nodeKey, s *nodeSession, p *sppb.Payload) 
 	if !tr.advanceSeq(s, p) || !tr.aliasesResolve(s, p) {
 		return nil, tr.wantRebirth(s)
 	}
-	return samplesFrom(p, s.aliases, tr.now), false
+	return tr.extract(p, s.aliases), false
 }
 
 // onDData validates device data. Beyond the node-birth and seq/alias checks, it
@@ -438,7 +478,7 @@ func (tr *SessionTracker) onDData(key nodeKey, s *nodeSession, device string, p 
 	if !tr.advanceSeq(s, p) || !tr.aliasesResolve(s, p) {
 		return nil, tr.wantRebirth(s)
 	}
-	return samplesFrom(p, s.aliases, tr.now), false
+	return tr.extract(p, s.aliases), false
 }
 
 // advanceSeq checks the message sequence against the session and advances it on
