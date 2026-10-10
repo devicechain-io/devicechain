@@ -19,8 +19,10 @@ import (
 	"fmt"
 	"math"
 	"strings"
+	"time"
 
 	"github.com/devicechain-io/dc-event-processing/internal/rules"
+	"github.com/devicechain-io/dc-microservice/config"
 	"github.com/rs/zerolog/log"
 )
 
@@ -149,7 +151,8 @@ type InferOutput struct {
 // never depends on the transport (the concrete client mints an ai:infer service token and calls
 // ai-inference's inferRuleCandidate; see processor). An error means the inference could not be
 // produced — not configured, no active provider, consent denied, or a transport failure — all of
-// which the drafter reports as Unavailable.
+// which the drafter reports as Unavailable. An error caused by ctx's deadline (the draft
+// budget) must wrap ErrTimedOut.
 type Inferer interface {
 	Infer(ctx context.Context, tenant, prompt, system string) (InferOutput, error)
 }
@@ -159,16 +162,35 @@ type Drafter struct {
 	inferer     Inferer
 	limits      rules.Limits
 	maxAttempts int
+	// budget bounds the WHOLE draft, every attempt included; minAttempt is the least
+	// budget worth starting an attempt with. Fields only so a test can shrink them.
+	budget     time.Duration
+	minAttempt time.Duration
 }
+
+// minAttemptBudget is the least remaining draft budget worth starting an inference
+// attempt with. Below it, an attempt would almost surely be cut off by the budget after
+// spending provider budget, so the draft reports "timed out" without starting one.
+const minAttemptBudget = 10 * time.Second
+
+// errBudgetSpent is what an attempt that was never started reports: the draft's own
+// budget ran too low. It IS a timeout as far as the author is concerned.
+var errBudgetSpent = fmt.Errorf("%w: the draft budget is spent", ErrTimedOut)
 
 // NewDrafter builds a drafter over an Inferer and the compile limits (the platform-default
 // ceilings, shared with every other compile door so a drafted rule compiles identically
 // everywhere). maxAttempts <= 0 uses the default.
+//
+// The whole draft is bounded by config.AiDraftBudget, inside the request edge the author's
+// browser waits behind: past the edge the author would get a gateway error instead of this
+// draft's own answer. Each attempt runs under what is left of the budget, so its bound is
+// min(remaining budget, the inference client's own call bound).
 func NewDrafter(inferer Inferer, limits rules.Limits, maxAttempts int) *Drafter {
 	if maxAttempts <= 0 {
 		maxAttempts = defaultMaxAttempts
 	}
-	return &Drafter{inferer: inferer, limits: limits, maxAttempts: maxAttempts}
+	return &Drafter{inferer: inferer, limits: limits, maxAttempts: maxAttempts,
+		budget: config.AiDraftBudget, minAttempt: minAttemptBudget}
 }
 
 // Draft produces a compiling rules.Rule draft from the request's NL text, or a diagnostic
@@ -179,11 +201,20 @@ func (d *Drafter) Draft(ctx context.Context, tenant string, req Request) (Result
 	system := buildSystemPrompt(req.Metrics)
 	prompt := buildInitialPrompt(req.Text)
 
+	ctx, cancel := context.WithTimeout(ctx, d.budget)
+	defer cancel()
+
 	var last InferOutput
 	var lastDiags []Diagnostic
 	rounds := 0 // candidates actually produced (a call that errored produced none).
 	for attempt := 1; attempt <= d.maxAttempts; attempt++ {
-		out, err := d.inferer.Infer(ctx, tenant, prompt, system)
+		var out InferOutput
+		var err error
+		if deadline, _ := ctx.Deadline(); time.Until(deadline) < d.minAttempt {
+			err = errBudgetSpent
+		} else {
+			out, err = d.inferer.Infer(ctx, tenant, prompt, system)
+		}
 		if err != nil {
 			// The inference call failed (unconfigured / no active provider / consent denied /
 			// transport). Fail closed and NEVER surface err.Error() — log the detail server-side,

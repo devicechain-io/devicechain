@@ -8,9 +8,10 @@ import (
 	"errors"
 	"fmt"
 	"net"
-	"strings"
+	"slices"
 
 	"github.com/devicechain-io/dc-event-processing/internal/nldraft"
+	"github.com/devicechain-io/dc-microservice/aiwire"
 	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/svcclient"
@@ -43,7 +44,7 @@ type inferenceClient struct {
 //
 // It builds the svcclient itself rather than taking one, because the client's TIMEOUT is part of
 // this seam's contract and a caller-supplied client would be free to get it wrong. The default
-// svcclient bound (10s) is far below ai-inference's inference timeout (60s by default, up to
+// svcclient bound (10s) is far below ai-inference's inference timeout (40s by default, up to
 // config.AiInferenceMaxCallTimeout), so a default client cut slow models off first and turned
 // ai-inference's honest "timed out" into an opaque transport error the author read as an outage.
 // This client outwaits the callee's CEILING (config.AiInferenceCallerTimeout), so whatever the
@@ -54,30 +55,20 @@ func NewInferenceClient(umCfg config.UserManagementConfiguration, secret, url st
 	return &inferenceClient{client: client, url: url}
 }
 
-// timedOutMarker is the stable prefix of ai-inference's ErrTimedOut — the same WIRE CONTRACT,
-// and the same benign-on-drift reasoning, as rateLimitMarker below.
-const timedOutMarker = "inference timed out"
-
-// rateLimitMarker is the stable substring ai-inference's ErrRateLimited carries (ADR-056 §6 /
-// ADR-023). It is a WIRE CONTRACT between the two services: svcclient surfaces a GraphQL error
-// only as its message text, so classifying a transient rate-limit — the one inference outcome the
-// author fixes by waiting rather than by calling an operator — means matching on it here.
-//
-// Deliberately a prefix of the sentinel's text rather than the whole message, so wording may be
-// refined without breaking the match. If it ever does drift, the failure is BENIGN by
-// construction: the error falls through to the generic unavailable reason, which is exactly
-// today's behaviour — a rate-limited author sees a vaguer message, never a wrong outcome. The
-// alternative (teaching svcclient to decode GraphQL error extensions) is a core change for every
-// service and is the right home for this if a second caller ever needs typed error codes.
-const rateLimitMarker = "inference rate limit exceeded"
-
 // Infer carries one prompt to the active provider under the given tenant and returns the raw
 // candidate. Any error (not configured, no active provider, consent denied, rate limited, or a
 // transport failure) propagates to the drafter, which reports it as an unavailable result — the
-// caller never sees a partial success. A rate-limit rejection is classified into
-// nldraft.ErrRateLimited and a timeout (either side's) into nldraft.ErrTimedOut, so the drafter
-// can report those transient outcomes without knowing the transport; every other error stays
-// opaque to it.
+// caller never sees a partial success. Two transient outcomes are classified so the drafter can
+// report them without knowing the transport:
+//
+//   - rate limited → nldraft.ErrRateLimited, on ai-inference's extensions.code
+//   - timed out → nldraft.ErrTimedOut, on ai-inference's extensions.code, or this call's own
+//     bound (or ctx's deadline) firing while ai-inference was being asked
+//
+// Classification reads the GraphQL error's CODE (svcclient.GraphQLError.Codes), never its
+// message text, which ai-inference is free to reword. A failure to obtain the service token is
+// checked FIRST and stays opaque: user-management being slow is not the model being slow, and
+// ai-inference was never asked.
 func (c *inferenceClient) Infer(ctx context.Context, tenant, prompt, system string) (nldraft.InferOutput, error) {
 	request := map[string]any{"prompt": prompt}
 	if system != "" {
@@ -93,14 +84,14 @@ func (c *inferenceClient) Infer(ctx context.Context, tenant, prompt, system stri
 		} `json:"inferRuleCandidate"`
 	}
 	if err := c.client.Query(ctx, c.url, tenant, inferRuleCandidateMutation, vars, &out); err != nil {
-		if strings.Contains(err.Error(), rateLimitMarker) {
-			// Wrapped, not replaced: the drafter matches the sentinel while the underlying
-			// detail still reaches the server-side log.
+		// Wrapped, not replaced, in every arm: the drafter matches the sentinel while the
+		// underlying detail still reaches the server-side log.
+		switch {
+		case errors.Is(err, svcclient.ErrServiceToken):
+			return nldraft.InferOutput{}, fmt.Errorf("ai-inference: %w", err)
+		case hasCode(err, aiwire.CodeRateLimited):
 			return nldraft.InferOutput{}, fmt.Errorf("ai-inference: %w: %v", nldraft.ErrRateLimited, err)
-		}
-		if strings.Contains(err.Error(), timedOutMarker) || isTimeout(err) {
-			// Either ai-inference said its provider overran, or this call's own bound fired
-			// first. The author's remedy is the same — try again — and neither is an outage.
+		case hasCode(err, aiwire.CodeTimedOut) || isTimeout(err):
 			return nldraft.InferOutput{}, fmt.Errorf("ai-inference: %w: %v", nldraft.ErrTimedOut, err)
 		}
 		return nldraft.InferOutput{}, fmt.Errorf("ai-inference: %w", err)
@@ -110,6 +101,12 @@ func (c *inferenceClient) Infer(ctx context.Context, tenant, prompt, system stri
 		Model:     out.InferRuleCandidate.Model,
 		Provider:  out.InferRuleCandidate.Provider,
 	}, nil
+}
+
+// hasCode reports whether ai-inference answered with a GraphQL error carrying code.
+func hasCode(err error, code string) bool {
+	var gqlErr *svcclient.GraphQLError
+	return errors.As(err, &gqlErr) && slices.Contains(gqlErr.Codes, code)
 }
 
 // isTimeout reports a transport-level timeout: the client's own bound, or a deadline on ctx.

@@ -263,26 +263,50 @@ type AiInferenceConfiguration struct {
 	Port     uint32
 }
 
-// The two timeouts on the ai-inference call, defined together because they are only
-// correct as a PAIR: the caller must outwait the slowest answer the callee can be
-// configured to give.
+// The timeout chain on an AI rule draft, defined together because it is only correct
+// as a whole. Outermost first:
 //
-// The deadline belongs to ai-inference, which is the side that knows what ran out —
-// it answers a provider that overran its own deadline with a typed "timed out", and a
-// caller that gives up first replaces that answer with its own transport error, so a
-// slow model reads to the author as an outage. So the caller's bound is derived from
-// the callee's CEILING, not its default: an operator may raise the inference timeout
-// up to the ceiling, and the pair stays correct without either side reading the
-// other's config.
+//	RequestEdgeTimeout (60s)       the browser's request: ingress-nginx's default
+//	                               proxy-read-timeout, and the GraphQL execution default
+//	 └ AiDraftBudget (50s)         the whole draft, every attempt included, in
+//	                               event-processing — inside the edge, so the author
+//	                               gets the draft's own answer, not a gateway error
+//	    └ per attempt: min(remaining budget, AiInferenceCallerTimeout)
+//	       └ AiInferenceDefaultCallTimeout (40s)  ai-inference's default deadline on
+//	                               one provider call — inside the budget, so its
+//	                               "timed out" can reach the author
+//
+// The deadline on the PROVIDER belongs to ai-inference, which is the side that knows
+// what ran out; a caller that gives up first replaces that typed answer with its own
+// transport error. So AiInferenceCallerTimeout is derived from the callee's CEILING,
+// not its default: no configured value can make the caller's own bound fire first.
+// The draft budget can — an operator who raises the inference timeout above the
+// budget gets "timed out" from the budget for the slow tail instead of from
+// ai-inference, an honest answer either way, but such values are not reachable from
+// the console's drafting door.
 const (
+	// RequestEdgeTimeout is the one edge every synchronous browser request lives
+	// inside: ingress-nginx's default proxy-read-timeout and the GraphQL execution
+	// default. A synchronous operation that can run longer must budget below it, or
+	// its own answer is replaced at the edge by a gateway error.
+	RequestEdgeTimeout = 60 * time.Second
+	// AiDraftBudget bounds one whole NL rule draft (every infer/repair attempt), with
+	// room under RequestEdgeTimeout to compile and answer.
+	AiDraftBudget = RequestEdgeTimeout - 10*time.Second
+	// AiInferenceDefaultCallTimeout is ai-inference's default deadline on one provider
+	// call. It fits inside AiDraftBudget, so a slow first attempt is reported by
+	// ai-inference as timed out rather than cut short by the budget.
+	AiInferenceDefaultCallTimeout = 40 * time.Second
 	// AiInferenceMaxCallTimeout is the ceiling ai-inference's configured per-call
 	// inference timeout is validated against at startup.
 	AiInferenceMaxCallTimeout = 120 * time.Second
+	// AiInferencePreCallBound bounds the work ai-inference does before its inference
+	// deadline starts, cold: a service-token mint, the tenant-limits read and the
+	// tenant-facts read, each a cross-service call bounded at 10s.
+	AiInferencePreCallBound = 3 * 10 * time.Second
 	// AiInferenceCallerTimeout bounds one whole call TO ai-inference: the inference
-	// ceiling plus a margin for the work ai-inference does before its inference
-	// deadline starts (resolving the tenant's model and consent, which includes a
-	// cross-service read bounded at 10s) and for carrying the answer back.
-	AiInferenceCallerTimeout = AiInferenceMaxCallTimeout + 30*time.Second
+	// ceiling, the pre-call work, and room to carry the answer back.
+	AiInferenceCallerTimeout = AiInferenceMaxCallTimeout + AiInferencePreCallBound + 10*time.Second
 )
 
 // ServiceAuthConfiguration carries the shared secret backing the synchronous

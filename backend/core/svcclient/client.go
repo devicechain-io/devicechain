@@ -40,9 +40,11 @@ import (
 	"golang.org/x/sync/singleflight"
 )
 
+// requestTimeout bounds a single mint, and a query unless WithQueryTimeout says
+// otherwise. A variable only so a test can shorten it; nothing else assigns it.
+var requestTimeout = 10 * time.Second
+
 const (
-	// requestTimeout bounds a single mint or query round-trip.
-	requestTimeout = 10 * time.Second
 	// refreshSkew re-mints this far ahead of the cached token's expiry so a call
 	// never rides a token that expires mid-flight.
 	refreshSkew = 1 * time.Minute
@@ -56,6 +58,12 @@ const (
 	// on passing while measuring nothing.
 	MaxResponseBytes = 1 << 20
 )
+
+// ErrServiceToken marks a Query that failed before reaching its target, while obtaining
+// the service token from user-management: the mint failed, timed out, or the caller's
+// context ended while waiting on it. The target was never asked, so a caller must not
+// read this as the target's answer — a slow mint is not a slow peer.
+var ErrServiceToken = errors.New("svcclient: could not obtain a service token")
 
 // ErrResponseTooLarge reports that a peer's response exceeded MaxResponseBytes.
 //
@@ -191,7 +199,7 @@ func (c *Client) Query(ctx context.Context, baseURL, tenant, query string, varia
 	}
 	token, err := c.serviceToken(ctx)
 	if err != nil {
-		return err
+		return fmt.Errorf("%w: %w", ErrServiceToken, err)
 	}
 
 	body, err := json.Marshal(struct {
