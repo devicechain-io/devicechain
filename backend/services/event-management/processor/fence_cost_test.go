@@ -81,7 +81,7 @@ func newFencedPersistenceWorker(t *testing.T) (*EventPersistenceWorker, *gorm.DB
 	// writer's alternate-id skip could be removed with nothing turning red.
 	for _, stmt := range []string{
 		`CREATE UNIQUE INDEX idx_events_identity ON events (tenant_id, occurred_time, event_id);`,
-		`CREATE UNIQUE INDEX idx_events_tenant_alt_id ON events (tenant_id, alt_id, occurred_time) WHERE alt_id IS NOT NULL;`,
+		`CREATE UNIQUE INDEX idx_events_tenant_device_alt_id ON events (tenant_id, device_token, alt_id, occurred_time) WHERE alt_id IS NOT NULL;`,
 		`CREATE UNIQUE INDEX uq_measurement_events_idem ON measurement_events (tenant_id, occurred_time, payload_id);`,
 		`CREATE UNIQUE INDEX uq_location_events_idem ON location_events (tenant_id, occurred_time, payload_id);`,
 		`CREATE UNIQUE INDEX uq_alert_events_idem ON alert_events (tenant_id, occurred_time, payload_id);`,

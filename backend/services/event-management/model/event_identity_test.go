@@ -38,8 +38,8 @@ func newIdentityTestApi(t *testing.T) *Api {
 		`ON measurement_events (tenant_id, occurred_time, payload_id);`).Error, "payload key")
 	require.NoError(t, db.Exec(`CREATE UNIQUE INDEX uq_event_anchors_idem `+
 		`ON event_anchors (tenant_id, occurred_time, event_id, anchor_type, anchor_token);`).Error, "anchor key")
-	require.NoError(t, db.Exec(`CREATE UNIQUE INDEX idx_events_tenant_alt_id `+
-		`ON events (tenant_id, alt_id, occurred_time) WHERE alt_id IS NOT NULL;`).Error, "dedup index")
+	require.NoError(t, db.Exec(`CREATE UNIQUE INDEX idx_events_tenant_device_alt_id `+
+		`ON events (tenant_id, device_token, alt_id, occurred_time) WHERE alt_id IS NOT NULL;`).Error, "dedup index")
 	return NewApi(&rdb.RdbManager{Database: db})
 }
 
@@ -141,7 +141,7 @@ func TestRedeliveryOfACollidingEventIsStillDeduplicated(t *testing.T) {
 
 	// The colliding event's alternateId is now visible to the dedup probe. Before the fix
 	// this returned false forever, which is what made every redelivery double-persist.
-	exists, err := api.EventExistsByAltId(ctx, api.RDB.DB(ctx), "msg-B", occurred)
+	exists, err := api.EventExistsByAltId(ctx, api.RDB.DB(ctx), "device-1", "msg-B", occurred)
 	require.NoError(t, err)
 	assert.True(t, exists, "the second event's alternateId must be visible to the dedup probe")
 }

@@ -82,7 +82,7 @@ type EventManagementApi interface {
 	// EventExistsByAltId reports whether a resolved event with the given
 	// alternateId was already persisted for the tenant in context, backing
 	// idempotent ingestion of a redelivered message.
-	EventExistsByAltId(ctx context.Context, db *gorm.DB, altId string, occurred time.Time) (bool, error)
+	EventExistsByAltId(ctx context.Context, db *gorm.DB, deviceToken string, altId string, occurred time.Time) (bool, error)
 	// EventsExistByAltId is EventExistsByAltId for many keys in one query, answering each
 	// key in order.
 	EventsExistByAltId(ctx context.Context, db *gorm.DB, keys []AltIdKey) ([]bool, error)
@@ -115,16 +115,19 @@ type EventManagementApi interface {
 // inserts, not that guard. It does guard one thing the arbiters cannot: an event
 // re-sent with the same alternate id and instant but different content has a
 // different event id, so the events insert's arbiter does not absorb it, and
-// idx_events_tenant_alt_id would refuse it (23505) if the probe had not skipped it.
+// idx_events_tenant_device_alt_id would refuse it (23505) if the probe had not skipped it.
 func (api *Api) PersistInTx(ctx context.Context, fn func(db *gorm.DB) error) error {
 	return api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
 		return fn(tx)
 	})
 }
 
-// AltIdKey is an event's alternate-id dedup key beyond its tenant: its alternate id and
-// the instant it occurred.
+// AltIdKey is an event's alternate-id dedup key beyond its tenant: the device that sent it,
+// its alternate id and the instant it occurred. The device is part of the key because an
+// alternate id is the SENDER's message id: two devices may legitimately send the same one at
+// the same instant, and neither is a redelivery of the other.
 type AltIdKey struct {
+	DeviceToken  string
 	AltId        string
 	OccurredTime time.Time
 }
@@ -136,13 +139,14 @@ type AltIdKey struct {
 // map on it; it is the one definition of "the same alternate id" the persistence writer
 // uses, here and in its in-batch rule.
 type AltIdMatch struct {
-	altId string
-	us    int64
+	device string
+	altId  string
+	us     int64
 }
 
 // Match is k as the event store compares it.
 func (k AltIdKey) Match() AltIdMatch {
-	return AltIdMatch{altId: k.AltId, us: k.OccurredTime.UnixMicro()}
+	return AltIdMatch{device: k.DeviceToken, altId: k.AltId, us: k.OccurredTime.UnixMicro()}
 }
 
 // EventsExistByAltId reports, for each key in order, whether an event with that alternate
@@ -151,7 +155,7 @@ func (k AltIdKey) Match() AltIdMatch {
 // detected and skipped rather than double-persisted. db may be a transaction handle, so the
 // check and the inserts that follow share one transaction.
 //
-// It is ONE query whatever the number of keys: the (alt_id, occurred_time) pairs are
+// It is ONE query whatever the number of keys: the (device_token, alt_id, occurred_time) triples are
 // matched in SQL, so the server compares each instant exactly as it compares a single
 // key's, and the pairs are bounded by the keys' earliest and latest instants so a
 // hypertable read touches only the chunks that cover them. The rows found are matched back
@@ -164,7 +168,7 @@ func (api *Api) EventsExistByAltId(ctx context.Context, db *gorm.DB, keys []AltI
 	pairs := make([][]any, 0, len(keys))
 	lo, hi := keys[0].OccurredTime, keys[0].OccurredTime
 	for _, k := range keys {
-		pairs = append(pairs, []any{k.AltId, k.OccurredTime})
+		pairs = append(pairs, []any{k.DeviceToken, k.AltId, k.OccurredTime})
 		if k.OccurredTime.Before(lo) {
 			lo = k.OccurredTime
 		}
@@ -173,17 +177,18 @@ func (api *Api) EventsExistByAltId(ctx context.Context, db *gorm.DB, keys []AltI
 		}
 	}
 	var found []struct {
+		DeviceToken  string
 		AltId        string
 		OccurredTime time.Time
 	}
-	if err := db.WithContext(ctx).Model(&Event{}).Select("alt_id", "occurred_time").
-		Where("(alt_id, occurred_time) IN ? AND occurred_time >= ? AND occurred_time <= ?", pairs, lo, hi).
+	if err := db.WithContext(ctx).Model(&Event{}).Select("device_token", "alt_id", "occurred_time").
+		Where("(device_token, alt_id, occurred_time) IN ? AND occurred_time >= ? AND occurred_time <= ?", pairs, lo, hi).
 		Find(&found).Error; err != nil {
 		return nil, err
 	}
 	stored := make(map[AltIdMatch]struct{}, len(found))
 	for _, f := range found {
-		stored[AltIdKey{AltId: f.AltId, OccurredTime: f.OccurredTime}.Match()] = struct{}{}
+		stored[AltIdKey{DeviceToken: f.DeviceToken, AltId: f.AltId, OccurredTime: f.OccurredTime}.Match()] = struct{}{}
 	}
 	for i, k := range keys {
 		_, out[i] = stored[k.Match()]
@@ -192,8 +197,8 @@ func (api *Api) EventsExistByAltId(ctx context.Context, db *gorm.DB, keys []AltI
 }
 
 // EventExistsByAltId is EventsExistByAltId for one key.
-func (api *Api) EventExistsByAltId(ctx context.Context, db *gorm.DB, altId string, occurred time.Time) (bool, error) {
-	found, err := api.EventsExistByAltId(ctx, db, []AltIdKey{{AltId: altId, OccurredTime: occurred}})
+func (api *Api) EventExistsByAltId(ctx context.Context, db *gorm.DB, deviceToken string, altId string, occurred time.Time) (bool, error) {
+	found, err := api.EventsExistByAltId(ctx, db, []AltIdKey{{DeviceToken: deviceToken, AltId: altId, OccurredTime: occurred}})
 	if err != nil {
 		return false, err
 	}
