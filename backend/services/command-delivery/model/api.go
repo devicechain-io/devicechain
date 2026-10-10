@@ -684,18 +684,6 @@ func (api *Api) liveCommandByToken(ctx context.Context, token string) (*Command,
 	return found, true, nil
 }
 
-// commandByToken loads the single live command with the given token in the request's tenant (tenant
-// scoping is applied transparently by the tenant-scoped DB callback). It backs the idempotent
-// createCommand replay path; a missing row after an ON CONFLICT DO NOTHING no-op would mean the
-// conflicting row was concurrently soft-deleted, which surfaces as a not-found error to the caller.
-func (api *Api) commandByToken(ctx context.Context, token string) (*Command, error) {
-	found := &Command{}
-	if err := api.RDB.DB(ctx).Where("token = ?", token).First(found).Error; err != nil {
-		return nil, err
-	}
-	return found, nil
-}
-
 // loadCommand loads a single command by id.
 func (api *Api) loadCommand(ctx context.Context, id uint) (*Command, error) {
 	found := &Command{}
@@ -2063,14 +2051,20 @@ func (api *Api) CancelCommand(ctx context.Context, token string) (*Command, erro
 // lands in TIMEOUT for a command it never received. That window is narrow and no state
 // distinguishes it, unlike the queue-mode case, which was systematic.
 //
-// An unrecognised status maps to TIMEOUT, preserving the pre-existing default. It
-// should be unreachable: the only non-terminal states are the four above.
-func expiredTerminalFor(status string) string {
+// 🔴 AN UNRECOGNISED STATUS IS AN ERROR, NOT TIMEOUT. The old default filed it as
+// TIMEOUT, which says "the device was reached and never answered" — a claim about
+// hardware made for a row this build cannot even name. A terminal status is an error too:
+// the sweep never selects one, so seeing it here means the selection is wrong. The only
+// non-terminal states are the four above; ExpireStale logs the error and leaves the row
+// alone.
+func expiredTerminalFor(status string) (string, error) {
 	switch CommandStatus(status) {
 	case CommandQueued, CommandHeld, CommandParked:
-		return CommandExpired.String()
+		return CommandExpired.String(), nil
+	case CommandSent:
+		return CommandTimeout.String(), nil
 	default:
-		return CommandTimeout.String()
+		return "", fmt.Errorf("command in status %q has no expiry terminal", status)
 	}
 }
 
@@ -2130,7 +2124,15 @@ func (api *Api) ExpireStale(ctx context.Context, now time.Time) (int64, map[stri
 			return sumCounts(byFromStatus), byFromStatus, nil
 		}
 		for _, cmd := range stale {
-			expired, err := api.expireOne(ctx, cmd.ID, cmd.Status, expiredTerminalFor(cmd.Status))
+			next, err := expiredTerminalFor(cmd.Status)
+			if err != nil {
+				// Left as it is: expiring it as anything would be a guess. It stays
+				// visible here on every sweep until someone looks at the row.
+				log.Error().Err(err).Uint("commandId", cmd.ID).Str("status", cmd.Status).
+					Msg("Expiry sweep met a command in a status it cannot expire; leaving it untouched.")
+				continue
+			}
+			expired, err := api.expireOne(ctx, cmd.ID, cmd.Status, next)
 			if err != nil {
 				return sumCounts(byFromStatus), byFromStatus, err
 			}

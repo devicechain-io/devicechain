@@ -220,6 +220,9 @@ func (r *AdminResolver) CreateRole(ctx context.Context, args struct {
 	if err := auth.Authorize(ctx, auth.RoleWrite); err != nil {
 		return nil, err
 	}
+	if err := checkList("authorities", args.Request.Authorities); err != nil {
+		return nil, err
+	}
 	role, err := r.getAdminService(ctx).CreateRole(ctx, admin.RoleInput{
 		Scope:       args.Request.Scope,
 		Token:       args.Request.Token,
@@ -242,6 +245,9 @@ func (r *AdminResolver) UpdateRole(ctx context.Context, args struct {
 	Request admin.RoleUpdateRequest
 }) (*AdminRoleResolver, error) {
 	if err := auth.Authorize(ctx, auth.RoleWrite); err != nil {
+		return nil, err
+	}
+	if err := checkList("authorities", args.Request.Authorities.Value); err != nil {
 		return nil, err
 	}
 	role, err := r.getAdminService(ctx).UpdateRole(ctx, args.Scope, args.Token, &args.Request)
