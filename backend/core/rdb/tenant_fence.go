@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"sync"
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/core"
@@ -389,6 +390,10 @@ func destTenants(dest any, field string) []string {
 		return nil
 	}
 	var out []string
+	// The rows of a batch share one type, so the field is looked up once per type per call
+	// and read by index on every row (lastType/lastIndex), rather than by name on each.
+	var lastType reflect.Type
+	var lastIndex []int
 	var walk func(reflect.Value)
 	walk = func(v reflect.Value) {
 		for v.Kind() == reflect.Ptr || v.Kind() == reflect.Interface {
@@ -403,8 +408,15 @@ func destTenants(dest any, field string) []string {
 				walk(v.Index(i))
 			}
 		case reflect.Struct:
-			f := v.FieldByName(field)
-			if f.IsValid() && f.Kind() == reflect.String {
+			if t := v.Type(); t != lastType {
+				lastType, lastIndex = t, structFieldIndex(t, field)
+			}
+			if lastIndex == nil {
+				return
+			}
+			// What v.FieldByName(field) does once it has the index, panics included.
+			f := v.FieldByIndex(lastIndex)
+			if f.Kind() == reflect.String {
 				out = append(out, f.String())
 			}
 		case reflect.Map:
@@ -429,3 +441,36 @@ func destTenants(dest any, field string) []string {
 	walk(reflect.ValueOf(dest))
 	return out
 }
+
+// structFieldIndex is reflect.Type.FieldByName's index for name on t, or nil when t has no
+// such field, remembered per (type, name). Looking a field up by name walks the struct's
+// embedded fields and allocates on every call, and destTenants runs twice per row of every
+// create (the scope callback's mismatch check and the fence's statementTenants), so on a
+// 64-row batch insert that walk was paid 128 times per statement. The set of keys is
+// bounded by the model types the program writes.
+func structFieldIndex(t reflect.Type, name string) []int {
+	k := structFieldKey{t, name}
+	structFieldIndexes.RLock()
+	idx, ok := structFieldIndexes.m[k]
+	structFieldIndexes.RUnlock()
+	if ok {
+		return idx
+	}
+	if f, found := t.FieldByName(name); found {
+		idx = f.Index
+	}
+	structFieldIndexes.Lock()
+	structFieldIndexes.m[k] = idx
+	structFieldIndexes.Unlock()
+	return idx
+}
+
+type structFieldKey struct {
+	t    reflect.Type
+	name string
+}
+
+var structFieldIndexes = struct {
+	sync.RWMutex
+	m map[structFieldKey][]int
+}{m: map[structFieldKey][]int{}}
