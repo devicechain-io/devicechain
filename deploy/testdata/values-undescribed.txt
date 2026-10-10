@@ -1,0 +1,9 @@
+# Chart values with no description in values.schema.json, one key per line
+# (functionalAreas.*.x for per-area keys, [] for array elements).
+#
+# This list may only SHRINK. A new property ships with its description; do not add
+# a line here. TestChartValuesAreDescribed fails for an undescribed property that
+# is not listed, for a listed property that is now described, and for any growth
+# past the maxUndescribed ceiling in valuesdoc_test.go.
+#
+# Empty: every property is described.
