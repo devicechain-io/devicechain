@@ -163,7 +163,7 @@ Schema 表达不了的内容：
 | `commandToken` | string | 是 | 所响应的那次下发中的 `token`：命令的令牌，而不是设备的令牌。 | `"6f1c0f8e-…"` |
 | `dispatchNonce` | string | 是 | 所响应的那次下发中的 `dispatchNonce`。 | `"0f6f4a2c-…"` |
 | `success` | boolean | 是 | `true` 将命令结束为 `SUCCESSFUL`，`false` 结束为 `FAILED`。省略时按 `false` 处理。 | `true` |
-| `payload` | **string** | 否 | 结果文本，随命令存储并由 API 返回。它是 JSON **字符串**，不是对象：要返回结构化数据，请将其编码进字符串。此处若为对象，整条响应都无法解码：它会被丢弃，不进入死信，命令保持 `SENT`。这是一个已知限制，修复正在进行中。 | `"rebooting in 5s"` |
+| `payload` | 任意 JSON 值 | 否 | 命令的结果数据，随命令存储并由 API 返回。字符串按其文本存储；对象、数组、数字或布尔值则按发送时的原样作为该 JSON 值存储，因此设备可以直接返回结构化数据。省略或为 `null` 时，命令没有响应载荷。 | `"rebooting in 5s"` 或 `{"level":3}` |
 | `error` | string | 否 | 命令失败的原因。仅在 `success` 为 `false` 时存储；为 `true` 时被忽略。 | `"actuator jammed"` |
 
 ```json
@@ -215,7 +215,7 @@ Schema 表达不了的内容：
 | --- | --- |
 | 对应该设备拥有的命令，且带有其当前派发的 `dispatchNonce` | 命令结束为 `SUCCESSFUL` 或 `FAILED`。 |
 | 响应一条已经结束的命令 | 被忽略；命令保持原有结果。 |
-| 无法解码：不是 JSON，或字段类型错误，例如 `payload` 是对象或 `success` 带引号 | **被丢弃**：会记录日志并计数，但不进入死信。命令保持 `SENT` 直至超时，除非设备再次正确响应。已知限制：记录这类响应的修复正在进行中。 |
+| 无法解码：不是 JSON，或字段类型错误，例如 `success` 带引号 | 不会被结算；以原因 `unprocessable` 记录在 `dead-letters` 流上，并注明响应的设备。命令保持 `SENT` 直至超时，除非设备再次正确响应。 |
 | 没有 `dispatchNonce` | 不结束命令；以原因 `unprocessable` 记录到 `dead-letters` 流。 |
 | 带有命令已经弃用的那次派发的 `dispatchNonce` | 不结束命令；以原因 `unprocessable` 进入死信。 |
 | `commandToken` 不对应任何命令（最常见的是误发了设备自己的令牌） | 重试到第五次投递，然后以原因 `exhausted` 进入死信。 |
