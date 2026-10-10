@@ -160,6 +160,10 @@ type Metrics struct {
 	// Host gets no broker redelivery, so this is real (bounded) loss — the signal that
 	// ingest, not just connectivity, is degraded.
 	IngestFailures prometheus.Counter
+	// SamplesSkipped counts the metrics of accepted messages that produced no sample, labelled
+	// by reason (SkipNonNumeric, SkipNull, SkipUnnamed). Without it a node publishing booleans
+	// or strings looks identical to one publishing nothing. May be nil (decode-only tests).
+	SamplesSkipped *prometheus.CounterVec
 }
 
 // SampleIngester turns an accepted message's samples into durable telemetry
@@ -660,6 +664,7 @@ func (c *Client) onMessage(_ mqtt.Client, msg mqtt.Message) {
 	// has no node session.
 	if !rec.Topic.IsState && rec.Payload != nil && c.ingester != nil {
 		obs := c.sessions.Observe(rec.Topic, rec.Payload)
+		c.countSkipped(obs.Skipped)
 		samples := obs.Samples
 		// Only a DATA message's readings are charged against the tenant's ingest ceiling.
 		// A BIRTH's are not: Sparkplug reports by exception, so a birth is the only place
@@ -683,6 +688,18 @@ func (c *Client) onMessage(_ mqtt.Client, msg mqtt.Message) {
 		c.sessions.Observe(rec.Topic, rec.Payload)
 	}
 	c.logRecord(rec)
+}
+
+// countSkipped records the metrics a message produced no sample from.
+func (c *Client) countSkipped(k Skips) {
+	if c.metrics.SamplesSkipped == nil || k.Total() == 0 {
+		return
+	}
+	for reason, n := range map[string]int{SkipNonNumeric: k.NonNumeric, SkipNull: k.Null, SkipUnnamed: k.Unnamed} {
+		if n > 0 {
+			c.metrics.SamplesSkipped.WithLabelValues(reason).Add(float64(n))
+		}
+	}
 }
 
 // isData reports whether a message type carries DATA (NDATA or DDATA), the messages whose

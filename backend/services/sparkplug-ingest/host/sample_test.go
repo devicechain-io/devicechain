@@ -50,7 +50,7 @@ var fixedNow = func() time.Time { return time.Unix(1_700_000_000, 0) }
 // Sample (or asserts it was skipped when want=false).
 func firstSample(t *testing.T, m *sppb.Payload_Metric) (Sample, bool) {
 	t.Helper()
-	out := samplesFrom(&sppb.Payload{Metrics: []*sppb.Payload_Metric{m}}, map[uint64]string{}, fixedNow)
+	out, _ := samplesFrom(&sppb.Payload{Metrics: []*sppb.Payload_Metric{m}}, map[uint64]string{}, fixedNow)
 	if len(out) == 0 {
 		return Sample{}, false
 	}
@@ -128,19 +128,19 @@ func TestMetricTimestampFallbackChain(t *testing.T) {
 	m := namedMetric("t", datatypeDouble, float64(1))
 	m.Timestamp = proto.Uint64(1_700_000_000_123)
 	p := &sppb.Payload{Timestamp: proto.Uint64(1_600_000_000_000), Metrics: []*sppb.Payload_Metric{m}}
-	out := samplesFrom(p, map[uint64]string{}, fixedNow)
+	out, _ := samplesFrom(p, map[uint64]string{}, fixedNow)
 	assert.Equal(t, int64(1_700_000_000_123), out[0].Time, "metric ts wins, sub-second kept")
 
 	// No metric ts → payload ts.
 	m2 := namedMetric("t", datatypeDouble, float64(1))
 	p2 := &sppb.Payload{Timestamp: proto.Uint64(1_600_000_000_456), Metrics: []*sppb.Payload_Metric{m2}}
-	out = samplesFrom(p2, map[uint64]string{}, fixedNow)
+	out, _ = samplesFrom(p2, map[uint64]string{}, fixedNow)
 	assert.Equal(t, int64(1_600_000_000_456), out[0].Time, "falls back to payload ts")
 
 	// No metric ts, no payload ts → receipt clock, never 1970.
 	m3 := namedMetric("t", datatypeDouble, float64(1))
 	p3 := &sppb.Payload{Metrics: []*sppb.Payload_Metric{m3}}
-	out = samplesFrom(p3, map[uint64]string{}, fixedNow)
+	out, _ = samplesFrom(p3, map[uint64]string{}, fixedNow)
 	assert.Equal(t, fixedNow().UnixMilli(), out[0].Time, "falls back to receipt time")
 	assert.Greater(t, out[0].Time, int64(0), "never a zero/1970 timestamp")
 }
@@ -150,7 +150,7 @@ func TestMetricTimestampFallbackChain(t *testing.T) {
 func TestAliasResolvesToBirthName(t *testing.T) {
 	m := &sppb.Payload_Metric{Alias: proto.Uint64(5), Datatype: proto.Uint32(datatypeDouble),
 		Value: &sppb.Payload_Metric_DoubleValue{DoubleValue: 21.5}}
-	out := samplesFrom(&sppb.Payload{Metrics: []*sppb.Payload_Metric{m}}, map[uint64]string{5: "temperature"}, fixedNow)
+	out, _ := samplesFrom(&sppb.Payload{Metrics: []*sppb.Payload_Metric{m}}, map[uint64]string{5: "temperature"}, fixedNow)
 	if assert.Len(t, out, 1) {
 		assert.Equal(t, "temperature", out[0].Name)
 		assert.Equal(t, 21.5, out[0].Value)
