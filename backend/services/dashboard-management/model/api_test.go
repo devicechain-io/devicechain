@@ -241,30 +241,31 @@ func TestPublishVersionsAndRollback(t *testing.T) {
 	assert.Equal(t, int32(2), v2.Version)
 
 	// Versions list is newest-first with per-version snapshots preserved.
-	versions, err := api.DashboardVersions(ctx, "d")
+	versions, err := api.DashboardVersions(ctx, "d", nil, nil)
 	require.NoError(t, err)
 	require.Len(t, versions, 2)
 	assert.Equal(t, int32(2), versions[0].Version)
 	assert.Equal(t, int32(1), versions[1].Version)
-	assert.JSONEq(t, defB, string(versions[0].Definition))
-	assert.JSONEq(t, defA, string(versions[1].Definition))
+	// The list is metadata only: the snapshots are read by rollback, never by a list.
+	assert.Empty(t, versions[0].Definition)
+	assert.Empty(t, versions[1].Definition)
 
 	// Move the draft to C (unpublished), then roll back to v1 (defA).
 	_, err = api.UpdateDashboard(ctx, "d", &DashboardUpdateRequest{
 		Definition: util.OptionalStringOf(defC),
 	}, nil)
 	require.NoError(t, err)
-	rolled, err := api.RollbackDashboard(ctx, "d", 1)
+	rolled, err := api.RollbackDashboard(ctx, "d", 1, nil)
 	require.NoError(t, err)
 	assert.JSONEq(t, defA, string(rolled.Definition))
 
 	// History is append-only — rollback didn't delete any version.
-	versions, err = api.DashboardVersions(ctx, "d")
+	versions, err = api.DashboardVersions(ctx, "d", nil, nil)
 	require.NoError(t, err)
 	assert.Len(t, versions, 2)
 
 	// Rolling back to a non-existent version errors, not silently succeeds.
-	_, err = api.RollbackDashboard(ctx, "d", 99)
+	_, err = api.RollbackDashboard(ctx, "d", 99, nil)
 	assert.ErrorIs(t, err, gorm.ErrRecordNotFound)
 }
 
@@ -282,7 +283,7 @@ func TestVersionsTenantIsolation(t *testing.T) {
 
 	// The other tenant can't see the dashboard, so versions/publish resolve to
 	// "no such dashboard" rather than leaking another tenant's history.
-	_, err = api.DashboardVersions(other, "d")
+	_, err = api.DashboardVersions(other, "d", nil, nil)
 	assert.ErrorIs(t, err, gorm.ErrRecordNotFound)
 	_, err = api.PublishDashboard(other, "d", nil, nil, "mallory", nil)
 	assert.ErrorIs(t, err, gorm.ErrRecordNotFound)
@@ -328,7 +329,11 @@ func TestDeleteRemovesVersions(t *testing.T) {
 	require.True(t, ok)
 
 	// No orphaned version rows remain for the deleted dashboard.
+	//
+	// 🔴 UNSCOPED, AND THAT IS THE POINT. A scoped count hides soft-deleted rows, so a
+	// delete reverted to a soft delete would leave every snapshot (up to 1 MiB each) in
+	// the table and this would still read 0.
 	var count int64
-	require.NoError(t, api.RDB.DB(ctx).Model(&DashboardVersion{}).Count(&count).Error)
+	require.NoError(t, api.RDB.DB(ctx).Unscoped().Model(&DashboardVersion{}).Count(&count).Error)
 	assert.Equal(t, int64(0), count)
 }

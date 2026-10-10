@@ -21,7 +21,7 @@ type Documents = {
     "\n  mutation UpdateDashboard(\n    $token: String!\n    $request: DashboardUpdateRequest!\n    $expectedUpdatedAt: String\n  ) {\n    updateDashboard(token: $token, request: $request, expectedUpdatedAt: $expectedUpdatedAt) {\n      token\n      updatedAt\n    }\n  }\n": typeof types.UpdateDashboardDocument,
     "\n  query DashboardVersions($token: String!) {\n    dashboardVersions(token: $token) {\n      version\n      label\n      description\n      publishedAt\n      publishedBy\n    }\n  }\n": typeof types.DashboardVersionsDocument,
     "\n  mutation PublishDashboard(\n    $token: String!\n    $label: String\n    $description: String\n    $expectedUpdatedAt: String\n  ) {\n    publishDashboard(\n      token: $token\n      label: $label\n      description: $description\n      expectedUpdatedAt: $expectedUpdatedAt\n    ) {\n      version\n    }\n  }\n": typeof types.PublishDashboardDocument,
-    "\n  mutation RollbackDashboard($token: String!, $version: Int!) {\n    rollbackDashboard(token: $token, version: $version) {\n      definition\n      updatedAt\n    }\n  }\n": typeof types.RollbackDashboardDocument,
+    "\n  mutation RollbackDashboard($token: String!, $version: Int!, $expectedUpdatedAt: String) {\n    rollbackDashboard(token: $token, version: $version, expectedUpdatedAt: $expectedUpdatedAt) {\n      definition\n      updatedAt\n    }\n  }\n": typeof types.RollbackDashboardDocument,
     "\n  mutation DeleteDashboard($token: String!) {\n    deleteDashboard(token: $token)\n  }\n": typeof types.DeleteDashboardDocument,
 };
 const documents: Documents = {
@@ -31,7 +31,7 @@ const documents: Documents = {
     "\n  mutation UpdateDashboard(\n    $token: String!\n    $request: DashboardUpdateRequest!\n    $expectedUpdatedAt: String\n  ) {\n    updateDashboard(token: $token, request: $request, expectedUpdatedAt: $expectedUpdatedAt) {\n      token\n      updatedAt\n    }\n  }\n": types.UpdateDashboardDocument,
     "\n  query DashboardVersions($token: String!) {\n    dashboardVersions(token: $token) {\n      version\n      label\n      description\n      publishedAt\n      publishedBy\n    }\n  }\n": types.DashboardVersionsDocument,
     "\n  mutation PublishDashboard(\n    $token: String!\n    $label: String\n    $description: String\n    $expectedUpdatedAt: String\n  ) {\n    publishDashboard(\n      token: $token\n      label: $label\n      description: $description\n      expectedUpdatedAt: $expectedUpdatedAt\n    ) {\n      version\n    }\n  }\n": types.PublishDashboardDocument,
-    "\n  mutation RollbackDashboard($token: String!, $version: Int!) {\n    rollbackDashboard(token: $token, version: $version) {\n      definition\n      updatedAt\n    }\n  }\n": types.RollbackDashboardDocument,
+    "\n  mutation RollbackDashboard($token: String!, $version: Int!, $expectedUpdatedAt: String) {\n    rollbackDashboard(token: $token, version: $version, expectedUpdatedAt: $expectedUpdatedAt) {\n      definition\n      updatedAt\n    }\n  }\n": types.RollbackDashboardDocument,
     "\n  mutation DeleteDashboard($token: String!) {\n    deleteDashboard(token: $token)\n  }\n": types.DeleteDashboardDocument,
 };
 
@@ -62,7 +62,7 @@ export function graphql(source: "\n  mutation PublishDashboard(\n    $token: Str
 /**
  * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
  */
-export function graphql(source: "\n  mutation RollbackDashboard($token: String!, $version: Int!) {\n    rollbackDashboard(token: $token, version: $version) {\n      definition\n      updatedAt\n    }\n  }\n"): typeof import('./graphql').RollbackDashboardDocument;
+export function graphql(source: "\n  mutation RollbackDashboard($token: String!, $version: Int!, $expectedUpdatedAt: String) {\n    rollbackDashboard(token: $token, version: $version, expectedUpdatedAt: $expectedUpdatedAt) {\n      definition\n      updatedAt\n    }\n  }\n"): typeof import('./graphql').RollbackDashboardDocument;
 /**
  * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
  */

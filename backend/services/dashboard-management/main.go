@@ -10,6 +10,7 @@ import (
 	"github.com/devicechain-io/dc-dashboard-management/graphql"
 	"github.com/devicechain-io/dc-dashboard-management/model"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/governance"
 	gqlcore "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/prometheus/client_golang/prometheus"
@@ -78,6 +79,11 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 
 	// Wrap api around rdb manager.
 	Api = model.NewApi(RdbManager)
+	// The tenant-lifecycle gate: a deleted tenant's still-valid access token must not
+	// re-land dashboard rows behind the purge sweep. Nil (user-management unconfigured)
+	// leaves the gate off with a warning; the per-area erasure fence is the guarantee.
+	infra := Microservice.InstanceConfiguration.Infrastructure
+	Api.TenantDeleted = governance.NewTenantLifecycleGate(infra.UserManagement, infra.ServiceAuth.Secret, "dashboard-management")
 
 	// Report the size of this schema's append-only history tables (ADR-023): a dashboard version history only
 	// grows, and so does the audit journal the collector adds for every schema. Nothing

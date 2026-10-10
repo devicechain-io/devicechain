@@ -201,12 +201,13 @@ function VersionHistoryBody({
       return;
     setBusy(true);
     try {
-      const result = await rollbackDashboard(token, v.version);
+      const result = await rollbackDashboard(token, v.version, expectedUpdatedAt);
       onRolledBack(result);
       toast(t('versionRolledBack', { version: v.version }));
       onClose();
     } catch (err) {
-      toast(errMessage(err), 'error');
+      const raw = errMessage(err);
+      toast(raw.includes(CONFLICT_MARKER) ? t('versionRollbackConflict') : raw, 'error');
     } finally {
       setBusy(false);
     }

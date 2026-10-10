@@ -185,6 +185,15 @@ describe('loadDashboard', () => {
     expect('error' in result && result.error).toEqual({ code: 'definitionTooLarge' });
   });
 
+  it('measures the server cap in bytes, not UTF-16 units', () => {
+    // A euro sign is ONE UTF-16 unit and THREE bytes: this paste is under the cap by
+    // `.length` and over it by the server's measure, so it must be refused the same way.
+    const text = '€'.repeat(Math.floor(MAX_PASTE_BYTES / 3) + 1);
+    expect(text.length).toBeLessThan(MAX_PASTE_BYTES);
+    const result = loadDashboard(text, '');
+    expect('error' in result && result.error).toEqual({ code: 'definitionTooLarge' });
+  });
+
   it('reports a manifest that is not JSON, and blames the MANIFEST', () => {
     // 🔴 Which of the two boxes is at fault is the only thing this failure is for, and
     // both boxes take JSON — so the code is the claim, not just the presence of an

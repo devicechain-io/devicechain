@@ -73,6 +73,7 @@ export type PublishDashboardMutation = { publishDashboard: { version: number } }
 export type RollbackDashboardMutationVariables = Exact<{
   token: string;
   version: number;
+  expectedUpdatedAt?: string | null | undefined;
 }>;
 
 
@@ -176,8 +177,12 @@ export const PublishDashboardDocument = new TypedDocumentString(`
 }
     `) as unknown as TypedDocumentString<PublishDashboardMutation, PublishDashboardMutationVariables>;
 export const RollbackDashboardDocument = new TypedDocumentString(`
-    mutation RollbackDashboard($token: String!, $version: Int!) {
-  rollbackDashboard(token: $token, version: $version) {
+    mutation RollbackDashboard($token: String!, $version: Int!, $expectedUpdatedAt: String) {
+  rollbackDashboard(
+    token: $token
+    version: $version
+    expectedUpdatedAt: $expectedUpdatedAt
+  ) {
     definition
     updatedAt
   }

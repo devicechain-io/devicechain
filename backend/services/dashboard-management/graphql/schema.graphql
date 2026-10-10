@@ -18,7 +18,9 @@ type SearchResultsPagination {
 # A persisted dashboard definition. The layout, widgets, and datasource selectors
 # live inside the JSON `definition` document (owned by the @devicechain/dashboards
 # TypeScript types); the backend stores it opaquely, validated only as well-formed
-# JSON.
+# JSON. `definition` is returned by a lookup by token and by the write mutations, but
+# NOT by the `dashboards` search, which lists metadata only: selecting it there is an
+# error, never an empty value.
 type Dashboard {
     id: ID!
     createdAt: String
@@ -85,8 +87,10 @@ type Query {
     dashboard(token: String!): Dashboard
     # Search dashboards by criteria.
     dashboards(criteria: DashboardSearchCriteria!): DashboardSearchResults!
-    # List a dashboard's published versions, newest first.
-    dashboardVersions(token: String!): [DashboardVersion!]!
+    # List a dashboard's published versions, newest first, one page at a time. limit is
+    # clamped to the platform's maximum page size (1000) and defaults to 100; offset
+    # skips that many of the newest versions.
+    dashboardVersions(token: String!, limit: Int, offset: Int): [DashboardVersion!]!
 }
 
 type Mutation {
@@ -112,8 +116,11 @@ type Mutation {
         expectedUpdatedAt: String
     ): DashboardVersion!
     # Re-draft: copy a published version's definition back into the draft. Returns
-    # the updated dashboard. History is append-only; nothing is deleted.
-    rollbackDashboard(token: String!, version: Int!): Dashboard!
+    # the updated dashboard. History is append-only; nothing is deleted. When
+    # expectedUpdatedAt is supplied it is the same optimistic-concurrency precondition as
+    # updateDashboard: a rollback replaces the whole draft, so it is refused if the draft
+    # changed since ("dashboard was modified by another writer; reload and try again").
+    rollbackDashboard(token: String!, version: Int!, expectedUpdatedAt: String): Dashboard!
     # Delete the dashboard with the given token. Returns whether a row was deleted.
     deleteDashboard(token: String!): Boolean!
 }

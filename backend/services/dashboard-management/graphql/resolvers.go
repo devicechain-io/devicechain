@@ -5,6 +5,7 @@ package graphql
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/devicechain-io/dc-dashboard-management/model"
@@ -44,8 +45,16 @@ func (r *DashboardResolver) Description() *string {
 	return util.NullStr(r.M.Description)
 }
 
-func (r *DashboardResolver) Definition() string {
-	return string(r.M.Definition)
+// Definition resolves the definition document. A dashboard read through a LIST is loaded
+// without it (a page of up-to-1-MiB documents is not a read a table view should cost),
+// and an empty document there means "not loaded", not "empty": a stored definition is
+// never empty. So it is an error rather than "" — a plausible blank would render as a
+// dashboard with nothing on it.
+func (r *DashboardResolver) Definition() (string, error) {
+	if len(r.M.Definition) == 0 {
+		return "", errors.New("definition is not returned by a list read; fetch the dashboard by token")
+	}
+	return string(r.M.Definition), nil
 }
 
 // DashboardVersionResolver resolves the fields of a published dashboard version.
