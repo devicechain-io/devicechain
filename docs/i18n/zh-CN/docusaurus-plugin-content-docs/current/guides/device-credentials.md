@@ -17,13 +17,16 @@ title: 设备凭据
 | --- | --- | --- |
 | `ACCESS_TOKEN` | bearer 令牌（凭据 ID） | 无，持有 ID 本身就是证明 |
 | `MQTT_BASIC` | 用户名（凭据 ID）+ 密码 | 密码 |
-| `X509_CERTIFICATE` | 证书主题/指纹（凭据 ID） | 无，通过带外方式证明持有凭据 |
+
+:::note 不接受 X.509 凭据
+在证书验证功能发布之前，不支持 `X509_CERTIFICATE` 类型。创建或更新该类型的凭据会被拒绝（`UNSUPPORTED`），已存在的该类型凭据也不再通过认证。请使用 `ACCESS_TOKEN` 或 `MQTT_BASIC`。
+:::
 
 ## 读取凭据需要 `device:write` {#reading-a-credential}
 
 存在密钥的类型，其密钥是**只写**的。只有 `MQTT_BASIC` 有密钥，即密码。注册凭据时提交密码，读取时绝不返回。控制台从不显示它：在掩码字段中输入，凭据创建后字段清空。此后 API 对该值返回 `null`。
 
-这只保护 `MQTT_BASIC` 密码。`ACCESS_TOKEN` 和 `X509_CERTIFICATE` 没有可隐藏的存储密钥，因为 **`credentialId` 本身就是 bearer 凭据**。上表已说明访问令牌如此，逐事件检查对证书凭据也仅凭 ID 接受。`credentialId` 是直接可读字段。因此，无论类型，读取设备凭据都会提供以该设备身份认证所需的内容。
+这只保护 `MQTT_BASIC` 密码。`ACCESS_TOKEN` 没有可隐藏的存储密钥，因为 **`credentialId` 本身就是 bearer 凭据**。`credentialId` 是直接可读字段。因此，无论类型，读取设备凭据都会提供以该设备身份认证所需的内容。
 
 因此，所有返回凭据的查询都需要 **`device:write`**，而不是 `device:read`。只读用户不能列出设备凭据，所以控制台不向其显示**凭据（Credentials）**选项卡。这不会减少 `device:write` 持有者的能力：他们已经能够为租户任何设备注册凭据并模拟其身份。它阻止的是这种能力进入所有启用租户成员都获得的只读基础权限。
 
@@ -97,7 +100,7 @@ title: 设备凭据
 ## 注册凭据（控制台） {#register-a-credential-console}
 
 1. 打开设备详情页，选择**凭据（Credentials）**选项卡。
-2. 选择凭据**类型**并填写对应字段：生成或粘贴访问令牌、输入 MQTT-basic 用户名和密码，或输入 X.509 证书 ID。
+2. 选择凭据**类型**并填写对应字段：生成或粘贴访问令牌、输入 MQTT-basic 用户名和密码。
 3. 对 `MQTT_BASIC`，继续前记录密码。成功后字段清空，密码不再显示。
 4. 点击**添加凭据（Add credential）**。
 

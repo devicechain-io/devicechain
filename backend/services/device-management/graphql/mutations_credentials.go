@@ -21,7 +21,7 @@ func (r *SchemaResolver) CreateDeviceCredential(ctx context.Context, args struct
 	api := r.GetApi(ctx)
 	created, err := api.CreateDeviceCredential(ctx, args.Request)
 	if err != nil {
-		return nil, err
+		return nil, model.UnsupportedCredentialTypeOf(err)
 	}
 
 	dc := &DeviceCredentialResolver{
@@ -44,7 +44,7 @@ func (r *SchemaResolver) UpdateDeviceCredential(ctx context.Context, args struct
 	api := r.GetApi(ctx)
 	updated, err := api.UpdateDeviceCredential(ctx, args.Token, &args.Request)
 	if err != nil {
-		return nil, err
+		return nil, model.UnsupportedCredentialTypeOf(err)
 	}
 
 	dc := &DeviceCredentialResolver{

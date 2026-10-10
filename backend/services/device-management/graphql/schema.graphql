@@ -1420,11 +1420,11 @@ input DeviceReplaceRequest {
     credentialType: String
     # The identifier the new unit presents at connect time. Optional only for
     # ACCESS_TOKEN, where the id is itself the bearer and a fresh random one is
-    # minted; required for every other type, since the server cannot invent a
-    # certificate thumbprint or an MQTT username.
+    # minted; required for every other type, since the server cannot invent an
+    # MQTT username.
     credentialId: String
-    # Secret material for types that carry one separately (an MQTT password, a
-    # certificate PEM). Write-only, as on any credential.
+    # Secret material for types that carry one separately (an MQTT password).
+    # Write-only, as on any credential.
     credentialValue: String
     # Entity token for the new credential row. A UUID is minted when absent.
     credentialToken: String

@@ -93,7 +93,7 @@ type DeviceReplacement struct {
 	// NewCredentialToken names the credential row minted for the incoming unit.
 	NewCredentialToken string `gorm:"not null;size:128"`
 	// NewCredentialType is that credential's type, denormalized so a reader does not
-	// need a join to see whether the fleet moved (say) from ACCESS_TOKEN to X509.
+	// need a join to see whether the fleet moved (say) from ACCESS_TOKEN to MQTT_BASIC.
 	NewCredentialType string `gorm:"not null;size:32"`
 }
 
@@ -140,7 +140,7 @@ type DeviceReplaceRequest struct {
 	// Optional; defaults to ACCESS_TOKEN, matching provisioning's default.
 	CredentialType *string
 	// CredentialId is the identifier the new unit will present at connect time (an
-	// X.509 thumbprint, an MQTT username). Optional ONLY for ACCESS_TOKEN, where a
+	// MQTT username). Optional ONLY for ACCESS_TOKEN, where a
 	// fresh random id is minted because the id is itself the bearer token; for every
 	// other type it is required, because there is no material the server can invent.
 	CredentialId *string

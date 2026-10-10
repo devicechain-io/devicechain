@@ -53,7 +53,7 @@ type ProvisioningProfileCreateRequest struct {
 	DeviceTypeToken string
 	// CredentialType is the credential type minted for a provisioned device.
 	// Optional; defaults to ACCESS_TOKEN, the only type provisioning mints today
-	// (minting MQTT_BASIC / X509 credentials is a later onboarding slice).
+	// (minting MQTT_BASIC credentials is a later onboarding slice).
 	CredentialType *string
 	Enabled        bool
 	ExpiresAt      *string
@@ -79,7 +79,7 @@ type ProvisioningProfileCreateRequest struct {
 // field is not in the input.
 //
 // The difference from memberType is that this one is a CURRENT limit rather than an
-// identity property — minting MQTT_BASIC or X509 is a later onboarding slice — and adding
+// identity property — minting MQTT_BASIC is a later onboarding slice — and adding
 // an optional field back to an input is additive. So this is a removal that reverses
 // cleanly on the day a second type becomes mintable, not a decision about the entity.
 //

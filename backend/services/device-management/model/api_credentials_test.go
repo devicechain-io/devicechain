@@ -20,14 +20,15 @@ import (
 func TestCredentialTypeValid(t *testing.T) {
 	for _, valid := range []CredentialType{
 		CredentialAccessToken,
-		CredentialX509Certificate,
 		CredentialMqttBasic,
 	} {
 		if !valid.Valid() {
 			t.Errorf("known credential type %q rejected", valid)
 		}
 	}
-	for _, invalid := range []CredentialType{"", "BOGUS", "access_token"} {
+	// X509_CERTIFICATE is retired: recognized (so it is refused with its own typed
+	// answer) but never valid.
+	for _, invalid := range []CredentialType{"", "BOGUS", "access_token", CredentialX509Certificate} {
 		if invalid.Valid() {
 			t.Errorf("unknown credential type %q accepted", invalid)
 		}

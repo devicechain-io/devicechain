@@ -33,7 +33,11 @@ import (
 // writes instead. Setting both means neither caller has to reach around this
 // function to get a correct row.
 func buildDeviceCredential(device *Device, request *DeviceCredentialCreateRequest) (*DeviceCredential, error) {
-	// Validate credential type against the known vocabulary.
+	// Validate credential type against the known vocabulary. A retired type is refused
+	// with its own typed error, not as an unknown one.
+	if CredentialType(request.CredentialType).Retired() {
+		return nil, &UnsupportedCredentialTypeError{Type: CredentialType(request.CredentialType)}
+	}
 	if !CredentialType(request.CredentialType).Valid() {
 		return nil, fmt.Errorf("invalid credential type: %s", request.CredentialType)
 	}
@@ -137,6 +141,9 @@ func (api *Api) UpdateDeviceCredential(ctx context.Context, token string,
 	// The vocabulary check runs only when the caller named the type: an absent field has
 	// nothing to validate, and checking the stored value instead would refuse a metadata
 	// edit over a type the caller never sent.
+	if request.CredentialType.Set && CredentialType(credentialType).Retired() {
+		return nil, &UnsupportedCredentialTypeError{Type: CredentialType(credentialType)}
+	}
 	if request.CredentialType.Set && !CredentialType(credentialType).Valid() {
 		return nil, fmt.Errorf("invalid credential type: %s", credentialType)
 	}

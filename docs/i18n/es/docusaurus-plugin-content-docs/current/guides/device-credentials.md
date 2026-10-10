@@ -17,13 +17,16 @@ Disponible. Gestionas las credenciales desde la pestaña **Credenciales** de la 
 | --- | --- | --- |
 | `ACCESS_TOKEN` | un token portador (bearer token) (el id de la credencial) | ninguno — poseer el id es la prueba |
 | `MQTT_BASIC` | un usuario (el id de la credencial) + contraseña | la contraseña |
-| `X509_CERTIFICATE` | un sujeto/huella digital de certificado (el id de la credencial) | ninguno — la posesión se prueba fuera de banda |
+
+:::note Las credenciales X.509 no se aceptan
+El tipo `X509_CERTIFICATE` no es compatible hasta que se publique la verificación de certificados. Crear o actualizar una credencial de ese tipo se rechaza (`UNSUPPORTED`), y una credencial de ese tipo que ya exista deja de autenticar. Usa `ACCESS_TOKEN` o `MQTT_BASIC`.
+:::
 
 ## Leer una credencial requiere `device:write` {#reading-a-credential}
 
 Un secreto, cuando el tipo lo tiene, es de **solo escritura**. Solo `MQTT_BASIC` tiene uno: su contraseña. Envías la contraseña al registrar la credencial, y nunca se devuelve en una lectura. La consola nunca la muestra: la introduces en un campo enmascarado, y el campo se borra una vez creada la credencial. A partir de ese momento, la API devuelve `null` para ella.
 
-Eso protege la contraseña de `MQTT_BASIC`, y nada más. `ACCESS_TOKEN` y `X509_CERTIFICATE` no almacenan ningún secreto que ocultar, porque el **`credentialId` es en sí mismo el portador**. La tabla anterior lo dice para el token de acceso, y la verificación por evento también acepta una credencial de certificado solo con su id. `credentialId` es un campo que se lee sin restricciones. Así que, sea cual sea el tipo, leer las credenciales de un dispositivo te da lo necesario para autenticarte como ese dispositivo.
+Eso protege la contraseña de `MQTT_BASIC`, y nada más. `ACCESS_TOKEN` no almacena ningún secreto que ocultar, porque el **`credentialId` es en sí mismo el portador**. `credentialId` es un campo que se lee sin restricciones. Así que, sea cual sea el tipo, leer las credenciales de un dispositivo te da lo necesario para autenticarte como ese dispositivo.
 
 Por eso, toda consulta que devuelve una credencial requiere **`device:write`**, no `device:read`. Un usuario de solo lectura no puede listar las credenciales de un dispositivo, y por eso la consola no le muestra la pestaña **Credenciales**. El requisito no le quita nada a quien tiene `device:write`: ya puede registrar una credencial para cualquier dispositivo del inquilino y suplantarlo. Lo que evita es que esa capacidad llegue a la base de solo lectura que recibe todo miembro habilitado del inquilino.
 
@@ -97,7 +100,7 @@ La métrica `devicechain_devicemanagement_credential_checks_total` cuenta cada v
 ## Registrar una credencial (consola)
 
 1. Abre la página de detalle del dispositivo y selecciona la pestaña **Credenciales**.
-2. Elige el **tipo** de credencial y completa los campos de ese tipo: genera o pega un token de acceso, introduce un usuario y una contraseña para MQTT-basic, o introduce un id de certificado para X.509.
+2. Elige el **tipo** de credencial y completa los campos de ese tipo: genera o pega un token de acceso, o introduce un usuario y una contraseña para MQTT-basic.
 3. Para `MQTT_BASIC`, anota la contraseña antes de continuar. El campo se borra si la operación tiene éxito y la contraseña no se vuelve a mostrar.
 4. Haz clic en **Agregar credencial**.
 

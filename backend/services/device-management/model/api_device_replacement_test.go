@@ -467,7 +467,7 @@ func TestReplaceDeviceRequiresACredentialIdForUnmintableTypes(t *testing.T) {
 	device := seedReplacementDevice(t, api, ctx, "dozer-01")
 	seedCredential(t, api, ctx, device.Token, "cred-old", "bearer-old", true, nil)
 
-	for _, ctype := range []CredentialType{CredentialX509Certificate, CredentialMqttBasic} {
+	for _, ctype := range []CredentialType{CredentialMqttBasic} {
 		name := string(ctype)
 		_, err := api.ReplaceDevice(ctx, &DeviceReplaceRequest{
 			DeviceToken:    device.Token,
@@ -482,16 +482,18 @@ func TestReplaceDeviceRequiresACredentialIdForUnmintableTypes(t *testing.T) {
 
 	// The counterweight: WITH an id, the same type succeeds. A blanket refusal of
 	// everything but ACCESS_TOKEN would pass the assertions above.
-	thumbprint := "AA:BB:CC:DD"
-	x509 := string(CredentialX509Certificate)
+	username := "unit-02"
+	password := "s3cret"
+	basic := string(CredentialMqttBasic)
 	result, err := api.ReplaceDevice(ctx, &DeviceReplaceRequest{
-		DeviceToken:    device.Token,
-		CredentialType: &x509,
-		CredentialId:   &thumbprint,
+		DeviceToken:     device.Token,
+		CredentialType:  &basic,
+		CredentialId:    &username,
+		CredentialValue: &password,
 	}, "tech@acme.example", time.Now())
-	require.NoError(t, err, "an X509 replacement carrying a thumbprint was refused")
-	require.Equal(t, thumbprint, result.NewCredential.CredentialId, "the supplied thumbprint was not used")
-	require.Equal(t, x509, result.Replacement.NewCredentialType, "the record names the wrong credential type")
+	require.NoError(t, err, "an MQTT_BASIC replacement carrying a username was refused")
+	require.Equal(t, username, result.NewCredential.CredentialId, "the supplied username was not used")
+	require.Equal(t, basic, result.Replacement.NewCredentialType, "the record names the wrong credential type")
 }
 
 // An unknown credential type is reported as an unknown TYPE, not as a missing id.

@@ -62,8 +62,7 @@ func IsCredentialRefusal(err error) bool {
 
 // PresentedCredential is the authentication material a connecting device offers,
 // carried inbound on the event from the transport (ADR-014). CredentialId is the
-// public identifier the device presents (access token, X.509 thumbprint, or MQTT
-// username); Secret is the accompanying bearer secret when the credential type
+// public identifier the device presents (access token or MQTT username); Secret is the accompanying bearer secret when the credential type
 // requires one (e.g. an MQTT password) and is nil otherwise.
 type PresentedCredential struct {
 	CredentialType string
@@ -73,8 +72,7 @@ type PresentedCredential struct {
 
 // credentialRequiresSecret reports whether a credential type carries a secret
 // that the device must present and that is verified by comparison. ACCESS_TOKEN
-// and X509_CERTIFICATE prove possession out of band (the token id is itself the
-// bearer secret; the certificate's private key is proven at the TLS layer), so
+// proves possession out of band (the token id is itself the bearer secret), so
 // only MQTT_BASIC compares a stored secret.
 func credentialRequiresSecret(ctype string) bool {
 	return CredentialType(ctype) == CredentialMqttBasic
@@ -86,6 +84,11 @@ func credentialRequiresSecret(ctype string) bool {
 // is unit-testable in isolation. now is supplied by the caller for the same
 // reason.
 func evaluateCredential(cred *DeviceCredential, presented *PresentedCredential, now time.Time) error {
+	// Fail closed for a stored row of a type outside the supported vocabulary (a retired
+	// type): it has no verification, so it never authenticates.
+	if !CredentialType(cred.CredentialType).Valid() {
+		return ErrCredentialTypeInvalid
+	}
 	if err := checkExpiry(cred, now); err != nil {
 		return err
 	}
