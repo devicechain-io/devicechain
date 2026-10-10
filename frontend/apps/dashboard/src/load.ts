@@ -23,6 +23,7 @@
 // only ever a parser's own diagnostic. Rendering happens in loadErrorMessage, in the
 // i18n layer, where the catalogs and the parity gate can see it.
 
+import { GraphQLRequestError, gql } from '@devicechain/client';
 import {
   migrateToSlots,
   parseBindingManifest,
@@ -30,6 +31,8 @@ import {
   type DashboardDefinition,
   type SlotBinding,
 } from '@devicechain/dashboards';
+
+import { PUBLISHED_DASHBOARD } from './queries';
 
 // A loaded, parsed dashboard ready to render: the definition plus the binding manifest
 // (the host's override map) it renders against.
@@ -54,7 +57,12 @@ export type LoadError =
   | { code: 'definitionInvalid'; detail: string | null }
   | { code: 'manifestInvalid'; detail: string | null }
   | { code: 'manifestNotObject' }
-  | { code: 'manifestDropped'; slots: string[] };
+  | { code: 'manifestDropped'; slots: string[] }
+  // The fetch-by-token path. These carry no prose for the same reason the others do.
+  | { code: 'dashboardNotFound' }
+  | { code: 'dashboardNotPublished' }
+  | { code: 'dashboardForbidden' }
+  | { code: 'dashboardFetchFailed'; detail: string | null };
 
 // Matches dashboard-management's server-side definition cap (1 MiB).
 export const MAX_PASTE_BYTES = 1 << 20;
@@ -116,4 +124,41 @@ export function loadDashboard(
   }
 
   return { loaded: { definition, manifest } };
+}
+
+/**
+ * Load the PUBLISHED snapshot of a dashboard by its token, then run it through exactly
+ * the path a pasted definition takes (loadDashboard), so the two doors cannot disagree
+ * about how a document is parsed, migrated or bound.
+ *
+ * Only the published snapshot is ever requested. The draft is author-only on the
+ * server, so a viewer asking for it would be refused; and a board nobody has published
+ * is reported as such rather than rendered blank.
+ *
+ * Every failure is a returned code, never a throw -- see the header.
+ */
+export async function loadPublishedDashboard(
+  token: string,
+  manifestText: string,
+): Promise<{ loaded: Loaded } | { error: LoadError }> {
+  let definition: string;
+  try {
+    const data = await gql('dashboard-management', PUBLISHED_DASHBOARD, { token: token.trim() });
+    if (!data.publishedDashboard) return { error: { code: 'dashboardNotFound' } };
+    definition = data.publishedDashboard.definition;
+  } catch (err) {
+    return { error: fetchError(err) };
+  }
+  return loadDashboard(definition, manifestText);
+}
+
+// Classify a failed fetch by the server's machine-readable code where there is one, and
+// by the HTTP-level shape otherwise -- never by the wording of its message.
+function fetchError(err: unknown): LoadError {
+  if (err instanceof GraphQLRequestError) {
+    const codes = (err.errors ?? []).map((e) => e.extensions?.code);
+    if (codes.includes('NOT_PUBLISHED')) return { code: 'dashboardNotPublished' };
+    if (codes.includes('FORBIDDEN') || err.status === 403) return { code: 'dashboardForbidden' };
+  }
+  return { code: 'dashboardFetchFailed', detail: errorDetail(err) };
 }

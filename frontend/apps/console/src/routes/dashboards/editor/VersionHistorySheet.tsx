@@ -19,7 +19,7 @@
 
 import { useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { RotateCcw } from 'lucide-react';
+import { Radio, RotateCcw } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { FormField } from '@/components/ui/form-field';
@@ -51,6 +51,8 @@ import { validateDefinitionOptions } from '@devicechain/widgets';
 import { OPTION_ISSUE_MESSAGE_KEYS, widgetLabel } from './optionIssues';
 import type { DashboardDefinition } from '@devicechain/dashboards';
 import {
+  activateDashboardVersion,
+  getPublishedVersion,
   listDashboardVersions,
   publishDashboard,
   rollbackDashboard,
@@ -164,6 +166,8 @@ function VersionHistoryBody({
     [token, refreshKey, limit],
   );
   const maybeMore = !!data && data.length >= limit;
+  // The version viewers are served right now; refreshed with the list.
+  const { data: liveVersion } = useQuery(() => getPublishedVersion(token), [token, refreshKey]);
 
   const [label, setLabel] = useState('');
   const [description, setDescription] = useState('');
@@ -197,6 +201,19 @@ function VersionHistoryBody({
       // does, the raw message (which names the widget and the option) is exactly what
       // should be shown rather than a friendlier sentence that discards it.
       toast(raw.includes(CONFLICT_MARKER) ? t('versionPublishConflict') : raw, 'error');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const activate = async (v: DashboardVersion) => {
+    setBusy(true);
+    try {
+      await activateDashboardVersion(token, v.version);
+      toast(t('versionActivated', { version: v.version }));
+      setRefreshKey((k) => k + 1);
+    } catch (err) {
+      toast(errMessage(err), 'error');
     } finally {
       setBusy(false);
     }
@@ -244,6 +261,7 @@ function VersionHistoryBody({
               placeholder={t('versionDescriptionPlaceholder')}
             />
           </FormField>
+          <p className="text-sm text-muted-foreground">{t('versionPublishGoesLive')}</p>
           {dirty ? (
             <p className="text-sm text-muted-foreground">{t('versionSaveBeforePublish')}</p>
           ) : null}
@@ -313,6 +331,11 @@ function VersionHistoryBody({
                   <DataTableCell className="font-medium text-foreground">
                     <span className="font-mono">{v.version}</span>
                     {v.label ? <span className="ml-2 text-muted-foreground">{v.label}</span> : null}
+                    {v.version === liveVersion ? (
+                      <span className="ml-2 inline-flex items-center gap-1 rounded-full bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary">
+                        <Radio size={11} /> {t('versionLive')}
+                      </span>
+                    ) : null}
                   </DataTableCell>
                   <DataTableCell className="text-muted-foreground">
                     {formatTime(v.publishedAt)}
@@ -320,14 +343,26 @@ function VersionHistoryBody({
                   <DataTableCell className="text-muted-foreground">{v.publishedBy || '—'}</DataTableCell>
                   <DataTableCell className="text-right">
                     {canWrite && (
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => rollback(v)}
-                        disabled={busy || saving}
-                      >
-                        <RotateCcw size={13} /> {t('versionRollback')}
-                      </Button>
+                      <div className="flex justify-end gap-2">
+                        {v.version !== liveVersion && (
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => activate(v)}
+                            disabled={busy}
+                          >
+                            <Radio size={13} /> {t('versionActivate')}
+                          </Button>
+                        )}
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => rollback(v)}
+                          disabled={busy || saving}
+                        >
+                          <RotateCcw size={13} /> {t('versionRollback')}
+                        </Button>
+                      </div>
                     )}
                   </DataTableCell>
                 </DataTableRow>

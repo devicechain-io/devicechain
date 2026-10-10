@@ -59,6 +59,14 @@ export function loadErrorKey(error: LoadError): LoadErrorKey {
         key: 'load:errorManifestDropped',
         params: { count: error.slots.length, slots: quoteSlots(error.slots) },
       };
+    case 'dashboardNotFound':
+      return { key: 'load:errorDashboardNotFound', params: {} };
+    case 'dashboardNotPublished':
+      return { key: 'load:errorDashboardNotPublished', params: {} };
+    case 'dashboardForbidden':
+      return { key: 'load:errorDashboardForbidden', params: {} };
+    case 'dashboardFetchFailed':
+      return { key: 'load:errorDashboardFetchFailed', params: { detail: error.detail } };
     default: {
       // Unreachable while the switch is exhaustive; a new variant reddens the
       // assignment below at compile time rather than falling through at runtime.

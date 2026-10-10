@@ -49,6 +49,13 @@ const SAMPLES: { [K in LoadError['code']]: Extract<LoadError, { code: K }>[] } =
     { code: 'manifestDropped', slots: ['zone'] },
     { code: 'manifestDropped', slots: ['zone', 'sensor'] },
   ],
+  dashboardNotFound: [{ code: 'dashboardNotFound' }],
+  dashboardNotPublished: [{ code: 'dashboardNotPublished' }],
+  dashboardForbidden: [{ code: 'dashboardForbidden' }],
+  dashboardFetchFailed: [
+    { code: 'dashboardFetchFailed', detail: 'Failed to fetch' },
+    { code: 'dashboardFetchFailed', detail: null },
+  ],
 };
 
 const ALL_SAMPLES: LoadError[] = Object.values(SAMPLES).flat();

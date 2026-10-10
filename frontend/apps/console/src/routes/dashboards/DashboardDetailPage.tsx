@@ -15,8 +15,38 @@ import { PageShell } from '@/components/ui/page-shell';
 import { LoadingState } from '@/components/ui/loading-state';
 import { ErrorState } from '@/components/ui/error-state';
 import { useQuery } from '@/lib/hooks/use-query';
-import { getDashboard } from '@/lib/api/dashboards';
+import { hasAuthority } from '@devicechain/client';
+import { useAuth } from '@/auth/AuthProvider';
+import {
+  getDashboard,
+  getPublishedDashboard,
+  isNotPublishedError,
+  type Dashboard,
+} from '@/lib/api/dashboards';
 import { DashboardWorkspace } from './editor/DashboardWorkspace';
+
+// The marker loadPublished answers for a dashboard that exists but was never published.
+const NOT_PUBLISHED = Symbol('not-published');
+
+// Adapts the published snapshot to the shape the page renders from the draft. The
+// snapshot has no updatedAt: a viewer never saves, so there is no baseline to carry.
+async function loadPublished(token: string): Promise<Dashboard | typeof NOT_PUBLISHED | null> {
+  try {
+    const published = await getPublishedDashboard(token);
+    if (!published) return null;
+    return {
+      token: published.token,
+      name: published.name,
+      description: published.description,
+      definition: published.definition,
+      updatedAt: null,
+      publishedVersion: published.version,
+    };
+  } catch (err) {
+    if (isNotPublishedError(err)) return NOT_PUBLISHED;
+    throw err;
+  }
+}
 
 export default function DashboardDetailPage() {
   const { t } = useTranslation('dashboards');
@@ -25,7 +55,15 @@ export default function DashboardDetailPage() {
   const { token: rawToken } = useParams<{ token: string }>();
   const token = rawToken ?? '';
 
-  const { data, loading, error } = useQuery(() => getDashboard(token), [token]);
+  // The draft is author-only: a member without dashboard:write reads the PUBLISHED
+  // snapshot instead, shown read-only (the workspace derives canEdit from the same
+  // authority). They see nothing until someone publishes.
+  const { claims } = useAuth();
+  const canEdit = hasAuthority(claims, 'dashboard:write');
+  const { data, loading, error } = useQuery(
+    () => (canEdit ? getDashboard(token) : loadPublished(token)),
+    [token, canEdit],
+  );
 
   // The resolver (anchor → device tokens) that backs the hub's stream resolution.
   // The hub itself is created by the workspace, once per (resolver, authorities).
@@ -39,7 +77,7 @@ export default function DashboardDetailPage() {
   const parsed = useMemo<
     { definition: DashboardDefinition } | { error: string } | null
   >(() => {
-    if (!data) return null;
+    if (!data || data === NOT_PUBLISHED) return null;
     try {
       let definition = parseDashboardDefinition(JSON.parse(data.definition));
       if (definition.title === '' && data.name) definition = setTitle(definition, data.name);
@@ -64,6 +102,13 @@ export default function DashboardDetailPage() {
     return (
       <PageShell title={token} banner="dashboard">
         <ErrorState description={error} />
+      </PageShell>
+    );
+  }
+  if (data === NOT_PUBLISHED) {
+    return (
+      <PageShell title={token} banner="dashboard">
+        <ErrorState description={t('detailNotPublished', { token })} />
       </PageShell>
     );
   }
