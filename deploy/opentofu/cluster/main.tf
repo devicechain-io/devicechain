@@ -526,7 +526,8 @@ module "cnpg_rdb" {
   #                    (10 x 20 = 200 since update-management joined `full`)
   #
   # against `max_connections - superuser_reserved_connections` = 100 - 3 = 97.
-  # The default profile oversubscribes the primary 1.44x, full 1.86x. Confirmed by
+  # The default profile oversubscribes the primary 1.44x, full 2.06x (200/97; it was
+  # 1.86x before update-management joined `full`). Confirmed by
   # opening connections as the application role until refusal: number 94 failed with
   # `FATAL: remaining connection slots are reserved for roles with the SUPERUSER
   # attribute`.

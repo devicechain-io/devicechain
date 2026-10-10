@@ -672,7 +672,7 @@ chart and operator are identical.
 |------|---------|
 | `--cluster <name>` | `local` provider: the kind cluster to create the instance on (default `devicechain`). It must already have been [installed](#install); bootstrap never creates a cluster. |
 | `--kube-context <name>` | Target an installed cluster through this kube-context instead. |
-| `--profile <profile>` | Functional-area profile: `default` (the standard system, used when omitted), `full` (everything — adds AI inference, outbound connectors, MCP, Sparkplug B ingest, and LwM2M ingest), `telemetry`, or `ingest-only`. |
+| `--profile <profile>` | Functional-area profile: `default` (the standard system, used when omitted), `full` (everything — adds AI inference, outbound connectors, MCP, Sparkplug B ingest, LwM2M ingest, and update management), `telemetry`, or `ingest-only`. |
 | `--build` | Build images from source into a local registry (developer path; needs the source tree + Docker + ko). |
 | `--registry` / `--version` | Override the image registry / tag (defaults: published `ghcr.io/devicechain-io`, or `localhost:5000` + `dev` with `--build`). |
 | `--host <name>` | Ingress host to expose the instance on (default `devicechain.local`). Use `localhost` on a local cluster to reach the console with no `/etc/hosts` edit. |
@@ -769,8 +769,8 @@ already exist rather than adding a tuning axis of its own:
 It does **not** change which services run. That stays on each instance's `--profile`, where
 it is named and visible. A profile *larger* than `default` — today only `full` — is rejected
 on a compact cluster. The published compact numbers are measured on `default`, so they would
-not describe an instance running five more services (AI inference, outbound connectors, MCP,
-Sparkplug B ingest, and LwM2M ingest). The smaller profiles (`telemetry`, `ingest-only`) are
+not describe an instance running six more services (AI inference, outbound connectors, MCP,
+Sparkplug B ingest, LwM2M ingest, and update management). The smaller profiles (`telemetry`, `ingest-only`) are
 accepted.
 
 You can keep both TLS and monitoring. An explicit `--no-tls=false` or `--no-monitoring=false`

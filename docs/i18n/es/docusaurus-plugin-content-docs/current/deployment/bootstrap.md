@@ -730,7 +730,7 @@ imágenes. La canalización, el chart y el operador son idénticos.
 |------|-----------|
 | `--cluster <name>` | Proveedor `local`: el clúster de kind en el que crear la instancia (por defecto `devicechain`). Debe estar ya [instalado](#install); el arranque inicial nunca crea un clúster. |
 | `--kube-context <name>` | Apunta en su lugar a un clúster instalado a través de este kube-context. |
-| `--profile <profile>` | Perfil de área funcional: `default` (el sistema estándar, usado cuando se omite), `full` (todo: añade inferencia de IA, conectores salientes, MCP, ingesta de Sparkplug B e ingesta de LwM2M), `telemetry` o `ingest-only`. |
+| `--profile <profile>` | Perfil de área funcional: `default` (el sistema estándar, usado cuando se omite), `full` (todo: añade inferencia de IA, conectores salientes, MCP, ingesta de Sparkplug B, ingesta de LwM2M y gestión de actualizaciones), `telemetry` o `ingest-only`. |
 | `--build` | Compila las imágenes desde el código fuente en un registro local (ruta para desarrolladores; necesita el árbol de código fuente + Docker + ko). |
 | `--registry` / `--version` | Sobrescribe el registro/etiqueta de imagen (por defecto: `ghcr.io/devicechain-io` publicado, o `localhost:5000` + `dev` con `--build`). |
 | `--host <name>` | Host de ingress en el que exponer la instancia (por defecto `devicechain.local`). Usa `localhost` en un clúster local para llegar a la consola sin editar `/etc/hosts`. |
@@ -828,8 +828,8 @@ que ya existen en lugar de añadir un eje de ajuste propio:
 **No** cambia qué servicios se ejecutan. Eso sigue en el `--profile` de cada instancia, donde
 queda nombrado y visible. Un perfil *más grande* que `default` —hoy solo `full`— se rechaza en
 un clúster compacto. Las cifras compactas publicadas se miden sobre `default`, así que no
-describirían una instancia que ejecuta cinco servicios más (inferencia de IA, conectores
-salientes, MCP, ingesta de Sparkplug B e ingesta de LwM2M). Los perfiles más pequeños
+describirían una instancia que ejecuta seis servicios más (inferencia de IA, conectores
+salientes, MCP, ingesta de Sparkplug B, ingesta de LwM2M y gestión de actualizaciones). Los perfiles más pequeños
 (`telemetry`, `ingest-only`) sí se aceptan.
 
 Puedes conservar tanto TLS como la monitorización. Un `--no-tls=false` o
