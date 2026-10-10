@@ -88,7 +88,7 @@ func (r *natsReader) configureFetch() {
 	}
 	r.fetchSize = cfg.BatchSize()
 	// A capacity reader asks for its free slots and not for more; it never fetches ahead.
-	r.ahead = cfg.Ahead && r.slots == 0
+	r.ahead = cfg.AheadEnabled() && r.slots == 0
 	r.aheadBudget = cfg.HoldBudget(r.nmgr.ackWait())
 }
 
@@ -213,7 +213,7 @@ func (r *natsReader) noteDrained() {
 // it pulls the default batch, one request at a time.
 func (r *natsReader) batchSize() int {
 	if r.fetchSize <= 0 {
-		return fetchBatch
+		return config.DefaultFetchBatch
 	}
 	return r.fetchSize
 }

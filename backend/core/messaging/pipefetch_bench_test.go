@@ -271,7 +271,7 @@ func pipeReader(b *testing.B, nc *nats.Conn, stream string, batch int, ahead boo
 		b.Fatalf("legacy js: %v", err)
 	}
 	nmgr := &NatsManager{nc: nc, js: js, Microservice: &core.Microservice{InstanceId: "bench", FunctionalArea: "bench"}}
-	nmgr.Microservice.InstanceConfiguration.Infrastructure.Nats.Fetch = config.NatsFetchConfiguration{Batch: batch, Ahead: ahead}
+	nmgr.Microservice.InstanceConfiguration.Infrastructure.Nats.Fetch = config.NatsFetchConfiguration{Batch: batch, Ahead: config.AheadFlag(ahead)}
 	r := &natsReader{nmgr: nmgr, stream: stream, durable: "bench", subject: stream + ".>"}
 	r.configureFetch()
 	sub := pipeLegacySub(b, nc, stream)
