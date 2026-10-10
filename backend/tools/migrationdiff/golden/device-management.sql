@@ -670,7 +670,7 @@ CREATE TABLE "device-management".device_configuration_revisions (
  device_id bigint NOT NULL,
  revision bigint NOT NULL,
  profile_version_id bigint,
- document jsonb NOT NULL,
+ document text NOT NULL,
  digest character varying(71) NOT NULL,
  actor character varying(256)
 );

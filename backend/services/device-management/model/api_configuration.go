@@ -209,7 +209,7 @@ func mintConfigurationRevision(ctx context.Context, tx *gorm.DB, deviceId uint,
 		DeviceId:         deviceId,
 		Revision:         next,
 		ProfileVersionId: versionId,
-		Document:         append([]byte(nil), doc.Canonical...),
+		Document:         string(doc.Canonical),
 		Digest:           doc.Digest,
 		Actor:            configurationActor(ctx),
 	}

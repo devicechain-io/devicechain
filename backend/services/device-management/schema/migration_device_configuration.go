@@ -37,9 +37,11 @@ type deviceConfigurationRevision struct {
 	// no profile version to cite.
 	ProfileVersionId *uint
 
-	Document datatypes.JSON `gorm:"not null"`
-	Digest   string         `gorm:"not null;size:71"`
-	Actor    string         `gorm:"size:256"`
+	// Plain text, never json/jsonb: jsonb re-renders a document on read (spacing, key
+	// order), and the stored bytes must be exactly the bytes the digest covers.
+	Document string `gorm:"not null"`
+	Digest   string `gorm:"not null;size:71"`
+	Actor    string `gorm:"size:256"`
 }
 
 // deviceConfigurationState is the SNAPSHOT of the per-device reported configuration

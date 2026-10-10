@@ -84,8 +84,11 @@ type DeviceConfigurationRevision struct {
 	// document; nil when the device resolves no published profile (an empty document).
 	ProfileVersionId *uint
 
-	Document datatypes.JSON `gorm:"not null"`
-	Digest   string         `gorm:"not null;size:71"`
+	// Document is TEXT, never json/jsonb: Postgres re-renders a jsonb value on read
+	// (whitespace after separators, its own key order), so a jsonb column would hand back
+	// bytes that no longer hash to Digest — and those are the bytes a device would receive.
+	Document string `gorm:"not null"`
+	Digest   string `gorm:"not null;size:71"`
 	// Actor is the authenticated subject whose write caused the revision.
 	Actor string `gorm:"size:256"`
 }
@@ -183,6 +186,16 @@ type ConfigurationDocument struct {
 }
 
 // ConfigurationDigest is "sha256:" + the lowercase hex SHA-256 of the canonical bytes.
+//
+// DEVICE CONTRACT: a device hashes the bytes it RECEIVES and never re-serializes them to
+// verify. The canonical form is the platform's own, close to but not identical with the
+// JSON canonicalization scheme (ECMAScript serialization), and a device re-encoding with
+// a different serializer will disagree on these known points:
+//   - U+2028 and U+2029 are escaped ( ,  ) by Go's encoder;
+//   - object keys sort by UTF-8 byte order, not UTF-16 code units, which differ only for
+//     characters outside the Basic Multilingual Plane;
+//   - LONG values are exact int64, so values above 2^53 are not rounded to a double;
+//   - numbers inside JSON-typed values ARE parsed as float64 and so rounded to a double.
 func ConfigurationDigest(canonical []byte) string {
 	sum := sha256.Sum256(canonical)
 	return ConfigurationDigestPrefix + hex.EncodeToString(sum[:])

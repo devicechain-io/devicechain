@@ -97,7 +97,7 @@ func (r *DeviceConfigurationRevisionResolver) Digest() string { return r.M.Diges
 
 // Document returns the stored canonical bytes verbatim: they are what the digest covers,
 // so they are never re-encoded on the way out.
-func (r *DeviceConfigurationRevisionResolver) Document() string { return string(r.M.Document) }
+func (r *DeviceConfigurationRevisionResolver) Document() string { return r.M.Document }
 
 func (r *DeviceConfigurationRevisionResolver) CreatedAt() *string {
 	return util.FormatTime(r.M.CreatedAt)

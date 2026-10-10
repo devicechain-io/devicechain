@@ -160,39 +160,65 @@ func TestNoMutationWritesReportedConfigurationState(t *testing.T) {
 	}
 }
 
-// Every field of the new types carries a description the served schema actually exposes.
+// Every new type, field and argument carries a """ description. The schema is parsed with
+// string descriptions on, which is how the server serves it; a # comment does not count.
 func TestDeviceConfigurationTypesAreDescribed(t *testing.T) {
-	schema := gql.MustParseSchema(SchemaContent, &SchemaResolver{})
-	for _, typ := range []string{"DeviceConfiguration", "DeviceConfigurationRevision", "DeviceConfigurationReport",
-		"DeviceConfigurationRevisionSearchResults"} {
+	schema := gql.MustParseSchema(SchemaContent, &SchemaResolver{}, gql.UseStringDescriptions())
+	type field struct {
+		Name        string `json:"name"`
+		Description string `json:"description"`
+		Args        []struct {
+			Name        string `json:"name"`
+			Description string `json:"description"`
+		} `json:"args"`
+	}
+	read := func(typ string) (string, []field) {
 		resp := schema.Exec(context.Background(),
-			`query ($n: String!) { __type(name: $n) { description fields { name description } } }`, "",
+			`query ($n: String!) { __type(name: $n) { description fields { name description args { name description } } } }`, "",
 			map[string]any{"n": typ})
 		if len(resp.Errors) > 0 {
 			t.Fatal(resp.Errors)
 		}
 		var parsed struct {
 			Type *struct {
-				Description string `json:"description"`
-				Fields      []struct {
-					Name        string `json:"name"`
-					Description string `json:"description"`
-				} `json:"fields"`
+				Description string  `json:"description"`
+				Fields      []field `json:"fields"`
 			} `json:"__type"`
 		}
 		if err := json.Unmarshal(resp.Data, &parsed); err != nil || parsed.Type == nil {
 			t.Fatalf("%s: not in the schema (%v)", typ, err)
 		}
-		if strings.TrimSpace(parsed.Type.Description) == "" {
-			t.Errorf("%s has no description", typ)
+		return parsed.Type.Description, parsed.Type.Fields
+	}
+	check := func(where string, f field) {
+		if strings.TrimSpace(f.Description) == "" {
+			t.Errorf("%s.%s has no description", where, f.Name)
 		}
-		if typ == "DeviceConfigurationRevisionSearchResults" {
-			continue // results/pagination follow the shared search-results shape
-		}
-		for _, f := range parsed.Type.Fields {
-			if strings.TrimSpace(f.Description) == "" {
-				t.Errorf("%s.%s has no description", typ, f.Name)
+		for _, a := range f.Args {
+			if strings.TrimSpace(a.Description) == "" {
+				t.Errorf("%s.%s(%s) has no description", where, f.Name, a.Name)
 			}
 		}
+	}
+	for _, typ := range []string{"DeviceConfiguration", "DeviceConfigurationRevision", "DeviceConfigurationReport",
+		"DeviceConfigurationRevisionSearchResults"} {
+		desc, fields := read(typ)
+		if strings.TrimSpace(desc) == "" {
+			t.Errorf("%s has no description", typ)
+		}
+		for _, f := range fields {
+			check(typ, f)
+		}
+	}
+	_, queries := read("Query")
+	found := 0
+	for _, f := range queries {
+		if f.Name == "deviceConfiguration" || f.Name == "deviceConfigurationRevisions" {
+			found++
+			check("Query", f)
+		}
+	}
+	if found != 2 {
+		t.Fatalf("found %d of the 2 configuration queries", found)
 	}
 }

@@ -11,13 +11,16 @@ import (
 	"encoding/json"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 
+	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/entity"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
+	gormschema "gorm.io/gorm/schema"
 )
 
 // configTestApi stands up everything a SHARED device attribute write touches: the device
@@ -149,7 +152,7 @@ func TestLongWrittenAsTwentyTwoPointZeroConvergesOnDeviceReport(t *testing.T) {
 
 	// The device: decode what it received, apply, encode what it now holds.
 	var applied map[string]any
-	if err := json.Unmarshal(desired.Document, &applied); err != nil {
+	if err := json.Unmarshal([]byte(desired.Document), &applied); err != nil {
 		t.Fatal(err)
 	}
 	held, err := json.Marshal(applied)
@@ -372,6 +375,14 @@ func TestConfigurationValuesAreCanonical(t *testing.T) {
 		{"DOUBLE", "1e21", "1e+21"},
 		{"DOUBLE", "0.0000001", "1e-7"},
 		{"DOUBLE", "-0", "0"},
+		// The plain-decimal range is [1e-6, 1e21). Go's 'g' format switches to an exponent
+		// at 1e-5 and 1e21's neighbours differently, so both edges are pinned.
+		{"DOUBLE", "0.000001", "0.000001"},
+		{"DOUBLE", "0.0000015", "0.0000015"},
+		{"DOUBLE", "0.00000999", "0.00000999"},
+		{"DOUBLE", "100000000000000000", "100000000000000000"},
+		{"DOUBLE", "150000000000000000000", "150000000000000000000"},
+		{"DOUBLE", "999999999999999900000", "999999999999999900000"},
 		{"BOOLEAN", "true", "true"},
 		{"STRING", "a<b&\"c\"", `"a<b&\"c\""`},
 		{"JSON", `{ "b": [1.0, 2e0], "a": {"z": null, "y": "<"} }`, `{"a":{"y":"<","z":null},"b":[1,2]}`},
@@ -391,5 +402,58 @@ func TestConfigurationValuesAreCanonical(t *testing.T) {
 		if got, err := canonicalConfigurationValue(bad.declared, bad.stored, bad.text); err == nil {
 			t.Errorf("%s/%s %q accepted as %s", bad.declared, bad.stored, bad.text, got)
 		}
+	}
+}
+
+// A revision that exists but no longer matches what the declaration and values would build
+// reads stale; the same revision read before the change does not.
+func TestMintedRevisionReadsStaleWhenTheDeclarationMoves(t *testing.T) {
+	api, ctx := configTestApi(t)
+	seedConfiguredDevice(t, api, ctx, []ConfigurationKey{{Key: "mode", ValueType: "STRING"}})
+	setConfigAttr(t, api, ctx, AttributeScopeShared, "mode", AttributeValueString, "eco")
+	setConfigAttr(t, api, ctx, AttributeScopeShared, "rate", AttributeValueLong, "5")
+	if c := readConfig(t, api, ctx); c.Desired == nil || c.Stale {
+		t.Fatalf("fresh revision: desired=%v stale=%v; want minted and not stale", c.Desired, c.Stale)
+	}
+	if _, err := api.SetDeviceProfileConfigurationDeclaration(ctx, "prof", []ConfigurationKey{
+		{Key: "mode", ValueType: "STRING"}, {Key: "rate", ValueType: "LONG"}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := api.PublishDeviceProfile(ctx, "prof", nil, nil, "tester"); err != nil {
+		t.Fatal(err)
+	}
+	c := readConfig(t, api, ctx)
+	if c.Desired == nil || string(c.Desired.Document) != `{"mode":"eco"}` || !c.Stale {
+		t.Fatalf("after declaring rate: desired=%v stale=%v; want the old revision, stale", c.Desired, c.Stale)
+	}
+}
+
+// The revision records the authenticated caller whose write minted it.
+func TestRevisionRecordsTheCallerAsActor(t *testing.T) {
+	api, ctx := configTestApi(t)
+	seedConfiguredDevice(t, api, ctx, []ConfigurationKey{{Key: "mode", ValueType: "STRING"}})
+	setConfigAttr(t, api, auth.WithClaims(ctx, &auth.Claims{Username: "alice"}), AttributeScopeShared,
+		"mode", AttributeValueString, "eco")
+	setConfigAttr(t, api, auth.WithClaims(ctx, &auth.Claims{Email: "bob@example.com"}), AttributeScopeShared,
+		"mode", AttributeValueString, "turbo")
+	page, err := api.DeviceConfigurationRevisions(ctx, "dev", rdb.Pagination{PageNumber: 1, PageSize: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Results) != 2 || page.Results[0].Actor != "bob@example.com" || page.Results[1].Actor != "alice" {
+		t.Fatalf("actors (newest first) = %+v; want bob@example.com, alice", page.Results)
+	}
+}
+
+// The document column must hold the exact bytes the digest covers. A json/jsonb column is
+// re-rendered by Postgres on read (spacing, key order), so the field must be plain text.
+func TestRevisionDocumentIsStoredAsText(t *testing.T) {
+	s, err := gormschema.Parse(&DeviceConfigurationRevision{}, &sync.Map{}, gormschema.NamingStrategy{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := s.LookUpField("Document")
+	if f == nil || f.DataType != gormschema.String {
+		t.Fatalf("Document column data type = %v; want string (text), never json", f.DataType)
 	}
 }
