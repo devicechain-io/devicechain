@@ -184,8 +184,8 @@ export type CommandDefinitionUpdateRequest = {
   /** New description, or null to clear it. */
   description?: string | null | undefined;
   /**
-   * Token of another profile to move the definition to. An explicit null is refused, and an
-   * unknown token fails the whole update. The command key must be unique in the profile the
+   * Token of another profile to move the definition to. An explicit null or a blank value is
+   * refused, and an unknown token fails the whole update. The command key must be unique in the profile the
    * definition ends up in.
    */
   deviceProfileToken?: string | null | undefined;
@@ -718,8 +718,8 @@ export type MetricDefinitionUpdateRequest = {
   /** New semantic tag, or null to clear it. */
   descriptor?: string | null | undefined;
   /**
-   * Token of another profile to move the definition to. An explicit null is refused, and
-   * an unknown token fails the whole update.
+   * Token of another profile to move the definition to. An explicit null or a blank value
+   * is refused, and an unknown token fails the whole update.
    */
   deviceProfileToken?: string | null | undefined;
   /** New allowed values as a JSON array of strings, or null to allow any value. */

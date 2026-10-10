@@ -5,4 +5,4 @@
 // in the device management API.
 package gqlclient
 
-//go:generate go run github.com/Khan/genqlient@v0.5.0
+//go:generate go run github.com/Khan/genqlient

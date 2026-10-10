@@ -177,7 +177,8 @@ type DeviceProfile implements Model & TokenReference & NamedEntity & MetadataEnt
     deletedAt: String
     """
     Identifier of the profile, unique within the tenant. It can be changed with
-    renameDeviceProfile only until the profile is first published or adopted by a device type.
+    renameDeviceProfile only while the profile has never been published and no device type
+    currently adopts it.
     """
     token: String!
     """Human-readable name, up to 128 characters. Null when none is set."""
@@ -415,8 +416,8 @@ token here. Any refusal leaves the definition unchanged.
 """
 input MetricDefinitionUpdateRequest {
     """
-    Token of another profile to move the definition to. An explicit null is refused, and
-    an unknown token fails the whole update.
+    Token of another profile to move the definition to. An explicit null or a blank value
+    is refused, and an unknown token fails the whole update.
     """
     deviceProfileToken: String
     """
@@ -674,8 +675,8 @@ token here. Any refusal leaves the definition unchanged.
 """
 input CommandDefinitionUpdateRequest {
     """
-    Token of another profile to move the definition to. An explicit null is refused, and an
-    unknown token fails the whole update. The command key must be unique in the profile the
+    Token of another profile to move the definition to. An explicit null or a blank value is
+    refused, and an unknown token fails the whole update. The command key must be unique in the profile the
     definition ends up in.
     """
     deviceProfileToken: String
@@ -2954,8 +2955,8 @@ type Mutation {
     # dead-man entries.
     """
     Changes a device profile's token and returns the profile. Allowed only while the
-    profile has never been published and no device type adopts it; after that its token is
-    permanent. Renaming to the current token succeeds without change. Fails if no profile
+    profile has never been published and no device type currently adopts it; once it has
+    been published, its token is permanent. Renaming to the current token succeeds without change. Fails if no profile
     has the token. Requires device:write.
     """
     renameDeviceProfile(
