@@ -22,6 +22,7 @@ import { sanitizeSdl } from './sanitize.mjs';
 import { scan, formatFindings } from './gate.mjs';
 import {
   PLANES, FILENAME_CONVENTIONS, SCHEMAS, REQUIRED_OUTPUTS, REFUSED_SCHEMA_EXTENSIONS,
+  DEVICE_SCHEMAS,
 } from './schemas.manifest.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -131,6 +132,99 @@ export function reconcile(discovered, schemas = SCHEMAS) {
   }
 }
 
+/** Every device-contract JSON Schema in the tree, found without consulting the manifest. */
+export function discoverDevice(repo = REPO) {
+  const services = join(repo, 'backend', 'services');
+  const found = [];
+  for (const area of readdirSync(services, { withFileTypes: true })) {
+    if (!area.isDirectory()) continue;
+    const dir = join(services, area.name, 'contract');
+    if (!existsSync(dir)) continue;
+    for (const f of readdirSync(dir)) {
+      if (f.endsWith('.schema.json')) found.push(`backend/services/${area.name}/contract/${f}`);
+    }
+  }
+  return found.sort();
+}
+
+/** The same bidirectional floor as reconcile(), over the device contract. */
+export function reconcileDevice(discovered, deviceSchemas = DEVICE_SCHEMAS) {
+  const declared = new Set(deviceSchemas.map((s) => s.source));
+  const present = new Set(discovered);
+  const undeclared = discovered.filter((s) => !declared.has(s));
+  if (undeclared.length) {
+    throw new GenerateError(
+      `${undeclared.length} device contract file(s) in the tree with no manifest entry`,
+      `${undeclared.map((s) => `  ${s}`).join('\n')}\n\n`
+      + 'Add each to DEVICE_SCHEMAS in scripts/schemas.manifest.mjs, so it is published\n'
+      + 'under /schema/device/ and listed in the index.',
+    );
+  }
+  const missing = deviceSchemas.map((s) => s.source).filter((s) => !present.has(s));
+  if (missing.length) {
+    throw new GenerateError(
+      `${missing.length} device contract manifest entr(ies) point at a file that does not exist`,
+      `${missing.map((s) => `  ${s}`).join('\n')}\n\n`
+      + 'A contract file was moved, renamed or deleted. Update DEVICE_SCHEMAS in\n'
+      + 'scripts/schemas.manifest.mjs, and every page that links to its published URL.',
+    );
+  }
+}
+
+/** Every relative $ref in a schema document, found anywhere in it. */
+function relativeRefs(node, out = []) {
+  if (Array.isArray(node)) node.forEach((n) => relativeRefs(n, out));
+  else if (node && typeof node === 'object') {
+    for (const [k, v] of Object.entries(node)) {
+      if (k === '$ref' && typeof v === 'string' && !v.startsWith('#') && !/^[a-z]+:/.test(v)) out.push(v);
+      else relativeRefs(v, out);
+    }
+  }
+  return out;
+}
+
+/**
+ * The device contract, published verbatim: these files are already public text, written
+ * for device authors, so there is nothing to sanitize. What is checked is what would make
+ * a published copy wrong rather than merely different: it parses, it says it is draft
+ * 2020-12, its $id is the URL it is served at, and every file it $refs is published too.
+ */
+export function buildDeviceArtifacts(repo = REPO, deviceSchemas = DEVICE_SCHEMAS) {
+  reconcileDevice(discoverDevice(repo), deviceSchemas);
+  const names = deviceSchemas.map((s) => basename(s.source));
+  const dup = names.find((n, i) => names.indexOf(n) !== i);
+  if (dup) throw new GenerateError(`two device contract files would both publish as device/${dup}`);
+
+  return deviceSchemas.map((s) => {
+    const name = basename(s.source);
+    const text = readFileSync(join(repo, s.source), 'utf8');
+    let doc;
+    try {
+      doc = JSON.parse(text);
+    } catch (err) {
+      throw new GenerateError(`${s.source} is not valid JSON`, String(err));
+    }
+    if (doc.$schema !== 'https://json-schema.org/draft/2020-12/schema') {
+      throw new GenerateError(`${s.source} does not declare JSON Schema draft 2020-12`);
+    }
+    const id = `${CANONICAL}/schema/device/${name}`;
+    if (doc.$id !== id) {
+      throw new GenerateError(
+        `${s.source} has $id ${JSON.stringify(doc.$id)}, not the URL it is published at`,
+        `Set "$id": "${id}". A $ref between these files resolves against the $id, so a\n`
+        + 'wrong one sends a validator to a file that does not exist.',
+      );
+    }
+    const unresolved = relativeRefs(doc).filter((r) => !names.includes(r.split('#')[0]));
+    if (unresolved.length) {
+      throw new GenerateError(
+        `${s.source} references file(s) that are not published: ${unresolved.join(', ')}`,
+      );
+    }
+    return { name: `device/${name}`, text, device: { role: s.role, title: doc.title } };
+  });
+}
+
 /** Resolve one manifest entry into everything the index needs to say about it. */
 export function resolve(entry) {
   const file = basename(entry.source);
@@ -184,8 +278,9 @@ function banner(s) {
 }
 
 /** Everything the run would publish, gated. Throws rather than writing anything. */
-export function buildArtifacts(repo = REPO, schemas = SCHEMAS) {
+export function buildArtifacts(repo = REPO, schemas = SCHEMAS, deviceSchemas = DEVICE_SCHEMAS) {
   reconcile(discover(repo), schemas);
+  const device = buildDeviceArtifacts(repo, deviceSchemas);
   const resolved = schemas.map(resolve);
 
   const artifacts = [];
@@ -244,7 +339,20 @@ export function buildArtifacts(repo = REPO, schemas = SCHEMAS) {
       if (s.note) row.note = s.note;
       return row;
     }),
+    deviceProtocol: {
+      description:
+        'JSON Schemas (draft 2020-12) of what a device sends to the platform and receives '
+        + 'from it over MQTT and HTTP. Committed beside the structs the platform decodes '
+        + 'them with, and tested against those structs, so a field renamed in one fails the '
+        + 'build until the other agrees.',
+      schemas: device.map((d) => ({
+        title: d.device.title,
+        role: d.device.role,
+        schema: `${SITE}/schema/${d.name}`,
+      })),
+    },
   };
+  artifacts.push(...device);
   artifacts.push({ name: 'index.json', text: `${JSON.stringify(index, null, 2)}\n` });
 
   // Assert the required outputs by name. A count would look just as complete.
@@ -294,7 +402,10 @@ function main() {
   // `docusaurus clear` does not touch static/.
   rmSync(OUT, { recursive: true, force: true });
   mkdirSync(OUT, { recursive: true });
-  for (const a of artifacts) writeFileSync(join(OUT, a.name), a.text);
+  for (const a of artifacts) {
+    mkdirSync(dirname(join(OUT, a.name)), { recursive: true });
+    writeFileSync(join(OUT, a.name), a.text);
+  }
 
   console.log(`generate-schema: wrote ${artifacts.length} artifact(s) to static/schema/`);
 }
