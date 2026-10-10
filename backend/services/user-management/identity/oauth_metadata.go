@@ -110,7 +110,7 @@ func MetadataPathFor(issuer string) string {
 // client that appends rather than inserts; the conditional avoids registering one
 // pattern twice, which ServeMux panics on.
 func RegisterMetadataHandlers(mux *http.ServeMux, issuer string) {
-	h := AuthorizationServerMetadataHandler(issuer)
+	h := BoundRequests(AuthorizationServerMetadataHandler(issuer), MaxSmallBodyBytes)
 	mux.Handle(MetadataPath, h)
 	if p := MetadataPathFor(issuer); p != MetadataPath {
 		mux.Handle(p, h)

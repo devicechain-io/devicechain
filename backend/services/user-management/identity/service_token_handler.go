@@ -22,8 +22,8 @@ const maxMintBodyBytes = 1 << 16
 // minting, fail-closed); issue signs a service token for the requested subject +
 // authorities. It is a standalone function (not an inline closure over main's
 // globals) so every branch is unit-testable.
-func ServiceTokenHandler(secret func() string, issue func(subject string, authorities []string) (auth.IssuedToken, error)) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
+func ServiceTokenHandler(secret func() string, issue func(subject string, authorities []string) (auth.IssuedToken, error)) http.Handler {
+	return BoundRequests(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
@@ -68,5 +68,5 @@ func ServiceTokenHandler(secret func() string, issue func(subject string, author
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(auth.ServiceTokenResponse{Token: tok.Token, ExpiresAt: tok.ExpiresAt.Unix()})
-	}
+	}), maxMintBodyBytes)
 }

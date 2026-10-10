@@ -1,9 +1,10 @@
 # `/dash` paste samples
 
-The standalone dashboard viewer (`frontend/apps/dashboard`, served at `/dash`) is
-paste-only by design: it is the reference *external* embedder, so it has its own login
-and takes a dashboard definition as text rather than reading one out of the console's
-session. That leaves anyone trying it with nothing to paste. These are the samples.
+The standalone dashboard viewer (`frontend/apps/dashboard`, served at `/dash`) can load
+a dashboard's published snapshot by token, or take a definition pasted as text. Paste is
+the path for the reference *external* embedder, which has no access to the service, and
+for previewing a definition offline; it has its own login either way and never reads the
+console's session. That leaves anyone pasting with nothing to paste. These are the samples.
 
 Each directory is named for a **dashboard token**, and holds binding manifests for the
 board whose definition is committed at `../sim-dashboards/<token>.json`.

@@ -106,6 +106,14 @@ export const SCHEMAS = [
   },
   { source: 'backend/services/notification-management/graphql/schema.graphql', area: 'notification-management' },
   { source: 'backend/services/outbound-connectors/graphql/schema.graphql', area: 'outbound-connectors' },
+  {
+    source: 'backend/services/update-management/graphql/schema.graphql',
+    area: 'update-management',
+    publish: false,
+    note: 'Over-the-air updates. Not implemented in this release: the service ships so it '
+      + 'can be deployed, and its one placeholder query answers every call with a '
+      + 'NOT_IMPLEMENTED error. Nothing is published until the update API exists.',
+  },
   { source: 'backend/services/user-management/graphql/admin_schema.graphql', area: 'user-management' },
   {
     source: 'backend/services/user-management/graphql/schema.graphql',
@@ -139,4 +147,25 @@ export const REQUIRED_OUTPUTS = [
   'user-management.graphql',
   'user-management-admin.graphql',
   'user-management-settings.graphql',
+];
+
+/**
+ * The device protocol contract: the JSON Schemas of what a device sends and receives,
+ * committed beside the Go structs that decode them and published verbatim under
+ * /schema/device/. Same floor as SCHEMAS above, for the same reason: discovery globs
+ * backend/services/<area>/contract/*.schema.json, and this list is checked against it in
+ * both directions, so a moved or renamed contract fails the build instead of quietly
+ * dropping off the site.
+ *
+ * Each file's $id must be its published URL on the canonical host; the generator refuses
+ * one that is not, because a $ref between these files resolves against it.
+ */
+export const DEVICE_SCHEMAS = [
+  { source: 'backend/services/event-sources/contract/device-event.schema.json', role: 'Inbound device event envelope (MQTT and HTTP)' },
+  { source: 'backend/services/event-sources/contract/measurement-payload.schema.json', role: 'Payload of a Measurement event' },
+  { source: 'backend/services/event-sources/contract/location-payload.schema.json', role: 'Payload of a Location event' },
+  { source: 'backend/services/event-sources/contract/alert-payload.schema.json', role: 'Payload of an Alert event' },
+  { source: 'backend/services/event-sources/contract/new-relationship-payload.schema.json', role: 'Payload of a NewRelationship event' },
+  { source: 'backend/services/command-delivery/contract/command-delivery.schema.json', role: 'Command delivered to a device' },
+  { source: 'backend/services/command-delivery/contract/command-response.schema.json', role: 'Command response sent by a device' },
 ];

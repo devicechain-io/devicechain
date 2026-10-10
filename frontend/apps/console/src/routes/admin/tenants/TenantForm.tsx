@@ -69,9 +69,9 @@ export function TenantForm({
   // is on is a commercial decision, not a form convenience.
   const [tierToken, setTierToken] = useState(tenant?.tier.token ?? '');
   const [config, setConfig] = useState(tenant?.config ?? '');
-  const [ingestRate, setIngestRate] = useState(tenant?.ingestMessagesPerSecond?.toString() ?? '');
+  const [ingestRate, setIngestRate] = useState(tenant?.ingestReadingsPerSecond?.toString() ?? '');
   const [ingestBurst, setIngestBurst] = useState(tenant?.ingestBurst?.toString() ?? '');
-  const [outboundRate, setOutboundRate] = useState(tenant?.outboundMessagesPerSecond?.toString() ?? '');
+  const [outboundRate, setOutboundRate] = useState(tenant?.outboundCallsPerSecond?.toString() ?? '');
   const [outboundBurst, setOutboundBurst] = useState(tenant?.outboundBurst?.toString() ?? '');
   // Per-tenant consent to route NL→rule authoring to an external AI model (ADR-056 §6).
   // Default off (fail-closed): a null/false flag means the tenant has not opted in.
@@ -140,9 +140,9 @@ export function TenantForm({
     try {
       const cfg = config.trim() === '' ? null : config;
       const gov = {
-        ingestMessagesPerSecond: optNum(ingestRate),
+        ingestReadingsPerSecond: optNum(ingestRate),
         ingestBurst: optNum(ingestBurst),
-        outboundMessagesPerSecond: optNum(outboundRate),
+        outboundCallsPerSecond: optNum(outboundRate),
         outboundBurst: optNum(outboundBurst),
         // Sent explicitly (true/false) — consent is a deliberate operator decision, so
         // an unchecked box records "not opted in" rather than leaving it ambiguous.

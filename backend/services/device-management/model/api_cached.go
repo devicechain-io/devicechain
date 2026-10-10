@@ -406,6 +406,11 @@ func (capi *CachedApi) loadRelationships(ctx context.Context, key string,
 	if err != nil {
 		return nil, err
 	}
+	// Observed here, the one place both the cached API and the event read-ahead load from
+	// the database, so it fires once per load and a cache hit pays nothing.
+	if results != nil {
+		capi.ceilings.observeTracked(len(results.Results))
+	}
 	// Cache positive results only.
 	if results != nil {
 		_ = capi.caches.RelationshipsBySource.Set(ctx, key, results)

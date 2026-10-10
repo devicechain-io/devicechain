@@ -76,7 +76,7 @@ func TestBuildRateLimiterCountsUnresolvedAdmissions(t *testing.T) {
 	unresolved := governance.NewUnresolvedAdmissions(ms, governance.AIInference)
 
 	client := svcclient.New(infra.UserManagement, infra.ServiceAuth.Secret, "ai-inference", []string{string(auth.TenantRead)})
-	limiter := buildRateLimiter(governance.Limits{MessagesPerSecond: 1, Burst: 1000}, infra, client, unresolved)
+	limiter := buildRateLimiter(governance.Limits{RatePerSecond: 1, Burst: 1000}, infra, client, unresolved)
 
 	const series = "devicechain_aiinference_governance_unresolved_admissions_total"
 	require.Equal(t, float64(0), unreachableAdmissions(t, reg, series, "ai-inference"),

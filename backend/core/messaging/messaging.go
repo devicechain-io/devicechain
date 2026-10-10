@@ -32,6 +32,12 @@ const (
 	// consumer still reads them all; see the declaration in core/streams for why the
 	// identity cannot live in the payload instead.
 	SubjectCommandResponses = streams.CommandResponses
+	// SubjectDeviceDesired carries desired state DOWN to a device, and
+	// SubjectDeviceReports carries a device's reports UP. Both are PER-DEVICE exactly as
+	// SubjectDeviceCommands is ("{instance}.{tenant}.device-desired.{deviceToken}"), and
+	// both are RESERVED: granted to the device, consumed by nothing yet.
+	SubjectDeviceDesired = streams.DeviceDesired
+	SubjectDeviceReports = streams.DeviceReports
 )
 
 // IsPerDeviceSuffix reports whether a suffix addresses an individual device.

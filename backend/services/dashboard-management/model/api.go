@@ -8,11 +8,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"time"
 
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"gorm.io/datatypes"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // maxDefinitionBytes caps a stored dashboard definition. A definition is a layout
@@ -257,15 +259,184 @@ func (api *Api) UpdateDashboard(ctx context.Context, token string, request *Dash
 	return reloaded[0], nil
 }
 
-// PublishDashboard freezes the dashboard's current draft into a new immutable
-// version (the next monotonic integer for that dashboard) and returns it. label
-// and description are optional user annotations; publishedBy is the caller's
-// identity. Concurrent publishes are safe: the unique (dashboard_id, version)
-// index rejects a duplicate version number.
-func (api *Api) PublishDashboard(ctx context.Context, token string, label *string, description *string, publishedBy string, expectedUpdatedAt *string) (*DashboardVersion, error) {
+// ErrNotPublished is returned by PublishedDashboard when the dashboard exists but has
+// never been published: there is nothing to serve, and saying so beats a blank board.
+var ErrNotPublished = &notPublishedError{}
+
+type notPublishedError struct{}
+
+func (*notPublishedError) Error() string {
+	return "dashboard has not been published"
+}
+
+// Extensions types the refusal for the GraphQL layer.
+func (*notPublishedError) Extensions() map[string]any {
+	return map[string]any{"code": "NOT_PUBLISHED"}
+}
+
+// PublishDashboard freezes the dashboard's current draft into a new immutable version
+// (the next monotonic integer for that dashboard), makes it the version viewers are
+// served (publish = activate), and returns it with the dashboard as it stands.
+// label and description are optional user annotations; publishedBy is the caller's
+// identity.
+//
+// The version insert and the pointer move are ONE transaction that locks the dashboard
+// row, so concurrent publishes serialize into N+1 and N+2 rather than one failing on the
+// unique index, and the precondition is checked against the row as locked, not as an
+// earlier read saw it.
+//
+// 🔴 THE POINTER MOVES WITHOUT TOUCHING updated_at. updated_at is the DRAFT's
+// optimistic-concurrency token; a publish is not a draft edit, and bumping it would make
+// the author's next save conflict with their own publish. The returned dashboard carries
+// the unchanged value so a client keeps its baseline.
+func (api *Api) PublishDashboard(ctx context.Context, token string, label *string, description *string, publishedBy string, expectedUpdatedAt *string) (*DashboardVersion, *Dashboard, error) {
+	if err := api.refuseDeletedTenant(ctx); err != nil {
+		return nil, nil, err
+	}
+
+	var version *DashboardVersion
+	var dash *Dashboard
+	err := api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
+		locked, err := lockDashboard(tx, token)
+		if err != nil {
+			return err
+		}
+
+		// Optimistic precondition (same contract as UpdateDashboard): refuse to freeze a
+		// draft that moved on since the caller loaded it -- otherwise publish could
+		// snapshot another writer's content while the author believes they froze their
+		// own view. Checked against the locked row, so no writer can slip in after it.
+		if err := rdb.RefuseIfMoved(locked.UpdatedAt, expectedUpdatedAt, ErrConflict); err != nil {
+			return err
+		}
+
+		var maxVersion int32
+		if err := tx.Model(&DashboardVersion{}).
+			Where("dashboard_id = ?", locked.ID).
+			Select("COALESCE(MAX(version), 0)").Scan(&maxVersion).Error; err != nil {
+			return err
+		}
+		created := &DashboardVersion{
+			DashboardID: locked.ID,
+			Version:     maxVersion + 1,
+			Label:       rdb.NullStrOf(label),
+			Description: rdb.NullStrOf(description),
+			Definition:  locked.Definition,
+			PublishedBy: publishedBy,
+		}
+		if err := tx.Create(created).Error; err != nil {
+			return err
+		}
+		if err := movePointer(tx, locked, created.Version); err != nil {
+			return err
+		}
+		version, dash = created, locked
+		return nil
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	return version, dash, nil
+}
+
+// lockDashboard loads the tenant's dashboard with the given token FOR UPDATE inside tx,
+// or gorm.ErrRecordNotFound. The tenant-scope callback confines the read.
+func lockDashboard(tx *gorm.DB, token string) (*Dashboard, error) {
+	var dash Dashboard
+	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+		Where("token = ?", token).First(&dash).Error; err != nil {
+		return nil, err
+	}
+	return &dash, nil
+}
+
+// movePointer sets the dashboard's published version without touching updated_at.
+// UpdateColumn, not Updates: Updates stamps updated_at, which is the draft's version.
+// The caller has resolved the version row in the same transaction (or just created it).
+func movePointer(tx *gorm.DB, dash *Dashboard, version int32) error {
+	res := tx.Model(&Dashboard{}).Where("id = ?", dash.ID).UpdateColumn("published_version", version)
+	if res.Error != nil {
+		return res.Error
+	}
+	if res.RowsAffected == 0 {
+		return gorm.ErrRecordNotFound
+	}
+	dash.PublishedVersion = &version
+	return nil
+}
+
+// ActivateDashboardVersion makes an existing published version the one viewers are
+// served, WITHOUT touching the draft (its definition and its updatedAt): re-serving an
+// older version must not destroy in-progress edits, which rollback does by design.
+// Returns gorm.ErrRecordNotFound if the dashboard or the version does not exist.
+func (api *Api) ActivateDashboardVersion(ctx context.Context, token string, version int32) (*Dashboard, error) {
 	if err := api.refuseDeletedTenant(ctx); err != nil {
 		return nil, err
 	}
+	var dash *Dashboard
+	err := api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
+		locked, err := lockDashboard(tx, token)
+		if err != nil {
+			return err
+		}
+		var count int64
+		if err := tx.Model(&DashboardVersion{}).
+			Where("dashboard_id = ? AND version = ?", locked.ID, version).Count(&count).Error; err != nil {
+			return err
+		}
+		if count == 0 {
+			return gorm.ErrRecordNotFound
+		}
+		if err := movePointer(tx, locked, version); err != nil {
+			return err
+		}
+		dash = locked
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return dash, nil
+}
+
+// PublishedDashboard returns the dashboard and the version viewers are served.
+// gorm.ErrRecordNotFound when the dashboard does not exist (in this tenant);
+// ErrNotPublished when it exists but was never published.
+func (api *Api) PublishedDashboard(ctx context.Context, token string) (*Dashboard, *DashboardVersion, error) {
+	matches, err := api.DashboardsByToken(ctx, []string{token})
+	if err != nil {
+		return nil, nil, err
+	}
+	if len(matches) == 0 {
+		return nil, nil, gorm.ErrRecordNotFound
+	}
+	dash := matches[0]
+	if dash.PublishedVersion == nil {
+		return nil, nil, ErrNotPublished
+	}
+	version, err := api.DashboardVersion(ctx, token, *dash.PublishedVersion)
+	if err != nil {
+		return nil, nil, err
+	}
+	return dash, version, nil
+}
+
+// PublishedAt is when the given version of the dashboard with the given id was published
+// (the row's creation time), read without loading the definition.
+func (api *Api) PublishedAt(ctx context.Context, dashboardID uint, version int32) (time.Time, error) {
+	var row DashboardVersion
+	if err := api.RDB.DB(ctx).Select("created_at").
+		Where("dashboard_id = ? AND version = ?", dashboardID, version).
+		First(&row).Error; err != nil {
+		return time.Time{}, err
+	}
+	return row.CreatedAt, nil
+}
+
+// DashboardVersion reads one version row including its definition snapshot -- the
+// single-row body read that the metadata-only DashboardVersions list leaves out.
+// gorm.ErrRecordNotFound if the dashboard or the version does not exist.
+func (api *Api) DashboardVersion(ctx context.Context, token string, version int32) (*DashboardVersion, error) {
 	matches, err := api.DashboardsByToken(ctx, []string{token})
 	if err != nil {
 		return nil, err
@@ -273,38 +444,13 @@ func (api *Api) PublishDashboard(ctx context.Context, token string, label *strin
 	if len(matches) == 0 {
 		return nil, gorm.ErrRecordNotFound
 	}
-	dash := matches[0]
-
-	// Optimistic precondition (same contract as UpdateDashboard): refuse to freeze a
-	// draft that moved on since the caller loaded it — otherwise publish could snapshot
-	// another writer's content while the author believes they froze their own view.
-	// The same check as UpdateDashboard's, rdb.RefuseIfMoved. Publish has no guarded write
-	// of the draft row: it only reads it, and freezes what it read.
-	if err := rdb.RefuseIfMoved(dash.UpdatedAt, expectedUpdatedAt, ErrConflict); err != nil {
+	var row DashboardVersion
+	if err := api.RDB.DB(ctx).
+		Where("dashboard_id = ? AND version = ?", matches[0].ID, version).
+		First(&row).Error; err != nil {
 		return nil, err
 	}
-
-	// Next version = max existing + 1 for this dashboard (tenant-confined already,
-	// both because dash was loaded tenant-scoped and via the scope callback here).
-	var maxVersion int32
-	if err := api.RDB.DB(ctx).Model(&DashboardVersion{}).
-		Where("dashboard_id = ?", dash.ID).
-		Select("COALESCE(MAX(version), 0)").Scan(&maxVersion).Error; err != nil {
-		return nil, err
-	}
-
-	version := &DashboardVersion{
-		DashboardID: dash.ID,
-		Version:     maxVersion + 1,
-		Label:       rdb.NullStrOf(label),
-		Description: rdb.NullStrOf(description),
-		Definition:  dash.Definition,
-		PublishedBy: publishedBy,
-	}
-	if err := api.RDB.DB(ctx).Create(version).Error; err != nil {
-		return nil, err
-	}
-	return version, nil
+	return &row, nil
 }
 
 // RollbackDashboard copies a published version's definition back into the draft
@@ -414,9 +560,8 @@ func (api *Api) DashboardVersions(ctx context.Context, token string, limit, offs
 // DashboardsByToken looks up dashboards by their current tokens.
 func (api *Api) DashboardsByToken(ctx context.Context, tokens []string) ([]*Dashboard, error) {
 	found := make([]*Dashboard, 0)
-	result := api.RDB.DB(ctx).Find(&found, "token in ?", tokens)
-	if result.Error != nil {
-		return nil, result.Error
+	if err := rdb.FindByKeys(api.RDB.DB(ctx), &found, "token", tokens); err != nil {
+		return nil, err
 	}
 	return found, nil
 }

@@ -21,6 +21,8 @@ package inference
 import (
 	"context"
 	"errors"
+
+	"github.com/devicechain-io/dc-microservice/aiwire"
 )
 
 // ErrUnavailable is the fail-closed sentinel returned when inference cannot be served
@@ -37,13 +39,26 @@ var ErrUnavailable = errors.New("inference is unavailable")
 // opt in rather than tell an operator to fix configuration.
 var ErrConsentRequired = errors.New("tenant has not opted in to external AI routing")
 
+// ErrTimedOut is returned when the provider did not answer inside the configured
+// inference timeout. Distinct from ErrUnavailable because nothing is misconfigured
+// and nothing is down: the model was reached and was slow, and the author's next
+// move is to try again — not to find an operator. It reveals only that the call ran
+// long, never the provider or its endpoint.
+//
+// It is served with extensions.code aiwire.CodeTimedOut, which is what a caller
+// classifies on; the message text is free to change.
+var ErrTimedOut error = aiwire.New(aiwire.CodeTimedOut,
+	"inference timed out before the model answered; retry, or shorten the request")
+
 // ErrRateLimited is returned when the tenant is over its per-tenant inference rate
 // ceiling (ADR-056 §6 / ADR-023). Distinct from ErrUnavailable because it is
 // TRANSIENT and actionable in a way the others are not: nothing is misconfigured and
 // the caller should simply retry shortly, whereas "unavailable" tells an author to go
 // find an operator. Leaking "you are going too fast" to the caller is safe — it
 // reveals only the caller's own behaviour against a ceiling their own operator set.
-var ErrRateLimited = errors.New("inference rate limit exceeded for this tenant; retry shortly")
+// Served with extensions.code aiwire.CodeRateLimited.
+var ErrRateLimited error = aiwire.New(aiwire.CodeRateLimited,
+	"inference rate limit exceeded for this tenant; retry shortly")
 
 // RateGate meters a tenant's inference calls against its effective ceiling. Allow
 // reports whether this call may proceed and CONSUMES budget when it returns true, so

@@ -6,24 +6,24 @@ import { parseTierConfig, buildTierConfigPatch, type ConfigDimension } from './t
 
 // The platform's dimensions, as the server hands them over.
 const DIMS: ConfigDimension[] = [
-  { rateField: 'ingestMessagesPerSecond', burstField: 'ingestBurst' },
-  { rateField: 'outboundMessagesPerSecond', burstField: 'outboundBurst' },
+  { rateField: 'ingestReadingsPerSecond', burstField: 'ingestBurst' },
+  { rateField: 'outboundCallsPerSecond', burstField: 'outboundBurst' },
 ];
 
 // GOLD's seeded packaging — the thing an accidental clear destroys.
 const GOLD = JSON.stringify({
-  ingestMessagesPerSecond: 2000,
+  ingestReadingsPerSecond: 2000,
   ingestBurst: 4000,
-  outboundMessagesPerSecond: 200,
+  outboundCallsPerSecond: 200,
   outboundBurst: 400,
 });
 
 describe('parseTierConfig', () => {
   it('reads settings into editable strings', () => {
     expect(parseTierConfig(GOLD)).toEqual({
-      ingestMessagesPerSecond: '2000',
+      ingestReadingsPerSecond: '2000',
       ingestBurst: '4000',
-      outboundMessagesPerSecond: '200',
+      outboundCallsPerSecond: '200',
       outboundBurst: '400',
     });
   });
@@ -62,11 +62,11 @@ describe('buildTierConfigPatch', () => {
   });
 
   it('writes an edited ceiling', () => {
-    const settings = { ...parseTierConfig(GOLD), ingestMessagesPerSecond: '9000' };
+    const settings = { ...parseTierConfig(GOLD), ingestReadingsPerSecond: '9000' };
     expect(JSON.parse(buildTierConfigPatch(DIMS, settings, GOLD)!)).toEqual({
-      ingestMessagesPerSecond: 9000,
+      ingestReadingsPerSecond: 9000,
       ingestBurst: 4000,
-      outboundMessagesPerSecond: 200,
+      outboundCallsPerSecond: 200,
       outboundBurst: 400,
     });
   });
@@ -75,9 +75,9 @@ describe('buildTierConfigPatch', () => {
     // Blanking a field is the one legitimate way to drop a ceiling: the key is
     // omitted, which is how a tier says "inherit". It is NOT written as 0 — a zero
     // ceiling admits nothing and the server rejects it outright.
-    const settings = { ...parseTierConfig(GOLD), ingestMessagesPerSecond: '  ' };
+    const settings = { ...parseTierConfig(GOLD), ingestReadingsPerSecond: '  ' };
     const out = JSON.parse(buildTierConfigPatch(DIMS, settings, GOLD)!);
-    expect(out).not.toHaveProperty('ingestMessagesPerSecond');
+    expect(out).not.toHaveProperty('ingestReadingsPerSecond');
     expect(out.ingestBurst).toBe(4000);
   });
 
@@ -94,10 +94,10 @@ describe('buildTierConfigPatch', () => {
     // join) — a non-numeric key no rate/burst field renders. Rebuilding config from
     // only the rendered fields would silently delete a tier's model menu on the next
     // rename; preserving is what keeps this correct when that key arrives.
-    const withMenu = JSON.stringify({ ingestMessagesPerSecond: 2000, aiProviders: ['anthropic'] });
+    const withMenu = JSON.stringify({ ingestReadingsPerSecond: 2000, aiProviders: ['anthropic'] });
     const out = JSON.parse(buildTierConfigPatch(DIMS, parseTierConfig(withMenu), withMenu)!);
     expect(out.aiProviders).toEqual(['anthropic']);
-    expect(out.ingestMessagesPerSecond).toBe(2000);
+    expect(out.ingestReadingsPerSecond).toBe(2000);
   });
 
   it('ignores a non-numeric entry in a rendered field rather than writing garbage', () => {

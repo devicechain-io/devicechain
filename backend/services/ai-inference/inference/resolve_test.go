@@ -14,6 +14,7 @@ import (
 
 	"github.com/devicechain-io/dc-ai-inference/model"
 	aischema "github.com/devicechain-io/dc-ai-inference/schema"
+	"github.com/devicechain-io/dc-microservice/aiwire"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-microservice/secrets"
@@ -454,14 +455,18 @@ func TestValidatePrompt(t *testing.T) {
 	assert.NoError(t, r.ValidatePrompt("sys", "draft a rule"))
 }
 
-// WIRE CONTRACT. event-processing classifies a transient rate-limit by matching this
-// substring on the returned GraphQL error message (svcclient surfaces only the message
-// text, not error extensions), so it can tell an author "wait a moment" instead of the
-// generic "unavailable, go find an operator".
-//
-// If this text changes, update `rateLimitMarker` in
-// event-processing/processor/nl_inference_client.go. Drift degrades benignly — the
-// author just sees the vaguer reason — but it silently loses the better message.
-func TestErrRateLimitedCarriesTheWireMarker(t *testing.T) {
-	assert.Contains(t, ErrRateLimited.Error(), "inference rate limit exceeded")
+// WIRE CONTRACT. event-processing classifies the two retryable refusals on their GraphQL
+// extensions.code (aiwire), so it can tell an author "wait a moment" or "try again" instead
+// of the generic "unavailable, go find an operator". The codes are what is pinned; the
+// message text is free to change. graphql/wire_codes_test.go pins that they survive the
+// tenant coarsening and the GraphQL server.
+func TestRetryableRefusalsCarryTheirWireCodes(t *testing.T) {
+	for err, code := range map[error]string{
+		ErrRateLimited: aiwire.CodeRateLimited,
+		ErrTimedOut:    aiwire.CodeTimedOut,
+	} {
+		var coded interface{ Extensions() map[string]any }
+		require.True(t, errors.As(err, &coded), "%v serves no extensions", err)
+		assert.Equal(t, code, coded.Extensions()["code"])
+	}
 }

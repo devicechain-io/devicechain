@@ -1,13 +1,19 @@
 {
   "$schema": "https://json-schema.org/draft-07/schema#",
   "title": "DeviceChain Helm values",
-  "description": "Apply-time guard for DeviceChain deployment values (ADR-022). Validates the deployment-selection envelope; per-service config is validated fail-closed by each service at load (decision 1).",
+  "description": "Deployment values for one DeviceChain instance. This schema validates the deployment-selection envelope at install time; each service's own configuration is validated by the service when it starts, and an unknown or invalid key stops it rather than being ignored.",
   "type": "object",
   "additionalProperties": false,
   "properties": {
     "profile": {
       "type": "string",
-      "enum": ["", "default", "full", "telemetry", "ingest-only"],
+      "enum": [
+        "",
+        "default",
+        "full",
+        "telemetry",
+        "ingest-only"
+      ],
       "description": "A named profile, or empty to use enabledFunctionalAreas (or fall back to the default profile). 'default' is the standard system; 'full' ships every area."
     },
     "enabledFunctionalAreas": {
@@ -28,7 +34,8 @@
           "mcp",
           "ai-inference",
           "sparkplug-ingest",
-          "lwm2m-ingest"
+          "lwm2m-ingest",
+          "update-management"
         ]
       },
       "uniqueItems": true,
@@ -38,13 +45,22 @@
       "type": "array",
       "items": {
         "type": "object",
-        "required": ["name", "stringData"],
+        "required": [
+          "name",
+          "stringData"
+        ],
         "properties": {
-          "name": { "type": "string", "minLength": 1, "description": "Secret name, rendered in the instance namespace." },
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Secret name, rendered in the instance namespace."
+          },
           "stringData": {
             "type": "object",
             "minProperties": 1,
-            "additionalProperties": { "type": "string" },
+            "additionalProperties": {
+              "type": "string"
+            },
             "description": "Verbatim key→value entries (e.g. a base64 PSK string a service decodes at load)."
           }
         },
@@ -54,13 +70,25 @@
     },
     "instance": {
       "type": "object",
-      "required": ["id", "config"],
+      "required": [
+        "id",
+        "config"
+      ],
       "properties": {
-        "id": { "type": "string", "minLength": 1, "maxLength": 50, "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$", "description": "Instance id: becomes DC_INSTANCE_ID, names the instance's own database and login on the shared relational store, is the value of the devicechain.io/instance label (which is also a pod selector) and of the devicechain_instance alert label, names the Helm release (dc-<id>), the config objects (dci-<id>-config and dct-<id>-config), the blob claim (dci-<id>-blob), the ServiceAccount (dc-<id>) and the Grafana folder, board title, ConfigMap and uid, and is the first segment of every messaging subject, the device-plane MQTT topic, and the HTTP ingest route (ADR-048). The instance's NAMESPACE is not the id: it is `dci-` plus the id, so instance `foo` is deployed into namespace `dci-foo`. That prefix makes instance namespaces and the cluster's own namespaces (monitoring, dc-system, cert-manager, cnpg-system, ingress-nginx) disjoint sets, so an instance can never be built into a namespace a cluster component owns — without it an instance named `monitoring` writes its secret-store root key, its broker TLS private key and every database credential into the monitoring stack's namespace. Note `dci-` appears here in two unrelated roles: this namespace prefix, and a long-standing prefix on OBJECT names (dci-<id>-config, dci-<id>-blob), which are not namespaces and are unchanged. A DNS-1123 label, which sits inside the token safety alphabet so it cannot inject a subject/MQTT/route metacharacter, and is lowercase so PostgreSQL case-folding cannot make two ids one identifier; the service also fail-closes on a malformed value at startup. The pattern also guarantees dci-<id> is itself a valid DNS-1123 label. At most 50 characters — and the namespace is NOT what bounds that, since a label allows 63 and dci- plus 50 is 54. The binding constraint is the Helm release name dc-<id> against Helm's 53-character release-name cap." },
-        "createNamespace": { "type": "boolean", "description": "Whether the chart renders the instance's Namespace object, i.e. dci-<instance.id>. Disable when that namespace is created and managed elsewhere; either way every object this chart renders is written into it." },
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 50,
+          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+          "description": "Instance id, 1 to 50 characters, a lowercase DNS-1123 label. It names the Helm release (dc-<id>), the instance's database and login on the shared relational store, the config objects (dci-<id>-config, dct-<id>-config), the blob claim (dci-<id>-blob) and the ServiceAccount (dc-<id>), and it is the first segment of every messaging subject, the device-plane MQTT topic and the HTTP ingest route. The instance's namespace is not the id: it is dci-<id>, so instance foo is deployed into namespace dci-foo, which keeps instance namespaces disjoint from the cluster's own (monitoring, cert-manager and so on). The 50-character cap comes from Helm's 53-character release-name limit applied to dc-<id>."
+        },
+        "createNamespace": {
+          "type": "boolean",
+          "description": "Whether the chart renders the instance's Namespace object, i.e. dci-<instance.id>. Disable when that namespace is created and managed elsewhere; either way every object this chart renders is written into it."
+        },
         "existingSecret": {
           "type": "string",
-          "description": "C2: name of a pre-created Secret (e.g. External Secrets) holding the instance-config JSON under an `instance` key. When set, the chart mounts it and renders no Secret of its own, and existingSecretChecksum becomes required."
+          "description": "Name of a pre-created Secret (for example one managed by External Secrets) holding the instance-config JSON under an `instance` key. The Secret must be named dci-<id>-config; any other name fails the render, because dcctl reads the instance config back by that exact name and would take a differently named Secret for a fresh install. When set, the chart mounts it and renders no Secret of its own, and existingSecretChecksum becomes required."
         },
         "existingSecretChecksum": {
           "type": "string",
@@ -71,67 +99,142 @@
           "type": "string",
           "description": "Name of the Secret holding the superuser's seed password under key `password`, projected into user-management as DC_SUPERUSER_PASSWORD and read only to seed an empty identity table. Empty means dci-<id>-superuser, the Secret dcctl bootstrap generates per instance. There is no default password: an install made without dcctl must create this Secret before user-management first starts, or it refuses to seed the superuser."
         },
-        "config": { "type": "object" }
-      }
+        "config": {
+          "type": "object",
+          "description": "The instance configuration document (infrastructure, persistence, per-service settings), written into the dci-<id>-config Secret. The chart validates only the envelope; each service validates its own part at startup. Under existingSecret this block is not the mounted document, but templates still read its defaults; restate the ports in networkPolicy.externalConfigPorts and the broker host in metrics.natsBrokerHost."
+        }
+      },
+      "description": "Identity and configuration of this DeviceChain instance."
     },
     "image": {
       "type": "object",
-      "required": ["registry", "tag"],
+      "required": [
+        "registry",
+        "tag"
+      ],
       "properties": {
-        "registry": { "type": "string", "minLength": 1 },
-        "tag": { "type": "string" },
+        "registry": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Registry and organisation the service images are pulled from; each area image is <registry>/<area>:<tag> unless the area sets its own image."
+        },
+        "tag": {
+          "type": "string",
+          "description": "Image tag for every service. Empty uses the chart's appVersion, which a release sets to the release tag, so a packaged chart deploys the matching images with no override."
+        },
         "pullPolicy": {
           "type": "string",
-          "enum": ["Always", "IfNotPresent", "Never"]
+          "enum": [
+            "Always",
+            "IfNotPresent",
+            "Never"
+          ],
+          "description": "Kubernetes imagePullPolicy applied to every container."
         }
-      }
+      },
+      "description": "Container image selection for the platform's services."
     },
     "service": {
       "type": "object",
       "properties": {
-        "port": { "type": "integer", "minimum": 1, "maximum": 65535 }
-      }
+        "port": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535,
+          "description": "HTTP port every service listens on. It serves the GraphQL API, /healthz, /readyz and /metrics."
+        }
+      },
+      "description": "The Service exposed for each functional area."
     },
     "metrics": {
       "type": "object",
       "comment": "databaseNamespace is REQUIRED, and minLength on its own did not make it so. values.yaml supplies it and the schema already refuses an empty string, but the key could be REMOVED (--set metrics.databaseNamespace=null) — and three alert templates build their namespace selector from it whether it is there or not. The render then SUCCEEDS and ships PromQL reading namespace=~\"%!s(<nil>)|dci-<id>\", a Go formatting error verb inside a live alert expression, plus namespace=\"\" elsewhere: the CNPG unobserved-state alert then fires permanently while the volume-fullness alerts can never fire at all. Nothing rejected that, so requiring the key is what turns it into a refusal at install time instead of alerting that silently means nothing.",
-      "required": ["databaseNamespace"],
+      "required": [
+        "databaseNamespace"
+      ],
       "properties": {
-        "enabled": { "type": "boolean" },
-        "grafanaDashboards": { "type": "boolean" },
-        "alerts": { "type": "boolean" },
-        "natsPodMonitor": { "type": "boolean" },
-        "natsBrokerHost": { "type": "string" },
-        "databaseBackups": { "type": "boolean" },
-        "databaseBackupSnapshots": { "type": "boolean" },
-        "databaseNamespace": { "type": "string", "minLength": 1 },
-        "cnpgNamespace": { "type": "string" }
+        "enabled": {
+          "type": "boolean",
+          "description": "Render one ServiceMonitor per enabled functional area, scraping /metrics on the named graphql port. Requires the Prometheus Operator CRDs; set false on a cluster without them."
+        },
+        "grafanaDashboards": {
+          "type": "boolean",
+          "description": "Render one ConfigMap per bundled operations dashboard (event-processing and command-delivery today), labelled for the Grafana sidecar to import. Each board is this instance's own copy with its own uid and title. Set false on clusters that have the Prometheus Operator but no Grafana sidecar. Ignored when metrics.enabled is false."
+        },
+        "alerts": {
+          "type": "boolean",
+          "description": "Render the PrometheusRules for the platform's own services: event-processing, dead-letter and command-delivery rules, among others. Requires the Prometheus Operator CRDs. The database and replication rules are gated separately because they describe infrastructure this chart does not install. Ignored when metrics.enabled is false."
+        },
+        "natsPodMonitor": {
+          "type": "boolean",
+          "description": "Render a PodMonitor scraping the NATS broker's own exporter sidecar, for broker-side cluster health (routes, JetStream RAFT). It targets the namespace in instance.config.infrastructure.nats.hostname. Safe to leave on when the sidecar is absent (no targets are generated); set false for a broker this chart should not monitor. Ignored when metrics.enabled is false."
+        },
+        "natsBrokerHost": {
+          "type": "string",
+          "description": "The broker's <service>.<namespace> hostname, restated for the PodMonitor. Needed only with instance.existingSecret, where the chart cannot read instance.config and would otherwise derive the target namespace from its own default."
+        },
+        "databaseBackups": {
+          "type": "boolean",
+          "description": "Render the WAL-archiving and base-backup alerting rules. It must track whether the infrastructure actually archives, which is decided outside this chart: dcctl sets it from the database_backups_enabled OpenTofu output, and a hand-run install against an instance with backups off should set false. Left true with archiving off the rules load but can never fire. Ignored when metrics.enabled or metrics.alerts is false."
+        },
+        "databaseBackupSnapshots": {
+          "type": "boolean",
+          "description": "Declare that the databases take their daily base backup as a CSI volume snapshot, with a weekly base backup still going to the backup store. Renders the snapshot rules and moves the base-backup alert from 36 hours to 8.5 days. Like databaseBackups it must match what the infrastructure does; dcctl sets it from the database_backup_snapshot_class output. Ignored unless databaseBackups is on."
+        },
+        "databaseNamespace": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Namespace the CloudNativePG database Clusters run in, where their archiver and backup metrics are exported and where their volumes are reported. It is not the instance's own namespace (dci-<id>): a rule scoped to that would select no series and never fire. It also gates the database volume-fullness rules, which are not behind databaseBackups."
+        },
+        "cnpgNamespace": {
+          "type": "string",
+          "description": "Namespace the CloudNativePG operator and the Barman Cloud plugin run in (the database control plane, distinct from the databases). Gates both the control-plane alert rules and a diagnostic PodMonitor over the operator. Empty disables both; dcctl sets it from the cnpg_namespace OpenTofu output, which is null when the operator was not installed. Ignored when metrics.enabled is false; the rules also need metrics.alerts."
+        }
       },
-      "description": "Prometheus scrape integration. enabled renders a ServiceMonitor per area (scraping /metrics on the graphql port); requires the Prometheus Operator CRDs. grafanaDashboards renders one ops dashboard ConfigMap per dashboards/*.json file (event-processing and command-delivery today) for the Grafana sidecar; alerts renders PrometheusRules with the DETECT+REACT, dead-letter, command-delivery and JetStream-replication alerting rules, among others; natsPodMonitor renders a PodMonitor for the NATS broker's prometheus-nats-exporter sidecar (ADR-020 A0), targeting the namespace named in instance.config.infrastructure.nats.hostname. databaseBackups renders the WAL-archiving and base-backup alerting rules (ADR-028, ADR-020 A2.5); it must track whether the infrastructure ACTUALLY archives, so dcctl sets it from the database_backups_enabled OpenTofu output rather than from a preference. databaseBackupSnapshots says the daily base backups are CSI volume snapshots with a weekly one in the backup store; it renders the snapshot-backup rules and moves the base-backup alert to 8.5 days, and dcctl sets it from the database_backup_snapshot_class OpenTofu output. databaseNamespace is where the CloudNativePG Clusters run and is NOT the instance's own namespace (dci-<instance.id>) — those metrics are exported from the infrastructure namespace, so a rule scoped to the instance's own namespace would select no series and never fire. It also gates the database VOLUME fullness rules, which are NOT behind databaseBackups: the append-only version tables are never pruned, so a database volume fills whether or not backups run, and a full one stops PostgreSQL. cnpgNamespace is where the CloudNativePG OPERATOR and Barman Cloud plugin run (the database control plane, a different tier from the databases themselves); it gates BOTH the operator's PodMonitor and the control-plane alerting rules together, because rules reading controller_runtime_* series are useless without the scrape that produces them. Empty disables both — dcctl sets it from the cnpg_namespace OpenTofu output, which is null when the operator was not installed here."
+      "description": "Prometheus integration. Metrics are served on the same HTTP port as GraphQL, at /metrics. `enabled` renders a ServiceMonitor per area and requires the Prometheus Operator CRDs; the other keys here are ignored while it is false. See the individual keys for the dashboards, alert rules and PodMonitors it gates."
     },
-    "replicas": { "type": "integer", "minimum": 0 },
+    "replicas": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Default replica count for each functional area's Deployment; an area overrides it with functionalAreas.<area>.replicas."
+    },
     "rollingUpdate": {
       "type": "object",
-      "description": "§10.1: zero-downtime rolling-update strategy. maxUnavailable:0 + maxSurge:1 surges a Ready replacement in before removing an old pod.",
+      "description": "Rolling-update strategy for the area Deployments. The defaults (maxUnavailable 0, maxSurge 1) bring a Ready replacement up before an old pod is removed, so an upgrade keeps full capacity.",
       "properties": {
-        "maxUnavailable": { "type": ["integer", "string"] },
-        "maxSurge": { "type": ["integer", "string"] }
+        "maxUnavailable": {
+          "type": [
+            "integer",
+            "string"
+          ],
+          "description": "Maximum pods that may be unavailable during a rollout, as a count or a percentage. Default 0."
+        },
+        "maxSurge": {
+          "type": [
+            "integer",
+            "string"
+          ],
+          "description": "Maximum pods above the desired count during a rollout, as a count or a percentage. Default 1."
+        }
       }
     },
     "terminationGracePeriodSeconds": {
       "type": "integer",
       "minimum": 0,
-      "description": "§10.2: graceful-shutdown window. Rendered into the pod spec AND into the instance config, where the services validate it against shutdownDrainSeconds and refuse to start if the drain leaves no room for the teardown that follows it."
+      "description": "Graceful-shutdown window in seconds. Rendered into the pod spec and into the instance config, where the services validate it against shutdownDrainSeconds and refuse to start if the drain leaves no room for the teardown that follows it."
     },
     "nodeLossTolerationSeconds": {
-      "type": ["integer", "null"],
+      "type": [
+        "integer",
+        "null"
+      ],
       "minimum": 0,
       "description": "Seconds a pod tolerates its node being NotReady/unreachable before eviction. null leaves Kubernetes' 300s default. MUST be a bare integer, not a duration: `30s` would coerce to 0, which evicts every pod the instant a node is tainted."
     },
     "shutdownDrainSeconds": {
       "type": "integer",
       "minimum": 0,
-      "description": "§10.2: app-side readiness-drain window before the server tears down, written into the instance config as infrastructure.shutdown.drainSeconds. It may take at most HALF of terminationGracePeriodSeconds — the drain only waits for endpoint removal to propagate, and the teardown after it is what finishes in-flight work — so a larger value is refused at startup, not at shutdown. 0 skips the drain, which suits a single-instance run with no Service to be pulled out of."
+      "description": "Readiness-drain window in seconds before a service tears down, written into the instance config as infrastructure.shutdown.drainSeconds. It may take at most half of terminationGracePeriodSeconds, because the drain only waits for endpoint removal to propagate and the teardown after it finishes in-flight work; a larger value is refused at startup. 0 skips the drain, which suits a single-instance run with no Service to be pulled out of."
     },
     "goMemLimitPercent": {
       "type": "integer",
@@ -147,12 +250,21 @@
     "resources": {
       "type": "object",
       "minProperties": 1,
-      "description": "E7: default container resources; non-empty so pods are not BestEffort QoS.",
+      "description": "Default container resources for every area; an area's own functionalAreas.<area>.resources is merged over it key by key. Requests are mandatory and must not be empty, so pods are Burstable or Guaranteed rather than BestEffort QoS.",
       "properties": {
-        "requests": { "type": "object", "minProperties": 1 },
-        "limits": { "type": "object" }
+        "requests": {
+          "type": "object",
+          "minProperties": 1,
+          "description": "Default resource requests (cpu, memory); must not be empty."
+        },
+        "limits": {
+          "type": "object",
+          "description": "Default resource limits (cpu, memory)."
+        }
       },
-      "required": ["requests"]
+      "required": [
+        "requests"
+      ]
     },
     "useMeasuredRequests": {
       "type": "boolean",
@@ -161,83 +273,182 @@
     "serviceAccount": {
       "type": "object",
       "properties": {
-        "create": { "type": "boolean" },
-        "name": { "type": "string" },
-        "automountToken": { "type": "boolean" }
-      }
+        "create": {
+          "type": "boolean",
+          "description": "Render a dedicated ServiceAccount for the release. The data-plane services never call the Kubernetes API."
+        },
+        "name": {
+          "type": "string",
+          "description": "ServiceAccount name. Empty uses dc-<instance.id>."
+        },
+        "automountToken": {
+          "type": "boolean",
+          "description": "Mount the ServiceAccount API token into the pods. Default false, since the services do not use it."
+        }
+      },
+      "description": "The ServiceAccount the area Deployments run as, in place of the namespace's default one."
     },
     "networkPolicy": {
       "type": "object",
       "properties": {
-        "enabled": { "type": "boolean" },
+        "enabled": {
+          "type": "boolean",
+          "description": "Render the egress NetworkPolicy for outbound-connectors. Check that your CNI enforces policy before treating it as a control."
+        },
         "infrastructureNamespaceSelector": {
           "type": "object",
-          "additionalProperties": { "type": "string" }
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Labels selecting the namespace that holds NATS and PostgreSQL. The OpenTofu-created infrastructure namespace carries the default pair. If you brought your own, set the labels it actually has; an empty selector is refused at render time."
         },
         "dnsNamespaceSelector": {
           "type": "object",
-          "additionalProperties": { "type": "string" }
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Labels selecting the namespace that serves cluster DNS. The default matches kube-system on any cluster that labels namespaces with kubernetes.io/metadata.name (Kubernetes 1.21 and later)."
         },
-        "additionalAllowedCidrs": { "type": "array", "items": { "type": "string" } },
+        "additionalAllowedCidrs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Extra destinations to permit, as CIDRs. Two reasons to need it: a CNI that evaluates egress before service load-balancing, so Service ClusterIPs match no pod selector and must be allowed by their Service CIDR (kubeadm default 10.96.0.0/12), and a tenant's broker or webhook on a private address such as a peered VPC. Each entry opens that range for every tenant connector, so keep it as narrow as you can. It does not affect mail, which is notification-management's path."
+        },
         "externalConfigPorts": {
           "type": "object",
           "description": "Only for instance.existingSecret deployments: restates the NATS and relational-database ports the egress rule would otherwise read from instance.config, which the chart cannot see there. Both keys required when set.",
           "properties": {
-            "nats": { "type": "integer", "minimum": 1, "maximum": 65535 },
-            "rdb": { "type": "integer", "minimum": 1, "maximum": 65535 }
+            "nats": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 65535,
+              "description": "NATS port for the egress rule."
+            },
+            "rdb": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 65535,
+              "description": "Relational-database port for the egress rule."
+            }
           },
-          "required": ["nats", "rdb"],
+          "required": [
+            "nats",
+            "rdb"
+          ],
           "additionalProperties": false
         }
       },
-      "additionalProperties": false
+      "additionalProperties": false,
+      "description": "Optional egress NetworkPolicy for outbound-connectors, a network-level second layer over the egress guard every tenant connector already dials through. Off by default. It only has effect on a CNI that enforces NetworkPolicy, and traffic it denies is dropped rather than refused, so a missing peer shows up as timeouts. The blocked address space is fixed in the template; the old blocked-range keys are rejected, and additionalAllowedCidrs is the way to permit a destination."
     },
     "podDisruptionBudget": {
       "type": "object",
       "properties": {
-        "enabled": { "type": "boolean" },
-        "minAvailable": { "type": ["integer", "string"] },
-        "maxUnavailable": { "type": ["integer", "string"] }
-      }
+        "enabled": {
+          "type": "boolean",
+          "description": "Render the PodDisruptionBudgets."
+        },
+        "minAvailable": {
+          "type": [
+            "integer",
+            "string"
+          ],
+          "description": "Minimum pods that must stay available, as a count or percentage. Leave empty when using maxUnavailable."
+        },
+        "maxUnavailable": {
+          "type": [
+            "integer",
+            "string"
+          ],
+          "description": "Maximum pods that may be unavailable, as a count or percentage. Leave empty when using minAvailable."
+        }
+      },
+      "description": "PodDisruptionBudget per area, so a node drain cannot evict every replica at once. Emitted only for areas with more than one replica, since a budget on a single replica would block voluntary drains. Set exactly one of minAvailable and maxUnavailable."
     },
     "startupProbe": {
       "type": "object",
       "properties": {
-        "periodSeconds": { "type": "integer", "minimum": 1 },
-        "failureThreshold": { "type": "integer", "minimum": 1 }
-      }
+        "periodSeconds": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Seconds between startup probe attempts."
+        },
+        "failureThreshold": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Consecutive startup probe failures before the container is restarted."
+        }
+      },
+      "description": "Startup probe on /readyz. It gives a slow cold start (identity keys, database) up to periodSeconds times failureThreshold to come up before the liveness probe can act."
     },
     "livenessProbe": {
       "type": "object",
       "properties": {
-        "failureThreshold": { "type": "integer", "minimum": 1 }
-      }
+        "failureThreshold": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Consecutive liveness failures before the container is restarted; kept high so a transient blip does not kill a healthy pod."
+        }
+      },
+      "description": "Liveness probe on /healthz. Readiness gates Service endpoints on /readyz separately."
     },
     "podSecurityContext": {
       "type": "object",
-      "description": "C3: pod-level securityContext; hardened defaults run the workload as a non-zero uid with RuntimeDefault seccomp."
+      "description": "Pod-level securityContext. The hardened defaults run the workload as the non-root uid 65532 with the RuntimeDefault seccomp profile; relax them only if you build images that need to run as root."
     },
     "securityContext": {
       "type": "object",
-      "description": "C3: container-level securityContext; hardened defaults drop all capabilities and use a read-only rootfs."
+      "description": "Container-level securityContext. The hardened defaults drop all Linux capabilities, forbid privilege escalation and use a read-only root filesystem; the service images are static binaries that write nothing to the root filesystem."
     },
     "ingress": {
       "type": "object",
       "description": "Optional Ingress + cert-manager TLS exposing the GraphQL/HTTP surface (requires the OpenTofu ingress-nginx + cert-manager).",
       "properties": {
-        "enabled": { "type": "boolean" },
-        "className": { "type": "string", "minLength": 1 },
-        "host": { "type": "string", "minLength": 1 },
-        "annotations": { "type": "object" },
+        "enabled": {
+          "type": "boolean",
+          "description": "Render the Ingress objects: the API, the well-known discovery route and the web console. Each enabled area is reachable at https://<host>/api/<area>/graphql and the console at https://<host>/."
+        },
+        "className": {
+          "type": "string",
+          "minLength": 1,
+          "description": "IngressClass the controller registered (the OpenTofu ingress_class)."
+        },
+        "host": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Host name the Ingress objects route. The chart renders up to three: the API (https://<host>/api/<area>/graphql), the well-known discovery route for OAuth and MCP, and the web console (https://<host>/)."
+        },
+        "annotations": {
+          "type": "object",
+          "description": "Extra annotations merged onto the Ingress objects (body size, timeouts and so on)."
+        },
         "tls": {
           "type": "object",
           "properties": {
-            "enabled": { "type": "boolean" },
-            "selfSigned": { "type": "boolean" },
-            "issuerName": { "type": "string" },
-            "clusterIssuer": { "type": "string" },
-            "secretName": { "type": "string" }
-          }
+            "enabled": {
+              "type": "boolean",
+              "description": "Terminate TLS at the Ingress."
+            },
+            "selfSigned": {
+              "type": "boolean",
+              "description": "Render a cert-manager self-signed Issuer in the instance namespace: valid TLS that browsers do not trust, for development. For real certificates set false and name a ClusterIssuer in clusterIssuer."
+            },
+            "issuerName": {
+              "type": "string",
+              "description": "Name of the self-signed Issuer the chart renders when selfSigned is true."
+            },
+            "clusterIssuer": {
+              "type": "string",
+              "description": "Name of an existing cert-manager ClusterIssuer (for example a Let's Encrypt ACME issuer) to request certificates from. Used when selfSigned is false."
+            },
+            "secretName": {
+              "type": "string",
+              "description": "Name of the Secret that holds the TLS certificate."
+            }
+          },
+          "description": "TLS for the Ingress, using cert-manager."
         }
       }
     },
@@ -245,40 +456,83 @@
       "type": "object",
       "description": "The web console workload: a static nginx SPA served at the ingress root. Disable for headless/ingest-only instances.",
       "properties": {
-        "enabled": { "type": "boolean" },
+        "enabled": {
+          "type": "boolean",
+          "description": "Deploy the web console. Disable for headless or ingest-only instances."
+        },
         "image": {
           "type": "object",
           "properties": {
-            "repository": { "type": "string" },
-            "tag": { "type": "string" }
-          }
+            "repository": {
+              "type": "string",
+              "description": "Full image repository for the console, overriding the registry-derived default."
+            },
+            "tag": {
+              "type": "string",
+              "description": "Console image tag, overriding image.tag."
+            }
+          },
+          "description": "Console image override. By default the image is <image.registry>/frontend:<image.tag>."
         },
-        "replicas": { "type": "integer", "minimum": 0 },
-        "resources": { "type": "object" }
+        "replicas": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Replica count for the console Deployment."
+        },
+        "resources": {
+          "type": "object",
+          "description": "Container resources for the console, a small static nginx image."
+        }
       }
     },
     "blobStorage": {
       "type": "object",
-      "description": "ADR-058: Kubernetes volume wiring for the filesystem object store. Creates/mounts the PVC that backs instance.config.infrastructure.blob.directory (branding logos today; firmware/OTA + exports later). Ignored for the s3 backend; the render fails on a persistence/backend mismatch.",
+      "description": "Kubernetes volume wiring for the filesystem object store (instance.config.infrastructure.blob.backend set to filesystem). Creates and mounts the PVC that backs instance.config.infrastructure.blob.directory, which today holds branding logos. Enabling persistence with the s3 backend fails the render.",
       "properties": {
         "persistence": {
           "type": "object",
           "properties": {
-            "enabled": { "type": "boolean" },
-            "existingClaim": { "type": "string" },
+            "enabled": {
+              "type": "boolean",
+              "description": "Create a PersistentVolumeClaim for the filesystem store and mount it into the consuming areas. Requires the filesystem backend and a resolved mount path."
+            },
+            "existingClaim": {
+              "type": "string",
+              "description": "Name of a pre-created PVC to use instead of having the chart create one (for example an RWX claim provisioned elsewhere). When set, size, accessModes and storageClass are ignored and no PVC is rendered, but the volume is still mounted into mountAreas."
+            },
             "mountPath": {
               "type": "string",
               "description": "Volume mount path; defaults to blob.directory (must match it). Set only when the instance config is supplied via instance.existingSecret and the chart cannot read blob.directory."
             },
             "accessModes": {
               "type": "array",
-              "items": { "type": "string", "enum": ["ReadWriteOnce", "ReadWriteMany", "ReadOnlyMany", "ReadWriteOncePod"] },
-              "minItems": 1
+              "items": {
+                "type": "string",
+                "enum": [
+                  "ReadWriteOnce",
+                  "ReadWriteMany",
+                  "ReadOnlyMany",
+                  "ReadWriteOncePod"
+                ]
+              },
+              "minItems": 1,
+              "description": "PVC access modes. ReadWriteOnce suits a single replica; for more than one replica of a consuming area use ReadWriteMany with an RWX-capable storage class, or the s3 backend."
             },
-            "size": { "type": "string", "minLength": 1 },
-            "storageClass": { "type": "string" },
-            "annotations": { "type": "object" }
-          }
+            "size": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Requested PVC size."
+            },
+            "storageClass": {
+              "type": "string",
+              "description": "StorageClass for the PVC. Empty uses the cluster default; set an RWX-capable class for multi-replica use; \"-\" selects no storage class, for a statically provisioned volume."
+            },
+            "annotations": {
+              "type": "object",
+              "description": "Extra annotations merged onto the PVC (for example a backup policy)."
+            }
+          },
+          "description": "The PersistentVolumeClaim that backs the filesystem object store."
         },
         "mountAreas": {
           "type": "array",
@@ -310,36 +564,82 @@
       "additionalProperties": {
         "type": "object",
         "properties": {
-          "image": { "type": "string" },
-          "replicas": { "type": "integer", "minimum": 0 },
+          "image": {
+            "type": "string",
+            "description": "Full image reference for this area, overriding <image.registry>/<area>:<image.tag>."
+          },
+          "replicas": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Replica count for this area, overriding the top-level replicas."
+          },
           "strategy": {
             "type": "string",
-            "enum": ["RollingUpdate", "Recreate"],
-            "description": "Deployment rollout strategy for this area. Default RollingUpdate. Recreate stops all old pods before starting new ones (no old+new overlap), which is why it is paired with replicas:1 — the template refuses Recreate above one replica for any area, since every pod would stop before any started. event-processing (ADR-051 DETECT) ships that way, and is the one stateful single-owner area that MAY exceed replicas:1: its extra replicas are warm standbys arbitrated by the ADR-070 partition lease, and running them means setting RollingUpdate as well. sparkplug-ingest, lwm2m-ingest and mcp are pinned at one serving pod by an area-keyed guard, whatever the strategy — the first two because they own a broker Host session and a UDP socket, mcp because it keeps each client's protocol session in memory on the pod that made it."
+            "enum": [
+              "RollingUpdate",
+              "Recreate"
+            ],
+            "description": "Deployment rollout strategy for this area: RollingUpdate (the default) or Recreate, which stops every old pod before starting a new one. The template refuses Recreate above one replica. event-processing ships with Recreate and is the one stateful single-owner area that may run more than one replica: the extras are warm standbys arbitrated by a partition lease, and running them means setting RollingUpdate as well. sparkplug-ingest, lwm2m-ingest and mcp are held at one serving pod regardless of strategy, because they own a broker session, a UDP socket or in-memory client sessions respectively."
           },
           "resources": {
             "type": "object",
             "description": "Container resources for this area, merged key by key over the top-level resources: set only the keys that differ (e.g. limits.cpu). A request above the merged limit is refused at render.",
             "properties": {
-              "requests": { "type": "object" },
-              "limits": { "type": "object" },
-              "claims": { "type": "array" }
+              "requests": {
+                "type": "object",
+                "description": "Resource requests for this area, merged over the top-level requests."
+              },
+              "limits": {
+                "type": "object",
+                "description": "Resource limits for this area, merged over the top-level limits."
+              },
+              "claims": {
+                "type": "array",
+                "description": "Core-v1 resource claims (dynamic resource allocation) for this area's container."
+              }
             },
             "additionalProperties": false
           },
-          "goMemLimit": { "type": "string", "description": "GOMEMLIMIT for this area only, overriding the derivation. Use for a service whose working set genuinely differs (e.g. event-processing holds more live state than the CRUD areas)." },
-          "config": { "type": "object" },
+          "goMemLimit": {
+            "type": "string",
+            "description": "GOMEMLIMIT for this area only, overriding the derivation. Use for a service whose working set genuinely differs (e.g. event-processing holds more live state than the CRUD areas)."
+          },
+          "config": {
+            "type": "object",
+            "description": "This area's own configuration, written to the dct-<id>-config object and mounted at /etc/dct-config/<area>. Empty means the service applies its typed defaults; an unknown key stops the service at startup."
+          },
           "extraPorts": {
             "type": "array",
             "description": "Extra Service/container ports for this area beyond the 8080 graphql port (e.g. event-sources HTTP device ingest on 8081). Port names must be <=15 chars per Kubernetes.",
             "items": {
               "type": "object",
-              "required": ["name", "port"],
+              "required": [
+                "name",
+                "port"
+              ],
               "additionalProperties": false,
               "properties": {
-                "name": { "type": "string", "minLength": 1, "maxLength": 15 },
-                "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
-                "protocol": { "type": "string", "enum": ["TCP", "UDP", "SCTP"], "description": "Port protocol; defaults to TCP. lwm2m-ingest sets UDP for its CoAPS port." }
+                "name": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 15,
+                  "description": "Port name; at most 15 characters, per Kubernetes."
+                },
+                "port": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 65535,
+                  "description": "Port number, 1 to 65535."
+                },
+                "protocol": {
+                  "type": "string",
+                  "enum": [
+                    "TCP",
+                    "UDP",
+                    "SCTP"
+                  ],
+                  "description": "Port protocol; defaults to TCP. lwm2m-ingest sets UDP for its CoAPS port."
+                }
               }
             }
           },
@@ -348,11 +648,23 @@
             "description": "Extra container environment variables for this area, passed through verbatim as core-v1 EnvVar entries. Used to project a Secret into an env var — e.g. sparkplug-ingest reads each per-tenant broker password from the env var its source's broker.passwordEnv names, so an operator sets an entry here with valueFrom.secretKeyRef.",
             "items": {
               "type": "object",
-              "required": ["name"],
+              "required": [
+                "name"
+              ],
               "properties": {
-                "name": { "type": "string", "minLength": 1 },
-                "value": { "type": "string" },
-                "valueFrom": { "type": "object" }
+                "name": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "Environment variable name."
+                },
+                "value": {
+                  "type": "string",
+                  "description": "Literal value. Use valueFrom instead to project a Secret."
+                },
+                "valueFrom": {
+                  "type": "object",
+                  "description": "Core-v1 EnvVarSource, for example a secretKeyRef."
+                }
               }
             }
           },
@@ -360,7 +672,13 @@
             "type": "object",
             "description": "CPU request: the area's measured use at 6,000 events/s (event-processing: at 6,800), applied over the top-level resources.requests while useMeasuredRequests is true. The area's own resources.requests wins over it.",
             "properties": {
-              "cpu": { "type": ["string", "number"] }
+              "cpu": {
+                "type": [
+                  "string",
+                  "number"
+                ],
+                "description": "CPU request, as a Kubernetes quantity or a number of cores."
+              }
             },
             "additionalProperties": false
           },
@@ -376,14 +694,22 @@
             "type": "object",
             "description": "Opt-in profiling listener for this area: Go runtime profiles (CPU, heap, goroutines, execution trace) on a port of its own, never on the Service or the ingress. Off by default. Turning it on restarts this area's pods only.",
             "properties": {
-              "enabled": { "type": "boolean", "description": "Serve profiles from this area's pods. Default false." },
-              "address": { "type": "string", "minLength": 1, "description": "IP address and port the listener binds. Default 127.0.0.1:6060, the pod's loopback address, reachable only with kubectl port-forward. Any other address is reachable by anything that can reach the pod, without authentication." }
+              "enabled": {
+                "type": "boolean",
+                "description": "Serve profiles from this area's pods. Default false."
+              },
+              "address": {
+                "type": "string",
+                "minLength": 1,
+                "description": "IP address and port the listener binds. Default 127.0.0.1:6060, the pod's loopback address, reachable only with kubectl port-forward. Any other address is reachable by anything that can reach the pod, without authentication."
+              }
             },
             "additionalProperties": false
           }
         },
         "additionalProperties": false
-      }
+      },
+      "description": "Per-functional-area settings, keyed by area name (user-management, device-management, event-sources and so on). Only enabled areas are rendered. Every key an area may set is listed under functionalAreas.<area>."
     }
   }
 }

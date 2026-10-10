@@ -102,11 +102,13 @@ hasta que el usuario vuelve a iniciar sesión.
 Creas los paneles en la **consola**:
 
 - **Editor de lienzo** — arrastrar y redimensionar, con selectores reales de dispositivo / ancla.
-- **Versionado** — la definición en vivo es un **borrador** mutable. **Publicar** la captura como una versión inmutable, y puedes **revertir** a cualquier versión anterior, lo que la vuelve a convertir en borrador en el mismo lugar. El historial es una lista de instantáneas publicadas, no un diff.
+- **Versionado** — la definición de trabajo es un **borrador** mutable. **Publicar** la captura como una versión inmutable y hace que esa versión esté **activa**: es la que ven los espectadores. Puedes volver a activar una versión anterior sin tocar el borrador (**activar**), o **revertir** a una versión anterior, lo que sobrescribe el borrador con ella. El historial es una lista de instantáneas publicadas, no un diff.
 - **Vista previa sintética** — sustituye los datos en vivo por un generador del lado del cliente (seno / rampa / paseo aleatorio) para validar el diseño, las escalas y los umbrales antes de que ningún dispositivo haya reportado.
 - **Exportación** — descarga o copia una definición para compartirla o embeberla en otro lugar.
 
-La definición de una versión publicada no se puede leer por sí sola. La lista de versiones solo lleva su número, su etiqueta y descripción opcionales, y quién la publicó y cuándo. Revertir, que es una escritura, es la única forma de recuperar su contenido.
+El borrador es para los autores. Leer la definición de un borrador, o la de una versión publicada, requiere `dashboard:write`. Un miembro que solo tiene `dashboard:read` ve el nombre y la descripción del panel y qué versión está activa, y recibe la definición de la versión activa mediante la consulta `publishedDashboard`. Un panel que nunca se ha publicado no sirve nada a ese miembro, y la respuesta lo dice en lugar de devolver un panel en blanco.
+
+Publicar o activar una versión no cambia el `updatedAt` del borrador, de modo que guardar el borrador con la referencia que ya tienes sigue funcionando. La lista de versiones solo lleva el número de cada versión, su etiqueta y descripción opcionales, y quién la publicó y cuándo.
 
 ## Incrustación: definiciones, slots y manifiestos de vinculación {#embedding-definitions-slots-and-binding-manifests}
 
@@ -124,8 +126,8 @@ Una aplicación React embebe un panel en vivo construyendo un único hub con un 
 
 ### El visor de referencia `/dash`
 
-La aplicación independiente **`/dash`** es el embebedor externo de referencia. Tiene su propio inicio de sesión, acepta una definición exportada más un manifiesto de vinculación, y la renderiza.
+La aplicación independiente **`/dash`** es el embebedor externo de referencia. Tiene su propio inicio de sesión. Indícale el token de un panel y obtiene la versión de ese panel que está activa en ese momento; o pega una definición exportada, que no necesita acceso al servicio y es la vía de un embebedor externo o de una vista previa sin conexión. En ambos casos puedes añadir un manifiesto de vinculación, y renderiza el resultado.
 
-En cuanto a la creación, es solo de visualización: no hay editor, no hay guardado y nunca obtiene un panel del servicio. Aun así, las acciones de widget siguen disponibles. Un visor con `alarm:write` o `command:write` puede reconocer y limpiar alarmas y despachar comandos a dispositivos reales desde el panel que renderiza, y el servidor hace valer esos derechos en cualquier caso.
+En cuanto a la creación, es solo de visualización: no hay editor ni guardado, y solo pide la versión activa, nunca el borrador. Aun así, las acciones de widget siguen disponibles. Un visor con `alarm:write` o `command:write` puede reconocer y limpiar alarmas y despachar comandos a dispositivos reales desde el panel que renderiza, y el servidor hace valer esos derechos en cualquier caso.
 
 Consulta también la vista general de [Arquitectura](./architecture.md) y la [referencia de la API GraphQL](../reference/graphql-api.md).

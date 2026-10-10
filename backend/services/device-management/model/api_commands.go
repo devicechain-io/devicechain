@@ -67,6 +67,10 @@ func (api *Api) CreateCommandDefinition(ctx context.Context,
 		return nil, err
 	}
 
+	if err := api.checkProfileChildCeiling(ctx, &CommandDefinition{}, childKindCommand, matches[0].ID); err != nil {
+		return nil, err
+	}
+
 	metadataJSON, err := rdb.JSONInputOf("metadata", request.Metadata)
 	if err != nil {
 		return nil, err
@@ -117,6 +121,12 @@ func (api *Api) UpdateCommandDefinition(ctx context.Context, token string,
 	reparent, err := api.resolveProfileRef(ctx, request.DeviceProfileToken, updated.DeviceProfile)
 	if err != nil {
 		return nil, err
+	}
+	// Moving a definition onto another profile adds one to it.
+	if reparent != nil {
+		if err := api.checkProfileChildCeiling(ctx, &CommandDefinition{}, childKindCommand, reparent.ID); err != nil {
+			return nil, err
+		}
 	}
 	commandKey, err := request.CommandKey.ApplyToRequired("commandKey", updated.CommandKey)
 	if err != nil {
@@ -187,11 +197,8 @@ func (api *Api) CommandDefinitionsById(ctx context.Context, ids []uint) ([]*Comm
 // Get command definitions by token.
 func (api *Api) CommandDefinitionsByToken(ctx context.Context, tokens []string) ([]*CommandDefinition, error) {
 	found := make([]*CommandDefinition, 0)
-	result := api.RDB.DB(ctx)
-	result = result.Preload("DeviceProfile")
-	result = result.Find(&found, "token in ?", tokens)
-	if result.Error != nil {
-		return nil, result.Error
+	if err := rdb.FindByKeys(api.RDB.DB(ctx).Preload("DeviceProfile"), &found, "token", tokens); err != nil {
+		return nil, err
 	}
 	return found, nil
 }
@@ -231,6 +238,7 @@ func (api *Api) CommandDefinitionsByDeviceProfile(ctx context.Context, profileId
 	if result.Error != nil {
 		return nil, result.Error
 	}
+	api.ceilings.observeChildren(childKindCommand, len(found))
 	return found, nil
 }
 

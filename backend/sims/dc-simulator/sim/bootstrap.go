@@ -1097,7 +1097,7 @@ const mutationCreateDashboard = `mutation($request:DashboardCreateRequest!){` +
 const mutationUpdateDashboard = `mutation($token:String!,$request:DashboardUpdateRequest!){` +
 	`updateDashboard(token:$token,request:$request){token}}`
 
-const mutationPublishDashboard = `mutation($token:String!){publishDashboard(token:$token){version}}`
+const mutationPublishDashboard = `mutation($token:String!){publishDashboard(token:$token){version{version} dashboard{publishedVersion}}}`
 
 // ensureDashboard makes a dashboard match the spec (create-or-UPDATE the draft),
 // then publishes it if it has no published version yet. Updating rather than
@@ -1173,14 +1173,25 @@ func ensureDashboard(ctx context.Context, rt *Runtime, ds DashboardSpec) error {
 
 	var published struct {
 		PublishDashboard struct {
-			Version int `json:"version"`
+			Version struct {
+				Version int `json:"version"`
+			} `json:"version"`
+			Dashboard struct {
+				PublishedVersion *int `json:"publishedVersion"`
+			} `json:"dashboard"`
 		} `json:"publishDashboard"`
 	}
 	if err := rt.Session.Query(ctx, rt.Endpoints.DashboardMgmtGraphQL, mutationPublishDashboard,
 		map[string]any{"token": ds.Token}, &published); err != nil {
 		return fmt.Errorf("publishDashboard: %w", err)
 	}
-	log.Info().Str("token", ds.Token).Int("version", published.PublishDashboard.Version).
+	// Publishing activates: the pointer viewers are served must now name the version
+	// just minted, or the dashboard is "published" yet serves nothing.
+	if pv := published.PublishDashboard.Dashboard.PublishedVersion; pv == nil || *pv != published.PublishDashboard.Version.Version {
+		return fmt.Errorf("publishDashboard %q minted version %d but the published pointer is %v",
+			ds.Token, published.PublishDashboard.Version.Version, pv)
+	}
+	log.Info().Str("token", ds.Token).Int("version", published.PublishDashboard.Version.Version).
 		Msg("published dashboard")
 	return nil
 }

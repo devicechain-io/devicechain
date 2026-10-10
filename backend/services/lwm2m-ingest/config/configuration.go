@@ -54,7 +54,7 @@ const (
 	// too-short key is refused at startup rather than silently weakening every session.
 	// 16 bytes (128-bit) is the LwM2M-common baseline for the AES-128 cipher suite.
 	MinPskBytes = 16
-	// DefaultIngestMessagesPerSecond and DefaultIngestBurst are the platform per-tenant
+	// DefaultIngestReadingsPerSecond and DefaultIngestBurst are the platform per-tenant
 	// ingest ceiling (ADR-023, ADR-075 L2c) applied when none is configured — a generous
 	// safety ceiling, high enough not to shed a normally busy fleet, low enough that one
 	// runaway device cannot saturate the pipeline. They MUST be positive: a zero ceiling
@@ -64,7 +64,7 @@ const (
 	// Notify messages before it; why 1000 is in the chart's values.yaml, event-sources block.
 	// A genuinely high-volume tenant is raised by a per-tenant override, never by making the
 	// default unlimited.
-	DefaultIngestMessagesPerSecond = 1000
+	DefaultIngestReadingsPerSecond = 1000
 	DefaultIngestBurst             = 2000
 	// DefaultMaxLifetimeSeconds is the ceiling a registration lifetime is clamped DOWN to
 	// at Register, and — identically — the lifetime the failover-reconstruction shadow timer
@@ -136,10 +136,10 @@ type DownlinkConfiguration struct {
 // misconfiguration cannot silently remove the protection — and never to zero, which would be a
 // bucket that admits nothing.
 type IngestRateLimit struct {
-	// MessagesPerSecond is the sustained per-tenant message rate (the pre-decode STAGE 1
-	// ceiling). The per-tenant reading budget (STAGE 2) is the same number, counted in
-	// readings, as on every other transport.
-	MessagesPerSecond float64 `json:"messagesPerSecond"`
+	// ReadingsPerSecond is the sustained per-tenant reading budget (STAGE 2, counted in
+	// decoded readings, as on every other transport). The pre-decode STAGE 1 message
+	// ceiling is the same number, counted in Notify messages.
+	ReadingsPerSecond float64 `json:"readingsPerSecond"`
 	// Burst is the largest instantaneous batch a tenant may send before the sustained rate
 	// applies — it absorbs a bursty fleet without raising the sustained ceiling.
 	Burst int `json:"burst"`
@@ -264,8 +264,8 @@ func (c *Lwm2mConfiguration) ApplyDefaults() {
 	// Fail safe: a non-positive ceiling (unset, or an out-of-band bad value) floors to the
 	// positive platform default. A zero here would hand the limiter a bucket that admits
 	// nothing, silently blacking out every device's telemetry — worse than no gate at all.
-	if c.IngestRateLimit.MessagesPerSecond <= 0 {
-		c.IngestRateLimit.MessagesPerSecond = DefaultIngestMessagesPerSecond
+	if c.IngestRateLimit.ReadingsPerSecond <= 0 {
+		c.IngestRateLimit.ReadingsPerSecond = DefaultIngestReadingsPerSecond
 	}
 	if c.IngestRateLimit.Burst <= 0 {
 		c.IngestRateLimit.Burst = DefaultIngestBurst
@@ -411,4 +411,12 @@ func (c *Lwm2mConfiguration) ResolveCredentials() (map[string][]byte, error) {
 		creds[id.Identity] = key
 	}
 	return creds, nil
+}
+
+// RenamedConfigKeys refuses the old spelling of a renamed key with the new one named
+// (core.ConfigRenamer): the ingest ceiling meters READINGS, and the key now says so. It is refused rather than
+// retired because the setting still exists — stripping it would start the service on
+// the platform default instead of the ceiling the operator chose.
+func (c *Lwm2mConfiguration) RenamedConfigKeys() map[string]string {
+	return map[string]string{"ingestRateLimit.messagesPerSecond": "ingestRateLimit.readingsPerSecond"}
 }

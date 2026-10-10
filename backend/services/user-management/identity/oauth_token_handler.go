@@ -69,8 +69,8 @@ func TokenHandler(
 	authenticateClient func(ctx context.Context, clientID, secret string, presented bool) error,
 	redeemCode func(ctx context.Context, code, clientID, redirectURI, codeVerifier string) (*OAuthTokens, error),
 	refreshGrant func(ctx context.Context, refreshToken, scope, clientID string) (*OAuthTokens, error),
-) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
+) http.Handler {
+	return BoundRequests(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			w.Header().Set("Allow", http.MethodPost)
 			writeTokenError(w, errInvalidRequest("the token endpoint requires POST"))
@@ -133,7 +133,7 @@ func TokenHandler(
 			return
 		}
 		writeTokenSuccess(w, tokens)
-	}
+	}), maxTokenBodyBytes)
 }
 
 // writeGrantError renders an error from client-auth or a grant: a typed *oauthError

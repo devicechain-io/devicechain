@@ -28,9 +28,8 @@ func (api *Api) AlarmsById(ctx context.Context, ids []uint) ([]*Alarm, error) {
 // Get alarms by token.
 func (api *Api) AlarmsByToken(ctx context.Context, tokens []string) ([]*Alarm, error) {
 	found := make([]*Alarm, 0)
-	result := api.RDB.DB(ctx).Find(&found, "token in ?", tokens)
-	if result.Error != nil {
-		return nil, result.Error
+	if err := rdb.FindByKeys(api.RDB.DB(ctx), &found, "token", tokens); err != nil {
+		return nil, err
 	}
 	return found, nil
 }
@@ -237,13 +236,18 @@ func (api *Api) AcknowledgeAlarms(ctx context.Context, tokens []string, by *stri
 		return result, nil // the empty case, answered before a statement exists
 	}
 
-	matches, err := api.AlarmsByToken(ctx, ordered)
-	if err != nil {
-		return nil, err
-	}
-	byToken := make(map[string]*Alarm, len(matches))
-	for _, alarm := range matches {
-		byToken[alarm.Token] = alarm
+	// The request bound (MaxBulkAcknowledgeAlarms) is above the per-lookup key bound
+	// (rdb.MaxLookupKeys), so the lookup is chunked to stay under the latter.
+	byToken := make(map[string]*Alarm, len(ordered))
+	for start := 0; start < len(ordered); start += rdb.MaxLookupKeys {
+		end := min(start+rdb.MaxLookupKeys, len(ordered))
+		matches, err := api.AlarmsByToken(ctx, ordered[start:end])
+		if err != nil {
+			return nil, err
+		}
+		for _, alarm := range matches {
+			byToken[alarm.Token] = alarm
+		}
 	}
 
 	for _, token := range ordered {

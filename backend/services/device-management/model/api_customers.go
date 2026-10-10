@@ -94,9 +94,8 @@ func (api *Api) CustomerTypesById(ctx context.Context, ids []uint) ([]*CustomerT
 // Get customer types by token.
 func (api *Api) CustomerTypesByToken(ctx context.Context, tokens []string) ([]*CustomerType, error) {
 	found := make([]*CustomerType, 0)
-	result := api.RDB.DB(ctx).Find(&found, "token in ?", tokens)
-	if result.Error != nil {
-		return nil, result.Error
+	if err := rdb.FindByKeys(api.RDB.DB(ctx), &found, "token", tokens); err != nil {
+		return nil, err
 	}
 	return found, nil
 }
@@ -217,11 +216,8 @@ func (api *Api) CustomersById(ctx context.Context, ids []uint) ([]*Customer, err
 // Get customers by token.
 func (api *Api) CustomersByToken(ctx context.Context, tokens []string) ([]*Customer, error) {
 	found := make([]*Customer, 0)
-	result := api.RDB.DB(ctx)
-	result = result.Preload("CustomerType")
-	result = result.Find(&found, "token in ?", tokens)
-	if result.Error != nil {
-		return nil, result.Error
+	if err := rdb.FindByKeys(api.RDB.DB(ctx).Preload("CustomerType"), &found, "token", tokens); err != nil {
+		return nil, err
 	}
 	return found, nil
 }

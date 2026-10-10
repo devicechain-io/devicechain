@@ -260,3 +260,33 @@ func TestSuffixesCoversAll(t *testing.T) {
 		t.Errorf("Suffixes() returned %d entries for %d declared streams", got, want)
 	}
 }
+
+// The two OTA/configuration channels are per-device (the token in the subject is what the
+// signed grant confines a device to), Cold (volume follows state changes), and DORMANT:
+// declared so the grant, purge and budget know them, but ensured by no service, so no
+// stream exists to grow. Whoever ships the first reader or writer must drop Dormant for
+// that stream, which this test forces by naming the set.
+func TestDormantStreamsArePinned(t *testing.T) {
+	var got []string
+	for _, s := range All {
+		if s.Dormant {
+			got = append(got, s.Suffix)
+		}
+	}
+	want := []string{DeviceDesired, DeviceReports}
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("dormant streams = %v, want %v: a stream that gained a reader or writer must "+
+			"stop being dormant, and a new dormant one must be added here deliberately", got, want)
+	}
+	for _, suffix := range want {
+		if !IsPerDevice(suffix) {
+			t.Errorf("%q must be per-device so the grant can confine a device to its own", suffix)
+		}
+		if TierFor(suffix) != Cold {
+			t.Errorf("%q must be Cold: it is not a per-sample stream", suffix)
+		}
+		if RetentionFor(suffix) != RetentionLimits {
+			t.Errorf("%q must use Limits retention (age and byte bounded)", suffix)
+		}
+	}
+}

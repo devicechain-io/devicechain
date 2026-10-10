@@ -142,6 +142,7 @@ type responseCall struct {
 	responder    string
 	nonce        string
 	success      bool
+	payload      *string
 }
 
 type parkCall struct {
@@ -383,11 +384,11 @@ func (f *fakeApi) CreateCommand(context.Context, *model.CommandCreateRequest) (*
 // forwarded what the device echoed or forwarded nothing at all — which is the difference
 // between a command that settles and one that never does.
 func (f *fakeApi) MarkResponse(_ context.Context, commandToken, responder, nonce string,
-	success bool, _ *string, _ *string) (*model.Command, error) {
+	success bool, payload *string, _ *string) (*model.Command, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.responseCalls = append(f.responseCalls, responseCall{
-		commandToken: commandToken, responder: responder, nonce: nonce, success: success,
+		commandToken: commandToken, responder: responder, nonce: nonce, success: success, payload: payload,
 	})
 	return nil, f.responseErr
 }

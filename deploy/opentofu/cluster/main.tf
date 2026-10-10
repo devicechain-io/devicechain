@@ -523,9 +523,11 @@ module "cnpg_rdb" {
   #
   #   default profile  7 services x 20 = 140
   #   full profile     9 services x 20 = 180   (adds ai-inference, outbound-connectors)
+  #                    (10 x 20 = 200 since update-management joined `full`)
   #
   # against `max_connections - superuser_reserved_connections` = 100 - 3 = 97.
-  # The default profile oversubscribes the primary 1.44x, full 1.86x. Confirmed by
+  # The default profile oversubscribes the primary 1.44x, full 2.06x (200/97; it was
+  # 1.86x before update-management joined `full`). Confirmed by
   # opening connections as the application role until refusal: number 94 failed with
   # `FATAL: remaining connection slots are reserved for roles with the SUPERUSER
   # attribute`.
@@ -554,22 +556,22 @@ module "cnpg_rdb" {
   # `rollingUpdate` ships maxUnavailable:0 / maxSurge:1 (values.yaml), so a new pod
   # must pass readiness BEFORE the old one is removed. Both hold full pools at once,
   # and a plain `helm upgrade` therefore roughly DOUBLES the pod count of every
-  # RollingUpdate area. Eight of the nine rdb consumers surge; only event-processing
+  # RollingUpdate area. Nine of the ten rdb consumers surge; only event-processing
   # is Recreate (it is a single writer). And values.yaml recommends `replicas >= 2`
   # in production, which is the configuration we tell people to run:
   #
   #                                    pods                      x20    vs 597
   #   default, replicas 1, upgrading   6x2 + 1 = 13              260    ok
-  #   full,    replicas 1, upgrading   8x2 + 1 = 17              340    ok
+  #   full,    replicas 1, upgrading   9x2 + 1 = 19              380    ok
   #   default, replicas 2, upgrading   6x3 + 1 = 19              380    ok
-  #   full,    replicas 2, upgrading   8x3 + 1 = 25              500    ok
+  #   full,    replicas 2, upgrading   9x3 + 1 = 28              560    ok
   #
   # At 300 the last three of those exceed the budget, so the fix would have been
   # undone by a routine upgrade of the profile we ship, with the silent
   # Ready-but-locked-out symptom described above. 600 covers the recommended
   # production configuration mid-rollout with margin for the operator, the exporter,
   # dcctl bootstrap/migrations and drdrill. The next break point is replicas 3 on the
-  # full profile (8x4 + 1 = 33 pods = 660); re-derive before going there.
+  # full profile (9x4 + 1 = 37 pods = 740); re-derive before going there.
   #
   # 🔴 THAT IS ONE INSTANCE'S DEMAND, AND THE STORE IS SHARED BY EVERY INSTANCE ON THE
   # CLUSTER. Each instance's login carries a CONNECTION LIMIT sized the same way (its
@@ -594,7 +596,7 @@ module "cnpg_rdb" {
   # 24MB for 500 extra slots. The important part is that max_connections is a
   # CEILING, not an allocation: a slot nothing connects to costs nothing beyond
   # that, and the actual number of backends is bounded by the deployed pools
-  # (500 worst case above), not by this value. Raising it does not raise
+  # (560 worst case above), not by this value. Raising it does not raise
   # steady-state memory; it removes a cliff.
   #
   # wal_compression is left at off here ON PURPOSE. The event store compresses its

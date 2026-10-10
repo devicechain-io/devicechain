@@ -5218,6 +5218,41 @@ pueden hacer bootstrap de instancias. Una instalación sana añade unos segundos
 
 No hace falta nada más.
 
+#### Los techos de tasa se renombran según lo que cuentan {#next-upgrade-rate-key-rename}
+
+El techo de ingesta cuenta lecturas desde hace tiempo, y el techo de salida cuenta llamadas de
+conector, pero ambos seguían nombrados por mensajes. Se renombran en todas partes, sin conservar la
+grafía anterior:
+
+| Antes | Ahora |
+| --- | --- |
+| `ingestRateLimit.messagesPerSecond` (configuración de `event-sources`, `lwm2m-ingest`, `sparkplug-ingest`) | `ingestRateLimit.readingsPerSecond` |
+| `outboundMessagesPerSecond` (configuración de `event-processing`, `outbound-connectors`) | `outboundCallsPerSecond` |
+| `ingestMessagesPerSecond` (campo GraphQL, clave de configuración de nivel) | `ingestReadingsPerSecond` |
+| `outboundMessagesPerSecond` (campo GraphQL, clave de configuración de nivel) | `outboundCallsPerSecond` |
+
+- **Antes de actualizar, renombre las claves de configuración de los servicios.** Si sus valores
+  fijan alguna de las claves anteriores en el `config` de un servicio, cámbiela por el nombre
+  nuevo. Un servicio que aún encuentra una clave anterior se niega a arrancar, y su error indica la
+  clave que debe usar. No recurre al valor predeterminado de la plataforma, porque eso sustituiría
+  en silencio el techo que usted fijó.
+- **Clientes de la API.** Se renombran los campos de `tenantGovernance`, del tipo de inquilino de
+  la API de administración y de sus entradas de creación y actualización. Una petición que
+  selecciona o envía un nombre anterior ahora falla, así que actualice cualquier script o
+  integración que gestione techos de inquilinos. Una configuración de nivel que usa una clave
+  anterior se rechaza, y su error enumera las claves aceptadas.
+- **Los datos guardados se convierten solos.** La actualización renombra las columnas de
+  sobrescritura del inquilino y cambia las claves de cada configuración de nivel guardada, incluidos
+  los niveles de serie y los eliminados, con los mismos valores.
+- **Durante el despliegue.** Hasta que todos los pods ejecutan la nueva versión, un pod anterior y
+  un `user-management` nuevo no se entienden. Un pod de ingesta o de salida anterior pide los campos
+  anteriores de `tenantGovernance`, la petición falla y ese pod mide a todos los inquilinos con el
+  valor predeterminado de la plataforma; `TenantsMeteredAtPlatformDefault` puede dispararse por
+  él. Un pod de `user-management` anterior sigue usando los nombres de columna anteriores una vez
+  que el pod nuevo los ha renombrado, así que las lecturas y escrituras de inquilinos que atiende
+  fallan hasta que se sustituye. Ambas cosas terminan al acabar el despliegue; evite modificar
+  inquilinos o niveles hasta entonces.
+
 ### La transición única a la ingesta duradera
 
 La versión que introduce la **ingesta MQTT duradera** cambia la forma en que `event-sources` recibe

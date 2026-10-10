@@ -151,9 +151,19 @@ input TenantBrandingInput {
 # service cannot fold for it — see the field. Field selection keeps the rest honest:
 # a service that does not ask does not learn.
 type TenantGovernance {
-    ingestMessagesPerSecond: Float
+    """
+    The tenant's effective sustained ingest ceiling, in readings (decoded samples) per
+    second: its own override, else its tier's. Null means neither declares one and the
+    platform default applies — never unlimited.
+    """
+    ingestReadingsPerSecond: Float
     ingestBurst: Int
-    outboundMessagesPerSecond: Float
+    """
+    The tenant's effective sustained outbound ceiling, in connector calls dispatched per
+    second: its own override, else its tier's. Null means neither declares one and the
+    platform default applies — never unlimited.
+    """
+    outboundCallsPerSecond: Float
     outboundBurst: Int
     # Whether this tenant has opted in to routing its data to an EXTERNAL frontier
     # model (ADR-056 §6). Non-null and fail-closed: false unless explicitly opted

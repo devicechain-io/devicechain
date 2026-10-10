@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/entity"
+	"github.com/devicechain-io/dc-microservice/limit"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"gorm.io/gorm"
 )
@@ -258,6 +259,9 @@ func numericAttributeValue(valueType string, value *string) (float64, bool) {
 // if it names no entity the search yields zero rows.
 func (api *Api) EntityAttributes(ctx context.Context,
 	criteria EntityAttributeSearchCriteria) (*EntityAttributeSearchResults, error) {
+	if criteria.AttrKeys != nil && len(*criteria.AttrKeys) > rdb.MaxLookupKeys {
+		return nil, limit.Exceeded("lookup keys", len(*criteria.AttrKeys), rdb.MaxLookupKeys)
+	}
 	// Resolve the owner token to an id up front (mirrors EntityRelationships).
 	entityId := criteria.EntityId
 	if criteria.Entity != nil && criteria.EntityType != nil {

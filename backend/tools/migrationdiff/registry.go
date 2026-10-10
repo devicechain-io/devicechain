@@ -15,6 +15,7 @@ import (
 	eventprocessing "github.com/devicechain-io/dc-event-processing/model"
 	notificationmanagement "github.com/devicechain-io/dc-notification-management/schema"
 	outboundconnectors "github.com/devicechain-io/dc-outbound-connectors/schema"
+	updatemanagement "github.com/devicechain-io/dc-update-management/schema"
 	usermanagement "github.com/devicechain-io/dc-user-management/schema"
 )
 
@@ -63,5 +64,6 @@ var areas = []area{
 	{name: "event-processing", migrations: eventprocessing.Migrations},
 	{name: "notification-management", migrations: notificationmanagement.Migrations},
 	{name: "outbound-connectors", migrations: outboundconnectors.Migrations},
+	{name: "update-management", migrations: updatemanagement.Migrations},
 	{name: "user-management", migrations: usermanagement.Migrations},
 }

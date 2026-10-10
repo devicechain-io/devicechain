@@ -90,8 +90,8 @@ func buildInferenceResolver() *inference.Resolver {
 	// Declared per minute; converted once, here, through the dimension that owns the
 	// unit, so it cannot disagree with a fetched override (which converts the same way).
 	def := governance.Limits{
-		MessagesPerSecond: governance.AIInference.PerSecond(Configuration.InferenceRequestsPerMinute),
-		Burst:             Configuration.InferenceBurst,
+		RatePerSecond: governance.AIInference.PerSecond(Configuration.InferenceRequestsPerMinute),
+		Burst:         Configuration.InferenceBurst,
 	}
 
 	infra := Microservice.InstanceConfiguration.Infrastructure
@@ -127,7 +127,7 @@ func buildRateLimiter(def governance.Limits, infra mscfg.InfrastructureConfigura
 	unresolved func(core.CeilingSource)) *core.TenantRateLimiter {
 	counted := core.WithUnresolvedAdmissions(unresolved)
 	if client == nil {
-		return core.NewTenantRateLimiter(core.StaticCeiling(def.MessagesPerSecond, def.Burst), counted)
+		return core.NewTenantRateLimiter(core.StaticCeiling(def.RatePerSecond, def.Burst), counted)
 	}
 	umURL := fmt.Sprintf("http://%s:%d/graphql", infra.UserManagement.Hostname, infra.UserManagement.Port)
 	resolver := governance.NewServiceLimitResolver(client, umURL, def, governance.AIInference)

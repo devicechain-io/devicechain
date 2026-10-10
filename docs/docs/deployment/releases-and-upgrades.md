@@ -4842,6 +4842,38 @@ bootstrapped meanwhile. A healthy install adds a few seconds.
 
 Nothing else needs doing.
 
+#### The rate ceilings are renamed after what they count {#next-upgrade-rate-key-rename}
+
+The ingest ceiling has counted readings for some time, and the outbound ceiling counts connector
+calls, but both were still named for messages. They are renamed everywhere, with no old spelling
+kept alongside:
+
+| Was | Now |
+| --- | --- |
+| `ingestRateLimit.messagesPerSecond` (`event-sources`, `lwm2m-ingest`, `sparkplug-ingest` config) | `ingestRateLimit.readingsPerSecond` |
+| `outboundMessagesPerSecond` (`event-processing`, `outbound-connectors` config) | `outboundCallsPerSecond` |
+| `ingestMessagesPerSecond` (GraphQL field, tier config key) | `ingestReadingsPerSecond` |
+| `outboundMessagesPerSecond` (GraphQL field, tier config key) | `outboundCallsPerSecond` |
+
+- **Before you upgrade, rename the service configuration keys.** If your values set any of the old
+  keys under a service's `config`, change them to the new names. A service that still finds an old
+  key refuses to start, and its error names the key to use instead. It does not fall back to the
+  platform default, because that would quietly replace the ceiling you set.
+- **API clients.** The fields on `tenantGovernance`, on the admin API's tenant type and on its
+  create and update inputs are renamed. A request that selects or sends an old name now fails, so
+  update any script or integration that manages tenant ceilings. A tier config that uses an old key
+  is refused, and its error lists the keys that are accepted.
+- **Stored data is converted for you.** The upgrade renames the tenant override columns and
+  re-keys every stored tier config, including the shipped tiers and deleted ones, at the same
+  values.
+- **During the rollout.** Until every pod runs the new release, an older pod and a newer
+  `user-management` do not understand each other. An older ingest or outbound pod asks for the old
+  `tenantGovernance` fields, the request fails, and that pod meters every tenant at the platform
+  default; `TenantsMeteredAtPlatformDefault` can fire for it. An older `user-management` pod still
+  uses the old column names once the new pod has renamed them, so the tenant reads and writes it
+  serves fail until it is replaced. Both end when the rollout finishes; avoid changing tenants or
+  tiers until it has.
+
 ### The one-time durable-ingest cutover
 
 The release that introduces **durable MQTT ingest** changes how `event-sources` receives

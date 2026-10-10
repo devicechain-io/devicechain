@@ -246,3 +246,96 @@ func TestARefusedResponseIsNotDeadLettered(t *testing.T) {
 		t.Fatalf("ResponsesRefused = %v, want 1 (premise lost)", got)
 	}
 }
+
+// A device's answer data is any JSON value, as the delivery envelope's payload is. A string
+// is stored as its text exactly as before; an object (or any other JSON value) is kept as
+// its own JSON text instead of the whole envelope being refused as undecodable, which acked
+// it with no dead letter and left the command SENT until it timed out.
+func TestAResponsePayloadMayBeAnyJSONValue(t *testing.T) {
+	str := func(s string) *string { return &s }
+	for name, tc := range map[string]struct {
+		payload string
+		want    *string
+	}{
+		"a string is its text":              {`"bucket raised"`, str("bucket raised")},
+		"a string holding JSON is its text": {`"{\"level\":3}"`, str(`{"level":3}`)},
+		"an object is its JSON text":        {`{"level":3,"ok":true}`, str(`{"level":3,"ok":true}`)},
+		"an array is its JSON text":         {`[1,2,3]`, str(`[1,2,3]`)},
+		"a number is its JSON text":         {`42`, str(`42`)},
+		"a null is no payload":              {`null`, nil},
+	} {
+		t.Run(name, func(t *testing.T) {
+			api := &fakeApi{}
+			p := responseProcessor(t, api, "inst-1.acme.command-responses.pump-1",
+				`{"commandToken":"cmd-1","success":true,"dispatchNonce":"n-1","payload":`+tc.payload+`}`)
+
+			readAndHandleOne(p, context.Background())
+
+			if len(api.responseCalls) != 1 {
+				t.Fatalf("MarkResponse called %d times, want 1: the response must reach the command", len(api.responseCalls))
+			}
+			got := api.responseCalls[0].payload
+			switch {
+			case tc.want == nil && got != nil:
+				t.Fatalf("payload = %q, want none", *got)
+			case tc.want != nil && (got == nil || *got != *tc.want):
+				t.Fatalf("payload = %v, want %q", got, *tc.want)
+			}
+		})
+	}
+}
+
+// A response with no payload still reaches the command with none.
+func TestAResponseWithoutAPayloadReachesTheCommandWithNone(t *testing.T) {
+	api := &fakeApi{}
+	p := responseProcessor(t, api, "inst-1.acme.command-responses.pump-1",
+		`{"commandToken":"cmd-1","success":true,"dispatchNonce":"n-1"}`)
+
+	readAndHandleOne(p, context.Background())
+
+	if len(api.responseCalls) != 1 || api.responseCalls[0].payload != nil {
+		t.Fatalf("calls = %+v, want one with no payload", api.responseCalls)
+	}
+}
+
+// A body that is not JSON at all never reaches a command, is acked rather than retried
+// (the same bytes decode the same way), and is DEAD-LETTERED as unprocessable: the subject
+// names a tenant and a device, so it can be filed truthfully, and silently dropping it left
+// no trace that the device had answered.
+func TestAnUndecodableResponseIsDeadLetteredAndNotApplied(t *testing.T) {
+	api := &fakeApi{}
+	dead := &deadRecorder{}
+	acked := 0
+	p := &CommandDeliveryProcessor{
+		Api:  api,
+		dead: testDeadSink(dead),
+		CommandResponsesReader: &oneMessageReader{msg: responseMessage([]byte(`{"commandToken":`), 1, nil,
+			ackCounter{&acked})},
+	}
+
+	readAndHandleOne(p, context.Background())
+
+	if len(api.responseCalls) != 0 {
+		t.Fatalf("an undecodable body reached MarkResponse: %+v", api.responseCalls)
+	}
+	if acked != 1 {
+		t.Fatalf("acked %d times, want 1: the same bytes decode the same way on every delivery", acked)
+	}
+	if len(dead.msgs) != 1 {
+		t.Fatalf("wrote %d dead letters, want 1", len(dead.msgs))
+	}
+	e, err := deadletter.Unmarshal(dead.msgs[0].Value)
+	if err != nil {
+		t.Fatalf("the written letter does not read back: %v", err)
+	}
+	if e.Reason != deadletter.ReasonUnprocessable || e.Reference != "pump-1" || string(e.Payload) != `{"commandToken":` {
+		t.Fatalf("letter = %+v; want reason unprocessable, the responding device, and the body", e)
+	}
+	if d := dead.tenants[0]; d != "acme" {
+		t.Fatalf("filed under tenant %q, want acme", d)
+	}
+}
+
+type ackCounter struct{ n *int }
+
+func (a ackCounter) Ack() error { *a.n++; return nil }
