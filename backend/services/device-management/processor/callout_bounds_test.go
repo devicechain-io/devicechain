@@ -11,6 +11,7 @@ import (
 
 	"github.com/devicechain-io/dc-device-management/model"
 	"github.com/devicechain-io/dc-microservice/credential/credentialtest"
+	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/natsauth"
 	"github.com/nats-io/jwt/v2"
 	"github.com/nats-io/nats.go"
@@ -64,6 +65,9 @@ func (g *calloutBoundsRig) send() *nats.Subscription {
 	inbox := nats.NewInbox()
 	sub, err := g.conn.SubscribeSync(inbox)
 	if err != nil {
+		g.t.Fatal(err)
+	}
+	if err := messaging.ConfirmSubscribed(g.conn); err != nil {
 		g.t.Fatal(err)
 	}
 	// Handed to the dispatcher directly: the service login may not publish on the
