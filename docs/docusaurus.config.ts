@@ -1,6 +1,17 @@
 import type { Config } from '@docusaurus/types';
 import type * as Preset from '@docusaurus/preset-classic';
+import { existsSync } from 'node:fs';
 import { themes as prismThemes } from 'prism-react-renderer';
+
+// Every markdown tree a docs page is built from, for the search index's content hash.
+// The generated GraphQL reference is a second docs plugin instance whose pages are written
+// at prebuild into this folder; it is listed only once it exists, because the plugin warns
+// on a `docsDir` that is missing.
+const searchDocsDirs = [
+  'docs',
+  'i18n',
+  ...(existsSync('generated/graphql-reference') ? ['generated/graphql-reference'] : []),
+];
 
 const config: Config = {
   title: 'DeviceChain',
@@ -83,6 +94,37 @@ const config: Config = {
           customCss: './src/css/custom.css',
         },
       } satisfies Preset.Options,
+    ],
+  ],
+
+  themes: [
+    // Local full-text search: the index is built at `docusaurus build` from the rendered
+    // HTML of every locale and served as static files, so there is no third-party service.
+    [
+      '@easyops-cn/docusaurus-search-local',
+      {
+        // Content-hashed index file names, so a browser or CDN can cache them forever and a
+        // new build still gets fresh ones.
+        //
+        // The hash is computed from the markdown under `docsDir` ONLY, so `docsDir` must list
+        // every tree the index is built from: the default ('docs') alone would leave the
+        // hash unchanged when only a translation changed, and a browser would keep serving
+        // a stale es or zh-CN index under an unchanged name.
+        hashed: 'filename',
+        docsDir: searchDocsDirs,
+        // `language` is one list for the whole build, not one per locale, and the build
+        // produces all three locales at once. `zh` is the tokenizer Chinese needs (no
+        // spaces between words); `es` is the Spanish stemmer.
+        language: ['en', 'es', 'zh'],
+        // Docs are served at the site root, and the docs plugin ids are merged by permalink:
+        // the plugin collects the pages of EVERY docs plugin instance, so a second instance
+        // (the generated GraphQL reference) is indexed under this same root with no
+        // further configuration. There is no blog.
+        docsRouteBasePath: '/',
+        indexBlog: false,
+        highlightSearchTermsOnTargetPage: true,
+        explicitSearchResultPath: true,
+      },
     ],
   ],
 

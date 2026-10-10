@@ -1,0 +1,30 @@
+{
+  "theme.SearchBar.label": {
+    "message": "Buscar",
+    "description": "The ARIA label and placeholder for search button"
+  },
+  "theme.SearchBar.seeAll": {
+    "message": "Ver todos los resultados",
+    "description": "The link to the full search results page"
+  },
+  "theme.SearchBar.noResultsText": {
+    "message": "Sin resultados",
+    "description": "The text shown in the search dropdown when nothing matches"
+  },
+  "theme.SearchPage.existingResultsTitle": {
+    "message": "Resultados de búsqueda para \"{query}\"",
+    "description": "The search page title for non-empty query"
+  },
+  "theme.SearchPage.emptyResultsTitle": {
+    "message": "Buscar en la documentación",
+    "description": "The search page title for empty query"
+  },
+  "theme.SearchPage.documentsFound.plurals": {
+    "message": "Se encontró 1 documento|Se encontraron {count} documentos",
+    "description": "Pluralized label for \"{count} documents found\""
+  },
+  "theme.SearchPage.noResultsText": {
+    "message": "No se encontraron documentos",
+    "description": "The paragraph for empty search result"
+  }
+}
