@@ -961,3 +961,21 @@ func TestTheTwoReconcilerBranchesFailIndependently(t *testing.T) {
 	invs := classifyPresence(obs, steady, churn, departed, healthyPresenceConfig(3), 5000)
 	assertOnlyTheseFailed(t, invs, InvPresenceReconcilerExact)
 }
+
+// A cohort larger than the API's key bound is read in chunks no larger than the bound,
+// and every token still gets an observation.
+func TestOracleStatesChunksACohortOverTheLookupBound(t *testing.T) {
+	var sizes []int
+	o := &presenceOracle{session: &fakeSession{respond: func(vars map[string]any) (json.RawMessage, error) {
+		sizes = append(sizes, len(vars["tokens"].([]string)))
+		return json.RawMessage(`{"deviceStatesByDeviceToken":[]}`), nil
+	}}}
+	tokens := make([]string, 2*maxLookupKeys+5)
+	for i := range tokens {
+		tokens[i] = fmt.Sprintf("dev-%04d", i)
+	}
+	obs, err := o.states(context.Background(), tokens)
+	require.NoError(t, err)
+	assert.Len(t, obs, len(tokens))
+	assert.Equal(t, []int{maxLookupKeys, maxLookupKeys, 5}, sizes)
+}

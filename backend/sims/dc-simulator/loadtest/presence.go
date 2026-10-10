@@ -8,6 +8,7 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"sort"
 	"strconv"
 	"strings"
@@ -18,6 +19,11 @@ import (
 	"github.com/devicechain-io/dc-simulator/sim"
 	"github.com/rs/zerolog/log"
 )
+
+// maxLookupKeys is the most keys the tenant API accepts in one batch lookup (the
+// platform's rdb.MaxLookupKeys, 1000). This module does not import core/rdb, so the
+// number is repeated here; a cohort over it is read in chunks of this size.
+const maxLookupKeys = 1000
 
 // L4: broker-asserted MQTT presence under churn.
 //
@@ -708,6 +714,20 @@ type presenceOracle struct {
 // "this device has no state row" is an ANSWER (and, before any device connects, the
 // expected one), not an error.
 func (o *presenceOracle) states(ctx context.Context, tokens []string) (map[string]deviceStateObs, error) {
+	// The API refuses a token list over maxLookupKeys, so a cohort larger than that is
+	// read in chunks and the observations merged.
+	if len(tokens) > maxLookupKeys {
+		merged := make(map[string]deviceStateObs, len(tokens))
+		for start := 0; start < len(tokens); start += maxLookupKeys {
+			end := min(start+maxLookupKeys, len(tokens))
+			part, err := o.states(ctx, tokens[start:end])
+			if err != nil {
+				return nil, err
+			}
+			maps.Copy(merged, part)
+		}
+		return merged, nil
+	}
 	var out struct {
 		DeviceStatesByDeviceToken []struct {
 			DeviceToken    string  `json:"deviceToken"`
