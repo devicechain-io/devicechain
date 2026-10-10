@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://docs.devicechain.io/schema/device/command-response.schema.json",
   "title": "DeviceChain command response",
-  "description": "The JSON message a device publishes on MQTT topic {instanceId}/{tenant}/command-responses/{deviceToken} to report the outcome of a command it was delivered. The responding device is taken from the topic, never from the body. A message that is not valid JSON for this shape (for example a payload that is an object rather than a string) is discarded: it is logged and counted, but not dead-lettered, and unless the device answers again the command stays SENT until it times out. That is a known limitation, and a fix is under way. Required describes what a device must send: an omitted success reads as false, and an omitted commandToken matches no command.",
+  "description": "The JSON message a device publishes on MQTT topic {instanceId}/{tenant}/command-responses/{deviceToken} to report the outcome of a command it was delivered. The responding device is taken from the topic, never from the body. A message that is not valid JSON, or whose members have the wrong types (for example a quoted success), cannot be matched to a command: it is recorded on the dead-letters stream with reason unprocessable, naming the responding device, and unless the device answers again the command stays SENT until it times out. Required describes what a device must send: an omitted success reads as false, and an omitted commandToken matches no command.",
   "type": "object",
   "properties": {
     "commandToken": {
@@ -14,8 +14,7 @@
       "description": "true settles the command as SUCCESSFUL, false as FAILED. Omitted, it reads as false."
     },
     "payload": {
-      "type": "string",
-      "description": "Free-form result text, stored with the command and returned by the API. A JSON string, not an object: to return structured data, encode it into the string. An object here makes the whole response undecodable, so it is discarded as described above."
+      "description": "The command's result data: any JSON value (a string, an object, an array, a number or a boolean), stored with the command and returned by the API. A string is stored as its text; any other value is stored as that JSON value, exactly as sent. Omitted or null, the command has no response payload."
     },
     "error": {
       "type": "string",
@@ -33,6 +32,12 @@
       "dispatchNonce": "0f6f4a2c-9b71-4d0e-8a5b-3c2d1e0f7a94",
       "success": true,
       "payload": "rebooting in 5s"
+    },
+    {
+      "commandToken": "6f1c0f8e-6d1e-4a1a-9a3f-1f2b0d0a5c11",
+      "dispatchNonce": "0f6f4a2c-9b71-4d0e-8a5b-3c2d1e0f7a94",
+      "success": true,
+      "payload": {"rebootInSeconds": 5, "queued": true}
     },
     {
       "commandToken": "6f1c0f8e-6d1e-4a1a-9a3f-1f2b0d0a5c11",
