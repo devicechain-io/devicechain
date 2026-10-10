@@ -101,15 +101,72 @@ func TestResponseExamplesDecodeStrictly(t *testing.T) {
 	}
 }
 
-// The page and the schema both say a response payload is a STRING, and that an object
-// there makes the whole message undecodable — which handleResponse discards. This pins the
-// decode half of that claim to the struct.
-func TestResponseObjectPayloadIsUndecodable(t *testing.T) {
-	var r responseEnvelope
-	err := json.Unmarshal([]byte(`{"commandToken":"c","dispatchNonce":"n","success":true,"payload":{"ok":true}}`), &r)
-	if err == nil {
-		t.Fatal("an object payload decoded; the published contract says it does not")
+// The page and the schema say a response payload is ANY JSON value: a string is kept as its
+// text, every other value as its own JSON text, and absent or null is no payload. This pins
+// the decode half of that claim to the struct, and the schema half to the same file the docs
+// site serves: the payload member declares no type, and an object example is published.
+func TestResponsePayloadMayBeAnyJSONValue(t *testing.T) {
+	str := func(s string) *string { return &s }
+	for name, tc := range map[string]struct {
+		payload string
+		want    *string
+	}{
+		"object": {`{"ok":true,"n":[1,2]}`, str(`{"ok":true,"n":[1,2]}`)},
+		"array":  {`[1,"two",null]`, str(`[1,"two",null]`)},
+		"number": {`42.5`, str(`42.5`)},
+		"bool":   {`false`, str(`false`)},
+		"string": {`"rebooting in 5s"`, str("rebooting in 5s")},
+		"null":   {`null`, nil},
+	} {
+		t.Run(name, func(t *testing.T) {
+			var r responseEnvelope
+			body := `{"commandToken":"c","dispatchNonce":"n","success":true,"payload":` + tc.payload + `}`
+			if err := json.Unmarshal([]byte(body), &r); err != nil {
+				t.Fatalf("a %s payload did not decode; the published contract says any JSON value does: %v", name, err)
+			}
+			got := responsePayloadText(r.Payload)
+			switch {
+			case tc.want == nil && got != nil:
+				t.Fatalf("payload = %q, want none", *got)
+			case tc.want != nil && (got == nil || *got != *tc.want):
+				t.Fatalf("payload = %v, want %q", got, *tc.want)
+			}
+		})
 	}
+
+	// The schema says the same: payload is not required and declares no JSON type.
+	var doc struct {
+		Properties map[string]map[string]any `json:"properties"`
+	}
+	if err := json.Unmarshal(readContract(t, "command-response.schema.json"), &doc); err != nil {
+		t.Fatal(err)
+	}
+	payload, ok := doc.Properties["payload"]
+	if !ok {
+		t.Fatal("the response schema declares no payload member")
+	}
+	if typ, typed := payload["type"]; typed {
+		t.Errorf("the response schema types payload as %v; it admits any JSON value", typ)
+	}
+}
+
+// The published examples include a non-string payload, so a device author who copies the
+// object form is copying something the decoder is known to accept.
+func TestResponseExamplesIncludeAStructuredPayload(t *testing.T) {
+	var doc schemaDoc
+	if err := json.Unmarshal(readContract(t, "command-response.schema.json"), &doc); err != nil {
+		t.Fatal(err)
+	}
+	for _, ex := range doc.Examples {
+		var r responseEnvelope
+		if err := json.Unmarshal(ex, &r); err != nil {
+			t.Fatal(err)
+		}
+		if r.Payload != nil && bytes.HasPrefix(bytes.TrimSpace(*r.Payload), []byte("{")) {
+			return
+		}
+	}
+	t.Error("no published response example carries an object payload")
 }
 
 // A delivery the platform actually builds carries exactly the members the schema
