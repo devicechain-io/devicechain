@@ -14,8 +14,8 @@ import (
 	"github.com/devicechain-io/dc-microservice/core"
 	gqlcore "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/rdb"
+	"github.com/glebarez/sqlite"
 	gql "github.com/graph-gophers/graphql-go"
-	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 )
 
