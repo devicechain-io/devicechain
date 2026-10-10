@@ -1,0 +1,112 @@
+# Copyright The DeviceChain Authors
+# SPDX-License-Identifier: Apache-2.0
+#
+# promtool UNIT TESTS for the safety-gate alerting rule.
+#
+# WHAT THESE ARE FOR, over and above the parse check
+#
+# SafetyGateDisabled reads a gauge every gated service exports in BOTH states: 1 when its
+# optional safety gate is wired, 0 when it came up without the configuration it needs. The
+# cases worth writing down are the quiet ones -- a healthy instance, and a service that exports
+# nothing at all (a build that predates the gauge, or a scrape that is down, which other alerts
+# own) -- and the loud one: a gate that is 0 and stays 0.
+#
+# THE SERIES:
+#
+#   - devicechain_<area>_safety_gate_enabled{gate} -- a GaugeVec each gated service registers and
+#     sets at startup. The series EXISTS for an OFF gate (value 0), so the alert reads 0 rather than
+#     inferring it from an absence.
+#
+# Run via hack/check-prometheus-rules.sh, which renders the chart first and copies the rendered
+# group in beside this file as rendered-rules.yaml. Naming it below is not optional: promtool with
+# no rule_files loads no rules, and every expected alert then reads as "the rule does not fire"
+# rather than "there is no rule".
+rule_files:
+  - rendered-rules.yaml
+
+evaluation_interval: 1m
+
+tests:
+  # ------------------------------------------------------------------
+  # A gate that is OFF and stays off: pending through the 5m period, firing after it.
+  # ------------------------------------------------------------------
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_commanddelivery_safety_gate_enabled{namespace="dci-devicechain", pod="dc-command-delivery-6f7d-abcde", job="devicechain/command-delivery", gate="presence"}'
+        values: '0x30'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: SafetyGateDisabled
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: SafetyGateDisabled
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              devicechain_instance: devicechain
+              job: devicechain/command-delivery
+              gate: presence
+            exp_annotations:
+              summary: "A safety gate is switched off in a running service"
+              description: "For at least 5 minutes, devicechain/command-delivery has run with its presence safety gate OFF because the configuration it needs is absent (the service secret, or the endpoint of the service the gate consults). Work the gate exists to refuse is being let through: tenant_lifecycle admits work for deleted tenants, presence lets commands to absent devices be published and dropped, rule_validation lets uncompilable detection rules publish and be skipped at load. The service logged a WARN at startup naming what is missing. Restore the missing configuration and restart the service."
+
+  # ------------------------------------------------------------------
+  # A healthy instance: every gate wired. And an instance where no service exports the gauge
+  # at all. Both quiet.
+  # ------------------------------------------------------------------
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_commanddelivery_safety_gate_enabled{namespace="dci-devicechain", pod="dc-command-delivery-6f7d-abcde", job="devicechain/command-delivery", gate="presence"}'
+        values: '1x30'
+      - series: 'devicechain_commanddelivery_safety_gate_enabled{namespace="dci-devicechain", pod="dc-command-delivery-6f7d-abcde", job="devicechain/command-delivery", gate="tenant_lifecycle"}'
+        values: '1x30'
+      - series: 'devicechain_devicemanagement_safety_gate_enabled{namespace="dci-devicechain", pod="dc-device-management-5b8c-fghij", job="devicechain/device-management", gate="rule_validation"}'
+        values: '1x30'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: SafetyGateDisabled
+        exp_alerts: []
+  - interval: 1m
+    input_series:
+      - series: 'up{namespace="dci-devicechain", job="devicechain/command-delivery"}'
+        values: '1x30'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: SafetyGateDisabled
+        exp_alerts: []
+
+  # ------------------------------------------------------------------
+  # ONE replica of two came up without its configuration. The alert reads min, so the share of
+  # traffic that replica serves does not hide behind its healthy sibling.
+  # ------------------------------------------------------------------
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_devicemanagement_safety_gate_enabled{namespace="dci-devicechain", pod="dc-device-management-5b8c-fghij", job="devicechain/device-management", gate="tenant_lifecycle"}'
+        values: '1x30'
+      - series: 'devicechain_devicemanagement_safety_gate_enabled{namespace="dci-devicechain", pod="dc-device-management-5b8c-klmno", job="devicechain/device-management", gate="tenant_lifecycle"}'
+        values: '0x30'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: SafetyGateDisabled
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              devicechain_instance: devicechain
+              job: devicechain/device-management
+              gate: tenant_lifecycle
+            exp_annotations:
+              summary: "A safety gate is switched off in a running service"
+              description: "For at least 5 minutes, devicechain/device-management has run with its tenant_lifecycle safety gate OFF because the configuration it needs is absent (the service secret, or the endpoint of the service the gate consults). Work the gate exists to refuse is being let through: tenant_lifecycle admits work for deleted tenants, presence lets commands to absent devices be published and dropped, rule_validation lets uncompilable detection rules publish and be skipped at load. The service logged a WARN at startup naming what is missing. Restore the missing configuration and restart the service."
+
+  # ------------------------------------------------------------------
+  # A gate that is off for two minutes and is then restored (a restart with the config fixed)
+  # does not fire: the pending period outlasts the blip.
+  # ------------------------------------------------------------------
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_outboundconnectors_safety_gate_enabled{namespace="dci-devicechain", pod="dc-outbound-connectors-5d8b-fghij", job="devicechain/outbound-connectors", gate="tenant_lifecycle"}'
+        values: '0 0 1x30'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: SafetyGateDisabled
+        exp_alerts: []

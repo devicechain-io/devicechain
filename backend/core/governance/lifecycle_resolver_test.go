@@ -181,14 +181,14 @@ func TestNewTenantLifecycleGateIsOffWhenUnconfigured(t *testing.T) {
 		{"no hostname", config.UserManagementConfiguration{Port: 8080}, "s3cret"},
 		{"no port", config.UserManagementConfiguration{Hostname: "user-management"}, "s3cret"},
 	} {
-		assert.Nilf(t, NewTenantLifecycleGate(c.cfg, c.secret, "test"), "gate with %s", c.name)
+		assert.Nilf(t, NewTenantLifecycleGate(c.cfg, c.secret, "test", nil), "gate with %s", c.name)
 	}
 
 	// The control: fully configured builds a gate. Without it, a helper that returned nil
 	// unconditionally would satisfy every case above and leave every service carrying this
 	// gate ungated. (Deliberately not counted — the count has been wrong twice; the set is
 	// `grep -rl NewTenantLifecycleGate backend/services`.)
-	gate := NewTenantLifecycleGate(full, "s3cret", "test")
+	gate := NewTenantLifecycleGate(full, "s3cret", "test", nil)
 	require.NotNil(t, gate)
 	assert.False(t, gate("acme"),
 		"a freshly built gate has fetched nothing yet and must fail open, not refuse")

@@ -203,7 +203,14 @@ func parseConfiguration() error {
 // only the leader ever holds the socket. An identity-less deployment instead builds a single
 // always-on health-only transport that takes no lease. It starts no bearer-token auth gate: this
 // service authenticates devices at the DTLS layer, not with platform JWTs.
+// safetyGates reports whether this service's optional safety gates are wired
+// (<area>_safety_gate_enabled). Built once in afterMicroserviceInitialized.
+var safetyGates *governance.SafetyGates
+
 func afterMicroserviceInitialized(ctx context.Context) error {
+	// Built ONCE, here on the initialize path: the gauge registers on construction and a second
+	// registration panics, and the gates below are decided in callbacks that can run again.
+	safetyGates = governance.NewSafetyGates(Microservice)
 	if err := parseConfiguration(); err != nil {
 		return err
 	}
@@ -541,7 +548,7 @@ func buildPresenceLayer(leaderCtx context.Context, bindings map[string]config.Ps
 	// been reclaimed. This gate stops the inflow; the fence is the correctness path, and
 	// it is at the area that owns the row rather than at the transport that would have
 	// caused it.
-	tenantGate := governance.NewTenantLifecycleGate(infra.UserManagement, infra.ServiceAuth.Secret, "lwm2m-ingest")
+	tenantGate := governance.NewTenantLifecycleGate(infra.UserManagement, infra.ServiceAuth.Secret, "lwm2m-ingest", safetyGates)
 	registrar := adapter.NewRegistrar(client, ingestURL, "lw-", tenantGate)
 	// authenticatedTransport=true: LwM2M devices authenticate at the DTLS-PSK
 	// handshake, and the device token is bound to that authenticated PSK identity

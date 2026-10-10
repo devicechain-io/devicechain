@@ -443,7 +443,7 @@ func buildEventSources() error {
 	// minted JWT for its full TTL), and HTTP ingest has no transport auth at all.
 	infra := Microservice.InstanceConfiguration.Infrastructure
 	ingestGate = processor.RefuseDeletedTenants(
-		governance.NewTenantLifecycleGate(infra.UserManagement, infra.ServiceAuth.Secret, "event-sources"),
+		governance.NewTenantLifecycleGate(infra.UserManagement, infra.ServiceAuth.Secret, "event-sources", safetyGates),
 		processor.NewRateGate(RateLimiter, BacklogRateLimiter, HttpRateLimiter, onRateShed),
 		onTenantGone)
 	// The reading stage, charged after decode on every transport. One gate, built once,
@@ -868,7 +868,14 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 }
 
 // Called after microservice has been initialized.
+// safetyGates reports whether this service's optional safety gates are wired
+// (<area>_safety_gate_enabled). Built once in afterMicroserviceInitialized.
+var safetyGates *governance.SafetyGates
+
 func afterMicroserviceInitialized(ctx context.Context) error {
+	// Built ONCE, here on the initialize path: the gauge registers on construction and a second
+	// registration panics, and the gates below are decided in callbacks that can run again.
+	safetyGates = governance.NewSafetyGates(Microservice)
 	// Parse configuration.
 	err := parseConfiguration()
 	if err != nil {

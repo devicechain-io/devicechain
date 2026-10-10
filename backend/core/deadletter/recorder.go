@@ -75,8 +75,10 @@ func MaxDeliveryRecorder(p *Producer) func(*messaging.NatsManager) (messaging.Ma
 		r.maxLetter = int(nmgr.MaxMsgSize(streams.DeadLetters))
 		if lettered {
 			infra := nmgr.Microservice.InstanceConfiguration.Infrastructure
+			// nil gates: the owning service reports the gate's state on its own gauge, and this
+			// is the same configuration read a second time.
 			r.deleted = tenantLifecycleGate(infra.UserManagement, infra.ServiceAuth.Secret,
-				nmgr.Microservice.FunctionalArea)
+				nmgr.Microservice.FunctionalArea, nil)
 		}
 		return r.record, nil
 	}
