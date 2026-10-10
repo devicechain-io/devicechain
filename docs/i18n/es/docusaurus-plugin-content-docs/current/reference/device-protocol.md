@@ -163,7 +163,7 @@ Lo que un dispositivo publica en su topic `command-responses` para cerrar un com
 | `commandToken` | string | sí | El `token` de la entrega a la que se responde: el token del comando, no el del dispositivo. | `"6f1c0f8e-…"` |
 | `dispatchNonce` | string | sí | El `dispatchNonce` de la entrega a la que se responde. | `"0f6f4a2c-…"` |
 | `success` | boolean | sí | `true` cierra el comando como `SUCCESSFUL`; `false`, como `FAILED`. Si se omite, se lee como `false`. | `true` |
-| `payload` | **string** | no | Texto de resultado, almacenado con el comando y devuelto por la API. Es un **string** JSON, no un objeto: para devolver datos estructurados, codifícalos dentro del string. Un objeto aquí hace que toda la respuesta sea indecodificable: se descarta, no pasa a dead-letter y el comando sigue en `SENT`. Es una limitación conocida, y se está preparando una corrección. | `"rebooting in 5s"` |
+| `payload` | cualquier valor JSON | no | Los datos de resultado del comando, almacenados con el comando y devueltos por la API. Un string se almacena como su texto; un objeto, array, número o booleano se almacena como ese valor JSON, tal cual se envió, de modo que un dispositivo puede devolver datos estructurados directamente. Si se omite o es `null`, el comando no tiene payload de respuesta. | `"rebooting in 5s"` o `{"level":3}` |
 | `error` | string | no | Por qué falló el comando. Solo se almacena cuando `success` es `false`; se ignora cuando es `true`. | `"actuator jammed"` |
 
 ```json
@@ -215,7 +215,7 @@ Una respuesta a comando nunca recibe contestación, en ningún transporte. Lo qu
 | --- | --- |
 | Corresponde a un comando del dispositivo, con el `dispatchNonce` de su despacho actual | El comando se cierra como `SUCCESSFUL` o `FAILED`. |
 | Responde a un comando ya terminado | Se ignora; el comando conserva su resultado. |
-| No es decodificable: no es JSON, o un campo tiene el tipo equivocado, como un `payload` objeto o un `success` entre comillas | **Se descarta**: se registra en el log y se cuenta, pero no pasa a dead-letter. El comando sigue en `SENT` hasta que vence, salvo que el dispositivo vuelva a responder correctamente. Limitación conocida: se está preparando una corrección que registre estas respuestas. |
+| No es decodificable: no es JSON, o un campo tiene el tipo equivocado, como un `success` entre comillas | No se resuelve; se registra en el stream `dead-letters` con el motivo `unprocessable`, indicando el dispositivo que respondió. El comando sigue en `SENT` hasta que vence, salvo que el dispositivo vuelva a responder correctamente. |
 | Sin `dispatchNonce` | No se cierra; se registra en el stream `dead-letters` con el motivo `unprocessable`. |
 | Un `dispatchNonce` de un despacho que el comando ya dejó atrás | No se cierra; pasa a dead-letter con el motivo `unprocessable`. |
 | Un `commandToken` que no corresponde a ningún comando (casi siempre el propio token del dispositivo enviado por error) | Se reintenta hasta la quinta entrega y después pasa a dead-letter con el motivo `exhausted`. |
