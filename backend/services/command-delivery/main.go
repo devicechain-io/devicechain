@@ -154,7 +154,7 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	infra := Microservice.InstanceConfiguration.Infrastructure
 	CommandDeliveryProcessor = processor.NewCommandDeliveryProcessor(Microservice, CommandResponsesReader,
 		DeviceCommandsWriter, core.NewNoOpLifecycleCallbacks(), Api,
-		governance.NewTenantLifecycleGate(infra.UserManagement, infra.ServiceAuth.Secret, "command-delivery", safetyGates),
+		tenantLifecycleGate(infra, safetyGates),
 		presenceReader(infra, safetyGates), deadLetters, DeliveryMetrics)
 	// 🔴 SET HERE, WHERE THE PROCESSOR EXISTS, AND NOT BESIDE THE Api.* ASSIGNMENTS IN
 	// afterMicroserviceInitialized -- WHICH IS WHERE THEY BELONG BY APPEARANCE AND WHERE
@@ -247,6 +247,12 @@ func presenceReader(infra mscfg.InfrastructureConfiguration, gates *governance.S
 		Msg("Presence gate enabled; commands to devices a transport reports as absent will be withheld rather than published.")
 	gates.Set(governance.GatePresence, true)
 	return presence.NewGraphQLReader(client, url)
+}
+
+// tenantLifecycleGate is the deleted-tenant gate the dispatch path refuses work through: nil when
+// user-management is unconfigured, with the tenant_lifecycle safety gate recorded either way.
+func tenantLifecycleGate(infra mscfg.InfrastructureConfiguration, gates *governance.SafetyGates) func(string) bool {
+	return governance.NewTenantLifecycleGate(infra.UserManagement, infra.ServiceAuth.Secret, "command-delivery", gates)
 }
 
 // wireDeviceManagementGates installs the three collaborators command-delivery reaches

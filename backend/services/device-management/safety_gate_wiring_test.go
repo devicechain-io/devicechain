@@ -4,8 +4,12 @@
 package main
 
 import (
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"testing"
 
+	"github.com/devicechain-io/dc-device-management/model"
 	mscfg "github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/governance"
@@ -89,4 +93,78 @@ func TestCalloutTenantGateRecordsItsDecision(t *testing.T) {
 	v, ok = read(governance.GateTenantLifecycle)
 	assert.True(t, ok)
 	assert.Equal(t, 1.0, v)
+}
+
+// The gate decisions this service makes, by function name.
+var decisions = []string{"wireDetectionRuleValidator", "calloutTenantGate"}
+
+// callSitesPassTheServiceGates is a SOURCE-LEVEL check, chosen because afterMicroserviceInitialized
+// cannot run in a unit test (it needs the whole microservice, a database and a broker). It parses
+// main.go and asserts three things the helper tests cannot see: the gauge is built exactly once, in
+// afterMicroserviceInitialized, into safetyGates; every call to a gate decision passes exactly
+// safetyGates (a nil, or a handle built somewhere else, would leave the series absent and the
+// SafetyGateDisabled alert blind); and each decision is called at least once (so a renamed or
+// removed call site cannot pass vacuously).
+func TestEveryGateDecisionIsCalledWithTheServiceGates(t *testing.T) {
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, "main.go", nil, 0)
+	require.NoError(t, err)
+
+	calls := map[string]int{}
+	built := 0
+	ast.Inspect(file, func(n ast.Node) bool {
+		fn, ok := n.(*ast.FuncDecl)
+		if !ok || fn.Body == nil {
+			return true
+		}
+		ast.Inspect(fn.Body, func(m ast.Node) bool {
+			call, ok := m.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			name := ""
+			switch f := call.Fun.(type) {
+			case *ast.Ident:
+				name = f.Name
+			case *ast.SelectorExpr:
+				name = f.Sel.Name
+			}
+			if name == "NewSafetyGates" {
+				built++
+				assert.Equal(t, "afterMicroserviceInitialized", fn.Name.Name,
+					"the gauge must be built on the initialize path, once")
+			}
+			for _, want := range decisions {
+				if name != want {
+					continue
+				}
+				calls[name]++
+				last := call.Args[len(call.Args)-1]
+				id, isIdent := last.(*ast.Ident)
+				assert.Truef(t, isIdent && id.Name == "safetyGates",
+					"%s is called with %T %v as its gates; it must be safetyGates", name, last, last)
+			}
+			return true
+		})
+		return false
+	})
+	assert.Equal(t, 1, built, "NewSafetyGates must be called exactly once")
+	for _, want := range decisions {
+		assert.GreaterOrEqualf(t, calls[want], 1, "no call to %s found: renamed, or no longer wired", want)
+	}
+}
+
+// wireDetectionRuleValidator must leave the Api's validator a true nil interface when the gate is
+// off: a nil *Validator stored in the interface is non-nil, and profile publish would then call a
+// method on a nil receiver instead of skipping validation.
+func TestWireDetectionRuleValidatorLeavesAnInterfaceNilWhenOff(t *testing.T) {
+	gates, _ := gateReading(t, "device-management")
+	infra := fullInfra()
+	infra.ServiceAuth.Secret = ""
+	api := &model.Api{}
+	wireDetectionRuleValidator(api, infra, gates)
+	assert.True(t, api.DetectionRuleValidator == nil, "an OFF gate must not store a typed-nil validator")
+
+	wireDetectionRuleValidator(api, fullInfra(), gates)
+	assert.NotNil(t, api.DetectionRuleValidator)
 }

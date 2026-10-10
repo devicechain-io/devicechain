@@ -386,9 +386,12 @@ func newRaiseAlarmConsumer(reader messaging.MessageReader, dead *deadletter.Sink
 // event-processing (ADR-051 slice 4b). It logs the enabled/disabled mode at startup so a
 // misconfigured deploy (empty secret, or a config predating this feature) is visible
 // rather than silently skipping validation — mirroring command-delivery's device check.
-func wireDetectionRuleValidator(gates *governance.SafetyGates) {
-	if v := detectionRuleValidator(Microservice.InstanceConfiguration.Infrastructure, gates); v != nil {
-		Api.DetectionRuleValidator = v
+func wireDetectionRuleValidator(api *model.Api, infra mscfg.InfrastructureConfiguration, gates *governance.SafetyGates) {
+	// Assigned only when non-nil: a nil *Validator stored in the interface field is NOT a nil
+	// interface, so profile publish would call a method on a nil receiver instead of skipping
+	// validation.
+	if v := detectionRuleValidator(infra, gates); v != nil {
+		api.DetectionRuleValidator = v
 	}
 }
 
@@ -538,7 +541,7 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 
 			// Wire the detection-rule validator (ADR-044 sync gate) so profile publish compiles
 			// its draft rules against event-processing and fails closed on an uncompilable one.
-			wireDetectionRuleValidator(safetyGates)
+			wireDetectionRuleValidator(Api, Microservice.InstanceConfiguration.Infrastructure, safetyGates)
 
 			// Wire the per-tenant geofence caps and the counter that reports their refusals. The
 			// counter is set unconditionally, unlike the resolver: with no resolver the platform
