@@ -80,6 +80,10 @@ func (s *stubBlobs) Open(context.Context, blob.Ref) (io.ReadCloser, blob.Info, e
 	panic("the purge read an object it was erasing")
 }
 
+func (s *stubBlobs) OpenRange(context.Context, blob.Ref, int64, int64) (io.ReadCloser, blob.Info, error) {
+	panic("the purge read an object it was erasing")
+}
+
 func (s *stubBlobs) URL(context.Context, blob.Ref, blob.URLOptions) (string, time.Time, error) {
 	panic("the purge minted a URL for an object it was erasing")
 }

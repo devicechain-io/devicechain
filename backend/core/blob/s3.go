@@ -192,6 +192,74 @@ func (s *s3Store) Open(ctx context.Context, ref Ref) (io.ReadCloser, Info, error
 	return out.Body, info, nil
 }
 
+func (s *s3Store) OpenRange(ctx context.Context, ref Ref, offset, length int64) (io.ReadCloser, Info, error) {
+	key, err := s.objectKey(ref)
+	if err != nil {
+		return nil, Info{}, err
+	}
+	// Refuse a malformed range before the network round trip.
+	if offset < 0 || length <= 0 {
+		return nil, Info{}, ErrRangeNotSatisfiable
+	}
+	// Inclusive last byte; saturate rather than overflow on a huge length (S3 clamps
+	// an end past the object).
+	last := int64(math.MaxInt64)
+	if length-1 <= math.MaxInt64-offset {
+		last = offset + length - 1
+	}
+	out, err := s.api.GetObject(ctx, &s3.GetObjectInput{
+		Bucket: aws.String(s.bucket),
+		Key:    aws.String(key),
+		Range:  aws.String(fmt.Sprintf("bytes=%d-%d", offset, last)),
+	})
+	if err != nil {
+		if isS3NotFound(err) {
+			return nil, Info{}, ErrNotFound
+		}
+		if isS3InvalidRange(err) {
+			return nil, Info{}, ErrRangeNotSatisfiable
+		}
+		return nil, Info{}, fmt.Errorf("blob: getting object range: %w", err)
+	}
+	// Trust only a response that says which window it carries. A server that ignores
+	// Range answers with the whole object and no Content-Range; serving that as the
+	// requested window would return the wrong bytes.
+	start, end, total, ok := parseContentRange(aws.ToString(out.ContentRange))
+	if !ok || start != offset || end < start || end > last || total <= end {
+		out.Body.Close()
+		return nil, Info{}, fmt.Errorf("blob: object store did not honour the range request (Content-Range %q)", aws.ToString(out.ContentRange))
+	}
+	info := Info{
+		Key:         key,
+		Size:        total,
+		ContentType: contentTypeOr(out.ContentType),
+		ModTime:     derefTime(out.LastModified),
+	}
+	// Bound the reader to the window even if the body is longer.
+	return &sectionReadCloser{Reader: io.LimitReader(out.Body, end-start+1), Closer: out.Body}, info, nil
+}
+
+// parseContentRange parses "bytes {start}-{end}/{total}"; ok is false for any other
+// shape (including an unknown total, "*").
+func parseContentRange(h string) (start, end, total int64, ok bool) {
+	if _, err := fmt.Sscanf(h, "bytes %d-%d/%d", &start, &end, &total); err != nil {
+		return 0, 0, 0, false
+	}
+	return start, end, total, true
+}
+
+// isS3InvalidRange reports whether err is S3's 416 "range not satisfiable" error.
+func isS3InvalidRange(err error) bool {
+	var apiErr smithy.APIError
+	if errors.As(err, &apiErr) {
+		switch apiErr.ErrorCode() {
+		case "InvalidRange", "416":
+			return true
+		}
+	}
+	return false
+}
+
 func (s *s3Store) Stat(ctx context.Context, ref Ref) (Info, error) {
 	key, err := s.objectKey(ref)
 	if err != nil {

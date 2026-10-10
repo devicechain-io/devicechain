@@ -186,6 +186,51 @@ func (s *filesystemStore) Open(ctx context.Context, ref Ref) (io.ReadCloser, Inf
 	return f, infoFor(ref.Key, fi), nil
 }
 
+func (s *filesystemStore) OpenRange(ctx context.Context, ref Ref, offset, length int64) (io.ReadCloser, Info, error) {
+	path, err := s.pathForRef(ref)
+	if err != nil {
+		return nil, Info{}, err
+	}
+	// Refuse a malformed range before touching the disk.
+	if offset < 0 || length <= 0 {
+		return nil, Info{}, ErrRangeNotSatisfiable
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, Info{}, ErrNotFound
+		}
+		return nil, Info{}, fmt.Errorf("blob: opening object: %w", err)
+	}
+	fi, err := f.Stat()
+	if err != nil {
+		f.Close()
+		return nil, Info{}, fmt.Errorf("blob: stating object: %w", err)
+	}
+	if !fi.Mode().IsRegular() {
+		f.Close()
+		return nil, Info{}, ErrNotFound
+	}
+	size := fi.Size()
+	if offset >= size {
+		f.Close()
+		return nil, Info{}, ErrRangeNotSatisfiable
+	}
+	// Clamp to the end of the object (HTTP semantics); written as a subtraction so a
+	// huge length cannot overflow offset+length.
+	if remaining := size - offset; length > remaining {
+		length = remaining
+	}
+	return &sectionReadCloser{Reader: io.NewSectionReader(f, offset, length), Closer: f}, infoFor(ref.Key, fi), nil
+}
+
+// sectionReadCloser exposes only Read and Close of a bounded window over a file, so
+// the caller can neither read past the window nor seek out of it.
+type sectionReadCloser struct {
+	io.Reader
+	io.Closer
+}
+
 func (s *filesystemStore) Stat(ctx context.Context, ref Ref) (Info, error) {
 	path, err := s.pathForRef(ref)
 	if err != nil {

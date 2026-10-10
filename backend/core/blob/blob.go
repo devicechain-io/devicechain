@@ -29,12 +29,9 @@
 // The S3-compatible and GCS backends land behind these exact signatures in later
 // slices (additive, no consumer change).
 //
-// Planned additive surface (not in this slice, called out so a later backend ships
-// it deliberately rather than discovering the need mid-migration):
-//   - a range/offset read (OpenRange or an OpenOptions offset/length) for resumable
-//     HTTP Range GETs of large firmware/OTA images (ADR-012/018). Small assets
-//     (branding logos) do not need it, so Open stays whole-object for now; the
-//     firmware/OTA consumer slice adds the range method across all backends.
+// OpenRange serves a bounded byte window of an object on every backend, for
+// resumable HTTP Range GETs of large firmware/OTA images (ADR-012/018). Open stays
+// whole-object for the small assets (branding logos) that do not need it.
 package blob
 
 import (
@@ -62,6 +59,11 @@ var (
 	// ErrTooLarge is returned by Put when the object exceeds PutOptions.MaxSize. The
 	// partially-written object is not committed.
 	ErrTooLarge = errors.New("blob: object exceeds the maximum allowed size")
+
+	// ErrRangeNotSatisfiable is returned by OpenRange for a range that cannot be
+	// served: a negative offset, a non-positive length, or an offset at or past the
+	// end of the object. Consumers map it to HTTP 416.
+	ErrRangeNotSatisfiable = errors.New("blob: requested range not satisfiable")
 )
 
 // maxSegmentLen bounds a single key segment so a pathological id cannot blow past
@@ -182,6 +184,14 @@ type Store interface {
 	// Open returns a reader over the object's bytes plus its Info. The caller must
 	// Close the reader. Returns ErrNotFound when absent.
 	Open(ctx context.Context, ref Ref) (io.ReadCloser, Info, error)
+	// OpenRange returns a reader over at most length bytes of the object starting at
+	// offset, plus the object's Info (Size is the WHOLE object's size, so a caller can
+	// build a Content-Range). Fail-closed: offset < 0, length <= 0, or offset >= the
+	// object's size (including any range over an empty object) returns
+	// ErrRangeNotSatisfiable; a range that runs past the end is clamped to the end (HTTP
+	// semantics). The reader never yields more than length bytes. The caller must
+	// Close it. Returns ErrNotFound when absent.
+	OpenRange(ctx context.Context, ref Ref, offset, length int64) (io.ReadCloser, Info, error)
 	// URL mints a direct, expiring URL for the object (cloud backends). Returns
 	// ErrURLUnsupported for a backend with no public/presigned path (filesystem),
 	// signalling the caller to serve via the authorizing proxy (Open) instead.
