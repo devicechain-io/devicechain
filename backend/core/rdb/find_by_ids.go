@@ -3,7 +3,10 @@
 
 package rdb
 
-import "gorm.io/gorm"
+import (
+	"github.com/devicechain-io/dc-microservice/limit"
+	"gorm.io/gorm"
+)
 
 // FindByIds loads the rows whose primary keys appear in ids.
 //
@@ -24,6 +27,8 @@ import "gorm.io/gorm"
 // the empty path would still hand back whatever the caller had already put there; here,
 // zero ids means zero rows because there is no other value the function can return.
 //
+// More than MaxLookupKeys ids are refused with a *limit.Error (LIMIT_EXCEEDED), like FindByKeys.
+//
 // db is the caller's already-decorated handle, so Preload chains compose:
 //
 //	rdb.FindByIds[Device](api.RDB.DB(ctx).Preload("DeviceType"), ids)
@@ -31,6 +36,9 @@ func FindByIds[T any](db *gorm.DB, ids []uint) ([]*T, error) {
 	found := make([]*T, 0, len(ids))
 	if len(ids) == 0 {
 		return found, nil
+	}
+	if len(ids) > MaxLookupKeys {
+		return nil, limit.Exceeded("lookup keys", len(ids), MaxLookupKeys)
 	}
 	if err := db.Find(&found, ids).Error; err != nil {
 		return nil, err

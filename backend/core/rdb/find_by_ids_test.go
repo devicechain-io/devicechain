@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/limit"
 	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
 )
@@ -145,5 +146,26 @@ func TestGormDropsAnEmptyInlineIdSlice(t *testing.T) {
 	}
 	if len(byToken) != 0 {
 		t.Fatalf("the `name in ?` form returned %d rows for an empty slice, want 0", len(byToken))
+	}
+}
+
+// More than MaxLookupKeys ids are refused with the limit refusal; exactly the bound is
+// answered.
+func TestFindByIdsRefusesMoreThanMaxLookupKeys(t *testing.T) {
+	db, ctx := newFindByIdsDB(t)
+	mk := func(n int) []uint {
+		ids := make([]uint, n)
+		for i := range ids {
+			ids[i] = uint(i + 1)
+		}
+		return ids
+	}
+	got, err := FindByIds[idThing](db.WithContext(ctx), mk(MaxLookupKeys))
+	if err != nil || len(got) != 3 {
+		t.Fatalf("a list at the bound must be answered (3 seeded rows): %d rows, %v", len(got), err)
+	}
+	_, err = FindByIds[idThing](db.WithContext(ctx), mk(MaxLookupKeys+1))
+	if _, ok := limit.As(err); !ok {
+		t.Fatalf("a list over the bound must be a limit refusal, got %v", err)
 	}
 }

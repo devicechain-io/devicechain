@@ -6,6 +6,7 @@ package rdb
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/devicechain-io/dc-microservice/core"
@@ -38,6 +39,11 @@ func newKeysDB(t *testing.T) (*gorm.DB, context.Context) {
 			t.Fatal(err)
 		}
 	}
+	// Another tenant's row under a token the tests ask for: it must never come back.
+	other := core.WithTenant(context.Background(), "other")
+	if err := db.WithContext(other).Create(&keyThing{Token: "a"}).Error; err != nil {
+		t.Fatal(err)
+	}
 	return db.WithContext(ctx), ctx
 }
 
@@ -48,7 +54,7 @@ func TestFindByKeysReturnsMatches(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(out) != 2 {
-		t.Fatalf("got %d rows, want 2", len(out))
+		t.Fatalf("got %d rows, want 2 (the other tenant's \"a\" must not be returned)", len(out))
 	}
 }
 
@@ -92,11 +98,15 @@ func TestFindByKeysBoundary(t *testing.T) {
 func TestFindByKeysRefusesBadInput(t *testing.T) {
 	db, _ := newKeysDB(t)
 	var out []keyThing
-	if err := FindByKeys(db, &out, "token", "notaslice"); err == nil {
-		t.Fatal("non-slice keys must be refused")
+	err := FindByKeys(db, &out, "token", "notaslice")
+	if err == nil || !strings.Contains(err.Error(), "keys must be a slice") {
+		t.Fatalf("non-slice keys must be refused by FindByKeys itself, got %v", err)
 	}
-	if err := FindByKeys(db, &out, "token; drop table x", []string{"a"}); err == nil {
-		t.Fatal("non-identifier column must be refused")
+	for _, col := range []string{"token; drop table x", "", "1token", "to ken", "token)--"} {
+		err := FindByKeys(db, &out, col, []string{"a"})
+		if err == nil || !strings.Contains(err.Error(), "is not a plain column name") {
+			t.Fatalf("column %q must be refused with the identifier error, got %v", col, err)
+		}
 	}
 }
 
