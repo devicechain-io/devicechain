@@ -10,14 +10,55 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"unicode"
 
 	"github.com/devicechain-io/dc-microservice/graphql/schemaplane"
+	graphql "github.com/graph-gophers/graphql-go"
+	"github.com/graph-gophers/graphql-go/ast"
 )
 
-// createMutation matches a create* field on a schema's Mutation type. The served
-// schemas indent their fields, which is what keeps this from matching the input
-// types and comments that also mention the word.
-var createMutation = regexp.MustCompile(`(?m)^[\t ]+create[A-Z]\w*\s*\(`)
+// mutationNames returns the names of the Mutation root fields one served schema file
+// declares that start with prefix followed by an upper-case letter ("create" ->
+// createDevice), or every Mutation root field when prefix is empty.
+//
+// 🔴 PARSED, NOT GREPPED. These used to be regexes over the file text, which is a
+// claim about FORMATTING: a """description""" can start a line with a word that
+// reads like a field, and a ")" inside one ends a signature early. The schemas
+// describe every element now, so only the parsed root type says what is declared.
+func mutationNames(t *testing.T, path, prefix string) []string {
+	t.Helper()
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	parsed, err := graphql.ParseSchema(string(body), nil, graphql.UseFieldResolvers())
+	if err != nil {
+		t.Fatalf("parse %s: %v", path, err)
+	}
+	root, ok := parsed.AST().RootOperationTypes["mutation"].(*ast.ObjectTypeDefinition)
+	if !ok {
+		return nil
+	}
+	var out []string
+	for _, f := range root.Fields {
+		rest, found := strings.CutPrefix(f.Name, prefix)
+		if !found || (prefix != "" && (rest == "" || !unicode.IsUpper(rune(rest[0])))) {
+			continue
+		}
+		out = append(out, f.Name)
+	}
+	return out
+}
+
+// parsedArea parses one functional area's served tenant-plane schema.
+func parsedArea(t *testing.T, area string) *ast.Schema {
+	t.Helper()
+	parsed, err := graphql.ParseSchema(schemaFor(t, area), nil, graphql.UseFieldResolvers())
+	if err != nil {
+		t.Fatalf("parse the %s schema: %v", area, err)
+	}
+	return parsed.AST()
+}
 
 // servedSchemas returns every tenant-plane schema file in the tree. The
 // identity-token schemas — the admin API and the settings API — are excluded
@@ -104,11 +145,7 @@ func TestCoverageDenominatorMatchesTheSchemas(t *testing.T) {
 	counted := 0
 	perFile := map[string]int{}
 	for _, s := range schemas {
-		body, err := os.ReadFile(s)
-		if err != nil {
-			t.Fatalf("read %s: %v", s, err)
-		}
-		n := len(createMutation.FindAll(body, -1))
+		n := len(mutationNames(t, s, "create"))
 		if n > 0 {
 			perFile[s] = n
 			counted += n
@@ -165,12 +202,8 @@ func declaredCreateMutations(t *testing.T) map[string]bool {
 	t.Helper()
 	out := map[string]bool{}
 	for _, s := range servedSchemas(t) {
-		body, err := os.ReadFile(s)
-		if err != nil {
-			t.Fatalf("read %s: %v", s, err)
-		}
-		for _, m := range createMutation.FindAll(body, -1) {
-			out[strings.TrimRight(strings.TrimSpace(string(m)), "( \t")] = true
+		for _, m := range mutationNames(t, s, "create") {
+			out[m] = true
 		}
 	}
 	return out
@@ -181,19 +214,14 @@ func declaredCreateMutations(t *testing.T) map[string]bool {
 // initiateDeviceClaim — and "26 of 26 create mutations" was true and much narrower than
 // it sounded while they sat outside it entirely.
 func TestEveryNonCreateWriteNamesAMutationTheSchemasDeclare(t *testing.T) {
-	any := regexp.MustCompile(`(?m)^[\t ]+([a-z][A-Za-z0-9]*)\s*\(`)
 	declared := map[string]bool{}
 	for _, s := range servedSchemas(t) {
-		body, err := os.ReadFile(s)
-		if err != nil {
-			t.Fatalf("read %s: %v", s, err)
-		}
-		for _, m := range any.FindAllSubmatch(body, -1) {
-			declared[string(m[1])] = true
+		for _, m := range mutationNames(t, s, "") {
+			declared[m] = true
 		}
 	}
 	if len(declared) < 50 {
-		t.Fatalf("only %d mutation/query names were found; the probe is broken, not the table", len(declared))
+		t.Fatalf("only %d mutation names were found; the probe is broken, not the table", len(declared))
 	}
 	for _, e := range allEntities() {
 		if !declared[e.Mutation] {
@@ -284,14 +312,14 @@ func TestEveryEntityIsComplete(t *testing.T) {
 // the outer return type says nothing about it. No entry is both wrapped and bulk
 // today, and the check would silently pass if one were.
 func TestBulkAgreesWithTheDeclaredReturnType(t *testing.T) {
-	byArea := map[string]string{}
+	byArea := map[string]*ast.Schema{}
 	for _, e := range entities {
 		if e.Wrap != "" {
 			continue
 		}
 		schema, ok := byArea[e.Area]
 		if !ok {
-			schema = schemaFor(t, e.Area)
+			schema = parsedArea(t, e.Area)
 			byArea[e.Area] = schema
 		}
 		returns, ok := returnTypeOf(schema, e.Mutation)
@@ -305,16 +333,13 @@ func TestBulkAgreesWithTheDeclaredReturnType(t *testing.T) {
 	}
 }
 
-// returnTypeOf reads the declared result type of a field, e.g. "[Device!]!".
-// The argument list holds no closing paren of its own, which is what makes the
-// lazy match safe here.
-func returnTypeOf(schema, field string) (string, bool) {
-	m := regexp.MustCompile(`(?m)^[\t ]+` + regexp.QuoteMeta(field) + `\s*\([^)]*\)\s*:\s*(\S+)\s*$`).
-		FindStringSubmatch(schema)
-	if m == nil {
+// returnTypeOf reads the declared result type of a Mutation field, e.g. "[Device!]!".
+func returnTypeOf(s *ast.Schema, field string) (string, bool) {
+	f := rootField(s, "mutation", field)
+	if f == nil {
 		return "", false
 	}
-	return m[1], true
+	return f.Type.String(), true
 }
 
 // 🔑 THE AREA LIST IS A SPECIFICATION, not a printout. The upgrade rig reads it
@@ -357,10 +382,6 @@ func TestTheAreaListCoversEveryEntityExactlyOnce(t *testing.T) {
 	if !sort.StringsAreSorted(got) {
 		t.Errorf("the area list is not sorted, so its output is not stable between builds: %v", got)
 	}
-}
-
-func stripSpace(s string) string {
-	return strings.Join(strings.Fields(s), "")
 }
 
 // The documents are generated rather than written, so the create and read

@@ -65,16 +65,37 @@ EXPECTED_UPDATE_SCHEMAS=7
 # It costs one alternation, and the self-test's new-service plant uses that form so the
 # branch is exercised rather than merely written.
 #
-# Descriptions ("""block""" and "string") are removed before anything else reads a line:
-# they are prose, and prose may hold a brace that would end the block early, a parenthesis
-# that would unbalance a signature, or a line that reads like a field ("updatedAt: ...").
+# Descriptions ("""block""" and "string") and # comments are removed before anything else
+# reads a line: they are prose, and prose may hold a brace that would end the block early,
+# a parenthesis that would unbalance a signature, or a line that reads like a field
+# ("updatedAt: ..."). It is a character scan, not a pair of regexes, because the three
+# interact: a "quoted" word inside a """description""", a """ inside a # comment, a # inside
+# a description, and an escaped \""" all put a regex-based stripper out of step for the
+# REST OF THE FILE — which hides every mutation after it, and a hidden mutation is a pass.
 mutation_block() {
   awk '
     {
-      gsub(/"""[^"]*"""/, "")
-      if (indesc) { if ($0 ~ /"""/) { indesc = 0 }; next }
-      if ($0 ~ /"""/) { indesc = 1; next }
-      gsub(/"[^"]*"/, "")
+      line = $0; out = ""; i = 1; n = length(line)
+      while (i <= n) {
+        if (blk) {
+          if (substr(line, i, 4) == "\\\"\"\"") { i += 4; continue }
+          if (substr(line, i, 3) == "\"\"\"") { blk = 0; i += 3; continue }
+          i++; continue
+        }
+        if (substr(line, i, 3) == "\"\"\"") { blk = 1; i += 3; continue }
+        c = substr(line, i, 1)
+        if (c == "#") break
+        if (c == "\"") {
+          i++
+          while (i <= n && substr(line, i, 1) != "\"") {
+            if (substr(line, i, 1) == "\\") i++
+            i++
+          }
+          i++; continue
+        }
+        out = out c; i++
+      }
+      $0 = out
     }
     !inb && /type[[:space:]]+Mutation([[:space:]]+implements[^{]*)?[[:space:]]*\{/ { inb = 1; d = 1; next }
     inb {
@@ -383,14 +404,29 @@ EOF
   #    current layout and whatever descriptions it carries, so neither case depends on how
   #    the schema happens to be formatted today; a plant that matches nothing fails the
   #    self-test rather than passing it.
-  local layout plant
-  for layout in one-line multi-line; do
+  #
+  #    The two PROSE layouts put text that has put a stripper out of step directly above
+  #    the defect: a "quoted" word inside a one-line description, and a """ inside a #
+  #    comment. Out of step, the stripper swallows the rest of the block and the defect
+  #    with it — a pass. Each prose layout is also planted WITHOUT the defect, and that
+  #    tree must pass, so the case cannot be satisfied by a stripper that breaks the block
+  #    in a way that fails everything.
+  local layout plant request
+  local one='updateDashboard(token: String!, request: REQ!, expectedUpdatedAt: String): Dashboard!'
+  for layout in one-line multi-line quoted-description comment-with-quotes \
+    quoted-description-clean comment-with-quotes-clean; do
     rm -rf "$tmp/t"; cp -r backend "$tmp/t"
-    if [ "$layout" = one-line ]; then
-      plant='    updateDashboard(token: String!, request: DashboardCreateRequest!, expectedUpdatedAt: String): Dashboard!'
-    else
-      plant=$'    updateDashboard(\n        token: String!\n        request: DashboardCreateRequest!\n        expectedUpdatedAt: String\n    ): Dashboard!'
-    fi
+    request=DashboardCreateRequest
+    case "$layout" in
+      *-clean) request=DashboardUpdateRequest ;;
+    esac
+    case "$layout" in
+      one-line) plant="    $one" ;;
+      multi-line) plant=$'    updateDashboard(\n        token: String!\n        request: REQ!\n        expectedUpdatedAt: String\n    ): Dashboard!' ;;
+      quoted-description*) plant=$'    """Updates a "draft" dashboard (see {braces})."""\n    '"$one" ;;
+      comment-with-quotes*) plant=$'    # a stray """ in a comment, and a { brace\n    '"$one" ;;
+    esac
+    plant="${plant//REQ/$request}"
     if ! PLANT="$plant" python3 - "$tmp/t/services/dashboard-management/graphql/schema.graphql" <<'EOF'
 import io, os, re, sys
 p = sys.argv[1]
@@ -405,11 +441,22 @@ EOF
       echo "🔴 self-test: the $layout plant did not apply, so this case would prove nothing" >&2
       return 1
     fi
-    if check_tree "$tmp/t" >/dev/null 2>&1; then
-      echo "🔴 self-test: an update* taking a *CreateRequest ($layout) was not caught" >&2
-      return 1
-    fi
-    echo "  ok   an update* mutation taking a *CreateRequest is caught ($layout)"
+    case "$layout" in
+      *-clean)
+        if ! check_tree "$tmp/t" >/dev/null 2>&1; then
+          echo "🔴 self-test: a correct schema with prose above it ($layout) was reported" >&2
+          return 1
+        fi
+        echo "  ok   prose above a correct update* is not a finding ($layout)"
+        ;;
+      *)
+        if check_tree "$tmp/t" >/dev/null 2>&1; then
+          echo "🔴 self-test: an update* taking a *CreateRequest ($layout) was not caught" >&2
+          return 1
+        fi
+        echo "  ok   an update* mutation taking a *CreateRequest is caught ($layout)"
+        ;;
+    esac
   done
 
   # 8. THE FLOOR ITSELF. Discovery that reads nothing must FAIL rather than report a clean

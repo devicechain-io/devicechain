@@ -18,7 +18,7 @@ export type DashboardCreateRequest = {
 
 /** Criteria for searching dashboards. */
 export type DashboardSearchCriteria = {
-  /** Return only dashboards whose name contains this text. */
+  /** Return only dashboards whose name contains this text. The match is case-sensitive. */
   name?: string | null | undefined;
   /** Page to return, starting at 1. */
   pageNumber: number;
