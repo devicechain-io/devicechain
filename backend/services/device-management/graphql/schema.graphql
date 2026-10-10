@@ -4,81 +4,152 @@
 #
 # Device Management GraphQL Schema
 #
+# Descriptions: a """string""" above an element is its PUBLIC description — served by
+# introspection, read by every GraphQL tool, published on the docs site — and may not
+# cite a decision record. A # comment is a maintainer note. backend/tools/docsgql/sdldesc
+# enforces both.
 
 # Base elements in gorm RDB model.
+"""Fields every stored record carries: a server-assigned id and its timestamps."""
 interface Model {
+    """
+    Server-assigned numeric identifier, as a string. Records are normally addressed by
+    token; the ById lookups take this value.
+    """
     id: ID!
+    """When the record was created, as an RFC 3339 timestamp."""
     createdAt: String
+    """When the record was last written, as an RFC 3339 timestamp."""
     updatedAt: String
+    """Always null: deleted records are not returned by this API."""
     deletedAt: String
 }
 
-# Entity referenced by unique token.
+"""A record addressed by a token, an identifier unique within the tenant among records of its kind."""
 interface TokenReference {
+    """
+    Identifier of the record, unique within the tenant among records of its kind. Letters,
+    digits, hyphens and underscores, starting with a letter or digit; at most 128 characters.
+    """
     token: String!
 }
 
-# Entity that provides human-readable name-description.
+"""A record with a human-readable name and description."""
 interface NamedEntity {
+    """Human-readable name. Null when none is set."""
     name: String
+    """Free-text description. Null when none is set."""
     description: String
 }
 
-# Entity that provides branding information.
+"""
+Presentation hints a user interface can use when showing the record. The server stores
+them as text and does not interpret them.
+"""
 interface BrandedEntity {
+    """URL of an image representing the record."""
     imageUrl: String
+    """Name of an icon representing the record. Not checked against any icon set."""
     icon: String
+    """Background colour to display the record with, such as a CSS colour. Not validated."""
     backgroundColor: String
+    """Foreground (text) colour to display the record with, such as a CSS colour. Not validated."""
     foregroundColor: String
+    """Border colour to display the record with, such as a CSS colour. Not validated."""
     borderColor: String
 }
 
-# Entity that provides metadata.
+"""A record that carries caller-defined metadata."""
 interface MetadataEntity {
+    """Caller-defined metadata as a JSON document, or null when none is set."""
     metadata: String
 }
 
-# Pagination info for search results.
+"""
+Where a page of search results sits in the full result set. Positions are 1-based and
+inclusive.
+"""
 type SearchResultsPagination {
+	"""Position of the first result on this page within the full result set (1-based)."""
 	pageStart: Int
+	"""
+	Position of the last result on this page within the full result set (1-based,
+	inclusive). Lower than pageStart when the page is past the end of the results.
+	"""
 	pageEnd: Int
+	"""Number of records matching the criteria across all pages."""
 	totalRecords: Int
 }
 
-# Pagination arguments for a paginated field or query (the input analogue of the
-# pageNumber/pageSize pair the search-criteria inputs carry inline). Resolution is
-# always bounded by the platform page-size ceiling regardless of the requested size.
+# The input analogue of the pageNumber/pageSize pair the search-criteria inputs carry
+# inline; resolved through rdb.Pagination, so the same clamp applies.
+"""Which page of results to return."""
 input PaginationInput {
+    """Page to return, starting at 1. Values below 1 are read as 1."""
     pageNumber: Int!
+    """Results per page. Below 1 means the default of 100; above 1000 is capped at 1000."""
     pageSize: Int!
 }
 
 # Represents a type or class of devices
+"""
+A kind of device: what it is (manufacturer and model), how it is displayed, and the device
+profile that defines what its devices measure and accept. Every device has exactly one
+device type, and many types may share one profile.
+"""
 type DeviceType implements Model & TokenReference & NamedEntity & BrandedEntity & MetadataEntity {
+    """Server-assigned numeric identifier, as a string. Address a device type by its token instead where you can."""
     id: ID!
+    """When the device type was created, as an RFC 3339 timestamp."""
     createdAt: String
+    """When the device type was last written, as an RFC 3339 timestamp."""
     updatedAt: String
+    """Always null: deleted device types are not returned."""
     deletedAt: String
+    """Identifier of the device type, unique within the tenant."""
     token: String!
+    """Human-readable name, up to 128 characters. Null when none is set."""
     name: String
+    """Free-text description, up to 1024 characters. Null when none is set."""
     description: String
+    """URL of an image representing the device type, up to 512 characters."""
     imageUrl: String
+    """Name of an icon representing the device type, up to 128 characters. Not checked against any icon set."""
     icon: String
+    """Background colour to display the device type with, up to 32 characters. Not validated."""
     backgroundColor: String
+    """Foreground (text) colour to display the device type with, up to 32 characters. Not validated."""
     foregroundColor: String
+    """Border colour to display the device type with, up to 32 characters. Not validated."""
     borderColor: String
+    """
+    The device profile this type adopts, or null when it adopts none. Devices of a type
+    with no profile have no declared metrics or commands.
+    """
     profile: DeviceProfile
+    """
+    Manufacturer of the devices of this type: free text, up to 128 characters. facetValues
+    lists the values already in use.
+    """
     manufacturer: String
+    """
+    Model of the devices of this type: free text, up to 128 characters. facetValues lists
+    the values already in use.
+    """
     model: String
+    """Caller-defined metadata as a JSON document, or null when none is set."""
     metadata: String
 }
 
-# A discovery facet (ADR-045 decision 8) whose in-use values suggest completions in
-# the authoring UI. MANUFACTURER/MODEL live on the device type; CATEGORY on the
-# profile.
+# A discovery facet (ADR-045 decision 8) whose in-use values suggest completions in the
+# authoring UI.
+"""A free-text classification field whose values in use facetValues can list."""
 enum DeviceFacet {
+    """The manufacturer field of device types."""
     MANUFACTURER
+    """The model field of device types."""
     MODEL
+    """The category field of device profiles."""
     CATEGORY
 }
 
@@ -88,34 +159,73 @@ enum DeviceFacet {
 # definitions (ADR-045 slice b) and for the profile's detection rules (ADR-051),
 # which are the one alarm-authoring path since the standalone alarm-definition
 # model was torn down.
+"""
+The capability contract a device type adopts: the metrics its devices report, the
+commands they accept, the detection rules evaluated against them and whether they report
+their own position. What you edit is a draft; publishDeviceProfile freezes the draft into
+a numbered version, and devices use only the active published version. Many device types
+may share one profile.
+"""
 type DeviceProfile implements Model & TokenReference & NamedEntity & MetadataEntity {
+    """Server-assigned numeric identifier, as a string. Address a profile by its token instead where you can."""
     id: ID!
+    """When the profile was created, as an RFC 3339 timestamp."""
     createdAt: String
+    """When the profile was last written, as an RFC 3339 timestamp."""
     updatedAt: String
+    """Always null: deleted profiles are not returned."""
     deletedAt: String
+    """
+    Identifier of the profile, unique within the tenant. It can be changed with
+    renameDeviceProfile only until the profile is first published or adopted by a device type.
+    """
     token: String!
+    """Human-readable name, up to 128 characters. Null when none is set."""
     name: String
+    """Free-text description, up to 1024 characters. Null when none is set."""
     description: String
+    """
+    Functional class of the devices, such as thermostat or meter: free text, up to 64
+    characters. facetValues lists the values already in use.
+    """
     category: String
+    """Caller-defined metadata as a JSON document, or null when none is set."""
     metadata: String
     # The published version a device currently resolves through this profile
     # (ADR-045 versioning); null until the profile is first published — an
     # unpublished profile's definitions are inert (a device resolves nothing).
+    """
+    The published version devices currently use, or null if the profile has never been
+    published. Until then devices of this profile have no declared metrics or commands.
+    """
     activeVersion: Int
-    # How many device types currently adopt this profile. A profile is a shared
-    # contract, so editing its definitions affects every adopting type; the
-    # authoring UI surfaces this before a publish.
+    # A profile is a shared contract, so editing its definitions affects every adopting
+    # type; the authoring UI surfaces this before a publish.
+    """Number of device types that currently adopt this profile."""
     deviceTypeCount: Int!
-    # The profile's DRAFT capability definitions — the editable working copy. A
-    # device resolves the active PUBLISHED version, not these; edits here take
-    # effect only when published.
+    """
+    The metric definitions in the draft. Devices use the active published version, so a
+    change here takes effect only when the profile is published.
+    """
     metricDefinitions: [MetricDefinition!]!
+    """
+    The command definitions in the draft. Devices use the active published version, so a
+    change here takes effect only when the profile is published.
+    """
     commandDefinitions: [CommandDefinition!]!
+    """
+    The detection rules in the draft. Devices use the active published version, so a change
+    here takes effect only when the profile is published.
+    """
     detectionRules: [DetectionRule!]!
-    # The profile's DRAFT position declaration, or null when devices built on this
-    # profile do not report their own position. Note this is a single nullable object
-    # and not a list — a device reports its position once — so null is the whole
-    # display rule: no declaration means no map, no track, no last-fix panel.
+    # Note this is a single nullable object and not a list — a device reports its position
+    # once — so null is the whole display rule: no declaration means no map, no track, no
+    # last-fix panel.
+    """
+    The draft position declaration: present when devices of this profile report their own
+    position, null when they do not. Like the other draft content, it reaches devices only
+    when the profile is published.
+    """
     location: DeviceLocationDeclaration
 }
 
@@ -133,21 +243,40 @@ type DeviceProfile implements Model & TokenReference & NamedEntity & MetadataEnt
 # or per profile: WGS84 / EPSG:4326 decimal degrees, elevation in metres above the
 # ellipsoid, accuracy in metres, speed in metres per second, heading in degrees
 # clockwise from true north in [0, 360).
+"""
+A statement that devices report their own position, with what to expect of it. The object
+being present is the statement; both fields are optional, so an empty object still means
+the devices report position. It is descriptive only: location data is accepted and stored
+whether or not a declaration exists.
+"""
 type DeviceLocationDeclaration {
-    # Horizontal accuracy an operator should expect from this kind of device, in
-    # metres. Descriptive: a worse fix is still stored, unchanged.
+    """
+    Horizontal accuracy to expect from these devices, in metres, or null when not stated.
+    Descriptive only: a less accurate fix is still stored unchanged.
+    """
     expectedAccuracyMeters: Float
-    # How often a fix is expected to arrive, in seconds. Descriptive: nothing alarms
-    # on it here — an absence rule on the profile is the mechanism for that.
+    # Nothing alarms on it here — an absence rule on the profile is the mechanism for that.
+    """
+    How often a position fix is expected, in seconds, or null when not stated. Descriptive
+    only: nothing is raised when fixes arrive less often.
+    """
     expectedUpdateIntervalSeconds: Int
 }
 
-# Sets a profile's position declaration. Supplying it declares that these devices
-# report their own position; omitting it (or passing null) on an update CLEARS an
-# existing declaration, which is how a profile stops declaring position. Both fields
-# are optional, so `{}` is the valid "reports position, no expectations stated" form.
+"""
+Sets a profile's position declaration. Supplying it states that the devices report their
+own position; an empty object makes that statement with no expectations.
+"""
 input DeviceLocationDeclarationInput {
+    """
+    Horizontal accuracy to expect, in metres. Must be a positive finite number when sent;
+    omit it or send null to state no expectation.
+    """
     expectedAccuracyMeters: Float
+    """
+    How often a position fix is expected, in seconds. Must be positive when sent; omit it
+    or send null to state no expectation.
+    """
     expectedUpdateIntervalSeconds: Int
 }
 
@@ -156,51 +285,112 @@ input DeviceLocationDeclarationInput {
 # frozen together.
 # The snapshot blob is deliberately omitted here — the list stays light; a device
 # resolves the active version server-side, and rollback re-points it by version.
+"""
+An immutable, published snapshot of a profile's metric, command and detection-rule
+definitions and its position declaration. Versions are never deleted while the profile
+exists; rollbackDeviceProfile makes an earlier one active again.
+"""
 type DeviceProfileVersion {
-    # Monotonic per-profile version number.
+    """Version number: 1 for the first publish of the profile, increasing by one with each publish."""
     version: Int!
-    # Optional user-supplied label (may embed a semver string; not parsed).
+    """Optional label given at publish time, such as a release name. Not interpreted."""
     label: String
+    """Optional notes given at publish time."""
     description: String
-    # When the version was published (the row's creation time).
+    """When the version was published, as an RFC 3339 timestamp."""
     publishedAt: String!
-    # The identity that published it (username, falling back to email).
+    """Who published it: their username, or their email when there is no username."""
     publishedBy: String
 }
 
 # Represents a typed, unit-bearing metric declared on a device profile (ADR-016/ADR-045).
+"""
+A measurement the devices of a profile report: its key, numeric type, unit and allowed
+values. Inbound measurements whose key matches are validated against it; a measurement
+whose key is not declared is not validated.
+"""
 type MetricDefinition implements Model & TokenReference & NamedEntity & MetadataEntity {
+    """Server-assigned numeric identifier, as a string. Address a metric definition by its token instead where you can."""
     id: ID!
+    """When the metric definition was created, as an RFC 3339 timestamp."""
     createdAt: String
+    """When the metric definition was last written, as an RFC 3339 timestamp."""
     updatedAt: String
+    """Always null: deleted metric definitions are not returned."""
     deletedAt: String
+    """Identifier of the metric definition, unique within the tenant."""
     token: String!
+    """Human-readable name, up to 128 characters. Null when none is set."""
     name: String
+    """Free-text description, up to 1024 characters. Null when none is set."""
     description: String
+    """The profile this metric is declared on."""
     deviceProfile: DeviceProfile!
+    """
+    The key a measurement uses to report this metric, unique within the profile and at most
+    128 characters.
+    """
     metricKey: String!
+    """The value type: DOUBLE, INT or BOOLEAN. A BOOLEAN value is stored as 0 or 1."""
     dataType: String!
+    """
+    Unit of measure, such as a UCUM code (Cel, kW). It is carried with each measurement
+    of this metric; values are not converted.
+    """
     unit: String
+    """
+    Smallest value accepted for a DOUBLE or INT metric, or null for no lower bound. A
+    measurement below it is rejected.
+    """
     minValue: Float
+    """
+    Largest value accepted for a DOUBLE or INT metric, or null for no upper bound. A
+    measurement above it is rejected.
+    """
     maxValue: Float
+    """
+    The allowed values as a JSON array of strings, or null when any value is allowed. A
+    measurement must equal one of them exactly. A value that is not a non-empty array of
+    strings restricts nothing.
+    """
     enum: String
+    """Optional semantic tag for the metric, such as a Web of Things type. Stored and returned; not interpreted."""
     descriptor: String
+    """Caller-defined metadata as a JSON document, or null when none is set."""
     metadata: String
 }
 
-# Data required to create a metric definition.
+"""Fields for a new metric definition."""
 input MetricDefinitionCreateRequest {
+    """Identifier for the new metric definition. A token already in use in the tenant is refused with CONFLICT."""
     token: String!
+    """Token of the profile to declare the metric on. An unknown token fails the request."""
     deviceProfileToken: String!
+    """
+    The key measurements will use for this metric, at most 128 characters. A key the
+    profile already declares is refused with CONFLICT.
+    """
     metricKey: String!
+    """Human-readable name, up to 128 characters."""
     name: String
+    """Free-text description, up to 1024 characters."""
     description: String
+    """
+    The value type: DOUBLE, INT or BOOLEAN. STRING is refused, because a metric must be
+    numeric; report string values as attributes instead.
+    """
     dataType: String!
+    """Unit of measure, such as a UCUM code (Cel, kW)."""
     unit: String
+    """Smallest value accepted for a DOUBLE or INT metric."""
     minValue: Float
+    """Largest value accepted for a DOUBLE or INT metric."""
     maxValue: Float
+    """Allowed values as a JSON array of strings. Must be valid JSON."""
     enum: String
+    """Optional semantic tag, such as a Web of Things type."""
     descriptor: String
+    """Caller-defined metadata. Must be valid JSON; an empty string means none."""
     metadata: String
 }
 
@@ -217,172 +407,253 @@ input MetricDefinitionCreateRequest {
 # dataType is validated ONLY when the caller names it: an absent field has nothing to
 # validate, and checking the stored value instead would refuse a rename over a type the
 # caller never sent.
+"""
+A partial update to a metric definition. Omit a field to leave the stored value alone,
+send a value to set it, or send an explicit null to clear it; the fields that cannot be
+cleared say so. The definition is named by the mutation's token argument, so there is no
+token here. Any refusal leaves the definition unchanged.
+"""
 input MetricDefinitionUpdateRequest {
-    # Re-points the definition at another device profile. Omit to keep the current one;
-    # null is refused (a metric with no profile is unreachable by any device), and an
-    # unknown token refuses the whole update.
+    """
+    Token of another profile to move the definition to. An explicit null is refused, and
+    an unknown token fails the whole update.
+    """
     deviceProfileToken: String
-    # Required and unclearable: a measurement event names the metric by this key.
+    """
+    New key for the metric, unique within the profile the definition ends up in. An
+    explicit null or a blank value is refused.
+    """
     metricKey: String
+    """New name, or null to clear it."""
     name: String
+    """New description, or null to clear it."""
     description: String
-    # Required and unclearable; validated against the metric type vocabulary when sent.
+    """New value type: DOUBLE, INT or BOOLEAN. An explicit null is refused."""
     dataType: String
+    """New unit, or null to clear it."""
     unit: String
+    """New lower bound, or null to remove it."""
     minValue: Float
+    """New upper bound, or null to remove it."""
     maxValue: Float
+    """New allowed values as a JSON array of strings, or null to allow any value."""
     enum: String
+    """New semantic tag, or null to clear it."""
     descriptor: String
+    """New metadata (valid JSON, replacing the stored document), or null to clear it."""
     metadata: String
 }
 
-# Criteria used when searching for metric definitions.
+"""Criteria for searching metric definitions. Results are newest first."""
 input MetricDefinitionSearchCriteria {
+    """Page to return, starting at 1. Values below 1 are read as 1."""
     pageNumber: Int!
+    """Results per page. Below 1 means the default of 100; above 1000 is capped at 1000."""
     pageSize: Int!
+    """Return only definitions on the profile with this token. An unknown token matches nothing."""
     deviceProfile: String
+    """Return only definitions with exactly this metric key."""
     metricKey: String
 }
 
-# Search results returned from metric definition query.
+"""One page of metric definitions matching a search."""
 type MetricDefinitionSearchResults {
+    """The metric definitions on this page."""
     results: [MetricDefinition!]!
+    """Where this page sits in the full result set."""
     pagination: SearchResultsPagination!
 }
 
-# The answer to "may this command be enqueued to this device?" — the ADR-043
-# decision 3 enqueue gate, evaluated here because this service owns the command
-# vocabulary. A rejection is a verdict, not a GraphQL error, so a caller can tell an
-# invalid command (relayable to its client) from an unavailable check (fail closed).
+# The ADR-043 decision 3 enqueue gate, evaluated here because this service owns the
+# command vocabulary. A rejection is a verdict, not a GraphQL error, so a caller can tell
+# an invalid command (relayable to its client) from an unavailable check (fail closed).
+"""
+Whether a command may be sent to a device. A refusal is reported here rather than as a
+GraphQL error; an error means the check itself could not be made.
+"""
 type CommandEnqueueVerdict {
-    # Whether the command may be enqueued.
+    """True when the command may be sent."""
     allowed: Boolean!
-    # The stable, machine-readable classification of a rejection; null when allowed.
-    # One of DEVICE_NOT_FOUND, COMMAND_NOT_IN_VOCABULARY, PAYLOAD_SCHEMA_VIOLATION.
-    # Branch on this, never on `reason` — the reason is prose for a person and its
-    # wording may change without the meaning changing.
+    """
+    Why the command was refused, as a stable code; null when allowed. One of
+    DEVICE_NOT_FOUND (no device has the token), COMMAND_NOT_IN_VOCABULARY (the device's
+    published profile declares commands and this key is not one of them) or
+    PAYLOAD_SCHEMA_VIOLATION (the payload does not satisfy the command's parameters).
+    Branch on this, not on reason.
+    """
     code: String
-    # Why it was rejected, in client-safe terms; null when allowed.
+    """
+    Why the command was refused, in words a person can act on; null when allowed. The
+    wording may change; use code to decide what to do.
+    """
     reason: String
 }
 
-# One device a batch enqueue gate refused, and why — the same (code, reason) pair
-# CommandEnqueueVerdict carries, plus the device it is about, because a batch answers
-# about many devices at once and a verdict with no subject is unattributable.
+"""One device a batch command check refused, and why."""
 type BatchEnqueueRefusal {
-    # The device this refusal is about, exactly as the caller spelled it.
+    """The refused device's token, exactly as it appeared in the request."""
     deviceToken: String!
-    # The machine-readable classification — the SAME vocabulary validateCommandEnqueue
-    # produces (DEVICE_NOT_FOUND, COMMAND_NOT_IN_VOCABULARY, PAYLOAD_SCHEMA_VIOLATION),
-    # never a batch-specific one. Branch on this, never on `reason`.
+    """
+    Why the command was refused, as a stable code: DEVICE_NOT_FOUND,
+    COMMAND_NOT_IN_VOCABULARY or PAYLOAD_SCHEMA_VIOLATION, with the same meanings as in
+    validateCommandEnqueue. Branch on this, not on reason.
+    """
     code: String!
-    # Why it was refused, in client-safe terms: it names only the device token, the
-    # command key and the offending parameter — never a service, host or internal id.
+    """Why the command was refused, in words a person can act on. The wording may change."""
     reason: String!
 }
 
-# One page of the devices an entity group collects, resolved as a command target.
+"""One page of the devices an entity group contains, for use as the target of a command."""
 type DeviceGroupTargetPage {
-    # Whether the group cannot serve as a command target at all. When true, `code` and
-    # `reason` explain it and every other field is meaningless — in particular
-    # deviceTokens is empty, which must NOT be read as "the group has no members".
+    """
+    True when the group cannot be a command target. code and reason then explain why, and
+    the empty deviceTokens list does not mean the group has no members.
+    """
     rejected: Boolean!
-    # The classification of a rejection; null otherwise. One of GROUP_NOT_FOUND,
-    # GROUP_NOT_A_DEVICE_GROUP, GROUP_NOT_PUBLISHED, GROUP_VERSION_NOT_FOUND,
-    # GROUP_NOT_VERSIONED.
+    """
+    Why the group was refused, as a stable code; null when not rejected. One of
+    GROUP_NOT_FOUND, GROUP_NOT_A_DEVICE_GROUP (it contains something other than devices),
+    GROUP_NOT_PUBLISHED (a dynamic group that was never published),
+    GROUP_VERSION_NOT_FOUND (the requested version does not exist) or GROUP_NOT_VERSIONED
+    (a version was requested for a static group).
+    """
     code: String
-    # Why the group was refused, in client-safe terms; null otherwise.
+    """Why the group was refused, in words a person can act on; null when not rejected."""
     reason: String
-    # This page's device tokens, ascending by the member's row id.
+    """The device tokens on this page, in ascending order of the devices' ids."""
     deviceTokens: [String!]!
-    # The cursor to pass as afterId for the next page; null when the group is exhausted.
-    #
     # It is a String rather than an Int because it carries a row id, and GraphQL's Int is
     # a signed 32-bit value — an id beyond that would fail to marshal on the one field
-    # whose entire job is to not lose members. Treat it as opaque.
+    # whose entire job is to not lose members.
+    """
+    Opaque cursor to pass as afterId for the next page. Null when this page holds fewer
+    tokens than the limit; a full page always carries a cursor, so a walk can end with
+    an empty page.
+    """
     nextCursor: String
-    # The frozen group version this page resolved against; null for a static group,
-    # which is never versioned. Record it: it is what lets an audit answer "what did this
-    # group MEAN when the command fired?" after someone edits the selector.
+    # Record it: it is what lets an audit answer "what did this group MEAN when the
+    # command fired?" after someone edits the selector.
+    """The dynamic group's published version this page was resolved from; null for a static group."""
     resolvedVersion: Int
 }
 
-# One command a device currently accepts, read from its profile's active PUBLISHED
-# version (ADR-043 decision 3). This is a snapshot copy frozen at publish — deliberately
-# NOT a CommandDefinition, because it has no id or token to address: the draft row it was
-# captured from may since have been edited or deleted. Author against commandDefinitions;
-# read this to know what a device will accept right now.
+# This is a snapshot copy frozen at publish — deliberately NOT a CommandDefinition,
+# because it has no id or token to address: the draft row it was captured from may since
+# have been edited or deleted.
+"""
+One command a device accepts, as frozen in its profile's active published version. To
+edit commands, use the profile's command definitions and publish the profile.
+"""
 type PublishedCommand {
+    """The key used to send this command."""
     commandKey: String!
+    """Human-readable name, or null when none was set."""
     name: String
+    """Free-text description, or null when none was set."""
     description: String
-    # The ordered []CommandParameter contract as a JSON string, which drives the console
-    # command form. Null when the command takes no structured arguments.
+    """The command's parameters as a JSON array of parameter descriptors, or null when it takes no structured arguments."""
     parameterSchema: String
 }
 
-# The commands a device currently accepts (ADR-043 decision 3).
+"""The commands a device currently accepts, from its profile's active published version."""
 type DeviceCommandVocabulary {
-    # Whether the profile restricts which commands may be sent. When false the enqueue
-    # gate accepts ANY command key (decision 4) and `commands` is empty — so an empty
-    # list does NOT mean "nothing can be sent to this device", it means the vocabulary
-    # is open. Read this field rather than inferring from the list length.
+    """
+    True when the device accepts only the listed commands. False when its published
+    profile declares no commands, or it has no published profile: any command key is then
+    accepted, and commands is empty.
+    """
     constrained: Boolean!
-    # The published vocabulary; empty when not constrained.
+    """The accepted commands; empty when not constrained."""
     commands: [PublishedCommand!]!
 }
 
-# Whether a device reports its own position, resolved through the profile version the
-# device ACTUALLY RESOLVES (ADR-078 / ADR-045) — its type's profile's active PUBLISHED
-# version, never the editable draft on DeviceProfile.location.
-#
 # That distinction is the whole reason this type exists. A client that read the draft
 # would show and hide a position panel on an unpublished edit, which is the same
 # publish-boundary confusion deviceCommandVocabulary was added to prevent for commands.
-#
-# 🔴 UNDECLARED IS NOT "NO POSITION". The declaration describes and displays; it never
-# permits, and ingest never gates on it, so a device that reports a position before
-# anyone declares it keeps every fix it sent. A consumer must not render `declared:
-# false` as "this device has no position" — check for a stored position too.
+"""
+Whether a device reports its own position, according to the active published version of
+its profile (not the draft). Location data is accepted whether or not it is declared, so
+an undeclared device may still have stored positions.
+"""
 type DeviceLocationCapability {
-    # Whether the resolved published version declares that this device reports position.
-    # False covers three sources that mean one thing to a reader — the type has no
-    # profile, the profile was never published, or the published version declares no
-    # location.
+    """
+    True when the published version declares that the device reports position. False when
+    the device's type has no profile, the profile was never published, or the published
+    version declares nothing.
+    """
     declared: Boolean!
-    # The declaration itself, or null when `declared` is false. A present object with
-    # neither field set is a real, distinct answer — "reports position, nothing stated
-    # about it" — and is NOT the same claim as null.
+    """
+    The declaration, or null when declared is false. An empty object is a real answer:
+    the device reports position and no expectations are stated.
+    """
     declaration: DeviceLocationDeclaration
 }
 
 # Represents a typed command declared on a device profile (ADR-043/ADR-045). parameterSchema
-# is the ordered []CommandParameter argument contract as a JSON string, which drives the
+# is the ordered []ParameterSpec argument contract as a JSON string, which drives the
 # console command form and constrains an issued command's payload at enqueue (the
-# validateCommandEnqueue gate). Null when the command declares no structured arguments.
+# validateCommandEnqueue gate).
+"""
+A command the devices of a profile accept, with the parameters its payload must satisfy.
+Once the profile is published, a command sent to such a device must use one of the
+published keys, and its payload is checked against the parameters.
+"""
 type CommandDefinition implements Model & TokenReference & NamedEntity & MetadataEntity {
+    """Server-assigned numeric identifier, as a string. Address a command definition by its token instead where you can."""
     id: ID!
+    """When the command definition was created, as an RFC 3339 timestamp."""
     createdAt: String
+    """When the command definition was last written, as an RFC 3339 timestamp."""
     updatedAt: String
+    """Always null: deleted command definitions are not returned."""
     deletedAt: String
+    """Identifier of the command definition, unique within the tenant."""
     token: String!
+    """Human-readable name, up to 128 characters. Null when none is set."""
     name: String
+    """Free-text description, up to 1024 characters. Null when none is set."""
     description: String
+    """The profile this command is declared on."""
     deviceProfile: DeviceProfile!
+    """
+    The key used to send this command, unique within the profile. Letters, digits, hyphens
+    and underscores, starting with a letter or digit; at most 128 characters.
+    """
     commandKey: String!
+    """
+    The command's parameters as a JSON array of parameter descriptors, or null when the
+    command takes no structured arguments, in which case payloads are not checked.
+    """
     parameterSchema: String
+    """Caller-defined metadata as a JSON document, or null when none is set."""
     metadata: String
 }
 
-# Data required to create a command definition. parameterSchema is a JSON array of
-# CommandParameter descriptors; it is validated for well-formedness on create.
+"""Fields for a new command definition."""
 input CommandDefinitionCreateRequest {
+    """Identifier for the new command definition. A token already in use in the tenant is refused with CONFLICT."""
     token: String!
+    """Token of the profile to declare the command on. An unknown token fails the request."""
     deviceProfileToken: String!
+    """
+    The key used to send the command. Letters, digits, hyphens and underscores, starting
+    with a letter or digit; at most 128 characters. A key the profile already declares is
+    refused with CONFLICT.
+    """
     commandKey: String!
+    """Human-readable name, up to 128 characters."""
     name: String
+    """Free-text description, up to 1024 characters."""
     description: String
+    """
+    The command's parameters: a JSON array of descriptors, each with a name and optional
+    description, kind (SCALAR, the default, or OBJECT with nested parameters), dataType
+    (DOUBLE, INT, BOOLEAN or STRING), unit, required, default, minValue, maxValue and enum.
+    Unknown keys and inconsistent constraints are refused. Omit it for a command without
+    structured arguments.
+    """
     parameterSchema: String
+    """Caller-defined metadata. Must be valid JSON; an empty string means none."""
     metadata: String
 }
 
@@ -395,32 +666,54 @@ input CommandDefinitionCreateRequest {
 # 🔴 Do NOT give any field in this input an SDL default value. A default makes the field
 # arrive already-populated for a caller who never sent it, which collapses "omitted" back
 # into "sent", and turns this input back into the full replace it replaces.
+"""
+A partial update to a command definition. Omit a field to leave the stored value alone,
+send a value to set it, or send an explicit null to clear it; the fields that cannot be
+cleared say so. The definition is named by the mutation's token argument, so there is no
+token here. Any refusal leaves the definition unchanged.
+"""
 input CommandDefinitionUpdateRequest {
-    # Re-parents the definition. Null is refused, and an unknown token refuses the whole
-    # update. The command key's uniqueness is checked against the profile the definition
-    # ends up IN, not the one it is moving away from.
+    """
+    Token of another profile to move the definition to. An explicit null is refused, and an
+    unknown token fails the whole update. The command key must be unique in the profile the
+    definition ends up in.
+    """
     deviceProfileToken: String
-    # Required and unclearable; grammar-checked when sent.
+    """
+    New command key, in the same format as on create. An explicit null or a blank value is
+    refused, and a key already declared on the profile is refused with CONFLICT.
+    """
     commandKey: String
+    """New name, or null to clear it."""
     name: String
+    """New description, or null to clear it."""
     description: String
-    # Nullable: a command that takes no structured arguments is a real state, so null
-    # clears the schema back to that.
+    """
+    New parameters (validated as on create), or null to make the command one without
+    structured arguments.
+    """
     parameterSchema: String
+    """New metadata (valid JSON, replacing the stored document), or null to clear it."""
     metadata: String
 }
 
-# Criteria used when searching for command definitions.
+"""Criteria for searching command definitions. Results are newest first."""
 input CommandDefinitionSearchCriteria {
+    """Page to return, starting at 1. Values below 1 are read as 1."""
     pageNumber: Int!
+    """Results per page. Below 1 means the default of 100; above 1000 is capped at 1000."""
     pageSize: Int!
+    """Return only definitions on the profile with this token. An unknown token matches nothing."""
     deviceProfile: String
+    """Return only definitions with exactly this command key."""
     commandKey: String
 }
 
-# Search results returned from command definition query.
+"""One page of command definitions matching a search."""
 type CommandDefinitionSearchResults {
+    """The command definitions on this page."""
     results: [CommandDefinition!]!
+    """Where this page sits in the full result set."""
     pagination: SearchResultsPagination!
 }
 
@@ -912,180 +1205,287 @@ type EntityAttributeSearchResults {
     pagination: SearchResultsPagination!
 }
 
-# Data required to create a device type.
+"""Fields for a new device type."""
 input DeviceTypeCreateRequest {
+    """Identifier for the new device type. A token already in use in the tenant is refused with CONFLICT."""
     token: String!
+    """Human-readable name, up to 128 characters."""
     name: String
+    """Free-text description, up to 1024 characters."""
     description: String
+    """URL of an image representing the device type, up to 512 characters."""
     imageUrl: String
+    """Name of an icon representing the device type, up to 128 characters."""
     icon: String
+    """Background colour, up to 32 characters."""
     backgroundColor: String
+    """Foreground (text) colour, up to 32 characters."""
     foregroundColor: String
+    """Border colour, up to 32 characters."""
     borderColor: String
-    # References the DeviceProfile this type adopts (ADR-045). Optional; empty or
-    # omitted leaves the type with no profile. An unknown token is rejected.
+    """
+    Token of the device profile the type adopts. Omit it, or send an empty value, for a
+    type with no profile. An unknown token fails the request.
+    """
     profileToken: String
+    """Manufacturer of the devices of this type, up to 128 characters."""
     manufacturer: String
+    """Model of the devices of this type, up to 128 characters."""
     model: String
+    """Caller-defined metadata. Must be valid JSON; an empty string means none."""
     metadata: String
 }
 
-# A PARTIAL update to a device type. Every field is optional in three senses, not
-# two: omit it to leave the stored value untouched, send null to clear it, send a
-# value to set it. Sending only `name` renames the type and changes nothing else.
-#
-# There is deliberately no `token` field — the type is identified by the mutation's
-# `token` argument, and an update cannot move it.
-#
 # 🔴 Do NOT give any field in this input an SDL default value. A default makes the
 # field arrive already-populated for a caller who never sent it, which collapses
 # "omitted" back into "sent", and turns this input back into the full replace it
 # replaces.
+"""
+A partial update to a device type. Omit a field to leave the stored value alone, send a
+value to set it, or send an explicit null to clear it; sending only name renames the type
+and changes nothing else. The type is named by the mutation's token argument, so there is
+no token here and a type's token cannot be changed.
+"""
 input DeviceTypeUpdateRequest {
+    """New name, or null to clear it."""
     name: String
+    """New description, or null to clear it."""
     description: String
+    """New image URL, or null to clear it."""
     imageUrl: String
+    """New icon name, or null to clear it."""
     icon: String
+    """New background colour, or null to clear it."""
     backgroundColor: String
+    """New foreground colour, or null to clear it."""
     foregroundColor: String
+    """New border colour, or null to clear it."""
     borderColor: String
-    # Re-points the DeviceProfile this type adopts (ADR-045). Omit to keep the
-    # current profile; null or an empty token detaches it. An unknown token is
-    # rejected and the whole update is refused.
+    """
+    Token of the profile the type should adopt; null or an empty value detaches the
+    current profile. An unknown token fails the whole update. Changing the profile changes
+    what every device of the type measures and accepts.
+    """
     profileToken: String
+    """New manufacturer, or null to clear it."""
     manufacturer: String
+    """New model, or null to clear it."""
     model: String
+    """New metadata (valid JSON, replacing the stored document), or null to clear it."""
     metadata: String
 }
 
-# Criteria used when searching for device types.
+"""Criteria for searching device types. Results are newest first."""
 input DeviceTypeSearchCriteria {
+    """Page to return, starting at 1. Values below 1 are read as 1."""
     pageNumber: Int!
+    """Results per page. Below 1 means the default of 100; above 1000 is capped at 1000."""
     pageSize: Int!
 }
 
-# Search results returned from device type query.
+"""One page of device types matching a search."""
 type DeviceTypeSearchResults {
+    """The device types on this page."""
     results: [DeviceType!]!
+    """Where this page sits in the full result set."""
     pagination: SearchResultsPagination!
 }
 
-# Data required to create a device profile (ADR-045).
+"""Fields for a new device profile. Its definitions are added afterwards, and take effect when the profile is published."""
 input DeviceProfileCreateRequest {
+    """Identifier for the new profile. A token already in use in the tenant is refused with CONFLICT."""
     token: String!
+    """Human-readable name, up to 128 characters."""
     name: String
+    """Free-text description, up to 1024 characters."""
     description: String
+    """Functional class of the devices, such as thermostat or meter, up to 64 characters."""
     category: String
+    """Caller-defined metadata. Must be valid JSON; an empty string means none."""
     metadata: String
-    # Whether devices built on this profile report their own position, and what to
-    # expect of it. Omit it for "these devices do not report their own position".
+    """
+    Whether the devices report their own position, and what to expect of it. Omit it when
+    they do not.
+    """
     location: DeviceLocationDeclarationInput
 }
 
-# Fields to change on an existing device profile (ADR-045). Every field is
-# three-state: OMIT it to leave the stored value alone, send NULL to clear it, or
-# send a value to set it.
-#
 # It carries no token. The mutation's own `token` argument names the profile, and
 # a profile is renamed through renameDeviceProfile — where the new token can mean
 # only one thing.
+"""
+A partial update to a device profile's own fields. Omit a field to leave the stored value
+alone, send a value to set it, or send an explicit null to clear it. The profile is named
+by the mutation's token argument; use renameDeviceProfile to change its token. Changes
+here are part of the draft.
+"""
 input DeviceProfileUpdateRequest {
+    """New name, or null to clear it."""
     name: String
+    """New description, or null to clear it."""
     description: String
+    """New category, or null to clear it."""
     category: String
+    """New metadata (valid JSON, replacing the stored document), or null to clear it."""
     metadata: String
-    # The position declaration. Omitting it PRESERVES the stored declaration; pass
-    # null to stop declaring that these devices report their own position. Sending
-    # `{}` is the distinct "reports position, no expectations stated" form.
+    """
+    New position declaration, replacing the stored one; null states that the devices do
+    not report their own position. An empty object states that they do, with no
+    expectations.
+    """
     location: DeviceLocationDeclarationInput
 }
 
-# Criteria used when searching for device profiles.
+"""Criteria for searching device profiles. Results are newest first."""
 input DeviceProfileSearchCriteria {
+    """Page to return, starting at 1. Values below 1 are read as 1."""
     pageNumber: Int!
+    """Results per page. Below 1 means the default of 100; above 1000 is capped at 1000."""
     pageSize: Int!
 }
 
-# Search results returned from device profile query.
+"""One page of device profiles matching a search."""
 type DeviceProfileSearchResults {
+    """The device profiles on this page."""
     results: [DeviceProfile!]!
+    """Where this page sits in the full result set."""
     pagination: SearchResultsPagination!
 }
 
 # Represents a device instance
+"""
+A device: one connected thing the platform receives events from and sends commands to.
+What it measures and accepts comes from its device type's profile.
+"""
 type Device implements Model & TokenReference & NamedEntity & MetadataEntity & Entity {
+    """Server-assigned numeric identifier, as a string. Address a device by its token instead where you can."""
     id: ID!
+    """When the device was created, as an RFC 3339 timestamp."""
     createdAt: String
+    """When the device was last written, as an RFC 3339 timestamp."""
     updatedAt: String
+    """Always null: deleted devices are not returned."""
     deletedAt: String
+    """
+    Identifier of the device, unique within the tenant. It cannot be changed after the
+    device is created.
+    """
     token: String!
-    # Optional customer-owned business id (ADR-049) — a VIN, serial, asset tag —
-    # distinct from the token: opaque, not a credential, unique per tenant when set.
+    # ADR-049: opaque, not a credential, unique per tenant when set.
+    """
+    Optional business identifier you assign, such as a serial number or VIN, up to 256
+    characters. Unique within the tenant when set. It is only a lookup key: devices are not
+    addressed or authenticated by it.
+    """
     externalId: String
+    """Human-readable name, up to 128 characters. Null when none is set."""
     name: String
+    """Free-text description, up to 1024 characters. Null when none is set."""
     description: String
+    """The device's type."""
     deviceType: DeviceType!
+    """Caller-defined metadata as a JSON document, or null when none is set."""
     metadata: String
 }
 
-# Data required to create a device.
+"""Fields for a new device."""
 input DeviceCreateRequest {
+    """Identifier for the new device. A token already in use in the tenant is refused with CONFLICT."""
     token: String!
+    """
+    Optional business identifier, up to 256 characters. A value another device in the
+    tenant already has is refused with CONFLICT.
+    """
     externalId: String
+    """Human-readable name, up to 128 characters."""
     name: String
+    """Free-text description, up to 1024 characters."""
     description: String
+    """Token of the device's type. An unknown token fails the request."""
     deviceTypeToken: String!
+    """Caller-defined metadata. Must be valid JSON; an empty string means none."""
     metadata: String
 }
 
-# A PARTIAL update to a device: omit a field to leave it alone, send null to clear
-# it, send a value to set it. There is no `token` member — the mutation's own
-# `token` argument names the row. It used to be the payload token that named the
-# row, with the argument ignored, so a request whose two tokens disagreed silently
-# updated the device in the payload and returned it as though it were the one asked
-# for.
+# There is no `token` member — the mutation's own `token` argument names the row. It used
+# to be the payload token that named the row, with the argument ignored, so a request
+# whose two tokens disagreed silently updated the device in the payload and returned it as
+# though it were the one asked for.
 #
 # 🔴 Do NOT give any field in this input an SDL default value. A default makes the
 # field arrive already-populated for a caller who never sent it, which collapses
 # "omitted" back into "sent", and turns this input back into the full replace it
 # replaces.
+"""
+A partial update to a device. Omit a field to leave the stored value alone, send a value
+to set it, or send an explicit null to clear it; the fields that cannot be cleared say so.
+The device is named by the mutation's token argument, so there is no token here. An empty
+object changes nothing.
+"""
 input DeviceUpdateRequest {
+    """New business identifier, or null to clear it. A value another device already has is refused with CONFLICT."""
     externalId: String
+    """New name, or null to clear it."""
     name: String
+    """New description, or null to clear it."""
     description: String
-    # Re-types the device. Omit to keep the current type. NULL IS REFUSED: a device
-    # with no type resolves no capability at all. An unknown token is refused, and
-    # the refusal is total.
+    """
+    Token of a different device type to move the device to. An explicit null or an empty
+    value is refused, because every device must have a type; an unknown token fails the
+    whole update.
+    """
     deviceTypeToken: String
+    """New metadata (valid JSON, replacing the stored document), or null to clear it."""
     metadata: String
 }
 
-# Templated bulk device creation. The server renders `count` devices (indices
-# startIndex .. startIndex+count-1) from the templates and creates them in one
-# transaction. Templates understand `{n}` / `{n:0Wd}` (the 1-based index,
-# optionally zero-padded to width W) and, for externalIdTemplate, `{random}`
-# (a fresh random token per device). tokenTemplate MUST contain an index
-# placeholder so every device gets a distinct token.
+"""
+Creates many devices of one type from templates. Device n of the batch (n running from
+startIndex to startIndex + count - 1) is rendered by replacing {n} with n, or {n:0Wd}
+with n zero-padded to width W. Each template may be at most 256 characters, with a pad
+width of at most 128. The whole batch is created or none of it is.
+"""
 input DeviceBulkCreateRequest {
+    """Token of the device type for every device. An unknown token fails the request."""
     deviceTypeToken: String!
+    """Number of devices to create, from 1 to 1000."""
     count: Int!
+    """Index of the first device. Defaults to 1; values below 1 are refused."""
     startIndex: Int
+    """
+    Template for the device tokens. It must contain {n} or {n:0Wd} so each token is
+    distinct, must not contain {random}, and every rendered token must be a valid token
+    not already in use.
+    """
     tokenTemplate: String!
+    """Template for the device names. Optional; {random} is not allowed. A rendered name may be at most 128 characters."""
     nameTemplate: String
+    """
+    Template for the external ids. Optional. {random} renders a fresh random value per
+    device. When creating more than one device the template must contain {n}, {n:0Wd} or
+    {random}, since external ids are unique within the tenant. A rendered value may be at
+    most 256 characters.
+    """
     externalIdTemplate: String
+    """Metadata given to every device. Must be valid JSON; an empty string means none."""
     metadata: String
 }
 
-# Criteria used when searching for devices.
+"""Criteria for searching devices. Results are newest first."""
 input DeviceSearchCriteria {
+    """Page to return, starting at 1. Values below 1 are read as 1."""
     pageNumber: Int!
+    """Results per page. Below 1 means the default of 100; above 1000 is capped at 1000."""
     pageSize: Int!
+    """Return only devices of the device type with this token. An unknown token matches nothing."""
     deviceType: String
 }
 
-# Search results returned from device query.
+"""One page of devices matching a search."""
 type DeviceSearchResults {
+    """The devices on this page."""
     results: [Device!]!
+    """Where this page sits in the full result set."""
     pagination: SearchResultsPagination!
 }
 
@@ -2083,100 +2483,203 @@ type EntityRelationshipSearchResults {
 
 # Contains queries executed against model.
 type Query {
-    # Find device types by unique id.
-    deviceTypesById(ids: [ID!]!): [DeviceType!]!
-    # Find device types by unique token.
-    deviceTypesByToken(tokens: [String!]!): [DeviceType!]!
-    # List device types that meet criteria.
-    deviceTypes(criteria: DeviceTypeSearchCriteria!): DeviceTypeSearchResults!
-    # Find device profiles by unique id.
-    deviceProfilesById(ids: [ID!]!): [DeviceProfile!]!
-    # Find device profiles by unique token.
-    deviceProfilesByToken(tokens: [String!]!): [DeviceProfile!]!
-    # List device profiles that meet criteria.
-    deviceProfiles(criteria: DeviceProfileSearchCriteria!): DeviceProfileSearchResults!
-    # List a device profile's published versions, newest first (ADR-045 versioning).
-    deviceProfileVersions(token: String!): [DeviceProfileVersion!]!
-    # The distinct non-empty values a discovery facet currently holds across the
-    # tenant's device types / profiles — the suggestions offered under the free-text
-    # facet inputs (ADR-045 decision 8). Sorted; empty until values are in use.
-    facetValues(facet: DeviceFacet!): [String!]!
+    """
+    Returns the device types with the given ids. Ids that match no device type are
+    omitted, an id that is not a number fails the request, and more than 1000 ids are
+    refused with LIMIT_EXCEEDED. Requires device:read.
+    """
+    deviceTypesById(
+        """Ids of the device types to return."""
+        ids: [ID!]!
+    ): [DeviceType!]!
+    """
+    Returns the device types with the given tokens. Tokens that match no device type are
+    omitted. Requires device:read.
+    """
+    deviceTypesByToken(
+        """Tokens of the device types to return."""
+        tokens: [String!]!
+    ): [DeviceType!]!
+    """Lists the tenant's device types, newest first, one page at a time. Requires device:read."""
+    deviceTypes(
+        """The page to return."""
+        criteria: DeviceTypeSearchCriteria!
+    ): DeviceTypeSearchResults!
+    """
+    Returns the device profiles with the given ids. Ids that match no profile are omitted,
+    an id that is not a number fails the request, and more than 1000 ids are refused with
+    LIMIT_EXCEEDED. Requires device:read.
+    """
+    deviceProfilesById(
+        """Ids of the profiles to return."""
+        ids: [ID!]!
+    ): [DeviceProfile!]!
+    """
+    Returns the device profiles with the given tokens. Tokens that match no profile are
+    omitted. Requires device:read.
+    """
+    deviceProfilesByToken(
+        """Tokens of the profiles to return."""
+        tokens: [String!]!
+    ): [DeviceProfile!]!
+    """Lists the tenant's device profiles, newest first, one page at a time. Requires device:read."""
+    deviceProfiles(
+        """The page to return."""
+        criteria: DeviceProfileSearchCriteria!
+    ): DeviceProfileSearchResults!
+    # #1426 adds limit/offset arguments and a 1000-version clamp; update this text when it lands.
+    """
+    Lists every published version of a device profile, newest first; empty when the profile
+    has never been published. Fails if no profile has the token. Requires device:read.
+    """
+    deviceProfileVersions(
+        """Token of the profile."""
+        token: String!
+    ): [DeviceProfileVersion!]!
+    """
+    Lists the distinct values currently in use for a free-text classification field across
+    the tenant's device types or profiles, sorted, without empty values. An authoring form
+    can offer them as suggestions. Requires device:read.
+    """
+    facetValues(
+        """The field whose values to list."""
+        facet: DeviceFacet!
+    ): [String!]!
     # List the tenant's declared facet keys, optionally for one member family
     # (ADR-061 G2). Powers the console browse/filter axis picker + typeahead.
     facetKeys(criteria: FacetKeySearchCriteria!): FacetKeySearchResults!
-    # Find metric definitions by unique id.
-    metricDefinitionsById(ids: [ID!]!): [MetricDefinition!]!
-    # Find metric definitions by unique token.
-    metricDefinitionsByToken(tokens: [String!]!): [MetricDefinition!]!
-    # List metric definitions that meet criteria.
-    metricDefinitions(criteria: MetricDefinitionSearchCriteria!): MetricDefinitionSearchResults!
-    # Find command definitions by unique id.
-    commandDefinitionsById(ids: [ID!]!): [CommandDefinition!]!
-    # Find command definitions by unique token.
-    commandDefinitionsByToken(tokens: [String!]!): [CommandDefinition!]!
-    # List command definitions that meet criteria.
-    commandDefinitions(criteria: CommandDefinitionSearchCriteria!): CommandDefinitionSearchResults!
-    # Decide whether a command may be enqueued to a device (ADR-043 decision 3):
-    # resolves device -> its profile's active PUBLISHED command vocabulary -> the
-    # definition for commandKey, and validates the payload against its parameter
-    # schema. Answers device existence, unknown command key, and payload validity in
-    # one hop. A profile declaring no vocabulary allows free-form payloads (decision 4).
-    validateCommandEnqueue(deviceToken: String!, commandKey: String!, payload: String): CommandEnqueueVerdict!
-    # Decide the same question for MANY devices at once — the gate a fleet-wide command
-    # write runs through. One command key and one payload apply to every device, so the
-    # verdict depends only on each device's TYPE: the devices resolve in one lookup and
-    # each distinct type's published vocabulary is resolved once, rather than once per
-    # device.
-    #
-    # It answers with REFUSALS ONLY. A device that may receive the command produces no
-    # entry, so a healthy fleet's answer is the empty list and the response scales with
-    # the problems rather than with the fleet — but it also means silence is consent, so
-    # send only tokens you intend to enqueue to. Duplicate tokens are collapsed and
-    # refusals come back in the order each device was first named.
-    #
-    # The refusal codes are exactly validateCommandEnqueue's, never a batch-specific set,
-    # so a device refused here is refused there for the same stated reason.
-    validateCommandEnqueueBatch(deviceTokens: [String!]!, commandKey: String!, payload: String): [BatchEnqueueRefusal!]!
-    # Resolve one page of the devices an entity group collects, for use as a command
-    # target. Walk it by passing the previous page's nextCursor as afterId; a null
-    # nextCursor means the group is exhausted.
-    #
+    """
+    Returns the metric definitions with the given ids. Ids that match nothing are omitted,
+    an id that is not a number fails the request, and more than 1000 ids are refused with
+    LIMIT_EXCEEDED. Requires device:read.
+    """
+    metricDefinitionsById(
+        """Ids of the metric definitions to return."""
+        ids: [ID!]!
+    ): [MetricDefinition!]!
+    """
+    Returns the metric definitions with the given tokens. Tokens that match nothing are
+    omitted. Requires device:read.
+    """
+    metricDefinitionsByToken(
+        """Tokens of the metric definitions to return."""
+        tokens: [String!]!
+    ): [MetricDefinition!]!
+    """
+    Searches the tenant's metric definitions, newest first, one page at a time. These are
+    the draft definitions, not a published version. Requires device:read.
+    """
+    metricDefinitions(
+        """Filters and the page to return."""
+        criteria: MetricDefinitionSearchCriteria!
+    ): MetricDefinitionSearchResults!
+    """
+    Returns the command definitions with the given ids. Ids that match nothing are omitted,
+    an id that is not a number fails the request, and more than 1000 ids are refused with
+    LIMIT_EXCEEDED. Requires device:read.
+    """
+    commandDefinitionsById(
+        """Ids of the command definitions to return."""
+        ids: [ID!]!
+    ): [CommandDefinition!]!
+    """
+    Returns the command definitions with the given tokens. Tokens that match nothing are
+    omitted. Requires device:read.
+    """
+    commandDefinitionsByToken(
+        """Tokens of the command definitions to return."""
+        tokens: [String!]!
+    ): [CommandDefinition!]!
+    """
+    Searches the tenant's command definitions, newest first, one page at a time. These are
+    the draft definitions, not a published version. Requires device:read.
+    """
+    commandDefinitions(
+        """Filters and the page to return."""
+        criteria: CommandDefinitionSearchCriteria!
+    ): CommandDefinitionSearchResults!
+    # The ADR-043 decision 3 enqueue gate; a profile declaring no vocabulary allows
+    # free-form payloads (decision 4).
+    """
+    Checks whether a command may be sent to a device, using the active published version
+    of the device's profile. If that version declares commands, the key must be one of
+    them and the payload must satisfy its parameters; if it declares none, or the device
+    has no published profile, any command is allowed. Refusals are returned as a verdict,
+    not as an error. Requires device:read.
+    """
+    validateCommandEnqueue(
+        """Token of the target device."""
+        deviceToken: String!
+        """Key of the command to send."""
+        commandKey: String!
+        """
+        The command's arguments as a JSON object. Omit it or send null to check a command
+        sent with no arguments, which passes only if no parameter is required.
+        """
+        payload: String
+    ): CommandEnqueueVerdict!
+    # One command key and one payload apply to every device, so the verdict depends only on
+    # each device's TYPE: the devices resolve in one lookup and each distinct type's
+    # published vocabulary is resolved once, rather than once per device.
+    """
+    Checks one command against many devices at once, with the same rules as
+    validateCommandEnqueue. Only refusals are returned: a device that may receive the
+    command produces no entry, so an empty list means every listed device may receive it.
+    Duplicate tokens are collapsed, and refusals come back in the order each device was
+    first named. More than 2000 tokens fails the request. Requires device:read.
+    """
+    validateCommandEnqueueBatch(
+        """Tokens of the target devices, at most 2000."""
+        deviceTokens: [String!]!
+        """Key of the command to send."""
+        commandKey: String!
+        """The command's arguments as a JSON object, applied to every device. Omit it to check a command with no arguments."""
+        payload: String
+    ): [BatchEnqueueRefusal!]!
     # It is a KEYSET walk rather than page-number paging, and that is a correctness
     # difference: with offset paging, a device leaving the group between two pages shifts
     # every later row down a slot, so a device that was a member throughout is never
-    # visited — it would receive no command and appear in no refusal list. A cursor
-    # cannot skip a row that stays in the set. What a walk can still miss is a device
-    # that JOINS below the cursor after it has passed, which is the honest semantic: the
-    # target set is the group's membership as of the moment the walk began.
-    #
-    # A dynamic group resolves its FROZEN published version — the group's draft selector
-    # is mutable, and a fleet actuation must not follow whatever someone last typed.
-    # Name a version to pin one explicitly; omit it for the active published version.
-    #
-    # Three conditions come back as rejected=true with a code rather than as errors,
-    # because each is a decided fact about the request the caller can act on: the group
-    # does not exist, it collects something other than devices, or it is a dynamic group
-    # that has never been published (so it has no frozen rule to fire at).
-    resolveDeviceGroupTargets(groupToken: String!, version: Int, afterId: String, limit: Int!): DeviceGroupTargetPage!
-    # List the commands a device currently accepts (ADR-043 decision 3) — the listing
-    # counterpart of validateCommandEnqueue, which is ask-don't-list. Both are answered
-    # from the same resolution, so what this offers is what the gate accepts.
-    #
-    # Null when the token resolves to no device. That is a normal state rather than a
-    # caller error: a dashboard or saved view can hold a token whose device was since
-    # deleted, and erroring would take the rest of a batched query down with it. It
-    # matches devicesByToken, which omits tokens it cannot resolve.
-    deviceCommandVocabulary(deviceToken: String!): DeviceCommandVocabulary
-    # Answer "does THIS device report its position?" (ADR-078) in one hop: resolves
-    # device -> its type -> its profile's active PUBLISHED version -> the position
-    # declaration frozen into it. The published resolution is the point — the draft on
-    # DeviceProfile.location is what an author is editing, not what a device resolves.
-    #
-    # Null when the token resolves to no device, matching deviceCommandVocabulary: a
-    # saved view can outlive its device, and erroring would null out every sibling in a
-    # batched document. A real device that declares nothing answers `declared: false`,
-    # which is a different fact and stays distinguishable from this null.
-    deviceLocationDeclaration(deviceToken: String!): DeviceLocationCapability
+    # visited. What a walk can still miss is a device that JOINS below the cursor after it
+    # has passed.
+    """
+    Returns one page of the devices an entity group contains, for use as the target of a
+    command. Pass each page's nextCursor as afterId to get the next one. A device that
+    stays in the group throughout a walk is visited exactly once. A dynamic group is
+    resolved from a published version, never from its editable draft. A group that cannot
+    be a target is answered with rejected set and a code, not with an error. Requires
+    device:read.
+    """
+    resolveDeviceGroupTargets(
+        """Token of the entity group."""
+        groupToken: String!
+        """
+        Published version of a dynamic group to resolve. Omit it for the active version.
+        Must be omitted for a static group.
+        """
+        version: Int
+        """The nextCursor of the previous page. Omit it to start from the beginning. A malformed cursor fails the request."""
+        afterId: String
+        """Maximum number of devices on the page, from 1 to 1000."""
+        limit: Int!
+    ): DeviceGroupTargetPage!
+    """
+    Lists the commands a device currently accepts, from the active published version of
+    its profile. It reads the same data validateCommandEnqueue checks against. Returns null
+    when no device has the token. Requires device:read.
+    """
+    deviceCommandVocabulary(
+        """Token of the device."""
+        deviceToken: String!
+    ): DeviceCommandVocabulary
+    """
+    Tells whether a device reports its own position, from the active published version of
+    its profile rather than the draft. Returns null when no device has the token; a device
+    that declares nothing answers with declared false. Requires device:read.
+    """
+    deviceLocationDeclaration(
+        """Token of the device."""
+        deviceToken: String!
+    ): DeviceLocationCapability
     # Find detection rules by unique id.
     detectionRulesById(ids: [ID!]!): [DetectionRule!]!
     # Find detection rules by unique token.
@@ -2269,14 +2772,36 @@ type Query {
     entityAttributes(criteria: EntityAttributeSearchCriteria!): EntityAttributeSearchResults!
     # Query the audit journal (ADR-019); tenant-scoped, newest first.
     auditEvents(criteria: AuditEventSearchCriteria!): AuditEventSearchResults!
-    # Find devices by unique id.
-    devicesById(ids: [ID!]!): [Device!]!
-    # Find devices by unique token.
-    devicesByToken(tokens: [String!]!): [Device!]!
-    # Find devices by customer-owned external id (ADR-049).
-    devicesByExternalId(externalIds: [String!]!): [Device!]!
-    # List devices that meet criteria.
-    devices(criteria: DeviceSearchCriteria!): DeviceSearchResults!
+    """
+    Returns the devices with the given ids. Ids that match no device are omitted, an id
+    that is not a number fails the request, and more than 1000 ids are refused with
+    LIMIT_EXCEEDED. Requires device:read.
+    """
+    devicesById(
+        """Ids of the devices to return."""
+        ids: [ID!]!
+    ): [Device!]!
+    """
+    Returns the devices with the given tokens. Tokens that match no device are omitted.
+    Requires device:read.
+    """
+    devicesByToken(
+        """Tokens of the devices to return."""
+        tokens: [String!]!
+    ): [Device!]!
+    """
+    Returns the devices whose business identifier is one of the given values. Values that
+    match no device are omitted. Requires device:read.
+    """
+    devicesByExternalId(
+        """Business identifiers to look up, matched exactly."""
+        externalIds: [String!]!
+    ): [Device!]!
+    """Searches the tenant's devices, newest first, one page at a time. Requires device:read."""
+    devices(
+        """Filters and the page to return."""
+        criteria: DeviceSearchCriteria!
+    ): DeviceSearchResults!
     # Find entity groups by unique id.
     entityGroupsById(ids: [ID!]!): [EntityGroup!]!
     # Find entity groups by unique token.
@@ -2384,48 +2909,157 @@ type Query {
 
 # Contains mutations executed against model.
 type Mutation {
-    # Create a new device type.
-    createDeviceType(request: DeviceTypeCreateRequest): DeviceType!
-    # Update an existing device type.
-    updateDeviceType(token: String!, request: DeviceTypeUpdateRequest!): DeviceType!
-    # Delete a device type. Refused while any device references it. Its capability
-    # definitions live on the DeviceProfile now (ADR-045), which survives. Returns
-    # whether a row was deleted.
-    deleteDeviceType(token: String!): Boolean!
-    # Create a new device profile (ADR-045).
-    createDeviceProfile(request: DeviceProfileCreateRequest): DeviceProfile!
-    # Update an existing device profile, located by the token argument (ADR-045).
-    # A partial update: an omitted field is left alone, an explicit null clears it.
-    updateDeviceProfile(token: String!, request: DeviceProfileUpdateRequest!): DeviceProfile!
-    # Rename a device profile. A blank newToken is refused; renaming to the token the
-    # profile already has is an idempotent success; a token another profile holds is
-    # refused by name. REFUSED outright once the profile has been published or adopted
-    # by a device type — from that point the token is the key published rules are filed
-    # under and rostered devices are tracked by, so a rename would silently stop
-    # detections and orphan dead-man entries.
-    renameDeviceProfile(token: String!, newToken: String!): DeviceProfile!
-    # Delete a device profile (ADR-045). Refused while any device type references
-    # it; its owned metric, command, and detection-rule definitions are cascade-removed.
-    # Returns whether a row was deleted.
-    deleteDeviceProfile(token: String!): Boolean!
-    # Publish the profile's current draft as a new immutable version and make it the
-    # version devices resolve (ADR-045 versioning). label/description are optional.
-    publishDeviceProfile(token: String!, label: String, description: String): DeviceProfileVersion!
-    # Re-point the profile's active published version at an existing version — a
-    # non-destructive rollback; the draft is untouched. Returns the updated profile.
-    rollbackDeviceProfile(token: String!, version: Int!): DeviceProfile!
-    # Create a new metric definition.
-    createMetricDefinition(request: MetricDefinitionCreateRequest): MetricDefinition!
-    # Update an existing metric definition.
-    updateMetricDefinition(token: String!, request: MetricDefinitionUpdateRequest!): MetricDefinition!
-    # Delete a single metric definition.
-    deleteMetricDefinition(token: String!): Boolean!
-    # Create a new command definition.
-    createCommandDefinition(request: CommandDefinitionCreateRequest): CommandDefinition!
-    # Update an existing command definition.
-    updateCommandDefinition(token: String!, request: CommandDefinitionUpdateRequest!): CommandDefinition!
-    # Delete a single command definition.
-    deleteCommandDefinition(token: String!): Boolean!
+    """Creates a device type and returns it. Requires device:write."""
+    createDeviceType(
+        """The new device type's fields. Although the schema lets it be omitted, a call without it fails."""
+        request: DeviceTypeCreateRequest
+    ): DeviceType!
+    """
+    Partially updates a device type and returns it. Fails if no device type has the token.
+    Requires device:write.
+    """
+    updateDeviceType(
+        """Token of the device type to update."""
+        token: String!
+        """The fields to change."""
+        request: DeviceTypeUpdateRequest!
+    ): DeviceType!
+    """
+    Deletes a device type. Returns true when it was deleted and false when no device type
+    has the token. Refused with REFERENCE_VIOLATION while any device has this type. The
+    profile it adopted is not affected. Requires device:write.
+    """
+    deleteDeviceType(
+        """Token of the device type to delete."""
+        token: String!
+    ): Boolean!
+    """Creates a device profile, with no definitions and no published version, and returns it. Requires device:write."""
+    createDeviceProfile(
+        """The new profile's fields. Although the schema lets it be omitted, a call without it fails."""
+        request: DeviceProfileCreateRequest
+    ): DeviceProfile!
+    """
+    Partially updates a device profile's draft and returns it. Fails if no profile has the
+    token. Requires device:write.
+    """
+    updateDeviceProfile(
+        """Token of the profile to update."""
+        token: String!
+        """The fields to change."""
+        request: DeviceProfileUpdateRequest!
+    ): DeviceProfile!
+    # REFUSED outright once the profile has been published or adopted by a device type —
+    # from that point the token is the key published rules are filed under and rostered
+    # devices are tracked by, so a rename would silently stop detections and orphan
+    # dead-man entries.
+    """
+    Changes a device profile's token and returns the profile. Allowed only while the
+    profile has never been published and no device type adopts it; after that its token is
+    permanent. Renaming to the current token succeeds without change. Fails if no profile
+    has the token. Requires device:write.
+    """
+    renameDeviceProfile(
+        """Current token of the profile."""
+        token: String!
+        """
+        The new token, in the usual token format. A blank value is refused, and a token
+        another profile in the tenant holds is refused with CONFLICT.
+        """
+        newToken: String!
+    ): DeviceProfile!
+    """
+    Deletes a device profile together with its metric, command and detection-rule
+    definitions and all its published versions. Returns true when it was deleted and false
+    when no profile has the token. Refused with REFERENCE_VIOLATION while any device type
+    adopts it. Requires device:write.
+    """
+    deleteDeviceProfile(
+        """Token of the profile to delete."""
+        token: String!
+    ): Boolean!
+    # ADR-045 versioning; the detection-rule check is the ADR-044 sync gate against
+    # event-processing.
+    """
+    Freezes the profile's current draft (its metric, command and detection-rule definitions
+    and its position declaration) into a new version and makes that version the one devices
+    use. The draft's enabled detection rules are checked first; a rejected
+    rule, or a check that cannot be completed, fails the publish and nothing is stored.
+    Fails if no profile has the token. Returns the new version. Requires device:write.
+    """
+    publishDeviceProfile(
+        """Token of the profile to publish."""
+        token: String!
+        """Optional label for the version, up to 128 characters, such as a release name."""
+        label: String
+        """Optional notes for the version, up to 1024 characters."""
+        description: String
+    ): DeviceProfileVersion!
+    """
+    Makes an existing published version the one devices use again. The draft and the version
+    history are untouched, so a later version can be made active the same way. Fails if the
+    profile or the version does not exist. Returns the updated profile. Requires
+    device:write.
+    """
+    rollbackDeviceProfile(
+        """Token of the profile."""
+        token: String!
+        """Number of the published version to make active."""
+        version: Int!
+    ): DeviceProfile!
+    """
+    Adds a metric definition to a profile's draft and returns it. It reaches devices when
+    the profile is next published. Requires device:write.
+    """
+    createMetricDefinition(
+        """The new metric definition's fields. Although the schema lets it be omitted, a call without it fails."""
+        request: MetricDefinitionCreateRequest
+    ): MetricDefinition!
+    """
+    Partially updates a draft metric definition and returns it. Fails if no metric
+    definition has the token. Requires device:write.
+    """
+    updateMetricDefinition(
+        """Token of the metric definition to update."""
+        token: String!
+        """The fields to change."""
+        request: MetricDefinitionUpdateRequest!
+    ): MetricDefinition!
+    """
+    Removes a metric definition from a profile's draft. Published versions keep their copy.
+    Returns true when it was deleted and false when nothing has the token. Requires
+    device:write.
+    """
+    deleteMetricDefinition(
+        """Token of the metric definition to delete."""
+        token: String!
+    ): Boolean!
+    """
+    Adds a command definition to a profile's draft and returns it. It reaches devices when
+    the profile is next published. Requires device:write.
+    """
+    createCommandDefinition(
+        """The new command definition's fields. Although the schema lets it be omitted, a call without it fails."""
+        request: CommandDefinitionCreateRequest
+    ): CommandDefinition!
+    """
+    Partially updates a draft command definition and returns it. Fails if no command
+    definition has the token. Requires device:write.
+    """
+    updateCommandDefinition(
+        """Token of the command definition to update."""
+        token: String!
+        """The fields to change."""
+        request: CommandDefinitionUpdateRequest!
+    ): CommandDefinition!
+    """
+    Removes a command definition from a profile's draft. Published versions keep their
+    copy. Returns true when it was deleted and false when nothing has the token. Requires
+    device:write.
+    """
+    deleteCommandDefinition(
+        """Token of the command definition to delete."""
+        token: String!
+    ): Boolean!
     # Create a new detection rule.
     createDetectionRule(request: DetectionRuleCreateRequest!): DetectionRule!
     # Update an existing detection rule.
@@ -2471,16 +3105,40 @@ type Mutation {
     setEntityAttribute(request: EntityAttributeSetRequest!): EntityAttribute!
     # Delete an entity attribute by its natural key.
     deleteEntityAttribute(entityType: String!, entity: String!, scope: String!, attrKey: String!): Boolean!
-    # Create a new device.
-    createDevice(request: DeviceCreateRequest): Device!
-    # Create many devices in one transaction from a template (bulk fleet
-    # provisioning): the server renders count devices from the token/name/
-    # external-id templates and creates them all-or-nothing.
-    createDevices(request: DeviceBulkCreateRequest!): [Device!]!
-    # Update an existing device.
-    updateDevice(token: String!, request: DeviceUpdateRequest!): Device!
-    # Delete a device, cascade-removing its credentials and relationship edges.
-    deleteDevice(token: String!): Boolean!
+    """Creates a device and returns it. Requires device:write."""
+    createDevice(
+        """The new device's fields. Although the schema lets it be omitted, a call without it fails."""
+        request: DeviceCreateRequest
+    ): Device!
+    """
+    Creates up to 1000 devices of one type from templates, in one transaction: every
+    device is created, or none is (an invalid template, a rendered token that repeats or is
+    already in use, or an unknown device type fails them all). Returns the created devices
+    in index order. Requires device:write.
+    """
+    createDevices(
+        """The type, count and templates of the devices to create."""
+        request: DeviceBulkCreateRequest!
+    ): [Device!]!
+    """
+    Partially updates a device and returns it. Fails if no device has the token. Requires
+    device:write.
+    """
+    updateDevice(
+        """Token of the device to update."""
+        token: String!
+        """The fields to change."""
+        request: DeviceUpdateRequest!
+    ): Device!
+    """
+    Deletes a device together with its credentials, replacement history, relationships,
+    attributes, alarms and group memberships. Returns true when it was deleted and false
+    when no device has the token. Requires device:write.
+    """
+    deleteDevice(
+        """Token of the device to delete."""
+        token: String!
+    ): Boolean!
     # Create a new entity group (ADR-061). A static group's members are managed over
     # "member" relationship edges; a dynamic group carries a CEL selector and resolves
     # its members eval-on-read (validated + cost-gated at create).

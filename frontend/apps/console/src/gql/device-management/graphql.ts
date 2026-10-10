@@ -129,29 +129,74 @@ export type AuditEventSearchCriteria = {
   tableName?: string | null | undefined;
 };
 
+/** Fields for a new command definition. */
 export type CommandDefinitionCreateRequest = {
+  /**
+   * The key used to send the command. Letters, digits, hyphens and underscores, starting
+   * with a letter or digit; at most 128 characters. A key the profile already declares is
+   * refused with CONFLICT.
+   */
   commandKey: string;
+  /** Free-text description, up to 1024 characters. */
   description?: string | null | undefined;
+  /** Token of the profile to declare the command on. An unknown token fails the request. */
   deviceProfileToken: string;
+  /** Caller-defined metadata. Must be valid JSON; an empty string means none. */
   metadata?: string | null | undefined;
+  /** Human-readable name, up to 128 characters. */
   name?: string | null | undefined;
+  /**
+   * The command's parameters: a JSON array of descriptors, each with a name and optional
+   * description, kind (SCALAR, the default, or OBJECT with nested parameters), dataType
+   * (DOUBLE, INT, BOOLEAN or STRING), unit, required, default, minValue, maxValue and enum.
+   * Unknown keys and inconsistent constraints are refused. Omit it for a command without
+   * structured arguments.
+   */
   parameterSchema?: string | null | undefined;
+  /** Identifier for the new command definition. A token already in use in the tenant is refused with CONFLICT. */
   token: string;
 };
 
+/** Criteria for searching command definitions. Results are newest first. */
 export type CommandDefinitionSearchCriteria = {
+  /** Return only definitions with exactly this command key. */
   commandKey?: string | null | undefined;
+  /** Return only definitions on the profile with this token. An unknown token matches nothing. */
   deviceProfile?: string | null | undefined;
+  /** Page to return, starting at 1. Values below 1 are read as 1. */
   pageNumber: number;
+  /** Results per page. Below 1 means the default of 100; above 1000 is capped at 1000. */
   pageSize: number;
 };
 
+/**
+ * A partial update to a command definition. Omit a field to leave the stored value alone,
+ * send a value to set it, or send an explicit null to clear it; the fields that cannot be
+ * cleared say so. The definition is named by the mutation's token argument, so there is no
+ * token here. Any refusal leaves the definition unchanged.
+ */
 export type CommandDefinitionUpdateRequest = {
+  /**
+   * New command key, in the same format as on create. An explicit null or a blank value is
+   * refused, and a key already declared on the profile is refused with CONFLICT.
+   */
   commandKey?: string | null | undefined;
+  /** New description, or null to clear it. */
   description?: string | null | undefined;
+  /**
+   * Token of another profile to move the definition to. An explicit null is refused, and an
+   * unknown token fails the whole update. The command key must be unique in the profile the
+   * definition ends up in.
+   */
   deviceProfileToken?: string | null | undefined;
+  /** New metadata (valid JSON, replacing the stored document), or null to clear it. */
   metadata?: string | null | undefined;
+  /** New name, or null to clear it. */
   name?: string | null | undefined;
+  /**
+   * New parameters (validated as on create), or null to make the command one without
+   * structured arguments.
+   */
   parameterSchema?: string | null | undefined;
 };
 
@@ -235,22 +280,54 @@ export type DetectionRuleUpdateRequest = {
   name?: string | null | undefined;
 };
 
+/**
+ * Creates many devices of one type from templates. Device n of the batch (n running from
+ * startIndex to startIndex + count - 1) is rendered by replacing {n} with n, or {n:0Wd}
+ * with n zero-padded to width W. Each template may be at most 256 characters, with a pad
+ * width of at most 128. The whole batch is created or none of it is.
+ */
 export type DeviceBulkCreateRequest = {
+  /** Number of devices to create, from 1 to 1000. */
   count: number;
+  /** Token of the device type for every device. An unknown token fails the request. */
   deviceTypeToken: string;
+  /**
+   * Template for the external ids. Optional. {random} renders a fresh random value per
+   * device. When creating more than one device the template must contain {n}, {n:0Wd} or
+   * {random}, since external ids are unique within the tenant. A rendered value may be at
+   * most 256 characters.
+   */
   externalIdTemplate?: string | null | undefined;
+  /** Metadata given to every device. Must be valid JSON; an empty string means none. */
   metadata?: string | null | undefined;
+  /** Template for the device names. Optional; {random} is not allowed. A rendered name may be at most 128 characters. */
   nameTemplate?: string | null | undefined;
+  /** Index of the first device. Defaults to 1; values below 1 are refused. */
   startIndex?: number | null | undefined;
+  /**
+   * Template for the device tokens. It must contain {n} or {n:0Wd} so each token is
+   * distinct, must not contain {random}, and every rendered token must be a valid token
+   * not already in use.
+   */
   tokenTemplate: string;
 };
 
+/** Fields for a new device. */
 export type DeviceCreateRequest = {
+  /** Free-text description, up to 1024 characters. */
   description?: string | null | undefined;
+  /** Token of the device's type. An unknown token fails the request. */
   deviceTypeToken: string;
+  /**
+   * Optional business identifier, up to 256 characters. A value another device in the
+   * tenant already has is refused with CONFLICT.
+   */
   externalId?: string | null | undefined;
+  /** Caller-defined metadata. Must be valid JSON; an empty string means none. */
   metadata?: string | null | undefined;
+  /** Human-readable name, up to 128 characters. */
   name?: string | null | undefined;
+  /** Identifier for the new device. A token already in use in the tenant is refused with CONFLICT. */
   token: string;
 };
 
@@ -274,35 +351,79 @@ export type DeviceCredentialSearchCriteria = {
   pageSize: number;
 };
 
+/** A free-text classification field whose values in use facetValues can list. */
 export type DeviceFacet =
+  /** The category field of device profiles. */
   | 'CATEGORY'
+  /** The manufacturer field of device types. */
   | 'MANUFACTURER'
+  /** The model field of device types. */
   | 'MODEL';
 
+/**
+ * Sets a profile's position declaration. Supplying it states that the devices report their
+ * own position; an empty object makes that statement with no expectations.
+ */
 export type DeviceLocationDeclarationInput = {
+  /**
+   * Horizontal accuracy to expect, in metres. Must be a positive finite number when sent;
+   * omit it or send null to state no expectation.
+   */
   expectedAccuracyMeters?: number | null | undefined;
+  /**
+   * How often a position fix is expected, in seconds. Must be positive when sent; omit it
+   * or send null to state no expectation.
+   */
   expectedUpdateIntervalSeconds?: number | null | undefined;
 };
 
+/** Fields for a new device profile. Its definitions are added afterwards, and take effect when the profile is published. */
 export type DeviceProfileCreateRequest = {
+  /** Functional class of the devices, such as thermostat or meter, up to 64 characters. */
   category?: string | null | undefined;
+  /** Free-text description, up to 1024 characters. */
   description?: string | null | undefined;
+  /**
+   * Whether the devices report their own position, and what to expect of it. Omit it when
+   * they do not.
+   */
   location?: DeviceLocationDeclarationInput | null | undefined;
+  /** Caller-defined metadata. Must be valid JSON; an empty string means none. */
   metadata?: string | null | undefined;
+  /** Human-readable name, up to 128 characters. */
   name?: string | null | undefined;
+  /** Identifier for the new profile. A token already in use in the tenant is refused with CONFLICT. */
   token: string;
 };
 
+/** Criteria for searching device profiles. Results are newest first. */
 export type DeviceProfileSearchCriteria = {
+  /** Page to return, starting at 1. Values below 1 are read as 1. */
   pageNumber: number;
+  /** Results per page. Below 1 means the default of 100; above 1000 is capped at 1000. */
   pageSize: number;
 };
 
+/**
+ * A partial update to a device profile's own fields. Omit a field to leave the stored value
+ * alone, send a value to set it, or send an explicit null to clear it. The profile is named
+ * by the mutation's token argument; use renameDeviceProfile to change its token. Changes
+ * here are part of the draft.
+ */
 export type DeviceProfileUpdateRequest = {
+  /** New category, or null to clear it. */
   category?: string | null | undefined;
+  /** New description, or null to clear it. */
   description?: string | null | undefined;
+  /**
+   * New position declaration, replacing the stored one; null states that the devices do
+   * not report their own position. An empty object states that they do, with no
+   * expectations.
+   */
   location?: DeviceLocationDeclarationInput | null | undefined;
+  /** New metadata (valid JSON, replacing the stored document), or null to clear it. */
   metadata?: string | null | undefined;
+  /** New name, or null to clear it. */
   name?: string | null | undefined;
 };
 
@@ -323,51 +444,110 @@ export type DeviceReplacementSearchCriteria = {
   pageSize: number;
 };
 
+/** Criteria for searching devices. Results are newest first. */
 export type DeviceSearchCriteria = {
+  /** Return only devices of the device type with this token. An unknown token matches nothing. */
   deviceType?: string | null | undefined;
+  /** Page to return, starting at 1. Values below 1 are read as 1. */
   pageNumber: number;
+  /** Results per page. Below 1 means the default of 100; above 1000 is capped at 1000. */
   pageSize: number;
 };
 
+/** Fields for a new device type. */
 export type DeviceTypeCreateRequest = {
+  /** Background colour, up to 32 characters. */
   backgroundColor?: string | null | undefined;
+  /** Border colour, up to 32 characters. */
   borderColor?: string | null | undefined;
+  /** Free-text description, up to 1024 characters. */
   description?: string | null | undefined;
+  /** Foreground (text) colour, up to 32 characters. */
   foregroundColor?: string | null | undefined;
+  /** Name of an icon representing the device type, up to 128 characters. */
   icon?: string | null | undefined;
+  /** URL of an image representing the device type, up to 512 characters. */
   imageUrl?: string | null | undefined;
+  /** Manufacturer of the devices of this type, up to 128 characters. */
   manufacturer?: string | null | undefined;
+  /** Caller-defined metadata. Must be valid JSON; an empty string means none. */
   metadata?: string | null | undefined;
+  /** Model of the devices of this type, up to 128 characters. */
   model?: string | null | undefined;
+  /** Human-readable name, up to 128 characters. */
   name?: string | null | undefined;
+  /**
+   * Token of the device profile the type adopts. Omit it, or send an empty value, for a
+   * type with no profile. An unknown token fails the request.
+   */
   profileToken?: string | null | undefined;
+  /** Identifier for the new device type. A token already in use in the tenant is refused with CONFLICT. */
   token: string;
 };
 
+/** Criteria for searching device types. Results are newest first. */
 export type DeviceTypeSearchCriteria = {
+  /** Page to return, starting at 1. Values below 1 are read as 1. */
   pageNumber: number;
+  /** Results per page. Below 1 means the default of 100; above 1000 is capped at 1000. */
   pageSize: number;
 };
 
+/**
+ * A partial update to a device type. Omit a field to leave the stored value alone, send a
+ * value to set it, or send an explicit null to clear it; sending only name renames the type
+ * and changes nothing else. The type is named by the mutation's token argument, so there is
+ * no token here and a type's token cannot be changed.
+ */
 export type DeviceTypeUpdateRequest = {
+  /** New background colour, or null to clear it. */
   backgroundColor?: string | null | undefined;
+  /** New border colour, or null to clear it. */
   borderColor?: string | null | undefined;
+  /** New description, or null to clear it. */
   description?: string | null | undefined;
+  /** New foreground colour, or null to clear it. */
   foregroundColor?: string | null | undefined;
+  /** New icon name, or null to clear it. */
   icon?: string | null | undefined;
+  /** New image URL, or null to clear it. */
   imageUrl?: string | null | undefined;
+  /** New manufacturer, or null to clear it. */
   manufacturer?: string | null | undefined;
+  /** New metadata (valid JSON, replacing the stored document), or null to clear it. */
   metadata?: string | null | undefined;
+  /** New model, or null to clear it. */
   model?: string | null | undefined;
+  /** New name, or null to clear it. */
   name?: string | null | undefined;
+  /**
+   * Token of the profile the type should adopt; null or an empty value detaches the
+   * current profile. An unknown token fails the whole update. Changing the profile changes
+   * what every device of the type measures and accepts.
+   */
   profileToken?: string | null | undefined;
 };
 
+/**
+ * A partial update to a device. Omit a field to leave the stored value alone, send a value
+ * to set it, or send an explicit null to clear it; the fields that cannot be cleared say so.
+ * The device is named by the mutation's token argument, so there is no token here. An empty
+ * object changes nothing.
+ */
 export type DeviceUpdateRequest = {
+  /** New description, or null to clear it. */
   description?: string | null | undefined;
+  /**
+   * Token of a different device type to move the device to. An explicit null or an empty
+   * value is refused, because every device must have a type; an unknown token fails the
+   * whole update.
+   */
   deviceTypeToken?: string | null | undefined;
+  /** New business identifier, or null to clear it. A value another device already has is refused with CONFLICT. */
   externalId?: string | null | undefined;
+  /** New metadata (valid JSON, replacing the stored document), or null to clear it. */
   metadata?: string | null | undefined;
+  /** New name, or null to clear it. */
   name?: string | null | undefined;
 };
 
@@ -478,44 +658,94 @@ export type GeoFenceUpdateRequest = {
   name?: string | null | undefined;
 };
 
+/** Fields for a new metric definition. */
 export type MetricDefinitionCreateRequest = {
+  /**
+   * The value type: DOUBLE, INT or BOOLEAN. STRING is refused, because a metric must be
+   * numeric; report string values as attributes instead.
+   */
   dataType: string;
+  /** Free-text description, up to 1024 characters. */
   description?: string | null | undefined;
+  /** Optional semantic tag, such as a Web of Things type. */
   descriptor?: string | null | undefined;
+  /** Token of the profile to declare the metric on. An unknown token fails the request. */
   deviceProfileToken: string;
+  /** Allowed values as a JSON array of strings. Must be valid JSON. */
   enum?: string | null | undefined;
+  /** Largest value accepted for a DOUBLE or INT metric. */
   maxValue?: number | null | undefined;
+  /** Caller-defined metadata. Must be valid JSON; an empty string means none. */
   metadata?: string | null | undefined;
+  /**
+   * The key measurements will use for this metric, at most 128 characters. A key the
+   * profile already declares is refused with CONFLICT.
+   */
   metricKey: string;
+  /** Smallest value accepted for a DOUBLE or INT metric. */
   minValue?: number | null | undefined;
+  /** Human-readable name, up to 128 characters. */
   name?: string | null | undefined;
+  /** Identifier for the new metric definition. A token already in use in the tenant is refused with CONFLICT. */
   token: string;
+  /** Unit of measure, such as a UCUM code (Cel, kW). */
   unit?: string | null | undefined;
 };
 
+/** Criteria for searching metric definitions. Results are newest first. */
 export type MetricDefinitionSearchCriteria = {
+  /** Return only definitions on the profile with this token. An unknown token matches nothing. */
   deviceProfile?: string | null | undefined;
+  /** Return only definitions with exactly this metric key. */
   metricKey?: string | null | undefined;
+  /** Page to return, starting at 1. Values below 1 are read as 1. */
   pageNumber: number;
+  /** Results per page. Below 1 means the default of 100; above 1000 is capped at 1000. */
   pageSize: number;
 };
 
+/**
+ * A partial update to a metric definition. Omit a field to leave the stored value alone,
+ * send a value to set it, or send an explicit null to clear it; the fields that cannot be
+ * cleared say so. The definition is named by the mutation's token argument, so there is no
+ * token here. Any refusal leaves the definition unchanged.
+ */
 export type MetricDefinitionUpdateRequest = {
+  /** New value type: DOUBLE, INT or BOOLEAN. An explicit null is refused. */
   dataType?: string | null | undefined;
+  /** New description, or null to clear it. */
   description?: string | null | undefined;
+  /** New semantic tag, or null to clear it. */
   descriptor?: string | null | undefined;
+  /**
+   * Token of another profile to move the definition to. An explicit null is refused, and
+   * an unknown token fails the whole update.
+   */
   deviceProfileToken?: string | null | undefined;
+  /** New allowed values as a JSON array of strings, or null to allow any value. */
   enum?: string | null | undefined;
+  /** New upper bound, or null to remove it. */
   maxValue?: number | null | undefined;
+  /** New metadata (valid JSON, replacing the stored document), or null to clear it. */
   metadata?: string | null | undefined;
+  /**
+   * New key for the metric, unique within the profile the definition ends up in. An
+   * explicit null or a blank value is refused.
+   */
   metricKey?: string | null | undefined;
+  /** New lower bound, or null to remove it. */
   minValue?: number | null | undefined;
+  /** New name, or null to clear it. */
   name?: string | null | undefined;
+  /** New unit, or null to clear it. */
   unit?: string | null | undefined;
 };
 
+/** Which page of results to return. */
 export type PaginationInput = {
+  /** Page to return, starting at 1. Values below 1 are read as 1. */
   pageNumber: number;
+  /** Results per page. Below 1 means the default of 100; above 1000 is capped at 1000. */
   pageSize: number;
 };
 

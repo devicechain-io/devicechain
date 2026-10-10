@@ -347,15 +347,25 @@ func (v *DefaultCustomerType) GetMetadata() *string { return v.Metadata }
 
 // Content associated with a device response.
 type DefaultDevice struct {
-	Id          string                  `json:"id"`
-	CreatedAt   *string                 `json:"createdAt"`
-	UpdatedAt   *string                 `json:"updatedAt"`
-	DeletedAt   *string                 `json:"deletedAt"`
-	Token       string                  `json:"token"`
-	Name        *string                 `json:"name"`
-	Description *string                 `json:"description"`
-	DeviceType  DefaultDeviceDeviceType `json:"deviceType"`
-	Metadata    *string                 `json:"metadata"`
+	// Server-assigned numeric identifier, as a string. Address a device by its token instead where you can.
+	Id string `json:"id"`
+	// When the device was created, as an RFC 3339 timestamp.
+	CreatedAt *string `json:"createdAt"`
+	// When the device was last written, as an RFC 3339 timestamp.
+	UpdatedAt *string `json:"updatedAt"`
+	// Always null: deleted devices are not returned.
+	DeletedAt *string `json:"deletedAt"`
+	// Identifier of the device, unique within the tenant. It cannot be changed after the
+	// device is created.
+	Token string `json:"token"`
+	// Human-readable name, up to 128 characters. Null when none is set.
+	Name *string `json:"name"`
+	// Free-text description, up to 1024 characters. Null when none is set.
+	Description *string `json:"description"`
+	// The device's type.
+	DeviceType DefaultDeviceDeviceType `json:"deviceType"`
+	// Caller-defined metadata as a JSON document, or null when none is set.
+	Metadata *string `json:"metadata"`
 }
 
 // GetId returns DefaultDevice.Id, and is useful for accessing the field via an interface.
@@ -386,9 +396,17 @@ func (v *DefaultDevice) GetDeviceType() DefaultDeviceDeviceType { return v.Devic
 func (v *DefaultDevice) GetMetadata() *string { return v.Metadata }
 
 // DefaultDeviceDeviceType includes the requested fields of the GraphQL type DeviceType.
+// The GraphQL type's documentation follows.
+//
+// A kind of device: what it is (manufacturer and model), how it is displayed, and the device
+// profile that defines what its devices measure and accept. Every device has exactly one
+// device type, and many types may share one profile.
 type DefaultDeviceDeviceType struct {
-	Token       string  `json:"token"`
-	Name        *string `json:"name"`
+	// Identifier of the device type, unique within the tenant.
+	Token string `json:"token"`
+	// Human-readable name, up to 128 characters. Null when none is set.
+	Name *string `json:"name"`
+	// Free-text description, up to 1024 characters. Null when none is set.
 	Description *string `json:"description"`
 }
 
@@ -403,19 +421,32 @@ func (v *DefaultDeviceDeviceType) GetDescription() *string { return v.Descriptio
 
 // Content associated with a device type response.
 type DefaultDeviceType struct {
-	Id              string  `json:"id"`
-	CreatedAt       *string `json:"createdAt"`
-	UpdatedAt       *string `json:"updatedAt"`
-	DeletedAt       *string `json:"deletedAt"`
-	Token           string  `json:"token"`
-	Name            *string `json:"name"`
-	Description     *string `json:"description"`
-	ImageUrl        *string `json:"imageUrl"`
-	Icon            *string `json:"icon"`
+	// Server-assigned numeric identifier, as a string. Address a device type by its token instead where you can.
+	Id string `json:"id"`
+	// When the device type was created, as an RFC 3339 timestamp.
+	CreatedAt *string `json:"createdAt"`
+	// When the device type was last written, as an RFC 3339 timestamp.
+	UpdatedAt *string `json:"updatedAt"`
+	// Always null: deleted device types are not returned.
+	DeletedAt *string `json:"deletedAt"`
+	// Identifier of the device type, unique within the tenant.
+	Token string `json:"token"`
+	// Human-readable name, up to 128 characters. Null when none is set.
+	Name *string `json:"name"`
+	// Free-text description, up to 1024 characters. Null when none is set.
+	Description *string `json:"description"`
+	// URL of an image representing the device type, up to 512 characters.
+	ImageUrl *string `json:"imageUrl"`
+	// Name of an icon representing the device type, up to 128 characters. Not checked against any icon set.
+	Icon *string `json:"icon"`
+	// Background colour to display the device type with, up to 32 characters. Not validated.
 	BackgroundColor *string `json:"backgroundColor"`
+	// Foreground (text) colour to display the device type with, up to 32 characters. Not validated.
 	ForegroundColor *string `json:"foregroundColor"`
-	BorderColor     *string `json:"borderColor"`
-	Metadata        *string `json:"metadata"`
+	// Border colour to display the device type with, up to 32 characters. Not validated.
+	BorderColor *string `json:"borderColor"`
+	// Caller-defined metadata as a JSON document, or null when none is set.
+	Metadata *string `json:"metadata"`
 }
 
 // GetId returns DefaultDeviceType.Id, and is useful for accessing the field via an interface.
@@ -527,8 +558,12 @@ func (v *DefaultEntityGroup) GetSelector() *string { return v.Selector }
 
 // Content associated with pagination.
 type DefaultPagination struct {
-	PageStart    *int `json:"pageStart"`
-	PageEnd      *int `json:"pageEnd"`
+	// Position of the first result on this page within the full result set (1-based).
+	PageStart *int `json:"pageStart"`
+	// Position of the last result on this page within the full result set (1-based,
+	// inclusive). Lower than pageStart when the page is past the end of the results.
+	PageEnd *int `json:"pageEnd"`
+	// Number of records matching the criteria across all pages.
 	TotalRecords *int `json:"totalRecords"`
 }
 
@@ -1788,6 +1823,10 @@ func (v *createCustomerTypeResponse) GetCreateCustomerType() createCustomerTypeC
 }
 
 // createDeviceCreateDevice includes the requested fields of the GraphQL type Device.
+// The GraphQL type's documentation follows.
+//
+// A device: one connected thing the platform receives events from and sends commands to.
+// What it measures and accepts comes from its device type's profile.
 type createDeviceCreateDevice struct {
 	DefaultDevice `json:"-"`
 }
@@ -1891,6 +1930,7 @@ func (v *createDeviceCreateDevice) __premarshalJSON() (*__premarshalcreateDevice
 
 // createDeviceResponse is returned by createDevice on success.
 type createDeviceResponse struct {
+	// Creates a device and returns it. Requires device:write.
 	CreateDevice createDeviceCreateDevice `json:"createDevice"`
 }
 
@@ -1898,6 +1938,11 @@ type createDeviceResponse struct {
 func (v *createDeviceResponse) GetCreateDevice() createDeviceCreateDevice { return v.CreateDevice }
 
 // createDeviceTypeCreateDeviceType includes the requested fields of the GraphQL type DeviceType.
+// The GraphQL type's documentation follows.
+//
+// A kind of device: what it is (manufacturer and model), how it is displayed, and the device
+// profile that defines what its devices measure and accept. Every device has exactly one
+// device type, and many types may share one profile.
 type createDeviceTypeCreateDeviceType struct {
 	DefaultDeviceType `json:"-"`
 }
@@ -2037,6 +2082,7 @@ func (v *createDeviceTypeCreateDeviceType) __premarshalJSON() (*__premarshalcrea
 
 // createDeviceTypeResponse is returned by createDeviceType on success.
 type createDeviceTypeResponse struct {
+	// Creates a device type and returns it. Requires device:write.
 	CreateDeviceType createDeviceTypeCreateDeviceType `json:"createDeviceType"`
 }
 
@@ -3050,6 +3096,11 @@ func (v *getCustomersByTokenResponse) GetCustomersByToken() []getCustomersByToke
 }
 
 // getDeviceTypesByTokenDeviceTypesByTokenDeviceType includes the requested fields of the GraphQL type DeviceType.
+// The GraphQL type's documentation follows.
+//
+// A kind of device: what it is (manufacturer and model), how it is displayed, and the device
+// profile that defines what its devices measure and accept. Every device has exactly one
+// device type, and many types may share one profile.
 type getDeviceTypesByTokenDeviceTypesByTokenDeviceType struct {
 	DefaultDeviceType `json:"-"`
 }
@@ -3201,6 +3252,8 @@ func (v *getDeviceTypesByTokenDeviceTypesByTokenDeviceType) __premarshalJSON() (
 
 // getDeviceTypesByTokenResponse is returned by getDeviceTypesByToken on success.
 type getDeviceTypesByTokenResponse struct {
+	// Returns the device types with the given tokens. Tokens that match no device type are
+	// omitted. Requires device:read.
 	DeviceTypesByToken []getDeviceTypesByTokenDeviceTypesByTokenDeviceType `json:"deviceTypesByToken"`
 }
 
@@ -3210,6 +3263,10 @@ func (v *getDeviceTypesByTokenResponse) GetDeviceTypesByToken() []getDeviceTypes
 }
 
 // getDevicesByTokenDevicesByTokenDevice includes the requested fields of the GraphQL type Device.
+// The GraphQL type's documentation follows.
+//
+// A device: one connected thing the platform receives events from and sends commands to.
+// What it measures and accepts comes from its device type's profile.
 type getDevicesByTokenDevicesByTokenDevice struct {
 	DefaultDevice `json:"-"`
 }
@@ -3323,6 +3380,8 @@ func (v *getDevicesByTokenDevicesByTokenDevice) __premarshalJSON() (*__premarsha
 
 // getDevicesByTokenResponse is returned by getDevicesByToken on success.
 type getDevicesByTokenResponse struct {
+	// Returns the devices with the given tokens. Tokens that match no device are omitted.
+	// Requires device:read.
 	DevicesByToken []getDevicesByTokenDevicesByTokenDevice `json:"devicesByToken"`
 }
 
@@ -3532,6 +3591,10 @@ func (v *listAreaTypesAreaTypesAreaTypeSearchResults) GetPagination() listAreaTy
 }
 
 // listAreaTypesAreaTypesAreaTypeSearchResultsPagination includes the requested fields of the GraphQL type SearchResultsPagination.
+// The GraphQL type's documentation follows.
+//
+// Where a page of search results sits in the full result set. Positions are 1-based and
+// inclusive.
 type listAreaTypesAreaTypesAreaTypeSearchResultsPagination struct {
 	DefaultPagination `json:"-"`
 }
@@ -3778,6 +3841,10 @@ func (v *listAreasAreasAreaSearchResults) GetPagination() listAreasAreasAreaSear
 }
 
 // listAreasAreasAreaSearchResultsPagination includes the requested fields of the GraphQL type SearchResultsPagination.
+// The GraphQL type's documentation follows.
+//
+// Where a page of search results sits in the full result set. Positions are 1-based and
+// inclusive.
 type listAreasAreasAreaSearchResultsPagination struct {
 	DefaultPagination `json:"-"`
 }
@@ -3984,6 +4051,10 @@ func (v *listAssetTypesAssetTypesAssetTypeSearchResults) GetPagination() listAss
 }
 
 // listAssetTypesAssetTypesAssetTypeSearchResultsPagination includes the requested fields of the GraphQL type SearchResultsPagination.
+// The GraphQL type's documentation follows.
+//
+// Where a page of search results sits in the full result set. Positions are 1-based and
+// inclusive.
 type listAssetTypesAssetTypesAssetTypeSearchResultsPagination struct {
 	DefaultPagination `json:"-"`
 }
@@ -4230,6 +4301,10 @@ func (v *listAssetsAssetsAssetSearchResults) GetPagination() listAssetsAssetsAss
 }
 
 // listAssetsAssetsAssetSearchResultsPagination includes the requested fields of the GraphQL type SearchResultsPagination.
+// The GraphQL type's documentation follows.
+//
+// Where a page of search results sits in the full result set. Positions are 1-based and
+// inclusive.
 type listAssetsAssetsAssetSearchResultsPagination struct {
 	DefaultPagination `json:"-"`
 }
@@ -4440,6 +4515,10 @@ func (v *listCustomerTypesCustomerTypesCustomerTypeSearchResults) GetPagination(
 }
 
 // listCustomerTypesCustomerTypesCustomerTypeSearchResultsPagination includes the requested fields of the GraphQL type SearchResultsPagination.
+// The GraphQL type's documentation follows.
+//
+// Where a page of search results sits in the full result set. Positions are 1-based and
+// inclusive.
 type listCustomerTypesCustomerTypesCustomerTypeSearchResultsPagination struct {
 	DefaultPagination `json:"-"`
 }
@@ -4686,6 +4765,10 @@ func (v *listCustomersCustomersCustomerSearchResults) GetPagination() listCustom
 }
 
 // listCustomersCustomersCustomerSearchResultsPagination includes the requested fields of the GraphQL type SearchResultsPagination.
+// The GraphQL type's documentation follows.
+//
+// Where a page of search results sits in the full result set. Positions are 1-based and
+// inclusive.
 type listCustomersCustomersCustomerSearchResultsPagination struct {
 	DefaultPagination `json:"-"`
 }
@@ -4884,9 +4967,14 @@ func (v *listCustomersResponse) GetCustomers() listCustomersCustomersCustomerSea
 }
 
 // listDeviceTypesDeviceTypesDeviceTypeSearchResults includes the requested fields of the GraphQL type DeviceTypeSearchResults.
+// The GraphQL type's documentation follows.
+//
+// One page of device types matching a search.
 type listDeviceTypesDeviceTypesDeviceTypeSearchResults struct {
-	Results    []listDeviceTypesDeviceTypesDeviceTypeSearchResultsResultsDeviceType `json:"results"`
-	Pagination listDeviceTypesDeviceTypesDeviceTypeSearchResultsPagination          `json:"pagination"`
+	// The device types on this page.
+	Results []listDeviceTypesDeviceTypesDeviceTypeSearchResultsResultsDeviceType `json:"results"`
+	// Where this page sits in the full result set.
+	Pagination listDeviceTypesDeviceTypesDeviceTypeSearchResultsPagination `json:"pagination"`
 }
 
 // GetResults returns listDeviceTypesDeviceTypesDeviceTypeSearchResults.Results, and is useful for accessing the field via an interface.
@@ -4900,6 +4988,10 @@ func (v *listDeviceTypesDeviceTypesDeviceTypeSearchResults) GetPagination() list
 }
 
 // listDeviceTypesDeviceTypesDeviceTypeSearchResultsPagination includes the requested fields of the GraphQL type SearchResultsPagination.
+// The GraphQL type's documentation follows.
+//
+// Where a page of search results sits in the full result set. Positions are 1-based and
+// inclusive.
 type listDeviceTypesDeviceTypesDeviceTypeSearchResultsPagination struct {
 	DefaultPagination `json:"-"`
 }
@@ -4970,6 +5062,11 @@ func (v *listDeviceTypesDeviceTypesDeviceTypeSearchResultsPagination) __premarsh
 }
 
 // listDeviceTypesDeviceTypesDeviceTypeSearchResultsResultsDeviceType includes the requested fields of the GraphQL type DeviceType.
+// The GraphQL type's documentation follows.
+//
+// A kind of device: what it is (manufacturer and model), how it is displayed, and the device
+// profile that defines what its devices measure and accept. Every device has exactly one
+// device type, and many types may share one profile.
 type listDeviceTypesDeviceTypesDeviceTypeSearchResultsResultsDeviceType struct {
 	DefaultDeviceType `json:"-"`
 }
@@ -5121,6 +5218,7 @@ func (v *listDeviceTypesDeviceTypesDeviceTypeSearchResultsResultsDeviceType) __p
 
 // listDeviceTypesResponse is returned by listDeviceTypes on success.
 type listDeviceTypesResponse struct {
+	// Lists the tenant's device types, newest first, one page at a time. Requires device:read.
 	DeviceTypes listDeviceTypesDeviceTypesDeviceTypeSearchResults `json:"deviceTypes"`
 }
 
@@ -5130,9 +5228,14 @@ func (v *listDeviceTypesResponse) GetDeviceTypes() listDeviceTypesDeviceTypesDev
 }
 
 // listDevicesDevicesDeviceSearchResults includes the requested fields of the GraphQL type DeviceSearchResults.
+// The GraphQL type's documentation follows.
+//
+// One page of devices matching a search.
 type listDevicesDevicesDeviceSearchResults struct {
-	Results    []listDevicesDevicesDeviceSearchResultsResultsDevice `json:"results"`
-	Pagination listDevicesDevicesDeviceSearchResultsPagination      `json:"pagination"`
+	// The devices on this page.
+	Results []listDevicesDevicesDeviceSearchResultsResultsDevice `json:"results"`
+	// Where this page sits in the full result set.
+	Pagination listDevicesDevicesDeviceSearchResultsPagination `json:"pagination"`
 }
 
 // GetResults returns listDevicesDevicesDeviceSearchResults.Results, and is useful for accessing the field via an interface.
@@ -5146,6 +5249,10 @@ func (v *listDevicesDevicesDeviceSearchResults) GetPagination() listDevicesDevic
 }
 
 // listDevicesDevicesDeviceSearchResultsPagination includes the requested fields of the GraphQL type SearchResultsPagination.
+// The GraphQL type's documentation follows.
+//
+// Where a page of search results sits in the full result set. Positions are 1-based and
+// inclusive.
 type listDevicesDevicesDeviceSearchResultsPagination struct {
 	DefaultPagination `json:"-"`
 }
@@ -5216,6 +5323,10 @@ func (v *listDevicesDevicesDeviceSearchResultsPagination) __premarshalJSON() (*_
 }
 
 // listDevicesDevicesDeviceSearchResultsResultsDevice includes the requested fields of the GraphQL type Device.
+// The GraphQL type's documentation follows.
+//
+// A device: one connected thing the platform receives events from and sends commands to.
+// What it measures and accepts comes from its device type's profile.
 type listDevicesDevicesDeviceSearchResultsResultsDevice struct {
 	DefaultDevice `json:"-"`
 }
@@ -5335,6 +5446,7 @@ func (v *listDevicesDevicesDeviceSearchResultsResultsDevice) __premarshalJSON() 
 
 // listDevicesResponse is returned by listDevices on success.
 type listDevicesResponse struct {
+	// Searches the tenant's devices, newest first, one page at a time. Requires device:read.
 	Devices listDevicesDevicesDeviceSearchResults `json:"devices"`
 }
 
@@ -5358,6 +5470,10 @@ func (v *listEntityGroupsEntityGroupsEntityGroupSearchResults) GetPagination() l
 }
 
 // listEntityGroupsEntityGroupsEntityGroupSearchResultsPagination includes the requested fields of the GraphQL type SearchResultsPagination.
+// The GraphQL type's documentation follows.
+//
+// Where a page of search results sits in the full result set. Positions are 1-based and
+// inclusive.
 type listEntityGroupsEntityGroupsEntityGroupSearchResultsPagination struct {
 	DefaultPagination `json:"-"`
 }
