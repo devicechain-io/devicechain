@@ -721,6 +721,7 @@ is partly applied, so narrow the request and send it again.
 | Bound | Limit | Applies to |
 | --- | --- | --- |
 | Buckets per aggregation | 10,000 | `bucketedMeasurements`: the range divided by `intervalSeconds`, rounded up. |
+| Keys per lookup | 1,000 | A list of tokens, external ids or alarm tokens passed to a `…ByToken`, `…ByExternalId` or similar batch query (device states, latest locations, commands, command batches, notification channels, policies and states). |
 
 `bucketedMeasurements` also requires `startTime`; `endTime` defaults to the current time.
 

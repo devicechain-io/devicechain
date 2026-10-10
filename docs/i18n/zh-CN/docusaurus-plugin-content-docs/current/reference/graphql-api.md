@@ -625,6 +625,7 @@ token 会拼入基础设施命名空间：租户 ID 成为 NATS subject 中按 `
 | 限制 | 数值 | 适用于 |
 | --- | --- | --- |
 | 每次聚合的时间桶数 | 10,000 | `bucketedMeasurements`：时间范围除以 `intervalSeconds`，向上取整。 |
+| 每次查找的键数 | 1,000 | 传给 `…ByToken`、`…ByExternalId` 等批量查询的令牌、外部 ID 或告警令牌列表（设备状态、最新位置、命令、命令批次、通知渠道、策略和状态）。 |
 
 `bucketedMeasurements` 还要求提供 `startTime`；`endTime` 默认为当前时间。
 

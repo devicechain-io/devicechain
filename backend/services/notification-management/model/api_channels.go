@@ -335,8 +335,10 @@ func (api *Api) NotificationChannelsById(ctx context.Context, ids []uint) ([]*No
 // NotificationChannelsByToken loads channels by token.
 func (api *Api) NotificationChannelsByToken(ctx context.Context, tokens []string) ([]*NotificationChannel, error) {
 	found := make([]*NotificationChannel, 0)
-	result := api.RDB.DB(ctx).Find(&found, "token in ?", tokens)
-	return found, result.Error
+	if err := rdb.FindByKeys(api.RDB.DB(ctx), &found, "token", tokens); err != nil {
+		return nil, err
+	}
+	return found, nil
 }
 
 // NotificationChannels searches channels by criteria.

@@ -765,6 +765,7 @@ trunca nada ni se aplica nada a medias, así que reduzca la solicitud y envíela
 | Límite | Valor | Se aplica a |
 | --- | --- | --- |
 | Intervalos por agregación | 10 000 | `bucketedMeasurements`: el rango dividido por `intervalSeconds`, redondeado hacia arriba. |
+| Claves por consulta | 1000 | Una lista de tokens, identificadores externos o tokens de alarma pasada a una consulta por lotes `…ByToken`, `…ByExternalId` o similar (estados de dispositivo, últimas ubicaciones, comandos, lotes de comandos, canales, políticas y estados de notificación). |
 
 `bucketedMeasurements` también exige `startTime`; `endTime` toma por defecto la hora actual.
 
