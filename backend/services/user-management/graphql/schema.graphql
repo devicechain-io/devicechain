@@ -31,7 +31,7 @@ type AuthToken {
 
 """
 The result of a successful email and password login: an identity token that is not yet
-tied to any tenant, and the tenants the identity may enter. Pass the identity token and a
+tied to any tenant, and the identity's memberships. Pass the identity token and a
 chosen tenant to selectTenant to obtain a tenant-scoped AuthToken.
 """
 # Result of an email/password login (ADR-033): an instance-scoped identity token
@@ -54,8 +54,9 @@ type IdentityAuth {
     """
     superuser: Boolean!
     """
-    The tenants this identity belongs to, as of the moment of login. Call identityMemberships
-    to re-read them later without logging in again.
+    The identity's tenant memberships as of login, including any that are disabled or in a
+    tenant that is disabled or being deleted; selectTenant refuses those. Call
+    identityMemberships to re-read them later without logging in again.
     """
     memberships: [Membership!]!
 }
@@ -318,7 +319,7 @@ reported.
 type TenantGovernance {
     """
     Sustained rate at which the tenant's devices may submit data, in readings per second;
-    a reading is one stored measurement value. Despite the name it counts readings, not
+    a reading is one stored value: one measurement value, one location or one alert. Despite the name it counts readings, not
     messages.
     """
     ingestMessagesPerSecond: Float
@@ -517,7 +518,9 @@ type Query {
     """
     me: CurrentIdentity!
     """
-    The tenants the identity currently belongs to, with its roles in each. It takes the
+    The identity's tenant memberships as of now, with its roles in each, including any that
+    are disabled or in a tenant that is disabled or being deleted; selectTenant refuses
+    those. It takes the
     identity token returned by login, so it works before any tenant is selected and needs no
     Authorization header; use it to refresh a tenant picker after memberships change
     without logging in again. Fails with "invalid or expired token" if the identity token
