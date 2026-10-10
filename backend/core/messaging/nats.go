@@ -1403,6 +1403,20 @@ type natsReader struct {
 	// request, whose clock started no later than this, so it is stamped with it rather than
 	// with the new request's time. Capacity readers only; read-loop goroutine only.
 	leftoverSince time.Time
+
+	// The fetch-ahead state (fetch_ahead.go). All of it is touched only by the goroutine
+	// that holds the reading flag, except aheadGen, which bindLocked also bumps. The
+	// settings are resolved from the instance configuration when the reader is built.
+	fetchSize   int           // messages one pull asks for
+	ahead       bool          // whether this reader fetches ahead at all
+	aheadBudget time.Duration // the longest recent batches may take to hand out and still be fetched ahead
+	future      *fetchFuture  // the one request in flight, if any
+	aheadGen    atomic.Uint64 // bumped by every (re)bind; a future from an older one is stale
+	batchFresh  bool          // pending was just fetched and its first message not yet handed out
+	drainStart  time.Time     // when the current batch's first message was handed out
+	drainEWMA   time.Duration // moving average of how long a batch takes to hand out
+	aheadStarts atomic.Int64  // futures started, for tests and diagnosis
+	aheadLive   atomic.Int64  // futures whose goroutine is still running, for tests and diagnosis
 }
 
 // ReaderOption tunes a reader's durable consumer at creation time. Options only
@@ -1664,6 +1678,9 @@ func (r *natsReader) bindLocked() error {
 	if r.unbound {
 		return errReaderUnbound
 	}
+	// Whatever request is in flight belongs to the subscription about to be released; a
+	// result it delivers is stale from here (see takeAhead).
+	r.aheadGen.Add(1)
 	// Release any stale subscription first. With a bound sub this does not delete the
 	// durable; it just releases the old (dead) subscription on a re-bind. The old
 	// pointer stays published until the new one is ready, so a concurrent
@@ -1780,6 +1797,7 @@ func (nmgr *NatsManager) NewReader(suffix string, opts ...ReaderOption) (Message
 	if r.downstream != "" {
 		nmgr.registerBackpressure(r.downstream)
 	}
+	r.configureFetch()
 	if r.slots > 0 {
 		r.capacity = newCapacity(r.slots, nmgr.ackWait(), nmgr.metrics.heldPastAckWaitFor(r.durable))
 	}
@@ -2230,7 +2248,7 @@ func (r *natsReader) ReadMessage(ctx context.Context) (_ Message, err error) {
 		if r.held != nil && !r.held() {
 			// A reader built with ReaderWithReleaseOnPark gives its buffer up at the first
 			// poll of a park; the buffer is then empty, so later polls do nothing.
-			if r.releases() && len(r.pending) > 0 {
+			if r.releases() && (len(r.pending) > 0 || r.future != nil) {
 				r.releasePending()
 			}
 			select {
@@ -2241,6 +2259,7 @@ func (r *natsReader) ReadMessage(ctx context.Context) (_ Message, err error) {
 			continue
 		}
 		if len(r.pending) == 0 {
+			r.noteDrained()
 			sub := r.sub.Load()
 			if sub == nil {
 				// UnbindTerm has run and BindTerm has not yet: we are between terms.
@@ -2270,7 +2289,7 @@ func (r *natsReader) ReadMessage(ctx context.Context) (_ Message, err error) {
 					continue
 				}
 			}
-			batch := fetchBatch
+			batch := r.batchSize()
 			var fetchedAt time.Time
 			leftovers := 0
 			if r.capacity != nil {
@@ -2288,7 +2307,10 @@ func (r *natsReader) ReadMessage(ctx context.Context) (_ Message, err error) {
 					r.leftoverSince = fetchedAt
 				}
 			}
-			msgs, err := sub.Fetch(batch, nats.MaxWait(fetchTimeout))
+			msgs, err, ok := r.takeAhead(sub)
+			if !ok {
+				msgs, err = sub.Fetch(batch, nats.MaxWait(fetchTimeout))
+			}
 			// Before the error is handed out, so the error the reconnect interrupted carries it.
 			r.noteReconnect()
 			if r.capacity != nil {
@@ -2354,12 +2376,18 @@ func (r *natsReader) ReadMessage(ctx context.Context) (_ Message, err error) {
 			r.answered.Store(true)
 			r.consecutiveTimeouts = 0
 			r.pending = msgs
+			r.batchFresh = true
 			// A Fetch can wait out its whole long-poll, so the term may have ended while it
 			// did. Re-evaluate the gate before handing any of the batch out, rather than
 			// handing out one message a full fetchTimeout after the gate closed.
 			if r.held != nil {
 				continue
 			}
+		}
+		if r.batchFresh {
+			r.batchFresh = false
+			r.drainStart = time.Now()
+			r.startAhead()
 		}
 		nm := r.pending[0]
 		r.pending = r.pending[1:]
@@ -2484,6 +2512,7 @@ func (r *natsReader) releasePending() {
 	for _, nm := range r.pending {
 		_ = nm.Nak()
 	}
+	r.dropAhead(true)
 	r.dropPending()
 }
 
@@ -2495,6 +2524,11 @@ func (r *natsReader) dropPending() {
 	}
 	r.pending = nil
 	r.pendingSlots = nil
+	// The request in flight and the batch's timing go with the buffer: they belong to the
+	// same fetch position, and a new term or a replaced consumer starts over from it.
+	r.dropAhead(false)
+	r.batchFresh = false
+	r.drainStart = time.Time{}
 }
 
 // SubscribeLive opens an ephemeral, tenant-scoped fan-out subscription over a
@@ -2798,6 +2832,12 @@ func (nmgr *NatsManager) lastConnectedServer() string {
 func (nmgr *NatsManager) ExecuteInitialize(ctx context.Context) error {
 	url := nmgr.NatsUrl()
 	natscfg := nmgr.Microservice.InstanceConfiguration.Infrastructure.Nats
+	// Fail closed on a fetch setting the readers could not honour, before anything dials:
+	// the hold budget is judged against the acknowledgement window, which only this
+	// package knows.
+	if err := natscfg.Fetch.ValidateAgainst(nmgr.ackWait()); err != nil {
+		return err
+	}
 	opts := []nats.Option{
 		nats.Name(nmgr.Microservice.FunctionalArea),
 		nats.MaxReconnects(-1),

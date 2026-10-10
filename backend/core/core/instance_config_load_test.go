@@ -244,3 +244,28 @@ func TestLoadInstanceConfigurationAcceptsAFullyPopulatedDocument(t *testing.T) {
 	assert.Equal(t, "timescaledb", ms.InstanceConfiguration.Persistence.Tsdb.Type)
 	assert.Equal(t, "debug", infra.Logging.Level)
 }
+
+// The fetch settings arrive through the same strict loader: spelled right they are applied
+// (and so reach the readers), spelled wrong they are refused by name, and a batch past
+// the ceiling is refused rather than clamped.
+func TestLoadInstanceConfigurationAppliesTheFetchSettings(t *testing.T) {
+	doc := `{"infrastructure":{"nats":{"hostname":"h","port":4222,
+	           "fetch":{"batch":128,"ahead":true,"aheadHoldBudgetMillis":500}},
+	         "userManagement":{"hostname":"u","port":8080}}}`
+	ms := &Microservice{}
+	require.NoError(t, ms.LoadInstanceConfigurationFrom(instanceDoc(t, doc)))
+	assert.Equal(t, config.NatsFetchConfiguration{Batch: 128, Ahead: true, AheadHoldBudgetMillis: 500},
+		ms.InstanceConfiguration.Infrastructure.Nats.Fetch)
+
+	typo := `{"infrastructure":{"nats":{"hostname":"h","port":4222,"fetch":{"aheed":true}},
+	         "userManagement":{"hostname":"u","port":8080}}}`
+	err := (&Microservice{}).LoadInstanceConfigurationFrom(instanceDoc(t, typo))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "aheed")
+
+	tooWide := `{"infrastructure":{"nats":{"hostname":"h","port":4222,"fetch":{"batch":257}},
+	         "userManagement":{"hostname":"u","port":8080}}}`
+	err = (&Microservice{}).LoadInstanceConfigurationFrom(instanceDoc(t, tooWide))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "infrastructure.nats.fetch.batch")
+}

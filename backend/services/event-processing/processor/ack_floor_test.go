@@ -22,6 +22,7 @@ import (
 	detectcore "github.com/devicechain-io/dc-event-processing/internal/detect/core"
 	"github.com/devicechain-io/dc-event-processing/internal/runtime"
 	"github.com/devicechain-io/dc-event-processing/model"
+	mscfg "github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-microservice/streams"
@@ -605,4 +606,51 @@ type recreateSeen struct{ messaging.MessageReader }
 
 func (r *recreateSeen) RecreateAtFloor() error {
 	return r.MessageReader.(messaging.AckFloorRecreator).RecreateAtFloor()
+}
+
+// THE SAME LOSS, AT THE WIDTH FETCH-AHEAD MAKES POSSIBLE, THROUGH THE REAL READER AND THE REAL
+// RANGE READ. The reader fetches 128 at a time with the next pull already in flight; a thief
+// takes a whole pull's worth off the durable (the deliveries the broker counted as sent that
+// a dropped connection never delivered), and the floor ack would delete them unless the loop
+// reads them from the stream first. Every one must be derived exactly once, in a single range
+// read that takes the direct path, with the floor passing them and nothing left pending.
+func TestAWholeLostBatchIsFilledWithFetchAheadOn(t *testing.T) {
+	t.Parallel()
+	const total, batch = 400, 128
+	b := startDetectBroker(t)
+	b.fetch = mscfg.NatsFetchConfiguration{Batch: batch, Ahead: true}
+	store := brokerStore(t)
+	nmgr, reader := b.detectManager(t, store)
+
+	b.publishHot(t, 1) // the term's startup replay reaches this head
+	thief := &thiefReader{MessageReader: reader, steal: func() {
+		for n := uint64(2); n <= total; n++ {
+			b.publishHot(t, n)
+		}
+		require.Eventually(t, func() bool { return b.resolvedInfo(t).NumPending >= total },
+			10*time.Second, 20*time.Millisecond, "the stream's events never reached the durable")
+		js, err := b.nc.JetStream()
+		require.NoError(t, err)
+		sub, err := js.PullSubscribe(messaging.StreamSubject(b.instance, streams.ResolvedEvents), b.resolvedDurable(),
+			nats.Bind(b.resolvedStream(), b.resolvedDurable()))
+		require.NoError(t, err)
+		got, err := sub.Fetch(batch, nats.MaxWait(5*time.Second))
+		require.NoError(t, err)
+		require.Len(t, got, batch, "the thief did not take a whole pull")
+	}}
+	seen := &handedOut{MessageReader: thief}
+	_, w := b.hotProcessor(t, seen, nmgr, store, 50)
+
+	waitForCheckpoint(t, store, total, 30*time.Second)
+	b.waitForAck(t, total)
+	want := map[string]int{}
+	for n := 1; n <= total; n++ {
+		want[fmt.Sprintf("dev-%d", n)] = 1
+	}
+	require.Equal(t, want, w.counts(), "an event in the lost range was not derived exactly once")
+	for seq := uint64(1); seq <= batch; seq++ { // the thief took the durable's first pull: 1..batch
+		require.Zero(t, seen.seenCount()[seq], "the stolen sequence %d was handed to the loop by the reader", seq)
+	}
+	require.Eventually(t, func() bool { return b.resolvedInfo(t).NumAckPending == 0 },
+		5*time.Second, 50*time.Millisecond, "the floor ack left the lost range pending")
 }
