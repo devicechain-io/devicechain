@@ -367,3 +367,35 @@ func TestAnOrdinaryFailureIsStillLeftForRedelivery(t *testing.T) {
 	assert.Equal(t, 0, ack.acked, "a transient failure must be left unacked for AckWait-paced redelivery")
 	assert.Empty(t, dead.msgs)
 }
+
+// An alarm event type this build does not know is not a notification anyone can send. Acking
+// it after a WARN made it vanish; it now fails Notify and takes the ordinary AckWait-paced
+// retry. It is NOT dead-lettered on the first delivery: during a rolling upgrade
+// device-management may publish a type this notification-management has not been rolled to
+// yet, the dead-letter stream cannot be replayed, and a type that is new would be lost for
+// good instead of delayed. At the cap it is dead-lettered with reason unprocessable.
+func TestAnUnknownAlarmEventTypeRetriesThenIsDeadLetteredAsUnprocessable(t *testing.T) {
+	dead := &deadRecorder{}
+	n := &PolicyNotifier{adapters: map[string]ChannelAdapter{}, attempts: 1, timeout: time.Second}
+	np := processorWithDeadLetters(n, dead)
+
+	bytes, err := dmproto.MarshalAlarmStateChangeEvent(&dmmodel.AlarmStateChangeEvent{
+		EventType: "TELEPORTED", AlarmToken: "alarm-1", Severity: "CRITICAL",
+		OccurredTime: time.Unix(1_700_000_000, 0).UTC(),
+	})
+	assert.NoError(t, err)
+
+	early := &recordingAck{}
+	np.dispatchOne(context.Background(), msgWith(testAlarmSubject, bytes, 1, early))
+	assert.Equal(t, 0, early.acked, "a type this build does not know yet is left for redelivery")
+	assert.Empty(t, dead.msgs, "and is not dead-lettered on the first delivery")
+
+	last := &recordingAck{}
+	np.dispatchOne(context.Background(), msgWith(testAlarmSubject, bytes, messaging.MaxDeliver, last))
+	assert.Equal(t, 1, last.acked)
+	if assert.Len(t, dead.msgs, 1, "at the cap it reaches the dead-letter stream, not vanishes") {
+		env, err := deadletter.Unmarshal(dead.msgs[0].Value)
+		assert.NoError(t, err)
+		assert.Equal(t, deadletter.ReasonUnprocessable, env.Reason)
+	}
+}

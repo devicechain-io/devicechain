@@ -134,8 +134,9 @@ func NewNotifyMetrics(ms *core.Microservice) NotifyMetrics {
 				"operator can see which pages were never sent (ADR-024)."),
 		deliveriesRefused: ms.NewCounterVec("deliveries_refused_total",
 			"Channel deliveries refused on the first attempt and not retried, by reason: egress "+
-				"(the channel points at a destination outbound traffic may not reach) or credential "+
-				"(a declared credential is missing, or a secret is stored that the channel never presents).",
+				"(the channel points at a destination outbound traffic may not reach), credential "+
+				"(a declared credential is missing, or a secret is stored that the channel never presents) "+
+				"or no_adapter (the channel's type has no delivery adapter in this build, so the channel was skipped).",
 			[]string{"reason"}),
 	}
 }
@@ -308,7 +309,15 @@ func (np *NotificationProcessor) dispatchOne(ctx context.Context, msg messaging.
 		if msg.NumDelivered >= messaging.MaxDeliver {
 			log.Error().Str("correlation", msg.CorrelationID()).Str("alarm", event.AlarmToken).
 				Msgf("Dead-lettering notification after %d failed attempts; nobody was paged", msg.NumDelivered)
-			np.deadLetter(msgctx, msg, event.AlarmToken, err)
+			if errors.Is(err, ErrUnknownAlarmEventType) {
+				// An event type this build never learned in a whole redelivery budget: not a
+				// delivery failure but work it cannot process. Retried first, because during a
+				// rolling upgrade the type may simply not have been rolled out here yet.
+				np.deadLetterAs(msgctx, msg, event.AlarmToken, err, deadletter.ReasonUnprocessable,
+					"an alarm event carried a type this service does not recognise, so nobody was paged about it")
+			} else {
+				np.deadLetter(msgctx, msg, event.AlarmToken, err)
+			}
 			msg.Ack()
 			done(core.ResultFailed)
 		} else {
@@ -365,6 +374,15 @@ func (np *NotificationProcessor) ExecuteTerminate(context.Context) error {
 // surface's decision, not this one's.
 func (np *NotificationProcessor) deadLetter(ctx context.Context, msg messaging.Message,
 	alarm string, cause error) {
+	np.deadLetterAs(ctx, msg, alarm, cause, deadletter.ReasonExhausted,
+		"an alarm could not be delivered to any configured channel after every "+
+			"delivery attempt, so nobody was paged about it")
+}
+
+// deadLetterAs is deadLetter with the reason and summary chosen by the caller, for the
+// give-ups that are decided on the first delivery rather than at the cap.
+func (np *NotificationProcessor) deadLetterAs(ctx context.Context, msg messaging.Message,
+	alarm string, cause error, reason deadletter.Reason, summary string) {
 	if np.dead == nil {
 		return
 	}
@@ -375,9 +393,8 @@ func (np *NotificationProcessor) deadLetter(ctx context.Context, msg messaging.M
 	// WriteFor fills the kind (alarm-events' declared one), subject, sequence, attempts and
 	// correlation from msg, and the dedup id the max-delivery recorder shares.
 	err := np.dead.WriteFor(ctx, msg, deadletter.Envelope{
-		Reason: deadletter.ReasonExhausted,
-		Summary: "an alarm could not be delivered to any configured channel after every " +
-			"delivery attempt, so nobody was paged about it",
+		Reason:     reason,
+		Summary:    summary,
 		Detail:     detail,
 		Reference:  alarm,
 		OccurredAt: time.Now().UTC(),

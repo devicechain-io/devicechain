@@ -144,6 +144,9 @@ type PolicyNotifier struct {
 const (
 	refusalReasonEgress     = "egress"
 	refusalReasonCredential = "credential"
+	// refusalReasonNoAdapter: the channel's type has no delivery adapter in this build, so the
+	// channel was skipped from the plan and nobody was paged through it.
+	refusalReasonNoAdapter = "no_adapter"
 )
 
 // countRefusal records one terminal refusal, tolerating a notifier built without metrics.
@@ -212,6 +215,10 @@ func (n *PolicyNotifier) tenantDeleted(ctx context.Context) bool {
 	return ok && n.TenantDeleted(tenant)
 }
 
+// ErrUnknownAlarmEventType is returned by Notify for an alarm event whose type it cannot route.
+// It is permanent: the processor dead-letters it on the first delivery rather than retrying.
+var ErrUnknownAlarmEventType = errors.New("alarm event type is not one this service routes")
+
 // Notify routes one alarm transition. RAISED/ESCALATED are delivered through the
 // matching channels; the lifecycle transitions only update the per-alarm state so the
 // escalation scheduler (N.D) can stop or re-tier — none of them page. A returned
@@ -242,9 +249,9 @@ func (n *PolicyNotifier) Notify(ctx context.Context, event *dmmodel.AlarmStateCh
 	case dmmodel.AlarmEventRaised, dmmodel.AlarmEventEscalated:
 		return n.dispatch(ctx, event)
 	default:
-		log.Warn().Str("eventType", event.EventType.String()).Str("alarm", event.AlarmToken).
-			Msg("Ignoring unknown alarm event type")
-		return nil
+		// Not a silent ack: an event type this build cannot route is a notification nobody
+		// will send, so it fails (and the processor dead-letters it) rather than vanishing.
+		return fmt.Errorf("%w: %q (alarm %q)", ErrUnknownAlarmEventType, event.EventType.String(), event.AlarmToken)
 	}
 }
 
@@ -669,6 +676,7 @@ func (n *PolicyNotifier) appendRuleDeliveries(policyToken, severity string,
 		if _, ok := n.adapters[rule.Channel.ChannelType]; !ok {
 			log.Warn().Str("channel", rule.Channel.Token).Str("type", rule.Channel.ChannelType).
 				Msg("No adapter for channel type; skipping")
+			n.countRefusal(refusalReasonNoAdapter)
 			continue
 		}
 		recipients := parseRecipients(rule.Recipients)
