@@ -27,7 +27,8 @@ export type CommandBatchCreateRequest = {
   expiresAt?: string | null | undefined;
   /**
    * Token of an entity group of devices, resolved to its members when the batch fires. A dynamic
-   * group must have been published. Requires device:read in addition to command:write.
+   * group must have been published. A group that resolves to more than 10000 devices is refused
+   * with BATCH_TOO_LARGE. Requires device:read in addition to command:write.
    */
   groupToken?: string | null | undefined;
   /**
