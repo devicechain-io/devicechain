@@ -78,7 +78,11 @@ export function loadDashboard(
 ): { loaded: Loaded } | { error: LoadError } {
   // Bound the paste on the main thread (parse is synchronous) — matches the
   // server's definition cap; a giant paste would only freeze this tab.
-  if (definitionText.length > MAX_PASTE_BYTES) {
+  //
+  // The cap is in BYTES, as the server's is. `String.length` counts UTF-16 units, which
+  // undercounts any non-ASCII text (a euro sign is 1 unit and 3 bytes), so a document the
+  // server would refuse passed this check.
+  if (new TextEncoder().encode(definitionText).length > MAX_PASTE_BYTES) {
     return { error: { code: 'definitionTooLarge' } };
   }
 

@@ -69,7 +69,11 @@ func callAllThree(t *testing.T, ctx context.Context, check func(name string, err
 	})
 	check("dashboards", err)
 
-	_, err = r.DashboardVersions(ctx, struct{ Token string }{Token: "nothing"})
+	_, err = r.DashboardVersions(ctx, struct {
+		Token  string
+		Limit  *int32
+		Offset *int32
+	}{Token: "nothing"})
 	check("dashboardVersions", err)
 }
 

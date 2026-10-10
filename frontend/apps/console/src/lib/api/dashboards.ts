@@ -187,8 +187,8 @@ export const INVALID_DEFINITION_MARKER = 'dashboard definition is not publishabl
 // ── Versioning (ADR-039) ──────────────────────────────────────────────────
 
 const DASHBOARD_VERSIONS = graphql(`
-  query DashboardVersions($token: String!) {
-    dashboardVersions(token: $token) {
+  query DashboardVersions($token: String!, $limit: Int) {
+    dashboardVersions(token: $token, limit: $limit) {
       version
       label
       description
@@ -198,8 +198,15 @@ const DASHBOARD_VERSIONS = graphql(`
   }
 `);
 
-export async function listDashboardVersions(token: string): Promise<DashboardVersion[]> {
-  const data = await gql('dashboard-management', DASHBOARD_VERSIONS, { token });
+// Newest first; the server clamps `limit` to its maximum page size.
+export async function listDashboardVersions(
+  token: string,
+  limit?: number,
+): Promise<DashboardVersion[]> {
+  const data = await gql('dashboard-management', DASHBOARD_VERSIONS, {
+    token,
+    limit: limit ?? null,
+  });
   return data.dashboardVersions;
 }
 
@@ -279,8 +286,8 @@ export async function publishDashboard(
 }
 
 const ROLLBACK_DASHBOARD = graphql(`
-  mutation RollbackDashboard($token: String!, $version: Int!) {
-    rollbackDashboard(token: $token, version: $version) {
+  mutation RollbackDashboard($token: String!, $version: Int!, $expectedUpdatedAt: String) {
+    rollbackDashboard(token: $token, version: $version, expectedUpdatedAt: $expectedUpdatedAt) {
       definition
       updatedAt
     }
@@ -289,11 +296,21 @@ const ROLLBACK_DASHBOARD = graphql(`
 
 // rollbackDashboard re-drafts a published version into the draft, returning the new
 // draft definition + updatedAt so the editor can re-baseline without a reload.
+//
+// expectedUpdatedAt is the same precondition as updateDashboard's, and it is REQUIRED
+// (though nullable) for the reason publishDashboard's is: a rollback replaces the whole
+// draft, so one issued from a stale view must fail (the CONFLICT_MARKER error) instead of
+// overwriting an edit it never saw. `null` means "roll back whatever is there".
 export async function rollbackDashboard(
   token: string,
   version: number,
+  expectedUpdatedAt: string | null,
 ): Promise<{ definition: string; updatedAt: string | null }> {
-  const data = await gql('dashboard-management', ROLLBACK_DASHBOARD, { token, version });
+  const data = await gql('dashboard-management', ROLLBACK_DASHBOARD, {
+    token,
+    version,
+    expectedUpdatedAt,
+  });
   return data.rollbackDashboard;
 }
 

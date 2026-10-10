@@ -55,6 +55,7 @@ export type UpdateDashboardMutation = { updateDashboard: { token: string, update
 
 export type DashboardVersionsQueryVariables = Exact<{
   token: string;
+  limit?: number | null | undefined;
 }>;
 
 
@@ -73,6 +74,7 @@ export type PublishDashboardMutation = { publishDashboard: { version: number } }
 export type RollbackDashboardMutationVariables = Exact<{
   token: string;
   version: number;
+  expectedUpdatedAt?: string | null | undefined;
 }>;
 
 
@@ -153,8 +155,8 @@ export const UpdateDashboardDocument = new TypedDocumentString(`
 }
     `) as unknown as TypedDocumentString<UpdateDashboardMutation, UpdateDashboardMutationVariables>;
 export const DashboardVersionsDocument = new TypedDocumentString(`
-    query DashboardVersions($token: String!) {
-  dashboardVersions(token: $token) {
+    query DashboardVersions($token: String!, $limit: Int) {
+  dashboardVersions(token: $token, limit: $limit) {
     version
     label
     description
@@ -176,8 +178,12 @@ export const PublishDashboardDocument = new TypedDocumentString(`
 }
     `) as unknown as TypedDocumentString<PublishDashboardMutation, PublishDashboardMutationVariables>;
 export const RollbackDashboardDocument = new TypedDocumentString(`
-    mutation RollbackDashboard($token: String!, $version: Int!) {
-  rollbackDashboard(token: $token, version: $version) {
+    mutation RollbackDashboard($token: String!, $version: Int!, $expectedUpdatedAt: String) {
+  rollbackDashboard(
+    token: $token
+    version: $version
+    expectedUpdatedAt: $expectedUpdatedAt
+  ) {
     definition
     updatedAt
   }

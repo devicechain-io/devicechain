@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 
+	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"gorm.io/datatypes"
 	"gorm.io/gorm"
@@ -37,8 +38,39 @@ var ErrDefinitionTooLarge = errors.New("dashboard definition exceeds the maximum
 // save that never happened as done.
 var ErrConflict = rdb.NewStaleWriteError("dashboard")
 
+// TenantDeletedError is the refusal for a write on behalf of a tenant that has been
+// through the delete door. It answers with the TENANT_DELETED extensions code.
+type TenantDeletedError struct{ Tenant string }
+
+func (e *TenantDeletedError) Error() string {
+	return "this tenant has been deleted; dashboards can no longer be written"
+}
+
+// Extensions types the refusal for the GraphQL layer.
+func (*TenantDeletedError) Extensions() map[string]any {
+	return map[string]any{"code": "TENANT_DELETED"}
+}
+
 type Api struct {
 	RDB *rdb.RdbManager
+	// TenantDeleted reports whether a tenant has been through the delete door. When set,
+	// every write that creates or changes a dashboard (create, update, publish, rollback)
+	// is refused for such a tenant, so a still-valid access token cannot re-land rows
+	// behind the purge sweep. Delete is deliberately NOT gated: removing a deleted
+	// tenant's rows is what erasure needs. Nil disables the gate, which is how main.go
+	// leaves it when user-management is not configured, and how unit tests run.
+	TenantDeleted func(tenant string) bool
+}
+
+// refuseDeletedTenant is the lifecycle gate every dashboard write passes through.
+func (api *Api) refuseDeletedTenant(ctx context.Context) error {
+	if api.TenantDeleted == nil {
+		return nil
+	}
+	if tenant, ok := core.TenantFromContext(ctx); ok && api.TenantDeleted(tenant) {
+		return &TenantDeletedError{Tenant: tenant}
+	}
+	return nil
 }
 
 // NewApi creates a new API instance around the given rdb manager.
@@ -70,6 +102,9 @@ func definitionJSON(raw string) (datatypes.JSON, error) {
 
 // CreateDashboard inserts a new dashboard definition.
 func (api *Api) CreateDashboard(ctx context.Context, request *DashboardCreateRequest) (*Dashboard, error) {
+	if err := api.refuseDeletedTenant(ctx); err != nil {
+		return nil, err
+	}
 	def, err := definitionJSON(request.Definition)
 	if err != nil {
 		return nil, err
@@ -101,6 +136,9 @@ func (api *Api) CreateDashboard(ctx context.Context, request *DashboardCreateReq
 // save is rejected with ErrConflict if the row's current UpdatedAt no longer matches,
 // i.e. another writer changed it since the caller loaded it.
 func (api *Api) UpdateDashboard(ctx context.Context, token string, request *DashboardUpdateRequest, expectedUpdatedAt *string) (*Dashboard, error) {
+	if err := api.refuseDeletedTenant(ctx); err != nil {
+		return nil, err
+	}
 	matches, err := api.DashboardsByToken(ctx, []string{token})
 	if err != nil {
 		return nil, err
@@ -225,6 +263,9 @@ func (api *Api) UpdateDashboard(ctx context.Context, token string, request *Dash
 // identity. Concurrent publishes are safe: the unique (dashboard_id, version)
 // index rejects a duplicate version number.
 func (api *Api) PublishDashboard(ctx context.Context, token string, label *string, description *string, publishedBy string, expectedUpdatedAt *string) (*DashboardVersion, error) {
+	if err := api.refuseDeletedTenant(ctx); err != nil {
+		return nil, err
+	}
 	matches, err := api.DashboardsByToken(ctx, []string{token})
 	if err != nil {
 		return nil, err
@@ -270,7 +311,16 @@ func (api *Api) PublishDashboard(ctx context.Context, token string, label *strin
 // (the parent Dashboard row), returning the updated dashboard. History is
 // append-only — no version is deleted; the caller may edit and re-publish. Returns
 // gorm.ErrRecordNotFound if the dashboard or the version does not exist.
-func (api *Api) RollbackDashboard(ctx context.Context, token string, version int32) (*Dashboard, error) {
+//
+// When expectedUpdatedAt is non-nil it is the same optimistic-concurrency precondition
+// UpdateDashboard offers: the rollback is refused with ErrConflict if the draft moved
+// on since the caller loaded it. A rollback REPLACES the whole draft, so it is the
+// write that most needs one: without it, an edit another writer saved is silently
+// overwritten by a snapshot the caller picked from a stale view.
+func (api *Api) RollbackDashboard(ctx context.Context, token string, version int32, expectedUpdatedAt *string) (*Dashboard, error) {
+	if err := api.refuseDeletedTenant(ctx); err != nil {
+		return nil, err
+	}
 	matches, err := api.DashboardsByToken(ctx, []string{token})
 	if err != nil {
 		return nil, err
@@ -280,6 +330,12 @@ func (api *Api) RollbackDashboard(ctx context.Context, token string, version int
 	}
 	dash := matches[0]
 
+	// The precondition is checked before the snapshot is resolved, so a stale caller
+	// learns it is stale whether or not the version it named exists.
+	if err := rdb.RefuseIfMoved(dash.UpdatedAt, expectedUpdatedAt, ErrConflict); err != nil {
+		return nil, err
+	}
+
 	var snapshot DashboardVersion
 	if err := api.RDB.DB(ctx).
 		Where("dashboard_id = ? AND version = ?", dash.ID, version).
@@ -287,9 +343,24 @@ func (api *Api) RollbackDashboard(ctx context.Context, token string, version int
 		return nil, err
 	}
 
-	dash.Definition = snapshot.Definition
-	if err := rdb.AdvancingFrom(api.RDB.DB(ctx), dash.UpdatedAt).Save(dash).Error; err != nil {
-		return nil, err
+	// Only the definition column is written. With a precondition the write is ATOMIC and
+	// guarded (UPDATE ... WHERE updated_at = <the value just read>): a writer slipping in
+	// between the read above and this write moves updated_at and matches zero rows,
+	// instead of being clobbered. Without one it is the unconditional last-write-wins
+	// the other writes offer.
+	assignments := map[string]any{"definition": snapshot.Definition}
+	if expectedUpdatedAt != nil {
+		if err := rdb.UpdateIfUnmoved(api.RDB.DB(ctx), dash, dash.UpdatedAt, assignments, ErrConflict); err != nil {
+			return nil, err
+		}
+	} else {
+		res := rdb.AdvancingFrom(api.RDB.DB(ctx), dash.UpdatedAt).Model(dash).Where("id = ?", dash.ID).Updates(assignments)
+		if res.Error != nil {
+			return nil, res.Error
+		}
+		if res.RowsAffected == 0 {
+			return nil, gorm.ErrRecordNotFound
+		}
 	}
 	// Reload for the stored updated_at: the console takes the version from this response as
 	// its next precondition, and the copy in memory carries digits the database drops.
@@ -303,9 +374,13 @@ func (api *Api) RollbackDashboard(ctx context.Context, token string, version int
 	return reloaded[0], nil
 }
 
-// DashboardVersions lists a dashboard's published versions, newest first. Returns
+// DashboardVersions lists a dashboard's published versions, newest first, one page at a
+// time. limit and offset are optional: a nil or non-positive limit means the default page
+// and a limit above rdb.MaxPageSize is clamped to it, so no request reads an unbounded
+// history. The snapshot definitions (up to 1 MiB each) are NOT loaded — a version is
+// listed by its metadata, and rollback resolves a snapshot server-side. Returns
 // gorm.ErrRecordNotFound if the dashboard does not exist.
-func (api *Api) DashboardVersions(ctx context.Context, token string) ([]*DashboardVersion, error) {
+func (api *Api) DashboardVersions(ctx context.Context, token string, limit, offset *int32) ([]*DashboardVersion, error) {
 	matches, err := api.DashboardsByToken(ctx, []string{token})
 	if err != nil {
 		return nil, err
@@ -315,10 +390,22 @@ func (api *Api) DashboardVersions(ctx context.Context, token string) ([]*Dashboa
 	}
 	dash := matches[0]
 
+	page := rdb.DefaultPageSize
+	if limit != nil && *limit > 0 {
+		page = int(*limit)
+	}
+	if page > rdb.MaxPageSize {
+		page = rdb.MaxPageSize
+	}
+	skip := 0
+	if offset != nil && *offset > 0 {
+		skip = int(*offset)
+	}
+
 	versions := make([]*DashboardVersion, 0)
-	if err := api.RDB.DB(ctx).
+	if err := api.RDB.DB(ctx).Omit("definition").
 		Where("dashboard_id = ?", dash.ID).
-		Order("version DESC").Find(&versions).Error; err != nil {
+		Order("version DESC").Limit(page).Offset(skip).Find(&versions).Error; err != nil {
 		return nil, err
 	}
 	return versions, nil
@@ -343,7 +430,10 @@ func (api *Api) Dashboards(ctx context.Context, criteria DashboardSearchCriteria
 		}
 		return result
 	}, criteria.Pagination)
-	db.Find(&results)
+	// The list is metadata only: a definition is up to 1 MiB, and a page of them is the
+	// read this service must not make on a table view's behalf. The resolver refuses a
+	// `definition` selection on a row read this way (see DashboardResolver.Definition).
+	db.Omit("definition").Find(&results)
 	if db.Error != nil {
 		return nil, db.Error
 	}

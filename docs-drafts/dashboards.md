@@ -98,8 +98,9 @@ someone who arrives from the profile code.
 Two concurrency details worth knowing. `UpdateDashboard` does a genuine guarded write —
 `UPDATE … WHERE id = ? AND updated_at = ?` with a zero-rows check
 (`model/api.go:140-153`). `PublishDashboard` has only the pre-read string compare, so its
-precondition is racy in a way update's is not. And **`RollbackDashboard` has no precondition at
-all** (`model/api.go:217`): it silently clobbers a concurrent editor's saved draft.
+precondition is racy in a way update's is not. `RollbackDashboard` now takes an optional
+`expectedUpdatedAt` and writes through the same guarded update, so a rollback from a stale view is
+refused instead of clobbering a concurrent editor's saved draft.
 
 🔴 **There is no way to read a published version.** A `DashboardVersion`'s definition field is
 deliberately absent from the schema (`graphql/schema.graphql:53-66`), so the only retrieval path is
@@ -291,20 +292,17 @@ every `Authorize` call from `mutations.go` still turns no test red.
    first-party source by each app's bundler. The published docs claim a dashboard can be embedded in
    "any React app"; inside the repo that is true and `/dash` is the working proof, outside it there
    is nothing to install.
-3. 🔴 **No tenant-lifecycle gate on dashboard-management.** Every other write path in the platform
-   carries one. A write that re-lands rows after a purge sweep is reported by the sweeper as residual
-   rows — a retryable error that **blocks purge completion**. The exposure is bounded, because
-   deleting a tenant requires its memberships to be gone first so no new token can be minted; what
-   remains is an already-issued access token living out its TTL. Same shape as the emitter gaps, on a
-   control-plane write path.
-4. **No caps anywhere that matter.** No limit on dashboards per tenant, versions per dashboard, or
-   the `dashboardVersions` response, which takes no pagination and returns every version. Combined
-   with unbounded publishing, that query on a heavily-published board is an unbounded response.
-5. **Rollback has no concurrency precondition**, unlike save and publish.
+3. ~~No tenant-lifecycle gate on dashboard-management~~ — fixed: create, update, publish and rollback
+   are refused (`TENANT_DELETED`) for a deleted tenant through the shared lifecycle gate. Delete is
+   deliberately left open so erasure keeps working.
+4. **Few caps.** No limit on dashboards per tenant or versions per dashboard. The
+   `dashboardVersions` response is now paged (optional `limit`/`offset`, clamped to the maximum
+   page size, newest first, no snapshot bodies), and the `dashboards` search lists a
+   `DashboardSummary` with no definition.
+5. ~~Rollback has no concurrency precondition~~ — fixed: it takes `expectedUpdatedAt`.
 6. **A published version cannot be read** — §2.
-7. **The 1 MiB cap is bytes on the server and UTF-16 code units in the viewer**
-   (`model/api.go:55` vs `frontend/apps/dashboard/src/load.ts:48`), under a comment claiming they
-   match. For any non-ASCII definition the client's ceiling is the looser one.
+7. ~~The 1 MiB cap is bytes on the server and UTF-16 code units in the viewer~~ — fixed: the viewer
+   measures bytes.
 8. **Audit rows are written and unreadable.** Dashboards are journalled by construction, and the
    service exposes no query over the journal.
 9. **Anyone who can save can publish, roll back, and hard-delete** a dashboard with its whole

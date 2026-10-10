@@ -67,17 +67,19 @@ func (r *SchemaResolver) PublishDashboard(ctx context.Context, args struct {
 	return &DashboardVersionResolver{M: *version, S: r, C: ctx}, nil
 }
 
-// RollbackDashboard re-drafts a published version into the dashboard.
+// RollbackDashboard re-drafts a published version into the dashboard. expectedUpdatedAt,
+// when supplied, is the optimistic-concurrency precondition UpdateDashboard offers.
 func (r *SchemaResolver) RollbackDashboard(ctx context.Context, args struct {
-	Token   string
-	Version int32
+	Token             string
+	Version           int32
+	ExpectedUpdatedAt *string
 }) (*DashboardResolver, error) {
 	if err := auth.Authorize(ctx, auth.DashboardWrite); err != nil {
 		return nil, err
 	}
 
 	api := r.GetApi(ctx)
-	updated, err := api.RollbackDashboard(ctx, args.Token, args.Version)
+	updated, err := api.RollbackDashboard(ctx, args.Token, args.Version, args.ExpectedUpdatedAt)
 	if err != nil {
 		return nil, err
 	}

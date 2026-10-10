@@ -48,6 +48,27 @@ func (r *DashboardResolver) Definition() string {
 	return string(r.M.Definition)
 }
 
+// DashboardSummaryResolver resolves a dashboard as listed by a search. The list is read
+// without the definition column, and the type has no definition field to resolve, so a
+// client selecting one is refused by validation rather than served a blank.
+type DashboardSummaryResolver struct {
+	M model.Dashboard
+	S *SchemaResolver
+	C context.Context
+}
+
+func (r *DashboardSummaryResolver) Id() gql.ID { return gql.ID(fmt.Sprint(r.M.ID)) }
+
+func (r *DashboardSummaryResolver) CreatedAt() *string { return util.FormatTime(r.M.CreatedAt) }
+
+func (r *DashboardSummaryResolver) UpdatedAt() *string { return util.FormatTime(r.M.UpdatedAt) }
+
+func (r *DashboardSummaryResolver) Token() string { return r.M.Token }
+
+func (r *DashboardSummaryResolver) Name() *string { return util.NullStr(r.M.Name) }
+
+func (r *DashboardSummaryResolver) Description() *string { return util.NullStr(r.M.Description) }
+
 // DashboardVersionResolver resolves the fields of a published dashboard version.
 type DashboardVersionResolver struct {
 	M model.DashboardVersion
@@ -110,10 +131,10 @@ type DashboardSearchResultsResolver struct {
 	C context.Context
 }
 
-func (r *DashboardSearchResultsResolver) Results() []*DashboardResolver {
-	resolvers := make([]*DashboardResolver, 0, len(r.M.Results))
+func (r *DashboardSearchResultsResolver) Results() []*DashboardSummaryResolver {
+	resolvers := make([]*DashboardSummaryResolver, 0, len(r.M.Results))
 	for _, current := range r.M.Results {
-		resolvers = append(resolvers, &DashboardResolver{M: current, S: r.S, C: r.C})
+		resolvers = append(resolvers, &DashboardSummaryResolver{M: current, S: r.S, C: r.C})
 	}
 	return resolvers
 }

@@ -47,14 +47,16 @@ func (r *SchemaResolver) Dashboards(ctx context.Context, args struct {
 
 // DashboardVersions lists a dashboard's published versions, newest first.
 func (r *SchemaResolver) DashboardVersions(ctx context.Context, args struct {
-	Token string
+	Token  string
+	Limit  *int32
+	Offset *int32
 }) ([]*DashboardVersionResolver, error) {
 	if err := auth.Authorize(ctx, auth.DashboardRead); err != nil {
 		return nil, err
 	}
 
 	api := r.GetApi(ctx)
-	versions, err := api.DashboardVersions(ctx, args.Token)
+	versions, err := api.DashboardVersions(ctx, args.Token, args.Limit, args.Offset)
 	if err != nil {
 		return nil, err
 	}
