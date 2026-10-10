@@ -12,8 +12,8 @@ func TestContainsPattern(t *testing.T) {
 		"fleet":  `%fleet%`,
 		"50%":    `%50\%%`,
 		"a_b":    `%a\_b%`,
-		`C:\ops`: `%C:\ops%`,
-		`\%_`:    `%\\%\_%`,
+		`C:\ops`: `%C:\\ops%`,
+		`\%_`:    `%\\\%\_%`,
 		"":       `%%`,
 	} {
 		if got := ContainsPattern(in); got != want {
