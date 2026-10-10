@@ -63,10 +63,10 @@ func (r *AdminResolver) SetSystemRoles(ctx context.Context, args struct {
 	Email      string
 	RoleTokens []string
 }) (*AdminIdentityResolver, error) {
-	if err := checkList("role tokens", args.RoleTokens); err != nil {
-		return nil, err
-	}
 	return r.identityMutation(ctx, func(s *admin.Service) (*identityResult, error) {
+		if err := checkList("role tokens", args.RoleTokens); err != nil {
+			return nil, err
+		}
 		return wrap(s.SetSystemRoles(ctx, args.Email, args.RoleTokens))
 	})
 }
@@ -76,10 +76,10 @@ func (r *AdminResolver) SetPassword(ctx context.Context, args struct {
 	Email    string
 	Password string
 }) (*AdminIdentityResolver, error) {
-	if err := checkPassword(args.Password); err != nil {
-		return nil, err
-	}
 	return r.identityMutation(ctx, func(s *admin.Service) (*identityResult, error) {
+		if err := checkPassword(args.Password); err != nil {
+			return nil, err
+		}
 		return wrap(s.SetPassword(ctx, args.Email, args.Password))
 	})
 }
@@ -101,10 +101,10 @@ func (r *AdminResolver) AddMembership(ctx context.Context, args struct {
 	Tenant     string
 	RoleTokens []string
 }) (*AdminIdentityResolver, error) {
-	if err := checkList("role tokens", args.RoleTokens); err != nil {
-		return nil, err
-	}
 	return r.identityMutation(ctx, func(s *admin.Service) (*identityResult, error) {
+		if err := checkList("role tokens", args.RoleTokens); err != nil {
+			return nil, err
+		}
 		return wrap(s.AddMembership(ctx, args.Email, args.Tenant, args.RoleTokens))
 	})
 }
@@ -115,10 +115,10 @@ func (r *AdminResolver) SetMembershipRoles(ctx context.Context, args struct {
 	Tenant     string
 	RoleTokens []string
 }) (*AdminIdentityResolver, error) {
-	if err := checkList("role tokens", args.RoleTokens); err != nil {
-		return nil, err
-	}
 	return r.identityMutation(ctx, func(s *admin.Service) (*identityResult, error) {
+		if err := checkList("role tokens", args.RoleTokens); err != nil {
+			return nil, err
+		}
 		return wrap(s.SetMembershipRoles(ctx, args.Email, args.Tenant, args.RoleTokens))
 	})
 }

@@ -30,6 +30,16 @@ describe('normalizeToken', () => {
     expect(normalizeToken('--edge--')).toBe('edge');
   });
 
+  it('trims hyphens at both ends, including an input that is nothing but hyphens', () => {
+    expect(normalizeToken('---')).toBe('');
+    expect(normalizeToken('-a-')).toBe('a');
+    expect(normalizeToken(' - a b - ')).toBe('a-b');
+    // A long run of separators stays fast (the trim is linear).
+    const started = Date.now();
+    expect(normalizeToken('-'.repeat(200_000) + '!')).toBe('');
+    expect(Date.now() - started).toBeLessThan(1000);
+  });
+
   it('is idempotent', () => {
     const once = normalizeToken('Ops Overview');
     expect(normalizeToken(once)).toBe(once);
