@@ -206,6 +206,12 @@ func useMeasurementRollup(criteria MeasurementAggregationCriteria) bool {
 // ceil((endTime - startTime) / intervalSeconds). A read that would produce more is
 // refused (LIMIT_EXCEEDED) rather than truncated, so the caller narrows the range or
 // widens the interval. 10,000 points is far beyond what a chart can draw.
+//
+// The count is ceil(range / interval). time_bucket aligns buckets to a fixed origin, not
+// to startTime, so a range that straddles a bucket boundary can touch one bucket more
+// than that: a read at the cap may return cap+1 buckets per measurement name. The bound
+// is on cost, not an exact row count, so the extra bucket is accepted rather than
+// counted.
 const MaxMeasurementBuckets = 10_000
 
 // errStartTimeRequired refuses an aggregation with no start of range: without one the
