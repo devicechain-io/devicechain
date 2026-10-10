@@ -6,6 +6,7 @@ package processor
 import (
 	"time"
 
+	"github.com/devicechain-io/dc-event-processing/internal/react"
 	"github.com/devicechain-io/dc-event-processing/internal/rules"
 	"github.com/devicechain-io/dc-event-processing/internal/runtime"
 	"github.com/devicechain-io/dc-microservice/core"
@@ -348,6 +349,7 @@ type ReactMetrics struct {
 	notEnabled          *prometheus.CounterVec
 	connectorShed       *prometheus.CounterVec
 	permanentlyRejected *prometheus.CounterVec
+	dropped             *prometheus.CounterVec
 	orphan              prometheus.Counter
 	poisonDropped       prometheus.Counter
 	// deadLettered counts events recorded as dead letters. A letter that could not be
@@ -383,6 +385,7 @@ func NewReactMetrics(ms *core.Microservice) *ReactMetrics {
 		notEnabled:          ms.NewCounterVec("react_actions_not_enabled_total", "REACT actions recognized but dropped because this deployment has no sink for them, by action type: sendCommand without command-delivery configured, or httpCall/publish without outbound connectors enabled. The alarm sink is always wired, so raiseAlarm/clearAlarm should never appear here.", []string{"action"}),
 		connectorShed:       ms.NewCounterVec("react_connector_egress_shed_total", "Connector dispatch ATTEMPTS (httpCall/publish) shed at the source for being over the tenant's outbound egress quota (ADR-060 SD-3). Per-attempt: a sibling-failure redelivery may shed then later admit the same action, so this is not a count of permanently-dropped actions.", []string{"action"}),
 		permanentlyRejected: ms.NewCounterVec("react_actions_permanently_rejected_total", "REACT actions DROPPED because the downstream service returned a typed rejection a retry cannot change, by action type: a sendCommand for a device that no longer exists, or a command outside the device's published vocabulary. These were previously retried to the redelivery cap and counted as poison, so a non-zero rate here is an authoring defect (a rule aimed at commands its devices cannot accept), not an infrastructure one.", []string{"action"}),
+		dropped:             droppedPrecreated(ms.NewCounterVec("react_actions_dropped_total", "REACT actions skipped without being attempted, by reason. unknown_kind: the rule definition carried an action type this build cannot dispatch (a forged or hand-edited definition; unreachable through the supported authoring path), so a non-zero value is a defect to investigate, not load.", []string{"reason"})),
 		orphan:              ms.NewCounter("react_events_orphaned_total", "Derived events whose rule was gone from the projection (nothing dispatched)."),
 		poisonDropped:       ms.NewCounter("react_events_poison_dropped_total", "Derived events dropped after the redelivery cap (a persistently-failing dispatch). Now that such an event is dead-lettered (ADR-024), this counts the same events react_events_dead_lettered_total does — kept because it is what the ReactPoisonDropping alert has always fired on, and a metric an alert is built around is not renamed for tidiness."),
 		deadLettered:        ms.NewCounter("react_events_dead_lettered_total", "Derived events written to the dead-letter stream after the redelivery cap, so their actions can be inspected rather than vanishing (ADR-024)."),
@@ -398,6 +401,13 @@ func precreated(v *prometheus.CounterVec) *prometheus.CounterVec {
 	for _, a := range []string{string(rules.ActionHTTPCall), string(rules.ActionPublish)} {
 		v.WithLabelValues(a)
 	}
+	return v
+}
+
+// droppedPrecreated creates the dropped vec's known reason at 0, so an alert over the series has
+// something to read before the first increment.
+func droppedPrecreated(v *prometheus.CounterVec) *prometheus.CounterVec {
+	v.WithLabelValues(react.DropUnknownKind)
 	return v
 }
 
@@ -449,6 +459,14 @@ func (m *ReactMetrics) RecordPermanentlyRejected(action string) {
 		return
 	}
 	m.permanentlyRejected.WithLabelValues(action).Inc()
+}
+
+// RecordDropped records one action skipped without being attempted, by reason (react.Metrics).
+func (m *ReactMetrics) RecordDropped(reason string) {
+	if m == nil || m.dropped == nil {
+		return
+	}
+	m.dropped.WithLabelValues(reason).Inc()
 }
 
 // RecordConnectorShed records one connector action dropped at the source for being over the tenant's
