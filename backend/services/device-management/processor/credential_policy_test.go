@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	dmtest "github.com/devicechain-io/dc-device-management/test"
 	mscfg "github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/credential"
@@ -57,13 +58,13 @@ func TestDeviceCredentialCheckerUsesTheDeviceBucket(t *testing.T) {
 	const instance = "inst-creds"
 	nmgr := startCheckerNats(t, instance)
 
-	checker, err := NewDeviceCredentialChecker(nmgr)
+	checker, err := NewDeviceCredentialChecker(nmgr, dmtest.DeviceSecretKey())
 	if err != nil {
 		t.Fatalf("NewDeviceCredentialChecker: %v", err)
 	}
 	p := credential.Principal{Kind: credential.KindDeviceCredential, ID: "acme:sensor-001"}
 	err = checker.Check(context.Background(), p, "wrong", func(context.Context) (string, error) {
-		return "right", nil
+		return dmtest.SecretDigest("right"), nil
 	})
 	if err == nil {
 		t.Fatal("a wrong password was accepted")

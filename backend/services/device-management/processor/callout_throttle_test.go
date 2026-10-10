@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/devicechain-io/dc-device-management/model"
+	dmtest "github.com/devicechain-io/dc-device-management/test"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/credential"
 	"github.com/devicechain-io/dc-microservice/credential/credentialtest"
@@ -190,7 +191,7 @@ func TestCalloutRefusalsAreChargedAndDummyCompared(t *testing.T) {
 			if len(compared) != 1 {
 				t.Fatalf("want exactly one (dummy) compare, got %d", len(compared))
 			}
-			if len(compared[0]) == 0 || string(compared[0]) == storedSecret {
+			if len(compared[0]) == 0 || credential.VerifyDeviceSecret(dmtest.DeviceSecretKey(), string(compared[0]), storedSecret) == nil {
 				t.Errorf("the compare was against %q, not the kind's dummy", compared[0])
 			}
 			if got := rig.outcome(credential.OutcomeMismatch); got != 1 {

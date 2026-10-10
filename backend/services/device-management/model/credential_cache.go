@@ -74,7 +74,8 @@ type credentialEntry struct {
 	key credentialKey
 	dev deviceKey
 	// cred holds only what a hit reads: TenantId, DeviceId, CredentialType,
-	// CredentialValue, ExpiresAt, and Enabled (always true). Device is nil here.
+	// SecretDigest, ExpiresAt, and Enabled (always true). Device is nil here. It never
+	// holds a secret: the row carries the digest, never the password.
 	cred DeviceCredential
 	// device is a private copy: DeviceType nil, Metadata bytes its own.
 	device  Device
@@ -241,11 +242,11 @@ func (c *CredentialCache) fill(key credentialKey, presentedType string, cred *De
 		key: key,
 		dev: deviceKey{tenant: cred.TenantId, deviceId: cred.DeviceId},
 		cred: DeviceCredential{
-			DeviceId:        cred.DeviceId,
-			CredentialType:  cred.CredentialType,
-			CredentialValue: cred.CredentialValue,
-			Enabled:         true,
-			ExpiresAt:       cred.ExpiresAt,
+			DeviceId:       cred.DeviceId,
+			CredentialType: cred.CredentialType,
+			SecretDigest:   cred.SecretDigest,
+			Enabled:        true,
+			ExpiresAt:      cred.ExpiresAt,
 		},
 		device:  cloneDevice(cred.Device),
 		expires: expires,
@@ -362,7 +363,7 @@ func (c *CredentialCache) report() {
 // entry count is what binds.
 func credentialEntrySize(e *credentialEntry) int {
 	n := credentialEntryOverhead + len(e.dev.tenant) +
-		len(e.cred.TenantId) + len(e.cred.CredentialType) + len(e.cred.CredentialValue.String) +
+		len(e.cred.TenantId) + len(e.cred.CredentialType) + len(e.cred.SecretDigest.String) +
 		len(e.device.TenantId) + len(e.device.Token) + len(e.device.ExternalId.String) +
 		len(e.device.Name.String) + len(e.device.Description.String)
 	if e.device.Metadata != nil {

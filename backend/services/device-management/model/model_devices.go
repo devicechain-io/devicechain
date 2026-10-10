@@ -330,7 +330,7 @@ type DeviceCredentialUpdateRequest struct {
 	// CredentialValue is the secret material and IS nullable — a credential type that
 	// carries no secret is a real state — so an explicit null (or "") clears it. Omitting
 	// it leaves the secret in place, which is what makes a metadata edit safe. A value is
-	// stored EXACTLY AS SENT, surrounding whitespace included, because a device presents
+	// digested EXACTLY AS SENT, surrounding whitespace included, because a device presents
 	// it byte for byte.
 	CredentialValue dcgraphql.OptionalString
 	// Enabled sits on a NOT NULL column; a null is refused rather than folded to false,
@@ -346,21 +346,27 @@ type DeviceCredentialUpdateRequest struct {
 // Identity (Device) is stable and never rotates; credentials are rotatable and
 // a device may hold several. CredentialId is the identifier a device presents
 // at connect time (access token string or MQTT
-// username); it resolves to the owning device. CredentialValue is the secret
-// material (token secret, MQTT password, or certificate PEM).
+// username); it resolves to the owning device.
+//
+// 🔴 THE SECRET IS NEVER STORED, ONLY ITS KEYED DIGEST. SecretDigest is what
+// credential.DeviceSecretKey made of the secret a create or update carried (an MQTT
+// password), and NULL for a credential with none. Nothing that reads this row can
+// recover the secret, and the cache that copies the row copies the digest. The
+// credential_value column that held the plaintext is still in the table, NULLed by
+// DigestPlaintextCredentialSecrets at startup; nothing maps it.
 type DeviceCredential struct {
 	gorm.Model
 	rdb.TenantScoped
 	rdb.TokenReference
 	rdb.MetadataEntity
 
-	DeviceId        uint
-	Device          *Device
-	CredentialType  string
-	CredentialId    string
-	CredentialValue sql.NullString
-	Enabled         bool
-	ExpiresAt       sql.NullTime
+	DeviceId       uint
+	Device         *Device
+	CredentialType string
+	CredentialId   string
+	SecretDigest   sql.NullString
+	Enabled        bool
+	ExpiresAt      sql.NullTime
 }
 
 // DefaultOrder implements rdb.Sortable, and this is the one model here where the

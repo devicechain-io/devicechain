@@ -23,9 +23,28 @@ import (
 
 var device = credential.Principal{Kind: credential.KindDeviceCredential, ID: "acme:dev-1"}
 
-// plaintext is a lookup returning a device's stored password as it is stored: plaintext.
+// plaintext is a lookup returning a stored value as it is.
 func plaintext(stored string) func(context.Context) (string, error) {
 	return func(context.Context) (string, error) { return stored, nil }
+}
+
+// testRootKey is a fixed root key, so a digest made in one test verifies in another.
+var testRootKey = []byte("0123456789abcdef0123456789abcdef")
+
+// testDeviceKey is the device secret key every test Checker is built with.
+func testDeviceKey(t testing.TB) *credential.DeviceSecretKey {
+	t.Helper()
+	k, err := credential.DeriveDeviceSecretKey(testRootKey)
+	require.NoError(t, err)
+	return k
+}
+
+// digestOf is a lookup returning secret's stored digest under the test key.
+func digestOf(t testing.TB, secret string) func(context.Context) (string, error) {
+	t.Helper()
+	d, err := testDeviceKey(t).Digest(secret)
+	require.NoError(t, err)
+	return plaintext(d)
 }
 
 func allKinds(p credential.Policy) map[credential.Kind]credential.Policy {
@@ -34,37 +53,40 @@ func allKinds(p credential.Policy) map[credential.Kind]credential.Policy {
 	}
 }
 
-// The device kind compares a stored plaintext password: the right one matches and a
-// wrong one does not. Mapped to bcrypt, a plaintext stored value would never match.
-func TestDeviceKindComparesPlaintext(t *testing.T) {
+// The device kind compares against a stored keyed digest: the right secret matches and a
+// wrong one does not, byte for byte.
+func TestDeviceKindComparesItsDigest(t *testing.T) {
 	// Enough free attempts that every wrong secret below is evaluated, not throttled.
 	c := newCheckerFor(t, credentialtest.NewStore(), allKinds(credential.Policy{Free: 10, Base: time.Second, Cap: time.Minute}))
-	require.NoError(t, c.Check(context.Background(), device, "s3cret", plaintext("s3cret")))
-	for _, wrong := range []string{"s3creT", "s3cret-extra", "s3cre", "x"} {
-		require.ErrorIs(t, c.Check(context.Background(), device, wrong, plaintext("s3cret")),
+	require.NoError(t, c.Check(context.Background(), device, "s3cret", digestOf(t, "s3cret")))
+	for _, wrong := range []string{"s3creT", "s3cret-extra", "s3cre", "x", " s3cret"} {
+		require.ErrorIs(t, c.Check(context.Background(), device, wrong, digestOf(t, "s3cret")),
 			credential.ErrMismatch, "presented %q", wrong)
 	}
 }
 
-// 🔴 THE MOST IMPORTANT PROPERTY HERE. A bcrypt kind whose lookup hands back the
-// literal secret (a store holding plaintext by mistake, or a comparator that "also
-// tries plaintext") must not authenticate: for a person or an OAuth client the only
-// stored value that may match is a bcrypt hash.
-func TestBcryptKindsRefuseAStoredPlaintext(t *testing.T) {
+// 🔴 A STORED PLAINTEXT NEVER AUTHENTICATES ANY KIND. For a person or an OAuth client the
+// only stored value that may match is a bcrypt hash, and for a device it is a digest: a
+// store still holding the password itself (a row the upgrade did not digest) must refuse,
+// not fall back to comparing it.
+func TestNoKindAuthenticatesAgainstAStoredPlaintext(t *testing.T) {
 	c := newCheckerFor(t, credentialtest.NewStore(), allKinds(testPolicy))
-	for _, k := range []credential.Kind{credential.KindIdentity, credential.KindOAuthClient} {
+	for _, k := range []credential.Kind{credential.KindIdentity, credential.KindOAuthClient, credential.KindDeviceCredential} {
 		p := credential.Principal{Kind: k, ID: "someone"}
 		require.ErrorIs(t, c.Check(context.Background(), p, secret, plaintext(secret)), credential.ErrMismatch,
 			"kind %s authenticated against a stored PLAINTEXT secret", k)
-		// Control: the same kind does match its bcrypt hash, so the refusal above is
-		// about the stored value's form and not a checker that refuses everything.
-		require.NoError(t, c.Check(context.Background(), p, secret, newAccount(t).lookup), "kind %s", k)
 	}
+	// Controls: each kind does match its own stored form, so the refusals above are about
+	// the stored value's form and not a checker that refuses everything.
+	for _, k := range []credential.Kind{credential.KindIdentity, credential.KindOAuthClient} {
+		require.NoError(t, c.Check(context.Background(), credential.Principal{Kind: k, ID: "someone"}, secret, newAccount(t).lookup), "kind %s", k)
+	}
+	require.NoError(t, c.Check(context.Background(), device, secret, digestOf(t, secret)))
 }
 
 // An unknown device credential pays exactly one compare, against the device kind's own
-// dummy (not the bcrypt hash the other kinds use), is refused, and is charged like a
-// real one.
+// dummy — a digest under the device key, the shape of a stored one, not the bcrypt hash
+// the other kinds use — is refused, and is charged like a real one.
 func TestDeviceUnknownPrincipalPaysDummyCompare(t *testing.T) {
 	store := credentialtest.NewStore()
 	c := newCheckerFor(t, store, allKinds(testPolicy))
@@ -75,31 +97,27 @@ func TestDeviceUnknownPrincipalPaysDummyCompare(t *testing.T) {
 	require.Len(t, seen, 1, "an unknown device credential must pay exactly one compare")
 	assert.Equal(t, credential.Dummy(c, credential.KindDeviceCredential), seen[0])
 	_, err := bcrypt.Cost(seen[0])
-	assert.Error(t, err, "the device kind's dummy must be a plaintext like its stored values, not a bcrypt hash")
+	assert.Error(t, err, "the device kind's dummy must be a digest like its stored values, not a bcrypt hash")
+	assert.NoError(t, testDeviceKey(t).Recognizes(string(seen[0])), "the dummy must be a digest under the device key")
 	assert.Equal(t, []string{"get:not-found", "create:ok"}, store.Ops(), "the attempt must be charged")
 }
 
-// A stored empty secret never matches, not even an empty presented one — a
-// constant-time compare of two equal values reports a match, and sha256("") is equal
-// to itself.
+// A stored empty secret never matches, not even an empty presented one.
 func TestDeviceEmptyStoredNeverMatchesEmpty(t *testing.T) {
 	c := newCheckerFor(t, credentialtest.NewStore(), allKinds(testPolicy))
 	require.ErrorIs(t, c.Check(context.Background(), device, "", plaintext("")), credential.ErrMismatch)
-	// Control: the comparator on its own does call two empty secrets equal, which is
-	// the match the "" rule in Check exists to refuse.
-	require.NoError(t, credential.DigestCompare(nil, nil))
 }
 
-// The digest comparator hands the constant-time compare two 32-byte digests whatever
-// the lengths of what it compares, so a compare cannot leak the stored secret's length.
-func TestPlainCompareIsLengthIndependent(t *testing.T) {
-	var lengths [][2]int
-	restore := credential.RecordConstantTimeCompareLengths(func(a, b int) { lengths = append(lengths, [2]int{a, b}) })
-	defer restore()
-
-	require.ErrorIs(t, credential.DigestCompare([]byte("short"), []byte("a much longer presented secret")), credential.ErrMismatch)
-	require.NoError(t, credential.DigestCompare([]byte("same"), []byte("same")))
-	assert.Equal(t, [][2]int{{32, 32}, {32, 32}}, lengths)
+// Declaring the device kind without its key is refused at construction, not discovered
+// at the first connect.
+func TestNewCheckerRefusesTheDeviceKindWithoutAKey(t *testing.T) {
+	_, err := credential.NewChecker(credentialtest.NewStore(),
+		map[credential.Kind]credential.Policy{credential.KindDeviceCredential: testPolicy})
+	require.ErrorIs(t, err, credential.ErrNoDeviceSecretKey)
+	// A Checker of the bcrypt kinds needs no device key.
+	_, err = credential.NewChecker(credentialtest.NewStore(),
+		map[credential.Kind]credential.Policy{credential.KindIdentity: testPolicy})
+	require.NoError(t, err)
 }
 
 // Construction declares kinds by the policy map's keys, and refuses a map with none
@@ -116,7 +134,8 @@ func TestNewCheckerRefusesUnknownKindAndEmptyMap(t *testing.T) {
 
 	// A map declaring any subset of the known kinds is accepted.
 	_, err = credential.NewChecker(credentialtest.NewStore(),
-		map[credential.Kind]credential.Policy{credential.KindDeviceCredential: testPolicy})
+		map[credential.Kind]credential.Policy{credential.KindDeviceCredential: testPolicy},
+		credential.WithDeviceSecretKey(testDeviceKey(t)))
 	require.NoError(t, err)
 }
 
@@ -127,7 +146,7 @@ func TestCheckUndeclaredKindFailsLoudly(t *testing.T) {
 	counter := prometheus.NewCounterVec(prometheus.CounterOpts{Name: "checks_total"}, []string{"kind", "outcome"})
 	c, err := credential.NewChecker(store,
 		map[credential.Kind]credential.Policy{credential.KindDeviceCredential: testPolicy},
-		credential.WithClock(newClock().Now), credential.WithCounter(counter))
+		credential.WithClock(newClock().Now), credential.WithCounter(counter), credential.WithDeviceSecretKey(testDeviceKey(t)))
 	require.NoError(t, err)
 	compares := 0
 	credential.ObserveCompares(c, func([]byte) { compares++ })
@@ -144,7 +163,7 @@ func TestCheckUndeclaredKindFailsLoudly(t *testing.T) {
 
 func newCheckerFor(t *testing.T, store credential.Store, p map[credential.Kind]credential.Policy) *credential.Checker {
 	t.Helper()
-	c, err := credential.NewChecker(store, p, credential.WithClock(newClock().Now))
+	c, err := credential.NewChecker(store, p, credential.WithClock(newClock().Now), credential.WithDeviceSecretKey(testDeviceKey(t)))
 	require.NoError(t, err)
 	return c
 }

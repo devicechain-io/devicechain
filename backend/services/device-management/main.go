@@ -46,6 +46,11 @@ var (
 	Api       *model.Api
 	CachedApi *model.CachedApi
 
+	// DeviceSecretKey digests and verifies device credential secrets (MQTT passwords). It is
+	// derived from the instance root key in AfterRdb, before anything can store or compare
+	// a secret.
+	DeviceSecretKey *credential.DeviceSecretKey
+
 	InboundEventsReader    messaging.MessageReader
 	InboundEventsProcessor *processor.InboundEventsProcessor
 	ResolvedEventsWriter   messaging.OrderedWriter
@@ -207,7 +212,7 @@ func newInboundEventsProcessor(reader messaging.MessageReader) *processor.Inboun
 // Api. Without it every eviction is silently skipped, a revoked credential keeps
 // authenticating events from memory until its copy expires, and only a test that builds
 // the Apis through here can see it.
-func buildApis(nmgr *messaging.NatsManager, rdbm *rdb.RdbManager,
+func buildApis(nmgr *messaging.NatsManager, rdbm *rdb.RdbManager, key *credential.DeviceSecretKey,
 	cfg *config.DeviceManagementConfiguration) (*model.Api, *model.CachedApi, error) {
 	// Create NATS KV caches TTL'd from configuration (ADR-022 review B2), and the
 	// in-process credential cache.
@@ -220,6 +225,7 @@ func buildApis(nmgr *messaging.NatsManager, rdbm *rdb.RdbManager,
 	// inbound-event resolution path.
 	api := model.NewApi(rdbm)
 	api.EnableCeilingMetrics(nmgr.Microservice)
+	api.DeviceSecretKey = key
 	cached := model.NewCachedApi(api, caches)
 	// The write paths evict the hot-path caches through this seam (ADR-044 F2). The GraphQL
 	// mutations run on the plain *Api, so the evictor is wired onto it.
@@ -508,8 +514,19 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 			Migrations: schema.Migrations,
 			Config:     Configuration.RdbConfiguration,
 		},
-		AfterRdb: func(_ context.Context, m *service.Managers) error {
+		AfterRdb: func(ctx context.Context, m *service.Managers) error {
 			RdbManager = m.Rdb
+
+			// Device credential secrets are stored as digests under a key derived from the
+			// instance root key, so this service cannot store or check an MQTT password
+			// without it: no key, no start.
+			var err error
+			if DeviceSecretKey, err = deriveDeviceSecretKey(); err != nil {
+				return err
+			}
+			if err = digestStoredCredentialSecrets(ctx, RdbManager, DeviceSecretKey); err != nil {
+				return err
+			}
 
 			// Build every Prometheus instrument this service exports, before the NATS manager
 			// that consumes them.
@@ -522,7 +539,7 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 		// relational handle and a broker to build KV buckets from.
 		AfterNats: func(_ context.Context, m *service.Managers) error {
 			var err error
-			Api, CachedApi, err = buildApis(m.Nats, RdbManager, Configuration)
+			Api, CachedApi, err = buildApis(m.Nats, RdbManager, DeviceSecretKey, Configuration)
 			if err != nil {
 				return err
 			}
@@ -627,7 +644,7 @@ func afterMicroserviceStarted(ctx context.Context) error {
 		// credential-attempt bucket. It fails closed when that bucket cannot be reached,
 		// and OPEN, without the backoff, when it is full, since anyone can fill it by
 		// presenting enough distinct usernames (the credential package doc says why).
-		creds, err := processor.NewDeviceCredentialChecker(NatsManager, credential.WithCounter(CredentialChecks))
+		creds, err := processor.NewDeviceCredentialChecker(NatsManager, DeviceSecretKey, credential.WithCounter(CredentialChecks))
 		if err != nil {
 			return err
 		}

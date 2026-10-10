@@ -111,7 +111,7 @@ func (api *Api) ReplaceDevice(ctx context.Context, request *DeviceReplaceRequest
 	// Validate and render the new credential BEFORE the transaction opens, so a bad
 	// credential type or an unparseable expiry refuses the whole replacement without
 	// having retired anything.
-	credential, err := buildDeviceCredential(device, credentialRequest)
+	credential, err := buildDeviceCredential(api.DeviceSecretKey, device, credentialRequest)
 	if err != nil {
 		return nil, err
 	}

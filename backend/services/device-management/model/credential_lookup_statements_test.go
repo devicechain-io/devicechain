@@ -166,8 +166,8 @@ func TestAuthenticatingAnMqttBasicCredentialIsOneStatement(t *testing.T) {
 func TestResolvingACredentialForTheCalloutIsOneStatement(t *testing.T) {
 	f := newSQLiteCredentialFixture(t)
 	d, stored, err := f.capi.ResolveDeviceCredential(f.ctx, basic("cred-1", "wrong"), time.Now())
-	if err != nil || d == nil || d.Token != "dev" || stored != "s3cret" {
-		t.Fatalf("resolve: got (%v, %q, %v), want dev with its stored secret", d, stored, err)
+	if err != nil || d == nil || d.Token != "dev" || !verifies(stored, "s3cret") {
+		t.Fatalf("resolve: got (%v, %q, %v), want dev with its stored digest", d, stored, err)
 	}
 	requireOneJoinedStatement(t, f, "callout resolve")
 }
@@ -216,7 +216,7 @@ func requireReadsNoVariableWidthColumn(t *testing.T, stmt string) {
 			t.Errorf("the connect lookup reads %s: %s", banned, stmt)
 		}
 	}
-	for _, needed := range []string{"token", "credential_value", "expires_at", "device_id"} {
+	for _, needed := range []string{"token", "secret_digest", "expires_at", "device_id"} {
 		if !strings.Contains(stmt, needed) {
 			t.Errorf("the connect lookup does not read %s: %s", needed, stmt)
 		}
@@ -235,8 +235,8 @@ func TestTheConnectResolveReadsNoVariableWidthColumn(t *testing.T) {
 	if err != nil || d == nil {
 		t.Fatalf("resolve: got (%v, %q, %v), want device dev", d, stored, err)
 	}
-	if d.Token != "dev" || d.ID != f.devId || d.TenantId != "acme" || stored != "s3cret" {
-		t.Errorf("resolve: got device (id %d, tenant %q, token %q) with secret %q, want (%d, acme, dev) with s3cret",
+	if d.Token != "dev" || d.ID != f.devId || d.TenantId != "acme" || !verifies(stored, "s3cret") {
+		t.Errorf("resolve: got device (id %d, tenant %q, token %q) with digest %q, want (%d, acme, dev) with a digest of s3cret",
 			d.ID, d.TenantId, d.Token, stored, f.devId)
 	}
 	if d.Metadata != nil {
@@ -379,7 +379,7 @@ func runCredentialLookupControls(t *testing.T, fresh func(t *testing.T) credFixt
 					t.Fatalf("seed foreign device: %v", err)
 				}
 				row := &DeviceCredential{DeviceId: foreign.ID, CredentialType: string(CredentialMqttBasic),
-					CredentialId: "crossed", CredentialValue: sql.NullString{String: "s3cret", Valid: true}, Enabled: true}
+					CredentialId: "crossed", SecretDigest: testDigest("s3cret"), Enabled: true}
 				row.Token = "c-crossed"
 				mustExec(t, f.api.RDB.DB(f.ctx).Create(row))
 				return basic("crossed", "s3cret")

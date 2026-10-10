@@ -14,6 +14,7 @@ import (
 
 	"github.com/devicechain-io/dc-device-management/config"
 	"github.com/devicechain-io/dc-device-management/model"
+	dmtest "github.com/devicechain-io/dc-device-management/test"
 	esmodel "github.com/devicechain-io/dc-event-sources/model"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/entity"
@@ -83,6 +84,7 @@ func buildResolveRig(t testing.TB, db *gorm.DB, scoped bool, extraMetrics int,
 	wrap func(field string, kv *msgtest.MemoryKV) *messaging.Cache) *resolveRig {
 	t.Helper()
 	api := model.NewApi(&rdb.RdbManager{Database: db})
+	api.DeviceSecretKey = dmtest.DeviceSecretKey()
 	ctx := core.WithTenant(context.Background(), "acme")
 
 	rig := &resolveRig{t: t, ctx: ctx, db: db, api: api, stores: map[string]*msgtest.MemoryKV{}}

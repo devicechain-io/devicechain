@@ -28,7 +28,9 @@ import (
 // the reasons all three are load-bearing — is putest.NewSQLiteDB's.
 func newPartialUpdateApi(t *testing.T, tables ...any) *Api {
 	t.Helper()
-	return NewApi(&rdb.RdbManager{Database: putest.NewSQLiteDB(t, tables...)})
+	api := NewApi(&rdb.RdbManager{Database: putest.NewSQLiteDB(t, tables...)})
+	api.DeviceSecretKey = testSecretKey
+	return api
 }
 
 // partialUpdateTenant is the one place this service's fixture tenant is spelled. Both the

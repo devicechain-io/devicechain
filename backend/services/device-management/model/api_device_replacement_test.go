@@ -87,6 +87,7 @@ func replacementTestApi(t *testing.T) (*Api, context.Context) {
 		"foreign keys are still off; this fixture would not see a missing cascade")
 
 	api := NewApi(&rdb.RdbManager{Database: db})
+	api.DeviceSecretKey = testSecretKey
 	return api, core.WithTenant(context.Background(), "acme")
 }
 
