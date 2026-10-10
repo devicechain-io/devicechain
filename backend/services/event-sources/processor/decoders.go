@@ -208,6 +208,11 @@ type entryTimeProbe struct {
 // pass, not the safety net: the decode fails closed either way, and running it second
 // would simply mean nobody ever sees the better message.
 //
+// The single-pass decode (decodeOnce) does not run it at all: a failure there is never
+// reported, it sends the bytes to decodeReference, which runs this first. decodeOnce
+// checks the one thing this refuses that the typed decode accepts, the zero instant, on
+// the decoded entries (zeroEntryTime).
+//
 // A device gets this text back (400 on HTTP, dead-letter with the reason on a broker
 // transport), so it is written for whoever has to fix the firmware.
 //
@@ -293,13 +298,15 @@ func (jd *JsonDecoder) BuildLocationsPayload(source *JsonEvent) (*model.Unresolv
 	if err != nil {
 		return nil, err
 	}
-	return jd.buildLocationsPayloadFromBytes(locbytes)
+	return jd.buildLocationsPayloadFromBytes(locbytes, true)
 }
 
 // buildLocationsPayloadFromBytes is BuildLocationsPayload from the payload object's JSON bytes.
-func (jd *JsonDecoder) buildLocationsPayloadFromBytes(locbytes []byte) (*model.UnresolvedLocationsPayload, error) {
-	if err := validateEntryTimes("location", locbytes); err != nil {
-		return nil, err
+func (jd *JsonDecoder) buildLocationsPayloadFromBytes(locbytes []byte, probe bool) (*model.UnresolvedLocationsPayload, error) {
+	if probe {
+		if err := validateEntryTimes("location", locbytes); err != nil {
+			return nil, err
+		}
 	}
 	payload := &model.UnresolvedLocationsPayload{}
 	if err := json.Unmarshal(locbytes, payload); err != nil {
@@ -322,13 +329,15 @@ func (jd *JsonDecoder) BuildMeasurementsPayload(source *JsonEvent) (*model.Unres
 	if err != nil {
 		return nil, err
 	}
-	return jd.buildMeasurementsPayloadFromBytes(locbytes)
+	return jd.buildMeasurementsPayloadFromBytes(locbytes, true)
 }
 
 // buildMeasurementsPayloadFromBytes is BuildMeasurementsPayload from the payload object's JSON bytes.
-func (jd *JsonDecoder) buildMeasurementsPayloadFromBytes(locbytes []byte) (*model.UnresolvedMeasurementsPayload, error) {
-	if err := validateEntryTimes("measurement", locbytes); err != nil {
-		return nil, err
+func (jd *JsonDecoder) buildMeasurementsPayloadFromBytes(locbytes []byte, probe bool) (*model.UnresolvedMeasurementsPayload, error) {
+	if probe {
+		if err := validateEntryTimes("measurement", locbytes); err != nil {
+			return nil, err
+		}
 	}
 	payload := &model.UnresolvedMeasurementsPayload{}
 	if err := json.Unmarshal(locbytes, payload); err != nil {
@@ -355,13 +364,15 @@ func (jd *JsonDecoder) BuildAlertsPayload(source *JsonEvent) (*model.UnresolvedA
 	if err != nil {
 		return nil, err
 	}
-	return jd.buildAlertsPayloadFromBytes(locbytes)
+	return jd.buildAlertsPayloadFromBytes(locbytes, true)
 }
 
 // buildAlertsPayloadFromBytes is BuildAlertsPayload from the payload object's JSON bytes.
-func (jd *JsonDecoder) buildAlertsPayloadFromBytes(locbytes []byte) (*model.UnresolvedAlertsPayload, error) {
-	if err := validateEntryTimes("alert", locbytes); err != nil {
-		return nil, err
+func (jd *JsonDecoder) buildAlertsPayloadFromBytes(locbytes []byte, probe bool) (*model.UnresolvedAlertsPayload, error) {
+	if probe {
+		if err := validateEntryTimes("alert", locbytes); err != nil {
+			return nil, err
+		}
 	}
 	payload := &model.UnresolvedAlertsPayload{}
 	if err := json.Unmarshal(locbytes, payload); err != nil {
@@ -505,21 +516,60 @@ func (jd *JsonDecoder) decodeOnce(payload []byte, receivedAt time.Time) (*model.
 		}
 		built, err = jd.BuildNewRelationshipPayload(source)
 	case model.Location:
-		built, err = jd.buildLocationsPayloadFromBytes(body)
+		built, err = jd.buildLocationsPayloadFromBytes(body, false)
 	case model.Measurement:
-		built, err = jd.buildMeasurementsPayloadFromBytes(body)
+		built, err = jd.buildMeasurementsPayloadFromBytes(body, false)
 	case model.Alert:
-		built, err = jd.buildAlertsPayloadFromBytes(body)
+		built, err = jd.buildAlertsPayloadFromBytes(body, false)
 	default:
 		return nil, nil, false
 	}
-	if err != nil {
+	if err != nil || zeroEntryTime(built) {
 		return nil, nil, false
 	}
 	if err := checkBuilt(event, built); err != nil {
 		return nil, nil, false
 	}
 	return event, built, true
+}
+
+// zeroEntryTime reports whether any entry of a built payload carries the zero instant.
+//
+// It is the one refusal of validateEntryTimes that the typed decode does not make itself,
+// and the single-pass decode runs it INSTEAD of that probe, which costs a whole extra
+// unmarshal of the payload. Every other refusal of the probe is already one of the typed
+// decode's: an entry time is a *time.Time, whose UnmarshalJSON refuses anything that is
+// not a JSON string and parses the string with the same time.Parse(time.RFC3339) the probe
+// uses. So the typed decode succeeds and this answers false exactly when the probe would
+// have passed. What the probe adds is only its error TEXT, and decodeOnce reports no
+// error: any failure, this one included, sends the same bytes to decodeReference, which
+// runs the probe first and owns the message the device is sent.
+//
+// checkBuilt's age floor refuses the zero instant too, today. This does not lean on that:
+// the floor is a policy that can move, and the zero instant is a sentinel that cannot.
+func zeroEntryTime(built interface{}) bool {
+	zero := func(t *time.Time) bool { return t != nil && t.IsZero() }
+	switch p := built.(type) {
+	case *model.UnresolvedMeasurementsPayload:
+		for i := range p.Entries {
+			if zero(p.Entries[i].OccurredTime) {
+				return true
+			}
+		}
+	case *model.UnresolvedLocationsPayload:
+		for i := range p.Entries {
+			if zero(p.Entries[i].OccurredTime) {
+				return true
+			}
+		}
+	case *model.UnresolvedAlertsPayload:
+		for i := range p.Entries {
+			if zero(p.Entries[i].OccurredTime) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // decodeReference is the original decode: envelope into a map, then per kind a
