@@ -46,7 +46,7 @@ func (r *DashboardResolver) Description() *string {
 }
 
 // Definition resolves the DRAFT, which is author-only: a caller holding dashboard:read
-// but not dashboard:write is refused with FORBIDDEN rather than served an empty string.
+// but not dashboard:write is refused with an authorization error rather than served an empty string.
 // Viewers read the published snapshot through publishedDashboard.
 func (r *DashboardResolver) Definition() (string, error) {
 	if err := auth.Authorize(r.C, auth.DashboardWrite); err != nil {

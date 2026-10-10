@@ -239,3 +239,46 @@ func TestActivateIsTenantScoped(t *testing.T) {
 		t.Fatalf("another tenant activated a version: %s", res.Data)
 	}
 }
+
+// publishedAt on Dashboard is the live version's publish time, and null before the first
+// publish.
+func TestDashboardPublishedAt(t *testing.T) {
+	api, ctx := newWireFixture(t)
+	for _, tok := range []string{"d", "other"} {
+		if _, err := api.CreateDashboard(ctx, &model.DashboardCreateRequest{Token: tok, Definition: publishedDef}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	const doc = `{ dashboard(token: "d") { publishedVersion publishedAt } }`
+	res := execDoc(t, ctx, doc)
+	if hasErr(res) || string(res.Data) != `{"dashboard":{"publishedVersion":null,"publishedAt":null}}` {
+		t.Fatalf("unpublished = %s / %v", res.Data, res.Errors)
+	}
+
+	// "other" publishes first, so a lookup that ignored the dashboard would find its row.
+	if _, _, err := api.PublishDashboard(ctx, "other", nil, nil, "alice", nil); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(20 * time.Millisecond)
+	v, _, err := api.PublishDashboard(ctx, "d", nil, nil, "alice", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res = execDoc(t, ctx, doc)
+	if hasErr(res) {
+		t.Fatalf("published read: %v", res.Errors)
+	}
+	var data struct {
+		Dashboard struct {
+			PublishedAt string `json:"publishedAt"`
+		} `json:"dashboard"`
+	}
+	_ = json.Unmarshal(res.Data, &data)
+	got, err := time.Parse(time.RFC3339Nano, data.Dashboard.PublishedAt)
+	if err != nil {
+		t.Fatalf("publishedAt %q: %v", data.Dashboard.PublishedAt, err)
+	}
+	if got.UnixMicro() != v.CreatedAt.UnixMicro() {
+		t.Fatalf("publishedAt = %s, want the version's creation time %s", got, v.CreatedAt)
+	}
+}

@@ -28,7 +28,7 @@ type Dashboard {
     description: String
     """
     The current DRAFT definition. The draft is author-only: reading it requires
-    dashboard:write, and a caller holding only dashboard:read is refused (FORBIDDEN)
+    dashboard:write, and a caller holding only dashboard:read is refused with an authorization error
     rather than served an empty string. Viewers read the published snapshot with the
     publishedDashboard query instead.
     """

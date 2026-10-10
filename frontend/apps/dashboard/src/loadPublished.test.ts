@@ -83,7 +83,7 @@ describe('loadPublishedDashboard', () => {
     expect(await loadPublishedDashboard('ops', '')).toEqual({ error: { code: 'dashboardNotPublished' } });
 
     rejectWith(
-      new GraphQLRequestError('forbidden: missing required authority', 403, [
+      new GraphQLRequestError('forbidden: missing required authority', 200, [
         { message: 'forbidden: missing required authority' },
       ]),
     );

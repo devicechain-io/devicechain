@@ -23,7 +23,7 @@
 // only ever a parser's own diagnostic. Rendering happens in loadErrorMessage, in the
 // i18n layer, where the catalogs and the parity gate can see it.
 
-import { GraphQLRequestError, gql } from '@devicechain/client';
+import { GraphQLRequestError, gql, isForbiddenError } from '@devicechain/client';
 import {
   migrateToSlots,
   parseBindingManifest,
@@ -158,7 +158,9 @@ function fetchError(err: unknown): LoadError {
   if (err instanceof GraphQLRequestError) {
     const codes = (err.errors ?? []).map((e) => e.extensions?.code);
     if (codes.includes('NOT_PUBLISHED')) return { code: 'dashboardNotPublished' };
-    if (codes.includes('FORBIDDEN') || err.status === 403) return { code: 'dashboardForbidden' };
   }
+  // The server's authorization refusal is a plain error over HTTP 200 with no code, so it
+  // is recognised by the SDK's own classifier rather than by a code of ours.
+  if (isForbiddenError(err)) return { code: 'dashboardForbidden' };
   return { code: 'dashboardFetchFailed', detail: errorDetail(err) };
 }

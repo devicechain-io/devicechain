@@ -216,3 +216,55 @@ func TestActivateIsRefusedForADeletedTenant(t *testing.T) {
 	var deleted *TenantDeletedError
 	assert.ErrorAs(t, err, &deleted)
 }
+
+// Two dashboards in ONE tenant: every version lookup must be confined to its own
+// dashboard, not just to the tenant.
+func TestVersionsAreConfinedToTheirOwnDashboard(t *testing.T) {
+	api := newTestApi(t)
+	ctx := core.WithTenant(context.Background(), "acme")
+	_, err := api.CreateDashboard(ctx, &DashboardCreateRequest{Token: "a", Definition: defA})
+	require.NoError(t, err)
+	_, err = api.CreateDashboard(ctx, &DashboardCreateRequest{Token: "b", Definition: defB})
+	require.NoError(t, err)
+
+	// a gets versions 1 and 2; b gets only version 1. Numbering is per dashboard.
+	for i := 0; i < 2; i++ {
+		_, _, err = api.PublishDashboard(ctx, "a", nil, nil, "alice", nil)
+		require.NoError(t, err)
+	}
+	vb, _, err := api.PublishDashboard(ctx, "b", nil, nil, "alice", nil)
+	require.NoError(t, err)
+	assert.Equal(t, int32(1), vb.Version, "b's first version was numbered from a's history")
+
+	// Version 2 exists only on a: b may not activate it, nor read its body.
+	_, err = api.ActivateDashboardVersion(ctx, "b", 2)
+	assert.ErrorIs(t, err, gorm.ErrRecordNotFound)
+	_, err = api.DashboardVersion(ctx, "b", 2)
+	assert.ErrorIs(t, err, gorm.ErrRecordNotFound)
+	if p := pointerOf(t, api, ctx, "b"); assert.NotNil(t, p) {
+		assert.Equal(t, int32(1), *p)
+	}
+
+	// Each serves its own body at the same version number.
+	_, served, err := api.PublishedDashboard(ctx, "a")
+	require.NoError(t, err)
+	assert.JSONEq(t, defA, string(served.Definition))
+	_, served, err = api.PublishedDashboard(ctx, "b")
+	require.NoError(t, err)
+	assert.JSONEq(t, defB, string(served.Definition))
+	body, err := api.DashboardVersion(ctx, "b", 1)
+	require.NoError(t, err)
+	assert.JSONEq(t, defB, string(body.Definition))
+
+	// publishedAt is read from the right dashboard's row too.
+	var a, b Dashboard
+	require.NoError(t, api.RDB.DB(ctx).Where("token = ?", "a").First(&a).Error)
+	require.NoError(t, api.RDB.DB(ctx).Where("token = ?", "b").First(&b).Error)
+	at, err := api.PublishedAt(ctx, b.ID, 1)
+	require.NoError(t, err)
+	assert.Equal(t, vb.CreatedAt.UnixMicro(), at.UnixMicro())
+	_, err = api.PublishedAt(ctx, b.ID, 2)
+	assert.ErrorIs(t, err, gorm.ErrRecordNotFound)
+	_, err = api.PublishedAt(ctx, a.ID, 2)
+	assert.NoError(t, err)
+}
