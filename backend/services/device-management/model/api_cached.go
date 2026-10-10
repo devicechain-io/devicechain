@@ -5,7 +5,7 @@ package model
 
 import (
 	"context"
-	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/core"
@@ -163,7 +163,7 @@ func (capi *CachedApi) EvictMemberships(ctx context.Context, entityType string, 
 // memberships, keyed by family + row id (row ids are per-table, so the family must be
 // part of the key to avoid a device/area id collision).
 func membershipsByEntityKey(tenant, entityType string, entityId uint) string {
-	return fmt.Sprintf("%s|%s|%d", tenant, entityType, entityId)
+	return tenant + "|" + entityType + "|" + strconv.FormatUint(uint64(entityId), 10)
 }
 
 // EvictScopedGroupsExist satisfies model.CacheEvictor (ADR-062 Decision 7): it drops the
@@ -323,8 +323,13 @@ func deviceByTokenKey(tenant string, token string) string {
 
 // relationshipsBySourceKey builds the tenant-scoped cache key for a device's
 // tracked relationships, keyed by the source device row id.
+//
+// The three per-event keys are concatenated rather than formatted: they are built for
+// every event resolved, and fmt was a few percent of the resolver's CPU in a
+// production-shaped profile. TestCacheKeysMatchTheirFormattedShape holds each to the
+// format it replaced, since a key that changed shape would read nothing it had written.
 func relationshipsBySourceKey(tenant string, sourceId uint) string {
-	return fmt.Sprintf("%s|%d", tenant, sourceId)
+	return tenant + "|" + strconv.FormatUint(uint64(sourceId), 10)
 }
 
 // DevicesByToken serves single-token lookups from the device-by-token cache,
@@ -476,7 +481,7 @@ func (capi *CachedApi) UpdateDeviceType(ctx context.Context, token string,
 // profileResolutionByTypeKey builds the tenant-scoped cache key for a device type's
 // ProfileResolution, keyed by the device type row id.
 func profileResolutionByTypeKey(tenant string, deviceTypeId uint) string {
-	return fmt.Sprintf("%s|%d", tenant, deviceTypeId)
+	return tenant + "|" + strconv.FormatUint(uint64(deviceTypeId), 10)
 }
 
 // ProfileResolutionByDeviceType serves the resolve path's per-device-type profile read

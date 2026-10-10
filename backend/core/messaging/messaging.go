@@ -588,8 +588,10 @@ func TenantContextFromSubject(ctx context.Context, subject string) (context.Cont
 
 // ScopedSubject builds the fully-scoped publish subject for a tenant:
 // "{instanceId}.{tenant}.{suffix}".
+//
+// Concatenated rather than formatted: it is built for every publish.
 func ScopedSubject(instanceId, tenant, suffix string) string {
-	return fmt.Sprintf("%s.%s.%s", instanceId, tenant, suffix)
+	return instanceId + "." + tenant + "." + suffix
 }
 
 // WildcardSubject builds the cross-tenant subscribe filter for the shared
