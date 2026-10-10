@@ -392,7 +392,7 @@ var (
 		"device_credentials.tenant_id",
 		"device_credentials.device_id",
 		"device_credentials.credential_type",
-		"device_credentials.credential_value",
+		"device_credentials.secret_digest",
 		"device_credentials.enabled",
 		"device_credentials.expires_at",
 	}
