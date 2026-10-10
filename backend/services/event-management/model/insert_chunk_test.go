@@ -23,16 +23,20 @@ import (
 )
 
 // insertStatement is one INSERT the write path built: its table, how many rows it carried,
-// how many parameters it bound, and whether it carried an ON CONFLICT arbiter.
+// how many parameters it bound, whether it carried an ON CONFLICT arbiter, and whether it
+// was a column-array insert (rdb.ColumnTable, issued as SQL through gorm's Raw processor)
+// rather than a gorm Create.
 type insertStatement struct {
 	table      string
 	rows, vars int
 	arbiter    bool
+	columnar   bool
 }
 
 // newDryRunApi is an Api whose inserts are BUILT, through the production callback chain and
 // the production ON CONFLICT clauses, and never sent — so a statement larger than sqlite
-// would take can still be measured — with every INSERT it builds recorded.
+// would take can still be measured — with every INSERT it builds recorded: a gorm Create's,
+// and a column-array insert's, which on sqlite renders a multi-row VALUES statement.
 func newDryRunApi(t *testing.T) (*Api, func() []insertStatement) {
 	t.Helper()
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{DryRun: true, Logger: logger.Discard})
@@ -50,6 +54,17 @@ func newDryRunApi(t *testing.T) (*Api, func() []insertStatement) {
 		seen = append(seen, insertStatement{table: tx.Statement.Table, rows: rows, vars: len(tx.Statement.Vars),
 			arbiter: strings.Contains(tx.Statement.SQL.String(), "ON CONFLICT")})
 	}))
+	require.NoError(t, db.Callback().Raw().After("gorm:raw").Register("test:record_raw_insert", func(tx *gorm.DB) {
+		sql := tx.Statement.SQL.String()
+		if !strings.HasPrefix(sql, "INSERT INTO `") {
+			return
+		}
+		table, _, _ := strings.Cut(strings.TrimPrefix(sql, "INSERT INTO `"), "`")
+		mu.Lock()
+		defer mu.Unlock()
+		seen = append(seen, insertStatement{table: table, rows: strings.Count(sql, "),(") + 1,
+			vars: len(tx.Statement.Vars), arbiter: strings.Contains(sql, "ON CONFLICT"), columnar: true})
+	}))
 	return NewApi(&rdb.RdbManager{Database: db}), func() []insertStatement {
 		mu.Lock()
 		defer mu.Unlock()
@@ -64,13 +79,20 @@ func rowsPerInsert(t *testing.T, api *Api, ctx context.Context, model any) int {
 	return n
 }
 
-// Every insert on the event-store write path, given one row more than a statement can
-// carry, splits it into two statements and binds no more than the driver accepts in
-// either. What is measured is what gorm actually built — the site's own ON CONFLICT
-// clause, the tenant stamp, every bound column — not the column count the bound was
-// derived from; and the first statement carrying a full chunk shows the bound is not
-// looser than it needs to be. Every statement, the second of a split included, must carry
-// its site's arbiter: without it a redelivery writes the rows twice.
+// Every insert on the event-store write path, given one row more than a gorm Create
+// statement can carry, binds no more than the driver accepts and writes every row. What
+// is measured is what was actually built — the site's own ON CONFLICT clause, the tenant,
+// every bound column — not the column count the bound was derived from. Every statement,
+// the second of a split included, must carry its site's arbiter: without it a redelivery
+// writes the rows twice.
+//
+// Two shapes are on the path. The state-change rows are a gorm Create split by
+// rdb.CreateChunked: given one row too many it takes two statements, and the first
+// carrying a full chunk shows the bound is not looser than it needs to be. Every other
+// table — the parents included — is a column-array insert, which on Postgres binds one
+// array per column whatever the rows (the integration test
+// TestEventStoreInsertsBindAFixedNumberOfParameters pins that); here, on sqlite, it renders
+// VALUES statements bounded by sqlite's own limit.
 func TestEveryEventStoreInsertFitsTheDriversLimit(t *testing.T) {
 	ctx := core.WithTenant(context.Background(), "acme")
 	at := time.Date(2026, 9, 29, 12, 0, 0, 0, time.UTC)
@@ -176,7 +198,24 @@ func TestEveryEventStoreInsertFitsTheDriversLimit(t *testing.T) {
 					target = append(target, s)
 				case "events":
 					parents = append(parents, s)
+					assert.True(t, s.columnar, "the parents are written by a column-array insert")
 				}
+			}
+			if tc.parentsSplit {
+				written := 0
+				for _, s := range parents {
+					written += s.rows
+				}
+				assert.Equal(t, n, written, "every distinct parent must be written")
+			}
+			if tc.table != "state_change_events" {
+				written := 0
+				for _, s := range target {
+					assert.Truef(t, s.columnar, "%s is written by a column-array insert", tc.table)
+					written += s.rows
+				}
+				assert.Equal(t, n, written, "every row must be written")
+				return
 			}
 			require.Len(t, target, 2, "%d rows into %s must take two statements", n, tc.table)
 			assert.Equal(t, per, target[0].rows, "the first statement must carry a full chunk")
@@ -185,11 +224,6 @@ func TestEveryEventStoreInsertFitsTheDriversLimit(t *testing.T) {
 				"a full chunk of %d rows binds %d parameters, so one row more would still have fit",
 				target[0].rows, target[0].vars)
 			assert.Equal(t, n, target[0].rows+target[1].rows, "every row must be written")
-			if tc.parentsSplit {
-				require.Len(t, parents, 2, "%d distinct parents must take two statements", n)
-				assert.Equal(t, perParent, parents[0].rows)
-				assert.Equal(t, n, parents[0].rows+parents[1].rows)
-			}
 		})
 	}
 }

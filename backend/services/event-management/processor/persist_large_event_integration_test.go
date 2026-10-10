@@ -6,14 +6,16 @@
 // An event too large for one INSERT, against a REAL TimescaleDB.
 //
 // PostgreSQL's wire protocol binds at most 65535 parameters in a statement, and pgx refuses
-// a larger one before sending it. A measurement row binds 11, so an event with more than
-// 5,957 readings cannot be written in one statement; the event store splits it. sqlite has
-// a different limit and a different driver, so none of this can be asked of it.
+// a larger one before sending it. A measurement row bound as a multi-row VALUES list binds
+// 11, so an event with more than 5,957 readings could not be written in one such
+// statement. The event store writes its rows as column arrays instead (rdb.ColumnTable),
+// one parameter per column, so it is one statement however many readings there are; the
+// generic split (rdb.CreateChunked) is still exercised directly below. sqlite has a
+// different limit and a different driver, so none of this can be asked of it.
 //
 // The events here carry NO alternate id — the shape sparkplug-ingest and lwm2m-ingest
-// produce — so a redelivery is not skipped by the alternate-id probe and reaches every
-// split insert again, where only each statement's ON CONFLICT arbiter stops it writing
-// twice.
+// produce — so a redelivery is not skipped by the alternate-id probe and reaches the
+// insert again, where only its ON CONFLICT arbiter stops it writing twice.
 package processor
 
 import (
@@ -112,15 +114,15 @@ func TestALargeMeasurementEventIsStoredWhole(t *testing.T) {
 		assert.EqualValuesf(t, 3, r.count(t, tenant, ""), "events after delivery %d", delivery)
 		assert.Emptyf(t, r.failures, "failures after delivery %d", delivery)
 		assert.Lenf(t, r.acks.snapshot(), 3*delivery, "acks after delivery %d", delivery)
-		// One transaction per batch: the split insert nests inside it rather than costing
+		// One transaction per batch: the large insert runs inside it rather than costing
 		// the message a transaction, or a set-aside, of its own.
 		assert.EqualValuesf(t, delivery, r.api.txs.Load(), "transactions after delivery %d", delivery)
 	}
 
-	// The negative control: the same rows in ONE statement are refused, by the driver and
-	// not the server, and the worker gives up on that refusal at once rather than retrying
-	// a statement that is the same on every delivery. This is what makes 6,000 a real
-	// test of the split and not a number that would have fitted anyway.
+	// The negative control: the same rows in ONE multi-row VALUES statement (a gorm Create)
+	// are refused, by the driver and not the server, and the worker gives up on that refusal
+	// at once rather than retrying a statement that is the same on every delivery. This is
+	// what makes 6,000 a number the VALUES shape could not have carried in one statement.
 	t.Run("a single statement is refused", func(t *testing.T) {
 		ctx := core.WithTenant(context.Background(), tenant+"x")
 		at := base
@@ -211,10 +213,10 @@ func TestALargeEventOfEachOtherKindIsStoredWhole(t *testing.T) {
 	}
 }
 
-// The split is at the size derived from the row, and no smaller: 6,000 readings take
-// exactly two INSERTs into measurement_events, and three readings take the one they
-// always did.
-func TestAnEventTooLargeForOneStatementUsesTwo(t *testing.T) {
+// An event with more readings than a multi-row VALUES statement could bind is still ONE
+// INSERT into measurement_events: the column-array insert binds one array per column, so
+// 6,000 readings take the one statement three readings do.
+func TestAnEventTooLargeForAValuesStatementIsStillOneInsert(t *testing.T) {
 	r := newPgBatchRig(t, "emlargetest", 8)
 	counter := rdbtest.NewStatementCounter(`measurement_events"`)
 	counter.Record(true)
@@ -237,7 +239,7 @@ func TestAnEventTooLargeForOneStatementUsesTwo(t *testing.T) {
 		// The positive control: the marker matches the rendered SQL at all, and the
 		// common path is one statement, as it was before any of this.
 		{3, 1},
-		{6000, 2},
+		{6000, 1},
 	} {
 		counter.Reset()
 		ev := largeEvent(base.Add(time.Duration(tc.readings)*time.Second), measurementsOf(tc.readings, base))
@@ -249,9 +251,8 @@ func TestAnEventTooLargeForOneStatementUsesTwo(t *testing.T) {
 	assert.Empty(t, r.failures)
 }
 
-// A statement refused part-way through a split insert takes the whole message with it: the
-// rows of the statements before it are rolled back to the savepoint the split ran under,
-// and the message's parent row with the batch, so nothing of it is stored. Its batch-mates
+// A statement refused for one of a large event's rows takes the whole message with it: the
+// message's parent row is rolled back with the batch, so nothing of it is stored. Its batch-mates
 // are, and the value the server refused is reported as invalid on the first delivery.
 func TestALargeEventRefusedInItsLastStatementIsStoredNowhere(t *testing.T) {
 	r := newPgBatchRig(t, "emlargetest", 8)
@@ -259,8 +260,7 @@ func TestALargeEventRefusedInItsLastStatementIsStoredNowhere(t *testing.T) {
 	base := time.Now().UTC().Truncate(time.Hour)
 	big := largeEvent(base, measurementsOf(6000, base))
 	entries := big.Payload.(*dmodel.ResolvedMeasurementsPayload).Entries[0].Entries
-	// numeric(20,8) holds 12 integer digits; this parses, and overflows at the INSERT — in
-	// the second statement, since the first carries fewer than 6,000 rows.
+	// numeric(20,8) holds 12 integer digits; this parses, and overflows at the INSERT.
 	entries[len(entries)-1].Value = "1e13"
 
 	r.run([]messaging.Message{

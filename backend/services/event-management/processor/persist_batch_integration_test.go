@@ -338,7 +338,7 @@ func BenchmarkPersistBatch(b *testing.B) {
 			shapes = append(shapes, shape{writers, batch, false})
 		}
 	}
-	shapes = append(shapes, shape{10, 1, true}, shape{10, 64, true})
+	shapes = append(shapes, shape{10, 1, true}, shape{10, 16, true}, shape{10, 64, true})
 	for _, sh := range shapes {
 		writers, batch := sh.writers, sh.batch
 		name := fmt.Sprintf("writers=%d/batch=%d", writers, batch)
@@ -396,6 +396,9 @@ func BenchmarkPersistBatch(b *testing.B) {
 			close(ch)
 			before := api.txs.Load()
 			var wg sync.WaitGroup
+			// Per event: b.N is events. Allocation counts are the client-side cost the
+			// column-array insert exists to cut, so they are reported beside the throughput.
+			b.ReportAllocs()
 			b.ResetTimer()
 			start := time.Now()
 			for w := 0; w < writers; w++ {
