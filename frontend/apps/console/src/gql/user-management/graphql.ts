@@ -4,25 +4,61 @@ type Exact<T extends { [key: string]: unknown }> = { [K in keyof T]: T[K] };
 /** Internal type. DO NOT USE DIRECTLY. */
 export type Incremental<T> = T | { [P in keyof T]?: P extends ' $fragmentName' | '__typename' ? T[P] : never };
 import { DocumentTypeDecoration } from '@graphql-typed-document-node/core';
+/**
+ * Changes to the signed-in user's own display name. The user is identified by the request's
+ * access token, so only your own profile can be edited. For each field, leaving it out keeps
+ * the stored name, a value sets it, and null or an empty string clears it.
+ */
 export type ProfileUpdateRequest = {
+  /** New first name. Omit to keep it, send null or an empty string to clear it. */
   firstName?: string | null | undefined;
+  /** New last name. Omit to keep it, send null or an empty string to clear it. */
   lastName?: string | null | undefined;
 };
 
+/**
+ * A basemap for setTenantBasemap. Every field is optional and the input replaces the
+ * tenant's whole basemap: a field left out or sent as null (or as a blank string) is cleared,
+ * so that aspect falls back to the instance default.
+ */
 export type TenantBasemapInput = {
+  /**
+   * Credit line for the tiles, at most 512 characters. The only markup allowed is links
+   * written exactly as `<a href="https://...">text</a>`. Required when tileUrl is set, and
+   * rejected without it.
+   */
   attribution?: string | null | undefined;
+  /** Latitude in degrees, from -90 to 90. Must be sent together with centerLon. */
   centerLat?: number | null | undefined;
+  /** Longitude in degrees, from -180 to 180. Must be sent together with centerLat. */
   centerLon?: number | null | undefined;
+  /**
+   * Raster tile URL template: an https URL of at most 2048 characters containing {z}, {x}
+   * and {y}, or {bbox-epsg-3857}, or {quadkey}. {prefix} and {ratio} are also substituted;
+   * any other placeholder is rejected. Requires attribution.
+   */
   tileUrl?: string | null | undefined;
+  /** Zoom level, from 0 to 24. */
   zoom?: number | null | undefined;
 };
 
+/**
+ * A tenant's white-labeling theme for setTenantBranding. It replaces the whole theme: a
+ * field left out or sent as null is cleared, so that aspect falls back to the instance
+ * default. The logo is not part of it; see setTenantLogo.
+ */
 export type TenantBrandingInput = {
+  /** Accent color as a hex string, `#rrggbb`. */
   accent?: string | null | undefined;
+  /** Page background color as a hex string, `#rrggbb`. */
   background?: string | null | undefined;
+  /** Text color as a hex string, `#rrggbb`. */
   foreground?: string | null | undefined;
+  /** Maximum height in pixels at which the logo is drawn; from 16 to 200. */
   logoMaxHeight?: number | null | undefined;
+  /** Primary brand color as a hex string, `#rrggbb`. */
   primary?: string | null | undefined;
+  /** Product name shown in the browser tab and the console, at most 64 characters. */
   title?: string | null | undefined;
 };
 
