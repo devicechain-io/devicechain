@@ -629,9 +629,12 @@ medida.
 
 | Ajuste (configuración de `device-management`) | Valor por defecto | Qué hace |
 | --- | --- | --- |
-| `resolution.workers` | `10` | Resolvedores que trabajan a la vez. Cada uno ocupa una conexión a la base de datos mientras lee de ella la credencial de un evento, lo que hace siempre que la credencial no se haya verificado en esa réplica en los últimos cinco segundos (consulte [Cachés que dejan de responder](#kv-caches)). Por eso debe ser menor que el pool de conexiones del servicio (`rdbConfiguration.maxOpenConnections`, 20 si no se indica), que comparte con la API GraphQL, las comprobaciones de conexión MQTT y el consumidor que aplica las activaciones y resoluciones de alarmas. Se permite más de la mitad del pool, y se registra al arrancar. Las consultas de un resolvedor al almacén clave-valor se hacen a la vez, pero sus lecturas de la base de datos siguen haciéndose de una en una, así que nunca ocupa más de una conexión. |
+| `resolution.workers` | `10` | Resolvedores que trabajan a la vez. Cada uno ocupa una conexión a la base de datos mientras lee de ella la credencial de un evento, lo que hace siempre que la credencial no se haya verificado en esa réplica dentro de `inMemoryCache.ttlSeconds` (consulte [Cachés que dejan de responder](#kv-caches)). Por eso debe ser menor que el pool de conexiones del servicio (`rdbConfiguration.maxOpenConnections`, 20 si no se indica), que comparte con la API GraphQL, las comprobaciones de conexión MQTT y el consumidor que aplica las activaciones y resoluciones de alarmas. Se permite más de la mitad del pool, y se registra al arrancar. Las consultas de un resolvedor al almacén clave-valor se hacen a la vez, pero sus lecturas de la base de datos siguen haciéndose de una en una, así que nunca ocupa más de una conexión. |
+| `inMemoryCache.ttlSeconds` | `300` | Cuánto tiempo guarda una réplica un valor en su propia memoria, de 1 a 3600 segundos. Un cambio descarta el valor en todas las réplicas a la vez, así que esto solo acota un mensaje de descarte que se perdió. El tiempo de vida de la propia caché de clave-valor lo limita (véase más abajo). Consulte [Cachés que dejan de responder](#kv-caches). |
+| `deviceCacheTtlSeconds`, `relationshipCacheTtlSeconds`, `metricDefCacheTtlSeconds`, `membershipCacheTtlSeconds` | `300` | El tiempo de vida de cada caché de clave-valor en el broker, de 1 a 3600 segundos. |
 | `inMemoryCache.perDeviceCacheEntries` | `131072` | Cuántas entradas, como máximo, guarda cada réplica en memoria de cada una de las tres cachés que se guardan por dispositivo: un dispositivo por su token, sus relaciones seguidas y sus pertenencias a grupos. Consulte [Cachés que dejan de responder](#kv-caches). |
 | `inMemoryCache.perDeviceCacheMiB` | `24` | Cuánta memoria, en MiB, ocupa como máximo cada una de esas tres cachés en cada réplica. Suba con él el límite de memoria del servicio. Consulte [Cachés que dejan de responder](#kv-caches). |
+| `inMemoryCache.credentialCacheMiB` | `32` | Cuánta memoria, en MiB, ocupa como máximo la caché de credenciales de dispositivo en cada réplica, de 1 a 256. En el valor por defecto caben unos 29.000 dispositivos con credencial; 60.000 necesitan unos 70. Suba con él el límite de memoria del servicio. Consulte [Cachés que dejan de responder](#kv-caches). |
 
 Súbalo cuando `resolve_inflight` se mantenga en `resolve_workers` mientras al pod le sobra CPU. Si
 el pod está en su límite de CPU, más resolvedores no ayudan: dele más CPU (consulte
@@ -850,60 +853,64 @@ servidor que ya no está. Durante ese tiempo los eventos se siguen resolviendo, 
 lecturas de la base de datos.
 
 Cada réplica de `device-management` también guarda en memoria lo que leyó de un bucket, o escribió
-en él, durante hasta cinco segundos (menos si el tiempo de vida de la caché es menor), y responde
-desde ahí sin preguntar a NATS, incluso mientras el bucket se está omitiendo. Los cinco segundos
-cuentan desde que se leyó el valor, no desde la última vez que se usó. Las tres cachés que se
-guardan por dispositivo (un dispositivo por su token, sus relaciones seguidas y sus pertenencias a
-grupos) guardan cada una hasta 131.072 entradas o 24 MiB por réplica, según
+en él, durante hasta cinco minutos (`inMemoryCache.ttlSeconds`, y nunca más que el tiempo de vida
+de la caché), y responde desde ahí sin preguntar a NATS, incluso mientras el bucket se está
+omitiendo. El tiempo cuenta desde que se leyó el valor, no desde la última vez que se usó. Las
+tres cachés que se guardan por dispositivo (un dispositivo por su token, sus relaciones seguidas y
+sus pertenencias a grupos) guardan cada una hasta 131.072 entradas o 24 MiB por réplica, según
 `inMemoryCache.perDeviceCacheEntries` e `inMemoryCache.perDeviceCacheMiB`. Eso son unos 87.000
 dispositivos sin ninguna relación seguida, o unos 26.000 con una. Las cachés de perfil y de alcance
 de grupos, que se guardan por tipo de dispositivo y por inquilino, guardan 4096 entradas o 4 MiB.
 Cada una descarta primero la entrada usada hace más tiempo cuando está llena. Al guardar una
 entrada nueva también descarta las caducadas desde su extremo de uso más antiguo, y se detiene en
-la primera que no ha caducado. Una búsqueda que NATS informó
-como ausente nunca se guarda. Un cambio llega a los eventos que resuelven las demás
-réplicas hasta cinco segundos más tarde de lo que llegaría solo a través del bucket. Hasta
-entonces otra réplica puede, por ejemplo, seguir resolviendo un dispositivo borrado, o vuelto a
-crear con el mismo token, a través de su registro anterior, o evaluar una regla cuyo alcance de
-grupo acaba de cambiar con el alcance anterior. Los eventos que presentan una credencial de
-dispositivo toman su dispositivo de la copia de la credencial que describe el párrafo siguiente.
+la primera que no ha caducado. Una búsqueda que NATS informó como ausente nunca se guarda.
+
+**Un cambio llega a todas las réplicas a la vez, y el tiempo solo cubre un mensaje perdido.** Un
+cambio que deja incorrecto un valor guardado (un dispositivo actualizado o borrado, una relación
+añadida o quitada, un perfil publicado o revertido, cambios en los miembros de un grupo, un
+inquilino borrado) quita el valor del bucket y luego envía un mensaje en NATS que hace que cada
+réplica de `device-management` descarte su copia. Una réplica que pierde la conexión con NATS y la
+recupera descarta todo lo que guarda, porque puede haberse perdido mensajes. Así que una réplica
+sirve un valor cambiado durante más de un instante solo si se perdió un mensaje mientras estaba
+conectada, por ejemplo porque iba demasiado atrasada para recibirlo, y entonces solo hasta que
+se agote el tiempo. Lo mismo ocurre con una lectura que estaba en curso al producirse el cambio y
+guardó lo que había leído antes de él. Los mensajes se cuentan en `cache_eviction_broadcasts_total`.
 
 **Credenciales de dispositivo.** Cada réplica guarda también en memoria una credencial de
-dispositivo que acaba de verificar, con su dispositivo, durante cinco segundos desde que la leyó.
+dispositivo que acaba de verificar, con su dispositivo, durante cinco minutos desde que la leyó.
 Nunca se guarda en un bucket de clave-valor, porque contiene la contraseña de la credencial. Cada
-réplica guarda hasta 65.536 credenciales o 16 MiB, que son fijos. Cada comprobación de una
-credencial guardada compara su contraseña y su expiración igual que la de la almacenada, y una
-credencial que no se pudo verificar nunca se guarda. Un cambio en una credencial o en su
-dispositivo descarta la copia en la réplica que lo hace, y un mensaje en NATS avisa a las demás
-réplicas para que descarten la suya. Así que una revocación, o un dispositivo borrado a través de
-otra réplica, normalmente surte efecto en el siguiente evento en todas, y en cinco segundos como
-máximo si ese mensaje se pierde. Las conexiones MQTT siempre leen la base de datos. Una flota que
-informa con menos frecuencia que cada cinco segundos lee su credencial de la base de datos en cada
-evento, como antes.
+réplica guarda hasta `inMemoryCache.credentialCacheMiB` de ellas (32 MiB por defecto). Cada
+comprobación de una credencial guardada compara su contraseña y su expiración igual que la de la
+almacenada, y una credencial que no se pudo verificar nunca se guarda. Un cambio en una credencial
+o en su dispositivo descarta la copia en la réplica que lo hace, y un mensaje en NATS avisa a las
+demás réplicas para que descarten la suya. Así que una revocación, o un dispositivo borrado a
+través de otra réplica, surte efecto en el siguiente evento en todas, y cuando caduque la copia si
+ese mensaje se pierde. Las conexiones MQTT siempre leen la base de datos.
 
-**Flotas que informan con menos frecuencia que cada cinco segundos.** Un valor se guarda en memoria
-cinco segundos desde que se leyó, por grande que sea la caché. Así que un dispositivo que informa
-con menos frecuencia nunca se responde desde memoria, y cada uno de sus eventos cuesta una lectura
-del bucket de clave-valor. En un clúster GKE de tres nodos esa lectura tardó unos 1,5 ms. Con los
-10 resolvedores por defecto, cada uno dedicando ese tiempo a cada uno de esos eventos, una flota
-así se resuelve más despacio que una cuyos dispositivos informan cada pocos segundos. Para
-resolverla más rápido, añada resolvedores (`resolution.workers`, dentro del pool de conexiones) o
-réplicas de `device-management`. La señal es
+**Dimensionar para la flota.** Un valor se guarda en memoria cinco minutos desde que se leyó, así
+que un dispositivo que informa al menos con esa frecuencia se responde desde memoria en todos sus
+eventos salvo el primero. Un dispositivo que informa con menos frecuencia nunca se responde desde
+memoria, y cada uno de sus eventos cuesta una lectura del bucket de clave-valor y otra de la base
+de datos para su credencial. Dimensione un límite para los dispositivos que atiende una réplica y
+que informan dentro de ese tiempo: una caché menor que ese número los recorre en ciclo y casi no
+responde nada. La señal es
 `kv_cache_local_lookups_total{cache="relationships-by-source", result="miss"}` cerca del ritmo de
 eventos, mientras `kv_cache_local_entries` de esa caché se mantiene muy por debajo de
 `kv_cache_local_max_entries`. Una flota demasiado grande para la caché muestra en cambio
 `kv_cache_local_evictions_total{reason="capacity"}` creciendo cerca del ritmo de eventos, con
 `kv_cache_local_entries` en `kv_cache_local_max_entries` o `kv_cache_local_bytes` en
-`kv_cache_local_max_bytes`. Entonces suba el límite, y con él el límite de memoria: con los valores
-por defecto las seis cachés en memoria, incluidos los 16 MiB fijos de las credenciales, guardan
-como máximo 96 MiB, y sin `GOMEMLIMIT` el heap puede crecer
-hasta aproximadamente el doble de lo que guarda antes de recolectarse.
+`kv_cache_local_max_bytes`; en las credenciales, las mismas señales están en
+`credential_cache_evictions_total{reason="capacity"}`. Entonces suba el límite, y con él el límite
+de memoria: con los valores por defecto las seis cachés en memoria guardan como máximo 112 MiB, y
+sin `GOMEMLIMIT` el heap puede crecer hasta aproximadamente el doble de lo que guarda antes de
+recolectarse. Para resolver una flota más rápido también puede añadir resolvedores
+(`resolution.workers`, dentro del pool de conexiones) o réplicas de `device-management`.
 
 Eliminar una entrada tras un cambio (un dispositivo borrado, un perfil publicado) nunca se omite.
 Espera hasta cinco segundos, porque solo el líder del bucket puede aceptarlo. Si aun así falla, el
 servicio registra `A key-value cache eviction failed`, y la entrada antigua puede servirse hasta
-que caduque, que es el tiempo de vida configurado de la caché, más hasta cinco segundos en las
-réplicas que ya la tenían en memoria.
+que caduque, que es el tiempo de vida configurado de la caché, o el tiempo en memoria en las
+réplicas que ya la tenían, el que sea menor.
 
 - **`devicechain_devicemanagement_kv_cache_unavailable{cache}`**: 1 mientras el bucket se está
   omitiendo.
@@ -920,7 +927,7 @@ réplicas que ya la tenían en memoria.
 - **`devicechain_devicemanagement_kv_cache_local_lookups_total{cache, result}`**: búsquedas
   respondidas desde memoria (`result="hit"`) o pasadas al bucket (`result="miss"`).
 - **`devicechain_devicemanagement_kv_cache_local_evictions_total{cache, reason}`**: entradas
-  descartadas de la memoria porque tenían cinco segundos (`reason="expired"`), porque la caché
+  descartadas de la memoria porque habían superado su tiempo (`reason="expired"`), porque la caché
   estaba llena (`reason="capacity"`) o porque la entrada se eliminó tras un cambio
   (`reason="deleted"`).
 - **`devicechain_devicemanagement_kv_cache_local_entries{cache}`** y
@@ -941,7 +948,7 @@ La copia de las credenciales tiene series propias:
   credenciales respondidas desde memoria (`result="hit"`) o pasadas a la base de datos
   (`result="miss"`).
 - **`devicechain_devicemanagement_credential_cache_evictions_total{reason}`**: credenciales
-  descartadas de la memoria porque tenían cinco segundos (`reason="expired"`), porque la copia
+  descartadas de la memoria porque habían superado su tiempo (`reason="expired"`), porque la copia
   estaba llena (`reason="capacity"`) o porque la credencial o su dispositivo cambiaron, en esta
   réplica o en otra (`reason="revoked"`).
 - **`devicechain_devicemanagement_credential_cache_entries`**,
@@ -953,7 +960,7 @@ La copia de las credenciales tiene series propias:
   que avisan a las demás réplicas para que descarten una copia, enviados (`result="published"`),
   no enviados (`result="publish_failed"`), recibidos (`result="received"`) o recibidos y
   descartados por ilegibles (`result="malformed"`). Un `publish_failed` constante significa que los
-  cambios llegan a las demás réplicas solo cuando caducan sus copias, en cinco segundos como máximo.
+  cambios llegan a las demás réplicas solo cuando caducan sus copias.
 
 Por otra parte, resolver un evento que tarda más de cinco segundos, por la razón que sea, se
 registra como advertencia (`Event resolution is slow`): la primera vez de inmediato y después como

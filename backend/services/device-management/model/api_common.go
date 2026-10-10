@@ -74,6 +74,11 @@ func (api *Api) UpdateEntityRelationshipType(ctx context.Context, token string,
 	if err := api.RDB.DB(ctx).Save(updated).Error; err != nil {
 		return nil, err
 	}
+	// The `tracked` flag decides which edges a device's cached set holds, and the cached
+	// edges carry the type's own fields: so every device with an edge of this type has a
+	// stale set. Not bounded by a device list the caller named, so it is read from the edges.
+	api.evictRelationshipSources(ctx,
+		api.relationshipSourceDevices(ctx, "relationship_type_id = ?", updated.ID))
 	return updated, nil
 }
 
@@ -171,6 +176,12 @@ func (api *Api) CreateEntityRelationship(ctx context.Context,
 	// selecting relationshipType on the mutation result gets real values. Read
 	// paths Preload it; the create path must set it explicitly or it stays zero.
 	created.RelationshipType = *rtmatches[0]
+	// A new edge from a device changes that device's cached tracked set, whether or not its
+	// type is tracked (the cache holds the tracked edges, and the type decides): drop it,
+	// after the commit, on every replica.
+	if created.SourceType == string(entity.TypeDevice) {
+		api.evictRelationshipSources(ctx, []uint{created.SourceId})
+	}
 	return created, nil
 }
 

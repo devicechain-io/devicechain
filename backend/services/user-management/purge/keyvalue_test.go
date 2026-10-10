@@ -123,3 +123,41 @@ func TestAKeyValueStoreThatCannotSweepDoesNotReportClean(t *testing.T) {
 	require.Empty(t, out.Note(),
 		"a pass that never swept has nothing to say about what it declined to look at")
 }
+
+// TestTheKeyValueStoreTellsDeviceManagementReplicasToDropTheTenant pins the half of the
+// erasure that no bucket scan can do: each device-management replica holds what it read in
+// its own memory for minutes, so the pass must also tell every one of them to let go of the
+// tenant's entries. It subscribes where a replica does and drives the REAL Erase.
+func TestTheKeyValueStoreTellsDeviceManagementReplicasToDropTheTenant(t *testing.T) {
+	nc := kvRig(t)
+	got := make(chan string, 16)
+	for _, name := range []string{messaging.DeviceCredentialCacheName, "device-by-token"} {
+		subject := messaging.CacheEvictSubject("inst1", "device-management", name)
+		sub, err := nc.Subscribe(subject, func(m *nats.Msg) { got <- subject + " " + string(m.Data) })
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = sub.Unsubscribe() })
+	}
+	require.NoError(t, nc.Flush())
+
+	_, err := NewKeyValue(kvConn{nc: nc}, "inst1").Erase(context.Background(), "acme", time.Now())
+	require.NoError(t, err)
+
+	want := map[string]bool{
+		messaging.CacheEvictSubject("inst1", "device-management", messaging.DeviceCredentialCacheName) +
+			` {"tenant":"acme","all":true}`: false,
+		messaging.CacheEvictSubject("inst1", "device-management", "device-by-token") +
+			` {"tenant":"acme","all":true}`: false,
+	}
+	deadline := time.After(5 * time.Second)
+	for seen := 0; seen < len(want); {
+		select {
+		case m := <-got:
+			if _, ok := want[m]; ok && !want[m] {
+				want[m] = true
+				seen++
+			}
+		case <-deadline:
+			t.Fatalf("not every device-management cache was told to drop the tenant: %v", want)
+		}
+	}
+}

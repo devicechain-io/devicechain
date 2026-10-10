@@ -302,9 +302,12 @@ kube-state-metrics 本身因节点失效等原因移动期间的重启，只要�
 
 | 设置（`device-management`） | 默认值 | 作用 |
 | --- | --- | --- |
-| `resolution.workers` | `10` | 并行解析器。凭据在副本最近五秒未验证时，从数据库读取并持有一个连接，见[键值缓存](#kv-caches)。必须低于服务连接池 `rdbConfiguration.maxOpenConnections`（默认 20），池还供 GraphQL、MQTT 连接检查、告警触发解除消费者使用。允许超过一半，但启动时记录。键值查找并行，数据库查找仍串行，因此最多一个连接。 |
+| `resolution.workers` | `10` | 并行解析器。凭据在副本 `inMemoryCache.ttlSeconds` 内未验证时，从数据库读取并持有一个连接，见[键值缓存](#kv-caches)。必须低于服务连接池 `rdbConfiguration.maxOpenConnections`（默认 20），池还供 GraphQL、MQTT 连接检查、告警触发解除消费者使用。允许超过一半，但启动时记录。键值查找并行，数据库查找仍串行，因此最多一个连接。 |
+| `inMemoryCache.ttlSeconds` | `300` | 副本将值保留在自身内存中的时长，1 到 3600 秒。变更会同时清除所有副本中的该值，所以它只约束丢失的清除消息。键值缓存自身的存活时间对它设上限（见下文），见[键值缓存](#kv-caches)。 |
+| `deviceCacheTtlSeconds`、`relationshipCacheTtlSeconds`、`metricDefCacheTtlSeconds`、`membershipCacheTtlSeconds` | `300` | 代理中各键值缓存的存活时间，1 到 3600 秒。 |
 | `inMemoryCache.perDeviceCacheEntries` | `131072` | 每副本三个逐设备内存缓存各自的条目上限：按令牌设备、追踪关系和分组成员，见[键值缓存](#kv-caches)。 |
 | `inMemoryCache.perDeviceCacheMiB` | `24` | 各缓存在每副本的内存 MiB 上限，调高时同步提高服务内存限制，见[键值缓存](#kv-caches)。 |
+| `inMemoryCache.credentialCacheMiB` | `32` | 设备凭据缓存在每副本的内存 MiB 上限，1 到 256。默认值约容纳 29,000 个有凭据的设备，60,000 个约需 70。调高时同步提高服务内存限制，见[键值缓存](#kv-caches)。 |
 
 `resolve_inflight` 持续等于 worker 数且 CPU 有余量时可增加。CPU 已到限制时，增加解析器无效，应增加 CPU，参见[服务容量](./bootstrap.md#service-sizing)。进程内针对三节点代理测量、各查找 750 微秒且依次执行时，5 个解析器约每秒 1,500 事件，10 个约 2,900。完成顺序可能比到达乱序几分之一秒，检测按进入解析流顺序处理。超范围配置阻止启动，错误指出设置；启动日志列出实际值。
 
@@ -392,20 +395,22 @@ kube-state-metrics 本身因节点失效等原因移动期间的重启，只要�
 
 常见原因是 NATS 服务器网络失联却未关闭连接。桶所有副本都响应读取，其他服务器约一到一分半发现失联前，部分读取仍发往旧服务器。事件继续解析，但增加数据库读取。
 
-每个副本还将桶读写结果在内存保留最多五秒，桶 TTL 更短时取更短，直接响应，包括桶被绕过期间。五秒从读取而非最近使用计算。三个逐设备缓存各最多 131,072 条或 24 MiB，由 `inMemoryCache.perDeviceCacheEntries` 和 `inMemoryCache.perDeviceCacheMiB` 配置，大约容纳无追踪关系 87,000 设备、有一条关系 26,000 设备。按类型和租户的配置、分组范围缓存各 4,096 条或 4 MiB。满时移除最近最少使用条目；插入时也从该端移除过期条目，遇到首个未过期即停止。NATS 报告不存在的结果不缓存。相比只用桶，变更最多额外五秒后才到达其他副本事件；期间可能按旧记录解析已删除或同令牌重建设备，或按旧分组范围评估规则。携带设备凭据的事件，设备来自下一段的凭据缓存。
+每个副本还将桶读写结果在内存保留最多五分钟（`inMemoryCache.ttlSeconds`，且不超过缓存的存活时间），直接响应，包括桶被绕过期间。时间从读取而非最近使用计算。三个逐设备缓存各最多 131,072 条或 24 MiB，由 `inMemoryCache.perDeviceCacheEntries` 和 `inMemoryCache.perDeviceCacheMiB` 配置，大约容纳无追踪关系 87,000 设备、有一条关系 26,000 设备。按类型和租户的配置、分组范围缓存各 4,096 条或 4 MiB。满时移除最近最少使用条目；插入时也从该端移除过期条目，遇到首个未过期即停止。NATS 报告不存在的结果不缓存。
 
-**设备凭据。** 各副本将刚验证的凭据及其设备从读取起内存缓存五秒，因包含密码，绝不放键值桶。固定最多 65,536 凭据或 16 MiB。每次使用仍比较密码及到期时间，验证失败不缓存。凭据或设备变更使执行变更的副本立即清缓存，并用 NATS 通知其他副本。因此撤销或跨副本设备删除，通常所有副本下个事件生效；通知丢失也在五秒内生效。MQTT 连接始终读数据库。上报间隔超过五秒的设备，每事件仍读数据库凭据。
+**变更同时到达所有副本，存活时间只兜底丢失的消息。** 使已缓存值失效的变更（设备更新或删除、关系增删、配置发布或回滚、分组成员变化、租户被清除）先从桶中移除该值，再通过 NATS 发送一条消息，使每个设备管理副本丢弃自己的副本。副本与 NATS 断开又重新连上时，会丢弃其持有的全部内容，因为可能漏收了消息。所以副本只有在连接期间丢失了消息（例如落后太多而未能收到）时，才会在短暂时刻之后继续提供旧值，而且只持续到时间用尽。变更发生时正在进行的读取若在变更之前读到并随后写入缓存，情况相同。消息数由 `cache_eviction_broadcasts_total` 统计。
 
-**上报间隔超过五秒的设备群。** 无论缓存多大，内容从读取起仅保留五秒，因此这些设备永不内存命中，每事件一次桶读取。三节点 GKE 上该读取约 1.5 毫秒；默认 10 解析器每事件花此时间，所以慢于每几秒上报的设备群。可增加池范围内 `resolution.workers` 或设备管理副本。特征是 `kv_cache_local_lookups_total{cache="relationships-by-source", result="miss"}` 接近事件率，而条目数远低上限。缓存容不下设备群则 `kv_cache_local_evictions_total{reason="capacity"}` 接近事件率，条目数或字节数到上限。此时提高边界并同步提高内存限制。默认六个内存缓存含固定 16 MiB 凭据，共最多 96 MiB；未设置 `GOMEMLIMIT` 时，回收前堆可增长至持有量约两倍。
+**设备凭据。** 各副本将刚验证的凭据及其设备从读取起内存缓存五分钟，因包含密码，绝不放键值桶。每副本最多保留 `inMemoryCache.credentialCacheMiB`（默认 32 MiB）。每次使用仍比较密码及到期时间，验证失败不缓存。凭据或设备变更使执行变更的副本立即清缓存，并用 NATS 通知其他副本。因此撤销或跨副本设备删除，所有副本下个事件即生效；通知丢失时，则在副本到期时生效。MQTT 连接始终读数据库。
 
-变更后移除条目（设备删除、配置发布）绝不跳过，因为只有桶主副本接受，最多等五秒。仍失败会记录 `A key-value cache eviction failed`，旧条目可服务至配置 TTL 到期，加已有内存副本最多五秒。
+**按设备群规模设定上限。** 内容从读取起在内存保留五分钟，因此上报间隔不超过该时长的设备，首个事件之后每个事件都由内存回答。上报更稀疏的设备永不内存命中，每事件一次桶读取，另加一次数据库凭据读取。请按单个副本所服务、且在该时间内上报的设备数设定上限：缓存小于该数量时会循环淘汰，几乎没有命中。特征是 `kv_cache_local_lookups_total{cache="relationships-by-source", result="miss"}` 接近事件率，而条目数远低上限。缓存容不下设备群则 `kv_cache_local_evictions_total{reason="capacity"}` 接近事件率，条目数或字节数到上限；凭据缓存的同类信号在 `credential_cache_evictions_total{reason="capacity"}`。此时提高边界并同步提高内存限制。默认六个内存缓存共最多 112 MiB；未设置 `GOMEMLIMIT` 时，回收前堆可增长至持有量约两倍。想更快解析设备群，也可增加池范围内 `resolution.workers` 或设备管理副本。
+
+变更后移除条目（设备删除、配置发布）绝不跳过，因为只有桶主副本接受，最多等五秒。仍失败会记录 `A key-value cache eviction failed`，旧条目可服务至配置 TTL 到期，已有内存副本则至内存时间到期，二者取较短者。
 
 - **`devicechain_devicemanagement_kv_cache_unavailable{cache}`**：桶绕过时为 1。
 - **`devicechain_devicemanagement_kv_cache_failures_total{cache, op, reason}`**：超时 `timeout` 或错误 `error`。事件查找并行，绕过前多个查找可能同时超时，各自计数。
 - **`devicechain_devicemanagement_kv_cache_bypassed_total{cache, op}`**：回退数据库的读写。
 - **`devicechain_devicemanagement_kv_cache_request_duration_seconds{cache, op}`**：桶操作时长。读写半秒截止，移除五秒。内存命中不访问桶，所以 `op="get"` 只统计内存无法回答的查找。
 - **`devicechain_devicemanagement_kv_cache_local_lookups_total{cache, result}`**：内存回答 `hit` 或交给桶 `miss`。
-- **`devicechain_devicemanagement_kv_cache_local_evictions_total{cache, reason}`**：五秒过期 `expired`、满容量 `capacity`、变更移除 `deleted`。
+- **`devicechain_devicemanagement_kv_cache_local_evictions_total{cache, reason}`**：超时过期 `expired`、满容量 `capacity`、变更移除 `deleted`。
 - **`devicechain_devicemanagement_kv_cache_local_entries{cache}`**、**`devicechain_devicemanagement_kv_cache_local_bytes{cache}`**：副本内存条目和约字节数。过期条目直到查找发现、插入时从最少使用端清除，或需要空间才不再计入。
 - **`devicechain_devicemanagement_kv_cache_local_max_entries{cache}`**、**`devicechain_devicemanagement_kv_cache_local_max_bytes{cache}`**：开始驱逐前的条目和字节上限。
 
@@ -414,9 +419,9 @@ kube-state-metrics 本身因节点失效等原因移动期间的重启，只要�
 凭据缓存有独立序列：
 
 - **`devicechain_devicemanagement_credential_cache_lookups_total{result}`**：内存回答 `hit` 或交数据库 `miss`。
-- **`devicechain_devicemanagement_credential_cache_evictions_total{reason}`**：五秒过期 `expired`、容量已满 `capacity`，或本副本/其他副本凭据或设备变更 `revoked`。
+- **`devicechain_devicemanagement_credential_cache_evictions_total{reason}`**：超时过期 `expired`、容量已满 `capacity`，或本副本/其他副本凭据或设备变更 `revoked`。
 - **`devicechain_devicemanagement_credential_cache_entries`**、**`devicechain_devicemanagement_credential_cache_bytes`**、**`devicechain_devicemanagement_credential_cache_max_entries`**、**`devicechain_devicemanagement_credential_cache_max_bytes`**：副本当前持有量和上限。
-- **`devicechain_devicemanagement_cache_eviction_broadcasts_total{cache, result}`**：通知其他副本删除缓存的消息，分别为发送 `published`、未发送 `publish_failed`、接收 `received`、无法解析而丢弃 `malformed`。持续发送失败意味着其他副本只能等最多五秒缓存到期才见变更。
+- **`devicechain_devicemanagement_cache_eviction_broadcasts_total{cache, result}`**：通知其他副本删除缓存的消息，分别为发送 `published`、未发送 `publish_failed`、接收 `received`、无法解析而丢弃 `malformed`。持续发送失败意味着其他副本只能等缓存到期才见变更。
 
 任何原因使解析超过五秒，都会记录 `Event resolution is slow` 警告：首个立即记录，此后最多每 30 秒一条，含数量和最慢值。
 

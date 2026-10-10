@@ -27,8 +27,8 @@ import (
 //     cached and goes to the DB by promotion.
 //   - ProfileResolutionByDeviceType: a device type's published profile — metric
 //     definitions, rule scope and fence-set version — as one entry read once per event.
-//   - AuthenticateDevice: a credential that has just verified, with its device, for five
-//     seconds (Caches.Credentials). Only a success is kept, every hit is checked again
+//   - AuthenticateDevice: a credential that has just verified, with its device, for
+//     inMemoryCache.ttlSeconds (Caches.Credentials). Only a success is kept, every hit is checked again
 //     exactly as a database row is (expiry, then the constant-time secret compare), and
 //     every write that changes a credential or its device evicts it by owning device, on
 //     this replica before the write returns and on every other one by broadcast.
@@ -48,6 +48,10 @@ type CachedApi struct {
 	*Api
 	caches *Caches
 }
+
+// Caches returns the caches this decorator reads from and evicts. It exists for the tests
+// that build the service's Apis as the service does and then look at what they hold.
+func (capi *CachedApi) Caches() *Caches { return capi.caches }
 
 // Create a new cached API instance wrapping api with the given caches.
 func NewCachedApi(api *Api, caches *Caches) *CachedApi {
@@ -103,11 +107,22 @@ func (capi *CachedApi) EvictDeviceCredentials(_ context.Context, tenant string, 
 	}
 	if tenant == "" {
 		log.Error().Uints("deviceIds", deviceIds).
-			Msg("A credential cache eviction named no tenant, so it evicted nothing; the entries expire within 5s.")
+			Msg("A credential cache eviction named no tenant, so it evicted nothing; the entries expire when their time to live is up.")
 		return
 	}
 	creds.EvictDevices(tenant, deviceIds)
 	creds.publishEviction(tenant, deviceIds)
+}
+
+// EvictDeviceByToken satisfies model.CacheEvictor: it drops the device's by-token entry,
+// here and, by the cache's eviction broadcast, on every other replica. No tenant in context
+// means the cache was bypassed on write, so there is nothing to evict.
+func (capi *CachedApi) EvictDeviceByToken(ctx context.Context, token string) {
+	tenant, ok := core.TenantFromContext(ctx)
+	if !ok {
+		return
+	}
+	_ = capi.caches.DeviceByToken.Delete(ctx, deviceByTokenKey(tenant, token))
 }
 
 // EvictEntityDelete satisfies model.CacheEvictor (ADR-044 F2): it drops the caches
@@ -202,6 +217,9 @@ func (capi *CachedApi) EvictFenceSetVersion(ctx context.Context) {
 	}
 	typeIds, err := capi.Api.deviceTypeIdsForTenant(ctx)
 	if err != nil {
+		log.Warn().Err(err).Str("tenant", tenant).
+			Msg("Could not list the tenant's device types to evict their cached profile resolutions; " +
+				"they are served until the cache's time to live expires.")
 		return
 	}
 	for _, typeId := range typeIds {
@@ -277,8 +295,8 @@ func (capi *CachedApi) loadAnyScopedGroups(ctx context.Context, tenant string) (
 // Like the sibling read-through cache here (ProfileResolutionByType), this is
 // cache-aside: a mutation evicts post-commit, but a read that missed and is repopulating
 // across that commit can re-store the pre-commit value, so worst-case staleness is TTL-
-// bounded, not the eviction instant. On top of that, another replica keeps what it read in
-// process memory for up to 5 s after the eviction (see InitializeCaches). That is the
+// bounded, not the eviction instant. Another replica drops its in-process copy on the eviction
+// broadcast (see InitializeCaches), so a lost message is bounded by the same time. That is the
 // accepted posture for these caches. ADR-062's arming invariant must therefore not depend
 // on sub-TTL visibility of a just-registered group@v. Nothing in the tree provides a
 // margin for it today: a rule scoped to a new group can miss that group's members for up
@@ -429,40 +447,12 @@ func (capi *CachedApi) cachedRelationships(ctx context.Context, key string,
 	return results, true, settled
 }
 
-// UpdateDevice forwards to the DB then evicts the device's by-token entry so a
-// device-type change is not served stale (bounded further by the TTL).
-//
-// The second eviction this used to perform — of `updated.Token` when it differed
-// from the argument — is gone with the token field it defended against. The update
-// input carries no token, so the row's token cannot move and the argument is the
-// only key the cached entry can be filed under.
-func (capi *CachedApi) UpdateDevice(ctx context.Context, token string, request *DeviceUpdateRequest) (*Device, error) {
-	updated, err := capi.Api.UpdateDevice(ctx, token, request)
-	if err != nil {
-		return nil, err
-	}
-	if tenant, ok := core.TenantFromContext(ctx); ok {
-		_ = capi.caches.DeviceByToken.Delete(ctx, deviceByTokenKey(tenant, token))
-	}
-	return updated, nil
-}
-
-// CreateEntityRelationship forwards to the DB then, when the new edge originates
-// from a device, evicts that source device's tracked-relationships entry so a
-// newly tracked relationship is not hidden by a stale cached set.
-func (capi *CachedApi) CreateEntityRelationship(ctx context.Context,
-	request *EntityRelationshipCreateRequest) (*EntityRelationship, error) {
-	created, err := capi.Api.CreateEntityRelationship(ctx, request)
-	if err != nil {
-		return nil, err
-	}
-	if created != nil && created.SourceType == string(entity.TypeDevice) {
-		if tenant, ok := core.TenantFromContext(ctx); ok {
-			_ = capi.caches.RelationshipsBySource.Delete(ctx, relationshipsBySourceKey(tenant, created.SourceId))
-		}
-	}
-	return created, nil
-}
+// 🔴 THERE IS DELIBERATELY NO UpdateDevice OR CreateEntityRelationship OVERRIDE HERE. Both
+// used to sit here, evicting around the plain Api's method, and the GraphQL mutations that
+// write a device or an edge run on the PLAIN Api (GetApi), so neither override ever ran for
+// an operator's change: the device-by-token entry and the device's tracked set were served
+// stale until the bucket's TTL. The eviction lives in Api.UpdateDevice and
+// Api.CreateEntityRelationship (through CacheEvictor) now, so it runs for every caller.
 
 // UpdateDeviceType forwards to the DB then evicts the type's cached profile
 // resolution. Attaching, changing, or detaching the type's profile (ADR-045)
@@ -589,6 +579,9 @@ func (capi *CachedApi) evictProfileResolution(ctx context.Context, profileId uin
 	}
 	typeIds, err := capi.Api.deviceTypeIdsForProfile(ctx, profileId)
 	if err != nil {
+		log.Warn().Err(err).Str("tenant", tenant).Uint("profileId", profileId).
+			Msg("Could not list the device types adopting a profile to evict their cached profile " +
+				"resolutions; they are served until the cache's time to live expires.")
 		return
 	}
 	for _, typeId := range typeIds {

@@ -10,6 +10,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"strings"
 	"sync"
 	"time"
 
@@ -88,7 +89,9 @@ var ErrCacheUnavailable = errors.New("messaging: cache unavailable; bypassed aft
 // and a Get it can answer from there never asks the bucket at all. What that costs:
 //
 //   - A change made through ANOTHER replica reaches this one up to 5 s later than it
-//     would through the bucket alone. The bucket has only ever been cache-aside (a read
+//     would through the bucket alone, unless the Cache is built WithCrossReplicaEviction,
+//     which makes Delete tell every replica to drop its copy (and lets the time be minutes,
+//     as the bound then only covers a lost message). The bucket has only ever been cache-aside (a read
 //     racing a mutation can store the old value until the TTL), so every adopter already
 //     tolerates TTL-bounded staleness; this adds at most 5 s to it. A cache whose readers
 //     cannot tolerate that is built WithoutLocalCache.
@@ -112,8 +115,9 @@ type Cache struct {
 	delete  time.Duration // cacheDeleteTimeout; likewise
 	bypass  time.Duration // cacheBypassFor; likewise
 	now     func() time.Time
-	obs     *cacheObserver // nil-safe
-	local   *localCache    // nil when the in-process tier is off
+	obs     *cacheObserver     // nil-safe
+	local   *localCache        // nil when the in-process tier is off
+	evict   *EvictionBroadcast // nil unless built WithCrossReplicaEviction through NewCache
 
 	mu        sync.Mutex
 	openUntil time.Time // zero while the cache is answering (the breaker is closed)
@@ -203,7 +207,50 @@ func (nmgr *NatsManager) NewCache(name string, ttl time.Duration, opts ...CacheO
 	if err != nil {
 		return nil, err
 	}
-	return newCache(name, store, nmgr.metrics, ttl, opts...), nil
+	c := newCache(name, store, nmgr.metrics, ttl, opts...)
+	o := defaultCacheOptions()
+	for _, opt := range opts {
+		opt(&o)
+	}
+	if o.crossReplica && c.local != nil {
+		if err := c.subscribeEvictions(nmgr.NewEvictionBroadcast(name)); err != nil {
+			return nil, err
+		}
+		nmgr.OnReconnect(c.local.clear)
+	}
+	return c, nil
+}
+
+// subscribeEvictions wires b as this cache's cross-replica eviction channel: Delete
+// publishes to it, and what other replicas publish drops entries from this one's memory.
+// The subscription is made before the Cache is returned, so no entry is held on a replica
+// that cannot yet hear an eviction.
+func (c *Cache) subscribeEvictions(b *EvictionBroadcast) error {
+	if err := b.Subscribe(c.applyEviction); err != nil {
+		return err
+	}
+	c.evict = b
+	return nil
+}
+
+// applyEviction drops what a broadcast names from this replica's memory only. It never
+// touches the bucket: the replica that made the change already cleared that.
+func (c *Cache) applyEviction(e CacheEviction) {
+	if e.All {
+		c.local.invalidateTenant(e.Tenant)
+	}
+	for _, k := range e.Keys {
+		c.local.invalidate(k)
+	}
+}
+
+// tenantOfKey is the tenant a cache key is filed under: the text before the first
+// separator, or the whole key when it has none (see WithCrossReplicaEviction).
+func tenantOfKey(key string) string {
+	if i := strings.Index(key, kvTenantSeparator); i >= 0 {
+		return key[:i]
+	}
+	return key
 }
 
 // Set stores value under key, JSON-encoding it. The entry expires after the
@@ -335,6 +382,7 @@ func (c *Cache) Delete(ctx context.Context, key string) error {
 	start := time.Now()
 	err := c.kv.Delete(opctx, kvKey(key))
 	c.local.invalidate(key)
+	c.publishEviction(key)
 	c.obs.observe("delete", time.Since(start))
 	c.settle(context.Background(), "delete", false, err)
 	if err != nil && !isNotFound(err) {
@@ -344,6 +392,22 @@ func (c *Cache) Delete(ctx context.Context, key string) error {
 		return err
 	}
 	return nil
+}
+
+// publishEviction tells the other replicas to drop key from memory, when this cache has a
+// broadcast. It never fails the Delete: the bucket is already clear, and a lost message
+// leaves the other replicas' copies to expire, which is the in-process TTL.
+func (c *Cache) publishEviction(key string) {
+	if c.evict == nil {
+		return
+	}
+	tenant := tenantOfKey(key)
+	if err := c.evict.Publish(tenant, []string{key}); err != nil {
+		sum := sha256.Sum256([]byte(key))
+		log.Warn().Err(err).Str("cache", c.name).Str("keyHash", hex.EncodeToString(sum[:8])).
+			Msg("A key-value cache eviction could not be broadcast; other replicas serve the entry from " +
+				"memory until it expires")
+	}
 }
 
 // admit decides whether an operation may go to the store. It lets everything through

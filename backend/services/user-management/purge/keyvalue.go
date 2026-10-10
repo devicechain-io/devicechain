@@ -66,5 +66,10 @@ func (k *KeyValue) Erase(ctx context.Context, tenant string, _ time.Time) (Outco
 	if err != nil {
 		return Outcome{}, fmt.Errorf("purging the key-value store for %q: %w", tenant, err)
 	}
+	// The buckets are shared, but each device-management replica also holds what it read in
+	// its own memory for minutes: tell every one to let go of this tenant's entries.
+	if err := messaging.BroadcastTenantCacheEviction(nc, k.instanceId, tenant); err != nil {
+		return Outcome{}, fmt.Errorf("evicting the in-process caches for %q: %w", tenant, err)
+	}
 	return Outcome{Rows: res.Keys, Notes: messaging.KvPurgeExemptions()}, nil
 }
