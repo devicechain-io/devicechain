@@ -45,13 +45,15 @@ func (r *SchemaResolver) Connectors(ctx context.Context, args struct {
 
 // ConnectorVersions lists a connector's published versions, newest first.
 func (r *SchemaResolver) ConnectorVersions(ctx context.Context, args struct {
-	Token string
+	Token  string
+	Limit  *int32
+	Offset *int32
 }) ([]*ConnectorVersionResolver, error) {
 	if err := auth.Authorize(ctx, auth.ConnectorRead); err != nil {
 		return nil, err
 	}
 	api := r.GetApi(ctx)
-	versions, err := api.ConnectorVersions(ctx, args.Token)
+	versions, err := api.ConnectorVersions(ctx, args.Token, args.Limit, args.Offset)
 	if err != nil {
 		return nil, err
 	}
