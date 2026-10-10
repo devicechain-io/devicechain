@@ -61,6 +61,13 @@ var permanentRejectionCodes = map[string]bool{
 	// function of the detection and action, so a retry re-sends the same colliding token and can
 	// only collide again.
 	"TOKEN_IN_USE": true,
+	// The request exceeds a size cap command-delivery enforces on the request as written (a rule
+	// may carry a larger payload than a command may). The same rule re-sends the same oversized
+	// request on every redelivery, so retrying only spends the budget and then poison-drops it as
+	// if it were an infrastructure fault.
+	"PAYLOAD_TOO_LARGE":     true,
+	"METADATA_TOO_LARGE":    true,
+	"COMMAND_NAME_TOO_LONG": true,
 }
 
 // commandClient is the REACT dispatcher's send-command sink (ADR-051 slice 5b): it calls

@@ -458,3 +458,39 @@ func TestReactAcksEvenWhenTheDeadLetterWriteFails(t *testing.T) {
 		t.Fatalf("a lost dead letter must still ack its source: acks=%d", ack.acks)
 	}
 }
+
+// The real Prometheus adapter, not a fake: the unknown_kind series exists at 0 from construction
+// (so an alert over it has something to read) and RecordDropped moves it.
+func TestReactMetricsRecordDroppedIsExported(t *testing.T) {
+	reg := prometheus.NewRegistry()
+	ms := &core.Microservice{InstanceId: "test", FunctionalArea: "event-processing"}
+	ms.UseMetricsRegistry(reg)
+	m := NewReactMetrics(ms)
+
+	read := func() (float64, bool) {
+		families, err := reg.Gather()
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, f := range families {
+			if f.GetName() != "devicechain_eventprocessing_react_actions_dropped_total" {
+				continue
+			}
+			for _, mt := range f.GetMetric() {
+				for _, l := range mt.GetLabel() {
+					if l.GetName() == "reason" && l.GetValue() == "unknown_kind" {
+						return mt.GetCounter().GetValue(), true
+					}
+				}
+			}
+		}
+		return 0, false
+	}
+	if v, ok := read(); !ok || v != 0 {
+		t.Fatalf("unknown_kind must exist at 0 from construction, got %v present=%v", v, ok)
+	}
+	m.RecordDropped("unknown_kind")
+	if v, _ := read(); v != 1 {
+		t.Fatalf("RecordDropped must increment the counter, got %v", v)
+	}
+}
