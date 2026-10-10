@@ -182,7 +182,7 @@ func TestCalloutStopWaitsForRequestsInFlight(t *testing.T) {
 		entered.Add(1)
 		<-release
 		return sensorDevice(), nil
-	}, 4, 5*time.Second, 5*time.Second)
+	}, 4, 5*time.Second, time.Minute)
 
 	sub := g.send()
 	waitFor(t, "a request in flight", func() bool { return entered.Load() == 1 })
@@ -197,11 +197,17 @@ func TestCalloutStopWaitsForRequestsInFlight(t *testing.T) {
 		t.Fatal("Stop returned while a request was still in flight")
 	case <-time.After(300 * time.Millisecond):
 	}
+	released := time.Now()
 	close(release)
+	// stopWait is a minute: returning promptly after the release shows Stop waits for the
+	// handlers themselves, not for the whole bound.
 	select {
 	case <-stopped:
-	case <-time.After(5 * time.Second):
-		t.Fatal("Stop did not return after the in-flight request finished")
+	case <-time.After(2 * time.Second):
+		t.Fatal("Stop did not return promptly after the in-flight request finished")
+	}
+	if d := time.Since(released); d > time.Second {
+		t.Fatalf("Stop took %v after the release, want well under a second", d)
 	}
 	if g.r.InFlight() != 0 {
 		t.Fatalf("inFlight=%d after Stop", g.r.InFlight())
@@ -235,5 +241,26 @@ func TestCalloutStopGivesUpAndCancelsAStuckRequest(t *testing.T) {
 	case <-cancelled:
 	case <-time.After(3 * time.Second):
 		t.Fatal("the stuck request was not cancelled by Stop")
+	}
+}
+
+// A request that arrives after Stop is neither handled nor answered.
+func TestCalloutDispatchAfterStopDoesNothing(t *testing.T) {
+	var entered atomic.Int32
+	g := newCalloutBoundsRig(t, func(ctx context.Context, _ *model.PresentedCredential) (*model.Device, error) {
+		entered.Add(1)
+		return sensorDevice(), nil
+	}, 4, 5*time.Second, time.Second)
+
+	if err := g.r.Stop(); err != nil {
+		t.Fatal(err)
+	}
+	sub := g.send()
+	if _, got := denied(t, sub, 500*time.Millisecond); got {
+		t.Fatal("a request after Stop was answered")
+	}
+	if entered.Load() != 0 || g.r.InFlight() != 0 || g.r.RefusedBusy() != 0 {
+		t.Fatalf("a request after Stop reached a handler: entered=%d inFlight=%d refusedBusy=%d",
+			entered.Load(), g.r.InFlight(), g.r.RefusedBusy())
 	}
 }
