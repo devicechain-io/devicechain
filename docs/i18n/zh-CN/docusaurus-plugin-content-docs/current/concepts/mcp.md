@@ -29,7 +29,7 @@ title: AI 访问（MCP）
 - `get_device_state`：设备当前最新已知状态，包括该状态是*传输协议明确上报*还是*根据静默推断*。这一区别影响“不活跃”的含义。明确上报表示已知设备断开；推断只表示近期没有收到数据，健康但上报间隔较长的设备也可能如此。
 - `get_latest_measurements`：各测量的最新值。
 - `query_measurements`：时间范围内的原始时序读数。
-- `aggregate_measurements`：时间范围内按桶聚合的结果，如最小值、最大值和平均值。
+- `aggregate_measurements`：时间范围内按桶聚合的结果，如最小值、最大值和平均值。`startTime` 和 `intervalSeconds` 为必填，`endTime` 默认为当前时间，单次请求最多 10,000 个桶。
 
 **位置**
 
