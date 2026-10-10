@@ -1,46 +1,116 @@
 # Copyright The DeviceChain Authors
 # SPDX-License-Identifier: Apache-2.0
 
-# Tenant-scoped pair of JWTs returned by selectTenant or token refresh.
+# Descriptions: a """string""" above an element is its PUBLIC description — served by
+# introspection, read by every GraphQL tool, published on the docs site — and may not
+# cite a decision record. A # comment is a maintainer note. backend/tools/docsgql/sdldesc
+# enforces both.
+
+"""
+A tenant-scoped session: a short-lived access token paired with a longer-lived refresh
+token. Returned by selectTenant and refresh.
+"""
 type AuthToken {
+    """
+    Signed JWT that authorizes tenant-scoped API requests; send it as
+    `Authorization: Bearer <token>`. Valid until expiresAt.
+    """
     accessToken: String!
+    """
+    Signed JWT whose only use is to obtain a new pair through the refresh mutation. It is
+    single-use: refreshing consumes it and returns a new one.
+    """
     refreshToken: String!
+    """
+    When the access token expires, as an RFC 3339 timestamp in UTC. The refresh token's
+    own, longer expiry is not reported. The lifetimes are operator-configured; the defaults
+    are 15 minutes for the access token and 7 days for the refresh token.
+    """
     expiresAt: String!
 }
 
+"""
+The result of a successful email and password login: an identity token that is not yet
+tied to any tenant, and the identity's memberships. Pass the identity token and a
+chosen tenant to selectTenant to obtain a tenant-scoped AuthToken.
+"""
 # Result of an email/password login (ADR-033): an instance-scoped identity token
 # plus the tenants the identity may act in. The caller picks one via selectTenant.
 type IdentityAuth {
+    """
+    Signed JWT proving who the caller is, valid across the instance rather than within one
+    tenant. It is accepted by selectTenant, identityMemberships and the instance-level
+    administration endpoints, and is not accepted as a tenant access token.
+    """
     identityToken: String!
+    """
+    When the identity token expires, as an RFC 3339 timestamp in UTC. It lives as long as a
+    tenant access token (15 minutes by default, operator-configured).
+    """
     expiresAt: String!
-    # Whether this identity holds the superuser system role (may enter any tenant).
+    """
+    True when the identity holds the superuser system role, which may enter any tenant with
+    full authority whether or not it has a membership there.
+    """
     superuser: Boolean!
+    """
+    The identity's tenant memberships as of login, including any that are disabled or in a
+    tenant that is disabled or being deleted; selectTenant refuses those. Call
+    identityMemberships to re-read them later without logging in again.
+    """
     memberships: [Membership!]!
 }
 
-# A tenant the authenticated identity belongs to, with the role tokens it holds.
+"""A tenant an identity belongs to, with the roles the identity holds in it."""
 type Membership {
+    """Token of the tenant, as accepted by selectTenant."""
     tenant: String!
+    """Tokens of the roles this identity holds in the tenant. Empty if it holds none."""
     roles: [String!]!
 }
 
+"""
+The tenant the caller is acting within, as seen by that tenant's own members. It carries
+the settings that shape the console: white-label branding, the map basemap and the
+default language.
+"""
 # The tenant the authenticated caller is acting within (control plane). Drives
 # the console's tenant header, and carries the resolved white-labeling branding
 # (ADR-038) the console applies to the shell.
 type Tenant {
+    """Unique identifier of the tenant on this instance."""
     token: String!
+    """Human-readable name of the tenant. Null when none has been set."""
     name: String
+    """Free-text description of the tenant. Null when none has been set."""
     description: String
+    """
+    The white-labeling in effect for this tenant: the tenant's own overrides laid over the
+    instance-wide default, field by field, with the tenant's value winning. Always present;
+    a field is null when neither level sets it, and the console then keeps its built-in look
+    for that aspect. Readable by any member of the tenant.
+    """
     # The resolved white-labeling for this tenant: the tenant's override folded
     # over the operator/code default (most-specific-non-null wins). Always present;
     # an individual field is null when nothing overrides it, and the console then
     # keeps its built-in look for that field. Never carried in the JWT (ADR-038 §1).
     branding: TenantBranding!
+    """
+    Only the branding this tenant has set itself, with no instance default folded in: a
+    null field means the tenant inherits that aspect. Use it to show which values are
+    overridden when editing; use branding to apply the look. Readable by any member of the
+    tenant.
+    """
     # The tenant's RAW branding override — the stored columns with no cascade, so a
     # null field means "this tenant inherits" (vs `branding`, which fills it from
     # the default). The editor reads this to show set-vs-inherited per field; it is
     # NOT for applying to the shell. Self-scoped, like `branding`.
     brandingOverride: TenantBranding!
+    """
+    The map basemap in effect for this tenant: its own overrides laid over the instance-wide
+    default. Always present; a field is null where neither level sets it, and maps with no
+    tile source draw positions on a plain panel. Readable by any member of the tenant.
+    """
     # The tenant's EFFECTIVE basemap: its override folded over the operator's
     # `basemap.default`. Always present; every field is null when nothing sets it,
     # and the surface then draws positions on a plain panel and says why — the
@@ -48,10 +118,22 @@ type Tenant {
     # member, like `branding`: gating it would blank the map for the people who
     # need it.
     basemap: TenantBasemap!
+    """
+    Only the basemap this tenant has set itself, with no instance default folded in: a null
+    field means the tenant inherits it. Use it to show which values are overridden when
+    editing; use basemap to draw maps. Readable by any member of the tenant.
+    """
     # The tenant's RAW basemap override — the stored columns with no cascade, so a
     # null field means "this tenant inherits" (vs `basemap`, which fills it from the
     # operator default). The editor reads this to show set-vs-inherited.
     basemapOverride: TenantBasemap!
+    """
+    The default language of the console for this tenant, as a BCP-47 language tag such as
+    "en", "es" or "pt-BR": the tenant's own setting if it has one, otherwise the instance
+    default. Null when neither is set. It applies only to members who have not chosen a
+    language themselves, and only when the console ships that language. Readable by any
+    member of the tenant.
+    """
     # The tenant's EFFECTIVE default language: its own override folded over the
     # operator's `locale.default`. A BCP-47 tag ("en", "es", "pt-BR"), or null when
     # neither tier sets one. Requires no authority beyond being a member, like
@@ -62,15 +144,21 @@ type Tenant {
     # languages, then English — so this only answers for a member who has not chosen,
     # and only when the console ships that catalog.
     locale: String
+    """
+    Only the default language this tenant has set itself, with no instance default folded
+    in: null means the tenant inherits it. Use it to show whether the value is overridden
+    when editing; use locale for the value in effect.
+    """
     # The tenant's RAW locale override — the stored column with no cascade, so null
     # means "this tenant inherits" (vs `locale`, which fills it from the operator
     # default). The editor reads this to show set-vs-inherited.
     localeOverride: String
 }
 
-# The tile source a tenant's maps draw on, and the view they open at when there is
-# nothing to fit to.
-#
+"""
+The map tile source a tenant's maps draw on, plus the view they open at when there is
+nothing to fit to. A null field is unset.
+"""
 # tileUrl is a raster tile TEMPLATE ({z}/{x}/{y}, or {bbox-epsg-3857}, or {quadkey})
 # and attribution is the credit line its provider's licence requires. The two
 # RESOLVE TOGETHER: a tenant that names its own tile source never inherits the
@@ -82,26 +170,69 @@ type Tenant {
 # something of its own to fit to (an existing fence's bounds, a widget's markers)
 # fits it and ignores these.
 type TenantBasemap {
+    """
+    URL template of the raster tiles, over https, in which {z}, {x} and {y} (or
+    {bbox-epsg-3857}, or {quadkey}) stand for the tile being requested.
+    """
     tileUrl: String
+    """
+    The credit line the tile provider requires, shown on the map. Plain text, in which links
+    may be written as `<a href="https://...">text</a>`. Always set together with tileUrl:
+    a tenant that sets its own tileUrl does not inherit the instance default's credit line.
+    """
     attribution: String
+    """
+    Latitude in degrees, from -90 to 90, of the point maps open centered on when they have
+    nothing of their own to fit to. Set together with centerLon.
+    """
     centerLat: Float
+    """
+    Longitude in degrees, from -180 to 180, of the point maps open centered on when they
+    have nothing of their own to fit to. Set together with centerLat.
+    """
     centerLon: Float
+    """
+    Zoom level, from 0 (whole world) to 24, that maps open at when they have nothing of
+    their own to fit to.
+    """
     zoom: Float
 }
 
+"""
+A basemap for setTenantBasemap. Every field is optional and the input replaces the
+tenant's whole basemap: a field left out or sent as null (or as a blank string) is cleared,
+so that aspect falls back to the instance default.
+"""
 # A basemap override for setTenantBasemap. Every field is optional and this is a full
 # replace: a null field CLEARS that override, re-inheriting the operator default.
 # Validated server-side (fail-closed): an https tile template carrying a real
 # placeholder, a non-empty attribution whose only permitted markup is
 # <a href="https://…">…</a>, in-range coordinates, and a zoom between 0 and 24.
 input TenantBasemapInput {
+    """
+    Raster tile URL template: an https URL of at most 2048 characters containing {z}, {x}
+    and {y}, or {bbox-epsg-3857}, or {quadkey}. {prefix} and {ratio} are also substituted;
+    any other placeholder is rejected. Requires attribution.
+    """
     tileUrl: String
+    """
+    Credit line for the tiles, at most 512 characters. The only markup allowed is links
+    written exactly as `<a href="https://...">text</a>`. Required when tileUrl is set, and
+    rejected without it.
+    """
     attribution: String
+    """Latitude in degrees, from -90 to 90. Must be sent together with centerLon."""
     centerLat: Float
+    """Longitude in degrees, from -180 to 180. Must be sent together with centerLat."""
     centerLon: Float
+    """Zoom level, from 0 to 24."""
     zoom: Float
 }
 
+"""
+White-labeling applied to the console. A null field means the console keeps its built-in
+look for that aspect.
+"""
 # The resolved white-labeling applied to the console shell (ADR-038). A null field
 # means "inherit the built-in look" for that aspect. Colors are hex #rrggbb;
 # logoMaxHeight caps the render in px; updatedAt versions the value so a client can
@@ -111,16 +242,38 @@ input TenantBasemapInput {
 # exposed. Logo lifecycle is managed OUT of the full-replace input below, via
 # setTenantLogo (url/clear) and the POST /branding/logo upload (ADR-058).
 type TenantBranding {
+    """Product name shown in the browser tab and the console, at most 64 characters."""
     title: String
+    """
+    The logo, in a form you can put straight into an image tag: an https URL, a base64
+    `data:` URI of a PNG, JPEG or WebP image, or, for an uploaded logo, a path on this API
+    that you fetch with your access token.
+    """
     logo: String
+    """Maximum height, in pixels, at which the logo is drawn, from 16 to 200."""
     logoMaxHeight: Int
+    """Primary brand color as a hex string, `#rrggbb`."""
     primary: String
+    """Page background color as a hex string, `#rrggbb`."""
     background: String
+    """Text color as a hex string, `#rrggbb`."""
     foreground: String
+    """Accent color as a hex string, `#rrggbb`."""
     accent: String
+    """
+    A version stamp, as an RFC 3339 timestamp, for caching: it changes whenever the branding
+    may have changed. On branding it is the later of the tenant's last modification and the
+    instance default's; on brandingOverride it is the tenant's last modification, which any
+    change to the tenant moves, not only a branding change. Null if never modified.
+    """
     updatedAt: String
 }
 
+"""
+A tenant's white-labeling theme for setTenantBranding. It replaces the whole theme: a
+field left out or sent as null is cleared, so that aspect falls back to the instance
+default. The logo is not part of it; see setTenantLogo.
+"""
 # A white-labeling override for setTenantBranding — the theme fields only. Every
 # field is optional: a null field CLEARS that override, re-inheriting the operator/
 # code default. Validated server-side (fail-closed): hex colors, a bounded title and
@@ -129,14 +282,27 @@ type TenantBranding {
 # otherwise wipe an uploaded logo — logo is managed separately (setTenantLogo +
 # the upload endpoint, ADR-058).
 input TenantBrandingInput {
+    """Product name shown in the browser tab and the console, at most 64 characters."""
     title: String
+    """Maximum height in pixels at which the logo is drawn; from 16 to 200."""
     logoMaxHeight: Int
+    """Primary brand color as a hex string, `#rrggbb`."""
     primary: String
+    """Page background color as a hex string, `#rrggbb`."""
     background: String
+    """Text color as a hex string, `#rrggbb`."""
     foreground: String
+    """Accent color as a hex string, `#rrggbb`."""
     accent: String
 }
 
+"""
+The limits that apply to one tenant, resolved for the services that enforce them: each
+value is the tenant's own setting if it has one, otherwise the setting of the tenant's
+tier. A null limit means neither sets it, and the enforcing service then applies its
+platform default; null never means unlimited. Which of the two supplied a value is not
+reported.
+"""
 # The EFFECTIVE governance ceilings for the tenant the caller is acting within,
 # already folded over the tenant's tier (ADR-065): each field is the tenant's own
 # override if it has one, else its tier's setting. A null field means neither
@@ -151,26 +317,67 @@ input TenantBrandingInput {
 # service cannot fold for it — see the field. Field selection keeps the rest honest:
 # a service that does not ask does not learn.
 type TenantGovernance {
+    """
+    Sustained rate at which the tenant's devices may submit data, in readings per second;
+    a reading is one stored value: one measurement value, one location or one alert. Despite the name it counts readings, not
+    messages.
+    """
     ingestMessagesPerSecond: Float
+    """
+    How many readings the tenant may submit in a burst above the sustained ingest rate
+    before being throttled.
+    """
     ingestBurst: Int
+    """
+    Sustained rate at which the tenant's automation may call out to external destinations
+    (webhooks and message brokers), in calls per second.
+    """
     outboundMessagesPerSecond: Float
+    """
+    How many outbound calls the tenant may make in a burst above the sustained outbound
+    rate before being throttled.
+    """
     outboundBurst: Int
+    """
+    Whether the tenant has agreed to have its data sent to an external AI model provider.
+    False unless the tenant has explicitly opted in; there is no inherited value, and a
+    tenant that never opted in reads as false.
+    """
     # Whether this tenant has opted in to routing its data to an EXTERNAL frontier
     # model (ADR-056 §6). Non-null and fail-closed: false unless explicitly opted
     # in. Read by the ai-inference service over a service token.
     aiExternalEnabled: Boolean!
+    """
+    Sustained rate at which the tenant may make AI inference requests, in requests per
+    minute.
+    """
     # How fast this tenant may spend AI inference budget (ADR-056 §6 / ADR-023),
     # enforced by the ai-inference service. Declared per MINUTE — drafting is a
     # human-paced authoring action, so the legible ceiling is "30 a minute", not
     # "0.5 a second". Null inherits the platform default, never unlimited.
     aiInferenceRequestsPerMinute: Float
+    """
+    How many AI inference requests the tenant may make in a burst above the sustained
+    rate before being throttled.
+    """
     aiInferenceBurst: Int
+    """
+    How strongly the tenant's traffic is protected when the platform is overloaded and has
+    to refuse some ingest: a whole number from 1 to 100, higher meaning more protected.
+    80 to 100 is never refused, 50 to 79 only under the heaviest load, 20 to 49 under heavy
+    load, and 1 to 19 first. When null, the platform treats the tenant as priority 30.
+    """
     # This tenant's ADR-063 shed priority (1–100), resolved down the cascade (override,
     # else tier, else null). Read by event-sources over a service token: it bands the
     # value (80–100 gold · 50–79 silver · 20–49 bronze · 1–19 best-effort) and, under a
     # contention floor, lowers the affected classes' effective ingest ceiling. Null ⇒
     # the reader substitutes the platform fail-safe (a bronze-band value), never gold.
     shedPriority: Int
+    """
+    The most commands the tenant may have waiting on a device that is known to be offline,
+    in the held state. Beyond it, new commands for absent devices are refused. When null,
+    the command service applies its configured default; there is no unlimited value.
+    """
     # How many commands this tenant may have parked in the HELD state — the
     # command-delivery lifecycle state meaning "the platform is deliberately
     # withholding dispatch because the device is known absent". Resolved down the same
@@ -179,6 +386,10 @@ type TenantGovernance {
     # reader substitutes its own configured default — a real bound. There is no value
     # meaning unlimited, at any level.
     heldCommandCeiling: Int
+    """
+    The most positions (vertices) one geofence may have, counted across all of its rings.
+    A limit on the size of a single fence. When null, the platform default applies.
+    """
     # The three geofence caps, each resolved down the same cascade (override, else tier, else
     # null) and each bounding a cost the other two cannot express. Read by device-management
     # when a tenant creates or edits a fence. Null ⇒ the reader substitutes the platform
@@ -187,15 +398,28 @@ type TenantGovernance {
     # geoFencePositionCeiling bounds ONE fence's position count across every ring, because
     # compiling a fence is quadratic in that number.
     geoFencePositionCeiling: Int
+    """
+    The most geofences the tenant may have at one time. When null, the platform default
+    applies.
+    """
     # geoFenceCeiling bounds how many fences the tenant may hold, because the fence-set
     # manifest carries one entry per fence and must fit inside one broker message.
     geoFenceCeiling: Int
+    """
+    The most positions (vertices) the tenant's geofences may have in total, summed across
+    every fence. A limit on the combined size of the whole set, independent of
+    geoFencePositionCeiling and geoFenceCeiling. When null, the platform default applies.
+    """
     # geoFencePositionBudget bounds the position count across the tenant's WHOLE current fence
     # set — the cost neither of the others reaches, since one bounds a compile and the other a
     # message. It is the tenant's share of a geometry cache that lives in a single DETECT
     # process serving every tenant on the instance, which is why it alone among these caps
     # bounds a resource the tenant does not own.
     geoFencePositionBudget: Int
+    """
+    Where the tenant is in its deletion lifecycle: `active` for a normal tenant, or
+    `purging` once the tenant has been deleted and its data is being erased. Never null.
+    """
     # Where this tenant sits in the ADR-077 deletion lifecycle: "active" or "purging".
     # Read by the data-plane services that must stop acting on behalf of a tenant an
     # operator has deleted — device connect-auth, ingest auto-registration, command
@@ -205,6 +429,10 @@ type TenantGovernance {
     # from. Unlike the ceilings above this is not a metered value; it is here because it
     # is the same per-tenant fact, on the same service-token read, with the same cache.
     purgeState: String!
+    """
+    Token of the tier (the operator-defined packaging level) the tenant belongs to. Every
+    tenant has exactly one.
+    """
     # This tenant's ADR-065 packaging tier — its identity, not a value derived from it.
     # Read by ai-inference, which joins its own tier↔provider grants against it to
     # resolve which AI models the tenant may use (decision 10). It is here rather than
@@ -214,14 +442,23 @@ type TenantGovernance {
     tierToken: String!
 }
 
+"""The signed-in user, as shown in the console."""
 # The identity the caller is signed in as (control plane), for display in the
 # console — its name, falling back to email.
 type CurrentIdentity {
+    """The user's email address, which is their sign-in name and cannot be changed."""
     email: String!
+    """The user's first name. Null when none has been set."""
     firstName: String
+    """The user's last name. Null when none has been set."""
     lastName: String
 }
 
+"""
+Changes to the signed-in user's own display name. The user is identified by the request's
+access token, so only your own profile can be edited. For each field, leaving it out keeps
+the stored name, a value sets it, and null or an empty string clears it.
+"""
 # Data to update the signed-in user's own profile. The identity is named by the
 # caller's own token, so it is not a member of this input — editing someone else's
 # profile is unrepresentable here, not merely refused.
@@ -232,41 +469,83 @@ type CurrentIdentity {
 # and the server writes the same empty for either spelling — so there is no third stored
 # outcome for them to differ over.
 input ProfileUpdateRequest {
+    """New first name. Omit to keep it, send null or an empty string to clear it."""
     firstName: String
+    """New last name. Omit to keep it, send null or an empty string to clear it."""
     lastName: String
 }
 
+"""
+Sign-in, session and self-service reads. Everything here is scoped to the caller's own
+tenant or identity; instance-level administration is a separate API.
+"""
 # The tenant-scoped user-management API is the authentication surface only
 # (ADR-033). Identities, memberships, the role catalog, and tenants are
 # administered through the instance-scoped admin API (admin_schema.gql) — the one
 # exception is `tenant`, which lets a caller read their own tenant for display.
 type Query {
-    # Liveness placeholder.
+    """Liveness check. Always returns the string "pong". Needs no token."""
     ping: String!
-    # The tenant the caller is currently acting within (self-scoped).
+    """
+    The tenant the caller is currently acting within, as named by their access token. Fails
+    with an authentication error if the request carries no tenant access token. Needs no
+    authority beyond being signed in to the tenant.
+    """
     tenant: Tenant!
+    """
+    The limits that apply to the tenant of the current request, for the services that
+    enforce them. The tenant comes from the access token, or from the tenant a service
+    names when it calls with a service token. Fails if that tenant does not exist. Requires
+    tenant:read, an instance-level authority that tenant users do not hold.
+    """
     # The ingest governance overrides for the caller's tenant (requires
     # tenant:read); read by the enforcing service over a service token.
     tenantGovernance: TenantGovernance!
+    """
+    The token of every tenant on the instance. Returns tokens only, not tenant records.
+    Requires tenant:read, which only an instance-level caller holds, so a tenant user,
+    including one with every tenant authority, cannot list tenants.
+    """
     # Every tenant token on the instance (requires the system-tier tenant:read).
     # Read by services that must act across tenants over a service token — broker
     # presence reconciliation compares the broker's live connections against what
     # each tenant's projection believes, and a tenant whose whole fleet dropped is
     # nameable only from a list. Tokens only: an iteration key, not tenant records.
     tenantTokens: [String!]!
-    # The identity the caller is signed in as (self-scoped).
+    """
+    The user the access token belongs to. Fails with an authentication error if the request
+    carries no valid access token.
+    """
     me: CurrentIdentity!
-    # Re-read the caller's live memberships from a valid identity token, so the
-    # console can refresh its tenant picker after a membership change without a
-    # re-login. The token is validated internally (like selectTenant), so this
-    # runs before a tenant is selected.
-    identityMemberships(identityToken: String!): [Membership!]!
-    # The functional areas this instance deployed, so the console can tell "this
-    # feature was never deployed here" apart from "the server is broken" instead
-    # of surfacing a raw HTTP status. Requires only an authenticated caller.
-    # Reports DESIRED state (what the operator deployed), never health: an area
-    # that is enabled but failing still appears here.
+    """
+    The identity's tenant memberships as of now, with its roles in each, including any that
+    are disabled or in a tenant that is disabled or being deleted; selectTenant refuses
+    those. It takes the
+    identity token returned by login, so it works before any tenant is selected and needs no
+    Authorization header; use it to refresh a tenant picker after memberships change
+    without logging in again. Fails with "invalid or expired token" if the identity token
+    is expired, malformed, or from a session that has since ended (for example after a
+    password reset or the account being disabled).
+    """
+    identityMemberships(
+        """The identity token from login."""
+        identityToken: String!
+    ): [Membership!]!
+    """
+    The names of the functional areas deployed on this instance, so a client can tell a
+    feature that was never deployed from a server that is failing. It reports what the
+    operator enabled, not whether each area is healthy: an area that is enabled but down
+    still appears. Requires only a signed-in caller.
+    """
     functionalAreas: [String!]!
+    """
+    The entity token masks as a JSON object serialized to a string: it maps an entity type
+    (or "default") to the mask template used to generate tokens for new entities of that
+    type. A template is literal text plus the placeholders {slug}, {uuid},
+    {alphanumeric-N} and {numeric-N}. Masks apply to the create forms in the console; the
+    server accepts any token that satisfies the general token format. Requires only a
+    signed-in caller. The same masks are served on the settings API.
+    """
     # The effective entity token-mask map, as a JSON object string. Requires only an
     # authenticated caller — the masks are non-sensitive UI templates that every
     # create form needs to mint a token, not a settings read.
@@ -282,37 +561,128 @@ type Query {
     tokenMasks: String!
 }
 
+"""
+Sign in, choose a tenant, refresh the session, and edit the signed-in user's profile and
+their tenant's look and defaults.
+"""
 type Mutation {
+    """
+    Signs in with an email address and password. Returns an identity token and the tenants
+    the identity may enter; call selectTenant next to obtain a tenant-scoped session. Needs
+    no token. Fails with "invalid credentials" for an unknown email, a wrong password or a
+    disabled account, without saying which. Repeated failures for one email are slowed down,
+    and a request that is throttled or exceeds its allowance of password checks is refused
+    without checking the password.
+    """
     # Authenticate with an email and password, returning an identity token + the
     # tenants the identity may select (ADR-033). No tenant is chosen yet.
-    login(email: String!, password: String!): IdentityAuth!
+    login(
+        """Email address of the account. Case and surrounding whitespace are ignored."""
+        email: String!
+        """The account's password."""
+        password: String!
+    ): IdentityAuth!
+    """
+    Exchanges an identity token for a session in one tenant. The identity must have an
+    enabled membership in an enabled tenant; a superuser may enter any tenant. Needs no
+    Authorization header, since the identity token is the argument. Fails with "invalid or
+    expired token" if the identity token is expired or from a session that has ended, and
+    with "invalid credentials" if the identity may not enter that tenant.
+    """
     # Exchange an identity token for a tenant-scoped access/refresh pair.
-    selectTenant(identityToken: String!, tenant: String!): AuthToken!
+    selectTenant(
+        """The identity token returned by login."""
+        identityToken: String!
+        """Token of the tenant to enter."""
+        tenant: String!
+    ): AuthToken!
+    """
+    Exchanges a refresh token for a new access and refresh pair, and consumes the refresh
+    token: each one can be used once. The roles and authorities in the new tokens are read
+    afresh, so a change to the user's role or membership applies from the next refresh. Needs
+    no Authorization header. Fails with "invalid or expired token" if the refresh token is
+    expired, already used, or belongs to a session that has ended or a membership or tenant
+    that is no longer allowed in. If the failure is temporary the error says the session
+    could not be refreshed right now and the same refresh token remains usable.
+    """
     # Exchange a valid refresh token for a new pair (rotates the refresh token).
-    refresh(refreshToken: String!): AuthToken!
+    refresh(
+        """The refresh token from selectTenant or an earlier refresh."""
+        refreshToken: String!
+    ): AuthToken!
+    """
+    Changes the signed-in user's own first and last name and returns the updated user. The
+    email cannot be changed here. Fields left out of the request keep their stored value.
+    Requires only a signed-in caller.
+    """
     # Update the signed-in user's own display name (first/last). Email is fixed;
     # self-scoped to the caller's identity. A partial update: an omitted field is left
     # alone, a null (or "") clears it, a value sets it.
-    updateProfile(request: ProfileUpdateRequest!): CurrentIdentity!
+    updateProfile(
+        """The name changes to apply."""
+        request: ProfileUpdateRequest!
+    ): CurrentIdentity!
+    """
+    Sets the white-label theme of the caller's own tenant and returns the tenant with its
+    resulting branding. It replaces the whole theme: any field not sent, or sent as null, is
+    cleared and falls back to the instance default. Colors must be `#rrggbb`, the title at
+    most 64 characters, and the logo height from 16 to 200 pixels; an invalid value rejects
+    the whole request. It does not touch the logo; use setTenantLogo. Requires
+    branding:write.
+    """
     # Set the caller's OWN tenant white-labeling theme (ADR-038): title, colors,
     # logo height. Self-scoped to the tenant in the access token; requires
     # branding:write. A null field clears that override. Does NOT manage the logo
     # (see setTenantLogo). Returns the tenant with its freshly-resolved branding so
     # the editing client can write it straight into cache.
-    setTenantBranding(input: TenantBrandingInput!): Tenant!
+    setTenantBranding(
+        """The theme to apply; replaces the tenant's current theme."""
+        input: TenantBrandingInput!
+    ): Tenant!
+    """
+    Sets the logo of the caller's own tenant to an image URL or an inline image, or clears
+    it, and returns the tenant. The logo must be an https URL of at most 2048 characters, or
+    a base64 `data:` URI of a PNG, JPEG or WebP image of at most 256 KiB once decoded; SVG
+    is accepted only as an https URL. Null or a blank string clears the logo. Uploading an
+    image file is done with a separate HTTP upload endpoint rather than this mutation, and
+    setting or clearing the logo here discards any previously uploaded image. Requires
+    branding:write.
+    """
     # Set the caller's OWN tenant logo to an https URL (or a bounded raster data:
     # URI), or clear it with null — self-scoped, requires branding:write (ADR-038).
     # An uploaded (binary) logo instead goes to the object store via POST
     # /branding/logo (ADR-058); both paths garbage-collect a replaced object-store
     # logo. A blob storage reference is never accepted here (clients never hold one).
-    setTenantLogo(logo: String): Tenant!
+    setTenantLogo(
+        """The logo as an https URL or an inline image data URI. Null clears it."""
+        logo: String
+    ): Tenant!
+    """
+    Sets the map basemap of the caller's own tenant and returns the tenant with its
+    resulting basemap. It replaces the whole basemap: any field not sent, or sent as null or
+    a blank string, is cleared and falls back to the instance default. An invalid value
+    rejects the whole request. Requires basemap:write, which is separate from
+    branding:write because the tile URL may embed the tenant's own provider key.
+    """
     # Set the caller's OWN tenant basemap (ADR-079): tile source, credit line, and
     # fallback view. Self-scoped to the tenant in the access token; requires
     # basemap:write — NOT branding:write, because the tile URL carries the tenant's
     # own provider credential and neither grant should imply the other. A full
     # replace: a null field clears that override. Returns the tenant with its freshly
     # resolved basemap so the editing client can write it straight into cache.
-    setTenantBasemap(input: TenantBasemapInput!): Tenant!
+    setTenantBasemap(
+        """The basemap to apply; replaces the tenant's current basemap."""
+        input: TenantBasemapInput!
+    ): Tenant!
+    """
+    Sets the default console language of the caller's own tenant and returns the tenant.
+    Null or a blank string clears it, so the tenant falls back to the instance default. The
+    value must be a BCP-47 language tag of at most 35 characters in the form `en`, `es-MX`,
+    `zh-Hans` or `zh-Hans-CN` (a two- or three-letter language, an optional four-letter
+    script, an optional two-letter or three-digit region); its case is normalized. A
+    well-formed tag the console has no translation for is stored and takes effect once the
+    console supports it. Requires locale:write.
+    """
     # Set the caller's OWN tenant default language, or clear it with null to
     # re-inherit the operator's `locale.default`. Self-scoped to the tenant in the
     # access token; requires locale:write — NOT branding:write, because this one value
@@ -321,7 +691,10 @@ type Mutation {
     # ("en", "es", "pt-BR"); a tag whose catalog this console build does not ship is
     # stored but has no effect until it does. Returns the tenant with its freshly
     # resolved locale so the editing client can write it straight into cache.
-    setTenantLocale(locale: String): Tenant!
+    setTenantLocale(
+        """The language tag, such as "en" or "pt-BR". Null clears it."""
+        locale: String
+    ): Tenant!
 }
 
 schema {

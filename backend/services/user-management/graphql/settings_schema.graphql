@@ -1,6 +1,11 @@
 # Copyright The DeviceChain Authors
 # SPDX-License-Identifier: Apache-2.0
 
+# Descriptions: a """string""" above an element is its PUBLIC description — served by
+# introspection, read by every GraphQL tool, published on the docs site — and may not
+# cite a decision record. A # comment is a maintainer note. backend/tools/docsgql/sdldesc
+# enforces both.
+
 # System settings (instance-scoped) GraphQL API — ADR-042 P2.
 #
 # Served at /settings/graphql and authenticated with an *identity*-tier token (the
@@ -14,37 +19,100 @@
 # store holds only overrides, so a setting is always resolvable even before it is
 # ever set.
 
+"""
+One instance-wide setting, with the value currently in effect and whether that value is
+an override or the built-in default.
+"""
 # One system setting resolved for presentation: the effective value plus whether
 # it comes from a stored override or the code default.
 type Setting {
+    """Name of the setting, such as `branding.default`. Settings are identified by key."""
     key: String!
+    """What the setting controls and the shape its value must have."""
     description: String!
+    """
+    The value in effect, as a JSON document serialized to a string: the override if one is
+    set, otherwise the built-in default.
+    """
     # The effective value as a JSON-encoded string — the override when one is set,
     # otherwise the code default.
     value: String!
-    # True when a stored override is in effect; false when using the code default.
+    """
+    True when an override is stored and in effect; false when the built-in default is in
+    use.
+    """
     overridden: Boolean!
+    """
+    When the override was last written, as an RFC 3339 timestamp. Null when the built-in
+    default is in use.
+    """
     # The override's audit metadata, null when using the code default.
     updatedAt: String
+    """
+    Email of the user who last wrote the override. Null when the built-in default is in use,
+    or when the writer was not recorded.
+    """
     updatedBy: String
 }
 
+"""
+Instance-wide settings. This API takes an identity token, not a tenant access token.
+"""
 type Query {
-    # Every known setting with its effective value (requires settings:read).
+    """
+    Every setting the instance defines, each with its value in effect. Requires
+    settings:read.
+    """
     settings: [Setting!]!
-    # One known setting by key (requires settings:read).
-    setting(key: String!): Setting
+    """
+    One setting by key. Fails with an "unknown setting key" error if no setting has that
+    key; it does not return null. Requires settings:read.
+    """
+    setting(
+        """Key of the setting, as listed by settings."""
+        key: String!
+    ): Setting
+    """
+    The entity token masks as a JSON object serialized to a string: it maps an entity type
+    (or "default") to the mask template used to generate tokens for new entities of that
+    type. A template is literal text plus the placeholders {slug}, {uuid},
+    {alphanumeric-N} and {numeric-N}. It is the value of the `entity.token_masks` setting.
+    Unlike the other operations here it needs no settings authority, only a signed-in
+    caller, because every create form needs the masks. The same masks are served on the
+    tenant API.
+    """
     # The effective entity token-mask map as a JSON-encoded string. Available to
     # any authenticated user (not just settings admins) — every console user needs
     # the masks to generate tokens in the create forms.
     tokenMasks: String!
 }
 
+"""Changes to instance-wide settings."""
 type Mutation {
+    """
+    Overrides a setting with a new value and returns the setting. The value must be valid
+    JSON of at most 64 KiB and must satisfy the rules of that particular setting; otherwise
+    the request fails and nothing changes. The key must be one the instance defines, else it
+    fails with an "unknown setting key" error. Requires settings:write.
+    """
     # Override a setting with a JSON value; the value must be valid JSON and the key
     # must be known (requires settings:write).
-    setSetting(key: String!, value: String!): Setting!
+    setSetting(
+        """Key of the setting to override."""
+        key: String!
+        """The new value, as a JSON document serialized to a string."""
+        value: String!
+    ): Setting!
+    """
+    Removes a setting's override so the built-in default applies again, and returns the
+    setting. Clearing a setting that has no override succeeds and changes nothing. The key
+    must be one the instance defines, else it fails with an "unknown setting key" error.
+    Requires settings:write.
+    """
     # Remove a setting's override, reverting it to the code default (requires
     # settings:write).
-    clearSetting(key: String!): Setting!
+    clearSetting(
+        """Key of the setting to reset."""
+        key: String!
+    ): Setting!
 }
