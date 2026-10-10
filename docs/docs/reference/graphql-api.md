@@ -724,6 +724,7 @@ is partly applied, so narrow the request and send it again.
 | Bound | Limit | Applies to |
 | --- | --- | --- |
 | Buckets per aggregation | 10,000 | `bucketedMeasurements`: the range divided by `intervalSeconds`, rounded up. |
+| Rows per aggregation | 50,000 | `bucketedMeasurements`: the buckets multiplied by the measurement names returned. With a `name` filter that is one name; without one it is every distinct measurement name in the range. |
 
 `bucketedMeasurements` also requires `startTime`; `endTime` defaults to the current time.
 

@@ -768,6 +768,7 @@ trunca nada ni se aplica nada a medias, así que reduzca la solicitud y envíela
 | Límite | Valor | Se aplica a |
 | --- | --- | --- |
 | Intervalos por agregación | 10 000 | `bucketedMeasurements`: el rango dividido por `intervalSeconds`, redondeado hacia arriba. |
+| Filas por agregación | 50 000 | `bucketedMeasurements`: los intervalos multiplicados por los nombres de medición devueltos. Con un filtro `name` es un solo nombre; sin él, cada nombre de medición distinto del rango. |
 
 `bucketedMeasurements` también exige `startTime`; `endTime` toma por defecto la hora actual.
 

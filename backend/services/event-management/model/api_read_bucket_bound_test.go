@@ -60,7 +60,7 @@ func TestBoundBucketedRange(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := boundBucketedRange(MeasurementAggregationCriteria{
+			got, _, err := boundBucketedRange(MeasurementAggregationCriteria{
 				IntervalSeconds: tc.interval, StartTime: timePtr(tc.start), EndTime: tc.end,
 			}, boundNow)
 			switch tc.wantErr {

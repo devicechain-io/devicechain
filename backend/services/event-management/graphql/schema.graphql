@@ -131,8 +131,12 @@ type AlertEventSearchResults {
 # Criteria for a server-side, time-bucketed measurement aggregation. Reuses the
 # event search filters (device, event types, time range, anchor) plus an optional
 # measurement-name filter. intervalSeconds is the time_bucket width and must be
-# >= 1. startTime is required (endTime defaults to now), and a request whose range
-# would produce more than 10,000 buckets is refused with LIMIT_EXCEEDED.
+# >= 1. startTime is required (endTime defaults to now). A request whose range
+# would produce more than 10,000 buckets is refused with LIMIT_EXCEEDED, and so is
+# one that would return more than 50,000 rows: one row per bucket per measurement
+# name, so with no name filter the buckets are multiplied by the number of distinct
+# measurement names in range. Filter on a name, narrow the range or widen the
+# interval to stay under it.
 input MeasurementAggregationCriteria {
     deviceToken: String
     name: String
