@@ -414,9 +414,8 @@ func (api *Api) DashboardVersions(ctx context.Context, token string, limit, offs
 // DashboardsByToken looks up dashboards by their current tokens.
 func (api *Api) DashboardsByToken(ctx context.Context, tokens []string) ([]*Dashboard, error) {
 	found := make([]*Dashboard, 0)
-	result := api.RDB.DB(ctx).Find(&found, "token in ?", tokens)
-	if result.Error != nil {
-		return nil, result.Error
+	if err := rdb.FindByKeys(api.RDB.DB(ctx), &found, "token", tokens); err != nil {
+		return nil, err
 	}
 	return found, nil
 }
