@@ -326,9 +326,8 @@ type DeviceCredential struct {
 // DefaultOrder implements rdb.Sortable, and this is the one model here where the
 // ordering is a BEHAVIOURAL choice rather than a stability one.
 //
-// mintOrReuseCredential reads a device's live credentials unbounded and reuses
-// whichever comes off the FRONT of the set, so whatever leads this clause is the
-// credential every re-provision hands back. expires_at DESC NULLS FIRST puts a
+// A credential listing leads with the credential that has the MOST runway left:
+// expires_at DESC NULLS FIRST puts a
 // never-expiring credential first, then the one with the most runway left. The
 // obvious id ASC would have done the opposite — handed back the credential CLOSEST
 // to expiry, forcing the earliest possible re-provision.

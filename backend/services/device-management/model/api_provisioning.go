@@ -5,7 +5,6 @@ package model
 
 import (
 	"context"
-	"crypto/subtle"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -17,16 +16,9 @@ import (
 	"gorm.io/gorm"
 )
 
-// Errors returned by provisioning-profile evaluation and writes. They are sentinels so
+// Errors returned by provisioning-profile writes. They are sentinels so
 // a caller can map each outcome without string matching.
 var (
-	// ErrProvisioningDisabled means the resolved profile is disabled.
-	ErrProvisioningDisabled = errors.New("provisioning profile is disabled")
-	// ErrProvisioningExpired means the resolved profile is past its ExpiresAt.
-	ErrProvisioningExpired = errors.New("provisioning profile has expired")
-	// ErrProvisioningSecretMismatch means the presented provision secret did not
-	// match the profile's secret.
-	ErrProvisioningSecretMismatch = errors.New("provision secret did not match")
 	// ErrProvisioningSecretEmpty means an empty or blank provision secret was supplied
 	// on create. An empty secret is no proof of anything, so it is rejected at write
 	// time rather than persisted as a profile anyone holding the key can use.
@@ -235,49 +227,6 @@ func (api *Api) ProvisioningProfiles(ctx context.Context, criteria ProvisioningP
 		Results:    results,
 		Pagination: pag,
 	}, nil
-}
-
-// ProvisioningProfileByProvisionKey resolves the profile a connecting device's
-// provision key names. The lookup is tenant scoped by the global callback, so a
-// key belonging to another tenant never resolves. It is intentionally not
-// enabled-only: the enabled/expiry gates live in evaluateProvisioningProfile so
-// an operator can distinguish "no such key" from "disabled". Returns
-// gorm.ErrRecordNotFound if no profile matches.
-func (api *Api) ProvisioningProfileByProvisionKey(ctx context.Context, provisionKey string) (*ProvisioningProfile, error) {
-	found := make([]*ProvisioningProfile, 0)
-	result := api.RDB.DB(ctx).Preload("DeviceType").Where("provision_key = ?", provisionKey).Find(&found)
-	if result.Error != nil {
-		return nil, result.Error
-	}
-	if len(found) == 0 {
-		return nil, gorm.ErrRecordNotFound
-	}
-	return found[0], nil
-}
-
-// evaluateProvisioningProfile verifies a resolved profile is usable for a
-// provisioning request: enabled, not expired, and the presented secret matches.
-// It is pure (no I/O) so the policy is unit-testable in isolation; now is
-// supplied by the caller for deterministic expiry.
-func evaluateProvisioningProfile(profile *ProvisioningProfile, presentedSecret string, now time.Time) error {
-	if !profile.Enabled {
-		return ErrProvisioningDisabled
-	}
-	if profile.ExpiresAt.Valid && !now.Before(profile.ExpiresAt.Time) {
-		return ErrProvisioningExpired
-	}
-	// An empty stored secret is never a valid proof: a constant-time compare of
-	// "" == "" would otherwise match an empty presented secret.
-	// CreateProvisioningProfile and the update path both refuse a blank secret, so this
-	// only guards rows written before those checks.
-	if profile.ProvisionSecret == "" {
-		return ErrProvisioningSecretMismatch
-	}
-	// Constant-time compare to avoid leaking the secret via timing.
-	if subtle.ConstantTimeCompare([]byte(presentedSecret), []byte(profile.ProvisionSecret)) != 1 {
-		return ErrProvisioningSecretMismatch
-	}
-	return nil
 }
 
 // parseOptionalTime parses an optional RFC3339 timestamp into a sql.NullTime,

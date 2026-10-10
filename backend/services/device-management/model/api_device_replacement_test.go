@@ -139,7 +139,7 @@ func seedCredential(t *testing.T, api *Api, ctx context.Context,
 // The input class is three live credentials that differ in the ways the code branches
 // on — one never-expiring, one with runway, one already EXPIRED but still enabled.
 // The expired one matters: ReplaceDevice retires on `enabled`, not on expiry, and a
-// filter that skipped it (as mintOrReuseCredential's reuse loop deliberately does)
+// filter that skipped it
 // would leave an enabled row behind.
 func TestReplaceDeviceRetiresEveryLiveCredential(t *testing.T) {
 	api, ctx := replacementTestApi(t)

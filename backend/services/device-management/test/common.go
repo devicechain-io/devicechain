@@ -162,12 +162,6 @@ func (api *MockApi) DeviceCredentials(ctx context.Context, criteria model.Device
 	return args.Get(0).(*model.DeviceCredentialSearchResults), args.Error(1)
 }
 
-func (api *MockApi) EnabledDeviceCredentialsOfType(ctx context.Context,
-	deviceToken string, credentialType string) (*model.DeviceCredentialSearchResults, error) {
-	args := api.Mock.Called()
-	return args.Get(0).(*model.DeviceCredentialSearchResults), args.Error(1)
-}
-
 func (api *MockApi) DeviceCredentialByCredentialId(ctx context.Context, credentialType string, credentialId string) (*model.DeviceCredential, error) {
 	args := api.Mock.Called()
 	return args.Get(0).(*model.DeviceCredential), args.Error(1)
@@ -394,11 +388,6 @@ func (api *MockApi) ProvisioningProfilesByToken(ctx context.Context, tokens []st
 func (api *MockApi) ProvisioningProfiles(ctx context.Context, criteria model.ProvisioningProfileSearchCriteria) (*model.ProvisioningProfileSearchResults, error) {
 	args := api.Mock.Called()
 	return args.Get(0).(*model.ProvisioningProfileSearchResults), args.Error(1)
-}
-
-func (api *MockApi) ProvisioningProfileByProvisionKey(ctx context.Context, provisionKey string) (*model.ProvisioningProfile, error) {
-	args := api.Mock.Called()
-	return args.Get(0).(*model.ProvisioningProfile), args.Error(1)
 }
 
 func (api *MockApi) InitiateDeviceClaim(ctx context.Context, request *model.DeviceClaimInitiateRequest) (*model.DeviceClaim, error) {

@@ -215,25 +215,6 @@ func (api *Api) assetTypeVersionByNumber(ctx context.Context, assetTypeId uint, 
 	return &v, nil
 }
 
-// assetTypeVersionsFor loads the published versions of several asset types in one
-// query, grouped by type id — the batched form the GraphQL resolver needs so a page
-// of asset types does not issue a query per row.
-func (api *Api) assetTypeVersionsFor(ctx context.Context, ids []uint) (map[uint][]*AssetTypeVersion, error) {
-	grouped := make(map[uint][]*AssetTypeVersion, len(ids))
-	if len(ids) == 0 {
-		return grouped, nil
-	}
-	versions := make([]*AssetTypeVersion, 0)
-	if err := api.RDB.DB(ctx).Where("asset_type_id in ?", ids).
-		Order("version DESC").Find(&versions).Error; err != nil {
-		return nil, err
-	}
-	for _, v := range versions {
-		grouped[v.AssetTypeId] = append(grouped[v.AssetTypeId], v)
-	}
-	return grouped, nil
-}
-
 // deleteAssetTypeVersions removes a type's version history inside the caller's
 // transaction. There is no database foreign key doing this — the four versioning
 // implementations that came before all cascade by hand for the same reason — so a
