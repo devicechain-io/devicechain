@@ -318,7 +318,7 @@ mosquitto_pub \
 - **`commandToken` debe ser el `token` del sobre de entrega**, el token del comando, no el del dispositivo. Enviar aquí el token del dispositivo es el error más común. No coincide con ningún comando, así que la respuesta no cierra nada: se vuelve a entregar hasta el tope de entregas del broker (cinco intentos) y después queda registrada en el flujo de mensajes descartados con el motivo `exhausted`, visible para un operador, mientras el comando sigue pendiente.
 - **`dispatchNonce` debe ser el `dispatchNonce` del sobre de entrega que estás respondiendo.** Es obligatorio. Una respuesta que lo omita, o que cite el nonce de una entrega anterior del mismo comando, no cierra el comando. Consulta [Por qué el nonce es obligatorio](#why-the-nonce-is-required).
 - **`success`** mueve el comando a `SUCCESSFUL` o `FAILED`.
-- **`payload`** / **`error`** son cadenas opcionales, que se muestran en el historial de comandos de la consola y se devuelven a través de la API.
+- **`payload`** es opcional y puede ser cualquier valor JSON (una cadena se almacena como su texto; un objeto o un arreglo, como ese JSON); **`error`** es una cadena opcional. Ambos se muestran en el historial de comandos de la consola y se devuelven a través de la API.
 
 Al igual que los topics de eventos y de comandos, este es por dispositivo, y un dispositivo está autorizado a publicar únicamente en el suyo. Tanto el inquilino como el dispositivo que responde se toman del topic en lugar del cuerpo, de modo que un dispositivo solo puede responder por **sus propios** comandos. Una respuesta que nombre un comando perteneciente a otro dispositivo se rechaza, no se registra.
 
