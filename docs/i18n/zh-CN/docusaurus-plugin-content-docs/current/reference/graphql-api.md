@@ -70,6 +70,7 @@ Ingress 将 `/api/<area>/graphql` 路由到各功能区服务，并移除前缀�
 
 `sparkplug-ingest` 和 `lwm2m-ingest` 完全不提供 GraphQL，且有意不进入 `/api` 路由。
 `event-sources` 虽有路由，但只返回占位 Schema；设备通过传输协议接入它，而不是通过该 API。
+`update-management` 同样有路由，但其 API 在本版本中尚未实现：它唯一的占位查询对每次调用都返回 `NOT_IMPLEMENTED` 错误。
 
 ### 通过 WebSocket 订阅 {#subscriptions-over-websocket}
 

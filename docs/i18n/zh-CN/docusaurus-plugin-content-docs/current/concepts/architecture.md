@@ -24,6 +24,7 @@ DeviceChain 由基于共享核心库构建的无状态 Go 微服务组成。Kube
 | `ai-inference` _（可选启用）_ | 根据自然语言描述起草检测规则，并使用其他编写界面所用的*同一个*编译器进行验证。模型提出规则，编译器判断其是否有效。它绝不参与规则评估路径。参见 [AI 辅助编写](./ai-authoring.md)。 |
 | `outbound-connectors` _（可选启用）_ | 向外部系统投递出站动作：HTTP/webhook 调用，以及向消息代理和云队列（MQTT、Kafka、AWS SNS/SQS）执行 `publish`。它使用限定于租户、支持版本管理的连接器，凭据保存在密钥存储中。服务在独立进程中运行，因此缓慢或行为异常的外部系统不会影响检测流水线。参见[出站连接器](./outbound-connectors.md)。 |
 | `mcp` _（可选启用）_ | 只读的 Model Context Protocol 服务器，使 AI 助手能够代表用户访问租户。它是 GraphQL API 上的一层轻量 OAuth 2.1 资源服务器，携带调用方自己的租户作用域令牌。它没有服务令牌，只提供经过选择的读取工具。参见 [AI 访问（MCP）](./mcp.md)。 |
+| `update-management` _（可选启用）_ | 空中（OTA）更新：固件制品及其向设备的分配。本版本只提供服务本身：它可以部署、迁移自己的数据库 Schema，并报告健康、就绪状态和指标，但其 API 尚未实现，对每次调用都返回 `NOT_IMPLEMENTED` 错误。 |
 | `operator` | 基于 controller-runtime 的 Operator，管理 `Instance` 自定义资源及其生命周期。目前协调循环只观察资源；聚合已渲染 Deployment 的就绪状态，是该循环计划中的后续功能。配置不会原地重新加载：服务只在启动时读取一次配置，通过滚动更新 Pod 采用更改。工作负载本身由 Helm Chart 渲染。租户是控制平面数据库记录，不是被协调的资源。 |
 
 向多台设备分发同一条命令属于 `command-delivery`，不是独立服务。参见[一条命令，多台设备](./commands.md#command-batches)。调度功能仍在计划中；当前状态以仓库为准。

@@ -157,7 +157,8 @@ backend/
   services/             one module per microservice — user-management, device-management,
                         event-sources, event-management, device-state, command-delivery,
                         dashboard-management, notification-management, event-processing,
-                        outbound-connectors, ai-inference, mcp, and the edge ingest areas
+                        outbound-connectors, ai-inference, mcp, update-management, and the
+                        edge ingest areas
   edge/                 the edge agent
   sims/                 the device simulator
   cli/                  dcctl

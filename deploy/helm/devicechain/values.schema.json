@@ -34,7 +34,8 @@
           "mcp",
           "ai-inference",
           "sparkplug-ingest",
-          "lwm2m-ingest"
+          "lwm2m-ingest",
+          "update-management"
         ]
       },
       "uniqueItems": true,

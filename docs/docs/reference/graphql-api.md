@@ -76,7 +76,9 @@ authorities do not line up with intuition:
 
 `sparkplug-ingest` and `lwm2m-ingest` serve no GraphQL at all and are deliberately kept off the
 `/api` router entirely. `event-sources` is routed but answers with a placeholder schema: ingest
-reaches it over the device-plane transports, not this API.
+reaches it over the device-plane transports, not this API. `update-management` is routed too, but its
+API is not implemented in this release: its one placeholder query answers every call with a
+`NOT_IMPLEMENTED` error.
 
 ### Subscriptions over WebSocket {#subscriptions-over-websocket}
 

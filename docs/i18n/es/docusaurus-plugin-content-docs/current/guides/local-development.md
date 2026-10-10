@@ -239,7 +239,8 @@ backend/
   services/             un módulo por microservicio — user-management, device-management,
                         event-sources, event-management, device-state, command-delivery,
                         dashboard-management, notification-management, event-processing,
-                        outbound-connectors, ai-inference, mcp, y las áreas de ingesta edge
+                        outbound-connectors, ai-inference, mcp, update-management, y las
+                        áreas de ingesta edge
   edge/                 el agente edge
   sims/                 el simulador de dispositivos
   cli/                  dcctl

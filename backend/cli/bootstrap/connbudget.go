@@ -23,6 +23,7 @@ var relationalAreas = map[functionalarea.FunctionalArea]bool{
 	functionalarea.EventProcessing:  true,
 	functionalarea.OutboundConn:     true,
 	functionalarea.AiInference:      true,
+	functionalarea.UpdateMgmt:       true,
 }
 
 const (
