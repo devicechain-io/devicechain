@@ -196,6 +196,15 @@ func equivCases() []equivCase {
 		{"entry time null", envelope(m, `{"entries":[{"occurredTime":null,"measurements":{"a":"1"}}]}`), true},
 		{"entry time escaped but valid", envelope(m, `{"entries":[{"occurredTime":"2026-10-01T11:00:00\u005a","measurements":{"a":"1"}}]}`), false},
 		{"entry time in the future", envelope(m, `{"entries":[{"occurredTime":"2030-01-01T00:00:00Z","measurements":{"a":"1"}}]}`), true},
+		// The single-pass decode skips the entry-time probe and refuses the zero instant on the
+		// decoded entries instead, for every entry-carrying kind and at any entry.
+		{"second entry time zero instant", envelope(m, `{"entries":[{"measurements":{"a":"1"}},{"occurredTime":"0001-01-01T00:00:00Z","measurements":{"a":"1"}}]}`), false},
+		{"entry time zero instant in another zone", envelope(m, `{"entries":[{"occurredTime":"0001-01-01T01:00:00+01:00","measurements":{"a":"1"}}]}`), false},
+		{"location entry time zero instant", envelope("Location", `{"entries":[{"latitude":"1","longitude":"2","occurredTime":"0001-01-01T00:00:00Z"}]}`), false},
+		{"alert entry time zero instant", envelope("Alert", `{"entries":[{"type":"t","level":1,"occurredTime":"0001-01-01T00:00:00Z"}]}`), false},
+		{"location entry time number", envelope("Location", `{"entries":[{"latitude":"1","longitude":"2","occurredTime":5}]}`), false},
+		{"alert entry time not rfc3339", envelope("Alert", `{"entries":[{"type":"t","level":1,"occurredTime":"noon"}]}`), false},
+		{"alert entry time valid", envelope("Alert", `{"entries":[{"type":"t","level":1,"occurredTime":"2026-10-01T11:00:00Z"}]}`), true},
 
 		// Duplicate and re-spelled keys: a direct decode and the map round trip disagree, so
 		// the single-pass decode must decline every one of these.
