@@ -1720,7 +1720,10 @@ functionalAreas:
     # "unlimited" setting: 0 means UNSET here (as it does for every tunable above) and takes
     # the default, while a negative value fails startup — neither disables metering.
     config: {}
-      # inferenceTimeoutMs: 60000        # per-call ceiling on one outbound provider call (max 120000)
+      # inferenceTimeoutMs: 40000        # per-call ceiling on one outbound provider call (max 120000). The console's
+      #                                  # rule-drafting door bounds a WHOLE draft at 50s, inside the 60s request edge,
+      #                                  # so values above ~50000 cannot be reached from the console: the draft reports
+      #                                  # the slow tail as timed out before this deadline would.
       # maxPromptBytes: 131072           # cap on an inbound prompt (+ its schema context); 128 KiB default
       # maxOutputTokens: 2048            # cap on the provider's generated output for one call (a rule candidate is small)
       # inferenceRequestsPerMinute: 30   # PLATFORM per-tenant rate ceiling. Declared per minute: drafting is a

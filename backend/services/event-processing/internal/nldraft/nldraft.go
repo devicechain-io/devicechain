@@ -19,8 +19,10 @@ import (
 	"fmt"
 	"math"
 	"strings"
+	"time"
 
 	"github.com/devicechain-io/dc-event-processing/internal/rules"
+	"github.com/devicechain-io/dc-microservice/config"
 	"github.com/rs/zerolog/log"
 )
 
@@ -44,6 +46,16 @@ const unavailableReason = "the inference provider is unavailable, or this tenant
 // set, and reveals no topology.
 const rateLimitedReason = "this tenant has reached its AI drafting rate limit; wait a moment and try again"
 
+// timedOutReason is the safe message for a model that was reached but did not answer
+// in time. Distinct from unavailableReason for the same reason rateLimitedReason is:
+// nothing is misconfigured, so pointing the author at an operator is wrong — the fix
+// is to try again, or to ask for something smaller. It carries no provider detail.
+const timedOutReason = "the AI model did not answer in time; try again, or shorten the description"
+
+// repairTimedOutMessage is timedOutReason's counterpart to repairTruncatedMessage: a
+// timeout on a REPAIR turn, after a candidate was already produced.
+const repairTimedOutMessage = "the AI model did not answer in time to repair this draft; try again"
+
 // repairTruncatedMessage is surfaced as an unanchored diagnostic when the repair loop
 // is cut short by the rate limit AFTER a candidate was already produced. Without it a
 // truncated loop is indistinguishable from a model that simply could not write a
@@ -56,6 +68,11 @@ const repairTruncatedMessage = "the AI drafting rate limit was reached before th
 // processor's inference client), so the drafter can report the transient, retryable
 // outcome without depending on the transport.
 var ErrRateLimited = errors.New("inference rate limited")
+
+// ErrTimedOut marks an inference call that ran out of time — ai-inference's own
+// inference deadline, or this caller's bound on the whole call. Like ErrRateLimited,
+// the Inferer classifies the transport error into it.
+var ErrTimedOut = errors.New("inference timed out")
 
 // MetricHint is one entry of the target profile's metric vocabulary, supplied by the caller
 // (the console already loads it) so the prompt can reference real metric keys. All fields but
@@ -116,7 +133,8 @@ type Result struct {
 	Diagnostics []Diagnostic
 	// Unavailable is true when the inference path itself could not run — the ai-inference endpoint
 	// is not configured, no provider is active, or the tenant has not opted in to external routing
-	// (all fail-closed, ADR-056). UnavailableReason carries the (already-coarsened) message.
+	// (all fail-closed, ADR-056) — or when the model was reached but did not answer in time.
+	// UnavailableReason carries the (already-coarsened) message, which tells those apart.
 	Unavailable       bool
 	UnavailableReason string
 }
@@ -133,7 +151,8 @@ type InferOutput struct {
 // never depends on the transport (the concrete client mints an ai:infer service token and calls
 // ai-inference's inferRuleCandidate; see processor). An error means the inference could not be
 // produced — not configured, no active provider, consent denied, or a transport failure — all of
-// which the drafter reports as Unavailable.
+// which the drafter reports as Unavailable. An error caused by ctx's deadline (the draft
+// budget) must wrap ErrTimedOut.
 type Inferer interface {
 	Infer(ctx context.Context, tenant, prompt, system string) (InferOutput, error)
 }
@@ -143,16 +162,35 @@ type Drafter struct {
 	inferer     Inferer
 	limits      rules.Limits
 	maxAttempts int
+	// budget bounds the WHOLE draft, every attempt included; minAttempt is the least
+	// budget worth starting an attempt with. Fields only so a test can shrink them.
+	budget     time.Duration
+	minAttempt time.Duration
 }
+
+// minAttemptBudget is the least remaining draft budget worth starting an inference
+// attempt with. Below it, an attempt would almost surely be cut off by the budget after
+// spending provider budget, so the draft reports "timed out" without starting one.
+const minAttemptBudget = 10 * time.Second
+
+// errBudgetSpent is what an attempt that was never started reports: the draft's own
+// budget ran too low. It IS a timeout as far as the author is concerned.
+var errBudgetSpent = fmt.Errorf("%w: the draft budget is spent", ErrTimedOut)
 
 // NewDrafter builds a drafter over an Inferer and the compile limits (the platform-default
 // ceilings, shared with every other compile door so a drafted rule compiles identically
 // everywhere). maxAttempts <= 0 uses the default.
+//
+// The whole draft is bounded by config.AiDraftBudget, inside the request edge the author's
+// browser waits behind: past the edge the author would get a gateway error instead of this
+// draft's own answer. Each attempt runs under what is left of the budget, so its bound is
+// min(remaining budget, the inference client's own call bound).
 func NewDrafter(inferer Inferer, limits rules.Limits, maxAttempts int) *Drafter {
 	if maxAttempts <= 0 {
 		maxAttempts = defaultMaxAttempts
 	}
-	return &Drafter{inferer: inferer, limits: limits, maxAttempts: maxAttempts}
+	return &Drafter{inferer: inferer, limits: limits, maxAttempts: maxAttempts,
+		budget: config.AiDraftBudget, minAttempt: minAttemptBudget}
 }
 
 // Draft produces a compiling rules.Rule draft from the request's NL text, or a diagnostic
@@ -163,11 +201,20 @@ func (d *Drafter) Draft(ctx context.Context, tenant string, req Request) (Result
 	system := buildSystemPrompt(req.Metrics)
 	prompt := buildInitialPrompt(req.Text)
 
+	ctx, cancel := context.WithTimeout(ctx, d.budget)
+	defer cancel()
+
 	var last InferOutput
 	var lastDiags []Diagnostic
 	rounds := 0 // candidates actually produced (a call that errored produced none).
 	for attempt := 1; attempt <= d.maxAttempts; attempt++ {
-		out, err := d.inferer.Infer(ctx, tenant, prompt, system)
+		var out InferOutput
+		var err error
+		if deadline, _ := ctx.Deadline(); time.Until(deadline) < d.minAttempt {
+			err = errBudgetSpent
+		} else {
+			out, err = d.inferer.Infer(ctx, tenant, prompt, system)
+		}
 		if err != nil {
 			// The inference call failed (unconfigured / no active provider / consent denied /
 			// transport). Fail closed and NEVER surface err.Error() — log the detail server-side,
@@ -181,6 +228,8 @@ func (d *Drafter) Draft(ctx context.Context, tenant string, req Request) (Result
 					// compiling rule". The repair turn that would likely have fixed it never ran,
 					// and the author's next move is to wait — not to rewrite their description.
 					lastDiags = append(lastDiags, Diagnostic{Message: repairTruncatedMessage})
+				} else if errors.Is(err, ErrTimedOut) {
+					lastDiags = append(lastDiags, Diagnostic{Message: repairTimedOutMessage})
 				}
 				break
 			}
@@ -188,8 +237,11 @@ func (d *Drafter) Draft(ctx context.Context, tenant string, req Request) (Result
 			// fixes it by waiting, whereas the generic reason points at configuration and
 			// would send them to an operator for nothing.
 			reason := unavailableReason
-			if errors.Is(err, ErrRateLimited) {
+			switch {
+			case errors.Is(err, ErrRateLimited):
 				reason = rateLimitedReason
+			case errors.Is(err, ErrTimedOut):
+				reason = timedOutReason
 			}
 			return Result{
 				Unavailable:       true,

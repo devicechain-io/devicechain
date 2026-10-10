@@ -5,6 +5,7 @@ package config
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/devicechain-io/dc-microservice/config"
 )
@@ -17,8 +18,10 @@ import (
 // stable from the start.
 const (
 	// DefaultInferenceTimeoutMs bounds a single outbound inference call. An unbounded
-	// wait on a hung provider would pin the request goroutine indefinitely.
-	DefaultInferenceTimeoutMs = 60_000
+	// wait on a hung provider would pin the request goroutine indefinitely. Derived from
+	// core so it stays inside the draft budget event-processing gives a whole NL draft:
+	// a default above it would mean this service's "timed out" never reached the author.
+	DefaultInferenceTimeoutMs = int(config.AiInferenceDefaultCallTimeout / time.Millisecond)
 	// DefaultMaxPromptBytes caps an inbound prompt (+ its schema context). An
 	// inference prompt is a bounded authoring request, not a blob; the cap bounds the
 	// cost of a single call and keeps a caller from shipping an oversized payload.
@@ -28,8 +31,11 @@ const (
 	DefaultMaxOutputTokens = 2_048
 
 	// MaxInferenceTimeoutMs caps the configurable per-call timeout at startup so an
-	// operator cannot set an unbounded wait.
-	MaxInferenceTimeoutMs = 120_000
+	// operator cannot set an unbounded wait. It is the shared ceiling event-processing
+	// sizes its own call timeout from, so it is defined in core and derived here: a
+	// ceiling raised on one side only would let the caller cut a configured inference off
+	// before it could time out on its own and say so.
+	MaxInferenceTimeoutMs = int(config.AiInferenceMaxCallTimeout / time.Millisecond)
 
 	// DefaultInferenceRequestsPerMinute / DefaultInferenceBurst are the PLATFORM
 	// per-tenant rate ceiling for inference calls (ADR-056 §6 / ADR-023) — the
@@ -58,7 +64,9 @@ type AiInferenceConfiguration struct {
 
 	// InferenceTimeoutMs bounds a single provider call. Unset (0) defaults to
 	// DefaultInferenceTimeoutMs; a negative value or one above MaxInferenceTimeoutMs
-	// is rejected.
+	// is rejected. A value above config.AiDraftBudget is accepted but cannot be reached
+	// through the console's drafting door, whose whole draft is bounded by that budget:
+	// the slow tail is then reported as timed out by the draft, not by this service.
 	InferenceTimeoutMs int
 
 	// MaxPromptBytes caps an inbound prompt. Unset (0) defaults to

@@ -45,6 +45,12 @@ func runInference(ctx context.Context, res *inference.Resolver, metrics *Metrics
 		Prompt: req.Prompt,
 	})
 	if err != nil {
+		// Classified by which deadline fired, not by the error's shape: only THIS
+		// deadline expiring, with the caller's own context still live, is the provider
+		// running out of time. A caller that went away is not a slow model.
+		if errors.Is(inferCtx.Err(), context.DeadlineExceeded) && ctx.Err() == nil {
+			return nil, fmt.Errorf("%w (after %v): %v", inference.ErrTimedOut, res.InferenceTimeout(), err)
+		}
 		return nil, err
 	}
 	// Counted for BOTH entrypoints: an operator smoke test spends the same real budget
@@ -77,6 +83,11 @@ func tenantSafeError(err error) error {
 		return inference.ErrConsentRequired
 	case errors.Is(err, inference.ErrRateLimited):
 		return inference.ErrRateLimited
+	case errors.Is(err, inference.ErrTimedOut):
+		// Actionable by the caller (retry) and topology-free; the detail — which
+		// provider, how long — stays in the server log.
+		log.Info().Err(err).Msg("inferRuleCandidate inference timed out")
+		return inference.ErrTimedOut
 	}
 	log.Warn().Err(err).Msg("inferRuleCandidate inference failed")
 	return inference.ErrUnavailable
