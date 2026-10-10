@@ -8,10 +8,11 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 
 	"github.com/devicechain-io/dc-microservice/graphql/schemaplane"
+	graphql "github.com/graph-gophers/graphql-go"
+	"github.com/graph-gophers/graphql-go/ast"
 )
 
 // baseline is the schema tree a SEED is measured against, and it exists because
@@ -56,13 +57,17 @@ import (
 // a working filter from one that rejects everything.
 type baseline struct {
 	dir string
-	// raw is the concatenated served schema text per functional area, and
-	// stripped the same text with all whitespace removed. Both are kept because
-	// a type declaration is matched with its spacing (`input X {`) and a field
-	// signature without it (`createX(request:`), and re-deriving either per
-	// lookup would re-scan the tree for every row.
-	raw      map[string]string
-	stripped map[string]string
+	// schemas is each functional area's served tenant-plane schema, PARSED.
+	//
+	// 🔴 PARSED, NOT MATCHED AS TEXT. This used to substring-match the SDL
+	// (`createX(request:` with whitespace removed, `input X {`, a regex over a
+	// signature's parentheses). That is a claim about how the file is FORMATTED, and
+	// the schemas' public descriptions broke it: a """description""" above an argument
+	// sits between `createDashboard(` and `request:`, and a ")" inside one ends a
+	// signature early. Every such row then read as unsupported, and the drill would
+	// have skipped it silently — the fail-open described above. The AST answers the
+	// question actually being asked, with the server's own parser.
+	schemas map[string]*ast.Schema
 }
 
 // loadBaseline reads every tenant-plane schema under dir, which is expected to be
@@ -72,7 +77,7 @@ type baseline struct {
 // for the same reason the coverage test excludes them: they are a separate surface
 // under a separate principal, and nothing in the table is served there.
 func loadBaseline(dir string) (*baseline, error) {
-	b := &baseline{dir: dir, raw: map[string]string{}, stripped: map[string]string{}}
+	b := &baseline{dir: dir, schemas: map[string]*ast.Schema{}}
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return nil, failWith(exitSetup, "read baseline schemas at %s: %w", dir, err)
@@ -99,10 +104,13 @@ func loadBaseline(dir string) (*baseline, error) {
 		case !served:
 			continue
 		}
-		b.raw[e.Name()] = sdl
-		b.stripped[e.Name()] = stripAllSpace(sdl)
+		parsed, err := graphql.ParseSchema(sdl, nil, graphql.UseFieldResolvers())
+		if err != nil {
+			return nil, failWith(exitSetup, "parse the %s baseline schema: %w", e.Name(), err)
+		}
+		b.schemas[e.Name()] = parsed.AST()
 	}
-	if len(b.raw) == 0 {
+	if len(b.schemas) == 0 {
 		// An empty tree would mark every entity unsupported and produce a receipt
 		// with nothing on it — a verify that passes having checked nothing. Refuse
 		// it here, where the path is still in hand to name.
@@ -115,7 +123,7 @@ func loadBaseline(dir string) (*baseline, error) {
 // — the reason is printed beside the skipped row, because "24 of 26" with no
 // explanation is indistinguishable from a tool quietly giving up.
 func (b *baseline) supports(e entity) (bool, string) {
-	stripped, ok := b.stripped[e.Area]
+	s, ok := b.schemas[e.Area]
 	if !ok {
 		return false, "the baseline serves no " + e.Area + " schema"
 	}
@@ -133,7 +141,7 @@ func (b *baseline) supports(e entity) (bool, string) {
 		if !found {
 			return false, "malformed Requires entry " + req + " (want TYPE.FIELD)"
 		}
-		if !declaresField(b.raw[e.Area], typeName, field) {
+		if !declaresField(s, typeName, field) {
 			return false, "the baseline's " + typeName + " has no " + field + " field"
 		}
 	}
@@ -144,43 +152,43 @@ func (b *baseline) supports(e entity) (bool, string) {
 	// A criteria-addressed read has no token argument and its input is the CRITERIA
 	// type, not the create's, so the two checks below match the wrong things for it.
 	if e.ReadInput != "" {
-		if !strings.Contains(stripped, e.Mutation+"("+e.arg()+":") {
+		if !rootFieldTakes(s, "mutation", e.Mutation, e.arg()) {
 			return false, "the baseline does not declare " + e.Mutation + "(" + e.arg() + ":…)"
 		}
-		if !strings.Contains(stripped, e.Read+"(criteria:") {
+		if !rootFieldTakes(s, "query", e.Read, "criteria") {
 			return false, "the baseline does not declare " + e.Read + "(criteria:…)"
 		}
-		if !strings.Contains(b.raw[e.Area], "input "+inputTypeName(e.ReadInput)+" {") {
+		if !declaresInput(s, inputTypeName(e.ReadInput)) {
 			return false, "the baseline does not declare input " + inputTypeName(e.ReadInput)
 		}
-		if input := inputTypeName(e.Input); !strings.Contains(b.raw[e.Area], "input "+input+" {") {
+		if input := inputTypeName(e.Input); !declaresInput(s, input) {
 			return false, "the baseline does not declare input " + input
 		}
 		return true, ""
 	}
 	if e.Publish {
-		if !strings.Contains(stripped, e.Mutation+"(token:") {
+		if !rootFieldTakes(s, "mutation", e.Mutation, "token") {
 			return false, "the baseline does not declare " + e.Mutation + "(token:…)"
 		}
-		if !strings.Contains(stripped, e.Read+"(token:") {
+		if !rootFieldTakes(s, "query", e.Read, "token") {
 			return false, "the baseline does not declare " + e.Read + "(token:…)"
 		}
 		return true, ""
 	}
-	if !strings.Contains(stripped, e.Mutation+"("+e.arg()+":") {
+	if !rootFieldTakes(s, "mutation", e.Mutation, e.arg()) {
 		return false, "the baseline does not declare " + e.Mutation + "(" + e.arg() + ":…)"
 	}
 	// The read is matched the way readDoc SPELLS it, so a query that changed from
 	// a list lookup to a single one counts as unsupported rather than being read
 	// with the wrong document.
-	readArg := "tokens:"
+	readArg := "tokens"
 	if e.Single {
-		readArg = e.readArg() + ":"
+		readArg = e.readArg()
 	}
-	if !strings.Contains(stripped, e.Read+"("+readArg) {
-		return false, "the baseline does not declare " + e.Read + "(" + strings.TrimSuffix(readArg, ":") + ":…)"
+	if !rootFieldTakes(s, "query", e.Read, readArg) {
+		return false, "the baseline does not declare " + e.Read + "(" + readArg + ":…)"
 	}
-	if input := inputTypeName(e.Input); !strings.Contains(b.raw[e.Area], "input "+input+" {") {
+	if input := inputTypeName(e.Input); !declaresInput(s, input) {
 		return false, "the baseline does not declare input " + input
 	}
 	return true, ""
@@ -236,27 +244,23 @@ func (b *baseline) envelopes(e entity) bool {
 
 // returnTypeOf reads a mutation's declared result type, stripped of its
 // decoration: `createCommand(request: X!): CreateCommandResult!` yields
-// "CreateCommandResult". The argument list holds no closing paren of its own,
-// which is what makes the lazy match safe.
+// "CreateCommandResult".
 func (b *baseline) returnTypeOf(area, field string) (string, bool) {
-	m := regexp.MustCompile(`(?m)^[\t ]+` + regexp.QuoteMeta(field) + `\s*\([^)]*\)\s*:\s*(\S+)\s*$`).
-		FindStringSubmatch(b.raw[area])
-	if m == nil {
+	f := rootField(b.schemas[area], "mutation", field)
+	if f == nil {
 		return "", false
 	}
-	return strings.Trim(m[1], "[]!"), true
+	return inputTypeName(f.Type.String()), true
 }
 
-// typeDeclaresField reports whether the named object type declares this field.
-// The body is bounded by the type's own closing brace so a field belonging to
-// the NEXT declaration cannot answer for this one.
+// typeDeclaresField reports whether the named OBJECT type declares this field.
 func (b *baseline) typeDeclaresField(area, typeName, field string) bool {
-	m := regexp.MustCompile(`(?ms)^type ` + regexp.QuoteMeta(typeName) + `\s*\{(.*?)^\}`).
-		FindStringSubmatch(b.raw[area])
-	if m == nil {
+	s := b.schemas[area]
+	if s == nil {
 		return false
 	}
-	return regexp.MustCompile(`(?m)^[\t ]+` + regexp.QuoteMeta(field) + `\s*[:(]`).MatchString(m[1])
+	t, ok := s.Types[typeName].(*ast.ObjectTypeDefinition)
+	return ok && t.Fields.Get(field) != nil
 }
 
 // plan decides what a seed should do with one entity: write it, skip it, or
@@ -288,32 +292,41 @@ func plan(e entity, base *baseline) (write bool, why string, err error) {
 	return false, reason, nil
 }
 
-// declaresField reports whether the schema text declares `field` inside the body of
-// `input <typeName>` or `type <typeName>`.
-//
-// It is a text scan rather than a parse, matching the rest of this file: the served
-// schemas are the only input, they are generated by us, and adding a GraphQL parser
-// to a matcher whose other checks are substring tests would leave two different
-// notions of "declared" in one function. The block is bounded by the first line that
-// closes it at column zero, which is how every type in these schemas ends.
-func declaresField(raw, typeName, field string) bool {
-	for _, kw := range []string{"input ", "type "} {
-		start := strings.Index(raw, kw+typeName+" {")
-		if start < 0 {
-			continue
-		}
-		body := raw[start:]
-		if end := strings.Index(body, "\n}"); end >= 0 {
-			body = body[:end]
-		}
-		// Anchored on the line start and the colon, so `properties` does not match a
-		// field named `propertiesCount`, and the same name mentioned in a comment on
-		// another field's line is not read as a declaration.
-		for _, line := range strings.Split(body, "\n") {
-			if strings.HasPrefix(strings.TrimSpace(line), field+":") {
-				return true
-			}
-		}
+// rootField returns the field a root operation type (op is "query" or "mutation")
+// declares under name, or nil.
+func rootField(s *ast.Schema, op, name string) *ast.FieldDefinition {
+	if s == nil {
+		return nil
+	}
+	root, ok := s.RootOperationTypes[op].(*ast.ObjectTypeDefinition)
+	if !ok {
+		return nil
+	}
+	return root.Fields.Get(name)
+}
+
+// rootFieldTakes reports whether a root field exists and takes an argument named arg
+// — the argument the generated document addresses it by.
+func rootFieldTakes(s *ast.Schema, op, name, arg string) bool {
+	f := rootField(s, op, name)
+	return f != nil && f.Arguments.Get(arg) != nil
+}
+
+// declaresInput reports whether the schema declares an input object of that name.
+func declaresInput(s *ast.Schema, name string) bool {
+	_, ok := s.Types[name].(*ast.InputObject)
+	return ok
+}
+
+// declaresField reports whether the schema declares `field` on the input or object
+// type `typeName`. A field on ANOTHER type, or a name mentioned only in a comment or a
+// description, is not a declaration.
+func declaresField(s *ast.Schema, typeName, field string) bool {
+	switch t := s.Types[typeName].(type) {
+	case *ast.InputObject:
+		return t.Values.Get(field) != nil
+	case *ast.ObjectTypeDefinition:
+		return t.Fields.Get(field) != nil
 	}
 	return false
 }
@@ -323,8 +336,4 @@ func declaresField(raw, typeName, field string) bool {
 // non-list entry names directly, and only the name is declared.
 func inputTypeName(input string) string {
 	return strings.Trim(input, "[]!")
-}
-
-func stripAllSpace(s string) string {
-	return strings.Join(strings.Fields(s), "")
 }

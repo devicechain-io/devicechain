@@ -4,6 +4,7 @@
 package sdldesc
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -208,5 +209,24 @@ func TestLeafName(t *testing.T) {
 		if got := leafName(in); got != want {
 			t.Errorf("leafName(%q) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+// A discovery that finds no served schema must refuse, not report a clean run over
+// nothing — the failure every loop-shaped guard has by default.
+func TestLoadServedRefusesAnEmptyTree(t *testing.T) {
+	empty := t.TempDir()
+	if _, err := LoadServed(empty); err == nil {
+		t.Error("an empty services tree loaded without error")
+	}
+	// Areas present, but none with a graphql directory: still nothing served.
+	if err := os.MkdirAll(filepath.Join(empty, "some-area", "model"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadServed(empty); err == nil {
+		t.Error("a services tree with no graphql directories loaded without error")
+	}
+	if _, err := LoadServed(filepath.Join(empty, "not-there")); err == nil {
+		t.Error("a missing services directory loaded without error")
 	}
 }
