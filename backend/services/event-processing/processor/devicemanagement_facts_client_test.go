@@ -21,7 +21,7 @@ import (
 // size has to be shown to fit, or shown to adapt.
 
 // A worst-case roster page and a worst-case threshold-attribute page — every token at the length
-// the grammar allows, every attribute key at its column's width — fit under the cap at the doors'
+// the grammar allows, every attribute key at the longest the service accepts — fit under the cap at the doors'
 // maximum page sizes. Measured through device-management's real schema, not estimated.
 func TestReconcilePagesFitTheResponseCap(t *testing.T) {
 	t.Parallel()
@@ -40,7 +40,7 @@ func TestReconcilePagesFitTheResponseCap(t *testing.T) {
 		}
 	}
 	for i := 0; i < dmmodel.MaxThresholdAttributePageSize; i++ {
-		key := fmt.Sprintf("%0*d", 256, i) // the attr_key column's width
+		key := fmt.Sprintf("%0*d", dmmodel.MaxAttributeKeyBytes, i) // the longest key the service accepts
 		dm.setAttr(reqs[i%len(reqs)].Token, "SERVER", key, "-123456789.123456789")
 	}
 	src := newSchemaFactSource(t, dm.api, "acme")
