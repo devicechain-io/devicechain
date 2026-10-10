@@ -126,9 +126,12 @@ spec:
         #
         # event-processing's resolved-events durable is excluded: DETECT has its own tuned
         # backlog alert (DetectConsumerBacklogHigh) and a takeover replays that durable by
-        # design, so this rule would page first on every long replay.
+        # design, so this rule would page first on every long replay. The durable is named
+        # for its acknowledgement policy: "..._resolved-events_ackfloor" now, and the ordinary
+        # "..._resolved-events" of the previous release until the first leader retires it, so
+        # both are excluded and a rollback is not paged either.
         - alert: JetStreamDurableFallingBehind
-          expr: max by (stream, durable) ({__name__=~"devicechain_[a-z0-9]+_jetstream_consumer_pending_messages", durable!~".+_event-processing_resolved-events", namespace="{{ $ns }}"}) > 10000
+          expr: max by (stream, durable) ({__name__=~"devicechain_[a-z0-9]+_jetstream_consumer_pending_messages", durable!~".+_event-processing_resolved-events(_ackfloor)?", namespace="{{ $ns }}"}) > 10000
           for: 15m
           labels:
             severity: warning

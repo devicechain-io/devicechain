@@ -186,6 +186,7 @@ func TestPoisonInsideAGapAndAsTheGappedMessage(t *testing.T) {
 	poison := func(seq uint64, ack *fakeAck) messaging.Message {
 		m := messaging.NewConsumedMessage(testSubject, []byte("not-a-proto"), 0, nil, ack)
 		m.StreamSeq = seq
+		registerPending(t, ack, seq)
 		return m
 	}
 	// The stream: 1 hot, 2 hot, 3 poison, 4 hot, 5 hot, 6 poison, 7 hot.
@@ -273,10 +274,10 @@ func TestAbsentSequencesBeforeAPartWayFailureAreCountedOnce(t *testing.T) {
 func TestTheLiveDurableIsFilteredToTheWholeStream(t *testing.T) {
 	t.Parallel()
 	b := startDetectBroker(t)
-	b.detectManager(t)
+	b.detectManager(t, newTestStore(t))
 	js, err := b.nc.JetStream()
 	require.NoError(t, err)
-	durable := messaging.DurableName(b.instance, "event-processing", streams.ResolvedEvents)
+	durable := b.resolvedDurable()
 	var info *nats.ConsumerInfo
 	require.Eventually(t, func() bool {
 		ci, err := js.ConsumerInfo(messaging.StreamName(b.instance, streams.ResolvedEvents), durable)

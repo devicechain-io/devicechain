@@ -1547,7 +1547,8 @@ functionalAreas:
     # checkpointEvents: 1000          # ADR-051: max applied events between snapshot
     # checkpointIntervalSeconds: 10   # commits (whichever comes first). The engine
     # acks the resolved-events durable only after the snapshot containing an event's
-    # effect commits (ack-on-checkpoint), so these bound write-amplification vs the
+    # effect commits (ack-on-checkpoint), with one acknowledgement for everything at or
+    # below the committed position, so these bound write-amplification vs the
     # ack/redelivery latency on a crash. checkpointIntervalSeconds is at most 30 — half
     # the broker's acknowledgement window, since a quiet stream is acked only at a
     # checkpoint; a larger value is refused at startup.

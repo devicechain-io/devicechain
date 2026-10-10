@@ -172,15 +172,21 @@ func firstSightInOrder(t *testing.T, seqs []uint64, n uint64) {
 // detectManager is one event-processing process's broker side: a manager with the production
 // resolved-events reader on it (the same NewReader call main.go makes, less the term gate that
 // a lease adds) and the platform's max-delivery recorder, which a manager with readers refuses
-// to start without.
-func (b *detectBroker) detectManager(t *testing.T) (*messaging.NatsManager, messaging.MessageReader) {
+// to start without. The reader is an ack-floor one created at store's committed sequence, as
+// main.go builds it (ResolvedEventsReaderOptions).
+func (b *detectBroker) detectManager(t *testing.T, store *model.SnapshotStore) (*messaging.NatsManager, messaging.MessageReader) {
 	t.Helper()
-	nmgr, reader, _ := b.detectManagerWithMetrics(t)
+	nmgr, reader, _ := b.detectManagerWithMetrics(t, store)
 	return nmgr, reader
 }
 
+// resolvedDurable is the name of the DETECT tap's durable on the resolved-events stream.
+func (b *detectBroker) resolvedDurable() string {
+	return messaging.AckFloorDurableName(b.instance, "event-processing", streams.ResolvedEvents)
+}
+
 // detectManagerWithMetrics is detectManager that also returns the registry its /metrics serves.
-func (b *detectBroker) detectManagerWithMetrics(t *testing.T) (*messaging.NatsManager, messaging.MessageReader, *prometheus.Registry) {
+func (b *detectBroker) detectManagerWithMetrics(t *testing.T, store *model.SnapshotStore) (*messaging.NatsManager, messaging.MessageReader, *prometheus.Registry) {
 	t.Helper()
 	ms := &core.Microservice{InstanceId: b.instance, FunctionalArea: "event-processing"}
 	reg := prometheus.NewRegistry()
@@ -188,7 +194,7 @@ func (b *detectBroker) detectManagerWithMetrics(t *testing.T) (*messaging.NatsMa
 	ms.InstanceConfiguration.Infrastructure.Nats = b.natsConfig()
 	var reader messaging.MessageReader
 	nmgr := messaging.NewNatsManager(ms, core.NewNoOpLifecycleCallbacks(), func(m *messaging.NatsManager) error {
-		r, err := m.NewReader(streams.ResolvedEvents)
+		r, err := m.NewReader(streams.ResolvedEvents, ResolvedEventsReaderOptions(store, "singleton")...)
 		reader = r
 		return err
 	})
@@ -227,7 +233,7 @@ func (b *detectBroker) watchExhaustions(t *testing.T) *exhaustions {
 	e := &exhaustions{seqs: map[uint64]bool{}}
 	subject := messaging.AdvisorySubject(
 		messaging.StreamName(b.instance, streams.ResolvedEvents),
-		messaging.DurableName(b.instance, "event-processing", streams.ResolvedEvents))
+		b.resolvedDurable())
 	sub, err := b.nc.Subscribe(subject, func(m *nats.Msg) {
 		var adv struct {
 			StreamSeq uint64 `json:"stream_seq"`
@@ -318,7 +324,7 @@ func (b *detectBroker) waitForAck(t *testing.T, seq uint64) {
 	js, err := b.nc.JetStream()
 	require.NoError(t, err)
 	stream := messaging.StreamName(b.instance, streams.ResolvedEvents)
-	durable := messaging.DurableName(b.instance, "event-processing", streams.ResolvedEvents)
+	durable := b.resolvedDurable()
 	deadline := time.Now().Add(10 * time.Second)
 	for {
 		ci, err := js.ConsumerInfo(stream, durable)
@@ -378,9 +384,9 @@ func TestAnExhaustedEventIsCheckpointedWhenTheStoreReturns(t *testing.T) {
 		"the declaration this file proves is gone; the recorder would dead-letter every event of a checkpoint outage")
 	b := startDetectBroker(t)
 	exhausted := b.watchExhaustions(t)
-	nmgr, reader, reg := b.detectManagerWithMetrics(t)
-	require.Zero(t, replayCoveredCount(t, reg), "the replay-covered series must exist at zero before the first one")
 	store, outage := outageStore(t)
+	nmgr, reader, reg := b.detectManagerWithMetrics(t, store)
+	require.Zero(t, replayCoveredCount(t, reg), "the replay-covered series must exist at zero before the first one")
 	seen := &handedOut{MessageReader: reader}
 	rp := liveDetect(t, seen, nmgr, store)
 	t.Cleanup(func() { _ = rp.ExecuteStop(context.Background()) })
@@ -415,8 +421,8 @@ func TestAnExhaustedEventIsReplayedAfterACrash(t *testing.T) {
 	t.Parallel()
 	b := startDetectBroker(t)
 	exhausted := b.watchExhaustions(t)
-	nmgr1, reader1 := b.detectManager(t)
 	store, outage := outageStore(t)
+	nmgr1, reader1 := b.detectManager(t, store)
 	rp1 := liveDetect(t, reader1, nmgr1, store)
 
 	b.publish(t, testBase.Add(time.Second))
@@ -443,12 +449,12 @@ func TestAnExhaustedEventIsReplayedAfterACrash(t *testing.T) {
 	js, err := b.nc.JetStream()
 	require.NoError(t, err)
 	ci, err := js.ConsumerInfo(messaging.StreamName(b.instance, streams.ResolvedEvents),
-		messaging.DurableName(b.instance, "event-processing", streams.ResolvedEvents))
+		b.resolvedDurable())
 	require.NoError(t, err)
 	require.Zero(t, ci.NumPending, "the durable still had undelivered messages; the crash case is vacuous")
 
 	// The successor process: a new connection, the same durable, restore + replay.
-	nmgr2, reader2 := b.detectManager(t)
+	nmgr2, reader2 := b.detectManager(t, store)
 	seen := &handedOut{MessageReader: reader2}
 	rp2 := liveDetect(t, seen, nmgr2, store)
 	t.Cleanup(func() { _ = rp2.ExecuteStop(context.Background()) })
@@ -467,8 +473,8 @@ func TestABlockedLoopSpendsNoDeliveries(t *testing.T) {
 	t.Parallel()
 	b := startDetectBroker(t)
 	exhausted := b.watchExhaustions(t)
-	nmgr, reader := b.detectManager(t)
 	store, outage := outageStore(t)
+	nmgr, reader := b.detectManager(t, store)
 	seen := &handedOut{MessageReader: reader}
 	release := make(chan struct{})
 	var releaseOnce sync.Once

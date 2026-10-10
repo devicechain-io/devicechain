@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"sync"
 	"testing"
 	"time"
 
@@ -84,6 +85,15 @@ func (r *fakeReader) Backlog(context.Context) (uint64, uint64, error) {
 // checkpoint actually acknowledged (a plain struct-literal Message's Ack is a no-op).
 type fakeAck struct {
 	acks int
+	// floorAcks counts AckFloor calls; staleBind makes Current report false (a message delivered
+	// before the durable was recreated).
+	floorAcks  int
+	floorAcked bool
+	staleBind  bool
+	// seq and book are set by msgAt: the sequence this message was built with and the test's
+	// pending set, which AckFloor acks through.
+	seq  uint64
+	book *ackBook
 	// acked, when non-nil, receives once per Ack so a test that drives a consumer with no other
 	// sync point (the roster/entity-deleted consumers hand nothing to the loop) can wait for the
 	// ack BEFORE cancelling — cancelling first would fail the persist against a cancelled context.
@@ -98,6 +108,71 @@ func (a *fakeAck) Ack() error {
 	default:
 	}
 	return nil
+}
+
+// AckFloor and Current make fakeAck a messaging.FloorAcknowledger. The resolved-events durable
+// acknowledges at a FLOOR: a checkpoint sends ONE ack, for the highest sequence it made durable,
+// and the broker deletes the pending entry of every message at or below it. The fake models the
+// broker's side of that. Messages built by msgAt register in their test's ackBook, and an
+// AckFloor acks every registered message at or below its own sequence, once each (acks), so the
+// assertions that a message was or was not acked keep meaning what they say. floorAcks counts
+// AckFloor calls: how many acks the checkpoint SENT, which is the point of the floor.
+func (a *fakeAck) AckFloor() error {
+	a.floorAcks++
+	if a.book == nil {
+		a.markAcked()
+		return nil
+	}
+	a.book.ackThrough(a.seq)
+	return nil
+}
+
+// markAcked counts the ack of this message once, the way the broker deletes a pending entry once.
+func (a *fakeAck) markAcked() {
+	if a.floorAcked {
+		return
+	}
+	a.floorAcked = true
+	a.acks++
+	select {
+	case a.acked <- struct{}{}:
+	default:
+	}
+}
+
+// Current reports the message as delivered by the reader's current bind unless staleBind is set.
+func (a *fakeAck) Current() bool { return !a.staleBind }
+
+// ackBook is the set of messages one test has handed the loop through msgAt: the broker's
+// pending set, as far as an AckAll ack is concerned.
+type ackBook struct {
+	mu    sync.Mutex
+	peers []*fakeAck
+}
+
+func (b *ackBook) add(a *fakeAck) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.peers = append(b.peers, a)
+}
+
+// ackThrough acks every registered message at or below seq.
+func (b *ackBook) ackThrough(seq uint64) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	for _, p := range b.peers {
+		if p.seq <= seq {
+			p.markAcked()
+		}
+	}
+}
+
+var ackBooks sync.Map // *testing.T -> *ackBook
+
+func bookFor(t *testing.T) *ackBook {
+	v, _ := ackBooks.LoadOrStore(t, &ackBook{})
+	t.Cleanup(func() { ackBooks.Delete(t) })
+	return v.(*ackBook)
 }
 
 // fakeReplayOpener yields a preset, ordered set of messages as a bounded replay from
@@ -222,6 +297,7 @@ func msgAt(t *testing.T, seq uint64, ack *fakeAck) messaging.Message {
 	t.Helper()
 	m := messaging.NewConsumedMessage(testSubject, resolvedBytes(t, testBase.Add(time.Duration(seq)*time.Second)), 0, nil, ack)
 	m.StreamSeq = seq
+	registerPending(t, ack, seq)
 	return m
 }
 
@@ -349,11 +425,13 @@ func TestPoisonAndUntenantedDroppedAndAcked(t *testing.T) {
 	poison := &fakeAck{}
 	pm := messaging.NewConsumedMessage(testSubject, []byte("not-a-proto"), 0, nil, poison)
 	pm.StreamSeq = 1
+	registerPending(t, poison, 1)
 	rp.handle(pm)
 
 	untenanted := &fakeAck{}
 	um := messaging.NewConsumedMessage("no-tenant-here", resolvedBytes(t, testBase), 0, nil, untenanted)
 	um.StreamSeq = 2
+	registerPending(t, untenanted, 2)
 	rp.handle(um)
 
 	// Their sequences are recorded as handled (Engine.Skip): the loop is dirty and the
@@ -659,4 +737,14 @@ func TestALostTermDoesNotClearTheCheckpointItStillMatches(t *testing.T) {
 	if _, ok, _ := store.Load(ctx, "singleton"); ok {
 		t.Fatal("the term holder's reset did not clear the stale row")
 	}
+}
+
+// registerPending records ack as the pending delivery of stream sequence seq in t's ackBook, so
+// an AckFloor at or above seq acks it. Every helper that builds a resolved-event message for a
+// fakeAck calls it; a message built some other way is acked only by its own AckFloor.
+func registerPending(t *testing.T, ack *fakeAck, seq uint64) {
+	t.Helper()
+	ack.seq = seq
+	ack.book = bookFor(t)
+	ack.book.add(ack)
 }

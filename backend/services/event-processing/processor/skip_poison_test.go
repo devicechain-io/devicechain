@@ -15,16 +15,18 @@ import (
 )
 
 // garbageAt builds an unparseable payload on a tenanted subject at stream sequence seq.
-func garbageAt(seq uint64, ack *fakeAck) messaging.Message {
+func garbageAt(t *testing.T, seq uint64, ack *fakeAck) messaging.Message {
 	m := messaging.NewConsumedMessage(testSubject, []byte("not-a-proto"), 0, nil, ack)
 	m.StreamSeq = seq
+	registerPending(t, ack, seq)
 	return m
 }
 
 // untenantedAt builds a well-formed payload on a subject that carries no tenant.
-func untenantedAt(seq uint64, ack *fakeAck, payload []byte) messaging.Message {
+func untenantedAt(t *testing.T, seq uint64, ack *fakeAck, payload []byte) messaging.Message {
 	m := messaging.NewConsumedMessage("no-tenant-here", payload, 0, nil, ack)
 	m.StreamSeq = seq
+	registerPending(t, ack, seq)
 	return m
 }
 
@@ -52,12 +54,12 @@ func TestPoisonMidBatchAdvancesLastSeqInOrder(t *testing.T) {
 	if got := rp.engine.LastSeq(); got != 1 {
 		t.Fatalf("after valid 1: lastSeq = %d", got)
 	}
-	rp.handle(garbageAt(2, acks[1]))
+	rp.handle(garbageAt(t, 2, acks[1]))
 	if got := rp.engine.LastSeq(); got != 2 {
 		t.Fatalf("poison 2 must advance lastSeq to 2, got %d", got)
 	}
 	wmAfterValid := rp.engine.Watermark()
-	rp.handle(untenantedAt(3, acks[2], resolvedBytes(t, testBase)))
+	rp.handle(untenantedAt(t, 3, acks[2], resolvedBytes(t, testBase)))
 	if got := rp.engine.LastSeq(); got != 3 {
 		t.Fatalf("untenanted 3 must advance lastSeq to 3, got %d", got)
 	}
@@ -99,7 +101,7 @@ func TestPoisonAtTailEndsLastSeqAtPoison(t *testing.T) {
 	rp.handle(msgAt(t, 1, &fakeAck{}))
 	rp.handle(msgAt(t, 2, &fakeAck{}))
 	tail := &fakeAck{}
-	rp.handle(garbageAt(3, tail))
+	rp.handle(garbageAt(t, 3, tail))
 	if got := rp.engine.LastSeq(); got != 3 {
 		t.Fatalf("tail poison: lastSeq = %d, want 3", got)
 	}
@@ -119,7 +121,7 @@ func TestPoisonAtTailEndsLastSeqAtPoison(t *testing.T) {
 	if err := rp2.restore(ctx); err != nil {
 		t.Fatalf("restore: %v", err)
 	}
-	rp2.handle(garbageAt(7, &fakeAck{}))
+	rp2.handle(garbageAt(t, 7, &fakeAck{}))
 	if !rp2.dirty {
 		t.Fatal("poison must mark the loop dirty so the advanced LastSeq is snapshotted")
 	}
@@ -142,7 +144,7 @@ func TestValidLowerSeqAfterSkippedPoisonIsDropped(t *testing.T) {
 		t.Fatalf("restore: %v", err)
 	}
 	rp.Replay = &fakeReplayOpener{} // sequences 1..4 were purged
-	rp.handle(garbageAt(5, &fakeAck{}))
+	rp.handle(garbageAt(t, 5, &fakeAck{}))
 	rp.checkpoint(ctx)
 	before := snapshotBytes(t, rp)
 
@@ -188,7 +190,7 @@ func TestDuplicateIsDroppedBeforeDecode(t *testing.T) {
 	if rp.applyResolved(msgAt(t, 2, &fakeAck{})) {
 		t.Fatal("duplicate must not report an advance")
 	}
-	if rp.applyResolved(garbageAt(1, &fakeAck{})) {
+	if rp.applyResolved(garbageAt(t, 1, &fakeAck{})) {
 		t.Fatal("poison duplicate must not report an advance")
 	}
 	if rp.engine.LastSeq() != 2 || rp.dirty {
@@ -199,7 +201,7 @@ func TestDuplicateIsDroppedBeforeDecode(t *testing.T) {
 	}
 
 	// Control: a message above LastSeq does reach the decode.
-	if !rp.applyResolved(garbageAt(3, &fakeAck{})) {
+	if !rp.applyResolved(garbageAt(t, 3, &fakeAck{})) {
 		t.Fatal("poison above LastSeq must be skipped (advance)")
 	}
 	if decodes != 1 {
@@ -213,7 +215,7 @@ func TestSeqZeroIsNeverSkipped(t *testing.T) {
 	if err := rp.restore(context.Background()); err != nil {
 		t.Fatalf("restore: %v", err)
 	}
-	if rp.applyResolved(garbageAt(0, &fakeAck{})) || rp.engine.LastSeq() != 0 || rp.dirty {
+	if rp.applyResolved(garbageAt(t, 0, &fakeAck{})) || rp.engine.LastSeq() != 0 || rp.dirty {
 		t.Fatal("seq 0 must neither advance the engine nor dirty the loop")
 	}
 }
@@ -226,9 +228,9 @@ func TestRestoreAfterSkipResumesAfterSkippedSeq(t *testing.T) {
 	stream := func() []messaging.Message {
 		return []messaging.Message{
 			msgAt(t, 1, &fakeAck{}),
-			garbageAt(2, &fakeAck{}),
+			garbageAt(t, 2, &fakeAck{}),
 			msgAt(t, 3, &fakeAck{}),
-			garbageAt(4, &fakeAck{}),
+			garbageAt(t, 4, &fakeAck{}),
 			msgAt(t, 5, &fakeAck{}),
 		}
 	}
@@ -298,12 +300,12 @@ func TestStreamEndingInPoisonIsDeterministicAcrossLiveReplayAndRestore(t *testin
 	stream := func() []messaging.Message {
 		return []messaging.Message{
 			msgAt(t, 1, &fakeAck{}),
-			garbageAt(2, &fakeAck{}),
+			garbageAt(t, 2, &fakeAck{}),
 			msgAt(t, 3, &fakeAck{}),
-			untenantedAt(4, &fakeAck{}, resolvedBytes(t, testBase)),
+			untenantedAt(t, 4, &fakeAck{}, resolvedBytes(t, testBase)),
 			msgAt(t, 5, &fakeAck{}),
-			garbageAt(6, &fakeAck{}),
-			garbageAt(7, &fakeAck{}),
+			garbageAt(t, 6, &fakeAck{}),
+			garbageAt(t, 7, &fakeAck{}),
 		}
 	}
 	const last = 7

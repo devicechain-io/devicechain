@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -27,8 +28,10 @@ type floorFixture struct {
 	writer  MessageWriter
 	ctx     context.Context
 	stream  string
-	durable string
-	n       int
+	durable string // the ack-floor reader's durable (AckFloorDurableName)
+	// explicit is the ordinary reader's durable (DurableName), which an ack-floor reader replaces.
+	explicit string
+	n        int
 }
 
 func newFloorFixture(t *testing.T, ackWait time.Duration) *floorFixture {
@@ -37,7 +40,8 @@ func newFloorFixture(t *testing.T, ackWait time.Duration) *floorFixture {
 	area := uniqueArea("ackfloor")
 	ctx := core.WithTenant(context.Background(), "acme")
 	f := &floorFixture{t: t, ctx: ctx,
-		stream: StreamName("test", floorSuffix), durable: DurableName("test", area, floorSuffix)}
+		stream: StreamName("test", floorSuffix), durable: AckFloorDurableName("test", area, floorSuffix),
+		explicit: DurableName("test", area, floorSuffix)}
 	f.nmgr = NewNatsManager(testMicroservice(t, srv, area), core.NewNoOpLifecycleCallbacks(),
 		func(n *NatsManager) error {
 			w, err := n.NewWriter(floorSuffix)
@@ -68,9 +72,11 @@ func (f *floorFixture) publish(n int) {
 	}
 }
 
-func (f *floorFixture) info() *nats.ConsumerInfo {
+func (f *floorFixture) info() *nats.ConsumerInfo { return f.infoNamed(f.durable) }
+
+func (f *floorFixture) infoNamed(durable string) *nats.ConsumerInfo {
 	f.t.Helper()
-	info, err := f.nmgr.js.ConsumerInfo(f.stream, f.durable)
+	info, err := f.nmgr.js.ConsumerInfo(f.stream, durable)
 	if err != nil {
 		f.t.Fatalf("consumer info: %v", err)
 	}
@@ -117,12 +123,18 @@ func (f *floorFixture) seqs(msgs []Message) []uint64 {
 	return out
 }
 
-// waitFor polls the durable until cond holds.
+// waitFor polls the ack-floor durable until cond holds.
 func (f *floorFixture) waitFor(what string, cond func(*nats.ConsumerInfo) bool) *nats.ConsumerInfo {
+	f.t.Helper()
+	return f.waitForNamed(f.durable, what, cond)
+}
+
+// waitForNamed polls the named durable until cond holds.
+func (f *floorFixture) waitForNamed(durable, what string, cond func(*nats.ConsumerInfo) bool) *nats.ConsumerInfo {
 	f.t.Helper()
 	deadline := time.Now().Add(10 * time.Second)
 	for {
-		info := f.info()
+		info := f.infoNamed(durable)
 		if cond(info) {
 			return info
 		}
@@ -259,12 +271,16 @@ func TestAckFloorReconcilesAMovedFilterKeepingTheStartFields(t *testing.T) {
 	}
 }
 
-// An existing explicit-ack durable is a loud refusal, never a fallback.
+// An existing explicit-ack durable under the ack-floor reader's own name is a loud refusal,
+// never a fallback. NewReader never creates one (the two policies have different names), so it
+// takes an operator's hand, or another build's, to make it.
 func TestAckFloorRefusesAnExistingExplicitDurable(t *testing.T) {
 	f := newFloorFixture(t, 0)
 	f.publish(2)
-	if _, err := f.reader(); err != nil {
-		t.Fatalf("plain reader: %v", err)
+	if _, err := f.nmgr.js.AddConsumer(f.stream, &nats.ConsumerConfig{
+		Durable: f.durable, AckPolicy: nats.AckExplicitPolicy, FilterSubject: StreamSubject("test", floorSuffix),
+	}); err != nil {
+		t.Fatalf("seeding the explicit durable: %v", err)
 	}
 	var called atomic.Int32
 	_, err := f.reader(ReaderWithAckFloor(func(context.Context) (uint64, error) { called.Add(1); return 1, nil }))
@@ -276,6 +292,127 @@ func TestAckFloorRefusesAnExistingExplicitDurable(t *testing.T) {
 	}
 	if got := f.info().Config.AckPolicy; got != nats.AckExplicitPolicy {
 		t.Fatalf("the existing durable's policy is now %v; it must be left alone", got)
+	}
+}
+
+// The two policies never share a name, and the ack-floor name is derived, not chosen.
+func TestAckFloorDurableHasItsOwnName(t *testing.T) {
+	f := newFloorFixture(t, 0)
+	f.publish(1)
+	if f.durable == f.explicit {
+		t.Fatal("the ack-floor durable name equals the ordinary one")
+	}
+	if _, err := f.reader(fixedStart(1)); err != nil {
+		t.Fatalf("reader: %v", err)
+	}
+	if got := f.info().Config.AckPolicy; got != nats.AckAllPolicy {
+		t.Fatalf("durable %s is %v, want AckAll", f.durable, got)
+	}
+	if _, err := f.nmgr.js.ConsumerInfo(f.stream, f.explicit); !errors.Is(err, nats.ErrConsumerNotFound) {
+		t.Fatalf("an ack-floor reader created the ordinary durable too: %v", err)
+	}
+}
+
+// The explicit-ack durable an ack-floor reader replaced is deleted when a term starts, never
+// when the reader is built, and a second term finds nothing to delete.
+func TestAckFloorReaderRetiresTheExplicitDurableAtBindTerm(t *testing.T) {
+	f := newFloorFixture(t, 0)
+	f.publish(2)
+	if _, err := f.nmgr.js.AddConsumer(f.stream, &nats.ConsumerConfig{
+		Durable: f.explicit, AckPolicy: nats.AckExplicitPolicy, FilterSubject: StreamSubject("test", floorSuffix),
+	}); err != nil {
+		t.Fatalf("seeding the previous build's durable: %v", err)
+	}
+	r, err := f.reader(fixedStart(1))
+	if err != nil {
+		t.Fatalf("reader: %v", err)
+	}
+	_ = f.infoNamed(f.explicit) // still there: building the reader does not delete it
+	if err := r.BindTerm(); err != nil {
+		t.Fatalf("BindTerm: %v", err)
+	}
+	if _, err := f.nmgr.js.ConsumerInfo(f.stream, f.explicit); !errors.Is(err, nats.ErrConsumerNotFound) {
+		t.Fatalf("the explicit durable survived BindTerm: %v", err)
+	}
+	if f.info().Config.AckPolicy != nats.AckAllPolicy {
+		t.Fatal("the ack-floor durable went with it")
+	}
+	if err := r.BindTerm(); err != nil {
+		t.Fatalf("a second BindTerm with nothing to retire: %v", err)
+	}
+}
+
+// An ordinary reader is not an ack-floor reader and retires nothing: its durable is the ordinary one.
+func TestOrdinaryReaderRetiresNothingAtBindTerm(t *testing.T) {
+	f := newFloorFixture(t, 0)
+	r, err := f.reader()
+	if err != nil {
+		t.Fatalf("reader: %v", err)
+	}
+	if err := r.BindTerm(); err != nil {
+		t.Fatalf("BindTerm: %v", err)
+	}
+	_ = f.infoNamed(f.explicit)
+}
+
+// The stream's writers measure a gating reader's backlog on its ORDINARY durable name, which an
+// ack-floor durable does not have, so the combination is refused instead of leaving a gate that
+// reads a durable that does not exist.
+func TestAckFloorIsRefusedForAGatingReader(t *testing.T) {
+	srv := startEmbeddedServer(t)
+	ms := testMicroservice(t, srv, "event-management")
+	// The refusal is the NewReader call's own error, captured where it is made: whatever
+	// Initialize and Start go on to report is a different question (a manager with readers
+	// also needs a max-delivery recorder).
+	var built error
+	nmgr := NewNatsManager(ms, core.NewNoOpLifecycleCallbacks(), func(n *NatsManager) error {
+		_, built = n.NewReader(streams.ResolvedEvents, fixedStart(1))
+		return built
+	})
+	ctx := context.Background()
+	err := nmgr.Initialize(ctx)
+	if err == nil {
+		err = nmgr.Start(ctx)
+	}
+	defer func() { _ = nmgr.Stop(ctx) }()
+	if built == nil {
+		t.Fatalf("an ack-floor reader on the stream whose writers it gates was accepted (Initialize/Start: %v)", err)
+	}
+	if !strings.Contains(built.Error(), "ReaderWithAckFloor cannot be used by") {
+		t.Fatalf("NewReader failed for another reason than the gating refusal: %v", built)
+	}
+}
+
+// AckThrough works on any FloorAcknowledger, so a consumer's unit tests can stand a fake in for the broker and
+// still go through it: the highest sequence at or below the ceiling is the one acked, a stale
+// one is skipped, and a message whose Acknowledger is not a floor one is refused.
+type fakeFloorAck struct {
+	floorAcks int
+	stale     bool
+}
+
+func (a *fakeFloorAck) Ack() error      { return ErrAckFloorReader }
+func (a *fakeFloorAck) AckFloor() error { a.floorAcks++; return nil }
+func (a *fakeFloorAck) Current() bool   { return !a.stale }
+
+func TestAckThroughAcceptsAnyFloorAcknowledger(t *testing.T) {
+	a1, a2, a3, stale := &fakeFloorAck{}, &fakeFloorAck{}, &fakeFloorAck{}, &fakeFloorAck{stale: true}
+	msgs := []Message{
+		NewConsumedMessage("s", nil, 1, nil, a2),
+		NewConsumedMessage("s", nil, 1, nil, a3),
+		NewConsumedMessage("s", nil, 1, nil, a1),
+		NewConsumedMessage("s", nil, 1, nil, stale),
+	}
+	for i, seq := range []uint64{2, 9, 1, 4} {
+		msgs[i].StreamSeq = seq
+	}
+	res, err := AckThrough(msgs, 5)
+	if err != nil {
+		t.Fatalf("AckThrough: %v", err)
+	}
+	// 9 is above the ceiling, the stale 4 is skipped, and 2 is the highest of what is left.
+	if res.SentSeq != 2 || res.Above != 1 || res.Stale != 1 || a2.floorAcks != 1 || a1.floorAcks+a3.floorAcks+stale.floorAcks != 0 {
+		t.Fatalf("result %+v, acks a1=%d a2=%d a3=%d stale=%d", res, a1.floorAcks, a2.floorAcks, a3.floorAcks, stale.floorAcks)
 	}
 }
 
@@ -402,7 +539,7 @@ func TestOrdinaryReaderStillAcksIndividually(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reader: %v", err)
 	}
-	info := f.info()
+	info := f.infoNamed(f.explicit)
 	if info.Config.AckPolicy != nats.AckExplicitPolicy || info.Config.DeliverPolicy != nats.DeliverAllPolicy {
 		t.Fatalf("ordinary durable is %v / %v, want AckExplicit / DeliverAll",
 			info.Config.AckPolicy, info.Config.DeliverPolicy)
@@ -411,7 +548,7 @@ func TestOrdinaryReaderStillAcksIndividually(t *testing.T) {
 	if err := msgs[2].Ack(); err != nil {
 		t.Fatalf("ack: %v", err)
 	}
-	f.waitFor("one acked", func(i *nats.ConsumerInfo) bool { return i.NumAckPending == 2 })
+	f.waitForNamed(f.explicit, "one acked", func(i *nats.ConsumerInfo) bool { return i.NumAckPending == 2 })
 	if _, err := AckThrough(msgs, 3); !errors.Is(err, ErrNotAckFloorMessage) {
 		t.Fatalf("AckThrough on an ordinary reader's messages: %v, want ErrNotAckFloorMessage", err)
 	}
