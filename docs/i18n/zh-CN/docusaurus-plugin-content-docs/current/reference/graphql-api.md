@@ -584,6 +584,7 @@ token 会拼入基础设施命名空间：租户 ID 成为 NATS subject 中按 `
 | 限制 | 默认值 | 变量 | 拒绝内容 |
 | --- | --- | --- | --- |
 | 请求正文 | 4 MiB | `DC_GRAPHQL_MAX_BODY_BYTES` | 整个 HTTP 正文，包括变量。返回 HTTP 400。 |
+| 执行时间 | 60 秒 | `DC_GRAPHQL_EXEC_TIMEOUT`（整数秒） | 到达期限时仍在运行的查询或变更会被取消，正在进行的数据库语句也一并取消；响应中带有错误。不适用于订阅。客户端还必须在 30 秒内送达请求正文。 |
 | 查询长度 | 100,000 字节 | `DC_GRAPHQL_MAX_QUERY_LENGTH` | 查询字符串本身。 |
 | 嵌套深度 | 15 | `DC_GRAPHQL_MAX_DEPTH` | 超过此深度的嵌套选择。 |
 | 每查询根字段数 | 20 | `DC_GRAPHQL_MAX_QUERY_ROOT_FIELDS` | 顶层字段数超过此值的查询操作。 |

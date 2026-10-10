@@ -186,6 +186,7 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	Microservice.StartInstanceAuthGate(ctx)
 	GraphQLManager = gqlcore.NewGraphQLManager(Microservice, core.NewNoOpLifecycleCallbacks(),
 		parsed, providers, Microservice.Readiness)
+	GraphQLManager.ExecTimeout = graphQLExecTimeout()
 	if err := GraphQLManager.Initialize(ctx); err != nil {
 		return err
 	}
@@ -212,7 +213,23 @@ func registerAdminHandler(providers map[gqlcore.ContextKey]interface{}, metrics 
 		Inference: InferenceResolver,
 		Metrics:   metrics,
 	})
-	Microservice.Mux().Handle("/admin/graphql", gqlcore.NewAdminHttpHandler(adminSchema, providers, Microservice.Readiness))
+	admin := gqlcore.NewAdminHttpHandler(adminSchema, providers, Microservice.Readiness)
+	admin.ExecTimeout = graphQLExecTimeout()
+	Microservice.Mux().Handle("/admin/graphql", admin)
+}
+
+// graphQLExecTimeout is this service's request execution deadline. One request makes at
+// most one provider call (the compile/repair loop that can make several runs in the
+// caller, event-processing, one request per attempt), so the deadline is the configured
+// per-call timeout plus a margin for the rest of the request. The platform default
+// would end a call that is still legitimately waiting on its provider; this is still a
+// bound, just one that sits above the inference ceiling.
+func graphQLExecTimeout() time.Duration {
+	perCallMs := config.MaxInferenceTimeoutMs // the ceiling, when no configuration is loaded
+	if Configuration != nil {
+		perCallMs = Configuration.InferenceTimeoutMs
+	}
+	return time.Duration(perCallMs)*time.Millisecond + 30*time.Second
 }
 
 // afterMicroserviceStarted starts components after the microservice is started.

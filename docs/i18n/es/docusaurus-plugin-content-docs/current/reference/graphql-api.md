@@ -718,6 +718,7 @@ defecto: ninguno puede desactivarse.
 | Límite | Por defecto | Variable | Qué se rechaza |
 | --- | --- | --- | --- |
 | Cuerpo de la solicitud | 4 MiB | `DC_GRAPHQL_MAX_BODY_BYTES` | Todo el cuerpo HTTP, variables incluidas. Se responde con HTTP 400. |
+| Tiempo de ejecución | 60 segundos | `DC_GRAPHQL_EXEC_TIMEOUT` (segundos enteros) | Una consulta o mutación que sigue ejecutándose al llegar al plazo se cancela, junto con la sentencia de base de datos en curso; la respuesta incluye un error. No se aplica a las suscripciones. El cliente también debe entregar el cuerpo de la solicitud en 30 segundos. |
 | Longitud de la consulta | 100.000 bytes | `DC_GRAPHQL_MAX_QUERY_LENGTH` | La cadena de la consulta en sí. |
 | Profundidad de anidamiento | 15 | `DC_GRAPHQL_MAX_DEPTH` | Selecciones anidadas más allá de esta profundidad. |
 | Campos raíz por consulta | 20 | `DC_GRAPHQL_MAX_QUERY_ROOT_FIELDS` | Una operación de consulta que selecciona más campos de primer nivel que este número. |

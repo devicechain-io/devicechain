@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"time"
 
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/friendsofgo/graphiql"
@@ -51,6 +52,11 @@ type GraphQLManager struct {
 	// /readyz probe reports (ADR-022 decision 3). Pass nil only for a deliberately
 	// unauthenticated server (tests); production services pass ms.Readiness.
 	Gate *core.ReadinessGate
+
+	// ExecTimeout raises the execution deadline of this service's /graphql handler
+	// above the platform bound (see HttpHandler.ExecTimeout). Zero keeps the platform
+	// bound.
+	ExecTimeout time.Duration
 
 	// Port is the port ExecuteStart binds. NewGraphQLManager sets GRAPHQL_PORT, which
 	// is what every service serves on and what the chart's container port names.
@@ -150,7 +156,7 @@ func (gql *GraphQLManager) ExecuteInitialize(context.Context) error {
 	}
 
 	mux.Handle("/graphql", graphqlDispatcher(
-		NewHttpHandler(gql.Schema, gql.ContextProviders, gql.Gate),
+		gql.dataPlaneHandler(),
 		ws,
 	))
 
@@ -169,6 +175,13 @@ func (gql *GraphQLManager) ExecuteInitialize(context.Context) error {
 	// the chart addresses by name.
 	gql.Microservice.RegisterProbes(gql.Gate)
 	return nil
+}
+
+// dataPlaneHandler builds the /graphql HTTP handler, carrying the manager's deadline.
+func (gql *GraphQLManager) dataPlaneHandler() *HttpHandler {
+	h := NewHttpHandler(gql.Schema, gql.ContextProviders, gql.Gate)
+	h.ExecTimeout = gql.ExecTimeout
+	return h
 }
 
 // Start component.

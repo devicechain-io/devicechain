@@ -213,7 +213,11 @@ func (r *SchemaResolver) PreviewRule(ctx context.Context, args struct{ Input pre
 	if opener == nil {
 		opener = r.GetNats(ctx)
 	}
-	res, err := preview.Run(ctx, opener, streams.ResolvedEvents, reg,
+	// The replay gets its own time budget, below the request's deadline, so a long replay ends
+	// as a truncated (degraded) result with a response to deliver rather than as a deadline error.
+	runCtx, cancel := context.WithTimeout(ctx, previewBudget(ctx))
+	defer cancel()
+	res, err := preview.Run(runCtx, opener, streams.ResolvedEvents, reg,
 		tenant, active.ActiveVersionToken, preview.TimeRange{Start: start, End: end}, 0, preview.DefaultMaxScan, preview.DefaultMaxRead, r.FenceSets)
 	if err != nil {
 		return nil, err
@@ -405,3 +409,18 @@ func (r *PreviewStatsResolver) EventsScanned() int32 { return r.scanned }
 func (r *PreviewStatsResolver) FiringCount() int32   { return r.fireCnt }
 func (r *PreviewStatsResolver) EvalErrors() int32    { return r.evalErrors }
 func (r *PreviewStatsResolver) WallMs() int32        { return r.wallMs }
+
+// previewTimeBudget is the most time one preview replay is given.
+const previewTimeBudget = 45 * time.Second
+
+// previewBudget is the replay's time budget: previewTimeBudget, or three quarters of what is left
+// of the request's deadline when that is shorter, so the response is still deliverable.
+func previewBudget(ctx context.Context) time.Duration {
+	budget := previewTimeBudget
+	if deadline, ok := ctx.Deadline(); ok {
+		if left := time.Until(deadline) * 3 / 4; left < budget {
+			budget = left
+		}
+	}
+	return budget
+}

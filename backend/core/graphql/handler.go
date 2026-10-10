@@ -7,8 +7,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-microservice/core"
@@ -126,6 +128,12 @@ type HttpHandler struct {
 	// service's readiness probe keeps external traffic away in the first place.
 	Gate *core.ReadinessGate
 
+	// ExecTimeout is the wall-clock bound on executing one request. Zero means the
+	// platform bound (DC_GRAPHQL_EXEC_TIMEOUT, default 60s); it is never unlimited.
+	// A service whose operations legitimately run longer (an outbound model call)
+	// raises it here rather than loosening the bound for every service.
+	ExecTimeout time.Duration
+
 	policy authPolicy
 }
 
@@ -229,12 +237,37 @@ type execRequest struct {
 // that decodes gets HTTP 200 with a JSON GraphQL response, errors included — a GraphQL
 // request error is a 200 with an `errors` array, never an HTTP status.
 func (h *HttpHandler) serveExec(w http.ResponseWriter, r *http.Request) {
+	// A deadline on delivering the body, so a client that trickles it cannot hold the
+	// connection. Cleared once the body is read, so it does not cut the response write.
+	// A ResponseWriter that cannot set one (a test recorder) is served without it.
+	rc := http.NewResponseController(w)
+	_ = rc.SetReadDeadline(time.Now().Add(bodyReadTimeout))
 	var params execRequest
-	if err := json.NewDecoder(r.Body).Decode(&params); err != nil {
+	err := json.NewDecoder(r.Body).Decode(&params)
+	if err == nil {
+		// Read the body to its end under the same deadline. A client that sends a
+		// complete value, declares a longer body and stalls would otherwise be waited
+		// on by the server, with no deadline, when it discards the unread rest. The
+		// read is already capped by the body-size ceiling.
+		_, err = io.Copy(io.Discard, r.Body)
+	}
+	_ = rc.SetReadDeadline(time.Time{})
+	if err != nil {
+		// The body may be unfinished. Closing after the reply keeps the server from
+		// waiting on the rest of it (with the deadline cleared) before answering.
+		w.Header().Set("Connection", "close")
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	response := h.Schema.Exec(r.Context(), params.Query, params.OperationName, params.Variables)
+	// The execution bound: the context ends at the deadline, and pgx cancels the
+	// statement in flight with it.
+	timeout := h.ExecTimeout
+	if timeout <= 0 {
+		timeout = execTimeout()
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), timeout)
+	defer cancel()
+	response := h.Schema.Exec(ctx, params.Query, params.OperationName, params.Variables)
 	body, err := json.Marshal(response)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
