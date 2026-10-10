@@ -224,13 +224,13 @@ func newDispatchReader(nmgr *messaging.NatsManager, cfg *config.OutboundConnecto
 func buildEgressLimiter(cfg *config.OutboundConnectorsConfiguration, infra mscfg.InfrastructureConfiguration,
 	unresolved func(core.CeilingSource)) *core.TenantRateLimiter {
 	def := governance.Limits{
-		MessagesPerSecond: cfg.OutboundCallsPerSecond,
-		Burst:             cfg.OutboundBurst,
+		RatePerSecond: cfg.OutboundCallsPerSecond,
+		Burst:         cfg.OutboundBurst,
 	}
 	counted := core.WithUnresolvedAdmissions(unresolved)
 	if infra.ServiceAuth.Secret == "" || infra.UserManagement.Hostname == "" || infra.UserManagement.Port == 0 {
 		log.Warn().Msg("Service secret or user-management endpoint not configured — per-tenant outbound overrides disabled; metering every tenant at the platform default.")
-		return core.NewTenantRateLimiter(core.StaticCeiling(def.MessagesPerSecond, def.Burst), counted)
+		return core.NewTenantRateLimiter(core.StaticCeiling(def.RatePerSecond, def.Burst), counted)
 	}
 	client := svcclient.New(infra.UserManagement, infra.ServiceAuth.Secret, "outbound-connectors", []string{string(auth.TenantRead)})
 	umURL := fmt.Sprintf("http://%s:%d/graphql", infra.UserManagement.Hostname, infra.UserManagement.Port)

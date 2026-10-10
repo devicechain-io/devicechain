@@ -258,3 +258,11 @@ func validateTopicToken(field, raw string) error {
 	}
 	return nil
 }
+
+// RenamedConfigKeys refuses the old spelling of a renamed key with the new one named
+// (core.ConfigRenamer): the ingest ceiling meters READINGS, and the key now says so. It is refused rather than
+// retired because the setting still exists — stripping it would start the service on
+// the platform default instead of the ceiling the operator chose.
+func (c *SparkplugConfiguration) RenamedConfigKeys() map[string]string {
+	return map[string]string{"ingestRateLimit.messagesPerSecond": "ingestRateLimit.readingsPerSecond"}
+}

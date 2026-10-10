@@ -84,9 +84,8 @@ func register(d Dimension) Dimension {
 // tenant overriding one inherits the platform default for the others.
 var (
 	// Ingest governs inbound device telemetry admission (ADR-023 G.1/G.2), counted in
-	// READINGS — one stored value; see ReadingCeiling. The same number also meters
-	// messages before they are decoded. The field names still say "messages": renaming
-	// them would change the stored schema and the API for no change in behaviour.
+	// READINGS — one stored value; see ReadingCeiling — and the rate field says so. The
+	// same number also meters messages before they are decoded.
 	Ingest = register(Dimension{
 		Name: "ingest", RateField: "ingestReadingsPerSecond", BurstField: "ingestBurst",
 		PerSecondScale: 1,
@@ -211,7 +210,7 @@ func resolveLimits(raw map[string]json.RawMessage, def Limits, dim Dimension) (L
 			// The override is declared in the dimension's own unit; the bucket meters
 			// per second. Converting here (rather than at the enforcing service) is what
 			// keeps an override and its platform default from disagreeing about the unit.
-			limits.MessagesPerSecond = dim.PerSecond(rate)
+			limits.RatePerSecond = dim.PerSecond(rate)
 		} else {
 			floored = append(floored, dim.RateField)
 		}

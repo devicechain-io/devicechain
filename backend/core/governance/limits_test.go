@@ -15,7 +15,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-var platformDefault = Limits{MessagesPerSecond: 1000, Burst: 2000}
+var platformDefault = Limits{RatePerSecond: 1000, Burst: 2000}
 
 // fakeFetcher records call counts and returns a fixed result (or error).
 type fakeFetcher struct {
@@ -41,7 +41,7 @@ func (f *fakeFetcher) callCount() int {
 // The first Resolve serves the platform default (nothing cached) and triggers an
 // out-of-band refresh; once it completes, Resolve serves the fetched override.
 func TestResolve_DefaultThenOverride(t *testing.T) {
-	f := &fakeFetcher{result: Limits{MessagesPerSecond: 5, Burst: 10}}
+	f := &fakeFetcher{result: Limits{RatePerSecond: 5, Burst: 10}}
 	r := NewTenantLimitResolver(f, platformDefault, "test")
 
 	rps, burst := pair(r.Ceiling("acme"))
@@ -78,7 +78,7 @@ func TestResolve_DedupesInflight(t *testing.T) {
 	// A fetcher that blocks until released, so several Resolve calls land while the
 	// first refresh is still running.
 	release := make(chan struct{})
-	f := &blockingFetcher{gate: release, result: Limits{MessagesPerSecond: 5, Burst: 10}}
+	f := &blockingFetcher{gate: release, result: Limits{RatePerSecond: 5, Burst: 10}}
 	r := NewTenantLimitResolver(f, platformDefault, "test")
 
 	for i := 0; i < 20; i++ {
@@ -96,7 +96,7 @@ func TestResolve_DedupesInflight(t *testing.T) {
 // A cached entry older than the TTL is refreshed; a fresh one is served without a
 // fetch.
 func TestResolve_StaleRefresh(t *testing.T) {
-	f := &fakeFetcher{result: Limits{MessagesPerSecond: 5, Burst: 10}}
+	f := &fakeFetcher{result: Limits{RatePerSecond: 5, Burst: 10}}
 	r := NewTenantLimitResolver(f, platformDefault, "test")
 	now := time.Unix(0, 0)
 	r.now = func() time.Time { return now }
@@ -116,7 +116,7 @@ func TestResolve_StaleRefresh(t *testing.T) {
 	// Advance past the TTL and change the upstream value; the stale entry refreshes.
 	now = now.Add(r.ttl + time.Second)
 	f.mu.Lock()
-	f.result = Limits{MessagesPerSecond: 7, Burst: 14}
+	f.result = Limits{RatePerSecond: 7, Burst: 14}
 	f.mu.Unlock()
 	pair(r.Ceiling("acme")) // serves stale (5) and triggers refresh
 	assert.Eventually(t, func() bool {
@@ -130,7 +130,7 @@ func TestResolve_StaleRefresh(t *testing.T) {
 // lookups against user-management.
 func TestResolve_CapsConcurrentRefreshes(t *testing.T) {
 	release := make(chan struct{})
-	f := &blockingFetcher{gate: release, result: Limits{MessagesPerSecond: 5, Burst: 10}}
+	f := &blockingFetcher{gate: release, result: Limits{RatePerSecond: 5, Burst: 10}}
 	r := NewTenantLimitResolver(f, platformDefault, "test")
 
 	// Resolve many distinct tenants while every fetch is blocked; each is uncached
@@ -196,11 +196,11 @@ func TestNewTenantLimitResolver_FloorsNonPositiveDefault(t *testing.T) {
 		want Limits
 	}{
 		{"both unset", Limits{}, defaultLimits},
-		{"rate unset", Limits{Burst: 2000}, Limits{MessagesPerSecond: defaultLimits.MessagesPerSecond, Burst: 2000}},
-		{"burst unset", Limits{MessagesPerSecond: 1000}, Limits{MessagesPerSecond: 1000, Burst: defaultLimits.Burst}},
-		{"negative", Limits{MessagesPerSecond: -1, Burst: -1}, defaultLimits},
-		{"NaN rate", Limits{MessagesPerSecond: math.NaN(), Burst: 2000}, Limits{MessagesPerSecond: defaultLimits.MessagesPerSecond, Burst: 2000}},
-		{"infinite rate", Limits{MessagesPerSecond: math.Inf(1), Burst: 2000}, Limits{MessagesPerSecond: defaultLimits.MessagesPerSecond, Burst: 2000}},
+		{"rate unset", Limits{Burst: 2000}, Limits{RatePerSecond: defaultLimits.RatePerSecond, Burst: 2000}},
+		{"burst unset", Limits{RatePerSecond: 1000}, Limits{RatePerSecond: 1000, Burst: defaultLimits.Burst}},
+		{"negative", Limits{RatePerSecond: -1, Burst: -1}, defaultLimits},
+		{"NaN rate", Limits{RatePerSecond: math.NaN(), Burst: 2000}, Limits{RatePerSecond: defaultLimits.RatePerSecond, Burst: 2000}},
+		{"infinite rate", Limits{RatePerSecond: math.Inf(1), Burst: 2000}, Limits{RatePerSecond: defaultLimits.RatePerSecond, Burst: 2000}},
 		{"usable default is untouched", platformDefault, platformDefault},
 	}
 	for _, tc := range cases {
@@ -210,7 +210,7 @@ func TestNewTenantLimitResolver_FloorsNonPositiveDefault(t *testing.T) {
 			f := &blockingFetcher{gate: make(chan struct{})}
 			r := NewTenantLimitResolver(f, tc.def, "test")
 			rps, burst := pair(r.Ceiling("acme"))
-			assert.Equal(t, tc.want.MessagesPerSecond, rps)
+			assert.Equal(t, tc.want.RatePerSecond, rps)
 			assert.Equal(t, tc.want.Burst, burst)
 			assert.Positive(t, rps, "a served ceiling must admit something")
 			assert.Positive(t, burst, "a served ceiling must admit something")

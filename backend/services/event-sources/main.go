@@ -333,8 +333,8 @@ func shedAdjusted(base core.TenantCeilingResolver, shedPriority func(string) (in
 			return c
 		}
 		class := governance.ShedClassOf(prio)
-		l := governance.Limits{MessagesPerSecond: c.RatePerSecond, Burst: c.Burst}.Shed(governance.ShedFactor(class, level))
-		return core.TenantCeiling{RatePerSecond: l.MessagesPerSecond, Burst: l.Burst, Source: c.Source}
+		l := governance.Limits{RatePerSecond: c.RatePerSecond, Burst: c.Burst}.Shed(governance.ShedFactor(class, level))
+		return core.TenantCeiling{RatePerSecond: l.RatePerSecond, Burst: l.Burst, Source: c.Source}
 	}
 }
 
@@ -356,13 +356,13 @@ func buildRateLimiter() {
 	unresolved := core.WithUnresolvedAdmissions(governance.NewUnresolvedAdmissions(Microservice, governance.Ingest))
 	overflow := core.WithOverflowAdmissions(governance.NewOverflowAdmissions(Microservice))
 	def := governance.Limits{
-		MessagesPerSecond: Configuration.IngestRateLimit.ReadingsPerSecond,
-		Burst:             Configuration.IngestRateLimit.Burst,
+		RatePerSecond: Configuration.IngestRateLimit.ReadingsPerSecond,
+		Burst:         Configuration.IngestRateLimit.Burst,
 	}
 	infra := Microservice.InstanceConfiguration.Infrastructure
 	if infra.ServiceAuth.Secret == "" || infra.UserManagement.Hostname == "" || infra.UserManagement.Port == 0 {
 		log.Warn().Msg("Service secret or user-management endpoint not configured — per-tenant ingest overrides disabled; metering every tenant at the platform default.")
-		flat := core.StaticCeiling(def.MessagesPerSecond, def.Burst)
+		flat := core.StaticCeiling(def.RatePerSecond, def.Burst)
 		// No user-management ⇒ no shed priorities to differentiate tenants; everyone
 		// resolves to the fail-safe bronze band. Still honor the floor on the LIVE and
 		// HTTP limiters so a drill in a no-UM dev instance behaves, but nothing here reads a

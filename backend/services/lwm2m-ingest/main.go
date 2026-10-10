@@ -652,11 +652,11 @@ func buildPresenceLayer(leaderCtx context.Context, bindings map[string]config.Ps
 // want of the tenant's own ceiling (see governance.NewUnresolvedAdmissions).
 func buildIngestLimiter(client *svcclient.Client, infra mscfg.InfrastructureConfiguration,
 	cfg config.IngestRateLimit, unresolved func(core.CeilingSource)) *adapter.IngestLimiter {
-	def := governance.Limits{MessagesPerSecond: cfg.ReadingsPerSecond, Burst: cfg.Burst}
+	def := governance.Limits{RatePerSecond: cfg.ReadingsPerSecond, Burst: cfg.Burst}
 	var resolve core.TenantCeilingResolver
 	if infra.UserManagement.Hostname == "" || infra.UserManagement.Port == 0 {
 		log.Warn().Msg("user-management endpoint not configured — per-tenant LwM2M ingest overrides disabled; metering every tenant at the platform default.")
-		resolve = core.StaticCeiling(def.MessagesPerSecond, def.Burst)
+		resolve = core.StaticCeiling(def.RatePerSecond, def.Burst)
 	} else {
 		umURL := fmt.Sprintf("http://%s:%d/graphql", infra.UserManagement.Hostname, infra.UserManagement.Port)
 		resolve = governance.NewServiceLimitResolver(client, umURL, def, governance.Ingest).Ceiling

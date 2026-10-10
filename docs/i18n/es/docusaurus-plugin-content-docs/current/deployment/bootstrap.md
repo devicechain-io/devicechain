@@ -1329,7 +1329,7 @@ evento, y fusionarlo en el estado en vivo de cada dispositivo. `event-processing
 detección sobre cada evento; su límite es el doble de lo que se midió que usaba (consulta más
 abajo). Los límites de los cuatro primeros servicios
 están dimensionados para el tráfico en vivo de los dispositivos al techo de ingesta predeterminado de un inquilino, 1000
-mensajes por segundo con una lectura por mensaje, y para unos 4000 eventos por segundo, el ritmo
+lecturas por segundo con una lectura por mensaje, y para unos 4000 eventos por segundo, el ritmo
 que sostenía una instalación predeterminada antes de que se aumentaran los valores de persistencia
 de `event-management` (consulta [Rendimiento medido](#measured-throughput)).
 

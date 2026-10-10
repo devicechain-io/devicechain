@@ -5,6 +5,7 @@ package core
 
 import (
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -304,4 +305,39 @@ func TestLoadConfiguration_NestedRetirementLeavesAnUnrelatedDocumentUntouched(t 
 
 	assert.NoError(t, err)
 	assert.Equal(t, "broker", cfg.Infrastructure.Nats.Hostname)
+}
+
+type renamedConfig struct {
+	Outer struct {
+		NewRate float64 `json:"newRate"`
+	} `json:"outer"`
+	Plain int `json:"plain"`
+}
+
+func (renamedConfig) RenamedConfigKeys() map[string]string {
+	return map[string]string{"outer.oldRate": "outer.newRate"}
+}
+
+// A renamed key is refused with the replacement named — at any depth, in any casing the
+// decoder would have bound — and never stripped: the setting still exists, so dropping it
+// would start the service on a default the operator did not choose.
+func TestRenamedConfigKeyIsRefusedNamingItsReplacement(t *testing.T) {
+	for _, doc := range []string{`{"outer":{"oldRate":5}}`, `{"Outer":{"OldRate":5},"plain":1}`} {
+		err := LoadConfiguration([]byte(doc), &renamedConfig{})
+		if err == nil {
+			t.Fatalf("%s loaded; a renamed key must be refused", doc)
+		}
+		if !strings.Contains(err.Error(), "renamed") || !strings.Contains(err.Error(), `"outer.newRate"`) {
+			t.Fatalf("the refusal must name the replacement, got %v", err)
+		}
+	}
+
+	// The counterweight: the new key loads, and a document without the old key is untouched.
+	var ok renamedConfig
+	if err := LoadConfiguration([]byte(`{"outer":{"newRate":5},"plain":1}`), &ok); err != nil {
+		t.Fatalf("the new key must load: %v", err)
+	}
+	if ok.Outer.NewRate != 5 || ok.Plain != 1 {
+		t.Fatalf("got %+v", ok)
+	}
 }

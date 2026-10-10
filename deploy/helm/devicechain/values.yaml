@@ -1056,7 +1056,7 @@ functionalAreas:
     #
     # At 500m this service was the ceiling of the whole ingest path: on a four-node
     # --ha kind cluster it resolved at most ~720 events/s, CPU-throttled in 99.9% of
-    # scheduling periods, below the 1000 messages/s (and readings/s) every tenant
+    # scheduling periods, below the 1000 readings/s (and messages/s) every tenant
     # is allowed by default (event-sources DefaultIngestReadingsPerSecond).
     # Measured unthrottled, it costs up to 0.96 millicores per event at 800-1600
     # events/s, so the default ceiling needs ~1 core. The limit is twice that
@@ -1315,7 +1315,7 @@ functionalAreas:
     # CPU LIMIT raised from the 500m default, merged over the defaults like
     # device-management's (above) and by the same rule; the CPU request is
     # measuredRequests below. Measured unthrottled on kind it costs
-    # up to 0.53 millicores per stored event, so the default 1000 messages/s tenant
+    # up to 0.53 millicores per stored event, so the default 1000 readings/s tenant
     # ceiling needs ~0.5 core: exactly the old limit, which it would have hit as soon
     # as device-management stopped holding it back (it was already throttled in 4% of
     # periods at ~720 events/s). "2" keeps it under half its limit there, and gives

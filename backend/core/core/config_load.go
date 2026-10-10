@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/rs/zerolog/log"
@@ -63,6 +64,20 @@ type ConfigRetirer interface {
 	RetiredConfigKeys() map[string]string
 }
 
+// ConfigRenamer is implemented by configuration types that have RENAMED a key an earlier
+// release accepted. It returns the old key's path mapped to the new key's path, both
+// dot-separated from the document root, matched the way ConfigRetirer's are.
+//
+// A renamed key is REFUSED, never stripped: unlike a retirement, the setting still exists,
+// so dropping the old spelling with a warning would start the service on the DEFAULT for a
+// setting the operator explicitly chose — a rate ceiling silently reverting to the platform
+// default is exactly the fail-open this posture exists to prevent. What the renamer adds
+// over the strict decode's bare "unknown field" is the replacement's name, so the fix is in
+// the error the operator is already reading.
+type ConfigRenamer interface {
+	RenamedConfigKeys() map[string]string
+}
+
 // LoadConfiguration decodes a microservice configuration document into a typed
 // struct with fail-closed semantics (ADR-022 decision 1): unknown fields are
 // rejected so a typo or stale key is an error rather than a silently ignored
@@ -75,6 +90,11 @@ type ConfigRetirer interface {
 // always run so the result is never an unvalidated zero value.
 func LoadConfiguration(raw []byte, into any) error {
 	if len(bytes.TrimSpace(raw)) > 0 {
+		if r, ok := into.(ConfigRenamer); ok {
+			if err := refuseRenamedKeys(raw, r.RenamedConfigKeys()); err != nil {
+				return err
+			}
+		}
 		if r, ok := into.(ConfigRetirer); ok {
 			raw = stripRetiredKeys(raw, r.RetiredConfigKeys())
 		}
@@ -96,6 +116,58 @@ func LoadConfiguration(raw []byte, into any) error {
 		}
 	}
 	return nil
+}
+
+// refuseRenamedKeys fails the load when the document carries any renamed key, naming the
+// key as written and its replacement. Keys are checked in sorted order so the error is the
+// same on every run. A document that does not parse as an object is left to the strict
+// decode, for the reason stripRetiredKeys gives.
+func refuseRenamedKeys(raw []byte, renamed map[string]string) error {
+	if len(renamed) == 0 {
+		return nil
+	}
+	var doc map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		return nil
+	}
+	olds := make([]string, 0, len(renamed))
+	for old := range renamed {
+		olds = append(olds, old)
+	}
+	sort.Strings(olds)
+	for _, old := range olds {
+		if written, ok := findConfigPath(doc, strings.Split(old, "."), nil); ok {
+			return fmt.Errorf("config: key %q was renamed to %q; set %q instead (the old key is not read)",
+				written, renamed[old], renamed[old])
+		}
+	}
+	return nil
+}
+
+// findConfigPath reports whether obj carries the path, matching each segment
+// case-insensitively as encoding/json binds field names, and returns the path as the
+// operator spelled it.
+func findConfigPath(obj map[string]json.RawMessage, path []string, seen []string) (string, bool) {
+	if len(path) == 0 {
+		return "", false
+	}
+	for present, value := range obj {
+		if !strings.EqualFold(present, path[0]) {
+			continue
+		}
+		matched := append(append([]string{}, seen...), present)
+		if len(path) == 1 {
+			return strings.Join(matched, "."), true
+		}
+		var child map[string]json.RawMessage
+		if err := json.Unmarshal(value, &child); err != nil {
+			continue
+		}
+		if written, ok := findConfigPath(child, path[1:], matched); ok {
+			return written, true
+		}
+	}
+	return "", false
 }
 
 // stripRetiredKeys removes the retired keys a document actually carries, reporting each

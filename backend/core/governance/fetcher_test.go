@@ -34,7 +34,7 @@ func TestResolveLimits_AppliesOverrides(t *testing.T) {
 		"ingestReadingsPerSecond": raw("5"),
 		"ingestBurst":             raw("10"),
 	}, Ingest)
-	assert.Equal(t, Limits{MessagesPerSecond: 5, Burst: 10}, got)
+	assert.Equal(t, Limits{RatePerSecond: 5, Burst: 10}, got)
 }
 
 // A null override (the common case — the tenant declared none) inherits the
@@ -59,7 +59,7 @@ func TestResolveLimits_PartialOverride(t *testing.T) {
 	got := resolve(t, map[string]json.RawMessage{
 		"ingestReadingsPerSecond": raw("5"),
 	}, Ingest)
-	assert.Equal(t, Limits{MessagesPerSecond: 5, Burst: platformDefault.Burst}, got)
+	assert.Equal(t, Limits{RatePerSecond: 5, Burst: platformDefault.Burst}, got)
 }
 
 // THE DRIFT THIS CONSOLIDATION FIXES. A non-positive override can only reach the
@@ -111,7 +111,7 @@ func TestResolveLimits_FractionalRateLegalBurstNot(t *testing.T) {
 		"ingestReadingsPerSecond": raw("0.5"),
 		"ingestBurst":             raw("2.5"),
 	}, platformDefault, Ingest)
-	assert.Equal(t, 0.5, limits.MessagesPerSecond, "a sub-1/s rate is a legal ceiling")
+	assert.Equal(t, 0.5, limits.RatePerSecond, "a sub-1/s rate is a legal ceiling")
 	assert.Equal(t, platformDefault.Burst, limits.Burst, "a non-integer burst must not truncate")
 	assert.Equal(t, []string{"ingestBurst"}, floored)
 }
@@ -123,8 +123,8 @@ func TestResolveLimits_AIInferenceRateIsPerMinute(t *testing.T) {
 	limits, floored := resolveLimits(map[string]json.RawMessage{
 		"aiInferenceRequestsPerMinute": raw("30"),
 		"aiInferenceBurst":             raw("15"),
-	}, Limits{MessagesPerSecond: 0.5, Burst: 15}, AIInference)
-	assert.InDelta(t, 0.5, limits.MessagesPerSecond, 1e-9, "30 a minute is 0.5 a second")
+	}, Limits{RatePerSecond: 0.5, Burst: 15}, AIInference)
+	assert.InDelta(t, 0.5, limits.RatePerSecond, 1e-9, "30 a minute is 0.5 a second")
 	assert.Equal(t, 15, limits.Burst, "burst is a count and is never scaled")
 	assert.Empty(t, floored)
 }
@@ -157,7 +157,7 @@ func TestFetchDecode_ToleratesNonNumericSiblings(t *testing.T) {
 	require.NoError(t, json.Unmarshal(body, &out), "a boolean sibling must not fail the decode")
 
 	limits, floored := resolveLimits(out.TenantGovernance, platformDefault, Ingest)
-	assert.Equal(t, Limits{MessagesPerSecond: 5, Burst: 10}, limits)
+	assert.Equal(t, Limits{RatePerSecond: 5, Burst: 10}, limits)
 	assert.Empty(t, floored)
 }
 
