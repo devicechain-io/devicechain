@@ -39,13 +39,14 @@ const (
 	tableEndMark    = "<!-- values:end -->"
 	maxUndescribed  = 0 // the ratchet: lower it as the allowlist shrinks, never raise it
 	maxDefaultWidth = 60
+	minRows         = 100 // the schema has 117 properties; far fewer means the walker lost sight of part of it
 )
 
 var updateValuesDoc = flag.Bool("update-values-doc", false, "rewrite the chart README values table")
 
 // adrRef matches the private decision-record citations that must never reach a
 // published surface (the README is rendered on Artifact Hub).
-var adrRef = regexp.MustCompile(`ADR-\d+`)
+var adrRef = regexp.MustCompile(`(?i)ADR-\d+`)
 
 // valueRow is one schema property.
 type valueRow struct {
@@ -242,7 +243,7 @@ func loadAllowlist(t *testing.T) []string {
 
 // checkDescribed is the guard: every undescribed property must be on the
 // allowlist, and every allowlist entry must still be an undescribed property.
-func checkDescribed(missing, allow []string) []string {
+func checkDescribed(missing, allow []string, ceiling int) []string {
 	var errs []string
 	in := map[string]bool{}
 	for _, a := range allow {
@@ -260,8 +261,8 @@ func checkDescribed(missing, allow []string) []string {
 			errs = append(errs, fmt.Sprintf("%s is on the allowlist but is now described or gone: delete the line", a))
 		}
 	}
-	if len(allow) > maxUndescribed {
-		errs = append(errs, fmt.Sprintf("allowlist has %d entries, ceiling is %d: it may only shrink", len(allow), maxUndescribed))
+	if len(allow) > ceiling {
+		errs = append(errs, fmt.Sprintf("allowlist has %d entries, ceiling is %d: it may only shrink", len(allow), ceiling))
 	}
 	sort.Strings(errs)
 	return errs
@@ -272,7 +273,7 @@ func TestChartValuesAreDescribed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, e := range checkDescribed(missing, loadAllowlist(t)) {
+	for _, e := range checkDescribed(missing, loadAllowlist(t), maxUndescribed) {
 		t.Error(e)
 	}
 }
@@ -283,13 +284,64 @@ func TestChartDescriptionsHaveNoDecisionRefs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	for _, e := range adrCitations(schema) {
+		t.Error(e)
+	}
+}
+
+// adrCitations names every description (the root's included) that cites a decision record.
+func adrCitations(schema *yaml.Node) []string {
+	var out []string
 	for _, r := range collectRows(schema, nil) {
 		if adrRef.MatchString(r.Description) {
-			t.Errorf("%s: description cites a decision record; say the thing itself", r.Key)
+			out = append(out, r.Key+": description cites a decision record; say the thing itself")
 		}
 	}
 	if d := mapGet(schema, "description"); d != nil && adrRef.MatchString(d.Value) {
-		t.Error("schema root description cites a decision record")
+		out = append(out, "schema root description cites a decision record")
+	}
+	return out
+}
+
+// unsupportedKeywords finds schema constructs the row walker cannot see inside.
+// Properties declared under them would silently drop out of the table and out of
+// the described-check, so their presence is an error, not a skip.
+func unsupportedKeywords(n *yaml.Node, path string) []string {
+	var out []string
+	if n.Kind == yaml.MappingNode {
+		for i := 0; i+1 < len(n.Content); i += 2 {
+			k := n.Content[i].Value
+			switch k {
+			case "oneOf", "anyOf", "allOf", "not", "if", "then", "else", "$ref", "$defs", "definitions", "patternProperties", "dependentSchemas":
+				out = append(out, join(path, k))
+			}
+			// A property NAMED like a keyword is data, not a keyword: only recurse as
+			// schema where a schema is expected, and as a map of schemas under properties.
+			if k == "properties" {
+				pr := n.Content[i+1]
+				for j := 0; j+1 < len(pr.Content); j += 2 {
+					out = append(out, unsupportedKeywords(pr.Content[j+1], join(path, pr.Content[j].Value))...)
+				}
+			} else if k == "items" || k == "additionalProperties" {
+				if c := n.Content[i+1]; c.Kind == yaml.MappingNode {
+					out = append(out, unsupportedKeywords(c, join(path, k))...)
+				}
+			}
+		}
+	}
+	return out
+}
+
+func TestChartSchemaIsFullyWalkable(t *testing.T) {
+	schema, err := parseDoc(readFile(t, schemaFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if u := unsupportedKeywords(schema, ""); len(u) > 0 {
+		t.Fatalf("schema uses constructs the values-reference walker cannot see inside: %v", u)
+	}
+	if n := len(collectRows(schema, nil)); n < minRows {
+		t.Fatalf("walker found %d properties, expected at least %d", n, minRows)
 	}
 }
 
@@ -375,10 +427,66 @@ func TestValuesDocUndescribedGuardFires(t *testing.T) {
 	if len(missing) != 1 || missing[0] != "beta.gamma" {
 		t.Fatalf("missing = %v, want [beta.gamma]", missing)
 	}
-	if errs := checkDescribed(missing, nil); len(errs) == 0 {
+	if errs := checkDescribed(missing, nil, 0); len(errs) == 0 {
 		t.Error("an undescribed property off the allowlist must fail")
 	}
-	if errs := checkDescribed(nil, []string{"beta.gamma"}); len(errs) == 0 {
+	if errs := checkDescribed(nil, []string{"beta.gamma"}, 5); len(errs) == 0 {
 		t.Error("a stale allowlist entry must fail")
+	}
+}
+
+// The ceiling check on its own: the allowlist entry is legitimate (the property is
+// undescribed), so only the ceiling can object.
+func TestValuesDocAllowlistCeilingFiresAlone(t *testing.T) {
+	missing := []string{"beta.gamma"}
+	allow := []string{"beta.gamma"}
+	if errs := checkDescribed(missing, allow, 1); len(errs) != 0 {
+		t.Errorf("at the ceiling there must be no error, got %v", errs)
+	}
+	errs := checkDescribed(missing, allow, 0)
+	if len(errs) != 1 || !strings.Contains(errs[0], "may only shrink") {
+		t.Errorf("above the ceiling want exactly the shrink error, got %v", errs)
+	}
+}
+
+// The stale-entry check on its own, with the ceiling out of the way.
+func TestValuesDocStaleAllowlistEntryFiresAlone(t *testing.T) {
+	errs := checkDescribed(nil, []string{"gone.key"}, 10)
+	if len(errs) != 1 || !strings.Contains(errs[0], "delete the line") {
+		t.Errorf("want exactly the stale-entry error, got %v", errs)
+	}
+}
+
+func TestValuesDocADRCheckFires(t *testing.T) {
+	for _, cite := range []string{"ADR-059", "adr-059", "see Adr-12"} {
+		src := strings.Replace(plantedSchema, "Gamma.", "Gamma ("+cite+").", 1)
+		schema, err := parseDoc([]byte(src))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(adrCitations(schema)) != 1 {
+			t.Errorf("%q not caught", cite)
+		}
+	}
+	schema, _ := parseDoc([]byte(plantedSchema))
+	if got := adrCitations(schema); len(got) != 0 {
+		t.Errorf("clean schema flagged: %v", got)
+	}
+}
+
+func TestValuesDocUnsupportedKeywordsAreRefused(t *testing.T) {
+	for _, kw := range []string{"oneOf", "anyOf", "allOf", "if", "$ref", "$defs"} {
+		src := strings.Replace(plantedSchema, `"alpha":{`, `"alpha":{"`+kw+`":[],`, 1)
+		schema, err := parseDoc([]byte(src))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(unsupportedKeywords(schema, "")) != 1 {
+			t.Errorf("%s not refused", kw)
+		}
+	}
+	schema, _ := parseDoc([]byte(plantedSchema))
+	if u := unsupportedKeywords(schema, ""); len(u) != 0 {
+		t.Errorf("clean schema flagged: %v", u)
 	}
 }

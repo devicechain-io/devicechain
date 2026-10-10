@@ -87,7 +87,7 @@
         },
         "existingSecret": {
           "type": "string",
-          "description": "Name of a pre-created Secret (for example one managed by External Secrets) holding the instance-config JSON under an `instance` key. When set, the chart mounts it and renders no Secret of its own, and existingSecretChecksum becomes required."
+          "description": "Name of a pre-created Secret (for example one managed by External Secrets) holding the instance-config JSON under an `instance` key. The Secret must be named dci-<id>-config; any other name fails the render, because dcctl reads the instance config back by that exact name and would take a differently named Secret for a fresh install. When set, the chart mounts it and renders no Secret of its own, and existingSecretChecksum becomes required."
         },
         "existingSecretChecksum": {
           "type": "string",
@@ -100,7 +100,7 @@
         },
         "config": {
           "type": "object",
-          "description": "The instance configuration document (infrastructure, persistence, per-service settings), written into the dci-<id>-config Secret. The chart validates only the envelope; each service validates its own part at startup. Ignored when existingSecret is set."
+          "description": "The instance configuration document (infrastructure, persistence, per-service settings), written into the dci-<id>-config Secret. The chart validates only the envelope; each service validates its own part at startup. Under existingSecret this block is not the mounted document, but templates still read its defaults; restate the ports in networkPolicy.externalConfigPorts and the broker host in metrics.natsBrokerHost."
         }
       },
       "description": "Identity and configuration of this DeviceChain instance."
@@ -407,7 +407,7 @@
       "properties": {
         "enabled": {
           "type": "boolean",
-          "description": "Render the API and web Ingress objects. Each enabled area is reachable at https://<host>/api/<area>/graphql and the console at https://<host>/."
+          "description": "Render the Ingress objects: the API, the well-known discovery route and the web console. Each enabled area is reachable at https://<host>/api/<area>/graphql and the console at https://<host>/."
         },
         "className": {
           "type": "string",
@@ -417,7 +417,7 @@
         "host": {
           "type": "string",
           "minLength": 1,
-          "description": "Host name both Ingress objects route."
+          "description": "Host name the Ingress objects route. The chart renders up to three: the API (https://<host>/api/<area>/graphql), the well-known discovery route for OAuth and MCP, and the web console (https://<host>/)."
         },
         "annotations": {
           "type": "object",
@@ -486,7 +486,7 @@
     },
     "blobStorage": {
       "type": "object",
-      "description": "Kubernetes volume wiring for the filesystem object store (instance.config.infrastructure.blob.backend set to filesystem). Creates and mounts the PVC that backs instance.config.infrastructure.blob.directory, which today holds branding logos. Ignored for the s3 backend; the render fails on a persistence and backend mismatch.",
+      "description": "Kubernetes volume wiring for the filesystem object store (instance.config.infrastructure.blob.backend set to filesystem). Creates and mounts the PVC that backs instance.config.infrastructure.blob.directory, which today holds branding logos. Enabling persistence with the s3 backend fails the render.",
       "properties": {
         "persistence": {
           "type": "object",
