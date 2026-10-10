@@ -238,8 +238,7 @@ func (api *Api) ReplaceDevice(ctx context.Context, request *DeviceReplaceRequest
 // into the create request shape, applying the two defaults and the one refusal.
 //
 // Defaults: the type is ACCESS_TOKEN (matching provisioning), and the entity token
-// is a fresh UUID (mintOrReuseCredential does the same — an operator has no reason
-// to name a credential row).
+// is a fresh UUID (an operator has no reason to name a credential row).
 //
 // The refusal is the interesting one. An ACCESS_TOKEN's CredentialId is itself the
 // bearer secret, so a random UUID is a complete, usable credential and minting one

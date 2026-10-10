@@ -62,8 +62,6 @@ EXEMPTIONS=(
 
   "backend/services/device-management/model.evaluateDeviceClaim@subtle.ConstantTimeCompare=ClaimDevice requires device:write and is bounded by the GraphQL root-field limit per request; the caller is an authenticated tenant user, not an anonymous device"
 
-  "backend/services/device-management/model.evaluateProvisioningProfile@subtle.ConstantTimeCompare=no production caller reaches it: no provisioning transport has shipped. It must move onto credential.Checker when one does"
-
   "backend/services/user-management/identity.verifyPKCE@subtle.ConstantTimeCompare=not a guessing oracle: the authorization code is claimed by a revision-checked delete before the verifier is compared, so each code buys exactly one guess"
 
   "backend/services/user-management/identity.ServiceTokenHandler@subtle.ConstantTimeCompare=a dcctl-minted internal shared secret compared as SHA-256 digests; it cannot be guessed, so a backoff would buy nothing — the same rule that leaves OAuth client secrets unthrottled"

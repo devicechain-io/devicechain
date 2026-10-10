@@ -201,8 +201,7 @@ func (api *Api) DeviceCredentialsByToken(ctx context.Context, tokens []string) (
 }
 
 // deviceCredentialFilters builds the WHERE clauses for a credential search, shared by
-// the paged DeviceCredentials and the full-set EnabledDeviceCredentialsOfType so the two
-// cannot drift into filtering differently.
+// the paged DeviceCredentials read.
 func (api *Api) deviceCredentialFilters(ctx context.Context,
 	criteria DeviceCredentialSearchCriteria) func(result *gorm.DB) *gorm.DB {
 	return func(result *gorm.DB) *gorm.DB {
@@ -225,9 +224,7 @@ func (api *Api) deviceCredentialFilters(ctx context.Context,
 
 // Search for device credentials that meet criteria, ONE PAGE at a time.
 //
-// This is the GraphQL-facing read and it is always bounded. Provisioning's reuse scan
-// needs every live credential of a type and calls EnabledDeviceCredentialsOfType, which
-// is a separate method so that this one cannot be asked to return the table.
+// This is the GraphQL-facing read and it is always bounded.
 func (api *Api) DeviceCredentials(ctx context.Context, criteria DeviceCredentialSearchCriteria) (*DeviceCredentialSearchResults, error) {
 	results := make([]DeviceCredential, 0)
 	db, pag := api.RDB.ListOf(ctx, &DeviceCredential{},
@@ -238,38 +235,6 @@ func (api *Api) DeviceCredentials(ctx context.Context, criteria DeviceCredential
 	}
 
 	// Wrap as search results.
-	return &DeviceCredentialSearchResults{
-		Results:    results,
-		Pagination: pag,
-	}, nil
-}
-
-// EnabledDeviceCredentialsOfType returns EVERY enabled credential of one type held by
-// one device, with no LIMIT.
-//
-// 🔴 THE FULL SET IS THE CORRECTNESS REQUIREMENT, NOT A CONVENIENCE. Its caller reuses
-// an existing unexpired credential so that re-provisioning is idempotent; a bounded page
-// could miss a reusable credential sitting past the page boundary and mint a duplicate
-// instead. That is why this is a named method rather than a page size the caller has to
-// remember to make large enough.
-//
-// It is bounded by how many credentials of one type one device holds, which is the
-// standard ListAllOf asks of its callers — not by a LIMIT.
-func (api *Api) EnabledDeviceCredentialsOfType(ctx context.Context,
-	deviceToken string, credentialType string) (*DeviceCredentialSearchResults, error) {
-	enabled := true
-	criteria := DeviceCredentialSearchCriteria{
-		Device:         &deviceToken,
-		CredentialType: &credentialType,
-		Enabled:        &enabled,
-	}
-	results := make([]DeviceCredential, 0)
-	db, pag := api.RDB.ListAllOf(ctx, &DeviceCredential{},
-		api.deviceCredentialFilters(ctx, criteria))
-	db.Find(&results)
-	if db.Error != nil {
-		return nil, db.Error
-	}
 	return &DeviceCredentialSearchResults{
 		Results:    results,
 		Pagination: pag,

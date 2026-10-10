@@ -41,9 +41,8 @@ func TestCredentialTypeString(t *testing.T) {
 }
 
 // A paged read of device credentials leads with the credential that has the MOST
-// runway left, because that is the one mintOrReuseCredential hands back: it walks the
-// unbounded result and returns the first live credential it sees, so the ordering IS
-// the reuse policy. DeviceCredential.DefaultOrder therefore sorts expires_at DESC
+// runway left, so a caller that takes the first live credential gets the longest-lived
+// one. DeviceCredential.DefaultOrder therefore sorts expires_at DESC
 // NULLS FIRST — never-expiring first, then furthest expiry. The obvious id ASC would
 // have returned the credential CLOSEST to expiry and forced the earliest possible
 // re-provision, which is the defect this pins.
@@ -61,9 +60,7 @@ func TestDeviceCredentialsOrderLeadsWithMostRunway(t *testing.T) {
 	ctx := core.WithTenant(context.Background(), "acme")
 
 	// The credentials hang off a real device because the read under test filters by
-	// one: EnabledDeviceCredentialsOfType is the method mintOrReuseCredential actually
-	// calls, and testing the generic search instead would pin the ordering of a query
-	// production does not issue.
+	// one: the listing under test is filtered by device.
 	device := Device{}
 	device.Token = "dev1"
 	device.TenantId = "acme"
@@ -86,13 +83,14 @@ func TestDeviceCredentialsOrderLeadsWithMostRunway(t *testing.T) {
 		require.NoError(t, api.RDB.DB(ctx).Create(&row).Error, "seed credential %q", c.token)
 	}
 
-	res, err := api.EnabledDeviceCredentialsOfType(ctx, "dev1", "ACCESS_TOKEN")
-	require.NoError(t, err, "full-set credential read (NULLS FIRST must parse on sqlite)")
+	dev, typ, enabled := "dev1", "ACCESS_TOKEN", true
+	res, err := api.DeviceCredentials(ctx, DeviceCredentialSearchCriteria{Device: &dev, CredentialType: &typ, Enabled: &enabled})
+	require.NoError(t, err, "credential listing (NULLS FIRST must parse on sqlite)")
 
 	order := make([]string, 0, len(res.Results))
 	for _, cred := range res.Results {
 		order = append(order, cred.Token)
 	}
 	require.Equal(t, []string{"never", "far", "soon"}, order,
-		"credentials must lead with the most runway; mintOrReuseCredential reuses the first")
+		"credentials must lead with the most runway")
 }

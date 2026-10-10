@@ -351,10 +351,6 @@ type DeviceManagementApi interface {
 	DeviceCredentialsById(ctx context.Context, ids []uint) ([]*DeviceCredential, error)
 	DeviceCredentialsByToken(ctx context.Context, tokens []string) ([]*DeviceCredential, error)
 	DeviceCredentials(ctx context.Context, criteria DeviceCredentialSearchCriteria) (*DeviceCredentialSearchResults, error)
-	// EnabledDeviceCredentialsOfType is the full-set read behind provisioning's reuse
-	// check. It is a separate method rather than a flag on the search above because a
-	// page could miss a reusable credential and mint a duplicate; see its implementation.
-	EnabledDeviceCredentialsOfType(ctx context.Context, deviceToken string, credentialType string) (*DeviceCredentialSearchResults, error)
 	DeviceCredentialByCredentialId(ctx context.Context, credentialType string, credentialId string) (*DeviceCredential, error)
 
 	// Device authentication (transport security, ADR-014).
@@ -447,9 +443,6 @@ type DeviceManagementApi interface {
 	ProvisioningProfilesById(ctx context.Context, ids []uint) ([]*ProvisioningProfile, error)
 	ProvisioningProfilesByToken(ctx context.Context, tokens []string) ([]*ProvisioningProfile, error)
 	ProvisioningProfiles(ctx context.Context, criteria ProvisioningProfileSearchCriteria) (*ProvisioningProfileSearchResults, error)
-	ProvisioningProfileByProvisionKey(ctx context.Context, provisionKey string) (*ProvisioningProfile, error)
-	ProvisionDevice(ctx context.Context, request *ProvisionDeviceRequest, now time.Time) (*ProvisionDeviceResult, error)
-	ProvisionDeviceBootstrap(ctx context.Context, request *ProvisionDeviceRequest, now time.Time) (*ProvisionDeviceResult, error)
 
 	// Device→customer claiming (ADR-012).
 	InitiateDeviceClaim(ctx context.Context, request *DeviceClaimInitiateRequest) (*DeviceClaim, error)

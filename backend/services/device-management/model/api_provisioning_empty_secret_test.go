@@ -6,22 +6,7 @@ package model
 import (
 	"errors"
 	"testing"
-	"time"
 )
-
-// A profile holding an EMPTY secret must never match, not even an empty presented one.
-// subtle.ConstantTimeCompare("", "") is 1, so without the guard a profile written with
-// no secret admits anyone who knows its key and sends nothing.
-func TestEvaluateProvisioningProfile_EmptyStoredSecretNeverMatches(t *testing.T) {
-	now := time.Date(2026, 6, 25, 12, 0, 0, 0, time.UTC)
-	for _, presented := range []string{"", "anything"} {
-		err := evaluateProvisioningProfile(profile(true, "", nil), presented, now)
-		if !errors.Is(err, ErrProvisioningSecretMismatch) {
-			t.Errorf("stored secret \"\", presented %q: got %v, want ErrProvisioningSecretMismatch",
-				presented, err)
-		}
-	}
-}
 
 // Create refuses a blank key or secret and writes no row. The whitespace-only cases are
 // what separate a TrimSpace check from an == "" one: "  \t" is as much no-secret as "".
