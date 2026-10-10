@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://docs.devicechain.io/schema/device/command-response.schema.json",
+  "title": "DeviceChain command response",
+  "description": "The JSON message a device publishes on MQTT topic {instanceId}/{tenant}/command-responses/{deviceToken} to report the outcome of a command it was delivered. The responding device is taken from the topic, never from the body. A message that is not valid JSON for this shape (for example a payload that is an object rather than a string) is discarded: it is logged and counted, but not dead-lettered, and unless the device answers again the command stays SENT until it times out.",
+  "type": "object",
+  "properties": {
+    "commandToken": {
+      "type": "string",
+      "description": "The token member of the delivery being answered: the command's token, not the device's."
+    },
+    "success": {
+      "type": "boolean",
+      "description": "true settles the command as SUCCESSFUL, false as FAILED. Omitted, it reads as false."
+    },
+    "payload": {
+      "type": "string",
+      "description": "Free-form result text, stored with the command and returned by the API. A JSON string, not an object: to return structured data, encode it into the string."
+    },
+    "error": {
+      "type": "string",
+      "description": "Why the command failed. Stored only when success is false; ignored when success is true."
+    },
+    "dispatchNonce": {
+      "type": "string",
+      "description": "The dispatchNonce of the delivery being answered. A response without one, or with a nonce from a dispatch the command has moved off, does not settle the command and is dead-lettered."
+    }
+  },
+  "required": ["commandToken", "success", "dispatchNonce"],
+  "examples": [
+    {
+      "commandToken": "6f1c0f8e-6d1e-4a1a-9a3f-1f2b0d0a5c11",
+      "dispatchNonce": "0f6f4a2c-9b71-4d0e-8a5b-3c2d1e0f7a94",
+      "success": true,
+      "payload": "rebooting in 5s"
+    },
+    {
+      "commandToken": "6f1c0f8e-6d1e-4a1a-9a3f-1f2b0d0a5c11",
+      "dispatchNonce": "0f6f4a2c-9b71-4d0e-8a5b-3c2d1e0f7a94",
+      "success": false,
+      "error": "actuator jammed"
+    }
+  ]
+}

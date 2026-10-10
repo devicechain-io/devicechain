@@ -1,0 +1,85 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://docs.devicechain.io/schema/device/device-event.schema.json",
+  "title": "DeviceChain device event",
+  "description": "The JSON body a device sends for one event: published on MQTT to {instanceId}/{tenant}/devices/{deviceToken}/events, or POSTed over HTTP to /{instanceId}/{tenant}/events. The same body is accepted on both transports. Unknown members are ignored rather than refused, so a misspelled optional member is silently dropped. Envelope member names are matched without regard to case, but send them exactly as written here.",
+  "type": "object",
+  "properties": {
+    "altId": {
+      "type": "string",
+      "description": "A device-chosen idempotency key. An event whose altId and envelope occurredTime both match an event already stored for the same tenant is skipped as a redelivery. The match is per tenant, not per device, so make the value unique across the fleet (prefix it with the device token, for example). Without an envelope occurredTime the event is dated on arrival, so a resend gets a different time and is stored again."
+    },
+    "device": {
+      "type": "string",
+      "description": "The device token of the device sending the event. On MQTT it must equal the {deviceToken} segment of the topic, or the message is refused. When a credential authenticates, it must name the device that credential belongs to."
+    },
+    "relationship": {
+      "type": "string",
+      "description": "Accepted and carried through the pipeline, but not used: the platform records every one of the device's tracked relationships on the event regardless of this value. Do not rely on it."
+    },
+    "occurredTime": {
+      "type": "string",
+      "format": "date-time",
+      "description": "When the event happened, as an RFC 3339 timestamp. Omitted, the event is dated when the platform received it. Refused if it is not RFC 3339, if it is 0001-01-01T00:00:00Z, or if it is more than 366 days before the platform received the message. A time far ahead of the platform clock is stored at a ceiling rather than refused."
+    },
+    "eventType": {
+      "type": "string",
+      "enum": ["Measurement", "Location", "Alert", "NewRelationship"],
+      "description": "Selects the payload shape. Case-sensitive. Any other value is refused, including the platform-produced types StateChange, CommandInvocation and CommandResponse."
+    },
+    "payload": {
+      "type": "object",
+      "description": "The event's content. Its shape is fixed by eventType; see the payload schemas this document references."
+    },
+    "credentialType": {
+      "type": "string",
+      "enum": ["ACCESS_TOKEN", "MQTT_BASIC"],
+      "description": "The type of the credential the device presents for this event. With credentialId, it authenticates the event in the pipeline. Required by the default device-authentication mode (required); omit the credential only on an instance configured as optional or disabled. A credential is only read when both credentialType and a non-empty credentialId are present."
+    },
+    "credentialId": {
+      "type": "string",
+      "description": "The credential's id. For ACCESS_TOKEN it is the bearer token itself; for MQTT_BASIC it is the username, without the {tenant}: prefix the MQTT connection uses."
+    },
+    "credentialSecret": {
+      "type": "string",
+      "description": "The MQTT_BASIC password. Not used by ACCESS_TOKEN."
+    }
+  },
+  "required": ["device", "eventType", "payload"],
+  "allOf": [
+    {
+      "if": { "properties": { "eventType": { "const": "Measurement" } }, "required": ["eventType"] },
+      "then": { "properties": { "payload": { "$ref": "measurement-payload.schema.json" } } }
+    },
+    {
+      "if": { "properties": { "eventType": { "const": "Location" } }, "required": ["eventType"] },
+      "then": { "properties": { "payload": { "$ref": "location-payload.schema.json" } } }
+    },
+    {
+      "if": { "properties": { "eventType": { "const": "Alert" } }, "required": ["eventType"] },
+      "then": { "properties": { "payload": { "$ref": "alert-payload.schema.json" } } }
+    },
+    {
+      "if": { "properties": { "eventType": { "const": "NewRelationship" } }, "required": ["eventType"] },
+      "then": { "properties": { "payload": { "$ref": "new-relationship-payload.schema.json" } } }
+    }
+  ],
+  "examples": [
+    {
+      "device": "sensor-001",
+      "eventType": "Measurement",
+      "credentialType": "ACCESS_TOKEN",
+      "credentialId": "5f989616-2a0d-4160-8ae1-da5fad2898b2",
+      "payload": { "entries": [ { "measurements": { "temperature": "21.5", "humidity": "48" } } ] }
+    },
+    {
+      "altId": "sensor-001-4417",
+      "device": "sensor-001",
+      "eventType": "Alert",
+      "credentialType": "MQTT_BASIC",
+      "credentialId": "sensor-001",
+      "credentialSecret": "<password>",
+      "payload": { "entries": [ { "type": "overheat", "level": 5, "message": "coolant over limit", "source": "ecu" } ] }
+    }
+  ]
+}

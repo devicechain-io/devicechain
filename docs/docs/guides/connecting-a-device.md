@@ -58,6 +58,8 @@ Every inbound event, over any transport, is a JSON object:
 - `credentialType` / `credentialId` — the credential the device presents. `MQTT_BASIC` additionally carries `credentialSecret`. Omit these only when the instance's device-auth mode is set to `disabled` or `optional`. The default is `required`, so a credential is expected.
 - `payload` — its shape depends on `eventType`, and every shape is `{ "entries": [ … ] }`. See below.
 
+Every field, with its type and whether it is required, including the optional `altId` and `relationship`, is in the [Device Protocol Reference](../reference/device-protocol.md#device-event), together with JSON Schemas you can validate firmware output against.
+
 ### Payload shapes {#payload-shapes}
 
 Every payload wraps its content in an `entries` array, and the shape fixes the JSON type of each value:
@@ -261,7 +263,7 @@ The ingest listener bounds how long a request may take. A device has **5 seconds
 
 A request that exceeds either bound has its **connection closed**. The server closes it before the event exists, so there is no response, no event, and nothing in the pipeline to trace it to. The symptom looks like intermittent device-side flakiness affecting only the slowest devices. On a constrained link (NB-IoT, 2G, satellite), where several seconds to complete a request is ordinary, raise the bounds rather than leaving those devices to fail silently. The `total_http_connections_closed_before_request` metric counts connections that never delivered a request, which is what such a device leaves behind.
 
-## Receiving commands
+## Receiving commands {#receiving-commands}
 
 A device receives commands on **its own** topic:
 
@@ -318,6 +320,8 @@ mosquitto_pub \
 - **`dispatchNonce` must be the `dispatchNonce` from the delivery envelope you are answering.** It is required. A response that omits it, or that quotes a nonce from an earlier delivery of the same command, does not settle the command. See [Why the nonce is required](#why-the-nonce-is-required).
 - **`success`** moves the command to `SUCCESSFUL` or `FAILED`.
 - **`payload`** / **`error`** are optional strings, surfaced in the console's command history and returned by the API.
+
+Every way a response can fail to settle its command is listed in the [Device Protocol Reference](../reference/device-protocol.md#rejections-command-responses).
 
 Like the events and command topics, this one is per-device, and a device is authorized to publish only to its own. Both the tenant and the responding device are taken from the topic rather than the body, so a device can answer only for **its own** commands. A response naming a command that belongs to a different device is rejected, not recorded.
 

@@ -123,8 +123,8 @@
       "translationSha256": "644febcd3785fbcb692e7bc8424424b04356808bab0904399e33b6e8c8528ceb"
     },
     "guides/connecting-a-device.md": {
-      "sourceSha256": "40ced9d73aa4dd6c0a276cd807ae9cd1d0108e1c113495135dc44afd1f3d0a8d",
-      "translationSha256": "0451559bfd549f14ad659c4dabd167b92065c6cdd9d8b8f10a3b4e3c8986c8c7"
+      "sourceSha256": "0b1cfb8671348decbe6f55b070b5af421e46430bda1a0a1f988ead121016ec56",
+      "translationSha256": "5a3342ca2726b347dd409dba55c5d5c553fe023c2b0f8c27569110920c7a180f"
     },
     "guides/device-credentials.md": {
       "sourceSha256": "c5527934e9f148ff305f8d49452642a3e0b6344241c25528398296de88d169cf",
@@ -157,6 +157,10 @@
     "quickstart/first-device.md": {
       "sourceSha256": "3326c4310411c61934d714cb70b192a87b90ef4a3052df6b33bd9986b260e2c4",
       "translationSha256": "e48dc180e08eafaa8167d16550cc0903a8097927a6e97d9a89bdcfbc87353bb5"
+    },
+    "reference/device-protocol.md": {
+      "sourceSha256": "9069e934734d458497e7ba5b93320f6c2d35b6110fa7ec27574dc7c3a79aa376",
+      "translationSha256": "9ce52129382f0dd6c80986918500299bd833d06898d27b58e77285423866868c"
     },
     "reference/graphql-api.md": {
       "sourceSha256": "3f323e1aa24b35b94cd377c879ae651fddf4b9019b16125d3c6e516285d4138c",
