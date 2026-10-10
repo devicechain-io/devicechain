@@ -5,6 +5,7 @@ go 1.26.0
 require (
 	github.com/devicechain-io/dc-microservice v0.0.1
 	github.com/nats-io/nats-server/v2 v2.15.0
+	github.com/nats-io/nats.go v1.54.0
 	github.com/pion/dtls/v3 v3.1.10
 	github.com/plgd-dev/go-coap/v3 v3.5.4
 	github.com/prometheus/client_golang v1.24.1
@@ -32,7 +33,6 @@ require (
 	github.com/klauspost/compress v1.20.0 // indirect
 	github.com/minio/highwayhash v1.0.4 // indirect
 	github.com/nats-io/jwt/v2 v2.8.2 // indirect
-	github.com/nats-io/nats.go v1.54.0 // indirect
 	github.com/nats-io/nkeys v0.4.16 // indirect
 	github.com/nats-io/nuid v1.0.1 // indirect
 	github.com/pion/transport/v5 v5.0.0 // indirect
