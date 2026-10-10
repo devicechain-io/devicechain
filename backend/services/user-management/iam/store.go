@@ -346,8 +346,8 @@ func (s *Store) CreateTenant(ctx context.Context, t *Tenant) error {
 // survives, which for a limit means a tightened ceiling never takes effect.
 func (s *Store) UpdateTenant(ctx context.Context, t *Tenant) error {
 	return s.sys(ctx).Model(t).
-		Select("Name", "Config", "TierID", "IngestMessagesPerSecond", "IngestBurst",
-			"OutboundMessagesPerSecond", "OutboundBurst", "AiExternalEnabled",
+		Select("Name", "Config", "TierID", "IngestReadingsPerSecond", "IngestBurst",
+			"OutboundCallsPerSecond", "OutboundBurst", "AiExternalEnabled",
 			"AiInferenceRequestsPerMinute", "AiInferenceBurst", "ShedPriority",
 			"HeldCommandCeiling", "GeoFencePositionCeiling", "GeoFenceCeiling",
 			"GeoFencePositionBudget").

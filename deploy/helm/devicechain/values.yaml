@@ -1057,7 +1057,7 @@ functionalAreas:
     # At 500m this service was the ceiling of the whole ingest path: on a four-node
     # --ha kind cluster it resolved at most ~720 events/s, CPU-throttled in 99.9% of
     # scheduling periods, below the 1000 messages/s (and readings/s) every tenant
-    # is allowed by default (event-sources DefaultIngestMessagesPerSecond).
+    # is allowed by default (event-sources DefaultIngestReadingsPerSecond).
     # Measured unthrottled, it costs up to 0.96 millicores per event at 800-1600
     # events/s, so the default ceiling needs ~1 core. The limit is twice that
     # because a CPU quota is spent by bursts, not by the average: at 500m this service was already throttled in 24%
@@ -1190,13 +1190,13 @@ functionalAreas:
     # Per-tenant ingest ceiling (defaults shown). The rate counts READINGS: one stored
     # value, i.e. one key of a measurement entry, one location or one alert. Each
     # message is also charged once as a message before it is decoded, at the same
-    # number. A tenant's tier overrides both (ingestMessagesPerSecond / ingestBurst).
+    # number. A tenant's tier overrides both (ingestReadingsPerSecond / ingestBurst).
     # Over HTTP a tenant over its ceiling gets 429, checked before the shared
     # backpressure 503; over MQTT the message is acked and dropped, and counted on
     # total_msg_reading_limited and total_readings_rate_limited.
     #   config:
     #     ingestRateLimit:
-    #       messagesPerSecond: 1000   # readings/s per tenant, per allowance, per replica
+    #       readingsPerSecond: 1000   # readings/s per tenant, per allowance, per replica
     #       burst: 2000
     #
     # WHY 1000. A default --ha install on a split cluster (three dedicated 4-vCPU/16 GB
@@ -1567,7 +1567,7 @@ functionalAreas:
     # connector-dispatch stream. Defaults MATCH outbound-connectors' egress ceiling (both ends meter
     # the same dimension on the same time); per-tenant overrides come from user-management. Never
     # unlimited. ---
-    # outboundMessagesPerSecond: 100  # platform-default source egress rate ceiling (0/unset ⇒ this default)
+    # outboundCallsPerSecond: 100  # platform-default source egress rate ceiling (0/unset ⇒ this default)
     # outboundBurst: 200              # platform-default source egress burst
     # Dead letters for shed actions: a per-tenant budget and one across all tenants. A shed past
     # either is counted (react_connector_shed_unlettered_total) and summarised in one letter per
@@ -1668,7 +1668,7 @@ functionalAreas:
       # sendTimeoutMs: 10000        # fallback per-send timeout when an action specifies none
       # maxConcurrentSends: 32      # outbound concurrency ceiling (worker-pool width / back-pressure)
       # --- per-tenant egress rate (ADR-060 SD-3), metered on the same trigger time REACT metered; platform default, per-tenant overrides via user-management ---
-      # outboundMessagesPerSecond: 100  # platform-default egress rate ceiling (never unlimited; below ingest)
+      # outboundCallsPerSecond: 100  # platform-default egress rate ceiling (never unlimited; below ingest)
       # outboundBurst: 200              # platform-default egress burst
       # egressWaitBudgetMs: 5000        # smoothing wait for a token before a shed (bounded < AckWait − max send)
   ai-inference:
@@ -1767,7 +1767,7 @@ functionalAreas:
       #     deviceTypeToken: sparkplug-node   # REQUIRED when autoRegister is true — the device type stamped on a
       #                                # created device (a Sparkplug birth carries no DeviceChain type). Must exist.
       # ingestRateLimit:               # Per-tenant ingest ceiling, counted in READINGS (one numeric metric). A
-      #   messagesPerSecond: 1000      # DATA message's readings are charged before they are ingested; readings
+      #   readingsPerSecond: 1000      # DATA message's readings are charged before they are ingested; readings
       #   burst: 2000                  # over it are dropped (no redelivery) and counted on ingest_samples_shed_total.
       #                                # A tenant's tier overrides both. Births, deaths and the message rate are NOT
       #                                # metered. Why 1000: see event-sources above.
@@ -1824,7 +1824,7 @@ functionalAreas:
       #       deviceTypeToken: sensor      # Device type stamped on the device row when autoRegister creates it. Required when autoRegister is true.
       #       autoRegister: true           # Create the device row on first registration (ALLOW_NEW). An unknown device never reaches here — it has no PSK.
       # ingestRateLimit:                   # Per-tenant ingest ceiling: charged once per Notify before decode, and in READINGS
-      #   messagesPerSecond: 1000          # (decoded samples) after it, at the same number. Readings over it are dropped and
+      #   readingsPerSecond: 1000          # (decoded samples) after it, at the same number. Readings over it are dropped and
       #   burst: 2000                      # counted on ingest_samples_shed_total. A tenant's tier overrides both. Why 1000:
       #                                    # see event-sources above.
     # Project each device PSK Secret into the env var its identity names:

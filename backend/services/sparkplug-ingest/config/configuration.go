@@ -28,11 +28,11 @@ import (
 const DefaultHostId = "devicechain"
 
 const (
-	// DefaultIngestMessagesPerSecond and DefaultIngestBurst are the per-tenant ingest
+	// DefaultIngestReadingsPerSecond and DefaultIngestBurst are the per-tenant ingest
 	// ceiling applied when none is configured, counted in READINGS (one numeric Sparkplug
 	// metric), the same platform default as event-sources and lwm2m-ingest. Why 1000 is in
 	// the chart's values.yaml, event-sources block. A tenant's tier overrides both.
-	DefaultIngestMessagesPerSecond = 1000
+	DefaultIngestReadingsPerSecond = 1000
 	DefaultIngestBurst             = 2000
 )
 
@@ -58,9 +58,9 @@ type SparkplugConfiguration struct {
 // must observe every message. It is fail-safe: an unset, non-positive or NaN value falls
 // back to the platform default, never to unlimited and never to zero.
 type IngestRateLimit struct {
-	// MessagesPerSecond is the sustained per-tenant rate, in readings per second. The name
-	// matches event-sources' and lwm2m-ingest's key, which also meters messages there.
-	MessagesPerSecond float64
+	// ReadingsPerSecond is the sustained per-tenant rate, in readings per second. The key
+	// matches event-sources' and lwm2m-ingest's.
+	ReadingsPerSecond float64
 	// Burst is the largest instantaneous batch, in readings, before the sustained rate
 	// applies.
 	Burst int
@@ -150,8 +150,8 @@ func (c *SparkplugConfiguration) ApplyDefaults() {
 			c.Sources[i].HostId = DefaultHostId
 		}
 	}
-	if !(c.IngestRateLimit.MessagesPerSecond > 0) {
-		c.IngestRateLimit.MessagesPerSecond = DefaultIngestMessagesPerSecond
+	if !(c.IngestRateLimit.ReadingsPerSecond > 0) {
+		c.IngestRateLimit.ReadingsPerSecond = DefaultIngestReadingsPerSecond
 	}
 	if c.IngestRateLimit.Burst <= 0 {
 		c.IngestRateLimit.Burst = DefaultIngestBurst

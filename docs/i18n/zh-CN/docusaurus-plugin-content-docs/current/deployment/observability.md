@@ -262,7 +262,7 @@ kube-state-metrics 本身因节点失效等原因移动期间的重启，只要�
 | `RateLimiterOverflowInUse` | warning | HTTP 连续十分钟让无法确认的租户名字使用共享额度。大量未确认名字通常是虚构租户请求。 | 检查 HTTP 接入发送者，参见[无法确认的租户名称](../concepts/governance.md#unconfirmed-tenants)。 |
 | `ReactShedLettersOverBudget` | warning | 检测引擎连续十分钟丢弃动作快于逐条记录，超额每租户每分钟汇总一封死信，租户明显超过对外限额。 | 用 `dcctl dead-letters` 的 `shed` 原因找到租户，检查规则；合法流量可提高限额，参见[对外治理](../concepts/outbound-connectors.md#governance)。 |
 | `RateMeteringClockFallback` | warning | `job` 服务连续一小时因缺失触发时间，按代理或到达时间计量，重启追赶可能误作洪峰。触发时间晚于承载消息的代理时间也按代理时间计量，但记为 `capped`，不触发，因为这是时钟差而非缺失。 | 确认事件处理和对外连接器使用同一版本。 |
-| `ConnectorDispatchRateLimited` | warning | 对外连接器连续十五分钟因租户速率超限丢弃投递。检测引擎按同一时间线先行计量，因此这些请求一端允许、另一端拒绝。单纯租户超限触发的是检测引擎 `ReactConnectorEgressShedding`，不是此告警。 | 检查两服务默认 `outboundMessagesPerSecond`、`outboundBurst` 一致，以及任一服务是否触发 `TenantsMeteredAtPlatformDefault`。失败重试在连接器端再次计量，也应检查失败目标。因此单租户接近限额且目标持续失败也能单独触发，故仅 warning。丢弃投递记录为 `rate_limited` 死信。 |
+| `ConnectorDispatchRateLimited` | warning | 对外连接器连续十五分钟因租户速率超限丢弃投递。检测引擎按同一时间线先行计量，因此这些请求一端允许、另一端拒绝。单纯租户超限触发的是检测引擎 `ReactConnectorEgressShedding`，不是此告警。 | 检查两服务默认 `outboundCallsPerSecond`、`outboundBurst` 一致，以及任一服务是否触发 `TenantsMeteredAtPlatformDefault`。失败重试在连接器端再次计量，也应检查失败目标。因此单租户接近限额且目标持续失败也能单独触发，故仅 warning。丢弃投递记录为 `rate_limited` 死信。 |
 
 告警对应序列：
 

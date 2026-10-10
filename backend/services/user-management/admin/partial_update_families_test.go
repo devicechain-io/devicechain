@@ -134,9 +134,9 @@ func tenantFamily() putest.Family[*Service] {
 				// large — a repeated value would let "this field was written" be satisfied
 				// by a neighbour's.
 				GovernanceOverrides: GovernanceOverrides{
-					IngestMessagesPerSecond:      fptr(11),
+					IngestReadingsPerSecond:      fptr(11),
 					IngestBurst:                  iptr(12),
-					OutboundMessagesPerSecond:    fptr(13),
+					OutboundCallsPerSecond:       fptr(13),
 					OutboundBurst:                iptr(14),
 					AiInferenceRequestsPerMinute: fptr(15),
 					AiInferenceBurst:             iptr(16),
@@ -164,9 +164,9 @@ func tenantFamily() putest.Family[*Service] {
 				"tierToken":                    tn.Tier.Token,
 				"config":                       configJSON(tn.Config),
 				"aiExternalEnabled":            nullBoolStr(tn.AiExternalEnabled),
-				"ingestMessagesPerSecond":      nullFloatStr(tn.IngestMessagesPerSecond),
+				"ingestReadingsPerSecond":      nullFloatStr(tn.IngestReadingsPerSecond),
 				"ingestBurst":                  nullIntStr(tn.IngestBurst),
-				"outboundMessagesPerSecond":    nullFloatStr(tn.OutboundMessagesPerSecond),
+				"outboundCallsPerSecond":       nullFloatStr(tn.OutboundCallsPerSecond),
 				"outboundBurst":                nullIntStr(tn.OutboundBurst),
 				"aiInferenceRequestsPerMinute": nullFloatStr(tn.AiInferenceRequestsPerMinute),
 				"aiInferenceBurst":             nullIntStr(tn.AiInferenceBurst),
@@ -194,12 +194,12 @@ func tenantFamily() putest.Family[*Service] {
 				func(r *TenantUpdateRequest) *dcgraphql.OptionalString { return &r.Config }),
 			putest.OptionalBoolField("aiExternalEnabled", true,
 				func(r *TenantUpdateRequest) *dcgraphql.OptionalBool { return &r.AiExternalEnabled }),
-			putest.OptionalFloat64Field("ingestMessagesPerSecond", 11, 31,
-				func(r *TenantUpdateRequest) *dcgraphql.OptionalFloat64 { return &r.IngestMessagesPerSecond }),
+			putest.OptionalFloat64Field("ingestReadingsPerSecond", 11, 31,
+				func(r *TenantUpdateRequest) *dcgraphql.OptionalFloat64 { return &r.IngestReadingsPerSecond }),
 			putest.OptionalInt32Field("ingestBurst", 12, 32,
 				func(r *TenantUpdateRequest) *dcgraphql.OptionalInt32 { return &r.IngestBurst }),
-			putest.OptionalFloat64Field("outboundMessagesPerSecond", 13, 33,
-				func(r *TenantUpdateRequest) *dcgraphql.OptionalFloat64 { return &r.OutboundMessagesPerSecond }),
+			putest.OptionalFloat64Field("outboundCallsPerSecond", 13, 33,
+				func(r *TenantUpdateRequest) *dcgraphql.OptionalFloat64 { return &r.OutboundCallsPerSecond }),
 			putest.OptionalInt32Field("outboundBurst", 14, 34,
 				func(r *TenantUpdateRequest) *dcgraphql.OptionalInt32 { return &r.OutboundBurst }),
 			putest.OptionalFloat64Field("aiInferenceRequestsPerMinute", 15, 35,
@@ -223,8 +223,8 @@ func tenantFamily() putest.Family[*Service] {
 func tenantTierFamily() putest.Family[*Service] {
 	const token = "gold-tier"
 
-	seededConfig := `{"ingestMessagesPerSecond":2000}`
-	replaceConfig := `{"ingestMessagesPerSecond":3000}`
+	seededConfig := `{"ingestReadingsPerSecond":2000}`
+	replaceConfig := `{"ingestReadingsPerSecond":3000}`
 
 	return putest.Family[*Service]{
 		Name:    "tenantTier",

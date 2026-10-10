@@ -356,7 +356,7 @@ func buildRateLimiter() {
 	unresolved := core.WithUnresolvedAdmissions(governance.NewUnresolvedAdmissions(Microservice, governance.Ingest))
 	overflow := core.WithOverflowAdmissions(governance.NewOverflowAdmissions(Microservice))
 	def := governance.Limits{
-		MessagesPerSecond: Configuration.IngestRateLimit.MessagesPerSecond,
+		MessagesPerSecond: Configuration.IngestRateLimit.ReadingsPerSecond,
 		Burst:             Configuration.IngestRateLimit.Burst,
 	}
 	infra := Microservice.InstanceConfiguration.Infrastructure

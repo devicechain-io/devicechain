@@ -295,7 +295,7 @@ func resolveSources(cfg *config.SparkplugConfiguration, instanceId string, inges
 // service token scoped to tenant:read alone, like the tenant gate's.
 func buildSampleLimiter(infra mscfg.InfrastructureConfiguration, cfg config.IngestRateLimit,
 	metrics adapter.IngestLimiterMetrics, unresolved func(core.CeilingSource)) *adapter.IngestLimiter {
-	def := governance.Limits{MessagesPerSecond: cfg.MessagesPerSecond, Burst: cfg.Burst}
+	def := governance.Limits{MessagesPerSecond: cfg.ReadingsPerSecond, Burst: cfg.Burst}
 	resolve := core.StaticCeiling(def.MessagesPerSecond, def.Burst)
 	if infra.ServiceAuth.Secret == "" || infra.UserManagement.Hostname == "" || infra.UserManagement.Port == 0 {
 		log.Warn().Msg("Service secret or user-management endpoint not configured — per-tenant Sparkplug ingest overrides disabled; metering every tenant at the platform default.")

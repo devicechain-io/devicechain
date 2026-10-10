@@ -4,6 +4,7 @@
 package config
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -15,9 +16,16 @@ import (
 // an operator who still sets it believes a ceiling is in force, and the fail-closed decode
 // is what tells them it is not.
 func TestIngestCeilingIsReadFromReadingsPerSecond(t *testing.T) {
-	if err := core.LoadConfiguration([]byte(`{"ingestRateLimit":{"readingsPerSecond":50,"burst":300}}`), &SparkplugConfiguration{}); err != nil &&
-		strings.Contains(err.Error(), "readingsPerSecond") {
+	// The decode alone, so the assertion is about the key and not about whatever else
+	// a full configuration must carry to validate.
+	var cfg SparkplugConfiguration
+	dec := json.NewDecoder(strings.NewReader(`{"ingestRateLimit":{"readingsPerSecond":50,"burst":300}}`))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&cfg); err != nil {
 		t.Fatalf("ingestRateLimit.readingsPerSecond must be a known key: %v", err)
+	}
+	if cfg.IngestRateLimit.ReadingsPerSecond != 50 || cfg.IngestRateLimit.Burst != 300 {
+		t.Fatalf("ingest ceiling = %g/%d, want 50/300", cfg.IngestRateLimit.ReadingsPerSecond, cfg.IngestRateLimit.Burst)
 	}
 }
 

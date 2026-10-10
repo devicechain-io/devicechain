@@ -193,10 +193,10 @@ func (s *Service) DeleteRole(ctx context.Context, scope, token string) (bool, er
 // validator's positional argument list (which, at six interchangeable numeric
 // pointers, is a swap waiting to happen).
 type GovernanceOverrides struct {
-	IngestMessagesPerSecond   *float64
-	IngestBurst               *int
-	OutboundMessagesPerSecond *float64
-	OutboundBurst             *int
+	IngestReadingsPerSecond *float64
+	IngestBurst             *int
+	OutboundCallsPerSecond  *float64
+	OutboundBurst           *int
 	// AI-inference rate (ADR-056 §6). Declared per MINUTE, unlike the per-second
 	// device-traffic dimensions above: drafting is a human-paced authoring action.
 	AiInferenceRequestsPerMinute *float64
@@ -239,8 +239,8 @@ func (g GovernanceOverrides) validate() error {
 		field string
 		value *float64
 	}{
-		{"ingestMessagesPerSecond", g.IngestMessagesPerSecond},
-		{"outboundMessagesPerSecond", g.OutboundMessagesPerSecond},
+		{"ingestReadingsPerSecond", g.IngestReadingsPerSecond},
+		{"outboundCallsPerSecond", g.OutboundCallsPerSecond},
 		{"aiInferenceRequestsPerMinute", g.AiInferenceRequestsPerMinute},
 	} {
 		if err := validateRateOverride(r.field, r.value); err != nil {
@@ -300,9 +300,9 @@ func (g GovernanceOverrides) validate() error {
 // the governance fields, not a partial patch. Every field set here must also appear
 // in Store.UpdateTenant's Select allowlist or the write is silently dropped.
 func (g GovernanceOverrides) applyTo(t *iam.Tenant) {
-	t.IngestMessagesPerSecond = g.IngestMessagesPerSecond
+	t.IngestReadingsPerSecond = g.IngestReadingsPerSecond
 	t.IngestBurst = g.IngestBurst
-	t.OutboundMessagesPerSecond = g.OutboundMessagesPerSecond
+	t.OutboundCallsPerSecond = g.OutboundCallsPerSecond
 	t.OutboundBurst = g.OutboundBurst
 	t.AiInferenceRequestsPerMinute = g.AiInferenceRequestsPerMinute
 	t.AiInferenceBurst = g.AiInferenceBurst
@@ -381,10 +381,10 @@ type TenantUpdateRequest struct {
 	// so renaming a tenant dropped its config.
 	Config dcgraphql.OptionalString
 
-	IngestMessagesPerSecond   dcgraphql.OptionalFloat64
-	IngestBurst               dcgraphql.OptionalInt32
-	OutboundMessagesPerSecond dcgraphql.OptionalFloat64
-	OutboundBurst             dcgraphql.OptionalInt32
+	IngestReadingsPerSecond dcgraphql.OptionalFloat64
+	IngestBurst             dcgraphql.OptionalInt32
+	OutboundCallsPerSecond  dcgraphql.OptionalFloat64
+	OutboundBurst           dcgraphql.OptionalInt32
 	// AiExternalEnabled is the per-tenant external-AI consent (ADR-056 §6), a nullable
 	// column where null and false both mean "not opted in" (fail-closed). Clearable,
 	// unlike the required booleans elsewhere on the platform: null is a state the column
@@ -409,9 +409,9 @@ type TenantUpdateRequest struct {
 // the tenant already holds, so applyTo rewrites the same values instead of eleven NULLs.
 func (r *TenantUpdateRequest) governanceFor(t *iam.Tenant) GovernanceOverrides {
 	return GovernanceOverrides{
-		IngestMessagesPerSecond:      r.IngestMessagesPerSecond.ApplyTo(t.IngestMessagesPerSecond),
+		IngestReadingsPerSecond:      r.IngestReadingsPerSecond.ApplyTo(t.IngestReadingsPerSecond),
 		IngestBurst:                  r.IngestBurst.ApplyToIntPtr(t.IngestBurst),
-		OutboundMessagesPerSecond:    r.OutboundMessagesPerSecond.ApplyTo(t.OutboundMessagesPerSecond),
+		OutboundCallsPerSecond:       r.OutboundCallsPerSecond.ApplyTo(t.OutboundCallsPerSecond),
 		OutboundBurst:                r.OutboundBurst.ApplyToIntPtr(t.OutboundBurst),
 		AiInferenceRequestsPerMinute: r.AiInferenceRequestsPerMinute.ApplyTo(t.AiInferenceRequestsPerMinute),
 		AiInferenceBurst:             r.AiInferenceBurst.ApplyToIntPtr(t.AiInferenceBurst),

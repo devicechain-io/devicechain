@@ -121,7 +121,7 @@ const cpuHeadroom = 2.0
 // plain `go test` can serve a stale PASS over an edit there; CI runs -count=1.
 const eventSourcesConfig = "../../services/event-sources/config/configuration.go"
 
-// defaultIngestCeiling parses DefaultIngestMessagesPerSecond out of the
+// defaultIngestCeiling parses DefaultIngestReadingsPerSecond out of the
 // event-sources config, failing rather than returning a zero that would make
 // every requirement below trivially met.
 func defaultIngestCeiling(t *testing.T) float64 {
@@ -139,26 +139,26 @@ func defaultIngestCeiling(t *testing.T) float64 {
 		for _, spec := range gd.Specs {
 			vs := spec.(*ast.ValueSpec)
 			for i, name := range vs.Names {
-				if name.Name != "DefaultIngestMessagesPerSecond" {
+				if name.Name != "DefaultIngestReadingsPerSecond" {
 					continue
 				}
 				if i >= len(vs.Values) {
-					t.Fatalf("DefaultIngestMessagesPerSecond in %s has no value of its own", eventSourcesConfig)
+					t.Fatalf("DefaultIngestReadingsPerSecond in %s has no value of its own", eventSourcesConfig)
 				}
 				lit, ok := vs.Values[i].(*ast.BasicLit)
 				if !ok || lit.Kind != token.INT {
-					t.Fatalf("DefaultIngestMessagesPerSecond in %s is no longer an integer literal; "+
+					t.Fatalf("DefaultIngestReadingsPerSecond in %s is no longer an integer literal; "+
 						"teach this test to read its new form", eventSourcesConfig)
 				}
 				n, err := strconv.ParseInt(lit.Value, 0, 64)
 				if err != nil || n <= 0 {
-					t.Fatalf("DefaultIngestMessagesPerSecond = %s is not a positive integer", lit.Value)
+					t.Fatalf("DefaultIngestReadingsPerSecond = %s is not a positive integer", lit.Value)
 				}
 				return float64(n)
 			}
 		}
 	}
-	t.Fatalf("no DefaultIngestMessagesPerSecond constant in %s", eventSourcesConfig)
+	t.Fatalf("no DefaultIngestReadingsPerSecond constant in %s", eventSourcesConfig)
 	return 0
 }
 

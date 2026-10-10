@@ -474,7 +474,7 @@ func newReactReader(nmgr *messaging.NatsManager) (messaging.MessageReader, error
 func buildEgressLimiter(cfg *config.EventProcessingConfiguration, infra mscfg.InfrastructureConfiguration,
 	unresolved func(core.CeilingSource)) *core.TenantRateLimiter {
 	def := governance.Limits{
-		MessagesPerSecond: cfg.OutboundMessagesPerSecond,
+		MessagesPerSecond: cfg.OutboundCallsPerSecond,
 		Burst:             cfg.OutboundBurst,
 	}
 	counted := core.WithUnresolvedAdmissions(unresolved)

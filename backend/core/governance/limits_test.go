@@ -148,9 +148,9 @@ func TestResolve_CapsConcurrentRefreshes(t *testing.T) {
 // Each dimension names a distinct pair of tenantGovernance fields; mixing them up
 // would silently govern the wrong resource.
 func TestDimensions_AreDistinct(t *testing.T) {
-	assert.Equal(t, "ingestMessagesPerSecond", Ingest.RateField)
+	assert.Equal(t, "ingestReadingsPerSecond", Ingest.RateField)
 	assert.Equal(t, "ingestBurst", Ingest.BurstField)
-	assert.Equal(t, "outboundMessagesPerSecond", Outbound.RateField)
+	assert.Equal(t, "outboundCallsPerSecond", Outbound.RateField)
 	assert.Equal(t, "outboundBurst", Outbound.BurstField)
 	assert.Equal(t, "aiInferenceRequestsPerMinute", AIInference.RateField)
 	assert.Equal(t, "aiInferenceBurst", AIInference.BurstField)

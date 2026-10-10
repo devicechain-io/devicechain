@@ -88,14 +88,14 @@ var (
 	// messages before they are decoded. The field names still say "messages": renaming
 	// them would change the stored schema and the API for no change in behaviour.
 	Ingest = register(Dimension{
-		Name: "ingest", RateField: "ingestMessagesPerSecond", BurstField: "ingestBurst",
+		Name: "ingest", RateField: "ingestReadingsPerSecond", BurstField: "ingestBurst",
 		PerSecondScale: 1,
 		Label:          "Ingest", RateUnit: "readings/sec",
 	})
 	// Outbound governs REACT connector egress, charged at both the source
 	// (event-processing) and the sink (outbound-connectors) — ADR-060 SD-3.
 	Outbound = register(Dimension{
-		Name: "outbound", RateField: "outboundMessagesPerSecond", BurstField: "outboundBurst",
+		Name: "outbound", RateField: "outboundCallsPerSecond", BurstField: "outboundBurst",
 		PerSecondScale: 1,
 		Label:          "Outbound", RateUnit: "calls/sec",
 	})

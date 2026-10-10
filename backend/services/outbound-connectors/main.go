@@ -224,7 +224,7 @@ func newDispatchReader(nmgr *messaging.NatsManager, cfg *config.OutboundConnecto
 func buildEgressLimiter(cfg *config.OutboundConnectorsConfiguration, infra mscfg.InfrastructureConfiguration,
 	unresolved func(core.CeilingSource)) *core.TenantRateLimiter {
 	def := governance.Limits{
-		MessagesPerSecond: cfg.OutboundMessagesPerSecond,
+		MessagesPerSecond: cfg.OutboundCallsPerSecond,
 		Burst:             cfg.OutboundBurst,
 	}
 	counted := core.WithUnresolvedAdmissions(unresolved)

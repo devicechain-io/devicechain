@@ -123,11 +123,19 @@ type AdminTenant {
     config: String
     # Per-tenant ingest governance overrides. Null means the tenant inherits the
     # platform default; a set value raises or lowers its ceiling.
-    ingestMessagesPerSecond: Float
+    """
+    This tenant's own ingest ceiling override, in readings (decoded samples) per second.
+    Null means the tenant inherits its tier's ceiling, then the platform default.
+    """
+    ingestReadingsPerSecond: Float
     ingestBurst: Int
     # Per-tenant outbound-connector governance overrides (ADR-060). Null means the
     # tenant inherits the platform default; a set value raises or lowers its ceiling.
-    outboundMessagesPerSecond: Float
+    """
+    This tenant's own outbound ceiling override, in connector calls dispatched per second.
+    Null means the tenant inherits its tier's ceiling, then the platform default.
+    """
+    outboundCallsPerSecond: Float
     outboundBurst: Int
     # Per-tenant external-AI consent (ADR-056 §6). Null/false means the tenant is
     # not opted in (fail-closed); true records the operator's consent to route this
@@ -288,9 +296,17 @@ input AdminTenantCreateRequest {
     # un-tiered tenant, so there is nothing to default.
     tierToken: String!
     config: String
-    ingestMessagesPerSecond: Float
+    """
+    Ingest ceiling override, in readings (decoded samples) per second. Must be positive;
+    omit it to inherit the tier's ceiling, then the platform default.
+    """
+    ingestReadingsPerSecond: Float
     ingestBurst: Int
-    outboundMessagesPerSecond: Float
+    """
+    Outbound ceiling override, in connector calls dispatched per second. Must be positive;
+    omit it to inherit the tier's ceiling, then the platform default.
+    """
+    outboundCallsPerSecond: Float
     outboundBurst: Int
     # Per-tenant external-AI consent (ADR-056 §6); omit for not-opted-in (the
     # fail-closed default).
@@ -352,9 +368,17 @@ input AdminTenantUpdateRequest {
     # the full replace this replaces. Re-tiering is a live, settings-only change.
     tierToken: String
     config: String
-    ingestMessagesPerSecond: Float
+    """
+    Ingest ceiling override, in readings (decoded samples) per second. Omitted leaves it
+    as it is; null removes it so the tenant inherits; a value must be positive.
+    """
+    ingestReadingsPerSecond: Float
     ingestBurst: Int
-    outboundMessagesPerSecond: Float
+    """
+    Outbound ceiling override, in connector calls dispatched per second. Omitted leaves it
+    as it is; null removes it so the tenant inherits; a value must be positive.
+    """
+    outboundCallsPerSecond: Float
     outboundBurst: Int
     aiExternalEnabled: Boolean
     # Per-tenant AI-inference rate overrides (ADR-056 §6 / ADR-023): how fast this
