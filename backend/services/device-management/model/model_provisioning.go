@@ -153,29 +153,3 @@ type ProvisioningProfileSearchResults struct {
 	Results    []ProvisioningProfile
 	Pagination rdb.SearchResultsPagination
 }
-
-// ProvisionDeviceRequest is what a connecting device presents to self-register:
-// the fleet's provision key+secret plus the identity it claims. The transport
-// that carries this (a later onboarding slice) sets the tenant on the context;
-// the request itself never names a tenant.
-type ProvisionDeviceRequest struct {
-	ProvisionKey    string
-	ProvisionSecret string
-	DeviceToken     string
-	Name            *string
-	Metadata        *string
-}
-
-// ProvisionDeviceResult is returned to a successfully provisioned device: its
-// resolved identity plus the credential it must authenticate with going forward.
-// CredentialValue is set only for credential types that carry a secret; for an
-// ACCESS_TOKEN the bearer secret is the CredentialId itself.
-type ProvisionDeviceResult struct {
-	Device          *Device
-	CredentialType  string
-	CredentialId    string
-	CredentialValue *string
-	// Created reports whether this call brought the device into existence (true)
-	// or resolved an already-registered one (false).
-	Created bool
-}

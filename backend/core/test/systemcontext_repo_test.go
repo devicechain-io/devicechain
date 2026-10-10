@@ -49,7 +49,6 @@ var sanctionedSystemContexts = map[string][]string{
 	},
 	"backend/services/command-delivery/processor/HoldReconciler.go":            {"CommandDeliveryProcessor.reconcileOnePage"},
 	"backend/services/command-delivery/processor/StrandedReconciler.go":        {"CommandDeliveryProcessor.reconcileStrandedPage"},
-	"backend/services/device-management/model/api_provisioning.go":             {"Api.ProvisionDeviceBootstrap"},
 	"backend/services/device-state/processor/StateProcessor.go":                {"StateProcessor.runInactivityMonitor"},
 	"backend/services/event-management/model/analytics.go":                     {"ReconcileAnalyticsSurface"},
 	"backend/services/event-management/model/lifecycle.go":                     {"ApplyDataLifecyclePolicies"},

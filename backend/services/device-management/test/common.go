@@ -401,16 +401,6 @@ func (api *MockApi) ProvisioningProfileByProvisionKey(ctx context.Context, provi
 	return args.Get(0).(*model.ProvisioningProfile), args.Error(1)
 }
 
-func (api *MockApi) ProvisionDevice(ctx context.Context, request *model.ProvisionDeviceRequest, now time.Time) (*model.ProvisionDeviceResult, error) {
-	args := api.Mock.Called()
-	return args.Get(0).(*model.ProvisionDeviceResult), args.Error(1)
-}
-
-func (api *MockApi) ProvisionDeviceBootstrap(ctx context.Context, request *model.ProvisionDeviceRequest, now time.Time) (*model.ProvisionDeviceResult, error) {
-	args := api.Mock.Called()
-	return args.Get(0).(*model.ProvisionDeviceResult), args.Error(1)
-}
-
 func (api *MockApi) InitiateDeviceClaim(ctx context.Context, request *model.DeviceClaimInitiateRequest) (*model.DeviceClaim, error) {
 	args := api.Mock.Called()
 	return args.Get(0).(*model.DeviceClaim), args.Error(1)

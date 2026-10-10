@@ -103,13 +103,6 @@ func TestEvaluateProvisioningProfile_DisabledBeatsSecret(t *testing.T) {
 	assert.ErrorIs(t, err, ErrProvisioningDisabled)
 }
 
-// Only CHECK_PRE_PROVISIONED forbids creating an unknown device; ALLOW_NEW
-// permits it.
-func TestProvisioningRejectsUnknownDevice(t *testing.T) {
-	assert.True(t, provisioningRejectsUnknownDevice(ProvisionCheckPreProvisioned))
-	assert.False(t, provisioningRejectsUnknownDevice(ProvisionAllowNew))
-}
-
 // parseOptionalTime returns the zero invalid value for nil input and a valid
 // time for a well-formed RFC3339 string; a malformed string errors.
 func TestParseOptionalTime(t *testing.T) {

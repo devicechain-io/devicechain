@@ -43,8 +43,6 @@ func (r *SchemaResolver) UpdateProvisioningProfile(ctx context.Context, args str
 	return &ProvisioningProfileResolver{M: *updated, S: r, C: ctx}, nil
 }
 
-// NOTE: device self-registration has no GraphQL surface. The api-layer flow
-// (model.Api.ProvisionDevice / ProvisionDeviceBootstrap) is retained as the
-// onboarding primitive a future device-plane provisioning transport will call
-// (ADR-012); the ADR-025 broker path, not GraphQL, is where device-facing entry
-// points live.
+// NOTE: device self-registration has no GraphQL surface and no api-layer entry point: the
+// flow that once sat in the model was never wired to a transport and was removed. A future
+// device-plane provisioning transport adds its own, authority-gated entry point.

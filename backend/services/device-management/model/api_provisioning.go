@@ -12,22 +12,14 @@ import (
 	"strings"
 	"time"
 
-	"github.com/devicechain-io/dc-microservice/core"
 	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/rdb"
-	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
 
-// Errors returned by ProvisionDevice. They are sentinels so a caller (e.g. the
-// future provisioning transport) can map each outcome without string matching.
-// A device-facing transport collapses all of them to one generic rejection so a
-// caller cannot probe which provision keys exist; operators see the distinct
-// reasons.
+// Errors returned by provisioning-profile evaluation and writes. They are sentinels so
+// a caller can map each outcome without string matching.
 var (
-	// ErrProvisioningKeyNotResolved means the presented provision key did not
-	// resolve to a profile in the request's tenant.
-	ErrProvisioningKeyNotResolved = errors.New("provision key did not resolve to a provisioning profile")
 	// ErrProvisioningDisabled means the resolved profile is disabled.
 	ErrProvisioningDisabled = errors.New("provisioning profile is disabled")
 	// ErrProvisioningExpired means the resolved profile is past its ExpiresAt.
@@ -35,12 +27,6 @@ var (
 	// ErrProvisioningSecretMismatch means the presented provision secret did not
 	// match the profile's secret.
 	ErrProvisioningSecretMismatch = errors.New("provision secret did not match")
-	// ErrProvisioningStrategyInvalid means the profile's stored strategy is not in
-	// the known vocabulary (a misconfigured profile).
-	ErrProvisioningStrategyInvalid = errors.New("provisioning profile strategy is not recognized")
-	// ErrProvisioningDeviceNotPreProvisioned means the device does not exist and the
-	// profile's CHECK_PRE_PROVISIONED strategy forbids creating it.
-	ErrProvisioningDeviceNotPreProvisioned = errors.New("device is not pre-provisioned and the profile does not allow new devices")
 	// ErrProvisioningSecretEmpty means an empty or blank provision secret was supplied
 	// on create. An empty secret is no proof of anything, so it is rejected at write
 	// time rather than persisted as a profile anyone holding the key can use.
@@ -292,142 +278,6 @@ func evaluateProvisioningProfile(profile *ProvisioningProfile, presentedSecret s
 		return ErrProvisioningSecretMismatch
 	}
 	return nil
-}
-
-// provisioningRejectsUnknownDevice reports whether a profile's strategy forbids
-// creating a device that does not already exist (CHECK_PRE_PROVISIONED). Pure so
-// the strategy gate is unit-testable.
-func provisioningRejectsUnknownDevice(strategy ProvisioningStrategy) bool {
-	return strategy == ProvisionCheckPreProvisioned
-}
-
-// ProvisionDevice runs the per-profile self-registration flow (ADR-012): it
-// resolves the provision key, verifies the profile (enabled/expiry/secret), then
-// applies the profile's strategy — ALLOW_NEW creates the device on first contact;
-// CHECK_PRE_PROVISIONED requires it to already exist — and returns the device
-// together with a credential it can authenticate with. The credential is reused
-// if the device already holds an enabled one of the profile's type, so repeated
-// provisioning is idempotent rather than minting duplicate credentials. now is
-// supplied by the caller so expiry is deterministic in tests.
-func (api *Api) ProvisionDevice(ctx context.Context, request *ProvisionDeviceRequest, now time.Time) (*ProvisionDeviceResult, error) {
-	profile, err := api.ProvisioningProfileByProvisionKey(ctx, request.ProvisionKey)
-	if err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, ErrProvisioningKeyNotResolved
-		}
-		return nil, err
-	}
-	if err := evaluateProvisioningProfile(profile, request.ProvisionSecret, now); err != nil {
-		return nil, err
-	}
-	strategy := ProvisioningStrategy(profile.Strategy)
-	if !strategy.Valid() {
-		return nil, ErrProvisioningStrategyInvalid
-	}
-	if profile.DeviceType == nil {
-		return nil, ErrProvisioningStrategyInvalid
-	}
-
-	// Resolve the claimed identity; absence drives the strategy decision.
-	devices, err := api.DevicesByToken(ctx, []string{request.DeviceToken})
-	if err != nil {
-		return nil, err
-	}
-
-	var device *Device
-	created := false
-	if len(devices) > 0 {
-		device = devices[0]
-	} else {
-		if provisioningRejectsUnknownDevice(strategy) {
-			return nil, ErrProvisioningDeviceNotPreProvisioned
-		}
-		device, err = api.CreateDevice(ctx, &DeviceCreateRequest{
-			Token:           request.DeviceToken,
-			Name:            request.Name,
-			DeviceTypeToken: profile.DeviceType.Token,
-			Metadata:        request.Metadata,
-		})
-		if err != nil {
-			return nil, err
-		}
-		created = true
-	}
-
-	credentialId, err := api.mintOrReuseCredential(ctx, device.Token, profile.CredentialType, now)
-	if err != nil {
-		return nil, err
-	}
-
-	return &ProvisionDeviceResult{
-		Device:         device,
-		CredentialType: profile.CredentialType,
-		CredentialId:   credentialId,
-		// ACCESS_TOKEN carries no separate secret: the id is the bearer token.
-		CredentialValue: nil,
-		Created:         created,
-	}, nil
-}
-
-// ProvisionDeviceBootstrap is the entry point an unauthenticated provisioning
-// transport calls: a device presents only its provision key+secret and never
-// names a tenant. It resolves the owning tenant from the globally-unique
-// provision key before any tenant is known — the device-side analog of the
-// login-by-username lookup and a sanctioned WithSystemContext bootstrap
-// (ADR-015) — then re-enters scoped to that tenant and runs ProvisionDevice, so
-// the secret/strategy gates and the device + credential writes are all tenant
-// isolated exactly as an authenticated path would be. The secret is NOT trusted
-// during tenant resolution; ProvisionDevice verifies it within the tenant scope.
-func (api *Api) ProvisionDeviceBootstrap(ctx context.Context, request *ProvisionDeviceRequest, now time.Time) (*ProvisionDeviceResult, error) {
-	sysctx := core.WithSystemContext(ctx)
-	profile, err := api.ProvisioningProfileByProvisionKey(sysctx, request.ProvisionKey)
-	if err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, ErrProvisioningKeyNotResolved
-		}
-		return nil, err
-	}
-	tctx := core.WithTenant(ctx, profile.TenantId)
-	return api.ProvisionDevice(tctx, request, now)
-}
-
-// mintOrReuseCredential returns the credential id a provisioned device should
-// authenticate with for the given type. It reuses the device's existing enabled,
-// UNEXPIRED credential of that type when present (so re-provisioning is
-// idempotent), and otherwise mints a fresh one. Only ACCESS_TOKEN is minted today
-// (see provisionableCredentialType), so the generated id is the bearer token and
-// no secret value is stored. now is supplied so an expired credential is never
-// handed back (review #4): reusing one would return a dead token the device
-// cannot authenticate with.
-func (api *Api) mintOrReuseCredential(ctx context.Context, deviceToken string, credentialType string, now time.Time) (string, error) {
-	// Reuse must consider every live credential of this type for the device, not a
-	// bounded page: a page could miss a reusable credential past its boundary and mint a
-	// duplicate instead of reusing. EnabledDeviceCredentialsOfType is the named full-set
-	// read (ADR-029) — the page size this used to have to defeat is no longer reachable.
-	existing, err := api.EnabledDeviceCredentialsOfType(ctx, deviceToken, credentialType)
-	if err != nil {
-		return "", err
-	}
-	for _, cred := range existing.Results {
-		// Skip an enabled-but-expired credential: it would authenticate to nothing.
-		if cred.ExpiresAt.Valid && !now.Before(cred.ExpiresAt.Time) {
-			continue
-		}
-		return cred.CredentialId, nil
-	}
-
-	credentialId := uuid.New().String()
-	_, err = api.CreateDeviceCredential(ctx, &DeviceCredentialCreateRequest{
-		Token:          uuid.New().String(),
-		DeviceToken:    deviceToken,
-		CredentialType: credentialType,
-		CredentialId:   credentialId,
-		Enabled:        true,
-	})
-	if err != nil {
-		return "", err
-	}
-	return credentialId, nil
 }
 
 // parseOptionalTime parses an optional RFC3339 timestamp into a sql.NullTime,

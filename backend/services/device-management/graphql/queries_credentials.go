@@ -20,14 +20,6 @@ import (
 // by introspecting the schema, so a field added elsewhere fails rather than
 // quietly widening the gate.
 //
-// One credential-minting path deliberately sits outside all of this:
-// model.ProvisionDevice / ProvisionDeviceBootstrap return the minted ACCESS_TOKEN
-// in ProvisionDeviceResult with no authority check, because device
-// self-registration authenticates with a provision key + secret rather than a
-// bearer (ADR-012). It has no GraphQL surface today and no caller
-// (mutations_provisioning.go says so). Whoever wires the device-plane
-// provisioning transport owns that gate; it is not covered by this one.
-//
 // The reason is that for two of the three credential types the credentialId IS
 // the bearer secret: an ACCESS_TOKEN device authenticates by presenting its
 // credentialId and nothing else (model.credentialRequiresSecret — only
