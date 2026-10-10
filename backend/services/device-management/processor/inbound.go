@@ -568,7 +568,8 @@ func sourceDedupID(kind, tenant string, src messaging.Message, index int) string
 	if src.StreamSeq == 0 {
 		return ""
 	}
-	return fmt.Sprintf("%s:%s:%d:%d", kind, tenant, src.StreamSeq, index)
+	// Concatenated rather than formatted: one is built for every resolved event published.
+	return kind + ":" + tenant + ":" + strconv.FormatUint(src.StreamSeq, 10) + ":" + strconv.Itoa(index)
 }
 
 // settleResolved records the outcome of publishing one resolved event against

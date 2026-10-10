@@ -985,7 +985,9 @@ func (rez *EventResolver) Process(ctx context.Context) {
 			// inbound message into the per-message log context (E15).
 			done := rez.metrics.Start()
 			correlation := unresolved.CorrelationID()
-			log.Debug().Str("correlation", correlation).Msg(fmt.Sprintf("Event resolution handled by resolver id %d", rez.WorkerId))
+			// Fields, not a formatted message: a disabled level makes this a no-op, and it
+			// is reached for every event resolved.
+			log.Debug().Str("correlation", correlation).Int("resolver", rez.WorkerId).Msg("Event resolution handled by resolver")
 
 			// Derive the per-message tenant from the message subject and build a
 			// tenant-scoped context. Without a parseable tenant the message can

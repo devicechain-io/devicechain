@@ -46,8 +46,34 @@ func ValidateToken(token string) error {
 	if len(token) > MaxTokenLen {
 		return fmt.Errorf("token %q exceeds the maximum length of %d", token, MaxTokenLen)
 	}
-	if !tokenGrammar.MatchString(token) {
+	if !matchesTokenGrammar(token) {
 		return fmt.Errorf("token %q is invalid: must be letters, digits, hyphens and underscores, starting with a letter or digit (%s)", token, tokenGrammar.String())
 	}
 	return nil
+}
+
+// matchesTokenGrammar is tokenGrammar.MatchString without the regular-expression engine:
+// a byte loop over the same two character classes. Every published message checks its
+// tenant against the grammar (messaging's tenantSubject), so the engine was a per-event
+// cost on every service that publishes; it was about 1% of device-management's CPU in a
+// production-shaped profile. tokenGrammar stays the statement of the grammar, and the
+// error message quotes it; TestTokenGrammarMatcherAgreesWithTheRegexp holds the two to
+// the same answer.
+//
+// It works on bytes, not runes: every byte the grammar admits is ASCII, so a multi-byte
+// UTF-8 sequence is refused at its first byte, as the regexp refuses its rune.
+func matchesTokenGrammar(token string) bool {
+	if token == "" {
+		return false
+	}
+	for i := 0; i < len(token); i++ {
+		c := token[i]
+		switch {
+		case 'a' <= c && c <= 'z', 'A' <= c && c <= 'Z', '0' <= c && c <= '9':
+		case (c == '-' || c == '_') && i > 0:
+		default:
+			return false
+		}
+	}
+	return true
 }
