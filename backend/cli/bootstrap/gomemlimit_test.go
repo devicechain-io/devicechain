@@ -235,12 +235,6 @@ func TestGoMemLimitConvertsGibibytesBeforeTakingThePercentage(t *testing.T) {
 			"requests": map[string]interface{}{"cpu": "100m", "memory": "256Mi"},
 			"limits":   map[string]interface{}{"cpu": "500m", "memory": "1Gi"},
 		},
-		// event-processing ships its own, larger memory limit, which is merged over this one.
-		"functionalAreas": map[string]interface{}{
-			"event-processing": map[string]interface{}{
-				"resources": map[string]interface{}{"limits": map[string]interface{}{"memory": "1Gi"}},
-			},
-		},
 	}))))
 	if n := mib(t, got); n != 768 {
 		t.Errorf("a 1Gi limit produced GOMEMLIMIT %s (%d MiB), want 768 MiB: the "+
@@ -257,12 +251,6 @@ func TestGoMemLimitReadsAFractionalLimit(t *testing.T) {
 		"resources": map[string]interface{}{
 			"requests": map[string]interface{}{"cpu": "100m", "memory": "256Mi"},
 			"limits":   map[string]interface{}{"cpu": "500m", "memory": "1.5Gi"},
-		},
-		// event-processing ships its own, larger memory limit, which is merged over this one.
-		"functionalAreas": map[string]interface{}{
-			"event-processing": map[string]interface{}{
-				"resources": map[string]interface{}{"limits": map[string]interface{}{"memory": "1.5Gi"}},
-			},
 		},
 	}))))
 	if n := mib(t, got); n != 1152 {
@@ -387,12 +375,6 @@ func TestGoMemLimitEscapeHatches(t *testing.T) {
 			"resources": map[string]interface{}{
 				"requests": map[string]interface{}{"cpu": "100m", "memory": "128Mi"},
 				"limits":   nil,
-			},
-			// event-processing ships a memory limit of its own, merged over the top-level one.
-			"functionalAreas": map[string]interface{}{
-				"event-processing": map[string]interface{}{
-					"resources": map[string]interface{}{"limits": map[string]interface{}{"memory": nil}},
-				},
 			},
 		}))) {
 			if c.goMemLimit != "" {
@@ -527,5 +509,67 @@ func TestEventPathAreasShipGoRuntimeTuningAndNoOtherAreaDoes(t *testing.T) {
 		if !seen[area] {
 			t.Errorf("%s did not render, so nothing above checked it", area)
 		}
+	}
+}
+
+// A raised TOP-LEVEL memory limit reaches event-processing: its 384Mi is a floor, applied only
+// when the merged limit is lower, not an area-level limit that would silently beat it. An
+// operator's own area-level limit is used as written, lower than the floor included.
+func TestEventProcessingMemoryFloorYieldsToALargerTopLevelAndToItsOwnLimit(t *testing.T) {
+	top := func(mem string) map[string]interface{} {
+		return map[string]interface{}{"resources": map[string]interface{}{
+			"requests": map[string]interface{}{"cpu": "100m", "memory": "128Mi"},
+			"limits":   map[string]interface{}{"cpu": "500m", "memory": mem},
+		}}
+	}
+	ep := func(vals map[string]interface{}) renderedContainer {
+		return byArea(t, renderContainers(t, vals))["event-processing"]
+	}
+	if c := ep(nil); c.memoryLimit != "384Mi" || mib(t, c.goMemLimit) != 288 {
+		t.Errorf("shipped: limit %q GOMEMLIMIT %q, want 384Mi and 288MiB", c.memoryLimit, c.goMemLimit)
+	}
+	if c := ep(top("256Mi")); c.memoryLimit != "384Mi" {
+		t.Errorf("a top-level limit below the floor gave %q, want the floor 384Mi", c.memoryLimit)
+	}
+	if c := ep(top("1Gi")); c.memoryLimit != "1Gi" || mib(t, c.goMemLimit) != 768 {
+		t.Errorf("a raised top-level limit gave %q / %q, want 1Gi / 768MiB: the floor beat the operator",
+			c.memoryLimit, c.goMemLimit)
+	}
+	own := top("256Mi")
+	own["functionalAreas"] = map[string]interface{}{"event-processing": map[string]interface{}{
+		"resources": map[string]interface{}{"limits": map[string]interface{}{"memory": "300Mi"}}}}
+	if c := ep(own); c.memoryLimit != "300Mi" {
+		t.Errorf("the area's own 300Mi limit gave %q, want it used as written", c.memoryLimit)
+	}
+}
+
+// An area-level goMemLimitPercent of 100 is refused by the schema, as the top-level one is.
+func TestAnAreaGoMemLimitPercentOfOneHundredIsRefused(t *testing.T) {
+	_, err := renderChart(t, map[string]interface{}{"functionalAreas": map[string]interface{}{
+		"device-management": map[string]interface{}{"goMemLimitPercent": 100}}})
+	if err == nil {
+		t.Fatal("an area-level goMemLimitPercent of 100 rendered: the pod would be OOMKilled where it should collect")
+	}
+}
+
+// An area's own percentage beats a non-zero top-level one that differs from 75, and the areas
+// that set none of their own follow the top level.
+func TestAnAreasPercentBeatsADifferentNonZeroTopLevel(t *testing.T) {
+	got := byArea(t, renderContainers(t, map[string]interface{}{
+		"goMemLimitPercent": 50,
+		"functionalAreas": map[string]interface{}{
+			"device-management": map[string]interface{}{"goMemLimitPercent": 60},
+		},
+	}))
+	if c := got["device-management"]; mib(t, c.goMemLimit) != mib(t, c.memoryLimit)*60/100 {
+		t.Errorf("device-management GOMEMLIMIT %q of a %s limit, want its own 60%%", c.goMemLimit, c.memoryLimit)
+	}
+	// event-management ships its own 75, which also beats the top-level 50.
+	if c := got["event-management"]; mib(t, c.goMemLimit) != mib(t, c.memoryLimit)*75/100 {
+		t.Errorf("event-management GOMEMLIMIT %q of a %s limit, want its shipped 75%%", c.goMemLimit, c.memoryLimit)
+	}
+	// an area with none follows the top level.
+	if c := got["command-delivery"]; c.memoryLimit != "" && mib(t, c.goMemLimit) != mib(t, c.memoryLimit)*50/100 {
+		t.Errorf("command-delivery GOMEMLIMIT %q of a %s limit, want the top-level 50%%", c.goMemLimit, c.memoryLimit)
 	}
 }

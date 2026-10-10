@@ -806,6 +806,20 @@ Parameters: area (the name, for messages), areaCfg, root.
 {{- end -}}
 {{- $own := deepCopy (get .areaCfg "resources" | default dict) -}}
 {{- $res := mergeOverwrite $base $own -}}
+{{- /* memoryLimitFloor: the chart's own default for a service that needs more than the
+top-level limit, applied only when the operator set no memory limit on the area itself and
+only when there is a merged limit and it is LOWER (no limit stays no limit). A raised top-level limit therefore still reaches the
+area (a plain area-level default would silently beat it), and an area's own limit is the
+operator's word and is never changed. */ -}}
+{{- $floor := get .areaCfg "memoryLimitFloor" | default "" | toString -}}
+{{- if and $floor (not (hasKey (dig "limits" dict $own) "memory")) -}}
+{{- $cur := dig "limits" "memory" "" $res | toString -}}
+{{- if and $cur (lt (include "devicechain.quantityScalar" (dict "dim" "memory" "q" $cur "area" $.area) | float64) (include "devicechain.quantityScalar" (dict "dim" "memory" "q" $floor "area" $.area) | float64)) -}}
+{{- $lims := get $res "limits" | default dict -}}
+{{- $_ := set $lims "memory" $floor -}}
+{{- $_ := set $res "limits" $lims -}}
+{{- end -}}
+{{- end -}}
 {{- range $dim := list "cpu" "memory" -}}
 {{- $req := dig "requests" $dim "" $res | toString -}}
 {{- $lim := dig "limits" $dim "" $res | toString -}}

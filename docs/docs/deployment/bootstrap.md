@@ -1205,7 +1205,7 @@ store.
 ### Service sizing {#service-sizing}
 
 Every backend service requests 128Mi of memory and is limited to 256Mi, except `event-processing`,
-which is limited to 384Mi. CPU is sized per service from measurement:
+which is limited to 384Mi (a floor: a higher top-level `resources.limits.memory`, or a limit of your own on that service, is used as written). CPU is sized per service from measurement:
 
 | Service | CPU request | CPU limit |
 | --- | --- | --- |

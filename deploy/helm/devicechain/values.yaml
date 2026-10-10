@@ -1588,12 +1588,15 @@ functionalAreas:
     resources:
       limits:
         cpu: "1"
-        # MEMORY LIMIT raised from the 256Mi default to 384Mi. With GOGC 400 and a GOMEMLIMIT at 75%
-        # (below) the collector lets the heap grow, and detection's working set reached 174 MiB
-        # of the 256Mi limit at 6,000 events/s on GKE, with GOMEMLIMIT at 192 MiB: the one event-path
-        # area close to its soft limit. At 384Mi the soft limit is 288 MiB. Only the limit moves; the
-        # memory request stays 128Mi. sizing_test.go holds it.
-        memory: 384Mi
+    # MEMORY LIMIT raised from the 256Mi default to 384Mi, as a FLOOR (memoryLimitFloor), not as an
+    # area-level limit: it applies only when the merged limit is lower, so a raised top-level
+    # resources.limits.memory still reaches this service, and a functionalAreas.event-processing
+    # .resources.limits.memory of your own is used as written. With GOGC 400 and a GOMEMLIMIT at
+    # 75% (below) the collector lets the heap grow, and detection's working set reached 174 MiB
+    # of the 256Mi limit at 6,000 events/s on GKE, with GOMEMLIMIT at 192 MiB: the one event-path
+    # area close to its soft limit. At 384Mi the soft limit is 288 MiB. Only the limit moves; the
+    # memory request stays 128Mi. sizing_test.go holds it.
+    memoryLimitFloor: 384Mi
     # CPU REQUEST (as device-management above), from its one UNTHROTTLED reading: 0.37
     # cores at 6,800 events/s with a 1-core limit, rounded up to 400m. At 6,000 under
     # its 500m limit it used 0.33-0.34, but it was throttled in about 5% of periods and

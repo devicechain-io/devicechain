@@ -1307,7 +1307,7 @@ base pueda seguirla, o donde puedas permitirte recrear la base.
 ### Dimensionamiento de los servicios {#service-sizing}
 
 Cada servicio de backend solicita 128Mi de memoria y tiene un límite de 256Mi, salvo
-`event-processing`, cuyo límite es 384Mi. La CPU se dimensiona por servicio a partir de mediciones:
+`event-processing`, cuyo límite es 384Mi (un mínimo: un `resources.limits.memory` superior de nivel superior, o un límite propio de ese servicio, se usa tal cual). La CPU se dimensiona por servicio a partir de mediciones:
 
 | Servicio | Solicitud de CPU | Límite de CPU |
 | --- | --- | --- |

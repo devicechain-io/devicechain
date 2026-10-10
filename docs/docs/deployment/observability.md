@@ -847,8 +847,10 @@ A fleet too large for the cache instead shows `kv_cache_local_evictions_total{re
 rising at close to the event rate, with `kv_cache_local_entries` at `kv_cache_local_max_entries`
 or `kv_cache_local_bytes` at `kv_cache_local_max_bytes`. Then raise the bound, and the memory
 limit with it: at the defaults the six in-memory caches, the credentials' fixed 16 MiB included,
-hold at most 96 MiB, and with no `GOMEMLIMIT` set
-the heap can grow to about twice what it holds before it is collected.
+hold at most 96 MiB. `device-management` runs with `GOGC=400` and a soft memory limit
+(`GOMEMLIMIT`) at 75% of its memory limit, so the collector lets the heap grow to about five times
+what it holds, and works harder once it nears that soft limit; where no `GOMEMLIMIT` is set the
+heap can instead grow to about twice what it holds before it is collected.
 
 Removing an entry after a change (a device deleted, a profile published) is never skipped. It
 waits up to five seconds, because only the bucket's leader can accept it. If it still fails, the

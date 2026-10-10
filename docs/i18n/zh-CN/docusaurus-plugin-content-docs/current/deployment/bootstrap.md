@@ -554,7 +554,7 @@ kubectl get pods -A -l cnpg.io/cluster -o wide
 
 ### 服务容量配置 {#service-sizing}
 
-每个后端服务请求 128Mi 内存，上限 256Mi，但 `event-processing` 的上限为 384Mi。CPU 按各服务测量结果配置：
+每个后端服务请求 128Mi 内存，上限 256Mi，但 `event-processing` 的上限为 384Mi（这是下限：更高的顶层 `resources.limits.memory`，或该服务自己设置的上限，按原值使用）。CPU 按各服务测量结果配置：
 
 | 服务 | CPU 请求 | CPU 上限 |
 | --- | --- | --- |
