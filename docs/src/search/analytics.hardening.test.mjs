@@ -8,19 +8,24 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createSearchTracker, sanitizeQuery } from './analytics.mjs';
 
+// Vendor-prefixed fixtures are assembled at run time so no credential-shaped literal sits
+// in the repository: secret scanners (GitHub push protection, Netlify's build scan) flag
+// the literal and fail the push or the deploy, whatever the file is.
+const tok = (prefix, body) => [prefix, body].join('');
+
 test('more credential shapes are redacted', () => {
   const sensitive = [
     '123e4567-e89b-12d3-a456-426614174000', // UUID
     'device 123E4567-E89B-12D3-A456-426614174000 not found',
-    'AKIAIOSFODNN7EXAMPLE', // AWS access key id
-    'ASIAY34FZKBOKMUTVV7A',
+    tok('AKIA', 'IOSFODNN7EXAMPLE'), // AWS access key id
+    tok('ASIA', 'Y34FZKBOKMUTVV7A'),
     'Basic dXNlcjpwYXNzd29yZDEyMw==',
     'basic YWRtaW46c2VjcmV0MTIz',
     'Bearer abc123def456ghi789',
-    'xoxb-1234567890-abcdefghij',
-    'ghp_a1b2c3d4e5f6a7b8c9d0e1f2',
-    'sk-proj-abc123def456ghi789jkl',
-    'glpat-abc123def456ghi789',
+    tok('xoxb', '-1234567890-abcdefghij'),
+    tok('ghp', '_a1b2c3d4e5f6a7b8c9d0e1f2'),
+    tok('sk', '-proj-abc123def456ghi789jkl'),
+    tok('glpat', '-abc123def456ghi789'),
     'a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6', // 32 lowercase alphanumerics
     'https://x.io/cb#access_token=abc',
     '#access_token=abc123',
