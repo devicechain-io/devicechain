@@ -5,6 +5,8 @@ package rdb
 
 import (
 	"fmt"
+	"reflect"
+	"sync"
 	"testing"
 )
 
@@ -46,8 +48,8 @@ func TestDestTenantsDoesNotAllocatePerRow(t *testing.T) {
 	}
 }
 
-// A field the struct does not have, and a nil embedded pointer, read exactly as a by-name
-// lookup reads them.
+// A field the struct does not have, a field reached through a non-nil embedded pointer, and
+// a shadowed field read exactly as a by-name lookup reads them.
 func TestDestTenantsCachedLookupKeepsByNameSemantics(t *testing.T) {
 	type viaPointer struct {
 		*TenantScoped
@@ -87,4 +89,73 @@ func BenchmarkDestTenants(b *testing.B) {
 			}
 		})
 	}
+}
+
+// Two local types can share a printed name ("rdb.row") and still lay their fields out
+// differently, so the cache must be keyed on the type itself, not on its name: a key
+// built from t.String() would hand the second type the first one's index.
+func TestDestTenantsCacheKeysOnTypeIdentityNotItsName(t *testing.T) {
+	first := func() any {
+		type row struct {
+			TenantId string
+			Name     string
+		}
+		return []row{{TenantId: "first", Name: "n"}}
+	}()
+	second := func() any {
+		type row struct {
+			Name     string
+			Count    int
+			TenantId string
+		}
+		return []row{{Name: "n", Count: 1, TenantId: "second"}}
+	}()
+	if a, b := reflect.TypeOf(first).Elem(), reflect.TypeOf(second).Elem(); a.String() != b.String() || a == b {
+		t.Fatalf("fixture: want two distinct types with one printed name, got %s and %s", a, b)
+	}
+	for _, tc := range []struct {
+		dest any
+		want string
+	}{{first, "first"}, {second, "second"}, {first, "first"}} {
+		if got := destTenants(tc.dest, "TenantId"); len(got) != 1 || got[0] != tc.want {
+			t.Fatalf("destTenants = %v, want [%s]", got, tc.want)
+		}
+	}
+}
+
+// The cache is shared by every statement of every goroutine. Run under -race, this fails
+// on unsynchronised access to it.
+func TestDestTenantsIsSafeForConcurrentUse(t *testing.T) {
+	type a struct {
+		TenantScoped
+		X int
+	}
+	type b struct {
+		Y        string
+		TenantId string
+	}
+	type c struct{ Tenant string }
+	var wg sync.WaitGroup
+	for g := 0; g < 16; g++ {
+		wg.Add(1)
+		go func(g int) {
+			defer wg.Done()
+			for i := 0; i < 200; i++ {
+				field := []string{"TenantId", "Tenant", fmt.Sprintf("Missing%d", i%7)}[(g+i)%3]
+				for _, dest := range []any{
+					[]a{{TenantScoped: TenantScoped{TenantId: "t"}}},
+					[]b{{TenantId: "t"}},
+					[]c{{Tenant: "t"}},
+				} {
+					got := destTenants(dest, field)
+					want := reflect.ValueOf(dest).Index(0).FieldByName(field)
+					if want.IsValid() != (len(got) == 1) {
+						t.Errorf("destTenants(%T, %s) = %v, by-name valid=%v", dest, field, got, want.IsValid())
+						return
+					}
+				}
+			}
+		}(g)
+	}
+	wg.Wait()
 }
