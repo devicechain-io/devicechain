@@ -249,12 +249,14 @@ func TestTheConnectResolveReadsNoVariableWidthColumn(t *testing.T) {
 	requireOneJoinedStatement(t, f, "callout resolve")
 	requireReadsNoVariableWidthColumn(t, f.stmts.taken()[0])
 
-	// Control: the per-event path still reads the full device, which the event resolver
-	// relies on. Without this, a lookup that read nothing for anyone would pass above.
+	// Control: the per-event path still reads what the event resolver relies on (the
+	// device type and external id), but not the variable-width columns. Without this, a
+	// lookup that read nothing for anyone would pass above.
 	f.stmts.reset()
 	full, err := f.capi.AuthenticateDevice(f.ctx, basic("cred-1", "s3cret"), time.Now())
-	if err != nil || full == nil || full.Metadata == nil || !full.Name.Valid || full.DeviceTypeId == 0 {
-		t.Fatalf("control: AuthenticateDevice must still read the whole device, got (%+v, %v)", full, err)
+	if err != nil || full == nil || full.DeviceTypeId == 0 || !full.ExternalId.Valid ||
+		full.Metadata != nil || full.Name.Valid {
+		t.Fatalf("control: AuthenticateDevice must read the resolver's columns and no variable-width one, got (%+v, %v)", full, err)
 	}
 }
 

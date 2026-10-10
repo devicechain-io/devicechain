@@ -187,11 +187,12 @@ func (api *Api) AuthenticateDeviceConnect(ctx context.Context, presented *Presen
 }
 
 // authenticateCredential is AuthenticateDevice returning the verified row as well, for
-// CachedApi to keep. The row is the full one (DeviceCredentialByCredentialId), never the
-// connect finder's.
+// CachedApi to keep. The row is deviceCredentialForAuth's: the columns the event check and
+// the access-token connect read, not the password connect finder's (whose row must never
+// reach evaluateCredential) and not every column.
 func (api *Api) authenticateCredential(ctx context.Context, presented *PresentedCredential,
 	now time.Time) (*DeviceCredential, *Device, error) {
-	cred, err := api.lookupPresentedCredential(ctx, presented, api.DeviceCredentialByCredentialId)
+	cred, err := api.lookupPresentedCredential(ctx, presented, api.deviceCredentialForAuth)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -249,8 +250,8 @@ func (api *Api) ResolveDeviceCredential(ctx context.Context, presented *Presente
 }
 
 // lookupPresentedCredential validates what was presented and finds the enabled
-// credential it names with find: DeviceCredentialByCredentialId for every column, or
-// deviceCredentialForConnect for the few a password connect reads.
+// credential it names with find: deviceCredentialForAuth for the columns the event check
+// reads, or deviceCredentialForConnect for the few a password connect reads.
 func (api *Api) lookupPresentedCredential(ctx context.Context, presented *PresentedCredential,
 	find func(ctx context.Context, credentialType string, credentialId string) (*DeviceCredential, error)) (*DeviceCredential, error) {
 	if presented == nil || presented.CredentialId == "" {
