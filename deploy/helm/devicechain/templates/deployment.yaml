@@ -235,6 +235,11 @@ spec:
             - name: GOMEMLIMIT
               value: {{ . | quote }}
             {{- end }}
+            {{/* GOGC, per area; see devicechain.goGc. The event-path areas ship 400. */}}
+            {{- with include "devicechain.goGc" (dict "areaCfg" $areaCfg "root" $root) }}
+            - name: GOGC
+              value: {{ . | quote }}
+            {{- end }}
             {{/* The opt-in profiling listener, for this area only; see
             devicechain.profilerAddress. Absent unless
             functionalAreas.<area>.profiler.enabled, and never a port below. */}}

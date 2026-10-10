@@ -737,7 +737,14 @@ useMeasuredRequests: true
 
 # GOMEMLIMIT, as a percentage of each container's own memory LIMIT.
 #
-# DEFAULT OFF, deliberately, and the reason is worth reading before turning it on.
+# OFF AT THE TOP LEVEL, ON FOR THE FIVE EVENT-PATH AREAS (device-management,
+# event-management, device-state, event-sources and event-processing), which set
+# `goMemLimitPercent: 75` and `gogc: 400` themselves under functionalAreas. That
+# measurement is at the end of this note. An area's own value wins over this one, and
+# 0 there turns it off for that area; the rest of this note is why the top level stays 0.
+#
+# The reasoning below was written when nothing set it, and it still holds for an area
+# without a measurement:
 #
 # Go does not read the container's memory limit. Measured on Go 1.26: a process in a
 # container limited to 128m reports GOMEMLIMIT as unlimited, while GOMAXPROCS *is*
@@ -772,7 +779,19 @@ useMeasuredRequests: true
 # service whose limit had since been raised, and GC thrash with no visible cause is
 # a miserable thing to debug. An area with no memory limit gets no GOMEMLIMIT —
 # there is nothing to derive from, and guessing is worse than leaving it to Go.
+#
+# WHAT CHANGED FOR THE EVENT PATH. The measurement above found no footprint benefit,
+# and that is still true. What was missing was its cost side on the services that
+# run hot: with GOGC 400 (a collection every time the heap reaches five times the live
+# set, instead of twice) the collector ran 4 to 13 times less often and CPU per event
+# fell 4 to 18% (see functionalAreas.device-management), and GOMEMLIMIT is what keeps
+# that larger heap from passing the container limit. Without the soft limit, GOGC 400
+# on a service near its limit is an OOMKill waiting for a spike.
 goMemLimitPercent: 0
+
+# GOGC for every area that sets none of its own (functionalAreas.<area>.gogc). 0 leaves
+# Go's default of 100. Valid values are 1 and above.
+gogc: 0
 
 # An explicit GOMEMLIMIT for every area, bypassing goMemLimitPercent. Go's own
 # syntax (e.g. "192MiB"). Prefer the percentage, and read the note above first.
@@ -1128,6 +1147,20 @@ functionalAreas:
     # they no longer prefer different zones. With eventPathSpread: false the area
     # keeps the cluster's default spread and gets no such term.
     eventPathSpread: true
+    # Go runtime tuning for the event path (the five areas that set eventPathSpread):
+    # GOGC 400 and a GOMEMLIMIT at 75% of this area's own memory limit. On GKE, at 6,000
+    # events/s, against a control run in the same session, it cut CPU per event by 18%
+    # (device-management), 18% (event-management), 15% (device-state), 4% (event-sources)
+    # and 5% (event-processing), and the garbage collector ran 4 to 13 times less often
+    # (device-management 7.3 to 1.5 runs a second).
+    # GOGC 400 lets the heap grow to five times the live set before a collection, which is
+    # why the soft limit rides with it: the limit makes the collector work harder, instead
+    # of letting the heap pass the container limit, when the live set is large.
+    # `goMemLimitPercent: 0` and `gogc: 0` here turn each off for this area; the top-level
+    # goMemLimitPercent applies to an area that sets none of its own. See the note above
+    # the top-level goMemLimitPercent.
+    gogc: 400
+    goMemLimitPercent: 75
     # Profiling listener: Go runtime profiles (CPU, heap, goroutines, execution
     # trace) served by this service on a port of its own. OFF, here and in every
     # area. Any area takes the same block. Turning it on restarts this area's pods
@@ -1200,6 +1233,8 @@ functionalAreas:
     # See device-management above.
     avoidEventStorePrimary: true
     eventPathSpread: true  # See device-management above.
+    gogc: 400
+    goMemLimitPercent: 75
     config: {}
     # Per-tenant ingest ceiling (defaults shown). The rate counts READINGS: one stored
     # value, i.e. one key of a measurement entry, one location or one alert. Each
@@ -1345,6 +1380,8 @@ functionalAreas:
     # moved.
     avoidEventStorePrimary: true
     eventPathSpread: true  # See device-management above.
+    gogc: 400
+    goMemLimitPercent: 75
     # REPLICAS: 1 here (the top-level default); `dcctl install --ha` without --compact
     # runs 2 (backend/cli/bootstrap/persistence_replicas.go). Measured on GKE (three
     # 4-vCPU service nodes, --ha, 3-minute runs): one pod shared a node with the NATS
@@ -1446,6 +1483,8 @@ functionalAreas:
     measuredRequests:
       cpu: 950m
     eventPathSpread: true  # See device-management above.
+    gogc: 400
+    goMemLimitPercent: 75
     config: {}
     # Live-state projection (defaults shown). Each writer merges the events already
     # waiting for it, up to maxBatch, in one transaction, which is what lets the
@@ -1549,6 +1588,12 @@ functionalAreas:
     resources:
       limits:
         cpu: "1"
+        # MEMORY LIMIT raised from the 256Mi default to 384Mi. With GOGC 400 and a GOMEMLIMIT at 75%
+        # (below) the collector lets the heap grow, and detection's working set reached 174 MiB
+        # of the 256Mi limit at 6,000 events/s on GKE, with GOMEMLIMIT at 192 MiB: the one event-path
+        # area close to its soft limit. At 384Mi the soft limit is 288 MiB. Only the limit moves; the
+        # memory request stays 128Mi. sizing_test.go holds it.
+        memory: 384Mi
     # CPU REQUEST (as device-management above), from its one UNTHROTTLED reading: 0.37
     # cores at 6,800 events/s with a 1-core limit, rounded up to 400m. At 6,000 under
     # its 500m limit it used 0.33-0.34, but it was throttled in about 5% of periods and
@@ -1558,6 +1603,8 @@ functionalAreas:
     measuredRequests:
       cpu: 400m
     eventPathSpread: true  # See device-management above.
+    gogc: 400
+    goMemLimitPercent: 75
     # checkpointEvents: 1000          # ADR-051: max applied events between snapshot
     # checkpointIntervalSeconds: 10   # commits (whichever comes first). The engine
     # acks the resolved-events durable only after the snapshot containing an event's
