@@ -72,6 +72,23 @@
   var URL_KEY = /(url|href|referrer|pathname)/i;
   var SEARCH_PAGE = /(^|\/)search\/?($|[?#])/;
 
+  // The search page's document title embeds the raw query, per locale (these are the
+  // plugin's strings, as translated in i18n/<locale>/code.json). PostHog records a doc
+  // page's $pageview on pushState BEFORE Docusaurus replaces the title, so a click from
+  // the results page arrives carrying the previous page's title.
+  var SEARCH_TITLE_TEMPLATES = [
+    'Search results for "{query}"',
+    'Resultados de búsqueda para "{query}"',
+    '“{query}”的搜索结果',
+  ];
+  function isSearchTitle(title) {
+    if (typeof title !== 'string') return false;
+    return SEARCH_TITLE_TEMPLATES.some(function (t) {
+      var parts = t.split('{query}');
+      return title.indexOf(parts[0]) === 0 && title.indexOf(parts[1], parts[0].length) >= 0;
+    });
+  }
+
   function scrubElement(el) {
     if (!el || typeof el !== 'object') return el;
     Object.keys(el).forEach(function (k) {
@@ -104,7 +121,14 @@
     // The search results page puts the query in its document title.
     var url = typeof props.$current_url === 'string' ? props.$current_url : '';
     var path = typeof props.$pathname === 'string' ? props.$pathname : '';
-    if (SEARCH_PAGE.test(url.split(/[?#]/)[0]) || SEARCH_PAGE.test(path)) {
+    var prev = typeof props.$prev_pageview_pathname === 'string' ? props.$prev_pageview_pathname : '';
+    if (
+      SEARCH_PAGE.test(url.split(/[?#]/)[0]) ||
+      SEARCH_PAGE.test(path) ||
+      SEARCH_PAGE.test(prev.split(/[?#]/)[0]) ||
+      isSearchTitle(props.title) ||
+      isSearchTitle(props.$title)
+    ) {
       delete props.title;
       delete props.$title;
     }
@@ -116,7 +140,7 @@
     return event;
   }
 
-  var api = { scrubUrl: scrubUrl, scrubEvent: scrubEvent, SENSITIVE_PARAMS: SENSITIVE_PARAMS };
+  var api = { scrubUrl: scrubUrl, scrubEvent: scrubEvent, SENSITIVE_PARAMS: SENSITIVE_PARAMS, SEARCH_TITLE_TEMPLATES: SEARCH_TITLE_TEMPLATES };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.dcAnalyticsScrub = api;
 })(typeof window !== 'undefined' ? window : this);

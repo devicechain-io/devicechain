@@ -85,3 +85,31 @@ test('non-event input does not throw', () => {
   assert.equal(scrubEvent(null), null);
   assert.deepEqual(scrubEvent({}), {});
 });
+
+test('a doc page recorded right after leaving the results page carries no query title', () => {
+  for (const title of [
+    'Search results for "hunter2" | DeviceChain',
+    'Resultados de búsqueda para "hunter2" | DeviceChain',
+    '“hunter2”的搜索结果 | DeviceChain',
+  ]) {
+    const ev = scrubEvent({
+      event: '$pageview',
+      properties: { $current_url: 'https://d/concepts/alarms', $pathname: '/concepts/alarms', title },
+    });
+    assert.ok(!('title' in ev.properties), title);
+  }
+  // previous page was the search page, whatever the title says
+  const ev = scrubEvent({
+    properties: {
+      $current_url: 'https://d/concepts/alarms',
+      $prev_pageview_pathname: '/es/search/',
+      title: 'anything hunter2',
+    },
+  });
+  assert.ok(!('title' in ev.properties));
+});
+
+test('ordinary page titles are kept', () => {
+  const ev = scrubEvent({ properties: { $current_url: 'https://d/a', title: 'Alarms | DeviceChain' } });
+  assert.equal(ev.properties.title, 'Alarms | DeviceChain');
+});

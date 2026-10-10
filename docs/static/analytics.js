@@ -45,5 +45,9 @@
     // Every event, including $pageview/$pageleave/autocapture, passes through here. The
     // docs search keeps the typed query in the URL; see analytics-scrub.js.
     before_send: scrub.scrubEvent,
+    // The docs use no feature flags. The flags request sends person properties such as
+    // $initial_current_url, which before_send does not cover, so a landing URL carrying
+    // ?token= or a shared /search/?q= link would leave unscrubbed.
+    advanced_disable_flags: true,
   });
 })();

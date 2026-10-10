@@ -102,3 +102,68 @@ test('the click survives a tracker shared across a remount (same instance, new p
   assert.equal(events.at(-1).n, 'docs_search_result_clicked');
   assert.equal(events.at(-1).p.rank, 2);
 });
+
+// ---- consent: the shape the live site has (cookieless_mode 'always')
+
+function captureHarness(posthog) {
+  const { tracker } = harness(posthog);
+  return tracker;
+}
+
+test('cookieless consent "pending" (opted-out=true, is_capturing=true) still sends', () => {
+  const events = [];
+  const posthog = {
+    __loaded: true,
+    has_opted_out_capturing: () => true, // what cookieless_mode 'always' reports by default
+    is_capturing: () => true,
+    get_explicit_consent_status: () => 'pending',
+    capture: (name) => events.push(name),
+  };
+  const tracker = captureHarness(posthog);
+  tracker.input('alarm');
+  tracker.select(1);
+  tracker.navigated('/x');
+  assert.deepEqual(events, ['docs_search', 'docs_search_result_clicked']);
+});
+
+test('explicit denial or is_capturing=false sends nothing', () => {
+  for (const patch of [
+    { get_explicit_consent_status: () => 'denied' },
+    { is_capturing: () => false },
+  ]) {
+    const events = [];
+    const posthog = {
+      __loaded: true,
+      has_opted_out_capturing: () => true,
+      is_capturing: () => true,
+      capture: (name) => events.push(name),
+      ...patch,
+    };
+    const tracker = captureHarness(posthog);
+    tracker.input('alarm');
+    tracker.select(1);
+    tracker.navigated('/x');
+    assert.deepEqual(events, []);
+  }
+});
+
+test('consent withdrawn between selection and landing suppresses the click', () => {
+  const events = [];
+  let capturing = true;
+  const posthog = {
+    __loaded: true,
+    is_capturing: () => capturing,
+    capture: (name) => events.push(name),
+  };
+  const tracker = captureHarness(posthog);
+  tracker.input('alarm');
+  tracker.select(1);
+  capturing = false;
+  tracker.navigated('/x');
+  assert.deepEqual(events, ['docs_search']);
+});
+
+test('bearer boundary: 11 value characters pass, 12 are redacted', () => {
+  assert.equal(sanitizeQuery('bearer abcdefghij1').redacted, false); // 11
+  assert.deepEqual(sanitizeQuery('bearer abcdefghij12'), { redacted: true }); // 12
+});

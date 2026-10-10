@@ -96,7 +96,16 @@ export function activePostHog(getPostHog) {
   if (!ph || typeof ph.capture !== 'function') return null;
   // `__loaded` is set by posthog.init(); before it the global is an inert stub.
   if (ph.__loaded !== true) return null;
-  if (typeof ph.has_opted_out_capturing === 'function' && ph.has_opted_out_capturing()) {
+  // `is_capturing()` is the client's own answer to "may I send?". NOT has_opted_out_capturing():
+  // under cookieless_mode 'always' (see analytics.js) that is TRUE while consent is merely
+  // "pending", yet the client captures pageviews, so gating on it would silence every
+  // search event on the live site. An explicit denial still stops us.
+  if (typeof ph.is_capturing === 'function') {
+    if (!ph.is_capturing()) return null;
+  } else if (typeof ph.has_opted_out_capturing === 'function' && ph.has_opted_out_capturing()) {
+    return null;
+  }
+  if (typeof ph.get_explicit_consent_status === 'function' && ph.get_explicit_consent_status() === 'denied') {
     return null;
   }
   return ph;
