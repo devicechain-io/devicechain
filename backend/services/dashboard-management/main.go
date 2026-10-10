@@ -83,7 +83,7 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	// re-land dashboard rows behind the purge sweep. Nil (user-management unconfigured)
 	// leaves the gate off with a warning; the per-area erasure fence is the guarantee.
 	infra := Microservice.InstanceConfiguration.Infrastructure
-	Api.TenantDeleted = governance.NewTenantLifecycleGate(infra.UserManagement, infra.ServiceAuth.Secret, "dashboard-management")
+	Api.TenantDeleted = governance.NewTenantLifecycleGate(infra.UserManagement, infra.ServiceAuth.Secret, "dashboard-management", governance.NewSafetyGates(Microservice))
 
 	// Report the size of this schema's append-only history tables (ADR-023): a dashboard version history only
 	// grows, and so does the audit journal the collector adds for every schema. Nothing
