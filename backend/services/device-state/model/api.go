@@ -360,9 +360,8 @@ func applyEvent(found *DeviceState, occurredAt time.Time, pt *PresenceTransition
 // caller distinguishes "never located" from "located here" by absence.
 func (api *Api) LatestLocationsByDeviceToken(ctx context.Context, deviceTokens []string) ([]*LatestLocation, error) {
 	found := make([]*LatestLocation, 0)
-	result := api.RDB.DB(ctx).Where("device_token in ?", deviceTokens).Order("device_token asc").Find(&found)
-	if result.Error != nil {
-		return nil, result.Error
+	if err := rdb.FindByKeys(api.RDB.DB(ctx).Order("device_token asc"), &found, "device_token", deviceTokens); err != nil {
+		return nil, err
 	}
 	return found, nil
 }
@@ -381,9 +380,8 @@ func (api *Api) LatestMeasurementsByDeviceToken(ctx context.Context, deviceToken
 // Get device states by originating device token.
 func (api *Api) DeviceStatesByDeviceToken(ctx context.Context, deviceTokens []string) ([]*DeviceState, error) {
 	found := make([]*DeviceState, 0)
-	result := api.RDB.DB(ctx).Find(&found, "device_token in ?", deviceTokens)
-	if result.Error != nil {
-		return nil, result.Error
+	if err := rdb.FindByKeys(api.RDB.DB(ctx), &found, "device_token", deviceTokens); err != nil {
+		return nil, err
 	}
 	return found, nil
 }
@@ -391,9 +389,8 @@ func (api *Api) DeviceStatesByDeviceToken(ctx context.Context, deviceTokens []st
 // DeviceStatesByExternalId returns the device states for the given external ids.
 func (api *Api) DeviceStatesByExternalId(ctx context.Context, externalIds []string) ([]*DeviceState, error) {
 	found := make([]*DeviceState, 0)
-	result := api.RDB.DB(ctx).Find(&found, "external_id in ?", externalIds)
-	if result.Error != nil {
-		return nil, result.Error
+	if err := rdb.FindByKeys(api.RDB.DB(ctx), &found, "external_id", externalIds); err != nil {
+		return nil, err
 	}
 	return found, nil
 }
