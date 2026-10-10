@@ -64,11 +64,14 @@ func names(n int) []string {
 	return out
 }
 
-// rowRead is an aggregation over the last `buckets` buckets of `interval` seconds.
+// rowRead is an aggregation over exactly `buckets` buckets of `interval` seconds, ending
+// now. endTime is explicit so the bucket count is exact, not one more for the time that
+// passes before the read computes it.
 func rowRead(buckets, interval int64, name *string) MeasurementAggregationCriteria {
-	start := time.Now().Add(-time.Duration(buckets*interval) * time.Second)
+	end := time.Now()
+	start := end.Add(-time.Duration(buckets*interval) * time.Second)
 	dev := "d1"
-	return MeasurementAggregationCriteria{DeviceToken: &dev, Name: name, StartTime: &start, IntervalSeconds: interval}
+	return MeasurementAggregationCriteria{DeviceToken: &dev, Name: name, StartTime: &start, EndTime: &end, IntervalSeconds: interval}
 }
 
 // 9,000 one-second buckets is under the bucket cap, but with six measurement names in
@@ -83,7 +86,7 @@ func TestBucketedMeasurementsRefusesTooManyRowsWithNoNameFilter(t *testing.T) {
 	require.True(t, ok, "want a limit refusal, got %v", err)
 	assert.Equal(t, "rows", le.What)
 	assert.Equal(t, MaxMeasurementRows, le.Max)
-	assert.InDelta(t, 9000*6, le.Got, 6, "Got is buckets x distinct names")
+	assert.Equal(t, 9000*6, le.Got, "Got is buckets x distinct names")
 }
 
 // Five names in range is 45,000 rows: not refused.
@@ -122,7 +125,7 @@ func TestBucketedMeasurementsCountsOnlyNamesInScope(t *testing.T) {
 
 	criteria, _, err := boundBucketedRange(rowRead(9000, 1, nil), time.Now())
 	require.NoError(t, err)
-	n, err := api.distinctMeasurementNames(ctx, criteria, false)
+	n, err := api.distinctMeasurementNames(ctx, criteria, false, 100)
 	require.NoError(t, err)
 	assert.Equal(t, int64(5), n)
 
@@ -142,4 +145,113 @@ func TestBucketedMeasurementsCountsNamesInTheRollupItReads(t *testing.T) {
 	le, ok := limit.As(err)
 	require.True(t, ok, "want a limit refusal, got %v", err)
 	assert.Equal(t, "rows", le.What)
+}
+
+// The cap is inclusive: 10,000 buckets x 5 names is exactly 50,000 rows and is allowed;
+// 7,143 buckets x 7 names is 50,001 rows and is refused.
+func TestBucketedMeasurementsRowCapIsExact(t *testing.T) {
+	api := newRowBoundTestApi(t)
+	ctx := core.WithTenant(context.Background(), "A")
+
+	seedNames(t, api, "A", time.Now().Add(-time.Minute), names(5)...)
+	_, err := api.BucketedMeasurements(ctx, rowRead(MaxMeasurementBuckets, 1, nil))
+	_, refused := limit.As(err)
+	assert.False(t, refused, "50,000 rows is at the cap, not over it: got %v", err)
+
+	seedNames(t, api, "A", time.Now().Add(-time.Minute), "m05", "m06")
+	_, err = api.BucketedMeasurements(ctx, rowRead(7143, 1, nil))
+	le, ok := limit.As(err)
+	require.True(t, ok, "50,001 rows must be refused, got %v", err)
+	assert.Equal(t, "rows", le.What)
+	assert.Equal(t, 50_001, le.Got)
+}
+
+// The count stops one name past what the cap allows: far more names than that are
+// refused all the same, and the count reads no further.
+func TestDistinctMeasurementNamesStopsAtEnough(t *testing.T) {
+	api := newRowBoundTestApi(t)
+	ctx := core.WithTenant(context.Background(), "A")
+	seedNames(t, api, "A", time.Now().Add(-time.Minute), names(12)...)
+
+	criteria, _, err := boundBucketedRange(rowRead(MaxMeasurementBuckets, 1, nil), time.Now())
+	require.NoError(t, err)
+	n, err := api.distinctMeasurementNames(ctx, criteria, false, 6)
+	require.NoError(t, err)
+	assert.Equal(t, int64(6), n)
+
+	_, err = api.BucketedMeasurements(ctx, rowRead(MaxMeasurementBuckets, 1, nil))
+	le, ok := limit.As(err)
+	require.True(t, ok, "12 names at 10,000 buckets must be refused, got %v", err)
+	assert.Equal(t, MaxMeasurementBuckets*6, le.Got, "the count stopped at 6 names")
+}
+
+// A zero-length range is zero buckets by arithmetic but one bucket of rows: it must not
+// multiply the name count away.
+func TestBoundBucketedRowsCountsAZeroLengthRangeAsOneBucket(t *testing.T) {
+	_, refused := limit.As(boundBucketedRows(0, MaxMeasurementRows+1))
+	assert.True(t, refused)
+	assert.NoError(t, boundBucketedRows(0, MaxMeasurementRows))
+}
+
+// If the name count fails, the read fails with it: a failed count is never read as zero
+// names, which would let the read through unbounded.
+func TestBucketedMeasurementsFailsClosedWhenTheNameCountFails(t *testing.T) {
+	api := newRowBoundTestApi(t)
+	require.NoError(t, api.RDB.Database.Migrator().DropTable(&MeasurementRollup{}))
+	ctx := core.WithTenant(context.Background(), "A")
+
+	criteria, _, err := boundBucketedRange(rowRead(10, 60, nil), time.Now())
+	require.NoError(t, err)
+	n, err := api.distinctMeasurementNames(ctx, criteria, true, 100)
+	require.Error(t, err)
+	assert.Zero(t, n)
+
+	// rollup-eligible (60 s interval), so the count reads the dropped table; the error
+	// must be the count's, i.e. the aggregation was never reached.
+	_, err = api.BucketedMeasurements(ctx, rowRead(10, 60, nil))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "counting measurement names")
+}
+
+// The rollup scope counts only names in its own range, device and tenant: a rollup
+// bucket before the (floored) start is not counted.
+func TestDistinctMeasurementNamesRollupScope(t *testing.T) {
+	api := newRowBoundTestApi(t)
+	ctx := core.WithTenant(context.Background(), "A")
+	inRange := time.Now().Add(-time.Hour).Truncate(time.Minute)
+	seedRollupNames(t, api, "A", inRange, "r1", "r2", "r3")
+	seedRollupNames(t, api, "A", time.Now().Add(-72*time.Hour).Truncate(time.Minute), "old1", "old2")
+	seedRollupNames(t, api, "B", inRange, "b1", "b2")
+	other := &MeasurementRollup{DeviceToken: "d2", EventType: esmodel.Measurement, Name: "other", Bucket: inRange, CountValue: 1}
+	require.NoError(t, api.RDB.DB(ctx).Create(other).Error)
+
+	criteria, _, err := boundBucketedRange(rowRead(24*60, 60, nil), time.Now())
+	require.NoError(t, err)
+	n, err := api.distinctMeasurementNames(ctx, criteria, true, 100)
+	require.NoError(t, err)
+	assert.Equal(t, int64(3), n)
+}
+
+// The raw scope applies the eventTypes filter: names under another event type are not
+// counted.
+func TestDistinctMeasurementNamesRawEventTypes(t *testing.T) {
+	api := newRowBoundTestApi(t)
+	ctx := core.WithTenant(context.Background(), "A")
+	at := time.Now().Add(-time.Minute)
+	seedNames(t, api, "A", at, "m1", "m2")
+	other := &MeasurementEvent{EventId: []byte("x"), PayloadId: []byte("x"), DeviceToken: "d1",
+		EventType: esmodel.Alert, OccurredTime: at, Name: "elsewhere"}
+	require.NoError(t, api.RDB.DB(ctx).Create(other).Error)
+
+	criteria, _, err := boundBucketedRange(rowRead(3600, 1, nil), time.Now())
+	require.NoError(t, err)
+	criteria.EventTypes = []esmodel.EventType{esmodel.Measurement}
+	n, err := api.distinctMeasurementNames(ctx, criteria, false, 100)
+	require.NoError(t, err)
+	assert.Equal(t, int64(2), n)
+
+	criteria.EventTypes = nil
+	n, err = api.distinctMeasurementNames(ctx, criteria, false, 100)
+	require.NoError(t, err)
+	assert.Equal(t, int64(3), n, "the control: without the filter the third name counts")
 }

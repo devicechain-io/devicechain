@@ -5,6 +5,7 @@ package model
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/integrity"
@@ -221,9 +222,12 @@ const MaxMeasurementBuckets = 10_000
 // is refused (LIMIT_EXCEEDED), not truncated.
 //
 // "names" is 1 when the read filters on a name. With no name filter it is the number of
-// distinct names actually in range, counted (see distinctMeasurementNames), not an
-// assumed bound: nothing limits how many names a device reports, so any assumed count
-// would let a device with more names than assumed straight through.
+// distinct names that match the read's filters, counted (see distinctMeasurementNames),
+// not an assumed bound: nothing limits how many names a device reports, so any assumed
+// count would let a device with more names than assumed straight through.
+//
+// Like the bucket bound, this is a bound on cost rather than an exact row count: the
+// aligned extra bucket MaxMeasurementBuckets describes can add up to `names` rows.
 const MaxMeasurementRows = 50_000
 
 // errStartTimeRequired refuses an aggregation with no start of range: without one the
@@ -260,10 +264,17 @@ func boundBucketedRange(criteria MeasurementAggregationCriteria, now time.Time) 
 	return criteria, buckets, nil
 }
 
+// rowBuckets is the bucket count the row bound multiplies by. A zero-length range
+// (startTime == endTime) counts as zero buckets but still returns the one bucket that
+// holds that instant, so it is counted as one: zero would make every name count pass.
+func rowBuckets(buckets int64) int64 {
+	return max(buckets, 1)
+}
+
 // boundBucketedRows caps the rows a read may return at MaxMeasurementRows. buckets is
 // already at most MaxMeasurementBuckets, so the product cannot overflow.
 func boundBucketedRows(buckets, names int64) error {
-	if rows := buckets * names; rows > MaxMeasurementRows {
+	if rows := rowBuckets(buckets) * names; rows > MaxMeasurementRows {
 		return limit.Exceeded("rows", int(rows), MaxMeasurementRows)
 	}
 	return nil
@@ -293,7 +304,10 @@ func (api *Api) BucketedMeasurements(ctx context.Context, criteria MeasurementAg
 	rollup := !api.RollupReadsDisabled && useMeasurementRollup(criteria)
 	names := int64(1)
 	if criteria.Name == nil {
-		if names, err = api.distinctMeasurementNames(ctx, criteria, rollup); err != nil {
+		// One name more than the cap allows at this bucket count is enough to decide, so
+		// the count stops there instead of reading every name in range.
+		enough := MaxMeasurementRows/rowBuckets(buckets) + 1
+		if names, err = api.distinctMeasurementNames(ctx, criteria, rollup, enough); err != nil {
 			return nil, err
 		}
 	}
@@ -308,19 +322,23 @@ func (api *Api) BucketedMeasurements(ctx context.Context, criteria MeasurementAg
 
 // distinctMeasurementNames counts the measurement names a read with no name filter will
 // group by, under exactly the filters and the source (raw or rollup) the read itself
-// uses, so the count is the read's real name dimension rather than an estimate.
-func (api *Api) distinctMeasurementNames(ctx context.Context, criteria MeasurementAggregationCriteria, rollup bool) (int64, error) {
+// uses, so the count is the read's real name dimension rather than an estimate. It
+// counts at most `enough` names: past that the read is refused whatever the true count
+// is, so reading further would only cost more. The scope keeps the model, so the
+// tenant-scope callback still applies. A failed count is returned as an error, never as
+// zero names: zero would let the read through unbounded.
+func (api *Api) distinctMeasurementNames(ctx context.Context, criteria MeasurementAggregationCriteria, rollup bool, enough int64) (int64, error) {
 	var db *gorm.DB
 	if rollup {
 		db = api.rollupMeasurementScope(ctx, criteria)
 	} else {
 		db = api.rawMeasurementScope(ctx, criteria)
 	}
-	var n int64
-	if err := db.Distinct("name").Count(&n).Error; err != nil {
-		return 0, err
+	var names []string
+	if err := db.Distinct("name").Limit(int(enough)).Pluck("name", &names).Error; err != nil {
+		return 0, fmt.Errorf("counting measurement names: %w", err)
 	}
-	return n, nil
+	return int64(len(names)), nil
 }
 
 // bucketedMeasurementsFromRaw is the exact path: it aggregates the raw

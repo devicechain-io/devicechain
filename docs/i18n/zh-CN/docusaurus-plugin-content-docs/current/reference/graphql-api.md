@@ -627,7 +627,7 @@ token 会拼入基础设施命名空间：租户 ID 成为 NATS subject 中按 `
 | 限制 | 数值 | 适用于 |
 | --- | --- | --- |
 | 每次聚合的时间桶数 | 10,000 | `bucketedMeasurements`：时间范围除以 `intervalSeconds`，向上取整。 |
-| 每次聚合的行数 | 50,000 | `bucketedMeasurements`：时间桶数乘以返回的测量名称数。指定 `name` 过滤时为一个名称；未指定时为该时间范围内所有不同的测量名称。 |
+| 每次聚合的行数 | 50,000 | `bucketedMeasurements`：时间桶数乘以返回的测量名称数。指定 `name` 过滤时为一个名称；未指定时为符合该读取过滤条件的所有不同测量名称。 |
 
 `bucketedMeasurements` 还要求提供 `startTime`；`endTime` 默认为当前时间。
 
