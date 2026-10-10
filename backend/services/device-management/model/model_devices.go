@@ -353,7 +353,7 @@ type DeviceCredentialUpdateRequest struct {
 // password), and NULL for a credential with none. Nothing that reads this row can
 // recover the secret, and the cache that copies the row copies the digest. The
 // credential_value column that held the plaintext is still in the table, NULLed by
-// DigestPlaintextCredentialSecrets at startup; nothing maps it.
+// DigestPlaintextCredentialSecrets at startup and by every write (LegacyCredentialValue).
 type DeviceCredential struct {
 	gorm.Model
 	rdb.TenantScoped
@@ -367,6 +367,18 @@ type DeviceCredential struct {
 	SecretDigest   sql.NullString
 	Enabled        bool
 	ExpiresAt      sql.NullTime
+
+	// LegacyCredentialValue is the retired plaintext column, mapped WRITE-ONLY so that
+	// every create and save of a credential writes it NULL. Nothing reads it, and nothing
+	// may set it.
+	//
+	// 🔴 IT IS LOAD-BEARING DURING A ROLLING UPGRADE. An old-version pod still writes a
+	// rotated password into credential_value and leaves secret_digest alone. If a new pod
+	// then rotated again without clearing that column, the next start's digest step would
+	// digest the OLDER password over the newer one, and the password that was rotated away
+	// would authenticate again. Clearing it on every write means the column only ever holds
+	// a value an old pod wrote LAST, which is the one the step should keep.
+	LegacyCredentialValue sql.NullString `gorm:"column:credential_value;->:false;<-"`
 }
 
 // DefaultOrder implements rdb.Sortable, and this is the one model here where the

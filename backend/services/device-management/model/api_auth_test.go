@@ -24,6 +24,7 @@ func credentialRow(ctype CredentialType, value *string, expires *time.Time) *Dev
 		CredentialId:   "cred-1",
 		Enabled:        true,
 	}
+	cred.TenantId = partialUpdateTenant
 	if value != nil && *value == "" {
 		// An empty stored value is a defect no write path produces; stored as is.
 		cred.SecretDigest = sql.NullString{String: "", Valid: true}

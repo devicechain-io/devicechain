@@ -16,6 +16,7 @@ import (
 	dmtest "github.com/devicechain-io/dc-device-management/test"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/credential"
+	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	putest "github.com/devicechain-io/dc-microservice/rdb/partialupdatetest"
 )
@@ -38,7 +39,7 @@ type legacySecretFixture struct {
 func newLegacySecretFixture(t *testing.T) legacySecretFixture {
 	t.Helper()
 	db := putest.NewSQLiteDB(t, credentialTables()...)
-	require.NoError(t, db.Exec(`ALTER TABLE device_credentials ADD COLUMN credential_value varchar(4096)`).Error)
+	// credential_value exists because the live model still maps it, write-only.
 	api := model.NewApi(&rdb.RdbManager{Database: db})
 	api.DeviceSecretKey = dmtest.DeviceSecretKey()
 	f := legacySecretFixture{db: db, api: api,
@@ -91,12 +92,13 @@ func TestTheStartupStepDigestsEveryPlaintextSecretInPlace(t *testing.T) {
 
 	require.NoError(t, digestStoredCredentialSecrets(context.Background(), rdbm, key))
 
+	tenantOf := map[string]string{"a-1": "acme", "a-2": "acme", "a-del": "acme", "a-tok": "acme", "b-1": "beta"}
 	for token, secret := range map[string]string{
 		"a-1": "pw-a1", "a-2": " pw a2 ", "a-del": "pw-deleted", "a-tok": "stray-value", "b-1": "pw-b1",
 	} {
 		require.Nil(t, f.column(t, token, "credential_value"), "%s still holds its plaintext", token)
 		digest, _ := f.column(t, token, "secret_digest").(string)
-		require.NoError(t, credential.VerifyDeviceSecret(key, digest, secret), "%s: the digest does not verify its old secret", token)
+		require.NoError(t, credential.VerifyDeviceSecret(key, tenantOf[token], digest, secret), "%s: the digest does not verify its old secret", token)
 	}
 	// An empty stored value meant "no secret" and still does; NULL stays NULL.
 	for _, token := range []string{"a-empty", "a-none"} {
@@ -105,14 +107,17 @@ func TestTheStartupStepDigestsEveryPlaintextSecretInPlace(t *testing.T) {
 	}
 
 	// A device keeps the password it always had: both tenants, both paths.
-	for ctx, c := range map[context.Context][2]string{f.acme: {"user-a2", " pw a2 "}, f.beta: {"user-b1", "pw-b1"}} {
-		secret := c[1]
-		presented := &model.PresentedCredential{CredentialType: string(model.CredentialMqttBasic), CredentialId: c[0], Secret: &secret}
+	for _, c := range []struct {
+		ctx                  context.Context
+		tenant, user, secret string
+	}{{f.acme, "acme", "user-a2", " pw a2 "}, {f.beta, "beta", "user-b1", "pw-b1"}} {
+		ctx, tenant, secret := c.ctx, c.tenant, c.secret
+		presented := &model.PresentedCredential{CredentialType: string(model.CredentialMqttBasic), CredentialId: c.user, Secret: &secret}
 		_, err := f.api.AuthenticateDevice(ctx, presented, time.Now())
 		require.NoError(t, err)
 		_, stored, err := f.api.ResolveDeviceCredential(ctx, presented, time.Now())
 		require.NoError(t, err)
-		require.NoError(t, credential.VerifyDeviceSecret(key, stored, secret))
+		require.NoError(t, credential.VerifyDeviceSecret(key, tenant, stored, secret))
 	}
 
 	// It runs on every start: the second finds nothing to do and changes nothing.
@@ -129,15 +134,15 @@ func TestTheStartupStepDoesNotOverwriteARowAnotherReplicaConverted(t *testing.T)
 	f := newLegacySecretFixture(t)
 	key := dmtest.DeviceSecretKey()
 	raced := ""
-	digest := func(secret string) (string, error) {
+	digest := func(tenant, secret string) (string, error) {
 		if secret == "pw-a1" && raced == "" {
 			// Another replica gets there first.
-			d, err := key.Digest(secret)
+			d, err := key.Digest(tenant, secret)
 			require.NoError(t, err)
 			raced = d
 			require.NoError(t, f.db.Exec(`UPDATE device_credentials SET secret_digest = ?, credential_value = NULL WHERE token = ?`, d, "a-1").Error)
 		}
-		return key.Digest(secret)
+		return key.Digest(tenant, secret)
 	}
 	n, err := schema.DigestPlaintextCredentialSecrets(context.Background(), f.db, digest)
 	require.NoError(t, err)
@@ -159,10 +164,81 @@ func TestTheStartupStepCountsDigestsMadeUnderAnotherKey(t *testing.T) {
 
 	other, err := credential.DeriveDeviceSecretKey([]byte("a-different-instance-root-key-32"))
 	require.NoError(t, err)
-	foreign, err := other.Digest("pw-b1")
+	foreign, err := other.Digest("beta", "pw-b1")
 	require.NoError(t, err)
 	require.NoError(t, f.db.Exec(`UPDATE device_credentials SET secret_digest = ? WHERE token = ?`, foreign, "b-1").Error)
 	n, err = schema.CountForeignCredentialDigests(context.Background(), f.db, prefix)
 	require.NoError(t, err)
 	require.Equal(t, int64(1), n)
+}
+
+// 🔴 A ROLLING UPGRADE CANNOT UNDO A ROTATION. During the overlap an old-version pod writes
+// a rotated password into credential_value and leaves secret_digest alone. A later
+// rotation on a new pod must clear that column, or the next start's digest step would
+// digest the older password over the newer one and the rotated-away password would
+// authenticate again. And the other way round: when the old pod's rotation is the LATER
+// one, the step must keep it.
+func TestARotationDuringTheRollingUpgradeIsNotUndoneByTheNextStart(t *testing.T) {
+	presented := func(secret string) *model.PresentedCredential {
+		return &model.PresentedCredential{CredentialType: string(model.CredentialMqttBasic), CredentialId: "user-a1", Secret: &secret}
+	}
+	oldPodRotates := func(f legacySecretFixture, secret string) {
+		require.NoError(t, f.db.Exec(`UPDATE device_credentials SET credential_value = ? WHERE token = ?`, secret, "a-1").Error)
+	}
+	newPodRotates := func(f legacySecretFixture, secret string) {
+		_, err := f.api.UpdateDeviceCredential(f.acme, "a-1", &model.DeviceCredentialUpdateRequest{
+			CredentialValue: dcgraphql.OptionalStringOf(secret),
+		})
+		require.NoError(t, err)
+	}
+	restart := func(f legacySecretFixture) {
+		require.NoError(t, digestStoredCredentialSecrets(context.Background(), &rdb.RdbManager{Database: f.db}, dmtest.DeviceSecretKey()))
+	}
+	authenticates := func(f legacySecretFixture, secret string) bool {
+		_, err := f.api.AuthenticateDevice(f.acme, presented(secret), time.Now())
+		return err == nil
+	}
+
+	t.Run("old pod, then new pod", func(t *testing.T) {
+		f := newLegacySecretFixture(t)
+		restart(f)
+		oldPodRotates(f, "P1")
+		newPodRotates(f, "P2")
+		require.Nil(t, f.column(t, "a-1", "credential_value"), "the new pod's write left the old pod's plaintext behind")
+		restart(f)
+		require.True(t, authenticates(f, "P2"), "the latest password must authenticate")
+		require.False(t, authenticates(f, "P1"), "the rotated-away password authenticates again")
+		require.False(t, authenticates(f, "pw-a1"))
+	})
+
+	t.Run("new pod, then old pod", func(t *testing.T) {
+		f := newLegacySecretFixture(t)
+		restart(f)
+		newPodRotates(f, "P2")
+		oldPodRotates(f, "P1")
+		restart(f)
+		require.True(t, authenticates(f, "P1"), "the old pod's later rotation must be the one kept")
+		require.False(t, authenticates(f, "P2"))
+	})
+
+	// A new-version save that does not name a secret (a metadata edit) after an old pod's
+	// rotation keeps the old pod's password: it is digested, not discarded, so the
+	// rotated-away password does not come back either.
+	t.Run("old pod rotates, new pod edits metadata", func(t *testing.T) {
+		f := newLegacySecretFixture(t)
+		restart(f)
+		oldPodRotates(f, "P1")
+		read, err := f.api.DeviceCredentialsByToken(f.acme, []string{"a-1"})
+		require.NoError(t, err)
+		require.False(t, read[0].LegacyCredentialValue.Valid, "a read filled the write-only plaintext column")
+		_, err = f.api.UpdateDeviceCredential(f.acme, "a-1", &model.DeviceCredentialUpdateRequest{
+			Metadata: dcgraphql.OptionalStringOf(`{"k":"v"}`),
+		})
+		require.NoError(t, err)
+		require.Nil(t, f.column(t, "a-1", "credential_value"), "the save left plaintext behind")
+		require.True(t, authenticates(f, "P1"), "the old pod's rotation was discarded")
+		require.False(t, authenticates(f, "pw-a1"), "the rotated-away password authenticates again")
+		restart(f)
+		require.True(t, authenticates(f, "P1"))
+	})
 }

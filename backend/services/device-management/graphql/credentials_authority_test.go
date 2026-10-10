@@ -89,7 +89,7 @@ func seedAccessTokenCredential(t *testing.T, ctx context.Context) *model.DeviceC
 		DeviceId:       device.ID,
 		CredentialType: string(model.CredentialAccessToken),
 		CredentialId:   "the-bearer-5f989616",
-		SecretDigest:   sql.NullString{String: dmtest.SecretDigest("stored-secret"), Valid: true},
+		SecretDigest:   sql.NullString{String: dmtest.SecretDigest("acme", "stored-secret"), Valid: true},
 		Enabled:        true,
 	}
 	cred.Token = "dozer-01-cred"

@@ -77,6 +77,7 @@ func (capi *CachedApi) AuthenticateDevice(ctx context.Context, presented *Presen
 		// A refusal here leaves the entry where it is: what is held is still the stored
 		// row, and only the presented secret or the time was wrong.
 		if err := evaluateCredential(capi.DeviceSecretKey, &cred, presented, now); err != nil {
+			capi.countMisconfigured(CredentialPathEvent, err)
 			return nil, err
 		}
 		return credentialDevice(&cred)

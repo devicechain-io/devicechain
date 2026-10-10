@@ -19,9 +19,10 @@ var testSecretKey = func() *credential.DeviceSecretKey {
 	return k
 }()
 
-// testDigest is secret's stored form under testSecretKey.
+// testDigest is secret's stored form under testSecretKey, for a credential of the fixture
+// tenant.
 func testDigest(secret string) sql.NullString {
-	d, err := testSecretKey.Digest(secret)
+	d, err := testSecretKey.Digest(partialUpdateTenant, secret)
 	if err != nil {
 		panic(err)
 	}
@@ -44,7 +45,8 @@ func secretStr(d sql.NullString, candidates ...string) string {
 	return "unverified digest " + d.String
 }
 
-// verifies reports whether stored is testSecretKey's digest of secret.
+// verifies reports whether stored is testSecretKey's digest of secret for a credential of
+// the fixture tenant.
 func verifies(stored, secret string) bool {
-	return credential.VerifyDeviceSecret(testSecretKey, stored, secret) == nil
+	return credential.VerifyDeviceSecret(testSecretKey, partialUpdateTenant, stored, secret) == nil
 }

@@ -26,8 +26,10 @@ import (
 // next start rather than left behind by a one-off backfill.
 //
 // credential_value is NOT dropped here. Old pods read it during the overlap, and a dropped
-// column would fail every credential lookup they make, ACCESS_TOKEN included. It is left
-// NULLed by the startup step, mapped by nothing, and dropped by a later migration.
+// column would fail every credential lookup they make, ACCESS_TOKEN included. It is NULLed
+// by the startup step, written NULL by every new-version write (the live model maps it
+// write-only, so a rotation an old pod left there cannot outlive a later one), and dropped
+// by a later migration together with that mapping.
 //
 // # Nullable, no default
 //
@@ -54,11 +56,12 @@ func NewCredentialSecretDigestSchema() *gormigrate.Migration {
 	}
 }
 
-// credentialSecretRow is a snapshot of the two device_credentials columns the digest step
-// reads and writes. It is not the live model: the live model no longer maps
+// credentialSecretRow is a snapshot of the device_credentials columns the digest step
+// reads and writes, and the tenant its digest is bound to. It is not the live model: the live model no longer maps
 // credential_value at all.
 type credentialSecretRow struct {
 	ID              uint
+	TenantId        string
 	CredentialValue sql.NullString
 }
 
@@ -74,7 +77,7 @@ const digestBatch = 500
 //
 // It runs under a system context: it is instance maintenance, like the migration chain, and
 // reads every tenant's rows. Each row is written with a compare-and-set on the plaintext it
-// read (WHERE id = ? AND credential_value = ?), so replicas starting together cannot undo
+// read (id = ? AND credential_value = ?), so replicas starting together cannot undo
 // one another: the loser of a race updates nothing, and both would have written a digest of
 // the same secret. A stored empty string is cleared to NULL with no digest, which is what an
 // empty secret means everywhere else.
@@ -82,7 +85,7 @@ const digestBatch = 500
 // 🔴 IT RUNS ON EVERY START, not once. After the first, the read finds nothing and the step
 // costs one query. That is what digests a plaintext an old-version pod wrote while the
 // rolling upgrade was still in progress.
-func DigestPlaintextCredentialSecrets(ctx context.Context, db *gorm.DB, digest func(string) (string, error)) (int, error) {
+func DigestPlaintextCredentialSecrets(ctx context.Context, db *gorm.DB, digest func(tenant, secret string) (string, error)) (int, error) {
 	db = db.WithContext(core.WithSystemContext(ctx))
 	converted := 0
 	var after uint
@@ -99,14 +102,16 @@ func DigestPlaintextCredentialSecrets(ctx context.Context, db *gorm.DB, digest f
 			after = row.ID
 			digested := sql.NullString{}
 			if row.CredentialValue.String != "" {
-				d, err := digest(row.CredentialValue.String)
+				d, err := digest(row.TenantId, row.CredentialValue.String)
 				if err != nil {
 					return converted, err
 				}
 				digested = sql.NullString{String: d, Valid: true}
 			}
-			res := db.Model(&credentialSecretRow{}).
-				Where("id = ? AND credential_value = ?", row.ID, row.CredentialValue.String).
+			// The model carries the primary key, so gorm adds id = ? and the audit journal
+			// records which row changed.
+			res := db.Model(&credentialSecretRow{ID: row.ID}).
+				Where("credential_value = ?", row.CredentialValue.String).
 				Updates(map[string]any{"secret_digest": digested, "credential_value": nil})
 			if res.Error != nil {
 				return converted, res.Error
