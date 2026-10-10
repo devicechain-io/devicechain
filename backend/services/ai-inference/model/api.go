@@ -34,6 +34,45 @@ var ErrInvalidParams = errors.New("provider params must be a JSON object")
 // ErrParamsTooLarge is returned when Params exceeds maxParamsBytes.
 var ErrParamsTooLarge = errors.New("provider params exceeds the maximum size")
 
+// ParamsNotAppliedError is returned when a create/update tries to SET provider params.
+// No provider client consumes Params yet, so storing one would be accepted, echoed back
+// and ignored: setting `temperature` would do nothing and nothing would say so. It is
+// refused until a client reads it. It answers with the UNSUPPORTED extensions code.
+//
+// Clearing is still allowed (an explicit null or blank), and so is an update that leaves
+// a previously stored value alone, so a provider written before this refusal stays
+// editable.
+type ParamsNotAppliedError struct{}
+
+// ErrParamsNotApplied is the one ParamsNotAppliedError value.
+var ErrParamsNotApplied error = &ParamsNotAppliedError{}
+
+func (*ParamsNotAppliedError) Error() string {
+	return "provider params are not applied in this build: no provider client reads them yet"
+}
+
+// Extensions types the refusal for the GraphQL layer.
+func (*ParamsNotAppliedError) Extensions() map[string]any {
+	return map[string]any{"code": "UNSUPPORTED"}
+}
+
+// refuseParams refuses a request whose params document would SET something: a JSON
+// object with at least one key. Blank, null and the empty object `{}` set nothing, so
+// they pass; malformed input falls through to paramsJSON's own refusal.
+func refuseParams(raw *string) error {
+	if raw == nil {
+		return nil
+	}
+	var doc map[string]json.RawMessage
+	if err := json.Unmarshal(bytes.TrimSpace([]byte(*raw)), &doc); err != nil {
+		return nil
+	}
+	if len(doc) != 0 {
+		return ErrParamsNotApplied
+	}
+	return nil
+}
+
 // ErrInvalidEndpoint is returned when a create/update carries an Endpoint that is
 // not a well-formed absolute http(s) URL.
 var ErrInvalidEndpoint = errors.New("provider endpoint must be an absolute http(s) URL")
@@ -160,6 +199,9 @@ func (api *Api) validateProviderFields(kind, model string, endpoint, params *str
 // separate acts, so an operator can add and smoke-test a provider without it
 // appearing on any tenant's menu.
 func (api *Api) CreateAIProvider(ctx context.Context, request *AIProviderCreateRequest) (*AIProvider, error) {
+	if err := refuseParams(request.Params); err != nil {
+		return nil, err
+	}
 	params, endpoint, err := api.validateRequest(request)
 	if err != nil {
 		return nil, err
@@ -241,6 +283,11 @@ func (api *Api) UpdateAIProvider(ctx context.Context, token string, request *AIP
 	// The endpoint folds through the POINTER shape on purpose: the pair is re-validated
 	// even when the request names neither half, and validation needs the value it would
 	// hold. endpointValue is idempotent on anything it has already stored.
+	if request.Params.Set {
+		if err := refuseParams(request.Params.Value); err != nil {
+			return nil, err
+		}
+	}
 	storedParams := providerParamsStr(current.Params)
 	params, endpoint, err := api.validateProviderFields(kind, modelID,
 		request.Endpoint.ApplyTo(dcgraphql.NullStr(current.Endpoint)), request.Params.ApplyTo(storedParams))
