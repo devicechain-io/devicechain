@@ -95,6 +95,12 @@ func (api *Api) UpdateMetricDefinition(ctx context.Context, token string,
 	if err != nil {
 		return nil, err
 	}
+	// Moving a definition onto another profile adds one to it.
+	if reparent != nil {
+		if err := api.checkProfileChildCeiling(ctx, &MetricDefinition{}, childKindMetric, reparent.ID); err != nil {
+			return nil, err
+		}
+	}
 	metricKey, err := request.MetricKey.ApplyToRequired("metricKey", updated.MetricKey)
 	if err != nil {
 		return nil, err

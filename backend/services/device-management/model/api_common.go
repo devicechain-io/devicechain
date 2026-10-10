@@ -58,6 +58,11 @@ func (api *Api) UpdateEntityRelationshipType(ctx context.Context, token string,
 	if err != nil {
 		return nil, err
 	}
+	if tracked && !updated.Tracked {
+		if err := api.checkTrackedFlipCeiling(ctx, updated.ID); err != nil {
+			return nil, err
+		}
+	}
 	updated.Name = request.Name.ApplyToNullString(updated.Name)
 	updated.Description = request.Description.ApplyToNullString(updated.Description)
 	metadataJSON, err := rdb.JSONInputOf("metadata", request.Metadata.ApplyTo(dcgraphql.MetadataStr(updated.Metadata)))

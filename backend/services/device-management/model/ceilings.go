@@ -33,6 +33,9 @@ const (
 	// own. The three are read whole to build a profile's publish snapshot and for the
 	// profile's resolver fields.
 	MaxChildrenPerProfile = 1000
+
+	// MaxRelationshipBatch caps the edges one createEntityRelationships call may carry.
+	MaxRelationshipBatch = 1000
 )
 
 // Labels of the profile-children histogram. A closed set, so the series count is fixed.
@@ -55,8 +58,8 @@ type ceilingMetrics struct {
 func newCeilingMetrics(ms *core.Microservice) *ceilingMetrics {
 	return &ceilingMetrics{
 		tracked: ms.NewHistogramVec("tracked_relationships_per_device",
-			"Tracked relationships found on a device each time event resolution reads them, from this "+
-				"replica's cache or the database. Writes are refused above 256.",
+			"Tracked relationships found on a device each time its tracked set is loaded from the database "+
+				"(a cache hit is not counted). Writes are refused above 256.",
 			[]string{}, ceilingBuckets).WithLabelValues(),
 		children: ms.NewHistogramVec("profile_children",
 			"Definitions found on a device profile each time one kind is read whole: kind=metric, command "+
@@ -101,6 +104,26 @@ func (api *Api) checkTrackedCeiling(ctx context.Context, db *gorm.DB, rt *Entity
 	}
 	if total := int(existing) + adding; total > MaxTrackedRelationshipsPerDevice {
 		return limit.Exceeded("tracked relationships per device", total, MaxTrackedRelationshipsPerDevice)
+	}
+	return nil
+}
+
+// checkTrackedFlipCeiling refuses marking a relationship type tracked when that would put
+// any device over MaxTrackedRelationshipsPerDevice: one grouped query over the device
+// edges of every tracked type plus this one, on the tenant-scoped handle.
+func (api *Api) checkTrackedFlipCeiling(ctx context.Context, typeId uint) error {
+	var over []uint
+	if err := api.RDB.DB(ctx).Model(&EntityRelationship{}).
+		Where("source_type = ? AND (relationship_type_id = ? OR relationship_type_id IN (?))",
+			string(entity.TypeDevice), typeId,
+			api.RDB.DB(ctx).Model(&EntityRelationshipType{}).Select("id").Where("tracked = ?", true)).
+		Group("source_id").Having("COUNT(*) > ?", MaxTrackedRelationshipsPerDevice).
+		Limit(1).Pluck("source_id", &over).Error; err != nil {
+		return err
+	}
+	if len(over) > 0 {
+		return limit.Exceeded("tracked relationships per device", MaxTrackedRelationshipsPerDevice+1,
+			MaxTrackedRelationshipsPerDevice)
 	}
 	return nil
 }

@@ -784,12 +784,13 @@ Borrar filas vuelve a dejar espacio.
 
 | Techo | Límite | Se aplica a |
 | --- | --- | --- |
-| Relaciones rastreadas por dispositivo | 256 | Relaciones de un tipo de relación rastreado cuyo origen es un dispositivo, en `createEntityRelationship`, `createEntityRelationships` y `claimDevice`. La resolución de eventos lee todas las relaciones rastreadas de un dispositivo en cada evento. |
+| Relaciones rastreadas por dispositivo | 256 | Relaciones de un tipo de relación rastreado cuyo origen es un dispositivo, en `createEntityRelationship`, `createEntityRelationships` y `claimDevice`, y en `updateEntityRelationshipType` cuando pone `tracked` en verdadero y eso dejaría a algún dispositivo por encima del techo. Una llamada a `createEntityRelationships` admite como máximo 1.000 relaciones. La resolución de eventos lee todas las relaciones rastreadas de un dispositivo en cada evento. |
 | Definiciones por perfil de dispositivo | 1.000 por tipo | Definiciones de métricas, definiciones de comandos y reglas de detección, cada una contada por separado, en `createMetricDefinition`, `createCommandDefinition` y `createDetectionRule`. |
 
-El servicio exporta `tracked_relationships_per_device` y `profile_children` (con la etiqueta `kind`:
-`metric`, `command` o `rule`) como histogramas de los tamaños que lee, para que pueda ver cuánto se
-acercan los datos reales a un techo.
+El servicio exporta `devicechain_devicemanagement_tracked_relationships_per_device` (se observa cada
+vez que el conjunto rastreado de un dispositivo se carga desde la base de datos) y
+`devicechain_devicemanagement_profile_children` (con la etiqueta `kind`: `metric`, `command` o `rule`)
+como histogramas de los tamaños que lee, para que pueda ver cuánto se acercan los datos reales a un techo.
 
 ### Comprobaciones de credenciales por petición {#credential-checks-per-request}
 

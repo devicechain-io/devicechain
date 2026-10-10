@@ -184,6 +184,12 @@ func (api *Api) UpdateDetectionRule(ctx context.Context, token string,
 	if err != nil {
 		return nil, err
 	}
+	// Moving a definition onto another profile adds one to it.
+	if reparent != nil {
+		if err := api.checkProfileChildCeiling(ctx, &DetectionRule{}, childKindRule, reparent.ID); err != nil {
+			return nil, err
+		}
+	}
 	definition, err := request.Definition.ApplyToRequired("definition", string(updated.Definition))
 	if err != nil {
 		return nil, err

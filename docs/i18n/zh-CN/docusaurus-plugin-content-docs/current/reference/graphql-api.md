@@ -638,11 +638,11 @@ WebSocket 同样遵循此规则：服务器无法读取的订阅会得到语法�
 
 | 上限 | 数值 | 适用范围 |
 | --- | --- | --- |
-| 每台设备的跟踪关系数 | 256 | 源为同一台设备、且关系类型为跟踪类型的关系，适用于 `createEntityRelationship`、`createEntityRelationships` 和 `claimDevice`。事件解析处理每个事件时都会读取该设备的全部跟踪关系。 |
+| 每台设备的跟踪关系数 | 256 | 源为同一台设备、且关系类型为跟踪类型的关系，适用于 `createEntityRelationship`、`createEntityRelationships` 和 `claimDevice`，以及把 `tracked` 设为 true 会使某台设备超过上限的 `updateEntityRelationshipType`。一次 `createEntityRelationships` 调用最多包含 1,000 条关系。事件解析处理每个事件时都会读取该设备的全部跟踪关系。 |
 | 每个设备配置文件的定义数 | 每种 1,000 | 指标定义、命令定义和检测规则，各自单独计数，适用于 `createMetricDefinition`、`createCommandDefinition` 和 `createDetectionRule`。 |
 
-服务以直方图形式导出 `tracked_relationships_per_device` 和 `profile_children`（带 `kind` 标签：
-`metric`、`command` 或 `rule`），记录读取到的规模，便于了解真实数据距离上限有多近。
+服务以直方图形式导出 `devicechain_devicemanagement_tracked_relationships_per_device`（每次从数据库加载设备的跟踪集合时记录）和
+`devicechain_devicemanagement_profile_children`（带 `kind` 标签：`metric`、`command` 或 `rule`），记录读取到的规模，便于了解真实数据距离上限有多近。
 
 ### 每请求凭据检查 {#credential-checks-per-request}
 

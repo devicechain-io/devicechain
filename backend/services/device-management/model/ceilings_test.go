@@ -7,9 +7,12 @@ import (
 	"context"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/devicechain-io/dc-microservice/core"
+	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/limit"
+	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-microservice/test/msgtest"
 	"github.com/prometheus/client_golang/prometheus"
@@ -40,7 +43,7 @@ func trackedRig(t *testing.T, targets int) (*Api, context.Context) {
 	t.Helper()
 	api := newPartialUpdateApi(t, &DeviceType{}, &Device{}, &DeviceCredential{},
 		&EntityRelationshipType{}, &EntityRelationship{}, &EntityAttribute{}, &Alarm{},
-		&EntityGroup{}, &EntityGroupMembership{})
+		&EntityGroup{}, &EntityGroupMembership{}, &CustomerType{}, &Customer{}, &DeviceClaim{})
 	ctx := partialUpdateCtx()
 	dt := &DeviceType{}
 	dt.Token = "src-type"
@@ -225,6 +228,8 @@ func histogramOf(t *testing.T, reg *prometheus.Registry, name string) (count uin
 	return count, sum
 }
 
+// The event resolver reads through ReadAheadForEvent, not through the CachedApi method,
+// so the metric is driven the way production drives it.
 func TestTrackedRelationshipMetricIsEmitted(t *testing.T) {
 	reg := prometheus.NewRegistry()
 	ms := &core.Microservice{FunctionalArea: "device-management"}
@@ -232,21 +237,23 @@ func TestTrackedRelationshipMetricIsEmitted(t *testing.T) {
 
 	api, ctx := trackedRig(t, 3)
 	api.EnableCeilingMetrics(ms)
-	capi := NewCachedApi(api, &Caches{RelationshipsBySource: msgtest.NewMemoryKV().NewCache()})
+	kv := func() *messaging.Cache { return msgtest.NewMemoryKV().NewCache() }
+	capi := NewCachedApi(api, &Caches{DeviceByToken: kv(), RelationshipsBySource: kv(),
+		ProfileResolutionByType: kv(), MembershipsByEntity: kv(), ScopedGroupsExist: kv()})
 	for i := 0; i < 3; i++ {
 		_, err := api.CreateEntityRelationship(ctx, relRequest("tracked", i))
 		require.NoError(t, err)
 	}
 	id := deviceIDOf(t, api, ctx, "src")
-	for i := 0; i < 2; i++ { // one database load and one cache hit: both observed
-		got, err := capi.TrackedRelationshipsForDevice(ctx, id)
+	for i := 0; i < 2; i++ { // the first read loads from the database, the second hits the cache
+		got, err := ReadAheadForEvent(ctx, capi, &Device{DeviceTypeId: 1}).TrackedRelationshipsForDevice(ctx, id)
 		require.NoError(t, err)
 		require.Len(t, got.Results, 3)
 	}
 
 	count, sum := histogramOf(t, reg, "devicechain_devicemanagement_tracked_relationships_per_device")
-	require.Equal(t, uint64(2), count)
-	require.Equal(t, 6.0, sum)
+	require.Equal(t, uint64(1), count, "one database load; the cache hit is not counted")
+	require.Equal(t, 3.0, sum)
 }
 
 func TestProfileChildrenMetricIsEmitted(t *testing.T) {
@@ -264,4 +271,116 @@ func TestProfileChildrenMetricIsEmitted(t *testing.T) {
 	count, sum := histogramOf(t, reg, "devicechain_devicemanagement_profile_children")
 	require.Equal(t, uint64(2), count, "one observation on the write check, one on the read")
 	require.Equal(t, 1.0, sum, "0 existing at the write check, 1 found by the read")
+}
+
+func TestProfileChildCeilingMoveOntoAFullProfileIsRefused(t *testing.T) {
+	api, ctx, _ := profileRig(t)
+	_, err := api.CreateDeviceProfile(ctx, &DeviceProfileCreateRequest{Token: "q"})
+	require.NoError(t, err)
+	def := `{"type":"threshold","metric":"temp","op":">","value":30}`
+
+	// A profile "q" is full of every kind; one definition of each sits on "p".
+	q, err := api.DeviceProfilesByToken(ctx, []string{"q"})
+	require.NoError(t, err)
+	seedMetrics(t, api, ctx, q[0], MaxChildrenPerProfile)
+	cmds := make([]any, 0, MaxChildrenPerProfile)
+	rules := make([]any, 0, MaxChildrenPerProfile)
+	for i := 0; i < MaxChildrenPerProfile; i++ {
+		cmds = append(cmds, &CommandDefinition{TokenReference: tokRef(fmt.Sprintf("qc-%d", i)),
+			DeviceProfile: q[0], CommandKey: fmt.Sprintf("cmd%d", i)})
+		rules = append(rules, &DetectionRule{TokenReference: tokRef(fmt.Sprintf("qr-%d", i)),
+			DeviceProfile: q[0], Definition: []byte(def), Enabled: true})
+	}
+	seedChildren(t, api, ctx, cmds)
+	seedChildren(t, api, ctx, rules)
+	_, err = api.CreateMetricDefinition(ctx, &MetricDefinitionCreateRequest{
+		Token: "pm", DeviceProfileToken: "p", MetricKey: "pm", DataType: "DOUBLE"})
+	require.NoError(t, err, "a full profile q does not block profile p")
+	_, err = api.CreateCommandDefinition(ctx, &CommandDefinitionCreateRequest{
+		Token: "pc", DeviceProfileToken: "p", CommandKey: "pc"})
+	require.NoError(t, err)
+	_, err = api.CreateDetectionRule(ctx, &DetectionRuleCreateRequest{
+		Token: "pr", DeviceProfileToken: "p", Definition: def, Enabled: true})
+	require.NoError(t, err)
+
+	q1 := "q"
+	_, err = api.UpdateMetricDefinition(ctx, "pm", &MetricDefinitionUpdateRequest{
+		DeviceProfileToken: dcgraphql.OptionalString{Set: true, Value: &q1}})
+	requireLimitRefusal(t, err, MaxChildrenPerProfile)
+	_, err = api.UpdateCommandDefinition(ctx, "pc", &CommandDefinitionUpdateRequest{
+		DeviceProfileToken: dcgraphql.OptionalString{Set: true, Value: &q1}})
+	requireLimitRefusal(t, err, MaxChildrenPerProfile)
+	_, err = api.UpdateDetectionRule(ctx, "pr", &DetectionRuleUpdateRequest{
+		DeviceProfileToken: dcgraphql.OptionalString{Set: true, Value: &q1}})
+	requireLimitRefusal(t, err, MaxChildrenPerProfile)
+}
+
+func TestTrackedFlipCeiling(t *testing.T) {
+	api, ctx := trackedRig(t, MaxTrackedRelationshipsPerDevice+1)
+	// 257 edges of a type that is NOT tracked are fine; flipping it would break the ceiling.
+	reqs := make([]*EntityRelationshipCreateRequest, 0, MaxTrackedRelationshipsPerDevice+1)
+	for i := 0; i <= MaxTrackedRelationshipsPerDevice; i++ {
+		reqs = append(reqs, relRequest("plain", i))
+	}
+	_, err := api.CreateEntityRelationships(ctx, reqs)
+	require.NoError(t, err)
+
+	yes := true
+	on := dcgraphql.OptionalBool{Set: true, Value: &yes}
+	_, err = api.UpdateEntityRelationshipType(ctx, "plain", &EntityRelationshipTypeUpdateRequest{Tracked: on})
+	requireLimitRefusal(t, err, MaxTrackedRelationshipsPerDevice)
+
+	// Removing one edge puts the device at exactly the ceiling, which the flip accepts.
+	_, err = api.RemoveEntityRelationship(ctx, "plain-0")
+	require.NoError(t, err)
+	_, err = api.UpdateEntityRelationshipType(ctx, "plain", &EntityRelationshipTypeUpdateRequest{Tracked: on})
+	require.NoError(t, err)
+}
+
+func TestTrackedRelationshipCeilingClaimIsRefused(t *testing.T) {
+	api, ctx := trackedRig(t, MaxTrackedRelationshipsPerDevice)
+	assignment, err := api.EnsureAssignmentType(ctx)
+	require.NoError(t, err)
+	require.NoError(t, api.RDB.DB(ctx).Model(&EntityRelationshipType{}).
+		Where("id = ?", assignment.ID).Update("tracked", true).Error)
+	for i := 0; i < MaxTrackedRelationshipsPerDevice; i++ {
+		r := relRequest(assignment.Token, i)
+		_, err := api.CreateEntityRelationship(ctx, r)
+		require.NoError(t, err)
+	}
+	ct := &CustomerType{}
+	ct.Token = "op"
+	require.NoError(t, api.RDB.DB(ctx).Create(ct).Error)
+	_, err = api.CreateCustomer(ctx, &CustomerCreateRequest{Token: "cust", CustomerTypeToken: "op"})
+	require.NoError(t, err)
+	_, err = api.InitiateDeviceClaim(ctx, &DeviceClaimInitiateRequest{DeviceToken: "src", ClaimSecret: "s3cret"})
+	require.NoError(t, err)
+
+	_, err = api.ClaimDevice(ctx, &DeviceClaimRequest{DeviceToken: "src", ClaimSecret: "s3cret",
+		CustomerToken: "cust", RelationshipType: assignment.Token}, time.Now())
+	requireLimitRefusal(t, err, MaxTrackedRelationshipsPerDevice)
+}
+
+func TestTrackedRelationshipCeilingIsPerDevice(t *testing.T) {
+	api, ctx := trackedRig(t, MaxTrackedRelationshipsPerDevice)
+	_, err := api.CreateDevice(ctx, &DeviceCreateRequest{Token: "other", DeviceTypeToken: "src-type"})
+	require.NoError(t, err)
+	for i := 0; i < MaxTrackedRelationshipsPerDevice; i++ {
+		_, err := api.CreateEntityRelationship(ctx, relRequest("tracked", i))
+		require.NoError(t, err)
+	}
+	r := relRequest("tracked", 0)
+	r.Token, r.Source = "other-0", "other"
+	_, err = api.CreateEntityRelationship(ctx, r)
+	require.NoError(t, err, "a full device does not block another")
+}
+
+func TestRelationshipBatchCap(t *testing.T) {
+	api, ctx := trackedRig(t, 0)
+	reqs := make([]*EntityRelationshipCreateRequest, MaxRelationshipBatch+1)
+	for i := range reqs {
+		reqs[i] = relRequest("plain", i)
+	}
+	_, err := api.CreateEntityRelationships(ctx, reqs)
+	requireLimitRefusal(t, err, MaxRelationshipBatch)
 }

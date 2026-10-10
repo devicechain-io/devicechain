@@ -122,6 +122,12 @@ func (api *Api) UpdateCommandDefinition(ctx context.Context, token string,
 	if err != nil {
 		return nil, err
 	}
+	// Moving a definition onto another profile adds one to it.
+	if reparent != nil {
+		if err := api.checkProfileChildCeiling(ctx, &CommandDefinition{}, childKindCommand, reparent.ID); err != nil {
+			return nil, err
+		}
+	}
 	commandKey, err := request.CommandKey.ApplyToRequired("commandKey", updated.CommandKey)
 	if err != nil {
 		return nil, err

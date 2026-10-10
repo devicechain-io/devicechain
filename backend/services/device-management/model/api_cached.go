@@ -394,16 +394,9 @@ func (capi *CachedApi) TrackedRelationshipsForDevice(ctx context.Context,
 
 	key := relationshipsBySourceKey(tenant, deviceId)
 	if results, answered, _ := capi.cachedRelationships(ctx, key, false); answered {
-		if results != nil {
-			capi.ceilings.observeTracked(len(results.Results))
-		}
 		return results, nil
 	}
-	results, err := capi.loadRelationships(ctx, key, deviceId)
-	if err == nil && results != nil {
-		capi.ceilings.observeTracked(len(results.Results))
-	}
-	return results, err
+	return capi.loadRelationships(ctx, key, deviceId)
 }
 
 // loadRelationships is the database half of TrackedRelationshipsForDevice.
@@ -412,6 +405,11 @@ func (capi *CachedApi) loadRelationships(ctx context.Context, key string,
 	results, err := capi.Api.TrackedRelationshipsForDevice(ctx, deviceId)
 	if err != nil {
 		return nil, err
+	}
+	// Observed here, the one place both the cached API and the event read-ahead load from
+	// the database, so it fires once per load and a cache hit pays nothing.
+	if results != nil {
+		capi.ceilings.observeTracked(len(results.Results))
 	}
 	// Cache positive results only.
 	if results != nil {

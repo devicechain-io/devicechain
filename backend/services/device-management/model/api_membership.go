@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/devicechain-io/dc-microservice/limit"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -114,6 +115,9 @@ func (api *Api) CreateEntityRelationships(ctx context.Context,
 	// Resolve each distinct relationship type once up front — a bulk add of N
 	// edges of the same type does one lookup, not N. The reserved types (member,
 	// assigned) are auto-provisioned on first use and seeded into the map.
+	if len(requests) > MaxRelationshipBatch {
+		return nil, limit.Exceeded("relationships in one request", len(requests), MaxRelationshipBatch)
+	}
 	typesByToken := make(map[string]*EntityRelationshipType)
 	plainTokens := make([]string, 0)
 	for _, request := range requests {
