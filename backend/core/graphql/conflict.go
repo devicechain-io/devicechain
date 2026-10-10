@@ -8,6 +8,7 @@ import (
 
 	"github.com/devicechain-io/dc-microservice/conflict"
 	"github.com/devicechain-io/dc-microservice/integrity"
+	"github.com/devicechain-io/dc-microservice/limit"
 	gqlerrors "github.com/graph-gophers/graphql-go/errors"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
@@ -53,7 +54,9 @@ func answerIntegrity(errs []*gqlerrors.QueryError) {
 		}
 		err := qe.ResolverError
 		chosen := ""
-		if class, ok := integrity.Refused(err); ok {
+		if _, ok := limit.As(err); ok {
+			chosen = limit.Code
+		} else if class, ok := integrity.Refused(err); ok {
 			chosen, _, _ = integrity.Answer(class)
 		} else if conflict.Is(err) {
 			chosen = conflict.Code
