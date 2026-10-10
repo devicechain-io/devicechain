@@ -37,4 +37,9 @@ func TestIngestMessagesPerSecondIsRefused(t *testing.T) {
 	if !strings.Contains(err.Error(), "messagesPerSecond") {
 		t.Fatalf("the refusal must name the key, got %v", err)
 	}
+	// The refusal says WHERE the setting went, so the fix is in the message rather than
+	// in a search of the release notes.
+	if !strings.Contains(err.Error(), "renamed") || !strings.Contains(err.Error(), "ingestRateLimit.readingsPerSecond") {
+		t.Fatalf("the refusal must say the key was renamed to ingestRateLimit.readingsPerSecond, got %v", err)
+	}
 }

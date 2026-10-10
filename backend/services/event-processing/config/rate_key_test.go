@@ -32,4 +32,9 @@ func TestOutboundMessagesPerSecondIsRefused(t *testing.T) {
 	if !strings.Contains(err.Error(), "outboundMessagesPerSecond") {
 		t.Fatalf("the refusal must name the key, got %v", err)
 	}
+	// The refusal says WHERE the setting went, so the fix is in the message rather than
+	// in a search of the release notes.
+	if !strings.Contains(err.Error(), "renamed") || !strings.Contains(err.Error(), "outboundCallsPerSecond") {
+		t.Fatalf("the refusal must say the key was renamed to outboundCallsPerSecond, got %v", err)
+	}
 }

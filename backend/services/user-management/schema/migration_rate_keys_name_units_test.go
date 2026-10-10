@@ -99,3 +99,30 @@ func TestTheRateKeyMigrationRollsBack(t *testing.T) {
 		`{"ingestMessagesPerSecond":2000,"ingestBurst":4000,"outboundMessagesPerSecond":200,"outboundBurst":400,"shedPriority":90}`,
 		tierConfig(t, db, "gold"))
 }
+
+// A SOFT-DELETED tier is re-keyed too. Restoring it must not bring back a config under keys
+// nothing reads — the tenant would be metered at the platform default while its tier said
+// otherwise. A gorm read through a model with DeletedAt would skip exactly these rows.
+func TestTheRateKeyMigrationReKeysSoftDeletedTiers(t *testing.T) {
+	db := newMigratedDB(t)
+	require.NoError(t, db.Exec("INSERT INTO iam_tenant_tiers (token, config, display_order, deleted_at) VALUES "+
+		`('retired', '{"ingestMessagesPerSecond":3,"outboundMessagesPerSecond":4}', 0, CURRENT_TIMESTAMP)`).Error)
+
+	require.NoError(t, NewRateKeysNameUnitsMigration().Migrate(db))
+	require.JSONEq(t, `{"ingestReadingsPerSecond":3,"outboundCallsPerSecond":4}`, tierConfig(t, db, "retired"))
+}
+
+// A tenant table carrying BOTH the old and the new column is refused, not resolved, and is
+// left exactly as it was: renaming over the new column, or skipping because the new one
+// exists, would each discard a set of overrides someone wrote.
+func TestTheRateKeyMigrationRefusesATableCarryingBothColumns(t *testing.T) {
+	db := newMigratedDB(t)
+	require.NoError(t, db.Exec("ALTER TABLE iam_tenants ADD COLUMN ingest_messages_per_second numeric").Error)
+
+	err := NewRateKeysNameUnitsMigration().Migrate(db)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "ingest_messages_per_second")
+	require.Contains(t, err.Error(), "ingest_readings_per_second")
+	require.True(t, db.Migrator().HasColumn(&rateKeyTenantRow{}, "ingest_messages_per_second"))
+	require.True(t, db.Migrator().HasColumn(&rateKeyTenantRow{}, "ingest_readings_per_second"))
+}
