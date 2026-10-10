@@ -14,21 +14,33 @@ export const DEFAULT_DEBOUNCE_MS = 1000;
 
 const EMAIL = /[^\s@]+@[^\s@]+\.[^\s@]+/;
 const JWT = /\beyJ[\w-]+\.[\w-]+\.[\w-]*/;
-// "bearer <value>" where the value looks like a credential (has a digit), so the plain
-// phrase "bearer token" or "bearer authentication" is still a searchable docs query.
-const BEARER = /\bbearer\s+(?=[\w.~+/=-]*\d)[\w.~+/=-]{16,}/i;
+const UUID = /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/i;
+const AWS_KEY_ID = /\b(?:AKIA|ASIA|AGPA|AIDA|AROA)[A-Z0-9]{16}\b/;
+// "bearer <value>" / "basic <value>" where the value looks like a credential (a digit, or
+// base64 padding / symbols), so the plain phrases "bearer token" and "basic authentication"
+// stay searchable.
+const BEARER = /\bbearer\s+(?=[\w.~+/=-]*\d)[\w.~+/=-]{12,}/i;
+const BASIC = /\bbasic\s+(?=[A-Za-z0-9+/]*[\d+/=])[A-Za-z0-9+/]{12,}={0,2}/i;
+// Well-known token prefixes (Slack, GitHub, GitLab, OpenAI/Stripe-style): a prefix, a
+// separator, and a body that carries a digit. The prefix is what makes a lowercase
+// hyphenated token a secret; an ordinary slug has no such prefix.
+const PREFIXED_TOKEN =
+  /\b(?:xox[abeoprs]|xapp|ghp|gho|ghu|ghs|ghr|github_pat|glpat|sk)[-_](?=[\w-]*\d)[\w-]{10,}/i;
 // scheme://user[:pass]@host
 const URL_USERINFO = /\b[a-z][a-z0-9+.-]*:\/\/[^\s/?#]*@/i;
-// a secret passed in a query string
+// a secret in a query string OR a fragment (#access_token=...)
 const URL_SECRET_PARAM =
-  /[?&](?:access_token|token|api[_-]?key|apikey|key|secret|password|passwd|pwd|auth|signature|sig)=[^\s&]+/i;
+  /[?&#;](?:access_token|refresh_token|id_token|token|api[_-]?key|apikey|key|client_secret|secret|password|passwd|pwd|auth|signature|sig)=[^\s&]+/i;
 const HEX_SECRET = /^[a-f0-9]{24,}$/i;
 const SECRET_CHARSET = /^[A-Za-z0-9+/_=-]{24,}$/;
+// A long unbroken lowercase run mixing letters and digits (no separators to read as words).
+const LOWER_ALNUM_SECRET = /^[a-z0-9]{32,}$/;
 
 /** A single whitespace-delimited token that reads as a key rather than a word. */
 function isSecretToken(token) {
   if (token.length < 24) return false;
   if (HEX_SECRET.test(token)) return true;
+  if (LOWER_ALNUM_SECRET.test(token) && /\d/.test(token) && /[a-z]/.test(token)) return true;
   // Base64 / base64url: random keys mix letter case and carry digits. Requiring both keeps
   // long hyphenated slugs and CamelCase identifiers (real docs queries) searchable.
   return (
@@ -46,7 +58,11 @@ export function looksSensitive(raw) {
   return (
     EMAIL.test(text) ||
     JWT.test(text) ||
+    UUID.test(text) ||
+    AWS_KEY_ID.test(text) ||
     BEARER.test(text) ||
+    BASIC.test(text) ||
+    PREFIXED_TOKEN.test(text) ||
     URL_USERINFO.test(text) ||
     URL_SECRET_PARAM.test(text) ||
     text.split(/\s+/).some(isSecretToken)
