@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Typed GraphQL operations against the dashboard-management service (ADR-039).
-import { gql } from '@devicechain/client';
+import { gql, GraphQLRequestError } from '@devicechain/client';
 import {
   parseDashboardDefinition,
   serializeDefinition,
@@ -14,6 +14,7 @@ import type {
   DashboardsQuery,
   DashboardQuery,
   DashboardVersionsQuery,
+  PublishedDashboardQuery,
   DashboardUpdateRequest,
 } from '@/gql/dashboard-management/graphql';
 
@@ -24,6 +25,7 @@ export type Dashboard = NonNullable<DashboardQuery['dashboard']>;
 export type Pagination = DashboardsQuery['dashboards']['pagination'];
 export type DashboardSearchResults = DashboardsQuery['dashboards'];
 export type DashboardVersion = DashboardVersionsQuery['dashboardVersions'][number];
+export type PublishedDashboard = NonNullable<PublishedDashboardQuery['publishedDashboard']>;
 
 // ── Dashboards ──────────────────────────────────────────────────────────
 
@@ -70,13 +72,62 @@ const DASHBOARD_BY_TOKEN = graphql(`
       description
       definition
       updatedAt
+      publishedVersion
     }
   }
 `);
 
+// The DRAFT, which is author-only: a caller without dashboard:write is refused. Members
+// who may not write read the published snapshot with getPublishedDashboard instead.
 export async function getDashboard(token: string): Promise<Dashboard | null> {
   const data = await gql('dashboard-management', DASHBOARD_BY_TOKEN, { token });
   return data.dashboard ?? null;
+}
+
+const DASHBOARD_PUBLISHED_VERSION = graphql(`
+  query DashboardPublishedVersion($token: String!) {
+    dashboard(token: $token) {
+      publishedVersion
+    }
+  }
+`);
+
+// Which version viewers are served (null when never published). Metadata only -- it never
+// selects the draft definition, so it needs just dashboard:read.
+export async function getPublishedVersion(token: string): Promise<number | null> {
+  const data = await gql('dashboard-management', DASHBOARD_PUBLISHED_VERSION, { token });
+  return data.dashboard?.publishedVersion ?? null;
+}
+
+const PUBLISHED_DASHBOARD = graphql(`
+  query PublishedDashboard($token: String!) {
+    publishedDashboard(token: $token) {
+      token
+      name
+      description
+      version
+      publishedAt
+      definition
+    }
+  }
+`);
+
+// NOT_PUBLISHED_CODE is the extensions code the server answers for a dashboard that
+// exists but has never been published.
+export const NOT_PUBLISHED_CODE = 'NOT_PUBLISHED';
+
+export function isNotPublishedError(err: unknown): boolean {
+  return (
+    err instanceof GraphQLRequestError &&
+    (err.errors ?? []).some((e) => e.extensions?.code === NOT_PUBLISHED_CODE)
+  );
+}
+
+// The snapshot viewers are served: null when the dashboard does not exist, and a thrown
+// error for which isNotPublishedError is true when it exists but was never published.
+export async function getPublishedDashboard(token: string): Promise<PublishedDashboard | null> {
+  const data = await gql('dashboard-management', PUBLISHED_DASHBOARD, { token });
+  return data.publishedDashboard ?? null;
 }
 
 const CREATE_DASHBOARD = graphql(`
@@ -223,12 +274,19 @@ const PUBLISH_DASHBOARD = graphql(`
       description: $description
       expectedUpdatedAt: $expectedUpdatedAt
     ) {
-      version
+      version {
+        version
+      }
+      dashboard {
+        updatedAt
+      }
     }
   }
 `);
 
-// publishDashboard freezes the current (saved) draft into a new immutable version.
+// publishDashboard freezes the current (saved) draft into a new immutable version and
+// makes it the version viewers are served. A publish is not a draft edit, so the returned
+// updatedAt is the draft's UNCHANGED one -- keep using it as the save baseline.
 // expectedUpdatedAt is the same precondition as updateDashboard: publish fails with
 // CONFLICT if the server draft moved on since — so it can't freeze another writer's
 // content while the author believes they published their own view.
@@ -267,7 +325,7 @@ export async function publishDashboard(
     // door. `null` is still expressible, and means "publish whatever is there".
     expectedUpdatedAt: string | null;
   },
-): Promise<{ version: number }> {
+): Promise<{ version: number; updatedAt: string | null }> {
   const issues = validateDefinitionOptions(input.definition);
   if (issues.length > 0) {
     throw new Error(
@@ -282,7 +340,28 @@ export async function publishDashboard(
     description: input.description?.trim() ? input.description.trim() : null,
     expectedUpdatedAt: input.expectedUpdatedAt,
   });
-  return data.publishDashboard;
+  return {
+    version: data.publishDashboard.version.version,
+    updatedAt: data.publishDashboard.dashboard.updatedAt ?? null,
+  };
+}
+
+const ACTIVATE_DASHBOARD_VERSION = graphql(`
+  mutation ActivateDashboardVersion($token: String!, $version: Int!) {
+    activateDashboardVersion(token: $token, version: $version) {
+      publishedVersion
+    }
+  }
+`);
+
+// activateDashboardVersion re-serves an existing version to viewers WITHOUT touching the
+// draft, unlike rollbackDashboard, which overwrites it. Returns the version now served.
+export async function activateDashboardVersion(
+  token: string,
+  version: number,
+): Promise<number | null> {
+  const data = await gql('dashboard-management', ACTIVATE_DASHBOARD_VERSION, { token, version });
+  return data.activateDashboardVersion.publishedVersion ?? null;
 }
 
 const ROLLBACK_DASHBOARD = graphql(`

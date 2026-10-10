@@ -3,16 +3,19 @@
 
 // The standalone dashboard viewer — the ADR-039 reference external embedder. It
 // proves the embed story: bring your OWN auth (its own login, NOT the console's
-// dc-auth session), paste an EXPORTED definition + an optional binding manifest,
-// and render view-only. One definition + two manifests → two live dashboards on
-// two different devices.
+// dc-auth session), load a definition + an optional binding manifest, and render
+// view-only. One definition + two manifests → two live dashboards on two different
+// devices.
 //
 // Three steps: (1) sign in (login → selectTenant → a tenant access token held in
-// React state); (2) load (paste + parse a definition and manifest); (3) view
-// (render the definition read-only through a hub bound to the manifest). There is
-// NO editing, no save, no token fetch.
+// React state); (2) load (fetch a dashboard's PUBLISHED snapshot by its token, or
+// paste + parse an exported definition, plus a manifest); (3) view (render the
+// definition read-only through a hub bound to the manifest). There is NO editing and
+// no save, and the viewer only ever asks for the published snapshot — the draft is
+// author-only. Paste stays for an embedder with no access to the service, and for
+// previewing a definition offline.
 //
-// Being paste-only leaves a first-time reader with nothing to paste, so there are
+// A first-time reader pasting has nothing to paste, so there are
 // checked-in samples — a board definition and manifests that bind it to real simulated
 // entities — at frontend/testdata/dash-samples. Read that README before pasting one:
 // the scenario it names has to be bootstrapped first, or every widget renders empty.
@@ -41,7 +44,7 @@ import type { Basemap } from '@devicechain/client';
 import { SUPPORTED_LOCALES, setUserLocale } from './i18n/config';
 import { loadErrorMessage } from './i18n/loadError';
 import { signInErrorKey } from './i18n/signInError';
-import { loadDashboard, type Loaded } from './load';
+import { loadDashboard, loadPublishedDashboard, type Loaded } from './load';
 import { MAP_RUNTIME } from './map-runtime';
 import { LOGIN, type Membership, SELECT_TENANT, TENANT_BASEMAP } from './queries';
 
@@ -224,18 +227,32 @@ function Load({
   onSignOut: () => void;
 }) {
   const { t } = useTranslation();
+  const [dashboardToken, setDashboardToken] = useState('');
   const [definitionText, setDefinitionText] = useState('');
   const [manifestText, setManifestText] = useState('');
   const [error, setError] = useState<string | null>(null);
+  const [fetching, setFetching] = useState(false);
 
-  const render = () => {
-    const result = loadDashboard(definitionText, manifestText);
+  const show = (result: Awaited<ReturnType<typeof loadPublishedDashboard>>) => {
     if ('error' in result) {
       setError(loadErrorMessage(result.error, t));
       return;
     }
     setError(null);
     onRender(result.loaded);
+  };
+
+  // The paste door: synchronous, offline, no server involved.
+  const render = () => show(loadDashboard(definitionText, manifestText));
+
+  // The default door: the dashboard's published snapshot, by token.
+  const loadPublished = async () => {
+    setFetching(true);
+    try {
+      show(await loadPublishedDashboard(dashboardToken, manifestText));
+    } finally {
+      setFetching(false);
+    }
   };
 
   return (
@@ -269,6 +286,24 @@ function Load({
           margin: '0 auto',
         }}
       >
+        <Field label={t('load:tokenLabel')} hint={t('load:tokenHint')}>
+          <TextInput
+            value={dashboardToken}
+            onChange={setDashboardToken}
+            placeholder={t('load:tokenPlaceholder')}
+          />
+        </Field>
+        <div>
+          <HeaderButton
+            onClick={loadPublished}
+            primary
+            disabled={dashboardToken.trim() === '' || fetching}
+          >
+            {fetching ? t('load:loading') : t('load:loadPublished')}
+          </HeaderButton>
+        </div>
+
+        <div style={{ fontWeight: 600 }}>{t('load:pasteHeading')}</div>
         <Field label={t('load:definitionLabel')}>
           <TextArea
             value={definitionText}
@@ -293,7 +328,7 @@ function Load({
         {error && <ErrorText>{error}</ErrorText>}
 
         <div>
-          <HeaderButton onClick={render} primary disabled={definitionText.trim() === ''}>
+          <HeaderButton onClick={render} disabled={definitionText.trim() === ''}>
             {t('load:render')}
           </HeaderButton>
         </div>
@@ -541,12 +576,14 @@ function TextInput({
   type = 'text',
   autoComplete,
   autoFocus,
+  placeholder,
 }: {
   value: string;
   onChange: (v: string) => void;
   type?: string;
   autoComplete?: string;
   autoFocus?: boolean;
+  placeholder?: string;
 }) {
   return (
     <input
@@ -555,6 +592,7 @@ function TextInput({
       onChange={(e) => onChange(e.target.value)}
       autoComplete={autoComplete}
       autoFocus={autoFocus}
+      placeholder={placeholder}
       style={{
         fontSize: 14,
         padding: '8px 10px',

@@ -510,6 +510,7 @@ var sweepTokenArgs = map[string]string{
 	"device-management.entityGroupVersions.token":            "entity-group",
 	"device-management.resolveDeviceGroupTargets.groupToken": "entity-group",
 	"dashboard-management.dashboardVersions.token":           "dashboard",
+	"dashboard-management.dashboardVersion.token":            "dashboard",
 	"outbound-connectors.connectorVersions.token":            "connector",
 }
 
@@ -535,6 +536,10 @@ var sweepExemptions = map[string]string{
 	// geometry archive broke) with no version to guess at.
 	"device-management.geoFenceSetSnapshot": "takes a fence-set VERSION, and an unknown one is an " +
 		"error by design; currentGeoFenceSet reaches the same hydration with nothing to guess",
+	"dashboard-management.publishedDashboard": "answers NOT_PUBLISHED, by design, for a dashboard " +
+		"whose published pointer was never set; every dashboard seeded by a release that predates " +
+		"the pointer is exactly that, so the refusal is the platform working. dashboardVersion " +
+		"reaches the same stored snapshots",
 	"device-management.geoFenceSetManifest": "takes a fence-set VERSION, for the reason " +
 		"geoFenceSetSnapshot is exempt; currentGeoFenceSetManifest covers the same path",
 

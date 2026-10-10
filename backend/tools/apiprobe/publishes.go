@@ -64,6 +64,10 @@ type publishOp struct {
 	// Fields is the selection, used verbatim in both documents. Same rule as
 	// entity.Fields: select only STORED values.
 	Fields string
+	// Wrap and WrapMarker are the entity's: set when the publish returns an envelope
+	// whose `Wrap` member is the version. See entity.Wrap and entity.WrapMarker.
+	Wrap       string
+	WrapMarker string
 }
 
 // entity renders the op in the table's own vocabulary.
@@ -73,13 +77,15 @@ type publishOp struct {
 // exactly what the read-back needs: xVersions is keyed by the parent.
 func (p publishOp) entity() entity {
 	return entity{
-		Name:     p.Name,
-		Area:     p.Area,
-		Mutation: p.Mutation,
-		Read:     p.Read,
-		Fields:   p.Fields,
-		Requires: p.Requires,
-		Publish:  true,
+		Name:       p.Name,
+		Area:       p.Area,
+		Mutation:   p.Mutation,
+		Read:       p.Read,
+		Fields:     p.Fields,
+		Requires:   p.Requires,
+		Publish:    true,
+		Wrap:       p.Wrap,
+		WrapMarker: p.WrapMarker,
 		Vars: func(s *state) map[string]any {
 			return map[string]any{
 				"token": s.tok(p.Of),
@@ -147,6 +153,10 @@ var publishes = []publishOp{
 		Read:     "dashboardVersions",
 		Of:       "dashboard",
 		Fields:   publishVersionFields,
+		// publishDashboard returns {version, dashboard}; earlier releases returned the
+		// version itself, which the baseline adaptation falls back to.
+		Wrap:       "version",
+		WrapMarker: "dashboard",
 	},
 	{
 		// propertySchema is the contract FROZEN at publish — the whole point of the

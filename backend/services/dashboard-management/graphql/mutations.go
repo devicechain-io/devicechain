@@ -54,17 +54,34 @@ func (r *SchemaResolver) PublishDashboard(ctx context.Context, args struct {
 	Label             *string
 	Description       *string
 	ExpectedUpdatedAt *string
-}) (*DashboardVersionResolver, error) {
+}) (*DashboardPublicationResolver, error) {
 	if err := auth.Authorize(ctx, auth.DashboardWrite); err != nil {
 		return nil, err
 	}
 
 	api := r.GetApi(ctx)
-	version, err := api.PublishDashboard(ctx, args.Token, args.Label, args.Description, publisher(ctx), args.ExpectedUpdatedAt)
+	version, dash, err := api.PublishDashboard(ctx, args.Token, args.Label, args.Description, publisher(ctx), args.ExpectedUpdatedAt)
 	if err != nil {
 		return nil, err
 	}
-	return &DashboardVersionResolver{M: *version, S: r, C: ctx}, nil
+	return &DashboardPublicationResolver{V: *version, D: *dash, S: r, C: ctx}, nil
+}
+
+// ActivateDashboardVersion makes an existing version the one viewers are served, leaving
+// the draft untouched.
+func (r *SchemaResolver) ActivateDashboardVersion(ctx context.Context, args struct {
+	Token   string
+	Version int32
+}) (*DashboardSummaryResolver, error) {
+	if err := auth.Authorize(ctx, auth.DashboardWrite); err != nil {
+		return nil, err
+	}
+
+	dash, err := r.GetApi(ctx).ActivateDashboardVersion(ctx, args.Token, args.Version)
+	if err != nil {
+		return nil, err
+	}
+	return &DashboardSummaryResolver{M: *dash, S: r, C: ctx}, nil
 }
 
 // RollbackDashboard re-drafts a published version into the dashboard. expectedUpdatedAt,

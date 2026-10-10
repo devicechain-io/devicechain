@@ -8,6 +8,7 @@ import (
 	"fmt"
 
 	"github.com/devicechain-io/dc-dashboard-management/model"
+	"github.com/devicechain-io/dc-microservice/auth"
 	util "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	gql "github.com/graph-gophers/graphql-go"
@@ -44,8 +45,30 @@ func (r *DashboardResolver) Description() *string {
 	return util.NullStr(r.M.Description)
 }
 
-func (r *DashboardResolver) Definition() string {
-	return string(r.M.Definition)
+// Definition resolves the DRAFT, which is author-only: a caller holding dashboard:read
+// but not dashboard:write is refused with an authorization error rather than served an empty string.
+// Viewers read the published snapshot through publishedDashboard.
+func (r *DashboardResolver) Definition() (string, error) {
+	if err := auth.Authorize(r.C, auth.DashboardWrite); err != nil {
+		return "", err
+	}
+	return string(r.M.Definition), nil
+}
+
+func (r *DashboardResolver) PublishedVersion() *int32 {
+	return r.M.PublishedVersion
+}
+
+// PublishedAt is the served version's publish time; null when never published.
+func (r *DashboardResolver) PublishedAt() (*string, error) {
+	if r.M.PublishedVersion == nil {
+		return nil, nil
+	}
+	at, err := r.S.GetApi(r.C).PublishedAt(r.C, r.M.ID, *r.M.PublishedVersion)
+	if err != nil {
+		return nil, err
+	}
+	return util.FormatTime(at), nil
 }
 
 // DashboardSummaryResolver resolves a dashboard as listed by a search. The list is read
@@ -68,6 +91,73 @@ func (r *DashboardSummaryResolver) Token() string { return r.M.Token }
 func (r *DashboardSummaryResolver) Name() *string { return util.NullStr(r.M.Name) }
 
 func (r *DashboardSummaryResolver) Description() *string { return util.NullStr(r.M.Description) }
+
+func (r *DashboardSummaryResolver) PublishedVersion() *int32 { return r.M.PublishedVersion }
+
+// PublishedDashboardResolver resolves the snapshot viewers are served.
+type PublishedDashboardResolver struct {
+	D model.Dashboard
+	V model.DashboardVersion
+}
+
+func (r *PublishedDashboardResolver) Token() string { return r.D.Token }
+
+func (r *PublishedDashboardResolver) Name() *string { return util.NullStr(r.D.Name) }
+
+func (r *PublishedDashboardResolver) Description() *string { return util.NullStr(r.D.Description) }
+
+func (r *PublishedDashboardResolver) Version() int32 { return r.V.Version }
+
+func (r *PublishedDashboardResolver) PublishedAt() string { return publishedAtOf(r.V) }
+
+func (r *PublishedDashboardResolver) Definition() string { return string(r.V.Definition) }
+
+// DashboardVersionDetailResolver resolves one version including its definition.
+type DashboardVersionDetailResolver struct {
+	M model.DashboardVersion
+}
+
+func (r *DashboardVersionDetailResolver) Version() int32 { return r.M.Version }
+
+func (r *DashboardVersionDetailResolver) Label() *string { return util.NullStr(r.M.Label) }
+
+func (r *DashboardVersionDetailResolver) Description() *string { return util.NullStr(r.M.Description) }
+
+func (r *DashboardVersionDetailResolver) PublishedAt() string { return publishedAtOf(r.M) }
+
+func (r *DashboardVersionDetailResolver) PublishedBy() *string {
+	if r.M.PublishedBy == "" {
+		return nil
+	}
+	return &r.M.PublishedBy
+}
+
+func (r *DashboardVersionDetailResolver) Definition() string { return string(r.M.Definition) }
+
+// DashboardPublicationResolver resolves what a publish returns.
+type DashboardPublicationResolver struct {
+	V model.DashboardVersion
+	D model.Dashboard
+	S *SchemaResolver
+	C context.Context
+}
+
+func (r *DashboardPublicationResolver) Version() *DashboardVersionResolver {
+	return &DashboardVersionResolver{M: r.V, S: r.S, C: r.C}
+}
+
+func (r *DashboardPublicationResolver) Dashboard() *DashboardSummaryResolver {
+	return &DashboardSummaryResolver{M: r.D, S: r.S, C: r.C}
+}
+
+// publishedAtOf is a version's publish time (its row creation time); empty rather than a
+// panic for a zero time, as DashboardVersionResolver.PublishedAt.
+func publishedAtOf(v model.DashboardVersion) string {
+	if s := util.FormatTime(v.CreatedAt); s != nil {
+		return *s
+	}
+	return ""
+}
 
 // DashboardVersionResolver resolves the fields of a published dashboard version.
 type DashboardVersionResolver struct {
