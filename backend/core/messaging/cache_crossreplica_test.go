@@ -198,3 +198,18 @@ func TestATenantErasureBroadcastsToEveryDeviceManagementCache(t *testing.T) {
 	require.Error(t, BroadcastTenantCacheEviction(evictConn(t, url), "", "acme"))
 	require.Error(t, BroadcastTenantCacheEviction(evictConn(t, url), "inst-1", ""))
 }
+
+// Everything registered with OnReconnect runs when the connection comes back, in order, and a
+// Cache built through NewCache registers its in-process tier there. (Forcing a real
+// reconnect needs a broker restart; the hook list is what the client's reconnect callback
+// runs, and the Cache's clear is pinned by TestClearDropsEverythingHeld.)
+func TestReconnectHooksRun(t *testing.T) {
+	nmgr := &NatsManager{}
+	var order []int
+	nmgr.OnReconnect(func() { order = append(order, 1) })
+	nmgr.OnReconnect(func() { order = append(order, 2) })
+	nmgr.runReconnectHooks()
+	require.Equal(t, []int{1, 2}, order)
+	nmgr.runReconnectHooks()
+	require.Equal(t, []int{1, 2, 1, 2}, order)
+}
