@@ -93,7 +93,10 @@ type AdminTenantTier {
     """
     # The tier's settings as a JSON object string (null when unset).
     config: String
-    """The number of tenants at this tier. A tier that has tenants cannot be deleted."""
+    """
+    The number of active tenants at this tier, not counting tenants being deleted. A tier
+    cannot be deleted while any tenant, including one still being deleted, is at it.
+    """
     # How many tenants are packaged at this tier. A tier with tenants cannot be
     # deleted (its tenants' tier is a required FK).
     tenantCount: Int!
@@ -214,7 +217,8 @@ type AdminTenant {
     """
     Where the tenant is in its deletion lifecycle: `active` normally, or `purging` once
     deleteTenant has been called. A purging tenant stays in the registry, and keeps its token
-    reserved, until its data has been erased everywhere; the entry then disappears.
+    reserved, until the deletion completes: its data erased everywhere and the settling and
+    token-hold periods over; the entry then disappears.
     """
     # Where the tenant sits in the deletion lifecycle (ADR-077): "active" or
     # "purging". There is deliberately no "purged" — it would have to live on a row
@@ -739,7 +743,8 @@ type SearchResultsPagination {
 
 """
 One entry in the instance's audit journal: either a sign-in or token refresh, or a change
-made through the administration API. The journal covers the whole instance, not one tenant.
+to one of this service's records (identities, roles, tenants, memberships and the like),
+including a tenant's own self-service changes. The journal covers the whole instance, not one tenant.
 """
 # A row of the instance's user-management audit journal (ADR-019): an
 # authentication event (login/refresh) or an administrative mutation (identity /
@@ -763,7 +768,7 @@ type AdminAuditEvent {
     """
     Who performed the action: the subject of the token that made the request, which is the
     user's email address for a person, `system` for an action the platform took itself, or an
-    empty string when it was not recorded.
+    empty string when it was not recorded. Emptied for a tenant that has been deleted.
     """
     # JWT subject that performed it, "system" for a system-context op, or "".
     actor: String!
@@ -1017,7 +1022,7 @@ secret is shown.
 # returned EXACTLY ONCE (only its bcrypt hash is stored) — null for a public client.
 # Capture it now; it cannot be retrieved again.
 type AdminOAuthClientSecret {
-    """The client."""
+    """The registered client as it now stands."""
     client: AdminOAuthClient!
     """
     The client's secret in clear text, returned only in this response and stored only as a
@@ -1660,10 +1665,11 @@ type Mutation {
         enabled: Boolean!
     ): AdminTenant!
     """
-    Begins permanently deleting a tenant, which cannot be undone. New sign-ins and token
-    refreshes for the tenant are refused at once, and its data is then erased from every storage system in the background; track
-    that with tenantDeletion. Returning true means the deletion has started, not that the data
-    is already gone. The tenant's token stays reserved until the erasure finishes. Returns
+    Begins permanently deleting a tenant, which cannot be undone. Sign-ins and token
+    refreshes for the tenant are refused at once for its members (a superuser can still enter,
+    to operate the deletion), and its data is then erased from every storage system in the
+    background; track that with tenantDeletion. Returning true means the deletion has started, not that the data
+    is already gone. The tenant's token stays reserved until the deletion completes (see tenantDeletion). Returns
     false, changing nothing, if there is no such tenant or it is already being deleted. Fails
     (error code REFERENCE_VIOLATION) while any identity still has a membership in the
     tenant: remove the memberships first. Requires tenant:write.
