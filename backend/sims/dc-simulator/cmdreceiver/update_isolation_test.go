@@ -13,8 +13,8 @@ import (
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/ota"
+	"github.com/devicechain-io/dc-simulator/internal/platformtest"
 	"github.com/devicechain-io/dc-simulator/updater"
-	"github.com/devicechain-io/dc-simulator/updater/platformtest"
 	mqtt "github.com/eclipse/paho.mqtt.golang"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

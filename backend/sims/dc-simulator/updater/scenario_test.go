@@ -5,13 +5,15 @@ package updater_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"os"
 	"testing"
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/ota"
+	"github.com/devicechain-io/dc-simulator/internal/platformtest"
 	"github.com/devicechain-io/dc-simulator/updater"
-	"github.com/devicechain-io/dc-simulator/updater/platformtest"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -107,9 +109,13 @@ func TestResumeAfterRestartContinuesSameAttempt(t *testing.T) {
 	assert.True(t, snap.Pending, "the report decided before the crash is still owed")
 	persistedSeq := snap.Seq
 
+	owed := pendingBytes(t, r.cfg.StatePath)
+	require.NotEmpty(t, owed)
+
 	r.src.resetReads()
 	r.runToEnd()
 
+	assert.Equal(t, string(owed), string(r.link.Frames()[delivered]), "the owed report is resent byte for byte")
 	after := r.link.Decoded()[delivered:]
 	require.NotEmpty(t, after)
 	assert.Equal(t, "att-1", after[0]["attemptId"])
@@ -447,4 +453,82 @@ func TestAssignRules(t *testing.T) {
 	zero := r.asg
 	zero.AttemptID, zero.Size = "att-11", 0
 	assert.Error(t, r.up.Assign(zero))
+}
+
+// pendingBytes reads the report the state file says is owed.
+func pendingBytes(t *testing.T, path string) []byte {
+	t.Helper()
+	raw, err := os.ReadFile(path)
+	require.NoError(t, err)
+	var f struct {
+		Attempt struct {
+			Pending json.RawMessage `json:"pending"`
+		} `json:"attempt"`
+	}
+	require.NoError(t, json.Unmarshal(raw, &f))
+	return f.Attempt.Pending
+}
+
+// A restart between the boot and the confirmation must not boot again: the device is already
+// running the new image, and a second boot would change the boot id the platform compares.
+func TestRestartAfterRebootDoesNotRebootTwice(t *testing.T) {
+	r := newRig(t, true)
+	r.assign()
+	r.up.SetFaults(updater.Faults{NoConfirmAfterReboot: true})
+	r.runToEnd()
+	booted := r.up.Snapshot()
+	require.Equal(t, "REBOOTING", booted.Stage)
+	require.Equal(t, "boot-2", booted.BootID)
+
+	r.restart() // no faults now: the device goes on to confirm
+	r.runToEnd()
+
+	assert.Equal(t, "boot-2", r.up.Snapshot().BootID, "no second boot")
+	frames := r.link.Decoded()
+	assert.Equal(t, "boot-2", frames[len(frames)-1]["bootId"])
+	assert.Equal(t, ota.StateUpdated, r.state())
+}
+
+// Same sequence number, different content: the platform calls it a conflict and applies nothing.
+func TestSameSeqWithDifferentContentIsAConflict(t *testing.T) {
+	r := newRig(t, true)
+	r.assign()
+	for i := 0; i < 3; i++ {
+		_, err := r.up.Step(ctx)
+		require.NoError(t, err)
+	}
+	r.up.SetFaults(updater.Faults{ConflictNext: true})
+	_, err := r.up.Step(ctx)
+	require.NoError(t, err)
+
+	assert.Equal(t, 1, r.platform.Count(ota.VerdictConflict))
+	fr := r.link.Decoded()
+	assert.Equal(t, fr[len(fr)-2]["seq"], fr[len(fr)-1]["seq"])
+	r.runToEnd()
+	assert.Equal(t, ota.StateUpdated, r.state(), "the original report stood")
+}
+
+// An attempt that has ended but whose terminal report is still owed is not finished: replacing it
+// would drop that report on the floor.
+func TestAssignRefusedWhileTerminalReportIsPending(t *testing.T) {
+	r := newRig(t, true)
+	r.assign()
+	r.up.SetFaults(updater.Faults{FailVerification: true})
+	for r.up.Snapshot().Stage != "FAILED" {
+		if r.up.Snapshot().Stage == "DOWNLOADED" {
+			r.link.SetDown(true) // the FAILED report is generated but cannot be delivered
+		}
+		_, _ = r.up.Step(ctx)
+	}
+	snap := r.up.Snapshot()
+	require.True(t, snap.Pending)
+
+	next := r.asg
+	next.AttemptID, next.AssignmentID = "att-2", "asg-2"
+	assert.ErrorIs(t, r.up.Assign(next), updater.ErrAttemptInProgress)
+
+	r.link.SetDown(false)
+	r.runToEnd()
+	assert.Equal(t, ota.StateFailed, r.state(), "the terminal report was delivered")
+	require.NoError(t, r.up.Assign(next), "now it has ended and been told")
 }

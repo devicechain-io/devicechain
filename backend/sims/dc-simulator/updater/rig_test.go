@@ -14,8 +14,8 @@ import (
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/ota"
+	"github.com/devicechain-io/dc-simulator/internal/platformtest"
 	"github.com/devicechain-io/dc-simulator/updater"
-	"github.com/devicechain-io/dc-simulator/updater/platformtest"
 	"github.com/stretchr/testify/require"
 )
 

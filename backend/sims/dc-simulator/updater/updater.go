@@ -44,6 +44,7 @@ import (
 	"crypto/sha256"
 	"encoding"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"hash"
@@ -130,6 +131,9 @@ type Faults struct {
 	Crash func(CrashPoint, Snapshot) bool
 	// DuplicateNext sends the next report twice in a row.
 	DuplicateNext bool
+	// ConflictNext sends the next report, then the same sequence number again with different
+	// content (a forged boot id): a device bug, or a replay that was tampered with.
+	ConflictNext bool
 	// FailVerification makes the verification step fail whatever the bytes hash to.
 	FailVerification bool
 	// NoConfirmAfterReboot boots the new image but never reports it: the device is silent after
@@ -222,7 +226,18 @@ func (u *Updater) snapshot() Snapshot {
 	return s
 }
 
+// save persists the state. A failed save kills the instance, like a crash: the in-memory state is
+// then ahead of the file, and sending a report the file does not hold would make the device
+// contradict itself after a restart.
 func (u *Updater) save() error {
+	if err := u.persist(); err != nil {
+		u.dead = true
+		return err
+	}
+	return nil
+}
+
+func (u *Updater) persist() error {
 	if a := u.st.Attempt; a != nil && a.BytesHave > 0 {
 		hs, err := u.h.(encoding.BinaryMarshaler).MarshalBinary()
 		if err != nil {
@@ -433,13 +448,26 @@ func (u *Updater) flush(ctx context.Context) error {
 	if u.crashAt(CrashBeforeSend) {
 		return ErrCrashed
 	}
-	copies := 1
+	frames := [][]byte{a.Pending}
 	if u.faults.DuplicateNext {
 		u.faults.DuplicateNext = false
-		copies = 2
+		frames = append(frames, a.Pending)
 	}
-	for i := 0; i < copies; i++ {
-		if err := u.cfg.Transport.Send(ctx, a.Pending); err != nil {
+	if u.faults.ConflictNext {
+		u.faults.ConflictNext = false
+		var w wireReport
+		if err := json.Unmarshal(a.Pending, &w); err != nil {
+			return err
+		}
+		w.BootID += "-forged"
+		forged, err := w.encode()
+		if err != nil {
+			return err
+		}
+		frames = append(frames, forged)
+	}
+	for _, f := range frames {
+		if err := u.cfg.Transport.Send(ctx, f); err != nil {
 			return fmt.Errorf("updater: send seq %d: %w", a.Seq, err)
 		}
 	}

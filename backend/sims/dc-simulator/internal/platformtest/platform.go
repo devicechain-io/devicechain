@@ -6,7 +6,8 @@
 // It runs the REAL update reducer from the core contract package (Apply, Tick, Cancel,
 // Reconcile) against whatever a simulated device sends, over an in-memory Link. It is not a
 // service and has no storage: one Platform holds one attempt. Nothing outside tests should import
-// it; it lives in a non-test file only so that tests in more than one package can share it.
+// it; it lives under internal/ in a non-test file so that tests in more than one package of this
+// module can share it and no other module can import it.
 package platformtest
 
 import (

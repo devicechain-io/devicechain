@@ -63,8 +63,9 @@ type state struct {
 
 // ErrCorruptState is returned when the state file exists but cannot be trusted. The updater
 // refuses to start over it: silently beginning from scratch would forget an attempt that is
-// half-applied.
-var ErrCorruptState = errors.New("updater: state file is corrupt")
+// half-applied. To reset the simulated device deliberately, delete the state file; the error text
+// says so.
+var ErrCorruptState = errors.New("updater: state file is corrupt (delete the state file to reset the simulated device)")
 
 func loadState(path string) (state, bool, error) {
 	raw, err := os.ReadFile(path)
