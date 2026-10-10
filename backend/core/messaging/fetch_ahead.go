@@ -42,8 +42,10 @@ const _ = uint(rangeDirectMax-config.MaxFetchBatch) + uint(config.MaxFetchBatch-
 //   - Messages in flight: a future adds at most one batch to what the reader holds. With
 //     one request in flight, a dropped connection loses the deliveries of at most ONE pull,
 //     so at most one batch (a pull of which nothing arrived is an error and the broker has
-//     still counted the batch as delivered): a range the live gap fill reads back, and the
-//     configuration caps the batch at the width it reads cheaply (config.MaxFetchBatch).
+//     still counted the batch as delivered). A result dropped for age (below) is a second
+//     source of the same size, and the two can meet in one contiguous gap of two batches.
+//     The live gap fill reads either back; the configuration caps the batch at the width it
+//     reads cheaply (config.MaxFetchBatch), and the two-batch case takes its wide path.
 //   - Age: the broker starts a message's acknowledgement window when it delivers it, so a
 //     prefetched batch ages while the batch before it is handed out. The hold budget bounds
 //     that to about one budget (a fraction of the window, validated against it); a consumer
@@ -54,12 +56,12 @@ const _ = uint(rangeDirectMax-config.MaxFetchBatch) + uint(config.MaxFetchBatch-
 //     acknowledged, so the broker redelivers them. Only a term change (BindTerm), a
 //     re-bind and ReaderWithReleaseOnPark (which Naks them) act on it sooner.
 //
-// 🔴 AN EOF DOES NOT DROP THE FUTURE, AND THAT IS DELIBERATE. ReadMessage returns EOF when
-// the CALLER's context ends, and a caller may poll with a short deadline and read again
-// (event-processing's fact catch-up does). Dropping the future at each EOF would leave its
-// batch delivered and unacked for a whole acknowledgement window, and a catch-up that
-// asks the broker what is left would then find nothing undelivered and conclude it had
-// reached the head. A plain reader keeps its fetch buffer across an EOF for the same reason.
+// AN EOF DOES NOT DROP THE FUTURE. ReadMessage returns EOF when the CALLER's context ends,
+// and a plain reader keeps its fetch buffer across that, so it keeps the request in flight
+// too: a caller that reads again gets the batch instead of leaving it delivered and unacked
+// for a whole acknowledgement window. In practice an EOF with a request in flight is a
+// shutdown or a park, where the request ends by itself, so this is a property to preserve
+// rather than a path that runs often; TestFetchAheadAnEOFKeepsTheRequestForTheNextRead pins it.
 
 // fetchFuture is the one pull request a reader has in flight.
 type fetchFuture struct {
@@ -115,8 +117,10 @@ func (r *natsReader) startAhead() {
 	f := &fetchFuture{sub: sub, gen: r.aheadGen.Load(), cancel: cancel, done: make(chan fetchResult, 1)}
 	r.future = f
 	r.aheadStarts.Add(1)
+	r.aheadLive.Add(1)
 	batch := r.batchSize()
 	go func() {
+		defer r.aheadLive.Add(-1)
 		fctx, fcancel := context.WithTimeout(ctx, fetchTimeout)
 		defer fcancel()
 		msgs, err := sub.Fetch(batch, nats.Context(fctx))
@@ -176,6 +180,14 @@ func (r *natsReader) dropAhead(release bool) {
 		}
 	case <-time.After(fetchTimeout + time.Second):
 		// The goroutine ends by itself when its fetch does; its result has nowhere to go.
+		//
+		// 🔴 BUT IT IS STILL ALIVE, AND ITS FETCH IS STILL PULLING ON f.sub. future is already
+		// nil, so nothing here can tell the next fetch to ignore what that pull delivers into
+		// the subscription's buffer. A caller reaching this path MUST replace the subscription
+		// (every caller does: a new term and a re-bind both bind a new one, and the generation
+		// they bump is what makes a late result stale). A new caller that drops a request
+		// without replacing the subscription would let the old pull's deliveries leak into the
+		// next synchronous fetch, behind messages it had already handed out.
 	}
 }
 

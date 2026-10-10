@@ -116,6 +116,13 @@ type detectBroker struct {
 	host     string
 	port     uint32
 	nc       *nats.Conn
+	// fetch is the pull shape every manager of this test's readers is built with. Unset it is
+	// the production default; DC_TEST_FETCH_AHEAD=1 turns fetch-ahead on at batch 128 for every
+	// broker test in this package, which is how the live-gap and integration suites are run
+	// with the mechanism engaged:
+	//
+	//	DC_TEST_FETCH_AHEAD=1 go test -count=1 -p 2 ./processor/
+	fetch mscfg.NatsFetchConfiguration
 }
 
 func startDetectBroker(t *testing.T) *detectBroker {
@@ -138,6 +145,9 @@ func startDetectBroker(t *testing.T) *detectBroker {
 		port:     uint32(port),
 		nc:       nc,
 	}
+	if os.Getenv("DC_TEST_FETCH_AHEAD") == "1" {
+		b.fetch = mscfg.NatsFetchConfiguration{Batch: 128, Ahead: true}
+	}
 	// Registered before any manager or dispatcher the test builds, so it runs after all of
 	// them have stopped.
 	t.Cleanup(func() { b.deleteInstanceStreams(t) })
@@ -149,6 +159,7 @@ func (b *detectBroker) natsConfig() mscfg.NatsConfiguration {
 	return mscfg.NatsConfiguration{
 		Hostname: b.host, Port: b.port,
 		StreamMaxBytes: testStreamMaxBytes, StreamMaxBytesCold: testStreamMaxBytesCold,
+		Fetch: b.fetch,
 	}
 }
 

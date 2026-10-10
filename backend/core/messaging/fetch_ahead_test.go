@@ -10,14 +10,14 @@ import (
 	"math/rand"
 	"net"
 	"os"
-	"runtime"
-	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/streams"
+	nats "github.com/nats-io/nats.go"
 	"github.com/stretchr/testify/require"
 )
 
@@ -61,8 +61,15 @@ func publishAsync(t *testing.T, nmgr *NatsManager, n int) {
 	t.Helper()
 	subject := ScopedSubject(nmgr.Microservice.InstanceId, "acme", streams.InboundEvents)
 	for i := 0; i < n; i++ {
-		_, err := nmgr.js.PublishAsync(subject, []byte(`{"telemetry":true}`))
-		require.NoError(t, err)
+		for {
+			_, err := nmgr.js.PublishAsync(subject, []byte(`{"telemetry":true}`))
+			if errors.Is(err, nats.ErrTooManyStalledMsgs) {
+				time.Sleep(5 * time.Millisecond) // the client's pending window is full; let the broker catch up
+				continue
+			}
+			require.NoError(t, err)
+			break
+		}
 	}
 	select {
 	case <-nmgr.js.PublishAsyncComplete():
@@ -76,19 +83,6 @@ func read(t *testing.T, r *natsReader, d time.Duration) Message {
 	msg, err := readWithin(t, r, d)
 	require.NoError(t, err)
 	return msg
-}
-
-// goroutinesIn counts goroutines whose stack mentions fn.
-func goroutinesIn(fn string) int {
-	buf := make([]byte, 1<<20)
-	buf = buf[:runtime.Stack(buf, true)]
-	n := 0
-	for _, g := range strings.Split(string(buf), "\n\n") {
-		if strings.Contains(g, fn) {
-			n++
-		}
-	}
-	return n
 }
 
 // 🔴 ORDER. With a request always in flight and a consumer that stalls now and then, the
@@ -232,7 +226,7 @@ func TestFetchAheadShutdownLeaksNoGoroutineAndLosesNothing(t *testing.T) {
 	first := read(t, r, 10*time.Second)
 	require.NoError(t, first.Ack())
 	require.NotNil(t, r.future)
-	require.Equal(t, 1, goroutinesIn("startAhead.func1"), "the request in flight should be one goroutine")
+	require.Equal(t, int64(1), r.aheadStarts.Load(), "exactly one request should have been started")
 
 	// The service stops: the caller's context ends (EOF), and the manager releases the
 	// subscription, exactly as ExecuteStop does.
@@ -241,7 +235,7 @@ func TestFetchAheadShutdownLeaksNoGoroutineAndLosesNothing(t *testing.T) {
 	_, err := r.ReadMessage(ctx)
 	require.ErrorIs(t, err, io.EOF)
 	require.NoError(t, r.sub.Load().Unsubscribe())
-	waitFor(t, "the request in flight to end", func() bool { return goroutinesIn("startAhead.func1") == 0 })
+	waitFor(t, "the request in flight to end", func() bool { return r.aheadLive.Load() == 0 })
 
 	// A replacement reader on the same durable gets everything that was not acked, the
 	// dropped batches included, once their window runs out.
@@ -314,7 +308,7 @@ func TestFetchAheadIsDroppedByANewTerm(t *testing.T) {
 	require.NoError(t, r.BindTerm())
 	require.Nil(t, r.future)
 	require.Empty(t, r.pending)
-	waitFor(t, "the dropped request to end", func() bool { return goroutinesIn("startAhead.func1") == 0 })
+	waitFor(t, "the dropped request to end", func() bool { return r.aheadLive.Load() == 0 })
 }
 
 // 🔴 BY GENERATION. A request pulled on a subscription that has since been replaced is
@@ -445,4 +439,124 @@ func TestTheLargestConfiguredBatchLeavesARangeTheDirectPathReads(t *testing.T) {
 	require.IsType(t, &consumerRangeReader{}, wide)
 	_ = narrow.Close()
 	_ = wide.Close()
+}
+
+// The broker must never see two of this reader's pull requests waiting at once,
+// whatever the interleaving of idle reads (EOFs with a request in flight), trickled
+// publishes and fresh batches. Sampled from the broker's own NumWaiting.
+func TestFetchAheadNeverHasTwoPullRequestsWaiting(t *testing.T) {
+	nmgr := aheadManager(t, 8, 0)
+	r := newAheadReader(t, nmgr)
+	subject := ScopedSubject(nmgr.Microservice.InstanceId, "acme", streams.InboundEvents)
+
+	stop := make(chan struct{})
+	var wg sync.WaitGroup
+	var maxWaiting, sawWaiting atomic.Int64
+	wg.Add(2)
+	go func() { // sampler
+		defer wg.Done()
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			if ci, err := nmgr.js.ConsumerInfo(r.stream, r.durable); err == nil {
+				n := int64(ci.NumWaiting)
+				if n > 0 {
+					sawWaiting.Store(1)
+				}
+				for {
+					m := maxWaiting.Load()
+					if n <= m || maxWaiting.CompareAndSwap(m, n) {
+						break
+					}
+				}
+			}
+			time.Sleep(2 * time.Millisecond)
+		}
+	}()
+	go func() { // trickle: a few messages, then idle long enough for a request to wait
+		defer wg.Done()
+		for i := 0; i < 12; i++ {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			for j := 0; j < 10; j++ {
+				_, _ = nmgr.js.Publish(subject, []byte(`{"telemetry":true}`))
+			}
+			time.Sleep(250 * time.Millisecond)
+		}
+	}()
+
+	deadline := time.Now().Add(4 * time.Second)
+	got := 0
+	for time.Now().Before(deadline) {
+		ctx, cancel := context.WithTimeout(context.Background(), 120*time.Millisecond)
+		msg, err := r.ReadMessage(ctx)
+		cancel()
+		if err == nil {
+			got++
+			_ = msg.Ack()
+		}
+	}
+	close(stop)
+	wg.Wait()
+	require.Positive(t, got)
+	require.Positive(t, r.aheadStarts.Load(), "fetch-ahead never engaged")
+	require.Equal(t, int64(1), sawWaiting.Load(), "the sampler never saw a waiting request, so it proves nothing")
+	require.LessOrEqual(t, maxWaiting.Load(), int64(1), "the broker saw two pull requests waiting for one reader")
+}
+
+// 🔴 A forwarding reader whose downstream is applying backpressure starts no request: it
+// would fetch messages it can only fail to publish, which the loop itself refuses to do
+// before a synchronous fetch. The gate answers open to the loop's own check and refuses to
+// the next one, so the only thing that can stop the request is the check startAhead makes.
+func TestFetchAheadStartsNothingWhileTheDownstreamRefuses(t *testing.T) {
+	run := func(t *testing.T, refuseAfterFirst bool) int64 {
+		nmgr := aheadManager(t, 8, 0)
+		r := newAheadReader(t, nmgr)
+		r.downstream = streams.InboundEvents // a stream that applies backpressure
+		g := nmgr.backpressure()
+		base := time.Now()
+		gs := &gateState{suffix: streams.InboundEvents, stream: StreamName("test", streams.InboundEvents), sampledAt: base}
+		var calls atomic.Int32
+		g.mu.Lock()
+		g.gates[streams.InboundEvents] = gs
+		g.now = func() time.Time {
+			if refuseAfterFirst && calls.Add(1) > 1 {
+				return base.Add(time.Hour) // stale: the gate refuses
+			}
+			return base
+		}
+		g.mu.Unlock()
+		publishAsync(t, nmgr, 20)
+		require.NoError(t, read(t, r, 10*time.Second).Ack())
+		return r.aheadStarts.Load()
+	}
+	require.Equal(t, int64(1), run(t, false), "control: with the gate open a request is started")
+	require.Zero(t, run(t, true), "a request was started while the downstream was refusing")
+}
+
+// An EOF (the caller's context ending) leaves the request in flight, as it leaves the fetch
+// buffer: the next read takes that request's batch rather than fetching again.
+func TestFetchAheadAnEOFKeepsTheRequestForTheNextRead(t *testing.T) {
+	nmgr := aheadManager(t, 8, 0)
+	r := newAheadReader(t, nmgr)
+	publishAsync(t, nmgr, 24)
+	for i := 0; i < 8; i++ { // the first batch; a request for the second is in flight
+		require.NoError(t, read(t, r, 10*time.Second).Ack())
+	}
+	require.NotNil(t, r.future)
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := r.ReadMessage(cancelled)
+	require.ErrorIs(t, err, io.EOF)
+	require.NotNil(t, r.future, "an EOF dropped the request in flight")
+	msg := read(t, r, 10*time.Second)
+	require.Equal(t, uint64(9), msg.StreamSeq, "the next read did not take the kept request's batch")
+	require.Equal(t, 1, msg.NumDelivered, "the batch was delivered again instead of being kept")
+	require.NoError(t, msg.Ack())
 }

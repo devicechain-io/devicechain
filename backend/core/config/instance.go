@@ -145,7 +145,7 @@ const (
 type NatsFetchConfiguration struct {
 	// Batch is how many messages one pull asks for: 1 to MaxFetchBatch, 0 meaning
 	// DefaultFetchBatch. A larger batch amortizes the round trip over more messages, and
-	// is also the most a single dropped connection can lose from one pull (Batch-1),
+	// is also the most a single dropped connection can lose from one pull (one batch),
 	// which the live gap fill then reads back from the stream.
 	Batch int
 	// Ahead, when true, has a reader ask for its next batch while the caller is still

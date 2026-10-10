@@ -1416,6 +1416,7 @@ type natsReader struct {
 	drainStart  time.Time     // when the current batch's first message was handed out
 	drainEWMA   time.Duration // moving average of how long a batch takes to hand out
 	aheadStarts atomic.Int64  // futures started, for tests and diagnosis
+	aheadLive   atomic.Int64  // futures whose goroutine is still running, for tests and diagnosis
 }
 
 // ReaderOption tunes a reader's durable consumer at creation time. Options only

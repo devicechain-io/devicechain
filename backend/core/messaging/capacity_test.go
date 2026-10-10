@@ -15,6 +15,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
 
+	"github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/streams"
 )
 
@@ -133,6 +134,9 @@ func TestCapacityBoundsFetch(t *testing.T) {
 // re-based onto a number that does not describe its queue — the reason the deadline is zero.
 func TestNoCapacityKeepsFullBatchAndNoDeadline(t *testing.T) {
 	nmgr := capacityManager(t, 0)
+	// One pull at a time: what is asserted is the size of a plain reader's FIRST pull, which a
+	// request fetched ahead would add to.
+	nmgr.Microservice.InstanceConfiguration.Infrastructure.Nats.Fetch = config.NatsFetchConfiguration{}
 	r := capacityReaderFor(t, nmgr, 0)
 	publishN(t, nmgr, streams.InboundEvents, 100)
 
