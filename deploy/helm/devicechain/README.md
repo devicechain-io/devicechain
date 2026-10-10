@@ -94,7 +94,7 @@ list (not both). An empty selection resolves to `default`.
 | Profile | Functional areas |
 |---|---|
 | `default` | user-management, device-management, event-sources, event-management, device-state, dashboard-management, command-delivery, notification-management, event-processing |
-| `full` | everything in `default`, plus `ai-inference`, `outbound-connectors`, `mcp`, `sparkplug-ingest`, `lwm2m-ingest` |
+| `full` | everything in `default`, plus `ai-inference`, `outbound-connectors`, `mcp`, `sparkplug-ingest`, `lwm2m-ingest`, `update-management` |
 | `telemetry` | user-management, device-management, event-sources, event-management, device-state, dashboard-management |
 | `ingest-only` | user-management, device-management, event-sources |
 
@@ -112,7 +112,7 @@ helm install dc deploy/helm/devicechain \
 The chart **fails the render** if the selection omits a required core area
 (`user-management`, `device-management`) or an enabled area's hard dependency.
 `user-management` and `device-management` are the required core; every other area in
-the table above is optional — the seven `default` adds on top of the core, plus the five
+the table above is optional — the seven `default` adds on top of the core, plus the six
 only `full` ships. The one dependency between optional areas is `outbound-connectors`,
 which requires `event-processing`; the rest can be enabled or left out independently.
 (`values.schema.json` carries the authoritative area names; the dependency catalog
@@ -170,10 +170,10 @@ installing.
 build has, and a test enforces that, so "full" cannot drift back into meaning "most of
 it".
 
-The difference is the five areas `default` holds back. Each carries a decision an operator
+The difference is the six areas `default` holds back. Each carries a decision an operator
 should make deliberately rather than inherit — a paid provider key, an egress surface, an
-agent-facing API, a customer broker topology, a device-facing DTLS port — not because they
-are second-class. Get them with `--set profile=full`, or name them in an explicit
+agent-facing API, a customer broker topology, a device-facing DTLS port, an update plane
+that is not implemented yet — not because they are second-class. Get them with `--set profile=full`, or name them in an explicit
 `enabledFunctionalAreas` set:
 
 | Area | Purpose | Notes |
@@ -183,6 +183,7 @@ are second-class. Get them with `--set profile=full`, or name them in an explici
 | `ai-inference` | natural-language→rule authoring proxy | no hard dep (fails paths closed); needs `infrastructure.secrets.rootKey` for provider keys; external routing needs `serviceAuth.secret` + `userManagement` and is per-tenant opt-in / fail-closed |
 | `sparkplug-ingest` | Sparkplug B host application ingesting from customer MQTT brokers | hard-depends on `device-management`; each source binds one broker connection to one tenant; single-owner — `replicas: 1` + `Recreate`, the render fails above one |
 | `lwm2m-ingest` | OMA LwM2M over CoAP/UDP + DTLS for constrained devices | hard-depends on `device-management`; serves CoAPS on UDP 5684; single-owner — `replicas: 1` + `Recreate`, the render fails above one |
+| `update-management` | over-the-air update artifacts and assignments | hard-depends on `device-management`; **scaffold only in this release** — it starts and serves health, readiness and metrics, but its GraphQL API answers every request with a `NOT_IMPLEMENTED` error |
 
 ## Per-service configuration
 

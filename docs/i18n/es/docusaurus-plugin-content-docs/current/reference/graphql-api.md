@@ -82,6 +82,8 @@ llamador. Algunas autoridades no coinciden con la intuición:
 `sparkplug-ingest` y `lwm2m-ingest` no sirven GraphQL en absoluto y se mantienen deliberadamente
 fuera del router `/api`. `event-sources` sí está enrutado, pero responde con un esquema marcador de
 posición: la ingesta llega a él por los transportes del plano de dispositivo, no por esta API.
+`update-management` también está enrutado, pero su API no está implementada en esta versión: su
+única consulta marcadora de posición responde a cada llamada con un error `NOT_IMPLEMENTED`.
 
 ### Suscripciones por WebSocket {#subscriptions-over-websocket}
 

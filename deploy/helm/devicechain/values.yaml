@@ -8,12 +8,12 @@
 # A named profile: one of "default", "full", "telemetry", "ingest-only".
 #
 #   default  the standard system: the whole device/telemetry/automation platform.
-#   full     everything this build ships — `default` PLUS the five areas held back
-#            from it: ai-inference, outbound-connectors, mcp, sparkplug-ingest and
-#            lwm2m-ingest. Each carries a decision to make deliberately (a paid
-#            provider key, an egress surface, an agent-facing API, or a device
-#            transport that binds its own inbound port), which is why they are not in
-#            `default`. Of these, outbound-connectors and ai-inference own a secret
+#   full     everything this build ships — `default` PLUS the six areas held back
+#            from it: ai-inference, outbound-connectors, mcp, sparkplug-ingest,
+#            lwm2m-ingest and update-management. Each carries a decision to make
+#            deliberately (a paid provider key, an egress surface, an agent-facing API,
+#            a device transport that binds its own inbound port, or an update plane
+#            that is not yet implemented), which is why they are not in `default`. Of these, outbound-connectors and ai-inference own a secret
 #            store and so need infrastructure.secrets.rootKey below — but so does
 #            notification-management, which is in `default`, so every install owes one.
 #
@@ -1713,6 +1713,16 @@ functionalAreas:
       #                                  # human-paced authoring action. One draft costs up to 3 provider calls
       #                                  # (the bounded repair loop), so 30/min is ~10 drafts a minute sustained.
       # inferenceBurst: 15               # tokens a tenant may spend back-to-back before the rate binds (~5 drafts)
+  update-management:
+    # The update-management service: over-the-air update artifacts, their assignment to
+    # devices and the download plane. THIS RELEASE SHIPS ONLY ITS SCAFFOLD — the service
+    # starts, migrates its schema and serves health, readiness and metrics, but its GraphQL
+    # API answers every request with a NOT_IMPLEMENTED error. OPT-IN area: held back from
+    # `default`, shipped by `full`, or named explicitly (enabledFunctionalAreas:
+    # [..., update-management]). It hard-depends on device-management (an update targets
+    # devices). It opens a pool on the shared relational store, so it counts toward an
+    # instance's connection budget when enabled.
+    config: {}
   sparkplug-ingest:
     # The Sparkplug ingest service (ADR-069): a stateful Sparkplug B Host Application
     # that connects OUT to one or more per-tenant customer MQTT brokers, announces its

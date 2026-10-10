@@ -106,6 +106,14 @@ export const SCHEMAS = [
   },
   { source: 'backend/services/notification-management/graphql/schema.graphql', area: 'notification-management' },
   { source: 'backend/services/outbound-connectors/graphql/schema.graphql', area: 'outbound-connectors' },
+  {
+    source: 'backend/services/update-management/graphql/schema.graphql',
+    area: 'update-management',
+    publish: false,
+    note: 'Over-the-air updates. Not implemented in this release: the service ships so it '
+      + 'can be deployed, and its one placeholder query answers every call with a '
+      + 'NOT_IMPLEMENTED error. Nothing is published until the update API exists.',
+  },
   { source: 'backend/services/user-management/graphql/admin_schema.graphql', area: 'user-management' },
   {
     source: 'backend/services/user-management/graphql/schema.graphql',
