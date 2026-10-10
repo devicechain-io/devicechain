@@ -6,6 +6,8 @@ package processor
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -151,8 +153,53 @@ func fastCases() []equivCase {
 		{"envelope time too old", `{"device":"d","occurredTime":"2020-01-01T00:00:00Z","eventType":"Measurement","payload":{"entries":[{"measurements":{"a":"1"}}]}}`, false},
 		{"envelope time too old, entry time recent", `{"device":"d","occurredTime":"2020-01-01T00:00:00Z","eventType":"Measurement","payload":{"entries":[{"occurredTime":"2026-10-01T11:00:00Z","measurements":{"a":"1"}}]}}`, false},
 		{"envelope time number", `{"device":"d","occurredTime":1759320000,"eventType":"Measurement","payload":{"entries":[{"measurements":{"a":"1"}}]}}`, false},
+
+		// From the review. The first rows each catch a change to the scanner that the rows above
+		// let through (a fast path accepting what the reference refuses); the rest are folded in
+		// from the review's adversarial set.
+		{"raw 0x1f byte in a value", meas("\"a\":\"x\x1fy\""), false},
+		{"raw NUL in a value", meas("\"a\":\"x\x00y\""), false},
+		{"vertical tab as whitespace", strings.Replace(meas(`"a":"1"`), `{"device"`, "{\v\"device\"", 1), false},
+		{"form feed as whitespace", strings.Replace(meas(`"a":"1"`), `{"device"`, "{\f\"device\"", 1), false},
+		{"Alert with a measurement-shaped payload", envelope("Alert", `{"entries":[{"measurements":{"a":"1"}}]}`), false},
+		{"empty event type", `{"device":"d","eventType":"","payload":{"entries":[{"measurements":{"a":"1"}}]}}`, false},
+		{"Alert then Measurement event type", `{"eventType":"Alert","device":"d","eventType":"Measurement","payload":{"entries":[{"measurements":{"a":"1"}}]}}`, false},
+		{"mismatched closer in readings", entry(`{"measurements":{"a":"1"]}`), false},
+		{"mismatched closer in entries", envelope("Measurement", `{"entries":[{"measurements":{"a":"1"}}}}`), false},
+		{"mismatched closer in an entry", envelope("Measurement", `{"entries":[{"measurements":{"a":"1"}]]}`), false},
+		{"payload trailing comma, one brace short", `{"eventType":"Measurement","payload":{"entries":[{"measurements":{"a":"1"}}],}`, false},
+		{"trailing comma in entries", envelope("Measurement", `{"entries":[{"measurements":{"a":"1"}},]}`), false},
+		{"double colon", meas(`"a"::"1"`), false},
+		{"double comma", meas(`"a":"1",,"b":"2"`), false},
+		{"leading comma", meas(`,"a":"1"`), false},
+		{"unquoted name", meas(`a:"1"`), false},
+		{"single quotes", meas(`'a':'1'`), false},
+		{"comment", strings.Replace(meas(`"a":"1"`), `{"device"`, `{/*c*/"device"`, 1), false},
+		{"top-level array", "[" + meas(`"a":"1"`) + "]", false},
+		{"extra closer", meas(`"a":"1"`) + "}", false},
+		{"no-break space as whitespace", strings.Replace(meas(`"a":"1"`), `{"device"`, "{\xc2\xa0\"device\"", 1), false},
+		{"escaped slash", meas(`"a":"\/"`), false},
+		{"whitespace-only body", "   ", false},
+		{"128 + 128 readings across entries", envelope("Measurement", `{"entries":[{"measurements":{`+namedReadings(128, "a")+`}},{"measurements":{`+namedReadings(128, "b")+`}}]}`), true},
+		{"128 + 129 readings across entries", envelope("Measurement", `{"entries":[{"measurements":{`+namedReadings(128, "a")+`}},{"measurements":{`+namedReadings(129, "b")+`}}]}`), false},
+		{"secret with base64 punctuation", `{"credentialSecret":"a/b+c=","device":"d","eventType":"Measurement","payload":{"entries":[{"measurements":{"a":"1"}}]}}`, true},
+		{"entry time one-digit hour", entry(`{"occurredTime":"2026-10-01T1:00:00Z","measurements":{"a":"1"}}`), true},
+		{"entry time leap second", entry(`{"occurredTime":"2026-10-01T11:00:60Z","measurements":{"a":"1"}}`), false},
+		{"envelope time one-digit hour", `{"device":"d","occurredTime":"2026-10-01T1:00:00Z","eventType":"Measurement","payload":{"entries":[{"measurements":{"a":"1"}}]}}`, true},
 	}
 	return cases
+}
+
+// namedReadings is n readings named prefix00000, prefix00001, ...
+func namedReadings(n int, prefix string) string {
+	var sb strings.Builder
+	for i := 0; i < n; i++ {
+		if i > 0 {
+			sb.WriteString(",")
+		}
+		fmt.Fprintf(&sb, `"%s%05d":"%d"`, prefix, i, i)
+	}
+	return sb.String()
 }
 
 func TestDecodeFastMatchesReference(t *testing.T) {
@@ -183,6 +230,22 @@ func indented(t *testing.T, body []byte) []byte {
 	var out bytes.Buffer
 	require.NoError(t, json.Indent(&out, body, "", "	"))
 	return out.Bytes()
+}
+
+// TestFastScannerEntryRefusesTheZeroInstant holds the entry's own zero-instant refusal on its
+// own. Through Decode it is masked: checkBuilt's age floor refuses the zero instant too, so
+// removing the entry check leaves every table row green. The floor is a policy that can move;
+// the sentinel is not.
+func TestFastScannerEntryRefusesTheZeroInstant(t *testing.T) {
+	for doc, want := range map[string]bool{
+		`{"measurements":{"a":"1"},"occurredTime":"2026-10-01T11:00:00Z"}`:      true, // control
+		`{"measurements":{"a":"1"},"occurredTime":"0001-01-01T00:00:00Z"}`:      false,
+		`{"occurredTime":"0001-01-01T01:00:00+01:00","measurements":{"a":"1"}}`: false,
+	} {
+		sc := fastScanner{s: doc, b: []byte(doc)}
+		_, ok := sc.entry()
+		require.Equal(t, want, ok, doc)
+	}
 }
 
 // TestDecodeAllocationsOnTheCommonShape is what the fast decode is FOR, measured where it can

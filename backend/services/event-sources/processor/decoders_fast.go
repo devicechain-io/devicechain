@@ -27,8 +27,9 @@ import (
 //     null, backslash, control byte or byte at or above 0x80 anywhere. A string like that
 //     is its own decoded value and survives the reference's map re-marshal unchanged, so
 //     a substring of the body is exactly what the reference would have built;
-//   - a measurement name repeats exactly (the reference keeps the last). Names differing
-//     only in case are DISTINCT map keys on both paths, so they are taken;
+//   - a measurement name repeats exactly: the reference keeps the last, and the fast decode
+//     DECLINES rather than reproduce that. Names differing only in case are distinct map
+//     keys on both paths, so they are taken;
 //   - whitespace is JSON's four bytes, between tokens and around the document.
 //
 // The times go through the same functions as on the reference path: the envelope's
