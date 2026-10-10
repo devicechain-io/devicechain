@@ -4,101 +4,265 @@ type Exact<T extends { [key: string]: unknown }> = { [K in keyof T]: T[K] };
 /** Internal type. DO NOT USE DIRECTLY. */
 export type Incremental<T> = T | { [P in keyof T]?: P extends ' $fragmentName' | '__typename' ? T[P] : never };
 import { DocumentTypeDecoration } from '@graphql-typed-document-node/core';
+/**
+ * Filters and paging for searching the audit journal. Every filter is optional and filters
+ * are combined with AND.
+ */
 export type AdminAuditEventSearchCriteria = {
+  /** Only entries whose actor contains this text. The match ignores case. */
   actor?: string | null | undefined;
+  /** Only entries of this category, `auth` or `mutation`. Exact match. */
   category?: string | null | undefined;
+  /** Only entries at or before this time, as an RFC 3339 timestamp. */
   endTime?: string | null | undefined;
+  /** Only entries of this operation, such as `login` or `update`. Exact match. */
   operation?: string | null | undefined;
+  /** Page to return, starting at 1. */
   pageNumber: number;
+  /** Results per page. Below 1 means the default of 100; above 1000 is capped at 1000. */
   pageSize: number;
+  /** Only entries at or after this time, as an RFC 3339 timestamp. */
   startTime?: string | null | undefined;
+  /**
+   * Only entries belonging to the tenant with this token. Exact match. Entries that belong
+   * to no tenant are excluded when this is set.
+   */
   tenant?: string | null | undefined;
 };
 
+/** Fields for a new identity. */
 export type AdminIdentityCreateRequest = {
+  /** The identity's email address. It becomes the sign-in name, is stored lower-cased and cannot be changed. It must not already be in use. */
   email: string;
+  /** Whether the identity may sign in. Send false to create it disabled. */
   enabled: boolean;
+  /** Given name, shown in the console. A blank value is stored as unset. */
   firstName?: string | null | undefined;
+  /** Family name, shown in the console. A blank value is stored as unset. */
   lastName?: string | null | undefined;
+  /** The initial password. It must not be empty. It is stored hashed and cannot be read back. */
   password: string;
+  /** Tokens of the system roles to assign. Each must name an existing role with system scope; an empty list assigns none. */
   systemRoles: Array<string>;
 };
 
+/** Fields for a new role. */
 export type AdminRoleCreateRequest = {
+  /**
+   * The authorities to grant, as listed by the authorities query for the same scope; `*` is
+   * allowed at either scope. An unknown authority, or one that belongs to the other scope,
+   * rejects the request. An empty list creates a role that grants nothing.
+   */
   authorities: Array<string>;
+  /** Free-text description. */
   description?: string | null | undefined;
+  /** Human-readable name. */
   name?: string | null | undefined;
+  /** `system` or `tenant`. A role's scope cannot be changed afterwards. */
   scope: string;
+  /** Identifier for the role, unique within its scope. */
   token: string;
 };
 
+/**
+ * A partial update to a role. Omit a field to keep it, send a value to set it, or send null
+ * to clear it. The role is named by the mutation's scope and token arguments, which cannot
+ * be changed.
+ */
 export type AdminRoleUpdateRequest = {
+  /**
+   * The complete new set of authorities, replacing the current set. Null and an empty list
+   * both leave the role granting nothing. Validated as for creation; an unknown authority,
+   * or one that belongs to the other scope, rejects the whole update.
+   */
   authorities?: Array<string> | null | undefined;
+  /** New description, or null to clear it. */
   description?: string | null | undefined;
+  /** New name, or null to clear it. */
   name?: string | null | undefined;
 };
 
+/** Fields for a new tenant. */
 export type AdminTenantCreateRequest = {
+  /**
+   * Records the tenant's agreement to have its data sent to an external AI model provider.
+   * Omit it for not agreed.
+   */
   aiExternalEnabled?: boolean | null | undefined;
+  /** Override of the AI inference burst allowance, in requests. Must be positive. Omit to inherit. */
   aiInferenceBurst?: number | null | undefined;
+  /** Override of the sustained AI inference rate in requests per minute. Must be positive. Omit to inherit. */
   aiInferenceRequestsPerMinute?: number | null | undefined;
+  /** Free-form settings as a JSON object serialized to a string. Omit it, or send an empty string or `{}`, for none. */
   config?: string | null | undefined;
+  /**
+   * Override of the most geofences the tenant may have. A positive whole number of at most
+   * 4000; a larger value is rejected, not clamped. Omit to inherit.
+   */
   geoFenceCeiling?: number | null | undefined;
+  /**
+   * Override of the most positions the tenant's geofences may have in total. A positive whole
+   * number of at most 128000; a larger value is rejected, not clamped. Omit to inherit.
+   */
   geoFencePositionBudget?: number | null | undefined;
+  /**
+   * Override of the most positions one geofence may have, across all of its rings. A
+   * positive whole number of at most 1024; a larger value is rejected, not clamped. Omit to
+   * inherit.
+   */
   geoFencePositionCeiling?: number | null | undefined;
+  /**
+   * Override of how many commands may be held waiting for offline devices. Any positive
+   * whole number. Omit to inherit the tier's value, then the command service's default.
+   */
   heldCommandCeiling?: number | null | undefined;
+  /** Override of the ingest burst allowance, in readings. Must be positive. Omit to inherit. */
   ingestBurst?: number | null | undefined;
+  /** Override of the sustained ingest rate in readings per second. Must be positive. Omit to inherit the tier's value, then the platform default. */
   ingestMessagesPerSecond?: number | null | undefined;
+  /** Human-readable name. */
   name?: string | null | undefined;
+  /** Override of the outbound burst allowance, in calls. Must be positive. Omit to inherit. */
   outboundBurst?: number | null | undefined;
+  /** Override of the sustained rate of outbound calls in calls per second. Must be positive. Omit to inherit. */
   outboundMessagesPerSecond?: number | null | undefined;
+  /**
+   * Override of the overload-protection priority: a whole number from 1 to 100, higher
+   * meaning the tenant's traffic is refused later when the platform is overloaded; 80 to 100
+   * is never refused. Omit to inherit the tier's value, then the platform default.
+   */
   shedPriority?: number | null | undefined;
+  /** Token of the tier to package the tenant at. The tier must exist. */
   tierToken: string;
+  /**
+   * Unique identifier for the tenant: letters, digits, hyphens and underscores, starting
+   * with a letter or digit, at most 128 characters. It cannot be changed. A token that
+   * belongs to a tenant being deleted is reserved and is refused until that deletion finishes.
+   */
   token: string;
 };
 
+/** Fields for a new tenant tier. */
 export type AdminTenantTierCreateRequest = {
+  /**
+   * A color name from tierColorPalette. Omit it, or send null or an empty string, for no
+   * color; an unknown name rejects the request.
+   */
   color?: string | null | undefined;
+  /**
+   * The tier's settings as a JSON object serialized to a string, using the keys described
+   * on AdminTenantTier.config. An unknown key, or a value outside its allowed range, rejects
+   * the request. Omit it, or send an empty string or `{}`, for a tier with no settings.
+   */
   config?: string | null | undefined;
+  /** Free-text description. */
   description?: string | null | undefined;
+  /** Human-readable name. */
   name?: string | null | undefined;
+  /**
+   * Unique identifier for the tier: letters, digits, hyphens and underscores, starting with
+   * a letter or digit, at most 128 characters.
+   */
   token: string;
 };
 
+/**
+ * A partial update to a tier. Omit a field to keep it, send a value to set it, or send null
+ * to clear it. The tier is named by the mutation's token argument. Changes apply to every
+ * tenant at the tier.
+ */
 export type AdminTenantTierUpdateRequest = {
+  /**
+   * A color name from tierColorPalette, trimmed of surrounding spaces. Null or an empty
+   * string clears it; an unknown name rejects the request.
+   */
   color?: string | null | undefined;
+  /**
+   * The tier's settings as a JSON object serialized to a string, replacing the current
+   * settings entirely. Null, an empty string or `{}` removes all of them, so every tenant at
+   * the tier then falls back to the platform defaults. An unknown key, or a value outside
+   * its allowed range, rejects the request.
+   */
   config?: string | null | undefined;
+  /** New description, or null to clear it. */
   description?: string | null | undefined;
+  /** New name, or null to clear it. */
   name?: string | null | undefined;
 };
 
+/**
+ * A partial update to a tenant. For every field, omitting it keeps the stored value, sending
+ * a value sets it, and sending null clears it. Clearing a limit removes the tenant's own
+ * override, so the tier's value applies, then the platform default; it never makes the tenant
+ * unlimited. The tenant is named by the mutation's token argument. Limits are validated as
+ * for creation.
+ */
 export type AdminTenantUpdateRequest = {
+  /**
+   * Whether the tenant has agreed to have its data sent to an external AI model provider.
+   * Null clears the record, which counts as not agreed.
+   */
   aiExternalEnabled?: boolean | null | undefined;
+  /** Override of the AI inference burst allowance, in requests. Must be positive. */
   aiInferenceBurst?: number | null | undefined;
+  /** Override of the sustained AI inference rate, in requests per minute. Must be positive. */
   aiInferenceRequestsPerMinute?: number | null | undefined;
+  /**
+   * Free-form settings as a JSON object serialized to a string, replacing the current ones.
+   * Null, an empty string or `{}` clears them.
+   */
   config?: string | null | undefined;
+  /** Override of the most geofences the tenant may have. A positive whole number of at most 4000. */
   geoFenceCeiling?: number | null | undefined;
+  /** Override of the most positions the tenant's geofences may have in total. A positive whole number of at most 128000. */
   geoFencePositionBudget?: number | null | undefined;
+  /** Override of the most positions one geofence may have. A positive whole number of at most 1024. */
   geoFencePositionCeiling?: number | null | undefined;
+  /** Override of how many commands may be held waiting for offline devices. A positive whole number. */
   heldCommandCeiling?: number | null | undefined;
+  /** Override of the ingest burst allowance, in readings. Must be positive. */
   ingestBurst?: number | null | undefined;
+  /** Override of the sustained ingest rate, in readings per second. Must be positive. */
   ingestMessagesPerSecond?: number | null | undefined;
+  /** New name, or null to clear it. */
   name?: string | null | undefined;
+  /** Override of the outbound burst allowance, in calls. Must be positive. */
   outboundBurst?: number | null | undefined;
+  /** Override of the sustained rate of outbound calls, in calls per second. Must be positive. */
   outboundMessagesPerSecond?: number | null | undefined;
+  /** Override of the overload-protection priority, a whole number from 1 to 100. */
   shedPriority?: number | null | undefined;
+  /**
+   * Token of the tier to move the tenant to; the change takes effect within about a minute.
+   * Omit it to keep the current tier. Null is rejected, because every tenant has a tier.
+   */
   tierToken?: string | null | undefined;
 };
 
+/** What a tenant deletion is currently waiting on. */
 export type DeletionWait =
+  /** Nothing is outstanding. */
   | 'NONE'
+  /** Every storage system is clean but has not yet stayed clean for the required settling period. */
   | 'SETTLE'
+  /**
+   * At least one storage system has not reported clean. This is the only wait that needs a
+   * person; blockedBy says which system and why.
+   */
   | 'STORES'
+  /**
+   * Everything is clean and settled, but the deletion is not yet old enough to release the
+   * tenant's token for reuse.
+   */
   | 'TOKEN_HOLD';
 
+/** Paging and an optional completion filter for listing tenant deletions. */
 export type TenantDeletionSearchCriteria = {
+  /** True for deletions that have finished, false for those still in progress. Omit it for both. */
   completed?: boolean | null | undefined;
+  /** Page to return, starting at 1. */
   pageNumber: number;
+  /** Results per page. Below 1 means the default of 100; above 1000 is capped at 1000. */
   pageSize: number;
 };
 
