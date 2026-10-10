@@ -38,5 +38,6 @@ var (
 		NewDetectReconcileInstantsSchema(),
 		NewProfileConfigurationDeclarationSchema(),
 		NewDeviceConfigurationSchema(),
+		NewCredentialSecretDigestSchema(),
 	}
 )

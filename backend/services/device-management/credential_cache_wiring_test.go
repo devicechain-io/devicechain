@@ -18,6 +18,7 @@ import (
 
 	"github.com/devicechain-io/dc-device-management/config"
 	"github.com/devicechain-io/dc-device-management/model"
+	dmtest "github.com/devicechain-io/dc-device-management/test"
 	mscfg "github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/core"
 	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
@@ -121,6 +122,7 @@ func TestTheServiceAnswersARepeatedCredentialCheckFromMemory(t *testing.T) {
 
 	db := putest.NewSQLiteDB(t, credentialTables()...)
 	api := model.NewApi(&rdb.RdbManager{Database: db})
+	api.DeviceSecretKey = dmtest.DeviceSecretKey()
 	capi := model.NewCachedApi(api, caches)
 	api.CacheEvictor = capi
 	ctx := seedBasicCredential(t, api)
@@ -157,7 +159,7 @@ type replica struct {
 func newReplica(t *testing.T, host string, port uint32, instanceId string, db *gorm.DB) replica {
 	t.Helper()
 	nmgr := startNatsManager(t, host, port, instanceId)
-	api, capi, err := buildApis(nmgr, &rdb.RdbManager{Database: db}, config.NewDeviceManagementConfiguration())
+	api, capi, err := buildApis(nmgr, &rdb.RdbManager{Database: db}, dmtest.DeviceSecretKey(), config.NewDeviceManagementConfiguration())
 	require.NoError(t, err)
 	return replica{api: api, capi: capi}
 }

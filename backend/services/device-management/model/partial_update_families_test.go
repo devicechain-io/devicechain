@@ -1046,7 +1046,7 @@ func deviceCredentialFamily() putest.Family[*Api] {
 				"deviceToken":     refTokenOf(t, e.Device == nil, func() string { return e.Device.Token }),
 				"credentialType":  e.CredentialType,
 				"credentialId":    e.CredentialId,
-				"credentialValue": nullStr(e.CredentialValue),
+				"credentialValue": secretStr(e.SecretDigest, credentialValueSeed, "rotated-material"),
 				"enabled":         boolStr(e.Enabled),
 				"expiresAt":       nullTimeStr(e.ExpiresAt),
 				"metadata":        jsonStr(e.Metadata),

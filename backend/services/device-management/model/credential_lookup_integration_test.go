@@ -84,7 +84,7 @@ func TestCredentialLookupJoinOnPostgres(t *testing.T) {
 		known := f.stmts.taken()[0]
 		requireReadsNoVariableWidthColumn(t, known)
 		for _, want := range []string{"device_credentials.id,", "device_credentials.tenant_id,",
-			"device_credentials.credential_value,", `"Device"."token"`, `"Device"."tenant_id"`,
+			"device_credentials.secret_digest,", `"Device"."token"`, `"Device"."tenant_id"`,
 			`"Device"."deleted_at" IS NULL`, `"device_credentials"."tenant_id" =`} {
 			if !strings.Contains(known, want) {
 				t.Errorf("the statement lacks %s: %s", want, known)
