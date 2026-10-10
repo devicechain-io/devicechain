@@ -33,6 +33,7 @@ import (
 func TestCredentialLookupJoinOnPostgres(t *testing.T) {
 	mgr := newPostgresRdbManager(t)
 	api := NewApi(mgr)
+	api.DeviceSecretKey = testSecretKey // credential secrets are stored as keyed digests
 	stmts := countQueries(t, api)
 
 	// Every fixture starts from empty tables: the instance id is fixed, so a server that
@@ -74,8 +75,8 @@ func TestCredentialLookupJoinOnPostgres(t *testing.T) {
 		f := fresh(t)
 		storeVariableWidthColumns(t, f)
 		d, stored, err := f.capi.ResolveDeviceCredential(f.ctx, basic("cred-1", "wrong"), time.Now())
-		if err != nil || d == nil || d.Token != "dev" || stored != "s3cret" {
-			t.Fatalf("got (%v, %q, %v), want device dev with its stored secret", d, stored, err)
+		if err != nil || d == nil || d.Token != "dev" || !verifies(stored, "s3cret") {
+			t.Fatalf("got (%v, %q, %v), want device dev with its stored digest", d, stored, err)
 		}
 		if d.Metadata != nil || d.Name.Valid || d.Description.Valid || d.ExternalId.Valid {
 			t.Errorf("the resolved device carries columns the connect does not read: %+v", d)
