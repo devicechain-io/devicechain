@@ -367,3 +367,24 @@ func TestAnOrdinaryFailureIsStillLeftForRedelivery(t *testing.T) {
 	assert.Equal(t, 0, ack.acked, "a transient failure must be left unacked for AckWait-paced redelivery")
 	assert.Empty(t, dead.msgs)
 }
+
+// An alarm event type this build does not know is not a notification anyone can send. Acking
+// it after a WARN made it vanish; it now fails Notify, and because no redelivery can teach
+// the consumer a new event type, the processor dead-letters it at once instead of spending
+// the redelivery budget.
+func TestAnUnknownAlarmEventTypeIsDeadLetteredAtOnce(t *testing.T) {
+	dead := &deadRecorder{}
+	n := &PolicyNotifier{adapters: map[string]ChannelAdapter{}, attempts: 1, timeout: time.Second}
+	np := processorWithDeadLetters(n, dead)
+	ack := &recordingAck{}
+
+	bytes, err := dmproto.MarshalAlarmStateChangeEvent(&dmmodel.AlarmStateChangeEvent{
+		EventType: "TELEPORTED", AlarmToken: "alarm-1", Severity: "CRITICAL",
+		OccurredTime: time.Unix(1_700_000_000, 0).UTC(),
+	})
+	assert.NoError(t, err)
+	np.dispatchOne(context.Background(), msgWith(testAlarmSubject, bytes, 1, ack))
+
+	assert.Equal(t, 1, ack.acked, "an unprocessable event is acked once it is dead-lettered")
+	assert.Len(t, dead.msgs, 1, "an unknown event type must reach the dead-letter stream, not vanish")
+}

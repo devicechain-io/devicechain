@@ -134,8 +134,9 @@ func NewNotifyMetrics(ms *core.Microservice) NotifyMetrics {
 				"operator can see which pages were never sent (ADR-024)."),
 		deliveriesRefused: ms.NewCounterVec("deliveries_refused_total",
 			"Channel deliveries refused on the first attempt and not retried, by reason: egress "+
-				"(the channel points at a destination outbound traffic may not reach) or credential "+
-				"(a declared credential is missing, or a secret is stored that the channel never presents).",
+				"(the channel points at a destination outbound traffic may not reach), credential "+
+				"(a declared credential is missing, or a secret is stored that the channel never presents) "+
+				"or no_adapter (the channel's type has no delivery adapter in this build, so the channel was skipped).",
 			[]string{"reason"}),
 	}
 }
@@ -304,6 +305,18 @@ func (np *NotificationProcessor) dispatchOne(ctx context.Context, msg messaging.
 			done(core.ResultInvalid)
 			return
 		}
+		// 🔴 THE OTHER PERMANENT ERROR: an event type this build does not know. No redelivery
+		// can teach the consumer a new type, so it is dead-lettered on the first delivery
+		// (acked once recorded) instead of spending the cap, and it is never dropped silently.
+		if errors.Is(err, ErrUnknownAlarmEventType) {
+			log.Error().Err(err).Str("correlation", msg.CorrelationID()).Str("alarm", event.AlarmToken).
+				Msg("Dead-lettering an alarm event of an unknown type; nobody was paged")
+			np.deadLetterAs(msgctx, msg, event.AlarmToken, err, deadletter.ReasonUnprocessable,
+				"an alarm event carried a type this service does not recognise, so nobody was paged about it")
+			msg.Ack()
+			done(core.ResultInvalid)
+			return
+		}
 		log.Error().Err(err).Str("correlation", msg.CorrelationID()).Str("alarm", event.AlarmToken).Msg("Notification dispatch failed")
 		if msg.NumDelivered >= messaging.MaxDeliver {
 			log.Error().Str("correlation", msg.CorrelationID()).Str("alarm", event.AlarmToken).
@@ -365,6 +378,15 @@ func (np *NotificationProcessor) ExecuteTerminate(context.Context) error {
 // surface's decision, not this one's.
 func (np *NotificationProcessor) deadLetter(ctx context.Context, msg messaging.Message,
 	alarm string, cause error) {
+	np.deadLetterAs(ctx, msg, alarm, cause, deadletter.ReasonExhausted,
+		"an alarm could not be delivered to any configured channel after every "+
+			"delivery attempt, so nobody was paged about it")
+}
+
+// deadLetterAs is deadLetter with the reason and summary chosen by the caller, for the
+// give-ups that are decided on the first delivery rather than at the cap.
+func (np *NotificationProcessor) deadLetterAs(ctx context.Context, msg messaging.Message,
+	alarm string, cause error, reason deadletter.Reason, summary string) {
 	if np.dead == nil {
 		return
 	}

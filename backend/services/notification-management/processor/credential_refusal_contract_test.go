@@ -146,3 +146,22 @@ func TestARefusalMovesTheDocumentedSeries(t *testing.T) {
 	}
 	t.Fatalf("the registry holds no %q", want)
 }
+
+// A channel whose type has no adapter in this build is skipped from the plan. The skip was a
+// log line and nothing else, so a mis-typed channel paged nobody with no series to alert on.
+// It is counted under its own reason on the same refused-deliveries counter.
+func TestAChannelWithNoAdapterIsCountedWhenSkipped(t *testing.T) {
+	refused := prometheus.NewCounterVec(prometheus.CounterOpts{Name: "refused_test"}, []string{"reason"})
+	n := NewPolicyNotifier(nil, nil, 1, time.Second, nil, nil, NotifyMetrics{deliveriesRefused: refused})
+	n.adapters = map[string]ChannelAdapter{}
+
+	got := n.plan(raisedEvent("CRITICAL"), []*model.NotificationPolicy{
+		policy("p", rule("CRITICAL", enabledChannel("sms-1", "sms"), "x@x.com")),
+	}, nil)
+	if len(got) != 0 {
+		t.Fatalf("a channel with no adapter must not be planned, got %d deliveries", len(got))
+	}
+	if v := counterValue(t, refused, "no_adapter"); v != 1 {
+		t.Errorf("no-adapter skips counted = %v, want 1", v)
+	}
+}
