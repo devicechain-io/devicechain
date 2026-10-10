@@ -47,9 +47,9 @@ type BrandingLogoHandler struct {
 // brandingLogoPath. store may be nil when the object store is unconfigured.
 func RegisterBrandingLogoHandler(mux *http.ServeMux, store blob.Store, mgr *identity.Manager, v *auth.Validator) {
 	h := &BrandingLogoHandler{store: store, identity: mgr, validator: v}
-	// The upload ceiling is the body ceiling: a larger body reaches the handler cut one
-	// byte over it, and the handler refuses it as too large.
-	mux.Handle(brandingLogoPath, identity.BoundRequests(h, branding.MaxUploadedLogoBytes))
+	// Deadlines only: the upload authenticates first and then makes its own bounded
+	// read, so nothing is buffered for a caller without a token.
+	mux.Handle(brandingLogoPath, identity.RequestDeadlines(h))
 }
 
 func (h *BrandingLogoHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {

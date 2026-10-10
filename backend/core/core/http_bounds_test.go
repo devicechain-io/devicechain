@@ -174,3 +174,123 @@ func TestBoundRequestsRequiresABodyCeiling(t *testing.T) {
 	}()
 	BoundRequests(http.NotFoundHandler(), RequestBounds{})
 }
+
+// A body that runs past the ceiling and then stalls is answered at once. The handler
+// refuses the cut body, and the unread rest is not waited for: net/http discards it
+// after the handler returns, and it must not do that with no deadline in force.
+// Both framings, since a chunked body has no declared length to give up on.
+func TestBoundRequestsDoesNotWaitOnTheRestOfAnOversizedStalledBody(t *testing.T) {
+	srv := httptest.NewServer(BoundRequests(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.ReadAll(r.Body)
+		w.WriteHeader(http.StatusRequestEntityTooLarge)
+	}), RequestBounds{MaxBodyBytes: 16, BodyReadTimeout: 10 * time.Second}))
+	t.Cleanup(srv.Close)
+
+	over := strings.Repeat("x", 20)
+	for name, raw := range map[string]string{
+		"content-length": "POST /x HTTP/1.1\r\nHost: t\r\nContent-Length: 1000\r\n\r\n" + over,
+		"chunked":        "POST /x HTTP/1.1\r\nHost: t\r\nTransfer-Encoding: chunked\r\n\r\n14\r\n" + over + "\r\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			resp, elapsed := rawExchange(t, srv, raw, 3*time.Second)
+			if resp.StatusCode != http.StatusRequestEntityTooLarge || !resp.Close {
+				t.Errorf("status = %d, connection closed = %v; want the handler's 413 with the connection closed", resp.StatusCode, resp.Close)
+			}
+			if elapsed > time.Second {
+				t.Errorf("answered after %v; the server waited on the rest of a body it had already refused", elapsed)
+			}
+		})
+	}
+}
+
+// A handler that refuses without reading its body — an authentication failure in front
+// of the read — is answered at once too, with the connection closed, not after the
+// server has waited on the body it never wanted.
+func TestRequestDeadlinesDoesNotWaitOnABodyTheHandlerNeverRead(t *testing.T) {
+	srv := httptest.NewServer(RequestDeadlines(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "unauthenticated", http.StatusUnauthorized)
+	}), RequestBounds{BodyReadTimeout: 10 * time.Second}))
+	t.Cleanup(srv.Close)
+
+	resp, elapsed := rawExchange(t, srv, stalledPost, 3*time.Second)
+	if resp.StatusCode != http.StatusUnauthorized || !resp.Close {
+		t.Errorf("status = %d, connection closed = %v; want 401 with the connection closed", resp.StatusCode, resp.Close)
+	}
+	if elapsed > time.Second {
+		t.Errorf("answered after %v; the server waited on a body the handler never read", elapsed)
+	}
+}
+
+// installBudget swaps in a budget of capacity bytes for one test.
+func installBudget(t *testing.T, capacity int64) {
+	t.Helper()
+	prev := bodyBudget
+	bodyBudget = newByteBudget(capacity)
+	t.Cleanup(func() { bodyBudget = prev })
+}
+
+// When the process-wide buffer budget is spent, a request that would buffer is refused
+// 503 with Retry-After and the connection closed, rather than buffered regardless; and
+// the budget comes back when the request holding it finishes.
+func TestBufferBodyRefusesWhenTheBudgetIsSpent(t *testing.T) {
+	installBudget(t, 17) // exactly one request's reservation at MaxBodyBytes 16
+	hold := make(chan struct{})
+	entered := make(chan struct{}, 1)
+	srv := httptest.NewServer(BoundRequests(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/hold" {
+			entered <- struct{}{}
+			<-hold
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}), RequestBounds{MaxBodyBytes: 16}))
+	t.Cleanup(srv.Close)
+	post := func(path string) string {
+		return "POST " + path + " HTTP/1.1\r\nHost: t\r\nContent-Length: 3\r\n\r\nabc"
+	}
+
+	held := make(chan int, 1)
+	go func() {
+		conn, err := net.Dial("tcp", srv.Listener.Addr().String())
+		if err != nil {
+			held <- 0
+			return
+		}
+		defer conn.Close()
+		_, _ = conn.Write([]byte(post("/hold")))
+		resp, err := http.ReadResponse(bufio.NewReader(conn), nil)
+		if err != nil {
+			held <- 0
+			return
+		}
+		held <- resp.StatusCode
+	}()
+	<-entered
+
+	resp, _ := rawExchange(t, srv, post("/x"), 3*time.Second)
+	if resp.StatusCode != http.StatusServiceUnavailable || !resp.Close || resp.Header.Get("Retry-After") == "" {
+		t.Errorf("status = %d, closed = %v, Retry-After = %q; want 503, closed, with Retry-After",
+			resp.StatusCode, resp.Close, resp.Header.Get("Retry-After"))
+	}
+
+	close(hold)
+	if got := <-held; got != http.StatusNoContent {
+		t.Fatalf("the request holding the budget got %d, want 204", got)
+	}
+	resp, _ = rawExchange(t, srv, post("/x"), 3*time.Second)
+	if resp.StatusCode != http.StatusNoContent {
+		t.Errorf("after the holder finished, status = %d; the budget was not given back", resp.StatusCode)
+	}
+}
+
+// A request with no body reserves nothing, so a spent budget does not refuse it.
+func TestBufferBodyReservesNothingForABodilessRequest(t *testing.T) {
+	installBudget(t, 0)
+	h := BoundRequests(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}), RequestBounds{MaxBodyBytes: 16})
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+	if rec.Code != http.StatusNoContent {
+		t.Errorf("status = %d, want 204", rec.Code)
+	}
+}

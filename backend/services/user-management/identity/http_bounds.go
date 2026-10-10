@@ -20,14 +20,26 @@ const MaxSmallBodyBytes = 1 << 16
 var bodyReadTimeout, execTimeout time.Duration
 
 // BoundRequests wraps one of user-management's plain (non-GraphQL) HTTP handlers with
-// a body-delivery deadline and an execution deadline (see core.BoundRequests). Every
-// such handler this service registers goes through it: the OAuth endpoints and the
-// service-token mint here, and the JWK sets and the branding-logo endpoints from
-// their own registrations. Without it only the server's header timeout applies, and a
-// client that stalls its body holds the connection for as long as it likes.
+// a body-delivery deadline and an execution deadline, buffering the body up to
+// maxBodyBytes before the handler runs (see core.BoundRequests). The OAuth endpoints,
+// the service-token mint, the discovery documents and the JWK sets go through it:
+// each reads a small body before deciding anything, or takes none. Without it only
+// the server's header timeout applies, and a client that stalls its body holds the
+// connection for as long as it likes.
 func BoundRequests(h http.Handler, maxBodyBytes int64) http.Handler {
 	return core.BoundRequests(h, core.RequestBounds{
 		MaxBodyBytes:    maxBodyBytes,
+		BodyReadTimeout: bodyReadTimeout,
+		ExecTimeout:     execTimeout,
+	})
+}
+
+// RequestDeadlines applies the same two deadlines without buffering anything, for a
+// handler that authenticates before it reads its body and bounds that read itself —
+// the branding-logo upload. Buffering in front of it would hold up to a logo's worth
+// of memory for a caller who has not yet shown a token.
+func RequestDeadlines(h http.Handler) http.Handler {
+	return core.RequestDeadlines(h, core.RequestBounds{
 		BodyReadTimeout: bodyReadTimeout,
 		ExecTimeout:     execTimeout,
 	})
