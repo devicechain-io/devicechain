@@ -33,7 +33,7 @@ func TestDeviceAltIdKeySnapshot(t *testing.T) {
 func TestDeviceAltIdKeyManualStatements(t *testing.T) {
 	assert.Contains(t, deviceAltIdKeyManualBuild, "CREATE UNIQUE INDEX idx_events_tenant_device_alt_id")
 	assert.Contains(t, deviceAltIdKeyManualBuild, "(tenant_id, device_token, alt_id, occurred_time) WHERE alt_id IS NOT NULL")
-	assert.Contains(t, deviceAltIdKeyManualBuild, "timescaledb.transaction_per_chunk")
+	assert.NotContains(t, deviceAltIdKeyManualBuild, "transaction_per_chunk", "not accepted for a unique, partial index")
 	assert.NotContains(t, deviceAltIdKeyManualBuild, "IF NOT EXISTS")
 	assert.Equal(t, `DROP INDEX IF EXISTS "event-management".idx_events_tenant_device_alt_id`, deviceAltIdKeyManualDrop)
 }

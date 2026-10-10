@@ -226,11 +226,26 @@ func TestIntegrationDeviceAltIdKeyRerunTakesNoLock(t *testing.T) {
 	holder := connectInstance(t, inst)
 	_, err := holder.Exec(context.Background(), `BEGIN; LOCK TABLE "event-management".events IN ACCESS EXCLUSIVE MODE`)
 	require.NoError(t, err)
+	// Released on every exit, so a failure here cannot leave the lock held for the rest of the run.
+	released := false
+	release := func() {
+		if released {
+			return
+		}
+		released = true
+		_, rerr := holder.Exec(context.Background(), `ROLLBACK`)
+		require.NoError(t, rerr)
+	}
+	t.Cleanup(release)
+
+	// A migration that queued behind the lock would wait for as long as it is held; the deadline
+	// turns that into a failed assertion instead of a hung package.
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
 	start := time.Now()
-	require.NoError(t, NewDeviceAltIdKeySchema().Migrate(sys))
+	require.NoError(t, NewDeviceAltIdKeySchema().Migrate(sys.WithContext(ctx)))
 	assert.Less(t, time.Since(start), time.Second, "a re-run takes no lock")
-	_, err = holder.Exec(context.Background(), `ROLLBACK`)
-	require.NoError(t, err)
+	release()
 	assert.Equal(t, built, deviceIndexOID(t, sys, deviceAltIdKey.name), "a re-run rebuilds nothing")
 	assertFinalIndexes(t, sys, 2)
 }

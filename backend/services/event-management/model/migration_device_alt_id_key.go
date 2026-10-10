@@ -34,22 +34,24 @@ var deviceAltIdKey = deviceAltIdKeySnapshot{
 }
 
 // deviceAltIdKeyManualDrop and deviceAltIdKeyManualBuild are the two statements every refusal
-// hands the operator. The build goes chunk by chunk (timescaledb.transaction_per_chunk), as
-// the per-device index's hand-run build does, so a write waits only while the chunk it
-// targets is indexed. It has no IF NOT EXISTS on purpose: an index of that name already
-// there, including the INVALID one an interrupted build leaves, must fail the statement
-// loudly rather than be skipped as though it were built; the DROP first removes exactly that.
+// hands the operator. Unlike the per-device index's hand-run build it does NOT use
+// timescaledb.transaction_per_chunk: that option is not accepted for this unique, partial
+// index (the statement was refused against a real TimescaleDB), so the hand-run build is one
+// statement that holds writers off for its whole run, as the migration's own build does for
+// its bounded one. It has no IF NOT EXISTS on purpose: an index of that name already
+// there, including an INVALID leftover, must fail the statement loudly rather than be skipped
+// as though it were built; the DROP first removes exactly that.
 const (
 	deviceAltIdKeyManualDrop  = `DROP INDEX IF EXISTS "event-management".idx_events_tenant_device_alt_id`
 	deviceAltIdKeyManualBuild = `CREATE UNIQUE INDEX idx_events_tenant_device_alt_id ` +
 		`ON "event-management".events (tenant_id, device_token, alt_id, occurred_time) ` +
-		`WHERE alt_id IS NOT NULL WITH (timescaledb.transaction_per_chunk)`
+		`WHERE alt_id IS NOT NULL`
 )
 
 const deviceAltIdKeyManualAdvice = "To finish it in place, run these on the event store's primary, outside " +
 	"event-management's startup and at a quiet time: " + deviceAltIdKeyManualDrop + "; " +
-	deviceAltIdKeyManualBuild + ". If it is interrupted it leaves an invalid index of that name, which " +
-	"the DROP removes before the next try. Then restart event-management, which removes the index it " +
+	deviceAltIdKeyManualBuild + ". The DROP removes an unfinished index of that name, if one is there, " +
+	"before the build. Then restart event-management, which removes the index it " +
 	"replaces. The same statements can be run before upgrading"
 
 // NewDeviceAltIdKeySchema scopes the alternate-id idempotency key to the DEVICE. The key was
@@ -163,19 +165,27 @@ func gateDeviceAltIdKey(db *gorm.DB, timing timeLeadingKeysTiming) error {
 	return nil
 }
 
-// classifyDeviceAltIdKey reads the catalog only (no lock on the table).
+// classifyDeviceAltIdKey reads the catalog only, and takes no lock on the table. It therefore
+// does not deparse the predicate with pg_get_expr(indpred, indrelid): that opens the indexed
+// relation, so a re-run queued behind an ACCESS EXCLUSIVE lock on events (which it must not
+// be) and hung. The predicate is recognised from its stored node tree instead: a single
+// NULLTEST of the alt_id column, IS NOT NULL.
 func classifyDeviceAltIdKey(db *gorm.DB) (deviceAltIdKeyState, error) {
 	var found []struct {
 		Signature string
 		Method    string
 		Unique    bool
-		Predicate string
+		Partial   bool // a plain "alt_id IS NOT NULL" predicate, and no expression column
 		Valid     bool
 		OnEvents  bool
 	}
 	if err := db.Raw(`SELECT string_agg(a.attname, ', ' ORDER BY k.ord) AS signature,
 		max(am.amname) AS method, bool_and(x.indisunique) AS "unique",
-		coalesce(max(pg_get_expr(x.indpred, x.indrelid)), '') AS predicate,
+		bool_and(x.indpred IS NOT NULL AND x.indexprs IS NULL
+			AND x.indpred::text ~ ('^\{NULLTEST :arg \{VAR :varno 1 :varattno '
+				|| (SELECT ca.attnum FROM pg_attribute ca WHERE ca.attrelid = x.indrelid AND ca.attname = 'alt_id') || ' ')
+			AND x.indpred::text ~ ':nulltesttype 1[ }]'
+			AND x.indpred::text !~ 'BOOLEXPR') AS partial,
 		bool_and(x.indisvalid) AS valid, bool_and(t.relname = ?) AS on_events
 		FROM pg_class i
 		JOIN pg_index x ON x.indexrelid = i.oid
@@ -197,14 +207,13 @@ func classifyDeviceAltIdKey(db *gorm.DB) (deviceAltIdKeyState, error) {
 	valid := false
 	if len(found) > 0 {
 		f := found[0]
-		pred := strings.NewReplacer("(", "", ")", "").Replace(f.Predicate)
-		if f.Signature != deviceAltIdKey.columns || f.Method != "btree" || !f.Unique || !f.OnEvents ||
-			pred != deviceAltIdKey.where {
-			return 0, fmt.Errorf("an index named %s exists on \"event-management\" as (%s%s, predicate %q), which is "+
+		if f.Signature != deviceAltIdKey.columns || f.Method != "btree" || !f.Unique || !f.OnEvents || !f.Partial {
+			return 0, fmt.Errorf("an index named %s exists on \"event-management\" as (%s%s%s), which is "+
 				"not the unique index this migration builds (%s WHERE %s). Nothing was changed: this migration does "+
 				"not replace an index it did not write. Drop or rename it, then restart event-management.",
 				deviceAltIdKey.name, f.Signature, map[bool]string{true: ", unique", false: ""}[f.Unique],
-				f.Predicate, deviceAltIdKey.columns, deviceAltIdKey.where)
+				map[bool]string{true: ", partial on alt_id", false: ", not partial on alt_id"}[f.Partial],
+				deviceAltIdKey.columns, deviceAltIdKey.where)
 		}
 		valid = f.Valid
 	}

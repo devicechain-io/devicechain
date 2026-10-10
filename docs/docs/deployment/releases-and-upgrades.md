@@ -3584,12 +3584,11 @@ yourself if you need that.
   DROP INDEX IF EXISTS "event-management".idx_events_tenant_device_alt_id;
   CREATE UNIQUE INDEX idx_events_tenant_device_alt_id
     ON "event-management".events (tenant_id, device_token, alt_id, occurred_time)
-    WHERE alt_id IS NOT NULL
-    WITH (timescaledb.transaction_per_chunk);
+    WHERE alt_id IS NOT NULL;
   ```
 
-  The build goes one chunk at a time, so a write waits only while the chunk it targets is being
-  indexed. An event held longer than the broker's 60 second acknowledgement wait is delivered again,
+  A unique index is built in one go, so writes of base events wait for the whole build while reads
+  do not. An event held longer than the broker's 60 second acknowledgement wait is delivered again,
   which is safe. On a busy instance, choose a quiet time.
 - **To avoid the refusal, build the index before you upgrade.** On a `v0.19.0` instance with more
   than `4000000` uncompressed base events, run the two statements above first; `v0.19.0` works with

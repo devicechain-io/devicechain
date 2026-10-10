@@ -192,7 +192,7 @@ func TestAnAlternateIdIsMatchedAtTheStoresResolutionOnPostgres(t *testing.T) {
 			r.run([]messaging.Message{consumed(t, r.acks, 100, tenant, 1, measurementOf("dev-z", at, alt, 1, "21.5"))})
 			r.api.txs.Store(0)
 
-			msgs := []messaging.Message{consumed(t, r.acks, 0, tenant, 1, measurementOf("dev-z2", at, alt, 1, "99"))}
+			msgs := []messaging.Message{consumed(t, r.acks, 0, tenant, 1, measurementOf("dev-z", at, alt, 1, "99"))}
 			for i := 1; i < 4; i++ {
 				msgs = append(msgs, consumed(t, r.acks, i, tenant, 1, batchEvent(i, true, at.Truncate(time.Hour))))
 			}
@@ -216,7 +216,7 @@ func TestAnAlternateIdIsMatchedAtTheStoresResolutionOnPostgres(t *testing.T) {
 				t.Errorf("%d events stored for the alternate id; want 1", n)
 			}
 			var values []float64
-			if err := db.Model(&model.MeasurementEvent{}).Where("device_token IN ?", []string{"dev-z", "dev-z2"}).
+			if err := db.Model(&model.MeasurementEvent{}).Where("device_token = ?", "dev-z").
 				Pluck("value", &values).Error; err != nil {
 				t.Fatalf("read values: %v", err)
 			}

@@ -2101,11 +2101,10 @@ v0.19.0 中列表总数和按事件类型过滤的设备列表，会访问该设
   DROP INDEX IF EXISTS "event-management".idx_events_tenant_device_alt_id;
   CREATE UNIQUE INDEX idx_events_tenant_device_alt_id
     ON "event-management".events (tenant_id, device_token, alt_id, occurred_time)
-    WHERE alt_id IS NOT NULL
-    WITH (timescaledb.transaction_per_chunk);
+    WHERE alt_id IS NOT NULL;
   ```
 
-  构建按分块逐个进行，因此写入只在其目标分块被索引时等待。被持有超过代理 60 秒确认等待的事件会被重新投递，这是安全的。在繁忙的实例上，请选择安静的时段。
+  唯一索引一次性构建，因此基础事件的写入会在整个构建期间等待，读取不受影响。被持有超过代理 60 秒确认等待的事件会被重新投递，这是安全的。在繁忙的实例上，请选择安静的时段。
 - **要避免被拒绝，请在升级前构建索引。** 在未压缩基础事件超过 `4000000` 的 `v0.19.0` 实例上，先执行上面两条语句；`v0.19.0` 可以与之配合工作，升级随后只需删除旧索引。统计基础事件数量时，使用[检查行数](#v0190-row-count)下的查询，并将条件改为 `hypertable_name IN ('events')`。
 - 回退到 `v0.19.0` 会保留新索引，`v0.19.0` 可以使用它：重新投递的事件仍会被去重，但该版本仍按租户检查，因此会再次丢弃第二台设备的事件。
 

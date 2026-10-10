@@ -3849,12 +3849,11 @@ entre sus dispositivos si lo necesita.
   DROP INDEX IF EXISTS "event-management".idx_events_tenant_device_alt_id;
   CREATE UNIQUE INDEX idx_events_tenant_device_alt_id
     ON "event-management".events (tenant_id, device_token, alt_id, occurred_time)
-    WHERE alt_id IS NOT NULL
-    WITH (timescaledb.transaction_per_chunk);
+    WHERE alt_id IS NOT NULL;
   ```
 
-  La construcción avanza fragmento a fragmento, de modo que una escritura solo espera mientras se
-  indexa el fragmento al que se dirige. Un evento retenido más que la espera de confirmación de 60
+  Un índice único se construye de una sola vez, de modo que las escrituras de eventos base esperan
+  durante toda la construcción y las lecturas no. Un evento retenido más que la espera de confirmación de 60
   segundos del broker se entrega de nuevo, lo cual es seguro. En una instancia ocupada, elija un
   momento tranquilo.
 - **Para evitar el rechazo, construya el índice antes de actualizar.** En una instancia `v0.19.0`
