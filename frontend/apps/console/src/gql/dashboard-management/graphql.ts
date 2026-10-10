@@ -18,7 +18,10 @@ export type DashboardCreateRequest = {
 
 /** Criteria for searching dashboards. */
 export type DashboardSearchCriteria = {
-  /** Return only dashboards whose name contains this text. The match is case-sensitive. */
+  /**
+   * Return only dashboards whose name contains this text. The match is case-sensitive,
+   * and % and _ in the text match any run of characters and any single character.
+   */
   name?: string | null | undefined;
   /** Page to return, starting at 1. */
   pageNumber: number;
