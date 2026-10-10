@@ -265,6 +265,11 @@ type NatsManager struct {
 	// under-reports a death rather than inventing one.
 	writeStalled atomic.Bool
 
+	// onReconnect holds what to run each time the connection comes back after a drop. See
+	// OnReconnect.
+	reconnectMu sync.Mutex
+	onReconnect []func()
+
 	// ackWaitOverride is the test seam behind SetAckWaitForTesting. Zero in production,
 	// where ackWait() answers the AckWait constant. Read it through ackWait(), never
 	// directly: the durable's configured AckWait and the AckDeadline a capacity reader
@@ -2773,6 +2778,7 @@ func (nmgr *NatsManager) connectionEventHandlers(requested *atomic.Bool) []nats.
 		nats.ReconnectHandler(func(nc *nats.Conn) {
 			nmgr.writeStalled.Store(false) // see writeStalled
 			nmgr.connectedServer.Store(nc.ConnectedUrl())
+			nmgr.runReconnectHooks()
 			log.Info().Str("area", area).Str("server", nc.ConnectedUrl()).
 				Str("cluster", nc.ConnectedClusterName()).
 				Msg("Reconnected to NATS. Durable consumers resume from their last ack; " +
@@ -3214,4 +3220,24 @@ func (nmgr *NatsManager) ExecuteTerminate(context.Context) error {
 		nmgr.closeConn()
 	}
 	return nil
+}
+
+// OnReconnect registers fn to run each time this manager's connection comes back after a
+// drop (not on the first connect). It exists for state a service keeps in process memory
+// that is kept honest by messages on core NATS, which are not replayed: a replica that
+// was away may have missed some, so it drops what it holds rather than trust it. fn runs
+// on the client library's callback goroutine and must be quick and must not block.
+func (nmgr *NatsManager) OnReconnect(fn func()) {
+	nmgr.reconnectMu.Lock()
+	defer nmgr.reconnectMu.Unlock()
+	nmgr.onReconnect = append(nmgr.onReconnect, fn)
+}
+
+func (nmgr *NatsManager) runReconnectHooks() {
+	nmgr.reconnectMu.Lock()
+	hooks := append([]func(){}, nmgr.onReconnect...)
+	nmgr.reconnectMu.Unlock()
+	for _, fn := range hooks {
+		fn()
+	}
 }

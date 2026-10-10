@@ -1171,14 +1171,33 @@ functionalAreas:
       # kept per device (a device by its token, its tracked relationships, its group
       # memberships), per cache (defaults shown). An entry costs about 290 bytes for a
       # device with no tracked relationship and 950 with one, so 24 MiB holds about
-      # 87,000 or 26,000 devices. An entry is kept 5 s from when it was read, so a
-      # device reporting less often than that is never answered from memory, however
-      # large these are. At the defaults the six in-memory caches (these three, two
-      # small ones, and the device credentials' fixed 16 MiB) hold at most 96 MiB, which
+      # 87,000 or 26,000 devices.
+      #
+      # A value is kept for ttlSeconds (5 minutes) from when it was read, so a device
+      # that reports less often than that but more often than every 5 minutes is answered
+      # from memory. A change to a device, a credential, a relationship or a profile
+      # drops the value on EVERY replica at once; the time only bounds a message that was
+      # lost, and a replica that reconnects to the broker drops everything it holds. Each
+      # cache's own time to live in the broker (deviceCacheTtlSeconds,
+      # relationshipCacheTtlSeconds, metricDefCacheTtlSeconds, membershipCacheTtlSeconds,
+      # also 300 by default) caps it: the shorter of the two applies. All are 1 to 3600.
+      #
+      # Size EACH replica for the WHOLE active fleet, not fleet / replicas: the inbound
+      # stream is one durable shared by every replica, so events are not split by device,
+      # and when replicas x a device's reporting interval is under the time, every
+      # replica sees nearly every device. A bound below the fleet makes the
+      # least-recently-used order cycle and answer almost nothing. The device credentials
+      # (an entry is about 1.1 KB, never stored in the broker) have their own bound,
+      # credentialCacheMiB: 32 MiB holds about 29,000 devices. Example, 60,000 devices
+      # each with one tracked edge: credentialCacheMiB 80, perDeviceCacheMiB 64 (relationship
+      # sets are about 950 B each), and the memory limit raised to 512Mi. At the defaults the six in-memory caches
+      # (these three, two small ones, and the credentials) hold at most 112 MiB, which
       # the heap can double before a collection: raise the memory limit with them.
       #   inMemoryCache:
+      #     ttlSeconds: 300
       #     perDeviceCacheEntries: 131072
       #     perDeviceCacheMiB: 24
+      #     credentialCacheMiB: 32
   event-sources:
     # CPU LIMIT raised from the 500m default. On GKE (3 x n2-standard-8, SSD
     # persistent disks, --ha, v0.18.0, shipped defaults) this service was throttled in

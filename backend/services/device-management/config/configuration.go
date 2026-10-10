@@ -30,8 +30,8 @@ const (
 	AuthModeRequired = "required"
 )
 
-// Defaults for the hot-path resolution caches (ADR-022 review B2). A short TTL
-// bounds staleness for entries that change rarely.
+// Defaults for the hot-path resolution caches (ADR-022 review B2). The TTL is the backstop
+// on staleness for entries that change rarely; evict-on-change is the mechanism.
 //
 // The caches are NATS JetStream KV buckets (ADR-007), so the size of the BUCKETS is a
 // server-side platform concern rather than a per-service one: each bucket carries a
@@ -54,7 +54,7 @@ const DefaultMaxEventFutureSkewSeconds = 300
 // resolution.workers is not set.
 //
 // A warm event makes its lookups in two steps — the credential (one database read, for
-// an event whose credential was not verified on this replica in the last 5 s), then the
+// an event whose credential was not verified on this replica within inMemoryCache.ttlSeconds), then the
 // profile, the tracked relationships and whether
 // any scoped group exists, read from the message broker's key-value store at the same
 // time — so a resolver spends most of each event waiting for replies, not using CPU. The
@@ -88,33 +88,44 @@ const DefaultResolutionWorkers = 10
 // singly assigned ones, and the entry bound is set above either so that memory, not the
 // count, is what binds.
 //
-// 🔑 A CACHE ENTRY LIVES 5 S, SO THE FLEET SIZE IS NOT WHAT TO SIZE FOR. An entry expires
-// 5 s after it was stored, whether or not it was read, so on one replica only a device read
-// again within 5 s can be answered from memory: the working set is 5 s × that replica's
-// event rate, about 35,000 at the highest rate one replica has been measured resolving
-// (just under 7,000 events a second). A fleet larger than that, or reporting less often
-// than every 5 s, gets nothing more from a larger bound. Below it, a cache that is full
-// holds the devices that reported in the last (bound ÷ rate) seconds.
+// 🔑 AN ENTRY LIVES inMemoryCache.ttlSeconds (5 MINUTES BY DEFAULT), SO SIZE EACH REPLICA FOR
+// THE WHOLE ACTIVE FLEET. An entry expires that long after it was stored, whether or not it
+// was read, so the working set is every device that reported within the time. The inbound
+// stream is ONE durable shared by every replica, so events are not divided between replicas
+// by device: a replica resolves whichever batch it fetched next. When replicas × a device's
+// reporting interval is under the time, every replica sees nearly every device, so every
+// replica holds nearly the whole fleet. Dividing the fleet by the replica count is wrong.
+// A bound under the fleet makes the least-recently-used order cycle through it and answer
+// almost nothing (every entry is evicted before its device reports again). At the 5 s this
+// used to be, the working set was 5 s × the replica's event rate and a fleet reporting less
+// often than every 5 s got nothing from memory at all.
+//
+// WORKED EXAMPLE, 60,000 devices each reporting every 10 s, each with one tracked edge:
+// credentials 60,000 × about 1.1 KB = about 66 MB, so credentialCacheMiB 80; relationships
+// 60,000 × about 950 B = about 57 MB, so perDeviceCacheMiB 64 (the entry bound of 131,072
+// already covers 60,000); the two small caches and the group memberships add little. That
+// is about 150 MiB of live cache per replica, and the heap can be a multiple of that before
+// a collection, so raise the memory limit to 512Mi.
 //
 // 🔴 THE MEMORY BUDGET, STATED AGAINST THE LIMIT IT RUNS UNDER. At these defaults the six
 // in-process caches — these three, the two keyed by device type and by tenant, and the
-// credential cache, fixed at 16 MiB (model.CredentialCacheMaxBytes) — hold at most
-// 3 × 24 + 2 × 4 + 16 = 96 MiB, counted as above. With no GOMEMLIMIT set (the chart's
+// credential cache, 32 MiB (inMemoryCache.credentialCacheMiB) — hold at most
+// 3 × 24 + 2 × 4 + 32 = 112 MiB, counted as above. With no GOMEMLIMIT set (the chart's
 // default), the heap can grow to about twice what is live before a collection: about
-// 192 MiB for full caches, plus the rest of the service (a replica resolving several
+// 224 MiB for full caches, plus the rest of the service (a replica resolving several
 // thousand events a second on a three-node GKE cluster used 32 MiB in all, its then 4-MiB
-// caches included), about 224 MiB against device-management's 256 MiB memory limit.
+// caches included), about 256 MiB against device-management's 256 MiB memory limit. That is
+// the worst case, with every cache full: a fleet that fills them is the fleet to raise the
+// memory limit for.
 //
-// Full caches need a busy replica, and all six full at once needs more than one replica
-// has been measured doing. Three full 24-MiB caches at once take device-by-token being read
-// (devices authenticated at the transport, or device auth set to optional or disabled) and
-// a tenant with rule-scoped groups. Device-by-token and the credential cache are filled by
-// DISJOINT events — an event either presents a credential or resolves on its token — so both
-// full needs about 50,000 token-path devices (24 MiB at about 500 B) and about 15,000
-// credentialed ones (16 MiB at about 1.1 KB) each reporting within 5 s on one replica:
-// about 13,000 events a second, twice the highest rate one replica has been measured
-// resolving. Raising either setting needs the memory limit raised with it;
-// MaxPerDeviceCacheMiB is well past what 256 MiB can hold.
+// Full caches need a large fleet on one replica. Three full 24-MiB caches at once take
+// device-by-token being read (devices authenticated at the transport, or device auth set to
+// optional or disabled) and a tenant with rule-scoped groups. Device-by-token and the
+// credential cache are filled by DISJOINT events — an event either presents a credential or
+// resolves on its token — so both full needs about 50,000 token-path devices (24 MiB at
+// about 500 B) and about 29,000 credentialed ones (32 MiB at about 1.1 KB) each reporting
+// within the time to live on one replica. Raising either setting needs the memory limit
+// raised with it; MaxPerDeviceCacheMiB is well past what 256 MiB can hold.
 //
 // That budget is why the default is 24 MiB and not the ~33 MiB that 35,000 singly assigned
 // devices would need: 32 MiB per cache would put full caches at about 240 MiB under the
@@ -126,11 +137,42 @@ const (
 	MaxPerDeviceCacheMiB         = 256
 )
 
+// 🔑 THE CACHE TIME TO LIVE IS MINUTES, BECAUSE THE FLEET'S REPORTING INTERVAL IS. A cached
+// value is of use to a device only if the device reports again before it expires, so a
+// time to live shorter than the fleet's reporting interval is a cache that never answers: at
+// 5 s, 60,000 devices reporting every 10 s measured 0% credential hits and a relationships
+// hit ratio of 0, capping resolution at about 2,400 events a second against 6,000 offered.
+// Five minutes covers every interval a fleet is likely to report at, and a value costs
+// memory only while it is held, which the bounds below cap whatever the time.
+//
+// Correctness does not rest on the time to live. Every write that changes what a cache holds
+// evicts it on every replica (see model.InitializeCaches), and the time is the backstop for
+// a message that was lost. Longer means a lost message costs longer, which is why there is a
+// ceiling: an hour, the longest a stale answer is allowed to be kept even if every
+// eviction failed. Five minutes is the default because it is long enough to hold a device
+// that reports every few minutes and short enough that a lost eviction heals within the
+// time an operator would notice and retry.
 const (
-	DefaultDeviceCacheTtlSeconds       = 60
-	DefaultRelationshipCacheTtlSeconds = 60
-	DefaultMetricDefCacheTtlSeconds    = 60
-	DefaultMembershipCacheTtlSeconds   = 60
+	DefaultCacheTtlSeconds = 300
+	MaxCacheTtlSeconds     = 3600
+
+	DefaultDeviceCacheTtlSeconds       = DefaultCacheTtlSeconds
+	DefaultRelationshipCacheTtlSeconds = DefaultCacheTtlSeconds
+	DefaultMetricDefCacheTtlSeconds    = DefaultCacheTtlSeconds
+	DefaultMembershipCacheTtlSeconds   = DefaultCacheTtlSeconds
+
+	// DefaultInMemoryCacheTtlSeconds is how long a replica keeps a value in its own memory
+	// (inMemoryCache.ttlSeconds). A bucket-backed cache never keeps one longer than its own
+	// time to live above, so the shorter of the two applies.
+	DefaultInMemoryCacheTtlSeconds = DefaultCacheTtlSeconds
+)
+
+// DefaultCredentialCacheMiB bounds the credential cache. An entry is about 1.1 KB, so 32 MiB
+// holds about 29,000 credentialed devices; a fleet of 60,000 needs about 70 MiB, with the
+// memory limit raised to match.
+const (
+	DefaultCredentialCacheMiB = 32
+	MaxCredentialCacheMiB     = 256
 )
 
 type DeviceManagementConfiguration struct {
@@ -148,9 +190,9 @@ type DeviceManagementConfiguration struct {
 	// validation (ADR-016), plus the rule scope and fence-set version stamped onto every
 	// event (ADR-051/078). Its name predates that cache holding more than the metric
 	// definitions, and is kept because a rename would reject every existing values file.
-	// All are NATS KV bucket TTLs, in seconds (ADR-007). Each also caps how long a replica
-	// keeps what it read in process memory (messaging.DefaultLocalCacheTTL, 5 s), so a TTL
-	// below 5 s shortens that too.
+	// All are NATS KV bucket TTLs, in seconds (ADR-007), from 1 to MaxCacheTtlSeconds. Each
+	// also caps how long a replica keeps what it read in process memory
+	// (InMemoryCache.TtlSeconds), so a TTL below that shortens it too.
 	DeviceCacheTtlSeconds       int
 	RelationshipCacheTtlSeconds int
 	MetricDefCacheTtlSeconds    int
@@ -190,6 +232,21 @@ type DeviceManagementConfiguration struct {
 // InMemoryCacheConfiguration sizes what one replica keeps in memory of each cache keyed by
 // device. Each setting applies to each of those three caches separately, per replica.
 type InMemoryCacheConfiguration struct {
+	// TtlSeconds is how long a replica keeps a value in its own memory before it asks the
+	// bucket (or, for device credentials, the database) again, from 1 to MaxCacheTtlSeconds.
+	// Unset (0) defaults to DefaultInMemoryCacheTtlSeconds. The clock starts when the value
+	// was read and a hit does not extend it.
+	//
+	// A change made through any replica evicts the value on every replica at once, so this is
+	// the bound on a change whose eviction message was lost (a replica disconnected while it
+	// was sent, or one too far behind to receive it), not the delay of a change. A replica that
+	// reconnects drops everything it holds.
+	TtlSeconds int
+	// CredentialCacheMiB bounds the device credential cache, in MiB. Unset (0) defaults to
+	// DefaultCredentialCacheMiB. It is separate from the per-device bound because the
+	// credential cache holds a whole device beside the credential, and is never stored in a
+	// key-value bucket.
+	CredentialCacheMiB int
 	// PerDeviceCacheEntries bounds each such cache's entry count. Unset (0) defaults to
 	// DefaultPerDeviceCacheEntries.
 	PerDeviceCacheEntries int
@@ -200,6 +257,12 @@ type InMemoryCacheConfiguration struct {
 
 // ApplyDefaults fills each bound that is unset.
 func (c *InMemoryCacheConfiguration) ApplyDefaults() {
+	if c.TtlSeconds == 0 {
+		c.TtlSeconds = DefaultInMemoryCacheTtlSeconds
+	}
+	if c.CredentialCacheMiB == 0 {
+		c.CredentialCacheMiB = DefaultCredentialCacheMiB
+	}
 	if c.PerDeviceCacheEntries == 0 {
 		c.PerDeviceCacheEntries = DefaultPerDeviceCacheEntries
 	}
@@ -211,6 +274,14 @@ func (c *InMemoryCacheConfiguration) ApplyDefaults() {
 // Validate refuses a bound outside its range. A negative value is refused, not read as
 // unset: only 0 means that, and ApplyDefaults has replaced it by now.
 func (c InMemoryCacheConfiguration) Validate() error {
+	if c.TtlSeconds < 1 || c.TtlSeconds > MaxCacheTtlSeconds {
+		return fmt.Errorf("inMemoryCache.ttlSeconds must be between 1 and %d (got %d)",
+			MaxCacheTtlSeconds, c.TtlSeconds)
+	}
+	if c.CredentialCacheMiB < 1 || c.CredentialCacheMiB > MaxCredentialCacheMiB {
+		return fmt.Errorf("inMemoryCache.credentialCacheMiB must be between 1 and %d (got %d)",
+			MaxCredentialCacheMiB, c.CredentialCacheMiB)
+	}
 	if c.PerDeviceCacheEntries < 1 || c.PerDeviceCacheEntries > MaxPerDeviceCacheEntries {
 		return fmt.Errorf("inMemoryCache.perDeviceCacheEntries must be between 1 and %d (got %d)",
 			MaxPerDeviceCacheEntries, c.PerDeviceCacheEntries)
@@ -229,8 +300,9 @@ type ResolutionConfiguration struct {
 	//
 	// Every event that carries a credential — every event, under the default "required"
 	// device-auth mode — is authenticated with one database read when that credential was
-	// not verified on this replica in the last 5 s, and that read holds a pooled connection
-	// while it runs. A cold fleet (every device reporting less often than every 5 s) still
+	// not verified on this replica within inMemoryCache.ttlSeconds, and that read holds a pooled
+	// connection while it runs. A cold fleet (every device reporting less often than that, or a
+	// fleet larger than the credential cache holds) still
 	// reads on every event, so the bound below is unchanged by the credential cache. A
 	// resolver reads the key-value caches for
 	// one event at the same time, but reads the database for whatever they could not answer
@@ -302,17 +374,17 @@ func (c *DeviceManagementConfiguration) Validate() error {
 		return fmt.Errorf("deviceAuthMode must be one of %q, %q, %q (got %q)",
 			AuthModeDisabled, AuthModeOptional, AuthModeRequired, c.DeviceAuthMode)
 	}
-	if c.DeviceCacheTtlSeconds <= 0 {
-		return fmt.Errorf("deviceCacheTtlSeconds must be positive (got %d)", c.DeviceCacheTtlSeconds)
+	if c.DeviceCacheTtlSeconds <= 0 || c.DeviceCacheTtlSeconds > MaxCacheTtlSeconds {
+		return fmt.Errorf("deviceCacheTtlSeconds must be between 1 and %d seconds (got %d)", MaxCacheTtlSeconds, c.DeviceCacheTtlSeconds)
 	}
-	if c.RelationshipCacheTtlSeconds <= 0 {
-		return fmt.Errorf("relationshipCacheTtlSeconds must be positive (got %d)", c.RelationshipCacheTtlSeconds)
+	if c.RelationshipCacheTtlSeconds <= 0 || c.RelationshipCacheTtlSeconds > MaxCacheTtlSeconds {
+		return fmt.Errorf("relationshipCacheTtlSeconds must be between 1 and %d seconds (got %d)", MaxCacheTtlSeconds, c.RelationshipCacheTtlSeconds)
 	}
-	if c.MetricDefCacheTtlSeconds <= 0 {
-		return fmt.Errorf("metricDefCacheTtlSeconds must be positive (got %d)", c.MetricDefCacheTtlSeconds)
+	if c.MetricDefCacheTtlSeconds <= 0 || c.MetricDefCacheTtlSeconds > MaxCacheTtlSeconds {
+		return fmt.Errorf("metricDefCacheTtlSeconds must be between 1 and %d seconds (got %d)", MaxCacheTtlSeconds, c.MetricDefCacheTtlSeconds)
 	}
-	if c.MembershipCacheTtlSeconds <= 0 {
-		return fmt.Errorf("membershipCacheTtlSeconds must be positive (got %d)", c.MembershipCacheTtlSeconds)
+	if c.MembershipCacheTtlSeconds <= 0 || c.MembershipCacheTtlSeconds > MaxCacheTtlSeconds {
+		return fmt.Errorf("membershipCacheTtlSeconds must be between 1 and %d seconds (got %d)", MaxCacheTtlSeconds, c.MembershipCacheTtlSeconds)
 	}
 	// 🔴 A NEGATIVE VALUE HERE USED TO START THE INSTANCE WITH THE SKEW BOUND OFF. eventtime
 	// treats maxSkew <= 0 as "no ceiling" — a defensive read, since ApplyDefaults turns the

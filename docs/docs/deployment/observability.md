@@ -605,9 +605,12 @@ bucket is 5 ms, so a quantile below that is an estimate, not a measurement.
 
 | Setting (`device-management` config) | Default | What it does |
 | --- | --- | --- |
-| `resolution.workers` | `10` | Resolvers running at once. Each holds one database connection while it reads an event's credential from the database, which it does whenever the credential was not verified on that replica in the last five seconds (see [Caches that stop answering](#kv-caches)). So it must be below the service's connection pool (`rdbConfiguration.maxOpenConnections`, 20 unless set), which it shares with the GraphQL API, the MQTT connect checks and the consumer that applies alarm raises and resolves. More than half the pool is allowed, and logged at startup. A resolver's lookups in the key-value store run at the same time, but its database reads still run one at a time, so it never holds more than one connection. |
+| `resolution.workers` | `10` | Resolvers running at once. Each holds one database connection while it reads an event's credential from the database, which it does whenever the credential was not verified on that replica within `inMemoryCache.ttlSeconds` (see [Caches that stop answering](#kv-caches)). So it must be below the service's connection pool (`rdbConfiguration.maxOpenConnections`, 20 unless set), which it shares with the GraphQL API, the MQTT connect checks and the consumer that applies alarm raises and resolves. More than half the pool is allowed, and logged at startup. A resolver's lookups in the key-value store run at the same time, but its database reads still run one at a time, so it never holds more than one connection. |
+| `inMemoryCache.ttlSeconds` | `300` | How long a replica keeps a value in its own memory, from 1 to 3600 seconds. A change drops the value on every replica at once, so this only bounds an eviction message that was lost. The key-value cache's own time to live caps it (see below). See [Caches that stop answering](#kv-caches). |
+| `deviceCacheTtlSeconds`, `relationshipCacheTtlSeconds`, `metricDefCacheTtlSeconds`, `membershipCacheTtlSeconds` | `300` | The time to live of each key-value cache in the broker, from 1 to 3600 seconds. |
 | `inMemoryCache.perDeviceCacheEntries` | `131072` | The most entries each replica keeps in memory of each of the three caches kept per device: a device by its token, its tracked relationships, its group memberships. See [Caches that stop answering](#kv-caches). |
 | `inMemoryCache.perDeviceCacheMiB` | `24` | The most memory, in MiB, each of those three caches takes in each replica. Raise the service's memory limit with it. See [Caches that stop answering](#kv-caches). |
+| `inMemoryCache.credentialCacheMiB` | `32` | The most memory, in MiB, the device credential cache takes in each replica, from 1 to 256. About 29,000 credentialed devices fit in the default; 60,000 need about 70. Raise the service's memory limit with it. See [Caches that stop answering](#kv-caches). |
 
 Raise it when `resolve_inflight` stays at `resolve_workers` while the pod has CPU to spare. If the
 pod is at its CPU limit instead, more resolvers do not help: give it more CPU (see
@@ -807,54 +810,66 @@ silence, which takes between one and one and a half minutes, some of the reads a
 server that is gone. Events keep being resolved in that time, at the cost of more database reads.
 
 Each `device-management` replica also keeps what it read from, or wrote to, a bucket in memory
-for up to five seconds (less if the cache's time to live is shorter), and answers from there
-without asking NATS, including while the bucket is being skipped. The five seconds count from
-when the value was read, not from when it was last used. The three caches kept per device (a
-device by its token, its tracked relationships, its group memberships) each hold up to 131,072
-entries or 24 MiB per replica, set by `inMemoryCache.perDeviceCacheEntries` and
-`inMemoryCache.perDeviceCacheMiB`. That is about 87,000 devices with no tracked relationship, or
-about 26,000 with one. The profile and group-scope caches, kept per device type and per tenant,
-hold 4,096 entries or 4 MiB. Each drops the least recently used entry when it is full. As it
-stores a new entry it also drops expired ones from its least recently used end, stopping at the
-first that has not expired. A lookup NATS reported as absent is
-never kept. A change reaches the events that other replicas resolve up to five seconds later
-than it would through the bucket alone. Until then another replica can, for example, still
-resolve a device deleted or re-created under the same token through its old record, or evaluate
-a rule whose group scope was just changed against the previous scope. Events that present a
-device credential take their device from the credential copy the next paragraph describes.
+for up to five minutes (`inMemoryCache.ttlSeconds`, and never longer than the cache's time to
+live), and answers from there without asking NATS, including while the bucket is being skipped.
+The time counts from when the value was read, not from when it was last used. The three caches
+kept per device (a device by its token, its tracked relationships, its group memberships) each
+hold up to 131,072 entries or 24 MiB per replica, set by `inMemoryCache.perDeviceCacheEntries`
+and `inMemoryCache.perDeviceCacheMiB`. That is about 87,000 devices with no tracked relationship,
+or about 26,000 with one. The profile and group-scope caches, kept per device type and per
+tenant, hold 4,096 entries or 4 MiB. Each drops the least recently used entry when it is full. As
+it stores a new entry it also drops expired ones from its least recently used end, stopping at
+the first that has not expired. A lookup NATS reported as absent is never kept.
+
+**A change reaches every replica at once, and the time only covers a lost message.** A change that
+makes a kept value wrong (a device updated or deleted, a relationship added or removed, a
+profile published or rolled back, a group's members changed, a tenant erased) removes the value
+from the bucket and then sends a message on NATS that makes every `device-management` replica
+drop its copy. A replica that loses its connection to NATS and gets it back drops everything it
+holds, because it may have missed messages. So a replica serves a changed value for longer than a
+moment only if a message was lost while it was connected, for example because the replica was too
+far behind to receive it, and then only until the time runs out. The same is true of a read that
+was in flight across the change and stored what it read before it. The messages are counted by
+`cache_eviction_broadcasts_total`.
 
 **Device credentials.** Each replica also keeps a device credential it has just verified, with
-its device, in memory for five seconds from when it read it. It is never stored in a key-value
-bucket, because it holds the credential's password. Each replica keeps up to 65,536 credentials or
-16 MiB, which is fixed. Every check of a kept credential compares its password and expiry as a
-check of the stored one does, and a credential that failed to verify is never kept. A change to a
-credential or its device drops the copy on the replica that made it, and a message on NATS tells
-the other replicas to drop theirs. So a revocation, or a device deleted through another replica,
-normally takes effect on the next event everywhere, and within five seconds if that message is
-lost. MQTT connects always read the database. A fleet that reports less often than every five
-seconds reads its credential from the database on every event, as before.
+its device, in memory for five minutes from when it read it. It is never stored in a key-value
+bucket, because it holds the credential's password. Each replica keeps up to
+`inMemoryCache.credentialCacheMiB` of them (32 MiB by default). Every check of a kept credential
+compares its password and expiry as a check of the stored one does, and a credential that failed
+to verify is never kept. A change to a credential or its device drops the copy on the replica
+that made it, and a message on NATS tells the other replicas to drop theirs. So a revocation, or
+a device deleted through another replica, takes effect on the next event everywhere, and when
+the copy expires if that message is lost. MQTT connects always read the database.
 
-**Fleets that report less often than every five seconds.** A value is kept in memory for five
-seconds from when it was read, however large the cache. So a device that reports less often than
-that is never answered from memory, and each of its events costs one read from the key-value
-bucket. On a three-node GKE cluster that read took about 1.5 ms. With the 10 default resolvers,
-each spending that long on each such event, a fleet of this shape resolves more slowly than one
-whose devices report every few seconds. To resolve it faster, add resolvers
-(`resolution.workers`, within the connection pool) or `device-management` replicas. The sign is
+**Sizing for the fleet.** A value is kept in memory for five minutes from when it was read, so a
+device that reports at least that often is answered from memory on every event after its first.
+A device that reports less often than that is never answered from memory, and each of its events
+costs one read from the key-value bucket, and one from the database for its credential. Size
+each replica for the whole active fleet, not for the fleet divided by the replicas: the inbound
+stream is one durable shared by every replica, so events are not divided between replicas by
+device, and when the number of replicas times a device's reporting interval is under the time,
+every replica sees nearly every device. A cache smaller than the fleet cycles through it and
+answers almost nothing. For example, 60,000 devices reporting every 10 s, each with one tracked
+relationship, need `inMemoryCache.credentialCacheMiB` of about 80 (an entry is about 1.1 KB) and
+`inMemoryCache.perDeviceCacheMiB` of about 64 (a relationship set is about 950 bytes) on every
+replica, and a memory limit of 512Mi to hold them. The sign is
 `kv_cache_local_lookups_total{cache="relationships-by-source", result="miss"}` close to the event
 rate, while `kv_cache_local_entries` for that cache stays well below `kv_cache_local_max_entries`.
 A fleet too large for the cache instead shows `kv_cache_local_evictions_total{reason="capacity"}`
 rising at close to the event rate, with `kv_cache_local_entries` at `kv_cache_local_max_entries`
-or `kv_cache_local_bytes` at `kv_cache_local_max_bytes`. Then raise the bound, and the memory
-limit with it: at the defaults the six in-memory caches, the credentials' fixed 16 MiB included,
-hold at most 96 MiB, and with no `GOMEMLIMIT` set
-the heap can grow to about twice what it holds before it is collected.
+or `kv_cache_local_bytes` at `kv_cache_local_max_bytes`; for credentials, the same signs are in
+`credential_cache_evictions_total{reason="capacity"}`. Then raise the bound, and the memory limit
+with it: at the defaults the six in-memory caches hold at most 112 MiB, and with no `GOMEMLIMIT`
+set the heap can grow to about twice what it holds before it is collected. To resolve a fleet
+faster you can also add resolvers (`resolution.workers`, within the connection pool) or
+`device-management` replicas.
 
 Removing an entry after a change (a device deleted, a profile published) is never skipped. It
 waits up to five seconds, because only the bucket's leader can accept it. If it still fails, the
 service logs `A key-value cache eviction failed`, and the old entry can be served until it
-expires, which is the cache's configured time to live, plus up to five seconds on replicas that
-already had it in memory.
+expires, which is the cache's configured time to live, or the in-memory time on replicas that
+already had it in memory, whichever is shorter.
 
 - **`devicechain_devicemanagement_kv_cache_unavailable{cache}`**: 1 while the bucket is being
   skipped.
@@ -871,7 +886,7 @@ already had it in memory.
 - **`devicechain_devicemanagement_kv_cache_local_lookups_total{cache, result}`**: lookups
   answered from memory (`result="hit"`) or passed on to the bucket (`result="miss"`).
 - **`devicechain_devicemanagement_kv_cache_local_evictions_total{cache, reason}`**: entries
-  dropped from memory because they were five seconds old (`reason="expired"`), because the cache
+  dropped from memory because they were past their time (`reason="expired"`), because the cache
   was full (`reason="capacity"`), or because the entry was removed after a change
   (`reason="deleted"`).
 - **`devicechain_devicemanagement_kv_cache_local_entries{cache}`** and
@@ -891,7 +906,7 @@ The credential copy has series of its own:
 - **`devicechain_devicemanagement_credential_cache_lookups_total{result}`**: credential checks
   answered from memory (`result="hit"`) or passed on to the database (`result="miss"`).
 - **`devicechain_devicemanagement_credential_cache_evictions_total{reason}`**: credentials dropped
-  from memory because they were five seconds old (`reason="expired"`), because the copy was full
+  from memory because they were past their time (`reason="expired"`), because the copy was full
   (`reason="capacity"`), or because the credential or its device changed, on this replica or
   another (`reason="revoked"`).
 - **`devicechain_devicemanagement_credential_cache_entries`**,
@@ -903,7 +918,7 @@ The credential copy has series of its own:
   that tell the other replicas to drop a copy, sent (`result="published"`), not sent
   (`result="publish_failed"`), received (`result="received"`), or received and dropped as
   unreadable (`result="malformed"`). A steady `publish_failed` means changes reach the other
-  replicas only when their copies expire, within five seconds.
+  replicas only when their copies expire.
 
 Separately, resolving an event that takes longer than five seconds for any reason is logged as a
 warning (`Event resolution is slow`): the first one at once, then at most one line every 30

@@ -160,7 +160,7 @@ func storedSecret(cred *DeviceCredential) (string, error) {
 // which nothing caches. This path stays unthrottled on purpose — a throttle here would cost a KV round trip on every such
 // event, and would let a device's own event stream push its connects into backoff.
 //
-// CachedApi answers a credential verified within the last five seconds from memory,
+// CachedApi answers a credential verified within the in-memory time (inMemoryCache.ttlSeconds) from memory,
 // checked exactly as here (see CachedApi.AuthenticateDevice). An access-token CONNECT is
 // never answered from memory: the callout calls AuthenticateDeviceConnect.
 //
