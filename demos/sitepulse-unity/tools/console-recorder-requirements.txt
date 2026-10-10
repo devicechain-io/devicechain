@@ -1,0 +1,5 @@
+# Copyright The DeviceChain Authors
+# SPDX-License-Identifier: Apache-2.0
+# The console recorder's one dependency (console_capture.py). Installed by console-recorder-setup.sh into its own venv; pinned exactly, and
+# the browser build it downloads is the one this Playwright release pins.
+playwright==1.48.0
