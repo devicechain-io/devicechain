@@ -243,6 +243,13 @@ type Stream struct {
 	// Retention is how the stream lets go of a message; see Retention. The zero value
 	// is RetentionLimits, which every stream but one is.
 	Retention Retention
+	// Dormant marks a stream that is DECLARED but that no service ensures yet, so it does
+	// not exist on a running broker. The replication check does not require a dormant
+	// stream even where its Areas are deployed - a check that fails on a healthy install
+	// is one somebody switches off. Whoever ships the first reader or writer removes the
+	// flag in the same change; TestDormantStreamsArePinned names the set so that cannot
+	// be forgotten.
+	Dormant bool
 	// DeadLetterKind is the kind (core/deadletter's vocabulary) of a dead letter written
 	// about a message consumed from this stream — by an in-handler arm or by the
 	// platform's max-delivery recorder, which is why it is declared once, here, rather
@@ -359,6 +366,8 @@ const (
 	DerivedEvents     = "derived-events"
 	DeviceAttribute   = "device-attribute"
 	DeviceCommands    = "device-commands"
+	DeviceDesired     = "device-desired"
+	DeviceReports     = "device-reports"
 	CommandResponses  = "command-responses"
 	ConnectorDispatch = "connector-dispatch"
 
@@ -477,13 +486,15 @@ const (
 // deviceEventsCaptureMaxBytesCap caps DeviceEventsCapture below the Hot tier
 // ceiling, because taking the Hot ceiling in full does not fit the disk budget.
 //
-// The arithmetic, at the shipped defaults: the declared streams reserve 8712 MiB
-// (7 Hot x 1 GiB + 10 Cold x 128 MiB + this capped capture stream at 256 MiB + the
+// The arithmetic, at the shipped defaults: the declared streams reserve 8968 MiB
+// (7 Hot x 1 GiB + 12 Cold x 128 MiB + this capped capture stream at 256 MiB + the
 // max-delivery capture capped at 8 MiB), the MQTT gateway stores 384 MiB and the KV
-// buckets 1088 MiB (6 State x 128 + 5 Cache x 64) — 9.945 GiB reserved against the
+// buckets 1088 MiB (6 State x 128 + 5 Cache x 64) — ~10.2 GiB reserved against the
 // 14 GiB max_file_store a 16Gi PV yields.
-// (Recount when a stream is added: this sentence said "8 Cold / 9.5 GiB" while the
-// tree held nine, and it is the sentence anyone weighing a new stream reads.) Every
+// (The two dormant device-desired / device-reports streams are counted: they reserve
+// budget although nothing creates them yet. Recount when a stream is added: this
+// sentence said "8 Cold / 9.5 GiB" while the tree held nine, and it is the sentence
+// anyone weighing a new stream reads.) Every
 // ceiling is reserved UP FRONT, so an uncapped capture stream does not merely
 // overcommit, it crashloops every stream-creating service at upgrade with
 // "insufficient storage resources available".
@@ -658,6 +669,27 @@ var All = []Stream{
 	// from device telemetry — which is the case that first motivated centralizing
 	// these names: a second literal is how the two drift apart.
 	{Suffix: DeviceCommands, Areas: []string{"command-delivery", "lwm2m-ingest"}, Tier: Hot, Shape: ShapeTenantDevice, DeadLetterKind: kindCommand, Why: "outbound commands — scale with fleet size"},
+
+	// PER-DEVICE, PLATFORM -> DEVICE: the desired-state downlink (configuration revisions,
+	// and later update assignments). Like DeviceCommands, the concrete subject ends in the
+	// target device's token so the signed broker grant can confine a device to its own.
+	//
+	// RESERVED: nothing in the platform publishes or reads it yet, and no service ensures
+	// the stream, so none exists on a running broker. Declared first so the grant, the disk
+	// budget, the tenant purge and the topic mapping all know the name before the first
+	// producer ships. If a stream is ever created for it, it is bounded like every other:
+	// Limits retention, a week of history and the Cold tier's byte ceiling, evicting the
+	// oldest, so an unread channel cannot grow without limit. Cold because volume follows
+	// state CHANGES, not telemetry samples.
+	{Suffix: DeviceDesired, Areas: []string{"device-management"}, Tier: Cold, Shape: ShapeTenantDevice, DeadLetterKind: kindControlFact, Dormant: true,
+		Why: "desired-state downlink per device - one message per state change"},
+
+	// PER-DEVICE, DEVICE -> PLATFORM: progress and status reports. The device token in the
+	// subject is the one AUTHENTICATED statement of who reported, for the reason given on
+	// CommandResponses: a payload field is self-asserted. RESERVED and bounded exactly as
+	// DeviceDesired is.
+	{Suffix: DeviceReports, Areas: []string{"device-management"}, Tier: Cold, Shape: ShapeTenantDevice, DeadLetterKind: kindControlFact, Dormant: true,
+		Why: "device reports per device - one message per state change"},
 
 	// ADR-030 amendment. The durable capture of raw device telemetry, and the
 	// reason the gateway is no longer an MQTT client: the broker stores a device's

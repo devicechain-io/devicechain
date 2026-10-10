@@ -4,6 +4,7 @@
 package processor
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -35,16 +36,54 @@ type deliveryEnvelope struct {
 	// device unreachable quotes it back when handing the command over, so a request still
 	// in redelivery cannot park a row that has since been re-claimed and actuated. It is
 	// opaque to a device and nothing needs to read it except the transport that may park.
-	DispatchNonce string `json:"dispatchNonce,omitempty"`
+	//
+	// Not `omitempty`: every publish carries the nonce its claim minted (deliverCommand
+	// builds the envelope after MarkSent), and the published contract says so, because a
+	// device must echo it. The json tags of both envelopes are held to the committed
+	// schemas in ../contract by contract_test.go.
+	DispatchNonce string `json:"dispatchNonce"`
+}
+
+// responsePayload is a device's answer data: any JSON value. The delivery envelope's payload
+// accepts any JSON, so the response that mirrors it must too; reading it as a Go string
+// refused the whole envelope the moment a device answered with an object, and the refusal
+// was an ack with no dead letter, leaving the command SENT until it timed out.
+//
+// A JSON string decodes to its text exactly as before (so what is stored for a device that
+// answers with a string is unchanged, byte for byte). Any other JSON value is kept as its own
+// JSON text, which the response_payload column, a JSON column, stores as that value.
+type responsePayload string
+
+func (p *responsePayload) UnmarshalJSON(data []byte) error {
+	data = bytes.TrimSpace(data)
+	if len(data) > 0 && data[0] == '"' {
+		var s string
+		if err := json.Unmarshal(data, &s); err != nil {
+			return err
+		}
+		*p = responsePayload(s)
+		return nil
+	}
+	*p = responsePayload(data)
+	return nil
+}
+
+// text is the payload as the *string MarkResponse takes, nil when the device sent none.
+func (p *responsePayload) text() *string {
+	if p == nil {
+		return nil
+	}
+	s := string(*p)
+	return &s
 }
 
 // responseEnvelope is the JSON payload a device publishes on the
 // command-responses subject to report the outcome of a command.
 type responseEnvelope struct {
-	CommandToken string  `json:"commandToken"`
-	Success      bool    `json:"success"`
-	Payload      *string `json:"payload,omitempty"`
-	Error        *string `json:"error,omitempty"`
+	CommandToken string           `json:"commandToken"`
+	Success      bool             `json:"success"`
+	Payload      *responsePayload `json:"payload,omitempty"`
+	Error        *string          `json:"error,omitempty"`
 
 	// DispatchNonce is the value the device echoes from the delivery envelope it acted on,
 	// and it is REQUIRED: an answer that carries none is refused and dead-lettered.
@@ -787,13 +826,20 @@ func (cproc *CommandDeliveryProcessor) handleResponse(ctx context.Context, msg m
 	var response responseEnvelope
 	if err := json.Unmarshal(msg.Value, &response); err != nil {
 		log.Warn().Err(err).Str("correlation", msg.CorrelationID()).Msg("Skipping undecodable command response")
+		// Acked, not retried (the same bytes decode the same way), but RECORDED: the subject
+		// gave a tenant and a device, so the letter can be filed truthfully, and it is the
+		// only trace that the device answered at all. The command it was answering is
+		// unknown, so the letter names the responding device instead.
+		cproc.deadLetterResponse(tenantCtx, msg, responder, err, deadletter.ReasonUnprocessable,
+			"a device published a command response that is not a decodable response envelope, "+
+				"so it could not be matched to a command and was not recorded against one")
 		_ = msg.Ack()
 		done(core.ResultInvalid)
 		return true
 	}
 
 	if _, err := cproc.Api.MarkResponse(tenantCtx, response.CommandToken, responder,
-		response.DispatchNonce, response.Success, response.Payload, response.Error); err != nil {
+		response.DispatchNonce, response.Success, response.Payload.text(), response.Error); err != nil {
 		// A device answering for a command it does not own is refused, and the refusal is
 		// TERMINAL, not transient: the same message would be refused on every redelivery,
 		// so retrying it only burns the delivery budget. Ack it, count it as invalid, and

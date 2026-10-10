@@ -50,7 +50,7 @@ function tier(overrides: Partial<AdminTenantTierDetail> = {}): AdminTenantTierDe
     description: 'The gold packaging',
     // A real ceiling, so "the settings survived" is an observation rather than the
     // absence of one: a tier with no config could not demonstrate preservation at all.
-    config: '{"ingestMessagesPerSecond":2000}',
+    config: '{"ingestReadingsPerSecond":2000}',
     color: 'amber',
     displayOrder: 0,
     tenantCount: 3,

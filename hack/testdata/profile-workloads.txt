@@ -31,6 +31,7 @@ mcp
 notification-management
 outbound-connectors
 sparkplug-ingest
+update-management
 user-management
 
 [telemetry]

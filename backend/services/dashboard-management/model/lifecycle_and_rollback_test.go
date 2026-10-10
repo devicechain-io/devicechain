@@ -29,7 +29,7 @@ func TestRollbackWithAStalePreconditionIsRefused(t *testing.T) {
 
 	created, err := api.CreateDashboard(ctx, &DashboardCreateRequest{Token: "d", Definition: defA})
 	require.NoError(t, err)
-	_, err = api.PublishDashboard(ctx, "d", nil, nil, "alice", nil)
+	_, _, err = api.PublishDashboard(ctx, "d", nil, nil, "alice", nil)
 	require.NoError(t, err)
 	loaded := *util.FormatTime(created.UpdatedAt)
 
@@ -58,7 +58,7 @@ func TestDeletedTenantWritesAreRefused(t *testing.T) {
 	acme := core.WithTenant(context.Background(), "acme")
 	_, err := api.CreateDashboard(acme, &DashboardCreateRequest{Token: "d", Definition: defA})
 	require.NoError(t, err)
-	_, err = api.PublishDashboard(acme, "d", nil, nil, "alice", nil)
+	_, _, err = api.PublishDashboard(acme, "d", nil, nil, "alice", nil)
 	require.NoError(t, err)
 
 	api.TenantDeleted = func(tenant string) bool { return tenant == "acme" }
@@ -68,7 +68,7 @@ func TestDeletedTenantWritesAreRefused(t *testing.T) {
 	require.ErrorAs(t, err, &deleted, "update for a deleted tenant")
 	_, err = api.CreateDashboard(acme, &DashboardCreateRequest{Token: "e", Definition: defA})
 	assert.ErrorAs(t, err, &deleted, "create for a deleted tenant")
-	_, err = api.PublishDashboard(acme, "d", nil, nil, "alice", nil)
+	_, _, err = api.PublishDashboard(acme, "d", nil, nil, "alice", nil)
 	assert.ErrorAs(t, err, &deleted, "publish for a deleted tenant")
 	_, err = api.RollbackDashboard(acme, "d", 1, nil)
 	assert.ErrorAs(t, err, &deleted, "rollback for a deleted tenant")
@@ -140,7 +140,7 @@ func TestRollbackWriteIsGuardedAgainstAWriterInTheGap(t *testing.T) {
 	ctx := core.WithTenant(context.Background(), "acme")
 	created, err := api.CreateDashboard(ctx, &DashboardCreateRequest{Token: "d", Definition: defA})
 	require.NoError(t, err)
-	_, err = api.PublishDashboard(ctx, "d", nil, nil, "alice", nil)
+	_, _, err = api.PublishDashboard(ctx, "d", nil, nil, "alice", nil)
 	require.NoError(t, err)
 	loaded := *util.FormatTime(created.UpdatedAt)
 

@@ -256,7 +256,7 @@ SenML 在 LwM2M 1.1 才引入。仅支持 1.0 的设备可注册、维持会话�
 | `security.handshakeTimeoutSeconds` | `10` | 单次 DTLS 握手上限，避免停滞握手长期占用资源。 |
 | `security.maxSessions` | `100000` | 活动会话表上限。超限握手被拒绝并计数，不静默接受。 |
 | `maxLifetimeSeconds` | `86400` | 所有注册有效期的上限。**直接限制死亡设备显示在线多久。** 必须高于设备请求的最长有效期。 |
-| `ingestRateLimit.messagesPerSecond` | `1000` | 每租户持续接入上限，按解码读数计数，也在解码前按 Notify 消息计数。未设置或非正值使用默认，不表示无限制。 |
+| `ingestRateLimit.readingsPerSecond` | `1000` | 每租户持续接入上限，按解码读数计数，也在解码前按 Notify 消息计数。未设置或非正值使用默认，不表示无限制。 |
 | `ingestRateLimit.burst` | `2000` | 上述限额的突发额度。 |
 | `downlink.timeoutSeconds` | `10` | 单次设备指令交换时间上限。到期报告失败，不悬而未决。慢速蜂窝休眠设备可提高。 |
 | `downlink.concurrency` | `16` | 跨设备指令并行度。无论此值多少，同一设备自己的指令始终按序执行。 |
@@ -287,7 +287,7 @@ Sparkplug 按租户接入上限计量 DATA 消息中的读数，并丢弃超出�
 
 | 设置 | 默认值 | 作用 |
 |---|---|---|
-| `ingestRateLimit.messagesPerSecond` | `1000` | 每租户持续接入上限，按读数计量，租户层级可覆盖。未设置或非正值使用默认，不表示无限制。 |
+| `ingestRateLimit.readingsPerSecond` | `1000` | 每租户持续接入上限，按读数计量，租户层级可覆盖。未设置或非正值使用默认，不表示无限制。 |
 | `ingestRateLimit.burst` | `2000` | 上述限额的突发额度，单位读数。 |
 
 **未计量的内容。** 主机必须观察每条消息以保持会话正确，因此不计量消息速率。birth 的指标值也不计费：Sparkplug 按变化上报，缓慢变化指标可能只在 birth 出现；重连或故障切换后的 rebirth 会一次重发所有节点指标。birth 改由会话限制，每个 birth 序列一次，请求 rebirth 使用退避。birth/death 声明的在线状态转换也不计量。失控边缘节点仍可按代理投递速度持续发送，应在代理或订阅分组范围上限制。

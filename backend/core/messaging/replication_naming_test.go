@@ -149,15 +149,28 @@ func TestLeaseBucketIsNamedAsTheRuntimeCreatedIt(t *testing.T) {
 // watching, and the suite would report a confident PASS over the other sixteen.
 func TestExpectationNamesEveryDeclaredStream(t *testing.T) {
 	exp := ReplicationExpectation("inst", 3, nil)
-	if len(exp.Streams) != len(streams.All) {
-		t.Fatalf("the expectation names %d stream(s) but the platform declares %d",
-			len(exp.Streams), len(streams.All))
+	declared := 0
+	for _, s := range streams.All {
+		if !s.Dormant {
+			declared++
+		}
+	}
+	if len(exp.Streams) != declared {
+		t.Fatalf("the expectation names %d stream(s) but the platform declares %d (dormant ones excluded)",
+			len(exp.Streams), declared)
 	}
 	named := map[string]bool{}
 	for _, s := range exp.Streams {
 		named[s] = true
 	}
 	for _, s := range streams.All {
+		if s.Dormant {
+			if named[StreamName("inst", s.Suffix)] {
+				t.Errorf("dormant stream %q is required by the replication check, which would fail "+
+					"every install: nothing ensures it", s.Suffix)
+			}
+			continue
+		}
 		if want := StreamName("inst", s.Suffix); !named[want] {
 			t.Errorf("stream %q (suffix %q) is declared in streams.All but the "+
 				"replication check does not require it", want, s.Suffix)
@@ -247,7 +260,16 @@ func TestUndeployedAreasStreamsAreNotRequired(t *testing.T) {
 	for _, s := range exp.Streams {
 		required[s] = true
 	}
+	nonDormant := 0
 	for _, st := range streams.All {
+		if st.Dormant {
+			// Declared but ensured by no service: never required, whatever its areas.
+			if required[StreamName("inst", st.Suffix)] {
+				t.Errorf("dormant stream %q is required present; nothing creates it", st.Suffix)
+			}
+			continue
+		}
+		nonDormant++
 		name := StreamName("inst", st.Suffix)
 		anyDeployed := false
 		for _, owner := range st.Areas {
@@ -269,7 +291,7 @@ func TestUndeployedAreasStreamsAreNotRequired(t *testing.T) {
 	}
 	// Non-vacuity: if this list ever covers everything, the case above is asserting
 	// only its trivial half and the gating could be broken without notice.
-	if len(exp.Streams) == len(streams.All) {
+	if len(exp.Streams) == nonDormant {
 		t.Fatal("the default profile is expected to leave at least one stream " +
 			"unrequired (connector-dispatch-dead, owned solely by outbound-connectors); " +
 			"if that is no longer true this test no longer exercises the gating")
@@ -305,9 +327,15 @@ func TestEveryStreamDeclaresItsOwners(t *testing.T) {
 // TestNilAreasRequiresEveryStream pins the strict default: a caller that cannot
 // observe what is deployed gets the loudest check, not the most forgiving one.
 func TestNilAreasRequiresEveryStream(t *testing.T) {
-	if got := len(ReplicationExpectation("inst", 3, nil).Streams); got != len(streams.All) {
-		t.Fatalf("an unknown deployment must require all %d stream(s); got %d",
-			len(streams.All), got)
+	want := 0
+	for _, s := range streams.All {
+		if !s.Dormant {
+			want++
+		}
+	}
+	if got := len(ReplicationExpectation("inst", 3, nil).Streams); got != want {
+		t.Fatalf("an unknown deployment must require all %d non-dormant stream(s); got %d",
+			want, got)
 	}
 }
 

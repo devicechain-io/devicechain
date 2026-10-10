@@ -18,7 +18,7 @@ import (
 // 256 would admit none of it, on every Notify.
 func TestBuildIngestLimiterFloorsTheSampleBurstAtOneEvent(t *testing.T) {
 	limiter := buildIngestLimiter(nil, mscfg.InfrastructureConfiguration{},
-		config.IngestRateLimit{MessagesPerSecond: 1e-9, Burst: 1}, nil)
+		config.IngestRateLimit{ReadingsPerSecond: 1e-9, Burst: 1}, nil)
 	require.Equal(t, 256, limiter.AdmitSamples("acme", 300))
 }
 
@@ -28,7 +28,7 @@ func TestBuildIngestLimiterFloorsTheSampleBurstAtOneEvent(t *testing.T) {
 // times (rate 250, burst 500) the second call admitted 200 and the third 50.
 func TestLwM2MSampleBudgetIsTheTenantCeilingInReadings(t *testing.T) {
 	limiter := buildIngestLimiter(nil, mscfg.InfrastructureConfiguration{},
-		config.IngestRateLimit{MessagesPerSecond: 10, Burst: 20}, nil)
+		config.IngestRateLimit{ReadingsPerSecond: 10, Burst: 20}, nil)
 	require.Equal(t, 256, limiter.AdmitSamples("t", 256), "one full event fits the floored burst")
 	require.Equal(t, 0, limiter.AdmitSamples("t", 200), "the burst is one event, not 25 times the tier's")
 	time.Sleep(200 * time.Millisecond)

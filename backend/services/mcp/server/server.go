@@ -9,6 +9,7 @@ import (
 	"time"
 
 	coreauth "github.com/devicechain-io/dc-microservice/auth"
+	"github.com/devicechain-io/dc-microservice/core"
 	sdkauth "github.com/modelcontextprotocol/go-sdk/auth"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -24,6 +25,31 @@ const (
 // long-lived LLM agents do) would grow the in-memory session map without bound and
 // OOM the pod. Reaping idle sessions caps that.
 const sessionTimeout = 30 * time.Minute
+
+// maxRequestBodyBytes is the body ceiling on the MCP endpoint, given both to the SDK
+// and to the buffering in front of it, so a larger body is refused by the SDK as too
+// large (413) rather than cut into a parse error. JSON-RPC tool calls are a few KiB; the
+// SDK's own default (4 MiB) is sized for servers that accept uploads, which this one
+// does not.
+const maxRequestBodyBytes = 1 << 20
+
+// maxMetadataBodyBytes is the body ceiling on the metadata documents, which take none.
+const maxMetadataBodyBytes = 1 << 16
+
+// bodyReadTimeout and execTimeout are the deadlines Routes puts in front of every
+// handler; zero means core's defaults. Variables only so a test can shorten them;
+// nothing else assigns them.
+var bodyReadTimeout, execTimeout time.Duration
+
+// bounds is the deadline configuration every handler here runs under.
+func bounds(maxBodyBytes int64, stream bool) core.RequestBounds {
+	return core.RequestBounds{
+		MaxBodyBytes:    maxBodyBytes,
+		BodyReadTimeout: bodyReadTimeout,
+		ExecTimeout:     execTimeout,
+		NoExecTimeout:   stream,
+	}
+}
 
 // New builds the MCP server's HTTP surface (ADR-047): the MCP endpoint over
 // Streamable HTTP, wrapped in the OAuth 2.1 Resource Server bearer-token
@@ -53,7 +79,7 @@ func New(resourceID, issuer string, validator func() *coreauth.Validator, gql *G
 
 	streamable := mcp.NewStreamableHTTPHandler(
 		func(*http.Request) *mcp.Server { return mcpServer },
-		&mcp.StreamableHTTPOptions{SessionTimeout: sessionTimeout},
+		&mcp.StreamableHTTPOptions{SessionTimeout: sessionTimeout, MaxRequestBodyBytes: maxRequestBodyBytes},
 	)
 
 	// The RS middleware verifies the bearer (signature + audience, via the verifier)
@@ -65,7 +91,10 @@ func New(resourceID, issuer string, validator func() *coreauth.Validator, gql *G
 			ResourceMetadataURL: metadataURL(resourceID),
 			Scopes:              []string{coreauth.ScopeReadOnly},
 		},
-	)(streamable)
+	)(core.BufferBody(streamable, maxRequestBodyBytes))
+	// The body is buffered INSIDE the bearer check, so a caller with no valid token is
+	// refused before any of it is held in memory. The deadlines go outside it, in
+	// Routes, so that caller still cannot stall the connection.
 
 	return protected, ProtectedResourceMetadataHandler(resourceID, issuer)
 }
@@ -230,7 +259,24 @@ func metadataURL(resourceID string) string {
 func Routes(mux *http.ServeMux, resourceID, issuer string, validator func() *coreauth.Validator,
 	gql *GraphQLClient) {
 	mcpHandler, metadataHandler := New(resourceID, issuer, validator, gql)
-	mux.Handle("/", mcpHandler)
+
+	// Every handler here runs with a body-delivery deadline and an execution deadline;
+	// without them only the server's header timeout applies, and a client that stalls
+	// its body holds the connection for as long as it likes. The one exception to the
+	// execution deadline is a GET to the endpoint: in Streamable HTTP that opens the
+	// session's server-to-client SSE stream, which is long-lived by design and which a
+	// deadline would sever. A tool call is a POST, and is bounded.
+	// The body itself is buffered inside the bearer check (see New), so only the
+	// deadlines are applied here.
+	call := core.RequestDeadlines(mcpHandler, bounds(maxRequestBodyBytes, false))
+	stream := core.RequestDeadlines(mcpHandler, bounds(maxRequestBodyBytes, true))
+	mux.Handle("/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			stream.ServeHTTP(w, r)
+			return
+		}
+		call.ServeHTTP(w, r)
+	}))
 
 	// TWO metadata locations, deliberately, because two different things reach this
 	// pod at two different paths:
@@ -259,9 +305,9 @@ func Routes(mux *http.ServeMux, resourceID, issuer string, validator func() *cor
 	// message naming the right location, rather than falling through to the catch-all
 	// above and being answered with an authentication challenge for a document
 	// request.
-	mux.Handle(ProtectedResourceMetadataPath, metadataHandler)
+	mux.Handle(ProtectedResourceMetadataPath, core.BoundRequests(metadataHandler, bounds(maxMetadataBodyBytes, false)))
 	served := ProtectedResourceMetadataPathFor(resourceID)
-	mux.Handle(ProtectedResourceMetadataPath+"/", http.HandlerFunc(
+	mux.Handle(ProtectedResourceMetadataPath+"/", core.BoundRequests(http.HandlerFunc(
 		func(w http.ResponseWriter, r *http.Request) {
 			if r.URL.Path == served {
 				metadataHandler.ServeHTTP(w, r)
@@ -269,5 +315,5 @@ func Routes(mux *http.ServeMux, resourceID, issuer string, validator func() *cor
 			}
 			http.Error(w, "no protected resource is served at this path; this server's "+
 				"metadata is at "+served, http.StatusNotFound)
-		}))
+		}), bounds(maxMetadataBodyBytes, false)))
 }

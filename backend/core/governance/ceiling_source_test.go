@@ -26,7 +26,7 @@ func (f *scriptedFetcher) Fetch(_ context.Context, tenant string) (Limits, error
 	if err := f.errs[tenant]; err != nil {
 		return Limits{}, err
 	}
-	return Limits{MessagesPerSecond: 5, Burst: 10}, nil
+	return Limits{RatePerSecond: 5, Burst: 10}, nil
 }
 
 // settled waits until the tenant's refresh has finished (nothing in flight for it) and
@@ -72,7 +72,7 @@ func TestCeilingSourceFollowsResolveOK(t *testing.T) {
 		got := settled(t, r, tenant)
 		assert.Equalf(t, want, got.Source, "tenant %q", tenant)
 		if want != core.CeilingResolved {
-			assert.Equalf(t, platformDefault.MessagesPerSecond, got.RatePerSecond, "tenant %q serves the default", tenant)
+			assert.Equalf(t, platformDefault.RatePerSecond, got.RatePerSecond, "tenant %q serves the default", tenant)
 		}
 	}
 

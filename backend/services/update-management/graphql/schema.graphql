@@ -1,0 +1,18 @@
+# Copyright The DeviceChain Authors
+# SPDX-License-Identifier: Apache-2.0
+
+# The update-management data plane. The service is scaffolded ahead of its API: the
+# firmware artifact catalogue and update assignments land here in later releases.
+#
+# Until then the plane is EXPLICITLY UNIMPLEMENTED. Its one query exists because the
+# GraphQL runtime requires a non-empty Query type, and it never answers with data: every
+# call returns an error saying the API is not implemented in this build, so a client
+# cannot mistake an empty answer for a working one.
+type Query {
+    # Not implemented in this build. Always returns an error.
+    updateManagementInfo: String!
+}
+
+schema {
+    query: Query
+}

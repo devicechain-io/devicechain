@@ -226,7 +226,7 @@ func TestPublishVersionsAndRollback(t *testing.T) {
 	require.NoError(t, err)
 
 	// Publish A as v1.
-	v1, err := api.PublishDashboard(ctx, "d", strp("v1.0.0"), nil, "alice", nil)
+	v1, _, err := api.PublishDashboard(ctx, "d", strp("v1.0.0"), nil, "alice", nil)
 	require.NoError(t, err)
 	assert.Equal(t, int32(1), v1.Version)
 	assert.Equal(t, "alice", v1.PublishedBy)
@@ -236,7 +236,7 @@ func TestPublishVersionsAndRollback(t *testing.T) {
 		Definition: util.OptionalStringOf(defB),
 	}, nil)
 	require.NoError(t, err)
-	v2, err := api.PublishDashboard(ctx, "d", strp("v2.0.0"), strp("second"), "bob", nil)
+	v2, _, err := api.PublishDashboard(ctx, "d", strp("v2.0.0"), strp("second"), "bob", nil)
 	require.NoError(t, err)
 	assert.Equal(t, int32(2), v2.Version)
 
@@ -278,14 +278,14 @@ func TestVersionsTenantIsolation(t *testing.T) {
 
 	_, err := api.CreateDashboard(acme, &DashboardCreateRequest{Token: "d", Definition: `{"schemaVersion":1}`})
 	require.NoError(t, err)
-	_, err = api.PublishDashboard(acme, "d", nil, nil, "alice", nil)
+	_, _, err = api.PublishDashboard(acme, "d", nil, nil, "alice", nil)
 	require.NoError(t, err)
 
 	// The other tenant can't see the dashboard, so versions/publish resolve to
 	// "no such dashboard" rather than leaking another tenant's history.
 	_, err = api.DashboardVersions(other, "d", nil, nil)
 	assert.ErrorIs(t, err, gorm.ErrRecordNotFound)
-	_, err = api.PublishDashboard(other, "d", nil, nil, "mallory", nil)
+	_, _, err = api.PublishDashboard(other, "d", nil, nil, "mallory", nil)
 	assert.ErrorIs(t, err, gorm.ErrRecordNotFound)
 }
 
@@ -303,10 +303,10 @@ func TestPublishOptimisticPrecondition(t *testing.T) {
 	// on UpdateDashboard: the read formatter and this compare are one contract.
 	current := *util.FormatTime(created.UpdatedAt)
 
-	_, err = api.PublishDashboard(ctx, "d", nil, nil, "alice", strp("2000-01-01T00:00:00Z"))
+	_, _, err = api.PublishDashboard(ctx, "d", nil, nil, "alice", strp("2000-01-01T00:00:00Z"))
 	assert.ErrorIs(t, err, ErrConflict)
 
-	v, err := api.PublishDashboard(ctx, "d", nil, nil, "alice", &current)
+	v, _, err := api.PublishDashboard(ctx, "d", nil, nil, "alice", &current)
 	require.NoError(t, err)
 	assert.Equal(t, int32(1), v.Version)
 }
@@ -319,9 +319,9 @@ func TestDeleteRemovesVersions(t *testing.T) {
 
 	_, err := api.CreateDashboard(ctx, &DashboardCreateRequest{Token: "d", Definition: `{"schemaVersion":1}`})
 	require.NoError(t, err)
-	_, err = api.PublishDashboard(ctx, "d", strp("v1"), nil, "alice", nil)
+	_, _, err = api.PublishDashboard(ctx, "d", strp("v1"), nil, "alice", nil)
 	require.NoError(t, err)
-	_, err = api.PublishDashboard(ctx, "d", strp("v2"), nil, "alice", nil)
+	_, _, err = api.PublishDashboard(ctx, "d", strp("v2"), nil, "alice", nil)
 	require.NoError(t, err)
 
 	ok, err := api.DeleteDashboard(ctx, "d")

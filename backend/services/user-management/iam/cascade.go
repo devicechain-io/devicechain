@@ -52,7 +52,7 @@ const (
 //
 // This mapping is hand-written and cannot be derived — the overrides are typed
 // struct fields, so something must connect "the ingest dimension" to
-// IngestMessagesPerSecond. What matters is that it exists in exactly ONE place and
+// IngestReadingsPerSecond. What matters is that it exists in exactly ONE place and
 // FAILS LOUD rather than silent: a dimension with no columns returns false, and
 // TestEveryDimensionHasOverrideColumns turns that into a build-time failure the day
 // a fourth dimension is declared without them. The alternative — returning nil, nil
@@ -61,9 +61,9 @@ const (
 func (t *Tenant) overridesFor(dim governance.Dimension) (rate *float64, burst *int, ok bool) {
 	switch dim.Name {
 	case governance.Ingest.Name:
-		return t.IngestMessagesPerSecond, t.IngestBurst, true
+		return t.IngestReadingsPerSecond, t.IngestBurst, true
 	case governance.Outbound.Name:
-		return t.OutboundMessagesPerSecond, t.OutboundBurst, true
+		return t.OutboundCallsPerSecond, t.OutboundBurst, true
 	case governance.AIInference.Name:
 		return t.AiInferenceRequestsPerMinute, t.AiInferenceBurst, true
 	}

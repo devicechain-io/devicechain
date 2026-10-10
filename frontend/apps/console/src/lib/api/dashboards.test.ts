@@ -15,9 +15,20 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { WidgetInstance, WidgetType } from '@devicechain/dashboards';
 
 const { gqlMock } = vi.hoisted(() => ({ gqlMock: vi.fn() }));
-vi.mock('@devicechain/client', () => ({ gql: gqlMock }));
+vi.mock('@devicechain/client', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  gql: gqlMock,
+}));
 
-const { publishDashboard, INVALID_DEFINITION_MARKER } = await import('./dashboards');
+const {
+  publishDashboard,
+  activateDashboardVersion,
+  getPublishedDashboard,
+  getPublishedVersion,
+  isNotPublishedError,
+  INVALID_DEFINITION_MARKER,
+} = await import('./dashboards');
+const { GraphQLRequestError } = await import('@devicechain/client');
 
 function widget(id: string, type: WidgetType, options?: Record<string, unknown>): WidgetInstance {
   return { id, type, layout: { base: { col: 0, row: 0, colSpan: 4, rowSpan: 2, z: 0 } }, options };
@@ -25,7 +36,9 @@ function widget(id: string, type: WidgetType, options?: Record<string, unknown>)
 
 beforeEach(() => {
   gqlMock.mockReset();
-  gqlMock.mockResolvedValue({ publishDashboard: { version: 7 } });
+  gqlMock.mockResolvedValue({
+    publishDashboard: { version: { version: 7 }, dashboard: { updatedAt: '2026-08-02T10:00:00Z' } },
+  });
 });
 
 describe('publishDashboard', () => {
@@ -34,7 +47,7 @@ describe('publishDashboard', () => {
 
     await expect(
       publishDashboard('ops', { definition, label: 'v1', expectedUpdatedAt: '2026-08-02T10:00:00Z' }),
-    ).resolves.toEqual({ version: 7 });
+    ).resolves.toEqual({ version: 7, updatedAt: '2026-08-02T10:00:00Z' });
 
     expect(gqlMock).toHaveBeenCalledTimes(1);
     const [area, , variables] = gqlMock.mock.calls[0];
@@ -60,7 +73,7 @@ describe('publishDashboard', () => {
         definition: { widgets: [widget('w1', 'timeseries-chart')] },
         expectedUpdatedAt: null,
       }),
-    ).resolves.toEqual({ version: 7 });
+    ).resolves.toEqual({ version: 7, updatedAt: '2026-08-02T10:00:00Z' });
     expect(gqlMock).toHaveBeenCalledTimes(1);
   });
 
@@ -104,5 +117,50 @@ describe('publishDashboard', () => {
       publishDashboard('ops', { definition, expectedUpdatedAt: null }),
     ).rejects.toThrow(/minimum/);
     expect(gqlMock).not.toHaveBeenCalled();
+  });
+});
+
+// Publishing activates, and a publish is not a draft edit: the returned updatedAt is the
+// draft's UNCHANGED one, which the caller keeps as its save baseline.
+describe('publishing and serving', () => {
+  it('activates a version without sending any draft precondition', async () => {
+    gqlMock.mockResolvedValue({ activateDashboardVersion: { publishedVersion: 3 } });
+    await expect(activateDashboardVersion('ops', 3)).resolves.toBe(3);
+    const [area, , variables] = gqlMock.mock.calls[0];
+    expect(area).toBe('dashboard-management');
+    expect(variables).toEqual({ token: 'ops', version: 3 });
+  });
+
+  it('reads the published snapshot, not the draft', async () => {
+    gqlMock.mockResolvedValue({
+      publishedDashboard: { token: 'ops', version: 2, definition: '{"live":true}' },
+    });
+    const live = await getPublishedDashboard('ops');
+    expect(live?.definition).toBe('{"live":true}');
+    // The query text names the published door and never selects the draft's updatedAt.
+    const doc = String(gqlMock.mock.calls[0][1]);
+    expect(doc).toContain('publishedDashboard(token: $token)');
+    expect(doc).not.toContain('updatedAt');
+  });
+
+  it('reads which version is live from metadata only', async () => {
+    gqlMock.mockResolvedValue({ dashboard: { publishedVersion: 4 } });
+    await expect(getPublishedVersion('ops')).resolves.toBe(4);
+    expect(String(gqlMock.mock.calls[0][1])).not.toContain('definition');
+  });
+
+  it('recognises the NOT_PUBLISHED refusal by its code, not its wording', () => {
+    const refused = new GraphQLRequestError('anything at all', 200, [
+      { message: 'anything at all', extensions: { code: 'NOT_PUBLISHED' } },
+    ]);
+    expect(isNotPublishedError(refused)).toBe(true);
+    expect(
+      isNotPublishedError(
+        new GraphQLRequestError('dashboard has not been published', 200, [
+          { message: 'dashboard has not been published' },
+        ]),
+      ),
+    ).toBe(false);
+    expect(isNotPublishedError(new Error('NOT_PUBLISHED'))).toBe(false);
   });
 });

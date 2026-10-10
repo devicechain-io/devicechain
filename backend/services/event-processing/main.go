@@ -474,13 +474,13 @@ func newReactReader(nmgr *messaging.NatsManager) (messaging.MessageReader, error
 func buildEgressLimiter(cfg *config.EventProcessingConfiguration, infra mscfg.InfrastructureConfiguration,
 	unresolved func(core.CeilingSource)) *core.TenantRateLimiter {
 	def := governance.Limits{
-		MessagesPerSecond: cfg.OutboundMessagesPerSecond,
-		Burst:             cfg.OutboundBurst,
+		RatePerSecond: cfg.OutboundCallsPerSecond,
+		Burst:         cfg.OutboundBurst,
 	}
 	counted := core.WithUnresolvedAdmissions(unresolved)
 	if infra.ServiceAuth.Secret == "" || infra.UserManagement.Hostname == "" || infra.UserManagement.Port == 0 {
 		log.Warn().Msg("Service secret or user-management endpoint not configured — per-tenant outbound overrides disabled; metering every tenant at the platform default (ADR-060 SD-3).")
-		return core.NewTenantRateLimiter(core.StaticCeiling(def.MessagesPerSecond, def.Burst), counted)
+		return core.NewTenantRateLimiter(core.StaticCeiling(def.RatePerSecond, def.Burst), counted)
 	}
 	client := svcclient.New(infra.UserManagement, infra.ServiceAuth.Secret, "event-processing", []string{string(auth.TenantRead)})
 	umURL := fmt.Sprintf("http://%s:%d/graphql", infra.UserManagement.Hostname, infra.UserManagement.Port)
@@ -573,10 +573,9 @@ func buildDrafter() *nldraft.Drafter {
 		log.Warn().Msg("ai-inference endpoint not configured (infrastructure.aiInference) — NL→rule drafting is UNAVAILABLE (ADR-056 slice 1).")
 		return nil
 	}
-	client := svcclient.New(infra.UserManagement, infra.ServiceAuth.Secret, "event-processing", []string{string(auth.AIInfer)})
 	url := fmt.Sprintf("http://%s:%d/graphql", infra.AiInference.Hostname, infra.AiInference.Port)
 	log.Info().Str("aiInference", url).Msg("NL→rule drafting ENABLED (ADR-056 slice 1): candidates compile through the DETECT firewall at the platform-default limits.")
-	return nldraft.NewDrafter(processor.NewInferenceClient(client, url), rules.DefaultLimits(), 0)
+	return nldraft.NewDrafter(processor.NewInferenceClient(infra.UserManagement, infra.ServiceAuth.Secret, url), rules.DefaultLimits(), 0)
 }
 
 // Called after microservice has been initialized.

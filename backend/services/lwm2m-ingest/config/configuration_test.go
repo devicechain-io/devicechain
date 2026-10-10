@@ -51,23 +51,23 @@ func TestIngestRateLimitDefaulting(t *testing.T) {
 	// A zeroed config defaults to the positive platform ceiling.
 	zeroed := &Lwm2mConfiguration{}
 	zeroed.ApplyDefaults()
-	assert.Equal(t, float64(DefaultIngestMessagesPerSecond), zeroed.IngestRateLimit.MessagesPerSecond)
+	assert.Equal(t, float64(DefaultIngestReadingsPerSecond), zeroed.IngestRateLimit.ReadingsPerSecond)
 	assert.Equal(t, DefaultIngestBurst, zeroed.IngestRateLimit.Burst)
-	assert.Positive(t, zeroed.IngestRateLimit.MessagesPerSecond, "a zero ceiling would admit nothing")
+	assert.Positive(t, zeroed.IngestRateLimit.ReadingsPerSecond, "a zero ceiling would admit nothing")
 	assert.Positive(t, zeroed.IngestRateLimit.Burst)
 
 	// NewLwm2mConfiguration (which runs ApplyDefaults) is positive too.
-	assert.Positive(t, NewLwm2mConfiguration().IngestRateLimit.MessagesPerSecond)
+	assert.Positive(t, NewLwm2mConfiguration().IngestRateLimit.ReadingsPerSecond)
 
 	// An explicit ceiling is preserved; a non-positive one floors to the default.
-	explicit := &Lwm2mConfiguration{IngestRateLimit: IngestRateLimit{MessagesPerSecond: 5, Burst: 10}}
+	explicit := &Lwm2mConfiguration{IngestRateLimit: IngestRateLimit{ReadingsPerSecond: 5, Burst: 10}}
 	explicit.ApplyDefaults()
-	assert.Equal(t, float64(5), explicit.IngestRateLimit.MessagesPerSecond)
+	assert.Equal(t, float64(5), explicit.IngestRateLimit.ReadingsPerSecond)
 	assert.Equal(t, 10, explicit.IngestRateLimit.Burst)
 
-	bad := &Lwm2mConfiguration{IngestRateLimit: IngestRateLimit{MessagesPerSecond: -1, Burst: -1}}
+	bad := &Lwm2mConfiguration{IngestRateLimit: IngestRateLimit{ReadingsPerSecond: -1, Burst: -1}}
 	bad.ApplyDefaults()
-	assert.Equal(t, float64(DefaultIngestMessagesPerSecond), bad.IngestRateLimit.MessagesPerSecond)
+	assert.Equal(t, float64(DefaultIngestReadingsPerSecond), bad.IngestRateLimit.ReadingsPerSecond)
 	assert.Equal(t, DefaultIngestBurst, bad.IngestRateLimit.Burst)
 }
 

@@ -5,10 +5,15 @@ package processor
 
 import (
 	"context"
+	"errors"
 	"fmt"
-	"strings"
+	"net"
+	"slices"
 
 	"github.com/devicechain-io/dc-event-processing/internal/nldraft"
+	"github.com/devicechain-io/dc-microservice/aiwire"
+	"github.com/devicechain-io/dc-microservice/auth"
+	"github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/svcclient"
 )
 
@@ -33,32 +38,37 @@ type inferenceClient struct {
 	url    string
 }
 
-// NewInferenceClient builds the drafter's inference seam over a service-token client and
-// ai-inference's GraphQL URL (wired in main). It returns the drafter's interface so the concrete
-// adapter stays package-private.
-func NewInferenceClient(client *svcclient.Client, url string) nldraft.Inferer {
+// NewInferenceClient builds the drafter's inference seam: a service-token client (least-privilege
+// ai:infer, minted from user-management at umCfg with the shared secret) aimed at ai-inference's
+// GraphQL URL. It returns the drafter's interface so the concrete adapter stays package-private.
+//
+// It builds the svcclient itself rather than taking one, because the client's TIMEOUT is part of
+// this seam's contract and a caller-supplied client would be free to get it wrong. The default
+// svcclient bound (10s) is far below ai-inference's inference timeout (40s by default, up to
+// config.AiInferenceMaxCallTimeout), so a default client cut slow models off first and turned
+// ai-inference's honest "timed out" into an opaque transport error the author read as an outage.
+// This client outwaits the callee's CEILING (config.AiInferenceCallerTimeout), so whatever the
+// operator configured, ai-inference's own answer is the one that arrives.
+func NewInferenceClient(umCfg config.UserManagementConfiguration, secret, url string) nldraft.Inferer {
+	client := svcclient.New(umCfg, secret, "event-processing", []string{string(auth.AIInfer)},
+		svcclient.WithQueryTimeout(config.AiInferenceCallerTimeout))
 	return &inferenceClient{client: client, url: url}
 }
-
-// rateLimitMarker is the stable substring ai-inference's ErrRateLimited carries (ADR-056 §6 /
-// ADR-023). It is a WIRE CONTRACT between the two services: svcclient surfaces a GraphQL error
-// only as its message text, so classifying a transient rate-limit — the one inference outcome the
-// author fixes by waiting rather than by calling an operator — means matching on it here.
-//
-// Deliberately a prefix of the sentinel's text rather than the whole message, so wording may be
-// refined without breaking the match. If it ever does drift, the failure is BENIGN by
-// construction: the error falls through to the generic unavailable reason, which is exactly
-// today's behaviour — a rate-limited author sees a vaguer message, never a wrong outcome. The
-// alternative (teaching svcclient to decode GraphQL error extensions) is a core change for every
-// service and is the right home for this if a second caller ever needs typed error codes.
-const rateLimitMarker = "inference rate limit exceeded"
 
 // Infer carries one prompt to the active provider under the given tenant and returns the raw
 // candidate. Any error (not configured, no active provider, consent denied, rate limited, or a
 // transport failure) propagates to the drafter, which reports it as an unavailable result — the
-// caller never sees a partial success. A rate-limit rejection is classified into
-// nldraft.ErrRateLimited so the drafter can report the transient outcome without knowing the
-// transport; every other error stays opaque to it.
+// caller never sees a partial success. Two transient outcomes are classified so the drafter can
+// report them without knowing the transport:
+//
+//   - rate limited → nldraft.ErrRateLimited, on ai-inference's extensions.code
+//   - timed out → nldraft.ErrTimedOut, on ai-inference's extensions.code, or this call's own
+//     bound (or ctx's deadline) firing while ai-inference was being asked
+//
+// Classification reads the GraphQL error's CODE (svcclient.GraphQLError.Codes), never its
+// message text, which ai-inference is free to reword. A failure to obtain the service token is
+// checked FIRST and stays opaque: user-management being slow is not the model being slow, and
+// ai-inference was never asked.
 func (c *inferenceClient) Infer(ctx context.Context, tenant, prompt, system string) (nldraft.InferOutput, error) {
 	request := map[string]any{"prompt": prompt}
 	if system != "" {
@@ -74,10 +84,15 @@ func (c *inferenceClient) Infer(ctx context.Context, tenant, prompt, system stri
 		} `json:"inferRuleCandidate"`
 	}
 	if err := c.client.Query(ctx, c.url, tenant, inferRuleCandidateMutation, vars, &out); err != nil {
-		if strings.Contains(err.Error(), rateLimitMarker) {
-			// Wrapped, not replaced: the drafter matches the sentinel while the underlying
-			// detail still reaches the server-side log.
+		// Wrapped, not replaced, in every arm: the drafter matches the sentinel while the
+		// underlying detail still reaches the server-side log.
+		switch {
+		case errors.Is(err, svcclient.ErrServiceToken):
+			return nldraft.InferOutput{}, fmt.Errorf("ai-inference: %w", err)
+		case hasCode(err, aiwire.CodeRateLimited):
 			return nldraft.InferOutput{}, fmt.Errorf("ai-inference: %w: %v", nldraft.ErrRateLimited, err)
+		case hasCode(err, aiwire.CodeTimedOut) || isTimeout(err):
+			return nldraft.InferOutput{}, fmt.Errorf("ai-inference: %w: %v", nldraft.ErrTimedOut, err)
 		}
 		return nldraft.InferOutput{}, fmt.Errorf("ai-inference: %w", err)
 	}
@@ -86,6 +101,22 @@ func (c *inferenceClient) Infer(ctx context.Context, tenant, prompt, system stri
 		Model:     out.InferRuleCandidate.Model,
 		Provider:  out.InferRuleCandidate.Provider,
 	}, nil
+}
+
+// hasCode reports whether ai-inference answered with a GraphQL error carrying code.
+func hasCode(err error, code string) bool {
+	var gqlErr *svcclient.GraphQLError
+	return errors.As(err, &gqlErr) && slices.Contains(gqlErr.Codes, code)
+}
+
+// isTimeout reports a transport-level timeout: the client's own bound, or a deadline on ctx.
+// A cancelled context (the author went away) is deliberately NOT a timeout.
+func isTimeout(err error) bool {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	var ne net.Error
+	return errors.As(err, &ne) && ne.Timeout()
 }
 
 // compile-time assertion that the client satisfies the drafter's Inferer contract.

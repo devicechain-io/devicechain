@@ -549,9 +549,8 @@ func (api *Api) applyProviderSecret(ctx context.Context, id uint, secret *string
 // AIProvidersByToken looks up providers by their current tokens.
 func (api *Api) AIProvidersByToken(ctx context.Context, tokens []string) ([]*AIProvider, error) {
 	found := make([]*AIProvider, 0)
-	result := api.sys(ctx).Find(&found, "token in ?", tokens)
-	if result.Error != nil {
-		return nil, result.Error
+	if err := rdb.FindByKeys(api.sys(ctx), &found, "token", tokens); err != nil {
+		return nil, err
 	}
 	return found, nil
 }

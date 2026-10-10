@@ -21,8 +21,8 @@ func TestApplyDefaults(t *testing.T) {
 	if c.MaxConcurrentSends != DefaultMaxConcurrentSends {
 		t.Fatalf("maxConcurrentSends = %d, want %d", c.MaxConcurrentSends, DefaultMaxConcurrentSends)
 	}
-	if c.OutboundMessagesPerSecond != DefaultOutboundMessagesPerSecond {
-		t.Fatalf("outboundMessagesPerSecond = %v, want %v", c.OutboundMessagesPerSecond, float64(DefaultOutboundMessagesPerSecond))
+	if c.OutboundCallsPerSecond != DefaultOutboundCallsPerSecond {
+		t.Fatalf("outboundCallsPerSecond = %v, want %v", c.OutboundCallsPerSecond, float64(DefaultOutboundCallsPerSecond))
 	}
 	if c.OutboundBurst != DefaultOutboundBurst {
 		t.Fatalf("outboundBurst = %d, want %d", c.OutboundBurst, DefaultOutboundBurst)
@@ -36,11 +36,11 @@ func TestApplyDefaults(t *testing.T) {
 func TestApplyDefaultsPreservesSet(t *testing.T) {
 	c := &OutboundConnectorsConfiguration{
 		SendTimeoutMs: 3000, MaxConcurrentSends: 4,
-		OutboundMessagesPerSecond: 25, OutboundBurst: 50, EgressWaitBudgetMs: 2000,
+		OutboundCallsPerSecond: 25, OutboundBurst: 50, EgressWaitBudgetMs: 2000,
 	}
 	c.ApplyDefaults()
 	if c.SendTimeoutMs != 3000 || c.MaxConcurrentSends != 4 ||
-		c.OutboundMessagesPerSecond != 25 || c.OutboundBurst != 50 || c.EgressWaitBudgetMs != 2000 {
+		c.OutboundCallsPerSecond != 25 || c.OutboundBurst != 50 || c.EgressWaitBudgetMs != 2000 {
 		t.Fatalf("ApplyDefaults overwrote a set value: %+v", c)
 	}
 }
@@ -49,7 +49,7 @@ func TestApplyDefaultsPreservesSet(t *testing.T) {
 func valid() OutboundConnectorsConfiguration {
 	return OutboundConnectorsConfiguration{
 		SendTimeoutMs: 1, MaxConcurrentSends: 1,
-		OutboundMessagesPerSecond: 10, OutboundBurst: 20, EgressWaitBudgetMs: 5000,
+		OutboundCallsPerSecond: 10, OutboundBurst: 20, EgressWaitBudgetMs: 5000,
 	}
 }
 
@@ -66,8 +66,8 @@ func TestValidate(t *testing.T) {
 		"negative sendTimeout":          func(c *OutboundConnectorsConfiguration) { c.SendTimeoutMs = -1 },
 		"sendTimeout above the ceiling": func(c *OutboundConnectorsConfiguration) { c.SendTimeoutMs = connectorwire.MaxTimeoutMs + 1 },
 		"zero concurrency":              func(c *OutboundConnectorsConfiguration) { c.MaxConcurrentSends = 0 },
-		"zero outbound rate":            func(c *OutboundConnectorsConfiguration) { c.OutboundMessagesPerSecond = 0 },
-		"negative outbound rate":        func(c *OutboundConnectorsConfiguration) { c.OutboundMessagesPerSecond = -1 },
+		"zero outbound rate":            func(c *OutboundConnectorsConfiguration) { c.OutboundCallsPerSecond = 0 },
+		"negative outbound rate":        func(c *OutboundConnectorsConfiguration) { c.OutboundCallsPerSecond = -1 },
 		"zero outbound burst":           func(c *OutboundConnectorsConfiguration) { c.OutboundBurst = 0 },
 		"zero wait budget":              func(c *OutboundConnectorsConfiguration) { c.EgressWaitBudgetMs = 0 },
 		"negative wait budget":          func(c *OutboundConnectorsConfiguration) { c.EgressWaitBudgetMs = -5 },

@@ -98,7 +98,7 @@ func (r *TenantGovernanceResolver) burst(field string, dim governance.Dimension)
 	return util.IntPtrInt32(field, v)
 }
 
-func (r *TenantGovernanceResolver) IngestMessagesPerSecond() *float64 {
+func (r *TenantGovernanceResolver) IngestReadingsPerSecond() *float64 {
 	return r.rate(governance.Ingest)
 }
 
@@ -106,7 +106,7 @@ func (r *TenantGovernanceResolver) IngestBurst() (*int32, error) {
 	return r.burst("ingestBurst", governance.Ingest)
 }
 
-func (r *TenantGovernanceResolver) OutboundMessagesPerSecond() *float64 {
+func (r *TenantGovernanceResolver) OutboundCallsPerSecond() *float64 {
 	return r.rate(governance.Outbound)
 }
 

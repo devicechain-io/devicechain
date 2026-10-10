@@ -231,7 +231,11 @@ func (b *baseline) envelopes(e entity) bool {
 	if !ok {
 		return false
 	}
-	return b.typeDeclaresField(e.Area, returns, e.Wrap)
+	marker := e.Wrap
+	if e.WrapMarker != "" {
+		marker = e.WrapMarker
+	}
+	return b.typeDeclaresField(e.Area, returns, marker)
 }
 
 // returnTypeOf reads a mutation's declared result type, stripped of its

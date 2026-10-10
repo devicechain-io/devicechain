@@ -308,7 +308,7 @@ type Tenant struct {
 	// absent) limit as the platform default, never as unlimited, so a tenant with
 	// no override is still metered. These are the first of a family of governance
 	// knobs (retention windows, API limits) that will land alongside them.
-	IngestMessagesPerSecond *float64
+	IngestReadingsPerSecond *float64
 	IngestBurst             *int
 
 	// Per-tenant OUTBOUND governance overrides (ADR-060 SD-3): the egress rate for
@@ -317,8 +317,8 @@ type Tenant struct {
 	// ingest heavily yet fan out few outbound calls, or the reverse — with the same
 	// fail-safe semantics: nil means "inherit the platform default", never
 	// unlimited, and a set value must be positive.
-	OutboundMessagesPerSecond *float64
-	OutboundBurst             *int
+	OutboundCallsPerSecond *float64
+	OutboundBurst          *int
 
 	// Per-tenant white-labeling overrides (ADR-038 Phase 2). Each is a nullable
 	// override on the same cascading-column pattern as the governance knobs above:

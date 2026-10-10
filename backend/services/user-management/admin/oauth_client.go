@@ -13,6 +13,7 @@ import (
 
 	"github.com/devicechain-io/dc-microservice/auth"
 	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
+	"github.com/devicechain-io/dc-microservice/limit"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-user-management/iam"
 	"golang.org/x/crypto/bcrypt"
@@ -26,6 +27,21 @@ var ErrOAuthClientNotFound = errors.New("oauth client not found")
 // clientSecretBytes is the entropy of a generated confidential-client secret: 32
 // random bytes → 43 base64url chars, comfortably under bcrypt's 72-byte input cap.
 const clientSecretBytes = 32
+
+// The bounds on a client's two allowlists, as a count and per entry. An over-bound
+// list is refused with LIMIT_EXCEEDED before any entry is validated, so a refusal
+// never echoes an oversized value back.
+//
+// A client needs a handful of redirect URIs (one per environment it runs in, plus a
+// loopback one for development) and at most every supported scope, so the counts are
+// generous; 2048 is the URL length every browser and proxy in the path accepts, and
+// no supported scope name is anywhere near 64 characters.
+const (
+	MaxClientRedirectURIs   = 16
+	MaxClientRedirectURILen = 2048
+	MaxClientScopes         = 16
+	MaxClientScopeLen       = 64
+)
 
 // OAuthClientInput is the data to register an OAuth 2.1 client (ADR-047). ClientId
 // is its stable public identifier; RedirectURIs is the exact-match allowlist;
@@ -246,6 +262,14 @@ func validateClientId(id string) error {
 // null` and `redirectUris: []` are one request spelled two ways, and both would leave an
 // exact-match allowlist that matches nothing.
 func validateRedirectURIs(uris []string) error {
+	if len(uris) > MaxClientRedirectURIs {
+		return limit.Exceeded("redirectUris", len(uris), MaxClientRedirectURIs)
+	}
+	for _, u := range uris {
+		if len(u) > MaxClientRedirectURILen {
+			return limit.Exceeded("redirectUris entry length", len(u), MaxClientRedirectURILen)
+		}
+	}
 	if len(uris) == 0 {
 		// The field is named as the SCHEMA spells it — redirectUris, plural — so the
 		// refusal points at something the caller actually sent. It read "redirectUri"
@@ -267,6 +291,14 @@ func validateRedirectURIs(uris []string) error {
 // grant (fail-closed) — a client cannot be registered for a scope that does not
 // exist.
 func validateClientScopes(scopes []string) error {
+	if len(scopes) > MaxClientScopes {
+		return limit.Exceeded("scopes", len(scopes), MaxClientScopes)
+	}
+	for _, sc := range scopes {
+		if len(sc) > MaxClientScopeLen {
+			return limit.Exceeded("scopes entry length", len(sc), MaxClientScopeLen)
+		}
+	}
 	if len(scopes) == 0 {
 		return fmt.Errorf("at least one entry in scopes is required: a client registered for " +
 			"none describes a permission set nobody can read — send the scopes it should " +

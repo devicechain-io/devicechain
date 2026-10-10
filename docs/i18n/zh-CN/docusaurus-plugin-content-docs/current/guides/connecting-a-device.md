@@ -58,6 +58,8 @@ MQTT 和 HTTP 摄取已可用。资源受限设备也可通过 [LwM2M 摄取](..
 - `credentialType` / `credentialId`：设备提供的凭据。`MQTT_BASIC` 还需要 `credentialSecret`。只有实例的设备认证模式设为 `disabled` 或 `optional` 时才可省略。默认值是 `required`，因此需要凭据。
 - `payload`：结构取决于 `eventType`，所有结构都是 `{ "entries": [ … ] }`。见下文。
 
+每个字段的类型及是否必填（包括可选的 `altId` 和 `relationship`）见[设备协议参考](../reference/device-protocol.md#device-event)，其中还提供可用于校验固件输出的 JSON Schema。
+
 ### 载荷结构 {#payload-shapes}
 
 每个载荷都以 `entries` 数组包裹内容，其结构固定了各个值的 JSON 类型：
@@ -309,7 +311,9 @@ mosquitto_pub \
 - **`commandToken` 必须是送达封装中的 `token`**，即命令令牌，而不是设备令牌。在这里发送设备令牌是最常见的错误。它不匹配任何命令，因此响应不会结算任何内容：响应会反复重新送达，直到消息代理送达上限（五次尝试），然后以原因 `exhausted` 记录到死信流，供运维人员查看；命令仍未完成。
 - **`dispatchNonce` 必须来自你正在应答的送达封装。** 它是必填项。省略它，或引用同一命令较早送达中的 nonce，都不会结算命令。参见[为何需要 nonce](#why-the-nonce-is-required)。
 - **`success`** 将命令转为 `SUCCESSFUL` 或 `FAILED`。
-- **`payload`** / **`error`** 是可选字符串，在控制台命令历史中展示，并由 API 返回。
+- **`payload`** 可选，可以是任意 JSON 值（字符串按其文本存储，对象或数组按该 JSON 存储）；**`error`** 是可选字符串。两者都在控制台命令历史中展示，并由 API 返回。
+
+响应未能结束其命令的所有情形，见[设备协议参考](../reference/device-protocol.md#rejections-command-responses)。
 
 与事件和命令主题一样，该主题按设备划分，设备只获准发布到自己的主题。租户和响应设备都从主题获取，而不是正文，因此设备只能应答**自己的**命令。指定其他设备所属命令的响应会被拒绝，不会记录。
 
@@ -319,6 +323,19 @@ mosquitto_pub \
 
 :::info 响应才会完成生命周期
 从未获得应答的命令会保持 `SENT`，直到 TTL 将其转为 `TIMEOUT`。没有响应，平台只知道命令已分发，不知道设备是否执行。如果设备不响应，发出命令时应设置 `expiresAt`，使其按你的时间安排达到终态，而不是采用平台默认七天。
+:::
+
+### 为配置下发预留的主题 {#reserved-device-topics}
+
+:::note 已预留，尚未启用
+为设备配置下发预留了另外两个按设备划分的主题。目前没有任何组件向它们发布或从中读取，请勿基于它们开发。在此列出，是为了避免设备将这些名称用于其他用途。
+
+```
+{instanceId}/{tenant}/device-desired/{deviceToken}    （平台到设备；设备可订阅属于自己的主题）
+{instanceId}/{tenant}/device-reports/{deviceToken}    （设备到平台；设备可向属于自己的主题发布）
+```
+
+与命令一样，设备只被授权使用带有自身设备令牌的主题，且仅限所示方向。
 :::
 
 ### 为何需要 nonce {#why-the-nonce-is-required}

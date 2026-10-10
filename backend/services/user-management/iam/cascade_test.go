@@ -17,7 +17,7 @@ func inp(v int) *int        { return &v }
 //
 // The dimension → override-column mapping cannot be derived: the overrides are typed
 // struct fields, so something must connect "the ingest dimension" to
-// IngestMessagesPerSecond. What CAN be guaranteed is that a dimension without one is
+// IngestReadingsPerSecond. What CAN be guaranteed is that a dimension without one is
 // caught here rather than shipped — because the silent failure is invisible on every
 // screen: a fourth dimension declared without columns would report every tenant as
 // "no override declared", the console would show it as inherited, and per-tenant
@@ -58,12 +58,12 @@ func TestEveryDimensionCarriesDisplayMetadata(t *testing.T) {
 // lie about their own platform.
 func TestEffectiveRateProvenance(t *testing.T) {
 	gold := &TenantTier{Token: TierGoldToken, Config: map[string]any{
-		"ingestMessagesPerSecond": float64(2000),
+		"ingestReadingsPerSecond": float64(2000),
 		"ingestBurst":             float64(4000),
 	}}
 
 	t.Run("an override reports itself as the exception it is", func(t *testing.T) {
-		tenant := &Tenant{Tier: gold, IngestMessagesPerSecond: fp(5000), IngestBurst: inp(9000)}
+		tenant := &Tenant{Tier: gold, IngestReadingsPerSecond: fp(5000), IngestBurst: inp(9000)}
 		rate, src := tenant.EffectiveRate(governance.Ingest)
 		require.Equal(t, float64(5000), *rate)
 		require.Equal(t, SourceOverride, src)
@@ -103,7 +103,7 @@ func TestEffectiveRateProvenance(t *testing.T) {
 		// Only reachable by an out-of-band DB write. It must not report itself as an
 		// override — the operator would go looking for a -5 they cannot see anywhere,
 		// and the tenant is in fact metered at its tier.
-		tenant := &Tenant{Tier: gold, IngestMessagesPerSecond: fp(-5), IngestBurst: inp(0)}
+		tenant := &Tenant{Tier: gold, IngestReadingsPerSecond: fp(-5), IngestBurst: inp(0)}
 		rate, src := tenant.EffectiveRate(governance.Ingest)
 		require.Equal(t, float64(2000), *rate)
 		require.Equal(t, SourceTier, src)
@@ -122,7 +122,7 @@ func TestEffectiveRateProvenance(t *testing.T) {
 		// The tier is a required FK and every read path preloads it, so nil is a bug
 		// in a read path. It must cost a tier's tuning, never a ceiling — and never
 		// take down the query every enforcing service refreshes against.
-		tenant := &Tenant{Tier: nil, IngestMessagesPerSecond: fp(750)}
+		tenant := &Tenant{Tier: nil, IngestReadingsPerSecond: fp(750)}
 		rate, src := tenant.EffectiveRate(governance.Ingest)
 		require.Equal(t, float64(750), *rate)
 		require.Equal(t, SourceOverride, src)
@@ -143,7 +143,7 @@ func TestUnmappedDimensionReportsNoOverride(t *testing.T) {
 	unknown := governance.Dimension{
 		Name: "not-a-real-dimension", RateField: "nope", BurstField: "nopeBurst", PerSecondScale: 1,
 	}
-	tenant := &Tenant{Tier: &TenantTier{Token: TierGoldToken}, IngestMessagesPerSecond: fp(5000)}
+	tenant := &Tenant{Tier: &TenantTier{Token: TierGoldToken}, IngestReadingsPerSecond: fp(5000)}
 
 	require.Nil(t, tenant.OverrideRate(unknown))
 	require.Nil(t, tenant.OverrideBurst(unknown))

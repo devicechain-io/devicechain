@@ -672,7 +672,7 @@ chart and operator are identical.
 |------|---------|
 | `--cluster <name>` | `local` provider: the kind cluster to create the instance on (default `devicechain`). It must already have been [installed](#install); bootstrap never creates a cluster. |
 | `--kube-context <name>` | Target an installed cluster through this kube-context instead. |
-| `--profile <profile>` | Functional-area profile: `default` (the standard system, used when omitted), `full` (everything — adds AI inference, outbound connectors, MCP, Sparkplug B ingest, and LwM2M ingest), `telemetry`, or `ingest-only`. |
+| `--profile <profile>` | Functional-area profile: `default` (the standard system, used when omitted), `full` (everything — adds AI inference, outbound connectors, MCP, Sparkplug B ingest, LwM2M ingest, and update management), `telemetry`, or `ingest-only`. |
 | `--build` | Build images from source into a local registry (developer path; needs the source tree + Docker + ko). |
 | `--registry` / `--version` | Override the image registry / tag (defaults: published `ghcr.io/devicechain-io`, or `localhost:5000` + `dev` with `--build`). |
 | `--host <name>` | Ingress host to expose the instance on (default `devicechain.local`). Use `localhost` on a local cluster to reach the console with no `/etc/hosts` edit. |
@@ -769,8 +769,8 @@ already exist rather than adding a tuning axis of its own:
 It does **not** change which services run. That stays on each instance's `--profile`, where
 it is named and visible. A profile *larger* than `default` — today only `full` — is rejected
 on a compact cluster. The published compact numbers are measured on `default`, so they would
-not describe an instance running five more services (AI inference, outbound connectors, MCP,
-Sparkplug B ingest, and LwM2M ingest). The smaller profiles (`telemetry`, `ingest-only`) are
+not describe an instance running six more services (AI inference, outbound connectors, MCP,
+Sparkplug B ingest, LwM2M ingest, and update management). The smaller profiles (`telemetry`, `ingest-only`) are
 accepted.
 
 You can keep both TLS and monitoring. An explicit `--no-tls=false` or `--no-monitoring=false`
@@ -1225,7 +1225,7 @@ instead, and the limits stay as above. The console is sized separately.
 The first four services do the per-event work: receiving, resolving and storing every event, and
 merging it into each device's live state. `event-processing` runs detection on every event; its
 limit is twice what it was measured to use (see below). The first four services' limits are
-sized for live device traffic at a tenant's default ingest ceiling of 1000 messages per second,
+sized for live device traffic at a tenant's default ingest ceiling of 1000 readings per second,
 one reading per message, and for about 4,000 events per second, the rate a default installation
 sustained before `event-management`'s persistence defaults were raised (see
 [Measured throughput](#measured-throughput)).

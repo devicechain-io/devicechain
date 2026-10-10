@@ -35,7 +35,7 @@ func TestLoadDefaultsEventSources(t *testing.T) {
 	assert.Equal(t, "8081", httpSrc.Configuration["port"])
 
 	// The per-tenant ingest ceiling defaults to the platform rate, never unlimited.
-	assert.Equal(t, float64(DefaultIngestMessagesPerSecond), cfg.IngestRateLimit.MessagesPerSecond)
+	assert.Equal(t, float64(DefaultIngestReadingsPerSecond), cfg.IngestRateLimit.ReadingsPerSecond)
 	assert.Equal(t, DefaultIngestBurst, cfg.IngestRateLimit.Burst)
 	assert.NoError(t, cfg.Validate())
 }
@@ -47,15 +47,15 @@ func TestIngestRateLimitDefaulting(t *testing.T) {
 	// Zeroed (omitted in the document) => platform default.
 	zeroed := &EventSourcesConfiguration{}
 	zeroed.ApplyDefaults()
-	assert.Equal(t, float64(DefaultIngestMessagesPerSecond), zeroed.IngestRateLimit.MessagesPerSecond)
+	assert.Equal(t, float64(DefaultIngestReadingsPerSecond), zeroed.IngestRateLimit.ReadingsPerSecond)
 	assert.Equal(t, DefaultIngestBurst, zeroed.IngestRateLimit.Burst)
 
 	// Explicit values survive defaulting.
 	explicit := &EventSourcesConfiguration{
-		IngestRateLimit: IngestRateLimit{MessagesPerSecond: 5, Burst: 10},
+		IngestRateLimit: IngestRateLimit{ReadingsPerSecond: 5, Burst: 10},
 	}
 	explicit.ApplyDefaults()
-	assert.Equal(t, float64(5), explicit.IngestRateLimit.MessagesPerSecond)
+	assert.Equal(t, float64(5), explicit.IngestRateLimit.ReadingsPerSecond)
 	assert.Equal(t, 10, explicit.IngestRateLimit.Burst)
 }
 

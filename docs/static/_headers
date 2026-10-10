@@ -33,3 +33,14 @@
 /:locale/schema/index.json
   Content-Type: application/json; charset=utf-8
   Access-Control-Allow-Origin: *
+
+# The device protocol contract: JSON Schemas of what a device sends and receives. JSON,
+# not text — a validator or an editor fetching one by URL should get it as what it is.
+# After the /schema/* wildcards for the same reason as the index above.
+/schema/device/*
+  Content-Type: application/json; charset=utf-8
+  Access-Control-Allow-Origin: *
+
+/:locale/schema/device/*
+  Content-Type: application/json; charset=utf-8
+  Access-Control-Allow-Origin: *

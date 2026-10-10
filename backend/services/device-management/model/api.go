@@ -68,6 +68,10 @@ type GeoFenceCapRefusalCounter interface {
 type Api struct {
 	RDB *rdb.RdbManager
 
+	// ceilings exports the observed size of the ceilinged collections (ceilings.go). Nil
+	// disables it.
+	ceilings *ceilingMetrics
+
 	// AlarmPublisher emits alarm state-change events (ADR-041). It is injected at
 	// wiring time (the concrete publisher owns a NATS writer, so it cannot be built
 	// until the messaging layer exists) and may be nil — in tests, or before wiring —

@@ -76,7 +76,8 @@ CREATE TABLE "dashboard-management".dashboards (
  token character varying(128) NOT NULL,
  name character varying(128),
  description character varying(1024),
- definition jsonb NOT NULL
+ definition jsonb NOT NULL,
+ published_version integer
 );
 CREATE TABLE "dashboard-management".purged_tenants (
  token character varying(128) NOT NULL,

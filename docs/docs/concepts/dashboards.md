@@ -102,11 +102,13 @@ again.
 You author dashboards in the **console**:
 
 - **Canvas editor** — drag and resize, with real device / anchor pickers.
-- **Versioning** — the live definition is a mutable **draft**. **Publish** captures it as an immutable version, and you can **roll back** to any earlier version, which re-drafts it in place. History is a list of published snapshots, not a diff.
+- **Versioning** — the working definition is a mutable **draft**. **Publish** captures it as an immutable version and makes that version **live**: it is the one viewers are shown. You can make an earlier version live again without touching the draft (**make live**), or **roll back** to an earlier version, which overwrites the draft with it. History is a list of published snapshots, not a diff.
 - **Synthetic preview** — swap live data for a client-side generator (sine / ramp / random-walk) to validate layout, scales, and thresholds before any device has reported.
 - **Export** — download or copy a definition to share or embed elsewhere.
 
-A published version's definition is not readable on its own. The version list carries only its number, optional label and description, and who published it when. Rollback, which is a write, is the only way to get its contents back.
+The draft is for authors. Reading a draft definition, or the definition of a published version, needs `dashboard:write`. A member holding only `dashboard:read` sees the dashboard's name, description and which version is live, and is served the live version's definition through the `publishedDashboard` query. A dashboard that has never been published serves nothing to them, and the answer says so rather than returning a blank board.
+
+Publishing or making a version live does not change the draft's `updatedAt`, so saving the draft with the baseline you already hold still works. The version list itself carries only each version's number, optional label and description, and who published it when.
 
 ## Embedding: definitions, slots, and binding manifests {#embedding-definitions-slots-and-binding-manifests}
 
@@ -124,8 +126,8 @@ A React application embeds a live dashboard by constructing one hub with a resol
 
 ### The `/dash` reference viewer
 
-The standalone **`/dash`** application is the reference external embedder. It has its own login, accepts an exported definition plus a binding manifest, and renders it.
+The standalone **`/dash`** application is the reference external embedder. It has its own login. Give it a dashboard token and it fetches the version of that dashboard that is currently live; or paste an exported definition, which needs no access to the service and is how an external embedder or an offline preview works. Either way you can add a binding manifest, and it renders the result.
 
-It is view-only as to authoring: there is no editor, no save, and it never fetches a dashboard from the service. Widget actions stay available, though. A viewer holding `alarm:write` or `command:write` can acknowledge and clear alarms and dispatch commands to real devices from the dashboard it renders, and the server enforces those rights either way.
+It is view-only as to authoring: there is no editor and no save, and it only ever asks for the live version, never the draft. Widget actions stay available, though. A viewer holding `alarm:write` or `command:write` can acknowledge and clear alarms and dispatch commands to real devices from the dashboard it renders, and the server enforces those rights either way.
 
 See also the [Architecture](./architecture.md) overview and the [GraphQL API reference](../reference/graphql-api.md).

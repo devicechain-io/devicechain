@@ -86,6 +86,28 @@ func TestResolveEnabledAreas(t *testing.T) {
 		}
 	})
 
+	t.Run("update-management is an opt-in area the default profile can add", func(t *testing.T) {
+		// It is held back from every profile but full, so --enable-area is how a default
+		// install gets it — and the CLI must accept it before any cluster is touched.
+		got, err := ResolveEnabledAreas("default", []string{"update-management"})
+		if err != nil {
+			t.Fatalf("enabling update-management on the default profile was refused: %v", err)
+		}
+		if !slices.Contains(got, "update-management") {
+			t.Fatalf("update-management is missing from the resolved set: %v", got)
+		}
+		def, err := ResolveEnabledAreas("default", []string{"device-management"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if slices.Contains(def, "update-management") {
+			t.Fatal("the default profile deploys update-management; it must be opt-in")
+		}
+		// It hard-depends on device-management, which every profile carries as a core
+		// area, so there is no profile on which it can be refused for a missing dep —
+		// asserting the refusal path here would need a selection the CLI cannot express.
+	})
+
 	t.Run("blank extras are ignored", func(t *testing.T) {
 		got, err := ResolveEnabledAreas("default", []string{"  "})
 		if err != nil {

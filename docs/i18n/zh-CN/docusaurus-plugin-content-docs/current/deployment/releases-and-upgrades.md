@@ -2836,6 +2836,22 @@ device-management 无法编码失败入站事件的记录时，此前仍存储�
 
 无需其他操作。
 
+#### 速率上限按其计量对象重新命名 {#next-upgrade-rate-key-rename}
+
+接入上限早已按读数计量，对外上限按连接器调用计量，但两者仍以"消息"命名。现已全面改名，不保留旧拼写：
+
+| 原名 | 新名 |
+| --- | --- |
+| `ingestRateLimit.messagesPerSecond`（`event-sources`、`lwm2m-ingest`、`sparkplug-ingest` 配置） | `ingestRateLimit.readingsPerSecond` |
+| `outboundMessagesPerSecond`（`event-processing`、`outbound-connectors` 配置） | `outboundCallsPerSecond` |
+| `ingestMessagesPerSecond`（GraphQL 字段、层级配置键） | `ingestReadingsPerSecond` |
+| `outboundMessagesPerSecond`（GraphQL 字段、层级配置键） | `outboundCallsPerSecond` |
+
+- **升级前，重命名服务配置键。** 如果 values 在某个服务的 `config` 下设置了旧键，请改为新名。服务若仍发现旧键将拒绝启动，错误信息会给出应改用的键。它不会退回平台默认值，因为那会悄悄替换您设定的上限。
+- **API 客户端。** `tenantGovernance`、管理 API 的租户类型及其创建和更新输入上的字段均已改名。选择或发送旧名的请求现在会失败，请更新管理租户上限的脚本或集成。使用旧键的层级配置会被拒绝，错误信息会列出可接受的键。
+- **已存数据自动转换。** 升级会重命名租户覆盖列，并以相同取值为每个已存层级配置（包括随附层级和已删除层级）更换键名。
+- **滚动升级期间。** 在所有 Pod 都运行新版本之前，旧 Pod 与新的 `user-management` 互不兼容。旧的接入或对外 Pod 请求旧的 `tenantGovernance` 字段，请求失败，该 Pod 按平台默认值计量所有租户，可能因此触发 `TenantsMeteredAtPlatformDefault`。新 Pod 重命名列后，旧的 `user-management` Pod 仍使用旧列名，它处理的租户读写会失败，直到被替换。两者均在滚动升级结束时消失；在此之前请避免修改租户或层级。
+
 ### 一次性的持久摄取切换 {#the-one-time-durable-ingest-cutover}
 
 引入**持久 MQTT 摄取**的发布改变 `event-sources` 接收设备遥测的方式：不再作为 MQTT 客户端订阅代理，而是消费代理在确认设备前先写入的持久捕获流。这让 `event-sources` 停机时遥测不再丢失。

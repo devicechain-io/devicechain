@@ -58,6 +58,8 @@ Every inbound event, over any transport, is a JSON object:
 - `credentialType` / `credentialId` — the credential the device presents. `MQTT_BASIC` additionally carries `credentialSecret`. Omit these only when the instance's device-auth mode is set to `disabled` or `optional`. The default is `required`, so a credential is expected.
 - `payload` — its shape depends on `eventType`, and every shape is `{ "entries": [ … ] }`. See below.
 
+Every field, with its type and whether it is required, including the optional `altId` and `relationship`, is in the [Device Protocol Reference](../reference/device-protocol.md#device-event), together with JSON Schemas you can validate firmware output against.
+
 ### Payload shapes {#payload-shapes}
 
 Every payload wraps its content in an `entries` array, and the shape fixes the JSON type of each value:
@@ -261,7 +263,7 @@ The ingest listener bounds how long a request may take. A device has **5 seconds
 
 A request that exceeds either bound has its **connection closed**. The server closes it before the event exists, so there is no response, no event, and nothing in the pipeline to trace it to. The symptom looks like intermittent device-side flakiness affecting only the slowest devices. On a constrained link (NB-IoT, 2G, satellite), where several seconds to complete a request is ordinary, raise the bounds rather than leaving those devices to fail silently. The `total_http_connections_closed_before_request` metric counts connections that never delivered a request, which is what such a device leaves behind.
 
-## Receiving commands
+## Receiving commands {#receiving-commands}
 
 A device receives commands on **its own** topic:
 
@@ -317,7 +319,9 @@ mosquitto_pub \
 - **`commandToken` must be the `token` from the delivery envelope**, the command's token, not the device's. Sending the device token here is the single most common mistake. It matches no command, so the response settles nothing: it is redelivered until the broker's delivery ceiling (five attempts), then recorded on the dead-letter stream with reason `exhausted`, visible to an operator, while the command stays outstanding.
 - **`dispatchNonce` must be the `dispatchNonce` from the delivery envelope you are answering.** It is required. A response that omits it, or that quotes a nonce from an earlier delivery of the same command, does not settle the command. See [Why the nonce is required](#why-the-nonce-is-required).
 - **`success`** moves the command to `SUCCESSFUL` or `FAILED`.
-- **`payload`** / **`error`** are optional strings, surfaced in the console's command history and returned by the API.
+- **`payload`** is optional and may be any JSON value (a string is stored as its text, an object or array as that JSON); **`error`** is an optional string. Both are surfaced in the console's command history and returned by the API.
+
+Every way a response can fail to settle its command is listed in the [Device Protocol Reference](../reference/device-protocol.md#rejections-command-responses).
 
 Like the events and command topics, this one is per-device, and a device is authorized to publish only to its own. Both the tenant and the responding device are taken from the topic rather than the body, so a device can answer only for **its own** commands. A response naming a command that belongs to a different device is rejected, not recorded.
 
@@ -327,6 +331,19 @@ This topic used to be tenant-wide (`{instanceId}/{tenant}/command-responses`, wi
 
 :::info Responding is what completes the lifecycle
 A command that is never answered stays `SENT` until its TTL turns it into `TIMEOUT`. Without a response, the platform knows only that the command was dispatched, not that the device acted on it. If your devices do not respond, set an `expiresAt` when issuing commands so they reach a terminal state on your schedule rather than on the platform's seven-day default.
+:::
+
+### Reserved topics for configuration delivery {#reserved-device-topics}
+
+:::note Reserved, not yet active
+Two further per-device topics are reserved as groundwork for device configuration delivery. Nothing publishes to them or reads from them yet, so do not build on them. They are listed so your devices do not claim the names for something else.
+
+```
+{instanceId}/{tenant}/device-desired/{deviceToken}    (platform to device; a device may subscribe to its own)
+{instanceId}/{tenant}/device-reports/{deviceToken}    (device to platform; a device may publish to its own)
+```
+
+As with commands, a device is authorized only for the topic carrying its own device token, and only in the direction shown.
 :::
 
 ### Why the nonce is required {#why-the-nonce-is-required}
