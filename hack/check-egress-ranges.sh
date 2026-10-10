@@ -18,6 +18,7 @@
 #   hack/check-egress-ranges.sh              # compare, fail on drift
 #   hack/check-egress-ranges.sh --self-test  # prove the checks can fail, then compare
 #   hack/check-egress-ranges.sh --update     # regenerate the golden policy
+#   hack/check-egress-ranges.sh --providers  # every metadata provider is covered or explained
 #
 # 🔴 IT MAKES TWO SEPARATE COMPARISONS, AND NEITHER IS SUFFICIENT ALONE. That split is
 # the correction of a real defect, so it is worth stating plainly rather than as a design
@@ -553,10 +554,24 @@ update_golden() {
 # every arm — the path CI actually runs was exercised by nothing. Two copies of the wiring
 # is one copy too many for the same reason two copies of a deny list is.
 main() {
-  run_against "$CHART"
+  run_against "$CHART" && providers
+}
+
+# providers (also run by main, so the existing CI step covers it) fails when a provider listed in core/egress/providers.go has no stated coverage, or
+# one of its metadata addresses is admitted by the guard. The deny table is the SSRF boundary and
+# nothing else owned its completeness; the provider table is that owner.
+#
+# 🔴 NEGATIVE CONTROL FIRST: the Go test that feeds the checker a provider with no entry, one marked
+# both ways and one whose address the guard admits must pass (it passes only when each is REPORTED),
+# so a checker that reported nothing could not get this far.
+providers() {
+  ( cd "$CORE_MODULE" && go test ./egress -run 'TestProviderGapsReportsEachKindOfGap' -count=1 )     || { echo "the provider checker could not detect a planted gap; its verdict means nothing" >&2; return 1; }
+  ( cd "$CORE_MODULE" && go run ./egress/internal/rangedump -providers )     || { echo "FAIL: a metadata provider is uncovered (see above)" >&2; return 1; }
+  echo "==> every listed metadata provider is covered or explained"
 }
 
 case "${1:-}" in
+  --providers) providers ;;
   --update)    update_golden ;;
   --self-test) self_test && main ;;
   *)           main ;;
