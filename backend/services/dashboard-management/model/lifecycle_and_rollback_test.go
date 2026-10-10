@@ -5,7 +5,9 @@ package model
 
 import (
 	"context"
+	"gorm.io/gorm"
 	"testing"
+	"time"
 
 	"github.com/devicechain-io/dc-microservice/core"
 	util "github.com/devicechain-io/dc-microservice/graphql"
@@ -128,4 +130,39 @@ func TestDashboardSearchOmitsDefinitions(t *testing.T) {
 	require.Len(t, page.Results, 1)
 	assert.Empty(t, page.Results[0].Definition)
 	assert.Equal(t, "d", page.Results[0].Token)
+}
+
+// The guarded write must itself hold against a writer that lands BETWEEN the read and the
+// UPDATE: the early comparison cannot see that one. A hook injects the write at exactly
+// that point, so a rollback whose UPDATE is unconditional overwrites it and fails here.
+func TestRollbackWriteIsGuardedAgainstAWriterInTheGap(t *testing.T) {
+	api := newTestApi(t)
+	ctx := core.WithTenant(context.Background(), "acme")
+	created, err := api.CreateDashboard(ctx, &DashboardCreateRequest{Token: "d", Definition: defA})
+	require.NoError(t, err)
+	_, err = api.PublishDashboard(ctx, "d", nil, nil, "alice", nil)
+	require.NoError(t, err)
+	loaded := *util.FormatTime(created.UpdatedAt)
+
+	fired := false
+	const hook = "test:writer_in_the_gap"
+	require.NoError(t, api.RDB.Database.Callback().Update().Before("gorm:update").Register(hook, func(tx *gorm.DB) {
+		if fired || tx.Statement.Table != "dashboards" {
+			return
+		}
+		fired = true
+		if err := tx.Session(&gorm.Session{NewDB: true}).Exec(
+			"UPDATE dashboards SET definition = ?, updated_at = ? WHERE token = ?",
+			defB, created.UpdatedAt.Add(time.Hour), "d").Error; err != nil {
+			tx.AddError(err)
+		}
+	}))
+
+	_, err = api.RollbackDashboard(ctx, "d", 1, &loaded)
+	require.True(t, fired, "the hook never ran, so nothing was tested")
+	assert.ErrorIs(t, err, ErrConflict)
+
+	got, err := api.DashboardsByToken(ctx, []string{"d"})
+	require.NoError(t, err)
+	assert.JSONEq(t, defB, string(got[0].Definition), "the writer in the gap must survive")
 }

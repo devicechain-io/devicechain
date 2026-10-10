@@ -187,8 +187,8 @@ export const INVALID_DEFINITION_MARKER = 'dashboard definition is not publishabl
 // ── Versioning (ADR-039) ──────────────────────────────────────────────────
 
 const DASHBOARD_VERSIONS = graphql(`
-  query DashboardVersions($token: String!) {
-    dashboardVersions(token: $token) {
+  query DashboardVersions($token: String!, $limit: Int) {
+    dashboardVersions(token: $token, limit: $limit) {
       version
       label
       description
@@ -198,8 +198,15 @@ const DASHBOARD_VERSIONS = graphql(`
   }
 `);
 
-export async function listDashboardVersions(token: string): Promise<DashboardVersion[]> {
-  const data = await gql('dashboard-management', DASHBOARD_VERSIONS, { token });
+// Newest first; the server clamps `limit` to its maximum page size.
+export async function listDashboardVersions(
+  token: string,
+  limit?: number,
+): Promise<DashboardVersion[]> {
+  const data = await gql('dashboard-management', DASHBOARD_VERSIONS, {
+    token,
+    limit: limit ?? null,
+  });
   return data.dashboardVersions;
 }
 

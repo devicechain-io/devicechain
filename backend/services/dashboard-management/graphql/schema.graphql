@@ -18,9 +18,7 @@ type SearchResultsPagination {
 # A persisted dashboard definition. The layout, widgets, and datasource selectors
 # live inside the JSON `definition` document (owned by the @devicechain/dashboards
 # TypeScript types); the backend stores it opaquely, validated only as well-formed
-# JSON. `definition` is returned by a lookup by token and by the write mutations, but
-# NOT by the `dashboards` search, which lists metadata only: selecting it there is an
-# error, never an empty value.
+# JSON.
 type Dashboard {
     id: ID!
     createdAt: String
@@ -29,6 +27,18 @@ type Dashboard {
     name: String
     description: String
     definition: String!
+}
+
+# A dashboard as listed by the `dashboards` search: the metadata of Dashboard without the
+# definition document, which can be up to 1 MiB per row. Look a dashboard up by token to
+# read its definition.
+type DashboardSummary {
+    id: ID!
+    createdAt: String
+    updatedAt: String
+    token: String!
+    name: String
+    description: String
 }
 
 # Data required to create a dashboard.
@@ -63,7 +73,7 @@ input DashboardSearchCriteria {
 
 # Search results returned from a dashboard query.
 type DashboardSearchResults {
-    results: [Dashboard!]!
+    results: [DashboardSummary!]!
     pagination: SearchResultsPagination!
 }
 

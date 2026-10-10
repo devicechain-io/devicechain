@@ -65,6 +65,8 @@
   "versionColumnPublished": "Publicada",
   "versionColumnBy": "Por",
   "versionRollback": "Revertir",
+  "versionLoadMore": "Cargar versiones anteriores",
+  "versionOlderNotShown": "Se muestran las {{count}} versiones más recientes. Las anteriores no se listan.",
   "versionPublished": "Versión {{version}} publicada",
   "versionPublishConflict": "Este panel cambió en otro lugar. Recargue la página antes de publicar.",
   "versionRollbackConflict": "Este panel cambió en otro lugar. Recargue la página antes de revertir.",

@@ -55,6 +55,7 @@ export type UpdateDashboardMutation = { updateDashboard: { token: string, update
 
 export type DashboardVersionsQueryVariables = Exact<{
   token: string;
+  limit?: number | null | undefined;
 }>;
 
 
@@ -154,8 +155,8 @@ export const UpdateDashboardDocument = new TypedDocumentString(`
 }
     `) as unknown as TypedDocumentString<UpdateDashboardMutation, UpdateDashboardMutationVariables>;
 export const DashboardVersionsDocument = new TypedDocumentString(`
-    query DashboardVersions($token: String!) {
-  dashboardVersions(token: $token) {
+    query DashboardVersions($token: String!, $limit: Int) {
+  dashboardVersions(token: $token, limit: $limit) {
     version
     label
     description

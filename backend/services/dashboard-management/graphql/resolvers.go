@@ -5,7 +5,6 @@ package graphql
 
 import (
 	"context"
-	"errors"
 	"fmt"
 
 	"github.com/devicechain-io/dc-dashboard-management/model"
@@ -45,17 +44,30 @@ func (r *DashboardResolver) Description() *string {
 	return util.NullStr(r.M.Description)
 }
 
-// Definition resolves the definition document. A dashboard read through a LIST is loaded
-// without it (a page of up-to-1-MiB documents is not a read a table view should cost),
-// and an empty document there means "not loaded", not "empty": a stored definition is
-// never empty. So it is an error rather than "" — a plausible blank would render as a
-// dashboard with nothing on it.
-func (r *DashboardResolver) Definition() (string, error) {
-	if len(r.M.Definition) == 0 {
-		return "", errors.New("definition is not returned by a list read; fetch the dashboard by token")
-	}
-	return string(r.M.Definition), nil
+func (r *DashboardResolver) Definition() string {
+	return string(r.M.Definition)
 }
+
+// DashboardSummaryResolver resolves a dashboard as listed by a search. The list is read
+// without the definition column, and the type has no definition field to resolve, so a
+// client selecting one is refused by validation rather than served a blank.
+type DashboardSummaryResolver struct {
+	M model.Dashboard
+	S *SchemaResolver
+	C context.Context
+}
+
+func (r *DashboardSummaryResolver) Id() gql.ID { return gql.ID(fmt.Sprint(r.M.ID)) }
+
+func (r *DashboardSummaryResolver) CreatedAt() *string { return util.FormatTime(r.M.CreatedAt) }
+
+func (r *DashboardSummaryResolver) UpdatedAt() *string { return util.FormatTime(r.M.UpdatedAt) }
+
+func (r *DashboardSummaryResolver) Token() string { return r.M.Token }
+
+func (r *DashboardSummaryResolver) Name() *string { return util.NullStr(r.M.Name) }
+
+func (r *DashboardSummaryResolver) Description() *string { return util.NullStr(r.M.Description) }
 
 // DashboardVersionResolver resolves the fields of a published dashboard version.
 type DashboardVersionResolver struct {
@@ -119,10 +131,10 @@ type DashboardSearchResultsResolver struct {
 	C context.Context
 }
 
-func (r *DashboardSearchResultsResolver) Results() []*DashboardResolver {
-	resolvers := make([]*DashboardResolver, 0, len(r.M.Results))
+func (r *DashboardSearchResultsResolver) Results() []*DashboardSummaryResolver {
+	resolvers := make([]*DashboardSummaryResolver, 0, len(r.M.Results))
 	for _, current := range r.M.Results {
-		resolvers = append(resolvers, &DashboardResolver{M: current, S: r.S, C: r.C})
+		resolvers = append(resolvers, &DashboardSummaryResolver{M: current, S: r.S, C: r.C})
 	}
 	return resolvers
 }

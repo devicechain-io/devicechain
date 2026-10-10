@@ -65,6 +65,8 @@
   "versionColumnPublished": "Published",
   "versionColumnBy": "By",
   "versionRollback": "Roll back",
+  "versionLoadMore": "Load older versions",
+  "versionOlderNotShown": "Showing the newest {{count}} versions. Older versions are not listed.",
   "versionPublished": "Published version {{version}}",
   "versionPublishConflict": "This dashboard changed elsewhere. Reload the page before publishing.",
   "versionRollbackConflict": "This dashboard changed elsewhere. Reload the page before rolling back.",

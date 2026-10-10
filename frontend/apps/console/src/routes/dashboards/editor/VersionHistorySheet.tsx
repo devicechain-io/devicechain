@@ -58,6 +58,10 @@ import {
   type DashboardVersion,
 } from '@/lib/api/dashboards';
 
+const VERSION_PAGE = 100;
+// dashboard-management clamps a page to its maximum page size.
+const VERSION_PAGE_MAX = 1000;
+
 export interface VersionHistorySheetProps {
   token: string;
   open: boolean;
@@ -151,7 +155,15 @@ function VersionHistoryBody({
   const confirm = useConfirm();
 
   const [refreshKey, setRefreshKey] = useState(0);
-  const { data, loading, error } = useQuery(() => listDashboardVersions(token), [token, refreshKey]);
+  // The server pages the history (newest first, at most VERSION_PAGE_MAX per request), so
+  // the list asks for a growing prefix and offers "load more" while the last page came back
+  // full. At the server's maximum it says so rather than implying that is everything.
+  const [limit, setLimit] = useState(VERSION_PAGE);
+  const { data, loading, error } = useQuery(
+    () => listDashboardVersions(token, limit),
+    [token, refreshKey, limit],
+  );
+  const maybeMore = !!data && data.length >= limit;
 
   const [label, setLabel] = useState('');
   const [description, setDescription] = useState('');
@@ -323,6 +335,20 @@ function VersionHistoryBody({
             </DataTableBody>
           </DataTable>
         )}
+        {maybeMore &&
+          (limit < VERSION_PAGE_MAX ? (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setLimit((l) => Math.min(l + VERSION_PAGE, VERSION_PAGE_MAX))}
+            >
+              {t('versionLoadMore')}
+            </Button>
+          ) : (
+            <p className="text-xs text-muted-foreground">
+              {t('versionOlderNotShown', { count: VERSION_PAGE_MAX })}
+            </p>
+          ))}
       </div>
     </div>
   );
