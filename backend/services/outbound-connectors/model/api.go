@@ -564,9 +564,8 @@ func (api *Api) ConnectorVersions(ctx context.Context, token string) ([]*Connect
 // ConnectorsByToken looks up connectors by their current tokens.
 func (api *Api) ConnectorsByToken(ctx context.Context, tokens []string) ([]*Connector, error) {
 	found := make([]*Connector, 0)
-	result := api.RDB.DB(ctx).Find(&found, "token in ?", tokens)
-	if result.Error != nil {
-		return nil, result.Error
+	if err := rdb.FindByKeys(api.RDB.DB(ctx), &found, "token", tokens); err != nil {
+		return nil, err
 	}
 	return found, nil
 }
