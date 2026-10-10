@@ -10,48 +10,132 @@
 # write-only credential} targets a `publish` action delivers through. Credentials are
 # write-only — a `secret` goes IN on create/update and is sealed in the ADR-059 secret
 # store; it never comes back out (the read side exposes only `hasSecret`).
+#
+# Descriptions: a """string""" above an element is its PUBLIC description — served by
+# introspection, read by every GraphQL tool, published on the docs site — and may not
+# cite a decision record. A # comment is a maintainer note.
 
-# Pagination info for search results.
+"""
+Where a page of search results sits in the full result set. Positions are 1-based and
+inclusive.
+"""
 type SearchResultsPagination {
+    """Position of the first result on this page within the full result set (1-based)."""
     pageStart: Int
+    """Position of the last result on this page within the full result set (1-based, inclusive)."""
     pageEnd: Int
+    """Number of records matching the criteria across all pages."""
     totalRecords: Int
 }
 
+"""Identity of the service answering the request."""
 # Static service identity — the deployed functional area (non-sensitive).
 type ServiceInfo {
+    """The functional area this service serves; for this service, the outbound connectors area."""
     area: String!
 }
 
+"""
+An outbound connector: a named, tenant-owned destination (an MQTT broker topic, a Kafka
+topic, an AWS SNS topic or an AWS SQS queue) that a rule's publish action delivers to.
+What you edit is the draft; publishConnector freezes it into an immutable
+ConnectorVersion, and delivery uses the latest published version. The credential is
+write-only: it is never returned, only whether one is set.
+"""
 # A tenant-scoped, versioned outbound-connector definition (ADR-060 Tier 2). The
 # `config` is the per-type connection document (stored opaquely as JSON); the
 # credential is never returned — `hasSecret` reports only whether one is configured.
 type Connector {
+    """Server-assigned identifier. Address a connector by its token, not by this."""
     id: ID!
+    """When the connector was created, as an RFC 3339 timestamp."""
     createdAt: String
+    """
+    When the connector draft was last written, as an RFC 3339 timestamp. Pass it back as
+    expectedUpdatedAt to make an update or publish conditional on nobody else having
+    changed the draft since you read it.
+    """
     updatedAt: String
+    """
+    Unique, caller-chosen identifier of the connector within the tenant. A rule's publish
+    action refers to the connector by this value. Letters, digits, hyphens and
+    underscores, starting with a letter or digit, at most 128 characters.
+    """
     token: String!
+    """Human-readable name shown in connector lists."""
     name: String
+    """Free-text description of what the connector delivers to."""
     description: String
+    """
+    The connector type: one of the values returned by connectorTypes. It selects which
+    transport delivers the message and which keys config takes.
+    """
     # One of the registered connector types (see the connectorTypes query).
     type: String!
+    """
+    The connection settings for the connector type, as a JSON object serialized to a
+    string. It never contains the credential; that is the separate write-only secret.
+    """
     # The opaque per-type connection config (a JSON object).
     config: String!
+    """
+    True when a credential is stored for this connector. The credential itself is never
+    returned.
+    """
     # Whether an outbound credential is configured, without exposing it.
     hasSecret: Boolean!
 }
 
+"""
+Fields for a new connector. The type must be one this deployment can deliver to, and
+the config must be valid for that type; either failing rejects the create.
+"""
 # Data required to create a connector. `secret` is write-only; omitting it (or sending
 # an empty string) means no credential.
 input ConnectorCreateRequest {
+    """
+    Unique identifier for the new connector within the tenant. Letters, digits, hyphens
+    and underscores, starting with a letter or digit, at most 128 characters.
+    """
     token: String!
+    """Human-readable name shown in connector lists."""
     name: String
+    """Free-text description of what the connector delivers to."""
     description: String
+    """
+    The connector type; must be one of the values returned by connectorTypes that this
+    deployment can deliver to. A recognized type with no delivery client in this build is
+    refused with extensions.code UNSUPPORTED.
+    """
     type: String!
+    """
+    The connection settings for the type, as a JSON object serialized to a string of at
+    most 64 KiB. Unknown keys are rejected. Keys by type: mqtt takes urls (required, one
+    broker per entry), topic (required), qos (0, 1 or 2; default 1), clientId and
+    username; kafka takes addresses (required, host:port each), topic (required),
+    clientId, tls and sasl ({mechanism: PLAIN, SCRAM-SHA-256 or SCRAM-SHA-512, username});
+    aws_sns takes region, accessKeyId and topicArn (all required) and endpoint; aws_sqs
+    takes region, accessKeyId and url (all required) and endpoint. mqtt urls
+    (scheme://host:port) and kafka addresses must give an explicit port; the AWS endpoint
+    and the SQS url are http or https URLs. The platform restricts which addresses a
+    connector may reach.
+    """
     config: String!
+    """
+    The credential: the broker password for mqtt, the SASL password for kafka, the secret
+    access key for aws_sns and aws_sqs. Write-only; stored encrypted and never returned.
+    Omit it, or send an empty string, for no credential. aws_sns and aws_sqs require one
+    at delivery time, as does kafka when sasl is set.
+    """
     secret: String
 }
 
+"""
+A partial update to a connector's draft. Omit a field to leave the stored value alone,
+send a value to set it, or send an explicit null to clear it (except where noted). The
+connector is named by the mutation's token argument, so there is no token here; use
+renameConnector to change the token.
+"""
 # Fields to change on an existing connector's draft. Every field is three-state: OMIT
 # it to leave the stored value alone, send NULL to clear it, or send a value to set it.
 #
@@ -59,93 +143,227 @@ input ConnectorCreateRequest {
 # connector is renamed through renameConnector — where the new token can mean only one
 # thing.
 input ConnectorUpdateRequest {
+    """New name, or null to clear it."""
     name: String
+    """New description, or null to clear it."""
     description: String
+    """
+    New connector type. Omit it to keep the stored type; an explicit null is refused. The
+    stored config is checked against the new type, so a change that leaves the config
+    invalid for it is rejected.
+    """
     # The connector kind. It cannot be cleared: a null is refused rather than stored as
     # a kind nothing can dispatch. Changing it re-validates the STORED config against
     # the new kind, so a re-point that leaves the config unusable is refused at the
     # write instead of at send time.
     type: String
+    """
+    New connection settings, as a JSON object serialized to a string of at most 64 KiB.
+    Omit it to keep the stored config; an explicit null is refused. It is validated
+    against the connector's type after this update is applied.
+    """
     # The opaque per-type connection config (a JSON object). It cannot be cleared
     # either — there is no configuration-less connector to fall back to.
     config: String
+    """
+    The write-only credential. Omit it to keep the stored credential, send a value to
+    replace it, or send null or an empty string to delete it.
+    """
     # The write-only outbound credential. Omit it to PRESERVE the stored one (it can
     # never be read back to resend), send a value to ROTATE it, or send null — or an
     # empty string — to DELETE it.
     secret: String
 }
 
+"""Filter and paging for the connectors query."""
 # Criteria used when searching for connectors.
 input ConnectorSearchCriteria {
+    """Page to return, starting at 1. A value below 1 is treated as 1."""
     pageNumber: Int!
+    """Connectors per page. A value below 1 is treated as 100; a value above 1000 is capped at 1000."""
     pageSize: Int!
+    """Return only connectors of this type. Omit it to return every type."""
     type: String
 }
 
+"""One page of connectors and where it sits in the full result set."""
 # Search results returned from a connector query.
 type ConnectorSearchResults {
+    """The connectors on this page, newest created first (ties broken by token)."""
     results: [Connector!]!
+    """Position of this page within the full result set."""
     pagination: SearchResultsPagination!
 }
 
+"""
+An immutable snapshot of a connector's type and config, taken when it was published.
+Versions are numbered from 1 per connector and are kept until the connector is deleted. The credential is not
+part of a version: it belongs to the connector, so a rotated credential applies to every
+version.
+"""
 # An immutable published snapshot of a connector's {type, config} (ADR-039 versioning).
 # The config blob is deliberately omitted here — the list stays light; rollback resolves
 # a snapshot server-side by its integer version. The credential is NOT versioned (it is
 # keyed by the connector, resolved live), so it does not appear on a version.
 type ConnectorVersion {
+    """The version number: 1 for the first publish, then increasing by 1 for each publish."""
     # Monotonic per-connector version number.
     version: Int!
+    """The connector type at the time of publishing."""
     # The connector type at publish time.
     type: String!
+    """Optional caller-supplied label for the version, such as a release name; not interpreted."""
     # Optional user-supplied label (may embed a semver string; not parsed).
     label: String
+    """Optional free-text note supplied when the version was published."""
     description: String
+    """When the version was published, as an RFC 3339 timestamp."""
     # When the version was published (the row's creation time).
     publishedAt: String!
+    """Username of the identity that published the version, or its email when it has no username; null when neither is known."""
     # The identity that published it (username, falling back to email).
     publishedBy: String
 }
 
 type Query {
+    """Identifies the service answering. Requires no specific authority."""
     # Non-sensitive service identity (the deployed functional area).
     outboundConnectorsInfo: ServiceInfo!
+    """Returns the connector with the given token, or null if there is none. Requires connector:read."""
     # Look up a single connector by its token.
-    connector(token: String!): Connector
+    connector(
+        """Token of the connector to look up."""
+        token: String!
+    ): Connector
+    """
+    Searches the tenant's connectors, newest created first, optionally filtered by type.
+    Returns an empty page when nothing matches. Requires connector:read.
+    """
     # Search connectors by criteria.
-    connectors(criteria: ConnectorSearchCriteria!): ConnectorSearchResults!
+    connectors(
+        """Filter and paging."""
+        criteria: ConnectorSearchCriteria!
+    ): ConnectorSearchResults!
+    """
+    Lists the published versions of a connector, newest first. Returns an empty list if
+    it has never been published; fails if no connector has the given token. Requires
+    connector:read.
+    """
     # List a connector's published versions, newest first.
-    connectorVersions(token: String!): [ConnectorVersion!]!
+    connectorVersions(
+        """Token of the connector."""
+        token: String!
+    ): [ConnectorVersion!]!
+    """
+    Lists the connector types this deployment recognizes, sorted alphabetically. A listed
+    type is not necessarily deliverable: gcp_pubsub is recognized but has no delivery
+    client in this build, so creating, updating to or publishing it is refused with
+    extensions.code UNSUPPORTED, and a delivery attempt for one stored earlier is
+    dead-lettered rather than dropped. Requires connector:read.
+    """
     # The registered connector-type vocabulary (for a console picker).
     connectorTypes: [String!]!
 }
 
 type Mutation {
+    """
+    Creates a connector as an unpublished draft; it is not used for delivery until
+    published. Rejects an unknown or undeliverable type, an invalid config, or a token
+    already in use. Requires connector:write.
+    """
     # Create a new connector (draft).
-    createConnector(request: ConnectorCreateRequest!): Connector!
+    createConnector(
+        """The new connector's fields."""
+        request: ConnectorCreateRequest!
+    ): Connector!
+    """
+    Partially updates a connector's draft; delivery keeps using the latest published
+    version until you publish again. Fails if no connector has the token. If
+    expectedUpdatedAt is given and the connector has changed since, nothing is written and
+    the call fails with the message "connector was modified by another writer; reload and
+    try again" (this error carries no code). Requires connector:write.
+    """
     # Partially update the connector (draft) with the given (current) token: an omitted
     # field is left alone, an explicit null clears it. When expectedUpdatedAt is
     # supplied it is an optimistic-concurrency precondition: the update is refused if the
     # connector's updatedAt has changed since, a concurrent edit ("connector was modified
     # by another writer; reload and try again"; this is not the CONFLICT code). Pass the
     # updatedAt the caller last read.
-    updateConnector(token: String!, request: ConnectorUpdateRequest!, expectedUpdatedAt: String): Connector!
+    updateConnector(
+        """Current token of the connector to update."""
+        token: String!
+        """The fields to change."""
+        request: ConnectorUpdateRequest!
+        """The updatedAt value you last read, as an RFC 3339 timestamp. Omit it to overwrite unconditionally."""
+        expectedUpdatedAt: String
+    ): Connector!
+    """
+    Changes a connector's token and nothing else. The stored credential stays attached,
+    but a rule that refers to the connector by its old token must be updated to the new
+    one. Renaming to the token it already has succeeds without change. Fails if the new
+    token is blank or is already used by another connector (extensions.code CONFLICT), or
+    if no connector has the old token. Requires connector:write.
+    """
     # Rename a connector. A blank newToken is refused; renaming to the token the
     # connector already has is an idempotent success; a token another connector holds is
     # refused by name. The credential is keyed by the connector's immutable id, so a
     # rename keeps it bound — but a rule's connector reference names the TOKEN, so a
     # rename means the rules pointing at it must be re-pointed too.
-    renameConnector(token: String!, newToken: String!): Connector!
+    renameConnector(
+        """Current token of the connector."""
+        token: String!
+        """The new token, which must be unused in the tenant."""
+        newToken: String!
+    ): Connector!
+    """
+    Publishes the connector's current draft as the next version and returns it; delivery
+    uses the latest published version. Fails if no connector has the token, or if the
+    connector's type cannot be delivered to in this build (extensions.code UNSUPPORTED).
+    If expectedUpdatedAt is given and the draft has changed since, nothing is published
+    and the call fails with the same "modified by another writer" message as
+    updateConnector. Requires connector:write.
+    """
     # Freeze the current draft {type, config} into a new immutable version (N+1).
     # expectedUpdatedAt is the same optimistic-concurrency precondition as
     # updateConnector: publish is refused, with the same message, if the draft changed
     # since.
-    publishConnector(token: String!, label: String, description: String, expectedUpdatedAt: String): ConnectorVersion!
+    publishConnector(
+        """Token of the connector to publish."""
+        token: String!
+        """Optional label for the version, such as a release name."""
+        label: String
+        """Optional free-text note for the version."""
+        description: String
+        """The updatedAt value you last read, as an RFC 3339 timestamp. Omit it to publish whatever the draft currently holds."""
+        expectedUpdatedAt: String
+    ): ConnectorVersion!
+    """
+    Copies a published version's type and config back into the connector's draft and
+    returns the connector. The credential is unchanged, no version is created or
+    removed, and delivery keeps using the latest published version until you publish
+    again. Fails if the connector or the version does not exist. Requires
+    connector:write.
+    """
     # Re-draft: copy a published version's {type, config} back into the draft. Returns
     # the updated connector. History is append-only; nothing is deleted.
-    rollbackConnector(token: String!, version: Int!): Connector!
+    rollbackConnector(
+        """Token of the connector."""
+        token: String!
+        """The version number to restore, as listed by connectorVersions."""
+        version: Int!
+    ): Connector!
+    """
+    Permanently deletes the connector, all its published versions and its stored
+    credential. Returns true if a connector was deleted and false if none has the token.
+    A rule that still refers to the deleted connector can no longer deliver. Requires
+    connector:write.
+    """
     # Delete the connector with the given token (and its versions + credential).
     # Returns whether a row was deleted.
-    deleteConnector(token: String!): Boolean!
+    deleteConnector(
+        """Token of the connector to delete."""
+        token: String!
+    ): Boolean!
 }
 
 schema {

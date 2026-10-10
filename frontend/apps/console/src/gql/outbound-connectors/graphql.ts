@@ -4,26 +4,85 @@ type Exact<T extends { [key: string]: unknown }> = { [K in keyof T]: T[K] };
 /** Internal type. DO NOT USE DIRECTLY. */
 export type Incremental<T> = T | { [P in keyof T]?: P extends ' $fragmentName' | '__typename' ? T[P] : never };
 import { DocumentTypeDecoration } from '@graphql-typed-document-node/core';
+/**
+ * Fields for a new connector. The type must be one this deployment can deliver to, and
+ * the config must be valid for that type; either failing rejects the create.
+ */
 export type ConnectorCreateRequest = {
+  /**
+   * The connection settings for the type, as a JSON object serialized to a string of at
+   * most 64 KiB. Unknown keys are rejected. Keys by type: mqtt takes urls (required, one
+   * broker per entry), topic (required), qos (0, 1 or 2; default 1), clientId and
+   * username; kafka takes addresses (required, host:port each), topic (required),
+   * clientId, tls and sasl ({mechanism: PLAIN, SCRAM-SHA-256 or SCRAM-SHA-512, username});
+   * aws_sns takes region, accessKeyId and topicArn (all required) and endpoint; aws_sqs
+   * takes region, accessKeyId and url (all required) and endpoint. mqtt urls
+   * (scheme://host:port) and kafka addresses must give an explicit port; the AWS endpoint
+   * and the SQS url are http or https URLs. The platform restricts which addresses a
+   * connector may reach.
+   */
   config: string;
+  /** Free-text description of what the connector delivers to. */
   description?: string | null | undefined;
+  /** Human-readable name shown in connector lists. */
   name?: string | null | undefined;
+  /**
+   * The credential: the broker password for mqtt, the SASL password for kafka, the secret
+   * access key for aws_sns and aws_sqs. Write-only; stored encrypted and never returned.
+   * Omit it, or send an empty string, for no credential. aws_sns and aws_sqs require one
+   * at delivery time, as does kafka when sasl is set.
+   */
   secret?: string | null | undefined;
+  /**
+   * Unique identifier for the new connector within the tenant. Letters, digits, hyphens
+   * and underscores, starting with a letter or digit, at most 128 characters.
+   */
   token: string;
+  /**
+   * The connector type; must be one of the values returned by connectorTypes that this
+   * deployment can deliver to. A recognized type with no delivery client in this build is
+   * refused with extensions.code UNSUPPORTED.
+   */
   type: string;
 };
 
+/** Filter and paging for the connectors query. */
 export type ConnectorSearchCriteria = {
+  /** Page to return, starting at 1. A value below 1 is treated as 1. */
   pageNumber: number;
+  /** Connectors per page. A value below 1 is treated as 100; a value above 1000 is capped at 1000. */
   pageSize: number;
+  /** Return only connectors of this type. Omit it to return every type. */
   type?: string | null | undefined;
 };
 
+/**
+ * A partial update to a connector's draft. Omit a field to leave the stored value alone,
+ * send a value to set it, or send an explicit null to clear it (except where noted). The
+ * connector is named by the mutation's token argument, so there is no token here; use
+ * renameConnector to change the token.
+ */
 export type ConnectorUpdateRequest = {
+  /**
+   * New connection settings, as a JSON object serialized to a string of at most 64 KiB.
+   * Omit it to keep the stored config; an explicit null is refused. It is validated
+   * against the connector's type after this update is applied.
+   */
   config?: string | null | undefined;
+  /** New description, or null to clear it. */
   description?: string | null | undefined;
+  /** New name, or null to clear it. */
   name?: string | null | undefined;
+  /**
+   * The write-only credential. Omit it to keep the stored credential, send a value to
+   * replace it, or send null or an empty string to delete it.
+   */
   secret?: string | null | undefined;
+  /**
+   * New connector type. Omit it to keep the stored type; an explicit null is refused. The
+   * stored config is checked against the new type, so a change that leaves the config
+   * invalid for it is rejected.
+   */
   type?: string | null | undefined;
 };
 
