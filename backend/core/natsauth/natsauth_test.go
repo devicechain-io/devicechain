@@ -78,6 +78,7 @@ func TestDevicePermissions(t *testing.T) {
 	for _, want := range []string{
 		"inst-1.acme-corp.devices.sensor-001.events",
 		"inst-1.acme-corp.command-responses.sensor-001",
+		"inst-1.acme-corp.device-reports.sensor-001",
 	} {
 		if !pub[want] {
 			t.Errorf("pub allow %v missing %q", []string(p.Pub.Allow), want)
@@ -85,6 +86,7 @@ func TestDevicePermissions(t *testing.T) {
 	}
 	for _, want := range []string{
 		"inst-1.acme-corp.device-commands.sensor-001",
+		"inst-1.acme-corp.device-desired.sensor-001",
 		MqttDeliverySubject,
 	} {
 		if !sub[want] {
@@ -195,8 +197,12 @@ func TestSignDeviceUserJWT(t *testing.T) {
 	// The signed claim must carry the SAME per-device grant DevicePermissions builds,
 	// so a device's JWT cannot be broader than the policy. Checked by reachability:
 	// nothing in the signed grant may reach another device's command subject.
-	if got := []string(uc.Permissions.Pub.Allow); len(got) != 2 {
-		t.Errorf("pub allow = %v, want the device's events topic and its own command-responses", got)
+	if got := []string(uc.Permissions.Pub.Allow); len(got) != 3 {
+		t.Errorf("pub allow = %v, want the device's events topic, its own command-responses and its own device-reports", got)
+	}
+	if !slices.Contains(uc.Permissions.Sub.Allow, "inst-1.plant_07.device-desired.sensor-001") {
+		t.Errorf("sub allow = %v, missing this device's own desired subject",
+			[]string(uc.Permissions.Sub.Allow))
 	}
 	for _, granted := range uc.Permissions.Sub.Allow {
 		if natsSubjectMatches(granted, "inst-1.plant_07.device-commands.other-device") {
@@ -387,6 +393,80 @@ func TestCredentialsFromDeployedFailsClosed(t *testing.T) {
 			}
 			if got != (Credentials{}) {
 				t.Errorf("credentials were returned alongside the error: %+v", got)
+			}
+		})
+	}
+}
+
+// deviceChannelViolations lists every way a grant reaches beyond device `own`'s two
+// OTA/configuration channels: another device's, another tenant's or instance's, the
+// tenant-wide prefix, or the wrong direction (publishing to the downlink, subscribing
+// to the uplink). Empty means confined.
+func deviceChannelViolations(p jwt.Permissions, own, other string) []string {
+	var out []string
+	check := func(dir string, allow []string, subject string) {
+		for _, g := range allow {
+			if natsSubjectMatches(g, subject) {
+				out = append(out, dir+" "+g+" reaches "+subject)
+			}
+		}
+	}
+	for _, sfx := range []string{"device-desired", "device-reports"} {
+		for _, subj := range []string{
+			"inst-1.acme-corp." + sfx + "." + other,
+			"inst-1.other-tenant." + sfx + "." + own,
+			"inst-2.acme-corp." + sfx + "." + own,
+			"inst-1.acme-corp." + sfx,
+		} {
+			check("pub", p.Pub.Allow, subj)
+			check("sub", p.Sub.Allow, subj)
+		}
+	}
+	// Direction: the own downlink is subscribe-only, the own uplink publish-only.
+	check("pub", p.Pub.Allow, "inst-1.acme-corp.device-desired."+own)
+	check("sub", p.Sub.Allow, "inst-1.acme-corp.device-reports."+own)
+	return out
+}
+
+// A device may publish ONLY to its own reports subject and subscribe ONLY to its own
+// desired subject. The second half runs the same check against deliberately wrong grants
+// and requires it to name them, so the check is shown to fail by value rather than
+// assumed to.
+func TestDeviceChannelGrantIsConfinedToTheDevice(t *testing.T) {
+	p, err := DevicePermissions("inst-1", "acme-corp", "sensor-001")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v := deviceChannelViolations(p, "sensor-001", "sensor-002"); len(v) != 0 {
+		t.Fatalf("the real grant escapes its device's channels: %v", v)
+	}
+
+	wrong := map[string]func(*jwt.Permissions){
+		"wildcard device segment on reports": func(p *jwt.Permissions) {
+			p.Pub.Allow.Add("inst-1.acme-corp.device-reports.*")
+		},
+		"another device's desired subject": func(p *jwt.Permissions) {
+			p.Sub.Allow.Add("inst-1.acme-corp.device-desired.sensor-002")
+		},
+		"publish to own downlink": func(p *jwt.Permissions) {
+			p.Pub.Allow.Add("inst-1.acme-corp.device-desired.sensor-001")
+		},
+		"subscribe to own uplink": func(p *jwt.Permissions) {
+			p.Sub.Allow.Add("inst-1.acme-corp.device-reports.sensor-001")
+		},
+		"another tenant's reports": func(p *jwt.Permissions) {
+			p.Pub.Allow.Add("inst-1.other-tenant.device-reports.sensor-001")
+		},
+	}
+	for name, mutate := range wrong {
+		t.Run(name, func(t *testing.T) {
+			bad, err := DevicePermissions("inst-1", "acme-corp", "sensor-001")
+			if err != nil {
+				t.Fatal(err)
+			}
+			mutate(&bad)
+			if v := deviceChannelViolations(bad, "sensor-001", "sensor-002"); len(v) == 0 {
+				t.Errorf("the confinement check accepted a deliberately wrong grant (%s)", name)
 			}
 		})
 	}

@@ -330,6 +330,19 @@ Este topic era antes de alcance de inquilino (`{instanceId}/{tenant}/command-res
 Un comando que nunca se responde permanece en `SENT` hasta que su TTL lo convierte en `TIMEOUT`. Sin una respuesta, la plataforma solo sabe que el comando se despachó, no que el dispositivo actuó sobre él. Si tus dispositivos no responden, configura un `expiresAt` al emitir comandos para que alcancen un estado terminal en tu propio plazo y no en el predeterminado de siete días de la plataforma.
 :::
 
+### Temas reservados para la entrega de configuración {#reserved-device-topics}
+
+:::note Reservado, aún no activo
+Se reservan dos temas adicionales por dispositivo como base para la entrega de configuración a los dispositivos. Todavía nada publica en ellos ni lee de ellos, así que no construyas sobre ellos. Se listan para que tus dispositivos no usen esos nombres para otra cosa.
+
+```
+{instanceId}/{tenant}/device-desired/{deviceToken}    (de la plataforma al dispositivo; un dispositivo puede suscribirse al suyo)
+{instanceId}/{tenant}/device-reports/{deviceToken}    (del dispositivo a la plataforma; un dispositivo puede publicar en el suyo)
+```
+
+Igual que con los comandos, un dispositivo solo está autorizado para su propio tema de cada par.
+:::
+
 ### Por qué el nonce es obligatorio {#why-the-nonce-is-required}
 
 Devolver `dispatchNonce` le indica a la plataforma que tu respuesta corresponde a **esta** entrega del comando. Importa porque un comando puede publicarse legítimamente más de una vez. Si una publicación informa de un error, la plataforma no puede distinguir un mensaje que se perdió de uno cuyo acuse de recibo se perdió, así que vuelve a encolar el comando para enviarlo de nuevo. Sin el nonce, una respuesta a la primera entrega que llegue después de enviarse la segunda cerraría el comando antes de que el dispositivo hubiera ejecutado esa segunda entrega.

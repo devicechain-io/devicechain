@@ -329,6 +329,19 @@ This topic used to be tenant-wide (`{instanceId}/{tenant}/command-responses`, wi
 A command that is never answered stays `SENT` until its TTL turns it into `TIMEOUT`. Without a response, the platform knows only that the command was dispatched, not that the device acted on it. If your devices do not respond, set an `expiresAt` when issuing commands so they reach a terminal state on your schedule rather than on the platform's seven-day default.
 :::
 
+### Reserved topics for configuration delivery {#reserved-device-topics}
+
+:::note Reserved, not yet active
+Two further per-device topics are reserved as groundwork for device configuration delivery. Nothing publishes to them or reads from them yet, so do not build on them. They are listed so your devices do not claim the names for something else.
+
+```
+{instanceId}/{tenant}/device-desired/{deviceToken}    (platform to device; a device may subscribe to its own)
+{instanceId}/{tenant}/device-reports/{deviceToken}    (device to platform; a device may publish to its own)
+```
+
+As with commands, a device is authorized only for its own topic of each pair.
+:::
+
 ### Why the nonce is required {#why-the-nonce-is-required}
 
 Echoing `dispatchNonce` tells the platform your answer belongs to **this** delivery of the command. That matters because a command can legitimately be published more than once. If a publish reports an error, the platform cannot tell a message that was lost from one whose acknowledgement was lost, so it queues the command to be sent again. Without the nonce, an answer to the first delivery arriving after the second went out would close the command before the device had carried out the second one.
