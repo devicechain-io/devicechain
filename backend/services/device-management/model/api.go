@@ -8,9 +8,11 @@ import (
 	"slices"
 	"time"
 
+	"github.com/devicechain-io/dc-microservice/credential"
 	"github.com/devicechain-io/dc-microservice/entity"
 	"github.com/devicechain-io/dc-microservice/governance"
 	"github.com/devicechain-io/dc-microservice/rdb"
+	"github.com/prometheus/client_golang/prometheus"
 )
 
 // GeoFenceCapsResolver reads a tenant's three RESOLVED geofence caps — the per-tenant
@@ -92,6 +94,17 @@ type Api struct {
 	// changed credential keeps authenticating events from memory until it expires.
 	// Injected at wiring time (it holds the cache layer); nil in tests disables eviction.
 	CacheEvictor CacheEvictor
+
+	// DeviceSecretKey digests every device credential secret a create or update carries,
+	// and verifies a presented one against its stored digest on the per-event path. It is
+	// derived from the instance root key at wiring time. NIL FAILS CLOSED: a secret
+	// cannot be stored (the write is refused) and no stored digest can be checked
+	// (ErrCredentialMisconfigured); nothing falls back to storing or comparing plaintext.
+	DeviceSecretKey *credential.DeviceSecretKey
+
+	// MisconfiguredSecrets counts checks refused with ErrCredentialMisconfigured, by path
+	// (CredentialPathConnect, CredentialPathEvent). Nil counts nothing (tests).
+	MisconfiguredSecrets *prometheus.CounterVec
 
 	// DetectionRuleValidator compiles a profile's draft detection rules against
 	// event-processing at publish (ADR-044 sync gate / ADR-051 slice 4b); a rule that

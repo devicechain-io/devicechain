@@ -52,7 +52,7 @@ func TestTheEventCredentialLookupReadsOnlyWhatResolutionUses(t *testing.T) {
 			t.Errorf("the event lookup reads %s: %s", banned, stmt)
 		}
 	}
-	for _, needed := range []string{"external_id", "device_type_id", "credential_type", "credential_value", "expires_at", "enabled"} {
+	for _, needed := range []string{"external_id", "device_type_id", "credential_type", "secret_digest", "expires_at", "enabled"} {
 		if !strings.Contains(stmt, needed) {
 			t.Errorf("the event lookup does not read %s: %s", needed, stmt)
 		}
@@ -80,7 +80,7 @@ type deviceProjection struct {
 func projectCredential(c *DeviceCredential) credProjection {
 	return credProjection{
 		ID: c.ID, DeviceId: c.DeviceId, Tenant: c.TenantId, Type: c.CredentialType,
-		Value: c.CredentialValue.String, ValueValid: c.CredentialValue.Valid, Enabled: c.Enabled,
+		Value: c.SecretDigest.String, ValueValid: c.SecretDigest.Valid, Enabled: c.Enabled,
 		ExpiresValid: c.ExpiresAt.Valid, Expires: c.ExpiresAt.Time.UTC(),
 	}
 }
@@ -205,7 +205,7 @@ func TestTheEventLookupResolvesWhatTheFullReadResolves(t *testing.T) {
 			case fullErr != nil:
 				wantErr = fullErr
 			default:
-				if wantErr = evaluateCredential(full, presented, now); wantErr == nil {
+				if wantErr = evaluateCredential(testSecretKey, full, presented, now); wantErr == nil {
 					wantDev, wantErr = credentialDevice(full)
 				}
 			}

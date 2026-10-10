@@ -9,10 +9,12 @@ func ObserveCompares(c *Checker, seen func(hash []byte)) { c.observeCompares(see
 // Dummy is what c compares an unknown principal of kind k against.
 func Dummy(c *Checker, k Kind) []byte { return c.dummies[k] }
 
-// DigestCompare is the digest kind's comparator.
-var DigestCompare = digestCompare
+// DigestWithSalt is Digest under a chosen salt, for a known-answer vector.
+func DigestWithSalt(k *DeviceSecretKey, tenant string, salt []byte, secret string) string {
+	return k.digestWithSalt(tenant, salt, secret)
+}
 
-// RecordConstantTimeCompareLengths replaces the constant-time compare digestCompare
+// RecordConstantTimeCompareLengths replaces the constant-time compare DeviceSecretKey.Verify
 // calls with one that records its two inputs' lengths, until the returned restore runs.
 func RecordConstantTimeCompareLengths(record func(a, b int)) (restore func()) {
 	inner := constantTimeCompare

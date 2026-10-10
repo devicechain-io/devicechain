@@ -37,6 +37,7 @@ func BenchmarkAuthenticateDeviceConcurrency(b *testing.B) {
 	const devices, calls = 200, 20000
 	mgr := newPostgresRdbManager(b)
 	api := NewApi(mgr)
+	api.DeviceSecretKey = testSecretKey // credential secrets are stored as keyed digests
 	sys := mgr.Database.WithContext(core.WithSystemContext(context.Background()))
 	for _, table := range []string{"device_credentials", "devices", "device_types"} {
 		if err := sys.Exec(fmt.Sprintf(`TRUNCATE TABLE "device-management".%q CASCADE`, table)).Error; err != nil {

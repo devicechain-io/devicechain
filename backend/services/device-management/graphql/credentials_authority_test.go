@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/devicechain-io/dc-device-management/model"
+	dmtest "github.com/devicechain-io/dc-device-management/test"
 	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-microservice/core"
 	gqlcore "github.com/devicechain-io/dc-microservice/graphql"
@@ -50,7 +51,14 @@ func credentialTestCtx(t *testing.T) context.Context {
 	}
 
 	ctx := core.WithTenant(context.Background(), "acme")
-	return context.WithValue(ctx, gqlcore.ContextApiKey, model.NewApi(&rdb.RdbManager{Database: db}))
+	return context.WithValue(ctx, gqlcore.ContextApiKey, keyedApi(db))
+}
+
+// keyedApi is an Api over db with the test device secret key, as main wires it.
+func keyedApi(db *gorm.DB) *model.Api {
+	api := model.NewApi(&rdb.RdbManager{Database: db})
+	api.DeviceSecretKey = dmtest.DeviceSecretKey()
+	return api
 }
 
 // withAuthorities layers a claims set onto ctx, as the GraphQL auth middleware
@@ -78,11 +86,11 @@ func seedAccessTokenCredential(t *testing.T, ctx context.Context) *model.DeviceC
 	}
 
 	cred := &model.DeviceCredential{
-		DeviceId:        device.ID,
-		CredentialType:  string(model.CredentialAccessToken),
-		CredentialId:    "the-bearer-5f989616",
-		CredentialValue: sql.NullString{String: "stored-secret", Valid: true},
-		Enabled:         true,
+		DeviceId:       device.ID,
+		CredentialType: string(model.CredentialAccessToken),
+		CredentialId:   "the-bearer-5f989616",
+		SecretDigest:   sql.NullString{String: dmtest.SecretDigest("acme", "stored-secret"), Valid: true},
+		Enabled:        true,
 	}
 	cred.Token = "dozer-01-cred"
 	if err := api.RDB.DB(ctx).Create(cred).Error; err != nil {

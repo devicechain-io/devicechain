@@ -654,7 +654,8 @@ CREATE TABLE "device-management".device_credentials (
  credential_id character varying(256) NOT NULL,
  credential_value character varying(4096),
  enabled boolean DEFAULT true NOT NULL,
- expires_at timestamp with time zone
+ expires_at timestamp with time zone,
+ secret_digest character varying(128)
 );
 CREATE TABLE "device-management".device_management_migrations (
  id character varying(255) NOT NULL

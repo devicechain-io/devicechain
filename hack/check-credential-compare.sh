@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # Refuses any watched secret compare — bcrypt.CompareHashAndPassword,
-# subtle.ConstantTimeCompare, hmac.Equal — in production Go code outside
+# subtle.ConstantTimeCompare, hmac.Equal, credential.VerifyDeviceSecret — in production Go code outside
 # backend/core/credential, unless an exemption below names the directory, the function
 # AND the member, with the reason that compare is not a guessable credential check. A
 # method is named Recv.Method, so an exemption for a function does not admit a method of
@@ -58,7 +58,7 @@ EXEMPTIONS=(
   # auth callout, which does answer, no longer reaches this function: it resolves with
   # model.ResolveDeviceCredential and compares through credential.Checker
   # (KindDeviceCredential), under a per-username backoff.
-  "backend/services/device-management/model.evaluateCredential@subtle.ConstantTimeCompare=device MQTT_BASIC secret compare for per-event re-authentication only (AuthenticateDevice, from the event resolver), which gives the sender no verdict: HTTP answers 202 before resolution and an MQTT publish has no reply. The MQTT auth callout compares through credential.Checker instead. The compare is over SHA-256 digests, so it does not leak the stored secret's length"
+  "backend/services/device-management/model.evaluateCredential@credential.VerifyDeviceSecret=device MQTT_BASIC secret compare for per-event re-authentication only (AuthenticateDevice, from the event resolver), which gives the sender no verdict: HTTP answers 202 before resolution and an MQTT publish has no reply. The MQTT auth callout compares through credential.Checker instead. The compare is the primitive's own, against the stored keyed digest, over two fixed-width MACs"
 
   "backend/services/device-management/model.evaluateDeviceClaim@subtle.ConstantTimeCompare=ClaimDevice requires device:write and is bounded by the GraphQL root-field limit per request; the caller is an authenticated tenant user, not an anonymous device"
 
@@ -215,6 +215,14 @@ import . "crypto/hmac"
 
 func f(a, b []byte) bool { return Equal(a, b) }'
   expect hmac-dot 1 "$fx/hmac-dot/x.go:3:" "$fx/hmac-dot=1"
+
+  # The primitive's own unthrottled device-secret compare, called from outside it.
+  write devicesecret-direct/x.go 'package p
+
+import "github.com/devicechain-io/dc-microservice/credential"
+
+func f(k *credential.DeviceSecretKey, d, s string) error { return credential.VerifyDeviceSecret(k, d, s) }'
+  expect devicesecret-direct 1 "$fx/devicesecret-direct/x.go:5:" "$fx/devicesecret-direct=1"
 
   # An exemption names ONE MEMBER: a subtle compare in a function exempted for bcrypt is
   # caught. Kills the mutant where exemption matching ignores the member.

@@ -46,6 +46,11 @@ var (
 	Api       *model.Api
 	CachedApi *model.CachedApi
 
+	// DeviceSecretKey digests and verifies device credential secrets (MQTT passwords). It is
+	// derived from the instance root key in AfterRdb, before anything can store or compare
+	// a secret.
+	DeviceSecretKey *credential.DeviceSecretKey
+
 	InboundEventsReader    messaging.MessageReader
 	InboundEventsProcessor *processor.InboundEventsProcessor
 	ResolvedEventsWriter   messaging.OrderedWriter
@@ -82,6 +87,11 @@ var (
 	// CredentialChecks counts the auth callout's MQTT password checks by outcome. The
 	// callout's credential.Checker exports its store_full series at zero when it is built.
 	CredentialChecks *prometheus.CounterVec
+	// CredentialMisconfigured counts device credential checks refused because the stored
+	// secret is one no presented secret can match (none stored, or a digest this key did
+	// not make), by path. It is separate from wrong passwords on purpose: those are the
+	// device's mistake, these are the operator's.
+	CredentialMisconfigured *prometheus.CounterVec
 
 	// DeadLetters is this service's identity as a dead-letter producer: the source its
 	// letters are stamped with and the ONE dead_letter_lost_total both of its arms count
@@ -145,6 +155,16 @@ func buildMetrics() {
 			"attempt store could not be reached and the connect was refused; outcome=\"store_full\" "+
 			"means the attempt store was full and the connect was checked WITHOUT its backoff.",
 		[]string{"kind", "outcome"})
+	CredentialMisconfigured = Microservice.NewCounterVec("credential_misconfigured_total",
+		"Device credential checks refused because the stored secret can never match: none is "+
+			"stored, or its digest was made under a different key than this instance's root key "+
+			"derives (most likely a database restored next to the wrong root key). path=\"connect\" "+
+			"is the MQTT auth callout, path=\"event\" the per-event check. Wrong passwords are not "+
+			"counted here.",
+		[]string{"path"})
+	for _, path := range []string{model.CredentialPathConnect, model.CredentialPathEvent} {
+		CredentialMisconfigured.WithLabelValues(path)
+	}
 	GeoFencePublishFails = Microservice.NewCounter(
 		"geofence_set_publish_failures_total",
 		"Geofence-set manifests that could not be published — a marshal error, a broker refusal, or a transport fault. Each one means event-processing was not told about a fence edit, so containment for that tenant holds its previous fence set until a reconcile sweep repairs it. A sustained non-zero rate means fence edits are not reaching the detection engine.")
@@ -207,7 +227,7 @@ func newInboundEventsProcessor(reader messaging.MessageReader) *processor.Inboun
 // Api. Without it every eviction is silently skipped, a revoked credential keeps
 // authenticating events from memory until its copy expires, and only a test that builds
 // the Apis through here can see it.
-func buildApis(nmgr *messaging.NatsManager, rdbm *rdb.RdbManager,
+func buildApis(nmgr *messaging.NatsManager, rdbm *rdb.RdbManager, key *credential.DeviceSecretKey,
 	cfg *config.DeviceManagementConfiguration) (*model.Api, *model.CachedApi, error) {
 	// Create NATS KV caches TTL'd from configuration (ADR-022 review B2), and the
 	// in-process credential cache.
@@ -220,6 +240,8 @@ func buildApis(nmgr *messaging.NatsManager, rdbm *rdb.RdbManager,
 	// inbound-event resolution path.
 	api := model.NewApi(rdbm)
 	api.EnableCeilingMetrics(nmgr.Microservice)
+	api.DeviceSecretKey = key
+	api.MisconfiguredSecrets = CredentialMisconfigured
 	cached := model.NewCachedApi(api, caches)
 	// The write paths evict the hot-path caches through this seam (ADR-044 F2). The GraphQL
 	// mutations run on the plain *Api, so the evictor is wired onto it.
@@ -508,8 +530,19 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 			Migrations: schema.Migrations,
 			Config:     Configuration.RdbConfiguration,
 		},
-		AfterRdb: func(_ context.Context, m *service.Managers) error {
+		AfterRdb: func(ctx context.Context, m *service.Managers) error {
 			RdbManager = m.Rdb
+
+			// Device credential secrets are stored as digests under a key derived from the
+			// instance root key, so this service cannot store or check an MQTT password
+			// without it: no key, no start.
+			var err error
+			if DeviceSecretKey, err = deriveDeviceSecretKey(); err != nil {
+				return err
+			}
+			if err = digestStoredCredentialSecrets(ctx, RdbManager, DeviceSecretKey); err != nil {
+				return err
+			}
 
 			// Build every Prometheus instrument this service exports, before the NATS manager
 			// that consumes them.
@@ -522,7 +555,7 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 		// relational handle and a broker to build KV buckets from.
 		AfterNats: func(_ context.Context, m *service.Managers) error {
 			var err error
-			Api, CachedApi, err = buildApis(m.Nats, RdbManager, Configuration)
+			Api, CachedApi, err = buildApis(m.Nats, RdbManager, DeviceSecretKey, Configuration)
 			if err != nil {
 				return err
 			}
@@ -627,7 +660,7 @@ func afterMicroserviceStarted(ctx context.Context) error {
 		// credential-attempt bucket. It fails closed when that bucket cannot be reached,
 		// and OPEN, without the backoff, when it is full, since anyone can fill it by
 		// presenting enough distinct usernames (the credential package doc says why).
-		creds, err := processor.NewDeviceCredentialChecker(NatsManager, credential.WithCounter(CredentialChecks))
+		creds, err := processor.NewDeviceCredentialChecker(NatsManager, DeviceSecretKey, credential.WithCounter(CredentialChecks))
 		if err != nil {
 			return err
 		}

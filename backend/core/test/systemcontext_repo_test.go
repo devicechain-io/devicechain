@@ -47,8 +47,11 @@ var sanctionedSystemContexts = map[string][]string{
 	"backend/services/command-delivery/processor/CommandDeliveryProcessor.go": {
 		"CommandDeliveryProcessor.deliverPendingCommands", "CommandDeliveryProcessor.sweepLocked",
 	},
-	"backend/services/command-delivery/processor/HoldReconciler.go":            {"CommandDeliveryProcessor.reconcileOnePage"},
-	"backend/services/command-delivery/processor/StrandedReconciler.go":        {"CommandDeliveryProcessor.reconcileStrandedPage"},
+	"backend/services/command-delivery/processor/HoldReconciler.go":     {"CommandDeliveryProcessor.reconcileOnePage"},
+	"backend/services/command-delivery/processor/StrandedReconciler.go": {"CommandDeliveryProcessor.reconcileStrandedPage"},
+	"backend/services/device-management/schema/migration_credential_secret_digest.go": {
+		"CountForeignCredentialDigests", "DigestPlaintextCredentialSecrets",
+	},
 	"backend/services/device-state/processor/StateProcessor.go":                {"StateProcessor.runInactivityMonitor"},
 	"backend/services/event-management/model/analytics.go":                     {"ReconcileAnalyticsSurface"},
 	"backend/services/event-management/model/lifecycle.go":                     {"ApplyDataLifecyclePolicies"},

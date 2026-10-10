@@ -48,10 +48,13 @@ var DeviceCredentialPolicies = map[credential.Kind]credential.Policy{
 // exactly as well — until a spray of MQTT usernames fills it and switches off the
 // sign-in backoff for people (messaging.DeviceCredentialAttemptStore says why the two
 // are kept apart). main.go calls this and nothing else.
-func NewDeviceCredentialChecker(nmgr *messaging.NatsManager, opts ...credential.Option) (*credential.Checker, error) {
+//
+// key is what the stored digests were made under; it is a parameter, not an option, so
+// there is no way to build this Checker without one (NewChecker refuses a nil key).
+func NewDeviceCredentialChecker(nmgr *messaging.NatsManager, key *credential.DeviceSecretKey, opts ...credential.Option) (*credential.Checker, error) {
 	attempts, err := nmgr.DeviceCredentialAttemptStore()
 	if err != nil {
 		return nil, err
 	}
-	return credential.NewChecker(attempts, DeviceCredentialPolicies, opts...)
+	return credential.NewChecker(attempts, DeviceCredentialPolicies, append([]credential.Option{credential.WithDeviceSecretKey(key)}, opts...)...)
 }

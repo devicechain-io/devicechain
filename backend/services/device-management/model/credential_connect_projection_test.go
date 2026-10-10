@@ -5,7 +5,6 @@ package model
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"testing"
 
@@ -25,9 +24,9 @@ func TestTheConnectLookupFillsOnlyTheConnectFields(t *testing.T) {
 		t.Fatalf("lookup: %v", err)
 	}
 	if cred.ID == 0 || cred.TenantId != "acme" || cred.DeviceId != f.devId ||
-		!cred.CredentialValue.Valid || cred.CredentialValue.String != "s3cret" || cred.ExpiresAt.Valid {
+		!cred.SecretDigest.Valid || !verifies(cred.SecretDigest.String, "s3cret") || cred.ExpiresAt.Valid {
 		t.Errorf("the connect fields were not read: id %d, tenant %q, device %d (want %d), secret %v, expires %v",
-			cred.ID, cred.TenantId, cred.DeviceId, f.devId, cred.CredentialValue, cred.ExpiresAt)
+			cred.ID, cred.TenantId, cred.DeviceId, f.devId, cred.SecretDigest, cred.ExpiresAt)
 	}
 	if cred.Metadata != nil {
 		t.Errorf("the credential carries %d bytes of metadata; the connect lookup must not read it", len(*cred.Metadata))
@@ -52,7 +51,7 @@ func TestTheConnectLookupFillsOnlyTheConnectFields(t *testing.T) {
 func TestBothCredentialFindersRefuseAnAmbiguousMatch(t *testing.T) {
 	f := newSQLiteCredentialFixture(t)
 	dup := &DeviceCredential{DeviceId: f.devId, CredentialType: string(CredentialMqttBasic),
-		CredentialId: "cred-1", CredentialValue: sql.NullString{String: "other", Valid: true}, Enabled: true}
+		CredentialId: "cred-1", SecretDigest: testDigest("other"), Enabled: true}
 	dup.Token = "c-dup"
 	mustExec(t, f.api.RDB.DB(f.ctx).Create(dup))
 

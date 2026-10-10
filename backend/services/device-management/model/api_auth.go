@@ -5,12 +5,11 @@ package model
 
 import (
 	"context"
-	"crypto/sha256"
-	"crypto/subtle"
 	"errors"
 	"fmt"
 	"time"
 
+	"github.com/devicechain-io/dc-microservice/credential"
 	"gorm.io/gorm"
 )
 
@@ -37,7 +36,9 @@ var (
 	// the presented secret was absent or did not match.
 	ErrCredentialSecretMismatch = errors.New("presented credential secret did not match")
 	// ErrCredentialMisconfigured means the stored credential requires a secret
-	// (e.g. MQTT_BASIC) but none was persisted, so it can never authenticate.
+	// (e.g. MQTT_BASIC) but none was persisted, or what was persisted is not a digest
+	// this replica's key made (a database restored next to another root key, or no key
+	// wired at all), so it can never authenticate.
 	ErrCredentialMisconfigured = errors.New("stored credential is missing required secret material")
 )
 
@@ -80,10 +81,10 @@ func credentialRequiresSecret(ctype string) bool {
 
 // evaluateCredential verifies a resolved credential against what was presented:
 // it is past the enabled/tenant lookup, so it only enforces expiry and, for
-// credential types that carry one, the secret. It is pure (no I/O) so the policy
-// is unit-testable in isolation. now is supplied by the caller for the same
-// reason.
-func evaluateCredential(cred *DeviceCredential, presented *PresentedCredential, now time.Time) error {
+// credential types that carry one, the secret, against its stored digest under key.
+// It is pure (no I/O) so the policy is unit-testable in isolation. now is supplied by
+// the caller for the same reason.
+func evaluateCredential(key *credential.DeviceSecretKey, cred *DeviceCredential, presented *PresentedCredential, now time.Time) error {
 	// Fail closed for a stored row of a type outside the supported vocabulary (a retired
 	// type): it has no verification, so it never authenticates.
 	if !CredentialType(cred.CredentialType).Valid() {
@@ -95,17 +96,16 @@ func evaluateCredential(cred *DeviceCredential, presented *PresentedCredential, 
 
 	// Secret verification for credential types that carry a comparable secret.
 	if credentialRequiresSecret(cred.CredentialType) {
-		stored, err := storedSecret(cred)
+		stored, err := storedSecret(key, cred)
 		if err != nil {
 			return err
 		}
 		if presented.Secret == nil {
 			return ErrCredentialSecretMismatch
 		}
-		// Compare fixed-width SHA-256 digests in constant time, so the check leaks
-		// neither the stored secret's content nor its LENGTH: ConstantTimeCompare
-		// returns at once when its inputs differ in length. The digests are never
-		// stored: they exist only for this length-safe compare.
+		// The stored digest is checked by the key that made it, in constant time over
+		// two fixed-width MACs (credential.VerifyDeviceSecret), so the check leaks
+		// neither the secret's content nor its length.
 		//
 		// This compare serves the per-event path only (AuthenticateDevice, from the
 		// event resolver), whose verdict never reaches the sender. It runs on every
@@ -113,9 +113,7 @@ func evaluateCredential(cred *DeviceCredential, presented *PresentedCredential, 
 		// row, never the verdict. The MQTT auth callout, which DOES answer, does not come
 		// here for a password: it resolves the credential with ResolveDeviceCredential and
 		// compares through credential.Checker, under a per-credential backoff.
-		got := sha256.Sum256([]byte(*presented.Secret))
-		want := sha256.Sum256([]byte(stored))
-		if subtle.ConstantTimeCompare(got[:], want[:]) != 1 {
+		if credential.VerifyDeviceSecret(key, cred.TenantId, stored, *presented.Secret) != nil {
 			return ErrCredentialSecretMismatch
 		}
 	}
@@ -131,17 +129,37 @@ func checkExpiry(cred *DeviceCredential, now time.Time) error {
 	return nil
 }
 
-// storedSecret is the secret a secret-carrying credential stores, or
-// ErrCredentialMisconfigured when it stores none. An EMPTY stored secret is
-// misconfigured too, not a secret that an empty presented one could match: the
-// create and update paths store NULL for an empty value and any other value exactly
-// as sent, so an empty string there is a defect in the stored data, and it must reach
-// an operator rather than authenticate anyone.
-func storedSecret(cred *DeviceCredential) (string, error) {
-	if !cred.CredentialValue.Valid || cred.CredentialValue.String == "" {
+// storedSecret is the digest a secret-carrying credential stores, or
+// ErrCredentialMisconfigured when it stores none, or one key did not make. An EMPTY
+// stored digest is misconfigured too: the create and update paths store NULL for an
+// empty value and a digest for any other, so an empty string there is a defect in the
+// stored data, and it must reach an operator rather than authenticate anyone.
+//
+// 🔴 A DIGEST THE KEY DOES NOT RECOGNIZE IS MISCONFIGURED, NOT A WRONG PASSWORD. It is
+// what a database restored next to the wrong root key looks like (every MQTT_BASIC device
+// refused at once), and what a missing key looks like; no device can fix either by
+// answering differently, so it must not be filed with the wrong-password noise.
+func storedSecret(key *credential.DeviceSecretKey, cred *DeviceCredential) (string, error) {
+	if !cred.SecretDigest.Valid || cred.SecretDigest.String == "" || key == nil {
 		return "", ErrCredentialMisconfigured
 	}
-	return cred.CredentialValue.String, nil
+	if err := key.Recognizes(cred.SecretDigest.String); err != nil {
+		return "", fmt.Errorf("%w: %v", ErrCredentialMisconfigured, err)
+	}
+	return cred.SecretDigest.String, nil
+}
+
+// The paths a device credential is checked on, as MisconfiguredSecrets labels them.
+const (
+	CredentialPathConnect = "connect"
+	CredentialPathEvent   = "event"
+)
+
+// countMisconfigured counts err on path when it is ErrCredentialMisconfigured.
+func (api *Api) countMisconfigured(path string, err error) {
+	if api.MisconfiguredSecrets != nil && errors.Is(err, ErrCredentialMisconfigured) {
+		api.MisconfiguredSecrets.WithLabelValues(path).Inc()
+	}
 }
 
 // AuthenticateDevice resolves a presented credential to its owning device and
@@ -196,7 +214,8 @@ func (api *Api) authenticateCredential(ctx context.Context, presented *Presented
 	if err != nil {
 		return nil, nil, err
 	}
-	if err := evaluateCredential(cred, presented, now); err != nil {
+	if err := evaluateCredential(api.DeviceSecretKey, cred, presented, now); err != nil {
+		api.countMisconfigured(CredentialPathEvent, err)
 		return nil, nil, err
 	}
 	device, err := credentialDevice(cred)
@@ -210,7 +229,7 @@ func (api *Api) authenticateCredential(ctx context.Context, presented *Presented
 // caller that compares through credential.Checker: the MQTT auth callout. It resolves
 // a presented MQTT_BASIC credential exactly as AuthenticateDevice does (enabled-only,
 // tenant-scoped, expiry) and returns its owning device together with the STORED
-// secret, for the Checker to compare against what was presented.
+// digest, for the Checker to compare against what was presented under the same key.
 //
 // 🔴 A DEVICE RETURNED FROM HERE IS NOT AUTHENTICATED. Nothing has compared the
 // presented secret; the caller must not use the device until its Checker has. That is
@@ -238,8 +257,9 @@ func (api *Api) ResolveDeviceCredential(ctx context.Context, presented *Presente
 	if err := checkExpiry(cred, now); err != nil {
 		return nil, "", err
 	}
-	stored, err := storedSecret(cred)
+	stored, err := storedSecret(api.DeviceSecretKey, cred)
 	if err != nil {
+		api.countMisconfigured(CredentialPathConnect, err)
 		return nil, "", err
 	}
 	device, err := credentialDevice(cred)

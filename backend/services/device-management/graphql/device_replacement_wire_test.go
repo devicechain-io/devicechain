@@ -63,7 +63,7 @@ func newReplacementWireCtx(t *testing.T, authorities ...auth.Authority) context.
 		Username:    "tech@acme.example",
 		Authorities: authorityStrings(authorities),
 	})
-	return context.WithValue(ctx, gqlcore.ContextApiKey, model.NewApi(&rdb.RdbManager{Database: db}))
+	return context.WithValue(ctx, gqlcore.ContextApiKey, keyedApi(db))
 }
 
 func authorityStrings(authorities []auth.Authority) []string {
