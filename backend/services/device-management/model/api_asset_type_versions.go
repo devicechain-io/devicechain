@@ -171,7 +171,10 @@ func (api *Api) AssetTypeVersions(ctx context.Context, token string, page *Versi
 		return nil, err
 	}
 	versions := make([]*AssetTypeVersion, 0)
-	limit, offset := page.window()
+	limit, offset, err := page.window()
+	if err != nil {
+		return nil, err
+	}
 	result := api.RDB.DB(ctx).Where("asset_type_id = ?", assetType.ID).
 		Order("version DESC").Limit(limit).Offset(offset).Find(&versions)
 	if result.Error != nil {

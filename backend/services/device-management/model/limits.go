@@ -47,6 +47,20 @@ func checkBytes(what, value string, max int) error {
 	return nil
 }
 
+// InvalidArgumentError is the typed refusal of a paging argument that makes no sense. It
+// carries extensions.code INVALID_VALUE and, like the other typed refusals here, is
+// returned unwrapped.
+type InvalidArgumentError struct {
+	Msg string
+}
+
+func (e *InvalidArgumentError) Error() string { return e.Msg }
+
+// Extensions gives the refusal its wire code.
+func (e *InvalidArgumentError) Extensions() map[string]any {
+	return map[string]any{"code": "INVALID_VALUE"}
+}
+
 // VersionListArgs are the optional paging arguments of a version-history read. Absent, a
 // read returns the newest rdb.MaxPageSize versions; a limit above that is clamped to it.
 type VersionListArgs struct {
@@ -55,17 +69,26 @@ type VersionListArgs struct {
 }
 
 // window resolves the arguments to a (limit, offset) pair: limit in [1, rdb.MaxPageSize],
-// offset >= 0. A non-positive limit means "the default", never "none".
-func (a *VersionListArgs) window() (limit, offset int) {
+// offset >= 0. A limit below 1 or an offset below 0 is refused rather than read as the
+// default, so a client that computed a bad page is told instead of handed a different one.
+func (a *VersionListArgs) window() (limit, offset int, err error) {
 	limit = rdb.MaxPageSize
 	if a == nil {
-		return limit, 0
+		return limit, 0, nil
 	}
-	if a.Limit != nil && *a.Limit > 0 && int(*a.Limit) < limit {
-		limit = int(*a.Limit)
+	if a.Limit != nil {
+		if *a.Limit < 1 {
+			return 0, 0, &InvalidArgumentError{Msg: fmt.Sprintf("limit must be at least 1, got %d", *a.Limit)}
+		}
+		if int(*a.Limit) < limit {
+			limit = int(*a.Limit)
+		}
 	}
-	if a.Offset != nil && *a.Offset > 0 {
+	if a.Offset != nil {
+		if *a.Offset < 0 {
+			return 0, 0, &InvalidArgumentError{Msg: fmt.Sprintf("offset must not be negative, got %d", *a.Offset)}
+		}
 		offset = int(*a.Offset)
 	}
-	return limit, offset
+	return limit, offset, nil
 }

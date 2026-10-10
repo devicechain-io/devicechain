@@ -163,7 +163,10 @@ func (api *Api) EntityGroupVersions(ctx context.Context, token string, page *Ver
 		return nil, err
 	}
 	versions := make([]*EntityGroupVersion, 0)
-	limit, offset := page.window()
+	limit, offset, err := page.window()
+	if err != nil {
+		return nil, err
+	}
 	result := api.RDB.DB(ctx).Where("entity_group_id = ?", group.ID).
 		Order("version DESC").Limit(limit).Offset(offset).Find(&versions)
 	if result.Error != nil {

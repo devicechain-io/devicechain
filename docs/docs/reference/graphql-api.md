@@ -717,13 +717,22 @@ counted.
 
 Separately from the request-shape limits above, some reads and inputs have a size bound. A request
 over one is refused with `extensions.code` set to `LIMIT_EXCEEDED`. Nothing is truncated and nothing
-is partly applied, so narrow the request and send it again.
+is partly applied, so narrow the request and send it again. Sizes are counted in bytes, not
+characters.
 
 | Bound | Limit | Applies to |
 | --- | --- | --- |
+| Attribute key | 128 B | `setEntityAttribute` `attrKey`. |
+| Attribute value | 64 KiB | `setEntityAttribute` `value`, whatever its declared type. |
+| Rule definition | 256 KiB | `definition` of a detection rule, on create and update. |
+| Rule authoring graph | 256 KiB | `authoringGraph` of a detection rule, on create and update. |
+| Version history | 1,000 per call | `deviceProfileVersions`, `entityGroupVersions`, `assetTypeVersions`: newest first. Narrow with `limit` (at least 1) and page with `offset` (not negative); a value outside that range is refused with `INVALID_VALUE`. |
 | Buckets per aggregation | 10,000 | `bucketedMeasurements`: the range divided by `intervalSeconds`, rounded up. |
 
 `bucketedMeasurements` also requires `startTime`; `endTime` defaults to the current time.
+
+A command key is limited to 128 bytes by the token grammar, which is also the longest command name
+that can be enqueued.
 
 ### GraphQL syntax only {#graphql-syntax-only}
 

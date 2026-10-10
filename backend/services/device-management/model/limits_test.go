@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/entity"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/stretchr/testify/require"
@@ -136,4 +137,94 @@ func TestVersionListsAreClamped(t *testing.T) {
 		require.Len(t, got, rdb.MaxPageSize)
 		require.EqualValues(t, total, got[0].Version)
 	})
+}
+
+// The caps count BYTES, not runes: a value of multibyte runes that is under the cap in
+// characters but over it in bytes is refused, and one that lands exactly on the cap passes.
+func TestCapsCountBytesNotRunes(t *testing.T) {
+	api, _, ctx := newAttrEmitTestApi(t)
+	const euro = "€" // three bytes
+
+	atCap := strings.Repeat(euro, MaxAttributeValueBytes/3) + "v" // 65535 + 1 = 65536 bytes
+	require.Len(t, atCap, MaxAttributeValueBytes)
+	_, err := api.SetEntityAttribute(ctx, attrRequest("k", atCap))
+	require.NoError(t, err, "a value exactly at the byte cap was refused")
+
+	over := strings.Repeat(euro, MaxAttributeValueBytes/3+1) // 21846 runes, 65538 bytes
+	require.Less(t, len([]rune(over)), MaxAttributeValueBytes, "the case must be under the cap in runes")
+	_, err = api.SetEntityAttribute(ctx, attrRequest("k2", over))
+	requireLimitExceeded(t, err, "attribute value")
+
+	_, err = api.SetEntityAttribute(ctx, attrRequest(strings.Repeat(euro, MaxAttributeKeyBytes/3+1), "v"))
+	requireLimitExceeded(t, err, "attribute key")
+}
+
+// The update path enforces the same rule caps as create, and a refused update changes
+// nothing.
+func TestUpdateDetectionRuleCapsDefinitionAndGraph(t *testing.T) {
+	api, ctx := newRuleScopeTestApi(t)
+	seedDeviceProfile(t, api, ctx, "p1")
+	_, err := api.CreateDetectionRule(ctx, &DetectionRuleCreateRequest{
+		Token: "r1", DeviceProfileToken: "p1", Definition: ruleDef, Enabled: false})
+	require.NoError(t, err)
+
+	big := `{"type":"threshold","pad":"` + strings.Repeat("€", MaxDetectionRuleBytes/3) + `"}` // > cap in bytes
+	var req DetectionRuleUpdateRequest
+	req.Definition.Set, req.Definition.Value = true, &big
+	_, err = api.UpdateDetectionRule(ctx, "r1", &req)
+	requireLimitExceeded(t, err, "detection rule definition")
+
+	graph := `{"nodes":"` + strings.Repeat("€", MaxDetectionRuleBytes/3) + `"}`
+	var req2 DetectionRuleUpdateRequest
+	req2.AuthoringGraph.Set, req2.AuthoringGraph.Value = true, &graph
+	_, err = api.UpdateDetectionRule(ctx, "r1", &req2)
+	requireLimitExceeded(t, err, "detection rule authoring graph")
+
+	rules, err := api.DetectionRulesByToken(ctx, []string{"r1"})
+	require.NoError(t, err)
+	require.JSONEq(t, ruleDef, string(rules[0].Definition), "a refused update changed the stored definition")
+	require.Empty(t, rules[0].AuthoringGraph, "a refused update stored a graph")
+}
+
+// A limit below 1 or an offset below 0 is refused with a typed answer, not read as the default.
+func TestVersionListRefusesNonsensePaging(t *testing.T) {
+	api, ctx := newRuleScopeTestApi(t)
+	seedDeviceProfile(t, api, ctx, "p1")
+	for name, args := range map[string]*VersionListArgs{
+		"zero limit":      {Limit: i32(0)},
+		"negative limit":  {Limit: i32(-3)},
+		"negative offset": {Offset: i32(-1)},
+	} {
+		_, err := api.DeviceProfileVersions(ctx, "p1", args)
+		var bad *InvalidArgumentError
+		require.True(t, errors.As(err, &bad), "%s: got %v, want InvalidArgumentError", name, err)
+		require.Equal(t, "INVALID_VALUE", bad.Extensions()["code"], name)
+	}
+}
+
+// The asset-type history pages the same way: an offset skips the newest versions.
+func TestAssetTypeVersionsOffset(t *testing.T) {
+	api, ctx := assetPropertyTestApi(t)
+	at := seedTypeWithSchema(t, api, ctx, "pump", "", false)
+	rows := make([]*AssetTypeVersion, 0, 5)
+	for v := 1; v <= 5; v++ {
+		rows = append(rows, &AssetTypeVersion{AssetTypeId: at.ID, Version: int32(v), PropertySchema: datatypes.JSON(`[]`)})
+	}
+	bulkVersions(t, api, ctx, rows)
+
+	got, err := api.AssetTypeVersions(ctx, "pump", &VersionListArgs{Limit: i32(2), Offset: i32(1)})
+	require.NoError(t, err)
+	require.Len(t, got, 2)
+	require.EqualValues(t, 4, got[0].Version)
+	require.EqualValues(t, 3, got[1].Version)
+}
+
+// A command definition's key is the name the platform enqueues, and command-delivery
+// refuses names over 128 bytes; the key grammar's own length cap must not exceed it, or a
+// command could be authored that can never be enqueued.
+func TestCommandKeyCapMatchesTheEnqueueCap(t *testing.T) {
+	const enqueueNameCap = 128 // command-delivery's MaxCommandNameLength
+	require.Equal(t, enqueueNameCap, core.MaxTokenLen)
+	require.NoError(t, validateCommandKey(strings.Repeat("c", enqueueNameCap)))
+	require.Error(t, validateCommandKey(strings.Repeat("c", enqueueNameCap+1)))
 }

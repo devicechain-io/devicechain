@@ -2121,7 +2121,7 @@ type Query {
     # List device profiles that meet criteria.
     deviceProfiles(criteria: DeviceProfileSearchCriteria!): DeviceProfileSearchResults!
     # List a device profile's published versions, newest first (ADR-045 versioning).
-    # At most 1000 per call (newest first); limit narrows that and offset pages further.
+    # At most 1000 per call (newest first); limit (at least 1) narrows that and offset (not negative) pages further.
     deviceProfileVersions(token: String!, limit: Int, offset: Int): [DeviceProfileVersion!]!
     # The distinct non-empty values a discovery facet currently holds across the
     # tenant's device types / profiles — the suggestions offered under the free-text
@@ -2316,7 +2316,7 @@ type Query {
     # / malformed selector returns valid=false with an inline error, never a hard fault.
     previewSelector(memberType: String!, selector: String!, pagination: PaginationInput!): SelectorPreview!
     # List a dynamic entity group's published versions, newest first (ADR-062 S1).
-    # At most 1000 per call (newest first); limit narrows that and offset pages further.
+    # At most 1000 per call (newest first); limit (at least 1) narrows that and offset (not negative) pages further.
     entityGroupVersions(token: String!, limit: Int, offset: Int): [EntityGroupVersion!]!
     # Find device credentials by unique id.
     deviceCredentialsById(ids: [ID!]!): [DeviceCredential!]!
@@ -2377,7 +2377,7 @@ type Query {
     # List assets that meet criteria.
     assets(criteria: AssetSearchCriteria!): AssetSearchResults!
     # An asset type's published property-contract versions, newest first.
-    # At most 1000 per call (newest first); limit narrows that and offset pages further.
+    # At most 1000 per call (newest first); limit (at least 1) narrows that and offset (not negative) pages further.
     assetTypeVersions(token: String!, limit: Int, offset: Int): [AssetTypeVersion!]!
     # The version an asset of this type is currently validated against, or null when
     # the type has never been published.

@@ -526,7 +526,10 @@ func (api *Api) DeviceProfileVersions(ctx context.Context, token string, page *V
 		return nil, err
 	}
 	versions := make([]*DeviceProfileVersion, 0)
-	limit, offset := page.window()
+	limit, offset, err := page.window()
+	if err != nil {
+		return nil, err
+	}
 	result := api.RDB.DB(ctx).Where("device_profile_id = ?", profile.ID).
 		Order("version DESC").Limit(limit).Offset(offset).Find(&versions)
 	if result.Error != nil {
