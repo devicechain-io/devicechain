@@ -26,7 +26,19 @@ import (
 type filesystemStore struct {
 	root       string
 	instanceID string
+	// openFile opens an object for OpenRange; os.Open in production, replaceable so a
+	// test can count handles.
+	openFile func(name string) (fileHandle, error)
 }
+
+// fileHandle is the part of *os.File OpenRange uses.
+type fileHandle interface {
+	io.ReaderAt
+	io.Closer
+	Stat() (os.FileInfo, error)
+}
+
+func osOpen(name string) (fileHandle, error) { return os.Open(name) }
 
 // tempPrefix is the in-flight temp-file prefix for the atomic write. It starts with
 // a dot, which validateSegment forbids as a leading char in an object id, so a temp
@@ -50,7 +62,7 @@ func NewFilesystemStore(cfg Config, instanceID string) (Store, error) {
 	if err := os.MkdirAll(root, 0o750); err != nil {
 		return nil, fmt.Errorf("blob: creating filesystem root %q: %w", root, err)
 	}
-	return &filesystemStore{root: root, instanceID: instanceID}, nil
+	return &filesystemStore{root: root, instanceID: instanceID, openFile: osOpen}, nil
 }
 
 // objectPath maps a full object key to an absolute filesystem path and verifies,
@@ -195,7 +207,7 @@ func (s *filesystemStore) OpenRange(ctx context.Context, ref Ref, offset, length
 	if offset < 0 || length <= 0 {
 		return nil, Info{}, ErrRangeNotSatisfiable
 	}
-	f, err := os.Open(path)
+	f, err := s.openFile(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil, Info{}, ErrNotFound

@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"os"
 	"strconv"
 	"strings"
 	"testing"
@@ -273,5 +274,138 @@ func TestS3OpenRangeNotFoundAndScope(t *testing.T) {
 	}
 	if f.gotRange != nil {
 		t.Fatal("a rejected ref must not reach the backend")
+	}
+}
+
+// cannedRangeS3 answers every GetObject with a fixed Content-Range and body, so the
+// store's judgement of the HEADER is tested on its own.
+type cannedRangeS3 struct {
+	fakeS3
+	contentRange string
+	body         *closeRecorder
+}
+
+type closeRecorder struct {
+	io.Reader
+	closed int
+}
+
+func (c *closeRecorder) Close() error { c.closed++; return nil }
+
+func (c *cannedRangeS3) GetObject(context.Context, *s3.GetObjectInput, ...func(*s3.Options)) (*s3.GetObjectOutput, error) {
+	return &s3.GetObjectOutput{Body: c.body, ContentRange: aws.String(c.contentRange)}, nil
+}
+
+// Request: offset 5, length 4 => last = 8, so the only acceptable answer on a 20-byte
+// object is exactly "bytes 5-8/20".
+func TestS3OpenRangeJudgesContentRangeStrictly(t *testing.T) {
+	ref := Ref{Backend: BackendS3, Key: "inst1/acme/firmware/fw.bin"}
+	cases := []struct {
+		name, header string
+		ok           bool
+	}{
+		{"exact", "bytes 5-8/20", true},
+		{"clamped at EOF", "bytes 5-19/20", false}, // end past last
+		{"wrong start", "bytes 4-8/20", false},
+		{"short end", "bytes 5-6/20", false},
+		{"end past last", "bytes 5-9/20", false},
+		{"total at or below end", "bytes 5-8/8", false},
+		{"trailing text", "bytes 5-8/20trailing", false},
+		{"plus sign", "bytes +5-8/20", false},
+		{"missing total", "bytes 5-8", false},
+		{"unknown total", "bytes 5-8/*", false},
+		{"empty", "", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			body := &closeRecorder{Reader: strings.NewReader("5678")}
+			s := newS3(&fakeS3{})
+			s.api = &cannedRangeS3{contentRange: tc.header, body: body}
+			rc, _, err := s.OpenRange(context.Background(), ref, 5, 4)
+			if tc.ok {
+				if err != nil {
+					t.Fatalf("refused a good header: %v", err)
+				}
+				rc.Close()
+				return
+			}
+			if err == nil {
+				rc.Close()
+				t.Fatalf("accepted %q for a 5..8 request", tc.header)
+			}
+			if body.closed != 1 {
+				t.Fatalf("refused body closed %d times, want 1", body.closed)
+			}
+		})
+	}
+}
+
+func TestS3OpenRangeClampedAtEndIsAccepted(t *testing.T) {
+	// Asking past EOF legitimately yields end == total-1 < last.
+	body := &closeRecorder{Reader: strings.NewReader("fghij")}
+	s := newS3(&fakeS3{})
+	s.api = &cannedRangeS3{contentRange: "bytes 15-19/20", body: body}
+	rc, info, err := s.OpenRange(context.Background(), Ref{Backend: BackendS3, Key: "inst1/a/b/c"}, 15, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rc.Close()
+	if got, _ := io.ReadAll(rc); string(got) != "fghij" || info.Size != 20 {
+		t.Fatalf("got %q size %d", got, info.Size)
+	}
+}
+
+func TestS3OpenRangeTruncatedBodyIsNotACleanEOF(t *testing.T) {
+	body := &closeRecorder{Reader: strings.NewReader("56")}
+	s := newS3(&fakeS3{})
+	s.api = &cannedRangeS3{contentRange: "bytes 5-8/20", body: body}
+	rc, _, err := s.OpenRange(context.Background(), Ref{Backend: BackendS3, Key: "inst1/a/b/c"}, 5, 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rc.Close()
+	got, rerr := io.ReadAll(rc)
+	if string(got) != "56" || !errors.Is(rerr, io.ErrUnexpectedEOF) {
+		t.Fatalf("read %q err %v, want 56 + ErrUnexpectedEOF", got, rerr)
+	}
+}
+
+// handle counting for the filesystem 416 path, with no reliance on OS file locking.
+type countingFile struct {
+	fileHandle
+	closes *int
+}
+
+func (c countingFile) Close() error { *c.closes++; return c.fileHandle.Close() }
+
+func TestFilesystemOpenRangeClosesTheFileOnEveryRefusal(t *testing.T) {
+	ctx := context.Background()
+	s := newFS(t).(*filesystemStore)
+	ref, _ := s.Put(ctx, Key{Tenant: "acme", Purpose: "firmware", ID: "fw.bin"}, strings.NewReader(rangeObject), PutOptions{})
+	dir := Ref{Backend: BackendFilesystem, Key: "inst1/acme"}
+	opens, closes := 0, 0
+	s.openFile = func(name string) (fileHandle, error) {
+		f, err := os.Open(name)
+		if err != nil {
+			return nil, err
+		}
+		opens++
+		return countingFile{fileHandle: f, closes: &closes}, nil
+	}
+	for _, c := range []struct {
+		ref     Ref
+		off, ln int64
+		want    error
+	}{
+		{ref, 20, 1, ErrRangeNotSatisfiable},
+		{ref, 99, 1, ErrRangeNotSatisfiable},
+		{dir, 0, 1, ErrNotFound},
+	} {
+		if _, _, err := s.OpenRange(ctx, c.ref, c.off, c.ln); !errors.Is(err, c.want) {
+			t.Fatalf("err = %v, want %v", err, c.want)
+		}
+	}
+	if opens == 0 || opens != closes {
+		t.Fatalf("opened %d handles, closed %d", opens, closes)
 	}
 }

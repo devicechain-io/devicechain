@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"strconv"
 	"strings"
 	"time"
 
@@ -225,7 +226,13 @@ func (s *s3Store) OpenRange(ctx context.Context, ref Ref, offset, length int64) 
 	// Range answers with the whole object and no Content-Range; serving that as the
 	// requested window would return the wrong bytes.
 	start, end, total, ok := parseContentRange(aws.ToString(out.ContentRange))
-	if !ok || start != offset || end < start || end > last || total <= end {
+	// The window must be EXACTLY what was asked for, clamped only by the object's end:
+	// a short window would otherwise be served as a clean, complete answer.
+	wantEnd := last
+	if total-1 < wantEnd {
+		wantEnd = total - 1
+	}
+	if !ok || total <= 0 || start != offset || end != wantEnd {
 		out.Body.Close()
 		return nil, Info{}, fmt.Errorf("blob: object store did not honour the range request (Content-Range %q)", aws.ToString(out.ContentRange))
 	}
@@ -235,17 +242,75 @@ func (s *s3Store) OpenRange(ctx context.Context, ref Ref, offset, length int64) 
 		ContentType: contentTypeOr(out.ContentType),
 		ModTime:     derefTime(out.LastModified),
 	}
-	// Bound the reader to the window even if the body is longer.
-	return &sectionReadCloser{Reader: io.LimitReader(out.Body, end-start+1), Closer: out.Body}, info, nil
+	// Bound the reader to the window even if the body is longer, and report a body
+	// shorter than the window as an error rather than a clean EOF.
+	return &sectionReadCloser{Reader: &exactReader{r: out.Body, remaining: end - start + 1}, Closer: out.Body}, info, nil
 }
 
-// parseContentRange parses "bytes {start}-{end}/{total}"; ok is false for any other
-// shape (including an unknown total, "*").
+// exactReader yields exactly `remaining` bytes from r: it stops at that many even if r
+// has more, and returns io.ErrUnexpectedEOF if r ends first.
+type exactReader struct {
+	r         io.Reader
+	remaining int64
+}
+
+func (e *exactReader) Read(p []byte) (int, error) {
+	if e.remaining <= 0 {
+		return 0, io.EOF
+	}
+	if int64(len(p)) > e.remaining {
+		p = p[:e.remaining]
+	}
+	n, err := e.r.Read(p)
+	e.remaining -= int64(n)
+	if err == io.EOF && e.remaining > 0 {
+		err = io.ErrUnexpectedEOF
+	}
+	if err == nil && e.remaining <= 0 {
+		err = io.EOF
+	}
+	return n, err
+}
+
+// parseContentRange strictly parses "bytes {start}-{end}/{total}": ASCII digits only
+// in each number, no sign, no whitespace, no trailing text, and a numeric total (so
+// "*" is refused).
 func parseContentRange(h string) (start, end, total int64, ok bool) {
-	if _, err := fmt.Sscanf(h, "bytes %d-%d/%d", &start, &end, &total); err != nil {
+	rest, found := strings.CutPrefix(h, "bytes ")
+	if !found {
+		return 0, 0, 0, false
+	}
+	r, t, found := strings.Cut(rest, "/")
+	if !found {
+		return 0, 0, 0, false
+	}
+	a, b, found := strings.Cut(r, "-")
+	if !found {
+		return 0, 0, 0, false
+	}
+	var err error
+	if start, err = parseDigits(a); err != nil {
+		return 0, 0, 0, false
+	}
+	if end, err = parseDigits(b); err != nil {
+		return 0, 0, 0, false
+	}
+	if total, err = parseDigits(t); err != nil {
 		return 0, 0, 0, false
 	}
 	return start, end, total, true
+}
+
+func parseDigits(s string) (int64, error) {
+	if s == "" {
+		return 0, errors.New("empty")
+	}
+	for i := 0; i < len(s); i++ {
+		if s[i] < '0' || s[i] > '9' {
+			return 0, errors.New("not a digit")
+		}
+	}
+	return strconv.ParseInt(s, 10, 64)
 }
 
 // isS3InvalidRange reports whether err is S3's 416 "range not satisfiable" error.
