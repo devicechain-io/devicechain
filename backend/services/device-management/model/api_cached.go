@@ -154,10 +154,15 @@ func (capi *CachedApi) EvictRelationshipSources(ctx context.Context, sourceDevic
 	capi.evictRelationshipSources(ctx, tenant, sourceDeviceIds)
 }
 
+// evictRelationshipSources evicts many sets at once (a relationship type's update touches
+// every device with an edge of that type, tens of thousands in a large fleet): with bounded
+// concurrency and one broadcast per tenant, not one bucket round trip after another.
 func (capi *CachedApi) evictRelationshipSources(ctx context.Context, tenant string, sourceDeviceIds []uint) {
-	for _, sid := range sourceDeviceIds {
-		_ = capi.caches.RelationshipsBySource.Delete(ctx, relationshipsBySourceKey(tenant, sid))
+	keys := make([]string, len(sourceDeviceIds))
+	for i, sid := range sourceDeviceIds {
+		keys[i] = relationshipsBySourceKey(tenant, sid)
 	}
+	_ = capi.caches.RelationshipsBySource.DeleteMany(ctx, keys)
 }
 
 // EvictMemberships satisfies model.CacheEvictor (ADR-062): it drops the cached
@@ -279,11 +284,12 @@ func readCache[T any](ctx context.Context, c *messaging.Cache, key string, clone
 // loadAnyScopedGroups is the database half of AnyScopedGroups: it reads the database and
 // stores the answer in the cache.
 func (capi *CachedApi) loadAnyScopedGroups(ctx context.Context, tenant string) (bool, error) {
+	gen := capi.caches.ScopedGroupsExist.Generation()
 	exists, err := capi.Api.AnyScopedGroups(ctx)
 	if err != nil {
 		return false, err
 	}
-	_ = capi.caches.ScopedGroupsExist.Set(ctx, tenant, exists)
+	_ = capi.caches.ScopedGroupsExist.SetIfUnchanged(ctx, tenant, exists, gen)
 	return exists, nil
 }
 
@@ -325,11 +331,12 @@ func (capi *CachedApi) cachedMemberships(ctx context.Context, key string, memory
 
 // loadMemberships is the database half of MembershipsForEntity.
 func (capi *CachedApi) loadMemberships(ctx context.Context, key, entityType string, entityId uint) ([]GroupMembership, error) {
+	gen := capi.caches.MembershipsByEntity.Generation()
 	memberships, err := capi.Api.MembershipsForEntity(ctx, entityType, entityId)
 	if err != nil {
 		return nil, err
 	}
-	_ = capi.caches.MembershipsByEntity.Set(ctx, key, memberships)
+	_ = capi.caches.MembershipsByEntity.SetIfUnchanged(ctx, key, memberships, gen)
 	return memberships, nil
 }
 
@@ -365,13 +372,15 @@ func (capi *CachedApi) DevicesByToken(ctx context.Context, tokens []string) ([]*
 		return []*Device{device}, nil
 	}
 
+	gen := capi.caches.DeviceByToken.Generation()
 	matches, err := capi.Api.DevicesByToken(ctx, tokens)
 	if err != nil {
 		return nil, err
 	}
-	// Cache positive hits only; never cache a miss/not-found.
+	// Cache positive hits only; never cache a miss/not-found. The fill is dropped if an
+	// eviction was learned of since the generation was taken (see Cache.SetIfUnchanged).
 	if len(matches) == 1 && matches[0] != nil {
-		_ = capi.caches.DeviceByToken.Set(ctx, key, matches[0])
+		_ = capi.caches.DeviceByToken.SetIfUnchanged(ctx, key, matches[0], gen)
 	}
 	return matches, nil
 }
@@ -420,6 +429,7 @@ func (capi *CachedApi) TrackedRelationshipsForDevice(ctx context.Context,
 // loadRelationships is the database half of TrackedRelationshipsForDevice.
 func (capi *CachedApi) loadRelationships(ctx context.Context, key string,
 	deviceId uint) (*EntityRelationshipSearchResults, error) {
+	gen := capi.caches.RelationshipsBySource.Generation()
 	results, err := capi.Api.TrackedRelationshipsForDevice(ctx, deviceId)
 	if err != nil {
 		return nil, err
@@ -431,7 +441,7 @@ func (capi *CachedApi) loadRelationships(ctx context.Context, key string,
 	}
 	// Cache positive results only.
 	if results != nil {
-		_ = capi.caches.RelationshipsBySource.Set(ctx, key, results)
+		_ = capi.caches.RelationshipsBySource.SetIfUnchanged(ctx, key, results, gen)
 	}
 	return results, nil
 }
@@ -510,11 +520,12 @@ func (capi *CachedApi) cachedProfileResolution(ctx context.Context, key string,
 
 // loadProfileResolution is the database half of ProfileResolutionByDeviceType.
 func (capi *CachedApi) loadProfileResolution(ctx context.Context, key string, deviceTypeId uint) (*ProfileResolution, error) {
+	gen := capi.caches.ProfileResolutionByType.Generation()
 	res, err := capi.Api.ProfileResolutionByDeviceType(ctx, deviceTypeId)
 	if err != nil {
 		return nil, err
 	}
-	_ = capi.caches.ProfileResolutionByType.Set(ctx, key, res)
+	_ = capi.caches.ProfileResolutionByType.SetIfUnchanged(ctx, key, res, gen)
 	return res, nil
 }
 

@@ -401,7 +401,7 @@ kube-state-metrics 本身因节点失效等原因移动期间的重启，只要�
 
 **设备凭据。** 各副本将刚验证的凭据及其设备从读取起内存缓存五分钟，因包含密码，绝不放键值桶。每副本最多保留 `inMemoryCache.credentialCacheMiB`（默认 32 MiB）。每次使用仍比较密码及到期时间，验证失败不缓存。凭据或设备变更使执行变更的副本立即清缓存，并用 NATS 通知其他副本。因此撤销或跨副本设备删除，所有副本下个事件即生效；通知丢失时，则在副本到期时生效。MQTT 连接始终读数据库。
 
-**按设备群规模设定上限。** 内容从读取起在内存保留五分钟，因此上报间隔不超过该时长的设备，首个事件之后每个事件都由内存回答。上报更稀疏的设备永不内存命中，每事件一次桶读取，另加一次数据库凭据读取。请按单个副本所服务、且在该时间内上报的设备数设定上限：缓存小于该数量时会循环淘汰，几乎没有命中。特征是 `kv_cache_local_lookups_total{cache="relationships-by-source", result="miss"}` 接近事件率，而条目数远低上限。缓存容不下设备群则 `kv_cache_local_evictions_total{reason="capacity"}` 接近事件率，条目数或字节数到上限；凭据缓存的同类信号在 `credential_cache_evictions_total{reason="capacity"}`。此时提高边界并同步提高内存限制。默认六个内存缓存共最多 112 MiB；未设置 `GOMEMLIMIT` 时，回收前堆可增长至持有量约两倍。想更快解析设备群，也可增加池范围内 `resolution.workers` 或设备管理副本。
+**按设备群规模设定上限。** 内容从读取起在内存保留五分钟，因此上报间隔不超过该时长的设备，首个事件之后每个事件都由内存回答。上报更稀疏的设备永不内存命中，每事件一次桶读取，另加一次数据库凭据读取。请让每个副本按整个活跃设备群设定上限，而不是按设备群除以副本数：入站流是所有副本共享的单个持久消费者，事件不会按设备在副本之间分配，当副本数乘以设备上报间隔小于该时间时，每个副本几乎看到每一台设备。缓存小于设备群时会循环淘汰，几乎没有命中。例如 60,000 台设备每 10 秒上报，每台有一条追踪关系，则每个副本需要 `inMemoryCache.credentialCacheMiB` 约 80（每条约 1.1 KB）和 `inMemoryCache.perDeviceCacheMiB` 约 64（一组关系约 950 字节），并将内存上限提高到 512Mi。特征是 `kv_cache_local_lookups_total{cache="relationships-by-source", result="miss"}` 接近事件率，而条目数远低上限。缓存容不下设备群则 `kv_cache_local_evictions_total{reason="capacity"}` 接近事件率，条目数或字节数到上限；凭据缓存的同类信号在 `credential_cache_evictions_total{reason="capacity"}`。此时提高边界并同步提高内存限制。默认六个内存缓存共最多 112 MiB；未设置 `GOMEMLIMIT` 时，回收前堆可增长至持有量约两倍。想更快解析设备群，也可增加池范围内 `resolution.workers` 或设备管理副本。
 
 变更后移除条目（设备删除、配置发布）绝不跳过，因为只有桶主副本接受，最多等五秒。仍失败会记录 `A key-value cache eviction failed`，旧条目可服务至配置 TTL 到期，已有内存副本则至内存时间到期，二者取较短者。
 

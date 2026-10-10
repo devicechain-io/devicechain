@@ -5,6 +5,9 @@ package messaging
 
 import (
 	"context"
+	"fmt"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -212,4 +215,168 @@ func TestReconnectHooksRun(t *testing.T) {
 	require.Equal(t, []int{1, 2}, order)
 	nmgr.runReconnectHooks()
 	require.Equal(t, []int{1, 2, 1, 2}, order)
+}
+
+// hookStore runs onPut after every Put reaches the store, to put an eviction INSIDE a write.
+type hookStore struct {
+	*countingStore
+	onPut func()
+}
+
+func (s *hookStore) Put(ctx context.Context, key string, value []byte) (uint64, error) {
+	rev, err := s.countingStore.Put(ctx, key, value)
+	if s.onPut != nil {
+		s.onPut()
+	}
+	return rev, err
+}
+
+func stored(s *countingStore, key string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, ok := s.values[kvKey(key)]
+	return ok
+}
+
+// 🔴 THE CACHE-ASIDE RACE, ACROSS REPLICAS. Replica B missed, read the OLD row and is about to
+// write it; replica A commits and evicts first. Without the fill check B's write lands after A's
+// delete and every replica serves the old value for the bucket's whole time to live.
+func TestAFillThatOverlappedAnotherReplicasEvictionIsNotWritten(t *testing.T) {
+	url := evictRig(t)
+	store := newCountingStore()
+	a := replicaOver(t, url, store)
+	b := replicaOver(t, url, store)
+	gen := b.Generation() // B takes it before reading the database
+	require.NoError(t, a.Delete(context.Background(), "acme|dev"))
+	eventually(t, "B learned of the eviction", func() bool { return b.Generation() != gen })
+
+	require.NoError(t, b.SetIfUnchanged(context.Background(), "acme|dev", "old", gen))
+	if stored(store, "acme|dev") || store.puts.Load() != 0 {
+		t.Error("a fill that overlapped an eviction wrote the old value into the shared bucket (even briefly)")
+	}
+	// The counterweight: a fill that did not overlap one is written.
+	require.NoError(t, b.SetIfUnchanged(context.Background(), "acme|dev", "new", b.Generation()))
+	if !stored(store, "acme|dev") {
+		t.Error("a fill with no eviction in between was refused")
+	}
+}
+
+func TestAFillThatOverlappedThisReplicasOwnDeleteIsNotWritten(t *testing.T) {
+	store := newCountingStore()
+	c, _ := localCacheOver(store)
+	gen := c.Generation()
+	require.NoError(t, c.Delete(context.Background(), "acme|dev"))
+	require.NoError(t, c.SetIfUnchanged(context.Background(), "acme|dev", "old", gen))
+	if stored(store, "acme|dev") || store.puts.Load() != 0 {
+		t.Error("a fill begun before this replica's own delete was written after it")
+	}
+}
+
+// An eviction that arrives WHILE the write is being made takes the write back.
+func TestAnEvictionDuringAFillWriteTakesTheWriteBack(t *testing.T) {
+	inner := newCountingStore()
+	hs := &hookStore{countingStore: inner}
+	c, _ := localCacheOver(hs)
+	gen := c.Generation()
+	hs.onPut = func() { c.applyEviction(CacheEviction{Tenant: "acme", Keys: []string{"acme|dev"}}) }
+	require.NoError(t, c.SetIfUnchanged(context.Background(), "acme|dev", "old", gen))
+	if stored(inner, "acme|dev") {
+		t.Error("the old value stayed in the bucket after an eviction arrived during its write")
+	}
+	if _, found := mustGet(t, c, "acme|dev"); found {
+		t.Error("the old value stayed in memory after an eviction arrived during its write")
+	}
+}
+
+// A late write that lands AFTER the eviction (and after the generation check passed) is removed
+// by the second delete the eviction schedules.
+func TestTheFollowUpDeleteRemovesALateWrite(t *testing.T) {
+	url := evictRig(t)
+	store := newCountingStore()
+	a := replicaOver(t, url, store)
+	b := replicaOver(t, url, store)
+	a.followUpDelay = 50 * time.Millisecond
+	require.NoError(t, a.Delete(context.Background(), "acme|dev"))
+	store.seed("acme|dev", `"old"`) // B's late write
+	mustGet(t, b, "acme|dev")       // and B holds it in memory
+	eventually(t, "the follow-up delete cleared the bucket", func() bool { return !stored(store, "acme|dev") })
+	eventually(t, "the follow-up broadcast cleared B's memory", func() bool {
+		_, found := mustGet(t, b, "acme|dev")
+		return !found
+	})
+}
+
+// DeleteMany clears every key with bounded concurrency, broadcasts once per tenant, and
+// reaches other replicas' memory.
+func TestDeleteManyIsBoundedAndReachesOtherReplicas(t *testing.T) {
+	url := evictRig(t)
+	store := newCountingStore()
+	a := replicaOver(t, url, store)
+	b := replicaOver(t, url, store)
+	var inflight, peak atomic.Int64
+	store.beforeDelete = func() {
+		n := inflight.Add(1)
+		for {
+			p := peak.Load()
+			if n <= p || peak.CompareAndSwap(p, n) {
+				break
+			}
+		}
+		time.Sleep(2 * time.Millisecond)
+		inflight.Add(-1)
+	}
+	var keys []string
+	for i := 0; i < 200; i++ {
+		tenant := "acme"
+		if i%2 == 1 {
+			tenant = "beta"
+		}
+		k := fmt.Sprintf("%s|%d", tenant, i)
+		keys = append(keys, k)
+		mustSet(t, a, k, "v")
+		mustGet(t, b, k)
+	}
+	require.NoError(t, a.DeleteMany(context.Background(), keys))
+	for _, k := range keys {
+		if stored(store, k) {
+			t.Fatalf("%s survived DeleteMany", k)
+		}
+	}
+	if p := peak.Load(); p < 2 || p > deleteManyWorkers {
+		t.Errorf("peak concurrent deletes = %d, want between 2 and %d", p, deleteManyWorkers)
+	}
+	for _, k := range []string{keys[0], keys[1], keys[199]} {
+		k := k
+		eventually(t, k+" dropped on B", func() bool { _, f := mustGet(t, b, k); return !f })
+	}
+}
+
+// 🔴 A TENANT ERASURE DURING A READ. A Get that was asking the bucket when the tenant was
+// erased must not put what it read into memory afterwards: the invalidation moves the
+// generation on, and the fill checks it.
+func TestAReadInFlightAcrossATenantEvictionDoesNotFillMemory(t *testing.T) {
+	store := newCountingStore()
+	c, _ := localCacheOver(store)
+	store.seed("acme|dev", `"v"`)
+	started, release := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	store.beforeGet = func() {
+		once.Do(func() { close(started); <-release })
+	}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		var v string
+		_, _ = c.Get(context.Background(), "acme|dev", &v)
+	}()
+	<-started
+	c.applyEviction(CacheEviction{Tenant: "acme", All: true})
+	close(release)
+	<-done
+
+	store.beforeGet = nil
+	store.seed("acme|dev", `"changed"`)
+	if v, _ := mustGet(t, c, "acme|dev"); v != "changed" {
+		t.Errorf("the read begun before the erasure filled memory with %q, which was then served", v)
+	}
 }

@@ -1182,11 +1182,15 @@ functionalAreas:
       # relationshipCacheTtlSeconds, metricDefCacheTtlSeconds, membershipCacheTtlSeconds,
       # also 300 by default) caps it: the shorter of the two applies. All are 1 to 3600.
       #
-      # Size the bounds for the devices ONE replica serves that report within the time:
-      # a bound below that count makes the least-recently-used order cycle and answer
-      # almost nothing. The device credentials (an entry is about 1.1 KB, never stored in
-      # the broker) have their own bound, credentialCacheMiB: 32 MiB holds about 29,000
-      # devices, and 60,000 need about 70 MiB. At the defaults the six in-memory caches
+      # Size EACH replica for the WHOLE active fleet, not fleet / replicas: the inbound
+      # stream is one durable shared by every replica, so events are not split by device,
+      # and when replicas x a device's reporting interval is under the time, every
+      # replica sees nearly every device. A bound below the fleet makes the
+      # least-recently-used order cycle and answer almost nothing. The device credentials
+      # (an entry is about 1.1 KB, never stored in the broker) have their own bound,
+      # credentialCacheMiB: 32 MiB holds about 29,000 devices. Example, 60,000 devices
+      # each with one tracked edge: credentialCacheMiB 80, perDeviceCacheMiB 64 (relationship
+      # sets are about 950 B each), and the memory limit raised to 512Mi. At the defaults the six in-memory caches
       # (these three, two small ones, and the credentials) hold at most 112 MiB, which
       # the heap can double before a collection: raise the memory limit with them.
       #   inMemoryCache:

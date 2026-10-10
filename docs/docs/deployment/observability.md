@@ -845,9 +845,15 @@ the copy expires if that message is lost. MQTT connects always read the database
 **Sizing for the fleet.** A value is kept in memory for five minutes from when it was read, so a
 device that reports at least that often is answered from memory on every event after its first.
 A device that reports less often than that is never answered from memory, and each of its events
-costs one read from the key-value bucket, and one from the database for its credential. Size a
-bound for the devices one replica serves that report within the time: a cache smaller than that
-count cycles through them and answers almost nothing. The sign is
+costs one read from the key-value bucket, and one from the database for its credential. Size
+each replica for the whole active fleet, not for the fleet divided by the replicas: the inbound
+stream is one durable shared by every replica, so events are not divided between replicas by
+device, and when the number of replicas times a device's reporting interval is under the time,
+every replica sees nearly every device. A cache smaller than the fleet cycles through it and
+answers almost nothing. For example, 60,000 devices reporting every 10 s, each with one tracked
+relationship, need `inMemoryCache.credentialCacheMiB` of about 80 (an entry is about 1.1 KB) and
+`inMemoryCache.perDeviceCacheMiB` of about 64 (a relationship set is about 950 bytes) on every
+replica, and a memory limit of 512Mi to hold them. The sign is
 `kv_cache_local_lookups_total{cache="relationships-by-source", result="miss"}` close to the event
 rate, while `kv_cache_local_entries` for that cache stays well below `kv_cache_local_max_entries`.
 A fleet too large for the cache instead shows `kv_cache_local_evictions_total{reason="capacity"}`

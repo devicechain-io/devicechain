@@ -891,9 +891,15 @@ ese mensaje se pierde. Las conexiones MQTT siempre leen la base de datos.
 que un dispositivo que informa al menos con esa frecuencia se responde desde memoria en todos sus
 eventos salvo el primero. Un dispositivo que informa con menos frecuencia nunca se responde desde
 memoria, y cada uno de sus eventos cuesta una lectura del bucket de clave-valor y otra de la base
-de datos para su credencial. Dimensione un límite para los dispositivos que atiende una réplica y
-que informan dentro de ese tiempo: una caché menor que ese número los recorre en ciclo y casi no
-responde nada. La señal es
+de datos para su credencial. Dimensione cada réplica para toda la flota activa, no para la flota dividida entre las
+réplicas: el flujo de entrada es un único consumidor duradero compartido por todas las réplicas, así
+que los eventos no se reparten entre réplicas por dispositivo, y cuando el número de réplicas por el
+intervalo de informe de un dispositivo es menor que el tiempo, cada réplica ve casi todos los
+dispositivos. Una caché menor que la flota la recorre en ciclo y casi no responde nada. Por ejemplo,
+60.000 dispositivos que informan cada 10 s, cada uno con una relación seguida, necesitan en cada
+réplica un `inMemoryCache.credentialCacheMiB` de unos 80 (una entrada ocupa unos 1,1 KB) y un
+`inMemoryCache.perDeviceCacheMiB` de unos 64 (un conjunto de relaciones ocupa unos 950 bytes), y un
+límite de memoria de 512Mi para alojarlos. La señal es
 `kv_cache_local_lookups_total{cache="relationships-by-source", result="miss"}` cerca del ritmo de
 eventos, mientras `kv_cache_local_entries` de esa caché se mantiene muy por debajo de
 `kv_cache_local_max_entries`. Una flota demasiado grande para la caché muestra en cambio

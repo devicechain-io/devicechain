@@ -88,16 +88,24 @@ const DefaultResolutionWorkers = 10
 // singly assigned ones, and the entry bound is set above either so that memory, not the
 // count, is what binds.
 //
-// 🔑 AN ENTRY LIVES inMemoryCache.ttlSeconds (5 MINUTES BY DEFAULT), SO SIZE FOR THE DEVICES
-// THAT REPORT WITHIN IT. An entry expires that long after it was stored, whether or not it
-// was read, so on one replica the working set is the devices that reported within the time:
-// a fleet of N devices reporting at least every time-to-live puts all N in each cache, and
-// a bound under N makes the least-recently-used order cycle through them and answer almost
-// nothing (every entry is evicted before its device reports again). At the 5 s this used to
-// be, the working set was 5 s × the replica's event rate, about 35,000 at the highest rate
-// one replica has been measured resolving, and a fleet reporting less often than every 5 s
-// got nothing from memory at all. So a bound is sized for the fleet one replica serves
-// (fleet ÷ replicas, as events are spread across them), not for a rate.
+// 🔑 AN ENTRY LIVES inMemoryCache.ttlSeconds (5 MINUTES BY DEFAULT), SO SIZE EACH REPLICA FOR
+// THE WHOLE ACTIVE FLEET. An entry expires that long after it was stored, whether or not it
+// was read, so the working set is every device that reported within the time. The inbound
+// stream is ONE durable shared by every replica, so events are not divided between replicas
+// by device: a replica resolves whichever batch it fetched next. When replicas × a device's
+// reporting interval is under the time, every replica sees nearly every device, so every
+// replica holds nearly the whole fleet. Dividing the fleet by the replica count is wrong.
+// A bound under the fleet makes the least-recently-used order cycle through it and answer
+// almost nothing (every entry is evicted before its device reports again). At the 5 s this
+// used to be, the working set was 5 s × the replica's event rate and a fleet reporting less
+// often than every 5 s got nothing from memory at all.
+//
+// WORKED EXAMPLE, 60,000 devices each reporting every 10 s, each with one tracked edge:
+// credentials 60,000 × about 1.1 KB = about 66 MB, so credentialCacheMiB 80; relationships
+// 60,000 × about 950 B = about 57 MB, so perDeviceCacheMiB 64 (the entry bound of 131,072
+// already covers 60,000); the two small caches and the group memberships add little. That
+// is about 150 MiB of live cache per replica, and the heap can be a multiple of that before
+// a collection, so raise the memory limit to 512Mi.
 //
 // 🔴 THE MEMORY BUDGET, STATED AGAINST THE LIMIT IT RUNS UNDER. At these defaults the six
 // in-process caches — these three, the two keyed by device type and by tenant, and the

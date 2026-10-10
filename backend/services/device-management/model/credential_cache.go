@@ -164,6 +164,11 @@ func WithCredentialCacheTTL(d time.Duration) CredentialCacheOption {
 	return func(c *CredentialCache) { c.ttl = d }
 }
 
+// TTL is how long an entry is kept; MaxBytes is the byte bound. They exist for the tests that
+// check the service builds this cache as configured.
+func (c *CredentialCache) TTL() time.Duration { return c.ttl }
+func (c *CredentialCache) MaxBytes() int      { return c.maxBytes }
+
 // WithCredentialEvictionBroadcast makes every eviction reach the other replicas through b.
 func WithCredentialEvictionBroadcast(b *messaging.EvictionBroadcast) CredentialCacheOption {
 	return func(c *CredentialCache) { c.broadcast = b }
