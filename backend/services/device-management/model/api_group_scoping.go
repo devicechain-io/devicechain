@@ -438,9 +438,15 @@ func (api *Api) AnyScopedGroups(ctx context.Context) (bool, error) {
 // back — the attribute row and the read-model can never diverge. An ineligible write
 // (CLIENT scope, a non-member family) runs bare: no transaction overhead, and the
 // reverse-index lookup would be empty anyway.
+//
+// A SHARED device write also reconciles the device's configuration revisions in the same
+// transaction (reconcileDeviceConfigurationOnTx): a write the configuration document
+// refuses rolls back, and a revision is never minted for a write that did not commit.
 func (api *Api) writeAttrThenRecompute(ctx context.Context, entityType string, entityId uint,
 	attrKey, scope string, write func(db *gorm.DB) error) error {
-	if !membershipScopeEligible(entityType, scope) {
+	membership := membershipScopeEligible(entityType, scope)
+	configuration := configurationScopeEligible(entityType, scope)
+	if !membership && !configuration {
 		return write(api.RDB.DB(ctx))
 	}
 	var touched bool
@@ -448,9 +454,14 @@ func (api *Api) writeAttrThenRecompute(ctx context.Context, entityType string, e
 		if err := write(tx); err != nil {
 			return err
 		}
-		t, err := api.recomputeMembershipForAttr(ctx, tx, entityType, entityId, attrKey)
-		touched = t
-		return err
+		if membership {
+			t, err := api.recomputeMembershipForAttr(ctx, tx, entityType, entityId, attrKey)
+			touched = t
+			if err != nil {
+				return err
+			}
+		}
+		return api.reconcileDeviceConfigurationOnTx(ctx, tx, entityType, entityId, scope, attrKey, true)
 	})
 	if err != nil {
 		return err

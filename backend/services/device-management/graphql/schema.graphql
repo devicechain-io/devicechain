@@ -1431,6 +1431,73 @@ type DeviceReplacementSearchResults {
     pagination: SearchResultsPagination!
 }
 
+# One immutable revision of a device's configuration document: the values of the shared
+# attribute keys its profile's active published version declares as device-visible.
+# Revisions are append-only; a new one is minted only when the document changes.
+type DeviceConfigurationRevision {
+    # The revision number: 1 for the device's first document and one higher for each
+    # later one. A number is never reused for the same device.
+    revision: Int!
+    # "sha256:" followed by the lowercase hex SHA-256 of the document bytes. A device
+    # converges on a revision by reporting this revision number and this digest.
+    digest: String!
+    # The document as canonical JSON text: an object of declared key to typed value with
+    # keys sorted. These are exactly the bytes the digest covers.
+    document: String!
+    # When the revision was minted.
+    createdAt: String
+    # The authenticated subject whose attribute change minted the revision; empty when
+    # none was recorded.
+    actor: String!
+}
+
+# The configuration state a device last reported. Written only from the device's own
+# reports; no mutation sets it.
+type DeviceConfigurationReport {
+    # The revision the device reported, or null when it has not reported one.
+    revision: Int
+    # The digest the device reported for that revision.
+    digest: String
+    # RECEIVED, APPLIED or REJECTED.
+    status: String
+    # The device's reasons for a REJECTED report; empty otherwise.
+    errors: [String!]!
+    # When the device made the report.
+    reportedAt: String
+    # When the device last asked for its configuration.
+    lastSyncAt: String
+}
+
+# A device's configuration: the latest revision it should hold, what it last reported,
+# and whether the two agree.
+type DeviceConfiguration {
+    # The latest minted revision, or null when none has been minted for this device.
+    desired: DeviceConfigurationRevision
+    # The device's last report, or null when it has never reported.
+    reported: DeviceConfigurationReport
+    # True when a revision exists and the device has not reported APPLIED for that same
+    # revision with that same digest. Equal values under a different revision or digest
+    # do not count as applied.
+    pending: Boolean!
+    # True when the document the device's current profile declaration and shared
+    # attributes would build differs from the latest revision - for example after a
+    # profile publish declared new keys. A newer revision is minted when a declared
+    # key is next written or the device next synchronizes.
+    stale: Boolean!
+    # The device's shared attribute keys that its declaration does not name. They are
+    # never part of the document.
+    undeclared: [String!]!
+    # Declared keys whose stored value cannot be carried as the declared value type
+    # (written with another type, or unparseable). They are left out of the document.
+    invalid: [String!]!
+}
+
+# A page of a device's configuration revisions, newest first.
+type DeviceConfigurationRevisionSearchResults {
+    results: [DeviceConfigurationRevision!]!
+    pagination: SearchResultsPagination!
+}
+
 # What a caller sends to swap the physical unit behind a device identity.
 #
 # It carries NO device identity fields, and that is the contract rather than an
@@ -2326,6 +2393,12 @@ type Query {
     # device. There is no by-id or by-token door: a replacement is never addressed
     # on its own, only read as part of a device's history.
     deviceReplacements(criteria: DeviceReplacementSearchCriteria!): DeviceReplacementSearchResults!
+    # A device's configuration: its latest revision, its last report and whether they
+    # agree. Null when no device has this token. Reading mints nothing.
+    deviceConfiguration(deviceToken: String!): DeviceConfiguration
+    # A page of a device's configuration revisions, newest first. Empty when no device
+    # has this token.
+    deviceConfigurationRevisions(deviceToken: String!, pagination: PaginationInput!): DeviceConfigurationRevisionSearchResults!
     # The asset directly above this one in the hierarchy, or null when it is a
     # root. A root is a normal state, not an error.
     assetParent(token: String!): Asset
