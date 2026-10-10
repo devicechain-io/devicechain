@@ -422,7 +422,7 @@ func createDecoder(source config.EventSource) (processor.Decoder, error) {
 	case processor.DECODER_TYPE_JSON:
 		return processor.NewJsonDecoder(source.Decoder.Configuration), nil
 	default:
-		return nil, fmt.Errorf("unkown decoder type: %s", source.Type)
+		return nil, fmt.Errorf("unknown decoder type: %s", source.Decoder.Type)
 	}
 }
 
@@ -554,7 +554,7 @@ func buildEventSources() error {
 			}
 			created = append(created, http)
 		default:
-			return fmt.Errorf("unkown event source type: %s", source.Type)
+			return fmt.Errorf("unknown event source type: %s", source.Type)
 		}
 	}
 	EventSources = created
