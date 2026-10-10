@@ -37,10 +37,15 @@ func addrs(s ...string) []netip.Addr {
 // covers it; check-egress-ranges.sh --providers fails when a listed provider's address is admitted
 // or a provider has neither addresses nor a stated reason.
 var MetadataProviders = []MetadataProvider{
-	{Name: "aws", Addresses: addrs("169.254.169.254", "fd00:ec2::254")},
-	{Name: "gcp", Addresses: addrs("169.254.169.254")},
+	// 169.254.170.2 is the ECS task credentials endpoint; 169.254.170.23 and fd00:ec2::23 are the EKS
+	// Pod Identity agent (all checked against AWS documentation).
+	{Name: "aws", Addresses: addrs("169.254.169.254", "fd00:ec2::254", "169.254.170.2", "169.254.170.23", "fd00:ec2::23")},
+	{Name: "gcp", Addresses: addrs("169.254.169.254", "fd20:ce::254")},
 	{Name: "azure", Addresses: addrs("169.254.169.254", "168.63.129.16")},
-	{Name: "oracle", Addresses: addrs("169.254.169.254", "192.0.0.192")},
+	// Oracle's current documentation gives 169.254.169.254 only; 192.0.0.192 (an older documented
+	// address) is dropped because it is no longer documented, and is denied anyway as part of
+	// 192.0.0.0/24.
+	{Name: "oracle", Addresses: addrs("169.254.169.254")},
 	{Name: "digitalocean", Addresses: addrs("169.254.169.254")},
 	{Name: "ibm", Addresses: addrs("169.254.169.254")},
 	{Name: "alibaba", Addresses: addrs("100.100.100.200")},
@@ -48,13 +53,12 @@ var MetadataProviders = []MetadataProvider{
 	{Name: "hetzner", Addresses: addrs("169.254.169.254")},
 	{Name: "vultr", Addresses: addrs("169.254.169.254")},
 	{Name: "scaleway", Addresses: addrs("169.254.42.42")},
-	{Name: "openstack", Addresses: addrs("169.254.169.254")},
+	{Name: "openstack", Addresses: addrs("169.254.169.254", "fe80::a9fe:a9fe")},
 	{
 		Name: "equinix-metal",
-		Unverified: "its metadata hostname resolves to a PUBLIC address (147.75.207.243 when last resolved, " +
-			"2026-10-09), which no range row covers; the address was not confirmed against a published " +
-			"Equinix source, and denying an unconfirmed public /32 risks refusing a real host, so no " +
-			"entry is added until it is",
+		Unverified: "Equinix Metal reached end of life on 2026-06-30 and its resources were removed on " +
+			"2026-07-01; its metadata hostname resolved to a PUBLIC address that no range row covers, and " +
+			"there is no reason to ever deny a public address for a service that no longer exists",
 	},
 }
 
