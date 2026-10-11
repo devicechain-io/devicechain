@@ -117,6 +117,18 @@ describe('the built-in registry', () => {
     });
   });
 
+  // The by-id views are read-only projections, not a second registry: a consumer that writes
+  // an entry into one (to "register" a widget the cheap way) must fail, not half-work.
+  it('serves its by-id views frozen, over exactly the built-in ids', () => {
+    for (const [name, view] of Object.entries({ WIDGET_CHANNEL, WIDGET_BINDS_DATASOURCE, WIDGET_OPTIONS })) {
+      expect(Object.isFrozen(view), `${name} is mutable`).toBe(true);
+      expect(Object.keys(view).sort(), name).toEqual([...WIDGET_TYPES].sort());
+      expect(() => {
+        (view as Record<string, unknown>)['acme/tank'] = 'measurement';
+      }, name).toThrow(TypeError);
+    }
+  });
+
   it('puts the static widgets on the none channel: no datasource, no policy', () => {
     for (const id of ['label', 'image'] as const) {
       expect(registry.descriptor(id)).toMatchObject({ channel: 'none', datasource: { mode: 'none' }, binding: {} });

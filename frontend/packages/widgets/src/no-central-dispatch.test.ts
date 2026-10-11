@@ -123,6 +123,15 @@ describe('no central built-in-ID dispatch in widgets/src or widget-sdk/src', () 
     it('flags that same lookup outside a widget module', () => {
       expect(dispatchViolations('widgets/src/connected-widget.tsx', "builtinWidgetDescriptors['gauge']")).not.toEqual([]);
     });
+
+    // The ECharts exemption is the chart helpers' directory alone: the rest of the SDK (its
+    // registry, hooks, frame) is held to zero like this package.
+    it('holds the SDK outside its chart helpers to the same rule', () => {
+      for (const file of ['widget-sdk/src/registry.ts', 'widget-sdk/src/hooks.ts', 'widget-sdk/src/echarts.ts']) {
+        expect(dispatchViolations(file, "if (widget.type === 'gauge') return 1;"), file).not.toEqual([]);
+      }
+      expect(dispatchViolations('widget-sdk/src/chart/chart-options.ts', "series: [{ type: 'gauge' }]")).toEqual([]);
+    });
   });
 
   it('holds every source to zero violations', () => {
@@ -137,5 +146,14 @@ describe('no central built-in-ID dispatch in widgets/src or widget-sdk/src', () 
     );
     // One registration per built-in, none shared or missing.
     expect([...registered].sort()).toEqual([...WIDGET_TYPES].sort());
+    // ...and each through the public defineWidget. It is an identity function, so a module
+    // that built the object by hand would register identically at runtime; only the source
+    // shows the built-ins took the third-party path.
+    const viaDefineWidget = widgetFiles.flatMap((s) =>
+      [...s.code.matchAll(/defineWidget\(\{\s*descriptor:\s*builtinWidgetDescriptors\[\s*'([a-z-]+)'\s*\]/g)].map(
+        (m) => m[1],
+      ),
+    );
+    expect([...viaDefineWidget].sort()).toEqual([...WIDGET_TYPES].sort());
   });
 });
