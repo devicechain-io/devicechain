@@ -3253,7 +3253,7 @@ func (v *getDeviceTypesByTokenDeviceTypesByTokenDeviceType) __premarshalJSON() (
 // getDeviceTypesByTokenResponse is returned by getDeviceTypesByToken on success.
 type getDeviceTypesByTokenResponse struct {
 	// Returns the device types with the given tokens. Tokens that match no device type are
-	// omitted. Requires device:read.
+	// omitted, and more than 1000 tokens are refused with LIMIT_EXCEEDED. Requires device:read.
 	DeviceTypesByToken []getDeviceTypesByTokenDeviceTypesByTokenDeviceType `json:"deviceTypesByToken"`
 }
 
@@ -3380,8 +3380,8 @@ func (v *getDevicesByTokenDevicesByTokenDevice) __premarshalJSON() (*__premarsha
 
 // getDevicesByTokenResponse is returned by getDevicesByToken on success.
 type getDevicesByTokenResponse struct {
-	// Returns the devices with the given tokens. Tokens that match no device are omitted.
-	// Requires device:read.
+	// Returns the devices with the given tokens. Tokens that match no device are omitted,
+	// and more than 1000 tokens are refused with LIMIT_EXCEEDED. Requires device:read.
 	DevicesByToken []getDevicesByTokenDevicesByTokenDevice `json:"devicesByToken"`
 }
 

@@ -2643,7 +2643,7 @@ type Query {
     ): [DeviceType!]!
     """
     Returns the device types with the given tokens. Tokens that match no device type are
-    omitted. Requires device:read.
+    omitted, and more than 1000 tokens are refused with LIMIT_EXCEEDED. Requires device:read.
     """
     deviceTypesByToken(
         """Tokens of the device types to return."""
@@ -2665,7 +2665,7 @@ type Query {
     ): [DeviceProfile!]!
     """
     Returns the device profiles with the given tokens. Tokens that match no profile are
-    omitted. Requires device:read.
+    omitted, and more than 1000 tokens are refused with LIMIT_EXCEEDED. Requires device:read.
     """
     deviceProfilesByToken(
         """Tokens of the profiles to return."""
@@ -2712,7 +2712,7 @@ type Query {
     ): [MetricDefinition!]!
     """
     Returns the metric definitions with the given tokens. Tokens that match nothing are
-    omitted. Requires device:read.
+    omitted, and more than 1000 tokens are refused with LIMIT_EXCEEDED. Requires device:read.
     """
     metricDefinitionsByToken(
         """Tokens of the metric definitions to return."""
@@ -2737,7 +2737,7 @@ type Query {
     ): [CommandDefinition!]!
     """
     Returns the command definitions with the given tokens. Tokens that match nothing are
-    omitted. Requires device:read.
+    omitted, and more than 1000 tokens are refused with LIMIT_EXCEEDED. Requires device:read.
     """
     commandDefinitionsByToken(
         """Tokens of the command definitions to return."""
@@ -2935,8 +2935,8 @@ type Query {
         ids: [ID!]!
     ): [Device!]!
     """
-    Returns the devices with the given tokens. Tokens that match no device are omitted.
-    Requires device:read.
+    Returns the devices with the given tokens. Tokens that match no device are omitted,
+    and more than 1000 tokens are refused with LIMIT_EXCEEDED. Requires device:read.
     """
     devicesByToken(
         """Tokens of the devices to return."""
