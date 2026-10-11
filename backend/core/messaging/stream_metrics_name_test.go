@@ -48,7 +48,7 @@ func TestExportedMetricNamesMatchTheAlertSelectors(t *testing.T) {
 		"device-management", "user-management", "event-processing", "event-sources",
 		"event-management", "device-state", "command-delivery", "dashboard-management",
 		"notification-management", "outbound-connectors", "ai-inference", "mcp",
-		"lwm2m-ingest", "sparkplug-ingest",
+		"lwm2m-ingest", "sparkplug-ingest", "update-management",
 	} {
 		// A registry per area. A Microservice registers its metrics in a registry it
 		// owns, and a struct literal owns none — without this the gauges below are

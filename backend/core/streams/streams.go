@@ -688,18 +688,20 @@ var All = []Stream{
 	// and later update assignments). Like DeviceCommands, the concrete subject ends in the
 	// target device's token so the signed broker grant can confine a device to its own.
 	//
-	// device-management publishes a device's configuration revisions here. It is bounded
+	// device-management publishes a device's configuration revisions here, and
+	// update-management its update assignments, download grants and cancellations. It is bounded
 	// like every other stream: Limits retention, a week of history and the Cold tier's byte
 	// ceiling, evicting the oldest, so an unread channel cannot grow without limit. Cold
 	// because volume follows state CHANGES, not telemetry samples.
-	{Suffix: DeviceDesired, PlatformAuthored: true, Areas: []string{"device-management"}, Tier: Cold, Shape: ShapeTenantDevice, DeadLetterKind: kindControlFact,
+	{Suffix: DeviceDesired, PlatformAuthored: true, Areas: []string{"device-management", "update-management"}, Tier: Cold, Shape: ShapeTenantDevice, DeadLetterKind: kindControlFact,
 		Why: "desired-state downlink per device - one message per state change"},
 
 	// PER-DEVICE, DEVICE -> PLATFORM: progress and status reports. The device token in the
 	// subject is the one AUTHENTICATED statement of who reported, for the reason given on
-	// CommandResponses: a payload field is self-asserted. device-management consumes it;
-	// bounded exactly as DeviceDesired is.
-	{Suffix: DeviceReports, Areas: []string{"device-management"}, Tier: Cold, Shape: ShapeTenantDevice, DeadLetterKind: kindControlFact,
+	// CommandResponses: a payload field is self-asserted. device-management consumes the
+	// configuration kinds and update-management the update kinds, each on its own durable; bounded
+	// exactly as DeviceDesired is.
+	{Suffix: DeviceReports, Areas: []string{"device-management", "update-management"}, Tier: Cold, Shape: ShapeTenantDevice, DeadLetterKind: kindControlFact,
 		Why: "device reports per device - one message per state change"},
 
 	// ADR-030 amendment. The durable capture of raw device telemetry, and the
@@ -860,7 +862,7 @@ var All = []Stream{
 	{Suffix: DeadLetters,
 		Areas: []string{"event-processing", "notification-management", "command-delivery",
 			"device-management", "user-management", "outbound-connectors", "device-state",
-			"event-management", "event-sources", "lwm2m-ingest"},
+			"event-management", "event-sources", "lwm2m-ingest", "update-management"},
 		Tier: Cold, DuplicateWindowSeconds: 1800, DeadLetterKind: NotLettered,
 		Why: "ADR-024 dead-letter sink: every area that consumes a stream writes it, user-management " +
 			"stores it, command-delivery reads it back to settle the commands its letters are about"},
@@ -888,7 +890,7 @@ var All = []Stream{
 	{Suffix: MaxDeliveries,
 		Areas: []string{"device-management", "device-state", "event-management", "event-sources",
 			"notification-management", "outbound-connectors", "command-delivery", "user-management",
-			"event-processing", "lwm2m-ingest"},
+			"event-processing", "lwm2m-ingest", "update-management"},
 		Tier: Cold, Shape: ShapeAdvisory, Retention: RetentionWorkQueue, MaxBytesCap: maxDeliveriesMaxBytesCap,
 		DeadLetterKind: NotLettered,
 		Why:            "broker advisories for deliveries that ran out — empty in steady state"},

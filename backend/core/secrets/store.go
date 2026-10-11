@@ -12,6 +12,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // Secret is one envelope-encrypted secret at rest (ADR-059): the sealed value plus
@@ -197,6 +198,42 @@ func (s *gormStore) Put(ctx context.Context, ref SecretRef, value []byte) error 
 	default:
 		return err
 	}
+}
+
+// CreateIfAbsent stores value under ref only if nothing is stored there, and reports whether it
+// did. It NEVER replaces an existing row: that is the whole difference from Put, which is an
+// upsert. A value that several replicas may all try to create at once (a signing key every one of
+// them must agree on) has to be created this way, because with Put the last writer wins and every
+// replica that already used the loser's value is left holding something nobody else can verify.
+//
+// The insert is ON CONFLICT DO NOTHING against the (tenant_id, scope, name) live-row unique
+// index, so of any number of concurrent callers exactly one gets true; the others get false and
+// read the winner's value with Resolve.
+func (s *gormStore) CreateIfAbsent(ctx context.Context, ref SecretRef, value []byte) (bool, error) {
+	if err := ref.Valid(); err != nil {
+		return false, err
+	}
+	env, err := Seal(ctx, s.kp, value, aadFor(ref))
+	if err != nil {
+		return false, err
+	}
+	row := &Secret{
+		Scope:      string(ref.Scope),
+		Name:       ref.Name,
+		Ciphertext: env.Ciphertext,
+		Nonce:      env.Nonce,
+		WrappedDEK: env.WrappedDEK,
+		KEKVersion: env.KEKVersion,
+		Alg:        env.Alg,
+	}
+	if ref.Scope == ScopeInstance {
+		row.TenantId = instanceTenantSentinel
+	}
+	res := s.ctxDB(ctx, ref).Clauses(clause.OnConflict{DoNothing: true}).Create(row)
+	if res.Error != nil {
+		return false, res.Error
+	}
+	return res.RowsAffected == 1, nil
 }
 
 // Resolve returns the cleartext for ref. SERVER-INTERNAL ONLY (never wire to a

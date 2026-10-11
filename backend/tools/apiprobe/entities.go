@@ -4,9 +4,12 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"sort"
 	"strings"
+
+	"github.com/devicechain-io/dc-microservice/userclient"
 )
 
 // entity is one creatable thing: how to make it, and how to read it back.
@@ -157,6 +160,12 @@ type entity struct {
 	// Record, when set, stores tokens from the created object into the state so
 	// later entities can reference them. Most entries need none.
 	Record func(*state, map[string]any)
+
+	// After, when set, runs once after the create succeeded, with the authenticated
+	// tenant session. It is for the one step a GraphQL mutation cannot express: an
+	// artifact is declared over GraphQL and its bytes go over an HTTP PUT. A failure
+	// is a refusal of the platform, reported like one.
+	After func(ctx context.Context, c *connection, sess *userclient.TenantSession, st *state) error
 }
 
 // param is one named, typed argument of a Params write.
