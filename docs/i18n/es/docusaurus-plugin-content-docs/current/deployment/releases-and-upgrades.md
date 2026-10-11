@@ -3775,6 +3775,14 @@ No hay que hacer nada.
 
 Lo que cambia la versión posterior a `v0.19.0`, recogido a medida que llega.
 
+#### La contraseña de un dispositivo `MQTT_BASIC` se muestra una vez y no puede volver a mostrarse {#next-upgrade-device-password-show-once}
+
+La plataforma conserva ahora solo un resumen irreversible con clave de la contraseña de un dispositivo `MQTT_BASIC`, no la contraseña. La API nunca devolvía la contraseña en una lectura, así que ningún resultado de consulta cambia. Lo que cambia es que nadie puede recuperarla tampoco de la plataforma: la consola muestra una contraseña una sola vez, justo después de agregar la credencial o de establecer una nueva, con un botón de copiar, y después solo indica que hay una contraseña establecida. La fila de la credencial incorpora la acción **Establecer nueva contraseña**, y el formulario ofrece **Generar contraseña segura**.
+
+Las contraseñas existentes se convierten en resúmenes la primera vez que device-management arranca con la nueva versión, y los dispositivos siguen autenticándose con la contraseña que ya usan. Una contraseña que no anotaste no puede mostrarse después; establece una nueva y cárgala en el dispositivo. Consulta [Contraseñas que se muestran una vez y su rotación](../guides/device-credentials.md#show-once).
+
+No hay nada que hacer.
+
 #### La lista de eventos de un dispositivo lee solo las filas de su inquilino {#tenant-device-index}
 
 El índice que sirve la lista de eventos de un dispositivo empieza ahora por el inquilino. En
