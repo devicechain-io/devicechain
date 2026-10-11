@@ -388,10 +388,13 @@ issuer_derivation_guards() {
   key="$(openssl rand -base64 32)"
 
   issuer_of() { # issuer_of [helm args...] — prints the rendered auth.issuerUrl or nothing
-    helm template "$CHART" \
+    # Render into a variable first: the reader below stops at its first match, and a pipe
+    # from helm would then SIGPIPE helm, which pipefail turns into exit 141.
+    local rendered
+    rendered="$(helm template "$CHART" \
         --set ingress.enabled=true --set ingress.host=iot.example.com \
-        --set "instance.config.infrastructure.secrets.rootKey=$key" "$@" |
-      python3 -c '
+        --set "instance.config.infrastructure.secrets.rootKey=$key" "$@")" || return 1
+    python3 -c '
 import json, sys, yaml
 for d in yaml.safe_load_all(sys.stdin):
     if d and d.get("kind") == "ConfigMap" and "user-management" in (d.get("data") or {}):
@@ -399,7 +402,7 @@ for d in yaml.safe_load_all(sys.stdin):
         break
 else:
     sys.exit("no user-management configuration rendered")
-'
+' <<<"$rendered"
   }
 
   expect_issuer() { # expect_issuer <want> <description> [helm args...]
