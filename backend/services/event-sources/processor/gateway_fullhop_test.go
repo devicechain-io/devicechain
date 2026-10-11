@@ -59,6 +59,13 @@ import (
 // instance+area+suffix, so the replacement must reuse it to resume the same durable.
 func captureReader(t *testing.T, nc *nats.Conn, area string) messaging.MessageReader {
 	t.Helper()
+	_, r := captureManagerAndReader(t, nc, area)
+	return r
+}
+
+// captureManagerAndReader is captureReader that also returns the manager that owns the reader.
+func captureManagerAndReader(t *testing.T, nc *nats.Conn, area string) (*messaging.NatsManager, messaging.MessageReader) {
+	t.Helper()
 
 	u, err := url.Parse(nc.ConnectedUrl())
 	require.NoError(t, err, "parse embedded server url")
@@ -91,7 +98,7 @@ func captureReader(t *testing.T, nc *nats.Conn, area string) messaging.MessageRe
 	// this is also what makes the stream exist before the device publishes.
 	r, err := nmgr.NewReader(streams.DeviceEventsCapture)
 	require.NoError(t, err, "bind the durable capture reader")
-	return r
+	return nmgr, r
 }
 
 // decodedEvent is one delivery observed at the far end of the whole chain.

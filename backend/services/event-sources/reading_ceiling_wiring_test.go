@@ -252,10 +252,12 @@ func TestCapturedLargeEventsAreShedAtTheTenantsReadingCeiling(t *testing.T) {
 	require.NotNil(t, GatewaySource, "a source pointed at the platform broker must be the gateway source")
 
 	const sent = 40
+	var lastSeq uint64
 	for i := 0; i < sent; i++ {
-		_, err := b.js.Publish(messaging.DeviceEventsSubject("inst-1", "acme", "sensor-001"),
+		pa, err := b.js.Publish(messaging.DeviceEventsSubject("inst-1", "acme", "sensor-001"),
 			[]byte(readingsBody("sensor-001", 256)))
 		require.NoError(t, err)
+		lastSeq = pa.Sequence
 	}
 
 	ctx := context.Background()
@@ -267,7 +269,7 @@ func TestCapturedLargeEventsAreShedAtTheTenantsReadingCeiling(t *testing.T) {
 	capture := messaging.StreamName("inst-1", streams.DeviceEventsCapture)
 	require.Eventually(t, func() bool {
 		for ci := range b.js.ConsumersInfo(capture) {
-			if ci.AckFloor.Stream == sent && ci.NumAckPending == 0 {
+			if ci.AckFloor.Stream == lastSeq && ci.NumAckPending == 0 {
 				return true
 			}
 		}
