@@ -613,16 +613,19 @@ type Mutation {
         refreshToken: String!
     ): AuthToken!
     """
-    Signs out: ends the sign-in the token belongs to. Every session minted from that one
-    sign-in stops working at its next exchange, whichever tenant it is in: the refresh
-    tokens (refresh is refused), the identity token (selectTenant is refused), and any
-    OAuth grants authorized from it. Other sign-ins of the same account, on other devices
-    or browsers, are not affected; to end all of them, reset the password or disable the
-    account. Access tokens already issued cannot be recalled and keep working until they
-    expire, at most 15 minutes. Needs no Authorization header. Safe to repeat: signing out
-    of a sign-in that has already ended, or with a token that has expired, succeeds. Fails
-    with "invalid or expired token" for a token that is not one of this instance's, and
-    with a retryable error, leaving the sign-in open, if the sign-out could not be recorded.
+    Signs out: ends the sign-in the token belongs to, and from that moment refuses its
+    exchanges. Refresh tokens minted from this sign-in, in any tenant, no longer refresh;
+    its identity token can no longer select a tenant; and OAuth grants authorized during
+    this sign-in no longer refresh. The MCP authorization page signs in on its own, so a
+    grant made there is not ended by signing out of the console: it ends when that
+    sign-in runs out (7 days by default). Access tokens and identity tokens already
+    issued, including on the admin API, are not recalled and stay valid until they
+    expire, at most 15 minutes by default. Other sign-ins of the same account, on other
+    devices or browsers, are not affected; to end all of them, reset the password or
+    disable the account. Needs no Authorization header. Safe to repeat, and a token that
+    has expired still ends its sign-in. Fails with "invalid or expired token" for a
+    token this instance did not sign or that names no sign-in, and with a retryable
+    error, leaving the sign-in open, if the sign-out could not be recorded.
     """
     # Server-side sign-out (see description). token is the sign-in's refresh token, or its
     # identity token when no tenant has been selected yet.
