@@ -86,8 +86,11 @@ function ConnectedWidgetBody({ widget, hub, registry, actions, initialSamples }:
   // A widget bound to a since-deleted device (its stable token no longer resolves)
   // shows an "unavailable" pane rather than a blank one — checked optimistically, so a
   // valid widget renders from its stream without waiting on this. An unresolved widget asks
-  // nothing: it is never given a datasource to check.
-  const availability = useDatasourceAvailability(hub, descriptor ? widget.datasource : undefined);
+  // nothing: it is never given a datasource to check. Nor does a widget whose descriptor
+  // binds none (label, image, the selector): a datasource left on its stored JSON is one it
+  // never reads, so it must not turn the widget into an "unavailable" pane.
+  const readsDatasource = descriptor !== undefined && descriptor.datasource.mode !== 'none';
+  const availability = useDatasourceAvailability(hub, readsDatasource ? widget.datasource : undefined);
   if (availability === 'unavailable') {
     return <WidgetUnavailableFrame widget={widget} />;
   }

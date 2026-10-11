@@ -69,6 +69,27 @@ describe('static widgets on the none channel', () => {
     expect(h.historyFetches).toEqual([]);
   });
 
+  // A board authored while label/image sat on the measurement channel can still carry a
+  // datasource on them, and the parser keeps it. The channel, not the stored JSON, decides:
+  // a `none` widget reads nothing even when handed a selector, so it can neither subscribe
+  // nor be replaced by an "unavailable" pane for a device it never displayed.
+  it('read nothing even when the stored widget still carries a datasource', async () => {
+    const { source, calls } = recordingSource();
+    const ds = { kind: 'device' as const, deviceToken: 'gone', measurements: ['t'] };
+    const definition: DashboardDefinition = {
+      ...staticOnly,
+      widgets: staticOnly.widgets.map((w) => ({ ...w, datasource: ds })),
+    };
+    source.isDatasourceAvailable = async () => (calls.push('availability'), false);
+    render(<DashboardRenderer definition={definition} hub={source} />);
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(calls).toEqual([]);
+    expect(h.historyFetches).toEqual([]);
+    expect(screen.getByText('Zone A')).toBeTruthy();
+    expect(screen.getByAltText('plan')).toBeTruthy();
+  });
+
   it('control: a measurement widget on the same board DOES subscribe', async () => {
     const { source, calls } = recordingSource();
     const definition: DashboardDefinition = {
