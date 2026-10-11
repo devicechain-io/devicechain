@@ -48,7 +48,7 @@ The relational system of record stays single and non-pluggable by design. The *b
 
 The filesystem default needs only a **persistent volume**. Set `blob.directory` and enable `blobStorage.persistence`, and the Helm chart creates the PVC and mounts it into the services that store assets. There is no extra infrastructure to install or operate.
 
-Selecting the S3 backend is a configuration change on the instance. The endpoint and bucket are non-secret config. The access credential resolves from the deployment's credential chain — for example, environment variables from the instance's Kubernetes Secret, or workload identity on a cloud cluster.
+Selecting the S3 backend is a configuration change on the instance. The endpoint and bucket are non-secret config. The access credential resolves from the deployment's credential chain — for example, environment variables from the instance's Kubernetes Secret, or workload identity on a cloud cluster. The credential needs `s3:GetObject`, `s3:PutObject` and `s3:DeleteObject` on the bucket's objects and `s3:ListBucket` on the bucket: the last one lets the erasure of a deleted tenant find and remove every object under its prefix.
 
 Like every DeviceChain config surface, the object-store configuration is typed and strict: a misspelled backend name is a startup error, not a silent fallback. A filesystem backend with no directory is treated as "object store not configured". The service still starts, the logo upload and read endpoints return **503**, and inline and URL logos keep working.
 

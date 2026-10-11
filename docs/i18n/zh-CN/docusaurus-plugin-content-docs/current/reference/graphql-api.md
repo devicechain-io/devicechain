@@ -70,7 +70,7 @@ Ingress 将 `/api/<area>/graphql` 路由到各功能区服务，并移除前缀�
 
 `sparkplug-ingest` 和 `lwm2m-ingest` 完全不提供 GraphQL，且有意不进入 `/api` 路由。
 `event-sources` 虽有路由，但只返回占位 Schema；设备通过传输协议接入它，而不是通过该 API。
-`update-management` 同样有路由，但其 API 在本版本中尚未实现：它唯一的占位查询对每次调用都返回 `NOT_IMPLEMENTED` 错误。
+`update-management` 同样有路由：其 API 是制品目录（声明、查看和停用更新制品）。制品内容本身不通过 GraphQL 传输，而是使用 `PUT /api/update-management/updates/artifacts/{token}/content` 上传，需携带具有 `artifact:write` 权限的租户访问令牌。该 Chart 会为这条路由单独创建一个 Ingress，请求体大小限制由 `ingress.uploadMaxBodySize`（默认 `1g`）设定，并关闭请求缓冲。使用其他 Ingress 控制器时，请在该路径上设置同样两项：对 ingress-nginx，将 `nginx.ingress.kubernetes.io/proxy-body-size` 设为不小于你最大的制品，并设置 `nginx.ingress.kubernetes.io/proxy-request-buffering: "off"`。缺少后者时，nginx 会先把整个请求体读入磁盘，服务才能看到请求，因此直到整个镜像到达之后才会校验令牌。
 
 ### 通过 WebSocket 订阅 {#subscriptions-over-websocket}
 

@@ -82,8 +82,16 @@ llamador. Algunas autoridades no coinciden con la intuición:
 `sparkplug-ingest` y `lwm2m-ingest` no sirven GraphQL en absoluto y se mantienen deliberadamente
 fuera del router `/api`. `event-sources` sí está enrutado, pero responde con un esquema marcador de
 posición: la ingesta llega a él por los transportes del plano de dispositivo, no por esta API.
-`update-management` también está enrutado, pero su API no está implementada en esta versión: su
-única consulta marcadora de posición responde a cada llamada con un error `NOT_IMPLEMENTED`.
+`update-management` también está enrutado: su API es el catálogo de artefactos (declarar,
+consultar y retirar artefactos de actualización). El contenido del artefacto no viaja por GraphQL:
+se sube con `PUT /api/update-management/updates/artifacts/{token}/content`, autenticado con un token
+de acceso del inquilino que tenga `artifact:write`. El chart da a esa ruta un Ingress propio, con el límite de cuerpo de petición fijado por
+`ingress.uploadMaxBodySize` (por defecto `1g`) y el almacenamiento en búfer de la petición desactivado. Con
+cualquier otro controlador de ingress, fije lo mismo en esa ruta: para ingress-nginx,
+`nginx.ingress.kubernetes.io/proxy-body-size` igual o superior a su artefacto más grande, y
+`nginx.ingress.kubernetes.io/proxy-request-buffering: "off"`. Sin lo segundo, nginx lee todo el cuerpo a disco
+antes de que el servicio vea la petición, de modo que el token no se comprueba hasta que ha llegado la imagen
+entera.
 
 ### Suscripciones por WebSocket {#subscriptions-over-websocket}
 

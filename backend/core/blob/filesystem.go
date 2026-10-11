@@ -293,6 +293,48 @@ func (s *filesystemStore) Delete(ctx context.Context, ref Ref) error {
 	return nil
 }
 
+// DeleteTenant removes the tenant's directory tree, counting the files in it (an
+// in-flight Put's temp file included: it is this tenant's bytes, and removing it makes
+// that Put fail at its rename rather than commit). Nothing is followed: WalkDir does not
+// descend symlinks, and removing one removes the link.
+func (s *filesystemStore) DeleteTenant(ctx context.Context, tenant string) (int64, error) {
+	prefix, err := tenantPrefix(s.instanceID, tenant)
+	if err != nil {
+		return 0, err
+	}
+	dir, err := s.objectPath(strings.TrimSuffix(prefix, "/"))
+	if err != nil {
+		return 0, err
+	}
+	var n int64
+	walkErr := filepath.WalkDir(dir, func(p string, d os.DirEntry, err error) error {
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				return nil
+			}
+			return err
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if d.IsDir() {
+			return nil
+		}
+		if err := os.Remove(p); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("blob: deleting %s: %w", p, err)
+		}
+		n++
+		return nil
+	})
+	if walkErr != nil {
+		return n, fmt.Errorf("blob: deleting tenant %q: %w", tenant, walkErr)
+	}
+	if err := os.RemoveAll(dir); err != nil {
+		return n, fmt.Errorf("blob: removing tenant directory %q: %w", tenant, err)
+	}
+	return n, nil
+}
+
 // infoFor builds Info from a stat result, inferring Content-Type from the key's
 // extension (the filesystem backend persists none of its own).
 func infoFor(key string, fi os.FileInfo) Info {

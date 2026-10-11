@@ -76,9 +76,15 @@ authorities do not line up with intuition:
 
 `sparkplug-ingest` and `lwm2m-ingest` serve no GraphQL at all and are deliberately kept off the
 `/api` router entirely. `event-sources` is routed but answers with a placeholder schema: ingest
-reaches it over the device-plane transports, not this API. `update-management` is routed too, but its
-API is not implemented in this release: its one placeholder query answers every call with a
-`NOT_IMPLEMENTED` error.
+reaches it over the device-plane transports, not this API. `update-management` is routed too: its API is the artifact
+catalogue (declare, inspect and retire update artifacts). The artifact content itself is not sent
+through GraphQL: it is uploaded with `PUT /api/update-management/updates/artifacts/{token}/content`,
+authenticated with a tenant access token that holds `artifact:write`. The chart gives that route an Ingress of its own, with the request-body limit set by
+`ingress.uploadMaxBodySize` (default `1g`) and request buffering turned off. Behind any other ingress
+controller set the same two things on that path: for ingress-nginx, `nginx.ingress.kubernetes.io/proxy-body-size`
+at or above your largest artifact, and `nginx.ingress.kubernetes.io/proxy-request-buffering: "off"`. Without the
+second, nginx reads the whole body to disk before the service sees the request, so the token is not checked
+until the entire image has arrived.
 
 ### Subscriptions over WebSocket {#subscriptions-over-websocket}
 
