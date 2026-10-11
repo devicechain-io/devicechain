@@ -27,6 +27,10 @@
     "message": "Material de referencia: la API de GraphQL y la configuración.",
     "description": "The generated-index page description for category 'Reference' in sidebar 'docs'"
   },
+  "sidebar.docs.link.GraphQL schema reference": {
+    "message": "Referencia de los esquemas GraphQL",
+    "description": "The label for link 'GraphQL schema reference' in sidebar 'docs', linking to '/reference/graphql/'"
+  },
   "sidebar.docs.category.Deployment": {
     "message": "Despliegue",
     "description": "The label for category 'Deployment' in sidebar 'docs'"

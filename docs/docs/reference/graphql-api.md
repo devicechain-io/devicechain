@@ -20,6 +20,7 @@ Every schema is published here, generated from the files the services parse at s
 
 | | |
 |---|---|
+| **Reference pages** | [GraphQL schema reference](/reference/graphql/) — one page per schema: every query, mutation, subscription and type, with its description |
 | **Index** | [`/schema/index.json`](pathname:///schema/index.json) — every area, its auth plane, its endpoint and its schema file |
 | **Schemas** | `/schema/<area>.graphql`, plus `-admin` and `-settings` for the two areas that serve those planes |
 

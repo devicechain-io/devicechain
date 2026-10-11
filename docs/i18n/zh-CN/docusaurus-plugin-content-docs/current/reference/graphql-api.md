@@ -19,6 +19,7 @@ DeviceChain 处于预发布阶段，Schema 仍会演进。发布的 Schema 文�
 
 | | |
 |---|---|
+| **参考页面** | [GraphQL Schema 参考](/reference/graphql/)：每个 Schema 一页，列出所有查询、变更、订阅和类型及其说明 |
 | **索引** | [`/schema/index.json`](pathname:///schema/index.json)：列出所有功能区、认证平面、端点和 Schema 文件 |
 | **Schema** | `/schema/<area>.graphql`；对提供另外两个平面的功能区，还包含 `-admin` 和 `-settings` 文件 |
 
