@@ -13,6 +13,7 @@ import (
 	"github.com/devicechain-io/dc-ai-inference/model"
 	"github.com/devicechain-io/dc-microservice/auth"
 	gql "github.com/graph-gophers/graphql-go"
+	"github.com/graph-gophers/graphql-go/ast"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -193,8 +194,32 @@ func TestTheActivePointerIsGone(t *testing.T) {
 		assert.NotContains(t, served, retired,
 			"the instance-wide active pointer is retired — entitlement is per-tier now (ADR-065)")
 	}
-	assert.NotContains(t, AdminSchemaContent, "active: Boolean!",
-		"a provider carries no active flag — being offered is a property of the GRANT, not of the provider")
+	// Read from the parsed schema, not the file text: a description is free to say
+	// the word, and only a declared field is a flag.
+	for name, typ := range parsedAdminSchema(t).Types {
+		var fields []string
+		switch typ := typ.(type) {
+		case *ast.ObjectTypeDefinition:
+			fields = typ.Fields.Names()
+		case *ast.InputObject:
+			for _, v := range typ.Values {
+				fields = append(fields, v.Name.Name)
+			}
+		}
+		if strings.HasPrefix(name, "AiProvider") {
+			assert.NotContains(t, fields, "active",
+				"a provider carries no active flag — being offered is a property of the GRANT, not of the provider (%s)", name)
+		}
+	}
+}
+
+// parsedAdminSchema is the admin schema's syntax tree, so a test asks what the schema
+// DECLARES rather than what its text happens to contain — descriptions included.
+func parsedAdminSchema(t *testing.T) *ast.Schema {
+	t.Helper()
+	parsed, err := gql.ParseSchema(AdminSchemaContent, nil, gql.UseFieldResolvers())
+	require.NoError(t, err)
+	return parsed.AST()
 }
 
 // TestAdminResolversFailClosed confirms every admin resolver rejects an
@@ -453,7 +478,12 @@ func TestAdminSchemaNeverExposesTheApiKey(t *testing.T) {
 	assert.Contains(t, body, `"hasSecret"`, "the provider type must still report whether a key is configured")
 
 	// And the input still accepts one — otherwise a key could never be sealed.
-	assert.Contains(t, AdminSchemaContent, "input AiProviderCreateRequest")
-	assert.True(t, strings.Contains(AdminSchemaContent, "secret: String"),
-		"the create/update input must still accept a write-only secret")
+	types := parsedAdminSchema(t).Types
+	for _, input := range []string{"AiProviderCreateRequest", "AiProviderUpdateRequest"} {
+		in, ok := types[input].(*ast.InputObject)
+		require.True(t, ok, "the admin schema must declare input %s", input)
+		secret := in.Values.Get("secret")
+		require.NotNil(t, secret, "%s must still accept a write-only secret", input)
+		assert.Equal(t, "String", secret.Type.String(), "%s.secret", input)
+	}
 }
