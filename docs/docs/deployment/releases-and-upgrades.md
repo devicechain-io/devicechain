@@ -3516,13 +3516,13 @@ Nothing needs doing.
 
 What the release after `v0.19.0` changes, collected as it lands.
 
-#### Events that carry a device password in the body are refused while versions are mixed {#next-upgrade-body-password}
+#### Events that carry a device password or access token in the body are refused while versions are mixed {#next-upgrade-body-password}
 
-From this release, `event-sources` and `device-management` pass a device password that arrives in an
-event body in a different form, and each needs the new version to read the other's. While old and new
-versions of the two run side by side during a rolling upgrade, events that carry a device password in
-the body (`MQTT_BASIC`, over HTTP or MQTT) are refused as unauthenticated, and they are not replayed.
-MQTT connects and access-token events are not affected.
+From this release, `event-sources` and `device-management` pass a device password or access token that
+arrives in an event body in a different form, and each needs the new version to read the other's. While
+old and new versions of the two run side by side during a rolling upgrade, events that carry a device
+password (`MQTT_BASIC`) or an access token (`ACCESS_TOKEN`) in the body, over HTTP or MQTT, are refused
+as unauthenticated, and they are not replayed. MQTT connects are not affected.
 
 Upgrade `event-sources` and `device-management` together, or accept the brief loss of those events.
 

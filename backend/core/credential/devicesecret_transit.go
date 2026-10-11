@@ -86,23 +86,52 @@ func transitAAD(tenant, credentialId string) []byte {
 	return []byte(tenant + "\x00" + credentialId)
 }
 
+func tokenAAD(tenant, credentialType string) []byte {
+	return []byte("token\x01" + tenant + "\x00" + credentialType)
+}
+
 // Seal returns the sealed form of secret for tenant's credential credentialId. An empty
 // secret, tenant or credential id is refused.
 func (t *SecretTransit) Seal(tenant, credentialId, secret string) (string, error) {
 	if tenant == "" || credentialId == "" || secret == "" {
 		return "", errors.New("credential: sealing a device secret needs a tenant, a credential id and a secret")
 	}
+	return t.seal(secret, transitAAD(tenant, credentialId))
+}
+
+// SealToken returns the sealed form of a bearer token (an ACCESS_TOKEN credential id)
+// for tenant's credentials of credentialType. A token cannot be its own authenticated
+// data, so it is bound to the tenant and the credential type instead; the sealed form is
+// otherwise the one Seal makes, and OpenToken is its only reader.
+func (t *SecretTransit) SealToken(tenant, credentialType, token string) (string, error) {
+	if tenant == "" || credentialType == "" || token == "" {
+		return "", errors.New("credential: sealing a bearer token needs a tenant, a credential type and a token")
+	}
+	return t.seal(token, tokenAAD(tenant, credentialType))
+}
+
+func (t *SecretTransit) seal(plain string, aad []byte) (string, error) {
 	nonce := make([]byte, t.aead.NonceSize())
 	if _, err := rand.Read(nonce); err != nil {
 		return "", err
 	}
-	sealed := t.aead.Seal(nonce, nonce, []byte(secret), transitAAD(tenant, credentialId))
+	sealed := t.aead.Seal(nonce, nonce, []byte(plain), aad)
 	return strings.Join([]string{sealedSecretPrefix, t.id, base64.RawStdEncoding.EncodeToString(sealed)}, sealedSecretSep), nil
 }
 
 // Open returns the secret a sealed value carries, or ErrSealedSecretInvalid. The check is
 // the AEAD's authentication tag, not a compare of the secret.
 func (t *SecretTransit) Open(tenant, credentialId, sealed string) (string, error) {
+	return t.open(sealed, transitAAD(tenant, credentialId))
+}
+
+// OpenToken returns the bearer token a SealToken value carries for this tenant and
+// credential type, or ErrSealedSecretInvalid. A plaintext token is one.
+func (t *SecretTransit) OpenToken(tenant, credentialType, sealed string) (string, error) {
+	return t.open(sealed, tokenAAD(tenant, credentialType))
+}
+
+func (t *SecretTransit) open(sealed string, aad []byte) (string, error) {
 	parts := strings.Split(sealed, sealedSecretSep)
 	if t == nil || len(parts) != 3 || parts[0] != sealedSecretPrefix || parts[1] != t.id {
 		return "", ErrSealedSecretInvalid
@@ -112,7 +141,7 @@ func (t *SecretTransit) Open(tenant, credentialId, sealed string) (string, error
 		return "", ErrSealedSecretInvalid
 	}
 	nonce, ct := raw[:t.aead.NonceSize()], raw[t.aead.NonceSize():]
-	plain, err := t.aead.Open(nil, nonce, ct, transitAAD(tenant, credentialId))
+	plain, err := t.aead.Open(nil, nonce, ct, aad)
 	if err != nil {
 		return "", ErrSealedSecretInvalid
 	}

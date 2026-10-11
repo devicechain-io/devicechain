@@ -868,13 +868,39 @@ func (rez *EventResolver) HandleEvent(ctx context.Context,
 // left in a message from before sealing included, is presented as an EMPTY secret:
 // it matches no stored digest, so the event fails to authenticate like a wrong password
 // and never as an absent credential, which optional mode would let through.
-func (rez *EventResolver) presentedCredential(ctx context.Context, unrez *esmodel.UnresolvedEvent) *model.PresentedCredential {
-	if unrez.CredentialType == nil || unrez.CredentialId == nil || *unrez.CredentialId == "" {
-		return nil
+func (rez *EventResolver) presentedCredential(ctx context.Context, unrez *esmodel.UnresolvedEvent) (*model.PresentedCredential, error) {
+	if unrez.CredentialType == nil {
+		if unrez.SealedCredentialId != nil {
+			return nil, errAccessTokenNotSealed
+		}
+		return nil, nil
+	}
+	credentialId := ""
+	if unrez.CredentialId != nil {
+		credentialId = *unrez.CredentialId
+	}
+	// An access token is the credential itself, so it arrives SEALED and is opened here,
+	// bound to the tenant and credential type, before any lookup. A token that will not
+	// open, or one that arrives as sent (a message from before sealing), is an
+	// authentication failure and never an absent credential, which optional mode would
+	// let through.
+	if unrez.SealedCredentialId != nil || (esproto.IsBearerCredentialType(unrez.CredentialType) && credentialId != "") {
+		tenant, ok := core.TenantFromContext(ctx)
+		if !ok || unrez.SealedCredentialId == nil || rez.SecretTransit == nil {
+			return nil, errAccessTokenNotSealed
+		}
+		token, err := rez.SecretTransit.OpenToken(tenant, *unrez.CredentialType, *unrez.SealedCredentialId)
+		if err != nil || token == "" {
+			return nil, errAccessTokenNotSealed
+		}
+		credentialId = token
+	}
+	if credentialId == "" {
+		return nil, nil
 	}
 	presented := &model.PresentedCredential{
 		CredentialType: *unrez.CredentialType,
-		CredentialId:   *unrez.CredentialId,
+		CredentialId:   credentialId,
 	}
 	if unrez.SealedCredentialSecret != nil {
 		opened := ""
@@ -885,8 +911,12 @@ func (rez *EventResolver) presentedCredential(ctx context.Context, unrez *esmode
 		}
 		presented.Secret = &opened
 	}
-	return presented
+	return presented, nil
 }
+
+// errAccessTokenNotSealed is the authentication failure for an access token that did not
+// arrive sealed for this tenant and credential type.
+var errAccessTokenNotSealed = errors.New("the access token was not sealed for this tenant and credential type")
 
 // transportAuthenticatedBypass reports whether an event may skip the required-mode
 // credential check because a trusted internal ingest source authenticated the device
@@ -935,7 +965,11 @@ func transportAuthenticatedBypass(unrez *esmodel.UnresolvedEvent) bool {
 // device can not impersonate another.
 func (rez *EventResolver) resolveDevice(ctx context.Context, unrez *esmodel.UnresolvedEvent) (*model.Device, uint, error) {
 	if rez.AuthMode != config.AuthModeDisabled {
-		if presented := rez.presentedCredential(ctx, unrez); presented != nil {
+		presented, perr := rez.presentedCredential(ctx, unrez)
+		if perr != nil {
+			return nil, uint(dmproto.FailureReason_Unauthenticated), perr
+		}
+		if presented != nil {
 			device, err := rez.Api.AuthenticateDevice(ctx, presented, time.Now())
 			if err != nil {
 				return nil, uint(dmproto.FailureReason_Unauthenticated), err

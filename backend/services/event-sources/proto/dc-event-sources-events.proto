@@ -37,6 +37,10 @@ message PUnresolvedEvent {
     // inbound-events publish to the service account, so this is not device-forgeable
     // — see resolveDevice). NEVER set from device-controlled input.
     bool authenticated_transport = 12;
+    // The ACCESS_TOKEN credential id SEALED for the hop to the resolver. A bearer token is the
+    // credential, so it never crosses this stream as the device sent it; credential_id is left
+    // empty for that credential type. A message without it authenticates nothing.
+    optional string sealed_credential_id = 13;
 }
 
 /**

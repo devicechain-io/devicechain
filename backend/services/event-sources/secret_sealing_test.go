@@ -100,3 +100,62 @@ func TestTheServiceRefusesToInitializeWithoutARootKey(t *testing.T) {
 		require.Nil(t, SecretTransit, name)
 	}
 }
+
+func presentingToken(token string) *model.UnresolvedEvent {
+	ty := "ACCESS_TOKEN"
+	return &model.UnresolvedEvent{Device: "sensor-001", EventType: model.Measurement,
+		CredentialType: &ty, CredentialId: &token}
+}
+
+// An ACCESS_TOKEN is the credential itself, so the message the inbound stream stores holds
+// it only sealed: its bytes contain the token nowhere, and the resolver's key opens it
+// for this tenant and credential type alone.
+func TestThePublishedMessageNeverCarriesTheAccessToken(t *testing.T) {
+	tr := sealingFixture(t)
+	const token = "tok-as-the-device-sent-it-0123456789"
+
+	_, msg, ok := inboundEventMessage("http", "acme", presentingToken(token), &model.UnresolvedMeasurementsPayload{}, 1)
+	require.True(t, ok)
+	require.NotContains(t, string(msg.Value), token)
+
+	decoded, err := esproto.UnmarshalUnresolvedEvent(msg.Value)
+	require.NoError(t, err)
+	require.Nil(t, decoded.CredentialId, "the clear id is not on the wire")
+	require.NotNil(t, decoded.SealedCredentialId)
+	opened, err := tr.OpenToken("acme", "ACCESS_TOKEN", *decoded.SealedCredentialId)
+	require.NoError(t, err)
+	require.Equal(t, token, opened)
+	_, err = tr.OpenToken("other", "ACCESS_TOKEN", *decoded.SealedCredentialId)
+	require.Error(t, err, "sealed for one tenant, it opens for no other")
+	_, err = tr.OpenToken("acme", "MQTT_BASIC", *decoded.SealedCredentialId)
+	require.Error(t, err, "sealed for one credential type, it opens for no other")
+	_, err = tr.Open("acme", token, *decoded.SealedCredentialId)
+	require.Error(t, err, "a sealed token is not a sealed password")
+}
+
+// Fail closed: with no key a token is never published as sent.
+func TestAnEventWithAnAccessTokenIsDroppedWhenThereIsNoKeyToSealIt(t *testing.T) {
+	sealingFixture(t)
+	SecretTransit = nil
+	_, _, ok := inboundEventMessage("http", "acme", presentingToken("tok-0123456789"), &model.UnresolvedMeasurementsPayload{}, 1)
+	require.False(t, ok)
+}
+
+// A credential type that is not a bearer type keeps its clear id (an MQTT username is
+// not secret), and a type spelled in another case is still sealed.
+func TestOnlyBearerCredentialIdsAreSealed(t *testing.T) {
+	sealingFixture(t)
+	_, msg, ok := inboundEventMessage("gw", "acme", presentingEvent("pw-long-enough-to-matter"), &model.UnresolvedMeasurementsPayload{}, 1)
+	require.True(t, ok)
+	decoded, err := esproto.UnmarshalUnresolvedEvent(msg.Value)
+	require.NoError(t, err)
+	require.Equal(t, "sensor-001", *decoded.CredentialId)
+	require.Nil(t, decoded.SealedCredentialId)
+
+	lower := presentingToken("tok-lowercase-0123456789")
+	ty := "access_token"
+	lower.CredentialType = &ty
+	_, msg, ok = inboundEventMessage("http", "acme", lower, &model.UnresolvedMeasurementsPayload{}, 1)
+	require.True(t, ok)
+	require.NotContains(t, string(msg.Value), "tok-lowercase")
+}

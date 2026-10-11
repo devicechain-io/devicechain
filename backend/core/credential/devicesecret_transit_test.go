@@ -102,3 +102,37 @@ func TestSecretTransitRefusesBadInput(t *testing.T) {
 		require.Error(t, err)
 	}
 }
+
+func TestTokenTransitRoundTripAndBinding(t *testing.T) {
+	tr := testTransit(t, 1)
+	sealed, err := tr.SealToken("acme", "ACCESS_TOKEN", "tok-0123456789")
+	require.NoError(t, err)
+	require.NotContains(t, sealed, "tok-0123456789")
+	got, err := tr.OpenToken("acme", "ACCESS_TOKEN", sealed)
+	require.NoError(t, err)
+	require.Equal(t, "tok-0123456789", got)
+
+	for name, open := range map[string]func() (string, error){
+		"another tenant": func() (string, error) { return tr.OpenToken("other", "ACCESS_TOKEN", sealed) },
+		"another type":   func() (string, error) { return tr.OpenToken("acme", "MQTT_BASIC", sealed) },
+		"as a password":  func() (string, error) { return tr.Open("acme", "tok-0123456789", sealed) },
+		"another key":    func() (string, error) { return testTransit(t, 2).OpenToken("acme", "ACCESS_TOKEN", sealed) },
+		"plaintext":      func() (string, error) { return tr.OpenToken("acme", "ACCESS_TOKEN", "tok-0123456789") },
+		"empty":          func() (string, error) { return tr.OpenToken("acme", "ACCESS_TOKEN", "") },
+	} {
+		_, err := open()
+		require.ErrorIs(t, err, ErrSealedSecretInvalid, name)
+	}
+
+	pw, err := tr.Seal("acme", "ACCESS_TOKEN", "a-password-value")
+	require.NoError(t, err)
+	_, err = tr.OpenToken("acme", "ACCESS_TOKEN", pw)
+	require.ErrorIs(t, err, ErrSealedSecretInvalid, "a sealed password is not a sealed token")
+
+	for _, a := range [][3]string{{"", "ACCESS_TOKEN", "t"}, {"acme", "", "t"}, {"acme", "ACCESS_TOKEN", ""}} {
+		_, err := tr.SealToken(a[0], a[1], a[2])
+		require.Error(t, err)
+	}
+	again, _ := tr.SealToken("acme", "ACCESS_TOKEN", "tok-0123456789")
+	require.NotEqual(t, sealed, again, "a fresh nonce per seal")
+}

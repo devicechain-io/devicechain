@@ -3775,14 +3775,14 @@ No hay que hacer nada.
 
 Lo que cambia la versión posterior a `v0.19.0`, recogido a medida que llega.
 
-#### Los eventos que llevan una contraseña de dispositivo en el cuerpo se rechazan mientras conviven versiones {#next-upgrade-body-password}
+#### Los eventos que llevan una contraseña de dispositivo o un token de acceso en el cuerpo se rechazan mientras conviven versiones {#next-upgrade-body-password}
 
 Desde esta versión, `event-sources` y `device-management` se pasan en otra forma la contraseña de
-dispositivo que llega en el cuerpo de un evento, y cada uno necesita la versión nueva para leer la del
-otro. Mientras conviven versiones antiguas y nuevas de ambos durante una actualización progresiva,
-los eventos que llevan una contraseña de dispositivo en el cuerpo (`MQTT_BASIC`, por HTTP o MQTT) se
-rechazan como no autenticados y no se reproducen. Las conexiones MQTT y los eventos con token de
-acceso no se ven afectados.
+dispositivo o el token de acceso que llega en el cuerpo de un evento, y cada uno necesita la versión
+nueva para leer la del otro. Mientras conviven versiones antiguas y nuevas de ambos durante una
+actualización progresiva, los eventos que llevan en el cuerpo una contraseña de dispositivo
+(`MQTT_BASIC`) o un token de acceso (`ACCESS_TOKEN`), por HTTP o MQTT, se rechazan como no
+autenticados y no se reproducen. Las conexiones MQTT no se ven afectadas.
 
 Actualiza `event-sources` y `device-management` a la vez, o acepta la breve pérdida de esos eventos.
 
