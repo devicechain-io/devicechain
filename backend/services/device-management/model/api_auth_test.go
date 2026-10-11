@@ -62,12 +62,12 @@ func TestEvaluateCredential_X509IsRefused(t *testing.T) {
 // MQTT_BASIC carries a secret that must be presented and must match.
 func TestEvaluateCredential_BasicSecretMatch(t *testing.T) {
 	now := time.Date(2026, 6, 25, 12, 0, 0, 0, time.UTC)
-	cred := credentialRow(CredentialMqttBasic, strptr("s3cret"), nil)
+	cred := credentialRow(CredentialMqttBasic, strptr("s3cret-0123456789"), nil)
 
 	err := evaluateCredential(testSecretKey, cred, &PresentedCredential{
 		CredentialType: string(CredentialMqttBasic),
 		CredentialId:   "cred-1",
-		Secret:         strptr("s3cret"),
+		Secret:         strptr("s3cret-0123456789"),
 	}, now)
 
 	assert.NoError(t, err)
@@ -75,7 +75,7 @@ func TestEvaluateCredential_BasicSecretMatch(t *testing.T) {
 
 func TestEvaluateCredential_BasicSecretWrong(t *testing.T) {
 	now := time.Date(2026, 6, 25, 12, 0, 0, 0, time.UTC)
-	cred := credentialRow(CredentialMqttBasic, strptr("s3cret"), nil)
+	cred := credentialRow(CredentialMqttBasic, strptr("s3cret-0123456789"), nil)
 
 	err := evaluateCredential(testSecretKey, cred, &PresentedCredential{
 		CredentialType: string(CredentialMqttBasic),
@@ -90,7 +90,7 @@ func TestEvaluateCredential_BasicSecretWrong(t *testing.T) {
 // the same length, one extending the stored secret, a prefix of it, and an empty one.
 func TestEvaluateCredential_BasicSecretNearMisses(t *testing.T) {
 	now := time.Date(2026, 6, 25, 12, 0, 0, 0, time.UTC)
-	cred := credentialRow(CredentialMqttBasic, strptr("s3cret"), nil)
+	cred := credentialRow(CredentialMqttBasic, strptr("s3cret-0123456789"), nil)
 
 	for _, presented := range []string{"s3creT", "s3cret-extra", "s3cre", ""} {
 		err := evaluateCredential(testSecretKey, cred, &PresentedCredential{
@@ -104,7 +104,7 @@ func TestEvaluateCredential_BasicSecretNearMisses(t *testing.T) {
 
 func TestEvaluateCredential_BasicSecretMissing(t *testing.T) {
 	now := time.Date(2026, 6, 25, 12, 0, 0, 0, time.UTC)
-	cred := credentialRow(CredentialMqttBasic, strptr("s3cret"), nil)
+	cred := credentialRow(CredentialMqttBasic, strptr("s3cret-0123456789"), nil)
 
 	err := evaluateCredential(testSecretKey, cred, &PresentedCredential{
 		CredentialType: string(CredentialMqttBasic),

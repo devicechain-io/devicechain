@@ -22,7 +22,7 @@ func TestTheEventCredentialLookupReadsOnlyWhatResolutionUses(t *testing.T) {
 	f := newSQLiteCredentialFixture(t)
 	storeVariableWidthColumns(t, f)
 
-	cred, dev, err := f.api.authenticateCredential(f.ctx, basic("cred-1", "s3cret"), time.Now())
+	cred, dev, err := f.api.authenticateCredential(f.ctx, basic("cred-1", "s3cret-0123456789"), time.Now())
 	if err != nil {
 		t.Fatalf("authenticate: %v", err)
 	}
@@ -42,7 +42,7 @@ func TestTheEventCredentialLookupReadsOnlyWhatResolutionUses(t *testing.T) {
 	}
 
 	f.stmts.reset()
-	if _, err := f.api.AuthenticateDevice(f.ctx, basic("cred-1", "s3cret"), time.Now()); err != nil {
+	if _, err := f.api.AuthenticateDevice(f.ctx, basic("cred-1", "s3cret-0123456789"), time.Now()); err != nil {
 		t.Fatalf("authenticate: %v", err)
 	}
 	requireOneJoinedStatement(t, f, "event authentication")
@@ -114,7 +114,7 @@ func TestTheEventLookupResolvesWhatTheFullReadResolves(t *testing.T) {
 		req := &DeviceCredentialCreateRequest{Token: token, DeviceToken: "dev2", CredentialType: string(ctype),
 			CredentialId: id, Enabled: enabled}
 		if ctype == CredentialMqttBasic {
-			v := "pw-" + id
+			v := "pw-0123456789abcdef-" + id
 			req.CredentialValue = &v
 		}
 		if _, err := f.api.CreateDeviceCredential(f.ctx, req); err != nil {
@@ -158,9 +158,9 @@ func TestTheEventLookupResolvesWhatTheFullReadResolves(t *testing.T) {
 		id    string
 		pw    string
 	}{
-		{"basic with external id and metadata", f.ctx, CredentialMqttBasic, "cred-1", "s3cret"},
+		{"basic with external id and metadata", f.ctx, CredentialMqttBasic, "cred-1", "s3cret-0123456789"},
 		{"basic, wrong secret", f.ctx, CredentialMqttBasic, "cred-1", "wrong"},
-		{"basic, bare device", f.ctx, CredentialMqttBasic, "basic-2", "pw-basic-2"},
+		{"basic, bare device", f.ctx, CredentialMqttBasic, "basic-2", "pw-0123456789abcdef-basic-2"},
 		{"access token with external id", f.ctx, CredentialAccessToken, "tok-1", ""},
 		{"access token, bare device", f.ctx, CredentialAccessToken, "tok-2", ""},
 		{"unexpired credential", f.ctx, CredentialAccessToken, "tok-exp", ""},

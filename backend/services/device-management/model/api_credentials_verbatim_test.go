@@ -6,6 +6,7 @@ package model
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -23,6 +24,9 @@ import (
 
 // verbatimFixture is resolveFixture's device with an MQTT_BASIC credential "cred-v"
 // created from the given value.
+// wsSecret is a secret of nothing but spaces, long enough to clear the minimum length.
+var wsSecret = strings.Repeat(" ", 16)
+
 func verbatimFixture(t *testing.T, value *string) (*Api, context.Context) {
 	t.Helper()
 	api, ctx := resolveFixture(t)
@@ -36,30 +40,30 @@ func verbatimFixture(t *testing.T, value *string) (*Api, context.Context) {
 }
 
 func TestACredentialValueIsStoredExactlyAsSent(t *testing.T) {
-	api, ctx := verbatimFixture(t, strPtr(" s3cret "))
+	api, ctx := verbatimFixture(t, strPtr(" s3cret-0123456789 "))
 	now := time.Now()
 
 	_, stored, err := api.ResolveDeviceCredential(ctx, basic("cred-v", "x"), now)
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
-	if !verifies(stored, " s3cret ") {
+	if !verifies(stored, " s3cret-0123456789 ") {
 		t.Fatalf("the stored digest does not verify %q — the value was rewritten on save, so the "+
-			"device presenting what it was configured with can never match it", " s3cret ")
+			"device presenting what it was configured with can never match it", " s3cret-0123456789 ")
 	}
-	if d, err := api.AuthenticateDevice(ctx, basic("cred-v", " s3cret "), now); err != nil || d == nil || d.Token != "dev" {
-		t.Fatalf("presenting the configured password %q: got (%v, %v), want device dev", " s3cret ", d, err)
+	if d, err := api.AuthenticateDevice(ctx, basic("cred-v", " s3cret-0123456789 "), now); err != nil || d == nil || d.Token != "dev" {
+		t.Fatalf("presenting the configured password %q: got (%v, %v), want device dev", " s3cret-0123456789 ", d, err)
 	}
 	// Counterweight: verbatim means the TRIMMED spelling is now a different password.
-	if _, err := api.AuthenticateDevice(ctx, basic("cred-v", "s3cret"), now); !errors.Is(err, ErrCredentialSecretMismatch) {
+	if _, err := api.AuthenticateDevice(ctx, basic("cred-v", "s3cret-0123456789"), now); !errors.Is(err, ErrCredentialSecretMismatch) {
 		t.Fatalf("presenting the trimmed password: got %v, want ErrCredentialSecretMismatch", err)
 	}
 }
 
 func TestARotatedCredentialValueIsStoredExactlyAsSent(t *testing.T) {
-	api, ctx := verbatimFixture(t, strPtr("initial"))
+	api, ctx := verbatimFixture(t, strPtr("initial-secret-value"))
 	if _, err := api.UpdateDeviceCredential(ctx, "c-v", &DeviceCredentialUpdateRequest{
-		CredentialValue: dcgraphql.OptionalStringOf("rotated\t"),
+		CredentialValue: dcgraphql.OptionalStringOf("rotated-secret-xyz\t"),
 	}); err != nil {
 		t.Fatalf("rotate: %v", err)
 	}
@@ -67,8 +71,8 @@ func TestARotatedCredentialValueIsStoredExactlyAsSent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
-	if !verifies(stored, "rotated\t") {
-		t.Fatalf("the stored digest after rotation does not verify %q", "rotated\t")
+	if !verifies(stored, "rotated-secret-xyz\t") {
+		t.Fatalf("the stored digest after rotation does not verify %q", "rotated-secret-xyz\t")
 	}
 }
 
@@ -80,12 +84,12 @@ func TestAWhitespaceCredentialValueIsStoredAndOnlyEmptyStoresNone(t *testing.T) 
 	now := time.Now()
 
 	t.Run("whitespace on create", func(t *testing.T) {
-		api, ctx := verbatimFixture(t, strPtr("   "))
+		api, ctx := verbatimFixture(t, strPtr(wsSecret))
 		_, stored, err := api.ResolveDeviceCredential(ctx, basic("cred-v", "x"), now)
-		if err != nil || !verifies(stored, "   ") {
-			t.Fatalf("resolve: got (%q, %v), want a digest of %q", stored, err, "   ")
+		if err != nil || !verifies(stored, wsSecret) {
+			t.Fatalf("resolve: got (%q, %v), want a digest of %q", stored, err, wsSecret)
 		}
-		if _, err := api.AuthenticateDevice(ctx, basic("cred-v", "   "), now); err != nil {
+		if _, err := api.AuthenticateDevice(ctx, basic("cred-v", wsSecret), now); err != nil {
 			t.Fatalf("presenting the stored whitespace password: %v", err)
 		}
 	})
@@ -102,7 +106,7 @@ func TestAWhitespaceCredentialValueIsStoredAndOnlyEmptyStoresNone(t *testing.T) 
 		"null on update":  dcgraphql.ClearedString(),
 	} {
 		t.Run(name, func(t *testing.T) {
-			api, ctx := verbatimFixture(t, strPtr("initial"))
+			api, ctx := verbatimFixture(t, strPtr("initial-secret-value"))
 			if _, err := api.UpdateDeviceCredential(ctx, "c-v", &DeviceCredentialUpdateRequest{
 				CredentialValue: value,
 			}); err != nil {
@@ -115,15 +119,15 @@ func TestAWhitespaceCredentialValueIsStoredAndOnlyEmptyStoresNone(t *testing.T) 
 	}
 
 	t.Run("whitespace on update", func(t *testing.T) {
-		api, ctx := verbatimFixture(t, strPtr("initial"))
+		api, ctx := verbatimFixture(t, strPtr("initial-secret-value"))
 		if _, err := api.UpdateDeviceCredential(ctx, "c-v", &DeviceCredentialUpdateRequest{
-			CredentialValue: dcgraphql.OptionalStringOf(" "),
+			CredentialValue: dcgraphql.OptionalStringOf(wsSecret),
 		}); err != nil {
 			t.Fatalf("update: %v", err)
 		}
 		_, stored, err := api.ResolveDeviceCredential(ctx, basic("cred-v", "x"), now)
-		if err != nil || !verifies(stored, " ") {
-			t.Fatalf("resolve: got (%q, %v), want a digest of %q", stored, err, " ")
+		if err != nil || !verifies(stored, wsSecret) {
+			t.Fatalf("resolve: got (%q, %v), want a digest of %q", stored, err, wsSecret)
 		}
 	})
 }

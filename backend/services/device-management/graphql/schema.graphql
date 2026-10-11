@@ -1757,6 +1757,12 @@ input DeviceCredentialCreateRequest {
     deviceToken: String!
     credentialType: String!
     credentialId: String!
+    """
+    The password for an MQTT_BASIC credential: at least 16 bytes, counted as sent, and at
+    most 4096. A shorter one is refused with extensions.code INVALID_VALUE. Write-only; it
+    is stored only as a keyed digest. A password set before the 16-byte minimum keeps
+    working until it is next changed.
+    """
     credentialValue: String
     enabled: Boolean!
     expiresAt: String
@@ -1783,6 +1789,13 @@ input DeviceCredentialUpdateRequest {
     # The secret material, nullable — a credential type that carries no secret is a real
     # state. OMITTING IT LEAVES THE SECRET IN PLACE, which is what makes editing anything
     # else on a credential safe; the input this replaces blanked it on every such edit.
+    """
+    The new password for an MQTT_BASIC credential: at least 16 bytes, counted as sent, and at
+    most 4096. A shorter one is refused with extensions.code INVALID_VALUE. Required when this
+    request changes the credential's type to MQTT_BASIC. Ignored for a type that has no
+    password. Write-only; it is stored only as a keyed digest. A password set before the 16-byte minimum keeps
+    working until it is next changed.
+    """
     credentialValue: String
     # Required and unclearable: null is refused rather than read as false, which would
     # silently disable the credential and take the device offline at its next reconnect.
@@ -1987,6 +2000,12 @@ input DeviceReplaceRequest {
     credentialId: String
     # Secret material for types that carry one separately (an MQTT password).
     # Write-only, as on any credential.
+    """
+    The password for an MQTT_BASIC credential: at least 16 bytes, counted as sent, and at
+    most 4096. A shorter one is refused with extensions.code INVALID_VALUE. Write-only; it
+    is stored only as a keyed digest. A password set before the 16-byte minimum keeps
+    working until it is next changed.
+    """
     credentialValue: String
     # Entity token for the new credential row. A UUID is minted when absent.
     credentialToken: String
