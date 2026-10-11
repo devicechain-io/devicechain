@@ -889,6 +889,11 @@ func (rez *EventResolver) presentedCredential(ctx context.Context, unrez *esmode
 		if !ok || unrez.SealedCredentialId == nil || rez.SecretTransit == nil {
 			return nil, errAccessTokenNotSealed
 		}
+		// A bearer token is the whole credential, so event-sources never publishes a
+		// secret beside one. That shape is refused rather than read.
+		if unrez.SealedCredentialSecret != nil {
+			return nil, errAccessTokenNotSealed
+		}
 		token, err := rez.SecretTransit.OpenToken(tenant, *unrez.CredentialType, *unrez.SealedCredentialId)
 		if err != nil || token == "" {
 			return nil, errAccessTokenNotSealed
@@ -905,7 +910,7 @@ func (rez *EventResolver) presentedCredential(ctx context.Context, unrez *esmode
 	if unrez.SealedCredentialSecret != nil {
 		opened := ""
 		if tenant, ok := core.TenantFromContext(ctx); ok {
-			if secret, err := rez.SecretTransit.Open(tenant, *unrez.CredentialId, *unrez.SealedCredentialSecret); err == nil {
+			if secret, err := rez.SecretTransit.Open(tenant, credentialId, *unrez.SealedCredentialSecret); err == nil {
 				opened = secret
 			}
 		}
