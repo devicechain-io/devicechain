@@ -29,13 +29,7 @@ import type {
   KnownWidgetInstance,
   SlotScope,
   UnknownWidgetInstance,
-  WidgetType,
 } from '@devicechain/dashboards';
-import {
-  WIDGET_BINDS_DATASOURCE,
-  WIDGET_CHANNEL,
-  type WidgetChannel,
-} from '@devicechain/widgets';
 import { useEffect, useState } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
@@ -45,30 +39,22 @@ import { Input } from '@/components/ui/input';
 import { FormField } from '@/components/ui/form-field';
 import { Combobox, type ComboboxOption } from '@/components/ui/combobox';
 import { EntityPicker, type EntityKind } from './EntityPicker';
+import { resolveText, useMessageLookup } from './optionWording';
 import {
   WidgetOptionFields,
   WidgetOptionNotices,
   type OptionFieldContext,
 } from './widgetOptionFields';
+import { defaultWidgetRegistry, type EditorWidgetRegistry } from './widgetRegistry';
 
-// Which widgets carry a datasource, and on which channel — DERIVED from the widget
-// package's own classifiers rather than listed here.
-//
-// These were three hand-written sets, and a hand-written set of widget types is a
-// list that silently omits whatever nobody remembered to add: a new alarm widget
-// would have been offered no scope picker, a new data widget no datasource picker at
-// all, and nothing would have failed. WIDGET_CHANNEL and WIDGET_BINDS_DATASOURCE are
-// exhaustive over WidgetType by construction, so a new type does not compile until it
-// answers both questions.
+// What the panel offers for a widget's data source is read from the widget's DESCRIPTOR —
+// its datasource policy (does it bind one at all, and to which kinds of entity) and its
+// channel (what the binding means) — never from a list of widget ids. A hand-written set of
+// widget types is a list that silently omits whatever nobody remembered to add: a new alarm
+// widget would have been offered no scope picker, and nothing would have failed.
 //
 // Alarm widgets carry a datasource as SCOPE (which entity's alarms; "None" means
-// tenant-wide); the command-button carries one as its single TARGET device.
-const widgetTypesOn = (channel: WidgetChannel): Set<WidgetType> =>
-  new Set((Object.keys(WIDGET_CHANNEL) as WidgetType[]).filter((type) => WIDGET_CHANNEL[type] === channel));
-
-const ALARM_WIDGETS = widgetTypesOn('alarm');
-const CONTROL_WIDGETS = widgetTypesOn('control');
-const LOCATION_WIDGETS = widgetTypesOn('location');
+// tenant-wide); the control widget carries one as its single TARGET device.
 
 // The location series a map widget reads. Stamped onto the selector the panel emits
 // rather than offered as a choice: the vocabulary has exactly one member today, so a
@@ -93,9 +79,6 @@ function withLocationSeries(
   if (ds.kind !== 'device' && ds.kind !== 'anchor') return ds;
   return { ...ds, location: LATEST_LOCATION };
 }
-const DATA_WIDGETS = new Set<WidgetType>(
-  (Object.keys(WIDGET_BINDS_DATASOURCE) as WidgetType[]).filter((type) => WIDGET_BINDS_DATASOURCE[type]),
-);
 
 // The option arrays below build Combobox dropdown text, so each is a FUNCTION of the
 // caller's `t` (module scope has no hook access) rather than a plain constant — a
@@ -157,6 +140,9 @@ export interface WidgetConfigPanelProps {
   // The dashboard's slots — the candidate PARENTS for scope authoring and the candidate
   // TARGETS for an entity-selector widget. Undefined on a slot-free dashboard.
   slots?: Record<string, SlotDefinition>;
+  // The widgets the console can author. Defaults to the built-ins; a host that composes
+  // extra widgets passes the registry it composed, so the panel reads THEIR descriptors.
+  registry?: EditorWidgetRegistry;
   // Title/text/type-specific option edits (widget-only; datasource is separate).
   onChange: (next: KnownWidgetInstance) => void;
   // Data-source edits: the new entity view, or undefined for "None".
@@ -177,8 +163,11 @@ export function WidgetConfigPanel({
   onDatasource,
   onScope,
   onClose,
+  registry = defaultWidgetRegistry(),
 }: WidgetConfigPanelProps) {
   const { t } = useTranslation(['dashboards', 'common']);
+  const lookup = useMessageLookup();
+  const descriptor = registry.descriptor(widget.type);
   // Read/write a single options key, dropping it when cleared so the widget falls
   // back to its default rather than reading an empty string/NaN/false. Dropping a false
   // boolean keeps opt-in flags absent-when-off (matching optBoolean's absent = false).
@@ -201,8 +190,31 @@ export function WidgetConfigPanel({
     onChange({ ...widget, options });
   };
 
+  // A widget whose id this console's registry does not hold has no schema to derive fields
+  // from. Say so plainly rather than render an empty panel that reads as "nothing to configure".
+  if (!descriptor) {
+    return (
+      <aside className="w-80 shrink-0 overflow-auto border-l bg-card p-4">
+        <div className="mb-4 flex items-center justify-between">
+          <div className="text-sm font-semibold">{widget.type}</div>
+          <IconButton label={t('widgetClosePanel')} onClick={onClose}>
+            <X size={14} />
+          </IconButton>
+        </div>
+        <p className="text-sm text-muted-foreground">{t('widgetNotInstalled')}</p>
+      </aside>
+    );
+  }
+
+  const policy = descriptor.datasource;
+  const channel = descriptor.channel;
+  const isAlarm = channel === 'alarm';
+  const isControl = channel === 'control';
+  const isLocation = channel === 'location';
+
   const fieldContext: OptionFieldContext = {
     widget,
+    descriptor,
     setOption,
     setOptions,
     slots,
@@ -212,7 +224,9 @@ export function WidgetConfigPanel({
   return (
     <aside className="w-80 shrink-0 overflow-auto border-l bg-card p-4">
       <div className="mb-4 flex items-center justify-between">
-        <div className="text-sm font-semibold">{widget.type}</div>
+        <div className="text-sm font-semibold">
+          {resolveText(lookup, descriptor.display.titleId, descriptor.display.title)}
+        </div>
         <IconButton label={t('widgetClosePanel')} onClick={onClose}>
           <X size={14} />
         </IconButton>
@@ -221,7 +235,7 @@ export function WidgetConfigPanel({
       <div className="space-y-4">
         <WidgetOptionFields ctx={fieldContext} leading />
 
-        {DATA_WIDGETS.has(widget.type) && (
+        {policy.mode !== 'none' && (
           <>
             {/* Scope authoring (ADR-039): a DEVICE slot can FOLLOW a parent anchor context
                 (a thermostat within the selected building). Offered only for a device-typed
@@ -266,25 +280,21 @@ export function WidgetConfigPanel({
                 <DatasourceFields
                   datasource={datasource}
                   label={
-                    CONTROL_WIDGETS.has(widget.type)
+                    isControl
                       ? t('widgetLabelTargetDevice')
-                      : ALARM_WIDGETS.has(widget.type)
+                      : isAlarm
                         ? t('widgetLabelScope')
                         : t('widgetLabelDataSource')
                   }
                   // A map reads a LOCATION series, not named scalar series, so it hides
                   // the measurements field for the same reason the alarm widgets do —
                   // measurement names on a map selector would be read by nothing.
-                  showMeasurements={
-                    !ALARM_WIDGETS.has(widget.type) &&
-                    !CONTROL_WIDGETS.has(widget.type) &&
-                    !LOCATION_WIDGETS.has(widget.type)
-                  }
-                  deviceOnly={CONTROL_WIDGETS.has(widget.type)}
+                  showMeasurements={channel === 'measurement'}
+                  // The kinds the descriptor accepts: a widget that does not accept an
+                  // anchor offers only the device kind.
+                  deviceOnly={!(policy.selectors as readonly string[]).includes('anchor')}
                   onChange={(ds) =>
-                    onDatasource(
-                      withLocationSeries(ds, LOCATION_WIDGETS.has(widget.type)) as ConcreteSelector | undefined,
-                    )
+                    onDatasource(withLocationSeries(ds, isLocation) as ConcreteSelector | undefined)
                   }
                 />
                 {datasource && slotName && (
@@ -297,7 +307,7 @@ export function WidgetConfigPanel({
                     />
                   </p>
                 )}
-                {ALARM_WIDGETS.has(widget.type) && !datasource && (
+                {isAlarm && !datasource && (
                   <p className="text-xs text-muted-foreground">{t('widgetNoScopeSelected')}</p>
                 )}
               </>
@@ -306,7 +316,7 @@ export function WidgetConfigPanel({
         )}
 
         <WidgetOptionFields ctx={fieldContext} leading={false} />
-        <WidgetOptionNotices widget={widget} />
+        <WidgetOptionNotices widget={widget} descriptor={descriptor} />
       </div>
     </aside>
   );
