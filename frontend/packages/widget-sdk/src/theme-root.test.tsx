@@ -4,8 +4,8 @@
 import { cleanup, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { WidgetThemeRootProvider } from './frame';
-import { useChartTheme } from './hooks';
+import { WidgetThemeRootProvider } from './context';
+import { useChartTheme } from './chart/chart-theme';
 
 afterEach(cleanup);
 

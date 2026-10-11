@@ -7,11 +7,17 @@
 // severity is also spelled out as text/aria so the signal never reads on hue alone (a
 // color-blind or screen-reader viewer still gets it). At zero it stays muted.
 
-import { WidgetFrame } from '../frame';
-import type { AlarmStreamState } from '../hooks';
-import { useElementSize } from '../hooks';
-import { css } from '../theme';
-import { optString, type WidgetProps } from '../widget';
+import {
+  type AlarmStreamState,
+  css,
+  defineWidget,
+  optString,
+  useElementSize,
+  WidgetFrame,
+  type WidgetProps,
+} from '@devicechain/widget-sdk';
+
+import { builtinWidgetDescriptors } from '../builtin-descriptors';
 import { highestSeverity, severityColor, severityLabel } from './severity';
 
 const clamp = (v: number, lo: number, hi: number): number => Math.max(lo, Math.min(hi, v));
@@ -64,3 +70,10 @@ export function AlarmCount({ widget, data }: WidgetProps<AlarmStreamState>) {
     </WidgetFrame>
   );
 }
+
+// The registration: this widget's portable descriptor paired with its component, declared
+// through the same public `defineWidget` a third-party package uses.
+export const alarmCountWidget = defineWidget({
+  descriptor: builtinWidgetDescriptors['alarm-count'],
+  implementation: { kind: 'trusted-react', component: AlarmCount },
+});

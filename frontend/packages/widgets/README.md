@@ -39,16 +39,19 @@ A templated board takes its slot bindings on the renderer, not the hub:
 (`useDashboardHub(resolver, authorities)` builds and disposes it); a new
 `bindings` map re-subscribes only the widgets whose slot moved.
 
-Or drive a single widget yourself with `ConnectedWidget`, and look components up
-by type through `WIDGET_REGISTRY` and its per-channel siblings. A widget bound to a
-slot needs its datasource resolved first (`resolveWidgets` or
+Or drive a single widget yourself with `ConnectedWidget`; it resolves the widget's
+component, channel and binding policy through a registry (the built-ins by default,
+or the one you pass as `registry`; see `createBuiltinWidgetRegistry` and
+`builtinWidgetDefinitions`, and `@devicechain/widget-sdk` to add your own). A widget
+bound to a slot needs its datasource resolved first (`resolveWidgets` or
 `resolveWidgetDatasource`).
 
 ## The widgets
 
 | channel | widgets |
 | --- | --- |
-| measurement | `timeseries-chart`, `gauge`, `latest-card`, `table`, `label`, `image` |
+| measurement | `timeseries-chart`, `gauge`, `latest-card`, `table` |
+| none (static) | `label`, `image` |
 | alarm | `alarm-table`, `alarm-count` |
 | control | `command-button` |
 | selection | `entity-selector` |

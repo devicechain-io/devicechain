@@ -200,18 +200,44 @@ CSS Grid, not absolute pixels. A widget is placed by span, and `gridItemStyle`
 implicit tracks, while leaving rows unbounded on purpose.
 
 The widget contract is pure — `{widget, data, actions?}`
-(`frontend/packages/widgets/src/widget.ts:21-28`) — so a widget renders identically from a live
+(`frontend/packages/widget-sdk/src/widget.ts`) — so a widget renders identically from a live
 stream, a replayed window, or a fixture. **No widget imports the client SDK.**
 
-**There is no dynamic widget registration.** Registration is a set of constant maps keyed by a
-derived type subset (`frontend/packages/widgets/src/registry.ts:32-55`), where `WIDGET_CHANNEL` is
-`as const satisfies Record<WidgetType, WidgetChannel>` — so a new widget type does not compile until
-it declares a channel, and the per-channel registries are *derived* from that map rather than
-hand-maintained. Registry drift is impossible by construction.
+**A widget is a registration, and the eleven built-ins are registrations like any other.** Each
+module under `frontend/packages/widgets/src/widgets/` declares itself with the public
+`defineWidget` from `@devicechain/widget-sdk`: a portable, JSON-only descriptor (channel, datasource
+policy, option schema, defaults, binding policy, declared interactions —
+`frontend/packages/widgets/src/builtin-descriptors.ts`, React-free) paired with its component. A
+host seals them into a registry (`createWidgetRegistry`; the default is `createBuiltinWidgetRegistry`
+over `builtinWidgetDefinitions`), and the parser, the renderer, the option validators and the editor
+all receive that one registry. There is no privileged internal path.
 
-An unregistered widget kind never reaches a registry: the parser throws and the **whole board fails
-to load** (`frontend/packages/dashboards/src/definition.ts:283-285`). Everything else degrades
-silently — a malformed datasource drops to undefined, a bad grid falls back to defaults.
+🔑 **The runtime branches on a registration's CHANNEL, never on a widget id.**
+`frontend/packages/widgets/src/connected-widget.tsx` switches on `descriptor.channel`
+(`measurement`, `alarm`, `control`, `location`, `selection`, and `none`) and reads page sizes and
+filters through the descriptor's declarative binding policy
+(`frontend/packages/widgets/src/binding-policy.ts`). The static widgets (label, image) are on the
+`none` channel: they open no subscription, no availability query, and take no history seed.
+`frontend/packages/widgets/src/no-central-dispatch.test.ts` scans the source and fails if an id
+comparison or an id-keyed component table comes back.
+
+`WIDGET_CHANNEL`, `WIDGET_BINDS_DATASOURCE` and `WIDGET_OPTIONS` still export from
+`@devicechain/widgets`, but only as frozen, derived views of the built-in descriptors
+(`frontend/packages/widgets/src/registry.ts`, `options.ts`) for code that wants to ask about a
+built-in without building a registry. They are not an extension point.
+
+The reusable building blocks — frame, theme variables, formatters, the change-flash cue, the option
+readers and the hub-to-React hooks — live in `@devicechain/widget-sdk` and are re-exported from
+`@devicechain/widgets`. The chart helpers (`EChart`, the option builders, the chart colour theme)
+are on the SDK's separate `/echarts` entry, so a DOM-only widget importing the SDK pulls in neither
+ECharts nor MapLibre nor the built-in catalog (asserted on the built artifact in
+`frontend/packages/widget-sdk/src/dist-shape.test.ts`).
+
+A widget id the registry cannot resolve never crashes the board: the parser keeps its raw JSON as a
+placeholder with a specific reason, it opens no channel and is handed no actions, and the serializer
+writes the stored object back untouched. Everything else degrades silently — a malformed datasource
+drops to undefined, a bad grid falls back to defaults — and a component that throws is contained to
+its own pane (`frontend/packages/widgets/src/widget-containment.tsx`).
 
 ## 5. Data — three channels, and only one is a subscription
 
@@ -256,7 +282,7 @@ touches the backend" invariant holds. `sendCommand` is declared optional so an e
 predating it still satisfies the type.
 
 Selection is deliberately a **different** seam from actions
-(`frontend/packages/widgets/src/frame.tsx:34-38`): selection changes the view's binding overlay and
+(`frontend/packages/widget-sdk/src/context.tsx`): selection changes the view's binding overlay and
 never the backend.
 
 **The client-side `can()` is a UI affordance and says so in three places.** It reads authorities from

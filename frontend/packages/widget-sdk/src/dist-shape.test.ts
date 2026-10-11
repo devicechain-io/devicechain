@@ -27,11 +27,19 @@ import { beforeAll, describe, expect, it } from 'vitest';
 
 const distDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../dist');
 
-let imports: string[];
+// What the /echarts entry defines, and so what the root graph must not.
+const CHART_HELPERS = ['EChart', 'buildLineOption', 'buildGaugeOption', 'resolveChartTheme', 'useChartTheme'];
+const definitionOf = (name: string) => new RegExp(`\\b(?:function|const|let|var|class)\\s+${name}\\b`);
 
-beforeAll(async () => {
+let imports: string[];
+let rootInputs: string[];
+let chartImports: string[];
+let chartCode: string;
+
+// One entry's graph: every bare specifier its modules import, and the files that make it up.
+async function graphOf(entry: string): Promise<{ imports: string[]; inputs: string[] }> {
   const result = await esbuild.build({
-    entryPoints: [path.join(distDir, 'index.js')],
+    entryPoints: [path.join(distDir, entry)],
     bundle: true,
     write: false,
     metafile: true,
@@ -41,7 +49,19 @@ beforeAll(async () => {
     packages: 'external',
     logLevel: 'silent',
   });
-  imports = Object.values(result.metafile.inputs).flatMap((input) => input.imports.map((i) => i.path));
+  return {
+    imports: Object.values(result.metafile.inputs).flatMap((input) => input.imports.map((i) => i.path)),
+    inputs: Object.keys(result.metafile.inputs),
+  };
+}
+
+beforeAll(async () => {
+  const root = await graphOf('index.js');
+  imports = root.imports;
+  rootInputs = root.inputs;
+  const chart = await graphOf('echarts.js');
+  chartImports = chart.imports;
+  chartCode = chart.inputs.map((f) => readFileSync(path.resolve(distDir, '..', f), 'utf8')).join('\n');
 });
 
 describe('the built SDK root entry', () => {
@@ -62,11 +82,60 @@ describe('the built SDK root entry', () => {
   });
 
   it('imports nothing but its two declared peers', () => {
-    const bare = [...new Set(imports.filter((s) => !s.startsWith('.') && !s.startsWith('/')))].sort();
+    // A shared chunk the entry imports is this package's own file (the build splits code both
+    // entries use), not a dependency: esbuild reports it by its dist-relative path.
+    const bare = [
+      ...new Set(imports.filter((s) => !s.startsWith('.') && !s.startsWith('/') && !s.startsWith('dist/'))),
+    ].sort();
     expect(bare).toEqual(['@devicechain/dashboards', 'react', 'react/jsx-runtime']);
   });
 
   it('does not reach the built-in widget package', () => {
     expect(imports.filter((s) => s.startsWith('@devicechain/widgets'))).toEqual([]);
+  });
+
+  // The DOM-only path, asserted on the file set rather than only on specifiers: a widget that
+  // imports the SDK root for its frame, formatters, hooks and flash cue is handed none of the
+  // chart wrapper, the option builders or the chart theme.
+  it('does not include the chart helpers in its module graph', () => {
+    const chartFiles = rootInputs.filter((f) => /(^|[/\\])(echarts\.js|chart[/\\])/.test(f));
+    expect(chartFiles, 'the root entry reaches the /echarts entry').toEqual([]);
+    // The file names alone cannot see a helper the bundler inlined into the root or into a
+    // shared chunk (the dist is bundled, so its inputs are index.js and hashed chunks, never
+    // src/chart/*). So read the code: no file in the root graph defines a chart helper. The
+    // chart theme matters as much as the wrapper -- it imports no echarts, so the specifier
+    // checks above are blind to it.
+    const pkgDir = path.resolve(distDir, '..');
+    const rootCode = rootInputs.map((f) => readFileSync(path.resolve(pkgDir, f), 'utf8')).join('\n');
+    for (const helper of CHART_HELPERS) {
+      expect(rootCode, `the root graph defines ${helper}`).not.toMatch(definitionOf(helper));
+    }
+    // Reach control: the graph is the real one -- it does hold the shared building blocks.
+    expect(readFileSync(path.join(distDir, 'index.js'), 'utf8')).toContain('WidgetFrame');
+    expect(rootInputs.length).toBeGreaterThan(1);
+  });
+});
+
+describe('the built SDK /echarts entry', () => {
+  it('is on disk, with its declarations, and was actually read', () => {
+    expect(existsSync(path.join(distDir, 'echarts.js'))).toBe(true);
+    expect(existsSync(path.join(distDir, 'echarts.d.ts'))).toBe(true);
+    expect(readFileSync(path.join(distDir, 'echarts.js'), 'utf8')).toContain('buildLineOption');
+    // Reach control for the absence claims above and below.
+    expect(chartImports.length).toBeGreaterThan(0);
+    // ...and for the root's "defines no chart helper": the pattern finds every one HERE.
+    for (const helper of CHART_HELPERS) {
+      expect(chartCode, `the /echarts graph does not define ${helper}`).toMatch(definitionOf(helper));
+    }
+  });
+
+  it('is where ECharts is imported -- by bare specifier, never bundled in', () => {
+    expect(chartImports).toContain('echarts/core');
+    expect(chartImports).toContain('echarts/charts');
+  });
+
+  it('imports no map library and nothing from the built-in catalog', () => {
+    expect(chartImports.filter((s) => s === 'maplibre-gl' || s.startsWith('maplibre-gl/'))).toEqual([]);
+    expect(chartImports.filter((s) => s.startsWith('@devicechain/widgets'))).toEqual([]);
   });
 });

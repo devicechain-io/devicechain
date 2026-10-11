@@ -19,11 +19,18 @@
 import type { CommandDispatch, CommandParameter } from '@devicechain/dashboards';
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 
-import type { CommandStreamState } from '../hooks';
-import { formatDateTime } from '../format';
-import { WidgetFrame, useWidgetTimeZone } from '../frame';
-import { css } from '../theme';
-import { optString, type WidgetProps } from '../widget';
+import {
+  type CommandStreamState,
+  css,
+  defineWidget,
+  formatDateTime,
+  optString,
+  useWidgetTimeZone,
+  WidgetFrame,
+  type WidgetProps,
+} from '@devicechain/widget-sdk';
+
+import { builtinWidgetDescriptors } from '../builtin-descriptors';
 import { commandStatusColor, commandStatusLabel } from './command-status';
 import {
   buildPayload,
@@ -392,3 +399,10 @@ const sendButton: CSSProperties = {
   color: css('background'),
   marginTop: 2,
 };
+
+// The registration: this widget's portable descriptor paired with its component, declared
+// through the same public `defineWidget` a third-party package uses.
+export const commandButtonWidget = defineWidget({
+  descriptor: builtinWidgetDescriptors['command-button'],
+  implementation: { kind: 'trusted-react', component: CommandButton },
+});

@@ -5,7 +5,7 @@ import type { SelectionCandidate, SelectionTarget, WidgetInstance } from '@devic
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { WidgetCandidatesProvider, WidgetSelectProvider } from '../frame';
+import { WidgetCandidatesProvider, WidgetSelectProvider } from '@devicechain/widget-sdk';
 import { EntitySelector } from './entity-selector';
 
 afterEach(cleanup);

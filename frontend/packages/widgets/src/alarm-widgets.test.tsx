@@ -9,8 +9,12 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 // otherwise renders leak across tests and text matches find stale elements.
 afterEach(cleanup);
 
-import type { AlarmStreamState } from './hooks';
-import { WidgetSelectProvider, WidgetTimeZoneProvider, type WidgetSelect } from './frame';
+import {
+  type AlarmStreamState,
+  type WidgetSelect,
+  WidgetSelectProvider,
+  WidgetTimeZoneProvider,
+} from '@devicechain/widget-sdk';
 import { AlarmCount } from './widgets/alarm-count';
 import { AlarmTable } from './widgets/alarm-table';
 

@@ -11,31 +11,30 @@ import { fileURLToPath } from 'node:url';
 import type { AlarmRow, CommandRow, KnownWidgetInstance, MeasurementSample } from '@devicechain/dashboards';
 import { isBuiltinWidget, parseDashboardDefinition, UNKNOWN_WIDGET_TYPE } from '@devicechain/dashboards';
 import { cleanup, render as rtlRender } from '@testing-library/react';
-import type { ReactElement } from 'react';
+import type { ComponentType, ReactElement } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 // jsdom has no canvas, so the ECharts wrapper is stubbed — as in widgets.test.tsx.
 // The stub still receives the real option object the widget built from its options
 // bag, so a chart's configuration is exercised even though nothing is painted.
-vi.mock('./echart', () => ({
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  EChart: ({ option }: { option: any }) => <div data-testid="echart" data-option={JSON.stringify(option)} />,
-}));
+vi.mock('@devicechain/widget-sdk/echarts', async (importOriginal) => {
+  // Only the canvas wrapper is replaced (jsdom has no canvas); the pure option builders and
+  // the colour theme stay real so a chart widget still builds the option it would draw.
+  const actual = await importOriginal<typeof import('@devicechain/widget-sdk/echarts')>();
+  return {
+    ...actual,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    EChart: ({ option }: { option: any }) => <div data-testid="echart" data-option={JSON.stringify(option)} />,
+  };
+});
 
-import type {
-  AlarmStreamState,
-  CommandStreamState,
-  LocationStreamState,
-  MeasurementStreamState,
-} from './hooks';
 import {
-  ALARM_WIDGET_REGISTRY,
-  CONTROL_WIDGET_REGISTRY,
-  LOCATION_WIDGET_REGISTRY,
-  SELECTION_WIDGET_REGISTRY,
-  WIDGET_CHANNEL,
-  WIDGET_REGISTRY,
-} from './registry';
+  type AlarmStreamState,
+  type CommandStreamState,
+  type LocationStreamState,
+  type MeasurementStreamState,
+} from '@devicechain/widget-sdk';
+import { createBuiltinWidgetRegistry } from './builtin-registry';
 import { MapRuntimeProvider } from './map-runtime-context';
 
 afterEach(cleanup);
@@ -228,39 +227,55 @@ function render(ui: ReactElement) {
   return rtlRender(<MapRuntimeProvider runtime={TEST_MAP_RUNTIME}>{ui}</MapRuntimeProvider>);
 }
 
-// renderWidget runs one widget through the registry its channel binds it to.
+// renderWidget runs one widget the way the renderer does: the component its registration
+// carries, fed the data its registered CHANNEL binds.
+const registry = createBuiltinWidgetRegistry();
+
 function renderWidget(widget: KnownWidgetInstance) {
-  switch (WIDGET_CHANNEL[widget.type]) {
-    case 'alarm': {
-      const Component = ALARM_WIDGET_REGISTRY[widget.type as keyof typeof ALARM_WIDGET_REGISTRY];
+  const Component = registry.implementation(widget.type)?.component as ComponentType<{
+    widget: KnownWidgetInstance;
+    data: unknown;
+  }>;
+  switch (registry.descriptor(widget.type)?.channel) {
+    case 'alarm':
       return render(<Component widget={widget} data={alarmData} />);
-    }
-    case 'control': {
-      const Component = CONTROL_WIDGET_REGISTRY[widget.type as keyof typeof CONTROL_WIDGET_REGISTRY];
+    case 'control':
       return render(<Component widget={widget} data={commandData} />);
-    }
-    case 'selection': {
-      const Component = SELECTION_WIDGET_REGISTRY[widget.type as keyof typeof SELECTION_WIDGET_REGISTRY];
-      return render(<Component widget={widget} data={null} />);
-    }
-    // 🔴 A channel with no case here does NOT fail loudly — it falls through to the
-    // default and looks its widget up in the MEASUREMENT registry, where it is
-    // absent, so React is handed `undefined` and reports an invalid element type
-    // rather than a missing channel. That is how the location channel arrived: the
-    // registry existed and this switch had never heard of it. Adding a sixth channel
-    // means adding a case here too.
-    case 'location': {
-      const Component = LOCATION_WIDGET_REGISTRY[widget.type as keyof typeof LOCATION_WIDGET_REGISTRY];
+    case 'location':
       return render(<Component widget={widget} data={locationData} />);
-    }
-    default: {
-      const Component = WIDGET_REGISTRY[widget.type as keyof typeof WIDGET_REGISTRY];
+    case 'measurement':
       return render(<Component widget={widget} data={measurementData()} />);
-    }
+    case 'selection':
+    case 'none':
+      return render(<Component widget={widget} data={null} />);
+    // 🔴 An unregistered widget or an unlisted channel must fail loudly here, not fall through
+    // to some default data shape: a case missing for a new channel would otherwise render the
+    // widget with the wrong snapshot and still pass.
+    default:
+      throw new Error(`no channel case for widget type ${widget.type}`);
   }
 }
 
 describe('rendering the widgetlab boards', () => {
+  // The gallery is the catalog: it must carry an instance of EVERY registration in the
+  // built-in registry (not just every id in a list), and render each through the component
+  // that registration carries -- so a built-in registered without a fixture, or a fixture
+  // for a widget the registry does not hold, is a failure here.
+  it('gives the gallery a rendering instance of every built-in registration', () => {
+    const registered = registry.list().map((d) => d.descriptor.id);
+    expect(registered.length).toBeGreaterThan(0);
+    const widgets = board(GALLERY).widgets;
+    for (const id of registered) {
+      const instances = widgets.filter((w) => w.type === id);
+      expect(instances.length, `the gallery has no ${id} widget`).toBeGreaterThan(0);
+      expect(() => renderWidget(instances[0]), `${id} threw while rendering`).not.toThrow();
+      cleanup();
+    }
+    for (const w of widgets) {
+      expect(registered, `${w.id}: gallery type ${w.type} is not a registered built-in`).toContain(w.type);
+    }
+  });
+
   for (const token of [GALLERY, STRESS]) {
     describe(token, () => {
       it('renders every widget', () => {
@@ -422,7 +437,7 @@ describe('the widgetlab options reach the rendered output', () => {
       for (const widget of board(token).widgets) {
         const title = widget.options?.title;
         if (typeof title !== 'string' || title === '') continue;
-        if (WIDGET_CHANNEL[widget.type] === 'selection') continue;
+        if (registry.descriptor(widget.type)?.channel === 'selection') continue;
         checked++;
         const { container } = renderWidget(widget);
         expect(container.textContent, `${widget.id}'s title never reached the DOM`).toContain(title);

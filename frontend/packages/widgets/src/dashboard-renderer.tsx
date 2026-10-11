@@ -32,14 +32,14 @@ import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 
 import { ConnectedWidget } from './connected-widget';
 import {
+  type WidgetCandidates,
   WidgetCandidatesProvider,
+  type WidgetSelect,
   WidgetSelectProvider,
+  WidgetSubjectProvider,
   WidgetThemeRootProvider,
   WidgetTimeZoneProvider,
-  WidgetSubjectProvider,
-  type WidgetCandidates,
-  type WidgetSelect,
-} from './frame';
+} from '@devicechain/widget-sdk';
 import { defaultWidgetRegistry } from './default-registry';
 
 export interface DashboardRendererProps {

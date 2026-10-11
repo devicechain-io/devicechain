@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 afterEach(cleanup);
 
-import type { CommandStreamState } from './hooks';
+import { type CommandStreamState } from '@devicechain/widget-sdk';
 import { CommandButton } from './widgets/command-button';
 
 const widget = (options: Record<string, unknown> = {}): WidgetInstance => ({

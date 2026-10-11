@@ -3,9 +3,10 @@
 
 // @devicechain/widgets — presentational dashboard widgets (ADR-039).
 //
-// Eleven built-ins over the DashboardHub's live telemetry, themed via CSS custom
-// properties (no Tailwind leakage — embeddable in any React host). A renderer
-// looks widgets up by type through WIDGET_REGISTRY.
+// Eleven built-ins over the DashboardHub's live data, themed via CSS custom
+// properties (no Tailwind leakage — embeddable in any React host). Each is a
+// registration declared with the public `defineWidget` from @devicechain/widget-sdk;
+// a renderer resolves a widget through a registry instance.
 
 // The view-only dashboard renderer: lays a parsed definition's widgets on the
 // canvas and binds each to the hub. The shared viewer for the console + external apps.
@@ -19,18 +20,10 @@ export { ConnectedWidget, type ConnectedWidgetProps } from './connected-widget';
 export { builtinWidgetCatalog, builtinWidgetDescriptors } from './builtin-descriptors';
 export { builtinWidgetDefinitions, createBuiltinWidgetRegistry } from './builtin-registry';
 
-// Registries + widget contract + channel classifier.
-export {
-  WIDGET_REGISTRY,
-  ALARM_WIDGET_REGISTRY,
-  CONTROL_WIDGET_REGISTRY,
-  SELECTION_WIDGET_REGISTRY,
-  LOCATION_WIDGET_REGISTRY,
-  WIDGET_CHANNEL,
-  WIDGET_BINDS_DATASOURCE,
-  type WidgetChannel,
-} from './registry';
-export { pickSample, optBoolean, type WidgetProps, type WidgetComponent } from './widget';
+// Read-only by-id views of the built-in descriptors (channel, datasource binding), and the
+// widget contract. The registrations above are the source of truth; these are derived.
+export { WIDGET_CHANNEL, WIDGET_BINDS_DATASOURCE, type WidgetChannel } from './registry';
+export { pickSample, optBoolean, type WidgetProps, type WidgetComponent } from '@devicechain/widget-sdk';
 
 // The tenant basemap seam. A host installs the provider; map widgets read it.
 export { TenantBasemapProvider, useTenantBasemap } from './basemap-context';
@@ -72,15 +65,6 @@ export {
   type DefinitionOptionIssue,
   type DefinitionValidationOptions,
 } from './definition-options';
-
-// Directional change-flash (opt-in `flashOnChange`): a reusable hook + the flashing value cell.
-export {
-  useFlashOnChange,
-  flashTextStyle,
-  flashBackgroundStyle,
-  FlashValue,
-  type FlashDirection,
-} from './flash';
 
 // Individual widgets (for direct/custom use).
 export { LatestCard } from './widgets/latest-card';
@@ -128,7 +112,9 @@ export {
   isScalar,
 } from './widgets/command-params';
 
-// Building blocks for custom widgets.
+// Building blocks for custom widgets. They live in @devicechain/widget-sdk (the one place the
+// ambient host contexts may be defined) and are re-exported so existing imports keep resolving;
+// the chart helpers come from its `/echarts` subpath.
 export {
   WidgetFrame,
   WidgetSubjectProvider,
@@ -140,12 +126,10 @@ export {
   useWidgetThemeRoot,
   WidgetCandidatesProvider,
   useWidgetCandidates,
-  type WidgetFrameProps,
-  type WidgetSelect,
-  type WidgetCandidates,
-} from './frame';
-export { EChart, type EChartOption } from './echart';
-export {
+  useFlashOnChange,
+  flashTextStyle,
+  flashBackgroundStyle,
+  FlashValue,
   useMeasurementStream,
   useAlarmStream,
   useCommandStream,
@@ -155,18 +139,27 @@ export {
   useResolvedBindings,
   useSlotCandidates,
   useCandidates,
-  useChartTheme,
+  css,
+  type FlashDirection,
+  type WidgetFrameProps,
+  type WidgetSelect,
+  type WidgetCandidates,
   type MeasurementStreamState,
   type AlarmStreamState,
   type CommandStreamState,
   type LocationStreamState,
   type CandidatesState,
   type DatasourceAvailability,
-} from './hooks';
+  type ThemeVar,
+} from '@devicechain/widget-sdk';
 export {
+  EChart,
   buildLineOption,
   buildGaugeOption,
+  resolveChartTheme,
+  useChartTheme,
+  type EChartOption,
   type LineChartOptions,
   type GaugeChartOptions,
-} from './chart-options';
-export { css, resolveChartTheme, type ChartTheme, type ThemeVar } from './theme';
+  type ChartTheme,
+} from '@devicechain/widget-sdk/echarts';

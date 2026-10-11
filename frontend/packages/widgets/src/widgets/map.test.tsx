@@ -74,7 +74,7 @@ vi.mock('maplibre-gl', () => {
   };
 });
 
-import type { LocationStreamState } from '../hooks';
+import { type LocationStreamState } from '@devicechain/widget-sdk';
 import { TenantBasemapProvider } from '../basemap-context';
 import { MapRuntimeProvider, type MapRuntime } from '../map-runtime-context';
 import { MapWidget } from './map';

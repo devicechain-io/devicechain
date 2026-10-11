@@ -3,13 +3,15 @@
 
 // @vitest-environment node
 
-// The built-in registry is built BY REFERENCE from today's tables, and it sits on one live
-// path (the publish-gate option validation). This file is what stops it rotting: every
-// assertion compares the registry to the table it was derived from, over EVERY widget type,
-// so a swapped component, a changed channel or a drifted default is a red test rather than a
-// registry that quietly disagrees with the renderer.
+// The built-in registry is the ONLY place a built-in's channel, schema, binding policy and
+// component are declared (each widget module registers itself through the public
+// defineWidget), and it sits on one live path (the publish-gate option validation). The
+// by-id views the console still imports (WIDGET_CHANNEL, WIDGET_OPTIONS, ...) are derived
+// from it, so this file compares each view to its registration over EVERY widget type, and
+// pins the facts the renderer relies on: a changed channel, a swapped component or a drifted
+// default is a red test rather than a registry that quietly disagrees with the renderer.
 
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -17,36 +19,11 @@ import { WIDGET_TYPES, addWidget, type WidgetType } from '@devicechain/dashboard
 import { createWidgetRegistry } from '@devicechain/widget-sdk';
 import { describe, expect, it } from 'vitest';
 
-import { builtinWidgetCatalog } from './builtin-descriptors';
+import { builtinWidgetCatalog, builtinWidgetDescriptors } from './builtin-descriptors';
 import { builtinWidgetDefinitions, createBuiltinWidgetRegistry } from './builtin-registry';
 import { validateDefinitionOptions } from './definition-options';
 import { WIDGET_OPTIONS } from './options';
-import {
-  ALARM_WIDGET_REGISTRY,
-  CONTROL_WIDGET_REGISTRY,
-  LOCATION_WIDGET_REGISTRY,
-  SELECTION_WIDGET_REGISTRY,
-  WIDGET_BINDS_DATASOURCE,
-  WIDGET_CHANNEL,
-  WIDGET_REGISTRY,
-} from './registry';
-
-// The component the per-channel registries hold for a type, looked up the way
-// ConnectedWidget does today.
-function tableComponent(type: WidgetType): unknown {
-  switch (WIDGET_CHANNEL[type]) {
-    case 'alarm':
-      return ALARM_WIDGET_REGISTRY[type as keyof typeof ALARM_WIDGET_REGISTRY];
-    case 'control':
-      return CONTROL_WIDGET_REGISTRY[type as keyof typeof CONTROL_WIDGET_REGISTRY];
-    case 'selection':
-      return SELECTION_WIDGET_REGISTRY[type as keyof typeof SELECTION_WIDGET_REGISTRY];
-    case 'location':
-      return LOCATION_WIDGET_REGISTRY[type as keyof typeof LOCATION_WIDGET_REGISTRY];
-    default:
-      return WIDGET_REGISTRY[type as keyof typeof WIDGET_REGISTRY];
-  }
-}
+import { WIDGET_BINDS_DATASOURCE, WIDGET_CHANNEL } from './registry';
 
 const registry = createBuiltinWidgetRegistry();
 const empty = { version: 1, widgets: [] } as never;
@@ -66,12 +43,12 @@ describe('the built-in registry', () => {
   describe.each(WIDGET_TYPES)('%s', (type) => {
     const descriptor = registry.descriptor(type)!;
 
-    it('takes its channel and option schema by identity from the tables', () => {
-      expect(descriptor.channel).toBe(WIDGET_CHANNEL[type]);
-      expect(descriptor.options).toBe(WIDGET_OPTIONS[type]);
+    it('has its by-id views derived from the registration, by identity', () => {
+      expect(WIDGET_CHANNEL[type]).toBe(descriptor.channel);
+      expect(WIDGET_OPTIONS[type]).toBe(descriptor.options);
     });
 
-    it('binds a datasource exactly when the table says it does', () => {
+    it('binds a datasource exactly when the derived view says it does', () => {
       expect(descriptor.datasource.mode !== 'none').toBe(WIDGET_BINDS_DATASOURCE[type]);
     });
 
@@ -105,10 +82,12 @@ describe('the built-in registry', () => {
       expect(descriptor.display.title).toBe(words.charAt(0).toUpperCase() + words.slice(1));
     });
 
-    it('renders with the component the per-channel registry holds', () => {
-      const component = tableComponent(type);
-      expect(component).toBeTypeOf('function');
-      expect(registry.implementation(type)?.component).toBe(component);
+    it('renders with the component its own module registered, through the public defineWidget', () => {
+      const definition = builtinWidgetDefinitions.find((d) => d.descriptor.id === type);
+      expect(definition, `no registration for ${type}`).toBeDefined();
+      expect(definition?.descriptor).toBe(builtinWidgetDescriptors[type]);
+      expect(registry.implementation(type)?.component).toBeTypeOf('function');
+      expect(registry.implementation(type)?.component).toBe(definition?.implementation.component);
       expect(registry.implementation(type)?.kind).toBe('trusted-react');
     });
 
@@ -149,6 +128,24 @@ describe('the built-in registry', () => {
     });
   });
 
+  // The by-id views are read-only projections, not a second registry: a consumer that writes
+  // an entry into one (to "register" a widget the cheap way) must fail, not half-work.
+  it('serves its by-id views frozen, over exactly the built-in ids', () => {
+    for (const [name, view] of Object.entries({ WIDGET_CHANNEL, WIDGET_BINDS_DATASOURCE, WIDGET_OPTIONS })) {
+      expect(Object.isFrozen(view), `${name} is mutable`).toBe(true);
+      expect(Object.keys(view).sort(), name).toEqual([...WIDGET_TYPES].sort());
+      expect(() => {
+        (view as Record<string, unknown>)['acme/tank'] = 'measurement';
+      }, name).toThrow(TypeError);
+    }
+  });
+
+  it('puts the static widgets on the none channel: no datasource, no policy', () => {
+    for (const id of ['label', 'image'] as const) {
+      expect(registry.descriptor(id)).toMatchObject({ channel: 'none', datasource: { mode: 'none' }, binding: {} });
+    }
+  });
+
   it('declares the gauge min/max rule as data on the descriptor', () => {
     expect(registry.descriptor('gauge')?.constraints).toEqual([{ kind: 'greater-than', key: 'max', than: 'min' }]);
     // And it is JSON: nothing in a built-in descriptor is a function.
@@ -183,10 +180,10 @@ describe('the built-in registry', () => {
 });
 
 describe('the publish gate', () => {
-  // Every built-in's catalog schema is the WIDGET_OPTIONS table by identity, so a gate that
-  // quietly went back to the table would produce identical issues and pass every behavioural
+  // Every built-in's catalog schema is the WIDGET_OPTIONS view by identity, so a gate that
+  // quietly went back to the view would produce identical issues and pass every behavioural
   // test — while the catalog stopped being on any live path. Pin the source instead.
-  it('resolves schemas through the catalog, not the by-type tables', () => {
+  it('resolves schemas through the catalog, not the by-type views', () => {
     const src = dirname(fileURLToPath(import.meta.url));
     const code = readFileSync(join(src, 'definition-options.ts'), 'utf8')
       .split('\n')
@@ -201,16 +198,29 @@ describe('the publish gate', () => {
 
 describe('ambient contexts', () => {
   // A React context is its createContext object, so a second definition in this package
-  // would be a context the host's provider never writes to. The contexts live in the SDK;
-  // frame.tsx must only re-export them.
-  it('are not redefined in the widgets package', async () => {
+  // would be a context the host's provider never writes to. The contexts live in the SDK
+  // alone; this package re-exports them from its index.
+  it('are not redefined in the widgets package, and the index re-exports the SDK ones', async () => {
     const src = dirname(fileURLToPath(import.meta.url));
-    const frame = readFileSync(join(src, 'frame.tsx'), 'utf8');
-    expect(frame).not.toMatch(/createContext\s*[<(]/);
+    // Only the five contexts the SDK owns; this package has its own (basemap, map runtime).
+    const redefined = sourcesUnder(src).filter((f) =>
+      /Widget(?:Subject|TimeZone|ThemeRoot|Select|Candidates)Context\s*=\s*createContext/.test(readFileSync(f, 'utf8')),
+    );
+    expect(redefined).toEqual([]);
     const sdk = await import('@devicechain/widget-sdk');
-    const frameModule = await import('./frame');
-    expect(frameModule.useWidgetSelect).toBe(sdk.useWidgetSelect);
-    expect(frameModule.WidgetCandidatesProvider).toBe(sdk.WidgetCandidatesProvider);
-    expect(frameModule.useWidgetTimeZone).toBe(sdk.useWidgetTimeZone);
+    const widgets = await import('./index');
+    expect(widgets.useWidgetSelect).toBe(sdk.useWidgetSelect);
+    expect(widgets.WidgetCandidatesProvider).toBe(sdk.WidgetCandidatesProvider);
+    expect(widgets.useWidgetTimeZone).toBe(sdk.useWidgetTimeZone);
   });
 });
+
+function sourcesUnder(dir: string): string[] {
+  const out: string[] = [];
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const full = join(dir, entry.name);
+    if (entry.isDirectory()) out.push(...sourcesUnder(full));
+    else if (/\.tsx?$/.test(entry.name) && !/\.test\.tsx?$/.test(entry.name)) out.push(full);
+  }
+  return out;
+}

@@ -7,9 +7,16 @@
 
 import type { CSSProperties } from 'react';
 
-import { WidgetFrame } from '../frame';
-import { css } from '../theme';
-import { optNumber, optString, type WidgetProps } from '../widget';
+import {
+  css,
+  defineWidget,
+  optNumber,
+  optString,
+  WidgetFrame,
+  type WidgetProps,
+} from '@devicechain/widget-sdk';
+
+import { builtinWidgetDescriptors } from '../builtin-descriptors';
 
 const justify: Record<string, CSSProperties['justifyContent']> = {
   left: 'flex-start',
@@ -17,7 +24,7 @@ const justify: Record<string, CSSProperties['justifyContent']> = {
   right: 'flex-end',
 };
 
-export function Label({ widget }: WidgetProps) {
+export function Label({ widget }: WidgetProps<null>) {
   const text = optString(widget.options, 'text') ?? '';
   const align = optString(widget.options, 'align') ?? 'center';
   const fontSize = optNumber(widget.options, 'fontSize') ?? 16;
@@ -47,3 +54,10 @@ export function Label({ widget }: WidgetProps) {
     </WidgetFrame>
   );
 }
+
+// The registration: this widget's portable descriptor paired with its component, declared
+// through the same public `defineWidget` a third-party package uses.
+export const labelWidget = defineWidget({
+  descriptor: builtinWidgetDescriptors['label'],
+  implementation: { kind: 'trusted-react', component: Label },
+});
