@@ -50,9 +50,11 @@ backend/
     mcp/                      opt-in OAuth 2.1 Resource Server exposing read-only tools (devices, state,
                               telemetry, alarms, commands) to AI agents over MCP, fronting per-area GraphQL
                               under the caller's own token — no service token, confused-deputy red line (ADR-047)
-    update-management/        opt-in OTA area: artifacts, device assignments, download plane. SCAFFOLD ONLY so far —
-                              empty baseline, health/metrics, and a GraphQL plane whose one probe query fails
-                              with NOT_IMPLEMENTED. Held out of `default`, shipped by `full`
+    update-management/        opt-in OTA area: artifacts, device assignments, download plane. Today: the immutable
+                              per-tenant artifact catalogue (GraphQL CRUD, digest stored as text) and a streaming
+                              `PUT /updates/artifacts/{token}/content` that authenticates before reading the body,
+                              caps size before and during the stream, and verifies size + SHA-256 (a mismatch deletes
+                              the object). Assignments and download are not built. Held out of `default`, shipped by `full`
   k8s/                        controller-runtime operator (Instance CRD; tenants are control-plane DB rows, ADR-033)
   cli/                        dcctl — install/bootstrap/destroy + admin tooling
   tools/                      maintainer-only Go tools, in the workspace but not shipped:

@@ -692,9 +692,12 @@ blobStorage:
     annotations: {}
   # Functional areas that mount the blob volume at the store directory. Only areas that
   # actually read/write the object store need it (today: user-management, for branding
-  # logos). An area that uses the store but is omitted here finds it "not configured".
+  # logos, and update-management, for update artifacts). An area that uses the store but
+  # is omitted here finds it "not configured". Two consuming areas share one volume, so
+  # when they can land on different nodes the claim must be ReadWriteMany.
   mountAreas:
     - user-management
+    - update-management
 
 # E7 (ADR-022 review): default pod resource requests/limits. An area's own
 # functionalAreas.<area>.resources is merged over this map key by key, so an area
@@ -1755,9 +1758,12 @@ functionalAreas:
       # inferenceBurst: 15               # tokens a tenant may spend back-to-back before the rate binds (~5 drafts)
   update-management:
     # The update-management service: over-the-air update artifacts, their assignment to
-    # devices and the download plane. THIS RELEASE SHIPS ONLY ITS SCAFFOLD — the service
-    # starts, migrates its schema and serves health, readiness and metrics, but its GraphQL
-    # API answers every request with a NOT_IMPLEMENTED error. OPT-IN area: held back from
+    # devices and the download plane. THIS RELEASE SHIPS THE ARTIFACT CATALOGUE ONLY: a
+    # per-tenant, immutable record of each firmware / software / configuration image, a
+    # GraphQL API to declare and inspect them, and a streaming content upload that verifies
+    # size and digest. Assignment to devices and download are not built yet. It stores the
+    # bytes in the object store (blobStorage), so artifacts cannot be declared until a blob
+    # backend is configured. OPT-IN area: held back from
     # `default`, shipped by `full`, or named explicitly (enabledFunctionalAreas:
     # [..., update-management]). It hard-depends on device-management (an update targets
     # devices). It opens a pool on the shared relational store, so it counts toward an

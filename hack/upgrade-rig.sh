@@ -1029,6 +1029,29 @@ wait_for_api() {
   done
 }
 
+# The functional areas the rig installs and waits on: the ones the coverage table writes
+# to, THAT THE BASELINE RELEASE ALSO SHIPS.
+#
+# 🔴 THE TABLE IS BUILT FROM THE WORKING TREE, THE INSTALL IS THE BASELINE'S. An area added
+# after the baseline was cut (update-management, once its artifact catalogue gained an
+# entity) is one the baseline's dcctl does not know, so asking it to enable that area is a
+# refusal that reads as a broken rig rather than as "this release predates the area". The
+# seed already skips the entities the baseline cannot express (--baseline-schemas); this is
+# the same rule applied to the install, keyed the same way - on whether the extracted
+# baseline tree has the service at all. It stops filtering by itself the day a release that
+# ships the area becomes the baseline, which is when the entity starts being exercised.
+rig_areas() {
+  local area
+  while read -r area; do
+    [[ -n "$area" ]] || continue
+    if [[ -d "$baseline_src/backend/services/$area" ]]; then
+      echo "$area"
+    else
+      note "skipping $area: $baseline_tag does not ship it, so there is nothing to seed there and nothing to carry over" >&2
+    fi
+  done < <("$apiprobe" areas)
+}
+
 wait_for_every_api() {
   local area waited=0
   say "waiting for the instance API to route"
@@ -1037,7 +1060,7 @@ wait_for_every_api() {
     [[ -n "$area" ]] || continue
     wait_for_api "$area"
     waited=$((waited + 1))
-  done < <("$apiprobe" areas)
+  done < <(rig_areas)
   # An empty list would make this wait for user-management alone and return — a
   # wait that looks like it covered the instance and covered one service. The
   # areas come from a subprocess, and a subprocess that dies produces no lines
@@ -1075,7 +1098,7 @@ cmd_up() {
   while read -r area; do
     [[ -n "$area" ]] || continue
     area_args+=(--enable-area "$area")
-  done < <("$apiprobe" areas)
+  done < <(rig_areas)
   [[ ${#area_args[@]} -gt 0 ]] || fail "apiprobe named no functional areas; the seed would have nothing to write to"
 
   pin_baseline_charts

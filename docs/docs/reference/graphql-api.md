@@ -76,9 +76,12 @@ authorities do not line up with intuition:
 
 `sparkplug-ingest` and `lwm2m-ingest` serve no GraphQL at all and are deliberately kept off the
 `/api` router entirely. `event-sources` is routed but answers with a placeholder schema: ingest
-reaches it over the device-plane transports, not this API. `update-management` is routed too, but its
-API is not implemented in this release: its one placeholder query answers every call with a
-`NOT_IMPLEMENTED` error.
+reaches it over the device-plane transports, not this API. `update-management` is routed too: its API is the artifact
+catalogue (declare, inspect and retire update artifacts). The artifact content itself is not sent
+through GraphQL: it is uploaded with `PUT /api/update-management/updates/artifacts/{token}/content`,
+authenticated with a tenant access token that holds `artifact:write`. An ingress controller
+still applies its own request-body limit to that route (nginx defaults to 1 MiB), so raise it to the
+largest artifact you intend to upload.
 
 ### Subscriptions over WebSocket {#subscriptions-over-websocket}
 

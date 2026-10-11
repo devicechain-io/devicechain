@@ -551,11 +551,12 @@
               "outbound-connectors",
               "mcp",
               "ai-inference",
-              "sparkplug-ingest"
+              "sparkplug-ingest",
+              "update-management"
             ]
           },
           "uniqueItems": true,
-          "description": "Functional areas that mount the blob volume at the store directory (default: user-management)."
+          "description": "Functional areas that mount the blob volume at the store directory (default: user-management and update-management)."
         }
       }
     },
