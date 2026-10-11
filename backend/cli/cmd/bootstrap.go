@@ -206,7 +206,7 @@ var bootstrapCmd = &cobra.Command{
 		// Diagnose the local system up front so a run fails fast on a missing
 		// tool / low limit / unreachable docker rather than midway through.
 		if !bootstrapSkipPreflight {
-			if d := runDoctor(args[0]); d.fails > 0 {
+			if d := runDoctor(args[0], doctorOpts{KubeContext: bootstrapKubeContext, Build: bootstrapBuild}); d.fails > 0 {
 				return fmt.Errorf("%d preflight check(s) failed — fix the items above, or re-run with --skip-preflight", d.fails)
 			}
 		}
