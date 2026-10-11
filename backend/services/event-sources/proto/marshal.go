@@ -6,6 +6,7 @@ package proto
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/devicechain-io/dc-event-sources/model"
@@ -298,6 +299,16 @@ func UnmarshalUnresolvedPayload(etype model.EventType, payload []byte) (interfac
 // carries the credential secret as the device sent it.
 var ErrUnsealedCredentialSecret = errors.New("refusing to marshal an event carrying an unsealed credential secret")
 
+// ErrUnsealedCredentialId is MarshalUnresolvedEvent's refusal of an ACCESS_TOKEN event that
+// still carries the token as the device sent it.
+var ErrUnsealedCredentialId = errors.New("refusing to marshal an event carrying an unsealed access token")
+
+// IsBearerCredentialType reports whether credentialType names a credential whose id is
+// itself the bearer secret (ACCESS_TOKEN), which therefore travels sealed.
+func IsBearerCredentialType(credentialType *string) bool {
+	return credentialType != nil && strings.EqualFold(*credentialType, "ACCESS_TOKEN")
+}
+
 // Marshal an unresolved event to protobuf bytes.
 //
 // An event still carrying CredentialSecret, the secret as the device sent it, is refused:
@@ -308,6 +319,10 @@ var ErrUnsealedCredentialSecret = errors.New("refusing to marshal an event carry
 func MarshalUnresolvedEvent(event *model.UnresolvedEvent) ([]byte, error) {
 	if event.CredentialSecret != nil {
 		return nil, ErrUnsealedCredentialSecret
+	}
+	// An access token is the credential itself: only its sealed form is marshalled.
+	if IsBearerCredentialType(event.CredentialType) && event.CredentialId != nil {
+		return nil, ErrUnsealedCredentialId
 	}
 	plbytes, err := MarshalUnresolvedPayload(event.EventType, event.Payload)
 	if err != nil {
@@ -327,6 +342,7 @@ func MarshalUnresolvedEvent(event *model.UnresolvedEvent) ([]byte, error) {
 		CredentialType:         event.CredentialType,
 		CredentialId:           event.CredentialId,
 		CredentialSecret:       event.SealedCredentialSecret,
+		SealedCredentialId:     event.SealedCredentialId,
 		AuthenticatedTransport: event.AuthenticatedTransport,
 	}
 
@@ -377,6 +393,7 @@ func UnmarshalUnresolvedEvent(encoded []byte) (*model.UnresolvedEvent, error) {
 		CredentialType:         pbevent.CredentialType,
 		CredentialId:           pbevent.CredentialId,
 		SealedCredentialSecret: pbevent.CredentialSecret,
+		SealedCredentialId:     pbevent.SealedCredentialId,
 		AuthenticatedTransport: pbevent.AuthenticatedTransport,
 	}
 

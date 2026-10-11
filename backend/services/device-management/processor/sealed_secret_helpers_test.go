@@ -38,3 +38,19 @@ func presentSealed(t testing.TB, ctx context.Context, e *esmodel.UnresolvedEvent
 	}
 	e.CredentialType, e.CredentialId, e.SealedCredentialSecret = &ctype, &cid, &sealed
 }
+
+// presentSealedToken makes e present the ACCESS_TOKEN credential token, sealed for the
+// tenant in ctx and the credential type, the way event-sources publishes it: the clear
+// credential id is left empty.
+func presentSealedToken(t testing.TB, ctx context.Context, e *esmodel.UnresolvedEvent, ctype, token string) {
+	t.Helper()
+	tenant, ok := core.TenantFromContext(ctx)
+	if !ok {
+		t.Fatal("presentSealedToken needs a tenant in the context")
+	}
+	sealed, err := testSecretTransit(t).SealToken(tenant, ctype, token)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.CredentialType, e.CredentialId, e.SealedCredentialId = &ctype, nil, &sealed
+}

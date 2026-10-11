@@ -27,6 +27,7 @@ func eventWithCredentialMarkers() UnresolvedEvent {
 		CredentialSecret: &secret,
 		// Sealed carries the marker too: it is secret material of the same standing.
 		SealedCredentialSecret: &secret,
+		SealedCredentialId:     &secret,
 	}
 }
 
@@ -47,6 +48,9 @@ func TestWithoutPresentedCredentialClearsEveryField(t *testing.T) {
 	}
 	if got.SealedCredentialSecret != nil {
 		t.Errorf("SealedCredentialSecret survived: %q", *got.SealedCredentialSecret)
+	}
+	if got.SealedCredentialId != nil {
+		t.Errorf("SealedCredentialId survived: %q", *got.SealedCredentialId)
 	}
 }
 

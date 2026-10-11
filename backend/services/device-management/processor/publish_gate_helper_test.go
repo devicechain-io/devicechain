@@ -52,5 +52,6 @@ func newBenchProcessor(b testing.TB, nmgr *messaging.NatsManager, reader messagi
 		time.Duration(config.DefaultMaxEventFutureSkewSeconds)*time.Second,
 		NewResolveMetrics(nmgr.Microservice))
 	iproc.resolverCount = resolvers
+	iproc.secretTransit = testSecretTransit(b)
 	return iproc
 }

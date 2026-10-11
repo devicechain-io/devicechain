@@ -4,14 +4,14 @@
 package credential
 
 import (
-	"crypto/aes"
-	"crypto/cipher"
 	"crypto/hkdf"
 	"crypto/sha256"
+	"encoding/base64"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	"golang.org/x/crypto/chacha20poly1305"
 )
 
 func testTransit(t *testing.T, fill byte) *SecretTransit {
@@ -50,7 +50,7 @@ func TestSecretTransitRefusesWhatWasNotSealedForThisCredential(t *testing.T) {
 		"empty":              {"acme", "sensor-1", ""},
 		"truncated":          {"acme", "sensor-1", sealed[:len(sealed)-4]},
 		"tampered":           {"acme", "sensor-1", sealed[:len(sealed)-2] + "AA"},
-		"wrong version":      {"acme", "sensor-1", strings.Replace(sealed, "dcs1", "dcs2", 1)},
+		"wrong version":      {"acme", "sensor-1", strings.Replace(sealed, "dcs2", "dcs1", 1)},
 		"stored digest form": {"acme", "sensor-1", "v1$00000000$AAAA$BBBB"},
 	} {
 		_, err := tr.Open(c.tenant, c.id, c.val)
@@ -78,11 +78,9 @@ func TestSecretTransitKeyIsSeparateFromTheDigestKey(t *testing.T) {
 
 	// A transit built on the DIGEST key's bytes does not open what the real transit seals,
 	// and the reverse.
-	block, err := aes.NewCipher(dk.key[:])
+	aead, err := chacha20poly1305.NewX(dk.key[:])
 	require.NoError(t, err)
-	aead, err := cipher.NewGCM(block)
-	require.NoError(t, err)
-	wrong := &SecretTransit{aead: aead, id: tr.id}
+	wrong := &SecretTransit{aead: aead, tokenAEAD: aead, id: tr.id}
 	sealed, err := tr.Seal("acme", "c", "a-long-enough-secret")
 	require.NoError(t, err)
 	_, err = wrong.Open("acme", "c", sealed)
@@ -93,6 +91,34 @@ func TestSecretTransitKeyIsSeparateFromTheDigestKey(t *testing.T) {
 	require.ErrorIs(t, err, ErrSealedSecretInvalid)
 }
 
+// The nonce is 192 bits, and a password and a token are sealed under separate subkeys: a
+// value sealed for one purpose does not open for the other even when the bound data is
+// supplied identically, and a dcs1 value from before the cipher change is refused.
+func TestSecretTransitNonceSizeAndSeparateSubkeys(t *testing.T) {
+	tr := testTransit(t, 1)
+	require.Equal(t, 24, tr.aead.NonceSize())
+	require.Equal(t, 24, tr.tokenAEAD.NonceSize())
+
+	sealed, err := tr.Seal("acme", "c", "a-long-enough-secret")
+	require.NoError(t, err)
+	require.True(t, strings.HasPrefix(sealed, "dcs2$"))
+	raw, err := base64.RawStdEncoding.DecodeString(strings.Split(sealed, "$")[2])
+	require.NoError(t, err)
+	require.Len(t, raw, 24+len("a-long-enough-secret")+16)
+
+	// Same bound data on both sides, so only the subkey differs.
+	cross := &SecretTransit{aead: tr.tokenAEAD, tokenAEAD: tr.aead, id: tr.id}
+	_, err = cross.Open("acme", "c", sealed)
+	require.ErrorIs(t, err, ErrSealedSecretInvalid, "a password-sealed value opened by the token subkey")
+	token, err := tr.SealToken("acme", "ACCESS_TOKEN", "tok-0123456789")
+	require.NoError(t, err)
+	_, err = cross.OpenToken("acme", "ACCESS_TOKEN", token)
+	require.ErrorIs(t, err, ErrSealedSecretInvalid, "a token-sealed value opened by the password subkey")
+
+	_, err = tr.Open("acme", "c", strings.Replace(sealed, "dcs2", "dcs1", 1))
+	require.ErrorIs(t, err, ErrSealedSecretInvalid, "dcs1 is not opened")
+}
+
 func TestSecretTransitRefusesBadInput(t *testing.T) {
 	_, err := DeriveSecretTransit(make([]byte, 16))
 	require.Error(t, err)
@@ -101,4 +127,38 @@ func TestSecretTransitRefusesBadInput(t *testing.T) {
 		_, err := tr.Seal(c[0], c[1], c[2])
 		require.Error(t, err)
 	}
+}
+
+func TestTokenTransitRoundTripAndBinding(t *testing.T) {
+	tr := testTransit(t, 1)
+	sealed, err := tr.SealToken("acme", "ACCESS_TOKEN", "tok-0123456789")
+	require.NoError(t, err)
+	require.NotContains(t, sealed, "tok-0123456789")
+	got, err := tr.OpenToken("acme", "ACCESS_TOKEN", sealed)
+	require.NoError(t, err)
+	require.Equal(t, "tok-0123456789", got)
+
+	for name, open := range map[string]func() (string, error){
+		"another tenant": func() (string, error) { return tr.OpenToken("other", "ACCESS_TOKEN", sealed) },
+		"another type":   func() (string, error) { return tr.OpenToken("acme", "MQTT_BASIC", sealed) },
+		"as a password":  func() (string, error) { return tr.Open("acme", "tok-0123456789", sealed) },
+		"another key":    func() (string, error) { return testTransit(t, 2).OpenToken("acme", "ACCESS_TOKEN", sealed) },
+		"plaintext":      func() (string, error) { return tr.OpenToken("acme", "ACCESS_TOKEN", "tok-0123456789") },
+		"empty":          func() (string, error) { return tr.OpenToken("acme", "ACCESS_TOKEN", "") },
+	} {
+		_, err := open()
+		require.ErrorIs(t, err, ErrSealedSecretInvalid, name)
+	}
+
+	pw, err := tr.Seal("acme", "ACCESS_TOKEN", "a-password-value")
+	require.NoError(t, err)
+	_, err = tr.OpenToken("acme", "ACCESS_TOKEN", pw)
+	require.ErrorIs(t, err, ErrSealedSecretInvalid, "a sealed password is not a sealed token")
+
+	for _, a := range [][3]string{{"", "ACCESS_TOKEN", "t"}, {"acme", "", "t"}, {"acme", "ACCESS_TOKEN", ""}} {
+		_, err := tr.SealToken(a[0], a[1], a[2])
+		require.Error(t, err)
+	}
+	again, _ := tr.SealToken("acme", "ACCESS_TOKEN", "tok-0123456789")
+	require.NotEqual(t, sealed, again, "a fresh nonce per seal")
 }

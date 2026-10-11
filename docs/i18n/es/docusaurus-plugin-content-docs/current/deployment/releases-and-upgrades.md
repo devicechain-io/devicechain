@@ -3783,14 +3783,19 @@ Cada inicio de sesión es ahora un registro que dura lo mismo que un token de ac
 
 Los tokens emitidos antes de la actualización no tienen registro de inicio de sesión y se rechazan, por lo que **todos inician sesión de nuevo una vez**: las sesiones de la consola, de la aplicación de paneles, del SDK y de OAuth terminan en su siguiente renovación, dentro de los 15 minutos posteriores a la actualización salvo que hayas cambiado la vida del token de acceso. Los clientes OAuth, como los agentes MCP, se autorizan de nuevo. No hay que hacer nada más.
 
-#### Los eventos que llevan una contraseña de dispositivo en el cuerpo se rechazan mientras conviven versiones {#next-upgrade-body-password}
+#### Los eventos que llevan una contraseña de dispositivo o un token de acceso en el cuerpo se ven afectados mientras conviven versiones {#next-upgrade-body-password}
 
 Desde esta versión, `event-sources` y `device-management` se pasan en otra forma la contraseña de
-dispositivo que llega en el cuerpo de un evento, y cada uno necesita la versión nueva para leer la del
-otro. Mientras conviven versiones antiguas y nuevas de ambos durante una actualización progresiva,
-los eventos que llevan una contraseña de dispositivo en el cuerpo (`MQTT_BASIC`, por HTTP o MQTT) se
-rechazan como no autenticados y no se reproducen. Las conexiones MQTT y los eventos con token de
-acceso no se ven afectados.
+dispositivo o el token de acceso que llega en el cuerpo de un evento, y cada uno necesita la versión
+nueva para leer la del otro. Mientras conviven versiones antiguas y nuevas de ambos durante una
+actualización progresiva:
+
+- Los eventos que llevan en el cuerpo una contraseña de dispositivo (`MQTT_BASIC`), por HTTP o MQTT, se
+  rechazan como no autenticados y no se reproducen.
+- Los eventos que llevan en el cuerpo un token de acceso (`ACCESS_TOKEN`) se rechazan con
+  `deviceAuthMode: required`. Con `deviceAuthMode: optional` se aceptan con el token de dispositivo que
+  nombran, sin comprobar su credencial.
+- Las conexiones MQTT no se ven afectadas.
 
 Actualiza `event-sources` y `device-management` a la vez, o acepta la breve pérdida de esos eventos.
 
