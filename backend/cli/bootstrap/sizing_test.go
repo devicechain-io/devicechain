@@ -598,8 +598,14 @@ func TestAreaResourcesMergeOverTheDefaults(t *testing.T) {
 			// Every key but the raised CPU limit and the measured CPU request comes
 			// from the top-level map. For an area rendered AFTER device-management, a
 			// wrong value here means the merge wrote into the shared defaults.
+			// event-processing alone raises its memory limit: with GOGC 400 its working set
+			// (174 MiB of the 256Mi limit at 6,000 events/s on GKE) needed the room.
+			wantMem := "256Mi"
+			if area == "event-processing" {
+				wantMem = "384Mi"
+			}
 			want := map[string]string{
-				"limits.cpu": wantCPU, "limits.memory": "256Mi",
+				"limits.cpu": wantCPU, "limits.memory": wantMem,
 				"requests.cpu": wantReq, "requests.memory": "128Mi",
 			}
 			have := map[string]string{

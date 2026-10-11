@@ -898,8 +898,11 @@ eventos, mientras `kv_cache_local_entries` de esa caché se mantiene muy por deb
 `kv_cache_local_entries` en `kv_cache_local_max_entries` o `kv_cache_local_bytes` en
 `kv_cache_local_max_bytes`. Entonces suba el límite, y con él el límite de memoria: con los valores
 por defecto las seis cachés en memoria, incluidos los 16 MiB fijos de las credenciales, guardan
-como máximo 96 MiB, y sin `GOMEMLIMIT` el heap puede crecer
-hasta aproximadamente el doble de lo que guarda antes de recolectarse.
+como máximo 96 MiB. `device-management` se ejecuta con `GOGC=400` y un límite blando de memoria
+(`GOMEMLIMIT`) al 75 % de su límite de memoria, de modo que el recolector deja crecer el heap
+hasta unas cinco veces lo que guarda, y trabaja más al acercarse a ese límite blando; donde no hay
+`GOMEMLIMIT`, el heap puede crecer hasta aproximadamente el doble de lo que guarda antes de
+recolectarse.
 
 Eliminar una entrada tras un cambio (un dispositivo borrado, un perfil publicado) nunca se omite.
 Espera hasta cinco segundos, porque solo el líder del bucket puede aceptarlo. Si aun así falla, el
