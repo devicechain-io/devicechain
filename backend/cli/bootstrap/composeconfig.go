@@ -116,6 +116,9 @@ type externalConfigCoordinates struct {
 	// NatsPort and RdbPort are the two egress ports the NetworkPolicy opens.
 	NatsPort int
 	RdbPort  int
+	// BlobDirectory is where the filesystem object store writes; empty when the instance
+	// has no filesystem store. The volume must mount exactly there.
+	BlobDirectory string
 }
 
 // readConfigCoordinates takes them from the document itself, through the services'
@@ -155,6 +158,7 @@ func readConfigCoordinates(doc []byte) (externalConfigCoordinates, error) {
 			loaded.Persistence.Rdb.Configuration["port"])
 	}
 	out.RdbPort = port
+	out.BlobDirectory = loaded.Infrastructure.Blob.Directory
 	return out, nil
 }
 
@@ -236,12 +240,21 @@ func installValuesFor(authoring map[string]interface{}, instance string, doc []b
 	// reverts to the chart's default ports. One rule instead: dcctl restates every
 	// coordinate the chart can no longer read.
 	//
-	// blobStorage.persistence.mountPath is the one that is deliberately NOT here. It
-	// is the same kind of escape hatch, but it is only legal alongside a volume: the
-	// chart refuses a mount path with no volume to mount, and refuses a blob
-	// directory with no volume behind it. The document carries the chart's default —
-	// no directory, hence no store — so there is nothing to restate, and restating
-	// an empty path would be writing a value with no meaning.
+	// blobStorage.persistence.mountPath is restated ONLY WHEN THE DOCUMENT NAMES A
+	// DIRECTORY. It is the same kind of escape hatch, but it is only legal alongside a
+	// volume: the chart refuses a mount path with no volume to mount, and refuses a
+	// blob directory with no volume behind it. An instance with no filesystem store
+	// has no directory, hence nothing to restate, and restating an empty path would be
+	// writing a value with no meaning. One WITH a store has lost the only place the
+	// chart could read where to mount it -- the document it authored -- so without
+	// this the volume mounts nowhere and the service finds a read-only path.
+	if coords.BlobDirectory != "" {
+		vals["blobStorage"] = mergedStringKeyMap(authoring["blobStorage"], map[string]interface{}{
+			"persistence": mergedStringKeyMap(
+				blobPersistenceOf(authoring["blobStorage"]),
+				map[string]interface{}{"mountPath": coords.BlobDirectory}),
+		})
+	}
 	vals["metrics"] = mergedStringKeyMap(authoring["metrics"], map[string]interface{}{
 		"natsBrokerHost": coords.NatsHost,
 	})
@@ -253,6 +266,12 @@ func installValuesFor(authoring map[string]interface{}, instance string, doc []b
 	})
 
 	return vals, nil
+}
+
+// blobPersistenceOf reads blobStorage.persistence out of an authoring blobStorage block.
+func blobPersistenceOf(blobStorage interface{}) interface{} {
+	m, _ := blobStorage.(map[string]interface{})
+	return m["persistence"]
 }
 
 // mergedStringKeyMap returns base (when it is a map) with over laid on top, without

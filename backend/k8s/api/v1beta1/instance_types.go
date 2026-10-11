@@ -147,6 +147,7 @@ const FinalizerInstance = "core.devicechain.io/instance"
 // +kubebuilder:validation:XValidation:rule="has(self.cluster) == has(oldSelf.cluster) && (!has(self.cluster) || self.cluster == oldSelf.cluster)",message="cluster is immutable: it is half of the binding between this instance and the cluster it lives in, and rewriting it (including by removing or adding it) would point destroy at a different cluster"
 // +kubebuilder:validation:XValidation:rule="!(has(oldSelf.restored) && oldSelf.restored) || (has(self.restored) && self.restored)",message="restored cannot be unset: it records that this instance's databases came from an archive, which stays true. An ordinary re-run does not restore anything and must not erase the fact that an earlier one did"
 // +kubebuilder:validation:XValidation:rule="!(has(self.restoredAt) && !(has(self.restored) && self.restored))",message="restoredAt is set on an instance that says it was not restored"
+// +kubebuilder:validation:XValidation:rule="!has(oldSelf.objectStore) || has(self.objectStore)",message="objectStore cannot be removed: the logos and artifacts on it would be stranded, and the volume deleted with the declaration that named it"
 type InstanceSpec struct {
 	// Provider is the infrastructure provider that resolved this instance's
 	// cluster. Immutable: an instance cannot move between providers in place.
@@ -272,6 +273,105 @@ type InstanceSpec struct {
 	//
 	// +optional
 	RestoredAt *metav1.Time `json:"restoredAt,omitempty"`
+
+	// ObjectStore is where the instance keeps opaque binaries that do not belong in
+	// the database: tenant branding logos and update artifacts. Absent means the
+	// instance has no object store, and the operations that need one are refused
+	// with OBJECT_STORE_NOT_CONFIGURED rather than written somewhere ephemeral.
+	//
+	// Everything here is a SETTING or a NAME. An S3 credential is never a field:
+	// the reference below points at a Secret, and the Secret holds the key.
+	//
+	// +optional
+	ObjectStore *ObjectStoreSpec `json:"objectStore,omitempty"`
+}
+
+// The object-store backends a declaration can name. An instance with no store has no
+// ObjectStore block at all, so there is deliberately no "none" here: a third spelling
+// of absence is one more thing a reader has to know means the same.
+const (
+	ObjectStoreFilesystem = "filesystem"
+	ObjectStoreS3         = "s3"
+)
+
+// ObjectStoreSpec selects the instance's object store and carries its non-secret
+// settings.
+//
+// +kubebuilder:validation:XValidation:rule="self.backend != \"s3\" || has(self.s3)",message="objectStore.s3 is required when backend is s3"
+// +kubebuilder:validation:XValidation:rule="self.backend == \"s3\" || !has(self.s3)",message="objectStore.s3 is only valid when backend is s3"
+// +kubebuilder:validation:XValidation:rule="self.backend == \"filesystem\" || (!has(self.size) && !has(self.storageClass) && !has(self.accessMode))",message="size, storageClass and accessMode describe the filesystem volume and are only valid when backend is filesystem"
+// +kubebuilder:validation:XValidation:rule="self.backend != \"filesystem\" || has(self.size)",message="size is required when backend is filesystem"
+// +kubebuilder:validation:XValidation:rule="self.backend == oldSelf.backend",message="objectStore.backend is immutable: nothing moves the objects already stored, so a different backend would leave them behind"
+type ObjectStoreSpec struct {
+	// Backend is where objects live: a volume the chart creates (filesystem) or an
+	// S3-compatible bucket (s3).
+	//
+	// +kubebuilder:validation:Enum=filesystem;s3
+	Backend string `json:"backend"`
+
+	// Size is the requested size of the filesystem volume, as a Kubernetes quantity.
+	//
+	// +optional
+	Size string `json:"size,omitempty"`
+
+	// StorageClass is the filesystem volume's StorageClass. Empty selects the
+	// cluster default.
+	//
+	// +optional
+	StorageClass string `json:"storageClass,omitempty"`
+
+	// AccessMode is the filesystem volume's access mode: ReadWriteOnce, or
+	// ReadWriteMany when more than one pod must share the store.
+	//
+	// +kubebuilder:validation:Enum=ReadWriteOnce;ReadWriteMany
+	// +optional
+	AccessMode string `json:"accessMode,omitempty"`
+
+	// S3 is the bucket and its coordinates.
+	//
+	// +optional
+	S3 *S3ObjectStoreSpec `json:"s3,omitempty"`
+}
+
+// S3ObjectStoreSpec is an S3-compatible bucket: AWS S3, or MinIO and the like.
+type S3ObjectStoreSpec struct {
+	// Bucket is the bucket objects are written to.
+	//
+	// +kubebuilder:validation:MinLength=1
+	Bucket string `json:"bucket"`
+
+	// Region is the AWS region. Optional when Endpoint names an S3-compatible
+	// service, which ignores it.
+	//
+	// +optional
+	Region string `json:"region,omitempty"`
+
+	// Endpoint overrides the AWS endpoint, for an S3-compatible service.
+	//
+	// +optional
+	Endpoint string `json:"endpoint,omitempty"`
+
+	// UsePathStyle addresses the bucket in the URL path rather than the host name,
+	// which MinIO and most S3-compatible servers require.
+	//
+	// +optional
+	UsePathStyle bool `json:"usePathStyle,omitempty"`
+
+	// CredentialsSecret names an existing Secret holding AWS_ACCESS_KEY_ID and
+	// AWS_SECRET_ACCESS_KEY, which dcctl copies into the instance's namespace. Absent
+	// means the services use the pod's own AWS identity (IRSA, an instance profile).
+	//
+	// +optional
+	CredentialsSecret *SecretReference `json:"credentialsSecret,omitempty"`
+}
+
+// SecretReference names a Secret. It is a NAME: nothing the Secret holds appears
+// in the declaration.
+type SecretReference struct {
+	// +kubebuilder:validation:MinLength=1
+	Namespace string `json:"namespace"`
+	// +kubebuilder:validation:MinLength=1
+	Name string `json:"name"`
 }
 
 // InstanceStatus is the OBSERVED state.

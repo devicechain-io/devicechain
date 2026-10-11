@@ -4,13 +4,9 @@
 package main
 
 import (
-	"os"
-	"regexp"
 	"strings"
 	"testing"
 )
-
-var publishMutation = regexp.MustCompile(`(?m)^[\t ]+publish[A-Z]\w*\s*\(`)
 
 // Same reasoning as the create denominator, and the same trap: these files live
 // OUTSIDE this module, so Go's test cache does not track them.
@@ -27,11 +23,7 @@ func TestThePublishDenominatorMatchesTheSchemas(t *testing.T) {
 	counted := 0
 	perFile := map[string]int{}
 	for _, s := range schemas {
-		body, err := os.ReadFile(s)
-		if err != nil {
-			t.Fatalf("read %s: %v", s, err)
-		}
-		if n := len(publishMutation.FindAll(body, -1)); n > 0 {
+		if n := len(mutationNames(t, s, "publish")); n > 0 {
 			perFile[s] = n
 			counted += n
 		}
@@ -180,12 +172,8 @@ func TestEveryExclusionIsReviewable(t *testing.T) {
 func TestEveryExclusionNamesAMutationTheSchemasDeclare(t *testing.T) {
 	declared := map[string]bool{}
 	for _, s := range servedSchemas(t) {
-		body, err := os.ReadFile(s)
-		if err != nil {
-			t.Fatalf("read %s: %v", s, err)
-		}
-		for _, m := range publishMutation.FindAll(body, -1) {
-			declared[strings.TrimRight(strings.TrimSpace(string(m)), "( \t")] = true
+		for _, m := range mutationNames(t, s, "publish") {
+			declared[m] = true
 		}
 	}
 	if len(declared) == 0 {

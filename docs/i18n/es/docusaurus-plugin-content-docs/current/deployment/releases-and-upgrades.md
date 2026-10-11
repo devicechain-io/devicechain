@@ -3775,6 +3775,14 @@ No hay que hacer nada.
 
 Lo que cambia la versión posterior a `v0.19.0`, recogido a medida que llega.
 
+#### La contraseña de un dispositivo `MQTT_BASIC` se muestra una vez y no puede volver a mostrarse {#next-upgrade-device-password-show-once}
+
+La plataforma conserva ahora solo un resumen irreversible con clave de la contraseña de un dispositivo `MQTT_BASIC`, no la contraseña. La API nunca devolvía la contraseña en una lectura, así que ningún resultado de consulta cambia. Lo que cambia es que nadie puede recuperarla tampoco de la plataforma: la consola muestra una contraseña una sola vez, justo después de agregar la credencial o de establecer una nueva, con un botón de copiar, y después solo indica que hay una contraseña establecida. La fila de la credencial incorpora la acción **Establecer nueva contraseña**, y el formulario ofrece **Generar contraseña segura**.
+
+Las contraseñas existentes se convierten en resúmenes la primera vez que device-management arranca con la nueva versión, y los dispositivos siguen autenticándose con la contraseña que ya usan. Una contraseña que no anotaste no puede mostrarse después; establece una nueva y cárgala en el dispositivo. Consulta [Contraseñas que se muestran una vez y su rotación](../guides/device-credentials.md#show-once).
+
+No hay nada que hacer.
+
 #### La lista de eventos de un dispositivo lee solo las filas de su inquilino {#tenant-device-index}
 
 El índice que sirve la lista de eventos de un dispositivo empieza ahora por el inquilino. En
@@ -3864,6 +3872,29 @@ entre sus dispositivos si lo necesita.
 - Volver a `v0.19.0` conserva el nuevo índice y `v0.19.0` funciona con él: los eventos reentregados
   siguen deduplicándose, pero esa versión sigue comprobando por inquilino, así que vuelve a
   descartar el evento del segundo dispositivo.
+
+#### El flujo de entrada de dispositivos elimina cada mensaje una vez reenviado {#next-upgrade-capture-stream}
+
+El flujo que guarda cada publicación de un dispositivo hasta que `event-sources` la reenvía
+(`device-events-capture`) ahora elimina un mensaje cuando `event-sources` lo confirma. En `v0.19.0`
+conservaba cada mensaje hasta siete días después de reenviarlo. Una publicación que aún no se ha
+reenviado se conserva exactamente como antes, así que una caída de `event-sources` sigue sin perder
+nada.
+
+- **En la actualización.** El primer arranque del nuevo `event-sources` reenvía lo que el flujo
+  existente aún contiene, espera a que quede vacío y entonces elimina el flujo y lo crea de nuevo
+  con la nueva retención. Los números de secuencia saltan por delante de los del flujo anterior, así que ninguno se reutiliza. Una
+  publicación de dispositivo que llegue en el instante entre la comprobación de vacío y la
+  recreación puede perderse después de que el broker la haya confirmado. Si el flujo no queda vacío
+  en cinco minutos, `event-sources` se detiene con un error que nombra el flujo y no elimina nada;
+  vuelva a iniciarlo cuando pueda reenviar.
+- **Nada más puede leer este flujo.** Admite un solo consumidor, el que posee `event-sources`, así
+  que `nats stream view` y cualquier otro consumidor sobre `device-events-capture` dejan de
+  funcionar. Para ver lo que envían los dispositivos, lea el flujo `inbound-events`, que contiene
+  los eventos decodificados.
+- Volver a `v0.19.0` exige eliminar antes el flujo, con `event-sources` detenido, porque `v0.19.0`
+  se niega a arrancar contra un flujo con la nueva retención; lo crea de nuevo en su siguiente
+  arranque. Lo que aún no se haya reenviado cuando lo elimine se pierde.
 
 #### Un evento entrante cuyo registro de fallo no se puede codificar ya no se guarda como un registro vacío {#next-upgrade-failed-record-encode}
 

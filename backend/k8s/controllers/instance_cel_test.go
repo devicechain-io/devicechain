@@ -303,3 +303,78 @@ func TestTheAPIServerRefusesAnInstanceThatDeclaresNothing(t *testing.T) {
 		t.Errorf("the refusal was not a validation error: %v", err)
 	}
 }
+
+// The object store is a block whose halves must agree: an s3 backend without its
+// coordinates would deploy a store with nowhere to write, and a filesystem one with
+// s3 settings (or the reverse) is two backends in one declaration. dcctl refuses
+// each; so must the API server, or the answer depends on who wrote the object.
+func TestTheAPIServerRefusesAnObjectStoreWhoseHalvesDisagree(t *testing.T) {
+	c := withAPIServer(t)
+	ctx := context.Background()
+
+	for name, store := range map[string]*dcv1beta1.ObjectStoreSpec{
+		"s3-without-coordinates":  {Backend: dcv1beta1.ObjectStoreS3},
+		"filesystem-with-s3":      {Backend: dcv1beta1.ObjectStoreFilesystem, Size: "1Gi", S3: &dcv1beta1.S3ObjectStoreSpec{Bucket: "b"}},
+		"filesystem-without-size": {Backend: dcv1beta1.ObjectStoreFilesystem},
+		"s3-with-a-volume-size":   {Backend: dcv1beta1.ObjectStoreS3, Size: "1Gi", S3: &dcv1beta1.S3ObjectStoreSpec{Bucket: "b"}},
+		"unknown-backend":         {Backend: "gcs"},
+	} {
+		store := store
+		if err := c.Create(ctx, newInstance("os-"+name, func(i *dcv1beta1.Instance) {
+			i.Spec.ObjectStore = store
+		})); err == nil {
+			t.Errorf("%s: an inconsistent object store was accepted", name)
+		}
+	}
+
+	// The counterweights: the two well-formed shapes must stay writable.
+	for name, store := range map[string]*dcv1beta1.ObjectStoreSpec{
+		"good-filesystem": {Backend: dcv1beta1.ObjectStoreFilesystem, Size: "1Gi"},
+		"good-s3":         {Backend: dcv1beta1.ObjectStoreS3, S3: &dcv1beta1.S3ObjectStoreSpec{Bucket: "b", Region: "us-east-1"}},
+	} {
+		store := store
+		if err := c.Create(ctx, newInstance("os-"+name, func(i *dcv1beta1.Instance) {
+			i.Spec.ObjectStore = store
+		})); err != nil {
+			t.Errorf("%s: a well-formed object store was refused: %v", name, err)
+		}
+	}
+}
+
+// A store's backend cannot change and the store cannot be removed once declared: nothing
+// moves the objects, so either would leave them behind. dcctl refuses both; so must the API
+// server, or a hand edit does what a re-run cannot.
+func TestTheAPIServerRefusesToChangeOrRemoveTheObjectStore(t *testing.T) {
+	c := withAPIServer(t)
+	ctx := context.Background()
+
+	if err := c.Create(ctx, newInstance("os-keep", func(i *dcv1beta1.Instance) {
+		i.Spec.ObjectStore = &dcv1beta1.ObjectStoreSpec{Backend: dcv1beta1.ObjectStoreFilesystem, Size: "1Gi"}
+	})); err != nil {
+		t.Fatal(err)
+	}
+	live := &dcv1beta1.Instance{}
+	if err := c.Get(ctx, client.ObjectKey{Name: "os-keep"}, live); err != nil {
+		t.Fatal(err)
+	}
+
+	moved := live.DeepCopy()
+	moved.Spec.ObjectStore = &dcv1beta1.ObjectStoreSpec{Backend: dcv1beta1.ObjectStoreS3,
+		S3: &dcv1beta1.S3ObjectStoreSpec{Bucket: "bucket", Region: "us-east-1"}}
+	if err := c.Update(ctx, moved); err == nil {
+		t.Error("the object store was moved from a volume to a bucket")
+	}
+
+	removed := live.DeepCopy()
+	removed.Spec.ObjectStore = nil
+	if err := c.Update(ctx, removed); err == nil {
+		t.Error("the object store was removed from the declaration")
+	}
+
+	// The counterweight: growing the volume is ordinary.
+	grown := live.DeepCopy()
+	grown.Spec.ObjectStore.Size = "2Gi"
+	if err := c.Update(ctx, grown); err != nil {
+		t.Errorf("growing the volume was refused: %v", err)
+	}
+}

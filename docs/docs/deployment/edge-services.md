@@ -609,43 +609,56 @@ the readings tolerant of a repeat.
 | `uplink.connectTimeoutSeconds` | `30` | Bounds one uplink connection attempt. |
 | `uplink.backoffMinSeconds` / `uplink.backoffMaxSeconds` | `1` / `60` | Reconnection backoff bounds while the link is down. |
 
-## What to watch
+## What to watch {#what-to-watch}
 
-:::danger No alerts and no dashboards ship for any of these
-The shipped alert rules and Grafana dashboards cover other parts of the platform, such as detection,
-command delivery, messaging, the databases and replication. **No metric in the tables below has an
-alert or a dashboard panel.** Everything below is emitted and scraped, and nothing will page you about
-it until you write the rule yourself. Start with the [no-leader alert](#no-leader-alert).
+:::note Seven alerts ship for these two services
+The chart ships seven alert rules for sparkplug-ingest and lwm2m-ingest, described under
+[Alerts that ship](#edge-alerts): whether each transport is being read at all, a LwM2M leader that is
+stuck, and the ways the two services drop data. **Every other metric in the tables below has no alert
+and no dashboard panel.** It is emitted and scraped, and nothing will page you about it until you write
+the rule yourself. The edge agent has no shipped alert at all.
 :::
 
 All metrics carry the `devicechain_` prefix and their service's own segment:
 `devicechain_sparkplugingest_`, `devicechain_lwm2mingest_`, `devicechain_edge_`. None of them is
 labelled per device or per tenant, so none of them is a cardinality risk to scrape.
 
-### The no-leader alert {#no-leader-alert}
+### Alerts that ship {#edge-alerts}
 
-**The first alert to author is a no-leader alert**, on each ingest service:
+| Alert | Severity | What it means | What to do |
+| --- | --- | --- | --- |
+| `Lwm2mIngestLeaderCountNotOne` | critical | For 2 minutes, the number of lwm2m-ingest replicas reporting that they hold the leadership lease has not been exactly 1. At 0, nobody is reading the CoAP/DTLS transport and every LwM2M device is unreachable, although every pod looks healthy. Above 1, two replicas are serving at once. | Read the lwm2m-ingest logs for why no replica acquired the lease; typically the platform's message broker is unreachable. |
+| `Lwm2mIngestLeaderNotServing` | critical | For 5 minutes, a pod has held the LwM2M lease while its CoAP/DTLS read loop is not running (`is_leader` is 1 and `is_serving` is 0). It is stuck building its term, typically reading the asserted-active devices from device-state, and because it keeps the lease no standby can take over. No LwM2M device is being served. | Read that pod's log around `Acquired LwM2M leadership`, then restart the pod so a standby can acquire the lease. |
+| `Lwm2mIngestDroppingNotifications` | warning | In the last 10 minutes, for 10 minutes, lwm2m-ingest has dropped the readings of Notify messages because ingest failed or refused them, backpressure included. There is no retry in the Notify path, so a device that reports rarely loses its reading. | Check the message broker, the backlog of the inbound-events stream (see [Backpressure on the ingest path](./observability.md#ingest-backpressure)) and the lwm2m-ingest log. Counted in `notify_ingest_dropped_total`. |
+| `SparkplugIngestLeaderCountNotOne` | critical | For 2 minutes, the number of sparkplug-ingest replicas reporting that they hold the lease has not been exactly 1. At 0, no Sparkplug source is being read. Above 1, two replicas connect the same sources. A pod deployed with no sources configured never takes the lease and reads 0 permanently. | Configure the pod's sources or leave the service out of the deployment. Otherwise read the sparkplug-ingest logs for why no replica acquired the lease. |
+| `SparkplugIngestBrokerUnreachable` | warning | In the last 10 minutes, for 10 minutes, sparkplug-ingest has failed to connect to a configured Sparkplug broker. Readiness is deliberately not gated on broker reachability, so the pod looks healthy while that source ingests nothing. | A bad host, a rejected credential or a broker outage all raise it. The sparkplug-ingest log names the source and the reason. Counted in `connect_failures_total`. |
+| `SparkplugIngestSubscriptionRefused` | warning | In the last 15 minutes, for 5 minutes, a Sparkplug source has been abandoned and retried because its broker accepted the connection but refused, or never acknowledged, a group subscription. While any group is refused, the source ingests none of its groups and never announces ONLINE. | Compare the broker's access rules for the source's credential with the groups configured for it; the credential most likely may not read one of them. Counted in `subscribe_failures_total`. |
+| `SparkplugIngestDroppingData` | warning | In the last 10 minutes, for 10 minutes, sparkplug-ingest has abandoned messages it accepted: their readings or presence transitions were dropped after the retry budget was spent, at once under backpressure, or at shutdown. A Sparkplug Host gets no broker redelivery, so each one is lost. | Check device-management and the message broker, and the sparkplug-ingest log for `Dropping Sparkplug samples`. Counted in `ingest_failures_total`. |
+
+### The leader alerts {#no-leader-alert}
+
+The two `LeaderCountNotOne` alerts are the most load-bearing signal on this whole surface: zero means
+nobody is serving that transport, and every device on it is silently unreachable. They fire on a
+sum other than one, and they deliberately carry **no `absent()` arm**. A service that is not deployed
+exports nothing, and the chart's rules are not told which services an install runs. A deployed service
+with no running pod exports nothing either; that is a pod failing loudly in its own right, through
+restarts and readiness. If you want to be paged when the series does not exist at all, add the pairing
+yourself:
 
 > `sum(devicechain_lwm2mingest_is_leader) != 1 or absent(devicechain_lwm2mingest_is_leader)`
 >
 > `sum(devicechain_sparkplugingest_is_leader) != 1 or absent(devicechain_sparkplugingest_is_leader)`
 
-Zero means nobody is serving that transport, and every device on it is silently unreachable. Anything
-other than one is worth waking someone. It is the most load-bearing signal on this whole surface, and
-nothing tells you about it today.
-
-The `absent()` half is needed, but not for a source-less pod. Both services register their
-`is_leader` gauge unconditionally at initialization, before either checks whether it has anything to
-serve. A Sparkplug pod running with its sources unset therefore publishes the series reading **0** for
-the life of the pod, and `!= 1` fires on its own. `absent()` covers the case where there is no series
-to sum at all: no replica came up, or none is being scraped. `!= 1` over an empty result is itself
-empty, which is a silent alert, not a firing one. That case applies to both transports equally, which
-is why both expressions carry the pairing.
+A Sparkplug pod running with its sources unset registers its `is_leader` gauge at initialization,
+before it checks whether it has anything to serve, and then never acquires the lease. It publishes the
+series reading **0** for the life of the pod, and `SparkplugIngestLeaderCountNotOne` fires on it by
+itself. That is deliberate: a transport service with nothing to serve is a configuration to fix, or a
+service to leave out of the deployment.
 
 Both services' `is_leader` gauges go up when the replica **acquires** the lease, not when it finishes
 building its leadership term. A normal takeover therefore does not read as leaderless while the new leader
 rebuilds its state. What hides in that window instead is a leader **stuck** in a build, and on LwM2M
-a second gauge names it: see `is_serving` below.
+a second gauge names it: see `is_serving` below, and `Lwm2mIngestLeaderNotServing` above.
 
 ### Sparkplug ingestion metrics {#sparkplug-ingestion-metrics}
 
@@ -653,16 +666,16 @@ Prefix: `devicechain_sparkplugingest_`.
 
 | Signal | Means |
 |---|---|
-| `is_leader` | 1 on the serving pod, 0 elsewhere. **Alert on the sum not being 1.** |
-| `connect_failures_total` | A configured broker is not reachable. Rising means one source is down while the pod looks healthy. |
-| `subscribe_failures_total` | The broker accepted the connection but refused (or never acknowledged) a group subscription, most likely because the source's credential may not read that group. The source stays offline, ingests none of its groups, and retries. **Alert on any increase.** |
+| `is_leader` | 1 on the serving pod, 0 elsewhere. `SparkplugIngestLeaderCountNotOne` fires when the sum is not 1. |
+| `connect_failures_total` | A configured broker is not reachable. Rising means one source is down while the pod looks healthy. Feeds `SparkplugIngestBrokerUnreachable`. |
+| `subscribe_failures_total` | The broker accepted the connection but refused (or never acknowledged) a group subscription, most likely because the source's credential may not read that group. The source stays offline, ingests none of its groups, and retries. `SparkplugIngestSubscriptionRefused` fires on an increase. |
 | `messages_total` | Inbound Sparkplug traffic. A flat line on a live fleet is the symptom of a lost subscription or a dead source. |
 | `presence_emitted_total` | Connect/disconnect signals produced. |
 | `rebirth_requests_total` | Nodes being asked to re-announce. Steadily rising means a node is failing to resynchronise. |
 | `rebirth_enqueued_total` / `rebirth_dropped_total` | Rebirths the session machine asked for, and the ones its publish queue was too full to take. A drop is a latency signal rather than a failure — the request is re-made on the node's next window — but a standing drop rate means rebirths are going out slower than they are being asked for. Read it against `rebirth_requests_total`, which counts only what reached the wire and is therefore capped by the publisher rather than by demand: **drops while `rebirth_requests_total` climbs to a steady ceiling** is fan-out outrunning a publisher that is otherwise healthy; **drops while it is flat** is the publishes themselves stalling, which points at the broker connection. |
 | `unknown_device_dropped_total` | Traffic from identities with no device, with auto-registration off. |
 | `decode_errors_total` | Malformed payloads. |
-| `ingest_failures_total` | Accepted messages whose readings, or the connect and disconnect transitions their births and deaths assert, were dropped, plus batches of disconnects that presence reconciliation declared and could not store: readings at once while the platform applies backpressure, and either one after the in-handler retry ran out (device-management or the broker unreachable) or while the connection was shutting down. A message split across several events may have stored its leading events. A clean-session Host gets no redelivery, so each one is lost. |
+| `ingest_failures_total` | Accepted messages whose readings, or the connect and disconnect transitions their births and deaths assert, were dropped, plus batches of disconnects that presence reconciliation declared and could not store: readings at once while the platform applies backpressure, and either one after the in-handler retry ran out (device-management or the broker unreachable) or while the connection was shutting down. A message split across several events may have stored its leading events. A clean-session Host gets no redelivery, so each one is lost. Feeds `SparkplugIngestDroppingData`. |
 | `ingest_samples_shed_total` | DATA readings dropped because a tenant is over its ingest ceiling. A tenant shedding here sends more readings than its tier allows. |
 | `tenant_deleted_dropped_total` | Traffic refused because its tenant is being deleted. |
 | `samples_too_old_dropped_total` | Readings dropped because their timestamp is more than 366 days before the host received them; the rest of their message is stored. A metric whose value has not changed for that long is dropped from every birth, and a node with no clock set (times near 1970) has all its readings dropped. The service logs a warning naming the device. |
@@ -673,8 +686,8 @@ Prefix: `devicechain_lwm2mingest_`.
 
 | Signal | Means |
 |---|---|
-| `is_leader` | 1 on the pod holding the lease, from the moment it acquires it. **Alert on the sum not being 1.** |
-| `is_serving` | 1 once that pod's CoAP/DTLS read loop is actually running. Read it **with** `is_leader`: the pair is the only thing that separates a leader still rebuilding its registration table from a leader wedged in that rebuild, and every other signal on the pod — readiness, liveness, `is_leader` — is green for both. `is_leader == 1 and is_serving == 0` sustained for longer than a takeover takes is worth an alert of its own. |
+| `is_leader` | 1 on the pod holding the lease, from the moment it acquires it. `Lwm2mIngestLeaderCountNotOne` fires when the sum is not 1. |
+| `is_serving` | 1 once that pod's CoAP/DTLS read loop is actually running. Read it **with** `is_leader`: the pair is the only thing that separates a leader still rebuilding its registration table from a leader wedged in that rebuild, and every other signal on the pod — readiness, liveness, `is_leader` — is green for both. `is_leader == 1 and is_serving == 0` sustained for longer than a takeover takes is what `Lwm2mIngestLeaderNotServing` alerts on. |
 | `active_registrations` / `active_sessions` / `active_observations` | The live fleet as the service sees it. **Watch `active_observations` across a restart** — it is how you see the observation loss described above, and how you see it recover. |
 | `registrations_total` / `registration_updates_total` | Devices arriving and keeping their sessions alive. |
 | `registration_expiries_total` | Registrations that lapsed rather than deregistering — devices that vanished. |
@@ -686,7 +699,7 @@ Prefix: `devicechain_lwm2mingest_`.
 | `observation_overflow_total` | A registration exceeding the 32-observation cap. Some of its resources are not observed. |
 | `telemetry_too_old_dropped_total` | Readings dropped because their time is more than 366 days before the adapter received them; the rest of their Notify is stored. The service logs a warning naming the device. |
 | `ingest_messages_shed_total` / `ingest_samples_shed_total` | A tenant over its ingest ceiling, in Notify messages and in readings. |
-| `notify_ingest_dropped_total` | Notify messages whose readings were dropped because the platform refused them or could not take them, including while it applies backpressure. There is no retry; the next Notify supersedes what was lost. A Notify split across several events may have stored its leading events. |
+| `notify_ingest_dropped_total` | Notify messages whose readings were dropped because the platform refused them or could not take them, including while it applies backpressure. There is no retry; the next Notify supersedes what was lost. A Notify split across several events may have stored its leading events. Feeds `Lwm2mIngestDroppingNotifications`. |
 | `shadows_reconstructed_total` | Presence rebuilt after a leadership change. A spike is the fingerprint of a failover. |
 | `commands_failed_total` / `commands_not_served_total` | Downlink commands that did not land. |
 | `command_live_claim_errors_total` | Commands **not carried out** because command-delivery could not confirm them. Each command is confirmed with command-delivery immediately before it reaches the device, and without that confirmation it is never sent. A sustained rate means no LwM2M command is reaching its device: **this is the one to alert on.** The commands are retried, not lost. |

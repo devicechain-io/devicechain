@@ -67,8 +67,7 @@ func TestTheOperationSetIsExactlyTheCatalogue(t *testing.T) {
 		sort.Strings(out)
 		return out
 	}
-	require.Equal(t, []string{"artifact", "artifacts", "updateAssignment", "updateAssignments", "updateManagementInfo"},
-		names(got.Schema.QueryType.Fields))
+	require.Equal(t, []string{"artifact", "artifacts", "updateAssignment", "updateAssignments", "updateManagementInfo"}, names(got.Schema.QueryType.Fields))
 	require.Equal(t, []string{"abandonUnknownUpdate", "assignArtifact", "cancelUpdate", "createArtifact", "retireArtifact"}, names(got.Schema.MutationType.Fields))
 	require.Nil(t, got.Schema.SubscriptionType)
 }
@@ -99,36 +98,10 @@ func TestEverySchemaElementIsDescribed(t *testing.T) {
 	  fields { name description args { name description } }
 	  inputFields { name description } enumValues { name description } } } }`, &got)
 
-	// Several operation ARGUMENTS are the one place this SDL carries no description, and the
-	// reason is mechanical: the upgrade probe (tools/apiprobe) finds a mutation by matching
-	// the whitespace-stripped text "createArtifact(request:", which a description between
-	// the parenthesis and the name breaks. The probe is taught to read described
-	// arguments in the change that adds the repository-wide description guard, and these
-	// are described in that same change. The list is a ratchet: describing one without
-	// removing it here fails the stale check below.
-	pendingArgs := map[string]bool{
-		"Query.artifact(token)":            true,
-		"Query.artifacts(criteria)":        true,
-		"Mutation.createArtifact(request)": true,
-		"Mutation.retireArtifact(token)":   true,
-		// The assignment operations follow the same convention for the same reason.
-		"Query.updateAssignment(token)":                  true,
-		"Query.updateAssignments(criteria)":              true,
-		"Mutation.assignArtifact(deviceToken)":           true,
-		"Mutation.assignArtifact(artifactToken)":         true,
-		"Mutation.cancelUpdate(assignmentToken)":         true,
-		"Mutation.abandonUnknownUpdate(assignmentToken)": true,
-		"Mutation.abandonUnknownUpdate(reason)":          true,
-	}
 	var undescribed []string
 	check := func(what string, d *string) {
 		described := d != nil && strings.TrimSpace(*d) != ""
-		switch {
-		case pendingArgs[what] && described:
-			undescribed = append(undescribed, "stale pending entry (now described): "+what)
-		case pendingArgs[what]:
-			delete(pendingArgs, what)
-		case !described:
+		if !described {
 			undescribed = append(undescribed, what)
 		}
 	}
@@ -151,7 +124,6 @@ func TestEverySchemaElementIsDescribed(t *testing.T) {
 		}
 	}
 	require.Empty(t, undescribed, "SDL elements without a description")
-	require.Empty(t, pendingArgs, "pending entries that name no argument")
 }
 
 func isBuiltin(name string) bool {

@@ -4,14 +4,13 @@
 package main
 
 import (
-	"errors"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
-	"github.com/devicechain-io/dc-microservice/graphql/schemaplane"
+	graphql "github.com/graph-gophers/graphql-go"
+	"github.com/graph-gophers/graphql-go/ast"
 )
 
 // 🔴 THE COUNTERWEIGHT, and the only test here that can tell a working filter
@@ -59,6 +58,9 @@ type Query {
 input AssetCreateRequest {
     token: String!
 }
+type Asset {
+    token: String!
+}
 `,
 	})
 	b, err := loadBaseline(dir)
@@ -98,23 +100,31 @@ type Query {
 input AssetCreateRequest {
     token: String!
 }
+type Asset {
+    token: String!
+}
 `
-	cases := []struct{ name, drop, wantReason string }{
-		{"the mutation is gone", "createAsset(request: AssetCreateRequest): Asset!", "createAsset"},
-		{"the read query is gone", "assetsByToken(tokens: [String!]!): [Asset!]!", "assetsByToken"},
-		{"the input type is gone", "input AssetCreateRequest {", "input AssetCreateRequest"},
+	// Each case RENAMES one declaration, which is how a release lacks it while still
+	// being a valid schema (the baseline is parsed, so a dangling reference would be a
+	// load error rather than an unsupported row).
+	cases := []struct{ name, from, to, wantReason string }{
+		{"the mutation is gone", "createAsset(", "createAssetV0(", "createAsset"},
+		{"the read query is gone", "assetsByToken(", "assetsByTokenV0(", "assetsByToken"},
+		{"the input type is gone", "AssetCreateRequest", "AssetCreateRequestV0", "input AssetCreateRequest"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			b, err := loadBaseline(writeBaseline(t, map[string]string{
-				"device-management": strings.Replace(full, c.drop, "", 1),
-			}))
+			planted := strings.ReplaceAll(full, c.from, c.to)
+			if planted == full {
+				t.Fatal("the plant did not apply, so this case proves nothing")
+			}
+			b, err := loadBaseline(writeBaseline(t, map[string]string{"device-management": planted}))
 			if err != nil {
 				t.Fatalf("load: %v", err)
 			}
 			ok, why := b.supports(asset)
 			if ok {
-				t.Fatalf("asset was supported with %q removed", c.drop)
+				t.Fatalf("asset was supported with %q renamed", c.from)
 			}
 			if !strings.Contains(why, c.wantReason) {
 				t.Errorf("reason %q does not mention %q", why, c.wantReason)
@@ -166,6 +176,9 @@ type Query {
     dashboard(tokens: [String!]!): [Dashboard!]!
 }
 input DashboardCreateRequest {
+    token: String!
+}
+type Dashboard {
     token: String!
 }
 `,
@@ -475,66 +488,56 @@ func TestAnUnsupportedDEPENDENCYIsRefusedRatherThanSkipped(t *testing.T) {
 // the three field-gated rows are skipped, and every other row in the whole table is
 // still supported. A Requires that matched nothing would fail the second half.
 func TestAReleaseWithoutTheNewFieldsSkipsExactlyTheRowsThatNeedThem(t *testing.T) {
-	current, err := os.ReadFile(filepath.Join("..", "..", "services", "device-management",
-		"graphql", "schema.graphql"))
+	// Built on the PARSED tree, not by deleting lines of text: a line filter depends on
+	// how the schema is formatted, and a description or an argument list spread over
+	// several lines would leave it removing half a declaration. Every other area stays
+	// exactly as the current tree serves it (tenant plane only, as loadBaseline reads
+	// it): this is a release missing ONE feature, not a tree missing every area, and a
+	// row skipped for the wrong reason must not be able to hide behind a missing schema.
+	b, err := loadBaseline(filepath.Join("..", "..", "services"))
 	if err != nil {
-		t.Fatalf("read the current device-management schema: %v", err)
+		t.Fatalf("load the current tree: %v", err)
 	}
-
-	var kept []string
+	dm := b.schemas["device-management"]
+	if dm == nil {
+		t.Fatal("the current tree serves no device-management schema")
+	}
+	newFields := map[string]bool{"propertySchema": true, "properties": true}
+	doors := map[string]bool{"publishAssetType": true, "rollbackAssetType": true,
+		"assetTypeVersions": true, "activeAssetTypeVersion": true}
 	var droppedFields, droppedDoors int
-	for _, line := range strings.Split(string(current), "\n") {
-		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, "propertySchema:") || strings.HasPrefix(trimmed, "properties:") {
-			droppedFields++
-			continue
+	for _, nt := range dm.Types {
+		switch typ := nt.(type) {
+		case *ast.InputObject:
+			kept := typ.Values[:0]
+			for _, v := range typ.Values {
+				if newFields[v.Name.Name] {
+					droppedFields++
+					continue
+				}
+				kept = append(kept, v)
+			}
+			typ.Values = kept
+		case *ast.ObjectTypeDefinition:
+			kept := typ.Fields[:0]
+			for _, f := range typ.Fields {
+				switch {
+				case newFields[f.Name]:
+					droppedFields++
+				case doors[f.Name]:
+					droppedDoors++
+				default:
+					kept = append(kept, f)
+				}
+			}
+			typ.Fields = kept
 		}
-		if strings.HasPrefix(trimmed, "publishAssetType(") ||
-			strings.HasPrefix(trimmed, "rollbackAssetType(") ||
-			strings.HasPrefix(trimmed, "assetTypeVersions(") ||
-			strings.HasPrefix(trimmed, "activeAssetTypeVersion(") {
-			droppedDoors++
-			continue
-		}
-		kept = append(kept, line)
 	}
-	// If the SDL is reshaped so these no longer match, this test would silently become
+	// If the schema is reshaped so these no longer match, this test would silently become
 	// "the current tree supports everything", which the test above already says.
-	if droppedFields == 0 || droppedDoors == 0 {
-		t.Fatalf("the stand-in removed %d field line(s) and %d door(s); it is no longer "+
-			"standing in for a release without them", droppedFields, droppedDoors)
-	}
-
-	// Every other area is copied verbatim: this is a release missing ONE feature, not a
-	// tree missing every area, and a row skipped for the wrong reason must not be able
-	// to hide behind a missing schema.
-	schemas := map[string]string{"device-management": strings.Join(kept, "\n")}
-	areas, err := os.ReadDir(filepath.Join("..", "..", "services"))
-	if err != nil {
-		t.Fatalf("list services: %v", err)
-	}
-	for _, a := range areas {
-		if !a.IsDir() || a.Name() == "device-management" {
-			continue
-		}
-		// The TENANT plane only, matching what loadBaseline reads from a real tree.
-		// Copying an area's identity-token schemas in as well would make the
-		// stand-in more permissive than the thing it stands in for.
-		sdl, served, err := schemaplane.SDLAt(filepath.Join("..", "..", "services", a.Name(), "graphql"), schemaplane.MountTenant)
-		switch {
-		case errors.Is(err, fs.ErrNotExist):
-			continue
-		case err != nil:
-			t.Fatalf("classify %s: %v", a.Name(), err)
-		case !served:
-			continue
-		}
-		schemas[a.Name()] = sdl
-	}
-
-	b, err := loadBaseline(writeBaseline(t, schemas))
-	if err != nil {
-		t.Fatalf("load the stand-in baseline: %v", err)
+	if droppedFields == 0 || droppedDoors != len(doors) {
+		t.Fatalf("the stand-in removed %d field(s) and %d of %d door(s); it is no longer "+
+			"standing in for a release without them", droppedFields, droppedDoors, len(doors))
 	}
 
 	wantSkipped := map[string]bool{
@@ -571,12 +574,19 @@ func TestAReleaseWithoutTheNewFieldsSkipsExactlyTheRowsThatNeedThem(t *testing.T
 	}
 }
 
-// The narrow unit under the test above: the field scan itself, including the two ways
-// a substring match would say yes when it must say no.
+// The narrow unit under the test above: the field lookup itself, including the ways a
+// text match would say yes when it must say no — a commented-out declaration, a longer
+// field name, the name inside a DESCRIPTION, and the field on another type.
 func TestDeclaresField(t *testing.T) {
-	raw := `input AssetTypeCreateRequest {
+	parsed, err := graphql.ParseSchema(`
+type Query { asset: Asset }
+
+input AssetTypeCreateRequest {
     token: String!
     # propertySchema: String  -- mentioned in a comment, not declared
+    """
+    propertySchema: the version of it (named in a description, not declared)
+    """
     propertySchemaVersion: String
 }
 
@@ -584,20 +594,24 @@ type Asset {
     token: String!
     properties: String
 }
-`
-	if declaresField(raw, "AssetTypeCreateRequest", "propertySchema") {
-		t.Error("a commented-out declaration and a longer field name were read as the field")
+`, nil, graphql.UseFieldResolvers())
+	if err != nil {
+		t.Fatal(err)
 	}
-	if !declaresField(raw, "Asset", "properties") {
+	s := parsed.AST()
+	if declaresField(s, "AssetTypeCreateRequest", "propertySchema") {
+		t.Error("a commented-out declaration, a description, or a longer field name was read as the field")
+	}
+	if !declaresField(s, "Asset", "properties") {
 		t.Error("a real declaration on a `type` was not found")
 	}
-	if !declaresField(raw, "AssetTypeCreateRequest", "propertySchemaVersion") {
+	if !declaresField(s, "AssetTypeCreateRequest", "propertySchemaVersion") {
 		t.Error("a real declaration on an `input` was not found")
 	}
-	if declaresField(raw, "Asset", "propertySchema") {
+	if declaresField(s, "Asset", "propertySchema") {
 		t.Error("a field declared on ANOTHER type was attributed to this one")
 	}
-	if declaresField(raw, "NoSuchType", "properties") {
+	if declaresField(s, "NoSuchType", "properties") {
 		t.Error("a type the schema does not declare answered yes")
 	}
 }
@@ -616,4 +630,71 @@ func writeBaseline(t *testing.T, schemas map[string]string) string {
 		}
 	}
 	return dir
+}
+
+// 🔴 DESCRIPTIONS ARE PROSE, NOT DECLARATIONS. A """description""" sits between a
+// field's opening parenthesis and its first argument, and may itself contain a ")".
+// Matched as text, both made a declared mutation read as absent — the row skipped,
+// silently — and hid a create's result envelope. Parsed, neither can.
+func TestDescriptionsDoNotHideDeclarations(t *testing.T) {
+	b, err := loadBaseline(writeBaseline(t, map[string]string{
+		"dashboard-management": `
+type Mutation {
+    """Creates a dashboard (and returns it)."""
+    createDashboard(
+        """The new dashboard's fields (token, name)."""
+        request: DashboardCreateRequest!
+    ): Dashboard!
+}
+type Query {
+    """Returns one dashboard (or null)."""
+    dashboard(
+        """Token of the dashboard (case-sensitive)."""
+        token: String!
+    ): Dashboard
+}
+"""Fields for a new dashboard."""
+input DashboardCreateRequest {
+    """Unique token."""
+    token: String!
+}
+type Dashboard {
+    token: String!
+}
+`,
+		"command-delivery": `
+type Mutation {
+    createCommand(
+        """The command (and its target)."""
+        request: CommandCreateRequest!
+    ): CreateCommandResult!
+}
+type Query {
+    commandsByToken(tokens: [String!]!): [Command!]!
+}
+type CreateCommandResult {
+    """The created command (null when refused)."""
+    command: Command
+    rejection: CommandRejection
+}
+type Command { token: String! }
+type CommandRejection { code: String! }
+input CommandCreateRequest { token: String! }
+`,
+	}))
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	dashboard, _ := entityNamed("dashboard")
+	if ok, why := b.supports(dashboard); !ok {
+		t.Errorf("a described dashboard schema does not support the dashboard row: %s", why)
+	}
+	command, _ := entityNamed("command")
+	if ok, why := b.supports(command); !ok {
+		t.Errorf("a described command schema does not support the command row: %s", why)
+	}
+	if adapted := b.adapt(command); adapted.Wrap != command.Wrap {
+		t.Errorf("the envelope was dropped although the described baseline declares it (Wrap %q -> %q)",
+			command.Wrap, adapted.Wrap)
+	}
 }

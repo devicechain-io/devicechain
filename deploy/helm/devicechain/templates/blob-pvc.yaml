@@ -62,8 +62,9 @@ the render on a persistence/backend mismatch rather than silently producing a st
 {{/* A chart-created ReadWriteOnce claim backs ONE pod. The pods that mount it are counted
      ACROSS the enabled mount areas, not per area: two areas at one replica each are two pods,
      and a ReadWriteOnce volume attaches to one node, so the second can wedge on attach. An
-     existingClaim is the operator's own and is not judged here. */}}
-{{- if and $p.enabled (eq $backend "filesystem") (ne $path "") (empty $p.existingClaim) (not (has "ReadWriteMany" ($p.accessModes | default (list "ReadWriteOnce")))) -}}
+     existingClaim is the operator's own and is not judged here. A COLOCATED claim
+     (blobStorage.persistence.colocate) is exempt: every mounting pod is scheduled onto one node. */}}
+{{- if and $p.enabled (not $p.colocate) (eq $backend "filesystem") (ne $path "") (empty $p.existingClaim) (not (has "ReadWriteMany" ($p.accessModes | default (list "ReadWriteOnce")))) -}}
 {{-   $pods := 0 -}}
 {{-   $podAreas := list -}}
 {{-   range $a := $mountAreas -}}
@@ -78,6 +79,13 @@ the render on a persistence/backend mismatch rather than silently producing a st
 {{-   end -}}
 {{- end -}}
 
+{{/* S3 credentials mean nothing to a filesystem store. The backend is only visible here when the
+     chart authors the instance document; under instance.existingSecret (dcctl) it reads as the
+     default, so the check is skipped there rather than wrong. */}}
+{{- if and (eq (.Values.instance.existingSecret | default "") "") (eq $backend "filesystem") (not (empty ((.Values.blobStorage | default dict).s3 | default dict).credentialsSecret)) -}}
+{{-   fail "blobStorage.s3.credentialsSecret is set but the object store backend is filesystem: S3 credentials apply only to the s3 backend. Remove it, or select instance.config.infrastructure.blob.backend: s3" -}}
+{{- end -}}
+
 {{- if and $p.enabled (eq $backend "filesystem") (ne $path "") (empty $p.existingClaim) -}}
 apiVersion: v1
 kind: PersistentVolumeClaim
@@ -86,10 +94,16 @@ metadata:
   namespace: {{ include "devicechain.instanceNamespace" . }}
   labels:
     {{- include "devicechain.instanceLabels" . | nindent 4 }}
-  {{- with $p.annotations }}
+  {{/* The claim holds every stored logo and artifact, and nothing else has a copy. Helm
+       deletes what leaves its manifest, so a later values change that disables persistence
+       (or switches backend) would delete the data with it; this stops Helm doing so. Delete
+       the claim deliberately with `kubectl -n <instance namespace> delete pvc <name>`. A
+       caller-supplied annotation of the same name wins. */}}
   annotations:
+    helm.sh/resource-policy: keep
+    {{- with $p.annotations }}
     {{- toYaml . | nindent 4 }}
-  {{- end }}
+    {{- end }}
 spec:
   accessModes:
     {{- toYaml ($p.accessModes | default (list "ReadWriteOnce")) | nindent 4 }}

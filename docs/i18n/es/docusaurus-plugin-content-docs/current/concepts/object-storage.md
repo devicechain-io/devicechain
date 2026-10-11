@@ -52,6 +52,8 @@ Seleccionar el backend S3 es un cambio de configuración en la instancia. El end
 
 Como toda superficie de configuración de DeviceChain, la configuración del almacén de objetos es tipada y estricta: un nombre de backend mal escrito es un error de arranque, no un fallback silencioso. Un backend filesystem sin directorio se trata como "almacén de objetos no configurado". El servicio arranca igualmente, los endpoints de subida y lectura del logo devuelven **503**, y los logos en línea y por URL siguen funcionando.
 
+En una instancia creada con `dcctl`, nada de esto se escribe a mano: `dcctl bootstrap` elige el almacén con `--object-store` (por defecto, un pequeño volumen de sistema de archivos en un clúster local, o un bucket de S3 con las credenciales tomadas de un Secret existente) y lo registra en la instancia. Consulta [el almacén de objetos](../deployment/bootstrap.md#object-store).
+
 ## Primer consumidor: white-labeling
 
 El white-labeling de inquilino es la primera funcionalidad construida sobre el almacén de objetos. El logo de un inquilino se sube al almacén y se referencia por handle desde la configuración de marca del inquilino. Los activos muy pequeños aún pueden suministrarse en línea (un data-URI acotado) en despliegues sin almacenamiento configurado, pero los activos de imagen reales pasan por el almacén. El campo `background` del registro de marca es un color hexadecimal, no una imagen.
