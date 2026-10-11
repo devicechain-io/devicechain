@@ -863,11 +863,13 @@ func (rez *EventResolver) HandleEvent(ctx context.Context,
 // as none so an event carrying blank fields falls through to the configured
 // no-credential behaviour rather than failing authentication.
 //
-// The secret arrives SEALED (SealedCredentialSecret) and is opened here, bound to the
-// tenant and credential id it was sealed for. A secret that will not open, a plaintext
-// left in a message from before sealing included, is presented as an EMPTY secret:
-// it matches no stored digest, so the event fails to authenticate like a wrong password
-// and never as an absent credential, which optional mode would let through.
+// Two things arrive SEALED and are opened here, each bound to the tenant it was sealed for.
+// A password (SealedCredentialSecret) is bound to its credential id. A secret that will not
+// open, a plaintext left in a message from before sealing included, is presented as an
+// EMPTY secret: it matches no stored digest, so the event fails to authenticate like a
+// wrong password and never as an absent credential, which optional mode would let through.
+// An access token (SealedCredentialId) is bound to its credential type and is opened before
+// any lookup; one that will not open is refused, never read as an absent credential.
 func (rez *EventResolver) presentedCredential(ctx context.Context, unrez *esmodel.UnresolvedEvent) (*model.PresentedCredential, error) {
 	if unrez.CredentialType == nil {
 		if unrez.SealedCredentialId != nil {

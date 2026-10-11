@@ -56,9 +56,10 @@ type PUnresolvedEvent struct {
 	// inbound-events publish to the service account, so this is not device-forgeable
 	// — see resolveDevice). NEVER set from device-controlled input.
 	AuthenticatedTransport bool `protobuf:"varint,12,opt,name=authenticated_transport,json=authenticatedTransport,proto3" json:"authenticated_transport,omitempty"`
-	// The ACCESS_TOKEN credential id SEALED for the hop to the resolver. A bearer token
-	// is the credential, so it never crosses this stream as the device sent it; credential_id
-	// is left empty for that credential type.
+	// The ACCESS_TOKEN credential id SEALED for the hop to the resolver. A bearer token is the
+	// credential, so it never crosses this stream as the device sent it; credential_id is left
+	// empty for that credential type. A value that does not open for this tenant and credential
+	// type, or a clear token left in a message from before sealing, is refused as unauthenticated.
 	SealedCredentialId *string `protobuf:"bytes,13,opt,name=sealed_credential_id,json=sealedCredentialId,proto3,oneof" json:"sealed_credential_id,omitempty"`
 }
 

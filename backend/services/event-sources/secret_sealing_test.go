@@ -78,6 +78,23 @@ func TestASecretPresentedWithoutACredentialIdIsDiscarded(t *testing.T) {
 	require.Nil(t, decoded.SealedCredentialSecret)
 }
 
+// A credential id presented with no credential type authenticates nothing downstream, so
+// it is discarded: nothing is published carrying it, sealed or not. (An id of an unknown
+// type is not discarded: it is looked up and matches nothing.)
+func TestACredentialIdWithoutATypeIsDiscarded(t *testing.T) {
+	sealingFixture(t)
+	const token = "tok-typeless-0123456789"
+	ev := presentingToken(token)
+	ev.CredentialType = nil
+	_, msg, ok := inboundEventMessage("http", "acme", ev, &model.UnresolvedMeasurementsPayload{}, 1)
+	require.True(t, ok)
+	require.NotContains(t, string(msg.Value), token)
+	decoded, err := esproto.UnmarshalUnresolvedEvent(msg.Value)
+	require.NoError(t, err)
+	require.Nil(t, decoded.CredentialId)
+	require.Nil(t, decoded.SealedCredentialId)
+}
+
 // No usable root key, no start: the service refuses to initialize rather than run with
 // nothing to seal a presented password with. Driven through the real initialize callback,
 // which is what wires the key.
