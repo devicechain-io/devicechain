@@ -182,6 +182,21 @@ describe('widgetBinding / resolveConcrete', () => {
     expect(resolveConcrete(d, d.widgets[0])).toBeUndefined();
     expect(resolveConcrete(d, d.widgets[1])).toBeUndefined();
   });
+
+  // The panel renders its Kind control from this value: a kind chosen before any entity is
+  // picked must come back, or the control snaps to "None" and the picker never appears.
+  it('returns a selector the author has not finished filling in, as it stands', () => {
+    const d = def([
+      widget('a', { kind: 'device', deviceToken: '', measurements: [] }),
+      widget('b', { kind: 'anchor', anchor: { relationship: 'in', targetType: 'customer', targetToken: '' }, measurements: ['t'] }),
+    ]);
+    expect(resolveConcrete(d, d.widgets[0])).toEqual({ kind: 'device', deviceToken: '', measurements: [] });
+    expect(resolveConcrete(d, d.widgets[1])).toEqual({
+      kind: 'anchor',
+      anchor: { relationship: 'in', targetType: 'customer', targetToken: '' },
+      measurements: ['t'],
+    });
+  });
 });
 
 // Scope-aware helper fixes (ADR-039 selection amendment): dedup must not fold a plain
