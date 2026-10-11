@@ -138,6 +138,12 @@ type Api struct {
 	// (at-most-once), like the other fact publishers.
 	DeviceAttributePublisher DeviceAttributePublisher
 
+	// DeviceDesiredPublisher delivers a minted per-device configuration revision to its device
+	// on the device-desired channel, post-commit and best-effort (the device's next sync
+	// repairs a miss). Injected at wiring time and may be nil — in tests, or before wiring —
+	// which disables delivery without disabling the revision.
+	DeviceDesiredPublisher DeviceDesiredPublisher
+
 	// GeoFenceSetPublisher emits the MANIFEST of each newly-minted fence-set version
 	// (ADR-078) — which fences it holds and the content address of each one's geometry —
 	// so event-processing's live containment projection tracks fence edits without

@@ -35,6 +35,14 @@
 //   - replays of stale attempts: ReplayPrevious resends the last report of the attempt before the
 //     current one.
 //
+// # Configuration
+//
+// config.go is the device half of the configuration contract: a ConfigAgent syncs on connect,
+// checks a desired revision's digest against the bytes it was sent, applies or refuses it, and
+// reports RECEIVED then APPLIED or REJECTED, keeping what it applied across restarts. It shares
+// the Transport and the wire discipline above and is mirror-tested against the contract's
+// configuration fixtures.
+//
 // The updater never learns a verdict. The reports go up one way, like the real device-reports
 // channel, so a test that wants to know what the platform decided asks the platform.
 package updater

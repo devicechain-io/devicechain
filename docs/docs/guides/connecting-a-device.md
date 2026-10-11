@@ -333,19 +333,31 @@ This topic used to be tenant-wide (`{instanceId}/{tenant}/command-responses`, wi
 A command that is never answered stays `SENT` until its TTL turns it into `TIMEOUT`. Without a response, the platform knows only that the command was dispatched, not that the device acted on it. If your devices do not respond, set an `expiresAt` when issuing commands so they reach a terminal state on your schedule rather than on the platform's seven-day default.
 :::
 
-### Reserved topics for configuration delivery {#reserved-device-topics}
+### Configuration delivery topics {#reserved-device-topics}
 
-:::note Reserved, not yet active
-Two further per-device topics are reserved as groundwork for device configuration delivery. Nothing publishes to them or reads from them yet, so do not build on them. They are listed so your devices do not claim the names for something else.
+A device receives its configuration, and tells the platform what it did with it, over two per-device topics:
 
 ```
 {instanceId}/{tenant}/device-desired/{deviceToken}    (platform to device; a device may subscribe to its own)
 {instanceId}/{tenant}/device-reports/{deviceToken}    (device to platform; a device may publish to its own)
 ```
 
-As with commands, a device is authorized only for the topic carrying its own device token, and only in the direction shown.
-:::
+As with commands, a device is authorized only for the topic carrying its own device token, and only in the direction shown. The platform takes the tenant and the device from the topic, never from the message, so a message must not carry a device identity (one that does is refused), and a device can report only for itself.
 
+Whenever the device's configuration changes, the platform publishes a revision on `device-desired`:
+
+```json
+{"v":1,"kind":"config.revision","revision":3,"digest":"sha256:9e39b20b9def308341baa751db8c2570bfc5b562e1d5420f9e6506510e0328da","document":"{\"sampleIntervalSeconds\":30}"}
+```
+
+`document` is a JSON **string** holding the configuration. Compute SHA-256 over exactly those bytes and compare it with `digest`; if they differ, apply nothing. Do not parse the document and serialize it again before hashing, because the digest covers the bytes the platform sent.
+
+The device answers on `device-reports`. Every message is JSON, at most 4 KiB, and unknown fields are refused.
+
+- **`sync`**, sent every time the device connects, says which revision it holds (`0` if none): `{"v":1,"kind":"sync","config":{"haveRevision":3}}`. The platform replies on `device-desired` with the current revision, whether or not the device already holds it. Do not rely on a message published while the device was offline arriving later: syncing on connect is how a device catches up.
+- **`config.status`** reports what the device did with a revision: `{"v":1,"kind":"config.status","revision":3,"digest":"sha256:…","status":"APPLIED"}`. The status is `RECEIVED`, `APPLIED` or `REJECTED`. A `REJECTED` report must carry `errors`, a list of up to 16 strings of up to 256 bytes each, saying why.
+
+The platform records a `config.status` only when the device has that revision and the digest matches it; the device stops showing the revision as pending once it has reported `APPLIED` for it. Reports are processed at least once, so repeating one is safe, and an older report never overwrites a newer one. A message that does not decode, names a revision the device was not sent, or carries a digest that is not that revision's is refused and recorded on the dead-letter stream rather than dropped. Devices that speak only HTTP are not served by this channel.
 ### Why the nonce is required {#why-the-nonce-is-required}
 
 Echoing `dispatchNonce` tells the platform your answer belongs to **this** delivery of the command. That matters because a command can legitimately be published more than once. If a publish reports an error, the platform cannot tell a message that was lost from one whose acknowledgement was lost, so it queues the command to be sent again. Without the nonce, an answer to the first delivery arriving after the second went out would close the command before the device had carried out the second one.

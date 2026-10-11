@@ -674,21 +674,18 @@ var All = []Stream{
 	// and later update assignments). Like DeviceCommands, the concrete subject ends in the
 	// target device's token so the signed broker grant can confine a device to its own.
 	//
-	// RESERVED: nothing in the platform publishes or reads it yet, and no service ensures
-	// the stream, so none exists on a running broker. Declared first so the grant, the disk
-	// budget, the tenant purge and the topic mapping all know the name before the first
-	// producer ships. If a stream is ever created for it, it is bounded like every other:
-	// Limits retention, a week of history and the Cold tier's byte ceiling, evicting the
-	// oldest, so an unread channel cannot grow without limit. Cold because volume follows
-	// state CHANGES, not telemetry samples.
-	{Suffix: DeviceDesired, Areas: []string{"device-management"}, Tier: Cold, Shape: ShapeTenantDevice, DeadLetterKind: kindControlFact, Dormant: true,
+	// device-management publishes a device's configuration revisions here. It is bounded
+	// like every other stream: Limits retention, a week of history and the Cold tier's byte
+	// ceiling, evicting the oldest, so an unread channel cannot grow without limit. Cold
+	// because volume follows state CHANGES, not telemetry samples.
+	{Suffix: DeviceDesired, Areas: []string{"device-management"}, Tier: Cold, Shape: ShapeTenantDevice, DeadLetterKind: kindControlFact,
 		Why: "desired-state downlink per device - one message per state change"},
 
 	// PER-DEVICE, DEVICE -> PLATFORM: progress and status reports. The device token in the
 	// subject is the one AUTHENTICATED statement of who reported, for the reason given on
-	// CommandResponses: a payload field is self-asserted. RESERVED and bounded exactly as
-	// DeviceDesired is.
-	{Suffix: DeviceReports, Areas: []string{"device-management"}, Tier: Cold, Shape: ShapeTenantDevice, DeadLetterKind: kindControlFact, Dormant: true,
+	// CommandResponses: a payload field is self-asserted. device-management consumes it;
+	// bounded exactly as DeviceDesired is.
+	{Suffix: DeviceReports, Areas: []string{"device-management"}, Tier: Cold, Shape: ShapeTenantDevice, DeadLetterKind: kindControlFact,
 		Why: "device reports per device - one message per state change"},
 
 	// ADR-030 amendment. The durable capture of raw device telemetry, and the

@@ -149,27 +149,32 @@ func configurationScopeEligible(entityType, scope string) bool {
 //
 // written is true for a set (the key must then appear in the document) and false for a
 // delete.
+//
+// It returns the revision it minted, or nil when none was (the write did not touch a declared
+// key, or the document did not change). The caller delivers it to the device AFTER the
+// transaction commits (publishMintedConfiguration): publishing from inside would announce a
+// revision that a rollback then erases.
 func (api *Api) reconcileDeviceConfigurationOnTx(ctx context.Context, tx *gorm.DB, entityType string,
-	deviceId uint, scope, attrKey string, written bool) error {
+	deviceId uint, scope, attrKey string, written bool) (*DeviceConfigurationRevision, error) {
 	if !configurationScopeEligible(entityType, scope) {
-		return nil
+		return nil, nil
 	}
 	declared, _, err := activeConfigurationDeclaration(tx, deviceId)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if !slices.ContainsFunc(declared, func(k ConfigurationKey) bool { return k.Key == attrKey }) {
-		return nil
+		return nil, nil
 	}
 	if err := lockDeviceConfiguration(ctx, tx, deviceId); err != nil {
-		return err
+		return nil, err
 	}
 	doc, versionId, err := computeDeviceConfiguration(tx, deviceId)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if written && slices.Contains(doc.Invalid, attrKey) {
-		return &ConfigurationRefusal{Code: CodeConfigurationValueType, Message: fmt.Sprintf(
+		return nil, &ConfigurationRefusal{Code: CodeConfigurationValueType, Message: fmt.Sprintf(
 			"attribute %q is declared as device configuration with a different value type, "+
 				"or its value cannot be carried as that type", attrKey)}
 	}
@@ -179,27 +184,30 @@ func (api *Api) reconcileDeviceConfigurationOnTx(ctx context.Context, tx *gorm.D
 			// only because a later profile version declared more keys; refusing the delete
 			// would make it impossible to bring the device back under. Mint nothing: no
 			// revision over the cap ever exists, and the read API shows the device stale.
-			return nil
+			return nil, nil
 		}
-		return &ConfigurationRefusal{Code: CodeConfigurationTooLarge, Message: fmt.Sprintf(
+		return nil, &ConfigurationRefusal{Code: CodeConfigurationTooLarge, Message: fmt.Sprintf(
 			"the device's configuration document would be %d bytes, over the %d byte limit",
 			len(doc.Canonical), MaxConfigurationDocumentBytes)}
 	}
-	_, err = mintConfigurationRevision(ctx, tx, deviceId, doc, versionId)
-	return err
+	rev, minted, err := mintConfigurationRevision(tx, deviceId, doc, versionId, configurationActor(ctx))
+	if err != nil || !minted {
+		return nil, err
+	}
+	return rev, nil
 }
 
 // mintConfigurationRevision appends a revision for doc unless the latest revision already
-// carries its digest. It returns the revision now current. The caller holds the device's
-// configuration lock.
-func mintConfigurationRevision(ctx context.Context, tx *gorm.DB, deviceId uint,
-	doc *ConfigurationDocument, versionId *uint) (*DeviceConfigurationRevision, error) {
+// carries its digest. It returns the revision now current and whether this call minted it. The
+// caller holds the device's configuration lock.
+func mintConfigurationRevision(tx *gorm.DB, deviceId uint, doc *ConfigurationDocument,
+	versionId *uint, actor string) (*DeviceConfigurationRevision, bool, error) {
 	latest, err := latestConfigurationRevision(tx, deviceId)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	if latest != nil && latest.Digest == doc.Digest {
-		return latest, nil
+		return latest, false, nil
 	}
 	next := int64(1)
 	if latest != nil {
@@ -211,12 +219,12 @@ func mintConfigurationRevision(ctx context.Context, tx *gorm.DB, deviceId uint,
 		ProfileVersionId: versionId,
 		Document:         string(doc.Canonical),
 		Digest:           doc.Digest,
-		Actor:            configurationActor(ctx),
+		Actor:            actor,
 	}
 	if err := tx.Create(rev).Error; err != nil {
-		return nil, err
+		return nil, false, err
 	}
-	return rev, nil
+	return rev, true, nil
 }
 
 // deviceIdByToken resolves a device token in the caller's tenant.

@@ -334,19 +334,31 @@ Este topic era antes de alcance de inquilino (`{instanceId}/{tenant}/command-res
 Un comando que nunca se responde permanece en `SENT` hasta que su TTL lo convierte en `TIMEOUT`. Sin una respuesta, la plataforma solo sabe que el comando se despachó, no que el dispositivo actuó sobre él. Si tus dispositivos no responden, configura un `expiresAt` al emitir comandos para que alcancen un estado terminal en tu propio plazo y no en el predeterminado de siete días de la plataforma.
 :::
 
-### Topics reservados para la entrega de configuración {#reserved-device-topics}
+### Topics de entrega de configuración {#reserved-device-topics}
 
-:::note Reservado, aún no activo
-Se reservan dos topics adicionales por dispositivo como base para la entrega de configuración a los dispositivos. Todavía nada publica en ellos ni lee de ellos, así que no construyas sobre ellos. Se listan para que tus dispositivos no usen esos nombres para otra cosa.
+Un dispositivo recibe su configuración, y le dice a la plataforma qué hizo con ella, mediante dos topics por dispositivo:
 
 ```
 {instanceId}/{tenant}/device-desired/{deviceToken}    (de la plataforma al dispositivo; un dispositivo puede suscribirse al suyo)
 {instanceId}/{tenant}/device-reports/{deviceToken}    (del dispositivo a la plataforma; un dispositivo puede publicar en el suyo)
 ```
 
-Igual que con los comandos, un dispositivo solo está autorizado para el topic que lleva su propio token de dispositivo, y únicamente en el sentido indicado.
-:::
+Igual que con los comandos, un dispositivo solo está autorizado para el topic que lleva su propio token de dispositivo, y únicamente en el sentido indicado. La plataforma toma el tenant y el dispositivo del topic, nunca del mensaje, así que un mensaje no debe llevar la identidad de un dispositivo (si la lleva, se rechaza) y un dispositivo solo puede informar por sí mismo.
 
+Cada vez que cambia la configuración del dispositivo, la plataforma publica una revisión en `device-desired`:
+
+```json
+{"v":1,"kind":"config.revision","revision":3,"digest":"sha256:9e39b20b9def308341baa751db8c2570bfc5b562e1d5420f9e6506510e0328da","document":"{\"sampleIntervalSeconds\":30}"}
+```
+
+`document` es una **cadena** JSON que contiene la configuración. Calcula SHA-256 sobre exactamente esos bytes y compáralo con `digest`; si difieren, no apliques nada. No analices el documento ni lo vuelvas a serializar antes de calcular el hash, porque el digest cubre los bytes que envió la plataforma.
+
+El dispositivo responde en `device-reports`. Cada mensaje es JSON, de como máximo 4 KiB, y se rechazan los campos desconocidos.
+
+- **`sync`**, que se envía cada vez que el dispositivo se conecta, indica qué revisión tiene (`0` si ninguna): `{"v":1,"kind":"sync","config":{"haveRevision":3}}`. La plataforma responde en `device-desired` con la revisión actual, la tenga ya el dispositivo o no. No cuentes con que llegue después un mensaje publicado mientras el dispositivo estaba desconectado: sincronizar al conectar es como un dispositivo se pone al día.
+- **`config.status`** informa de lo que el dispositivo hizo con una revisión: `{"v":1,"kind":"config.status","revision":3,"digest":"sha256:…","status":"APPLIED"}`. El estado es `RECEIVED`, `APPLIED` o `REJECTED`. Un informe `REJECTED` debe incluir `errors`, una lista de hasta 16 cadenas de hasta 256 bytes cada una que explique el motivo.
+
+La plataforma registra un `config.status` solo cuando el dispositivo tiene esa revisión y el digest coincide con ella; el dispositivo deja de figurar como pendiente de esa revisión cuando ha informado `APPLIED` para ella. Los informes se procesan al menos una vez, así que repetir uno es seguro, y un informe antiguo nunca sobrescribe uno más reciente. Un mensaje que no se decodifica, que nombra una revisión que no se envió al dispositivo o que lleva un digest que no es el de esa revisión se rechaza y se registra en el flujo de mensajes fallidos (dead-letter) en lugar de descartarse. Los dispositivos que solo hablan HTTP no se atienden por este canal.
 ### Por qué el nonce es obligatorio {#why-the-nonce-is-required}
 
 Devolver `dispatchNonce` le indica a la plataforma que tu respuesta corresponde a **esta** entrega del comando. Importa porque un comando puede publicarse legítimamente más de una vez. Si una publicación informa de un error, la plataforma no puede distinguir un mensaje que se perdió de uno cuyo acuse de recibo se perdió, así que vuelve a encolar el comando para enviarlo de nuevo. Sin el nonce, una respuesta a la primera entrega que llegue después de enviarse la segunda cerraría el comando antes de que el dispositivo hubiera ejecutado esa segunda entrega.
