@@ -636,6 +636,11 @@ token 会拼入基础设施命名空间：租户 ID 成为 NATS subject 中按 `
 | 每次查找的键数 | 1,000 | 传给 `…ByToken`、`…ByExternalId` 等批量查询的令牌、外部 ID 或告警令牌列表（设备状态、最新位置、命令、命令批次、通知渠道、策略和状态）。 |
 | JSON 输入大小 | 64 KiB | 以 JSON 形式发送的每个元数据、属性、配置、载荷或收件人值。命令的载荷和元数据会以 `PAYLOAD_TOO_LARGE` / `METADATA_TOO_LARGE` 拒绝（参见[发送命令](../guides/sending-commands.md)）。 |
 | 每条通知规则的收件人数 | 100 | 通知策略规则的 `recipients` 列表。 |
+| OAuth 客户端重定向 URI | 16 项，每项 2,048 B | `createOauthClient` 和 `updateOauthClient` 的 `redirectUris`。 |
+| OAuth 客户端作用域 | 16 项，每项 64 B | `createOauthClient` 和 `updateOauthClient` 的 `scopes`。 |
+| 租户层级 | 100 个层级，每个令牌 128 B | 层级目录（`createTenantTier` 拒绝第 101 个层级）以及 `reorderTenantTiers` 的 `orderedTokens`，后者必须列出所有层级。 |
+| 管理端角色与权限列表 | 100 项 | `createRole` 和 `updateRole` 的 `authorities`；`createIdentity` 的 `systemRoles`；`setSystemRoles`、`addMembership` 和 `setMembershipRoles` 的 `roleTokens`。 |
+| 密码 | 72 B | `createIdentity` 和 `setPassword` 的 `password`：过长的密码会被拒绝，而不是被悄悄截断。 |
 
 `bucketedMeasurements` 还要求提供 `startTime`；`endTime` 默认为当前时间。
 
