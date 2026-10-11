@@ -187,6 +187,11 @@ func checkIssuerURL(issuer string) error {
 	if u.RawQuery != "" || u.Fragment != "" || u.User != nil {
 		return fmt.Errorf("%w: issuer %q must not carry a query, fragment or credentials", ErrIssuerRefused, issuer)
 	}
+	// A fully-qualified host ("login.microsoftonline.com.") resolves to the same provider but
+	// is a different string, so it would slip past every host-keyed rule below.
+	if strings.HasSuffix(u.Hostname(), ".") {
+		return fmt.Errorf("%w: issuer %q must not end its host with a dot", ErrIssuerRefused, issuer)
+	}
 	return nil
 }
 
@@ -223,6 +228,7 @@ func checkScheme(u *url.URL) error {
 // came from the issuer" says nothing about WHOSE token it is.
 var microsoftIssuerHosts = map[string]struct{}{
 	"login.microsoftonline.com":        {},
+	"login.microsoft.com":              {},
 	"login.microsoftonline.us":         {},
 	"login.microsoftonline.de":         {},
 	"login.partner.microsoftonline.cn": {},

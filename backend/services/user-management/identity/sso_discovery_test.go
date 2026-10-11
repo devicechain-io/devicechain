@@ -224,6 +224,8 @@ func TestGoogleIssuerRequiresHd(t *testing.T) {
 		require.ErrorIsf(t, ValidateConnectionIssuer(google, claims), ErrIssuerRefused, name)
 	}
 	require.NoError(t, ValidateConnectionIssuer(google, map[string]string{"hd": "acme.example"}))
+	// The fully-qualified spelling of the same host must not escape the rule.
+	require.ErrorIs(t, ValidateConnectionIssuer("https://accounts.google.com.", nil), ErrIssuerRefused)
 }
 
 func TestEntraCommonRefused(t *testing.T) {
@@ -239,6 +241,8 @@ func TestEntraCommonRefused(t *testing.T) {
 		"https://login.microsoftonline.com",
 		"https://login.microsoftonline.com/not-a-guid/v2.0",
 		"https://sts.windows.net/common/",
+		"https://login.microsoft.com/common/v2.0",        // an alias host of the same service
+		"https://login.microsoftonline.com./common/v2.0", // a fully-qualified host is the same provider
 		"https://login.microsoftonline.com/" + guid + "/v2.0/extra",
 	} {
 		require.ErrorIsf(t, ValidateConnectionIssuer(issuer, map[string]string{"tid": "common"}), ErrIssuerRefused, "%s", issuer)
