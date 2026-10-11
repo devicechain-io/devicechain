@@ -632,6 +632,7 @@ token 会拼入基础设施命名空间：租户 ID 成为 NATS subject 中按 `
 | 规则编排图 | 256 KiB | 检测规则的 `authoringGraph`，创建和更新时均适用。 |
 | 版本历史 | 每次调用 1,000 条 | `deviceProfileVersions`、`entityGroupVersions`、`assetTypeVersions`：最新的在前。用 `limit`（至少为 1）缩小范围，用 `offset`（不为负）翻页；超出此范围的值会被拒绝，`extensions.code` 为 `INVALID_VALUE`。 |
 | 每次聚合的时间桶数 | 10,000 | `bucketedMeasurements`：时间范围除以 `intervalSeconds`，向上取整。 |
+| 每次聚合的行数 | 50,000 | `bucketedMeasurements`：时间桶数乘以返回的测量名称数。指定 `name` 过滤时为一个名称；未指定时为符合该读取过滤条件的所有不同测量名称。 |
 
 `bucketedMeasurements` 还要求提供 `startTime`；`endTime` 默认为当前时间。
 

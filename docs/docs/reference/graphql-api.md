@@ -730,6 +730,7 @@ characters.
 | Rule authoring graph | 256 KiB | `authoringGraph` of a detection rule, on create and update. |
 | Version history | 1,000 per call | `deviceProfileVersions`, `entityGroupVersions`, `assetTypeVersions`: newest first. Narrow with `limit` (at least 1) and page with `offset` (not negative); a value outside that range is refused with `INVALID_VALUE`. |
 | Buckets per aggregation | 10,000 | `bucketedMeasurements`: the range divided by `intervalSeconds`, rounded up. |
+| Rows per aggregation | 50,000 | `bucketedMeasurements`: the buckets multiplied by the measurement names returned. With a `name` filter that is one name; without one it is every distinct measurement name that matches the read's filters. |
 
 `bucketedMeasurements` also requires `startTime`; `endTime` defaults to the current time.
 

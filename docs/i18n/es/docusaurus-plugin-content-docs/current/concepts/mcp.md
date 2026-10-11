@@ -29,7 +29,7 @@ El servidor expone once herramientas de **lectura**. Cada una es una consulta co
 - `get_device_state` — el estado actual de último valor conocido del dispositivo, incluido si ese estado lo *reportó el transporte* o se *infirió del silencio*. La diferencia cambia lo que significa «no activo». Reportado significa que se sabe que el dispositivo está desconectado. Inferido significa solo que no ha llegado nada recientemente, que es también el aspecto que tiene un dispositivo sano con un intervalo de reporte lento.
 - `get_latest_measurements` — el valor más reciente por medición.
 - `query_measurements` — lecturas de series temporales sin procesar en un rango de tiempo.
-- `aggregate_measurements` — agregados por intervalos (min/max/promedio y similares) en un rango. `startTime` e `intervalSeconds` son obligatorios, `endTime` toma por defecto la hora actual y una solicitud tiene un máximo de 10 000 intervalos.
+- `aggregate_measurements` — agregados por intervalos (min/max/promedio y similares) en un rango. `startTime` e `intervalSeconds` son obligatorios, `endTime` toma por defecto la hora actual y una solicitud tiene un máximo de 10 000 intervalos y de 50 000 filas (los intervalos multiplicados por el número de nombres de medición devueltos).
 
 **Posición**
 
