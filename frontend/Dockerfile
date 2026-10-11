@@ -50,6 +50,7 @@ COPY apps/board-replay/package.json apps/board-replay/
 COPY packages/brand/package.json packages/brand/
 COPY packages/client/package.json packages/client/
 COPY packages/dashboards/package.json packages/dashboards/
+COPY packages/widget-sdk/package.json packages/widget-sdk/
 COPY packages/widgets/package.json packages/widgets/
 RUN npm ci
 
