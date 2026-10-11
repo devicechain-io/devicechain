@@ -97,9 +97,9 @@ type AiProvider {
     # The provider model id (e.g. "claude-opus-4-8").
     model: String!
     """
-    Free-form settings for the kind, as a JSON object serialized to a string, or null if
-    none. They are stored and returned as supplied; inference calls do not currently read
-    them.
+    Free-form settings for the kind, as a JSON object serialized to a string, or null if none.
+    No provider client reads them in this build, so new values cannot be set; a value stored
+    earlier is returned as stored and is not applied.
     """
     # The opaque per-kind inference params (a JSON object), or null.
     params: String
@@ -234,7 +234,10 @@ input AiProviderCreateRequest {
     endpoint: String
     """The model identifier to request from the provider. Required and must not be blank."""
     model: String!
-    """Free-form settings for the kind, as a JSON object serialized to a string of at most 16 KiB. Currently stored but not read by inference calls. A blank value counts as omitted."""
+    """
+    Not supported in this build: a JSON object with any keys is refused with extensions.code
+    UNSUPPORTED. Omit it, or send null, a blank string or {}.
+    """
     params: String
     """Whether the provider may be used. A disabled provider never serves a tenant call."""
     enabled: Boolean!
@@ -278,7 +281,11 @@ input AiProviderUpdateRequest {
     # The provider model id. It cannot be cleared — a provider with no model can serve
     # nothing.
     model: String
-    """New free-form settings as a JSON object serialized to a string of at most 16 KiB, or null to clear them."""
+    """
+    Omit it to keep the stored value, or send null or a blank string to clear it. Setting a
+    JSON object with any keys is refused with extensions.code UNSUPPORTED, unless it is the
+    document already stored, so resending an unchanged record is accepted. At most 16 KiB.
+    """
     # The opaque per-kind inference params (a JSON object). Null clears them.
     params: String
     """Whether the provider may be used. Omit it to keep the stored value; an explicit null is refused."""
@@ -390,8 +397,9 @@ type Query {
 type Mutation {
     """
     Registers a provider. It is offered to no tenant until granted to a tier or tenant.
-    Rejects an unknown kind, a blank model, an invalid endpoint or params, an openai-compatible
-    provider with no endpoint, and a token already in use. Requires ai:admin.
+    Rejects an unknown kind, a blank model, an invalid endpoint, params that are invalid or
+    set any key (extensions.code UNSUPPORTED), an openai-compatible provider with no endpoint,
+    and a token already in use. Requires ai:admin.
     """
     # Create a new provider. It is offered to nobody until granted to a tier.
     createAiProvider(

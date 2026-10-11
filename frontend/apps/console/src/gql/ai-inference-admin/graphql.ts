@@ -26,7 +26,10 @@ export type AiProviderCreateRequest = {
   model: string;
   /** Human-readable name shown in provider lists. */
   name?: string | null | undefined;
-  /** Free-form settings for the kind, as a JSON object serialized to a string of at most 16 KiB. Currently stored but not read by inference calls. A blank value counts as omitted. */
+  /**
+   * Not supported in this build: a JSON object with any keys is refused with extensions.code
+   * UNSUPPORTED. Omit it, or send null, a blank string or {}.
+   */
   params?: string | null | undefined;
   /** The provider's API key. Write-only; stored encrypted and never returned. Omit it, or send an empty string, to store no key yet; a provider with no key cannot serve calls. */
   secret?: string | null | undefined;
@@ -71,7 +74,11 @@ export type AiProviderUpdateRequest = {
   model?: string | null | undefined;
   /** New name, or null to clear it. */
   name?: string | null | undefined;
-  /** New free-form settings as a JSON object serialized to a string of at most 16 KiB, or null to clear them. */
+  /**
+   * Omit it to keep the stored value, or send null or a blank string to clear it. Setting a
+   * JSON object with any keys is refused with extensions.code UNSUPPORTED, unless it is the
+   * document already stored, so resending an unchanged record is accepted. At most 16 KiB.
+   */
   params?: string | null | undefined;
   /**
    * The write-only API key. Omit it to keep the stored key, send a value to replace it, or
