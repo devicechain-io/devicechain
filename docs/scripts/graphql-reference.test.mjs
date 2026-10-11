@@ -306,3 +306,50 @@ test('the escapers leave code spans and fences literal', () => {
   assert.equal(escapeBlock('```\n<x> {y}\n```\n<z>'), '```\n<x> {y}\n```\n\\<z>');
   assert.equal(escapeCell('one\ntwo | three\n\nfour'), 'one two \\| three<br /><br />four');
 });
+
+// What a reader sees: every text / inline-code literal in the parsed page, in order.
+function literals(text) {
+  const out = [];
+  (function walk(n) {
+    if (n.type === 'text' || n.type === 'inlineCode') out.push(n.value);
+    for (const c of n.children ?? []) walk(c);
+  })(processor.parse(text.replace(/^---\n[\s\S]*?\n---\n/, '').replace(/ \{#[^}\n]+\}$/gm, '')));
+  return out;
+}
+
+const BS = String.fromCharCode(92);
+
+test('a backslash before a brace stays literal text and opens no expression', async () => {
+  const desc = `before ${BS}{evil} after`;
+  const sdl = `"""\n${desc}\n"""\ntype Widget {\n  """\n${desc}\n  """\n  token: String!\n}\ntype Query { widget: Widget }`;
+  const page = renderAlpha(sdl);
+  await assert.doesNotReject(compileLikeDocusaurus(page));
+  assert.deepEqual(executableNodes(page), []);
+  // Both the block (type) and the table-cell (field) renderings show the author's text.
+  assert.equal(literals(page).filter((t) => t.includes(`before ${BS}{evil} after`)).length >= 2, true);
+  assert.equal(escapeBlock(desc), `before ${BS}${BS}${BS}{evil${BS}} after`);
+});
+
+test('a backslash-pipe in a table cell stays one cell with the literal text', async () => {
+  const desc = `a ${BS}| b`;
+  const page = renderAlpha(`type Widget {\n  """\n${desc}\n  """\n  token: String!\n}\ntype Query { widget: Widget }`);
+  await assert.doesNotReject(compileLikeDocusaurus(page));
+  assert.ok(literals(page).includes(`a ${BS}| b`), 'cell text is the literal description');
+  // A pipe inside a code span, after an odd and an even run of backslashes.
+  for (const code of [`a${BS}|b`, `a${BS}${BS}|b`, `a${BS}${BS}${BS}|b`, 'a|b']) {
+    const cellText = escapeCell(`see ${'`'}${code}${'`'} there`);
+    const row = `| h |\n|---|\n| ${cellText} |\n`;
+    await assert.doesNotReject(compileLikeDocusaurus(row), code);
+    assert.deepEqual(executableNodes(row), [], code);
+    assert.equal(literals(row).join(''), `hsee ${code} there`, code);
+  }
+});
+
+test('a default value with a backslash and a pipe renders as that literal', async () => {
+  const page = renderAlpha(`type Query { find(x: String = "a${BS}${BS}|b${BS}${BS}", y: String = "p|q"): Boolean }`);
+  await assert.doesNotReject(compileLikeDocusaurus(page));
+  assert.deepEqual(executableNodes(page), []);
+  const lits = literals(page);
+  assert.ok(lits.includes(`"a${BS}${BS}|b${BS}${BS}"`), 'backslash + pipe default');
+  assert.ok(lits.includes('"p|q"'), 'pipe default');
+});

@@ -138,18 +138,49 @@ const NO_DESCRIPTION = '_No description yet._';
 // `<`, `{`, `}` and `&` backslash-escaped.
 // ---------------------------------------------------------------------------
 
-const ESCAPES = { '<': '\\<', '{': '\\{', '}': '\\}', '&': '\\&' };
-const escapeProse = (s) => s.replace(/[<{}&]/g, (c) => ESCAPES[c]);
+// One pass over one map: the backslash is escaped in the same sweep as the characters it
+// protects, so an author's `\{x}` becomes `\\\{x\}` (a literal backslash, then a literal
+// brace) rather than `\\{x\}` (a literal backslash, then a LIVE expression). A second
+// sweep over the output would double-escape the backslashes the first one added.
+const ESCAPES = { '\\': '\\\\', '<': '\\<', '{': '\\{', '}': '\\}', '&': '\\&' };
+const CELL_ESCAPES = { ...ESCAPES, '|': '\\|' };
+const PROSE_RE = /[\\<{}&]/g;
+const CELL_RE = /[\\<{}&|]/g;
+const escapeProse = (s, cell) => (cell
+  ? s.replace(CELL_RE, (c) => CELL_ESCAPES[c])
+  : s.replace(PROSE_RE, (c) => ESCAPES[c]));
+
+/**
+ * A code span inside a table cell. Backslashes are literal in a span, but GFM splits the
+ * row into cells first (a backslash pair is an escaped backslash there) and then turns a
+ * surviving `\|` into `|`. So a pipe after an EVEN run of backslashes is written `\|`.
+ * After an ODD run no spelling inside one span survives both passes, so the last backslash
+ * of the run leaves the span and is written as an escaped backslash in the prose beside it
+ * (adjacent spans would merge their backticks into one longer run, so there are none).
+ */
+function cellCodeSpan(fence, content) {
+  let out = '';
+  let cur = '';
+  const flush = () => { if (cur !== '') out += fence + cur + fence; cur = ''; };
+  for (const ch of content) {
+    if (ch !== '|') { cur += ch; continue; }
+    const run = cur.length - cur.replace(/\\+$/, '').length;
+    if (run % 2 === 1) { cur = cur.slice(0, -1); flush(); out += '\\\\'; }
+    cur += '\\|';
+  }
+  flush();
+  return out;
+}
 
 /** Escapes one line of prose, leaving inline code spans (a run of N backticks to the next run of exactly N) alone. */
-export function escapeInline(line) {
+export function escapeInline(line, cell = false) {
   let out = '';
   let i = 0;
   while (i < line.length) {
     if (line[i] !== '`') {
       let j = line.indexOf('`', i);
       if (j < 0) j = line.length;
-      out += escapeProse(line.slice(i, j));
+      out += escapeProse(line.slice(i, j), cell);
       i = j;
       continue;
     }
@@ -162,7 +193,9 @@ export function escapeInline(line) {
       i += n;
       continue;
     }
-    out += line.slice(i, end + n);
+    out += cell
+      ? cellCodeSpan('`'.repeat(n), line.slice(i + n, end))
+      : line.slice(i, end + n);
     i = end + n;
   }
   return out;
@@ -251,7 +284,7 @@ export function escapeBlock(text) {
 export function escapeCell(text) {
   return text
     .split(/\n[ \t]*\n/)
-    .map((para) => escapeInline(para.split('\n').map((l) => l.trim()).join(' ')).replace(/\|/g, '\\|'))
+    .map((para) => escapeInline(para.split('\n').map((l) => l.trim()).join(' '), true))
     .filter((p) => p !== '')
     .join('<br /><br />');
 }
@@ -272,16 +305,16 @@ function typeRef(type) {
   return isOwnType(named) ? `[${label}](#${named.name})` : label;
 }
 
-function deprecation(el) {
+function deprecation(el, cell = false) {
   if (el.deprecationReason == null) return '';
-  return `**Deprecated.** ${escapeInline(el.deprecationReason.split('\n').join(' '))}`;
+  return `**Deprecated.** ${escapeInline(el.deprecationReason.split('\n').join(' '), cell)}`;
 }
 
 function cell(el) {
   const parts = [];
   parts.push(el.description ? escapeCell(el.description) : NO_DESCRIPTION);
-  const dep = deprecation(el);
-  if (dep) parts.push(dep.replace(/\|/g, '\\|'));
+  const dep = deprecation(el, true);
+  if (dep) parts.push(dep);
   return parts.join('<br /><br />');
 }
 
@@ -317,8 +350,7 @@ export function defaultOf(el) {
 function defaultSuffix(el) {
   const d = defaultOf(el);
   if (d === undefined) return '';
-  const span = d.includes('`') ? `\`\` ${d} \`\`` : `\`${d}\``;
-  return ` = ${span}`.replace(/\|/g, '\\|');
+  return ` = ${d.includes('`') ? cellCodeSpan('``', ` ${d} `) : cellCodeSpan('`', d)}`;
 }
 
 /** A field cell that names its arguments, for the rare non-root field that takes some. */
