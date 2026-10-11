@@ -282,6 +282,15 @@ const (
 	ConnectorRead  Authority = "connector:read"
 	ConnectorWrite Authority = "connector:write"
 
+	// Update artifacts (update-management). Gate the per-tenant artifact catalogue -
+	// the firmware / software / configuration images a device update installs - and the
+	// streaming upload of an image's bytes. Writing creates and retires catalogue
+	// entries and uploads content; reading lists and inspects them. Kept apart from
+	// device:write on purpose: who may register a device and who may publish a binary
+	// that devices will later be told to install are different trust decisions.
+	ArtifactRead  Authority = "artifact:read"
+	ArtifactWrite Authority = "artifact:write"
+
 	// Tenant branding self-service (user-management, ADR-038). Gates the
 	// self-scoped setTenantBranding mutation — a tenant admin white-labeling their
 	// OWN tenant (title/palette/logo). Reads need no authority: resolved branding
@@ -425,6 +434,8 @@ var vocabulary = map[Authority]Tiers{
 	NotificationWrite: tenant,
 	ConnectorRead:     tenant,
 	ConnectorWrite:    tenant,
+	ArtifactRead:      tenant,
+	ArtifactWrite:     tenant,
 	BrandingWrite:     tenant,
 	BasemapWrite:      tenant,
 	LocaleWrite:       tenant,

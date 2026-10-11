@@ -976,6 +976,35 @@ Por otra parte, resolver un evento que tarda más de cinco segundos, por la raz�
 registra como advertencia (`Event resolution is slow`): la primera vez de inmediato y después como
 máximo una línea cada 30 segundos, con cuántas hubo y la más lenta.
 
+## Llamadas de inferencia de IA {#ai-inference}
+
+Donde la creación asistida por IA está habilitada (consulte
+[Autoría Asistida por IA](../concepts/ai-authoring.md)), el servicio `ai-inference` cuenta lo que
+sus inquilinos le piden. Ambas series están acotadas: sus etiquetas toman un conjunto fijo de
+valores, nunca un inquilino, un modelo o un proveedor, así que no crecen con el número de inquilinos.
+
+- **`devicechain_aiinference_ai_inference_calls_total{outcome}`**: solicitudes de inferencia de los
+  inquilinos, según cómo terminó cada una.
+- **`devicechain_aiinference_ai_inference_tokens_total{direction}`**: tokens que el proveedor informó
+  haber usado, por `direction` (`input` u `output`). Es la señal de gasto: ninguna otra métrica de la
+  plataforma cuenta tokens. Es un contador para vigilar, no un libro contable, y nada se hace cumplir
+  a partir de él.
+
+| Resultado | Significado |
+| --- | --- |
+| `served` | El proveedor respondió y se devolvió un candidato. |
+| `rate_limited` | El inquilino superó su límite de tasa de inferencia y la llamada se rechazó antes de llegar a ningún proveedor. Un aumento sostenido indica que un inquilino está por encima de su cuota. |
+| `consent_required` | El inquilino no ha aceptado el enrutamiento externo de IA, así que nada salió de la plataforma. Es lo esperado para un inquilino sin consentimiento concedido. |
+| `unavailable` | La plataforma no está configurada para atender la llamada: sin modelo asignado, proveedor deshabilitado, falta una clave. El registro del servidor indica cuál. |
+| `provider_error` | Se llegó al proveedor y este falló la llamada (error de transporte, un estado de error, una respuesta vacía). La dependencia externa no funciona bien. |
+| `timed_out` | Se llegó al proveedor y no respondió dentro de `inferenceTimeoutMs` (40 segundos por defecto, 120 como máximo). El autor ve un tiempo agotado en lugar de un fallo genérico. |
+
+Lea `timed_out` y `provider_error` por separado. Un `provider_error` creciente indica que el
+proveedor está fallando. Un `timed_out` creciente con `provider_error` estable indica que el modelo
+en uso es más lento de lo que permite el tiempo límite: elija un modelo más rápido o aumente
+`inferenceTimeoutMs`, que la configuración de `ai-inference` del chart expone y que impide arrancar
+si supera su máximo.
+
 ## Pasadas de mantenimiento {#maintenance-passes}
 
 Varios servicios ejecutan una tarea de mantenimiento con un temporizador: un barrido, un

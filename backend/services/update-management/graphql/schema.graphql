@@ -1,18 +1,187 @@
 # Copyright The DeviceChain Authors
 # SPDX-License-Identifier: Apache-2.0
 
-# The update-management data plane. The service is scaffolded ahead of its API: the
-# firmware artifact catalogue and update assignments land here in later releases.
-#
-# Until then the plane is EXPLICITLY UNIMPLEMENTED. Its one query exists because the
-# GraphQL runtime requires a non-empty Query type, and it never answers with data: every
-# call returns an error saying the API is not implemented in this build, so a client
-# cannot mistake an empty answer for a working one.
-type Query {
-    """Not implemented in this build. Always returns an error."""
-    updateManagementInfo: String!
-}
-
+# The update-management data plane: the per-tenant catalogue of update artifacts (firmware,
+# software and configuration images). An artifact is declared here, its bytes are uploaded
+# to the content endpoint PUT /updates/artifacts/{token}/content, and it is then AVAILABLE.
+# Artifacts are immutable once available.
 schema {
     query: Query
+    mutation: Mutation
+}
+
+"""Pagination info for search results."""
+type SearchResultsPagination {
+    """Zero-based index of the first record on this page."""
+    pageStart: Int
+    """Zero-based index of the last record on this page."""
+    pageEnd: Int
+    """Total number of records matching the search."""
+    totalRecords: Int
+}
+
+"""Static service identity: the deployed functional area (non-sensitive)."""
+type ServiceInfo {
+    """The functional area this service is deployed as."""
+    area: String!
+}
+
+"""What an update artifact is."""
+enum ArtifactKind {
+    """A device firmware image."""
+    FIRMWARE
+    """An application or agent software package."""
+    SOFTWARE
+    """A configuration bundle installed as an update."""
+    CONFIGURATION
+}
+
+"""Where an artifact is in its lifecycle."""
+enum ArtifactState {
+    """Declared, with no verified content yet. The only state in which content can be uploaded."""
+    UPLOADING
+    """The content is stored and matches the declared size and digest. The artifact is immutable."""
+    AVAILABLE
+    """Withdrawn from new use. Its metadata and content remain."""
+    RETIRED
+}
+
+"""
+How far an artifact's origin has been established. The only value is UNVERIFIED: the
+platform checks that the bytes are the bytes that were declared, and does not authenticate
+who produced them.
+"""
+enum ArtifactTrustStatus {
+    """The artifact's origin is not authenticated."""
+    UNVERIFIED
+}
+
+"""A tenant-scoped, immutable update artifact."""
+type Artifact {
+    """Internal identifier."""
+    id: ID!
+    """When the artifact was declared, as an RFC 3339 timestamp."""
+    createdAt: String
+    """When the artifact last changed state, as an RFC 3339 timestamp."""
+    updatedAt: String
+    """The artifact's token, unique within the tenant."""
+    token: String!
+    """What the artifact is."""
+    kind: ArtifactKind!
+    """The artifact's name. Together with component and version it is the artifact's identity, unique per tenant."""
+    name: String!
+    """The artifact's version label. It is opaque to the platform."""
+    version: String!
+    """The part of the device the artifact updates, for example firmware or app/agent."""
+    component: String!
+    """The size of the content in bytes, as a decimal string (it can exceed a 32-bit integer)."""
+    sizeBytes: String!
+    """The content's SHA-256 digest, as sha256: followed by 64 lowercase hex digits."""
+    digest: String!
+    """The IANA media type of the content."""
+    mediaType: String!
+    """Tokens of the device profiles the artifact may be assigned to."""
+    compatibleProfiles: [String!]!
+    """How far the artifact's origin has been established."""
+    trustStatus: ArtifactTrustStatus!
+    """Who declared the artifact and any source or notes they recorded, as a JSON object; null when none."""
+    provenance: String
+    """Where the artifact is in its lifecycle."""
+    state: ArtifactState!
+}
+
+"""The data needed to declare an artifact. No content travels with it."""
+input ArtifactCreateRequest {
+    """The artifact's token, unique within the tenant."""
+    token: String!
+    """What the artifact is."""
+    kind: ArtifactKind!
+    """The artifact's name."""
+    name: String!
+    """The artifact's version label. Name, component and version together must be unique within the tenant."""
+    version: String!
+    """The part of the device the artifact updates, for example firmware or app/agent."""
+    component: String!
+    """
+    The exact size of the content in bytes, as a decimal string. An upload that delivers any
+    other number of bytes is refused.
+    """
+    sizeBytes: String!
+    """The content's SHA-256 digest, as sha256: followed by 64 hex digits. An upload that hashes differently is refused."""
+    digest: String!
+    """The IANA media type of the content. Defaults to application/octet-stream."""
+    mediaType: String
+    """Tokens of the device profiles the artifact may be assigned to. At least one; each must exist."""
+    compatibleProfiles: [String!]!
+    """Where the artifact came from, recorded as provenance."""
+    source: String
+    """Free-form notes, recorded as provenance."""
+    notes: String
+}
+
+"""Criteria for searching artifacts. Every filter is optional."""
+input ArtifactSearchCriteria {
+    """Zero-based page number."""
+    pageNumber: Int!
+    """Records per page."""
+    pageSize: Int!
+    """Only artifacts of this kind."""
+    kind: ArtifactKind
+    """Only artifacts in this state."""
+    state: ArtifactState
+    """Only artifacts for this component."""
+    component: String
+}
+
+"""A page of artifacts."""
+type ArtifactSearchResults {
+    """The artifacts on this page, newest first."""
+    results: [Artifact!]!
+    """Pagination info for the search."""
+    pagination: SearchResultsPagination!
+}
+
+"""The update-management read operations."""
+type Query {
+    """Non-sensitive service identity (the deployed functional area)."""
+    updateManagementInfo: ServiceInfo!
+    """Look up an artifact by token. Requires artifact:read. Null when there is none in the caller's tenant."""
+    artifact(
+        """
+        The token of the artifact to look up.
+        """
+        token: String!
+    ): Artifact
+    """Search the tenant's artifacts, newest first. Requires artifact:read."""
+    artifacts(
+        """
+        The filters and page to search with.
+        """
+        criteria: ArtifactSearchCriteria!
+    ): ArtifactSearchResults!
+}
+
+"""The update-management write operations."""
+type Mutation {
+    """
+    Declare an artifact in the UPLOADING state. Requires artifact:write. The compatible
+    profiles are checked against device-management, and the size against the artifact and
+    tenant ceilings. Upload the content afterwards with PUT /updates/artifacts/{token}/content.
+    """
+    createArtifact(
+        """
+        The artifact to declare.
+        """
+        request: ArtifactCreateRequest!
+    ): Artifact!
+    """
+    Withdraw an artifact from new use. Requires artifact:write. Idempotent. The content is
+    kept: removing it is not offered until update assignments exist to check it against.
+    """
+    retireArtifact(
+        """
+        The token of the artifact to retire.
+        """
+        token: String!
+    ): Artifact!
 }

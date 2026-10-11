@@ -43,6 +43,7 @@ import (
 
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/messaging"
+	"github.com/devicechain-io/dc-microservice/payloadredact"
 	"github.com/devicechain-io/dc-microservice/streams"
 	"github.com/prometheus/client_golang/prometheus"
 )
@@ -568,7 +569,7 @@ func (s *Sink) Write(ctx context.Context, e Envelope) error {
 		return fmt.Errorf("dead letter LOST — %s was refused before any write, a defect in the "+
 			"producing service: %w", e.Kind, err)
 	}
-	return s.write(ctx, e, "")
+	return s.write(ctx, e, "", "")
 }
 
 // WriteFor records one dead letter about msg, a message this service CONSUMED and is giving
@@ -641,7 +642,7 @@ func (s *Sink) writeFor(ctx context.Context, msg messaging.Message, e Envelope, 
 	if part != nil && id != "" {
 		id += ".part." + *part
 	}
-	return s.write(ctx, e, id)
+	return s.write(ctx, e, id, o.Suffix)
 }
 
 // OriginID is the dedup id of a letter about msg: "mdl.<stream>.<consumer>.<seq>" from its
@@ -662,7 +663,33 @@ func originID(stream, consumer string, seq uint64) string {
 
 // write is the one write path: validate, then retry within the detached deadline. dedupID,
 // when set, is published as the letter's Nats-Msg-Id.
-func (s *Sink) write(ctx context.Context, e Envelope, dedupID string) error {
+func (s *Sink) write(ctx context.Context, e Envelope, dedupID, suffix string) error {
+	e.Payload = payloadFor(suffix, e.Kind, e.Payload)
+	return s.writePrepared(ctx, e, dedupID)
+}
+
+// payloadFor is the payload a letter may keep. Classification is by the ORIGIN STREAM's
+// declaration (streams.Stream.PlatformAuthored), not by the letter's kind: only a stream
+// declared platform-authored keeps its payload verbatim, and anything else - an undeclared
+// stream, a new one - is redacted of credential material. With no origin stream (a plain
+// Write) the kind decides, and only a kind all of whose streams are platform-authored
+// keeps its payload.
+func payloadFor(suffix string, kind Kind, p []byte) []byte {
+	if len(p) == 0 {
+		return p
+	}
+	if suffix != "" {
+		if streams.PlatformAuthoredFor(suffix) {
+			return p
+		}
+	} else if streams.KindPlatformAuthored(string(kind)) {
+		return p
+	}
+	return payloadredact.Redact(p, payloadredact.DiagnosticMaxBytes)
+}
+
+// writePrepared writes a letter whose payload has already been through payloadFor.
+func (s *Sink) writePrepared(ctx context.Context, e Envelope, dedupID string) error {
 	e.Source = s.source
 	body, err := Marshal(e)
 	if err != nil {

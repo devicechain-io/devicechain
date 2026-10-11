@@ -183,7 +183,7 @@ that is not implemented yet — not because they are second-class. Get them with
 | `ai-inference` | natural-language→rule authoring proxy | no hard dep (fails paths closed); needs `infrastructure.secrets.rootKey` for provider keys; external routing needs `serviceAuth.secret` + `userManagement` and is per-tenant opt-in / fail-closed |
 | `sparkplug-ingest` | Sparkplug B host application ingesting from customer MQTT brokers | hard-depends on `device-management`; each source binds one broker connection to one tenant; single-owner — `replicas: 1` + `Recreate`, the render fails above one |
 | `lwm2m-ingest` | OMA LwM2M over CoAP/UDP + DTLS for constrained devices | hard-depends on `device-management`; serves CoAPS on UDP 5684; single-owner — `replicas: 1` + `Recreate`, the render fails above one |
-| `update-management` | over-the-air update artifacts and assignments | hard-depends on `device-management`; **scaffold only in this release** — it starts and serves health, readiness and metrics, but its GraphQL API answers every request with a `NOT_IMPLEMENTED` error |
+| `update-management` | over-the-air update artifacts and assignments | hard-depends on `device-management`; **the artifact catalogue only in this release** — declare, inspect and retire artifacts, and upload their content with a verified size and digest (needs a configured object store); assignment to devices and download are not built yet |
 
 ## Per-service configuration
 
@@ -301,7 +301,7 @@ exports later) go to a pluggable object store, configured under
 
   Use `blobStorage.persistence.existingClaim` to mount a PVC you provisioned
   out-of-band instead. Only the areas in `blobStorage.mountAreas` (default
-  `user-management`) mount the volume. Leaving `blob.directory` empty and
+  `user-management` and `update-management`) mount the volume. Leaving `blob.directory` empty and
   persistence disabled keeps the store "not configured" — logo upload/read return
   503 while inline/URL logos still work. The render **fails** on a mismatch
   (persistence enabled for the `s3` backend, a directory with no volume, or a
@@ -560,6 +560,7 @@ generated from the schema; do not edit it by hand.
 | `ingress.className` | string | `"nginx"` | IngressClass the controller registered (the OpenTofu ingress_class). |
 | `ingress.host` | string | `"devicechain.local"` | Host name the Ingress objects route. The chart renders up to three: the API (https://&lt;host&gt;/api/&lt;area&gt;/graphql), the well-known discovery route for OAuth and MCP, and the web console (https://&lt;host&gt;/). |
 | `ingress.annotations` | object | `{}` | Extra annotations merged onto the Ingress objects (body size, timeouts and so on). |
+| `ingress.uploadMaxBodySize` | string | `"1g"` | Largest request body the update-artifact upload route accepts at the edge, as an nginx size (for example 1g). That route is rendered on its own Ingress with this limit and request buffering off. Keep it at or above the update-management artifact ceiling. |
 | `ingress.tls` | object | - | TLS for the Ingress, using cert-manager. |
 | `ingress.tls.enabled` | boolean | `true` | Terminate TLS at the Ingress. |
 | `ingress.tls.selfSigned` | boolean | `true` | Render a cert-manager self-signed Issuer in the instance namespace: valid TLS that browsers do not trust, for development. For real certificates set false and name a ClusterIssuer in clusterIssuer. |
@@ -582,7 +583,7 @@ generated from the schema; do not edit it by hand.
 | `blobStorage.persistence.size` | string | `"5Gi"` | Requested PVC size. |
 | `blobStorage.persistence.storageClass` | string | `""` | StorageClass for the PVC. Empty uses the cluster default; set an RWX-capable class for multi-replica use; "-" selects no storage class, for a statically provisioned volume. |
 | `blobStorage.persistence.annotations` | object | `{}` | Extra annotations merged onto the PVC (for example a backup policy). |
-| `blobStorage.mountAreas` | array | `["user-management"]` | Functional areas that mount the blob volume at the store directory (default: user-management). |
+| `blobStorage.mountAreas` | array | `["user-management","update-management"]` | Functional areas that mount the blob volume at the store directory (default: user-management and update-management). |
 | `functionalAreas` | object | see values.yaml | Per-functional-area settings, keyed by area name (user-management, device-management, event-sources and so on). Only enabled areas are rendered. Every key an area may set is listed under functionalAreas.&lt;area&gt;. |
 | `functionalAreas.<area>.image` | string | - | Full image reference for this area, overriding &lt;image.registry&gt;/&lt;area&gt;:&lt;image.tag&gt;. |
 | `functionalAreas.<area>.replicas` | integer | - | Replica count for this area, overriding the top-level replicas. |

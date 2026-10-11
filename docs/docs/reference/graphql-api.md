@@ -76,9 +76,15 @@ authorities do not line up with intuition:
 
 `sparkplug-ingest` and `lwm2m-ingest` serve no GraphQL at all and are deliberately kept off the
 `/api` router entirely. `event-sources` is routed but answers with a placeholder schema: ingest
-reaches it over the device-plane transports, not this API. `update-management` is routed too, but its
-API is not implemented in this release: its one placeholder query answers every call with a
-`NOT_IMPLEMENTED` error.
+reaches it over the device-plane transports, not this API. `update-management` is routed too: its API is the artifact
+catalogue (declare, inspect and retire update artifacts). The artifact content itself is not sent
+through GraphQL: it is uploaded with `PUT /api/update-management/updates/artifacts/{token}/content`,
+authenticated with a tenant access token that holds `artifact:write`. The chart gives that route an Ingress of its own, with the request-body limit set by
+`ingress.uploadMaxBodySize` (default `1g`) and request buffering turned off. Behind any other ingress
+controller set the same two things on that path: for ingress-nginx, `nginx.ingress.kubernetes.io/proxy-body-size`
+at or above your largest artifact, and `nginx.ingress.kubernetes.io/proxy-request-buffering: "off"`. Without the
+second, nginx reads the whole body to disk before the service sees the request, so the token is not checked
+until the entire image has arrived.
 
 ### Subscriptions over WebSocket {#subscriptions-over-websocket}
 
@@ -734,6 +740,11 @@ characters.
 | Keys per lookup | 1,000 | A list of tokens, external ids or alarm tokens passed to a `…ByToken`, `…ByExternalId` or similar batch query (device states, latest locations, commands, command batches, notification channels, policies and states). |
 | JSON input size | 64 KiB | Each metadata, properties, configuration, payload or recipients value sent as JSON. Command payloads and metadata are refused with `PAYLOAD_TOO_LARGE` / `METADATA_TOO_LARGE` (see [Sending commands](../guides/sending-commands.md)). |
 | Recipients per notification rule | 100 | The `recipients` list of a notification policy rule. |
+| OAuth client redirect URIs | 16 entries, 2,048 B each | `redirectUris` on `createOauthClient` and `updateOauthClient`. |
+| OAuth client scopes | 16 entries, 64 B each | `scopes` on `createOauthClient` and `updateOauthClient`. |
+| Tenant tiers | 100 tiers, 128 B per token | The tier catalog (`createTenantTier` refuses a 101st tier) and `orderedTokens` on `reorderTenantTiers`, which must name every tier. |
+| Admin role and authority lists | 100 entries | `authorities` on `createRole` and `updateRole`; `systemRoles` on `createIdentity`; `roleTokens` on `setSystemRoles`, `addMembership` and `setMembershipRoles`. |
+| Password | 72 B | `password` on `createIdentity` and `setPassword`: longer passwords are refused rather than silently truncated. |
 
 `bucketedMeasurements` also requires `startTime`; `endTime` defaults to the current time.
 

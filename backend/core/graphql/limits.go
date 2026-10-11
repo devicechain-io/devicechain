@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/rs/zerolog/log"
+
+	"github.com/devicechain-io/dc-microservice/config"
 )
 
 // ADR-029 request-shape ceilings. Every request is bounded by a maximum body size, a
@@ -52,7 +54,12 @@ const (
 	// statement in flight with it, so this is also the bound on a single statement.
 	// Legitimate operations finish in well under a second; the slowest tenant-facing
 	// work (a bounded analytics read) in a few seconds.
-	DefaultGraphQLExecTimeoutSeconds = 60
+	//
+	// It is derived from config.RequestEdgeTimeout, the one definition of the browser's
+	// request edge, so the two cannot drift apart: an operation that outlives the edge
+	// would have its own answer replaced by a gateway error. The environment override
+	// (EnvGraphQLExecTimeout) still applies on top.
+	DefaultGraphQLExecTimeoutSeconds = int(config.RequestEdgeTimeout / time.Second)
 	// GraphQLBodyReadTimeoutDefault bounds how long a client may take to deliver the request
 	// body. The body is capped at DefaultGraphQLMaxBodyBytes, so a client that cannot
 	// send that much in this time is not one worth holding a connection for.

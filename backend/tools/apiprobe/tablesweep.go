@@ -239,8 +239,13 @@ func runTableSweep(ctx context.Context, argv []string) error {
 	fs.StringVar(&dsn, "dsn", "",
 		"PostgreSQL connection `string` for the instance database, WITHOUT a password (use PGPASSWORD)")
 	fs.StringVar(&tenant, "tenant", "apiprobe", "tenant `token` the seed wrote under")
+	deployedFn := bindDeployedAreas(fs)
 	if err := fs.Parse(argv); err != nil {
 		return failWith(exitSetup, "%w", err)
+	}
+	deployed, err := deployedFn()
+	if err != nil {
+		return err
 	}
 	if dsn == "" {
 		return failWith(exitSetup, "--dsn is required")
@@ -291,6 +296,19 @@ func runTableSweep(ctx context.Context, argv []string) error {
 	rows := make(map[string]int64, len(res.Tables))
 	for _, t := range res.Tables {
 		rows[t.Table.String()] = t.Rows
+	}
+
+	// An area declared undeployed must have no tables: a schema is proof it ran. This is
+	// what keeps --deployed-areas from being a way to measure less and call it the same.
+	names := make([]string, 0, len(actionable))
+	for _, e := range actionable {
+		names = append(names, e.Table.String())
+	}
+	if err := checkUndeployedAreasHaveNoTables(names, deployed); err != nil {
+		return err
+	}
+	for _, a := range deployed.undeployed() {
+		fmt.Printf("    not measured: %s - %s; no table of its exists in this database\n", a, notDeployedReason(a))
 	}
 
 	rep := reconcileTableCoverage(actionable, rows, tableSweepExemptions)
