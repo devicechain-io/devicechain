@@ -2060,6 +2060,15 @@ gh attestation verify <archive> --repo devicechain-io/devicechain \
 
 随开发合并收集 `v0.19.0` 之后版本的变化。
 
+#### 版本混合期间，正文中携带设备密码的事件会被拒绝 {#next-upgrade-body-password}
+
+从本版本起，`event-sources` 与 `device-management` 以另一种形式传递出现在事件正文中的设备密码，
+且双方都需要新版本才能读取对方的内容。在滚动升级期间，只要两者的新旧版本并存，正文中携带设备密码的
+事件（`MQTT_BASIC`，通过 HTTP 或 MQTT）会被当作未认证而拒绝，并且不会重放。MQTT 连接和访问令牌事件
+不受影响。
+
+请同时升级 `event-sources` 与 `device-management`，或接受这些事件的短暂丢失。
+
 #### 设备事件列表只读取本租户的行 {#tenant-device-index}
 
 设备事件列表索引现在以租户开头。

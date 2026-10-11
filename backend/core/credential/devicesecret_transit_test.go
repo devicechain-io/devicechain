@@ -4,6 +4,10 @@
 package credential
 
 import (
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/hkdf"
+	"crypto/sha256"
 	"strings"
 	"testing"
 
@@ -59,13 +63,34 @@ func TestSecretTransitRefusesWhatWasNotSealedForThisCredential(t *testing.T) {
 	require.ErrorIs(t, err, ErrSealedSecretInvalid, "no key")
 }
 
+// The transit key and the digest key come from the same root key under different contexts.
+// Compared as KEY MATERIAL, not ids: a value sealed under the digest key must not open.
 func TestSecretTransitKeyIsSeparateFromTheDigestKey(t *testing.T) {
 	root := make([]byte, 32)
 	tr, err := DeriveSecretTransit(root)
 	require.NoError(t, err)
 	dk, err := DeriveDeviceSecretKey(root)
 	require.NoError(t, err)
-	require.NotEqual(t, tr.id, dk.KeyId())
+
+	transitKey, err := hkdf.Key(sha256.New, root, nil, secretTransitInfo, sha256.Size)
+	require.NoError(t, err)
+	require.NotEqual(t, transitKey, dk.key[:], "the two keys are the same bytes")
+
+	// A transit built on the DIGEST key's bytes does not open what the real transit seals,
+	// and the reverse.
+	block, err := aes.NewCipher(dk.key[:])
+	require.NoError(t, err)
+	aead, err := cipher.NewGCM(block)
+	require.NoError(t, err)
+	wrong := &SecretTransit{aead: aead, id: tr.id}
+	sealed, err := tr.Seal("acme", "c", "a-long-enough-secret")
+	require.NoError(t, err)
+	_, err = wrong.Open("acme", "c", sealed)
+	require.ErrorIs(t, err, ErrSealedSecretInvalid)
+	sealedWrong, err := wrong.Seal("acme", "c", "a-long-enough-secret")
+	require.NoError(t, err)
+	_, err = tr.Open("acme", "c", sealedWrong)
+	require.ErrorIs(t, err, ErrSealedSecretInvalid)
 }
 
 func TestSecretTransitRefusesBadInput(t *testing.T) {

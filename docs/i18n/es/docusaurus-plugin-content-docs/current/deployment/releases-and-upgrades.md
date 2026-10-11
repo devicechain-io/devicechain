@@ -3775,6 +3775,17 @@ No hay que hacer nada.
 
 Lo que cambia la versión posterior a `v0.19.0`, recogido a medida que llega.
 
+#### Los eventos que llevan una contraseña de dispositivo en el cuerpo se rechazan mientras conviven versiones {#next-upgrade-body-password}
+
+Desde esta versión, `event-sources` y `device-management` se pasan en otra forma la contraseña de
+dispositivo que llega en el cuerpo de un evento, y cada uno necesita la versión nueva para leer la del
+otro. Mientras conviven versiones antiguas y nuevas de ambos durante una actualización progresiva,
+los eventos que llevan una contraseña de dispositivo en el cuerpo (`MQTT_BASIC`, por HTTP o MQTT) se
+rechazan como no autenticados y no se reproducen. Las conexiones MQTT y los eventos con token de
+acceso no se ven afectados.
+
+Actualiza `event-sources` y `device-management` a la vez, o acepta la breve pérdida de esos eventos.
+
 #### La lista de eventos de un dispositivo lee solo las filas de su inquilino {#tenant-device-index}
 
 El índice que sirve la lista de eventos de un dispositivo empieza ahora por el inquilino. En

@@ -5,6 +5,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"testing"
 
 	"github.com/devicechain-io/dc-event-sources/model"
@@ -75,4 +76,27 @@ func TestASecretPresentedWithoutACredentialIdIsDiscarded(t *testing.T) {
 	decoded, err := esproto.UnmarshalUnresolvedEvent(msg.Value)
 	require.NoError(t, err)
 	require.Nil(t, decoded.SealedCredentialSecret)
+}
+
+// No usable root key, no start: the service refuses to initialize rather than run with
+// nothing to seal a presented password with. Driven through the real initialize callback,
+// which is what wires the key.
+func TestTheServiceRefusesToInitializeWithoutARootKey(t *testing.T) {
+	savedMs, savedCfg, savedTransit, savedGates := Microservice, Configuration, SecretTransit, safetyGates
+	t.Cleanup(func() {
+		Microservice, Configuration, SecretTransit, safetyGates = savedMs, savedCfg, savedTransit, savedGates
+	})
+	SecretTransit = nil
+
+	for name, key := range map[string]string{"absent": "", "malformed": "not-base64!!", "wrong length": "AAAA"} {
+		// Fresh each time: initialize registers its gauges once per Microservice.
+		Microservice = &core.Microservice{InstanceId: "inst-1", FunctionalArea: "event-sources"}
+		Microservice.UseMetricsRegistry(prometheus.NewRegistry())
+		Microservice.MicroserviceConfigurationRaw = []byte(`{}`)
+		Microservice.InstanceConfiguration.Infrastructure.Secrets.RootKey = key
+		err := afterMicroserviceInitialized(context.Background())
+		require.Error(t, err, name)
+		require.Contains(t, err.Error(), "root key", name)
+		require.Nil(t, SecretTransit, name)
+	}
 }

@@ -69,3 +69,68 @@ func TestTheMinimumDoesNotReachOtherTypesOrSecretsAlreadyStored(t *testing.T) {
 		CredentialValue: dcgraphql.OptionalStringOf("oldpw")})
 	require.True(t, errors.Is(err, ErrCredentialSecretTooShort), "re-setting the short secret is a rotation and is refused")
 }
+
+// 🔴 A TYPE CHANGE CANNOT CARRY A SECRET PAST THE MINIMUM. An ACCESS_TOKEN stores no secret,
+// so a value sent with one is dropped; a change TO MQTT_BASIC must set the password in the same
+// request, and that password meets the minimum like any other.
+func TestChangingATypeToMqttBasicNeedsAPasswordThatMeetsTheMinimum(t *testing.T) {
+	api, ctx := resolveFixture(t)
+	short := "tok"
+	_, err := api.CreateDeviceCredential(ctx, &DeviceCredentialCreateRequest{Token: "t-1", DeviceToken: "dev",
+		CredentialType: string(CredentialAccessToken), CredentialId: "tok-1", CredentialValue: &short, Enabled: true})
+	require.NoError(t, err)
+	toBasic := func(value dcgraphql.OptionalString) error {
+		_, err := api.UpdateDeviceCredential(ctx, "t-1", &DeviceCredentialUpdateRequest{
+			CredentialType: dcgraphql.OptionalStringOf(string(CredentialMqttBasic)), CredentialValue: value})
+		return err
+	}
+
+	// The reviewer's scenario: no value. Without the rule, "tok" would now be a 3-byte password.
+	require.ErrorIs(t, toBasic(dcgraphql.OptionalString{}), ErrCredentialSecretRequiredForType)
+	require.Equal(t, "INVALID_VALUE", ErrCredentialSecretRequiredForType.Extensions()["code"])
+	require.ErrorIs(t, toBasic(dcgraphql.OptionalStringOf("")), ErrCredentialSecretRequiredForType)
+	require.ErrorIs(t, toBasic(dcgraphql.ClearedString()), ErrCredentialSecretRequiredForType)
+	require.ErrorIs(t, toBasic(dcgraphql.OptionalStringOf(short)), ErrCredentialSecretTooShort)
+	_, err = api.AuthenticateDevice(ctx, basic("tok-1", short), time.Now())
+	require.Error(t, err, "a refused change leaves the credential as it was, and 'tok' never authenticates as a password")
+
+	require.NoError(t, toBasic(dcgraphql.OptionalStringOf("a-long-enough-password")))
+	_, err = api.AuthenticateDevice(ctx, basic("tok-1", "a-long-enough-password"), time.Now())
+	require.NoError(t, err)
+
+	// A value sent with a type that compares no secret is not kept.
+	_, err = api.UpdateDeviceCredential(ctx, "t-1", &DeviceCredentialUpdateRequest{
+		CredentialType: dcgraphql.OptionalStringOf(string(CredentialAccessToken))})
+	require.NoError(t, err)
+	var digest *string
+	require.NoError(t, api.RDB.Database.Raw("SELECT secret_digest FROM device_credentials WHERE token = ?", "t-1").Scan(&digest).Error)
+	require.Nil(t, digest, "a type that compares no secret stores none")
+	require.ErrorIs(t, toBasic(dcgraphql.OptionalString{}), ErrCredentialSecretRequiredForType,
+		"nothing carried across the type change")
+}
+
+// A creation of a type that compares no secret drops a value sent with it.
+func TestACreateOfATypeWithNoSecretStoresNone(t *testing.T) {
+	api, ctx := resolveFixture(t)
+	v := "ignored-value-0123456789"
+	_, err := api.CreateDeviceCredential(ctx, &DeviceCredentialCreateRequest{Token: "t-2", DeviceToken: "dev",
+		CredentialType: string(CredentialAccessToken), CredentialId: "tok-2", CredentialValue: &v, Enabled: true})
+	require.NoError(t, err)
+	var digest *string
+	require.NoError(t, api.RDB.Database.Raw("SELECT secret_digest FROM device_credentials WHERE token = ?", "t-2").Scan(&digest).Error)
+	require.Nil(t, digest)
+}
+
+// A short plaintext left by an old pod during a rolling upgrade is ADOPTED by an edit that
+// sets no password, and the minimum does not apply to it: it is carried over, not chosen.
+func TestAdoptingAShortLegacyPlaintextSecretIsNotRefusedAndAuthenticates(t *testing.T) {
+	api, ctx := resolveFixture(t)
+	require.NoError(t, api.RDB.DB(ctx).Exec("UPDATE device_credentials SET credential_value = ? WHERE token = ?", "legacy", "c-1").Error)
+
+	_, err := api.UpdateDeviceCredential(ctx, "c-1", &DeviceCredentialUpdateRequest{Enabled: dcgraphql.OptionalBoolOf(true)})
+	require.NoError(t, err)
+	_, err = api.AuthenticateDevice(ctx, basic("cred-1", "legacy"), time.Now())
+	require.NoError(t, err, "the adopted short secret authenticates")
+	_, err = api.AuthenticateDevice(ctx, basic("cred-1", "s3cret-0123456789"), time.Now())
+	require.Error(t, err, "the older digest was replaced by the later plaintext")
+}

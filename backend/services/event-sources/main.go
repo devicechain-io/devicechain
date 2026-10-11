@@ -760,6 +760,12 @@ func inboundEventMessage(source string, tenant string, event *model.UnresolvedEv
 	}, true
 }
 
+// initSecretTransit sets SecretTransit from the instance root key, or refuses the start.
+func initSecretTransit() (err error) {
+	SecretTransit, err = deriveSecretTransit()
+	return err
+}
+
 // deriveSecretTransit derives the key presented credential secrets are sealed under from
 // the instance root key. A missing or malformed root key refuses the start.
 func deriveSecretTransit() (*credential.SecretTransit, error) {
@@ -940,7 +946,7 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	// The key every presented credential secret is sealed under before it is published.
 	// No key, no start: without it an event carrying a password could only be published
 	// unsealed, or dropped.
-	if SecretTransit, err = deriveSecretTransit(); err != nil {
+	if err = initSecretTransit(); err != nil {
 		return err
 	}
 

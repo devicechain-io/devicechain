@@ -120,4 +120,4 @@ mutation {
 }
 ```
 
-对于 `MQTT_BASIC`，还要传入 `credentialValue: "<password>"`（只写）。密码完全按提交内容保存，包括前后空格，因此必须与设备提交内容逐字节一致；空值表示不保存密码。密码长度必须至少为 16 字节（最多 4096 字节）；更短的密码会被拒绝，并返回 `extensions.code` 为 `INVALID_VALUE` 的错误，注册凭据和修改密码时均如此。在设置此最小长度之前创建的密码在你修改它之前仍然有效。注册凭据和列出设备凭据都需要 `device:write` 权限，参见[读取凭据需要 `device:write`](#reading-a-credential)。
+对于 `MQTT_BASIC`，还要传入 `credentialValue: "<password>"`（只写）。密码完全按提交内容保存，包括前后空格，因此必须与设备提交内容逐字节一致；空值表示不保存密码。密码长度必须至少为 16 字节（最多 4096 字节）；更短的密码会被拒绝，并返回 `extensions.code` 为 `INVALID_VALUE` 的错误，注册凭据和修改密码时均如此。在设置此最小长度之前创建的密码在你修改它之前仍然有效。将现有凭据改为 `MQTT_BASIC` 时，必须在同一请求中提供 `credentialValue`。注册凭据和列出设备凭据都需要 `device:write` 权限，参见[读取凭据需要 `device:write`](#reading-a-credential)。

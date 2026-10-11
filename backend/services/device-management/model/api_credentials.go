@@ -60,9 +60,13 @@ func buildDeviceCredential(key *credential.DeviceSecretKey, device *Device, requ
 	if err != nil {
 		return nil, err
 	}
-	secretDigest, err := digestSecret(key, device.TenantId, request.CredentialValue, minSecretBytes(request.CredentialType))
-	if err != nil {
-		return nil, err
+	// A type that compares no secret stores none: a value sent with it is dropped, so it
+	// cannot ride along into a later change of type.
+	var secretDigest sql.NullString
+	if credentialRequiresSecret(request.CredentialType) {
+		if secretDigest, err = digestSecret(key, device.TenantId, request.CredentialValue, minSecretBytes(request.CredentialType)); err != nil {
+			return nil, err
+		}
 	}
 	return &DeviceCredential{
 		TokenReference: rdb.TokenReference{
@@ -86,6 +90,11 @@ func buildDeviceCredential(key *credential.DeviceSecretKey, device *Device, requ
 // floor, never the secret.
 var ErrCredentialSecretTooShort = integrity.NewRefusal(integrity.ClassInvalid,
 	fmt.Sprintf("credentialValue must be at least %d bytes for an MQTT_BASIC credential", credential.MinDeviceSecretBytes))
+
+// ErrCredentialSecretRequiredForType refuses a change of a credential's type to MQTT_BASIC
+// that does not set its password in the same request. INVALID_VALUE.
+var ErrCredentialSecretRequiredForType = integrity.NewRefusal(integrity.ClassInvalid,
+	"changing a credential to MQTT_BASIC requires credentialValue in the same request")
 
 // minSecretBytes is the shortest secret a write may set on a credential of ctype: the
 // floor for MQTT_BASIC, the only type that compares a stored secret, and none for the rest.
@@ -223,13 +232,25 @@ func (api *Api) UpdateDeviceCredential(ctx context.Context, token string,
 	}
 	// Absent keeps the stored secret; null or "" clears it; a value replaces it with a
 	// digest of the new secret.
+	//
+	// The secret follows the type. A type that compares none stores none. A change TO
+	// MQTT_BASIC must carry a password in the same request, so no secret chosen under another
+	// type (or none) becomes a password that skipped the minimum length.
 	secretDigest := updated.SecretDigest
-	if request.CredentialValue.Set {
+	switch {
+	case !credentialRequiresSecret(credentialType):
+		secretDigest = sql.NullString{}
+	case !credentialRequiresSecret(updated.CredentialType) &&
+		(!request.CredentialValue.Set || request.CredentialValue.Value == nil || *request.CredentialValue.Value == ""):
+		return nil, ErrCredentialSecretRequiredForType
+	case request.CredentialValue.Set:
 		if secretDigest, err = digestSecret(api.DeviceSecretKey, updated.TenantId, request.CredentialValue.Value, minSecretBytes(credentialType)); err != nil {
 			return nil, err
 		}
-	} else if secretDigest, err = api.adoptLegacySecret(ctx, updated); err != nil {
-		return nil, err
+	default:
+		if secretDigest, err = api.adoptLegacySecret(ctx, updated); err != nil {
+			return nil, err
+		}
 	}
 
 	updated.Metadata = metadataJSON
