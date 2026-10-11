@@ -75,10 +75,10 @@ func TestAWarmCredentialedEventAsksNoKeyValueStoreAndNoDatabase(t *testing.T) {
 		t.Fatalf("seed credential: %v", err)
 	}
 	rez := NewEventResolver(1, rig.capi, config.AuthModeRequired, EventTimePolicy{}, nil, nil, nil, nil, nil, nil)
+	rez.SecretTransit = testSecretTransit(t)
 	event := func() *esmodel.UnresolvedEvent {
 		e := tempEvent("21")
-		ctype, cid := string(model.CredentialMqttBasic), "cred-1"
-		e.CredentialType, e.CredentialId, e.CredentialSecret = &ctype, &cid, &secret
+		presentSealed(t, rig.ctx, e, string(model.CredentialMqttBasic), "cred-1", secret)
 		return e
 	}
 	resolve := func() *model.ResolvedEvent {

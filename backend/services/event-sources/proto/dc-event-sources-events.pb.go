@@ -42,8 +42,12 @@ type PUnresolvedEvent struct {
 	// Credential presented by the connecting device (ADR-014). Used to
 	// authenticate the device at the ingest->resolve boundary; absent when the
 	// transport is trusted or authentication is disabled.
-	CredentialType   *string `protobuf:"bytes,9,opt,name=credential_type,json=credentialType,proto3,oneof" json:"credential_type,omitempty"`
-	CredentialId     *string `protobuf:"bytes,10,opt,name=credential_id,json=credentialId,proto3,oneof" json:"credential_id,omitempty"`
+	CredentialType *string `protobuf:"bytes,9,opt,name=credential_type,json=credentialType,proto3,oneof" json:"credential_type,omitempty"`
+	CredentialId   *string `protobuf:"bytes,10,opt,name=credential_id,json=credentialId,proto3,oneof" json:"credential_id,omitempty"`
+	// The presented secret SEALED for the hop to the resolver (never as the device sent
+	// it: this message is stored for the stream's retention period). A value that is not
+	// a sealed secret for this credential, such as a plaintext from a message written
+	// before sealing, authenticates nothing.
 	CredentialSecret *string `protobuf:"bytes,11,opt,name=credential_secret,json=credentialSecret,proto3,oneof" json:"credential_secret,omitempty"`
 	// Set by an internal ingest source that authenticated the device at the
 	// TRANSPORT (LwM2M DTLS-PSK / Sparkplug broker) upstream, so the device

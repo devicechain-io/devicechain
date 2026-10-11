@@ -24,6 +24,16 @@ func deriveDeviceSecretKey() (*credential.DeviceSecretKey, error) {
 	return credential.DeriveDeviceSecretKey(root)
 }
 
+// deriveSecretTransit derives the key that opens the sealed credential secrets inbound
+// events carry, from the same root key as the device secret key.
+func deriveSecretTransit() (*credential.SecretTransit, error) {
+	root, err := Microservice.InstanceConfiguration.Infrastructure.Secrets.DecodedRootKey()
+	if err != nil {
+		return nil, fmt.Errorf("presented device credential secrets travel sealed under a key derived from the instance root key: %w", err)
+	}
+	return credential.DeriveSecretTransit(root)
+}
+
 // digestStoredCredentialSecrets digests any credential secret still stored as plaintext
 // (schema.DigestPlaintextCredentialSecrets), then reports stored digests this key did not
 // make. It runs on every start, after the migration chain.

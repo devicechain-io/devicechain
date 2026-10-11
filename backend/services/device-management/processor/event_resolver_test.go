@@ -16,6 +16,7 @@ import (
 	dmproto "github.com/devicechain-io/dc-device-management/proto"
 	dmtest "github.com/devicechain-io/dc-device-management/test"
 	esmodel "github.com/devicechain-io/dc-event-sources/model"
+	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/suite"
@@ -93,11 +94,13 @@ func (suite *EventResolverTestSuite) TestCredentialAuthenticates() {
 // This pins the split against a later "unification" of the two.
 func (suite *EventResolverTestSuite) TestPasswordCredentialUsesAuthenticateDeviceNotTheCalloutPath() {
 	suite.API.Mock.On("AuthenticateDevice").Return(deviceWithToken("TEST-123"), nil)
-	ctype, cid, secret := string(dmodel.CredentialMqttBasic), "dev1", "s3cret"
-	event := &esmodel.UnresolvedEvent{Device: "TEST-123", EventType: esmodel.Location,
-		CredentialType: &ctype, CredentialId: &cid, CredentialSecret: &secret}
+	event := &esmodel.UnresolvedEvent{Device: "TEST-123", EventType: esmodel.Location}
+	ctx := core.WithTenant(context.Background(), "acme")
+	presentSealed(suite.T(), ctx, event, string(dmodel.CredentialMqttBasic), "dev1", "s3cret")
+	rez := suite.resolver(config.AuthModeRequired)
+	rez.SecretTransit = testSecretTransit(suite.T())
 
-	device, _, err := suite.resolver(config.AuthModeRequired).resolveDevice(context.Background(), event)
+	device, _, err := rez.resolveDevice(ctx, event)
 
 	assert.NoError(suite.T(), err)
 	assert.Equal(suite.T(), "TEST-123", device.Token)
@@ -740,11 +743,13 @@ func TestPresentedCredential(t *testing.T) {
 	cid := "tok-abc"
 	empty := ""
 
-	assert.Nil(t, presentedCredential(&esmodel.UnresolvedEvent{}))
-	assert.Nil(t, presentedCredential(&esmodel.UnresolvedEvent{CredentialType: &ctype}))
-	assert.Nil(t, presentedCredential(&esmodel.UnresolvedEvent{CredentialType: &ctype, CredentialId: &empty}))
+	rez := &EventResolver{}
+	ctx := context.Background()
+	assert.Nil(t, rez.presentedCredential(ctx, &esmodel.UnresolvedEvent{}))
+	assert.Nil(t, rez.presentedCredential(ctx, &esmodel.UnresolvedEvent{CredentialType: &ctype}))
+	assert.Nil(t, rez.presentedCredential(ctx, &esmodel.UnresolvedEvent{CredentialType: &ctype, CredentialId: &empty}))
 
-	got := presentedCredential(&esmodel.UnresolvedEvent{CredentialType: &ctype, CredentialId: &cid})
+	got := rez.presentedCredential(ctx, &esmodel.UnresolvedEvent{CredentialType: &ctype, CredentialId: &cid})
 	assert.NotNil(t, got)
 	assert.Equal(t, ctype, got.CredentialType)
 	assert.Equal(t, cid, got.CredentialId)

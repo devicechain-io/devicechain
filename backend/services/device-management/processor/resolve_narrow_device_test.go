@@ -61,8 +61,10 @@ func TestAResolvedEventDoesNotDependOnUnreadDeviceColumns(t *testing.T) {
 	rig.caches.Credentials = nil // every event reads the credential: the miss path
 
 	narrow := NewEventResolver(1, rig.capi, config.AuthModeRequired, EventTimePolicy{}, nil, nil, nil, nil, nil, nil)
+	narrow.SecretTransit = testSecretTransit(t)
 	full := NewEventResolver(1, fullDeviceApi{DeviceManagementApi: rig.capi, rig: rig}, config.AuthModeRequired,
 		EventTimePolicy{}, nil, nil, nil, nil, nil, nil)
+	full.SecretTransit = testSecretTransit(t)
 
 	events := map[string]func() *esmodel.UnresolvedEvent{
 		"measurement": func() *esmodel.UnresolvedEvent { return tempEvent("21") },
@@ -73,8 +75,7 @@ func TestAResolvedEventDoesNotDependOnUnreadDeviceColumns(t *testing.T) {
 			var got [2]*model.ResolvedEvent
 			for i, rez := range []*EventResolver{narrow, full} {
 				ev := mk()
-				ctype, cid := string(model.CredentialMqttBasic), "cred-1"
-				ev.CredentialType, ev.CredentialId, ev.CredentialSecret = &ctype, &cid, &secret
+				presentSealed(t, rig.ctx, ev, string(model.CredentialMqttBasic), "cred-1", secret)
 				results, reason, err := rez.ResolveEvent(rig.ctx, ev)
 				if err != nil || reason != 0 || len(results) != 1 {
 					t.Fatalf("resolver %d: %d results, reason %d, err %v", i, len(results), reason, err)
