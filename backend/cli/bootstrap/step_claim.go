@@ -28,6 +28,22 @@ import (
 // producing two different specs on one object, with the loser's values lingering
 // in whichever fields the winner did not set.
 func stepDeclareInstance(ctx context.Context, st *State) error {
+	// 🔴 THE DECLARED STORE IS CARRIED FORWARD WHEN THIS RUN NAMED NO STORE, the way the restore
+	// fact is. A re-run over a live instance (a restore retry, --allow-legacy-db-removal, the
+	// finish of a bootstrap that never completed) builds its declaration from FLAGS, and a
+	// flagless one would resolve the defaults over the instance's real store: no store on a
+	// cluster dcctl was pointed at, a fresh default one on a cluster it created. Either rewrites
+	// what the instance is built on, and a store dropped from the declaration is a volume Helm
+	// would then remove along with every logo and artifact on it.
+	if !st.DryRun && !st.ObjectStoreExplicit {
+		existing, err := readInstanceDeclaration(ctx, st.KubeContext, st.Instance)
+		if err != nil {
+			return err
+		}
+		if existing != nil {
+			st.ObjectStore = existing.Spec.ObjectStore.DeepCopy()
+		}
+	}
 	spec := InstanceSpecFrom(st, st.Binding, st.Provider)
 
 	if st.DryRun {

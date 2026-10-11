@@ -63,11 +63,11 @@ dcctl bootstrap <provider> <instance> [flags]
       --object-store string                         where the instance keeps tenant logos and update artifacts: none, filesystem (a volume the chart creates) or s3. Default: a small filesystem store on a cluster dcctl created, none on one it was pointed at with --kube-context. Fixed configuration, recorded on the instance and kept by 'dcctl upgrade'
       --object-store-access-mode string             filesystem store: ReadWriteOnce (default) or ReadWriteMany, which needs a storage class that supports it and is required when more than one pod shares the store
       --object-store-s3-bucket string               s3 store: the bucket (required with --object-store s3)
-      --object-store-s3-credentials-secret string   s3 store: <namespace>/<name> of an EXISTING Secret with keys AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY, which dcctl copies into the instance's namespace. Never the key itself: no credential is accepted on the command line or written into the instance configuration. Omit to use the pods' own AWS identity (IRSA, an instance profile)
+      --object-store-s3-credentials-secret string   s3 store: <namespace>/<name> of an EXISTING Secret with keys AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY, which dcctl copies into the instance's namespace. Never the key itself: no credential is accepted on the command line or written into the instance configuration. Omit to use the pods' own AWS identity, which exists only on a cloud cluster (refused on a cluster dcctl created)
       --object-store-s3-endpoint string             s3 store: the endpoint of an S3-compatible service such as MinIO (an http:// or https:// URL without credentials)
       --object-store-s3-path-style                  s3 store: address the bucket in the URL path, which MinIO and most S3-compatible services need
       --object-store-s3-region string               s3 store: the AWS region (required unless --object-store-s3-endpoint is set)
-      --object-store-size string                    filesystem store: size of the volume, a Kubernetes quantity (default 1Gi)
+      --object-store-size string                    filesystem store: size of the volume, a Kubernetes quantity (default 5Gi, the chart default)
       --object-store-storage-class string           filesystem store: StorageClass of the volume (default: the cluster's default class)
       --profile string                              configuration profile to apply
       --registry string                             image registry to deploy from (default: published ghcr.io/devicechain-io, or localhost:5000 with --build)

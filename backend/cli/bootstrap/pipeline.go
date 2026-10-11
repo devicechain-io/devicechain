@@ -144,6 +144,10 @@ type State struct {
 	// resolves it from the flags and the provider's default; an upgrade reads it back from
 	// the declaration, which is how it survives a re-run. See objectstore.go.
 	ObjectStore *dcv1beta1.ObjectStoreSpec
+	// ObjectStoreExplicit says an --object-store* flag was given on this run. A run that gave
+	// none and finds an instance already declared KEEPS that instance's store rather than
+	// resolving the flags' defaults over it: see stepDeclareInstance.
+	ObjectStoreExplicit bool
 	// Escrow is the settled root-key plan (ADR-059 / ADR-028): where the key comes
 	// from and where its second copy goes. Resolved in the command layer, BEFORE any
 	// cluster exists, so a missing passphrase or an unopenable restore artifact

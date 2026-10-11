@@ -226,9 +226,11 @@ func helmInstall(ctx context.Context, st *State) error {
 	// The object store's S3 credentials, copied in beside the document. Before the release
 	// for the same reason: the pods project the Secret at container start, and a Secret
 	// that arrives after them is a rollout that waits on it.
-	if err := syncObjectStoreCredentials(ctx, typed, st); err != nil {
+	digest, err := syncObjectStoreCredentials(ctx, typed, st)
+	if err != nil {
 		return err
 	}
+	withObjectStoreCredentialsDigest(vals, digest)
 	if err := writeOwnedSecret(ctx, typed, instanceOwner(st.Instance, st.InstanceUID),
 		instanceConfigSecret(st.Instance, doc), time.Now); err != nil {
 		return err
@@ -403,7 +405,7 @@ func helmValues(st *State) map[string]interface{} {
 	}
 	// The object store: what the services read (infrastructure.blob) here, and what the
 	// chart does about it (the volume, the credentials projection) at the top level below.
-	blobVals, blobStorageVals := objectStoreChartValues(st.ObjectStore, st.Instance)
+	blobVals, blobStorageVals := objectStoreChartValues(st.ObjectStore, st.Instance, DefaultsToFilesystemObjectStore(st.Provider, st.Binding))
 	if blobVals != nil {
 		infraVals["blob"] = blobVals
 	}

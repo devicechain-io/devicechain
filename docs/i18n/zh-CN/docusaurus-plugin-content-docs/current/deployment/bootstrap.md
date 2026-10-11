@@ -344,11 +344,11 @@ dcctl bootstrap local scratch --dev
 
 | 模式 | 效果 |
 |------|------|
-| `--object-store filesystem` | 由 chart 创建的卷，并挂载到使用对象存储的服务。用 `--object-store-size` 设置大小（默认 `1Gi`），用 `--object-store-storage-class` 选择存储类（默认使用集群的默认存储类）；当多个 Pod 需要共享时使用 `--object-store-access-mode ReadWriteMany`（需要支持该模式的存储类）。 |
+| `--object-store filesystem` | 由 chart 创建的卷，并挂载到使用对象存储的服务。用 `--object-store-size` 设置大小（默认 `5Gi`），用 `--object-store-storage-class` 选择存储类（默认使用集群的默认存储类）；当多个 Pod 需要共享时使用 `--object-store-access-mode ReadWriteMany`（需要支持该模式的存储类）。 |
 | `--object-store s3` | AWS S3 或 MinIO 等兼容 S3 的服务上的存储桶。提供 `--object-store-s3-bucket`，以及 `--object-store-s3-region` 或 `--object-store-s3-endpoint`（MinIO 还需 `--object-store-s3-path-style`）。 |
 | `--object-store none` | 不使用对象存储。 |
 
-省略 `--object-store` 时，由 dcctl 自己创建的集群（本地 kind 集群）会得到 `1Gi` 的文件系统存储，因此标志和制品开箱即用。
+省略 `--object-store` 时，由 dcctl 自己创建的集群（本地 kind 集群）会得到 `5Gi` 的文件系统存储，因此标志和制品开箱即用。
 用 `--kube-context` 指向的集群在你做出选择之前不会得到对象存储：是否存在合适存储类的卷、是否更希望使用存储桶，由你决定。
 
 不适用的标志会被拒绝，而不是被忽略。例如 `--object-store filesystem` 搭配存储桶、`s3` 搭配卷大小，或 `none` 搭配任何细节参数，
@@ -362,20 +362,43 @@ dcctl bootstrap local scratch --dev
 kubectl -n storage create secret generic minio-keys \
   --from-literal=AWS_ACCESS_KEY_ID=... --from-literal=AWS_SECRET_ACCESS_KEY=...
 
-dcctl bootstrap local prod --kube-context my-cluster --object-store s3 \
+dcctl bootstrap local prod --object-store s3 \
   --object-store-s3-bucket dc-objects --object-store-s3-endpoint https://minio.example.com:9000 \
   --object-store-s3-path-style --object-store-s3-credentials-secret storage/minio-keys
 ```
 
 取值为 `<namespace>/<name>`。在创建任何资源之前，dcctl 会检查该 Secret 存在且包含这两个密钥，然后只把这两个密钥复制到实例命名空间中
-由 dcctl 拥有的 Secret，服务通过 AWS SDK 常用的环境变量读取。每次 `dcctl upgrade` 都会刷新这份副本，因此轮换密钥的做法是：
-更新你的 Secret，然后运行 `dcctl upgrade`。省略该标志则使用 Pod 自身的 AWS 身份（IRSA 或实例配置文件）。
+由 dcctl 拥有的 Secret，服务通过 AWS SDK 常用的环境变量读取。每个值末尾的单个换行符会被去除（用 `kubectl create secret --from-file`
+写入的密钥会带一个）；其他任何空白或控制字符都会被拒绝。任何拒绝信息都不会打印出值。
+
+轮换密钥时，更新你的 Secret 并运行 `dcctl upgrade`。升级会复制新的值，并在读取它们的 Pod 上标注这些值的摘要，因此即使发布版本没有变化，
+Pod 也会重启并使用新密钥。
+
+为此，dcctl 需要你的 kubeconfig 凭据具备以下权限：对你的 Secret 所在命名空间中 Secret 的 `get`，以及对实例自身命名空间
+（`dci-<instance>`）中 Secret 的 `create` 和 `update`。
+
+在 dcctl 自己创建的集群（本地 kind 集群）上，Pod 没有可回退使用的云身份，因此不带凭据 Secret 的 `--object-store s3` 会被拒绝。
+在云集群上可以省略该标志，改为给 Pod 提供身份：实例配置文件，或通过 chart 的 `serviceAccount.annotations` 设置的 IAM
+服务账号角色注解。dcctl 不会替你设置该注解。
 
 #### 保留对象存储 {#object-store-persistence}
 
 这一选择记录在实例的声明中，因此 `dcctl upgrade` 和另一位运维人员重建的对象存储与实例创建时完全一致。声明中保存的是 Secret 的名称，
-绝不是其内容。把实例在文件系统和 S3 之间切换会被拒绝：没有任何机制会迁移已存储的对象，它们会被留在原处。没有对象存储的实例
-不会在升级时获得对象存储；请销毁后带上该标志重新初始化。
+绝不是其内容。对已存在的实例再次运行 `dcctl bootstrap`（完成中断的初始化、重试恢复）时，如果没有给出任何 `--object-store*` 标志，
+则保留已声明的对象存储，而不是用默认值覆盖它。
+
+dcctl 和 Instance 资源本身都会拒绝那些会使对象存储中的内容失去归属或丢失的更改：移除对象存储、在文件系统和 S3 之间切换、缩小卷、
+更改其存储类或访问模式，以及更改存储桶、端点或区域。允许扩大卷、更改保存凭据的 Secret 以及更改路径样式。
+
+没有对象存储的实例不会在 `dcctl upgrade` 时获得对象存储，因为升级没有对象存储相关标志。要给它一个对象存储，请销毁后带上该标志重新初始化。
+
+在 dcctl 创建的集群上，使用对象存储的 Pod 会被一起调度到同一个节点，因为 `ReadWriteOnce` 卷只能挂载到一个节点。在其他任何集群上，
+如果某个区域组合会让多个 Pod 挂载同一个 `ReadWriteOnce` 对象存储，dcctl 会在创建任何资源之前拒绝；请改用
+`--object-store-access-mode ReadWriteMany` 并搭配支持该模式的存储类，或使用 S3。
+
+chart 会给对象存储的卷加上 `helm.sh/resource-policy: keep`，因此之后对值的更改不会让 Helm 删除已存储的标志和制品。
+`dcctl destroy` 会删除实例的命名空间，卷也随之删除。若要在保留实例的同时有意删除卷，请运行
+`kubectl -n dci-<instance> delete pvc dci-<instance>-blob`。
 
 ## 安装标志 {#install-flags}
 

@@ -42,7 +42,7 @@ func TestResolveObjectStore(t *testing.T) {
 		wantErr string
 	}{
 		{name: "unset on a dcctl-created cluster is a small filesystem store", local: true,
-			want: &dcv1beta1.ObjectStoreSpec{Backend: "filesystem", Size: "1Gi"}},
+			want: &dcv1beta1.ObjectStoreSpec{Backend: "filesystem", Size: "5Gi"}},
 		{name: "unset on a cluster dcctl was pointed at is no store", local: false, want: nil},
 		{name: "none overrides the local default", local: true, flags: ObjectStoreFlags{Mode: "none"}, want: nil},
 		{name: "size alone follows the local default", local: true, flags: ObjectStoreFlags{Size: "3Gi"},
@@ -50,7 +50,7 @@ func TestResolveObjectStore(t *testing.T) {
 		{name: "filesystem with every detail", flags: ObjectStoreFlags{Mode: "filesystem", Size: "2Gi",
 			StorageClass: "fast", AccessMode: "ReadWriteMany"}, want: fsStore()},
 		{name: "filesystem on a remote cluster defaults its size", flags: ObjectStoreFlags{Mode: "filesystem"},
-			want: &dcv1beta1.ObjectStoreSpec{Backend: "filesystem", Size: "1Gi"}},
+			want: &dcv1beta1.ObjectStoreSpec{Backend: "filesystem", Size: "5Gi"}},
 		{name: "s3", flags: ObjectStoreFlags{Mode: "s3", S3Bucket: "dc-objects", S3Region: "eu-west-1",
 			S3Endpoint: "https://minio.example.com:9000", S3PathStyle: true, S3Credentials: "storage/minio-keys"},
 			want: s3Store()},
@@ -71,12 +71,16 @@ func TestResolveObjectStore(t *testing.T) {
 		{name: "bad access mode", flags: ObjectStoreFlags{Mode: "filesystem", AccessMode: "ReadOnlyMany"}, wantErr: "access mode"},
 		{name: "bad storage class", flags: ObjectStoreFlags{Mode: "filesystem", StorageClass: "Not Valid"}, wantErr: "storage class"},
 		{name: "endpoint with credentials in the URL", flags: ObjectStoreFlags{Mode: "s3", S3Bucket: "bucket",
-			S3Endpoint: "https://AKIA:secret@minio.example.com"}, wantErr: "credentials in its URL"},
+			S3Endpoint: "https://ZZUSERINFOZZ:ZZPASSZZ@minio.example.com"}, wantErr: "credentials in its URL"},
 		{name: "endpoint that is not a URL", flags: ObjectStoreFlags{Mode: "s3", S3Bucket: "bucket", S3Endpoint: "minio:9000"}, wantErr: "http:// or https://"},
 		{name: "a key pasted as the credentials reference", flags: ObjectStoreFlags{Mode: "s3", S3Bucket: "bucket",
-			S3Region: "us-east-1", S3Credentials: "AKIAIOSFODNN7EXAMPLE"}, wantErr: "<namespace>/<name>"},
+			S3Region: "us-east-1", S3Credentials: "ZZKEYZZAKIAIOSFODNN7"}, wantErr: "<namespace>/<name>"},
 		{name: "a key=value pasted as the credentials reference", flags: ObjectStoreFlags{Mode: "s3", S3Bucket: "bucket",
-			S3Region: "us-east-1", S3Credentials: "ns/AWS_SECRET_ACCESS_KEY=abc"}, wantErr: "not a valid name"},
+			S3Region: "us-east-1", S3Credentials: "ns/ZZKEYZZ=abc"}, wantErr: "not a valid Kubernetes name"},
+		{name: "endpoint with a query", flags: ObjectStoreFlags{Mode: "s3", S3Bucket: "bucket", S3Endpoint: "https://minio.example.com?X-Amz-Signature=ZZSIGZZ"}, wantErr: "without a query or fragment"},
+		{name: "endpoint with a fragment", flags: ObjectStoreFlags{Mode: "s3", S3Bucket: "bucket", S3Endpoint: "https://minio.example.com#ZZFRAGZZ"}, wantErr: "without a query or fragment"},
+		{name: "s3 on a dcctl-created cluster needs a credentials Secret", local: true,
+			flags: ObjectStoreFlags{Mode: "s3", S3Bucket: "bucket", S3Region: "us-east-1"}, wantErr: "needs --object-store-s3-credentials-secret"},
 		{name: "bucket with uppercase", flags: ObjectStoreFlags{Mode: "s3", S3Bucket: "My_Bucket", S3Region: "us-east-1"}, wantErr: "valid bucket name"},
 	}
 	for _, c := range cases {
@@ -86,8 +90,10 @@ func TestResolveObjectStore(t *testing.T) {
 				if err == nil || !strings.Contains(err.Error(), c.wantErr) {
 					t.Fatalf("err = %v, want one containing %q (got %+v)", err, c.wantErr, got)
 				}
-				if strings.Contains(err.Error(), "secret@") || strings.Contains(err.Error(), "AKIAIOSFODNN7") {
-					t.Errorf("the refusal echoes the value it refused: %v", err)
+				for _, leaked := range []string{"ZZUSERINFOZZ", "ZZPASSZZ", "ZZKEYZZ"} {
+					if strings.Contains(err.Error(), leaked) {
+						t.Errorf("the refusal echoes the value it refused (%s): %v", leaked, err)
+					}
 				}
 				return
 			}
@@ -144,7 +150,7 @@ func TestARerunMayNotMoveAStoreBetweenBackends(t *testing.T) {
 		return dcv1beta1.InstanceSpec{Provider: "local", Cluster: "c", Managed: true, ObjectStore: os}
 	}
 	if err := ValidateInstanceSpecChange(base(fsStore()), base(s3Store())); err == nil ||
-		!strings.Contains(err.Error(), "nothing moves the objects") {
+		!strings.Contains(err.Error(), "Nothing moves the objects") {
 		t.Errorf("filesystem to s3 was allowed: %v", err)
 	}
 	// The counterweights: adding a store, resizing one and keeping one are ordinary.
@@ -188,8 +194,8 @@ func TestTheStoreSurvivesTheDeclarationRoundTrip(t *testing.T) {
 				t.Fatalf("the store did not survive: got %+v, want %+v", upgradeSt.ObjectStore, store)
 			}
 			// ...and what the chart is handed is the same either side of the round trip.
-			b1, s1 := objectStoreChartValues(store, "dc1")
-			b2, s2 := objectStoreChartValues(upgradeSt.ObjectStore, "dc1")
+			b1, s1 := objectStoreChartValues(store, "dc1", false)
+			b2, s2 := objectStoreChartValues(upgradeSt.ObjectStore, "dc1", false)
 			if !reflect.DeepEqual(b1, b2) || !reflect.DeepEqual(s1, s2) {
 				t.Errorf("a re-run renders a different store than the bootstrap did")
 			}
@@ -429,7 +435,7 @@ func TestTheCredentialsAreCopiedIntoTheInstanceNamespaceAsAnOwnedSecret(t *testi
 	if err := precheckObjectStoreWith(t.Context(), c, st); err != nil {
 		t.Fatalf("precheck refused a good Secret: %v", err)
 	}
-	if err := syncObjectStoreCredentials(t.Context(), c, st); err != nil {
+	if _, err := syncObjectStoreCredentials(t.Context(), c, st); err != nil {
 		t.Fatalf("copy: %v", err)
 	}
 	got, err := c.CoreV1().Secrets(InstanceNamespace("acme")).Get(t.Context(), "dci-acme-blob-s3", metav1.GetOptions{})
@@ -455,7 +461,7 @@ func TestTheCredentialsAreCopiedIntoTheInstanceNamespaceAsAnOwnedSecret(t *testi
 	if _, err := c.CoreV1().Secrets("storage").Update(t.Context(), src, metav1.UpdateOptions{}); err != nil {
 		t.Fatal(err)
 	}
-	if err := syncObjectStoreCredentials(t.Context(), c, st); err != nil {
+	if _, err := syncObjectStoreCredentials(t.Context(), c, st); err != nil {
 		t.Fatalf("re-copy: %v", err)
 	}
 	got, _ = c.CoreV1().Secrets(InstanceNamespace("acme")).Get(t.Context(), "dci-acme-blob-s3", metav1.GetOptions{})
@@ -489,7 +495,7 @@ func TestACredentialsSecretThatCannotServeIsRefused(t *testing.T) {
 			if c.secret != nil {
 				client = fake.NewSimpleClientset(c.secret)
 			}
-			err := syncObjectStoreCredentials(t.Context(), client, st)
+			_, err := syncObjectStoreCredentials(t.Context(), client, st)
 			if err == nil || !strings.Contains(err.Error(), c.wantErr) {
 				t.Fatalf("err = %v, want one containing %q", err, c.wantErr)
 			}
@@ -506,7 +512,7 @@ func TestACredentialsSecretThatCannotServeIsRefused(t *testing.T) {
 func TestACredentialsSecretInTheInstanceNamespaceIsRefused(t *testing.T) {
 	store := s3Store()
 	store.S3.CredentialsSecret = &dcv1beta1.SecretReference{Namespace: InstanceNamespace("acme"), Name: "keys"}
-	err := syncObjectStoreCredentials(t.Context(), fake.NewSimpleClientset(),
+	_, err := syncObjectStoreCredentials(t.Context(), fake.NewSimpleClientset(),
 		&State{Instance: "acme", InstanceUID: testUID, ObjectStore: store})
 	if err == nil || !strings.Contains(err.Error(), "own namespace") {
 		t.Errorf("err = %v", err)
@@ -517,7 +523,7 @@ func TestOtherStoresCopyNothing(t *testing.T) {
 	for name, store := range map[string]*dcv1beta1.ObjectStoreSpec{"none": nil, "filesystem": fsStore(),
 		"s3 on pod identity": {Backend: "s3", S3: &dcv1beta1.S3ObjectStoreSpec{Bucket: "bucket", Region: "us-east-1"}}} {
 		c := fake.NewSimpleClientset()
-		if err := syncObjectStoreCredentials(context.Background(), c, &State{Instance: "acme", ObjectStore: store}); err != nil {
+		if _, err := syncObjectStoreCredentials(context.Background(), c, &State{Instance: "acme", ObjectStore: store}); err != nil {
 			t.Errorf("%s: %v", name, err)
 		}
 		if len(c.Actions()) != 0 {

@@ -236,8 +236,7 @@ var bootstrapCmd = &cobra.Command{
 		// judged here -- against the more demanding default, so a misuse is refused before a
 		// cluster is created for it. The default itself is applied once the cluster is
 		// resolved, below.
-		if _, err := bootstrap.ResolveObjectStore(bootstrapObjectStore, false); err != nil &&
-			bootstrapObjectStore.Mode != "" {
+		if err := checkObjectStoreArgv(bootstrapObjectStore); err != nil {
 			return err
 		}
 
@@ -403,6 +402,7 @@ var bootstrapCmd = &cobra.Command{
 			EnabledAreas:         enabledAreas,
 			Lwm2mIdentities:      lwm2mIdentities,
 			ObjectStore:          objectStore,
+			ObjectStoreExplicit:  objectStoreFlagGiven(cmd.Flags().Changed),
 			Escrow:               escrowPlan,
 			Values:               map[string]string{},
 		}
@@ -456,6 +456,35 @@ var bootstrapCmd = &cobra.Command{
 		return runErr
 	},
 	SilenceUsage: true,
+}
+
+// objectStoreFlags are every flag that chooses the object store. A run that gave none of them
+// and finds the instance already declared keeps the declared store.
+var objectStoreFlags = []string{
+	"object-store", "object-store-size", "object-store-storage-class", "object-store-access-mode",
+	"object-store-s3-bucket", "object-store-s3-region", "object-store-s3-endpoint",
+	"object-store-s3-path-style", "object-store-s3-credentials-secret",
+}
+
+// objectStoreFlagGiven says whether any object-store flag was set on this run.
+func objectStoreFlagGiven(changed func(string) bool) bool {
+	for _, f := range objectStoreFlags {
+		if changed(f) {
+			return true
+		}
+	}
+	return false
+}
+
+// checkObjectStoreArgv judges the flag combination from argv alone, before a cluster is
+// created for it. Only an explicit --object-store is judged here: without one the default
+// depends on the cluster, which is not known yet, and is judged once it is.
+func checkObjectStoreArgv(f bootstrap.ObjectStoreFlags) error {
+	if f.Mode == "" {
+		return nil
+	}
+	_, err := bootstrap.ResolveObjectStore(f, false)
+	return err
 }
 
 // followClusterShape settles what this instance takes from the cluster it is built on,
@@ -565,14 +594,14 @@ func init() {
 	bootstrapCmd.Flags().StringVar(&bootstrapLwm2mIdentities, "lwm2m-identities", "", "path to a JSON file of LwM2M DTLS-PSK credentials to provision: [{identity, psk(base64), tenant, externalId, deviceTypeToken, autoRegister}]. Renders the PSKs into a chart-owned Secret and binds each to lwm2m-ingest; implies --enable-area lwm2m-ingest. Validated up front (short PSK / missing tenancy fails before any cluster). Re-running bootstrap WITHOUT this flag removes the provisioned credentials")
 
 	bootstrapCmd.Flags().StringVar(&bootstrapObjectStore.Mode, "object-store", "", "where the instance keeps tenant logos and update artifacts: none, filesystem (a volume the chart creates) or s3. Default: a small filesystem store on a cluster dcctl created, none on one it was pointed at with --kube-context. Fixed configuration, recorded on the instance and kept by 'dcctl upgrade'")
-	bootstrapCmd.Flags().StringVar(&bootstrapObjectStore.Size, "object-store-size", "", "filesystem store: size of the volume, a Kubernetes quantity (default 1Gi)")
+	bootstrapCmd.Flags().StringVar(&bootstrapObjectStore.Size, "object-store-size", "", "filesystem store: size of the volume, a Kubernetes quantity (default 5Gi, the chart default)")
 	bootstrapCmd.Flags().StringVar(&bootstrapObjectStore.StorageClass, "object-store-storage-class", "", "filesystem store: StorageClass of the volume (default: the cluster's default class)")
 	bootstrapCmd.Flags().StringVar(&bootstrapObjectStore.AccessMode, "object-store-access-mode", "", "filesystem store: ReadWriteOnce (default) or ReadWriteMany, which needs a storage class that supports it and is required when more than one pod shares the store")
 	bootstrapCmd.Flags().StringVar(&bootstrapObjectStore.S3Bucket, "object-store-s3-bucket", "", "s3 store: the bucket (required with --object-store s3)")
 	bootstrapCmd.Flags().StringVar(&bootstrapObjectStore.S3Region, "object-store-s3-region", "", "s3 store: the AWS region (required unless --object-store-s3-endpoint is set)")
 	bootstrapCmd.Flags().StringVar(&bootstrapObjectStore.S3Endpoint, "object-store-s3-endpoint", "", "s3 store: the endpoint of an S3-compatible service such as MinIO (an http:// or https:// URL without credentials)")
 	bootstrapCmd.Flags().BoolVar(&bootstrapObjectStore.S3PathStyle, "object-store-s3-path-style", false, "s3 store: address the bucket in the URL path, which MinIO and most S3-compatible services need")
-	bootstrapCmd.Flags().StringVar(&bootstrapObjectStore.S3Credentials, "object-store-s3-credentials-secret", "", "s3 store: <namespace>/<name> of an EXISTING Secret with keys AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY, which dcctl copies into the instance's namespace. Never the key itself: no credential is accepted on the command line or written into the instance configuration. Omit to use the pods' own AWS identity (IRSA, an instance profile)")
+	bootstrapCmd.Flags().StringVar(&bootstrapObjectStore.S3Credentials, "object-store-s3-credentials-secret", "", "s3 store: <namespace>/<name> of an EXISTING Secret with keys AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY, which dcctl copies into the instance's namespace. Never the key itself: no credential is accepted on the command line or written into the instance configuration. Omit to use the pods' own AWS identity, which exists only on a cloud cluster (refused on a cluster dcctl created)")
 	bootstrapCmd.Flags().StringVar(&bootstrapEscrowFile, "escrow-file", "", "where to write the encrypted root-key escrow artifact (default ~/.devicechain/escrow/<instance>-rootkey.escrow). Refuses a path inside ~/.devicechain/instances/<instance>, which 'dcctl destroy' deletes")
 	bootstrapCmd.Flags().StringVar(&bootstrapEscrowPassFile, "escrow-passphrase-file", "", "read the escrow passphrase from this file instead of $"+bootstrap.EscrowPassphraseEnv+" or an interactive prompt (trailing newline stripped)")
 	bootstrapCmd.Flags().BoolVar(&bootstrapNoEscrow, "no-escrow", false, "do NOT escrow the secret-store root key. The key then exists only inside the cluster: losing the cluster makes every stored secret permanently unreadable, even from a database backup, because no DeviceChain backup contains etcd. For throwaway instances only; implied by --dev")
