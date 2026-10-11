@@ -489,6 +489,16 @@
       "type": "object",
       "description": "Kubernetes volume wiring for the filesystem object store (instance.config.infrastructure.blob.backend set to filesystem). Creates and mounts the PVC that backs instance.config.infrastructure.blob.directory, which today holds branding logos. Enabling persistence with the s3 backend fails the render.",
       "properties": {
+        "s3": {
+          "type": "object",
+          "properties": {
+            "credentialsSecret": {
+              "type": "string",
+              "description": "Name of a Secret in the instance namespace holding AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY, projected into the environment of every area in mountAreas for the s3 backend. Empty leaves the AWS credential chain to the pod's own identity (IRSA, an instance profile)."
+            }
+          },
+          "description": "Credentials for the s3 object store."
+        },
         "persistence": {
           "type": "object",
           "properties": {

@@ -665,6 +665,14 @@ metrics:
 # object store "not configured" — branding-logo upload/read return 503 and Tier-0 inline/
 # URL logos still work — a safe default rather than a silent per-pod ephemeral store.
 blobStorage:
+  # Credentials for the s3 backend (instance.config.infrastructure.blob.backend: s3). The
+  # access key is never part of the instance configuration: name a Secret in the instance
+  # namespace holding AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY and the chart projects it
+  # into the environment of every area in mountAreas, where the AWS SDK's own credential
+  # chain finds it. Leave empty when the pods carry their own AWS identity (IRSA, an
+  # instance profile). dcctl sets this to a Secret it copies from the one you name.
+  s3:
+    credentialsSecret: ""
   persistence:
     # Create a PersistentVolumeClaim for the filesystem store and mount it into the
     # consuming areas. Requires backend: filesystem and a resolved mount path (below).

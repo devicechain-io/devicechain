@@ -266,6 +266,20 @@ spec:
             {{- with get $areaCfg "extraEnv" }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
+            {{/* The s3 object store's credentials, projected from the Secret named by
+            blobStorage.s3.credentialsSecret into the areas that use the store. Read from
+            the values and not from the instance document: under instance.existingSecret
+            the chart cannot see the document, and the backend is not what is being asked. */}}
+            {{- $blobS3Secret := (($root.Values.blobStorage | default dict).s3 | default dict).credentialsSecret | default "" }}
+            {{- if and $blobS3Secret (has $area $blobMountAreas) }}
+            {{- range $key := list "AWS_ACCESS_KEY_ID" "AWS_SECRET_ACCESS_KEY" }}
+            - name: {{ $key }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $blobS3Secret | quote }}
+                  key: {{ $key }}
+            {{- end }}
+            {{- end }}
           ports:
             - name: graphql
               containerPort: {{ $root.Values.service.port }}

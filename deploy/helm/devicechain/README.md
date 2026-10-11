@@ -312,6 +312,12 @@ exports later) go to a pluggable object store, configured under
   first, or set `blobStorage.persistence.annotations: {helm.sh/resource-policy: keep}` to
   retain the claim.
 
+  For the `s3` backend the access key is never an instance-config value. Name a Secret in
+  the instance namespace holding `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` in
+  `blobStorage.s3.credentialsSecret` and the chart projects it into the environment of the
+  areas in `blobStorage.mountAreas`; leave it empty to use the pods' own AWS identity (IRSA,
+  an instance profile). `dcctl bootstrap --object-store s3` sets all of this for you.
+
 ## Zero-downtime upgrades
 
 `helm upgrade` rolls forward without dropping traffic. Each Deployment uses a
@@ -573,6 +579,8 @@ generated from the schema; do not edit it by hand.
 | `frontend.replicas` | integer | `1` | Replica count for the console Deployment. |
 | `frontend.resources` | object | see values.yaml | Container resources for the console, a small static nginx image. |
 | `blobStorage` | object | - | Kubernetes volume wiring for the filesystem object store (instance.config.infrastructure.blob.backend set to filesystem). Creates and mounts the PVC that backs instance.config.infrastructure.blob.directory, which today holds branding logos. Enabling persistence with the s3 backend fails the render. |
+| `blobStorage.s3` | object | - | Credentials for the s3 object store. |
+| `blobStorage.s3.credentialsSecret` | string | `""` | Name of a Secret in the instance namespace holding AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY, projected into the environment of every area in mountAreas for the s3 backend. Empty leaves the AWS credential chain to the pod's own identity (IRSA, an instance profile). |
 | `blobStorage.persistence` | object | - | The PersistentVolumeClaim that backs the filesystem object store. |
 | `blobStorage.persistence.enabled` | boolean | `false` | Create a PersistentVolumeClaim for the filesystem store and mount it into the consuming areas. Requires the filesystem backend and a resolved mount path. |
 | `blobStorage.persistence.existingClaim` | string | `""` | Name of a pre-created PVC to use instead of having the chart create one (for example an RWX claim provisioned elsewhere). When set, size, accessModes and storageClass are ignored and no PVC is rendered, but the volume is still mounted into mountAreas. |
