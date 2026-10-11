@@ -62,12 +62,29 @@ var (
 // The zero value is the full local-cluster check, which is what `dcctl preflight`
 // with no flags diagnoses.
 type doctorOpts struct {
-	// KubeContext is the --kube-context the run targets. Empty means dcctl brings
+	// KubeContext is the --kube-context the run was given. Empty means dcctl brings
 	// its own kind cluster.
 	KubeContext string
+	// Target is the context the run will actually act on: KubeContext, or the kind
+	// cluster's context when none was given. Build it with doctorOptsFor.
+	Target string
 	// Build is --build: images are built from source into a local registry.
 	Build bool
 }
+
+// doctorOptsFor is the ONE mapping from a run's flags to what the doctor checks, shared
+// by install, bootstrap and preflight so they cannot disagree about the target.
+func doctorOptsFor(kubeContext, cluster string, build bool) doctorOpts {
+	target := kubeContext
+	if target == "" {
+		target = bootstrap.KindContext(cluster)
+	}
+	return doctorOpts{KubeContext: kubeContext, Target: target, Build: build}
+}
+
+// hostsKind reports whether dcctl creates or reuses a kind cluster on this host, which
+// is what the kind-node kernel limits (inotify) exist for.
+func (o doctorOpts) hostsKind() bool { return o.KubeContext == "" }
 
 // needsDocker reports whether the run touches a local Docker daemon: a kind
 // cluster is containers on it, and --build builds and pushes through it. An
@@ -228,6 +245,9 @@ func (d *doctor) checkKubeContexts(selected string) {
 	names, current, err := bootstrap.KubeContexts()
 	if err != nil {
 		d.warn("unable to load kube contexts", err.Error())
+		if selected != "" {
+			d.fail("--kube-context "+selected+" could not be checked", "fix the kubeconfig error above")
+		}
 		return
 	}
 	if current != "" {
@@ -237,7 +257,6 @@ func (d *doctor) checkKubeContexts(selected string) {
 	}
 	if len(names) == 0 {
 		d.warn("no contexts found in kubeconfig", "create a local cluster (kind create cluster --config deploy/local/kind-cluster.yaml) or add a context")
-		return
 	}
 	for _, name := range names {
 		d.info("- " + name)
@@ -379,6 +398,12 @@ func (d *doctor) summary() {
 // callers (the preflight command and bootstrap) can decide whether to proceed.
 // provider tightens provider-specific checks ("local" requires kind +
 // cloud-provider-kind); an empty provider uses the generic checks.
+// Seams for the host-dependent checks, so a test can see whether they ran.
+var (
+	systemCheck = checkSystem
+	portsCheck  = (*doctor).checkPorts
+)
+
 func runDoctor(provider string, opts doctorOpts) *doctor {
 	d := &doctor{}
 	d.checkTools(provider, opts)
@@ -386,11 +411,13 @@ func runDoctor(provider string, opts doctorOpts) *doctor {
 	if opts.needsDocker() {
 		// The kernel limits, docker data-root headroom and local ports are all
 		// about hosting a kind cluster; none applies to a remote one.
-		checkSystem(d, dockerRoot) // platform-specific (cgroup/inotify/disk/WSL)
-		d.checkPorts()
+		systemCheck(d, dockerRoot, opts.hostsKind()) // platform-specific (cgroup/inotify/disk/WSL)
+		if opts.hostsKind() {
+			portsCheck(d)
+		}
 	}
 	d.checkKubeContexts(opts.KubeContext)
-	d.checkKubeServerVersion(opts.KubeContext)
+	d.checkKubeServerVersion(opts.Target)
 	d.summary()
 	return d
 }
@@ -407,7 +434,7 @@ These are the prerequisites for standing a cluster up, not for building an insta
 		if len(args) > 0 {
 			provider = args[0]
 		}
-		d := runDoctor(provider, doctorOpts{})
+		d := runDoctor(provider, doctorOptsFor(preflightKubeContext, preflightCluster, preflightBuild))
 		if d.fails > 0 {
 			return fmt.Errorf("%d preflight check(s) failed", d.fails)
 		}
@@ -417,6 +444,15 @@ These are the prerequisites for standing a cluster up, not for building an insta
 	SilenceErrors: true,
 }
 
+var (
+	preflightKubeContext string
+	preflightCluster     string
+	preflightBuild       bool
+)
+
 func init() {
+	preflightCmd.Flags().StringVar(&preflightKubeContext, "kube-context", "", "check for installing into this existing cluster instead of a local kind cluster")
+	preflightCmd.Flags().StringVar(&preflightCluster, "cluster", bootstrap.DefaultClusterName, "local provider: the kind cluster the run would create or use")
+	preflightCmd.Flags().BoolVar(&preflightBuild, "build", false, "check for building images from source (needs Docker even on an existing cluster)")
 	rootCmd.AddCommand(preflightCmd)
 }

@@ -250,3 +250,12 @@ func (localProvider) ClusterExists(ctx context.Context, binding ClusterBinding) 
 	}
 	return false, nil
 }
+
+// KindContext is the kube context of the kind cluster named cluster, the one a run with no
+// --kube-context targets ("" meaning the default cluster name, as EnsureCluster reads it).
+func KindContext(cluster string) string {
+	if cluster == "" {
+		cluster = DefaultClusterName
+	}
+	return kindContext(cluster)
+}
