@@ -301,7 +301,7 @@ type Query {
     """
     # Get device states for one or more devices by device token.
     deviceStatesByDeviceToken(
-        """Tokens of the devices."""
+        """Tokens of the devices. More than 1000 is refused with LIMIT_EXCEEDED."""
         deviceTokens: [String!]!
     ): [DeviceState!]!
     """
@@ -310,7 +310,10 @@ type Query {
     """
     # Get device states for one or more devices by their (denormalized) external id.
     deviceStatesByExternalId(
-        """External ids of the devices, as reported in DeviceState.externalId."""
+        """
+        External ids of the devices, as reported in DeviceState.externalId. More than 1000 is
+        refused with LIMIT_EXCEEDED.
+        """
         externalIds: [String!]!
     ): [DeviceState!]!
     """
@@ -393,7 +396,7 @@ type Query {
     # that has never been located is absent from the result rather than present with
     # null coordinates. Requires location:read.
     latestLocations(
-        """Tokens of the devices."""
+        """Tokens of the devices. More than 1000 is refused with LIMIT_EXCEEDED."""
         deviceTokens: [String!]!
     ): [LatestLocation!]!
 }
@@ -506,7 +509,8 @@ type Mutation {
         """
         Optional narrowing within the source. Omit or null to demote the whole source; a
         non-empty list restricts to those devices (a token belonging to another source is not
-        found, never demoted); an empty list demotes nothing.
+        found, never demoted); an empty list demotes nothing; more than 1000 is refused with
+        LIMIT_EXCEEDED.
         """
         deviceTokens: [String!]
         """

@@ -36,16 +36,19 @@ export type CommandBatchCreateRequest = {
    * published version. Naming a version without a group, or for a static group, is refused.
    */
   groupVersion?: number | null | undefined;
-  /** Free-form metadata as a JSON document serialized to a string. Must be valid JSON. Optional. */
+  /**
+   * Free-form metadata as a JSON document serialized to a string. Must be valid JSON. At most
+   * 65536 bytes (METADATA_TOO_LARGE). Optional.
+   */
   metadata?: string | null | undefined;
   /**
    * Name of the command every targeted device receives, as defined in each device's command
-   * vocabulary.
+   * vocabulary. At most 128 bytes, or the request is refused with COMMAND_NAME_TOO_LONG.
    */
   name: string;
   /**
    * The payload every device receives, as a JSON document serialized to a string. Must be valid
-   * JSON. Optional.
+   * JSON. At most 65536 bytes (PAYLOAD_TOO_LARGE). Optional.
    */
   payload?: string | null | undefined;
   /**
@@ -84,16 +87,21 @@ export type CommandCreateRequest = {
    * the platform's default time-to-live applies.
    */
   expiresAt?: string | null | undefined;
-  /** Free-form metadata as a JSON document serialized to a string. Must be valid JSON. Optional. */
+  /**
+   * Free-form metadata as a JSON document serialized to a string. Must be valid JSON. At most
+   * 65536 bytes (METADATA_TOO_LARGE). Optional.
+   */
   metadata?: string | null | undefined;
   /**
    * Name of the command, which must exist in the command vocabulary of the device's profile;
-   * otherwise the request is refused with COMMAND_NOT_IN_VOCABULARY.
+   * otherwise the request is refused with COMMAND_NOT_IN_VOCABULARY. At most 128 bytes, or the
+   * request is refused with COMMAND_NAME_TOO_LONG.
    */
   name: string;
   /**
    * The command's arguments as a JSON document serialized to a string. Must be valid JSON and,
-   * when the command definition declares a schema, conform to it. Optional.
+   * when the command definition declares a schema, conform to it. At most 65536 bytes
+   * (PAYLOAD_TOO_LARGE). Optional.
    */
   payload?: string | null | undefined;
   /**

@@ -168,12 +168,14 @@ input CommandCreateRequest {
     deviceToken: String!
     """
     Name of the command, which must exist in the command vocabulary of the device's profile;
-    otherwise the request is refused with COMMAND_NOT_IN_VOCABULARY.
+    otherwise the request is refused with COMMAND_NOT_IN_VOCABULARY. At most 128 bytes, or the
+    request is refused with COMMAND_NAME_TOO_LONG.
     """
     name: String!
     """
     The command's arguments as a JSON document serialized to a string. Must be valid JSON and,
-    when the command definition declares a schema, conform to it. Optional.
+    when the command definition declares a schema, conform to it. At most 65536 bytes
+    (PAYLOAD_TOO_LARGE). Optional.
     """
     payload: String
     """
@@ -182,7 +184,8 @@ input CommandCreateRequest {
     """
     expiresAt: String
     """
-    Free-form metadata as a JSON document serialized to a string. Must be valid JSON. Optional.
+    Free-form metadata as a JSON document serialized to a string. Must be valid JSON. At most
+    65536 bytes (METADATA_TOO_LARGE). Optional.
     """
     metadata: String
 }
@@ -201,7 +204,8 @@ the platform.
 type CommandEnqueueRejection {
     """
     Stable, machine-readable classification: PAYLOAD_NOT_JSON, METADATA_NOT_JSON,
-    EXPIRES_AT_INVALID, HELD_CEILING_EXCEEDED, TOKEN_IN_USE, DEVICE_NOT_FOUND,
+    COMMAND_NAME_TOO_LONG, PAYLOAD_TOO_LARGE, METADATA_TOO_LARGE, EXPIRES_AT_INVALID,
+    HELD_CEILING_EXCEEDED, TOKEN_IN_USE, DEVICE_NOT_FOUND,
     COMMAND_NOT_IN_VOCABULARY, PAYLOAD_SCHEMA_VIOLATION, or COMMAND_REJECTED when a refusal
     arrived without a classification.
 
@@ -487,13 +491,13 @@ input CommandBatchCreateRequest {
     token: String!
     """
     Name of the command every targeted device receives, as defined in each device's command
-    vocabulary.
+    vocabulary. At most 128 bytes, or the request is refused with COMMAND_NAME_TOO_LONG.
     """
     # The command key every targeted device receives, and the payload it carries.
     name: String!
     """
     The payload every device receives, as a JSON document serialized to a string. Must be valid
-    JSON. Optional.
+    JSON. At most 65536 bytes (PAYLOAD_TOO_LARGE). Optional.
     """
     payload: String
     """
@@ -502,7 +506,8 @@ input CommandBatchCreateRequest {
     """
     expiresAt: String
     """
-    Free-form metadata as a JSON document serialized to a string. Must be valid JSON. Optional.
+    Free-form metadata as a JSON document serialized to a string. Must be valid JSON. At most
+    65536 bytes (METADATA_TOO_LARGE). Optional.
     """
     metadata: String
     """
@@ -555,8 +560,8 @@ type CommandBatchRejection {
     Stable, machine-readable classification: BATCH_TARGET_AMBIGUOUS, BATCH_TOO_LARGE,
     BATCH_GROUP_UNUSABLE (the group does not exist, collects something other than devices, was
     never published, or the named version does not exist or was named for a static group),
-    PAYLOAD_NOT_JSON, METADATA_NOT_JSON, EXPIRES_AT_INVALID, BATCH_PARTIAL_REFUSED or
-    HELD_CEILING_EXCEEDED.
+    PAYLOAD_NOT_JSON, METADATA_NOT_JSON, COMMAND_NAME_TOO_LONG, PAYLOAD_TOO_LARGE,
+    METADATA_TOO_LARGE, EXPIRES_AT_INVALID, BATCH_PARTIAL_REFUSED or HELD_CEILING_EXCEEDED.
 
     Branch on this, never on reason. The list is open: treat an unrecognized code as a refusal
     you cannot classify. HELD_CEILING_EXCEEDED is temporary; the others will be refused again if
@@ -728,7 +733,7 @@ type Query {
     """
     # Find commands by unique id.
     commandsById(
-        """Numeric ids of the commands, as strings."""
+        """Numeric ids of the commands, as strings. More than 1000 is refused with LIMIT_EXCEEDED."""
         ids: [String!]!
     ): [Command!]!
     """
@@ -737,7 +742,7 @@ type Query {
     """
     # Find commands by unique token.
     commandsByToken(
-        """Tokens of the commands."""
+        """Tokens of the commands. More than 1000 is refused with LIMIT_EXCEEDED."""
         tokens: [String!]!
     ): [Command!]!
     """Searches the tenant's commands, newest first, one page at a time. Requires command:read."""
@@ -753,7 +758,7 @@ type Query {
     """
     # Find command batches by unique id.
     commandBatchesById(
-        """Numeric ids of the batches, as strings."""
+        """Numeric ids of the batches, as strings. More than 1000 is refused with LIMIT_EXCEEDED."""
         ids: [String!]!
     ): [CommandBatch!]!
     """
@@ -763,7 +768,7 @@ type Query {
     """
     # Find command batches by unique token.
     commandBatchesByToken(
-        """Tokens of the batches."""
+        """Tokens of the batches. More than 1000 is refused with LIMIT_EXCEEDED."""
         tokens: [String!]!
     ): [CommandBatch!]!
     """
