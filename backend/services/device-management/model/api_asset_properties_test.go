@@ -167,7 +167,7 @@ func TestPublishAssetTypeFreezesTheDraft(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	versions, err := api.AssetTypeVersions(ctx, "pump")
+	versions, err := api.AssetTypeVersions(ctx, "pump", nil)
 	require.NoError(t, err)
 	require.Len(t, versions, 1)
 	require.JSONEq(t, `[{"name":"vendor","dataType":"STRING"}]`, string(versions[0].PropertySchema),
@@ -190,7 +190,7 @@ func TestPublishAssetTypeRefusesATypeWithNoDraft(t *testing.T) {
 	_, err := api.PublishAssetType(ctx, "pump", nil, nil, "alice")
 	require.Error(t, err)
 
-	versions, err := api.AssetTypeVersions(ctx, "pump")
+	versions, err := api.AssetTypeVersions(ctx, "pump", nil)
 	require.NoError(t, err)
 	require.Empty(t, versions)
 }
@@ -226,7 +226,7 @@ func TestPublishAssetTypeAppendsMonotonicVersions(t *testing.T) {
 	require.NoError(t, err)
 	require.EqualValues(t, 2, v2.Version)
 
-	versions, err := api.AssetTypeVersions(ctx, "pump")
+	versions, err := api.AssetTypeVersions(ctx, "pump", nil)
 	require.NoError(t, err)
 	require.Len(t, versions, 2)
 	require.EqualValues(t, 2, versions[0].Version, "versions list newest first")
@@ -259,7 +259,7 @@ func TestRollbackAssetTypeRepointsWithoutDestroying(t *testing.T) {
 	require.JSONEq(t, `[{"name":"psi","dataType":"INT"}]`, string(*rolled.PropertySchema))
 
 	// Both versions still exist, so it rolls forward again.
-	versions, err := api.AssetTypeVersions(ctx, "pump")
+	versions, err := api.AssetTypeVersions(ctx, "pump", nil)
 	require.NoError(t, err)
 	require.Len(t, versions, 2)
 
@@ -670,7 +670,7 @@ func TestDeleteAssetTypeStillRefusesWhileAssetsReferenceIt(t *testing.T) {
 	require.Error(t, err)
 	require.True(t, errors.Is(err, ErrEntityInUse))
 
-	versions, err := api.AssetTypeVersions(ctx, "pump")
+	versions, err := api.AssetTypeVersions(ctx, "pump", nil)
 	require.NoError(t, err)
 	require.Len(t, versions, 1, "a refused delete must not have removed the history")
 }

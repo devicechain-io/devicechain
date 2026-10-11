@@ -6,19 +6,22 @@ package graphql
 import (
 	"context"
 
+	"github.com/devicechain-io/dc-device-management/model"
 	"github.com/devicechain-io/dc-microservice/auth"
 )
 
 // EntityGroupVersions lists a dynamic entity group's published versions, newest
 // first (ADR-062 S1).
 func (r *SchemaResolver) EntityGroupVersions(ctx context.Context, args struct {
-	Token string
+	Token  string
+	Limit  *int32
+	Offset *int32
 }) ([]*EntityGroupVersionResolver, error) {
 	if err := auth.Authorize(ctx, auth.DeviceRead); err != nil {
 		return nil, err
 	}
 	api := r.GetApi(ctx)
-	versions, err := api.EntityGroupVersions(ctx, args.Token)
+	versions, err := api.EntityGroupVersions(ctx, args.Token, &model.VersionListArgs{Limit: args.Limit, Offset: args.Offset})
 	if err != nil {
 		return nil, err
 	}

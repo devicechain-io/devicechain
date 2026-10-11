@@ -622,13 +622,20 @@ token 会拼入基础设施命名空间：租户 ID 成为 NATS subject 中按 `
 ### 列表、输入和聚合的大小限制 {#size-bounds}
 
 除上述请求形态限制外，部分读取和输入还有大小限制。超出限制的请求会被拒绝，`extensions.code`
-为 `LIMIT_EXCEEDED`。不会截断，也不会部分应用，请缩小请求后重新发送。
+为 `LIMIT_EXCEEDED`。不会截断，也不会部分应用，请缩小请求后重新发送。大小按字节而非字符计算。
 
 | 限制 | 数值 | 适用于 |
 | --- | --- | --- |
+| 属性键 | 128 B | `setEntityAttribute` 的 `attrKey`。 |
+| 属性值 | 64 KiB | `setEntityAttribute` 的 `value`，无论声明的类型是什么。 |
+| 规则定义 | 256 KiB | 检测规则的 `definition`，创建和更新时均适用。 |
+| 规则编排图 | 256 KiB | 检测规则的 `authoringGraph`，创建和更新时均适用。 |
+| 版本历史 | 每次调用 1,000 条 | `deviceProfileVersions`、`entityGroupVersions`、`assetTypeVersions`：最新的在前。用 `limit`（至少为 1）缩小范围，用 `offset`（不为负）翻页；超出此范围的值会被拒绝，`extensions.code` 为 `INVALID_VALUE`。 |
 | 每次聚合的时间桶数 | 10,000 | `bucketedMeasurements`：时间范围除以 `intervalSeconds`，向上取整。 |
 
 `bucketedMeasurements` 还要求提供 `startTime`；`endTime` 默认为当前时间。
+
+命令键受令牌语法限制为 128 字节，这也是可入队的最长命令名称。
 
 ### 仅接受 GraphQL 语法 {#graphql-syntax-only}
 

@@ -28,6 +28,15 @@ import (
 // validates both the type and the entity's existence (ADR-012).
 func (api *Api) SetEntityAttribute(ctx context.Context,
 	request *EntityAttributeSetRequest) (*EntityAttribute, error) {
+	// Cap the free-form fields before anything else is done with them.
+	if err := checkBytes("attribute key", request.AttrKey, MaxAttributeKeyBytes); err != nil {
+		return nil, err
+	}
+	if request.Value != nil {
+		if err := checkBytes("attribute value", *request.Value, MaxAttributeValueBytes); err != nil {
+			return nil, err
+		}
+	}
 	// Validate the scope and value-type vocabularies.
 	if !AttributeScope(request.Scope).Valid() {
 		return nil, fmt.Errorf("invalid attribute scope: %s", request.Scope)

@@ -37,6 +37,9 @@ func validateDetectionRuleDefinition(definition string) error {
 	if definition == "" {
 		return fmt.Errorf("a detection rule definition is required")
 	}
+	if err := checkBytes("detection rule definition", definition, MaxDetectionRuleBytes); err != nil {
+		return err
+	}
 	if !json.Valid([]byte(definition)) {
 		return fmt.Errorf("detection rule definition is not valid JSON")
 	}
@@ -61,6 +64,9 @@ func validateDetectionRuleDefinition(definition string) error {
 func validateAuthoringGraph(graph *string) error {
 	if graph == nil {
 		return nil
+	}
+	if err := checkBytes("detection rule authoring graph", *graph, MaxDetectionRuleBytes); err != nil {
+		return err
 	}
 	if !json.Valid([]byte(*graph)) {
 		return fmt.Errorf("detection rule authoring graph is not valid JSON")
