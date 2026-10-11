@@ -58,6 +58,16 @@ func (c *capturedDeliveries) all() []MaxDelivery {
 func recorderRig(t *testing.T, srv *natsserver.Server, area string,
 	build func(*NatsManager) (MaxDeliveryFunc, error), suffixes ...string) (*NatsManager, []MessageReader) {
 	t.Helper()
+	return recorderRigWith(t, srv, area, build, nil, suffixes...)
+}
+
+// recorderRigWith is recorderRig with a hook run after Initialize and before Start: the one
+// window in which a test may swap the manager's JetStream context without racing the stream
+// sampler that Start launches.
+func recorderRigWith(t *testing.T, srv *natsserver.Server, area string,
+	build func(*NatsManager) (MaxDeliveryFunc, error), beforeStart func(*NatsManager),
+	suffixes ...string) (*NatsManager, []MessageReader) {
+	t.Helper()
 	var readers []MessageReader
 	nmgr := NewNatsManager(testMicroservice(t, srv, area), core.NewNoOpLifecycleCallbacks(),
 		func(n *NatsManager) error {
@@ -76,6 +86,9 @@ func recorderRig(t *testing.T, srv *natsserver.Server, area string,
 	ctx := context.Background()
 	require.NoError(t, nmgr.Initialize(ctx))
 	nmgr.SetAckWaitForTesting(t, time.Second)
+	if beforeStart != nil {
+		beforeStart(nmgr)
+	}
 	require.NoError(t, nmgr.Start(ctx))
 	t.Cleanup(func() {
 		stopCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)

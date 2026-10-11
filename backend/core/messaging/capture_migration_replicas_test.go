@@ -30,6 +30,14 @@ import (
 // find it there.
 func replicaManager(t *testing.T, srv *natsserver.Server, area string, preload int) (*NatsManager, MessageReader) {
 	t.Helper()
+	return replicaManagerWith(t, srv, area, preload, nil)
+}
+
+// replicaManagerWith is replicaManager with a hook run after Initialize and before Start, the
+// window in which a test may swap the JetStream context without racing the stream sampler.
+func replicaManagerWith(t *testing.T, srv *natsserver.Server, area string, preload int,
+	beforeStart func(*NatsManager)) (*NatsManager, MessageReader) {
+	t.Helper()
 	var reader MessageReader
 	nmgr := NewNatsManager(testMicroservice(t, srv, area), core.NewNoOpLifecycleCallbacks(),
 		func(n *NatsManager) error {
@@ -51,6 +59,9 @@ func replicaManager(t *testing.T, srv *natsserver.Server, area string, preload i
 		}
 	}
 	nmgr.SetAckWaitForTesting(t, time.Second)
+	if beforeStart != nil {
+		beforeStart(nmgr)
+	}
 	require.NoError(t, nmgr.Start(ctx))
 	t.Cleanup(func() {
 		stopCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -190,12 +201,17 @@ func (f *flakyJS) SecureDeleteMsg(name string, seq uint64, opts ...nats.JSOpt) e
 // and the devices publishing into the gap are being lost.
 func TestTheCreateAfterTheDeleteIsRetried(t *testing.T) {
 	srv := startEmbeddedServer(t)
-	nmgr, reader := replicaManager(t, srv, uniqueArea("retry-add"), 1)
+	// The JetStream context is swapped before Start: after it, the stream sampler Start launches
+	// reads nmgr.js concurrently. The failures are armed afterwards (atomically), so nothing Start
+	// does can spend them.
+	var flaky *flakyJS
+	nmgr, reader := replicaManagerWith(t, srv, uniqueArea("retry-add"), 1, func(n *NatsManager) {
+		flaky = &flakyJS{JetStreamContext: n.js}
+		n.js = flaky
+		n.retentionAddBackoff = 10 * time.Millisecond
+	})
 	consumeCaptured(t, reader)
-	flaky := &flakyJS{JetStreamContext: nmgr.js}
 	flaky.failAdds.Store(3)
-	nmgr.js = flaky
-	nmgr.retentionAddBackoff = 10 * time.Millisecond
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -264,10 +280,13 @@ func TestADeletedTenantGiveUpIsRemovedFromAWorkQueue(t *testing.T) {
 func TestAFailedRemovalLeavesTheAdvisoryUnacked(t *testing.T) {
 	srv := startEmbeddedServer(t)
 	rec := &capturedDeliveries{}
-	nmgr, readers := recorderRig(t, srv, uniqueArea("delete-fails"), rec.build, captureSuffix)
-	flaky := &flakyJS{JetStreamContext: nmgr.js}
+	// Swapped before Start, for the reason given in TestTheCreateAfterTheDeleteIsRetried.
+	var flaky *flakyJS
+	nmgr, readers := recorderRigWith(t, srv, uniqueArea("delete-fails"), rec.build, func(n *NatsManager) {
+		flaky = &flakyJS{JetStreamContext: n.js}
+		n.js = flaky
+	}, captureSuffix)
 	flaky.failDeletes.Store(true)
-	nmgr.js = flaky
 	seq := publishCaptured(t, flaky, `{"n":1}`)
 	for i := 1; i <= MaxDeliver; i++ {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
