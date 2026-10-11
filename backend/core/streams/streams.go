@@ -250,6 +250,13 @@ type Stream struct {
 	// flag in the same change; TestDormantStreamsArePinned names the set so that cannot
 	// be forgotten.
 	Dormant bool
+	// PlatformAuthored declares that every message on this stream is written by the
+	// platform itself, never by a device. Only such a stream's dead letters keep their
+	// payload verbatim; a stream that does not declare it - including one added later and
+	// forgotten here - has its payload redacted of credential material before it is kept
+	// (core/deadletter, core/payloadredact). The default is the safe side: forgetting the
+	// flag costs a less detailed letter, never a kept credential.
+	PlatformAuthored bool
 	// DeadLetterKind is the kind (core/deadletter's vocabulary) of a dead letter written
 	// about a message consumed from this stream — by an in-handler arm or by the
 	// platform's max-delivery recorder, which is why it is declared once, here, rather
@@ -631,7 +638,7 @@ var All = []Stream{
 	// which its durable's backlog does not show exactly (see BackpressureReaders). That
 	// backlog is still warned on (the chart's JetStreamDurableUnreadNearFull), as an upper
 	// bound: the checkpoint is never behind what the durable has acknowledged.
-	{Suffix: ResolvedEvents, Areas: []string{"device-management", "device-state", "event-management", "event-processing"}, Tier: Hot, DeadLetterKind: kindEvent,
+	{Suffix: ResolvedEvents, PlatformAuthored: true, Areas: []string{"device-management", "device-state", "event-management", "event-processing"}, Tier: Hot, DeadLetterKind: kindEvent,
 		ReplayCovered:       []string{"event-processing"},
 		BackpressureReaders: []string{"event-management"},
 		Why:                 "every ingested event after resolution; device-management produces it, every other area listed is a durable reader"},
@@ -651,7 +658,7 @@ var All = []Stream{
 	// charges it again, and connector-dispatch's own window covers only REACT's redelivery span,
 	// so a replay older than this one reaches the connectors service again. Collapsing it then
 	// is the destination's job, on the forwarded idempotency key.
-	{Suffix: DerivedEvents, Areas: []string{"event-processing"}, Tier: Hot, DuplicateWindowSeconds: 1800,
+	{Suffix: DerivedEvents, PlatformAuthored: true, Areas: []string{"event-processing"}, Tier: Hot, DuplicateWindowSeconds: 1800,
 		DeadLetterKind: kindDetectionAction, Why: "DETECT output — scales with rule firings against device traffic"},
 
 	// Emitted post-commit when a numeric platform-set attribute (ADR-012 scope
@@ -661,14 +668,14 @@ var All = []Stream{
 	// that never reaches the stream is repaired by event-processing's reconcile
 	// against device-management (at every DETECT term start and every five
 	// minutes), not by replay.
-	{Suffix: DeviceAttribute, Areas: []string{"device-management", "event-processing"}, Tier: Hot, DeadLetterKind: kindControlFact, Why: "attribute set/delete per device — scales with fleet size"},
+	{Suffix: DeviceAttribute, PlatformAuthored: true, Areas: []string{"device-management", "event-processing"}, Tier: Hot, DeadLetterKind: kindControlFact, Why: "attribute set/delete per device — scales with fleet size"},
 
 	// PER-DEVICE: the concrete subject carries the target device's token as a
 	// final segment so the broker grant can confine a device to its own commands.
 	// event-sources also has to recognize this suffix — to tell command traffic
 	// from device telemetry — which is the case that first motivated centralizing
 	// these names: a second literal is how the two drift apart.
-	{Suffix: DeviceCommands, Areas: []string{"command-delivery", "lwm2m-ingest"}, Tier: Hot, Shape: ShapeTenantDevice, DeadLetterKind: kindCommand, Why: "outbound commands — scale with fleet size"},
+	{Suffix: DeviceCommands, PlatformAuthored: true, Areas: []string{"command-delivery", "lwm2m-ingest"}, Tier: Hot, Shape: ShapeTenantDevice, DeadLetterKind: kindCommand, Why: "outbound commands — scale with fleet size"},
 
 	// PER-DEVICE, PLATFORM -> DEVICE: the desired-state downlink (configuration revisions,
 	// and later update assignments). Like DeviceCommands, the concrete subject ends in the
@@ -681,7 +688,7 @@ var All = []Stream{
 	// Limits retention, a week of history and the Cold tier's byte ceiling, evicting the
 	// oldest, so an unread channel cannot grow without limit. Cold because volume follows
 	// state CHANGES, not telemetry samples.
-	{Suffix: DeviceDesired, Areas: []string{"device-management"}, Tier: Cold, Shape: ShapeTenantDevice, DeadLetterKind: kindControlFact, Dormant: true,
+	{Suffix: DeviceDesired, PlatformAuthored: true, Areas: []string{"device-management"}, Tier: Cold, Shape: ShapeTenantDevice, DeadLetterKind: kindControlFact, Dormant: true,
 		Why: "desired-state downlink per device - one message per state change"},
 
 	// PER-DEVICE, DEVICE -> PLATFORM: progress and status reports. The device token in the
@@ -758,7 +765,7 @@ var All = []Stream{
 	// replay: derived-events' own window collapses those before REACT sees them. Past it the
 	// connectors service runs the request again, and the forwarded idempotency key is the
 	// destination's to honour.
-	{Suffix: ConnectorDispatch, Areas: []string{"event-processing", "outbound-connectors"}, Tier: Hot, DuplicateWindowSeconds: RedeliveryDuplicateWindowSeconds,
+	{Suffix: ConnectorDispatch, PlatformAuthored: true, Areas: []string{"event-processing", "outbound-connectors"}, Tier: Hot, DuplicateWindowSeconds: RedeliveryDuplicateWindowSeconds,
 		DeadLetterKind: kindConnectorDispatch, VerbatimCopy: ConnectorDispatchDead, Why: "REACT outbound dispatch — scales with rule firings"},
 
 	// ---- Control plane (Cold): volume cannot scale with device count ----
@@ -769,7 +776,7 @@ var All = []Stream{
 	// projection, and a fact that never reaches the stream is repaired by
 	// event-processing's reconcile against device-management (at every DETECT term
 	// start and every five minutes), not by replay.
-	{Suffix: DetectionRulesPublished, Areas: []string{"device-management", "event-processing"}, Tier: Cold, DeadLetterKind: kindControlFact, Why: "a rule publish — a human authoring action"},
+	{Suffix: DetectionRulesPublished, PlatformAuthored: true, Areas: []string{"device-management", "event-processing"}, Tier: Cold, DeadLetterKind: kindControlFact, Why: "a rule publish — a human authoring action"},
 
 	// Emitted post-commit when a device is created or re-typed, naming the device
 	// and the stable profile token its type adopts, so DETECT can arm absence for
@@ -778,7 +785,7 @@ var All = []Stream{
 	// durable projection, and a fact that never reaches the stream is repaired by
 	// event-processing's reconcile against device-management (at every DETECT term
 	// start and every five minutes), not by replay.
-	{Suffix: DeviceRoster, Areas: []string{"device-management", "event-processing"}, Tier: Cold, DeadLetterKind: kindControlFact, Why: "roster projection updates"},
+	{Suffix: DeviceRoster, PlatformAuthored: true, Areas: []string{"device-management", "event-processing"}, Tier: Cold, DeadLetterKind: kindControlFact, Why: "roster projection updates"},
 
 	// Emitted post-commit whenever a geofence change mints a new fence-set version, naming that
 	// version's fences and the content address of each one's geometry so event-processing's live
@@ -792,17 +799,17 @@ var All = []Stream{
 	// a second copy of its own. A fact that never reaches the stream is recovered by that startup
 	// reconcile, not by replay. Its size depends on the fence COUNT and on nothing the fences
 	// contain, so no fence set can outgrow one message.
-	{Suffix: GeoFenceSetManifest, Areas: []string{"device-management", "event-processing"}, Tier: Cold, DeadLetterKind: kindControlFact, Why: "a fence edit — a human authoring action"},
+	{Suffix: GeoFenceSetManifest, PlatformAuthored: true, Areas: []string{"device-management", "event-processing"}, Tier: Cold, DeadLetterKind: kindControlFact, Why: "a fence edit — a human authoring action"},
 
 	// ADR-044. Emitted when an edge entity (device, customer, area, asset, and
 	// their groups) is deleted, so cross-service reference holders — such as
 	// event-management's event_anchors — can reconcile dangling references.
 	// At-least-once and idempotent.
-	{Suffix: EntityDeleted, Areas: []string{"device-management", "event-management", "event-processing"}, Tier: Cold, DeadLetterKind: kindControlFact, Why: "entity lifecycle fan-out"},
+	{Suffix: EntityDeleted, PlatformAuthored: true, Areas: []string{"device-management", "event-management", "event-processing"}, Tier: Cold, DeadLetterKind: kindControlFact, Why: "entity lifecycle fan-out"},
 
 	// ADR-041, re-emitted on each alarm transition. The substrate for graphql-ws
 	// subscriptions (ADR-037) and for notifications (ADR-017).
-	{Suffix: AlarmEvents, Areas: []string{"device-management", "notification-management"}, Tier: Cold, DeadLetterKind: kindNotification, Why: "alarm state changes, not raw telemetry"},
+	{Suffix: AlarmEvents, PlatformAuthored: true, Areas: []string{"device-management", "notification-management"}, Tier: Cold, DeadLetterKind: kindNotification, Why: "alarm state changes, not raw telemetry"},
 
 	// ADR-051 5c / ADR-054, carrying a JSON RaiseAlarmRequest. AT-LEAST-once, and
 	// safe as such: ApplyAlarmContributorEdge (ADR-057) is an idempotent
@@ -814,11 +821,11 @@ var All = []Stream{
 	// REACT re-publishes each alarm edge on every delivery of the derived event, under an
 	// edge-scoped token as the dedup id, and the window covers that redelivery span. The fold
 	// would absorb the repeat anyway; the window means device-management does not have to.
-	{Suffix: RaiseAlarm, Areas: []string{"device-management", "event-processing"}, Tier: Cold,
+	{Suffix: RaiseAlarm, PlatformAuthored: true, Areas: []string{"device-management", "event-processing"}, Tier: Cold,
 		DuplicateWindowSeconds: RedeliveryDuplicateWindowSeconds, DeadLetterKind: kindDetectionAction, Why: "REACT alarm requests"},
 
 	{Suffix: FailedDecode, Areas: []string{"event-sources"}, Tier: Cold, DeadLetterKind: NotLettered, Why: "error path — near zero in steady state; see the spike caveat below"},
-	{Suffix: FailedEvents, Areas: []string{"device-management", "event-management"}, Tier: Cold, DeadLetterKind: NotLettered, Why: "error path — near zero in steady state; see the spike caveat below"},
+	{Suffix: FailedEvents, PlatformAuthored: true, Areas: []string{"device-management", "event-management"}, Tier: Cold, DeadLetterKind: NotLettered, Why: "error path — near zero in steady state; see the spike caveat below"},
 	// The dedup window is what lets the connectors service's own arm and the platform's
 	// max-delivery recorder both write the verbatim copy of one give-up and store it
 	// ONCE: both carry the same id, derived from the original's stream position.
@@ -942,6 +949,30 @@ func MaxBytesCapFor(suffix string) int64 {
 // RetentionLimits, but nothing creates a stream for one (see IsDeclared).
 func RetentionFor(suffix string) Retention {
 	return bySuffix[suffix].Retention
+}
+
+// PlatformAuthoredFor reports whether suffix's stream is declared platform-authored. A
+// suffix this package does not declare is not: the caller redacts.
+func PlatformAuthoredFor(suffix string) bool {
+	return bySuffix[suffix].PlatformAuthored
+}
+
+// KindPlatformAuthored reports whether every stream declaring dead-letter kind is
+// platform-authored (and at least one does). It answers for a letter written with no origin
+// stream, where the kind is all that is known; a kind shared with any device-authored
+// stream is not.
+func KindPlatformAuthored(kind string) bool {
+	found := false
+	for _, st := range All {
+		if st.DeadLetterKind != kind {
+			continue
+		}
+		if !st.PlatformAuthored {
+			return false
+		}
+		found = true
+	}
+	return found
 }
 
 // DeadLetterKindFor returns the dead-letter kind declared for a message consumed from

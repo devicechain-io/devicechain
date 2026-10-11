@@ -23,6 +23,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/governance"
 	gqlcore "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/messaging"
+	"github.com/devicechain-io/dc-microservice/payloadredact"
 	"github.com/devicechain-io/dc-microservice/svcclient"
 	"github.com/prometheus/client_golang/prometheus"
 )
@@ -812,10 +813,12 @@ func onEventDecodeFailed(source string, tenant string, raw []byte, err error) er
 	}
 	ctx := core.WithTenant(context.Background(), tenant)
 
-	// Create and deliver message.
+	// Create and deliver message. The body is kept for diagnosis, so it is kept WITHOUT the
+	// credential the device presented: this is the one funnel every transport's refusal
+	// passes through, so redacting here covers MQTT, HTTP and the capture-stream source alike.
 	msg := messaging.Message{
 		Key:   []byte(source),
-		Value: raw,
+		Value: payloadredact.Redact(raw, failedDecodeMaxBytes),
 	}
 	senderr := FailedDecodeWriter.WriteMessages(ctx, msg)
 	FailedDecodeWriter.HandleResponse(senderr)
@@ -1046,3 +1049,6 @@ func beforeMicroserviceTerminated(ctx context.Context) error {
 
 	return nil
 }
+
+// failedDecodeMaxBytes bounds the (redacted) body kept on the failed-decode stream.
+const failedDecodeMaxBytes = payloadredact.DiagnosticMaxBytes

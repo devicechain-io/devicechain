@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"strings"
 	"testing"
 
 	"github.com/devicechain-io/dc-command-delivery/model"
@@ -328,8 +329,12 @@ func TestAnUndecodableResponseIsDeadLetteredAndNotApplied(t *testing.T) {
 	if err != nil {
 		t.Fatalf("the written letter does not read back: %v", err)
 	}
-	if e.Reason != deadletter.ReasonUnprocessable || e.Reference != "pump-1" || string(e.Payload) != `{"commandToken":` {
-		t.Fatalf("letter = %+v; want reason unprocessable, the responding device, and the body", e)
+	if e.Reason != deadletter.ReasonUnprocessable || e.Reference != "pump-1" {
+		t.Fatalf("letter = %+v; want reason unprocessable and the responding device", e)
+	}
+	// A body that is not JSON is kept as a description (length and digest), not as sent.
+	if p := string(e.Payload); strings.Contains(p, "commandToken") || !strings.Contains(p, `"bytes":16`) {
+		t.Fatalf("payload = %s; want the length and digest of the 16-byte body, not the body", p)
 	}
 	if d := dead.tenants[0]; d != "acme" {
 		t.Fatalf("filed under tenant %q, want acme", d)
