@@ -108,11 +108,10 @@ type Api struct {
 	lockTenant func(ctx context.Context, tx *gorm.DB) error
 }
 
-// heldBytesPredicate selects the artifacts that count against a tenant's ceiling: those
+// The held-bytes predicate in CreateArtifact selects the artifacts that count against a tenant's ceiling: those
 // that hold, or are about to hold, bytes. A retired artifact that never received content
 // holds none, so retiring an abandoned declaration gives its quota back; a retired
 // artifact whose bytes are stored still counts, because they still are.
-const heldBytesPredicate = "state <> 'RETIRED' OR blob_ref IS NOT NULL"
 
 // lockTenantArtifacts takes pg_advisory_xact_lock keyed on the tenant, as the other
 // services do for their per-tenant admission checks.
@@ -282,7 +281,7 @@ func (api *Api) CreateArtifact(ctx context.Context, req *ArtifactCreateRequest) 
 			return err
 		}
 		var held int64
-		if err := tx.Model(&Artifact{}).Where(heldBytesPredicate).
+		if err := tx.Model(&Artifact{}).Where("state <> 'RETIRED' OR blob_ref IS NOT NULL").
 			Select("CAST(COALESCE(SUM(size_bytes), 0) AS BIGINT)").Scan(&held).Error; err != nil {
 			return err
 		}

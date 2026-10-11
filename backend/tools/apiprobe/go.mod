@@ -16,6 +16,7 @@ replace github.com/graph-gophers/graphql-go => github.com/devicechain-io/graphql
 require (
 	github.com/devicechain-io/dc-microservice v0.0.0-00010101000000-000000000000
 	github.com/graph-gophers/graphql-go v1.10.2
+	github.com/stretchr/testify v1.12.1
 	gorm.io/driver/postgres v1.6.3
 	gorm.io/gorm v1.31.2
 )
@@ -49,6 +50,7 @@ require (
 	github.com/prometheus/common v0.70.1 // indirect
 	github.com/prometheus/procfs v0.21.1 // indirect
 	github.com/rs/zerolog v1.35.1 // indirect
+	go.yaml.in/yaml/v3 v3.0.5 // indirect
 	golang.org/x/crypto v0.57.0 // indirect
 	golang.org/x/net v0.58.0 // indirect
 	golang.org/x/sync v0.23.0 // indirect
