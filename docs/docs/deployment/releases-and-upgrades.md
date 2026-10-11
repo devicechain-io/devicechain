@@ -3681,6 +3681,17 @@ kept alongside:
   serves fail until it is replaced. Both end when the rollout finishes; avoid changing tenants or
   tiers until it has.
 
+#### Deleting a tenant now erases everything stored under its object-store prefix {#next-upgrade-object-prefix-erase}
+
+Erasing a deleted tenant used to remove only the objects that a user-management row named. It now
+also removes every object under that tenant's prefix in the object store, whichever service stored
+it, so update artifacts and any object whose reference was lost are erased with the tenant.
+
+- **On the S3 backend, the credential now needs `s3:ListBucket` on the bucket**, in addition to
+  `s3:GetObject`, `s3:PutObject` and `s3:DeleteObject`. Without it the object step of a tenant
+  erasure fails and is retried on every pass, so the erasure does not complete. Grant it before
+  you upgrade. The filesystem backend needs nothing.
+
 ### v0.19.0 — sized from measurement at 6,000 events a second; a full stream refuses {#v0190-upgrade}
 
 `v0.19.0` is an in-place upgrade from `v0.18.0`: `dcctl install` for the cluster, then `dcctl

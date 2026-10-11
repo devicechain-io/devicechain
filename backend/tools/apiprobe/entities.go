@@ -1060,6 +1060,39 @@ var entities = []entity{
 		},
 	},
 
+	// ---- update-management -------------------------------------------------
+	{
+		// Depends on: device-profile (the artifact declares which profiles it may be
+		// assigned to, and the service refuses a token device-management does not know).
+		//
+		// 🔴 Also a nullable single read. The row is the DECLARATION only: no bytes are
+		// uploaded, because the content endpoint is an HTTP PUT this table cannot drive
+		// and the claim here is that the catalogue row survives an upgrade. state is
+		// therefore UPLOADING, and stays so, which makes it comparable across the seed
+		// and the verify. sizeBytes and digest are the fields an upgrade must not
+		// re-render: the digest is stored as text for exactly that reason.
+		Name:     "artifact",
+		Area:     "update-management",
+		Mutation: "createArtifact",
+		Input:    "ArtifactCreateRequest!",
+		Read:     "artifact",
+		Single:   true,
+		Fields:   "token kind name version component sizeBytes digest mediaType compatibleProfiles trustStatus state",
+		Vars: func(s *state) map[string]any {
+			return map[string]any{"req": map[string]any{
+				"token":              s.tok("artifact"),
+				"kind":               "FIRMWARE",
+				"name":               "apiprobe artifact",
+				"version":            "1.0.0",
+				"component":          "firmware",
+				"sizeBytes":          "1024",
+				"digest":             "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+				"mediaType":          "application/octet-stream",
+				"compatibleProfiles": []string{s.tokens["profile"]},
+			}}
+		},
+	},
+
 	// ---- notification-management -------------------------------------------
 	{
 		Name:     "notification-channel",
@@ -1232,7 +1265,7 @@ func otherWrites() int {
 	return len(seen)
 }
 
-const tenantCreateMutations = 26
+const tenantCreateMutations = 27
 
 // tenantPublishMutations is the same claim for publishes, measured the same way by
 // TestThePublishDenominatorMatchesTheSchemas. Separate from the count above because

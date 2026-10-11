@@ -1029,6 +1029,54 @@ wait_for_api() {
   done
 }
 
+# The functional areas the rig installs and waits on: the ones the coverage table writes
+# to, THAT THE BASELINE RELEASE ALSO SHIPS.
+#
+# 🔴 THE TABLE IS BUILT FROM THE WORKING TREE, THE INSTALL IS THE BASELINE'S. An area added
+# after the baseline was cut (update-management, once its artifact catalogue gained an
+# entity) is one the baseline's dcctl does not know, so asking it to enable that area is a
+# refusal that reads as a broken rig rather than as "this release predates the area". The
+# seed already skips the entities the baseline cannot express (--baseline-schemas); this is
+# the same rule applied to the install, keyed the same way - on whether the extracted
+# baseline tree has the service at all. It stops filtering by itself the day a release that
+# ships the area becomes the baseline, which is when the entity starts being exercised.
+rig_areas() {
+  local area
+  while read -r area; do
+    [[ -n "$area" ]] || continue
+    if [[ -d "$baseline_src/backend/services/$area" ]]; then
+      echo "$area"
+    else
+      note "skipping $area: $baseline_tag does not ship it, so there is nothing to seed there and nothing to carry over" >&2
+    fi
+  done < <("$apiprobe" areas)
+}
+
+# set_deployed_areas sets deployed_areas to rig_areas as the comma list apiprobe's --deployed-areas takes.
+# (A variable, not a command substitution: a fail inside $(...) would only end the subshell and
+# hand apiprobe an EMPTY list, which it reads as "every area".)
+#
+# 🔴 WHY THE PROBE IS TOLD, INSTEAD OF THE RIG ENABLING THE MISSING AREA. The instance was
+# installed by the baseline's dcctl, and nothing an operator types can add the area
+# afterwards: `dcctl upgrade` has no area or object-store flag (cmd/upgrade.go), the area
+# set is the one bootstrap recorded, and dcctl never writes a blob directory or volume into
+# the instance (bootstrap/composeconfig.go: the document carries the chart's default, "no
+# directory, hence no store"). Editing the release's values or its config Secret by hand
+# would be the rig doing something no operator does, and the next `dcctl upgrade` would
+# undo it. So the areas the instance really runs are stated, apiprobe skips the rest BY
+# NAME in the seed, the read sweep and the table sweep, and the table sweep fails if the
+# database holds a table of an area declared undeployed. Coverage of the artifact table
+# begins with the first baseline that ships the area.
+set_deployed_areas() {
+  local csv="" area
+  while read -r area; do
+    [[ -n "$area" ]] || continue
+    csv+="${csv:+,}$area"
+  done < <(rig_areas)
+  [[ -n "$csv" ]] || fail "no probe area is shipped by $baseline_tag, so there is nothing to probe"
+  deployed_areas="$csv"
+}
+
 wait_for_every_api() {
   local area waited=0
   say "waiting for the instance API to route"
@@ -1037,7 +1085,7 @@ wait_for_every_api() {
     [[ -n "$area" ]] || continue
     wait_for_api "$area"
     waited=$((waited + 1))
-  done < <("$apiprobe" areas)
+  done < <(rig_areas)
   # An empty list would make this wait for user-management alone and return — a
   # wait that looks like it covered the instance and covered one service. The
   # areas come from a subprocess, and a subprocess that dies produces no lines
@@ -1075,7 +1123,7 @@ cmd_up() {
   while read -r area; do
     [[ -n "$area" ]] || continue
     area_args+=(--enable-area "$area")
-  done < <("$apiprobe" areas)
+  done < <(rig_areas)
   [[ ${#area_args[@]} -gt 0 ]] || fail "apiprobe named no functional areas; the seed would have nothing to write to"
 
   pin_baseline_charts
@@ -1849,8 +1897,9 @@ Read apiprobe's output above, and note that the code says which KIND of defect:
 # half is the half that was complete and still missed this.
 
 run_readsweep() {
-  local rc=0
-  "$apiprobe" readsweep --receipt "$receipt" --schemas "$repo_root/backend/services" \
+  local rc=0 deployed_areas
+  set_deployed_areas
+  "$apiprobe" readsweep --deployed-areas "$deployed_areas" --receipt "$receipt" --schemas "$repo_root/backend/services" \
     --server "$api_server" --scheme "$api_scheme" || rc=$?
   return "$rc"
 }
@@ -1975,6 +2024,8 @@ stop_forward() {
 }
 
 cmd_tablesweep() {
+  local deployed_areas
+  set_deployed_areas
   need_all
   build_apiprobe
   load_exit_codes
@@ -1988,7 +2039,7 @@ cmd_tablesweep() {
   local admin_pw
   admin_pw="$(superuser_password)" || fail "could not settle the superuser password the baseline seeded (see above)"
   DC_ADMIN_PASSWORD="$admin_pw" "$apiprobe" seed --instance "$instance" --receipt "$sweep_receipt" \
-    --tenant "$sweep_tenant" \
+    --tenant "$sweep_tenant" --deployed-areas "$deployed_areas" \
     --server "$api_server" --scheme "$api_scheme" ||
     fail "the UPGRADED release could not create one of every entity (apiprobe exit $?).
 This is a finding about the release, not about the upgrade: verify and the read sweep
@@ -2025,7 +2076,7 @@ failed is a CREATE, on an instance that is running the code under test."
     rc=0
     PGPASSWORD="$pg_pw" "$apiprobe" tablesweep \
       --dsn "postgres://${user}@127.0.0.1:${port}/${rdb_db}?sslmode=disable" \
-      --tenant "$sweep_tenant" || rc=$?
+      --tenant "$sweep_tenant" --deployed-areas "$deployed_areas" || rc=$?
     [[ $rc -eq $APIPROBE_EXIT_COVERAGE && $SECONDS -lt $deadline ]] || break
     note "not every table holds a row yet; asking again in 10s (event-processing's projections are written asynchronously)"
     sleep 10
