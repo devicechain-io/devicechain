@@ -94,7 +94,7 @@ check() {
 }
 
 self_test() {
-  local tmp rc
+  local tmp
   tmp="$(mktemp -d)"
   trap 'rm -rf "$tmp"' RETURN
   mkdir -p "$tmp/deploy/helm/devicechain/templates" "$tmp/hack" \
