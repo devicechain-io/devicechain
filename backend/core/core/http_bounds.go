@@ -10,6 +10,8 @@ import (
 	"net/http"
 	"sync"
 	"time"
+
+	"github.com/devicechain-io/dc-microservice/config"
 )
 
 const (
@@ -22,7 +24,11 @@ const (
 	// DefaultRequestExecTimeout bounds one request's execution: the request context
 	// ends at this deadline, and the database driver cancels a statement in flight
 	// with it. Every handler wrapped today finishes in well under a second.
-	DefaultRequestExecTimeout = 60 * time.Second
+	//
+	// It is derived from config.RequestEdgeTimeout, the one definition of the request
+	// edge (the same one the GraphQL execution default derives from), so the two
+	// cannot drift apart.
+	DefaultRequestExecTimeout = config.RequestEdgeTimeout
 	// BodyBufferBudget is the most request-body memory BufferBody holds at once, across
 	// every handler in the process. Each request reserves its whole ceiling (not what
 	// it turns out to send) before reading a byte, and a request that does not fit is
