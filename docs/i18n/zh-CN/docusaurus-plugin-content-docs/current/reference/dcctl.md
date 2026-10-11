@@ -561,7 +561,10 @@ dcctl preflight [provider] [flags]
 ### Options
 
 ```
-  -h, --help   help for preflight
+      --build                 check for building images from source (needs Docker even on an existing cluster)
+      --cluster string        local provider: the kind cluster the run would create or use (default "devicechain")
+  -h, --help                  help for preflight
+      --kube-context string   check for installing into this existing cluster instead of a local kind cluster
 ```
 
 ### SEE ALSO
