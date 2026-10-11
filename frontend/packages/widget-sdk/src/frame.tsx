@@ -7,27 +7,8 @@
 
 import { type CSSProperties, type ReactNode } from 'react';
 
-import { useWidgetSubject } from '@devicechain/widget-sdk';
-
+import { useWidgetSubject } from './context';
 import { css } from './theme';
-
-// The ambient host contexts live in @devicechain/widget-sdk — the one place they may be
-// defined (see its context module) — and are re-exported here so every import site keeps
-// resolving.
-export {
-  WidgetCandidatesProvider,
-  WidgetSelectProvider,
-  WidgetSubjectProvider,
-  WidgetThemeRootProvider,
-  WidgetTimeZoneProvider,
-  useWidgetCandidates,
-  useWidgetSelect,
-  useWidgetSubject,
-  useWidgetThemeRoot,
-  useWidgetTimeZone,
-  type WidgetCandidates,
-  type WidgetSelect,
-} from '@devicechain/widget-sdk';
 
 export interface WidgetFrameProps {
   title?: string;

@@ -29,15 +29,17 @@ import { useMemo, type ComponentType, type ReactNode } from 'react';
 
 import { alarmSubscription, commandSubscription, measurementWindow } from './binding-policy';
 import { defaultWidgetRegistry } from './default-registry';
-import { WidgetFrame, useWidgetCandidates, useWidgetSelect } from './frame';
 import {
+  optString,
   useAlarmStream,
   useCommandStream,
   useDatasourceAvailability,
   useLocationStream,
   useMeasurementStream,
-} from './hooks';
-import { optString } from './widget';
+  useWidgetCandidates,
+  useWidgetSelect,
+  WidgetFrame,
+} from '@devicechain/widget-sdk';
 import { WidgetContainment, useReportRejection } from './widget-containment';
 import { narrowActions, narrowCandidates, narrowSelect } from './widget-host';
 

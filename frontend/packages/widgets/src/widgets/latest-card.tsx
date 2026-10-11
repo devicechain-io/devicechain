@@ -3,19 +3,25 @@
 
 // latest-card — the current value of one measurement, big and legible.
 
-import { flashTextStyle, useFlashOnChange } from '../flash';
-import { formatTimestamp, formatValue } from '../format';
-import { WidgetFrame, useWidgetTimeZone } from '../frame';
-import { useElementSize } from '../hooks';
-import { css } from '../theme';
 import {
+  css,
+  defineWidget,
+  flashTextStyle,
+  formatTimestamp,
+  formatValue,
   optBoolean,
   optNumber,
   optString,
   pickSample,
   primaryMeasurementName,
+  useElementSize,
+  useFlashOnChange,
+  useWidgetTimeZone,
+  WidgetFrame,
   type WidgetProps,
-} from '../widget';
+} from '@devicechain/widget-sdk';
+
+import { builtinWidgetDescriptors } from '../builtin-descriptors';
 
 const clamp = (v: number, lo: number, hi: number): number => Math.max(lo, Math.min(hi, v));
 
@@ -80,3 +86,10 @@ export function LatestCard({ widget, data }: WidgetProps) {
     </WidgetFrame>
   );
 }
+
+// The registration: this widget's portable descriptor paired with its component, declared
+// through the same public `defineWidget` a third-party package uses.
+export const latestCardWidget = defineWidget({
+  descriptor: builtinWidgetDescriptors['latest-card'],
+  implementation: { kind: 'trusted-react', component: LatestCard },
+});

@@ -6,13 +6,19 @@
 
 import type { CSSProperties } from 'react';
 
-import { WidgetFrame } from '../frame';
-import { css } from '../theme';
-import { optString, type WidgetProps } from '../widget';
+import {
+  css,
+  defineWidget,
+  optString,
+  WidgetFrame,
+  type WidgetProps,
+} from '@devicechain/widget-sdk';
+
+import { builtinWidgetDescriptors } from '../builtin-descriptors';
 
 const FITS = new Set(['contain', 'cover', 'fill']);
 
-export function Image({ widget }: WidgetProps) {
+export function Image({ widget }: WidgetProps<null>) {
   const url = optString(widget.options, 'url');
   const alt = optString(widget.options, 'alt') ?? '';
   const fitOption = optString(widget.options, 'fit');
@@ -39,3 +45,10 @@ export function Image({ widget }: WidgetProps) {
     </WidgetFrame>
   );
 }
+
+// The registration: this widget's portable descriptor paired with its component, declared
+// through the same public `defineWidget` a third-party package uses.
+export const imageWidget = defineWidget({
+  descriptor: builtinWidgetDescriptors['image'],
+  implementation: { kind: 'trusted-react', component: Image },
+});

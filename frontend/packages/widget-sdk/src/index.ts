@@ -31,6 +31,43 @@ export {
   type WidgetSelect,
 } from './context';
 
+// The building blocks every widget (built-in or third-party) composes from: the card frame,
+// theme-variable references, number/time formatting, the opt-in change-flash cue, option
+// readers, and the React bindings between the hub's channels and widget state. The chart
+// engine helpers are NOT here -- they are on the `/echarts` subpath, so importing this root
+// never pulls Apache ECharts (nor MapLibre, nor the built-in catalog).
+export { WidgetFrame, type WidgetFrameProps } from './frame';
+export { css, type ThemeVar } from './theme';
+export { formatDateTime, formatTimestamp, formatValue } from './format';
+export {
+  FlashValue,
+  flashBackgroundStyle,
+  flashTextStyle,
+  useFlashOnChange,
+  type FlashDirection,
+} from './flash';
+export { optBoolean, optNumber, optString, pickSample, primaryMeasurementName } from './widget-options';
+export {
+  useAlarmStream,
+  useCandidates,
+  useCommandStream,
+  useDashboardHub,
+  useDatasourceAvailability,
+  useElementSize,
+  useLocationStream,
+  useMeasurementStream,
+  useResolvedBindings,
+  useSlotCandidates,
+  type AlarmStreamState,
+  type CandidatesState,
+  type CommandStreamState,
+  type DatasourceAvailability,
+  type ElementSize,
+  type LocationStreamState,
+  type MeasurementStreamOptions,
+  type MeasurementStreamState,
+} from './hooks';
+
 // The portable descriptor vocabulary.
 export {
   SDK_API_VERSION,

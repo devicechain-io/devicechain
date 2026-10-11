@@ -9,7 +9,8 @@
     "widget",
     "sdk",
     "registry",
-    "react"
+    "react",
+    "echarts"
   ],
   "license": "Apache-2.0",
   "homepage": "https://devicechain.io",
@@ -29,6 +30,10 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
     },
+    "./echarts": {
+      "types": "./dist/echarts.d.ts",
+      "import": "./dist/echarts.js"
+    },
     "./package.json": "./package.json"
   },
   "files": [
@@ -47,6 +52,7 @@
   },
   "peerDependencies": {
     "@devicechain/dashboards": "0.0.0-dev",
+    "echarts": "^6.0.0",
     "react": "^19.3.0"
   },
   "devDependencies": {
@@ -54,11 +60,17 @@
     "@testing-library/react": "^16.3.3",
     "@types/node": "^26.6.4",
     "@types/react": "^19.3.0",
+    "echarts": "^6.0.0",
     "esbuild": "^0.28.2",
     "jsdom": "^30.1.1",
     "react": "^19.3.0",
     "react-dom": "^19.3.0",
     "typescript": "~7.0.2",
     "vitest": "^5.0.3"
+  },
+  "peerDependenciesMeta": {
+    "echarts": {
+      "optional": true
+    }
   }
 }

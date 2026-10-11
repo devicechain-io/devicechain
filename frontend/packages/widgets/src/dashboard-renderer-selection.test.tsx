@@ -45,7 +45,15 @@ vi.mock('@devicechain/dashboards', async (importOriginal) => {
   };
 });
 
-vi.mock('./echart', () => ({ EChart: () => <div data-testid="echart" /> }));
+vi.mock('@devicechain/widget-sdk/echarts', async (importOriginal) => {
+  // Only the canvas wrapper is replaced (jsdom has no canvas); the pure option builders and
+  // the colour theme stay real so a chart widget still builds the option it would draw.
+  const actual = await importOriginal<typeof import('@devicechain/widget-sdk/echarts')>();
+  return {
+    ...actual,
+    EChart: () => <div data-testid="echart" />,
+  };
+});
 
 import { DashboardRenderer } from './dashboard-renderer';
 

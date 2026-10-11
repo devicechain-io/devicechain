@@ -10,7 +10,7 @@
 
 import { Component, createContext, useCallback, useContext, useState, type ReactNode } from 'react';
 
-import { WidgetFrame } from './frame';
+import { WidgetFrame } from '@devicechain/widget-sdk';
 import { describeError, type ReportRejection } from './widget-host';
 
 const MESSAGE_STYLE = {

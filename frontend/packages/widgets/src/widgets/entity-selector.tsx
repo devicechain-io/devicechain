@@ -14,10 +14,17 @@
 import type { SlotBinding } from '@devicechain/dashboards';
 import { useEffect, useState, type ChangeEvent, type CSSProperties } from 'react';
 
-import { WidgetFrame, useWidgetSelect } from '../frame';
-import { useCandidates } from '../hooks';
-import { css } from '../theme';
-import { optString, type WidgetProps } from '../widget';
+import {
+  css,
+  defineWidget,
+  optString,
+  useCandidates,
+  useWidgetSelect,
+  WidgetFrame,
+  type WidgetProps,
+} from '@devicechain/widget-sdk';
+
+import { builtinWidgetDescriptors } from '../builtin-descriptors';
 
 // A binding's stable option value — the device token or the anchor's target token. Used as
 // the <option> value (not the array index) so the control's value survives a re-fetch that
@@ -109,3 +116,10 @@ export function EntitySelector({ widget }: WidgetProps<null>) {
     </WidgetFrame>
   );
 }
+
+// The registration: this widget's portable descriptor paired with its component, declared
+// through the same public `defineWidget` a third-party package uses.
+export const entitySelectorWidget = defineWidget({
+  descriptor: builtinWidgetDescriptors['entity-selector'],
+  implementation: { kind: 'trusted-react', component: EntitySelector },
+});

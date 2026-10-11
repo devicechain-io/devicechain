@@ -182,4 +182,30 @@ describe('the history seed a measurement widget is handed', () => {
     });
     expect(lastRender()?.seeded).toEqual(['hauler-1']);
   });
+
+  // The static widgets sit on the none channel: not a measurement widget, so no history is
+  // fetched for them and no seed is handed over.
+  it('is never fetched for, nor handed to, a static label or image', async () => {
+    const withStatic: DashboardDefinition = {
+      ...definition,
+      widgets: [
+        ...definition.widgets,
+        { id: 'note', type: 'label', layout: { base: { col: 4, colSpan: 4, row: 0, rowSpan: 1, z: 0 } }, options: { text: 'x' } },
+        { id: 'logo', type: 'image', layout: { base: { col: 8, colSpan: 4, row: 0, rowSpan: 1, z: 0 } }, options: { url: 'u' } },
+      ],
+    };
+    render(<DashboardRenderer definition={withStatic} hub={source} bindings={dev('hauler-1')} />);
+    await flush();
+    await act(async () => {
+      fetchFor('hauler-1')?.resolve([sample('hauler-1', 71)]);
+    });
+    // Positive control: the measurement widget beside them did fetch and was seeded.
+    expect(lastRender()?.seeded).toEqual(['hauler-1']);
+    expect(h.fetches.map((f) => f.widgetId)).toEqual(['card']);
+    for (const id of ['note', 'logo']) {
+      const renders = h.renders.filter((r) => r.widgetId === id);
+      expect(renders.length, id).toBeGreaterThan(0);
+      expect(renders.every((r) => r.seeded === undefined), id).toBe(true);
+    }
+  });
 });

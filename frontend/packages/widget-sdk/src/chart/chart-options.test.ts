@@ -5,7 +5,7 @@ import type { MeasurementSample } from '@devicechain/dashboards';
 import { describe, expect, it } from 'vitest';
 
 import { buildGaugeOption, buildLineOption } from './chart-options';
-import type { ChartTheme } from './theme';
+import type { ChartTheme } from './chart-theme';
 
 const theme: ChartTheme = {
   foreground: '#fff',

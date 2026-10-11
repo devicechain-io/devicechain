@@ -5,10 +5,10 @@
 // component. The headless validators read the catalog built from these without ever
 // loading a widget; builtin-registry.ts pairs each descriptor with its component.
 //
-// 🔑 BUILT BY REFERENCE, NOT BY COPY. `channel` and `options` are the very values in
-// WIDGET_CHANNEL and WIDGET_OPTIONS (builtin-registry.test.ts asserts identity), so the
-// descriptor cannot drift from the tables the renderer and the console still read today.
-// The tables stay the source of truth until the built-in cutover retires them.
+// 🔑 THE SOURCE OF TRUTH. A built-in's channel, option schema, defaults and binding policy are
+// declared here, once, as data. Nothing else in this package keeps an id-keyed table of them:
+// the by-id views the console still reads (WIDGET_CHANNEL, WIDGET_OPTIONS, ...) are derived,
+// read-only projections of these descriptors (registry.ts, options.ts).
 //
 // Every built-in carries version 1.0.0: a per-widget release number, NOT the platform
 // version. It is bumped only on a rendering change worth surfacing to an author, so a
@@ -18,11 +18,94 @@ import {
   createWidgetCatalog,
   defineWidgetDescriptor,
   type BuiltinWidgetId,
+  type OptionSpec,
   type WidgetDescriptor,
 } from '@devicechain/dashboards';
 
-import { WIDGET_OPTIONS, WIDGET_CONSTRAINTS } from './options';
-import { WIDGET_CHANNEL } from './registry';
+// ---- Shared option specs ----------------------------------------------------
+// Declared once and referenced by each widget that reads them, so the same key always
+// carries the same type and bounds. They are still listed PER WIDGET below rather than
+// merged in from a base: which widget reads which option is the fact this table exists
+// to record, and a base object would hide it.
+
+const TITLE = {
+  kind: 'string',
+  doc: 'Heading shown in the widget frame. Blank hides the frame heading.',
+} as const satisfies OptionSpec;
+
+// gauge and latest-card fall back to the displayed measurement's name when no title is set.
+const TITLE_OR_MEASUREMENT = {
+  kind: 'string',
+  doc: 'Heading shown in the widget frame. Defaults to the displayed measurement name.',
+} as const satisfies OptionSpec;
+
+// toFixed()'s domain is 0..100 — outside it throws a RangeError, which would take the
+// whole widget subtree down rather than degrading.
+const PRECISION = {
+  kind: 'number',
+  integer: true,
+  min: 0,
+  max: 100,
+  doc: 'Decimal places to round displayed values to. Unset shows the raw value.',
+} as const satisfies OptionSpec;
+
+const FLASH_ON_CHANGE = {
+  kind: 'boolean',
+  doc: 'Briefly tint a value green on a rise and red on a fall when it changes.',
+} as const satisfies OptionSpec;
+
+// Read by MeasurementConnectedWidget for every measurement-channel widget, and declared on
+// each one that binds a datasource. It is NOT declared on label/image, which carry no
+// datasource at all, so there is no stream for it to size.
+//
+// It bounds the RETAINED buffer, not what is drawn: useMeasurementStream keeps `latest`
+// per measurement unconditionally and trims only `samples`. Only the chart draws
+// `samples`, so on a card, gauge or table this is a memory bound with no visible effect —
+// declared because the renderer honors it, documented so nobody expects it to show.
+//
+// The trim is GLOBAL across the widget's measurements, not per measurement: `samples` is
+// one interleaved list, so a chart drawing N series retains roughly window/N of each. An
+// earlier version of this doc said "per measurement", and a caller sized a window off it
+// and got half the history it intended.
+const WINDOW = {
+  kind: 'number',
+  integer: true,
+  min: 1,
+  doc: 'Samples retained across ALL of the widget\'s measurements before the oldest are dropped. Bounds memory; only the chart draws them. Default 300.',
+} as const satisfies OptionSpec;
+
+const UNIT = {
+  kind: 'string',
+  doc: 'Unit suffix shown beside the value.',
+} as const satisfies OptionSpec;
+
+const ALARM_STATE = {
+  kind: 'enum',
+  values: ['ACTIVE', 'CLEARED'],
+  doc: 'Show only alarms in this state. Unset shows every state.',
+} as const satisfies OptionSpec;
+
+const ALARM_SEVERITY = {
+  kind: 'enum',
+  values: ['CRITICAL', 'MAJOR', 'MINOR', 'WARNING', 'INDETERMINATE'],
+  doc: 'Show only alarms at this severity. Unset shows every severity.',
+} as const satisfies OptionSpec;
+
+// Stored as the STRING 'true'/'false', not a boolean — alarmSubscription() reads it with
+// optString and maps it through parseAcknowledged, so a real boolean here is read as
+// undefined and the filter silently disappears. Typed as an enum of those two strings so
+// that mistake is an error rather than a no-op.
+const ALARM_ACKNOWLEDGED = {
+  kind: 'enum',
+  values: ['true', 'false'],
+  doc: "Show only acknowledged ('true') or unacknowledged ('false') alarms. Unset shows both.",
+} as const satisfies OptionSpec;
+
+const SELECTION_TARGET = {
+  kind: 'string',
+  doc: 'Name of the slot this widget re-points when the viewer picks an entity.',
+} as const satisfies OptionSpec;
+
 
 const VERSION = '1.0.0';
 const ALL_SELECTORS = ['device', 'anchor', 'slot'] as const;
@@ -42,10 +125,13 @@ export const builtinWidgetDescriptors = {
     sdkApiVersion: 1,
     optionsVersion: 1,
     display: { title: 'Timeseries chart', category: 'Telemetry' },
-    channel: WIDGET_CHANNEL['timeseries-chart'],
+    channel: 'measurement',
     datasource: { mode: 'required', selectors: ALL_SELECTORS },
     binding: { window: { option: 'window', min: 1 } },
-    options: WIDGET_OPTIONS['timeseries-chart'],
+    options: {
+      title: TITLE,
+      window: WINDOW,
+    },
     defaults: { title: 'Timeseries chart' },
     interactions: {},
   }),
@@ -56,10 +142,20 @@ export const builtinWidgetDescriptors = {
     sdkApiVersion: 1,
     optionsVersion: 1,
     display: { title: 'Latest card', category: 'Telemetry' },
-    channel: WIDGET_CHANNEL['latest-card'],
+    channel: 'measurement',
     datasource: { mode: 'required', selectors: ALL_SELECTORS },
     binding: { window: { option: 'window', min: 1 } },
-    options: WIDGET_OPTIONS['latest-card'],
+    options: {
+      title: TITLE_OR_MEASUREMENT,
+      measurement: {
+        kind: 'string',
+        doc: 'Which measurement to display. Defaults to the first the datasource selects.',
+      },
+      unit: UNIT,
+      precision: PRECISION,
+      flashOnChange: FLASH_ON_CHANGE,
+      window: WINDOW,
+    },
     defaults: { title: 'Latest card' },
     interactions: {},
   }),
@@ -70,11 +166,28 @@ export const builtinWidgetDescriptors = {
     sdkApiVersion: 1,
     optionsVersion: 1,
     display: { title: 'Gauge', category: 'Telemetry' },
-    channel: WIDGET_CHANNEL.gauge,
+    channel: 'measurement',
     datasource: { mode: 'required', selectors: ALL_SELECTORS },
     binding: { window: { option: 'window', min: 1 } },
-    options: WIDGET_OPTIONS.gauge,
-    constraints: WIDGET_CONSTRAINTS.gauge,
+    options: {
+      title: TITLE_OR_MEASUREMENT,
+      measurement: {
+        kind: 'string',
+        doc: 'Which measurement to display. Defaults to the first the datasource selects.',
+      },
+      min: {
+        kind: 'number',
+        doc: 'Low end of the gauge scale. Default 0.',
+      },
+      max: {
+        kind: 'number',
+        doc: 'High end of the gauge scale. Default 100.',
+      },
+      unit: UNIT,
+      flashOnChange: FLASH_ON_CHANGE,
+      window: WINDOW,
+    },
+    constraints: [{ kind: 'greater-than', key: 'max', than: 'min' }],
     defaults: { title: 'Gauge' },
     interactions: {},
   }),
@@ -85,27 +198,48 @@ export const builtinWidgetDescriptors = {
     sdkApiVersion: 1,
     optionsVersion: 1,
     display: { title: 'Table', category: 'Telemetry' },
-    channel: WIDGET_CHANNEL.table,
+    channel: 'measurement',
     datasource: { mode: 'required', selectors: ALL_SELECTORS },
     binding: { window: { option: 'window', min: 1 } },
-    options: WIDGET_OPTIONS.table,
+    options: {
+      title: TITLE,
+      precision: PRECISION,
+      flashOnChange: FLASH_ON_CHANGE,
+      window: WINDOW,
+    },
     defaults: { title: 'Table' },
     interactions: {},
   }),
 
-  // label and image sit on the measurement channel today only because that is
-  // ConnectedWidget's default branch; they bind no datasource and read no stream, which the
-  // datasource mode says. A `none` channel retires the pretence in the built-in cutover.
+  // label and image are static: the `none` channel, no datasource, no subscription and no
+  // history seed.
   label: defineWidgetDescriptor({
     id: 'label',
     version: VERSION,
     sdkApiVersion: 1,
     optionsVersion: 1,
     display: { title: 'Label', category: 'Static' },
-    channel: WIDGET_CHANNEL.label,
+    channel: 'none',
     datasource: NO_DATASOURCE,
     binding: {},
-    options: WIDGET_OPTIONS.label,
+    options: {
+      title: TITLE,
+      text: {
+        kind: 'string',
+        required: true,
+        doc: 'The text to show. Rendered as plain text — markup is never interpreted.',
+      },
+      align: {
+        kind: 'enum',
+        values: ['left', 'center', 'right'],
+        doc: 'Horizontal alignment of the text. Default center.',
+      },
+      fontSize: {
+        kind: 'number',
+        min: 1,
+        doc: 'Text size in pixels. Default 16.',
+      },
+    },
     defaults: { text: 'New label' },
     interactions: {},
   }),
@@ -116,10 +250,26 @@ export const builtinWidgetDescriptors = {
     sdkApiVersion: 1,
     optionsVersion: 1,
     display: { title: 'Image', category: 'Static' },
-    channel: WIDGET_CHANNEL.image,
+    channel: 'none',
     datasource: NO_DATASOURCE,
     binding: {},
-    options: WIDGET_OPTIONS.image,
+    options: {
+      title: TITLE,
+      url: {
+        kind: 'string',
+        required: true,
+        doc: 'Source URL of the image.',
+      },
+      alt: {
+        kind: 'string',
+        doc: 'Alternative text describing the image for assistive technology.',
+      },
+      fit: {
+        kind: 'enum',
+        values: ['contain', 'cover', 'fill'],
+        doc: 'How the image fills its box. Default contain.',
+      },
+    },
     defaults: { title: 'Image' },
     interactions: {},
   }),
@@ -130,10 +280,24 @@ export const builtinWidgetDescriptors = {
     sdkApiVersion: 1,
     optionsVersion: 1,
     display: { title: 'Alarm table', category: 'Alarms' },
-    channel: WIDGET_CHANNEL['alarm-table'],
+    channel: 'alarm',
     datasource: { mode: 'optional', selectors: ALL_SELECTORS },
     binding: { pageSize: { option: 'maxRows', default: 50, min: 1 }, ...ALARM_FILTERS },
-    options: WIDGET_OPTIONS['alarm-table'],
+    options: {
+      title: TITLE,
+      state: ALARM_STATE,
+      severity: ALARM_SEVERITY,
+      acknowledged: ALARM_ACKNOWLEDGED,
+      maxRows: {
+        kind: 'number',
+        integer: true,
+        min: 1,
+        doc: 'Alarms loaded into the table. Default 50.',
+      },
+      precision: PRECISION,
+      flashOnChange: FLASH_ON_CHANGE,
+      selectionTarget: SELECTION_TARGET,
+    },
     defaults: { title: 'Alarm table', state: 'ACTIVE' },
     interactions: { alarmActions: true, selection: true },
   }),
@@ -146,10 +310,18 @@ export const builtinWidgetDescriptors = {
     sdkApiVersion: 1,
     optionsVersion: 1,
     display: { title: 'Alarm count', category: 'Alarms' },
-    channel: WIDGET_CHANNEL['alarm-count'],
+    channel: 'alarm',
     datasource: { mode: 'optional', selectors: ALL_SELECTORS },
     binding: { pageSize: { const: 50 }, ...ALARM_FILTERS },
-    options: WIDGET_OPTIONS['alarm-count'],
+    // No maxRows: alarmSubscription() forces the default page size for a count, because the
+    // number it shows is the SERVER total and the page is read only to sample the worst
+    // loaded severity. An authored maxRows here would be read by nothing.
+    options: {
+      title: TITLE,
+      state: ALARM_STATE,
+      severity: ALARM_SEVERITY,
+      acknowledged: ALARM_ACKNOWLEDGED,
+    },
     defaults: { title: 'Alarm count', state: 'ACTIVE' },
     interactions: {},
   }),
@@ -160,10 +332,32 @@ export const builtinWidgetDescriptors = {
     sdkApiVersion: 1,
     optionsVersion: 1,
     display: { title: 'Command button', category: 'Control' },
-    channel: WIDGET_CHANNEL['command-button'],
+    channel: 'control',
     datasource: { mode: 'required', selectors: ['device', 'slot'] },
     binding: { pageSize: { option: 'maxRows', default: 20, min: 1 } },
-    options: WIDGET_OPTIONS['command-button'],
+    options: {
+      title: TITLE,
+      commandName: {
+        kind: 'string',
+        required: true,
+        doc: 'Command key issued to the target device. Without it the widget cannot send.',
+      },
+      commandLabel: {
+        kind: 'string',
+        doc: 'Text on the send button. Defaults to the command key.',
+      },
+      parameterSchema: {
+        kind: 'string',
+        format: 'json',
+        doc: "The command's parameter descriptors, baked in as JSON at author time. Drives the typed form.",
+      },
+      maxRows: {
+        kind: 'number',
+        integer: true,
+        min: 1,
+        doc: 'Recent commands shown in the history. Default 20.',
+      },
+    },
     defaults: { title: 'Command button' },
     interactions: { commandSend: true },
   }),
@@ -174,10 +368,13 @@ export const builtinWidgetDescriptors = {
     sdkApiVersion: 1,
     optionsVersion: 1,
     display: { title: 'Entity selector', category: 'Navigation' },
-    channel: WIDGET_CHANNEL['entity-selector'],
+    channel: 'selection',
     datasource: NO_DATASOURCE,
     binding: {},
-    options: WIDGET_OPTIONS['entity-selector'],
+    options: {
+      title: TITLE,
+      selectionTarget: { ...SELECTION_TARGET, required: true },
+    },
     defaults: { title: 'Entity selector' },
     interactions: { selection: true, candidates: true },
   }),
@@ -188,10 +385,27 @@ export const builtinWidgetDescriptors = {
     sdkApiVersion: 1,
     optionsVersion: 1,
     display: { title: 'Map', category: 'Location' },
-    channel: WIDGET_CHANNEL.map,
+    channel: 'location',
     datasource: { mode: 'required', selectors: ALL_SELECTORS },
     binding: {},
-    options: WIDGET_OPTIONS.map,
+    // 🔴 tileUrl is NOT `required`, and that is the decision rather than an oversight.
+    // `required` means "absent leaves the widget with nothing to show", and a map without
+    // a basemap still shows every position it was asked to — on a plain panel, saying why
+    // there is no map behind them. Marking it required would report a correctly-rendering
+    // widget as broken on every board that names no provider of its own — which is most
+    // of them, because the usual and recommended answer is to inherit the tenant's
+    // basemap rather than to configure tiles per board.
+    options: {
+      title: TITLE,
+      tileUrl: {
+        kind: 'string',
+        doc: "Raster tile URL template, e.g. https://tiles.example.com/{z}/{x}/{y}.png. Leave empty to inherit the tenant's basemap; setting one overrides it for this board only.",
+      },
+      attribution: {
+        kind: 'string',
+        doc: 'Credit line the tile source requires, shown on the map. Set whatever the provider you chose asks for.',
+      },
+    },
     defaults: { title: 'Map' },
     interactions: {},
   }),

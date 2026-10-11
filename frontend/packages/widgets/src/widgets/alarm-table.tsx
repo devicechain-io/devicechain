@@ -10,12 +10,23 @@
 import type { AlarmRow, WidgetActions } from '@devicechain/dashboards';
 import { useState, type CSSProperties } from 'react';
 
-import type { AlarmStreamState } from '../hooks';
-import { FlashValue } from '../flash';
-import { formatDateTime } from '../format';
-import { WidgetFrame, useWidgetSelect, useWidgetTimeZone, type WidgetSelect } from '../frame';
-import { css } from '../theme';
-import { optBoolean, optNumber, optString, type WidgetProps } from '../widget';
+import {
+  type AlarmStreamState,
+  css,
+  defineWidget,
+  FlashValue,
+  formatDateTime,
+  optBoolean,
+  optNumber,
+  optString,
+  useWidgetSelect,
+  useWidgetTimeZone,
+  WidgetFrame,
+  type WidgetProps,
+  type WidgetSelect,
+} from '@devicechain/widget-sdk';
+
+import { builtinWidgetDescriptors } from '../builtin-descriptors';
 import { severityColor, severityLabel } from './severity';
 
 const cell: CSSProperties = { padding: '6px 10px', textAlign: 'left', whiteSpace: 'nowrap' };
@@ -284,3 +295,10 @@ function AlarmRowActions({ alarm, actions }: { alarm: AlarmRow; actions: WidgetA
     </span>
   );
 }
+
+// The registration: this widget's portable descriptor paired with its component, declared
+// through the same public `defineWidget` a third-party package uses.
+export const alarmTableWidget = defineWidget({
+  descriptor: builtinWidgetDescriptors['alarm-table'],
+  implementation: { kind: 'trusted-react', component: AlarmTable },
+});

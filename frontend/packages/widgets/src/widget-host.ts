@@ -8,7 +8,7 @@
 
 import type { WidgetActions, WidgetDescriptor } from '@devicechain/dashboards';
 
-import type { WidgetCandidates, WidgetSelect } from './frame';
+import { type WidgetCandidates, type WidgetSelect } from '@devicechain/widget-sdk';
 
 // Receives the message of an async host callback that rejected, so it can be shown on the
 // widget that made the call.
