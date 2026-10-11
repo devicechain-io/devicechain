@@ -89,7 +89,11 @@ lleva un intento de actualización cuyo estado pasa de `QUEUED` por `DOWNLOADING
 y `REBOOTING` hasta `UPDATED`, o a `FAILED`, `TIMED_OUT`, `UNKNOWN` o `CANCELLED`; `UPDATED` solo se alcanza
 cuando el dispositivo informa de que la versión de destino está en ejecución, con un nuevo arranque cuando
 la actualización lo requiere. Asignar un artefacto que nada ha autenticado se rechaza salvo que la instancia
-active `updates.allowUnverifiedArtifacts`, valor que se muestra en `updateManagementInfo`. El contenido del artefacto no viaja por GraphQL:
+active `updates.allowUnverifiedArtifacts`, valor que se muestra en `updateManagementInfo`. Una actualización que queda en `UNKNOWN` (el dispositivo calló durante la
+instalación o el reinicio) bloquea una nueva asignación de ese componente hasta que el dispositivo informe de lo que ejecuta;
+si nunca lo hará, `abandonUnknownUpdate(assignmentToken, reason)` la cierra como `CANCELLED` con su motivo registrado,
+deja constancia del cambio a su nombre y avisa al dispositivo. No averigua qué ejecuta el dispositivo, que puede estar en
+cualquiera de las dos versiones, así que compruebe su inventario antes de dar por buena una u otra. El contenido del artefacto no viaja por GraphQL:
 se sube con `PUT /api/update-management/updates/artifacts/{token}/content`, autenticado con un token
 de acceso del inquilino que tenga `artifact:write`. El chart da a esa ruta un Ingress propio, con el límite de cuerpo de petición fijado por
 `ingress.uploadMaxBodySize` (por defecto `1g`) y el almacenamiento en búfer de la petición desactivado. Con
@@ -103,7 +107,9 @@ Un dispositivo descarga un artefacto asignado desde `GET /api/update-management/
 La petición no lleva ninguna credencial del inquilino: `cap` es una capacidad que la plataforma envió al
 dispositivo por su sesión MQTT autenticada, que nombra un artefacto para un dispositivo bajo una asignación y
 caduca en menos de quince minutos. Un dispositivo que necesite más tiempo la pide de nuevo y recibe una capacidad
-nueva para el mismo artefacto. El endpoint responde a las peticiones `Range` con `206`, de modo que una descarga
+nueva para el mismo artefacto. Como `cap` va en la cadena de consulta, el chart publica esta ruta en un Ingress propio con el
+registro de accesos de ingress-nginx desactivado; con cualquier otro controlador de ingress, asegúrese de que la cadena de
+consulta de `/api/update-management/updates/download/` no se escriba en un registro de accesos. El endpoint responde a las peticiones `Range` con `206`, de modo que una descarga
 interrumpida continúa donde se detuvo, y rechaza una capacidad falsificada, caducada o que ya no está vigente antes
 de leer nada del artefacto. Fije `updates.downloadBaseUrl` a la URL pública por la que los dispositivos llegan al
 servicio (por ejemplo `https://<host del ingress>/api/update-management`); sin ella ningún dispositivo puede recibir

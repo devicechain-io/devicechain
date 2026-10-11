@@ -1822,8 +1822,9 @@ functionalAreas:
     # firmware / software / configuration image, a GraphQL API to declare, inspect, assign
     # and cancel them, a streaming content upload that verifies size and digest, and the
     # download endpoint a device fetches an assigned image from with a short-lived
-    # capability (GET /api/update-management/updates/download/<artifact>?cap=..., routed by
-    # the API Ingress like every other path under /api/update-management). Update progress
+    # capability (GET /api/update-management/updates/download/<artifact>?cap=..., rendered on
+    # its own Ingress with the access log OFF, because the capability is in the query string).
+    # Update progress
     # rides the device-reports channel. It stores the bytes in the object store
     # (blobStorage), so artifacts cannot be declared until a blob backend is configured.
     #
