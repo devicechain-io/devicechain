@@ -899,6 +899,28 @@ export type DeleteCustomerTypeMutationVariables = Exact<{
 
 export type DeleteCustomerTypeMutation = { deleteCustomerType: boolean };
 
+export type DeviceConfigurationQueryVariables = Exact<{
+  deviceToken: string;
+}>;
+
+
+export type DeviceConfigurationQuery = { deviceConfiguration: { pending: boolean, stale: boolean, undeclared: Array<string>, invalid: Array<string>, desired: { revision: number, digest: string, document: string, createdAt: string | null, actor: string } | null, reported: { revision: number | null, digest: string | null, status: string | null, errors: Array<string>, reportedAt: string | null, lastSyncAt: string | null } | null } | null };
+
+export type DeviceConfigurationRevisionsQueryVariables = Exact<{
+  deviceToken: string;
+  pagination: PaginationInput;
+}>;
+
+
+export type DeviceConfigurationRevisionsQuery = { deviceConfigurationRevisions: { results: Array<{ revision: number, digest: string, document: string, createdAt: string | null, actor: string }>, pagination: { pageStart: number | null, pageEnd: number | null, totalRecords: number | null } } };
+
+export type DeviceConfigurationDeclarationQueryVariables = Exact<{
+  tokens: Array<string> | string;
+}>;
+
+
+export type DeviceConfigurationDeclarationQuery = { devicesByToken: Array<{ token: string, deviceType: { token: string, profile: { token: string, configurationDeclaration: Array<{ key: string, valueType: string, description: string | null }> } | null } }> };
+
 export type DevicesQueryVariables = Exact<{
   criteria: DeviceSearchCriteria;
 }>;
@@ -2186,6 +2208,67 @@ export const DeleteCustomerTypeDocument = new TypedDocumentString(`
   deleteCustomerType(token: $token)
 }
     `) as unknown as TypedDocumentString<DeleteCustomerTypeMutation, DeleteCustomerTypeMutationVariables>;
+export const DeviceConfigurationDocument = new TypedDocumentString(`
+    query DeviceConfiguration($deviceToken: String!) {
+  deviceConfiguration(deviceToken: $deviceToken) {
+    desired {
+      revision
+      digest
+      document
+      createdAt
+      actor
+    }
+    reported {
+      revision
+      digest
+      status
+      errors
+      reportedAt
+      lastSyncAt
+    }
+    pending
+    stale
+    undeclared
+    invalid
+  }
+}
+    `) as unknown as TypedDocumentString<DeviceConfigurationQuery, DeviceConfigurationQueryVariables>;
+export const DeviceConfigurationRevisionsDocument = new TypedDocumentString(`
+    query DeviceConfigurationRevisions($deviceToken: String!, $pagination: PaginationInput!) {
+  deviceConfigurationRevisions(deviceToken: $deviceToken, pagination: $pagination) {
+    results {
+      revision
+      digest
+      document
+      createdAt
+      actor
+    }
+    pagination {
+      pageStart
+      pageEnd
+      totalRecords
+    }
+  }
+}
+    `) as unknown as TypedDocumentString<DeviceConfigurationRevisionsQuery, DeviceConfigurationRevisionsQueryVariables>;
+export const DeviceConfigurationDeclarationDocument = new TypedDocumentString(`
+    query DeviceConfigurationDeclaration($tokens: [String!]!) {
+  devicesByToken(tokens: $tokens) {
+    token
+    deviceType {
+      token
+      profile {
+        token
+        configurationDeclaration {
+          key
+          valueType
+          description
+        }
+      }
+    }
+  }
+}
+    `) as unknown as TypedDocumentString<DeviceConfigurationDeclarationQuery, DeviceConfigurationDeclarationQueryVariables>;
 export const DevicesDocument = new TypedDocumentString(`
     query Devices($criteria: DeviceSearchCriteria!) {
   devices(criteria: $criteria) {
