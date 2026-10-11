@@ -211,6 +211,24 @@ describe('validateWidgetDescriptor', () => {
 });
 
 describe('createWidgetCatalog', () => {
+  // The published contract has exactly one way to obtain a catalog, and it validates. A
+  // catalog builder that skips validation, exported from the package entry, would be a
+  // privileged path around every check below.
+  it('is the only catalog constructor the package exports, and it rejects an invalid descriptor', async () => {
+    const api: Record<string, unknown> = await import('./index');
+    expect(api.createWidgetCatalog).toBe(createWidgetCatalog);
+    expect(api).not.toHaveProperty('sealCatalog');
+    const invalid = { ...valid(), version: 'latest' } as WidgetDescriptor;
+    let error: WidgetCatalogError | undefined;
+    try {
+      (api.createWidgetCatalog as typeof createWidgetCatalog)([invalid]);
+    } catch (e) {
+      error = e as WidgetCatalogError;
+    }
+    expect(error).toBeInstanceOf(WidgetCatalogError);
+    expect(error!.issues.map((i) => `${i.id}:${i.path}`)).toEqual(['acme/tank-level:version']);
+  });
+
   it('reports a duplicate id (path id), including two copies of a built-in', () => {
     const gauge = { ...valid(), id: 'gauge' } as WidgetDescriptor;
     const attempt = () => createWidgetCatalog([gauge, { ...gauge }]);

@@ -264,7 +264,6 @@ export {
   collectCatalogIssues,
   createWidgetCatalog,
   describeIssues,
-  sealCatalog,
   validateWidgetDescriptor,
   type DescriptorIssue,
   type WidgetCatalog,

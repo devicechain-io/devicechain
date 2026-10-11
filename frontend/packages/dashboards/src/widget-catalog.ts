@@ -406,8 +406,9 @@ export function createWidgetCatalog(descriptors: readonly WidgetDescriptor[]): W
   return sealCatalog(descriptors);
 }
 
-// The issues for a set of descriptors: each descriptor's own, plus duplicate ids. Exposed
-// to the widget registry so it reports descriptor and implementation faults together.
+// The issues for a set of descriptors: each descriptor's own, plus duplicate ids. A pure
+// report — it cannot produce a catalog. Exposed so the widget registry can report descriptor
+// and implementation faults together before it builds anything.
 export function collectCatalogIssues(descriptors: readonly unknown[]): DescriptorIssue[] {
   if (!Array.isArray(descriptors)) {
     return [{ id: '#?', path: '', message: 'descriptors must be an array' }];
@@ -426,7 +427,9 @@ export function collectCatalogIssues(descriptors: readonly unknown[]): Descripto
 }
 
 // Builds the sealed catalog from descriptors ALREADY validated by collectCatalogIssues.
-export function sealCatalog(descriptors: readonly WidgetDescriptor[]): WidgetCatalog {
+// Module-private on purpose: the only way to obtain a catalog is createWidgetCatalog, which
+// validates first, so the published contract has no unvalidated path to a catalog.
+function sealCatalog(descriptors: readonly WidgetDescriptor[]): WidgetCatalog {
   const byId = new Map<string, WidgetDescriptor>();
   for (const d of descriptors) byId.set(d.id, deepFreeze(d));
   const ordered: readonly WidgetDescriptor[] = Object.freeze([...byId.values()]);

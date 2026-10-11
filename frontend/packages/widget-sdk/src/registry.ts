@@ -4,7 +4,7 @@
 import {
   WidgetCatalogError,
   collectCatalogIssues,
-  sealCatalog,
+  createWidgetCatalog,
   type DescriptorIssue,
   type WidgetCatalog,
   type WidgetDescriptor,
@@ -72,10 +72,18 @@ export function createWidgetRegistry(definitions: readonly ErasedWidgetDefinitio
 
   if (issues.length > 0) throw new WidgetRegistryError(issues);
 
-  const catalog = sealCatalog(definitions.map((d) => d.descriptor));
+  // Through the one public, validating constructor: no unvalidated path to a catalog exists.
+  // The descriptors were already checked above (so this cannot throw for them); checking
+  // again is the price of not exporting a catalog builder that skips validation.
+  //
+  // 🔴 The catalog freezes each descriptor IN PLACE (deeply), so the caller's descriptor
+  // objects are frozen after this call. That is deliberate: a built-in descriptor holds its
+  // option schema BY IDENTITY with WIDGET_OPTIONS, and a copy would break that identity.
+  const catalog = createWidgetCatalog(definitions.map((d) => d.descriptor));
   const byId = new Map<string, ErasedWidgetDefinition>();
   for (const definition of definitions) {
-    // Copy the implementation before freezing it: the caller's own object is never mutated.
+    // The implementation object, unlike the descriptor, is copied before freezing, so the
+    // caller's implementation object is left mutable (the components it names are shared).
     byId.set(
       definition.descriptor.id,
       Object.freeze({
