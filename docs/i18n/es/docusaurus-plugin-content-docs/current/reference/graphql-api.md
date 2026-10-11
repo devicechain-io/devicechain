@@ -774,6 +774,7 @@ trunca nada ni se aplica nada a medias, así que reduzca la solicitud y envíela
 | Historial de versiones | 1000 por llamada | `deviceProfileVersions`, `entityGroupVersions`, `assetTypeVersions`: las más recientes primero. Reduzca con `limit` (al menos 1) y pagine con `offset` (no negativo); un valor fuera de ese rango se rechaza con `INVALID_VALUE`. |
 | Intervalos por agregación | 10 000 | `bucketedMeasurements`: el rango dividido por `intervalSeconds`, redondeado hacia arriba. |
 | Filas por agregación | 50 000 | `bucketedMeasurements`: los intervalos multiplicados por los nombres de medición devueltos. Con un filtro `name` es un solo nombre; sin él, cada nombre de medición distinto que coincide con los filtros de la lectura. |
+| Claves por consulta | 1000 | Una lista de tokens, identificadores externos o tokens de alarma pasada a una consulta por lotes `…ByToken`, `…ByExternalId` o similar (estados de dispositivo, últimas ubicaciones, comandos, lotes de comandos, canales, políticas y estados de notificación). |
 
 `bucketedMeasurements` también exige `startTime`; `endTime` toma por defecto la hora actual.
 

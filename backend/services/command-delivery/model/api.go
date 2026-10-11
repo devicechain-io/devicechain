@@ -2208,9 +2208,8 @@ func (api *Api) CommandsById(ctx context.Context, ids []uint) ([]*Command, error
 // CommandsByToken gets commands by token.
 func (api *Api) CommandsByToken(ctx context.Context, tokens []string) ([]*Command, error) {
 	found := make([]*Command, 0)
-	result := api.RDB.DB(ctx).Find(&found, "token in ?", tokens)
-	if result.Error != nil {
-		return nil, result.Error
+	if err := rdb.FindByKeys(api.RDB.DB(ctx), &found, "token", tokens); err != nil {
+		return nil, err
 	}
 	return found, nil
 }
