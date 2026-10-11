@@ -585,6 +585,20 @@ jobs:
         # reads as that test hanging rather than the package being long.
         run: go test -count=1 -timeout 20m ./...
 
+      # event-processing's broker suites a second time, with fetch-ahead ON. A hand-built
+      # test configuration fetches one batch at a time, so the step above runs them with
+      # fetch-ahead OFF, while production loads its configuration through ApplyDefaults
+      # and runs with it ON at batch 128. DC_TEST_FETCH_AHEAD=1 (shared_broker_test.go)
+      # builds every broker test's readers the way production does, so the live-gap and
+      # integration suites run once with each setting. Only the processor package builds
+      # a detect broker; the rest of the module does not read the switch.
+      - name: go test (event-processing, fetch-ahead on)
+        if: matrix.module == 'backend/services/event-processing'
+        working-directory: ${{ matrix.module }}
+        env:
+          DC_TEST_FETCH_AHEAD: "1"
+        run: go test -count=1 -timeout 20m ./processor/
+
       # Data-race detection, on every module except the exempt ones.
       #
       # 🔴 THE STEP IS UNCONDITIONAL AND THE VERDICT IS A LINE IN THE LOG. An
