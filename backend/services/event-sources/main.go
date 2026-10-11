@@ -966,6 +966,14 @@ func afterMicroserviceStarted(ctx context.Context) error {
 		}
 	}
 
+	// A capture stream created before it became a work queue keeps its old retention until
+	// its backlog has been forwarded; the source started above is what drains it, so this
+	// runs after it. The wait is bounded, and failing here stops the service rather than
+	// leaving it on a stream that does not behave as declared.
+	if err := NatsManager.MigratePendingRetention(ctx); err != nil {
+		return err
+	}
+
 	// Bound the MQTT gateway's own JetStream streams, which nats-server creates
 	// with no size limit at all and offers no option to bound.
 	//

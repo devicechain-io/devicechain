@@ -77,12 +77,18 @@ func TestPipelinedCaptureReachesInboundEventsOnceEndToEnd(t *testing.T) {
 	require.NoError(t, err)
 	// Published straight to the capture subjects: the MQTT hop in front of them is pinned
 	// by TestCaptureSurvivesASourceRestartEndToEnd.
+	// The capture stream does not start at sequence 1, so the ids are measured from the first
+	// message it stored.
+	var first uint64
 	for i := 0; i < events; i++ {
 		device := i % 50
-		_, err := js.Publish(fmt.Sprintf("%s.acme.devices.dev-%d.events", instance, device),
+		pa, err := js.Publish(fmt.Sprintf("%s.acme.devices.dev-%d.events", instance, device),
 			[]byte(fmt.Sprintf(`{"device":"dev-%d","eventType":"Measurement",`+
 				`"payload":{"entries":[{"measurements":{"t":"%d"}}]}}`, device, i)))
 		require.NoError(t, err)
+		if i == 0 {
+			first = pa.Sequence
+		}
 	}
 
 	src := NewGatewayJetStreamSource(nil, "gw-e2e", NewJsonDecoder(map[string]string{}),
@@ -114,7 +120,7 @@ func TestPipelinedCaptureReachesInboundEventsOnceEndToEnd(t *testing.T) {
 		ids[m.Header.Get(nats.MsgIdHdr)] = true
 	}
 	want := map[string]bool{}
-	for seq := 1; seq <= events; seq++ {
+	for seq := first; seq < first+events; seq++ {
 		want[fmt.Sprintf("acme:%d", seq)] = true
 	}
 	require.Equal(t, want, ids,
@@ -123,7 +129,7 @@ func TestPipelinedCaptureReachesInboundEventsOnceEndToEnd(t *testing.T) {
 	capture := messaging.StreamName(instance, streams.DeviceEventsCapture)
 	require.Eventually(t, func() bool {
 		for ci := range js.ConsumersInfo(capture) {
-			if ci.NumAckPending == 0 && ci.AckFloor.Stream == events {
+			if ci.NumAckPending == 0 && ci.AckFloor.Stream == first+events-1 {
 				return true
 			}
 		}

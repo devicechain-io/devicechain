@@ -117,7 +117,8 @@ const (
 	// oldest-first at the ceiling, independently of who has read them.
 	RetentionLimits Retention = iota
 	// RetentionWorkQueue removes a message when it is acked, so the stream's count
-	// is exactly the work nobody has finished. Only MaxDeliveries is declared so.
+	// is exactly the work nobody has finished. Two streams are declared so, each with
+	// exactly one reader: MaxDeliveries and DeviceEventsCapture.
 	RetentionWorkQueue
 )
 
@@ -243,6 +244,12 @@ type Stream struct {
 	// Retention is how the stream lets go of a message; see Retention. The zero value
 	// is RetentionLimits, which every stream but one is.
 	Retention Retention
+	// RecreateOnRetentionChange declares that an existing stream of this suffix holding a
+	// different retention than the one declared here may be deleted and recreated, once its
+	// reader has drained it, instead of being refused. JetStream cannot change retention in
+	// place, and every other stream keeps the refusal: a recreate is only safe where the
+	// stream holds nothing but what its single reader has not yet forwarded.
+	RecreateOnRetentionChange bool
 	// Dormant marks a stream that is DECLARED but that no service ensures yet, so it does
 	// not exist on a running broker. The replication check does not require a dormant
 	// stream even where its Areas are deployed - a check that fails on a healthy install
@@ -719,10 +726,20 @@ var All = []Stream{
 	// Nothing in the platform publishes here; the producer is the device. Writers
 	// are refused (messaging.WriteMessages) rather than allowed to publish to a
 	// subject that matches no stream.
+	//
+	// IT IS A WORK QUEUE: the stream holds only what event-sources has not yet forwarded,
+	// and an ack removes the message. Nothing reads it for history (the one reader is
+	// event-sources' durable; rule preview and DETECT replay read resolved-events), so
+	// keeping a forwarded publish would serve no consumer. Unread messages keep the
+	// durability this stream exists for, because a work queue removes only on ack. A work
+	// queue allows one consumer per subject, so no second reader may be attached.
+	// RecreateOnRetentionChange lets an instance whose stream was created under Limits
+	// retention move onto this one once the old stream has been drained.
 	{Suffix: DeviceEventsCapture, Areas: []string{"event-sources"}, Tier: Hot, Shape: ShapeDeviceEvents,
 		MaxBytesCap: deviceEventsCaptureMaxBytesCap, DeadLetterKind: kindEvent,
+		Retention: RetentionWorkQueue, RecreateOnRetentionChange: true,
 		Forwards: map[string]string{"event-sources": InboundEvents},
-		Why:      "raw device publishes, captured by the broker — the ingest durability floor"},
+		Why:      "raw device publishes, captured by the broker and held only until forwarded — the ingest durability floor"},
 
 	// PER-DEVICE, and it is the device token that makes a response ATTRIBUTABLE.
 	//
@@ -946,6 +963,12 @@ func MaxBytesCapFor(suffix string) int64 {
 // RetentionLimits, but nothing creates a stream for one (see IsDeclared).
 func RetentionFor(suffix string) Retention {
 	return bySuffix[suffix].Retention
+}
+
+// RecreatesOnRetentionChange reports whether an existing stream of suffix with a different
+// retention may be drained and recreated (Stream.RecreateOnRetentionChange).
+func RecreatesOnRetentionChange(suffix string) bool {
+	return bySuffix[suffix].RecreateOnRetentionChange
 }
 
 // PlatformAuthoredFor reports whether suffix's stream is declared platform-authored. A
