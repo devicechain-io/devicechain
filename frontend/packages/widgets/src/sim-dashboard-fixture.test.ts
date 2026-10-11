@@ -10,6 +10,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import {
+  isBuiltinWidget,
   parseDashboardDefinition,
   UNKNOWN_WIDGET_TYPE,
   WIDGET_TYPES,
@@ -71,6 +72,7 @@ function parsed(token: string) {
     if (widget.type === UNKNOWN_WIDGET_TYPE) {
       throw new Error(`${token}: ${widget.id} has a widget type this build does not know: ${JSON.stringify(widget.raw.type)}`);
     }
+    if (!isBuiltinWidget(widget)) throw new Error(`${token}: ${widget.id} is not a built-in widget`);
     widgets.push(widget);
   }
   return { ...def, widgets };

@@ -2,26 +2,34 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // ConnectedWidget is the one place the imperative DashboardHub meets the pure widget
-// contract. It dispatches on the widget's data CHANNEL (WIDGET_CHANNEL): a measurement
-// widget subscribes its datasource (windowed per its options); an alarm widget
-// subscribes its scope+filters through the hub's alarm channel. Either way it resolves
-// the data and renders the pure widget with { widget, data }. A dashboard renderer maps
-// over its widgets rendering one ConnectedWidget each.
+// contract. It looks the widget up in the host's REGISTRY and dispatches on the registered
+// descriptor's data CHANNEL: a measurement widget subscribes its datasource (windowed per its
+// binding policy); an alarm widget subscribes its scope+filters through the hub's alarm
+// channel; and so on. Either way it resolves the data and renders the registered component
+// with { widget, data }. A dashboard renderer maps over its widgets rendering one
+// ConnectedWidget each.
+//
+// Each widget renders inside its own containment (widget-containment.tsx): a throw shows a
+// local diagnostic with a reset control and the siblings keep rendering. A widget the
+// registry cannot resolve (an unknown or unavailable package, a version it cannot read) is a
+// placeholder with a specific reason: it reads nothing — no channel, no availability query —
+// and is handed no actions.
 
 import {
   UNKNOWN_WIDGET_TYPE,
-  type AlarmSubscription,
-  type CommandSubscription,
-  type LocationSubscription,
   type MeasurementSample,
-  type UnknownWidgetInstance,
+  type UnresolvedWidgetReason,
   type WidgetActions,
   type WidgetDataSource,
+  type WidgetDescriptor,
   type WidgetInstance,
 } from '@devicechain/dashboards';
-import type { ReactNode } from 'react';
+import { WidgetCandidatesProvider, WidgetSelectProvider, type WidgetRegistry } from '@devicechain/widget-sdk';
+import { useMemo, type ComponentType, type ReactNode } from 'react';
 
-import { WidgetFrame } from './frame';
+import { alarmSubscription, commandSubscription, measurementWindow } from './binding-policy';
+import { defaultWidgetRegistry } from './default-registry';
+import { WidgetFrame, useWidgetCandidates, useWidgetSelect } from './frame';
 import {
   useAlarmStream,
   useCommandStream,
@@ -29,99 +37,160 @@ import {
   useLocationStream,
   useMeasurementStream,
 } from './hooks';
-import {
-  ALARM_WIDGET_REGISTRY,
-  CONTROL_WIDGET_REGISTRY,
-  LOCATION_WIDGET_REGISTRY,
-  SELECTION_WIDGET_REGISTRY,
-  WIDGET_CHANNEL,
-  WIDGET_REGISTRY,
-} from './registry';
-import { optNumber, optString } from './widget';
-
-// Rows an alarm table shows before scrolling; also the default page size the count
-// query reads (the count itself uses the server total, independent of this).
-const DEFAULT_ALARM_ROWS = 50;
-
-// Recent commands a command-button shows in its history before scrolling.
-const DEFAULT_COMMAND_ROWS = 20;
+import { optString } from './widget';
+import { WidgetContainment, useReportRejection } from './widget-containment';
+import { narrowActions, narrowCandidates, narrowSelect } from './widget-host';
 
 export interface ConnectedWidgetProps {
   widget: WidgetInstance;
   hub: WidgetDataSource;
-  // The action seam (writes), threaded to acting widgets. Undefined = read-only.
+  // The registry that resolves the widget's component, channel and binding policy. Omitted =
+  // the built-in registry. A host composing extension packages passes the SAME registry it
+  // parsed the definition with.
+  registry?: WidgetRegistry;
+  // The action seam (writes). Narrowed per widget to the interactions its descriptor
+  // declares; undefined = read-only.
   actions?: WidgetActions;
   // Optional history backfill for this widget (from bucketedMeasurements), seeded
   // under the live tail so a chart isn't blank until the first live sample. Ignored by
-  // alarm widgets (their channel reconciles from a query, not a history seed).
+  // every channel but measurement (the others reconcile from a query, not a history seed).
   initialSamples?: MeasurementSample[];
 }
 
-export function ConnectedWidget({ widget, hub, actions, initialSamples }: ConnectedWidgetProps) {
+export function ConnectedWidget(props: ConnectedWidgetProps) {
+  const { widget } = props;
+  const registry = props.registry ?? defaultWidgetRegistry();
+  // A change to what the widget is configured with retries a widget that threw on the old one.
+  const resetKey = JSON.stringify([widget.type, widget.options ?? null, widget.datasource ?? null]);
+  return (
+    <WidgetContainment title={optString(widget.options, 'title')} resetKey={resetKey}>
+      <ConnectedWidgetBody {...props} registry={registry} />
+    </WidgetContainment>
+  );
+}
+
+type BodyProps = ConnectedWidgetProps & { registry: WidgetRegistry };
+
+// The component a registration renders. Its props are erased in the registry (one registry
+// holds components of every channel); the channel adapters below supply the matching data.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type AnyWidgetComponent = ComponentType<any>;
+
+function ConnectedWidgetBody({ widget, hub, registry, actions, initialSamples }: BodyProps) {
+  const unresolved = widget.type === UNKNOWN_WIDGET_TYPE;
+  const descriptor = unresolved ? undefined : registry.descriptor(widget.type);
+  const implementation = unresolved ? undefined : registry.implementation(widget.type);
+
   // A widget bound to a since-deleted device (its stable token no longer resolves)
   // shows an "unavailable" pane rather than a blank one — checked optimistically, so a
-  // valid widget renders from its stream without waiting on this. Uniform across every
-  // channel, so it wraps the dispatch below.
-  const availability = useDatasourceAvailability(hub, widget.datasource);
+  // valid widget renders from its stream without waiting on this. An unresolved widget asks
+  // nothing: it is never given a datasource to check.
+  const availability = useDatasourceAvailability(hub, descriptor ? widget.datasource : undefined);
   if (availability === 'unavailable') {
     return <WidgetUnavailableFrame widget={widget} />;
   }
 
-  // A widget of a type this build does not know (a newer release added it) is shown as
-  // a placeholder and reads nothing: it has no datasource, so the availability check
-  // above resolves without a query, and no channel is opened for it.
   if (widget.type === UNKNOWN_WIDGET_TYPE) {
-    return <UnknownWidgetFrame widget={widget} />;
+    return <UnresolvedWidgetFrame storedType={widget.raw.type} reason={widget.reason} />;
+  }
+  if (!descriptor || !implementation) {
+    // Parsed against a catalog this registry does not hold: say so rather than render nothing.
+    return (
+      <UnresolvedWidgetFrame
+        storedType={widget.type}
+        reason={{ code: 'unregistered', message: `"${widget.type}" is not registered in this host's widget registry` }}
+      />
+    );
   }
 
-  const channel = WIDGET_CHANNEL[widget.type];
-  if (channel === 'alarm') {
-    return <AlarmConnectedWidget widget={widget} hub={hub} actions={actions} />;
+  return (
+    <HostScope descriptor={descriptor} actions={actions}>
+      {(hostActions) => (
+        <ChannelBody
+          widget={widget}
+          hub={hub}
+          descriptor={descriptor}
+          Component={implementation.component}
+          actions={hostActions}
+          initialSamples={initialSamples}
+        />
+      )}
+    </HostScope>
+  );
+}
+
+// HostScope hands ONE widget only the interactions it declared: a narrowed action seam, and
+// the ambient selection / candidate providers re-provided so an undeclared capability
+// reads as "not wired" to a widget that asks.
+function HostScope({
+  descriptor,
+  actions,
+  children,
+}: {
+  descriptor: WidgetDescriptor;
+  actions: WidgetActions | undefined;
+  children: (actions: WidgetActions | undefined) => ReactNode;
+}) {
+  const report = useReportRejection();
+  const select = useWidgetSelect();
+  const candidates = useWidgetCandidates();
+  const narrowed = useMemo(() => narrowActions(actions, descriptor, report), [actions, descriptor, report]);
+  const narrowedSelect = useMemo(() => narrowSelect(select, descriptor), [select, descriptor]);
+  const narrowedCandidates = useMemo(
+    () => narrowCandidates(candidates, descriptor, report),
+    [candidates, descriptor, report],
+  );
+  return (
+    <WidgetSelectProvider select={narrowedSelect}>
+      <WidgetCandidatesProvider candidates={narrowedCandidates}>{children(narrowed)}</WidgetCandidatesProvider>
+    </WidgetSelectProvider>
+  );
+}
+
+interface ChannelProps {
+  widget: WidgetInstance;
+  hub: WidgetDataSource;
+  descriptor: WidgetDescriptor;
+  Component: AnyWidgetComponent;
+  actions: WidgetActions | undefined;
+  initialSamples?: MeasurementSample[];
+}
+
+// The channel is the only thing the runtime branches on — never the widget id.
+function ChannelBody(props: ChannelProps) {
+  switch (props.descriptor.channel) {
+    case 'alarm':
+      return <AlarmConnectedWidget {...props} />;
+    case 'control':
+      return <ControlConnectedWidget {...props} />;
+    case 'location':
+      return <LocationConnectedWidget {...props} />;
+    case 'selection':
+    case 'none':
+      return <StaticConnectedWidget {...props} />;
+    case 'measurement':
+      return <MeasurementConnectedWidget {...props} />;
   }
-  if (channel === 'control') {
-    return <ControlConnectedWidget widget={widget} hub={hub} actions={actions} />;
-  }
-  if (channel === 'selection') {
-    return <SelectionConnectedWidget widget={widget} />;
-  }
-  if (channel === 'location') {
-    return <LocationConnectedWidget widget={widget} hub={hub} />;
-  }
-  return <MeasurementConnectedWidget widget={widget} hub={hub} initialSamples={initialSamples} />;
 }
 
 // A selection widget (entity-selector) consumes no hub data — it reads the ambient candidate
-// provider + selection callback. It carries no datasource, so the availability check above is
-// trivially satisfied and there is no stream to bind.
-function SelectionConnectedWidget({ widget }: { widget: WidgetInstance }) {
-  const Component = SELECTION_WIDGET_REGISTRY[widget.type as keyof typeof SELECTION_WIDGET_REGISTRY];
-  if (!Component) return null;
-  return <Component widget={widget} data={null} />;
+// provider + selection callback; a `none` widget is static. Neither subscribes anything.
+function StaticConnectedWidget({ widget, Component, actions }: ChannelProps) {
+  return <Component widget={widget} data={null} actions={actions} />;
 }
 
-function MeasurementConnectedWidget({ widget, hub, initialSamples }: ConnectedWidgetProps) {
+function MeasurementConnectedWidget({ widget, hub, descriptor, Component, actions, initialSamples }: ChannelProps) {
   const data = useMeasurementStream(hub, widget.datasource, {
-    window: optNumber(widget.options, 'window'),
+    window: measurementWindow(descriptor, widget),
     initialSamples,
   });
 
   if (data.error) return <WidgetErrorFrame widget={widget} error={data.error} />;
-
-  const Component = WIDGET_REGISTRY[widget.type as keyof typeof WIDGET_REGISTRY];
-  if (!Component) return null; // unknown/misclassified type in a hand-edited definition
-  return <Component widget={widget} data={data} />;
+  return <Component widget={widget} data={data} actions={actions} />;
 }
 
-function AlarmConnectedWidget({
-  widget,
-  hub,
-  actions,
-}: {
-  widget: WidgetInstance;
-  hub: WidgetDataSource;
-  actions?: WidgetActions;
-}) {
-  const data = useAlarmStream(hub, alarmSubscription(widget));
+function AlarmConnectedWidget({ widget, hub, descriptor, Component, actions }: ChannelProps) {
+  const data = useAlarmStream(hub, alarmSubscription(descriptor, widget));
 
   // Show the error pane ONLY when there's nothing to display (the initial load failed).
   // Once a snapshot has loaded, a later transient poll/query error keeps the last-good
@@ -130,40 +199,23 @@ function AlarmConnectedWidget({
   if (data.error && data.alarms.length === 0 && data.total === 0) {
     return <WidgetErrorFrame widget={widget} error={data.error} />;
   }
-
-  const Component = ALARM_WIDGET_REGISTRY[widget.type as keyof typeof ALARM_WIDGET_REGISTRY];
-  if (!Component) return null;
   return <Component widget={widget} data={data} actions={actions} />;
 }
 
-function ControlConnectedWidget({
-  widget,
-  hub,
-  actions,
-}: {
-  widget: WidgetInstance;
-  hub: WidgetDataSource;
-  actions?: WidgetActions;
-}) {
-  const data = useCommandStream(hub, commandSubscription(widget));
+function ControlConnectedWidget({ widget, hub, descriptor, Component, actions }: ChannelProps) {
+  const data = useCommandStream(hub, commandSubscription(descriptor, widget));
 
-  // Unlike the read-only widgets, a command-button is NEVER replaced by the error pane:
+  // Unlike the read-only widgets, a command widget is NEVER replaced by the error pane:
   // its primary control is the send form (a separate authority from reading history), so
   // a history poll error must not tear the form down. The widget surfaces the error
   // inline instead.
-  const Component = CONTROL_WIDGET_REGISTRY[widget.type as keyof typeof CONTROL_WIDGET_REGISTRY];
-  if (!Component) return null;
   return <Component widget={widget} data={data} actions={actions} />;
 }
 
-function LocationConnectedWidget({
-  widget,
-  hub,
-}: {
-  widget: WidgetInstance;
-  hub: WidgetDataSource;
-}) {
-  const data = useLocationStream(hub, locationSubscription(widget));
+function LocationConnectedWidget({ widget, hub, Component, actions }: ChannelProps) {
+  // The tile source lives in the widget's options, not here — it is a rendering choice, not
+  // part of what the widget asks the platform for.
+  const data = useLocationStream(hub, { datasource: widget.datasource });
 
   // Same rule as the alarm channel: show the error pane ONLY when there is nothing to
   // display. Once a snapshot has loaded, a later transient poll error keeps the last
@@ -177,61 +229,24 @@ function LocationConnectedWidget({
   if (data.error && data.locations.length === 0) {
     return <WidgetErrorFrame widget={widget} error={data.error} />;
   }
-
-  const Component = LOCATION_WIDGET_REGISTRY[widget.type as keyof typeof LOCATION_WIDGET_REGISTRY];
-  if (!Component) return null;
-  return <Component widget={widget} data={data} />;
+  return <Component widget={widget} data={data} actions={actions} />;
 }
 
-// locationSubscription reads a map widget's selector from its definition: the devices to
-// plot AND the location series to read (the selector's own `location` field). The tile
-// source lives in the widget's options, not here — it is a rendering choice, not part of
-// what the widget asks the platform for.
-function locationSubscription(widget: WidgetInstance): LocationSubscription {
-  return { datasource: widget.datasource };
-}
-
-// commandSubscription reads a command widget's scope (the target device) from its
-// definition; the command name + parameter schema live in the widget's options (baked by
-// the console), not the subscription. pageSize bounds the recent-command history shown.
-function commandSubscription(widget: WidgetInstance): CommandSubscription {
-  return {
-    datasource: widget.datasource,
-    pageSize: Math.max(1, optNumber(widget.options, 'maxRows') ?? DEFAULT_COMMAND_ROWS),
-  };
-}
-
-// alarmSubscription reads an alarm widget's scope+filters from its definition: the
-// datasource (undefined = tenant-wide) plus the state/severity/acknowledged filters. A
-// count reports the server total (independent of pageSize) but still reads a page so its
-// worst-severity accent samples the current alarms rather than only the single newest;
-// a table reads its configured, clamped row cap.
-function alarmSubscription(widget: WidgetInstance): AlarmSubscription {
-  const pageSize =
-    widget.type === 'alarm-count'
-      ? DEFAULT_ALARM_ROWS
-      : Math.max(1, optNumber(widget.options, 'maxRows') ?? DEFAULT_ALARM_ROWS);
-  return {
-    datasource: widget.datasource,
-    state: optString(widget.options, 'state'),
-    severity: optString(widget.options, 'severity'),
-    acknowledged: parseAcknowledged(optString(widget.options, 'acknowledged')),
-    pageSize,
-  };
-}
-
-// The acknowledged filter is stored as 'true' / 'false' (or absent = any).
-function parseAcknowledged(value: string | undefined): boolean | undefined {
-  if (value === 'true') return true;
-  if (value === 'false') return false;
-  return undefined;
-}
-
-// The placeholder for a widget this build cannot render. It names the stored type so an
-// author can tell which widget it is and which release added it; the stored object is
-// otherwise untouched (the serializer writes it back verbatim).
-function UnknownWidgetFrame({ widget }: { widget: UnknownWidgetInstance }): ReactNode {
-  const storedType = typeof widget.raw.type === 'string' ? widget.raw.type : '';
+// The placeholder for a widget this build cannot resolve. It names the stored type and says
+// WHY (not installed, no version metadata, a settings or SDK generation it cannot read); the
+// stored object is otherwise untouched (the serializer writes it back verbatim).
+function UnresolvedWidgetFrame({
+  storedType: stored,
+  reason,
+}: {
+  storedType: unknown;
+  reason: UnresolvedWidgetReason | undefined;
+}): ReactNode {
+  const storedType = typeof stored === 'string' ? stored : '';
+  const heading =
+    (reason?.code ?? 'unregistered') === 'unregistered'
+      ? 'This widget needs a newer viewer'
+      : 'This widget cannot be shown here';
   return (
     <WidgetFrame>
       <div
@@ -249,8 +264,11 @@ function UnknownWidgetFrame({ widget }: { widget: UnknownWidgetInstance }): Reac
           color: 'hsl(var(--muted-foreground))',
         }}
       >
-        <div style={{ fontSize: 13, fontWeight: 600 }}>This widget needs a newer viewer</div>
-        {storedType && <div style={{ fontSize: 11, opacity: 0.8 }}>Widget type: {storedType}</div>}
+        <div style={{ fontSize: 13, fontWeight: 600 }}>{heading}</div>
+        {storedType && !reason?.message.includes(storedType) && (
+          <div style={{ fontSize: 11, opacity: 0.8 }}>Widget type: {storedType}</div>
+        )}
+        {reason && <div style={{ fontSize: 11, opacity: 0.8, wordBreak: 'break-word' }}>{reason.message}</div>}
       </div>
     </WidgetFrame>
   );

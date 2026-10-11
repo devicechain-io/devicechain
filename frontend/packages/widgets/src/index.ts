@@ -70,6 +70,7 @@ export {
   validateDefinitionOptions,
   stripUnknownOptions,
   type DefinitionOptionIssue,
+  type DefinitionValidationOptions,
 } from './definition-options';
 
 // Directional change-flash (opt-in `flashOnChange`): a reusable hook + the flashing value cell.
