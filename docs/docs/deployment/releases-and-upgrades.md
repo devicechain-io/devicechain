@@ -3516,6 +3516,16 @@ Nothing needs doing.
 
 What the release after `v0.19.0` changes, collected as it lands.
 
+#### Events that carry a device password in the body are refused while versions are mixed {#next-upgrade-body-password}
+
+From this release, `event-sources` and `device-management` pass a device password that arrives in an
+event body in a different form, and each needs the new version to read the other's. While old and new
+versions of the two run side by side during a rolling upgrade, events that carry a device password in
+the body (`MQTT_BASIC`, over HTTP or MQTT) are refused as unauthenticated, and they are not replayed.
+MQTT connects and access-token events are not affected.
+
+Upgrade `event-sources` and `device-management` together, or accept the brief loss of those events.
+
 #### An `MQTT_BASIC` device password is shown once, and cannot be shown again {#next-upgrade-device-password-show-once}
 
 The platform now keeps only a one-way, keyed digest of an `MQTT_BASIC` device password, not the password. The API never returned the password on read, so no query result changes. What changes is that nobody can recover it from the platform either: the console shows a password once, right after you add the credential or set a new one, with a copy button, and afterwards only says that a password is set. Its credential row gains a **Set new password** action, and the form offers **Generate strong password**.

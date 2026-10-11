@@ -17,15 +17,15 @@ func strptr(s string) *string { return &s }
 // reaches the resolver across the messaging hop (ADR-014).
 func TestMarshalRoundTripCarriesCredential(t *testing.T) {
 	event := &model.UnresolvedEvent{
-		Source:           "mqtt1",
-		Device:           "TEST-123",
-		OccurredTime:     time.Now().UTC().Truncate(time.Second),
-		ProcessedTime:    time.Now().UTC().Truncate(time.Second),
-		EventType:        model.Location,
-		Payload:          &model.UnresolvedLocationsPayload{Entries: []model.UnresolvedLocationEntry{}},
-		CredentialType:   strptr(string("MQTT_BASIC")),
-		CredentialId:     strptr("device-user"),
-		CredentialSecret: strptr("device-pass"),
+		Source:                 "mqtt1",
+		Device:                 "TEST-123",
+		OccurredTime:           time.Now().UTC().Truncate(time.Second),
+		ProcessedTime:          time.Now().UTC().Truncate(time.Second),
+		EventType:              model.Location,
+		Payload:                &model.UnresolvedLocationsPayload{Entries: []model.UnresolvedLocationEntry{}},
+		CredentialType:         strptr(string("MQTT_BASIC")),
+		CredentialId:           strptr("device-user"),
+		SealedCredentialSecret: strptr("dcs1$00000000$sealed-form"),
 	}
 
 	bytes, err := MarshalUnresolvedEvent(event)
@@ -37,8 +37,29 @@ func TestMarshalRoundTripCarriesCredential(t *testing.T) {
 	assert.Equal(t, "MQTT_BASIC", *got.CredentialType)
 	assert.NotNil(t, got.CredentialId)
 	assert.Equal(t, "device-user", *got.CredentialId)
-	assert.NotNil(t, got.CredentialSecret)
-	assert.Equal(t, "device-pass", *got.CredentialSecret)
+	assert.Nil(t, got.CredentialSecret, "the plaintext field never crosses the wire")
+	assert.NotNil(t, got.SealedCredentialSecret)
+	assert.Equal(t, "dcs1$00000000$sealed-form", *got.SealedCredentialSecret)
+}
+
+// The stream keeps what is marshalled, so an event that still carries the secret as the
+// device sent it is refused rather than written, and the secret is in no byte of the
+// message.
+func TestMarshalRefusesAnUnsealedCredentialSecret(t *testing.T) {
+	event := &model.UnresolvedEvent{
+		Source:           "mqtt1",
+		Device:           "TEST-123",
+		OccurredTime:     time.Now().UTC(),
+		ProcessedTime:    time.Now().UTC(),
+		EventType:        model.Location,
+		Payload:          &model.UnresolvedLocationsPayload{Entries: []model.UnresolvedLocationEntry{}},
+		CredentialType:   strptr("MQTT_BASIC"),
+		CredentialId:     strptr("device-user"),
+		CredentialSecret: strptr("device-pass-as-sent"),
+	}
+	bytes, err := MarshalUnresolvedEvent(event)
+	assert.ErrorIs(t, err, ErrUnsealedCredentialSecret)
+	assert.Nil(t, bytes)
 }
 
 // An event with no credential round-trips with nil credential fields (the common

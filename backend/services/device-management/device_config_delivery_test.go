@@ -65,6 +65,11 @@ func startDeliveryFixture(t *testing.T) *deliveryFixture {
 	Microservice.MicroserviceConfigurationRaw = []byte(`{}`)
 	require.NoError(t, parseConfiguration())
 	Configuration = &dmconfig.DeviceManagementConfiguration{}
+	// createNatsComponents builds the inbound processor, which refuses to exist without the
+	// key that opens sealed credential secrets.
+	prevTransit := SecretTransit
+	t.Cleanup(func() { SecretTransit = prevTransit })
+	SecretTransit = testTransit(t)
 	Svc = service.New(Microservice, service.Spec{Nats: &service.NatsSpec{OnCreate: createNatsComponents}})
 	buildMetrics()
 

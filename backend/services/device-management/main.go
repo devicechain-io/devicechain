@@ -51,6 +51,10 @@ var (
 	// a secret.
 	DeviceSecretKey *credential.DeviceSecretKey
 
+	// SecretTransit opens the sealed credential secrets inbound events carry; derived from
+	// the same root key, in the same step, as DeviceSecretKey.
+	SecretTransit *credential.SecretTransit
+
 	InboundEventsReader    messaging.MessageReader
 	InboundEventsProcessor *processor.InboundEventsProcessor
 	ResolvedEventsWriter   messaging.OrderedWriter
@@ -225,7 +229,8 @@ func newInboundEventsProcessor(reader messaging.MessageReader) *processor.Inboun
 		core.NewNoOpLifecycleCallbacks(), CachedApi, Configuration.DeviceAuthMode,
 		time.Duration(Configuration.MaxEventFutureSkewSeconds)*time.Second, ResolveMetrics,
 		processor.WithResolvers(Configuration.Resolution.Workers),
-		processor.WithDeadLetters(DeadLetters))
+		processor.WithDeadLetters(DeadLetters),
+		processor.WithSecretTransit(SecretTransit))
 }
 
 // buildApis builds the service's two Apis over the relational store and the broker: the
@@ -582,6 +587,9 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 			// without it: no key, no start.
 			var err error
 			if DeviceSecretKey, err = deriveDeviceSecretKey(); err != nil {
+				return err
+			}
+			if SecretTransit, err = deriveSecretTransit(); err != nil {
 				return err
 			}
 			if err = digestStoredCredentialSecrets(ctx, RdbManager, DeviceSecretKey); err != nil {

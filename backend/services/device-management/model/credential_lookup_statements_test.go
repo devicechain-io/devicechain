@@ -65,7 +65,7 @@ func (c *stmtCounter) taken() []string {
 }
 
 // credFixture is one device "dev" in tenant acme with an MQTT_BASIC credential "cred-1"
-// storing "s3cret" and an ACCESS_TOKEN credential "tok-1", behind the cached decorator the
+// storing "s3cret-0123456789" and an ACCESS_TOKEN credential "tok-1", behind the cached decorator the
 // resolver actually holds.
 type credFixture struct {
 	api   *Api
@@ -86,7 +86,7 @@ func seedCredentialFixture(t *testing.T, api *Api, stmts *stmtCounter) credFixtu
 	if err != nil {
 		t.Fatalf("seed device: %v", err)
 	}
-	secret := "s3cret"
+	secret := "s3cret-0123456789"
 	if _, err := api.CreateDeviceCredential(ctx, &DeviceCredentialCreateRequest{
 		Token: "c-1", DeviceToken: "dev", CredentialType: string(CredentialMqttBasic),
 		CredentialId: "cred-1", CredentialValue: &secret, Enabled: true,
@@ -149,7 +149,7 @@ func TestAuthenticatingAnMqttBasicCredentialIsOneStatement(t *testing.T) {
 	f := newSQLiteCredentialFixture(t)
 	now := time.Now()
 
-	d, err := f.capi.AuthenticateDevice(f.ctx, basic("cred-1", "s3cret"), now)
+	d, err := f.capi.AuthenticateDevice(f.ctx, basic("cred-1", "s3cret-0123456789"), now)
 	if err != nil || d == nil || d.Token != "dev" {
 		t.Fatalf("right secret: got (%v, %v), want device dev", d, err)
 	}
@@ -166,7 +166,7 @@ func TestAuthenticatingAnMqttBasicCredentialIsOneStatement(t *testing.T) {
 func TestResolvingACredentialForTheCalloutIsOneStatement(t *testing.T) {
 	f := newSQLiteCredentialFixture(t)
 	d, stored, err := f.capi.ResolveDeviceCredential(f.ctx, basic("cred-1", "wrong"), time.Now())
-	if err != nil || d == nil || d.Token != "dev" || !verifies(stored, "s3cret") {
+	if err != nil || d == nil || d.Token != "dev" || !verifies(stored, "s3cret-0123456789") {
 		t.Fatalf("resolve: got (%v, %q, %v), want dev with its stored digest", d, stored, err)
 	}
 	requireOneJoinedStatement(t, f, "callout resolve")
@@ -235,7 +235,7 @@ func TestTheConnectResolveReadsNoVariableWidthColumn(t *testing.T) {
 	if err != nil || d == nil {
 		t.Fatalf("resolve: got (%v, %q, %v), want device dev", d, stored, err)
 	}
-	if d.Token != "dev" || d.ID != f.devId || d.TenantId != "acme" || !verifies(stored, "s3cret") {
+	if d.Token != "dev" || d.ID != f.devId || d.TenantId != "acme" || !verifies(stored, "s3cret-0123456789") {
 		t.Errorf("resolve: got device (id %d, tenant %q, token %q) with digest %q, want (%d, acme, dev) with a digest of s3cret",
 			d.ID, d.TenantId, d.Token, stored, f.devId)
 	}
@@ -253,7 +253,7 @@ func TestTheConnectResolveReadsNoVariableWidthColumn(t *testing.T) {
 	// device type and external id), but not the variable-width columns. Without this, a
 	// lookup that read nothing for anyone would pass above.
 	f.stmts.reset()
-	full, err := f.capi.AuthenticateDevice(f.ctx, basic("cred-1", "s3cret"), time.Now())
+	full, err := f.capi.AuthenticateDevice(f.ctx, basic("cred-1", "s3cret-0123456789"), time.Now())
 	if err != nil || full == nil || full.DeviceTypeId == 0 || !full.ExternalId.Valid ||
 		full.Metadata != nil || full.Name.Valid {
 		t.Fatalf("control: AuthenticateDevice must read the resolver's columns and no variable-width one, got (%+v, %v)", full, err)
@@ -315,7 +315,7 @@ func runCredentialLookupControls(t *testing.T, fresh func(t *testing.T) credFixt
 			arrange: func(t *testing.T, f credFixture) *PresentedCredential {
 				mustExec(t, f.api.RDB.DB(f.ctx).Model(&DeviceCredential{}).
 					Where("credential_id = ?", "cred-1").Update("enabled", false))
-				return basic("cred-1", "s3cret")
+				return basic("cred-1", "s3cret-0123456789")
 			},
 			want:        ErrCredentialNotResolved,
 			alsoResolve: true,
@@ -326,7 +326,7 @@ func runCredentialLookupControls(t *testing.T, fresh func(t *testing.T) credFixt
 				// A gorm SOFT delete of the device row alone. DeleteDevice would hard-delete
 				// the credentials with it, and then there would be no row to join from.
 				mustExec(t, f.api.RDB.DB(f.ctx).Delete(&Device{}, f.devId))
-				return basic("cred-1", "s3cret")
+				return basic("cred-1", "s3cret-0123456789")
 			},
 			want:        ErrCredentialNotResolved,
 			alsoResolve: true,
@@ -341,14 +341,14 @@ func runCredentialLookupControls(t *testing.T, fresh func(t *testing.T) credFixt
 				if _, err := f.api.CreateDevice(beta, &DeviceCreateRequest{Token: "bdev", DeviceTypeToken: "dt"}); err != nil {
 					t.Fatalf("seed beta device: %v", err)
 				}
-				secret := "s3cret"
+				secret := "s3cret-0123456789"
 				if _, err := f.api.CreateDeviceCredential(beta, &DeviceCredentialCreateRequest{
 					Token: "bc-1", DeviceToken: "bdev", CredentialType: string(CredentialMqttBasic),
 					CredentialId: "beta-only", CredentialValue: &secret, Enabled: true,
 				}); err != nil {
 					t.Fatalf("seed beta credential: %v", err)
 				}
-				return basic("beta-only", "s3cret")
+				return basic("beta-only", "s3cret-0123456789")
 			},
 			want:        ErrCredentialNotResolved,
 			alsoResolve: true,
@@ -358,7 +358,7 @@ func runCredentialLookupControls(t *testing.T, fresh func(t *testing.T) credFixt
 			arrange: func(t *testing.T, f credFixture) *PresentedCredential {
 				mustExec(t, f.api.RDB.DB(f.ctx).Model(&DeviceCredential{}).Where("credential_id = ?", "cred-1").
 					Update("expires_at", sql.NullTime{Time: now.Add(-time.Hour), Valid: true}))
-				return basic("cred-1", "s3cret")
+				return basic("cred-1", "s3cret-0123456789")
 			},
 			want:        ErrCredentialExpired,
 			alsoResolve: true,
@@ -379,10 +379,10 @@ func runCredentialLookupControls(t *testing.T, fresh func(t *testing.T) credFixt
 					t.Fatalf("seed foreign device: %v", err)
 				}
 				row := &DeviceCredential{DeviceId: foreign.ID, CredentialType: string(CredentialMqttBasic),
-					CredentialId: "crossed", SecretDigest: testDigest("s3cret"), Enabled: true}
+					CredentialId: "crossed", SecretDigest: testDigest("s3cret-0123456789"), Enabled: true}
 				row.Token = "c-crossed"
 				mustExec(t, f.api.RDB.DB(f.ctx).Create(row))
-				return basic("crossed", "s3cret")
+				return basic("crossed", "s3cret-0123456789")
 			},
 			want:        ErrCredentialNotResolved,
 			alsoResolve: true,

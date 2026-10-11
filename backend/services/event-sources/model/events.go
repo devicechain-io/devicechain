@@ -45,9 +45,21 @@ type UnresolvedEvent struct {
 	// rather than trusting the self-asserted Device token. CredentialSecret
 	// carries the bearer secret (e.g. an MQTT password) when the credential type
 	// requires one; it is nil when possession of the id is itself the proof.
+	//
+	// CredentialSecret is the secret AS THE DEVICE SENT IT, and it exists only inside
+	// event-sources, between the decoder and the publish. It is never marshalled
+	// (MarshalUnresolvedEvent refuses an event that still carries one): the publish
+	// seals it into SealedCredentialSecret first, so the inbound stream, which keeps
+	// its messages for the retention period, never holds a password as sent.
 	CredentialType   *string
 	CredentialId     *string
 	CredentialSecret *string
+	// SealedCredentialSecret is CredentialSecret sealed for the hop to device-management
+	// (credential.SecretTransit): the only form of the secret an event carries on the
+	// stream. The resolver opens it to compare. A value that is not a sealed secret for
+	// this credential, such as a plaintext left in a message from before sealing,
+	// authenticates nothing.
+	SealedCredentialSecret *string
 
 	// AuthenticatedTransport marks an event whose device was authenticated at the
 	// TRANSPORT by a trusted internal ingest source (LwM2M DTLS-PSK / Sparkplug
@@ -82,7 +94,7 @@ type UnresolvedEvent struct {
 // reach the caller's event at all. Callers therefore use the result and leave the
 // original alone.
 //
-// All three fields go, including CredentialType. It is the least sensitive of them,
+// All four fields go, including CredentialType. It is the least sensitive of them,
 // but it arrives on device-controlled input like the other two, so its contents are
 // whatever a producer put there rather than a member of the credential vocabulary.
 // The resolution failure REASON, which is server-derived, is what the dead-letter
@@ -91,6 +103,7 @@ func (unrez UnresolvedEvent) WithoutPresentedCredential() UnresolvedEvent {
 	unrez.CredentialType = nil
 	unrez.CredentialId = nil
 	unrez.CredentialSecret = nil
+	unrez.SealedCredentialSecret = nil
 	return unrez
 }
 

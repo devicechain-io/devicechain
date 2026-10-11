@@ -25,15 +25,15 @@ import (
 // verifies it. Read through a raw row (every column, whatever the model maps), so a
 // column the model stopped mapping cannot hide a plaintext.
 func TestNoColumnOfACredentialRowHoldsTheSecret(t *testing.T) {
-	api, ctx := resolveFixture(t) // creates c-1 with "s3cret"
-	requireNoColumnHolds(t, api, "c-1", "s3cret")
+	api, ctx := resolveFixture(t) // creates c-1 with "s3cret-0123456789"
+	requireNoColumnHolds(t, api, "c-1", "s3cret-0123456789")
 
 	_, err := api.UpdateDeviceCredential(ctx, "c-1", &DeviceCredentialUpdateRequest{
-		CredentialValue: dcgraphql.OptionalStringOf("r0tated-secret"),
+		CredentialValue: dcgraphql.OptionalStringOf("r0tated-secret-0123"),
 	})
 	require.NoError(t, err)
-	requireNoColumnHolds(t, api, "c-1", "r0tated-secret")
-	d, err := api.AuthenticateDevice(ctx, basic("cred-1", "r0tated-secret"), time.Now())
+	requireNoColumnHolds(t, api, "c-1", "r0tated-secret-0123")
+	d, err := api.AuthenticateDevice(ctx, basic("cred-1", "r0tated-secret-0123"), time.Now())
 	require.NoError(t, err)
 	require.Equal(t, "dev", d.Token)
 }
@@ -57,15 +57,15 @@ func requireNoColumnHolds(t *testing.T, api *Api, token, secret string) {
 // memory.
 func TestTheCredentialCacheHoldsNoSecret(t *testing.T) {
 	f := newCredentialCacheFixture(t)
-	f.mustAuthenticate(t, basic("cred-1", "s3cret"), 1, "fill")
+	f.mustAuthenticate(t, basic("cred-1", "s3cret-0123456789"), 1, "fill")
 
 	f.cache.mu.Lock()
 	held := 0
 	for _, el := range f.cache.byKey {
 		e := el.Value.(*credentialEntry)
 		held++
-		require.NotContains(t, fmt.Sprintf("%+v %+v", e.cred, e.device), "s3cret", "a cache entry holds the secret")
-		require.True(t, verifies(e.cred.SecretDigest.String, "s3cret"), "the cached row carries no digest of the secret")
+		require.NotContains(t, fmt.Sprintf("%+v %+v", e.cred, e.device), "s3cret-0123456789", "a cache entry holds the secret")
+		require.True(t, verifies(e.cred.SecretDigest.String, "s3cret-0123456789"), "the cached row carries no digest of the secret")
 	}
 	f.cache.mu.Unlock()
 	require.Equal(t, 1, held)
@@ -84,7 +84,7 @@ func TestWithNoKeyASecretIsNeitherStoredNorChecked(t *testing.T) {
 
 	_, err := api.CreateDeviceCredential(ctx, &DeviceCredentialCreateRequest{
 		Token: "c-2", DeviceToken: "dev", CredentialType: string(CredentialMqttBasic),
-		CredentialId: "cred-2", CredentialValue: strPtr("s3cret"), Enabled: true,
+		CredentialId: "cred-2", CredentialValue: strPtr("s3cret-0123456789"), Enabled: true,
 	})
 	require.ErrorIs(t, err, errNoDeviceSecretKey)
 	var n int64
@@ -92,13 +92,13 @@ func TestWithNoKeyASecretIsNeitherStoredNorChecked(t *testing.T) {
 	require.Zero(t, n, "a refused create wrote a row")
 
 	_, err = api.UpdateDeviceCredential(ctx, "c-1", &DeviceCredentialUpdateRequest{
-		CredentialValue: dcgraphql.OptionalStringOf("new"),
+		CredentialValue: dcgraphql.OptionalStringOf("new-secret-0123456789"),
 	})
 	require.ErrorIs(t, err, errNoDeviceSecretKey)
 
-	_, err = api.AuthenticateDevice(ctx, basic("cred-1", "s3cret"), time.Now())
+	_, err = api.AuthenticateDevice(ctx, basic("cred-1", "s3cret-0123456789"), time.Now())
 	require.ErrorIs(t, err, ErrCredentialMisconfigured)
-	_, _, err = api.ResolveDeviceCredential(ctx, basic("cred-1", "s3cret"), time.Now())
+	_, _, err = api.ResolveDeviceCredential(ctx, basic("cred-1", "s3cret-0123456789"), time.Now())
 	require.ErrorIs(t, err, ErrCredentialMisconfigured)
 
 	// Control: a credential that carries no secret is created and checked without a key.
@@ -122,11 +122,11 @@ func TestADigestUnderAnotherKeyIsMisconfiguredOnBothPaths(t *testing.T) {
 	counted := prometheus.NewCounterVec(prometheus.CounterOpts{Name: "misconfigured"}, []string{"path"})
 	api.MisconfiguredSecrets = counted
 
-	_, err = api.AuthenticateDevice(ctx, basic("cred-1", "s3cret"), time.Now())
+	_, err = api.AuthenticateDevice(ctx, basic("cred-1", "s3cret-0123456789"), time.Now())
 	require.ErrorIs(t, err, ErrCredentialMisconfigured)
 	require.False(t, errors.Is(err, ErrCredentialSecretMismatch))
 	require.False(t, IsCredentialRefusal(err), "a foreign digest must reach an operator, not the wrong-password noise")
-	_, _, err = api.ResolveDeviceCredential(ctx, basic("cred-1", "s3cret"), time.Now())
+	_, _, err = api.ResolveDeviceCredential(ctx, basic("cred-1", "s3cret-0123456789"), time.Now())
 	require.ErrorIs(t, err, ErrCredentialMisconfigured)
 
 	// Counted, by path, apart from wrong passwords.
@@ -136,7 +136,7 @@ func TestADigestUnderAnotherKeyIsMisconfiguredOnBothPaths(t *testing.T) {
 	// Control: under the key that made it, the same row authenticates, and a wrong password
 	// is a mismatch that is not counted as misconfigured.
 	api.DeviceSecretKey = testSecretKey
-	_, err = api.AuthenticateDevice(ctx, basic("cred-1", "s3cret"), time.Now())
+	_, err = api.AuthenticateDevice(ctx, basic("cred-1", "s3cret-0123456789"), time.Now())
 	require.NoError(t, err)
 	_, err = api.AuthenticateDevice(ctx, basic("cred-1", "wrong"), time.Now())
 	require.ErrorIs(t, err, ErrCredentialSecretMismatch)
@@ -146,7 +146,7 @@ func TestADigestUnderAnotherKeyIsMisconfiguredOnBothPaths(t *testing.T) {
 // 🔴 A DIGEST CANNOT BE TRANSPLANTED ACROSS TENANTS. Copied from one tenant's row into
 // another tenant's credential, a digest of a known password verifies nothing there.
 func TestADigestCopiedIntoAnotherTenantVerifiesNothing(t *testing.T) {
-	api, ctx := resolveFixture(t) // acme's cred-1 stores "s3cret"
+	api, ctx := resolveFixture(t) // acme's cred-1 stores "s3cret-0123456789"
 	beta := core.WithTenant(context.Background(), "beta")
 	_, err := api.CreateDeviceType(beta, &DeviceTypeCreateRequest{Token: "dt"})
 	require.NoError(t, err)
@@ -154,7 +154,7 @@ func TestADigestCopiedIntoAnotherTenantVerifiesNothing(t *testing.T) {
 	require.NoError(t, err)
 	_, err = api.CreateDeviceCredential(beta, &DeviceCredentialCreateRequest{
 		Token: "b-1", DeviceToken: "dev", CredentialType: string(CredentialMqttBasic),
-		CredentialId: "cred-b", CredentialValue: strPtr("beta-secret"), Enabled: true,
+		CredentialId: "cred-b", CredentialValue: strPtr("beta-secret-0123456789"), Enabled: true,
 	})
 	require.NoError(t, err)
 
@@ -162,13 +162,13 @@ func TestADigestCopiedIntoAnotherTenantVerifiesNothing(t *testing.T) {
 	require.NoError(t, api.RDB.Database.Raw("SELECT secret_digest FROM device_credentials WHERE token = ?", "c-1").Scan(&acmeDigest).Error)
 	require.NoError(t, api.RDB.Database.Exec("UPDATE device_credentials SET secret_digest = ? WHERE token = ?", acmeDigest, "b-1").Error)
 
-	_, err = api.AuthenticateDevice(beta, basic("cred-b", "s3cret"), time.Now())
+	_, err = api.AuthenticateDevice(beta, basic("cred-b", "s3cret-0123456789"), time.Now())
 	require.ErrorIs(t, err, ErrCredentialSecretMismatch)
-	_, stored, err := api.ResolveDeviceCredential(beta, basic("cred-b", "s3cret"), time.Now())
+	_, stored, err := api.ResolveDeviceCredential(beta, basic("cred-b", "s3cret-0123456789"), time.Now())
 	require.NoError(t, err)
-	require.ErrorIs(t, credential.VerifyDeviceSecret(testSecretKey, "beta", stored, "s3cret"), credential.ErrMismatch)
+	require.ErrorIs(t, credential.VerifyDeviceSecret(testSecretKey, "beta", stored, "s3cret-0123456789"), credential.ErrMismatch)
 	// Control: in its own tenant the digest still verifies.
-	_, err = api.AuthenticateDevice(ctx, basic("cred-1", "s3cret"), time.Now())
+	_, err = api.AuthenticateDevice(ctx, basic("cred-1", "s3cret-0123456789"), time.Now())
 	require.NoError(t, err)
 }
 
