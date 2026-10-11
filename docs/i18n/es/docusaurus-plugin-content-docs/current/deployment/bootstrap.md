@@ -1306,8 +1306,8 @@ base pueda seguirla, o donde puedas permitirte recrear la base.
 
 ### Dimensionamiento de los servicios {#service-sizing}
 
-Cada servicio de backend solicita 128Mi de memoria y tiene un límite de 256Mi. La CPU se
-dimensiona por servicio a partir de mediciones:
+Cada servicio de backend solicita 128Mi de memoria y tiene un límite de 256Mi, salvo
+`event-processing`, cuyo límite es 384Mi (un mínimo: un `resources.limits.memory` superior de nivel superior, o un límite propio de ese servicio, se usa tal cual). La CPU se dimensiona por servicio a partir de mediciones:
 
 | Servicio | Solicitud de CPU | Límite de CPU |
 | --- | --- | --- |
@@ -1323,6 +1323,17 @@ límite de CPU; consulta [El intermediario de mensajes](#broker-sizing).
 
 Con [`--compact`](#--compact), cada servicio de backend y cada servidor NATS solicita en cambio
 25m y 64Mi, y los límites quedan como arriba. La consola se dimensiona por separado.
+
+Los cinco servicios de la tabla anterior que tienen un límite de CPU propio ejecutan además el
+recolector de basura de Go con `GOGC=400` y un límite blando de memoria (`GOMEMLIMIT`) al 75 % del
+límite de memoria del propio servicio. A 6.000 eventos por segundo esto redujo entre un 4 % y un
+18 % la CPU que cuesta cada evento (un 18 % en `device-management` y `event-management`), porque el
+recolector se ejecutó entre cuatro y trece veces menos. El límite blando es lo que mantiene el
+montón más grande dentro del contenedor: hace que el recolector trabaje más en lugar de dejar que
+el montón supere el límite. Por eso `event-processing` tiene 384Mi, ya que su conjunto de trabajo
+llegó a 174 MiB de 256Mi en esa prueba. Ponga `functionalAreas.<servicio>.gogc` y
+`functionalAreas.<servicio>.goMemLimitPercent` a `0` para desactivar cualquiera de los dos en un
+servicio.
 
 Los cuatro primeros servicios hacen el trabajo por evento: recibir, resolver y almacenar cada
 evento, y fusionarlo en el estado en vivo de cada dispositivo. `event-processing` ejecuta la

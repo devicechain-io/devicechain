@@ -1,0 +1,127 @@
+// Copyright The DeviceChain Authors
+// SPDX-License-Identifier: Apache-2.0
+
+// Typed GraphQL operations behind the device configuration panel: the device's
+// desired/reported configuration, its revision history, and the configuration keys
+// its profile declares. All three are reads at device:read; nothing here writes.
+import { gql } from '@devicechain/client';
+import { graphql } from '@/gql/device-management';
+import type {
+  DeviceConfigurationQuery,
+  DeviceConfigurationRevisionsQuery,
+  DeviceConfigurationDeclarationQuery,
+} from '@/gql/device-management/graphql';
+
+export type DeviceConfiguration = NonNullable<DeviceConfigurationQuery['deviceConfiguration']>;
+export type DeviceConfigurationRevision =
+  DeviceConfigurationRevisionsQuery['deviceConfigurationRevisions']['results'][number];
+export type ConfigurationKey = NonNullable<
+  NonNullable<
+    DeviceConfigurationDeclarationQuery['devicesByToken'][number]['deviceType']
+  >['profile']
+>['configurationDeclaration'][number];
+
+const DEVICE_CONFIGURATION = graphql(`
+  query DeviceConfiguration($deviceToken: String!) {
+    deviceConfiguration(deviceToken: $deviceToken) {
+      desired {
+        revision
+        digest
+        document
+        createdAt
+        actor
+      }
+      reported {
+        revision
+        digest
+        status
+        errors
+        reportedAt
+        lastSyncAt
+      }
+      pending
+      stale
+      undeclared
+      invalid
+    }
+  }
+`);
+
+const DEVICE_CONFIGURATION_REVISIONS = graphql(`
+  query DeviceConfigurationRevisions($deviceToken: String!, $pagination: PaginationInput!) {
+    deviceConfigurationRevisions(deviceToken: $deviceToken, pagination: $pagination) {
+      results {
+        revision
+        digest
+        document
+        createdAt
+        actor
+      }
+      pagination {
+        pageStart
+        pageEnd
+        totalRecords
+      }
+    }
+  }
+`);
+
+// The declaration on the device's profile. This is the profile's DRAFT declaration —
+// the API exposes no published-version declaration — so the panel labels it as such.
+const DEVICE_CONFIGURATION_DECLARATION = graphql(`
+  query DeviceConfigurationDeclaration($tokens: [String!]!) {
+    devicesByToken(tokens: $tokens) {
+      token
+      deviceType {
+        token
+        profile {
+          token
+          configurationDeclaration {
+            key
+            valueType
+            description
+          }
+        }
+      }
+    }
+  }
+`);
+
+export interface DeviceConfigurationView {
+  // The device the data was read for. The panel renders it only while this equals
+  // the device on screen, so a slow response for the previous device never paints.
+  deviceToken: string;
+  configuration: DeviceConfiguration | null;
+  revisions: DeviceConfigurationRevision[];
+  totalRevisions: number;
+  // null when the declaration could not be read (e.g. no profile authority); the
+  // rest of the panel is unaffected.
+  declaration: ConfigurationKey[] | null;
+}
+
+export const REVISION_PAGE_SIZE = 20;
+
+// Everything the panel shows, read together. `pending` and `stale` are the server's
+// verdicts and are passed through untouched.
+export async function getDeviceConfigurationView(
+  deviceToken: string,
+): Promise<DeviceConfigurationView> {
+  const [cfg, revs, decl] = await Promise.all([
+    gql('device-management', DEVICE_CONFIGURATION, { deviceToken }),
+    gql('device-management', DEVICE_CONFIGURATION_REVISIONS, {
+      deviceToken,
+      pagination: { pageNumber: 1, pageSize: REVISION_PAGE_SIZE },
+    }),
+    gql('device-management', DEVICE_CONFIGURATION_DECLARATION, { tokens: [deviceToken] }).then(
+      (d) => d.devicesByToken[0]?.deviceType?.profile?.configurationDeclaration ?? [],
+      () => null,
+    ),
+  ]);
+  return {
+    deviceToken,
+    configuration: cfg.deviceConfiguration ?? null,
+    revisions: revs.deviceConfigurationRevisions.results,
+    totalRevisions: revs.deviceConfigurationRevisions.pagination.totalRecords ?? 0,
+    declaration: decl,
+  };
+}
