@@ -653,7 +653,7 @@ agente de borde, haz que tu tratamiento de las lecturas tolere una repetición.
 | `uplink.connectTimeoutSeconds` | `30` | Acota un intento de conexión del enlace ascendente. |
 | `uplink.backoffMinSeconds` / `uplink.backoffMaxSeconds` | `1` / `60` | Cotas de la espera creciente de reconexión mientras el enlace está caído. |
 
-## Qué vigilar
+## Qué vigilar {#what-to-watch}
 
 :::note Se distribuyen siete alertas para estos dos servicios
 El chart distribuye siete reglas de alerta para sparkplug-ingest y lwm2m-ingest, descritas en

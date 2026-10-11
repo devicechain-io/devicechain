@@ -609,7 +609,7 @@ the readings tolerant of a repeat.
 | `uplink.connectTimeoutSeconds` | `30` | Bounds one uplink connection attempt. |
 | `uplink.backoffMinSeconds` / `uplink.backoffMaxSeconds` | `1` / `60` | Reconnection backoff bounds while the link is down. |
 
-## What to watch
+## What to watch {#what-to-watch}
 
 :::note Seven alerts ship for these two services
 The chart ships seven alert rules for sparkplug-ingest and lwm2m-ingest, described under

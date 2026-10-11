@@ -220,7 +220,7 @@ la culpa.
 | `commands_served_offline_total` | Comandos para un dispositivo que este adaptador sirve que no tenían conexión activa: aparcados en command-delivery y vaciados en el siguiente despertar del dispositivo, o EXPIRED en su TTL si nunca despierta. |
 | `commands_succeeded_total{op}` | Comandos LwM2M que el dispositivo confirmó con un 2.xx, por operación. |
 | `commands_tenant_deleted_total` | Comandos descartados con confirmación porque su inquilino ha sido eliminado y sus datos se están recuperando: la plataforma declinando actuar sobre el hardware de un cliente dado de baja. |
-| `deregistrations_total` | Bajas explícitas de LwM2M (DELETE /rd/{id}). |
+| `deregistrations_total` | Bajas explícitas de LwM2M (`DELETE /rd/{id}`). |
 | `devices_registered_total` | Dispositivos creados automáticamente en su primer registro LwM2M. |
 | `handshakes_total` | Handshakes DTLS completados (cada uno es una nueva sesión LwM2M autenticada). |
 | `measurements_emitted_total` | Muestras de medición individuales escritas de forma duradera desde LwM2M Observe/Notify. |

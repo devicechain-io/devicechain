@@ -170,7 +170,7 @@ title: 指标参考
 | `commands_served_offline_total` | 发给此适配器所服务设备、但没有在线连接的指令：暂存在指令投递中并在设备下次唤醒时排空，或在设备始终不唤醒时于 TTL 处 EXPIRED。 |
 | `commands_succeeded_total{op}` | 设备以 2.xx 确认的 LwM2M 指令，按操作区分。 |
 | `commands_tenant_deleted_total` | 因其租户已被删除、数据正在回收而被确认丢弃的指令：平台拒绝驱动已退出客户的硬件。 |
-| `deregistrations_total` | LwM2M 显式注销（DELETE /rd/{id}）。 |
+| `deregistrations_total` | LwM2M 显式注销（`DELETE /rd/{id}`）。 |
 | `devices_registered_total` | 首次 LwM2M 注册时自动创建的设备。 |
 | `handshakes_total` | 完成的 DTLS 握手（每次都是一个新的已认证 LwM2M 会话）。 |
 | `measurements_emitted_total` | 由 LwM2M Observe/Notify 持久写入的单个测量样本。 |

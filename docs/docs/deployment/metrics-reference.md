@@ -212,7 +212,7 @@ although the device was not at fault.
 | `commands_served_offline_total` | Commands for a device this adapter serves that had no live connection — parked in command-delivery and drained on the device's next wake, or EXPIRED at their TTL if it never wakes. |
 | `commands_succeeded_total{op}` | LwM2M commands the device acknowledged with a 2.xx, by operation. |
 | `commands_tenant_deleted_total` | Commands ack-dropped because their tenant has been deleted and its data is being reclaimed — the platform declining to actuate an offboarded customer's hardware. |
-| `deregistrations_total` | LwM2M explicit deregistrations (DELETE /rd/{id}). |
+| `deregistrations_total` | LwM2M explicit deregistrations (`DELETE /rd/{id}`). |
 | `devices_registered_total` | Devices auto-created on their first LwM2M registration. |
 | `handshakes_total` | Completed DTLS handshakes (each is a new authenticated LwM2M session). |
 | `measurements_emitted_total` | Individual measurement samples durably written from LwM2M Observe/Notify. |
