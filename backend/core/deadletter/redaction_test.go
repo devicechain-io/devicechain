@@ -5,10 +5,11 @@ package deadletter
 
 import (
 	"context"
+	"strings"
 	"testing"
-	"time"
 
 	"github.com/devicechain-io/dc-microservice/messaging"
+	"github.com/devicechain-io/dc-microservice/payloadredact"
 	"github.com/devicechain-io/dc-microservice/streams"
 	"github.com/nats-io/nats.go"
 	"github.com/stretchr/testify/require"
@@ -60,19 +61,21 @@ func TestAPlatformAuthoredLetterPayloadIsUntouched(t *testing.T) {
 	require.Equal(t, []byte(`{"token":"dev-1"}`), lastLetter(t, w).Payload)
 }
 
-// The recorder letters a cold device-shaped stream's original with the credential removed,
-// and a cold platform-shaped stream's original untouched.
-func TestRecorderRedactsOnlyDeviceAuthoredCopies(t *testing.T) {
+// The recorder letters a cold stream's original by the stream's authorship declaration:
+// device-authored streams are redacted, platform-authored ones kept byte for byte.
+func TestRecorderRedactsByDeclaredAuthorship(t *testing.T) {
 	cases := map[string]struct {
 		suffix, body string
 		want         func(t *testing.T, payload string)
 	}{
-		"device-shaped": {streams.DeviceReports, `{"state":"ok","credentialSecret":"` + fixtureSecret + `"}`,
+		"device-reports": {streams.DeviceReports, `{"state":"ok","credentialSecret":"` + fixtureSecret + `"}`,
 			func(t *testing.T, payload string) {
 				require.NotContains(t, payload, fixtureSecret)
 				require.Contains(t, payload, `"state":"ok"`)
 			}},
-		"platform-shaped": {streams.EntityDeleted, `{"token":"dev-1"}`,
+		"device-desired": {streams.DeviceDesired, `{"token":"dev-1","document":"x"}`,
+			func(t *testing.T, payload string) { require.Equal(t, `{"token":"dev-1","document":"x"}`, payload) }},
+		"entity-deleted": {streams.EntityDeleted, `{"token":"dev-1"}`,
 			func(t *testing.T, payload string) { require.Equal(t, `{"token":"dev-1"}`, payload) }},
 	}
 	for name, c := range cases {
@@ -87,11 +90,84 @@ func TestRecorderRedactsOnlyDeviceAuthoredCopies(t *testing.T) {
 			d := abandoned(c.suffix, true)
 			d.Original = &nats.RawStreamMsg{Subject: messaging.ScopedSubject("test", "acme", c.suffix),
 				Data: []byte(c.body), Header: nats.Header{}}
-			d.At = time.Now()
 			outcome, err := r.record(context.Background(), d)
 			require.NoError(t, err)
 			require.Equal(t, messaging.MaxDeliveryLettered, outcome)
 			c.want(t, string(lastLetter(t, letters).Payload))
 		})
 	}
+}
+
+// The size check is made on what would be stored, after redaction: a body whose redacted
+// form fits is kept (as its description), not dropped for the size of the original.
+func TestRecorderSizeChecksTheRedactedPayload(t *testing.T) {
+	p, _ := testProducer(t, "rec-size")
+	letters := &fakeWriter{}
+	r := &maxDeliveryRecorder{
+		producer:  p,
+		sink:      &Sink{writer: letters, source: p.source, onLoss: func(error) {}},
+		maxLetter: payloadOverhead + 4096,
+	}
+	d := abandoned(streams.DeviceReports, true)
+	d.Original = &nats.RawStreamMsg{Subject: messaging.ScopedSubject("test", "acme", streams.DeviceReports),
+		Data: []byte("not json " + strings.Repeat("x", 1<<20)), Header: nats.Header{}}
+	_, err := r.record(context.Background(), d)
+	require.NoError(t, err)
+	got := lastLetter(t, letters)
+	require.NotEmpty(t, got.Payload, "the redacted description fits and must be kept")
+	require.Contains(t, string(got.Payload), `"sha256"`)
+}
+
+// Authorship is read from the origin stream, so a letter about a device-authored stream is
+// redacted whatever its kind - the path a stream added with a control-fact kind takes.
+func TestWriteForRedactsADeviceAuthoredOrigin(t *testing.T) {
+	p, _ := testProducer(t, "device-management")
+	w := &fakeWriter{}
+	msg := messaging.NewConsumedMessage("test.acme.device-reports.dev-1", []byte(`{}`), 5, nil, nil).
+		WithOrigin(messaging.Origin{Suffix: streams.DeviceReports, Stream: "test_device-reports",
+			Consumer: "test_device-management_device-reports", Seq: 3})
+	e := armEnvelope()
+	e.Payload = []byte(`{"state":"ok","password":"` + fixtureSecret + `"}`)
+	require.NoError(t, p.NewSink(w).WriteFor(tenantCtx(), msg, e))
+	got := lastLetter(t, w)
+	require.Equal(t, KindControlFact, got.Kind)
+	require.NotContains(t, string(got.Payload), fixtureSecret)
+	require.Contains(t, string(got.Payload), `"state":"ok"`)
+}
+
+// FAIL CLOSED: a stream nobody declared platform-authored is redacted, and only the pinned
+// set of declared streams keeps a payload verbatim.
+func TestPayloadForIsFailClosedOnAnUndeclaredStream(t *testing.T) {
+	body := []byte(`{"state":"ok","credentialSecret":"` + fixtureSecret + `"}`)
+	for _, suffix := range []string{"a-stream-added-later", "unknown"} {
+		require.NotContains(t, string(payloadFor(suffix, KindControlFact, body)), fixtureSecret, suffix)
+	}
+	for _, st := range streams.All {
+		kept := string(payloadFor(st.Suffix, KindControlFact, body))
+		if st.PlatformAuthored {
+			require.Equal(t, string(body), kept, st.Suffix)
+		} else {
+			require.NotContains(t, kept, fixtureSecret, st.Suffix)
+		}
+	}
+	// With no origin stream the kind decides: a kind any device-authored stream shares is redacted.
+	require.NotContains(t, string(payloadFor("", KindCommandResponse, body)), fixtureSecret)
+	require.NotContains(t, string(payloadFor("", Kind("not-a-kind"), body)), fixtureSecret)
+}
+
+func TestPayloadForLeavesEmptyPayloadsEmpty(t *testing.T) {
+	require.Nil(t, payloadFor(streams.CommandResponses, KindCommandResponse, nil))
+	require.Empty(t, payloadFor(streams.CommandResponses, KindCommandResponse, []byte{}))
+}
+
+func TestACommandResponseLetterIsBounded(t *testing.T) {
+	p, _ := testProducer(t, "command-delivery")
+	w := &fakeWriter{}
+	e := good()
+	e.Kind = KindCommandResponse
+	e.Payload = []byte(`{"credentialSecret":"` + fixtureSecret + `","note":"` + strings.Repeat("x", 4*payloadredact.DiagnosticMaxBytes) + `"}`)
+	require.NoError(t, p.NewSink(w).Write(tenantCtx(), e))
+	got := lastLetter(t, w)
+	require.NotContains(t, string(got.Payload), fixtureSecret)
+	require.LessOrEqual(t, len(got.Payload), payloadredact.DiagnosticMaxBytes+64)
 }

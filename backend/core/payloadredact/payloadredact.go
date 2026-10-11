@@ -8,7 +8,8 @@
 // live authentication material only for as long as the message is being authenticated, so
 // anything that keeps the body for later reading keeps it through Redact first. The
 // guarantee is structural rather than best-effort: a body that can be read as JSON comes
-// back with the value of every credential-named field replaced and everything else intact,
+// back with the value of every credential-named field (compared as encoding/json compares
+// keys, see credentialKeys) replaced and everything else intact,
 // and a body that cannot be read as JSON comes back as a fixed-size description (length and
 // digest) with none of its content, so there is no spelling of a credential that survives.
 package payloadredact
@@ -23,38 +24,36 @@ import (
 	"strings"
 )
 
+// DiagnosticMaxBytes is the bound every store of a redacted body applies.
+const DiagnosticMaxBytes = 16 << 10
+
 // Marker replaces the value of every credential-named field.
 const Marker = "[redacted]"
 
-// credentialKeys are the field names whose values are credential material, compared after
-// lower-casing and dropping '_' and '-' (so credentialSecret, credential_secret and
-// CredentialSecret are one name). The device envelope's own field is credentialSecret; the
-// rest are the names a device or gateway commonly uses for the same thing.
-var credentialKeys = map[string]struct{}{
-	"credentialsecret": {},
-	"secret":           {},
-	"clientsecret":     {},
-	"password":         {},
-	"passwd":           {},
-	"passphrase":       {},
-	"token":            {},
-	"accesstoken":      {},
-	"refreshtoken":     {},
-	"authtoken":        {},
-	"bearer":           {},
-	"authorization":    {},
-	"apikey":           {},
-	"privatekey":       {},
-	"psk":              {},
-	"presharedkey":     {},
+// credentialKeys are the field names whose values are credential material. A key matches
+// when, after dropping '_' and '-', it equals one of these under Unicode simple case folding
+// - the same folding encoding/json applies when it matches a key to a field, so a spelling the
+// device decoder would accept as credentialSecret is a spelling this redacts. The device
+// envelope's own field is credentialSecret; the rest are names a device or gateway commonly
+// uses for the same thing.
+var credentialKeys = []string{
+	"credentialsecret", "credential", "credentials",
+	"secret", "clientsecret",
+	"password", "passwd", "pwd", "pass", "passphrase",
+	"token", "accesstoken", "refreshtoken", "authtoken",
+	"bearer", "authorization",
+	"apikey", "xapikey",
+	"privatekey", "psk", "presharedkey",
 }
 
 func isCredentialKey(k string) bool {
-	k = strings.ToLower(k)
-	k = strings.ReplaceAll(k, "_", "")
-	k = strings.ReplaceAll(k, "-", "")
-	_, ok := credentialKeys[k]
-	return ok
+	k = strings.NewReplacer("_", "", "-", "").Replace(k)
+	for _, c := range credentialKeys {
+		if strings.EqualFold(k, c) {
+			return true
+		}
+	}
+	return false
 }
 
 // Redact returns raw with credential material removed, for storage.

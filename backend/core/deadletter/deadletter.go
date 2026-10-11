@@ -569,7 +569,7 @@ func (s *Sink) Write(ctx context.Context, e Envelope) error {
 		return fmt.Errorf("dead letter LOST — %s was refused before any write, a defect in the "+
 			"producing service: %w", e.Kind, err)
 	}
-	return s.write(ctx, e, "")
+	return s.write(ctx, e, "", "")
 }
 
 // WriteFor records one dead letter about msg, a message this service CONSUMED and is giving
@@ -642,7 +642,7 @@ func (s *Sink) writeFor(ctx context.Context, msg messaging.Message, e Envelope, 
 	if part != nil && id != "" {
 		id += ".part." + *part
 	}
-	return s.write(ctx, e, id)
+	return s.write(ctx, e, id, o.Suffix)
 }
 
 // OriginID is the dedup id of a letter about msg: "mdl.<stream>.<consumer>.<seq>" from its
@@ -663,14 +663,34 @@ func originID(stream, consumer string, seq uint64) string {
 
 // write is the one write path: validate, then retry within the detached deadline. dedupID,
 // when set, is published as the letter's Nats-Msg-Id.
-func (s *Sink) write(ctx context.Context, e Envelope, dedupID string) error {
-	e.Source = s.source
-	// A device's reply is a device-authored body, kept for diagnosis without whatever
-	// credential material it carried. Done here, on the one write path, so no producer has
-	// to remember it.
-	if e.Kind == KindCommandResponse {
-		e.Payload = redactDevicePayload(e.Payload)
+func (s *Sink) write(ctx context.Context, e Envelope, dedupID, suffix string) error {
+	e.Payload = payloadFor(suffix, e.Kind, e.Payload)
+	return s.writePrepared(ctx, e, dedupID)
+}
+
+// payloadFor is the payload a letter may keep. Classification is by the ORIGIN STREAM's
+// declaration (streams.Stream.PlatformAuthored), not by the letter's kind: only a stream
+// declared platform-authored keeps its payload verbatim, and anything else - an undeclared
+// stream, a new one - is redacted of credential material. With no origin stream (a plain
+// Write) the kind decides, and only a kind all of whose streams are platform-authored
+// keeps its payload.
+func payloadFor(suffix string, kind Kind, p []byte) []byte {
+	if len(p) == 0 {
+		return p
 	}
+	if suffix != "" {
+		if streams.PlatformAuthoredFor(suffix) {
+			return p
+		}
+	} else if streams.KindPlatformAuthored(string(kind)) {
+		return p
+	}
+	return payloadredact.Redact(p, payloadredact.DiagnosticMaxBytes)
+}
+
+// writePrepared writes a letter whose payload has already been through payloadFor.
+func (s *Sink) writePrepared(ctx context.Context, e Envelope, dedupID string) error {
+	e.Source = s.source
 	body, err := Marshal(e)
 	if err != nil {
 		s.onLoss(err)
@@ -688,14 +708,6 @@ func (s *Sink) write(ctx context.Context, e Envelope, dedupID string) error {
 			"source message will not redeliver: %w", e.Kind, attempts, err)
 	}
 	return nil
-}
-
-// redactDevicePayload prepares a device-authored body for the archive; nil stays nil.
-func redactDevicePayload(p []byte) []byte {
-	if len(p) == 0 {
-		return p
-	}
-	return payloadredact.Redact(p, 0)
 }
 
 // writeWithRetries writes msg with the bounded retries every give-up write gets, under a

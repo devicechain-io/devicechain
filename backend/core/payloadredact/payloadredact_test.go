@@ -26,7 +26,10 @@ func TestRedactReplacesCredentialValuesAtAnyDepthAndKeepsTheRest(t *testing.T) {
 }
 
 func TestRedactDoesNotKeepAnEscapedSpellingOfTheKey(t *testing.T) {
-	out := string(Redact([]byte(`{"credentialSecret":"`+secret+`"}`), 0))
+	bs := string(rune(92)) // a backslash, so the body carries a real JSON escape
+	body := `{"credential` + bs + `u0053ecret":"` + secret + `"}`
+	require.Contains(t, body, bs+`u0053`, "the fixture must carry a real JSON escape")
+	out := string(Redact([]byte(body), 0))
 	require.NotContains(t, out, secret)
 }
 

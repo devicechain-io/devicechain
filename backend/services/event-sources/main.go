@@ -1051,4 +1051,4 @@ func beforeMicroserviceTerminated(ctx context.Context) error {
 }
 
 // failedDecodeMaxBytes bounds the (redacted) body kept on the failed-decode stream.
-const failedDecodeMaxBytes = 16 << 10
+const failedDecodeMaxBytes = payloadredact.DiagnosticMaxBytes
