@@ -51,3 +51,18 @@ func (r *DeviceProfileVersionResolver) PublishedBy() *string {
 	}
 	return &r.M.PublishedBy
 }
+
+// ConfigurationDeclaration is the device-visible configuration declaration frozen into
+// this version. A snapshot that cannot be decoded is an error, not an empty declaration:
+// "declares nothing" is a statement devices act on.
+func (r *DeviceProfileVersionResolver) ConfigurationDeclaration() ([]*ConfigurationKeyResolver, error) {
+	snap, err := model.ParseProfileSnapshot(r.M.Snapshot)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]*ConfigurationKeyResolver, 0, len(snap.Configuration))
+	for _, k := range snap.Configuration {
+		result = append(result, &ConfigurationKeyResolver{M: k})
+	}
+	return result, nil
+}

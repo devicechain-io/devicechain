@@ -925,7 +925,7 @@ export type DeviceConfigurationDeclarationQueryVariables = Exact<{
 }>;
 
 
-export type DeviceConfigurationDeclarationQuery = { devicesByToken: Array<{ token: string, deviceType: { token: string, profile: { token: string, configurationDeclaration: Array<{ key: string, valueType: string, description: string | null }> } | null } }> };
+export type DeviceConfigurationDeclarationQuery = { devicesByToken: Array<{ token: string, deviceType: { token: string, profile: { token: string, activeProfileVersion: { version: number, configurationDeclaration: Array<{ key: string, valueType: string, description: string | null }> } | null } | null } }> };
 
 export type DevicesQueryVariables = Exact<{
   criteria: DeviceSearchCriteria;
@@ -2276,10 +2276,13 @@ export const DeviceConfigurationDeclarationDocument = new TypedDocumentString(`
       token
       profile {
         token
-        configurationDeclaration {
-          key
-          valueType
-          description
+        activeProfileVersion {
+          version
+          configurationDeclaration {
+            key
+            valueType
+            description
+          }
         }
       }
     }

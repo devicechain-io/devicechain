@@ -7,7 +7,9 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/devicechain-io/dc-device-management/model"
 	"github.com/devicechain-io/dc-microservice/auth"
+	gqlcore "github.com/devicechain-io/dc-microservice/graphql"
 	gql "github.com/graph-gophers/graphql-go"
 )
 
@@ -115,5 +117,45 @@ func TestGraphQLSetConfigurationDeclarationRequiresDeviceWrite(t *testing.T) {
 	writer := withAuthorities(ctx, auth.DeviceWrite, auth.DeviceRead)
 	if resp := schema.Exec(writer, setConfigDeclMutation, "", vars); len(resp.Errors) > 0 {
 		t.Fatalf("a device:write caller was refused: %v", resp.Errors)
+	}
+}
+
+// The PUBLISHED declaration is readable through the profile's active version, and it is
+// the frozen one: a later draft edit must not move it. The draft is changed after the
+// publish and the two reads are compared, so a resolver that read the draft instead of
+// the snapshot would show the edit.
+func TestGraphQLReadsPublishedConfigurationDeclaration(t *testing.T) {
+	ctx := profileLocationCtx(t)
+	execProfileGql(t, ctx, createProfileMutation, map[string]any{
+		"request": map[string]any{"token": "thermostat"},
+	})
+	execProfileGql(t, ctx, setConfigDeclMutation, map[string]any{
+		"token": "thermostat",
+		"keys":  []any{map[string]any{"key": "mode", "valueType": "STRING", "description": "run mode"}},
+	})
+
+	const read = `query { deviceProfilesByToken(tokens: ["thermostat"]) {
+	  configurationDeclaration { key }
+	  activeProfileVersion { version configurationDeclaration { key valueType description } } } }`
+
+	// Never published: no active version, so nothing is published.
+	if got := string(execProfileGql(t, ctx, read, nil)); got !=
+		`{"deviceProfilesByToken":[{"configurationDeclaration":[{"key":"mode"}],"activeProfileVersion":null}]}` {
+		t.Fatalf("unpublished profile read %s", got)
+	}
+
+	api := ctx.Value(gqlcore.ContextApiKey).(*model.Api)
+	if _, err := api.PublishDeviceProfile(ctx, "thermostat", nil, nil, "tester"); err != nil {
+		t.Fatalf("publish: %v", err)
+	}
+	execProfileGql(t, ctx, setConfigDeclMutation, map[string]any{
+		"token": "thermostat",
+		"keys":  []any{map[string]any{"key": "other", "valueType": "LONG"}},
+	})
+
+	got := string(execProfileGql(t, ctx, read, nil))
+	want := `{"deviceProfilesByToken":[{"configurationDeclaration":[{"key":"other"}],"activeProfileVersion":{"version":1,"configurationDeclaration":[{"key":"mode","valueType":"STRING","description":"run mode"}]}}]}`
+	if got != want {
+		t.Fatalf("published declaration moved with the draft:\n got %s\nwant %s", got, want)
 	}
 }

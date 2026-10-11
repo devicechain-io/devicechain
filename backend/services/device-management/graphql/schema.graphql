@@ -125,6 +125,12 @@ type DeviceProfile implements Model & TokenReference & NamedEntity & MetadataEnt
     never changes.
     """
     configurationDeclaration: [ConfigurationKey!]!
+    """
+    The published version a device currently resolves through this profile, with the
+    content frozen into it, or null until the profile is first published. Read the
+    declaration devices actually see from here, not from the draft fields above.
+    """
+    activeProfileVersion: DeviceProfileVersion
 }
 
 """One shared attribute key declared as device-visible configuration on a device profile."""
@@ -195,6 +201,13 @@ type DeviceProfileVersion {
     publishedAt: String!
     # The identity that published it (username, falling back to email).
     publishedBy: String
+    """
+    The device-visible configuration declaration frozen into this version: the shared
+    attribute keys a device of the profile may see. Empty when the version declared
+    nothing, including every version published before declarations existed. It never
+    changes after publication.
+    """
+    configurationDeclaration: [ConfigurationKey!]!
 }
 
 # Represents a typed, unit-bearing metric declared on a device profile (ADR-016/ADR-045).

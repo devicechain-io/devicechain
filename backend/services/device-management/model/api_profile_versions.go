@@ -649,3 +649,24 @@ func (api *Api) ProfileResolutionByDeviceType(ctx context.Context, deviceTypeId 
 	scope.ProfileVersionToken = fmt.Sprintf("%s@%d", profiles[0].Token, version)
 	return NewProfileResolution(scope, snap.Metrics), nil
 }
+
+// ParseProfileSnapshot decodes a stored version snapshot for readers outside the model
+// package (the GraphQL layer), with the same normalization the resolution path applies.
+func ParseProfileSnapshot(raw datatypes.JSON) (*ProfileSnapshot, error) {
+	return parseProfileSnapshot(raw)
+}
+
+// ActiveDeviceProfileVersion returns the published version row a profile currently
+// resolves through, or nil when the profile has never been published.
+func (api *Api) ActiveDeviceProfileVersion(ctx context.Context, profile *DeviceProfile) (*DeviceProfileVersion, error) {
+	if !profile.ActiveVersion.Valid {
+		return nil, nil
+	}
+	var row DeviceProfileVersion
+	result := api.RDB.DB(ctx).Where("device_profile_id = ? AND version = ?",
+		profile.ID, profile.ActiveVersion.Int32).First(&row)
+	if result.Error != nil {
+		return nil, result.Error
+	}
+	return &row, nil
+}

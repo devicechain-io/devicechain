@@ -253,7 +253,7 @@
   "configStatusReceived": "Received",
   "configStatusRejected": "Rejected",
   "configDeclaredKeys": "Declared keys",
-  "configDeclaredKeysHint": "Shown from the profile's current draft declaration. Values are edited as shared attributes in the Facets tab; changing a declared key creates a new revision.",
+  "configDeclaredKeysHint": "Shown from the profile's active published version. Values are edited as shared attributes in the Facets tab; changing a declared key creates a new revision.",
   "configDeclarationUnavailable": "The profile's declaration could not be read.",
   "configNoDeclaredKeys": "This device's profile declares no configuration keys, so the device sees an empty document.",
   "configKeyColumn": "Key",

@@ -17,8 +17,10 @@ export type DeviceConfigurationRevision =
   DeviceConfigurationRevisionsQuery['deviceConfigurationRevisions']['results'][number];
 export type ConfigurationKey = NonNullable<
   NonNullable<
-    DeviceConfigurationDeclarationQuery['devicesByToken'][number]['deviceType']
-  >['profile']
+    NonNullable<
+      DeviceConfigurationDeclarationQuery['devicesByToken'][number]['deviceType']
+    >['profile']
+  >['activeProfileVersion']
 >['configurationDeclaration'][number];
 
 const DEVICE_CONFIGURATION = graphql(`
@@ -66,8 +68,9 @@ const DEVICE_CONFIGURATION_REVISIONS = graphql(`
   }
 `);
 
-// The declaration on the device's profile. This is the profile's DRAFT declaration —
-// the API exposes no published-version declaration — so the panel labels it as such.
+// The declaration on the device's profile, as of its ACTIVE PUBLISHED version — what the
+// device actually sees. A never-published profile has no active version and so declares
+// nothing, which is exactly what a device of it sees.
 const DEVICE_CONFIGURATION_DECLARATION = graphql(`
   query DeviceConfigurationDeclaration($tokens: [String!]!) {
     devicesByToken(tokens: $tokens) {
@@ -76,10 +79,13 @@ const DEVICE_CONFIGURATION_DECLARATION = graphql(`
         token
         profile {
           token
-          configurationDeclaration {
-            key
-            valueType
-            description
+          activeProfileVersion {
+            version
+            configurationDeclaration {
+              key
+              valueType
+              description
+            }
           }
         }
       }
@@ -113,7 +119,7 @@ export async function getDeviceConfigurationView(
       pagination: { pageNumber: 1, pageSize: REVISION_PAGE_SIZE },
     }),
     gql('device-management', DEVICE_CONFIGURATION_DECLARATION, { tokens: [deviceToken] }).then(
-      (d) => d.devicesByToken[0]?.deviceType?.profile?.configurationDeclaration ?? [],
+      (d) => d.devicesByToken[0]?.deviceType?.profile?.activeProfileVersion?.configurationDeclaration ?? [],
       () => null,
     ),
   ]);
