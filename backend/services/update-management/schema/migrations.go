@@ -20,4 +20,5 @@ import (
 var Migrations = []*gormigrate.Migration{
 	NewBaselineSchema(),
 	NewArtifactsSchema(),
+	NewUploadLeaseSchema(),
 }

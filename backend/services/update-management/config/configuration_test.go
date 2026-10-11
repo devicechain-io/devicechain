@@ -37,6 +37,12 @@ func TestUpdatesCeilingsDefaultAndValidate(t *testing.T) {
 	require.Equal(t, config.DefaultMaxArtifactBytes, cfg.Updates.MaxArtifactBytes)
 	require.Equal(t, config.DefaultMaxTenantArtifactBytes, cfg.Updates.MaxTenantArtifactBytes)
 
+	require.Equal(t, config.DefaultMaxConcurrentUploads, cfg.Updates.MaxConcurrentUploads)
+	require.Less(t, config.DefaultMaxTenantArtifactBytes, int64(5<<30),
+		"the per-tenant ceiling stays below the chart's default 5Gi volume, which every tenant shares")
+	negUploads := &config.UpdateManagementConfiguration{}
+	require.Error(t, core.LoadConfiguration([]byte(`{"updates":{"maxConcurrentUploads":-1}}`), negUploads))
+
 	neg := &config.UpdateManagementConfiguration{}
 	require.Error(t, core.LoadConfiguration([]byte(`{"updates":{"maxArtifactBytes":-1}}`), neg))
 

@@ -9,8 +9,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-microservice/blob"
@@ -46,6 +48,7 @@ const (
 	CodeArtifactNotFound           = "ARTIFACT_NOT_FOUND"
 	CodeTenantDeleted              = "TENANT_DELETED"
 	CodeObjectStoreNotConfigured   = "OBJECT_STORE_NOT_CONFIGURED"
+	CodeUploadInProgress           = "ARTIFACT_UPLOAD_IN_PROGRESS"
 	CodeArtifactUploadRaceLost     = "ARTIFACT_UPLOAD_CONFLICT"
 )
 
@@ -99,6 +102,43 @@ type Api struct {
 	// behind the purge sweep. Nil disables the gate (user-management not configured, unit
 	// tests).
 	TenantDeleted func(tenant string) bool
+
+	// lockTenant takes the per-tenant admission lock inside the create transaction. A seam
+	// so a test can see that it is taken before the sum is read; nil means the real lock.
+	lockTenant func(ctx context.Context, tx *gorm.DB) error
+}
+
+// heldBytesPredicate selects the artifacts that count against a tenant's ceiling: those
+// that hold, or are about to hold, bytes. A retired artifact that never received content
+// holds none, so retiring an abandoned declaration gives its quota back; a retired
+// artifact whose bytes are stored still counts, because they still are.
+const heldBytesPredicate = "state <> 'RETIRED' OR blob_ref IS NOT NULL"
+
+// lockTenantArtifacts takes pg_advisory_xact_lock keyed on the tenant, as the other
+// services do for their per-tenant admission checks.
+//
+// IT IS A NO-OP ON SQLITE, which the unit tests run on, because the function does not
+// exist there. The unit tests therefore prove the lock is requested before the sum is
+// read (through the lockTenant seam) and that the statement is the right one for
+// PostgreSQL; the overshoot it prevents is only observable against a real server, and
+// lock_integration_test.go (build tag integration) observes it there.
+func lockTenantArtifacts(ctx context.Context, tx *gorm.DB) error {
+	if tx.Dialector.Name() != "postgres" {
+		return nil
+	}
+	tenant, ok := core.TenantFromContext(ctx)
+	if !ok {
+		// A lock keyed on an empty string would serialize every tenant against every other.
+		return core.ErrNoTenant
+	}
+	return tx.Exec("SELECT pg_advisory_xact_lock(?)", artifactLockKey(tenant)).Error
+}
+
+// artifactLockKey is the advisory-lock key for a tenant's artifact admissions.
+func artifactLockKey(tenant string) int64 {
+	h := fnv.New64a()
+	_, _ = h.Write([]byte("update-management:artifact-quota:" + tenant))
+	return int64(h.Sum64())
 }
 
 // NewApi creates the catalogue API.
@@ -227,14 +267,23 @@ func (api *Api) CreateArtifact(ctx context.Context, req *ArtifactCreateRequest) 
 		Provenance:         provenance,
 		State:              StateUploading,
 	}
-	// The quota check and the insert share one transaction so the sum read is the one
-	// the insert is judged against. Two concurrent creates can still both pass (READ
-	// COMMITTED), overshooting the ceiling by at most one artifact each; the ceiling
-	// bounds storage growth, not a billing figure, and serialising every create of a
-	// tenant to close that window would cost more than the overshoot does.
+	// The quota check and the insert share one transaction, and the transaction first takes
+	// the tenant's advisory lock. Without the lock two creates both read the same sum under
+	// READ COMMITTED and both insert, each one passing a ceiling the pair exceeds; with it
+	// the second waits for the first to commit and then reads a sum that includes it. The
+	// lock is held to the end of the transaction and is per tenant, so tenants do not queue
+	// behind each other.
+	lock := api.lockTenant
+	if lock == nil {
+		lock = lockTenantArtifacts
+	}
 	err = api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := lock(ctx, tx); err != nil {
+			return err
+		}
 		var held int64
-		if err := tx.Model(&Artifact{}).Select("CAST(COALESCE(SUM(size_bytes), 0) AS BIGINT)").Scan(&held).Error; err != nil {
+		if err := tx.Model(&Artifact{}).Where(heldBytesPredicate).
+			Select("CAST(COALESCE(SUM(size_bytes), 0) AS BIGINT)").Scan(&held).Error; err != nil {
 			return err
 		}
 		if held+req.SizeBytes > api.Limits.MaxTenantArtifactBytes {
@@ -415,8 +464,9 @@ func (api *Api) CompleteUpload(ctx context.Context, a *Artifact, ref blob.Ref) e
 	res := api.RDB.DB(ctx).Model(&Artifact{}).
 		Where("id = ? AND state = ?", a.ID, StateUploading).
 		Updates(map[string]any{
-			"state":    StateAvailable,
-			"blob_ref": sql.NullString{String: ref.String(), Valid: true},
+			"state":           StateAvailable,
+			"blob_ref":        sql.NullString{String: ref.String(), Valid: true},
+			"uploading_since": nil,
 		})
 	if res.Error != nil {
 		return res.Error
@@ -425,4 +475,42 @@ func (api *Api) CompleteUpload(ctx context.Context, a *Artifact, ref blob.Ref) e
 		return refuse(CodeArtifactUploadRaceLost, "artifact %q is no longer accepting content", a.Token)
 	}
 	return nil
+}
+
+// UploadWindow is the longest an upload of size bytes is allowed to run: a fixed allowance
+// plus the declared size at the slowest rate the handler tolerates. The handler's
+// whole-upload deadline and the claim's expiry are both derived from it, so they cannot
+// disagree.
+func UploadWindow(size int64) time.Duration {
+	const minThroughput = 256 << 10 // bytes per second
+	return 2*time.Minute + time.Duration(size/minThroughput)*time.Second
+}
+
+// claimGrace is how long past its window a claim is honoured, so a replica whose clock
+// runs behind does not see a live upload as expired.
+const claimGrace = time.Minute
+
+// ClaimUpload takes the artifact's single upload lease. Of any number of concurrent
+// callers, across every replica, at most one succeeds; the others get
+// ARTIFACT_UPLOAD_IN_PROGRESS and must not read their body. A lease older than the upload
+// window belongs to a process that died, and is taken over.
+func (api *Api) ClaimUpload(ctx context.Context, a *Artifact) error {
+	now := time.Now().UTC()
+	stale := now.Add(-(UploadWindow(a.SizeBytes) + claimGrace))
+	res := api.RDB.DB(ctx).Model(&Artifact{}).
+		Where("id = ? AND state = ? AND (uploading_since IS NULL OR uploading_since < ?)", a.ID, StateUploading, stale).
+		Update("uploading_since", now)
+	if res.Error != nil {
+		return res.Error
+	}
+	if res.RowsAffected == 0 {
+		return refuse(CodeUploadInProgress, "artifact %q already has an upload in progress", a.Token)
+	}
+	return nil
+}
+
+// ReleaseUpload gives the lease back. It is best effort by design: an expired lease is
+// taken over anyway, and the only cost of a failed release is that a retry waits for it.
+func (api *Api) ReleaseUpload(ctx context.Context, a *Artifact) error {
+	return api.RDB.DB(ctx).Model(&Artifact{}).Where("id = ?", a.ID).Update("uploading_since", nil).Error
 }

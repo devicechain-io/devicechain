@@ -49,14 +49,20 @@ type env struct {
 	h      *Handler
 }
 
-func newEnv(t *testing.T) *env {
+func newEnv(t *testing.T) *env { return newEnvWith(t, 4) }
+
+func newEnvWith(t *testing.T, maxConcurrent int) *env {
 	t.Helper()
 	db, err := gorm.Open(sqlite.Open("file:"+t.Name()+"?mode=memory&cache=shared"), &gorm.Config{})
 	require.NoError(t, err)
+	// The chain runs before the tenant callbacks exist, as core/rdb runs it in the system
+	// context: gorm's AutoMigrate reads an existing table through a statement the tenant
+	// scope cannot classify.
+	for _, m := range schema.Migrations {
+		require.NoError(t, m.Migrate(db))
+	}
 	require.NoError(t, rdb.RegisterTenantScoping(db))
 	require.NoError(t, rdb.RegisterTokenGrammar(db))
-	require.NoError(t, schema.NewBaselineSchema().Migrate(db))
-	require.NoError(t, schema.NewArtifactsSchema().Migrate(db))
 
 	dir := t.TempDir()
 	store, err := blob.New(context.Background(), blob.Config{Backend: blob.BackendFilesystem, Directory: dir}, "inst")
@@ -71,7 +77,7 @@ func newEnv(t *testing.T) *env {
 	e := &env{t: t, api: api, store: store, dir: dir,
 		issuer: auth.NewIssuer(key, "https://as.example.com", time.Hour, time.Hour),
 		val:    auth.NewValidator(&key.PublicKey)}
-	e.h = New(api, func() *auth.Validator { return e.val })
+	e.h = New(api, func() *auth.Validator { return e.val }, maxConcurrent)
 	mux := http.NewServeMux()
 	mux.Handle(Path, e.h)
 	e.srv = httptest.NewServer(mux)
@@ -448,7 +454,7 @@ func TestAnAvailableArtifactCannotBeUploadedOver(t *testing.T) {
 // Many simultaneous uploads of the same artifact: exactly one wins, the losers' objects
 // are removed, and what remains is a single object.
 func TestConcurrentUploadsOfOneArtifactLeaveExactlyOneObject(t *testing.T) {
-	e := newEnv(t)
+	e := newEnvWith(t, 16)
 	content := bytes.Repeat([]byte("c"), 2<<20)
 	e.declare("acme", "fw-1", content)
 	tok := e.writer("acme")
@@ -596,4 +602,157 @@ func rawPut(t *testing.T, srv *httptest.Server, token, bearer, lengthHeader stri
 	require.NoError(t, err, "no response: the server is waiting on the body")
 	_ = resp.Body.Close()
 	return rawResult{status: resp.StatusCode}
+}
+
+// ---- admission: one upload per artifact, a bounded number per process ----
+
+// holdUpload starts an upload of content to token that sends its first half and then waits
+// on the returned release func, and returns once the server has claimed the artifact.
+// finish completes the body and returns the response status.
+func (e *env) holdUpload(tenant, token string, content []byte) (finish func() int) {
+	e.t.Helper()
+	pr, pw := io.Pipe()
+	req, err := http.NewRequest(http.MethodPut, e.url(token), pr)
+	require.NoError(e.t, err)
+	req.ContentLength = int64(len(content))
+	req.Header.Set("Authorization", "Bearer "+e.writer(tenant))
+	done := make(chan int, 1)
+	go func() {
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			done <- -1
+			return
+		}
+		_ = resp.Body.Close()
+		done <- resp.StatusCode
+	}()
+	go func() { _, _ = pw.Write(content[:len(content)/2]) }()
+	require.Eventually(e.t, func() bool { return e.state(tenant, token).UploadingSince.Valid },
+		5*time.Second, 10*time.Millisecond, "the upload never claimed the artifact")
+	return func() int {
+		_, _ = pw.Write(content[len(content)/2:])
+		_ = pw.Close()
+		select {
+		case c := <-done:
+			return c
+		case <-time.After(10 * time.Second):
+			e.t.Fatal("the held upload never finished")
+			return 0
+		}
+	}
+}
+
+// A second upload to an artifact that already has one in flight is refused BEFORE its body
+// is read, and the first is not disturbed.
+func TestASecondUploadToTheSameArtifactIsRefusedBeforeItsBodyIsRead(t *testing.T) {
+	e := newEnv(t)
+	content := bytes.Repeat([]byte("a"), 100_000)
+	e.declare("acme", "fw-1", content)
+	finish := e.holdUpload("acme", "fw-1", content)
+
+	// Declares the full length and sends nothing: any wait on its body is a stall.
+	started := time.Now()
+	got := rawPut(t, e.srv, "fw-1", e.writer("acme"), fmt.Sprintf("Content-Length: %d", len(content)), nil)
+	require.Less(t, time.Since(started), 2*time.Second, "the second upload was waited on")
+	require.Equal(t, http.StatusConflict, got.status)
+
+	require.Equal(t, http.StatusOK, finish(), "the first upload completes untouched")
+	a := e.state("acme", "fw-1")
+	require.Equal(t, model.StateAvailable, a.State)
+	require.False(t, a.UploadingSince.Valid, "the lease is cleared when the artifact becomes available")
+	require.Len(t, e.objects(), 1)
+}
+
+// The process-wide bound: with one slot, an upload to a DIFFERENT artifact is refused 503
+// with Retry-After and the connection closed, again before its body is read.
+func TestUploadsPastTheProcessLimitAreRefusedBeforeTheirBodyIsRead(t *testing.T) {
+	e := newEnvWith(t, 1)
+	first := bytes.Repeat([]byte("a"), 100_000)
+	second := bytes.Repeat([]byte("b"), 100_000)
+	e.declare("acme", "fw-1", first)
+	e.declare("acme", "fw-2", second)
+	finish := e.holdUpload("acme", "fw-1", first)
+
+	req := httptest.NewRequest(http.MethodPut, "/updates/artifacts/fw-2/content", panicBody{t})
+	req.SetPathValue("token", "fw-2")
+	req.ContentLength = int64(len(second))
+	req.Header.Set("Authorization", "Bearer "+e.writer("acme"))
+	rec := httptest.NewRecorder()
+	e.h.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusServiceUnavailable, rec.Code)
+	require.Equal(t, "close", rec.Header().Get("Connection"))
+	require.NotEmpty(t, rec.Header().Get("Retry-After"))
+	require.False(t, e.state("acme", "fw-2").UploadingSince.Valid, "a refused upload must not hold a lease")
+
+	require.Equal(t, http.StatusOK, finish())
+	// The slot is free again.
+	status(t, e.put(e.writer("acme"), "fw-2", bytes.NewReader(second)), http.StatusOK)
+}
+
+// A lease older than the upload window belongs to a process that died, and is taken over;
+// a fresh one is honoured.
+func TestAStaleUploadLeaseIsTakenOver(t *testing.T) {
+	e := newEnv(t)
+	content := []byte("0123456789")
+	a := e.declare("acme", "fw-1", content)
+
+	setLease := func(at time.Time) {
+		require.NoError(t, e.api.RDB.DB(ctxFor("acme")).Model(&model.Artifact{}).Where("id = ?", a.ID).
+			Update("uploading_since", at).Error)
+	}
+	setLease(time.Now().UTC().Add(-30 * time.Second))
+	status(t, e.put(e.writer("acme"), "fw-1", bytes.NewReader(content)), http.StatusConflict)
+
+	setLease(time.Now().UTC().Add(-(model.UploadWindow(int64(len(content))) + 2*time.Minute)))
+	status(t, e.put(e.writer("acme"), "fw-1", bytes.NewReader(content)), http.StatusOK)
+}
+
+// A failed upload gives its lease back, so the retry is not made to wait for it.
+func TestAFailedUploadReleasesItsLease(t *testing.T) {
+	e := newEnv(t)
+	e.declare("acme", "fw-1", bytes.Repeat([]byte("good"), 100))
+	status(t, e.put(e.writer("acme"), "fw-1", bytes.NewReader(bytes.Repeat([]byte("evil"), 100))), http.StatusUnprocessableEntity)
+	require.False(t, e.state("acme", "fw-1").UploadingSince.Valid)
+}
+
+// ---- the whole-upload deadline ----
+
+// A client that drips a byte inside the idle allowance, for ever, is cut by the whole-upload
+// deadline: the idle timeout alone would let it hold the connection for hours.
+func TestADripThatStaysUnderTheIdleTimeoutIsCutByTheWholeUploadDeadline(t *testing.T) {
+	e := newEnv(t)
+	content := bytes.Repeat([]byte("a"), 10_000)
+	e.declare("acme", "fw-1", content)
+	e.h.idle = 5 * time.Second
+	e.h.window = func(int64) time.Duration { return 600 * time.Millisecond }
+
+	conn, err := net.Dial("tcp", e.srv.Listener.Addr().String())
+	require.NoError(t, err)
+	defer conn.Close()
+	fmt.Fprintf(conn, "PUT /updates/artifacts/fw-1/content HTTP/1.1\r\nHost: t\r\nAuthorization: Bearer %s\r\nContent-Length: %d\r\n\r\n",
+		e.writer("acme"), len(content))
+	stop := make(chan struct{})
+	go func() {
+		for {
+			select {
+			case <-stop:
+				return
+			case <-time.After(100 * time.Millisecond):
+				if _, err := conn.Write([]byte("a")); err != nil {
+					return
+				}
+			}
+		}
+	}()
+	defer close(stop)
+
+	started := time.Now()
+	_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	resp, err := http.ReadResponse(bufio.NewReader(conn), nil)
+	require.NoError(t, err, "no response: the drip held the connection past the whole-upload deadline")
+	_ = resp.Body.Close()
+	require.Less(t, time.Since(started), 3*time.Second)
+	require.Equal(t, http.StatusRequestTimeout, resp.StatusCode)
+	require.Empty(t, e.objects())
+	require.Equal(t, model.StateUploading, e.state("acme", "fw-1").State)
 }

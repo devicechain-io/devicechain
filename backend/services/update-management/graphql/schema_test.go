@@ -177,10 +177,14 @@ func newPlane(t *testing.T) *plane {
 	t.Helper()
 	db, err := gorm.Open(sqlite.Open("file:"+t.Name()+"?mode=memory&cache=shared"), &gorm.Config{})
 	require.NoError(t, err)
+	// The chain runs before the tenant callbacks exist, as core/rdb runs it in the system
+	// context: gorm's AutoMigrate reads an existing table through a statement the tenant
+	// scope cannot classify.
+	for _, m := range schema.Migrations {
+		require.NoError(t, m.Migrate(db))
+	}
 	require.NoError(t, rdb.RegisterTenantScoping(db))
 	require.NoError(t, rdb.RegisterTokenGrammar(db))
-	require.NoError(t, schema.NewBaselineSchema().Migrate(db))
-	require.NoError(t, schema.NewArtifactsSchema().Migrate(db))
 	store, err := blob.New(context.Background(), blob.Config{Backend: blob.BackendFilesystem, Directory: t.TempDir()}, "inst")
 	require.NoError(t, err)
 	api := model.NewApi(&rdb.RdbManager{Database: db}, store, model.Limits{

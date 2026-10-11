@@ -45,7 +45,8 @@ CREATE TABLE "update-management".artifacts (
  trust_status character varying(16) NOT NULL,
  provenance jsonb,
  blob_ref character varying(512),
- state character varying(16) NOT NULL
+ state character varying(16) NOT NULL,
+ uploading_since timestamp with time zone
 );
 CREATE TABLE "update-management".audit_events (
  id bigint NOT NULL,

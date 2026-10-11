@@ -52,12 +52,7 @@ const (
 	// idleTimeout is how long the connection may go without delivering a byte before the
 	// upload is abandoned. It is re-armed on every read, so a large, steady upload is
 	// never cut by it while a stalled one is.
-	idleTimeout = 30 * time.Second
-	// minThroughput is the slowest sustained rate an upload may run at, and with
-	// baseDuration it bounds the WHOLE upload: an idle timeout alone would let a client
-	// drip one byte every 29 seconds for hours.
-	minThroughput = 256 << 10 // bytes per second
-	baseDuration  = 2 * time.Minute
+	idleTimeout   = 30 * time.Second
 	cleanupBudget = 30 * time.Second
 )
 
@@ -72,16 +67,28 @@ type Handler struct {
 	validator ValidatorSource
 	// idle is the per-read stall allowance; a field so a test can shorten it.
 	idle time.Duration
+	// window is the whole-upload allowance for an artifact of a given size; a field so a
+	// test can shorten it. The default is model.UploadWindow, which is also what a claim's
+	// expiry is derived from, so the two cannot drift apart.
+	window func(size int64) time.Duration
+	// slots bounds the uploads this process streams at once: one token per upload in flight.
+	slots chan struct{}
 }
 
-// New builds the handler. api carries the object store and the catalogue.
-func New(api *model.Api, validator ValidatorSource) *Handler {
-	return &Handler{api: api, validator: validator, idle: idleTimeout}
+// New builds the handler. api carries the object store and the catalogue, and
+// maxConcurrent bounds the uploads this process streams at once (it must be positive:
+// an unbounded handler is the thing the bound exists to prevent).
+func New(api *model.Api, validator ValidatorSource, maxConcurrent int) *Handler {
+	if maxConcurrent <= 0 {
+		panic("upload.New: maxConcurrent must be positive")
+	}
+	return &Handler{api: api, validator: validator, idle: idleTimeout,
+		window: model.UploadWindow, slots: make(chan struct{}, maxConcurrent)}
 }
 
 // Register mounts the handler on mux.
-func Register(mux *http.ServeMux, api *model.Api, validator ValidatorSource) {
-	mux.Handle(Path, New(api, validator))
+func Register(mux *http.ServeMux, api *model.Api, validator ValidatorSource, maxConcurrent int) {
+	mux.Handle(Path, New(api, validator, maxConcurrent))
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -137,9 +144,32 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Admission, still before the body: a bounded number of uploads per process, then one
+	// per artifact across every replica. Both refuse with the connection closed, so
+	// neither costs a byte of the body that was on its way.
+	select {
+	case h.slots <- struct{}{}:
+		defer func() { <-h.slots }()
+	default:
+		w.Header().Set("Retry-After", "5")
+		refuse(w, r, http.StatusServiceUnavailable, "too many uploads are in progress; retry shortly")
+		return
+	}
+	if err := h.api.ClaimUpload(ctx, artifact); err != nil {
+		var re *model.RefusalError
+		if errors.As(err, &re) {
+			refuse(w, r, http.StatusConflict, re.Msg)
+			return
+		}
+		log.Error().Err(err).Str("artifact", token).Msg("claiming an artifact upload failed")
+		refuse(w, r, http.StatusInternalServerError, "internal error")
+		return
+	}
+	defer h.release(artifact)
+
 	// 3. Stream.
 	rc := http.NewResponseController(w)
-	deadline := time.Now().Add(baseDuration + time.Duration(artifact.SizeBytes/minThroughput)*time.Second)
+	deadline := time.Now().Add(h.window(artifact.SizeBytes))
 	sr := &streamReader{
 		src:      r.Body,
 		hash:     sha256.New(),
@@ -204,6 +234,19 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		"sizeBytes": strconv.FormatInt(artifact.SizeBytes, 10),
 		"digest":    artifact.Digest,
 	})
+}
+
+// release gives the artifact's upload lease back. It runs on a context detached from the
+// request for the same reason discard does: the usual reason to be here with a dead request
+// is a client that went away, and the lease must still be freed so a retry is not made to
+// wait out its expiry.
+func (h *Handler) release(a *model.Artifact) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(context.Background()), cleanupBudget)
+	defer cancel()
+	ctx = core.WithTenant(ctx, a.TenantId)
+	if err := h.api.ReleaseUpload(ctx, a); err != nil {
+		log.Warn().Err(err).Str("artifact", a.Token).Msg("could not release an artifact upload lease; it expires on its own")
+	}
 }
 
 // discard deletes an object that failed verification. It runs on a context detached from

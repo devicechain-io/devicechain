@@ -85,6 +85,11 @@ type Artifact struct {
 	// BlobRef locates the stored bytes; null until the artifact is AVAILABLE.
 	BlobRef sql.NullString `gorm:"size:512"`
 	State   string         `gorm:"not null;size:16"`
+	// UploadingSince is the lease of the one upload allowed in flight for this artifact:
+	// the moment it was claimed, or null when none is. It is a column rather than process
+	// memory because the service can run more than one replica, and two replicas each
+	// holding a private "one upload at a time" would admit two.
+	UploadingSince sql.NullTime
 }
 
 // DefaultOrder implements rdb.Sortable: newest first, token as the tiebreak so the
