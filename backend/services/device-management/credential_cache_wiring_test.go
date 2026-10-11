@@ -85,7 +85,7 @@ func seedBasicCredential(t *testing.T, api *model.Api) context.Context {
 	require.NoError(t, err)
 	_, err = api.CreateDevice(ctx, &model.DeviceCreateRequest{Token: "dev", DeviceTypeToken: "dt"})
 	require.NoError(t, err)
-	secret := "s3cret"
+	secret := "s3cret-0123456789"
 	_, err = api.CreateDeviceCredential(ctx, &model.DeviceCredentialCreateRequest{
 		Token: "c-1", DeviceToken: "dev", CredentialType: string(model.CredentialMqttBasic),
 		CredentialId: "cred-1", CredentialValue: &secret, Enabled: true,
@@ -95,7 +95,7 @@ func seedBasicCredential(t *testing.T, api *model.Api) context.Context {
 }
 
 func basicCred() *model.PresentedCredential {
-	secret := "s3cret"
+	secret := "s3cret-0123456789"
 	return &model.PresentedCredential{CredentialType: string(model.CredentialMqttBasic),
 		CredentialId: "cred-1", Secret: &secret}
 }

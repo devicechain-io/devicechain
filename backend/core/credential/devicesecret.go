@@ -61,6 +61,16 @@ const (
 // would not, so the limit is stated here and enforced where a secret is accepted.
 const MaxDeviceSecretBytes = 4096
 
+// MinDeviceSecretBytes is the shortest secret an MQTT_BASIC credential may be given. A
+// device's password is provisioned, not remembered, so the floor is set for a generated
+// secret: 16 bytes is 128 bits when generated from random bytes (32 hex characters) and
+// still 90+ bits when drawn from letters and digits. The per-credential backoff on a
+// connect (Checker) is what bounds an online guess; the floor is what keeps a guessable
+// short password out of the store. It counts bytes of the secret as sent, as
+// MaxDeviceSecretBytes does. A secret stored before this floor existed keeps working
+// until it is rotated.
+const MinDeviceSecretBytes = 16
+
 // ErrNoDeviceSecretKey is NewChecker's refusal to declare KindDeviceCredential without a
 // key (WithDeviceSecretKey): stored device secrets are digests under that key, so there
 // would be nothing to compare them with.

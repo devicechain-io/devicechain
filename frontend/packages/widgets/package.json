@@ -55,6 +55,7 @@
   "peerDependencies": {
     "@devicechain/client": "0.0.0-dev",
     "@devicechain/dashboards": "0.0.0-dev",
+    "@devicechain/widget-sdk": "0.0.0-dev",
     "maplibre-gl": "^6.11.2",
     "react": "^19.3.0",
     "react-dom": "^19.3.0"
@@ -62,6 +63,7 @@
   "devDependencies": {
     "@devicechain/client": "0.0.0-dev",
     "@devicechain/dashboards": "0.0.0-dev",
+    "@devicechain/widget-sdk": "0.0.0-dev",
     "@testing-library/react": "^16.3.3",
     "@types/node": "^26.6.4",
     "@types/react": "^19.3.0",

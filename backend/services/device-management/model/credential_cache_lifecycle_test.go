@@ -14,8 +14,8 @@ import (
 // warmBoth authenticates the fixture's credential and leaves it cached.
 func warmBoth(t *testing.T, f ccFixture) {
 	t.Helper()
-	f.mustAuthenticate(t, basic("cred-1", "s3cret"), 1, "warm")
-	f.mustAuthenticate(t, basic("cred-1", "s3cret"), 0, "held")
+	f.mustAuthenticate(t, basic("cred-1", "s3cret-0123456789"), 1, "warm")
+	f.mustAuthenticate(t, basic("cred-1", "s3cret-0123456789"), 0, "held")
 }
 
 // A tenant's erasure drops every credential of the tenant, by the broadcast's tenant-wide
@@ -25,10 +25,10 @@ func TestATenantWideEvictionDropsEveryCredentialOfTheTenant(t *testing.T) {
 	warmBoth(t, f)
 
 	f.cache.ApplyEviction(messaging.CacheEviction{Tenant: "another", All: true})
-	f.mustAuthenticate(t, basic("cred-1", "s3cret"), 0, "another tenant's erasure must not touch acme")
+	f.mustAuthenticate(t, basic("cred-1", "s3cret-0123456789"), 0, "another tenant's erasure must not touch acme")
 
 	f.cache.ApplyEviction(messaging.CacheEviction{Tenant: "acme", All: true})
-	f.mustAuthenticate(t, basic("cred-1", "s3cret"), 1, "after acme's erasure")
+	f.mustAuthenticate(t, basic("cred-1", "s3cret-0123456789"), 1, "after acme's erasure")
 }
 
 // A replica that reconnects to the broker drops every credential it holds, since it may
@@ -44,7 +44,7 @@ func TestClearingTheCredentialCacheDropsEverythingAndRejectsInFlightFills(t *tes
 	entries, bytes := f.cache.len()
 	require.Zero(t, entries)
 	require.Zero(t, bytes)
-	f.mustAuthenticate(t, basic("cred-1", "s3cret"), 1, "after clear")
+	f.mustAuthenticate(t, basic("cred-1", "s3cret-0123456789"), 1, "after clear")
 
 	// A read begun before the clear must not put what it read back.
 	cred := &DeviceCredential{}

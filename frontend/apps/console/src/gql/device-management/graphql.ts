@@ -334,6 +334,12 @@ export type DeviceCreateRequest = {
 export type DeviceCredentialCreateRequest = {
   credentialId: string;
   credentialType: string;
+  /**
+   * The password for an MQTT_BASIC credential: at least 16 bytes, counted as sent, and at
+   * most 4096. A shorter one is refused with extensions.code INVALID_VALUE. Write-only; it
+   * is stored only as a keyed digest. A password set before the 16-byte minimum keeps
+   * working until it is next changed.
+   */
   credentialValue?: string | null | undefined;
   deviceToken: string;
   enabled: boolean;
@@ -354,6 +360,13 @@ export type DeviceCredentialSearchCriteria = {
 export type DeviceCredentialUpdateRequest = {
   credentialId?: string | null | undefined;
   credentialType?: string | null | undefined;
+  /**
+   * The new password for an MQTT_BASIC credential: at least 16 bytes, counted as sent, and at
+   * most 4096. A shorter one is refused with extensions.code INVALID_VALUE. Required when this
+   * request changes the credential's type to MQTT_BASIC. Ignored for a type that has no
+   * password. Write-only; it is stored only as a keyed digest. A password set before the 16-byte minimum keeps
+   * working until it is next changed.
+   */
   credentialValue?: string | null | undefined;
   deviceToken?: string | null | undefined;
   enabled?: boolean | null | undefined;
@@ -441,6 +454,12 @@ export type DeviceReplaceRequest = {
   credentialId?: string | null | undefined;
   credentialToken?: string | null | undefined;
   credentialType?: string | null | undefined;
+  /**
+   * The password for an MQTT_BASIC credential: at least 16 bytes, counted as sent, and at
+   * most 4096. A shorter one is refused with extensions.code INVALID_VALUE. Write-only; it
+   * is stored only as a keyed digest. A password set before the 16-byte minimum keeps
+   * working until it is next changed.
+   */
   credentialValue?: string | null | undefined;
   deviceToken: string;
   expiresAt?: string | null | undefined;

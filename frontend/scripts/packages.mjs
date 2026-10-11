@@ -5,7 +5,7 @@
 // matches that list.
 //
 // 🔴 THE ORDER IS EXPLICIT, and that is the whole point of this file. Alphabetical
-// order happens to equal dependency order today — brand, client, dashboards, widgets
+// order happens to equal dependency order today — brand, client, dashboards, widget-sdk, widgets
 // — which is exactly why `npm run build --workspaces` looks like it works. It works
 // by coincidence, and the coincidence breaks silently the first time a package is
 // added or renamed.
@@ -23,9 +23,9 @@
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 
-// `brand` first because it emits stylesheets the apps import; then the SDK, the
-// runtime that uses it, and the widgets that use both.
-export const ORDER = ['brand', 'client', 'dashboards', 'widgets'];
+// `brand` first because it emits stylesheets the apps import; then the client, the runtime
+// that uses it, the widget SDK that builds on the runtime, and the widgets that use all three.
+export const ORDER = ['brand', 'client', 'dashboards', 'widget-sdk', 'widgets'];
 
 // The scope every internal dependency range is written in. Rewriting at release time
 // keys off this prefix, so it is named once rather than spelled into each caller.

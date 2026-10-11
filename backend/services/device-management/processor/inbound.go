@@ -17,6 +17,7 @@ import (
 	esmodel "github.com/devicechain-io/dc-event-sources/model"
 	esproto "github.com/devicechain-io/dc-event-sources/proto"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/credential"
 	"github.com/devicechain-io/dc-microservice/deadletter"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/prometheus/client_golang/prometheus"
@@ -92,6 +93,7 @@ type InboundEventsProcessor struct {
 	FailedEventsWriter   messaging.OrderedWriter
 	Api                  dmodel.DeviceManagementApi
 	AuthMode             string
+	secretTransit        *credential.SecretTransit
 	// MaxFutureSkew bounds how far a device-reported instant may lead the server's
 	// own clock before resolution replaces it with the ceiling. It is the platform's
 	// ONE event-time knob and it lives here because resolution is the one place the
@@ -211,6 +213,22 @@ func WithResolvers(n int) InboundOption {
 // is initialized, the default it applied when none was set.
 func (iproc *InboundEventsProcessor) Resolvers() int {
 	return iproc.resolverCount
+}
+
+// WithSecretTransit hands the processor the key that opens the sealed credential secrets
+// inbound events carry. It panics on nil: without it every MQTT password would fail to
+// authenticate, and that is a wiring mistake to refuse, not a state to run in.
+func WithSecretTransit(t *credential.SecretTransit) InboundOption {
+	if t == nil {
+		panic("processor: WithSecretTransit needs the service's secret transit key; without it no sealed credential secret opens")
+	}
+	return func(iproc *InboundEventsProcessor) { iproc.secretTransit = t }
+}
+
+// SecretTransit is the key WithSecretTransit set. It exists so the service's wiring test can
+// check main.go hands on the key it derived.
+func (iproc *InboundEventsProcessor) SecretTransit() *credential.SecretTransit {
+	return iproc.secretTransit
 }
 
 // WithDeadLetters hands the processor the service's dead-letter producer, on whose
@@ -656,6 +674,7 @@ func (iproc *InboundEventsProcessor) initializeEventResolvers(ctx context.Contex
 			iproc.OnInvalidEvent, iproc.OnResolvedEvent, iproc.OnUnresolvedEvent, iproc.metrics.red,
 			locationMemo)
 		resolver.slow = slow
+		resolver.SecretTransit = iproc.secretTransit
 		iproc.resolvers = append(iproc.resolvers, resolver)
 		// Resolvers run on a background context (not the cancelable read context)
 		// so that on shutdown they drain the remaining buffered messages to
