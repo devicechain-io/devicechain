@@ -20,6 +20,7 @@
     "@devicechain/client": "0.0.0-dev",
     "@devicechain/dashboards": "0.0.0-dev",
     "@devicechain/widgets": "0.0.0-dev",
+    "echarts": "^6.0.0",
     "i18next": "^26.4.2",
     "i18next-browser-languagedetector": "^8.2.1",
     "maplibre-gl": "^6.11.2",
