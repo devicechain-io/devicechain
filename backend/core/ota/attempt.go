@@ -406,3 +406,40 @@ func Reconcile(a Attempt, inv Report, receivedAt time.Time) (Attempt, Verdict) {
 	out.LastReportAt = receivedAt
 	return out, VerdictApplied
 }
+
+// ErrNotUnknown is returned by Abandon on an attempt that is not UNKNOWN.
+var ErrNotUnknown = errors.New("ota: only an UNKNOWN attempt can be abandoned")
+
+// AbandonCode is the failure code an operator abandonment records.
+const AbandonCode = "OPERATOR_ABANDONED"
+
+// Abandon ends an UNKNOWN attempt as CANCELLED because an operator decided to stop waiting for
+// evidence. It is NOT Cancel, and no device report can reach it: Cancel refuses UNKNOWN as beyond
+// recall, because the device may have installed the update, and that stays true. Abandon records
+// that the platform has stopped tracking the attempt, nothing more. The device may be running
+// either version, and the reason (required, and kept on the attempt as the failure detail) is the
+// operator's statement of why waiting longer was not worth it. An inventory is how to find out.
+//
+// It exists because UNKNOWN blocks a new attempt for the component until it is reconciled, and a
+// device that never comes back would otherwise block it for ever.
+func Abandon(a Attempt, reason string) (Attempt, error) {
+	if !a.State.Valid() {
+		return a, ErrInvalidAttempt
+	}
+	if a.State.Terminal() {
+		return a, ErrTerminal
+	}
+	if a.State != StateUnknown {
+		return a, ErrNotUnknown
+	}
+	if err := checkPrintable("reason", reason); err != nil {
+		return a, err
+	}
+	if len(reason) < 1 || len(reason) > maxDetailBytes {
+		return a, fmt.Errorf("ota: reason must be 1-%d bytes, got %d", maxDetailBytes, len(reason))
+	}
+	out := a.clone()
+	out.State = StateCancelled
+	out.Failure = &Failure{Code: AbandonCode, Detail: reason, Platform: true}
+	return out, nil
+}
