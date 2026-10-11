@@ -70,7 +70,9 @@ Ingress 将 `/api/<area>/graphql` 路由到各功能区服务，并移除前缀�
 
 `sparkplug-ingest` 和 `lwm2m-ingest` 完全不提供 GraphQL，且有意不进入 `/api` 路由。
 `event-sources` 虽有路由，但只返回占位 Schema；设备通过传输协议接入它，而不是通过该 API。
-`update-management` 同样有路由：其 API 是制品目录（声明、查看和停用更新制品）。制品内容本身不通过 GraphQL 传输，而是使用 `PUT /api/update-management/updates/artifacts/{token}/content` 上传，需携带具有 `artifact:write` 权限的租户访问令牌。该 Chart 会为这条路由单独创建一个 Ingress，请求体大小限制由 `ingress.uploadMaxBodySize`（默认 `1g`）设定，并关闭请求缓冲。使用其他 Ingress 控制器时，请在该路径上设置同样两项：对 ingress-nginx，将 `nginx.ingress.kubernetes.io/proxy-body-size` 设为不小于你最大的制品，并设置 `nginx.ingress.kubernetes.io/proxy-request-buffering: "off"`。缺少后者时，nginx 会先把整个请求体读入磁盘，服务才能看到请求，因此直到整个镜像到达之后才会校验令牌。
+`update-management` 同样有路由：其 API 是制品目录（声明、查看和停用更新制品），以及将可用制品分配给设备（`assignArtifact`、`cancelUpdate`、`updateAssignment`、`updateAssignments`）。每个分配带有一次更新尝试，其状态从 `QUEUED` 经 `DOWNLOADING`、`VERIFIED`、`UPDATING`、`REBOOTING` 到 `UPDATED`，或进入 `FAILED`、`TIMED_OUT`、`UNKNOWN`、`CANCELLED`；只有当设备报告目标版本正在运行（更新需要重启时还须是新的一次启动）时才会到达 `UPDATED`。分配一个尚无任何机制验证其来源的制品会被拒绝，除非实例设置了 `updates.allowUnverifiedArtifacts`，该值会显示在 `updateManagementInfo` 中。制品内容本身不通过 GraphQL 传输，而是使用 `PUT /api/update-management/updates/artifacts/{token}/content` 上传，需携带具有 `artifact:write` 权限的租户访问令牌。该 Chart 会为这条路由单独创建一个 Ingress，请求体大小限制由 `ingress.uploadMaxBodySize`（默认 `1g`）设定，并关闭请求缓冲。使用其他 Ingress 控制器时，请在该路径上设置同样两项：对 ingress-nginx，将 `nginx.ingress.kubernetes.io/proxy-body-size` 设为不小于你最大的制品，并设置 `nginx.ingress.kubernetes.io/proxy-request-buffering: "off"`。缺少后者时，nginx 会先把整个请求体读入磁盘，服务才能看到请求，因此直到整个镜像到达之后才会校验令牌。
+
+设备通过 `GET /api/update-management/updates/download/{artifact}?cap=...` 获取已分配的制品。该请求不携带任何租户凭据：`cap` 是平台通过设备已认证的 MQTT 会话发给它的一项授权，只针对某个分配下的一个设备、一个制品，并在十五分钟内过期。需要更多时间的设备可再次请求，得到同一制品的新授权。该端点对 `Range` 请求返回 `206`，因此中断的下载可从中断处继续；在读取制品的任何内容之前，它就会拒绝伪造、已过期或已不再有效的授权。请将 `updates.downloadBaseUrl` 设为设备访问该服务所用的公开 URL（例如 `https://<ingress 主机>/api/update-management`）；未设置时，任何设备都无法获得授权。
 
 ### 通过 WebSocket 订阅 {#subscriptions-over-websocket}
 

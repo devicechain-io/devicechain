@@ -83,7 +83,13 @@ llamador. Algunas autoridades no coinciden con la intuición:
 fuera del router `/api`. `event-sources` sí está enrutado, pero responde con un esquema marcador de
 posición: la ingesta llega a él por los transportes del plano de dispositivo, no por esta API.
 `update-management` también está enrutado: su API es el catálogo de artefactos (declarar,
-consultar y retirar artefactos de actualización). El contenido del artefacto no viaja por GraphQL:
+consultar y retirar artefactos de actualización) y la asignación de un artefacto disponible a un
+dispositivo (`assignArtifact`, `cancelUpdate`, `updateAssignment`, `updateAssignments`). Una asignación
+lleva un intento de actualización cuyo estado pasa de `QUEUED` por `DOWNLOADING`, `VERIFIED`, `UPDATING`
+y `REBOOTING` hasta `UPDATED`, o a `FAILED`, `TIMED_OUT`, `UNKNOWN` o `CANCELLED`; `UPDATED` solo se alcanza
+cuando el dispositivo informa de que la versión de destino está en ejecución, con un nuevo arranque cuando
+la actualización lo requiere. Asignar un artefacto que nada ha autenticado se rechaza salvo que la instancia
+active `updates.allowUnverifiedArtifacts`, valor que se muestra en `updateManagementInfo`. El contenido del artefacto no viaja por GraphQL:
 se sube con `PUT /api/update-management/updates/artifacts/{token}/content`, autenticado con un token
 de acceso del inquilino que tenga `artifact:write`. El chart da a esa ruta un Ingress propio, con el límite de cuerpo de petición fijado por
 `ingress.uploadMaxBodySize` (por defecto `1g`) y el almacenamiento en búfer de la petición desactivado. Con
@@ -92,6 +98,16 @@ cualquier otro controlador de ingress, fije lo mismo en esa ruta: para ingress-n
 `nginx.ingress.kubernetes.io/proxy-request-buffering: "off"`. Sin lo segundo, nginx lee todo el cuerpo a disco
 antes de que el servicio vea la petición, de modo que el token no se comprueba hasta que ha llegado la imagen
 entera.
+
+Un dispositivo descarga un artefacto asignado desde `GET /api/update-management/updates/download/{artifact}?cap=...`.
+La petición no lleva ninguna credencial del inquilino: `cap` es una capacidad que la plataforma envió al
+dispositivo por su sesión MQTT autenticada, que nombra un artefacto para un dispositivo bajo una asignación y
+caduca en menos de quince minutos. Un dispositivo que necesite más tiempo la pide de nuevo y recibe una capacidad
+nueva para el mismo artefacto. El endpoint responde a las peticiones `Range` con `206`, de modo que una descarga
+interrumpida continúa donde se detuvo, y rechaza una capacidad falsificada, caducada o que ya no está vigente antes
+de leer nada del artefacto. Fije `updates.downloadBaseUrl` a la URL pública por la que los dispositivos llegan al
+servicio (por ejemplo `https://<host del ingress>/api/update-management`); sin ella ningún dispositivo puede recibir
+una capacidad.
 
 ### Suscripciones por WebSocket {#subscriptions-over-websocket}
 
