@@ -202,6 +202,31 @@ type Store interface {
 	// Stat returns the object's Info without opening its bytes. Returns ErrNotFound
 	// when absent.
 	Stat(ctx context.Context, ref Ref) (Info, error)
+	// DeleteTenant removes EVERY object under one tenant's namespace,
+	// {instanceId}/{tenant}/, whatever purpose stored it and whether or not any row
+	// still names it, and reports how many objects it removed. It is the tenant-erasure
+	// path: a consumer's rows can lose a reference (a best-effort delete that failed, a
+	// process that died between Put and recording the Ref), and erasing a tenant must
+	// not depend on every consumer having kept every reference. It is idempotent: a
+	// second call finds nothing and reports 0, which is what lets a caller tell "erased
+	// something" from "nothing left". An empty tenant (the instance slot) is refused.
+	DeleteTenant(ctx context.Context, tenant string) (int64, error)
+}
+
+// tenantPrefix renders the key prefix every object of one tenant shares,
+// "{instanceId}/{tenant}/", refusing the instance slot and any segment buildKey would
+// refuse, so a prefix delete can never reach past the tenant's own namespace.
+func tenantPrefix(instanceID, tenant string) (string, error) {
+	if err := validateSegment("instanceId", instanceID); err != nil {
+		return "", err
+	}
+	if tenant == "" || tenant == instanceScopeSegment {
+		return "", fmt.Errorf("blob: a tenant delete needs a tenant, not the instance slot")
+	}
+	if err := validateSegment("tenant", tenant); err != nil {
+		return "", err
+	}
+	return instanceID + "/" + tenant + "/", nil
 }
 
 // New builds the configured Store. The backend is validated by Config.Validate,
