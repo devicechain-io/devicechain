@@ -83,6 +83,11 @@ var reportShape = shape{
 	"progress": {"bytes": nil, "total": nil},
 	"result":   {"code": nil, "detail": nil},
 	"running":  {"version": nil, "digest": nil},
+	// The configuration kinds (config.go) share the envelope, so their keys are known to the
+	// key scan. An update report carrying one still fails: the update struct has no such
+	// field, and its decode refuses unknown fields.
+	"revision": nil, "digest": nil, "status": nil, "errors": nil, "document": nil,
+	"config": {"haveRevision": nil},
 }
 
 // inventoryForbidden are the keys that may not appear at all on an update.inventory report. They

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -77,6 +78,9 @@ func InstanceSpecFrom(st *State, binding ClusterBinding, provider string) dcv1be
 	if len(st.EnableAreas) > 0 {
 		spec.ExtraFunctionalAreas = append([]string(nil), st.EnableAreas...)
 	}
+	// The store as RESOLVED (the provider's default applied), for the reason the ingress
+	// host is: an unset flag recorded as unset leaves the next reader to re-derive a default.
+	spec.ObjectStore = st.ObjectStore.DeepCopy()
 	if spec.Restored {
 		now := metav1.NewTime(time.Now().UTC())
 		spec.RestoredAt = &now
@@ -102,6 +106,9 @@ func ValidateInstanceSpec(spec dcv1beta1.InstanceSpec) error {
 	if spec.Restored && spec.RestoredAt == nil {
 		return fmt.Errorf("the instance declaration says this instance was restored and carries " +
 			"no timestamp for it")
+	}
+	if err := ValidateObjectStore(spec.ObjectStore); err != nil {
+		return fmt.Errorf("the instance declaration's object store is unusable: %w", err)
 	}
 	// 🔴 THE AREA SET IS JUDGED AGAINST THE CATALOG, not merely against itself.
 	// This is the read-back check: a declaration is an INPUT to a later run, and an
@@ -150,7 +157,67 @@ func ValidateInstanceSpecChange(existing, desired dcv1beta1.InstanceSpec) error 
 				f.name, f.was, f.is, f.consequence)
 		}
 	}
+	if err := validateObjectStoreChange(existing.ObjectStore, desired.ObjectStore); err != nil {
+		return err
+	}
 	return ValidateInstanceSpec(desired)
+}
+
+// validateObjectStoreChange refuses the changes to a store that would strand or lose what
+// it holds. Nothing moves objects between stores, so each of these leaves them behind (or,
+// for a volume, asks Kubernetes to shrink or re-home one) and reports success.
+//
+// Allowed: adding a store to an instance that had none, growing a volume, and changing which
+// Secret the credentials come from or the path style.
+func validateObjectStoreChange(e, d *dcv1beta1.ObjectStoreSpec) error {
+	const keep = "Nothing moves the objects already stored, so they would be left behind. Keep the " +
+		"setting, or destroy the instance and bootstrap it again"
+	if e == nil {
+		return nil
+	}
+	if d == nil {
+		return fmt.Errorf("this run would remove the instance's object store (%s), and the logos and "+
+			"artifacts on it with it. %s", e.Backend, keep)
+	}
+	if e.Backend != d.Backend {
+		return fmt.Errorf("this run would change the instance's object store from %s to %s. %s", e.Backend, d.Backend, keep)
+	}
+	switch e.Backend {
+	case dcv1beta1.ObjectStoreFilesystem:
+		was, errWas := resource.ParseQuantity(e.Size)
+		is, errIs := resource.ParseQuantity(d.Size)
+		if errWas == nil && errIs == nil && is.Cmp(was) < 0 {
+			return fmt.Errorf("this run would shrink the object store volume from %s to %s, and "+
+				"Kubernetes cannot shrink a volume. Keep the size or grow it", e.Size, d.Size)
+		}
+		if e.StorageClass != d.StorageClass {
+			return fmt.Errorf("this run would change the object store's storage class, which would "+
+				"provision a new empty volume. %s", keep)
+		}
+		if normalAccessMode(e.AccessMode) != normalAccessMode(d.AccessMode) {
+			return fmt.Errorf("this run would change the object store's access mode. %s", keep)
+		}
+	case dcv1beta1.ObjectStoreS3:
+		if e.S3 != nil && d.S3 != nil {
+			switch {
+			case e.S3.Bucket != d.S3.Bucket:
+				return fmt.Errorf("this run would change the object store's bucket. %s", keep)
+			case e.S3.Endpoint != d.S3.Endpoint:
+				return fmt.Errorf("this run would change the object store's endpoint. %s", keep)
+			case e.S3.Region != d.S3.Region:
+				return fmt.Errorf("this run would change the object store's region. %s", keep)
+			}
+		}
+	}
+	return nil
+}
+
+// normalAccessMode reads an unset access mode as the chart does: ReadWriteOnce.
+func normalAccessMode(m string) string {
+	if m == "" {
+		return "ReadWriteOnce"
+	}
+	return m
 }
 
 // ReadInstanceCR returns the declaration in the cluster, or nil when there is

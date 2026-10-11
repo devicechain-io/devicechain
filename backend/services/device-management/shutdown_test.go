@@ -92,10 +92,10 @@ func TestTheStopperStopsEachManagerExactlyOnce(t *testing.T) {
 	host, port := startEmbeddedNats(t)
 
 	prevMs, prevGql, prevNats, prevSvc := Microservice, GraphQLManager, NatsManager, Svc
-	prevIep, prevRac, prevCallout := InboundEventsProcessor, RaiseAlarmConsumer, CalloutResponder
+	prevIep, prevRac, prevCallout, prevDrc := InboundEventsProcessor, RaiseAlarmConsumer, CalloutResponder, DeviceReportsConsumer
 	t.Cleanup(func() {
 		Microservice, GraphQLManager, NatsManager, Svc = prevMs, prevGql, prevNats, prevSvc
-		InboundEventsProcessor, RaiseAlarmConsumer, CalloutResponder = prevIep, prevRac, prevCallout
+		InboundEventsProcessor, RaiseAlarmConsumer, CalloutResponder, DeviceReportsConsumer = prevIep, prevRac, prevCallout, prevDrc
 	})
 
 	area := fmt.Sprintf("device-management-shutdown-%d", time.Now().UnixNano())
@@ -141,6 +141,9 @@ func TestTheStopperStopsEachManagerExactlyOnce(t *testing.T) {
 	RaiseAlarmConsumer = processor.NewRaiseAlarmConsumer(Microservice, nil,
 		core.NewNoOpLifecycleCallbacks(), nil, nil, processor.NewRaiseAlarmMetrics(Microservice))
 	require.NoError(t, RaiseAlarmConsumer.Initialize(context.Background()))
+	DeviceReportsConsumer = processor.NewDeviceReportsConsumer(Microservice, nil,
+		core.NewNoOpLifecycleCallbacks(), nil, nil, processor.NewDeviceReportsMetrics(Microservice))
+	require.NoError(t, DeviceReportsConsumer.Initialize(context.Background()))
 
 	// The callout responder is nil-guarded in the stopper; there is nothing to stop.
 	CalloutResponder = nil

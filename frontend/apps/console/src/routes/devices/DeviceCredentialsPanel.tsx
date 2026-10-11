@@ -1,9 +1,9 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Copy, Plus, Trash2 } from 'lucide-react';
+import { Copy, KeyRound, Plus, Trash2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { IconButton } from '@/components/ui/icon-button';
 import { Badge } from '@/components/ui/badge';
@@ -27,9 +27,11 @@ import { formatTime } from '@/lib/utils';
 import { useNoAutofill } from '@/lib/hooks/use-no-autofill';
 import { useQuery } from '@/lib/hooks/use-query';
 import { errMessage, useReload } from '@/routes/common';
+import { generatePassword, passwordBelowMinimum, MIN_PASSWORD_BYTES } from '@/lib/credentialPassword';
 import {
   listDeviceCredentials,
   createDeviceCredential,
+  rotateDeviceCredentialSecret,
   deleteDeviceCredential,
   CREDENTIAL_TYPES,
   type CredentialType,
@@ -40,10 +42,15 @@ import {
 // others prove possession out of band, so only the id is registered.
 const needsSecret = (t: CredentialType) => t === 'MQTT_BASIC';
 
-// DeviceCredentialsPanel lists a device's credentials and registers/removes them
-// (ADR-014). The stored secret is write-only server-side and never displayed; the
-// credential id (the device-facing identifier, e.g. an access token) is shown with
-// a copy button.
+// DeviceCredentialsPanel lists a device's credentials and registers/rotates/removes
+// them (ADR-014). The platform keeps only a keyed digest of an MQTT_BASIC password,
+// so it can never be shown again: the password is displayed ONCE, in a banner, when
+// it is set (registered or rotated), and the list afterwards says only that one is
+// set. The banner is component state: it is gone on dismissal, navigation or reload,
+// and nothing read from the API can put a value back in it. No form is ever
+// pre-filled with a password; changing it is the explicit "Set new password" action.
+// The credential id (the device-facing identifier, e.g. an access token) is a
+// readable identifier by design and is shown with a copy button.
 //
 // 🔴 Every operation here — the list included — requires device:write. For
 // ACCESS_TOKEN the credential id IS the bearer secret, so
@@ -63,10 +70,23 @@ export function DeviceCredentialsPanel({ deviceToken }: { deviceToken: string })
   const [credentialId, setCredentialId] = useState('');
   const [secret, setSecret] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  // The password just set, shown once. username is the credential id.
+  const [issued, setIssued] = useState<{ username: string; password: string; rotated: boolean } | null>(null);
+  // The credential whose "set new password" form is open, and its draft.
+  const [rotating, setRotating] = useState<string | null>(null);
+  const [newSecret, setNewSecret] = useState('');
+  const [rotatingBusy, setRotatingBusy] = useState(false);
   const [version, reload] = useReload();
   // These are device credentials, not the operator's own login, so suppress
   // password-manager autofill/save on the fields (see the hook for the mechanism).
   const { noAutofill, rearm } = useNoAutofill();
+
+  // A different device is a different screen: never carry its one-time password over.
+  useEffect(() => {
+    setIssued(null);
+    setRotating(null);
+    setNewSecret('');
+  }, [deviceToken]);
 
   const { data, loading, error } = useQuery(
     () => listDeviceCredentials(deviceToken),
@@ -81,7 +101,36 @@ export function DeviceCredentialsPanel({ deviceToken }: { deviceToken: string })
     setType(t);
     setCredentialId('');
     setSecret('');
+    setRotating(null);
     rearm();
+  };
+
+  const startRotate = (c: DeviceCredential) => {
+    setRotating(c.token);
+    setNewSecret('');
+    rearm();
+  };
+
+  const rotate = async (c: DeviceCredential) => {
+    if (!newSecret) {
+      toast(t('passwordRequired'), 'error');
+      return;
+    }
+    setRotatingBusy(true);
+    try {
+      await rotateDeviceCredentialSecret(c.token, newSecret);
+      setIssued({ username: c.credentialId, password: newSecret, rotated: true });
+      toast(t('passwordRotated'));
+      setRotating(null);
+      setNewSecret('');
+      rearm();
+      reload();
+    } catch (err) {
+      // The server's refusal (for example a password under the minimum) is shown as is.
+      toast(errMessage(err), 'error');
+    } finally {
+      setRotatingBusy(false);
+    }
   };
 
   const copy = (text: string) => {
@@ -95,6 +144,10 @@ export function DeviceCredentialsPanel({ deviceToken }: { deviceToken: string })
       toast(t('credentialIdRequired'), 'error');
       return;
     }
+    if (needsSecret(type) && !secret) {
+      toast(t('passwordRequired'), 'error');
+      return;
+    }
     setSubmitting(true);
     try {
       await createDeviceCredential({
@@ -106,6 +159,7 @@ export function DeviceCredentialsPanel({ deviceToken }: { deviceToken: string })
         enabled: true,
       });
       toast(t('credentialAdded'));
+      if (needsSecret(type)) setIssued({ username: id, password: secret, rotated: false });
       setCredentialId('');
       setSecret('');
       rearm(); // re-arm the autofill guard for the now-empty fields
@@ -140,6 +194,36 @@ export function DeviceCredentialsPanel({ deviceToken }: { deviceToken: string })
 
   return (
     <div className="space-y-6">
+      {/* The one-time password banner. Above everything so it cannot be scrolled
+          past; it is the only place the value is ever rendered. */}
+      {issued && (
+        <div role="alert" className="space-y-2 rounded-lg border border-warning bg-warning/10 p-4">
+          <div className="text-sm font-medium text-foreground">
+            {issued.rotated ? t('passwordRotatedTitle') : t('passwordCreatedTitle')}
+          </div>
+          <p className="text-xs text-muted-foreground">{t('passwordShownOnce')}</p>
+          <div className="text-xs text-muted-foreground">
+            {t('usernameLabel')}: <span className="font-mono text-foreground">{issued.username}</span>
+          </div>
+          <div className="flex items-center gap-1.5">
+            <span className="font-mono text-xs break-all text-foreground" data-testid="issued-password">
+              {issued.password}
+            </span>
+            <IconButton
+              label={t('copyPasswordAriaLabel')}
+              variant="quiet"
+              size="xs"
+              onClick={() => copy(issued.password)}
+            >
+              <Copy size={13} />
+            </IconButton>
+          </div>
+          <Button variant="outline" size="sm" onClick={() => setIssued(null)}>
+            {t('dismissCredential')}
+          </Button>
+        </div>
+      )}
+
       {/* Register form, grouped in a contrasting container. The type chooser sits
           on top; the fields below it are specific to the chosen type. */}
       <div className="space-y-4 rounded-lg border border-border bg-muted/40 p-4">
@@ -181,13 +265,23 @@ export function DeviceCredentialsPanel({ deviceToken }: { deviceToken: string })
               />
             </FormField>
             <FormField label={t('passwordLabel')} description={t('passwordHint')}>
-              <Input
-                type="password"
-                value={secret}
-                onChange={(e) => setSecret(e.target.value)}
-                placeholder="••••••••"
-                {...noAutofill}
-              />
+              <div className="flex gap-2">
+                <Input
+                  type="password"
+                  value={secret}
+                  onChange={(e) => setSecret(e.target.value)}
+                  placeholder="••••••••"
+                  {...noAutofill}
+                />
+                <Button type="button" variant="outline" onClick={() => setSecret(generatePassword())}>
+                  {t('generatePassword')}
+                </Button>
+              </div>
+              {passwordBelowMinimum(secret) && (
+                <p role="status" className="mt-1 text-xs text-warning">
+                  {t('passwordTooShort', { min: MIN_PASSWORD_BYTES })}
+                </p>
+              )}
             </FormField>
           </div>
         )}
@@ -231,6 +325,54 @@ export function DeviceCredentialsPanel({ deviceToken }: { deviceToken: string })
                       <Copy size={13} />
                     </IconButton>
                   </div>
+                  {c.credentialType === 'MQTT_BASIC' && (
+                    <div className="mt-1 space-y-2">
+                      <div className="text-xs text-muted-foreground">{t('passwordIsSet')}</div>
+                      {rotating === c.token && (
+                        <div className="space-y-2">
+                          <div className="flex gap-2">
+                            <Input
+                              type="password"
+                              aria-label={t('newPasswordLabel')}
+                              value={newSecret}
+                              onChange={(e) => setNewSecret(e.target.value)}
+                              placeholder="••••••••"
+                              {...noAutofill}
+                            />
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              onClick={() => setNewSecret(generatePassword())}
+                            >
+                              {t('generatePassword')}
+                            </Button>
+                          </div>
+                          {passwordBelowMinimum(newSecret) && (
+                            <p role="status" className="text-xs text-warning">
+                              {t('passwordTooShort', { min: MIN_PASSWORD_BYTES })}
+                            </p>
+                          )}
+                          <p className="text-xs text-muted-foreground">{t('rotateWarning')}</p>
+                          <div className="flex gap-2">
+                            <Button size="sm" onClick={() => rotate(c)} loading={rotatingBusy} disabled={rotatingBusy}>
+                              {t('savePassword')}
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => {
+                                setRotating(null);
+                                setNewSecret('');
+                              }}
+                            >
+                              {t('cancel')}
+                            </Button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </DataTableCell>
                 <DataTableCell>
                   {c.enabled ? (
@@ -245,6 +387,11 @@ export function DeviceCredentialsPanel({ deviceToken }: { deviceToken: string })
                   {c.expiresAt ? formatTime(c.expiresAt) : '—'}
                 </DataTableCell>
                 <DataTableCell className="text-right">
+                  {c.credentialType === 'MQTT_BASIC' && rotating !== c.token && (
+                    <Button variant="outline" size="sm" className="mr-2" onClick={() => startRotate(c)}>
+                      <KeyRound size={13} /> {t('setNewPassword')}
+                    </Button>
+                  )}
                   <Button variant="outline" size="sm" onClick={() => remove(c)}>
                     <Trash2 size={13} /> {t('delete')}
                   </Button>

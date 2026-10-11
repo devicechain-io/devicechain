@@ -254,6 +254,10 @@ func stepCheckClusterSingletons(ctx context.Context, st *State) error {
 		// has never been rehearsed, and what the store already holds cannot be either. A
 		// rehearsal that simply omitted the one refusal whose cost is permanent would be
 		// read as clearance for the run it cannot clear.
+		if err := precheckObjectStore(ctx, st); err != nil {
+			wouldDo(fmt.Sprintf("check the s3 credentials Secret -- the check did not pass (%v), and "+
+				"a real run would stop here", err))
+		}
 		wouldDo(fmt.Sprintf("ask the relational store what it already holds for %q, and refuse to mint "+
 			"a fresh root key over a database recovered from an archive — NOT rehearsed, because "+
 			"reading the store means signing in to it", st.Instance))
@@ -287,6 +291,12 @@ func stepCheckClusterSingletons(ctx context.Context, st *State) error {
 	// event store, for the same reason: the nodes it names may have been drained,
 	// relabelled or retainted since. Here nothing has been written.
 	if err := checkDatabasePlacement(ctx, st); err != nil {
+		return err
+	}
+	// The object store's credentials Secret, which the operator named and dcctl will copy:
+	// absent or incomplete, the pods would sit in CreateContainerConfigError for as long as
+	// the readiness wait lasts. Here nothing has been written.
+	if err := precheckObjectStore(ctx, st); err != nil {
 		return err
 	}
 	// 🔴 AND THE SHARED RELATIONAL STORE, FOR THE SAME REASON, TWICE OVER.

@@ -2060,6 +2060,14 @@ gh attestation verify <archive> --repo devicechain-io/devicechain \
 
 随开发合并收集 `v0.19.0` 之后版本的变化。
 
+#### `MQTT_BASIC` 设备密码只显示一次，之后无法再次显示 {#next-upgrade-device-password-show-once}
+
+平台现在只保存 `MQTT_BASIC` 设备密码带密钥的单向摘要，而不是密码本身。API 读取时从不返回密码，因此任何查询结果都不变。变化在于，平台这边也无法再找回它：控制台在你添加凭据或设置新密码后只显示一次密码，并带复制按钮，此后只表明已设置密码。凭据所在行新增**设置新密码（Set new password）**操作，表单提供**生成强密码（Generate strong password）**。
+
+现有密码会在 device-management 在新版本上首次启动时转换为摘要，设备继续使用已有密码认证。未记录的密码之后无法显示；请设置新密码并装入设备。参见[密码只显示一次与轮换](../guides/device-credentials.md#show-once)。
+
+无需任何操作。
+
 #### 设备事件列表只读取本租户的行 {#tenant-device-index}
 
 设备事件列表索引现在以租户开头。
