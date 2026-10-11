@@ -114,7 +114,7 @@ function fixture(alpha) {
 function renderAlpha(sdl) {
   const repo = fixture(sdl);
   try {
-    return buildPages(repo, FIXTURE_SCHEMAS).find((p) => p.locale === 'en' && p.name === 'alpha').text;
+    return buildPages(repo, FIXTURE_SCHEMAS, undefined, []).find((p) => p.locale === 'en' && p.name === 'alpha').text;
   } finally {
     rmSync(repo, { recursive: true, force: true });
   }
@@ -123,7 +123,7 @@ function renderAlpha(sdl) {
 test('a new served schema gets a page with no change to the generator', () => {
   const repo = fixture(TRIVIAL);
   try {
-    const names = buildPages(repo, FIXTURE_SCHEMAS).filter((p) => p.locale === 'en').map((p) => p.name);
+    const names = buildPages(repo, FIXTURE_SCHEMAS, undefined, []).filter((p) => p.locale === 'en').map((p) => p.name);
     assert.ok(names.includes('alpha'));
   } finally {
     rmSync(repo, { recursive: true, force: true });
@@ -281,13 +281,13 @@ test('the citation gate fires on what the generator itself writes', () => {
   const repo = fixture(TRIVIAL);
   try {
     const chrome = { en: { ...CHROME.en, pageIntro: 'Generated per ADR-047.' } };
-    assert.throws(() => buildPages(repo, FIXTURE_SCHEMAS, chrome), (err) => {
+    assert.throws(() => buildPages(repo, FIXTURE_SCHEMAS, chrome, []), (err) => {
       assert.ok(err instanceof GenerateError);
       assert.match(err.message, /unpublishable reference/);
       assert.match(err.message, /ADR-047/);
       return true;
     });
-    assert.doesNotThrow(() => buildPages(repo, FIXTURE_SCHEMAS, { en: CHROME.en }));
+    assert.doesNotThrow(() => buildPages(repo, FIXTURE_SCHEMAS, { en: CHROME.en }, []));
   } finally {
     rmSync(repo, { recursive: true, force: true });
   }

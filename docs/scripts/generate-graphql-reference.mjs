@@ -36,7 +36,7 @@ import {
 
 import { REPO, GenerateError, buildArtifacts, resolve } from './generate-schema.mjs';
 import { scan, formatFindings } from './gate.mjs';
-import { PLANES, SCHEMAS, REQUIRED_OUTPUTS } from './schemas.manifest.mjs';
+import { PLANES, SCHEMAS, DEVICE_SCHEMAS, REQUIRED_OUTPUTS } from './schemas.manifest.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 export const DOCS = join(HERE, '..');
@@ -491,9 +491,9 @@ function renderIndex(c, entries) {
  * Every page, in every locale, as { path (relative to docs/), text }. Throws rather
  * than returning a partial set.
  */
-export function buildPages(repo = REPO, schemas = SCHEMAS, chrome = CHROME) {
+export function buildPages(repo = REPO, schemas = SCHEMAS, chrome = CHROME, deviceSchemas = DEVICE_SCHEMAS) {
   // The same artifacts /schema/ publishes: reconciled against the tree, sanitized, gated.
-  const artifacts = new Map(buildArtifacts(repo, schemas).map((a) => [a.name, a.text]));
+  const artifacts = new Map(buildArtifacts(repo, schemas, deviceSchemas).map((a) => [a.name, a.text]));
   const published = schemas.map(resolve).filter((s) => s.publish !== false)
     .sort((a, b) => (a.published < b.published ? -1 : 1));
 
