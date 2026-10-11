@@ -68,6 +68,13 @@ var (
 	RaiseAlarmReader   messaging.MessageReader
 	RaiseAlarmConsumer *processor.RaiseAlarmConsumer
 
+	// DeviceReportsConsumer consumes what devices report on their device-reports channel
+	// (configuration sync and status) and records it; the revisions it answers with go out
+	// on device-desired through the publisher injected into the shared Api.
+	DeviceReportsReader   messaging.MessageReader
+	DeviceReportsConsumer *processor.DeviceReportsConsumer
+	DeviceDesiredWriter   messaging.MessageWriter
+
 	// CalloutResponder answers NATS auth-callout requests for device connections
 	// (ADR-025). Non-nil only when the broker is configured for auth callout (the
 	// issuer seed is present in the instance config).
@@ -78,6 +85,7 @@ var (
 	// callback builds. See buildMetrics.
 	ResolveMetrics       processor.ResolveMetrics
 	RaiseAlarmMetrics    processor.RaiseAlarmMetrics
+	DeviceReportsMetrics processor.DeviceReportsMetrics
 	AlarmEventMetrics    processor.AlarmEventMetrics
 	GeoFencePublishFails prometheus.Counter
 	// FactPublishFails counts detection-rule, device-roster and device-attribute facts that
@@ -145,6 +153,7 @@ func parseConfiguration() error {
 func buildMetrics() {
 	ResolveMetrics = processor.NewResolveMetrics(Microservice)
 	RaiseAlarmMetrics = processor.NewRaiseAlarmMetrics(Microservice)
+	DeviceReportsMetrics = processor.NewDeviceReportsMetrics(Microservice)
 	AlarmEventMetrics = processor.NewAlarmEventMetrics(Microservice)
 	// core/service built it: the platform's max-delivery recorder letters under it too,
 	// and a second NewProducer here would panic on the duplicate counter.
@@ -169,7 +178,7 @@ func buildMetrics() {
 		"geofence_set_publish_failures_total",
 		"Geofence-set manifests that could not be published — a marshal error, a broker refusal, or a transport fault. Each one means event-processing was not told about a fence edit, so containment for that tenant holds its previous fence set until a reconcile sweep repairs it. A sustained non-zero rate means fence edits are not reaching the detection engine.")
 	FactPublishFails = Microservice.NewCounterVec("fact_publish_failures_total",
-		"Detection-rule, device-roster and device-attribute notifications that could not be published, by fact — a marshal error, a broker refusal or a transport fault. The change itself committed; the detection engine learns of it at its next reconcile against this service, a few minutes later, instead of at once. A sustained rate means changes are taking minutes to take effect.",
+		"Detection-rule, device-roster, device-attribute and device-desired notifications that could not be published, by fact — a marshal error, a broker refusal or a transport fault. The change itself committed; the detection engine learns of it at its next reconcile against this service, a few minutes later, instead of at once (a device-desired miss is repaired by the device's next sync). A sustained rate means changes are taking minutes to take effect.",
 		[]string{"fact"})
 	// Every label value exists from startup, so an alert on the rate sees a zero series rather
 	// than no series on a healthy instance.
@@ -179,12 +188,15 @@ func buildMetrics() {
 }
 
 // factPublishLabels are the fact label values of FactPublishFails, one per fact writer.
-var factPublishLabels = []string{factDetectionRules, factDeviceRoster, factDeviceAttribute}
+var factPublishLabels = []string{factDetectionRules, factDeviceRoster, factDeviceAttribute, factDeviceDesired}
 
 const (
 	factDetectionRules  = "detection_rules"
 	factDeviceRoster    = "device_roster"
 	factDeviceAttribute = "device_attribute"
+	// factDeviceDesired is a configuration revision that could not be put on the device's
+	// device-desired channel. Unlike the facts above, the repair is the DEVICE's next sync.
+	factDeviceDesired = "device_desired"
 )
 
 // newDeadLetterSink builds this service's sink over the platform dead-letter stream, stamped
@@ -338,6 +350,17 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	Api.DeviceAttributePublisher = processor.NewDeviceAttributeWriter(attrpub,
 		FactPublishFails.WithLabelValues(factDeviceAttribute))
 
+	// Add the device-desired writer and inject a publisher over it into the shared Api: a
+	// SHARED write that mints a per-device configuration revision delivers it to the device
+	// after the transaction commits. Best-effort; the device's next sync repairs a miss.
+	desiredpub, err := nmgr.NewWriter(streams.DeviceDesired)
+	if err != nil {
+		return err
+	}
+	DeviceDesiredWriter = desiredpub
+	Api.DeviceDesiredPublisher = processor.NewDesiredConfigurationWriter(desiredpub,
+		FactPublishFails.WithLabelValues(factDeviceDesired))
+
 	// Add the geofence-set writer and inject a publisher into the shared Api (ADR-078): a
 	// change to the fence SET — created, geometry edited, deleted — mints a new fence-set
 	// version, and this fact carries that
@@ -386,7 +409,28 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 		return err
 	}
 
+	// Reader + consumer for what devices report on device-reports: configuration sync and
+	// status. A message it cannot understand is dead-lettered (the stream's declared kind).
+	drreader, err := nmgr.NewReader(streams.DeviceReports)
+	if err != nil {
+		return err
+	}
+	DeviceReportsReader = drreader
+	DeviceReportsConsumer = newDeviceReportsConsumer(DeviceReportsReader, deadLetters)
+	if err = DeviceReportsConsumer.Initialize(context.Background()); err != nil {
+		return err
+	}
+
 	return nil
+}
+
+// newDeviceReportsConsumer assembles the device-reports consumer from this service's globals.
+// It hands the consumer the plain Api, not the cached one: a sync or a report resolves its
+// device by token, and a device deleted on another replica must stop resolving at once rather
+// than when a cached copy expires.
+func newDeviceReportsConsumer(reader messaging.MessageReader, dead *deadletter.Sink) *processor.DeviceReportsConsumer {
+	return processor.NewDeviceReportsConsumer(Microservice, reader,
+		core.NewNoOpLifecycleCallbacks(), Api, dead, DeviceReportsMetrics)
 }
 
 // newRaiseAlarmConsumer assembles the raise-alarm consumer from this service's globals. It
@@ -644,6 +688,12 @@ func afterMicroserviceStarted(ctx context.Context) error {
 		return err
 	}
 
+	// Start the device-reports consumer: configuration sync and status from devices.
+	err = DeviceReportsConsumer.Start(ctx)
+	if err != nil {
+		return err
+	}
+
 	// Start the device auth-callout responder once the broker is configured for it
 	// (ADR-025): it authenticates every device connect at the broker against the
 	// device credential store. Absent an issuer seed the broker isn't running callout,
@@ -699,6 +749,12 @@ func beforeMicroserviceStopped(ctx context.Context) error {
 		return err
 	}
 
+	// Stop the device-reports consumer before the NATS connection drains.
+	err = DeviceReportsConsumer.Stop(ctx)
+	if err != nil {
+		return err
+	}
+
 	// GraphQL, then NATS, then Rdb: draining the HTTP server first ensures no in-flight
 	// ack/clear mutation tries to publish an alarm event to a NATS connection that is
 	// already shutting down (mirrors the start order). core/service walks them in exactly
@@ -716,6 +772,12 @@ func beforeMicroserviceTerminated(ctx context.Context) error {
 
 	// Terminate the REACT raise-alarm consumer.
 	err = RaiseAlarmConsumer.Terminate(ctx)
+	if err != nil {
+		return err
+	}
+
+	// Terminate the device-reports consumer.
+	err = DeviceReportsConsumer.Terminate(ctx)
 	if err != nil {
 		return err
 	}

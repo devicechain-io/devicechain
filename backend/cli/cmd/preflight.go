@@ -48,7 +48,50 @@ func run(name string, args ...string) string {
 	return strings.TrimSpace(string(out))
 }
 
-func haveTool(name string) bool { _, err := exec.LookPath(name); return err == nil }
+func haveTool(name string) bool { _, err := lookPath(name); return err == nil }
+
+// lookPath and runCmd are the doctor's only windows onto the host. They are
+// variables so a test can present a host with (or without) a Docker daemon, or a
+// kubectl that answers per --context, without needing either on the machine.
+var (
+	lookPath = exec.LookPath
+	runCmd   = run
+)
+
+// doctorOpts says what the run about to follow will actually need from this host.
+// The zero value is the full local-cluster check, which is what `dcctl preflight`
+// with no flags diagnoses.
+type doctorOpts struct {
+	// KubeContext is the --kube-context the run was given. Empty means dcctl brings
+	// its own kind cluster.
+	KubeContext string
+	// Target is the context the run will actually act on: KubeContext, or the kind
+	// cluster's context when none was given. Build it with doctorOptsFor.
+	Target string
+	// Build is --build: images are built from source into a local registry.
+	Build bool
+}
+
+// doctorOptsFor is the ONE mapping from a run's flags to what the doctor checks, shared
+// by install, bootstrap and preflight so they cannot disagree about the target.
+func doctorOptsFor(kubeContext, cluster string, build bool) doctorOpts {
+	target := kubeContext
+	if target == "" {
+		target = bootstrap.KindContext(cluster)
+	}
+	return doctorOpts{KubeContext: kubeContext, Target: target, Build: build}
+}
+
+// hostsKind reports whether dcctl creates or reuses a kind cluster on this host, which
+// is what the kind-node kernel limits (inotify) exist for.
+func (o doctorOpts) hostsKind() bool { return o.KubeContext == "" }
+
+// needsDocker reports whether the run touches a local Docker daemon: a kind
+// cluster is containers on it, and --build builds and pushes through it. An
+// install into an existing cluster from published images pulls everything on the
+// cluster's own nodes and never talks to a daemon here, so demanding one would
+// turn away an operator on a laptop (or a CI runner) with nothing but kubectl.
+func (o doctorOpts) needsDocker() bool { return o.Build || o.KubeContext == "" }
 
 // ---- tooling ---------------------------------------------------------------
 
@@ -58,24 +101,30 @@ type toolCheck struct {
 	guidance string
 }
 
-func (d *doctor) checkTools(provider string) {
+func (d *doctor) checkTools(provider string, opts doctorOpts) {
 	section("Tooling", "🧰")
-	checks := []toolCheck{
-		{names: []string{"docker"}, required: true, guidance: "install a native Docker engine (not Docker Desktop)"},
-		{names: []string{"kubectl"}, required: true, guidance: "https://kubernetes.io/docs/tasks/tools/"},
-		{names: []string{"helm"}, required: true, guidance: "https://helm.sh/docs/intro/install/"},
-		{names: []string{"tofu", "terraform"}, required: true, guidance: "install OpenTofu (https://opentofu.org) or Terraform"},
+	var checks []toolCheck
+	if opts.needsDocker() {
+		checks = append(checks, toolCheck{names: []string{"docker"}, required: true, guidance: "install a native Docker engine (not Docker Desktop)"})
 	}
+	checks = append(checks,
+		toolCheck{names: []string{"kubectl"}, required: true, guidance: "https://kubernetes.io/docs/tasks/tools/"},
+		toolCheck{names: []string{"helm"}, required: true, guidance: "https://helm.sh/docs/intro/install/"},
+		toolCheck{names: []string{"tofu", "terraform"}, required: true, guidance: "install OpenTofu (https://opentofu.org) or Terraform"},
+	)
 	// The local provider targets a kind cluster specifically, so require kind
 	// (not just any cluster tool). cloud-provider-kind is optional: bootstrap
 	// reaches ingress and MQTT through host-port/NodePort mappings, so a
 	// LoadBalancer (and thus the LB helper) is not needed for the default path.
-	if provider == "local" {
+	switch {
+	case opts.KubeContext != "":
+		// An existing cluster: dcctl never creates it, so no cluster tool is needed.
+	case provider == "local":
 		checks = append(checks,
 			toolCheck{names: []string{"kind"}, required: true, guidance: "go install sigs.k8s.io/kind@latest — the local provider deploys to a kind cluster"},
 			toolCheck{names: []string{"cloud-provider-kind"}, required: false, guidance: "go install sigs.k8s.io/cloud-provider-kind@latest — only needed for type=LoadBalancer services; the default bootstrap uses host-port/NodePort"},
 		)
-	} else {
+	default:
 		checks = append(checks,
 			toolCheck{names: []string{"kind", "minikube", "k3d"}, required: true, guidance: "install a local cluster tool, e.g. go install sigs.k8s.io/kind@latest"},
 			toolCheck{names: []string{"cloud-provider-kind"}, required: false, guidance: "go install sigs.k8s.io/cloud-provider-kind@latest — type=LoadBalancer services stay <pending> without it"},
@@ -87,7 +136,7 @@ func (d *doctor) checkTools(provider string) {
 	for _, c := range checks {
 		found := ""
 		for _, n := range c.names {
-			if path, err := exec.LookPath(n); err == nil {
+			if path, err := lookPath(n); err == nil {
 				found = fmt.Sprintf("%s (%s)", n, path)
 				break
 			}
@@ -112,13 +161,13 @@ func (d *doctor) checkDockerEngine() string {
 		d.fail("docker not installed", "install a native Docker engine")
 		return ""
 	}
-	if run("docker", "info", "--format", "{{.ServerVersion}}") == "" {
+	if runCmd("docker", "info", "--format", "{{.ServerVersion}}") == "" {
 		d.fail("docker daemon not reachable", "start dockerd (e.g. 'sudo service docker start') and ensure your user is in the 'docker' group")
 		return ""
 	}
 	d.pass("docker daemon reachable")
 
-	if ctx := run("docker", "context", "show"); ctx != "" {
+	if ctx := runCmd("docker", "context", "show"); ctx != "" {
 		if ctx == "default" {
 			d.pass("docker context = default (native engine)")
 		} else {
@@ -126,14 +175,14 @@ func (d *doctor) checkDockerEngine() string {
 		}
 	}
 
-	if n, _ := strconv.Atoi(run("docker", "info", "--format", "{{.NCPU}}")); n > 0 {
+	if n, _ := strconv.Atoi(runCmd("docker", "info", "--format", "{{.NCPU}}")); n > 0 {
 		if n >= 4 {
 			d.pass(fmt.Sprintf("engine CPUs: %d", n))
 		} else {
 			d.warn(fmt.Sprintf("engine CPUs: %d", n), "recommend >= 4 for the full stack")
 		}
 	}
-	if b, _ := strconv.ParseInt(run("docker", "info", "--format", "{{.MemTotal}}"), 10, 64); b > 0 {
+	if b, _ := strconv.ParseInt(runCmd("docker", "info", "--format", "{{.MemTotal}}"), 10, 64); b > 0 {
 		gi := b / (1 << 30)
 		if gi >= 8 {
 			d.pass(fmt.Sprintf("engine memory: %dGi", gi))
@@ -141,21 +190,32 @@ func (d *doctor) checkDockerEngine() string {
 			d.warn(fmt.Sprintf("engine memory: %dGi", gi), "recommend >= 8Gi")
 		}
 	}
-	if drv := run("docker", "info", "--format", "{{.Driver}}"); drv != "" {
+	if drv := runCmd("docker", "info", "--format", "{{.Driver}}"); drv != "" {
 		if drv == "overlay2" {
 			d.pass("storage driver: overlay2")
 		} else {
 			d.warn("storage driver: "+drv, "overlay2 is recommended for kind")
 		}
 	}
-	return run("docker", "info", "--format", "{{.DockerRootDir}}")
+	return runCmd("docker", "info", "--format", "{{.DockerRootDir}}")
+}
+
+// checkDocker runs the engine check only when the run needs a daemon, and says so
+// when it does not, so a skipped check is visible rather than silently absent.
+func (d *doctor) checkDocker(opts doctorOpts) string {
+	if !opts.needsDocker() {
+		section("Docker engine", "🐳")
+		d.info("not needed — installing into " + opts.KubeContext + " from published images")
+		return ""
+	}
+	return d.checkDockerEngine()
 }
 
 // ---- ports -----------------------------------------------------------------
 
 func (d *doctor) checkPorts() {
 	section("Ports & registry", "🔌")
-	registryUp := strings.Contains(run("docker", "ps", "--format", "{{.Names}}"), "kind-registry")
+	registryUp := strings.Contains(runCmd("docker", "ps", "--format", "{{.Names}}"), "kind-registry")
 	for _, p := range []int{80, 443, 5000} {
 		inUse := portInUse(p)
 		switch {
@@ -180,11 +240,14 @@ func portInUse(port int) bool {
 
 // ---- kube contexts ---------------------------------------------------------
 
-func (d *doctor) checkKubeContexts() {
+func (d *doctor) checkKubeContexts(selected string) {
 	section("Kubernetes contexts", "☸️")
 	names, current, err := bootstrap.KubeContexts()
 	if err != nil {
 		d.warn("unable to load kube contexts", err.Error())
+		if selected != "" {
+			d.fail("--kube-context "+selected+" could not be checked", "fix the kubeconfig error above")
+		}
 		return
 	}
 	if current != "" {
@@ -194,10 +257,23 @@ func (d *doctor) checkKubeContexts() {
 	}
 	if len(names) == 0 {
 		d.warn("no contexts found in kubeconfig", "create a local cluster (kind create cluster --config deploy/local/kind-cluster.yaml) or add a context")
-		return
 	}
 	for _, name := range names {
 		d.info("- " + name)
+	}
+	if selected != "" {
+		// The run targets this context, not the current one, so it is the one that
+		// has to exist; a typo here would otherwise surface as a kubectl error deep
+		// in the install.
+		found := false
+		for _, name := range names {
+			found = found || name == selected
+		}
+		if found {
+			d.pass("--kube-context " + selected + " exists")
+		} else {
+			d.fail("--kube-context "+selected+" is not in the kubeconfig", "pick one of the contexts listed above")
+		}
 	}
 }
 
@@ -216,10 +292,10 @@ const (
 	minKubeMinor = 29
 )
 
-func (d *doctor) checkKubeServerVersion() {
+func (d *doctor) checkKubeServerVersion(kubeContext string) {
 	section("Kubernetes server version", "🧩")
 
-	out := run("kubectl", "version", "-o", "json")
+	out := runCmd("kubectl", kubectlVersionArgs(kubeContext)...)
 	if out == "" {
 		// Not a failure. The local provider is allowed to run before a cluster
 		// exists, and an unreachable server is already reported by the context
@@ -260,6 +336,20 @@ func (d *doctor) checkKubeServerVersion() {
 	d.fail(fmt.Sprintf("kubernetes server %s is below the %d.%d floor", shown, minKubeMajor, minKubeMinor),
 		"the CloudNativePG charts declare kubeVersion >=1.29.0-0 and helm refuses the release, "+
 			"which would fail the infra apply AFTER the root-key escrow has been written — upgrade the cluster")
+}
+
+// kubectlVersionArgs builds the version query for the cluster the run targets.
+//
+// 🔴 --context IS THE WHOLE POINT. Without it kubectl answers for the kubeconfig's
+// CURRENT context, so `dcctl install --kube-context prod` was gated on whatever
+// cluster the shell happened to be pointed at: a new cluster passed on an old
+// one's version, and an old one on a new one's.
+func kubectlVersionArgs(kubeContext string) []string {
+	args := []string{"version", "-o", "json"}
+	if kubeContext != "" {
+		args = append(args, "--context", kubeContext)
+	}
+	return args
 }
 
 // kubeVersionMeetsFloor compares a reported server version against the floor.
@@ -308,14 +398,26 @@ func (d *doctor) summary() {
 // callers (the preflight command and bootstrap) can decide whether to proceed.
 // provider tightens provider-specific checks ("local" requires kind +
 // cloud-provider-kind); an empty provider uses the generic checks.
-func runDoctor(provider string) *doctor {
+// Seams for the host-dependent checks, so a test can see whether they ran.
+var (
+	systemCheck = checkSystem
+	portsCheck  = (*doctor).checkPorts
+)
+
+func runDoctor(provider string, opts doctorOpts) *doctor {
 	d := &doctor{}
-	d.checkTools(provider)
-	dockerRoot := d.checkDockerEngine()
-	checkSystem(d, dockerRoot) // platform-specific (cgroup/inotify/disk/WSL)
-	d.checkPorts()
-	d.checkKubeContexts()
-	d.checkKubeServerVersion()
+	d.checkTools(provider, opts)
+	dockerRoot := d.checkDocker(opts)
+	if opts.needsDocker() {
+		// The kernel limits, docker data-root headroom and local ports are all
+		// about hosting a kind cluster; none applies to a remote one.
+		systemCheck(d, dockerRoot, opts.hostsKind()) // platform-specific (cgroup/inotify/disk/WSL)
+		if opts.hostsKind() {
+			portsCheck(d)
+		}
+	}
+	d.checkKubeContexts(opts.KubeContext)
+	d.checkKubeServerVersion(opts.Target)
 	d.summary()
 	return d
 }
@@ -332,7 +434,7 @@ These are the prerequisites for standing a cluster up, not for building an insta
 		if len(args) > 0 {
 			provider = args[0]
 		}
-		d := runDoctor(provider)
+		d := runDoctor(provider, doctorOptsFor(preflightKubeContext, preflightCluster, preflightBuild))
 		if d.fails > 0 {
 			return fmt.Errorf("%d preflight check(s) failed", d.fails)
 		}
@@ -342,6 +444,15 @@ These are the prerequisites for standing a cluster up, not for building an insta
 	SilenceErrors: true,
 }
 
+var (
+	preflightKubeContext string
+	preflightCluster     string
+	preflightBuild       bool
+)
+
 func init() {
+	preflightCmd.Flags().StringVar(&preflightKubeContext, "kube-context", "", "check for installing into this existing cluster instead of a local kind cluster")
+	preflightCmd.Flags().StringVar(&preflightCluster, "cluster", bootstrap.DefaultClusterName, "local provider: the kind cluster the run would create or use")
+	preflightCmd.Flags().BoolVar(&preflightBuild, "build", false, "check for building images from source (needs Docker even on an existing cluster)")
 	rootCmd.AddCommand(preflightCmd)
 }
