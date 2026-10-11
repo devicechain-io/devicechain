@@ -70,8 +70,23 @@ const FIELD_ID: Record<CustomControl, string> = {
   'slot-target': 'slot',
 };
 
-function customControlOf(spec: OptionSpec): CustomControl | null {
-  return spec.control === 'command-vocabulary' || spec.control === 'slot-target' ? spec.control : null;
+function customControlOf(descriptor: WidgetDescriptor, spec: OptionSpec): CustomControl | null {
+  if (spec.control === 'slot-target') return spec.control;
+  // The command workflow writes all three of its keys at once, so it is offered only to a
+  // descriptor that declares all three under it. Declaring the control on some other key
+  // would otherwise hand that widget a picker writing options it never declared (which the
+  // validator then reports as unknown) and leave the key it did declare unauthorable; such
+  // a widget gets the generic field instead, as a host that did not know the control would.
+  if (spec.control === 'command-vocabulary' && declaresCommandTriple(descriptor)) return spec.control;
+  return null;
+}
+
+function declaresCommandTriple(descriptor: WidgetDescriptor): boolean {
+  return [KEY_COMMAND_NAME, KEY_COMMAND_LABEL, KEY_PARAMETER_SCHEMA].every(
+    (key) =>
+      Object.prototype.hasOwnProperty.call(descriptor.options, key) &&
+      descriptor.options[key].control === 'command-vocabulary',
+  );
 }
 
 // The command workflow bakes these three keys together; the basemap notice reads these two.
@@ -101,7 +116,7 @@ function optionFieldsFor(descriptor: WidgetDescriptor): OptionField[] {
   const seen = new Set<CustomControl>();
   const fields: OptionField[] = [];
   for (const [key, spec] of Object.entries(descriptor.options)) {
-    const custom = customControlOf(spec);
+    const custom = customControlOf(descriptor, spec);
     if (custom) {
       if (seen.has(custom)) continue;
       seen.add(custom);
