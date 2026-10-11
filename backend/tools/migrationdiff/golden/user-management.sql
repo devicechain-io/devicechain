@@ -1,9 +1,14 @@
 ALTER SEQUENCE "user-management".audit_events_id_seq OWNED BY "user-management".audit_events.id;
 ALTER SEQUENCE "user-management".dead_letters_id_seq OWNED BY "user-management".dead_letters.id;
 ALTER SEQUENCE "user-management".iam_identities_id_seq OWNED BY "user-management".iam_identities.id;
+ALTER SEQUENCE "user-management".iam_identity_links_id_seq OWNED BY "user-management".iam_identity_links.id;
+ALTER SEQUENCE "user-management".iam_idp_connection_domains_id_seq OWNED BY "user-management".iam_idp_connection_domains.id;
+ALTER SEQUENCE "user-management".iam_idp_connections_id_seq OWNED BY "user-management".iam_idp_connections.id;
+ALTER SEQUENCE "user-management".iam_idp_role_mappings_id_seq OWNED BY "user-management".iam_idp_role_mappings.id;
 ALTER SEQUENCE "user-management".iam_memberships_id_seq OWNED BY "user-management".iam_memberships.id;
 ALTER SEQUENCE "user-management".iam_oauth_clients_id_seq OWNED BY "user-management".iam_oauth_clients.id;
 ALTER SEQUENCE "user-management".iam_roles_id_seq OWNED BY "user-management".iam_roles.id;
+ALTER SEQUENCE "user-management".iam_sso_link_requests_id_seq OWNED BY "user-management".iam_sso_link_requests.id;
 ALTER SEQUENCE "user-management".iam_tenant_purge_stores_id_seq OWNED BY "user-management".iam_tenant_purge_stores.id;
 ALTER SEQUENCE "user-management".iam_tenant_purges_id_seq OWNED BY "user-management".iam_tenant_purges.id;
 ALTER SEQUENCE "user-management".iam_tenant_tiers_id_seq OWNED BY "user-management".iam_tenant_tiers.id;
@@ -19,12 +24,38 @@ ALTER TABLE ONLY "user-management".dead_letters ALTER COLUMN id SET DEFAULT next
 ALTER TABLE ONLY "user-management".iam_identities
  ADD CONSTRAINT iam_identities_pkey PRIMARY KEY (id);
 ALTER TABLE ONLY "user-management".iam_identities ALTER COLUMN id SET DEFAULT nextval('"user-management".iam_identities_id_seq'::regclass);
+ALTER TABLE ONLY "user-management".iam_identity_links
+ ADD CONSTRAINT fk_iam_identity_links_connection FOREIGN KEY (connection_id) REFERENCES "user-management".iam_idp_connections(id) ON DELETE CASCADE;
+ALTER TABLE ONLY "user-management".iam_identity_links
+ ADD CONSTRAINT fk_iam_identity_links_identity FOREIGN KEY (identity_id) REFERENCES "user-management".iam_identities(id) ON DELETE CASCADE;
+ALTER TABLE ONLY "user-management".iam_identity_links
+ ADD CONSTRAINT iam_identity_links_pkey PRIMARY KEY (id);
+ALTER TABLE ONLY "user-management".iam_identity_links ALTER COLUMN id SET DEFAULT nextval('"user-management".iam_identity_links_id_seq'::regclass);
 ALTER TABLE ONLY "user-management".iam_identity_system_roles
  ADD CONSTRAINT "fk_user-management_iam_identity_system_roles_identity" FOREIGN KEY (identity_id) REFERENCES "user-management".iam_identities(id);
 ALTER TABLE ONLY "user-management".iam_identity_system_roles
  ADD CONSTRAINT "fk_user-management_iam_identity_system_roles_role" FOREIGN KEY (role_id) REFERENCES "user-management".iam_roles(id);
 ALTER TABLE ONLY "user-management".iam_identity_system_roles
  ADD CONSTRAINT iam_identity_system_roles_pkey PRIMARY KEY (identity_id, role_id);
+ALTER TABLE ONLY "user-management".iam_idp_connection_domains
+ ADD CONSTRAINT fk_iam_idp_connection_domains_connection FOREIGN KEY (connection_id) REFERENCES "user-management".iam_idp_connections(id) ON DELETE CASCADE;
+ALTER TABLE ONLY "user-management".iam_idp_connection_domains
+ ADD CONSTRAINT iam_idp_connection_domains_pkey PRIMARY KEY (id);
+ALTER TABLE ONLY "user-management".iam_idp_connection_domains ALTER COLUMN id SET DEFAULT nextval('"user-management".iam_idp_connection_domains_id_seq'::regclass);
+ALTER TABLE ONLY "user-management".iam_idp_connection_tenants
+ ADD CONSTRAINT fk_iam_idp_connection_tenants_connection FOREIGN KEY (connection_id) REFERENCES "user-management".iam_idp_connections(id) ON DELETE CASCADE;
+ALTER TABLE ONLY "user-management".iam_idp_connection_tenants
+ ADD CONSTRAINT iam_idp_connection_tenants_pkey PRIMARY KEY (connection_id, tenant_id);
+ALTER TABLE ONLY "user-management".iam_idp_connections
+ ADD CONSTRAINT iam_idp_connections_pkey PRIMARY KEY (id);
+ALTER TABLE ONLY "user-management".iam_idp_connections ALTER COLUMN id SET DEFAULT nextval('"user-management".iam_idp_connections_id_seq'::regclass);
+ALTER TABLE ONLY "user-management".iam_idp_role_mappings
+ ADD CONSTRAINT fk_iam_idp_connection_tenants_mappings FOREIGN KEY (connection_id, tenant_id) REFERENCES "user-management".iam_idp_connection_tenants(connection_id, tenant_id) ON DELETE CASCADE;
+ALTER TABLE ONLY "user-management".iam_idp_role_mappings
+ ADD CONSTRAINT fk_iam_idp_role_mappings_role FOREIGN KEY (role_id) REFERENCES "user-management".iam_roles(id) ON DELETE RESTRICT;
+ALTER TABLE ONLY "user-management".iam_idp_role_mappings
+ ADD CONSTRAINT iam_idp_role_mappings_pkey PRIMARY KEY (id);
+ALTER TABLE ONLY "user-management".iam_idp_role_mappings ALTER COLUMN id SET DEFAULT nextval('"user-management".iam_idp_role_mappings_id_seq'::regclass);
 ALTER TABLE ONLY "user-management".iam_membership_tenant_roles
  ADD CONSTRAINT "fk_user-management_iam_membership_tenant_roles_membership" FOREIGN KEY (membership_id) REFERENCES "user-management".iam_memberships(id);
 ALTER TABLE ONLY "user-management".iam_membership_tenant_roles
@@ -42,6 +73,11 @@ ALTER TABLE ONLY "user-management".iam_oauth_clients ALTER COLUMN id SET DEFAULT
 ALTER TABLE ONLY "user-management".iam_roles
  ADD CONSTRAINT iam_roles_pkey PRIMARY KEY (id);
 ALTER TABLE ONLY "user-management".iam_roles ALTER COLUMN id SET DEFAULT nextval('"user-management".iam_roles_id_seq'::regclass);
+ALTER TABLE ONLY "user-management".iam_sso_link_requests
+ ADD CONSTRAINT fk_iam_sso_link_requests_connection FOREIGN KEY (connection_id) REFERENCES "user-management".iam_idp_connections(id) ON DELETE CASCADE;
+ALTER TABLE ONLY "user-management".iam_sso_link_requests
+ ADD CONSTRAINT iam_sso_link_requests_pkey PRIMARY KEY (id);
+ALTER TABLE ONLY "user-management".iam_sso_link_requests ALTER COLUMN id SET DEFAULT nextval('"user-management".iam_sso_link_requests_id_seq'::regclass);
 ALTER TABLE ONLY "user-management".iam_tenant_purge_stores
  ADD CONSTRAINT fk_iam_tenant_purge_stores_tenant_purge FOREIGN KEY (tenant_purge_id) REFERENCES "user-management".iam_tenant_purges(id) ON DELETE CASCADE;
 ALTER TABLE ONLY "user-management".iam_tenant_purge_stores
@@ -82,7 +118,9 @@ CREATE INDEX idx_dead_letters_kind_time ON "user-management".dead_letters USING 
 CREATE INDEX idx_dead_letters_tenant_time ON "user-management".dead_letters USING btree (tenant_id, occurred_time DESC);
 CREATE INDEX idx_dead_letters_time ON "user-management".dead_letters USING btree (occurred_time DESC);
 CREATE INDEX idx_iam_identities_deleted_at ON "user-management".iam_identities USING btree (deleted_at);
+CREATE INDEX idx_iam_idp_connection_domains_connection ON "user-management".iam_idp_connection_domains USING btree (connection_id);
 CREATE INDEX idx_iam_memberships_deleted_at ON "user-management".iam_memberships USING btree (deleted_at);
+CREATE INDEX idx_iam_memberships_managed_by ON "user-management".iam_memberships USING btree (managed_by);
 CREATE INDEX idx_iam_oauth_clients_deleted_at ON "user-management".iam_oauth_clients USING btree (deleted_at);
 CREATE INDEX idx_iam_roles_deleted_at ON "user-management".iam_roles USING btree (deleted_at);
 CREATE INDEX idx_iam_tenant_purges_completed_at ON "user-management".iam_tenant_purges USING btree (completed_at);
@@ -109,6 +147,30 @@ CREATE SEQUENCE "user-management".iam_identities_id_seq
  NO MINVALUE
  NO MAXVALUE
  CACHE 1;
+CREATE SEQUENCE "user-management".iam_identity_links_id_seq
+ START WITH 1
+ INCREMENT BY 1
+ NO MINVALUE
+ NO MAXVALUE
+ CACHE 1;
+CREATE SEQUENCE "user-management".iam_idp_connection_domains_id_seq
+ START WITH 1
+ INCREMENT BY 1
+ NO MINVALUE
+ NO MAXVALUE
+ CACHE 1;
+CREATE SEQUENCE "user-management".iam_idp_connections_id_seq
+ START WITH 1
+ INCREMENT BY 1
+ NO MINVALUE
+ NO MAXVALUE
+ CACHE 1;
+CREATE SEQUENCE "user-management".iam_idp_role_mappings_id_seq
+ START WITH 1
+ INCREMENT BY 1
+ NO MINVALUE
+ NO MAXVALUE
+ CACHE 1;
 CREATE SEQUENCE "user-management".iam_memberships_id_seq
  START WITH 1
  INCREMENT BY 1
@@ -122,6 +184,12 @@ CREATE SEQUENCE "user-management".iam_oauth_clients_id_seq
  NO MAXVALUE
  CACHE 1;
 CREATE SEQUENCE "user-management".iam_roles_id_seq
+ START WITH 1
+ INCREMENT BY 1
+ NO MINVALUE
+ NO MAXVALUE
+ CACHE 1;
+CREATE SEQUENCE "user-management".iam_sso_link_requests_id_seq
  START WITH 1
  INCREMENT BY 1
  NO MINVALUE
@@ -207,8 +275,57 @@ CREATE TABLE "user-management".iam_identities (
  password_hash character varying(256) NOT NULL,
  session_epoch character varying(64) DEFAULT ''::character varying NOT NULL
 );
+CREATE TABLE "user-management".iam_identity_links (
+ id bigint NOT NULL,
+ created_at timestamp with time zone,
+ identity_id bigint NOT NULL,
+ connection_id bigint NOT NULL,
+ subject character varying(512) NOT NULL,
+ created_by character varying(256) DEFAULT ''::character varying NOT NULL
+);
 CREATE TABLE "user-management".iam_identity_system_roles (
  identity_id bigint NOT NULL,
+ role_id bigint NOT NULL
+);
+CREATE TABLE "user-management".iam_idp_connection_domains (
+ id bigint NOT NULL,
+ domain character varying(253) NOT NULL,
+ connection_id bigint NOT NULL,
+ verified_at timestamp with time zone NOT NULL,
+ verified_by character varying(256) NOT NULL
+);
+CREATE TABLE "user-management".iam_idp_connection_tenants (
+ connection_id bigint NOT NULL,
+ tenant_id character varying(128) NOT NULL
+);
+CREATE TABLE "user-management".iam_idp_connections (
+ id bigint NOT NULL,
+ created_at timestamp with time zone,
+ updated_at timestamp with time zone,
+ token character varying(128) NOT NULL,
+ name character varying(256) NOT NULL,
+ kind character varying(16) NOT NULL,
+ enabled boolean DEFAULT false NOT NULL,
+ issuer character varying(512) NOT NULL,
+ client_id character varying(256) NOT NULL,
+ client_secret_ref character varying(256) DEFAULT ''::character varying NOT NULL,
+ scopes text,
+ email_claim character varying(64) DEFAULT 'email'::character varying NOT NULL,
+ groups_claim character varying(64) DEFAULT ''::character varying NOT NULL,
+ required_claims text,
+ required_amr text,
+ jit_enabled boolean DEFAULT false NOT NULL,
+ default_tenant_roles text,
+ session_max_age_seconds bigint DEFAULT 43200 NOT NULL,
+ discovery_snapshot text,
+ discovery_approved_at timestamp with time zone,
+ discovery_approved_by character varying(256) DEFAULT ''::character varying NOT NULL
+);
+CREATE TABLE "user-management".iam_idp_role_mappings (
+ id bigint NOT NULL,
+ connection_id bigint NOT NULL,
+ tenant_id character varying(128) NOT NULL,
+ group_value character varying(512) NOT NULL,
  role_id bigint NOT NULL
 );
 CREATE TABLE "user-management".iam_membership_tenant_roles (
@@ -222,7 +339,8 @@ CREATE TABLE "user-management".iam_memberships (
  deleted_at timestamp with time zone,
  identity_id bigint NOT NULL,
  tenant_id character varying(128) NOT NULL,
- enabled boolean DEFAULT true NOT NULL
+ enabled boolean DEFAULT true NOT NULL,
+ managed_by bigint
 );
 CREATE TABLE "user-management".iam_oauth_clients (
  id bigint NOT NULL,
@@ -247,6 +365,14 @@ CREATE TABLE "user-management".iam_roles (
  scope character varying(16) NOT NULL,
  token character varying(128) NOT NULL,
  authorities text
+);
+CREATE TABLE "user-management".iam_sso_link_requests (
+ id bigint NOT NULL,
+ created_at timestamp with time zone,
+ connection_id bigint NOT NULL,
+ subject character varying(512) NOT NULL,
+ email character varying(256) NOT NULL,
+ claims_digest character varying(128) DEFAULT ''::character varying NOT NULL
 );
 CREATE TABLE "user-management".iam_tenant_purge_stores (
  id bigint NOT NULL,
@@ -320,7 +446,8 @@ CREATE TABLE "user-management".iam_tenants (
  geo_fence_position_ceiling bigint,
  geo_fence_ceiling bigint,
  geo_fence_position_budget bigint,
- locale text
+ locale text,
+ sso_enforced boolean DEFAULT false NOT NULL
 );
 CREATE TABLE "user-management".purged_tenants (
  token character varying(128) NOT NULL,
@@ -362,9 +489,15 @@ CREATE TABLE "user-management".user_management_migrations (
 );
 CREATE UNIQUE INDEX idx_dead_letters_stream_seq ON "user-management".dead_letters USING btree (stream_seq, append_time);
 CREATE UNIQUE INDEX idx_iam_identities_email ON "user-management".iam_identities USING btree (email);
+CREATE UNIQUE INDEX idx_iam_identity_links_connection_identity ON "user-management".iam_identity_links USING btree (connection_id, identity_id);
+CREATE UNIQUE INDEX idx_iam_identity_links_connection_subject ON "user-management".iam_identity_links USING btree (connection_id, subject);
+CREATE UNIQUE INDEX idx_iam_idp_connection_domains_domain ON "user-management".iam_idp_connection_domains USING btree (domain);
+CREATE UNIQUE INDEX idx_iam_idp_connections_token ON "user-management".iam_idp_connections USING btree (token);
+CREATE UNIQUE INDEX idx_iam_idp_role_mappings_unique ON "user-management".iam_idp_role_mappings USING btree (connection_id, tenant_id, group_value, role_id);
 CREATE UNIQUE INDEX idx_iam_membership_identity_tenant ON "user-management".iam_memberships USING btree (identity_id, tenant_id);
 CREATE UNIQUE INDEX idx_iam_oauth_clients_client_id ON "user-management".iam_oauth_clients USING btree (client_id);
 CREATE UNIQUE INDEX idx_iam_role_scope_token ON "user-management".iam_roles USING btree (scope, token);
+CREATE UNIQUE INDEX idx_iam_sso_link_requests_connection_subject ON "user-management".iam_sso_link_requests USING btree (connection_id, subject);
 CREATE UNIQUE INDEX idx_iam_tenant_tiers_token ON "user-management".iam_tenant_tiers USING btree (token);
 CREATE UNIQUE INDEX idx_iam_tenants_token ON "user-management".iam_tenants USING btree (token);
 CREATE UNIQUE INDEX idx_tenant_purge_stores_purge_store ON "user-management".iam_tenant_purge_stores USING btree (tenant_purge_id, store);
