@@ -17,8 +17,13 @@ export type {
   Breakpoints,
   WidgetInstance,
   KnownWidgetInstance,
+  ExtensionWidgetInstance,
+  ExtensionWidgetType,
   UnknownWidgetInstance,
   UnknownWidgetType,
+  UnresolvedWidgetCode,
+  UnresolvedWidgetReason,
+  WidgetImplementationRef,
   WidgetType,
   WidgetLayout,
   WidgetBox,
@@ -170,6 +175,7 @@ export {
 
 export {
   parseDashboardDefinition,
+  type ParseDefinitionOptions,
   parseSlotBinding,
   serializeDefinition,
   storedDefinition,
@@ -270,3 +276,12 @@ export {
   type DescriptorIssue,
   type WidgetCatalog,
 } from './widget-catalog';
+
+export {
+  isBuiltinWidget,
+  parseWidgetRef,
+  checkWidgetCompatibility,
+  widgetVersionNotice,
+  unresolvedWidgets,
+  type UnresolvedWidgetReport,
+} from './widget-compat';

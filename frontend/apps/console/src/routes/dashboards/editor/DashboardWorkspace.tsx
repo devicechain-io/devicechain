@@ -32,6 +32,7 @@ import {
   storedDefinition,
   stripDefaultBindings,
   UNKNOWN_WIDGET_TYPE,
+  isBuiltinWidget,
   updateWidget,
   widgetSlotName,
   SyntheticDataSource,
@@ -665,7 +666,7 @@ export function DashboardWorkspace({
           {selected?.type === UNKNOWN_WIDGET_TYPE && (
             <UnknownWidgetPanel key={selected.id} widget={selected} onClose={() => setSelectedId(null)} />
           )}
-          {selected && selected.type !== UNKNOWN_WIDGET_TYPE && (
+          {selected && isBuiltinWidget(selected) && (
             <WidgetConfigPanel
               // Remount per widget so the config panel's local input buffers (e.g.
               // the measurements text field) don't carry one widget's keystrokes
