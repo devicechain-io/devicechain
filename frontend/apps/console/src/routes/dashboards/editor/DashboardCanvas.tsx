@@ -30,6 +30,7 @@ import {
 } from '@devicechain/dashboards';
 import { ConnectedWidget, WidgetSubjectProvider, resolveWidgets, widgetSubjectLabel } from '@devicechain/widgets';
 import { Rnd } from 'react-rnd';
+import { defaultWidgetRegistry, type EditorWidgetRegistry } from './widgetRegistry';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 
@@ -37,6 +38,9 @@ export interface DashboardCanvasProps {
   definition: DashboardDefinition;
   onChange: (next: DashboardDefinition) => void;
   hub: WidgetDataSource;
+  // The registry every widget on the canvas resolves through -- the one the definition was
+  // parsed with. Defaults to the deployment's.
+  registry?: EditorWidgetRegistry;
   // Action seam, so an action widget shows its controls in the layout (WYSIWYG). The
   // canvas makes each widget pointer-inert during editing, so the controls are visible
   // but inert — react-rnd owns drag/resize.
@@ -73,6 +77,7 @@ export function DashboardCanvas({
   definition,
   onChange,
   hub,
+  registry = defaultWidgetRegistry(),
   actions,
   bindings,
   selectedId,
@@ -167,7 +172,7 @@ export function DashboardCanvas({
                     live selection overlay (selection is inert here), so the author's own
                     bindings are the right subject. */}
                 <WidgetSubjectProvider label={widgetSubjectLabel(resolved.get(widget.id) ?? widget)}>
-                  <ConnectedWidget widget={resolved.get(widget.id) ?? widget} hub={hub} actions={actions} />
+                  <ConnectedWidget widget={resolved.get(widget.id) ?? widget} hub={hub} registry={registry} actions={actions} />
                 </WidgetSubjectProvider>
               </div>
 

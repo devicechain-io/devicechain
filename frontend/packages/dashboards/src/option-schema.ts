@@ -364,3 +364,63 @@ export function enumValues(specs: WidgetOptionSpecs, key: string): readonly stri
   const spec = specs[key];
   return spec.kind === 'enum' ? spec.values : undefined;
 }
+
+// applyOptionPatch is the VALIDATED write a registered editor is given: it returns the
+// options bag with `patch` applied, or throws on a write the schema cannot hold.
+//
+// An editor is developer code running in the host page, so a mistake in it should be loud at
+// the moment it is made, not a half-configured widget discovered at publish. The rules:
+//   - a key the schema does not declare is refused (an editor cannot grow the stored bag);
+//   - a value of the wrong kind, an enum value outside `values`, or a `format: 'json'`
+//     string that does not parse, is refused;
+//   - a number is folded into its bounds, as the generic field does;
+//   - `undefined`, an empty string, and `false` DROP the key (an unset option reads as its
+//     default, and an opt-in flag is absent-when-off), as the generic fields do.
+// Keys the patch does not name — including ones outside the schema that an older release
+// stored — are carried through untouched.
+export function applyOptionPatch(
+  specs: WidgetOptionSpecs,
+  options: Readonly<Record<string, unknown>> | undefined,
+  patch: Readonly<Record<string, unknown>>,
+  label = 'widget',
+): Record<string, unknown> {
+  const next: Record<string, unknown> = { ...(options ?? {}) };
+  for (const [key, value] of Object.entries(patch)) {
+    if (!hasOwn(specs, key)) throw new Error(`${label}: "${key}" is not a declared option`);
+    const spec = specs[key];
+    if (value === undefined || value === '' || (spec.kind === 'boolean' && value === false)) {
+      delete next[key];
+      continue;
+    }
+    const refuse = (expected: string): never => {
+      throw new TypeError(`${label}: option "${key}" takes ${expected}, got ${JSON.stringify(value)}`);
+    };
+    switch (spec.kind) {
+      case 'string':
+        if (typeof value !== 'string') refuse('a string');
+        // A `format: 'json'` option is judged as the option validator judges it: a string
+        // that does not parse is refused here rather than flagged later at publish.
+        if (spec.format === 'json' && !parsesAsJson(value as string)) refuse('a JSON string');
+        next[key] = value;
+        break;
+      case 'boolean':
+        if (typeof value !== 'boolean') refuse('a boolean');
+        next[key] = value;
+        break;
+      case 'number': {
+        if (typeof value !== 'number') refuse('a finite number');
+        const clamped = clampNumberOption(spec, value as number);
+        if (clamped === undefined) refuse('a finite number');
+        next[key] = clamped;
+        break;
+      }
+      case 'enum':
+        if (typeof value !== 'string' || !spec.values.includes(value)) {
+          refuse(`one of ${spec.values.map((v) => JSON.stringify(v)).join(', ')}`);
+        }
+        next[key] = value;
+        break;
+    }
+  }
+  return next;
+}

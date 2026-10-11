@@ -19,6 +19,7 @@
     "@devicechain/brand": "0.0.0-dev",
     "@devicechain/client": "0.0.0-dev",
     "@devicechain/dashboards": "0.0.0-dev",
+    "@devicechain/host-widgets": "0.0.0-dev",
     "@devicechain/widgets": "0.0.0-dev",
     "echarts": "^6.0.0",
     "i18next": "^26.4.2",

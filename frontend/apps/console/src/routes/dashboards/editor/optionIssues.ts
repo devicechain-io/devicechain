@@ -16,7 +16,7 @@
 // survives is the part an author acts on — WHICH option, and WHAT KIND of wrong — and
 // that beats precise English nobody in the room reads.
 
-import type { DashboardDefinition } from '@devicechain/dashboards';
+import type { DashboardDefinition, UnresolvedWidgetCode } from '@devicechain/dashboards';
 import type { OptionIssueCode } from '@devicechain/widgets';
 
 // A translation key per issue code.
@@ -35,6 +35,17 @@ export const OPTION_ISSUE_MESSAGE_KEYS: Record<OptionIssueCode, string> = {
   range: 'optionIssueRange',
   json: 'optionIssueJson',
   invariant: 'optionIssueInvariant',
+};
+
+// A translation key per reason a stored widget cannot be resolved, for the publish drawer.
+// Exhaustive for the same reason as above; the dashboards package's own English message
+// names the same fact but is not translated, so it is not what an author reads.
+export const UNRESOLVED_REASON_KEYS: Record<UnresolvedWidgetCode, string> = {
+  unregistered: 'unresolvedReasonUnregistered',
+  unversioned: 'unresolvedReasonUnversioned',
+  'invalid-metadata': 'unresolvedReasonInvalidMetadata',
+  'options-version': 'unresolvedReasonOptionsVersion',
+  'sdk-incompatible': 'unresolvedReasonSdkIncompatible',
 };
 
 // widgetLabel names the widget an issue belongs to, the way an author recognises it.

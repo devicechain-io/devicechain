@@ -12,7 +12,14 @@
 export { defineWidget } from './define-widget';
 export type { ErasedComponent, ErasedWidgetDefinition, WidgetDefinition, WidgetImplementation } from './define-widget';
 export { createWidgetRegistry, WidgetRegistryError, type WidgetRegistry } from './registry';
-export type { WidgetComponent, WidgetEditorProps, WidgetProps } from './widget';
+export type {
+  EditorCommandChoice,
+  EditorCommandChoices,
+  WidgetComponent,
+  WidgetEditorProps,
+  WidgetEditorServices,
+  WidgetProps,
+} from './widget';
 
 // The ambient host contexts (selection, candidates, time zone, theme root, subject). Defined
 // in this package and nowhere else — see ./context.

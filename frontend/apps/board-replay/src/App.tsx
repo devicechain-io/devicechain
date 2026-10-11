@@ -19,6 +19,7 @@ import {
 import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
+import type { WidgetRegistry } from '@devicechain/host-widgets';
 import { Board } from './Board';
 import { loadReplay, ReplayLoadError, type LoadedReplay } from './load';
 import { ProvenancePanel, ReplayHeader } from './ReplayHeader';
@@ -36,9 +37,11 @@ export interface ReplayAppProps {
   fetchFn?: typeof fetch;
   origin?: string;
   ticker?: ClockTicker;
+  // The widget registry to parse and render with; defaults to the deployment's.
+  registry?: WidgetRegistry;
 }
 
-export default function ReplayApp({ recordingUrl, boardUrl, fetchFn, origin, ticker }: ReplayAppProps) {
+export default function ReplayApp({ recordingUrl, boardUrl, fetchFn, origin, ticker, registry }: ReplayAppProps) {
   const [load, setLoad] = useState<Load>({ status: 'loading' });
   const [provenanceOpen, setProvenanceOpen] = useState(false);
   const [rootEl, setRootEl] = useState<HTMLElement | null>(null);
@@ -47,7 +50,7 @@ export default function ReplayApp({ recordingUrl, boardUrl, fetchFn, origin, tic
   useEffect(() => {
     let cancelled = false;
     setLoad({ status: 'loading' });
-    loadReplay({ recordingUrl, boardUrl, fetchFn, origin }).then(
+    loadReplay({ recordingUrl, boardUrl, fetchFn, origin, registry }).then(
       (replay) => {
         if (!cancelled) setLoad({ status: 'ready', replay });
       },
@@ -143,7 +146,7 @@ function Player({
   ticker?: ClockTicker;
   themeRoot: Element | undefined;
 }) {
-  const { recording, definition, siteAnchors } = replay;
+  const { recording, definition, registry, siteAnchors } = replay;
   const clock: RecordedClock = useMemo(() => createRecordedClock(recording, { ticker }), [recording, ticker]);
   const site = useMemo(() => ({ siteAnchors }), [siteAnchors]);
   const resolver = useMemo(() => createRecordedResolver(recording, site), [recording, site]);
@@ -169,7 +172,7 @@ function Player({
         data-state={replayState(view, seeking)}
         style={{ flex: '1 1 auto', minHeight: 0, overflow: 'auto' }}
       >
-        <Board definition={definition} source={source} resolver={resolver} lister={lister} themeRoot={themeRoot} />
+        <Board definition={definition} registry={registry} source={source} resolver={resolver} lister={lister} themeRoot={themeRoot} />
       </main>
       <TransportBar clock={clock} recording={recording} seeking={seeking} onSeeking={setSeeking} />
     </>

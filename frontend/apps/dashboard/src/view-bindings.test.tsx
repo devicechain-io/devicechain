@@ -20,6 +20,7 @@ import type {
   WidgetDataSource,
   WidgetStreamSink,
 } from '@devicechain/dashboards';
+import { hostWidgetRegistry } from '@devicechain/host-widgets';
 import { act, cleanup, render } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -94,7 +95,7 @@ const definition: DashboardDefinition = {
 };
 
 async function mount(manifest: Record<string, { kind: 'device'; deviceToken: string }>) {
-  render(<View loaded={{ definition, manifest }} authorities={[]} onChange={() => {}} onSignOut={() => {}} />);
+  render(<View loaded={{ definition, manifest, registry: hostWidgetRegistry() }} authorities={[]} onChange={() => {}} onSignOut={() => {}} />);
   await act(async () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
   });

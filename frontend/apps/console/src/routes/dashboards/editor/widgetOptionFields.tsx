@@ -31,13 +31,12 @@
 
 import {
   clampNumberOption,
-  type KnownWidgetInstance,
   type NumberOptionSpec,
-  type HostOptionControl,
   type OptionSpec,
-  type SlotDefinition,
+  type ResolvedWidgetInstance,
   type WidgetDescriptor,
 } from '@devicechain/dashboards';
+import type { WidgetEditorServices } from '@devicechain/widget-sdk';
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
@@ -45,58 +44,18 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { Combobox, type ComboboxOption } from '@/components/ui/combobox';
 import { FormField } from '@/components/ui/form-field';
 import { Input } from '@/components/ui/input';
-import { useQuery } from '@/lib/hooks/use-query';
-import {
-  getDeviceCommandVocabulary,
-  listCommandDefinitionsForDevice,
-} from '@/lib/api/device-management';
-import { commandChoices, type PickableCommand } from '@/routes/devices/commandVocabulary';
 
+import { editorControlOf, hostControl, type ControlEditorProps } from './controlEditors';
 import { enumChoiceLabel, enumPlaceholder, fieldHelp, fieldLabel, useMessageLookup } from './optionWording';
 
 // ---- Which control authors which option -------------------------------------
 
-// The specialized workflows this host implements for the controls a descriptor may name. The
-// command and slot controls collapse every option that names them into ONE field, because
+// Options that declare a control this host has an EDITOR for collapse into ONE field, because
 // they are one choice: picking a command bakes its key, its label and its parameter
 // descriptors together (ADR-043 decision 3), and a free-text box for the parameter schema
 // would invite an author to hand-write JSON the button silently ignores when it does not
-// parse. `basemap` has no field of its own — its options render as ordinary strings — and
-// only drives the notice below.
-type CustomControl = Extract<HostOptionControl, 'command-vocabulary' | 'slot-target'>;
-
-const FIELD_ID: Record<CustomControl, string> = {
-  'command-vocabulary': 'command',
-  'slot-target': 'slot',
-};
-
-function customControlOf(descriptor: WidgetDescriptor, spec: OptionSpec): CustomControl | null {
-  if (spec.control === 'slot-target') return spec.control;
-  // The command workflow writes all three of its keys at once, so it is offered only to a
-  // descriptor that declares all three under it. Declaring the control on some other key
-  // would otherwise hand that widget a picker writing options it never declared (which the
-  // validator then reports as unknown) and leave the key it did declare unauthorable; such
-  // a widget gets the generic field instead, as a host that did not know the control would.
-  if (spec.control === 'command-vocabulary' && declaresCommandTriple(descriptor)) return spec.control;
-  return null;
-}
-
-function declaresCommandTriple(descriptor: WidgetDescriptor): boolean {
-  return [KEY_COMMAND_NAME, KEY_COMMAND_LABEL, KEY_PARAMETER_SCHEMA].every(
-    (key) =>
-      Object.prototype.hasOwnProperty.call(descriptor.options, key) &&
-      descriptor.options[key].control === 'command-vocabulary',
-  );
-}
-
-// The command workflow bakes these three keys together; the basemap notice reads these two.
-// Registering those workflows through the editor interface (a later slice) removes the names
-// from this host. They are consulted only AFTER the descriptor has declared the control.
-const KEY_COMMAND_NAME = 'commandName';
-const KEY_COMMAND_LABEL = 'commandLabel';
-const KEY_PARAMETER_SCHEMA = 'parameterSchema';
-const KEY_TILE_URL = 'tileUrl';
-const KEY_ATTRIBUTION = 'attribution';
+// parse. The editors themselves are registered in ./controlEditors (the same interface a
+// package's own editor is written against); this file only decides WHERE each one goes.
 
 // The one field rendered ABOVE the data-source block. A widget's title is what an author
 // reaches for first; everything else reads as a detail of the binding and belongs after it.
@@ -107,20 +66,31 @@ const LEADING_KEYS: ReadonlySet<string> = new Set(['title']);
 
 type OptionField =
   | { id: string; leading: boolean; kind: 'schema'; key: string; spec: OptionSpec }
-  | { id: string; leading: false; kind: CustomControl; key: string };
+  | { id: string; leading: false; kind: 'editor'; control: string; keys: string[] };
 
 // optionFieldsFor walks a descriptor's declared options in schema order and returns the
-// fields that author them. Options sharing a custom control collapse into one field,
+// fields that author them. Options sharing a registered control collapse into one field,
 // emitted where the first of them appears.
 function optionFieldsFor(descriptor: WidgetDescriptor): OptionField[] {
-  const seen = new Set<CustomControl>();
   const fields: OptionField[] = [];
+  const editors = new Map<string, Extract<OptionField, { kind: 'editor' }>>();
   for (const [key, spec] of Object.entries(descriptor.options)) {
-    const custom = customControlOf(descriptor, spec);
-    if (custom) {
-      if (seen.has(custom)) continue;
-      seen.add(custom);
-      fields.push({ id: FIELD_ID[custom], leading: false, kind: custom, key });
+    const control = editorControlOf(descriptor, spec);
+    if (control !== undefined) {
+      const existing = editors.get(control);
+      if (existing) {
+        existing.keys.push(key);
+      } else {
+        const field = {
+          id: hostControl(control)!.fieldId,
+          leading: false as const,
+          kind: 'editor' as const,
+          control,
+          keys: [key],
+        };
+        editors.set(control, field);
+        fields.push(field);
+      }
       continue;
     }
     fields.push({ id: key, leading: LEADING_KEYS.has(key), kind: 'schema', key, spec });
@@ -129,17 +99,16 @@ function optionFieldsFor(descriptor: WidgetDescriptor): OptionField[] {
 }
 
 export interface OptionFieldContext {
-  widget: KnownWidgetInstance;
+  widget: ResolvedWidgetInstance;
   // What this widget declares: the schema the fields are derived from.
   descriptor: WidgetDescriptor;
   // Write (or, with undefined/''/false, drop) a single option key.
   setOption: (key: string, value: string | number | boolean | undefined) => void;
-  // Write several keys at once, for a control that authors more than one.
-  setOptions: (patch: Record<string, string | number | undefined>) => void;
-  // The dashboard's slots — the choices a selection-target picker offers.
-  slots: Record<string, SlotDefinition> | undefined;
-  // The widget's target device, where it has one: the command vocabulary comes from it.
-  deviceToken: string | undefined;
+  // Write several keys at once, for a control that authors more than one. Validated against
+  // the descriptor's schema (an editor writing an undeclared key or a wrong-kind value throws).
+  setOptions: (patch: Record<string, unknown>) => void;
+  // The host services a registered editor is handed, passed explicitly.
+  services: WidgetEditorServices;
 }
 
 // WidgetOptionFields renders one half of the derived field list — the leading fields above
@@ -167,14 +136,16 @@ export function WidgetOptionFields({
 }
 
 function OptionFieldControl({ field, ctx }: { field: OptionField; ctx: OptionFieldContext }) {
-  switch (field.kind) {
-    case 'schema':
-      return <SchemaField option={field.key} spec={field.spec} ctx={ctx} />;
-    case 'command-vocabulary':
-      return <CommandField ctx={ctx} />;
-    case 'slot-target':
-      return <SlotTargetField ctx={ctx} optionKey={field.key} />;
-  }
+  if (field.kind === 'schema') return <SchemaField option={field.key} spec={field.spec} ctx={ctx} />;
+  const Editor = hostControl(field.control)!.Editor!;
+  const props: ControlEditorProps = {
+    options: ctx.widget.options ?? {},
+    setOptions: ctx.setOptions,
+    services: ctx.services,
+    descriptor: ctx.descriptor,
+    optionKeys: field.keys,
+  };
+  return <Editor {...props} />;
 }
 
 // ---- Controls derived from the spec kind -------------------------------------
@@ -259,209 +230,39 @@ function BooleanField({
   );
 }
 
-// ---- Command selection (command-button) -------------------------------------
-
-// CommandField lets the author pick which command the button issues, from the target
-// device's PUBLISHED command vocabulary (ADR-043 decision 3). Picking one bakes its key,
-// label, and parameter schema into the widget's options — so the widget renders its typed
-// form at runtime with no device→profile resolution. Requires a target device to be
-// chosen first (that's where the command list comes from).
-//
-// When the device's profile CONSTRAINS its vocabulary, the picker offers published
-// commands only, because published is what the enqueue gate accepts. Baking a draft there
-// would produce a button that looks correct in the editor, renders correctly on the
-// dashboard, and fails only when an operator presses it. Draft-only commands are still
-// NAMED below the picker rather than omitted: an author who just wrote a command
-// definition and can't find it needs to be told it is unpublished, not left to conclude
-// the editor is broken.
-//
-// When the profile does NOT constrain (no profile, never published, or no definitions —
-// ADR-043 decision 4), the gate accepts any key, so the drafts ARE offerable and are
-// offered. Restricting to published there would leave the whole unconstrained device
-// class — most devices, pre-GA — with an empty picker and no way to author a command
-// button at all, for a button that would have worked.
-function CommandField({ ctx }: { ctx: OptionFieldContext }) {
-  const { t } = useTranslation('dashboards');
-  const deviceToken = ctx.deviceToken;
-  const commandName = optString(ctx.widget, KEY_COMMAND_NAME);
-  const { data, loading, error } = useQuery(
-    async () => {
-      if (!deviceToken) return commandChoices(null, []);
-      const [vocabulary, drafts] = await Promise.all([
-        getDeviceCommandVocabulary(deviceToken),
-        listCommandDefinitionsForDevice(deviceToken),
-      ]);
-      return commandChoices(vocabulary, drafts);
-    },
-    [deviceToken],
-  );
-  const selectable = data?.selectable ?? [];
-  const draftOnly = data?.draftOnly ?? [];
-  const constrained = data?.constrained ?? false;
-
-  const options: ComboboxOption[] = selectable.map((def) => ({
-    value: def.commandKey,
-    label: def.name ? `${def.name} (${def.commandKey})` : def.commandKey,
-  }));
-
-  const select = (def: PickableCommand | undefined) =>
-    ctx.setOptions({
-      [KEY_COMMAND_NAME]: def?.commandKey,
-      [KEY_COMMAND_LABEL]: def?.name ?? def?.commandKey,
-      [KEY_PARAMETER_SCHEMA]: def?.parameterSchema ?? undefined,
-    });
-
-  // A command baked from a previous target device may not exist on the current one (the
-  // author repointed the device without re-picking), or may have been unpublished since.
-  // Flag it — non-destructively, since the datasource and options update through separate
-  // handlers — so the author re-picks rather than silently shipping a button that fails.
-  const staleSelection =
-    commandName !== '' && !loading && !error && !selectable.some((d) => d.commandKey === commandName);
-
-  return (
-    <div className="space-y-3 rounded-md border border-border p-3">
-      <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-        {t('widgetCommandHeading')}
-      </div>
-      {!deviceToken ? (
-        <p className="text-xs text-muted-foreground">{t('widgetCommandSelectDevice')}</p>
-      ) : loading ? (
-        <p className="text-xs text-muted-foreground">{t('widgetCommandLoading')}</p>
-      ) : error ? (
-        <p className="text-xs text-muted-foreground">{t('widgetCommandLoadError', { error })}</p>
-      ) : (
-        <>
-          {staleSelection && (
-            <p className="text-xs text-destructive">{t('widgetCommandStale', { commandName })}</p>
-          )}
-          {selectable.length === 0 ? (
-            <p className="text-xs text-muted-foreground">{t('widgetCommandNoneDefined')}</p>
-          ) : (
-            <FormField label={t('widgetCommandHeading')} description={t('widgetCommandFieldHint')}>
-              <Combobox
-                options={options}
-                value={commandName}
-                onChange={(key) => select(selectable.find((d) => d.commandKey === key))}
-                placeholder={t('widgetCommandSelectPlaceholder')}
-              />
-            </FormField>
-          )}
-          {!constrained && selectable.length > 0 && (
-            <p className="text-xs text-muted-foreground">{t('widgetCommandUnpublishedHint')}</p>
-          )}
-          {draftOnly.length > 0 && (
-            <div className="space-y-1 rounded-md bg-muted/50 p-2">
-              <p className="text-xs text-muted-foreground">{t('widgetCommandDraftOnlyLabel')}</p>
-              {/* Actual (untranslated) command names — data, not prose. */}
-              <p className="text-xs font-medium text-muted-foreground">{draftOnly.join(', ')}</p>
-              <p className="text-xs text-muted-foreground">
-                {t('widgetCommandDraftOnlyPublishHint', { count: draftOnly.length })}
-              </p>
-            </div>
-          )}
-        </>
-      )}
-    </div>
-  );
-}
-
-// ---- Selection target (entity-selector, alarm-table) -------------------------
-
-// SlotTargetField picks which slot a widget re-points when a viewer selects an entity in
-// it. A scoped slot becomes a member picker (which device within the parent context); a
-// root slot a context picker (which building/customer the dashboard shows). The target is
-// stored in the widget's options; the runtime resolves the candidate set from the target
-// slot's scope.
-//
-// Every widget whose descriptor declares the slot-target control gets it, under whatever
-// option key it chose to store the target in.
-function SlotTargetField({ ctx, optionKey }: { ctx: OptionFieldContext; optionKey: string }) {
-  const { t } = useTranslation('dashboards');
-  const slots = ctx.slots;
-  const names = Object.keys(slots ?? {});
-  const options: ComboboxOption[] = names.map((name) => {
-    const slot = slots![name];
-    const role = slot.scope
-      ? t('widgetRoleMemberOf', { parent: slot.scope.parent })
-      : slot.type === 'anchor'
-        ? t('widgetRoleContext')
-        : t('widgetRoleDevice');
-    return { value: name, label: name, description: role };
-  });
-
-  return (
-    <div className="space-y-3 rounded-md border border-border p-3">
-      <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-        {t('widgetSelectionTargetHeading')}
-      </div>
-      {options.length === 0 ? (
-        <p className="text-xs text-muted-foreground">{t('widgetSelectionTargetEmptyHint')}</p>
-      ) : (
-        <FormField label={t('widgetLabelTargetSlot')} description={t('widgetTargetSlotHint')}>
-          <Combobox
-            options={options}
-            value={optString(ctx.widget, optionKey)}
-            onChange={(v) => ctx.setOption(optionKey, v || undefined)}
-            placeholder={t('widgetPlaceholderSelectSlot')}
-          />
-        </FormField>
-      )}
-    </div>
-  );
-}
 // ---- Cross-field notices ------------------------------------------------------
 
-// 🔴 A widget tile source with no credit line is IGNORED at render — the two halves are
-// one value, and this tier never reaches the server's validation, so the renderer discards
-// the pair rather than drawing a provider's tiles uncredited. Saying so is the whole point:
-// without it the option silently does nothing and reads as broken, which is the complaint
-// the basemap work started from. The geofence editor carries the same message.
-//
-// It lives outside the derived field list because it is not a field: it reads two options
-// and writes neither, which is exactly what the exhaustiveness gate would (correctly) call
-// a decorative container if it were emitted as one.
-//
-// Which widget it applies to is asked of the DESCRIPTOR — "does this widget declare both
-// halves of the tile pair, under the basemap control?" — rather than written as
-// `type === 'map'`. Stated limit: declaring the pair is a PROXY for rendering tiles, not
-// proof of it; a widget that declared both and did not discard the unattributed pair at
-// render would be told something untrue here. Nothing declares them today but the map, and
-// the discard rule lives with the widget that does.
+// Notices live outside the derived field list because they are not fields: they read the
+// options and write nothing, which is exactly what the exhaustiveness gate would (correctly)
+// call a decorative container if one were emitted as a field. Which notice applies is asked
+// of the DESCRIPTOR through the controls it declares -- never of the widget's id.
 export function WidgetOptionNotices({
   widget,
   descriptor,
 }: {
-  widget: KnownWidgetInstance;
+  widget: ResolvedWidgetInstance;
   descriptor: WidgetDescriptor;
 }) {
-  const { t } = useTranslation('dashboards');
-  if (!declaresTilePair(descriptor)) return null;
-  if (optString(widget, KEY_TILE_URL).trim() === '') return null;
-  if (optString(widget, KEY_ATTRIBUTION).trim() !== '') return null;
+  const controls = new Set<string>();
+  for (const spec of Object.values(descriptor.options)) if (spec.control !== undefined) controls.add(spec.control);
   return (
-    <p className="text-destructive text-xs" data-testid="widget-tile-uncredited">
-      {t('widgetTileUncredited')}
-    </p>
+    <>
+      {[...controls].map((name) => {
+        const Notice = hostControl(name)?.Notice;
+        return Notice ? <Notice key={name} options={widget.options ?? {}} descriptor={descriptor} /> : null;
+      })}
+    </>
   );
-}
-
-// declaresTilePair answers whether a descriptor reads BOTH halves of the basemap override,
-// each under the basemap control. An own-property test rather than `in`, so a key reaching
-// here from data ('constructor' and friends) is not mistaken for a declared option.
-function declaresTilePair(descriptor: WidgetDescriptor): boolean {
-  const declares = (key: string) =>
-    Object.prototype.hasOwnProperty.call(descriptor.options, key) && descriptor.options[key].control === 'basemap';
-  return declares(KEY_TILE_URL) && declares(KEY_ATTRIBUTION);
 }
 
 // ---- options readers (panel-local; strict-typed inputs) ---------------------
 
-function optString(widget: KnownWidgetInstance, key: string): string {
+function optString(widget: ResolvedWidgetInstance, key: string): string {
   const value = widget.options?.[key];
   return typeof value === 'string' ? value : '';
 }
 
-function optNumber(widget: KnownWidgetInstance, key: string): number | undefined {
+function optNumber(widget: ResolvedWidgetInstance, key: string): number | undefined {
   const value = widget.options?.[key];
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
 }

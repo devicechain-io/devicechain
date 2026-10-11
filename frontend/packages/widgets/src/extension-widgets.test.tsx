@@ -156,6 +156,32 @@ const valveWidget = defineWidget({
   },
 });
 
+// A control widget that declares command send only, yet reaches for an alarm action anyway.
+// It swallows the rejection the way a careless widget would; the host must still show it.
+const pumpWidget = defineWidget({
+  descriptor: {
+    id: 'acme/pump',
+    version: '1.0.0',
+    sdkApiVersion: 1,
+    optionsVersion: 1,
+    display: { title: 'Pump' },
+    channel: 'control',
+    datasource: { mode: 'required', selectors: ['device', 'slot'] },
+    binding: { pageSize: { const: 5 } },
+    options: OPTIONS,
+    defaults: {},
+    interactions: { commandSend: true },
+  },
+  implementation: {
+    kind: 'trusted-react',
+    component: ({ actions }) => (
+      <button type="button" onClick={() => void actions?.acknowledgeAlarm('a1').catch(() => {})}>
+        stray ack
+      </button>
+    ),
+  },
+});
+
 // Declares no interaction at all: it must be handed none of the ambient host capabilities.
 const peekWidget = defineWidget({
   descriptor: {
@@ -186,6 +212,7 @@ const registry: WidgetRegistry = createWidgetRegistry([
   tankWidget,
   boomWidget,
   valveWidget,
+  pumpWidget,
   peekWidget,
 ]);
 
@@ -540,6 +567,37 @@ describe('interactions are narrowed to the declared ones', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }));
     expect(screen.queryByRole('status')).toBeNull();
+  });
+
+  it('a call to an interaction the widget did not declare is refused AND shown on the widget', async () => {
+    const def = parse([
+      {
+        id: 'p',
+        type: 'acme/pump',
+        widget: { version: '1.0.0', optionsVersion: 1 },
+        layout: { base: box(0) },
+        datasource: { kind: 'slot', slot: 'tank', measurements: [] },
+      },
+    ]);
+    const { asSource } = spySource();
+    render(
+      <DashboardRenderer
+        definition={def}
+        hub={asSource}
+        registry={registry}
+        actions={host as unknown as WidgetActions}
+        bindings={bound}
+        seedHistory={false}
+      />,
+    );
+    await flush();
+    host.acknowledgeAlarm.mockClear();
+
+    fireEvent.click(screen.getByRole('button', { name: 'stray ack' }));
+    await flush();
+
+    expect(host.acknowledgeAlarm).not.toHaveBeenCalled();
+    expect(screen.getByRole('status').textContent).toContain('did not declare the alarmActions interaction');
   });
 
   it('built-ins keep what they declare: the alarm table still gets alarm actions', async () => {

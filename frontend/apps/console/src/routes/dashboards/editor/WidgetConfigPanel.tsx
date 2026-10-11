@@ -18,27 +18,32 @@
 // datasource selector and the scoped-slot context, both of which are stored outside the
 // options bag and reported through their own callbacks.
 
-import type {
-  AnchorSelector,
-  AnchorTarget,
-  ConcreteSelector,
-  DatasourceSelector,
-  DeviceSelector,
-  LocationSelection,
-  SlotDefinition,
-  KnownWidgetInstance,
-  SlotScope,
-  UnknownWidgetInstance,
+import {
+  applyOptionPatch,
+  type AnchorSelector,
+  type AnchorTarget,
+  type ConcreteSelector,
+  type DatasourceSelector,
+  type DeviceSelector,
+  type LocationSelection,
+  type SlotDefinition,
+  type ResolvedWidgetInstance,
+  type SlotScope,
+  type UnknownWidgetInstance,
 } from '@devicechain/dashboards';
+import type { WidgetEditorProps, WidgetEditorServices } from '@devicechain/widget-sdk';
 import { useEffect, useState } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
 import { X } from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import { ErrorBoundary } from '@/components/ui/error-boundary';
 import { IconButton } from '@/components/ui/icon-button';
 import { Input } from '@/components/ui/input';
 import { FormField } from '@/components/ui/form-field';
 import { Combobox, type ComboboxOption } from '@/components/ui/combobox';
 import { EntityPicker, type EntityKind } from './EntityPicker';
+import { commandChoicesService } from './editorServices';
 import { resolveText, useMessageLookup } from './optionWording';
 import {
   WidgetOptionFields,
@@ -123,9 +128,9 @@ function scopeStrategyOptions(t: TFunction): ComboboxOption[] {
 }
 
 export interface WidgetConfigPanelProps {
-  // Only a widget of a type this build knows is configurable here; a placeholder for a
-  // newer widget type gets UnknownWidgetPanel instead.
-  widget: KnownWidgetInstance;
+  // Only a widget some installed implementation resolved (a built-in or a registered
+  // extension) is configurable here; a placeholder gets UnknownWidgetPanel instead.
+  widget: ResolvedWidgetInstance;
   // The widget's data source resolved to a slot-free entity view (device/anchor +
   // measurements), or undefined when unbound. The panel edits THIS; the workspace
   // maps changes back to slot storage (find-or-create slot, prune).
@@ -144,7 +149,7 @@ export interface WidgetConfigPanelProps {
   // extra widgets passes the registry it composed, so the panel reads THEIR descriptors.
   registry?: EditorWidgetRegistry;
   // Title/text/type-specific option edits (widget-only; datasource is separate).
-  onChange: (next: KnownWidgetInstance) => void;
+  onChange: (next: ResolvedWidgetInstance) => void;
   // Data-source edits: the new entity view, or undefined for "None".
   onDatasource: (next: ConcreteSelector | undefined) => void;
   // Set (or, with undefined, clear) the scope of the selected widget's slot — the scoped-slot
@@ -181,13 +186,17 @@ export function WidgetConfigPanel({
   // Write several option keys atomically (a value of undefined/'' drops that key). Used
   // where one choice bakes multiple options at once (e.g. picking a command sets its
   // name, label, and parameter schema together).
-  const setOptions = (patch: Record<string, string | number | undefined>) => {
-    const options = { ...(widget.options ?? {}) };
-    for (const [key, value] of Object.entries(patch)) {
-      if (value === undefined || value === '') delete options[key];
-      else options[key] = value;
-    }
-    onChange({ ...widget, options });
+  //
+  // This is the write a registered editor is given, so it is VALIDATED against the
+  // descriptor's schema (applyOptionPatch): a key the descriptor does not declare, or a value
+  // of the wrong kind, throws where the editor made the mistake instead of becoming a stored
+  // option nothing reads.
+  const setOptions = (patch: Record<string, unknown>) => {
+    if (!descriptor) return;
+    onChange({
+      ...widget,
+      options: applyOptionPatch(descriptor.options, widget.options, patch, widget.type),
+    });
   };
 
   // A widget whose id this console's registry does not hold has no schema to derive fields
@@ -212,14 +221,26 @@ export function WidgetConfigPanel({
   const isControl = channel === 'control';
   const isLocation = channel === 'location';
 
-  const fieldContext: OptionFieldContext = {
-    widget,
-    descriptor,
-    setOption,
-    setOptions,
-    slots,
+  const services: WidgetEditorServices = {
+    slots: slots ?? {},
     deviceToken: datasource?.kind === 'device' ? datasource.deviceToken : undefined,
+    commandChoices: commandChoicesService,
   };
+  const fieldContext: OptionFieldContext = { widget, descriptor, setOption, setOptions, services };
+  // A package's own editor for the whole widget, when its registration ships one. It takes
+  // the place of the generic option fields; the datasource block, the slot-scope block and
+  // the notices stay the host's.
+  const CustomEditor = registry.implementation(widget.type)?.editor;
+  const editorProps: WidgetEditorProps = {
+    options: widget.options ?? {},
+    setOptions,
+    services,
+    descriptor,
+  };
+  // Provenance, not a fault: a widget authored with one release of its package and rendered
+  // by another still renders. The author is told, so a changed look is not a surprise.
+  const authoredVersion = widget.widget?.version;
+  const versionDrift = authoredVersion !== undefined && authoredVersion !== descriptor.version;
 
   return (
     <aside className="w-80 shrink-0 overflow-auto border-l bg-card p-4">
@@ -233,7 +254,33 @@ export function WidgetConfigPanel({
       </div>
 
       <div className="space-y-4">
-        <WidgetOptionFields ctx={fieldContext} leading />
+        {versionDrift && (
+          <p className="rounded-md border border-border bg-muted/50 p-2 text-xs text-muted-foreground" data-testid="widget-version-drift">
+            {t('widgetVersionDrift', { authored: authoredVersion, installed: descriptor.version })}
+          </p>
+        )}
+        {CustomEditor ? (
+          // A package's editor is code this console did not write. A throw while it renders
+          // must cost the author that editor, not the route: the route's own boundary would
+          // replace the whole workspace and discard every unsaved edit on the board.
+          <ErrorBoundary
+            fallback={(_error, reset) => (
+              <div
+                className="space-y-2 rounded-md border border-destructive/40 bg-destructive/5 p-3"
+                data-testid="widget-editor-failed"
+              >
+                <p className="text-xs">{t('widgetEditorFailed')}</p>
+                <Button variant="outline" size="sm" onClick={reset}>
+                  {t('common:tryAgain')}
+                </Button>
+              </div>
+            )}
+          >
+            <CustomEditor {...editorProps} />
+          </ErrorBoundary>
+        ) : (
+          <WidgetOptionFields ctx={fieldContext} leading />
+        )}
 
         {policy.mode !== 'none' && (
           <>
@@ -315,7 +362,7 @@ export function WidgetConfigPanel({
           </>
         )}
 
-        <WidgetOptionFields ctx={fieldContext} leading={false} />
+        {!CustomEditor && <WidgetOptionFields ctx={fieldContext} leading={false} />}
         <WidgetOptionNotices widget={widget} descriptor={descriptor} />
       </div>
     </aside>

@@ -32,7 +32,7 @@ import {
   storedDefinition,
   stripDefaultBindings,
   UNKNOWN_WIDGET_TYPE,
-  isBuiltinWidget,
+  isResolvedWidget,
   updateWidget,
   widgetSlotName,
   SyntheticDataSource,
@@ -426,7 +426,7 @@ export function DashboardWorkspace({
   // DELETES authored values, so the author gets the same review-then-save (or discard)
   // they get for any other change, and the same conflict precondition on the way out.
   const stripUnknown = () => {
-    const next = stripUnknownOptions(working);
+    const next = stripUnknownOptions(working, { catalog: registry.catalog });
     // Identity is the no-op signal (see stripUnknownOptions). Not a dirty-state concern:
     // isDirty compares serializations, so an equal-but-new object would not read as an
     // edit either way — this just distinguishes "nothing to remove" from "removed".
@@ -444,7 +444,7 @@ export function DashboardWorkspace({
   // baseline to the returned updatedAt.
   const onRolledBack = (result: { definition: string; updatedAt: string | null }) => {
     try {
-      let def = parseDashboardDefinition(JSON.parse(result.definition));
+      let def = parseDashboardDefinition(JSON.parse(result.definition), { catalog: registry.catalog });
       // Seed the title from the CURRENT effective name (the last-saved title, which
       // tracks renames) rather than the mount-time `name` prop — otherwise rolling
       // back to a title-less version and re-saving would silently revert a rename.
@@ -657,6 +657,7 @@ export function DashboardWorkspace({
               // a no-op for move/resize since those keep every widget's slot reference.
               onChange={(next) => setWorking(pruneSlots(next))}
               hub={dataHub}
+              registry={registry}
               actions={dataHub}
               bindings={editBindings}
               selectedId={selectedId}
@@ -666,7 +667,7 @@ export function DashboardWorkspace({
           {selected?.type === UNKNOWN_WIDGET_TYPE && (
             <UnknownWidgetPanel key={selected.id} widget={selected} onClose={() => setSelectedId(null)} />
           )}
-          {selected && isBuiltinWidget(selected) && (
+          {selected && isResolvedWidget(selected) && (
             <WidgetConfigPanel
               // Remount per widget so the config panel's local input buffers (e.g.
               // the measurements text field) don't carry one widget's keystrokes
@@ -699,6 +700,7 @@ export function DashboardWorkspace({
           <DashboardRenderer
             definition={working}
             hub={dataHub}
+            registry={registry}
             actions={dataHub}
             seedHistory={!preview}
             bindings={bindings}
@@ -726,6 +728,7 @@ export function DashboardWorkspace({
       expectedUpdatedAt={expectedUpdatedAt}
       onRolledBack={onRolledBack}
       onStripUnknownOptions={stripUnknown}
+      registry={registry}
     />
     </>
   );
