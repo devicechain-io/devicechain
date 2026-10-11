@@ -1,0 +1,64 @@
+{
+  "name": "@devicechain/widget-sdk",
+  "version": "0.0.0-dev",
+  "description": "The DeviceChain widget SDK: the typed contract for writing a dashboard widget as a React component, and the sealed registry that makes it available to a host. Declare a widget once (portable descriptor plus trusted component) and register it beside the built-ins.",
+  "keywords": [
+    "devicechain",
+    "iot",
+    "dashboard",
+    "widget",
+    "sdk",
+    "registry",
+    "react"
+  ],
+  "license": "Apache-2.0",
+  "homepage": "https://devicechain.io",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/devicechain-io/devicechain.git",
+    "directory": "frontend/packages/widget-sdk"
+  },
+  "bugs": {
+    "url": "https://github.com/devicechain-io/devicechain/issues"
+  },
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "node ../../scripts/build-package.mjs",
+    "typecheck": "tsc --noEmit",
+    "pretest": "node ../../scripts/build-packages.mjs",
+    "test": "vitest run"
+  },
+  "peerDependencies": {
+    "@devicechain/dashboards": "0.0.0-dev",
+    "react": "^19.3.0"
+  },
+  "devDependencies": {
+    "@devicechain/dashboards": "0.0.0-dev",
+    "@testing-library/react": "^16.3.3",
+    "@types/node": "^26.6.4",
+    "@types/react": "^19.3.0",
+    "esbuild": "^0.28.2",
+    "jsdom": "^30.1.1",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0",
+    "typescript": "~7.0.2",
+    "vitest": "^5.0.3"
+  }
+}
