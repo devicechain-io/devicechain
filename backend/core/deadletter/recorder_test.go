@@ -327,6 +327,8 @@ func TestCaptureGiveUpIsLetteredAndTheOriginalRemoved(t *testing.T) {
 	require.Equal(t, KindEvent, e.Kind)
 	require.Equal(t, ReasonNoOutcome, e.Reason)
 	require.Contains(t, e.Detail, messaging.StreamName("test", streams.DeviceEventsCapture)+"#"+fmt.Sprint(ack.Sequence))
+	require.Contains(t, e.Detail, "was removed from its stream", "the letter must not point at an original that is gone")
+	require.NotContains(t, e.Detail, "until it ages out")
 	eventually(t, 5*time.Second, "the original to be removed", func() bool { return len(rig.held(streams.DeviceEventsCapture)) == 0 })
 	require.Equal(t, 1.0, rig.records(streams.DeviceEventsCapture, "lettered"))
 }

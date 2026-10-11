@@ -189,9 +189,9 @@ type NatsManager struct {
 	retentionPending map[string]string
 	// retentionDrainBound and retentionDrainPoll override the drain wait's bound and poll
 	// interval when non-zero; production leaves them zero.
-	retentionDrainBound, retentionDrainPoll time.Duration
-	metrics                                 *streamMetrics
-	samplerWg                               sync.WaitGroup
+	retentionDrainBound, retentionDrainPoll, retentionAddBackoff time.Duration
+	metrics                                                      *streamMetrics
+	samplerWg                                                    sync.WaitGroup
 
 	// samplerCancel ends the metrics sampler. It is a CancelFunc rather than a plain
 	// signalling channel because closing a channel only tells the loop to stop at its
@@ -844,6 +844,11 @@ func (nmgr *NatsManager) ensureStream(suffix string) (string, error) {
 		}
 		applyStreamBounds(cfg, bounds)
 		applyStreamDuplicateWindow(cfg, dupWindow)
+		if streams.RecreatesOnRetentionChange(suffix) {
+			// A stream that may have had a predecessor (see retention_migration.go) never
+			// starts at 1: its sequence is the basis of a dedup id.
+			cfg.FirstSeq = captureFirstSeq()
+		}
 		if _, err := nmgr.js.AddStream(cfg); err != nil {
 			return err
 		}

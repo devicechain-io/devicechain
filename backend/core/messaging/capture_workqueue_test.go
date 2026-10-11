@@ -302,7 +302,7 @@ func TestAnOlderCaptureStreamIsDrainedThenRecreated(t *testing.T) {
 
 	// The sequence carries on from the old stream's last, and the reader follows the stream.
 	next := publishCaptured(t, nmgr.js, "after")
-	require.EqualValues(t, 4, next, "the recreated stream restarted its sequence")
+	require.Greater(t, next, uint64(1_000_003), "the recreated stream did not start past the old stream sequence plus the margin")
 	waitWithin(t, 15*time.Second, "the reader to receive a message on the recreated stream", func() bool {
 		s := seen()
 		return len(s) == 4 && s[3] == next

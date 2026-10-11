@@ -160,8 +160,15 @@ func (r *maxDeliveryRecorder) record(ctx context.Context, d messaging.MaxDeliver
 	default:
 		// A Hot stream's letter is a POINTER: a flood of abandoned device traffic must not
 		// copy itself into the cold dead-letter stream and evict the letters that matter.
-		letter.Detail = fmt.Sprintf("payload omitted; the original is at %s#%d until it ages out",
-			d.Stream, d.StreamSeq)
+		if streams.RetentionFor(d.Suffix) == streams.RetentionWorkQueue {
+			// A work queue keeps nothing the reader has finished with, so the recorder removes
+			// the original once this letter is written; there is nothing left to point at.
+			letter.Detail = fmt.Sprintf("payload omitted; the original (%s#%d) was removed from its stream after this "+
+				"record was written", d.Stream, d.StreamSeq)
+		} else {
+			letter.Detail = fmt.Sprintf("payload omitted; the original is at %s#%d until it ages out",
+				d.Stream, d.StreamSeq)
+		}
 	}
 	if err := r.sink.write(tctx, letter, id); err != nil {
 		return r.failed(d, err)

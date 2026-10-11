@@ -3607,7 +3607,7 @@ forwarded yet is kept exactly as before, so an outage of `event-sources` still l
 
 - **At the upgrade.** The first start of the new `event-sources` forwards what the existing stream
   still holds, waits until it is empty, then deletes the stream and creates it again with the new
-  retention. Sequence numbers carry on from where the old stream stopped. A device publish that
+  retention. Sequence numbers jump forward past the old stream's, so none is ever reused. A device publish that
   arrives in the instant between the empty check and the recreate can be lost after the broker
   acknowledged it. If the stream is not empty within five minutes, `event-sources` stops with an
   error that names the stream and does not delete anything; start it again once it can forward.

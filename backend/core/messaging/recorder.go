@@ -359,15 +359,24 @@ func (h *maxDeliveryHandler) handle(ctx context.Context, msg Message) {
 		return
 	}
 	// On a work-queue stream an unacked message is not aged out by anything but MaxAge, and
-	// the broker has stopped redelivering it, so a lettered give-up would sit there for days
-	// as a second copy of what the letter now holds. Remove it once the letter is written.
-	// A failed removal leaves the advisory unacked so the whole step is retried; the letter's
-	// dedup id absorbs the repeat.
-	if outcome == MaxDeliveryLettered && orig != nil && streams.RetentionFor(suffix) == streams.RetentionWorkQueue {
-		if err := h.nmgr.js.DeleteMsg(stream, adv.StreamSeq); err != nil && !errors.Is(err, nats.ErrMsgNotFound) {
-			log.Warn().Err(err).Str("stream", stream).Uint64("seq", adv.StreamSeq).Bool("final", final).
-				Msg("Could not remove a lettered message from its work-queue stream; its advisory will be redelivered")
-			return
+	// the broker has stopped redelivering it, so a given-up message would sit there for days
+	// and hold the block it lives in, with every other body in that block. Remove it once its
+	// outcome is final: a letter written, or the tenant deleted (nothing is owed to anyone).
+	// The removal OVERWRITES the stored bytes, because a plain delete leaves them in the
+	// block while any neighbour in it is unacked. A failed removal leaves the advisory
+	// unacked so the whole step is retried; the letter's dedup id absorbs the repeat.
+	if orig != nil && streams.RetentionFor(suffix) == streams.RetentionWorkQueue {
+		switch outcome {
+		case MaxDeliveryLettered, MaxDeliveryTenantDeleted:
+			if err := h.nmgr.js.SecureDeleteMsg(stream, adv.StreamSeq); err != nil && !errors.Is(err, nats.ErrMsgNotFound) {
+				log.Warn().Err(err).Str("stream", stream).Uint64("seq", adv.StreamSeq).Bool("final", final).
+					Msg("Could not remove a given-up message from its work-queue stream; its advisory will be redelivered")
+				return
+			}
+		default:
+			// No letter was written, so the message is the only record and stays until it ages out.
+			log.Warn().Str("stream", stream).Uint64("seq", adv.StreamSeq).Str("outcome", string(outcome)).
+				Msg("A given-up message on a work-queue stream was kept: no letter was written for it")
 		}
 	}
 	h.nmgr.metrics.countMaxDelivery(stream, outcome)

@@ -3875,7 +3875,7 @@ nada.
 
 - **En la actualización.** El primer arranque del nuevo `event-sources` reenvía lo que el flujo
   existente aún contiene, espera a que quede vacío y entonces elimina el flujo y lo crea de nuevo
-  con la nueva retención. Los números de secuencia continúan donde terminó el flujo anterior. Una
+  con la nueva retención. Los números de secuencia saltan por delante de los del flujo anterior, así que ninguno se reutiliza. Una
   publicación de dispositivo que llegue en el instante entre la comprobación de vacío y la
   recreación puede perderse después de que el broker la haya confirmado. Si el flujo no queda vacío
   en cinco minutos, `event-sources` se detiene con un error que nombra el flujo y no elimina nada;
