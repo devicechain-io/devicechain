@@ -422,6 +422,17 @@ which you send from the console or, with `--unattended`, `tools/video_take.py op
 `tools/shots/sitepulse-video.json` (every Unity shot of the script, 16:9), `sitepulse-video-9x16.json` (the portrait cut)
 and `sitepulse-website-loop.json` (a 25 s seamless loop for the website).
 
+**The console shots.** With `--unattended`, the operator's part is done through the console's own UI by a headless browser
+(`tools/console_capture.py`, one-time install with `tools/console-recorder-setup.sh`: a venv holding Playwright and its Chromium, no sudo),
+and recorded at 1920x1080, 30 fps, one H.264 file per shot under `<take out>/console/`: `s17-board` (the Site Pulse board from the console's
+Dashboards once the player says the tyre alarm is active), `s18-alarm-drill` (clicking SP-HL-0003 in the active-alarm table, which points the
+Machine gauges at it), `s19-command-form` (Devices, the truck, Commands: Go To Area, areaToken `sp-zone-yard`, up to Send) and
+`s20-command-sent` (Send, then the command row as it moves to SENT and SUCCESSFUL). `console-shots.json` gives each clip's UTC start and end and
+what was clicked, to line the clips up with the Unity renders. The tenant user is read from the sim's record in the isolated home inside the
+process and is never printed or written. `--operator api` keeps the old path (the operator plane sends the command, nothing is recorded), and
+a console part that fails before it sends falls back to it. Stand-alone against a running environment, with no player and nothing sent:
+`console-recorder-setup.sh`, then `~/.cache/sitepulse-recorder/venv/bin/python tools/console_capture.py shot --out <dir> --shots s17,s19`.
+
 ## Quality levels
 
 - **PC**: the full look (MSAA, screen-space ambient occlusion, long four-cascade shadows).

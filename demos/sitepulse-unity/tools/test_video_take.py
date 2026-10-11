@@ -154,7 +154,8 @@ class Sending(unittest.TestCase):
 class Main(unittest.TestCase):
     """What the command line does: its exit code is what the unattended take reads, and it sends nothing unless the player said it was time."""
 
-    def run_main(self, argv, platform=None, waited=True):
+    def run_main(self, argv, platform=None, waited=True, recorder=None, console_rc=0):
+        """<recorder> is the recorder's interpreter (None: not installed, so the tests do not depend on this machine's setup)."""
         out = io.StringIO()
         made = []
 
@@ -163,8 +164,11 @@ class Main(unittest.TestCase):
             return platform
 
         with mock.patch.object(v, "wait_for_operator_step", return_value=waited) as wait, mock.patch.object(c, "Platform", make_platform), \
+                mock.patch.object(v, "recorder_python", return_value=recorder), \
+                mock.patch.object(v.subprocess, "call", return_value=console_rc) as call, \
                 contextlib.redirect_stdout(out), contextlib.redirect_stderr(out):
             rc = v.main(argv)
+        self.call = call
         return rc, out.getvalue(), made, wait
 
     def test_when_the_wait_for_the_players_signal_times_out_nothing_is_sent_and_it_exits_1(self):
@@ -202,6 +206,73 @@ class Main(unittest.TestCase):
         rc, out, _, _ = self.run_main(["operator", "--now"], Down())
         self.assertNotEqual(0, rc)
         self.assertIn("did not answer", out)
+
+
+class OperatorMode(unittest.TestCase):
+    """--operator: who sends the command. The console records and sends; the API is the fallback, never a second sender."""
+
+    def test_auto_is_console_when_the_recorder_is_installed_and_api_when_it_is_not(self):
+        self.assertEqual("console", v.choose_operator("auto", True))
+        self.assertEqual("api", v.choose_operator("auto", False))
+
+    def test_an_explicit_choice_is_kept_and_console_without_the_recorder_is_refused(self):
+        self.assertEqual("api", v.choose_operator("api", True))
+        self.assertEqual("console", v.choose_operator("console", True))
+        with self.assertRaises(ValueError):
+            v.choose_operator("console", False)
+        with self.assertRaises(ValueError):
+            v.choose_operator("telepathy", True)
+
+    def test_the_consoles_exit_status_decides_whether_the_api_may_send(self):
+        self.assertEqual("done", v.console_outcome(0))
+        self.assertEqual("fallback", v.console_outcome(3))
+        self.assertEqual("fallback", v.console_outcome(1), "a crash of the recorder itself sent nothing")
+        self.assertEqual("sent-clip-lost", v.console_outcome(4), "after the console sent it, the API must never send a second one")
+
+
+class MainConsole(unittest.TestCase):
+    """The command line with the console path."""
+
+    run_main = Main.run_main
+
+    def test_console_mode_hands_the_log_and_out_to_the_recorder_and_sends_nothing_itself(self):
+        p = FakePlatform()
+        rc, out, made, _ = self.run_main(["operator", "--log", "player.log", "--out", "o", "--operator", "console"], p, recorder="/py")
+        self.assertEqual(0, rc)
+        argv = self.call.call_args[0][0]
+        self.assertEqual("/py", argv[0])
+        self.assertIn("take", argv)
+        self.assertIn("player.log", argv)
+        self.assertIn("o", argv)
+        self.assertEqual([], p.created)
+        self.assertEqual([], made)
+        self.assertIn("PASS", out)
+
+    def test_a_console_that_failed_before_sending_falls_back_to_the_api_exactly_once(self):
+        p = FakePlatform()
+        rc, out, _, wait = self.run_main(["operator", "--log", "player.log", "--out", "o"], p, recorder="/py", console_rc=3)
+        self.assertEqual(0, rc)
+        self.assertEqual(1, len(p.created))
+        wait.assert_called_once()
+        self.assertIn("falling back", out)
+
+    def test_a_console_that_failed_after_sending_never_sends_again(self):
+        p = FakePlatform()
+        rc, out, _, _ = self.run_main(["operator", "--log", "player.log", "--out", "o"], p, recorder="/py", console_rc=4)
+        self.assertEqual(1, rc)
+        self.assertEqual([], p.created)
+        self.assertIn("clip was lost", out)
+
+    def test_without_the_recorder_auto_is_the_api_path_and_the_recorder_is_never_run(self):
+        p = FakePlatform()
+        rc, _, _, _ = self.run_main(["operator", "--log", "player.log", "--out", "o"], p, recorder=None)
+        self.assertEqual(0, rc)
+        self.call.assert_not_called()
+        self.assertEqual(1, len(p.created))
+
+    def test_console_mode_needs_the_take_out_directory(self):
+        with self.assertRaises(SystemExit):
+            self.run_main(["operator", "--log", "player.log", "--operator", "console"], FakePlatform(), recorder="/py")
 
 
 if __name__ == "__main__":
