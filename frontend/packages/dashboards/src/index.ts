@@ -205,3 +205,66 @@ export {
 // platform's GraphQL, kept out of the presentational widget layer.
 export { createDeviceResolver } from './resolver';
 export { defaultHistoryWindow, fetchWidgetHistory, type HistoryWindow } from './history';
+
+// The portable widget vocabulary — React-free, shared by the definition parser, the headless
+// validators, @devicechain/widget-sdk and the built-in widget package.
+export type {
+  AlarmStreamState,
+  CommandStreamState,
+  LocationStreamState,
+  MeasurementStreamState,
+} from './channel-snapshots';
+export {
+  clampNumberOption,
+  enumValues,
+  numberSpec,
+  validateOptions,
+  type BooleanOptionSpec,
+  type DefaultsOf,
+  type EnumOptionSpec,
+  type GreaterThanConstraint,
+  type NumberOptionSpec,
+  type OptionConstraint,
+  type OptionIssue,
+  type OptionIssueCode,
+  type OptionKeysOfKind,
+  type OptionSpec,
+  type OptionsOf,
+  type RequiredOptionKeys,
+  type SpecValue,
+  type StringOptionSpec,
+  type ValidateOptionsContext,
+  type WidgetOptionSpecs,
+} from './option-schema';
+export {
+  SDK_API_VERSION,
+  defineWidgetDescriptor,
+  isBuiltinWidgetId,
+  isNamespacedWidgetId,
+  type AckOptionRef,
+  type BuiltinWidgetId,
+  type ChannelBindingPolicy,
+  type ChannelSnapshot,
+  type ConstBinding,
+  type DatasourcePolicy,
+  type DatasourcePolicyFor,
+  type DatasourceSelectorKind,
+  type InteractionsFor,
+  type NamespacedWidgetId,
+  type NumberOptionRef,
+  type StringOptionRef,
+  type WidgetChannel,
+  type WidgetDescriptor,
+  type WidgetDisplay,
+  type WidgetId,
+  type WidgetInteractionDeclaration,
+} from './widget-descriptor';
+export {
+  WidgetCatalogError,
+  collectCatalogIssues,
+  createWidgetCatalog,
+  describeIssues,
+  validateWidgetDescriptor,
+  type DescriptorIssue,
+  type WidgetCatalog,
+} from './widget-catalog';

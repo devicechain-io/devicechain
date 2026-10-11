@@ -15,7 +15,7 @@
 #             artifact to ghcr.io/devicechain-io/charts.
 #   - cli:    goreleaser cross-compiles dcctl and creates the GitHub Release.
 #   - npm-packages / nuget:
-#             publish the four @devicechain/* npm packages and the C# SDK, after
+#             publish the five @devicechain/* npm packages and the C# SDK, after
 #             the correctness gates — these are the only IMMUTABLE artifacts a
 #             release produces, so they go last.
 #
@@ -442,7 +442,7 @@ jobs:
       version: ${{ needs.guard.outputs.version }}
 
   # ---------------------------------------------------------------------------
-  # Publish the four @devicechain/* packages to npmjs.com.
+  # Publish the five @devicechain/* packages to npmjs.com.
   #
   # 🔴 AUTH IS OIDC — there is no NPM_TOKEN in this repo and there must not be one.
   # npm's 2FA-bypass granular access tokens lost account/org/package management on
@@ -454,11 +454,11 @@ jobs:
   # that the flag is unnecessary on GitHub Actions).
   #
   # 🔴 WHAT MAKES THIS JOB TRUSTED IS A SETTING ON npmjs.com, PER PACKAGE, and it names
-  # THIS FILE. Each of the four packages has a trusted publisher configured with the
+  # THIS FILE. Each of the five packages has a trusted publisher configured with the
   # repository and the workflow FILENAME (`release.yml`, filename only, no path) and no
   # environment. Renaming this workflow, or moving these steps into a reusable workflow
   # that runs under a different filename, silently revokes publishing rights for all
-  # four — and the symptom is a 404/403 from `npm publish`, not anything that mentions
+  # five — and the symptom is a 404/403 from `npm publish`, not anything that mentions
   # the rename.
   #
   # 🔴 THE FIRST VERSION OF EACH PACKAGE CANNOT COME FROM HERE. A trusted publisher can
@@ -467,6 +467,13 @@ jobs:
   # `npm publish` from a maintainer's machine; this job takes over from version two.
   # scripts/publish-packages.mjs detects the not-yet-bootstrapped case and says so,
   # rather than leaving a bare registry error to be decoded.
+  #
+  # 🔴 @devicechain/widget-sdk (the fifth, added after the other four shipped) needs that
+  # ONE-TIME manual bootstrap before the first release tag that carries it: a
+  # maintainer publishes its first version by hand (2FA) and configures its trusted
+  # publisher against this file. Until then this job fails on it — and it cannot simply
+  # be skipped, because @devicechain/widgets names it as a peer dependency, so a
+  # published widgets without it would ask for a package that cannot be installed.
   #
   # Gated on BOTH correctness gates, like `cli`, and for a stronger reason than `cli`
   # has: a GitHub Release can be deleted and recut, and an image tag can be moved, but
@@ -588,7 +595,7 @@ jobs:
   # carries a SCOPE that can permit publishing NEW packages, matched by a glob
   # (`DeviceChain.*`), so the first ever version of DeviceChain.Sdk can come from here.
   # npm cannot do that — a trusted publisher can only be configured on a package that
-  # already exists — which is why the four @devicechain/* packages needed a manual first
+  # already exists — which is why each @devicechain/* package needs a manual first
   # publish and this one does not.
   #
   # The version comes from the tag with its leading `v` STRIPPED, matching the chart.

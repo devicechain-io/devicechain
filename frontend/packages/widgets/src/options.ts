@@ -25,57 +25,36 @@
 // actually sees. Where the console's authoring UI offers fewer keys than this — it does:
 // `align`, `fontSize`, `fit`, `window` and `measurement` are all honored by the renderer
 // and not authorable in the config panel — the gap is in the panel, not here.
-
-import { type WidgetType } from '@devicechain/dashboards';
-
-// ---- Spec vocabulary --------------------------------------------------------
-
-// `required` marks an option whose ABSENCE leaves the widget with nothing to show.
-// The renderer never throws on a missing option — an image with no `url` renders "No
-// image URL", a command-button with no `commandName` renders "No command configured" —
-// which is deliberate graceful degradation for a hand-edited definition, but is exactly
-// the failure a generated dashboard must not ship. So `required` is an AUTHORING
-// completeness contract, not a claim that the renderer rejects the option's absence.
 //
-// Absent here means absent AS THE RENDERER SEES IT, which for a required string includes
-// the EMPTY string: every one of the four required options is read into a truthiness test
-// (`url ? … : 'No image URL'`, `!commandName`, `!target`), so `''` produces the same
-// placeholder as an omitted key. Treating `''` as present would let a generated dashboard
-// carrying `"url": ""` validate clean and render nothing.
-interface OptionSpecBase {
-  // What the option does. Short: this feeds the config panel's help text and the
-  // published "available widgets" page.
-  doc: string;
-  required?: true;
-}
+// The spec VOCABULARY and the engine that checks a bag against a schema live in
+// @devicechain/dashboards (option-schema.ts) — they know no widget type, so the SDK's
+// registry validates an extension's schema with the very code that validates this one. What
+// stays here is the built-in TABLE and thin wrappers that keep the by-type public names.
 
-export interface StringOptionSpec extends OptionSpecBase {
-  kind: 'string';
-  // 'json' additionally requires the string to parse as JSON. Used for the command
-  // button's baked parameterSchema, where a malformed schema is silently swallowed
-  // (parseParameterSchema returns []) and renders as a bare Send button.
-  format?: 'json';
-}
+import {
+  clampNumberOption,
+  enumValues,
+  numberSpec,
+  validateOptions,
+  type NumberOptionSpec,
+  type OptionConstraint,
+  type OptionIssueCode,
+  type OptionSpec,
+  type OptionsOf,
+  type WidgetOptionSpecs,
+  type WidgetType,
+} from '@devicechain/dashboards';
 
-export interface NumberOptionSpec extends OptionSpecBase {
-  kind: 'number';
-  min?: number;
-  max?: number;
-  integer?: true;
-}
-
-export interface BooleanOptionSpec extends OptionSpecBase {
-  kind: 'boolean';
-}
-
-export interface EnumOptionSpec<V extends string = string> extends OptionSpecBase {
-  kind: 'enum';
-  values: readonly V[];
-}
-
-export type OptionSpec = StringOptionSpec | NumberOptionSpec | BooleanOptionSpec | EnumOptionSpec;
-
-export type WidgetOptionSpecs = Record<string, OptionSpec>;
+export type {
+  BooleanOptionSpec,
+  EnumOptionSpec,
+  NumberOptionSpec,
+  OptionIssueCode,
+  OptionSpec,
+  StringOptionSpec,
+  WidgetOptionSpecs,
+} from '@devicechain/dashboards';
+export { clampNumberOption };
 
 // ---- Shared option specs ----------------------------------------------------
 // Declared once and referenced by each widget that reads them, so the same key always
@@ -321,64 +300,34 @@ export const WIDGET_OPTIONS = {
   },
 } as const satisfies Record<WidgetType, WidgetOptionSpecs>;
 
+// ---- Cross-field constraints ------------------------------------------------
+
+// Rules that read more than one option, as DATA (the descriptor's `constraints`). Deliberately
+// Partial: most widgets have none, and an exhaustive map would be nine empty entries of
+// noise. This used to be a table of closures, which made the schema impossible to serialize.
+export const WIDGET_CONSTRAINTS = {
+  gauge: [{ kind: 'greater-than', key: 'max', than: 'min' }],
+} as const satisfies Partial<Record<WidgetType, readonly OptionConstraint[]>>;
+
 // ---- Derived compile-time types ---------------------------------------------
-
-// The value type a spec accepts. Enum first: an EnumOptionSpec's values carry the literal
-// union, which is the whole point of declaring one.
-type SpecValue<S> = S extends { kind: 'enum'; values: readonly (infer V)[] }
-  ? V extends string
-    ? V
-    : never
-  : S extends { kind: 'number' }
-    ? number
-    : S extends { kind: 'boolean' }
-      ? boolean
-      : S extends { kind: 'string' }
-        ? string
-        : never;
-
-type RequiredOptionKeys<S> = {
-  [K in keyof S]: S[K] extends { required: true } ? K : never;
-}[keyof S];
-
-type OptionsFor<T extends WidgetType> = {
-  [K in RequiredOptionKeys<(typeof WIDGET_OPTIONS)[T]>]: SpecValue<(typeof WIDGET_OPTIONS)[T][K]>;
-} & {
-  [K in Exclude<keyof (typeof WIDGET_OPTIONS)[T], RequiredOptionKeys<(typeof WIDGET_OPTIONS)[T]>>]?: SpecValue<
-    (typeof WIDGET_OPTIONS)[T][K]
-  >;
-};
 
 // WidgetOptions<'gauge'> is the typed options bag for a gauge: every declared key at its
 // declared type, required ones mandatory. Code that BUILDS a definition should type its
 // options with this — a typo is then a compile error rather than a key nothing reads.
 //
-// DISTRIBUTIVE over T, which is the whole reason it is written as a conditional rather
-// than inlining OptionsFor. `keyof` a union of the ten tables is their INTERSECTION — only
-// `title` — and RequiredOptionKeys over that union collapses to never, so the undistributed
-// form silently degenerates for any generic T: it would reject `{ text: 'body' }` as an
-// excess property while accepting `{}` for a widget that requires an option. That is
-// exactly the position a generator writing one widget of each type sits in. Distributing
-// makes WidgetOptions<WidgetType> the union of the ten per-type bags instead.
-export type WidgetOptions<T extends WidgetType> = T extends WidgetType ? OptionsFor<T> : never;
+// DISTRIBUTIVE over T, which is the whole reason it is written as a conditional. `keyof` a
+// union of the built-in tables is their INTERSECTION — only `title` — and the required-keys
+// computation over that union collapses to never, so the undistributed form silently
+// degenerates for any generic T: it would reject `{ text: 'body' }` as an excess property
+// while accepting `{}` for a widget that requires an option. That is exactly the position a
+// generator writing one widget of each type sits in. Distributing makes
+// WidgetOptions<WidgetType> the union of the per-type bags instead.
+export type WidgetOptions<T extends WidgetType> = T extends WidgetType ? OptionsOf<(typeof WIDGET_OPTIONS)[T]> : never;
 
 // ---- Runtime validation -----------------------------------------------------
 
-export type OptionIssueCode =
-  // a key the renderer for this widget type reads nothing from
-  | 'unknown'
-  // present, but the wrong JavaScript type — read back as undefined, rendered as default
-  | 'type'
-  // a string/number outside the option's declared legal values or bounds
-  | 'enum'
-  | 'range'
-  // a `required` option absent, so the widget renders its "not configured" placeholder
-  | 'missing'
-  // a format:'json' string that does not parse
-  | 'json'
-  // a rule spanning more than one option (see CROSS_FIELD_RULES)
-  | 'invariant';
-
+// The by-type issue shape the console reads. `widgetType` keeps its name so existing
+// consumers compile unchanged; the engine's own issue calls the same value `widgetId`.
 export interface OptionIssue {
   widgetType: WidgetType;
   // The offending option key. For a cross-field rule, the key the fix belongs on.
@@ -387,29 +336,9 @@ export interface OptionIssue {
   message: string;
 }
 
-type CrossFieldRule = (options: Record<string, unknown>) => Pick<OptionIssue, 'key' | 'code' | 'message'> | undefined;
-
-// Rules that read more than one option, so they cannot live on a single spec. Deliberately
-// Partial: most widgets have none, and an exhaustive map would be nine empty entries of
-// noise. The table above stays pure data so it can generate the docs page and a
-// cross-language type list; these functions are the one exception, kept separate for that
-// reason.
-const CROSS_FIELD_RULES: Partial<Record<WidgetType, readonly CrossFieldRule[]>> = {
-  gauge: [
-    (options) => {
-      const min = options.min;
-      const max = options.max;
-      if (typeof min !== 'number' || typeof max !== 'number') return undefined;
-      if (!Number.isFinite(min) || !Number.isFinite(max)) return undefined;
-      if (max > min) return undefined;
-      return {
-        key: 'max',
-        code: 'invariant',
-        message: `max (${max}) must be greater than min (${min})`,
-      };
-    },
-  ],
-};
+function constraintsFor(widgetType: WidgetType): readonly OptionConstraint[] {
+  return (WIDGET_CONSTRAINTS as Partial<Record<WidgetType, readonly OptionConstraint[]>>)[widgetType] ?? [];
+}
 
 // validateWidgetOptions reports every way a widget's stored options bag disagrees with
 // what the renderer reads. An empty result means every key present is one the renderer
@@ -425,153 +354,20 @@ export function validateWidgetOptions(
   options: Record<string, unknown> | undefined,
 ): OptionIssue[] {
   const specs: WidgetOptionSpecs = WIDGET_OPTIONS[widgetType];
-  const issues: OptionIssue[] = [];
-  const bag = options ?? {};
-
-  for (const [key, spec] of Object.entries(specs)) {
-    const value = bag[key];
-    // '' counts as absent for a required option: the renderer reads all four into a
-    // truthiness test, so an empty string renders the same placeholder as an omitted key.
-    if (value === undefined || (spec.required && value === '')) {
-      if (spec.required) {
-        issues.push({ widgetType, key, code: 'missing', message: `${key} is required but not set` });
-      }
-      continue;
-    }
-    issues.push(...checkValue(widgetType, key, spec, value));
-  }
-
-  for (const key of Object.keys(bag)) {
-    // An OWN-property test, not `in`: every specs table inherits Object.prototype, so `in`
-    // reports 'toString', 'constructor' and friends as declared and waves them through. A
-    // stored definition arrives via JSON.parse, which makes '__proto__' an ordinary own
-    // key — so this is a shape a real definition can carry, not a synthetic one.
-    // (hasOwnProperty.call rather than Object.hasOwn: the package targets ES2020.)
-    if (Object.prototype.hasOwnProperty.call(specs, key)) continue;
-    issues.push({
-      widgetType,
-      key,
-      code: 'unknown',
-      message: `${key} is not read by a ${widgetType} widget`,
-    });
-  }
-
-  for (const rule of CROSS_FIELD_RULES[widgetType] ?? []) {
-    const issue = rule(bag);
-    if (issue) issues.push({ widgetType, ...issue });
-  }
-
-  return issues;
-}
-
-function checkValue(widgetType: WidgetType, key: string, spec: OptionSpec, value: unknown): OptionIssue[] {
-  const issue = (code: OptionIssueCode, message: string): OptionIssue[] => [{ widgetType, key, code, message }];
-
-  switch (spec.kind) {
-    case 'string':
-      if (typeof value !== 'string') {
-        return issue('type', `${key} must be a string, got ${describe(value)}`);
-      }
-      if (spec.format === 'json' && !parsesAsJson(value)) {
-        return issue('json', `${key} must be valid JSON`);
-      }
-      return [];
-
-    case 'number':
-      // Number.isFinite mirrors optNumber: NaN and ±Infinity survive JSON round-trips
-      // through some producers and are read back as undefined by the renderer.
-      if (typeof value !== 'number' || !Number.isFinite(value)) {
-        return issue('type', `${key} must be a finite number, got ${describe(value)}`);
-      }
-      if (spec.integer && !Number.isInteger(value)) {
-        return issue('range', `${key} must be a whole number, got ${value}`);
-      }
-      if (spec.min !== undefined && value < spec.min) {
-        return issue('range', `${key} must be at least ${spec.min}, got ${value}`);
-      }
-      if (spec.max !== undefined && value > spec.max) {
-        return issue('range', `${key} must be at most ${spec.max}, got ${value}`);
-      }
-      return [];
-
-    case 'boolean':
-      // optBoolean treats anything but literal `true` as false, so a wrong type here is a
-      // silently-disabled feature rather than a visible error.
-      if (typeof value !== 'boolean') {
-        return issue('type', `${key} must be a boolean, got ${describe(value)}`);
-      }
-      return [];
-
-    case 'enum':
-      if (typeof value !== 'string') {
-        return issue('type', `${key} must be a string, got ${describe(value)}`);
-      }
-      if (!spec.values.includes(value)) {
-        return issue('enum', `${key} must be one of ${spec.values.join(', ')}, got ${JSON.stringify(value)}`);
-      }
-      return [];
-  }
-}
-
-function parsesAsJson(value: string): boolean {
-  try {
-    JSON.parse(value);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-// describe names the offending value's type in a message, quoting a string so an empty
-// one is visible and distinguishing null from an object.
-function describe(value: unknown): string {
-  if (value === null) return 'null';
-  if (typeof value === 'string') return `string ${JSON.stringify(value)}`;
-  if (Array.isArray(value)) return 'an array';
-  return `${typeof value} ${JSON.stringify(value)}`;
+  return validateOptions(specs, options, { constraints: constraintsFor(widgetType), label: widgetType }).map(
+    ({ key, code, message }) => ({ widgetType, key, code, message }),
+  );
 }
 
 // numberOptionSpec returns the declared bounds for a numeric option, so an authoring
 // UI can constrain its input from the schema rather than from a second, hand-written
-// copy of the same numbers.
-//
-// This exists because the console's numeric inputs were unbounded: a `precision` of
-// -1 is a legal number, reaches Number.prototype.toFixed, and throws a RangeError
-// DURING RENDER. formatValue clamps so the renderer survives, but the definition is
-// still wrong and the author had no way to know. A panel that reads the schema cannot
-// offer the value at all.
+// copy of the same numbers. See numberSpec for why it exists.
 export function numberOptionSpec(type: WidgetType, key: string): NumberOptionSpec | undefined {
-  const specs: WidgetOptionSpecs = WIDGET_OPTIONS[type];
-  if (!Object.prototype.hasOwnProperty.call(specs, key)) return undefined;
-  const spec = specs[key];
-  return spec.kind === 'number' ? spec : undefined;
-}
-
-// clampNumberOption folds a raw number into what a numeric option's schema allows, or
-// returns undefined when it is not a number at all.
-//
-// Separate from the input that calls it because the correction is the part worth
-// testing: an authoring UI's keystroke handling is awkward to exercise, and the
-// question that actually matters — what value gets STORED for a given input — is a
-// pure function of the schema and the number.
-export function clampNumberOption(spec: NumberOptionSpec | undefined, value: number): number | undefined {
-  if (!Number.isFinite(value)) return undefined;
-  if (!spec) return value;
-  let next = spec.integer ? Math.trunc(value) : value;
-  if (spec.min !== undefined) next = Math.max(spec.min, next);
-  if (spec.max !== undefined) next = Math.min(spec.max, next);
-  return next;
+  return numberSpec(WIDGET_OPTIONS[type], key);
 }
 
 // enumOptionValues returns the legal values of an enum option, so an authoring UI can
 // build its dropdown from the schema instead of a private copy of the same list.
-//
-// A dropdown offering a value the schema rejects lets a panel author a definition the
-// validator refuses; one MISSING a value silently removes a filter an author could
-// previously express. Both are invisible without a shared source.
 export function enumOptionValues(type: WidgetType, key: string): readonly string[] | undefined {
-  const specs: WidgetOptionSpecs = WIDGET_OPTIONS[type];
-  if (!Object.prototype.hasOwnProperty.call(specs, key)) return undefined;
-  const spec = specs[key];
-  return spec.kind === 'enum' ? spec.values : undefined;
+  return enumValues(WIDGET_OPTIONS[type], key);
 }
