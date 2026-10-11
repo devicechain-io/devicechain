@@ -14,6 +14,7 @@ import (
 	"crypto/rsa"
 	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 	"sync"
 	"time"
@@ -179,6 +180,10 @@ type Manager struct {
 	bootstrap   BootstrapConfig
 	issuerUrl   string
 	issuerName  string
+	// ssoClient is the HTTP client every identity-provider fetch goes through. It is built
+	// over the egress guard (NewSsoHTTPClient) and installed by main; nil means SSO fetches
+	// refuse rather than fall back to a client that would dial anywhere.
+	ssoClient *http.Client
 
 	// mu guards the signing-key material, which a rotation replaces while the
 	// service is live. The validator pointer is created once (request handlers

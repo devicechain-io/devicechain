@@ -84,7 +84,7 @@ func newMintTestEnv(t *testing.T) *mintTestEnv {
 	require.NoError(t, rdb.RegisterTenantScoping(db))
 	require.NoError(t, rdb.RegisterTokenGrammar(db))
 	require.NoError(t, db.AutoMigrate(
-		&iam.TenantTier{}, &iam.Tenant{}, &iam.Role{}, &iam.Identity{}, &iam.Membership{},
+		&iam.TenantTier{}, &iam.Tenant{}, &iam.Role{}, &iam.Identity{}, &iam.Membership{}, &iam.IdentityLink{},
 		&iam.OAuthClient{}, &rdb.AuditEvent{},
 	))
 	rdbm := &rdb.RdbManager{Database: db}

@@ -99,5 +99,11 @@ var (
 		// readings and outbound in calls. Renames the two tenant override columns and
 		// re-keys every tier config that declares either ceiling, the seeded tiers included.
 		NewRateKeysNameUnitsMigration(),
+		// Single sign-on through external identity providers: the connections, the tenants and
+		// email domains each one serves, group->role mappings, explicit identity links and the
+		// queue of refused sign-ins awaiting a link decision, plus iam_memberships.managed_by and
+		// iam_tenants.sso_enforced. One migration for the whole feature; nothing here is served
+		// until the slices that enforce it land.
+		NewSsoConnectionsMigration(),
 	}
 )

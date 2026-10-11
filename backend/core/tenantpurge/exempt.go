@@ -100,6 +100,35 @@ var exemptions = []Exemption{
 		Reason: "instance-wide settings; no tenant dimension.",
 	},
 	{
+		Schema: "user-management", Name: "iam_idp_connections", Class: ClassExempt,
+		Reason: "an external identity provider registration is instance-global: one connection can serve " +
+			"several tenants, and one that serves none is still the operator's configuration. It holds " +
+			"an issuer, a client id, the NAME of a sealed secret and the approved discovery snapshot — no " +
+			"person and no tenant data. A tenant's relationship to a connection is the " +
+			"iam_idp_connection_tenants row, which carries the tenant column and IS swept, along with " +
+			"the tenant's role mappings.",
+	},
+	{
+		Schema: "user-management", Name: "iam_idp_connection_domains", Class: ClassExempt,
+		Reason: "an email domain asserted for an identity provider connection. It belongs to the " +
+			"connection, not to a tenant (the connection may serve several), and names an organisation's " +
+			"mail domain, not a person.",
+	},
+	{
+		Schema: "user-management", Name: "iam_identity_links", Class: ClassExempt,
+		Reason: "binds a PERSON to an external account, so it is identity-global exactly as " +
+			"iam_identities is: the same person may hold memberships in several tenants. Deleting one " +
+			"tenant must not unlink the human being. The link is removed with the identity (cascade), " +
+			"and with its connection.",
+	},
+	{
+		Schema: "user-management", Name: "iam_sso_link_requests", Class: ClassExempt,
+		Reason: "a refused sign-in awaiting an operator's decision, keyed by connection and external " +
+			"subject and naming the email the person presented. Like iam_identities it is instance-global " +
+			"and is decided by the instance operator, not the tenant; it grants nothing and is removed " +
+			"when decided or when its connection is deleted.",
+	},
+	{
 		Schema: "user-management", Name: "iam_tenant_purges", Class: ClassExempt,
 		Reason: "the DELETION RECORD, which has to outlive the tenant it records — erasing it would " +
 			"destroy the evidence that the erasure happened, and it is the only durable proof there " +
