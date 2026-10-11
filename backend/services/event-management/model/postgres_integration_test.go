@@ -234,7 +234,7 @@ func TestIntegrationDistinctEventsAtOneNaturalKeyBothPersist(t *testing.T) {
 
 	// And the colliding event is now visible to the dedup probe, which is what makes a
 	// redelivery of it detectable at all.
-	exists, err := api.EventExistsByAltId(ctx, api.RDB.DB(ctx), "msg-B", occurred)
+	exists, err := api.EventExistsByAltId(ctx, api.RDB.DB(ctx), "device-1", "msg-B", occurred)
 	require.NoError(t, err)
 	assert.True(t, exists)
 }

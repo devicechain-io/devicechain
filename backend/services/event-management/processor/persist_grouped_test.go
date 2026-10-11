@@ -268,7 +268,7 @@ func TestTwoEventsWithOneAlternateIdInABatchStoreTheFirst(t *testing.T) {
 				{fenceCostTenant, batchEvent(0, true, batchT0)},
 				{fenceCostTenant, tc.first},
 				{fenceCostTenant, batchEvent(2, true, batchT0)},
-				{fenceCostTenant, measurementOf("dev-z", at, "y", 1, "99")},
+				{fenceCostTenant, measurementOf("dev-y", at, "y", 1, "99")},
 			}))
 			if got, fb := r.api.txs.Load(), r.metric(t, metricFallbacks, "", ""); got != 1 || fb != 0 {
 				t.Errorf("%d transactions, %v fallbacks; want 1, 0", got, fb)
@@ -280,14 +280,47 @@ func TestTwoEventsWithOneAlternateIdInABatchStoreTheFirst(t *testing.T) {
 				t.Errorf("%d events stored; want %d", got, tc.wantEvents)
 			}
 			var rows []model.MeasurementEvent
-			if err := sysDB(r.db).Where("event_type = ? AND device_token IN ?", esmodel.Measurement,
-				[]string{"dev-y", "dev-z"}).Find(&rows).Error; err != nil {
+			if err := sysDB(r.db).Where("event_type = ? AND device_token = ?", esmodel.Measurement,
+				"dev-y").Find(&rows).Error; err != nil {
 				t.Fatalf("read the key's readings: %v", err)
 			}
 			if len(rows) != 1 || rows[0].Value.Float64 != tc.wantValue {
 				t.Errorf("the key's readings are %+v; want one, of value %v", rows, tc.wantValue)
 			}
 		})
+	}
+}
+
+// An alternate id is the SENDER's message id, so it dedups per device: two devices of one
+// tenant that send the same alternate id at the same instant are two messages, not a
+// redelivery, and both are stored. The same device sending it again is the redelivery and is
+// skipped. Both shapes run in one batch, so the in-batch rule and the stored-key probe are
+// each exercised.
+func TestTwoDevicesWithOneAlternateIdAtOneInstantBothStore(t *testing.T) {
+	at := batchT0.Add(time.Hour)
+	r := newBatchRig(t, 8)
+	r.run(r.consume(t, []sent{
+		{fenceCostTenant, measurementOf("dev-a", at, "shared", 1, "1.5")},
+		{fenceCostTenant, measurementOf("dev-b", at, "shared", 1, "2.5")},
+		{fenceCostTenant, measurementOf("dev-a", at, "shared", 1, "9.9")}, // dev-a again: the redelivery
+	}))
+	// A second batch: both devices again, now against the stored keys.
+	r.run(r.consume(t, []sent{
+		{fenceCostTenant, measurementOf("dev-a", at, "shared", 1, "8.8")},
+		{fenceCostTenant, measurementOf("dev-b", at, "shared", 1, "7.7")},
+	}))
+
+	for dev, want := range map[string]float64{"dev-a": 1.5, "dev-b": 2.5} {
+		var rows []model.MeasurementEvent
+		if err := sysDB(r.db).Where("device_token = ?", dev).Find(&rows).Error; err != nil {
+			t.Fatalf("read %s: %v", dev, err)
+		}
+		if len(rows) != 1 || rows[0].Value.Float64 != want {
+			t.Errorf("%s stored %+v; want exactly one reading of %v", dev, rows, want)
+		}
+	}
+	if got := count(t, r.db, &model.Event{}, "alt_id = ?", "shared"); got != 2 {
+		t.Errorf("%d events stored for the shared alternate id; want 2, one per device", got)
 	}
 }
 
@@ -513,11 +546,11 @@ func oracleBatch() (seed, batch []sent) {
 		sent{"t-b", locationOf("dup-2", at(111), "", 2, "10.5")},
 		// One alternate id and instant, two contents: the first is stored.
 		sent{"t-a", alertOf("same-1", at(120), "s", 1, "first")},
-		sent{"t-a", alertOf("same-2", at(120), "s", 1, "second")},
+		sent{"t-a", alertOf("same-1", at(120), "s", 1, "second")},
 		// The same alternate id under another tenant is another key.
 		sent{"t-b", alertOf("same-3", at(120), "s", 1, "other tenant")},
 		// A key already stored.
-		sent{"t-a", measurementOf("seed-1b", at(500), "pre", 3, "77")},
+		sent{"t-a", measurementOf("seed-1", at(500), "pre", 3, "77")},
 		// A state change redelivered with a new anchor set.
 		sent{"t-b", stateChangeOf("seed-sc", at(501), "", "CONNECTED", 3, "area-new")},
 		// A measurement whose readings span instants, with no alternate id, in each tenant.
@@ -599,9 +632,9 @@ func TestAGroupedBatchStoresWhatOneEventAtATimeStores(t *testing.T) {
 	}{
 		{"readings of the full event after an empty one with its key", countRows(d.Measurements, "full-1"), 1},
 		{"anchors of the empty event", countRows(d.Anchors, "empty-1"), 2},
-		{"alerts of the second content for one key", countRows(d.Alerts, "same-2"), 0},
+		{"alerts of one device's key, first and second content", countRows(d.Alerts, "same-1"), 1},
 		{"alerts of the key under another tenant", countRows(d.Alerts, "same-3"), 1},
-		{"events of a key already stored", countRows(d.Events, "seed-1b"), 0},
+		{"events of a key already stored", countRows(d.Events, "seed-1"), 1},
 		{"anchors of the redelivered state change", countRows(d.Anchors, "seed-sc"), 1},
 		{"events of the message sent twice with an alternate id", countRows(d.Events, "dup-1"), 1},
 		{"locations of the message sent twice without one", countRows(d.Locations, "dup-2"), 1},

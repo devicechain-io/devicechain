@@ -33,8 +33,8 @@ func newIdempotencyTestApi(t *testing.T) *Api {
 	if err := db.AutoMigrate(&Event{}); err != nil {
 		t.Fatalf("failed to migrate: %v", err)
 	}
-	if err := db.Exec(`CREATE UNIQUE INDEX idx_events_tenant_alt_id ` +
-		`ON events (tenant_id, alt_id, occurred_time) WHERE alt_id IS NOT NULL;`).Error; err != nil {
+	if err := db.Exec(`CREATE UNIQUE INDEX idx_events_tenant_device_alt_id ` +
+		`ON events (tenant_id, device_token, alt_id, occurred_time) WHERE alt_id IS NOT NULL;`).Error; err != nil {
 		t.Fatalf("failed to create dedup index: %v", err)
 	}
 	return NewApi(&rdb.RdbManager{Database: db})
@@ -70,18 +70,20 @@ func TestEventExistsByAltId(t *testing.T) {
 	cases := []struct {
 		name     string
 		ctx      context.Context
+		device   string
 		altId    string
 		occurred time.Time
 		want     bool
 	}{
-		{"same tenant+id+time hits", ctxA, "evt-1", occurred, true},
-		{"different id misses", ctxA, "evt-2", occurred, false},
-		{"different time misses", ctxA, "evt-1", occurred.Add(time.Second), false},
-		{"other tenant cannot see A's id", core.WithTenant(context.Background(), "B"), "evt-1", occurred, false},
+		{"same tenant+device+id+time hits", ctxA, "device-100", "evt-1", occurred, true},
+		{"another device of the tenant misses", ctxA, "device-101", "evt-1", occurred, false},
+		{"different id misses", ctxA, "device-100", "evt-2", occurred, false},
+		{"different time misses", ctxA, "device-100", "evt-1", occurred.Add(time.Second), false},
+		{"other tenant cannot see A's id", core.WithTenant(context.Background(), "B"), "device-100", "evt-1", occurred, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := api.EventExistsByAltId(tc.ctx, db, tc.altId, tc.occurred)
+			got, err := api.EventExistsByAltId(tc.ctx, db, tc.device, tc.altId, tc.occurred)
 			if err != nil {
 				t.Fatalf("EventExistsByAltId: %v", err)
 			}
@@ -102,10 +104,18 @@ func TestAltIdUniqueIndexBackstop(t *testing.T) {
 	// A second row with the same (tenant, alt_id, occurred_time) is rejected.
 	seedAltEvent(t, api, "A", "evt-1", occurred)
 	ctxA := core.WithTenant(context.Background(), "A")
-	dup := &Event{DeviceToken: "device-101", EventType: esmodel.Alert, OccurredTime: occurred, Source: "dup",
+	dup := &Event{DeviceToken: "device-100", EventType: esmodel.Alert, OccurredTime: occurred, Source: "dup",
 		AltId: sql.NullString{String: "evt-1", Valid: true}}
 	if err := api.RDB.DB(ctxA).Create(dup).Error; err == nil {
 		t.Fatal("expected the partial unique index to reject a duplicate alternateId")
+	}
+
+	// The same alt_id and instant from ANOTHER device of the tenant is a different message,
+	// not a redelivery, and is stored.
+	other := &Event{DeviceToken: "device-101", EventType: esmodel.Alert, OccurredTime: occurred, Source: "other",
+		AltId: sql.NullString{String: "evt-1", Valid: true}}
+	if err := api.RDB.DB(ctxA).Create(other).Error; err != nil {
+		t.Fatalf("another device's event with the same alternateId must be stored: %v", err)
 	}
 
 	// The same alt_id under a different tenant is allowed (tenant_id is part of
@@ -130,10 +140,10 @@ func TestEventsExistByAltIdAnswersEachKeyOnItsOwnInstant(t *testing.T) {
 	seedAltEvent(t, api, "A", "a", at)
 	seedAltEvent(t, api, "A", "b", at.Add(time.Second))
 	keys := []AltIdKey{
-		{AltId: "a", OccurredTime: at},
-		{AltId: "a", OccurredTime: at.Add(time.Second)},
-		{AltId: "b", OccurredTime: at.Add(time.Second)},
-		{AltId: "c", OccurredTime: at},
+		{DeviceToken: "device-100", AltId: "a", OccurredTime: at},
+		{DeviceToken: "device-100", AltId: "a", OccurredTime: at.Add(time.Second)},
+		{DeviceToken: "device-100", AltId: "b", OccurredTime: at.Add(time.Second)},
+		{DeviceToken: "device-100", AltId: "c", OccurredTime: at},
 	}
 	for _, tc := range []struct {
 		tenant string
@@ -165,14 +175,17 @@ func TestEventsExistByAltIdAnswersEachKeyOnItsOwnInstant(t *testing.T) {
 // microseconds; two a microsecond apart are two.
 func TestAnAlternateIdKeyMatchesAtMicrosecondResolution(t *testing.T) {
 	at := time.Date(2026, 6, 25, 12, 0, 0, 1000, time.UTC)
-	k := AltIdKey{AltId: "a", OccurredTime: at}
-	if k.Match() != (AltIdKey{AltId: "a", OccurredTime: at.Add(500 * time.Nanosecond)}).Match() {
+	k := AltIdKey{DeviceToken: "d", AltId: "a", OccurredTime: at}
+	if k.Match() != (AltIdKey{DeviceToken: "d", AltId: "a", OccurredTime: at.Add(500 * time.Nanosecond)}).Match() {
 		t.Error("two instants 500ns apart within one microsecond are different keys; want the same")
 	}
-	if k.Match() == (AltIdKey{AltId: "a", OccurredTime: at.Add(time.Microsecond)}).Match() {
+	if k.Match() == (AltIdKey{DeviceToken: "d", AltId: "a", OccurredTime: at.Add(time.Microsecond)}).Match() {
 		t.Error("two instants a microsecond apart are the same key; want different")
 	}
-	if k.Match() == (AltIdKey{AltId: "b", OccurredTime: at}).Match() {
+	if k.Match() == (AltIdKey{DeviceToken: "d", AltId: "b", OccurredTime: at}).Match() {
 		t.Error("two alternate ids at one instant are the same key; want different")
+	}
+	if k.Match() == (AltIdKey{DeviceToken: "e", AltId: "a", OccurredTime: at}).Match() {
+		t.Error("two devices with one alternate id at one instant are the same key; want different")
 	}
 }

@@ -763,13 +763,22 @@ primer nivel; los alias de un campo anidado no se cuentan.
 
 Aparte de los límites de forma de la solicitud, algunas lecturas y entradas tienen un límite de
 tamaño. Una solicitud que lo supera se rechaza con `extensions.code` igual a `LIMIT_EXCEEDED`. No se
-trunca nada ni se aplica nada a medias, así que reduzca la solicitud y envíela de nuevo.
+trunca nada ni se aplica nada a medias, así que reduzca la solicitud y envíela de nuevo. Los tamaños se cuentan en bytes, no en caracteres.
 
 | Límite | Valor | Se aplica a |
 | --- | --- | --- |
+| Clave de atributo | 128 B | `attrKey` de `setEntityAttribute`. |
+| Valor de atributo | 64 KiB | `value` de `setEntityAttribute`, sea cual sea su tipo declarado. |
+| Definición de regla | 256 KiB | `definition` de una regla de detección, al crear y al actualizar. |
+| Grafo de autoría de regla | 256 KiB | `authoringGraph` de una regla de detección, al crear y al actualizar. |
+| Historial de versiones | 1000 por llamada | `deviceProfileVersions`, `entityGroupVersions`, `assetTypeVersions`: las más recientes primero. Reduzca con `limit` (al menos 1) y pagine con `offset` (no negativo); un valor fuera de ese rango se rechaza con `INVALID_VALUE`. |
 | Intervalos por agregación | 10 000 | `bucketedMeasurements`: el rango dividido por `intervalSeconds`, redondeado hacia arriba. |
+| Filas por agregación | 50 000 | `bucketedMeasurements`: los intervalos multiplicados por los nombres de medición devueltos. Con un filtro `name` es un solo nombre; sin él, cada nombre de medición distinto que coincide con los filtros de la lectura. |
 
 `bucketedMeasurements` también exige `startTime`; `endTime` toma por defecto la hora actual.
+
+La gramática de tokens limita una clave de comando a 128 bytes, que es también el nombre de comando
+más largo que se puede encolar.
 
 ### Solo sintaxis de GraphQL {#graphql-syntax-only}
 

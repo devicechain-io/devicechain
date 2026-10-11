@@ -283,6 +283,83 @@ var afterPublish = []entity{
 			}}
 		},
 	},
+	{
+		// Depends on: device, device-profile, device-profile-configuration,
+		// device-profile-version.
+		//
+		// 🔑 THIS WRITE IS WHAT MINTS device_configuration_revisions. A shared attribute
+		// write mints a revision only when the key is declared by the device's profile's
+		// ACTIVE PUBLISHED version, so it can run neither before the declaration is set nor
+		// before the profile is published — the same ordering reason as the rows above.
+		// Verify reads the attribute back; the table sweep then proves the revision row it
+		// minted survived the upgrade.
+		//
+		// device_configuration_states is NOT reached from here: it is written only from a
+		// device's own report, and no tenant API writes it. See tablesweep.go.
+		Name:      "entity-attribute-configuration",
+		Area:      "device-management",
+		Mutation:  "setEntityAttribute",
+		Input:     "EntityAttributeSetRequest!",
+		Read:      "entityAttributes",
+		ReadInput: "EntityAttributeSearchCriteria!",
+		ReadVars: map[string]any{
+			"pageNumber": 1, "pageSize": 10,
+			"entityType": "device", "entity": "apiprobe-device",
+			"scope": probeAttrScope, "attrKeys": []any{probeConfigKey},
+		},
+		Fields: "entityType scope attrKey valueType value",
+		Vars: func(s *state) map[string]any {
+			return map[string]any{"req": map[string]any{
+				"entityType": "device",
+				"entity":     s.tokens["device"],
+				"scope":      probeAttrScope,
+				"attrKey":    probeConfigKey,
+				"valueType":  probeValueType,
+				"value":      probeConfigValue,
+			}}
+		},
+		TokenFrom: func(s *state) string {
+			return "device/" + s.tokens["device"] + "/" + probeAttrScope + "/" + probeConfigKey
+		},
+	},
+}
+
+// The device-visible configuration the seed declares on the probe profile and then sets
+// on the probe device. A STRING shared attribute, like the facet attribute beside it.
+const (
+	probeConfigKey   = "apiprobe-config-mode"
+	probeConfigValue = "eco"
+)
+
+// prePublish is the phase between the creates and the publishes: writes that must land
+// on a parent AFTER it exists and BEFORE it is published, because publishing freezes them.
+var prePublish = []entity{
+	{
+		// Depends on: device-profile.
+		//
+		// The profile's DRAFT device-visible configuration declaration. It is frozen into
+		// the profile version at publish, and it is the declaration the attribute write in
+		// afterPublish is checked against — so it has to be set before the publish.
+		Name:     "device-profile-configuration",
+		Area:     "device-management",
+		Mutation: "setDeviceProfileConfigurationDeclaration",
+		Params: []param{
+			{Name: "token", Type: "String!"},
+			{Name: "keys", Type: "[ConfigurationKeyInput!]!"},
+		},
+		Read:   "deviceProfilesByToken",
+		Fields: "token configurationDeclaration{key valueType description}",
+		Vars: func(s *state) map[string]any {
+			return map[string]any{
+				"token": s.tok("device-profile"),
+				"keys": []any{map[string]any{
+					"key":         probeConfigKey,
+					"valueType":   probeValueType,
+					"description": "Written by apiprobe; declares a device-visible configuration key.",
+				}},
+			}
+		},
+	},
 }
 
 // allEntities is every seedable thing: creates first, then publishes.
@@ -299,8 +376,9 @@ var afterPublish = []entity{
 // definitions are all created after the profile itself, and a profile published before
 // them would freeze an empty snapshot and still look like a successful publish.
 func allEntities() []entity {
-	out := make([]entity, 0, len(entities)+len(publishes)+len(afterPublish))
+	out := make([]entity, 0, len(entities)+len(prePublish)+len(publishes)+len(afterPublish))
 	out = append(out, entities...)
+	out = append(out, prePublish...)
 	for _, p := range publishes {
 		out = append(out, p.entity())
 	}

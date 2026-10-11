@@ -254,8 +254,23 @@ func TestLoadInstanceConfigurationAppliesTheFetchSettings(t *testing.T) {
 	         "userManagement":{"hostname":"u","port":8080}}}`
 	ms := &Microservice{}
 	require.NoError(t, ms.LoadInstanceConfigurationFrom(instanceDoc(t, doc)))
-	assert.Equal(t, config.NatsFetchConfiguration{Batch: 128, Ahead: true, AheadHoldBudgetMillis: 500},
+	assert.Equal(t, config.NatsFetchConfiguration{Batch: 128, Ahead: config.AheadFlag(true), AheadHoldBudgetMillis: 500},
 		ms.InstanceConfiguration.Infrastructure.Nats.Fetch)
+
+	// Absent, it is on at a batch of 128; an explicit false turns it off.
+	bare := `{"infrastructure":{"nats":{"hostname":"h","port":4222},
+	         "userManagement":{"hostname":"u","port":8080}}}`
+	bareMs := &Microservice{}
+	require.NoError(t, bareMs.LoadInstanceConfigurationFrom(instanceDoc(t, bare)))
+	assert.True(t, bareMs.InstanceConfiguration.Infrastructure.Nats.Fetch.AheadEnabled(),
+		"a document that omits fetch must run with fetch-ahead on")
+	assert.Equal(t, 128, bareMs.InstanceConfiguration.Infrastructure.Nats.Fetch.BatchSize())
+	offDoc := `{"infrastructure":{"nats":{"hostname":"h","port":4222,"fetch":{"ahead":false}},
+	         "userManagement":{"hostname":"u","port":8080}}}`
+	offMs := &Microservice{}
+	require.NoError(t, offMs.LoadInstanceConfigurationFrom(instanceDoc(t, offDoc)))
+	assert.False(t, offMs.InstanceConfiguration.Infrastructure.Nats.Fetch.AheadEnabled(),
+		"an explicit ahead:false must stay off")
 
 	typo := `{"infrastructure":{"nats":{"hostname":"h","port":4222,"fetch":{"aheed":true}},
 	         "userManagement":{"hostname":"u","port":8080}}}`

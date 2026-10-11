@@ -665,6 +665,10 @@ func (api *Api) UpdateDevice(ctx context.Context, token string, request *DeviceU
 	// device as it was read: drop it so the next event sees the new type, external id and
 	// the rest.
 	api.evictDeviceCredentials(ctx, updated.TenantId, updated.ID)
+	// And the device-by-token entry, which holds the same row for an event that resolves on
+	// its token (auth disabled or optional, or a transport-authenticated event). A re-type
+	// is what makes it wrong: the event would resolve to the old type's profile.
+	api.evictDeviceByToken(ctx, updated.Token)
 	// Re-roster POST-COMMIT only when the device was re-typed (ADR-051 slice 4c-2): a
 	// re-type may change the adopted profile, so the roster's device→profile binding must
 	// follow. Metadata-only updates leave the binding unchanged, so they emit nothing. The

@@ -3557,6 +3557,120 @@ because it carries the tenant.
   the query under [Check the row count](#v0190-row-count) with `hypertable_name IN ('events')`.
 - Going back to `v0.19.0` keeps the new index, and `v0.19.0` works with it.
 
+#### Two devices can now send the same `altId` at the same instant, and both events are stored {#device-alt-id-key}
+
+An event's `altId` is the sender's own message id, and the write side used it, with the event's
+`occurredTime`, to drop a redelivered copy. That key was per tenant, so when two devices of one tenant
+sent the same `altId` at the same instant, the second event was taken for a redelivery of the first
+and silently discarded. The key now includes the device: both events are stored, and a device that
+sends the same `altId` at the same instant again is still deduplicated. If you relied on one device's
+`altId` suppressing another's, that no longer happens; make the `altId` unique across your devices
+yourself if you need that.
+
+- **At the upgrade.** The first start of the new `event-management` builds the new unique index over
+  the base events that are not yet compressed, then removes the tenant-wide index it replaces; there
+  is no moment without a deduplication guard. While it builds, writes of base events wait and reads
+  do not; the build is bounded to 40 seconds once the table is locked. It refuses, changing nothing,
+  when there are more than 4,000,000 rows to index or the table has more than 500 chunks, and a start
+  that cannot lock the table or finish in time changes nothing and the next start tries again. None
+  of these needs a recreate: the error carries the statements that build the index by hand. The
+  previous `event-management` keeps storing events meanwhile.
+- **To build it by hand, at a quiet time.** Run these on the event store's primary, then restart
+  `event-management`, which finds the index and only removes the one it replaces. The first
+  statement removes an unfinished index of the same name that an interrupted build leaves behind, and
+  does nothing when there is none:
+
+  ```sql
+  DROP INDEX IF EXISTS "event-management".idx_events_tenant_device_alt_id;
+  CREATE UNIQUE INDEX idx_events_tenant_device_alt_id
+    ON "event-management".events (tenant_id, device_token, alt_id, occurred_time)
+    WHERE alt_id IS NOT NULL;
+  ```
+
+  A unique index is built in one go, so writes of base events wait for the whole build while reads
+  do not. An event held longer than the broker's 60 second acknowledgement wait is delivered again,
+  which is safe. On a busy instance, choose a quiet time.
+- **To avoid the refusal, build the index before you upgrade.** On a `v0.19.0` instance with more
+  than `4000000` uncompressed base events, run the two statements above first; `v0.19.0` works with
+  them, and the upgrade then only removes the old index. To count the base events, use the query
+  under [Check the row count](#v0190-row-count) with `hypertable_name IN ('events')`.
+- Going back to `v0.19.0` keeps the new index, and `v0.19.0` works with it: redelivered events are
+  still deduplicated, but that release still checks per tenant, so it goes back to discarding the
+  second device's event.
+
+#### An inbound event whose failure record cannot be encoded is no longer stored as an empty record {#next-upgrade-failed-record-encode}
+
+When device-management could not encode the record of an inbound event that failed, it used to
+store an empty record anyway and acknowledge the event. The record read back as a failure with no
+reason and no text, and the real failure was recorded nowhere. It now publishes nothing for that
+event, acknowledges it, and counts the loss on `dead_letter_lost_total`, so `DeadLetterWriteLost`
+fires and the `LOST` line in the pod's log says which event. No event a device can send reaches
+this today; it is a defect path, and the alert is how you would learn of one. `DeadLetterWriteLost`
+therefore has a fourth cause, listed in [the alert table](./detection-engine.md#what-to-watch).
+
+Nothing needs doing.
+
+#### `dcctl install --dry-run` makes the re-install refusals the install makes
+
+On a cluster that answers, a dry run now reads the install record, asks which instances run on
+the cluster when the settings change, and fails with the install's own message when the install would be refused for what
+the cluster already holds: a re-install from a machine that holds no state for the cluster, changed
+settings while instances run on it, or a `--backup-snapshot-class` that cannot work. Before, it
+printed a plan and exited 0. A dry run aimed at a cluster that does not exist yet, or that it cannot
+reach, still prints its plan, and says those checks were not made. A dry run does not check
+everything the install refuses; for example, a cluster whose relational store was built by an older
+release is still refused only when the install runs.
+
+Nothing to do.
+
+#### `dcctl install` and `dcctl bootstrap` wait until every database instance has joined {#next-upgrade-wait-database-instances}
+
+Before, `dcctl install` returned once the relational database's primary accepted a connection, and
+`dcctl bootstrap` waited only for the services, so either could report success, and bootstrap could
+print that both databases were replicated, while a replica was still being created. Install now
+records itself, releases the cluster lock, and then waits up to 15 minutes until every instance of
+the relational database has joined. Bootstrap waits for the services and then, for up to 15 minutes,
+for every instance of the instance's event store. If one has not joined in time, the command exits
+with an error that names the database and how many of its instances are ready. Run the same command
+again to keep waiting (for install, that re-applies the prerequisites and refuses bootstraps while
+it runs, so watch the database with `kubectl` if you only want to follow it); a bootstrap that
+ended this way is not undone, and the install is already recorded, so instances can be
+bootstrapped meanwhile. A healthy install adds a few seconds.
+
+Nothing else needs doing.
+
+#### The rate ceilings are renamed after what they count {#next-upgrade-rate-key-rename}
+
+The ingest ceiling has counted readings for some time, and the outbound ceiling counts connector
+calls, but both were still named for messages. They are renamed everywhere, with no old spelling
+kept alongside:
+
+| Was | Now |
+| --- | --- |
+| `ingestRateLimit.messagesPerSecond` (`event-sources`, `lwm2m-ingest`, `sparkplug-ingest` config) | `ingestRateLimit.readingsPerSecond` |
+| `outboundMessagesPerSecond` (`event-processing`, `outbound-connectors` config) | `outboundCallsPerSecond` |
+| `ingestMessagesPerSecond` (GraphQL field, tier config key) | `ingestReadingsPerSecond` |
+| `outboundMessagesPerSecond` (GraphQL field, tier config key) | `outboundCallsPerSecond` |
+
+- **Before you upgrade, rename the service configuration keys.** If your values set any of the old
+  keys under a service's `config`, change them to the new names. A service that still finds an old
+  key refuses to start, and its error names the key to use instead. It does not fall back to the
+  platform default, because that would quietly replace the ceiling you set.
+- **API clients.** The fields on `tenantGovernance`, on the admin API's tenant type and on its
+  create and update inputs are renamed. A request that selects or sends an old name now fails, so
+  update any script or integration that manages tenant ceilings. A tier config that uses an old key
+  is refused, and its error lists the keys that are accepted.
+- **Stored data is converted for you.** The upgrade renames the tenant override columns and
+  re-keys every stored tier config, including the shipped tiers and deleted ones, at the same
+  values.
+- **During the rollout.** Until every pod runs the new release, an older pod and a newer
+  `user-management` do not understand each other. An older ingest or outbound pod asks for the old
+  `tenantGovernance` fields, the request fails, and that pod meters every tenant at the platform
+  default; `TenantsMeteredAtPlatformDefault` can fire for it. An older `user-management` pod still
+  uses the old column names once the new pod has renamed them, so the tenant reads and writes it
+  serves fail until it is replaced. Both end when the rollout finishes; avoid changing tenants or
+  tiers until it has.
+
 ### v0.19.0 — sized from measurement at 6,000 events a second; a full stream refuses {#v0190-upgrade}
 
 `v0.19.0` is an in-place upgrade from `v0.18.0`: `dcctl install` for the cluster, then `dcctl
@@ -4796,83 +4910,6 @@ Resolution, storage and live device state each kept pace over those 10 minutes, 
 had drained within 3 seconds of the load stopping. Detection, which that check does not cover, kept
 up at 6,000 (peak backlog under 1,000), and fell behind from 7,600 offered. No sustained rate above
 6,000 is claimed. See [Measured throughput](./bootstrap.md#measured-throughput).
-
-### Next release {#next-upgrade}
-
-What the release after `v0.19.0` changes, collected as it lands.
-
-#### An inbound event whose failure record cannot be encoded is no longer stored as an empty record {#next-upgrade-failed-record-encode}
-
-When device-management could not encode the record of an inbound event that failed, it used to
-store an empty record anyway and acknowledge the event. The record read back as a failure with no
-reason and no text, and the real failure was recorded nowhere. It now publishes nothing for that
-event, acknowledges it, and counts the loss on `dead_letter_lost_total`, so `DeadLetterWriteLost`
-fires and the `LOST` line in the pod's log says which event. No event a device can send reaches
-this today; it is a defect path, and the alert is how you would learn of one. `DeadLetterWriteLost`
-therefore has a fourth cause, listed in [the alert table](./detection-engine.md#what-to-watch).
-
-Nothing needs doing.
-
-#### `dcctl install --dry-run` makes the re-install refusals the install makes
-
-On a cluster that answers, a dry run now reads the install record, asks which instances run on
-the cluster when the settings change, and fails with the install's own message when the install would be refused for what
-the cluster already holds: a re-install from a machine that holds no state for the cluster, changed
-settings while instances run on it, or a `--backup-snapshot-class` that cannot work. Before, it
-printed a plan and exited 0. A dry run aimed at a cluster that does not exist yet, or that it cannot
-reach, still prints its plan, and says those checks were not made. A dry run does not check
-everything the install refuses; for example, a cluster whose relational store was built by an older
-release is still refused only when the install runs.
-
-Nothing to do.
-
-#### `dcctl install` and `dcctl bootstrap` wait until every database instance has joined {#next-upgrade-wait-database-instances}
-
-Before, `dcctl install` returned once the relational database's primary accepted a connection, and
-`dcctl bootstrap` waited only for the services, so either could report success, and bootstrap could
-print that both databases were replicated, while a replica was still being created. Install now
-records itself, releases the cluster lock, and then waits up to 15 minutes until every instance of
-the relational database has joined. Bootstrap waits for the services and then, for up to 15 minutes,
-for every instance of the instance's event store. If one has not joined in time, the command exits
-with an error that names the database and how many of its instances are ready. Run the same command
-again to keep waiting (for install, that re-applies the prerequisites and refuses bootstraps while
-it runs, so watch the database with `kubectl` if you only want to follow it); a bootstrap that
-ended this way is not undone, and the install is already recorded, so instances can be
-bootstrapped meanwhile. A healthy install adds a few seconds.
-
-Nothing else needs doing.
-
-#### The rate ceilings are renamed after what they count {#next-upgrade-rate-key-rename}
-
-The ingest ceiling has counted readings for some time, and the outbound ceiling counts connector
-calls, but both were still named for messages. They are renamed everywhere, with no old spelling
-kept alongside:
-
-| Was | Now |
-| --- | --- |
-| `ingestRateLimit.messagesPerSecond` (`event-sources`, `lwm2m-ingest`, `sparkplug-ingest` config) | `ingestRateLimit.readingsPerSecond` |
-| `outboundMessagesPerSecond` (`event-processing`, `outbound-connectors` config) | `outboundCallsPerSecond` |
-| `ingestMessagesPerSecond` (GraphQL field, tier config key) | `ingestReadingsPerSecond` |
-| `outboundMessagesPerSecond` (GraphQL field, tier config key) | `outboundCallsPerSecond` |
-
-- **Before you upgrade, rename the service configuration keys.** If your values set any of the old
-  keys under a service's `config`, change them to the new names. A service that still finds an old
-  key refuses to start, and its error names the key to use instead. It does not fall back to the
-  platform default, because that would quietly replace the ceiling you set.
-- **API clients.** The fields on `tenantGovernance`, on the admin API's tenant type and on its
-  create and update inputs are renamed. A request that selects or sends an old name now fails, so
-  update any script or integration that manages tenant ceilings. A tier config that uses an old key
-  is refused, and its error lists the keys that are accepted.
-- **Stored data is converted for you.** The upgrade renames the tenant override columns and
-  re-keys every stored tier config, including the shipped tiers and deleted ones, at the same
-  values.
-- **During the rollout.** Until every pod runs the new release, an older pod and a newer
-  `user-management` do not understand each other. An older ingest or outbound pod asks for the old
-  `tenantGovernance` fields, the request fails, and that pod meters every tenant at the platform
-  default; `TenantsMeteredAtPlatformDefault` can fire for it. An older `user-management` pod still
-  uses the old column names once the new pod has renamed them, so the tenant reads and writes it
-  serves fail until it is replaced. Both end when the rollout finishes; avoid changing tenants or
-  tiers until it has.
 
 ### The one-time durable-ingest cutover
 

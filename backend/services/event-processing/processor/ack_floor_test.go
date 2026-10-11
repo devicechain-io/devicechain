@@ -618,7 +618,7 @@ func TestAWholeLostBatchIsFilledWithFetchAheadOn(t *testing.T) {
 	t.Parallel()
 	const total, batch = 400, 128
 	b := startDetectBroker(t)
-	b.fetch = mscfg.NatsFetchConfiguration{Batch: batch, Ahead: true}
+	b.fetch = mscfg.NatsFetchConfiguration{Batch: batch, Ahead: mscfg.AheadFlag(true)}
 	store := brokerStore(t)
 	nmgr, reader := b.detectManager(t, store)
 

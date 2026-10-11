@@ -237,3 +237,48 @@ func KvPurgeExemptions() []string {
 			"seconds-long TTL is what bounds the residue either way",
 	}
 }
+
+// DeviceCredentialCacheName names device-management's in-process credential cache: the one
+// cache of that service with no bucket, whose evictions travel only on its eviction subject.
+// It is declared here, with the buckets, so a tenant's erasure can reach it.
+const DeviceCredentialCacheName = "device-credentials"
+
+// BroadcastTenantCacheEviction tells every device-management replica to drop every entry of
+// tenant from its in-process caches: one message on each tenant-scoped cache's eviction
+// subject, and one for the credential cache.
+//
+// 🔑 IT IS THE OTHER HALF OF PurgeTenantKv. The purge clears the buckets, which every replica
+// shares, but each replica also holds what it read in its own memory for up to the caches'
+// time to live (minutes), and nothing in the bucket tells it to let go. Without this a
+// deleted tenant's devices keep resolving, and their credentials keep authenticating, from
+// memory for that long after the data they describe is gone. It sends to every cache even
+// when the purge deleted nothing, as the purge repeats until it finds nothing, and a replica
+// that missed a pass hears the next.
+//
+// Like every eviction it only removes, so a lost message costs hit rate, never correctness,
+// and the time to live bounds it. The returned error is the first publish failure, after all
+// were tried; the purge treats it as retryable.
+func BroadcastTenantCacheEviction(nc *nats.Conn, instanceId, tenant string) error {
+	if err := core.ValidateToken(tenant); err != nil {
+		return fmt.Errorf("refusing to evict the in-process caches for tenant %q: %w", tenant, err)
+	}
+	if strings.TrimSpace(instanceId) == "" {
+		return errors.New("refusing to evict the in-process caches with no instance id: every " +
+			"subject is rooted at it, so nothing would hear it and the replicas would report clean")
+	}
+	names := []string{DeviceCredentialCacheName}
+	for _, b := range tenantScopedBuckets {
+		if b.area == "device-management" && b.logical != retiredBucketMetricDefsByType &&
+			b.logical != retiredBucketProfileScopeByType {
+			names = append(names, b.logical)
+		}
+	}
+	var first error
+	for _, name := range names {
+		b := newEvictionBroadcast(nc, CacheEvictSubject(instanceId, "device-management", name), name, nil)
+		if err := b.PublishTenant(tenant); err != nil && first == nil {
+			first = err
+		}
+	}
+	return first
+}

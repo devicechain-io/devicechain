@@ -155,10 +155,10 @@ func (a stageArm) name() string {
 }
 
 // readerFetchBatch is the most messages the inbound reader fetches at once
-// (core/messaging fetchBatch). The reader fetches again only once its buffer is empty, so
+// (config.DefaultFetchBatch, the configured default pull size). The reader fetches again only once its buffer is empty, so
 // its buffer holds between 0 and this many, plus the one message the read loop holds while it
 // waits on a full hand-off channel.
-const readerFetchBatch = 64
+const readerFetchBatch = 128
 
 // Stage names a place an event can wait, for the verdict.
 const (

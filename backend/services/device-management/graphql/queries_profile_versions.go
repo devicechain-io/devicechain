@@ -6,20 +6,23 @@ package graphql
 import (
 	"context"
 
+	"github.com/devicechain-io/dc-device-management/model"
 	"github.com/devicechain-io/dc-microservice/auth"
 )
 
 // DeviceProfileVersions lists a device profile's published versions, newest first
 // (ADR-045 versioning).
 func (r *SchemaResolver) DeviceProfileVersions(ctx context.Context, args struct {
-	Token string
+	Token  string
+	Limit  *int32
+	Offset *int32
 }) ([]*DeviceProfileVersionResolver, error) {
 	if err := auth.Authorize(ctx, auth.DeviceRead); err != nil {
 		return nil, err
 	}
 
 	api := r.GetApi(ctx)
-	versions, err := api.DeviceProfileVersions(ctx, args.Token)
+	versions, err := api.DeviceProfileVersions(ctx, args.Token, &model.VersionListArgs{Limit: args.Limit, Offset: args.Offset})
 	if err != nil {
 		return nil, err
 	}

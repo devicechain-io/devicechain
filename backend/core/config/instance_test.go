@@ -634,3 +634,34 @@ func TestTheFetchHoldBudgetIsBoundedByTheAcknowledgementWindow(t *testing.T) {
 		t.Errorf("default batch = %d, want %d", got, DefaultFetchBatch)
 	}
 }
+
+// 🔑 FETCH-AHEAD IS ON BY DEFAULT, AT A BATCH OF 128, and only an explicit `ahead: false` turns
+// it off. It is on for detection's sake (event-processing's backlog stays small), not for
+// throughput: nothing here promises a higher ceiling.
+func TestFetchAheadIsOnByDefaultAndAnExplicitFalseTurnsItOff(t *testing.T) {
+	cfg := &InstanceConfiguration{}
+	cfg.ApplyDefaults()
+	fetch := cfg.Infrastructure.Nats.Fetch
+	if !fetch.AheadEnabled() {
+		t.Error("an absent `ahead` key left fetch-ahead off; the default is on")
+	}
+	if got := fetch.BatchSize(); got != 128 {
+		t.Errorf("the default batch is %d, want 128", got)
+	}
+	if DefaultFetchBatch != 128 {
+		t.Errorf("DefaultFetchBatch = %d; the chart and the docs state 128", DefaultFetchBatch)
+	}
+
+	off := &InstanceConfiguration{}
+	off.Infrastructure.Nats.Fetch.Ahead = AheadFlag(false)
+	off.ApplyDefaults()
+	if off.Infrastructure.Nats.Fetch.AheadEnabled() {
+		t.Error("an explicit `ahead: false` was overwritten by the default")
+	}
+
+	// A configuration nothing defaulted (a manager built by hand) reads as off: the default
+	// is applied once, where configuration is loaded.
+	if (NatsFetchConfiguration{}).AheadEnabled() {
+		t.Error("an undefaulted configuration reads as on")
+	}
+}

@@ -28,6 +28,15 @@ import (
 // validates both the type and the entity's existence (ADR-012).
 func (api *Api) SetEntityAttribute(ctx context.Context,
 	request *EntityAttributeSetRequest) (*EntityAttribute, error) {
+	// Cap the free-form fields before anything else is done with them.
+	if err := checkBytes("attribute key", request.AttrKey, MaxAttributeKeyBytes); err != nil {
+		return nil, err
+	}
+	if request.Value != nil {
+		if err := checkBytes("attribute value", *request.Value, MaxAttributeValueBytes); err != nil {
+			return nil, err
+		}
+	}
 	// Validate the scope and value-type vocabularies.
 	if !AttributeScope(request.Scope).Valid() {
 		return nil, fmt.Errorf("invalid attribute scope: %s", request.Scope)
@@ -315,7 +324,8 @@ func (api *Api) DeleteEntityAttribute(ctx context.Context, entityType string,
 	// commit together (a recompute failure rolls the delete back). Only wrap in a
 	// transaction when the delete can affect membership; a CLIENT-scope delete runs bare.
 	membershipTouched := false
-	if membershipScopeEligible(entityType, scope) {
+	membership := membershipScopeEligible(entityType, scope)
+	if membership || configurationScopeEligible(entityType, scope) {
 		err = api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
 			result := tx.Where(
 				"entity_type = ? AND entity_id = ? AND scope = ? AND attr_key = ?",
@@ -324,12 +334,19 @@ func (api *Api) DeleteEntityAttribute(ctx context.Context, entityType string,
 				return result.Error
 			}
 			rowsAffected = result.RowsAffected
-			if rowsAffected > 0 {
+			if rowsAffected == 0 {
+				return nil
+			}
+			if membership {
 				t, err := api.recomputeMembershipForAttr(ctx, tx, entityType, entityId, attrKey)
 				membershipTouched = t
-				return err
+				if err != nil {
+					return err
+				}
 			}
-			return nil
+			// Removing a declared configuration key changes the device's document: mint
+			// the revision in the delete's transaction.
+			return api.reconcileDeviceConfigurationOnTx(ctx, tx, entityType, entityId, scope, attrKey, false)
 		})
 		if err != nil {
 			return false, err

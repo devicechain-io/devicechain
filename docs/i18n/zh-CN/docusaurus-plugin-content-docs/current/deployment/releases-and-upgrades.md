@@ -2090,6 +2090,58 @@ v0.19.0 中列表总数和按事件类型过滤的设备列表，会访问该设
   改为 `hypertable_name IN ('events')`。
 - 回退 v0.19.0 保留新索引，旧版能使用它。
 
+#### 两台设备现在可以在同一时刻发送相同的 `altId`，两个事件都会被存储 {#device-alt-id-key}
+
+事件的 `altId` 是发送方自己的消息 ID，写入侧用它加上事件的 `occurredTime` 来丢弃被重新投递的副本。这个键按租户划分，因此同一租户的两台设备在同一时刻发送相同的 `altId` 时，第二个事件会被当作第一个的重新投递而被静默丢弃。现在键中包含设备：两个事件都会被存储，而同一设备在同一时刻再次发送相同的 `altId` 仍会被去重。如果你依赖一台设备的 `altId` 抑制另一台设备的事件，这种情况不会再发生；如有需要，请自行保证 `altId` 在你的设备之间唯一。
+
+- **升级时。** 新版 `event-management` 首次启动会在尚未压缩的基础事件上构建新的唯一索引，然后删除它所取代的按租户索引；任何时刻都不会没有去重保护。构建期间，基础事件的写入会等待，读取不会；表被锁定后，构建限时 40 秒。当待索引的行超过 4,000,000，或表的分块超过 500 个时，它会拒绝执行且不做任何更改；无法锁定表或未能及时完成的启动同样不做更改，下次启动会再次尝试。这些情况都不需要重建：错误信息会附上手动构建索引的语句。期间，旧版 `event-management` 继续存储事件。
+- **在安静时段手动构建。** 在事件存储的主库上执行以下语句，然后重启 `event-management`，它会发现该索引，只删除被取代的索引。第一条语句会删除被中断的构建留下的同名未完成索引，没有时则什么也不做：
+
+  ```sql
+  DROP INDEX IF EXISTS "event-management".idx_events_tenant_device_alt_id;
+  CREATE UNIQUE INDEX idx_events_tenant_device_alt_id
+    ON "event-management".events (tenant_id, device_token, alt_id, occurred_time)
+    WHERE alt_id IS NOT NULL;
+  ```
+
+  唯一索引一次性构建，因此基础事件的写入会在整个构建期间等待，读取不受影响。被持有超过代理 60 秒确认等待的事件会被重新投递，这是安全的。在繁忙的实例上，请选择安静的时段。
+- **要避免被拒绝，请在升级前构建索引。** 在未压缩基础事件超过 `4000000` 的 `v0.19.0` 实例上，先执行上面两条语句；`v0.19.0` 可以与之配合工作，升级随后只需删除旧索引。统计基础事件数量时，使用[检查行数](#v0190-row-count)下的查询，并将条件改为 `hypertable_name IN ('events')`。
+- 回退到 `v0.19.0` 会保留新索引，`v0.19.0` 可以使用它：重新投递的事件仍会被去重，但该版本仍按租户检查，因此会再次丢弃第二台设备的事件。
+
+#### 无法编码失败记录的入站事件，不再存成空记录 {#next-upgrade-failed-record-encode}
+
+device-management 无法编码失败入站事件的记录时，此前仍存储空记录并确认事件。读回的失败没有原因和文本，真正失败没有记录在任何地方。现在不为该事件发布任何内容，确认事件，并在 `dead_letter_lost_total` 统计损失，因此 `DeadLetterWriteLost` 触发，Pod 日志的 `LOST` 行说明哪个事件。今天设备能够发送的事件都不会触发此路径；这是缺陷路径，告警让你知道此类缺陷。`DeadLetterWriteLost` 因而有第四个原因，列于[告警表](./detection-engine.md#what-to-watch)。
+
+无需操作。
+
+#### `dcctl install --dry-run` 按实际 install 拒绝重新安装 {#dcctl-install---dry-run-makes-the-re-install-refusals-the-install-makes}
+
+集群响应时，dry run 现在读取安装记录，设置改变时查询集群上运行哪些实例；若因现有集群内容导致安装拒绝，则使用 install 自己的消息失败：在没有集群状态的机器重新安装、有实例运行时更改设置、或无法工作的 `--backup-snapshot-class`。此前打印计划并以 0 退出。面向尚不存在或无法连接的集群仍打印计划，并说明未执行这些检查。Dry run 不检查 install 拒绝的全部情况；例如关系存储由旧发布构建的集群，仍只在真正 install 时拒绝。
+
+无需操作。
+
+#### `dcctl install` 和 `dcctl bootstrap` 等待每个数据库实例加入 {#next-upgrade-wait-database-instances}
+
+此前 `dcctl install` 在关系数据库主库接受连接后返回，`dcctl bootstrap` 只等待服务。因此任一命令都可能报告成功，bootstrap 甚至打印两个数据库已复制，而副本仍在创建。Install 现在记录自身、释放集群锁，再等待最多 15 分钟，直到关系数据库每个实例都加入。Bootstrap 先等待服务，再最多等待 15 分钟，直到实例事件存储每个实例都加入。如果仍有实例未及时加入，命令以错误退出，指出数据库和就绪实例数。重新运行同一命令可继续等待（install 会重新应用前提组件，执行期间拒绝 bootstrap；如果只想观察请用 `kubectl` 监视数据库）；这样结束的 bootstrap 不会撤销，install 已记录，所以期间仍能引导实例。健康安装额外耗时几秒。
+
+无需其他操作。
+
+#### 速率上限按其计量对象重新命名 {#next-upgrade-rate-key-rename}
+
+接入上限早已按读数计量，对外上限按连接器调用计量，但两者仍以"消息"命名。现已全面改名，不保留旧拼写：
+
+| 原名 | 新名 |
+| --- | --- |
+| `ingestRateLimit.messagesPerSecond`（`event-sources`、`lwm2m-ingest`、`sparkplug-ingest` 配置） | `ingestRateLimit.readingsPerSecond` |
+| `outboundMessagesPerSecond`（`event-processing`、`outbound-connectors` 配置） | `outboundCallsPerSecond` |
+| `ingestMessagesPerSecond`（GraphQL 字段、层级配置键） | `ingestReadingsPerSecond` |
+| `outboundMessagesPerSecond`（GraphQL 字段、层级配置键） | `outboundCallsPerSecond` |
+
+- **升级前，重命名服务配置键。** 如果 values 在某个服务的 `config` 下设置了旧键，请改为新名。服务若仍发现旧键将拒绝启动，错误信息会给出应改用的键。它不会退回平台默认值，因为那会悄悄替换您设定的上限。
+- **API 客户端。** `tenantGovernance`、管理 API 的租户类型及其创建和更新输入上的字段均已改名。选择或发送旧名的请求现在会失败，请更新管理租户上限的脚本或集成。使用旧键的层级配置会被拒绝，错误信息会列出可接受的键。
+- **已存数据自动转换。** 升级会重命名租户覆盖列，并以相同取值为每个已存层级配置（包括随附层级和已删除层级）更换键名。
+- **滚动升级期间。** 在所有 Pod 都运行新版本之前，旧 Pod 与新的 `user-management` 互不兼容。旧的接入或对外 Pod 请求旧的 `tenantGovernance` 字段，请求失败，该 Pod 按平台默认值计量所有租户，可能因此触发 `TenantsMeteredAtPlatformDefault`。新 Pod 重命名列后，旧的 `user-management` Pod 仍使用旧列名，它处理的租户读写会失败，直到被替换。两者均在滚动升级结束时消失；在此之前请避免修改租户或层级。
+
 ### v0.19.0：按每秒 6,000 事件实测定规格，满流拒绝新事件 {#v0190-upgrade}
 
 v0.19.0 可从 v0.18.0 原地升级：先为集群 dcctl install，再逐实例 dcctl upgrade，
@@ -2813,44 +2865,6 @@ L1 和 contention 负载测试现在检查发送的每个事件，不仅确认�
 Google Kubernetes Engine 上，三个 4-vCPU、16 GB 数据库节点和三个 4-vCPU、8 GB 服务节点的默认 HA 安装，两次各持续 10 分钟接受每秒 6,000 事件，且每个接受事件恰好存储一次。逐事件检查确认：没有缺失、重复或意外事件。
 
 解析、存储和实时设备状态在这 10 分钟各自保持跟上，负载停止后 3 秒内积压排空。上述检查未覆盖的检测阶段，在每秒 6,000 时跟得上（峰值积压低于 1,000），从提供每秒 7,600 起落后。不声称任何高于 6,000 的持续速率。参见[测量吞吐量](./bootstrap.md#measured-throughput)。
-
-### 下一发布 {#next-upgrade}
-
-记录 `v0.19.0` 后下一发布陆续加入的变化。
-
-#### 无法编码失败记录的入站事件，不再存成空记录 {#next-upgrade-failed-record-encode}
-
-device-management 无法编码失败入站事件的记录时，此前仍存储空记录并确认事件。读回的失败没有原因和文本，真正失败没有记录在任何地方。现在不为该事件发布任何内容，确认事件，并在 `dead_letter_lost_total` 统计损失，因此 `DeadLetterWriteLost` 触发，Pod 日志的 `LOST` 行说明哪个事件。今天设备能够发送的事件都不会触发此路径；这是缺陷路径，告警让你知道此类缺陷。`DeadLetterWriteLost` 因而有第四个原因，列于[告警表](./detection-engine.md#what-to-watch)。
-
-无需操作。
-
-#### `dcctl install --dry-run` 按实际 install 拒绝重新安装 {#dcctl-install---dry-run-makes-the-re-install-refusals-the-install-makes}
-
-集群响应时，dry run 现在读取安装记录，设置改变时查询集群上运行哪些实例；若因现有集群内容导致安装拒绝，则使用 install 自己的消息失败：在没有集群状态的机器重新安装、有实例运行时更改设置、或无法工作的 `--backup-snapshot-class`。此前打印计划并以 0 退出。面向尚不存在或无法连接的集群仍打印计划，并说明未执行这些检查。Dry run 不检查 install 拒绝的全部情况；例如关系存储由旧发布构建的集群，仍只在真正 install 时拒绝。
-
-无需操作。
-
-#### `dcctl install` 和 `dcctl bootstrap` 等待每个数据库实例加入 {#next-upgrade-wait-database-instances}
-
-此前 `dcctl install` 在关系数据库主库接受连接后返回，`dcctl bootstrap` 只等待服务。因此任一命令都可能报告成功，bootstrap 甚至打印两个数据库已复制，而副本仍在创建。Install 现在记录自身、释放集群锁，再等待最多 15 分钟，直到关系数据库每个实例都加入。Bootstrap 先等待服务，再最多等待 15 分钟，直到实例事件存储每个实例都加入。如果仍有实例未及时加入，命令以错误退出，指出数据库和就绪实例数。重新运行同一命令可继续等待（install 会重新应用前提组件，执行期间拒绝 bootstrap；如果只想观察请用 `kubectl` 监视数据库）；这样结束的 bootstrap 不会撤销，install 已记录，所以期间仍能引导实例。健康安装额外耗时几秒。
-
-无需其他操作。
-
-#### 速率上限按其计量对象重新命名 {#next-upgrade-rate-key-rename}
-
-接入上限早已按读数计量，对外上限按连接器调用计量，但两者仍以"消息"命名。现已全面改名，不保留旧拼写：
-
-| 原名 | 新名 |
-| --- | --- |
-| `ingestRateLimit.messagesPerSecond`（`event-sources`、`lwm2m-ingest`、`sparkplug-ingest` 配置） | `ingestRateLimit.readingsPerSecond` |
-| `outboundMessagesPerSecond`（`event-processing`、`outbound-connectors` 配置） | `outboundCallsPerSecond` |
-| `ingestMessagesPerSecond`（GraphQL 字段、层级配置键） | `ingestReadingsPerSecond` |
-| `outboundMessagesPerSecond`（GraphQL 字段、层级配置键） | `outboundCallsPerSecond` |
-
-- **升级前，重命名服务配置键。** 如果 values 在某个服务的 `config` 下设置了旧键，请改为新名。服务若仍发现旧键将拒绝启动，错误信息会给出应改用的键。它不会退回平台默认值，因为那会悄悄替换您设定的上限。
-- **API 客户端。** `tenantGovernance`、管理 API 的租户类型及其创建和更新输入上的字段均已改名。选择或发送旧名的请求现在会失败，请更新管理租户上限的脚本或集成。使用旧键的层级配置会被拒绝，错误信息会列出可接受的键。
-- **已存数据自动转换。** 升级会重命名租户覆盖列，并以相同取值为每个已存层级配置（包括随附层级和已删除层级）更换键名。
-- **滚动升级期间。** 在所有 Pod 都运行新版本之前，旧 Pod 与新的 `user-management` 互不兼容。旧的接入或对外 Pod 请求旧的 `tenantGovernance` 字段，请求失败，该 Pod 按平台默认值计量所有租户，可能因此触发 `TenantsMeteredAtPlatformDefault`。新 Pod 重命名列后，旧的 `user-management` Pod 仍使用旧列名，它处理的租户读写会失败，直到被替换。两者均在滚动升级结束时消失；在此之前请避免修改租户或层级。
 
 ### 一次性的持久摄取切换 {#the-one-time-durable-ingest-cutover}
 

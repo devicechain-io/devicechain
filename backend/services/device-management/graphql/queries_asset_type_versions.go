@@ -6,20 +6,23 @@ package graphql
 import (
 	"context"
 
+	"github.com/devicechain-io/dc-device-management/model"
 	"github.com/devicechain-io/dc-microservice/auth"
 )
 
 // AssetTypeVersions lists an asset type's published property-contract versions,
 // newest first (ADR-072).
 func (r *SchemaResolver) AssetTypeVersions(ctx context.Context, args struct {
-	Token string
+	Token  string
+	Limit  *int32
+	Offset *int32
 }) ([]*AssetTypeVersionResolver, error) {
 	if err := auth.Authorize(ctx, auth.DeviceRead); err != nil {
 		return nil, err
 	}
 
 	api := r.GetApi(ctx)
-	versions, err := api.AssetTypeVersions(ctx, args.Token)
+	versions, err := api.AssetTypeVersions(ctx, args.Token, &model.VersionListArgs{Limit: args.Limit, Offset: args.Offset})
 	if err != nil {
 		return nil, err
 	}

@@ -5,6 +5,7 @@ package messaging
 
 import (
 	"container/list"
+	"strings"
 	"sync"
 	"time"
 )
@@ -56,6 +57,9 @@ type cacheOptions struct {
 	// value kept by GetCloned: factor times the encoded length, plus base. See
 	// WithDecodedCharge.
 	decodedFactor, decodedBase int
+	// crossReplica makes a Delete tell every other replica to drop its in-process copy.
+	// See WithCrossReplicaEviction.
+	crossReplica bool
 }
 
 func defaultCacheOptions() cacheOptions {
@@ -110,6 +114,24 @@ func WithLocalBounds(maxEntries, maxBytes int) CacheOption {
 		o.maxEntries = maxEntries
 		o.maxBytes = maxBytes
 	}
+}
+
+// WithCrossReplicaEviction makes Delete reach the in-process tier of EVERY replica of the
+// service, not only the one that made the change, through an EvictionBroadcast on this
+// cache's own subject. NewCache subscribes this replica to it; a Cache built any other way
+// (NewCacheOver) ignores the option, since it has no connection to subscribe on.
+//
+// WITHOUT IT a change reaches another replica's memory only by expiry, so the in-process
+// TTL is the staleness bound, which is why the default TTL is five seconds. WITH IT the TTL
+// can be minutes: it is then a backstop for a lost message, and the eviction is the
+// mechanism. A replica also drops its whole in-process tier when its connection comes back
+// (NatsManager.OnReconnect), since it may have missed messages while it was away.
+//
+// 🔴 EVERY KEY OF A CACHE BUILT WITH IT MUST START WITH ITS TENANT: either the bare tenant or
+// "{tenant}|{rest}", the layout the tenant purge relies on (keyBelongsTo). The broadcast
+// files each eviction under that tenant, and a key with none could not be sent.
+func WithCrossReplicaEviction() CacheOption {
+	return func(o *cacheOptions) { o.crossReplica = true }
 }
 
 // WithoutLocalCache turns the in-process tier off, so every Get asks the bucket. It is for
@@ -356,6 +378,44 @@ func (l *localCache) invalidate(key string) {
 	l.gen++
 	if el, ok := l.byKey[key]; ok {
 		l.remove(el, "deleted")
+	}
+	l.report()
+}
+
+// invalidateTenant removes every entry filed under tenant (its key is the tenant, or the
+// tenant and the key separator, then the rest) and moves the generation on, as invalidate
+// does. It scans the whole tier, which is fine for what calls it: a tenant's erasure.
+func (l *localCache) invalidateTenant(tenant string) {
+	if l == nil {
+		return
+	}
+	prefix := tenant + kvTenantSeparator
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.gen++
+	for el := l.order.Front(); el != nil; {
+		next := el.Next()
+		if k := el.Value.(*localEntry).key; k == tenant || strings.HasPrefix(k, prefix) {
+			l.remove(el, "deleted")
+		}
+		el = next
+	}
+	l.report()
+}
+
+// clear drops every entry and moves the generation on. It is what a replica does when it
+// may have missed evictions, so it trusts nothing it holds.
+func (l *localCache) clear() {
+	if l == nil {
+		return
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.gen++
+	for el := l.order.Front(); el != nil; {
+		next := el.Next()
+		l.remove(el, "deleted")
+		el = next
 	}
 	l.report()
 }

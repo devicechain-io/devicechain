@@ -6,7 +6,9 @@ package model
 import (
 	"context"
 	"fmt"
+	"slices"
 
+	"github.com/devicechain-io/dc-microservice/entity"
 	"github.com/devicechain-io/dc-microservice/limit"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"gorm.io/gorm"
@@ -200,6 +202,14 @@ func (api *Api) CreateEntityRelationships(ctx context.Context,
 	if err != nil {
 		return nil, err
 	}
+	// Every device that now has a new edge has a stale cached tracked set.
+	sources := make([]uint, 0, len(created))
+	for _, edge := range created {
+		if edge.SourceType == string(entity.TypeDevice) && !slices.Contains(sources, edge.SourceId) {
+			sources = append(sources, edge.SourceId)
+		}
+	}
+	api.evictRelationshipSources(ctx, sources)
 	return created, nil
 }
 

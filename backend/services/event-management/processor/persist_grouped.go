@@ -171,7 +171,7 @@ func (ep *EventPersistenceWorker) groupBatch(batch []pendingEvent) ([]*tenantGro
 			r.TenantId = p.tenant
 		}
 		if p.event.AltId != nil {
-			m.alt = &model.AltIdKey{AltId: *p.event.AltId, OccurredTime: p.event.OccurredTime}
+			m.alt = &model.AltIdKey{DeviceToken: p.event.SourceDeviceToken, AltId: *p.event.AltId, OccurredTime: p.event.OccurredTime}
 		}
 		g, ok := byTenant[p.tenant]
 		if !ok {

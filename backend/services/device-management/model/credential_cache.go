@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/devicechain-io/dc-device-management/config"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/prometheus/client_golang/prometheus"
@@ -21,24 +22,27 @@ import (
 // CredentialCacheName labels the credential cache's metrics and names its eviction
 // broadcast. It is not a key-value bucket and is deliberately absent from kv.All: an entry
 // holds secrets (see Caches.Credentials).
-const CredentialCacheName = "device-credentials"
+const CredentialCacheName = messaging.DeviceCredentialCacheName
 
-// CredentialCacheTTL is how long a verified credential is kept: messaging.DefaultLocalCacheTTL,
-// so ONE number bounds every in-process copy this service holds, and the docs state one
-// number. The clock starts when the database read that produced the entry STARTED, not when
-// the entry was stored, so a read that began before a change and finished after it cannot
-// keep the old credential past the change by more than this. A hit never extends it (see
-// DefaultLocalCacheTTL for why a sliding TTL would let a hot key outlive every eviction).
-const CredentialCacheTTL = messaging.DefaultLocalCacheTTL
+// CredentialCacheTTL is how long a verified credential is kept unless the cache is built
+// WithCredentialCacheTTL: config.DefaultInMemoryCacheTtlSeconds, the same number that bounds
+// every other in-process copy this service holds (inMemoryCache.ttlSeconds). The clock
+// starts when the database read that produced the entry STARTED, not when the entry was
+// stored, so a read that began before a change and finished after it cannot keep the old
+// credential past the change by more than this. A hit never extends it (see
+// messaging.DefaultLocalCacheTTL for why a sliding TTL would let a hot key outlive every
+// eviction).
+//
+// The time is a BACKSTOP. A change to a credential or its device evicts the entry on every
+// replica, and a replica that reconnects to the broker drops all of them; the time is what
+// bounds an eviction message that was lost anyway.
+const CredentialCacheTTL = time.Duration(config.DefaultInMemoryCacheTtlSeconds) * time.Second
 
-// CredentialCacheMaxEntries and CredentialCacheMaxBytes bound one replica's credential
-// cache. They are fixed rather than configurable, as the TTL is: what they cost against
-// the service's memory limit is set out at config.DefaultPerDeviceCacheMiB, and the byte
-// bound binds first (an entry is about a kilobyte before its device's metadata).
-const (
-	CredentialCacheMaxEntries = 65536
-	CredentialCacheMaxBytes   = 16 << 20
-)
+// CredentialCacheMaxEntries bounds one replica's credential cache by count. The byte bound
+// (inMemoryCache.credentialCacheMiB) binds first: an entry is about a kilobyte before its
+// device's metadata, and what the bytes cost against the service's memory limit is set out
+// at config.DefaultPerDeviceCacheMiB.
+const CredentialCacheMaxEntries = 262144
 
 // credentialEntryOverhead is what one held entry costs on the heap beyond the strings and
 // metadata credentialEntrySize counts: the entry struct, its list element, its slot in
@@ -150,6 +154,20 @@ func NewCredentialCache(maxEntries, maxBytes int, opts ...CredentialCacheOption)
 func WithCredentialCacheMetrics(ms *core.Microservice) CredentialCacheOption {
 	return func(c *CredentialCache) { c.metrics = newCredentialCacheMetrics(ms) }
 }
+
+// WithCredentialCacheTTL sets how long an entry is kept, in place of CredentialCacheTTL. It
+// panics on a duration of zero or less, as messaging.WithLocalTTL does.
+func WithCredentialCacheTTL(d time.Duration) CredentialCacheOption {
+	if d <= 0 {
+		panic("model: WithCredentialCacheTTL needs a positive duration")
+	}
+	return func(c *CredentialCache) { c.ttl = d }
+}
+
+// TTL is how long an entry is kept; MaxBytes is the byte bound. They exist for the tests that
+// check the service builds this cache as configured.
+func (c *CredentialCache) TTL() time.Duration { return c.ttl }
+func (c *CredentialCache) MaxBytes() int      { return c.maxBytes }
 
 // WithCredentialEvictionBroadcast makes every eviction reach the other replicas through b.
 func WithCredentialEvictionBroadcast(b *messaging.EvictionBroadcast) CredentialCacheOption {
@@ -285,10 +303,45 @@ func (c *CredentialCache) EvictDevices(tenant string, deviceIds []uint) {
 	c.report()
 }
 
+// EvictTenant drops every entry of tenant, on this replica only, and moves the generation on.
+func (c *CredentialCache) EvictTenant(tenant string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.gen++
+	for dev := range c.byDevice {
+		if dev.tenant != tenant {
+			continue
+		}
+		for _, key := range append([]credentialKey(nil), c.byDevice[dev]...) {
+			if el, ok := c.byKey[key]; ok {
+				c.removeLocked(el, "revoked")
+			}
+		}
+	}
+	c.report()
+}
+
+// Clear drops every entry and moves the generation on. A replica does it when its
+// connection to the broker comes back, since it may have missed eviction messages while it
+// was away and cannot tell which entries they named.
+func (c *CredentialCache) Clear() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.gen++
+	for el := c.order.Front(); el != nil; el = c.order.Front() {
+		c.removeLocked(el, "revoked")
+	}
+	c.report()
+}
+
 // ApplyEviction is the eviction broadcast's apply function: an eviction another replica
 // (or this one) sent. Each key is a device row id in decimal. A key that does not parse is
-// skipped, and the rest still apply.
+// skipped, and the rest still apply. A tenant-wide eviction (a tenant's erasure) drops every
+// entry of the tenant.
 func (c *CredentialCache) ApplyEviction(e messaging.CacheEviction) {
+	if e.All {
+		c.EvictTenant(e.Tenant)
+	}
 	ids := make([]uint, 0, len(e.Keys))
 	for _, k := range e.Keys {
 		id, err := strconv.ParseUint(k, 10, strconv.IntSize)
@@ -315,7 +368,7 @@ func (c *CredentialCache) publishEviction(tenant string, deviceIds []uint) {
 	}
 	if err := c.broadcast.Publish(tenant, keys); err != nil {
 		log.Warn().Err(err).Str("tenant", tenant).
-			Msg("A credential cache eviction could not be broadcast; other replicas drop the entry within 5s.")
+			Msg("A credential cache eviction could not be broadcast; other replicas drop the entry when it expires.")
 	}
 }
 
@@ -398,13 +451,13 @@ type credentialCacheMetrics struct {
 func newCredentialCacheMetrics(ms *core.Microservice) *credentialCacheMetrics {
 	lookups := ms.NewCounterVec("credential_cache_lookups_total",
 		"Device credential checks answered from this replica's memory (result=hit) or passed on to the "+
-			"database (result=miss). A credential is kept for up to 5 s after the read that verified it.",
+			"database (result=miss). A credential is kept for up to its time to live (inMemoryCache.ttlSeconds) after the read that verified it.",
 		[]string{"result"})
 	m := &credentialCacheMetrics{
 		hit:  lookups.WithLabelValues("hit"),
 		miss: lookups.WithLabelValues("miss"),
 		evictions: ms.NewCounterVec("credential_cache_evictions_total",
-			"Credentials removed from this replica's memory: reason=expired (found past its 5 s), capacity "+
+			"Credentials removed from this replica's memory: reason=expired (found past its time to live), capacity "+
 				"(the cache was full), revoked (dropped after a change to the credential or its device, made "+
 				"on this replica or announced by another).",
 			[]string{"reason"}),

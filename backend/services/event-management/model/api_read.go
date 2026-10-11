@@ -5,6 +5,7 @@ package model
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/integrity"
@@ -214,6 +215,21 @@ func useMeasurementRollup(criteria MeasurementAggregationCriteria) bool {
 // counted.
 const MaxMeasurementBuckets = 10_000
 
+// MaxMeasurementRows is the most rows one aggregation read may return: one row per
+// (bucket, measurement name), so the bound is buckets x names. The bucket cap alone
+// does not bound the response, because a read with no name filter returns every
+// measurement name in range for each bucket. A read whose buckets x names is over this
+// is refused (LIMIT_EXCEEDED), not truncated.
+//
+// "names" is 1 when the read filters on a name. With no name filter it is the number of
+// distinct names that match the read's filters, counted (see distinctMeasurementNames),
+// not an assumed bound: nothing limits how many names a device reports, so any assumed
+// count would let a device with more names than assumed straight through.
+//
+// Like the bucket bound, this is a bound on cost rather than an exact row count: the
+// aligned extra bucket MaxMeasurementBuckets describes can add up to `names` rows.
+const MaxMeasurementRows = 50_000
+
 // errStartTimeRequired refuses an aggregation with no start of range: without one the
 // read covers a tenant's whole measurement history.
 var errStartTimeRequired = integrity.NewRefusal(integrity.ClassInvalid,
@@ -222,20 +238,20 @@ var errStartTimeRequired = integrity.NewRefusal(integrity.ClassInvalid,
 // boundBucketedRange applies the range rules to an aggregation read: startTime is
 // required, endTime defaults to now, the range must not run backwards, and the number
 // of buckets it produces is capped at MaxMeasurementBuckets. It returns the criteria
-// with endTime filled in.
-func boundBucketedRange(criteria MeasurementAggregationCriteria, now time.Time) (MeasurementAggregationCriteria, error) {
+// with endTime filled in, and the bucket count.
+func boundBucketedRange(criteria MeasurementAggregationCriteria, now time.Time) (MeasurementAggregationCriteria, int64, error) {
 	if criteria.IntervalSeconds < 1 {
-		return criteria, integrity.NewRefusal(integrity.ClassInvalid, "intervalSeconds must be >= 1")
+		return criteria, 0, integrity.NewRefusal(integrity.ClassInvalid, "intervalSeconds must be >= 1")
 	}
 	if criteria.StartTime == nil {
-		return criteria, errStartTimeRequired
+		return criteria, 0, errStartTimeRequired
 	}
 	if criteria.EndTime == nil {
 		end := now
 		criteria.EndTime = &end
 	}
 	if criteria.EndTime.Before(*criteria.StartTime) {
-		return criteria, integrity.NewRefusal(integrity.ClassInvalid, "endTime must not be before startTime")
+		return criteria, 0, integrity.NewRefusal(integrity.ClassInvalid, "endTime must not be before startTime")
 	}
 	rangeSeconds := int64(criteria.EndTime.Sub(*criteria.StartTime) / time.Second)
 	buckets := rangeSeconds / criteria.IntervalSeconds
@@ -243,9 +259,25 @@ func boundBucketedRange(criteria MeasurementAggregationCriteria, now time.Time) 
 		buckets++
 	}
 	if buckets > MaxMeasurementBuckets {
-		return criteria, limit.Exceeded("buckets", int(buckets), MaxMeasurementBuckets)
+		return criteria, buckets, limit.Exceeded("buckets", int(buckets), MaxMeasurementBuckets)
 	}
-	return criteria, nil
+	return criteria, buckets, nil
+}
+
+// rowBuckets is the bucket count the row bound multiplies by. A zero-length range
+// (startTime == endTime) counts as zero buckets but still returns the one bucket that
+// holds that instant, so it is counted as one: zero would make every name count pass.
+func rowBuckets(buckets int64) int64 {
+	return max(buckets, 1)
+}
+
+// boundBucketedRows caps the rows a read may return at MaxMeasurementRows. buckets is
+// already at most MaxMeasurementBuckets, so the product cannot overflow.
+func boundBucketedRows(buckets, names int64) error {
+	if rows := rowBuckets(buckets) * names; rows > MaxMeasurementRows {
+		return limit.Exceeded("rows", int(rows), MaxMeasurementRows)
+	}
+	return nil
 }
 
 // BucketedMeasurements returns measurement values aggregated into fixed-width
@@ -261,29 +293,77 @@ func boundBucketedRange(criteria MeasurementAggregationCriteria, now time.Time) 
 // includes whole overlapping base buckets rather than splitting them), which is
 // immaterial for charts. The rollup is a read optimization, not a separate source of
 // truth — an operator who needs the exact raw path can force it with the kill-switch.
+//
+// The read is bounded before it runs: at most MaxMeasurementBuckets buckets, and at
+// most MaxMeasurementRows rows (buckets x measurement names).
 func (api *Api) BucketedMeasurements(ctx context.Context, criteria MeasurementAggregationCriteria) ([]MeasurementBucket, error) {
-	criteria, err := boundBucketedRange(criteria, time.Now())
+	criteria, buckets, err := boundBucketedRange(criteria, time.Now())
 	if err != nil {
 		return nil, err
 	}
-	if !api.RollupReadsDisabled && useMeasurementRollup(criteria) {
+	rollup := !api.RollupReadsDisabled && useMeasurementRollup(criteria)
+	names := int64(1)
+	if criteria.Name == nil {
+		// One name more than the cap allows at this bucket count is enough to decide, so
+		// the count stops there instead of reading every name in range.
+		enough := MaxMeasurementRows/rowBuckets(buckets) + 1
+		if names, err = api.distinctMeasurementNames(ctx, criteria, rollup, enough); err != nil {
+			return nil, err
+		}
+	}
+	if err := boundBucketedRows(buckets, names); err != nil {
+		return nil, err
+	}
+	if rollup {
 		return api.bucketedMeasurementsFromRollup(ctx, criteria)
 	}
 	return api.bucketedMeasurementsFromRaw(ctx, criteria)
 }
 
+// distinctMeasurementNames counts the measurement names a read with no name filter will
+// group by, under exactly the filters and the source (raw or rollup) the read itself
+// uses, so the count is the read's real name dimension rather than an estimate. It
+// counts at most `enough` names: past that the read is refused whatever the true count
+// is, so reading further would only cost more. The scope keeps the model, so the
+// tenant-scope callback still applies. A failed count is returned as an error, never as
+// zero names: zero would let the read through unbounded.
+func (api *Api) distinctMeasurementNames(ctx context.Context, criteria MeasurementAggregationCriteria, rollup bool, enough int64) (int64, error) {
+	var db *gorm.DB
+	if rollup {
+		db = api.rollupMeasurementScope(ctx, criteria)
+	} else {
+		db = api.rawMeasurementScope(ctx, criteria)
+	}
+	var names []string
+	if err := db.Distinct("name").Limit(int(enough)).Pluck("name", &names).Error; err != nil {
+		return 0, fmt.Errorf("counting measurement names: %w", err)
+	}
+	return int64(len(names)), nil
+}
+
 // bucketedMeasurementsFromRaw is the exact path: it aggregates the raw
-// measurement_events hypertable per time_bucket. It runs through DB(ctx) with the
-// MeasurementEvent model, so the fail-closed tenant-scope callback injects the
-// tenant predicate (ADR-015) just as it does for the paginated reads. The optional
-// anchor filter reuses the same tenant-scoped event_id subquery as the typed payload reads.
+// measurement_events hypertable per time_bucket, over rawMeasurementScope.
 func (api *Api) bucketedMeasurementsFromRaw(ctx context.Context, criteria MeasurementAggregationCriteria) ([]MeasurementBucket, error) {
 	results := make([]MeasurementBucket, 0)
-	db := api.RDB.DB(ctx).Model(&MeasurementEvent{}).
+	db := api.rawMeasurementScope(ctx, criteria).
 		Select("time_bucket(make_interval(secs => ?), occurred_time) AS bucket_start, "+
 			"name, "+
 			"avg(value) AS avg, min(value) AS min, max(value) AS max, "+
 			"sum(value) AS sum, count(value) AS count", criteria.IntervalSeconds)
+	db = db.Group("bucket_start, name").Order("bucket_start ASC, name ASC")
+	if err := db.Scan(&results).Error; err != nil {
+		return nil, err
+	}
+	return results, nil
+}
+
+// rawMeasurementScope is the filtered measurement_events relation an aggregation over
+// the raw hypertable reads. It runs through DB(ctx) with the MeasurementEvent model, so
+// the fail-closed tenant-scope callback injects the tenant predicate (ADR-015) just as
+// it does for the paginated reads. The optional anchor filter reuses the same
+// tenant-scoped event_id subquery as the typed payload reads.
+func (api *Api) rawMeasurementScope(ctx context.Context, criteria MeasurementAggregationCriteria) *gorm.DB {
+	db := api.RDB.DB(ctx).Model(&MeasurementEvent{})
 	if criteria.DeviceToken != nil {
 		db = db.Where("device_token = ?", *criteria.DeviceToken)
 	}
@@ -303,26 +383,21 @@ func (api *Api) bucketedMeasurementsFromRaw(ctx context.Context, criteria Measur
 		db = db.Where("event_id IN (?)",
 			api.anchorKeySubquery(ctx, *criteria.AnchorType, *criteria.AnchorToken))
 	}
-	db = db.Group("bucket_start, name").Order("bucket_start ASC, name ASC")
-	if err := db.Scan(&results).Error; err != nil {
-		return nil, err
-	}
-	return results, nil
+	return db
 }
 
 // bucketedMeasurementsFromRollup serves the read from the measurement_rollups
-// continuous aggregate: it re-buckets the 1-minute partial aggregates up to the
-// requested interval. avg is derived as sum(sum_value)/sum(count_value) (an average
-// of averages would be wrong); min/max/sum/count roll up directly. NULLIF guards the
-// empty-bucket division so an all-NULL group yields a NULL avg, matching the raw
-// path. Runs through DB(ctx) with the MeasurementRollup model so the same fail-closed
-// tenant predicate is injected. The time-range filter is on the bucket column, so at
-// the range edges the result is bucket-granular (an interval boundary that falls
-// mid-bucket includes/excludes the whole base bucket) — immaterial for charts and the
-// price of reading pre-bucketed rollups.
+// continuous aggregate (rollupMeasurementScope): it re-buckets the 1-minute partial
+// aggregates up to the requested interval. avg is derived as
+// sum(sum_value)/sum(count_value) (an average of averages would be wrong);
+// min/max/sum/count roll up directly. NULLIF guards the empty-bucket division so an
+// all-NULL group yields a NULL avg, matching the raw path. The time-range filter is on
+// the bucket column, so at the range edges the result is bucket-granular (an interval
+// boundary that falls mid-bucket includes/excludes the whole base bucket) — immaterial
+// for charts and the price of reading pre-bucketed rollups.
 func (api *Api) bucketedMeasurementsFromRollup(ctx context.Context, criteria MeasurementAggregationCriteria) ([]MeasurementBucket, error) {
 	results := make([]MeasurementBucket, 0)
-	db := api.RDB.DB(ctx).Model(&MeasurementRollup{}).
+	db := api.rollupMeasurementScope(ctx, criteria).
 		Select("time_bucket(make_interval(secs => ?), bucket) AS bucket_start, "+
 			"name, "+
 			"sum(sum_value) / NULLIF(sum(count_value), 0) AS avg, "+
@@ -331,6 +406,17 @@ func (api *Api) bucketedMeasurementsFromRollup(ctx context.Context, criteria Mea
 			// MeasurementBucket.Count exactly like the raw path's count() does
 			// (sum(bigint) is numeric in Postgres).
 			"sum(sum_value) AS sum, sum(count_value)::bigint AS count", criteria.IntervalSeconds)
+	db = db.Group("bucket_start, name").Order("bucket_start ASC, name ASC")
+	if err := db.Scan(&results).Error; err != nil {
+		return nil, err
+	}
+	return results, nil
+}
+
+// rollupMeasurementScope is the filtered measurement_rollups relation a rollup-served
+// aggregation reads, tenant-scoped through the MeasurementRollup model like the raw path.
+func (api *Api) rollupMeasurementScope(ctx context.Context, criteria MeasurementAggregationCriteria) *gorm.DB {
+	db := api.RDB.DB(ctx).Model(&MeasurementRollup{})
 	if criteria.DeviceToken != nil {
 		db = db.Where("device_token = ?", *criteria.DeviceToken)
 	}
@@ -351,11 +437,7 @@ func (api *Api) bucketedMeasurementsFromRollup(ctx context.Context, criteria Mea
 	if criteria.EndTime != nil {
 		db = db.Where("bucket <= ?", criteria.EndTime.Truncate(bucketWidth))
 	}
-	db = db.Group("bucket_start, name").Order("bucket_start ASC, name ASC")
-	if err := db.Scan(&results).Error; err != nil {
-		return nil, err
-	}
-	return results, nil
+	return db
 }
 
 // Search for alert events that meet criteria.
