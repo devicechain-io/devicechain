@@ -20,8 +20,13 @@ func runSeed(ctx context.Context, argv []string) error {
 	fs.StringVar(&receipt, "receipt", "", "path to write the receipt verify will read (required)")
 	fs.StringVar(&baselineDir, "baseline-schemas", "",
 		"a `backend/services` tree from the release being seeded, so entities that release cannot express are skipped instead of refused")
+	deployedFn := bindDeployedAreas(fs)
 	if err := fs.Parse(argv); err != nil {
 		return failWith(exitSetup, "%w", err)
+	}
+	deployed, err := deployedFn()
+	if err != nil {
+		return err
 	}
 	if strings.TrimSpace(instance) == "" || strings.TrimSpace(receipt) == "" {
 		return failWith(exitSetup, "--instance and --receipt are both required")
@@ -50,6 +55,15 @@ func runSeed(ctx context.Context, argv []string) error {
 	}
 
 	for _, e := range allEntities() {
+		skip, why, err := skipForUndeployedArea(e, deployed)
+		if err != nil {
+			return err
+		}
+		if skip {
+			skipped = append(skipped, e.Name)
+			fmt.Printf("  skipped %-26s %s\n", e.Name, why)
+			continue
+		}
 		write, why, err := plan(e, base)
 		if err != nil {
 			return err

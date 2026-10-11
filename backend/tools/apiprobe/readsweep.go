@@ -400,8 +400,13 @@ func runReadSweep(ctx context.Context, argv []string) error {
 	fs.StringVar(&receiptPath, "receipt", "", "path to the receipt seed wrote (required)")
 	fs.StringVar(&schemaDir, "schemas", "",
 		"the DEPLOYED release's `backend/services` tree, whose served schemas name the doors to sweep (required)")
+	deployedFn := bindDeployedAreas(fs)
 	if err := fs.Parse(argv); err != nil {
 		return failWith(exitSetup, "%w", err)
+	}
+	deployed, err := deployedFn()
+	if err != nil {
+		return err
 	}
 	if strings.TrimSpace(receiptPath) == "" || strings.TrimSpace(schemaDir) == "" {
 		return failWith(exitSetup, "--receipt and --schemas are both required")
@@ -422,6 +427,10 @@ func runReadSweep(ctx context.Context, argv []string) error {
 	var calls []sweepCall
 	var skips []sweepSkip
 	for _, area := range probeAreas() {
+		if !deployed.has(area) {
+			fmt.Printf("  not swept: %s - %s\n", area, notDeployedReason(area))
+			continue
+		}
 		schema, err := loadServedSchema(schemaDir, area)
 		if err != nil {
 			return err

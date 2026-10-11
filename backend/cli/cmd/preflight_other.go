@@ -9,7 +9,7 @@ package cmd
 // diagnostics rely on Linux /proc and statfs semantics; the DeviceChain runtime
 // target is Linux, so run `dcctl preflight` inside the Linux/WSL2 dev
 // environment for the full host diagnostics.
-func checkSystem(d *doctor, _ string) {
+func checkSystem(d *doctor, _ string, _ bool) {
 	section("System", "🖥️")
 	d.warn("host diagnostics skipped on non-Linux host",
 		"run dcctl preflight inside the Linux/WSL2 dev environment for full system checks")

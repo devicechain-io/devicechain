@@ -1967,6 +1967,42 @@ jobs:
             --set useMeasuredRequests=false \
             --set functionalAreas.device-management.resources.limits.cpu=300m
 
+          # The filesystem object store is shared by every area that builds one, so the
+          # claim is judged by the pods ACROSS those areas, and an override of
+          # blobStorage.mountAreas is judged against the same default the mount uses.
+          BLOB=(--set "instance.config.infrastructure.secrets.rootKey=$KEY"
+            --set "enabledFunctionalAreas={user-management,device-management,update-management}"
+            --set instance.config.infrastructure.blob.directory=/var/lib/dc/blob)
+          refuses "two areas share a ReadWriteOnce claim" "but it is not ReadWriteMany" \
+            "${BLOB[@]}" --set blobStorage.persistence.enabled=true
+          renders "two areas share a ReadWriteMany claim" \
+            "${BLOB[@]}" --set blobStorage.persistence.enabled=true \
+            --set "blobStorage.persistence.accessModes={ReadWriteMany}"
+          renders "two areas share an operator-provided claim" \
+            "${BLOB[@]}" --set blobStorage.persistence.existingClaim=mine
+          renders "one area on a ReadWriteOnce claim" \
+            "${BLOB[@]}" --set blobStorage.persistence.enabled=true \
+            --set "enabledFunctionalAreas={user-management,device-management}"
+          refuses "a mountAreas override that omits update-management" "is not in blobStorage.mountAreas" \
+            "${BLOB[@]}" --set blobStorage.persistence.enabled=true \
+            --set "blobStorage.persistence.accessModes={ReadWriteMany}" \
+            --set "blobStorage.mountAreas={user-management}"
+
+          # The artifact upload route needs its own Ingress: nginx's defaults refuse a body
+          # over 1 MiB and buffer the whole body before the service can authenticate it.
+          UPLOAD="$(helm template deploy/helm/devicechain             --set "instance.config.infrastructure.secrets.rootKey=$KEY"             --set "enabledFunctionalAreas={user-management,device-management,update-management}"             --set ingress.enabled=true)"
+          for want in 'name: devicechain-update-upload' 'proxy-request-buffering: "off"' 'proxy-body-size: "1g"'; do
+            case "$UPLOAD" in
+              *"$want"*) echo "ok (renders): upload ingress carries $want" ;;
+              *) echo "::error::the upload ingress is missing $want"; exit 1 ;;
+            esac
+          done
+          NOUPLOAD="$(helm template deploy/helm/devicechain --set "instance.config.infrastructure.secrets.rootKey=$KEY" --set ingress.enabled=true)"
+          case "$NOUPLOAD" in
+            *devicechain-update-upload*) echo "::error::the upload ingress renders without update-management"; exit 1 ;;
+            *) echo "ok (renders): no upload ingress without update-management" ;;
+          esac
+
           renders "inline config" --set "instance.config.infrastructure.secrets.rootKey=$KEY"
           renders "inline config, ingest-only" --set profile=ingest-only \
             --set "instance.config.infrastructure.secrets.rootKey=$KEY"

@@ -140,7 +140,7 @@ func TestEveryAuthorityDeclaresATier(t *testing.T) {
 		CommandRead, CommandWrite, CommandClaim, CommandWake, CommandPark,
 		DashboardRead, DashboardWrite,
 		NotificationRead, NotificationWrite, AuditRead, SettingsRead, SettingsWrite,
-		ClientRead, ClientWrite, ConnectorRead, ConnectorWrite, BrandingWrite,
+		ClientRead, ClientWrite, ConnectorRead, ConnectorWrite, ArtifactRead, ArtifactWrite, BrandingWrite,
 		BasemapWrite, LocaleWrite, AIAdmin, AIInfer,
 	}
 	for _, a := range expected {

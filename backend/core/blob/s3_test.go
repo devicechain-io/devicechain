@@ -34,8 +34,13 @@ type fakeS3 struct {
 	headOut *s3.HeadObjectOutput
 	headErr error
 
-	delIn  *s3.DeleteObjectInput
-	delErr error
+	delIn   *s3.DeleteObjectInput
+	delErr  error
+	delKeys []string
+
+	listIns   []*s3.ListObjectsV2Input
+	listPages []*s3.ListObjectsV2Output
+	listErr   error
 }
 
 func (f *fakeS3) PutObject(_ context.Context, in *s3.PutObjectInput, _ ...func(*s3.Options)) (*s3.PutObjectOutput, error) {
@@ -62,7 +67,22 @@ func (f *fakeS3) HeadObject(_ context.Context, in *s3.HeadObjectInput, _ ...func
 
 func (f *fakeS3) DeleteObject(_ context.Context, in *s3.DeleteObjectInput, _ ...func(*s3.Options)) (*s3.DeleteObjectOutput, error) {
 	f.delIn = in
+	if f.delErr == nil && in.Key != nil {
+		f.delKeys = append(f.delKeys, *in.Key)
+	}
 	return &s3.DeleteObjectOutput{}, f.delErr
+}
+
+// ListObjectsV2 serves the canned pages in order, one per call.
+func (f *fakeS3) ListObjectsV2(_ context.Context, in *s3.ListObjectsV2Input, _ ...func(*s3.Options)) (*s3.ListObjectsV2Output, error) {
+	f.listIns = append(f.listIns, in)
+	if f.listErr != nil {
+		return nil, f.listErr
+	}
+	if len(f.listIns) > len(f.listPages) {
+		return &s3.ListObjectsV2Output{}, nil
+	}
+	return f.listPages[len(f.listIns)-1], nil
 }
 
 func newS3(f *fakeS3) *s3Store {
