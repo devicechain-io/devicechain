@@ -420,8 +420,7 @@ func runStageArm(b *testing.B, srv *natsserver.Server, instance string, arm stag
 		event: func(i int) *esmodel.UnresolvedEvent {
 			e := benchMeasurement(i)
 			if arm.auth == config.AuthModeRequired {
-				ctype, cid := string(dmodel.CredentialAccessToken), fmt.Sprintf("cred-%d", i)
-				e.CredentialType, e.CredentialId = &ctype, &cid
+				presentSealedToken(b, credCtx(), e, string(dmodel.CredentialAccessToken), fmt.Sprintf("cred-%d", i))
 			}
 			return e
 		},

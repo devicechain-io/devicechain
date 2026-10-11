@@ -105,6 +105,7 @@ func newCredFixture(t *testing.T) *credFixture {
 	key, err := auth.GenerateKeyPair()
 	require.NoError(t, err)
 	mgr.issuer = auth.NewIssuer(key, "test", time.Minute, time.Hour)
+	mgr.refreshKV = &stubRefreshKV{} // a successful sign-in opens a session record
 	return &credFixture{mgr: mgr, rdbm: rdbm, store: attempts, clock: clk, lookups: lookups}
 }
 

@@ -3,6 +3,18 @@
 
 package main
 
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
+	"io"
+	"net/http"
+	"strings"
+
+	"github.com/devicechain-io/dc-microservice/userclient"
+)
+
 // PUBLISHING, WHICH THE COVERAGE TABLE STRUCTURALLY CANNOT HOLD.
 //
 // `entities` is one row per tenant CREATE mutation, and its own tests enforce that:
@@ -323,6 +335,112 @@ var afterPublish = []entity{
 			return "device/" + s.tokens["device"] + "/" + probeAttrScope + "/" + probeConfigKey
 		},
 	},
+	{
+		// Depends on: device-profile.
+		//
+		// An artifact whose bytes WERE uploaded, so it is AVAILABLE: the only state an
+		// artifact can be assigned from, and the one that holds a blob reference. The
+		// `artifact` row in the main table stays UPLOADING on purpose (it proves the
+		// declaration survives); this one proves the completed state does, and gives the
+		// assignment below something it may legitimately name.
+		//
+		// The content is a fixed literal so its digest is a constant the declaration and
+		// the upload agree on. The upload is the one step GraphQL cannot express, which is
+		// what After is for.
+		Name:     "artifact-available",
+		Area:     "update-management",
+		Mutation: "createArtifact",
+		Input:    "ArtifactCreateRequest!",
+		Read:     "artifact",
+		Single:   true,
+		Fields:   "token kind name version component sizeBytes digest mediaType compatibleProfiles trustStatus state",
+		Vars: func(s *state) map[string]any {
+			return map[string]any{"req": map[string]any{
+				"token":              s.tok("artifact-available"),
+				"kind":               "FIRMWARE",
+				"name":               "apiprobe artifact (uploaded)",
+				"version":            "2.0.0",
+				"component":          "firmware",
+				"sizeBytes":          fmt.Sprint(len(probeArtifactContent)),
+				"digest":             probeArtifactDigest(),
+				"mediaType":          "application/octet-stream",
+				"compatibleProfiles": []string{s.tokens["profile"]},
+			}}
+		},
+		After: uploadProbeArtifact,
+	},
+	{
+		// Depends on: device, artifact-available.
+		//
+		// 🔑 THIS WRITE IS WHAT CREATES update_assignments AND update_attempts: assigning an
+		// artifact stores the append-only assignment row and the attempt the update state
+		// machine will drive. The token is minted by the platform, so the receipt records
+		// the one the response returned and the read-back is keyed by it.
+		//
+		// The attempt is read back QUEUED and stays QUEUED: nothing here is a device, so
+		// nothing reports, and the deadline that would move it is a day away. Only stored
+		// values are selected; the timestamps that move are not.
+		//
+		// ⚠️ IT NEEDS THE INSTANCE TO ALLOW UNVERIFIED ARTIFACTS
+		// (updates.allowUnverifiedArtifacts), because every artifact is UNVERIFIED today. An
+		// instance that does not refuses this seed, by name, rather than skipping it: a
+		// silent skip would be coverage that quietly stops existing. The area is not in any
+		// released baseline yet, so the upgrade rig skips this row until one ships it, and
+		// the rig that installs such a baseline must set the flag.
+		Name:     "update-assignment",
+		Area:     "update-management",
+		Mutation: "assignArtifact",
+		Params: []param{
+			{Name: "deviceToken", Type: "String!"},
+			{Name: "artifactToken", Type: "String!"},
+		},
+		Read:   "updateAssignment",
+		Single: true,
+		Fields: "token deviceToken component current actor artifact{token state digest} " +
+			"attempt{token state targetVersion targetDigest requiresReboot cancelRequested reconciled}",
+		Vars: func(s *state) map[string]any {
+			return map[string]any{
+				"deviceToken":   s.tokens["device"],
+				"artifactToken": s.tok("artifact-available"),
+			}
+		},
+	},
+}
+
+// probeArtifactContent is the bytes the probe uploads for its AVAILABLE artifact. A fixed literal,
+// so the digest declared at create and the digest of what is uploaded are the same constant.
+const probeArtifactContent = "apiprobe artifact content: not a firmware image, only bytes with a known digest\n"
+
+func probeArtifactDigest() string {
+	sum := sha256.Sum256([]byte(probeArtifactContent))
+	return "sha256:" + hex.EncodeToString(sum[:])
+}
+
+// uploadProbeArtifact sends the probe artifact bytes to the content endpoint, authenticated as the
+// probe tenant administrator like every other write. The platform verifies size and digest and
+// flips the artifact to AVAILABLE; anything else is a refusal worth stopping for.
+func uploadProbeArtifact(ctx context.Context, c *connection, sess *userclient.TenantSession, st *state) error {
+	token, err := sess.AccessToken(ctx)
+	if err != nil {
+		return fmt.Errorf("obtain an access token for the upload: %w", err)
+	}
+	target := fmt.Sprintf("%s/api/update-management/updates/artifacts/%s/content", c.base(), st.tok("artifact-available"))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut, target, strings.NewReader(probeArtifactContent))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/octet-stream")
+	resp, err := c.httpClient().Do(req)
+	if err != nil {
+		return fmt.Errorf("upload to %s: %w", target, err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<10))
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("upload to %s: HTTP %d: %s", target, resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+	return nil
 }
 
 // The device-visible configuration the seed declares on the probe profile and then sets

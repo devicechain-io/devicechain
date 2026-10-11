@@ -47,6 +47,7 @@ var sanctionedSystemContexts = map[string][]string{
 	"backend/services/command-delivery/processor/CommandDeliveryProcessor.go": {
 		"CommandDeliveryProcessor.deliverPendingCommands", "CommandDeliveryProcessor.sweepLocked",
 	},
+	"backend/services/update-management/model/api_updates.go":           {"Api.SweepDeadlines"},
 	"backend/services/command-delivery/processor/HoldReconciler.go":     {"CommandDeliveryProcessor.reconcileOnePage"},
 	"backend/services/command-delivery/processor/StrandedReconciler.go": {"CommandDeliveryProcessor.reconcileStrandedPage"},
 	"backend/services/device-management/schema/migration_credential_secret_digest.go": {

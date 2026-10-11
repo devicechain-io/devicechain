@@ -36,8 +36,13 @@ func (suite *EventResolverTestSuite) SetupTest() {
 // event-time bound DISABLED (a zero policy) so these tests read reported times back
 // unchanged. The bound itself is exercised by event_time_test.go.
 func (suite *EventResolverTestSuite) resolver(authMode string) *EventResolver {
-	return NewEventResolver(1, suite.API, authMode, EventTimePolicy{}, nil, nil, nil, nil, nil, nil)
+	rez := NewEventResolver(1, suite.API, authMode, EventTimePolicy{}, nil, nil, nil, nil, nil, nil)
+	rez.SecretTransit = testSecretTransit(suite.T())
+	return rez
 }
+
+// credCtx is the tenant context the credential fixtures are sealed for.
+func credCtx() context.Context { return core.WithTenant(context.Background(), "acme") }
 
 // A device whose stable token is the given value.
 func deviceWithToken(token string) *dmodel.Device {
@@ -49,15 +54,11 @@ func deviceWithToken(token string) *dmodel.Device {
 
 // An event presenting an access-token credential and (optionally) a self-asserted
 // device token.
-func eventWithCredential(deviceToken string) *esmodel.UnresolvedEvent {
+func eventWithCredential(t testing.TB, deviceToken string) *esmodel.UnresolvedEvent {
 	ctype := string(dmodel.CredentialAccessToken)
-	cid := "tok-abc"
-	return &esmodel.UnresolvedEvent{
-		Device:         deviceToken,
-		EventType:      esmodel.Location,
-		CredentialType: &ctype,
-		CredentialId:   &cid,
-	}
+	e := &esmodel.UnresolvedEvent{Device: deviceToken, EventType: esmodel.Location}
+	presentSealedToken(t, credCtx(), e, ctype, "tok-abc")
+	return e
 }
 
 // optional mode + no credential falls back to the trusted device-token lookup.
@@ -78,7 +79,7 @@ func (suite *EventResolverTestSuite) TestOptionalNoCredentialUsesToken() {
 func (suite *EventResolverTestSuite) TestCredentialAuthenticates() {
 	suite.API.Mock.On("AuthenticateDevice").Return(deviceWithToken("TEST-123"), nil)
 
-	device, reason, err := suite.resolver(config.AuthModeOptional).resolveDevice(context.Background(), eventWithCredential("TEST-123"))
+	device, reason, err := suite.resolver(config.AuthModeOptional).resolveDevice(credCtx(), eventWithCredential(suite.T(), "TEST-123"))
 
 	assert.NoError(suite.T(), err)
 	assert.Equal(suite.T(), uint(0), reason)
@@ -112,7 +113,7 @@ func (suite *EventResolverTestSuite) TestPasswordCredentialUsesAuthenticateDevic
 func (suite *EventResolverTestSuite) TestCredentialWithoutAssertedToken() {
 	suite.API.Mock.On("AuthenticateDevice").Return(deviceWithToken("TEST-123"), nil)
 
-	device, _, err := suite.resolver(config.AuthModeOptional).resolveDevice(context.Background(), eventWithCredential(""))
+	device, _, err := suite.resolver(config.AuthModeOptional).resolveDevice(credCtx(), eventWithCredential(suite.T(), ""))
 
 	assert.NoError(suite.T(), err)
 	assert.Equal(suite.T(), "TEST-123", device.Token)
@@ -123,7 +124,7 @@ func (suite *EventResolverTestSuite) TestCredentialWithoutAssertedToken() {
 func (suite *EventResolverTestSuite) TestCredentialTokenMismatchRejected() {
 	suite.API.Mock.On("AuthenticateDevice").Return(deviceWithToken("TEST-123"), nil)
 
-	_, reason, err := suite.resolver(config.AuthModeOptional).resolveDevice(context.Background(), eventWithCredential("OTHER-DEVICE"))
+	_, reason, err := suite.resolver(config.AuthModeOptional).resolveDevice(credCtx(), eventWithCredential(suite.T(), "OTHER-DEVICE"))
 
 	assert.Error(suite.T(), err)
 	assert.Equal(suite.T(), uint(dmproto.FailureReason_Unauthenticated), reason)
@@ -133,7 +134,7 @@ func (suite *EventResolverTestSuite) TestCredentialTokenMismatchRejected() {
 func (suite *EventResolverTestSuite) TestCredentialAuthFails() {
 	suite.API.Mock.On("AuthenticateDevice").Return((*dmodel.Device)(nil), dmodel.ErrCredentialExpired)
 
-	_, reason, err := suite.resolver(config.AuthModeOptional).resolveDevice(context.Background(), eventWithCredential("TEST-123"))
+	_, reason, err := suite.resolver(config.AuthModeOptional).resolveDevice(credCtx(), eventWithCredential(suite.T(), "TEST-123"))
 
 	assert.Error(suite.T(), err)
 	assert.Equal(suite.T(), uint(dmproto.FailureReason_Unauthenticated), reason)
@@ -154,7 +155,7 @@ func (suite *EventResolverTestSuite) TestRequiredNoCredentialRejected() {
 func (suite *EventResolverTestSuite) TestDisabledIgnoresCredential() {
 	suite.API.Mock.On("DevicesByToken").Return([]*dmodel.Device{deviceWithToken("TEST-123")}, nil)
 
-	device, _, err := suite.resolver(config.AuthModeDisabled).resolveDevice(context.Background(), eventWithCredential("TEST-123"))
+	device, _, err := suite.resolver(config.AuthModeDisabled).resolveDevice(credCtx(), eventWithCredential(suite.T(), "TEST-123"))
 
 	assert.NoError(suite.T(), err)
 	assert.Equal(suite.T(), "TEST-123", device.Token)
@@ -737,19 +738,28 @@ func TestEventResolverTestSuite(t *testing.T) {
 	suite.Run(t, new(EventResolverTestSuite))
 }
 
-// Verify presentedCredential treats blank/absent fields as "no credential".
+// Verify presentedCredential treats blank/absent fields as "no credential", and an access
+// token as present only when it arrives sealed for this tenant and credential type.
 func TestPresentedCredential(t *testing.T) {
 	ctype := string(dmodel.CredentialAccessToken)
 	cid := "tok-abc"
 	empty := ""
 
-	rez := &EventResolver{}
-	ctx := context.Background()
-	assert.Nil(t, rez.presentedCredential(ctx, &esmodel.UnresolvedEvent{}))
-	assert.Nil(t, rez.presentedCredential(ctx, &esmodel.UnresolvedEvent{CredentialType: &ctype}))
-	assert.Nil(t, rez.presentedCredential(ctx, &esmodel.UnresolvedEvent{CredentialType: &ctype, CredentialId: &empty}))
+	rez := &EventResolver{SecretTransit: testSecretTransit(t)}
+	ctx := core.WithTenant(context.Background(), "acme")
+	none := func(e *esmodel.UnresolvedEvent) {
+		got, err := rez.presentedCredential(ctx, e)
+		assert.NoError(t, err)
+		assert.Nil(t, got)
+	}
+	none(&esmodel.UnresolvedEvent{})
+	none(&esmodel.UnresolvedEvent{CredentialType: &ctype})
+	none(&esmodel.UnresolvedEvent{CredentialType: &ctype, CredentialId: &empty})
 
-	got := rez.presentedCredential(ctx, &esmodel.UnresolvedEvent{CredentialType: &ctype, CredentialId: &cid})
+	ev := &esmodel.UnresolvedEvent{}
+	presentSealedToken(t, ctx, ev, ctype, cid)
+	got, err := rez.presentedCredential(ctx, ev)
+	assert.NoError(t, err)
 	assert.NotNil(t, got)
 	assert.Equal(t, ctype, got.CredentialType)
 	assert.Equal(t, cid, got.CredentialId)

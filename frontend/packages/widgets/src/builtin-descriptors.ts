@@ -30,12 +30,14 @@ import {
 
 const TITLE = {
   kind: 'string',
+  labelId: 'widgetLabelTitle',
   doc: 'Heading shown in the widget frame. Blank hides the frame heading.',
 } as const satisfies OptionSpec;
 
 // gauge and latest-card fall back to the displayed measurement's name when no title is set.
 const TITLE_OR_MEASUREMENT = {
   kind: 'string',
+  labelId: 'widgetLabelTitle',
   doc: 'Heading shown in the widget frame. Defaults to the displayed measurement name.',
 } as const satisfies OptionSpec;
 
@@ -46,11 +48,15 @@ const PRECISION = {
   integer: true,
   min: 0,
   max: 100,
+  labelId: 'widgetLabelPrecision',
+  helpId: 'widgetHintPrecision',
   doc: 'Decimal places to round displayed values to. Unset shows the raw value.',
 } as const satisfies OptionSpec;
 
 const FLASH_ON_CHANGE = {
   kind: 'boolean',
+  labelId: 'widgetFlashOnChange',
+  helpId: 'widgetFlashOnChangeHint',
   doc: 'Briefly tint a value green on a rise and red on a fall when it changes.',
 } as const satisfies OptionSpec;
 
@@ -71,23 +77,34 @@ const WINDOW = {
   kind: 'number',
   integer: true,
   min: 1,
+  labelId: 'widgetLabelWindow',
+  helpId: 'widgetHintWindow',
   doc: 'Samples retained across ALL of the widget\'s measurements before the oldest are dropped. Bounds memory; only the chart draws them. Default 300.',
 } as const satisfies OptionSpec;
 
 const UNIT = {
   kind: 'string',
+  labelId: 'widgetLabelUnit',
   doc: 'Unit suffix shown beside the value.',
 } as const satisfies OptionSpec;
 
 const ALARM_STATE = {
   kind: 'enum',
   values: ['ACTIVE', 'CLEARED'],
+  labelId: 'widgetLabelState',
+  helpId: 'widgetStateHint',
+  valueLabelIds: { ACTIVE: 'widgetAlarmStateActive', CLEARED: 'widgetAlarmStateCleared' },
+  placeholderId: 'widgetPlaceholderAny',
   doc: 'Show only alarms in this state. Unset shows every state.',
 } as const satisfies OptionSpec;
 
 const ALARM_SEVERITY = {
   kind: 'enum',
   values: ['CRITICAL', 'MAJOR', 'MINOR', 'WARNING', 'INDETERMINATE'],
+  labelId: 'widgetLabelSeverity',
+  helpId: 'widgetSeverityHint',
+  valueLabelIds: { CRITICAL: 'widgetAlarmSeverityCritical', MAJOR: 'widgetAlarmSeverityMajor', MINOR: 'widgetAlarmSeverityMinor', WARNING: 'widgetAlarmSeverityWarning', INDETERMINATE: 'widgetAlarmSeverityIndeterminate' },
+  placeholderId: 'widgetPlaceholderAny',
   doc: 'Show only alarms at this severity. Unset shows every severity.',
 } as const satisfies OptionSpec;
 
@@ -98,11 +115,18 @@ const ALARM_SEVERITY = {
 const ALARM_ACKNOWLEDGED = {
   kind: 'enum',
   values: ['true', 'false'],
+  labelId: 'widgetLabelAcknowledged',
+  helpId: 'widgetAcknowledgedHint',
+  valueLabelIds: { true: 'widgetAlarmAckAcknowledged', false: 'widgetAlarmAckUnacknowledged' },
+  placeholderId: 'widgetPlaceholderAny',
   doc: "Show only acknowledged ('true') or unacknowledged ('false') alarms. Unset shows both.",
 } as const satisfies OptionSpec;
 
 const SELECTION_TARGET = {
   kind: 'string',
+  labelId: 'widgetLabelTargetSlot',
+  helpId: 'widgetTargetSlotHint',
+  control: 'slot-target',
   doc: 'Name of the slot this widget re-points when the viewer picks an entity.',
 } as const satisfies OptionSpec;
 
@@ -124,7 +148,7 @@ export const builtinWidgetDescriptors = {
     version: VERSION,
     sdkApiVersion: 1,
     optionsVersion: 1,
-    display: { title: 'Timeseries chart', category: 'Telemetry' },
+    display: { title: 'Timeseries chart', category: 'Telemetry', titleId: 'widgetTypeTimeseriesChart', categoryId: 'widgetCategoryTelemetry' },
     channel: 'measurement',
     datasource: { mode: 'required', selectors: ALL_SELECTORS },
     binding: { window: { option: 'window', min: 1 } },
@@ -141,7 +165,7 @@ export const builtinWidgetDescriptors = {
     version: VERSION,
     sdkApiVersion: 1,
     optionsVersion: 1,
-    display: { title: 'Latest card', category: 'Telemetry' },
+    display: { title: 'Latest card', category: 'Telemetry', titleId: 'widgetTypeLatestCard', categoryId: 'widgetCategoryTelemetry' },
     channel: 'measurement',
     datasource: { mode: 'required', selectors: ALL_SELECTORS },
     binding: { window: { option: 'window', min: 1 } },
@@ -149,6 +173,8 @@ export const builtinWidgetDescriptors = {
       title: TITLE_OR_MEASUREMENT,
       measurement: {
         kind: 'string',
+        labelId: 'widgetLabelMeasurement',
+        helpId: 'widgetHintMeasurement',
         doc: 'Which measurement to display. Defaults to the first the datasource selects.',
       },
       unit: UNIT,
@@ -165,7 +191,7 @@ export const builtinWidgetDescriptors = {
     version: VERSION,
     sdkApiVersion: 1,
     optionsVersion: 1,
-    display: { title: 'Gauge', category: 'Telemetry' },
+    display: { title: 'Gauge', category: 'Telemetry', titleId: 'widgetTypeGauge', categoryId: 'widgetCategoryTelemetry' },
     channel: 'measurement',
     datasource: { mode: 'required', selectors: ALL_SELECTORS },
     binding: { window: { option: 'window', min: 1 } },
@@ -173,14 +199,18 @@ export const builtinWidgetDescriptors = {
       title: TITLE_OR_MEASUREMENT,
       measurement: {
         kind: 'string',
+        labelId: 'widgetLabelMeasurement',
+        helpId: 'widgetHintMeasurement',
         doc: 'Which measurement to display. Defaults to the first the datasource selects.',
       },
       min: {
         kind: 'number',
+        labelId: 'widgetLabelMin',
         doc: 'Low end of the gauge scale. Default 0.',
       },
       max: {
         kind: 'number',
+        labelId: 'widgetLabelMax',
         doc: 'High end of the gauge scale. Default 100.',
       },
       unit: UNIT,
@@ -197,7 +227,7 @@ export const builtinWidgetDescriptors = {
     version: VERSION,
     sdkApiVersion: 1,
     optionsVersion: 1,
-    display: { title: 'Table', category: 'Telemetry' },
+    display: { title: 'Table', category: 'Telemetry', titleId: 'widgetTypeTable', categoryId: 'widgetCategoryTelemetry' },
     channel: 'measurement',
     datasource: { mode: 'required', selectors: ALL_SELECTORS },
     binding: { window: { option: 'window', min: 1 } },
@@ -218,7 +248,7 @@ export const builtinWidgetDescriptors = {
     version: VERSION,
     sdkApiVersion: 1,
     optionsVersion: 1,
-    display: { title: 'Label', category: 'Static' },
+    display: { title: 'Label', category: 'Static', titleId: 'widgetTypeLabel', categoryId: 'widgetCategoryStatic' },
     channel: 'none',
     datasource: NO_DATASOURCE,
     binding: {},
@@ -227,16 +257,22 @@ export const builtinWidgetDescriptors = {
       text: {
         kind: 'string',
         required: true,
+        labelId: 'widgetLabelText',
         doc: 'The text to show. Rendered as plain text — markup is never interpreted.',
       },
       align: {
         kind: 'enum',
         values: ['left', 'center', 'right'],
+        labelId: 'widgetLabelAlign',
+        valueLabelIds: { left: 'widgetAlignLeft', center: 'widgetAlignCenter', right: 'widgetAlignRight' },
+        placeholderId: 'widgetPlaceholderDefault',
         doc: 'Horizontal alignment of the text. Default center.',
       },
       fontSize: {
         kind: 'number',
         min: 1,
+        labelId: 'widgetLabelFontSize',
+        helpId: 'widgetHintFontSize',
         doc: 'Text size in pixels. Default 16.',
       },
     },
@@ -249,7 +285,7 @@ export const builtinWidgetDescriptors = {
     version: VERSION,
     sdkApiVersion: 1,
     optionsVersion: 1,
-    display: { title: 'Image', category: 'Static' },
+    display: { title: 'Image', category: 'Static', titleId: 'widgetTypeImage', categoryId: 'widgetCategoryStatic' },
     channel: 'none',
     datasource: NO_DATASOURCE,
     binding: {},
@@ -258,15 +294,20 @@ export const builtinWidgetDescriptors = {
       url: {
         kind: 'string',
         required: true,
+        labelId: 'widgetLabelImageUrl',
         doc: 'Source URL of the image.',
       },
       alt: {
         kind: 'string',
+        labelId: 'widgetLabelAltText',
         doc: 'Alternative text describing the image for assistive technology.',
       },
       fit: {
         kind: 'enum',
         values: ['contain', 'cover', 'fill'],
+        labelId: 'widgetLabelFit',
+        valueLabelIds: { contain: 'widgetFitContain', cover: 'widgetFitCover', fill: 'widgetFitFill' },
+        placeholderId: 'widgetPlaceholderDefault',
         doc: 'How the image fills its box. Default contain.',
       },
     },
@@ -279,7 +320,7 @@ export const builtinWidgetDescriptors = {
     version: VERSION,
     sdkApiVersion: 1,
     optionsVersion: 1,
-    display: { title: 'Alarm table', category: 'Alarms' },
+    display: { title: 'Alarm table', category: 'Alarms', titleId: 'widgetTypeAlarmTable', categoryId: 'widgetCategoryAlarms' },
     channel: 'alarm',
     datasource: { mode: 'optional', selectors: ALL_SELECTORS },
     binding: { pageSize: { option: 'maxRows', default: 50, min: 1 }, ...ALARM_FILTERS },
@@ -292,6 +333,8 @@ export const builtinWidgetDescriptors = {
         kind: 'number',
         integer: true,
         min: 1,
+        labelId: 'widgetLabelMaxRows',
+        helpId: 'widgetMaxRowsAlarmHint',
         doc: 'Alarms loaded into the table. Default 50.',
       },
       precision: PRECISION,
@@ -309,7 +352,7 @@ export const builtinWidgetDescriptors = {
     version: VERSION,
     sdkApiVersion: 1,
     optionsVersion: 1,
-    display: { title: 'Alarm count', category: 'Alarms' },
+    display: { title: 'Alarm count', category: 'Alarms', titleId: 'widgetTypeAlarmCount', categoryId: 'widgetCategoryAlarms' },
     channel: 'alarm',
     datasource: { mode: 'optional', selectors: ALL_SELECTORS },
     binding: { pageSize: { const: 50 }, ...ALARM_FILTERS },
@@ -331,7 +374,7 @@ export const builtinWidgetDescriptors = {
     version: VERSION,
     sdkApiVersion: 1,
     optionsVersion: 1,
-    display: { title: 'Command button', category: 'Control' },
+    display: { title: 'Command button', category: 'Control', titleId: 'widgetTypeCommandButton', categoryId: 'widgetCategoryControl' },
     channel: 'control',
     datasource: { mode: 'required', selectors: ['device', 'slot'] },
     binding: { pageSize: { option: 'maxRows', default: 20, min: 1 } },
@@ -340,21 +383,32 @@ export const builtinWidgetDescriptors = {
       commandName: {
         kind: 'string',
         required: true,
+        labelId: 'widgetCommandHeading',
+        helpId: 'widgetCommandFieldHint',
+        control: 'command-vocabulary',
         doc: 'Command key issued to the target device. Without it the widget cannot send.',
       },
       commandLabel: {
         kind: 'string',
+        labelId: 'widgetCommandHeading',
+        helpId: 'widgetCommandFieldHint',
+        control: 'command-vocabulary',
         doc: 'Text on the send button. Defaults to the command key.',
       },
       parameterSchema: {
         kind: 'string',
         format: 'json',
+        labelId: 'widgetCommandHeading',
+        helpId: 'widgetCommandFieldHint',
+        control: 'command-vocabulary',
         doc: "The command's parameter descriptors, baked in as JSON at author time. Drives the typed form.",
       },
       maxRows: {
         kind: 'number',
         integer: true,
         min: 1,
+        labelId: 'widgetLabelMaxRows',
+        helpId: 'widgetMaxRowsCommandHint',
         doc: 'Recent commands shown in the history. Default 20.',
       },
     },
@@ -367,7 +421,7 @@ export const builtinWidgetDescriptors = {
     version: VERSION,
     sdkApiVersion: 1,
     optionsVersion: 1,
-    display: { title: 'Entity selector', category: 'Navigation' },
+    display: { title: 'Entity selector', category: 'Navigation', titleId: 'widgetTypeEntitySelector', categoryId: 'widgetCategoryNavigation' },
     channel: 'selection',
     datasource: NO_DATASOURCE,
     binding: {},
@@ -384,7 +438,7 @@ export const builtinWidgetDescriptors = {
     version: VERSION,
     sdkApiVersion: 1,
     optionsVersion: 1,
-    display: { title: 'Map', category: 'Location' },
+    display: { title: 'Map', category: 'Location', titleId: 'widgetTypeMap', categoryId: 'widgetCategoryLocation' },
     channel: 'location',
     datasource: { mode: 'required', selectors: ALL_SELECTORS },
     binding: {},
@@ -399,10 +453,16 @@ export const builtinWidgetDescriptors = {
       title: TITLE,
       tileUrl: {
         kind: 'string',
+        labelId: 'widgetLabelTileUrl',
+        helpId: 'widgetTileUrlHint',
+        control: 'basemap',
         doc: "Raster tile URL template, e.g. https://tiles.example.com/{z}/{x}/{y}.png. Leave empty to inherit the tenant's basemap; setting one overrides it for this board only.",
       },
       attribution: {
         kind: 'string',
+        labelId: 'widgetLabelAttribution',
+        helpId: 'widgetAttributionHint',
+        control: 'basemap',
         doc: 'Credit line the tile source requires, shown on the map. Set whatever the provider you chose asks for.',
       },
     },

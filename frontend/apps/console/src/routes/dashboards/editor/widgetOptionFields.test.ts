@@ -3,12 +3,11 @@
 
 // The catalog half of the derived config panel (ADR-076 half 1).
 //
-// The wording tables in widgetOptionFields.tsx are exhaustive over the schema by
-// construction: `Record<OptionKey, …>` refuses to build until a new option has a label and
-// a hint decision, and `Record<EnumValueId, …>` until a new enum value has a label. That
-// proves a key was NAMED. It does not prove the name resolves — a table entry pointing at
-// `widgetLabelWhatever`, which no catalog defines, compiles perfectly and puts the raw key
-// on screen where the field label should be. This closes that half.
+// A built-in's descriptor names the console message ids that word its options, choices and
+// titles. The descriptor is data, so nothing compiles those names against a catalog: an id
+// pointing at `widgetLabelWhatever`, which no catalog defines, would fall back to the
+// portable text (or, for a built-in that ships none, to the humanized key) instead of the
+// translated sentence. This proves every id a built-in declares resolves, in every locale.
 //
 // 🔴 AND IT DOES NOT ASK t() WHETHER A LOCALE HAS A STRING, because t() cannot answer.
 // config.ts sets `fallbackLng: 'en'`, so a key missing from the Spanish catalog resolves to
@@ -17,40 +16,37 @@
 // which returns undefined for a key that locale does not define.
 
 import i18n, { SUPPORTED_LOCALES } from '@/i18n/config';
+import { builtinWidgetDescriptors } from '@devicechain/widgets';
 import { describe, expect, it } from 'vitest';
-
-import { OPTION_WORDING } from './widgetOptionFields';
 
 const NS = 'dashboards';
 
-// Every catalog key the panel can ask for, paired with what it words — the label of an
-// option, the hint under it, an enum choice, an enum's empty state. Flattened here so a new
-// TABLE cannot be added to OPTION_WORDING and go unchecked: the count control at the bottom
-// notices a table that contributed nothing.
+// Every message id the built-in descriptors declare, paired with what it words.
 function wordingKeys(): { where: string; key: string }[] {
   const out: { where: string; key: string }[] = [];
-  for (const [option, key] of Object.entries(OPTION_WORDING.labels)) {
-    out.push({ where: `label ${option}`, key });
-  }
-  for (const [option, key] of Object.entries(OPTION_WORDING.hints)) {
-    // `null` is the recorded decision that this option needs no hint, not an omission.
-    if (key) out.push({ where: `hint ${option}`, key });
-  }
-  for (const [type, overrides] of Object.entries(OPTION_WORDING.hintOverrides)) {
-    for (const [option, key] of Object.entries(overrides ?? {})) {
-      if (key) out.push({ where: `hint ${type}.${option}`, key });
+  const push = (where: string, key: string | undefined) => {
+    if (key) out.push({ where, key });
+  };
+  for (const [type, d] of Object.entries(builtinWidgetDescriptors)) {
+    push(`${type} title`, d.display.titleId);
+    push(`${type} category`, d.display.categoryId);
+    for (const [option, spec] of Object.entries(d.options) as [string, import('@devicechain/dashboards').OptionSpec][]) {
+      push(`${type}.${option} label`, spec.labelId);
+      push(`${type}.${option} help`, spec.helpId);
+      if (spec.kind === 'enum') {
+        push(`${type}.${option} placeholder`, spec.placeholderId);
+        for (const [value, key] of Object.entries(spec.valueLabelIds ?? {})) {
+          push(`${type}.${option}:${value}`, key);
+        }
+      }
     }
-  }
-  for (const [id, key] of Object.entries(OPTION_WORDING.enumValues)) {
-    out.push({ where: `value ${id}`, key });
-  }
-  for (const [option, key] of Object.entries(OPTION_WORDING.enumPlaceholders)) {
-    out.push({ where: `placeholder ${option}`, key });
   }
   return out;
 }
 
 const KEYS = wordingKeys();
+
+const SAME_IN_EVERY_LOCALE: ReadonlySet<string> = new Set(['widgetMenuDetail', 'widgetCategoryControl']);
 
 describe('the config panel wording', () => {
   it('resolves to a real string in every locale the console ships', () => {
@@ -61,36 +57,52 @@ describe('the config panel wording', () => {
           'string',
         );
         // 🔴 Non-empty, not merely present. An empty string satisfies every "is it there?"
-        // check and renders an unlabelled control — the same nothing as a missing field,
-        // arrived at through the table rather than around it.
+        // check and renders an unlabelled control — the same nothing as a missing field.
         expect((text ?? '').trim().length, `${locale.code}: ${where} is blank`).toBeGreaterThan(0);
       }
     }
   });
 
   // The counterweight: the check above is only meaningful while the locales differ. PER KEY,
-  // not per catalog — comparing whole bundles would pass while one entry sat untranslated,
-  // because the other two hundred still differ.
+  // not per catalog — comparing whole bundles would pass while one entry sat untranslated.
   it('is actually translated, not copied, in each locale', () => {
     const other = SUPPORTED_LOCALES.filter((l) => l.code !== 'en');
     expect(other.length, 'nothing to compare against — this check compares nothing').toBeGreaterThan(0);
     for (const locale of other) {
       for (const { where, key } of KEYS) {
-        expect(
-          i18n.getResource(locale.code, NS, key),
-          `${locale.code}: ${where} is the English string verbatim`,
-        ).not.toBe(i18n.getResource('en', NS, key));
+        const en = i18n.getResource('en', NS, key);
+        const here = i18n.getResource(locale.code, NS, key);
+        // The few strings that are legitimately identical in the two languages: the version
+        // detail line is a template of ids and numbers, and "Control" is the same word.
+        if (SAME_IN_EVERY_LOCALE.has(key)) continue;
+        expect(here, `${locale.code}: ${where} is the English string verbatim`).not.toBe(en);
       }
     }
   });
 
-  // The control. Both assertions above iterate a list, and a list that came back empty —
-  // a renamed export, a table that stopped being walked — reports perfect agreement about
-  // nothing. The floor is the number of distinct option keys the schema declares, which is
-  // the smallest this can honestly be.
+  // A built-in is translated through ids, so each one must DECLARE its wording: a built-in
+  // option with no labelId would show a humanized key in Spanish and English alike, which
+  // is understandable and wrong.
+  it('is declared for every built-in option, enum choice and enum placeholder', () => {
+    for (const [type, d] of Object.entries(builtinWidgetDescriptors)) {
+      expect(d.display.titleId, `${type} title`).toBeTruthy();
+      expect(d.display.categoryId, `${type} category`).toBeTruthy();
+      for (const [option, spec] of Object.entries(d.options) as [string, import('@devicechain/dashboards').OptionSpec][]) {
+        expect(spec.labelId, `${type}.${option} has no labelId`).toBeTruthy();
+        if (spec.kind === 'enum') {
+          expect(spec.placeholderId, `${type}.${option} has no placeholderId`).toBeTruthy();
+          for (const value of spec.values) {
+            expect(spec.valueLabelIds?.[value], `${type}.${option}:${value} has no label`).toBeTruthy();
+          }
+        }
+      }
+    }
+  });
+
+  // The control. Every assertion above iterates a list, and a list that came back empty — a
+  // renamed export, a descriptor that stopped being walked — reports perfect agreement
+  // about nothing.
   it('is checking a non-trivial number of keys', () => {
-    expect(KEYS.length).toBeGreaterThan(Object.keys(OPTION_WORDING.labels).length);
-    expect(Object.keys(OPTION_WORDING.enumValues).length).toBeGreaterThan(0);
-    expect(Object.keys(OPTION_WORDING.enumPlaceholders).length).toBeGreaterThan(0);
+    expect(KEYS.length).toBeGreaterThan(60);
   });
 });

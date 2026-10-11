@@ -60,6 +60,12 @@ type UnresolvedEvent struct {
 	// this credential, such as a plaintext left in a message from before sealing,
 	// authenticates nothing.
 	SealedCredentialSecret *string
+	// SealedCredentialId is the CredentialId of an ACCESS_TOKEN credential sealed for the
+	// hop to device-management (credential.SecretTransit.SealToken). A bearer token is
+	// itself the credential, so the stream carries only this form of it and CredentialId
+	// stays empty on the wire. The resolver opens it, bound to the tenant and credential
+	// type, before it looks the credential up.
+	SealedCredentialId *string
 
 	// AuthenticatedTransport marks an event whose device was authenticated at the
 	// TRANSPORT by a trusted internal ingest source (LwM2M DTLS-PSK / Sparkplug
@@ -94,7 +100,7 @@ type UnresolvedEvent struct {
 // reach the caller's event at all. Callers therefore use the result and leave the
 // original alone.
 //
-// All four fields go, including CredentialType. It is the least sensitive of them,
+// Every credential field goes, including CredentialType. It is the least sensitive of them,
 // but it arrives on device-controlled input like the other two, so its contents are
 // whatever a producer put there rather than a member of the credential vocabulary.
 // The resolution failure REASON, which is server-derived, is what the dead-letter
@@ -104,6 +110,7 @@ func (unrez UnresolvedEvent) WithoutPresentedCredential() UnresolvedEvent {
 	unrez.CredentialId = nil
 	unrez.CredentialSecret = nil
 	unrez.SealedCredentialSecret = nil
+	unrez.SealedCredentialId = nil
 	return unrez
 }
 

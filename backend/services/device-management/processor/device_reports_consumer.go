@@ -34,7 +34,6 @@ type ConfigurationReportApi interface {
 // (model.ReportRejected*). A closed vocabulary: they are label values.
 const (
 	reportRejectedMalformed        = "malformed"
-	reportRejectedUnsupportedKind  = "unsupported_kind"
 	reportRejectedUnattributable   = "unattributable"
 	reportRejectedThrottled        = "throttled"
 	maxDeadLetterReportPayloadByte = 4096
@@ -58,10 +57,15 @@ const (
 //
 // Anything that cannot be understood is DEAD-LETTERED, not dropped: a body that does not decode
 // (malformed, oversized, a field it must not carry, a duplicate key), a kind this version does
-// not serve (the update kinds arrive with their own consumer), and a report naming a revision the
-// device does not have or a digest that does not match. Reports that are merely old, and
-// reports from a device the tenant does not have, are counted and acked: they are ordinary
-// at-least-once traffic and need no operator.
+// not understand, and a report naming a revision the device does not have or a digest that does
+// not match. Reports that are merely old, and reports from a device the tenant does not have,
+// are counted and acked: they are ordinary at-least-once traffic and need no operator.
+//
+// The update family (update.progress, update.inventory, download.request) is update-management's:
+// it reads this channel on its own durable and applies those kinds to the device's update attempt.
+// Both consumers see every message, so this one acknowledges the update kinds and says nothing
+// about them, the way update-management acknowledges sync and config.status. A body that does not
+// decode is lettered HERE, once, whichever family it was meant for.
 type DeviceReportsConsumer struct {
 	Microservice *core.Microservice
 	Reader       messaging.MessageReader
@@ -91,7 +95,7 @@ type DeviceReportsMetrics struct {
 // deviceReportRejectionReasons are every rejection label value, so each series exists at zero
 // from startup and an alert on the rate sees a series rather than none.
 var deviceReportRejectionReasons = []string{
-	reportRejectedMalformed, reportRejectedUnsupportedKind, reportRejectedUnattributable, reportRejectedThrottled,
+	reportRejectedMalformed, reportRejectedUnattributable, reportRejectedThrottled,
 	model.ReportRejectedUnknownDevice, model.ReportRejectedUnknownRevision,
 	model.ReportRejectedDigestMismatch, model.ReportRejectedStale,
 }
@@ -103,7 +107,7 @@ func NewDeviceReportsMetrics(ms *core.Microservice) DeviceReportsMetrics {
 		metrics: ms.NewProcessorMetrics("device_reports"),
 		rejected: ms.NewCounterVec("config_reports_rejected_total",
 			"Device messages on the device-reports channel that were refused, by reason: malformed "+
-				"(did not decode), unsupported_kind, throttled (a sync inside the per-device cooldown), unattributable (no tenant or device in the "+
+				"(did not decode), throttled (a sync inside the per-device cooldown), unattributable (no tenant or device in the "+
 				"subject), unknown_device, unknown_revision, digest_mismatch (the device named a "+
 				"revision it was not sent), and stale (older than what is recorded).",
 			[]string{"reason"}),
@@ -224,15 +228,9 @@ func (rc *DeviceReportsConsumer) handle(ctx context.Context, msg messaging.Messa
 			return
 		}
 	default:
-		// An update.* report: well-formed, and not served by this version. Said out loud, not
-		// swallowed - a device reporting an update the platform never assigned is worth seeing.
-		log.Warn().Str("device", token).Str("kind", rep.Kind).Msg("Device report refused: this kind is not served yet.")
-		rc.rejected.WithLabelValues(reportRejectedUnsupportedKind).Inc()
-		rc.deadLetter(msgctx, msg, token, "device report of a kind this version does not serve",
-			fmt.Errorf("kind %q", rep.Kind))
-		msg.Ack()
-		done(core.ResultInvalid)
-		return
+		// An update-family report (update.progress, update.inventory, download.request):
+		// well-formed, and update-management's to apply on its own durable.
+		log.Trace().Str("device", token).Str("kind", rep.Kind).Msg("Device report left to update-management.")
 	}
 
 	msg.Ack()

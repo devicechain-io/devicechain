@@ -28,6 +28,9 @@ var SchemaContent string
 type SchemaResolver struct {
 	// Area is the deployed functional area, reported by updateManagementInfo.
 	Area string
+	// AllowUnverifiedArtifacts is the instance's fixed updates.allowUnverifiedArtifacts, reported
+	// by updateManagementInfo so an instance running with it can be seen to be.
+	AllowUnverifiedArtifacts bool
 }
 
 // GetApi returns the catalogue API injected into the request context. It fails loudly
@@ -41,13 +44,17 @@ func (r *SchemaResolver) GetApi(ctx context.Context) (*model.Api, error) {
 	return api, nil
 }
 
-type serviceInfoResolver struct{ area string }
+type serviceInfoResolver struct {
+	area            string
+	allowUnverified bool
+}
 
-func (r *serviceInfoResolver) Area() string { return r.area }
+func (r *serviceInfoResolver) Area() string                   { return r.area }
+func (r *serviceInfoResolver) AllowUnverifiedArtifacts() bool { return r.allowUnverified }
 
 // UpdateManagementInfo is the non-sensitive service identity.
 func (r *SchemaResolver) UpdateManagementInfo() *serviceInfoResolver {
-	return &serviceInfoResolver{area: r.Area}
+	return &serviceInfoResolver{area: r.Area, allowUnverified: r.AllowUnverifiedArtifacts}
 }
 
 // Artifact looks an artifact up by token.

@@ -34,7 +34,7 @@ func credentialLocationEvent() *esmodel.UnresolvedEvent {
 	ctype := string(dmodel.CredentialMqttBasic)
 	// The stream only ever carries the secret sealed. The marker rides inside the sealed
 	// value so a sink that echoed the field would still trip the NotContains checks.
-	cid, sealed := fixtureCredentialId, "dcs1$00000000$"+fixtureCredentialSecret
+	cid, sealed := fixtureCredentialId, "dcs2$00000000$"+fixtureCredentialSecret
 	event.CredentialType = &ctype
 	event.CredentialId = &cid
 	event.SealedCredentialSecret = &sealed

@@ -25,7 +25,7 @@ func TestMarshalRoundTripCarriesCredential(t *testing.T) {
 		Payload:                &model.UnresolvedLocationsPayload{Entries: []model.UnresolvedLocationEntry{}},
 		CredentialType:         strptr(string("MQTT_BASIC")),
 		CredentialId:           strptr("device-user"),
-		SealedCredentialSecret: strptr("dcs1$00000000$sealed-form"),
+		SealedCredentialSecret: strptr("dcs2$00000000$sealed-form"),
 	}
 
 	bytes, err := MarshalUnresolvedEvent(event)
@@ -39,7 +39,7 @@ func TestMarshalRoundTripCarriesCredential(t *testing.T) {
 	assert.Equal(t, "device-user", *got.CredentialId)
 	assert.Nil(t, got.CredentialSecret, "the plaintext field never crosses the wire")
 	assert.NotNil(t, got.SealedCredentialSecret)
-	assert.Equal(t, "dcs1$00000000$sealed-form", *got.SealedCredentialSecret)
+	assert.Equal(t, "dcs2$00000000$sealed-form", *got.SealedCredentialSecret)
 }
 
 // The stream keeps what is marshalled, so an event that still carries the secret as the
@@ -133,4 +133,32 @@ func TestMarshalRoundTripCarriesAuthenticatedTransport(t *testing.T) {
 		assert.NoError(t, err)
 		assert.Equal(t, marked, got.AuthenticatedTransport)
 	}
+}
+
+// The stream keeps what is marshalled, so an access token as the device sent it is
+// refused rather than written; its sealed form round-trips.
+func TestMarshalRefusesAnUnsealedAccessToken(t *testing.T) {
+	event := &model.UnresolvedEvent{
+		Source:         "http1",
+		Device:         "TEST-123",
+		OccurredTime:   time.Now().UTC(),
+		ProcessedTime:  time.Now().UTC(),
+		EventType:      model.Location,
+		Payload:        &model.UnresolvedLocationsPayload{Entries: []model.UnresolvedLocationEntry{}},
+		CredentialType: strptr("ACCESS_TOKEN"),
+		CredentialId:   strptr("tok-as-sent"),
+	}
+	bytes, err := MarshalUnresolvedEvent(event)
+	assert.ErrorIs(t, err, ErrUnsealedCredentialId)
+	assert.Nil(t, bytes)
+
+	event.CredentialId = nil
+	event.SealedCredentialId = strptr("dcs2$00000000$sealed-token")
+	bytes, err = MarshalUnresolvedEvent(event)
+	assert.NoError(t, err)
+	got, err := UnmarshalUnresolvedEvent(bytes)
+	assert.NoError(t, err)
+	assert.Nil(t, got.CredentialId)
+	assert.Equal(t, "dcs2$00000000$sealed-token", *got.SealedCredentialId)
+	assert.NotContains(t, string(bytes), "tok-as-sent")
 }

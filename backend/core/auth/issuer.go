@@ -65,6 +65,10 @@ func (i *Issuer) Kid() string { return i.kid }
 // cause. Refusing at the mint names the cause where it happens.
 var ErrNoSessionEpoch = errors.New("a refresh or identity token requires a session epoch")
 
+// ErrNoSessionID is ErrNoSessionEpoch's counterpart for the session id (the "sid" claim):
+// a refresh or identity token minted without one would be refused at every exchange.
+var ErrNoSessionID = errors.New("a refresh or identity token requires a session id")
+
 // IssuedToken is a signed token plus the metadata a caller needs to store or
 // return it (the JTI for server-side refresh-token tracking, and expiry).
 type IssuedToken struct {
@@ -96,6 +100,7 @@ type tokenSpec struct {
 	// sessionEpoch is the subject identity's session value (the "sep" claim). Set
 	// only on refresh and identity tokens; see Claims.SessionEpoch.
 	sessionEpoch SessionEpoch
+	sessionID    SessionID
 	jti          string
 	ttl          time.Duration
 }
@@ -144,13 +149,16 @@ func (i *Issuer) IssueOAuthAccess(tenant, email string, roles, authorities []str
 // refresh token its jti is persisted server-side (NATS KV) for revocation, and it
 // carries the subject's session epoch so a credential change ends it. An empty
 // epoch is refused (ErrNoSessionEpoch).
-func (i *Issuer) IssueOAuthRefresh(tenant, email string, epoch SessionEpoch, roles, authorities []string, scope string, audience []string, clientID, jti string) (IssuedToken, error) {
+func (i *Issuer) IssueOAuthRefresh(tenant, email string, epoch SessionEpoch, sid SessionID, roles, authorities []string, scope string, audience []string, clientID, jti string) (IssuedToken, error) {
 	if epoch == "" {
 		return IssuedToken{}, ErrNoSessionEpoch
 	}
+	if sid == "" {
+		return IssuedToken{}, ErrNoSessionID
+	}
 	return i.sign(tokenSpec{
 		tokenType: TokenTypeRefresh, tenant: tenant, username: email, email: email,
-		roles: roles, authorities: authorities, sessionEpoch: epoch,
+		roles: roles, authorities: authorities, sessionEpoch: epoch, sessionID: sid,
 		scope: scope, audience: audience, clientID: clientID, jti: jti, ttl: i.refreshTTL,
 	})
 }
@@ -159,13 +167,16 @@ func (i *Issuer) IssueOAuthRefresh(tenant, email string, epoch SessionEpoch, rol
 // persists jti in the refresh-token store (NATS KV) so it can be revoked. It
 // carries the subject's session epoch so a credential change ends it; an empty
 // epoch is refused (ErrNoSessionEpoch).
-func (i *Issuer) IssueRefresh(tenant, username string, epoch SessionEpoch, roles, authorities []string, jti string) (IssuedToken, error) {
+func (i *Issuer) IssueRefresh(tenant, username string, epoch SessionEpoch, sid SessionID, roles, authorities []string, jti string) (IssuedToken, error) {
 	if epoch == "" {
 		return IssuedToken{}, ErrNoSessionEpoch
 	}
+	if sid == "" {
+		return IssuedToken{}, ErrNoSessionID
+	}
 	return i.sign(tokenSpec{
 		tokenType: TokenTypeRefresh, tenant: tenant, username: username,
-		roles: roles, authorities: authorities, sessionEpoch: epoch, jti: jti, ttl: i.refreshTTL,
+		roles: roles, authorities: authorities, sessionEpoch: epoch, sessionID: sid, jti: jti, ttl: i.refreshTTL,
 	})
 }
 
@@ -177,13 +188,16 @@ func (i *Issuer) IssueRefresh(tenant, username string, epoch SessionEpoch, roles
 // code; an empty epoch is refused (ErrNoSessionEpoch). The admin API does NOT check
 // the epoch — it verifies the signature only — so an identity token already issued
 // keeps its admin authority until it expires (the access-token lifetime).
-func (i *Issuer) IssueIdentity(email string, epoch SessionEpoch, roles, authorities []string, jti string) (IssuedToken, error) {
+func (i *Issuer) IssueIdentity(email string, epoch SessionEpoch, sid SessionID, roles, authorities []string, jti string) (IssuedToken, error) {
 	if epoch == "" {
 		return IssuedToken{}, ErrNoSessionEpoch
 	}
+	if sid == "" {
+		return IssuedToken{}, ErrNoSessionID
+	}
 	return i.sign(tokenSpec{
 		tokenType: TokenTypeIdentity, username: email, email: email,
-		roles: roles, authorities: authorities, sessionEpoch: epoch, jti: jti, ttl: i.accessTTL,
+		roles: roles, authorities: authorities, sessionEpoch: epoch, sessionID: sid, jti: jti, ttl: i.accessTTL,
 	})
 }
 
@@ -213,6 +227,7 @@ func (i *Issuer) sign(spec tokenSpec) (IssuedToken, error) {
 		Scope:             spec.scope,
 		ClientId:          spec.clientID,
 		SessionEpoch:      spec.sessionEpoch,
+		SessionID:         spec.sessionID,
 		TokenType:         spec.tokenType,
 		RegisteredClaims: jwt.RegisteredClaims{
 			Issuer:    i.issuer,
