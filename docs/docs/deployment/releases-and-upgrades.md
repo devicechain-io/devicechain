@@ -3526,6 +3526,14 @@ MQTT connects and access-token events are not affected.
 
 Upgrade `event-sources` and `device-management` together, or accept the brief loss of those events.
 
+#### An `MQTT_BASIC` device password is shown once, and cannot be shown again {#next-upgrade-device-password-show-once}
+
+The platform now keeps only a one-way, keyed digest of an `MQTT_BASIC` device password, not the password. The API never returned the password on read, so no query result changes. What changes is that nobody can recover it from the platform either: the console shows a password once, right after you add the credential or set a new one, with a copy button, and afterwards only says that a password is set. Its credential row gains a **Set new password** action, and the form offers **Generate strong password**.
+
+Existing passwords are converted to digests the first time device-management starts on the new release, and devices keep authenticating with the password they already use. A password you did not record cannot be displayed afterwards; set a new one and load it onto the device. See [Show-once passwords and rotation](../guides/device-credentials.md#show-once).
+
+Nothing needs doing.
+
 #### A device's event list reads only its own tenant's rows {#tenant-device-index}
 
 The index that serves a device's event list now starts with the tenant. In `v0.19.0` the list's

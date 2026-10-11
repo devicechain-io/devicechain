@@ -24,7 +24,7 @@ The `X509_CERTIFICATE` type is not supported until certificate verification ship
 
 ## Reading a credential requires `device:write` {#reading-a-credential}
 
-A secret, where a type has one, is **write-only**. Only `MQTT_BASIC` has one: its password. You submit the password when you register the credential, and it is never returned on read. The console never displays it: you enter it in a masked field, and the field is cleared once the credential is created. From then on the API returns `null` for it.
+A secret, where a type has one, is **write-only**. Only `MQTT_BASIC` has one: its password. You submit the password when you register the credential, and it is never returned on read: the API returns `null` for it, and the platform keeps only a one-way, keyed digest of it, never the password itself. The console shows the password **once**, right after you set it, and never again. See [Show-once passwords and rotation](#show-once).
 
 That protects the `MQTT_BASIC` password and nothing else. `ACCESS_TOKEN` stores no secret to withhold, because the **`credentialId` is itself the bearer**. `credentialId` is a plainly readable field. So whatever the type, reading a device's credentials gives you what you need to authenticate as that device.
 
@@ -100,11 +100,23 @@ The `devicechain_devicemanagement_credential_checks_total` metric counts every p
 ## Register a credential (console)
 
 1. Open the device's detail page and select the **Credentials** tab.
-2. Choose the credential **type** and fill in the fields for that type: generate or paste an access token, or enter a username and password for MQTT-basic.
-3. For `MQTT_BASIC`, record the password before you continue. The field is cleared on success and the password is never shown again.
-4. Click **Add credential**.
+2. Choose the credential **type** and fill in the fields for that type: generate or paste an access token, or enter a username and password for MQTT-basic. For a password, type one or click **Generate strong password**.
+3. Click **Add credential**.
+4. For `MQTT_BASIC`, a banner now shows the password with a copy button. **Copy it now**: this is the only time it is shown. Click **Done** when you have it. Leaving the page, reloading it or opening another device also clears the banner.
 
 To delete a credential, use its row. The device can no longer authenticate with it.
+
+## Show-once passwords and rotation {#show-once}
+
+Because the platform keeps only a digest of an `MQTT_BASIC` password, nobody can read it back, including an administrator. The console follows from that:
+
+- **The password is shown once**, in a banner with a copy button, when you add the credential or set a new password. After that the credential's row says only that a password is set. No screen ever shows a stored password or its digest, and no form is filled in with one.
+- **A password that is lost cannot be recovered.** Set a new one.
+- **To rotate a password**, click **Set new password** on the credential's row, type one or click **Generate strong password**, and click **Save password**. The new password is shown once, as above. The device's current password stops working as soon as you save, so have the new one ready to load onto the device. The credential's other fields are left as they were.
+- **Generated passwords** are 24 random bytes from the browser's secure random source, written in URL-safe base64 (32 characters).
+- **Length.** The platform refuses an `MQTT_BASIC` password shorter than 16 bytes. The console warns as you type, counting UTF-8 bytes rather than characters (a character outside ASCII takes two to four), and still sends what you typed, so the platform's own refusal is the one you see if it disagrees.
+
+`ACCESS_TOKEN` credentials are different: the token is the credential id, a readable identifier by design, and stays listed with a copy button.
 
 ## Register a credential (GraphQL)
 
@@ -120,4 +132,4 @@ mutation {
 }
 ```
 
-For `MQTT_BASIC`, also pass `credentialValue: "<password>"` (write-only). The password is stored exactly as you send it, including any leading or trailing spaces, so it must match what the device presents byte for byte; an empty value stores no password. The password must be at least 16 bytes long (and at most 4096); a shorter one is refused with `extensions.code` `INVALID_VALUE`, on registering a credential and on changing its password. A password set before this minimum existed keeps working until you change it. Changing an existing credential to `MQTT_BASIC` requires `credentialValue` in the same request. Registering a credential and listing a device's credentials both require the `device:write` authority; see [Reading a credential requires `device:write`](#reading-a-credential).
+For `MQTT_BASIC`, also pass `credentialValue: "<password>"` (write-only). The password is checked exactly as you send it, including any leading or trailing spaces, so it must match what the device presents byte for byte; an empty value stores no password. The password must be at least 16 bytes long (and at most 4096); a shorter one is refused with `extensions.code` `INVALID_VALUE`, on registering a credential and on changing its password. A password set before this minimum existed keeps working until you change it. Changing an existing credential to `MQTT_BASIC` requires `credentialValue` in the same request. To change it later, call `updateDeviceCredential` with only `credentialValue`: the other fields are left alone, and the old password stops working at once. Neither call returns the password. Registering a credential and listing a device's credentials both require the `device:write` authority; see [Reading a credential requires `device:write`](#reading-a-credential).

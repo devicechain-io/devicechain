@@ -280,6 +280,23 @@ export type DeviceCredentialSearchCriteria = {
   pageSize: number;
 };
 
+export type DeviceCredentialUpdateRequest = {
+  credentialId?: string | null | undefined;
+  credentialType?: string | null | undefined;
+  /**
+   * The new password for an MQTT_BASIC credential: at least 16 bytes, counted as sent, and at
+   * most 4096. A shorter one is refused with extensions.code INVALID_VALUE. Required when this
+   * request changes the credential's type to MQTT_BASIC. Ignored for a type that has no
+   * password. Write-only; it is stored only as a keyed digest. A password set before the 16-byte minimum keeps
+   * working until it is next changed.
+   */
+  credentialValue?: string | null | undefined;
+  deviceToken?: string | null | undefined;
+  enabled?: boolean | null | undefined;
+  expiresAt?: string | null | undefined;
+  metadata?: string | null | undefined;
+};
+
 export type DeviceFacet =
   | 'CATEGORY'
   | 'MANUFACTURER'
@@ -819,6 +836,14 @@ export type CreateDeviceCredentialMutationVariables = Exact<{
 
 
 export type CreateDeviceCredentialMutation = { createDeviceCredential: { id: string, token: string, credentialType: string, credentialId: string, enabled: boolean } };
+
+export type UpdateDeviceCredentialMutationVariables = Exact<{
+  token: string;
+  request: DeviceCredentialUpdateRequest;
+}>;
+
+
+export type UpdateDeviceCredentialMutation = { updateDeviceCredential: { id: string, token: string, credentialType: string, credentialId: string, enabled: boolean } };
 
 export type DeleteDeviceCredentialMutationVariables = Exact<{
   token: string;
@@ -2027,6 +2052,17 @@ export const CreateDeviceCredentialDocument = new TypedDocumentString(`
   }
 }
     `) as unknown as TypedDocumentString<CreateDeviceCredentialMutation, CreateDeviceCredentialMutationVariables>;
+export const UpdateDeviceCredentialDocument = new TypedDocumentString(`
+    mutation UpdateDeviceCredential($token: String!, $request: DeviceCredentialUpdateRequest!) {
+  updateDeviceCredential(token: $token, request: $request) {
+    id
+    token
+    credentialType
+    credentialId
+    enabled
+  }
+}
+    `) as unknown as TypedDocumentString<UpdateDeviceCredentialMutation, UpdateDeviceCredentialMutationVariables>;
 export const DeleteDeviceCredentialDocument = new TypedDocumentString(`
     mutation DeleteDeviceCredential($token: String!) {
   deleteDeviceCredential(token: $token)

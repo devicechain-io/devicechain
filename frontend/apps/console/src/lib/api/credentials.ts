@@ -3,7 +3,9 @@
 
 // Typed GraphQL operations for device credentials (ADR-014), served by the
 // device-management schema. The secret (credentialValue) is write-only on the
-// API: it is submitted on create and never returned on read.
+// API: it is submitted on create or rotation and never returned on read (the
+// platform keeps only a keyed digest of it). The list query below deliberately does
+// not select it.
 import { gql } from '@devicechain/client';
 import { graphql } from '@/gql/device-management';
 import type {
@@ -49,6 +51,18 @@ const CREATE_DEVICE_CREDENTIAL = graphql(`
   }
 `);
 
+const UPDATE_DEVICE_CREDENTIAL = graphql(`
+  mutation UpdateDeviceCredential($token: String!, $request: DeviceCredentialUpdateRequest!) {
+    updateDeviceCredential(token: $token, request: $request) {
+      id
+      token
+      credentialType
+      credentialId
+      enabled
+    }
+  }
+`);
+
 const DELETE_DEVICE_CREDENTIAL = graphql(`
   mutation DeleteDeviceCredential($token: String!) {
     deleteDeviceCredential(token: $token)
@@ -69,6 +83,14 @@ export async function listDeviceCredentials(deviceToken: string): Promise<Device
 // (the credential's own id) and the credential id/secret. Requires device:write.
 export async function createDeviceCredential(request: DeviceCredentialCreateRequest) {
   return (await gql('device-management', CREATE_DEVICE_CREDENTIAL, { request })).createDeviceCredential;
+}
+
+// Set a new secret on an existing credential (rotation). It sends credentialValue
+// and nothing else, so no other field on the credential is touched. The old secret
+// stops working at once. Requires device:write.
+export async function rotateDeviceCredentialSecret(token: string, credentialValue: string) {
+  return (await gql('device-management', UPDATE_DEVICE_CREDENTIAL, { token, request: { credentialValue } }))
+    .updateDeviceCredential;
 }
 
 // Delete a credential by its token; returns whether one was removed. device:write.
