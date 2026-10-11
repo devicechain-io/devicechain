@@ -171,7 +171,8 @@ func newDmWorld(t *testing.T) *dmWorld {
 		&dmmodel.DeviceProfileVersion{}, &dmmodel.MetricDefinition{}, &dmmodel.CommandDefinition{},
 		&dmmodel.DetectionRule{}, &dmmodel.DetectionRuleScopeRef{}, &dmmodel.EntityAttribute{},
 		&dmmodel.EntityGroupMembership{}, &dmmodel.EntityGroupFacetRef{}, &dmmodel.EntityRelationship{},
-		&dmmodel.EntityRelationshipType{}, &dmmodel.Alarm{}, &dmmodel.DeviceCredential{}, &dmmodel.DeviceReplacement{}); err != nil {
+		&dmmodel.EntityRelationshipType{}, &dmmodel.Alarm{}, &dmmodel.DeviceCredential{}, &dmmodel.DeviceReplacement{},
+		&dmmodel.DeviceConfigurationRevision{}, &dmmodel.DeviceConfigurationState{}); err != nil {
 		t.Fatalf("migrate device-management: %v", err)
 	}
 	w := &dmWorld{t: t, api: dmmodel.NewApi(&rdb.RdbManager{Database: db}),

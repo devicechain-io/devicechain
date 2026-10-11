@@ -61,6 +61,7 @@ func replacementTestApi(t *testing.T) (*Api, context.Context) {
 	// fails the delete for the wrong reason and hides the one under test.
 	require.NoError(t, db.AutoMigrate(
 		&DeviceType{}, &Device{}, &DeviceCredential{}, &DeviceReplacement{},
+		&DeviceConfigurationRevision{}, &DeviceConfigurationState{},
 		&AssetType{}, &Asset{},
 		&EntityRelationshipType{}, &EntityRelationship{},
 		&EntityAttribute{}, &Alarm{}, &EntityGroup{}, &EntityGroupMembership{},

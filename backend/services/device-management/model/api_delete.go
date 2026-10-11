@@ -297,7 +297,12 @@ func (api *Api) DeleteDevice(ctx context.Context, token string) (bool, error) {
 			if err := deleteCredentialsReturningOwners(tx.Unscoped().Where("device_id = ?", id), &credentials); err != nil {
 				return err
 			}
-			return tx.Unscoped().Where("device_id = ?", id).Delete(&DeviceReplacement{}).Error
+			if err := tx.Unscoped().Where("device_id = ?", id).Delete(&DeviceReplacement{}).Error; err != nil {
+				return err
+			}
+			// The configuration revisions and reported state are records ABOUT this
+			// device; they go with it.
+			return deleteDeviceConfigurationOnTx(tx, id)
 		})
 	if err == nil && deleted {
 		api.evictCredentialOwners(ctx, credentials)

@@ -167,7 +167,13 @@ func (b *baseline) supports(e entity) (bool, string) {
 		}
 		return true, ""
 	}
-	if !strings.Contains(stripped, e.Mutation+"("+e.arg()+":") {
+	if len(e.Params) > 0 {
+		// Several named arguments and no input type: the write is matched on its
+		// first argument, and the read below is matched exactly as for any other row.
+		if !strings.Contains(stripped, e.Mutation+"("+e.Params[0].Name+":") {
+			return false, "the baseline does not declare " + e.Mutation + "(" + e.Params[0].Name + ":…)"
+		}
+	} else if !strings.Contains(stripped, e.Mutation+"("+e.arg()+":") {
 		return false, "the baseline does not declare " + e.Mutation + "(" + e.arg() + ":…)"
 	}
 	// The read is matched the way readDoc SPELLS it, so a query that changed from
@@ -179,6 +185,9 @@ func (b *baseline) supports(e entity) (bool, string) {
 	}
 	if !strings.Contains(stripped, e.Read+"("+readArg) {
 		return false, "the baseline does not declare " + e.Read + "(" + strings.TrimSuffix(readArg, ":") + ":…)"
+	}
+	if len(e.Params) > 0 {
+		return true, ""
 	}
 	if input := inputTypeName(e.Input); !strings.Contains(b.raw[e.Area], "input "+input+" {") {
 		return false, "the baseline does not declare input " + input

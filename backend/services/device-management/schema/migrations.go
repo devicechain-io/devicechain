@@ -37,5 +37,6 @@ var (
 		NewDropAlarmMessageSchema(),
 		NewDetectReconcileInstantsSchema(),
 		NewProfileConfigurationDeclarationSchema(),
+		NewDeviceConfigurationSchema(),
 	}
 )

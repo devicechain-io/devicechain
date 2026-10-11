@@ -161,6 +161,11 @@ var tableSweepExemptions = map[string]string{
 	"event-processing.device_attribute_deletions": "the tombstone side of the attribute projection. " +
 		"It records a REMOVAL, and the seed sets an attribute and never unsets it — an entry here " +
 		"would mean the drill had deleted data it just wrote.",
+	"device-management.device_configuration_states": "the configuration state a device last REPORTED. It is " +
+		"written only by the device's own report path, and no tenant API writes it (the type's own " +
+		"description: no mutation sets it), so a drill that sends no device traffic correctly leaves it " +
+		"empty. The revision the report would answer is covered: entity-attribute-configuration mints " +
+		"device_configuration_revisions through the real API.",
 	"device-management.alarms": "alarm objects are RAISED by the REACT pipeline when a rule fires. " +
 		"Nothing fires in a drill that sends no telemetry, and creating one by hand would assert " +
 		"the row rather than the engine that produces it.",

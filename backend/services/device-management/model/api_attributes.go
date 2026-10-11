@@ -324,7 +324,8 @@ func (api *Api) DeleteEntityAttribute(ctx context.Context, entityType string,
 	// commit together (a recompute failure rolls the delete back). Only wrap in a
 	// transaction when the delete can affect membership; a CLIENT-scope delete runs bare.
 	membershipTouched := false
-	if membershipScopeEligible(entityType, scope) {
+	membership := membershipScopeEligible(entityType, scope)
+	if membership || configurationScopeEligible(entityType, scope) {
 		err = api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
 			result := tx.Where(
 				"entity_type = ? AND entity_id = ? AND scope = ? AND attr_key = ?",
@@ -333,12 +334,19 @@ func (api *Api) DeleteEntityAttribute(ctx context.Context, entityType string,
 				return result.Error
 			}
 			rowsAffected = result.RowsAffected
-			if rowsAffected > 0 {
+			if rowsAffected == 0 {
+				return nil
+			}
+			if membership {
 				t, err := api.recomputeMembershipForAttr(ctx, tx, entityType, entityId, attrKey)
 				membershipTouched = t
-				return err
+				if err != nil {
+					return err
+				}
 			}
-			return nil
+			// Removing a declared configuration key changes the device's document: mint
+			// the revision in the delete's transaction.
+			return api.reconcileDeviceConfigurationOnTx(ctx, tx, entityType, entityId, scope, attrKey, false)
 		})
 		if err != nil {
 			return false, err

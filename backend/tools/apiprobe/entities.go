@@ -130,6 +130,12 @@ type entity struct {
 	// apart; `dashboard` can. Empty means Wrap itself is the discriminator.
 	WrapMarker string
 
+	// Params marks a write that takes several named arguments instead of one input
+	// object — setDeviceProfileConfigurationDeclaration(token:, keys:). Each is a
+	// variable of the same name, and Vars returns them as a flat map. Input is empty
+	// for such a row.
+	Params []param
+
 	// Fields is the selection set, used VERBATIM in BOTH documents.
 	//
 	// 🔑 IT IS ONE STRING BECAUSE THE COMPARISON IS BETWEEN THE TWO RESPONSES.
@@ -153,6 +159,9 @@ type entity struct {
 	Record func(*state, map[string]any)
 }
 
+// param is one named, typed argument of a Params write.
+type param struct{ Name, Type string }
+
 func (e entity) arg() string {
 	if e.Arg == "" {
 		return "request"
@@ -175,6 +184,16 @@ func (e entity) createDoc() string {
 		}
 		return "mutation($token:String!,$label:String){" + e.Mutation +
 			"(token:$token,label:$label){" + selection + "}}"
+	}
+	if len(e.Params) > 0 {
+		decl := make([]string, 0, len(e.Params))
+		pass := make([]string, 0, len(e.Params))
+		for _, p := range e.Params {
+			decl = append(decl, "$"+p.Name+":"+p.Type)
+			pass = append(pass, p.Name+":$"+p.Name)
+		}
+		return "mutation(" + strings.Join(decl, ",") + "){" + e.Mutation + "(" +
+			strings.Join(pass, ",") + "){" + e.Fields + "}}"
 	}
 	selection := e.Fields
 	if e.Wrap != "" {
