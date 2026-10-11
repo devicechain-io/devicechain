@@ -22,6 +22,7 @@ import {
   enumOptionValues,
   type WidgetOptions,
 } from './options';
+import { builtinWidgetCatalog } from './builtin-descriptors';
 import { WIDGET_BINDS_DATASOURCE, WIDGET_CHANNEL } from './registry';
 
 const SRC = dirname(fileURLToPath(import.meta.url));
@@ -83,20 +84,30 @@ const SHARED_KEY_TYPES: Record<string, readonly WidgetType[]> = {
   // Every widget renders a frame, and ConnectedWidget's error/unavailable panes read the
   // title to label a widget that never got as far as its own component.
   title: [...WIDGET_TYPES],
-  // MeasurementConnectedWidget, for the measurement widgets that bind a datasource.
-  window: ['timeseries-chart', 'latest-card', 'gauge', 'table'],
-  // alarmSubscription(), which runs for the alarm channel.
-  state: ['alarm-table', 'alarm-count'],
-  severity: ['alarm-table', 'alarm-count'],
-  acknowledged: ['alarm-table', 'alarm-count'],
-  // Read by both subscription builders, but alarm-count forces the default page size.
-  maxRows: ['alarm-table', 'command-button'],
   // primaryMeasurementName(), called by the two single-value widgets.
   measurement: ['latest-card', 'gauge'],
   // The entity-selector authors it; the alarm-table's originator drill reuses it; slots.ts
   // reads it generically to keep a referenced slot alive.
   selectionTarget: ['alarm-table', 'entity-selector'],
 };
+
+// The option keys a widget's BINDING POLICY references (window, page size, alarm filters).
+// The channel adapters read these by the name the descriptor declares, with no literal in
+// any source file for the scan above to find, so a policy reference is itself the evidence of
+// a read — the same standing a literal `optNumber(widget.options, 'x')` had when
+// connected-widget.tsx held them. binding-policy.test.ts proves the adapters honor them.
+function policyKeys(type: WidgetType): string[] {
+  const keys: string[] = [];
+  const walk = (value: unknown): void => {
+    if (typeof value !== 'object' || value === null) return;
+    for (const [k, v] of Object.entries(value)) {
+      if (k === 'option' && typeof v === 'string') keys.push(v);
+      else walk(v);
+    }
+  };
+  walk(builtinWidgetCatalog.get(type)?.binding);
+  return keys;
+}
 
 function sourceFiles(): string[] {
   const out: string[] = [];
@@ -172,6 +183,18 @@ describe('the option-read scan', () => {
   });
 });
 
+describe('binding-policy option references', () => {
+  // Negative control for the policy half of the evidence: if the walk stopped finding
+  // references, the declared-equals-read check would fail only for the keys it used to supply
+  // — pin that it still finds them, per channel.
+  it('finds the references each channel declares', () => {
+    expect(policyKeys('timeseries-chart')).toEqual(['window']);
+    expect(policyKeys('alarm-table').sort()).toEqual(['acknowledged', 'maxRows', 'severity', 'state']);
+    expect(policyKeys('alarm-count').sort()).toEqual(['acknowledged', 'severity', 'state']); // page size is a constant
+    expect(policyKeys('command-button')).toEqual(['maxRows']);
+  });
+});
+
 describe('WIDGET_OPTIONS', () => {
   it('declares a schema for every widget type', () => {
     expect(Object.keys(WIDGET_OPTIONS).sort()).toEqual([...WIDGET_TYPES].sort());
@@ -188,7 +211,7 @@ describe('WIDGET_OPTIONS', () => {
       const shared = Object.entries(SHARED_KEY_TYPES)
         .filter(([, types]) => types.includes(type))
         .map(([key]) => key);
-      const read = sorted([...optionKeysIn(WIDGET_SOURCES[type]), ...shared]);
+      const read = sorted([...optionKeysIn(WIDGET_SOURCES[type]), ...shared, ...policyKeys(type)]);
       expect(sorted(Object.keys(WIDGET_OPTIONS[type])), type).toEqual(read);
     }
   });

@@ -35,9 +35,9 @@ import {
   UNKNOWN_WIDGET_TYPE,
   validateOptions,
   type DashboardDefinition,
+  type WidgetCatalog,
   type WidgetDescriptor,
   type WidgetInstance,
-  type WidgetType,
 } from '@devicechain/dashboards';
 
 import { builtinWidgetCatalog } from './builtin-descriptors';
@@ -51,7 +51,9 @@ import type { OptionIssue } from './options';
 // other entry is evidence that a RENDERER reads a key. It needed a paragraph explaining
 // why it did not mean what its neighbours meant. A consumer that wants a title already
 // holds the definition and can join on the id; the scan goes back to meaning one thing.
-export interface DefinitionOptionIssue extends OptionIssue {
+export interface DefinitionOptionIssue extends Omit<OptionIssue, 'widgetType'> {
+  // The stored widget id: a built-in type, or an extension's namespaced id.
+  widgetType: string;
   widgetId: string;
 }
 
@@ -66,11 +68,22 @@ type WidgetCarrier = Pick<DashboardDefinition, 'widgets'>;
 // A placeholder for a widget type this build does not know reports nothing: it carries
 // no options of its own (its stored object is kept verbatim, options and all), and this
 // build has no schema to judge a newer widget's options against.
-export function validateDefinitionOptions(definition: WidgetCarrier): DefinitionOptionIssue[] {
+//
+// `options.catalog` is the host's widget catalog (registry.catalog): an extension widget is
+// judged against ITS registered schema. Omitted = the built-ins only, so a board carrying an
+// extension widget must be validated with the catalog it was parsed with.
+export interface DefinitionValidationOptions {
+  catalog?: WidgetCatalog;
+}
+
+export function validateDefinitionOptions(
+  definition: WidgetCarrier,
+  options: DefinitionValidationOptions = {},
+): DefinitionOptionIssue[] {
   return definition.widgets.flatMap((widget) => {
     if (widget.type === UNKNOWN_WIDGET_TYPE) return [];
     const type = widget.type;
-    const descriptor = descriptorFor(type);
+    const descriptor = descriptorFor(type, options.catalog);
     return validateOptions(descriptor.options, widget.options, {
       constraints: descriptor.constraints,
       label: type,
@@ -83,9 +96,16 @@ export function validateDefinitionOptions(definition: WidgetCarrier): Definition
 // live consumer of the registry's data. Every built-in type is in the catalog by
 // construction (builtin-registry.test.ts), so a miss is a defect to surface, not a widget
 // to skip.
-function descriptorFor(type: WidgetType): WidgetDescriptor {
-  const descriptor = builtinWidgetCatalog.get(type);
-  if (!descriptor) throw new Error(`no built-in descriptor for widget type "${type}"`);
+//
+// A catalog the host supplies is consulted first (an extension lives only there); a built-in
+// the supplied catalog omits falls back to the built-in descriptor, since its schema is the
+// same everywhere. An id neither holds is a defect — the board was parsed against a catalog
+// other than the one it is validated with — so it throws rather than skipping the widget.
+function descriptorFor(type: string, catalog: WidgetCatalog | undefined): WidgetDescriptor {
+  const descriptor = catalog?.get(type) ?? builtinWidgetCatalog.get(type);
+  if (!descriptor) {
+    throw new Error(`no widget descriptor for "${type}"; validate with the catalog the definition was parsed with`);
+  }
   return descriptor;
 }
 
@@ -112,22 +132,22 @@ function descriptorFor(type: WidgetType): WidgetDescriptor {
 // identity actually buys is smaller and still worth having: the caller can tell "there
 // was nothing to remove" from "I removed something" without diffing, and it avoids a
 // state write that would re-render the editor for no change.
-export function stripUnknownOptions<T extends WidgetCarrier>(definition: T): T {
+export function stripUnknownOptions<T extends WidgetCarrier>(definition: T, options: DefinitionValidationOptions = {}): T {
   let changed = false;
   const widgets = definition.widgets.map((widget) => {
-    const stripped = stripUnknownWidgetOptions(widget);
+    const stripped = stripUnknownWidgetOptions(widget, options.catalog);
     if (stripped !== widget) changed = true;
     return stripped;
   });
   return changed ? { ...definition, widgets } : definition;
 }
 
-function stripUnknownWidgetOptions(widget: WidgetInstance): WidgetInstance {
+function stripUnknownWidgetOptions(widget: WidgetInstance, catalog: WidgetCatalog | undefined): WidgetInstance {
   // A placeholder for an unknown widget type carries no options (they stay in its raw
   // object, which is never rewritten), so it returns here unchanged.
   const bag = widget.options;
   if (!bag) return widget;
-  const specs = descriptorFor(widget.type).options;
+  const specs = descriptorFor(widget.type, catalog).options;
   // hasOwnProperty.call, not `in` â€” see validateWidgetOptions: every specs table
   // inherits Object.prototype, so `in` would report '__proto__' and 'constructor' as
   // declared and leave exactly the keys a JSON.parse'd definition can smuggle in.
