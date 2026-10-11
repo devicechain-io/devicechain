@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"gorm.io/gorm"
 
@@ -244,7 +245,7 @@ func replayOne(ctx context.Context, admin *gorm.DB, a area, k int, container, ho
 	// an extra schema would carry into the next iteration and show up in a snapshot as
 	// state no migration in that prefix created.
 	for _, s := range a.schemas() {
-		if err := admin.Exec(fmt.Sprintf("DROP SCHEMA IF EXISTS %q CASCADE", s)).Error; err != nil {
+		if err := dropSchemaWithRetry(func(q string) error { return admin.Exec(q).Error }, s, time.Sleep, logRetry); err != nil {
 			return &harnessError{fmt.Errorf("dropping schema %s: %w", s, err)}
 		}
 	}
@@ -284,6 +285,54 @@ func replayOne(ctx context.Context, admin *gorm.DB, a area, k int, container, ho
 		return err
 	}
 	return before.diff(after)
+}
+
+// dropAttempts bounds how often a schema drop is retried when it loses a race for a catalog row.
+const dropAttempts = 5
+
+// isCatalogRace reports whether err is the server losing a race for a system catalog row:
+// SQLSTATE XX000 "tuple concurrently deleted" (or "updated"). DROP SCHEMA ... CASCADE walks the
+// dependency graph and deletes each catalog row it finds; when something else removes or rewrites
+// the same row in that window, the drop aborts with this internal error instead of waiting.
+// In this harness the "something else" is a TimescaleDB background worker (a continuous
+// aggregate's refresh policy, or the scheduler retiring a job) acting on the very schema being
+// dropped. Nothing is wrong with the schema, and the drop is idempotent, so it is safe to repeat.
+//
+// The match is deliberately narrow: only this error, never an error text that merely mentions a
+// schema or a dependency, so a real failure to drop still stops the run.
+func isCatalogRace(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "SQLSTATE XX000") &&
+		(strings.Contains(msg, "concurrently deleted") || strings.Contains(msg, "concurrently updated"))
+}
+
+func logRetry(format string, args ...any) { fmt.Printf(format+"\n", args...) }
+
+// dropSchemaWithRetry drops schema (and everything in it), repeating the drop a bounded number
+// of times when it loses a catalog race (see isCatalogRace), and logging each retry. Any other
+// error, and the last race error once the attempts are spent, is returned.
+//
+// This is setup, not the thing under test: it runs before the chain prefix is migrated, and
+// DROP SCHEMA IF EXISTS is idempotent, so repeating it cannot hide a migration that is not
+// re-runnable. That property is judged by the second migrateSome and the snapshot comparison,
+// neither of which is retried.
+func dropSchemaWithRetry(exec func(sql string) error, schema string, sleep func(time.Duration), logf func(string, ...any)) error {
+	q := fmt.Sprintf("DROP SCHEMA IF EXISTS %q CASCADE", schema)
+	var err error
+	for attempt := 1; attempt <= dropAttempts; attempt++ {
+		if err = exec(q); err == nil || !isCatalogRace(err) {
+			return err
+		}
+		if attempt < dropAttempts {
+			logf("retry    dropping schema %s lost a catalog race (attempt %d of %d), trying again: %v",
+				schema, attempt, dropAttempts, err)
+			sleep(time.Duration(attempt) * 500 * time.Millisecond)
+		}
+	}
+	return err
 }
 
 // snapshot is everything compared across a replay: the normalized schema text, the raw
