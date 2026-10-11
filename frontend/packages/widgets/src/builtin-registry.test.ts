@@ -75,6 +75,36 @@ describe('the built-in registry', () => {
       expect(descriptor.datasource.mode !== 'none').toBe(WIDGET_BINDS_DATASOURCE[type]);
     });
 
+    // The mode is not just "binds or not": an alarm widget with no datasource shows the
+    // tenant-wide alarms, so `optional` vs `required` is behaviour the runtime will read.
+    it('declares the datasource mode and selectors the renderer honours today', () => {
+      const channel = WIDGET_CHANNEL[type];
+      if (!WIDGET_BINDS_DATASOURCE[type]) {
+        expect(descriptor.datasource).toEqual({ mode: 'none' });
+        return;
+      }
+      expect(descriptor.datasource).toEqual({
+        mode: channel === 'alarm' ? 'optional' : 'required',
+        selectors: channel === 'control' ? ['device', 'slot'] : ['device', 'anchor', 'slot'],
+      });
+    });
+
+    // Each declared interaction is one the component actually uses (alarm-table acts on and
+    // drills from alarms, command-button sends, entity-selector picks from candidates).
+    it('declares exactly the interactions its component uses', () => {
+      const expected: Partial<Record<WidgetType, object>> = {
+        'alarm-table': { alarmActions: true, selection: true },
+        'command-button': { commandSend: true },
+        'entity-selector': { selection: true, candidates: true },
+      };
+      expect(descriptor.interactions).toEqual(expected[type] ?? {});
+    });
+
+    it('takes its display title from the humanized id, as the editor does', () => {
+      const words = type.replace(/-/g, ' ');
+      expect(descriptor.display.title).toBe(words.charAt(0).toUpperCase() + words.slice(1));
+    });
+
     it('renders with the component the per-channel registry holds', () => {
       const component = tableComponent(type);
       expect(component).toBeTypeOf('function');
@@ -138,6 +168,23 @@ describe('the built-in registry', () => {
         message: 'max (5) must be greater than min (10)',
       }),
     ]);
+  });
+});
+
+describe('the publish gate', () => {
+  // Every built-in's catalog schema is the WIDGET_OPTIONS table by identity, so a gate that
+  // quietly went back to the table would produce identical issues and pass every behavioural
+  // test — while the catalog stopped being on any live path. Pin the source instead.
+  it('resolves schemas through the catalog, not the by-type tables', () => {
+    const src = dirname(fileURLToPath(import.meta.url));
+    const code = readFileSync(join(src, 'definition-options.ts'), 'utf8')
+      .split('\n')
+      .filter((line) => !line.trim().startsWith('//'))
+      .join('\n');
+    expect(code).toMatch(/builtinWidgetCatalog\.get\(/);
+    expect(code).not.toMatch(/\b(WIDGET_OPTIONS|WIDGET_CONSTRAINTS|validateWidgetOptions|numberOptionSpec)\b/);
+    // Anything still imported from ./options is a type only.
+    expect(code).not.toMatch(/^import\s+\{[^}]*\}\s+from\s+'\.\/options'/m);
   });
 });
 
