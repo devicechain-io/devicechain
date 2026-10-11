@@ -106,6 +106,8 @@ redacción puede cambiar.
 | `COMMAND_NOT_IN_VOCABULARY` | El perfil restringe los comandos y esta clave no es uno de ellos. Revisa mayúsculas y minúsculas. | No |
 | `PAYLOAD_SCHEMA_VIOLATION` | La carga útil incumplió el esquema de parámetros del comando — parámetro desconocido, tipo incorrecto, fuera de rango, o falta uno requerido. | No |
 | `PAYLOAD_NOT_JSON` / `METADATA_NOT_JSON` | La cadena no es JSON válido. | No |
+| `PAYLOAD_TOO_LARGE` / `METADATA_TOO_LARGE` | La cadena de carga útil o de metadatos supera los 64 KiB. | No |
+| `COMMAND_NAME_TOO_LONG` | El nombre del comando supera los 128 bytes. | No |
 | `EXPIRES_AT_INVALID` | `expiresAt` no es una marca de tiempo RFC3339. | No |
 | `TOKEN_IN_USE` | El token lo tiene un comando que no te pertenece — en la práctica, uno que la plataforma acuñó para un lote. | No — elige otro token |
 | `COMMAND_REJECTED` | Llegó un rechazo sin clasificación. | No |
