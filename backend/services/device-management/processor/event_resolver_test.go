@@ -96,7 +96,7 @@ func (suite *EventResolverTestSuite) TestPasswordCredentialUsesAuthenticateDevic
 	suite.API.Mock.On("AuthenticateDevice").Return(deviceWithToken("TEST-123"), nil)
 	event := &esmodel.UnresolvedEvent{Device: "TEST-123", EventType: esmodel.Location}
 	ctx := core.WithTenant(context.Background(), "acme")
-	presentSealed(suite.T(), ctx, event, string(dmodel.CredentialMqttBasic), "dev1", "s3cret")
+	presentSealed(suite.T(), ctx, event, string(dmodel.CredentialMqttBasic), "dev1", "s3cret-0123456789")
 	rez := suite.resolver(config.AuthModeRequired)
 	rez.SecretTransit = testSecretTransit(suite.T())
 

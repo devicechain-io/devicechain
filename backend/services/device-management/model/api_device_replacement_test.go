@@ -485,7 +485,7 @@ func TestReplaceDeviceRequiresACredentialIdForUnmintableTypes(t *testing.T) {
 	// The counterweight: WITH an id, the same type succeeds. A blanket refusal of
 	// everything but ACCESS_TOKEN would pass the assertions above.
 	username := "unit-02"
-	password := "s3cret"
+	password := "s3cret-0123456789"
 	basic := string(CredentialMqttBasic)
 	result, err := api.ReplaceDevice(ctx, &DeviceReplaceRequest{
 		DeviceToken:     device.Token,

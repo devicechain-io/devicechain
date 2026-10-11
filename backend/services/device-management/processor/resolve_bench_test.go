@@ -123,7 +123,7 @@ func BenchmarkWarmCredentialedResolve(b *testing.B) {
 				if !cached {
 					rig.caches.Credentials = nil
 				}
-				secret := "s3cret"
+				secret := "s3cret-0123456789"
 				if _, err := rig.api.CreateDeviceCredential(rig.ctx, &model.DeviceCredentialCreateRequest{
 					Token: "c-1", DeviceToken: "dev", CredentialType: string(model.CredentialMqttBasic),
 					CredentialId: "cred-1", CredentialValue: &secret, Enabled: true,

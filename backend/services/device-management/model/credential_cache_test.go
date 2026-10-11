@@ -120,12 +120,12 @@ func (f ccFixture) mustAuthenticate(t *testing.T, p *PresentedCredential, wantRe
 // filled at t0 is read again at exactly t0+5s even after a hit at t0+4s.
 func TestARepeatedAuthenticationWithinTheTTLRunsNoStatement(t *testing.T) {
 	f := newCredentialCacheFixture(t)
-	f.mustAuthenticate(t, basic("cred-1", "s3cret"), 1, "first check")
-	f.mustAuthenticate(t, basic("cred-1", "s3cret"), 0, "second check at t0")
+	f.mustAuthenticate(t, basic("cred-1", "s3cret-0123456789"), 1, "first check")
+	f.mustAuthenticate(t, basic("cred-1", "s3cret-0123456789"), 0, "second check at t0")
 	f.clock.set(f.t0.Add(4 * time.Second))
-	f.mustAuthenticate(t, basic("cred-1", "s3cret"), 0, "check at t0+4s")
+	f.mustAuthenticate(t, basic("cred-1", "s3cret-0123456789"), 0, "check at t0+4s")
 	f.clock.set(f.t0.Add(CredentialCacheTTL))
-	f.mustAuthenticate(t, basic("cred-1", "s3cret"), 1, "check at exactly t0+5s")
+	f.mustAuthenticate(t, basic("cred-1", "s3cret-0123456789"), 1, "check at exactly t0+5s")
 }
 
 // Nothing that failed is kept: an unknown id, a wrong secret and a misconfigured credential
@@ -140,7 +140,7 @@ func TestAFailedAuthenticationIsNeverCached(t *testing.T) {
 	_, err, reads := f.check(basic("cred-1", "wrong"))
 	require.ErrorIs(t, err, ErrCredentialSecretMismatch)
 	require.Equal(t, 1, reads)
-	f.mustAuthenticate(t, basic("cred-1", "s3cret"), 1, "right secret after a wrong one")
+	f.mustAuthenticate(t, basic("cred-1", "s3cret-0123456789"), 1, "right secret after a wrong one")
 
 	// A credential that needs a secret and stores none.
 	_, err = f.api.CreateDeviceCredential(f.ctx, &DeviceCredentialCreateRequest{
@@ -159,7 +159,7 @@ func TestAFailedAuthenticationIsNeverCached(t *testing.T) {
 // absent one is refused from memory, and the right one still authenticates.
 func TestACachedCredentialStillComparesTheSecret(t *testing.T) {
 	f := newCredentialCacheFixture(t)
-	f.mustAuthenticate(t, basic("cred-1", "s3cret"), 1, "fill")
+	f.mustAuthenticate(t, basic("cred-1", "s3cret-0123456789"), 1, "fill")
 	for name, p := range map[string]*PresentedCredential{
 		"wrong": basic("cred-1", "wrong"),
 		"empty": basic("cred-1", ""),
@@ -169,7 +169,7 @@ func TestACachedCredentialStillComparesTheSecret(t *testing.T) {
 		require.ErrorIs(t, err, ErrCredentialSecretMismatch, "%s secret", name)
 		require.Zero(t, reads, "%s secret was not answered from memory", name)
 	}
-	f.mustAuthenticate(t, basic("cred-1", "s3cret"), 0, "right secret after the refusals")
+	f.mustAuthenticate(t, basic("cred-1", "s3cret-0123456789"), 0, "right secret after the refusals")
 }
 
 // An expiry takes effect at its time on a hit, whatever the cache's own TTL says.
@@ -199,7 +199,7 @@ func TestEveryChangeToACredentialOrItsDeviceIsSeenOnTheNextCheck(t *testing.T) {
 	}
 	refused := func(want error) func(t *testing.T, f ccFixture) {
 		return func(t *testing.T, f ccFixture) {
-			_, err, reads := f.check(basic("cred-1", "s3cret"))
+			_, err, reads := f.check(basic("cred-1", "s3cret-0123456789"))
 			require.ErrorIs(t, err, want)
 			require.Equal(t, 1, reads, "the refusal came from the database")
 		}
@@ -215,17 +215,17 @@ func TestEveryChangeToACredentialOrItsDeviceIsSeenOnTheNextCheck(t *testing.T) {
 			refused(ErrCredentialNotResolved)},
 		{"expiry in the past", update(&DeviceCredentialUpdateRequest{
 			ExpiresAt: dcgraphql.OptionalStringOf(f0Past())}), refused(ErrCredentialExpired)},
-		{"new secret", update(&DeviceCredentialUpdateRequest{CredentialValue: dcgraphql.OptionalStringOf("n3w")}),
+		{"new secret", update(&DeviceCredentialUpdateRequest{CredentialValue: dcgraphql.OptionalStringOf("n3w-secret-0123456")}),
 			func(t *testing.T, f ccFixture) {
-				_, err, _ := f.check(basic("cred-1", "s3cret"))
+				_, err, _ := f.check(basic("cred-1", "s3cret-0123456789"))
 				require.ErrorIs(t, err, ErrCredentialSecretMismatch, "the old secret")
-				f.mustAuthenticate(t, basic("cred-1", "n3w"), 1, "the new secret")
+				f.mustAuthenticate(t, basic("cred-1", "n3w-secret-0123456"), 1, "the new secret")
 			}},
 		{"credential id changed", update(&DeviceCredentialUpdateRequest{CredentialId: dcgraphql.OptionalStringOf("cred-9")}),
 			refused(ErrCredentialNotResolved)},
 		{"re-pointed to dev2", update(&DeviceCredentialUpdateRequest{DeviceToken: dcgraphql.OptionalStringOf("dev2")}),
 			func(t *testing.T, f ccFixture) {
-				d := f.mustAuthenticate(t, basic("cred-1", "s3cret"), 1, "after the re-point")
+				d := f.mustAuthenticate(t, basic("cred-1", "s3cret-0123456789"), 1, "after the re-point")
 				require.Equal(t, "dev2", d.Token)
 			}},
 		{"credential deleted", func(t *testing.T, f ccFixture) {
@@ -246,7 +246,7 @@ func TestEveryChangeToACredentialOrItsDeviceIsSeenOnTheNextCheck(t *testing.T) {
 			_, err := f.api.UpdateDevice(f.ctx, "dev", &DeviceUpdateRequest{ExternalId: dcgraphql.OptionalStringOf("ext-2")})
 			require.NoError(t, err)
 		}, func(t *testing.T, f ccFixture) {
-			d := f.mustAuthenticate(t, basic("cred-1", "s3cret"), 1, "after the device edit")
+			d := f.mustAuthenticate(t, basic("cred-1", "s3cret-0123456789"), 1, "after the device edit")
 			require.True(t, d.ExternalId.Valid)
 			require.Equal(t, "ext-2", d.ExternalId.String)
 		}},
@@ -262,8 +262,8 @@ func TestEveryChangeToACredentialOrItsDeviceIsSeenOnTheNextCheck(t *testing.T) {
 	for _, r := range rows {
 		t.Run(r.name, func(t *testing.T) {
 			f := newCredentialCacheFixture(t)
-			f.mustAuthenticate(t, basic("cred-1", "s3cret"), 1, "fill")
-			f.mustAuthenticate(t, basic("cred-1", "s3cret"), 0, "held")
+			f.mustAuthenticate(t, basic("cred-1", "s3cret-0123456789"), 1, "fill")
+			f.mustAuthenticate(t, basic("cred-1", "s3cret-0123456789"), 0, "held")
 			r.change(t, f)
 			r.check(t, f)
 		})
@@ -273,10 +273,10 @@ func TestEveryChangeToACredentialOrItsDeviceIsSeenOnTheNextCheck(t *testing.T) {
 	// rows above can see a missing eviction.
 	t.Run("control: no evictor", func(t *testing.T) {
 		f := newCredentialCacheFixture(t)
-		f.mustAuthenticate(t, basic("cred-1", "s3cret"), 1, "fill")
+		f.mustAuthenticate(t, basic("cred-1", "s3cret-0123456789"), 1, "fill")
 		f.api.CacheEvictor = nil
 		update(&DeviceCredentialUpdateRequest{Enabled: dcgraphql.OptionalBoolOf(false)})(t, f)
-		f.mustAuthenticate(t, basic("cred-1", "s3cret"), 0, "a disable nothing evicted is still answered from memory")
+		f.mustAuthenticate(t, basic("cred-1", "s3cret-0123456789"), 0, "a disable nothing evicted is still answered from memory")
 	})
 }
 
@@ -308,11 +308,11 @@ func TestTheCacheIsTenantScoped(t *testing.T) {
 func TestTheSameIdUnderTwoTypesIsTwoEntries(t *testing.T) {
 	f := newCredentialCacheFixture(t)
 	_, err := f.api.CreateDeviceCredential(f.ctx, &DeviceCredentialCreateRequest{
-		Token: "c-x", DeviceToken: "dev2", CredentialType: string(CredentialMqttBasic), CredentialId: "tok-1", CredentialValue: strptr("pw"), Enabled: true,
+		Token: "c-x", DeviceToken: "dev2", CredentialType: string(CredentialMqttBasic), CredentialId: "tok-1", CredentialValue: strptr("pw-0123456789abcdef"), Enabled: true,
 	})
 	require.NoError(t, err)
 	require.Equal(t, "dev", f.mustAuthenticate(t, accessToken("tok-1"), 1, "token").Token)
-	cert := &PresentedCredential{CredentialType: string(CredentialMqttBasic), CredentialId: "tok-1", Secret: strptr("pw")}
+	cert := &PresentedCredential{CredentialType: string(CredentialMqttBasic), CredentialId: "tok-1", Secret: strptr("pw-0123456789abcdef")}
 	require.Equal(t, "dev2", f.mustAuthenticate(t, cert, 1, "certificate").Token)
 	require.Equal(t, "dev", f.mustAuthenticate(t, accessToken("tok-1"), 0, "token again").Token)
 	require.Equal(t, "dev2", f.mustAuthenticate(t, cert, 0, "certificate again").Token)
@@ -371,14 +371,14 @@ func TestAnEvictionDuringALookupIsNotUndone(t *testing.T) {
 	reading, release := blockCredentialRead(t, f)
 	done := make(chan error, 1)
 	go func() {
-		_, err := f.capi.AuthenticateDevice(f.ctx, basic("cred-1", "s3cret"), f.t0)
+		_, err := f.capi.AuthenticateDevice(f.ctx, basic("cred-1", "s3cret-0123456789"), f.t0)
 		done <- err
 	}()
 	<-reading
 	f.cache.EvictDevices("acme", []uint{f.devId})
 	close(release)
 	require.NoError(t, <-done)
-	f.mustAuthenticate(t, basic("cred-1", "s3cret"), 1, "the check after the in-flight read")
+	f.mustAuthenticate(t, basic("cred-1", "s3cret-0123456789"), 1, "the check after the in-flight read")
 }
 
 // The TTL counts from when the read STARTED: a read that took 2 s keeps its entry to
@@ -389,7 +389,7 @@ func TestAnEntryExpiresFiveSecondsAfterItsReadBegan(t *testing.T) {
 	reading, release := blockCredentialRead(t, f)
 	done := make(chan error, 1)
 	go func() {
-		_, err := f.capi.AuthenticateDevice(f.ctx, basic("cred-1", "s3cret"), f.t0)
+		_, err := f.capi.AuthenticateDevice(f.ctx, basic("cred-1", "s3cret-0123456789"), f.t0)
 		done <- err
 	}()
 	<-reading
@@ -397,9 +397,9 @@ func TestAnEntryExpiresFiveSecondsAfterItsReadBegan(t *testing.T) {
 	close(release)
 	require.NoError(t, <-done)
 	f.clock.set(f.t0.Add(4900 * time.Millisecond))
-	f.mustAuthenticate(t, basic("cred-1", "s3cret"), 0, "a hit inside the read's 5 s")
+	f.mustAuthenticate(t, basic("cred-1", "s3cret-0123456789"), 0, "a hit inside the read's 5 s")
 	f.clock.set(f.t0.Add(CredentialCacheTTL))
-	f.mustAuthenticate(t, basic("cred-1", "s3cret"), 1, "5 s after the read began")
+	f.mustAuthenticate(t, basic("cred-1", "s3cret-0123456789"), 1, "5 s after the read began")
 }
 
 // A row read by the password connect's finder carries no type, and evaluateCredential would
@@ -453,12 +453,12 @@ func TestAHitHandsBackADeviceTheCallerCannotChangeInTheCache(t *testing.T) {
 	// device stores; the copy a hit hands back is still the caller's own.
 	_, err := f.api.UpdateDevice(f.ctx, "dev", &DeviceUpdateRequest{Metadata: dcgraphql.OptionalStringOf(`{"a":1}`)})
 	require.NoError(t, err)
-	f.mustAuthenticate(t, basic("cred-1", "s3cret"), 1, "fill")
-	d := f.mustAuthenticate(t, basic("cred-1", "s3cret"), 0, "hit")
+	f.mustAuthenticate(t, basic("cred-1", "s3cret-0123456789"), 1, "fill")
+	d := f.mustAuthenticate(t, basic("cred-1", "s3cret-0123456789"), 0, "hit")
 	require.Nil(t, d.Metadata)
 	d.Token = "tampered"
 	d.DeviceTypeId = 99
-	again := f.mustAuthenticate(t, basic("cred-1", "s3cret"), 0, "next hit")
+	again := f.mustAuthenticate(t, basic("cred-1", "s3cret-0123456789"), 0, "next hit")
 	require.Equal(t, "dev", again.Token)
 	require.NotEqual(t, uint(99), again.DeviceTypeId)
 }
@@ -705,11 +705,11 @@ func TestEveryCredentialWriteNamesTheDevicesItChanges(t *testing.T) {
 // broadcast, rather than reaching an empty tenant everywhere.
 func TestAnEvictionWithNoTenantEvictsNothing(t *testing.T) {
 	f := newCredentialCacheFixture(t)
-	f.mustAuthenticate(t, basic("cred-1", "s3cret"), 1, "fill")
+	f.mustAuthenticate(t, basic("cred-1", "s3cret-0123456789"), 1, "fill")
 	f.capi.EvictDeviceCredentials(f.ctx, "", []uint{f.devId})
-	f.mustAuthenticate(t, basic("cred-1", "s3cret"), 0, "after an eviction naming no tenant")
+	f.mustAuthenticate(t, basic("cred-1", "s3cret-0123456789"), 0, "after an eviction naming no tenant")
 	f.capi.EvictDeviceCredentials(f.ctx, "acme", []uint{f.devId})
-	_, err, reads := f.check(basic("cred-1", "s3cret"))
+	_, err, reads := f.check(basic("cred-1", "s3cret-0123456789"))
 	require.NoError(t, err)
 	require.Equal(t, 1, reads, "an eviction naming the tenant evicted nothing")
 }

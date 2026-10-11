@@ -281,7 +281,7 @@ func TestEveryCacheEvictsOnOtherReplicas(t *testing.T) {
 func TestATenantErasureEmptiesEveryReplicasCaches(t *testing.T) {
 	r := newEvictionRig(t)
 	dev, _ := r.seedDevices(t)
-	secret := "s3cret"
+	secret := "s3cret-0123456789"
 	_, err := r.a.api.CreateDeviceCredential(r.ctx, &model.DeviceCredentialCreateRequest{
 		Token: "c-1", DeviceToken: "dev", CredentialType: string(model.CredentialMqttBasic),
 		CredentialId: "cred-1", CredentialValue: &secret, Enabled: true})

@@ -67,7 +67,7 @@ func TestAWarmEventWithinTheLocalTtlAsksNoKeyValueStoreInARuleScopedTenant(t *te
 // at all. A revocation is still seen on the next event: the last step checks it.
 func TestAWarmCredentialedEventAsksNoKeyValueStoreAndNoDatabase(t *testing.T) {
 	rig := newCountingResolveRig(t, false, nil)
-	secret := "s3cret"
+	secret := "s3cret-0123456789"
 	if _, err := rig.api.CreateDeviceCredential(rig.ctx, &model.DeviceCredentialCreateRequest{
 		Token: "c-1", DeviceToken: "dev", CredentialType: string(model.CredentialMqttBasic),
 		CredentialId: "cred-1", CredentialValue: &secret, Enabled: true,

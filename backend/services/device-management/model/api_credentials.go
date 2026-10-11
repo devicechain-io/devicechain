@@ -12,6 +12,7 @@ import (
 
 	"github.com/devicechain-io/dc-microservice/credential"
 	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
+	"github.com/devicechain-io/dc-microservice/integrity"
 	"github.com/devicechain-io/dc-microservice/limit"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-microservice/sqlnull"
@@ -59,7 +60,7 @@ func buildDeviceCredential(key *credential.DeviceSecretKey, device *Device, requ
 	if err != nil {
 		return nil, err
 	}
-	secretDigest, err := digestSecret(key, device.TenantId, request.CredentialValue)
+	secretDigest, err := digestSecret(key, device.TenantId, request.CredentialValue, minSecretBytes(request.CredentialType))
 	if err != nil {
 		return nil, err
 	}
@@ -80,6 +81,21 @@ func buildDeviceCredential(key *credential.DeviceSecretKey, device *Device, requ
 	}, nil
 }
 
+// ErrCredentialSecretTooShort refuses an MQTT_BASIC secret shorter than
+// credential.MinDeviceSecretBytes. It carries extensions.code INVALID_VALUE and names the
+// floor, never the secret.
+var ErrCredentialSecretTooShort = integrity.NewRefusal(integrity.ClassInvalid,
+	fmt.Sprintf("credentialValue must be at least %d bytes for an MQTT_BASIC credential", credential.MinDeviceSecretBytes))
+
+// minSecretBytes is the shortest secret a write may set on a credential of ctype: the
+// floor for MQTT_BASIC, the only type that compares a stored secret, and none for the rest.
+func minSecretBytes(ctype string) int {
+	if credentialRequiresSecret(ctype) {
+		return credential.MinDeviceSecretBytes
+	}
+	return 0
+}
+
 // errNoDeviceSecretKey refuses a write carrying a secret when no DeviceSecretKey is wired:
 // there is nothing to digest it with, and storing it as sent is what this replaced.
 var errNoDeviceSecretKey = errors.New("device credential secrets cannot be stored: no device secret key is configured")
@@ -91,13 +107,21 @@ var errNoDeviceSecretKey = errors.New("device credential secrets cannot be store
 //
 // A secret longer than credential.MaxDeviceSecretBytes is refused with LIMIT_EXCEEDED. The
 // plaintext column refused it before; the digest is fixed-width and would not.
-func digestSecret(key *credential.DeviceSecretKey, tenant string, value *string) (sql.NullString, error) {
+//
+// minBytes is the shortest secret this write may set: credential.MinDeviceSecretBytes for
+// an MQTT_BASIC credential, refused with INVALID_VALUE (ErrCredentialSecretTooShort), and
+// 0 where a stored secret is carried over rather than set (adoptLegacySecret), so a
+// secret that predates the floor is never refused by a write that did not choose it.
+func digestSecret(key *credential.DeviceSecretKey, tenant string, value *string, minBytes int) (sql.NullString, error) {
 	plain := sqlnull.Secret(value)
 	if !plain.Valid {
 		return sql.NullString{}, nil
 	}
 	if len(plain.String) > credential.MaxDeviceSecretBytes {
 		return sql.NullString{}, limit.Exceeded("credentialValue bytes", len(plain.String), credential.MaxDeviceSecretBytes)
+	}
+	if len(plain.String) < minBytes {
+		return sql.NullString{}, ErrCredentialSecretTooShort
 	}
 	if key == nil {
 		return sql.NullString{}, errNoDeviceSecretKey
@@ -201,7 +225,7 @@ func (api *Api) UpdateDeviceCredential(ctx context.Context, token string,
 	// digest of the new secret.
 	secretDigest := updated.SecretDigest
 	if request.CredentialValue.Set {
-		if secretDigest, err = digestSecret(api.DeviceSecretKey, updated.TenantId, request.CredentialValue.Value); err != nil {
+		if secretDigest, err = digestSecret(api.DeviceSecretKey, updated.TenantId, request.CredentialValue.Value, minSecretBytes(credentialType)); err != nil {
 			return nil, err
 		}
 	} else if secretDigest, err = api.adoptLegacySecret(ctx, updated); err != nil {
@@ -250,7 +274,7 @@ func (api *Api) adoptLegacySecret(ctx context.Context, cred *DeviceCredential) (
 	if len(legacy) != 1 || !legacy[0].Valid || legacy[0].String == "" {
 		return cred.SecretDigest, nil
 	}
-	return digestSecret(api.DeviceSecretKey, cred.TenantId, &legacy[0].String)
+	return digestSecret(api.DeviceSecretKey, cred.TenantId, &legacy[0].String, 0)
 }
 
 // Get device credentials by id.

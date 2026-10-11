@@ -43,7 +43,7 @@ func (a fullDeviceApi) AuthenticateDevice(ctx context.Context, p *model.Presente
 // value on a cache miss, and this test would fail.
 func TestAResolvedEventDoesNotDependOnUnreadDeviceColumns(t *testing.T) {
 	rig := newCountingResolveRig(t, false, nil)
-	secret := "s3cret"
+	secret := "s3cret-0123456789"
 	if _, err := rig.api.CreateDeviceCredential(rig.ctx, &model.DeviceCredentialCreateRequest{
 		Token: "c-1", DeviceToken: "dev", CredentialType: string(model.CredentialMqttBasic),
 		CredentialId: "cred-1", CredentialValue: &secret, Enabled: true,
