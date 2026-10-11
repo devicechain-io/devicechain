@@ -3942,6 +3942,18 @@ grafía anterior:
   fallan hasta que se sustituye. Ambas cosas terminan al acabar el despliegue; evite modificar
   inquilinos o niveles hasta entonces.
 
+#### Eliminar un inquilino ahora borra todo lo guardado bajo su prefijo del almacén de objetos {#next-upgrade-object-prefix-erase}
+
+El borrado de un inquilino eliminado solo quitaba los objetos que nombraba una fila de
+user-management. Ahora también quita todos los objetos bajo el prefijo de ese inquilino en el
+almacén de objetos, sea cual sea el servicio que los guardó, de modo que los artefactos de
+actualización y cualquier objeto cuya referencia se perdió se borran con el inquilino.
+
+- **En el backend S3, la credencial ahora necesita `s3:ListBucket` sobre el bucket**, además de
+  `s3:GetObject`, `s3:PutObject` y `s3:DeleteObject`. Sin ello, el paso de objetos del borrado de
+  un inquilino falla y se reintenta en cada pasada, así que el borrado no termina. Concédelo antes
+  de actualizar. El backend filesystem no necesita nada.
+
 ### v0.19.0 — dimensionada a partir de lo medido a 6000 eventos por segundo; un stream lleno rechaza {#v0190-upgrade}
 
 `v0.19.0` es una actualización en su sitio desde `v0.18.0`: `dcctl install` para el clúster y

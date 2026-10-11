@@ -17,11 +17,12 @@ import (
 
 // Object erases a tenant's uploaded assets from the object store.
 //
-// # It is driven from Postgres, because the object store cannot be asked
+// # Two work lists: the rows that name objects, then the tenant's whole prefix
 //
-// blob.Store has Put, Open, URL, Delete and Stat — and deliberately no List. There is no
-// way to ask it "what does this tenant have", so the work list has to come from the rows
-// that NAME the objects, which is the one place a reference is recorded.
+// The row-driven half deletes each object a user-management row names and clears the
+// column, as described below. The prefix half (blob.Store.DeleteTenant) then deletes
+// whatever is still under {instance}/{tenant}/ — see "an ORPHAN, and every other
+// consumer" below for why the rows alone are not the work list.
 //
 // 🔑 THE ROW OUTLIVES THE SWEEP, WHICH IS WHY THIS WORKS AT ALL. iam_tenants is exempt from
 // the relational sweep — it holds the token reservation that stops a successor being
@@ -31,20 +32,21 @@ import (
 // ever swept like an ordinary table, this store would go looking for its work list after
 // something else had deleted it, find nothing, and report clean over a live object.
 //
-// # 🔴 What a row-driven work list cannot see: an ORPHAN
+// # 🔴 What a row-driven work list cannot see: an ORPHAN, and every other consumer
 //
-// An object whose reference was already lost is invisible here, and one way to produce one
-// is ordinary: replacing a logo deletes the old object best-effort, warning rather than
-// failing, so a delete that fails leaves an object no row names. Nothing will ever find it
-// again — not this store, and not a later one.
+// An object whose reference was already lost is invisible to the rows, and orphans are
+// ordinary: replacing a logo deletes the old object best-effort, an artifact upload that
+// fails verification deletes its object best-effort, and a process can die between storing
+// an object and recording its reference. Worse, the store has a second consumer whose
+// references this store cannot read at all: update-management records its artifacts'
+// references in its OWN rows, and the relational sweep, which runs before this store,
+// deletes those rows on the first pass.
 //
-// It is stated rather than deferred because deferring it would block every purge on every
-// instance forever over a case that usually does not exist, and a deferral that is always
-// present stops being read. The real fix is a prefix sweep, which the key layout already
-// supports — every object is at `{instance}/{tenant}/{purpose}/{id}`, so a tenant's objects
-// share a prefix — but blob.Store has no List, and giving it one means widening the S3
-// client interface that deliberately exposes only four operations. That is a change worth
-// making on its own, not smuggled in here.
+// So every pass ends with a prefix sweep. Every object is at
+// `{instance}/{tenant}/{purpose}/{id}`, so a tenant's objects share a prefix; deleting it
+// needs no knowledge of any consumer's tables and covers the next consumer the day it
+// lands. It reports what it removed, so a pass that found an object is not quiet and the
+// pass after it finds nothing.
 //
 // # 🔴 The reference column is polymorphic
 //
@@ -122,10 +124,12 @@ func (o *Object) Erase(ctx context.Context, tenant string, _ time.Time) (Outcome
 	if err != nil {
 		return Outcome{}, err
 	}
-	if len(refs) == 0 {
-		return Outcome{}, nil
-	}
 	if o.store == nil {
+		// The store is instance configuration shared by every consumer, so no store here
+		// means none anywhere: nothing can have been stored unless a row says otherwise.
+		if len(refs) == 0 {
+			return Outcome{}, nil
+		}
 		return Outcome{Deferred: []string{fmt.Sprintf(
 			"the object store still holds %d of this tenant's uploaded asset(s), and this instance "+
 				"has no object storage configured — so the reference is known and the object cannot "+
@@ -133,25 +137,33 @@ func (o *Object) Erase(ctx context.Context, tenant string, _ time.Time) (Outcome
 				"out of band, before treating this tenant's data as erased", len(refs))}}, nil
 	}
 
-	row, err := o.tenant.TenantByToken(ctx, tenant)
-	if err != nil {
-		return Outcome{}, fmt.Errorf("re-reading %q to clear its object references: %w", tenant, err)
+	var erased int64
+	if len(refs) > 0 {
+		row, err := o.tenant.TenantByToken(ctx, tenant)
+		if err != nil {
+			return Outcome{}, fmt.Errorf("re-reading %q to clear its object references: %w", tenant, err)
+		}
+		for _, r := range refs {
+			if err := o.store.Delete(ctx, r.ref); err != nil {
+				return Outcome{Rows: erased}, fmt.Errorf("deleting %s for %q: %w", r.ref, tenant, err)
+			}
+			// Clear before counting: a count that outlived the reference would be the
+			// double-count this ordering exists to prevent.
+			if err := o.tenant.UpdateTenantFields(ctx, row, map[string]any{r.column: nil}); err != nil {
+				return Outcome{Rows: erased}, fmt.Errorf("clearing %s for %q after deleting %s: %w",
+					r.column, tenant, r.ref, err)
+			}
+			erased++
+		}
 	}
 
-	var erased int64
-	for _, r := range refs {
-		if err := o.store.Delete(ctx, r.ref); err != nil {
-			return Outcome{Rows: erased}, fmt.Errorf("deleting %s for %q: %w", r.ref, tenant, err)
-		}
-		// Clear before counting: a count that outlived the reference would be the
-		// double-count this ordering exists to prevent.
-		if err := o.tenant.UpdateTenantFields(ctx, row, map[string]any{r.column: nil}); err != nil {
-			return Outcome{Rows: erased}, fmt.Errorf("clearing %s for %q after deleting %s: %w",
-				r.column, tenant, r.ref, err)
-		}
-		erased++
+	// Then whatever the tenant's prefix still holds: objects no row names any more, and
+	// every other consumer's (update-management's artifacts among them).
+	swept, err := o.store.DeleteTenant(ctx, tenant)
+	if err != nil {
+		return Outcome{Rows: erased + swept}, fmt.Errorf("deleting what remains under %q's object-store prefix: %w", tenant, err)
 	}
-	return Outcome{Rows: erased}, nil
+	return Outcome{Rows: erased + swept}, nil
 }
 
 // refsFor returns every object this tenant's rows name.

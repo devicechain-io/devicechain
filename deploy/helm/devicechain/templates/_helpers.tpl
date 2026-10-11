@@ -1093,3 +1093,23 @@ the filtered document by accident.
     "terminationGracePeriodSeconds" (int .Values.terminationGracePeriodSeconds)) -}}
 {{- $cfg | toJson -}}
 {{- end }}
+
+{{/*
+The areas that mount the filesystem object-store volume, as a JSON array: blobStorage.mountAreas
+when set, else the default. ONE definition, used by deployment.yaml (to mount) and
+blob-pvc.yaml (to validate), so an override that drops an area is judged against the same
+default the mount uses and the two cannot disagree. Decode with fromJsonArray.
+*/}}
+{{- define "devicechain.blobMountAreas" -}}
+{{- (.Values.blobStorage | default dict).mountAreas | default (list "user-management" "update-management") | toJson -}}
+{{- end -}}
+
+{{/*
+The Go services that build an object store and so need the volume mounted: mirrors the code
+(user-management for branding logos, update-management for update artifacts) the way the
+hard-dependency catalog above mirrors backend/k8s/functionalarea. Keep it in sync as consumers
+land. As a JSON array; decode with fromJsonArray.
+*/}}
+{{- define "devicechain.blobConsumers" -}}
+{{- list "user-management" "update-management" | toJson -}}
+{{- end -}}

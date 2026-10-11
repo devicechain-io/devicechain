@@ -70,7 +70,7 @@ Ingress 将 `/api/<area>/graphql` 路由到各功能区服务，并移除前缀�
 
 `sparkplug-ingest` 和 `lwm2m-ingest` 完全不提供 GraphQL，且有意不进入 `/api` 路由。
 `event-sources` 虽有路由，但只返回占位 Schema；设备通过传输协议接入它，而不是通过该 API。
-`update-management` 同样有路由，但其 API 在本版本中尚未实现：它唯一的占位查询对每次调用都返回 `NOT_IMPLEMENTED` 错误。
+`update-management` 同样有路由：其 API 是制品目录（声明、查看和停用更新制品）。制品内容本身不通过 GraphQL 传输，而是使用 `PUT /api/update-management/updates/artifacts/{token}/content` 上传，需携带具有 `artifact:write` 权限的租户访问令牌。该 Chart 会为这条路由单独创建一个 Ingress，请求体大小限制由 `ingress.uploadMaxBodySize`（默认 `1g`）设定，并关闭请求缓冲。使用其他 Ingress 控制器时，请在该路径上设置同样两项：对 ingress-nginx，将 `nginx.ingress.kubernetes.io/proxy-body-size` 设为不小于你最大的制品，并设置 `nginx.ingress.kubernetes.io/proxy-request-buffering: "off"`。缺少后者时，nginx 会先把整个请求体读入磁盘，服务才能看到请求，因此直到整个镜像到达之后才会校验令牌。
 
 ### 通过 WebSocket 订阅 {#subscriptions-over-websocket}
 
@@ -636,6 +636,11 @@ token 会拼入基础设施命名空间：租户 ID 成为 NATS subject 中按 `
 | 每次查找的键数 | 1,000 | 传给 `…ByToken`、`…ByExternalId` 等批量查询的令牌、外部 ID 或告警令牌列表（设备状态、最新位置、命令、命令批次、通知渠道、策略和状态）。 |
 | JSON 输入大小 | 64 KiB | 以 JSON 形式发送的每个元数据、属性、配置、载荷或收件人值。命令的载荷和元数据会以 `PAYLOAD_TOO_LARGE` / `METADATA_TOO_LARGE` 拒绝（参见[发送命令](../guides/sending-commands.md)）。 |
 | 每条通知规则的收件人数 | 100 | 通知策略规则的 `recipients` 列表。 |
+| OAuth 客户端重定向 URI | 16 项，每项 2,048 B | `createOauthClient` 和 `updateOauthClient` 的 `redirectUris`。 |
+| OAuth 客户端作用域 | 16 项，每项 64 B | `createOauthClient` 和 `updateOauthClient` 的 `scopes`。 |
+| 租户层级 | 100 个层级，每个令牌 128 B | 层级目录（`createTenantTier` 拒绝第 101 个层级）以及 `reorderTenantTiers` 的 `orderedTokens`，后者必须列出所有层级。 |
+| 管理端角色与权限列表 | 100 项 | `createRole` 和 `updateRole` 的 `authorities`；`createIdentity` 的 `systemRoles`；`setSystemRoles`、`addMembership` 和 `setMembershipRoles` 的 `roleTokens`。 |
+| 密码 | 72 B | `createIdentity` 和 `setPassword` 的 `password`：过长的密码会被拒绝，而不是被悄悄截断。 |
 
 `bucketedMeasurements` 还要求提供 `startTime`；`endTime` 默认为当前时间。
 
