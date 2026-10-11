@@ -5,13 +5,17 @@ package identity
 
 import (
 	"context"
+	"crypto/rsa"
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/rdb"
+	"github.com/golang-jwt/jwt/v5"
+	"github.com/google/uuid"
 	nats "github.com/nats-io/nats.go"
 	"github.com/stretchr/testify/require"
 )
@@ -292,4 +296,61 @@ func TestASessionIDOfAPrefixSharingIdentityIsRefused(t *testing.T) {
 		_, err = e.m.Refresh(ctx, e.forgeWithoutSid(t, claims, true))
 		require.ErrorIs(t, err, ErrInvalidToken, "%s carried a prefix-sharing identity's sign-in", c.email)
 	}
+}
+
+// signIdentity signs an identity token for the given sign-in with key (naming the
+// instance key's kid whatever key signs it), expiring at exp.
+func (e *sessionEnv) signIdentity(t *testing.T, key *rsa.PrivateKey, email string, sid auth.SessionID, exp time.Time) string {
+	t.Helper()
+	c := identityClaims(email, e.rowEpoch(t, email))
+	c.SessionID = sid
+	c.ID = uuid.NewString()
+	c.Subject = email
+	c.IssuedAt = jwt.NewNumericDate(exp.Add(-15 * time.Minute))
+	c.ExpiresAt = jwt.NewNumericDate(exp)
+	tok := jwt.NewWithClaims(jwt.SigningMethodRS256, &c)
+	tok.Header["kid"] = auth.Thumbprint(&e.key.PublicKey)
+	signed, err := tok.SignedString(key)
+	require.NoError(t, err)
+	return signed
+}
+
+// An identity token that has EXPIRED still names its sign-in, whose refresh chains may be
+// live: signing out with it ends them. Only the signature decides whether it is ours.
+func TestLogoutWithAnExpiredGenuineIdentityTokenEndsTheSignIn(t *testing.T) {
+	e := newSessionEnv(t)
+	ctx := context.Background()
+	e.createMember(t, "pat@example.com", "pw-1")
+	idTok, pair := e.login(t, "pat@example.com", "pw-1")
+	idClaims, err := e.m.validator.ParseSignatureOnly(idTok)
+	require.NoError(t, err)
+	expired := e.signIdentity(t, e.key, "pat@example.com", idClaims.SessionID, time.Now().Add(-time.Minute))
+	_, err = e.m.validator.ValidateIdentity(expired)
+	require.Error(t, err, "control: the token really is expired")
+
+	require.NoError(t, e.m.Logout(ctx, expired))
+	_, err = e.m.Refresh(ctx, pair.RefreshToken)
+	require.ErrorIs(t, err, ErrInvalidToken, "an expired identity token's sign-out left its refresh chain live")
+	require.Equal(t, int64(1), e.auditCount(t, rdb.AuditOpLogout))
+}
+
+// A token signed with another key is garbage, expired or not: refused with the same
+// error, and the sign-in it names is untouched.
+func TestLogoutRefusesAForgedTokenExpiredOrNot(t *testing.T) {
+	e := newSessionEnv(t)
+	ctx := context.Background()
+	e.createMember(t, "pat@example.com", "pw-1")
+	idTok, pair := e.login(t, "pat@example.com", "pw-1")
+	idClaims, err := e.m.validator.ParseSignatureOnly(idTok)
+	require.NoError(t, err)
+	other, err := auth.GenerateKeyPair()
+	require.NoError(t, err)
+
+	for name, exp := range map[string]time.Time{"expired": time.Now().Add(-time.Minute), "live": time.Now().Add(time.Hour)} {
+		forged := e.signIdentity(t, other, "pat@example.com", idClaims.SessionID, exp)
+		require.ErrorIs(t, e.m.Logout(ctx, forged), ErrInvalidToken, "a %s forged token", name)
+	}
+	_, err = e.m.Refresh(ctx, pair.RefreshToken)
+	require.NoError(t, err, "a forged token's sign-out ended a real sign-in")
+	require.Equal(t, int64(0), e.auditCount(t, rdb.AuditOpLogout))
 }

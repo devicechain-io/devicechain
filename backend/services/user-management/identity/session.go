@@ -9,7 +9,6 @@ import (
 
 	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-microservice/rdb"
-	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 	nats "github.com/nats-io/nats.go"
 	"github.com/rs/zerolog/log"
@@ -73,27 +72,26 @@ func (m *Manager) sessionLive(sid auth.SessionID, email string) error {
 // next exchange, and it burns the presented refresh token. token is a refresh token or an
 // identity token (a user who has not yet picked a tenant holds only the latter).
 //
-// It is idempotent: ending a sign-in that has already ended, or presenting a token that
-// has already expired, succeeds. A token that is not ours, or that names no sign-in,
-// is ErrInvalidToken. A store error is returned (the caller may retry) because
-// reporting success for a sign-in that is still open would be the one wrong answer.
+// Only the SIGNATURE and the token type are checked, not the expiry: an identity token
+// that lapsed fifteen minutes into the sign-in still names a sign-in whose refresh chains
+// and OAuth grants may be live, and signing out with it must end them. A token whose
+// signature is not ours, or that names no sign-in, is ErrInvalidToken - the same answer
+// as garbage.
 //
-// Access tokens already issued are not revoked: services verify them by signature and
-// expiry alone, so one runs on for at most the access-token lifetime.
+// It is idempotent: ending a sign-in that has already ended (or whose record has run
+// out) succeeds. A store error is returned (the caller may retry) because reporting
+// success for a sign-in that is still open would be the one wrong answer.
+//
+// Access tokens and identity tokens already issued are not revoked: they are verified by
+// signature and expiry alone (identity tokens on the admin API included), so each runs
+// on for at most its own lifetime.
 func (m *Manager) Logout(ctx context.Context, token string) error {
-	claims, err := m.validator.ValidateRefresh(token)
+	claims, err := m.validator.ParseSignatureOnly(token)
 	if err != nil {
-		if errors.Is(err, jwt.ErrTokenExpired) {
-			return nil
-		}
-		var idErr error
-		claims, idErr = m.validator.ValidateIdentity(token)
-		if idErr != nil {
-			if errors.Is(idErr, jwt.ErrTokenExpired) {
-				return nil
-			}
-			return ErrInvalidToken
-		}
+		return ErrInvalidToken
+	}
+	if claims.TokenType != auth.TokenTypeRefresh && claims.TokenType != auth.TokenTypeIdentity {
+		return ErrInvalidToken
 	}
 	if claims.SessionID == "" {
 		return ErrInvalidToken
@@ -105,7 +103,7 @@ func (m *Manager) Logout(ctx context.Context, token string) error {
 	// The presented refresh token's own jti, so the token itself is dead even to a path
 	// that read it before the record was gone. Best effort: the session record is what
 	// every exchange checks.
-	if claims.TokenType == auth.TokenTypeRefresh {
+	if claims.TokenType == auth.TokenTypeRefresh && claims.ID != "" {
 		if err := m.refreshKV.Delete(claims.ID); err != nil && !errors.Is(err, nats.ErrKeyNotFound) {
 			log.Warn().Err(err).Msg("Logout ended the session but could not burn the presented refresh token.")
 		}
