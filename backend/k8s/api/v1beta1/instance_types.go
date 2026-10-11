@@ -147,6 +147,7 @@ const FinalizerInstance = "core.devicechain.io/instance"
 // +kubebuilder:validation:XValidation:rule="has(self.cluster) == has(oldSelf.cluster) && (!has(self.cluster) || self.cluster == oldSelf.cluster)",message="cluster is immutable: it is half of the binding between this instance and the cluster it lives in, and rewriting it (including by removing or adding it) would point destroy at a different cluster"
 // +kubebuilder:validation:XValidation:rule="!(has(oldSelf.restored) && oldSelf.restored) || (has(self.restored) && self.restored)",message="restored cannot be unset: it records that this instance's databases came from an archive, which stays true. An ordinary re-run does not restore anything and must not erase the fact that an earlier one did"
 // +kubebuilder:validation:XValidation:rule="!(has(self.restoredAt) && !(has(self.restored) && self.restored))",message="restoredAt is set on an instance that says it was not restored"
+// +kubebuilder:validation:XValidation:rule="!has(oldSelf.objectStore) || has(self.objectStore)",message="objectStore cannot be removed: the logos and artifacts on it would be stranded, and the volume deleted with the declaration that named it"
 type InstanceSpec struct {
 	// Provider is the infrastructure provider that resolved this instance's
 	// cluster. Immutable: an instance cannot move between providers in place.
@@ -300,6 +301,7 @@ const (
 // +kubebuilder:validation:XValidation:rule="self.backend == \"s3\" || !has(self.s3)",message="objectStore.s3 is only valid when backend is s3"
 // +kubebuilder:validation:XValidation:rule="self.backend == \"filesystem\" || (!has(self.size) && !has(self.storageClass) && !has(self.accessMode))",message="size, storageClass and accessMode describe the filesystem volume and are only valid when backend is filesystem"
 // +kubebuilder:validation:XValidation:rule="self.backend != \"filesystem\" || has(self.size)",message="size is required when backend is filesystem"
+// +kubebuilder:validation:XValidation:rule="self.backend == oldSelf.backend",message="objectStore.backend is immutable: nothing moves the objects already stored, so a different backend would leave them behind"
 type ObjectStoreSpec struct {
 	// Backend is where objects live: a volume the chart creates (filesystem) or an
 	// S3-compatible bucket (s3).

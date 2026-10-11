@@ -243,6 +243,9 @@ spec:
                     && !has(self.accessMode))
                 - message: size is required when backend is filesystem
                   rule: self.backend != "filesystem" || has(self.size)
+                - message: 'objectStore.backend is immutable: nothing moves the objects
+                    already stored, so a different backend would leave them behind'
+                  rule: self.backend == oldSelf.backend
               profile:
                 description: |-
                   Profile names a curated set of functional areas ("default", "full",
@@ -296,6 +299,10 @@ spec:
                 && self.restored)'
             - message: restoredAt is set on an instance that says it was not restored
               rule: '!(has(self.restoredAt) && !(has(self.restored) && self.restored))'
+            - message: 'objectStore cannot be removed: the logos and artifacts on
+                it would be stranded, and the volume deleted with the declaration
+                that named it'
+              rule: '!has(oldSelf.objectStore) || has(self.objectStore)'
           status:
             description: |-
               InstanceStatus is the OBSERVED state.
