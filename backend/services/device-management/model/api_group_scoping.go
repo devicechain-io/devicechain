@@ -450,6 +450,7 @@ func (api *Api) writeAttrThenRecompute(ctx context.Context, entityType string, e
 		return write(api.RDB.DB(ctx))
 	}
 	var touched bool
+	var minted *DeviceConfigurationRevision
 	err := api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := write(tx); err != nil {
 			return err
@@ -461,11 +462,15 @@ func (api *Api) writeAttrThenRecompute(ctx context.Context, entityType string, e
 				return err
 			}
 		}
-		return api.reconcileDeviceConfigurationOnTx(ctx, tx, entityType, entityId, scope, attrKey, true)
+		var err error
+		minted, err = api.reconcileDeviceConfigurationOnTx(ctx, tx, entityType, entityId, scope, attrKey, true)
+		return err
 	})
 	if err != nil {
 		return err
 	}
+	// Post-commit: deliver the revision this write minted, if any.
+	api.publishMintedConfiguration(ctx, entityId, minted)
 	// Evict the entity's membership cache post-commit — only if a rule-referenced group
 	// existed for the key (otherwise no membership could have changed, and an unused tenant
 	// pays nothing).

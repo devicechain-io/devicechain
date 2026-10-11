@@ -35,7 +35,7 @@ const (
 	// SubjectDeviceDesired carries desired state DOWN to a device, and
 	// SubjectDeviceReports carries a device's reports UP. Both are PER-DEVICE exactly as
 	// SubjectDeviceCommands is ("{instance}.{tenant}.device-desired.{deviceToken}"), and
-	// both are RESERVED: granted to the device, consumed by nothing yet.
+	// device-management publishes the first and consumes the second.
 	SubjectDeviceDesired = streams.DeviceDesired
 	SubjectDeviceReports = streams.DeviceReports
 )
