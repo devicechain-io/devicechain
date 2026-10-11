@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"github.com/devicechain-io/dc-device-management/model"
+	dmtest "github.com/devicechain-io/dc-device-management/test"
+	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/credential"
 	"github.com/devicechain-io/dc-microservice/credential/credentialtest"
 	"github.com/devicechain-io/dc-microservice/natsauth"
@@ -53,17 +55,23 @@ func (f fakeAuthApi) ResolveDeviceCredential(ctx context.Context, p *model.Prese
 	if err != nil {
 		return nil, "", err
 	}
+	// What a real lookup returns is the stored DIGEST, so the fake digests too.
+	tenant, _ := core.TenantFromContext(ctx)
 	if f.secret != "" {
-		return d, f.secret, nil
+		return d, dmtest.SecretDigest(tenant, f.secret), nil
 	}
-	return d, *p.Secret, nil
+	if *p.Secret == "" {
+		return d, "", nil
+	}
+	return d, dmtest.SecretDigest(tenant, *p.Secret), nil
 }
 
 // testChecker is a real credential.Checker with the production device policy over an
 // in-memory attempt store.
 func testChecker(t *testing.T, store credential.Store, opts ...credential.Option) *credential.Checker {
 	t.Helper()
-	c, err := credential.NewChecker(store, DeviceCredentialPolicies, opts...)
+	c, err := credential.NewChecker(store, DeviceCredentialPolicies,
+		append([]credential.Option{credential.WithDeviceSecretKey(dmtest.DeviceSecretKey())}, opts...)...)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -12,13 +12,14 @@ import (
 	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
 )
 
-// 🔴 A CREDENTIAL VALUE IS STORED EXACTLY AS SENT.
+// 🔴 A CREDENTIAL VALUE IS DIGESTED EXACTLY AS SENT.
 //
 // A device presents its MQTT password byte for byte, and neither the per-event compare
 // (evaluateCredential) nor the connect callout trims what it presents. The value used to
 // be trimmed when it was SAVED, so a password with leading or trailing whitespace was
 // stored as something the device never sends, and could never authenticate — the create
-// and every rotation returned success over a credential nothing could use.
+// and every rotation returned success over a credential nothing could use. The stored
+// form is now a digest, so "as sent" is asserted by what the stored digest verifies.
 
 // verbatimFixture is resolveFixture's device with an MQTT_BASIC credential "cred-v"
 // created from the given value.
@@ -42,9 +43,9 @@ func TestACredentialValueIsStoredExactlyAsSent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
-	if stored != " s3cret " {
-		t.Fatalf("stored secret %q, want %q — the value was rewritten on save, so the device "+
-			"presenting what it was configured with can never match it", stored, " s3cret ")
+	if !verifies(stored, " s3cret ") {
+		t.Fatalf("the stored digest does not verify %q — the value was rewritten on save, so the "+
+			"device presenting what it was configured with can never match it", " s3cret ")
 	}
 	if d, err := api.AuthenticateDevice(ctx, basic("cred-v", " s3cret "), now); err != nil || d == nil || d.Token != "dev" {
 		t.Fatalf("presenting the configured password %q: got (%v, %v), want device dev", " s3cret ", d, err)
@@ -66,8 +67,8 @@ func TestARotatedCredentialValueIsStoredExactlyAsSent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
-	if stored != "rotated\t" {
-		t.Fatalf("stored secret %q after rotation, want %q", stored, "rotated\t")
+	if !verifies(stored, "rotated\t") {
+		t.Fatalf("the stored digest after rotation does not verify %q", "rotated\t")
 	}
 }
 
@@ -81,8 +82,8 @@ func TestAWhitespaceCredentialValueIsStoredAndOnlyEmptyStoresNone(t *testing.T) 
 	t.Run("whitespace on create", func(t *testing.T) {
 		api, ctx := verbatimFixture(t, strPtr("   "))
 		_, stored, err := api.ResolveDeviceCredential(ctx, basic("cred-v", "x"), now)
-		if err != nil || stored != "   " {
-			t.Fatalf("resolve: got (%q, %v), want (%q, nil)", stored, err, "   ")
+		if err != nil || !verifies(stored, "   ") {
+			t.Fatalf("resolve: got (%q, %v), want a digest of %q", stored, err, "   ")
 		}
 		if _, err := api.AuthenticateDevice(ctx, basic("cred-v", "   "), now); err != nil {
 			t.Fatalf("presenting the stored whitespace password: %v", err)
@@ -121,8 +122,8 @@ func TestAWhitespaceCredentialValueIsStoredAndOnlyEmptyStoresNone(t *testing.T) 
 			t.Fatalf("update: %v", err)
 		}
 		_, stored, err := api.ResolveDeviceCredential(ctx, basic("cred-v", "x"), now)
-		if err != nil || stored != " " {
-			t.Fatalf("resolve: got (%q, %v), want (%q, nil)", stored, err, " ")
+		if err != nil || !verifies(stored, " ") {
+			t.Fatalf("resolve: got (%q, %v), want a digest of %q", stored, err, " ")
 		}
 	})
 }

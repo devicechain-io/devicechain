@@ -8,8 +8,8 @@
 //
 // Each Kind is compared by ONE comparator, fixed in this package (comparators) rather
 // than chosen by the caller: a person's password and an OAuth client secret against a
-// bcrypt hash, a device's MQTT password against the stored secret as SHA-256 digests in
-// constant time. A caller that could pick the comparator could pick a plaintext compare
+// bcrypt hash, a device's MQTT password against its stored keyed digest (devicesecret.go)
+// in constant time. A caller that could pick the comparator could pick a plaintext compare
 // for a kind whose store holds bcrypt hashes — a security downgrade expressed as
 // configuration — so it cannot.
 //
@@ -146,8 +146,8 @@ const (
 	// KindDeviceCredential is a device connecting to the MQTT gateway with a username
 	// and password (an MQTT_BASIC credential). ID is "{tenant}:{credentialId}" — the
 	// MQTT username as presented — which is unambiguous because the token grammar
-	// excludes ":" from a tenant id. Its stored secret is the device's password itself,
-	// so it is compared as digests rather than against a bcrypt hash.
+	// excludes ":" from a tenant id. Its stored secret is a keyed digest of the password
+	// (DeviceSecretKey), so declaring it needs WithDeviceSecretKey.
 	KindDeviceCredential Kind = "device-credential"
 )
 
@@ -158,6 +158,9 @@ type comparator struct {
 	// bcrypt is whether the stored value is a bcrypt hash, which decides what an
 	// unknown principal is compared against (see NewChecker).
 	bcrypt bool
+	// keyed is whether the stored value is a device secret digest, compared under the
+	// Checker's DeviceSecretKey; compare is then nil and NewChecker binds the key.
+	keyed bool
 }
 
 // comparators is THE mapping from kind to compare. It is fixed here and not supplied
@@ -166,27 +169,12 @@ type comparator struct {
 var comparators = map[Kind]comparator{
 	KindIdentity:         {compare: bcrypt.CompareHashAndPassword, bcrypt: true},
 	KindOAuthClient:      {compare: bcrypt.CompareHashAndPassword, bcrypt: true},
-	KindDeviceCredential: {compare: digestCompare},
+	KindDeviceCredential: {keyed: true},
 }
 
 // constantTimeCompare is subtle.ConstantTimeCompare. It is a variable only so a test
-// can see the lengths digestCompare hands it (export_test.go).
+// can see the lengths DeviceSecretKey.Verify hands it (export_test.go).
 var constantTimeCompare = subtle.ConstantTimeCompare
-
-// digestCompare compares a plaintext stored secret against a presented one in time
-// that depends on neither's content NOR LENGTH. subtle.ConstantTimeCompare returns at
-// once when its inputs differ in length, so comparing the plaintexts would let a
-// timing measurement recover the stored secret's length; comparing their fixed-width
-// digests gives it two 32-byte inputs every time.
-func digestCompare(stored, secret []byte) error {
-	// The digests are never stored or sent anywhere: they exist only so the compare
-	// below sees two equal-length inputs. This is not password hashing at rest.
-	s, p := sha256.Sum256(stored), sha256.Sum256(secret)
-	if constantTimeCompare(s[:], p[:]) != 1 {
-		return ErrMismatch
-	}
-	return nil
-}
 
 // ErrUnknownKind is returned by NewChecker for a declared kind this package has no
 // comparator for: a typo, or a kind added without deciding how it is compared.
@@ -202,6 +190,10 @@ var ErrUndeclaredKind = errors.New("credential: kind was not declared to this Ch
 type Principal struct {
 	Kind Kind
 	ID   string
+	// Tenant is the tenant a KindDeviceCredential principal presented: its stored digest
+	// is bound to it, so it is part of the compare. It is not part of Key (ID already
+	// carries it) and is unused by the other kinds. Empty never matches a device secret.
+	Tenant string
 }
 
 // Policy is one kind's backoff schedule.
@@ -431,8 +423,8 @@ type Checker struct {
 	store    Store
 	policies map[Kind]Policy
 	// dummies is, per declared kind, what an unknown principal's secret is compared
-	// against: a bcrypt hash of the production cost for a bcrypt kind, and a
-	// plaintext for the digest kind, whose stored values are plaintext.
+	// against: a bcrypt hash of the production cost for a bcrypt kind, and a digest of
+	// the dummy secret under the device secret key for the device kind.
 	dummies map[Kind][]byte
 	now     func() time.Time
 	checks  *prometheus.CounterVec
@@ -440,7 +432,12 @@ type Checker struct {
 	// observe WHICH stored value each check paid for (export_test.go): the dummy
 	// compare is the timing equalizer, and an outcome-level test cannot see it being
 	// skipped.
-	compares map[Kind]func(stored, secret []byte) error
+	compares map[Kind]func(p Principal, stored, secret []byte) error
+
+	// deviceKey is what KindDeviceCredential's digests are made under (WithDeviceSecretKey).
+	deviceKey *DeviceSecretKey
+	// observer is WithCompareObserver's, applied once the compares exist.
+	observer func(stored []byte)
 
 	// fullLog rate-limits the warning a full store logs: during the spray that fills
 	// the bucket, every sign-in attempt fails open, and a line per attempt would turn
@@ -463,16 +460,22 @@ type Option func(*Checker)
 // what is compared or the result. It exists so a test in another package can count the
 // compares a request actually paid for, which no outcome or error can show.
 func WithCompareObserver(seen func(hash []byte)) Option {
-	return func(c *Checker) { c.observeCompares(seen) }
+	return func(c *Checker) { c.observer = seen }
+}
+
+// WithDeviceSecretKey is the key KindDeviceCredential's stored digests were made under. A
+// Checker declaring that kind without one is refused (ErrNoDeviceSecretKey).
+func WithDeviceSecretKey(k *DeviceSecretKey) Option {
+	return func(c *Checker) { c.deviceKey = k }
 }
 
 // observeCompares wraps every declared kind's compare so seen is told the stored
 // value first.
 func (c *Checker) observeCompares(seen func(stored []byte)) {
 	for k, inner := range c.compares {
-		c.compares[k] = func(stored, secret []byte) error {
+		c.compares[k] = func(p Principal, stored, secret []byte) error {
 			seen(stored)
-			return inner(stored, secret)
+			return inner(p, stored, secret)
 		}
 	}
 }
@@ -491,15 +494,16 @@ func WithClock(now func() time.Time) Option { return func(c *Checker) { c.now = 
 func WithCounter(c *prometheus.CounterVec) Option { return func(ch *Checker) { ch.checks = c } }
 
 // dummySecret is what an unknown principal is compared against, so it pays a real
-// compare: hashed with bcrypt at construction for a bcrypt kind, and used as it is for
-// the digest kind, whose stored values are plaintext.
+// compare: hashed with bcrypt at construction for a bcrypt kind, and digested under the
+// device secret key for the device kind.
 const dummySecret = "dc-credential-timing-equalizer"
 
 // NewChecker builds a Checker for the kinds policies declares: the map's keys, and
 // only those, so a Check on any other kind fails with ErrUndeclaredKind. A nil store,
-// an empty map, a kind this package has no comparator for (ErrUnknownKind) and an
-// invalid policy are refused: a checker that could not count attempts would be the
-// unthrottled compare this package exists to remove.
+// an empty map, a kind this package has no comparator for (ErrUnknownKind), the device
+// kind without WithDeviceSecretKey (ErrNoDeviceSecretKey) and an invalid policy are
+// refused: a checker that could not count attempts would be the unthrottled compare this
+// package exists to remove.
 func NewChecker(store Store, policies map[Kind]Policy, opts ...Option) (*Checker, error) {
 	if store == nil {
 		return nil, errors.New("credential: a Checker needs an attempt store")
@@ -516,7 +520,10 @@ func NewChecker(store Store, policies map[Kind]Policy, opts ...Option) (*Checker
 
 	c := &Checker{store: store, policies: policies, now: time.Now,
 		dummies:  map[Kind][]byte{},
-		compares: map[Kind]func(stored, secret []byte) error{}}
+		compares: map[Kind]func(p Principal, stored, secret []byte) error{}}
+	for _, o := range opts {
+		o(c)
+	}
 	// The bcrypt dummy is generated only when a bcrypt kind is declared (a hash at
 	// production cost is time a service checking only device passwords has no reason
 	// to spend at startup), and once, however many bcrypt kinds share it.
@@ -529,11 +536,25 @@ func NewChecker(store Store, policies map[Kind]Policy, opts ...Option) (*Checker
 		if err := policies[k].validate(); err != nil {
 			return nil, fmt.Errorf("credential: policy for kind %q: %w", k, err)
 		}
-		c.compares[k] = cmp.compare
-		if !cmp.bcrypt {
-			c.dummies[k] = []byte(dummySecret)
+		if cmp.keyed {
+			if c.deviceKey == nil {
+				return nil, fmt.Errorf("%w: kind %q", ErrNoDeviceSecretKey, k)
+			}
+			key := c.deviceKey
+			c.compares[k] = func(p Principal, stored, secret []byte) error {
+				return key.verify(p.Tenant, string(stored), string(secret))
+			}
+			// The dummy is a digest for a tenant no principal can name (the token grammar
+			// refuses the space), so it costs a real verify and never matches.
+			dummy, err := key.Digest(" dummy", dummySecret)
+			if err != nil {
+				return nil, err
+			}
+			c.dummies[k] = []byte(dummy)
 			continue
 		}
+		bcryptCompare := cmp.compare
+		c.compares[k] = func(_ Principal, stored, secret []byte) error { return bcryptCompare(stored, secret) }
 		if bcryptDummy == nil {
 			h, err := bcrypt.GenerateFromPassword([]byte(dummySecret), bcrypt.DefaultCost)
 			if err != nil {
@@ -543,8 +564,8 @@ func NewChecker(store Store, policies map[Kind]Policy, opts ...Option) (*Checker
 		}
 		c.dummies[k] = bcryptDummy
 	}
-	for _, o := range opts {
-		o(c)
+	if c.observer != nil {
+		c.observeCompares(c.observer)
 	}
 	if c.checks != nil {
 		for k, p := range policies {
@@ -576,8 +597,8 @@ func Key(p Principal) string {
 
 // Check authenticates secret for principal p.
 //
-// lookup returns the stored secret (a bcrypt hash, or for KindDeviceCredential the
-// plaintext), or "" when the principal does not exist or is not allowed to
+// lookup returns the stored secret (a bcrypt hash, or for KindDeviceCredential a
+// DeviceSecretKey digest), or "" when the principal does not exist or is not allowed to
 // authenticate, in which case the kind's dummy is compared instead, so the two cost
 // the same. "" never matches, whatever is presented. lookup is called only for an
 // attempt that is admitted.
@@ -654,7 +675,7 @@ func (c *Checker) check(ctx context.Context, p Principal, secret string, lookup 
 	if hash == "" {
 		stored = c.dummies[p.Kind]
 	}
-	if compare(stored, []byte(secret)) != nil || hash == "" {
+	if compare(p, stored, []byte(secret)) != nil || hash == "" {
 		return failedOpen, ErrMismatch
 	}
 	if policy.Unthrottled || !hadRecord {

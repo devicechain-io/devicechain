@@ -84,6 +84,10 @@ type CalloutResponder struct {
 	// reached. While it is down EVERY password connect is refused, so a line per
 	// connect would be one per device in a reconnecting fleet.
 	unavailableLog rateLimitedLog
+	// misconfiguredLog rate-limits the warning for a stored credential that can never
+	// authenticate. A restore next to the wrong root key makes that EVERY MQTT_BASIC
+	// device, each reconnecting on its own backoff; the counter sees every one.
+	misconfiguredLog rateLimitedLog
 
 	// maxInFlight bounds how many requests are being authorized at once. A request over
 	// the bound is answered with the generic denial at once (see dispatch) instead of
@@ -522,7 +526,7 @@ func (c *CalloutResponder) checkPassword(ctx context.Context, tenant string, pre
 	// reason is what the lookup found when it found no usable credential: the precise
 	// refusal, or ErrCredentialMisconfigured. It never reaches the device.
 	var reason error
-	p := credential.Principal{Kind: credential.KindDeviceCredential, ID: tenant + ":" + presented.CredentialId}
+	p := credential.Principal{Kind: credential.KindDeviceCredential, ID: tenant + ":" + presented.CredentialId, Tenant: tenant}
 	err := c.creds.Check(ctx, p, *presented.Secret, func(ctx context.Context) (string, error) {
 		d, stored, err := c.api.ResolveDeviceCredential(ctx, presented, c.now())
 		switch {
@@ -573,6 +577,13 @@ func (c *CalloutResponder) logAuthFailure(tenant string, err error) {
 				Msg("Auth-callout is refusing every MQTT password connect: the device credential " +
 					"attempt store in JetStream cannot be reached, and a connect that cannot be " +
 					"counted is not checked.")
+		}
+	case errors.Is(err, model.ErrCredentialMisconfigured):
+		if ok, held := c.misconfiguredLog.allow(c.now()); ok {
+			log.Warn().Err(err).Str("tenant", tenant).Int("suppressed", held).
+				Msg("Auth-callout could not authenticate a device connection: its stored credential " +
+					"can never authenticate (no secret, or a digest made under a different root key). " +
+					"Logged at most once a minute; credential_misconfigured_total counts every one.")
 		}
 	default:
 		log.Warn().Err(err).Str("tenant", tenant).
