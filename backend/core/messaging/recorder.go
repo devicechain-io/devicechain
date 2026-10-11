@@ -205,7 +205,10 @@ func (nmgr *NatsManager) startRecorder(ctx context.Context) error {
 	covered := map[string]bool{}
 	filters := []string{}
 	for _, r := range nmgr.readers {
-		if streams.RetentionFor(r.suffix) == streams.RetentionWorkQueue {
+		// The recorder's own stream is the one reader it skips: it would record its own
+		// advisories. Retention is not the test, because the device intake capture is also
+		// a work queue and its give-ups are lettered like any other.
+		if r.suffix == streams.MaxDeliveries {
 			continue
 		}
 		suffixOf[r.stream] = r.suffix
@@ -354,6 +357,18 @@ func (h *maxDeliveryHandler) handle(ctx context.Context, msg Message) {
 		log.Warn().Err(err).Str("stream", stream).Uint64("seq", adv.StreamSeq).
 			Msg("Could not record a message whose deliveries ran out; its advisory will be redelivered")
 		return
+	}
+	// On a work-queue stream an unacked message is not aged out by anything but MaxAge, and
+	// the broker has stopped redelivering it, so a lettered give-up would sit there for days
+	// as a second copy of what the letter now holds. Remove it once the letter is written.
+	// A failed removal leaves the advisory unacked so the whole step is retried; the letter's
+	// dedup id absorbs the repeat.
+	if outcome == MaxDeliveryLettered && orig != nil && streams.RetentionFor(suffix) == streams.RetentionWorkQueue {
+		if err := h.nmgr.js.DeleteMsg(stream, adv.StreamSeq); err != nil && !errors.Is(err, nats.ErrMsgNotFound) {
+			log.Warn().Err(err).Str("stream", stream).Uint64("seq", adv.StreamSeq).Bool("final", final).
+				Msg("Could not remove a lettered message from its work-queue stream; its advisory will be redelivered")
+			return
+		}
 	}
 	h.nmgr.metrics.countMaxDelivery(stream, outcome)
 	h.ack(msg)

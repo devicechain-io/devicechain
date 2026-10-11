@@ -243,11 +243,17 @@ func TestReplayCoveredIsDeclaredOnlyWhereProven(t *testing.T) {
 func TestOnlyTheCaptureStreamIsWorkQueue(t *testing.T) {
 	for _, s := range All {
 		want := RetentionLimits
-		if s.Suffix == MaxDeliveries {
+		if s.Suffix == MaxDeliveries || s.Suffix == DeviceEventsCapture {
 			want = RetentionWorkQueue
 		}
 		if got := RetentionFor(s.Suffix); got != want {
 			t.Errorf("RetentionFor(%q) = %d, want %d", s.Suffix, got, want)
+		}
+		if got, want := RecreatesOnRetentionChange(s.Suffix), s.Suffix == DeviceEventsCapture; got != want {
+			t.Errorf("RecreatesOnRetentionChange(%q) = %v, want %v", s.Suffix, got, want)
+		}
+		if s.Retention == RetentionWorkQueue && len(s.Areas) != 1 && s.Suffix == DeviceEventsCapture {
+			t.Errorf("%q is a work queue and must have exactly one reading area, has %v", s.Suffix, s.Areas)
 		}
 	}
 	if ShapeOf(MaxDeliveries) != ShapeAdvisory {

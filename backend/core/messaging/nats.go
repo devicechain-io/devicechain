@@ -183,8 +183,15 @@ type NatsManager struct {
 	streamNames []string
 	sinkStreams map[string]bool
 	bucketNames []string
-	metrics     *streamMetrics
-	samplerWg   sync.WaitGroup
+	// retentionPending is the streams (suffix -> name) found holding an older retention
+	// than declared, which core/streams permits to be drained and recreated; see
+	// retention_migration.go. Guarded by streamMu.
+	retentionPending map[string]string
+	// retentionDrainBound and retentionDrainPoll override the drain wait's bound and poll
+	// interval when non-zero; production leaves them zero.
+	retentionDrainBound, retentionDrainPoll time.Duration
+	metrics                                 *streamMetrics
+	samplerWg                               sync.WaitGroup
 
 	// samplerCancel ends the metrics sampler. It is a CancelFunc rather than a plain
 	// signalling channel because closing a channel only tells the loop to stop at its
@@ -758,7 +765,17 @@ func (nmgr *NatsManager) ensureStream(suffix string) (string, error) {
 			// work queue it deletes the message — so a stream carrying the wrong one is
 			// refused loudly here rather than run on with semantics nobody declared. Pre-GA
 			// the remedy is a recreate.
-			if info.Config.Retention != retention {
+			if info.Config.Retention != retention && streams.RecreatesOnRetentionChange(suffix) &&
+				info.Config.Retention == nats.LimitsPolicy && retention == nats.WorkQueuePolicy {
+				// The ONE declared migration (core/streams RecreateOnRetentionChange): the stream
+				// keeps running as it is, so its reader can drain it, and MigratePendingRetention
+				// then recreates it. Nothing else reaches here: any other stream, and any other
+				// pair of retentions, is refused below.
+				nmgr.notePendingRetention(suffix, name)
+				log.Warn().Str("stream", name).Str("have", info.Config.Retention.String()).
+					Str("want", retention.String()).
+					Msg("Stream holds an older retention than declared; it will be drained and recreated once its backlog is empty")
+			} else if info.Config.Retention != retention {
 				// Not returned as the op's error: no retry can fix it, so it ends the retry
 				// loop at once and is returned after it.
 				refused = fmt.Errorf("stream %s exists with retention %s, but core/streams "+

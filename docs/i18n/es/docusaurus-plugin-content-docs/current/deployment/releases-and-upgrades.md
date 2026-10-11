@@ -3865,6 +3865,29 @@ entre sus dispositivos si lo necesita.
   siguen deduplicándose, pero esa versión sigue comprobando por inquilino, así que vuelve a
   descartar el evento del segundo dispositivo.
 
+#### El flujo de entrada de dispositivos elimina cada mensaje una vez reenviado {#next-upgrade-capture-stream}
+
+El flujo que guarda cada publicación de un dispositivo hasta que `event-sources` la reenvía
+(`device-events-capture`) ahora elimina un mensaje cuando `event-sources` lo confirma. En `v0.19.0`
+conservaba cada mensaje hasta siete días después de reenviarlo. Una publicación que aún no se ha
+reenviado se conserva exactamente como antes, así que una caída de `event-sources` sigue sin perder
+nada.
+
+- **En la actualización.** El primer arranque del nuevo `event-sources` reenvía lo que el flujo
+  existente aún contiene, espera a que quede vacío y entonces elimina el flujo y lo crea de nuevo
+  con la nueva retención. Los números de secuencia continúan donde terminó el flujo anterior. Una
+  publicación de dispositivo que llegue en el instante entre la comprobación de vacío y la
+  recreación puede perderse después de que el broker la haya confirmado. Si el flujo no queda vacío
+  en cinco minutos, `event-sources` se detiene con un error que nombra el flujo y no elimina nada;
+  vuelva a iniciarlo cuando pueda reenviar.
+- **Nada más puede leer este flujo.** Admite un solo consumidor, el que posee `event-sources`, así
+  que `nats stream view` y cualquier otro consumidor sobre `device-events-capture` dejan de
+  funcionar. Para ver lo que envían los dispositivos, lea el flujo `inbound-events`, que contiene
+  los eventos decodificados.
+- Volver a `v0.19.0` exige eliminar antes el flujo, con `event-sources` detenido, porque `v0.19.0`
+  se niega a arrancar contra un flujo con la nueva retención; lo crea de nuevo en su siguiente
+  arranque. Lo que aún no se haya reenviado cuando lo elimine se pierde.
+
 #### Un evento entrante cuyo registro de fallo no se puede codificar ya no se guarda como un registro vacío {#next-upgrade-failed-record-encode}
 
 Cuando device-management no podía codificar el registro de un evento entrante que había fallado,
