@@ -5,13 +5,17 @@ package identity
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"time"
 
 	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-microservice/rdb"
+	"github.com/devicechain-io/dc-user-management/iam"
 	"github.com/google/uuid"
 	nats "github.com/nats-io/nats.go"
 	"github.com/rs/zerolog/log"
+	"gorm.io/gorm"
 )
 
 // A SIGN-IN SESSION is the server-side record of one successful login. Its id (the "sid"
@@ -30,41 +34,195 @@ const sessionKeyPrefix = "sid."
 
 func sessionKey(sid auth.SessionID) string { return sessionKeyPrefix + string(sid) }
 
-// startSession records a new sign-in for email and returns its id.
+// Sign-in methods a session record carries.
+const (
+	// SessionMethodPassword is a sign-in that compared a password.
+	SessionMethodPassword = "password"
+	// SessionMethodSso is a sign-in vouched for by an external identity provider.
+	SessionMethodSso = "sso"
+)
+
+// sessionRecord is what a sign-in's KV entry holds. Email names the owner. Method says how
+// the person proved who they are, and for a single sign-on the connection it came through
+// and the moment OUR callback accepted it (Anchor: never the provider's optional
+// auth_time, which a provider may omit or backdate).
+type sessionRecord struct {
+	Email          string      `json:"email"`
+	Method         string      `json:"method"`
+	ConnectionID   uint        `json:"connection_id,omitempty"`
+	ConnectionKind iam.IdpKind `json:"connection_kind,omitempty"`
+	Anchor         time.Time   `json:"anchor"`
+}
+
+// startSession records a new password sign-in for email and returns its id.
 func (m *Manager) startSession(email string) (auth.SessionID, error) {
+	return m.putSession(sessionRecord{Email: email, Method: SessionMethodPassword, Anchor: time.Now().UTC()})
+}
+
+// startSsoSession records a new single sign-on for email through conn, anchored at the
+// moment the callback accepted it.
+func (m *Manager) startSsoSession(email string, conn *iam.IdpConnection, anchor time.Time) (auth.SessionID, error) {
+	return m.putSession(sessionRecord{
+		Email: email, Method: SessionMethodSso,
+		ConnectionID: conn.ID, ConnectionKind: conn.Kind, Anchor: anchor.UTC(),
+	})
+}
+
+func (m *Manager) putSession(rec sessionRecord) (auth.SessionID, error) {
+	b, err := json.Marshal(rec)
+	if err != nil {
+		return "", err
+	}
 	sid := auth.SessionID(uuid.NewString())
-	if _, err := m.refreshKV.Put(sessionKey(sid), []byte(email)); err != nil {
+	if _, err := m.refreshKV.Put(sessionKey(sid), b); err != nil {
 		return "", err
 	}
 	return sid, nil
 }
 
-// sessionLive is the ONE check that a credential's sign-in is still open. It is called
-// from sessionIdentity, which every exchange of a previously issued credential (refresh,
-// tenant selection, membership read, authorization code issue and redemption, OAuth
-// refresh) already goes through, so no path can skip it.
+// loadSession is the ONE check that a credential's sign-in is still open, and it hands back
+// the record so the admission rules can read what kind of sign-in it is. It is called from
+// sessionIdentity, which every exchange of a previously issued credential (refresh, tenant
+// selection, membership read, authorization code issue and redemption, OAuth refresh)
+// already goes through, so no path can skip it.
 //
 // A credential with no sid is refused, not treated as an older kind: this build
 // issues none, and a refused one simply signs in again. A missing or deleted record is
-// errSessionEnded; a store error is returned as-is so the caller can tell an outage
-// (retryable) from a closed session (terminal).
-func (m *Manager) sessionLive(sid auth.SessionID, email string) error {
+// errSessionEnded; so is one this build cannot read, since a record that cannot be
+// interpreted cannot be admitted. A store error is returned as-is so the caller can tell an
+// outage (retryable) from a closed session (terminal).
+func (m *Manager) loadSession(sid auth.SessionID, email string) (*sessionRecord, error) {
 	if sid == "" {
-		return errSessionEnded
+		return nil, errSessionEnded
 	}
 	entry, err := m.refreshKV.Get(sessionKey(sid))
 	if err != nil {
 		if errors.Is(err, nats.ErrKeyNotFound) {
+			return nil, errSessionEnded
+		}
+		return nil, err
+	}
+	var rec sessionRecord
+	if err := json.Unmarshal(entry.Value(), &rec); err != nil {
+		return nil, errSessionEnded
+	}
+	// The record names its owner; a sid presented with another identity's email is not
+	// this sign-in.
+	if rec.Email != email {
+		return nil, errSessionEnded
+	}
+	return &rec, nil
+}
+
+// sessionLive reports whether the sign-in a credential names is still open.
+func (m *Manager) sessionLive(sid auth.SessionID, email string) error {
+	_, err := m.loadSession(sid, email)
+	return err
+}
+
+// admitTenant decides whether the sign-in sid may be turned into a session in tenant. It is
+// the ONE place the sign-in's own terms are applied to a tenant grant, and every path that
+// mints one calls it -- tenant selection, refresh, the authorization-code issue, and OAuth
+// redemption and refresh (the last through resolveTenantGrant) -- so a rule added here
+// cannot be skipped by one of them.
+//
+// A password sign-in is admitted wherever the identity's memberships allow; the rules below
+// bind a single sign-on:
+//
+//   - the connection it came through must still exist and be enabled, and the identity must
+//     still be linked on it, so deleting or disabling a connection, or unlinking the
+//     identity, ends its sessions at their next exchange;
+//   - through a TENANT connection the session reaches only the tenants that connection
+//     serves, and never an identity that holds a system role. The second rule is checked
+//     here as well as at sign-in because a role granted AFTER the link was made must stop
+//     working at once, not at the next sign-in;
+//   - through an INSTANCE connection a tenant is entered only by a superuser breaking glass.
+//     The operator's identity provider authenticates the operator; it does not give
+//     ordinary membership access, which is the tenant's own sign-in to give.
+//
+// su is whether the identity is a superuser. The denials are errTenantAccessDenied (the
+// sign-in is open but may not enter this tenant) and errSessionEnded (it is over).
+func (m *Manager) admitTenant(ctx context.Context, sid auth.SessionID, id *iam.Identity, tenant string, su bool) error {
+	rec, err := m.loadSession(sid, id.Email)
+	if err != nil {
+		return err
+	}
+	if rec.Method != SessionMethodSso {
+		return nil
+	}
+	conn, err := m.iam.IdpConnectionByID(ctx, rec.ConnectionID)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return errSessionEnded
 		}
 		return err
 	}
-	// The record names its owner; a sid presented with another identity's email is not
-	// this sign-in.
-	if string(entry.Value()) != email {
+	if !conn.Enabled {
 		return errSessionEnded
 	}
-	return nil
+	// The link the sign-in rested on must still exist: unlinking an identity ends the
+	// sessions it signed in with.
+	linked, err := m.iam.IdentityLinkedTo(ctx, id.ID, conn.ID)
+	if err != nil {
+		return err
+	}
+	if !linked {
+		return errSessionEnded
+	}
+	switch conn.Kind {
+	case iam.IdpKindTenant:
+		if len(id.SystemRoles) > 0 {
+			return errSessionEnded
+		}
+		served, err := m.iam.ConnectionTenants(ctx, conn.ID)
+		if err != nil {
+			return err
+		}
+		for _, t := range served {
+			if t == tenant {
+				return nil
+			}
+		}
+		return errTenantAccessDenied
+	case iam.IdpKindInstance:
+		if su {
+			return nil
+		}
+		return errTenantAccessDenied
+	}
+	// A kind this build does not know is not admitted: fail closed.
+	return errSessionEnded
+}
+
+// sessionMemberships is the membership list a sign-in is shown: every membership for a
+// password sign-in, and for a single sign-on only the tenants admitTenant would let it
+// enter (none through an instance connection, whose operator enters a tenant by breaking
+// glass rather than by membership). Listing a tenant the session cannot enter would offer a
+// choice that fails.
+func (m *Manager) sessionMemberships(ctx context.Context, sid auth.SessionID, id *iam.Identity) ([]MembershipInfo, error) {
+	rec, err := m.loadSession(sid, id.Email)
+	if err != nil {
+		if errors.Is(err, errSessionEnded) {
+			return nil, ErrInvalidToken
+		}
+		return nil, err
+	}
+	if rec.Method != SessionMethodSso {
+		return membershipInfos(id.Memberships), nil
+	}
+	out := []MembershipInfo{}
+	for _, mem := range id.Memberships {
+		switch err := m.admitTenant(ctx, sid, id, mem.TenantId, false); {
+		case err == nil:
+			out = append(out, MembershipInfo{Tenant: mem.TenantId, Roles: roleTokens(mem.TenantRoles)})
+		case errors.Is(err, errTenantAccessDenied):
+		case errors.Is(err, errSessionEnded):
+			return nil, ErrInvalidToken
+		default:
+			return nil, err
+		}
+	}
+	return out, nil
 }
 
 // Logout ends the sign-in a token belongs to: it deletes the session record, which ends

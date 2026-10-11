@@ -17,6 +17,15 @@ MQTT username, with the counts in a SEPARATE bucket in device-management, and th
 alert watches that one. Separate because each bucket fails open for everything in it: a
 spray of MQTT usernames must not switch off the backoff on people's passwords, nor the
 reverse.
+
+SINGLE SIGN-ON (the Sso* rules at the end of the group) has three failures worth waking
+someone for, each over the counters user-management exports once an issuer URL is set
+(devicechain_usermanagement_sso_logins_total{connection,outcome} and
+devicechain_usermanagement_sso_idp_fetch_failures_total{connection}): the identity provider
+cannot be reached, so nobody can sign in through it; a refusal that is a SECURITY event, where
+a provider vouched for someone it should not have been able to; and the state bucket full, where
+sign-in through every connection fails closed. They are on a per-connection or per-outcome
+breakdown deliberately, because the connection label is bounded by what a superuser created.
 */}}
 {{- if and .Values.metrics.enabled .Values.metrics.alerts }}
 {{- $ns := include "devicechain.instanceNamespace" . }}
@@ -75,4 +84,44 @@ spec:
           annotations:
             summary: "MQTT password connects are being checked without their per-username backoff"
             description: "The device credential-attempt store is full, so device-management is checking MQTT password connects WITHOUT slowing down repeated failures on any username that is not already waiting out a delay -- and one that is waiting is protected only until that delay ends, at most 30 seconds. Connects still work -- refusing them would let whoever filled the store keep every password device off the platform -- but guessing a device's password is now limited only by how fast the broker accepts connects. Every connect, successful or not, holds an entry for ten minutes, so the store fills either when connects are sent for a very large number of distinct usernames (someone spraying usernames: find where the MQTT connects come from and block it upstream) or when a very large fleet reconnects all at once, for example after a broker restart. It drains on its own as entries expire, ten minutes after the wave stops. If the connect volume is legitimate, raise instance.config.infrastructure.nats.kvStateMaxBytes, which sizes every state bucket."
+        - alert: SsoIdpUnreachable
+          # Sustained, not a blip: a provider that fails to answer for ten minutes running
+          # (the token endpoint, or the key set a sign-in verifies against) is a connection
+          # nobody can sign in through. The 5m window with a 10m `for` ignores a single
+          # slow request and a provider restart.
+          expr: sum by (connection) (increase(devicechain_usermanagement_sso_idp_fetch_failures_total{namespace="{{ $ns }}"}[5m])) > 0
+          for: 10m
+          labels:
+            severity: warning
+            devicechain_instance: {{ $id }}
+          annotations:
+            summary: "An identity provider cannot be reached for single sign-on"
+            description: "user-management has been failing to reach the identity provider of connection {{ "{{ $labels.connection }}" }} (its token endpoint or its signing keys) for ten minutes, so people who sign in through it are being refused. Password sign-in is unaffected. The connection's endpoints are the ones recorded and approved in its discovery snapshot, and every request goes through the egress guard: check that the provider is up, that its address resolves from the cluster, and that the egress allow list (instance.config.infrastructure.egress) permits an on-premises provider's range. If the provider moved an endpoint, run refreshIdpDiscovery and approve the new snapshot."
+
+        - alert: SsoUnverifiedIdentityRefused
+          # A security event, so no `for`: one is enough. These outcomes mean a provider
+          # vouched for a sign-in this platform then refused on its own checks -- an email
+          # the provider did not verify, an address outside the connection's domains, a
+          # token missing the claim that pins the provider to this customer, or a tenant
+          # connection asserting an identity that holds a system role.
+          expr: sum by (connection, outcome) (increase(devicechain_usermanagement_sso_logins_total{namespace="{{ $ns }}", outcome=~"refused_unverified_email|refused_unverified_domain|refused_required_claim|refused_system_role_identity"}[10m])) > 0
+          labels:
+            severity: warning
+            devicechain_instance: {{ $id }}
+          annotations:
+            summary: "Single sign-on refused a sign-in that an identity provider vouched for"
+            description: "Connection {{ "{{ $labels.connection }}" }} had a sign-in refused with outcome {{ "{{ $labels.outcome }}" }}. Nobody was signed in. Each of these outcomes is the platform's own check overriding the provider: refused_unverified_email (the provider did not vouch for the address), refused_unverified_domain (the address is not in a domain asserted for this connection), refused_required_claim (the token lacks a claim the connection requires, for example the Workspace domain or the Microsoft tenant id), or refused_system_role_identity (a tenant's provider asserted an identity that holds a system role). They are usually a misconfigured connection or someone probing one, and occasionally an attempt to sign in as another person. Look at the audit journal for the asserted address, and at the provider's own sign-in log."
+
+        - alert: SsoStateStoreFull
+          # The state bucket holds one record per begun sign-in and is written by an
+          # UNAUTHENTICATED call. When it is full beginSso fails closed for every connection
+          # until entries expire (ten minutes), which is the outcome counted here. Password
+          # sign-in does not use the bucket and is unaffected.
+          expr: sum(increase(devicechain_usermanagement_sso_logins_total{namespace="{{ $ns }}", outcome="state_store_full"}[10m])) > 0
+          labels:
+            severity: critical
+            devicechain_instance: {{ $id }}
+          annotations:
+            summary: "Single sign-on is refusing every sign-in because its state store is full"
+            description: "The single sign-on state store is full, so user-management is refusing to begin any sign-in through any identity provider (it fails closed rather than drop the protection that makes a replayed callback useless). Password sign-in still works. The store fills when an enormous number of sign-ins are begun inside ten minutes, which almost always means someone is calling beginSso in a loop: the call is public and is limited per source address and globally, but a distributed sender can still fill it. Find the traffic in the ingress logs and block it upstream; the store drains on its own ten minutes after the flood stops. If the volume is legitimate, raise instance.config.infrastructure.nats.kvStateMaxBytes, which sizes every state bucket."
 {{- end }}

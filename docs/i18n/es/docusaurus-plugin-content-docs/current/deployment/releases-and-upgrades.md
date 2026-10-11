@@ -4009,6 +4009,39 @@ actualización y cualquier objeto cuya referencia se perdió se borran con el in
   un inquilino falla y se reintenta en cada pasada, así que el borrado no termina. Concédelo antes
   de actualizar. El backend filesystem no necesita nada.
 
+#### El inicio de sesión único necesita la dirección pública de la instancia, así que el chart ahora la deriva {#next-upgrade-sso-issuer}
+
+Iniciar sesión mediante un proveedor de identidad externo OpenID Connect, y el servidor de
+autorización OAuth que usan los clientes MCP, necesitan conocer la dirección en la que se accede a
+esta instancia, porque un inicio de sesión tiene que volver a algún sitio. El `auth.issuerUrl` de
+user-management estaba vacío salvo que lo establecieras. El chart ahora lo deriva del ingress, como
+`https://<host>/api/user-management`, cuando la instancia se sirve por https o en un host de
+loopback (`localhost`, `127.0.0.1`, `::1`), y tu propio valor siempre prevalece. De ello se sigue:
+
+- **El servidor de autorización OAuth se activa** en esas instancias. En una instalación por defecto
+  los clientes MCP no podían obtener un token, porque estaba desactivado hasta que establecías este
+  valor. Para mantenerlo desactivado, y con él el inicio de sesión único, establece
+  `functionalAreas.user-management.config.auth.issuerUrl` en `""`.
+- **Los tokens emitidos tras la actualización llevan esa dirección como emisor**, en lugar del
+  identificador por instancia. Los validadores de tokens de los servicios no comprueban ni el emisor
+  ni la audiencia, así que los tokens emitidos antes de la actualización siguen funcionando hasta que
+  caducan. No hay nada que hacer.
+- **Una instancia solo http en un nombre de host real no recibe emisor**, porque user-management
+  rechaza un emisor http en cualquier host que no sea de loopback. El servidor de autorización y el
+  inicio de sesión único siguen desactivados, y `helm install` y `dcctl bootstrap` lo indican. Sirve
+  la instancia por https para activarlos.
+
+#### Alertas del inicio de sesión único {#next-upgrade-sso-alerts}
+
+Tres alertas informan de los fallos del inicio de sesión único. Si enrutas o silencias alertas por
+nombre, estas son nuevas.
+
+| Alerta | Severidad | Qué informa | Qué hacer |
+| --- | --- | --- | --- |
+| `SsoIdpUnreachable` | warning | Durante diez minutos, user-management no ha podido alcanzar el endpoint de tokens ni las claves de firma de un proveedor de identidad configurado, así que se rechaza a quienes inician sesión a través de él. El inicio de sesión con contraseña no se ve afectado. | Comprueba que el proveedor está activo y que su dirección se resuelve desde el clúster, que la lista de destinos permitidos de salida (`instance.config.infrastructure.egress`) permite el rango de un proveedor local y, si el proveedor movió un endpoint, actualiza y aprueba la instantánea de descubrimiento de la conexión. |
+| `SsoUnverifiedIdentityRefused` | warning | Se rechazó un inicio de sesión aunque el proveedor lo avalaba, con el resultado en la etiqueta `outcome`: `refused_unverified_email`, `refused_unverified_domain`, `refused_required_claim` o `refused_system_role_identity`. No se inició sesión a nadie. | Suele ser una conexión mal configurada o alguien que la está sondeando. Busca en el diario de auditoría la dirección que afirmó el proveedor, y en el registro de inicios de sesión del propio proveedor. |
+| `SsoStateStoreFull` | critical | El almacén que guarda los inicios de sesión comenzados está lleno, así que user-management se niega a comenzar cualquier inicio de sesión único con cualquier proveedor hasta que las entradas caduquen, diez minutos después. El inicio de sesión con contraseña no se ve afectado. | Casi seguro que alguien llama en bucle al inicio público de sesión: localiza el tráfico en los registros del ingress y bloquéalo aguas arriba. Si el volumen es legítimo, aumenta `instance.config.infrastructure.nats.kvStateMaxBytes`. |
+
 ### v0.19.0 — dimensionada a partir de lo medido a 6000 eventos por segundo; un stream lleno rechaza {#v0190-upgrade}
 
 `v0.19.0` es una actualización en su sitio desde `v0.18.0`: `dcctl install` para el clúster y

@@ -93,6 +93,25 @@ var All = []Bucket{
 			"volume of any bucket here; a full one breaks MCP authorization.",
 	},
 	{
+		Name: BucketSsoState,
+		Tier: State,
+		Why: "One entry per in-flight single sign-on attempt (state, nonce, the upstream " +
+			"PKCE verifier and the return address), written by the UNAUTHENTICATED beginSso " +
+			"call and held ten minutes or until the identity provider's redirect consumes it. " +
+			"Because anyone can call it, it scales with request rate rather than with " +
+			"people, which is why it is a bucket of its own: a flood fills this one and " +
+			"breaks only single sign-on, never a password sign-in or an OAuth code. A full " +
+			"bucket makes beginSso FAIL CLOSED and raises the SsoStateStoreFull alert.",
+	},
+	{
+		Name: BucketSsoCodes,
+		Tier: State,
+		Why: "One entry per completed single sign-on awaiting its completeSso call, " +
+			"single-use with a 60-second lifetime. Kept apart from the OAuth authorization " +
+			"codes so neither redeemer can ever be handed the other's record. Lowest volume " +
+			"of the sign-in buckets; a full one breaks single sign-on completion only.",
+	},
+	{
 		Name: BucketCredentialAttempts,
 		Tier: State,
 		Why: "One entry per principal of a throttled kind (in user-management, a " +
@@ -189,6 +208,8 @@ var All = []Bucket{
 const (
 	BucketRefreshTokens      = "dc_refresh_tokens"
 	BucketOAuthCodes         = "dc_oauth_codes"
+	BucketSsoState           = "dc_sso_state"
+	BucketSsoCodes           = "dc_sso_codes"
 	BucketCredentialAttempts = "dc_credential_attempts"
 	// BucketDeviceCredentialAttempts is kept apart from BucketCredentialAttempts on
 	// purpose: see its entry in All.

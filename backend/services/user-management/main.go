@@ -18,6 +18,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/credential"
 	"github.com/devicechain-io/dc-microservice/deadletter"
 	gqlcore "github.com/devicechain-io/dc-microservice/graphql"
+	"github.com/devicechain-io/dc-microservice/kv"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-microservice/secrets"
@@ -192,6 +193,21 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 			return err
 		}
 	}
+	// The single sign-on buckets (when the instance has a public issuer URL, the same switch
+	// as OAuth: no issuer, no sign-in could ever return). Two buckets of their own, apart from
+	// the OAuth codes and from each other, so a flood of unauthenticated beginSso calls fills
+	// only the first and neither redeemer can be handed the other's record.
+	var ssoStateKV, ssoCodesKV nats.KeyValue
+	if Configuration.OAuthEnabled() {
+		ssoStateKV, err = NatsManager.KeyValueStore(kv.BucketSsoState, kv.BucketSsoState, identity.SsoStateTTL)
+		if err != nil {
+			return err
+		}
+		ssoCodesKV, err = NatsManager.KeyValueStore(kv.BucketSsoCodes, kv.BucketSsoCodes, identity.SsoCodeTTL)
+		if err != nil {
+			return err
+		}
+	}
 	// Distributed lock (ADR-007, NATS KV) serializing signing-key work and
 	// bootstrap seeding across replicas.
 	lock, err := NatsManager.NewDistributedLock(5 * time.Second)
@@ -229,6 +245,10 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	if err := IdentityManager.Initialize(ctx, refreshKV, codesKV); err != nil {
 		return explainSeedRefusal(err)
 	}
+	if ssoStateKV != nil {
+		IdentityManager.SetSsoStores(ssoStateKV, ssoCodesKV)
+		IdentityManager.SetSsoMetrics(newSsoMetrics(Microservice))
+	}
 
 	// Age-based signing-key rotation (ADR-008 follow-up): rotate at startup if the
 	// active key is older than the configured max age, retaining the prior key for
@@ -250,6 +270,9 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	// URL is configured (ADR-047). Absent an issuer the OAuth surface stays off,
 	// fail-closed — mirroring the service-token secret gate above.
 	registerOAuthHandlersIfEnabled()
+
+	// The single sign-on callback, one path per connection, on the same switch.
+	registerSsoHandlersIfEnabled()
 
 	// The instance-scoped settings Service (ADR-042 P2). Shared between the
 	// data-plane resolver (which reads the branding.default setting as the cascade's
@@ -424,7 +447,8 @@ func registerAdminHandler() {
 	adminSvc := admin.NewService(iam.NewStore(RdbManager),
 		Configuration.TenantPurgeSettle(), Configuration.TenantPurgeTokenHold(), DeadLetterStore)
 	adminProviders := map[gqlcore.ContextKey]interface{}{
-		graphql.ContextAdminKey: adminSvc,
+		graphql.ContextAdminKey:    adminSvc,
+		graphql.ContextAdminSsoKey: IdentityManager,
 	}
 	adminSchema := gqlcore.MustParseSchema(graphql.AdminSchemaContent, &graphql.AdminResolver{})
 	Microservice.Mux().Handle("/admin/graphql", gqlcore.NewAdminHttpHandler(adminSchema, adminProviders, Microservice.Readiness))
@@ -493,6 +517,16 @@ func registerOAuthHandlersIfEnabled() {
 		return
 	}
 	registerOAuthHandlers()
+}
+
+// registerSsoHandlersIfEnabled serves the single sign-on callback when the instance has a
+// public issuer URL, and registers nothing otherwise (fail closed). It is a named function
+// for the reason registerOAuthHandlersIfEnabled is: so a test can drive the gate itself.
+func registerSsoHandlersIfEnabled() {
+	if !Configuration.OAuthEnabled() {
+		return
+	}
+	Microservice.Mux().Handle(identity.SsoCallbackPattern, identity.SsoCallbackHandler(IdentityManager))
 }
 
 func registerOAuthHandlers() {

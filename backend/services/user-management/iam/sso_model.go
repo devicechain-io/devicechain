@@ -101,6 +101,9 @@ type IdpConnection struct {
 
 func (IdpConnection) TableName() string { return "iam_idp_connections" }
 
+// AuditLabel names the connection in the audit journal by its token.
+func (c IdpConnection) AuditLabel() string { return c.Token }
+
 // IdpConnectionSecretRef is the INSTANCE-scoped secret-store handle for a connection's
 // client secret, keyed by the connection's immutable id (not its token) so a token rename
 // keeps the same entry bound. Instance-scoped because connections are instance-global.
@@ -128,6 +131,9 @@ type IdpConnectionDomain struct {
 }
 
 func (IdpConnectionDomain) TableName() string { return "iam_idp_connection_domains" }
+
+// AuditLabel names the domain in the audit journal.
+func (d IdpConnectionDomain) AuditLabel() string { return d.Domain }
 
 // IdpRoleMapping maps an IdP group value to a tenant role within one tenant a connection
 // serves. Nothing writes it yet; the model exists so the table the migration created has
@@ -164,8 +170,8 @@ type SsoLinkRequest struct {
 	ID        uint `gorm:"primarykey"`
 	CreatedAt time.Time
 
-	ConnectionID uint   `gorm:"not null"`
-	Subject      string `gorm:"not null;size:512"`
+	ConnectionID uint   `gorm:"not null;uniqueIndex:idx_iam_sso_link_requests_connection_subject,priority:1"`
+	Subject      string `gorm:"not null;size:512;uniqueIndex:idx_iam_sso_link_requests_connection_subject,priority:2"`
 	Email        string `gorm:"not null;size:256"`
 	ClaimsDigest string `gorm:"not null;size:128"`
 }

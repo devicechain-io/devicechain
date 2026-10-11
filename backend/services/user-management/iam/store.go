@@ -214,8 +214,30 @@ func (s *Store) DeleteIdentity(ctx context.Context, id *Identity) error {
 		if err := tx.Where("identity_id = ?", id.ID).Delete(&IdentityLink{}).Error; err != nil {
 			return err
 		}
+		// Nor may a pending link request outlive the identity it names (it holds only the
+		// email). Approving one later would otherwise bind an external account to whoever
+		// holds that email NEXT; approval also re-resolves the identity, but a request that
+		// cannot be approved should not be offered.
+		if err := tx.Where("email = ?", id.Email).Delete(&SsoLinkRequest{}).Error; err != nil {
+			return err
+		}
 		return tx.Unscoped().Delete(id).Error
 	})
+}
+
+// IdentityByID resolves a global identity by primary key, with the same preloads as
+// IdentityByEmail, or returns gorm.ErrRecordNotFound.
+func (s *Store) IdentityByID(ctx context.Context, id uint) (*Identity, error) {
+	var out Identity
+	err := s.sys(ctx).
+		Preload("SystemRoles").
+		Preload("Memberships.TenantRoles").
+		Where("id = ?", id).
+		First(&out).Error
+	if err != nil {
+		return nil, err
+	}
+	return &out, nil
 }
 
 // TenantByToken resolves a control-plane tenant by its token (with its ADR-065

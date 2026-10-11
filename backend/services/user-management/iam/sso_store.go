@@ -350,3 +350,23 @@ func (s *Store) DeleteSsoLinkRequest(ctx context.Context, id uint) (bool, error)
 	res := s.sys(ctx).Where("id = ?", id).Delete(&SsoLinkRequest{})
 	return res.RowsAffected > 0, res.Error
 }
+
+// MarkMembershipsManagedBy records that a connection manages an identity's memberships in the
+// given tenants: their roles will follow the connection, and deleting the connection disables
+// them. It touches only memberships no connection manages yet.
+func (s *Store) MarkMembershipsManagedBy(ctx context.Context, identityID uint, tenants []string, connectionID uint) error {
+	if len(tenants) == 0 {
+		return nil
+	}
+	return s.sys(ctx).Model(&Membership{}).
+		Where("identity_id = ? AND tenant_id IN ? AND managed_by IS NULL", identityID, tenants).
+		Update("managed_by", connectionID).Error
+}
+
+// IdentityLinkedTo reports whether an identity has a link on a connection.
+func (s *Store) IdentityLinkedTo(ctx context.Context, identityID, connectionID uint) (bool, error) {
+	var n int64
+	err := s.sys(ctx).Model(&IdentityLink{}).
+		Where("identity_id = ? AND connection_id = ?", identityID, connectionID).Count(&n).Error
+	return n > 0, err
+}
