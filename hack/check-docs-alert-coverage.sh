@@ -61,7 +61,7 @@ check() {
   fi
 
   for n in $allowed; do
-    if ! printf '%s\n' "$names" | grep -qx "$n"; then
+    if ! grep -qx -- "$n" <<<"$names"; then
       echo "  allowlist entry $n is not an alert the chart ships; delete it"
       problems=$((problems + 1))
     fi
@@ -69,7 +69,7 @@ check() {
 
   for n in $names; do
     local listed=0
-    printf '%s\n' "$allowed" | grep -qx "$n" && listed=1
+    grep -qx -- "$n" <<<"$allowed" && listed=1
     local missing=()
     for tree in "${trees[@]}"; do
       if ! grep -rqwF --include='*.md' --include='*.mdx' -- "$n" "$tree"; then
@@ -116,13 +116,13 @@ EOF
     echo "SELF-TEST FAILED: a shipped alert with no docs mention passed" >&2
     return 1
   fi
-  printf '%s\n' "$out" | grep -q 'alert PlantedGapAlert is not named' ||
+  grep -q 'alert PlantedGapAlert is not named' <<<"$out" ||
     { echo "SELF-TEST FAILED: the gap was not named: $out" >&2; return 1; }
 
   # 2. documented in English only: the other locales must be reported.
   echo 'The `PlantedGapAlert` alert.' >"$tmp/docs/docs/page2.md"
   out="$(check "$tmp" 2>&1 || true)"
-  printf '%s\n' "$out" | grep -q 'PlantedGapAlert is not named under: docs/i18n/es' ||
+  grep -q 'PlantedGapAlert is not named under: docs/i18n/es' <<<"$out" ||
     { echo "SELF-TEST FAILED: a missing translation was not named: $out" >&2; return 1; }
 
   # 3. documented everywhere: passes.
@@ -134,8 +134,8 @@ EOF
   # 4. a stale allowlist entry fails.
   printf '# reason\nPlantedGapAlert\nNoSuchAlert\n' >"$tmp/hack/docs-alert-allowlist.txt"
   out="$(check "$tmp" 2>&1 || true)"
-  printf '%s\n' "$out" | grep -q 'NoSuchAlert is not an alert' &&
-    printf '%s\n' "$out" | grep -q 'PlantedGapAlert is documented everywhere' ||
+  grep -q 'NoSuchAlert is not an alert' <<<"$out" &&
+    grep -q 'PlantedGapAlert is documented everywhere' <<<"$out" ||
     { echo "SELF-TEST FAILED: a stale allowlist was accepted: $out" >&2; return 1; }
 
   # 5. an allowlisted, undocumented alert passes.
