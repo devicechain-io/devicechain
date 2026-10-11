@@ -152,4 +152,8 @@ func applyDeclaration(st *State, spec dcv1beta1.InstanceSpec) {
 	if len(spec.ExtraFunctionalAreas) > 0 {
 		st.EnableAreas = append([]string(nil), spec.ExtraFunctionalAreas...)
 	}
+	// Taken from the declaration and not from the flags, so a re-run keeps the store it was
+	// built with. nil is a real answer (no store) and is taken as one: an instance declared
+	// before this field existed has no store, and an upgrade must not invent one.
+	st.ObjectStore = spec.ObjectStore.DeepCopy()
 }

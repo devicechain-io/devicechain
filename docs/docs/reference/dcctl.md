@@ -46,28 +46,37 @@ dcctl bootstrap <provider> <instance> [flags]
 ### Options
 
 ```
-      --allow-legacy-db-removal         proceed even though this cluster still runs the pre-CloudNativePG event-store StatefulSet (dc-timescaledb-single). 🔴 This ASSERTS THAT YOU HAVE HANDLED THE DATA — it is not a migration, nothing verifies it, and applying with it set destroys that StatefulSet and brings up an empty database on the same hostname. Dump first, or use it deliberately to discard a local instance
-      --build                           build images from source into a local registry (developer path; requires source + ko)
-      --cluster string                  local provider: the kind cluster 'dcctl install local' prepared (default "devicechain")
-      --dev                             local-developer preset: --build --host localhost --no-tls --yes, and implies --no-escrow (a zero-config http://localhost/ bring-up); rejects contradictory flags
-      --dry-run                         print what would happen without applying changes
-      --enable-area strings             additionally deploy a functional area on TOP of the profile (repeatable, e.g. --enable-area lwm2m-ingest --enable-area sparkplug-ingest). Composes with the cluster's --compact setting; validated against the area catalog (unknown area or unmet hard dependency fails before any cluster spin-up)
-      --escrow-file string              where to write the encrypted root-key escrow artifact (default ~/.devicechain/escrow/<instance>-rootkey.escrow). Refuses a path inside ~/.devicechain/instances/<instance>, which 'dcctl destroy' deletes
-      --escrow-passphrase-file string   read the escrow passphrase from this file instead of $DCCTL_ESCROW_PASSPHRASE or an interactive prompt (trailing newline stripped)
-  -h, --help                            help for bootstrap
-      --host string                     ingress host to expose the instance on (default devicechain.local; use 'localhost' for a local cluster to skip the /etc/hosts edit)
-      --kube-context string             build the instance on the cluster this context reaches, prepared with 'dcctl install --kube-context'
-      --lwm2m-identities string         path to a JSON file of LwM2M DTLS-PSK credentials to provision: [{identity, psk(base64), tenant, externalId, deviceTypeToken, autoRegister}]. Renders the PSKs into a chart-owned Secret and binds each to lwm2m-ingest; implies --enable-area lwm2m-ingest. Validated up front (short PSK / missing tenancy fails before any cluster). Re-running bootstrap WITHOUT this flag removes the provisioned credentials
-      --no-escrow                       do NOT escrow the secret-store root key. The key then exists only inside the cluster: losing the cluster makes every stored secret permanently unreadable, even from a database backup, because no DeviceChain backup contains etcd. For throwaway instances only; implied by --dev
-      --no-tls                          serve plain HTTP instead of a self-signed cert (with --host localhost, a zero-config http://localhost/). On by default on a cluster installed without cert-manager, where --no-tls=false is refused
-      --profile string                  configuration profile to apply
-      --registry string                 image registry to deploy from (default: published ghcr.io/devicechain-io, or localhost:5000 with --build)
-      --restore-root-key string         disaster recovery: seed the instance's secret-store root key FROM this escrow artifact instead of minting a fresh one, so a rebuilt cluster can read secrets restored from a database backup. Needs the artifact's passphrase
-      --restore-tsdb-at string          stop the event store's recovery at this RFC3339 timestamp instead of replaying the whole archive. For the disaster where the data was destroyed correctly — a mistaken delete — so pick a moment strictly before the damage. Needs --restore-tsdb-from
-      --restore-tsdb-from string        disaster recovery: recover the EVENT store from this archive path (the serverName inside the backup bucket, e.g. dc-tsdb) instead of initialising an empty database. 🔴 Only takes effect when the cluster is CREATED — recover by destroying the instance and rebuilding it with this set, not by re-running against a live one. When the backups are in the cluster's in-cluster object store, destroy with --keep-backups: a destroy without it deletes the archive this reads
-      --skip-preflight                  skip the local-system preflight checks
-      --version string                  image version/tag to deploy (default: the published release version, or 'dev' with --build)
-  -y, --yes                             assume yes for prompts
+      --allow-legacy-db-removal                     proceed even though this cluster still runs the pre-CloudNativePG event-store StatefulSet (dc-timescaledb-single). 🔴 This ASSERTS THAT YOU HAVE HANDLED THE DATA — it is not a migration, nothing verifies it, and applying with it set destroys that StatefulSet and brings up an empty database on the same hostname. Dump first, or use it deliberately to discard a local instance
+      --build                                       build images from source into a local registry (developer path; requires source + ko)
+      --cluster string                              local provider: the kind cluster 'dcctl install local' prepared (default "devicechain")
+      --dev                                         local-developer preset: --build --host localhost --no-tls --yes, and implies --no-escrow (a zero-config http://localhost/ bring-up); rejects contradictory flags
+      --dry-run                                     print what would happen without applying changes
+      --enable-area strings                         additionally deploy a functional area on TOP of the profile (repeatable, e.g. --enable-area lwm2m-ingest --enable-area sparkplug-ingest). Composes with the cluster's --compact setting; validated against the area catalog (unknown area or unmet hard dependency fails before any cluster spin-up)
+      --escrow-file string                          where to write the encrypted root-key escrow artifact (default ~/.devicechain/escrow/<instance>-rootkey.escrow). Refuses a path inside ~/.devicechain/instances/<instance>, which 'dcctl destroy' deletes
+      --escrow-passphrase-file string               read the escrow passphrase from this file instead of $DCCTL_ESCROW_PASSPHRASE or an interactive prompt (trailing newline stripped)
+  -h, --help                                        help for bootstrap
+      --host string                                 ingress host to expose the instance on (default devicechain.local; use 'localhost' for a local cluster to skip the /etc/hosts edit)
+      --kube-context string                         build the instance on the cluster this context reaches, prepared with 'dcctl install --kube-context'
+      --lwm2m-identities string                     path to a JSON file of LwM2M DTLS-PSK credentials to provision: [{identity, psk(base64), tenant, externalId, deviceTypeToken, autoRegister}]. Renders the PSKs into a chart-owned Secret and binds each to lwm2m-ingest; implies --enable-area lwm2m-ingest. Validated up front (short PSK / missing tenancy fails before any cluster). Re-running bootstrap WITHOUT this flag removes the provisioned credentials
+      --no-escrow                                   do NOT escrow the secret-store root key. The key then exists only inside the cluster: losing the cluster makes every stored secret permanently unreadable, even from a database backup, because no DeviceChain backup contains etcd. For throwaway instances only; implied by --dev
+      --no-tls                                      serve plain HTTP instead of a self-signed cert (with --host localhost, a zero-config http://localhost/). On by default on a cluster installed without cert-manager, where --no-tls=false is refused
+      --object-store string                         where the instance keeps tenant logos and update artifacts: none, filesystem (a volume the chart creates) or s3. Default: a small filesystem store on a cluster dcctl created, none on one it was pointed at with --kube-context. Fixed configuration, recorded on the instance and kept by 'dcctl upgrade'
+      --object-store-access-mode string             filesystem store: ReadWriteOnce (default) or ReadWriteMany, which needs a storage class that supports it and is required when more than one pod shares the store
+      --object-store-s3-bucket string               s3 store: the bucket (required with --object-store s3)
+      --object-store-s3-credentials-secret string   s3 store: <namespace>/<name> of an EXISTING Secret with keys AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY, which dcctl copies into the instance's namespace. Never the key itself: no credential is accepted on the command line or written into the instance configuration. Omit to use the pods' own AWS identity (IRSA, an instance profile)
+      --object-store-s3-endpoint string             s3 store: the endpoint of an S3-compatible service such as MinIO (an http:// or https:// URL without credentials)
+      --object-store-s3-path-style                  s3 store: address the bucket in the URL path, which MinIO and most S3-compatible services need
+      --object-store-s3-region string               s3 store: the AWS region (required unless --object-store-s3-endpoint is set)
+      --object-store-size string                    filesystem store: size of the volume, a Kubernetes quantity (default 1Gi)
+      --object-store-storage-class string           filesystem store: StorageClass of the volume (default: the cluster's default class)
+      --profile string                              configuration profile to apply
+      --registry string                             image registry to deploy from (default: published ghcr.io/devicechain-io, or localhost:5000 with --build)
+      --restore-root-key string                     disaster recovery: seed the instance's secret-store root key FROM this escrow artifact instead of minting a fresh one, so a rebuilt cluster can read secrets restored from a database backup. Needs the artifact's passphrase
+      --restore-tsdb-at string                      stop the event store's recovery at this RFC3339 timestamp instead of replaying the whole archive. For the disaster where the data was destroyed correctly — a mistaken delete — so pick a moment strictly before the damage. Needs --restore-tsdb-from
+      --restore-tsdb-from string                    disaster recovery: recover the EVENT store from this archive path (the serverName inside the backup bucket, e.g. dc-tsdb) instead of initialising an empty database. 🔴 Only takes effect when the cluster is CREATED — recover by destroying the instance and rebuilding it with this set, not by re-running against a live one. When the backups are in the cluster's in-cluster object store, destroy with --keep-backups: a destroy without it deletes the archive this reads
+      --skip-preflight                              skip the local-system preflight checks
+      --version string                              image version/tag to deploy (default: the published release version, or 'dev' with --build)
+  -y, --yes                                         assume yes for prompts
 ```
 
 ### SEE ALSO

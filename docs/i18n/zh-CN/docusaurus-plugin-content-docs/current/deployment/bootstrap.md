@@ -305,6 +305,7 @@ dcctl bootstrap local my-instance --build
 | `--registry` / `--version` | 覆盖镜像仓库或标签，默认已发布 `ghcr.io/devicechain-io`；`--build` 时为 `localhost:5000` 和 `dev`。 |
 | `--host <name>` | 暴露实例的 Ingress 主机名，默认 `devicechain.local`。本地使用 `localhost` 无需修改 `/etc/hosts`。 |
 | `--no-tls` | 使用纯 HTTP 而非自签名证书。配合 `--host localhost` 可免配置访问 `http://localhost/`，无证书警告。未安装 cert-manager 的集群默认启用，拒绝 `--no-tls=false`，因为无法签发证书。 |
+| `--object-store <none\|filesystem\|s3>` | 实例存放租户标志和更新制品的位置。默认值：dcctl 自己创建的集群上为一个小型文件系统卷，用 `--kube-context` 指向的集群上为无。可用 `--object-store-*` 标志调整；参见[对象存储](#object-store)。 |
 | `--dry-run` | 打印各步骤行为，不改变内容、不取得集群锁，但仍报告其他操作者是否持锁。 |
 | `--skip-preflight` | 跳过环境检查。 |
 | `--escrow-passphrase-file <path>` | 从文件读取根密钥托管口令，不交互提示，见下文。 |
@@ -334,6 +335,47 @@ dcctl bootstrap local scratch --dev
 保存秘密的领域无法解密凭据时拒绝启动。用户管理服务也在其中：它封存令牌签名密钥，因此所有用户无法登录。问题会立即显现，但届时已无法补救。[灾难恢复](./disaster-recovery.md)说明完整流程。
 
 使用 `--no-escrow` 或 `--dev` 创建的无托管实例可之后补充，无需重建。向 `dcctl upgrade` 提供口令会写入缺失文件，每次升级也检查已有文件。见[托管协调](./disaster-recovery.md#escrow-reconcile)。
+
+### 对象存储 {#object-store}
+
+租户的品牌标志和更新制品保存在对象存储中，而不是数据库里。没有对象存储时，上传这两类内容都会被拒绝，并返回
+`OBJECT_STORE_NOT_CONFIGURED`。对象存储属于**固定配置**：在初始化时选定，写入实例挂载的配置，并通过滚动重启 Pod 生效，
+不是运行时设置。
+
+| 模式 | 效果 |
+|------|------|
+| `--object-store filesystem` | 由 chart 创建的卷，并挂载到使用对象存储的服务。用 `--object-store-size` 设置大小（默认 `1Gi`），用 `--object-store-storage-class` 选择存储类（默认使用集群的默认存储类）；当多个 Pod 需要共享时使用 `--object-store-access-mode ReadWriteMany`（需要支持该模式的存储类）。 |
+| `--object-store s3` | AWS S3 或 MinIO 等兼容 S3 的服务上的存储桶。提供 `--object-store-s3-bucket`，以及 `--object-store-s3-region` 或 `--object-store-s3-endpoint`（MinIO 还需 `--object-store-s3-path-style`）。 |
+| `--object-store none` | 不使用对象存储。 |
+
+省略 `--object-store` 时，由 dcctl 自己创建的集群（本地 kind 集群）会得到 `1Gi` 的文件系统存储，因此标志和制品开箱即用。
+用 `--kube-context` 指向的集群在你做出选择之前不会得到对象存储：是否存在合适存储类的卷、是否更希望使用存储桶，由你决定。
+
+不适用的标志会被拒绝，而不是被忽略。例如 `--object-store filesystem` 搭配存储桶、`s3` 搭配卷大小，或 `none` 搭配任何细节参数，
+都会在创建任何资源之前失败。
+
+#### S3 凭据 {#object-store-s3-credentials}
+
+访问密钥永远不是命令行标志，不是实例记录的字段，也不会写入实例配置。请改为让 dcctl 指向一个已存在的 Kubernetes Secret：
+
+```bash
+kubectl -n storage create secret generic minio-keys \
+  --from-literal=AWS_ACCESS_KEY_ID=... --from-literal=AWS_SECRET_ACCESS_KEY=...
+
+dcctl bootstrap local prod --kube-context my-cluster --object-store s3 \
+  --object-store-s3-bucket dc-objects --object-store-s3-endpoint https://minio.example.com:9000 \
+  --object-store-s3-path-style --object-store-s3-credentials-secret storage/minio-keys
+```
+
+取值为 `<namespace>/<name>`。在创建任何资源之前，dcctl 会检查该 Secret 存在且包含这两个密钥，然后只把这两个密钥复制到实例命名空间中
+由 dcctl 拥有的 Secret，服务通过 AWS SDK 常用的环境变量读取。每次 `dcctl upgrade` 都会刷新这份副本，因此轮换密钥的做法是：
+更新你的 Secret，然后运行 `dcctl upgrade`。省略该标志则使用 Pod 自身的 AWS 身份（IRSA 或实例配置文件）。
+
+#### 保留对象存储 {#object-store-persistence}
+
+这一选择记录在实例的声明中，因此 `dcctl upgrade` 和另一位运维人员重建的对象存储与实例创建时完全一致。声明中保存的是 Secret 的名称，
+绝不是其内容。把实例在文件系统和 S3 之间切换会被拒绝：没有任何机制会迁移已存储的对象，它们会被留在原处。没有对象存储的实例
+不会在升级时获得对象存储；请销毁后带上该标志重新初始化。
 
 ## 安装标志 {#install-flags}
 

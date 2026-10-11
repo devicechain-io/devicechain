@@ -223,6 +223,12 @@ func helmInstall(ctx context.Context, st *State) error {
 		releaseName, releaseNamespace); err != nil {
 		return err
 	}
+	// The object store's S3 credentials, copied in beside the document. Before the release
+	// for the same reason: the pods project the Secret at container start, and a Secret
+	// that arrives after them is a rollout that waits on it.
+	if err := syncObjectStoreCredentials(ctx, typed, st); err != nil {
+		return err
+	}
 	if err := writeOwnedSecret(ctx, typed, instanceOwner(st.Instance, st.InstanceUID),
 		instanceConfigSecret(st.Instance, doc), time.Now); err != nil {
 		return err
@@ -395,6 +401,12 @@ func helmValues(st *State) map[string]interface{} {
 	if rootKey := st.Values["secretsRootKey"]; rootKey != "" {
 		infraVals["secrets"] = map[string]interface{}{"rootKey": rootKey}
 	}
+	// The object store: what the services read (infrastructure.blob) here, and what the
+	// chart does about it (the volume, the credentials projection) at the top level below.
+	blobVals, blobStorageVals := objectStoreChartValues(st.ObjectStore, st.Instance)
+	if blobVals != nil {
+		infraVals["blob"] = blobVals
+	}
 	instanceVals := map[string]interface{}{"id": st.Instance}
 	configVals := map[string]interface{}{}
 	if len(infraVals) > 0 {
@@ -482,6 +494,10 @@ func helmValues(st *State) map[string]interface{} {
 			"databaseNamespace":       databaseNamespaceFor(st),
 			"cnpgNamespace":           st.Values[cnpgNamespaceKey],
 		},
+	}
+
+	if len(blobStorageVals) > 0 {
+		vals["blobStorage"] = blobStorageVals
 	}
 
 	// Deployment selection: normally the named profile (or "" → the chart's default).

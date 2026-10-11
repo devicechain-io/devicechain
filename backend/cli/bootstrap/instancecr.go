@@ -77,6 +77,9 @@ func InstanceSpecFrom(st *State, binding ClusterBinding, provider string) dcv1be
 	if len(st.EnableAreas) > 0 {
 		spec.ExtraFunctionalAreas = append([]string(nil), st.EnableAreas...)
 	}
+	// The store as RESOLVED (the provider's default applied), for the reason the ingress
+	// host is: an unset flag recorded as unset leaves the next reader to re-derive a default.
+	spec.ObjectStore = st.ObjectStore.DeepCopy()
 	if spec.Restored {
 		now := metav1.NewTime(time.Now().UTC())
 		spec.RestoredAt = &now
@@ -102,6 +105,9 @@ func ValidateInstanceSpec(spec dcv1beta1.InstanceSpec) error {
 	if spec.Restored && spec.RestoredAt == nil {
 		return fmt.Errorf("the instance declaration says this instance was restored and carries " +
 			"no timestamp for it")
+	}
+	if err := ValidateObjectStore(spec.ObjectStore); err != nil {
+		return fmt.Errorf("the instance declaration's object store is unusable: %w", err)
 	}
 	// 🔴 THE AREA SET IS JUDGED AGAINST THE CATALOG, not merely against itself.
 	// This is the read-back check: a declaration is an INPUT to a later run, and an
@@ -149,6 +155,17 @@ func ValidateInstanceSpecChange(existing, desired dcv1beta1.InstanceSpec) error 
 				"else now, destroy it from the cluster that holds it and bootstrap it again",
 				f.name, f.was, f.is, f.consequence)
 		}
+	}
+	// 🔴 A STORE'S BACKEND IS NOT MOVED BY A RE-RUN. Objects written to a volume are not in
+	// the bucket the declaration now names (or the reverse), so changing it would not migrate
+	// anything: it would leave every stored logo and artifact behind and report success.
+	// Adding a store to an instance that had none, and changing a store's size or
+	// credentials, are ordinary; only a move between two real backends is refused.
+	if e, d := existing.ObjectStore, desired.ObjectStore; e != nil && d != nil && e.Backend != d.Backend {
+		return fmt.Errorf("this run would change the instance's object store from %s to %s, and "+
+			"nothing moves the objects already stored: they would be left behind in the old one. "+
+			"Keep the backend, or destroy the instance and bootstrap it again",
+			e.Backend, d.Backend)
 	}
 	return ValidateInstanceSpec(desired)
 }

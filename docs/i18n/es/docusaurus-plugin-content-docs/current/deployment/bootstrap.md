@@ -735,6 +735,7 @@ imágenes. La canalización, el chart y el operador son idénticos.
 | `--registry` / `--version` | Sobrescribe el registro/etiqueta de imagen (por defecto: `ghcr.io/devicechain-io` publicado, o `localhost:5000` + `dev` con `--build`). |
 | `--host <name>` | Host de ingress en el que exponer la instancia (por defecto `devicechain.local`). Usa `localhost` en un clúster local para llegar a la consola sin editar `/etc/hosts`. |
 | `--no-tls` | Sirve HTTP simple en lugar de un certificado autofirmado. Con `--host localhost`, un `http://localhost/` sin configuración adicional (sin advertencia de certificado). En un clúster instalado sin cert-manager está activado por defecto, y `--no-tls=false` se rechaza: no hay nada que emita el certificado. |
+| `--object-store <none\|filesystem\|s3>` | Dónde guarda la instancia los logotipos de los tenants y los artefactos de actualización. Por defecto, un pequeño volumen de sistema de archivos en un clúster creado por dcctl y ninguno en uno al que lo apuntaste con `--kube-context`. Se ajusta con los flags `--object-store-*`; consulta [el almacén de objetos](#object-store). |
 | `--dry-run` | Imprime lo que haría cada paso sin cambiar nada. Una ejecución en seco no toma el bloqueo del clúster; sí informa de si otro operador está reteniendo el clúster. |
 | `--skip-preflight` | Omite las comprobaciones de entorno. |
 | `--escrow-passphrase-file <path>` | Lee la frase de paso del depósito de la clave raíz desde un archivo en lugar de pedirla. Consulta más abajo. |
@@ -777,6 +778,59 @@ A una instancia que no tiene depósito —creada con `--no-escrow` o con `--dev`
 uno más tarde sin reconstruirla. `dcctl upgrade` escribe el artefacto que falta cuando le pasas
 una frase de paso, y comprueba uno existente cada vez que se ejecuta. Consulta
 [la reconciliación del depósito](./disaster-recovery.md#escrow-reconcile).
+
+### El almacén de objetos {#object-store}
+
+Los logotipos de marca de los tenants y los artefactos de actualización viven en un almacén de
+objetos, no en la base de datos. Sin uno, subir cualquiera de ellos se rechaza con
+`OBJECT_STORE_NOT_CONFIGURED`. El almacén es **configuración fija**: se elige al hacer bootstrap,
+se escribe en la configuración montada de la instancia y se adopta reiniciando los pods. No es un
+ajuste en tiempo de ejecución.
+
+| Modo | Qué obtienes |
+|------|--------------|
+| `--object-store filesystem` | Un volumen que crea el chart y que monta en los servicios que usan el almacén. Ajusta su tamaño con `--object-store-size` (por defecto `1Gi`), elige la clase con `--object-store-storage-class` (por defecto, la clase predeterminada del clúster) y usa `--object-store-access-mode ReadWriteMany` cuando más de un pod deba compartirlo (requiere una clase de almacenamiento que lo admita). |
+| `--object-store s3` | Un bucket en AWS S3 o en un servicio compatible con S3 como MinIO. Indica `--object-store-s3-bucket` y `--object-store-s3-region` o `--object-store-s3-endpoint` (con `--object-store-s3-path-style` para MinIO). |
+| `--object-store none` | Sin almacén. |
+
+Si omites `--object-store`, un clúster que dcctl creó él mismo (el clúster kind local) recibe un
+almacén de sistema de archivos de `1Gi`, de modo que los logotipos y los artefactos funcionan desde
+el primer momento. Un clúster al que apuntaste dcctl con `--kube-context` no recibe ninguno hasta que
+elijas: si existe un volumen de la clase adecuada, o si prefieres un bucket, lo decides tú.
+
+Los flags que no pueden aplicarse se rechazan en lugar de ignorarse. Un bucket junto con
+`--object-store filesystem`, un tamaño de volumen junto con `s3` o cualquier detalle junto con
+`none` falla antes de crear nada.
+
+#### Credenciales de S3 {#object-store-s3-credentials}
+
+Una clave de acceso nunca es un flag, nunca es un campo del registro de la instancia y nunca se
+escribe en la configuración de la instancia. En su lugar, apunta dcctl a un Secret de Kubernetes que
+ya exista:
+
+```bash
+kubectl -n storage create secret generic minio-keys \
+  --from-literal=AWS_ACCESS_KEY_ID=... --from-literal=AWS_SECRET_ACCESS_KEY=...
+
+dcctl bootstrap local prod --kube-context my-cluster --object-store s3 \
+  --object-store-s3-bucket dc-objects --object-store-s3-endpoint https://minio.example.com:9000 \
+  --object-store-s3-path-style --object-store-s3-credentials-secret storage/minio-keys
+```
+
+El valor es `<namespace>/<nombre>`. Antes de crear nada, dcctl comprueba que el Secret existe y
+contiene ambas claves; después copia esas dos claves (y nada más) a un Secret propio en el namespace
+de la instancia, que los servicios leen mediante las variables de entorno habituales del SDK de AWS.
+La copia se actualiza en cada `dcctl upgrade`, así que rotar una clave consiste en actualizar tu
+Secret y ejecutar `dcctl upgrade`. Omite el flag para usar la identidad AWS propia de los pods (IRSA
+o un perfil de instancia).
+
+#### Conservar el almacén {#object-store-persistence}
+
+La elección queda registrada en la declaración de la instancia, de modo que `dcctl upgrade` y un
+segundo operador reconstruyen exactamente el almacén con el que se creó la instancia. La declaración
+contiene el nombre del Secret, nunca su contenido. Cambiar una instancia entre sistema de archivos y
+S3 se rechaza: nada movería los objetos ya almacenados y se quedarían atrás. Una instancia creada sin
+almacén no lo adquiere al hacer upgrade; destrúyela y haz bootstrap de nuevo con el flag.
 
 ## Flags de instalación {#install-flags}
 

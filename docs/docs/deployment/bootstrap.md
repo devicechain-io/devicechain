@@ -677,6 +677,7 @@ chart and operator are identical.
 | `--registry` / `--version` | Override the image registry / tag (defaults: published `ghcr.io/devicechain-io`, or `localhost:5000` + `dev` with `--build`). |
 | `--host <name>` | Ingress host to expose the instance on (default `devicechain.local`). Use `localhost` on a local cluster to reach the console with no `/etc/hosts` edit. |
 | `--no-tls` | Serve plain HTTP instead of a self-signed cert. With `--host localhost`, a zero-config `http://localhost/` (no cert warning). On a cluster installed without cert-manager this is on by default, and `--no-tls=false` is refused: there is nothing to issue the certificate. |
+| `--object-store <none\|filesystem\|s3>` | Where the instance keeps tenant logos and update artifacts. Defaults to a small filesystem volume on a cluster dcctl created, and to none on one you pointed it at with `--kube-context`. Tuned by the `--object-store-*` flags; see [the object store](#object-store). |
 | `--dry-run` | Print what each step would do without changing anything. A dry run takes no cluster lock; it does still report whether another operator is holding the cluster. |
 | `--skip-preflight` | Skip the environment checks. |
 | `--escrow-passphrase-file <path>` | Read the root-key escrow passphrase from a file instead of prompting. See below. |
@@ -719,6 +720,56 @@ An instance that has no escrow — one created with `--no-escrow`, or with `--de
 given one later without being rebuilt. `dcctl upgrade` writes the missing artifact when you
 pass it a passphrase, and checks an existing one every time it runs. See
 [the escrow reconcile](./disaster-recovery.md#escrow-reconcile).
+
+### The object store {#object-store}
+
+Tenant branding logos and update artifacts live in an object store rather than in the database.
+Without one, uploading either is refused with `OBJECT_STORE_NOT_CONFIGURED`. The store is
+**fixed configuration**: it is chosen at bootstrap, written into the instance's mounted
+configuration, and adopted by rolling the pods. It is not a runtime setting.
+
+| Mode | What you get |
+|------|--------------|
+| `--object-store filesystem` | A volume the chart creates and mounts into the services that use the store. Size it with `--object-store-size` (default `1Gi`), pick the class with `--object-store-storage-class` (default: the cluster's default class), and choose `--object-store-access-mode ReadWriteMany` when more than one pod must share it (this needs a storage class that supports it). |
+| `--object-store s3` | A bucket on AWS S3 or an S3-compatible service such as MinIO. Give `--object-store-s3-bucket` and either `--object-store-s3-region` or `--object-store-s3-endpoint` (with `--object-store-s3-path-style` for MinIO). |
+| `--object-store none` | No store. |
+
+When you leave `--object-store` out, a cluster that dcctl created itself (the local kind cluster)
+gets a `1Gi` filesystem store, so logos and artifacts work out of the box. A cluster you pointed
+dcctl at with `--kube-context` gets no store until you choose one: whether a volume of the right
+class exists, or a bucket is wanted instead, is your call.
+
+Flags that cannot apply are refused rather than ignored. A bucket given with
+`--object-store filesystem`, a volume size given with `s3`, or any detail given with `none` fails
+before anything is created.
+
+#### S3 credentials {#object-store-s3-credentials}
+
+An access key is never a flag, never a field of the instance record, and never written into the
+instance configuration. Instead, point dcctl at a Kubernetes Secret that already exists:
+
+```bash
+kubectl -n storage create secret generic minio-keys \
+  --from-literal=AWS_ACCESS_KEY_ID=... --from-literal=AWS_SECRET_ACCESS_KEY=...
+
+dcctl bootstrap local prod --kube-context my-cluster --object-store s3 \
+  --object-store-s3-bucket dc-objects --object-store-s3-endpoint https://minio.example.com:9000 \
+  --object-store-s3-path-style --object-store-s3-credentials-secret storage/minio-keys
+```
+
+The value is `<namespace>/<name>`. dcctl checks before it creates anything that the Secret exists
+and holds both keys, then copies those two keys (and nothing else) into a Secret it owns in the
+instance's namespace, which the services read through the AWS SDK's usual environment variables. The
+copy is refreshed on every `dcctl upgrade`, so rotating a key is: update your Secret, then run
+`dcctl upgrade`. Omit the flag to use the pods' own AWS identity (IRSA or an instance profile).
+
+#### Keeping the store {#object-store-persistence}
+
+The choice is recorded on the instance's declaration, so `dcctl upgrade` and a second operator
+rebuild exactly the store the instance was built with. The declaration holds the Secret's name,
+never what is in it. Changing an instance between filesystem and S3 is refused: nothing would move
+the objects already stored, so they would be left behind. An instance bootstrapped without a store
+does not gain one on upgrade; destroy it and bootstrap it again with the flag.
 
 ## Install flags {#install-flags}
 

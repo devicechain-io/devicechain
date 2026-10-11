@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"strings"
 
+	dcv1beta1 "github.com/devicechain-io/dc-k8s/api/v1beta1"
 	"github.com/fatih/color"
 )
 
@@ -139,6 +140,10 @@ type State struct {
 	// helmValues renders them into a chart-owned Secret + lwm2m-ingest config. Setting
 	// this implies lwm2m-ingest ∈ EnabledAreas. Empty when the flag is unused.
 	Lwm2mIdentities []Lwm2mIdentity
+	// ObjectStore is the settled object store (--object-store): nil for none. A bootstrap
+	// resolves it from the flags and the provider's default; an upgrade reads it back from
+	// the declaration, which is how it survives a re-run. See objectstore.go.
+	ObjectStore *dcv1beta1.ObjectStoreSpec
 	// Escrow is the settled root-key plan (ADR-059 / ADR-028): where the key comes
 	// from and where its second copy goes. Resolved in the command layer, BEFORE any
 	// cluster exists, so a missing passphrase or an unopenable restore artifact

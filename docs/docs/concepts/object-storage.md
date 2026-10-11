@@ -52,6 +52,8 @@ Selecting the S3 backend is a configuration change on the instance. The endpoint
 
 Like every DeviceChain config surface, the object-store configuration is typed and strict: a misspelled backend name is a startup error, not a silent fallback. A filesystem backend with no directory is treated as "object store not configured". The service still starts, the logo upload and read endpoints return **503**, and inline and URL logos keep working.
 
+On an instance built with `dcctl`, none of this is hand-written: `dcctl bootstrap` chooses the store with `--object-store` (a small filesystem volume on a local cluster by default, or an S3 bucket with the credentials taken from an existing Secret) and records it on the instance. See [the object store](../deployment/bootstrap.md#object-store).
+
 ## First consumer: white-labeling
 
 Tenant white-labeling is the first feature built on the object store. A tenant's logo uploads into the store and is referenced by handle from the tenant's branding configuration. Very small assets can still be supplied inline (a bounded data-URI) for deployments with no storage wired up, but real image assets go through the store. The branding record's `background` is a hex color, not an image.
