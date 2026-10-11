@@ -55,3 +55,35 @@ func (c *Checker) Missing(ctx context.Context, tenant string, tokens []string) (
 	}
 	return missing, nil
 }
+
+const deviceProfile = `query($tokens: [String!]!) { devicesByToken(tokens: $tokens) { token deviceType { profile { token } } } }`
+
+// ProfileOf implements model.DeviceLookup: the token of the device-profile a device resolves
+// through, found=false for a device the tenant does not have, and an empty profile for a device
+// whose type has none. An error means the answer could not be obtained; it is never reported as a
+// device that does not exist.
+func (c *Checker) ProfileOf(ctx context.Context, tenant, deviceToken string) (profile string, found bool, err error) {
+	var out struct {
+		DevicesByToken []struct {
+			Token      string `json:"token"`
+			DeviceType struct {
+				Profile *struct {
+					Token string `json:"token"`
+				} `json:"profile"`
+			} `json:"deviceType"`
+		} `json:"devicesByToken"`
+	}
+	if err := c.client.Query(ctx, c.url, tenant, deviceProfile, map[string]any{"tokens": []string{deviceToken}}, &out); err != nil {
+		return "", false, fmt.Errorf("device-management device lookup: %w", err)
+	}
+	for _, d := range out.DevicesByToken {
+		if d.Token != deviceToken {
+			continue
+		}
+		if d.DeviceType.Profile != nil {
+			profile = d.DeviceType.Profile.Token
+		}
+		return profile, true, nil
+	}
+	return "", false, nil
+}

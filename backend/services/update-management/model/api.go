@@ -17,7 +17,9 @@ import (
 	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-microservice/blob"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/ota"
 	"github.com/devicechain-io/dc-microservice/rdb"
+	"github.com/devicechain-io/dc-microservice/secrets"
 	"gorm.io/datatypes"
 	"gorm.io/gorm"
 )
@@ -102,6 +104,32 @@ type Api struct {
 	// behind the purge sweep. Nil disables the gate (user-management not configured, unit
 	// tests).
 	TenantDeleted func(tenant string) bool
+
+	// The update plane (assignments, the device channels and the download capability). All of it
+	// is optional for the catalogue and REQUIRED for an assignment: each operation that needs a
+	// collaborator that is not wired is refused by name rather than half done.
+	//
+	// Devices resolves a device's profile in device-management; Desired puts messages on a
+	// device's desired-state channel; Secrets holds each tenant's capability key.
+	Devices DeviceLookup
+	Desired DesiredPublisher
+	Secrets secrets.SecretStore
+	// Policy is how long the platform waits in each phase of an attempt.
+	Policy ota.Policy
+	// AllowUnverified is the FIXED config updates.allowUnverifiedArtifacts. While every
+	// artifact is UNVERIFIED (nothing authenticates an artifact's origin yet), false means
+	// nothing can be assigned.
+	AllowUnverified bool
+	// DownloadBaseURL is the public base a device reaches the download endpoint at, with no
+	// trailing path. Empty means no capability URL can be minted, and a download request is
+	// refused loudly.
+	DownloadBaseURL string
+	// CapabilityTTL is how long a minted capability lives (at most MaxCapabilityTTL).
+	CapabilityTTL time.Duration
+	// Clock is the time source; nil means time.Now. A seam for deadline and expiry tests.
+	Clock func() time.Time
+
+	keys capabilityKeys
 
 	// lockTenant takes the per-tenant admission lock inside the create transaction. A seam
 	// so a test can see that it is taken before the sum is read; nil means the real lock.

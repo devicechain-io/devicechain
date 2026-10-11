@@ -72,6 +72,8 @@ EXEMPTIONS=(
 
   "backend/cli/bootstrap.refuseRestoreOverADifferentKey@subtle.ConstantTimeCompare=operator tool: compares the deployed and the restored root keys on the operator's own machine"
 
+  "backend/services/update-management/model.Api.VerifyCapability@hmac.Equal=not a guessable credential check: it verifies a 256-bit HMAC-SHA256 over one device, one assignment and one artifact digest, with a fifteen minute ceiling and a key per tenant, on a request that has no principal to back off and no per-account state to throttle; the signature is checked before any database state is read, and the download slots bound how many such checks run at once"
+
   "backend/tools/drdrill.classify@subtle.ConstantTimeCompare=test instrument: the restore drill checks a decrypted plaintext against the one it seeded itself"
 )
 
