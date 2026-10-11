@@ -17,7 +17,15 @@ const cgroup2SuperMagic = 0x63677270
 
 // checkSystem runs the Linux-specific host diagnostics: cgroup version, inotify
 // limits, disk headroom on the docker data-root, and WSL2 specifics.
-func checkSystem(d *doctor, dockerRoot string) {
+func checkSystem(d *doctor, dockerRoot string, hostsKind bool) {
+	if hostsKind {
+		checkKindNode(d)
+	}
+	checkDockerHost(d, dockerRoot)
+}
+
+// checkKindNode runs the checks that exist for kind's node containers: cgroups and inotify.
+func checkKindNode(d *doctor) {
 	section("Kernel & cgroups", "🧬")
 	var cg syscall.Statfs_t
 	if err := syscall.Statfs("/sys/fs/cgroup", &cg); err == nil {
@@ -43,7 +51,10 @@ func checkSystem(d *doctor, dockerRoot string) {
 				"echo 'fs.inotify.max_user_watches=524288' | sudo tee -a /etc/sysctl.d/99-kind.conf && sudo sysctl -p /etc/sysctl.d/99-kind.conf")
 		}
 	}
+}
 
+// checkDockerHost runs the checks on the Docker host itself, whatever the cluster is.
+func checkDockerHost(d *doctor, dockerRoot string) {
 	section("Disk", "💾")
 	if dockerRoot == "" {
 		dockerRoot = "/var/lib/docker"

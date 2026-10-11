@@ -334,18 +334,33 @@ Este topic era antes de alcance de inquilino (`{instanceId}/{tenant}/command-res
 Un comando que nunca se responde permanece en `SENT` hasta que su TTL lo convierte en `TIMEOUT`. Sin una respuesta, la plataforma solo sabe que el comando se despachó, no que el dispositivo actuó sobre él. Si tus dispositivos no responden, configura un `expiresAt` al emitir comandos para que alcancen un estado terminal en tu propio plazo y no en el predeterminado de siete días de la plataforma.
 :::
 
-### Topics reservados para la entrega de configuración {#reserved-device-topics}
+### Topics de entrega de configuración {#reserved-device-topics}
 
-:::note Reservado, aún no activo
-Se reservan dos topics adicionales por dispositivo como base para la entrega de configuración a los dispositivos. Todavía nada publica en ellos ni lee de ellos, así que no construyas sobre ellos. Se listan para que tus dispositivos no usen esos nombres para otra cosa.
+Un dispositivo recibe su configuración, y le dice a la plataforma qué hizo con ella, mediante dos topics por dispositivo:
 
 ```
 {instanceId}/{tenant}/device-desired/{deviceToken}    (de la plataforma al dispositivo; un dispositivo puede suscribirse al suyo)
 {instanceId}/{tenant}/device-reports/{deviceToken}    (del dispositivo a la plataforma; un dispositivo puede publicar en el suyo)
 ```
 
-Igual que con los comandos, un dispositivo solo está autorizado para el topic que lleva su propio token de dispositivo, y únicamente en el sentido indicado.
-:::
+Igual que con los comandos, un dispositivo solo está autorizado para el topic que lleva su propio token de dispositivo, y únicamente en el sentido indicado. La plataforma toma el tenant y el dispositivo del topic, nunca del mensaje, así que un mensaje no debe llevar la identidad de un dispositivo (si la lleva, se rechaza) y un dispositivo solo puede informar por sí mismo.
+
+Cada vez que cambia la configuración del dispositivo, la plataforma publica una revisión en `device-desired`:
+
+```json
+{"v":1,"kind":"config.revision","revision":3,"digest":"sha256:9e39b20b9def308341baa751db8c2570bfc5b562e1d5420f9e6506510e0328da","document":"{\"sampleIntervalSeconds\":30}"}
+```
+
+`document` es una **cadena** JSON que contiene la configuración. Decodifica el valor de la cadena JSON, calcula SHA-256 sobre sus bytes UTF-8 y compara `sha256:` seguido del hash en hexadecimal en minúsculas con `digest`; si difieren, no apliques nada. No analices el documento ni lo vuelvas a serializar antes de calcular el hash, porque el digest cubre los bytes que envió la plataforma.
+
+Las revisiones pueden llegar a un dispositivo fuera de orden, así que una revisión menor puede llegar después de una mayor. Ignora un `config.revision` cuya revisión sea menor que la que tienes y, si es la que ya tienes, informa `APPLIED` de nuevo en lugar de aplicarla dos veces.
+
+El dispositivo responde en `device-reports`. Cada mensaje es JSON, de como máximo 4 KiB, y se rechazan los campos desconocidos.
+
+- **`sync`**, que se envía cada vez que el dispositivo se conecta, indica qué revisión tiene (`0` si ninguna): `{"v":1,"kind":"sync","config":{"haveRevision":3}}`. Suscríbete a `device-desired` **antes** de enviar el sync: no se retiene nada, así que una respuesta publicada antes de que te suscribas se pierde. La plataforma responde con la revisión actual, la tenga ya el dispositivo o no, y no responde nada cuando el dispositivo no tiene configuración. No cuentes con que llegue después un mensaje publicado mientras el dispositivo estaba desconectado: sincronizar es como un dispositivo se pone al día. Sincroniza en cada conexión y también periódicamente (cada pocas horas, por ejemplo), porque una revisión perdida entre el momento en que la plataforma la confirma y el momento en que la envía solo se repara con un sync. Los sync enviados a los pocos segundos del anterior se confirman y se ignoran.
+- **`config.status`** informa de lo que el dispositivo hizo con una revisión: `{"v":1,"kind":"config.status","revision":3,"digest":"sha256:…","status":"APPLIED"}`. El estado es `RECEIVED`, `APPLIED` o `REJECTED`. Un informe `REJECTED` debe incluir `errors`, una lista de hasta 16 cadenas de hasta 256 bytes cada una que explique el motivo.
+
+La plataforma registra un `config.status` solo cuando el dispositivo tiene esa revisión y el digest coincide con ella; el dispositivo deja de figurar como pendiente de esa revisión cuando ha informado `APPLIED` para ella. Los informes se procesan al menos una vez, así que repetir uno es seguro, y un informe antiguo nunca sobrescribe uno más reciente. Un mensaje que no se decodifica, que nombra una revisión que no se envió al dispositivo o que lleva un digest que no es el de esa revisión se rechaza y se registra en el flujo de mensajes fallidos (dead-letter) en lugar de descartarse. Los dispositivos que solo hablan HTTP no se atienden por este canal.
 
 ### Por qué el nonce es obligatorio {#why-the-nonce-is-required}
 

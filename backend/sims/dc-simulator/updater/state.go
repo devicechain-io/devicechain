@@ -108,6 +108,12 @@ func saveState(path string, st state) error {
 	if err != nil {
 		return err
 	}
+	return writeFileAtomic(path, raw)
+}
+
+// writeFileAtomic writes raw the way a device must: to a sibling temp file, fsynced, then renamed
+// over the real one, so a crash leaves either the old contents or the new, never a torn mix.
+func writeFileAtomic(path string, raw []byte) error {
 	tmp := path + ".tmp"
 	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
 	if err != nil {

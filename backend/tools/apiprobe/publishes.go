@@ -294,8 +294,9 @@ var afterPublish = []entity{
 		// Verify reads the attribute back; the table sweep then proves the revision row it
 		// minted survived the upgrade.
 		//
-		// device_configuration_states is NOT reached from here: it is written only from a
-		// device's own report, and no tenant API writes it. See tablesweep.go.
+		// device_configuration_states is NOT reached from here: it is written only by the
+		// consumer of a device's own sync and report messages, and no tenant API writes it.
+		// See tablesweep.go.
 		Name:      "entity-attribute-configuration",
 		Area:      "device-management",
 		Mutation:  "setEntityAttribute",
