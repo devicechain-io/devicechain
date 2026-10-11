@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	nats "github.com/nats-io/nats.go"
@@ -266,4 +267,29 @@ func TestLogoutBurnsThePresentedRefreshToken(t *testing.T) {
 	require.NoError(t, e.m.Logout(ctx, pair.RefreshToken))
 	_, err = e.m.refreshKV.Get(claims.ID)
 	require.ErrorIs(t, err, nats.ErrKeyNotFound, "logout left the presented refresh token's jti in the store")
+}
+
+// The owner comparison is EXACT: an identity whose email extends, or is extended by,
+// another's cannot carry that one's sign-in. Both directions, each with a control.
+func TestASessionIDOfAPrefixSharingIdentityIsRefused(t *testing.T) {
+	e := newSessionEnv(t)
+	ctx := context.Background()
+	const short, long = "pat@example.com", "pat@example.com.au"
+	e.createMember(t, short, "pw-1")
+	e.createMember(t, long, "pw-2")
+	shortSid, longSid := e.sidOf(t, short), e.sidOf(t, long)
+
+	for _, c := range []struct {
+		email      string
+		own, other auth.SessionID
+	}{{short, shortSid, longSid}, {long, longSid, shortSid}} {
+		claims := tenantRefreshClaims(c.email, e.rowEpoch(t, c.email))
+		claims.SessionID = c.own
+		_, err := e.m.Refresh(ctx, e.forgeWithoutSid(t, claims, true))
+		require.NoError(t, err, "control: %s with its own sign-in is accepted", c.email)
+
+		claims.SessionID = c.other
+		_, err = e.m.Refresh(ctx, e.forgeWithoutSid(t, claims, true))
+		require.ErrorIs(t, err, ErrInvalidToken, "%s carried a prefix-sharing identity's sign-in", c.email)
+	}
 }
