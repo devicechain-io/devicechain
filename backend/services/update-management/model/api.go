@@ -437,7 +437,7 @@ func (api *Api) RetireArtifact(ctx context.Context, token string) (*Artifact, er
 	if a.State == StateRetired {
 		return a, nil
 	}
-	if err := api.RDB.DB(ctx).Model(&Artifact{}).Where("id = ? AND state <> ?", a.ID, StateRetired).
+	if err := api.RDB.DB(ctx).Model(identified(a)).Where("id = ? AND state <> ?", a.ID, StateRetired).
 		Update("state", StateRetired).Error; err != nil {
 		return nil, err
 	}
@@ -460,7 +460,7 @@ func ErrNotFound(token string) error {
 // uploads at most one wins and an artifact never changes after it is AVAILABLE; the
 // loser gets ARTIFACT_UPLOAD_CONFLICT and must delete its own object.
 func (api *Api) CompleteUpload(ctx context.Context, a *Artifact, ref blob.Ref) error {
-	res := api.RDB.DB(ctx).Model(&Artifact{}).
+	res := api.RDB.DB(ctx).Model(identified(a)).
 		Where("id = ? AND state = ?", a.ID, StateUploading).
 		Updates(map[string]any{
 			"state":           StateAvailable,
@@ -496,7 +496,7 @@ const claimGrace = time.Minute
 func (api *Api) ClaimUpload(ctx context.Context, a *Artifact) error {
 	now := time.Now().UTC()
 	stale := now.Add(-(UploadWindow(a.SizeBytes) + claimGrace))
-	res := api.RDB.DB(ctx).Model(&Artifact{}).
+	res := api.RDB.DB(ctx).Model(identified(a)).
 		Where("id = ? AND state = ? AND (uploading_since IS NULL OR uploading_since < ?)", a.ID, StateUploading, stale).
 		Update("uploading_since", now)
 	if res.Error != nil {
@@ -511,5 +511,14 @@ func (api *Api) ClaimUpload(ctx context.Context, a *Artifact) error {
 // ReleaseUpload gives the lease back. It is best effort by design: an expired lease is
 // taken over anyway, and the only cost of a failed release is that a retry waits for it.
 func (api *Api) ReleaseUpload(ctx context.Context, a *Artifact) error {
-	return api.RDB.DB(ctx).Model(&Artifact{}).Where("id = ?", a.ID).Update("uploading_since", nil).Error
+	return api.RDB.DB(ctx).Model(identified(a)).Where("id = ?", a.ID).Update("uploading_since", nil).Error
+}
+
+// identified is the zero-value model carrying only the identity of a loaded artifact, which
+// is what lets the audit journal name the row (its primary key and its token as the label)
+// without a second query. A conditional update that names its row by id must hand gorm this
+// rather than a bare Artifact{}, or the journal records that something changed without
+// recording what.
+func identified(a *Artifact) *Artifact {
+	return &Artifact{Model: gorm.Model{ID: a.ID}, TokenReference: a.TokenReference}
 }
