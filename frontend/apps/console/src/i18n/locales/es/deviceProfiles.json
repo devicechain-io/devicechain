@@ -469,6 +469,7 @@
   "cfgKeyHint": "Una clave de atributo compartido, p. ej. sampleIntervalSeconds. Letras, dígitos, guiones y guiones bajos, comenzando por una letra o un dígito.",
   "cfgKeyPlaceholder": "sampleIntervalSeconds",
   "cfgKeyInvalid": "La clave solo puede usar letras, dígitos, guiones y guiones bajos, y debe comenzar por una letra o un dígito.",
+  "cfgKeyTooLong": "La clave puede tener como máximo {{max}} caracteres.",
   "cfgKeyDuplicate": "La clave “{{key}}” ya está declarada.",
   "cfgDescriptionTooLong": "La descripción puede tener como máximo {{max}} caracteres.",
   "cfgTooManyKeys": "Un perfil puede declarar como máximo {{max}} claves.",

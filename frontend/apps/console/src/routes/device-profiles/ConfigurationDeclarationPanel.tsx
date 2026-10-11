@@ -47,6 +47,7 @@ import {
 // caught before the round trip. The server remains the authority and its message is
 // shown verbatim when it refuses something this does not catch.
 const KEY_GRAMMAR = /^[A-Za-z0-9][A-Za-z0-9_-]*$/;
+export const MAX_KEY_LENGTH = 128;
 export const MAX_DECLARED_KEYS = 256;
 export const MAX_KEY_DESCRIPTION = 256;
 
@@ -85,6 +86,7 @@ function KeyForm({
     const desc = description.trim();
     let problem: string | null = null;
     if (!KEY_GRAMMAR.test(k)) problem = t('deviceProfiles:cfgKeyInvalid');
+    else if (k.length > MAX_KEY_LENGTH) problem = t('deviceProfiles:cfgKeyTooLong', { max: MAX_KEY_LENGTH });
     else if (keys.some((r) => r.key === k && r.key !== existing?.key))
       problem = t('deviceProfiles:cfgKeyDuplicate', { key: k });
     else if ([...desc].length > MAX_KEY_DESCRIPTION)
@@ -159,6 +161,11 @@ export function ConfigurationDeclarationPanel({ profileToken }: { profileToken: 
   const [drawer, setDrawer] = useState<{ open: boolean; existing?: Row }>({ open: false });
 
   const keys = (data ?? []).map(toRow);
+  // Every write sends the WHOLE list built from `keys`, so a write is offered only while
+  // `keys` is the current answer. useQuery keeps the previous list both while a re-read is
+  // in flight (right after a save) and after one fails; a write built from that list would
+  // silently undo the save it follows.
+  const fresh = !loading && error == null;
 
   const save = async (next: Row[]) => {
     await setProfileConfigurationDeclaration(profileToken, next);
@@ -191,7 +198,7 @@ export function ConfigurationDeclarationPanel({ profileToken }: { profileToken: 
       <div className="flex items-start justify-between gap-4">
         <p className="max-w-prose text-sm text-muted-foreground">{t('deviceProfiles:cfgDescription')}</p>
         {canWrite && (
-          <Button size="sm" onClick={() => setDrawer({ open: true })} className="shrink-0">
+          <Button size="sm" onClick={() => setDrawer({ open: true })} disabled={!fresh} className="shrink-0">
             <Plus size={16} /> {t('deviceProfiles:cfgNew')}
           </Button>
         )}
@@ -239,13 +246,19 @@ export function ConfigurationDeclarationPanel({ profileToken }: { profileToken: 
                 {canWrite && (
                   <DataTableCell className="text-right">
                     <div className="flex justify-end gap-1">
-                      <Button variant="ghost" size="sm" onClick={() => setDrawer({ open: true, existing: r })}>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        disabled={!fresh}
+                        onClick={() => setDrawer({ open: true, existing: r })}
+                      >
                         <Pencil size={14} /> {t('deviceProfiles:defEdit')}
                       </Button>
                       <Button
                         variant="ghost"
                         size="sm"
                         aria-label={t('deviceProfiles:cfgDeleteTitle')}
+                        disabled={!fresh}
                         onClick={() => remove(r)}
                       >
                         <Trash2 size={14} />

@@ -469,6 +469,7 @@
   "cfgKeyHint": "A shared attribute key, e.g. sampleIntervalSeconds. Letters, digits, hyphens and underscores, starting with a letter or digit.",
   "cfgKeyPlaceholder": "sampleIntervalSeconds",
   "cfgKeyInvalid": "The key must use letters, digits, hyphens and underscores only, and start with a letter or digit.",
+  "cfgKeyTooLong": "The key may be at most {{max}} characters.",
   "cfgKeyDuplicate": "The key “{{key}}” is already declared.",
   "cfgDescriptionTooLong": "The description may be at most {{max}} characters.",
   "cfgTooManyKeys": "A profile can declare at most {{max}} keys.",
