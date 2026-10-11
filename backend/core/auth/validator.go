@@ -30,6 +30,8 @@ const signingMethod = "RS256"
 // per-request network call (ADR-008).
 type Validator struct {
 	parser *jwt.Parser
+	// sigOnly verifies the signature and nothing else (see ParseSignatureOnly).
+	sigOnly *jwt.Parser
 
 	mu   sync.RWMutex
 	keys map[string]*rsa.PublicKey
@@ -57,6 +59,10 @@ func newValidator(keys map[string]*rsa.PublicKey, refresh func() (map[string]*rs
 		parser: jwt.NewParser(
 			jwt.WithValidMethods([]string{signingMethod}),
 			jwt.WithExpirationRequired(),
+		),
+		sigOnly: jwt.NewParser(
+			jwt.WithValidMethods([]string{signingMethod}),
+			jwt.WithoutClaimsValidation(),
 		),
 	}
 }
@@ -142,6 +148,24 @@ func (v *Validator) ValidateService(tokenString string) (*Claims, error) {
 func (v *Validator) Parse(tokenString string) (*Claims, error) {
 	claims := &Claims{}
 	if _, err := v.parser.ParseWithClaims(tokenString, claims, v.keyfunc); err != nil {
+		return nil, err
+	}
+	return claims, nil
+}
+
+// ParseSignatureOnly verifies a token's signature (pinned RS256, kid-selected key) and
+// returns its claims WITHOUT validating any registered claim: an expired token is
+// returned, not refused. It exists for one purpose — REVOCATION, where the question is
+// "did we issue this?" and not "may it be used now?" (a sign-out presented with a token
+// that has just lapsed must still end the sign-in it names). It must never admit a
+// request: everything that authorizes goes through Parse or a Validate* helper.
+//
+// Use this rather than treating Parse's ErrTokenExpired as "ours, but expired": that
+// reading depends on the library checking the signature before the claims, an ordering
+// nothing here pins, and it would accept a forgery the day the order changed.
+func (v *Validator) ParseSignatureOnly(tokenString string) (*Claims, error) {
+	claims := &Claims{}
+	if _, err := v.sigOnly.ParseWithClaims(tokenString, claims, v.keyfunc); err != nil {
 		return nil, err
 	}
 	return claims, nil
