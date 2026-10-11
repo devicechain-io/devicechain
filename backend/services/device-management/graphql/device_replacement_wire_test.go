@@ -90,7 +90,7 @@ func seedReplacementWireDevice(t *testing.T, ctx context.Context) {
 	}); err != nil {
 		t.Fatalf("seed device: %v", err)
 	}
-	value := "stored-secret"
+	value := "stored-secret-0123456789"
 	if _, err := api.CreateDeviceCredential(ctx, &model.DeviceCredentialCreateRequest{
 		Token:           "dozer-01-cred",
 		DeviceToken:     "dozer-01",

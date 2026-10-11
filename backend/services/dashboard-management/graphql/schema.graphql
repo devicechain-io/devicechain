@@ -127,10 +127,9 @@ input DashboardSearchCriteria {
     """Results per page. Below 1 means the default of 100; above 1000 is capped at 1000."""
     pageSize: Int!
     """
-    Return only dashboards whose name contains this text. The match is case-sensitive,
-    and % and _ in the text match any run of characters and any single character.
+    Return only dashboards whose name contains this text. The match is a case-sensitive
+    literal substring match: % and _ in the text are ordinary characters, not wildcards.
     """
-    # The text goes into LIKE unescaped (core/rdb's likeEscaper is not applied here).
     name: String
 }
 

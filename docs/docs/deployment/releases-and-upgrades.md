@@ -3524,6 +3524,16 @@ Each sign-in is now a record that lasts as long as a refresh token (7 days by de
 
 Tokens issued before the upgrade carry no sign-in record and are refused, so **everyone signs in again once**: console, dashboard app, SDK and OAuth sessions end at their next refresh, within 15 minutes of the upgrade unless you changed the access-token lifetime. OAuth clients such as MCP agents authorize again. Nothing else needs doing.
 
+#### Events that carry a device password in the body are refused while versions are mixed {#next-upgrade-body-password}
+
+From this release, `event-sources` and `device-management` pass a device password that arrives in an
+event body in a different form, and each needs the new version to read the other's. While old and new
+versions of the two run side by side during a rolling upgrade, events that carry a device password in
+the body (`MQTT_BASIC`, over HTTP or MQTT) are refused as unauthenticated, and they are not replayed.
+MQTT connects and access-token events are not affected.
+
+Upgrade `event-sources` and `device-management` together, or accept the brief loss of those events.
+
 #### An `MQTT_BASIC` device password is shown once, and cannot be shown again {#next-upgrade-device-password-show-once}
 
 The platform now keeps only a one-way, keyed digest of an `MQTT_BASIC` device password, not the password. The API never returned the password on read, so no query result changes. What changes is that nobody can recover it from the platform either: the console shows a password once, right after you add the credential or set a new one, with a copy button, and afterwards only says that a password is set. Its credential row gains a **Set new password** action, and the form offers **Generate strong password**.

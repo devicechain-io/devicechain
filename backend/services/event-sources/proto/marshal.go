@@ -4,6 +4,7 @@
 package proto
 
 import (
+	"errors"
 	"fmt"
 	"time"
 
@@ -293,8 +294,21 @@ func UnmarshalUnresolvedPayload(etype model.EventType, payload []byte) (interfac
 	}
 }
 
+// ErrUnsealedCredentialSecret is MarshalUnresolvedEvent's refusal of an event that still
+// carries the credential secret as the device sent it.
+var ErrUnsealedCredentialSecret = errors.New("refusing to marshal an event carrying an unsealed credential secret")
+
 // Marshal an unresolved event to protobuf bytes.
+//
+// An event still carrying CredentialSecret, the secret as the device sent it, is refused:
+// the stream keeps what is marshalled for its retention period, so the secret must be
+// sealed into SealedCredentialSecret first (inboundEventMessage does). Dropping it
+// silently would turn a missed seal into an event that fails to authenticate far from
+// the cause.
 func MarshalUnresolvedEvent(event *model.UnresolvedEvent) ([]byte, error) {
+	if event.CredentialSecret != nil {
+		return nil, ErrUnsealedCredentialSecret
+	}
 	plbytes, err := MarshalUnresolvedPayload(event.EventType, event.Payload)
 	if err != nil {
 		return nil, err
@@ -312,7 +326,7 @@ func MarshalUnresolvedEvent(event *model.UnresolvedEvent) ([]byte, error) {
 		Payload:                plbytes,
 		CredentialType:         event.CredentialType,
 		CredentialId:           event.CredentialId,
-		CredentialSecret:       event.CredentialSecret,
+		CredentialSecret:       event.SealedCredentialSecret,
 		AuthenticatedTransport: event.AuthenticatedTransport,
 	}
 
@@ -362,7 +376,7 @@ func UnmarshalUnresolvedEvent(encoded []byte) (*model.UnresolvedEvent, error) {
 		Payload:                payload,
 		CredentialType:         pbevent.CredentialType,
 		CredentialId:           pbevent.CredentialId,
-		CredentialSecret:       pbevent.CredentialSecret,
+		SealedCredentialSecret: pbevent.CredentialSecret,
 		AuthenticatedTransport: pbevent.AuthenticatedTransport,
 	}
 
