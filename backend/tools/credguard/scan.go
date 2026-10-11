@@ -19,7 +19,9 @@
 //
 // The members in Watched: bcrypt.CompareHashAndPassword, subtle.ConstantTimeCompare
 // and hmac.Equal — the three ways this codebase, or code written the obvious way,
-// checks a secret. Every site outside the primitive must carry an exemption that
+// checks a secret — and credential.VerifyDeviceSecret, the primitive's own unthrottled
+// compare of a device secret against its stored digest, which is exported for the one
+// caller that needs no backoff and must not quietly gain others. Every site outside the primitive must carry an exemption that
 // names its directory, its function AND the member it calls, with a reason. The
 // member is part of the key so that an exemption granted for one kind of compare
 // does not silently admit a different kind added to the same function later.
@@ -75,6 +77,7 @@ var Watched = []Member{
 	{Path: "golang.org/x/crypto/bcrypt", Name: "CompareHashAndPassword", Label: "bcrypt.CompareHashAndPassword"},
 	{Path: "crypto/subtle", Name: "ConstantTimeCompare", Label: "subtle.ConstantTimeCompare"},
 	{Path: "crypto/hmac", Name: "Equal", Label: "hmac.Equal"},
+	{Path: "github.com/devicechain-io/dc-microservice/credential", Name: "VerifyDeviceSecret", Label: "credential.VerifyDeviceSecret"},
 }
 
 // memberByLabel finds a watched member by its exemption label.

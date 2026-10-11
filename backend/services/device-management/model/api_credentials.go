@@ -6,10 +6,13 @@ package model
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 
+	"github.com/devicechain-io/dc-microservice/credential"
 	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
+	"github.com/devicechain-io/dc-microservice/limit"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-microservice/sqlnull"
 	"gorm.io/gorm"
@@ -32,7 +35,7 @@ import (
 // omits the association (`Omit("Device")`, as the replacement transaction does)
 // writes instead. Setting both means neither caller has to reach around this
 // function to get a correct row.
-func buildDeviceCredential(device *Device, request *DeviceCredentialCreateRequest) (*DeviceCredential, error) {
+func buildDeviceCredential(key *credential.DeviceSecretKey, device *Device, request *DeviceCredentialCreateRequest) (*DeviceCredential, error) {
 	// Validate credential type against the known vocabulary. A retired type is refused
 	// with its own typed error, not as an unknown one.
 	if CredentialType(request.CredentialType).Retired() {
@@ -56,6 +59,10 @@ func buildDeviceCredential(device *Device, request *DeviceCredentialCreateReques
 	if err != nil {
 		return nil, err
 	}
+	secretDigest, err := digestSecret(key, device.TenantId, request.CredentialValue)
+	if err != nil {
+		return nil, err
+	}
 	return &DeviceCredential{
 		TokenReference: rdb.TokenReference{
 			Token: request.Token,
@@ -67,12 +74,39 @@ func buildDeviceCredential(device *Device, request *DeviceCredentialCreateReques
 		Device:         device,
 		CredentialType: request.CredentialType,
 		CredentialId:   request.CredentialId,
-		// Stored EXACTLY AS SENT: a device presents its password byte for byte, so trimming
-		// it here would store something no device sends.
-		CredentialValue: sqlnull.Secret(request.CredentialValue),
-		Enabled:         request.Enabled,
-		ExpiresAt:       expiresAt,
+		SecretDigest:   secretDigest,
+		Enabled:        request.Enabled,
+		ExpiresAt:      expiresAt,
 	}, nil
+}
+
+// errNoDeviceSecretKey refuses a write carrying a secret when no DeviceSecretKey is wired:
+// there is nothing to digest it with, and storing it as sent is what this replaced.
+var errNoDeviceSecretKey = errors.New("device credential secrets cannot be stored: no device secret key is configured")
+
+// digestSecret is the stored form of a secret a create or update carried: NULL for none
+// (nil or ""), and otherwise its keyed digest, bound to the credential's tenant. The secret is digested EXACTLY AS SENT: a
+// device presents its password byte for byte, so trimming it here would store a digest
+// of something no device sends.
+//
+// A secret longer than credential.MaxDeviceSecretBytes is refused with LIMIT_EXCEEDED. The
+// plaintext column refused it before; the digest is fixed-width and would not.
+func digestSecret(key *credential.DeviceSecretKey, tenant string, value *string) (sql.NullString, error) {
+	plain := sqlnull.Secret(value)
+	if !plain.Valid {
+		return sql.NullString{}, nil
+	}
+	if len(plain.String) > credential.MaxDeviceSecretBytes {
+		return sql.NullString{}, limit.Exceeded("credentialValue bytes", len(plain.String), credential.MaxDeviceSecretBytes)
+	}
+	if key == nil {
+		return sql.NullString{}, errNoDeviceSecretKey
+	}
+	digest, err := key.Digest(tenant, plain.String)
+	if err != nil {
+		return sql.NullString{}, err
+	}
+	return sql.NullString{String: digest, Valid: true}, nil
 }
 
 // Create a new device credential.
@@ -85,7 +119,7 @@ func (api *Api) CreateDeviceCredential(ctx context.Context, request *DeviceCrede
 		return nil, gorm.ErrRecordNotFound
 	}
 
-	created, err := buildDeviceCredential(matches[0], request)
+	created, err := buildDeviceCredential(api.DeviceSecretKey, matches[0], request)
 	if err != nil {
 		return nil, err
 	}
@@ -163,11 +197,21 @@ func (api *Api) UpdateDeviceCredential(ctx context.Context, token string,
 	if err != nil {
 		return nil, err
 	}
+	// Absent keeps the stored secret; null or "" clears it; a value replaces it with a
+	// digest of the new secret.
+	secretDigest := updated.SecretDigest
+	if request.CredentialValue.Set {
+		if secretDigest, err = digestSecret(api.DeviceSecretKey, updated.TenantId, request.CredentialValue.Value); err != nil {
+			return nil, err
+		}
+	} else if secretDigest, err = api.adoptLegacySecret(ctx, updated); err != nil {
+		return nil, err
+	}
 
 	updated.Metadata = metadataJSON
 	updated.CredentialType = credentialType
 	updated.CredentialId = credentialId
-	updated.CredentialValue = request.CredentialValue.ApplyToNullSecret(updated.CredentialValue)
+	updated.SecretDigest = secretDigest
 	updated.Enabled = enabled
 	updated.ExpiresAt = expiresAt
 	if device != nil {
@@ -188,6 +232,25 @@ func (api *Api) UpdateDeviceCredential(ctx context.Context, token string,
 	// matter that would have to be kept right forever.
 	api.evictDeviceCredentials(ctx, updated.TenantId, priorDeviceId, updated.DeviceId)
 	return updated, nil
+}
+
+// adoptLegacySecret is the stored secret an update that does not name one must keep. That is
+// the row's digest, UNLESS an old-version pod rotated the password during a rolling
+// upgrade: it wrote the new password into credential_value and left secret_digest alone,
+// so the plaintext column holds the later secret. The save that follows writes that column
+// NULL (LegacyCredentialValue), so the plaintext is digested here first rather than
+// discarded, which would bring back the password the old pod rotated away. Outside an
+// upgrade's overlap the column is always NULL and this returns the digest unchanged.
+func (api *Api) adoptLegacySecret(ctx context.Context, cred *DeviceCredential) (sql.NullString, error) {
+	var legacy []sql.NullString
+	if err := api.RDB.DB(ctx).Model(&DeviceCredential{}).Where("id = ?", cred.ID).
+		Pluck("credential_value", &legacy).Error; err != nil {
+		return sql.NullString{}, err
+	}
+	if len(legacy) != 1 || !legacy[0].Valid || legacy[0].String == "" {
+		return cred.SecretDigest, nil
+	}
+	return digestSecret(api.DeviceSecretKey, cred.TenantId, &legacy[0].String)
 }
 
 // Get device credentials by id.
@@ -278,7 +341,7 @@ var (
 		"device_credentials.id",
 		"device_credentials.tenant_id",
 		"device_credentials.device_id",
-		"device_credentials.credential_value",
+		"device_credentials.secret_digest",
 		"device_credentials.expires_at",
 	}
 	connectDeviceFields = []string{"ID", "TenantId", "Token"}
@@ -329,7 +392,7 @@ var (
 		"device_credentials.tenant_id",
 		"device_credentials.device_id",
 		"device_credentials.credential_type",
-		"device_credentials.credential_value",
+		"device_credentials.secret_digest",
 		"device_credentials.enabled",
 		"device_credentials.expires_at",
 	}

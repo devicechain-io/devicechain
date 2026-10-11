@@ -45,10 +45,11 @@ func BenchmarkDeviceConnectStormOnReplicatedJetStream(b *testing.B) {
 			kv := replicatedKV(b)
 			c, err := credential.NewChecker(kv, map[credential.Kind]credential.Policy{
 				credential.KindDeviceCredential: {Free: 10, Base: time.Second, Cap: 30 * time.Second},
-			})
+			}, credential.WithDeviceSecretKey(testDeviceKey(b)))
 			if err != nil {
 				b.Fatal(err)
 			}
+			stored := digestOf(b, "s3cret")
 			for i := 0; i < b.N; i++ {
 				lat := make([]time.Duration, fleet)
 				var failed sync.Map
@@ -60,10 +61,9 @@ func BenchmarkDeviceConnectStormOnReplicatedJetStream(b *testing.B) {
 						defer wg.Done()
 						<-start
 						p := credential.Principal{Kind: credential.KindDeviceCredential,
-							ID: fmt.Sprintf("acme:dev-%d-%d", i, d)}
+							ID: fmt.Sprintf("acme:dev-%d-%d", i, d), Tenant: "acme"}
 						t0 := time.Now()
-						err := c.Check(context.Background(), p, "s3cret",
-							func(context.Context) (string, error) { return "s3cret", nil })
+						err := c.Check(context.Background(), p, "s3cret", stored)
 						lat[d] = time.Since(t0)
 						if err != nil {
 							failed.Store(d, err)

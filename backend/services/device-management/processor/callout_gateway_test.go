@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/devicechain-io/dc-device-management/model"
+	dmtest "github.com/devicechain-io/dc-device-management/test"
 	"github.com/devicechain-io/dc-microservice/credential"
 	"github.com/devicechain-io/dc-microservice/credential/credentialtest"
 	"github.com/devicechain-io/dc-microservice/natsauth"
@@ -237,7 +238,7 @@ func TestCalloutThrottlesPasswordConnectsAgainstARealBroker(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	checker, err := credential.NewChecker(attempts, DeviceCredentialPolicies)
+	checker, err := credential.NewChecker(attempts, DeviceCredentialPolicies, credential.WithDeviceSecretKey(dmtest.DeviceSecretKey()))
 	if err != nil {
 		t.Fatal(err)
 	}

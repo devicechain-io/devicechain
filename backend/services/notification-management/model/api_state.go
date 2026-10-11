@@ -9,6 +9,7 @@ import (
 	"errors"
 	"time"
 
+	"github.com/devicechain-io/dc-microservice/rdb"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
@@ -18,8 +19,10 @@ import (
 // (the dispatcher has not yet notified about the alarm).
 func (api *Api) NotificationStatesByAlarmToken(ctx context.Context, alarmTokens []string) ([]*NotificationState, error) {
 	found := make([]*NotificationState, 0)
-	result := api.RDB.DB(ctx).Find(&found, "alarm_token in ?", alarmTokens)
-	return found, result.Error
+	if err := rdb.FindByKeys(api.RDB.DB(ctx), &found, "alarm_token", alarmTokens); err != nil {
+		return nil, err
+	}
+	return found, nil
 }
 
 // NotificationStates searches per-alarm notification state by criteria. This is
