@@ -233,6 +233,18 @@ var tableSweepExemptions = map[string]string{
 	"notification-management.notification_states": "escalation state for a notification the policy has " +
 		"actually dispatched. It follows an ALARM, which follows a rule firing, which the drill does " +
 		"not do — so it is downstream of two things that are exempt above for their own reasons.",
+
+	// ---- single sign-on, before any API can create it --------------------------
+	//
+	// These two exemptions are TEMPORARY. The tables exist ahead of the API that fills
+	// them; the slice that adds that API must replace each exemption with a seed in
+	// entities.go, at which point these entries go STALE and the sweep says so.
+	"user-management.iam_idp_connection_tenants": "which tenants an identity-provider connection " +
+		"serves. This release ships the storage only: no API or sign-in path can create a " +
+		"connection, so no tenant can own a row yet.",
+	"user-management.iam_idp_role_mappings": "group-to-role mappings of an identity-provider " +
+		"connection, keyed to a tenant the connection serves. Same as iam_idp_connection_tenants: " +
+		"no API can create a connection in this release.",
 }
 
 func runTableSweep(ctx context.Context, argv []string) error {
