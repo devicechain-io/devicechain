@@ -583,7 +583,7 @@ var entities = []entity{
 				"deviceToken":     s.tokens["device"],
 				"credentialType":  "MQTT_BASIC",
 				"credentialId":    "apiprobe-device",
-				"credentialValue": "apiprobe-secret",
+				"credentialValue": "apiprobe-secret-0001",
 				"enabled":         true,
 				"metadata":        meta("device-credential"),
 			}}

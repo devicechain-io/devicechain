@@ -14,7 +14,7 @@ import (
 )
 
 // resolveFixture is a real Api over SQLite holding one device, "dev", with an
-// MQTT_BASIC credential "cred-1" storing "s3cret".
+// MQTT_BASIC credential "cred-1" storing "s3cret-0123456789".
 func resolveFixture(t *testing.T) (*Api, context.Context) {
 	t.Helper()
 	api := newPartialUpdateApi(t, append(append([]any{}, deviceProfileTables...), &DeviceCredential{})...)
@@ -25,7 +25,7 @@ func resolveFixture(t *testing.T) (*Api, context.Context) {
 	if _, err := api.CreateDevice(ctx, &DeviceCreateRequest{Token: "dev", DeviceTypeToken: "dt"}); err != nil {
 		t.Fatalf("seed device: %v", err)
 	}
-	secret := "s3cret"
+	secret := "s3cret-0123456789"
 	if _, err := api.CreateDeviceCredential(ctx, &DeviceCredentialCreateRequest{
 		Token: "c-1", DeviceToken: "dev", CredentialType: string(CredentialMqttBasic),
 		CredentialId: "cred-1", CredentialValue: &secret, Enabled: true,
@@ -54,7 +54,7 @@ func TestResolveDeviceCredential_DoesNotCompare(t *testing.T) {
 	if device == nil || device.Token != "dev" {
 		t.Fatalf("resolved device %+v, want dev", device)
 	}
-	if !verifies(stored, "s3cret") {
+	if !verifies(stored, "s3cret-0123456789") {
 		t.Fatalf("stored %q is not the credential's own digest", stored)
 	}
 
@@ -62,7 +62,7 @@ func TestResolveDeviceCredential_DoesNotCompare(t *testing.T) {
 	if _, err := api.AuthenticateDevice(ctx, basic("cred-1", "wrong"), now); !errors.Is(err, ErrCredentialSecretMismatch) {
 		t.Fatalf("AuthenticateDevice with a wrong secret: got %v, want ErrCredentialSecretMismatch", err)
 	}
-	if d, err := api.AuthenticateDevice(ctx, basic("cred-1", "s3cret"), now); err != nil || d.Token != "dev" {
+	if d, err := api.AuthenticateDevice(ctx, basic("cred-1", "s3cret-0123456789"), now); err != nil || d.Token != "dev" {
 		t.Fatalf("AuthenticateDevice with the right secret: got (%v, %v)", d, err)
 	}
 }
@@ -82,7 +82,7 @@ func TestResolveDeviceCredential_RefusesWhatAuthenticateDeviceRefuses(t *testing
 		Update("expires_at", sql.NullTime{Time: past, Valid: true}).Error; err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := api.ResolveDeviceCredential(ctx, basic("cred-1", "s3cret"), now); !errors.Is(err, ErrCredentialExpired) {
+	if _, _, err := api.ResolveDeviceCredential(ctx, basic("cred-1", "s3cret-0123456789"), now); !errors.Is(err, ErrCredentialExpired) {
 		t.Errorf("expired credential: got %v, want ErrCredentialExpired", err)
 	}
 
@@ -90,19 +90,19 @@ func TestResolveDeviceCredential_RefusesWhatAuthenticateDeviceRefuses(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	foreign, err := foreignKey.Digest(partialUpdateTenant, "s3cret")
+	foreign, err := foreignKey.Digest(partialUpdateTenant, "s3cret-0123456789")
 	if err != nil {
 		t.Fatal(err)
 	}
 	// No secret, an empty one, the password itself (a row no digest step reached), and a
 	// digest of the right password under ANOTHER root key: none can ever authenticate, and
 	// none is the device's wrong answer.
-	for _, stored := range []sql.NullString{{}, {String: "", Valid: true}, {String: "s3cret", Valid: true}, {String: foreign, Valid: true}} {
+	for _, stored := range []sql.NullString{{}, {String: "", Valid: true}, {String: "s3cret-0123456789", Valid: true}, {String: foreign, Valid: true}} {
 		if err := api.RDB.DB(ctx).Model(&DeviceCredential{}).Where("credential_id = ?", "cred-1").
 			Updates(map[string]any{"expires_at": sql.NullTime{}, "secret_digest": stored}).Error; err != nil {
 			t.Fatal(err)
 		}
-		if _, _, err := api.ResolveDeviceCredential(ctx, basic("cred-1", "s3cret"), now); !errors.Is(err, ErrCredentialMisconfigured) {
+		if _, _, err := api.ResolveDeviceCredential(ctx, basic("cred-1", "s3cret-0123456789"), now); !errors.Is(err, ErrCredentialMisconfigured) {
 			t.Errorf("stored secret %+v: got %v, want ErrCredentialMisconfigured", stored, err)
 		}
 	}

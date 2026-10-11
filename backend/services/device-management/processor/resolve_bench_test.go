@@ -123,7 +123,7 @@ func BenchmarkWarmCredentialedResolve(b *testing.B) {
 				if !cached {
 					rig.caches.Credentials = nil
 				}
-				secret := "s3cret"
+				secret := "s3cret-0123456789"
 				if _, err := rig.api.CreateDeviceCredential(rig.ctx, &model.DeviceCredentialCreateRequest{
 					Token: "c-1", DeviceToken: "dev", CredentialType: string(model.CredentialMqttBasic),
 					CredentialId: "cred-1", CredentialValue: &secret, Enabled: true,
@@ -138,10 +138,10 @@ func BenchmarkWarmCredentialedResolve(b *testing.B) {
 					}
 				}
 				rez := NewEventResolver(1, rig.capi, config.AuthModeRequired, EventTimePolicy{}, nil, nil, nil, nil, nil, nil)
+				rez.SecretTransit = testSecretTransit(b)
 				event := func() *esmodel.UnresolvedEvent {
 					e := tempEvent("21")
-					ctype, cid := string(model.CredentialMqttBasic), "cred-1"
-					e.CredentialType, e.CredentialId, e.CredentialSecret = &ctype, &cid, &secret
+					presentSealed(b, rig.ctx, e, string(model.CredentialMqttBasic), "cred-1", secret)
 					return e
 				}
 				if _, _, err := rez.ResolveEvent(rig.ctx, event()); err != nil { // warm every cache

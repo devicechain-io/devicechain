@@ -51,7 +51,7 @@ func TestCredentialLookupJoinOnPostgres(t *testing.T) {
 
 	t.Run("a presented credential is one statement", func(t *testing.T) {
 		f := fresh(t)
-		d, err := f.capi.AuthenticateDevice(f.ctx, basic("cred-1", "s3cret"), time.Now())
+		d, err := f.capi.AuthenticateDevice(f.ctx, basic("cred-1", "s3cret-0123456789"), time.Now())
 		if err != nil || d == nil || d.Token != "dev" {
 			t.Fatalf("got (%v, %v), want device dev", d, err)
 		}
@@ -75,7 +75,7 @@ func TestCredentialLookupJoinOnPostgres(t *testing.T) {
 		f := fresh(t)
 		storeVariableWidthColumns(t, f)
 		d, stored, err := f.capi.ResolveDeviceCredential(f.ctx, basic("cred-1", "wrong"), time.Now())
-		if err != nil || d == nil || d.Token != "dev" || !verifies(stored, "s3cret") {
+		if err != nil || d == nil || d.Token != "dev" || !verifies(stored, "s3cret-0123456789") {
 			t.Fatalf("got (%v, %q, %v), want device dev with its stored digest", d, stored, err)
 		}
 		if d.Metadata != nil || d.Name.Valid || d.Description.Valid || d.ExternalId.Valid {

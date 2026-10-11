@@ -19,6 +19,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/auth"
 	mscfg "github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/credential"
 	"github.com/devicechain-io/dc-microservice/deadletter"
 	"github.com/devicechain-io/dc-microservice/governance"
 	gqlcore "github.com/devicechain-io/dc-microservice/graphql"
@@ -35,6 +36,11 @@ var (
 
 	GraphQLManager *gqlcore.GraphQLManager
 	NatsManager    *messaging.NatsManager
+
+	// SecretTransit seals a device's presented credential secret before the event is
+	// published, so the inbound stream never stores a password as sent. Derived from the
+	// instance root key at start; the service does not start without it.
+	SecretTransit *credential.SecretTransit
 
 	// RateLimiter meters inbound events per tenant against the platform ingest
 	// ceiling; over-limit events are shed at the receive point before decode. It
@@ -731,6 +737,10 @@ func inboundEventMessage(source string, tenant string, event *model.UnresolvedEv
 	}
 	ctx := core.WithTenant(context.Background(), tenant)
 
+	if !sealPresentedSecret(tenant, event) {
+		return nil, messaging.Message{}, false
+	}
+
 	// Marshal event message to protobuf.
 	bytes, err := esproto.MarshalUnresolvedEvent(event)
 	if err != nil {
@@ -749,6 +759,50 @@ func inboundEventMessage(source string, tenant string, event *model.UnresolvedEv
 		Value:   bytes,
 		DedupID: processor.DedupID(tenant, captureSeq),
 	}, true
+}
+
+// initSecretTransit sets SecretTransit from the instance root key, or refuses the start.
+func initSecretTransit() (err error) {
+	SecretTransit, err = deriveSecretTransit()
+	return err
+}
+
+// deriveSecretTransit derives the key presented credential secrets are sealed under from
+// the instance root key. A missing or malformed root key refuses the start.
+func deriveSecretTransit() (*credential.SecretTransit, error) {
+	root, err := Microservice.InstanceConfiguration.Infrastructure.Secrets.DecodedRootKey()
+	if err != nil {
+		return nil, fmt.Errorf("presented device credential secrets are sealed under a key derived from the instance root key: %w", err)
+	}
+	return credential.DeriveSecretTransit(root)
+}
+
+// sealPresentedSecret replaces the secret a device presented with its sealed form, so the
+// message published to inbound-events (stored for the stream's retention period) never
+// carries a password as sent. It reports false when the event must not be published: a
+// secret that could not be sealed is dropped, never published as sent.
+//
+// A secret presented without a credential id authenticates nothing downstream (the
+// resolver treats such an event as presenting no credential), so it is discarded rather
+// than sealed. Dropping that is a terminal decision like the others in inboundEventMessage.
+func sealPresentedSecret(tenant string, event *model.UnresolvedEvent) bool {
+	secret := event.CredentialSecret
+	event.CredentialSecret = nil
+	event.SealedCredentialSecret = nil
+	if secret == nil || *secret == "" || event.CredentialId == nil || *event.CredentialId == "" {
+		return true
+	}
+	if SecretTransit == nil {
+		log.Error().Msg("Dropping an event carrying a credential secret: no transit key to seal it with")
+		return false
+	}
+	sealed, err := SecretTransit.Seal(tenant, *event.CredentialId, *secret)
+	if err != nil {
+		log.Error().Err(err).Msg("Dropping an event carrying a credential secret: it could not be sealed")
+		return false
+	}
+	event.SealedCredentialSecret = &sealed
+	return true
 }
 
 // onEventDecoded publishes a decoded event synchronously, for the sources that publish
@@ -889,6 +943,13 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	// Parse configuration.
 	err := parseConfiguration()
 	if err != nil {
+		return err
+	}
+
+	// The key every presented credential secret is sealed under before it is published.
+	// No key, no start: without it an event carrying a password could only be published
+	// unsealed, or dropped.
+	if err = initSecretTransit(); err != nil {
 		return err
 	}
 
