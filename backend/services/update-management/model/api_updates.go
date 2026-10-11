@@ -818,6 +818,11 @@ func (api *Api) SweepDeadlines(ctx context.Context, limit int) (SweepResult, err
 	var skip []string // tenants found deleted during this pass
 	var after *UpdateAttempt
 	for page := 0; page < maxSweepPages && moved < limit; page++ {
+		// 🔴 THE ONLY TENANT-ISOLATION BYPASS IN THIS SERVICE, and it is one SELECT. Which attempts
+		// are overdue is a question across every tenant, and no tenant context can ask it. It reads
+		// rows (never writes) and returns them; every change made to one is made by tickOne under
+		// core.WithTenant(that attempt's own tenant), so the tenant predicate is injected and the
+		// fail-closed check is live for each write.
 		q := api.RDB.DB(core.WithSystemContext(ctx)).Where(due, args...)
 		if after != nil {
 			q = q.Where("(last_report_at > ? OR (last_report_at = ? AND id > ?))", after.LastReportAt, after.LastReportAt, after.ID)
