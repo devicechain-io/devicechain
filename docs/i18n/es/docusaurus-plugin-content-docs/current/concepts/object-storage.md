@@ -48,7 +48,7 @@ El sistema de registro relacional sigue siendo único y no pluggable por diseño
 
 El filesystem predeterminado solo necesita un **volumen persistente**. Establece `blob.directory` y habilita `blobStorage.persistence`, y el chart de Helm crea el PVC y lo monta en los servicios que guardan activos. No hay infraestructura adicional que instalar ni operar.
 
-Seleccionar el backend S3 es un cambio de configuración en la instancia. El endpoint y el bucket son configuración no secreta. La credencial de acceso se resuelve desde la cadena de credenciales del despliegue: por ejemplo, variables de entorno a partir del Secret de Kubernetes de la instancia, o la identidad de carga de trabajo en un clúster en la nube.
+Seleccionar el backend S3 es un cambio de configuración en la instancia. El endpoint y el bucket son configuración no secreta. La credencial de acceso se resuelve desde la cadena de credenciales del despliegue: por ejemplo, variables de entorno a partir del Secret de Kubernetes de la instancia, o la identidad de carga de trabajo en un clúster en la nube. La credencial necesita `s3:GetObject`, `s3:PutObject` y `s3:DeleteObject` sobre los objetos del bucket y `s3:ListBucket` sobre el bucket: este último permite que el borrado de un inquilino eliminado encuentre y quite todos los objetos bajo su prefijo.
 
 Como toda superficie de configuración de DeviceChain, la configuración del almacén de objetos es tipada y estricta: un nombre de backend mal escrito es un error de arranque, no un fallback silencioso. Un backend filesystem sin directorio se trata como "almacén de objetos no configurado". El servicio arranca igualmente, los endpoints de subida y lectura del logo devuelven **503**, y los logos en línea y por URL siguen funcionando.
 

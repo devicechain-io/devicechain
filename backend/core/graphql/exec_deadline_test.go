@@ -18,6 +18,8 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/devicechain-io/dc-microservice/config"
 )
 
 const deadlineSDL = `
@@ -191,4 +193,11 @@ func TestStalledBodyAfterACompleteValueIsCutOffAtTheReadDeadline(t *testing.T) {
 	n, _ := conn.Read(buf)
 	assert.Less(t, time.Since(start), 3*time.Second, "the server must answer or close at the body deadline")
 	assert.Contains(t, string(buf[:n]), "400")
+}
+
+// The default execution deadline is the request edge, not a second literal that merely
+// happens to equal it.
+func TestDefaultExecTimeoutIsTheRequestEdge(t *testing.T) {
+	t.Setenv(EnvGraphQLExecTimeout, "")
+	assert.Equal(t, config.RequestEdgeTimeout, execTimeout())
 }

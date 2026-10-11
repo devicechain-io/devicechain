@@ -20,7 +20,7 @@ ADR-022 review hardening:
 {{- $blobPersist := ($root.Values.blobStorage | default dict).persistence | default dict }}
 {{- $blobPath := ternary ($blobPersist.mountPath | default "") ($blob.directory | default "") (ne ($blobPersist.mountPath | default "") "") }}
 {{- $blobWantVolume := or $blobPersist.enabled (not (empty $blobPersist.existingClaim)) }}
-{{- $blobMountAreas := ($root.Values.blobStorage | default dict).mountAreas | default (list "user-management") }}
+{{- $blobMountAreas := include "devicechain.blobMountAreas" . | fromJsonArray }}
 {{- range $area := splitList "," (include "devicechain.enabledAreas" .) }}
 {{- $areaCfg := get ($root.Values.functionalAreas | default dict) $area | default dict }}
 {{/*

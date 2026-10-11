@@ -82,8 +82,16 @@ llamador. Algunas autoridades no coinciden con la intuición:
 `sparkplug-ingest` y `lwm2m-ingest` no sirven GraphQL en absoluto y se mantienen deliberadamente
 fuera del router `/api`. `event-sources` sí está enrutado, pero responde con un esquema marcador de
 posición: la ingesta llega a él por los transportes del plano de dispositivo, no por esta API.
-`update-management` también está enrutado, pero su API no está implementada en esta versión: su
-única consulta marcadora de posición responde a cada llamada con un error `NOT_IMPLEMENTED`.
+`update-management` también está enrutado: su API es el catálogo de artefactos (declarar,
+consultar y retirar artefactos de actualización). El contenido del artefacto no viaja por GraphQL:
+se sube con `PUT /api/update-management/updates/artifacts/{token}/content`, autenticado con un token
+de acceso del inquilino que tenga `artifact:write`. El chart da a esa ruta un Ingress propio, con el límite de cuerpo de petición fijado por
+`ingress.uploadMaxBodySize` (por defecto `1g`) y el almacenamiento en búfer de la petición desactivado. Con
+cualquier otro controlador de ingress, fije lo mismo en esa ruta: para ingress-nginx,
+`nginx.ingress.kubernetes.io/proxy-body-size` igual o superior a su artefacto más grande, y
+`nginx.ingress.kubernetes.io/proxy-request-buffering: "off"`. Sin lo segundo, nginx lee todo el cuerpo a disco
+antes de que el servicio vea la petición, de modo que el token no se comprueba hasta que ha llegado la imagen
+entera.
 
 ### Suscripciones por WebSocket {#subscriptions-over-websocket}
 
@@ -777,6 +785,11 @@ trunca nada ni se aplica nada a medias, así que reduzca la solicitud y envíela
 | Claves por consulta | 1000 | Una lista de tokens, identificadores externos o tokens de alarma pasada a una consulta por lotes `…ByToken`, `…ByExternalId` o similar (estados de dispositivo, últimas ubicaciones, comandos, lotes de comandos, canales, políticas y estados de notificación). |
 | Tamaño de entrada JSON | 64 KiB | Cada valor de metadatos, propiedades, configuración, carga útil o destinatarios enviado como JSON. Las cargas útiles y los metadatos de comandos se rechazan con `PAYLOAD_TOO_LARGE` / `METADATA_TOO_LARGE` (consulte [Enviar comandos](../guides/sending-commands.md)). |
 | Destinatarios por regla de notificación | 100 | La lista `recipients` de una regla de una política de notificación. |
+| URI de redirección de cliente OAuth | 16 entradas, 2048 B cada una | `redirectUris` de `createOauthClient` y `updateOauthClient`. |
+| Ámbitos de cliente OAuth | 16 entradas, 64 B cada una | `scopes` de `createOauthClient` y `updateOauthClient`. |
+| Niveles de inquilino | 100 niveles, 128 B por token | El catálogo de niveles (`createTenantTier` rechaza un nivel 101) y `orderedTokens` de `reorderTenantTiers`, que debe nombrar todos los niveles. |
+| Listas de roles y autoridades de administración | 100 entradas | `authorities` de `createRole` y `updateRole`; `systemRoles` de `createIdentity`; `roleTokens` de `setSystemRoles`, `addMembership` y `setMembershipRoles`. |
+| Contraseña | 72 B | `password` de `createIdentity` y `setPassword`: una contraseña más larga se rechaza en lugar de truncarse en silencio. |
 
 `bucketedMeasurements` también exige `startTime`; `endTime` toma por defecto la hora actual.
 

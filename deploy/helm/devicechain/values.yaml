@@ -696,6 +696,10 @@ blobStorage:
     # Filestore / NFS), or use the s3 backend instead.
     accessModes:
       - ReadWriteOnce
+    # Every tenant and every consuming area shares this volume. update-management caps each
+    # tenant at updates.maxTenantArtifactBytes (default 2 GiB) and each artifact at
+    # updates.maxArtifactBytes, so size the volume as (tenants storing artifacts) x (that
+    # ceiling), plus headroom for branding assets, or lower the ceiling to fit.
     size: 5Gi
     # Schedule every pod that mounts the claim onto ONE node. A ReadWriteOnce volume
     # attaches to a single node, so two consuming areas (or two replicas) on different
@@ -713,9 +717,12 @@ blobStorage:
     annotations: {}
   # Functional areas that mount the blob volume at the store directory. Only areas that
   # actually read/write the object store need it (today: user-management, for branding
-  # logos). An area that uses the store but is omitted here finds it "not configured".
+  # logos, and update-management, for update artifacts). An area that uses the store but
+  # is omitted here finds it "not configured". Two consuming areas share one volume, so
+  # when they can land on different nodes the claim must be ReadWriteMany.
   mountAreas:
     - user-management
+    - update-management
 
 # E7 (ADR-022 review): default pod resource requests/limits. An area's own
 # functionalAreas.<area>.resources is merged over this map key by key, so an area
@@ -1047,6 +1054,12 @@ ingress:
   host: devicechain.local
   # Extra annotations merged onto the Ingress (e.g. body size, timeouts).
   annotations: {}
+  # Largest request body the update-artifact upload route accepts at the edge. That route
+  # (PUT /api/update-management/updates/artifacts/<token>/content) is rendered on its own
+  # Ingress with this body limit and with request buffering OFF, so the body streams to the
+  # service, which authenticates before it reads it. Keep it at or above
+  # functionalAreas.update-management.config.updates.maxArtifactBytes (default 512 MiB).
+  uploadMaxBodySize: 1g
   tls:
     enabled: true
     # selfSigned renders a cert-manager self-signed Issuer in the instance
@@ -1830,9 +1843,12 @@ functionalAreas:
       # inferenceBurst: 15               # tokens a tenant may spend back-to-back before the rate binds (~5 drafts)
   update-management:
     # The update-management service: over-the-air update artifacts, their assignment to
-    # devices and the download plane. THIS RELEASE SHIPS ONLY ITS SCAFFOLD — the service
-    # starts, migrates its schema and serves health, readiness and metrics, but its GraphQL
-    # API answers every request with a NOT_IMPLEMENTED error. OPT-IN area: held back from
+    # devices and the download plane. THIS RELEASE SHIPS THE ARTIFACT CATALOGUE ONLY: a
+    # per-tenant, immutable record of each firmware / software / configuration image, a
+    # GraphQL API to declare and inspect them, and a streaming content upload that verifies
+    # size and digest. Assignment to devices and download are not built yet. It stores the
+    # bytes in the object store (blobStorage), so artifacts cannot be declared until a blob
+    # backend is configured. OPT-IN area: held back from
     # `default`, shipped by `full`, or named explicitly (enabledFunctionalAreas:
     # [..., update-management]). It hard-depends on device-management (an update targets
     # devices). It opens a pool on the shared relational store, so it counts toward an

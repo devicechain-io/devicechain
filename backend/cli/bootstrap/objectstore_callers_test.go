@@ -667,3 +667,42 @@ func TestEveryRefusedChangeToADeclaredStore(t *testing.T) {
 	}
 	_ = resource.MustParse
 }
+
+// The chart's pod-count guard counts pods across the consuming areas: user-management and
+// update-management are two pods on one ReadWriteOnce claim. Colocation is its one exception.
+func TestTwoConsumingAreasNeedAColocatedOrSharedClaim(t *testing.T) {
+	areas, err := ResolveEnabledAreas("default", []string{"update-management"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	remote := &State{Instance: "dc-os", Profile: "default", EnableAreas: []string{"update-management"},
+		EnabledAreas: areas, Values: map[string]string{}, ObjectStore: fsStore0()}
+	err = checkObjectStoreMountable(t.Context(), remote)
+	if err == nil || !strings.Contains(err.Error(), "update-management") {
+		t.Fatalf("two areas on a ReadWriteOnce store were accepted up front: %v", err)
+	}
+
+	managed := *remote
+	managedLocal(&managed)
+	if err := checkObjectStoreMountable(t.Context(), &managed); err != nil {
+		t.Errorf("a colocated store was refused: %v", err)
+	}
+	// ...and the same State really renders, with both areas pinned together.
+	c := composeStoreWith(t, fsStore0(), func(st *State) {
+		managedLocal(st)
+		st.EnableAreas, st.EnabledAreas = remote.EnableAreas, areas
+	}, nil)
+	for _, a := range []string{"user-management", "update-management"} {
+		aff := c.deployment(t, a).Spec.Template.Spec.Affinity
+		if aff == nil || aff.PodAffinity == nil {
+			t.Errorf("%s is not colocated with the other pods that mount the claim", a)
+		}
+	}
+
+	rwx := *remote
+	rwx.ObjectStore = fsStore0()
+	rwx.ObjectStore.AccessMode = "ReadWriteMany"
+	if err := checkObjectStoreMountable(t.Context(), &rwx); err != nil {
+		t.Errorf("a ReadWriteMany store was refused: %v", err)
+	}
+}
