@@ -862,8 +862,11 @@ A fleet too large for the cache instead shows `kv_cache_local_evictions_total{re
 rising at close to the event rate, with `kv_cache_local_entries` at `kv_cache_local_max_entries`
 or `kv_cache_local_bytes` at `kv_cache_local_max_bytes`; for credentials, the same signs are in
 `credential_cache_evictions_total{reason="capacity"}`. Then raise the bound, and the memory limit
-with it: at the defaults the six in-memory caches hold at most 112 MiB, and with no `GOMEMLIMIT`
-set the heap can grow to about twice what it holds before it is collected. To resolve a fleet
+with it: at the defaults the six in-memory caches hold at most 112 MiB. `device-management` runs
+with `GOGC=400` and a soft memory limit (`GOMEMLIMIT`) at 75% of its memory limit, so the collector
+lets the heap grow to about five times what it holds, and works harder once it nears that soft
+limit; where no `GOMEMLIMIT` is set the heap can instead grow to about twice what it holds before
+it is collected. To resolve a fleet
 faster you can also add resolvers (`resolution.workers`, within the connection pool) or
 `device-management` replicas.
 
