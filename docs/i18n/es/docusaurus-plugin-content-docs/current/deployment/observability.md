@@ -909,9 +909,11 @@ eventos, mientras `kv_cache_local_entries` de esa caché se mantiene muy por deb
 `kv_cache_local_entries` en `kv_cache_local_max_entries` o `kv_cache_local_bytes` en
 `kv_cache_local_max_bytes`; en las credenciales, las mismas señales están en
 `credential_cache_evictions_total{reason="capacity"}`. Entonces suba el límite, y con él el límite
-de memoria: con los valores por defecto las seis cachés en memoria guardan como máximo 112 MiB, y
-sin `GOMEMLIMIT` el heap puede crecer hasta aproximadamente el doble de lo que guarda antes de
-recolectarse. Para resolver una flota más rápido también puede añadir resolvedores
+de memoria: con los valores por defecto las seis cachés en memoria guardan como máximo 112 MiB.
+`device-management` se ejecuta con `GOGC=400` y un límite blando de memoria (`GOMEMLIMIT`) al 75 %
+de su límite de memoria, de modo que el recolector deja crecer el heap hasta unas cinco veces lo
+que guarda, y trabaja más al acercarse a ese límite blando; donde no hay `GOMEMLIMIT`, el heap
+puede crecer hasta aproximadamente el doble de lo que guarda antes de recolectarse. Para resolver una flota más rápido también puede añadir resolvedores
 (`resolution.workers`, dentro del pool de conexiones) o réplicas de `device-management`.
 
 Eliminar una entrada tras un cambio (un dispositivo borrado, un perfil publicado) nunca se omite.
