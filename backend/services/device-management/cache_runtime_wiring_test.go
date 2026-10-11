@@ -16,6 +16,7 @@ import (
 
 	"github.com/devicechain-io/dc-device-management/config"
 	"github.com/devicechain-io/dc-device-management/model"
+	dmtest "github.com/devicechain-io/dc-device-management/test"
 	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	putest "github.com/devicechain-io/dc-microservice/rdb/partialupdatetest"
@@ -134,7 +135,7 @@ func TestTheServiceBuildsItsCachesWithTheConfiguredTimesAndSizes(t *testing.T) {
 	check := func(t *testing.T, cfg *config.DeviceManagementConfiguration, want map[string]time.Duration, credTTL time.Duration, credBytes int) {
 		t.Helper()
 		nmgr := startNatsManager(t, host, port, fmt.Sprintf("cfgwiring%d", time.Now().UnixNano()))
-		_, capi, err := buildApis(nmgr, &rdb.RdbManager{Database: db}, cfg)
+		_, capi, err := buildApis(nmgr, &rdb.RdbManager{Database: db}, dmtest.DeviceSecretKey(), cfg)
 		require.NoError(t, err)
 		c := capi.Caches()
 		for name, cache := range map[string]interface{ LocalTTL() time.Duration }{
