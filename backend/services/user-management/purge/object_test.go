@@ -59,6 +59,23 @@ type stubBlobs struct {
 	deleted []blob.Ref
 	present map[blob.Ref]bool
 	err     error
+
+	// unnamed counts the objects under each tenant's prefix that no user-management row
+	// names (another consumer's, or an orphan). DeleteTenant removes them, so a second
+	// call finds none: the same idempotence the real backends have.
+	unnamed     map[string]int64
+	prefixCalls []string
+	prefixErr   error
+}
+
+func (s *stubBlobs) DeleteTenant(_ context.Context, tenant string) (int64, error) {
+	s.prefixCalls = append(s.prefixCalls, tenant)
+	if s.prefixErr != nil {
+		return 0, s.prefixErr
+	}
+	n := s.unnamed[tenant]
+	delete(s.unnamed, tenant)
+	return n, nil
 }
 
 func (s *stubBlobs) Delete(_ context.Context, ref blob.Ref) error {
@@ -246,4 +263,54 @@ func TestTheReferenceIsClearedOnlyAfterTheObjectIsGone(t *testing.T) {
 		"the delete failed, so the reference must survive — clearing it would strand the object "+
 			"with nothing left to find it by")
 	assert.NotNil(t, tenants.logo)
+}
+
+// TestObjectsNoRowNamesAreErasedByThePrefixSweep is the second consumer's case:
+// update-management's artifacts are named only by update-management's rows, which the
+// relational sweep has already deleted by the time this store runs, and an orphan is named
+// by nothing at all. With no logo to follow, the tenant still has objects, and they must go.
+func TestObjectsNoRowNamesAreErasedByThePrefixSweep(t *testing.T) {
+	blobs := &stubBlobs{unnamed: map[string]int64{"acme": 2, "globex": 5}}
+	store := NewObject(blobs, &stubTenants{})
+
+	first, err := store.Erase(context.Background(), "acme", time.Now())
+	require.NoError(t, err)
+	assert.Equal(t, int64(2), first.Rows, "the unnamed objects count as erased, so the pass is not quiet")
+	assert.Equal(t, []string{"acme"}, blobs.prefixCalls, "only the purged tenant's prefix is swept")
+	assert.Equal(t, int64(5), blobs.unnamed["globex"])
+
+	second, err := store.Erase(context.Background(), "acme", time.Now())
+	require.NoError(t, err)
+	assert.True(t, second.Clean())
+	assert.Zero(t, second.Rows, "the second pass finds nothing, so the purge can settle")
+}
+
+// TestALogoAndUnnamedObjectsAreBothErasedAndCountedOnce: the row-driven delete and the
+// prefix sweep compose without double counting.
+func TestALogoAndUnnamedObjectsAreBothErasedAndCountedOnce(t *testing.T) {
+	ref := blob.Ref{Backend: "filesystem", Key: "inst/acme/branding-logo/abc.png"}
+	blobs := &stubBlobs{unnamed: map[string]int64{"acme": 3}}
+	out, err := NewObject(blobs, &stubTenants{logo: ptr(ref.String())}).
+		Erase(context.Background(), "acme", time.Now())
+	require.NoError(t, err)
+	assert.Equal(t, int64(4), out.Rows)
+	assert.Equal(t, []blob.Ref{ref}, blobs.deleted)
+}
+
+// TestAPrefixSweepFailureIsRetryableRatherThanClean: a backend that cannot list or delete
+// the prefix has not erased what is under it.
+func TestAPrefixSweepFailureIsRetryableRatherThanClean(t *testing.T) {
+	blobs := &stubBlobs{prefixErr: errors.New("access denied")}
+	_, err := NewObject(blobs, &stubTenants{}).Erase(context.Background(), "acme", time.Now())
+	require.Error(t, err)
+}
+
+// TestTheMissingTenantRowStillSweepsThePrefix: the row is the logo's work list, not the
+// prefix's, so a row a peer already removed does not excuse the objects under the prefix.
+func TestTheMissingTenantRowStillSweepsThePrefix(t *testing.T) {
+	blobs := &stubBlobs{unnamed: map[string]int64{"acme": 1}}
+	out, err := NewObject(blobs, &stubTenants{err: gorm.ErrRecordNotFound}).
+		Erase(context.Background(), "acme", time.Now())
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), out.Rows)
 }

@@ -19,14 +19,9 @@ the render on a persistence/backend mismatch rather than silently producing a st
 {{- $mountPath := $p.mountPath | default "" -}}
 {{- $path := ternary $mountPath $directory (ne $mountPath "") -}}
 {{- $wantVolume := or $p.enabled (not (empty $p.existingClaim)) -}}
-{{- $mountAreas := (.Values.blobStorage | default dict).mountAreas | default (list "user-management") -}}
+{{- $mountAreas := include "devicechain.blobMountAreas" . | fromJsonArray -}}
 {{- $enabledAreas := splitList "," (include "devicechain.enabledAreas" .) -}}
-{{/*
-The Go services that build a filesystem blob store and thus need the volume mounted (ADR-058).
-Mirrors the code (today: user-management, for branding logos) the way the hard-dependency
-catalog in _helpers.tpl mirrors backend/k8s/functionalarea — keep it in sync as consumers land.
-*/}}
-{{- $blobConsumers := list "user-management" -}}
+{{- $blobConsumers := include "devicechain.blobConsumers" . | fromJsonArray -}}
 
 {{/* The mount path (an explicit override) must match where the store actually writes. */}}
 {{- if and (ne $mountPath "") (ne $directory "") (ne $mountPath $directory) -}}
@@ -64,16 +59,22 @@ catalog in _helpers.tpl mirrors backend/k8s/functionalarea — keep it in sync a
 {{-   end -}}
 {{- end -}}
 
-{{/* A chart-created RWO claim cannot back a consumer running more than one replica (a
-     filesystem store is per-pod): fail rather than wedge the second pod on volume attach. */}}
+{{/* A chart-created ReadWriteOnce claim backs ONE pod. The pods that mount it are counted
+     ACROSS the enabled mount areas, not per area: two areas at one replica each are two pods,
+     and a ReadWriteOnce volume attaches to one node, so the second can wedge on attach. An
+     existingClaim is the operator's own and is not judged here. */}}
 {{- if and $p.enabled (eq $backend "filesystem") (ne $path "") (empty $p.existingClaim) (not (has "ReadWriteMany" ($p.accessModes | default (list "ReadWriteOnce")))) -}}
+{{-   $pods := 0 -}}
+{{-   $podAreas := list -}}
 {{-   range $a := $mountAreas -}}
 {{-     if has $a $enabledAreas -}}
 {{-       $replicas := get (get ($.Values.functionalAreas | default dict) $a | default dict) "replicas" | default $.Values.replicas -}}
-{{-       if gt (int $replicas) 1 -}}
-{{-         fail (printf "blobStorage: area %q runs replicas=%v but the chart-created claim is not ReadWriteMany — a filesystem object store is per-pod, so replicas cannot share it; set blobStorage.persistence.accessModes:[ReadWriteMany] with an RWX storageClass, or use the s3 backend" $a $replicas) -}}
-{{-       end -}}
+{{-       $pods = add $pods (int $replicas) -}}
+{{-       $podAreas = append $podAreas (printf "%s x%v" $a $replicas) -}}
 {{-     end -}}
+{{-   end -}}
+{{-   if gt $pods 1 -}}
+{{-     fail (printf "blobStorage: %d pods mount the chart-created claim (%s) but it is not ReadWriteMany — a ReadWriteOnce volume attaches to one node, and a filesystem object store is per-pod unless the volume is shared; set blobStorage.persistence.accessModes:[ReadWriteMany] with an RWX storageClass, provide blobStorage.persistence.existingClaim, or use the s3 backend" $pods (join ", " $podAreas)) -}}
 {{-   end -}}
 {{- end -}}
 

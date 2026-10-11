@@ -296,3 +296,37 @@ func TestDormantStreamsArePinned(t *testing.T) {
 		}
 	}
 }
+
+// PlatformAuthored is the whole list of streams whose dead letters keep their payload
+// verbatim; every other stream's payload is redacted. Adding to this list is a deliberate
+// statement that no device writes to the stream.
+func TestPlatformAuthoredStreamsArePinned(t *testing.T) {
+	want := map[string]bool{
+		ResolvedEvents: true, DerivedEvents: true, DeviceAttribute: true, DeviceCommands: true,
+		DeviceDesired: true, ConnectorDispatch: true, DetectionRulesPublished: true, DeviceRoster: true,
+		GeoFenceSetManifest: true, EntityDeleted: true, AlarmEvents: true, RaiseAlarm: true, FailedEvents: true,
+	}
+	got := map[string]bool{}
+	for _, s := range All {
+		if s.PlatformAuthored {
+			got[s.Suffix] = true
+		}
+	}
+	if len(got) != len(want) {
+		t.Fatalf("platform-authored streams = %v, want %v", got, want)
+	}
+	for k := range want {
+		if !got[k] || !PlatformAuthoredFor(k) {
+			t.Errorf("%q must be declared platform-authored", k)
+		}
+	}
+	// The device-written streams never are.
+	for _, k := range []string{InboundEvents, DeviceEventsCapture, CommandResponses, DeviceReports, FailedDecode, "not-declared"} {
+		if PlatformAuthoredFor(k) {
+			t.Errorf("%q must not be platform-authored", k)
+		}
+	}
+	if KindPlatformAuthored("command-response") || KindPlatformAuthored("no-such-kind") || !KindPlatformAuthored("notification") {
+		t.Error("KindPlatformAuthored must be true only where every stream of the kind is platform-authored")
+	}
+}

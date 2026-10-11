@@ -929,6 +929,33 @@ Separately, resolving an event that takes longer than five seconds for any reaso
 warning (`Event resolution is slow`): the first one at once, then at most one line every 30
 seconds, with how many there were and the slowest.
 
+## AI inference calls {#ai-inference}
+
+Where AI-assisted authoring is enabled (see [AI-assisted authoring](../concepts/ai-authoring.md)),
+the `ai-inference` service counts what its tenants ask of it. Both series are bounded: their labels
+take a fixed set of values, never a tenant, model or provider, so they do not grow with the number of
+tenants.
+
+- **`devicechain_aiinference_ai_inference_calls_total{outcome}`**: tenant inference requests, by how
+  each ended.
+- **`devicechain_aiinference_ai_inference_tokens_total{direction}`**: tokens the provider reported
+  using, by `direction` (`input` or `output`). This is the spend signal: nothing else in the platform
+  counts tokens. It is a counter to watch, not a ledger, and nothing is enforced from it.
+
+| Outcome | Meaning |
+| --- | --- |
+| `served` | The provider answered and a candidate was returned. |
+| `rate_limited` | The tenant was over its inference rate ceiling and the call was refused before any provider was reached. A rising count means a tenant is sustained over its quota. |
+| `consent_required` | The tenant has not opted in to external AI routing, so nothing left the platform. Expected for a tenant that has not been granted consent. |
+| `unavailable` | The platform is not set up to serve the call: no model assigned, the provider disabled, a key missing. The server log names which. |
+| `provider_error` | The provider was reached and failed the call (transport error, a non-success status, an empty answer). The external dependency is misbehaving. |
+| `timed_out` | The provider was reached and did not answer within `inferenceTimeoutMs` (40 seconds by default, at most 120 seconds). The author sees a timeout rather than a generic failure. |
+
+Read `timed_out` and `provider_error` apart. A rising `provider_error` count says the provider is
+failing. A rising `timed_out` count with `provider_error` flat says the model in use is slower than
+the timeout allows: choose a faster model, or raise `inferenceTimeoutMs`, which the chart's
+`ai-inference` configuration exposes and which refuses to start above its maximum.
+
 ## Maintenance passes {#maintenance-passes}
 
 Several services run a maintenance task on a timer: a sweep, a reconciler or a scheduler. Each

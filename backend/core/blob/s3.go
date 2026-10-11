@@ -43,6 +43,9 @@ type s3ObjectAPI interface {
 	GetObject(ctx context.Context, in *s3.GetObjectInput, optFns ...func(*s3.Options)) (*s3.GetObjectOutput, error)
 	HeadObject(ctx context.Context, in *s3.HeadObjectInput, optFns ...func(*s3.Options)) (*s3.HeadObjectOutput, error)
 	DeleteObject(ctx context.Context, in *s3.DeleteObjectInput, optFns ...func(*s3.Options)) (*s3.DeleteObjectOutput, error)
+	// ListObjectsV2 serves DeleteTenant only: tenant erasure is the one operation that
+	// must find objects no row names.
+	ListObjectsV2(ctx context.Context, in *s3.ListObjectsV2Input, optFns ...func(*s3.Options)) (*s3.ListObjectsV2Output, error)
 }
 
 // s3Presigner is the presign subset (URL). *s3.PresignClient satisfies it, and
@@ -378,6 +381,40 @@ func (s *s3Store) Delete(ctx context.Context, ref Ref) error {
 		return fmt.Errorf("blob: deleting object: %w", err)
 	}
 	return nil
+}
+
+// DeleteTenant lists the tenant's prefix and deletes what it finds, page by page.
+// Deleting the keys a page returned does not disturb the continuation token.
+func (s *s3Store) DeleteTenant(ctx context.Context, tenant string) (int64, error) {
+	prefix, err := tenantPrefix(s.instanceID, tenant)
+	if err != nil {
+		return 0, err
+	}
+	var n int64
+	var next *string
+	for {
+		out, err := s.api.ListObjectsV2(ctx, &s3.ListObjectsV2Input{
+			Bucket: aws.String(s.bucket), Prefix: aws.String(prefix), ContinuationToken: next,
+		})
+		if err != nil {
+			return n, fmt.Errorf("blob: listing tenant %q: %w", tenant, err)
+		}
+		for _, o := range out.Contents {
+			if o.Key == nil || !strings.HasPrefix(*o.Key, prefix) {
+				// The listing asked for this prefix only; anything else is a server that did
+				// not honour it, and deleting it would reach past the tenant.
+				return n, fmt.Errorf("blob: listing tenant %q returned a key outside its prefix", tenant)
+			}
+			if _, err := s.api.DeleteObject(ctx, &s3.DeleteObjectInput{Bucket: aws.String(s.bucket), Key: o.Key}); err != nil {
+				return n, fmt.Errorf("blob: deleting object: %w", err)
+			}
+			n++
+		}
+		if out.IsTruncated == nil || !*out.IsTruncated || out.NextContinuationToken == nil {
+			return n, nil
+		}
+		next = out.NextContinuationToken
+	}
 }
 
 // isS3NotFound reports whether err is an S3 "object does not exist" error, across
