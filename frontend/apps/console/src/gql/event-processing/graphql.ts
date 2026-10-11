@@ -4,36 +4,79 @@ type Exact<T extends { [key: string]: unknown }> = { [K in keyof T]: T[K] };
 /** Internal type. DO NOT USE DIRECTLY. */
 export type Incremental<T> = T | { [P in keyof T]?: P extends ' $fragmentName' | '__typename' ? T[P] : never };
 import { DocumentTypeDecoration } from '@graphql-typed-document-node/core';
+/** One detection rule submitted for validation. */
 export type DetectionRuleInput = {
+  /** The rule definition, as a JSON document serialized to a string. */
   definition: string;
+  /**
+   * Whether the rule is scoped to a device group. Some rule kinds (absence and correlation)
+   * cannot be group-scoped and are rejected if this is true. Defaults to false.
+   */
   groupScoped?: boolean | null | undefined;
+  /** The rule's token, used to name the rule in errors and warnings. */
   token: string;
 };
 
+/** Input to draftDetectionRuleFromText. */
 export type DraftRuleFromTextInput = {
+  /**
+   * Optional metric vocabulary of the target profile, so the model refers to real metric keys.
+   * Omit it and the model works from the description alone.
+   */
   metrics?: Array<MetricHintInput> | null | undefined;
+  /** Token of the target device profile. */
   profileToken: string;
+  /** The author's plain-language description of the rule they want. */
   text: string;
 };
 
+/**
+ * One metric of the target profile's vocabulary, offered to the model as context. Only key is
+ * required.
+ */
 export type MetricHintInput = {
+  /** The metric's data type, as a hint. */
   dataType?: string | null | undefined;
+  /** What the metric measures, as a hint. */
   description?: string | null | undefined;
+  /** The metric's key. */
   key: string;
+  /** The metric's unit, as a hint. */
   unit?: string | null | undefined;
 };
 
+/** Input to previewRule. Exactly one of graph and ruleDefinition names the draft. */
 export type PreviewRuleInput = {
+  /**
+   * End of the replay window by event occurred time, as an RFC 3339 timestamp. Must be after
+   * start. A window longer than 24 hours is shortened to the 24 hours ending at end, and the
+   * result says so in degraded.
+   */
   end: string;
+  /** A canvas definition, as the JSON document the console editor emits, serialized to a string. */
   graph?: string | null | undefined;
+  /** Token of the device profile whose published history the draft is replayed against. */
   profileToken: string;
+  /** A rule definition, as a JSON document serialized to a string (the form builder's output). */
   ruleDefinition?: string | null | undefined;
+  /** Start of the replay window by event occurred time, as an RFC 3339 timestamp. */
   start: string;
+  /**
+   * When true and the draft is a canvas graph, each firing carries a per-node trace of what
+   * every canvas node did for it. Off by default; ignored for a ruleDefinition draft.
+   */
   trace?: boolean | null | undefined;
 };
 
+/** The status of a live detection rule. */
 export type RuleStatus =
+  /** The rule compiles under the current limits and is running. */
   | 'ACTIVE'
+  /**
+   * The published rule no longer compiles under the current limits (for example after a maximum
+   * rule duration was lowered). It is surfaced so its author can re-author it. A rule that
+   * failed to compile at publish time never reaches this state, because publishing is refused.
+   */
   | 'COMPILE_ERROR';
 
 export type ValidateDetectionRulesQueryVariables = Exact<{
