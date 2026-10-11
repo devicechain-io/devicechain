@@ -23,7 +23,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   WIDGET_TYPES,
-  type DatasourceSelector,
+  type ConcreteSelector,
   type EnumOptionSpec,
   type KnownWidgetInstance,
   type WidgetType,
@@ -154,7 +154,7 @@ function legacyFieldIds(type: WidgetType): string[] {
 const tr = (key: string) => i18n.t(key, { ns: 'dashboards' });
 const lookup: MessageLookup = (id) => (i18n.exists(id, { ns: 'dashboards' }) ? tr(id) : undefined);
 
-function renderPanel(type: WidgetType, datasource?: DatasourceSelector) {
+function renderPanel(type: WidgetType, datasource?: ConcreteSelector) {
   const widget: KnownWidgetInstance = {
     id: 'w1',
     type,
