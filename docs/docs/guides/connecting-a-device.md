@@ -350,14 +350,17 @@ Whenever the device's configuration changes, the platform publishes a revision o
 {"v":1,"kind":"config.revision","revision":3,"digest":"sha256:9e39b20b9def308341baa751db8c2570bfc5b562e1d5420f9e6506510e0328da","document":"{\"sampleIntervalSeconds\":30}"}
 ```
 
-`document` is a JSON **string** holding the configuration. Compute SHA-256 over exactly those bytes and compare it with `digest`; if they differ, apply nothing. Do not parse the document and serialize it again before hashing, because the digest covers the bytes the platform sent.
+`document` is a JSON **string** holding the configuration. Decode the JSON string value, hash its UTF-8 bytes with SHA-256, and compare `sha256:` followed by the lowercase hex digest with `digest`; if they differ, apply nothing. Do not parse the document and serialize it again before hashing, because the digest covers the bytes the platform sent.
+
+Revisions can reach a device out of order, so a lower revision can arrive after a higher one. Ignore a `config.revision` whose revision is lower than the one you hold, and when the revision is the one you hold, report `APPLIED` for it again rather than applying it twice.
 
 The device answers on `device-reports`. Every message is JSON, at most 4 KiB, and unknown fields are refused.
 
-- **`sync`**, sent every time the device connects, says which revision it holds (`0` if none): `{"v":1,"kind":"sync","config":{"haveRevision":3}}`. The platform replies on `device-desired` with the current revision, whether or not the device already holds it. Do not rely on a message published while the device was offline arriving later: syncing on connect is how a device catches up.
+- **`sync`**, sent every time the device connects, says which revision it holds (`0` if none): `{"v":1,"kind":"sync","config":{"haveRevision":3}}`. Subscribe to `device-desired` **before** you send the sync: nothing is retained, so a reply published before you subscribe is lost. The platform replies with the current revision, whether or not the device already holds it, and sends no reply at all when the device has no configuration. Do not rely on a message published while the device was offline arriving later: syncing is how a device catches up. Sync on every connect and also periodically (every few hours, say), because a revision lost between the platform committing it and sending it is repaired only by a sync. Syncs sent within a few seconds of the previous one are acknowledged and ignored.
 - **`config.status`** reports what the device did with a revision: `{"v":1,"kind":"config.status","revision":3,"digest":"sha256:…","status":"APPLIED"}`. The status is `RECEIVED`, `APPLIED` or `REJECTED`. A `REJECTED` report must carry `errors`, a list of up to 16 strings of up to 256 bytes each, saying why.
 
 The platform records a `config.status` only when the device has that revision and the digest matches it; the device stops showing the revision as pending once it has reported `APPLIED` for it. Reports are processed at least once, so repeating one is safe, and an older report never overwrites a newer one. A message that does not decode, names a revision the device was not sent, or carries a digest that is not that revision's is refused and recorded on the dead-letter stream rather than dropped. Devices that speak only HTTP are not served by this channel.
+
 ### Why the nonce is required {#why-the-nonce-is-required}
 
 Echoing `dispatchNonce` tells the platform your answer belongs to **this** delivery of the command. That matters because a command can legitimately be published more than once. If a publish reports an error, the platform cannot tell a message that was lost from one whose acknowledgement was lost, so it queues the command to be sent again. Without the nonce, an answer to the first delivery arriving after the second went out would close the command before the device had carried out the second one.

@@ -59,6 +59,20 @@ func (e *ConfigurationReportRefusal) Error() string {
 	return fmt.Sprintf("configuration report refused: %s", e.Reason)
 }
 
+// SyncCooldown is the shortest interval between two syncs from one device that the platform acts
+// on. A sync costs a transaction and a publish of up to the whole document, and a healthy device
+// syncs on connect and every few hours, so a second sync within seconds is a reconnect loop or a
+// fault. Ten seconds is long enough to absorb a flapping connection and short enough that a device
+// that reconnects after a real change is not made to wait. A throttled sync is acknowledged and
+// does nothing; the next one outside the window is served in full.
+const SyncCooldown = 10 * time.Second
+
+// ErrSyncThrottled is returned for a sync inside the device's SyncCooldown.
+var ErrSyncThrottled = errors.New("configuration sync throttled")
+
+// syncClock is the clock the cooldown reads; tests replace it.
+var syncClock = func() time.Time { return time.Now().UTC() }
+
 // SystemActorDeviceSync is the actor recorded on a revision minted because a device synced.
 const SystemActorDeviceSync = "system:device-sync"
 
@@ -92,6 +106,13 @@ func (api *Api) SyncDeviceConfiguration(ctx context.Context, deviceToken string,
 	if err != nil {
 		return nil, err
 	}
+	var seen []DeviceConfigurationState
+	if err := api.RDB.DB(ctx).Select("id", "last_sync_at").Where("device_id = ?", deviceId).Limit(1).Find(&seen).Error; err != nil {
+		return nil, err
+	}
+	if len(seen) == 1 && seen[0].LastSyncAt.Valid && syncClock().Sub(seen[0].LastSyncAt.Time) < SyncCooldown {
+		return nil, ErrSyncThrottled
+	}
 	var current *DeviceConfigurationRevision
 	err = api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := lockDeviceConfiguration(ctx, tx, deviceId); err != nil {
@@ -121,7 +142,7 @@ func (api *Api) SyncDeviceConfiguration(ctx context.Context, deviceToken string,
 			}
 			current = rev
 		}
-		return touchConfigurationSync(tx, deviceId, time.Now().UTC())
+		return touchConfigurationSync(tx, deviceId, syncClock())
 	})
 	if err != nil {
 		return nil, err

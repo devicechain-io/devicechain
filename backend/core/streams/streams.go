@@ -491,8 +491,8 @@ const (
 // max-delivery capture capped at 8 MiB), the MQTT gateway stores 384 MiB and the KV
 // buckets 1088 MiB (6 State x 128 + 5 Cache x 64) — ~10.2 GiB reserved against the
 // 14 GiB max_file_store a 16Gi PV yields.
-// (The two dormant device-desired / device-reports streams are counted: they reserve
-// budget although nothing creates them yet. Recount when a stream is added: this
+// (The device-desired / device-reports streams are counted: they reserve budget like
+// every other Cold stream. Recount when a stream is added: this
 // sentence said "8 Cold / 9.5 GiB" while the tree held nine, and it is the sentence
 // anyone weighing a new stream reads.) Every
 // ceiling is reserved UP FRONT, so an uncapped capture stream does not merely

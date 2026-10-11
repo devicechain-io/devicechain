@@ -9,9 +9,11 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/entity"
+	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
 )
 
@@ -121,6 +123,7 @@ func TestSyncMintsWhatAProfilePublishLeftStaleAndDelivers(t *testing.T) {
 	dev := seedConfiguredDevice(t, api, ctx, []ConfigurationKey{{Key: "mode", ValueType: "STRING"}})
 	pub := &recordingDesired{}
 	api.DeviceDesiredPublisher = pub
+	clock := fakeSyncClock(t)
 
 	// Nothing declared-and-set yet: a sync tells the device nothing, but is recorded.
 	rev, err := api.SyncDeviceConfiguration(ctx, "dev", 0)
@@ -151,6 +154,7 @@ func TestSyncMintsWhatAProfilePublishLeftStaleAndDelivers(t *testing.T) {
 		t.Fatal("the device does not read stale after its declaration moved")
 	}
 
+	clock.advance(SyncCooldown + time.Second)
 	rev, err = api.SyncDeviceConfiguration(ctx, "dev", 0)
 	if err != nil || rev == nil || rev.Revision != 1 || rev.Document != `{"level":"3"}` {
 		t.Fatalf("sync = (%+v, %v), want revision 1 {\"level\":\"3\"}", rev, err)
@@ -158,7 +162,8 @@ func TestSyncMintsWhatAProfilePublishLeftStaleAndDelivers(t *testing.T) {
 	if rev.Actor != SystemActorDeviceSync {
 		t.Fatalf("actor = %q, want %q", rev.Actor, SystemActorDeviceSync)
 	}
-	// Syncing again mints nothing new and delivers the same revision again.
+	// Syncing again (outside the cooldown) mints nothing new and delivers the same revision again.
+	clock.advance(SyncCooldown + time.Second)
 	again, err := api.SyncDeviceConfiguration(ctx, "dev", 1)
 	if err != nil || again.Revision != 1 {
 		t.Fatalf("second sync = (%+v, %v), want revision 1", again, err)
@@ -300,5 +305,119 @@ func TestReportsAndSyncsAreTenantScoped(t *testing.T) {
 	}
 	if !readConfig(t, api, acme).Pending {
 		t.Fatal("tenant A's device converged on tenant B's report")
+	}
+}
+
+type testClock struct{ now time.Time }
+
+func (c *testClock) advance(d time.Duration) { c.now = c.now.Add(d) }
+
+func fakeSyncClock(t *testing.T) *testClock {
+	t.Helper()
+	c := &testClock{now: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)}
+	prev := syncClock
+	syncClock = func() time.Time { return c.now }
+	t.Cleanup(func() { syncClock = prev })
+	return c
+}
+
+// A device that syncs again inside the cooldown is acknowledged and nothing happens: no
+// transaction's worth of work, no publish, no change to the recorded sync time. The first sync
+// after the window is served in full, including the re-delivery.
+func TestSyncInsideTheCooldownDoesNothing(t *testing.T) {
+	api, ctx := configTestApi(t)
+	seedConfiguredDevice(t, api, ctx, []ConfigurationKey{{Key: "mode", ValueType: "STRING"}})
+	setConfigAttr(t, api, ctx, AttributeScopeShared, "mode", AttributeValueString, "eco")
+	pub := &recordingDesired{}
+	api.DeviceDesiredPublisher = pub
+	clock := fakeSyncClock(t)
+
+	if rev, err := api.SyncDeviceConfiguration(ctx, "dev", 0); err != nil || rev == nil {
+		t.Fatalf("first sync = (%v, %v)", rev, err)
+	}
+	at := reportedState(t, api, ctx).LastSyncAt.Time
+
+	clock.advance(SyncCooldown - time.Second)
+	if rev, err := api.SyncDeviceConfiguration(ctx, "dev", 0); !errors.Is(err, ErrSyncThrottled) || rev != nil {
+		t.Fatalf("sync inside the window = (%v, %v), want ErrSyncThrottled", rev, err)
+	}
+	if got := len(pub.snapshot()); got != 1 {
+		t.Fatalf("delivered %d times, want 1: a throttled sync published", got)
+	}
+	if !reportedState(t, api, ctx).LastSyncAt.Time.Equal(at) {
+		t.Fatal("a throttled sync moved the recorded sync time, so a steady stream of them would never be served")
+	}
+
+	clock.advance(2 * time.Second)
+	if rev, err := api.SyncDeviceConfiguration(ctx, "dev", 0); err != nil || rev == nil {
+		t.Fatalf("sync after the window = (%v, %v)", rev, err)
+	}
+	if got := len(pub.snapshot()); got != 2 {
+		t.Fatalf("delivered %d times, want 2: the first sync after the window must re-deliver", got)
+	}
+}
+
+// visibilityPublisher checks, at the moment it is asked to deliver, that the revision it is
+// delivering is committed: it reads through a SEPARATE connection, which under SQLite's shared
+// cache cannot see (and is locked out of) a table another connection is still writing in an open
+// transaction. A publish made from inside the transaction fails one of the two ways.
+type visibilityPublisher struct {
+	t     *testing.T
+	other *gorm.DB
+	calls int
+}
+
+func (p *visibilityPublisher) PublishDesiredConfiguration(_ context.Context, _ string, rev *DeviceConfigurationRevision) {
+	p.calls++
+	var n int64
+	var err error
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		err = p.other.Raw("SELECT count(*) FROM device_configuration_revisions WHERE revision = ? AND digest = ?",
+			rev.Revision, rev.Digest).Scan(&n).Error
+	}()
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		// Blocked behind the writer's open transaction: the revision is not committed.
+		p.t.Errorf("revision %d was published before it was committed (separate connection blocked)", rev.Revision)
+		return
+	}
+	if err != nil || n != 1 {
+		p.t.Errorf("revision %d was published before it was committed (separate connection: count=%d err=%v)", rev.Revision, n, err)
+	}
+}
+
+func TestRevisionsArePublishedOnlyOnceCommitted(t *testing.T) {
+	api, ctx := configTestApi(t)
+	// configTestApi names its database after ITS test, which is this one.
+	other, err := gorm.Open(sqlite.Open("file:"+strings.ReplaceAll(t.Name(), "/", "_")+"?mode=memory&cache=shared"), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pub := &visibilityPublisher{t: t, other: other}
+	api.DeviceDesiredPublisher = pub
+	seedConfiguredDevice(t, api, ctx, []ConfigurationKey{{Key: "mode", ValueType: "STRING"}, {Key: "level", ValueType: "STRING"}})
+	fakeSyncClock(t)
+
+	setConfigAttr(t, api, ctx, AttributeScopeShared, "mode", AttributeValueString, "eco")                                             // write path
+	if _, err := api.DeleteEntityAttribute(ctx, string(entity.TypeDevice), "dev", string(AttributeScopeShared), "mode"); err != nil { // delete path
+		t.Fatal(err)
+	}
+	// sync path: a value written under an undeclared name, then a declaration that names it.
+	setConfigAttr(t, api, ctx, AttributeScopeShared, "extra", AttributeValueString, "x")
+	if _, err := api.SetDeviceProfileConfigurationDeclaration(ctx, "prof", []ConfigurationKey{
+		{Key: "mode", ValueType: "STRING"}, {Key: "extra", ValueType: "STRING"}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := api.PublishDeviceProfile(ctx, "prof", nil, nil, "tester"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := api.SyncDeviceConfiguration(ctx, "dev", 0); err != nil {
+		t.Fatal(err)
+	}
+	if pub.calls != 3 {
+		t.Fatalf("publisher called %d times, want 3 (write, delete, sync)", pub.calls)
 	}
 }

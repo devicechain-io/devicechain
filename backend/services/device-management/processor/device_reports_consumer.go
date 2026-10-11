@@ -36,6 +36,7 @@ const (
 	reportRejectedMalformed        = "malformed"
 	reportRejectedUnsupportedKind  = "unsupported_kind"
 	reportRejectedUnattributable   = "unattributable"
+	reportRejectedThrottled        = "throttled"
 	maxDeadLetterReportPayloadByte = 4096
 )
 
@@ -90,7 +91,7 @@ type DeviceReportsMetrics struct {
 // deviceReportRejectionReasons are every rejection label value, so each series exists at zero
 // from startup and an alert on the rate sees a series rather than none.
 var deviceReportRejectionReasons = []string{
-	reportRejectedMalformed, reportRejectedUnsupportedKind, reportRejectedUnattributable,
+	reportRejectedMalformed, reportRejectedUnsupportedKind, reportRejectedUnattributable, reportRejectedThrottled,
 	model.ReportRejectedUnknownDevice, model.ReportRejectedUnknownRevision,
 	model.ReportRejectedDigestMismatch, model.ReportRejectedStale,
 }
@@ -102,7 +103,7 @@ func NewDeviceReportsMetrics(ms *core.Microservice) DeviceReportsMetrics {
 		metrics: ms.NewProcessorMetrics("device_reports"),
 		rejected: ms.NewCounterVec("config_reports_rejected_total",
 			"Device messages on the device-reports channel that were refused, by reason: malformed "+
-				"(did not decode), unsupported_kind, unattributable (no tenant or device in the "+
+				"(did not decode), unsupported_kind, throttled (a sync inside the per-device cooldown), unattributable (no tenant or device in the "+
 				"subject), unknown_device, unknown_revision, digest_mismatch (the device named a "+
 				"revision it was not sent), and stale (older than what is recorded).",
 			[]string{"reason"}),
@@ -197,6 +198,12 @@ func (rc *DeviceReportsConsumer) handle(ctx context.Context, msg messaging.Messa
 		if _, err := rc.Api.SyncDeviceConfiguration(msgctx, token, rep.Sync.Config.HaveRevision); err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
 				rc.unknownDevice(msg, token, done)
+				return
+			}
+			if errors.Is(err, model.ErrSyncThrottled) {
+				rc.rejected.WithLabelValues(reportRejectedThrottled).Inc()
+				msg.Ack()
+				done(core.ResultInvalid)
 				return
 			}
 			rc.retryOrDrop(msgctx, msg, token, done, err, "sync")

@@ -297,6 +297,12 @@ func TestConfigurationDeliveryLoop(t *testing.T) {
 	require.EqualValues(t, 2, r2.Revision)
 	require.Equal(t, `{"mode":"turbo"}`, r2.Document)
 	dev.status(t, r2, ota.ConfigApplied)
+
+	// A second sync straight away is acknowledged and counted, and delivers nothing.
+	before := len(dev.received())
+	dev.sync(t, 2)
+	require.Eventually(t, func() bool { return f.counter(t, "config_reports_rejected_total", "throttled") == 1 }, 10*time.Second, 20*time.Millisecond)
+	require.Len(t, dev.received(), before, "a throttled sync delivered a revision")
 	require.Eventually(t, func() bool { return !configState(t, ctx, "dev").Pending }, 10*time.Second, 20*time.Millisecond)
 	require.NotNil(t, configState(t, ctx, "dev").Reported.LastSyncAt)
 	require.Empty(t, f.letters(t), "a healthy loop wrote a dead letter")
@@ -312,9 +318,9 @@ func TestMalformedAndOversizedReportsAreDeadLettered(t *testing.T) {
 	setMode(t, ctx, "dev", "eco")
 	r1 := dev.next(t)
 
-	dev.publish(t, `{"v":1,"kind":"config.status","revision":1,"digest":`)                        // truncated JSON
-	dev.publish(t, `{"v":1,"kind":"config.status","revision":1,"deviceToken":"other"}`)           // identity in the body
-	dev.publish(t, `{"v":1,"kind":"config.status","revision":1,"revision":9,"status":"APPLIED"}`) // duplicate key
+	dev.publish(t, `{"v":1,"kind":"config.status","revision":1,"digest":`)                                                          // truncated JSON
+	dev.publish(t, `{"v":1,"kind":"config.status","revision":1,"digest":"`+r1.Digest+`","status":"APPLIED","deviceToken":"other"}`) // identity in the body, otherwise valid
+	dev.publish(t, `{"v":1,"kind":"config.status","revision":1,"revision":9,"status":"APPLIED"}`)                                   // duplicate key
 	dev.publish(t, `{"v":1,"kind":"config.status","revision":1,"digest":"`+r1.Digest+`","status":"APPLIED","pad":"`+
 		strings.Repeat("x", ota.MaxReportBytes)+`"}`) // over the 4 KiB cap
 	dev.publish(t, `{"v":1,"kind":"update.inventory","component":"firmware","bootId":"b","running":{"version":"1"}}`) // not served here
