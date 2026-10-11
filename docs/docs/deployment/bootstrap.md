@@ -1204,8 +1204,8 @@ store.
 
 ### Service sizing {#service-sizing}
 
-Every backend service requests 128Mi of memory and is limited to 256Mi. CPU is sized per service
-from measurement:
+Every backend service requests 128Mi of memory and is limited to 256Mi, except `event-processing`,
+which is limited to 384Mi (a floor: a higher top-level `resources.limits.memory`, or a limit of your own on that service, is used as written). CPU is sized per service from measurement:
 
 | Service | CPU request | CPU limit |
 | --- | --- | --- |
@@ -1221,6 +1221,15 @@ CPU limit; see [The message broker](#broker-sizing).
 
 Under [`--compact`](#--compact) every backend service and every NATS server requests 25m and 64Mi
 instead, and the limits stay as above. The console is sized separately.
+
+The five services in the table above that carry a CPU limit of their own also run the Go garbage
+collector at `GOGC=400` with a soft memory limit (`GOMEMLIMIT`) at 75% of the service's own memory
+limit. At 6,000 events a second this cut the CPU each event costs by 4 to 18% (18% in
+`device-management` and `event-management`), because the collector ran four to thirteen times less
+often. The soft limit is what keeps the larger heap inside the container: it makes the collector
+work harder instead of letting the heap pass the limit. It is why `event-processing` has 384Mi, since
+its working set reached 174 MiB of 256Mi in that run. Set `functionalAreas.<service>.gogc` and
+`functionalAreas.<service>.goMemLimitPercent` to `0` to turn either off for one service.
 
 The first four services do the per-event work: receiving, resolving and storing every event, and
 merging it into each device's live state. `event-processing` runs detection on every event; its

@@ -783,6 +783,8 @@ trunca nada ni se aplica nada a medias, así que reduzca la solicitud y envíela
 | Intervalos por agregación | 10 000 | `bucketedMeasurements`: el rango dividido por `intervalSeconds`, redondeado hacia arriba. |
 | Filas por agregación | 50 000 | `bucketedMeasurements`: los intervalos multiplicados por los nombres de medición devueltos. Con un filtro `name` es un solo nombre; sin él, cada nombre de medición distinto que coincide con los filtros de la lectura. |
 | Claves por consulta | 1000 | Una lista de tokens, identificadores externos o tokens de alarma pasada a una consulta por lotes `…ByToken`, `…ByExternalId` o similar (estados de dispositivo, últimas ubicaciones, comandos, lotes de comandos, canales, políticas y estados de notificación). |
+| Tamaño de entrada JSON | 64 KiB | Cada valor de metadatos, propiedades, configuración, carga útil o destinatarios enviado como JSON. Las cargas útiles y los metadatos de comandos se rechazan con `PAYLOAD_TOO_LARGE` / `METADATA_TOO_LARGE` (consulte [Enviar comandos](../guides/sending-commands.md)). |
+| Destinatarios por regla de notificación | 100 | La lista `recipients` de una regla de una política de notificación. |
 
 `bucketedMeasurements` también exige `startTime`; `endTime` toma por defecto la hora actual.
 

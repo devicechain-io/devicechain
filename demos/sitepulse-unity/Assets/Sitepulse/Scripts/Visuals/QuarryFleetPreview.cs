@@ -276,6 +276,24 @@ namespace DeviceChain.Sitepulse.Visuals
             }
         }
 
+        /// <summary>
+        /// Where the machine's track will have it after <paramref name="seconds"/> more of the track at its own pace, and whether a loader's
+        /// boom is up then. False when it is not on its track.
+        /// </summary>
+        public bool TryTrackPoseAhead(string id, float seconds, out float x, out float z, out float heading, out bool boomRaised)
+        {
+            x = z = heading = 0f;
+            boomRaised = false;
+            var u = Find(id);
+            if (u == null || u.detached || data == null) return false;
+            var f = u.player.Sample(u.player.TrackSecondsAt(time) + seconds);
+            x = f.X;
+            z = f.Z;
+            heading = f.Heading;
+            boomRaised = u.rig.Kind == MachineKind.Loader && f.P1 < Footprint.LoaderRaisedBoomDegrees;
+            return true;
+        }
+
         /// <summary>Puts a detached machine on the ground at a place, facing a way, having moved <paramref name="distance"/> metres (wheels turn by it).</summary>
         public void Drive(string id, float x, float z, float heading, float distance, float steer)
         {
