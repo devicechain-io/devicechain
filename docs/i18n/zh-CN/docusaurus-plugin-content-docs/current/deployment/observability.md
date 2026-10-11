@@ -401,7 +401,7 @@ kube-state-metrics 本身因节点失效等原因移动期间的重启，只要�
 
 **设备凭据。** 各副本将刚验证的凭据及其设备从读取起内存缓存五分钟，因包含密码，绝不放键值桶。每副本最多保留 `inMemoryCache.credentialCacheMiB`（默认 32 MiB）。每次使用仍比较密码及到期时间，验证失败不缓存。凭据或设备变更使执行变更的副本立即清缓存，并用 NATS 通知其他副本。因此撤销或跨副本设备删除，所有副本下个事件即生效；通知丢失时，则在副本到期时生效。MQTT 连接始终读数据库。
 
-**按设备群规模设定上限。** 内容从读取起在内存保留五分钟，因此上报间隔不超过该时长的设备，首个事件之后每个事件都由内存回答。上报更稀疏的设备永不内存命中，每事件一次桶读取，另加一次数据库凭据读取。请让每个副本按整个活跃设备群设定上限，而不是按设备群除以副本数：入站流是所有副本共享的单个持久消费者，事件不会按设备在副本之间分配，当副本数乘以设备上报间隔小于该时间时，每个副本几乎看到每一台设备。缓存小于设备群时会循环淘汰，几乎没有命中。例如 60,000 台设备每 10 秒上报，每台有一条追踪关系，则每个副本需要 `inMemoryCache.credentialCacheMiB` 约 80（每条约 1.1 KB）和 `inMemoryCache.perDeviceCacheMiB` 约 64（一组关系约 950 字节），并将内存上限提高到 512Mi。特征是 `kv_cache_local_lookups_total{cache="relationships-by-source", result="miss"}` 接近事件率，而条目数远低上限。缓存容不下设备群则 `kv_cache_local_evictions_total{reason="capacity"}` 接近事件率，条目数或字节数到上限；凭据缓存的同类信号在 `credential_cache_evictions_total{reason="capacity"}`。此时提高边界并同步提高内存限制。默认六个内存缓存共最多 112 MiB；未设置 `GOMEMLIMIT` 时，回收前堆可增长至持有量约两倍。想更快解析设备群，也可增加池范围内 `resolution.workers` 或设备管理副本。
+**按设备群规模设定上限。** 内容从读取起在内存保留五分钟，因此上报间隔不超过该时长的设备，首个事件之后每个事件都由内存回答。上报更稀疏的设备永不内存命中，每事件一次桶读取，另加一次数据库凭据读取。请让每个副本按整个活跃设备群设定上限，而不是按设备群除以副本数：入站流是所有副本共享的单个持久消费者，事件不会按设备在副本之间分配，当副本数乘以设备上报间隔小于该时间时，每个副本几乎看到每一台设备。缓存小于设备群时会循环淘汰，几乎没有命中。例如 60,000 台设备每 10 秒上报，每台有一条追踪关系，则每个副本需要 `inMemoryCache.credentialCacheMiB` 约 80（每条约 1.1 KB）和 `inMemoryCache.perDeviceCacheMiB` 约 64（一组关系约 950 字节），并将内存上限提高到 512Mi。特征是 `kv_cache_local_lookups_total{cache="relationships-by-source", result="miss"}` 接近事件率，而条目数远低上限。缓存容不下设备群则 `kv_cache_local_evictions_total{reason="capacity"}` 接近事件率，条目数或字节数到上限；凭据缓存的同类信号在 `credential_cache_evictions_total{reason="capacity"}`。此时提高边界并同步提高内存限制。默认六个内存缓存共最多 112 MiB。`device-management` 以 `GOGC=400` 运行，并把软内存上限（`GOMEMLIMIT`）设为其内存上限的 75%，因此回收器允许堆增长到持有量的约五倍，接近软上限时更努力地回收；未设置 `GOMEMLIMIT` 的地方，回收前堆可增长至持有量约两倍。想更快解析设备群，也可增加池范围内 `resolution.workers` 或设备管理副本。
 
 变更后移除条目（设备删除、配置发布）绝不跳过，因为只有桶主副本接受，最多等五秒。仍失败会记录 `A key-value cache eviction failed`，旧条目可服务至配置 TTL 到期，已有内存副本则至内存时间到期，二者取较短者。
 
@@ -424,6 +424,24 @@ kube-state-metrics 本身因节点失效等原因移动期间的重启，只要�
 - **`devicechain_devicemanagement_cache_eviction_broadcasts_total{cache, result}`**：通知其他副本删除缓存的消息，分别为发送 `published`、未发送 `publish_failed`、接收 `received`、无法解析而丢弃 `malformed`。持续发送失败意味着其他副本只能等缓存到期才见变更。
 
 任何原因使解析超过五秒，都会记录 `Event resolution is slow` 警告：首个立即记录，此后最多每 30 秒一条，含数量和最慢值。
+
+## AI 推理调用 {#ai-inference}
+
+在启用了 AI 辅助编写的环境中（参见 [AI 辅助编写](../concepts/ai-authoring.md)），`ai-inference` 服务会统计租户向它提出的请求。这两个指标都是有界的：标签只取固定的一组值，绝不会是租户、模型或提供商，因此不会随租户数量增长。
+
+- **`devicechain_aiinference_ai_inference_calls_total{outcome}`**：租户的推理请求，按每次请求的结束方式划分。
+- **`devicechain_aiinference_ai_inference_tokens_total{direction}`**：提供商报告已使用的 token 数，按 `direction`（`input` 或 `output`）划分。这是用量（花费）信号：平台中没有其他指标统计 token。它是供观察的计数器，而不是账本，也不会据此强制执行任何限制。
+
+| 结果 | 含义 |
+| --- | --- |
+| `served` | 提供商已应答，并返回了候选结果。 |
+| `rate_limited` | 租户超出了推理速率上限，调用在到达任何提供商之前即被拒绝。计数持续上升说明某个租户长期超出配额。 |
+| `consent_required` | 租户尚未同意外部 AI 路由，因此没有任何数据离开平台。对于尚未获得授权的租户，这是预期情况。 |
+| `unavailable` | 平台未配置好来处理该调用：未分配模型、提供商已禁用、缺少密钥。服务端日志会指明具体原因。 |
+| `provider_error` | 已连接到提供商，但提供商未能完成调用（传输错误、非成功状态码、空应答）。外部依赖工作异常。 |
+| `timed_out` | 已连接到提供商，但它没有在 `inferenceTimeoutMs` 内应答（默认 40 秒，最长 120 秒）。作者看到的是超时，而不是笼统的失败。 |
+
+请把 `timed_out` 和 `provider_error` 分开解读。`provider_error` 上升说明提供商在出故障。`timed_out` 上升而 `provider_error` 持平，则说明所用模型比超时时间允许的更慢：请换用更快的模型，或调大 `inferenceTimeoutMs`（chart 的 `ai-inference` 配置中提供该项，超过其上限时服务将拒绝启动）。
 
 ## 维护轮次 {#maintenance-passes}
 

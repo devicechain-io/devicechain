@@ -39,6 +39,7 @@ import { DeviceCredentialsPanel } from '@/routes/devices/DeviceCredentialsPanel'
 import { DeviceReplacementPanel } from '@/routes/devices/DeviceReplacementPanel';
 import { DeviceAssignmentPanel } from '@/routes/devices/DeviceAssignmentPanel';
 import { DeviceLocationPanel } from '@/routes/devices/DeviceLocationPanel';
+import { DeviceConfigurationPanel } from '@/routes/devices/DeviceConfigurationPanel';
 import { EntityAttributesPanel } from '@/components/EntityAttributesPanel';
 import { EventTypeLabel } from '@/components/EventTypeLabel';
 
@@ -128,6 +129,7 @@ export default function DeviceDetailPage() {
           <TabsTrigger value="connectivity">{t('tabConnectivity')}</TabsTrigger>
           <TabsTrigger value="events">{t('tabEvents')}</TabsTrigger>
           <TabsTrigger value="commands">{t('tabCommands')}</TabsTrigger>
+          <TabsTrigger value="configuration">{t('tabConfiguration')}</TabsTrigger>
           {canManageCredentials && (
             <TabsTrigger value="credentials">{t('tabCredentials')}</TabsTrigger>
           )}
@@ -185,6 +187,12 @@ export default function DeviceDetailPage() {
         <TabsContent value="commands">
           <SectionPanel>
             <DeviceCommandsPanel deviceToken={device.token} />
+          </SectionPanel>
+        </TabsContent>
+        <TabsContent value="configuration">
+          <SectionPanel>
+            {/* Keyed by device so no state survives a move to another device. */}
+            <DeviceConfigurationPanel key={device.token} deviceToken={device.token} />
           </SectionPanel>
         </TabsContent>
         {canManageCredentials && (

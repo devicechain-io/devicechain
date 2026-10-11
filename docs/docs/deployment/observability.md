@@ -862,8 +862,11 @@ A fleet too large for the cache instead shows `kv_cache_local_evictions_total{re
 rising at close to the event rate, with `kv_cache_local_entries` at `kv_cache_local_max_entries`
 or `kv_cache_local_bytes` at `kv_cache_local_max_bytes`; for credentials, the same signs are in
 `credential_cache_evictions_total{reason="capacity"}`. Then raise the bound, and the memory limit
-with it: at the defaults the six in-memory caches hold at most 112 MiB, and with no `GOMEMLIMIT`
-set the heap can grow to about twice what it holds before it is collected. To resolve a fleet
+with it: at the defaults the six in-memory caches hold at most 112 MiB. `device-management` runs
+with `GOGC=400` and a soft memory limit (`GOMEMLIMIT`) at 75% of its memory limit, so the collector
+lets the heap grow to about five times what it holds, and works harder once it nears that soft
+limit; where no `GOMEMLIMIT` is set the heap can instead grow to about twice what it holds before
+it is collected. To resolve a fleet
 faster you can also add resolvers (`resolution.workers`, within the connection pool) or
 `device-management` replicas.
 
@@ -925,6 +928,33 @@ The credential copy has series of its own:
 Separately, resolving an event that takes longer than five seconds for any reason is logged as a
 warning (`Event resolution is slow`): the first one at once, then at most one line every 30
 seconds, with how many there were and the slowest.
+
+## AI inference calls {#ai-inference}
+
+Where AI-assisted authoring is enabled (see [AI-assisted authoring](../concepts/ai-authoring.md)),
+the `ai-inference` service counts what its tenants ask of it. Both series are bounded: their labels
+take a fixed set of values, never a tenant, model or provider, so they do not grow with the number of
+tenants.
+
+- **`devicechain_aiinference_ai_inference_calls_total{outcome}`**: tenant inference requests, by how
+  each ended.
+- **`devicechain_aiinference_ai_inference_tokens_total{direction}`**: tokens the provider reported
+  using, by `direction` (`input` or `output`). This is the spend signal: nothing else in the platform
+  counts tokens. It is a counter to watch, not a ledger, and nothing is enforced from it.
+
+| Outcome | Meaning |
+| --- | --- |
+| `served` | The provider answered and a candidate was returned. |
+| `rate_limited` | The tenant was over its inference rate ceiling and the call was refused before any provider was reached. A rising count means a tenant is sustained over its quota. |
+| `consent_required` | The tenant has not opted in to external AI routing, so nothing left the platform. Expected for a tenant that has not been granted consent. |
+| `unavailable` | The platform is not set up to serve the call: no model assigned, the provider disabled, a key missing. The server log names which. |
+| `provider_error` | The provider was reached and failed the call (transport error, a non-success status, an empty answer). The external dependency is misbehaving. |
+| `timed_out` | The provider was reached and did not answer within `inferenceTimeoutMs` (40 seconds by default, at most 120 seconds). The author sees a timeout rather than a generic failure. |
+
+Read `timed_out` and `provider_error` apart. A rising `provider_error` count says the provider is
+failing. A rising `timed_out` count with `provider_error` flat says the model in use is slower than
+the timeout allows: choose a faster model, or raise `inferenceTimeoutMs`, which the chart's
+`ai-inference` configuration exposes and which refuses to start above its maximum.
 
 ## Maintenance passes {#maintenance-passes}
 
