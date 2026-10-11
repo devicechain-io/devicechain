@@ -76,8 +76,8 @@ interface AuthContextValue {
    */
   refreshMemberships: () => Promise<void>;
   /**
-   * Sign out: ends the sign-in on the server (so its refresh and identity tokens stop
-   * working), then clears the local session. The local session is cleared even when the
+   * Sign out: clears the local session at once, then ends the sign-in on the server (so
+   * its refresh and identity tokens stop working). The local session is gone even when the
    * server cannot be reached - the user asked to leave - but that failure is logged and
    * shown, not swallowed, because the server-side session is then still open.
    */
@@ -219,15 +219,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const held = [tokensRef.current?.refreshToken, identityRef.current?.identityToken].filter(
       (t): t is string => !!t,
     );
+    // Forget the tokens here FIRST, then ask the server. The user may close the tab the
+    // moment they click: waiting on the network (up to LOGOUT_TIMEOUT_MS) before clearing
+    // would leave the tokens in localStorage on a shared machine whenever that request
+    // never finishes - worse than the client-only sign-out this replaces.
+    refreshInFlight.current = null;
+    applyTokens(null);
+    applyIdentity(null);
     try {
       await endServerSessions(held);
     } catch (err) {
       console.error('Sign-out: the server did not confirm the session ended', err);
       toast(i18n.t('login:signOutFailed'), 'error');
-    } finally {
-      refreshInFlight.current = null;
-      applyTokens(null);
-      applyIdentity(null);
     }
   }, [applyTokens, applyIdentity, toast]);
 

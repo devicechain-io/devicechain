@@ -85,17 +85,30 @@ describe('AuthProvider.logout', () => {
     expect(h.toasts).toEqual([]);
   });
 
-  it('asks the server BEFORE it clears local state', async () => {
+  // A tab closed straight after the click must not leave the tokens behind: storage is
+  // cleared before the server call starts, not after it settles.
+  it('clears local state BEFORE it waits on the server', async () => {
     mount();
-    let storedWhenCalled: string | null = 'unset';
-    h.logoutImpl = async () => {
-      storedWhenCalled = window.localStorage.getItem('dc-auth');
+    let storedWhenCalled: Array<string | null> = ['unset'];
+    const releases: Array<() => void> = [];
+    h.logoutImpl = () => {
+      storedWhenCalled = [
+        window.localStorage.getItem('dc-auth'),
+        window.localStorage.getItem('dc-identity'),
+      ];
+      return new Promise<void>((r) => releases.push(r));
     };
-    await act(async () => {
-      await auth.logout();
+    let done: Promise<void> = Promise.resolve();
+    act(() => {
+      done = auth.logout();
     });
-    expect(storedWhenCalled).not.toBeNull();
-    expect(window.localStorage.getItem('dc-auth')).toBeNull();
+    expect(storedWhenCalled).toEqual([null, null]);
+    expect(h.logoutCalls.sort()).toEqual([IDENTITY, REFRESH].sort());
+    await act(async () => {
+      releases.forEach((r) => r());
+      await done;
+    });
+    expect(auth.isAuthenticated).toBe(false);
   });
 
   it('still clears local state when the server cannot be reached, and says so', async () => {
