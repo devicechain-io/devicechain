@@ -613,10 +613,27 @@ Parameters: areaCfg, replicas (the area's resolved count), areaLabels (its label
 {{- define "devicechain.podAntiAffinity" -}}
 {{- $primary := get .areaCfg "avoidEventStorePrimary" -}}
 {{- $own := and (include "devicechain.eventPathLabel" (dict "areaCfg" .areaCfg)) (gt (int .replicas) 1) -}}
-{{- if or $primary $own -}}
+{{- $colocate := .colocate | default false -}}
+{{- if or $primary $own $colocate -}}
 affinity:
+{{- if $colocate }}
+  {{/* 3. Together with every other pod that mounts the ReadWriteOnce object-store claim
+  (blobStorage.persistence.colocate): REQUIRED, because a pod on another node cannot attach
+  the volume at all. The pods carry devicechain.io/blob-store=mounted and no namespace is
+  named, so the term counts this instance's own. The first pod matches itself and is
+  admitted. This is a podAffinity, beside the preferred anti-affinity below, in the same
+  affinity block. */}}
+  podAffinity:
+    requiredDuringSchedulingIgnoredDuringExecution:
+      - topologyKey: kubernetes.io/hostname
+        labelSelector:
+          matchLabels:
+            devicechain.io/blob-store: mounted
+{{- end }}
+{{- if or $primary $own }}
   podAntiAffinity:
     preferredDuringSchedulingIgnoredDuringExecution:
+{{- end }}
 {{- if $primary }}
       - weight: 100
         podAffinityTerm:

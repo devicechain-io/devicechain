@@ -49,13 +49,20 @@ func DevToolsEnabled() bool {
 // credential-check budget of DC_GRAPHQL_MAX_CREDENTIAL_CHECKS, which bounds the
 // bcrypt compares one request can reach however its document is written.
 //
+// Descriptions are the spec's string descriptions ("""…""" above an element), never `#`
+// comments. graphql-go's default is the legacy reading, where a comment IS the
+// description — which made every maintainer note (rationale, history, decision-record
+// citations) the public description, while every other GraphQL tool, which reads only
+// strings, saw none. Splitting the two is what lets `"""` be the public contract and `#`
+// stay a maintainer note; backend/tools/docsgql/sdldesc holds the schemas to it.
+//
 // Everything is centralized here so every service inherits it from one place rather
 // than each remembering to pass it, and the handler constructors accept only the
 // wrapped type, so a handler cannot be built over a schema that skips the limit. It
 // panics on a parse error, exactly like graphql.MustParseSchema.
 func MustParseSchema(schema string, resolver interface{}, opts ...graphql.SchemaOpt) *Schema {
 	maxLen := maxQueryLength()
-	opts = append(opts, graphql.MaxDepth(maxDepth()), graphql.MaxQueryLength(maxLen))
+	opts = append(opts, graphql.UseStringDescriptions(), graphql.MaxDepth(maxDepth()), graphql.MaxQueryLength(maxLen))
 	if !DevToolsEnabled() {
 		opts = append(opts, graphql.DisableIntrospection())
 	}

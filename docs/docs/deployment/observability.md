@@ -1013,7 +1013,10 @@ The chart's alerts for each link of that chain:
 | `PostgresWALArchiveBacklog` | A database has more than 32 finished log segments (512 MiB) waiting to ship, for 5 minutes. This includes an archiver that is slow or hung and records no failure at all. | If the failing alert fires too, fix the destination. If not, check the backup sidecar's logs and the store's free space, and grow the database volume if the backlog keeps rising. |
 | `BackupDestinationFillingFast` | The in-cluster object store is more than 65% full and, at its rate over the last 10 minutes, will be full within the hour. | Find what is writing: an instance ingesting faster than the store was sized for, backups left by instances that no longer exist, or a base backup schedule that stopped, so nothing is pruned. Grow the store, remove what no running instance owns, or move backups off the cluster. |
 | `BackupDestinationAlmostFull` | The in-cluster object store is more than 85% full, for 15 minutes. | The same, with less time. |
+| `PostgresHasNeverArchivedWAL` | A database has never shipped a log segment, for an hour. The first base backup forces a segment switch, so a working cluster leaves this state within minutes of creation; an hour in it means archiving has never worked here, not that the database is quiet. It records no failure, so the failing-archival alert cannot see it: an archiver that hangs rather than errors looks exactly like this. | Check the backup sidecar's logs and that the object store is reachable. |
+| `PostgresWALArchivingNotConfigured` | A database has archiving switched on and no backup plugin behind it, for 15 minutes. Every log segment is "archived" by a command that discards it and reports success, so nothing else tells you: the archived count rises, no failure is recorded, the disk does not grow and every other backup alert stays green. **The database cannot be restored to any point in time.** | Check that the Cluster still carries its barman-cloud entry under `spec.plugins` and that its ObjectStore exists. |
 | `DatabaseVolumeFillingFast` | An event-store volume is more than half full and, at its rate over the last 15 minutes, will be full within the hour, for 3 minutes. | If only the primary climbs, it is unshipped log: fix archiving first. If every member climbs, it is data: grow the volume or shorten data retention. |
+| `DatabaseVolumeFillingUp` | A database volume is more than 75% full, for an hour. Database storage here does not come back on its own: several tables are append-only by design and nothing prunes them (the audit journal and the version histories of device profiles, entity groups, dashboards, connectors and geofence sets, plus the geofence geometry archive), because a stored event names the version it was resolved against and a rollback returns to a stored version. Retention settings do not apply to them; those prune the time-series store. | Grow the volume while there is room to work, and find what is producing versions. On the relational primary, count rows per tenant in a history table, for example `SELECT tenant_id, count(*) FROM "device-management".geo_fence_set_versions GROUP BY tenant_id ORDER BY 2 DESC LIMIT 10;`. One tenant re-authoring in a loop is the usual answer. For an event-store volume, check the data-lifecycle retention settings; for a `-wal` volume, the archiving alerts above are where the cause is. |
 | `DatabaseVolumeAlmostFull` | A database volume is more than 85% full, for 15 minutes. | Grow it now. |
 
 The two rate alerts exist because the fixed thresholds are too slow for a volume that fills in
@@ -1047,6 +1050,51 @@ alerts are rendered:
 
 These read the Backup and ScheduledBackup objects through kube-state-metrics, not CloudNativePG's
 own backup gauge, which is set only on each database's primary.
+
+## The database control plane {#database-control-plane}
+
+A database can be healthy and still be unable to fail over. The PostgreSQL operator
+(CloudNativePG) and its backup plugin decide which instance becomes the primary. A Cluster whose
+plugin the operator cannot reach stops reconciling, so it is never promoted: the primary can be
+lost while healthy, fully caught-up replicas sit there and nothing elects one. Every instance pod
+stays `Running` throughout, and none of the backup alerts above fires, because nothing about
+PostgreSQL is wrong. The opposite failure also exists: a Cluster that reports `Ready` while every
+service is locked out of it. These five alerts cover both, and the monitoring gaps that would hide
+them. They are rendered when the chart is told the namespace of the database operator.
+
+| Alert | Severity | What it means | What to do |
+| --- | --- | --- | --- |
+| `CNPGClusterNotReady` | critical | A PostgreSQL Cluster has reported `Ready=False` for 15 minutes. **This blocks failover.** A Cluster passes through `Ready=False` during a switchover, a rolling restart and its first bootstrap, but a recovery takes seconds, so a quarter of an hour is not mid-operation. A phase of "Cluster cannot proceed to reconciliation" points at the operator or the backup plugin rather than at PostgreSQL. | Read the Cluster's `.status.phase` and conditions (the alert names the Cluster and the reason). If the phase mentions plugins, check `CNPGControlPlaneUnavailable`. |
+| `CNPGControlPlaneUnavailable` | critical | A Deployment in the database operator's namespace has had no available replicas for 10 minutes. With the operator down, no Cluster can fail over, scale or be reconfigured, and the databases keep serving unmanaged. With the backup plugin down the operator cannot reconcile any Cluster that references it, so the same failover block applies. | Restore the Deployment named on the alert. Expect `CNPGClusterNotReady` to follow within a quarter of an hour if you do not. Restarting kube-state-metrics restarts this alert's timer, so an outage can be reported later than it began. |
+| `CNPGClusterUnusable` | critical | For 5 minutes, at least one instance of a Cluster cannot be queried by its own metrics collector, while the pods and the Cluster's `Ready` condition may look healthy. The alert cannot say which instance. If it is the primary, clients are affected, and the likeliest cause is **connection exhaustion**: every database-backed service opens a pool of up to 20 against the primary, a rolling upgrade briefly doubles the pods, and services then fail with "remaining connection slots are reserved for roles with the SUPERUSER attribute". If it is a standby, clients are unaffected and a replica is failing. | As a superuser, which still works while this fires, compare `SELECT count(*) FROM pg_stat_activity` with `SHOW max_connections` on each instance. Changing `max_connections` is itself a rolling restart, which the 5-minute wait rides out. |
+| `CNPGCollectorAbsent` | warning | For 10 minutes nothing has reported that collector series in a database namespace, so whether the instances can answer is unknown, and `CNPGClusterUnusable` cannot fire because it reads the same series. | Check that the CloudNativePG PodMonitor for the Cluster exists and selects its pods, that Prometheus can read the namespace, and that the instance pods are running and serving port 9187. |
+| `CNPGClusterStateUnobserved` | warning | For 30 minutes nothing has reported Cluster conditions in a database namespace, so the health of failover is unknown, and `CNPGClusterNotReady` cannot fire. This is a monitoring gap, but the gap that hides a failover block. | Check that kube-state-metrics is running, that it was started with a custom-resource-state config (the OpenTofu monitoring module sets it when CloudNativePG is enabled), and that its role can list `postgresql.cnpg.io/clusters`. A missing permission shows only as a `forbidden` line in its log. |
+
+## Command delivery {#command-delivery-alerts}
+
+Three alerts cover the states in which command delivery reports something false while nobody is
+looking. The service exports many more counters, listed in the
+[metrics reference](./metrics-reference.md#command-delivery), and a Command Delivery dashboard
+charts them. The thresholds are reasoned rather than measured, and each is checked in both
+directions by unit tests.
+
+| Alert | Severity | What it means | What to do |
+| --- | --- | --- | --- |
+| `CommandClaimsStranded` | critical | In the last 30 minutes, for 5 minutes, at least one command was left reading `SENT` after both its publish and the release back to `QUEUED` failed. It was never delivered. On LwM2M the stranded reconciler re-arms it within about ten minutes and it is delivered when the device next wakes; on MQTT nothing retries it, and it expires as `TIMEOUT`, which records the failure against the device although the device never received anything. | Treat every MQTT `TIMEOUT` reported in this window as unattributed, and do not send engineers to inspect the devices named. Look for a broker outage that overlapped a database outage: it takes both to strand a claim. For LwM2M, `stranded_recovered_total{disposition="PARKED"}` confirms the re-arm, while `CANCELLED` means the command's batch had been called off and the row was cleaned up. |
+| `CommandPresenceReadErrors` | warning | For 15 minutes, the dispatch sweep has been unable to read the presence projection. The presence gate, which withholds commands for devices that are absent, **fails open** by design, so commands are being dispatched without the check. Nothing else shows it: dispatch looks normal and the holds counter falls to zero, which reads as "no devices are absent" rather than "nothing is being checked". | Check the device-state service and the health of the presence projection. Until it is fixed, a quiet holds panel is not reassuring. |
+| `CommandBatchReserveRefusals` | warning | For 30 minutes, fleet writes have been refused that would have fitted a tenant's own undelivered-command ceiling, and were refused only by the headroom the delivery machinery reserves for itself. Nothing is broken and every caller was told; the ceiling and the reserve disagree about what a normal fleet write is. | Raise the tenant's ceiling or lower the reserve, deliberately. The counters carry no tenant label, so the dashboard shows which codes and which bound but not which tenant. Find the tenant in the recorded command batches: a batch that fanned out partially records a per-device `HELD_CEILING_EXCEEDED` refusal, while one refused whole records nothing. |
+
+## Safety gates that switched themselves off {#safety-gates}
+
+A few services carry a safety gate that depends on another service, and each comes up **off**, with
+one warning at startup, when its configuration is absent. That is a deliberate availability trade:
+the device plane must not hard-depend on those services. It is also invisible, because work keeps
+flowing and nothing errors while the thing the gate exists to prevent resumes. A chart install always
+supplies the configuration, so an off gate means a misconfigured or hand-edited install.
+
+| Alert | Severity | What it means | What to do |
+| --- | --- | --- | --- |
+| `SafetyGateDisabled` | warning | For 5 minutes, a service named by the `job` label has run with the gate named by the `gate` label off. One replica started without its configuration is enough, because it is already off for its share of traffic. With `tenant_lifecycle` off, work is admitted for deleted tenants. With `presence` off, commands to absent devices are published and dropped. With `rule_validation` off, detection rules that cannot compile are allowed to publish and are skipped when loaded. | The service logged a warning at startup naming what is missing: the service secret, or the address of the service the gate consults. Restore it and restart the service. |
 
 ## Profiling a service {#profiling}
 

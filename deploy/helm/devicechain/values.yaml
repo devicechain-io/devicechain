@@ -665,6 +665,19 @@ metrics:
 # object store "not configured" — branding-logo upload/read return 503 and Tier-0 inline/
 # URL logos still work — a safe default rather than a silent per-pod ephemeral store.
 blobStorage:
+  # Credentials for the s3 backend (instance.config.infrastructure.blob.backend: s3). The
+  # access key is never part of the instance configuration: name a Secret in the instance
+  # namespace holding AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY and the chart projects it
+  # into the environment of every area in mountAreas, where the AWS SDK's own credential
+  # chain finds it. Leave empty when the pods carry their own AWS identity (IRSA, an
+  # instance profile). dcctl sets this to a Secret it copies from the one you name.
+  s3:
+    credentialsSecret: ""
+    # A digest of the credentials the Secret holds, stamped on the pods that read them so
+    # that rotating a key rolls the pods: a secretKeyRef is read once, at container start,
+    # and the Secret's name does not change when its content does. dcctl sets this; set it
+    # yourself (any string that changes with the credentials) if you manage the Secret.
+    credentialsChecksum: ""
   persistence:
     # Create a PersistentVolumeClaim for the filesystem store and mount it into the
     # consuming areas. Requires backend: filesystem and a resolved mount path (below).
@@ -688,6 +701,14 @@ blobStorage:
     # updates.maxArtifactBytes, so size the volume as (tenants storing artifacts) x (that
     # ceiling), plus headroom for branding assets, or lower the ceiling to fit.
     size: 5Gi
+    # Schedule every pod that mounts the claim onto ONE node. A ReadWriteOnce volume
+    # attaches to a single node, so two consuming areas (or two replicas) on different
+    # nodes leave one of them unable to start. Renders a REQUIRED pod affinity on
+    # kubernetes.io/hostname across the mounting pods; the first pod is admitted because it
+    # matches its own selector. It turns the render guard against several pods on one
+    # ReadWriteOnce claim into a placement rule instead of a refusal. For a single-node
+    # cluster (kind); on a multi-node cluster use ReadWriteMany, or the s3 backend.
+    colocate: false
     # Empty uses the cluster default StorageClass. Set the RWX-capable class for
     # multi-replica. "-" (a literal dash) selects "no storage class" for a statically
     # pre-provisioned PV.
@@ -880,6 +901,10 @@ nodeLossTolerationSeconds: 30
 # Kubernetes API, so the token is not mounted.
 serviceAccount:
   create: true
+  # Annotations on the ServiceAccount: the place for an IAM-role-for-service-accounts or
+  # workload-identity binding, which is how the s3 object store gets credentials with no
+  # access key at all (leave blobStorage.s3.credentialsSecret empty).
+  annotations: {}
   # Defaults to "dc-<instance.id>" when empty.
   name: ""
   automountToken: false

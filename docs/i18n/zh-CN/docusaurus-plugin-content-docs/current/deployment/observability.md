@@ -15,7 +15,7 @@ DeviceChain 内置可观测性：每个服务都提供 **Prometheus 指标**和�
 
 每个功能领域服务使用 Prometheus 客户端指标，并提供两个标准 Kubernetes 探针：
 
-- **`/healthz`**：存活检查，判断进程是否仍能工作，还是需要重启。服务与消息代理连接永久关闭后检查失败，使 Kubernetes 重启 Pod。流读取循环若连续两分钟读取失败，期间没有代理响应，也会结束进程并由 Kubernetes 重启。此前按逐渐增加、最长五秒的间隔重试。安静流的循环每几秒检查代理是否仍响应，重新连接成功也算响应，因此相隔两分钟的两次失败不会被当成一次持续失败；长期代理中断后恢复，也不会因此重启服务。单纯代理不可达不算读取失败：读取等待，服务持续重连，代理恢复后继续。参见[容器重启](#container-restarts)。
+- **`/healthz`**：存活检查，判断进程是否仍能工作，还是需要重启。服务与消息代理连接永久关闭后检查失败，使 Kubernetes 重启 Pod。流读取循环若连续两分钟读取失败，期间没有代理响应，也会结束进程并由 Kubernetes 重启。此前按逐渐增加、最长五秒的间隔重试。安静流的循环每几秒检查代理是否仍响应，重新连接成功也算响应，因此相隔数分钟的两次失败算作两次，而不是一次持续的失败；长时间的代理中断在代理恢复后，也不会导致服务重启。单纯代理不可达不算读取失败：读取等待，服务持续重连，代理恢复后继续。参见[容器重启](#container-restarts)。
 - **`/readyz`**：就绪检查，判断是否可接收流量。未就绪服务会被 Kubernetes Service 从流量轮转中排除，参见[部署与 Operator](./kubernetes-operator.md)。
 
 所有 Pod 使用同一约定，因此监控栈统一抓取整个实例，无需逐服务集成。
@@ -74,7 +74,7 @@ DeviceChain 内置可观测性：每个服务都提供 **Prometheus 指标**和�
 
 - **跨命名空间抓取。** Prometheus 位于独立命名空间，跨命名空间抓取各实例服务，一个栈覆盖整套部署。
 - **仪表盘随平台发布。** Grafana 面板位于 chart 的 `deploy/helm/devicechain/dashboards/`，由仪表盘 sidecar 自动导入。新增仪表盘属于 chart 变更，不需手动导入。
-- **每实例一个文件夹。** 每实例有独立 `devicechain-<instance>` 文件夹，包含自己的全部面板副本。副本限定实例、标题包含实例 ID，无需选择实例。`dashboards/` 下是按实例渲染的模板，不用于手动导入。文件夹来自 ConfigMap 的 `grafana_folder: devicechain-<instance>` 注解。sidecar 必须设置 `FOLDER_ANNOTATION=grafana_folder`，提供器必须设置 `foldersFromFilesStructure: true` 才按文件夹组织；`dcctl install` 部署的栈已设置。如果安装时使用 `--no-monitoring`，自行 Grafana sidecar 未设置这两项，注解被忽略，各实例面板会平铺在一起；仍各自独立并限定实例，只是没有文件夹。
+- **每实例一个文件夹。** 每实例有独立 `devicechain-<instance>` 文件夹，包含自己的全部面板副本。副本限定实例、标题包含实例 ID，无需选择实例。`dashboards/` 下是按实例渲染的模板，不用于手动导入。文件夹来自 ConfigMap 的 `grafana_folder: devicechain-<instance>` 注解。sidecar 必须设置 `FOLDER_ANNOTATION=grafana_folder`，提供器必须设置 `foldersFromFilesStructure: true` 才按文件夹组织；`dcctl install` 部署的栈已设置。如果安装时使用了 `--no-monitoring`，并让自己的 Grafana sidecar 读取这些 ConfigMap 却没有设置这两项，注解会被忽略，各实例的面板会平铺在同一处：仍是各自独立的面板、仍各自限定在自己的实例，只是不在文件夹中。
 - **同集群实例的面板互不干扰。** 所有实例升级到支持独立文件夹的 chart 后，移除或升级一个实例不影响其他面板。此前旧 chart 实例仍在文件夹外共享每种仪表盘一个文件，升级任一实例会移除该共享文件；旧实例面板会缺失，直到 sidecar 下次重新扫描。监控栈早于此布局的集群，需要重新运行 `dcctl install`，否则所有实例面板仍在文件夹外。
 - **旧面板链接失效。** 升级实例不再使用原共享 ID `dc-event-processing-ops`、`dc-command-delivery-ops`；全部升级后，旧书签失效。
 - **删除实例留下空文件夹。** 面板移除，但空的 `devicechain-<instance>` 文件夹仍留在 Grafana，需手动删除。
@@ -169,7 +169,7 @@ DETECT/REACT 引擎（参见[事件处理](../concepts/event-processing.md)）�
 - 各服务每五秒测量一次，自上次测量写入约容量千分之一后也立即测量，最快每 100 毫秒一次。
 - 三十秒无法测量积压时，视为已满并拒绝。
 - `resolved-events` 拒绝时，设备管理停止读取 `inbound-events`；后者拒绝时，事件来源停止读取 MQTT 捕获流。积压留在上游，不消耗消息尝试次数。
-- 流共享，因此拒绝作用于**所有租户**。先按读数检查各租户自己的接入限额，再检查共享门控。默认每秒 1000 读数，单租户设备本身无法发送超过[默认允许量](../concepts/governance.md#ingest-default)所述集群、单个事件来源副本的默认高可用部署实测存储能力。多个租户合计、层级提高限额的租户、小集群上的租户，以及用许多租户名字提交 HTTP 的客户端仍可能超出，因为名字在验证凭据前已计量。门控随后拒绝所有人。
+- 流是共享的，因此拒绝作用于**所有租户**。每个租户先受自己的接入限额约束（按读数计），然后才会经过共享门控。在默认的每秒 1000 读数下，租户自己的设备单独发送的量，不会超过默认高可用部署在[默认允许量](../concepts/governance.md#ingest-default)所述集群上、使用一个 `event-sources` 副本时实测的存储能力。但多个租户合计仍可能超过，层级提高了限额的租户、较小集群上的任何租户，以及用许多租户名称通过 HTTP 提交的客户端也可能超过，因为名称在验证其凭据之前就已计量。此时门控会拒绝所有人。
 - 满流代理仍会丢弃最旧消息，三种情况仍可能丢失未读事件：两次测量之间写入量耗尽的历史超过前 30 秒观测的丢弃量；流首次满时几乎没有已处理历史，尚未测得丢弃速率；拒绝期间仍接受连接/断开转换，见下文。[未读损失告警](#unread-loss)会报告。
 - 删除租户移除两条流中的事件，释放空间，一般不触发拒绝。例外是删除满流最旧、且数量少到删除后仍满的事件，看起来像历史快速被丢弃，可能暂时拒绝直到消费者追上，不会丢失。
 
@@ -183,7 +183,7 @@ DETECT/REACT 引擎（参见[事件处理](../concepts/event-processing.md)）�
 | Sparkplug | 读数不重试、直接丢弃，计入 `devicechain_sparkplugingest_ingest_failures_total`。 |
 | LwM2M | 通知丢弃，计入 `devicechain_lwm2mingest_notify_ingest_dropped_total`，下一通知取代丢失内容。 |
 
-代理连接通知、Sparkplug birth/death、LwM2M 注册等转换在拒绝期间仍接受，因为拒绝后无人重新发送。它们使用拒绝阈值以上保留的 10% 空间。背压不限制接受量；代理监听仍受租户限额约束。设备自行决定连接频率，循环重连设备群可能耗尽余量，代理随后像以前一样丢弃最旧事件，包括未读内容。只有两个关键消费者控制背压，设备状态或事件处理慢不会控制，仍由上述未读损失告警报告。事件处理实际位置在自己的检查点，门控不可见，由 `ReplayCoveredDeliveriesExhausted` 监控。
+代理连接通知、Sparkplug birth/death、LwM2M 注册等转换在拒绝期间仍接受，因为拒绝后无人重新发送。它们使用拒绝阈值以上保留的 10% 空间。背压不限制接受量；代理监听仍受租户限额约束。设备自行决定连接频率，循环重连设备群可能耗尽余量，代理随后会像本版本之前一样丢弃最旧事件，包括未读内容。只有两个关键消费者控制背压，设备状态或事件处理慢不会控制，仍由上述未读损失告警报告。事件处理实际位置在自己的检查点，门控不可见，由 `ReplayCoveredDeliveriesExhausted` 监控。
 
 | 告警 | 严重程度 | 含义 | 处理 |
 | --- | --- | --- | --- |
@@ -208,7 +208,7 @@ DETECT/REACT 引擎（参见[事件处理](../concepts/event-processing.md)）�
 - **`devicechain_<area>_nats_connection_dead_total{detected_by}`**：放弃连接数。`ping` 表示 ping 未响应，`write` 表示写入十秒无进展。Pod 用 `sum` 合并。
 - **`devicechain_<area>_nats_connection_dead_last_timestamp_seconds`**：最近放弃时刻的 Unix 秒，启动后未发生则为 0。告警读取此值，因此即使 Prometheus 在失效节点上、错过计数增长时刻，仍能触发。
 
-日志也明确服务器：`Disconnected from NATS: the server left 2 pings sent 10s apart unanswered…` 或 `Disconnected from NATS: a write to the server made no progress for 10s…`，随后 `Reconnected to NATS`。事件来源用于观察设备连接的第二条代理连接受同样边界限制，但不计入这些指标，日志为 `A write to the NATS server made no progress` 或 `Lost the NATS system-account connection`。
+服务日志说的是同一件事并指明服务器：`Disconnected from NATS: the server left 2 pings sent 10s apart unanswered…` 或 `Disconnected from NATS: a write to the server made no progress for 10s…`，随后 `Reconnected to NATS`。事件来源持有的第二条代理连接（用于观察设备与代理的连接）受同样的限制，但不计入这些指标，其日志为 `A write to the NATS server made no progress` 或 `Lost the NATS system-account connection`。
 
 ## 无人读取的外部 MQTT 来源 {#external-mqtt-owner}
 
@@ -486,7 +486,10 @@ chart 覆盖链条各环节：
 | `PostgresWALArchiveBacklog` | 超过 32 个完成日志段（512 MiB）等待发送，持续五分钟，也覆盖慢或挂起但未报错的归档器。 | 同时失败告警时修复目标，否则查备份 sidecar 日志、存储空间；积压持续增长时扩数据库卷。 |
 | `BackupDestinationFillingFast` | 集群内对象存储超过 65%，按最近十分钟速率将在一小时内满。 | 查写入者：实例接入高于容量设计、已不存在实例留下备份、基础备份调度停止导致不再清理。扩容，移除无人拥有的内容，或迁出集群。 |
 | `BackupDestinationAlmostFull` | 对象存储超过 85% 持续十五分钟。 | 同上，但时间更少。 |
+| `PostgresHasNeverArchivedWAL` | 某数据库持续一小时从未发送过任何日志段。第一次基础备份会强制切换日志段，因此正常工作的集群在创建后几分钟内就会离开这一状态；停留一小时意味着此处的归档从未工作过，而不是数据库安静。它不记录任何失败，所以归档失败告警看不到它：挂起而不报错的归档器看起来与此完全相同。 | 检查备份 sidecar 日志，以及对象存储是否可达。 |
+| `PostgresWALArchivingNotConfigured` | 某数据库持续 15 分钟开启了归档，背后却没有备份插件。每个日志段都被一条丢弃它并报告成功的命令“归档”，因此没有其他东西会告诉你：归档计数在上升，没有失败记录，磁盘不增长，其他所有备份告警都保持正常。**该数据库无法恢复到任何时间点。** | 检查该 Cluster 在 `spec.plugins` 下是否仍带有其 barman-cloud 条目，以及其 ObjectStore 是否存在。 |
 | `DatabaseVolumeFillingFast` | 事件库卷超过一半，按最近十五分钟速率将在一小时内满，持续三分钟。 | 仅主实例增长是未归档 WAL，先修复归档；全部成员增长是数据，扩卷或缩短保留。 |
+| `DatabaseVolumeFillingUp` | 某数据库卷持续一小时超过 75%。这里的数据库存储不会自行恢复：有几张表按设计只追加，没有任何东西清理它们（审计日志，以及设备档案、实体组、仪表盘、连接器和地理围栏集的版本历史，外加地理围栏几何归档），因为已存储的事件会指明它被解析时所依据的版本，而回滚会回到某个已存储的版本。保留设置不适用于它们；那些设置清理的是时序存储。 | 趁还有余地时扩卷，并找出是什么在产生版本。在关系型主库上，统计某张历史表中每个租户的行数，例如 `SELECT tenant_id, count(*) FROM "device-management".geo_fence_set_versions GROUP BY tenant_id ORDER BY 2 DESC LIMIT 10;`。通常的答案是某个租户在循环中反复编写。对于事件库卷，检查数据生命周期保留设置；对于 `-wal` 卷，原因要看上面的归档告警。 |
 | `DatabaseVolumeAlmostFull` | 数据库卷超过 85% 持续十五分钟。 | 立即扩卷。 |
 
 速率告警是因为固定阈值对几分钟填满卷太慢。基准中对象存储满后，事件库主卷约九分钟从 45% 到满，速率告警约提前两分钟触发，而等待十五分钟的 85% 告警会在卷已满后才触发。
@@ -506,6 +509,36 @@ chart 覆盖链条各环节：
 | `DatabaseSnapshotBackupsUnobserved` | 已启用快照，却无计划被监控看见，持续一小时。 | 确认 ScheduledBackup 存在，kube-state-metrics 读取 CloudNativePG Backup 和 ScheduledBackup，否则前两告警都无法触发。 |
 
 这些通过 kube-state-metrics 读取 Backup/ScheduledBackup 对象，不使用仅在主数据库设置的 CloudNativePG 备份 gauge。
+
+## 数据库控制平面 {#database-control-plane}
+
+数据库可能很健康，却无法故障转移。PostgreSQL Operator（CloudNativePG）及其备份插件决定哪个实例成为主实例。Operator 无法联系到插件的 Cluster 会停止协调，因此永远不会被提升：主实例可能在健康时丢失，完全追平的副本就在那里，却没有任何东西选举其中之一。整个过程中每个实例 Pod 都保持 `Running`，上面的备份告警也都不会触发，因为 PostgreSQL 本身没有任何问题。反过来的故障也存在：Cluster 报告 `Ready`，而每个服务都被锁在外面。这五条告警覆盖这两种情况，以及会掩盖它们的监控缺口。chart 获知数据库 Operator 的命名空间后才会渲染它们。
+
+| 告警 | 严重程度 | 含义 | 处理 |
+| --- | --- | --- | --- |
+| `CNPGClusterNotReady` | critical | 某个 PostgreSQL Cluster 持续 15 分钟报告 `Ready=False`。**这会阻止故障转移。** Cluster 在切换、滚动重启和首次引导期间会经过 `Ready=False`，但恢复只需数秒，因此一刻钟并非操作进行中。“Cluster cannot proceed to reconciliation”阶段指向 Operator 或备份插件，而不是 PostgreSQL。 | 读取该 Cluster 的 `.status.phase` 和状况（告警会指出 Cluster 和原因）。如果阶段中提到插件，检查 `CNPGControlPlaneUnavailable`。 |
+| `CNPGControlPlaneUnavailable` | critical | 数据库 Operator 命名空间中的某个 Deployment 持续 10 分钟没有可用副本。Operator 宕机时，没有 Cluster 能故障转移、伸缩或重新配置，数据库继续无人管理地提供服务。备份插件宕机时，Operator 无法协调任何引用它的 Cluster，因此同样阻止故障转移。 | 恢复告警所指的 Deployment。如果不恢复，预计 `CNPGClusterNotReady` 会在一刻钟内随之触发。重启 kube-state-metrics 会重置本告警的计时器，因此故障报告的时间可能晚于其实际开始时间。 |
+| `CNPGClusterUnusable` | critical | 持续 5 分钟，某个 Cluster 至少有一个实例无法被其自身的指标采集器查询，而 Pod 和 Cluster 的 `Ready` 状况看起来可能都健康。告警无法说明是哪个实例。如果是主实例，客户端会受影响，最可能的原因是**连接耗尽**：每个依赖数据库的服务都会向主实例打开最多 20 个连接的连接池，滚动升级会使 Pod 短暂翻倍，随后服务以“remaining connection slots are reserved for roles with the SUPERUSER attribute”失败。如果是备用实例，客户端不受影响，是某个副本出了故障。 | 以超级用户身份（此告警触发时仍可用），在每个实例上比较 `SELECT count(*) FROM pg_stat_activity` 与 `SHOW max_connections`。更改 `max_connections` 本身就是一次滚动重启，5 分钟的等待足以涵盖它。 |
+| `CNPGCollectorAbsent` | warning | 持续 10 分钟，没有任何东西在某个数据库命名空间中上报该采集器序列，因此不知道实例能否应答，而 `CNPGClusterUnusable` 因读取同一序列而无法触发。 | 检查该 Cluster 的 CloudNativePG PodMonitor 是否存在并选中其 Pod，Prometheus 能否读取该命名空间，以及实例 Pod 是否在运行并在 9187 端口提供服务。 |
+| `CNPGClusterStateUnobserved` | warning | 持续 30 分钟，没有任何东西在某个数据库命名空间中上报 Cluster 状况，因此故障转移的健康状况未知，而 `CNPGClusterNotReady` 无法触发。这是监控缺口，但恰恰是掩盖故障转移阻塞的那个缺口。 | 检查 kube-state-metrics 在运行，它启动时带有自定义资源状态配置（启用 CloudNativePG 时，OpenTofu 监控模块会设置它），并且其角色可以列出 `postgresql.cnpg.io/clusters`。缺少权限只会在其日志中表现为一行 `forbidden`。 |
+
+## 指令投递 {#command-delivery-alerts}
+
+三条告警覆盖指令投递在无人关注时报告虚假信息的状态。服务还导出了更多计数器，列在[指标参考](./metrics-reference.md#command-delivery)中，指令投递仪表盘也会绘制它们。阈值是推理得出而非实测得到的，每个阈值都由单元测试从两个方向检查。
+
+| 告警 | 严重程度 | 含义 | 处理 |
+| --- | --- | --- | --- |
+| `CommandClaimsStranded` | critical | 过去 30 分钟内，持续 5 分钟，至少有一条指令在其发布和释放回 `QUEUED` 都失败后停留在 `SENT`。它从未被投递。在 LwM2M 上，滞留调和器会在约十分钟内重新装载它，设备下次唤醒时投递；在 MQTT 上没有任何东西重试它，它会作为 `TIMEOUT` 过期，这会把失败记在设备头上，尽管设备从未收到任何东西。 | 将此窗口内报告的每个 MQTT `TIMEOUT` 都视为未归因，不要派工程师去检查所指的设备。查找与数据库故障重叠的代理故障：两者同时发生才会使一次领取滞留。对于 LwM2M，`stranded_recovered_total{disposition="PARKED"}` 可确认重新装载，而 `CANCELLED` 表示该指令的批次已被取消，该行已被清理。 |
+| `CommandPresenceReadErrors` | warning | 持续 15 分钟，投递扫描无法读取在线状态投影。扣留缺席设备指令的在线状态门按设计**失败即放行**，因此指令在没有该检查的情况下被分发。没有其他东西会显示这一点：分发看起来正常，扣留计数器降到零，读起来像“没有设备缺席”，而不是“什么也没有被检查”。 | 检查 device-state 服务和在线状态投影的健康状况。修复之前，安静的扣留面板并不能让人放心。 |
+| `CommandBatchReserveRefusals` | warning | 持续 30 分钟，有机群写入被拒绝，这些写入本可放入租户自己的未投递指令上限，仅因投递机制为自己保留的余量而被拒绝。没有任何东西损坏，每个调用方都被告知了；上限与保留量对什么是正常的机群写入存在分歧。 | 有意地提高租户的上限或降低保留量。计数器不带租户标签，因此仪表盘显示哪些代码和哪个边界，而不显示哪个租户。在记录的指令批次中找出该租户：部分扇出的批次会记录逐设备的 `HELD_CEILING_EXCEEDED` 拒绝，而被整体拒绝的批次则不记录任何内容。 |
+
+## 自行关闭的安全门 {#safety-gates}
+
+有几个服务带有依赖另一个服务的安全门，当其配置缺失时，每个安全门都会以**关闭**状态启动，并在启动时输出一条警告。这是刻意的可用性权衡：设备平面不能硬依赖这些服务。它同时也是不可见的，因为工作仍在流动，没有任何报错，而安全门本应阻止的事情已经恢复。chart 安装总会提供该配置，因此安全门关闭意味着安装配置错误或被手工修改。
+
+| 告警 | 严重程度 | 含义 | 处理 |
+| --- | --- | --- | --- |
+| `SafetyGateDisabled` | warning | 持续 5 分钟，`job` 标签所指的服务在 `gate` 标签所指的安全门关闭的情况下运行。只要有一个副本在没有其配置的情况下启动就足够，因为它对自己承担的那份流量已经是关闭的。`tenant_lifecycle` 关闭时，已删除租户的工作会被接纳。`presence` 关闭时，发给缺席设备的指令会被发布并丢弃。`rule_validation` 关闭时，无法编译的检测规则会被允许发布，并在加载时被跳过。 | 服务在启动时记录了一条警告，指出缺少什么：服务密钥，或该安全门所查询的服务的地址。恢复它并重启服务。 |
 
 ## 服务性能分析 {#profiling}
 

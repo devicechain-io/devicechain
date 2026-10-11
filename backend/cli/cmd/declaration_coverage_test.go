@@ -70,6 +70,18 @@ var dispositions = map[string]disposition{
 	"enable-area":  declared,
 	"dev":          declared, // a preset; every flag it expands to is itself declared
 
+	// The object store is the declaration's objectStore block. The S3 credentials flag
+	// carries the NAME of a Secret, never the key, so it is declared and not a secretHalf.
+	"object-store":                       declared,
+	"object-store-size":                  declared,
+	"object-store-storage-class":         declared,
+	"object-store-access-mode":           declared,
+	"object-store-s3-bucket":             declared,
+	"object-store-s3-region":             declared,
+	"object-store-s3-endpoint":           declared,
+	"object-store-s3-path-style":         declared,
+	"object-store-s3-credentials-secret": declared,
+
 	// --- properties of the run ---
 	"dry-run":                 runScoped,
 	"yes":                     runScoped,

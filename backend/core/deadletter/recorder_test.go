@@ -314,6 +314,25 @@ func TestHotStreamLetterCarriesNoPayload(t *testing.T) {
 	require.EqualValues(t, 1, seq)
 }
 
+// GUARD: the device intake capture is a work queue, and a give-up on it is still lettered; the
+// original is then removed, since nothing else would remove an unacked work-queue message.
+func TestCaptureGiveUpIsLetteredAndTheOriginalRemoved(t *testing.T) {
+	rig := newRecorderRig(t, startBroker(t), streams.DeviceEventsCapture)
+	ack, err := rig.js.Publish(messaging.DeviceEventsSubject("test", "acme", "dev-1"), []byte(`{"device":"dev-1"}`))
+	require.NoError(t, err)
+	rig.deliverAll(rig.readers[0])
+	rig.keepPulling(rig.readers[0])
+	eventually(t, 10*time.Second, "the letter", func() bool { return len(rig.letters()) == 1 })
+	e := rig.letters()[0]
+	require.Equal(t, KindEvent, e.Kind)
+	require.Equal(t, ReasonNoOutcome, e.Reason)
+	require.Contains(t, e.Detail, messaging.StreamName("test", streams.DeviceEventsCapture)+"#"+fmt.Sprint(ack.Sequence))
+	require.Contains(t, e.Detail, "was removed from its stream", "the letter must not point at an original that is gone")
+	require.NotContains(t, e.Detail, "until it ages out")
+	eventually(t, 5*time.Second, "the original to be removed", func() bool { return len(rig.held(streams.DeviceEventsCapture)) == 0 })
+	require.Equal(t, 1.0, rig.records(streams.DeviceEventsCapture, "lettered"))
+}
+
 // GUARD: the counterweight — a COLD stream's letter carries the original, so the work can be
 // understood after the stream has let it go.
 func TestColdStreamLetterCarriesPayload(t *testing.T) {

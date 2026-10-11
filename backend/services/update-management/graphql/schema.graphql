@@ -146,9 +146,19 @@ type Query {
     """Non-sensitive service identity (the deployed functional area)."""
     updateManagementInfo: ServiceInfo!
     """Look up an artifact by token. Requires artifact:read. Null when there is none in the caller's tenant."""
-    artifact(token: String!): Artifact
+    artifact(
+        """
+        The token of the artifact to look up.
+        """
+        token: String!
+    ): Artifact
     """Search the tenant's artifacts, newest first. Requires artifact:read."""
-    artifacts(criteria: ArtifactSearchCriteria!): ArtifactSearchResults!
+    artifacts(
+        """
+        The filters and page to search with.
+        """
+        criteria: ArtifactSearchCriteria!
+    ): ArtifactSearchResults!
 }
 
 """The update-management write operations."""
@@ -158,10 +168,20 @@ type Mutation {
     profiles are checked against device-management, and the size against the artifact and
     tenant ceilings. Upload the content afterwards with PUT /updates/artifacts/{token}/content.
     """
-    createArtifact(request: ArtifactCreateRequest!): Artifact!
+    createArtifact(
+        """
+        The artifact to declare.
+        """
+        request: ArtifactCreateRequest!
+    ): Artifact!
     """
     Withdraw an artifact from new use. Requires artifact:write. Idempotent. The content is
     kept: removing it is not offered until update assignments exist to check it against.
     """
-    retireArtifact(token: String!): Artifact!
+    retireArtifact(
+        """
+        The token of the artifact to retire.
+        """
+        token: String!
+    ): Artifact!
 }

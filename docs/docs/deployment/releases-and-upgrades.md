@@ -3616,6 +3616,26 @@ yourself if you need that.
   still deduplicated, but that release still checks per tenant, so it goes back to discarding the
   second device's event.
 
+#### The device intake stream deletes each message once it has been forwarded {#next-upgrade-capture-stream}
+
+The stream that holds every device publish until `event-sources` has forwarded it
+(`device-events-capture`) now deletes a message when `event-sources` acknowledges it. In `v0.19.0`
+it kept every message for up to seven days after it was forwarded. A publish that has not been
+forwarded yet is kept exactly as before, so an outage of `event-sources` still loses nothing.
+
+- **At the upgrade.** The first start of the new `event-sources` forwards what the existing stream
+  still holds, waits until it is empty, then deletes the stream and creates it again with the new
+  retention. Sequence numbers jump forward past the old stream's, so none is ever reused. A device publish that
+  arrives in the instant between the empty check and the recreate can be lost after the broker
+  acknowledged it. If the stream is not empty within five minutes, `event-sources` stops with an
+  error that names the stream and does not delete anything; start it again once it can forward.
+- **Nothing else may read this stream.** It accepts one consumer, the one `event-sources` owns, so
+  `nats stream view` and any other consumer on `device-events-capture` stop working. To look at
+  what devices send, read the `inbound-events` stream, which holds the decoded events.
+- Going back to `v0.19.0` needs the stream deleted first, with `event-sources` stopped, because
+  `v0.19.0` refuses to start against a stream with the new retention; it creates the stream again
+  on its next start. Anything not yet forwarded when you delete it is lost.
+
 #### An inbound event whose failure record cannot be encoded is no longer stored as an empty record {#next-upgrade-failed-record-encode}
 
 When device-management could not encode the record of an inbound event that failed, it used to
