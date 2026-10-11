@@ -219,6 +219,8 @@ export {
   enumValues,
   numberSpec,
   validateOptions,
+  OPTION_CONTROLS,
+  type OptionControl,
   type BooleanOptionSpec,
   type DefaultsOf,
   type EnumOptionSpec,

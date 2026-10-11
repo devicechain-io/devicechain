@@ -112,9 +112,20 @@ describe('the built-in registry', () => {
       expect(registry.implementation(type)?.kind).toBe('trusted-react');
     });
 
-    it('defaults to exactly what the editor adds for a new widget', () => {
-      const { definition } = addWidget(empty, type);
-      expect(descriptor.defaults).toEqual(definition.widgets[0].options);
+    // The editor now takes a new widget's options FROM the descriptor, so comparing the two
+    // would be circular. These are the starting options the editor produced before it did —
+    // written out, so a changed default is a decision rather than a side effect.
+    it('starts a new widget with the options the editor has always given it', () => {
+      const { definition } = addWidget(empty, descriptor);
+      const legacy: Record<string, Record<string, unknown>> = {
+        label: { text: 'New label' },
+        'alarm-table': { title: 'Alarm table', state: 'ACTIVE' },
+        'alarm-count': { title: 'Alarm count', state: 'ACTIVE' },
+      };
+      const words = type.replace(/-/g, ' ');
+      const expected = legacy[type] ?? { title: words.charAt(0).toUpperCase() + words.slice(1) };
+      expect(definition.widgets[0].options).toEqual(expected);
+      expect(definition.widgets[0].type).toBe(type);
     });
 
     it('carries a per-widget version, not the platform version', () => {

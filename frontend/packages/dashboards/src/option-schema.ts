@@ -42,7 +42,17 @@ interface OptionSpecBase {
   // above. Built-ins declare today's console keys here; the host resolves them.
   labelId?: string;
   helpId?: string;
+  // Names a SPECIALIZED authoring workflow for this option, chosen by the descriptor and never
+  // inferred from the option's key. Absent means the generic field the spec kind implies.
+  // A host that does not know the named workflow falls back to that generic field.
+  control?: OptionControl;
 }
+
+// The specialized authoring workflows a descriptor may name. `command-vocabulary` picks a
+// device command and bakes its key, label and parameters together; `slot-target` picks one
+// of the dashboard's slots; `basemap` marks the raster tile source/credit pair.
+export const OPTION_CONTROLS = ['command-vocabulary', 'slot-target', 'basemap'] as const;
+export type OptionControl = (typeof OPTION_CONTROLS)[number];
 
 export interface StringOptionSpec extends OptionSpecBase {
   kind: 'string';
@@ -66,6 +76,12 @@ export interface BooleanOptionSpec extends OptionSpecBase {
 export interface EnumOptionSpec<V extends string = string> extends OptionSpecBase {
   kind: 'enum';
   values: readonly V[];
+  // Portable text and optional host message ids for the choices and for the "unset" entry,
+  // by the same lookup-then-fall-back rule as `label`. Absent, a choice shows its raw value.
+  valueLabels?: Readonly<Record<string, string>>;
+  valueLabelIds?: Readonly<Record<string, string>>;
+  placeholder?: string;
+  placeholderId?: string;
 }
 
 export type OptionSpec = StringOptionSpec | NumberOptionSpec | BooleanOptionSpec | EnumOptionSpec;

@@ -7,7 +7,7 @@
 // frozen, independent instance — no module state, no global registration, so two hosts on
 // one page can hold two catalogs that do not affect each other.
 
-import { validateOptions, hasOwn, type OptionIssue, type WidgetOptionSpecs } from './option-schema';
+import { OPTION_CONTROLS, validateOptions, hasOwn, type OptionIssue, type WidgetOptionSpecs } from './option-schema';
 import {
   SDK_API_VERSION,
   isBuiltinWidgetId,
@@ -192,6 +192,12 @@ function checkOptions(options: unknown, add: Add): WidgetOptionSpecs | undefined
     }
     if (typeof spec.doc !== 'string') {
       add(`${at}.doc`, 'doc must be a string');
+    }
+    for (const text of ['label', 'help', 'labelId', 'helpId', 'placeholder', 'placeholderId'] as const) {
+      if (spec[text] !== undefined && typeof spec[text] !== 'string') add(`${at}.${text}`, `${text} must be a string`);
+    }
+    if (spec.control !== undefined && !(OPTION_CONTROLS as readonly unknown[]).includes(spec.control)) {
+      add(`${at}.control`, `control must be one of ${OPTION_CONTROLS.join(', ')}, got ${JSON.stringify(spec.control)}`);
     }
     switch (spec.kind) {
       case 'string':
