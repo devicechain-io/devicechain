@@ -99,58 +99,122 @@ func sign(key []byte, p capabilityPayload) []byte {
 	return m.Sum(nil)
 }
 
-// capabilityKeys holds each tenant's signing key in memory, so a download does not read the secret
-// store. It is bounded: a tenant's key is 32 bytes, and past the limit the cache is dropped and
-// refills from the store.
+const (
+	// keyTTL bounds how long a replica trusts a key it cached. The stored key never changes while
+	// the tenant exists, so this only matters when it does: a tenant erased and later created
+	// again gets a new key, and a replica holding the old one stops using it within this long.
+	keyTTL = time.Minute
+	// missTTL is how long a replica remembers that a tenant has no key. The verify path runs
+	// before anything is authenticated, so without this every capability that names a tenant that
+	// never minted one would be a secret-store read. It is short because the answer changes the
+	// moment the tenant mints its first capability on another replica.
+	missTTL = 3 * time.Second
+)
+
+type keyEntry struct {
+	key []byte
+	at  time.Time
+}
+
+// capabilityKeys holds each tenant signing key in memory, so a download does not read the secret
+// store, and remembers briefly which tenants have none. Both maps are bounded: a key is 32 bytes,
+// and past the limit a map is dropped and refills from the store.
 type capabilityKeys struct {
-	mu   sync.RWMutex
-	keys map[string][]byte
+	mu      sync.Mutex
+	keys    map[string]keyEntry
+	missing map[string]time.Time
 }
 
-func (c *capabilityKeys) get(tenant string) ([]byte, bool) {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	k, ok := c.keys[tenant]
-	return k, ok
+func (c *capabilityKeys) get(tenant string, now time.Time) (key []byte, found, knownMissing bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if e, ok := c.keys[tenant]; ok {
+		if now.Sub(e.at) < keyTTL {
+			return e.key, true, false
+		}
+		delete(c.keys, tenant)
+	}
+	if at, ok := c.missing[tenant]; ok {
+		if now.Sub(at) < missTTL {
+			return nil, false, true
+		}
+		delete(c.missing, tenant)
+	}
+	return nil, false, false
 }
 
-func (c *capabilityKeys) put(tenant string, key []byte) {
+func (c *capabilityKeys) put(tenant string, key []byte, now time.Time) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.keys == nil || len(c.keys) >= keyCacheLimit {
-		c.keys = make(map[string][]byte, 16)
+		c.keys = make(map[string]keyEntry, 16)
 	}
-	c.keys[tenant] = key
+	c.keys[tenant] = keyEntry{key: key, at: now}
+	delete(c.missing, tenant)
+}
+
+func (c *capabilityKeys) putMissing(tenant string, now time.Time) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.missing == nil || len(c.missing) >= keyCacheLimit {
+		c.missing = make(map[string]time.Time, 16)
+	}
+	c.missing[tenant] = now
+}
+
+func (c *capabilityKeys) forget(tenant string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	delete(c.keys, tenant)
+	delete(c.missing, tenant)
 }
 
 func (api *Api) keyRef(tenant string) secrets.SecretRef {
 	return secrets.SecretRef{Scope: secrets.ScopeTenant, Tenant: tenant, Name: capabilityKeyName}
 }
 
-// lookupKey returns the tenant's signing key if one exists. It NEVER creates one: verification
+// lookupKey returns the tenant signing key if one exists. It NEVER creates one: verification
 // runs on a request nobody has authenticated yet, and a verify path that created keys would let an
 // anonymous caller mint a secret row per tenant name it can think of.
+//
+// A tenant that has been through the delete door has no key to trust, whatever a cache holds: the
+// entry is dropped and the answer is "none", so an erased tenant cannot keep verifying on the
+// strength of a key its erasure removed.
 func (api *Api) lookupKey(ctx context.Context, tenant string) ([]byte, error) {
 	if api.Secrets == nil {
 		return nil, errors.New("update-management: the secret store is not wired, so download capabilities cannot be checked")
 	}
-	if k, ok := api.keys.get(tenant); ok {
-		return k, nil
+	if api.TenantDeleted != nil && api.TenantDeleted(tenant) {
+		api.keys.forget(tenant)
+		return nil, secrets.ErrSecretNotFound
+	}
+	now := api.now()
+	key, found, knownMissing := api.keys.get(tenant, now)
+	switch {
+	case found:
+		return key, nil
+	case knownMissing:
+		return nil, secrets.ErrSecretNotFound
 	}
 	k, err := api.Secrets.Resolve(core.WithTenant(ctx, tenant), api.keyRef(tenant))
 	if err != nil {
+		if errors.Is(err, secrets.ErrSecretNotFound) {
+			api.keys.putMissing(tenant, now)
+		}
 		return nil, err
 	}
-	api.keys.put(tenant, k)
+	api.keys.put(tenant, k, now)
 	return k, nil
 }
 
-// signingKey returns the tenant's key, creating it on first use. Only the mint path calls it, and
-// the mint path is reached only for an authenticated device's current assignment.
+// signingKey returns the tenant key, creating it on first use. Only the mint path calls it, and
+// the mint path is reached only for an authenticated device current assignment.
 //
-// Two replicas can both find no key and both try to create one. The store's unique handle index
-// makes one of the writes fail; the loser reads the winner's key instead of keeping its own, so
-// every replica ends up signing and verifying with the same key.
+// 🔴 THE KEY IS CREATED INSERT-IF-ABSENT AND NEVER OVERWRITTEN. Several replicas can find no key at
+// the same moment and each generate one. With an upsert the last writer replaces the first, and the
+// replica that already signed with the first key holds capabilities nobody else can verify. Here
+// exactly one insert wins; every loser reads the winner key and uses that, so all replicas sign
+// and verify with the same bytes.
 func (api *Api) signingKey(ctx context.Context, tenant string) ([]byte, error) {
 	k, err := api.lookupKey(ctx, tenant)
 	if err == nil {
@@ -164,21 +228,16 @@ func (api *Api) signingKey(ctx context.Context, tenant string) ([]byte, error) {
 		return nil, err
 	}
 	tctx := core.WithTenant(ctx, tenant)
-	if putErr := api.Secrets.Put(tctx, api.keyRef(tenant), fresh); putErr != nil {
-		k, err := api.Secrets.Resolve(tctx, api.keyRef(tenant))
-		if err != nil {
-			return nil, fmt.Errorf("creating the download capability key: %w", putErr)
-		}
-		api.keys.put(tenant, k)
-		return k, nil
+	if _, err := secrets.CreateIfAbsent(tctx, api.Secrets, api.keyRef(tenant), fresh); err != nil {
+		return nil, fmt.Errorf("creating the download capability key: %w", err)
 	}
-	// Read back what is stored, not what was generated: if a concurrent writer's row won the
-	// upsert, the stored value is the one every other replica will verify with.
+	// Read back what is stored, not what was generated: whether this insert won or another
+	// replica did, the stored value is the one every replica will verify with.
 	k, err = api.Secrets.Resolve(tctx, api.keyRef(tenant))
 	if err != nil {
 		return nil, err
 	}
-	api.keys.put(tenant, k)
+	api.keys.put(tenant, k, api.now())
 	return k, nil
 }
 
@@ -234,7 +293,9 @@ func (api *Api) VerifyCapability(ctx context.Context, raw, artifactToken string)
 	if err != nil {
 		if errors.Is(err, secrets.ErrSecretNotFound) {
 			// A tenant that never minted a capability has no key. Indistinguishable from a
-			// bad signature, so the response does not enumerate tenants.
+			// bad signature, so the response does not enumerate tenants; a MAC is still
+			// computed (under a key that verifies nothing) so the work done is the same.
+			_ = sign(make([]byte, capabilityKeyLen), p)
 			return nil, ErrCapabilityInvalid
 		}
 		return nil, err

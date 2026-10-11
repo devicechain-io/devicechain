@@ -131,6 +131,10 @@ type Api struct {
 
 	keys capabilityKeys
 
+	// beforeSave runs between an attempt being read and its compare-and-set write. A seam for the
+	// one thing a unit test cannot otherwise reach: a second writer landing in that window.
+	beforeSave func(row UpdateAttempt)
+
 	// lockTenant takes the per-tenant admission lock inside the create transaction. A seam
 	// so a test can see that it is taken before the sum is read; nil means the real lock.
 	lockTenant func(ctx context.Context, tx *gorm.DB) error

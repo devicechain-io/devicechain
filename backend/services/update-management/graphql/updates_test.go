@@ -8,9 +8,11 @@ import (
 	"context"
 	"encoding/json"
 	"testing"
+	"time"
 
 	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-microservice/blob"
+	"github.com/devicechain-io/dc-microservice/ota"
 	"github.com/devicechain-io/dc-microservice/secrets"
 	"github.com/devicechain-io/dc-update-management/model"
 	gql "github.com/graph-gophers/graphql-go"
@@ -163,4 +165,49 @@ func TestOtherTenantsCannotSeeOrCancelAnAssignment(t *testing.T) {
 	require.Equal(t, model.CodeAssignmentNotFound, code(p.exec(other,
 		`mutation($t: String!) { cancelUpdate(assignmentToken: $t){ token } }`, map[string]any{"t": got.AssignArtifact.Token})))
 	require.Equal(t, model.CodeArtifactNotFound, code(p.exec(other, assignMutation, map[string]any{"d": "dev-1", "a": "fw-1"})))
+}
+
+func TestAbandonUnknownThroughTheSchema(t *testing.T) {
+	p, out := updatePlane(t, true)
+	p.available("fw-1", []byte("image"))
+	now := time.Date(2026, 10, 11, 12, 0, 0, 0, time.UTC)
+	p.api.Clock = func() time.Time { return now }
+	p.api.Policy = ota.Policy{Acknowledge: time.Hour, Download: time.Hour, Verify: time.Hour, Install: time.Minute, Confirm: time.Hour}
+	writer, reader := p.ctx("acme", auth.ArtifactWrite), p.ctx("acme", auth.ArtifactRead)
+
+	resp := p.exec(writer, assignMutation, map[string]any{"d": "dev-1", "a": "fw-1"})
+	require.Empty(t, resp.Errors)
+	var got struct {
+		AssignArtifact struct {
+			Token   string
+			Attempt struct{ Token string }
+		}
+	}
+	require.NoError(t, json.Unmarshal(resp.Data, &got))
+	a := got.AssignArtifact
+	digestOfImage := digest([]byte("image"))
+	_, err := p.api.ApplyReport(writer, "dev-1", ota.Report{V: 1, Kind: ota.KindProgress, AttemptID: a.Attempt.Token,
+		AssignmentID: a.Token, Component: "firmware", ArtifactDigest: digestOfImage, Seq: 1, Stage: ota.StageInstalling, BootID: "b"})
+	require.NoError(t, err)
+	now = now.Add(2 * time.Minute)
+	sweep, err := p.api.SweepDeadlines(context.Background(), 10)
+	require.NoError(t, err)
+	require.Equal(t, 1, sweep.Unknown)
+
+	const abandon = `mutation($t: String!, $r: String!) { abandonUnknownUpdate(assignmentToken: $t, reason: $r) {
+	  attempt { state failure { code detail platform } } } }`
+	vars := map[string]any{"t": a.Token, "r": "device was scrapped"}
+	require.Equal(t, auth.ErrForbidden.Error(), code(p.exec(reader, abandon, vars)))
+	require.Equal(t, model.CodeInvalidReason, code(p.exec(writer, abandon, map[string]any{"t": a.Token, "r": " "})))
+	require.Equal(t, model.CodeAssignmentNotFound, code(p.exec(p.ctx("globex", auth.ArtifactWrite), abandon, vars)))
+
+	before := out.n
+	resp = p.exec(writer, abandon, vars)
+	require.Empty(t, resp.Errors)
+	require.JSONEq(t, `{"abandonUnknownUpdate":{"attempt":{"state":"CANCELLED",
+	  "failure":{"code":"OPERATOR_ABANDONED","detail":"device was scrapped","platform":true}}}}`, string(resp.Data))
+	require.Equal(t, before+1, out.n, "the device was sent a cancel")
+	require.Equal(t, model.CodeAttemptTerminal, code(p.exec(writer, abandon, vars)))
+	require.Equal(t, model.CodeAssignmentNotFound, code(p.exec(writer,
+		`mutation { abandonUnknownUpdate(assignmentToken:"asg-none", reason:"x"){ token } }`, nil)))
 }

@@ -35,6 +35,8 @@ const (
 	CodeAttemptTerminal         = "UPDATE_ALREADY_FINISHED"
 	CodeBeyondRecall            = "UPDATE_BEYOND_RECALL"
 	CodeInvalidAssignment       = "INVALID_ASSIGNMENT"
+	CodeNotUnknown              = "UPDATE_NOT_UNKNOWN"
+	CodeInvalidReason           = "INVALID_REASON"
 )
 
 // Verdicts the platform adds to the reducer's own: a report that names no assignment this device
@@ -353,6 +355,9 @@ func (api *Api) assignInTx(ctx context.Context, tx *gorm.DB, deviceToken string,
 // saveAttempt writes the columns a reducer step decided, only if nobody changed the row since it
 // was read. It reports whether it won; a loser re-reads and tries again.
 func (api *Api) saveAttempt(ctx context.Context, row UpdateAttempt, next ota.Attempt) (bool, error) {
+	if api.beforeSave != nil {
+		api.beforeSave(row)
+	}
 	cols := otaColumns(next)
 	cols["version"] = row.Version + 1
 	cols["updated_at"] = api.now()
@@ -405,6 +410,57 @@ func (api *Api) CancelUpdate(ctx context.Context, assignmentToken string) (*Upda
 		return api.AssignmentByToken(ctx, assignmentToken)
 	}
 	return nil, fmt.Errorf("update %q changed too often to cancel; try again", assignmentToken)
+}
+
+// AbandonUnknown ends an UNKNOWN attempt because an operator decided to stop waiting for the device
+// to say what it runs. It is a separate, explicit act from CancelUpdate, which refuses UNKNOWN: the
+// device may have installed the update, and nothing here learns whether it did. The attempt ends
+// CANCELLED with the reason stored on it (the failure detail, code OPERATOR_ABANDONED), the write is
+// journaled under the operator, and the device is sent an update.cancel as for any other cancel.
+// Afterwards the component is free for a new assignment. Check the device inventory: its state is
+// unknown, not reverted.
+func (api *Api) AbandonUnknown(ctx context.Context, assignmentToken, reason string) (*UpdateAssignmentView, error) {
+	if err := api.RefuseDeletedTenant(ctx); err != nil {
+		return nil, err
+	}
+	if api.Desired == nil {
+		return nil, refuse(CodeDeviceChannelUnwired, "the device channel is not available, so the device cannot be told")
+	}
+	reason = strings.TrimSpace(reason)
+	if reason == "" {
+		return nil, refuse(CodeInvalidReason, "a reason is required to abandon an update whose outcome is unknown")
+	}
+	for range casRetries {
+		view, err := api.AssignmentByToken(ctx, assignmentToken)
+		if err != nil {
+			return nil, err
+		}
+		if view == nil {
+			return nil, refuse(CodeAssignmentNotFound, "no update assignment with token %q", assignmentToken)
+		}
+		next, err := ota.Abandon(view.Attempt.ToOTA(view.Assignment.Token), reason)
+		switch {
+		case errors.Is(err, ota.ErrTerminal):
+			return nil, refuse(CodeAttemptTerminal, "update %q has already finished (%s)", assignmentToken, view.Attempt.State)
+		case errors.Is(err, ota.ErrNotUnknown):
+			return nil, refuse(CodeNotUnknown, "update %q is %s; only an UNKNOWN update can be abandoned (use cancelUpdate)",
+				assignmentToken, view.Attempt.State)
+		case err != nil:
+			return nil, refuse(CodeInvalidReason, "%v", err)
+		}
+		won, err := api.saveAttempt(ctx, view.Attempt, next)
+		if err != nil {
+			return nil, err
+		}
+		if !won {
+			continue
+		}
+		log.Warn().Str("assignment", assignmentToken).Str("device", view.Assignment.DeviceToken).Str("by", actorOf(ctx)).
+			Str("reason", reason).Msg("An UNKNOWN update was abandoned by an operator; the device state is not known.")
+		api.publishCancel(ctx, view.Assignment.DeviceToken, view.Attempt.Token, view.Assignment.Token)
+		return api.AssignmentByToken(ctx, assignmentToken)
+	}
+	return nil, fmt.Errorf("update %q changed too often to abandon; try again", assignmentToken)
 }
 
 func (api *Api) publishAssignment(ctx context.Context, v *UpdateAssignmentView) {
@@ -728,11 +784,23 @@ type SweepResult struct {
 	Unknown  int
 }
 
+// maxSweepPages bounds how many pages one pass walks looking for work. A pass that finds nothing to
+// do on a page moves on to the next instead of stopping, so rows it cannot act on (a deleted
+// tenant, an attempt whose write keeps failing) cannot pin the front of the queue; this bounds the
+// reads a pass does when there is a great deal of such junk.
+const maxSweepPages = 20
+
 // SweepDeadlines moves attempts whose phase deadline has elapsed: TIMED_OUT before installation is
-// reported started, UNKNOWN after. It reads one bounded page across every tenant under a system
-// context, and applies each change under that tenant's own context with the same compare-and-set
+// reported started, UNKNOWN after. It reads pages across every tenant under a system context,
+// oldest first, and applies each change under that tenant own context with the same compare-and-set
 // the report path uses, so two replicas sweeping at once, or a report landing mid-sweep, resolve
 // to one outcome. A device whose attempt timed out is told to stop.
+//
+// limit is how many attempts a pass may MOVE, and also the page size. Rows it examines but does not
+// move (a tenant that has been deleted, an attempt that was lost to a concurrent writer, a write
+// that failed) do not count toward it: the walk is by keyset past them, so none of them can fill
+// every page and starve the rows behind. Tenants found deleted are excluded from the next page in
+// the query itself.
 func (api *Api) SweepDeadlines(ctx context.Context, limit int) (SweepResult, error) {
 	var res SweepResult
 	if err := api.Policy.Validate(); err != nil {
@@ -745,27 +813,51 @@ func (api *Api) SweepDeadlines(ctx context.Context, limit int) (SweepResult, err
 		clauses = append(clauses, "(state IN ? AND last_report_at < ?)")
 		args = append(args, g.states, now.Add(-g.after))
 	}
-	var due []UpdateAttempt
-	if err := api.RDB.DB(core.WithSystemContext(ctx)).Where(strings.Join(clauses, " OR "), args...).
-		Order("last_report_at ASC").Limit(limit).Find(&due).Error; err != nil {
-		return res, err
-	}
-	for _, d := range due {
-		res.Examined++
-		if api.TenantDeleted != nil && api.TenantDeleted(d.TenantId) {
-			continue
+	due := "(" + strings.Join(clauses, " OR ") + ")"
+	moved := 0
+	var skip []string // tenants found deleted during this pass
+	var after *UpdateAttempt
+	for page := 0; page < maxSweepPages && moved < limit; page++ {
+		q := api.RDB.DB(core.WithSystemContext(ctx)).Where(due, args...)
+		if after != nil {
+			q = q.Where("(last_report_at > ? OR (last_report_at = ? AND id > ?))", after.LastReportAt, after.LastReportAt, after.ID)
 		}
-		tctx := core.WithTenant(ctx, d.TenantId)
-		out, err := api.tickOne(tctx, d.ID)
-		if err != nil {
-			log.Warn().Err(err).Str("attempt", d.Token).Msg("An update attempt's deadline could not be applied; it is retried at the next pass.")
-			continue
+		if len(skip) > 0 {
+			q = q.Where("tenant_id NOT IN ?", skip)
 		}
-		switch out {
-		case ota.StateTimedOut:
-			res.TimedOut++
-		case ota.StateUnknown:
-			res.Unknown++
+		var rows []UpdateAttempt
+		if err := q.Order("last_report_at ASC, id ASC").Limit(limit).Find(&rows).Error; err != nil {
+			return res, err
+		}
+		if len(rows) == 0 {
+			break
+		}
+		for i := range rows {
+			d := rows[i]
+			after = &rows[i]
+			res.Examined++
+			if api.TenantDeleted != nil && api.TenantDeleted(d.TenantId) {
+				if len(skip) < 100 && !slices.Contains(skip, d.TenantId) {
+					skip = append(skip, d.TenantId)
+				}
+				continue
+			}
+			out, err := api.tickOne(core.WithTenant(ctx, d.TenantId), d.ID)
+			if err != nil {
+				log.Warn().Err(err).Str("attempt", d.Token).Msg("An update attempt deadline could not be applied; it is retried at the next pass.")
+				continue
+			}
+			switch out {
+			case ota.StateTimedOut:
+				res.TimedOut++
+				moved++
+			case ota.StateUnknown:
+				res.Unknown++
+				moved++
+			}
+		}
+		if len(rows) < limit {
+			break
 		}
 	}
 	return res, nil

@@ -96,6 +96,25 @@ func (r *SchemaResolver) CancelUpdate(ctx context.Context, args struct{ Assignme
 	return &UpdateAssignmentResolver{M: *v}, nil
 }
 
+// AbandonUnknownUpdate ends an UNKNOWN update on an operator decision.
+func (r *SchemaResolver) AbandonUnknownUpdate(ctx context.Context, args struct {
+	AssignmentToken string
+	Reason          string
+}) (*UpdateAssignmentResolver, error) {
+	if err := auth.Authorize(ctx, auth.ArtifactWrite); err != nil {
+		return nil, err
+	}
+	api, err := r.GetApi(ctx)
+	if err != nil {
+		return nil, err
+	}
+	v, err := api.AbandonUnknown(ctx, args.AssignmentToken, args.Reason)
+	if err != nil {
+		return nil, err
+	}
+	return &UpdateAssignmentResolver{M: *v}, nil
+}
+
 // UpdateAssignmentResolver resolves the fields of one update assignment.
 type UpdateAssignmentResolver struct{ M model.UpdateAssignmentView }
 

@@ -485,6 +485,11 @@ func TestTooManyConcurrentDownloadsAreRefusedBeforeAnyWork(t *testing.T) {
 
 	e.store.gate = make(chan struct{})
 	e.store.started = make(chan struct{})
+	// Released on any exit, so a failing assertion below fails the test at once instead of leaving
+	// the first request parked on the gate (and the server waiting on it) until the suite times out.
+	var once sync.Once
+	release := func() { once.Do(func() { close(e.store.gate) }) }
+	t.Cleanup(release)
 	var wg sync.WaitGroup
 	wg.Add(1)
 	var first int
@@ -493,7 +498,11 @@ func TestTooManyConcurrentDownloadsAreRefusedBeforeAnyWork(t *testing.T) {
 		resp, _ := get(t, target)
 		first = resp.StatusCode
 	}()
-	<-e.store.started
+	select {
+	case <-e.store.started:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the first download never reached the store")
+	}
 
 	opensBefore := e.store.opens.Load()
 	resp, _ := get(t, target)
@@ -501,7 +510,7 @@ func TestTooManyConcurrentDownloadsAreRefusedBeforeAnyWork(t *testing.T) {
 	require.Equal(t, "5", resp.Header.Get("Retry-After"))
 	require.Equal(t, opensBefore, e.store.opens.Load(), "the refused request did no work")
 
-	close(e.store.gate)
+	release()
 	wg.Wait()
 	require.Equal(t, http.StatusOK, first)
 }

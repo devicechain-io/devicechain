@@ -69,7 +69,7 @@ func TestTheOperationSetIsExactlyTheCatalogue(t *testing.T) {
 	}
 	require.Equal(t, []string{"artifact", "artifacts", "updateAssignment", "updateAssignments", "updateManagementInfo"},
 		names(got.Schema.QueryType.Fields))
-	require.Equal(t, []string{"assignArtifact", "cancelUpdate", "createArtifact", "retireArtifact"}, names(got.Schema.MutationType.Fields))
+	require.Equal(t, []string{"abandonUnknownUpdate", "assignArtifact", "cancelUpdate", "createArtifact", "retireArtifact"}, names(got.Schema.MutationType.Fields))
 	require.Nil(t, got.Schema.SubscriptionType)
 }
 
@@ -112,11 +112,13 @@ func TestEverySchemaElementIsDescribed(t *testing.T) {
 		"Mutation.createArtifact(request)": true,
 		"Mutation.retireArtifact(token)":   true,
 		// The assignment operations follow the same convention for the same reason.
-		"Query.updateAssignment(token)":          true,
-		"Query.updateAssignments(criteria)":      true,
-		"Mutation.assignArtifact(deviceToken)":   true,
-		"Mutation.assignArtifact(artifactToken)": true,
-		"Mutation.cancelUpdate(assignmentToken)": true,
+		"Query.updateAssignment(token)":                  true,
+		"Query.updateAssignments(criteria)":              true,
+		"Mutation.assignArtifact(deviceToken)":           true,
+		"Mutation.assignArtifact(artifactToken)":         true,
+		"Mutation.cancelUpdate(assignmentToken)":         true,
+		"Mutation.abandonUnknownUpdate(assignmentToken)": true,
+		"Mutation.abandonUnknownUpdate(reason)":          true,
 	}
 	var undescribed []string
 	check := func(what string, d *string) {

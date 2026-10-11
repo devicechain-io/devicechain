@@ -67,10 +67,37 @@ func (f *fakeApi) PublishGrant(_ context.Context, device, assignment string, g *
 }
 
 func newConsumer(t *testing.T, api UpdateReportsApi) *ReportsConsumer {
+	c, _ := newConsumerWithRegistry(t, api)
+	return c
+}
+
+func newConsumerWithRegistry(t *testing.T, api UpdateReportsApi) (*ReportsConsumer, *prometheus.Registry) {
 	t.Helper()
+	reg := prometheus.NewRegistry()
 	ms := &core.Microservice{InstanceId: "inst", FunctionalArea: "update-management"}
-	ms.UseMetricsRegistry(prometheus.NewRegistry())
-	return NewReportsConsumer(ms, nil, core.NewNoOpLifecycleCallbacks(), api, nil, NewUpdateReportsMetrics(ms))
+	ms.UseMetricsRegistry(reg)
+	return NewReportsConsumer(ms, nil, core.NewNoOpLifecycleCallbacks(), api, nil, NewUpdateReportsMetrics(ms)), reg
+}
+
+// handled reads how many messages the loop finished with the given result.
+func handled(t *testing.T, reg *prometheus.Registry, result string) float64 {
+	t.Helper()
+	mfs, err := reg.Gather()
+	require.NoError(t, err)
+	var total float64
+	for _, mf := range mfs {
+		if !strings.HasSuffix(mf.GetName(), "update_reports_messages_total") {
+			continue
+		}
+		for _, m := range mf.GetMetric() {
+			for _, l := range m.GetLabel() {
+				if l.GetName() == "result" && l.GetValue() == result {
+					total += m.GetCounter().GetValue()
+				}
+			}
+		}
+	}
+	return total
 }
 
 func msg(subject, body string) messaging.Message {
@@ -195,4 +222,20 @@ func TestATransientFailureIsRetriedAndThenDeadLettered(t *testing.T) {
 	exhausted.NumDelivered = messaging.MaxDeliver
 	c.retryOrDrop(context.Background(), exhausted, "dev-1", func(r string) { results = append(results, r) }, api.applyErr, "update.progress")
 	require.Equal(t, []string{core.ResultRetry, core.ResultFailed}, results)
+}
+
+// A report that could not be applied (the store is down) must be left for redelivery, not
+// acknowledged: acknowledging it would lose the device's progress for good. The handler reports a
+// retry and never an ok for it, and an ordinary report is the opposite.
+func TestAFailedApplyIsRetriedNotAcknowledged(t *testing.T) {
+	api := &fakeApi{applyErr: errors.New("database down")}
+	c, reg := newConsumerWithRegistry(t, api)
+	c.handle(context.Background(), msg(reportsSubject, progressBody("RECEIVED")))
+	require.EqualValues(t, 1, handled(t, reg, core.ResultRetry))
+	require.Zero(t, handled(t, reg, core.ResultOK), "a report that failed to apply was finished as ok")
+	require.Zero(t, handled(t, reg, core.ResultFailed))
+
+	api.applyErr = nil
+	c.handle(context.Background(), msg(reportsSubject, progressBody("RECEIVED")))
+	require.EqualValues(t, 1, handled(t, reg, core.ResultOK))
 }

@@ -308,4 +308,13 @@ type Mutation {
     cannot be recalled. The device is told in every accepted case.
     """
     cancelUpdate(assignmentToken: String!): UpdateAssignment!
+    """
+    Stop waiting for an update whose outcome is UNKNOWN. Requires artifact:write. This is an explicit
+    operator decision, separate from cancelUpdate (which refuses an UNKNOWN update because the device may
+    have installed it): the update ends CANCELLED, the required reason is stored on it, the change is
+    journaled under the caller, and the device is sent a cancel. It frees the component for a new
+    assignment. It does not find out what the device runs, and the device may be on either version, so check
+    its inventory before relying on either.
+    """
+    abandonUnknownUpdate(assignmentToken: String!, reason: String!): UpdateAssignment!
 }
