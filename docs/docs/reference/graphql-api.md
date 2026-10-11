@@ -734,6 +734,11 @@ characters.
 | Keys per lookup | 1,000 | A list of tokens, external ids or alarm tokens passed to a `…ByToken`, `…ByExternalId` or similar batch query (device states, latest locations, commands, command batches, notification channels, policies and states). |
 | JSON input size | 64 KiB | Each metadata, properties, configuration, payload or recipients value sent as JSON. Command payloads and metadata are refused with `PAYLOAD_TOO_LARGE` / `METADATA_TOO_LARGE` (see [Sending commands](../guides/sending-commands.md)). |
 | Recipients per notification rule | 100 | The `recipients` list of a notification policy rule. |
+| OAuth client redirect URIs | 16 entries, 2,048 B each | `redirectUris` on `createOauthClient` and `updateOauthClient`. |
+| OAuth client scopes | 16 entries, 64 B each | `scopes` on `createOauthClient` and `updateOauthClient`. |
+| Tenant tiers | 100 tiers, 128 B per token | The tier catalog (`createTenantTier` refuses a 101st tier) and `orderedTokens` on `reorderTenantTiers`, which must name every tier. |
+| Admin role and authority lists | 100 entries | `authorities` on `createRole` and `updateRole`; `systemRoles` on `createIdentity`; `roleTokens` on `setSystemRoles`, `addMembership` and `setMembershipRoles`. |
+| Password | 72 B | `password` on `createIdentity` and `setPassword`: longer passwords are refused rather than silently truncated. |
 
 `bucketedMeasurements` also requires `startTime`; `endTime` defaults to the current time.
 

@@ -152,18 +152,23 @@ func (r *maxDeliveryRecorder) record(ctx context.Context, d messaging.MaxDeliver
 		Correlation: correlation,
 		OccurredAt:  d.At.UTC(),
 	}
+	// Redact FIRST, then size-check what would actually be stored.
+	var kept []byte
+	if streams.TierFor(d.Suffix) == streams.Cold {
+		kept = payloadFor(d.Suffix, Kind(kind), d.Original.Data)
+	}
 	switch {
 	case streams.VerbatimCopyFor(d.Suffix) != "":
 		// The index-entry contract of the kind: the body is on the copy, not here.
-	case streams.TierFor(d.Suffix) == streams.Cold && len(d.Original.Data)*4/3+payloadOverhead <= r.maxLetter:
-		letter.Payload = d.Original.Data
+	case streams.TierFor(d.Suffix) == streams.Cold && len(kept)*4/3+payloadOverhead <= r.maxLetter:
+		letter.Payload = kept
 	default:
 		// A Hot stream's letter is a POINTER: a flood of abandoned device traffic must not
 		// copy itself into the cold dead-letter stream and evict the letters that matter.
 		letter.Detail = fmt.Sprintf("payload omitted; the original is at %s#%d until it ages out",
 			d.Stream, d.StreamSeq)
 	}
-	if err := r.sink.write(tctx, letter, id); err != nil {
+	if err := r.sink.writePrepared(tctx, letter, id); err != nil {
 		return r.failed(d, err)
 	}
 	return messaging.MaxDeliveryLettered, nil
