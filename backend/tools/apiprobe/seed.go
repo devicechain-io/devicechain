@@ -55,12 +55,13 @@ func runSeed(ctx context.Context, argv []string) error {
 	}
 
 	for _, e := range allEntities() {
-		if !deployed.has(e.Area) {
-			if e.Record != nil {
-				return failWith(exitSetup, "%s cannot be seeded: %s, and later entities reference it", e.Name, notDeployedReason(e.Area))
-			}
+		skip, why, err := skipForUndeployedArea(e, deployed)
+		if err != nil {
+			return err
+		}
+		if skip {
 			skipped = append(skipped, e.Name)
-			fmt.Printf("  skipped %-26s %s\n", e.Name, notDeployedReason(e.Area))
+			fmt.Printf("  skipped %-26s %s\n", e.Name, why)
 			continue
 		}
 		write, why, err := plan(e, base)

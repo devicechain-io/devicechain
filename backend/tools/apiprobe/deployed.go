@@ -111,3 +111,32 @@ func tablesOfUndeployedAreas(tables []string, d deployedAreas) []string {
 	sort.Strings(bad)
 	return bad
 }
+
+// checkUndeployedAreasHaveNoTables is the table sweep's counterweight: an area declared
+// undeployed that nevertheless has tenant-scoped tables ran, and excluding it measured less
+// than the sweep claims.
+func checkUndeployedAreasHaveNoTables(tables []string, d deployedAreas) error {
+	bad := tablesOfUndeployedAreas(tables, d)
+	if len(bad) == 0 {
+		return nil
+	}
+	return failWith(exitCoverage,
+		"the drill declared %s undeployed, but the database holds tenant-scoped tables of theirs:\n    %s\n"+
+			"    An area with tables ran. Either the rig's deployed-area list is wrong, or the area is "+
+			"deployed and its tables must be covered like any other.",
+		strings.Join(d.undeployed(), ", "), strings.Join(bad, "\n    "))
+}
+
+// skipForUndeployedArea decides whether the seed skips an entity because its area is not
+// deployed. An entity that later entities reference cannot be skipped: that would strand
+// them, so it is a setup error rather than a quiet gap.
+func skipForUndeployedArea(e entity, d deployedAreas) (skip bool, why string, err error) {
+	if d.has(e.Area) {
+		return false, "", nil
+	}
+	if e.Record != nil {
+		return false, "", failWith(exitSetup, "%s cannot be seeded: %s, and later entities reference it",
+			e.Name, notDeployedReason(e.Area))
+	}
+	return true, notDeployedReason(e.Area), nil
+}

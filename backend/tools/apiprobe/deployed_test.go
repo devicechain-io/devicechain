@@ -57,3 +57,41 @@ func TestAnUndeployedAreaWithTablesIsACoverageFinding(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, tablesOfUndeployedAreas(tables, d))
 }
+
+func TestTheSeedSkipsAnUndeployedAreaByNameAndNeverStrandsADependent(t *testing.T) {
+	d, err := parseDeployedAreas("device-management")
+	require.NoError(t, err)
+
+	artifact := entity{Name: "artifact", Area: "update-management"}
+	skip, why, err := skipForUndeployedArea(artifact, d)
+	require.NoError(t, err)
+	require.True(t, skip)
+	require.Contains(t, why, "update-management", "the skip names the area")
+
+	// A deployed area is never skipped.
+	skip, _, err = skipForUndeployedArea(entity{Name: "device", Area: "device-management"}, d)
+	require.NoError(t, err)
+	require.False(t, skip)
+	// No list, no skipping.
+	skip, _, err = skipForUndeployedArea(artifact, nil)
+	require.NoError(t, err)
+	require.False(t, skip)
+
+	// Skipping an entity that later ones reference would strand them: a setup error.
+	referenced := entity{Name: "x", Area: "update-management", Record: func(*state, map[string]any) {}}
+	_, _, err = skipForUndeployedArea(referenced, d)
+	require.Error(t, err)
+	require.Equal(t, exitSetup, codeOf(err))
+}
+
+func TestTheTableSweepFailsAsCoverageWhenAnUndeployedAreaHasTables(t *testing.T) {
+	d, err := parseDeployedAreas("device-management")
+	require.NoError(t, err)
+	err = checkUndeployedAreasHaveNoTables([]string{"device-management.devices", "update-management.artifacts"}, d)
+	require.Error(t, err)
+	require.Equal(t, exitCoverage, codeOf(err))
+	require.Contains(t, err.Error(), "update-management.artifacts")
+
+	require.NoError(t, checkUndeployedAreasHaveNoTables([]string{"device-management.devices"}, d))
+	require.NoError(t, checkUndeployedAreasHaveNoTables([]string{"update-management.artifacts"}, nil))
+}

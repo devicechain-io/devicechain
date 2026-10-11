@@ -304,12 +304,8 @@ func runTableSweep(ctx context.Context, argv []string) error {
 	for _, e := range actionable {
 		names = append(names, e.Table.String())
 	}
-	if bad := tablesOfUndeployedAreas(names, deployed); len(bad) > 0 {
-		return failWith(exitCoverage,
-			"the drill declared %s undeployed, but the database holds tenant-scoped tables of theirs:\n    %s\n"+
-				"    An area with tables ran. Either the rig's deployed-area list is wrong, or the area is "+
-				"deployed and its tables must be covered like any other.",
-			strings.Join(deployed.undeployed(), ", "), strings.Join(bad, "\n    "))
+	if err := checkUndeployedAreasHaveNoTables(names, deployed); err != nil {
+		return err
 	}
 	for _, a := range deployed.undeployed() {
 		fmt.Printf("    not measured: %s - %s; no table of its exists in this database\n", a, notDeployedReason(a))
