@@ -480,16 +480,18 @@ Each pod counts only the messages it held, so combine pods with `sum`, not `max`
 
 ## Fetching ahead {#fetch-ahead}
 
-By default a service pulls 64 messages from the broker, works through them, and only then asks
-for the next 64, so the time each pull takes is added to the work. On a busy broker that time
-is several milliseconds, and it caps how fast one consumer can read. The `infrastructure.nats.fetch`
-settings change that. They are read when a service starts, so a change is a restart, and they
-touch no consumer on the broker.
+By default a service pulls 128 messages from the broker and asks for the next 128 while it is still
+working through the ones in hand, so the time each pull takes overlaps the work instead of being
+added to it. This is on to keep the detection engine's backlog small, not to raise throughput:
+with it on, the number of events waiting in front of detection stayed in the hundreds where it
+peaked in the thousands without it, at no cost in CPU, and the rate the platform sustains did
+not change. The `infrastructure.nats.fetch` settings change it. They are read when a service
+starts, so a change is a restart, and they touch no consumer on the broker.
 
 | Setting | Default | What it does |
 | --- | --- | --- |
-| `batch` | 64 | How many messages one pull asks for, from 1 to 256 (anything else is refused at startup). A larger batch spreads the pull's time over more messages. It is also the most one dropped connection can lose from a single pull, and the detection engine reads that range back from the stream before it carries on. |
-| `ahead` | off | Ask for the next batch while the current one is still being handed out, so the pull overlaps the work. Messages are still handled in the order they arrive. |
+| `batch` | 128 | How many messages one pull asks for, from 1 to 256 (anything else is refused at startup). A larger batch spreads the pull's time over more messages. It is also the most one dropped connection can lose from a single pull, and the detection engine reads that range back from the stream before it carries on. |
+| `ahead` | on | Ask for the next batch while the current one is still being handed out, so the pull overlaps the work. Set `ahead: false` to pull one batch at a time. Messages are still handled in the order they arrive. |
 | `aheadHoldBudgetMillis` | 1000 | A batch asked for ahead waits while the one before it is handled, and its acknowledgement window is already running. If recent batches take longer than this to hand out, the service stops asking ahead and goes back to one pull at a time. At most a tenth of the acknowledgement window, or the service refuses to start. |
 
 Services that read only as many messages as they have workers free (alarm notifications and

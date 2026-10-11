@@ -126,7 +126,7 @@ func TestCapacityBoundsFetch(t *testing.T) {
 	require.Equal(t, 4, ackPending(t, nmgr, r))
 }
 
-// Every reader that did NOT ask for capacity keeps its full 64-message fetch, and its messages
+// Every reader that did NOT ask for capacity keeps its full default-size fetch, and its messages
 // carry no AckDeadline.
 //
 // GUARD: kills "capacity/stamp applied to every reader". A full-batch consumer hands a message
@@ -138,12 +138,13 @@ func TestNoCapacityKeepsFullBatchAndNoDeadline(t *testing.T) {
 	// request fetched ahead would add to.
 	nmgr.Microservice.InstanceConfiguration.Infrastructure.Nats.Fetch = config.NatsFetchConfiguration{}
 	r := capacityReaderFor(t, nmgr, 0)
-	publishN(t, nmgr, streams.InboundEvents, 100)
+	// More than one default batch, so a full pull is distinguishable from "everything published".
+	publishN(t, nmgr, streams.InboundEvents, config.DefaultFetchBatch+72)
 
 	msg, err := readWithin(t, r, 5*time.Second)
 	require.NoError(t, err)
-	require.Len(t, r.pending, fetchBatch-1, "a plain reader must buffer the rest of a full batch")
-	require.Equal(t, fetchBatch, ackPending(t, nmgr, r), "a plain reader must fetch a full batch")
+	require.Len(t, r.pending, config.DefaultFetchBatch-1, "a plain reader must buffer the rest of a full batch")
+	require.Equal(t, config.DefaultFetchBatch, ackPending(t, nmgr, r), "a plain reader must fetch a full batch")
 	require.True(t, msg.AckDeadline().IsZero(), "a plain reader's message must carry no AckDeadline")
 	_, ok := AckDeadlineFrom(WithAckDeadline(context.Background(), msg))
 	require.False(t, ok, "WithAckDeadline must carry nothing for a message with no AckDeadline")

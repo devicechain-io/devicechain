@@ -125,7 +125,12 @@ type NatsConfiguration struct {
 // Bounds and defaults for NatsFetchConfiguration.
 const (
 	// DefaultFetchBatch is how many messages one pull asks for when Batch is unset.
-	DefaultFetchBatch = 64
+	//
+	// 128 is the size the fetch-ahead measurements were taken at (a GKE A/B with
+	// the feature on at 128 against off at 64): fetch time scales with the batch, so a larger
+	// pull is no faster to deliver, and it stays well inside MaxFetchBatch and the window a
+	// lost pull leaves behind.
+	DefaultFetchBatch = 128
 	// MaxFetchBatch is the widest pull the platform allows. It is the same number as the
 	// widest range the event-processing gap fill reads one request per sequence
 	// (messaging's rangeDirectMax; a compile-time assertion there keeps the two equal), so
@@ -151,7 +156,19 @@ type NatsFetchConfiguration struct {
 	// Ahead, when true, has a reader ask for its next batch while the caller is still
 	// working through the one in hand, so the round trip overlaps the work instead of
 	// following it. Messages are still handed out in the order they arrive.
-	Ahead bool
+	//
+	// ABSENT MEANS ON (ApplyDefaults); `ahead: false` turns it off. It is a pointer so an
+	// absent key can be told from an explicit false.
+	//
+	// 🔑 IT IS ON FOR DETECTION'S SAKE, NOT FOR THROUGHPUT. On a six-node GKE cluster it left
+	// the ceiling and the per-event CPU of every service where they were, and did nothing
+	// measurable for device-management, event-management or device-state. What it changed was
+	// event-processing's backlog behind the resolved-events stream: the peak fell from
+	// thousands (2,700 to 61,000) to hundreds (58 to 391) at 7,600 to 10,000 events a second
+	// offered, at no cost in CPU, broker load or correctness. A smaller backlog is a detection
+	// engine that evaluates events nearer the time they happened. Do not read it as a way to
+	// resolve more events a second.
+	Ahead *bool
 	// AheadHoldBudgetMillis is the longest a reader's batches may take to hand out and
 	// still be fetched ahead; past it the reader falls back to one pull at a time, so a
 	// slow consumer never holds a prefetched batch against the acknowledgement window.
@@ -159,6 +176,16 @@ type NatsFetchConfiguration struct {
 	// explicit value may be at most a tenth of the window.
 	AheadHoldBudgetMillis int
 }
+
+// AheadEnabled reports whether a reader fetches ahead. A configuration that never went
+// through ApplyDefaults (a manager assembled by hand in a test) has the key absent, and
+// reads as off: the default is applied where configuration is loaded, once.
+func (c NatsFetchConfiguration) AheadEnabled() bool {
+	return c.Ahead != nil && *c.Ahead
+}
+
+// AheadFlag returns a pointer to on, for a Go caller that sets Ahead explicitly.
+func AheadFlag(on bool) *bool { return &on }
 
 // validate checks the parts of the fetch settings that do not depend on the
 // acknowledgement window.
@@ -992,6 +1019,10 @@ func (c *InstanceConfiguration) ApplyDefaults() {
 	}
 	if nats.KvStateMaxBytes <= 0 {
 		nats.KvStateMaxBytes = DefaultKvStateMaxBytes
+	}
+	// Only ABSENCE is defaulted: an operator's explicit `ahead: false` is honoured.
+	if nats.Fetch.Ahead == nil {
+		nats.Fetch.Ahead = AheadFlag(true)
 	}
 	// Default the secret-store selection so an instance document that omits it means
 	// "the zero-infra default" (envelope-in-Postgres, instance KEK), not an invalid

@@ -496,16 +496,18 @@ un pod. Cada pod cuenta solo los mensajes que retuvo él, así que combine los p
 
 ## Lectura anticipada {#fetch-ahead}
 
-De forma predeterminada, un servicio pide 64 mensajes al broker, los procesa y solo entonces pide
-los 64 siguientes, de modo que el tiempo de cada petición se suma al del trabajo. En un broker
-ocupado ese tiempo es de varios milisegundos y limita la velocidad con la que un consumidor puede
-leer. Los ajustes de `infrastructure.nats.fetch` lo cambian. Se leen al arrancar el servicio, así
-que un cambio requiere un reinicio, y no modifican ningún consumidor del broker.
+De forma predeterminada, un servicio pide 128 mensajes al broker y pide los 128 siguientes mientras
+todavía procesa los que tiene, de modo que el tiempo de cada petición se solapa con el trabajo en
+lugar de sumarse a él. Está activado para mantener pequeña la cola del motor de detección, no para
+aumentar el rendimiento: con él, el número de eventos en espera delante de la detección se mantuvo
+en cientos donde sin él llegaba a miles, sin coste de CPU, y la velocidad que sostiene la
+plataforma no cambió. Los ajustes de `infrastructure.nats.fetch` lo cambian. Se leen al arrancar el
+servicio, así que un cambio requiere un reinicio, y no modifican ningún consumidor del broker.
 
 | Ajuste | Valor predeterminado | Qué hace |
 | --- | --- | --- |
-| `batch` | 64 | Cuántos mensajes pide cada petición, de 1 a 256 (cualquier otro valor se rechaza al arrancar). Un lote mayor reparte el tiempo de la petición entre más mensajes. Es también lo máximo que una conexión caída puede hacer perder de una sola petición, y el motor de detección vuelve a leer ese intervalo del flujo antes de continuar. |
-| `ahead` | desactivado | Pide el lote siguiente mientras se entrega el actual, de modo que la petición se solapa con el trabajo. Los mensajes se siguen procesando en el orden en que llegan. |
+| `batch` | 128 | Cuántos mensajes pide cada petición, de 1 a 256 (cualquier otro valor se rechaza al arrancar). Un lote mayor reparte el tiempo de la petición entre más mensajes. Es también lo máximo que una conexión caída puede hacer perder de una sola petición, y el motor de detección vuelve a leer ese intervalo del flujo antes de continuar. |
+| `ahead` | activado | Pide el lote siguiente mientras se entrega el actual, de modo que la petición se solapa con el trabajo. Con `ahead: false` se pide un lote cada vez. Los mensajes se siguen procesando en el orden en que llegan. |
 | `aheadHoldBudgetMillis` | 1000 | Un lote pedido por adelantado espera mientras se procesa el anterior, y su ventana de confirmación ya está corriendo. Si los últimos lotes tardan más que este valor en entregarse, el servicio deja de pedir por adelantado y vuelve a una petición cada vez. Como máximo una décima parte de la ventana de confirmación; de lo contrario el servicio se niega a arrancar. |
 
 Los servicios que leen solo tantos mensajes como trabajadores libres tienen (las notificaciones

@@ -29,7 +29,7 @@ import (
 //	DC_TEST_FETCH_AHEAD=1 go test -count=1 -p 2 ./messaging/
 func testFetchSettings() config.NatsFetchConfiguration {
 	if os.Getenv("DC_TEST_FETCH_AHEAD") == "1" {
-		return config.NatsFetchConfiguration{Batch: fetchBatch, Ahead: true}
+		return config.NatsFetchConfiguration{Batch: fetchBatch, Ahead: config.AheadFlag(true)}
 	}
 	return config.NatsFetchConfiguration{}
 }
@@ -41,7 +41,7 @@ func aheadManager(t *testing.T, batch int, ackWait time.Duration) *NatsManager {
 	nmgr, cleanup := newTestManager(t)
 	t.Cleanup(cleanup)
 	nmgr.Microservice.InstanceConfiguration.Infrastructure.Nats.Fetch =
-		config.NatsFetchConfiguration{Batch: batch, Ahead: true}
+		config.NatsFetchConfiguration{Batch: batch, Ahead: config.AheadFlag(true)}
 	if ackWait > 0 {
 		nmgr.SetAckWaitForTesting(t, ackWait)
 	}
@@ -117,7 +117,7 @@ func TestFetchAheadAcrossABrokerRestartSkipsAtMostABatchAndLosesNothing(t *testi
 	const total, batch = 3000, 64
 	srv, storeDir, nmgr := singleBroker(t)
 	nmgr.Microservice.InstanceConfiguration.Infrastructure.Nats.Fetch =
-		config.NatsFetchConfiguration{Batch: batch, Ahead: true}
+		config.NatsFetchConfiguration{Batch: batch, Ahead: config.AheadFlag(true)}
 	nmgr.SetAckWaitForTesting(t, 3*time.Second)
 	r := newAheadReader(t, nmgr)
 	publishAsync(t, nmgr, total)
@@ -403,13 +403,30 @@ func TestACapacityReaderNeverFetchesAhead(t *testing.T) {
 	require.Zero(t, r.aheadStarts.Load())
 }
 
-func TestFetchSettingsDefaultToOnePullAtATime(t *testing.T) {
+// A configuration nothing defaulted (a manager built by hand) fetches one batch at a time, at
+// the default batch size. The ON default is applied where configuration is LOADED
+// (InstanceConfiguration.ApplyDefaults), and is pinned there and by the load test in core.
+func TestAnUndefaultedFetchConfigurationPullsOneBatchAtATime(t *testing.T) {
 	nmgr, cleanup := newTestManager(t)
 	defer cleanup()
 	nmgr.Microservice.InstanceConfiguration.Infrastructure.Nats.Fetch = config.NatsFetchConfiguration{}
 	r := newAheadReader(t, nmgr)
 	require.False(t, r.ahead)
-	require.Equal(t, fetchBatch, r.fetchSize)
+	require.Equal(t, config.DefaultFetchBatch, r.fetchSize)
+}
+
+// A configuration that went through ApplyDefaults, as every service's does, fetches ahead at a
+// batch of 128 — and a capacity reader still never does.
+func TestADefaultedFetchConfigurationFetchesAheadAtTheDefaultBatch(t *testing.T) {
+	nmgr, cleanup := newTestManager(t)
+	defer cleanup()
+	cfg := &config.InstanceConfiguration{}
+	cfg.ApplyDefaults()
+	nmgr.Microservice.InstanceConfiguration.Infrastructure.Nats.Fetch = cfg.Infrastructure.Nats.Fetch
+	r := newAheadReader(t, nmgr)
+	require.True(t, r.ahead, "a defaulted configuration did not fetch ahead")
+	require.Equal(t, 128, r.fetchSize)
+	require.False(t, newAheadReader(t, nmgr, ReaderWithCapacity(4)).ahead)
 }
 
 // An explicit hold budget over a tenth of the window is refused when the manager starts.
@@ -418,7 +435,7 @@ func TestAnOverlongHoldBudgetIsRefusedAtStartup(t *testing.T) {
 	t.Cleanup(srv.Shutdown)
 	nmgr := managerFor(t, srv)
 	nmgr.Microservice.InstanceConfiguration.Infrastructure.Nats.Fetch =
-		config.NatsFetchConfiguration{Batch: 64, Ahead: true, AheadHoldBudgetMillis: int(AckWait/10/time.Millisecond) + 1}
+		config.NatsFetchConfiguration{Batch: 64, Ahead: config.AheadFlag(true), AheadHoldBudgetMillis: int(AckWait/10/time.Millisecond) + 1}
 	err := nmgr.ExecuteInitialize(context.Background())
 	require.ErrorContains(t, err, "aheadHoldBudgetMillis")
 }
