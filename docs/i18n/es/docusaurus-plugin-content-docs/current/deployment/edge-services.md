@@ -653,14 +653,14 @@ agente de borde, haz que tu tratamiento de las lecturas tolere una repetición.
 | `uplink.connectTimeoutSeconds` | `30` | Acota un intento de conexión del enlace ascendente. |
 | `uplink.backoffMinSeconds` / `uplink.backoffMaxSeconds` | `1` / `60` | Cotas de la espera creciente de reconexión mientras el enlace está caído. |
 
-## Qué vigilar
+## Qué vigilar {#what-to-watch}
 
-:::danger No se distribuye ninguna alerta ni ningún panel para nada de esto
-Las reglas de alerta y los paneles de Grafana que se distribuyen cubren otras partes de la plataforma,
-como la detección, la entrega de comandos, la mensajería, las bases de datos y la replicación.
-**Ninguna métrica de las tablas de abajo tiene alerta ni panel.** Todo lo de abajo se emite y se
-recoge, y nada te avisará de ello hasta que escribas la regla tú mismo. Empieza por la
-[alerta de «sin líder»](#no-leader-alert).
+:::note Se distribuyen siete alertas para estos dos servicios
+El chart distribuye siete reglas de alerta para sparkplug-ingest y lwm2m-ingest, descritas en
+[Alertas que se distribuyen](#edge-alerts): si cada transporte se está leyendo siquiera, un líder de
+LwM2M atascado y las maneras en que los dos servicios pierden datos. **Cualquier otra métrica de las
+tablas de abajo no tiene alerta ni panel.** Se emite y se recoge, y nada te avisará de ella hasta que
+escribas la regla tú mismo. El agente de borde no tiene ninguna alerta distribuida.
 :::
 
 Todas las métricas llevan el prefijo `devicechain_` y el segmento de su propio servicio:
@@ -668,31 +668,43 @@ Todas las métricas llevan el prefijo `devicechain_` y el segmento de su propio 
 etiquetada por dispositivo ni por inquilino, así que ninguna supone un riesgo de cardinalidad al
 recogerla.
 
-### La alerta de «sin líder» {#no-leader-alert}
+### Alertas que se distribuyen {#edge-alerts}
 
-**La primera alerta que hay que escribir es una alerta de «sin líder»**, en cada servicio de ingesta:
+| Alerta | Severidad | Qué significa | Qué hacer |
+| --- | --- | --- | --- |
+| `Lwm2mIngestLeaderCountNotOne` | critical | Durante 2 minutos, el número de réplicas de lwm2m-ingest que informan de que tienen el arrendamiento de liderazgo no ha sido exactamente 1. Con 0, nadie está leyendo el transporte CoAP/DTLS y todos los dispositivos LwM2M son inalcanzables, aunque todos los pods parezcan sanos. Con más de 1, dos réplicas sirven a la vez. | Lee los logs de lwm2m-ingest para ver por qué ninguna réplica adquirió el arrendamiento; lo habitual es que el broker de mensajes de la plataforma no sea alcanzable. |
+| `Lwm2mIngestLeaderNotServing` | critical | Durante 5 minutos, un pod ha tenido el arrendamiento de LwM2M mientras su bucle de lectura CoAP/DTLS no está en marcha (`is_leader` es 1 e `is_serving` es 0). Está atascado construyendo su turno, normalmente leyendo de device-state los dispositivos afirmados como activos, y como conserva el arrendamiento ninguna standby puede tomar el relevo. No se está sirviendo a ningún dispositivo LwM2M. | Lee el log de ese pod alrededor de `Acquired LwM2M leadership`, y reinicia el pod para que una standby pueda adquirir el arrendamiento. |
+| `Lwm2mIngestDroppingNotifications` | warning | En los últimos 10 minutos, durante 10 minutos, lwm2m-ingest ha descartado las lecturas de mensajes Notify porque la ingesta los falló o los rechazó, contrapresión incluida. No hay reintento en la ruta de Notify, así que un dispositivo que informa pocas veces pierde su lectura. | Revisa el broker de mensajes, la cola del flujo de eventos entrantes (consulta [Contrapresión en la ruta de ingesta](./observability.md#ingest-backpressure)) y el log de lwm2m-ingest. Se cuenta en `notify_ingest_dropped_total`. |
+| `SparkplugIngestLeaderCountNotOne` | critical | Durante 2 minutos, el número de réplicas de sparkplug-ingest que informan de que tienen el arrendamiento no ha sido exactamente 1. Con 0, no se está leyendo ninguna fuente Sparkplug. Con más de 1, dos réplicas conectan las mismas fuentes. Un pod desplegado sin fuentes configuradas nunca toma el arrendamiento y marca 0 de forma permanente. | Configura las fuentes del pod o deja el servicio fuera del despliegue. Si no, lee los logs de sparkplug-ingest para ver por qué ninguna réplica adquirió el arrendamiento. |
+| `SparkplugIngestBrokerUnreachable` | warning | En los últimos 10 minutos, durante 10 minutos, sparkplug-ingest no ha logrado conectar con un broker Sparkplug configurado. La preparación deliberadamente no depende de que el broker sea alcanzable, así que el pod parece sano mientras esa fuente no ingiere nada. | Lo provocan un host incorrecto, una credencial rechazada o una caída del broker. El log de sparkplug-ingest nombra la fuente y el motivo. Se cuenta en `connect_failures_total`. |
+| `SparkplugIngestSubscriptionRefused` | warning | En los últimos 15 minutos, durante 5 minutos, una fuente Sparkplug ha sido abandonada y reintentada porque su broker aceptó la conexión pero rechazó, o nunca confirmó, la suscripción a un grupo. Mientras se rechace algún grupo, la fuente no ingiere ninguno de sus grupos y nunca anuncia ONLINE. | Compara las reglas de acceso del broker para la credencial de la fuente con los grupos configurados para ella; lo más probable es que la credencial no pueda leer alguno. Se cuenta en `subscribe_failures_total`. |
+| `SparkplugIngestDroppingData` | warning | En los últimos 10 minutos, durante 10 minutos, sparkplug-ingest ha abandonado mensajes que aceptó: sus lecturas o transiciones de presencia se descartaron tras agotarse el presupuesto de reintentos, en el acto bajo contrapresión, o al apagarse. Un Host Sparkplug no recibe reentrega del broker, así que cada uno se pierde. | Revisa device-management y el broker de mensajes, y el log de sparkplug-ingest en busca de `Dropping Sparkplug samples`. Se cuenta en `ingest_failures_total`. |
+
+### Las alertas de líder {#no-leader-alert}
+
+Las dos alertas `LeaderCountNotOne` son la señal con más peso de toda esta superficie: cero significa
+que nadie está sirviendo ese transporte, y que todos los dispositivos que dependen de él son
+inalcanzables en silencio. Se disparan con una suma distinta de uno, y deliberadamente **no llevan
+rama `absent()`**. Un servicio que no está desplegado no exporta nada, y a las reglas del chart no se
+les dice qué servicios ejecuta una instalación. Un servicio desplegado sin ningún pod en marcha
+tampoco exporta nada; eso es un pod que falla ruidosamente por sí mismo, mediante reinicios y
+preparación. Si quieres que te avisen cuando la serie no existe en absoluto, añade tú el emparejamiento:
 
 > `sum(devicechain_lwm2mingest_is_leader) != 1 or absent(devicechain_lwm2mingest_is_leader)`
 >
 > `sum(devicechain_sparkplugingest_is_leader) != 1 or absent(devicechain_sparkplugingest_is_leader)`
 
-Cero significa que nadie está sirviendo ese transporte, y que todos los dispositivos que dependen de él
-son inalcanzables en silencio. Cualquier valor distinto de uno merece despertar a alguien. Es la señal
-con más peso de toda esta superficie, y hoy nada te informa de ella.
-
-La mitad con `absent()` hace falta, pero no por un pod sin fuentes. Ambos servicios registran su
-indicador `is_leader` de forma incondicional al inicializarse, antes de comprobar si tienen algo que
-servir. Un pod de Sparkplug que se ejecute sin fuentes publica por tanto la serie con valor **0**
-durante toda la vida del pod, y `!= 1` se dispara por sí solo. `absent()` cubre el caso en que no hay
-ninguna serie que sumar: ninguna réplica arrancó, o ninguna se está recogiendo. `!= 1` sobre un
-resultado vacío está vacío a su vez, lo que es una alerta muda, no una que se dispara. Ese caso afecta
-por igual a ambos transportes, y por eso las dos expresiones llevan el emparejamiento.
+Un pod de Sparkplug que se ejecuta sin fuentes registra su indicador `is_leader` al inicializarse,
+antes de comprobar si tiene algo que servir, y después nunca adquiere el arrendamiento. Publica la
+serie con valor **0** durante toda la vida del pod, y `SparkplugIngestLeaderCountNotOne` se dispara
+por sí sola con ella. Es deliberado: un servicio de transporte sin nada que servir es una
+configuración que arreglar, o un servicio que dejar fuera del despliegue.
 
 Los indicadores `is_leader` de ambos servicios suben cuando la réplica **adquiere** el arrendamiento,
 no cuando termina de construir su turno de liderazgo. Un relevo normal, por tanto, no se lee como «sin
 líder» mientras el nuevo líder reconstruye su estado. Lo que sí se esconde en esa ventana es un líder
 **atascado** en la construcción, y en LwM2M un segundo indicador lo identifica: consulta `is_serving`
-más abajo.
+más abajo, y `Lwm2mIngestLeaderNotServing` más arriba.
 
 ### Métricas de la ingesta de Sparkplug {#sparkplug-ingestion-metrics}
 
@@ -700,16 +712,16 @@ Prefijo: `devicechain_sparkplugingest_`.
 
 | Señal | Significa |
 |---|---|
-| `is_leader` | 1 en el pod que sirve, 0 en el resto. **Alerta si la suma no es 1.** |
-| `connect_failures_total` | Un broker configurado no es alcanzable. Que suba significa que una fuente está caída mientras el pod parece sano. |
-| `subscribe_failures_total` | El broker aceptó la conexión pero rechazó (o nunca confirmó) la suscripción a un grupo, lo más probable porque la credencial de la fuente no puede leerlo. La fuente sigue fuera de línea, no ingiere ninguno de sus grupos y reintenta. **Alerta ante cualquier aumento.** |
+| `is_leader` | 1 en el pod que sirve, 0 en el resto. `SparkplugIngestLeaderCountNotOne` se dispara cuando la suma no es 1. |
+| `connect_failures_total` | Un broker configurado no es alcanzable. Que suba significa que una fuente está caída mientras el pod parece sano. Alimenta `SparkplugIngestBrokerUnreachable`. |
+| `subscribe_failures_total` | El broker aceptó la conexión pero rechazó (o nunca confirmó) la suscripción a un grupo, lo más probable porque la credencial de la fuente no puede leerlo. La fuente sigue fuera de línea, no ingiere ninguno de sus grupos y reintenta. `SparkplugIngestSubscriptionRefused` se dispara ante un aumento. |
 | `messages_total` | Tráfico Sparkplug entrante. Una línea plana con una flota viva es el síntoma de una suscripción perdida o de una fuente muerta. |
 | `presence_emitted_total` | Señales de conexión/desconexión producidas. |
 | `rebirth_requests_total` | Nodos a los que se pide que se vuelvan a anunciar. Que suba de forma sostenida significa que un nodo no consigue resincronizarse. |
 | `rebirth_enqueued_total` / `rebirth_dropped_total` | Rebirths que pidió la máquina de sesión, y los que su cola de publicación estaba demasiado llena para aceptar. Un descarte es una señal de latencia más que un fallo (la petición se vuelve a hacer en la siguiente ventana del nodo), pero una tasa de descarte sostenida significa que los rebirths salen más despacio de lo que se piden. Léelo junto a `rebirth_requests_total`, que solo cuenta lo que llegó al cable y por tanto está limitado por el publicador y no por la demanda: **descartes mientras `rebirth_requests_total` sube hasta un techo estable** es un fan-out que supera a un publicador por lo demás sano; **descartes mientras está plano** son las propias publicaciones atascándose, lo que apunta a la conexión con el broker. |
 | `unknown_device_dropped_total` | Tráfico de identidades sin dispositivo, con el registro automático desactivado. |
 | `decode_errors_total` | Payloads malformados. |
-| `ingest_failures_total` | Mensajes aceptados cuyas lecturas, o las transiciones de conexión y desconexión que afirman sus nacimientos y muertes, se descartaron, más los lotes de desconexiones que la reconciliación de presencia declaró y no pudo almacenar: las lecturas en el acto mientras la plataforma aplica contrapresión, y unas u otras cuando se agotó el reintento dentro del manejador (device-management o el broker no respondían) o mientras la conexión se cerraba. Un mensaje dividido en varios eventos puede haber almacenado sus primeros eventos. Un Host de sesión limpia no recibe reentregas, así que cada uno se pierde. |
+| `ingest_failures_total` | Mensajes aceptados cuyas lecturas, o las transiciones de conexión y desconexión que afirman sus nacimientos y muertes, se descartaron, más los lotes de desconexiones que la reconciliación de presencia declaró y no pudo almacenar: las lecturas en el acto mientras la plataforma aplica contrapresión, y unas u otras cuando se agotó el reintento dentro del manejador (device-management o el broker no respondían) o mientras la conexión se cerraba. Un mensaje dividido en varios eventos puede haber almacenado sus primeros eventos. Un Host de sesión limpia no recibe reentregas, así que cada uno se pierde. Alimenta `SparkplugIngestDroppingData`. |
 | `ingest_samples_shed_total` | Lecturas DATA descartadas porque un inquilino supera su techo de ingesta. Un inquilino que descarta aquí envía más lecturas de las que permite su nivel. |
 | `tenant_deleted_dropped_total` | Tráfico rechazado porque su inquilino está siendo eliminado. |
 | `samples_too_old_dropped_total` | Lecturas descartadas porque su marca de tiempo es anterior en más de 366 días al momento en que el host las recibió; el resto de su mensaje se almacena. Una métrica cuyo valor no ha cambiado en ese tiempo se descarta de cada nacimiento, y un nodo sin reloj configurado (horas cercanas a 1970) ve descartadas todas sus lecturas. El servicio registra un aviso que nombra el dispositivo. |
@@ -720,8 +732,8 @@ Prefijo: `devicechain_lwm2mingest_`.
 
 | Señal | Significa |
 |---|---|
-| `is_leader` | 1 en el pod que tiene el arrendamiento, desde el momento en que lo adquiere. **Alerta si la suma no es 1.** |
-| `is_serving` | 1 cuando el bucle de lectura CoAP/DTLS de ese pod ya está en marcha. Léelo **junto a** `is_leader`: la pareja es lo único que distingue a un líder que todavía reconstruye su tabla de registros de un líder atascado en esa reconstrucción, y todas las demás señales del pod —readiness, liveness, `is_leader`— están en verde en ambos casos. `is_leader == 1 and is_serving == 0` sostenido durante más de lo que tarda un relevo merece una alerta propia. |
+| `is_leader` | 1 en el pod que tiene el arrendamiento, desde el momento en que lo adquiere. `Lwm2mIngestLeaderCountNotOne` se dispara cuando la suma no es 1. |
+| `is_serving` | 1 cuando el bucle de lectura CoAP/DTLS de ese pod ya está en marcha. Léelo **junto a** `is_leader`: la pareja es lo único que distingue a un líder que todavía reconstruye su tabla de registros de un líder atascado en esa reconstrucción, y todas las demás señales del pod —readiness, liveness, `is_leader`— están en verde en ambos casos. `is_leader == 1 and is_serving == 0` sostenido durante más de lo que tarda un relevo es sobre lo que alerta `Lwm2mIngestLeaderNotServing`. |
 | `active_registrations` / `active_sessions` / `active_observations` | La flota viva tal como la ve el servicio. **Vigila `active_observations` a través de un reinicio**: es como ves la pérdida de observaciones descrita más arriba, y como ves su recuperación. |
 | `registrations_total` / `registration_updates_total` | Dispositivos que llegan y que mantienen vivas sus sesiones. |
 | `registration_expiries_total` | Registros que caducaron en lugar de darse de baja: dispositivos que se desvanecieron. |
@@ -733,7 +745,7 @@ Prefijo: `devicechain_lwm2mingest_`.
 | `observation_overflow_total` | Un registro que supera el tope de 32 observaciones. Algunos de sus recursos no se observan. |
 | `telemetry_too_old_dropped_total` | Lecturas descartadas porque su hora es anterior en más de 366 días al momento en que el adaptador las recibió; el resto de su Notify se almacena. El servicio registra un aviso que nombra el dispositivo. |
 | `ingest_messages_shed_total` / `ingest_samples_shed_total` | Un inquilino por encima de su techo de ingesta, en mensajes Notify y en lecturas. |
-| `notify_ingest_dropped_total` | Mensajes Notify cuyas lecturas se descartaron porque la plataforma las rechazó o no pudo recibirlas, incluido mientras aplica contrapresión. No hay reintento; el siguiente Notify sustituye lo perdido. Un Notify dividido en varios eventos puede haber almacenado sus primeros eventos. |
+| `notify_ingest_dropped_total` | Mensajes Notify cuyas lecturas se descartaron porque la plataforma las rechazó o no pudo recibirlas, incluido mientras aplica contrapresión. No hay reintento; el siguiente Notify sustituye lo perdido. Un Notify dividido en varios eventos puede haber almacenado sus primeros eventos. Alimenta `Lwm2mIngestDroppingNotifications`. |
 | `shadows_reconstructed_total` | Presencia reconstruida tras un cambio de liderazgo. Un pico es la huella de un relevo. |
 | `commands_failed_total` / `commands_not_served_total` | Comandos descendentes que no llegaron a destino. |
 | `command_live_claim_errors_total` | Comandos **no llevados a cabo** porque command-delivery no pudo confirmarlos. Cada comando se confirma con command-delivery inmediatamente antes de llegar al dispositivo, y sin esa confirmación nunca se envía. Una tasa sostenida significa que ningún comando LwM2M está llegando a su dispositivo: **es la señal sobre la que alertar.** Los comandos se reintentan, no se pierden. |

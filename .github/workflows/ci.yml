@@ -1418,6 +1418,16 @@ jobs:
       - name: Translated docs match English file-for-file
         run: hack/check-docs-locale-parity.sh
 
+      # An alert is a page at 3 a.m. and the docs are its runbook. The chart's
+      # PrometheusRule templates and the docs were edited independently, and a
+      # quarter of the shipped alerts had no docs mention at all. Prove the check can
+      # fail (a planted gap, a missing translation, a stale allowlist), then run it.
+      - name: Alert-coverage guard self-test
+        run: hack/check-docs-alert-coverage.sh --self-test
+
+      - name: Every shipped alert is documented, in every locale
+        run: hack/check-docs-alert-coverage.sh
+
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: 26

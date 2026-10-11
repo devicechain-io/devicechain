@@ -347,25 +347,35 @@ Sparkplug 按租户接入上限计量 DATA 消息中的读数，并丢弃超出�
 
 ## 应监控什么 {#what-to-watch}
 
-:::danger 这些组件都没有默认告警或仪表盘
-平台发布的告警规则和 Grafana 仪表盘覆盖检测、指令投递、消息、数据库和复制等其他部分。**下表指标没有任何默认告警或面板。** 指标都会发出并被抓取，但编写自己的规则前，不会通知你。先配置[无主实例告警](#no-leader-alert)。
+:::note 这两个服务附带七条告警
+Chart 为 sparkplug-ingest 和 lwm2m-ingest 附带七条告警规则，见[随附告警](#edge-alerts)：每种传输是否在被读取、卡住的 LwM2M 主实例，以及两个服务丢弃数据的几种情形。**下表中其余所有指标都没有告警，也没有仪表盘面板。** 指标都会发出并被抓取，但编写自己的规则前，不会通知你。边缘代理没有任何随附告警。
 :::
 
 所有指标带 `devicechain_` 和服务段前缀：`devicechain_sparkplugingest_`、`devicechain_lwm2mingest_`、`devicechain_edge_`。没有逐设备或逐租户标签，因此抓取不存在相应高基数风险。
 
-### 无主实例告警 {#no-leader-alert}
+### 随附告警 {#edge-alerts}
 
-每个接入服务**首先应配置无主实例告警**：
+| 告警 | 严重程度 | 含义 | 处理方法 |
+| --- | --- | --- | --- |
+| `Lwm2mIngestLeaderCountNotOne` | critical | 持续 2 分钟，报告持有领导租约的 lwm2m-ingest 副本数不是恰好 1。为 0 时，无人读取 CoAP/DTLS 传输，所有 LwM2M 设备都不可达，尽管每个 Pod 看起来都健康。大于 1 时，两个副本同时在提供服务。 | 查看 lwm2m-ingest 日志，了解没有副本取得租约的原因；通常是平台的消息代理不可达。 |
+| `Lwm2mIngestLeaderNotServing` | critical | 持续 5 分钟，某个 Pod 持有 LwM2M 租约，但其 CoAP/DTLS 读取循环没有运行（`is_leader` 为 1 且 `is_serving` 为 0）。它卡在构建任期的过程中，通常是在从 device-state 读取已断言在线的设备，并且因为它一直持有租约，没有备用实例能够接管。没有任何 LwM2M 设备得到服务。 | 查看该 Pod 日志中 `Acquired LwM2M leadership` 前后的内容，然后重启该 Pod，让备用实例取得租约。 |
+| `Lwm2mIngestDroppingNotifications` | warning | 过去 10 分钟内，持续 10 分钟，lwm2m-ingest 因接入失败或被拒绝（包括背压）而丢弃了 Notify 消息的读数。Notify 路径没有重试，因此上报不频繁的设备会丢失其读数。 | 检查消息代理、入站事件流的积压（参见[接入链路背压](./observability.md#ingest-backpressure)）以及 lwm2m-ingest 日志。计入 `notify_ingest_dropped_total`。 |
+| `SparkplugIngestLeaderCountNotOne` | critical | 持续 2 分钟，报告持有租约的 sparkplug-ingest 副本数不是恰好 1。为 0 时，没有任何 Sparkplug 来源在被读取。大于 1 时，两个副本连接相同的来源。部署时未配置来源的 Pod 永远不会取得租约，其值永久为 0。 | 为该 Pod 配置来源，或将该服务从部署中去掉。否则查看 sparkplug-ingest 日志，了解没有副本取得租约的原因。 |
+| `SparkplugIngestBrokerUnreachable` | warning | 过去 10 分钟内，持续 10 分钟，sparkplug-ingest 连接某个已配置的 Sparkplug 代理失败。就绪状态刻意不以代理可达为条件，因此 Pod 看起来健康，而该来源什么也没有接入。 | 主机错误、凭据被拒绝或代理故障都会触发。sparkplug-ingest 日志会指出来源和原因。计入 `connect_failures_total`。 |
+| `SparkplugIngestSubscriptionRefused` | warning | 过去 15 分钟内，持续 5 分钟，某个 Sparkplug 来源因其代理接受了连接，却拒绝或从未确认某个分组订阅，而被放弃并重试。只要有任一分组被拒绝，该来源就不接入其任何分组，也从不宣告 ONLINE。 | 将代理对该来源凭据的访问规则与为其配置的分组进行比较；最可能是该凭据无权读取其中某个分组。计入 `subscribe_failures_total`。 |
+| `SparkplugIngestDroppingData` | warning | 过去 10 分钟内，持续 10 分钟，sparkplug-ingest 放弃了它已接受的消息：其读数或在线状态转换在重试预算用尽后、在背压下立即，或在关闭时被丢弃。Sparkplug 主机不会得到代理的重投递，因此每一条都会丢失。 | 检查 device-management 和消息代理，并在 sparkplug-ingest 日志中查找 `Dropping Sparkplug samples`。计入 `ingest_failures_total`。 |
+
+### 主实例告警 {#no-leader-alert}
+
+两条 `LeaderCountNotOne` 告警是整个部分最关键的信号：零表示无人提供该传输服务，其所有设备都静默不可达。它们在总和不为一时触发，并且刻意**不带 `absent()` 分支**。未部署的服务不导出任何内容，而 Chart 的规则并不知道某次安装运行了哪些服务。已部署但没有运行 Pod 的服务同样不导出任何内容；那是一个 Pod 自身通过重启和就绪状态大声报告的故障。如果希望在序列完全不存在时也收到通知，请自行添加配对表达式：
 
 > `sum(devicechain_lwm2mingest_is_leader) != 1 or absent(devicechain_lwm2mingest_is_leader)`
 >
 > `sum(devicechain_sparkplugingest_is_leader) != 1 or absent(devicechain_sparkplugingest_is_leader)`
 
-零表示无人提供该传输服务，其所有设备都静默不可达。任何非一值都值得唤醒值班人员。这是整个部分最关键的信号，目前没有默认通知。
+未配置来源的 Sparkplug Pod 在初始化时就注册其 `is_leader` 指标，先于检查是否有服务内容，随后永远不会取得租约。它整个生命周期都发布读数为 **0** 的序列，`SparkplugIngestLeaderCountNotOne` 会自行对此触发。这是刻意的：没有内容可服务的传输服务，要么是需要修正的配置，要么是应从部署中去掉的服务。
 
-`absent()` 必需，但不是为了无来源的 Pod。两个服务都在初始化无条件注册 `is_leader`，先于检查是否有服务内容。因此未配置来源的 Sparkplug Pod 整个生命周期都发布 **0**，`!= 1` 已足够触发。`absent()` 覆盖完全没有序列可求和的情况，例如没有副本启动或未抓取。空结果上的 `!= 1` 仍为空，意味着静默而非触发。两种传输都适用，因此都使用配对表达式。
-
-两服务的 `is_leader` 在副本**取得租约**时变为一，不等领导任期状态构建完成。正常接管不会在重建期间显示无主；但此时可能隐藏**卡在构建**中的主实例。LwM2M 的第二个指标 `is_serving` 可定位，见下文。
+两服务的 `is_leader` 在副本**取得租约**时变为一，不等领导任期状态构建完成。正常接管不会在重建期间显示无主；但此时可能隐藏**卡在构建**中的主实例。LwM2M 的第二个指标 `is_serving` 可定位，见下文以及上文的 `Lwm2mIngestLeaderNotServing`。
 
 ### Sparkplug 接入指标 {#sparkplug-ingestion-metrics}
 
@@ -373,16 +383,16 @@ Sparkplug 按租户接入上限计量 DATA 消息中的读数，并丢弃超出�
 
 | 信号 | 含义 |
 |---|---|
-| `is_leader` | 服务 Pod 为 1，其他为 0。**总和不为 1 时告警。** |
-| `connect_failures_total` | 配置的消息代理不可达。增长表示某来源停机，而 Pod 看起来健康。 |
-| `subscribe_failures_total` | 代理接受连接，却拒绝或未确认某分组订阅，通常凭据无读取权限。来源保持离线，不接入任何分组并重试。**任何增长都应告警。** |
+| `is_leader` | 服务 Pod 为 1，其他为 0。总和不为 1 时触发 `SparkplugIngestLeaderCountNotOne`。 |
+| `connect_failures_total` | 配置的消息代理不可达。增长表示某来源停机，而 Pod 看起来健康。供给 `SparkplugIngestBrokerUnreachable`。 |
+| `subscribe_failures_total` | 代理接受连接，却拒绝或未确认某分组订阅，通常凭据无读取权限。来源保持离线，不接入任何分组并重试。增长时触发 `SparkplugIngestSubscriptionRefused`。 |
 | `messages_total` | 入站 Sparkplug 流量。活跃设备群中平线表示订阅丢失或来源死亡。 |
 | `presence_emitted_total` | 产出的连接/断开信号。 |
 | `rebirth_requests_total` | 请求节点重新宣告的次数。持续增长表示节点无法重新同步。 |
 | `rebirth_enqueued_total` / `rebirth_dropped_total` | 会话状态机请求的 rebirth，以及发布队列已满而未接收的数量。丢弃属于延迟信号，不等于终止失败：节点下一窗口会重新请求。但持续丢弃表示请求速度超过发布速度。结合只统计实际发上线路、受发布能力而非需求限制的 `rebirth_requests_total`：**丢弃且请求量升至稳定上限**表示扇出超过健康发布者能力；**丢弃且请求量平线**表示发布本身卡住，应检查代理连接。 |
 | `unknown_device_dropped_total` | 关闭自动注册时，无对应设备身份的流量。 |
 | `decode_errors_total` | 格式错误载荷。 |
-| `ingest_failures_total` | 已接受消息的读数，或 birth/death 声明的连接转换被丢弃，以及在线状态协调产生但无法存储的断开批次。读数在平台背压时立即丢弃；其他情况在内部重试耗尽后（设备管理或代理不可达），或连接关闭期间丢弃。拆分为多事件的消息，前部分可能已存储。clean-session 主机没有重投递，因此这些内容均丢失。 |
+| `ingest_failures_total` | 已接受消息的读数，或 birth/death 声明的连接转换被丢弃，以及在线状态协调产生但无法存储的断开批次。读数在平台背压时立即丢弃；其他情况在内部重试耗尽后（设备管理或代理不可达），或连接关闭期间丢弃。拆分为多事件的消息，前部分可能已存储。clean-session 主机没有重投递，因此这些内容均丢失。供给 `SparkplugIngestDroppingData`。 |
 | `ingest_samples_shed_total` | 租户超过接入限额而丢弃的 DATA 读数，表示发送量超过层级允许值。 |
 | `tenant_deleted_dropped_total` | 租户正在删除而拒绝的流量。 |
 | `samples_too_old_dropped_total` | 时间戳早于主机接收时刻超过 366 天的读数，消息其他部分仍存储。超过这么久未变化的指标，每次 birth 都会丢弃；未设时钟、时间接近 1970 的节点全部读数会丢弃。服务警告日志列出设备。 |
@@ -393,8 +403,8 @@ Sparkplug 按租户接入上限计量 DATA 消息中的读数，并丢弃超出�
 
 | 信号 | 含义 |
 |---|---|
-| `is_leader` | 持有租约的 Pod 从取得租约起为 1。**总和不为 1 时告警。** |
-| `is_serving` | Pod 的 CoAP/DTLS 读取循环实际运行后为 1。必须**结合** `is_leader`：这是区分正常重建注册表和卡在重建的唯一方式，其他就绪、存活和 `is_leader` 信号都可能健康。`is_leader == 1 and is_serving == 0` 持续超过正常接管时长时，应独立告警。 |
+| `is_leader` | 持有租约的 Pod 从取得租约起为 1。总和不为 1 时触发 `Lwm2mIngestLeaderCountNotOne`。 |
+| `is_serving` | Pod 的 CoAP/DTLS 读取循环实际运行后为 1。必须**结合** `is_leader`：这是区分正常重建注册表和卡在重建的唯一方式，其他就绪、存活和 `is_leader` 信号都可能健康。`is_leader == 1 and is_serving == 0` 持续超过正常接管时长时，`Lwm2mIngestLeaderNotServing` 即对此告警。 |
 | `active_registrations` / `active_sessions` / `active_observations` | 服务看到的活动设备群。**重启前后观察 `active_observations`**，可发现上述观察关系丢失及恢复。 |
 | `registrations_total` / `registration_updates_total` | 设备加入和保持会话。 |
 | `registration_expiries_total` | 未注销而注册过期，表示设备消失。 |
@@ -406,7 +416,7 @@ Sparkplug 按租户接入上限计量 DATA 消息中的读数，并丢弃超出�
 | `observation_overflow_total` | 超过每次注册 32 条观察上限，部分资源未观察。 |
 | `telemetry_too_old_dropped_total` | 读数时间早于适配器接收时刻超过 366 天，Notify 其他部分存储。服务警告日志列出设备。 |
 | `ingest_messages_shed_total` / `ingest_samples_shed_total` | 超出租户接入上限的 Notify 消息和读数。 |
-| `notify_ingest_dropped_total` | 平台拒绝或无法接收，导致读数丢弃的 Notify，包括背压期间。没有重试，下一 Notify 取代丢失内容。拆分消息的前部分事件可能已存储。 |
+| `notify_ingest_dropped_total` | 平台拒绝或无法接收，导致读数丢弃的 Notify，包括背压期间。没有重试，下一 Notify 取代丢失内容。拆分消息的前部分事件可能已存储。供给 `Lwm2mIngestDroppingNotifications`。 |
 | `shadows_reconstructed_total` | 领导权变更后重建的在线状态，突增是故障切换特征。 |
 | `commands_failed_total` / `commands_not_served_total` | 未成功到达的下行指令。 |
 | `command_live_claim_errors_total` | 因指令投递服务无法确认而**未执行**的指令。每个指令在到达设备前立即向指令投递服务确认，未确认绝不发送。持续增长表示 LwM2M 指令都无法到达设备，**应为此告警**。指令会重试，不会丢失。 |

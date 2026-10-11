@@ -1,0 +1,4 @@
+# Alerts the chart ships that are deliberately not named on any docs page.
+# One name per line, with a `#` line above it saying why. The check fails on an
+# entry that is not a real alert or that is documented everywhere, so this list
+# can only shrink. Empty on purpose.
