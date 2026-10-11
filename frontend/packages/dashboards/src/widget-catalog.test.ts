@@ -270,6 +270,18 @@ describe('createWidgetCatalog', () => {
     }).toThrow(TypeError);
   });
 
+  it('deep-freezes a descriptor the caller already froze shallowly', () => {
+    // Object.freeze is shallow, so a frozen OUTER object says nothing about its children.
+    // A freeze that stops at the first frozen object would leave these mutable.
+    const d = Object.freeze({ ...valid(), id: 'acme/pre-frozen', defaults: { title: 'Tank' } });
+    const stored = createWidgetCatalog([d]).get('acme/pre-frozen')!;
+    expect(Object.isFrozen(stored.defaults)).toBe(true);
+    expect(Object.isFrozen(stored.datasource)).toBe(true);
+    expect(() => {
+      (stored.defaults as Record<string, unknown>).title = 'changed';
+    }).toThrow(TypeError);
+  });
+
   it('keeps two catalogs independent', () => {
     const a = createWidgetCatalog([valid()]);
     const b = createWidgetCatalog([{ ...valid(), id: 'acme/other' }]);

@@ -384,10 +384,14 @@ function checkInteractions(interactions: unknown, channel: WidgetChannel | undef
 // ---- Catalog ----------------------------------------------------------------
 
 // Freezes in place, recursively. Idempotent, so a table shared between registries (the
-// built-in option specs are) is simply frozen once. Descriptors hold JSON values only, so
+// built-in option specs are) is simply frozen again. Descriptors hold JSON values only, so
 // this never meets a function or a cycle.
+//
+// It descends even into an object that is ALREADY frozen: Object.freeze is shallow, so a
+// caller's `Object.freeze(descriptor)` says nothing about `descriptor.defaults`, and
+// stopping at the first frozen object would leave those children mutable.
 function deepFreeze<T>(value: T): T {
-  if (typeof value === 'object' && value !== null && !Object.isFrozen(value)) {
+  if (typeof value === 'object' && value !== null) {
     Object.freeze(value);
     for (const child of Object.values(value)) deepFreeze(child);
   }
