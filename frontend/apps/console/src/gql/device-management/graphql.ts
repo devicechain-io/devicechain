@@ -274,6 +274,16 @@ export type DeviceCredentialSearchCriteria = {
   pageSize: number;
 };
 
+export type DeviceCredentialUpdateRequest = {
+  credentialId?: string | null | undefined;
+  credentialType?: string | null | undefined;
+  credentialValue?: string | null | undefined;
+  deviceToken?: string | null | undefined;
+  enabled?: boolean | null | undefined;
+  expiresAt?: string | null | undefined;
+  metadata?: string | null | undefined;
+};
+
 export type DeviceFacet =
   | 'CATEGORY'
   | 'MANUFACTURER'
@@ -807,6 +817,14 @@ export type CreateDeviceCredentialMutationVariables = Exact<{
 
 
 export type CreateDeviceCredentialMutation = { createDeviceCredential: { id: string, token: string, credentialType: string, credentialId: string, enabled: boolean } };
+
+export type UpdateDeviceCredentialMutationVariables = Exact<{
+  token: string;
+  request: DeviceCredentialUpdateRequest;
+}>;
+
+
+export type UpdateDeviceCredentialMutation = { updateDeviceCredential: { id: string, token: string, credentialType: string, credentialId: string, enabled: boolean } };
 
 export type DeleteDeviceCredentialMutationVariables = Exact<{
   token: string;
@@ -2015,6 +2033,17 @@ export const CreateDeviceCredentialDocument = new TypedDocumentString(`
   }
 }
     `) as unknown as TypedDocumentString<CreateDeviceCredentialMutation, CreateDeviceCredentialMutationVariables>;
+export const UpdateDeviceCredentialDocument = new TypedDocumentString(`
+    mutation UpdateDeviceCredential($token: String!, $request: DeviceCredentialUpdateRequest!) {
+  updateDeviceCredential(token: $token, request: $request) {
+    id
+    token
+    credentialType
+    credentialId
+    enabled
+  }
+}
+    `) as unknown as TypedDocumentString<UpdateDeviceCredentialMutation, UpdateDeviceCredentialMutationVariables>;
 export const DeleteDeviceCredentialDocument = new TypedDocumentString(`
     mutation DeleteDeviceCredential($token: String!) {
   deleteDeviceCredential(token: $token)
