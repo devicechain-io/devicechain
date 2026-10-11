@@ -206,8 +206,11 @@ export type CommandDefinitionUpdateRequest = {
  * within the declaration, and carry a valid value type.
  */
 export type ConfigurationKeyInput = {
+  /** An optional human-readable note. */
   description?: string | null | undefined;
+  /** The shared attribute key. */
   key: string;
+  /** How the key's value is typed: STRING, LONG, DOUBLE, BOOLEAN or JSON. */
   valueType: string;
 };
 
