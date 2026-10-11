@@ -59,8 +59,12 @@ export function stripComments(source: string): string {
 
 // A built-in id as a quoted literal.
 const ID_LITERAL = new RegExp(`['"\`](${WIDGET_TYPES.join('|')})['"\`]`);
-// The tables and helpers keyed by built-in id, and the closed union type.
-const ID_KEYED = /\b(WIDGET_TYPES|WIDGET_CHANNEL|WIDGET_BINDS_DATASOURCE|WIDGET_OPTIONS|WidgetType|numberOptionSpec|enumOptionValues)\b/;
+// The tables and helpers keyed by built-in id, and the closed union types. The per-channel
+// registries and the built-in descriptor map are the same tables under other names, and
+// `isBuiltinWidgetId` is an id test by definition. (`createBuiltinWidgetRegistry` is not
+// here: building the default registry is composition, not dispatch.)
+const ID_KEYED =
+  /\b(WIDGET_TYPES|WIDGET_CHANNEL|WIDGET_BINDS_DATASOURCE|WIDGET_OPTIONS|WIDGET_REGISTRY|[A-Z]+_WIDGET_REGISTRY|WidgetType|BuiltinWidgetId|isBuiltinWidgetId|builtinWidgetDescriptors|builtinWidgetCatalog|numberOptionSpec|enumOptionValues)\b/;
 
 export function violations(source: string): string[] {
   const code = stripComments(source);
@@ -105,8 +109,16 @@ describe('the editor does not dispatch on built-in widget ids', () => {
   it('can fail', () => {
     expect(violations("if (widget.type === 'alarm-table') return 1;")).toHaveLength(1);
     expect(violations('const t = WIDGET_CHANNEL[widget.type];')).toHaveLength(1);
+    expect(violations('const c = builtinWidgetDescriptors[widget.type];')).toHaveLength(1);
+    expect(violations('const R = ALARM_WIDGET_REGISTRY;')).toHaveLength(1);
+    expect(violations('const r = createBuiltinWidgetRegistry();')).toEqual([]);
     expect(violations("// type === 'gauge' is what this file refuses to say\nconst x = 1;")).toEqual([]);
     expect(violations("/* 'map' */ const url = 'http://x'; const y = 'gauge';")).toHaveLength(1);
+    // Every quote style a literal can take, not only the one this codebase happens to use.
+    expect(violations('const a = "alarm-count";')).toHaveLength(1);
+    expect(violations('const a = `command-button`;')).toHaveLength(1);
+    // An id that merely CONTAINS a built-in's is not a built-in.
+    expect(violations("const a = 'acme/map';")).toEqual([]);
     expect(WIDGET_TYPES.length).toBeGreaterThanOrEqual(11);
   });
 });
