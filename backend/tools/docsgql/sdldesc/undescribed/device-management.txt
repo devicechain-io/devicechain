@@ -463,7 +463,6 @@ DeviceCredential.updatedAt
 DeviceCredentialCreateRequest
 DeviceCredentialCreateRequest.credentialId
 DeviceCredentialCreateRequest.credentialType
-DeviceCredentialCreateRequest.credentialValue
 DeviceCredentialCreateRequest.deviceToken
 DeviceCredentialCreateRequest.enabled
 DeviceCredentialCreateRequest.expiresAt
@@ -482,7 +481,6 @@ DeviceCredentialSearchResults.results
 DeviceCredentialUpdateRequest
 DeviceCredentialUpdateRequest.credentialId
 DeviceCredentialUpdateRequest.credentialType
-DeviceCredentialUpdateRequest.credentialValue
 DeviceCredentialUpdateRequest.deviceToken
 DeviceCredentialUpdateRequest.enabled
 DeviceCredentialUpdateRequest.expiresAt
@@ -552,7 +550,6 @@ DeviceReplaceRequest
 DeviceReplaceRequest.credentialId
 DeviceReplaceRequest.credentialToken
 DeviceReplaceRequest.credentialType
-DeviceReplaceRequest.credentialValue
 DeviceReplaceRequest.deviceToken
 DeviceReplaceRequest.expiresAt
 DeviceReplaceRequest.reason
