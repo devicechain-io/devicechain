@@ -31,9 +31,17 @@
 // server-side, ADR-044-style publish gate it superficially resembles, and calling it one
 // would misdescribe exactly which documents are protected.
 
-import { UNKNOWN_WIDGET_TYPE, type DashboardDefinition, type WidgetInstance } from '@devicechain/dashboards';
+import {
+  UNKNOWN_WIDGET_TYPE,
+  validateOptions,
+  type DashboardDefinition,
+  type WidgetDescriptor,
+  type WidgetInstance,
+  type WidgetType,
+} from '@devicechain/dashboards';
 
-import { WIDGET_OPTIONS, validateWidgetOptions, type OptionIssue } from './options';
+import { builtinWidgetCatalog } from './builtin-descriptors';
+import type { OptionIssue } from './options';
 
 // A DefinitionOptionIssue is an OptionIssue plus the widget that carries it.
 //
@@ -59,11 +67,26 @@ type WidgetCarrier = Pick<DashboardDefinition, 'widgets'>;
 // no options of its own (its stored object is kept verbatim, options and all), and this
 // build has no schema to judge a newer widget's options against.
 export function validateDefinitionOptions(definition: WidgetCarrier): DefinitionOptionIssue[] {
-  return definition.widgets.flatMap((widget) =>
-    widget.type === UNKNOWN_WIDGET_TYPE
-      ? []
-      : validateWidgetOptions(widget.type, widget.options).map((issue) => ({ ...issue, widgetId: widget.id })),
-  );
+  return definition.widgets.flatMap((widget) => {
+    if (widget.type === UNKNOWN_WIDGET_TYPE) return [];
+    const type = widget.type;
+    const descriptor = descriptorFor(type);
+    return validateOptions(descriptor.options, widget.options, {
+      constraints: descriptor.constraints,
+      label: type,
+    }).map(({ key, code, message }) => ({ widgetType: type, key, code, message, widgetId: widget.id }));
+  });
+}
+
+// The schema a recognized widget is judged against comes from the built-in CATALOG — the
+// same descriptors a registry holds — rather than from a by-type table, so this gate is the
+// live consumer of the registry's data. Every built-in type is in the catalog by
+// construction (builtin-registry.test.ts), so a miss is a defect to surface, not a widget
+// to skip.
+function descriptorFor(type: WidgetType): WidgetDescriptor {
+  const descriptor = builtinWidgetCatalog.get(type);
+  if (!descriptor) throw new Error(`no built-in descriptor for widget type "${type}"`);
+  return descriptor;
 }
 
 // stripUnknownOptions removes every option key no widget of that type reads, leaving
@@ -104,7 +127,7 @@ function stripUnknownWidgetOptions(widget: WidgetInstance): WidgetInstance {
   // object, which is never rewritten), so it returns here unchanged.
   const bag = widget.options;
   if (!bag) return widget;
-  const specs = WIDGET_OPTIONS[widget.type];
+  const specs = descriptorFor(widget.type).options;
   // hasOwnProperty.call, not `in` — see validateWidgetOptions: every specs table
   // inherits Object.prototype, so `in` would report '__proto__' and 'constructor' as
   // declared and leave exactly the keys a JSON.parse'd definition can smuggle in.
