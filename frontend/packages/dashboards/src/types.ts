@@ -200,10 +200,26 @@ export type WidgetLayout = Record<string, WidgetBox>;
 export const UNKNOWN_WIDGET_TYPE = 'unknown-widget';
 export type UnknownWidgetType = typeof UNKNOWN_WIDGET_TYPE;
 
+// The implementation a widget was authored against, stored beside its type as `widget`.
+// `version` is provenance (the widget release the author used); `optionsVersion` and
+// `sdkApiVersion` are the compatibility key together with the id — see checkWidgetCompatibility.
+// A definition predating this field is a legacy built-in and carries none.
+export interface WidgetImplementationRef {
+  version: string;
+  optionsVersion: number;
+  sdkApiVersion?: number;
+}
+
+// A namespaced id (`scope/name`) a registered extension package owns. Kept apart from
+// WidgetType so the built-in union stays exhaustive for the compiler.
+export type ExtensionWidgetType = `${string}/${string}`;
+
 // A widget of a type this build knows how to render.
 export interface KnownWidgetInstance {
   id: string;
   type: WidgetType;
+  // Absent on a legacy (unversioned) built-in.
+  widget?: WidgetImplementationRef;
   layout: WidgetLayout;
   // label/image widgets carry no datasource.
   datasource?: DatasourceSelector;
@@ -211,29 +227,66 @@ export interface KnownWidgetInstance {
   // widget package; opaque here.
   options?: Record<string, unknown>;
   raw?: undefined;
+  reason?: undefined;
 }
 
-// A widget whose stored type this build does not know. The parser keeps the stored
-// object VERBATIM in `raw`, and the serializer writes `raw` back, so a host on an older
-// release that loads a newer board and saves it does not delete or rewrite the widget
-// it cannot read.
+// A widget from an installed extension package, recognized through the catalog the
+// definition was parsed with: registered, versioned, and compatible (optionsVersion and
+// SDK generation). Same envelope as a built-in; the id is a namespaced one.
+export interface ExtensionWidgetInstance {
+  id: string;
+  type: ExtensionWidgetType;
+  widget: WidgetImplementationRef;
+  layout: WidgetLayout;
+  datasource?: DatasourceSelector;
+  options?: Record<string, unknown>;
+  raw?: undefined;
+  reason?: undefined;
+}
+
+// Why a stored widget could not be resolved to an installed implementation.
+//   unregistered     - no registration for the id in the catalog (or the type is unknown)
+//   unversioned      - a registered extension stored without version metadata
+//   invalid-metadata - `widget` is present but malformed, or an extension widget uses a
+//                      top-level field name the format reserves (`raw`, `reason`)
+//   options-version  - the stored settings shape differs from the installed one
+//   sdk-incompatible - authored against a different SDK contract generation
+export type UnresolvedWidgetCode =
+  | 'unregistered'
+  | 'unversioned'
+  | 'invalid-metadata'
+  | 'options-version'
+  | 'sdk-incompatible';
+
+export interface UnresolvedWidgetReason {
+  code: UnresolvedWidgetCode;
+  // A human-readable, specific explanation (names the id and the versions involved).
+  message: string;
+}
+
+// A widget that cannot be resolved to an installed implementation. The parser keeps the
+// stored object VERBATIM in `raw`, and the serializer writes `raw` back, so a host on an
+// older release or without the package that loads a board and saves it does not delete or
+// rewrite the widget it cannot read.
 //
 // `id` and `layout` are the only parsed fields, because every widget has them and the
 // canvas needs them to place, select, move and delete the placeholder. An edit to
 // either is written back into `raw` on save; nothing else about the widget is ever
-// read or changed. It carries no datasource and no options: whatever the newer widget
+// read or changed. It carries no datasource and no options: whatever the widget
 // binds lives in `raw`, where no hub channel can mistake it for a selector this build
-// understands.
+// understands. `reason` says why it is unresolved (derived at parse time, never stored).
 export interface UnknownWidgetInstance {
   id: string;
   type: UnknownWidgetType;
   layout: WidgetLayout;
   raw: Record<string, unknown>;
+  reason?: UnresolvedWidgetReason;
+  widget?: undefined;
   datasource?: undefined;
   options?: undefined;
 }
 
-export type WidgetInstance = KnownWidgetInstance | UnknownWidgetInstance;
+export type WidgetInstance = KnownWidgetInstance | ExtensionWidgetInstance | UnknownWidgetInstance;
 
 export interface CanvasBackground {
   color?: string | null;

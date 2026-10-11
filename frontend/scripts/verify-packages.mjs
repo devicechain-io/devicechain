@@ -1,7 +1,7 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// Verify the four publishable packages AS TARBALLS — the bytes `npm publish` uploads —
+// Verify the five publishable packages AS TARBALLS — the bytes `npm publish` uploads —
 // rather than as sources, as a workspace, or as a `dist` directory.
 //
 //   node scripts/verify-packages.mjs                 # expects the committed placeholder

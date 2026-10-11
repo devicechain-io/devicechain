@@ -1545,7 +1545,7 @@ jobs:
 
       # 🔴 BEFORE codegen, typecheck, lint and test — not merely before the build.
       # The apps consume the packages' `dist`, not their sources, so every step below
-      # resolves @devicechain/{client,dashboards,widgets} through built artifacts that
+      # resolves @devicechain/{client,dashboards,widget-sdk,widgets} through built artifacts that
       # do not exist in a fresh checkout. (Each app script also depends on this through
       # a `pre*` hook, so the same thing cannot be reached stale by hand; the step is
       # here as well so a build failure is reported as a build failure rather than as a
