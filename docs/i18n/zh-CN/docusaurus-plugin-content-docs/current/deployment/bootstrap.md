@@ -554,7 +554,7 @@ kubectl get pods -A -l cnpg.io/cluster -o wide
 
 ### 服务容量配置 {#service-sizing}
 
-每个后端服务请求 128Mi 内存，上限 256Mi。CPU 按各服务测量结果配置：
+每个后端服务请求 128Mi 内存，上限 256Mi，但 `event-processing` 的上限为 384Mi（这是下限：更高的顶层 `resources.limits.memory`，或该服务自己设置的上限，按原值使用）。CPU 按各服务测量结果配置：
 
 | 服务 | CPU 请求 | CPU 上限 |
 | --- | --- | --- |
@@ -568,6 +568,8 @@ kubectl get pods -A -l cnpg.io/cluster -o wide
 每个 NATS 服务器请求 500m CPU 和 768Mi 内存，内存上限 2Gi，无 CPU 上限；详见[消息代理](#broker-sizing)。
 
 [`--compact`](#--compact) 下，每个后端服务和 NATS 服务器改为请求 25m CPU、64Mi 内存，上限不变。控制台单独配置。
+
+上表中设有各自 CPU 上限的五个服务，还以 `GOGC=400` 运行 Go 垃圾回收器，并把软内存上限（`GOMEMLIMIT`）设为该服务自身内存上限的 75%。在每秒 6,000 个事件时，这使每个事件的 CPU 开销降低 4% 至 18%（`device-management` 和 `event-management` 为 18%），因为回收器运行次数减少到原来的四分之一至十三分之一。软上限让较大的堆留在容器之内：它使回收器更努力地工作，而不是让堆越过上限。`event-processing` 因此有 384Mi，因为该次测试中它的工作集达到 256Mi 中的 174 MiB。把 `functionalAreas.<服务>.gogc` 和 `functionalAreas.<服务>.goMemLimitPercent` 设为 `0`，可对单个服务关闭其中任一项。
 
 前四个服务负责每事件的接收、解析、存储及合并到设备实时状态。`event-processing` 对每个事件执行检测，其上限为测量用量的两倍，见下文。前四个服务的上限针对租户默认每秒 1000 个读数的实时设备流量、每消息一个读数，以及默认安装提高事件持久化参数前持续约每秒 4,000 个事件的处理量配置，见[实测吞吐量](#measured-throughput)。
 

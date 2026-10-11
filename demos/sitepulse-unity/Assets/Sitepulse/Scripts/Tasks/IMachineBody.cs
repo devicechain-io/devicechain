@@ -53,6 +53,20 @@ namespace DeviceChain.Sitepulse.Tasks
         void Attach(TrackPoint point);
 
         /// <summary>
+        /// Where its routine track will have it after <paramref name="seconds"/> more of the track at its own pace (what a machine on its
+        /// track is about to do, which nothing else can know). False when it is not on its track.
+        /// </summary>
+        bool TryTrackPoseAhead(double seconds, out double x, out double z, out double headingDegrees, out bool boomRaised)
+        {
+            x = z = headingDegrees = 0.0;
+            boomRaised = false;
+            return false;
+        }
+
+        /// <summary>A loader's boom is raised (its bucket is over what it is tipping into), so its front is its tyres.</summary>
+        bool BoomRaised => false;
+
+        /// <summary>
         /// How fast its routine track plays, from 0 (held where it is) to 1 (the track's own pace). A track played at less than its own
         /// pace plays less of itself and goes on from where it stood; a body with no track ignores it.
         /// </summary>

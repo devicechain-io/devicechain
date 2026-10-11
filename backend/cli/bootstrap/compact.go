@@ -17,11 +17,11 @@ import "fmt"
 // reports say "compact" when the real variable is "which services were deployed",
 // and we would inherit a works-in-default/breaks-in-compact support matrix.
 //
-// It also deliberately does NOT set GOMEMLIMIT. That was expected to shrink RSS
+// It also deliberately does NOT set GOMEMLIMIT itself. That was expected to shrink RSS
 // and measurably does not (see deploy/helm values.yaml goMemLimitPercent): the
 // steady-state footprint is governed by the live set, which a soft limit cannot go
-// below. Turning it on here would make the compact number rest on a lever with no
-// evidence behind it.
+// below. (The five event-path services carry one anyway, from the chart, with GOGC 400,
+// for the CPU it saves per event; --compact neither adds to that nor removes it.)
 type compactSizing struct {
 	// JetStream per-stream ceilings, in bytes. These are RESERVED UP FRONT at
 	// stream creation, so they are a disk floor rather than a cap on growth —
@@ -128,10 +128,11 @@ type compactSizing struct {
 	// left alone because lowering them shrinks nothing: a lower MEMORY limit
 	// converts memory pressure into OOMKills, and a lower CPU limit throttles.
 	//
-	// (Strictly, "limits do not affect usage" holds because goMemLimitPercent
-	// defaults to 0. The chart CAN derive GOMEMLIMIT from the memory limit — see
-	// _helpers.tpl — so the statement is about today's default, not about limits in
-	// general.)
+	// (Strictly, "limits do not affect usage" holds for the areas that do not set a
+	// goMemLimitPercent. The chart derives GOMEMLIMIT from the memory limit for the
+	// five event-path areas — see _helpers.tpl — so for those a memory limit does
+	// shape the heap's target, and the statement is about the limits --compact leaves
+	// alone, not about limits in general.)
 	//
 	// One tradeoff worth knowing, since it is not free: widening the gap between
 	// request and actual usage moves these pods UP the kubelet's eviction ranking,

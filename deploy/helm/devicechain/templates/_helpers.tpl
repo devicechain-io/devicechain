@@ -806,6 +806,20 @@ Parameters: area (the name, for messages), areaCfg, root.
 {{- end -}}
 {{- $own := deepCopy (get .areaCfg "resources" | default dict) -}}
 {{- $res := mergeOverwrite $base $own -}}
+{{- /* memoryLimitFloor: the chart's own default for a service that needs more than the
+top-level limit, applied only when the operator set no memory limit on the area itself and
+only when there is a merged limit and it is LOWER (no limit stays no limit). A raised top-level limit therefore still reaches the
+area (a plain area-level default would silently beat it), and an area's own limit is the
+operator's word and is never changed. */ -}}
+{{- $floor := get .areaCfg "memoryLimitFloor" | default "" | toString -}}
+{{- if and $floor (not (hasKey (dig "limits" dict $own) "memory")) -}}
+{{- $cur := dig "limits" "memory" "" $res | toString -}}
+{{- if and $cur (lt (include "devicechain.quantityScalar" (dict "dim" "memory" "q" $cur "area" $.area) | float64) (include "devicechain.quantityScalar" (dict "dim" "memory" "q" $floor "area" $.area) | float64)) -}}
+{{- $lims := get $res "limits" | default dict -}}
+{{- $_ := set $lims "memory" $floor -}}
+{{- $_ := set $res "limits" $lims -}}
+{{- end -}}
+{{- end -}}
 {{- range $dim := list "cpu" "memory" -}}
 {{- $req := dig "requests" $dim "" $res | toString -}}
 {{- $lim := dig "limits" $dim "" $res | toString -}}
@@ -906,9 +920,12 @@ against the cgroup while sitting outside the Go heap the limit governs. Aiming
 GOMEMLIMIT at 100% of the container limit would OOMKill rather than collect.
 
 Resolution order: an explicit per-area goMemLimit, then an explicit global one,
-then the derivation. Setting goMemLimitPercent to 0 disables it everywhere and
-restores Go's default behaviour, which is the escape hatch for a service that
-turns out to want an unbounded heap more than a small one.
+then the derivation, whose percentage is the area's own goMemLimitPercent when it
+sets one and the top-level one otherwise. Setting the percentage to 0 (on an area,
+or at the top level for the areas that set none) restores Go's default behaviour,
+which is the escape hatch for a service that turns out to want an unbounded heap
+more than a small one. The five event-path areas ship 75; every other area ships
+nothing and so follows the top level, which is 0.
 */}}
 {{- define "devicechain.goMemLimit" -}}
 {{- $root := .root -}}
@@ -917,7 +934,12 @@ turns out to want an unbounded heap more than a small one.
 {{- if $explicit -}}
 {{- $explicit -}}
 {{- else -}}
+{{- /* An area's own percentage wins, a 0 included: that is how an event-path area (which
+ships 75) turns it off. Otherwise the top-level one applies. */ -}}
 {{- $pct := $root.Values.goMemLimitPercent | default 0 | int -}}
+{{- if hasKey $areaCfg "goMemLimitPercent" -}}
+{{- $pct = get $areaCfg "goMemLimitPercent" | default 0 | int -}}
+{{- end -}}
 {{- $res := include "devicechain.areaResources" (dict "area" .area "areaCfg" $areaCfg "root" $root) | fromYaml -}}
 {{- $limit := dig "limits" "memory" "" $res -}}
 {{- if and (gt $pct 0) $limit -}}
@@ -928,6 +950,23 @@ turns out to want an unbounded heap more than a small one.
 {{- end -}}
 {{- printf "%dMiB" $derived -}}
 {{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+devicechain.goGc resolves GOGC for one functional area, or "" to leave Go's default (100).
+The area's own gogc wins, a 0 included (which turns the setting off for that area);
+otherwise the top-level gogc applies. The five event-path areas ship 400, measured with the
+GOMEMLIMIT that devicechain.goMemLimit derives, which is what keeps a larger heap target
+from passing the container limit: do not raise one without the other.
+*/}}
+{{- define "devicechain.goGc" -}}
+{{- $gc := .root.Values.gogc | default 0 | int -}}
+{{- if hasKey .areaCfg "gogc" -}}
+{{- $gc = get .areaCfg "gogc" | default 0 | int -}}
+{{- end -}}
+{{- if gt $gc 0 -}}
+{{- $gc -}}
 {{- end -}}
 {{- end -}}
 
