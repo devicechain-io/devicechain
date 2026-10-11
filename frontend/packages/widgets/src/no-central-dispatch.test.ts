@@ -59,7 +59,9 @@ function sources(): Array<{ file: string; code: string }> {
   return out;
 }
 
-const quoted = (id: string) => new RegExp(`['"\`]${id.replace(/[-]/g, '\\-')}['"\`]`);
+// Escapes every regex metacharacter (backslash included), not just the `-` today's ids use.
+const escapeRegExp = (s: string) => s.replace(/[\\^$.*+?()[\]{}|/-]/g, '\\$&');
+const quoted = (id: string) => new RegExp(`['"\`]${escapeRegExp(id)}['"\`]`);
 
 // What a widget module may write: its own `builtinWidgetDescriptors[<id>]` lookup.
 const OWN_DESCRIPTOR_LOOKUP = /builtinWidgetDescriptors\[\s*['"][a-z-]+['"]\s*\]/g;
