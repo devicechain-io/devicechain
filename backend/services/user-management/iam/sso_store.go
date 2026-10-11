@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/devicechain-io/dc-microservice/secrets"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
@@ -112,11 +113,24 @@ func (s *Store) IdpConnectionByDomain(ctx context.Context, domain string) (*IdpC
 //     is the only state that cannot be mistaken for something an administrator chose.
 //   - its role mappings, tenant set, domains, identity links and pending link requests are
 //     deleted.
-//
-// The client secret is not touched here — the store does not hold the secret store. The
-// caller removes IdpConnectionSecretRef(c.ID) afterwards.
-func (s *Store) DeleteIdpConnection(ctx context.Context, c *IdpConnection) error {
+//   - its sealed client secret (IdpConnectionSecretRef) is deleted IN THE SAME
+//     TRANSACTION, through secrets.BindTx. The secret and the row are one fact: written as
+//     two commits, a crash between them leaves ciphertext nothing refers to and nothing can
+//     find (the secret store has no listing), and leaving the delete to "the caller" is a
+//     step the first caller to forget it would leak silently. store is therefore required;
+//     a nil one is refused before anything is deleted.
+func (s *Store) DeleteIdpConnection(ctx context.Context, store secrets.SecretStore, c *IdpConnection) error {
+	if store == nil {
+		return errors.New("deleting an identity provider connection needs the secret store its client secret is sealed in")
+	}
 	return s.sys(ctx).Transaction(func(tx *gorm.DB) error {
+		sealed, err := secrets.BindTx(store, tx)
+		if err != nil {
+			return err
+		}
+		if err := sealed.Delete(ctx, IdpConnectionSecretRef(c.ID)); err != nil {
+			return fmt.Errorf("deleting the connection's client secret: %w", err)
+		}
 		if err := tx.Model(&Membership{}).Where("managed_by = ?", c.ID).
 			Update("enabled", false).Error; err != nil {
 			return err

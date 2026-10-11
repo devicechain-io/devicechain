@@ -5,9 +5,13 @@ package iam
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/base64"
 	"testing"
 
+	"github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/rdb"
+	"github.com/devicechain-io/dc-microservice/secrets"
 	"github.com/devicechain-io/dc-user-management/schema"
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/require"
@@ -23,6 +27,15 @@ import (
 // DSN because gorm pools connections and a pragma statement configures only one of them.
 func newSsoStore(t *testing.T) *Store {
 	t.Helper()
+	s, _ := newSsoFixture(t)
+	return s
+}
+
+// newSsoFixture is newSsoStore plus the REAL secret store over the same database — the
+// Postgres-backend store, built through the constructor main uses — so a test can see a
+// connection's sealed client secret written and removed alongside its row.
+func newSsoFixture(t *testing.T) (*Store, secrets.SecretStore) {
+	t.Helper()
 	db, err := gorm.Open(sqlite.Open(
 		"file:"+t.Name()+"?mode=memory&cache=shared&_pragma=foreign_keys(1)"), &gorm.Config{})
 	require.NoError(t, err)
@@ -31,12 +44,19 @@ func newSsoStore(t *testing.T) *Store {
 	for _, m := range schema.Migrations {
 		require.NoErrorf(t, m.Migrate(db), "migration %s", m.ID)
 	}
+	require.NoError(t, secrets.NewSecretStoreSchema().Migrate(db))
 	require.NoError(t, rdb.RegisterTenantScoping(db))
 	require.NoError(t, rdb.RegisterTokenGrammar(db))
 	var fk int
 	require.NoError(t, db.Raw(`PRAGMA foreign_keys`).Scan(&fk).Error)
 	require.Equal(t, 1, fk, "a test of foreign keys on a database not enforcing them proves nothing")
-	return NewStore(&rdb.RdbManager{Database: db})
+	raw := make([]byte, 32)
+	_, err = rand.Read(raw)
+	require.NoError(t, err)
+	sealed, err := secrets.NewFromConfig(context.Background(),
+		config.SecretsConfiguration{RootKey: base64.StdEncoding.EncodeToString(raw)}, db)
+	require.NoError(t, err)
+	return NewStore(&rdb.RdbManager{Database: db}), sealed
 }
 
 func ssoTenant(t *testing.T, s *Store, token string) {
@@ -84,7 +104,7 @@ func TestCreateConnectionDefaultsTheCeilingAndRefusesAnUnknownKind(t *testing.T)
 }
 
 func TestConnectionDeleteDisablesManagedMemberships(t *testing.T) {
-	s := newSsoStore(t)
+	s, sealed := newSsoFixture(t)
 	ctx := context.Background()
 	ssoTenant(t, s, "acme")
 	ssoTenant(t, s, "globex")
@@ -95,7 +115,7 @@ func TestConnectionDeleteDisablesManagedMemberships(t *testing.T) {
 	require.NoError(t, s.sys(ctx).Create(&Membership{IdentityID: person.ID, TenantId: "acme", Enabled: true, ManagedBy: &managed}).Error)
 	require.NoError(t, s.sys(ctx).Create(&Membership{IdentityID: person.ID, TenantId: "globex", Enabled: true}).Error)
 
-	require.NoError(t, s.DeleteIdpConnection(ctx, conn))
+	require.NoError(t, s.DeleteIdpConnection(ctx, sealed, conn))
 
 	m, err := s.MembershipByIdentityTenant(ctx, person.ID, "acme")
 	require.NoError(t, err, "the managed membership must survive the connection: deleting it discards the record")
@@ -110,7 +130,7 @@ func TestConnectionDeleteDisablesManagedMemberships(t *testing.T) {
 }
 
 func TestConnectionDeleteCascadesLinksDomainsMappings(t *testing.T) {
-	s := newSsoStore(t)
+	s, sealed := newSsoFixture(t)
 	ctx := context.Background()
 	ssoTenant(t, s, "acme")
 	conn := ssoConnection(t, s, "okta", IdpKindTenant)
@@ -131,7 +151,7 @@ func TestConnectionDeleteCascadesLinksDomainsMappings(t *testing.T) {
 	require.NoError(t, s.UpsertLinkRequest(ctx, &SsoLinkRequest{ConnectionID: conn.ID, Subject: "sub-2", Email: "q@acme.example"}))
 	require.NoError(t, s.UpsertLinkRequest(ctx, &SsoLinkRequest{ConnectionID: other.ID, Subject: "sub-3", Email: "r@globex.example"}))
 
-	require.NoError(t, s.DeleteIdpConnection(ctx, conn))
+	require.NoError(t, s.DeleteIdpConnection(ctx, sealed, conn))
 
 	for name, model := range map[string]any{
 		"connections": &IdpConnection{}, "tenants": &IdpConnectionTenant{}, "domains": &IdpConnectionDomain{},
@@ -203,7 +223,7 @@ func TestDomainUniqueAcrossConnections(t *testing.T) {
 }
 
 func TestReAddDomainAfterDelete(t *testing.T) {
-	s := newSsoStore(t)
+	s, sealed := newSsoFixture(t)
 	ctx := context.Background()
 	a := ssoConnection(t, s, "okta", IdpKindTenant)
 	b := ssoConnection(t, s, "entra", IdpKindTenant)
@@ -219,7 +239,7 @@ func TestReAddDomainAfterDelete(t *testing.T) {
 	require.NoError(t, err, "a removed domain must be re-addable; a soft delete would keep its unique slot")
 
 	// And the same when the whole connection goes.
-	require.NoError(t, s.DeleteIdpConnection(ctx, b))
+	require.NoError(t, s.DeleteIdpConnection(ctx, sealed, b))
 	_, err = s.AddIdpDomain(ctx, a.ID, "acme.example", "root")
 	require.NoError(t, err)
 
@@ -386,4 +406,110 @@ func TestSameEndpointsIgnoresFetchTime(t *testing.T) {
 	require.True(t, a.SameEndpoints(b))
 	b.TokenEndpoint = "t2"
 	require.False(t, a.SameEndpoints(b))
+}
+
+// TestConnectionDeleteRemovesItsClientSecret: the sealed client secret goes with the row,
+// in the same transaction. The other connection's secret is the control — a delete keyed
+// on the wrong handle, or one that cleared the instance scope, would pass "gone" alone.
+func TestConnectionDeleteRemovesItsClientSecret(t *testing.T) {
+	s, sealed := newSsoFixture(t)
+	ctx := context.Background()
+	conn := ssoConnection(t, s, "okta", IdpKindTenant)
+	other := ssoConnection(t, s, "entra", IdpKindTenant)
+	require.NoError(t, sealed.Put(ctx, IdpConnectionSecretRef(conn.ID), []byte("okta-secret")))
+	require.NoError(t, sealed.Put(ctx, IdpConnectionSecretRef(other.ID), []byte("entra-secret")))
+
+	require.Error(t, s.DeleteIdpConnection(ctx, nil, conn), "no secret store must refuse, not leave the secret behind")
+	_, err := s.IdpConnectionByID(ctx, conn.ID)
+	require.NoError(t, err, "a refused delete must delete nothing")
+
+	require.NoError(t, s.DeleteIdpConnection(ctx, sealed, conn))
+	ok, err := sealed.Exists(ctx, IdpConnectionSecretRef(conn.ID))
+	require.NoError(t, err)
+	require.False(t, ok, "a deleted connection must not leave its client secret sealed in the store")
+	ok, err = sealed.Exists(ctx, IdpConnectionSecretRef(other.ID))
+	require.NoError(t, err)
+	require.True(t, ok, "the other connection's secret is not this delete's to remove")
+
+	// A connection that never had a secret deletes cleanly (the secret delete is idempotent).
+	require.NoError(t, s.DeleteIdpConnection(ctx, sealed, other))
+	require.NoError(t, s.DeleteIdpConnection(ctx, sealed, ssoConnection(t, s, "bare", IdpKindInstance)))
+}
+
+// The connection and identity deletes are guarded TWICE: by the store's explicit statements
+// and by the migration's ON DELETE CASCADE foreign keys. Each layer masks the other in the
+// tests above, so removing either one alone would pass them. These two tests hold each
+// layer on its own.
+
+// TestTheForeignKeysCascadeOnTheirOwn deletes the parents with raw SQL, bypassing the
+// store, so only the migration's foreign keys can remove the children.
+func TestTheForeignKeysCascadeOnTheirOwn(t *testing.T) {
+	s := newSsoStore(t)
+	ctx := context.Background()
+	ssoTenant(t, s, "acme")
+	conn := ssoConnection(t, s, "okta", IdpKindTenant)
+	other := ssoConnection(t, s, "entra", IdpKindTenant)
+	gone := ssoIdentity(t, s, "gone@acme.example")
+	role := &Role{Scope: ScopeTenant, Token: "operator"}
+	require.NoError(t, s.CreateRole(ctx, role))
+	require.NoError(t, s.ReplaceConnectionTenants(ctx, conn, []string{"acme"}))
+	require.NoError(t, s.sys(ctx).Create(&IdpRoleMapping{ConnectionID: conn.ID, TenantId: "acme", GroupValue: "ops", RoleID: role.ID}).Error)
+	_, err := s.AddIdpDomain(ctx, conn.ID, "acme.example", "root")
+	require.NoError(t, err)
+	require.NoError(t, s.UpsertLinkRequest(ctx, &SsoLinkRequest{ConnectionID: conn.ID, Subject: "sub-2", Email: "q@acme.example"}))
+	require.NoError(t, s.CreateIdentityLink(ctx, &IdentityLink{IdentityID: gone.ID, ConnectionID: other.ID, Subject: "sub-gone"}))
+
+	require.NoError(t, s.sys(ctx).Exec(`DELETE FROM iam_identities WHERE id = ?`, gone.ID).Error)
+	require.Zero(t, count(t, s, &IdentityLink{}), "iam_identity_links.identity_id must cascade")
+
+	require.NoError(t, s.sys(ctx).Exec(`DELETE FROM iam_idp_connections WHERE id = ?`, conn.ID).Error)
+	for name, model := range map[string]any{
+		"tenants": &IdpConnectionTenant{}, "domains": &IdpConnectionDomain{},
+		"mappings": &IdpRoleMapping{}, "requests": &SsoLinkRequest{},
+	} {
+		require.Zerof(t, count(t, s, model), "%s must cascade from the connection", name)
+	}
+}
+
+// TestTheStoreDeletesCascadeWithoutForeignKeys runs the store's deletes on a database that
+// is NOT enforcing foreign keys, so only the explicit statements can remove the children.
+func TestTheStoreDeletesCascadeWithoutForeignKeys(t *testing.T) {
+	s, sealed := newSsoFixture(t)
+	ctx := context.Background()
+	ssoTenant(t, s, "acme")
+	conn := ssoConnection(t, s, "okta", IdpKindTenant)
+	other := ssoConnection(t, s, "entra", IdpKindTenant)
+	gone := ssoIdentity(t, s, "gone@acme.example")
+	role := &Role{Scope: ScopeTenant, Token: "operator"}
+	require.NoError(t, s.CreateRole(ctx, role))
+	require.NoError(t, s.ReplaceConnectionTenants(ctx, conn, []string{"acme"}))
+	require.NoError(t, s.sys(ctx).Create(&IdpRoleMapping{ConnectionID: conn.ID, TenantId: "acme", GroupValue: "ops", RoleID: role.ID}).Error)
+	_, err := s.AddIdpDomain(ctx, conn.ID, "acme.example", "root")
+	require.NoError(t, err)
+	require.NoError(t, s.UpsertLinkRequest(ctx, &SsoLinkRequest{ConnectionID: conn.ID, Subject: "sub-2", Email: "q@acme.example"}))
+	require.NoError(t, s.CreateIdentityLink(ctx, &IdentityLink{IdentityID: gone.ID, ConnectionID: other.ID, Subject: "sub-gone"}))
+	require.NoError(t, s.CreateIdentityLink(ctx, &IdentityLink{IdentityID: gone.ID, ConnectionID: conn.ID, Subject: "sub-gone-2"}))
+
+	// One pooled connection, so the pragma below is the one every statement runs under.
+	sqlDB, err := s.sys(ctx).DB()
+	require.NoError(t, err)
+	sqlDB.SetMaxOpenConns(1)
+	require.NoError(t, s.sys(ctx).Exec(`PRAGMA foreign_keys = OFF`).Error)
+	var fk int
+	require.NoError(t, s.sys(ctx).Raw(`PRAGMA foreign_keys`).Scan(&fk).Error)
+	require.Zero(t, fk, "this test is about the explicit deletes; the foreign keys must be off")
+
+	require.NoError(t, s.DeleteIdpConnection(ctx, sealed, conn))
+	for name, model := range map[string]any{
+		"tenants": &IdpConnectionTenant{}, "domains": &IdpConnectionDomain{},
+		"mappings": &IdpRoleMapping{}, "requests": &SsoLinkRequest{},
+	} {
+		require.Zerof(t, count(t, s, model), "%s must be deleted by the store itself", name)
+	}
+	require.EqualValues(t, 1, count(t, s, &IdentityLink{}), "the connection's link goes; the other connection's stays")
+
+	loaded, err := s.IdentityByEmail(ctx, "gone@acme.example")
+	require.NoError(t, err)
+	require.NoError(t, s.DeleteIdentity(ctx, loaded))
+	require.Zero(t, count(t, s, &IdentityLink{}), "DeleteIdentity must remove the links itself")
 }
