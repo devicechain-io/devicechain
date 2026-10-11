@@ -9,6 +9,7 @@ import { describe, expect, it } from 'vitest';
 
 import { parseDashboardDefinition, serializeDefinition, storedDefinition } from './definition';
 import { isBuiltinWidget, parseWidgetRef, unresolvedWidgets, widgetVersionNotice } from './widget-compat';
+import type { ExtensionWidgetInstance } from './types';
 import { createWidgetCatalog } from './widget-catalog';
 import { defineWidgetDescriptor } from './widget-descriptor';
 
@@ -58,6 +59,45 @@ describe('a registered extension widget', () => {
     const twice = serializeDefinition(parseDashboardDefinition(JSON.parse(once), { catalog }));
     expect(twice).toBe(once);
     expect(JSON.parse(once).widgets[0].widget).toEqual({ version: '1.2.0', optionsVersion: 1 });
+  });
+
+  // Fields outside the owned envelope belong to the package or a newer format; a resolved
+  // widget keeps them, in place, so load → save writes the widget back byte-for-byte.
+  it('keeps unknown top-level, metadata and option fields byte-for-byte', () => {
+    const stored = {
+      vendorTop: { a: [1, { b: 2 }] },
+      ...tank({
+        widget: { version: '1.2.0', optionsVersion: 1, publisher: 'acme' },
+        options: { title: 'Tank level', unit: '%', vendorOption: { deep: [true] } },
+      }),
+      trailing: 'x',
+    };
+    const def = parseDashboardDefinition(board([stored]), { catalog });
+    expect(def.widgets[0].type).toBe('acme/tank-level');
+    expect(JSON.stringify(JSON.parse(serializeDefinition(def)).widgets[0])).toBe(JSON.stringify(stored));
+    // ...and through a second parse of the saved document.
+    const again = parseDashboardDefinition(JSON.parse(serializeDefinition(def)), { catalog });
+    expect(serializeDefinition(again)).toBe(serializeDefinition(def));
+    // An editor's spread-update of an owned field leaves them in place.
+    const edited = { ...def, widgets: [{ ...def.widgets[0], options: { title: 'Renamed' } } as ExtensionWidgetInstance] };
+    const written = JSON.parse(serializeDefinition(edited)).widgets[0];
+    expect(written.vendorTop).toEqual(stored.vendorTop);
+    expect(written.trailing).toBe('x');
+    expect(written.options).toEqual({ title: 'Renamed' });
+  });
+
+  it('keeps a stored __proto__ field as a field, not a prototype', () => {
+    const text = JSON.stringify(board([tank()])).replace('"id":"tank-1"', '"id":"tank-1","__proto__":{"polluted":true}');
+    const def = parseDashboardDefinition(JSON.parse(text), { catalog });
+    expect((def.widgets[0] as unknown as { polluted?: boolean }).polluted).toBeUndefined();
+    expect(serializeDefinition(def)).toContain('"__proto__":{"polluted":true}');
+  });
+
+  it('a top-level field the format reserves keeps the widget verbatim as a placeholder', () => {
+    const stored = tank({ raw: { x: 1 } });
+    const def = parseDashboardDefinition(board([stored]), { catalog });
+    expect(def.widgets[0].reason?.code).toBe('invalid-metadata');
+    expect(JSON.stringify(JSON.parse(serializeDefinition(def)).widgets[0])).toBe(JSON.stringify(stored));
   });
 
   // F1: the version is provenance. A different release renders; the editor is told.
@@ -127,6 +167,12 @@ describe('legacy built-ins', () => {
     expect(def.widgets[0]).toEqual(gauge);
     expect(isBuiltinWidget(def.widgets[0])).toBe(true);
     expect(serializeDefinition(def)).toBe(JSON.stringify({ schemaVersion: 1, title: '', canvas: def.canvas, widgets: [gauge], slots: { tank: { type: 'device' } } }));
+  });
+
+  // Deliberately unchanged for built-ins: only the owned envelope survives, as it always has.
+  it('drop unknown top-level fields exactly as before', () => {
+    const def = parseDashboardDefinition(board([{ ...gauge, stale: 1 }]));
+    expect(def.widgets[0]).toEqual(gauge);
   });
 
   it('keep an authored version reference without a catalog', () => {

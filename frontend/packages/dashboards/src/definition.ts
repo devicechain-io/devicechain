@@ -316,7 +316,7 @@ function parseWidget(raw: unknown, index: number, catalog: WidgetCatalog | undef
   if (type === UNKNOWN_WIDGET_TYPE && isRecord(raw.raw)) return reparseUnknownWidget(raw, index, catalog);
 
   const builtin = WIDGET_TYPE_SET.has(type);
-  const reason = unresolvedReason(type, raw.widget, catalog, builtin);
+  const reason = unresolvedReason(type, raw.widget, catalog, builtin) ?? (builtin ? undefined : reservedFieldReason(type, raw));
   if (reason) return parseUnknownWidget(raw, index, reason);
 
   const ref = parseWidgetRef(raw.widget) ?? undefined;
@@ -340,7 +340,45 @@ function parseWidget(raw: unknown, index: number, catalog: WidgetCatalog | undef
   const ds = parseDatasource(raw.datasource, index);
   if (ds) widget.datasource = ds;
   if (isRecord(raw.options)) widget.options = raw.options as Record<string, unknown>;
+  if (!builtin) return withStoredFields(raw, widget as ExtensionWidgetInstance);
   return widget;
+}
+
+// The envelope fields the parser owns on a resolved widget. Everything else a stored widget
+// carries is outside the owned schema.
+const OWNED_WIDGET_KEYS: ReadonlySet<string> = new Set(['id', 'type', 'widget', 'layout', 'datasource', 'options']);
+
+// withStoredFields keeps, on a resolved EXTENSION widget, every stored field the envelope does
+// not own (a package's own top-level additions, extra keys inside `widget`), in the stored key
+// order, so a load/save round trip writes them back byte-for-byte. Owned fields take their
+// parsed (normalized) values. Built-ins are deliberately left as they always were (only the
+// owned envelope survives), so an existing board's saved bytes do not change.
+function withStoredFields(raw: Record<string, unknown>, parsed: ExtensionWidgetInstance): ExtensionWidgetInstance {
+  const owned = parsed as unknown as Record<string, unknown>;
+  const out: Record<string, unknown> = {};
+  // defineProperty, not assignment: a JSON.parse'd `__proto__` key is an own field to keep,
+  // and assigning it would set the prototype instead.
+  const put = (key: string, value: unknown) =>
+    Object.defineProperty(out, key, { value, enumerable: true, writable: true, configurable: true });
+  for (const key of Object.keys(raw)) {
+    if (!OWNED_WIDGET_KEYS.has(key)) put(key, JSON.parse(JSON.stringify(raw[key])) as unknown);
+    else if (key === 'widget') put(key, { ...(raw.widget as Record<string, unknown>), ...parsed.widget });
+    else if (owned[key] !== undefined) put(key, owned[key]);
+  }
+  for (const key of OWNED_WIDGET_KEYS) {
+    if (!Object.prototype.hasOwnProperty.call(out, key) && owned[key] !== undefined) put(key, owned[key]);
+  }
+  return out as unknown as ExtensionWidgetInstance;
+}
+
+// A stored extension widget that uses a field name the parsed model reserves for placeholders
+// cannot be carried on a resolved instance without being mistaken for one, so it is kept
+// verbatim as a placeholder instead of having the field dropped.
+function reservedFieldReason(type: string, raw: Record<string, unknown>): UnresolvedWidgetReason | undefined {
+  const clash = ['raw', 'reason'].find((k) => Object.prototype.hasOwnProperty.call(raw, k));
+  return clash === undefined
+    ? undefined
+    : { code: 'invalid-metadata', message: `"${type}" carries a top-level "${clash}" field, which the dashboard format reserves` };
 }
 
 // The id a stored widget carries, or undefined when it has none worth keeping.

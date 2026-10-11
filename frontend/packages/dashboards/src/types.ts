@@ -247,7 +247,8 @@ export interface ExtensionWidgetInstance {
 // Why a stored widget could not be resolved to an installed implementation.
 //   unregistered     - no registration for the id in the catalog (or the type is unknown)
 //   unversioned      - a registered extension stored without version metadata
-//   invalid-metadata - `widget` is present but malformed
+//   invalid-metadata - `widget` is present but malformed, or an extension widget uses a
+//                      top-level field name the format reserves (`raw`, `reason`)
 //   options-version  - the stored settings shape differs from the installed one
 //   sdk-incompatible - authored against a different SDK contract generation
 export type UnresolvedWidgetCode =
