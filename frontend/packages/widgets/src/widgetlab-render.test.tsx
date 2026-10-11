@@ -9,7 +9,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import type { AlarmRow, CommandRow, KnownWidgetInstance, MeasurementSample } from '@devicechain/dashboards';
-import { parseDashboardDefinition, UNKNOWN_WIDGET_TYPE } from '@devicechain/dashboards';
+import { isBuiltinWidget, parseDashboardDefinition, UNKNOWN_WIDGET_TYPE } from '@devicechain/dashboards';
 import { cleanup, render as rtlRender } from '@testing-library/react';
 import type { ReactElement } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -81,6 +81,7 @@ function board(token: string) {
   const def = parseDashboardDefinition(JSON.parse(readFileSync(join(FIXTURES, `${token}.json`), 'utf8')));
   const widgets: KnownWidgetInstance[] = def.widgets.map((widget) => {
     if (widget.type === UNKNOWN_WIDGET_TYPE) throw new Error(`${token}: ${widget.id} has an unknown widget type`);
+    if (!isBuiltinWidget(widget)) throw new Error(`${token}: ${widget.id} is not a built-in widget`);
     return widget;
   });
   return { ...def, widgets };

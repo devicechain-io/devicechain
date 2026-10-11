@@ -639,7 +639,17 @@ func TestCapturedMessageWithNoAppendTimeIsStillMetered(t *testing.T) {
 // messages as sent in the future. The send time is clamped to now, so a future
 // append time buys at most the burst that was already available.
 func TestFutureAppendTimeCannotMintTokens(t *testing.T) {
-	h := backlogHarness(t, 100, 10)
+	// The limiter's clock is FROZEN. Read from the wall clock, the 1000-message loop
+	// below accrues one token per 10ms of elapsed time at 100/s, so on a loaded host
+	// (or under -race) the run itself earned more than the 2 spare tokens the bound
+	// allows and the test failed for reasons unrelated to the clamp.
+	frozen := time.Now()
+	h := newCaptureHarness(t)
+	limiter := core.NewTenantRateLimiter(core.StaticCeiling(100, 10),
+		core.WithClock(func() time.Time { return frozen }))
+	h.gate = func(_ string, tenant string, sentAt time.Time, _ bool, _ Origin) bool {
+		return limiter.AllowAt(tenant, sentAt)
+	}
 
 	// ADVANCING through the future, not a constant future time. A constant one
 	// accrues nothing after the first call with or without the clamp, so it cannot
@@ -652,7 +662,7 @@ func TestFutureAppendTimeCannotMintTokens(t *testing.T) {
 	}
 	_, _, admitted, _ := h.counts()
 
-	require.LessOrEqual(t, admitted, 12,
+	require.LessOrEqual(t, admitted, 10,
 		"a future send time must be clamped to now, not accrue a day's worth of tokens")
 }
 

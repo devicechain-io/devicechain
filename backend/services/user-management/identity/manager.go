@@ -79,6 +79,9 @@ var errSessionEnded = errors.New("session has ended")
 // an identity token, or an authorization code — is turned back into an identity. It
 // loads the identity by email and refuses (errSessionEnded) when:
 //
+//   - the credential names no sign-in (no sid), or the sign-in's server-side record is
+//     gone (logout, or it ran out) -- see sessionLive. This is checked FIRST and is the
+//     per-sign-in unit; the epoch below is the per-identity one ("sign out everywhere"),
 //   - there is no such identity (deleted; a re-created one is a different row),
 //   - it is disabled,
 //   - its stored epoch is empty, or the credential's epoch is empty, or
@@ -95,7 +98,10 @@ var errSessionEnded = errors.New("session has ended")
 //
 // Callers mint with the RESOLVED row's epoch, not the incoming one. They are equal
 // once this passes; reading it from the row keeps the row the single source.
-func (m *Manager) sessionIdentity(ctx context.Context, email string, epoch auth.SessionEpoch) (*iam.Identity, error) {
+func (m *Manager) sessionIdentity(ctx context.Context, email string, epoch auth.SessionEpoch, sid auth.SessionID) (*iam.Identity, error) {
+	if err := m.sessionLive(sid, email); err != nil {
+		return nil, err
+	}
 	id, err := m.iam.IdentityByEmail(ctx, email)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -423,7 +429,11 @@ func (m *Manager) Login(ctx context.Context, email, password string) (*IdentityA
 	// only ErrInvalidCredentials, the same as every other sign-in failure: this branch
 	// is reached only after the password matched, so a distinct error would tell
 	// whoever sent it that the password was right.
-	tok, err := issuer.IssueIdentity(id.Email, auth.SessionEpoch(id.SessionEpoch), roleTokens(id.SystemRoles), id.SystemAuthorities(), uuid.NewString())
+	sid, err := m.startSession(id.Email)
+	if err != nil {
+		return nil, err
+	}
+	tok, err := issuer.IssueIdentity(id.Email, auth.SessionEpoch(id.SessionEpoch), sid, roleTokens(id.SystemRoles), id.SystemAuthorities(), uuid.NewString())
 	if err != nil {
 		if errors.Is(err, auth.ErrNoSessionEpoch) {
 			log.Error().Str("email", id.Email).
@@ -465,7 +475,7 @@ func (m *Manager) SelectTenant(ctx context.Context, identityToken, tenant string
 	if err != nil {
 		return nil, ErrInvalidToken
 	}
-	id, err := m.sessionIdentity(ctx, claims.Email, claims.SessionEpoch)
+	id, err := m.sessionIdentity(ctx, claims.Email, claims.SessionEpoch, claims.SessionID)
 	if err != nil {
 		if errors.Is(err, errSessionEnded) {
 			return nil, ErrInvalidToken
@@ -500,7 +510,7 @@ func (m *Manager) SelectTenant(ctx context.Context, identityToken, tenant string
 		return nil, err
 	}
 	m.recordAuth(ctx, rdb.AuditOpLogin, id.Email, tenant)
-	return m.issueTenantTokens(tenant, id.Email, auth.SessionEpoch(id.SessionEpoch), roles, authorities, su)
+	return m.issueTenantTokens(tenant, id.Email, auth.SessionEpoch(id.SessionEpoch), claims.SessionID, roles, authorities, su)
 }
 
 // Memberships re-reads the live memberships for the identity a valid identity
@@ -515,7 +525,7 @@ func (m *Manager) Memberships(ctx context.Context, identityToken string) ([]Memb
 	if err != nil {
 		return nil, ErrInvalidToken
 	}
-	id, err := m.sessionIdentity(ctx, claims.Email, claims.SessionEpoch)
+	id, err := m.sessionIdentity(ctx, claims.Email, claims.SessionEpoch, claims.SessionID)
 	if err != nil {
 		if errors.Is(err, errSessionEnded) {
 			return nil, ErrInvalidToken
@@ -530,6 +540,7 @@ func (m *Manager) Memberships(ctx context.Context, identityToken string) ([]Memb
 type IdentitySubject struct {
 	Email        string
 	SessionEpoch auth.SessionEpoch
+	SessionID    auth.SessionID
 }
 
 // IdentitySubject validates an identity-tier token's signature, expiry and type and
@@ -543,7 +554,7 @@ func (m *Manager) IdentitySubject(identityToken string) (IdentitySubject, error)
 	if err != nil {
 		return IdentitySubject{}, ErrInvalidToken
 	}
-	return IdentitySubject{Email: claims.Email, SessionEpoch: claims.SessionEpoch}, nil
+	return IdentitySubject{Email: claims.Email, SessionEpoch: claims.SessionEpoch, SessionID: claims.SessionID}, nil
 }
 
 // CurrentTenant resolves the control-plane tenant record the caller is acting
@@ -797,7 +808,7 @@ func (m *Manager) Refresh(ctx context.Context, refreshToken string) (*TokenPair,
 	rev := entry.Revision()
 
 	// The refresh token's subject is the identity email; the tenant is its claim.
-	id, err := m.sessionIdentity(ctx, claims.Username, claims.SessionEpoch)
+	id, err := m.sessionIdentity(ctx, claims.Username, claims.SessionEpoch, claims.SessionID)
 	if err != nil {
 		return nil, m.refuseRefresh(claims.ID, rev, err)
 	}
@@ -822,7 +833,7 @@ func (m *Manager) Refresh(ctx context.Context, refreshToken string) (*TokenPair,
 		return nil, ErrRefreshUnavailable
 	}
 	m.recordAuth(ctx, rdb.AuditOpRefresh, id.Email, claims.Tenant)
-	return m.issueTenantTokens(claims.Tenant, id.Email, auth.SessionEpoch(id.SessionEpoch), roles, authorities, su)
+	return m.issueTenantTokens(claims.Tenant, id.Email, auth.SessionEpoch(id.SessionEpoch), claims.SessionID, roles, authorities, su)
 }
 
 // refuseRefresh turns a failed re-check of a refresh grant into the error Refresh returns.
@@ -966,7 +977,7 @@ func unionStrings(a, b []string) []string {
 // and records the refresh jti in the server-side store. epoch is the identity's
 // current session epoch, embedded in the refresh token so the next Refresh can check
 // it; the access token does not carry it.
-func (m *Manager) issueTenantTokens(tenant, email string, epoch auth.SessionEpoch, roles, authorities []string, sudo bool) (*TokenPair, error) {
+func (m *Manager) issueTenantTokens(tenant, email string, epoch auth.SessionEpoch, sid auth.SessionID, roles, authorities []string, sudo bool) (*TokenPair, error) {
 	// Every enabled tenant member can view the domain objects by default (the
 	// `viewer` baseline); writes stay role-gated, as does reading a device
 	// credential (see viewerAuthorities). Superusers already hold `*`.
@@ -983,7 +994,7 @@ func (m *Manager) issueTenantTokens(tenant, email string, epoch auth.SessionEpoc
 		return nil, err
 	}
 	refreshJti := uuid.NewString()
-	refresh, err := issuer.IssueRefresh(tenant, email, epoch, roles, authorities, refreshJti)
+	refresh, err := issuer.IssueRefresh(tenant, email, epoch, sid, roles, authorities, refreshJti)
 	if err != nil {
 		return nil, err
 	}

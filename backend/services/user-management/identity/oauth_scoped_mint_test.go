@@ -6,6 +6,7 @@ package identity
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -37,9 +38,27 @@ import (
 type stubRefreshKV struct {
 	nats.KeyValue
 	puts map[string]string
+	// sessions holds the sign-in records (sid.*), apart from puts so a test counting the
+	// refresh jtis it minted is not counting those.
+	sessions map[string]string
+}
+
+func (s *stubRefreshKV) Get(key string) (nats.KeyValueEntry, error) {
+	v, ok := s.sessions[key]
+	if !ok {
+		return nil, nats.ErrKeyNotFound
+	}
+	return &kvEntry{key: key, value: []byte(v)}, nil
 }
 
 func (s *stubRefreshKV) Put(key string, value []byte) (uint64, error) {
+	if strings.HasPrefix(key, sessionKeyPrefix) {
+		if s.sessions == nil {
+			s.sessions = map[string]string{}
+		}
+		s.sessions[key] = string(value)
+		return 1, nil
+	}
 	if s.puts == nil {
 		s.puts = map[string]string{}
 	}
@@ -101,6 +120,15 @@ func (e *mintTestEnv) epochOf(t *testing.T, email string) auth.SessionEpoch {
 	return auth.SessionEpoch(id.SessionEpoch)
 }
 
+// sidOf opens a sign-in record for email, as a login would, and returns its id - what a
+// code or refresh token minted for it would carry.
+func (e *mintTestEnv) sidOf(t *testing.T, email string) auth.SessionID {
+	t.Helper()
+	sid, err := e.m.startSession(email)
+	require.NoError(t, err)
+	return sid
+}
+
 // seedTenant creates an active, enabled tenant the grant path will admit.
 func (e *mintTestEnv) seedTenant(t *testing.T, token string) {
 	t.Helper()
@@ -157,7 +185,7 @@ func (e *mintTestEnv) seedSuperuser(t *testing.T, email string) {
 // access token, read back through the ordinary validator.
 func (e *mintTestEnv) mint(t *testing.T, email, tenant, scope string) *auth.Claims {
 	t.Helper()
-	toks, err := e.m.mintScopedGrant(context.Background(), email, e.epochOf(t, email), tenant, scope, scope,
+	toks, err := e.m.mintScopedGrant(context.Background(), email, e.epochOf(t, email), e.sidOf(t, email), tenant, scope, scope,
 		[]string{"https://mcp.example.com"}, "mcp-client")
 	require.NoError(t, err)
 	require.Equal(t, scope, toks.Scope, "the response must echo the granted scope")
@@ -241,7 +269,7 @@ func TestMintRefusesAnUndefinedScope(t *testing.T) {
 	e.seedTenant(t, "acme")
 	e.seedMember(t, "member@example.com", "acme")
 
-	_, err := e.m.mintScopedGrant(context.Background(), "member@example.com", e.epochOf(t, "member@example.com"), "acme",
+	_, err := e.m.mintScopedGrant(context.Background(), "member@example.com", e.epochOf(t, "member@example.com"), e.sidOf(t, "member@example.com"), "acme",
 		"read-only admin", "read-only admin", nil, "mcp-client")
 	require.Error(t, err)
 	oe, ok := err.(*oauthError)
@@ -259,7 +287,7 @@ func TestRefreshNarrowingKeepsTheGrantOnTheRefreshToken(t *testing.T) {
 	e.seedTenant(t, "acme")
 	e.seedMember(t, "fleet@example.com", "acme", string(auth.LocationRead))
 
-	toks, err := e.m.mintScopedGrant(context.Background(), "fleet@example.com", e.epochOf(t, "fleet@example.com"), "acme",
+	toks, err := e.m.mintScopedGrant(context.Background(), "fleet@example.com", e.epochOf(t, "fleet@example.com"), e.sidOf(t, "fleet@example.com"), "acme",
 		auth.ScopeReadOnly, "read-only location", []string{"https://mcp.example.com"}, "mcp-client")
 	require.NoError(t, err)
 
