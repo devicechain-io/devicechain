@@ -66,7 +66,7 @@ catalog in _helpers.tpl mirrors backend/k8s/functionalarea — keep it in sync a
 
 {{/* A chart-created RWO claim cannot back a consumer running more than one replica (a
      filesystem store is per-pod): fail rather than wedge the second pod on volume attach. */}}
-{{- if and $p.enabled (eq $backend "filesystem") (ne $path "") (empty $p.existingClaim) (not (has "ReadWriteMany" ($p.accessModes | default (list "ReadWriteOnce")))) -}}
+{{- if and $p.enabled (not $p.colocate) (eq $backend "filesystem") (ne $path "") (empty $p.existingClaim) (not (has "ReadWriteMany" ($p.accessModes | default (list "ReadWriteOnce")))) -}}
 {{-   range $a := $mountAreas -}}
 {{-     if has $a $enabledAreas -}}
 {{-       $replicas := get (get ($.Values.functionalAreas | default dict) $a | default dict) "replicas" | default $.Values.replicas -}}
@@ -77,6 +77,13 @@ catalog in _helpers.tpl mirrors backend/k8s/functionalarea — keep it in sync a
 {{-   end -}}
 {{- end -}}
 
+{{/* S3 credentials mean nothing to a filesystem store. The backend is only visible here when the
+     chart authors the instance document; under instance.existingSecret (dcctl) it reads as the
+     default, so the check is skipped there rather than wrong. */}}
+{{- if and (eq (.Values.instance.existingSecret | default "") "") (eq $backend "filesystem") (not (empty ((.Values.blobStorage | default dict).s3 | default dict).credentialsSecret)) -}}
+{{-   fail "blobStorage.s3.credentialsSecret is set but the object store backend is filesystem: S3 credentials apply only to the s3 backend. Remove it, or select instance.config.infrastructure.blob.backend: s3" -}}
+{{- end -}}
+
 {{- if and $p.enabled (eq $backend "filesystem") (ne $path "") (empty $p.existingClaim) -}}
 apiVersion: v1
 kind: PersistentVolumeClaim
@@ -85,10 +92,16 @@ metadata:
   namespace: {{ include "devicechain.instanceNamespace" . }}
   labels:
     {{- include "devicechain.instanceLabels" . | nindent 4 }}
-  {{- with $p.annotations }}
+  {{/* The claim holds every stored logo and artifact, and nothing else has a copy. Helm
+       deletes what leaves its manifest, so a later values change that disables persistence
+       (or switches backend) would delete the data with it; this stops Helm doing so. Delete
+       the claim deliberately with `kubectl -n <instance namespace> delete pvc <name>`. A
+       caller-supplied annotation of the same name wins. */}}
   annotations:
+    helm.sh/resource-policy: keep
+    {{- with $p.annotations }}
     {{- toYaml . | nindent 4 }}
-  {{- end }}
+    {{- end }}
 spec:
   accessModes:
     {{- toYaml ($p.accessModes | default (list "ReadWriteOnce")) | nindent 4 }}

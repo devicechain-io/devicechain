@@ -307,16 +307,26 @@ exports later) go to a pluggable object store, configured under
   (persistence enabled for the `s3` backend, a directory with no volume, or a
   `mountPath` that disagrees with `blob.directory`).
 
-  Switching a live instance from `filesystem` to `s3` sets `persistence.enabled=false`,
-  and Helm then deletes the chart-created PVC (and its stored objects). Migrate the data
-  first, or set `blobStorage.persistence.annotations: {helm.sh/resource-policy: keep}` to
-  retain the claim.
+  The chart-created claim carries `helm.sh/resource-policy: keep`: it holds every stored
+  object and nothing else has a copy, so a values change that disables persistence or switches
+  the backend leaves the claim (and its objects) in place rather than letting Helm delete it.
+  To remove it deliberately, delete the claim yourself:
+  `kubectl -n <instance namespace> delete pvc dci-<instance id>-blob`.
+
+  A `ReadWriteOnce` claim attaches to one node. With more than one pod mounting it, either use
+  `ReadWriteMany` on a class that supports it, or set `blobStorage.persistence.colocate: true`,
+  which schedules every mounting pod onto the same node (a required pod affinity on
+  `kubernetes.io/hostname`). Colocation suits single-node clusters; elsewhere prefer
+  `ReadWriteMany` or the `s3` backend.
 
   For the `s3` backend the access key is never an instance-config value. Name a Secret in
   the instance namespace holding `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` in
   `blobStorage.s3.credentialsSecret` and the chart projects it into the environment of the
-  areas in `blobStorage.mountAreas`; leave it empty to use the pods' own AWS identity (IRSA,
-  an instance profile). `dcctl bootstrap --object-store s3` sets all of this for you.
+  areas in `blobStorage.mountAreas`. The projection is read once, when a container starts, so
+  also set `blobStorage.s3.credentialsChecksum` to a digest of the credentials: it is stamped on
+  those pods, and changing it rolls them onto a rotated key. Leave `credentialsSecret` empty to
+  use the pods' own AWS identity, for example an IAM role bound through
+  `serviceAccount.annotations`. `dcctl bootstrap --object-store s3` sets all of this for you.
 
 ## Zero-downtime upgrades
 
@@ -540,6 +550,7 @@ generated from the schema; do not edit it by hand.
 | `serviceAccount` | object | - | The ServiceAccount the area Deployments run as, in place of the namespace's default one. |
 | `serviceAccount.create` | boolean | `true` | Render a dedicated ServiceAccount for the release. The data-plane services never call the Kubernetes API. |
 | `serviceAccount.name` | string | `""` | ServiceAccount name. Empty uses dc-&lt;instance.id&gt;. |
+| `serviceAccount.annotations` | object | `{}` | Annotations on the ServiceAccount, for an IAM-role-for-service-accounts or workload-identity binding. |
 | `serviceAccount.automountToken` | boolean | `false` | Mount the ServiceAccount API token into the pods. Default false, since the services do not use it. |
 | `networkPolicy` | object | - | Optional egress NetworkPolicy for outbound-connectors, a network-level second layer over the egress guard every tenant connector already dials through. Off by default. It only has effect on a CNI that enforces NetworkPolicy, and traffic it denies is dropped rather than refused, so a missing peer shows up as timeouts. The blocked address space is fixed in the template; the old blocked-range keys are rejected, and additionalAllowedCidrs is the way to permit a destination. |
 | `networkPolicy.enabled` | boolean | `false` | Render the egress NetworkPolicy for outbound-connectors. Check that your CNI enforces policy before treating it as a control. |
@@ -580,12 +591,14 @@ generated from the schema; do not edit it by hand.
 | `frontend.resources` | object | see values.yaml | Container resources for the console, a small static nginx image. |
 | `blobStorage` | object | - | Kubernetes volume wiring for the filesystem object store (instance.config.infrastructure.blob.backend set to filesystem). Creates and mounts the PVC that backs instance.config.infrastructure.blob.directory, which today holds branding logos. Enabling persistence with the s3 backend fails the render. |
 | `blobStorage.s3` | object | - | Credentials for the s3 object store. |
+| `blobStorage.s3.credentialsChecksum` | string | `""` | A digest of the credentials the Secret holds, stamped on the pods that read them so a rotated key rolls the pods (a secretKeyRef is read once, at container start). dcctl sets it. |
 | `blobStorage.s3.credentialsSecret` | string | `""` | Name of a Secret in the instance namespace holding AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY, projected into the environment of every area in mountAreas for the s3 backend. Empty leaves the AWS credential chain to the pod's own identity (IRSA, an instance profile). |
 | `blobStorage.persistence` | object | - | The PersistentVolumeClaim that backs the filesystem object store. |
 | `blobStorage.persistence.enabled` | boolean | `false` | Create a PersistentVolumeClaim for the filesystem store and mount it into the consuming areas. Requires the filesystem backend and a resolved mount path. |
 | `blobStorage.persistence.existingClaim` | string | `""` | Name of a pre-created PVC to use instead of having the chart create one (for example an RWX claim provisioned elsewhere). When set, size, accessModes and storageClass are ignored and no PVC is rendered, but the volume is still mounted into mountAreas. |
 | `blobStorage.persistence.mountPath` | string | `""` | Volume mount path; defaults to blob.directory (must match it). Set only when the instance config is supplied via instance.existingSecret and the chart cannot read blob.directory. |
 | `blobStorage.persistence.accessModes` | array | `["ReadWriteOnce"]` | PVC access modes. ReadWriteOnce suits a single replica; for more than one replica of a consuming area use ReadWriteMany with an RWX-capable storage class, or the s3 backend. |
+| `blobStorage.persistence.colocate` | boolean | `false` | Schedule every pod that mounts the claim onto one node (a required pod affinity on kubernetes.io/hostname), which a ReadWriteOnce claim needs when more than one pod mounts it. For single-node clusters; elsewhere use ReadWriteMany or the s3 backend. |
 | `blobStorage.persistence.size` | string | `"5Gi"` | Requested PVC size. |
 | `blobStorage.persistence.storageClass` | string | `""` | StorageClass for the PVC. Empty uses the cluster default; set an RWX-capable class for multi-replica use; "-" selects no storage class, for a statically provisioned volume. |
 | `blobStorage.persistence.annotations` | object | `{}` | Extra annotations merged onto the PVC (for example a backup policy). |

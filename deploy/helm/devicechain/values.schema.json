@@ -281,6 +281,10 @@
           "type": "string",
           "description": "ServiceAccount name. Empty uses dc-<instance.id>."
         },
+        "annotations": {
+          "type": "object",
+          "description": "Annotations on the ServiceAccount, for an IAM-role-for-service-accounts or workload-identity binding."
+        },
         "automountToken": {
           "type": "boolean",
           "description": "Mount the ServiceAccount API token into the pods. Default false, since the services do not use it."
@@ -492,11 +496,16 @@
         "s3": {
           "type": "object",
           "properties": {
+            "credentialsChecksum": {
+              "type": "string",
+              "description": "A digest of the credentials the Secret holds, stamped on the pods that read them so a rotated key rolls the pods (a secretKeyRef is read once, at container start). dcctl sets it."
+            },
             "credentialsSecret": {
               "type": "string",
               "description": "Name of a Secret in the instance namespace holding AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY, projected into the environment of every area in mountAreas for the s3 backend. Empty leaves the AWS credential chain to the pod's own identity (IRSA, an instance profile)."
             }
           },
+          "additionalProperties": false,
           "description": "Credentials for the s3 object store."
         },
         "persistence": {
@@ -527,6 +536,10 @@
               },
               "minItems": 1,
               "description": "PVC access modes. ReadWriteOnce suits a single replica; for more than one replica of a consuming area use ReadWriteMany with an RWX-capable storage class, or the s3 backend."
+            },
+            "colocate": {
+              "type": "boolean",
+              "description": "Schedule every pod that mounts the claim onto one node (a required pod affinity on kubernetes.io/hostname), which a ReadWriteOnce claim needs when more than one pod mounts it. For single-node clusters; elsewhere use ReadWriteMany or the s3 backend."
             },
             "size": {
               "type": "string",

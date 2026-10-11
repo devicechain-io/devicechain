@@ -30,6 +30,7 @@ volume is provided. The read-only rootfs means the store's directory MUST be a w
 the s3 backend needs no volume, so this stays false there.
 */}}
 {{- $mountBlob := and (has $area $blobMountAreas) (eq $blobBackend "filesystem") (ne $blobPath "") $blobWantVolume }}
+{{- $blobColocate := $blobPersist.colocate | default false }}
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -175,10 +176,20 @@ spec:
         checksum/instance-secret: {{ include "devicechain.instanceConfigChecksum" $root | quote }}
         checksum/microservice-config: {{ include "devicechain.microserviceConfig" $root | sha256sum }}
         checksum/extra-secrets: {{ $root.Values.extraSecrets | default list | toJson | sha256sum }}
+        {{- $blobS3Checksum := (($root.Values.blobStorage | default dict).s3 | default dict).credentialsChecksum | default "" }}
+        {{- if and $blobS3Checksum (has $area $blobMountAreas) }}
+        {{/* The s3 credentials are a secretKeyRef, read once at container start, and the
+        Secret keeps its name when its content changes: without a digest here a rotated key
+        applies cleanly and rolls nothing. */}}
+        checksum/blob-s3-credentials: {{ $blobS3Checksum | quote }}
+        {{- end }}
       labels:
         {{- include "devicechain.areaLabels" (dict "root" $root "area" $area) | nindent 8 }}
         {{- with include "devicechain.eventPathLabel" (dict "areaCfg" $areaCfg) }}
         {{- . | nindent 8 }}
+        {{- end }}
+        {{- if and $mountBlob $blobColocate }}
+        devicechain.io/blob-store: "mounted"
         {{- end }}
     spec:
       {{/*
@@ -187,7 +198,7 @@ spec:
       */}}
       terminationGracePeriodSeconds: {{ $root.Values.terminationGracePeriodSeconds }}
       {{- include "devicechain.nodeLossTolerations" $root | nindent 6 }}
-      {{- with include "devicechain.podAntiAffinity" (dict "areaCfg" $areaCfg "replicas" $replicas "areaLabels" (include "devicechain.areaLabels" (dict "root" $root "area" $area))) }}
+      {{- with include "devicechain.podAntiAffinity" (dict "areaCfg" $areaCfg "replicas" $replicas "colocate" (and $mountBlob $blobColocate) "areaLabels" (include "devicechain.areaLabels" (dict "root" $root "area" $area))) }}
       {{- . | nindent 6 }}
       {{- end }}
       {{- with include "devicechain.eventPathSpread" (dict "areaCfg" $areaCfg) }}
