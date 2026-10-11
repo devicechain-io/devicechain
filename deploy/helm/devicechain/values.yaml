@@ -1843,12 +1843,24 @@ functionalAreas:
       # inferenceBurst: 15               # tokens a tenant may spend back-to-back before the rate binds (~5 drafts)
   update-management:
     # The update-management service: over-the-air update artifacts, their assignment to
-    # devices and the download plane. THIS RELEASE SHIPS THE ARTIFACT CATALOGUE ONLY: a
-    # per-tenant, immutable record of each firmware / software / configuration image, a
-    # GraphQL API to declare and inspect them, and a streaming content upload that verifies
-    # size and digest. Assignment to devices and download are not built yet. It stores the
-    # bytes in the object store (blobStorage), so artifacts cannot be declared until a blob
-    # backend is configured. OPT-IN area: held back from
+    # devices and the download plane. It carries a per-tenant, immutable record of each
+    # firmware / software / configuration image, a GraphQL API to declare, inspect, assign
+    # and cancel them, a streaming content upload that verifies size and digest, and the
+    # download endpoint a device fetches an assigned image from with a short-lived
+    # capability (GET /api/update-management/updates/download/<artifact>?cap=..., rendered on
+    # its own Ingress with the access log OFF, because the capability is in the query string).
+    # Update progress
+    # rides the device-reports channel. It stores the bytes in the object store
+    # (blobStorage), so artifacts cannot be declared until a blob backend is configured.
+    #
+    # Two settings are deliberate decisions, both under `config.updates`:
+    #   allowUnverifiedArtifacts: false   # nothing authenticates who produced an artifact, so
+    #                                     # with this false NO artifact can be assigned; set it
+    #                                     # true on a development instance only
+    #   downloadBaseUrl: ""               # the public URL devices reach this service at, for
+    #                                     # example https://<ingress.host>/api/update-management;
+    #                                     # unset, no device can be given a download capability
+    # OPT-IN area: held back from
     # `default`, shipped by `full`, or named explicitly (enabledFunctionalAreas:
     # [..., update-management]). It hard-depends on device-management (an update targets
     # devices). It opens a pool on the shared relational store, so it counts toward an

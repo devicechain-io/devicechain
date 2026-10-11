@@ -63,3 +63,34 @@ func TestEffectiveCeilingIsClampedOnS3Only(t *testing.T) {
 	cfg.Updates.MaxArtifactBytes = 1 << 20
 	require.Equal(t, int64(1<<20), cfg.EffectiveMaxArtifactBytes("s3"))
 }
+
+func TestUpdatePlaneDefaultsAndBounds(t *testing.T) {
+	cfg := &config.UpdateManagementConfiguration{}
+	require.NoError(t, core.LoadConfiguration([]byte("{}"), cfg))
+	require.False(t, cfg.Updates.AllowUnverifiedArtifacts, "nothing may be assigned until the instance opts in")
+	require.Empty(t, cfg.Updates.DownloadBaseURL)
+	require.Equal(t, config.DefaultMaxConcurrentDownloads, cfg.Updates.MaxConcurrentDownloads)
+	require.Equal(t, 15*60, cfg.Updates.CapabilityTTLSeconds)
+	require.NoError(t, cfg.Policy().Validate(), "every default deadline is positive")
+
+	ok := &config.UpdateManagementConfiguration{}
+	require.NoError(t, core.LoadConfiguration([]byte(`{"updates":{"allowUnverifiedArtifacts":true,
+		"downloadBaseUrl":"https://dc.example.com/api/update-management","capabilityTtlSeconds":60,
+		"deadlines":{"downloadSeconds":120}}}`), ok))
+	require.True(t, ok.Updates.AllowUnverifiedArtifacts)
+	require.EqualValues(t, 120, ok.Policy().Download.Seconds())
+
+	for name, doc := range map[string]string{
+		"a capability that outlives the ceiling": `{"updates":{"capabilityTtlSeconds":901}}`,
+		"a negative capability lifetime":         `{"updates":{"capabilityTtlSeconds":-1}}`,
+		"a negative deadline":                    `{"updates":{"deadlines":{"installSeconds":-5}}}`,
+		"a negative download cap":                `{"updates":{"maxConcurrentDownloads":-1}}`,
+		"a relative base URL":                    `{"updates":{"downloadBaseUrl":"/api/update-management"}}`,
+		"a base URL with a query":                `{"updates":{"downloadBaseUrl":"https://x.example.com/?a=1"}}`,
+		"a base URL with credentials":            `{"updates":{"downloadBaseUrl":"https://u:p@x.example.com/"}}`,
+		"a base URL of the wrong scheme":         `{"updates":{"downloadBaseUrl":"ftp://x.example.com/"}}`,
+		"an unknown deadline":                    `{"updates":{"deadlines":{"rebootSeconds":5}}}`,
+	} {
+		require.Error(t, core.LoadConfiguration([]byte(doc), &config.UpdateManagementConfiguration{}), name)
+	}
+}

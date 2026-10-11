@@ -5,8 +5,13 @@
 package schema
 
 import (
+	"github.com/devicechain-io/dc-microservice/secrets"
 	gormigrate "github.com/go-gormigrate/gormigrate/v2"
 )
+
+// SecretsID is the secret-store migration's frozen ID. The store holds each tenant's download
+// capability key, sealed under the instance root key.
+const SecretsID = "20261011000200"
 
 // Migrations run in slice order (not by ID), so a new migration must be appended last.
 //
@@ -21,4 +26,6 @@ var Migrations = []*gormigrate.Migration{
 	NewBaselineSchema(),
 	NewArtifactsSchema(),
 	NewUploadLeaseSchema(),
+	NewAssignmentsSchema(),
+	secrets.NewSecretStoreSchemaAt(SecretsID),
 }

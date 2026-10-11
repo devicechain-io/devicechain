@@ -77,7 +77,18 @@ authorities do not line up with intuition:
 `sparkplug-ingest` and `lwm2m-ingest` serve no GraphQL at all and are deliberately kept off the
 `/api` router entirely. `event-sources` is routed but answers with a placeholder schema: ingest
 reaches it over the device-plane transports, not this API. `update-management` is routed too: its API is the artifact
-catalogue (declare, inspect and retire update artifacts). The artifact content itself is not sent
+catalogue (declare, inspect and retire update artifacts) and the assignment of an available artifact to a
+device (`assignArtifact`, `cancelUpdate`, `updateAssignment`, `updateAssignments`). An assignment carries
+an update attempt whose state moves from `QUEUED` through `DOWNLOADING`, `VERIFIED`, `UPDATING` and
+`REBOOTING` to `UPDATED`, or to `FAILED`, `TIMED_OUT`, `UNKNOWN` or `CANCELLED`; `UPDATED` is reached only
+when the device reports the target version running, on a new boot when the update needs a reboot. Assigning
+an artifact that nothing has authenticated is refused unless the instance sets
+`updates.allowUnverifiedArtifacts`, which is shown in `updateManagementInfo`. An update left `UNKNOWN`
+(the device went quiet during installation or reboot) blocks a new assignment for that component until the
+device reports what it runs; if it never will, `abandonUnknownUpdate(assignmentToken, reason)` ends the update
+as `CANCELLED` with your reason recorded, journals the change under your name, and tells the device. It does not
+find out what the device runs, which may be either version, so check its inventory before relying on either.
+The artifact content itself is not sent
 through GraphQL: it is uploaded with `PUT /api/update-management/updates/artifacts/{token}/content`,
 authenticated with a tenant access token that holds `artifact:write`. The chart gives that route an Ingress of its own, with the request-body limit set by
 `ingress.uploadMaxBodySize` (default `1g`) and request buffering turned off. Behind any other ingress
@@ -85,6 +96,18 @@ controller set the same two things on that path: for ingress-nginx, `nginx.ingre
 at or above your largest artifact, and `nginx.ingress.kubernetes.io/proxy-request-buffering: "off"`. Without the
 second, nginx reads the whole body to disk before the service sees the request, so the token is not checked
 until the entire image has arrived.
+
+A device fetches an assigned artifact from `GET /api/update-management/updates/download/{artifact}?cap=...`.
+The request carries no tenant credential: `cap` is a capability the platform sent the device over its
+authenticated MQTT session, naming one artifact for one device under one assignment, and it expires within
+fifteen minutes. A device that needs longer asks again and is given a new capability for the same artifact.
+Because `cap` is in the query string, the chart renders this route on an Ingress of its own with the
+ingress-nginx access log turned off; behind any other ingress controller, make sure the query string of
+`/api/update-management/updates/download/` is not written to an access log.
+The endpoint answers `Range` requests with `206`, so an interrupted download resumes where it stopped, and it
+refuses a forged, expired or no-longer-current capability before it reads any of the artifact. Set
+`updates.downloadBaseUrl` to the public URL devices reach the service at (for example
+`https://<ingress host>/api/update-management`); without it no device can be given a capability.
 
 ### Subscriptions over WebSocket {#subscriptions-over-websocket}
 
