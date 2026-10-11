@@ -87,5 +87,18 @@ namespace DeviceChain.Sitepulse.Tests
         }
 
         public void SetTrackRate(double rate) => player.SetRate((float)rate);
+
+        /// <summary>A loader's boom is up (below <see cref="Footprint.LoaderRaisedBoomDegrees"/>) on the frame it is on now.</summary>
+        public bool BoomRaised => Kind == EquipmentKind.Loader && Attached && player.SampleAt(time).P1 < Footprint.LoaderRaisedBoomDegrees;
+
+        public bool TryTrackPoseAhead(double seconds, out double x, out double z, out double headingDegrees, out bool boomRaised)
+        {
+            var f = player.Sample(player.TrackSecondsAt(time) + (float)seconds);
+            x = f.X;
+            z = f.Z;
+            headingDegrees = SiteDefinition.Canonical(f.Heading);
+            boomRaised = Kind == EquipmentKind.Loader && f.P1 < Footprint.LoaderRaisedBoomDegrees;
+            return Attached;
+        }
     }
 }

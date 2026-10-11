@@ -240,7 +240,14 @@
       "type": "integer",
       "minimum": 0,
       "maximum": 99,
-      "description": "GOMEMLIMIT as a percentage of each container's own memory LIMIT. Go derives GOMAXPROCS from the cgroup CPU limit but does NOT derive GOMEMLIMIT from the memory limit. This is a CEILING against an OOMKill during a live-heap spike, not a footprint reduction — measurement found no heap reduction and a GC CPU cost — so it defaults to 0 (off). Capped below 100 deliberately: the cgroup limit also covers goroutine stacks and runtime bookkeeping outside the Go heap, so aiming at the full limit OOMKills instead of collecting.",
+      "description": "GOMEMLIMIT as a percentage of each container's own memory LIMIT. Go derives GOMAXPROCS from the cgroup CPU limit but does NOT derive GOMEMLIMIT from the memory limit. This is a CEILING against an OOMKill during a live-heap spike, not a footprint reduction — measurement found no heap reduction — so it defaults to 0 (off) at the top level. An area's own goMemLimitPercent wins over it, and the five event-path areas ship 75 under functionalAreas. Capped below 100 deliberately: the cgroup limit also covers goroutine stacks and runtime bookkeeping outside the Go heap, so aiming at the full limit OOMKills instead of collecting.",
+      "default": 0
+    },
+    "gogc": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 10000,
+      "description": "GOGC for every area that sets none of its own. 0 (the default) leaves Go's default of 100. The five event-path areas set 400 themselves under functionalAreas.",
       "default": 0
     },
     "goMemLimit": {
@@ -600,6 +607,9 @@
             },
             "additionalProperties": false
           },
+          "goMemLimitPercent": { "type": "integer", "minimum": 0, "maximum": 99, "description": "GOMEMLIMIT as a percentage of this area's own memory LIMIT, overriding the top-level goMemLimitPercent (0 turns it off for this area). The five event-path areas ship 75." },
+          "memoryLimitFloor": { "type": ["string", "number"], "description": "The chart's default memory limit for a service that needs more than the top-level one: used only when the merged limit is lower and the area sets no memory limit of its own. Shipped on event-processing (384Mi)." },
+          "gogc": { "type": "integer", "minimum": 0, "maximum": 10000, "description": "GOGC for this area only, overriding the top-level gogc (0 leaves Go's default of 100). The five event-path areas ship 400." },
           "goMemLimit": {
             "type": "string",
             "description": "GOMEMLIMIT for this area only, overriding the derivation. Use for a service whose working set genuinely differs (e.g. event-processing holds more live state than the CRUD areas)."
