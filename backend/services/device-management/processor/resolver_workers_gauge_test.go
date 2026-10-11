@@ -35,7 +35,7 @@ func TestTheResolverWorkersGaugeReportsThePoolItRuns(t *testing.T) {
 	}
 	iproc := NewInboundEventsProcessor(nmgr.Microservice, &sliceReader{}, resolved, failed,
 		core.NewNoOpLifecycleCallbacks(), instantApi{}, config.AuthModeOptional, time.Minute, metrics,
-		WithResolvers(3))
+		WithResolvers(3), WithSecretTransit(testSecretTransit(t)))
 	if got := iproc.Resolvers(); got != 3 {
 		t.Fatalf("Resolvers() = %d before Initialize, want the configured 3", got)
 	}
@@ -52,6 +52,13 @@ func TestTheResolverWorkersGaugeReportsThePoolItRuns(t *testing.T) {
 	}
 	if got := len(iproc.resolvers); got != 3 {
 		t.Errorf("the pool runs %d resolvers, want 3", got)
+	}
+	// Every resolver opens sealed secrets with the key the processor was given: one
+	// without it would refuse every MQTT password while the rest of the pool passed.
+	for i, r := range iproc.resolvers {
+		if r.SecretTransit == nil || r.SecretTransit != iproc.SecretTransit() {
+			t.Errorf("resolver %d was not given the processor's secret transit key", i)
+		}
 	}
 }
 

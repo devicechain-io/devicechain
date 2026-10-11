@@ -126,6 +126,7 @@ pack() {
   (cd "$FRONTEND" && npm pack \
     --workspace @devicechain/client \
     --workspace @devicechain/dashboards \
+    --workspace @devicechain/widget-sdk \
     --workspace @devicechain/widgets \
     --pack-destination "$WORK/tarballs" >/dev/null)
 
@@ -133,7 +134,7 @@ pack() {
   # tarball, would otherwise be discovered as a confusing install failure later.
   local count
   count="$(find "$WORK/tarballs" -name '*.tgz' -size +8k | wc -l)"
-  [ "$count" -eq 3 ] || fail "expected 3 non-trivial tarballs, found $count in $WORK/tarballs"
+  [ "$count" -eq 4 ] || fail "expected 4 non-trivial tarballs, found $count in $WORK/tarballs"
   say "packed: $(cd "$WORK/tarballs" && echo ./*.tgz)"
 }
 
@@ -161,7 +162,7 @@ materialize() {
 install_arm() {
   local arm="$1"
   say "$arm: installing from the tarballs"
-  # The three tarballs are installed together so the exact-pinned internal peers
+  # The four tarballs are installed together so the exact-pinned internal peers
   # (`0.0.0-dev`) resolve to each other rather than to the registry.
   (cd "$WORK/$arm" && npm install --no-audit --no-fund "$WORK"/tarballs/*.tgz)
 }

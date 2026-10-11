@@ -7,7 +7,7 @@
 // telemetry samples; alarm widgets consume the raised-alarm surface; location widgets
 // read the bound devices' positions. Custom widgets extend these same maps.
 
-import type { WidgetType } from '@devicechain/dashboards';
+import type { WidgetChannel, WidgetType } from '@devicechain/dashboards';
 
 import type { AlarmStreamState, CommandStreamState, LocationStreamState } from './hooks';
 import type { WidgetComponent } from './widget';
@@ -28,7 +28,9 @@ import { TimeSeriesChart } from './widgets/time-series-chart';
 // exhaustive over WidgetType (a new type won't compile without a channel), and the
 // per-channel type subsets are DERIVED from it, so the channel map and the two
 // registries can't drift out of sync.
-export type WidgetChannel = 'measurement' | 'alarm' | 'control' | 'selection' | 'location';
+// WidgetChannel itself is declared once, in @devicechain/dashboards (it also gains `none`
+// there); re-exported so this module's importers are unchanged.
+export type { WidgetChannel };
 
 export const WIDGET_CHANNEL = {
   'timeseries-chart': 'measurement',

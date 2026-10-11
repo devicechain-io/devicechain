@@ -25,6 +25,10 @@ message PUnresolvedEvent {
     // transport is trusted or authentication is disabled.
     optional string credential_type = 9;
     optional string credential_id = 10;
+    // The presented secret SEALED for the hop to the resolver (never as the device sent
+    // it: this message is stored for the stream's retention period). A value that is not
+    // a sealed secret for this credential, such as a plaintext from a message written
+    // before sealing, authenticates nothing.
     optional string credential_secret = 11;
     // Set by an internal ingest source that authenticated the device at the
     // TRANSPORT (LwM2M DTLS-PSK / Sparkplug broker) upstream, so the device

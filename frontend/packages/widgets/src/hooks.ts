@@ -4,21 +4,24 @@
 // React bindings between the imperative DashboardHub / DOM theme and widget state.
 
 import type {
-  AlarmRow,
   AlarmSubscription,
-  CommandRow,
   CommandSubscription,
   DashboardDefinition,
   DatasourceSelector,
   DeviceResolver,
   EntityCandidateLister,
-  LocationSample,
   LocationSubscription,
   MemberResolver,
   MeasurementSample,
   SelectionCandidate,
   SlotBinding,
   WidgetDataSource,
+} from '@devicechain/dashboards';
+import type {
+  AlarmStreamState,
+  CommandStreamState,
+  LocationStreamState,
+  MeasurementStreamState,
 } from '@devicechain/dashboards';
 import {
   bindingsWithoutScopedSlots,
@@ -31,6 +34,10 @@ import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type RefObj
 
 import { useWidgetThemeRoot, useWidgetCandidates, type WidgetCandidates } from './frame';
 import { resolveChartTheme, type ChartTheme } from './theme';
+
+// The channel snapshots moved to @devicechain/dashboards (they are pure data over the hub's
+// row types); re-exported so every import site here keeps resolving.
+export type { AlarmStreamState, CommandStreamState, LocationStreamState, MeasurementStreamState };
 
 // useDashboardHub gives a host ONE live hub per (resolver, authorities) — compared by
 // value, so a re-rendered but equal authorities array keeps the hub — and disposes it when
@@ -196,51 +203,6 @@ export function useCandidates(slot: string | undefined): CandidatesState {
   }, [provider, slot]);
 
   return { ...state, wired };
-}
-
-export interface MeasurementStreamState {
-  // The most recent sample per measurement name (drives cards, gauges, tables).
-  latest: Record<string, MeasurementSample>;
-  // A rolling, chronological window of recent samples (drives the time chart).
-  samples: MeasurementSample[];
-  error: unknown | null;
-}
-
-// The state an alarm widget renders from: the current rows (newest first, capped),
-// the total match count (past the page — drives alarm-count), and load/error flags.
-export interface AlarmStreamState {
-  alarms: AlarmRow[];
-  total: number;
-  loading: boolean;
-  error: unknown | null;
-}
-
-// The state a command widget renders from: the resolved target device (null = unbound,
-// so it can't issue), the recent commands (newest first, capped) with live status, the
-// total count, and load/error flags.
-export interface CommandStreamState {
-  deviceToken: string | null;
-  commands: CommandRow[];
-  total: number;
-  loading: boolean;
-  error: unknown | null;
-}
-
-// The state a map widget renders from: the located devices' positions, the device
-// tokens the selector resolved to (a never-located device has no position, so the two
-// lists differ), whether the viewer was REFUSED, and load/error flags.
-//
-// 🔴 `forbidden` is a field of its own and not an `error`. `location:read` is
-// deliberately outside the read-only viewer baseline, so being refused is the ordinary
-// case for an ordinary member — an error state would show an outage where the platform
-// is working exactly as designed, and an empty `locations` would blame the devices for
-// a fact about the caller.
-export interface LocationStreamState {
-  locations: LocationSample[];
-  deviceTokens: string[];
-  forbidden: boolean;
-  loading: boolean;
-  error: unknown | null;
 }
 
 export interface MeasurementStreamOptions {

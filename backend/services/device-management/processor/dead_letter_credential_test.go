@@ -32,10 +32,12 @@ const (
 func credentialLocationEvent() *esmodel.UnresolvedEvent {
 	event := buildLocationsEvent()
 	ctype := string(dmodel.CredentialMqttBasic)
-	cid, secret := fixtureCredentialId, fixtureCredentialSecret
+	// The stream only ever carries the secret sealed. The marker rides inside the sealed
+	// value so a sink that echoed the field would still trip the NotContains checks.
+	cid, sealed := fixtureCredentialId, "dcs1$00000000$"+fixtureCredentialSecret
 	event.CredentialType = &ctype
 	event.CredentialId = &cid
-	event.CredentialSecret = &secret
+	event.SealedCredentialSecret = &sealed
 	return event
 }
 
@@ -86,6 +88,7 @@ func (suite *InboundEventsProcessorTestSuite) TestDeadLetteredEventCarriesNoPres
 	assert.Nil(suite.T(), archived.CredentialType, "the archived event must not retain the presented credential type")
 	assert.Nil(suite.T(), archived.CredentialId, "the archived event must not retain the presented credential id")
 	assert.Nil(suite.T(), archived.CredentialSecret, "the archived event must not retain the presented credential secret")
+	assert.Nil(suite.T(), archived.SealedCredentialSecret, "nor the sealed form of it")
 	// The whole record, not just the decoded fields: nothing anywhere in the stored
 	// bytes carries the material, however a future encoding chooses to lay it out.
 	assert.NotContains(suite.T(), string(item.event.Payload), fixtureCredentialId)
