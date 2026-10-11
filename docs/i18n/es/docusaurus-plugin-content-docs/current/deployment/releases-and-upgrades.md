@@ -3775,6 +3775,14 @@ No hay que hacer nada.
 
 Lo que cambia la versión posterior a `v0.19.0`, recogido a medida que llega.
 
+#### Cerrar sesión ahora termina la sesión en el servidor, y todos inician sesión de nuevo una vez {#next-upgrade-server-side-logout}
+
+Cerrar sesión en la consola o en la aplicación de paneles incrustada solo borraba el navegador: el token de actualización seguía siendo válido hasta 7 días, y el token de inicio de sesión que conserva la consola aún podía iniciar una sesión nueva durante hasta 15 minutos. Una nueva mutación `logout` termina el inicio de sesión en el servidor. Desde ese momento se rechazan los intercambios de ese inicio de sesión: sus tokens de actualización ya no se renuevan, en ningún inquilino, su token de inicio de sesión ya no puede elegir un inquilino, y una concesión OAuth autorizada durante ese inicio de sesión ya no se renueva. La página de autorización de MCP inicia sesión por su cuenta, así que cerrar sesión en la consola no termina una concesión hecha allí; termina cuando caduca ese inicio de sesión (7 días por defecto). Los demás inicios de sesión de la misma cuenta no se ven afectados. Los tokens de acceso y los tokens de inicio de sesión ya emitidos, también en la API de administración, no se pueden revocar y siguen siendo válidos hasta que caducan, en un plazo de 15 minutos. Si no se puede contactar con el servidor al cerrar sesión, la aplicación cierra la sesión localmente igualmente e informa de que no se pudo terminar la sesión del servidor.
+
+Cada inicio de sesión es ahora un registro que dura lo mismo que un token de actualización (7 días por defecto), de modo que una sesión que se renueva continuamente termina 7 días después del inicio de sesión y el usuario vuelve a iniciar sesión. Eso incluye una concesión OAuth, como la de un agente MCP: termina 7 días después del inicio de sesión en la página de autorización, y el cliente se autoriza de nuevo.
+
+Los tokens emitidos antes de la actualización no tienen registro de inicio de sesión y se rechazan, por lo que **todos inician sesión de nuevo una vez**: las sesiones de la consola, de la aplicación de paneles, del SDK y de OAuth terminan en su siguiente renovación, dentro de los 15 minutos posteriores a la actualización salvo que hayas cambiado la vida del token de acceso. Los clientes OAuth, como los agentes MCP, se autorizan de nuevo. No hay que hacer nada más.
+
 #### Los eventos que llevan una contraseña de dispositivo en el cuerpo se rechazan mientras conviven versiones {#next-upgrade-body-password}
 
 Desde esta versión, `event-sources` y `device-management` se pasan en otra forma la contraseña de

@@ -108,6 +108,19 @@ func WithUnresolvedAdmissions(count func(CeilingSource)) TenantRateLimiterOption
 	return func(l *TenantRateLimiter) { l.unresolved = count }
 }
 
+// WithClock replaces the limiter's notion of "now" (time.Now by default). Admission
+// clamps a send time to now and the idle sweep measures against it, so a caller that
+// asserts on how many tokens a run of admissions was granted cannot let the wall clock
+// keep accruing underneath it: on a loaded host the run takes long enough to earn extra
+// tokens. A nil clock is ignored.
+func WithClock(now func() time.Time) TenantRateLimiterOption {
+	return func(l *TenantRateLimiter) {
+		if now != nil {
+			l.now = now
+		}
+	}
+}
+
 // WithOverflowAdmissions counts every admission served by the shared overflow bucket
 // (see AllowUntrusted).
 func WithOverflowAdmissions(c prometheus.Counter) TenantRateLimiterOption {

@@ -435,3 +435,48 @@ func TestStoreMutationsAuditByConstruction(t *testing.T) {
 		}
 	}
 }
+
+// CreateIfAbsent must create once and never replace: of two writers the first wins, and the
+// loser sees false and reads the winner. Put, an upsert, would hand the second writer the row.
+func TestCreateIfAbsentNeverOverwrites(t *testing.T) {
+	db := newStoreDB(t)
+	s := NewStore(db, newTestKP(t))
+	ctx := context.Background()
+	for _, ref := range []SecretRef{tenantRef("acme", "k"), instanceRef("k")} {
+		created, err := CreateIfAbsent(ctx, s, ref, []byte("first"))
+		if err != nil || !created {
+			t.Fatalf("%v: first create = (%v, %v), want (true, nil)", ref, created, err)
+		}
+		created, err = CreateIfAbsent(ctx, s, ref, []byte("second"))
+		if err != nil || created {
+			t.Fatalf("%v: second create = (%v, %v), want (false, nil)", ref, created, err)
+		}
+		got, err := s.Resolve(ctx, ref)
+		if err != nil || !bytes.Equal(got, []byte("first")) {
+			t.Fatalf("%v: resolved %q (%v), want the first value kept", ref, got, err)
+		}
+	}
+	// The same name under another tenant is another handle.
+	if created, err := CreateIfAbsent(ctx, s, tenantRef("globex", "k"), []byte("g")); err != nil || !created {
+		t.Fatalf("another tenant's handle was treated as taken: (%v, %v)", created, err)
+	}
+	// A deleted secret frees its handle.
+	if err := s.Delete(ctx, tenantRef("acme", "k")); err != nil {
+		t.Fatal(err)
+	}
+	if created, err := CreateIfAbsent(ctx, s, tenantRef("acme", "k"), []byte("again")); err != nil || !created {
+		t.Fatalf("a deleted handle was not free: (%v, %v)", created, err)
+	}
+	if _, err := CreateIfAbsent(ctx, s, SecretRef{Scope: ScopeTenant, Name: "x"}, []byte("v")); err == nil {
+		t.Fatal("a malformed ref was accepted")
+	}
+}
+
+type noCreator struct{ SecretStore }
+
+func TestCreateIfAbsentRefusesAStoreThatCannotDoIt(t *testing.T) {
+	_, err := CreateIfAbsent(context.Background(), noCreator{newTestStore(t)}, tenantRef("acme", "k"), []byte("v"))
+	if err == nil {
+		t.Fatal("a store without the capability silently fell back")
+	}
+}

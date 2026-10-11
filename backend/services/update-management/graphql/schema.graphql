@@ -4,7 +4,9 @@
 # The update-management data plane: the per-tenant catalogue of update artifacts (firmware,
 # software and configuration images). An artifact is declared here, its bytes are uploaded
 # to the content endpoint PUT /updates/artifacts/{token}/content, and it is then AVAILABLE.
-# Artifacts are immutable once available.
+# Artifacts are immutable once available. An available artifact is assigned to a device, which
+# downloads it through a short-lived grant and reports its progress; the platform tracks each
+# update attempt through to the running version.
 schema {
     query: Query
     mutation: Mutation
@@ -24,6 +26,12 @@ type SearchResultsPagination {
 type ServiceInfo {
     """The functional area this service is deployed as."""
     area: String!
+    """
+    Whether this instance lets an UNVERIFIED artifact be assigned (updates.allowUnverifiedArtifacts).
+    Every artifact is UNVERIFIED today, so false means nothing can be assigned. True is a
+    development setting: it is shown here so an instance running with it can be seen to be.
+    """
+    allowUnverifiedArtifacts: Boolean!
 }
 
 """What an update artifact is."""
@@ -141,6 +149,124 @@ type ArtifactSearchResults {
     pagination: SearchResultsPagination!
 }
 
+"""Where one update attempt is. The platform maps what the device reports to these states."""
+enum UpdateState {
+    """The platform created the attempt and the device has not reported."""
+    QUEUED
+    """The device acknowledged the assignment."""
+    INITIATED
+    """The device is downloading the artifact."""
+    DOWNLOADING
+    """The device holds all the bytes."""
+    DOWNLOADED
+    """The bytes the device holds hash to the artifact's digest. This is integrity only: it does not say who produced them."""
+    VERIFIED
+    """The device is installing."""
+    UPDATING
+    """The device is rebooting into the new version."""
+    REBOOTING
+    """The device is running the target version. Reached only on confirmation evidence: the version, and a new boot when the artifact needs one."""
+    UPDATED
+    """The device reported a failure, or came back on the wrong version."""
+    FAILED
+    """A phase deadline passed before installation was reported started."""
+    TIMED_OUT
+    """A phase deadline passed during installation or reboot. The attempt waits for evidence and is neither failed nor succeeded."""
+    UNKNOWN
+    """The update was cancelled before installation began."""
+    CANCELLED
+}
+
+"""Download progress an attempt last reported, in bytes."""
+type UpdateProgress {
+    """Bytes the device holds, as a decimal string."""
+    bytes: String!
+    """Total bytes, as a decimal string; 0 when the device did not say."""
+    total: String!
+}
+
+"""Why an attempt failed or timed out."""
+type UpdateFailure {
+    """The stage the attempt was in, empty when the failure has no device stage."""
+    stage: String!
+    """A machine-readable code: the device's own, or DEADLINE or NOT_RUNNING_TARGET when the platform decided."""
+    code: String!
+    """The device's human-readable detail."""
+    detail: String!
+    """True when the platform decided, rather than the device reporting."""
+    platform: Boolean!
+}
+
+"""One try at moving one component of one device to an assignment's artifact."""
+type UpdateAttempt {
+    """The attempt's token, the attemptId on the wire."""
+    token: String!
+    """Where the attempt is."""
+    state: UpdateState!
+    """The version the artifact installs."""
+    targetVersion: String!
+    """The digest the device must verify."""
+    targetDigest: String!
+    """Whether the update needs a reboot to take effect, in which case UPDATED needs a boot other than the install boot."""
+    requiresReboot: Boolean!
+    """When the platform last accepted a report from the device, or created the attempt."""
+    lastReportAt: String
+    """The last download progress reported; null when none was."""
+    progress: UpdateProgress
+    """Why the attempt failed or timed out; null otherwise."""
+    failure: UpdateFailure
+    """True once a cancel was requested and the device has not yet confirmed it."""
+    cancelRequested: Boolean!
+    """True when the attempt left UNKNOWN on a device's evidence."""
+    reconciled: Boolean!
+}
+
+"""A decision that a device should install an artifact, with the attempt that carries it out."""
+type UpdateAssignment {
+    """Internal identifier."""
+    id: ID!
+    """When the artifact was assigned, as an RFC 3339 timestamp."""
+    createdAt: String
+    """The assignment's token, the assignmentId on the wire."""
+    token: String!
+    """The device the artifact was assigned to."""
+    deviceToken: String!
+    """The component being updated."""
+    component: String!
+    """The artifact being installed."""
+    artifact: Artifact!
+    """Who assigned it."""
+    actor: String
+    """When a newer assignment replaced this one; null while it is the device's current assignment."""
+    supersededAt: String
+    """True while this is the device's current assignment for the component."""
+    current: Boolean!
+    """The attempt that carries the assignment out."""
+    attempt: UpdateAttempt!
+}
+
+"""Criteria for searching update assignments. Every filter is optional."""
+input UpdateAssignmentSearchCriteria {
+    """Zero-based page number."""
+    pageNumber: Int!
+    """Records per page."""
+    pageSize: Int!
+    """Only this device's assignments."""
+    deviceToken: String
+    """Only this component's assignments."""
+    component: String
+    """Only each device's current assignment, not the superseded history."""
+    currentOnly: Boolean
+}
+
+"""A page of update assignments."""
+type UpdateAssignmentSearchResults {
+    """The assignments on this page, newest first."""
+    results: [UpdateAssignment!]!
+    """Pagination info for the search."""
+    pagination: SearchResultsPagination!
+}
+
 """The update-management read operations."""
 type Query {
     """Non-sensitive service identity (the deployed functional area)."""
@@ -159,6 +285,20 @@ type Query {
         """
         criteria: ArtifactSearchCriteria!
     ): ArtifactSearchResults!
+    """Look up an update assignment by token. Requires artifact:read. Null when there is none in the caller's tenant."""
+    updateAssignment(
+        """
+        The token of the update assignment to look up.
+        """
+        token: String!
+    ): UpdateAssignment
+    """Search the tenant's update assignments, newest first. Requires artifact:read."""
+    updateAssignments(
+        """
+        The filters and page to search with.
+        """
+        criteria: UpdateAssignmentSearchCriteria!
+    ): UpdateAssignmentSearchResults!
 }
 
 """The update-management write operations."""
@@ -184,4 +324,50 @@ type Mutation {
         """
         token: String!
     ): Artifact!
+    """
+    Tell a device to install an AVAILABLE artifact. Requires artifact:write. The device must exist and its
+    profile must be on the artifact's compatible list, and an UNVERIFIED artifact is refused unless the
+    instance allows it. A device works toward one target per component: assigning while its previous
+    update is still live is refused until that is cancelled, assigning the same artifact again returns
+    the same assignment, and assigning after the previous update finished supersedes it (the history is kept).
+    """
+    assignArtifact(
+        """
+        The token of the device to update.
+        """
+        deviceToken: String!
+        """
+        The token of the AVAILABLE artifact the device should install.
+        """
+        artifactToken: String!
+    ): UpdateAssignment!
+    """
+    Cancel an update. Requires artifact:write. A queued update is cancelled at once; before installation the
+    request is recorded and completes when the device confirms; from installation on it is refused because it
+    cannot be recalled. The device is told in every accepted case.
+    """
+    cancelUpdate(
+        """
+        The token of the update assignment to cancel.
+        """
+        assignmentToken: String!
+    ): UpdateAssignment!
+    """
+    Stop waiting for an update whose outcome is UNKNOWN. Requires artifact:write. This is an explicit
+    operator decision, separate from cancelUpdate (which refuses an UNKNOWN update because the device may
+    have installed it): the update ends CANCELLED, the required reason is stored on it, the change is
+    journaled under the caller, and the device is sent a cancel. It frees the component for a new
+    assignment. It does not find out what the device runs, and the device may be on either version, so check
+    its inventory before relying on either.
+    """
+    abandonUnknownUpdate(
+        """
+        The token of the UNKNOWN update assignment to abandon.
+        """
+        assignmentToken: String!
+        """
+        Why the update is being abandoned. Required, and kept on the update.
+        """
+        reason: String!
+    ): UpdateAssignment!
 }

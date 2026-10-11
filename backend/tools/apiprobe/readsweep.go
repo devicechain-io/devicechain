@@ -530,6 +530,9 @@ var sweepTokenArgs = map[string]string{
 // are different facts, and collapsing them into silence is how a hole becomes invisible.
 // A reader scanning the sweep's output sees each one printed, with its sentence.
 var sweepExemptions = map[string]string{
+	"update-management.updateAssignment": "an assignment is addressed by a token the platform mints when " +
+		"the artifact is assigned, so the sweep has no value to supply; the update-assignment entity " +
+		"reads the SAME door back by the token its receipt recorded, and updateAssignments is swept",
 	"device-management.previewSelector": "an authoring preview: it evaluates a selector expression " +
 		"the CALLER writes, so there is no stored row for the drill to reach through it",
 	"device-management.validateCommandEnqueue": "a pre-flight gate over a command the CALLER is about " +

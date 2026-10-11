@@ -309,6 +309,7 @@ func TestEveryStreamDeclaresItsOwners(t *testing.T) {
 		"command-delivery": true, "notification-management": true,
 		"event-processing": true, "outbound-connectors": true, "mcp": true,
 		"ai-inference": true, "sparkplug-ingest": true, "lwm2m-ingest": true,
+		"update-management": true,
 	}
 	for _, st := range streams.All {
 		if len(st.Areas) == 0 {

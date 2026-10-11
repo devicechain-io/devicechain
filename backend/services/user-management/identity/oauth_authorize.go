@@ -157,6 +157,7 @@ func (m *Manager) IssueAuthorizationCode(ctx context.Context, client *iam.OAuthC
 		CodeChallenge: p.CodeChallenge,
 		Email:         id.Email,
 		SessionEpoch:  auth.SessionEpoch(id.SessionEpoch),
+		SessionID:     subject.SessionID,
 		Tenant:        tenant,
 		Scope:         p.Scope,
 	}
@@ -183,7 +184,7 @@ func (m *Manager) assertTenantAccess(ctx context.Context, subject IdentitySubjec
 	if err := core.ValidateToken(tenant); err != nil {
 		return nil, errTenantAccessDenied
 	}
-	id, err := m.sessionIdentity(ctx, subject.Email, subject.SessionEpoch)
+	id, err := m.sessionIdentity(ctx, subject.Email, subject.SessionEpoch, subject.SessionID)
 	if err != nil {
 		if errors.Is(err, errSessionEnded) {
 			return nil, ErrInvalidToken

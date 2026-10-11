@@ -10,5 +10,6 @@
   "signIn": "Iniciar sesión",
   "signInSubtitle": "Inicia sesión en la consola de gestión",
   "signInUnavailable": "El inicio de sesión no está disponible temporalmente. Vuelve a intentarlo en breve.",
+  "signOutFailed": "Se cerró la sesión en este dispositivo, pero el servidor no pudo finalizarla. Si es un equipo compartido, inicia y cierra sesión de nuevo.",
   "tooManyAttempts": "Demasiados intentos fallidos de inicio de sesión para esta cuenta. Espera un momento y vuelve a intentarlo."
 }

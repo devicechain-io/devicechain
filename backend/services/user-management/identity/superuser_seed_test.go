@@ -123,7 +123,7 @@ func TestTheSuperuserIsSeededFromTheSuppliedPassword(t *testing.T) {
 	f := newSeedFixture(t)
 	m := f.manager("minted-by-dcctl")
 	ctx := context.Background()
-	require.NoError(t, m.Initialize(ctx, nil, nil))
+	require.NoError(t, m.Initialize(ctx, &stubRefreshKV{}, nil))
 	require.Equal(t, int64(1), f.identities(t))
 
 	res, err := m.Login(ctx, "superuser@devicechain.local", "minted-by-dcctl")
@@ -143,10 +143,10 @@ func TestTheSuperuserIsSeededFromTheSuppliedPassword(t *testing.T) {
 func TestAnExistingSuperuserNeedsNoSeedPassword(t *testing.T) {
 	f := newSeedFixture(t)
 	ctx := context.Background()
-	require.NoError(t, f.manager("the-first-one").Initialize(ctx, nil, nil))
+	require.NoError(t, f.manager("the-first-one").Initialize(ctx, &stubRefreshKV{}, nil))
 
 	restarted := f.manager("")
-	require.NoError(t, restarted.Initialize(ctx, nil, nil), "a restart over a seeded table must not need the seed password")
+	require.NoError(t, restarted.Initialize(ctx, &stubRefreshKV{}, nil), "a restart over a seeded table must not need the seed password")
 	require.Equal(t, int64(1), f.identities(t))
 	_, err := restarted.Login(ctx, "superuser@devicechain.local", "the-first-one")
 	require.NoError(t, err, "the existing superuser's password must be untouched")
@@ -154,7 +154,7 @@ func TestAnExistingSuperuserNeedsNoSeedPassword(t *testing.T) {
 	// ...and a DIFFERENT seed password on a later start changes nothing either: the seed
 	// is a first-start input, not a way to reset the superuser.
 	again := f.manager("a-different-one")
-	require.NoError(t, again.Initialize(ctx, nil, nil))
+	require.NoError(t, again.Initialize(ctx, &stubRefreshKV{}, nil))
 	_, err = again.Login(ctx, "superuser@devicechain.local", "a-different-one")
 	require.True(t, errors.Is(err, ErrInvalidCredentials), "a later seed password must not reach an existing superuser: %v", err)
 }
