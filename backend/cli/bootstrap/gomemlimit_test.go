@@ -31,6 +31,7 @@ type renderedContainer struct {
 	area        string
 	memoryLimit string
 	goMemLimit  string // "" when the env var was not rendered
+	gogc        string // "" when GOGC was not rendered
 	// requests/limits as rendered, for the compact preset's scheduling assertions
 	// (compact_test.go). Kept here so both tests read one rendering of the pod spec
 	// rather than each modelling the chart's resource block separately.
@@ -139,6 +140,9 @@ func containersOf(t *testing.T, manifest string) []renderedContainer {
 			for _, e := range c.Env {
 				if e.Name == "GOMEMLIMIT" {
 					rc.goMemLimit = e.Value
+				}
+				if e.Name == "GOGC" {
+					rc.gogc = e.Value
 				}
 			}
 			out = append(out, rc)
@@ -294,11 +298,35 @@ func TestGoMemLimitStaysBelowTheContainerLimit(t *testing.T) {
 // must actually win. Both are escape hatches, and an escape hatch that quietly
 // does nothing is worse than not offering one.
 func TestGoMemLimitEscapeHatches(t *testing.T) {
-	t.Run("percent 0 removes it everywhere", func(t *testing.T) {
+	t.Run("percent 0 removes it from every area that sets none of its own", func(t *testing.T) {
 		for _, c := range renderContainers(t, map[string]interface{}{"goMemLimitPercent": 0}) {
+			if eventPathAreas[c.area] {
+				continue // ships its own 75; the next case turns that off
+			}
 			if c.goMemLimit != "" {
 				t.Errorf("%s still carries GOMEMLIMIT=%s after disabling the derivation",
 					c.area, c.goMemLimit)
+			}
+		}
+	})
+
+	t.Run("an event-path area's own 0 turns its GOMEMLIMIT and GOGC off, and only its own", func(t *testing.T) {
+		got := byArea(t, renderContainers(t, map[string]interface{}{
+			"functionalAreas": map[string]interface{}{
+				"device-management": map[string]interface{}{"goMemLimitPercent": 0, "gogc": 0},
+			},
+		}))
+		if c := got["device-management"]; c.goMemLimit != "" || c.gogc != "" {
+			t.Errorf("device-management carries GOMEMLIMIT=%q GOGC=%q after turning both off",
+				c.goMemLimit, c.gogc)
+		}
+		for area := range eventPathAreas {
+			if area == "device-management" {
+				continue
+			}
+			if c := got[area]; c.goMemLimit == "" || c.gogc != "400" {
+				t.Errorf("%s lost its shipped tuning (GOMEMLIMIT=%q GOGC=%q) when device-management turned its own off",
+					area, c.goMemLimit, c.gogc)
 			}
 		}
 	})
@@ -439,25 +467,109 @@ func TestSchemaRejectsAGoMemLimitPercentThatWouldOOMKill(t *testing.T) {
 	}
 }
 
-// The shipped default must leave Go alone.
+// eventPathAreas are the five areas that ship Go runtime tuning: GOGC 400 and a GOMEMLIMIT at
+// 75% of their own memory limit. They are the areas that set eventPathSpread.
+var eventPathAreas = map[string]bool{
+	"device-management": true, "event-management": true, "device-state": true,
+	"event-sources": true, "event-processing": true,
+}
+
+// 🔑 THE SHIPPED DEFAULT TUNES THE FIVE EVENT-PATH AREAS AND LEAVES GO ALONE EVERYWHERE ELSE.
 //
-// This is the assertion that keeps the measurement honest. GOMEMLIMIT was expected
-// to shrink the footprint and did not: across four workload shapes in a limited
-// container it produced no reduction in heap_sys and cost GC CPU, because
-// steady-state memory is governed by the live set and a soft limit cannot go below
-// it. What it offers is a ceiling against an OOMKill during a live-heap spike,
-// which is a survivability property rather than a footprint one — worth having,
-// but not worth turning on by default until it is shown to be worth its GC cost on
-// real services under real load.
-//
-// So the mechanism ships ready and inert. If someone later flips the default
-// without that evidence, this test is what makes them say so out loud.
-func TestGoMemLimitIsOffByDefault(t *testing.T) {
-	for _, c := range renderContainers(t, nil) {
-		if c.goMemLimit != "" {
-			t.Errorf("%s carries GOMEMLIMIT=%s with the shipped defaults: the derivation "+
-				"is off until measurement on real services justifies its GC cost, and a "+
-				"published footprint number must never rest on it", c.area, c.goMemLimit)
+// GOMEMLIMIT alone was measured to shrink nothing and to cost GC CPU, which is why the top
+// level stays 0. What changed is the other half: with GOGC 400 the collector ran 4 to 13 times
+// less often on these five services and CPU per event fell 4 to 18%, and the soft limit is
+// what keeps that larger heap target from passing the container limit. So the five ship both,
+// together: GOGC 400 without the limit is an OOMKill waiting for a spike, and the limit
+// without GOGC 400 is the cost with none of the benefit. This test holds the pair, and that
+// no other area picked either up.
+func TestEventPathAreasShipGoRuntimeTuningAndNoOtherAreaDoes(t *testing.T) {
+	seen := map[string]bool{}
+	for _, c := range goContainers(renderContainers(t, nil)) {
+		seen[c.area] = true
+		if !eventPathAreas[c.area] {
+			if c.goMemLimit != "" || c.gogc != "" {
+				t.Errorf("%s carries GOMEMLIMIT=%q GOGC=%q with the shipped defaults: only the "+
+					"five event-path areas were measured with them", c.area, c.goMemLimit, c.gogc)
+			}
+			continue
 		}
+		if c.gogc != "400" {
+			t.Errorf("%s: GOGC = %q, want 400", c.area, c.gogc)
+		}
+		if c.memoryLimit == "" {
+			t.Fatalf("%s has no memory limit, so nothing to derive GOMEMLIMIT from", c.area)
+		}
+		if want := mib(t, c.memoryLimit) * 75 / 100; c.goMemLimit == "" || mib(t, c.goMemLimit) != want {
+			t.Errorf("%s: GOMEMLIMIT = %q, want %d MiB (75%% of the %s limit)",
+				c.area, c.goMemLimit, want, c.memoryLimit)
+		}
+	}
+	for area := range eventPathAreas {
+		if !seen[area] {
+			t.Errorf("%s did not render, so nothing above checked it", area)
+		}
+	}
+}
+
+// A raised TOP-LEVEL memory limit reaches event-processing: its 384Mi is a floor, applied only
+// when the merged limit is lower, not an area-level limit that would silently beat it. An
+// operator's own area-level limit is used as written, lower than the floor included.
+func TestEventProcessingMemoryFloorYieldsToALargerTopLevelAndToItsOwnLimit(t *testing.T) {
+	top := func(mem string) map[string]interface{} {
+		return map[string]interface{}{"resources": map[string]interface{}{
+			"requests": map[string]interface{}{"cpu": "100m", "memory": "128Mi"},
+			"limits":   map[string]interface{}{"cpu": "500m", "memory": mem},
+		}}
+	}
+	ep := func(vals map[string]interface{}) renderedContainer {
+		return byArea(t, renderContainers(t, vals))["event-processing"]
+	}
+	if c := ep(nil); c.memoryLimit != "384Mi" || mib(t, c.goMemLimit) != 288 {
+		t.Errorf("shipped: limit %q GOMEMLIMIT %q, want 384Mi and 288MiB", c.memoryLimit, c.goMemLimit)
+	}
+	if c := ep(top("256Mi")); c.memoryLimit != "384Mi" {
+		t.Errorf("a top-level limit below the floor gave %q, want the floor 384Mi", c.memoryLimit)
+	}
+	if c := ep(top("1Gi")); c.memoryLimit != "1Gi" || mib(t, c.goMemLimit) != 768 {
+		t.Errorf("a raised top-level limit gave %q / %q, want 1Gi / 768MiB: the floor beat the operator",
+			c.memoryLimit, c.goMemLimit)
+	}
+	own := top("256Mi")
+	own["functionalAreas"] = map[string]interface{}{"event-processing": map[string]interface{}{
+		"resources": map[string]interface{}{"limits": map[string]interface{}{"memory": "300Mi"}}}}
+	if c := ep(own); c.memoryLimit != "300Mi" {
+		t.Errorf("the area's own 300Mi limit gave %q, want it used as written", c.memoryLimit)
+	}
+}
+
+// An area-level goMemLimitPercent of 100 is refused by the schema, as the top-level one is.
+func TestAnAreaGoMemLimitPercentOfOneHundredIsRefused(t *testing.T) {
+	_, err := renderChart(t, map[string]interface{}{"functionalAreas": map[string]interface{}{
+		"device-management": map[string]interface{}{"goMemLimitPercent": 100}}})
+	if err == nil {
+		t.Fatal("an area-level goMemLimitPercent of 100 rendered: the pod would be OOMKilled where it should collect")
+	}
+}
+
+// An area's own percentage beats a non-zero top-level one that differs from 75, and the areas
+// that set none of their own follow the top level.
+func TestAnAreasPercentBeatsADifferentNonZeroTopLevel(t *testing.T) {
+	got := byArea(t, renderContainers(t, map[string]interface{}{
+		"goMemLimitPercent": 50,
+		"functionalAreas": map[string]interface{}{
+			"device-management": map[string]interface{}{"goMemLimitPercent": 60},
+		},
+	}))
+	if c := got["device-management"]; mib(t, c.goMemLimit) != mib(t, c.memoryLimit)*60/100 {
+		t.Errorf("device-management GOMEMLIMIT %q of a %s limit, want its own 60%%", c.goMemLimit, c.memoryLimit)
+	}
+	// event-management ships its own 75, which also beats the top-level 50.
+	if c := got["event-management"]; mib(t, c.goMemLimit) != mib(t, c.memoryLimit)*75/100 {
+		t.Errorf("event-management GOMEMLIMIT %q of a %s limit, want its shipped 75%%", c.goMemLimit, c.memoryLimit)
+	}
+	// an area with none follows the top level.
+	if c := got["command-delivery"]; c.memoryLimit != "" && mib(t, c.goMemLimit) != mib(t, c.memoryLimit)*50/100 {
+		t.Errorf("command-delivery GOMEMLIMIT %q of a %s limit, want the top-level 50%%", c.goMemLimit, c.memoryLimit)
 	}
 }

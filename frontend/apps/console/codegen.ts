@@ -30,6 +30,7 @@ const config: CodegenConfig = {
         'src/lib/api/browse.ts',
         'src/lib/api/geofences.ts',
         'src/lib/api/replacements.ts',
+        'src/lib/api/device-configuration.ts',
       ],
       preset: 'client',
       presetConfig: { fragmentMasking: false },
