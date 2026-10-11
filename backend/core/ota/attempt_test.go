@@ -5,6 +5,7 @@ package ota
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -488,4 +489,47 @@ func TestNewAttemptValidates(t *testing.T) {
 
 	assert.NoError(t, testPolicy.Validate())
 	assert.Error(t, Policy{}.Validate())
+}
+
+func TestAbandonEndsOnlyAnUnknownAttemptAndKeepsTheReason(t *testing.T) {
+	now := time.Date(2026, 10, 11, 12, 0, 0, 0, time.UTC)
+	a, err := NewAttempt("att-1", "asg-1", "firmware", Target{Version: "2", Digest: "sha256:" + strings.Repeat("a", 64)}, now)
+	require.NoError(t, err)
+
+	for _, s := range []State{StateQueued, StateInitiated, StateDownloading, StateVerified, StateUpdating, StateRebooting} {
+		x := a
+		x.State = s
+		got, err := Abandon(x, "device retired")
+		assert.ErrorIs(t, err, ErrNotUnknown, string(s))
+		assert.Equal(t, x, got, "a refused abandon changes nothing")
+	}
+	for _, s := range []State{StateUpdated, StateFailed, StateTimedOut, StateCancelled} {
+		x := a
+		x.State = s
+		_, err := Abandon(x, "device retired")
+		assert.ErrorIs(t, err, ErrTerminal, string(s))
+	}
+
+	u := a
+	u.State = StateUnknown
+	for _, bad := range []string{"", "bad\x00", strings.Repeat("x", 513)} {
+		_, err := Abandon(u, bad)
+		assert.Error(t, err, bad)
+	}
+	out, err := Abandon(u, "device was scrapped")
+	require.NoError(t, err)
+	assert.Equal(t, StateCancelled, out.State)
+	require.NotNil(t, out.Failure)
+	assert.Equal(t, AbandonCode, out.Failure.Code)
+	assert.Equal(t, "device was scrapped", out.Failure.Detail)
+	assert.True(t, out.Failure.Platform)
+	assert.Equal(t, StateUnknown, u.State, "the input is not mutated")
+
+	// Cancel, the ordinary door, still refuses UNKNOWN: abandonment is a separate, explicit act.
+	_, err = Cancel(u, now)
+	assert.ErrorIs(t, err, ErrBeyondRecall)
+	// And no device report can end it: late progress on the abandoned attempt is LATE.
+	_, v := Apply(out, Report{V: 1, Kind: KindProgress, AttemptID: "att-1", AssignmentID: "asg-1", Component: "firmware",
+		ArtifactDigest: a.Target.Digest, Seq: 1, Stage: StageRunning}, now)
+	assert.Equal(t, VerdictLate, v)
 }

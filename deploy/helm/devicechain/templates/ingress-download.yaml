@@ -1,0 +1,65 @@
+{{/*
+The update-artifact download, on an Ingress of its own so that it is NOT access-logged.
+
+  GET /api/update-management/updates/download/<artifact>?cap=<capability>
+
+A device authenticates this request with a capability, and the capability travels in the query
+string. An ingress controller logs the request line, so on the API Ingress every download would
+write a live bearer credential into the access log (and into whatever ships that log). The
+capability expires within fifteen minutes and opens exactly one artifact for one device, which
+bounds the damage; it is still a credential, and an access log is the wrong place for one.
+
+So this route is rendered separately, with the ingress-nginx access log turned off. The longer path
+is matched ahead of the API Ingress /api/<area> location for the same host, and the rewrite is the
+API Ingress's: the /api/update-management prefix is stripped so the service sees
+/updates/download/<artifact>. Nothing else differs: a download streams a response, and the
+service enforces its own concurrency, idle and total-time bounds.
+
+The query-string form is kept on purpose (a device that cannot set a header, and the LwM2M Package
+URI, can only fetch a URL).
+
+Rendered only with the ingress and the update-management area. On any other ingress controller the
+same rule applies and is the operator's to apply: do not log the query string of this path.
+*/}}
+{{- if and .Values.ingress.enabled (has "update-management" (splitList "," (include "devicechain.enabledAreas" .))) }}
+{{- $tls := .Values.ingress.tls -}}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: devicechain-update-download
+  namespace: {{ include "devicechain.instanceNamespace" . }}
+  labels:
+    {{- include "devicechain.instanceLabels" . | nindent 4 }}
+  annotations:
+    nginx.ingress.kubernetes.io/rewrite-target: /$2
+    nginx.ingress.kubernetes.io/enable-access-log: "false"
+    {{- if $tls.enabled }}
+    {{- if $tls.selfSigned }}
+    cert-manager.io/issuer: {{ $tls.issuerName }}
+    {{- else if $tls.clusterIssuer }}
+    cert-manager.io/cluster-issuer: {{ $tls.clusterIssuer }}
+    {{- end }}
+    {{- end }}
+    {{- with .Values.ingress.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  ingressClassName: {{ .Values.ingress.className }}
+  {{- if $tls.enabled }}
+  tls:
+    - hosts:
+        - {{ .Values.ingress.host | quote }}
+      secretName: {{ $tls.secretName }}
+  {{- end }}
+  rules:
+    - host: {{ .Values.ingress.host | quote }}
+      http:
+        paths:
+          - path: /api/update-management(/)(updates/download/[^/]+)$
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: update-management
+                port:
+                  name: graphql
+{{- end }}

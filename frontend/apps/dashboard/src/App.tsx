@@ -47,6 +47,7 @@ import { signInErrorKey } from './i18n/signInError';
 import { loadDashboard, loadPublishedDashboard, type Loaded } from './load';
 import { MAP_RUNTIME } from './map-runtime';
 import { LOGIN, type Membership, SELECT_TENANT, TENANT_BASEMAP } from './queries';
+import { endServerSession } from './signOut';
 
 export default function App() {
   // The tenant access token, once signed in. Kept in state (to drive the UI) AND a
@@ -54,6 +55,12 @@ export default function App() {
   const [token, setToken] = useState<string | null>(null);
   const tokenRef = useRef<string | null>(null);
   tokenRef.current = token;
+  // The refresh token the server issued with it. This viewer never refreshes; it holds the
+  // token only to hand it back to logout, so signing out ends the session on the server.
+  const refreshTokenRef = useRef<string | null>(null);
+  // Set when the last sign-out could not be confirmed by the server, so the sign-in screen
+  // can say so rather than pretend the session is closed.
+  const [signOutFailed, setSignOutFailed] = useState(false);
 
   // The parsed dashboard to view, once loaded. Null → show the load form (Step 2).
   const [loaded, setLoaded] = useState<Loaded | null>(null);
@@ -67,11 +74,22 @@ export default function App() {
   }, []);
 
   const signOut = () => {
+    const refreshToken = refreshTokenRef.current;
+    refreshTokenRef.current = null;
+    // Local state clears at once so the viewer is out whatever the network does; the
+    // server call runs behind it and reports a failure on the sign-in screen.
     setToken(null);
     setLoaded(null);
+    void endServerSession(refreshToken).then((ended) => setSignOutFailed(!ended));
   };
 
-  if (!token) return <SignIn onAuthed={setToken} />; // Step 1
+  const onAuthed = (accessToken: string, refreshToken: string) => {
+    refreshTokenRef.current = refreshToken;
+    setSignOutFailed(false);
+    setToken(accessToken);
+  };
+
+  if (!token) return <SignIn onAuthed={onAuthed} signOutFailed={signOutFailed} />; // Step 1
   if (!loaded) return <Load onRender={setLoaded} onSignOut={signOut} />; // Step 2
   // The viewer's authorities gate action controls (alarm ack/clear); the server enforces
   // them regardless. Decoded from the access token this reference viewer holds.
@@ -85,7 +103,13 @@ export default function App() {
 // email + password → login → identity token + memberships. Zero memberships is an
 // error; one auto-selects; many show a picker. selectTenant yields the access token.
 
-function SignIn({ onAuthed }: { onAuthed: (accessToken: string) => void }) {
+function SignIn({
+  onAuthed,
+  signOutFailed,
+}: {
+  onAuthed: (accessToken: string, refreshToken: string) => void;
+  signOutFailed: boolean;
+}) {
   const { t } = useTranslation();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -102,7 +126,7 @@ function SignIn({ onAuthed }: { onAuthed: (accessToken: string) => void }) {
     setBusy(true);
     setError(null);
     gql('user-management', SELECT_TENANT, { identityToken: idToken, tenant }, { anonymous: true })
-      .then((r) => onAuthed(r.selectTenant.accessToken))
+      .then((r) => onAuthed(r.selectTenant.accessToken, r.selectTenant.refreshToken))
       .catch((err: unknown) => {
         setError(t(signInErrorKey(err, 'signIn:enterTenantFailed')));
         setBusy(false);
@@ -184,6 +208,7 @@ function SignIn({ onAuthed }: { onAuthed: (accessToken: string) => void }) {
               autoComplete="current-password"
             />
           </Field>
+          {signOutFailed && <ErrorText>{t('signIn:signOutFailed')}</ErrorText>}
           {error && <ErrorText>{error}</ErrorText>}
           <HeaderButton type="submit" primary disabled={busy}>
             {busy ? t('signIn:submitting') : t('signIn:submit')}

@@ -46,7 +46,7 @@ export const LOGIN = `
 // tenant-scoped access token the viewer attaches to every subsequent request.
 
 export interface SelectTenantResult {
-  selectTenant: { accessToken: string };
+  selectTenant: { accessToken: string; refreshToken: string };
 }
 export interface SelectTenantVariables {
   identityToken: string;
@@ -57,9 +57,28 @@ export const SELECT_TENANT = `
   mutation SelectTenant($identityToken: String!, $tenant: String!) {
     selectTenant(identityToken: $identityToken, tenant: $tenant) {
       accessToken
+      refreshToken
     }
   }
 ` as unknown as TypedDocument<SelectTenantResult, SelectTenantVariables>;
+
+// ── user-management: end the sign-in ─────────────────────────────────────────
+// Anonymous (the token is the argument). Ends the sign-in server-side, so the refresh
+// token this viewer was handed stops working instead of living out its lifetime. The
+// viewer never uses the refresh token itself - it exists only to be handed back here.
+
+export interface LogoutResult {
+  logout: boolean;
+}
+export interface LogoutVariables {
+  token: string;
+}
+
+export const LOGOUT = `
+  mutation Logout($token: String!) {
+    logout(token: $token)
+  }
+` as unknown as TypedDocument<LogoutResult, LogoutVariables>;
 
 // ── user-management: the tenant's effective basemap ──────────────────────────
 // Authenticated (rides the access token), self-scoped, and requires no authority —

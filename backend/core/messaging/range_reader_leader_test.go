@@ -8,13 +8,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net"
-	"net/url"
-	"os"
 	"testing"
 	"time"
 
-	natsserver "github.com/nats-io/nats-server/v2/server"
 	nats "github.com/nats-io/nats.go"
 	"github.com/stretchr/testify/require"
 
@@ -304,48 +300,18 @@ func TestRangeReaderStallIsBounded(t *testing.T) {
 	require.Equal(t, 4, cr.timeouts)
 }
 
-// rangeCluster starts a plain three-node JetStream cluster on loopback and returns a client
-// URL once a three-replica stream can be placed. A clustered server holds back its listeners
-// until it can reach a meta quorum, so every server is given the route ports of the other two
-// up front and all three are started before any is waited on.
+// rangeCluster starts a three-node JetStream cluster on loopback and returns a client URL
+// once it has formed. It is the shared fixture (dctest.StartJetStreamCluster), not a cluster
+// built here: this test used to pick three route ports by binding and releasing them, then
+// hand them to servers it started with logging off. A port another test binary's server took
+// in between made a route listener fail with nothing reported anywhere, and the only symptom
+// was ReadyForConnections running out its 60 seconds ("cluster server N not ready"). The
+// fixture holds every address a server dials for the cluster's whole life, gives the cluster a
+// name no other has, waits for a slow server rather than restarting it, and names what is
+// missing when it gives up.
 func rangeCluster(t *testing.T) string {
 	t.Helper()
-	name := fmt.Sprintf("rangecl-%d", os.Getpid())
-	ports := make([]int, 3)
-	for i := range ports {
-		l, err := net.Listen("tcp", "127.0.0.1:0")
-		require.NoError(t, err)
-		ports[i] = l.Addr().(*net.TCPAddr).Port
-		l.Close()
-	}
-	var servers []*natsserver.Server
-	for i := 0; i < 3; i++ {
-		var routes []*url.URL
-		for j, port := range ports {
-			if j != i {
-				routes = append(routes, &url.URL{Scheme: "nats-route", Host: fmt.Sprintf("127.0.0.1:%d", port)})
-			}
-		}
-		srv, err := natsserver.NewServer(&natsserver.Options{
-			ServerName: fmt.Sprintf("rangecl-%d", i),
-			Host:       "127.0.0.1",
-			Port:       -1,
-			JetStream:  true,
-			StoreDir:   dctest.JetStreamStoreDir(t),
-			NoLog:      true,
-			NoSigs:     true,
-			Cluster:    natsserver.ClusterOpts{Name: name, Host: "127.0.0.1", Port: ports[i]},
-			Routes:     routes,
-		})
-		require.NoError(t, err)
-		go srv.Start()
-		t.Cleanup(srv.Shutdown)
-		servers = append(servers, srv)
-	}
-	for i, srv := range servers {
-		require.True(t, srv.ReadyForConnections(60*time.Second), "cluster server %d not ready", i)
-	}
-	return servers[0].ClientURL()
+	return dctest.StartJetStreamCluster(t, 3)[0].ClientURL()
 }
 
 // On a real three-node cluster, with a three-replica stream, the reader's answers are the

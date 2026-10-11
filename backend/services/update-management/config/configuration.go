@@ -5,9 +5,12 @@ package config
 
 import (
 	"fmt"
+	"net/url"
+	"time"
 
 	"github.com/devicechain-io/dc-microservice/blob"
 	"github.com/devicechain-io/dc-microservice/config"
+	"github.com/devicechain-io/dc-microservice/ota"
 )
 
 const (
@@ -27,6 +30,16 @@ const (
 	// disk and bandwidth a burst of uploads can take; more are refused 503 before their body
 	// is read.
 	DefaultMaxConcurrentUploads = 4
+	// DefaultMaxConcurrentDownloads is how many artifact downloads one replica streams at a
+	// time. Each holds a connection and reads from the object store; more are refused 503
+	// before anything is looked up.
+	DefaultMaxConcurrentDownloads = 16
+	// DefaultCapabilityTTLSeconds and MaxCapabilityTTLSeconds bound how long a download
+	// capability lives: fifteen minutes is the ceiling, and the default is the ceiling.
+	DefaultCapabilityTTLSeconds = 15 * 60
+	MaxCapabilityTTLSeconds     = 15 * 60
+	// DefaultSweepIntervalSeconds is how often the deadline sweep looks for stalled attempts.
+	DefaultSweepIntervalSeconds = 30
 
 	// S3BufferedPutCap is the largest object the S3 backend can store today: its Put
 	// buffers the object to hand PutObject a known length, so a larger one would be held
@@ -57,6 +70,44 @@ type UpdatesConfiguration struct {
 	// MaxConcurrentUploads caps the uploads one replica streams at once. Zero selects the
 	// default; a negative value is refused at startup.
 	MaxConcurrentUploads int
+
+	// AllowUnverifiedArtifacts lets an UNVERIFIED artifact be assigned. Every artifact is
+	// UNVERIFIED today (nothing authenticates an artifact's origin, only that its bytes are the
+	// declared bytes), so with this false no artifact can be assigned. The default is false;
+	// development and simulator installs set it, and the value is visible in
+	// updateManagementInfo so an instance running with it can be seen to be.
+	AllowUnverifiedArtifacts bool
+	// DownloadBaseURL is the public URL a device reaches this service's HTTP surface at, for
+	// example https://dc.example.com/api/update-management, with no query or fragment. A
+	// capability URL is this plus /updates/download/{artifact}?cap=... Empty means no
+	// capability can be issued, and a device's download request is refused and counted.
+	DownloadBaseURL string
+	// CapabilityTTLSeconds is how long a download capability lives. Zero selects the default;
+	// above the ceiling is refused at startup.
+	CapabilityTTLSeconds int
+	// MaxConcurrentDownloads caps the downloads one replica streams at once. Zero selects the
+	// default; a negative value is refused at startup.
+	MaxConcurrentDownloads int
+	// SweepIntervalSeconds is the cadence of the deadline sweep. Zero selects the default.
+	SweepIntervalSeconds int
+	// Deadlines are how long the platform waits in each phase of an update, measured from the
+	// last accepted device report. Zero selects each default; negative is refused.
+	Deadlines DeadlinesConfiguration
+}
+
+// DeadlinesConfiguration is the per-phase wait of an update attempt, in seconds.
+type DeadlinesConfiguration struct {
+	// AcknowledgeSeconds covers QUEUED and INITIATED: an offline device may take a long time to
+	// come back, so the default is a day.
+	AcknowledgeSeconds int
+	// DownloadSeconds covers DOWNLOADING and DOWNLOADED, measured from the last progress report.
+	DownloadSeconds int
+	// VerifySeconds covers VERIFIED.
+	VerifySeconds int
+	// InstallSeconds covers UPDATING; silence here is UNKNOWN rather than failure.
+	InstallSeconds int
+	// ConfirmSeconds covers REBOOTING; silence here is UNKNOWN rather than failure.
+	ConfirmSeconds int
 }
 
 // NewUpdateManagementConfiguration creates the default update-management configuration.
@@ -77,6 +128,33 @@ func (c *UpdateManagementConfiguration) ApplyDefaults() {
 	if c.Updates.MaxConcurrentUploads == 0 {
 		c.Updates.MaxConcurrentUploads = DefaultMaxConcurrentUploads
 	}
+	if c.Updates.MaxConcurrentDownloads == 0 {
+		c.Updates.MaxConcurrentDownloads = DefaultMaxConcurrentDownloads
+	}
+	if c.Updates.CapabilityTTLSeconds == 0 {
+		c.Updates.CapabilityTTLSeconds = DefaultCapabilityTTLSeconds
+	}
+	if c.Updates.SweepIntervalSeconds == 0 {
+		c.Updates.SweepIntervalSeconds = DefaultSweepIntervalSeconds
+	}
+	d := &c.Updates.Deadlines
+	for _, f := range []struct {
+		v   *int
+		def int
+	}{{&d.AcknowledgeSeconds, 24 * 3600}, {&d.DownloadSeconds, 6 * 3600}, {&d.VerifySeconds, 30 * 60},
+		{&d.InstallSeconds, 3600}, {&d.ConfirmSeconds, 3600}} {
+		if *f.v == 0 {
+			*f.v = f.def
+		}
+	}
+}
+
+// Policy is the attempt deadlines as the update contract takes them.
+func (c *UpdateManagementConfiguration) Policy() ota.Policy {
+	d := c.Updates.Deadlines
+	sec := func(n int) time.Duration { return time.Duration(n) * time.Second }
+	return ota.Policy{Acknowledge: sec(d.AcknowledgeSeconds), Download: sec(d.DownloadSeconds),
+		Verify: sec(d.VerifySeconds), Install: sec(d.InstallSeconds), Confirm: sec(d.ConfirmSeconds)}
 }
 
 // Validate is the validation hook for this service (ADR-022 decision 1).
@@ -89,6 +167,22 @@ func (c *UpdateManagementConfiguration) Validate() error {
 	}
 	if c.Updates.MaxConcurrentUploads < 0 {
 		return fmt.Errorf("updates.maxConcurrentUploads must not be negative (got %d)", c.Updates.MaxConcurrentUploads)
+	}
+	if c.Updates.MaxConcurrentDownloads < 0 {
+		return fmt.Errorf("updates.maxConcurrentDownloads must not be negative (got %d)", c.Updates.MaxConcurrentDownloads)
+	}
+	if c.Updates.CapabilityTTLSeconds < 0 || c.Updates.CapabilityTTLSeconds > MaxCapabilityTTLSeconds {
+		return fmt.Errorf("updates.capabilityTtlSeconds must be between 1 and %d (got %d)",
+			MaxCapabilityTTLSeconds, c.Updates.CapabilityTTLSeconds)
+	}
+	if c.Updates.SweepIntervalSeconds < 0 {
+		return fmt.Errorf("updates.sweepIntervalSeconds must not be negative (got %d)", c.Updates.SweepIntervalSeconds)
+	}
+	if err := c.Updates.validateBaseURL(); err != nil {
+		return err
+	}
+	if err := c.Policy().Validate(); err != nil {
+		return fmt.Errorf("updates.deadlines: %w", err)
 	}
 	// Checked after defaulting, so a one-sided override cannot slip a per-artifact
 	// ceiling above the tenant total (no artifact could then ever be admitted at its
@@ -110,4 +204,18 @@ func (c *UpdateManagementConfiguration) EffectiveMaxArtifactBytes(backend string
 		return S3BufferedPutCap
 	}
 	return max
+}
+
+func (u UpdatesConfiguration) validateBaseURL() error {
+	if u.DownloadBaseURL == "" {
+		return nil
+	}
+	parsed, err := url.Parse(u.DownloadBaseURL)
+	if err != nil || !parsed.IsAbs() || parsed.Host == "" || (parsed.Scheme != "https" && parsed.Scheme != "http") {
+		return fmt.Errorf("updates.downloadBaseUrl must be an absolute http or https URL (got %q)", u.DownloadBaseURL)
+	}
+	if parsed.RawQuery != "" || parsed.Fragment != "" || parsed.User != nil {
+		return fmt.Errorf("updates.downloadBaseUrl must not carry a query, a fragment or credentials (got %q)", u.DownloadBaseURL)
+	}
+	return nil
 }

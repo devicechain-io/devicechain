@@ -2025,6 +2025,19 @@ jobs:
             *) echo "ok (renders): no upload ingress without update-management" ;;
           esac
 
+          # The download route carries a capability in its query string, so it gets an Ingress of
+          # its own with the access log off; the API Ingress would write it to the log.
+          for want in 'name: devicechain-update-download' 'enable-access-log: "false"' 'updates/download/[^/]+'; do
+            case "$UPLOAD" in
+              *"$want"*) echo "ok (renders): download ingress carries $want" ;;
+              *) echo "::error::the download ingress is missing $want"; exit 1 ;;
+            esac
+          done
+          case "$NOUPLOAD" in
+            *devicechain-update-download*) echo "::error::the download ingress renders without update-management"; exit 1 ;;
+            *) echo "ok (renders): no download ingress without update-management" ;;
+          esac
+
           renders "inline config" --set "instance.config.infrastructure.secrets.rootKey=$KEY"
           renders "inline config, ingest-only" --set profile=ingest-only \
             --set "instance.config.infrastructure.secrets.rootKey=$KEY"

@@ -30,6 +30,7 @@ package secrets
 import (
 	"context"
 	"errors"
+	"fmt"
 )
 
 // ErrSecretNotFound is returned by a store's Resolve/Exists path when no secret
@@ -123,4 +124,23 @@ type KeyProvider interface {
 	Unwrap(ctx context.Context, wrapped []byte, version int) (dek []byte, err error)
 	// Name is the provider's config identifier (e.g. "instance").
 	Name() string
+}
+
+// Creator is implemented by a store that can create a value only if none exists. It is a separate
+// interface so a store that cannot (an external backend) is not forced to pretend.
+type Creator interface {
+	// CreateIfAbsent stores value under ref only if nothing is stored there, reporting whether it
+	// did. It never replaces an existing value.
+	CreateIfAbsent(ctx context.Context, ref SecretRef, value []byte) (bool, error)
+}
+
+// CreateIfAbsent creates the secret under ref only if none exists. A store that cannot do that
+// atomically is an error, not a silent fallback to Put: the callers need the guarantee that an
+// existing value is never overwritten, and an upsert would give them the opposite.
+func CreateIfAbsent(ctx context.Context, store SecretStore, ref SecretRef, value []byte) (bool, error) {
+	c, ok := store.(Creator)
+	if !ok {
+		return false, fmt.Errorf("secrets: a %T cannot create a secret only if it is absent", store)
+	}
+	return c.CreateIfAbsent(ctx, ref, value)
 }

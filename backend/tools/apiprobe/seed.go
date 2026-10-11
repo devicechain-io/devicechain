@@ -147,6 +147,11 @@ func runSeed(ctx context.Context, argv []string) error {
 			})
 			fmt.Printf("  seeded  %-26s %s\n", e.Name, token)
 		}
+		if e.After != nil {
+			if err := e.After(ctx, &c, session, st); err != nil {
+				return failWith(exitRefused, "after creating %s: %w", e.Name, err)
+			}
+		}
 	}
 
 	// A receipt with nothing on it makes verify pass instantly, having checked

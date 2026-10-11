@@ -328,9 +328,8 @@ func TestMalformedAndOversizedReportsAreDeadLettered(t *testing.T) {
 	dev.publish(t, `{"v":1,"kind":"config.status","revision":1,"revision":9,"status":"APPLIED"}`)                                   // duplicate key
 	dev.publish(t, `{"v":1,"kind":"config.status","revision":1,"digest":"`+r1.Digest+`","status":"APPLIED","pad":"`+
 		strings.Repeat("x", ota.MaxReportBytes)+`"}`) // over the 4 KiB cap
-	dev.publish(t, `{"v":1,"kind":"update.inventory","component":"firmware","bootId":"b","running":{"version":"1"}}`) // not served here
 
-	require.Eventually(t, func() bool { return len(f.letters(t)) == 5 }, 10*time.Second, 20*time.Millisecond,
+	require.Eventually(t, func() bool { return len(f.letters(t)) == 4 }, 10*time.Second, 20*time.Millisecond,
 		"every refused message should leave a dead letter")
 	for _, l := range f.letters(t) {
 		require.Equal(t, deadletter.ReasonUnprocessable, l.Reason)
@@ -338,7 +337,6 @@ func TestMalformedAndOversizedReportsAreDeadLettered(t *testing.T) {
 		require.LessOrEqual(t, len(l.Payload), 4096, "a dead letter must bound what a device chose to send")
 	}
 	require.EqualValues(t, 4, f.counter(t, "config_reports_rejected_total", "malformed"))
-	require.EqualValues(t, 1, f.counter(t, "config_reports_rejected_total", "unsupported_kind"))
 	require.Nil(t, configState(t, ctx, "dev").Reported, "a refused report wrote reported state")
 
 	// And the loop still works.
@@ -460,4 +458,29 @@ func TestTheDeviceReportsConsumerResolvesDevicesUncached(t *testing.T) {
 	got, ok := rc.Api.(*model.Api)
 	require.True(t, ok, "the device-reports consumer was given a %T, want the plain *model.Api", rc.Api)
 	require.Same(t, Api, got)
+}
+
+// The update family belongs to update-management, which reads the same channel on its own
+// durable. This consumer acknowledges those kinds without a dead letter and without counting a
+// refusal, and keeps serving configuration afterwards.
+func TestUpdateFamilyReportsAreLeftToUpdateManagement(t *testing.T) {
+	f := startDeliveryFixture(t)
+	ctx := seedConfiguredDevice(t, "acme", "dev")
+	dev := f.device("acme", "dev")
+	dev.listen(t)
+	setMode(t, ctx, "dev", "eco")
+	r1 := dev.next(t)
+
+	dev.publish(t, `{"v":1,"kind":"update.inventory","component":"firmware","bootId":"b","running":{"version":"1"}}`)
+	dev.publish(t, `{"v":1,"kind":"download.request","assignmentId":"asg-1"}`)
+	dev.publish(t, `{"v":1,"kind":"update.progress","attemptId":"att-1","assignmentId":"asg-1","component":"firmware",`+
+		`"artifactDigest":"sha256:`+strings.Repeat("a", 64)+`","seq":1,"stage":"RECEIVED","bootId":"b"}`)
+
+	// A configuration report published after them is applied, so by then the three were consumed.
+	dev.status(t, r1, ota.ConfigApplied)
+	require.Eventually(t, func() bool { return !configState(t, ctx, "dev").Pending }, 10*time.Second, 20*time.Millisecond)
+	require.Empty(t, f.letters(t), "an update-family report was dead-lettered by the configuration consumer")
+	for _, reason := range []string{"malformed", "unattributable", "throttled", "unknown_device", "unknown_revision", "digest_mismatch", "stale"} {
+		require.Zero(t, f.counter(t, "config_reports_rejected_total", reason), reason)
+	}
 }

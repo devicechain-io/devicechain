@@ -133,6 +133,13 @@ func emitEach(ctx context.Context, rt *Runtime, workers int,
 					// reconcilable (persisted == emitted, shed events absent). Neither
 					// refusal sets firstErr — EmitAll only "fails" on real errors.
 					rt.Stats.Shed.Add(1)
+				case ctx.Err() != nil && errors.Is(err, ctx.Err()):
+					// The simulator's OWN cancellation (Stop, shutdown) aborted this
+					// POST mid-flight: the ingress never gave a verdict, so there is
+					// nothing to count as accepted, shed or failed. The event is
+					// already filed as ambiguous in rt.Identity (it may have been
+					// processed), which is what reconciliation reads. emitEach
+					// returns ctx.Err() to the caller below.
 				default:
 					rt.Stats.Failed.Add(1)
 					mu.Lock()
@@ -159,6 +166,9 @@ func emitEach(ctx context.Context, rt *Runtime, workers int,
 	close(idx)
 	wg.Wait()
 
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if failed > 0 {
 		return fmt.Errorf("%d of %d emits failed (first: %w)", failed, len(devices), firstErr)
 	}
