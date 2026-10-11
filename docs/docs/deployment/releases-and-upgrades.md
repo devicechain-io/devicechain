@@ -3520,7 +3520,7 @@ What the release after `v0.19.0` changes, collected as it lands.
 
 Signing out of the console or the embedded dashboard app used to clear only the browser: the refresh token stayed valid for up to 7 days, and the sign-in token the console keeps could still start a new session for up to 15 minutes. A new `logout` mutation ends the sign-in on the server. Every refresh token and sign-in token minted from that one sign-in, and any OAuth grant authorized from it, is refused at its next use; other sign-ins of the same account are not affected. Access tokens already issued cannot be recalled and run out within their 15 minutes. If the server cannot be reached when a user signs out, the app still signs them out locally and tells them the server-side session could not be ended.
 
-Each sign-in is now a record that lasts as long as a refresh token (7 days by default), so a session that keeps refreshing ends 7 days after the sign-in and the user signs in again.
+Each sign-in is now a record that lasts as long as a refresh token (7 days by default), so a session that keeps refreshing ends 7 days after the sign-in and the user signs in again. That includes an OAuth grant such as an MCP agent's: it ends 7 days after the sign-in on the authorization page, and the client authorizes again.
 
 Tokens issued before the upgrade carry no sign-in record and are refused, so **everyone signs in again once**: console, dashboard app, SDK and OAuth sessions end at their next refresh, within 15 minutes of the upgrade unless you changed the access-token lifetime. OAuth clients such as MCP agents authorize again. Nothing else needs doing.
 
