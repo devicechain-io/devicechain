@@ -3,5 +3,3 @@
 # This list may only SHRINK. Describe an element with a """string""" directly above it in
 # the schema, then run: go run ./cmd/sdldesc -prune   (from backend/tools/docsgql)
 # New schema elements must arrive described; do not add lines here.
-Mutation._empty
-Query._empty

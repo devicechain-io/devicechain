@@ -16,43 +16,75 @@
 # inside a tenant, and the console put the screen there. A tenant does not
 # administer providers; it only CONSENTS to external routing (the per-tenant
 # ai_external_enabled flag on user-management, ADR-056 §6).
+#
+# Descriptions: a """string""" above an element is its PUBLIC description — served by
+# introspection, read by every GraphQL tool, published on the docs site — and may not
+# cite a decision record. A # comment is a maintainer note.
 
+"""Identity of the service answering the request."""
 # Static service identity — the deployed functional area (non-sensitive).
 type ServiceInfo {
+    """The functional area this service serves; for this service, the AI inference area."""
     area: String!
 }
 
+"""
+A prompt to send to the model. The output-token limit, the endpoint and the call
+timeout are fixed by the server and cannot be set by the caller.
+"""
 # An inference request: the user prompt plus an optional system prompt. The
 # output-token cap, the provider endpoint, and the call timeout are server-side (the
 # fail-closed service config + the resolved provider row), never caller-supplied.
 input InferenceRequest {
+    """The user prompt. Required, and must not be blank. The prompt and system prompt together may not exceed 128 KiB unless the operator configured a different limit."""
     # The user prompt (required).
     prompt: String!
+    """Optional system prompt (instructions or persona) sent ahead of the prompt."""
     # An optional system prompt (instructions/persona).
     system: String
 }
 
+"""
+The model's answer to an inference request.
+"""
 # The result of an inference call: the candidate the provider produced (returned
 # verbatim — validated downstream by the deterministic rule compiler, not trusted
 # here), the model that answered, and the provider token that served it.
 type InferenceResult {
+    """The model's text output, returned as produced. It is a proposal only: nothing has validated it."""
     candidate: String!
+    """Identifier of the model that answered, as reported by the provider."""
     model: String!
+    """Token of the registered provider that served the call."""
     provider: String!
 }
 
 type Query {
+    """Identifies the service answering. Requires no specific authority."""
     # Non-sensitive service identity (the deployed functional area).
     aiInferenceInfo: ServiceInfo!
 }
 
 type Mutation {
+    """
+    Drafts a detection rule: sends the prompt to the model the calling tenant has been
+    assigned for rule drafting, or else its tier's default model, and returns the output
+    unvalidated. The tenant comes from the caller's token. The call fails if the tenant's
+    tier offers no usable model or the provider has no API key (the error is only
+    "inference is unavailable", whatever the cause), if the tenant has not opted in to
+    external AI routing (a distinct error), if the tenant is over its inference rate limit
+    (a distinct, retryable error), or if the prompt is blank or too large. The function
+    cannot be chosen by the caller. Requires ai:infer.
+    """
     # Run a prompt through the tenant's DEFAULT model for its NL→rule authoring request
     # (ADR-056 Zone 1). Gated by the least-privilege ai:infer authority; the tenant
     # comes from the caller's token. Fails closed when the tenant's tier offers no model,
     # the provider is disabled, the tenant has not opted in to external routing, or no
     # API key is set. The candidate is validated downstream by the rule compiler.
-    inferRuleCandidate(request: InferenceRequest!): InferenceResult!
+    inferRuleCandidate(
+        """The prompt to send."""
+        request: InferenceRequest!
+    ): InferenceResult!
 }
 
 schema {
