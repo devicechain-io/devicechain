@@ -157,6 +157,10 @@ func (r *maxDeliveryRecorder) record(ctx context.Context, d messaging.MaxDeliver
 		// The index-entry contract of the kind: the body is on the copy, not here.
 	case streams.TierFor(d.Suffix) == streams.Cold && len(d.Original.Data)*4/3+payloadOverhead <= r.maxLetter:
 		letter.Payload = d.Original.Data
+		if streams.ShapeOf(d.Suffix) == streams.ShapeTenantDevice {
+			// Device-authored: kept without any credential material it carried.
+			letter.Payload = redactDevicePayload(letter.Payload)
+		}
 	default:
 		// A Hot stream's letter is a POINTER: a flood of abandoned device traffic must not
 		// copy itself into the cold dead-letter stream and evict the letters that matter.

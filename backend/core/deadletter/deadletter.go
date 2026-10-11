@@ -43,6 +43,7 @@ import (
 
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/messaging"
+	"github.com/devicechain-io/dc-microservice/payloadredact"
 	"github.com/devicechain-io/dc-microservice/streams"
 	"github.com/prometheus/client_golang/prometheus"
 )
@@ -664,6 +665,12 @@ func originID(stream, consumer string, seq uint64) string {
 // when set, is published as the letter's Nats-Msg-Id.
 func (s *Sink) write(ctx context.Context, e Envelope, dedupID string) error {
 	e.Source = s.source
+	// A device's reply is a device-authored body, kept for diagnosis without whatever
+	// credential material it carried. Done here, on the one write path, so no producer has
+	// to remember it.
+	if e.Kind == KindCommandResponse {
+		e.Payload = redactDevicePayload(e.Payload)
+	}
 	body, err := Marshal(e)
 	if err != nil {
 		s.onLoss(err)
@@ -681,6 +688,14 @@ func (s *Sink) write(ctx context.Context, e Envelope, dedupID string) error {
 			"source message will not redeliver: %w", e.Kind, attempts, err)
 	}
 	return nil
+}
+
+// redactDevicePayload prepares a device-authored body for the archive; nil stays nil.
+func redactDevicePayload(p []byte) []byte {
+	if len(p) == 0 {
+		return p
+	}
+	return payloadredact.Redact(p, 0)
 }
 
 // writeWithRetries writes msg with the bounded retries every give-up write gets, under a
