@@ -196,7 +196,10 @@ describe('validateWidgetDescriptor', () => {
   it('rejects editor wording and control hints of the wrong shape', () => {
     const opt = (extra: Record<string, unknown>) => ({ ...valid(), options: { ...OPTIONS, state: { ...OPTIONS.state, ...extra } } });
     expect(issuesOf(opt({ control: 'slot-target', labelId: 'x', valueLabels: { ACTIVE: 'On' }, valueLabelIds: { CLEARED: 'y' } }))).toEqual([]);
-    expect(pathsOf(opt({ control: 'colour-wheel' }))).toEqual(['options.state.control']);
+    // Open vocabulary: a control this host has never heard of registers (and falls back).
+    expect(issuesOf(opt({ control: 'acme/colour-wheel' }))).toEqual([]);
+    expect(pathsOf(opt({ control: '' }))).toEqual(['options.state.control']);
+    expect(pathsOf(opt({ control: 7 }))).toEqual(['options.state.control']);
     expect(pathsOf(opt({ labelId: 7 }))).toEqual(['options.state.labelId']);
     expect(pathsOf(opt({ valueLabels: { ACTIVE: 1 } }))).toEqual(['options.state.valueLabels.ACTIVE']);
     expect(pathsOf(opt({ valueLabelIds: { PENDING: 'z' } }))).toEqual(['options.state.valueLabelIds.PENDING']);

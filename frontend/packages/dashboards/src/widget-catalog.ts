@@ -7,7 +7,7 @@
 // frozen, independent instance — no module state, no global registration, so two hosts on
 // one page can hold two catalogs that do not affect each other.
 
-import { OPTION_CONTROLS, validateOptions, hasOwn, type OptionIssue, type WidgetOptionSpecs } from './option-schema';
+import { validateOptions, hasOwn, type OptionIssue, type WidgetOptionSpecs } from './option-schema';
 import {
   SDK_API_VERSION,
   isBuiltinWidgetId,
@@ -204,8 +204,10 @@ function checkOptions(options: unknown, add: Add): WidgetOptionSpecs | undefined
     for (const text of ['label', 'help', 'labelId', 'helpId', 'placeholder', 'placeholderId'] as const) {
       if (spec[text] !== undefined && typeof spec[text] !== 'string') add(`${at}.${text}`, `${text} must be a string`);
     }
-    if (spec.control !== undefined && !(OPTION_CONTROLS as readonly unknown[]).includes(spec.control)) {
-      add(`${at}.control`, `control must be one of ${OPTION_CONTROLS.join(', ')}, got ${JSON.stringify(spec.control)}`);
+    // Any non-empty string: a control this host does not implement is a fallback to the
+    // generic field, not a fault (see OptionSpecBase.control).
+    if (spec.control !== undefined && (typeof spec.control !== 'string' || spec.control === '')) {
+      add(`${at}.control`, `control must be a non-empty string, got ${JSON.stringify(spec.control)}`);
     }
     switch (spec.kind) {
       case 'string':

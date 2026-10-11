@@ -44,15 +44,22 @@ interface OptionSpecBase {
   helpId?: string;
   // Names a SPECIALIZED authoring workflow for this option, chosen by the descriptor and never
   // inferred from the option's key. Absent means the generic field the spec kind implies.
-  // A host that does not know the named workflow falls back to that generic field.
-  control?: OptionControl;
+  //
+  // OPEN vocabulary, deliberately: any non-empty string registers, and a host that does not
+  // implement the named workflow renders the generic field for that option. A closed list
+  // here would make every package that names a newer control unregistrable on an older
+  // host. Name a package's own controls in a namespace ('acme/valve-curve'); the built-in
+  // names below are unprefixed.
+  control?: string;
 }
 
-// The specialized authoring workflows a descriptor may name. `command-vocabulary` picks a
-// device command and bakes its key, label and parameters together; `slot-target` picks one
-// of the dashboard's slots; `basemap` marks the raster tile source/credit pair.
-export const OPTION_CONTROLS = ['command-vocabulary', 'slot-target', 'basemap'] as const;
-export type OptionControl = (typeof OPTION_CONTROLS)[number];
+// The specialized workflows the DeviceChain console implements — what a built-in may name
+// and expect honoured. Not a validation whitelist: a control outside this list is valid and
+// simply falls back. `command-vocabulary` picks a device command and bakes its key, label and
+// parameters together; `slot-target` picks one of the dashboard's slots; `basemap` marks the
+// raster tile source/credit pair.
+export const HOST_OPTION_CONTROLS = ['command-vocabulary', 'slot-target', 'basemap'] as const;
+export type HostOptionControl = (typeof HOST_OPTION_CONTROLS)[number];
 
 export interface StringOptionSpec extends OptionSpecBase {
   kind: 'string';

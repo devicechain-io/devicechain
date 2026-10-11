@@ -33,7 +33,7 @@ import {
   clampNumberOption,
   type KnownWidgetInstance,
   type NumberOptionSpec,
-  type OptionControl,
+  type HostOptionControl,
   type OptionSpec,
   type SlotDefinition,
   type WidgetDescriptor,
@@ -63,7 +63,7 @@ import { enumChoiceLabel, enumPlaceholder, fieldHelp, fieldLabel, useMessageLook
 // would invite an author to hand-write JSON the button silently ignores when it does not
 // parse. `basemap` has no field of its own — its options render as ordinary strings — and
 // only drives the notice below.
-type CustomControl = Extract<OptionControl, 'command-vocabulary' | 'slot-target'>;
+type CustomControl = Extract<HostOptionControl, 'command-vocabulary' | 'slot-target'>;
 
 const FIELD_ID: Record<CustomControl, string> = {
   'command-vocabulary': 'command',

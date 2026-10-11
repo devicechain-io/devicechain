@@ -170,6 +170,20 @@ describe('a specialized workflow on a registered widget', () => {
     expect(lastOptions(onChange)).toEqual({ cmd: 'reboot' });
   });
 
+  // The control vocabulary is open: a package may name a workflow this console does not
+  // implement, and the option is then authored by the generic field rather than refused.
+  it('renders the generic field for a control this host does not implement', () => {
+    const onChange = renderProbe({ curve: { kind: 'string', doc: '.', label: 'Curve', control: 'acme/valve-curve' } }, {});
+    fireEvent.change(screen.getByTestId('widget-option-field-curve').querySelector('input')!, { target: { value: 'linear' } });
+    expect(lastOptions(onChange)).toEqual({ curve: 'linear' });
+  });
+
+  it('still gives a known control its specialized editor', () => {
+    renderProbe({ target: { kind: 'string', doc: '.', control: 'slot-target' } }, {});
+    expect(screen.getByTestId('widget-option-field-slot')).toBeTruthy();
+    expect(screen.queryByTestId('widget-option-field-target')).toBeNull();
+  });
+
   it('offers it when all three keys it writes are declared under it', () => {
     const cv = { kind: 'string', doc: '.', control: 'command-vocabulary' } as const;
     renderProbe({ commandName: cv, commandLabel: cv, parameterSchema: { ...cv, format: 'json' } }, {});
