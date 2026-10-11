@@ -34,7 +34,10 @@ func evictionTables() []any {
 	return append(credentialTables(), &model.DeviceReplacement{}, &model.EntityRelationship{},
 		&model.EntityRelationshipType{}, &model.EntityAttribute{}, &model.Alarm{},
 		&model.EntityGroupMembership{}, &model.GeoFence{}, &model.GeoFenceSetVersion{},
-		&model.GeoFenceGeometryBlob{})
+		&model.GeoFenceGeometryBlob{},
+		// A device delete removes the device's configuration revisions and reported state in
+		// the same transaction, so a rig that deletes a device needs both tables.
+		&model.DeviceConfigurationRevision{}, &model.DeviceConfigurationState{})
 }
 
 // evictionRig is replicas a (the writer), b (the reader) and a control on a broker of its

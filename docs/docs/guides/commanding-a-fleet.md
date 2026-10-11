@@ -155,6 +155,8 @@ change.
 | `BATCH_TOO_LARGE` | More devices than one batch may command — named explicitly, or resolved from the group. | No — split the operation or narrow the group |
 | `BATCH_GROUP_UNUSABLE` | The group does not exist, collects something other than devices, was never published, or the named version does not exist (or a version was named for a static group). The group service's own code travels in the reason. | No |
 | `PAYLOAD_NOT_JSON` / `METADATA_NOT_JSON` | The string is not valid JSON. | No |
+| `PAYLOAD_TOO_LARGE` / `METADATA_TOO_LARGE` | The payload or metadata string is over 64 KiB. | No |
+| `COMMAND_NAME_TOO_LONG` | The command name is over 128 bytes. | No |
 | `EXPIRES_AT_INVALID` | `expiresAt` is not an RFC3339 timestamp. | No |
 
 The list is open. Treat a code you do not recognize as a refusal you cannot classify, **never as a
