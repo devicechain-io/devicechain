@@ -103,17 +103,49 @@ func TestHelmInstallCopiesTheObjectStoreCredentialsAndStampsTheirDigest(t *testi
 }
 
 func TestTheSingletonStepChecksTheObjectStoreBeforeAnythingIsWritten(t *testing.T) {
-	calls, blanked := callsIn(t, "singletons.go", "stepCheckClusterSingletons")
-	pre, ok := calls["precheckObjectStore"]
-	if !ok {
-		t.Fatal("stepCheckClusterSingletons never calls precheckObjectStore: an absent credentials Secret " +
-			"or a store that cannot be mounted is found ten minutes into the install, not here")
+	f, err := parser.ParseFile(token.NewFileSet(), "singletons.go", nil, 0)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if blanked["precheckObjectStore"] {
-		t.Error("the object store precheck's verdict is discarded")
+	var decl *ast.FuncDecl
+	for _, d := range f.Decls {
+		if fd, ok := d.(*ast.FuncDecl); ok && fd.Name.Name == "stepCheckClusterSingletons" {
+			decl = fd
+		}
 	}
-	if pre > calls["precheckSharedStore"] && calls["precheckSharedStore"] != 0 {
-		t.Log("the object store check runs after the shared-store check, which is fine; both precede any write")
+	if decl == nil {
+		t.Fatal("singletons.go no longer declares stepCheckClusterSingletons")
+	}
+	// The verdict that matters is the one a real run RETURNS: an `if err := precheckObjectStore(...);
+	// err != nil { return ... }`. The rehearsal's own call, which only reports, does not count.
+	returning := 0
+	ast.Inspect(decl, func(n ast.Node) bool {
+		is, ok := n.(*ast.IfStmt)
+		if !ok {
+			return true
+		}
+		as, ok := is.Init.(*ast.AssignStmt)
+		if !ok || len(as.Rhs) != 1 {
+			return true
+		}
+		call, ok := as.Rhs[0].(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		if id, ok := call.Fun.(*ast.Ident); !ok || id.Name != "precheckObjectStore" {
+			return true
+		}
+		for _, stmt := range is.Body.List {
+			if _, ok := stmt.(*ast.ReturnStmt); ok {
+				returning++
+			}
+		}
+		return true
+	})
+	if returning != 1 {
+		t.Errorf("stepCheckClusterSingletons returns the verdict of precheckObjectStore in %d places, want 1: "+
+			"an absent credentials Secret or a store that cannot be mounted is found ten minutes into the "+
+			"install, not here", returning)
 	}
 }
 
