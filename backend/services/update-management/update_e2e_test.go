@@ -19,6 +19,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -88,6 +89,7 @@ type e2e struct {
 	srv      *httptest.Server
 	clockMu  sync.Mutex
 	clock    time.Time
+	sent     atomic.Int64 // messages every device link has published on device-reports
 }
 
 func (f *e2e) now() time.Time {
@@ -96,10 +98,38 @@ func (f *e2e) now() time.Time {
 	return f.clock
 }
 
+// advance moves the fake clock. The platform stamps a report with its RECEIVE time, and the device
+// publishes asynchronously, so a report the device has already sent can still be queued on the broker
+// when a test observes the state its predecessor produced. Moving the clock under it would stamp the
+// report in the future and refresh the deadline the test is about to cross; advance therefore waits
+// for every report sent so far to be applied before it moves.
 func (f *e2e) advance(d time.Duration) {
+	f.t.Helper()
+	f.settle()
 	f.clockMu.Lock()
 	defer f.clockMu.Unlock()
 	f.clock = f.clock.Add(d)
+}
+
+// settle waits until the broker holds every message a device link has published on device-reports and
+// every consumer of that stream has acknowledged all of them (none pending, none in flight).
+func (f *e2e) settle() {
+	f.t.Helper()
+	js, err := f.nc.JetStream()
+	require.NoError(f.t, err)
+	name := messaging.StreamName(f.instance, streams.DeviceReports)
+	require.Eventually(f.t, func() bool {
+		info, err := js.StreamInfo(name)
+		if err != nil || info.State.LastSeq < uint64(f.sent.Load()) {
+			return false
+		}
+		for ci := range js.Consumers(name) {
+			if ci.NumPending != 0 || ci.NumAckPending != 0 {
+				return false
+			}
+		}
+		return true
+	}, 10*time.Second, time.Millisecond, "device reports were still in flight")
 }
 
 func startE2E(t *testing.T) *e2e {
@@ -235,6 +265,7 @@ func (l *natsLink) Send(_ context.Context, payload []byte) error {
 	if err := l.f.nc.Publish(messaging.DeviceScopedSubject(l.f.instance, l.tenant, streams.DeviceReports, l.device), payload); err != nil {
 		return err
 	}
+	l.f.sent.Add(1)
 	return l.f.nc.Flush()
 }
 
