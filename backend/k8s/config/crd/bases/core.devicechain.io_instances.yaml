@@ -154,6 +154,95 @@ spec:
                   making them invert a negative to learn that Prometheus is installed puts a
                   step in front of the answer.
                 type: boolean
+              objectStore:
+                description: |-
+                  ObjectStore is where the instance keeps opaque binaries that do not belong in
+                  the database: tenant branding logos and update artifacts. Absent means the
+                  instance has no object store, and the operations that need one are refused
+                  with OBJECT_STORE_NOT_CONFIGURED rather than written somewhere ephemeral.
+
+                  Everything here is a SETTING or a NAME. An S3 credential is never a field:
+                  the reference below points at a Secret, and the Secret holds the key.
+                properties:
+                  accessMode:
+                    description: |-
+                      AccessMode is the filesystem volume's access mode: ReadWriteOnce, or
+                      ReadWriteMany when more than one pod must share the store.
+                    enum:
+                    - ReadWriteOnce
+                    - ReadWriteMany
+                    type: string
+                  backend:
+                    description: |-
+                      Backend is where objects live: a volume the chart creates (filesystem) or an
+                      S3-compatible bucket (s3).
+                    enum:
+                    - filesystem
+                    - s3
+                    type: string
+                  s3:
+                    description: S3 is the bucket and its coordinates.
+                    properties:
+                      bucket:
+                        description: Bucket is the bucket objects are written to.
+                        minLength: 1
+                        type: string
+                      credentialsSecret:
+                        description: |-
+                          CredentialsSecret names an existing Secret holding AWS_ACCESS_KEY_ID and
+                          AWS_SECRET_ACCESS_KEY, which dcctl copies into the instance's namespace. Absent
+                          means the services use the pod's own AWS identity (IRSA, an instance profile).
+                        properties:
+                          name:
+                            minLength: 1
+                            type: string
+                          namespace:
+                            minLength: 1
+                            type: string
+                        required:
+                        - name
+                        - namespace
+                        type: object
+                      endpoint:
+                        description: Endpoint overrides the AWS endpoint, for an S3-compatible
+                          service.
+                        type: string
+                      region:
+                        description: |-
+                          Region is the AWS region. Optional when Endpoint names an S3-compatible
+                          service, which ignores it.
+                        type: string
+                      usePathStyle:
+                        description: |-
+                          UsePathStyle addresses the bucket in the URL path rather than the host name,
+                          which MinIO and most S3-compatible servers require.
+                        type: boolean
+                    required:
+                    - bucket
+                    type: object
+                  size:
+                    description: Size is the requested size of the filesystem volume,
+                      as a Kubernetes quantity.
+                    type: string
+                  storageClass:
+                    description: |-
+                      StorageClass is the filesystem volume's StorageClass. Empty selects the
+                      cluster default.
+                    type: string
+                required:
+                - backend
+                type: object
+                x-kubernetes-validations:
+                - message: objectStore.s3 is required when backend is s3
+                  rule: self.backend != "s3" || has(self.s3)
+                - message: objectStore.s3 is only valid when backend is s3
+                  rule: self.backend == "s3" || !has(self.s3)
+                - message: size, storageClass and accessMode describe the filesystem
+                    volume and are only valid when backend is filesystem
+                  rule: self.backend == "filesystem" || (!has(self.size) && !has(self.storageClass)
+                    && !has(self.accessMode))
+                - message: size is required when backend is filesystem
+                  rule: self.backend != "filesystem" || has(self.size)
               profile:
                 description: |-
                   Profile names a curated set of functional areas ("default", "full",
