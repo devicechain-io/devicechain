@@ -280,5 +280,6 @@
   "assetVersionPublishDrawerTitle": "Publish property contract",
   "assetVersionPublishExplain": "Publishing freezes the current draft contract into a new version and makes it the one assets of this type are checked against. Draft edits take effect only when published.",
   "assetVersionRollbackConfirm": "Make version {{version}} the contract new property values are checked against? The draft is unchanged, and properties already stored are neither rechecked nor rewritten — assets that no longer fit stay editable until someone writes their properties again.",
-  "assetPropertiesRequiredUnset": "Required"
+  "assetPropertiesRequiredUnset": "Required",
+  "deviceProfileConfigurationTab": "Configuration"
 }

@@ -131,3 +131,62 @@ export async function getDeviceConfigurationView(
     declaration: decl,
   };
 }
+
+// ── Profile configuration declaration (authoring) ─────────────────────────
+
+export interface ConfigurationKeyInput {
+  key: string;
+  valueType: string;
+  description?: string | null;
+}
+
+// The profile's DRAFT declaration — the editable working copy. A device sees the one
+// frozen into the published version (read above), so edits here take effect only when
+// the profile is published.
+const PROFILE_CONFIGURATION_DECLARATION = graphql(`
+  query ProfileConfigurationDeclaration($tokens: [String!]!) {
+    deviceProfilesByToken(tokens: $tokens) {
+      token
+      configurationDeclaration {
+        key
+        valueType
+        description
+      }
+    }
+  }
+`);
+
+export async function getProfileConfigurationDeclaration(
+  profileToken: string,
+): Promise<ConfigurationKey[]> {
+  const data = await gql('device-management', PROFILE_CONFIGURATION_DECLARATION, {
+    tokens: [profileToken],
+  });
+  return data.deviceProfilesByToken[0]?.configurationDeclaration ?? [];
+}
+
+// Replaces the whole draft declaration: the server validates the list as a unit and
+// refuses it entirely if any key is invalid, so a rejected save changes nothing.
+const SET_PROFILE_CONFIGURATION_DECLARATION = graphql(`
+  mutation SetDeviceProfileConfigurationDeclaration($token: String!, $keys: [ConfigurationKeyInput!]!) {
+    setDeviceProfileConfigurationDeclaration(token: $token, keys: $keys) {
+      token
+      configurationDeclaration {
+        key
+        valueType
+        description
+      }
+    }
+  }
+`);
+
+export async function setProfileConfigurationDeclaration(
+  profileToken: string,
+  keys: ConfigurationKeyInput[],
+): Promise<ConfigurationKey[]> {
+  const data = await gql('device-management', SET_PROFILE_CONFIGURATION_DECLARATION, {
+    token: profileToken,
+    keys,
+  });
+  return data.setDeviceProfileConfigurationDeclaration.configurationDeclaration;
+}
