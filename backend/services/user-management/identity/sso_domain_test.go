@@ -35,6 +35,7 @@ func TestNormalizeDomain(t *testing.T) {
 	for _, bad := range []string{
 		"", "   ", ".", "localhost", "user@example.com", "https://example.com", "example.com/path",
 		"exa mple.com", "1.2.3.4", "-bad.example", "a..b.example", "example.com:443",
+		"example.com..", // the profile keeps a second trailing dot, which would be a second spelling
 	} {
 		_, err := NormalizeDomain(bad)
 		require.ErrorIsf(t, err, ErrDomainInvalid, "%q", bad)

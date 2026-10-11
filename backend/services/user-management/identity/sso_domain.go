@@ -58,6 +58,12 @@ func NormalizeDomain(raw string) (string, error) {
 	if d == "" {
 		return "", fmt.Errorf("%w: empty", ErrDomainInvalid)
 	}
+	// ONE trailing dot is the DNS root and is dropped above. A second is an empty label,
+	// which the IDNA profile tolerates as a trailing root dot — so "example.com.." would
+	// come back as "example.com.", a second spelling of a stored domain.
+	if strings.HasSuffix(d, ".") {
+		return "", fmt.Errorf("%w: %q has an empty label", ErrDomainInvalid, raw)
+	}
 	// An address or a URL pasted where a domain belongs is a mistake worth naming rather than
 	// letting the IDNA profile describe in its own words.
 	if strings.ContainsAny(d, "@/:\\ ?#") {
