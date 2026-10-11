@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	dcv1beta1 "github.com/devicechain-io/dc-k8s/api/v1beta1"
 	"helm.sh/helm/v3/pkg/chart"
 	"helm.sh/helm/v3/pkg/chartutil"
 	"helm.sh/helm/v3/pkg/releaseutil"
@@ -113,6 +114,27 @@ var renderProfiles = []renderProfile{
 		st: func(instance string) *State {
 			st := profileState(true, false, "default")(instance)
 			st.NoTLS = true
+			return st
+		},
+	},
+	{
+		// The object store changes the pod template: a claim mounted into the areas that use it
+		// (filesystem), or the S3 credentials projected from a Secret (s3).
+		name: "--object-store filesystem",
+		st: func(instance string) *State {
+			st := profileState(false, false, "default")(instance)
+			st.ObjectStore = &dcv1beta1.ObjectStoreSpec{Backend: dcv1beta1.ObjectStoreFilesystem, Size: "1Gi"}
+			return st
+		},
+	},
+	{
+		name: "--object-store s3 with a credentials Secret",
+		st: func(instance string) *State {
+			st := profileState(false, false, "default")(instance)
+			st.ObjectStore = &dcv1beta1.ObjectStoreSpec{Backend: dcv1beta1.ObjectStoreS3, S3: &dcv1beta1.S3ObjectStoreSpec{
+				Bucket: "dc-objects", Region: "us-east-1",
+				CredentialsSecret: &dcv1beta1.SecretReference{Namespace: "storage", Name: "keys"},
+			}}
 			return st
 		},
 	},
