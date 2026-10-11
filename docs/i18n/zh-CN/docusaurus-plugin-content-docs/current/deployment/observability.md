@@ -425,6 +425,24 @@ kube-state-metrics 本身因节点失效等原因移动期间的重启，只要�
 
 任何原因使解析超过五秒，都会记录 `Event resolution is slow` 警告：首个立即记录，此后最多每 30 秒一条，含数量和最慢值。
 
+## AI 推理调用 {#ai-inference}
+
+在启用了 AI 辅助编写的环境中（参见 [AI 辅助编写](../concepts/ai-authoring.md)），`ai-inference` 服务会统计租户向它提出的请求。这两个指标都是有界的：标签只取固定的一组值，绝不会是租户、模型或提供商，因此不会随租户数量增长。
+
+- **`devicechain_aiinference_ai_inference_calls_total{outcome}`**：租户的推理请求，按每次请求的结束方式划分。
+- **`devicechain_aiinference_ai_inference_tokens_total{direction}`**：提供商报告已使用的 token 数，按 `direction`（`input` 或 `output`）划分。这是用量（花费）信号：平台中没有其他指标统计 token。它是供观察的计数器，而不是账本，也不会据此强制执行任何限制。
+
+| 结果 | 含义 |
+| --- | --- |
+| `served` | 提供商已应答，并返回了候选结果。 |
+| `rate_limited` | 租户超出了推理速率上限，调用在到达任何提供商之前即被拒绝。计数持续上升说明某个租户长期超出配额。 |
+| `consent_required` | 租户尚未同意外部 AI 路由，因此没有任何数据离开平台。对于尚未获得授权的租户，这是预期情况。 |
+| `unavailable` | 平台未配置好来处理该调用：未分配模型、提供商已禁用、缺少密钥。服务端日志会指明具体原因。 |
+| `provider_error` | 已连接到提供商，但提供商未能完成调用（传输错误、非成功状态码、空应答）。外部依赖工作异常。 |
+| `timed_out` | 已连接到提供商，但它没有在 `inferenceTimeoutMs` 内应答（默认 40 秒，最长 120 秒）。作者看到的是超时，而不是笼统的失败。 |
+
+请把 `timed_out` 和 `provider_error` 分开解读。`provider_error` 上升说明提供商在出故障。`timed_out` 上升而 `provider_error` 持平，则说明所用模型比超时时间允许的更慢：请换用更快的模型，或调大 `inferenceTimeoutMs`（chart 的 `ai-inference` 配置中提供该项，超过其上限时服务将拒绝启动）。
+
 ## 维护轮次 {#maintenance-passes}
 
 多个服务按定时器运行清扫、协调或调度任务，以自身名字 `devicechain_<area>_<task>_…` 导出三项：
