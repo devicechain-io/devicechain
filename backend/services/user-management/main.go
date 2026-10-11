@@ -220,8 +220,12 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	IdentityManager = identity.NewManager(Microservice, RdbManager, lock, secretStore, accessTTL, refreshTTL,
-		Configuration.Auth.IssuerUrl, bootstrapConfig(Configuration), credentials)
+	IdentityManager, err = newIdentityManager(Microservice, RdbManager, lock, secretStore, accessTTL, refreshTTL,
+		Configuration.Auth.IssuerUrl, bootstrapConfig(Configuration), credentials,
+		Microservice.InstanceConfiguration.Infrastructure)
+	if err != nil {
+		return err
+	}
 	if err := IdentityManager.Initialize(ctx, refreshKV, codesKV); err != nil {
 		return explainSeedRefusal(err)
 	}
