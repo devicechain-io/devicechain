@@ -24,18 +24,24 @@ import {
   type CanvasGrid,
   type CanvasSizing,
   type DashboardDefinition,
+  type ExtensionWidgetInstance,
+  type ExtensionWidgetType,
   type KnownWidgetInstance,
   type LocationSelection,
   type SlotBinding,
   type SlotDefinition,
   type SlotScope,
   type WidgetBox,
+  type WidgetImplementationRef,
   type WidgetInstance,
   type WidgetLayout,
   type UnknownWidgetInstance,
+  type UnresolvedWidgetReason,
   type WidgetType,
   UNKNOWN_WIDGET_TYPE,
 } from './types';
+import { parseWidgetRef, unresolvedReason } from './widget-compat';
+import type { WidgetCatalog } from './widget-catalog';
 
 // The breakpoint every layout must define; a widget/viewport with no more specific
 // box falls back to it. Named once so parse + resolveWidgetBox agree.
@@ -71,7 +77,19 @@ function numberAt(rec: Record<string, unknown>, key: string, fallback: number): 
 // after JSON.parse (the caller owns the parse so a syntax error is theirs to
 // handle); an already-typed object round-trips unchanged, an unknown-type
 // placeholder included.
-export function parseDashboardDefinition(raw: unknown): DashboardDefinition {
+//
+// `options.catalog` is the React-free view of the host's widget registry. With it, a
+// namespaced extension id the catalog holds parses to an ExtensionWidgetInstance, and a
+// stored `widget` version reference is checked against the installed descriptor; a widget
+// the catalog cannot resolve (absent, no/invalid metadata, settings or SDK generation
+// differing) becomes a placeholder carrying its reason and its stored JSON. Without a
+// catalog the parser knows the built-ins only (legacy behavior), and any other id is a
+// placeholder.
+export interface ParseDefinitionOptions {
+  catalog?: WidgetCatalog;
+}
+
+export function parseDashboardDefinition(raw: unknown, options: ParseDefinitionOptions = {}): DashboardDefinition {
   if (!isRecord(raw)) throw new DashboardDefinitionError('not a JSON object');
 
   const widgetsRaw = raw.widgets;
@@ -81,7 +99,7 @@ export function parseDashboardDefinition(raw: unknown): DashboardDefinition {
     schemaVersion: numberAt(raw, 'schemaVersion', 1),
     title: typeof raw.title === 'string' ? raw.title : '',
     canvas: parseCanvas(raw.canvas),
-    widgets: widgetsRaw.map((w, i) => parseWidget(w, i)),
+    widgets: widgetsRaw.map((w, i) => parseWidget(w, i, options.catalog)),
   };
   // slots — the runtime-binding section (ADR-039). Normalized when present so a
   // stored definition round-trips, but omitted entirely otherwise so a slot-free
@@ -286,7 +304,7 @@ function parseCanvas(raw: unknown): Canvas {
   return canvas;
 }
 
-function parseWidget(raw: unknown, index: number): WidgetInstance {
+function parseWidget(raw: unknown, index: number, catalog: WidgetCatalog | undefined): WidgetInstance {
   if (!isRecord(raw)) throw new DashboardDefinitionError(`widgets[${index}] is not an object`);
 
   const type = raw.type;
@@ -295,14 +313,26 @@ function parseWidget(raw: unknown, index: number): WidgetInstance {
   if (typeof type !== 'string' || type.length === 0) {
     throw new DashboardDefinitionError(`widgets[${index}] has unknown type ${JSON.stringify(type)}`);
   }
-  if (type === UNKNOWN_WIDGET_TYPE && isRecord(raw.raw)) return reparseUnknownWidget(raw, index);
-  if (!WIDGET_TYPE_SET.has(type)) return parseUnknownWidget(raw, index);
+  if (type === UNKNOWN_WIDGET_TYPE && isRecord(raw.raw)) return reparseUnknownWidget(raw, index, catalog);
 
-  const widget: KnownWidgetInstance = {
-    id: storedWidgetId(raw) ?? generateWidgetId(),
-    type: type as WidgetType,
-    layout: parseLayout(raw.layout, index),
-  };
+  const builtin = WIDGET_TYPE_SET.has(type);
+  const reason = unresolvedReason(type, raw.widget, catalog, builtin) ?? (builtin ? undefined : reservedFieldReason(type, raw));
+  if (reason) return parseUnknownWidget(raw, index, reason);
+
+  const ref = parseWidgetRef(raw.widget) ?? undefined;
+  const widget: KnownWidgetInstance | ExtensionWidgetInstance = builtin
+    ? {
+        id: storedWidgetId(raw) ?? generateWidgetId(),
+        type: type as WidgetType,
+        ...(ref ? { widget: ref } : {}),
+        layout: parseLayout(raw.layout, index),
+      }
+    : {
+        id: storedWidgetId(raw) ?? generateWidgetId(),
+        type: type as ExtensionWidgetType,
+        widget: ref as WidgetImplementationRef, // unresolvedReason guarantees a valid ref here
+        layout: parseLayout(raw.layout, index),
+      };
   // datasource is owned by the hub, but the two supported kinds are NORMALIZED here
   // so downstream (hub/widgets) never sees a partial shape (a device selector with
   // no measurements array, an anchor with a non-object target, …). Reserved/other
@@ -310,7 +340,45 @@ function parseWidget(raw: unknown, index: number): WidgetInstance {
   const ds = parseDatasource(raw.datasource, index);
   if (ds) widget.datasource = ds;
   if (isRecord(raw.options)) widget.options = raw.options as Record<string, unknown>;
+  if (!builtin) return withStoredFields(raw, widget as ExtensionWidgetInstance);
   return widget;
+}
+
+// The envelope fields the parser owns on a resolved widget. Everything else a stored widget
+// carries is outside the owned schema.
+const OWNED_WIDGET_KEYS: ReadonlySet<string> = new Set(['id', 'type', 'widget', 'layout', 'datasource', 'options']);
+
+// withStoredFields keeps, on a resolved EXTENSION widget, every stored field the envelope does
+// not own (a package's own top-level additions, extra keys inside `widget`), in the stored key
+// order, so a load/save round trip writes them back byte-for-byte. Owned fields take their
+// parsed (normalized) values. Built-ins are deliberately left as they always were (only the
+// owned envelope survives), so an existing board's saved bytes do not change.
+function withStoredFields(raw: Record<string, unknown>, parsed: ExtensionWidgetInstance): ExtensionWidgetInstance {
+  const owned = parsed as unknown as Record<string, unknown>;
+  const out: Record<string, unknown> = {};
+  // defineProperty, not assignment: a JSON.parse'd `__proto__` key is an own field to keep,
+  // and assigning it would set the prototype instead.
+  const put = (key: string, value: unknown) =>
+    Object.defineProperty(out, key, { value, enumerable: true, writable: true, configurable: true });
+  for (const key of Object.keys(raw)) {
+    if (!OWNED_WIDGET_KEYS.has(key)) put(key, JSON.parse(JSON.stringify(raw[key])) as unknown);
+    else if (key === 'widget') put(key, { ...(raw.widget as Record<string, unknown>), ...parsed.widget });
+    else if (owned[key] !== undefined) put(key, owned[key]);
+  }
+  for (const key of OWNED_WIDGET_KEYS) {
+    if (!Object.prototype.hasOwnProperty.call(out, key) && owned[key] !== undefined) put(key, owned[key]);
+  }
+  return out as unknown as ExtensionWidgetInstance;
+}
+
+// A stored extension widget that uses a field name the parsed model reserves for placeholders
+// cannot be carried on a resolved instance without being mistaken for one, so it is kept
+// verbatim as a placeholder instead of having the field dropped.
+function reservedFieldReason(type: string, raw: Record<string, unknown>): UnresolvedWidgetReason | undefined {
+  const clash = ['raw', 'reason'].find((k) => Object.prototype.hasOwnProperty.call(raw, k));
+  return clash === undefined
+    ? undefined
+    : { code: 'invalid-metadata', message: `"${type}" carries a top-level "${clash}" field, which the dashboard format reserves` };
 }
 
 // The id a stored widget carries, or undefined when it has none worth keeping.
@@ -325,12 +393,17 @@ function storedWidgetId(raw: Record<string, unknown>): string | undefined {
 //
 // `raw` is a JSON copy of the stored object: detached from the caller's value (which a
 // host may go on to mutate), and exactly what JSON.stringify will write back.
-function parseUnknownWidget(raw: Record<string, unknown>, index: number): UnknownWidgetInstance {
+function parseUnknownWidget(
+  raw: Record<string, unknown>,
+  index: number,
+  reason: UnresolvedWidgetReason,
+): UnknownWidgetInstance {
   return {
     id: storedWidgetId(raw) ?? generateWidgetId(),
     type: UNKNOWN_WIDGET_TYPE,
     layout: parseLayout(raw.layout, index),
     raw: JSON.parse(JSON.stringify(raw)) as Record<string, unknown>,
+    reason,
   };
 }
 
@@ -340,12 +413,26 @@ function parseUnknownWidget(raw: Record<string, unknown>, index: number): Unknow
 // placeholder. Wrapping it again would make the save write the wrapper and lose the
 // widget. The serializer never writes the placeholder type, so no stored document takes
 // this path.
-function reparseUnknownWidget(raw: Record<string, unknown>, index: number): UnknownWidgetInstance {
+function reparseUnknownWidget(
+  raw: Record<string, unknown>,
+  index: number,
+  catalog: WidgetCatalog | undefined,
+): UnknownWidgetInstance {
+  const stored = JSON.parse(JSON.stringify(raw.raw)) as Record<string, unknown>;
+  const storedType = typeof stored.type === 'string' ? stored.type : '';
+  // The reason is recomputed against THIS catalog (it is never stored); a stored object the
+  // catalog now resolves stays a placeholder here, because only a parse of the stored
+  // document — not a re-parse of a typed definition — promotes a widget.
+  const reason = unresolvedReason(storedType, stored.widget, catalog, WIDGET_TYPE_SET.has(storedType)) ?? {
+    code: 'unregistered' as const,
+    message: `"${storedType}" is not available in this host`,
+  };
   return {
     id: storedWidgetId(raw) ?? generateWidgetId(),
     type: UNKNOWN_WIDGET_TYPE,
     layout: parseLayout(raw.layout, index),
-    raw: JSON.parse(JSON.stringify(raw.raw)) as Record<string, unknown>,
+    raw: stored,
+    reason,
   };
 }
 
@@ -479,7 +566,7 @@ function parseBox(rec: Record<string, unknown>): WidgetBox {
 // The stored shape of a definition: what serializeDefinition writes. A placeholder for
 // an unknown widget type is written as the stored object it was parsed from.
 export type StoredDashboardDefinition = Omit<DashboardDefinition, 'widgets'> & {
-  widgets: Array<KnownWidgetInstance | Record<string, unknown>>;
+  widgets: Array<KnownWidgetInstance | ExtensionWidgetInstance | Record<string, unknown>>;
 };
 
 // storedDefinition is the definition as it is stored: every unknown-type placeholder

@@ -90,6 +90,8 @@ type DeviceReport struct {
 	Update       *Report
 	Sync         *SyncReport
 	ConfigStatus *ConfigStatusReport
+	// DownloadRequest is set for a download.request (assignment.go).
+	DownloadRequest *DownloadRequest
 }
 
 // DecodeDeviceReport parses and validates one device-to-platform message of any kind. It is the
@@ -128,6 +130,15 @@ func DecodeDeviceReport(b []byte) (DeviceReport, error) {
 			return DeviceReport{}, err
 		}
 		return DeviceReport{Kind: kind, ConfigStatus: &c}, nil
+	case KindDownloadRequest:
+		var d DownloadRequest
+		if err := strictDecode(b, &d); err != nil {
+			return DeviceReport{}, err
+		}
+		if err := d.Validate(); err != nil {
+			return DeviceReport{}, err
+		}
+		return DeviceReport{Kind: kind, DownloadRequest: &d}, nil
 	default:
 		return DeviceReport{}, fmt.Errorf("ota: unknown report kind %q", kind)
 	}

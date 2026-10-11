@@ -28,6 +28,7 @@ const (
 	AuditOpLogin       = "login"
 	AuditOpLoginFailed = "login_failed"
 	AuditOpRefresh     = "refresh"
+	AuditOpLogout      = "logout"
 )
 
 // AuditEvent is one row of the tenant-scoped audit journal (ADR-019): a record,

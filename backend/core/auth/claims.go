@@ -86,6 +86,15 @@ type Claims struct {
 	// never reads it, and nor does the admin plane's identity-token check — a token
 	// already issued keeps working there until it expires.
 	SessionEpoch SessionEpoch `json:"sep,omitempty"`
+	// SessionID (the "sid" claim) names the server-side record of the sign-in this token
+	// descends from. It rides the same two tiers as SessionEpoch: identity tokens and
+	// refresh tokens (tenant and OAuth). Every refresh chain minted from one sign-in -
+	// the first tenant, each tenant switched to, each rotation - carries the sign-in's
+	// sid, so ending that record (logout) ends them all at once, where the epoch ends
+	// every sign-in of an identity. It names nothing but a random value; only the issuing
+	// service looks it up, whenever one of those tokens is exchanged. A token without it
+	// is refused rather than treated as an older kind.
+	SessionID SessionID `json:"sid,omitempty"`
 	// TokenType distinguishes access from refresh tokens (see TokenType*).
 	TokenType string `json:"typ"`
 
@@ -97,6 +106,11 @@ type Claims struct {
 // never be passed where the positional tenant, email or jti strings of the issue
 // methods are expected, or the other way round.
 type SessionEpoch string
+
+// SessionID names one sign-in's server-side record (see Claims.SessionID). A distinct
+// type for the same reason as SessionEpoch: it must never be passed where the issue
+// methods' positional strings are expected.
+type SessionID string
 
 // HasAuthority reports whether the claims grant the required authority. A subject
 // holding the super-authority AuthorityAll ("*") passes every check.

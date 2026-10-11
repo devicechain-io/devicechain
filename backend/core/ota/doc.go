@@ -45,6 +45,8 @@
 //     device volunteers matches, and when the target requires a reboot, the boot differs from the
 //     install boot (the boot of the first report at UPDATING or later; the last reported boot when no
 //     install report arrived). An unrelated restart earlier in the attempt does not count. No command acknowledgement and no INSTALLING "success" is evidence.
+//   - UNKNOWN leaves on evidence, or when an operator explicitly abandons it (Abandon): that ends it
+//     CANCELLED with a stated reason and says nothing about what the device actually runs.
 //   - Deadlines are platform time, measured from the last accepted report. Silence while installing
 //     or rebooting is UNKNOWN, never failure and never success.
 //   - A repeated seq with the same content is a DUPLICATE; with different content it is a CONFLICT.
