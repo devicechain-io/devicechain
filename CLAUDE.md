@@ -51,7 +51,7 @@ backend/
                               telemetry, alarms, commands) to AI agents over MCP, fronting per-area GraphQL
                               under the caller's own token — no service token, confused-deputy red line (ADR-047)
     update-management/        opt-in OTA area: artifacts, device assignments, download plane. Today: the immutable
-                              per-tenant artifact catalogue (GraphQL CRUD, digest stored as text) and a streaming
+                              per-tenant artifact catalogue (declare / inspect / retire over GraphQL, digest stored as text) and a streaming
                               `PUT /updates/artifacts/{token}/content` that authenticates before reading the body,
                               caps size before and during the stream, and verifies size + SHA-256 (a mismatch deletes
                               the object). Assignments and download are not built. Held out of `default`, shipped by `full`

@@ -424,6 +424,10 @@
           "type": "object",
           "description": "Extra annotations merged onto the Ingress objects (body size, timeouts and so on)."
         },
+        "uploadMaxBodySize": {
+          "type": "string",
+          "description": "Largest request body the update-artifact upload route accepts at the edge, as an nginx size (for example 1g). That route is rendered on its own Ingress with this limit and request buffering off. Keep it at or above the update-management artifact ceiling."
+        },
         "tls": {
           "type": "object",
           "properties": {

@@ -683,6 +683,10 @@ blobStorage:
     # Filestore / NFS), or use the s3 backend instead.
     accessModes:
       - ReadWriteOnce
+    # Every tenant and every consuming area shares this volume. update-management caps each
+    # tenant at updates.maxTenantArtifactBytes (default 2 GiB) and each artifact at
+    # updates.maxArtifactBytes, so size the volume as (tenants storing artifacts) x (that
+    # ceiling), plus headroom for branding assets, or lower the ceiling to fit.
     size: 5Gi
     # Empty uses the cluster default StorageClass. Set the RWX-capable class for
     # multi-replica. "-" (a literal dash) selects "no storage class" for a statically
@@ -1006,6 +1010,12 @@ ingress:
   host: devicechain.local
   # Extra annotations merged onto the Ingress (e.g. body size, timeouts).
   annotations: {}
+  # Largest request body the update-artifact upload route accepts at the edge. That route
+  # (PUT /api/update-management/updates/artifacts/<token>/content) is rendered on its own
+  # Ingress with this body limit and with request buffering OFF, so the body streams to the
+  # service, which authenticates before it reads it. Keep it at or above
+  # functionalAreas.update-management.config.updates.maxArtifactBytes (default 512 MiB).
+  uploadMaxBodySize: 1g
   tls:
     enabled: true
     # selfSigned renders a cert-manager self-signed Issuer in the instance

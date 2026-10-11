@@ -559,6 +559,7 @@ generated from the schema; do not edit it by hand.
 | `ingress.className` | string | `"nginx"` | IngressClass the controller registered (the OpenTofu ingress_class). |
 | `ingress.host` | string | `"devicechain.local"` | Host name the Ingress objects route. The chart renders up to three: the API (https://&lt;host&gt;/api/&lt;area&gt;/graphql), the well-known discovery route for OAuth and MCP, and the web console (https://&lt;host&gt;/). |
 | `ingress.annotations` | object | `{}` | Extra annotations merged onto the Ingress objects (body size, timeouts and so on). |
+| `ingress.uploadMaxBodySize` | string | `"1g"` | Largest request body the update-artifact upload route accepts at the edge, as an nginx size (for example 1g). That route is rendered on its own Ingress with this limit and request buffering off. Keep it at or above the update-management artifact ceiling. |
 | `ingress.tls` | object | - | TLS for the Ingress, using cert-manager. |
 | `ingress.tls.enabled` | boolean | `true` | Terminate TLS at the Ingress. |
 | `ingress.tls.selfSigned` | boolean | `true` | Render a cert-manager self-signed Issuer in the instance namespace: valid TLS that browsers do not trust, for development. For real certificates set false and name a ClusterIssuer in clusterIssuer. |

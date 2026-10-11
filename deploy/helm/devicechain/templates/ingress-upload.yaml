@@ -1,0 +1,69 @@
+{{/*
+The update-artifact content upload, on an Ingress of its own.
+
+  PUT /api/update-management/updates/artifacts/<token>/content
+
+carries a firmware image of up to hundreds of megabytes, and the API Ingress's defaults are
+wrong for it in two ways:
+
+  - ingress-nginx refuses a request body over 1 MiB (proxy-body-size) before it reaches the
+    service, so the upload fails with 413 at the edge;
+  - ingress-nginx BUFFERS the request body to disk before it forwards a byte (proxy-request-
+    buffering), so the service would not see the request, and could not refuse it for want of
+    a token, until the whole image had arrived. The service authenticates before it reads the
+    body; buffering at the edge puts the whole body ahead of that check.
+
+So this route lifts the body limit to ingress.uploadMaxBodySize and turns request buffering
+off, and the API Ingress keeps its defaults for every GraphQL request. It is a separate object
+because annotations apply to a whole Ingress, and the longer path is matched ahead of the API
+Ingress's /api/<area> location for the same host. The rewrite is the API Ingress's: the
+/api/update-management prefix is stripped so the service sees /updates/artifacts/<token>/content.
+
+Rendered only with the ingress and the update-management area. The body limit bounds what the
+edge accepts, not what the service stores: the service's own ceiling
+(functionalAreas.update-management.config.updates.maxArtifactBytes) is the one that decides, so
+keep this at or above it.
+*/}}
+{{- if and .Values.ingress.enabled (has "update-management" (splitList "," (include "devicechain.enabledAreas" .))) }}
+{{- $tls := .Values.ingress.tls -}}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: devicechain-update-upload
+  namespace: {{ include "devicechain.instanceNamespace" . }}
+  labels:
+    {{- include "devicechain.instanceLabels" . | nindent 4 }}
+  annotations:
+    nginx.ingress.kubernetes.io/rewrite-target: /$2
+    nginx.ingress.kubernetes.io/proxy-body-size: {{ .Values.ingress.uploadMaxBodySize | default "1g" | quote }}
+    nginx.ingress.kubernetes.io/proxy-request-buffering: "off"
+    {{- if $tls.enabled }}
+    {{- if $tls.selfSigned }}
+    cert-manager.io/issuer: {{ $tls.issuerName }}
+    {{- else if $tls.clusterIssuer }}
+    cert-manager.io/cluster-issuer: {{ $tls.clusterIssuer }}
+    {{- end }}
+    {{- end }}
+    {{- with .Values.ingress.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  ingressClassName: {{ .Values.ingress.className }}
+  {{- if $tls.enabled }}
+  tls:
+    - hosts:
+        - {{ .Values.ingress.host | quote }}
+      secretName: {{ $tls.secretName }}
+  {{- end }}
+  rules:
+    - host: {{ .Values.ingress.host | quote }}
+      http:
+        paths:
+          - path: /api/update-management(/)(updates/artifacts/[^/]+/content)$
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: update-management
+                port:
+                  name: graphql
+{{- end }}
