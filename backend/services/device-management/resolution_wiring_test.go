@@ -9,6 +9,7 @@ import (
 	"github.com/devicechain-io/dc-device-management/model"
 	"github.com/devicechain-io/dc-device-management/processor"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/credential"
 	"github.com/devicechain-io/dc-microservice/deadletter"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/require"
@@ -21,9 +22,9 @@ import (
 // It builds the resolve metrics and a dead-letter producer directly rather than through
 // buildMetrics, which reads the producer core/service builds and this test has no service to run.
 func TestConfiguredResolutionWorkersReachTheProcessor(t *testing.T) {
-	savedMs, savedCfg, savedMetrics, savedDead := Microservice, Configuration, ResolveMetrics, DeadLetters
+	savedMs, savedCfg, savedMetrics, savedDead, savedTransit := Microservice, Configuration, ResolveMetrics, DeadLetters, SecretTransit
 	t.Cleanup(func() {
-		Microservice, Configuration, ResolveMetrics, DeadLetters = savedMs, savedCfg, savedMetrics, savedDead
+		Microservice, Configuration, ResolveMetrics, DeadLetters, SecretTransit = savedMs, savedCfg, savedMetrics, savedDead, savedTransit
 	})
 
 	for _, tc := range []struct {
@@ -42,6 +43,7 @@ func TestConfiguredResolutionWorkersReachTheProcessor(t *testing.T) {
 			require.NoError(t, parseConfiguration())
 			ResolveMetrics = processor.NewResolveMetrics(Microservice)
 			DeadLetters = deadletter.NewProducer(Microservice)
+			SecretTransit = testTransit(t)
 
 			require.Equal(t, tc.want, newInboundEventsProcessor(nil).Resolvers())
 		})
@@ -54,11 +56,11 @@ func TestConfiguredResolutionWorkersReachTheProcessor(t *testing.T) {
 // to reading its caches one after another, with every processor test still green, because
 // they build their own resolvers.
 func TestTheProcessorReadsItsCachesAtTheSameTime(t *testing.T) {
-	savedMs, savedCfg, savedMetrics, savedCached, savedDead :=
-		Microservice, Configuration, ResolveMetrics, CachedApi, DeadLetters
+	savedMs, savedCfg, savedMetrics, savedCached, savedDead, savedTransit :=
+		Microservice, Configuration, ResolveMetrics, CachedApi, DeadLetters, SecretTransit
 	t.Cleanup(func() {
-		Microservice, Configuration, ResolveMetrics, CachedApi, DeadLetters =
-			savedMs, savedCfg, savedMetrics, savedCached, savedDead
+		Microservice, Configuration, ResolveMetrics, CachedApi, DeadLetters, SecretTransit =
+			savedMs, savedCfg, savedMetrics, savedCached, savedDead, savedTransit
 	})
 	Microservice = &core.Microservice{InstanceId: "test", FunctionalArea: "device-management"}
 	Microservice.UseMetricsRegistry(prometheus.NewRegistry())
@@ -66,6 +68,7 @@ func TestTheProcessorReadsItsCachesAtTheSameTime(t *testing.T) {
 	require.NoError(t, parseConfiguration())
 	ResolveMetrics = processor.NewResolveMetrics(Microservice)
 	DeadLetters = deadletter.NewProducer(Microservice)
+	SecretTransit = testTransit(t)
 	CachedApi = model.NewCachedApi(&model.Api{}, &model.Caches{})
 
 	require.True(t, model.ReadsAheadConcurrently(newInboundEventsProcessor(nil).Api),
@@ -87,7 +90,37 @@ func TestTheInboundProcessorCountsLostRecordsOnTheServiceProducer(t *testing.T) 
 	require.NoError(t, parseConfiguration())
 	ResolveMetrics = processor.NewResolveMetrics(Microservice)
 	DeadLetters = deadletter.NewProducer(Microservice)
+	savedTransit := SecretTransit
+	t.Cleanup(func() { SecretTransit = savedTransit })
+	SecretTransit = testTransit(t)
 
 	require.NotNil(t, DeadLetters)
 	require.Same(t, DeadLetters, newInboundEventsProcessor(nil).DeadLetters())
+}
+
+// The key the service derives from the root key is the one the processor's resolvers open
+// sealed credential secrets with. A processor built without it refuses at construction
+// (WithSecretTransit panics on nil), but one handed some OTHER key would start and refuse
+// every MQTT password, so the wiring is checked by identity.
+func TestTheProcessorOpensSealedSecretsWithTheServicesKey(t *testing.T) {
+	savedMs, savedCfg, savedMetrics, savedDead, savedTransit := Microservice, Configuration, ResolveMetrics, DeadLetters, SecretTransit
+	t.Cleanup(func() {
+		Microservice, Configuration, ResolveMetrics, DeadLetters, SecretTransit = savedMs, savedCfg, savedMetrics, savedDead, savedTransit
+	})
+	Microservice = &core.Microservice{InstanceId: "test", FunctionalArea: "device-management"}
+	Microservice.UseMetricsRegistry(prometheus.NewRegistry())
+	Microservice.MicroserviceConfigurationRaw = []byte(`{}`)
+	require.NoError(t, parseConfiguration())
+	ResolveMetrics = processor.NewResolveMetrics(Microservice)
+	DeadLetters = deadletter.NewProducer(Microservice)
+	SecretTransit = testTransit(t)
+
+	require.Same(t, SecretTransit, newInboundEventsProcessor(nil).SecretTransit())
+}
+
+func testTransit(t *testing.T) *credential.SecretTransit {
+	t.Helper()
+	tr, err := credential.DeriveSecretTransit(make([]byte, 32))
+	require.NoError(t, err)
+	return tr
 }

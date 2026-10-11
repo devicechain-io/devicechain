@@ -20,6 +20,7 @@ import (
 	esmodel "github.com/devicechain-io/dc-event-sources/model"
 	esproto "github.com/devicechain-io/dc-event-sources/proto"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/credential"
 	"github.com/devicechain-io/dc-microservice/entity"
 	"github.com/devicechain-io/dc-microservice/eventtime"
 	"github.com/devicechain-io/dc-microservice/messaging"
@@ -31,10 +32,14 @@ import (
 
 // Worker used to resolve event entities.
 type EventResolver struct {
-	WorkerId   int
-	Api        model.DeviceManagementApi
-	AuthMode   string
-	Unresolved <-chan messaging.Message
+	WorkerId int
+	Api      model.DeviceManagementApi
+	AuthMode string
+	// SecretTransit opens the sealed credential secret an inbound event carries
+	// (event-sources seals it; the stream never holds a password as sent). Nil opens
+	// nothing, so every event presenting a secret fails to authenticate.
+	SecretTransit *credential.SecretTransit
+	Unresolved    <-chan messaging.Message
 	// Invalid is handed a message that could not be decoded. It owns the message's ack
 	// from then on: the source is acked once its failed-event record is stored.
 	Invalid func(error, messaging.Message)
@@ -857,15 +862,30 @@ func (rez *EventResolver) HandleEvent(ctx context.Context,
 // event (ADR-014), or nil when none was presented. An empty credential id counts
 // as none so an event carrying blank fields falls through to the configured
 // no-credential behaviour rather than failing authentication.
-func presentedCredential(unrez *esmodel.UnresolvedEvent) *model.PresentedCredential {
+//
+// The secret arrives SEALED (SealedCredentialSecret) and is opened here, bound to the
+// tenant and credential id it was sealed for. A secret that will not open, a plaintext
+// left in a message from before sealing included, is presented as an EMPTY secret:
+// it matches no stored digest, so the event fails to authenticate like a wrong password
+// and never as an absent credential, which optional mode would let through.
+func (rez *EventResolver) presentedCredential(ctx context.Context, unrez *esmodel.UnresolvedEvent) *model.PresentedCredential {
 	if unrez.CredentialType == nil || unrez.CredentialId == nil || *unrez.CredentialId == "" {
 		return nil
 	}
-	return &model.PresentedCredential{
+	presented := &model.PresentedCredential{
 		CredentialType: *unrez.CredentialType,
 		CredentialId:   *unrez.CredentialId,
-		Secret:         unrez.CredentialSecret,
 	}
+	if unrez.SealedCredentialSecret != nil {
+		opened := ""
+		if tenant, ok := core.TenantFromContext(ctx); ok {
+			if secret, err := rez.SecretTransit.Open(tenant, *unrez.CredentialId, *unrez.SealedCredentialSecret); err == nil {
+				opened = secret
+			}
+		}
+		presented.Secret = &opened
+	}
+	return presented
 }
 
 // transportAuthenticatedBypass reports whether an event may skip the required-mode
@@ -915,7 +935,7 @@ func transportAuthenticatedBypass(unrez *esmodel.UnresolvedEvent) bool {
 // device can not impersonate another.
 func (rez *EventResolver) resolveDevice(ctx context.Context, unrez *esmodel.UnresolvedEvent) (*model.Device, uint, error) {
 	if rez.AuthMode != config.AuthModeDisabled {
-		if presented := presentedCredential(unrez); presented != nil {
+		if presented := rez.presentedCredential(ctx, unrez); presented != nil {
 			device, err := rez.Api.AuthenticateDevice(ctx, presented, time.Now())
 			if err != nil {
 				return nil, uint(dmproto.FailureReason_Unauthenticated), err

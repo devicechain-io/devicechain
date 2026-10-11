@@ -546,7 +546,7 @@ func TestClaimDeviceCannotWriteAContainmentEdge(t *testing.T) {
 	_, err = api.EnsureContainmentType(ctx)
 	require.NoError(t, err, "ensure containment type")
 
-	secret := "s3cret"
+	secret := "s3cret-0123456789"
 	_, err = api.InitiateDeviceClaim(ctx, &DeviceClaimInitiateRequest{
 		DeviceToken: "dozer-01",
 		ClaimSecret: secret,

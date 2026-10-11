@@ -24,7 +24,7 @@ func TestTheConnectLookupFillsOnlyTheConnectFields(t *testing.T) {
 		t.Fatalf("lookup: %v", err)
 	}
 	if cred.ID == 0 || cred.TenantId != "acme" || cred.DeviceId != f.devId ||
-		!cred.SecretDigest.Valid || !verifies(cred.SecretDigest.String, "s3cret") || cred.ExpiresAt.Valid {
+		!cred.SecretDigest.Valid || !verifies(cred.SecretDigest.String, "s3cret-0123456789") || cred.ExpiresAt.Valid {
 		t.Errorf("the connect fields were not read: id %d, tenant %q, device %d (want %d), secret %v, expires %v",
 			cred.ID, cred.TenantId, cred.DeviceId, f.devId, cred.SecretDigest, cred.ExpiresAt)
 	}

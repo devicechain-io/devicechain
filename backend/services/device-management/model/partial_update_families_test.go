@@ -1011,7 +1011,7 @@ func entityGroupFamily() putest.Family[*Api] {
 func deviceCredentialFamily() putest.Family[*Api] {
 	const (
 		credentialIdSeed    = "a-minted-bearer"
-		credentialValueSeed = "s3cret-material"
+		credentialValueSeed = "s3cret-material-0123"
 		expiresAtSeed       = "2031-03-04T05:06:07Z"
 		metadataSeed        = `{"fleet":"north"}`
 	)
@@ -1032,7 +1032,7 @@ func deviceCredentialFamily() putest.Family[*Api] {
 			}
 			if _, err := api.CreateDeviceCredential(ctx, &DeviceCredentialCreateRequest{
 				Token: "dcred-1", DeviceToken: "dev-a",
-				CredentialType: string(CredentialAccessToken), CredentialId: credentialIdSeed,
+				CredentialType: string(CredentialMqttBasic), CredentialId: credentialIdSeed,
 				CredentialValue: strp(credentialValueSeed), Enabled: true,
 				ExpiresAt: strp(expiresAtSeed), Metadata: strp(metadataSeed),
 			}); err != nil {
@@ -1043,10 +1043,13 @@ func deviceCredentialFamily() putest.Family[*Api] {
 			rows, err := api.DeviceCredentialsByToken(ctx, []string{"dcred-1"})
 			e := requireOne(t, "device credential", rows, err)
 			return map[string]string{
-				"deviceToken":     refTokenOf(t, e.Device == nil, func() string { return e.Device.Token }),
-				"credentialType":  e.CredentialType,
-				"credentialId":    e.CredentialId,
-				"credentialValue": secretStr(e.SecretDigest, credentialValueSeed, "rotated-material"),
+				"deviceToken":    refTokenOf(t, e.Device == nil, func() string { return e.Device.Token }),
+				"credentialType": e.CredentialType,
+				"credentialId":   e.CredentialId,
+				// A type that compares no secret holds none by design (checked in
+				// credential_secret_length_test.go), so the seed stands in for it here and a
+				// change of type is not read as a change of password.
+				"credentialValue": credentialValueOf(e, credentialValueSeed, "rotated-material-0123"),
 				"enabled":         boolStr(e.Enabled),
 				"expiresAt":       nullTimeStr(e.ExpiresAt),
 				"metadata":        jsonStr(e.Metadata),
@@ -1060,11 +1063,11 @@ func deviceCredentialFamily() putest.Family[*Api] {
 		Fields: []putest.Field{
 			putest.RequiredRefField("deviceToken", "dev-a", "dev-b",
 				func(r *DeviceCredentialUpdateRequest) *dcgraphql.OptionalString { return &r.DeviceToken }),
-			putest.RequiredStringField("credentialType", string(CredentialAccessToken), string(CredentialMqttBasic),
+			putest.RequiredStringField("credentialType", string(CredentialMqttBasic), string(CredentialAccessToken),
 				func(r *DeviceCredentialUpdateRequest) *dcgraphql.OptionalString { return &r.CredentialType }),
 			putest.RequiredStringField("credentialId", credentialIdSeed, "a-rotated-bearer",
 				func(r *DeviceCredentialUpdateRequest) *dcgraphql.OptionalString { return &r.CredentialId }),
-			putest.OptionalStringField("credentialValue", credentialValueSeed, "rotated-material",
+			putest.OptionalStringField("credentialValue", credentialValueSeed, "rotated-material-0123",
 				func(r *DeviceCredentialUpdateRequest) *dcgraphql.OptionalString { return &r.CredentialValue }),
 			putest.RequiredBoolField("enabled", true,
 				func(r *DeviceCredentialUpdateRequest) *dcgraphql.OptionalBool { return &r.Enabled }),
@@ -1321,4 +1324,13 @@ func deviceProfileFamily() putest.Family[*Api] {
 			locationField(),
 		},
 	}
+}
+
+// credentialValueOf reads a credential's password back for the partial-update families: the
+// candidate it verifies, or the seed when the type holds no secret.
+func credentialValueOf(e *DeviceCredential, seed string, candidates ...string) string {
+	if !credentialRequiresSecret(e.CredentialType) {
+		return seed
+	}
+	return secretStr(e.SecretDigest, append([]string{seed}, candidates...)...)
 }

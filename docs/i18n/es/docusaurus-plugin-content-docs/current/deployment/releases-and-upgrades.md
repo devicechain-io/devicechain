@@ -3775,6 +3775,17 @@ No hay que hacer nada.
 
 Lo que cambia la versión posterior a `v0.19.0`, recogido a medida que llega.
 
+#### Los eventos que llevan una contraseña de dispositivo en el cuerpo se rechazan mientras conviven versiones {#next-upgrade-body-password}
+
+Desde esta versión, `event-sources` y `device-management` se pasan en otra forma la contraseña de
+dispositivo que llega en el cuerpo de un evento, y cada uno necesita la versión nueva para leer la del
+otro. Mientras conviven versiones antiguas y nuevas de ambos durante una actualización progresiva,
+los eventos que llevan una contraseña de dispositivo en el cuerpo (`MQTT_BASIC`, por HTTP o MQTT) se
+rechazan como no autenticados y no se reproducen. Las conexiones MQTT y los eventos con token de
+acceso no se ven afectados.
+
+Actualiza `event-sources` y `device-management` a la vez, o acepta la breve pérdida de esos eventos.
+
 #### La contraseña de un dispositivo `MQTT_BASIC` se muestra una vez y no puede volver a mostrarse {#next-upgrade-device-password-show-once}
 
 La plataforma conserva ahora solo un resumen irreversible con clave de la contraseña de un dispositivo `MQTT_BASIC`, no la contraseña. La API nunca devolvía la contraseña en una lectura, así que ningún resultado de consulta cambia. Lo que cambia es que nadie puede recuperarla tampoco de la plataforma: la consola muestra una contraseña una sola vez, justo después de agregar la credencial o de establecer una nueva, con un botón de copiar, y después solo indica que hay una contraseña establecida. La fila de la credencial incorpora la acción **Establecer nueva contraseña**, y el formulario ofrece **Generar contraseña segura**.
