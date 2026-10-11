@@ -19,4 +19,5 @@ import (
 // failure.
 var Migrations = []*gormigrate.Migration{
 	NewBaselineSchema(),
+	NewArtifactsSchema(),
 }
