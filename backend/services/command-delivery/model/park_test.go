@@ -328,13 +328,13 @@ func TestParkedCommandsCountAgainstTheCeiling(t *testing.T) {
 // nothing, so recording TIMEOUT blames the device for the platform's own undelivered command
 // — and this fires on the ordinary expiry path, with no fleet write or cancel involved.
 func TestParkedCommandExpiresRatherThanTimingOut(t *testing.T) {
-	if got := expiredTerminalFor(CommandParked.String()); got != CommandExpired.String() {
+	if got, _ := expiredTerminalFor(CommandParked.String()); got != CommandExpired.String() {
 		t.Fatalf("a lapsed PARKED command records %s, want EXPIRED — it never reached a device, so "+
 			"TIMEOUT would blame hardware for a delivery that never happened", got)
 	}
 	// The counterweight: SENT must still map to TIMEOUT, or the distinction is lost in the
 	// other direction and a genuinely unanswered command reads as never sent.
-	if got := expiredTerminalFor(CommandSent.String()); got != CommandTimeout.String() {
+	if got, _ := expiredTerminalFor(CommandSent.String()); got != CommandTimeout.String() {
 		t.Fatalf("a lapsed SENT command records %s, want TIMEOUT", got)
 	}
 }

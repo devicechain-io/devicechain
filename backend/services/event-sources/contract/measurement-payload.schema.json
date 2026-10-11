@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://docs.devicechain.io/schema/device/measurement-payload.schema.json",
+  "title": "DeviceChain Measurement payload",
+  "description": "The payload of a device event whose eventType is Measurement. Every entry is one sample of named readings taken at one instant. One event may carry at most 256 readings in total, counting each measurement key in each entry; a message over that is refused whole.",
+  "type": "object",
+  "properties": {
+    "entries": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/entry" },
+      "description": "The samples. A payload with no entries, or with its readings placed directly under payload instead of in entries, is refused."
+    }
+  },
+  "required": ["entries"],
+  "$defs": {
+    "entry": {
+      "type": "object",
+      "properties": {
+        "measurements": {
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": { "type": "string" },
+          "description": "Metric name to value. Every value is a JSON string (\"21.5\", not 21.5); a bare number fails the whole message. An entry with no measurements is refused."
+        },
+        "occurredTime": {
+          "type": "string",
+          "format": "date-time",
+          "description": "This sample's own instant, RFC 3339. Omitted, the sample takes the envelope's occurredTime. Refused under the same rules as the envelope's."
+        }
+      },
+      "required": ["measurements"]
+    }
+  },
+  "examples": [
+    { "entries": [ { "measurements": { "temperature": "21.5", "humidity": "48" } } ] }
+  ]
+}

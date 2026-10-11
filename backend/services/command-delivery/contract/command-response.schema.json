@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://docs.devicechain.io/schema/device/command-response.schema.json",
+  "title": "DeviceChain command response",
+  "description": "The JSON message a device publishes on MQTT topic {instanceId}/{tenant}/command-responses/{deviceToken} to report the outcome of a command it was delivered. The responding device is taken from the topic, never from the body. A message that is not valid JSON, or whose members have the wrong types (for example a quoted success), cannot be matched to a command: it is recorded on the dead-letters stream with reason unprocessable, naming the responding device, and unless the device answers again the command stays SENT until it times out. Required describes what a device must send: an omitted success reads as false, and an omitted commandToken matches no command.",
+  "type": "object",
+  "properties": {
+    "commandToken": {
+      "type": "string",
+      "description": "The token member of the delivery being answered: the command's token, not the device's."
+    },
+    "success": {
+      "type": "boolean",
+      "description": "true settles the command as SUCCESSFUL, false as FAILED. Omitted, it reads as false."
+    },
+    "payload": {
+      "description": "The command's result data: any JSON value (a string, an object, an array, a number or a boolean), stored with the command and returned by the API. A string is stored as its text; any other value is stored as that JSON value, exactly as sent. Omitted or null, the command has no response payload."
+    },
+    "error": {
+      "type": "string",
+      "description": "Why the command failed. Stored only when success is false; ignored when success is true."
+    },
+    "dispatchNonce": {
+      "type": "string",
+      "description": "The dispatchNonce of the delivery being answered. A response without one, or with a nonce from a dispatch the command has moved off, does not settle the command and is dead-lettered."
+    }
+  },
+  "required": ["commandToken", "success", "dispatchNonce"],
+  "examples": [
+    {
+      "commandToken": "6f1c0f8e-6d1e-4a1a-9a3f-1f2b0d0a5c11",
+      "dispatchNonce": "0f6f4a2c-9b71-4d0e-8a5b-3c2d1e0f7a94",
+      "success": true,
+      "payload": "rebooting in 5s"
+    },
+    {
+      "commandToken": "6f1c0f8e-6d1e-4a1a-9a3f-1f2b0d0a5c11",
+      "dispatchNonce": "0f6f4a2c-9b71-4d0e-8a5b-3c2d1e0f7a94",
+      "success": true,
+      "payload": {"rebootInSeconds": 5, "queued": true}
+    },
+    {
+      "commandToken": "6f1c0f8e-6d1e-4a1a-9a3f-1f2b0d0a5c11",
+      "dispatchNonce": "0f6f4a2c-9b71-4d0e-8a5b-3c2d1e0f7a94",
+      "success": false,
+      "error": "actuator jammed"
+    }
+  ]
+}

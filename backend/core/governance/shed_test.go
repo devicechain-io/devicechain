@@ -131,7 +131,7 @@ func TestShedFactorMonotonicInClass(t *testing.T) {
 }
 
 func TestShedLimitsUnchangedAtFactorOne(t *testing.T) {
-	l := Limits{MessagesPerSecond: 1000, Burst: 2000}
+	l := Limits{RatePerSecond: 1000, Burst: 2000}
 	got := l.Shed(1.0)
 	if got != l {
 		t.Errorf("Shed(1.0) = %+v, want unchanged %+v", got, l)
@@ -144,9 +144,9 @@ func TestShedLimitsUnchangedAtFactorOne(t *testing.T) {
 }
 
 func TestShedLimitsHardDropAtFactorZero(t *testing.T) {
-	l := Limits{MessagesPerSecond: 1000, Burst: 2000}
+	l := Limits{RatePerSecond: 1000, Burst: 2000}
 	got := l.Shed(0)
-	if got.MessagesPerSecond != 0 || got.Burst != 0 {
+	if got.RatePerSecond != 0 || got.Burst != 0 {
 		t.Errorf("Shed(0) = %+v, want a hard drop {0,0}", got)
 	}
 }
@@ -156,13 +156,13 @@ func TestShedLimitsHardDropAtFactorZero(t *testing.T) {
 // class as if it were dropped.
 func TestShedLimitsThrottleFloorsBurst(t *testing.T) {
 	// A tiny base burst with a small factor would round to 0 without the floor.
-	l := Limits{MessagesPerSecond: 10, Burst: 2}
+	l := Limits{RatePerSecond: 10, Burst: 2}
 	got := l.Shed(0.10)
 	if got.Burst < 1 {
 		t.Errorf("Shed(0.10) burst = %d, want floored to >= 1 (a throttle must still admit)", got.Burst)
 	}
-	if got.MessagesPerSecond != 1.0 {
-		t.Errorf("Shed(0.10) rate = %v, want 1.0 (10 * 0.10)", got.MessagesPerSecond)
+	if got.RatePerSecond != 1.0 {
+		t.Errorf("Shed(0.10) rate = %v, want 1.0 (10 * 0.10)", got.RatePerSecond)
 	}
 }
 
@@ -171,18 +171,18 @@ func TestShedLimitsThrottleFloorsBurst(t *testing.T) {
 // them, where math.Round(NaN) is implementation-defined and the resulting ceiling
 // admits nothing — a total shed dressed as a throttle.
 func TestShedLimitsRejectsNaN(t *testing.T) {
-	l := Limits{MessagesPerSecond: 1000, Burst: 2000}
+	l := Limits{RatePerSecond: 1000, Burst: 2000}
 	got := l.Shed(math.NaN())
-	if got.MessagesPerSecond != 1000 || got.Burst != 2000 {
+	if got.RatePerSecond != 1000 || got.Burst != 2000 {
 		t.Errorf("Shed(NaN) = %+v, want the limits unchanged (no shed)", got)
 	}
 }
 
 func TestShedLimitsScalesProportionally(t *testing.T) {
-	l := Limits{MessagesPerSecond: 1000, Burst: 2000}
+	l := Limits{RatePerSecond: 1000, Burst: 2000}
 	got := l.Shed(0.25)
-	if got.MessagesPerSecond != 250 {
-		t.Errorf("Shed(0.25) rate = %v, want 250", got.MessagesPerSecond)
+	if got.RatePerSecond != 250 {
+		t.Errorf("Shed(0.25) rate = %v, want 250", got.RatePerSecond)
 	}
 	if got.Burst != 500 {
 		t.Errorf("Shed(0.25) burst = %d, want 500", got.Burst)

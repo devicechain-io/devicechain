@@ -6,7 +6,10 @@ package model
 import (
 	"context"
 	"fmt"
+	"slices"
 
+	"github.com/devicechain-io/dc-microservice/entity"
+	"github.com/devicechain-io/dc-microservice/limit"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -114,6 +117,9 @@ func (api *Api) CreateEntityRelationships(ctx context.Context,
 	// Resolve each distinct relationship type once up front — a bulk add of N
 	// edges of the same type does one lookup, not N. The reserved types (member,
 	// assigned) are auto-provisioned on first use and seeded into the map.
+	if len(requests) > MaxRelationshipBatch {
+		return nil, limit.Exceeded("relationships in one request", len(requests), MaxRelationshipBatch)
+	}
 	typesByToken := make(map[string]*EntityRelationshipType)
 	plainTokens := make([]string, 0)
 	for _, request := range requests {
@@ -163,6 +169,11 @@ func (api *Api) CreateEntityRelationships(ctx context.Context,
 				request.SourceType, sourceId, request.TargetType, targetId); err != nil {
 				return fmt.Errorf("relationship %q: %w", request.Token, err)
 			}
+			// Counted on the transaction, so edges this batch already created for the same
+			// device are in the total.
+			if err := api.checkTrackedCeiling(ctx, tx, rt, request.SourceType, sourceId, 1); err != nil {
+				return fmt.Errorf("relationship %q: %w", request.Token, err)
+			}
 			// Named, for the same reason "source:"/"target:" above are: the batch is
 			// all-or-nothing, so a refusal that does not say which edge is a refusal the
 			// caller cannot act on.
@@ -191,6 +202,14 @@ func (api *Api) CreateEntityRelationships(ctx context.Context,
 	if err != nil {
 		return nil, err
 	}
+	// Every device that now has a new edge has a stale cached tracked set.
+	sources := make([]uint, 0, len(created))
+	for _, edge := range created {
+		if edge.SourceType == string(entity.TypeDevice) && !slices.Contains(sources, edge.SourceId) {
+			sources = append(sources, edge.SourceId)
+		}
+	}
+	api.evictRelationshipSources(ctx, sources)
 	return created, nil
 }
 
@@ -200,6 +219,9 @@ func (api *Api) CreateEntityRelationships(ctx context.Context,
 func (api *Api) RemoveEntityRelationships(ctx context.Context, tokens []string) (bool, error) {
 	if len(tokens) == 0 {
 		return false, nil
+	}
+	if len(tokens) > rdb.MaxLookupKeys {
+		return false, limit.Exceeded("lookup keys", len(tokens), rdb.MaxLookupKeys)
 	}
 	// Capture the source devices before the edges are gone so their cached tracked
 	// sets can be evicted (ADR-044 F2); the targets survive, so the sweep won't

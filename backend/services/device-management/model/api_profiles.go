@@ -109,7 +109,10 @@ func (api *Api) UpdateDeviceProfile(ctx context.Context, token string,
 	// statement — so it is omitted with it: writing back a stale instant beside a current
 	// version would make the reconcile door answer an activation the fact never carried, and
 	// would lower the floor the next activation is minted above.
-	result := api.RDB.DB(ctx).Omit("ActiveVersion", "ActiveSince").Save(found)
+	// configuration_declaration is omitted for the same reason: it is written only by
+	// SetDeviceProfileConfigurationDeclaration, so an edit built from a stale read must not
+	// write a stale declaration back over one set in between.
+	result := api.RDB.DB(ctx).Omit("ActiveVersion", "ActiveSince", "ConfigurationDeclaration").Save(found)
 	if result.Error != nil {
 		return nil, result.Error
 	}
@@ -255,9 +258,8 @@ func (api *Api) DeviceProfilesById(ctx context.Context, ids []uint) ([]*DevicePr
 // Get device profiles by token.
 func (api *Api) DeviceProfilesByToken(ctx context.Context, tokens []string) ([]*DeviceProfile, error) {
 	found := make([]*DeviceProfile, 0)
-	result := api.RDB.DB(ctx).Find(&found, "token in ?", tokens)
-	if result.Error != nil {
-		return nil, result.Error
+	if err := rdb.FindByKeys(api.RDB.DB(ctx), &found, "token", tokens); err != nil {
+		return nil, err
 	}
 	return found, nil
 }

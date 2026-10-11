@@ -162,16 +162,21 @@ func (api *Api) RollbackAssetType(ctx context.Context, token string, version int
 	return api.assetTypeByToken(ctx, token)
 }
 
-// AssetTypeVersions lists a type's published versions, newest first. Returns
+// AssetTypeVersions lists a type's published versions, newest first, at most
+// rdb.MaxPageSize per call (page narrows or pages further). Returns
 // gorm.ErrRecordNotFound if the type does not exist.
-func (api *Api) AssetTypeVersions(ctx context.Context, token string) ([]*AssetTypeVersion, error) {
+func (api *Api) AssetTypeVersions(ctx context.Context, token string, page *VersionListArgs) ([]*AssetTypeVersion, error) {
 	assetType, err := api.assetTypeByToken(ctx, token)
 	if err != nil {
 		return nil, err
 	}
 	versions := make([]*AssetTypeVersion, 0)
+	limit, offset, err := page.window()
+	if err != nil {
+		return nil, err
+	}
 	result := api.RDB.DB(ctx).Where("asset_type_id = ?", assetType.ID).
-		Order("version DESC").Find(&versions)
+		Order("version DESC").Limit(limit).Offset(offset).Find(&versions)
 	if result.Error != nil {
 		return nil, result.Error
 	}

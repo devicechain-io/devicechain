@@ -8,7 +8,8 @@
 // is exactly what a generated document is at runtime. The viewer only needs the
 // two-step auth flow (ADR-033): login authenticates the identity and lists its
 // tenants; selectTenant exchanges the identity token for a tenant access token.
-// The definition itself is pasted in, not fetched — so there is no dashboard query.
+// A board is loaded one of two ways: fetched by token (the published snapshot, below), or
+// pasted in by an external embedder with no access to the service.
 
 import type { TypedDocument } from '@devicechain/client';
 
@@ -94,3 +95,24 @@ export const TENANT_BASEMAP = `
     }
   }
 ` as unknown as TypedDocument<TenantBasemapResult, Record<string, never>>;
+
+// ── dashboard-management: the published snapshot of a dashboard ──────────────
+// Authenticated (rides the tenant access token) and gated on dashboard:read. This is
+// the snapshot viewers are served -- never the draft, which is author-only. Null when
+// no such dashboard exists in the tenant; a NOT_PUBLISHED error when it exists but was
+// never published.
+
+export interface PublishedDashboardResult {
+  publishedDashboard: { definition: string } | null;
+}
+export interface PublishedDashboardVariables {
+  token: string;
+}
+
+export const PUBLISHED_DASHBOARD = `
+  query PublishedDashboard($token: String!) {
+    publishedDashboard(token: $token) {
+      definition
+    }
+  }
+` as unknown as TypedDocument<PublishedDashboardResult, PublishedDashboardVariables>;

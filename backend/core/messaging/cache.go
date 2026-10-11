@@ -10,7 +10,9 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	nats "github.com/nats-io/nats.go"
@@ -88,7 +90,9 @@ var ErrCacheUnavailable = errors.New("messaging: cache unavailable; bypassed aft
 // and a Get it can answer from there never asks the bucket at all. What that costs:
 //
 //   - A change made through ANOTHER replica reaches this one up to 5 s later than it
-//     would through the bucket alone. The bucket has only ever been cache-aside (a read
+//     would through the bucket alone, unless the Cache is built WithCrossReplicaEviction,
+//     which makes Delete tell every replica to drop its copy (and lets the time be minutes,
+//     as the bound then only covers a lost message). The bucket has only ever been cache-aside (a read
 //     racing a mutation can store the old value until the TTL), so every adopter already
 //     tolerates TTL-bounded staleness; this adds at most 5 s to it. A cache whose readers
 //     cannot tolerate that is built WithoutLocalCache.
@@ -112,8 +116,23 @@ type Cache struct {
 	delete  time.Duration // cacheDeleteTimeout; likewise
 	bypass  time.Duration // cacheBypassFor; likewise
 	now     func() time.Time
-	obs     *cacheObserver // nil-safe
-	local   *localCache    // nil when the in-process tier is off
+	obs     *cacheObserver     // nil-safe
+	local   *localCache        // nil when the in-process tier is off
+	evict   *EvictionBroadcast // nil unless built WithCrossReplicaEviction through NewCache
+
+	// gen moves on every eviction this Cache learns of, its own Delete, another replica's
+	// broadcast, a tenant's erasure and a reconnect flush. A cache-aside fill takes it before
+	// it reads the database and writes only if it has not moved (SetIfUnchanged), so a read
+	// that overlapped a change cannot put what it read before the change into the SHARED
+	// bucket, where every replica would then serve it for the bucket's whole time to live.
+	gen atomic.Uint64
+
+	// followUpDelay is how long after a Delete the key is deleted AGAIN (and broadcast
+	// again); see scheduleFollowUp. A field only so unit tests can shorten it.
+	followUpDelay time.Duration
+	fuMu          sync.Mutex
+	fuPending     map[string]struct{}
+	fuTimer       *time.Timer
 
 	mu        sync.Mutex
 	openUntil time.Time // zero while the cache is answering (the breaker is closed)
@@ -169,6 +188,8 @@ func newCache(name string, store cacheStore, m *streamMetrics, bucketTTL time.Du
 		bypass:  cacheBypassFor,
 		now:     time.Now,
 		obs:     m.cacheObserver(name),
+
+		followUpDelay: evictFollowUpDelay,
 	}
 	c.obs.init()
 	c.local = newLocalCache(o, c.obs)
@@ -203,7 +224,217 @@ func (nmgr *NatsManager) NewCache(name string, ttl time.Duration, opts ...CacheO
 	if err != nil {
 		return nil, err
 	}
-	return newCache(name, store, nmgr.metrics, ttl, opts...), nil
+	c := newCache(name, store, nmgr.metrics, ttl, opts...)
+	o := defaultCacheOptions()
+	for _, opt := range opts {
+		opt(&o)
+	}
+	if o.crossReplica && c.local != nil {
+		if err := c.subscribeEvictions(nmgr.NewEvictionBroadcast(name)); err != nil {
+			return nil, err
+		}
+		nmgr.OnReconnect(c.flushLocal)
+	}
+	return c, nil
+}
+
+// subscribeEvictions wires b as this cache's cross-replica eviction channel: Delete
+// publishes to it, and what other replicas publish drops entries from this one's memory.
+// The subscription is made before the Cache is returned, so no entry is held on a replica
+// that cannot yet hear an eviction.
+func (c *Cache) subscribeEvictions(b *EvictionBroadcast) error {
+	if err := b.Subscribe(c.applyEviction); err != nil {
+		return err
+	}
+	c.evict = b
+	return nil
+}
+
+// applyEviction drops what a broadcast names from this replica's memory only. It never
+// touches the bucket: the replica that made the change already cleared that.
+func (c *Cache) applyEviction(e CacheEviction) {
+	c.gen.Add(1)
+	if e.All {
+		c.local.invalidateTenant(e.Tenant)
+	}
+	for _, k := range e.Keys {
+		c.local.invalidate(k)
+	}
+	c.gen.Add(1)
+}
+
+// flushLocal drops everything held in memory, for a replica that may have missed evictions.
+func (c *Cache) flushLocal() {
+	c.gen.Add(1)
+	c.local.clear()
+	c.gen.Add(1)
+}
+
+// LocalTTL is how long this Cache keeps a value in process memory, or 0 when the in-process
+// tier is off. It exists for the tests that check a service builds its caches as configured.
+func (c *Cache) LocalTTL() time.Duration {
+	if c.local == nil {
+		return 0
+	}
+	return c.local.ttl
+}
+
+// Generation is the eviction counter a cache-aside fill takes BEFORE it reads the database;
+// see SetIfUnchanged.
+func (c *Cache) Generation() uint64 { return c.gen.Load() }
+
+// SetIfUnchanged is Set for a fill that read its value from the database after taking gen
+// from Generation: it writes only if no eviction has been learned of since, and takes the
+// write back if one arrived while it was being made. A skipped fill costs one database read
+// on the next event and never a wrong answer, which is the direction to fail in.
+//
+// 🔴 THIS IS WHAT KEEPS A MINUTES-LONG TIME TO LIVE SAFE AGAINST THE CACHE-ASIDE RACE: a
+// reader that missed and read the OLD row, overtaken by a commit and its eviction, would
+// otherwise write the old value back into the shared bucket AFTER the eviction cleared it.
+// The check covers an eviction that reached this replica before the write (its own, or a
+// broadcast) and the re-check covers one that arrived during it. A broadcast that arrives
+// only after both is covered by the follow-up delete every Delete schedules.
+func (c *Cache) SetIfUnchanged(ctx context.Context, key string, value interface{}, gen uint64) error {
+	if c.gen.Load() != gen {
+		return nil
+	}
+	if err := c.Set(ctx, key, value); err != nil {
+		return err
+	}
+	if c.gen.Load() != gen {
+		opctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), c.delete)
+		defer cancel()
+		_ = c.kv.Delete(opctx, kvKey(key))
+		c.local.invalidate(key)
+	}
+	return nil
+}
+
+// evictFollowUpDelay is how long after a change the evicted keys are deleted a second time.
+// It must exceed the longest a fill can take between taking its generation and writing: a
+// database read and one bucket write (cacheOpTimeout), which is milliseconds when healthy.
+// Two seconds covers a loaded replica without keeping the work pending long.
+const evictFollowUpDelay = 2 * time.Second
+
+// evictFollowUpMax bounds the keys waiting for their second delete. Past it a key is not
+// followed up: its entry is bounded by the time to live, as it was before the follow-up.
+const evictFollowUpMax = 1 << 16
+
+// deleteManyWorkers is how many bucket deletes DeleteMany keeps in flight.
+const deleteManyWorkers = 16
+
+// scheduleFollowUp arranges a second delete of keys after followUpDelay, coalescing every
+// key evicted in the meantime into one pass. Only a Cache with a cross-replica broadcast does
+// it: the race it covers is one replica's late write after another's eviction, and a Cache
+// with no other replica cannot have it (its generation check is enough).
+func (c *Cache) scheduleFollowUp(keys ...string) {
+	if c.evict == nil || c.followUpDelay <= 0 {
+		return
+	}
+	c.fuMu.Lock()
+	defer c.fuMu.Unlock()
+	if c.fuPending == nil {
+		c.fuPending = map[string]struct{}{}
+	}
+	for _, k := range keys {
+		if len(c.fuPending) >= evictFollowUpMax {
+			break
+		}
+		c.fuPending[k] = struct{}{}
+	}
+	if c.fuTimer == nil && len(c.fuPending) > 0 {
+		c.fuTimer = time.AfterFunc(c.followUpDelay, c.runFollowUp)
+	}
+}
+
+func (c *Cache) runFollowUp() {
+	c.fuMu.Lock()
+	keys := make([]string, 0, len(c.fuPending))
+	for k := range c.fuPending {
+		keys = append(keys, k)
+	}
+	c.fuPending = nil
+	c.fuTimer = nil
+	c.fuMu.Unlock()
+	c.deleteKeys(context.Background(), keys, false)
+}
+
+// DeleteMany evicts many entries as Delete evicts one, with up to deleteManyWorkers bucket
+// deletes in flight and one broadcast per tenant (split into messages of MaxCacheEvictionKeys),
+// so evicting every entry a change touched takes seconds rather than one round trip per key.
+func (c *Cache) DeleteMany(ctx context.Context, keys []string) error {
+	return c.deleteKeys(ctx, keys, true)
+}
+
+func (c *Cache) deleteKeys(ctx context.Context, keys []string, followUp bool) error {
+	if len(keys) == 0 {
+		return nil
+	}
+	c.gen.Add(1)
+	var wg sync.WaitGroup
+	work := make(chan string)
+	var mu sync.Mutex
+	var first error
+	workers := min(deleteManyWorkers, len(keys))
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for k := range work {
+				opctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), c.delete)
+				start := time.Now()
+				err := c.kv.Delete(opctx, kvKey(k))
+				cancel()
+				c.local.invalidate(k)
+				c.obs.observe("delete", time.Since(start))
+				c.settle(context.Background(), "delete", false, err)
+				if err != nil && !isNotFound(err) {
+					mu.Lock()
+					if first == nil {
+						first = err
+					}
+					mu.Unlock()
+				}
+			}
+		}()
+	}
+	for _, k := range keys {
+		work <- k
+	}
+	close(work)
+	wg.Wait()
+	c.gen.Add(1)
+	if c.evict != nil {
+		byTenant := map[string][]string{}
+		for _, k := range keys {
+			t := tenantOfKey(k)
+			byTenant[t] = append(byTenant[t], k)
+		}
+		for t, ks := range byTenant {
+			if err := c.evict.Publish(t, ks); err != nil {
+				log.Warn().Err(err).Str("cache", c.name).Int("keys", len(ks)).
+					Msg("A key-value cache eviction could not be broadcast; other replicas serve the entries " +
+						"from memory until they expire")
+			}
+		}
+	}
+	if followUp {
+		c.scheduleFollowUp(keys...)
+	}
+	if first != nil {
+		log.Warn().Err(first).Str("cache", c.name).Int("keys", len(keys)).
+			Msg("A key-value cache eviction failed; the entry is served until its TTL expires")
+	}
+	return first
+}
+
+// tenantOfKey is the tenant a cache key is filed under: the text before the first
+// separator, or the whole key when it has none (see WithCrossReplicaEviction).
+func tenantOfKey(key string) string {
+	if i := strings.Index(key, kvTenantSeparator); i >= 0 {
+		return key[:i]
+	}
+	return key
 }
 
 // Set stores value under key, JSON-encoding it. The entry expires after the
@@ -333,8 +564,12 @@ func (c *Cache) Delete(ctx context.Context, key string) error {
 	opctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), c.delete)
 	defer cancel()
 	start := time.Now()
+	c.gen.Add(1)
 	err := c.kv.Delete(opctx, kvKey(key))
 	c.local.invalidate(key)
+	c.gen.Add(1)
+	c.publishEviction(key)
+	c.scheduleFollowUp(key)
 	c.obs.observe("delete", time.Since(start))
 	c.settle(context.Background(), "delete", false, err)
 	if err != nil && !isNotFound(err) {
@@ -344,6 +579,22 @@ func (c *Cache) Delete(ctx context.Context, key string) error {
 		return err
 	}
 	return nil
+}
+
+// publishEviction tells the other replicas to drop key from memory, when this cache has a
+// broadcast. It never fails the Delete: the bucket is already clear, and a lost message
+// leaves the other replicas' copies to expire, which is the in-process TTL.
+func (c *Cache) publishEviction(key string) {
+	if c.evict == nil {
+		return
+	}
+	tenant := tenantOfKey(key)
+	if err := c.evict.Publish(tenant, []string{key}); err != nil {
+		sum := sha256.Sum256([]byte(key))
+		log.Warn().Err(err).Str("cache", c.name).Str("keyHash", hex.EncodeToString(sum[:8])).
+			Msg("A key-value cache eviction could not be broadcast; other replicas serve the entry from " +
+				"memory until it expires")
+	}
 }
 
 // admit decides whether an operation may go to the store. It lets everything through

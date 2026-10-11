@@ -94,7 +94,7 @@ list (not both). An empty selection resolves to `default`.
 | Profile | Functional areas |
 |---|---|
 | `default` | user-management, device-management, event-sources, event-management, device-state, dashboard-management, command-delivery, notification-management, event-processing |
-| `full` | everything in `default`, plus `ai-inference`, `outbound-connectors`, `mcp`, `sparkplug-ingest`, `lwm2m-ingest` |
+| `full` | everything in `default`, plus `ai-inference`, `outbound-connectors`, `mcp`, `sparkplug-ingest`, `lwm2m-ingest`, `update-management` |
 | `telemetry` | user-management, device-management, event-sources, event-management, device-state, dashboard-management |
 | `ingest-only` | user-management, device-management, event-sources |
 
@@ -112,7 +112,7 @@ helm install dc deploy/helm/devicechain \
 The chart **fails the render** if the selection omits a required core area
 (`user-management`, `device-management`) or an enabled area's hard dependency.
 `user-management` and `device-management` are the required core; every other area in
-the table above is optional — the seven `default` adds on top of the core, plus the five
+the table above is optional — the seven `default` adds on top of the core, plus the six
 only `full` ships. The one dependency between optional areas is `outbound-connectors`,
 which requires `event-processing`; the rest can be enabled or left out independently.
 (`values.schema.json` carries the authoritative area names; the dependency catalog
@@ -170,10 +170,10 @@ installing.
 build has, and a test enforces that, so "full" cannot drift back into meaning "most of
 it".
 
-The difference is the five areas `default` holds back. Each carries a decision an operator
+The difference is the six areas `default` holds back. Each carries a decision an operator
 should make deliberately rather than inherit — a paid provider key, an egress surface, an
-agent-facing API, a customer broker topology, a device-facing DTLS port — not because they
-are second-class. Get them with `--set profile=full`, or name them in an explicit
+agent-facing API, a customer broker topology, a device-facing DTLS port, an update plane
+that is not implemented yet — not because they are second-class. Get them with `--set profile=full`, or name them in an explicit
 `enabledFunctionalAreas` set:
 
 | Area | Purpose | Notes |
@@ -183,6 +183,7 @@ are second-class. Get them with `--set profile=full`, or name them in an explici
 | `ai-inference` | natural-language→rule authoring proxy | no hard dep (fails paths closed); needs `infrastructure.secrets.rootKey` for provider keys; external routing needs `serviceAuth.secret` + `userManagement` and is per-tenant opt-in / fail-closed |
 | `sparkplug-ingest` | Sparkplug B host application ingesting from customer MQTT brokers | hard-depends on `device-management`; each source binds one broker connection to one tenant; single-owner — `replicas: 1` + `Recreate`, the render fails above one |
 | `lwm2m-ingest` | OMA LwM2M over CoAP/UDP + DTLS for constrained devices | hard-depends on `device-management`; serves CoAPS on UDP 5684; single-owner — `replicas: 1` + `Recreate`, the render fails above one |
+| `update-management` | over-the-air update artifacts and assignments | hard-depends on `device-management`; **scaffold only in this release** — it starts and serves health, readiness and metrics, but its GraphQL API answers every request with a `NOT_IMPLEMENTED` error |
 
 ## Per-service configuration
 
@@ -478,3 +479,132 @@ re-opens every private address for every tenant.
   `https://<host>/`. Plus a cert-manager TLS `Issuer` (self-signed by default).
   Requires the ingress-nginx controller + cert-manager from
   [`deploy/opentofu`](https://github.com/devicechain-io/devicechain/tree/main/deploy/opentofu).
+
+## Values reference
+
+Every value the chart's schema (`values.schema.json`) accepts, with its type, its default in
+`values.yaml` and what it does. A `-` default means the key has no entry in `values.yaml`
+(or, for a group, that its defaults are listed on the keys beneath it). The table is
+generated from the schema; do not edit it by hand.
+
+<!-- values:begin -->
+| Key | Type | Default | Description |
+| --- | --- | --- | --- |
+| `profile` | string | `""` | A named profile, or empty to use enabledFunctionalAreas (or fall back to the default profile). 'default' is the standard system; 'full' ships every area. |
+| `enabledFunctionalAreas` | array | `[]` | Explicit set of functional areas; mutually exclusive with profile. |
+| `extraSecrets` | array | `[]` | Extra Opaque Secrets to render into the instance namespace (templates/extra-secrets.yaml), projected into a functional area via its extraEnv secretKeyRef. |
+| `extraSecrets[].name` | string | - | Secret name, rendered in the instance namespace. |
+| `extraSecrets[].stringData` | object | - | Verbatim key→value entries (e.g. a base64 PSK string a service decodes at load). |
+| `instance` | object | - | Identity and configuration of this DeviceChain instance. |
+| `instance.id` | string | `"devicechain"` | Instance id, 1 to 50 characters, a lowercase DNS-1123 label. It names the Helm release (dc-&lt;id&gt;), the instance's database and login on the shared relational store, the config objects (dci-&lt;id&gt;-config, dct-&lt;id&gt;-config), the blob claim (dci-&lt;id&gt;-blob) and the ServiceAccount (dc-&lt;id&gt;), and it is the first segment of every messaging subject, the device-plane MQTT topic and the HTTP ingest route. The instance's namespace is not the id: it is dci-&lt;id&gt;, so instance foo is deployed into namespace dci-foo, which keeps instance namespaces disjoint from the cluster's own (monitoring, cert-manager and so on). The 50-character cap comes from Helm's 53-character release-name limit applied to dc-&lt;id&gt;. |
+| `instance.createNamespace` | boolean | `true` | Whether the chart renders the instance's Namespace object, i.e. dci-&lt;instance.id&gt;. Disable when that namespace is created and managed elsewhere; either way every object this chart renders is written into it. |
+| `instance.existingSecret` | string | `""` | Name of a pre-created Secret (for example one managed by External Secrets) holding the instance-config JSON under an `instance` key. The Secret must be named dci-&lt;id&gt;-config; any other name fails the render, because dcctl reads the instance config back by that exact name and would take a differently named Secret for a fresh install. When set, the chart mounts it and renders no Secret of its own, and existingSecretChecksum becomes required. |
+| `instance.existingSecretChecksum` | string | `""` | Required whenever existingSecret is set: the sha256 of the `instance` document inside that Secret, as 64 lowercase hex characters. The chart cannot read the Secret, so this is what the pod annotation carries; without it a config change would apply cleanly, roll no pods and report success. The shape is constrained because the value lands in an annotation: a blank or YAML-null string would render as a constant, and one carrying a colon or newline would corrupt the pod template. |
+| `instance.superuserSecret` | string | `""` | Name of the Secret holding the superuser's seed password under key `password`, projected into user-management as DC_SUPERUSER_PASSWORD and read only to seed an empty identity table. Empty means dci-&lt;id&gt;-superuser, the Secret dcctl bootstrap generates per instance. There is no default password: an install made without dcctl must create this Secret before user-management first starts, or it refuses to seed the superuser. |
+| `instance.config` | object | see values.yaml | The instance configuration document (infrastructure, persistence, per-service settings), written into the dci-&lt;id&gt;-config Secret. The chart validates only the envelope; each service validates its own part at startup. Under existingSecret this block is not the mounted document, but templates still read its defaults; restate the ports in networkPolicy.externalConfigPorts and the broker host in metrics.natsBrokerHost. |
+| `image` | object | - | Container image selection for the platform's services. |
+| `image.registry` | string | `"ghcr.io/devicechain-io"` | Registry and organisation the service images are pulled from; each area image is &lt;registry&gt;/&lt;area&gt;:&lt;tag&gt; unless the area sets its own image. |
+| `image.tag` | string | `""` | Image tag for every service. Empty uses the chart's appVersion, which a release sets to the release tag, so a packaged chart deploys the matching images with no override. |
+| `image.pullPolicy` | string | `"IfNotPresent"` | Kubernetes imagePullPolicy applied to every container. |
+| `service` | object | - | The Service exposed for each functional area. |
+| `service.port` | integer | `8080` | HTTP port every service listens on. It serves the GraphQL API, /healthz, /readyz and /metrics. |
+| `metrics` | object | - | Prometheus integration. Metrics are served on the same HTTP port as GraphQL, at /metrics. `enabled` renders a ServiceMonitor per area and requires the Prometheus Operator CRDs; the other keys here are ignored while it is false. See the individual keys for the dashboards, alert rules and PodMonitors it gates. |
+| `metrics.enabled` | boolean | `true` | Render one ServiceMonitor per enabled functional area, scraping /metrics on the named graphql port. Requires the Prometheus Operator CRDs; set false on a cluster without them. |
+| `metrics.grafanaDashboards` | boolean | `true` | Render one ConfigMap per bundled operations dashboard (event-processing and command-delivery today), labelled for the Grafana sidecar to import. Each board is this instance's own copy with its own uid and title. Set false on clusters that have the Prometheus Operator but no Grafana sidecar. Ignored when metrics.enabled is false. |
+| `metrics.alerts` | boolean | `true` | Render the PrometheusRules for the platform's own services: event-processing, dead-letter and command-delivery rules, among others. Requires the Prometheus Operator CRDs. The database and replication rules are gated separately because they describe infrastructure this chart does not install. Ignored when metrics.enabled is false. |
+| `metrics.natsPodMonitor` | boolean | `true` | Render a PodMonitor scraping the NATS broker's own exporter sidecar, for broker-side cluster health (routes, JetStream RAFT). It targets the namespace in instance.config.infrastructure.nats.hostname. Safe to leave on when the sidecar is absent (no targets are generated); set false for a broker this chart should not monitor. Ignored when metrics.enabled is false. |
+| `metrics.natsBrokerHost` | string | `""` | The broker's &lt;service&gt;.&lt;namespace&gt; hostname, restated for the PodMonitor. Needed only with instance.existingSecret, where the chart cannot read instance.config and would otherwise derive the target namespace from its own default. |
+| `metrics.databaseBackups` | boolean | `true` | Render the WAL-archiving and base-backup alerting rules. It must track whether the infrastructure actually archives, which is decided outside this chart: dcctl sets it from the database_backups_enabled OpenTofu output, and a hand-run install against an instance with backups off should set false. Left true with archiving off the rules load but can never fire. Ignored when metrics.enabled or metrics.alerts is false. |
+| `metrics.databaseBackupSnapshots` | boolean | `false` | Declare that the databases take their daily base backup as a CSI volume snapshot, with a weekly base backup still going to the backup store. Renders the snapshot rules and moves the base-backup alert from 36 hours to 8.5 days. Like databaseBackups it must match what the infrastructure does; dcctl sets it from the database_backup_snapshot_class output. Ignored unless databaseBackups is on. |
+| `metrics.databaseNamespace` | string | `"dc-system"` | Namespace the CloudNativePG database Clusters run in, where their archiver and backup metrics are exported and where their volumes are reported. It is not the instance's own namespace (dci-&lt;id&gt;): a rule scoped to that would select no series and never fire. It also gates the database volume-fullness rules, which are not behind databaseBackups. |
+| `metrics.cnpgNamespace` | string | `"cnpg-system"` | Namespace the CloudNativePG operator and the Barman Cloud plugin run in (the database control plane, distinct from the databases). Gates both the control-plane alert rules and a diagnostic PodMonitor over the operator. Empty disables both; dcctl sets it from the cnpg_namespace OpenTofu output, which is null when the operator was not installed. Ignored when metrics.enabled is false; the rules also need metrics.alerts. |
+| `replicas` | integer | `1` | Default replica count for each functional area's Deployment; an area overrides it with functionalAreas.&lt;area&gt;.replicas. |
+| `rollingUpdate` | object | - | Rolling-update strategy for the area Deployments. The defaults (maxUnavailable 0, maxSurge 1) bring a Ready replacement up before an old pod is removed, so an upgrade keeps full capacity. |
+| `rollingUpdate.maxUnavailable` | integer or string | `0` | Maximum pods that may be unavailable during a rollout, as a count or a percentage. Default 0. |
+| `rollingUpdate.maxSurge` | integer or string | `1` | Maximum pods above the desired count during a rollout, as a count or a percentage. Default 1. |
+| `terminationGracePeriodSeconds` | integer | `30` | Graceful-shutdown window in seconds. Rendered into the pod spec and into the instance config, where the services validate it against shutdownDrainSeconds and refuse to start if the drain leaves no room for the teardown that follows it. |
+| `nodeLossTolerationSeconds` | integer or null | `30` | Seconds a pod tolerates its node being NotReady/unreachable before eviction. null leaves Kubernetes' 300s default. MUST be a bare integer, not a duration: `30s` would coerce to 0, which evicts every pod the instant a node is tainted. |
+| `shutdownDrainSeconds` | integer | `5` | Readiness-drain window in seconds before a service tears down, written into the instance config as infrastructure.shutdown.drainSeconds. It may take at most half of terminationGracePeriodSeconds, because the drain only waits for endpoint removal to propagate and the teardown after it finishes in-flight work; a larger value is refused at startup. 0 skips the drain, which suits a single-instance run with no Service to be pulled out of. |
+| `goMemLimitPercent` | integer | `0` | GOMEMLIMIT as a percentage of each container's own memory LIMIT. Go derives GOMAXPROCS from the cgroup CPU limit but does NOT derive GOMEMLIMIT from the memory limit. This is a CEILING against an OOMKill during a live-heap spike, not a footprint reduction — measurement found no heap reduction and a GC CPU cost — so it defaults to 0 (off). Capped below 100 deliberately: the cgroup limit also covers goroutine stacks and runtime bookkeeping outside the Go heap, so aiming at the full limit OOMKills instead of collecting. |
+| `goMemLimit` | string | `""` | An explicit GOMEMLIMIT for every area, bypassing goMemLimitPercent. Go's own syntax (e.g. "192MiB"). Prefer the percentage — a pinned value keeps throttling a service whose memory limit was later raised. |
+| `resources` | object | - | Default container resources for every area; an area's own functionalAreas.&lt;area&gt;.resources is merged over it key by key. Requests are mandatory and must not be empty, so pods are Burstable or Guaranteed rather than BestEffort QoS. |
+| `resources.requests` | object | `{"cpu":"100m","memory":"128Mi"}` | Default resource requests (cpu, memory); must not be empty. |
+| `resources.limits` | object | `{"cpu":"500m","memory":"256Mi"}` | Default resource limits (cpu, memory). |
+| `useMeasuredRequests` | boolean | `true` | Apply each area's functionalAreas.&lt;area&gt;.measuredRequests (its CPU use at 6,000 events/s; event-processing's at 6,800) over the top-level resources.requests. dcctl install --compact sets false, so the top-level requests reach every area. |
+| `serviceAccount` | object | - | The ServiceAccount the area Deployments run as, in place of the namespace's default one. |
+| `serviceAccount.create` | boolean | `true` | Render a dedicated ServiceAccount for the release. The data-plane services never call the Kubernetes API. |
+| `serviceAccount.name` | string | `""` | ServiceAccount name. Empty uses dc-&lt;instance.id&gt;. |
+| `serviceAccount.automountToken` | boolean | `false` | Mount the ServiceAccount API token into the pods. Default false, since the services do not use it. |
+| `networkPolicy` | object | - | Optional egress NetworkPolicy for outbound-connectors, a network-level second layer over the egress guard every tenant connector already dials through. Off by default. It only has effect on a CNI that enforces NetworkPolicy, and traffic it denies is dropped rather than refused, so a missing peer shows up as timeouts. The blocked address space is fixed in the template; the old blocked-range keys are rejected, and additionalAllowedCidrs is the way to permit a destination. |
+| `networkPolicy.enabled` | boolean | `false` | Render the egress NetworkPolicy for outbound-connectors. Check that your CNI enforces policy before treating it as a control. |
+| `networkPolicy.infrastructureNamespaceSelector` | object | `{"devicechain.io/component":"infrastructure"}` | Labels selecting the namespace that holds NATS and PostgreSQL. The OpenTofu-created infrastructure namespace carries the default pair. If you brought your own, set the labels it actually has; an empty selector is refused at render time. |
+| `networkPolicy.dnsNamespaceSelector` | object | `{"kubernetes.io/metadata.name":"kube-system"}` | Labels selecting the namespace that serves cluster DNS. The default matches kube-system on any cluster that labels namespaces with kubernetes.io/metadata.name (Kubernetes 1.21 and later). |
+| `networkPolicy.additionalAllowedCidrs` | array | `[]` | Extra destinations to permit, as CIDRs. Two reasons to need it: a CNI that evaluates egress before service load-balancing, so Service ClusterIPs match no pod selector and must be allowed by their Service CIDR (kubeadm default 10.96.0.0/12), and a tenant's broker or webhook on a private address such as a peered VPC. Each entry opens that range for every tenant connector, so keep it as narrow as you can. It does not affect mail, which is notification-management's path. |
+| `networkPolicy.externalConfigPorts` | object | - | Only for instance.existingSecret deployments: restates the NATS and relational-database ports the egress rule would otherwise read from instance.config, which the chart cannot see there. Both keys required when set. |
+| `networkPolicy.externalConfigPorts.nats` | integer | - | NATS port for the egress rule. |
+| `networkPolicy.externalConfigPorts.rdb` | integer | - | Relational-database port for the egress rule. |
+| `podDisruptionBudget` | object | - | PodDisruptionBudget per area, so a node drain cannot evict every replica at once. Emitted only for areas with more than one replica, since a budget on a single replica would block voluntary drains. Set exactly one of minAvailable and maxUnavailable. |
+| `podDisruptionBudget.enabled` | boolean | `true` | Render the PodDisruptionBudgets. |
+| `podDisruptionBudget.minAvailable` | integer or string | `""` | Minimum pods that must stay available, as a count or percentage. Leave empty when using maxUnavailable. |
+| `podDisruptionBudget.maxUnavailable` | integer or string | `1` | Maximum pods that may be unavailable, as a count or percentage. Leave empty when using minAvailable. |
+| `startupProbe` | object | - | Startup probe on /readyz. It gives a slow cold start (identity keys, database) up to periodSeconds times failureThreshold to come up before the liveness probe can act. |
+| `startupProbe.periodSeconds` | integer | `5` | Seconds between startup probe attempts. |
+| `startupProbe.failureThreshold` | integer | `30` | Consecutive startup probe failures before the container is restarted. |
+| `livenessProbe` | object | - | Liveness probe on /healthz. Readiness gates Service endpoints on /readyz separately. |
+| `livenessProbe.failureThreshold` | integer | `6` | Consecutive liveness failures before the container is restarted; kept high so a transient blip does not kill a healthy pod. |
+| `podSecurityContext` | object | see values.yaml | Pod-level securityContext. The hardened defaults run the workload as the non-root uid 65532 with the RuntimeDefault seccomp profile; relax them only if you build images that need to run as root. |
+| `securityContext` | object | see values.yaml | Container-level securityContext. The hardened defaults drop all Linux capabilities, forbid privilege escalation and use a read-only root filesystem; the service images are static binaries that write nothing to the root filesystem. |
+| `ingress` | object | - | Optional Ingress + cert-manager TLS exposing the GraphQL/HTTP surface (requires the OpenTofu ingress-nginx + cert-manager). |
+| `ingress.enabled` | boolean | `false` | Render the Ingress objects: the API, the well-known discovery route and the web console. Each enabled area is reachable at https://&lt;host&gt;/api/&lt;area&gt;/graphql and the console at https://&lt;host&gt;/. |
+| `ingress.className` | string | `"nginx"` | IngressClass the controller registered (the OpenTofu ingress_class). |
+| `ingress.host` | string | `"devicechain.local"` | Host name the Ingress objects route. The chart renders up to three: the API (https://&lt;host&gt;/api/&lt;area&gt;/graphql), the well-known discovery route for OAuth and MCP, and the web console (https://&lt;host&gt;/). |
+| `ingress.annotations` | object | `{}` | Extra annotations merged onto the Ingress objects (body size, timeouts and so on). |
+| `ingress.tls` | object | - | TLS for the Ingress, using cert-manager. |
+| `ingress.tls.enabled` | boolean | `true` | Terminate TLS at the Ingress. |
+| `ingress.tls.selfSigned` | boolean | `true` | Render a cert-manager self-signed Issuer in the instance namespace: valid TLS that browsers do not trust, for development. For real certificates set false and name a ClusterIssuer in clusterIssuer. |
+| `ingress.tls.issuerName` | string | `"devicechain-selfsigned"` | Name of the self-signed Issuer the chart renders when selfSigned is true. |
+| `ingress.tls.clusterIssuer` | string | `""` | Name of an existing cert-manager ClusterIssuer (for example a Let's Encrypt ACME issuer) to request certificates from. Used when selfSigned is false. |
+| `ingress.tls.secretName` | string | `"devicechain-tls"` | Name of the Secret that holds the TLS certificate. |
+| `frontend` | object | - | The web console workload: a static nginx SPA served at the ingress root. Disable for headless/ingest-only instances. |
+| `frontend.enabled` | boolean | `true` | Deploy the web console. Disable for headless or ingest-only instances. |
+| `frontend.image` | object | - | Console image override. By default the image is &lt;image.registry&gt;/frontend:&lt;image.tag&gt;. |
+| `frontend.image.repository` | string | `""` | Full image repository for the console, overriding the registry-derived default. |
+| `frontend.image.tag` | string | `""` | Console image tag, overriding image.tag. |
+| `frontend.replicas` | integer | `1` | Replica count for the console Deployment. |
+| `frontend.resources` | object | see values.yaml | Container resources for the console, a small static nginx image. |
+| `blobStorage` | object | - | Kubernetes volume wiring for the filesystem object store (instance.config.infrastructure.blob.backend set to filesystem). Creates and mounts the PVC that backs instance.config.infrastructure.blob.directory, which today holds branding logos. Enabling persistence with the s3 backend fails the render. |
+| `blobStorage.persistence` | object | - | The PersistentVolumeClaim that backs the filesystem object store. |
+| `blobStorage.persistence.enabled` | boolean | `false` | Create a PersistentVolumeClaim for the filesystem store and mount it into the consuming areas. Requires the filesystem backend and a resolved mount path. |
+| `blobStorage.persistence.existingClaim` | string | `""` | Name of a pre-created PVC to use instead of having the chart create one (for example an RWX claim provisioned elsewhere). When set, size, accessModes and storageClass are ignored and no PVC is rendered, but the volume is still mounted into mountAreas. |
+| `blobStorage.persistence.mountPath` | string | `""` | Volume mount path; defaults to blob.directory (must match it). Set only when the instance config is supplied via instance.existingSecret and the chart cannot read blob.directory. |
+| `blobStorage.persistence.accessModes` | array | `["ReadWriteOnce"]` | PVC access modes. ReadWriteOnce suits a single replica; for more than one replica of a consuming area use ReadWriteMany with an RWX-capable storage class, or the s3 backend. |
+| `blobStorage.persistence.size` | string | `"5Gi"` | Requested PVC size. |
+| `blobStorage.persistence.storageClass` | string | `""` | StorageClass for the PVC. Empty uses the cluster default; set an RWX-capable class for multi-replica use; "-" selects no storage class, for a statically provisioned volume. |
+| `blobStorage.persistence.annotations` | object | `{}` | Extra annotations merged onto the PVC (for example a backup policy). |
+| `blobStorage.mountAreas` | array | `["user-management"]` | Functional areas that mount the blob volume at the store directory (default: user-management). |
+| `functionalAreas` | object | see values.yaml | Per-functional-area settings, keyed by area name (user-management, device-management, event-sources and so on). Only enabled areas are rendered. Every key an area may set is listed under functionalAreas.&lt;area&gt;. |
+| `functionalAreas.<area>.image` | string | - | Full image reference for this area, overriding &lt;image.registry&gt;/&lt;area&gt;:&lt;image.tag&gt;. |
+| `functionalAreas.<area>.replicas` | integer | - | Replica count for this area, overriding the top-level replicas. |
+| `functionalAreas.<area>.strategy` | string | - | Deployment rollout strategy for this area: RollingUpdate (the default) or Recreate, which stops every old pod before starting a new one. The template refuses Recreate above one replica. event-processing ships with Recreate and is the one stateful single-owner area that may run more than one replica: the extras are warm standbys arbitrated by a partition lease, and running them means setting RollingUpdate as well. sparkplug-ingest, lwm2m-ingest and mcp are held at one serving pod regardless of strategy, because they own a broker session, a UDP socket or in-memory client sessions respectively. |
+| `functionalAreas.<area>.resources` | object | - | Container resources for this area, merged key by key over the top-level resources: set only the keys that differ (e.g. limits.cpu). A request above the merged limit is refused at render. |
+| `functionalAreas.<area>.resources.requests` | object | - | Resource requests for this area, merged over the top-level requests. |
+| `functionalAreas.<area>.resources.limits` | object | - | Resource limits for this area, merged over the top-level limits. |
+| `functionalAreas.<area>.resources.claims` | array | - | Core-v1 resource claims (dynamic resource allocation) for this area's container. |
+| `functionalAreas.<area>.goMemLimit` | string | - | GOMEMLIMIT for this area only, overriding the derivation. Use for a service whose working set genuinely differs (e.g. event-processing holds more live state than the CRUD areas). |
+| `functionalAreas.<area>.config` | object | - | This area's own configuration, written to the dct-&lt;id&gt;-config object and mounted at /etc/dct-config/&lt;area&gt;. Empty means the service applies its typed defaults; an unknown key stops the service at startup. |
+| `functionalAreas.<area>.extraPorts` | array | - | Extra Service/container ports for this area beyond the 8080 graphql port (e.g. event-sources HTTP device ingest on 8081). Port names must be &lt;=15 chars per Kubernetes. |
+| `functionalAreas.<area>.extraPorts[].name` | string | - | Port name; at most 15 characters, per Kubernetes. |
+| `functionalAreas.<area>.extraPorts[].port` | integer | - | Port number, 1 to 65535. |
+| `functionalAreas.<area>.extraPorts[].protocol` | string | - | Port protocol; defaults to TCP. lwm2m-ingest sets UDP for its CoAPS port. |
+| `functionalAreas.<area>.extraEnv` | array | - | Extra container environment variables for this area, passed through verbatim as core-v1 EnvVar entries. Used to project a Secret into an env var — e.g. sparkplug-ingest reads each per-tenant broker password from the env var its source's broker.passwordEnv names, so an operator sets an entry here with valueFrom.secretKeyRef. |
+| `functionalAreas.<area>.extraEnv[].name` | string | - | Environment variable name. |
+| `functionalAreas.<area>.extraEnv[].value` | string | - | Literal value. Use valueFrom instead to project a Secret. |
+| `functionalAreas.<area>.extraEnv[].valueFrom` | object | - | Core-v1 EnvVarSource, for example a secretKeyRef. |
+| `functionalAreas.<area>.measuredRequests` | object | - | CPU request: the area's measured use at 6,000 events/s (event-processing: at 6,800), applied over the top-level resources.requests while useMeasuredRequests is true. The area's own resources.requests wins over it. |
+| `functionalAreas.<area>.measuredRequests.cpu` | string or number | - | CPU request, as a Kubernetes quantity or a number of cores. |
+| `functionalAreas.<area>.avoidEventStorePrimary` | boolean | - | Prefer (never require) a node that is not running this instance's event-store primary. |
+| `functionalAreas.<area>.eventPathSpread` | boolean | - | Prefer (never require) a node running fewer of this instance's event-path services: every area with this set counts. Shipped on device-management, event-management, device-state, event-sources and event-processing. Above one replica, also prefers a node not running another of this area's own pods; off keeps the cluster's default spread instead. |
+| `functionalAreas.<area>.profiler` | object | - | Opt-in profiling listener for this area: Go runtime profiles (CPU, heap, goroutines, execution trace) on a port of its own, never on the Service or the ingress. Off by default. Turning it on restarts this area's pods only. |
+| `functionalAreas.<area>.profiler.enabled` | boolean | - | Serve profiles from this area's pods. Default false. |
+| `functionalAreas.<area>.profiler.address` | string | - | IP address and port the listener binds. Default 127.0.0.1:6060, the pod's loopback address, reachable only with kubectl port-forward. Any other address is reachable by anything that can reach the pod, without authentication. |
+<!-- values:end -->

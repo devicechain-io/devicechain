@@ -53,6 +53,7 @@ func newTestManager(t testing.TB) (*NatsManager, func()) {
 		nc:           nc,
 		js:           js,
 	}
+	nmgr.Microservice.InstanceConfiguration.Infrastructure.Nats.Fetch = testFetchSettings()
 	return nmgr, func() {
 		nc.Close()
 		srv.Shutdown()

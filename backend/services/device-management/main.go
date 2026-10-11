@@ -15,6 +15,7 @@ import (
 	"github.com/devicechain-io/dc-device-management/ruleverify"
 	"github.com/devicechain-io/dc-device-management/schema"
 	"github.com/devicechain-io/dc-microservice/auth"
+	mscfg "github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/credential"
 	"github.com/devicechain-io/dc-microservice/deadletter"
@@ -44,6 +45,11 @@ var (
 
 	Api       *model.Api
 	CachedApi *model.CachedApi
+
+	// DeviceSecretKey digests and verifies device credential secrets (MQTT passwords). It is
+	// derived from the instance root key in AfterRdb, before anything can store or compare
+	// a secret.
+	DeviceSecretKey *credential.DeviceSecretKey
 
 	InboundEventsReader    messaging.MessageReader
 	InboundEventsProcessor *processor.InboundEventsProcessor
@@ -81,6 +87,11 @@ var (
 	// CredentialChecks counts the auth callout's MQTT password checks by outcome. The
 	// callout's credential.Checker exports its store_full series at zero when it is built.
 	CredentialChecks *prometheus.CounterVec
+	// CredentialMisconfigured counts device credential checks refused because the stored
+	// secret is one no presented secret can match (none stored, or a digest this key did
+	// not make), by path. It is separate from wrong passwords on purpose: those are the
+	// device's mistake, these are the operator's.
+	CredentialMisconfigured *prometheus.CounterVec
 
 	// DeadLetters is this service's identity as a dead-letter producer: the source its
 	// letters are stamped with and the ONE dead_letter_lost_total both of its arms count
@@ -144,6 +155,16 @@ func buildMetrics() {
 			"attempt store could not be reached and the connect was refused; outcome=\"store_full\" "+
 			"means the attempt store was full and the connect was checked WITHOUT its backoff.",
 		[]string{"kind", "outcome"})
+	CredentialMisconfigured = Microservice.NewCounterVec("credential_misconfigured_total",
+		"Device credential checks refused because the stored secret can never match: none is "+
+			"stored, or its digest was made under a different key than this instance's root key "+
+			"derives (most likely a database restored next to the wrong root key). path=\"connect\" "+
+			"is the MQTT auth callout, path=\"event\" the per-event check. Wrong passwords are not "+
+			"counted here.",
+		[]string{"path"})
+	for _, path := range []string{model.CredentialPathConnect, model.CredentialPathEvent} {
+		CredentialMisconfigured.WithLabelValues(path)
+	}
 	GeoFencePublishFails = Microservice.NewCounter(
 		"geofence_set_publish_failures_total",
 		"Geofence-set manifests that could not be published — a marshal error, a broker refusal, or a transport fault. Each one means event-processing was not told about a fence edit, so containment for that tenant holds its previous fence set until a reconcile sweep repairs it. A sustained non-zero rate means fence edits are not reaching the detection engine.")
@@ -206,7 +227,7 @@ func newInboundEventsProcessor(reader messaging.MessageReader) *processor.Inboun
 // Api. Without it every eviction is silently skipped, a revoked credential keeps
 // authenticating events from memory until its copy expires, and only a test that builds
 // the Apis through here can see it.
-func buildApis(nmgr *messaging.NatsManager, rdbm *rdb.RdbManager,
+func buildApis(nmgr *messaging.NatsManager, rdbm *rdb.RdbManager, key *credential.DeviceSecretKey,
 	cfg *config.DeviceManagementConfiguration) (*model.Api, *model.CachedApi, error) {
 	// Create NATS KV caches TTL'd from configuration (ADR-022 review B2), and the
 	// in-process credential cache.
@@ -218,6 +239,9 @@ func buildApis(nmgr *messaging.NatsManager, rdbm *rdb.RdbManager,
 	// Wrap api around rdb manager, then wrap a caching decorator over it for the hot
 	// inbound-event resolution path.
 	api := model.NewApi(rdbm)
+	api.EnableCeilingMetrics(nmgr.Microservice)
+	api.DeviceSecretKey = key
+	api.MisconfiguredSecrets = CredentialMisconfigured
 	cached := model.NewCachedApi(api, caches)
 	// The write paths evict the hot-path caches through this seam (ADR-044 F2). The GraphQL
 	// mutations run on the plain *Api, so the evictor is wired onto it.
@@ -371,8 +395,8 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 // 🔴 IT GETS THE PLAIN Api, NOT THE CACHED ONE. The consumer drops an edge for a device
 // that no longer exists (deleted between detection and dispatch), and it learns that by
 // resolving the device token. Through the cached Api that read can be answered from another
-// replica's process memory for a few seconds after the delete (messaging.DefaultLocalCacheTTL),
-// and the edge would then be applied to a device row that is gone. It is one indexed read
+// replica's process memory if the eviction message for the delete was lost (up to
+// inMemoryCache.ttlSeconds), and the edge would then be applied to a device row that is gone. It is one indexed read
 // per rule edge, far off the per-event path, so the database answers it every time.
 func newRaiseAlarmConsumer(reader messaging.MessageReader, dead *deadletter.Sink) *processor.RaiseAlarmConsumer {
 	return processor.NewRaiseAlarmConsumer(Microservice, reader,
@@ -385,23 +409,41 @@ func newRaiseAlarmConsumer(reader messaging.MessageReader, dead *deadletter.Sink
 // event-processing (ADR-051 slice 4b). It logs the enabled/disabled mode at startup so a
 // misconfigured deploy (empty secret, or a config predating this feature) is visible
 // rather than silently skipping validation — mirroring command-delivery's device check.
-func wireDetectionRuleValidator(gates *governance.SafetyGates) {
-	infra := Microservice.InstanceConfiguration.Infrastructure
+func wireDetectionRuleValidator(api *model.Api, infra mscfg.InfrastructureConfiguration, gates *governance.SafetyGates) {
+	// Assigned only when non-nil: a nil *Validator stored in the interface field is NOT a nil
+	// interface, so profile publish would call a method on a nil receiver instead of skipping
+	// validation.
+	if v := detectionRuleValidator(infra, gates); v != nil {
+		api.DetectionRuleValidator = v
+	}
+}
+
+// detectionRuleValidator is the decision wireDetectionRuleValidator applies: the validator, or nil
+// (the gate is OFF) when the service secret or event-processing's coordinate is absent. It records
+// the decision on the rule_validation safety gate either way. A separate function, taking the
+// configuration and the gates, so the decision is testable without a started service.
+func detectionRuleValidator(infra mscfg.InfrastructureConfiguration, gates *governance.SafetyGates) *ruleverify.Validator {
 	if infra.ServiceAuth.Secret == "" {
 		log.Warn().Msg("Service secret not configured — device profile publish will NOT validate detection rules against event-processing (ADR-051 slice 4b disabled).")
 		gates.Set(governance.GateRuleValidation, false)
-		return
+		return nil
 	}
 	if infra.EventProcessing.Hostname == "" || infra.EventProcessing.Port == 0 {
 		log.Warn().Msg("event-processing endpoint not configured (infrastructure.eventProcessing) — device profile publish will NOT validate detection rules (ADR-051 slice 4b disabled).")
 		gates.Set(governance.GateRuleValidation, false)
-		return
+		return nil
 	}
 	client := svcclient.New(infra.UserManagement, infra.ServiceAuth.Secret, "device-management", []string{string(auth.DeviceRead)})
 	url := fmt.Sprintf("http://%s:%d/graphql", infra.EventProcessing.Hostname, infra.EventProcessing.Port)
-	Api.DetectionRuleValidator = ruleverify.NewValidator(client, url)
 	gates.Set(governance.GateRuleValidation, true)
 	log.Info().Str("eventProcessing", url).Msg("Device profile publish will validate detection rules against event-processing (ADR-051 slice 4b).")
+	return ruleverify.NewValidator(client, url)
+}
+
+// calloutTenantGate is the deleted-tenant gate the device auth callout refuses connects through:
+// nil when user-management is unconfigured, with the tenant_lifecycle safety gate recorded.
+func calloutTenantGate(infra mscfg.InfrastructureConfiguration, gates *governance.SafetyGates) func(string) bool {
+	return governance.NewTenantLifecycleGate(infra.UserManagement, infra.ServiceAuth.Secret, "device-management", gates)
 }
 
 // wireGeoFenceCapsResolver injects the PER-TENANT geofence caps onto the shared Api: an
@@ -488,8 +530,19 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 			Migrations: schema.Migrations,
 			Config:     Configuration.RdbConfiguration,
 		},
-		AfterRdb: func(_ context.Context, m *service.Managers) error {
+		AfterRdb: func(ctx context.Context, m *service.Managers) error {
 			RdbManager = m.Rdb
+
+			// Device credential secrets are stored as digests under a key derived from the
+			// instance root key, so this service cannot store or check an MQTT password
+			// without it: no key, no start.
+			var err error
+			if DeviceSecretKey, err = deriveDeviceSecretKey(); err != nil {
+				return err
+			}
+			if err = digestStoredCredentialSecrets(ctx, RdbManager, DeviceSecretKey); err != nil {
+				return err
+			}
 
 			// Build every Prometheus instrument this service exports, before the NATS manager
 			// that consumes them.
@@ -502,7 +555,7 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 		// relational handle and a broker to build KV buckets from.
 		AfterNats: func(_ context.Context, m *service.Managers) error {
 			var err error
-			Api, CachedApi, err = buildApis(m.Nats, RdbManager, Configuration)
+			Api, CachedApi, err = buildApis(m.Nats, RdbManager, DeviceSecretKey, Configuration)
 			if err != nil {
 				return err
 			}
@@ -518,11 +571,12 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 			// must produce NO series rather than a zero. See rdb.StorageGrowthCollector.
 			prometheus.MustRegister(rdb.NewStorageGrowthCollector(Microservice, RdbManager.Database,
 				&model.GeoFenceSetVersion{}, &model.GeoFenceGeometryBlob{},
-				&model.DeviceProfileVersion{}, &model.EntityGroupVersion{}, &model.AssetTypeVersion{}))
+				&model.DeviceProfileVersion{}, &model.EntityGroupVersion{}, &model.AssetTypeVersion{},
+				&model.DeviceConfigurationRevision{}))
 
 			// Wire the detection-rule validator (ADR-044 sync gate) so profile publish compiles
 			// its draft rules against event-processing and fails closed on an uncompilable one.
-			wireDetectionRuleValidator(safetyGates)
+			wireDetectionRuleValidator(Api, Microservice.InstanceConfiguration.Infrastructure, safetyGates)
 
 			// Wire the per-tenant geofence caps and the counter that reports their refusals. The
 			// counter is set unconditionally, unlike the resolver: with no resolver the platform
@@ -601,13 +655,13 @@ func afterMicroserviceStarted(ctx context.Context) error {
 		// reclaimed. Nil when user-management is unconfigured — the gate is off, matching
 		// the resolver's own fail-open, since the erasure guarantee is the per-area fence.
 		infra := Microservice.InstanceConfiguration.Infrastructure
-		gate := governance.NewTenantLifecycleGate(infra.UserManagement, infra.ServiceAuth.Secret, "device-management", safetyGates)
+		gate := calloutTenantGate(infra, safetyGates)
 		// Every MQTT password connect is compared through this Checker, behind a
 		// per-username backoff whose counts every replica shares through the device
 		// credential-attempt bucket. It fails closed when that bucket cannot be reached,
 		// and OPEN, without the backoff, when it is full, since anyone can fill it by
 		// presenting enough distinct usernames (the credential package doc says why).
-		creds, err := processor.NewDeviceCredentialChecker(NatsManager, credential.WithCounter(CredentialChecks))
+		creds, err := processor.NewDeviceCredentialChecker(NatsManager, DeviceSecretKey, credential.WithCounter(CredentialChecks))
 		if err != nil {
 			return err
 		}

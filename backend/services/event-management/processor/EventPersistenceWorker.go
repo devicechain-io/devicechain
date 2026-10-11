@@ -447,7 +447,7 @@ func (ep *EventPersistenceWorker) writeEvent(ctx context.Context, tx *gorm.DB, p
 		// redelivery) the content-derived event id and the ON CONFLICT arbiters are
 		// what keep a replay from writing twice.
 		if event.AltId != nil {
-			exists, derr := ep.Api.EventExistsByAltId(ctx, tx, *event.AltId, event.OccurredTime)
+			exists, derr := ep.Api.EventExistsByAltId(ctx, tx, event.SourceDeviceToken, *event.AltId, event.OccurredTime)
 			if derr != nil {
 				return derr
 			}

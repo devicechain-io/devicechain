@@ -115,7 +115,7 @@ func (r *AdminResolver) DeadLetter(ctx context.Context, args struct {
 	if err := auth.Authorize(ctx, auth.AuditRead); err != nil {
 		return nil, err
 	}
-	id, err := strconv.ParseUint(string(args.Id), 10, 64)
+	id, err := strconv.ParseUint(string(args.Id), 10, strconv.IntSize)
 	if err != nil {
 		return nil, fmt.Errorf("dead letter id %q is not a number", string(args.Id))
 	}

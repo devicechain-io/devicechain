@@ -58,7 +58,7 @@ func TestEffectiveSettingsCoversEveryDimension(t *testing.T) {
 func TestEffectiveSettingsReportsTierAndDelta(t *testing.T) {
 	r := &AdminTenantResolver{M: iam.Tenant{
 		Tier:                    goldTier(),
-		IngestMessagesPerSecond: f64(5000),
+		IngestReadingsPerSecond: f64(5000),
 		IngestBurst:             ip(9000),
 	}}
 	rows := r.EffectiveSettings()

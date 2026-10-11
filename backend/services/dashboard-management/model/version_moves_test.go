@@ -61,7 +61,7 @@ func TestEveryDashboardWriteMovesTheVersion(t *testing.T) {
 			require.NoError(t, err)
 		}, defWriter},
 		{"rollback", func(t *testing.T, api *Api, ctx context.Context) {
-			_, err := api.PublishDashboard(ctx, "fleet", nil, nil, "tester", nil)
+			_, _, err := api.PublishDashboard(ctx, "fleet", nil, nil, "tester", nil)
 			require.NoError(t, err)
 			_, err = api.UpdateDashboard(ctx, "fleet", &DashboardUpdateRequest{
 				Definition: util.OptionalStringOf(defWriter)}, nil)
@@ -141,7 +141,7 @@ func TestRollbackReturnsTheStoredVersion(t *testing.T) {
 	_, err := api.CreateDashboard(ctx, &DashboardCreateRequest{
 		Token: "fleet", Name: strp("Fleet"), Definition: defOriginal})
 	require.NoError(t, err)
-	_, err = api.PublishDashboard(ctx, "fleet", nil, nil, "tester", nil)
+	_, _, err = api.PublishDashboard(ctx, "fleet", nil, nil, "tester", nil)
 	require.NoError(t, err)
 	now = frozenAt.Add(time.Hour) // past the floor, so the clock itself (with its nanoseconds) is sent
 

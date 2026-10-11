@@ -105,7 +105,7 @@ func TestTheLocaleMigrationRollbackDropsOnlyItsOwnColumn(t *testing.T) {
 		"the rollback must drop the column this migration added")
 	for _, kept := range []string{
 		"branding_title", "branding_primary", "basemap_tile_url",
-		"ingest_messages_per_second", "outbound_burst", "token", "name",
+		"ingest_readings_per_second", "outbound_burst", "token", "name",
 	} {
 		require.Truef(t, db.Migrator().HasColumn(&localeTenantRow{}, kept),
 			"the rollback dropped %q, which this migration never added", kept)

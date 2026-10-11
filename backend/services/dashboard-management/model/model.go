@@ -24,6 +24,13 @@ type Dashboard struct {
 	rdb.TokenReference
 	rdb.NamedEntity
 	Definition datatypes.JSON `gorm:"not null"`
+	// PublishedVersion is the version number of the dashboard_versions row viewers are
+	// served; nil until the first publish. It is not a foreign key -- the version key is
+	// composite and per-dashboard -- so integrity is by construction: versions are
+	// append-only and leave only with their dashboard in one transaction, and every
+	// writer of the pointer resolves the version row in the same transaction first.
+	// Moving it is NOT a draft edit and never moves updated_at.
+	PublishedVersion *int32 `gorm:"column:published_version"`
 }
 
 // DefaultOrder implements rdb.Sortable. Newest-first matches how a dashboard list is

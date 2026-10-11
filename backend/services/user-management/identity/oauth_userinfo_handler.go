@@ -40,8 +40,8 @@ type userinfoResponse struct {
 // without a live key set; it must verify the signature + access-token type + tenant
 // (auth.Validator.Validate). Supports GET and POST (OIDC Core §5.3.1); the token is
 // read from the Authorization header for both.
-func UserinfoHandler(validate func(tokenString string) (*auth.Claims, error)) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
+func UserinfoHandler(validate func(tokenString string) (*auth.Claims, error)) http.Handler {
+	return BoundRequests(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet && r.Method != http.MethodPost {
 			w.Header().Set("Allow", "GET, POST")
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -76,7 +76,7 @@ func UserinfoHandler(validate func(tokenString string) (*auth.Claims, error)) ht
 			Sudo:              claims.ActingAsSuperuser,
 			Tenant:            claims.Tenant,
 		})
-	}
+	}), MaxSmallBodyBytes)
 }
 
 // bearerToken extracts the access token from the Authorization header, returning

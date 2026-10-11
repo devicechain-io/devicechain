@@ -40,12 +40,12 @@ func TestApplyDefaults(t *testing.T) {
 
 	// The outbound egress ceiling (ADR-060 SD-3) defaults to the platform ceilings when unset
 	// (fail-safe, never unlimited) and leaves explicit values untouched.
-	if c.OutboundMessagesPerSecond != DefaultOutboundMessagesPerSecond || c.OutboundBurst != DefaultOutboundBurst {
-		t.Fatalf("outbound egress should default to the platform ceilings; got rate=%g burst=%d", c.OutboundMessagesPerSecond, c.OutboundBurst)
+	if c.OutboundCallsPerSecond != DefaultOutboundCallsPerSecond || c.OutboundBurst != DefaultOutboundBurst {
+		t.Fatalf("outbound egress should default to the platform ceilings; got rate=%g burst=%d", c.OutboundCallsPerSecond, c.OutboundBurst)
 	}
-	tunedOut := &EventProcessingConfiguration{OutboundMessagesPerSecond: 7, OutboundBurst: 9}
+	tunedOut := &EventProcessingConfiguration{OutboundCallsPerSecond: 7, OutboundBurst: 9}
 	tunedOut.ApplyDefaults()
-	if tunedOut.OutboundMessagesPerSecond != 7 || tunedOut.OutboundBurst != 9 {
+	if tunedOut.OutboundCallsPerSecond != 7 || tunedOut.OutboundBurst != 9 {
 		t.Fatalf("ApplyDefaults overwrote explicit outbound ceiling: %+v", tunedOut)
 	}
 }
@@ -59,7 +59,7 @@ func TestValidateRejectsNegativeBudget(t *testing.T) {
 	}{
 		{"negative rules", EventProcessingConfiguration{CheckpointEvents: 100, CheckpointIntervalSeconds: 10, MaxRulesPerTenant: -1}},
 		{"negative keys", EventProcessingConfiguration{CheckpointEvents: 100, CheckpointIntervalSeconds: 10, MaxLiveKeysPerTenant: -1}},
-		{"negative outbound rate", EventProcessingConfiguration{CheckpointEvents: 100, CheckpointIntervalSeconds: 10, OutboundMessagesPerSecond: -1}},
+		{"negative outbound rate", EventProcessingConfiguration{CheckpointEvents: 100, CheckpointIntervalSeconds: 10, OutboundCallsPerSecond: -1}},
 		{"negative outbound burst", EventProcessingConfiguration{CheckpointEvents: 100, CheckpointIntervalSeconds: 10, OutboundBurst: -1}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

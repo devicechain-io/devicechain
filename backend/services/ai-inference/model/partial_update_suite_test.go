@@ -88,10 +88,10 @@ func paramsReading(params datatypes.JSON) string {
 
 // The values the provider family drives.
 const (
+	seededProviderParams     = `{"maxTokens":256}`
+	replacedProviderParams   = `{}`
 	seededProviderEndpoint   = "https://models.example.invalid/v1"
 	replacedProviderEndpoint = "https://other.example.invalid/v2"
-	seededProviderParams     = `{"maxTokens":256}`
-	replacedProviderParams   = `{"maxTokens":512}`
 )
 
 // aiProviderFamily is this service's one converted family.
@@ -121,11 +121,17 @@ func aiProviderFamily() putest.Family[*Api] {
 				Kind:        string(AIProviderKindAnthropic),
 				Endpoint:    strp(seededProviderEndpoint),
 				Model:       "claude-opus-4-8",
-				Params:      strp(seededProviderParams),
 				Enabled:     true,
 				Secret:      strp("sk-seeded"),
 			}); err != nil {
 				t.Fatalf("seed ai provider: %v", err)
+			}
+			// Setting params is refused (nothing applies them), so the seed writes a
+			// pre-existing value straight to the column, as a provider created before
+			// the refusal would hold. The only value an update may set is `{}`.
+			if err := api.sys(ctx).Model(&AIProvider{}).Where("token = ?", "prov-1").
+				Update("params", datatypes.JSON(seededProviderParams)).Error; err != nil {
+				t.Fatalf("seed legacy params: %v", err)
 			}
 		},
 		Read: func(t *testing.T, api *Api, ctx context.Context) map[string]string {
@@ -163,6 +169,8 @@ func aiProviderFamily() putest.Family[*Api] {
 				func(r *AIProviderUpdateRequest) *dcgraphql.OptionalString { return &r.Endpoint }),
 			putest.RequiredStringField("model", "claude-opus-4-8", "claude-haiku-4-5-20251001",
 				func(r *AIProviderUpdateRequest) *dcgraphql.OptionalString { return &r.Model }),
+			// The replacement is `{}`: any document that sets something is refused
+			// (TestProviderParamsAreRefused), and `{}` sets nothing.
 			putest.OptionalStringField("params", seededProviderParams, replacedProviderParams,
 				func(r *AIProviderUpdateRequest) *dcgraphql.OptionalString { return &r.Params }),
 			putest.RequiredBoolField("enabled", true,

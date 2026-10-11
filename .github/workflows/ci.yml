@@ -1432,6 +1432,12 @@ jobs:
       - name: Translation freshness self-tests
         run: node --test docs/scripts/translation-freshness.test.mjs
 
+      # What the docs search bar reports to PostHog: the query sanitizer (a query that
+      # looks like an email, token or key must never leave the browser) and when events
+      # fire (debounced, once per query, nothing when PostHog is absent or opted out).
+      - name: Docs search analytics + URL scrubbing + selector-check self-tests
+        run: node --test docs/src/search/analytics.test.mjs docs/src/search/analytics.hardening.test.mjs docs/scripts/analytics-scrub.test.mjs docs/scripts/check-search-selectors.test.mjs docs/scripts/analytics-init.test.mjs
+
       # English remains the reference; locale refreshes may happen in batches.
       # Report changed source pages without blocking unrelated English edits.
       - name: Chinese translation review status

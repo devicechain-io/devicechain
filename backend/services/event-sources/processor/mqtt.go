@@ -391,6 +391,9 @@ func tenantFromTopic(topic string) (string, bool) {
 var commandPlaneSuffixes = map[string]struct{}{
 	messaging.SubjectDeviceCommands:   {},
 	messaging.SubjectCommandResponses: {},
+	// The reserved configuration channels share the tree too; neither is telemetry.
+	messaging.SubjectDeviceDesired: {},
+	messaging.SubjectDeviceReports: {},
 }
 
 // deviceFromTopic returns the device token an events topic addresses, for the

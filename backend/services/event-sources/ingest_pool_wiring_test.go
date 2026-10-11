@@ -67,7 +67,7 @@ func newFakeUM(t *testing.T) *fakeUM {
 			rate = 1000
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"tenantGovernance": map[string]any{
-			"ingestMessagesPerSecond": rate, "ingestBurst": 50, "shedPriority": nil, "purgeState": "active",
+			"ingestReadingsPerSecond": rate, "ingestBurst": 50, "shedPriority": nil, "purgeState": "active",
 		}}})
 	}))
 	t.Cleanup(um.srv.Close)
@@ -131,7 +131,7 @@ func wireIngest(t *testing.T, um *fakeUM, rate float64, burst int) *ingestWiring
 	InboundEventsWriter, FailedDecodeWriter = nopWriter{}, nopWriter{}
 
 	Configuration = &config.EventSourcesConfiguration{
-		IngestRateLimit: config.IngestRateLimit{MessagesPerSecond: rate, Burst: burst},
+		IngestRateLimit: config.IngestRateLimit{ReadingsPerSecond: rate, Burst: burst},
 		EventSources: []config.EventSource{{
 			Id:            "http1",
 			Type:          config.SourceTypeHttp,

@@ -64,8 +64,9 @@ CNPGClusterUnusable is the exception, and deliberately so: it reads
 `cnpg_collector_up`, scraped from the CNPG instances' own PodMonitor rather than
 from kube-state-metrics. That independence is worth having — the two halves of
 this group fail for different reasons and neither silences the other — but note
-it also means CNPGClusterStateUnobserved does NOT cover it. Nothing here reports
-the loss of the CNPG PodMonitor itself.
+it also means CNPGClusterStateUnobserved does NOT cover it. The loss of the CNPG
+PodMonitor itself is reported by CNPGCollectorAbsent, which is to
+cnpg_collector_up what CNPGClusterStateUnobserved is to the Cluster conditions.
 
 🔑 THE GROUP COVERS TWO OPPOSITE FAILURES, and it is worth being explicit that
 they are not variations of one thing. A1.5 is "the operator cannot drive a
@@ -315,6 +316,38 @@ spec:
               this is a failing replica rather than an outage. Run `SELECT count(*) FROM
               pg_stat_activity` against `SHOW max_connections` as a superuser, which still works
               while this fires, and compare per instance.
+        # 🔴 THE INSTRUMENT'S OWN ALARM FOR CNPGClusterUnusable, which reads a series nothing
+        # else watches. `min by (...) (...) == 0` over an empty vector is empty, not true, so
+        # losing the CNPG instances' PodMonitor (deleted, selecting nothing after a label
+        # change, or Prometheus lacking the RBAC to see the namespace) silences CNPGClusterUnusable
+        # itself and leaves an instance that looks monitored and is not.
+        #
+        # Scoped to the same two namespaces as CNPGClusterStateUnobserved, and for the same
+        # reason `absent()` is written once per namespace: a single absent() over both would be
+        # satisfied by either one's series, so the loss of one Cluster's collector would hide
+        # behind the other's.
+        #
+        # 10m: longer than a PodMonitor re-sync or a collector restart, which gap the series
+        # for seconds. Warning, not critical: it is a monitoring gap, but the gap that hides a
+        # database lockout.
+        - alert: CNPGCollectorAbsent
+          expr: |
+            absent(cnpg_collector_up{namespace="{{ $dbns }}"})
+            or
+            absent(cnpg_collector_up{namespace="{{ $ns }}"})
+          for: 10m
+          labels:
+            severity: warning
+            devicechain_instance: {{ $id }}
+          annotations:
+            summary: "No CloudNativePG metrics collector is being scraped"
+            description: >-
+              Nothing is reporting cnpg_collector_up in namespace {{ "{{ $labels.namespace }}" }}, so whether
+              the PostgreSQL instances there can answer their own metrics collector is UNKNOWN rather than good —
+              and while this fires, CNPGClusterUnusable CANNOT fire, because it reads the series this rule
+              says are missing. Check, in order: the CloudNativePG PodMonitor for the Cluster exists and
+              selects its pods; Prometheus can read the namespace; and the instance pods are running and
+              serving :9187.
         - alert: CNPGClusterStateUnobserved
           expr: |
             absent(kube_cnpg_cluster_condition{type="Ready", namespace="{{ $dbns }}"})

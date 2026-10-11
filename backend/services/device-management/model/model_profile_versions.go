@@ -91,4 +91,10 @@ type ProfileSnapshot struct {
 	// distinction that matters — nil versus a declared-but-empty `{}` — survives
 	// either encoding.
 	Location *LocationDeclaration `json:"location,omitempty"`
+	// Configuration is the device-visible configuration declaration frozen into this
+	// version: the shared attribute keys a device of this profile may see. nil/empty means
+	// nothing is declared, so a device sees an empty document. That is also the correct
+	// reading of every snapshot published before the declaration existed (the key is simply
+	// absent), so no backfill is needed and none is wanted.
+	Configuration []ConfigurationKey `json:"configuration,omitempty"`
 }

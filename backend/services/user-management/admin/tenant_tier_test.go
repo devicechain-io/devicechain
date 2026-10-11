@@ -180,7 +180,7 @@ func TestTierConfigIsValidatedAtTheDoor(t *testing.T) {
 	// admits nothing, which is an outage for every tenant at the tier.
 	_, err = s.CreateTenantTier(ctx, TierInput{
 		Token:  "platinum",
-		Config: map[string]any{"ingestMessagesPerSecond": float64(0)},
+		Config: map[string]any{"ingestReadingsPerSecond": float64(0)},
 	})
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "must be positive")
@@ -213,10 +213,10 @@ func TestTierConfigIsValidatedAtTheDoor(t *testing.T) {
 	// A valid config passes both doors and lands.
 	got, err := s.UpdateTenantTier(ctx, iam.TierGoldToken, &TierUpdateRequest{
 		Name:   dcgraphql.OptionalStringOf("Gold"),
-		Config: dcgraphql.OptionalStringOf(`{"ingestMessagesPerSecond":2000}`),
+		Config: dcgraphql.OptionalStringOf(`{"ingestReadingsPerSecond":2000}`),
 	})
 	require.NoError(t, err)
-	require.Equal(t, float64(2000), got.Config["ingestMessagesPerSecond"])
+	require.Equal(t, float64(2000), got.Config["ingestReadingsPerSecond"])
 }
 
 // TestRenamingATierDoesNotWipeItsPackaging is the guard for a silent, tier-wide
@@ -241,7 +241,7 @@ func TestRenamingATierDoesNotWipeItsPackaging(t *testing.T) {
 	_, err := s.CreateTenantTier(ctx, TierInput{
 		Token:  iam.TierGoldToken,
 		Name:   "Gold",
-		Config: map[string]any{"ingestMessagesPerSecond": float64(2000)},
+		Config: map[string]any{"ingestReadingsPerSecond": float64(2000)},
 	})
 	require.NoError(t, err)
 
@@ -251,13 +251,13 @@ func TestRenamingATierDoesNotWipeItsPackaging(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Equal(t, "Gold Plus", renamed.Name.String)
-	require.Equal(t, float64(2000), renamed.Config["ingestMessagesPerSecond"],
+	require.Equal(t, float64(2000), renamed.Config["ingestReadingsPerSecond"],
 		"a name-only update must not clear the tier's ceilings")
 
 	// It survives the round-trip too, not just the returned struct.
 	reloaded, err := s.loadTier(ctx, iam.TierGoldToken)
 	require.NoError(t, err)
-	require.Equal(t, float64(2000), reloaded.Config["ingestMessagesPerSecond"])
+	require.Equal(t, float64(2000), reloaded.Config["ingestReadingsPerSecond"])
 
 	// Clearing stays possible — it just has to be said out loud.
 	cleared, err := s.UpdateTenantTier(ctx, iam.TierGoldToken, &TierUpdateRequest{
@@ -271,7 +271,7 @@ func TestRenamingATierDoesNotWipeItsPackaging(t *testing.T) {
 	// three-state semantic spells "clear it". The two must agree: a client that sends
 	// null and a client that sends "{}" are asking for one thing.
 	_, err = s.UpdateTenantTier(ctx, iam.TierGoldToken, &TierUpdateRequest{
-		Config: dcgraphql.OptionalStringOf(`{"ingestMessagesPerSecond":2000}`),
+		Config: dcgraphql.OptionalStringOf(`{"ingestReadingsPerSecond":2000}`),
 	})
 	require.NoError(t, err)
 	nulled, err := s.UpdateTenantTier(ctx, iam.TierGoldToken, &TierUpdateRequest{

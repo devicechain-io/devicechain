@@ -122,13 +122,23 @@ export function generateToken(mask: string, opts: GenerateOptions = {}): string 
  * "Ops Overview" → "ops-overview".
  */
 export function normalizeToken(input: string): string {
-  return input
-    .toLowerCase()
-    .trim()
-    .replace(/[\s_]+/g, '-')
-    .replace(/[^a-z0-9-]+/g, '')
-    .replace(/-+/g, '-')
-    .replace(/^-+|-+$/g, '');
+  return trimHyphens(
+    input
+      .toLowerCase()
+      .trim()
+      .replace(/[\s_]+/g, '-')
+      .replace(/[^a-z0-9-]+/g, '')
+      .replace(/-+/g, '-'),
+  );
+}
+
+/** Strips leading and trailing hyphens in linear time (no backtracking pattern). */
+function trimHyphens(s: string): string {
+  let start = 0;
+  let end = s.length;
+  while (start < end && s.charCodeAt(start) === 45) start++;
+  while (end > start && s.charCodeAt(end - 1) === 45) end--;
+  return s.slice(start, end);
 }
 
 function escapeRegExp(s: string): string {

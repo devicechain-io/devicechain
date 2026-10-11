@@ -36,5 +36,8 @@ var (
 		NewAssetPropertySchemaSchema(),
 		NewDropAlarmMessageSchema(),
 		NewDetectReconcileInstantsSchema(),
+		NewProfileConfigurationDeclarationSchema(),
+		NewDeviceConfigurationSchema(),
+		NewCredentialSecretDigestSchema(),
 	}
 )

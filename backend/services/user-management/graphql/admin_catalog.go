@@ -34,18 +34,18 @@ func (r *AdminRoleResolver) Authorities() []string {
 	return r.M.Authorities
 }
 
-// IngestMessagesPerSecond / IngestBurst resolve the per-tenant ingest governance
+// IngestReadingsPerSecond / IngestBurst resolve the per-tenant ingest governance
 // overrides; null means the tenant inherits the platform default.
-func (r *AdminTenantResolver) IngestMessagesPerSecond() *float64 { return r.M.IngestMessagesPerSecond }
+func (r *AdminTenantResolver) IngestReadingsPerSecond() *float64 { return r.M.IngestReadingsPerSecond }
 func (r *AdminTenantResolver) IngestBurst() (*int32, error) {
 	return util.IntPtrInt32("ingestBurst", r.M.IngestBurst)
 }
 
-// OutboundMessagesPerSecond / OutboundBurst resolve the per-tenant outbound
+// OutboundCallsPerSecond / OutboundBurst resolve the per-tenant outbound
 // governance overrides (ADR-060 SD-3); null means the tenant inherits the
 // platform default.
-func (r *AdminTenantResolver) OutboundMessagesPerSecond() *float64 {
-	return r.M.OutboundMessagesPerSecond
+func (r *AdminTenantResolver) OutboundCallsPerSecond() *float64 {
+	return r.M.OutboundCallsPerSecond
 }
 func (r *AdminTenantResolver) OutboundBurst() (*int32, error) {
 	return util.IntPtrInt32("outboundBurst", r.M.OutboundBurst)
@@ -220,6 +220,9 @@ func (r *AdminResolver) CreateRole(ctx context.Context, args struct {
 	if err := auth.Authorize(ctx, auth.RoleWrite); err != nil {
 		return nil, err
 	}
+	if err := checkList("authorities", args.Request.Authorities); err != nil {
+		return nil, err
+	}
 	role, err := r.getAdminService(ctx).CreateRole(ctx, admin.RoleInput{
 		Scope:       args.Request.Scope,
 		Token:       args.Request.Token,
@@ -244,6 +247,9 @@ func (r *AdminResolver) UpdateRole(ctx context.Context, args struct {
 	if err := auth.Authorize(ctx, auth.RoleWrite); err != nil {
 		return nil, err
 	}
+	if err := checkList("authorities", args.Request.Authorities.Value); err != nil {
+		return nil, err
+	}
 	role, err := r.getAdminService(ctx).UpdateRole(ctx, args.Scope, args.Token, &args.Request)
 	return wrapRole(role, err)
 }
@@ -266,9 +272,9 @@ type adminTenantCreateInput struct {
 	Name                         *string
 	TierToken                    string
 	Config                       *string
-	IngestMessagesPerSecond      *float64
+	IngestReadingsPerSecond      *float64
 	IngestBurst                  *int32
-	OutboundMessagesPerSecond    *float64
+	OutboundCallsPerSecond       *float64
 	OutboundBurst                *int32
 	AiExternalEnabled            *bool
 	AiInferenceRequestsPerMinute *float64
@@ -308,9 +314,9 @@ func (r *AdminResolver) CreateTenant(ctx context.Context, args struct {
 		Token: args.Request.Token, Name: strOrEmpty(args.Request.Name),
 		TierToken: args.Request.TierToken, Config: cfg,
 		GovernanceOverrides: admin.GovernanceOverrides{
-			IngestMessagesPerSecond:      args.Request.IngestMessagesPerSecond,
+			IngestReadingsPerSecond:      args.Request.IngestReadingsPerSecond,
 			IngestBurst:                  intPtr(args.Request.IngestBurst),
-			OutboundMessagesPerSecond:    args.Request.OutboundMessagesPerSecond,
+			OutboundCallsPerSecond:       args.Request.OutboundCallsPerSecond,
 			OutboundBurst:                intPtr(args.Request.OutboundBurst),
 			AiInferenceRequestsPerMinute: args.Request.AiInferenceRequestsPerMinute,
 			AiInferenceBurst:             intPtr(args.Request.AiInferenceBurst),

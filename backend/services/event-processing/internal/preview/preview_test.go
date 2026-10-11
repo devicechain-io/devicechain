@@ -6,6 +6,7 @@ package preview
 import (
 	"context"
 	"io"
+	"strings"
 	"testing"
 	"time"
 
@@ -327,5 +328,59 @@ func TestPreviewSpanStillExcludesAnEventOutsideTheWindow(t *testing.T) {
 	}
 	if len(res.Firings) != 0 {
 		t.Fatalf("an out-of-window event produced firings: %+v", res.Firings)
+	}
+}
+
+// blockingReader delivers its messages, then waits for the context to end and reports io.EOF,
+// which is how the real replay reader surfaces a context that ended mid-replay.
+type blockingReader struct {
+	msgs []messaging.Message
+	idx  int
+}
+
+func (r *blockingReader) Read(ctx context.Context) (messaging.Message, error) {
+	if r.idx < len(r.msgs) {
+		m := r.msgs[r.idx]
+		r.idx++
+		return m, nil
+	}
+	<-ctx.Done()
+	return messaging.Message{}, io.EOF
+}
+func (r *blockingReader) Close() error { return nil }
+
+type blockingOpener struct{ msgs []messaging.Message }
+
+func (o *blockingOpener) NewReplayReaderFromTime(string, time.Time) (messaging.ReplayReader, time.Time, error) {
+	return &blockingReader{msgs: o.msgs}, time.Time{}, nil
+}
+
+// TestPreviewTimeBudgetDegradesInsteadOfFailing: when the time budget runs out mid-replay the
+// preview returns what it found so far, marked truncated, rather than a deadline error.
+func TestPreviewTimeBudgetDegradesInsteadOfFailing(t *testing.T) {
+	op := &blockingOpener{msgs: []messaging.Message{
+		msg(t, 1, "acme", "d", "p@1", "temperature", "90", base),
+	}}
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	res, err := Run(ctx, op, "resolved-events", thresholdReg(t), "acme", "p@1", window(), 0, 0, 0, nil)
+	if err != nil {
+		t.Fatalf("a spent time budget must degrade, not fail: %v", err)
+	}
+	if !strings.Contains(res.Degraded, "ran out of time") {
+		t.Fatalf("want a truncation note, got %q", res.Degraded)
+	}
+	if len(res.Firings) != 1 || !res.Firings[0].Raise {
+		t.Fatalf("the firing found before the budget ran out must be kept, got %+v", res.Firings)
+	}
+}
+
+// A cancelled preview (the caller went away) is still an error.
+func TestPreviewCancellationStillFails(t *testing.T) {
+	op := &blockingOpener{}
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() { time.Sleep(50 * time.Millisecond); cancel() }()
+	if _, err := Run(ctx, op, "resolved-events", thresholdReg(t), "acme", "p@1", window(), 0, 0, 0, nil); err == nil {
+		t.Fatal("a cancelled preview must return the error")
 	}
 }

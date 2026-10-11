@@ -76,13 +76,13 @@ func TestUpdateTenantPreservesTierWhenOtherFieldsChange(t *testing.T) {
 	rate := 500.0
 	got, err := s.TenantByToken(ctx, "acme")
 	require.NoError(t, err)
-	got.IngestMessagesPerSecond = &rate
+	got.IngestReadingsPerSecond = &rate
 	require.NoError(t, s.UpdateTenant(ctx, got))
 
 	after, err := s.TenantByToken(ctx, "acme")
 	require.NoError(t, err)
 	require.Equal(t, gold.ID, after.TierID)
-	require.NotNil(t, after.IngestMessagesPerSecond)
+	require.NotNil(t, after.IngestReadingsPerSecond)
 }
 
 // TestCountTenantsAtTier backs the deletion guard (ADR-065 decision 9): the count

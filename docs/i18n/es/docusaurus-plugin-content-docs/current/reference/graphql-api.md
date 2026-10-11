@@ -82,6 +82,8 @@ llamador. Algunas autoridades no coinciden con la intuición:
 `sparkplug-ingest` y `lwm2m-ingest` no sirven GraphQL en absoluto y se mantienen deliberadamente
 fuera del router `/api`. `event-sources` sí está enrutado, pero responde con un esquema marcador de
 posición: la ingesta llega a él por los transportes del plano de dispositivo, no por esta API.
+`update-management` también está enrutado, pero su API no está implementada en esta versión: su
+única consulta marcadora de posición responde a cada llamada con un error `NOT_IMPLEMENTED`.
 
 ### Suscripciones por WebSocket {#subscriptions-over-websocket}
 
@@ -718,6 +720,7 @@ defecto: ninguno puede desactivarse.
 | Límite | Por defecto | Variable | Qué se rechaza |
 | --- | --- | --- | --- |
 | Cuerpo de la solicitud | 4 MiB | `DC_GRAPHQL_MAX_BODY_BYTES` | Todo el cuerpo HTTP, variables incluidas. Se responde con HTTP 400. |
+| Tiempo de ejecución | 60 segundos | `DC_GRAPHQL_EXEC_TIMEOUT` (segundos enteros) | Una consulta o mutación que sigue ejecutándose al llegar al plazo se cancela, junto con la sentencia de base de datos en curso; la respuesta incluye un error. No se aplica a las suscripciones. El cliente también debe entregar el cuerpo de la solicitud en 30 segundos. |
 | Longitud de la consulta | 100.000 bytes | `DC_GRAPHQL_MAX_QUERY_LENGTH` | La cadena de la consulta en sí. |
 | Profundidad de anidamiento | 15 | `DC_GRAPHQL_MAX_DEPTH` | Selecciones anidadas más allá de esta profundidad. |
 | Campos raíz por consulta | 20 | `DC_GRAPHQL_MAX_QUERY_ROOT_FIELDS` | Una operación de consulta que selecciona más campos de primer nivel que este número. |
@@ -756,6 +759,28 @@ consola, la aplicación de paneles, los SDK, `dcctl` y el servidor MCP envían u
 mutación por solicitud y como mucho dos campos de consulta. El límite se aplica solo a los campos de
 primer nivel; los alias de un campo anidado no se cuentan.
 
+### Límites de tamaño en listas, entradas y agregaciones {#size-bounds}
+
+Aparte de los límites de forma de la solicitud, algunas lecturas y entradas tienen un límite de
+tamaño. Una solicitud que lo supera se rechaza con `extensions.code` igual a `LIMIT_EXCEEDED`. No se
+trunca nada ni se aplica nada a medias, así que reduzca la solicitud y envíela de nuevo. Los tamaños se cuentan en bytes, no en caracteres.
+
+| Límite | Valor | Se aplica a |
+| --- | --- | --- |
+| Clave de atributo | 128 B | `attrKey` de `setEntityAttribute`. |
+| Valor de atributo | 64 KiB | `value` de `setEntityAttribute`, sea cual sea su tipo declarado. |
+| Definición de regla | 256 KiB | `definition` de una regla de detección, al crear y al actualizar. |
+| Grafo de autoría de regla | 256 KiB | `authoringGraph` de una regla de detección, al crear y al actualizar. |
+| Historial de versiones | 1000 por llamada | `deviceProfileVersions`, `entityGroupVersions`, `assetTypeVersions`: las más recientes primero. Reduzca con `limit` (al menos 1) y pagine con `offset` (no negativo); un valor fuera de ese rango se rechaza con `INVALID_VALUE`. |
+| Intervalos por agregación | 10 000 | `bucketedMeasurements`: el rango dividido por `intervalSeconds`, redondeado hacia arriba. |
+| Filas por agregación | 50 000 | `bucketedMeasurements`: los intervalos multiplicados por los nombres de medición devueltos. Con un filtro `name` es un solo nombre; sin él, cada nombre de medición distinto que coincide con los filtros de la lectura. |
+| Claves por consulta | 1000 | Una lista de tokens, identificadores externos o tokens de alarma pasada a una consulta por lotes `…ByToken`, `…ByExternalId` o similar (estados de dispositivo, últimas ubicaciones, comandos, lotes de comandos, canales, políticas y estados de notificación). |
+
+`bucketedMeasurements` también exige `startTime`; `endTime` toma por defecto la hora actual.
+
+La gramática de tokens limita una clave de comando a 128 bytes, que es también el nombre de comando
+más largo que se puede encolar.
+
 ### Solo sintaxis de GraphQL {#graphql-syntax-only}
 
 **Los documentos deben usar la sintaxis propia de GraphQL.** Un documento que contenga cualquiera de
@@ -773,6 +798,24 @@ lo siguiente se rechaza con un error de sintaxis, y no se ejecuta nada:
 La misma regla se aplica por WebSocket, donde una suscripción que el servidor no puede leer recibe el
 error de sintaxis en lugar del [mensaje de que solo se aceptan
 suscripciones](#subscriptions-over-websocket).
+
+### Techos de cantidad en device-management {#device-management-count-ceilings}
+
+Dos colecciones se leen completas, así que cada una tiene un techo sobre cuántos miembros puede
+contener. Una escritura que llevaría una colección por encima de su techo se rechaza con
+`extensions.code` igual a `LIMIT_EXCEEDED`, y no se guarda nada. Las lecturas nunca se truncan: un
+propietario que ya supera un techo conserva todas sus filas y cada lectura las devuelve todas.
+Borrar filas vuelve a dejar espacio.
+
+| Techo | Límite | Se aplica a |
+| --- | --- | --- |
+| Relaciones rastreadas por dispositivo | 256 | Relaciones de un tipo de relación rastreado cuyo origen es un dispositivo, en `createEntityRelationship`, `createEntityRelationships` y `claimDevice`, y en `updateEntityRelationshipType` cuando pone `tracked` en verdadero y eso dejaría a algún dispositivo por encima del techo. Una llamada a `createEntityRelationships` admite como máximo 1.000 relaciones. La resolución de eventos lee todas las relaciones rastreadas de un dispositivo en cada evento. |
+| Definiciones por perfil de dispositivo | 1.000 por tipo | Definiciones de métricas, definiciones de comandos y reglas de detección, cada una contada por separado, en `createMetricDefinition`, `createCommandDefinition` y `createDetectionRule`. |
+
+El servicio exporta `devicechain_devicemanagement_tracked_relationships_per_device` (se observa cada
+vez que el conjunto rastreado de un dispositivo se carga desde la base de datos) y
+`devicechain_devicemanagement_profile_children` (con la etiqueta `kind`: `metric`, `command` o `rule`)
+como histogramas de los tamaños que lee, para que pueda ver cuánto se acercan los datos reales a un techo.
 
 ### Comprobaciones de credenciales por petición {#credential-checks-per-request}
 

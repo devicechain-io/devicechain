@@ -94,12 +94,22 @@ func (unrez UnresolvedEvent) WithoutPresentedCredential() UnresolvedEvent {
 	return unrez
 }
 
+// 🔴 THE JSON TAGS ON THE PAYLOAD STRUCTS BELOW ARE THE PUBLISHED DEVICE CONTRACT.
+// Each struct is held to its committed JSON Schema in ../contract by
+// processor/contract_test.go: the tag names are the schema's properties, and a tag
+// without omitempty is a property the schema requires. Rename a tag and that test
+// fails, which is the point — a renamed wire field breaks every device in the field,
+// and the schema is what their authors read. Decoding is still encoding/json's
+// case-insensitive match, so the tags change nothing a device sends today.
+//
 // Payload for creating a new relationship. The target is a uniform (type, token)
 // reference (ADR-013): TargetType names an entity class and Target is its token.
+// The decoder reads these three keys out of the payload map by their exact names
+// (see processor.BuildNewRelationshipPayload); the tags declare those names.
 type UnresolvedNewRelationshipPayload struct {
-	RelationshipType string
-	TargetType       string
-	Target           string
+	RelationshipType string `json:"relationshipType"`
+	TargetType       string `json:"targetType"`
+	Target           string `json:"target"`
 }
 
 // Information for a location entry. A fix is the full GPS vocabulary, not the
@@ -135,18 +145,18 @@ type UnresolvedNewRelationshipPayload struct {
 // therefore has a time or a documented absence, never a string that might not be
 // one.
 type UnresolvedLocationEntry struct {
-	Latitude     *string
-	Longitude    *string
-	Elevation    *string
-	Accuracy     *string
-	Speed        *string
-	Heading      *string
-	OccurredTime *time.Time
+	Latitude     *string    `json:"latitude"`
+	Longitude    *string    `json:"longitude"`
+	Elevation    *string    `json:"elevation,omitempty"`
+	Accuracy     *string    `json:"accuracy,omitempty"`
+	Speed        *string    `json:"speed,omitempty"`
+	Heading      *string    `json:"heading,omitempty"`
+	OccurredTime *time.Time `json:"occurredTime,omitempty"`
 }
 
 // Payload creating new locations.
 type UnresolvedLocationsPayload struct {
-	Entries []UnresolvedLocationEntry
+	Entries []UnresolvedLocationEntry `json:"entries"`
 }
 
 // Information for a measurements entry — ONE sample, a coherent set of named
@@ -158,29 +168,29 @@ type UnresolvedLocationsPayload struct {
 // a minute of readings stored as a minute of readings and all of them stored at one
 // instant.
 type UnresolvedMeasurementsEntry struct {
-	Measurements map[string]string
-	OccurredTime *time.Time
+	Measurements map[string]string `json:"measurements"`
+	OccurredTime *time.Time        `json:"occurredTime,omitempty"`
 }
 
 // Payload creating new measurements.
 type UnresolvedMeasurementsPayload struct {
-	Entries []UnresolvedMeasurementsEntry
+	Entries []UnresolvedMeasurementsEntry `json:"entries"`
 }
 
 // Information for an alert entry. OccurredTime is this alert's own instant, nil
 // when the device timed only the message; see UnresolvedLocationEntry for why it is
 // already parsed.
 type UnresolvedAlertEntry struct {
-	Type         string
-	Level        uint32
-	Message      string
-	Source       string
-	OccurredTime *time.Time
+	Type         string     `json:"type"`
+	Level        uint32     `json:"level,omitempty"`
+	Message      string     `json:"message,omitempty"`
+	Source       string     `json:"source,omitempty"`
+	OccurredTime *time.Time `json:"occurredTime,omitempty"`
 }
 
 // Payload creating new alerts.
 type UnresolvedAlertsPayload struct {
-	Entries []UnresolvedAlertEntry
+	Entries []UnresolvedAlertEntry `json:"entries"`
 }
 
 // Presence state carried by a StateChange event (ADR-067). A closed enum, and NOT

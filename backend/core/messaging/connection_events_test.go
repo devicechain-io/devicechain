@@ -283,6 +283,7 @@ func managerFor(t *testing.T, srv *natsserver.Server) *NatsManager {
 	addr := srv.Addr().(*net.TCPAddr)
 	cfg := &config.InstanceConfiguration{}
 	cfg.ApplyDefaults()
+	cfg.Infrastructure.Nats.Fetch = testFetchSettings()
 	cfg.Infrastructure.Nats.Hostname = addr.IP.String()
 	cfg.Infrastructure.Nats.Port = uint32(addr.Port)
 	// The defaults carry a TLS block only when configured; the embedded server is

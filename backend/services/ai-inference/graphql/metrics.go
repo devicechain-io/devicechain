@@ -36,6 +36,11 @@ const (
 	// empty completion). Distinguished from unavailable because it means the external
 	// dependency is misbehaving rather than the platform being unconfigured.
 	outcomeProviderError = "provider_error"
+	// outcomeTimedOut — the provider was reached but did not answer inside the
+	// configured inference timeout. Split from provider_error because the two call for
+	// different operator responses: a rising timed_out count says the timeout is too
+	// tight for the model in use, not that the provider is failing.
+	outcomeTimedOut = "timed_out"
 )
 
 // Token direction label values for ai_inference_tokens_total (bounded enum).
@@ -105,6 +110,8 @@ func outcomeFor(err error) string {
 		return outcomeRateLimited
 	case errors.Is(err, inference.ErrConsentRequired):
 		return outcomeConsentRequired
+	case errors.Is(err, inference.ErrTimedOut):
+		return outcomeTimedOut
 	case errors.Is(err, inference.ErrUnavailable):
 		return outcomeUnavailable
 	default:

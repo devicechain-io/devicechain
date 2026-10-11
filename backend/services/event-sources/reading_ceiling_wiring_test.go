@@ -161,7 +161,7 @@ func (b *brokerIngest) inboundState(t *testing.T) nats.StreamState {
 // maxAdmittedEvents is the most 256-reading events a tenant at the default ceiling (1000
 // readings/s, burst 2000) can be admitted in `elapsed`, plus one for the boundary.
 func maxAdmittedEvents(elapsed time.Duration) int {
-	return int((float64(config.DefaultIngestBurst)+config.DefaultIngestMessagesPerSecond*elapsed.Seconds())/256) + 1
+	return int((float64(config.DefaultIngestBurst)+config.DefaultIngestReadingsPerSecond*elapsed.Seconds())/256) + 1
 }
 
 // 🔴 THE DEFECT. One tenant at its DEFAULT ceiling posts events of 256 readings each. Charged

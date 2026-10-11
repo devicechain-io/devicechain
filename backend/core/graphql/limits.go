@@ -6,6 +6,7 @@ package graphql
 import (
 	"os"
 	"strconv"
+	"time"
 
 	"github.com/rs/zerolog/log"
 )
@@ -39,10 +40,23 @@ const (
 	// EnvGraphQLMaxMutationRootFields overrides the maximum distinct root fields in a
 	// mutation.
 	EnvGraphQLMaxMutationRootFields = "DC_GRAPHQL_MAX_MUTATION_ROOT_FIELDS"
+	// EnvGraphQLExecTimeout overrides the wall-clock bound, in seconds, on executing one
+	// GraphQL query or mutation over HTTP.
+	EnvGraphQLExecTimeout = "DC_GRAPHQL_EXEC_TIMEOUT"
 	// EnvGraphQLMaxCredentialChecks overrides how many credential checks (password or
 	// client-secret compares) one request may make.
 	EnvGraphQLMaxCredentialChecks = "DC_GRAPHQL_MAX_CREDENTIAL_CHECKS"
 
+	// DefaultGraphQLExecTimeoutSeconds bounds one query or mutation's execution. The
+	// request context is cancelled at the deadline, and the database driver cancels the
+	// statement in flight with it, so this is also the bound on a single statement.
+	// Legitimate operations finish in well under a second; the slowest tenant-facing
+	// work (a bounded analytics read) in a few seconds.
+	DefaultGraphQLExecTimeoutSeconds = 60
+	// GraphQLBodyReadTimeoutDefault bounds how long a client may take to deliver the request
+	// body. The body is capped at DefaultGraphQLMaxBodyBytes, so a client that cannot
+	// send that much in this time is not one worth holding a connection for.
+	GraphQLBodyReadTimeoutDefault = 30 * time.Second
 	// DefaultGraphQLMaxDepth caps selection nesting. The deepest legitimate operation
 	// the platform issues is depth ~4; the canonical schema-introspection query
 	// (reachable only when dev tools are enabled) reaches ~13, so the default clears
@@ -85,6 +99,15 @@ const (
 // maxDepth resolves the effective selection-depth ceiling (see EnvGraphQLMaxDepth).
 func maxDepth() int {
 	return envPositiveInt(EnvGraphQLMaxDepth, DefaultGraphQLMaxDepth)
+}
+
+// bodyReadTimeout is the body-delivery deadline in force. A variable only so a test can
+// shorten it; nothing else assigns it.
+var bodyReadTimeout = GraphQLBodyReadTimeoutDefault
+
+// execTimeout resolves the effective execution deadline (see EnvGraphQLExecTimeout).
+func execTimeout() time.Duration {
+	return time.Duration(envPositiveInt(EnvGraphQLExecTimeout, DefaultGraphQLExecTimeoutSeconds)) * time.Second
 }
 
 // maxQueryLength resolves the effective query-length ceiling in bytes (see

@@ -84,6 +84,11 @@ type DeviceProfile struct {
 	// "reports position, no expectations stated". Read/written through
 	// decodeLocationDeclaration / encodeLocationDeclaration, never touched raw.
 	LocationDeclaration *datatypes.JSON
+	// ConfigurationDeclaration is the DRAFT list of shared attribute keys a device of this
+	// profile may see, as one nullable JSON document (NULL = nothing declared). Read and
+	// written through ConfigurationKeys / encodeConfigurationDeclaration; frozen into
+	// ProfileSnapshot.Configuration at publish.
+	ConfigurationDeclaration *datatypes.JSON
 	// Provenance is a reserved, nullable link recording that this profile was
 	// fork-adopted from an ADR-046 catalog entry ("catalog-profile@version"). Unset
 	// and unused in v1; present so the future catalog drops in additively.

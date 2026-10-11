@@ -123,6 +123,18 @@ type entity struct {
 	// arrives with its reason attached rather than as a bare absent object.
 	Wrap   string
 	Reject string
+	// WrapMarker names a field that only the ENVELOPE type declares, for an envelope
+	// whose Wrap field also exists on the bare type it replaced. publishDashboard
+	// used to return DashboardVersion, which has a `version` of its own, so asking
+	// whether the baseline's result type declares `version` cannot tell the two shapes
+	// apart; `dashboard` can. Empty means Wrap itself is the discriminator.
+	WrapMarker string
+
+	// Params marks a write that takes several named arguments instead of one input
+	// object — setDeviceProfileConfigurationDeclaration(token:, keys:). Each is a
+	// variable of the same name, and Vars returns them as a flat map. Input is empty
+	// for such a row.
+	Params []param
 
 	// Fields is the selection set, used VERBATIM in BOTH documents.
 	//
@@ -147,6 +159,9 @@ type entity struct {
 	Record func(*state, map[string]any)
 }
 
+// param is one named, typed argument of a Params write.
+type param struct{ Name, Type string }
+
 func (e entity) arg() string {
 	if e.Arg == "" {
 		return "request"
@@ -163,8 +178,22 @@ func (e entity) createDoc() string {
 		// out per op — see publishes.go. `description` is deliberately not sent: it
 		// defaults to the parent's, and sending one would make the comparison assert
 		// this tool's own literal rather than what publishing preserved.
+		selection := e.Fields
+		if e.Wrap != "" {
+			selection = e.Wrap + "{" + e.Fields + "}"
+		}
 		return "mutation($token:String!,$label:String){" + e.Mutation +
-			"(token:$token,label:$label){" + e.Fields + "}}"
+			"(token:$token,label:$label){" + selection + "}}"
+	}
+	if len(e.Params) > 0 {
+		decl := make([]string, 0, len(e.Params))
+		pass := make([]string, 0, len(e.Params))
+		for _, p := range e.Params {
+			decl = append(decl, "$"+p.Name+":"+p.Type)
+			pass = append(pass, p.Name+":$"+p.Name)
+		}
+		return "mutation(" + strings.Join(decl, ",") + "){" + e.Mutation + "(" +
+			strings.Join(pass, ",") + "){" + e.Fields + "}}"
 	}
 	selection := e.Fields
 	if e.Wrap != "" {

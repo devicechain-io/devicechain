@@ -236,7 +236,6 @@ function AiProviderCreateForm({ kinds, onDone }: { kinds: string[]; onDone: (tok
         kind: editor.kind,
         endpoint: editor.endpoint.trim() || undefined,
         model: editor.model.trim(),
-        params: editor.params.trim() || undefined,
         enabled: editor.enabled,
         secret: providerSecretArg(editor, 'create'),
       });

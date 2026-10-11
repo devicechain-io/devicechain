@@ -636,3 +636,72 @@ tests:
       - eval_time: 60m
         alertname: CNPGClusterUnusable
         exp_alerts: []
+
+  # -------------------------------------------------------------------------
+  # THE INSTRUMENT'S OWN ALARM FOR CNPGClusterUnusable. Losing the CNPG instances'
+  # PodMonitor removes cnpg_collector_up entirely, and `min by (...) (...) == 0` over
+  # nothing is silence, so without CNPGCollectorAbsent an instance in this state reports
+  # no database lockout forever. Pending through the 10m period, firing after it, one
+  # alert per namespace whose collector is missing.
+  # -------------------------------------------------------------------------
+  - name: a lost collector scrape raises the instrument alarm, per namespace
+    interval: 1m
+    input_series:
+      # Only the shared relational store's collector is scraped; this instance's own event
+      # store's is not.
+      - series: 'cnpg_collector_up{cluster="dc-rdb", namespace="dc-system", pod="dc-rdb-1", instance="10.244.1.10:9187", container="postgres", endpoint="metrics", job="dc-system/dc-rdb"}'
+        values: "1+0x180"
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: CNPGCollectorAbsent
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: CNPGCollectorAbsent
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              devicechain_instance: devicechain
+              namespace: dci-devicechain
+            exp_annotations:
+              summary: "No CloudNativePG metrics collector is being scraped"
+              description: "Nothing is reporting cnpg_collector_up in namespace dci-devicechain, so whether the PostgreSQL instances there can answer their own metrics collector is UNKNOWN rather than good — and while this fires, CNPGClusterUnusable CANNOT fire, because it reads the series this rule says are missing. Check, in order: the CloudNativePG PodMonitor for the Cluster exists and selects its pods; Prometheus can read the namespace; and the instance pods are running and serving :9187."
+
+  - name: no collector scraped anywhere raises the instrument alarm for both namespaces
+    interval: 1m
+    input_series:
+      # NOTE the absence: no cnpg_collector_up series at all. A series of another name keeps
+      # the scenario from being an empty one.
+      - series: 'kube_deployment_status_replicas_available{namespace="cnpg-system", deployment="cnpg-cloudnative-pg"}'
+        values: "2+0x180"
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: CNPGCollectorAbsent
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              devicechain_instance: devicechain
+              namespace: dc-system
+            exp_annotations:
+              summary: "No CloudNativePG metrics collector is being scraped"
+              description: "Nothing is reporting cnpg_collector_up in namespace dc-system, so whether the PostgreSQL instances there can answer their own metrics collector is UNKNOWN rather than good — and while this fires, CNPGClusterUnusable CANNOT fire, because it reads the series this rule says are missing. Check, in order: the CloudNativePG PodMonitor for the Cluster exists and selects its pods; Prometheus can read the namespace; and the instance pods are running and serving :9187."
+          - exp_labels:
+              severity: warning
+              devicechain_instance: devicechain
+              namespace: dci-devicechain
+            exp_annotations:
+              summary: "No CloudNativePG metrics collector is being scraped"
+              description: "Nothing is reporting cnpg_collector_up in namespace dci-devicechain, so whether the PostgreSQL instances there can answer their own metrics collector is UNKNOWN rather than good — and while this fires, CNPGClusterUnusable CANNOT fire, because it reads the series this rule says are missing. Check, in order: the CloudNativePG PodMonitor for the Cluster exists and selects its pods; Prometheus can read the namespace; and the instance pods are running and serving :9187."
+
+  # The counterweight: both collectors scraped, so the alarm is quiet. Without it a rule
+  # that always fired would satisfy every scenario above.
+  - name: collectors scraped in both namespaces keep the instrument alarm quiet
+    interval: 1m
+    input_series:
+      - series: 'cnpg_collector_up{cluster="dc-rdb", namespace="dc-system", pod="dc-rdb-1", instance="10.244.1.10:9187", container="postgres", endpoint="metrics", job="dc-system/dc-rdb"}'
+        values: "1+0x180"
+      - series: 'cnpg_collector_up{cluster="dc-tsdb", namespace="dci-devicechain", pod="dc-tsdb-1", instance="10.244.1.10:9187", container="postgres", endpoint="metrics", job="dci-devicechain/dc-tsdb"}'
+        values: "1+0x180"
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: CNPGCollectorAbsent
+        exp_alerts: []

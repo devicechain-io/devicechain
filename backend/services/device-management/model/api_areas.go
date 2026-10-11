@@ -94,9 +94,8 @@ func (api *Api) AreaTypesById(ctx context.Context, ids []uint) ([]*AreaType, err
 // Get area types by token.
 func (api *Api) AreaTypesByToken(ctx context.Context, tokens []string) ([]*AreaType, error) {
 	found := make([]*AreaType, 0)
-	result := api.RDB.DB(ctx).Find(&found, "token in ?", tokens)
-	if result.Error != nil {
-		return nil, result.Error
+	if err := rdb.FindByKeys(api.RDB.DB(ctx), &found, "token", tokens); err != nil {
+		return nil, err
 	}
 	return found, nil
 }
@@ -217,11 +216,8 @@ func (api *Api) AreasById(ctx context.Context, ids []uint) ([]*Area, error) {
 // Get areas by token.
 func (api *Api) AreasByToken(ctx context.Context, tokens []string) ([]*Area, error) {
 	found := make([]*Area, 0)
-	result := api.RDB.DB(ctx)
-	result = result.Preload("AreaType")
-	result = result.Find(&found, "token in ?", tokens)
-	if result.Error != nil {
-		return nil, result.Error
+	if err := rdb.FindByKeys(api.RDB.DB(ctx).Preload("AreaType"), &found, "token", tokens); err != nil {
+		return nil, err
 	}
 	return found, nil
 }

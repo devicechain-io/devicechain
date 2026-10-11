@@ -1,14 +1,24 @@
 {
   "definitionLabel": "Definición (JSON)",
   "definitionPlaceholder": "Pega una definición de panel exportada…",
+  "errorDashboardFetchFailed": "No se pudo cargar el panel: {{detail}}",
+  "errorDashboardForbidden": "No tienes acceso a los paneles de este tenant.",
+  "errorDashboardNotFound": "No existe ningún panel con ese token en este tenant.",
+  "errorDashboardNotPublished": "Ese panel aún no se ha publicado. Pide a un autor que lo publique.",
   "errorDefinitionInvalid": "Definición: {{detail}}",
   "errorDefinitionTooLarge": "La definición es demasiado grande (más de {{limit}} MiB).",
   "errorManifestDropped_one": "Manifiesto de vinculación: se ignoró {{slots}}: comprueba la forma (kind + deviceToken, o anchor con targetToken).",
   "errorManifestDropped_other": "Manifiesto de vinculación: se ignoraron {{slots}}: comprueba la forma (kind + deviceToken, o anchor con targetToken).",
   "errorManifestInvalid": "Manifiesto de vinculación: {{detail}}",
   "errorManifestNotObject": "El manifiesto de vinculación debe ser un objeto JSON de ranura → vinculación.",
+  "loadPublished": "Cargar publicado",
+  "loading": "Cargando…",
   "manifestLabel": "Manifiesto de vinculación (JSON, opcional)",
   "manifestSampleJoiner": "o",
+  "pasteHeading": "O pega una definición exportada",
   "render": "Renderizar",
-  "title": "Cargar un panel"
+  "title": "Cargar un panel",
+  "tokenHint": "Obtiene la versión de este panel que se publicó por última vez.",
+  "tokenLabel": "Token del panel",
+  "tokenPlaceholder": "ops-overview"
 }

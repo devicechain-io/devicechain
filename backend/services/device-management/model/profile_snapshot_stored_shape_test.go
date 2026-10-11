@@ -81,7 +81,11 @@ func TestProfileSnapshotStoredKeysArePinned(t *testing.T) {
 	// struct with explicit json tags. `omitempty` on both fields means an all-null
 	// declaration stores as `{}`, so the key set is exercised with both set.
 	wantLocation := []string{"expectedAccuracyMeters", "expectedUpdateIntervalSeconds"}
-	wantTop := []string{"commands", "location", "metrics", "rules"}
+	// ConfigurationKey is another purpose-built, explicitly tagged struct; description is
+	// omitempty, so it is set below to exercise the full key set. A snapshot published
+	// without the "configuration" key reads as nothing declared, which is correct.
+	wantConfiguration := []string{"description", "key", "valueType"}
+	wantTop := []string{"commands", "configuration", "location", "metrics", "rules"}
 
 	enum := datatypes.JSON([]byte(`["LOW","HIGH"]`))
 	schema := datatypes.JSON([]byte(`[{"key":"level","type":"INT"}]`))
@@ -124,6 +128,7 @@ func TestProfileSnapshotStoredKeysArePinned(t *testing.T) {
 			ExpectedAccuracyMeters:        &accuracy,
 			ExpectedUpdateIntervalSeconds: &interval,
 		},
+		Configuration: []ConfigurationKey{{Key: "mode", ValueType: "STRING", Description: "d"}},
 	}
 
 	raw, err := json.Marshal(snap)
@@ -160,6 +165,12 @@ func TestProfileSnapshotStoredKeysArePinned(t *testing.T) {
 		t.Fatalf("location is not an object: %v", err)
 	}
 	checkKeys(t, "the stored location declaration", loc, wantLocation)
+
+	var cfg []map[string]json.RawMessage
+	if err := json.Unmarshal(doc["configuration"], &cfg); err != nil || len(cfg) != 1 {
+		t.Fatalf("configuration is not a one-element list of objects: %v", err)
+	}
+	checkKeys(t, "a stored configuration key", cfg[0], wantConfiguration)
 }
 
 // checkKeys reports the difference as ADDED and REMOVED rather than as two sorted lists to

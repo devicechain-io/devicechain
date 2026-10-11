@@ -13,6 +13,7 @@ require (
 	github.com/devicechain-io/dc-microservice v0.0.1
 	github.com/devicechain-io/dc-notification-management v0.0.0-00010101000000-000000000000
 	github.com/devicechain-io/dc-outbound-connectors v0.0.0-00010101000000-000000000000
+	github.com/devicechain-io/dc-update-management v0.0.0-00010101000000-000000000000
 	github.com/devicechain-io/dc-user-management v0.0.0-00010101000000-000000000000
 	github.com/go-gormigrate/gormigrate/v2 v2.1.7
 	github.com/stretchr/testify v1.12.1
@@ -104,6 +105,8 @@ replace github.com/devicechain-io/dc-k8s => ../../k8s
 replace github.com/devicechain-io/dc-notification-management => ../../services/notification-management
 
 replace github.com/devicechain-io/dc-outbound-connectors => ../../services/outbound-connectors
+
+replace github.com/devicechain-io/dc-update-management => ../../services/update-management
 
 replace github.com/devicechain-io/dc-user-management => ../../services/user-management
 

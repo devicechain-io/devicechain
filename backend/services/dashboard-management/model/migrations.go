@@ -29,5 +29,6 @@ import (
 var (
 	Migrations = []*gormigrate.Migration{
 		NewBaselineSchema(),
+		NewPublishedVersionSchema(),
 	}
 )

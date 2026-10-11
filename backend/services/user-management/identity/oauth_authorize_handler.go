@@ -47,8 +47,8 @@ type AuthorizeService interface {
 // short-lived identity token as the proof of authentication across the two POSTs —
 // so no server-side session is needed. Every request re-resolves the client and
 // re-validates the parameters, so tampering a hidden field cannot bypass a check.
-func AuthorizeHandler(svc AuthorizeService) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
+func AuthorizeHandler(svc AuthorizeService) http.Handler {
+	return BoundRequests(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet && r.Method != http.MethodPost {
 			w.Header().Set("Allow", "GET, POST")
 			renderAuthorizeError(w, http.StatusMethodNotAllowed, "Method not allowed", "Use GET or POST.")
@@ -93,7 +93,7 @@ func AuthorizeHandler(svc AuthorizeService) http.HandlerFunc {
 		default:
 			renderAuthorizeLogin(w, p, "")
 		}
-	}
+	}), maxAuthorizeBodyBytes)
 }
 
 // handleAuthorizeLogin authenticates the login POST and renders the consent form on

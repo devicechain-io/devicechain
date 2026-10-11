@@ -58,8 +58,8 @@ func startReactFixture(t *testing.T) *reactFixture {
 	Microservice.Readiness.MarkReadyWithoutAuthSurface()
 	Microservice.InstanceConfiguration.Infrastructure.Nats = mscfg.NatsConfiguration{Hostname: host, Port: port}
 	Configuration = &config.EventProcessingConfiguration{
-		OutboundMessagesPerSecond: config.DefaultOutboundMessagesPerSecond,
-		OutboundBurst:             config.DefaultOutboundBurst,
+		OutboundCallsPerSecond: config.DefaultOutboundCallsPerSecond,
+		OutboundBurst:          config.DefaultOutboundBurst,
 	}
 	DeadLetters = deadletter.NewProducer(Microservice)
 	ReactMetrics = processor.NewReactMetrics(Microservice)

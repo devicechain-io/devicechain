@@ -432,7 +432,7 @@ far a timestamp may run *ahead*, lateness bounds how long the engine waits for o
 | `maxRulesPerTenant` | 500 | Per-tenant rule ceiling. **Measured and reported, not enforced** — see below. |
 | `maxLiveKeysPerTenant` | 1000000 | Per-tenant ceiling on live windows and timers. Also measured, not enforced. |
 | `maxRetainedSamplesPerTenant` | 5000000 | Per-tenant ceiling on readings held inside open windows. Also measured, not enforced. |
-| `outboundMessagesPerSecond` | 100 | Per-tenant rate at which outbound connector actions are dispatched, metered on the time the triggering telemetry reached the platform. |
+| `outboundCallsPerSecond` | 100 | Per-tenant rate at which outbound connector actions are dispatched, metered on the time the triggering telemetry reached the platform. |
 | `outboundBurst` | 200 | Burst allowance for the above. |
 | `shedLetterPerSecond` | 1 | Per-tenant rate at which shed outbound actions are recorded as individual dead letters. |
 | `shedLetterBurst` | 60 | Burst allowance for the above. |

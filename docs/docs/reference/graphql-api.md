@@ -76,7 +76,9 @@ authorities do not line up with intuition:
 
 `sparkplug-ingest` and `lwm2m-ingest` serve no GraphQL at all and are deliberately kept off the
 `/api` router entirely. `event-sources` is routed but answers with a placeholder schema: ingest
-reaches it over the device-plane transports, not this API.
+reaches it over the device-plane transports, not this API. `update-management` is routed too, but its
+API is not implemented in this release: its one placeholder query answers every call with a
+`NOT_IMPLEMENTED` error.
 
 ### Subscriptions over WebSocket {#subscriptions-over-websocket}
 
@@ -677,6 +679,7 @@ default: none of them can be switched off.
 | Limit | Default | Variable | What is refused |
 | --- | --- | --- | --- |
 | Request body | 4 MiB | `DC_GRAPHQL_MAX_BODY_BYTES` | The whole HTTP body, including variables. Answered with HTTP 400. |
+| Execution time | 60 seconds | `DC_GRAPHQL_EXEC_TIMEOUT` (whole seconds) | A query or mutation still running at the deadline is cancelled, and the database statement in flight with it; the response carries an error. Does not apply to subscriptions. A client must also deliver the request body within 30 seconds. |
 | Query length | 100,000 bytes | `DC_GRAPHQL_MAX_QUERY_LENGTH` | The query string itself. |
 | Nesting depth | 15 | `DC_GRAPHQL_MAX_DEPTH` | Selections nested deeper than this. |
 | Root fields per query | 20 | `DC_GRAPHQL_MAX_QUERY_ROOT_FIELDS` | A query operation selecting more top-level fields than this. |
@@ -712,6 +715,29 @@ dashboard app, the SDKs, `dcctl` and the MCP server send one mutation field per 
 two query fields. The limit applies to top-level fields only; aliases of a nested field are not
 counted.
 
+### Size bounds on lists, inputs and aggregations {#size-bounds}
+
+Separately from the request-shape limits above, some reads and inputs have a size bound. A request
+over one is refused with `extensions.code` set to `LIMIT_EXCEEDED`. Nothing is truncated and nothing
+is partly applied, so narrow the request and send it again. Sizes are counted in bytes, not
+characters.
+
+| Bound | Limit | Applies to |
+| --- | --- | --- |
+| Attribute key | 128 B | `setEntityAttribute` `attrKey`. |
+| Attribute value | 64 KiB | `setEntityAttribute` `value`, whatever its declared type. |
+| Rule definition | 256 KiB | `definition` of a detection rule, on create and update. |
+| Rule authoring graph | 256 KiB | `authoringGraph` of a detection rule, on create and update. |
+| Version history | 1,000 per call | `deviceProfileVersions`, `entityGroupVersions`, `assetTypeVersions`: newest first. Narrow with `limit` (at least 1) and page with `offset` (not negative); a value outside that range is refused with `INVALID_VALUE`. |
+| Buckets per aggregation | 10,000 | `bucketedMeasurements`: the range divided by `intervalSeconds`, rounded up. |
+| Rows per aggregation | 50,000 | `bucketedMeasurements`: the buckets multiplied by the measurement names returned. With a `name` filter that is one name; without one it is every distinct measurement name that matches the read's filters. |
+| Keys per lookup | 1,000 | A list of tokens, external ids or alarm tokens passed to a `…ByToken`, `…ByExternalId` or similar batch query (device states, latest locations, commands, command batches, notification channels, policies and states). |
+
+`bucketedMeasurements` also requires `startTime`; `endTime` defaults to the current time.
+
+A command key is limited to 128 bytes by the token grammar, which is also the longest command name
+that can be enqueued.
+
 ### GraphQL syntax only {#graphql-syntax-only}
 
 **Documents must use GraphQL's own syntax.** A document containing any of the following is refused
@@ -727,6 +753,23 @@ with a syntax error, and nothing runs:
 
 The same rule applies over WebSocket, where a subscription the server cannot read gets the syntax
 error rather than the [subscriptions-only message](#subscriptions-over-websocket).
+
+### Count ceilings on device-management {#device-management-count-ceilings}
+
+Two collections are read whole, so each has a ceiling on how many members it can hold. A write that
+would take a collection past its ceiling is refused with `extensions.code` set to `LIMIT_EXCEEDED`,
+and nothing is stored. Reads are never truncated: an owner already over a ceiling keeps every row
+and every read returns all of them. Deleting rows makes room again.
+
+| Ceiling | Limit | Applies to |
+| --- | --- | --- |
+| Tracked relationships per device | 256 | Relationships of a tracked relationship type whose source is one device, on `createEntityRelationship`, `createEntityRelationships` and `claimDevice`, and on `updateEntityRelationshipType` when it sets `tracked` to true and that would put any device over the ceiling. One `createEntityRelationships` call carries at most 1,000 relationships. Event resolution reads all of a device's tracked relationships for every event. |
+| Definitions per device profile | 1,000 per kind | Metric definitions, command definitions and detection rules, each counted on its own, on `createMetricDefinition`, `createCommandDefinition` and `createDetectionRule`. |
+
+The service exports `devicechain_devicemanagement_tracked_relationships_per_device` (observed each
+time a device's tracked set is loaded from the database) and `devicechain_devicemanagement_profile_children`
+(labelled by `kind`: `metric`, `command` or `rule`) as histograms of the sizes it reads, so you can
+see how close real data comes to a ceiling.
 
 ### Credential checks per request {#credential-checks-per-request}
 

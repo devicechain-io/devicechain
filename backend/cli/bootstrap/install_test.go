@@ -345,8 +345,9 @@ func TestAnInstancesConnectionLimitCountsItsRelationalAreas(t *testing.T) {
 		// user, device, state, dashboards, commands, notifications, processing.
 		{"no profile is the default", &State{}, 7 * per},
 		{"default", &State{Profile: "default"}, 7 * per},
-		// ...plus ai-inference and outbound-connectors; mcp and the ingests hold none.
-		{"full", &State{Profile: "full"}, 9 * per},
+		// ...plus ai-inference, outbound-connectors and update-management; mcp and the
+		// ingests hold none.
+		{"full", &State{Profile: "full"}, 10 * per},
 		{"explicit areas win over the profile", &State{Profile: "full",
 			EnabledAreas: []string{"user-management", "event-sources", "event-management", "mcp"}}, 1 * per},
 	} {

@@ -473,7 +473,7 @@ puede adelantarse una marca de tiempo, y el retraso acota cuánto espera el moto
 | `maxRulesPerTenant` | 500 | Techo de reglas por inquilino. **Se mide y se reporta, no se aplica**; vea más abajo. |
 | `maxLiveKeysPerTenant` | 1000000 | Techo por inquilino de ventanas y temporizadores vivos. También se mide, no se aplica. |
 | `maxRetainedSamplesPerTenant` | 5000000 | Techo por inquilino de lecturas retenidas dentro de las ventanas abiertas. También se mide, no se aplica. |
-| `outboundMessagesPerSecond` | 100 | Tasa por inquilino a la que se despachan las acciones de conector de salida, medida según el momento en que la telemetría que las desencadenó llegó a la plataforma. |
+| `outboundCallsPerSecond` | 100 | Tasa por inquilino a la que se despachan las acciones de conector de salida, medida según el momento en que la telemetría que las desencadenó llegó a la plataforma. |
 | `outboundBurst` | 200 | Margen de ráfaga para lo anterior. |
 | `shedLetterPerSecond` | 1 | Tasa por inquilino a la que las acciones de salida descartadas se registran como mensajes no entregados individuales. |
 | `shedLetterBurst` | 60 | Margen de ráfaga para lo anterior. |

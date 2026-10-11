@@ -27,6 +27,7 @@ func TestOutcomeFor(t *testing.T) {
 		{"wrapped unavailable", fmt.Errorf("%w: no provider is granted to any tier or tenant", inference.ErrUnavailable), outcomeUnavailable},
 		{"wrapped rate limited", fmt.Errorf("ai-inference: %w", inference.ErrRateLimited), outcomeRateLimited},
 		{"provider failure", errors.New("inference provider returned 500"), outcomeProviderError},
+		{"timed out", fmt.Errorf("%w (after 60s): context deadline exceeded", inference.ErrTimedOut), outcomeTimedOut},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

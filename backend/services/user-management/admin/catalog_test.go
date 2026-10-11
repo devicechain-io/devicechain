@@ -24,17 +24,17 @@ func TestGovernanceOverrides_Validate(t *testing.T) {
 	}{
 		{"all nil inherits", GovernanceOverrides{}, false},
 
-		{"positive ingest rate + burst", GovernanceOverrides{IngestMessagesPerSecond: fptr(500), IngestBurst: iptr(1000)}, false},
-		{"fractional ingest rate ok", GovernanceOverrides{IngestMessagesPerSecond: fptr(0.5)}, false},
-		{"zero ingest rate rejected", GovernanceOverrides{IngestMessagesPerSecond: fptr(0)}, true},
-		{"negative ingest rate rejected", GovernanceOverrides{IngestMessagesPerSecond: fptr(-1)}, true},
+		{"positive ingest rate + burst", GovernanceOverrides{IngestReadingsPerSecond: fptr(500), IngestBurst: iptr(1000)}, false},
+		{"fractional ingest rate ok", GovernanceOverrides{IngestReadingsPerSecond: fptr(0.5)}, false},
+		{"zero ingest rate rejected", GovernanceOverrides{IngestReadingsPerSecond: fptr(0)}, true},
+		{"negative ingest rate rejected", GovernanceOverrides{IngestReadingsPerSecond: fptr(-1)}, true},
 		{"zero ingest burst rejected", GovernanceOverrides{IngestBurst: iptr(0)}, true},
 		{"negative ingest burst rejected", GovernanceOverrides{IngestBurst: iptr(-5)}, true},
-		{"good ingest rate but bad ingest burst rejected", GovernanceOverrides{IngestMessagesPerSecond: fptr(100), IngestBurst: iptr(0)}, true},
+		{"good ingest rate but bad ingest burst rejected", GovernanceOverrides{IngestReadingsPerSecond: fptr(100), IngestBurst: iptr(0)}, true},
 
-		{"positive outbound rate + burst", GovernanceOverrides{OutboundMessagesPerSecond: fptr(50), OutboundBurst: iptr(100)}, false},
-		{"zero outbound rate rejected", GovernanceOverrides{OutboundMessagesPerSecond: fptr(0)}, true},
-		{"negative outbound rate rejected", GovernanceOverrides{OutboundMessagesPerSecond: fptr(-2)}, true},
+		{"positive outbound rate + burst", GovernanceOverrides{OutboundCallsPerSecond: fptr(50), OutboundBurst: iptr(100)}, false},
+		{"zero outbound rate rejected", GovernanceOverrides{OutboundCallsPerSecond: fptr(0)}, true},
+		{"negative outbound rate rejected", GovernanceOverrides{OutboundCallsPerSecond: fptr(-2)}, true},
 		{"zero outbound burst rejected", GovernanceOverrides{OutboundBurst: iptr(0)}, true},
 		{"negative outbound burst rejected", GovernanceOverrides{OutboundBurst: iptr(-3)}, true},
 
@@ -46,12 +46,12 @@ func TestGovernanceOverrides_Validate(t *testing.T) {
 		{"negative ai burst rejected", GovernanceOverrides{AiInferenceBurst: iptr(-3)}, true},
 
 		{"valid ingest but bad outbound rejected", GovernanceOverrides{
-			IngestMessagesPerSecond: fptr(500), IngestBurst: iptr(1000), OutboundMessagesPerSecond: fptr(-1)}, true},
+			IngestReadingsPerSecond: fptr(500), IngestBurst: iptr(1000), OutboundCallsPerSecond: fptr(-1)}, true},
 		{"valid ingest + outbound but bad ai rejected", GovernanceOverrides{
-			IngestMessagesPerSecond: fptr(500), OutboundMessagesPerSecond: fptr(50), AiInferenceBurst: iptr(-1)}, true},
+			IngestReadingsPerSecond: fptr(500), OutboundCallsPerSecond: fptr(50), AiInferenceBurst: iptr(-1)}, true},
 		{"every dimension positive", GovernanceOverrides{
-			IngestMessagesPerSecond: fptr(500), IngestBurst: iptr(1000),
-			OutboundMessagesPerSecond: fptr(50), OutboundBurst: iptr(100),
+			IngestReadingsPerSecond: fptr(500), IngestBurst: iptr(1000),
+			OutboundCallsPerSecond: fptr(50), OutboundBurst: iptr(100),
 			AiInferenceRequestsPerMinute: fptr(30), AiInferenceBurst: iptr(15)}, false},
 
 		// The HELD-command ceiling is a scalar, but the same positive-or-omit rule: a
@@ -88,17 +88,17 @@ func TestGovernanceOverrides_ValidateNamesTheField(t *testing.T) {
 // missing from this method would be silently unwritable through the admin API.
 func TestGovernanceOverrides_ApplyTo(t *testing.T) {
 	full := GovernanceOverrides{
-		IngestMessagesPerSecond: fptr(500), IngestBurst: iptr(1000),
-		OutboundMessagesPerSecond: fptr(50), OutboundBurst: iptr(100),
+		IngestReadingsPerSecond: fptr(500), IngestBurst: iptr(1000),
+		OutboundCallsPerSecond: fptr(50), OutboundBurst: iptr(100),
 		AiInferenceRequestsPerMinute: fptr(30), AiInferenceBurst: iptr(15),
 		ShedPriority:       iptr(90),
 		HeldCommandCeiling: iptr(2500),
 	}
 	var tenant iam.Tenant
 	full.applyTo(&tenant)
-	assert.Equal(t, fptr(500), tenant.IngestMessagesPerSecond)
+	assert.Equal(t, fptr(500), tenant.IngestReadingsPerSecond)
 	assert.Equal(t, iptr(1000), tenant.IngestBurst)
-	assert.Equal(t, fptr(50), tenant.OutboundMessagesPerSecond)
+	assert.Equal(t, fptr(50), tenant.OutboundCallsPerSecond)
 	assert.Equal(t, iptr(100), tenant.OutboundBurst)
 	assert.Equal(t, fptr(30), tenant.AiInferenceRequestsPerMinute)
 	assert.Equal(t, iptr(15), tenant.AiInferenceBurst)
@@ -108,9 +108,9 @@ func TestGovernanceOverrides_ApplyTo(t *testing.T) {
 
 	// A full replace: clearing every override reverts the tenant to the defaults.
 	GovernanceOverrides{}.applyTo(&tenant)
-	assert.Nil(t, tenant.IngestMessagesPerSecond)
+	assert.Nil(t, tenant.IngestReadingsPerSecond)
 	assert.Nil(t, tenant.IngestBurst)
-	assert.Nil(t, tenant.OutboundMessagesPerSecond)
+	assert.Nil(t, tenant.OutboundCallsPerSecond)
 	assert.Nil(t, tenant.OutboundBurst)
 	assert.Nil(t, tenant.AiInferenceRequestsPerMinute)
 	assert.Nil(t, tenant.AiInferenceBurst)

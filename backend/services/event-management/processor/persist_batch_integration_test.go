@@ -192,7 +192,7 @@ func TestAnAlternateIdIsMatchedAtTheStoresResolutionOnPostgres(t *testing.T) {
 			r.run([]messaging.Message{consumed(t, r.acks, 100, tenant, 1, measurementOf("dev-z", at, alt, 1, "21.5"))})
 			r.api.txs.Store(0)
 
-			msgs := []messaging.Message{consumed(t, r.acks, 0, tenant, 1, measurementOf("dev-z2", at, alt, 1, "99"))}
+			msgs := []messaging.Message{consumed(t, r.acks, 0, tenant, 1, measurementOf("dev-z", at, alt, 1, "99"))}
 			for i := 1; i < 4; i++ {
 				msgs = append(msgs, consumed(t, r.acks, i, tenant, 1, batchEvent(i, true, at.Truncate(time.Hour))))
 			}
@@ -216,7 +216,7 @@ func TestAnAlternateIdIsMatchedAtTheStoresResolutionOnPostgres(t *testing.T) {
 				t.Errorf("%d events stored for the alternate id; want 1", n)
 			}
 			var values []float64
-			if err := db.Model(&model.MeasurementEvent{}).Where("device_token IN ?", []string{"dev-z", "dev-z2"}).
+			if err := db.Model(&model.MeasurementEvent{}).Where("device_token = ?", "dev-z").
 				Pluck("value", &values).Error; err != nil {
 				t.Fatalf("read values: %v", err)
 			}
@@ -338,7 +338,7 @@ func BenchmarkPersistBatch(b *testing.B) {
 			shapes = append(shapes, shape{writers, batch, false})
 		}
 	}
-	shapes = append(shapes, shape{10, 1, true}, shape{10, 64, true})
+	shapes = append(shapes, shape{10, 1, true}, shape{10, 16, true}, shape{10, 64, true})
 	for _, sh := range shapes {
 		writers, batch := sh.writers, sh.batch
 		name := fmt.Sprintf("writers=%d/batch=%d", writers, batch)
@@ -396,6 +396,9 @@ func BenchmarkPersistBatch(b *testing.B) {
 			close(ch)
 			before := api.txs.Load()
 			var wg sync.WaitGroup
+			// Per event: b.N is events. Allocation counts are the client-side cost the
+			// column-array insert exists to cut, so they are reported beside the throughput.
+			b.ReportAllocs()
 			b.ResetTimer()
 			start := time.Now()
 			for w := 0; w < writers; w++ {

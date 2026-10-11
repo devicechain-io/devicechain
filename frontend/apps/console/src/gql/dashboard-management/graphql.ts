@@ -35,7 +35,21 @@ export type DashboardQueryVariables = Exact<{
 }>;
 
 
-export type DashboardQuery = { dashboard: { token: string, name: string | null, description: string | null, definition: string, updatedAt: string | null } | null };
+export type DashboardQuery = { dashboard: { token: string, name: string | null, description: string | null, definition: string, updatedAt: string | null, publishedVersion: number | null } | null };
+
+export type DashboardPublishedVersionQueryVariables = Exact<{
+  token: string;
+}>;
+
+
+export type DashboardPublishedVersionQuery = { dashboard: { publishedVersion: number | null } | null };
+
+export type PublishedDashboardQueryVariables = Exact<{
+  token: string;
+}>;
+
+
+export type PublishedDashboardQuery = { publishedDashboard: { token: string, name: string | null, description: string | null, version: number, publishedAt: string, definition: string } | null };
 
 export type CreateDashboardMutationVariables = Exact<{
   request: DashboardCreateRequest;
@@ -69,7 +83,15 @@ export type PublishDashboardMutationVariables = Exact<{
 }>;
 
 
-export type PublishDashboardMutation = { publishDashboard: { version: number } };
+export type PublishDashboardMutation = { publishDashboard: { version: { version: number }, dashboard: { updatedAt: string | null } } };
+
+export type ActivateDashboardVersionMutationVariables = Exact<{
+  token: string;
+  version: number;
+}>;
+
+
+export type ActivateDashboardVersionMutation = { activateDashboardVersion: { publishedVersion: number | null } };
 
 export type RollbackDashboardMutationVariables = Exact<{
   token: string;
@@ -132,9 +154,29 @@ export const DashboardDocument = new TypedDocumentString(`
     description
     definition
     updatedAt
+    publishedVersion
   }
 }
     `) as unknown as TypedDocumentString<DashboardQuery, DashboardQueryVariables>;
+export const DashboardPublishedVersionDocument = new TypedDocumentString(`
+    query DashboardPublishedVersion($token: String!) {
+  dashboard(token: $token) {
+    publishedVersion
+  }
+}
+    `) as unknown as TypedDocumentString<DashboardPublishedVersionQuery, DashboardPublishedVersionQueryVariables>;
+export const PublishedDashboardDocument = new TypedDocumentString(`
+    query PublishedDashboard($token: String!) {
+  publishedDashboard(token: $token) {
+    token
+    name
+    description
+    version
+    publishedAt
+    definition
+  }
+}
+    `) as unknown as TypedDocumentString<PublishedDashboardQuery, PublishedDashboardQueryVariables>;
 export const CreateDashboardDocument = new TypedDocumentString(`
     mutation CreateDashboard($request: DashboardCreateRequest!) {
   createDashboard(request: $request) {
@@ -173,10 +215,22 @@ export const PublishDashboardDocument = new TypedDocumentString(`
     description: $description
     expectedUpdatedAt: $expectedUpdatedAt
   ) {
-    version
+    version {
+      version
+    }
+    dashboard {
+      updatedAt
+    }
   }
 }
     `) as unknown as TypedDocumentString<PublishDashboardMutation, PublishDashboardMutationVariables>;
+export const ActivateDashboardVersionDocument = new TypedDocumentString(`
+    mutation ActivateDashboardVersion($token: String!, $version: Int!) {
+  activateDashboardVersion(token: $token, version: $version) {
+    publishedVersion
+  }
+}
+    `) as unknown as TypedDocumentString<ActivateDashboardVersionMutation, ActivateDashboardVersionMutationVariables>;
 export const RollbackDashboardDocument = new TypedDocumentString(`
     mutation RollbackDashboard($token: String!, $version: Int!, $expectedUpdatedAt: String) {
   rollbackDashboard(

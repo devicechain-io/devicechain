@@ -33,7 +33,7 @@ Operator 监视 `Instance` 资源。租户不在其职责内：租户是控制�
 | 配置档 | 功能域 |
 |---|---|
 | `default` | user-management、device-management、event-sources、event-management、device-state、dashboard-management、command-delivery、notification-management、event-processing——标准系统，也是未设置配置档时的选择 |
-| `full` | 此构建发布的全部功能：`default` 加 `ai-inference`、`outbound-connectors`、`mcp`、`sparkplug-ingest` 和 `lwm2m-ingest`；这些功能不包含在 `default` 中，因为每一项都需要明确作出决定（付费提供商密钥、出站访问接口、面向代理的 API，以及绑定独立入站端口的 Sparkplug B 或 LwM2M 设备传输） |
+| `full` | 此构建发布的全部功能：`default` 加 `ai-inference`、`outbound-connectors`、`mcp`、`sparkplug-ingest`、`lwm2m-ingest` 和 `update-management`；这些功能不包含在 `default` 中，因为每一项都需要明确作出决定（付费提供商密钥、出站访问接口、面向代理的 API、绑定独立入站端口的 Sparkplug B 或 LwM2M 设备传输，以及 API 尚未实现的空中（OTA）更新服务） |
 | `telemetry` | user-management、device-management、event-sources、event-management、device-state、dashboard-management |
 | `ingest-only` | user-management、device-management、event-sources |
 

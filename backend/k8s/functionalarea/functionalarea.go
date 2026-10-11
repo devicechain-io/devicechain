@@ -43,6 +43,7 @@ const (
 	AiInference      FunctionalArea = "ai-inference"
 	SparkplugIngest  FunctionalArea = "sparkplug-ingest"
 	Lwm2mIngest      FunctionalArea = "lwm2m-ingest"
+	UpdateMgmt       FunctionalArea = "update-management"
 )
 
 // Manifest is a functional area's deployment contract (ADR-022 decision 2): its
@@ -201,6 +202,21 @@ var catalog = map[FunctionalArea]Manifest{
 		HardDeps: []FunctionalArea{DeviceManagement},
 		SoftDeps: []FunctionalArea{UserManagement},
 	},
+	UpdateMgmt: {
+		// The update-management service: over-the-air update artifacts, their assignment
+		// to devices and the download plane (OTA). Today it is a SCAFFOLD — an empty
+		// baseline and an explicitly unimplemented GraphQL plane — so nothing depends on
+		// it and it depends on nothing at runtime. device-management is a Hard dep all the
+		// same, because the area is DESIGNED around it: an update is assigned to devices
+		// and device types, and an update area without the device registry has nothing to
+		// target. Declaring that edge now means the first feature does not move the
+		// dependency gate under existing selections. It is held back from ProfileDefault —
+		// an install does not grow an update plane it did not ask for — and shipped by
+		// ProfileFull, or named explicitly in enabledFunctionalAreas.
+		Area:     UpdateMgmt,
+		HardDeps: []FunctionalArea{DeviceManagement},
+		SoftDeps: []FunctionalArea{UserManagement},
+	},
 }
 
 // Profile names a curated, valid enabled set (ADR-022 decision 2). Every profile
@@ -238,7 +254,7 @@ var standardAreas = []FunctionalArea{
 
 var profiles = map[Profile][]FunctionalArea{
 	ProfileDefault: standardAreas,
-	ProfileFull:    append(append([]FunctionalArea{}, standardAreas...), AiInference, OutboundConn, Mcp, SparkplugIngest, Lwm2mIngest),
+	ProfileFull:    append(append([]FunctionalArea{}, standardAreas...), AiInference, OutboundConn, Mcp, SparkplugIngest, Lwm2mIngest, UpdateMgmt),
 	ProfileTelemetry: {
 		UserManagement, DeviceManagement, EventSources, EventManagement, DeviceState, DashboardMgmt,
 	},

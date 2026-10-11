@@ -58,6 +58,11 @@ func (api *Api) UpdateEntityRelationshipType(ctx context.Context, token string,
 	if err != nil {
 		return nil, err
 	}
+	if tracked && !updated.Tracked {
+		if err := api.checkTrackedFlipCeiling(ctx, updated.ID); err != nil {
+			return nil, err
+		}
+	}
 	updated.Name = request.Name.ApplyToNullString(updated.Name)
 	updated.Description = request.Description.ApplyToNullString(updated.Description)
 	metadataJSON, err := rdb.JSONInputOf("metadata", request.Metadata.ApplyTo(dcgraphql.MetadataStr(updated.Metadata)))
@@ -69,6 +74,11 @@ func (api *Api) UpdateEntityRelationshipType(ctx context.Context, token string,
 	if err := api.RDB.DB(ctx).Save(updated).Error; err != nil {
 		return nil, err
 	}
+	// The `tracked` flag decides which edges a device's cached set holds, and the cached
+	// edges carry the type's own fields: so every device with an edge of this type has a
+	// stale set. Not bounded by a device list the caller named, so it is read from the edges.
+	api.evictRelationshipSources(ctx,
+		api.relationshipSourceDevices(ctx, "relationship_type_id = ?", updated.ID))
 	return updated, nil
 }
 
@@ -80,7 +90,7 @@ func (api *Api) EntityRelationshipTypesById(ctx context.Context, ids []uint) ([]
 // EntityRelationshipTypesByToken looks up relationship types by token.
 func (api *Api) EntityRelationshipTypesByToken(ctx context.Context, tokens []string) ([]*EntityRelationshipType, error) {
 	found := make([]*EntityRelationshipType, 0)
-	if err := api.RDB.DB(ctx).Find(&found, "token in ?", tokens).Error; err != nil {
+	if err := rdb.FindByKeys(api.RDB.DB(ctx), &found, "token", tokens); err != nil {
 		return nil, err
 	}
 	return found, nil
@@ -141,6 +151,10 @@ func (api *Api) CreateEntityRelationship(ctx context.Context,
 		return nil, err
 	}
 
+	if err := api.checkTrackedCeiling(ctx, api.RDB.DB(ctx), rtmatches[0], request.SourceType, sourceId, 1); err != nil {
+		return nil, err
+	}
+
 	metadataJSON, err := rdb.JSONInputOf("metadata", request.Metadata)
 	if err != nil {
 		return nil, err
@@ -162,6 +176,12 @@ func (api *Api) CreateEntityRelationship(ctx context.Context,
 	// selecting relationshipType on the mutation result gets real values. Read
 	// paths Preload it; the create path must set it explicitly or it stays zero.
 	created.RelationshipType = *rtmatches[0]
+	// A new edge from a device changes that device's cached tracked set, whether or not its
+	// type is tracked (the cache holds the tracked edges, and the type decides): drop it,
+	// after the commit, on every replica.
+	if created.SourceType == string(entity.TypeDevice) {
+		api.evictRelationshipSources(ctx, []uint{created.SourceId})
+	}
 	return created, nil
 }
 
@@ -173,7 +193,7 @@ func (api *Api) EntityRelationshipsById(ctx context.Context, ids []uint) ([]*Ent
 // EntityRelationshipsByToken looks up relationships by token.
 func (api *Api) EntityRelationshipsByToken(ctx context.Context, tokens []string) ([]*EntityRelationship, error) {
 	found := make([]*EntityRelationship, 0)
-	if err := api.RDB.DB(ctx).Preload("RelationshipType").Find(&found, "token in ?", tokens).Error; err != nil {
+	if err := rdb.FindByKeys(api.RDB.DB(ctx).Preload("RelationshipType"), &found, "token", tokens); err != nil {
 		return nil, err
 	}
 	return found, nil

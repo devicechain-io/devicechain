@@ -48,7 +48,7 @@ func TestBuildIngestLimiterCountsUnresolvedAdmissions(t *testing.T) {
 	ms.UseMetricsRegistry(reg)
 	unresolved := governance.NewUnresolvedAdmissions(ms, governance.Ingest)
 
-	limiter := buildIngestLimiter(client, infra, config.IngestRateLimit{MessagesPerSecond: 1, Burst: 1000}, unresolved)
+	limiter := buildIngestLimiter(client, infra, config.IngestRateLimit{ReadingsPerSecond: 1, Burst: 1000}, unresolved)
 
 	unreachable := func() float64 {
 		mfs, err := reg.Gather()

@@ -214,9 +214,8 @@ func (api *Api) DeviceTypesById(ctx context.Context, ids []uint) ([]*DeviceType,
 // Get device types by token.
 func (api *Api) DeviceTypesByToken(ctx context.Context, tokens []string) ([]*DeviceType, error) {
 	found := make([]*DeviceType, 0)
-	result := api.RDB.DB(ctx).Find(&found, "token in ?", tokens)
-	if result.Error != nil {
-		return nil, result.Error
+	if err := rdb.FindByKeys(api.RDB.DB(ctx), &found, "token", tokens); err != nil {
+		return nil, err
 	}
 	return found, nil
 }
@@ -666,6 +665,10 @@ func (api *Api) UpdateDevice(ctx context.Context, token string, request *DeviceU
 	// device as it was read: drop it so the next event sees the new type, external id and
 	// the rest.
 	api.evictDeviceCredentials(ctx, updated.TenantId, updated.ID)
+	// And the device-by-token entry, which holds the same row for an event that resolves on
+	// its token (auth disabled or optional, or a transport-authenticated event). A re-type
+	// is what makes it wrong: the event would resolve to the old type's profile.
+	api.evictDeviceByToken(ctx, updated.Token)
 	// Re-roster POST-COMMIT only when the device was re-typed (ADR-051 slice 4c-2): a
 	// re-type may change the adopted profile, so the roster's device→profile binding must
 	// follow. Metadata-only updates leave the binding unchanged, so they emit nothing. The
@@ -700,11 +703,8 @@ func (api *Api) DevicesById(ctx context.Context, ids []uint) ([]*Device, error) 
 // Get devices by token.
 func (api *Api) DevicesByToken(ctx context.Context, tokens []string) ([]*Device, error) {
 	found := make([]*Device, 0)
-	result := api.RDB.DB(ctx)
-	result = result.Preload("DeviceType")
-	result = result.Find(&found, "token in ?", tokens)
-	if result.Error != nil {
-		return nil, result.Error
+	if err := rdb.FindByKeys(api.RDB.DB(ctx).Preload("DeviceType"), &found, "token", tokens); err != nil {
+		return nil, err
 	}
 	return found, nil
 }
@@ -713,11 +713,8 @@ func (api *Api) DevicesByToken(ctx context.Context, tokens []string) ([]*Device,
 // a matching non-null external id are returned; the token remains the addressing id.
 func (api *Api) DevicesByExternalId(ctx context.Context, externalIds []string) ([]*Device, error) {
 	found := make([]*Device, 0)
-	result := api.RDB.DB(ctx)
-	result = result.Preload("DeviceType")
-	result = result.Find(&found, "external_id in ?", externalIds)
-	if result.Error != nil {
-		return nil, result.Error
+	if err := rdb.FindByKeys(api.RDB.DB(ctx).Preload("DeviceType"), &found, "external_id", externalIds); err != nil {
+		return nil, err
 	}
 	return found, nil
 }

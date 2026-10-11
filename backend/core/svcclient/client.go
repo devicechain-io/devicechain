@@ -40,9 +40,11 @@ import (
 	"golang.org/x/sync/singleflight"
 )
 
+// requestTimeout bounds a single mint, and a query unless WithQueryTimeout says
+// otherwise. A variable only so a test can shorten it; nothing else assigns it.
+var requestTimeout = 10 * time.Second
+
 const (
-	// requestTimeout bounds a single mint or query round-trip.
-	requestTimeout = 10 * time.Second
 	// refreshSkew re-mints this far ahead of the cached token's expiry so a call
 	// never rides a token that expires mid-flight.
 	refreshSkew = 1 * time.Minute
@@ -56,6 +58,12 @@ const (
 	// on passing while measuring nothing.
 	MaxResponseBytes = 1 << 20
 )
+
+// ErrServiceToken marks a Query that failed before reaching its target, while obtaining
+// the service token from user-management: the mint failed, timed out, or the caller's
+// context ended while waiting on it. The target was never asked, so a caller must not
+// read this as the target's answer — a slow mint is not a slow peer.
+var ErrServiceToken = errors.New("svcclient: could not obtain a service token")
 
 // ErrResponseTooLarge reports that a peer's response exceeded MaxResponseBytes.
 //
@@ -107,7 +115,12 @@ func readCapped(body io.Reader) ([]byte, bool, error) {
 // and caches the minted service token across calls. Construct one per calling
 // service and share it.
 type Client struct {
+	// http carries Query; mintHTTP carries the service-token mint. They differ only in
+	// timeout, and only when WithQueryTimeout is given: a peer whose answer is slow by
+	// nature (an inference call) must not stretch the bound on the mint, which goes to
+	// user-management and is shared by every Query.
 	http        *http.Client
+	mintHTTP    *http.Client
 	mintURL     string
 	secret      string
 	subject     string
@@ -141,13 +154,37 @@ var sharedTransport = httptransport.New()
 // need). umCfg locates user-management's mint endpoint; secret is the shared
 // service secret (config.ServiceAuthConfiguration.Secret). An empty secret yields
 // a Client that fails closed on first use.
-func New(umCfg config.UserManagementConfiguration, secret, subject string, authorities []string) *Client {
-	return &Client{
+func New(umCfg config.UserManagementConfiguration, secret, subject string, authorities []string, opts ...Option) *Client {
+	c := &Client{
 		http:        &http.Client{Timeout: requestTimeout, Transport: sharedTransport},
+		mintHTTP:    &http.Client{Timeout: requestTimeout, Transport: sharedTransport},
 		mintURL:     fmt.Sprintf("http://%s:%d%s", umCfg.Hostname, umCfg.Port, auth.ServiceTokenPath),
 		secret:      secret,
 		subject:     subject,
 		authorities: authorities,
+	}
+	for _, opt := range opts {
+		opt(c)
+	}
+	return c
+}
+
+// Option adjusts a Client at construction.
+type Option func(*Client)
+
+// WithQueryTimeout bounds each Query round-trip at d instead of the default (10s). It is
+// for a peer that does slow work on purpose and enforces its OWN deadline on it: the
+// caller has to outwait that deadline, or it cuts the peer off before the peer can say
+// what happened. The mint keeps the default bound.
+//
+// A non-positive d panics: http.Client reads a zero Timeout as "no timeout", so
+// passing one through would quietly make the call unbounded.
+func WithQueryTimeout(d time.Duration) Option {
+	if d <= 0 {
+		panic(fmt.Sprintf("svcclient: WithQueryTimeout(%v): the timeout must be positive", d))
+	}
+	return func(c *Client) {
+		c.http = &http.Client{Timeout: d, Transport: sharedTransport}
 	}
 }
 
@@ -162,7 +199,7 @@ func (c *Client) Query(ctx context.Context, baseURL, tenant, query string, varia
 	}
 	token, err := c.serviceToken(ctx)
 	if err != nil {
-		return err
+		return fmt.Errorf("%w: %w", ErrServiceToken, err)
 	}
 
 	body, err := json.Marshal(struct {
@@ -302,7 +339,7 @@ func (c *Client) mint(ctx context.Context) (string, time.Time, error) {
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set(auth.ServiceSecretHeader, c.secret)
 
-	resp, err := c.http.Do(req)
+	resp, err := c.mintHTTP.Do(req)
 	if err != nil {
 		return "", time.Time{}, fmt.Errorf("svcclient: mint token: %w", err)
 	}

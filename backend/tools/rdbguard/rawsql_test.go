@@ -555,3 +555,25 @@ func TestAllowListsAreWellFormed(t *testing.T) {
 		}
 	}
 }
+
+// A method on a generic type is named by its receiver type, as any other method is, so an
+// allow-list entry names "Type.method" and a same-named function elsewhere in the file is
+// not covered by it.
+func TestRawSQLNamesAGenericReceiversMethod(t *testing.T) {
+	src := `package model
+type Table[R any] struct{}
+type Pair[K, V any] struct{}
+func (t *Table[R]) exec(tx DB, q string) error { return tx.Exec(q).Error }
+func (p Pair[K, V]) exec(tx DB, q string) error { return tx.Exec(q).Error }`
+	res := scanSQL(t, src, nil)
+	var in []string
+	for _, f := range res.Findings {
+		in = append(in, f.Message)
+	}
+	joined := strings.Join(in, "\n")
+	for _, want := range []string{"in Table.exec", "in Pair.exec"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("want a finding %q, got:\n%s", want, joined)
+		}
+	}
+}

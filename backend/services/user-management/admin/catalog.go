@@ -13,9 +13,11 @@ import (
 
 	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-microservice/conflict"
+	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/governance"
 	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/integrity"
+	"github.com/devicechain-io/dc-microservice/limit"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-user-management/iam"
 	"gorm.io/gorm"
@@ -193,10 +195,10 @@ func (s *Service) DeleteRole(ctx context.Context, scope, token string) (bool, er
 // validator's positional argument list (which, at six interchangeable numeric
 // pointers, is a swap waiting to happen).
 type GovernanceOverrides struct {
-	IngestMessagesPerSecond   *float64
-	IngestBurst               *int
-	OutboundMessagesPerSecond *float64
-	OutboundBurst             *int
+	IngestReadingsPerSecond *float64
+	IngestBurst             *int
+	OutboundCallsPerSecond  *float64
+	OutboundBurst           *int
 	// AI-inference rate (ADR-056 §6). Declared per MINUTE, unlike the per-second
 	// device-traffic dimensions above: drafting is a human-paced authoring action.
 	AiInferenceRequestsPerMinute *float64
@@ -239,8 +241,8 @@ func (g GovernanceOverrides) validate() error {
 		field string
 		value *float64
 	}{
-		{"ingestMessagesPerSecond", g.IngestMessagesPerSecond},
-		{"outboundMessagesPerSecond", g.OutboundMessagesPerSecond},
+		{"ingestReadingsPerSecond", g.IngestReadingsPerSecond},
+		{"outboundCallsPerSecond", g.OutboundCallsPerSecond},
 		{"aiInferenceRequestsPerMinute", g.AiInferenceRequestsPerMinute},
 	} {
 		if err := validateRateOverride(r.field, r.value); err != nil {
@@ -300,9 +302,9 @@ func (g GovernanceOverrides) validate() error {
 // the governance fields, not a partial patch. Every field set here must also appear
 // in Store.UpdateTenant's Select allowlist or the write is silently dropped.
 func (g GovernanceOverrides) applyTo(t *iam.Tenant) {
-	t.IngestMessagesPerSecond = g.IngestMessagesPerSecond
+	t.IngestReadingsPerSecond = g.IngestReadingsPerSecond
 	t.IngestBurst = g.IngestBurst
-	t.OutboundMessagesPerSecond = g.OutboundMessagesPerSecond
+	t.OutboundCallsPerSecond = g.OutboundCallsPerSecond
 	t.OutboundBurst = g.OutboundBurst
 	t.AiInferenceRequestsPerMinute = g.AiInferenceRequestsPerMinute
 	t.AiInferenceBurst = g.AiInferenceBurst
@@ -381,10 +383,10 @@ type TenantUpdateRequest struct {
 	// so renaming a tenant dropped its config.
 	Config dcgraphql.OptionalString
 
-	IngestMessagesPerSecond   dcgraphql.OptionalFloat64
-	IngestBurst               dcgraphql.OptionalInt32
-	OutboundMessagesPerSecond dcgraphql.OptionalFloat64
-	OutboundBurst             dcgraphql.OptionalInt32
+	IngestReadingsPerSecond dcgraphql.OptionalFloat64
+	IngestBurst             dcgraphql.OptionalInt32
+	OutboundCallsPerSecond  dcgraphql.OptionalFloat64
+	OutboundBurst           dcgraphql.OptionalInt32
 	// AiExternalEnabled is the per-tenant external-AI consent (ADR-056 §6), a nullable
 	// column where null and false both mean "not opted in" (fail-closed). Clearable,
 	// unlike the required booleans elsewhere on the platform: null is a state the column
@@ -409,9 +411,9 @@ type TenantUpdateRequest struct {
 // the tenant already holds, so applyTo rewrites the same values instead of eleven NULLs.
 func (r *TenantUpdateRequest) governanceFor(t *iam.Tenant) GovernanceOverrides {
 	return GovernanceOverrides{
-		IngestMessagesPerSecond:      r.IngestMessagesPerSecond.ApplyTo(t.IngestMessagesPerSecond),
+		IngestReadingsPerSecond:      r.IngestReadingsPerSecond.ApplyTo(t.IngestReadingsPerSecond),
 		IngestBurst:                  r.IngestBurst.ApplyToIntPtr(t.IngestBurst),
-		OutboundMessagesPerSecond:    r.OutboundMessagesPerSecond.ApplyTo(t.OutboundMessagesPerSecond),
+		OutboundCallsPerSecond:       r.OutboundCallsPerSecond.ApplyTo(t.OutboundCallsPerSecond),
 		OutboundBurst:                r.OutboundBurst.ApplyToIntPtr(t.OutboundBurst),
 		AiInferenceRequestsPerMinute: r.AiInferenceRequestsPerMinute.ApplyTo(t.AiInferenceRequestsPerMinute),
 		AiInferenceBurst:             r.AiInferenceBurst.ApplyToIntPtr(t.AiInferenceBurst),
@@ -725,12 +727,28 @@ func (s *Service) CountTenantsAtTier(ctx context.Context, tierID uint) (int64, e
 	return s.iam.CountTenantsAtTier(ctx, tierID)
 }
 
+// MaxTenantTiers bounds the tier catalog, and with it the list reorderTenantTiers
+// takes. The two are one bound because a reorder must name every tier: a catalog
+// allowed to grow past the reorder cap would be one nobody could reorder. Tiers are
+// operator packaging (a free/standard/enterprise ladder), so a hundred is far more
+// than any catalog needs. The count is read before the insert, so two creates racing
+// at the bound can both land; the only consequence is a catalog one or two over, which
+// reorderTenantTiers then refuses (loudly, with this code) until a tier is deleted.
+const MaxTenantTiers = 100
+
 // CreateTenantTier registers a new tier. Its config is validated against the key
 // registry (ADR-065 decision 8): an unknown key is rejected here rather than
 // accepted and silently ignored at read.
 func (s *Service) CreateTenantTier(ctx context.Context, in TierInput) (*iam.TenantTier, error) {
 	if in.Token == "" {
 		return nil, fmt.Errorf("token is required")
+	}
+	tiers, err := s.iam.ListTenantTiers(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if len(tiers) >= MaxTenantTiers {
+		return nil, limit.Exceeded("tenant tiers", len(tiers)+1, MaxTenantTiers)
 	}
 	if err := iam.ValidateTierConfig(in.Config); err != nil {
 		return nil, err
@@ -802,7 +820,20 @@ func (s *Service) UpdateTenantTier(ctx context.Context, token string, request *T
 // S5c). orderedTokens must be exactly the current tiers — a stale client is refused
 // (iam.ErrTierReorderMismatch) rather than silently dropping a tier it had not loaded.
 // Presentation only: it moves nothing but where tiers appear in a list.
+//
+// The list is bounded before it reaches the store, as a count (MaxTenantTiers, the
+// catalog's own bound) and per token (a tier token's own maximum length), so an
+// oversized request is refused with LIMIT_EXCEEDED rather than walked, or echoed in a
+// mismatch error.
 func (s *Service) ReorderTenantTiers(ctx context.Context, orderedTokens []string) error {
+	if len(orderedTokens) > MaxTenantTiers {
+		return limit.Exceeded("orderedTokens", len(orderedTokens), MaxTenantTiers)
+	}
+	for _, tok := range orderedTokens {
+		if len(tok) > core.MaxTokenLen {
+			return limit.Exceeded("orderedTokens entry length", len(tok), core.MaxTokenLen)
+		}
+	}
 	return s.iam.ReorderTenantTiers(ctx, orderedTokens)
 }
 

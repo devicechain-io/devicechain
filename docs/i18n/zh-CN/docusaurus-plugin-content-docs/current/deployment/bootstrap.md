@@ -300,7 +300,7 @@ dcctl bootstrap local my-instance --build
 |------|---------|
 | `--cluster <name>` | `local` 提供方：创建实例的 kind 集群，默认 `devicechain`。必须已[安装](#install)，初始化不创建集群。 |
 | `--kube-context <name>` | 通过此 kube-context 选择已安装集群。 |
-| `--profile <profile>` | 功能领域配置档：默认 `default` 标准系统；`full` 包含全部，增加 AI 推理、出站连接器、MCP、Sparkplug B 和 LwM2M 摄取；还可选 `telemetry` 或 `ingest-only`。 |
+| `--profile <profile>` | 功能领域配置档：默认 `default` 标准系统；`full` 包含全部，增加 AI 推理、出站连接器、MCP、Sparkplug B 和 LwM2M 摄取以及更新管理；还可选 `telemetry` 或 `ingest-only`。 |
 | `--build` | 将源码镜像构建至本地仓库，开发路径需源码、Docker、ko。 |
 | `--registry` / `--version` | 覆盖镜像仓库或标签，默认已发布 `ghcr.io/devicechain-io`；`--build` 时为 `localhost:5000` 和 `dev`。 |
 | `--host <name>` | 暴露实例的 Ingress 主机名，默认 `devicechain.local`。本地使用 `localhost` 无需修改 `/etc/hosts`。 |
@@ -370,7 +370,7 @@ dcctl bootstrap local scratch --dev
 - 不安装占用最大的监控栈；
 - 不安装 cert-manager，因为关闭 TLS 后不需要签发证书（保留 TLS 则保留 cert-manager，见下文），因此也不安装数据库备份插件。
 
-它**不改变**运行哪些服务，仍由每个实例明确可见的 `--profile` 决定。Compact 集群拒绝比 `default` *更大*的配置，目前只有 `full`。公布的 compact 数据在 `default` 上测得，不能代表多运行五个服务（AI inference、出站连接器、MCP、Sparkplug B ingest 和 LwM2M ingest）的实例。较小的 `telemetry` 和 `ingest-only` 被接受。
+它**不改变**运行哪些服务，仍由每个实例明确可见的 `--profile` 决定。Compact 集群拒绝比 `default` *更大*的配置，目前只有 `full`。公布的 compact 数据在 `default` 上测得，不能代表多运行六个服务（AI inference、出站连接器、MCP、Sparkplug B ingest、LwM2M ingest 和 update management）的实例。较小的 `telemetry` 和 `ingest-only` 被接受。
 
 可以保留 TLS 和监控。`dcctl install` 显式传入 `--no-tls=false` 或 `--no-monitoring=false` 会被遵守，其他 compact 调节仍应用。保留 TLS 也保留负责签发证书的 cert-manager。没有安装 cert-manager 的集群，所有实例都不使用 TLS：`dcctl bootstrap` 默认启用 `--no-tls`，并拒绝 `--no-tls=false`。
 
@@ -569,7 +569,7 @@ kubectl get pods -A -l cnpg.io/cluster -o wide
 
 [`--compact`](#--compact) 下，每个后端服务和 NATS 服务器改为请求 25m CPU、64Mi 内存，上限不变。控制台单独配置。
 
-前四个服务负责每事件的接收、解析、存储及合并到设备实时状态。`event-processing` 对每个事件执行检测，其上限为测量用量的两倍，见下文。前四个服务的上限针对租户默认每秒 1000 条消息的实时设备流量、每消息一个读数，以及默认安装提高事件持久化参数前持续约每秒 4,000 个事件的处理量配置，见[实测吞吐量](#measured-throughput)。
+前四个服务负责每事件的接收、解析、存储及合并到设备实时状态。`event-processing` 对每个事件执行检测，其上限为测量用量的两倍，见下文。前四个服务的上限针对租户默认每秒 1000 个读数的实时设备流量、每消息一个读数，以及默认安装提高事件持久化参数前持续约每秒 4,000 个事件的处理量配置，见[实测吞吐量](#measured-throughput)。
 
 - **请求来自每秒 6,000 个事件时的用量。** 请求只是调度器在节点上为 Pod 预留的 CPU，用于决定放置位置。上述数值为各服务在每秒 6,000 个事件时的实测用量向上取整。默认高可用安装在三个 4-vCPU 数据库节点及三个 4-vCPU 服务节点上，`event-management` 两个 Pod，解析、存储及实时状态都能跟上该速率，见[实测吞吐量](#measured-throughput)。`event-processing` 例外，其请求来自 1 核上限、提供每秒 6,800 个事件时的用量。发布候选版本中，400m 请求和 1 核上限可跟上每秒 6,000 个事件（积压峰值低于 1,000），从提供每秒 7,600 个事件起开始落后；它不在[实测吞吐量](#measured-throughput)的恰好存储一次检查范围。此前较小请求（[实测吞吐量](#measured-throughput)中被后续结果替代的一行）仅为此速率用量的 15% 至 66%，使调度器将繁忙服务放在一起：每秒 6,000 个事件时两个服务节点约 80% CPU，第三个约 55%。内存仍为 128Mi：所有样本直至提供每秒 9,200 个事件，事件路径服务均未超过 51Mi。请求按 Pod 计算，两个副本请求两倍资源。`--ha` 下 `event-management` 两个 Pod 合计请求 1.8 核，见 [`--ha`](#ha)。每个 Pod 保留由单 Pod 承担全部工作时测量的请求，因此预留高于两个 Pod 的总实际用量。
 - **上限不预留资源。** Kubernetes 按请求调度，提高上限不要求节点额外容量，只允许繁忙服务使用节点空闲 CPU。`--compact` 降低请求，保留上限。

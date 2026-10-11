@@ -204,8 +204,16 @@ func tenantField(db *gorm.DB) *schema.Field {
 	if !ensureSchema(db) {
 		return nil
 	}
+	return schemaTenantField(db.Statement.Schema)
+}
+
+// schemaTenantField is tenantField for a schema already in hand: the field carrying the
+// model's tenant in either spelling, or nil. It is the same lookup, factored out so the
+// column-array write (insert_columns.go), which parses its model without a statement,
+// classifies a table by exactly the rule this callback does.
+func schemaTenantField(s *schema.Schema) *schema.Field {
 	for _, name := range tenantFieldNames {
-		if field, ok := db.Statement.Schema.FieldsByName[name]; ok {
+		if field, ok := s.FieldsByName[name]; ok {
 			return field
 		}
 	}

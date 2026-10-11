@@ -163,3 +163,39 @@ func TestBaselineSeedDoesNotClobberOperatorEdits(t *testing.T) {
 	require.Equal(t, float64(45), after.Config["shedPriority"], "a replay must not revert an operator's retune")
 	require.Equal(t, float64(999), after.Config["ingestMessagesPerSecond"])
 }
+
+// TestAFreshInstanceSeedsTierRatesUnderTheirCurrentKeys is the seed proof for the rate-key
+// rename. The baseline is frozen, so it still WRITES ingestMessagesPerSecond and
+// outboundMessagesPerSecond (the tests above pin exactly that). What a fresh install ends up
+// HOLDING is the chain's result, and every key the governance registry reads must be the one
+// stored: after the whole chain, gold and bronze carry their ceilings under the reading and
+// call keys, at the same values, and no tier carries an old key that nothing would ever read.
+func TestAFreshInstanceSeedsTierRatesUnderTheirCurrentKeys(t *testing.T) {
+	db := newMigratedDB(t)
+
+	var gold, silver, bronze seedTierRow
+	require.NoError(t, db.Where("token = ?", "gold").First(&gold).Error)
+	require.NoError(t, db.Where("token = ?", "silver").First(&silver).Error)
+	require.NoError(t, db.Where("token = ?", "bronze").First(&bronze).Error)
+
+	require.Equal(t, float64(2000), gold.Config["ingestReadingsPerSecond"])
+	require.Equal(t, float64(4000), gold.Config["ingestBurst"])
+	require.Equal(t, float64(200), gold.Config["outboundCallsPerSecond"])
+	require.Equal(t, float64(400), gold.Config["outboundBurst"])
+	require.Equal(t, float64(90), gold.Config["shedPriority"])
+
+	require.Equal(t, float64(250), bronze.Config["ingestReadingsPerSecond"])
+	require.Equal(t, float64(500), bronze.Config["ingestBurst"])
+	require.Equal(t, float64(25), bronze.Config["outboundCallsPerSecond"])
+	require.Equal(t, float64(50), bronze.Config["outboundBurst"])
+	require.Equal(t, float64(30), bronze.Config["shedPriority"])
+
+	require.Equal(t, map[string]any{"shedPriority": float64(60)}, silver.Config,
+		"silver declares only its shed priority — no rate ceiling under either spelling")
+
+	for _, tier := range []seedTierRow{gold, silver, bronze} {
+		for _, old := range []string{"ingestMessagesPerSecond", "outboundMessagesPerSecond"} {
+			require.NotContainsf(t, tier.Config, old, "tier %s still carries %s", tier.Token, old)
+		}
+	}
+}

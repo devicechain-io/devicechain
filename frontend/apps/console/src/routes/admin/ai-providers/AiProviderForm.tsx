@@ -95,6 +95,18 @@ export function validateProvider(state: ProviderEditorState, t: TFunction): stri
   return null;
 }
 
+// providerParamsArg maps the params editor to the update's `params`: undefined (omit)
+// when it still equals the saved baseline, null when cleared, else the trimmed text.
+//
+// 🔴 PARAMS ARE NOT APPLIED BY ANY PROVIDER YET, so the server refuses a request that sets
+// one. Sending the baseline back on every save (as this editor used to) would therefore
+// lock a provider that already holds params out of every edit, including key rotation.
+export function providerParamsArg(current: string, baseline: string): string | null | undefined {
+  const next = current.trim();
+  if (next === baseline.trim()) return undefined;
+  return next === '' ? null : next;
+}
+
 // providerSecretArg maps the key editor state to the mutation's write-only `secret`
 // argument: undefined ⇒ omit (preserve/none), '' ⇒ clear, value ⇒ set. On create,
 // 'keep' cannot occur; an empty 'set' means no key (undefined).
@@ -209,6 +221,7 @@ export function ProviderConnectionFields({
           value={state.params}
           placeholder={t('paramsPlaceholder')}
           onChange={(e) => set({ params: e.target.value })}
+          disabled
           rows={3}
           className="font-mono text-xs"
         />

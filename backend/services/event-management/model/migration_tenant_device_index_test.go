@@ -36,8 +36,12 @@ func TestTenantDeviceIndexSnapshot(t *testing.T) {
 	m := NewTenantDeviceIndexSchema()
 	assert.Equal(t, "20261004000000", m.ID)
 	assert.Greater(t, m.ID, NewTimeLeadingKeysSchema().ID)
-	last := Migrations[len(Migrations)-1]
-	assert.Equal(t, m.ID, last.ID, "appended last")
+	for i, mig := range Migrations {
+		if mig.ID == m.ID {
+			require.Greater(t, i, 0)
+			assert.Equal(t, NewTimeLeadingKeysSchema().ID, Migrations[i-1].ID, "appended after the key rebuild")
+		}
+	}
 	assert.Nil(t, m.Rollback, "a rollback would be the same build again")
 
 	// One definition of the bounds: the upgrade notes publish one row bound and one chunk bound

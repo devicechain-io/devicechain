@@ -106,7 +106,7 @@ func TestTheHeldCommandCeilingMigrationRollbackDropsOnlyItsOwnColumn(t *testing.
 	require.False(t, db.Migrator().HasColumn(&heldCeilingTenantRow{}, "held_command_ceiling"),
 		"the rollback must drop held_command_ceiling, which this migration added")
 	for _, kept := range []string{
-		"shed_priority", "ingest_messages_per_second", "outbound_burst",
+		"shed_priority", "ingest_readings_per_second", "outbound_burst",
 		"basemap_tile_url", "token", "name",
 	} {
 		require.Truef(t, db.Migrator().HasColumn(&heldCeilingTenantRow{}, kept),

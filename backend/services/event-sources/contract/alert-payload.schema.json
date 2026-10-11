@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://docs.devicechain.io/schema/device/alert-payload.schema.json",
+  "title": "DeviceChain Alert payload",
+  "description": "The payload of a device event whose eventType is Alert. Every entry is one alert a device wants a person or a rule to see. One event may carry at most 256 entries.",
+  "type": "object",
+  "properties": {
+    "entries": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/entry" },
+      "description": "The alerts. A payload with no entries, or with an alert placed directly under payload instead of in entries, is refused."
+    }
+  },
+  "required": ["entries"],
+  "$defs": {
+    "entry": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The classifier that notification policies, rules and console filters route on. An entry with an empty or missing type is refused."
+        },
+        "level": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 2147483647,
+          "description": "Severity, a bare JSON integer (a quoted level fails the whole message). Omitted, it is 0."
+        },
+        "message": {
+          "type": "string",
+          "description": "Human-readable text."
+        },
+        "source": {
+          "type": "string",
+          "description": "What on the device raised the alert."
+        },
+        "occurredTime": {
+          "type": "string",
+          "format": "date-time",
+          "description": "This alert's own instant, RFC 3339. Omitted, the alert takes the envelope's occurredTime. Refused under the same rules as the envelope's."
+        }
+      },
+      "required": ["type"]
+    }
+  },
+  "examples": [
+    { "entries": [ { "type": "overheat", "level": 5, "message": "coolant over limit", "source": "ecu" } ] }
+  ]
+}

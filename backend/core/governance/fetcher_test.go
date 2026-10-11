@@ -24,17 +24,17 @@ func resolve(t *testing.T, fields map[string]json.RawMessage, dim Dimension) Lim
 // The query names exactly the dimension's two fields — reading the wrong pair
 // would silently govern a different resource.
 func TestGovernanceQuery_NamesDimensionFields(t *testing.T) {
-	assert.Equal(t, `query { tenantGovernance { ingestMessagesPerSecond ingestBurst } }`, governanceQuery(Ingest))
-	assert.Equal(t, `query { tenantGovernance { outboundMessagesPerSecond outboundBurst } }`, governanceQuery(Outbound))
+	assert.Equal(t, `query { tenantGovernance { ingestReadingsPerSecond ingestBurst } }`, governanceQuery(Ingest))
+	assert.Equal(t, `query { tenantGovernance { outboundCallsPerSecond outboundBurst } }`, governanceQuery(Outbound))
 }
 
 // A tenant that declared overrides is metered at them.
 func TestResolveLimits_AppliesOverrides(t *testing.T) {
 	got := resolve(t, map[string]json.RawMessage{
-		"ingestMessagesPerSecond": raw("5"),
+		"ingestReadingsPerSecond": raw("5"),
 		"ingestBurst":             raw("10"),
 	}, Ingest)
-	assert.Equal(t, Limits{MessagesPerSecond: 5, Burst: 10}, got)
+	assert.Equal(t, Limits{RatePerSecond: 5, Burst: 10}, got)
 }
 
 // A null override (the common case — the tenant declared none) inherits the
@@ -42,7 +42,7 @@ func TestResolveLimits_AppliesOverrides(t *testing.T) {
 // so it is NOT reported as a floored field.
 func TestResolveLimits_NullInheritsDefaultSilently(t *testing.T) {
 	limits, floored := resolveLimits(map[string]json.RawMessage{
-		"ingestMessagesPerSecond": raw("null"),
+		"ingestReadingsPerSecond": raw("null"),
 		"ingestBurst":             raw("null"),
 	}, platformDefault, Ingest)
 	assert.Equal(t, platformDefault, limits)
@@ -57,9 +57,9 @@ func TestResolveLimits_NullInheritsDefaultSilently(t *testing.T) {
 // the burst to zero.
 func TestResolveLimits_PartialOverride(t *testing.T) {
 	got := resolve(t, map[string]json.RawMessage{
-		"ingestMessagesPerSecond": raw("5"),
+		"ingestReadingsPerSecond": raw("5"),
 	}, Ingest)
-	assert.Equal(t, Limits{MessagesPerSecond: 5, Burst: platformDefault.Burst}, got)
+	assert.Equal(t, Limits{RatePerSecond: 5, Burst: platformDefault.Burst}, got)
 }
 
 // THE DRIFT THIS CONSOLIDATION FIXES. A non-positive override can only reach the
@@ -74,11 +74,11 @@ func TestResolveLimits_NonPositiveFloorsToDefault(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			limits, floored := resolveLimits(map[string]json.RawMessage{
-				"ingestMessagesPerSecond": raw(tc.rate),
+				"ingestReadingsPerSecond": raw(tc.rate),
 				"ingestBurst":             raw(tc.burst),
 			}, platformDefault, Ingest)
 			assert.Equal(t, platformDefault, limits, "a non-positive override must inherit the default, never meter at zero")
-			assert.ElementsMatch(t, []string{"ingestMessagesPerSecond", "ingestBurst"}, floored,
+			assert.ElementsMatch(t, []string{"ingestReadingsPerSecond", "ingestBurst"}, floored,
 				"an unusable override must be reported, not silently ignored")
 		})
 	}
@@ -96,10 +96,10 @@ func TestResolveLimits_UnusableValuesFloorToDefault(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			limits, floored := resolveLimits(map[string]json.RawMessage{
-				"ingestMessagesPerSecond": raw(tc.value),
+				"ingestReadingsPerSecond": raw(tc.value),
 			}, platformDefault, Ingest)
 			assert.Equal(t, platformDefault, limits)
-			assert.Equal(t, []string{"ingestMessagesPerSecond"}, floored)
+			assert.Equal(t, []string{"ingestReadingsPerSecond"}, floored)
 		})
 	}
 }
@@ -108,10 +108,10 @@ func TestResolveLimits_UnusableValuesFloorToDefault(t *testing.T) {
 // burst is not an integer count and must not silently truncate into a live ceiling.
 func TestResolveLimits_FractionalRateLegalBurstNot(t *testing.T) {
 	limits, floored := resolveLimits(map[string]json.RawMessage{
-		"ingestMessagesPerSecond": raw("0.5"),
+		"ingestReadingsPerSecond": raw("0.5"),
 		"ingestBurst":             raw("2.5"),
 	}, platformDefault, Ingest)
-	assert.Equal(t, 0.5, limits.MessagesPerSecond, "a sub-1/s rate is a legal ceiling")
+	assert.Equal(t, 0.5, limits.RatePerSecond, "a sub-1/s rate is a legal ceiling")
 	assert.Equal(t, platformDefault.Burst, limits.Burst, "a non-integer burst must not truncate")
 	assert.Equal(t, []string{"ingestBurst"}, floored)
 }
@@ -123,8 +123,8 @@ func TestResolveLimits_AIInferenceRateIsPerMinute(t *testing.T) {
 	limits, floored := resolveLimits(map[string]json.RawMessage{
 		"aiInferenceRequestsPerMinute": raw("30"),
 		"aiInferenceBurst":             raw("15"),
-	}, Limits{MessagesPerSecond: 0.5, Burst: 15}, AIInference)
-	assert.InDelta(t, 0.5, limits.MessagesPerSecond, 1e-9, "30 a minute is 0.5 a second")
+	}, Limits{RatePerSecond: 0.5, Burst: 15}, AIInference)
+	assert.InDelta(t, 0.5, limits.RatePerSecond, 1e-9, "30 a minute is 0.5 a second")
 	assert.Equal(t, 15, limits.Burst, "burst is a count and is never scaled")
 	assert.Empty(t, floored)
 }
@@ -133,8 +133,8 @@ func TestResolveLimits_AIInferenceRateIsPerMinute(t *testing.T) {
 // into an ingest resolver.
 func TestResolveLimits_IgnoresOtherDimensions(t *testing.T) {
 	got := resolve(t, map[string]json.RawMessage{
-		"outboundMessagesPerSecond": raw("5"),
-		"outboundBurst":             raw("10"),
+		"outboundCallsPerSecond": raw("5"),
+		"outboundBurst":          raw("10"),
 	}, Ingest)
 	assert.Equal(t, platformDefault, got, "another dimension's override must not govern ingest")
 }
@@ -147,7 +147,7 @@ func TestResolveLimits_IgnoresOtherDimensions(t *testing.T) {
 // platform default forever.
 func TestFetchDecode_ToleratesNonNumericSiblings(t *testing.T) {
 	body := []byte(`{"tenantGovernance":{
-		"ingestMessagesPerSecond": 5,
+		"ingestReadingsPerSecond": 5,
 		"ingestBurst": 10,
 		"aiExternalEnabled": true
 	}}`)
@@ -157,13 +157,13 @@ func TestFetchDecode_ToleratesNonNumericSiblings(t *testing.T) {
 	require.NoError(t, json.Unmarshal(body, &out), "a boolean sibling must not fail the decode")
 
 	limits, floored := resolveLimits(out.TenantGovernance, platformDefault, Ingest)
-	assert.Equal(t, Limits{MessagesPerSecond: 5, Burst: 10}, limits)
+	assert.Equal(t, Limits{RatePerSecond: 5, Burst: 10}, limits)
 	assert.Empty(t, floored)
 }
 
 // The real null-override response decodes and inherits the default.
 func TestFetchDecode_NullOverrides(t *testing.T) {
-	body := []byte(`{"tenantGovernance":{"ingestMessagesPerSecond":null,"ingestBurst":null}}`)
+	body := []byte(`{"tenantGovernance":{"ingestReadingsPerSecond":null,"ingestBurst":null}}`)
 	var out struct {
 		TenantGovernance map[string]json.RawMessage `json:"tenantGovernance"`
 	}

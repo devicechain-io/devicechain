@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"sync"
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/core"
@@ -115,12 +116,12 @@ func RegisterTenantFence(db *gorm.DB) error {
 	// gorm keeps one callback per name, so registering again would change nothing but the
 	// log: every repeat logs a "duplicated callback" warning. Registered once, the
 	// callbacks stay registered, and a second call returns here silently.
-	if db.Callback().Create().Get("dc:tenant_fence_create") != nil {
+	if db.Callback().Create().Get(fenceCreateCallback) != nil {
 		return nil
 	}
 	for _, register := range []func() error{
 		func() error {
-			return db.Callback().Create().Before("gorm:create").Register("dc:tenant_fence_create", tenantFenceCheck)
+			return db.Callback().Create().Before("gorm:create").Register(fenceCreateCallback, tenantFenceCheck)
 		},
 		func() error {
 			return db.Callback().Update().Before("gorm:update").Register("dc:tenant_fence_update", tenantFenceCheck)
@@ -228,12 +229,29 @@ func tenantFenceCheck(db *gorm.DB) {
 	if len(tokens) == 0 {
 		return
 	}
+	if err := readFence(db, tokens); err != nil {
+		_ = db.AddError(err)
+	}
+}
+
+// fenceCreateCallback is the name the fence's create hook is registered under. The
+// column-array write (insert_columns.go) asks for it by this name: it reads the fence
+// exactly when a gorm Create on the same handle would.
+const fenceCreateCallback = "dc:tenant_fence_create"
+
+// readFence is the fence read itself, for the tenants tokens: nil when no fence stands for
+// any of them, ErrTenantPurged when one does, and the read's own error, wrapped, when the
+// fence could not be read (fail closed). It is shared by the create/update callback above
+// and by the column-array write, which bypasses the create chain and calls it directly, so
+// the two cannot come to answer differently. Inside a transaction a clear answer is
+// remembered per tenant (fenceMemo), whichever of the two asked.
+func readFence(db *gorm.DB, tokens []string) error {
 	memo := memoOf(db.Statement.ConnPool)
 	ask, gen := tokens, uint64(0)
 	if memo != nil {
 		if ask, gen = memo.unproven(tokens); len(ask) == 0 {
 			// Every tenant this statement names was read clear earlier in THIS transaction.
-			return
+			return nil
 		}
 	}
 	ctx := db.Statement.Context
@@ -261,15 +279,16 @@ func tenantFenceCheck(db *gorm.DB) {
 		// so a query that cannot answer means the write cannot succeed either, and
 		// refusing costs nothing that was going to work. This arm comes first so that
 		// "no rows" below can only ever mean a read that answered.
-		_ = db.AddError(fmt.Errorf("reading the erasure fence: %w", res.Error))
+		return fmt.Errorf("reading the erasure fence: %w", res.Error)
 	case res.RowsAffected > 0:
-		_ = db.AddError(fmt.Errorf("%w (tenant %q)", ErrTenantPurged, standing.Token))
+		return fmt.Errorf("%w (tenant %q)", ErrTenantPurged, standing.Token)
 	default:
 		// No fence stands for any tenant in this statement. This is the ordinary answer,
 		// the only one that lets the write proceed, and the only one remembered.
 		if memo != nil {
 			memo.prove(ask, gen)
 		}
+		return nil
 	}
 }
 
@@ -389,6 +408,10 @@ func destTenants(dest any, field string) []string {
 		return nil
 	}
 	var out []string
+	// The rows of a batch share one type, so the field is looked up once per type per call
+	// and read by index on every row (lastType/lastIndex), rather than by name on each.
+	var lastType reflect.Type
+	var lastIndex []int
 	var walk func(reflect.Value)
 	walk = func(v reflect.Value) {
 		for v.Kind() == reflect.Ptr || v.Kind() == reflect.Interface {
@@ -403,8 +426,15 @@ func destTenants(dest any, field string) []string {
 				walk(v.Index(i))
 			}
 		case reflect.Struct:
-			f := v.FieldByName(field)
-			if f.IsValid() && f.Kind() == reflect.String {
+			if t := v.Type(); t != lastType {
+				lastType, lastIndex = t, structFieldIndex(t, field)
+			}
+			if lastIndex == nil {
+				return
+			}
+			// What v.FieldByName(field) does once it has the index, panics included.
+			f := v.FieldByIndex(lastIndex)
+			if f.Kind() == reflect.String {
 				out = append(out, f.String())
 			}
 		case reflect.Map:
@@ -429,3 +459,36 @@ func destTenants(dest any, field string) []string {
 	walk(reflect.ValueOf(dest))
 	return out
 }
+
+// structFieldIndex is reflect.Type.FieldByName's index for name on t, or nil when t has no
+// such field, remembered per (type, name). Looking a field up by name walks the struct's
+// embedded fields and allocates on every call, and destTenants runs twice per row of every
+// create (the scope callback's mismatch check and the fence's statementTenants), so on a
+// 64-row batch insert that walk was paid 128 times per statement. The set of keys is
+// bounded by the model types the program writes.
+func structFieldIndex(t reflect.Type, name string) []int {
+	k := structFieldKey{t, name}
+	structFieldIndexes.RLock()
+	idx, ok := structFieldIndexes.m[k]
+	structFieldIndexes.RUnlock()
+	if ok {
+		return idx
+	}
+	if f, found := t.FieldByName(name); found {
+		idx = f.Index
+	}
+	structFieldIndexes.Lock()
+	structFieldIndexes.m[k] = idx
+	structFieldIndexes.Unlock()
+	return idx
+}
+
+type structFieldKey struct {
+	t    reflect.Type
+	name string
+}
+
+var structFieldIndexes = struct {
+	sync.RWMutex
+	m map[structFieldKey][]int
+}{m: map[structFieldKey][]int{}}

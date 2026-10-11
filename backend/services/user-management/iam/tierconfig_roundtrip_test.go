@@ -31,9 +31,9 @@ func TestTierConfigSurvivesTheDatabaseRoundTrip(t *testing.T) {
 	require.NoError(t, s.CreateTenantTier(ctx, &TenantTier{
 		Token: TierGoldToken,
 		Config: map[string]any{
-			"ingestMessagesPerSecond":      float64(2000),
+			"ingestReadingsPerSecond":      float64(2000),
 			"ingestBurst":                  float64(4000),
-			"outboundMessagesPerSecond":    float64(0.5),
+			"outboundCallsPerSecond":       float64(0.5),
 			"aiInferenceRequestsPerMinute": float64(60),
 		},
 	}))
@@ -61,14 +61,14 @@ func TestTierConfigSurvivesTheDatabaseRoundTrip(t *testing.T) {
 // over a type nobody thinks about while reading a table of numbers.
 func TestTierConfigAcceptsGoNativeIntegers(t *testing.T) {
 	require.NoError(t, ValidateTierConfig(map[string]any{
-		"ingestMessagesPerSecond": 2000,
+		"ingestReadingsPerSecond": 2000,
 		"ingestBurst":             int64(4000),
 	}))
 
 	// And those values must READ back, not merely validate — a validator that
 	// accepts a type the reader drops is worse than one that rejects it.
 	tier := &TenantTier{Config: map[string]any{
-		"ingestMessagesPerSecond": 2000,
+		"ingestReadingsPerSecond": 2000,
 		"ingestBurst":             int64(4000),
 	}}
 	require.NotNil(t, tier.RateFor(governance.Ingest))
@@ -77,6 +77,6 @@ func TestTierConfigAcceptsGoNativeIntegers(t *testing.T) {
 	require.Equal(t, 4000, *tier.BurstFor(governance.Ingest))
 
 	// The fail-closed direction is unchanged for genuinely unusable values.
-	require.Error(t, ValidateTierConfig(map[string]any{"ingestMessagesPerSecond": 0}))
+	require.Error(t, ValidateTierConfig(map[string]any{"ingestReadingsPerSecond": 0}))
 	require.Error(t, ValidateTierConfig(map[string]any{"ingestBurst": -1}))
 }

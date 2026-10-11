@@ -120,9 +120,9 @@ const TENANTS = graphql(`
         color
       }
       config
-      ingestMessagesPerSecond
+      ingestReadingsPerSecond
       ingestBurst
-      outboundMessagesPerSecond
+      outboundCallsPerSecond
       outboundBurst
       aiExternalEnabled
       aiInferenceRequestsPerMinute
@@ -701,9 +701,9 @@ const CREATE_TENANT = graphql(`
         color
       }
       config
-      ingestMessagesPerSecond
+      ingestReadingsPerSecond
       ingestBurst
-      outboundMessagesPerSecond
+      outboundCallsPerSecond
       outboundBurst
       aiExternalEnabled
       aiInferenceRequestsPerMinute
@@ -763,9 +763,9 @@ const UPDATE_TENANT = graphql(`
         color
       }
       config
-      ingestMessagesPerSecond
+      ingestReadingsPerSecond
       ingestBurst
-      outboundMessagesPerSecond
+      outboundCallsPerSecond
       outboundBurst
       aiExternalEnabled
       aiInferenceRequestsPerMinute
@@ -805,9 +805,9 @@ const SET_TENANT_ENABLED = graphql(`
         color
       }
       config
-      ingestMessagesPerSecond
+      ingestReadingsPerSecond
       ingestBurst
-      outboundMessagesPerSecond
+      outboundCallsPerSecond
       outboundBurst
       aiExternalEnabled
       aiInferenceRequestsPerMinute

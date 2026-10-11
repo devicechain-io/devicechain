@@ -448,7 +448,7 @@ proxy). It must be a path that keeps every datagram of a session going to the on
 | `security.handshakeTimeoutSeconds` | `10` | Bounds one DTLS handshake, so a stalled one cannot pin resources. |
 | `security.maxSessions` | `100000` | Ceiling on the live session table. A handshake past the ceiling is refused and counted, never silently admitted. |
 | `maxLifetimeSeconds` | `86400` | The ceiling every registration lifetime is clamped down to. **This is the lever that bounds how long a dead device reads online.** Must stay above the longest lifetime your devices request. |
-| `ingestRateLimit.messagesPerSecond` | `1000` | Per-tenant sustained ingest ceiling, counted in readings (decoded samples), and in Notify messages before decode. Unset or non-positive falls back to this default, never to unlimited. |
+| `ingestRateLimit.readingsPerSecond` | `1000` | Per-tenant sustained ingest ceiling, counted in readings (decoded samples), and in Notify messages before decode. Unset or non-positive falls back to this default, never to unlimited. |
 | `ingestRateLimit.burst` | `2000` | Burst allowance for the above. |
 | `downlink.timeoutSeconds` | `10` | Bounds one command exchange to a device. On expiry the command is reported failed rather than left hanging. Raise it for slow cellular sleepers. |
 | `downlink.concurrency` | `16` | Cross-device command parallelism. A device's own commands always run in order regardless of this value. |
@@ -501,7 +501,7 @@ ceiling is on every transport.
 
 | Setting | Default | What it does |
 |---|---|---|
-| `ingestRateLimit.messagesPerSecond` | `1000` | Per-tenant sustained ingest ceiling, counted in readings. A tenant's tier overrides it. Unset or non-positive falls back to this default, never to unlimited. |
+| `ingestRateLimit.readingsPerSecond` | `1000` | Per-tenant sustained ingest ceiling, counted in readings. A tenant's tier overrides it. Unset or non-positive falls back to this default, never to unlimited. |
 | `ingestRateLimit.burst` | `2000` | Burst allowance for the above, in readings. |
 
 **What is not metered.** The message rate is not metered, because the Host must observe every

@@ -139,7 +139,7 @@ func TestTheGeoFenceCapsMigrationRollbackDropsOnlyItsOwnColumns(t *testing.T) {
 			"the rollback must drop %q, which this migration added", dropped)
 	}
 	for _, kept := range []string{
-		"held_command_ceiling", "shed_priority", "ingest_messages_per_second", "outbound_burst",
+		"held_command_ceiling", "shed_priority", "ingest_readings_per_second", "outbound_burst",
 		"basemap_tile_url", "token", "name",
 	} {
 		require.Truef(t, db.Migrator().HasColumn(&geoFenceCapsTenantRow{}, kept),

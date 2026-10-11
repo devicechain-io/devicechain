@@ -479,7 +479,7 @@ yendo al único pod que sirve.
 | `security.handshakeTimeoutSeconds` | `10` | Acota un handshake DTLS, para que uno atascado no pueda inmovilizar recursos. |
 | `security.maxSessions` | `100000` | Techo de la tabla de sesiones vivas. Un handshake por encima del techo se rechaza y se cuenta, nunca se admite en silencio. |
 | `maxLifetimeSeconds` | `86400` | El techo hasta el que se recorta el tiempo de vida de todo registro. **Es la palanca que acota cuánto tiempo figura en línea un dispositivo muerto.** Debe quedar por encima del mayor tiempo de vida que pidan tus dispositivos. |
-| `ingestRateLimit.messagesPerSecond` | `1000` | Techo de ingesta sostenida por inquilino, contado en lecturas (muestras decodificadas) y en mensajes Notify antes de decodificar. Sin definir o con un valor no positivo, recae en este predeterminado, nunca en ilimitado. |
+| `ingestRateLimit.readingsPerSecond` | `1000` | Techo de ingesta sostenida por inquilino, contado en lecturas (muestras decodificadas) y en mensajes Notify antes de decodificar. Sin definir o con un valor no positivo, recae en este predeterminado, nunca en ilimitado. |
 | `ingestRateLimit.burst` | `2000` | Margen de ráfaga para lo anterior. |
 | `downlink.timeoutSeconds` | `10` | Acota un intercambio de comando con un dispositivo. Al expirar, el comando se reporta como fallido en lugar de quedar colgado. Súbelo para dispositivos celulares lentos que duermen. |
 | `downlink.concurrency` | `16` | Paralelismo de comandos entre dispositivos. Los comandos de un mismo dispositivo se ejecutan siempre en orden, sea cual sea este valor. |
@@ -535,7 +535,7 @@ cualquier transporte con una lectura por encima de su techo.
 
 | Ajuste | Predeterminado | Qué hace |
 |---|---|---|
-| `ingestRateLimit.messagesPerSecond` | `1000` | Techo de ingesta sostenida por inquilino, contado en lecturas. El nivel del inquilino lo sustituye. Sin definir o con un valor no positivo, recae en este predeterminado, nunca en ilimitado. |
+| `ingestRateLimit.readingsPerSecond` | `1000` | Techo de ingesta sostenida por inquilino, contado en lecturas. El nivel del inquilino lo sustituye. Sin definir o con un valor no positivo, recae en este predeterminado, nunca en ilimitado. |
 | `ingestRateLimit.burst` | `2000` | Ráfaga permitida para lo anterior, en lecturas. |
 
 **Qué no se mide.** La tasa de mensajes no se mide, porque el Host debe observar cada mensaje para

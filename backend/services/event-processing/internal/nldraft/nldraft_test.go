@@ -242,3 +242,30 @@ func TestDraft_OtherFailureMidLoop_NoTruncationNotice(t *testing.T) {
 		assert.NotEqual(t, repairTruncatedMessage, d.Message)
 	}
 }
+
+// A model that did not answer in time gets its own reason: not the generic one (which sends the
+// author to an operator over a model that was merely slow), and not the rate-limit one.
+func TestDraft_TimedOut_ReportsTimedOutReason(t *testing.T) {
+	f := &fakeInferer{err: fmt.Errorf("ai-inference: %w: svcclient: http://10.0.0.5:8080/graphql: inference timed out", ErrTimedOut)}
+	res := draft(t, f, Request{Text: "alarm when temp over 80"})
+
+	assert.True(t, res.Unavailable)
+	assert.Equal(t, timedOutReason, res.UnavailableReason)
+	assert.NotContains(t, res.UnavailableReason, "10.0.0.5", "the reason must never leak topology")
+	assert.Len(t, f.prompts, 1, "a timeout ends the loop; it is not retried as a repair turn")
+}
+
+// A timeout on a REPAIR turn keeps the spent work and says why the repair did not happen.
+func TestDraft_TimedOutMidLoop_KeepsWorkAndSaysSo(t *testing.T) {
+	f := &fakeInferer{
+		outputs:  []InferOutput{{Candidate: invalidRule, Model: "m", Provider: "p"}},
+		err:      fmt.Errorf("ai-inference: %w", ErrTimedOut),
+		errAfter: 2,
+	}
+	res := draft(t, f, Request{Text: "alarm when temp over 80"})
+
+	assert.False(t, res.Unavailable)
+	assert.Equal(t, invalidRule, res.RawCandidate)
+	require.NotEmpty(t, res.Diagnostics)
+	assert.Equal(t, repairTimedOutMessage, res.Diagnostics[len(res.Diagnostics)-1].Message)
+}

@@ -58,6 +58,8 @@ Todo evento entrante, sobre cualquier transporte, es un objeto JSON:
 - `credentialType` / `credentialId` — la credencial que presenta el dispositivo. `MQTT_BASIC` además lleva `credentialSecret`. Omítelos solo cuando el modo de autenticación de dispositivo de la instancia esté configurado como `disabled` u `optional`. El valor predeterminado es `required`, así que se espera una credencial.
 - `payload` — su forma depende de `eventType`, y todas las formas son `{ "entries": [ … ] }`. Consulta a continuación.
 
+Cada campo, con su tipo y si es obligatorio, incluidos los opcionales `altId` y `relationship`, está en la [Referencia del protocolo de dispositivo](../reference/device-protocol.md#device-event), junto con esquemas JSON con los que puedes validar lo que emite el firmware.
+
 ### Formas del payload {#payload-shapes}
 
 Todo payload envuelve su contenido en un arreglo `entries`, y la forma fija el tipo JSON de cada valor:
@@ -262,7 +264,7 @@ El listener de ingesta limita cuánto puede tardar una petición. Un dispositivo
 
 Una petición que supera cualquiera de los dos límites ve su **conexión cerrada**. El servidor la cierra antes de que el evento exista, así que no hay respuesta, ni evento, ni nada en el pipeline con lo que rastrearla. El síntoma parece una inestabilidad intermitente del lado del dispositivo que solo afecta a los dispositivos más lentos. En un enlace restringido (NB-IoT, 2G, satélite), donde tardar varios segundos en completar una petición es lo normal, eleva los límites en lugar de dejar que esos dispositivos fallen en silencio. La métrica `total_http_connections_closed_before_request` cuenta las conexiones que nunca llegaron a entregar una petición, que es lo que deja tras de sí un dispositivo así.
 
-## Recepción de comandos
+## Recepción de comandos {#receiving-commands}
 
 Un dispositivo recibe comandos en **su propio** topic:
 
@@ -318,7 +320,9 @@ mosquitto_pub \
 - **`commandToken` debe ser el `token` del sobre de entrega**, el token del comando, no el del dispositivo. Enviar aquí el token del dispositivo es el error más común. No coincide con ningún comando, así que la respuesta no cierra nada: se vuelve a entregar hasta el tope de entregas del broker (cinco intentos) y después queda registrada en el flujo de mensajes descartados con el motivo `exhausted`, visible para un operador, mientras el comando sigue pendiente.
 - **`dispatchNonce` debe ser el `dispatchNonce` del sobre de entrega que estás respondiendo.** Es obligatorio. Una respuesta que lo omita, o que cite el nonce de una entrega anterior del mismo comando, no cierra el comando. Consulta [Por qué el nonce es obligatorio](#why-the-nonce-is-required).
 - **`success`** mueve el comando a `SUCCESSFUL` o `FAILED`.
-- **`payload`** / **`error`** son cadenas opcionales, que se muestran en el historial de comandos de la consola y se devuelven a través de la API.
+- **`payload`** es opcional y puede ser cualquier valor JSON (una cadena se almacena como su texto; un objeto o un arreglo, como ese JSON); **`error`** es una cadena opcional. Ambos se muestran en el historial de comandos de la consola y se devuelven a través de la API.
+
+Todas las formas en que una respuesta puede no liquidar su comando están en la [Referencia del protocolo de dispositivo](../reference/device-protocol.md#rejections-command-responses).
 
 Al igual que los topics de eventos y de comandos, este es por dispositivo, y un dispositivo está autorizado a publicar únicamente en el suyo. Tanto el inquilino como el dispositivo que responde se toman del topic en lugar del cuerpo, de modo que un dispositivo solo puede responder por **sus propios** comandos. Una respuesta que nombre un comando perteneciente a otro dispositivo se rechaza, no se registra.
 
@@ -328,6 +332,19 @@ Este topic era antes de alcance de inquilino (`{instanceId}/{tenant}/command-res
 
 :::info Responder es lo que completa el ciclo de vida
 Un comando que nunca se responde permanece en `SENT` hasta que su TTL lo convierte en `TIMEOUT`. Sin una respuesta, la plataforma solo sabe que el comando se despachó, no que el dispositivo actuó sobre él. Si tus dispositivos no responden, configura un `expiresAt` al emitir comandos para que alcancen un estado terminal en tu propio plazo y no en el predeterminado de siete días de la plataforma.
+:::
+
+### Topics reservados para la entrega de configuración {#reserved-device-topics}
+
+:::note Reservado, aún no activo
+Se reservan dos topics adicionales por dispositivo como base para la entrega de configuración a los dispositivos. Todavía nada publica en ellos ni lee de ellos, así que no construyas sobre ellos. Se listan para que tus dispositivos no usen esos nombres para otra cosa.
+
+```
+{instanceId}/{tenant}/device-desired/{deviceToken}    (de la plataforma al dispositivo; un dispositivo puede suscribirse al suyo)
+{instanceId}/{tenant}/device-reports/{deviceToken}    (del dispositivo a la plataforma; un dispositivo puede publicar en el suyo)
+```
+
+Igual que con los comandos, un dispositivo solo está autorizado para el topic que lleva su propio token de dispositivo, y únicamente en el sentido indicado.
 :::
 
 ### Por qué el nonce es obligatorio {#why-the-nonce-is-required}

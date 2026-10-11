@@ -93,7 +93,7 @@ const (
 	// unlimited; a negative value is rejected at Validate.
 	DefaultMaxRetainedSamplesPerTenant = 5_000_000
 
-	// DefaultOutboundMessagesPerSecond and DefaultOutboundBurst are the platform-default
+	// DefaultOutboundCallsPerSecond and DefaultOutboundBurst are the platform-default
 	// per-tenant OUTBOUND egress ceiling REACT charges at the SOURCE (ADR-060 SD-3): before
 	// publishing a connector-dispatch (httpCall/publish), the dispatcher charges the tenant's
 	// outbound budget and SHEDS the action when over quota, so a runaway rule sheds at the source
@@ -104,9 +104,9 @@ const (
 	// Fail-safe per ADR-023: an unset (0) rate/burst defaults to these platform ceilings — NEVER
 	// unlimited; a negative configured value is rejected at Validate (0 means unset and is replaced
 	// by ApplyDefaults, so it is not itself rejected). Per-tenant overrides are
-	// fetched from user-management (the outboundMessagesPerSecond / outboundBurst governance fields).
-	DefaultOutboundMessagesPerSecond = 100
-	DefaultOutboundBurst             = 200
+	// fetched from user-management (the outboundCallsPerSecond / outboundBurst governance fields).
+	DefaultOutboundCallsPerSecond = 100
+	DefaultOutboundBurst          = 200
 
 	// DefaultShedLetterPerSecond / DefaultShedLetterBurst are the per-tenant budget for dead
 	// letters REACT writes about connector actions its source gate shed, and
@@ -200,15 +200,15 @@ type EventProcessingConfiguration struct {
 	// (DefaultMaxRetainedSamplesPerTenant) — fail-safe: never unlimited; negative is rejected.
 	MaxRetainedSamplesPerTenant int
 
-	// OutboundMessagesPerSecond and OutboundBurst are the platform-default per-tenant OUTBOUND
+	// OutboundCallsPerSecond and OutboundBurst are the platform-default per-tenant OUTBOUND
 	// egress ceiling REACT charges at the SOURCE (ADR-060 SD-3): the sustained rate and burst of
 	// connector-dispatch publishes (httpCall/publish actions) a tenant may emit before REACT drops
-	// them. Unset (0) defaults to the platform ceilings (DefaultOutboundMessagesPerSecond /
+	// them. Unset (0) defaults to the platform ceilings (DefaultOutboundCallsPerSecond /
 	// DefaultOutboundBurst) — fail-safe: never unlimited; a non-positive configured value is rejected
 	// at Validate. Per-tenant overrides read from user-management take precedence at runtime; this is
 	// the floor used for every tenant when per-tenant overrides are not wired.
-	OutboundMessagesPerSecond float64
-	OutboundBurst             int
+	OutboundCallsPerSecond float64
+	OutboundBurst          int
 
 	// ShedLetterPerSecond / ShedLetterBurst are the per-tenant budget, and ShedLetterGlobalPerSecond
 	// / ShedLetterGlobalBurst the all-tenant budget, for dead letters about connector actions REACT's
@@ -260,8 +260,8 @@ func (c *EventProcessingConfiguration) ApplyDefaults() {
 	if c.MaxRetainedSamplesPerTenant == 0 {
 		c.MaxRetainedSamplesPerTenant = DefaultMaxRetainedSamplesPerTenant
 	}
-	if c.OutboundMessagesPerSecond == 0 {
-		c.OutboundMessagesPerSecond = DefaultOutboundMessagesPerSecond
+	if c.OutboundCallsPerSecond == 0 {
+		c.OutboundCallsPerSecond = DefaultOutboundCallsPerSecond
 	}
 	if c.OutboundBurst == 0 {
 		c.OutboundBurst = DefaultOutboundBurst
@@ -391,8 +391,8 @@ func (c *EventProcessingConfiguration) Validate() error {
 	// replaced by the platform ceiling in ApplyDefaults — never unlimited — so 0 cannot reach a live
 	// limiter, and a 0 is not itself rejected (it is indistinguishable from unset). A negative value
 	// is a misconfiguration and rejected.
-	if c.OutboundMessagesPerSecond < 0 {
-		return fmt.Errorf("outboundMessagesPerSecond must not be negative, got %g", c.OutboundMessagesPerSecond)
+	if c.OutboundCallsPerSecond < 0 {
+		return fmt.Errorf("outboundCallsPerSecond must not be negative, got %g", c.OutboundCallsPerSecond)
 	}
 	if c.OutboundBurst < 0 {
 		return fmt.Errorf("outboundBurst must not be negative, got %d", c.OutboundBurst)
@@ -415,4 +415,12 @@ func (c *EventProcessingConfiguration) Validate() error {
 		return fmt.Errorf("shedLetterGlobalBurst must not be negative, got %d", c.ShedLetterGlobalBurst)
 	}
 	return nil
+}
+
+// RenamedConfigKeys refuses the old spelling of a renamed key with the new one named
+// (core.ConfigRenamer): the outbound ceiling meters connector CALLS, and the key now says so. It is refused rather than
+// retired because the setting still exists — stripping it would start the service on
+// the platform default instead of the ceiling the operator chose.
+func (c *EventProcessingConfiguration) RenamedConfigKeys() map[string]string {
+	return map[string]string{"outboundMessagesPerSecond": "outboundCallsPerSecond"}
 }

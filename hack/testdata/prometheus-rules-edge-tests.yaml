@@ -1,0 +1,376 @@
+# Copyright The DeviceChain Authors
+# SPDX-License-Identifier: Apache-2.0
+#
+# promtool UNIT TESTS for the edge ingest alerting rules (sparkplug-ingest, lwm2m-ingest).
+#
+# WHAT THESE ARE FOR, over and above the parse check
+#
+# The leader alerts read a sum across replicas that must be exactly 1, so the cases worth writing
+# down are the quiet ones -- a healthy active/standby pair, and a takeover that leaves the lease
+# unheld for a minute or two -- and the two loud ones: nobody serving, and two serving. The
+# counter alerts watch accepted data being lost, so a flat counter and a single stray increment
+# that clears inside the window must stay quiet while a sustained climb fires.
+#
+# THE SERIES:
+#
+#   - devicechain_<lwm2mingest|sparkplugingest>_is_leader -- a gauge each replica registers at
+#     start: 1 on the replica holding the lease, 0 on the standbys.
+#   - devicechain_lwm2mingest_is_serving -- 1 while that replica's CoAP/DTLS read loop runs.
+#   - devicechain_sparkplugingest_{ingest_failures,subscribe_failures,connect_failures}_total and
+#     devicechain_lwm2mingest_notify_ingest_dropped_total -- plain counters.
+#
+# GENERATED from the rendered rules so the expected annotations cannot drift from the template by
+# a typo; the rules, not this file, are the authority on wording.
+#
+# Run via hack/check-prometheus-rules.sh, which renders the chart first and copies the rendered
+# group in beside this file as rendered-rules.yaml. Naming it below is not optional: promtool with
+# no rule_files loads no rules, and every expected alert then reads as "the rule does not fire"
+# rather than "there is no rule".
+rule_files:
+  - rendered-rules.yaml
+
+evaluation_interval: 1m
+
+tests:
+  # A healthy active/standby pair on both services, every counter flat: nothing fires.
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_lwm2mingest_is_leader{namespace="dci-devicechain", pod="pod-a", job="devicechain/lwm2m-ingest"}'
+        values: '1x40'
+      - series: 'devicechain_lwm2mingest_is_leader{namespace="dci-devicechain", pod="pod-b", job="devicechain/lwm2m-ingest"}'
+        values: '0x40'
+      - series: 'devicechain_sparkplugingest_is_leader{namespace="dci-devicechain", pod="pod-a", job="devicechain/sparkplug-ingest"}'
+        values: '1x40'
+      - series: 'devicechain_sparkplugingest_is_leader{namespace="dci-devicechain", pod="pod-b", job="devicechain/sparkplug-ingest"}'
+        values: '0x40'
+      - series: 'devicechain_lwm2mingest_is_serving{namespace="dci-devicechain", pod="pod-a", job="devicechain/lwm2m-ingest"}'
+        values: '1x40'
+      - series: 'devicechain_lwm2mingest_is_serving{namespace="dci-devicechain", pod="pod-b", job="devicechain/lwm2m-ingest"}'
+        values: '0x40'
+      - series: 'devicechain_sparkplugingest_ingest_failures_total{namespace="dci-devicechain", pod="pod-a", job="devicechain/sparkplug-ingest"}'
+        values: '0x40'
+      - series: 'devicechain_sparkplugingest_subscribe_failures_total{namespace="dci-devicechain", pod="pod-a", job="devicechain/sparkplug-ingest"}'
+        values: '0x40'
+      - series: 'devicechain_sparkplugingest_connect_failures_total{namespace="dci-devicechain", pod="pod-a", job="devicechain/sparkplug-ingest"}'
+        values: '0x40'
+      - series: 'devicechain_lwm2mingest_notify_ingest_dropped_total{namespace="dci-devicechain", pod="pod-a", job="devicechain/lwm2m-ingest"}'
+        values: '0x40'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: Lwm2mIngestLeaderCountNotOne
+        exp_alerts: []
+      - eval_time: 30m
+        alertname: SparkplugIngestLeaderCountNotOne
+        exp_alerts: []
+      - eval_time: 30m
+        alertname: Lwm2mIngestLeaderNotServing
+        exp_alerts: []
+      - eval_time: 30m
+        alertname: SparkplugIngestDroppingData
+        exp_alerts: []
+      - eval_time: 30m
+        alertname: SparkplugIngestSubscriptionRefused
+        exp_alerts: []
+      - eval_time: 30m
+        alertname: SparkplugIngestBrokerUnreachable
+        exp_alerts: []
+      - eval_time: 30m
+        alertname: Lwm2mIngestDroppingNotifications
+        exp_alerts: []
+
+  # Nobody holds either lease: pending through the 2m period, firing after it.
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_lwm2mingest_is_leader{namespace="dci-devicechain", pod="pod-a", job="devicechain/lwm2m-ingest"}'
+        values: '0x40'
+      - series: 'devicechain_lwm2mingest_is_leader{namespace="dci-devicechain", pod="pod-b", job="devicechain/lwm2m-ingest"}'
+        values: '0x40'
+      - series: 'devicechain_sparkplugingest_is_leader{namespace="dci-devicechain", pod="pod-a", job="devicechain/sparkplug-ingest"}'
+        values: '0x40'
+      - series: 'devicechain_sparkplugingest_is_leader{namespace="dci-devicechain", pod="pod-b", job="devicechain/sparkplug-ingest"}'
+        values: '0x40'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: Lwm2mIngestLeaderCountNotOne
+        exp_alerts: []
+      - eval_time: 1m
+        alertname: SparkplugIngestLeaderCountNotOne
+        exp_alerts: []
+      - eval_time: 3m
+        alertname: Lwm2mIngestLeaderCountNotOne
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              devicechain_instance: devicechain
+            exp_annotations:
+              summary: "LwM2M ingest is not served by exactly one replica"
+              description: "For at least 2 minutes, 0 lwm2m-ingest replicas have reported holding the leadership lease; it should be exactly 1. At 0, nobody is reading the CoAP/DTLS transport and every LwM2M device is silently unreachable, although every pod looks healthy. Above 1, two replicas are serving at once. Check the lwm2m-ingest logs for why no replica acquired the lease (typically the platform's message broker is unreachable)."
+      - eval_time: 5m
+        alertname: Lwm2mIngestLeaderCountNotOne
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              devicechain_instance: devicechain
+            exp_annotations:
+              summary: "LwM2M ingest is not served by exactly one replica"
+              description: "For at least 2 minutes, 0 lwm2m-ingest replicas have reported holding the leadership lease; it should be exactly 1. At 0, nobody is reading the CoAP/DTLS transport and every LwM2M device is silently unreachable, although every pod looks healthy. Above 1, two replicas are serving at once. Check the lwm2m-ingest logs for why no replica acquired the lease (typically the platform's message broker is unreachable)."
+      - eval_time: 3m
+        alertname: SparkplugIngestLeaderCountNotOne
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              devicechain_instance: devicechain
+            exp_annotations:
+              summary: "Sparkplug ingest is not served by exactly one replica"
+              description: "For at least 2 minutes, 0 sparkplug-ingest replicas have reported holding the leadership lease; it should be exactly 1. At 0, no Sparkplug source is being read and every device behind it is silently unreachable, although every pod looks healthy. Above 1, two replicas are connecting the same sources. A pod deployed with no sources configured never takes the lease and reads 0 permanently: configure its sources or leave the service out of the deployment. Otherwise check the sparkplug-ingest logs for why no replica acquired the lease."
+      - eval_time: 5m
+        alertname: SparkplugIngestLeaderCountNotOne
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              devicechain_instance: devicechain
+            exp_annotations:
+              summary: "Sparkplug ingest is not served by exactly one replica"
+              description: "For at least 2 minutes, 0 sparkplug-ingest replicas have reported holding the leadership lease; it should be exactly 1. At 0, no Sparkplug source is being read and every device behind it is silently unreachable, although every pod looks healthy. Above 1, two replicas are connecting the same sources. A pod deployed with no sources configured never takes the lease and reads 0 permanently: configure its sources or leave the service out of the deployment. Otherwise check the sparkplug-ingest logs for why no replica acquired the lease."
+
+  # Two replicas both report leading: it must not read as healthy.
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_lwm2mingest_is_leader{namespace="dci-devicechain", pod="pod-a", job="devicechain/lwm2m-ingest"}'
+        values: '1x40'
+      - series: 'devicechain_lwm2mingest_is_leader{namespace="dci-devicechain", pod="pod-b", job="devicechain/lwm2m-ingest"}'
+        values: '1x40'
+      - series: 'devicechain_sparkplugingest_is_leader{namespace="dci-devicechain", pod="pod-a", job="devicechain/sparkplug-ingest"}'
+        values: '1x40'
+      - series: 'devicechain_sparkplugingest_is_leader{namespace="dci-devicechain", pod="pod-b", job="devicechain/sparkplug-ingest"}'
+        values: '1x40'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: Lwm2mIngestLeaderCountNotOne
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              devicechain_instance: devicechain
+            exp_annotations:
+              summary: "LwM2M ingest is not served by exactly one replica"
+              description: "For at least 2 minutes, 2 lwm2m-ingest replicas have reported holding the leadership lease; it should be exactly 1. At 0, nobody is reading the CoAP/DTLS transport and every LwM2M device is silently unreachable, although every pod looks healthy. Above 1, two replicas are serving at once. Check the lwm2m-ingest logs for why no replica acquired the lease (typically the platform's message broker is unreachable)."
+      - eval_time: 10m
+        alertname: SparkplugIngestLeaderCountNotOne
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              devicechain_instance: devicechain
+            exp_annotations:
+              summary: "Sparkplug ingest is not served by exactly one replica"
+              description: "For at least 2 minutes, 2 sparkplug-ingest replicas have reported holding the leadership lease; it should be exactly 1. At 0, no Sparkplug source is being read and every device behind it is silently unreachable, although every pod looks healthy. Above 1, two replicas are connecting the same sources. A pod deployed with no sources configured never takes the lease and reads 0 permanently: configure its sources or leave the service out of the deployment. Otherwise check the sparkplug-ingest logs for why no replica acquired the lease."
+
+  # A handover: the lease is held by nobody for two samples, then by the new leader. The pending
+  # period outlasts the gap, so nothing fires.
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_lwm2mingest_is_leader{namespace="dci-devicechain", pod="pod-a", job="devicechain/lwm2m-ingest"}'
+        values: '0 0 1x40'
+      - series: 'devicechain_lwm2mingest_is_leader{namespace="dci-devicechain", pod="pod-b", job="devicechain/lwm2m-ingest"}'
+        values: '0x42'
+      - series: 'devicechain_sparkplugingest_is_leader{namespace="dci-devicechain", pod="pod-a", job="devicechain/sparkplug-ingest"}'
+        values: '0 0 1x40'
+      - series: 'devicechain_sparkplugingest_is_leader{namespace="dci-devicechain", pod="pod-b", job="devicechain/sparkplug-ingest"}'
+        values: '0x42'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: Lwm2mIngestLeaderCountNotOne
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: SparkplugIngestLeaderCountNotOne
+        exp_alerts: []
+
+  # LwM2M leader wedged in its term build: leader=1, serving=0 and staying there.
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_lwm2mingest_is_leader{namespace="dci-devicechain", pod="pod-a", job="devicechain/lwm2m-ingest"}'
+        values: '1x40'
+      - series: 'devicechain_lwm2mingest_is_serving{namespace="dci-devicechain", pod="pod-a", job="devicechain/lwm2m-ingest"}'
+        values: '0x40'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: Lwm2mIngestLeaderNotServing
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: Lwm2mIngestLeaderNotServing
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              devicechain_instance: devicechain
+              job: devicechain/lwm2m-ingest
+              namespace: dci-devicechain
+              pod: pod-a
+            exp_annotations:
+              summary: "The LwM2M ingest leader holds the lease but is not serving"
+              description: "For at least 5 minutes, pod-a has held the LwM2M leadership lease while its CoAP/DTLS read loop is not running. It is stuck building its term (typically reading the asserted-active devices from device-state), and it keeps the lease, so no standby can take over. No LwM2M device is being served. Check this pod's log around 'Acquired LwM2M leadership' and restart it so a standby can acquire."
+
+  # A normal takeover: serving follows acquisition by two minutes. Quiet.
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_lwm2mingest_is_leader{namespace="dci-devicechain", pod="pod-a", job="devicechain/lwm2m-ingest"}'
+        values: '1x40'
+      - series: 'devicechain_lwm2mingest_is_serving{namespace="dci-devicechain", pod="pod-a", job="devicechain/lwm2m-ingest"}'
+        values: '0 0 1x40'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: Lwm2mIngestLeaderNotServing
+        exp_alerts: []
+
+  # SparkplugIngestDroppingData fires on a sustained climb.
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_sparkplugingest_ingest_failures_total{namespace="dci-devicechain", pod="pod-a", job="devicechain/sparkplug-ingest"}'
+        values: '0+1x40'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: SparkplugIngestDroppingData
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              devicechain_instance: devicechain
+            exp_annotations:
+              summary: "Sparkplug ingest is abandoning accepted messages"
+              description: "For at least 10 minutes, sparkplug-ingest has been abandoning accepted messages: their samples or presence transitions were dropped after the retry budget was spent (device-management or the message broker unreachable), at once under backpressure, or on shutdown. A Sparkplug Host gets no broker redelivery, so each one is lost. Check device-management and the platform's message broker, and the sparkplug-ingest log for 'Dropping Sparkplug samples'."
+
+  # ...and is quiet on a stray abandonment that clears inside the window.
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_sparkplugingest_ingest_failures_total{namespace="dci-devicechain", pod="pod-a", job="devicechain/sparkplug-ingest"}'
+        values: '0 0 1x40'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: SparkplugIngestDroppingData
+        exp_alerts: []
+
+  # ...and fires on a SLOW climb of one increment every five minutes: the increase over the
+  # window is about two, above zero but far below any larger threshold.
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_sparkplugingest_ingest_failures_total{namespace="dci-devicechain", pod="pod-a", job="devicechain/sparkplug-ingest"}'
+        values: '0x4 1x5 2x5 3x5 4x5 5x5 6x5 7x5'
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: SparkplugIngestDroppingData
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              devicechain_instance: devicechain
+            exp_annotations:
+              summary: "Sparkplug ingest is abandoning accepted messages"
+              description: "For at least 10 minutes, sparkplug-ingest has been abandoning accepted messages: their samples or presence transitions were dropped after the retry budget was spent (device-management or the message broker unreachable), at once under backpressure, or on shutdown. A Sparkplug Host gets no broker redelivery, so each one is lost. Check device-management and the platform's message broker, and the sparkplug-ingest log for 'Dropping Sparkplug samples'."
+
+  # SparkplugIngestBrokerUnreachable fires on a sustained climb.
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_sparkplugingest_connect_failures_total{namespace="dci-devicechain", pod="pod-a", job="devicechain/sparkplug-ingest"}'
+        values: '0+1x40'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: SparkplugIngestBrokerUnreachable
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              devicechain_instance: devicechain
+            exp_annotations:
+              summary: "Sparkplug ingest cannot connect to a configured broker"
+              description: "For at least 10 minutes, sparkplug-ingest has been failing to connect to a configured Sparkplug broker. Readiness is deliberately not gated on broker reachability, so the pod looks healthy while that source ingests nothing. A bad host, a rejected credential or a broker outage all raise this; the sparkplug-ingest log names the source and the reason."
+
+  # ...and is quiet on a single failed connect that clears inside the window.
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_sparkplugingest_connect_failures_total{namespace="dci-devicechain", pod="pod-a", job="devicechain/sparkplug-ingest"}'
+        values: '0 0 1x40'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: SparkplugIngestBrokerUnreachable
+        exp_alerts: []
+
+  # ...and fires on a SLOW climb of one increment every five minutes: the increase over the
+  # window is about two, above zero but far below any larger threshold.
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_sparkplugingest_connect_failures_total{namespace="dci-devicechain", pod="pod-a", job="devicechain/sparkplug-ingest"}'
+        values: '0x4 1x5 2x5 3x5 4x5 5x5 6x5 7x5'
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: SparkplugIngestBrokerUnreachable
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              devicechain_instance: devicechain
+            exp_annotations:
+              summary: "Sparkplug ingest cannot connect to a configured broker"
+              description: "For at least 10 minutes, sparkplug-ingest has been failing to connect to a configured Sparkplug broker. Readiness is deliberately not gated on broker reachability, so the pod looks healthy while that source ingests nothing. A bad host, a rejected credential or a broker outage all raise this; the sparkplug-ingest log names the source and the reason."
+
+  # Lwm2mIngestDroppingNotifications fires on a sustained climb.
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_lwm2mingest_notify_ingest_dropped_total{namespace="dci-devicechain", pod="pod-a", job="devicechain/lwm2m-ingest"}'
+        values: '0+1x40'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: Lwm2mIngestDroppingNotifications
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              devicechain_instance: devicechain
+            exp_annotations:
+              summary: "LwM2M ingest is dropping Notify samples"
+              description: "For at least 10 minutes, lwm2m-ingest has been dropping the samples of Notify messages because ingest failed or refused them, backpressure included. There is no retry in the Notify path (the next Notify supersedes), so a device that reports rarely loses its reading. Check the platform's message broker and the inbound-events stream's backlog, and the lwm2m-ingest log."
+
+  # ...and is quiet on a single dropped Notify that clears inside the window.
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_lwm2mingest_notify_ingest_dropped_total{namespace="dci-devicechain", pod="pod-a", job="devicechain/lwm2m-ingest"}'
+        values: '0 0 1x40'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: Lwm2mIngestDroppingNotifications
+        exp_alerts: []
+
+  # ...and fires on a SLOW climb of one increment every five minutes: the increase over the
+  # window is about two, above zero but far below any larger threshold.
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_lwm2mingest_notify_ingest_dropped_total{namespace="dci-devicechain", pod="pod-a", job="devicechain/lwm2m-ingest"}'
+        values: '0x4 1x5 2x5 3x5 4x5 5x5 6x5 7x5'
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: Lwm2mIngestDroppingNotifications
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              devicechain_instance: devicechain
+            exp_annotations:
+              summary: "LwM2M ingest is dropping Notify samples"
+              description: "For at least 10 minutes, lwm2m-ingest has been dropping the samples of Notify messages because ingest failed or refused them, backpressure included. There is no retry in the Notify path (the next Notify supersedes), so a device that reports rarely loses its reading. Check the platform's message broker and the inbound-events stream's backlog, and the lwm2m-ingest log."
+
+  # SparkplugIngestSubscriptionRefused fires on a single refusal (any increase is the signal).
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_sparkplugingest_subscribe_failures_total{namespace="dci-devicechain", pod="pod-a", job="devicechain/sparkplug-ingest"}'
+        values: '0 0 1 1 1 1 1 1 1 1 1 1 1 1'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: SparkplugIngestSubscriptionRefused
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              devicechain_instance: devicechain
+            exp_annotations:
+              summary: "A Sparkplug source's broker refused a group subscription"
+              description: "For at least 5 minutes, a Sparkplug source has been abandoned and retried because its broker accepted the connection but refused (or never acknowledged) a group subscription, most likely because the source's credential may not read that group. While any group is refused the source ingests none of its groups and never announces ONLINE. Check the broker's access rules for the source's credential against the groups configured for it."
+
+  # ...and is quiet on the same refusal once its 15m window has passed.
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_sparkplugingest_subscribe_failures_total{namespace="dci-devicechain", pod="pod-a", job="devicechain/sparkplug-ingest"}'
+        values: '0 0 1x40'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: SparkplugIngestSubscriptionRefused
+        exp_alerts: []

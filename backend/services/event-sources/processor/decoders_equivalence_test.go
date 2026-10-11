@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/devicechain-io/dc-event-sources/model"
+	"github.com/devicechain-io/dc-microservice/eventtime"
 	"github.com/stretchr/testify/require"
 )
 
@@ -58,9 +59,19 @@ func referenceDecode(jd *JsonDecoder, payload []byte, receivedAt time.Time) (*mo
 var equivReceivedAt = time.Date(2026, 10, 1, 12, 0, 1, 0, time.UTC)
 
 // requireSameDecode runs payload through the reference and the production Decode and requires
-// identical events, identical payloads and identical errors (text and ErrInvalidEventTime
-// classification). It returns whether the single-pass decode produced the result itself.
-func requireSameDecode(t *testing.T, payload []byte) (fast bool) {
+// identical events, identical payloads and identical errors (text and classification). It returns
+// whether the single-pass decode produced the result itself; requireSameDecodePaths also says
+// whether the fast decode did.
+func requireSameDecode(t *testing.T, payload []byte) (once bool) {
+	t.Helper()
+	once, _ = requireSameDecodePaths(t, payload)
+	return once
+}
+
+// requireSameDecodePaths is requireSameDecode, and it also holds EACH accelerated path to the
+// reference on its own (decodeFast, then decodeOnce), not only the one Decode happened to take:
+// once the fast decode answers an input, Decode no longer exercises the single-pass decode on it.
+func requireSameDecodePaths(t *testing.T, payload []byte) (once, fast bool) {
 	t.Helper()
 	jd := NewJsonDecoder(nil)
 	wantEvent, wantBuilt, wantErr := referenceDecode(jd, payload, equivReceivedAt)
@@ -68,7 +79,11 @@ func requireSameDecode(t *testing.T, payload []byte) (fast bool) {
 	if wantErr != nil {
 		require.Error(t, gotErr)
 		require.Equal(t, wantErr.Error(), gotErr.Error())
-		require.Equal(t, errors.Is(wantErr, ErrInvalidEventTime), errors.Is(gotErr, ErrInvalidEventTime))
+		// The classes the caller counts by: the invalid-time and too-many-readings counters,
+		// and the too-old subclass of the first.
+		for _, class := range []error{ErrInvalidEventTime, model.ErrTooManyReadings, eventtime.ErrTooOld} {
+			require.Equal(t, errors.Is(wantErr, class), errors.Is(gotErr, class), "class %v", class)
+		}
 		require.Nil(t, gotEvent)
 		require.Nil(t, gotBuilt)
 	} else {
@@ -76,11 +91,26 @@ func requireSameDecode(t *testing.T, payload []byte) (fast bool) {
 		require.Equal(t, wantEvent, gotEvent)
 		require.Equal(t, wantBuilt, gotBuilt)
 	}
-	_, _, fast = jd.decodeOnce(payload, equivReceivedAt)
-	if fast {
-		require.NoError(t, wantErr, "the single-pass decode accepted an input the reference rejects")
+	for _, path := range []struct {
+		name  string
+		fn    func([]byte, time.Time) (*model.UnresolvedEvent, interface{}, bool)
+		taken *bool
+	}{
+		{"fast", jd.decodeFast, &fast},
+		{"single-pass", jd.decodeOnce, &once},
+	} {
+		event, built, ok := path.fn(payload, equivReceivedAt)
+		*path.taken = ok
+		if !ok {
+			require.Nil(t, event, path.name)
+			require.Nil(t, built, path.name)
+			continue
+		}
+		require.NoError(t, wantErr, "the %s decode accepted an input the reference rejects", path.name)
+		require.Equal(t, wantEvent, event, path.name)
+		require.Equal(t, wantBuilt, built, path.name)
 	}
-	return fast
+	return once, fast
 }
 
 func envelope(eventType, payload string) string {

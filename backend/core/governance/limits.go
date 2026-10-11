@@ -32,8 +32,10 @@ import (
 
 // Limits is a tenant's effective ceiling for one governance dimension.
 type Limits struct {
-	MessagesPerSecond float64
-	Burst             int
+	// RatePerSecond is the sustained ceiling, per second, in the dimension's own unit:
+	// readings for ingest, calls for outbound, requests for AI inference.
+	RatePerSecond float64
+	Burst         int
 }
 
 // Fetcher retrieves a tenant's effective limits from the authority
@@ -96,7 +98,7 @@ const (
 // default is floored to a real, metered ceiling here rather than passed through.
 // Generous enough not to shed a normally busy tenant, low enough that it is still a
 // ceiling; a service wanting a different number configures one.
-var defaultLimits = Limits{MessagesPerSecond: 100, Burst: 200}
+var defaultLimits = Limits{RatePerSecond: 100, Burst: 200}
 
 // floorLimits replaces a non-positive (or non-finite) rate or burst with the
 // corresponding defaultLimits field, per field.
@@ -108,9 +110,9 @@ var defaultLimits = Limits{MessagesPerSecond: 100, Burst: 200}
 // every tenant on the instance the moment user-management is unreachable, which is
 // the exact inversion of fail-open.
 func floorLimits(l Limits) Limits {
-	if !(l.MessagesPerSecond > 0) || math.IsInf(l.MessagesPerSecond, 0) {
+	if !(l.RatePerSecond > 0) || math.IsInf(l.RatePerSecond, 0) {
 		// The negated comparison also rejects NaN, which no comparison would.
-		l.MessagesPerSecond = defaultLimits.MessagesPerSecond
+		l.RatePerSecond = defaultLimits.RatePerSecond
 	}
 	if l.Burst <= 0 {
 		l.Burst = defaultLimits.Burst
@@ -154,5 +156,5 @@ func NewTenantLimitResolver(fetch Fetcher, def Limits, dimension string) *Tenant
 // otherwise why the platform default is being served, which the limiter counts.
 func (r *TenantLimitResolver) Ceiling(tenant string) core.TenantCeiling {
 	l, src := r.resolveOK(tenant)
-	return core.TenantCeiling{RatePerSecond: l.MessagesPerSecond, Burst: l.Burst, Source: src}
+	return core.TenantCeiling{RatePerSecond: l.RatePerSecond, Burst: l.Burst, Source: src}
 }

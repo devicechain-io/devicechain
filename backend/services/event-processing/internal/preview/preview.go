@@ -154,6 +154,9 @@ func Run(ctx context.Context, opener ReplayOpener, suffix string, reg *runtime.R
 	read := 0
 	for {
 		if err := ctx.Err(); err != nil {
+			if errors.Is(err, context.DeadlineExceeded) {
+				break // out of time: handled after the loop, as a degraded result
+			}
 			return Result{}, err
 		}
 		msg, err := reader.Read(ctx)
@@ -161,6 +164,9 @@ func Run(ctx context.Context, opener ReplayOpener, suffix string, reg *runtime.R
 			break
 		}
 		if err != nil {
+			if errors.Is(err, context.DeadlineExceeded) {
+				break
+			}
 			return Result{}, err
 		}
 		// Total-read bound (H1): the wildcard replay delivers every tenant's events over the window's
@@ -260,7 +266,14 @@ func Run(ctx context.Context, opener ReplayOpener, suffix string, reg *runtime.R
 	// A cancellation mid-replay surfaces as io.EOF from the reader; re-check so a cancelled preview
 	// returns the error rather than a truncated result dressed up as complete (L1).
 	if err := ctx.Err(); err != nil {
-		return Result{}, err
+		if !errors.Is(err, context.DeadlineExceeded) {
+			return Result{}, err
+		}
+		// 🔴 A TIME BUDGET THAT RAN OUT IS A TRUNCATION, NOT A FAILURE: the firings found so
+		// far are real, the rest of the window was not replayed, and the author is told so
+		// the same way as for the read and scan caps — a cancelled preview (the caller went
+		// away) still returns the error.
+		addDegraded(&res.Degraded, "the preview ran out of time before the whole window was replayed; the result is truncated")
 	}
 
 	// Advance the watermark to the window end to flush timer-driven edges (absence dead-man, a

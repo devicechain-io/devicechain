@@ -40,6 +40,10 @@ func (api *Api) buildProfileSnapshot(ctx context.Context, profileId uint) (datat
 	if err != nil {
 		return nil, err
 	}
+	configuration, err := api.configurationDeclarationForProfile(ctx, profileId)
+	if err != nil {
+		return nil, err
+	}
 	metrics, err := api.MetricDefinitionsByDeviceProfile(ctx, profileId)
 	if err != nil {
 		return nil, err
@@ -61,7 +65,8 @@ func (api *Api) buildProfileSnapshot(ctx context.Context, profileId uint) (datat
 	for _, dr := range rules {
 		dr.DeviceProfile = nil
 	}
-	raw, err := json.Marshal(ProfileSnapshot{Metrics: metrics, Commands: commands, Rules: rules, Location: location})
+	raw, err := json.Marshal(ProfileSnapshot{Metrics: metrics, Commands: commands, Rules: rules, Location: location,
+		Configuration: configuration})
 	if err != nil {
 		return nil, err
 	}
@@ -512,16 +517,21 @@ func (api *Api) emitActiveVersionRules(ctx context.Context, token string, profil
 	})
 }
 
-// DeviceProfileVersions lists a profile's published versions, newest first. Returns
+// DeviceProfileVersions lists a profile's published versions, newest first, at most
+// rdb.MaxPageSize per call (page narrows or pages further). Returns
 // gorm.ErrRecordNotFound if the profile does not exist.
-func (api *Api) DeviceProfileVersions(ctx context.Context, token string) ([]*DeviceProfileVersion, error) {
+func (api *Api) DeviceProfileVersions(ctx context.Context, token string, page *VersionListArgs) ([]*DeviceProfileVersion, error) {
 	profile, err := api.deviceProfileByToken(ctx, token)
 	if err != nil {
 		return nil, err
 	}
 	versions := make([]*DeviceProfileVersion, 0)
+	limit, offset, err := page.window()
+	if err != nil {
+		return nil, err
+	}
 	result := api.RDB.DB(ctx).Where("device_profile_id = ?", profile.ID).
-		Order("version DESC").Find(&versions)
+		Order("version DESC").Limit(limit).Offset(offset).Find(&versions)
 	if result.Error != nil {
 		return nil, result.Error
 	}

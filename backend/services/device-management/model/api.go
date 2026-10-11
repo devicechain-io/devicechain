@@ -8,9 +8,11 @@ import (
 	"slices"
 	"time"
 
+	"github.com/devicechain-io/dc-microservice/credential"
 	"github.com/devicechain-io/dc-microservice/entity"
 	"github.com/devicechain-io/dc-microservice/governance"
 	"github.com/devicechain-io/dc-microservice/rdb"
+	"github.com/prometheus/client_golang/prometheus"
 )
 
 // GeoFenceCapsResolver reads a tenant's three RESOLVED geofence caps — the per-tenant
@@ -68,6 +70,10 @@ type GeoFenceCapRefusalCounter interface {
 type Api struct {
 	RDB *rdb.RdbManager
 
+	// ceilings exports the observed size of the ceilinged collections (ceilings.go). Nil
+	// disables it.
+	ceilings *ceilingMetrics
+
 	// AlarmPublisher emits alarm state-change events (ADR-041). It is injected at
 	// wiring time (the concrete publisher owns a NATS writer, so it cannot be built
 	// until the messaging layer exists) and may be nil — in tests, or before wiring —
@@ -88,6 +94,17 @@ type Api struct {
 	// changed credential keeps authenticating events from memory until it expires.
 	// Injected at wiring time (it holds the cache layer); nil in tests disables eviction.
 	CacheEvictor CacheEvictor
+
+	// DeviceSecretKey digests every device credential secret a create or update carries,
+	// and verifies a presented one against its stored digest on the per-event path. It is
+	// derived from the instance root key at wiring time. NIL FAILS CLOSED: a secret
+	// cannot be stored (the write is refused) and no stored digest can be checked
+	// (ErrCredentialMisconfigured); nothing falls back to storing or comparing plaintext.
+	DeviceSecretKey *credential.DeviceSecretKey
+
+	// MisconfiguredSecrets counts checks refused with ErrCredentialMisconfigured, by path
+	// (CredentialPathConnect, CredentialPathEvent). Nil counts nothing (tests).
+	MisconfiguredSecrets *prometheus.CounterVec
 
 	// DetectionRuleValidator compiles a profile's draft detection rules against
 	// event-processing at publish (ADR-044 sync gate / ADR-051 slice 4b); a rule that
@@ -185,6 +202,11 @@ type CacheEvictor interface {
 	// a device updated, replaced or deleted. tenant is the changed row's, never the
 	// context's.
 	EvictDeviceCredentials(ctx context.Context, tenant string, deviceIds []uint)
+	// EvictDeviceByToken drops the cached device-by-token entry for token, on every
+	// replica. It is called post-commit by every write that changes the device row an
+	// event resolves to (an update, a re-type), under the tenant of the context. A
+	// delete reaches it through EvictEntityDelete instead.
+	EvictDeviceByToken(ctx context.Context, token string)
 }
 
 // Create a new API instance.
@@ -292,6 +314,14 @@ func (api *Api) evictDeviceCredentials(ctx context.Context, tenant string, devic
 	}
 	if len(ids) > 0 {
 		api.CacheEvictor.EvictDeviceCredentials(ctx, tenant, ids)
+	}
+}
+
+// evictDeviceByToken drops the cached device-by-token entry of token when an evictor is
+// wired. No-op otherwise. Called post-commit from every write that changes the device row.
+func (api *Api) evictDeviceByToken(ctx context.Context, token string) {
+	if api.CacheEvictor != nil && token != "" {
+		api.CacheEvictor.EvictDeviceByToken(ctx, token)
 	}
 }
 

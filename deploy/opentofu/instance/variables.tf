@@ -765,7 +765,7 @@ variable "timescale_storage" {
     event costs about 1.05 KB on the primary, and pg_wal about 1.1 GB more, held at
     max_wal_size only while WAL archiving keeps up. 32Gi holds about 27 million events
     with 10% kept free — about seven hours of one tenant at its full default ceiling of
-    1000 messages/s (backend/cli/bootstrap/compact_test.go holds it to six). 8Gi, the
+    1000 readings/s (backend/cli/bootstrap/compact_test.go holds it to six). 8Gi, the
     previous default, filled at about six million. event-management's
     lifecycle.retentionDays bounds the STORED DATA; the volume only decides how long
     filling takes.

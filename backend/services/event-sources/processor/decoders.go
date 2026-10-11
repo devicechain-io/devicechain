@@ -477,7 +477,14 @@ type rawJsonEvent struct {
 // cannot prove equivalent, and for EVERY failure, and Decode then runs the reference
 // path on the same bytes, so the error a device is sent is always the reference one.
 // Failures are the cold path; the hot path is a well-formed event.
+//
+// Ahead of both runs decodeFast, a hand-written scanner for the one shape devices
+// overwhelmingly send (a Measurement of flat string readings), under the same contract:
+// it answers only what it can prove equivalent and declines everything else to the next path.
 func (jd *JsonDecoder) Decode(payload []byte, receivedAt time.Time) (*model.UnresolvedEvent, interface{}, error) {
+	if event, built, ok := jd.decodeFast(payload, receivedAt); ok {
+		return event, built, nil
+	}
 	if event, built, ok := jd.decodeOnce(payload, receivedAt); ok {
 		return event, built, nil
 	}

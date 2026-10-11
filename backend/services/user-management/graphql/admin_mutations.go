@@ -28,6 +28,12 @@ func (r *AdminResolver) CreateIdentity(ctx context.Context, args struct {
 	if err := auth.Authorize(ctx, auth.UserWrite); err != nil {
 		return nil, err
 	}
+	if err := checkPassword(args.Request.Password); err != nil {
+		return nil, err
+	}
+	if err := checkList("system roles", args.Request.SystemRoles); err != nil {
+		return nil, err
+	}
 	id, err := r.getAdminService(ctx).CreateIdentity(ctx, admin.CreateIdentityInput{
 		Email:       args.Request.Email,
 		Password:    args.Request.Password,
@@ -58,6 +64,9 @@ func (r *AdminResolver) SetSystemRoles(ctx context.Context, args struct {
 	RoleTokens []string
 }) (*AdminIdentityResolver, error) {
 	return r.identityMutation(ctx, func(s *admin.Service) (*identityResult, error) {
+		if err := checkList("role tokens", args.RoleTokens); err != nil {
+			return nil, err
+		}
 		return wrap(s.SetSystemRoles(ctx, args.Email, args.RoleTokens))
 	})
 }
@@ -68,6 +77,9 @@ func (r *AdminResolver) SetPassword(ctx context.Context, args struct {
 	Password string
 }) (*AdminIdentityResolver, error) {
 	return r.identityMutation(ctx, func(s *admin.Service) (*identityResult, error) {
+		if err := checkPassword(args.Password); err != nil {
+			return nil, err
+		}
 		return wrap(s.SetPassword(ctx, args.Email, args.Password))
 	})
 }
@@ -90,6 +102,9 @@ func (r *AdminResolver) AddMembership(ctx context.Context, args struct {
 	RoleTokens []string
 }) (*AdminIdentityResolver, error) {
 	return r.identityMutation(ctx, func(s *admin.Service) (*identityResult, error) {
+		if err := checkList("role tokens", args.RoleTokens); err != nil {
+			return nil, err
+		}
 		return wrap(s.AddMembership(ctx, args.Email, args.Tenant, args.RoleTokens))
 	})
 }
@@ -101,6 +116,9 @@ func (r *AdminResolver) SetMembershipRoles(ctx context.Context, args struct {
 	RoleTokens []string
 }) (*AdminIdentityResolver, error) {
 	return r.identityMutation(ctx, func(s *admin.Service) (*identityResult, error) {
+		if err := checkList("role tokens", args.RoleTokens); err != nil {
+			return nil, err
+		}
 		return wrap(s.SetMembershipRoles(ctx, args.Email, args.Tenant, args.RoleTokens))
 	})
 }

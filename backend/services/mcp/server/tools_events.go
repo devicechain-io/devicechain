@@ -80,10 +80,10 @@ func (t *Tools) QueryMeasurements(ctx context.Context, req *mcp.CallToolRequest,
 
 type AggregateMeasurementsInput struct {
 	DeviceToken     string `json:"deviceToken" jsonschema:"the device whose measurements to aggregate"`
-	Name            string `json:"name,omitempty" jsonschema:"optional metric name to aggregate (omit for all)"`
-	StartTime       string `json:"startTime,omitempty" jsonschema:"inclusive RFC3339 start time — ALWAYS provide a window: an unbounded aggregate returns every bucket over all history"`
-	EndTime         string `json:"endTime,omitempty" jsonschema:"exclusive RFC3339 end time — provide together with startTime to bound the result"`
-	IntervalSeconds int    `json:"intervalSeconds" jsonschema:"time-bucket width in seconds (required, e.g. 3600 for hourly). Buckets returned = window / interval, so keep the window and interval proportionate"`
+	Name            string `json:"name,omitempty" jsonschema:"optional metric name to aggregate (omit for all). Omitting it returns one row per bucket per metric, so a wide window over many metrics is refused sooner"`
+	StartTime       string `json:"startTime" jsonschema:"inclusive RFC3339 start time (required)"`
+	EndTime         string `json:"endTime,omitempty" jsonschema:"RFC3339 end time; defaults to now"`
+	IntervalSeconds int    `json:"intervalSeconds" jsonschema:"time-bucket width in seconds (required, e.g. 3600 for hourly). A request is capped at 10,000 buckets (window / interval) and at 50,000 rows (buckets x distinct metric names that match the request's filters; 1 name when name is given), so keep the window and interval proportionate"`
 }
 
 type MeasurementBucket struct {
@@ -118,6 +118,9 @@ func (t *Tools) AggregateMeasurements(ctx context.Context, req *mcp.CallToolRequ
 	}
 	if in.IntervalSeconds <= 0 {
 		return nil, AggregateMeasurementsOutput{}, fmt.Errorf("intervalSeconds must be positive")
+	}
+	if in.StartTime == "" {
+		return nil, AggregateMeasurementsOutput{}, fmt.Errorf("startTime is required")
 	}
 	criteria := map[string]any{
 		"deviceToken":     in.DeviceToken,

@@ -341,7 +341,7 @@ func TestConnectorVersioning(t *testing.T) {
 	assert.Equal(t, int32(2), v2.Version)
 
 	// Versions list newest-first.
-	versions, err := api.ConnectorVersions(ctx, "c")
+	versions, err := api.ConnectorVersions(ctx, "c", nil, nil)
 	require.NoError(t, err)
 	require.Len(t, versions, 2)
 	assert.Equal(t, int32(2), versions[0].Version)
@@ -354,7 +354,7 @@ func TestConnectorVersioning(t *testing.T) {
 	assert.JSONEq(t, mqttConfig, string(rolled.Config))
 
 	// Rollback preserves history (nothing deleted).
-	versions, err = api.ConnectorVersions(ctx, "c")
+	versions, err = api.ConnectorVersions(ctx, "c", nil, nil)
 	require.NoError(t, err)
 	assert.Len(t, versions, 2)
 }
@@ -485,7 +485,7 @@ func TestTenantIsolation(t *testing.T) {
 
 	// Versions + rollback are keyed off a tenant-scoped parent lookup, so the other
 	// tenant sees the connector as nonexistent.
-	_, err = api.ConnectorVersions(globex, "shared")
+	_, err = api.ConnectorVersions(globex, "shared", nil, nil)
 	require.ErrorIs(t, err, gorm.ErrRecordNotFound)
 	_, err = api.RollbackConnector(globex, "shared", 1)
 	require.ErrorIs(t, err, gorm.ErrRecordNotFound)
@@ -525,4 +525,36 @@ func TestGCPPubSubIsRefusedAtEveryWrite(t *testing.T) {
 	}).Error)
 	_, err = api.PublishConnector(ctx, "legacy", nil, nil, "alice", nil)
 	requireUnsupported(err)
+}
+
+// The version list is bounded: a connector with more versions than rdb.MaxPageSize returns the
+// newest MaxPageSize, and the optional limit/offset page through the rest.
+func TestConnectorVersionsAreBounded(t *testing.T) {
+	api := newTestApi(t)
+	ctx := core.WithTenant(context.Background(), "acme")
+	conn, err := api.CreateConnector(ctx, &ConnectorCreateRequest{
+		Token: "c", Type: string(ConnectorTypeMQTT), Config: mqttConfig,
+	})
+	require.NoError(t, err)
+	rows := make([]ConnectorVersion, rdb.MaxPageSize+5)
+	for i := range rows {
+		rows[i] = ConnectorVersion{ConnectorID: conn.ID, Version: int32(i + 1), Type: conn.Type, Config: conn.Config, PublishedBy: "a"}
+	}
+	require.NoError(t, api.RDB.DB(ctx).CreateInBatches(rows, 100).Error)
+
+	all, err := api.ConnectorVersions(ctx, "c", nil, nil)
+	require.NoError(t, err)
+	assert.Len(t, all, rdb.MaxPageSize, "the unpaged list is clamped")
+	assert.Equal(t, int32(rdb.MaxPageSize+5), all[0].Version, "newest first, so the newest are kept")
+
+	huge := int32(1_000_000)
+	all, err = api.ConnectorVersions(ctx, "c", &huge, nil)
+	require.NoError(t, err)
+	assert.Len(t, all, rdb.MaxPageSize, "an oversized limit is clamped")
+
+	two, off := int32(2), int32(rdb.MaxPageSize)
+	tail, err := api.ConnectorVersions(ctx, "c", &two, &off)
+	require.NoError(t, err)
+	require.Len(t, tail, 2, "offset pages past the clamp to the oldest")
+	assert.Equal(t, int32(5), tail[0].Version)
 }

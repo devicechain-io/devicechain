@@ -116,6 +116,123 @@ type NatsConfiguration struct {
 	// (ADR-025): the shared service credential every internal service presents, and
 	// (device-management only) the callout issuer seed.
 	Auth NatsAuthConfiguration
+	// Fetch shapes how every plain durable reader pulls from the broker. It is a FIXED-plane
+	// setting: it is read once when a reader is built and touches no durable consumer
+	// config, so changing it is a restart, never a consumer recreate.
+	Fetch NatsFetchConfiguration
+}
+
+// Bounds and defaults for NatsFetchConfiguration.
+const (
+	// DefaultFetchBatch is how many messages one pull asks for when Batch is unset.
+	//
+	// 128 is the size the fetch-ahead measurements were taken at (a GKE A/B with
+	// the feature on at 128 against off at 64): fetch time scales with the batch, so a larger
+	// pull is no faster to deliver, and it stays well inside MaxFetchBatch and the window a
+	// lost pull leaves behind.
+	DefaultFetchBatch = 128
+	// MaxFetchBatch is the widest pull the platform allows. It is the same number as the
+	// widest range the event-processing gap fill reads one request per sequence
+	// (messaging's rangeDirectMax; a compile-time assertion there keeps the two equal), so
+	// the range a lost pull leaves behind is always one the cheap path reads.
+	MaxFetchBatch = 256
+	// DefaultFetchAheadHoldBudgetMillis is how long a reader's recent batches may take to
+	// drain before it stops fetching ahead, when AheadHoldBudgetMillis is unset.
+	DefaultFetchAheadHoldBudgetMillis = 1000
+	// fetchAheadBudgetDivisor sizes the hold budget against the acknowledgement window: a
+	// batch fetched ahead waits roughly one budget before it is handed out, and that wait
+	// is spent from the same window the handler needs.
+	fetchAheadBudgetDivisor = 10
+)
+
+// NatsFetchConfiguration is the pull shape of the plain durable readers. Readers that
+// fetch only as many messages as they have free workers (the capacity readers) ignore it.
+type NatsFetchConfiguration struct {
+	// Batch is how many messages one pull asks for: 1 to MaxFetchBatch, 0 meaning
+	// DefaultFetchBatch. A larger batch amortizes the round trip over more messages, and
+	// is also the most a single dropped connection can lose from one pull (one batch),
+	// which the live gap fill then reads back from the stream.
+	Batch int
+	// Ahead, when true, has a reader ask for its next batch while the caller is still
+	// working through the one in hand, so the round trip overlaps the work instead of
+	// following it. Messages are still handed out in the order they arrive.
+	//
+	// ABSENT MEANS ON (ApplyDefaults); `ahead: false` turns it off. It is a pointer so an
+	// absent key can be told from an explicit false.
+	//
+	// 🔑 IT IS ON FOR DETECTION'S SAKE, NOT FOR THROUGHPUT. On a six-node GKE cluster it left
+	// the ceiling and the per-event CPU of every service where they were, and did nothing
+	// measurable for device-management, event-management or device-state. What it changed was
+	// event-processing's backlog behind the resolved-events stream: the peak fell from
+	// thousands (2,700 to 61,000) to hundreds (58 to 391) at 7,600 to 10,000 events a second
+	// offered, at no cost in CPU, broker load or correctness. A smaller backlog is a detection
+	// engine that evaluates events nearer the time they happened. Do not read it as a way to
+	// resolve more events a second.
+	Ahead *bool
+	// AheadHoldBudgetMillis is the longest a reader's batches may take to hand out and
+	// still be fetched ahead; past it the reader falls back to one pull at a time, so a
+	// slow consumer never holds a prefetched batch against the acknowledgement window.
+	// 0 means DefaultFetchAheadHoldBudgetMillis (capped at a tenth of the window); an
+	// explicit value may be at most a tenth of the window.
+	AheadHoldBudgetMillis int
+}
+
+// AheadEnabled reports whether a reader fetches ahead. A configuration that never went
+// through ApplyDefaults (a manager assembled by hand in a test) has the key absent, and
+// reads as off: the default is applied where configuration is loaded, once.
+func (c NatsFetchConfiguration) AheadEnabled() bool {
+	return c.Ahead != nil && *c.Ahead
+}
+
+// AheadFlag returns a pointer to on, for a Go caller that sets Ahead explicitly.
+func AheadFlag(on bool) *bool { return &on }
+
+// validate checks the parts of the fetch settings that do not depend on the
+// acknowledgement window.
+func (c NatsFetchConfiguration) validate() error {
+	if c.Batch < 0 || c.Batch > MaxFetchBatch {
+		return fmt.Errorf("infrastructure.nats.fetch.batch is %d; it must be between 1 and %d "+
+			"(0 or absent means %d)", c.Batch, MaxFetchBatch, DefaultFetchBatch)
+	}
+	if c.AheadHoldBudgetMillis < 0 {
+		return fmt.Errorf("infrastructure.nats.fetch.aheadHoldBudgetMillis is %d; it cannot be negative "+
+			"(0 or absent means %d)", c.AheadHoldBudgetMillis, DefaultFetchAheadHoldBudgetMillis)
+	}
+	return nil
+}
+
+// ValidateAgainst adds the check that needs the broker's acknowledgement window, which
+// lives in the messaging package: an explicit hold budget may be at most a tenth of it.
+func (c NatsFetchConfiguration) ValidateAgainst(ackWait time.Duration) error {
+	if err := c.validate(); err != nil {
+		return err
+	}
+	if limit := ackWait / fetchAheadBudgetDivisor; c.AheadHoldBudgetMillis > 0 &&
+		time.Duration(c.AheadHoldBudgetMillis)*time.Millisecond > limit {
+		return fmt.Errorf("infrastructure.nats.fetch.aheadHoldBudgetMillis is %d, which is more than a "+
+			"tenth of the %s acknowledgement window (%d ms at most). A batch fetched ahead waits about "+
+			"one budget before it is handed out, and that wait comes out of the window the handler "+
+			"needs. Lower it to %d or less",
+			c.AheadHoldBudgetMillis, ackWait, limit.Milliseconds(), limit.Milliseconds())
+	}
+	return nil
+}
+
+// HoldBudget is the budget in force for a window: the configured value, or the default
+// capped at a tenth of the window.
+func (c NatsFetchConfiguration) HoldBudget(ackWait time.Duration) time.Duration {
+	if c.AheadHoldBudgetMillis > 0 {
+		return time.Duration(c.AheadHoldBudgetMillis) * time.Millisecond
+	}
+	return min(DefaultFetchAheadHoldBudgetMillis*time.Millisecond, ackWait/fetchAheadBudgetDivisor)
+}
+
+// BatchSize is the pull size in force.
+func (c NatsFetchConfiguration) BatchSize() int {
+	if c.Batch <= 0 {
+		return DefaultFetchBatch
+	}
+	return c.Batch
 }
 
 // NatsAuthConfiguration is the broker-authentication material threaded into the
@@ -262,6 +379,52 @@ type AiInferenceConfiguration struct {
 	Hostname string
 	Port     uint32
 }
+
+// The timeout chain on an AI rule draft, defined together because it is only correct
+// as a whole. Outermost first:
+//
+//	RequestEdgeTimeout (60s)       the browser's request: ingress-nginx's default
+//	                               proxy-read-timeout, and the GraphQL execution default
+//	 └ AiDraftBudget (50s)         the whole draft, every attempt included, in
+//	                               event-processing — inside the edge, so the author
+//	                               gets the draft's own answer, not a gateway error
+//	    └ per attempt: min(remaining budget, AiInferenceCallerTimeout)
+//	       └ AiInferenceDefaultCallTimeout (40s)  ai-inference's default deadline on
+//	                               one provider call — inside the budget, so its
+//	                               "timed out" can reach the author
+//
+// The deadline on the PROVIDER belongs to ai-inference, which is the side that knows
+// what ran out; a caller that gives up first replaces that typed answer with its own
+// transport error. So AiInferenceCallerTimeout is derived from the callee's CEILING,
+// not its default: no configured value can make the caller's own bound fire first.
+// The draft budget can — an operator who raises the inference timeout above the
+// budget gets "timed out" from the budget for the slow tail instead of from
+// ai-inference, an honest answer either way, but such values are not reachable from
+// the console's drafting door.
+const (
+	// RequestEdgeTimeout is the one edge every synchronous browser request lives
+	// inside: ingress-nginx's default proxy-read-timeout and the GraphQL execution
+	// default. A synchronous operation that can run longer must budget below it, or
+	// its own answer is replaced at the edge by a gateway error.
+	RequestEdgeTimeout = 60 * time.Second
+	// AiDraftBudget bounds one whole NL rule draft (every infer/repair attempt), with
+	// room under RequestEdgeTimeout to compile and answer.
+	AiDraftBudget = RequestEdgeTimeout - 10*time.Second
+	// AiInferenceDefaultCallTimeout is ai-inference's default deadline on one provider
+	// call. It fits inside AiDraftBudget, so a slow first attempt is reported by
+	// ai-inference as timed out rather than cut short by the budget.
+	AiInferenceDefaultCallTimeout = 40 * time.Second
+	// AiInferenceMaxCallTimeout is the ceiling ai-inference's configured per-call
+	// inference timeout is validated against at startup.
+	AiInferenceMaxCallTimeout = 120 * time.Second
+	// AiInferencePreCallBound bounds the work ai-inference does before its inference
+	// deadline starts, cold: a service-token mint, the tenant-limits read and the
+	// tenant-facts read, each a cross-service call bounded at 10s.
+	AiInferencePreCallBound = 3 * 10 * time.Second
+	// AiInferenceCallerTimeout bounds one whole call TO ai-inference: the inference
+	// ceiling, the pre-call work, and room to carry the answer back.
+	AiInferenceCallerTimeout = AiInferenceMaxCallTimeout + AiInferencePreCallBound + 10*time.Second
+)
 
 // ServiceAuthConfiguration carries the shared secret backing the synchronous
 // cross-service call primitive (ADR-044 amendment). A caller presents Secret to
@@ -857,6 +1020,10 @@ func (c *InstanceConfiguration) ApplyDefaults() {
 	if nats.KvStateMaxBytes <= 0 {
 		nats.KvStateMaxBytes = DefaultKvStateMaxBytes
 	}
+	// Only ABSENCE is defaulted: an operator's explicit `ahead: false` is honoured.
+	if nats.Fetch.Ahead == nil {
+		nats.Fetch.Ahead = AheadFlag(true)
+	}
 	// Default the secret-store selection so an instance document that omits it means
 	// "the zero-infra default" (envelope-in-Postgres, instance KEK), not an invalid
 	// empty selection. RootKey is deliberately NOT defaulted — key material is
@@ -930,6 +1097,9 @@ func (c *InstanceConfiguration) Validate() error {
 		return err
 	}
 	if err := c.Infrastructure.Nats.validateStreamReplicas(); err != nil {
+		return err
+	}
+	if err := c.Infrastructure.Nats.Fetch.validate(); err != nil {
 		return err
 	}
 	if err := c.Infrastructure.Shutdown.validate(); err != nil {

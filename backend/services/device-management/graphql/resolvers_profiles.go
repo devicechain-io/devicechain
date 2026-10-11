@@ -128,6 +128,34 @@ func (r *DeviceProfileResolver) Location() (*DeviceLocationDeclarationResolver, 
 	return &DeviceLocationDeclarationResolver{M: *decl, S: r.S, C: r.C}, nil
 }
 
+// ConfigurationDeclaration is the profile's DRAFT device-visible configuration
+// declaration; empty when nothing is declared.
+func (r *DeviceProfileResolver) ConfigurationDeclaration() ([]*ConfigurationKeyResolver, error) {
+	keys, err := r.M.ConfigurationKeys()
+	if err != nil {
+		return nil, err
+	}
+	result := make([]*ConfigurationKeyResolver, 0, len(keys))
+	for _, k := range keys {
+		result = append(result, &ConfigurationKeyResolver{M: k})
+	}
+	return result, nil
+}
+
+// ConfigurationKeyResolver resolves one declared configuration key.
+type ConfigurationKeyResolver struct {
+	M model.ConfigurationKey
+}
+
+func (r *ConfigurationKeyResolver) Key() string       { return r.M.Key }
+func (r *ConfigurationKeyResolver) ValueType() string { return r.M.ValueType }
+func (r *ConfigurationKeyResolver) Description() *string {
+	if r.M.Description == "" {
+		return nil
+	}
+	return &r.M.Description
+}
+
 // -----------------------------------
 // Location declaration resolver
 // -----------------------------------

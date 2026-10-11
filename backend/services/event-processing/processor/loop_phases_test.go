@@ -4,6 +4,8 @@
 package processor
 
 import (
+	"context"
+	"io"
 	"os"
 	"sort"
 	"strconv"
@@ -179,6 +181,27 @@ func TestAMessageHeldByAGapIsDecodedAfterTheFill(t *testing.T) {
 	equal(t, "apply", phaseSeconds(g.metrics, phaseApply), 3.0)
 }
 
+// tickGatedEOFReader serves its results and then holds the end of the stream back until ticked
+// reports true, so the loop is guaranteed to have been through at least one tick before it ends.
+// The wait is bounded by the read context, which the test's own deadline cancels.
+type tickGatedEOFReader struct {
+	fakeReader
+	ticked func() bool
+}
+
+func (r *tickGatedEOFReader) ReadMessage(ctx context.Context) (messaging.Message, error) {
+	if r.idx >= len(r.results) {
+		for !r.ticked() {
+			select {
+			case <-ctx.Done():
+				return messaging.Message{}, io.EOF
+			case <-time.After(time.Millisecond):
+			}
+		}
+	}
+	return r.fakeReader.ReadMessage(ctx)
+}
+
 // The phases PARTITION the loop's time: whatever it is doing it is in exactly one, so across a
 // run they add up to the run EXACTLY (the first clock read to the last), and a loop that is not
 // saturated is visibly mostly in fetch_wait. The clock is a step clock, so "exactly" means exactly.
@@ -192,8 +215,15 @@ func TestLoopPhasesPartitionTheLoopsTimeExactly(t *testing.T) {
 		acks[i] = &fakeAck{acked: make(chan struct{}, 4)}
 		results[i] = readResult{msg: hot(t, uint64(i+1), acks[i])}
 	}
-	// The reader runs dry and reports EOF, which ends the loop through its end-of-stream exit.
-	rp.ResolvedEventsReader = &fakeReader{results: results, readEOFImmediately: true}
+	// The reader runs dry and reports EOF, which ends the loop through its end-of-stream exit, but
+	// only once a tick has been credited to control. Control is entered only by the ticker, and a
+	// loop that drains 210 messages faster than one tick interval would otherwise reach the
+	// end of the stream before any tick fired (a fast Linux runner does), leaving the phase at zero
+	// through no fault of the stopwatch.
+	rp.ResolvedEventsReader = &tickGatedEOFReader{
+		fakeReader: fakeReader{results: results, readEOFImmediately: true},
+		ticked:     func() bool { return phaseSeconds(g.metrics, phaseControl) > 0 },
+	}
 	rp.cfg.TickInterval = 2 * time.Millisecond
 	rp.cfg.CheckpointEvents = 50
 	clk := newStepClock()

@@ -20,9 +20,10 @@ import { sanitizeSdl, sanitizeText, hasCitation } from './sanitize.mjs';
 import { scan } from './gate.mjs';
 import {
   REPO, SITE, CANONICAL, GenerateError, discover, reconcile, resolve, buildArtifacts,
+  discoverDevice, reconcileDevice, buildDeviceArtifacts,
 } from './generate-schema.mjs';
 import {
-  SCHEMAS, REQUIRED_OUTPUTS, SCHEMA_EXTENSION, REFUSED_SCHEMA_EXTENSIONS,
+  SCHEMAS, REQUIRED_OUTPUTS, SCHEMA_EXTENSION, REFUSED_SCHEMA_EXTENSIONS, DEVICE_SCHEMAS,
 } from './schemas.manifest.mjs';
 
 const clean = (s) => sanitizeText(s);
@@ -366,7 +367,10 @@ test('the index gives every published schema a plane, a token and an endpoint', 
     assert.ok(artifacts.some((a) => `${SITE}/schema/${a.name}` === area.schema), `${area.area}: ${area.schema} not published`);
   }
   // Every published artifact is reachable from the index — no orphan files.
-  const listed = new Set(index.areas.filter((a) => a.schema).map((a) => a.schema));
+  const listed = new Set([
+    ...index.areas.filter((a) => a.schema).map((a) => a.schema),
+    ...index.deviceProtocol.schemas.map((d) => d.schema),
+  ]);
   for (const a of artifacts) {
     if (a.name === 'index.json') continue;
     assert.ok(listed.has(`${SITE}/schema/${a.name}`), `${a.name} is served but absent from the index`);
@@ -410,7 +414,7 @@ test('every published schema opens with a banner routing back to the index', () 
   // Arriving at one file is the common case. Without this the reader has the types
   // and no way to learn the endpoint, the token, or that twelve siblings exist.
   for (const a of buildArtifacts()) {
-    if (a.name === 'index.json') continue;
+    if (!a.name.endsWith('.graphql')) continue; // the index, and the device contract (JSON)
     const head = a.text.split('\n').slice(0, 16).join('\n');
     assert.match(head, /DeviceChain GraphQL schema: /, a.name);
     assert.match(head, /^#\s+Endpoint\s+https:\/\/<your-host>\/api\//m, a.name);
@@ -485,12 +489,128 @@ test('the published SDL still parses as the schema it came from', () => {
   // they are not schema, and the banner adds one.
   const strip = (t) => t.split('\n').filter((l) => l.trim() !== '' && !/^[ \t]*#/.test(l)).join('\n');
   for (const artifact of buildArtifacts()) {
-    if (artifact.name === 'index.json') continue;
+    if (!artifact.name.endsWith('.graphql')) continue;
     const entry = SCHEMAS.find((s) => s.source.endsWith(`/${artifact.name.replace(/\.graphql$/, '')}`)
       || artifact.name === `${s.area}.graphql` && /\/schema\.graphql$/.test(s.source)
       || artifact.name === `${s.area}-admin.graphql` && /admin_schema\./.test(s.source)
       || artifact.name === `${s.area}-settings.graphql` && /settings_schema\./.test(s.source));
     assert.ok(entry, `no source for ${artifact.name}`);
     assert.equal(strip(artifact.text), strip(readFileSync(join(REPO, entry.source), 'utf8')), artifact.name);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// The device protocol contract: JSON Schemas published verbatim under /schema/device/.
+// ---------------------------------------------------------------------------
+
+test('the device contract is published by name, verbatim, under device/', () => {
+  const artifacts = buildArtifacts();
+  // By name, not by count: these are the URLs the device-protocol page links to.
+  for (const name of [
+    'device-event', 'measurement-payload', 'location-payload', 'alert-payload',
+    'new-relationship-payload', 'command-delivery', 'command-response',
+  ]) {
+    const published = artifacts.find((a) => a.name === `device/${name}.schema.json`);
+    assert.ok(published, `device/${name}.schema.json is not published`);
+    const entry = DEVICE_SCHEMAS.find((s) => s.source.endsWith(`/${name}.schema.json`));
+    assert.equal(published.text, readFileSync(join(REPO, entry.source), 'utf8'), name);
+  }
+  const index = JSON.parse(artifacts.find((a) => a.name === 'index.json').text);
+  assert.equal(index.deviceProtocol.schemas.length, DEVICE_SCHEMAS.length);
+  for (const d of index.deviceProtocol.schemas) {
+    // Prefix compared as a string, not interpolated into a RegExp, so no escaping is needed.
+    assert.ok(d.schema.startsWith(`${SITE}/schema/device/`), `${d.schema}: not under ${SITE}`);
+    assert.match(d.schema.slice(SITE.length), /^\/schema\/device\/[a-z-]+\.schema\.json$/);
+    assert.ok(d.title && d.role, `${d.schema}: no title or role`);
+  }
+});
+
+test('the real tree reconciles against the device manifest, both directions', () => {
+  reconcileDevice(discoverDevice(), DEVICE_SCHEMAS);
+});
+
+test('a device contract file with no manifest entry fails the build', () => {
+  assert.throws(
+    () => reconcileDevice([...discoverDevice(), 'backend/services/x/contract/new.schema.json'], DEVICE_SCHEMAS),
+    (e) => e instanceof GenerateError && /no manifest entry/.test(e.headline),
+  );
+});
+
+test('a device contract file that disappears from the tree fails the build', () => {
+  // The direction a glob cannot see: discovery simply stops finding the file.
+  const discovered = discoverDevice().filter((f) => !f.endsWith('/device-event.schema.json'));
+  assert.throws(
+    () => reconcileDevice(discovered, DEVICE_SCHEMAS),
+    (e) => e instanceof GenerateError && /does not exist/.test(e.headline),
+  );
+});
+
+// A throwaway tree holding one contract file, for the checks that read its content.
+function contractTree(doc) {
+  const repo = mkdtempSync(join(tmpdir(), 'devcontract-'));
+  mkdirSync(join(repo, 'backend', 'services', 'x', 'contract'), { recursive: true });
+  writeFileSync(join(repo, 'backend', 'services', 'x', 'contract', 'a.schema.json'), JSON.stringify(doc));
+  return { repo, manifest: [{ source: 'backend/services/x/contract/a.schema.json', role: 'test' }] };
+}
+
+test('a device contract whose $id is not its published URL fails the build', () => {
+  const { repo, manifest } = contractTree({
+    $schema: 'https://json-schema.org/draft/2020-12/schema',
+    $id: 'https://example.com/a.schema.json',
+    type: 'object',
+  });
+  try {
+    assert.throws(
+      () => buildDeviceArtifacts(repo, manifest),
+      (e) => e instanceof GenerateError && /not the URL it is published at/.test(e.headline),
+    );
+    // NEGATIVE CONTROL: the same file with the right $id is accepted, so the refusal
+    // above is about the $id and not about the throwaway tree.
+    const { repo: ok, manifest: m } = contractTree({
+      $schema: 'https://json-schema.org/draft/2020-12/schema',
+      $id: `${CANONICAL}/schema/device/a.schema.json`,
+      type: 'object',
+    });
+    try {
+      assert.equal(buildDeviceArtifacts(ok, m)[0].name, 'device/a.schema.json');
+    } finally {
+      rmSync(ok, { recursive: true, force: true });
+    }
+  } finally {
+    rmSync(repo, { recursive: true, force: true });
+  }
+});
+
+test('a device contract that $refs an unpublished file fails the build', () => {
+  const { repo, manifest } = contractTree({
+    $schema: 'https://json-schema.org/draft/2020-12/schema',
+    $id: `${CANONICAL}/schema/device/a.schema.json`,
+    type: 'object',
+    properties: { p: { $ref: 'missing.schema.json' } },
+  });
+  try {
+    assert.throws(
+      () => buildDeviceArtifacts(repo, manifest),
+      (e) => e instanceof GenerateError && /not published/.test(e.headline),
+    );
+  } finally {
+    rmSync(repo, { recursive: true, force: true });
+  }
+});
+
+test('the device contract is served as JSON, in every locale', () => {
+  // /schema/* serves text/plain (right for SDL), and Netlify applies every matching
+  // rule, so the device rules must come AFTER it to win Content-Type — the same
+  // ordering index.json relies on. Both the root and the /:locale/ copy, because a
+  // prefix rule does not reach the localized one.
+  const headers = readFileSync(join(REPO, 'docs', 'static', '_headers'), 'utf8');
+  for (const [wild, device] of [['/schema/*', '/schema/device/*'], ['/:locale/schema/*', '/:locale/schema/device/*']]) {
+    const w = headers.indexOf(`\n${wild}\n`);
+    const d = headers.indexOf(`\n${device}\n`);
+    assert.ok(w !== -1 && d !== -1, `${device} has no rule`);
+    assert.ok(d > w, `${device} must be listed after ${wild}`);
+    const block = headers.slice(d + 1).split('\n\n')[0];
+    assert.match(block, /Content-Type: application\/json; charset=utf-8/, device);
+    assert.match(block, /Access-Control-Allow-Origin: \*/, device);
   }
 });

@@ -95,5 +95,9 @@ var (
 		// An identity's empty first/last name becomes NULL. The columns always allowed it;
 		// the model now spells it, and this converts the '' rows already written. DML only.
 		NewIdentityNamesNullMigration(),
+		// The ingest and outbound rate ceilings name their units: ingest is metered in
+		// readings and outbound in calls. Renames the two tenant override columns and
+		// re-keys every tier config that declares either ceiling, the seeded tiers included.
+		NewRateKeysNameUnitsMigration(),
 	}
 )

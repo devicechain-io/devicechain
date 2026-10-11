@@ -70,6 +70,7 @@ Ingress 将 `/api/<area>/graphql` 路由到各功能区服务，并移除前缀�
 
 `sparkplug-ingest` 和 `lwm2m-ingest` 完全不提供 GraphQL，且有意不进入 `/api` 路由。
 `event-sources` 虽有路由，但只返回占位 Schema；设备通过传输协议接入它，而不是通过该 API。
+`update-management` 同样有路由，但其 API 在本版本中尚未实现：它唯一的占位查询对每次调用都返回 `NOT_IMPLEMENTED` 错误。
 
 ### 通过 WebSocket 订阅 {#subscriptions-over-websocket}
 
@@ -584,6 +585,7 @@ token 会拼入基础设施命名空间：租户 ID 成为 NATS subject 中按 `
 | 限制 | 默认值 | 变量 | 拒绝内容 |
 | --- | --- | --- | --- |
 | 请求正文 | 4 MiB | `DC_GRAPHQL_MAX_BODY_BYTES` | 整个 HTTP 正文，包括变量。返回 HTTP 400。 |
+| 执行时间 | 60 秒 | `DC_GRAPHQL_EXEC_TIMEOUT`（整数秒） | 到达期限时仍在运行的查询或变更会被取消，正在进行的数据库语句也一并取消；响应中带有错误。不适用于订阅。客户端还必须在 30 秒内送达请求正文。 |
 | 查询长度 | 100,000 字节 | `DC_GRAPHQL_MAX_QUERY_LENGTH` | 查询字符串本身。 |
 | 嵌套深度 | 15 | `DC_GRAPHQL_MAX_DEPTH` | 超过此深度的嵌套选择。 |
 | 每查询根字段数 | 20 | `DC_GRAPHQL_MAX_QUERY_ROOT_FIELDS` | 顶层字段数超过此值的查询操作。 |
@@ -617,6 +619,26 @@ token 会拼入基础设施命名空间：租户 ID 成为 NATS subject 中按 `
 控制台、仪表盘应用、SDK、`dcctl` 和 MCP 服务器每个请求发送一个变更字段，最多两个查询字段。
 限制只针对顶层字段，嵌套字段的别名不计数。
 
+### 列表、输入和聚合的大小限制 {#size-bounds}
+
+除上述请求形态限制外，部分读取和输入还有大小限制。超出限制的请求会被拒绝，`extensions.code`
+为 `LIMIT_EXCEEDED`。不会截断，也不会部分应用，请缩小请求后重新发送。大小按字节而非字符计算。
+
+| 限制 | 数值 | 适用于 |
+| --- | --- | --- |
+| 属性键 | 128 B | `setEntityAttribute` 的 `attrKey`。 |
+| 属性值 | 64 KiB | `setEntityAttribute` 的 `value`，无论声明的类型是什么。 |
+| 规则定义 | 256 KiB | 检测规则的 `definition`，创建和更新时均适用。 |
+| 规则编排图 | 256 KiB | 检测规则的 `authoringGraph`，创建和更新时均适用。 |
+| 版本历史 | 每次调用 1,000 条 | `deviceProfileVersions`、`entityGroupVersions`、`assetTypeVersions`：最新的在前。用 `limit`（至少为 1）缩小范围，用 `offset`（不为负）翻页；超出此范围的值会被拒绝，`extensions.code` 为 `INVALID_VALUE`。 |
+| 每次聚合的时间桶数 | 10,000 | `bucketedMeasurements`：时间范围除以 `intervalSeconds`，向上取整。 |
+| 每次聚合的行数 | 50,000 | `bucketedMeasurements`：时间桶数乘以返回的测量名称数。指定 `name` 过滤时为一个名称；未指定时为符合该读取过滤条件的所有不同测量名称。 |
+| 每次查找的键数 | 1,000 | 传给 `…ByToken`、`…ByExternalId` 等批量查询的令牌、外部 ID 或告警令牌列表（设备状态、最新位置、命令、命令批次、通知渠道、策略和状态）。 |
+
+`bucketedMeasurements` 还要求提供 `startTime`；`endTime` 默认为当前时间。
+
+命令键受令牌语法限制为 128 字节，这也是可入队的最长命令名称。
+
 ### 仅接受 GraphQL 语法 {#graphql-syntax-only}
 
 **文档必须使用 GraphQL 自身语法。**包含以下任一内容的文档会因语法错误被拒绝，不执行任何内容：
@@ -629,6 +651,20 @@ token 会拼入基础设施命名空间：租户 ID 成为 NATS subject 中按 `
   GraphQL 将它解读为两个相邻字符串；服务器过去会把它误读为块字符串开始。只有 `"""` 才能开始块字符串。
 
 WebSocket 同样遵循此规则：服务器无法读取的订阅会得到语法错误，而非[仅订阅提示](#subscriptions-over-websocket)。
+
+### device-management 的数量上限 {#device-management-count-ceilings}
+
+有两类集合每次都会被完整读取，因此各自设有成员数量上限。会使集合超过上限的写入将被拒绝，
+`extensions.code` 为 `LIMIT_EXCEEDED`，且不会存储任何内容。读取从不截断：已经超过上限的所有者
+保留全部行，每次读取都返回全部。删除行后即可重新腾出空间。
+
+| 上限 | 数值 | 适用范围 |
+| --- | --- | --- |
+| 每台设备的跟踪关系数 | 256 | 源为同一台设备、且关系类型为跟踪类型的关系，适用于 `createEntityRelationship`、`createEntityRelationships` 和 `claimDevice`，以及把 `tracked` 设为 true 会使某台设备超过上限的 `updateEntityRelationshipType`。一次 `createEntityRelationships` 调用最多包含 1,000 条关系。事件解析处理每个事件时都会读取该设备的全部跟踪关系。 |
+| 每个设备配置文件的定义数 | 每种 1,000 | 指标定义、命令定义和检测规则，各自单独计数，适用于 `createMetricDefinition`、`createCommandDefinition` 和 `createDetectionRule`。 |
+
+服务以直方图形式导出 `devicechain_devicemanagement_tracked_relationships_per_device`（每次从数据库加载设备的跟踪集合时记录）和
+`devicechain_devicemanagement_profile_children`（带 `kind` 标签：`metric`、`command` 或 `rule`），记录读取到的规模，便于了解真实数据距离上限有多近。
 
 ### 每请求凭据检查 {#credential-checks-per-request}
 

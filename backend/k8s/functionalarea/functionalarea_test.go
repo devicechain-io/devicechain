@@ -158,6 +158,32 @@ func TestAiInferenceIsOptInArea(t *testing.T) {
 	assert.NoError(t, Validate([]FunctionalArea{UserManagement, DeviceManagement, AiInference}))
 }
 
+// The update-management area is a known, opt-in area: held back from every standard
+// profile (an install does not grow an update plane it did not ask for), present in
+// ProfileFull, hard-depends on device-management (an update targets devices), and
+// validates only when that dependency is enabled too.
+//
+// The area is spelled as a literal rather than through its constant on purpose: this
+// test is the failing-first check for the area joining the catalog, and it has to
+// compile — and fail by value — against a catalog that does not know it.
+func TestUpdateManagementIsOptInArea(t *testing.T) {
+	area := FunctionalArea("update-management")
+	assert.True(t, Known(area), "update-management must be a known area")
+	assert.Contains(t, profiles[ProfileFull], area, "full ships everything, including update-management")
+	for p, areas := range profiles {
+		if p == ProfileFull {
+			continue
+		}
+		assert.NotContains(t, areas, area, "update-management must not be in profile %s (it is enabled deliberately)", p)
+	}
+	m, ok := ManifestFor(area)
+	assert.True(t, ok)
+	assert.Equal(t, []FunctionalArea{DeviceManagement}, m.HardDeps)
+	assert.Contains(t, m.SoftDeps, UserManagement)
+	assert.NoError(t, Validate([]FunctionalArea{UserManagement, DeviceManagement, area}))
+	assert.ErrorContains(t, Validate([]FunctionalArea{UserManagement, area}), string(DeviceManagement))
+}
+
 // The minimal valid explicit set is just the two core areas.
 func TestValidateAcceptsCoreOnly(t *testing.T) {
 	err := Validate([]FunctionalArea{UserManagement, DeviceManagement})

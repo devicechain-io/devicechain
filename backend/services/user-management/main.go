@@ -442,7 +442,7 @@ func registerSettingsHandler() {
 // of every retained public key — consumers select the right key by the token's
 // kid, which lets a signing-key rotation propagate without restarts.
 func registerKeyHandlers() {
-	Microservice.Mux().HandleFunc("/auth/jwks", func(w http.ResponseWriter, r *http.Request) {
+	Microservice.Mux().Handle("/auth/jwks", identity.BoundRequests(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		jwks, err := IdentityManager.JWKS()
 		if err != nil {
 			http.Error(w, "failed to build JWKS", http.StatusInternalServerError)
@@ -450,7 +450,7 @@ func registerKeyHandlers() {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write(jwks)
-	})
+	}), identity.MaxSmallBodyBytes))
 }
 
 // registerOAuthHandlers serves the OAuth 2.1 Authorization-Server surface (ADR-047)
@@ -519,7 +519,7 @@ func registerOAuthHandlers() {
 
 	// Public JWKS mirror for external OAuth token validators (see OAuthJwksPath).
 	// Serves the same retained key set as /auth/jwks.
-	Microservice.Mux().HandleFunc(identity.OAuthJwksPath, func(w http.ResponseWriter, r *http.Request) {
+	Microservice.Mux().Handle(identity.OAuthJwksPath, identity.BoundRequests(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			w.Header().Set("Allow", http.MethodGet)
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -532,7 +532,7 @@ func registerOAuthHandlers() {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write(jwks)
-	})
+	}), identity.MaxSmallBodyBytes))
 }
 
 // registerServiceTokenHandler serves the service-token mint endpoint (ADR-044

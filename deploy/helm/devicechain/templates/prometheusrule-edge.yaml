@@ -1,0 +1,112 @@
+{{/*
+Alerting rules for the edge ingest services: sparkplug-ingest and lwm2m-ingest.
+
+WHY THIS GROUP EXISTS. Both services read a transport that has no consumer group to share: one
+replica holds a lease and is the only one reading, and the others stand by Ready. So "nobody is
+reading this transport" is a state the platform can be in with every pod healthy, every probe
+green and no error anywhere, while each device on it is silently unreachable. Each service
+exports <area>_is_leader (1 on the serving replica, 0 elsewhere); the sum across replicas is 1
+when the transport is read exactly once. That is the first thing here, and the rest watch the
+ways a leader can be alive and still lose data: LwM2M's leader wedged in building its term
+(leader without serving), Sparkplug ingest abandoning samples it accepted, a Sparkplug group
+subscription the broker refused, a Sparkplug source broker that cannot be reached, and LwM2M
+Notify samples dropped because ingest refused them. Until this group, none of the edge services'
+metrics fed any alert.
+
+NO absent() ARM on the leader alerts, for the same reason the external MQTT source alert has
+none: a service that is not deployed exports nothing, and the chart's rule file is not told
+which services an install runs. A deployed service with no running pod exports nothing either,
+and that is a pod failing loudly in its own right (restarts, readiness).
+
+A Sparkplug ingest pod deployed with NO sources configured registers is_leader at start and never
+acquires a lease, so it reads 0 for the life of the pod and SparkplugIngestLeaderCountNotOne fires
+on it. That is deliberate: a transport service with nothing to serve is a configuration to fix or
+a service to leave out of the deployment.
+*/}}
+{{- if and .Values.metrics.enabled .Values.metrics.alerts }}
+{{- $ns := include "devicechain.instanceNamespace" . }}
+{{- $id := .Values.instance.id }}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: edge
+  namespace: {{ $ns }}
+  labels:
+    {{- include "devicechain.instanceLabels" . | nindent 4 }}
+spec:
+  groups:
+    - name: devicechain.edge
+      rules:
+        # `sum`, not `max`: the question is how many replicas serve the transport, and each
+        # reports only itself. `for: 2m` rides out a handover, where the lease is briefly held
+        # by nobody; both services raise the gauge at acquisition, so a normal takeover does not
+        # read as leaderless while the new leader rebuilds its state.
+        - alert: Lwm2mIngestLeaderCountNotOne
+          expr: sum(devicechain_lwm2mingest_is_leader{namespace="{{ $ns }}"}) != 1
+          for: 2m
+          labels:
+            severity: critical
+            devicechain_instance: {{ $id }}
+          annotations:
+            summary: "LwM2M ingest is not served by exactly one replica"
+            description: "For at least 2 minutes, {{ "{{ $value }}" }} lwm2m-ingest replicas have reported holding the leadership lease; it should be exactly 1. At 0, nobody is reading the CoAP/DTLS transport and every LwM2M device is silently unreachable, although every pod looks healthy. Above 1, two replicas are serving at once. Check the lwm2m-ingest logs for why no replica acquired the lease (typically the platform's message broker is unreachable)."
+        - alert: SparkplugIngestLeaderCountNotOne
+          expr: sum(devicechain_sparkplugingest_is_leader{namespace="{{ $ns }}"}) != 1
+          for: 2m
+          labels:
+            severity: critical
+            devicechain_instance: {{ $id }}
+          annotations:
+            summary: "Sparkplug ingest is not served by exactly one replica"
+            description: "For at least 2 minutes, {{ "{{ $value }}" }} sparkplug-ingest replicas have reported holding the leadership lease; it should be exactly 1. At 0, no Sparkplug source is being read and every device behind it is silently unreachable, although every pod looks healthy. Above 1, two replicas are connecting the same sources. A pod deployed with no sources configured never takes the lease and reads 0 permanently: configure its sources or leave the service out of the deployment. Otherwise check the sparkplug-ingest logs for why no replica acquired the lease."
+        # Read the pair together: is_leader goes up when the lease is acquired, is_serving only when
+        # the read loop runs. Leader and not serving past a takeover's worth of time is a leader
+        # wedged in building its term, which readiness, liveness and is_leader all report as healthy.
+        - alert: Lwm2mIngestLeaderNotServing
+          expr: devicechain_lwm2mingest_is_leader{namespace="{{ $ns }}"} == 1 and on (namespace, pod) devicechain_lwm2mingest_is_serving{namespace="{{ $ns }}"} == 0
+          for: 5m
+          labels:
+            severity: critical
+            devicechain_instance: {{ $id }}
+          annotations:
+            summary: "The LwM2M ingest leader holds the lease but is not serving"
+            description: "For at least 5 minutes, {{ "{{ $labels.pod }}" }} has held the LwM2M leadership lease while its CoAP/DTLS read loop is not running. It is stuck building its term (typically reading the asserted-active devices from device-state), and it keeps the lease, so no standby can take over. No LwM2M device is being served. Check this pod's log around 'Acquired LwM2M leadership' and restart it so a standby can acquire."
+        # `for` equals the increase window, never less: an abandonment that stops clears inside one
+        # window, and one that goes on for a full window is ingest failing, not a blip.
+        - alert: SparkplugIngestDroppingData
+          expr: sum(increase(devicechain_sparkplugingest_ingest_failures_total{namespace="{{ $ns }}"}[10m])) > 0
+          for: 10m
+          labels:
+            severity: warning
+            devicechain_instance: {{ $id }}
+          annotations:
+            summary: "Sparkplug ingest is abandoning accepted messages"
+            description: "For at least 10 minutes, sparkplug-ingest has been abandoning accepted messages: their samples or presence transitions were dropped after the retry budget was spent (device-management or the message broker unreachable), at once under backpressure, or on shutdown. A Sparkplug Host gets no broker redelivery, so each one is lost. Check device-management and the platform's message broker, and the sparkplug-ingest log for 'Dropping Sparkplug samples'."
+        - alert: SparkplugIngestSubscriptionRefused
+          expr: sum(increase(devicechain_sparkplugingest_subscribe_failures_total{namespace="{{ $ns }}"}[15m])) > 0
+          for: 5m
+          labels:
+            severity: warning
+            devicechain_instance: {{ $id }}
+          annotations:
+            summary: "A Sparkplug source's broker refused a group subscription"
+            description: "For at least 5 minutes, a Sparkplug source has been abandoned and retried because its broker accepted the connection but refused (or never acknowledged) a group subscription, most likely because the source's credential may not read that group. While any group is refused the source ingests none of its groups and never announces ONLINE. Check the broker's access rules for the source's credential against the groups configured for it."
+        - alert: SparkplugIngestBrokerUnreachable
+          expr: sum(increase(devicechain_sparkplugingest_connect_failures_total{namespace="{{ $ns }}"}[10m])) > 0
+          for: 10m
+          labels:
+            severity: warning
+            devicechain_instance: {{ $id }}
+          annotations:
+            summary: "Sparkplug ingest cannot connect to a configured broker"
+            description: "For at least 10 minutes, sparkplug-ingest has been failing to connect to a configured Sparkplug broker. Readiness is deliberately not gated on broker reachability, so the pod looks healthy while that source ingests nothing. A bad host, a rejected credential or a broker outage all raise this; the sparkplug-ingest log names the source and the reason."
+        - alert: Lwm2mIngestDroppingNotifications
+          expr: sum(increase(devicechain_lwm2mingest_notify_ingest_dropped_total{namespace="{{ $ns }}"}[10m])) > 0
+          for: 10m
+          labels:
+            severity: warning
+            devicechain_instance: {{ $id }}
+          annotations:
+            summary: "LwM2M ingest is dropping Notify samples"
+            description: "For at least 10 minutes, lwm2m-ingest has been dropping the samples of Notify messages because ingest failed or refused them, backpressure included. There is no retry in the Notify path (the next Notify supersedes), so a device that reports rarely loses its reading. Check the platform's message broker and the inbound-events stream's backlog, and the lwm2m-ingest log."
+{{- end }}

@@ -21,7 +21,7 @@ import (
 // full event: at 10/s with a burst of 20, a 300-reading message admits one event and the
 // next admits nothing.
 func TestBuildSampleLimiterMetersAtTheConfiguredCeiling(t *testing.T) {
-	l := buildSampleLimiter(mscfg.InfrastructureConfiguration{}, config.IngestRateLimit{MessagesPerSecond: 10, Burst: 20},
+	l := buildSampleLimiter(mscfg.InfrastructureConfiguration{}, config.IngestRateLimit{ReadingsPerSecond: 10, Burst: 20},
 		adapter.IngestLimiterMetrics{}, nil)
 	require.Equal(t, 256, l.AdmitSamples("acme", 300))
 	require.Equal(t, 0, l.AdmitSamples("acme", 300))
@@ -49,19 +49,19 @@ func TestResolveSourcesGivesEachIngestingClientTheLimiter(t *testing.T) {
 // it per field, keeps a positive one, and is read from the key the chart renders.
 func TestSparkplugIngestRateLimitDefaults(t *testing.T) {
 	c := config.NewSparkplugConfiguration()
-	assert.Equal(t, config.IngestRateLimit{MessagesPerSecond: 1000, Burst: 2000}, c.IngestRateLimit)
+	assert.Equal(t, config.IngestRateLimit{ReadingsPerSecond: 1000, Burst: 2000}, c.IngestRateLimit)
 
-	for _, bad := range []config.IngestRateLimit{{MessagesPerSecond: -1, Burst: -1}, {MessagesPerSecond: math.NaN()}} {
+	for _, bad := range []config.IngestRateLimit{{ReadingsPerSecond: -1, Burst: -1}, {ReadingsPerSecond: math.NaN()}} {
 		c := &config.SparkplugConfiguration{IngestRateLimit: bad}
 		c.ApplyDefaults()
-		assert.Equal(t, config.IngestRateLimit{MessagesPerSecond: 1000, Burst: 2000}, c.IngestRateLimit, "%+v", bad)
+		assert.Equal(t, config.IngestRateLimit{ReadingsPerSecond: 1000, Burst: 2000}, c.IngestRateLimit, "%+v", bad)
 	}
 
 	var parsed config.SparkplugConfiguration
-	require.NoError(t, core.LoadConfiguration([]byte(`{"sources":[],"ingestRateLimit":{"messagesPerSecond":50,"burst":300}}`), &parsed))
+	require.NoError(t, core.LoadConfiguration([]byte(`{"sources":[],"ingestRateLimit":{"readingsPerSecond":50,"burst":300}}`), &parsed))
 	parsed.ApplyDefaults()
-	assert.Equal(t, config.IngestRateLimit{MessagesPerSecond: 50, Burst: 300}, parsed.IngestRateLimit)
+	assert.Equal(t, config.IngestRateLimit{ReadingsPerSecond: 50, Burst: 300}, parsed.IngestRateLimit)
 
-	require.Error(t, core.LoadConfiguration([]byte(`{"ingestRateLimit":{"readingsPerSecond":50}}`), &config.SparkplugConfiguration{}),
+	require.Error(t, core.LoadConfiguration([]byte(`{"ingestRateLimit":{"messagesPerSecond":50}}`), &config.SparkplugConfiguration{}),
 		"an unknown key is refused, not ignored")
 }

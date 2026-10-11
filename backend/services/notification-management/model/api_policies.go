@@ -286,8 +286,10 @@ func (api *Api) NotificationPoliciesById(ctx context.Context, ids []uint) ([]*No
 // NotificationPoliciesByToken loads policies (with rules) by token.
 func (api *Api) NotificationPoliciesByToken(ctx context.Context, tokens []string) ([]*NotificationPolicy, error) {
 	found := make([]*NotificationPolicy, 0)
-	result := api.RDB.DB(ctx).Preload("Rules").Preload("Rules.Channel").Find(&found, "token in ?", tokens)
-	return found, result.Error
+	if err := rdb.FindByKeys(api.RDB.DB(ctx).Preload("Rules").Preload("Rules.Channel"), &found, "token", tokens); err != nil {
+		return nil, err
+	}
+	return found, nil
 }
 
 // EnabledNotificationPolicies loads every enabled policy (with rules + channels) for

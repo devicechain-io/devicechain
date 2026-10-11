@@ -161,7 +161,7 @@ func TestExpiredTerminalForMapsHoldToExpired(t *testing.T) {
 		CommandSent: CommandTimeout,
 	}
 	for from, want := range cases {
-		if got := expiredTerminalFor(from.String()); got != want.String() {
+		if got, err := expiredTerminalFor(from.String()); err != nil || got != want.String() {
 			t.Fatalf("a command lapsing from %s becomes %s, want %s", from, got, want)
 		}
 	}
