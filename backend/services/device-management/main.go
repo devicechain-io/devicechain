@@ -373,8 +373,8 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 // 🔴 IT GETS THE PLAIN Api, NOT THE CACHED ONE. The consumer drops an edge for a device
 // that no longer exists (deleted between detection and dispatch), and it learns that by
 // resolving the device token. Through the cached Api that read can be answered from another
-// replica's process memory for a few seconds after the delete (messaging.DefaultLocalCacheTTL),
-// and the edge would then be applied to a device row that is gone. It is one indexed read
+// replica's process memory if the eviction message for the delete was lost (up to
+// inMemoryCache.ttlSeconds), and the edge would then be applied to a device row that is gone. It is one indexed read
 // per rule edge, far off the per-event path, so the database answers it every time.
 func newRaiseAlarmConsumer(reader messaging.MessageReader, dead *deadletter.Sink) *processor.RaiseAlarmConsumer {
 	return processor.NewRaiseAlarmConsumer(Microservice, reader,

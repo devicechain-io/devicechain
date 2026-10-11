@@ -97,6 +97,8 @@ type captureEvictor struct {
 	// credentialEvicts records each EvictDeviceCredentials call: the tenant it named and
 	// the device ids, in call order.
 	credentialEvicts []credentialEvict
+	// deviceTokenEvicts records each EvictDeviceByToken call's token, in call order.
+	deviceTokenEvicts []string
 }
 
 type credentialEvict struct {
@@ -122,6 +124,10 @@ func (c *captureEvictor) EvictScopedGroupsExist(_ context.Context) {
 
 func (c *captureEvictor) EvictFenceSetVersion(_ context.Context) {
 	c.fenceSetEvicts++
+}
+
+func (c *captureEvictor) EvictDeviceByToken(_ context.Context, token string) {
+	c.deviceTokenEvicts = append(c.deviceTokenEvicts, token)
 }
 
 func (c *captureEvictor) EvictDeviceCredentials(_ context.Context, tenant string, deviceIds []uint) {

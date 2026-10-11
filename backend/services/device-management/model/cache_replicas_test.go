@@ -14,9 +14,14 @@ import (
 )
 
 // Two device-management replicas share one key-value store per cache and one database;
-// each has its own process memory in front of the store. These tests pin, as deliberate
-// and tested properties, what the in-process tier costs a replica that did NOT make a
-// change.
+// each has its own process memory in front of the store. These tests pin what the
+// in-process tier costs a replica that did NOT make a change WHEN NO EVICTION MESSAGE
+// REACHES IT: the bound that holds if a message is lost, which is the whole time to live.
+//
+// They build their caches over an in-memory store (NewCacheOver), which has no broker to
+// broadcast on. In the service every cache is built WithCrossReplicaEviction, and a change
+// reaches the other replicas at once; cache_eviction_wiring_test.go in the service package
+// proves that, over a real broker, with these same changes.
 
 // 🔑 A device deleted through replica A is still resolved by replica B's cached lookup
 // until B's copy expires. That bound is documented. It is also why the raise-alarm consumer

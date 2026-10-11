@@ -189,6 +189,11 @@ type CacheEvictor interface {
 	// a device updated, replaced or deleted. tenant is the changed row's, never the
 	// context's.
 	EvictDeviceCredentials(ctx context.Context, tenant string, deviceIds []uint)
+	// EvictDeviceByToken drops the cached device-by-token entry for token, on every
+	// replica. It is called post-commit by every write that changes the device row an
+	// event resolves to (an update, a re-type), under the tenant of the context. A
+	// delete reaches it through EvictEntityDelete instead.
+	EvictDeviceByToken(ctx context.Context, token string)
 }
 
 // Create a new API instance.
@@ -296,6 +301,14 @@ func (api *Api) evictDeviceCredentials(ctx context.Context, tenant string, devic
 	}
 	if len(ids) > 0 {
 		api.CacheEvictor.EvictDeviceCredentials(ctx, tenant, ids)
+	}
+}
+
+// evictDeviceByToken drops the cached device-by-token entry of token when an evictor is
+// wired. No-op otherwise. Called post-commit from every write that changes the device row.
+func (api *Api) evictDeviceByToken(ctx context.Context, token string) {
+	if api.CacheEvictor != nil && token != "" {
+		api.CacheEvictor.EvictDeviceByToken(ctx, token)
 	}
 }
 

@@ -152,6 +152,7 @@ func TestTheServiceAnswersARepeatedCredentialCheckFromMemory(t *testing.T) {
 type replica struct {
 	api  *model.Api
 	capi *model.CachedApi
+	nmgr *messaging.NatsManager
 }
 
 func newReplica(t *testing.T, host string, port uint32, instanceId string, db *gorm.DB) replica {
@@ -159,7 +160,7 @@ func newReplica(t *testing.T, host string, port uint32, instanceId string, db *g
 	nmgr := startNatsManager(t, host, port, instanceId)
 	api, capi, err := buildApis(nmgr, &rdb.RdbManager{Database: db}, config.NewDeviceManagementConfiguration())
 	require.NoError(t, err)
-	return replica{api: api, capi: capi}
+	return replica{api: api, capi: capi, nmgr: nmgr}
 }
 
 // A revocation made through one replica is seen by every other replica well inside the

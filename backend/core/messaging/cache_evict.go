@@ -44,7 +44,10 @@ func CacheEvictSubject(instanceId, functionalArea, name string) string {
 // ids).
 type CacheEviction struct {
 	Tenant string   `json:"tenant"`
-	Keys   []string `json:"keys"`
+	Keys   []string `json:"keys,omitempty"`
+	// All drops every entry of Tenant, whatever it is filed under. It is what a tenant's
+	// erasure sends: the keys are not enumerable by the party erasing them.
+	All bool `json:"all,omitempty"`
 }
 
 // EvictionBroadcast tells every replica of a service to drop entries from an IN-PROCESS
@@ -128,11 +131,29 @@ func (b *EvictionBroadcast) Publish(tenant string, keys []string) error {
 	return first
 }
 
+// PublishTenant tells every replica to drop every entry of tenant. An empty tenant is an
+// error and sends nothing, as in Publish.
+func (b *EvictionBroadcast) PublishTenant(tenant string) error {
+	if tenant == "" {
+		return errors.New("a cache eviction names no tenant, so it could evict nothing")
+	}
+	body, err := json.Marshal(CacheEviction{Tenant: tenant, All: true})
+	if err == nil {
+		err = b.nc.Publish(b.subject, body)
+	}
+	if err != nil {
+		b.m.evictionBroadcast(b.name, evictionPublishFailed)
+		return fmt.Errorf("broadcasting a %s tenant eviction: %w", b.name, err)
+	}
+	b.m.evictionBroadcast(b.name, evictionPublished)
+	return nil
+}
+
 // Subscribe applies every eviction this instance broadcasts for the cache. It subscribes
 // through SubscribeSynced: the subject is published from OTHER replicas' connections,
 // which is exactly the case ConfirmSubscribed exists for. apply runs inline on the
 // subscription's goroutine and must be cheap. A message that does not decode, names no
-// tenant, or carries no keys or more than MaxCacheEvictionKeys is counted as malformed and
+// tenant, or carries neither keys nor the all flag, or more than MaxCacheEvictionKeys is counted as malformed and
 // dropped. Calling it a second time is an error.
 func (b *EvictionBroadcast) Subscribe(apply func(CacheEviction)) error {
 	if apply == nil {
@@ -146,7 +167,7 @@ func (b *EvictionBroadcast) Subscribe(apply func(CacheEviction)) error {
 	sub, err := SubscribeSynced(b.nc, b.subject, func(msg *nats.Msg) {
 		var e CacheEviction
 		if json.Unmarshal(msg.Data, &e) != nil || e.Tenant == "" ||
-			len(e.Keys) == 0 || len(e.Keys) > MaxCacheEvictionKeys {
+			(len(e.Keys) == 0 && !e.All) || len(e.Keys) > MaxCacheEvictionKeys {
 			b.m.evictionBroadcast(b.name, evictionMalformed)
 			return
 		}

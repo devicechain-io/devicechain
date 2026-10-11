@@ -87,6 +87,8 @@ func (api *Api) InitiateDeviceClaim(ctx context.Context, request *DeviceClaimIni
 		if err != nil {
 			return nil, err
 		}
+		// The prior owner's edge is gone: the device's cached tracked set still lists it.
+		api.evictRelationshipSources(ctx, []uint{existing.DeviceId})
 		return existing, nil
 	}
 
@@ -215,6 +217,8 @@ func (api *Api) ClaimDevice(ctx context.Context, request *DeviceClaimRequest, no
 	// selecting relationshipType on the claim result gets real values (the create
 	// path doesn't Preload it).
 	rel.RelationshipType = *rtMatches[0]
+	// The new owner's edge is on the device: its cached tracked set does not list it yet.
+	api.evictRelationshipSources(ctx, []uint{rel.SourceId})
 	return rel, nil
 }
 
