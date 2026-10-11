@@ -1531,7 +1531,7 @@ jobs:
 
       # 🔴 BEFORE codegen, typecheck, lint and test — not merely before the build.
       # The apps consume the packages' `dist`, not their sources, so every step below
-      # resolves @devicechain/{client,dashboards,widgets} through built artifacts that
+      # resolves @devicechain/{client,dashboards,widget-sdk,widgets} through built artifacts that
       # do not exist in a fresh checkout. (Each app script also depends on this through
       # a `pre*` hook, so the same thing cannot be reached stale by hand; the step is
       # here as well so a build failure is reported as a build failure rather than as a
@@ -2023,6 +2023,19 @@ jobs:
           case "$NOUPLOAD" in
             *devicechain-update-upload*) echo "::error::the upload ingress renders without update-management"; exit 1 ;;
             *) echo "ok (renders): no upload ingress without update-management" ;;
+          esac
+
+          # The download route carries a capability in its query string, so it gets an Ingress of
+          # its own with the access log off; the API Ingress would write it to the log.
+          for want in 'name: devicechain-update-download' 'enable-access-log: "false"' 'updates/download/[^/]+'; do
+            case "$UPLOAD" in
+              *"$want"*) echo "ok (renders): download ingress carries $want" ;;
+              *) echo "::error::the download ingress is missing $want"; exit 1 ;;
+            esac
+          done
+          case "$NOUPLOAD" in
+            *devicechain-update-download*) echo "::error::the download ingress renders without update-management"; exit 1 ;;
+            *) echo "ok (renders): no download ingress without update-management" ;;
           esac
 
           renders "inline config" --set "instance.config.infrastructure.secrets.rootKey=$KEY"

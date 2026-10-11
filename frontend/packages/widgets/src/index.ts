@@ -3,7 +3,7 @@
 
 // @devicechain/widgets — presentational dashboard widgets (ADR-039).
 //
-// Six built-ins over the DashboardHub's live telemetry, themed via CSS custom
+// Eleven built-ins over the DashboardHub's live telemetry, themed via CSS custom
 // properties (no Tailwind leakage — embeddable in any React host). A renderer
 // looks widgets up by type through WIDGET_REGISTRY.
 
@@ -13,6 +13,11 @@ export { DashboardRenderer, resolveWidgets, widgetSubjectLabel, type DashboardRe
 
 // Renderer entry point: binds the hub to a widget by type.
 export { ConnectedWidget, type ConnectedWidgetProps } from './connected-widget';
+
+// The built-ins as registrations (the same descriptor + component pairing a third-party
+// package supplies), and the factory for a sealed registry holding exactly them.
+export { builtinWidgetCatalog, builtinWidgetDescriptors } from './builtin-descriptors';
+export { builtinWidgetDefinitions, createBuiltinWidgetRegistry } from './builtin-registry';
 
 // Registries + widget contract + channel classifier.
 export {
@@ -65,6 +70,7 @@ export {
   validateDefinitionOptions,
   stripUnknownOptions,
   type DefinitionOptionIssue,
+  type DefinitionValidationOptions,
 } from './definition-options';
 
 // Directional change-flash (opt-in `flashOnChange`): a reusable hook + the flashing value cell.

@@ -110,9 +110,9 @@ export const SCHEMAS = [
     source: 'backend/services/update-management/graphql/schema.graphql',
     area: 'update-management',
     publish: false,
-    note: 'Over-the-air updates. Not implemented in this release: the service ships so it '
-      + 'can be deployed, and its one placeholder query answers every call with a '
-      + 'NOT_IMPLEMENTED error. Nothing is published until the update API exists.',
+    note: 'Over-the-air updates: the artifact catalogue and the assignment of artifacts to '
+      + 'devices. Not published yet: the API is still being built out (there is no fleet '
+      + 'rollout), so a reference page would document a surface that is about to change.',
   },
   { source: 'backend/services/user-management/graphql/admin_schema.graphql', area: 'user-management' },
   {

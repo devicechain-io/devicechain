@@ -84,6 +84,16 @@ func (r *SchemaResolver) Refresh(ctx context.Context, args struct {
 	return &AuthTokenResolver{pair: pair}, nil
 }
 
+// Logout ends the sign-in a refresh or identity token belongs to (server-side sign-out).
+func (r *SchemaResolver) Logout(ctx context.Context, args struct {
+	Token string
+}) (bool, error) {
+	if err := r.getIdentityManager(ctx).Logout(ctx, args.Token); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
 // UpdateProfile lets the signed-in user edit their own display name (first/last).
 // Self-scoped: it targets the identity carried in the caller's token, so being
 // authenticated is sufficient; email and credentials are immutable here.

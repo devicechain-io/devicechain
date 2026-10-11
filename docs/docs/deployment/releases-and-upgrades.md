@@ -3516,6 +3516,14 @@ Nothing needs doing.
 
 What the release after `v0.19.0` changes, collected as it lands.
 
+#### Signing out now ends the session on the server, and everyone signs in again once {#next-upgrade-server-side-logout}
+
+Signing out of the console or the embedded dashboard app used to clear only the browser: the refresh token stayed valid for up to 7 days, and the sign-in token the console keeps could still start a new session for up to 15 minutes. A new `logout` mutation ends the sign-in on the server. From that moment the sign-in's exchanges are refused: its refresh tokens no longer refresh, in any tenant, its sign-in token can no longer choose a tenant, and an OAuth grant authorized during that sign-in no longer refreshes. The MCP authorization page signs in on its own, so a grant made there is not ended by signing out of the console; it ends when that sign-in runs out (7 days by default). Other sign-ins of the same account are not affected. Access tokens and sign-in tokens already issued, including on the admin API, cannot be recalled and stay valid until they expire, within 15 minutes. If the server cannot be reached when a user signs out, the app still signs them out locally and tells them the server-side session could not be ended.
+
+Each sign-in is now a record that lasts as long as a refresh token (7 days by default), so a session that keeps refreshing ends 7 days after the sign-in and the user signs in again. That includes an OAuth grant such as an MCP agent's: it ends 7 days after the sign-in on the authorization page, and the client authorizes again.
+
+Tokens issued before the upgrade carry no sign-in record and are refused, so **everyone signs in again once**: console, dashboard app, SDK and OAuth sessions end at their next refresh, within 15 minutes of the upgrade unless you changed the access-token lifetime. OAuth clients such as MCP agents authorize again. Nothing else needs doing.
+
 #### Events that carry a device password or access token in the body are affected while versions are mixed {#next-upgrade-body-password}
 
 From this release, `event-sources` and `device-management` pass a device password or access token that

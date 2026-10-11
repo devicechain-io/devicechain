@@ -19,16 +19,16 @@ func TestSessionEpochRoundTripsOnTheExchangeableTiers(t *testing.T) {
 	v := NewValidator(&key.PublicKey)
 	const epoch SessionEpoch = "epoch-abc"
 
-	refresh, err := iss.IssueRefresh("tenant-a", "alice@example.com", epoch, nil, nil, "jti-r")
+	refresh, err := iss.IssueRefresh("tenant-a", "alice@example.com", epoch, "sid-1", nil, nil, "jti-r")
 	if err != nil {
 		t.Fatalf("IssueRefresh: %v", err)
 	}
-	oauthRefresh, err := iss.IssueOAuthRefresh("tenant-a", "alice@example.com", epoch, nil,
+	oauthRefresh, err := iss.IssueOAuthRefresh("tenant-a", "alice@example.com", epoch, "sid-1", nil,
 		[]string{string(DeviceRead)}, ScopeReadOnly, nil, "mcp", "jti-o")
 	if err != nil {
 		t.Fatalf("IssueOAuthRefresh: %v", err)
 	}
-	identity, err := iss.IssueIdentity("alice@example.com", epoch, nil, nil, "jti-i")
+	identity, err := iss.IssueIdentity("alice@example.com", epoch, "sid-1", nil, nil, "jti-i")
 	if err != nil {
 		t.Fatalf("IssueIdentity: %v", err)
 	}
@@ -47,6 +47,9 @@ func TestSessionEpochRoundTripsOnTheExchangeableTiers(t *testing.T) {
 		}
 		if claims.SessionEpoch != epoch {
 			t.Errorf("%s: sep = %q, want %q", name, claims.SessionEpoch, epoch)
+		}
+		if claims.SessionID != "sid-1" {
+			t.Errorf("%s: sid = %q, want %q", name, claims.SessionID, "sid-1")
 		}
 	}
 }
@@ -88,12 +91,27 @@ func TestTheExchangeableTiersRefuseAnEmptySessionEpoch(t *testing.T) {
 	key := mustKey(t)
 	iss := NewIssuer(key, "test", time.Minute, time.Hour)
 
-	_, errRefresh := iss.IssueRefresh("tenant-a", "alice", "", nil, nil, "r")
-	_, errOAuth := iss.IssueOAuthRefresh("tenant-a", "alice", "", nil, nil, ScopeReadOnly, nil, "mcp", "o")
-	_, errIdentity := iss.IssueIdentity("alice", "", nil, nil, "i")
+	_, errRefresh := iss.IssueRefresh("tenant-a", "alice", "", "sid-1", nil, nil, "r")
+	_, errOAuth := iss.IssueOAuthRefresh("tenant-a", "alice", "", "sid-1", nil, nil, ScopeReadOnly, nil, "mcp", "o")
+	_, errIdentity := iss.IssueIdentity("alice", "", "sid-1", nil, nil, "i")
 	for name, err := range map[string]error{"IssueRefresh": errRefresh, "IssueOAuthRefresh": errOAuth, "IssueIdentity": errIdentity} {
 		if !errors.Is(err, ErrNoSessionEpoch) {
 			t.Errorf("%s with an empty epoch returned %v, want ErrNoSessionEpoch", name, err)
+		}
+	}
+}
+
+// An empty session id is refused at the MINT, for the same reason as an empty epoch.
+func TestTheExchangeableTiersRefuseAnEmptySessionID(t *testing.T) {
+	key := mustKey(t)
+	iss := NewIssuer(key, "test", time.Minute, time.Hour)
+
+	_, errRefresh := iss.IssueRefresh("tenant-a", "alice", "epoch-1", "", nil, nil, "r")
+	_, errOAuth := iss.IssueOAuthRefresh("tenant-a", "alice", "epoch-1", "", nil, nil, ScopeReadOnly, nil, "mcp", "o")
+	_, errIdentity := iss.IssueIdentity("alice", "epoch-1", "", nil, nil, "i")
+	for name, err := range map[string]error{"IssueRefresh": errRefresh, "IssueOAuthRefresh": errOAuth, "IssueIdentity": errIdentity} {
+		if !errors.Is(err, ErrNoSessionID) {
+			t.Errorf("%s with an empty sid returned %v, want ErrNoSessionID", name, err)
 		}
 	}
 }

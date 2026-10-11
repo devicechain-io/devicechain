@@ -7,6 +7,7 @@
   "passwordLabel": "Password",
   "serverUnreachable": "Could not reach the server. Check that the API is running.",
   "signInUnavailable": "Sign-in is temporarily unavailable. Try again shortly.",
+  "signOutFailed": "You were signed out here, but the server could not end the session. Try again if this is a shared computer.",
   "submit": "Sign in",
   "submitting": "Signing in…",
   "title": "Sign in",

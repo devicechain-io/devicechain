@@ -88,6 +88,9 @@ var reportShape = shape{
 	// field, and its decode refuses unknown fields.
 	"revision": nil, "digest": nil, "status": nil, "errors": nil, "document": nil,
 	"config": {"haveRevision": nil},
+	// The assignment and download kinds (assignment.go) share the envelope too.
+	"url": nil, "expiresAt": nil, "trust": nil,
+	"artifact": {"version": nil, "digest": nil, "size": nil, "requiresReboot": nil},
 }
 
 // inventoryForbidden are the keys that may not appear at all on an update.inventory report. They

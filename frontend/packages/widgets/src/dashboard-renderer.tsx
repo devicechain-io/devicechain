@@ -27,6 +27,7 @@ import {
   type SlotBinding,
   type WidgetInstance,
 } from '@devicechain/dashboards';
+import type { WidgetRegistry } from '@devicechain/widget-sdk';
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 
 import { ConnectedWidget } from './connected-widget';
@@ -39,11 +40,16 @@ import {
   type WidgetCandidates,
   type WidgetSelect,
 } from './frame';
-import { WIDGET_CHANNEL } from './registry';
+import { defaultWidgetRegistry } from './default-registry';
 
 export interface DashboardRendererProps {
   definition: DashboardDefinition;
   hub: WidgetDataSource;
+  // The widget registry that resolves every widget's component, channel, binding policy and
+  // history eligibility. Omitted = the built-ins. A host with extension packages passes the
+  // SAME registry it parsed `definition` with (parseDashboardDefinition(raw, { catalog:
+  // registry.catalog })), so an extension widget is recognized and rendered consistently.
+  registry?: WidgetRegistry;
   // The action seam (writes) for acting widgets (alarm ack/clear, command send). Omit
   // for a strictly read-only mount; the same instance as `hub` when the runtime provides
   // both (DashboardHub / SyntheticDataSource implement WidgetActions).
@@ -82,6 +88,7 @@ export interface DashboardRendererProps {
 export function DashboardRenderer({
   definition,
   hub,
+  registry: registryProp,
   actions,
   seedHistory = true,
   bindings,
@@ -96,7 +103,8 @@ export function DashboardRenderer({
   // that is cheap, and every channel keys its subscription on the selector's VALUE, so a
   // widget whose concrete selector did not change keeps its subscription.
   const widgets = useMemo(() => resolveWidgets(definition.widgets, bindings), [definition.widgets, bindings]);
-  const histories = useWidgetHistories(widgets, seedHistory);
+  const registry = registryProp ?? defaultWidgetRegistry();
+  const histories = useWidgetHistories(widgets, seedHistory, registry);
 
   const { grid, background: bg } = definition.canvas;
   const rowGap = typeof grid.gap === 'number' ? grid.gap : grid.gap.row;
@@ -127,6 +135,7 @@ export function DashboardRenderer({
                   <ConnectedWidget
                     widget={widget}
                     hub={hub}
+                    registry={registry}
                     actions={actions}
                     initialSamples={histories[widget.id]}
                   />
@@ -233,8 +242,12 @@ interface Seed {
 
 // seedKey is the identity of what a measurement widget's history is OF: its concrete
 // selector, by value. Undefined for a widget that takes no seed.
-function seedKey(widget: WidgetInstance): string | undefined {
-  if (widget.type === UNKNOWN_WIDGET_TYPE || WIDGET_CHANNEL[widget.type] !== 'measurement') return undefined;
+function seedKey(widget: WidgetInstance, registry: WidgetRegistry): string | undefined {
+  // Eligibility is registry metadata: only a registered measurement-channel widget takes a
+  // seed. A placeholder, an unregistered id and every other channel take none.
+  if (widget.type === UNKNOWN_WIDGET_TYPE || registry.descriptor(widget.type)?.channel !== 'measurement') {
+    return undefined;
+  }
   return JSON.stringify(widget.datasource ?? null);
 }
 
@@ -253,6 +266,7 @@ function seedKey(widget: WidgetInstance): string | undefined {
 function useWidgetHistories(
   widgets: WidgetInstance[],
   enabled: boolean,
+  registry: WidgetRegistry,
 ): Record<string, MeasurementSample[] | undefined> {
   const [seeds, setSeeds] = useState<Record<string, Seed>>({});
   // widget id → the selector key most recently REQUESTED for it. A fetch whose key is no
@@ -268,7 +282,7 @@ function useWidgetHistories(
 
   // The (id, key) pairs that want a seed; value-compared so an equal render is a no-op.
   const wanted = widgets.flatMap((w) => {
-    const key = seedKey(w);
+    const key = seedKey(w, registry);
     return key === undefined ? [] : [[w.id, key] as const];
   });
   const wantedKey = JSON.stringify(wanted);
@@ -305,8 +319,8 @@ function useWidgetHistories(
     if (!enabled) return out;
     for (const w of widgets) {
       const seed = seeds[w.id];
-      out[w.id] = seed && seed.key === seedKey(w) ? seed.samples : undefined;
+      out[w.id] = seed && seed.key === seedKey(w, registry) ? seed.samples : undefined;
     }
     return out;
-  }, [widgets, seeds, enabled]);
+  }, [widgets, seeds, enabled, registry]);
 }

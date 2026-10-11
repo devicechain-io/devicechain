@@ -6,6 +6,8 @@ package sim
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -38,6 +40,39 @@ func fakeIngress(t *testing.T, deviceCount int, handler http.HandlerFunc) *Runti
 }
 
 func accepted(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusAccepted) }
+
+// A POST aborted by the simulator's OWN cancellation (Stop, or a shutdown) is not an
+// ingress failure: the ingress never answered, so there is no verdict to count. Filing it
+// as Failed made a clean Stop mid-tick read as a broken run (the flake this pins). The
+// request is held in flight deterministically, then the context is cancelled.
+func TestOwnCancellationMidPostIsNotCountedAsFailure(t *testing.T) {
+	arrived := make(chan struct{}, 20)
+	rt := fakeIngress(t, 4, func(w http.ResponseWriter, r *http.Request) {
+		// Drain the body: the server only notices a client disconnect (and cancels
+		// r.Context()) once the request body has been read.
+		_, _ = io.Copy(io.Discard, r.Body)
+		arrived <- struct{}{}
+		<-r.Context().Done()
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	errc := make(chan error, 1)
+	go func() { errc <- EmitAll(ctx, rt, 4, constantMetrics) }()
+	for i := 0; i < 4; i++ {
+		<-arrived
+	}
+	cancel()
+
+	err := <-errc
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("EmitAll error = %v, want context.Canceled", err)
+	}
+	if f := rt.Stats.Failed.Load(); f != 0 {
+		t.Errorf("failed = %d for emits aborted by our own cancellation: not an ingress failure", f)
+	}
+	if e := rt.Stats.Emitted.Load(); e != 0 {
+		t.Errorf("emitted = %d for emits that never got an answer", e)
+	}
+}
 
 func constantMetrics(int, DeviceInstance) map[string]float64 {
 	return map[string]float64{"speed_kph": 1}

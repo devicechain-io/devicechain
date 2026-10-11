@@ -218,7 +218,7 @@ func TestTheLostCounterNameMatchesTheAlertSelector(t *testing.T) {
 		"device-management", "user-management", "event-processing", "event-sources",
 		"event-management", "device-state", "command-delivery", "dashboard-management",
 		"notification-management", "outbound-connectors", "ai-inference", "mcp",
-		"lwm2m-ingest", "sparkplug-ingest",
+		"lwm2m-ingest", "sparkplug-ingest", "update-management",
 	} {
 		ms := &core.Microservice{InstanceId: "test", FunctionalArea: area}
 		reg := prometheus.NewRegistry()

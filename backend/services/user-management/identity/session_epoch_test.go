@@ -181,7 +181,19 @@ func (e *sessionEnv) refreshOAuth(token string) (*OAuthTokens, error) {
 // forge signs a token with the instance key directly, bypassing the issuer's refusal
 // of an empty epoch. With register set, its jti is stored in the refresh KV the way
 // a real mint stores it, so the ONLY thing that can refuse it is the epoch check.
+//
+// It gives the token a LIVE sign-in (sid) when the claims name none, so that a test of the
+// epoch check is refused by the epoch and nothing else; forgeWithoutSid does not.
 func (e *sessionEnv) forge(t *testing.T, claims auth.Claims, register bool) string {
+	t.Helper()
+	if claims.SessionID == "" {
+		claims.SessionID = e.sidOf(t, claims.Email)
+	}
+	return e.forgeWithoutSid(t, claims, register)
+}
+
+// forgeWithoutSid signs the claims exactly as given, sid included (or not).
+func (e *sessionEnv) forgeWithoutSid(t *testing.T, claims auth.Claims, register bool) string {
 	t.Helper()
 	now := time.Now()
 	claims.ID = uuid.NewString()
@@ -520,12 +532,13 @@ func TestATransientStoreErrorInTheOAuthGrantIsAServerError(t *testing.T) {
 	e := newSessionEnv(t)
 	e.createMember(t, "pat@example.com", "pw-1")
 	epoch := e.rowEpoch(t, "pat@example.com")
+	sid := e.sidOf(t, "pat@example.com")
 
 	sqlDB, err := e.db().DB()
 	require.NoError(t, err)
 	require.NoError(t, sqlDB.Close())
 
-	_, err = e.m.mintScopedGrant(context.Background(), "pat@example.com", epoch, "acme",
+	_, err = e.m.mintScopedGrant(context.Background(), "pat@example.com", epoch, sid, "acme",
 		auth.ScopeReadOnly, auth.ScopeReadOnly, nil, sessClient)
 	assertOAuthErrorCode(t, err, "server_error")
 }

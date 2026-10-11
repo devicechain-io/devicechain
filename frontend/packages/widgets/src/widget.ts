@@ -1,33 +1,14 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// The widget contract — the shape every built-in (and every future custom widget)
-// implements, plus small helpers for reading a widget's opaque `options` bag and
+// The widget contract's helpers: small functions for reading a widget's opaque `options` bag and
 // picking the measurement a single-value widget should show.
 
-import type { MeasurementSample, WidgetActions, WidgetInstance } from '@devicechain/dashboards';
-import type { ComponentType } from 'react';
+import type { MeasurementSample, WidgetInstance } from '@devicechain/dashboards';
 
-import type { MeasurementStreamState } from './hooks';
-
-// A widget is a PURE React component of its definition instance and already-
-// resolved live data — it never touches the DashboardHub directly. This is the
-// public custom-widget interface: a widget is a function of (widget, data), so it
-// renders identically from a live stream, a recorded window, or a test fixture.
-// ConnectedWidget binds the hub to this contract and dispatches on the widget's data
-// CHANNEL (see WIDGET_CHANNEL): measurement widgets receive a MeasurementStreamState
-// (the default), alarm widgets an AlarmStreamState. The data type is a generic so each
-// widget declares exactly the shape it consumes.
-export interface WidgetProps<D = MeasurementStreamState> {
-  widget: WidgetInstance;
-  data: D;
-  // The action seam (writes), threaded in by the renderer. Undefined when the runtime
-  // supplies none — an acting widget then renders read-only. Present for the live hub and
-  // the synthetic preview source alike, so an action widget renders identically in both.
-  actions?: WidgetActions;
-}
-
-export type WidgetComponent<D = MeasurementStreamState> = ComponentType<WidgetProps<D>>;
+// WidgetProps / WidgetComponent are defined ONCE, in the SDK, and re-exported here so the
+// existing imports keep resolving.
+export type { WidgetComponent, WidgetProps } from '@devicechain/widget-sdk';
 
 // pickSample chooses the sample a single-value widget (card, gauge) shows: the
 // named measurement, or the first available when no name is pinned.
