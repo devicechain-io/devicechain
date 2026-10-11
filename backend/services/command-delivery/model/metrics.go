@@ -77,6 +77,9 @@ var metricSafeCodes = map[RejectionCode]struct{}{
 	// new code is caught by the "other" bucket at runtime.
 	RejectPayloadNotJSON:       {},
 	RejectMetadataNotJSON:      {},
+	RejectPayloadTooLarge:      {},
+	RejectMetadataTooLarge:     {},
+	RejectNameTooLong:          {},
 	RejectExpiresAtInvalid:     {},
 	RejectHeldCeilingExceeded:  {},
 	RejectUnclassified:         {},
