@@ -208,6 +208,12 @@ func (s *Store) DeleteIdentity(ctx context.Context, id *Identity) error {
 		if err := tx.Unscoped().Where("identity_id = ?", id.ID).Delete(&Membership{}).Error; err != nil {
 			return err
 		}
+		// The external accounts linked to this identity go with it. A link left behind would
+		// name an identity that no longer exists, and an identity created again at the same
+		// email must start with NO links — inheriting one is account takeover by recycling.
+		if err := tx.Where("identity_id = ?", id.ID).Delete(&IdentityLink{}).Error; err != nil {
+			return err
+		}
 		return tx.Unscoped().Delete(id).Error
 	})
 }

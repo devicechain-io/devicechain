@@ -195,6 +195,13 @@ type Membership struct {
 	TenantId   string `gorm:"uniqueIndex:idx_iam_membership_identity_tenant;not null;size:128"`
 	Enabled    bool   `gorm:"not null;default:true"`
 
+	// ManagedBy is the id of the IdP connection that manages this membership, or nil for a
+	// manual one. A managed membership's roles follow the connection; a manual one is never
+	// touched by it. There is deliberately NO foreign key: deleting a connection DISABLES
+	// its managed memberships and keeps this value, because deleting them or clearing it
+	// would silently turn IdP-granted roles into manual grants nobody reviews.
+	ManagedBy *uint `gorm:"index:idx_iam_memberships_managed_by"`
+
 	// Tenant (data-plane) roles for this identity in this tenant. Their
 	// authorities ride the tenant token and gate the data services.
 	TenantRoles []Role `gorm:"many2many:iam_membership_tenant_roles;"`

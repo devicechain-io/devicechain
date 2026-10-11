@@ -35,6 +35,7 @@ var (
 	ErrRoleNotFound         = errors.New("role not found")
 	ErrProtectedRole        = errors.New("the superuser system role cannot be deleted")
 	ErrTenantHasMemberships = integrity.NewRefusal(integrity.ClassReference, "tenant still has memberships; remove them first")
+	ErrRoleInUseByMapping   = integrity.NewRefusal(integrity.ClassReference, "role is still mapped from an identity provider group; remove the mapping first")
 	ErrTierNotFound         = errors.New("tenant tier not found")
 	ErrTierInUse            = integrity.NewRefusal(integrity.ClassReference, "tenant tier still has tenants; move them to another tier first")
 	ErrUnknownTierColor     = errors.New("unknown tier color (must be a palette token or empty)")
@@ -178,6 +179,16 @@ func (s *Service) DeleteRole(ctx context.Context, scope, token string) (bool, er
 	}
 	if err != nil {
 		return false, err
+	}
+	// A role an identity provider maps a group to cannot be deleted from under that
+	// mapping. The database's RESTRICT foreign key would refuse too, but with a message
+	// that names no mapping; this is the sentence an administrator can act on.
+	n, err := s.iam.CountIdpRoleMappingsForRole(ctx, r.ID)
+	if err != nil {
+		return false, err
+	}
+	if n > 0 {
+		return false, fmt.Errorf("%w (%d mapping(s) name %q)", ErrRoleInUseByMapping, n, token)
 	}
 	if err := s.iam.DeleteRole(ctx, r); err != nil {
 		return false, err
