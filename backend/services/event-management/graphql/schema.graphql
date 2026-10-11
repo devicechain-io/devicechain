@@ -289,7 +289,9 @@ type AlertEventSearchResults {
 """
 Filters for a server-side, time-bucketed measurement aggregation. The device, event type, time
 range and anchor filters work as in EventSearchCriteria, with an added filter on measurement
-name. The result contains every matching bucket, so bound it with a time range.
+name. startTime is required; a range that would produce more than 10,000 buckets, or a
+result of more than 50,000 rows (one per bucket per measurement name), is refused with
+LIMIT_EXCEEDED, so narrow the range, filter on a name or widen intervalSeconds.
 """
 # Criteria for a server-side, time-bucketed measurement aggregation. Reuses the
 # event search filters (device, event types, time range, anchor) plus an optional
@@ -311,15 +313,15 @@ input MeasurementAggregationCriteria {
     """
     eventTypes: [Int!]
     """
-    Only readings that occurred at or after this instant, as an RFC 3339 timestamp. Omit for no
-    lower bound. When the aggregation is served from one-minute summaries (see intervalSeconds)
+    Only readings that occurred at or after this instant, as an RFC 3339 timestamp. Required;
+    omitting it is an error. When the aggregation is served from one-minute summaries (see intervalSeconds)
     the bound is applied at whole-minute granularity, so readings earlier in the same minute are
     included.
     """
     startTime: String
     """
-    Only readings that occurred at or before this instant, as an RFC 3339 timestamp. Omit for no
-    upper bound. When the aggregation is served from one-minute summaries (see intervalSeconds)
+    Only readings that occurred at or before this instant, as an RFC 3339 timestamp. Omit to use
+    the current time. Must not be before startTime. When the aggregation is served from one-minute summaries (see intervalSeconds)
     the bound is applied at whole-minute granularity, so readings later in the same minute are
     included.
     """
@@ -332,8 +334,8 @@ input MeasurementAggregationCriteria {
     """
     Width of each time bucket in seconds; must be 1 or more (smaller is an error). A width that
     is a multiple of 60 without an anchor filter is normally served from pre-computed one-minute
-    summaries (an operator setting can turn that off); any other width is computed from the individual readings. Bucket boundaries are
-    fixed instants shared by every query of the same width, not aligned to startTime.
+    summaries (an operator setting can turn that off); any other width is computed from the
+    individual readings. Bucket boundaries are fixed instants shared by every query of the same width, not aligned to startTime.
     """
     intervalSeconds: Int!
 }
@@ -399,8 +401,12 @@ type Query {
     ): AlertEventSearchResults!
     """
     Aggregates measurements into fixed-width time buckets (average, minimum, maximum, sum and
-    count) per measurement name, ordered by bucket start and then name. Returns an empty list
-    when nothing matches. Requires event:read.
+    count) per measurement name, ordered by bucket start and then name. startTime is required,
+    and a request covering more than 10,000 buckets (range / intervalSeconds, rounded up) is
+    refused with LIMIT_EXCEEDED; because buckets align to fixed instants, a result can hold one
+    more bucket per name than that count. A result of more than 50,000 rows (buckets times
+    measurement names) is also refused with LIMIT_EXCEEDED. Returns an empty list when nothing
+    matches. Requires event:read.
     """
     bucketedMeasurements(
         """Filters and bucket width."""
