@@ -78,7 +78,10 @@ describe('static widgets on the none channel', () => {
     const ds = { kind: 'device' as const, deviceToken: 'gone', measurements: ['t'] };
     const definition: DashboardDefinition = {
       ...staticOnly,
-      widgets: staticOnly.widgets.map((w) => ({ ...w, datasource: ds })),
+      widgets: [
+        { id: 'note', type: 'label', layout: layout(0), datasource: ds, options: { text: 'Zone A' } },
+        { id: 'logo', type: 'image', layout: layout(4), datasource: ds, options: { url: 'http://x/y.png', alt: 'plan' } },
+      ],
     };
     source.isDatasourceAvailable = async () => (calls.push('availability'), false);
     render(<DashboardRenderer definition={definition} hub={source} />);
