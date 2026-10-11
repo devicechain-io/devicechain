@@ -75,6 +75,8 @@ mutation {
 | `COMMAND_NOT_IN_VOCABULARY` | 配置文件限制命令，而此键不在集合中。检查大小写。 | 否 |
 | `PAYLOAD_SCHEMA_VIOLATION` | 载荷违反参数模式：未知参数、错误类型、超范围或缺少必填参数。 | 否 |
 | `PAYLOAD_NOT_JSON` / `METADATA_NOT_JSON` | 字符串不是有效 JSON。 | 否 |
+| `PAYLOAD_TOO_LARGE` / `METADATA_TOO_LARGE` | 载荷或元数据字符串超过 64 KiB。 | 否 |
+| `COMMAND_NAME_TOO_LONG` | 命令名称超过 128 字节。 | 否 |
 | `EXPIRES_AT_INVALID` | `expiresAt` 不是 RFC3339 时间戳。 | 否 |
 | `TOKEN_IN_USE` | 令牌由不属于你的命令占用，实际通常是平台为批次创建的命令。 | 否，请换令牌 |
 | `COMMAND_REJECTED` | 收到没有分类的拒绝。 | 否 |
