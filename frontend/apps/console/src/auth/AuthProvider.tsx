@@ -1,6 +1,7 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
+import i18n from 'i18next';
 import {
   createContext,
   useCallback,
@@ -15,6 +16,7 @@ import {
   login as apiLogin,
   selectTenant as apiSelectTenant,
   refresh as apiRefresh,
+  logout as apiLogout,
   getIdentityMemberships as apiIdentityMemberships,
   type IdentityAuth,
 } from '@/lib/api/user-management';
@@ -25,6 +27,7 @@ import {
   isExpired,
   type DecodedClaims,
 } from '@devicechain/client';
+import { useToast } from '@/components/ui/toast';
 
 // The access/refresh pair is persisted to localStorage so a reload keeps the
 // session. The GraphQL client never reads storage directly: this provider
@@ -72,7 +75,13 @@ interface AuthContextValue {
    * when no identity session is held; failures are swallowed (best-effort).
    */
   refreshMemberships: () => Promise<void>;
-  logout: () => void;
+  /**
+   * Sign out: ends the sign-in on the server (so its refresh and identity tokens stop
+   * working), then clears the local session. The local session is cleared even when the
+   * server cannot be reached - the user asked to leave - but that failure is logged and
+   * shown, not swallowed, because the server-side session is then still open.
+   */
+  logout: () => Promise<void>;
 
   // ── Identity session (admin console) ──
   /** True while a non-expired identity token is held. */
@@ -151,10 +160,34 @@ export function consumeSessionExpired(): boolean {
   return false;
 }
 
+// How long sign-out waits for the server before leaving anyway. The user asked to go; a
+// hung request must not keep them signed in.
+const LOGOUT_TIMEOUT_MS = 5000;
+
+// endServerSessions calls the logout mutation for each token and rejects if any call
+// failed or the server took too long (every call is still attempted).
+async function endServerSessions(tokens: string[]): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error('sign-out timed out')), LOGOUT_TIMEOUT_MS);
+  });
+  try {
+    const results = await Promise.race([
+      Promise.allSettled(tokens.map((t) => apiLogout(t))),
+      timeout,
+    ]);
+    const failed = results.find((r): r is PromiseRejectedResult => r.status === 'rejected');
+    if (failed) throw failed.reason;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [tokens, setTokens] = useState<StoredTokens | null>(() => readStored());
   const [identity, setIdentity] = useState<StoredIdentity | null>(() => readStoredIdentity());
   const [isLoading, setIsLoading] = useState(true);
+  const { toast } = useToast();
 
   // A ref mirror of tokens so the (stable) token getter always sees the latest
   // pair without being re-created on every refresh.
@@ -180,11 +213,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     writeStoredIdentity(next);
   }, []);
 
-  const logout = useCallback(() => {
-    refreshInFlight.current = null;
-    applyTokens(null);
-    applyIdentity(null);
-  }, [applyTokens, applyIdentity]);
+  const logout = useCallback(async () => {
+    // Both tokens name the same sign-in when they came from one login; send each that is
+    // held, so a stale tenant session left over from an earlier login is ended too.
+    const held = [tokensRef.current?.refreshToken, identityRef.current?.identityToken].filter(
+      (t): t is string => !!t,
+    );
+    try {
+      await endServerSessions(held);
+    } catch (err) {
+      console.error('Sign-out: the server did not confirm the session ended', err);
+      toast(i18n.t('login:signOutFailed'), 'error');
+    } finally {
+      refreshInFlight.current = null;
+      applyTokens(null);
+      applyIdentity(null);
+    }
+  }, [applyTokens, applyIdentity, toast]);
 
   // expireTenant / expireIdentity drop a session that can no longer be sustained
   // (the refresh call failed, or a no-refresh identity token lapsed) and flag the

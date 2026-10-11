@@ -106,6 +106,21 @@ export async function refresh(refreshToken: string): Promise<AuthToken> {
   return data.refresh;
 }
 
+// logout ends the sign-in a token belongs to on the SERVER: every refresh token and
+// identity token minted from that sign-in stops working, rather than living out its
+// lifetime in whatever copy of it survives the browser. Anonymous - the token is the
+// argument - so it works for a session whose access token has already lapsed.
+const LOGOUT = graphql(`
+  mutation Logout($token: String!) {
+    logout(token: $token)
+  }
+`);
+
+export async function logout(token: string): Promise<void> {
+  const data = await gql('user-management', LOGOUT, { token }, { anonymous: true });
+  if (data.logout !== true) throw new Error('The server did not confirm the sign-out');
+}
+
 // ── Current tenant (authenticated) ──────────────────────────────────────
 //
 // Describes the tenant the caller is acting within — resolved server-side from
