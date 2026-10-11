@@ -28,6 +28,7 @@ import {
 } from '@/components/registry';
 import { DefinitionsPanel, type DefinitionColumn } from './DefinitionsPanel';
 import { VersionsPanel } from './VersionsPanel';
+import { ConfigurationDeclarationPanel } from './ConfigurationDeclarationPanel';
 import { MetricDefinitionForm, CommandDefinitionForm } from './DefinitionForms';
 import { DetectionRuleAuthoring } from './DetectionRuleAuthoring';
 import { RuleHealthPanel } from './RuleHealthPanel';
@@ -296,6 +297,11 @@ export const deviceProfileResource: RegistryResource<DeviceProfile> = {
       value: 'commands',
       label: 'entities:deviceProfileCommandsTab',
       render: (p) => <CommandsTab profile={p} />,
+    },
+    {
+      value: 'configuration',
+      label: 'entities:deviceProfileConfigurationTab',
+      render: (p) => <ConfigurationDeclarationPanel key={p.token} profileToken={p.token} />,
     },
     {
       value: 'detection-rules',

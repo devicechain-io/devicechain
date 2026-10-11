@@ -253,7 +253,7 @@
   "configStatusReceived": "Recibida",
   "configStatusRejected": "Rechazada",
   "configDeclaredKeys": "Claves declaradas",
-  "configDeclaredKeysHint": "Se muestra desde la declaración en borrador actual del perfil. Los valores se editan como atributos compartidos en la pestaña Facetas; cambiar una clave declarada crea una nueva revisión.",
+  "configDeclaredKeysHint": "Se muestra desde la versión publicada activa del perfil. Los valores se editan como atributos compartidos en la pestaña Facetas; cambiar una clave declarada crea una nueva revisión.",
   "configDeclarationUnavailable": "No se pudo leer la declaración del perfil.",
   "configNoDeclaredKeys": "El perfil de este dispositivo no declara claves de configuración, por lo que el dispositivo ve un documento vacío.",
   "configKeyColumn": "Clave",

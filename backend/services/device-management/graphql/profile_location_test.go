@@ -36,7 +36,7 @@ func profileLocationCtx(t *testing.T) context.Context {
 	}
 	if err := db.AutoMigrate(&model.DeviceProfile{}, &model.DeviceProfileVersion{},
 		&model.MetricDefinition{}, &model.CommandDefinition{}, &model.DetectionRule{},
-		&model.DeviceType{}); err != nil {
+		&model.DeviceType{}, &model.DetectionRuleScopeRef{}); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
 	ctx := core.WithTenant(context.Background(), "acme")

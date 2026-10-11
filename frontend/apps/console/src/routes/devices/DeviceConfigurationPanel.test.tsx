@@ -76,7 +76,7 @@ function route(f: Fixture, revisions: { revision: number; digest: string }[] = [
     if (d.includes('query DeviceConfigurationDeclaration')) {
       return Promise.resolve({
         devicesByToken: [
-          { token: 'x', deviceType: { token: 't', profile: { token: 'p', configurationDeclaration: f.declaration ?? [] } } },
+          { token: 'x', deviceType: { token: 't', profile: { token: 'p', activeProfileVersion: { version: 1, configurationDeclaration: f.declaration ?? [] } } } },
         ],
       });
     }
