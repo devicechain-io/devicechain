@@ -225,6 +225,8 @@ export {
   enumValues,
   numberSpec,
   validateOptions,
+  HOST_OPTION_CONTROLS,
+  type HostOptionControl,
   type BooleanOptionSpec,
   type DefaultsOf,
   type EnumOptionSpec,

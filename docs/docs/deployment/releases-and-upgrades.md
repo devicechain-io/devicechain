@@ -3524,13 +3524,18 @@ Each sign-in is now a record that lasts as long as a refresh token (7 days by de
 
 Tokens issued before the upgrade carry no sign-in record and are refused, so **everyone signs in again once**: console, dashboard app, SDK and OAuth sessions end at their next refresh, within 15 minutes of the upgrade unless you changed the access-token lifetime. OAuth clients such as MCP agents authorize again. Nothing else needs doing.
 
-#### Events that carry a device password in the body are refused while versions are mixed {#next-upgrade-body-password}
+#### Events that carry a device password or access token in the body are affected while versions are mixed {#next-upgrade-body-password}
 
-From this release, `event-sources` and `device-management` pass a device password that arrives in an
-event body in a different form, and each needs the new version to read the other's. While old and new
-versions of the two run side by side during a rolling upgrade, events that carry a device password in
-the body (`MQTT_BASIC`, over HTTP or MQTT) are refused as unauthenticated, and they are not replayed.
-MQTT connects and access-token events are not affected.
+From this release, `event-sources` and `device-management` pass a device password or access token that
+arrives in an event body in a different form, and each needs the new version to read the other's. While
+old and new versions of the two run side by side during a rolling upgrade:
+
+- Events that carry a device password (`MQTT_BASIC`) in the body, over HTTP or MQTT, are refused as
+  unauthenticated, and they are not replayed.
+- Events that carry an access token (`ACCESS_TOKEN`) in the body are refused under
+  `deviceAuthMode: required`. Under `deviceAuthMode: optional` they are accepted on the device token they
+  name, without their credential being checked.
+- MQTT connects are not affected.
 
 Upgrade `event-sources` and `device-management` together, or accept the brief loss of those events.
 

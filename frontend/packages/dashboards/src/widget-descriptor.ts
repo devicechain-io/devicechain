@@ -147,8 +147,9 @@ export interface WidgetDisplay {
   title: string;
   description?: string;
   category?: string;
-  // A message id a host may resolve in its own catalog before falling back to `title`.
+  // Message ids a host may resolve in its own catalog before falling back to the text above.
   titleId?: string;
+  categoryId?: string;
 }
 
 // ---- The descriptor ---------------------------------------------------------

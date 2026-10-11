@@ -42,7 +42,24 @@ interface OptionSpecBase {
   // above. Built-ins declare today's console keys here; the host resolves them.
   labelId?: string;
   helpId?: string;
+  // Names a SPECIALIZED authoring workflow for this option, chosen by the descriptor and never
+  // inferred from the option's key. Absent means the generic field the spec kind implies.
+  //
+  // OPEN vocabulary, deliberately: any non-empty string registers, and a host that does not
+  // implement the named workflow renders the generic field for that option. A closed list
+  // here would make every package that names a newer control unregistrable on an older
+  // host. Name a package's own controls in a namespace ('acme/valve-curve'); the built-in
+  // names below are unprefixed.
+  control?: string;
 }
+
+// The specialized workflows the DeviceChain console implements — what a built-in may name
+// and expect honoured. Not a validation whitelist: a control outside this list is valid and
+// simply falls back. `command-vocabulary` picks a device command and bakes its key, label and
+// parameters together; `slot-target` picks one of the dashboard's slots; `basemap` marks the
+// raster tile source/credit pair.
+export const HOST_OPTION_CONTROLS = ['command-vocabulary', 'slot-target', 'basemap'] as const;
+export type HostOptionControl = (typeof HOST_OPTION_CONTROLS)[number];
 
 export interface StringOptionSpec extends OptionSpecBase {
   kind: 'string';
@@ -66,6 +83,12 @@ export interface BooleanOptionSpec extends OptionSpecBase {
 export interface EnumOptionSpec<V extends string = string> extends OptionSpecBase {
   kind: 'enum';
   values: readonly V[];
+  // Portable text and optional host message ids for the choices and for the "unset" entry,
+  // by the same lookup-then-fall-back rule as `label`. Absent, a choice shows its raw value.
+  valueLabels?: Readonly<Record<string, string>>;
+  valueLabelIds?: Readonly<Record<string, string>>;
+  placeholder?: string;
+  placeholderId?: string;
 }
 
 export type OptionSpec = StringOptionSpec | NumberOptionSpec | BooleanOptionSpec | EnumOptionSpec;

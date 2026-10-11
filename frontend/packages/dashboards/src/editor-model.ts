@@ -18,10 +18,11 @@ import type {
   CanvasGrid,
   CanvasSizing,
   DashboardDefinition,
+  KnownWidgetInstance,
   WidgetBox,
   WidgetInstance,
-  WidgetType,
 } from './types';
+import type { WidgetDescriptor } from './widget-descriptor';
 
 // The base box a widget is placed by in the editor.
 export function baseBox(widget: WidgetInstance): WidgetBox {
@@ -98,31 +99,14 @@ export function updateWidget(def: DashboardDefinition, id: string, next: WidgetI
   return { ...def, widgets: def.widgets.map((w) => (w.id === id ? next : w)) };
 }
 
-// humanizeType turns a widget type slug into a readable default title
-// ('timeseries-chart' → 'Timeseries chart').
-function humanizeType(type: WidgetType): string {
-  const words = type.replace(/-/g, ' ');
-  return words.charAt(0).toUpperCase() + words.slice(1);
-}
-
-// defaultOptions is the starter options bag for a freshly added widget: labels
-// carry placeholder text, alarm widgets default to the active alarms (the useful
-// operations default), everything else just a title.
-function defaultOptions(type: WidgetType): Record<string, unknown> {
-  if (type === 'label') return { text: 'New label' };
-  if (type === 'alarm-table' || type === 'alarm-count') {
-    return { title: humanizeType(type), state: 'ACTIVE' };
-  }
-  return { title: humanizeType(type) };
-}
-
-// addWidget appends a new default widget of the given type, placed on top
-// (z = max existing z + 1) at a sensible default base box, datasource left
-// undefined. Returns the new definition and the new widget's id so the caller
-// can select it.
+// addWidget appends a new widget of the described kind, placed on top (z = max existing
+// z + 1) at a sensible default base box, datasource left undefined. Its starting options
+// are the descriptor's own `defaults` — the widget's declaration, not a table in the editor
+// keyed by widget id. Returns the new definition and the new widget's id so the caller can
+// select it.
 export function addWidget(
   def: DashboardDefinition,
-  type: WidgetType,
+  descriptor: Pick<WidgetDescriptor, 'id' | 'defaults'>,
 ): { definition: DashboardDefinition; id: string } {
   const maxZ = def.widgets.reduce((m, w) => Math.max(m, baseBox(w).z), 0);
   const id = generateWidgetId();
@@ -130,9 +114,11 @@ export function addWidget(
   const box: WidgetBox = { col: 0, colSpan: 8, row: 0, rowSpan: 4, z: maxZ + 1 };
   const widget: WidgetInstance = {
     id,
-    type,
+    // A registered extension id is not in the built-in widget-type union; the instance shape
+    // that carries one belongs to the definition/runtime work, so this narrows until then.
+    type: descriptor.id as KnownWidgetInstance['type'],
     layout: { [BASE_BREAKPOINT]: box },
-    options: defaultOptions(type),
+    options: { ...descriptor.defaults },
   };
   return { definition: { ...def, widgets: [...def.widgets, widget] }, id };
 }

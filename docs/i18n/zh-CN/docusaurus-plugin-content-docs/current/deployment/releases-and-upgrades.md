@@ -2068,12 +2068,15 @@ gh attestation verify <archive> --repo devicechain-io/devicechain \
 
 升级前签发的令牌没有登录记录，会被拒绝，因此**所有人需重新登录一次**：控制台、仪表板应用、SDK 和 OAuth 会话在下次刷新时结束，最迟在升级后 15 分钟内（除非你修改了访问令牌有效期）。MCP 代理等 OAuth 客户端需重新授权。无需其他操作。
 
-#### 版本混合期间，正文中携带设备密码的事件会被拒绝 {#next-upgrade-body-password}
+#### 版本混合期间，正文中携带设备密码或访问令牌的事件会受到影响 {#next-upgrade-body-password}
 
-从本版本起，`event-sources` 与 `device-management` 以另一种形式传递出现在事件正文中的设备密码，
-且双方都需要新版本才能读取对方的内容。在滚动升级期间，只要两者的新旧版本并存，正文中携带设备密码的
-事件（`MQTT_BASIC`，通过 HTTP 或 MQTT）会被当作未认证而拒绝，并且不会重放。MQTT 连接和访问令牌事件
-不受影响。
+从本版本起，`event-sources` 与 `device-management` 以另一种形式传递出现在事件正文中的设备密码或访问令牌，
+且双方都需要新版本才能读取对方的内容。在滚动升级期间，只要两者的新旧版本并存：
+
+- 正文中携带设备密码（`MQTT_BASIC`）的事件（通过 HTTP 或 MQTT）会被当作未认证而拒绝，并且不会重放。
+- 正文中携带访问令牌（`ACCESS_TOKEN`）的事件在 `deviceAuthMode: required` 下会被拒绝；在
+  `deviceAuthMode: optional` 下，这些事件按其所声明的设备令牌被接受，但不会校验其凭据。
+- MQTT 连接不受影响。
 
 请同时升级 `event-sources` 与 `device-management`，或接受这些事件的短暂丢失。
 

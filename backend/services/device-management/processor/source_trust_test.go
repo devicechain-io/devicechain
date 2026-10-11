@@ -4,8 +4,6 @@
 package processor
 
 import (
-	"context"
-
 	"github.com/devicechain-io/dc-device-management/config"
 	dmodel "github.com/devicechain-io/dc-device-management/model"
 	dmproto "github.com/devicechain-io/dc-device-management/proto"
@@ -22,7 +20,7 @@ func (suite *EventResolverTestSuite) TestRequiredTransportAuthenticatedBypass() 
 	// Honored for exactly the event types the marked ingest path emits.
 	for _, et := range []esmodel.EventType{esmodel.StateChange, esmodel.Measurement} {
 		event := &esmodel.UnresolvedEvent{Device: "lw-dev-1", EventType: et, AuthenticatedTransport: true}
-		device, _, err := suite.resolver(config.AuthModeRequired).resolveDevice(context.Background(), event)
+		device, _, err := suite.resolver(config.AuthModeRequired).resolveDevice(credCtx(), event)
 		assert.NoError(suite.T(), err, et.String())
 		assert.Equal(suite.T(), "lw-dev-1", device.Token, et.String())
 	}
@@ -37,7 +35,7 @@ func (suite *EventResolverTestSuite) TestRequiredTransportAuthenticatedBypass() 
 func (suite *EventResolverTestSuite) TestTransportAuthenticatedConfinedToEmittedTypes() {
 	for _, et := range []esmodel.EventType{esmodel.NewRelationship, esmodel.Location, esmodel.Alert} {
 		event := &esmodel.UnresolvedEvent{Device: "lw-dev-1", EventType: et, AuthenticatedTransport: true}
-		_, reason, err := suite.resolver(config.AuthModeRequired).resolveDevice(context.Background(), event)
+		_, reason, err := suite.resolver(config.AuthModeRequired).resolveDevice(credCtx(), event)
 		assert.Error(suite.T(), err, et.String())
 		assert.Equal(suite.T(), uint(dmproto.FailureReason_Unauthenticated), reason, et.String())
 	}
@@ -49,7 +47,7 @@ func (suite *EventResolverTestSuite) TestTransportAuthenticatedConfinedToEmitted
 // trusted source, never assumed.
 func (suite *EventResolverTestSuite) TestRequiredUnmarkedStillRejected() {
 	event := &esmodel.UnresolvedEvent{Device: "lw-dev-1", EventType: esmodel.StateChange, AuthenticatedTransport: false}
-	_, reason, err := suite.resolver(config.AuthModeRequired).resolveDevice(context.Background(), event)
+	_, reason, err := suite.resolver(config.AuthModeRequired).resolveDevice(credCtx(), event)
 	assert.Error(suite.T(), err)
 	assert.Equal(suite.T(), uint(dmproto.FailureReason_Unauthenticated), reason)
 	suite.API.AssertNotCalled(suite.T(), "DevicesByToken")
@@ -60,10 +58,10 @@ func (suite *EventResolverTestSuite) TestRequiredUnmarkedStillRejected() {
 // event carrying a credential still authenticates through AuthenticateDevice.
 func (suite *EventResolverTestSuite) TestTransportAuthenticatedStillVerifiesPresentedCredential() {
 	suite.API.Mock.On("AuthenticateDevice").Return(deviceWithToken("TEST-123"), nil)
-	event := eventWithCredential("TEST-123")
+	event := eventWithCredential(suite.T(), "TEST-123")
 	event.EventType = esmodel.Measurement
 	event.AuthenticatedTransport = true
-	device, _, err := suite.resolver(config.AuthModeRequired).resolveDevice(context.Background(), event)
+	device, _, err := suite.resolver(config.AuthModeRequired).resolveDevice(credCtx(), event)
 	assert.NoError(suite.T(), err)
 	assert.Equal(suite.T(), "TEST-123", device.Token)
 	suite.API.AssertCalled(suite.T(), "AuthenticateDevice")

@@ -789,6 +789,10 @@ func sealPresentedSecret(tenant string, event *model.UnresolvedEvent) bool {
 	secret := event.CredentialSecret
 	event.CredentialSecret = nil
 	event.SealedCredentialSecret = nil
+	event.SealedCredentialId = nil
+	if !sealPresentedToken(tenant, event) {
+		return false
+	}
 	if secret == nil || *secret == "" || event.CredentialId == nil || *event.CredentialId == "" {
 		return true
 	}
@@ -802,6 +806,42 @@ func sealPresentedSecret(tenant string, event *model.UnresolvedEvent) bool {
 		return false
 	}
 	event.SealedCredentialSecret = &sealed
+	return true
+}
+
+// sealPresentedToken replaces an ACCESS_TOKEN credential id, which is the bearer token
+// itself, with its sealed form, bound to the tenant and the credential type (a token
+// cannot be its own authenticated data). It reports false when the event must not be
+// published: a token that could not be sealed is dropped, never published as sent.
+//
+// A token presented without a credential type authenticates nothing downstream (the
+// resolver treats such an event as presenting no credential), so it is discarded.
+func sealPresentedToken(tenant string, event *model.UnresolvedEvent) bool {
+	if event.CredentialId == nil {
+		return true
+	}
+	if event.CredentialType == nil && *event.CredentialId != "" {
+		event.CredentialId = nil
+		return true
+	}
+	if !esproto.IsBearerCredentialType(event.CredentialType) {
+		return true
+	}
+	token := *event.CredentialId
+	event.CredentialId = nil
+	if token == "" {
+		return true
+	}
+	if SecretTransit == nil {
+		log.Error().Msg("Dropping an event carrying an access token: no transit key to seal it with")
+		return false
+	}
+	sealed, err := SecretTransit.SealToken(tenant, *event.CredentialType, token)
+	if err != nil {
+		log.Error().Err(err).Msg("Dropping an event carrying an access token: it could not be sealed")
+		return false
+	}
+	event.SealedCredentialId = &sealed
 	return true
 }
 

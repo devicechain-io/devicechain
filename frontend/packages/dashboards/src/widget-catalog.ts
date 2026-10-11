@@ -115,8 +115,16 @@ function collectDescriptorIssues(d: unknown, id: string): DescriptorIssue[] {
 
   if (!isRecord(d.display)) {
     add('display', 'display must be an object');
-  } else if (typeof d.display.title !== 'string' || d.display.title === '') {
-    add('display.title', 'display.title must be a non-empty string');
+  } else {
+    if (typeof d.display.title !== 'string' || d.display.title === '') {
+      add('display.title', 'display.title must be a non-empty string');
+    }
+    // A host renders these as text and groups its add menu by category, so a non-string
+    // here is a crash (or an "[object Object]" heading) in someone else's console.
+    for (const text of ['description', 'category', 'titleId', 'categoryId'] as const) {
+      const value = d.display[text];
+      if (value !== undefined && typeof value !== 'string') add(`display.${text}`, `display.${text} must be a string`);
+    }
   }
 
   const channel = CHANNELS.find((c) => c === d.channel);
@@ -193,6 +201,14 @@ function checkOptions(options: unknown, add: Add): WidgetOptionSpecs | undefined
     if (typeof spec.doc !== 'string') {
       add(`${at}.doc`, 'doc must be a string');
     }
+    for (const text of ['label', 'help', 'labelId', 'helpId', 'placeholder', 'placeholderId'] as const) {
+      if (spec[text] !== undefined && typeof spec[text] !== 'string') add(`${at}.${text}`, `${text} must be a string`);
+    }
+    // Any non-empty string: a control this host does not implement is a fallback to the
+    // generic field, not a fault (see OptionSpecBase.control).
+    if (spec.control !== undefined && (typeof spec.control !== 'string' || spec.control === '')) {
+      add(`${at}.control`, `control must be a non-empty string, got ${JSON.stringify(spec.control)}`);
+    }
     switch (spec.kind) {
       case 'string':
       case 'boolean':
@@ -206,6 +222,20 @@ function checkOptions(options: unknown, add: Add): WidgetOptionSpecs | undefined
         if (!Array.isArray(spec.values) || spec.values.length === 0 || !spec.values.every((v) => typeof v === 'string')) {
           add(`${at}.values`, 'an enum option needs a non-empty list of string values');
           sound = false;
+        }
+        for (const table of ['valueLabels', 'valueLabelIds'] as const) {
+          const labels = spec[table];
+          if (labels === undefined) continue;
+          if (!isRecord(labels)) {
+            add(`${at}.${table}`, `${table} must be an object mapping enum values to strings`);
+            continue;
+          }
+          for (const [value, label] of Object.entries(labels)) {
+            if (typeof label !== 'string') add(`${at}.${table}.${value}`, `${table} entries must be strings`);
+            else if (Array.isArray(spec.values) && !spec.values.includes(value)) {
+              add(`${at}.${table}.${value}`, `${JSON.stringify(value)} is not one of this option's values`);
+            }
+          }
         }
         break;
       default:

@@ -11,7 +11,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
-import { ArrowLeft, Download, FlaskConical, History, Plus, Trash2 } from 'lucide-react';
+import { ArrowLeft, Download, FlaskConical, History, Trash2 } from 'lucide-react';
 import { hasAuthority } from '@devicechain/client';
 import {
   addWidget,
@@ -37,7 +37,6 @@ import {
   widgetSlotName,
   SyntheticDataSource,
   SYNTHETIC_GENERATORS,
-  WIDGET_TYPES,
   type CanvasSizing,
   type ConcreteSelector,
   type DashboardDefinition,
@@ -45,7 +44,7 @@ import {
   type SelectionTarget,
   type SlotBinding,
   type SyntheticGenerator,
-  type WidgetType,
+  type WidgetDescriptor,
 } from '@devicechain/dashboards';
 import {
   DashboardRenderer,
@@ -73,6 +72,8 @@ import { errMessage } from '@/routes/common';
 import { DashboardCanvas } from './DashboardCanvas';
 import { UnknownWidgetPanel, WidgetConfigPanel } from './WidgetConfigPanel';
 import { VersionHistorySheet } from './VersionHistorySheet';
+import { AddWidgetMenu } from './AddWidgetMenu';
+import { defaultWidgetRegistry, type EditorWidgetRegistry } from './widgetRegistry';
 
 type SaveState = { kind: 'clean' } | { kind: 'saving' } | { kind: 'error'; message: string };
 
@@ -267,12 +268,16 @@ export function DashboardWorkspace({
   updatedAt,
   loaded,
   resolver,
+  registry = defaultWidgetRegistry(),
 }: {
   token: string;
   name: string | null;
   updatedAt: string | null;
   loaded: DashboardDefinition;
   resolver: DeviceResolver;
+  // The widgets this console can author. Defaults to the built-ins; a host composing extra
+  // widgets passes the registry it composed, and the menu and settings follow it.
+  registry?: EditorWidgetRegistry;
 }) {
   const { t } = useTranslation(['dashboards', 'common']);
   const navigate = useNavigate();
@@ -375,8 +380,8 @@ export function DashboardWorkspace({
     navigate(to);
   };
 
-  const addWidgetOfType = (type: WidgetType) => {
-    const { definition, id } = addWidget(working, type);
+  const addWidgetOfType = (descriptor: WidgetDescriptor) => {
+    const { definition, id } = addWidget(working, descriptor);
     setWorking(definition);
     setSelectedId(id); // open the new widget's config panel
   };
@@ -588,23 +593,7 @@ export function DashboardWorkspace({
   const editActions = (
     <div className="flex items-center gap-2">
       {statusEl}
-      <DropdownMenu>
-        <DropdownMenuTrigger asChild>
-          <Button variant="outline" size="sm">
-            <Plus size={14} /> {t('workspaceAddWidget')}
-          </Button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="end">
-          {WIDGET_TYPES.map((type) => (
-            <DropdownMenuItem key={type} onSelect={() => addWidgetOfType(type)}>
-              {/* `type` is the widget-kind identifier ('gauge', 'table', …) — a
-                  technical enum used as both the React key and the menu row's text,
-                  not user-facing prose. */}
-              {type}
-            </DropdownMenuItem>
-          ))}
-        </DropdownMenuContent>
-      </DropdownMenu>
+      <AddWidgetMenu registry={registry} onAdd={addWidgetOfType} />
       {previewControl}
       {exportMenu}
       {historyButton}
@@ -684,6 +673,7 @@ export function DashboardWorkspace({
               // onto the next when both take the same datasource branch.
               key={selected.id}
               widget={selected}
+              registry={registry}
               datasource={resolveConcrete(working, selected)}
               slotName={widgetSlotName(selected)}
               slotScoped={isSlotScoped(working, widgetSlotName(selected))}

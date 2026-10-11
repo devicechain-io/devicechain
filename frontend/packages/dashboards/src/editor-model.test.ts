@@ -97,9 +97,11 @@ describe('updateWidget', () => {
 });
 
 describe('addWidget', () => {
-  it('appends a widget with a unique id, on top, and default options', () => {
+  const gauge = { id: 'gauge', defaults: { title: 'Gauge' } } as const;
+
+  it('appends a widget with a unique id, on top, and the descriptor defaults', () => {
     const d = def();
-    const { definition, id } = addWidget(d, 'gauge');
+    const { definition, id } = addWidget(d, gauge);
     expect(definition.widgets).toHaveLength(3);
     const added = definition.widgets[2];
     expect(added.id).toBe(id);
@@ -111,14 +113,16 @@ describe('addWidget', () => {
     expect(added.options).toEqual({ title: 'Gauge' });
   });
 
-  it('humanizes a hyphenated type into the default title', () => {
-    const { definition } = addWidget(def(), 'timeseries-chart');
-    expect(definition.widgets[2].options).toEqual({ title: 'Timeseries chart' });
+  it('takes its starting options from the descriptor, whatever the widget id', () => {
+    const { definition } = addWidget(def(), { id: 'acme/tank-level', defaults: { title: 'Tank', unit: '%' } });
+    expect(definition.widgets[2].type).toBe('acme/tank-level');
+    expect(definition.widgets[2].options).toEqual({ title: 'Tank', unit: '%' });
   });
 
-  it('uses placeholder text for a label', () => {
-    const { definition } = addWidget(def(), 'label');
-    expect(definition.widgets[2].options).toEqual({ text: 'New label' });
+  it('gives each widget its own copy of the defaults', () => {
+    const shared = { id: 'label', defaults: { text: 'New label' } } as const;
+    const first = addWidget(def(), shared).definition.widgets[2];
+    expect(first.options).not.toBe(shared.defaults);
   });
 });
 
