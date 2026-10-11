@@ -119,7 +119,7 @@ CREATE TABLE "event-management".state_change_events (
  reason text,
  session_id bigint DEFAULT 0 NOT NULL
 );
-CREATE UNIQUE INDEX idx_events_tenant_alt_id ON "event-management".events USING btree (tenant_id, alt_id, occurred_time) WHERE (alt_id IS NOT NULL);
+CREATE UNIQUE INDEX idx_events_tenant_device_alt_id ON "event-management".events USING btree (tenant_id, device_token, alt_id, occurred_time) WHERE (alt_id IS NOT NULL);
 CREATE UNIQUE INDEX uq_alert_events_idem ON "event-management".alert_events USING btree (tenant_id, occurred_time, payload_id);
 CREATE UNIQUE INDEX uq_event_anchors_idem ON "event-management".event_anchors USING btree (tenant_id, occurred_time, event_id, anchor_type, anchor_token);
 CREATE UNIQUE INDEX uq_location_events_idem ON "event-management".location_events USING btree (tenant_id, occurred_time, payload_id);

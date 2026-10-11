@@ -75,5 +75,8 @@ var (
 		// replaces (see its doc comment). It BUILDS, gated like the key rebuild, but every
 		// refusal hands the operator the build to run by hand: the schema is correct without it.
 		NewTenantDeviceIndexSchema(),
+		// Scopes the alternate-id idempotency key to the device (see its doc comment). Builds a
+		// unique index under the key rebuild's gates and drops the tenant-wide one it replaces.
+		NewDeviceAltIdKeySchema(),
 	}
 )
