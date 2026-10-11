@@ -5,10 +5,13 @@ package identity
 
 import (
 	"context"
+	"errors"
+	"strings"
 	"testing"
 
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/rdb"
+	nats "github.com/nats-io/nats.go"
 	"github.com/stretchr/testify/require"
 )
 
@@ -180,4 +183,87 @@ func TestLogoutIsAudited(t *testing.T) {
 
 	require.ErrorIs(t, e.m.Logout(ctx, "not-a-token"), ErrInvalidToken)
 	require.Equal(t, int64(1), e.auditCount(t, rdb.AuditOpLogout), "a refused logout must not be audited as a sign-out")
+}
+
+// faultyKV fails the operations a test names on keys with the given prefix and passes
+// everything else to the real bucket.
+type faultyKV struct {
+	nats.KeyValue
+	prefix              string
+	failGet, failDelete bool
+}
+
+var errStoreDown = errors.New("store down")
+
+func (f *faultyKV) Get(key string) (nats.KeyValueEntry, error) {
+	if f.failGet && strings.HasPrefix(key, f.prefix) {
+		return nil, errStoreDown
+	}
+	return f.KeyValue.Get(key)
+}
+
+func (f *faultyKV) Delete(key string, opts ...nats.DeleteOpt) error {
+	if f.failDelete && strings.HasPrefix(key, f.prefix) {
+		return errStoreDown
+	}
+	return f.KeyValue.Delete(key, opts...)
+}
+
+// A sign-out the store could not record is NOT a success: the sign-in is still open, so
+// the caller must hear a retryable error (and nothing is audited); once the store is back
+// the same token signs out and the sign-in ends.
+func TestLogoutReportsAStoreFailureAndLeavesTheSignInOpen(t *testing.T) {
+	e := newSessionEnv(t)
+	ctx := context.Background()
+	e.createMember(t, "pat@example.com", "pw-1")
+	idTok, pair := e.login(t, "pat@example.com", "pw-1")
+	real := e.m.refreshKV
+	e.m.refreshKV = &faultyKV{KeyValue: real, prefix: sessionKeyPrefix, failDelete: true}
+
+	require.ErrorIs(t, e.m.Logout(ctx, pair.RefreshToken), ErrLogoutUnavailable)
+	require.ErrorIs(t, e.m.Logout(ctx, idTok), ErrLogoutUnavailable)
+	require.Equal(t, int64(0), e.auditCount(t, rdb.AuditOpLogout), "a failed sign-out was audited")
+
+	e.m.refreshKV = real
+	_, err := e.m.SelectTenant(ctx, idTok, "acme")
+	require.NoError(t, err, "the failed sign-out ended the sign-in anyway, yet reported failure")
+	require.NoError(t, e.m.Logout(ctx, idTok))
+	_, err = e.m.SelectTenant(ctx, idTok, "acme")
+	require.ErrorIs(t, err, ErrInvalidToken, "the retried sign-out left the sign-in open")
+}
+
+// A session store that cannot be READ is an outage, not a closed session: the refresh is
+// retryable and the token is left unconsumed, so it works once the store recovers.
+func TestASessionStoreReadFailureIsRetryableNotTerminal(t *testing.T) {
+	e := newSessionEnv(t)
+	ctx := context.Background()
+	e.createMember(t, "pat@example.com", "pw-1")
+	_, pair := e.login(t, "pat@example.com", "pw-1")
+	real := e.m.refreshKV
+	e.m.refreshKV = &faultyKV{KeyValue: real, prefix: sessionKeyPrefix, failGet: true}
+
+	_, err := e.m.Refresh(ctx, pair.RefreshToken)
+	require.ErrorIs(t, err, ErrRefreshUnavailable)
+
+	e.m.refreshKV = real
+	_, err = e.m.Refresh(ctx, pair.RefreshToken)
+	require.NoError(t, err, "a store outage burned the refresh token")
+}
+
+// Logout burns the presented refresh token itself, not only the session record: its jti
+// is gone from the store, so a refresh that read the token before the record was deleted
+// loses its revision-checked claim.
+func TestLogoutBurnsThePresentedRefreshToken(t *testing.T) {
+	e := newSessionEnv(t)
+	ctx := context.Background()
+	e.createMember(t, "pat@example.com", "pw-1")
+	_, pair := e.login(t, "pat@example.com", "pw-1")
+	claims, err := e.m.validator.ValidateRefresh(pair.RefreshToken)
+	require.NoError(t, err)
+	_, err = e.m.refreshKV.Get(claims.ID)
+	require.NoError(t, err, "control: the refresh jti is in the store before the logout")
+
+	require.NoError(t, e.m.Logout(ctx, pair.RefreshToken))
+	_, err = e.m.refreshKV.Get(claims.ID)
+	require.ErrorIs(t, err, nats.ErrKeyNotFound, "logout left the presented refresh token's jti in the store")
 }
