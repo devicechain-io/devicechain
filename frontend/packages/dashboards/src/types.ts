@@ -202,7 +202,7 @@ export type UnknownWidgetType = typeof UNKNOWN_WIDGET_TYPE;
 
 // The implementation a widget was authored against, stored beside its type as `widget`.
 // `version` is provenance (the widget release the author used); `optionsVersion` and
-// `sdkApiVersion` are the compatibility key together with the id — see checkWidgetCompatibility.
+// `sdkApiVersion` are the compatibility key together with the id â€” see checkWidgetCompatibility.
 // A definition predating this field is a legacy built-in and carries none.
 export interface WidgetImplementationRef {
   version: string;
@@ -223,7 +223,7 @@ export interface KnownWidgetInstance {
   layout: WidgetLayout;
   // label/image widgets carry no datasource.
   datasource?: DatasourceSelector;
-  // Widget-specific options (series colors, unit, thresholds, …). Owned by the
+  // Widget-specific options (series colors, unit, thresholds, â€¦). Owned by the
   // widget package; opaque here.
   options?: Record<string, unknown>;
   raw?: undefined;

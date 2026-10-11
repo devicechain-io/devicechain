@@ -99,8 +99,8 @@ export function validateDefinitionOptions(
 //
 // A catalog the host supplies is consulted first (an extension lives only there); a built-in
 // the supplied catalog omits falls back to the built-in descriptor, since its schema is the
-// same everywhere. An id neither holds is a defect — the board was parsed against a catalog
-// other than the one it is validated with — so it throws rather than skipping the widget.
+// same everywhere. An id neither holds is a defect â€” the board was parsed against a catalog
+// other than the one it is validated with â€” so it throws rather than skipping the widget.
 function descriptorFor(type: string, catalog: WidgetCatalog | undefined): WidgetDescriptor {
   const descriptor = catalog?.get(type) ?? builtinWidgetCatalog.get(type);
   if (!descriptor) {

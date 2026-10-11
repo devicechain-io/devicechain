@@ -94,7 +94,7 @@ const SHARED_KEY_TYPES: Record<string, readonly WidgetType[]> = {
 // The option keys a widget's BINDING POLICY references (window, page size, alarm filters).
 // The channel adapters read these by the name the descriptor declares, with no literal in
 // any source file for the scan above to find, so a policy reference is itself the evidence of
-// a read — the same standing a literal `optNumber(widget.options, 'x')` had when
+// a read â€” the same standing a literal `optNumber(widget.options, 'x')` had when
 // connected-widget.tsx held them. binding-policy.test.ts proves the adapters honor them.
 function policyKeys(type: WidgetType): string[] {
   const keys: string[] = [];
@@ -186,7 +186,7 @@ describe('the option-read scan', () => {
 describe('binding-policy option references', () => {
   // Negative control for the policy half of the evidence: if the walk stopped finding
   // references, the declared-equals-read check would fail only for the keys it used to supply
-  // — pin that it still finds them, per channel.
+  // â€” pin that it still finds them, per channel.
   it('finds the references each channel declares', () => {
     expect(policyKeys('timeseries-chart')).toEqual(['window']);
     expect(policyKeys('alarm-table').sort()).toEqual(['acknowledged', 'maxRows', 'severity', 'state']);

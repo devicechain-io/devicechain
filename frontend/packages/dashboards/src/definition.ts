@@ -384,7 +384,7 @@ function reparseUnknownWidget(
   const storedType = typeof stored.type === 'string' ? stored.type : '';
   // The reason is recomputed against THIS catalog (it is never stored); a stored object the
   // catalog now resolves stays a placeholder here, because only a parse of the stored
-  // document — not a re-parse of a typed definition — promotes a widget.
+  // document â€” not a re-parse of a typed definition â€” promotes a widget.
   const reason = unresolvedReason(storedType, stored.widget, catalog, WIDGET_TYPE_SET.has(storedType)) ?? {
     code: 'unregistered' as const,
     message: `"${storedType}" is not available in this host`,
