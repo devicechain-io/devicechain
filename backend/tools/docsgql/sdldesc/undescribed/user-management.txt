@@ -96,9 +96,7 @@ TenantGovernance.geoFencePositionBudget
 TenantGovernance.geoFencePositionCeiling
 TenantGovernance.heldCommandCeiling
 TenantGovernance.ingestBurst
-TenantGovernance.ingestMessagesPerSecond
 TenantGovernance.outboundBurst
-TenantGovernance.outboundMessagesPerSecond
 TenantGovernance.purgeState
 TenantGovernance.shedPriority
 TenantGovernance.tierToken

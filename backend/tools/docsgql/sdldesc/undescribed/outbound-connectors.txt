@@ -63,6 +63,8 @@ Query.connector
 Query.connector(token:)
 Query.connectorTypes
 Query.connectorVersions
+Query.connectorVersions(limit:)
+Query.connectorVersions(offset:)
 Query.connectorVersions(token:)
 Query.connectors
 Query.connectors(criteria:)

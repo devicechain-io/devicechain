@@ -213,14 +213,34 @@ type DashboardPublication {
 }
 
 type Query {
-    # Look up a single dashboard by its token.
-    dashboard(token: String!): Dashboard
-    # Search dashboards by criteria.
-    dashboards(criteria: DashboardSearchCriteria!): DashboardSearchResults!
-    # List a dashboard's published versions, newest first, one page at a time. limit is
-    # clamped to the platform's maximum page size (1000) and defaults to 100; offset
-    # skips that many of the newest versions.
-    dashboardVersions(token: String!, limit: Int, offset: Int): [DashboardVersion!]!
+    """Returns the dashboard with the given token, or null if there is none. Requires dashboard:read."""
+    dashboard(
+        """Token of the dashboard."""
+        token: String!
+    ): Dashboard
+    """
+    Searches the tenant's dashboards, one page at a time. Results carry metadata only;
+    read a definition with the dashboard query. Requires dashboard:read.
+    """
+    dashboards(
+        """Filter and page to return."""
+        criteria: DashboardSearchCriteria!
+    ): DashboardSearchResults!
+    """
+    Lists a dashboard's published versions, newest first, one page at a time. Fails if no
+    dashboard has the token. Requires dashboard:read.
+    """
+    dashboardVersions(
+        """Token of the dashboard."""
+        token: String!
+        """
+        Maximum number of versions to return. Omitted or below 1 means 100; above 1000 is
+        capped at 1000.
+        """
+        limit: Int
+        """Number of the newest versions to skip before the page starts. Omitted or below 1 means 0."""
+        offset: Int
+    ): [DashboardVersion!]!
     """
     Returns the version of the dashboard that viewers are served, with its definition, or
     null if there is no dashboard with the token. Fails with code NOT_PUBLISHED if the
@@ -243,24 +263,17 @@ type Query {
 }
 
 type Mutation {
-    # Create a new dashboard.
-    createDashboard(request: DashboardCreateRequest!): Dashboard!
-    # Update the dashboard (draft) with the given token. The request is a PARTIAL
-    # update: a field you omit is left alone, a field you send is written, and an
-    # explicit null clears it (except definition, which refuses one). When
-    # expectedUpdatedAt is supplied it is an optimistic-concurrency precondition:
-    # the update fails if the dashboard's updatedAt has changed since (a concurrent
-    # edit). Pass the updatedAt the caller last read. An update that names no field
-    # writes nothing and does not move updatedAt, but a stale precondition on it is
-    # still a conflict.
-    updateDashboard(token: String!, request: DashboardUpdateRequest!, expectedUpdatedAt: String): Dashboard!
-    # Freeze the current draft into a new immutable version (N+1), make it the version
-    # viewers are served (publish activates), and return it with the dashboard.
-    # The draft's updatedAt is NOT moved by a publish.
-    # expectedUpdatedAt is the same optimistic-concurrency precondition as
-    # updateDashboard: publish is refused if the draft changed since ("dashboard was
-    # modified by another writer; reload and try again"; this is not the CONFLICT code).
-    publishDashboard(
+    """Creates a dashboard and returns it. Requires dashboard:write."""
+    createDashboard(
+        """The new dashboard's fields."""
+        request: DashboardCreateRequest!
+    ): Dashboard!
+    """
+    Partially updates a dashboard's draft and returns it. Requires dashboard:write.
+    An update that names no field writes nothing and leaves updatedAt unchanged.
+    """
+    updateDashboard(
+        """Token of the dashboard to update."""
         token: String!
         """The fields to change; see DashboardUpdateRequest for omit, set and clear."""
         request: DashboardUpdateRequest!
@@ -274,7 +287,9 @@ type Mutation {
     ): Dashboard!
     """
     Freezes the current draft into a new immutable version, numbered one above the
-    latest, and returns it. Requires dashboard:write.
+    latest, makes it the version viewers are served, and returns the version together
+    with the dashboard. The draft's updatedAt is not moved by a publish. Requires
+    dashboard:write.
     """
     publishDashboard(
         """Token of the dashboard to publish."""
@@ -289,12 +304,23 @@ type Mutation {
         """
         expectedUpdatedAt: String
     ): DashboardPublication!
-    # Re-draft: copy a published version's definition back into the draft. Returns
-    # the updated dashboard. History is append-only; nothing is deleted. When
-    # expectedUpdatedAt is supplied it is the same optimistic-concurrency precondition as
-    # updateDashboard: a rollback replaces the whole draft, so it is refused if the draft
-    # changed since ("dashboard was modified by another writer; reload and try again").
-    rollbackDashboard(token: String!, version: Int!, expectedUpdatedAt: String): Dashboard!
+    """
+    Copies a published version's definition back into the draft, replacing the whole
+    draft definition, and returns the dashboard. The version history is unchanged.
+    Requires dashboard:write.
+    """
+    rollbackDashboard(
+        """Token of the dashboard."""
+        token: String!
+        """The published version to restore into the draft."""
+        version: Int!
+        """
+        Optional precondition: the updatedAt you last read. Because a rollback replaces
+        the whole draft, it is refused with the same error as updateDashboard if the
+        draft has changed since.
+        """
+        expectedUpdatedAt: String
+    ): Dashboard!
     """
     Makes an existing published version the one viewers are served, without touching the
     draft (its definition and updatedAt are unchanged). Use it to re-serve an older
@@ -307,6 +333,13 @@ type Mutation {
         """Version number to serve."""
         version: Int!
     ): DashboardSummary!
-    # Delete the dashboard with the given token. Returns whether a row was deleted.
-    deleteDashboard(token: String!): Boolean!
+    """
+    Permanently deletes a dashboard and all of its published versions. Returns false if
+    no dashboard has the token. The token can be reused immediately. Requires
+    dashboard:write.
+    """
+    deleteDashboard(
+        """Token of the dashboard to delete."""
+        token: String!
+    ): Boolean!
 }

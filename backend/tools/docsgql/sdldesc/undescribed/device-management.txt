@@ -286,6 +286,9 @@ CommandEnqueueVerdict
 CommandEnqueueVerdict.allowed
 CommandEnqueueVerdict.code
 CommandEnqueueVerdict.reason
+ConfigurationKeyInput.description
+ConfigurationKeyInput.key
+ConfigurationKeyInput.valueType
 Customer
 Customer.createdAt
 Customer.customerType
@@ -1075,6 +1078,8 @@ Mutation.rollbackEntityGroup(version:)
 Mutation.setAssetParent
 Mutation.setAssetParent(childToken:)
 Mutation.setAssetParent(parentToken:)
+Mutation.setDeviceProfileConfigurationDeclaration(keys:)
+Mutation.setDeviceProfileConfigurationDeclaration(token:)
 Mutation.setEntityAttribute
 Mutation.setEntityAttribute(request:)
 Mutation.setFacetKey
@@ -1223,6 +1228,8 @@ Query.assetChildren(parentToken:)
 Query.assetParent
 Query.assetParent(token:)
 Query.assetTypeVersions
+Query.assetTypeVersions(limit:)
+Query.assetTypeVersions(offset:)
 Query.assetTypeVersions(token:)
 Query.assetTypes
 Query.assetTypes(criteria:)
@@ -1278,6 +1285,8 @@ Query.deviceCredentialsByToken(tokens:)
 Query.deviceLocationDeclaration
 Query.deviceLocationDeclaration(deviceToken:)
 Query.deviceProfileVersions
+Query.deviceProfileVersions(limit:)
+Query.deviceProfileVersions(offset:)
 Query.deviceProfileVersions(token:)
 Query.deviceProfiles
 Query.deviceProfiles(criteria:)
@@ -1310,6 +1319,8 @@ Query.devicesByToken(tokens:)
 Query.entityAttributes
 Query.entityAttributes(criteria:)
 Query.entityGroupVersions
+Query.entityGroupVersions(limit:)
+Query.entityGroupVersions(offset:)
 Query.entityGroupVersions(token:)
 Query.entityGroups
 Query.entityGroups(criteria:)

@@ -74,16 +74,12 @@ AdminOAuthClientCreateRequest.clientId
 AdminOAuthClientCreateRequest.confidential
 AdminOAuthClientCreateRequest.description
 AdminOAuthClientCreateRequest.name
-AdminOAuthClientCreateRequest.redirectUris
-AdminOAuthClientCreateRequest.scopes
 AdminOAuthClientSecret
 AdminOAuthClientSecret.client
 AdminOAuthClientSecret.clientSecret
 AdminOAuthClientUpdateRequest
 AdminOAuthClientUpdateRequest.description
 AdminOAuthClientUpdateRequest.name
-AdminOAuthClientUpdateRequest.redirectUris
-AdminOAuthClientUpdateRequest.scopes
 AdminRateSetting
 AdminRateSetting.override
 AdminRateSetting.source
@@ -122,10 +118,8 @@ AdminTenant.geoFencePositionCeiling
 AdminTenant.heldCommandCeiling
 AdminTenant.id
 AdminTenant.ingestBurst
-AdminTenant.ingestMessagesPerSecond
 AdminTenant.name
 AdminTenant.outboundBurst
-AdminTenant.outboundMessagesPerSecond
 AdminTenant.purgeEpoch
 AdminTenant.purgeState
 AdminTenant.shedPriority
@@ -142,10 +136,8 @@ AdminTenantCreateRequest.geoFencePositionBudget
 AdminTenantCreateRequest.geoFencePositionCeiling
 AdminTenantCreateRequest.heldCommandCeiling
 AdminTenantCreateRequest.ingestBurst
-AdminTenantCreateRequest.ingestMessagesPerSecond
 AdminTenantCreateRequest.name
 AdminTenantCreateRequest.outboundBurst
-AdminTenantCreateRequest.outboundMessagesPerSecond
 AdminTenantCreateRequest.shedPriority
 AdminTenantCreateRequest.tierToken
 AdminTenantCreateRequest.token
@@ -185,10 +177,8 @@ AdminTenantUpdateRequest.geoFencePositionBudget
 AdminTenantUpdateRequest.geoFencePositionCeiling
 AdminTenantUpdateRequest.heldCommandCeiling
 AdminTenantUpdateRequest.ingestBurst
-AdminTenantUpdateRequest.ingestMessagesPerSecond
 AdminTenantUpdateRequest.name
 AdminTenantUpdateRequest.outboundBurst
-AdminTenantUpdateRequest.outboundMessagesPerSecond
 AdminTenantUpdateRequest.shedPriority
 AdminTenantUpdateRequest.tierToken
 DeadLetter
@@ -233,7 +223,6 @@ Mutation.createRole
 Mutation.createRole(request:)
 Mutation.createTenant
 Mutation.createTenant(request:)
-Mutation.createTenantTier
 Mutation.createTenantTier(request:)
 Mutation.deleteIdentity
 Mutation.deleteIdentity(email:)
@@ -249,8 +238,6 @@ Mutation.deleteTenantTier(token:)
 Mutation.removeMembership
 Mutation.removeMembership(email:)
 Mutation.removeMembership(tenant:)
-Mutation.reorderTenantTiers
-Mutation.reorderTenantTiers(orderedTokens:)
 Mutation.rotateOauthClientSecret
 Mutation.rotateOauthClientSecret(clientId:)
 Mutation.setIdentityEnabled

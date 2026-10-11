@@ -9,7 +9,7 @@
 # call returns an error saying the API is not implemented in this build, so a client
 # cannot mistake an empty answer for a working one.
 type Query {
-    # Not implemented in this build. Always returns an error.
+    """Not implemented in this build. Always returns an error."""
     updateManagementInfo: String!
 }
 
