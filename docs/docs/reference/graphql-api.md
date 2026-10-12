@@ -679,8 +679,8 @@ something you cannot see through the API still refers to the record. Report it w
 the request; the server logs which reference refused it.
 
 A write that names a record that does not exist is normally refused by the service's own lookup
-before the write, with a message naming the token and no code. It carries `REFERENCE_VIOLATION`
-only when that record was removed while the write ran.
+before the write, with a message naming the token rather than with this code. It carries
+`REFERENCE_VIOLATION` only when that record was removed while the write ran.
 
 `INVALID_VALUE` means a value in the request is one the record does not allow, and the service did
 not catch it before the write. The message is:
@@ -695,6 +695,25 @@ treats `CONFLICT` as "the record already exists" does not treat them as success.
 involves both a value that must be unique and one of these carries `REFERENCE_VIOLATION` or
 `INVALID_VALUE`, never `CONFLICT`, and its message uses that code's sentence in place of the one for
 a value already in use.
+
+### A record that does not exist {#not-found}
+
+An operation refused because the record it names does not exist, or does not exist in your tenant,
+carries `extensions.code` set to `NOT_FOUND`:
+
+```json
+{
+  "errors": [{
+    "message": "record not found",
+    "path": ["cancelCommandBatch"],
+    "extensions": { "code": "NOT_FOUND" }
+  }]
+}
+```
+
+Branch on the code, not on the message, which a service may prefix with what it was doing. A few
+operations answer a missing record with a code of their own that says what is missing, such as
+`ARTIFACT_NOT_FOUND`, and those keep their own code.
 
 ## Request limits {#request-limits}
 

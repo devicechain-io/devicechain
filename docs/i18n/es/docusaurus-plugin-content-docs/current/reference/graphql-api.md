@@ -720,7 +720,7 @@ la API todavía se refiere al registro. Infórmalo con la hora de la solicitud; 
 qué referencia la rechazó.
 
 Una escritura que nombra un registro que no existe la rechaza normalmente la búsqueda propia del
-servicio antes de la escritura, con un mensaje que nombra el token y sin código. Solo lleva
+servicio antes de la escritura, con un mensaje que nombra el token y no con este código. Solo lleva
 `REFERENCE_VIOLATION` cuando ese registro se eliminó mientras la escritura se ejecutaba.
 
 `INVALID_VALUE` significa que un valor de la solicitud no está permitido en el registro y el
@@ -736,6 +736,25 @@ Ninguno de los dos códigos es `CONFLICT`, así que el código que trata `CONFLI
 ya existe" no los trata como un éxito. Un rechazo en el que intervienen a la vez un valor que debe
 ser único y uno de estos lleva `REFERENCE_VIOLATION` o `INVALID_VALUE`, nunca `CONFLICT`, y su
 mensaje usa la frase de ese código en lugar de la de un valor que ya está en uso.
+
+### Un registro que no existe {#not-found}
+
+Una operación que se rechaza porque el registro que nombra no existe, o no existe en tu tenant,
+lleva `extensions.code` con el valor `NOT_FOUND`:
+
+```json
+{
+  "errors": [{
+    "message": "record not found",
+    "path": ["cancelCommandBatch"],
+    "extensions": { "code": "NOT_FOUND" }
+  }]
+}
+```
+
+Decide según el código, no según el mensaje, al que un servicio puede anteponer lo que estaba
+haciendo. Algunas operaciones responden a un registro que falta con un código propio que dice qué
+falta, como `ARTIFACT_NOT_FOUND`, y esas conservan su propio código.
 
 ## Límites de las solicitudes {#request-limits}
 
