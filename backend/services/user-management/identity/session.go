@@ -604,10 +604,16 @@ func (m *Manager) endSignIn(ctx context.Context, token string) (*sessionRecord, 
 	// token (deleted, then re-created) has already ended its sign-in above, as logout must,
 	// but filing it would put the earlier tenant's event in the new tenant's journal. An
 	// identity token names no tenant and is filed as before.
+	//
+	// A store error while placing the tenant also leaves the sign-out unfiled. Filing it
+	// anyway would be the same cross-tenant write whenever the token is a predecessor's,
+	// and nothing can tell which it is without the row; the tenant row and the journal live
+	// in one database, so the write would most likely fail too. A dropped audit row is
+	// logged at the level recordAuth uses for one.
 	if claims.TokenType == auth.TokenTypeRefresh {
 		if err := m.admitRefreshTenant(ctx, claims); err != nil {
 			if !errors.Is(err, errTenantAccessDenied) {
-				log.Warn().Err(err).Msg("Logout ended the sign-in but could not place its token's tenant; the sign-out is not audited.")
+				log.Error().Err(err).Msg("Logout ended the sign-in but could not place its token's tenant; the sign-out is not audited.")
 			}
 			return ended, nil
 		}

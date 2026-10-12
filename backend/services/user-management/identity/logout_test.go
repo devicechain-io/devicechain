@@ -203,12 +203,60 @@ func TestLogoutWithAPredecessorTenantsTokenIsNotAuditedUnderTheSuccessor(t *test
 
 	require.NoError(t, e.m.Logout(ctx, pair.RefreshToken), "logout must still end the session")
 	e.requireBurned(t, jti)
+	e.requireSessionEnded(t, pair.RefreshToken)
 	require.Equal(t, int64(0), e.auditCount(t, rdb.AuditOpLogout),
 		"a predecessor tenant's sign-out was audited under the successor")
 
 	// Control: a sign-out of a token issued for the current tenant is audited.
 	_, fresh := e.login(t, "pat@example.com", "pw-1")
 	require.NoError(t, e.m.Logout(ctx, fresh.RefreshToken))
+	require.Equal(t, int64(1), e.auditCount(t, rdb.AuditOpLogout))
+}
+
+// requireSessionEnded asserts the sign-in a refresh token names has no session record left.
+func (e *sessionEnv) requireSessionEnded(t *testing.T, refreshToken string) {
+	t.Helper()
+	claims, err := e.validator.ValidateRefresh(refreshToken)
+	require.NoError(t, err)
+	require.NotEmpty(t, claims.SessionID)
+	_, err = e.m.refreshKV.Get(sessionKey(claims.SessionID))
+	require.True(t, errors.Is(err, nats.ErrKeyNotFound), "the sign-in's session record survived logout: %v", err)
+}
+
+// A store error while placing the token's tenant must not keep the sign-in open or turn the
+// logout into a failure: the session and the token are ended before the tenant is looked up,
+// and the answer is the same success. The sign-out is not filed, because without the tenant
+// row nothing can say whether the token belongs to the tenant now holding its token.
+func TestALogoutThatCannotPlaceItsTenantStillEndsTheSignIn(t *testing.T) {
+	e := newSessionEnv(t)
+	ctx := context.Background()
+	e.createMember(t, "pat@example.com", "pw-1")
+	_, pair := e.login(t, "pat@example.com", "pw-1")
+	_, jti := e.issuedAt(t, pair.RefreshToken)
+
+	sqlDB, err := e.db().DB()
+	require.NoError(t, err)
+	sqlDB.SetMaxOpenConns(1) // ":memory:" is per connection; see breakIdentityStore
+	require.NoError(t, e.db().Exec("ALTER TABLE iam_tenants RENAME TO iam_tenants_away").Error)
+	err = e.m.Logout(ctx, pair.RefreshToken)
+	require.NoError(t, e.db().Exec("ALTER TABLE iam_tenants_away RENAME TO iam_tenants").Error)
+
+	require.NoError(t, err, "a tenant lookup failure turned a completed logout into an error")
+	e.requireBurned(t, jti)
+	e.requireSessionEnded(t, pair.RefreshToken)
+	require.Equal(t, int64(0), e.auditCount(t, rdb.AuditOpLogout),
+		"a sign-out whose tenant could not be placed was filed under its token anyway")
+	_, err = e.m.Refresh(ctx, pair.RefreshToken)
+	require.ErrorIs(t, err, ErrInvalidToken, "the refresh token outlived its logout")
+}
+
+// An identity token names no tenant, so the tenant check does not apply to it: its sign-out
+// is filed exactly as before.
+func TestLogoutWithAnIdentityTokenIsAudited(t *testing.T) {
+	e := newSessionEnv(t)
+	e.createMember(t, "pat@example.com", "pw-1")
+	idTok, _ := e.login(t, "pat@example.com", "pw-1")
+	require.NoError(t, e.m.Logout(context.Background(), idTok))
 	require.Equal(t, int64(1), e.auditCount(t, rdb.AuditOpLogout))
 }
 
