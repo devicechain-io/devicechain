@@ -236,5 +236,6 @@
   "unresolvedReasonSdkIncompatible": "se escribió para otra versión del SDK de widgets",
   "widgetVersionDrift": "Creado con la versión {{authored}}. Esta consola lo muestra con la versión {{installed}}; compruebe que sigue viéndose bien.",
   "widgetEditorFailed": "El editor de ajustes de este widget se detuvo con un error. Sus demás cambios se conservan; los detalles están en la consola del navegador.",
-  "widgetEditorWriteFailed": "El editor de ajustes intentó guardar un valor que este widget no admite, así que no se cambió nada: {{error}}"
+  "widgetEditorWriteFailed": "El editor de ajustes intentó guardar un valor que este widget no admite, así que no se cambió nada: {{error}}",
+  "widgetEditorServiceFailed": "El editor de ajustes pidió información a esta consola y la solicitud falló: {{error}}"
 }

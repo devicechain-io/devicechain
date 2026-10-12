@@ -236,5 +236,6 @@
   "unresolvedReasonSdkIncompatible": "it was written for a different widget SDK version",
   "widgetVersionDrift": "Authored with version {{authored}}. This console renders it with version {{installed}}; check that it still looks right.",
   "widgetEditorFailed": "This widget's settings editor stopped with an error. Your other changes are kept; the details are in the browser console.",
-  "widgetEditorWriteFailed": "The settings editor tried to save a value this widget cannot hold, so nothing was changed: {{error}}"
+  "widgetEditorWriteFailed": "The settings editor tried to save a value this widget cannot hold, so nothing was changed: {{error}}",
+  "widgetEditorServiceFailed": "The settings editor asked this console for information and the request failed: {{error}}"
 }
