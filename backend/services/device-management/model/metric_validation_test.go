@@ -39,6 +39,27 @@ func TestValidateMetricValue(t *testing.T) {
 			&MetricDefinition{MetricKey: "temp", DataType: "DOUBLE", MaxValue: sql.NullFloat64{Float64: 100, Valid: true}},
 			"120", false,
 		},
+		// The bounds are inclusive, and nothing past them is let through.
+		{
+			"at max",
+			&MetricDefinition{MetricKey: "temp", DataType: "DOUBLE", MaxValue: sql.NullFloat64{Float64: 100, Valid: true}},
+			"100", true,
+		},
+		{
+			"just above max",
+			&MetricDefinition{MetricKey: "temp", DataType: "DOUBLE", MaxValue: sql.NullFloat64{Float64: 100, Valid: true}},
+			"100.5", false,
+		},
+		{
+			"at min",
+			&MetricDefinition{MetricKey: "temp", DataType: "DOUBLE", MinValue: sql.NullFloat64{Float64: 0, Valid: true}},
+			"0", true,
+		},
+		{
+			"just below min",
+			&MetricDefinition{MetricKey: "temp", DataType: "DOUBLE", MinValue: sql.NullFloat64{Float64: 0, Valid: true}},
+			"-0.5", false,
+		},
 		{
 			"within bounds",
 			&MetricDefinition{MetricKey: "temp", DataType: "DOUBLE",
