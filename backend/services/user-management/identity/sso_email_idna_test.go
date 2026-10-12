@@ -86,6 +86,12 @@ func TestInvalidIdnaEmailIsRefusedEverywhere(t *testing.T) {
 	// The store is the last line: a caller that forgot to canonicalise cannot insert.
 	err := e.store.CreateIdentity(ctx, &iam.Identity{Email: "Ann@" + idnUnicode, Enabled: true})
 	require.ErrorIs(t, err, iam.ErrEmailNotCanonical)
+	// ...and the same holds on the two other paths that insert an identity.
+	err = e.store.CreateProvisionedIdentity(ctx, &iam.Identity{Email: "Ann@" + idnUnicode, Enabled: true}, &iam.IdentityLink{Subject: "sub-ann"})
+	require.ErrorIs(t, err, iam.ErrEmailNotCanonical, "provisioning")
+	err = e.store.SeedSuperuser(ctx, "Su@"+idnUnicode, "hash", nil, nil)
+	require.ErrorIs(t, err, iam.ErrEmailNotCanonical, "superuser seed")
+	require.EqualValues(t, 0, e.identityCount(t, "%@"+idnUnicode))
 }
 
 func TestSsoCallbackResolvesTheSameIdentityAcrossIdnaSpellings(t *testing.T) {
@@ -161,6 +167,35 @@ func TestLinkRequestMatchesAcrossIdnaSpellings(t *testing.T) {
 	require.NoError(t, e.m.LinkIdentity(ctx, "PIA@"+idnUnicode, "idn-idp", "sub-pia"))
 	_, err = e.m.UnlinkIdentity(ctx, "pia@"+idnUnicode, "idn-idp")
 	require.NoError(t, err)
+}
+
+// Every door that takes an address from a person -- the two sign-in starts and each
+// administrator action -- is driven through its CALLER with the unicode spelling, so a
+// caller that computed its own form instead of the canonical one fails here.
+func TestEveryDoorReachesTheIdentityByItsUnicodeSpelling(t *testing.T) {
+	e := newSsoEnv(t)
+	ctx := context.Background()
+	e.addConnection(t, "idn-idp", iam.IdpKindTenant, idnUnicode, "acme")
+	e.ssoIdentity(t, "rae@"+idnPunycode, "idn-idp", "sub-rae", "acme")
+	_, challenge := verifierPair()
+
+	// Both sign-in starts route a unicode-spelled address to the connection.
+	b, err := e.m.BeginSso(ctx, BeginSsoInput{Email: "Rae@BÜCHER.example", ReturnTo: ssoTestReturnTo, CodeChallenge: challenge}, e.source())
+	require.NoError(t, err)
+	require.NotNil(t, b, "beginSso by the unicode spelling finds the connection")
+	e.beginAuthz(t, "rae@"+idnUnicode)
+
+	// Each administrator action finds the one identity.
+	_, err = e.m.RevokeSessions(ctx, "Rae@"+idnUnicode)
+	require.NoError(t, err, "revoke")
+	_, err = e.m.ClearPassword(ctx, "rae@BÜCHER.example")
+	require.NoError(t, err, "clear password")
+	_, err = e.admin.SetIdentityEnabled(ctx, "RAE@"+idnUnicode, false)
+	require.NoError(t, err, "disable")
+	deleted, err := e.admin.DeleteIdentity(ctx, "rae@"+idnUnicode)
+	require.NoError(t, err)
+	require.True(t, deleted, "delete by the unicode spelling removes the identity")
+	require.EqualValues(t, 0, e.identityCount(t, "%@"+idnPunycode))
 }
 
 func TestVerifiedDomainMatchingUsesTheEmailsCanonicalForm(t *testing.T) {

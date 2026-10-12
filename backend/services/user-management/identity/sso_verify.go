@@ -45,7 +45,7 @@ const maxIdpResponseBytes = 512 << 10
 // ssoClaims is what a verified ID token vouches for.
 type ssoClaims struct {
 	Subject string
-	// Email is normalised (iam.NormalizeEmail) and Domain is its normalised domain.
+	// Email is canonical (iam.CanonicalEmail) and Domain is its normalised domain.
 	Email  string
 	Domain string
 	// Verified is whether the PROVIDER vouches that the person controls Email: the

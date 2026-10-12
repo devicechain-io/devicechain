@@ -37,7 +37,10 @@ func TestCanonicalEmailMapsEverySpellingToOne(t *testing.T) {
 
 func TestCanonicalEmailRefusesWhatIsNotAnAddress(t *testing.T) {
 	for _, in := range []string{"", "a", "a@", "@b.example", "a@@b.example", "a@b@c.example",
-		"a@xn--a.example", "a@b c.example", "a@b_c.example", "a@b.example..", "a@" + string([]byte{0xff}) + ".example"} {
+		"a@xn--a.example", "a@b c.example", "a@b_c.example", "a@b.example..", "a@" + string([]byte{0xff}) + ".example",
+		// Invalid UTF-8 in the LOCAL part: lower-casing would turn every invalid byte into
+		// U+FFFD, so two different byte strings would become one address.
+		"a" + string([]byte{0xff}) + "@b.example", "a" + string([]byte{0xfe}) + "@b.example"} {
 		_, err := CanonicalEmail(in)
 		require.ErrorIsf(t, err, ErrEmailInvalid, "%q", in)
 	}
