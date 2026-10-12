@@ -253,12 +253,11 @@ func (m *Manager) BeginSso(ctx context.Context, in BeginSsoInput, source string)
 
 // emailDomain returns the normalised domain of an address, or an error.
 func emailDomain(email string) (string, error) {
-	email = iam.NormalizeEmail(email)
-	at := strings.LastIndex(email, "@")
-	if at <= 0 || strings.Count(email, "@") != 1 {
+	email, err := iam.CanonicalEmail(email)
+	if err != nil {
 		return "", ErrSsoInvalidRequest
 	}
-	return NormalizeDomain(email[at+1:])
+	return NormalizeDomain(iam.EmailDomain(email))
 }
 
 // usableConnection is whether a connection can begin a sign-in at all: enabled, with a
@@ -695,6 +694,11 @@ func (m *Manager) completeSsoRecord(ctx context.Context, rec ssoCode) (*Identity
 	id, err := m.iam.IdentityByEmail(ctx, rec.Email)
 	if err != nil || !id.Enabled {
 		return nil, ErrSsoCodeInvalid
+	}
+	// A link resolves its identity by subject, not by address, so it can still name an
+	// identity whose stored email is not canonical: no session starts for one.
+	if admitStoredEmail(id) != nil {
+		return nil, ErrIdentityEmailNotCanonical
 	}
 	// And the link the callback resolved must still exist: an identity unlinked since then
 	// is not signed in by a code minted before the unlink.

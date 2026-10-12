@@ -18,7 +18,6 @@ package iam
 
 import (
 	"database/sql"
-	"strings"
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/rdb"
@@ -85,11 +84,6 @@ const (
 // (Persisted rows cannot be empty — NOT NULL DEFAULT 'active' — so this only ever bites
 // an in-memory struct that was never loaded.)
 func (p PurgeState) Deleted() bool { return p != PurgeActive }
-
-// NormalizeEmail lower-cases and trims an email so identity lookups and the
-// uniqueness constraint are case-insensitive. The single normalizer shared by the
-// auth path (login) and the admin path (identity CRUD) so the two cannot diverge.
-func NormalizeEmail(e string) string { return strings.ToLower(strings.TrimSpace(e)) }
 
 // RoleScope decides where a role may be assigned and which token tier carries
 // its authorities (ADR-033): system roles attach to an Identity and ride the

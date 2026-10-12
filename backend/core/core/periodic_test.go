@@ -405,7 +405,11 @@ func TestTheLoopFilesTheOutcomeItActuallySaw(t *testing.T) {
 		assert.True(t, math.IsNaN(testutil.ToFloat64(m.lastSuccess)),
 			"declining to run is not succeeding; an instance where every replica skipped "+
 				"would otherwise report itself freshly swept forever")
-		assert.EqualValues(t, 0, histogramCount(t, reg, "devicechain_testarea_sweep_pass_duration_seconds"),
+		// The pass running when Stop lands returns ErrPassSkipped under a cancelled context and
+		// is (rightly) filed as CANCELLED, which is timed. So the histogram need not be empty;
+		// what must hold is that it timed exactly the filings that were not skips.
+		cancelled := testutil.ToFloat64(m.passes.WithLabelValues(PassCancelled))
+		assert.EqualValues(t, cancelled, histogramCount(t, reg, "devicechain_testarea_sweep_pass_duration_seconds"),
 			"a lock decline is not a pass, and timing it would swamp the histogram on a "+
 				"multi-replica service")
 	})

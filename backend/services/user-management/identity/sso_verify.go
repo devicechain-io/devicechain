@@ -45,7 +45,7 @@ const maxIdpResponseBytes = 512 << 10
 // ssoClaims is what a verified ID token vouches for.
 type ssoClaims struct {
 	Subject string
-	// Email is normalised (iam.NormalizeEmail) and Domain is its normalised domain.
+	// Email is canonical (iam.CanonicalEmail) and Domain is its normalised domain.
 	Email  string
 	Domain string
 	// Verified is whether the PROVIDER vouches that the person controls Email: the
@@ -180,12 +180,11 @@ func bindEmail(conn *iam.IdpConnection, c *ssoClaims) error {
 		name = "email"
 	}
 	raw, _ := c.Raw[name].(string)
-	email := iam.NormalizeEmail(raw)
-	at := strings.LastIndex(email, "@")
-	if at <= 0 || at == len(email)-1 || strings.Count(email, "@") != 1 {
+	email, err := iam.CanonicalEmail(raw)
+	if err != nil {
 		return fmt.Errorf("%w: no usable %s claim", errSsoToken, name)
 	}
-	domain, err := NormalizeDomain(email[at+1:])
+	domain, err := NormalizeDomain(iam.EmailDomain(email))
 	if err != nil {
 		return fmt.Errorf("%w: the %s claim has no usable domain", errSsoToken, name)
 	}
