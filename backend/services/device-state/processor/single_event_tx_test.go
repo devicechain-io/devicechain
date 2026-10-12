@@ -187,9 +187,9 @@ func TestABatchOfOneLeavesTheProjectionThePerMessagePathDid(t *testing.T) {
 			func(t *testing.T) messaging.Message { return threeMetrics(t, "eq-01", t1) }},
 	}
 	type outcome struct {
-		Rows            []map[string]any
-		Acked           int32
-		Ok, Retry, Drop float64
+		Rows                    []map[string]any
+		Acked                   int32
+		Ok, Retry, Drop, Erased float64
 	}
 	run := func(t *testing.T, c int, batch bool) outcome {
 		tc := cases[c]
@@ -215,6 +215,7 @@ func TestABatchOfOneLeavesTheProjectionThePerMessagePathDid(t *testing.T) {
 		o.Ok, _, _, _ = gathered(t, reg, "state_messages_total", core.ResultOK)
 		o.Retry, _, _, _ = gathered(t, reg, "state_messages_total", core.ResultRetry)
 		o.Drop, _, _, _ = gathered(t, reg, "state_messages_total", core.ResultDropped)
+		o.Erased, _, _, _ = gathered(t, reg, "state_messages_total", core.ResultErased)
 		return o
 	}
 	for i, tc := range cases {
@@ -225,8 +226,9 @@ func TestABatchOfOneLeavesTheProjectionThePerMessagePathDid(t *testing.T) {
 			if !reflect.DeepEqual(old, got) {
 				t.Errorf("a batch of one diverged from the per-message path:\n per-message: %+v\n batch of one: %+v", old, got)
 			}
-			if tc.fence && (got.Acked != 0 || got.Retry != 1) {
-				t.Errorf("an event for a fenced tenant was acked %d times with retry=%v; want it left for redelivery", got.Acked, got.Retry)
+			if tc.fence && (got.Acked != 1 || got.Erased != 1 || got.Retry != 0) {
+				t.Errorf("an event for a fenced tenant was acked %d times with erased=%v, retry=%v; want it "+
+					"settled once as erased", got.Acked, got.Erased, got.Retry)
 			}
 			if !tc.fence && got.Acked != 1 {
 				t.Errorf("event acknowledged %d times; want 1", got.Acked)

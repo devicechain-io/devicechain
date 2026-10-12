@@ -1,0 +1,71 @@
+// Copyright The DeviceChain Authors
+// SPDX-License-Identifier: Apache-2.0
+
+package processor
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"sync/atomic"
+	"time"
+
+	dmodel "github.com/devicechain-io/dc-device-management/model"
+	esproto "github.com/devicechain-io/dc-event-sources/proto"
+	"github.com/devicechain-io/dc-microservice/messaging"
+	"github.com/devicechain-io/dc-microservice/rdb"
+	"github.com/stretchr/testify/mock"
+)
+
+// atomicAck counts acks from the resolver's own goroutine.
+type atomicAck struct{ n atomic.Int32 }
+
+func (a *atomicAck) Ack() error { a.n.Add(1); return nil }
+
+// A relationship event whose write the erasure fence refuses is settled where it is found and
+// reported NOWHERE — on its FINAL delivery too, which is where a transient failure is
+// published to failed-events. A failed-events copy of a deleted tenant's event would be a new
+// record of the data being erased. The counterweight is the same event failing for any other
+// reason at the cap: it IS reported, so the first half cannot pass on a path that never
+// reports anything.
+func (suite *InboundEventsProcessorTestSuite) TestARelationshipEventRefusedByTheFenceIsSettledNotReported() {
+	for _, tc := range []struct {
+		name     string
+		err      error
+		reported bool
+	}{
+		{"refused by the fence", fmt.Errorf("creating: %w", rdb.ErrTenantPurged), false},
+		{"control: any other failure", errors.New("database down"), true},
+	} {
+		suite.Run(tc.name, func() {
+			suite.SetupTest()
+			bytes, err := esproto.MarshalUnresolvedEvent(buildNewAssignmentEvent())
+			suite.Require().NoError(err)
+			ack := &atomicAck{}
+			msg := messaging.NewConsumedMessage(testTenantSubject, bytes, messaging.MaxDeliver, nil, ack)
+
+			suite.Inbound.Mock.On("ReadMessage", mock.Anything).Return(msg, nil)
+			suite.API.Mock.On("DevicesByToken", mock.Anything, mock.Anything).Return([]*dmodel.Device{buildDevice()}, nil)
+			suite.API.Mock.On("TrackedRelationshipsForDevice", mock.Anything, mock.Anything).Return(
+				&dmodel.EntityRelationshipSearchResults{Results: []dmodel.EntityRelationship{}}, nil)
+			suite.API.Mock.On("CreateEntityRelationship", mock.Anything, mock.Anything).Return(
+				(*dmodel.EntityRelationship)(nil), tc.err)
+
+			readAndHandleOne(suite.IP, context.Background())
+
+			select {
+			case item := <-suite.IP.failed:
+				if !tc.reported {
+					suite.Failf("reported", "an erased tenant's event was routed to failed-events: %+v", item.event)
+				}
+			case <-time.After(2 * time.Second):
+				if tc.reported {
+					suite.Fail("an event that failed at the cap for an ordinary reason was not reported")
+				}
+			}
+			if !tc.reported {
+				suite.Equal(int32(1), ack.n.Load(), "an erased tenant's event must be settled on the delivery it arrived on")
+			}
+		})
+	}
+}

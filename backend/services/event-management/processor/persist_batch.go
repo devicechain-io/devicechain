@@ -39,10 +39,12 @@ import (
 //     exactly as it was before batching existed.
 //   - A refused message does not take its batch-mates with it. When the failure belongs to
 //     one message, that message goes the per-message path and the others are committed
-//     again as a batch without it. When the erasure fence refused it, every message of its
-//     tenant goes the per-message path, since the fence refuses them all. Only a failure no
-//     message can be blamed for (BEGIN, COMMIT, a lost connection) sends every message
-//     down the per-message path.
+//     again as a batch without it. When the erasure fence refused it, the refusal is the
+//     TENANT's, so every message of that tenant is settled with it at once (dispose, which
+//     asks messaging.Dispose: an erased tenant's message is acked and reported nowhere) —
+//     none is written again on its own, because the fence would refuse each of them the
+//     same way. Only a failure no message can be blamed for (BEGIN, COMMIT, a lost
+//     connection) sends every message down the per-message path.
 //   - What the grouped write adds: when the database refuses a statement that carried
 //     several messages' rows, it does not say which row, so no message can be blamed yet.
 //     The same batch is then written again in a NEW transaction one message at a time
@@ -171,9 +173,11 @@ func (ep *EventPersistenceWorker) persistBatch(ctx context.Context, batch []pend
 		}
 		// The message to blame is set aside. When the erasure fence refused it, the fence
 		// refuses every other message of that tenant too — it is per tenant, not per
-		// message — so all of them are set aside together. Setting them aside one failed batch at a
-		// time would re-run every live batch-mate ahead of each, which for a deleted tenant
-		// still sending grows with the square of its share of the batch.
+		// message — so all of them are set aside together, and settled with the refusal
+		// rather than each written again alone only to be refused the same way. Setting them
+		// aside one failed batch at a time would re-run every live batch-mate ahead of each,
+		// which for a deleted tenant still sending grows with the square of its share of the
+		// batch.
 		refused := batch[failedAt].tenant
 		wholeTenant := errors.Is(err, rdb.ErrTenantPurged)
 		log.Warn().Err(err).Int("events", len(batch)).Str("tenant", refused).Bool("tenantPurged", wholeTenant).
@@ -181,7 +185,11 @@ func (ep *EventPersistenceWorker) persistBatch(ctx context.Context, batch []pend
 		// A fresh slice: the remainder must not alias the batch it came from.
 		rest := make([]pendingEvent, 0, len(batch)-1)
 		for i, p := range batch {
-			if i == failedAt || (wholeTenant && p.tenant == refused) {
+			if wholeTenant && p.tenant == refused {
+				ep.dispose(p, err)
+				continue
+			}
+			if i == failedAt {
 				ep.persistOne(p)
 				continue
 			}
@@ -237,17 +245,28 @@ func (ep *EventPersistenceWorker) dispose(p pendingEvent, err error) {
 		return
 	}
 	err = classifyPersistFailure(err)
+	disposition := messaging.Dispose(p.msg, err)
+	// An erased tenant's event is settled at once and reported NOWHERE: the fence refuses
+	// that tenant on every delivery, and a failed-events copy of its payload would be a new
+	// record of the very data being erased. It is decided first, so neither arm below can
+	// publish one.
+	//
 	// A deterministic failure (bad data) can never succeed on redelivery,
 	// so give up on the first failure (ADR-024). A transient failure is
 	// retried via redelivery up to the cap and then given up on the same
 	// way. Both report the event on the failed-events stream, which is a
 	// report and not a queue — see ErrDeterministic.
 	switch {
+	case disposition == messaging.TenantErased:
+		log.Info().Str("tenant", p.tenant).Str("correlation", p.msg.CorrelationID()).
+			Msg("Settling an event for a deleted tenant; this area's data has been erased.")
+		p.msg.Ack()
+		p.done(core.ResultErased)
 	case errors.Is(err, ErrDeterministic):
 		ep.Failed(p.tenant, uint(dmproto.FailureReason_Invalid), *p.event, err, p.msg.CorrelationID())
 		p.msg.Ack()
 		p.done(core.ResultFailed)
-	case p.msg.NumDelivered >= messaging.MaxDeliver:
+	case disposition == messaging.Exhausted:
 		ep.Failed(p.tenant, uint(dmproto.FailureReason_ApiCallFailed), *p.event, err, p.msg.CorrelationID())
 		p.msg.Ack()
 		p.done(core.ResultFailed)

@@ -328,10 +328,10 @@ func TestARaiseAlarmEdgeForADeletedTenantIsDroppedNotLettered(t *testing.T) {
 		t.Fatalf("initializing the consumer: %v", err)
 	}
 	// Read back from the registry, so the assertion is on what the service EXPORTS: a drop for a
-	// deleted tenant is counted invalid, never as a success or as a retry still pending.
+	// deleted tenant is counted erased, never as a success or as a retry still pending.
 	defer func() {
-		if got := loopResults(t, reg, "raise_alarm", core.ResultInvalid); got != 2 {
-			t.Errorf("raise_alarm results{invalid} = %v, want 2", got)
+		if got := loopResults(t, reg, "raise_alarm", core.ResultErased); got != 2 {
+			t.Errorf("raise_alarm results{erased} = %v, want 2", got)
 		}
 		for _, other := range []string{core.ResultOK, core.ResultRetry, core.ResultFailed} {
 			if got := loopResults(t, reg, "raise_alarm", other); got != 0 {

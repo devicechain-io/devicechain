@@ -250,8 +250,8 @@ func TestACommandResponseForADeletedTenantIsDroppedNotLettered(t *testing.T) {
 }
 
 // And through the constructor main.go uses, read back from the registry the service exports
-// through: the drop is counted INVALID, never as a recorded response or a retry still pending.
-func TestACommandResponseForADeletedTenantIsCountedInvalid(t *testing.T) {
+// through: the drop is counted ERASED, never as a recorded response or a retry still pending.
+func TestACommandResponseForADeletedTenantIsCountedErased(t *testing.T) {
 	results := gatheredResult
 	for _, delivery := range []int{1, messaging.MaxDeliver} {
 		dead := &deadRecorder{}
@@ -260,8 +260,8 @@ func TestACommandResponseForADeletedTenantIsCountedInvalid(t *testing.T) {
 
 		readAndHandleOne(p, context.Background())
 
-		if got := results(t, reg, core.ResultInvalid); got != 1 {
-			t.Fatalf("delivery %d: response results{invalid} = %v, want 1", delivery, got)
+		if got := results(t, reg, core.ResultErased); got != 1 {
+			t.Fatalf("delivery %d: response results{erased} = %v, want 1", delivery, got)
 		}
 		for _, other := range []string{core.ResultOK, core.ResultRetry, core.ResultFailed} {
 			if got := results(t, reg, other); got != 0 {
@@ -291,9 +291,9 @@ func TestALateResponseForADeletedTenantWhoseCommandWasSweptIsDropped(t *testing.
 		result   string
 		letters  int
 	}{
-		{"deleted, command swept, first delivery", "acme", "acme", gorm.ErrRecordNotFound, 1, core.ResultInvalid, 0},
-		{"deleted, command swept, at the cap", "acme", "acme", gorm.ErrRecordNotFound, messaging.MaxDeliver, core.ResultInvalid, 0},
-		{"a second deleted tenant", "globex", "globex", gorm.ErrRecordNotFound, 1, core.ResultInvalid, 0},
+		{"deleted, command swept, first delivery", "acme", "acme", gorm.ErrRecordNotFound, 1, core.ResultErased, 0},
+		{"deleted, command swept, at the cap", "acme", "acme", gorm.ErrRecordNotFound, messaging.MaxDeliver, core.ResultErased, 0},
+		{"a second deleted tenant", "globex", "globex", gorm.ErrRecordNotFound, 1, core.ResultErased, 0},
 		{"live tenant, not found, at the cap", "acme", "", gorm.ErrRecordNotFound, messaging.MaxDeliver, core.ResultFailed, 1},
 		{"another tenant deleted, at the cap", "acme", "globex", gorm.ErrRecordNotFound, messaging.MaxDeliver, core.ResultFailed, 1},
 		{"deleted, but the answer recorded", "acme", "acme", nil, 1, core.ResultOK, 0},

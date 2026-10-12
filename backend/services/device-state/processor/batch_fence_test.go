@@ -15,9 +15,10 @@ import (
 )
 
 // The erasure fence on the BATCH path. A batch transaction holds several tenants' writes, so
-// a fence standing for one of them must refuse that tenant's events — left unacked for
-// redelivery, exactly as the per-message path leaves them — without taking its batch-mates
-// down with it, and an unreadable fence must refuse everything.
+// a fence standing for one of them must refuse that tenant's events — settled on their first
+// delivery with nothing written, exactly as the per-message path settles them — without
+// taking its batch-mates down with it, and an unreadable fence must refuse everything and
+// settle nothing.
 
 const otherTenant = "tenant2"
 
@@ -40,9 +41,9 @@ func assertProjectedAtFor(t *testing.T, sp *StateProcessor, tenant, device strin
 	}
 }
 
-// A fenced tenant's events in a mixed batch are refused and left for redelivery; the other
-// tenant's events commit — TOGETHER, in one transaction, after exactly one failed attempt —
-// and the fenced tenant's projection does not move.
+// A fenced tenant's events in a mixed batch are refused and settled on their first delivery;
+// the other tenant's events commit — TOGETHER, in one transaction, after exactly one failed
+// attempt — and the fenced tenant's projection does not move.
 func TestABatchSetsAFencedTenantAsideAndCommitsTheRest(t *testing.T) {
 	sp, db, _ := newFencedStateProcessor(t)
 	reg := stateRegistry(sp)
@@ -62,14 +63,15 @@ func TestABatchSetsAFencedTenantAsideAndCommitsTheRest(t *testing.T) {
 		msgs = append(msgs, threeMetrics(t, fenced[i], t1), forTenant(threeMetrics(t, live[i], t1), otherTenant))
 	}
 	acks := drainQueue(sp, msgs)
-	for i, n := range ackCounts(acks) {
-		want := int32(i % 2) // live messages sit at odd positions
-		if n != want {
-			t.Errorf("message %d acknowledged %d times; want %d", i, n, want)
-		}
-	}
+	// The projection is the witness that nothing of the fenced tenant's was written; the
+	// acks are what says nothing of it will come back.
 	for _, d := range fenced {
 		assertProjectedAt(t, sp, d, t0)
+	}
+	for i, n := range ackCounts(acks) {
+		if n != 1 {
+			t.Errorf("message %d acknowledged %d times; want 1 (live: merged; fenced: settled)", i, n)
+		}
 	}
 	for _, d := range live {
 		assertProjectedAtFor(t, sp, otherTenant, d, t1)
@@ -83,8 +85,11 @@ func TestABatchSetsAFencedTenantAsideAndCommitsTheRest(t *testing.T) {
 		t.Errorf("batch-size histogram holds %v observations summing to %v; want %v summing to %v "+
 			"(the seeds' commits of one, then ONE batch of the live tenant's 4)", n, sum, 1+seededCommits, 4+seededCommits)
 	}
-	if v, _, _, _ := gathered(t, reg, "state_messages_total", core.ResultRetry); v != 4 {
-		t.Errorf("state_messages_total{result=retry} = %v; want the fenced tenant's 4", v)
+	if v, _, _, _ := gathered(t, reg, "state_messages_total", core.ResultErased); v != 4 {
+		t.Errorf("state_messages_total{result=erased} = %v; want the fenced tenant's 4", v)
+	}
+	if v, _, _, _ := gathered(t, reg, "state_messages_total", core.ResultRetry); v != 0 {
+		t.Errorf("state_messages_total{result=retry} = %v; want 0", v)
 	}
 
 	// Negative control: with the fence lifted, the SAME events land and the SAME reads see
@@ -134,7 +139,7 @@ func TestABatchOverAnUnreadableFenceMergesNothing(t *testing.T) {
 // A batch that carries NO readings and NO positions writes nothing but device rows, so the
 // write-back of those rows is the only statement in it that can meet the fence. Presence
 // events for devices already seen are exactly that batch: the fenced tenant's are refused and
-// left for redelivery, and its rows do not move, while the other tenant's commit.
+// settled at once, and its rows do not move, while the other tenant's commit.
 func TestABatchOfPresenceOnlyEventsForSeenDevicesIsRefusedUnderAFence(t *testing.T) {
 	sp, db, _ := newFencedStateProcessor(t)
 	reg := stateRegistry(sp)
@@ -156,13 +161,15 @@ func TestABatchOfPresenceOnlyEventsForSeenDevicesIsRefusedUnderAFence(t *testing
 		msgs = append(msgs, connect(fenced[i]), forTenant(connect(live[i]), otherTenant))
 	}
 	for i, n := range ackCounts(drainQueue(sp, msgs)) {
-		want := int32(i % 2) // live messages sit at odd positions
-		if n != want {
-			t.Errorf("message %d acknowledged %d times; want %d", i, n, want)
+		if n != 1 {
+			t.Errorf("message %d acknowledged %d times; want 1 (live: merged; fenced: settled)", i, n)
 		}
 	}
-	if v, _, _, _ := gathered(t, reg, "state_messages_total", core.ResultRetry); v != 4 {
-		t.Errorf("state_messages_total{result=retry} = %v; want the fenced tenant's 4", v)
+	if v, _, _, _ := gathered(t, reg, "state_messages_total", core.ResultErased); v != 4 {
+		t.Errorf("state_messages_total{result=erased} = %v; want the fenced tenant's 4", v)
+	}
+	if v, _, _, _ := gathered(t, reg, "state_messages_total", core.ResultRetry); v != 0 {
+		t.Errorf("state_messages_total{result=retry} = %v; want 0", v)
 	}
 	fencedCtx := core.WithTenant(context.Background(), fenceTenant)
 	for _, d := range fenced {

@@ -15,7 +15,6 @@ import (
 	"github.com/devicechain-io/dc-microservice/deadletter"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/ota"
-	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-microservice/streams"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/rs/zerolog/log"
@@ -266,21 +265,20 @@ func (rc *DeviceReportsConsumer) refused(ctx context.Context, msg messaging.Mess
 // retryOrDrop leaves a transiently failed message unacked for AckWait-paced redelivery, or
 // dead-letters and acks it once the redelivery cap is reached.
 //
-// 🔴 A DELETED TENANT IS NOT TRANSIENT. Once a tenant is deleted this area's erasure fence
-// refuses its writes, identically on every delivery, so retrying would spend the whole
-// redelivery budget and then file a dead letter — a new row about a tenant whose data is
-// being erased. The report is dropped on the first delivery instead, as every other consumer
-// that meets the fence does.
+// The decision is messaging.Dispose's. A deleted tenant is not transient: its erasure fence
+// refuses the write on every delivery, and a dead letter would be a new row about a tenant
+// whose data is being erased, so the report is settled on the delivery it arrived on and
+// lettered nowhere.
 func (rc *DeviceReportsConsumer) retryOrDrop(ctx context.Context, msg messaging.Message, token string,
 	done func(string), err error, what string) {
-	if errors.Is(err, rdb.ErrTenantPurged) {
+	switch messaging.Dispose(msg, err) {
+	case messaging.TenantErased:
 		log.Info().Str("what", what).Str("device", token).
 			Msg("Dropping a device report for a deleted tenant; this area's data has been erased.")
 		msg.Ack()
-		done(core.ResultInvalid)
+		done(core.ResultErased)
 		return
-	}
-	if msg.NumDelivered >= messaging.MaxDeliver {
+	case messaging.Exhausted:
 		log.Error().Err(err).Str("what", what).Str("device", token).Int("attempts", msg.NumDelivered).
 			Msg("Device report failed past the redelivery cap; dead-lettering.")
 		rc.deadLetterReason(ctx, msg, token, deadletter.ReasonExhausted,

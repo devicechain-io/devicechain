@@ -5,7 +5,6 @@ package processor
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"sync"
 
@@ -13,7 +12,6 @@ import (
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/deadletter"
 	"github.com/devicechain-io/dc-microservice/messaging"
-	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/rs/zerolog/log"
 	"time"
@@ -263,20 +261,18 @@ func (rc *RaiseAlarmConsumer) handle(ctx context.Context, msg messaging.Message)
 // retryOrDrop leaves a transiently-failed request unacked for redelivery, or acks (drops) it once the
 // redelivery cap is reached so one persistently-failing request cannot redeliver forever.
 //
-// 🔴 A DELETED TENANT IS NOT TRANSIENT. Once a tenant is deleted this area's erasure fence
-// refuses its writes, identically on every delivery, so retrying would spend the whole
-// redelivery budget and then file a dead letter about a tenant whose data is being erased.
-// There is no alarm left to raise or resolve, so the edge is dropped on the first delivery,
-// as every other consumer that meets the fence does.
+// The decision is messaging.Dispose's. A deleted tenant is not transient: its erasure fence
+// refuses the write on every delivery, and there is no alarm left to raise or resolve, so the
+// edge is settled on the delivery it arrived on and lettered nowhere.
 func (rc *RaiseAlarmConsumer) retryOrDrop(msg messaging.Message, done func(string), err error, what string) {
-	if errors.Is(err, rdb.ErrTenantPurged) {
+	switch messaging.Dispose(msg, err) {
+	case messaging.TenantErased:
 		log.Info().Str("what", what).
 			Msg("Dropping a raise-alarm edge for a deleted tenant; this area's data has been erased.")
 		msg.Ack()
-		done(core.ResultInvalid)
+		done(core.ResultErased)
 		return
-	}
-	if msg.NumDelivered >= messaging.MaxDeliver {
+	case messaging.Exhausted:
 		// Dropping an edge past the cap is a genuine loss for an edge-triggered producer: a dropped
 		// RAISE will not re-emit until the condition falls and re-breaches, and a dropped RESOLVE
 		// strands the alarm until its next cycle. It is a loud error precisely because it should never

@@ -95,9 +95,9 @@ func TestADeviceReportForADeletedTenantIsDroppedNotLettered(t *testing.T) {
 	if len(dead.msgs) != 0 {
 		t.Fatalf("wrote %d dead letters for a deleted tenant, want 0", len(dead.msgs))
 	}
-	// Counted invalid — not a success, and not a retry still pending.
-	if got := loopResults(t, reg, "device_reports", core.ResultInvalid); got != 4 {
-		t.Fatalf("device_reports results{invalid} = %v, want 4", got)
+	// Counted erased — not a success, and not a retry still pending.
+	if got := loopResults(t, reg, "device_reports", core.ResultErased); got != 4 {
+		t.Fatalf("device_reports results{erased} = %v, want 4", got)
 	}
 	for _, other := range []string{core.ResultOK, core.ResultRetry, core.ResultFailed} {
 		if got := loopResults(t, reg, "device_reports", other); got != 0 {

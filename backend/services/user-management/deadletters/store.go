@@ -85,11 +85,19 @@ func (DeadLetter) TableName() string { return "dead_letters" }
 // FenceExempt implements rdb.FenceExempt: a dead letter records that work did NOT happen,
 // so writing one for a purged tenant cannot resurrect anything a successor could inherit.
 //
-// 🔴 WITHOUT IT THE FENCE REFUSES THIS TABLE'S OWN WRITES DURING A PURGE. Deleting a tenant
-// refuses its upstream writes, those consumers dead-letter, and the letter's own row would
-// then be refused too — deleting the evidence that a tenant's last alarms went nowhere, and
-// reporting it to an operator as a database outage. The rows are still swept by the purge
-// like any other tenant-bearing table; only the write-time refusal is lifted.
+// 🔑 WHETHER A DELETED TENANT GETS A LETTER AT ALL IS NOT DECIDED HERE. It gets none, and
+// that is decided once, upstream: a consumer whose write the fence refused settles the
+// message without a letter (messaging.Dispose), and every other give-up is withheld by the
+// producer (core/deadletter's Producer.tenantDeleted, which every sink and the max-delivery
+// recorder ask). A deleted tenant's letter reaches this table only when that producer-side
+// gate answered "not deleted" — it fails open: unconfigured, cold, or unable to reach this
+// service.
+//
+// Such a row is swept by the purge like any other tenant-bearing row, which is the whole of
+// what the exemption costs. Fencing the table instead would not stop the letter existing; it
+// would turn the same row into a store write that fails on every delivery, which this
+// consumer can only retry and then count as a LOST letter — paging an operator about a
+// record nobody wanted, as if the database were down.
 func (DeadLetter) FenceExempt() bool { return true }
 
 // SearchCriteria narrows a list. Every filter is optional; pagination is not.

@@ -324,7 +324,9 @@ func (rez *EventResolver) HandleNewRelationshipEvent(ctx context.Context,
 	// Create new relationship from the event payload.
 	created, reason, err := rez.CreateNewEntityRelationship(ctx, device, *relcreate)
 	if err != nil {
-		return nil, reason, errors.New("could not create relationship")
+		// Wrapped, not replaced: the cause decides the message's disposition — an erased
+		// tenant's refusal is settled at once rather than retried into a failure report.
+		return nil, reason, fmt.Errorf("could not create relationship: %w", err)
 	}
 
 	// Convert to resolved payload with the uniform (type, id) target.
@@ -1108,7 +1110,17 @@ func (rez *EventResolver) Process(ctx context.Context) {
 				// times the event carries immutably, so every redelivery would answer the
 				// same, and leaving it unacked only holds it in flight for minutes. ONLY that
 				// refusal: a not-yet-registered device must still get its redeliveries.
-				if unresolved.NumDelivered >= messaging.MaxDeliver || errors.Is(err, eventtime.ErrTooOld) {
+				//
+				// A write refused because the tenant has been deleted is settled at once and
+				// reported NOWHERE (messaging.Dispose): the fence refuses it on every delivery,
+				// and a failed-events copy would be a new record of the data being erased.
+				disposition := messaging.Dispose(unresolved, err)
+				if disposition == messaging.TenantErased {
+					log.Info().Str("correlation", correlation).
+						Msg("Settling an event for a deleted tenant; this area's data has been erased.")
+					_ = unresolved.Ack()
+					done(core.ResultErased)
+				} else if disposition == messaging.Exhausted || errors.Is(err, eventtime.ErrTooOld) {
 					rez.Failed(unresolved, tenant, reason, *event, err)
 					done(core.ResultFailed)
 				} else {

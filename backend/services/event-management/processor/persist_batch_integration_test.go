@@ -129,7 +129,8 @@ func TestAValueTheServerRefusesInABatchOnPostgres(t *testing.T) {
 }
 
 // The erasure fence refuses a purged tenant's messages inside a mixed batch on the real
-// server, and their batch-mates are stored. Lifting the fence is the negative control.
+// server, they are settled with nothing reported, and their batch-mates are stored. Lifting
+// the fence is the negative control.
 func TestAFencedTenantInABatchOnPostgres(t *testing.T) {
 	for _, fenced := range []bool{true, false} {
 		t.Run(fmt.Sprintf("fenced=%v", fenced), func(t *testing.T) {
@@ -151,9 +152,9 @@ func TestAFencedTenantInABatchOnPostgres(t *testing.T) {
 			}
 			r.run(msgs)
 
-			// One failed batch sets the purged tenant's four aside together; each is then
-			// refused on its own, and the live four commit together.
-			wantGone, wantAcks, wantTxs := int64(0), 4, int64(6)
+			// One failed batch settles the purged tenant's four together with its refusal,
+			// and the live four commit together: every message is acknowledged.
+			wantGone, wantAcks, wantTxs := int64(0), 8, int64(2)
 			if !fenced {
 				wantGone, wantAcks, wantTxs = 4, 8, 1
 			}
@@ -168,6 +169,9 @@ func TestAFencedTenantInABatchOnPostgres(t *testing.T) {
 			}
 			if got := r.api.txs.Load(); got != wantTxs {
 				t.Errorf("took %d transactions; want %d", got, wantTxs)
+			}
+			if len(r.failures) != 0 {
+				t.Errorf("reported %+v; want nothing about an erased tenant", r.failures)
 			}
 		})
 	}
@@ -265,8 +269,8 @@ func TestTheSameEventTwiceInOneStatementOnPostgres(t *testing.T) {
 // check), which reads the fence and is refused before the 6,000-reading insert
 // is sent, so this does NOT exercise the fence on a split statement (that is
 // TestCreateChunkedRefusesAPurgedTenant); it pins the grouped path's whole-tenant set-aside
-// on the real server: one failed batch, each of the purged tenant's four alone, the live
-// four together.
+// on the real server: one failed batch whose refusal settles all four of the purged tenant's
+// messages, then the live four together.
 func TestAPurgedTenantsGroupedWriteStoresNothingOnPostgres(t *testing.T) {
 	r := newPgBatchRig(t, "embatchtest", 8)
 	live := fmt.Sprintf("lv%d", time.Now().UnixNano())
@@ -300,8 +304,14 @@ func TestAPurgedTenantsGroupedWriteStoresNothingOnPostgres(t *testing.T) {
 	if got := r.count(t, live, ""); got != 4 {
 		t.Errorf("stored %d live events; want 4", got)
 	}
-	if got := r.api.txs.Load(); got != 6 {
-		t.Errorf("took %d transactions; want 6", got)
+	if got := r.api.txs.Load(); got != 2 {
+		t.Errorf("took %d transactions; want 2", got)
+	}
+	if got := len(r.acks.acked()); got != 8 {
+		t.Errorf("%d acknowledged; want all 8: the live four stored, the purged four settled", got)
+	}
+	if len(r.failures) != 0 {
+		t.Errorf("reported %+v; want nothing about an erased tenant", r.failures)
 	}
 }
 

@@ -14,7 +14,6 @@ import (
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/deadletter"
 	"github.com/devicechain-io/dc-microservice/messaging"
-	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/rs/zerolog/log"
 )
@@ -296,17 +295,19 @@ func (np *NotificationProcessor) dispatchOne(ctx context.Context, msg messaging.
 		// PolicyNotifier already classifies this on the two paths where it knows the write it
 		// attempted (applyLifecycle, Escalate). This is the funnel: it holds for whatever
 		// Notifier is behind the seam and for any future write the dispatcher grows, which is
-		// the only reason to spend a check on a case a caller usually handles first.
-		if errors.Is(err, rdb.ErrTenantPurged) {
+		// the only reason to spend a check on a case a caller usually handles first. The
+		// decision is messaging.Dispose's, the one every consumer asks.
+		disposition := messaging.Dispose(msg, err)
+		if disposition == messaging.TenantErased {
 			log.Info().Str("correlation", msg.CorrelationID()).Str("alarm", event.AlarmToken).
 				Msg("Dropping an alarm notification for a deleted tenant; this area's data has " +
 					"been erased, so no redelivery could ever be applied.")
 			msg.Ack()
-			done(core.ResultInvalid)
+			done(core.ResultErased)
 			return
 		}
 		log.Error().Err(err).Str("correlation", msg.CorrelationID()).Str("alarm", event.AlarmToken).Msg("Notification dispatch failed")
-		if msg.NumDelivered >= messaging.MaxDeliver {
+		if disposition == messaging.Exhausted {
 			log.Error().Str("correlation", msg.CorrelationID()).Str("alarm", event.AlarmToken).
 				Msgf("Dead-lettering notification after %d failed attempts; nobody was paged", msg.NumDelivered)
 			if errors.Is(err, ErrUnknownAlarmEventType) {

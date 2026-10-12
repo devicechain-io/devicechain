@@ -12,7 +12,6 @@ import (
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/deadletter"
 	"github.com/devicechain-io/dc-microservice/messaging"
-	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/rs/zerolog/log"
 )
@@ -368,7 +367,8 @@ func (w *DeadLetterWriteback) Handle(msg messaging.Message) {
 		// bury the letters behind it, and the "stranded" alert would fire for a command
 		// that no longer exists — an operator paged to look for a record that was
 		// deliberately destroyed. There is no command left to settle, so ack and move on.
-		if errors.Is(err, rdb.ErrTenantPurged) {
+		disposition := messaging.Dispose(msg, err)
+		if disposition == messaging.TenantErased {
 			log.Info().Str("tenant", tenant).Str("command", e.Reference).
 				Msg("Skipping a dead-lettered command response for a deleted tenant; its " +
 					"commands have been erased, so there is no record to settle.")
@@ -376,7 +376,7 @@ func (w *DeadLetterWriteback) Handle(msg messaging.Message) {
 			w.ack(msg)
 			return
 		}
-		if msg.NumDelivered >= messaging.MaxDeliver {
+		if disposition == messaging.Exhausted {
 			// No redelivery follows. Said plainly rather than logged as a retry.
 			log.Error().Err(err).Str("tenant", tenant).Str("command", e.Reference).
 				Int("attempts", msg.NumDelivered).
