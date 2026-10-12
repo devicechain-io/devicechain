@@ -46,6 +46,22 @@ export async function endServerSession(refreshToken: string | null): Promise<Sig
 }
 
 /**
+ * Ends the sign-in on the server and reports whether that failed; then, ONLY once the
+ * server confirmed, sends the browser to the identity provider's sign-out address when the
+ * server answered one. The caller has already cleared its local state, so a failure here
+ * leaves the viewer signed out locally and told so, and never sends them to the provider.
+ */
+export async function finishSignOut(
+  refreshToken: string | null,
+  reportFailed: (failed: boolean) => void,
+  leave: (url: string) => void = (url) => window.location.assign(url),
+): Promise<void> {
+  const { ended, providerSignOut } = await endServerSession(refreshToken);
+  reportFailed(!ended);
+  if (ended && providerSignOut) leave(providerSignOut);
+}
+
+/**
  * The provider address, if it is one a browser may be sent to: an absolute http(s) URL.
  * Anything else is dropped, so a malformed answer degrades to signing out here only.
  */

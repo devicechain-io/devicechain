@@ -23,6 +23,14 @@ describe('logout', () => {
     gqlMock.mockResolvedValue({ logout: { providerSignOutUrl: at } });
     await expect(logout('tok')).resolves.toBe(at);
     expect(gqlMock).toHaveBeenCalledWith('user-management', expect.anything(), { token: 'tok' }, { anonymous: true });
+    // The console names itself as the app to come back to, and never an address: without
+    // returnTo the server offers no provider sign-out at all.
+    expect(String(gqlMock.mock.calls[0][1])).toMatch(/logout\(token: \$token, returnTo: CONSOLE\)/);
+  });
+
+  it('drops a provider address the server answered that no browser should be sent to', async () => {
+    gqlMock.mockResolvedValue({ logout: { providerSignOutUrl: 'javascript:alert(1)' } });
+    await expect(logout('tok')).resolves.toBeNull();
   });
 
   it('returns null when there is nothing more to do', async () => {
