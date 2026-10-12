@@ -1,7 +1,7 @@
 {{/*
 PersistentVolumeClaim backing the FILESYSTEM object store (ADR-058). The filesystem blob
-backend persists opaque binaries that do not belong in Postgres (branding logos today;
-firmware/OTA + exports later) under instance.config.infrastructure.blob.directory, which
+backend persists opaque binaries that do not belong in Postgres (branding logos and
+firmware/OTA update artifacts; exports later) under instance.config.infrastructure.blob.directory, which
 MUST be a durable mounted volume — and an RWX (ReadWriteMany) volume shared across pods when
 a consuming area runs more than one replica, since a filesystem store is per-pod otherwise.
 This claim is mounted into the blobStorage.mountAreas at that directory (see deployment.yaml).
