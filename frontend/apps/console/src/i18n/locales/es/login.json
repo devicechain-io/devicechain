@@ -1,5 +1,7 @@
 {
+  "changeEmail": "Usar otro correo electrónico",
   "chooseTenantSubtitle": "Elige un inquilino para continuar",
+  "continue": "Continuar",
   "emailLabel": "Correo electrónico",
   "enterTenantFailed": "No se pudo acceder a ese inquilino.",
   "invalidCredentials": "Correo electrónico o contraseña no válidos.",
@@ -15,6 +17,8 @@
   "ssoBackToSignIn": "Volver al inicio de sesión",
   "ssoButton": "Iniciar sesión con SSO",
   "ssoCompleting": "Completando el inicio de sesión…",
+  "ssoContinue": "Continuar con el inicio de sesión único",
+  "ssoDomainNotice": "Esta dirección inicia sesión mediante el inicio de sesión único de tu organización.",
   "ssoEmailRequired": "Escribe primero tu correo electrónico y luego elige Iniciar sesión con SSO.",
   "ssoErrorGroupsOverage": "Tu proveedor de identidad informó más pertenencias a grupos de las que puede incluir en un inicio de sesión. Pide a tu administrador que reduzca los grupos que se envían.",
   "ssoErrorIdp": "Tu proveedor de identidad no pudo completar el inicio de sesión. Vuelve a intentarlo o contacta a tu administrador.",
@@ -35,5 +39,6 @@
   "ssoRequired": "Tu organización exige el inicio de sesión único. Usa Iniciar sesión con SSO en lugar de una contraseña.",
   "ssoRequiredBadge": "Requiere inicio de sesión único",
   "ssoUnavailable": "El inicio de sesión único no está disponible en este momento.",
-  "tooManyAttempts": "Demasiados intentos fallidos de inicio de sesión para esta cuenta. Espera un momento y vuelve a intentarlo."
+  "tooManyAttempts": "Demasiados intentos fallidos de inicio de sesión para esta cuenta. Espera un momento y vuelve a intentarlo.",
+  "usePassword": "Usar una contraseña"
 }

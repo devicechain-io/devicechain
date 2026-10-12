@@ -56,8 +56,9 @@ describe('the identity-providers routes', () => {
   ])('send %s to the login page without loading anything', async (_who, state) => {
     auth.value = { ...auth.value, ...state };
     visit('/admin/identity-providers');
-    // The login page has a password "Sign in" and a "Sign in with SSO" button; match the first exactly.
-    expect(await screen.findByRole('button', { name: /^sign in$/i })).toBeTruthy();
+    // The login page opens on the email alone: its primary button is "Continue", beside a
+    // "Sign in with SSO" button; match the first exactly.
+    expect(await screen.findByRole('button', { name: /^continue$/i })).toBeTruthy();
     expect(screen.queryByText('Identity providers')).toBeNull();
     expect(listIdpConnections).not.toHaveBeenCalled();
   });
@@ -65,7 +66,7 @@ describe('the identity-providers routes', () => {
   it('guards the detail route the same way', async () => {
     auth.value = { ...auth.value, isIdentityAuthenticated: true, superuser: false };
     visit('/admin/identity-providers/acme-sso');
-    expect(await screen.findByRole('button', { name: /^sign in$/i })).toBeTruthy();
+    expect(await screen.findByRole('button', { name: /^continue$/i })).toBeTruthy();
     expect(listIdpConnections).not.toHaveBeenCalled();
   });
 });

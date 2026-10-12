@@ -206,8 +206,8 @@ type SsoBegin struct {
 }
 
 // BeginSso starts a sign-in. source is the caller's address, for rate limiting. It returns
-// (nil, nil) when Email names no connection (the person signs in some other way) and
-// ErrSsoUnavailable when a connection is found but cannot be used.
+// (nil, nil) when Email names no connection that can be used (the person signs in some
+// other way), and ErrSsoUnavailable when a Connection named by token cannot be used.
 func (m *Manager) BeginSso(ctx context.Context, in BeginSsoInput, source string) (*SsoBegin, error) {
 	if !m.SsoReady() {
 		return nil, ErrSsoUnavailable
@@ -234,6 +234,14 @@ func (m *Manager) BeginSso(ctx context.Context, in BeginSsoInput, source string)
 			return nil, err
 		}
 		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, nil
+		}
+		// A connection that cannot begin (switched off, or its snapshot awaiting approval)
+		// is, to someone signing in by address, no connection: the same null. The sign-in
+		// screen asks this for every address, and every address without a usable connection
+		// gets one answer. The operator still sees it counted.
+		if err == nil && !usableConnection(conn) {
+			m.countSso(conn.Token, SsoOutcomeRefusedConnectionUnusable)
 			return nil, nil
 		}
 	}

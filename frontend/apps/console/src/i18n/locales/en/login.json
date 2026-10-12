@@ -1,5 +1,7 @@
 {
+  "changeEmail": "Use a different email",
   "chooseTenantSubtitle": "Choose a tenant to continue",
+  "continue": "Continue",
   "emailLabel": "Email",
   "enterTenantFailed": "Could not enter that tenant.",
   "invalidCredentials": "Invalid email or password.",
@@ -15,6 +17,8 @@
   "ssoBackToSignIn": "Back to sign in",
   "ssoButton": "Sign in with SSO",
   "ssoCompleting": "Completing sign-in…",
+  "ssoContinue": "Continue with single sign-on",
+  "ssoDomainNotice": "This address signs in through your organization's single sign-on.",
   "ssoEmailRequired": "Enter your email address first, then choose Sign in with SSO.",
   "ssoErrorGroupsOverage": "Your identity provider reported more group memberships than it can include in a sign-in. Ask your administrator to narrow the groups that are sent.",
   "ssoErrorIdp": "Your identity provider could not complete the sign-in. Try again, or contact your administrator.",
@@ -35,5 +39,6 @@
   "ssoRequired": "Your organization requires single sign-on. Use Sign in with SSO instead of a password.",
   "ssoRequiredBadge": "Requires single sign-on",
   "ssoUnavailable": "Single sign-on is not available right now.",
-  "tooManyAttempts": "Too many failed sign-in attempts for this account. Wait a moment, then try again."
+  "tooManyAttempts": "Too many failed sign-in attempts for this account. Wait a moment, then try again.",
+  "usePassword": "Use a password instead"
 }

@@ -97,8 +97,8 @@ The metrics behind them are `devicechain_usermanagement_sso_logins_total{connect
 
 | Symptom | Likely cause |
 | --- | --- |
-| "Single sign-on is not set up for that email address" | The domain is not asserted on any connection. |
-| "Single sign-on is not available right now" | The connection for that domain is disabled, or its discovery is not approved. |
+| The console asks for a password for an address that should use single sign-on, or **Sign in with SSO** says "Single sign-on is not set up for that email address" | No usable connection speaks for the domain: it is not asserted on any connection, or its connection is disabled or its discovery is not approved. A sign-in by address answers all of these the same way (the connection shows up under the `refused_connection_unavailable` outcome), and the console also asks for a password when the instance has no single sign-on, so check **Admin → Identity providers**. |
+| "Single sign-on is not available right now" | The instance is not set up for single sign-on (see [Deployment](#deployment)), or too many sign-ins were started from the same address: wait a moment and try again. |
 | "Your account exists but is not linked" | The address already has an identity: approve its link request. |
 | Every sign-in refused as unverified | The provider does not send a verified email (for Entra, add `xms_edov`). |
 | Refused after a provider change | The provider moved an endpoint: **Refresh from provider** and approve again. |
