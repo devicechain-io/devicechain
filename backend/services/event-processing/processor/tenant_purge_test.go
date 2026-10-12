@@ -14,6 +14,7 @@ import (
 	"time"
 
 	detectcore "github.com/devicechain-io/dc-event-processing/internal/detect/core"
+	"github.com/devicechain-io/dc-event-processing/internal/geofence"
 	rules0 "github.com/devicechain-io/dc-event-processing/internal/rules"
 	"github.com/devicechain-io/dc-event-processing/internal/runtime"
 	"github.com/devicechain-io/dc-event-processing/model"
@@ -1251,5 +1252,49 @@ func TestTheLoopRefusesAnEvictionForATermItNoLongerHolds(t *testing.T) {
 	}
 	if got := rig.payload(t); strings.Contains(got, "acme/") {
 		t.Fatalf("the committed snapshot still names the evicted tenant: %s", got)
+	}
+}
+
+// purgeRecordingFenceSource is a fence-set source that also holds a geometry cache, the way
+// the production client does, and records which tenants it was asked to forget.
+type purgeRecordingFenceSource struct {
+	mu     sync.Mutex
+	purged []string
+}
+
+func (s *purgeRecordingFenceSource) CurrentFenceSet(context.Context, string) (*geofence.FenceSet, error) {
+	return geofence.EmptyFenceSet(0), nil
+}
+
+func (s *purgeRecordingFenceSource) PurgeTenant(tenant string) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.purged = append(s.purged, tenant)
+	return 2
+}
+
+// The fence-set client caches the tenant's compiled fence geometry — the coordinates of its
+// sites — in memory, keyed by tenant. An eviction must drop that copy along with the rest of
+// the tenant's in-process state; nothing else clears it before a restart.
+func TestEvictionSweepsTheTenantsCachedFenceGeometry(t *testing.T) {
+	rig := newEvictionRig(t, newTestStore(t), "globex")
+	src := &purgeRecordingFenceSource{}
+	rig.rp.FenceSets = src
+	rig.start(t)
+
+	evicted, err := rig.evict(t, "acme")
+	if err != nil {
+		t.Fatalf("EvictTenant: %v", err)
+	}
+	rig.stop()
+
+	src.mu.Lock()
+	defer src.mu.Unlock()
+	if len(src.purged) != 1 || src.purged[0] != "acme" {
+		t.Fatalf("the cached fence geometry was purged for %v, want exactly [acme]", src.purged)
+	}
+	if evicted != 2 {
+		t.Fatalf("the eviction reported %d entries, want the 2 cached geometries — acme holds "+
+			"nothing else in this rig", evicted)
 	}
 }
