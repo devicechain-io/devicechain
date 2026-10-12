@@ -7,7 +7,9 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
+	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
@@ -50,26 +52,33 @@ func TestAJournalRowIsKeptAndItsIdentifiersDestroyed(t *testing.T) {
 		"a tenant column made it direct, so the sweep would have deleted the evidence")
 	require.Equal(t, []string{"actor", "entity_label"}, entry.Redact)
 
-	res, err := Sweep(context.Background(), db, plan, "acme", nil)
+	res, err := Sweep(context.Background(), db, plan, "acme", testEpoch, nil)
 	require.NoError(t, err)
 	assert.Zero(t, res.Rows, "a retained table must contribute nothing to the DELETED count")
 	require.Len(t, res.Redacted, 1)
 	assert.Equal(t, int64(2), res.Redacted[0].Rows)
 
+	key := RetainedTenant("acme", testEpoch)
 	var kept int64
-	require.NoError(t, db.Raw(`SELECT count(*) FROM audit_events WHERE tenant_id = 'acme'`).
+	require.NoError(t, db.Raw(`SELECT count(*) FROM audit_events WHERE tenant_id = ?`, key).
 		Scan(&kept).Error)
 	assert.Equal(t, int64(2), kept, "the journal was swept, so the erasure has no evidence")
 
+	var underToken int64
+	require.NoError(t, db.Raw(`SELECT count(*) FROM audit_events WHERE tenant_id = 'acme'`).
+		Scan(&underToken).Error)
+	assert.Zero(t, underToken, "retained rows were left under the bare token, where a later tenant "+
+		"created with it reads them as its own")
+
 	var named int64
 	require.NoError(t, db.Raw(`SELECT count(*) FROM audit_events
-		WHERE tenant_id = 'acme' AND (actor <> '' OR entity_label <> '')`).Scan(&named).Error)
+		WHERE tenant_id = ? AND (actor <> '' OR entity_label <> '')`, key).Scan(&named).Error)
 	assert.Zero(t, named, "a purged tenant's people are still named in the retained journal")
 
 	// What survives is the shape of the activity, which is what the row is evidence of.
 	var ops []string
 	require.NoError(t, db.Raw(
-		`SELECT operation FROM audit_events WHERE tenant_id = 'acme' ORDER BY id`).Scan(&ops).Error)
+		`SELECT operation FROM audit_events WHERE tenant_id = ? ORDER BY id`, key).Scan(&ops).Error)
 	assert.Equal(t, []string{"create", "delete"}, ops)
 }
 
@@ -82,12 +91,12 @@ func TestASecondPassRedactsNothing(t *testing.T) {
 	seedJournal(t, db)
 	plan := journalPlan(t)
 
-	first, err := Sweep(context.Background(), db, plan, "acme", nil)
+	first, err := Sweep(context.Background(), db, plan, "acme", testEpoch, nil)
 	require.NoError(t, err)
 	require.Len(t, first.Redacted, 1, "the first pass redacted nothing, so this proves nothing")
 	require.Equal(t, int64(2), first.Redacted[0].Rows)
 
-	second, err := Sweep(context.Background(), db, plan, "acme", nil)
+	second, err := Sweep(context.Background(), db, plan, "acme", testEpoch, nil)
 	require.NoError(t, err)
 	assert.Empty(t, second.Redacted,
 		"the redaction rewrote rows it had already emptied, so every pass claims to have "+
@@ -95,7 +104,7 @@ func TestASecondPassRedactsNothing(t *testing.T) {
 
 	// And the rows are still there, still blank — a second pass must not undo the first.
 	var kept int64
-	require.NoError(t, db.Raw(`SELECT count(*) FROM audit_events WHERE tenant_id = 'acme'`).
+	require.NoError(t, db.Raw(`SELECT count(*) FROM audit_events WHERE tenant_id = ?`, RetainedTenant("acme", testEpoch)).
 		Scan(&kept).Error)
 	assert.Equal(t, int64(2), kept)
 }
@@ -106,7 +115,7 @@ func TestARedactionLeavesEveryOtherTenantAlone(t *testing.T) {
 	db := sqliteDB(t)
 	seedJournal(t, db)
 
-	_, err := Sweep(context.Background(), db, journalPlan(t), "acme", nil)
+	_, err := Sweep(context.Background(), db, journalPlan(t), "acme", testEpoch, nil)
 	require.NoError(t, err)
 
 	var actor, label string
@@ -126,10 +135,10 @@ func TestTheResidualScanSeesAnIdentifierTheRedactionMissed(t *testing.T) {
 	seedJournal(t, db)
 	plan := journalPlan(t)
 
-	_, err := Sweep(context.Background(), db, plan, "acme", nil)
+	_, err := Sweep(context.Background(), db, plan, "acme", testEpoch, nil)
 	require.NoError(t, err)
 
-	clean, err := Residue(context.Background(), db, plan, "acme")
+	clean, err := Residue(context.Background(), db, plan, "acme", testEpoch)
 	require.NoError(t, err)
 	require.Zero(t, clean.Retained(), "the scan reports an identifier where none is left")
 
@@ -138,7 +147,7 @@ func TestTheResidualScanSeesAnIdentifierTheRedactionMissed(t *testing.T) {
 	require.NoError(t, db.Exec(`INSERT INTO audit_events (id, tenant_id, actor, entity_label, operation)
 		VALUES (4,'acme','late@acme.example','','create')`).Error)
 
-	dirty, err := Residue(context.Background(), db, plan, "acme")
+	dirty, err := Residue(context.Background(), db, plan, "acme", testEpoch)
 	require.NoError(t, err)
 	assert.Equal(t, int64(1), dirty.Retained(),
 		"a retained row naming someone after the erasure was not seen by the re-verify")
@@ -214,17 +223,17 @@ func TestTheRedactionWritesTheEmptyStringRatherThanNull(t *testing.T) {
 	db := sqliteDB(t)
 	seedJournal(t, db)
 
-	_, err := Sweep(context.Background(), db, journalPlan(t), "acme", nil)
+	_, err := Sweep(context.Background(), db, journalPlan(t), "acme", testEpoch, nil)
 	require.NoError(t, err)
 
 	var nulls int64
 	require.NoError(t, db.Raw(`SELECT count(*) FROM audit_events
-		WHERE tenant_id = 'acme' AND (actor IS NULL OR entity_label IS NULL)`).Scan(&nulls).Error)
+		WHERE tenant_id = ? AND (actor IS NULL OR entity_label IS NULL)`, RetainedTenant("acme", testEpoch)).Scan(&nulls).Error)
 	assert.Zero(t, nulls, "the redaction wrote NULL; the registry entry promises the empty string")
 
 	var blanks int64
 	require.NoError(t, db.Raw(`SELECT count(*) FROM audit_events
-		WHERE tenant_id = 'acme' AND actor = '' AND entity_label = ''`).Scan(&blanks).Error)
+		WHERE tenant_id = ? AND actor = '' AND entity_label = ''`, RetainedTenant("acme", testEpoch)).Scan(&blanks).Error)
 	assert.Equal(t, int64(2), blanks)
 }
 
@@ -239,12 +248,14 @@ func TestANullIdentifierReadsAsClean(t *testing.T) {
 	seedJournal(t, db)
 	plan := journalPlan(t)
 
-	_, err := Sweep(context.Background(), db, plan, "acme", nil)
+	_, err := Sweep(context.Background(), db, plan, "acme", testEpoch, nil)
 	require.NoError(t, err)
-	require.NoError(t, db.Exec(
-		`UPDATE audit_events SET actor = NULL WHERE tenant_id = 'acme' AND id = 1`).Error)
+	nulled := db.Exec(
+		`UPDATE audit_events SET actor = NULL WHERE tenant_id = ? AND id = 1`, RetainedTenant("acme", testEpoch))
+	require.NoError(t, nulled.Error)
+	require.Equal(t, int64(1), nulled.RowsAffected, "no retained row was set NULL, so this proves nothing")
 
-	clean, err := Residue(context.Background(), db, plan, "acme")
+	clean, err := Residue(context.Background(), db, plan, "acme", testEpoch)
 	require.NoError(t, err)
 	assert.Zero(t, clean.Retained(),
 		"a NULL was counted as an identifier still present, which would hold the purge open "+
@@ -259,7 +270,7 @@ func TestARefusedSweepRedactsNothing(t *testing.T) {
 	seedJournal(t, db)
 	refused := errors.New("that token names a LIVE tenant")
 
-	_, err := Sweep(context.Background(), db, journalPlan(t), "acme",
+	_, err := Sweep(context.Background(), db, journalPlan(t), "acme", testEpoch,
 		func(*gorm.DB) error { return refused })
 	require.ErrorIs(t, err, refused)
 
@@ -277,7 +288,7 @@ func TestARedactionWithNoMatchingRowsReportsNothing(t *testing.T) {
 	db := sqliteDB(t)
 	seedJournal(t, db)
 
-	res, err := Sweep(context.Background(), db, journalPlan(t), "nobody", nil)
+	res, err := Sweep(context.Background(), db, journalPlan(t), "nobody", testEpoch, nil)
 	require.NoError(t, err)
 	assert.Empty(t, res.Redacted, "a redaction that matched no rows still reported a line")
 }
@@ -288,4 +299,135 @@ func TestTheRedactionRuleDoesNotCoverLookalikeTables(t *testing.T) {
 		_, ok := redactionFor(Table{Schema: "user-management", Name: name})
 		assert.Falsef(t, ok, "%q was redacted rather than swept", name)
 	}
+}
+
+// 🔴 A TOKEN IS RELEASED WHEN ITS PURGE COMPLETES, and a new tenant may then be created with
+// it. Every tenant-plane read of the journal selects on the tenant column, so the retained
+// rows must not stay under the bare token: the later tenant would read the earlier one's
+// activity as its own history. They are re-keyed, and stay findable under the key the
+// deletion record names.
+func TestALaterTenantAtTheSameTokenSeesNoneOfTheRetainedJournal(t *testing.T) {
+	db := sqliteDB(t)
+	seedJournal(t, db)
+	plan := journalPlan(t)
+
+	_, err := Sweep(context.Background(), db, plan, "acme", testEpoch, nil)
+	require.NoError(t, err)
+	// The later tenant's own activity.
+	require.NoError(t, db.Exec(`INSERT INTO audit_events (id, tenant_id, actor, entity_label, operation)
+		VALUES (4,'acme','new@acme.example','x','create')`).Error)
+
+	var later []int
+	require.NoError(t, db.Raw(`SELECT id FROM audit_events WHERE tenant_id = 'acme' ORDER BY id`).
+		Scan(&later).Error)
+	assert.Equal(t, []int{4}, later, "the later tenant at the same token sees the earlier tenant's journal")
+
+	var retained []int
+	require.NoError(t, db.Raw(`SELECT id FROM audit_events WHERE tenant_id = ? ORDER BY id`,
+		RetainedTenant("acme", testEpoch)).Scan(&retained).Error)
+	assert.Equal(t, []int{1, 2}, retained, "the retained rows are not under the key the deletion record names")
+}
+
+// Two purges of one token — the token was released, reused, and purged again — keep their
+// retained rows apart, because the key carries the purge's epoch.
+func TestTwoPurgesOfOneTokenKeepTheirRetainedRowsApart(t *testing.T) {
+	db := sqliteDB(t)
+	seedJournal(t, db)
+	plan := journalPlan(t)
+
+	_, err := Sweep(context.Background(), db, plan, "acme", testEpoch, nil)
+	require.NoError(t, err)
+	require.NoError(t, db.Exec(`INSERT INTO audit_events (id, tenant_id, actor, entity_label, operation)
+		VALUES (4,'acme','new@acme.example','x','create')`).Error)
+	second := testEpoch.Add(30 * 24 * time.Hour)
+	_, err = Sweep(context.Background(), db, plan, "acme", second, nil)
+	require.NoError(t, err)
+
+	ids := func(key string) []int {
+		var out []int
+		require.NoError(t, db.Raw(`SELECT id FROM audit_events WHERE tenant_id = ? ORDER BY id`, key).
+			Scan(&out).Error)
+		return out
+	}
+	assert.Equal(t, []int{1, 2}, ids(RetainedTenant("acme", testEpoch)))
+	assert.Equal(t, []int{4}, ids(RetainedTenant("acme", second)))
+	assert.Empty(t, ids("acme"))
+}
+
+// A row already re-keyed that still names someone — a pass whose emptying did not take — is
+// unfinished: the re-verify sees it, and the next pass finishes it rather than skipping it
+// because it is no longer under the token.
+func TestARekeyedRowStillNamingSomeoneIsSeenAndFinished(t *testing.T) {
+	db := sqliteDB(t)
+	seedJournal(t, db)
+	plan := journalPlan(t)
+	key := RetainedTenant("acme", testEpoch)
+
+	_, err := Sweep(context.Background(), db, plan, "acme", testEpoch, nil)
+	require.NoError(t, err)
+	require.NoError(t, db.Exec(`UPDATE audit_events SET actor = 'jane@acme.example' WHERE id = 1`).Error)
+
+	dirty, err := Residue(context.Background(), db, plan, "acme", testEpoch)
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), dirty.Retained(), "a re-keyed row still naming someone was not seen")
+
+	again, err := Sweep(context.Background(), db, plan, "acme", testEpoch, nil)
+	require.NoError(t, err)
+	require.Len(t, again.Redacted, 1)
+	assert.Equal(t, int64(1), again.Redacted[0].Rows, "the next pass did not finish the row")
+
+	clean, err := Residue(context.Background(), db, plan, "acme", testEpoch)
+	require.NoError(t, err)
+	assert.Zero(t, clean.Retained())
+	var actor string
+	require.NoError(t, db.Raw(`SELECT actor FROM audit_events WHERE id = 1 AND tenant_id = ?`, key).
+		Scan(&actor).Error)
+	assert.Empty(t, actor)
+}
+
+// A row under the bare token is unfinished whatever it holds: it is what a later tenant would
+// read, so the re-verify counts it even when it names nobody.
+func TestARowUnderTheTokenIsUnfinishedEvenWhenItNamesNobody(t *testing.T) {
+	db := sqliteDB(t)
+	seedJournal(t, db)
+	plan := journalPlan(t)
+
+	_, err := Sweep(context.Background(), db, plan, "acme", testEpoch, nil)
+	require.NoError(t, err)
+	require.NoError(t, db.Exec(`INSERT INTO audit_events (id, tenant_id, actor, entity_label, operation)
+		VALUES (5,'acme','','','delete')`).Error)
+
+	dirty, err := Residue(context.Background(), db, plan, "acme", testEpoch)
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), dirty.Retained(), "a nameless row under the bare token was read as finished")
+}
+
+// The key can never be a tenant: it fails the token grammar every tenant is created through,
+// so no later tenant can be created whose reads match it. And it reads off the deletion
+// record as "{token}~{epoch}", the epoch exactly as the record publishes it.
+func TestARetainedKeyIsNeverATenantToken(t *testing.T) {
+	key := RetainedTenant("acme", testEpoch)
+	assert.Equal(t, "acme~2026-10-01T12:00:00.123456Z", key)
+	require.NoError(t, core.ValidateToken("acme"), "control: the bare token is a valid token")
+	assert.Error(t, core.ValidateToken(key), "a retained key is a valid tenant token")
+	assert.Equal(t, key, RetainedTenant("acme", testEpoch.In(time.FixedZone("x", 5*3600))),
+		"the key depends on the epoch's time zone")
+}
+
+// A purge with no epoch would file every purge's retained rows under one key, so both halves
+// refuse it before touching the database.
+func TestAZeroEpochIsRefused(t *testing.T) {
+	db := sqliteDB(t)
+	seedJournal(t, db)
+	plan := journalPlan(t)
+
+	_, err := Sweep(context.Background(), db, plan, "acme", time.Time{}, nil)
+	require.ErrorContains(t, err, "no purge epoch")
+	_, err = Residue(context.Background(), db, plan, "acme", time.Time{})
+	require.ErrorContains(t, err, "no purge epoch")
+
+	var named int64
+	require.NoError(t, db.Raw(`SELECT count(*) FROM audit_events WHERE tenant_id = 'acme' AND actor <> ''`).
+		Scan(&named).Error)
+	assert.Equal(t, int64(2), named, "a refused sweep touched the journal")
 }

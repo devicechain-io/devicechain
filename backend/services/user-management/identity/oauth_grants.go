@@ -351,7 +351,22 @@ func (m *Manager) RefreshOAuth(ctx context.Context, refreshToken, requestedScope
 	// bounds the access token, it does not permanently downgrade the grant), so a
 	// client that narrows once does not irreversibly lose the rest of its grant. The
 	// client binding is carried forward so the rotated token stays bound.
-	grant, gerr := m.resolveScopedGrant(ctx, claims.Username, claims.SessionEpoch, claims.SessionID, claims.Tenant, scope, claims.Scope)
+	//
+	// A token issued before the tenant it names was created is refused first, the same
+	// check Refresh makes (admitRefreshTenant): a token that outlived its tenant must not
+	// carry a client's consent over to a later tenant created with the same token.
+	var grant scopedGrant
+	var gerr *oauthError
+	if err := m.admitRefreshTenant(ctx, claims); err != nil {
+		if errors.Is(err, errTenantAccessDenied) {
+			gerr = errInvalidGrant("tenant access denied")
+		} else {
+			log.Error().Err(err).Msg("Could not load the tenant to re-check an OAuth grant.")
+			gerr = errServer(errGrantUnavailable)
+		}
+	} else {
+		grant, gerr = m.resolveScopedGrant(ctx, claims.Username, claims.SessionEpoch, claims.SessionID, claims.Tenant, scope, claims.Scope)
+	}
 	if gerr != nil {
 		if gerr.Code != "server_error" {
 			// Revision-checked, so it only ever deletes the token this refresh read.

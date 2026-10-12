@@ -11,6 +11,7 @@ import (
 
 	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-microservice/rdb"
+	"github.com/devicechain-io/dc-microservice/tenantpurge"
 	"github.com/devicechain-io/dc-user-management/admin"
 	"github.com/devicechain-io/dc-user-management/iam"
 	"github.com/devicechain-io/dc-user-management/purge"
@@ -110,7 +111,7 @@ func TestTheDeletionWireContractIsStable(t *testing.T) {
 
 	// Non-null: a deletion record always has these, and a console rendering them has nothing
 	// above to inherit a null from.
-	for _, f := range []string{"token", "epoch", "rowsErased", "stores", "blockedBy", "awaiting"} {
+	for _, f := range []string{"token", "epoch", "retainedAuditTenant", "rowsErased", "stores", "blockedBy", "awaiting"} {
 		assert.Equalf(t, "NON_NULL", kinds[f], "%s must be non-null", f)
 	}
 	// Nullable, and each null MEANS something the console renders differently.
@@ -326,4 +327,19 @@ func TestTheDeletionsCriteriaReachesTheStore(t *testing.T) {
 		done := exec(t, map[string]any{"pageNumber": 1, "pageSize": 10, "completed": true})
 		assert.Empty(t, done.Results, "a completed filter that was dropped would return all three")
 	})
+}
+
+// TestTheRetainedAuditTenantIsTheTokenAndThePublishedEpoch pins the key a deletion record
+// names for its retained journal rows to the record's own two identifying fields, as they
+// are published: an operator holding the record can read the key off it, and the key is the
+// one the purge re-keys the rows to (tenantpurge.RetainedTenant).
+func TestTheRetainedAuditTenantIsTheTokenAndThePublishedEpoch(t *testing.T) {
+	epoch := time.Date(2026, 8, 4, 12, 34, 56, 789_000_000, time.UTC)
+	r := &AdminTenantDeletionResolver{M: iam.TenantPurge{Token: "acme", Epoch: epoch}}
+	assert.Equal(t, r.Token()+"~"+r.Epoch(), r.RetainedAuditTenant())
+	assert.Equal(t, tenantpurge.RetainedTenant("acme", epoch), r.RetainedAuditTenant())
+
+	other := &AdminTenantDeletionResolver{M: iam.TenantPurge{Token: "acme", Epoch: epoch.Add(time.Microsecond)}}
+	assert.NotEqual(t, r.RetainedAuditTenant(), other.RetainedAuditTenant(),
+		"two deletions of one token named the same retained key")
 }

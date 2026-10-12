@@ -25,7 +25,8 @@ export type AdminAuditEventSearchCriteria = {
   startTime?: string | null | undefined;
   /**
    * Only entries belonging to the tenant with this token. Exact match. Entries that belong
-   * to no tenant are excluded when this is set.
+   * to no tenant are excluded when this is set. A deleted tenant's entries are kept under
+   * its deletion's `retainedAuditTenant`, not under its token.
    */
   tenant?: string | null | undefined;
 };

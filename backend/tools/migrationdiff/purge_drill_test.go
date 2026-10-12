@@ -58,6 +58,11 @@ const (
 	bystander = "bystander-tenant"
 )
 
+// drillEpoch is the purge epoch the drill sweeps under. A purge files the rows it retains
+// under the token and this epoch together (tenantpurge.RetainedTenant), so the journal
+// assertions read them there.
+var drillEpoch = time.Date(2026, 10, 1, 12, 0, 0, 123456000, time.UTC)
+
 func drillConn(t *testing.T) (*gorm.DB, context.Context) {
 	t.Helper()
 	port := 5432
@@ -217,7 +222,7 @@ func TestPurgeDrillErasesOneTenantAndLeavesTheOther(t *testing.T) {
 	for _, tenant := range []string{victim, bystander} {
 		plan, err := tenantpurge.Classify(ctx, db)
 		require.NoError(t, err)
-		_, err = tenantpurge.Sweep(ctx, db, plan, tenant, nil)
+		_, err = tenantpurge.Sweep(ctx, db, plan, tenant, drillEpoch, nil)
 		require.NoError(t, err)
 	}
 	mustExec(t, db, `DELETE FROM "user-management".iam_identities WHERE id = ?`, sharedIdentityID)
@@ -230,7 +235,7 @@ func TestPurgeDrillErasesOneTenantAndLeavesTheOther(t *testing.T) {
 	// asserts one, having reset everything else perfectly. Any harness that leans on the
 	// sweep to reset state has the same problem the day a table becomes retained.
 	for _, a := range areas {
-		mustExec(t, db, fmt.Sprintf(`DELETE FROM %q.audit_events WHERE tenant_id IN (?, ?)`, a.name),
+		mustExec(t, db, fmt.Sprintf(`DELETE FROM %q.audit_events WHERE split_part(tenant_id, '~', 1) IN (?, ?)`, a.name),
 			victim, bystander)
 	}
 
@@ -281,7 +286,7 @@ func TestPurgeDrillErasesOneTenantAndLeavesTheOther(t *testing.T) {
 	assert.Contains(t, matEntry.Describe(), "measurement_rollups",
 		"the generated relation name means nothing on its own; the plan must carry the aggregate")
 
-	res, err := tenantpurge.Sweep(ctx, db, plan, victim, nil)
+	res, err := tenantpurge.Sweep(ctx, db, plan, victim, drillEpoch, nil)
 	require.NoError(t, err, "the sweep must survive the real foreign-key graph")
 	t.Logf("swept %d rows across %d tables", res.Rows, len(res.Tables))
 	assert.True(t, res.Complete(),
@@ -314,12 +319,19 @@ func TestPurgeDrillErasesOneTenantAndLeavesTheOther(t *testing.T) {
 	// record certifies. Asserting only that the rows survive would pass with the
 	// identifiers intact, and asserting only that the names are gone would pass with the
 	// rows deleted — so both are checked, in both schemas, for the victim.
+	//
+	// The retained row is also RE-KEYED, so a later tenant created with the released token
+	// does not read it as its own: it is found under RetainedTenant(victim, epoch), and
+	// nothing is left under the bare token.
+	retainedKey := tenantpurge.RetainedTenant(victim, drillEpoch)
 	for _, schema := range []string{"user-management", "device-management"} {
 		tbl := fmt.Sprintf("%q.audit_events", schema)
-		assert.Equalf(t, int64(1), count(t, db, tbl, "tenant_id = ?", victim),
+		assert.Equalf(t, int64(1), count(t, db, tbl, "tenant_id = ?", retainedKey),
 			"%s dropped the victim's journal row: the erasure has no evidence", schema)
+		assert.Zerof(t, count(t, db, tbl, "tenant_id = ?", victim),
+			"%s left the victim's journal under the bare token, where a later tenant reads it", schema)
 		assert.Zerof(t, count(t, db, tbl,
-			"tenant_id = ? AND (actor <> '' OR entity_label <> '')", victim),
+			"tenant_id = ? AND (actor <> '' OR entity_label <> '')", retainedKey),
 			"%s's retained journal still names the victim's people after their erasure", schema)
 
 		// The bystander is the control for both: a redaction with no tenant predicate,
@@ -367,7 +379,7 @@ func TestPurgeDrillErasesOneTenantAndLeavesTheOther(t *testing.T) {
 	// would depend on this one having run first, and Go gives no such guarantee across
 	// a package. Sharing the state here makes the dependency explicit instead of lucky.
 
-	clean, err := tenantpurge.Residue(ctx, db, plan, victim)
+	clean, err := tenantpurge.Residue(ctx, db, plan, victim, drillEpoch)
 	require.NoError(t, err)
 	assert.Zerof(t, clean.Retained(), "the re-verify found a retained row still naming someone: %+v",
 		clean.Redacted)
@@ -378,7 +390,7 @@ func TestPurgeDrillErasesOneTenantAndLeavesTheOther(t *testing.T) {
 	// always returned zero — a broken predicate, a query against the wrong database —
 	// would satisfy it and go on certifying every erasure that ever ran. The bystander
 	// demonstrably has rows, so the scan must find them.
-	dirty, err := tenantpurge.Residue(ctx, db, plan, bystander)
+	dirty, err := tenantpurge.Residue(ctx, db, plan, bystander, drillEpoch)
 	require.NoError(t, err)
 	assert.NotZero(t, dirty.Rows,
 		"the residual scan reported a tenant with live rows as clean, so it cannot see residue "+
@@ -640,7 +652,7 @@ func TestTheSweepRetainsAndRedactsTheJournalThroughTheStore(t *testing.T) {
 		for _, a := range areas {
 			for _, tok := range []string{tenant, bystander} {
 				mustExec(t, db, fmt.Sprintf(`DELETE FROM %q.%s WHERE token = ?`, a.name, rdb.FenceTable), tok)
-				mustExec(t, db, fmt.Sprintf(`DELETE FROM %q.audit_events WHERE tenant_id = ?`, a.name), tok)
+				mustExec(t, db, fmt.Sprintf(`DELETE FROM %q.audit_events WHERE split_part(tenant_id, '~', 1) = ?`, a.name), tok)
 			}
 		}
 	}
@@ -654,15 +666,19 @@ func TestTheSweepRetainsAndRedactsTheJournalThroughTheStore(t *testing.T) {
 	}
 
 	store := purge.NewRelational("rdb", drillDatabase{db}, nil)
-	if _, err := store.Erase(ctx, tenant, time.Now().UTC().Add(-time.Hour)); err != nil {
+	epoch := time.Now().UTC().Add(-time.Hour).Truncate(time.Microsecond)
+	if _, err := store.Erase(ctx, tenant, epoch); err != nil {
 		require.NoError(t, err)
 	}
 
+	key := tenantpurge.RetainedTenant(tenant, epoch)
 	assert.Equal(t, int64(1),
-		count(t, db, `"user-management".audit_events`, "tenant_id = ?", tenant),
+		count(t, db, `"user-management".audit_events`, "tenant_id = ?", key),
 		"the journal row was swept, so the erasure has no evidence")
+	assert.Zero(t, count(t, db, `"user-management".audit_events`, "tenant_id = ?", tenant),
+		"the retained row was left under the bare token, where a later tenant created with it reads it")
 	assert.Zero(t, count(t, db, `"user-management".audit_events`,
-		"tenant_id = ? AND (actor <> '' OR entity_label <> '')", tenant),
+		"tenant_id = ? AND (actor <> '' OR entity_label <> '')", key),
 		"the retained journal still names the erased tenant's people")
 
 	// The control: a redaction with no tenant predicate satisfies both assertions above.
@@ -687,7 +703,7 @@ func TestTheStoreRefusesToAckWhenTheRedactionDidNotTake(t *testing.T) {
 	clear := func() {
 		for _, a := range areas {
 			mustExec(t, db, fmt.Sprintf(`DELETE FROM %q.%s WHERE token = ?`, a.name, rdb.FenceTable), tenant)
-			mustExec(t, db, fmt.Sprintf(`DELETE FROM %q.audit_events WHERE tenant_id = ?`, a.name), tenant)
+			mustExec(t, db, fmt.Sprintf(`DELETE FROM %q.audit_events WHERE split_part(tenant_id, '~', 1) = ?`, a.name), tenant)
 		}
 	}
 	clear()
@@ -707,15 +723,21 @@ func TestTheStoreRefusesToAckWhenTheRedactionDidNotTake(t *testing.T) {
 	    ON "user-management".audit_events FOR EACH ROW EXECUTE FUNCTION dc_drill_keep_actor()`)
 
 	store := purge.NewRelational("rdb", drillDatabase{db}, nil)
-	_, err := store.Erase(ctx, tenant, time.Now().UTC().Add(-time.Hour))
+	epoch := time.Now().UTC().Add(-time.Hour).Truncate(time.Microsecond)
+	_, err := store.Erase(ctx, tenant, epoch)
 	require.Error(t, err, "the store acked while a retained row still named the erased tenant's people")
 	assert.Contains(t, err.Error(), "still name someone")
 	assert.NotContains(t, err.Error(), "still writing",
 		"the refusal reads as a failed delete, which sends an operator looking for a service to stop")
 
-	// The control: with the trigger gone, the identical pass acks. Without it, a store
-	// that refused everything would satisfy the assertion above.
+	// The control: with the trigger gone, the next pass of the SAME purge acks. Without it, a
+	// store that refused everything would satisfy the assertion above. The row the first pass
+	// re-keyed while the trigger kept its actor is no longer under the token, so this also
+	// shows the next pass still finds and finishes it rather than leaving it named.
 	mustExec(t, db, `DROP TRIGGER dc_drill_block_redaction ON "user-management".audit_events`)
-	_, err = store.Erase(ctx, tenant, time.Now().UTC().Add(-time.Hour))
+	_, err = store.Erase(ctx, tenant, epoch)
 	require.NoError(t, err, "the store refuses a pass whose redaction did take")
+	assert.Zero(t, count(t, db, `"user-management".audit_events`,
+		"split_part(tenant_id, '~', 1) = ? AND actor <> ''", tenant),
+		"the acked pass left a retained row still naming someone")
 }

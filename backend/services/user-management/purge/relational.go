@@ -103,14 +103,14 @@ func (r *Relational) Erase(ctx context.Context, tenant string, epoch time.Time) 
 		return Outcome{}, fmt.Errorf("fencing %s: %w", r.name, err)
 	}
 
-	swept, err := tenantpurge.Sweep(ctx, db, plan, tenant, pre)
+	swept, err := tenantpurge.Sweep(ctx, db, plan, tenant, epoch, pre)
 	if err != nil {
 		return Outcome{}, fmt.Errorf("sweeping %s: %w", r.name, err)
 	}
 
 	out := Outcome{Rows: swept.Rows, Deferred: deferrals(swept)}
 
-	residue, err := tenantpurge.Residue(ctx, db, plan, tenant)
+	residue, err := tenantpurge.Residue(ctx, db, plan, tenant, epoch)
 	if err != nil {
 		return out, fmt.Errorf("residual scan of %s: %w", r.name, err)
 	}
@@ -151,9 +151,10 @@ func retainedError(store, tenant string, res tenantpurge.Result) error {
 	if kept == 0 {
 		return nil
 	}
-	return fmt.Errorf("%d retained row(s) in %s still name someone after %q was erased (%s) — "+
-		"the journal is kept as the evidence of the deletion, and it may not keep the identifiers "+
-		"the deletion was of", kept, store, tenant, describeRetained(res))
+	return fmt.Errorf("%d retained row(s) in %s still name someone or are still filed under %q "+
+		"after it was erased (%s) — the journal is kept as the evidence of the deletion, and it may "+
+		"not keep the identifiers the deletion was of, nor stay readable by a later tenant created "+
+		"with the same token", kept, store, tenant, describeRetained(res))
 }
 
 // LiftFence stamps this database's standing fence rows for a tenant as completed, in

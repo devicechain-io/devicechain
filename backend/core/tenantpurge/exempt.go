@@ -5,6 +5,7 @@ package tenantpurge
 
 import (
 	"strings"
+	"time"
 
 	"github.com/devicechain-io/dc-microservice/rdb"
 )
@@ -308,6 +309,30 @@ type Redaction struct {
 	Reason string
 }
 
+// RetainedSeparator joins a purged tenant's token to its purge epoch in RetainedTenant.
+//
+// It is outside the token grammar (core.ValidateToken admits letters, digits, hyphen and
+// underscore), so no tenant can ever be created whose token equals a retained key, and no
+// tenant-scoped read — which matches its tenant column exactly — can reach a retained row.
+const RetainedSeparator = "~"
+
+// RetainedTenant is the value a purge writes into the tenant column of the rows it RETAINS
+// for a tenant (see redactions), in place of the bare token.
+//
+// 🔴 WHY THE TOKEN ALONE IS NOT ENOUGH. A token is released when its purge completes, and a
+// new tenant may then be created with it. Every tenant-plane read selects on the tenant
+// column, so retained rows left under the bare token would be read back by that new tenant
+// as its own history. Re-keying them is what separates the two: the retained rows stay
+// where an operator can find them, and stop belonging to whichever tenant holds the token.
+//
+// The epoch is rendered exactly as the deletion record publishes it (RFC 3339 with
+// fractional seconds, UTC), so the key can be read off the record as "{token}~{epoch}".
+// The record identifies one purge, so two purges of one token keep two sets of retained
+// rows apart.
+func RetainedTenant(token string, epoch time.Time) string {
+	return token + RetainedSeparator + epoch.UTC().Format(time.RFC3339Nano)
+}
+
 // redactionFor returns the redaction covering a table, if one exists.
 //
 // 🔴 IT MATCHES IN ANY SCHEMA, like the migration-bookkeeping and fence rules, because
@@ -349,6 +374,9 @@ var redactions = []Redaction{
 			"row that changed, and for a profile edit that row is an identity, which survives the " +
 			"purge deliberately — so an operator who can read both can still join them. And a " +
 			"purge selects on `tenant_id`, so the auth rows written before a tenant is chosen, " +
-			"which carry an email and no tenant, are reached by no tenant's deletion at all.",
+			"which carry an email and no tenant, are reached by no tenant's deletion at all. The " +
+			"retained rows are also RE-KEYED: their `tenant_id` becomes RetainedTenant(token, epoch), " +
+			"so a later tenant created with the released token does not read them as its own " +
+			"history, while an operator finds them from the deletion record.",
 	},
 }

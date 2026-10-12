@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
@@ -139,7 +140,7 @@ func TestSweepRefusesAnEmptyTokenBeforeTouchingTheDatabase(t *testing.T) {
 		col("a", "rows", "tenant_id", "character varying"),
 	}, nil)
 
-	_, err := Sweep(context.Background(), nil, plan, "", nil)
+	_, err := Sweep(context.Background(), nil, plan, "", testEpoch, nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "empty tenant token")
 }
@@ -156,7 +157,7 @@ func TestSweepRefusesAnUnclassifiedPlanBeforeTouchingTheDatabase(t *testing.T) {
 	}, nil, nil)
 	require.NoError(t, err)
 
-	_, err = Sweep(context.Background(), nil, plan, "acme", nil)
+	_, err = Sweep(context.Background(), nil, plan, "acme", testEpoch, nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "a.mystery")
 }
@@ -196,7 +197,7 @@ func TestADeferredTableIsCarriedOnEveryResult(t *testing.T) {
 
 	t.Run("on the refusal path", func(t *testing.T) {
 		deferOne(plan, "detect_snapshots")
-		res, err := Sweep(context.Background(), nil, plan, "", nil)
+		res, err := Sweep(context.Background(), nil, plan, "", testEpoch, nil)
 		require.Error(t, err)
 		require.Len(t, res.Deferred, 1)
 		assert.Equal(t, "detect_snapshots", res.Deferred[0].Table.Name)
@@ -220,7 +221,7 @@ func TestADeferredTableIsCarriedOnEveryResult(t *testing.T) {
 		deferOne(live, "detect_snapshots")
 		require.NoError(t, checkClassified(live))
 
-		res, err := Sweep(context.Background(), db, live, "acme", nil) //nolint
+		res, err := Sweep(context.Background(), db, live, "acme", testEpoch, nil) //nolint
 		require.NoError(t, err)
 		require.Equal(t, int64(1), res.Rows, "the sweep really ran")
 		require.Len(t, res.Deferred, 1,
@@ -256,6 +257,10 @@ func sqliteDB(t *testing.T) *gorm.DB {
 	return db
 }
 
+// testEpoch is the purge epoch the tests sweep under. It carries fractional seconds so the
+// retained key built from it is exercised at the precision a real epoch has.
+var testEpoch = time.Date(2026, 10, 1, 12, 0, 0, 123456000, time.UTC)
+
 func TestSweepDeletesOnlyTheNamedTenantsRows(t *testing.T) {
 	db := sqliteDB(t)
 	require.NoError(t, db.Exec(`CREATE TABLE devices (id INTEGER PRIMARY KEY, tenant_id TEXT)`).Error)
@@ -267,7 +272,7 @@ func TestSweepDeletesOnlyTheNamedTenantsRows(t *testing.T) {
 		col("main", "devices", "tenant_id", "text"),
 	}, nil)
 
-	res, err := Sweep(context.Background(), db, plan, "acme", nil)
+	res, err := Sweep(context.Background(), db, plan, "acme", testEpoch, nil)
 	require.NoError(t, err)
 	assert.Equal(t, int64(2), res.Rows)
 
@@ -298,7 +303,7 @@ func TestSweepDeletesAJoinRowThroughItsParent(t *testing.T) {
 		fk("main", "iam_membership_tenant_roles", "membership_id", "main", "iam_memberships", "id"),
 	})
 
-	res, err := Sweep(context.Background(), db, plan, "acme", nil)
+	res, err := Sweep(context.Background(), db, plan, "acme", testEpoch, nil)
 	require.NoError(t, err)
 	assert.Equal(t, int64(3), res.Rows, "two join rows plus the membership itself")
 
@@ -342,7 +347,7 @@ func TestSweepDeletesTheChildBeforeTheParent(t *testing.T) {
 	require.Error(t, db.Exec(`DELETE FROM area_types WHERE id = 1`).Error,
 		"foreign keys are not being enforced, so this test cannot observe a wrong delete order")
 
-	res, err := Sweep(context.Background(), db, plan, "acme", nil)
+	res, err := Sweep(context.Background(), db, plan, "acme", testEpoch, nil)
 	require.NoError(t, err, "a parent-first order would be rejected by the foreign key")
 	assert.Equal(t, int64(2), res.Rows)
 }
@@ -360,10 +365,10 @@ func TestResidueReportsWhatSurvivedTheSweep(t *testing.T) {
 	}, nil)
 	ctx := context.Background()
 
-	_, err := Sweep(ctx, db, plan, "acme", nil)
+	_, err := Sweep(ctx, db, plan, "acme", testEpoch, nil)
 	require.NoError(t, err)
 
-	clean, err := Residue(ctx, db, plan, "acme")
+	clean, err := Residue(ctx, db, plan, "acme", testEpoch)
 	require.NoError(t, err)
 	assert.Zero(t, clean.Rows)
 	assert.Empty(t, clean.Tables, "a clean scan reports no tables at all")
@@ -371,7 +376,7 @@ func TestResidueReportsWhatSurvivedTheSweep(t *testing.T) {
 	// A service that was still running re-registers the device.
 	require.NoError(t, db.Exec(`INSERT INTO devices (id, tenant_id) VALUES (2,'acme')`).Error)
 
-	dirty, err := Residue(ctx, db, plan, "acme")
+	dirty, err := Residue(ctx, db, plan, "acme", testEpoch)
 	require.NoError(t, err)
 	assert.Equal(t, int64(1), dirty.Rows)
 	require.Len(t, dirty.Tables, 1)
@@ -393,7 +398,7 @@ func TestSweepIsAllOrNothing(t *testing.T) {
 		col("main", "second", "tenant_id", "text"),
 	}, nil)
 
-	_, err := Sweep(context.Background(), db, plan, "acme", nil)
+	_, err := Sweep(context.Background(), db, plan, "acme", testEpoch, nil)
 	require.Error(t, err)
 
 	var remaining int64
@@ -420,7 +425,7 @@ func TestAFailingPreconditionAbortsTheSweepWithNothingDeleted(t *testing.T) {
 	}, nil)
 
 	refuse := func(*gorm.DB) error { return errors.New("that token names a live tenant") }
-	_, err := Sweep(context.Background(), db, plan, "acme", refuse)
+	_, err := Sweep(context.Background(), db, plan, "acme", testEpoch, refuse)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "that token names a live tenant")
 
@@ -447,7 +452,7 @@ func TestAPassingPreconditionIsTheCounterweight(t *testing.T) {
 		require.NotNil(t, tx, "the precondition receives the sweep's own transaction")
 		return nil
 	}
-	res, err := Sweep(context.Background(), db, plan, "acme", allow)
+	res, err := Sweep(context.Background(), db, plan, "acme", testEpoch, allow)
 	require.NoError(t, err)
 	assert.Equal(t, 1, called)
 	assert.Equal(t, int64(1), res.Rows)

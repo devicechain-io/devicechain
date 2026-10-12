@@ -151,14 +151,14 @@ func TestAMemoisedTransactionCommitsPastAFencePlantedMidway(t *testing.T) {
 	}
 
 	// 5. The committed rows are ordinary rows the sweep deletes and the residual scan sees.
-	res, err := tenantpurge.Sweep(sys, mgr.Database, plan, tenant, nil)
+	res, err := tenantpurge.Sweep(sys, mgr.Database, plan, tenant, now, nil)
 	if err != nil {
 		t.Fatalf("sweep: %v", err)
 	}
 	if res.Rows != 2 {
 		t.Fatalf("the sweep deleted %d row(s); want the memoised transaction's 2", res.Rows)
 	}
-	residue, err := tenantpurge.Residue(sys, mgr.Database, plan, tenant)
+	residue, err := tenantpurge.Residue(sys, mgr.Database, plan, tenant, now)
 	if err != nil {
 		t.Fatalf("residue: %v", err)
 	}
