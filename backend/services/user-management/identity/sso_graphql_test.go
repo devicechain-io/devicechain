@@ -5,7 +5,9 @@ package identity_test
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -319,4 +321,94 @@ func TestRoleMappingsOverTheWire(t *testing.T) {
 		nil, su.IdentityToken, "", "").field(t, "setIdpJit", &jit)
 	require.True(t, jit.JitEnabled)
 	require.Equal(t, []string{"operator"}, jit.DefaultTenantRoles)
+}
+
+const beginLinkDoc = `mutation($i:String!,$r:String!){beginSsoLink(identityToken:$i,returnTo:$r){authorizationUrl}}`
+
+// Linking one's own account, as the console does it: no connection is named; the server
+// picks the one the identity's own email domain was verified for. Every refusal of the begin
+// carries extensions.code, and every refusal at the provider's return names its reason.
+func TestBeginSsoLinkOverTheWire(t *testing.T) {
+	s := newSsoServed(t)
+	n := 0
+	remote := func() string { n++; return fmt.Sprintf("192.0.2.%d:1", 100+n) }
+	login := func(email string) string {
+		t.Helper()
+		s.s.CreateMember(email, "pw-1")
+		var got struct{ IdentityToken string }
+		post(t, s.pub, loginDoc, map[string]any{"e": email, "p": "pw-1"}, "", "", "").field(t, "login", &got)
+		return got.IdentityToken
+	}
+	begin := func(token string) wireReply {
+		return post(t, s.pub, beginLinkDoc, map[string]any{"i": token, "r": s.s.ReturnTo}, "", remote(), "")
+	}
+	// returnFrom plays the provider for (sub, email) and returns the address the callback
+	// sends the browser to.
+	returnFrom := func(r wireReply, sub, email string) url.Values {
+		t.Helper()
+		var b struct{ AuthorizationUrl string }
+		r.field(t, "beginSsoLink", &b)
+		state, code := s.s.Authorize(b.AuthorizationUrl, sub, email)
+		rec := httptest.NewRecorder()
+		s.mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet,
+			s.s.CallbackPrefix+s.s.Connection+"?"+url.Values{"state": {state}, "code": {code}}.Encode(), nil))
+		require.Equal(t, http.StatusFound, rec.Code)
+		loc, err := url.Parse(rec.Header().Get("Location"))
+		require.NoError(t, err)
+		return loc.Query()
+	}
+
+	// The connection is chosen by the server; the old argument no longer exists.
+	r := post(t, s.pub, `mutation($i:String!,$r:String!){beginSsoLink(identityToken:$i,connection:"acme-idp",returnTo:$r){authorizationUrl}}`,
+		map[string]any{"i": "x", "r": s.s.ReturnTo}, "", remote(), "")
+	require.NotEmpty(t, r.Errors)
+
+	// The domain-selected happy path.
+	lee := "lee@acme-corp.com"
+	leeTok := login(lee)
+	q := returnFrom(begin(leeTok), "sub-lee", lee)
+	require.Equal(t, "1", q.Get("linked"), "%v", q)
+	require.Empty(t, q.Get("error"))
+
+	// SSO_LINK_ALREADY_LINKED: once linked, not again.
+	require.Equal(t, identity.CodeSsoLinkAlreadyLinked, begin(leeTok).code(t))
+
+	// SSO_LINK_NO_CONNECTION: no connection was verified for this domain.
+	require.Equal(t, identity.CodeSsoLinkNoConnection, begin(login("kim@elsewhere-corp.com")).code(t))
+
+	// SSO_LINK_NOT_ALLOWED: an identity with a system role.
+	var su struct{ IdentityToken string }
+	post(t, s.pub, loginSu, map[string]any{"e": s.s.SuperuserEmail, "p": s.s.SuperuserPassword}, "", "", "").field(t, "login", &su)
+	require.Equal(t, identity.CodeSsoLinkNotAllowed, begin(su.IdentityToken).code(t))
+
+	// SSO_LINK_SESSION_REQUIRED: not a token, or a sign-in that has ended.
+	require.Equal(t, identity.CodeSsoLinkSessionRequired, begin("not-a-token").code(t))
+
+	// SSO_LINK_PASSWORD_REQUIRED: a session that came in through the provider.
+	verifier := strings.Repeat("v", 43)
+	var sb struct{ AuthorizationUrl string }
+	post(t, s.pub, beginDoc, map[string]any{"c": s.s.Connection, "r": s.s.ReturnTo, "h": challengeOf(verifier)}, "", remote(), "").
+		field(t, "beginSso", &sb)
+	state, code := s.s.Authorize(sb.AuthorizationUrl, "sub-pat", s.s.LinkedEmail)
+	rec := httptest.NewRecorder()
+	s.mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, s.s.CallbackPrefix+s.s.Connection+"?"+url.Values{"state": {state}, "code": {code}}.Encode(), nil))
+	loc, err := url.Parse(rec.Header().Get("Location"))
+	require.NoError(t, err)
+	var done struct{ IdentityToken string }
+	post(t, s.pub, completeDoc, map[string]any{"c": loc.Query().Get("code"), "v": verifier}, "", "", "").field(t, "completeSso", &done)
+	require.Equal(t, identity.CodeSsoLinkPasswordRequired, begin(done.IdentityToken).code(t))
+
+	// At the provider's return: a different address than the account's...
+	maxEmail := "max@acme-corp.com"
+	maxTok := login(maxEmail)
+	q = returnFrom(begin(maxTok), "sub-max", "someone-else@acme-corp.com")
+	require.Equal(t, "link_email_mismatch", q.Get("error"))
+	require.Empty(t, q.Get("linked"))
+
+	// ...and a password sign-in that ended while the person was at the provider.
+	r = begin(maxTok)
+	require.NoError(t, s.s.Manager.Logout(context.Background(), maxTok))
+	q = returnFrom(r, "sub-max", maxEmail)
+	require.Equal(t, "link_session_ended", q.Get("error"))
+	require.Equal(t, identity.CodeSsoLinkSessionRequired, begin(maxTok).code(t))
 }

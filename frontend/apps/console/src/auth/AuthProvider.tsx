@@ -102,7 +102,11 @@ interface AuthContextValue {
   memberships: IdentityAuth['memberships'];
   /** The live identity token, or null when the identity session is absent/expired. */
   identityToken: string | null;
-  /** How the live identity session was started, or null when it is absent or predates this. */
+  /**
+   * How the stored identity session was started, EVEN after its token has lapsed (so the
+   * console can say "sign in again" rather than hide what needs a fresh sign-in); null when
+   * none is stored or it predates this. Whether the session is usable is identityToken.
+   */
   signInMethod: SignInMethod | null;
 }
 
@@ -418,7 +422,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       superuser: identityAlive && (identity?.superuser ?? false),
       memberships: identity?.memberships ?? [],
       identityToken: identityAlive ? (identity?.identityToken ?? null) : null,
-      signInMethod: identityAlive ? (identity?.method ?? null) : null,
+      signInMethod: identity?.method ?? null,
     }),
     [
       claims,

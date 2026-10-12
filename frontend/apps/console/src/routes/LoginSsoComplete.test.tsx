@@ -259,6 +259,36 @@ describe('LoginSsoCompletePage: the return from linking an account', () => {
     expect(await screen.findByText(t('login:ssoErrorIdp'))).toBeTruthy();
   });
 
+  // The server names a link's failed check on the return address. Each reason has its own text
+  // in both languages, and is read as a link's even when this tab lost its marker.
+  const reasons: [string, string][] = [
+    ['link_email_mismatch', 'login:ssoLinkErrorEmailMismatch'],
+    ['link_unverified_email', 'login:ssoLinkErrorUnverifiedEmail'],
+    ['link_session_ended', 'login:ssoLinkErrorSessionEnded'],
+    ['link_already_linked', 'login:ssoLinkErrorAlreadyLinked'],
+    ['link_not_allowed', 'login:ssoLinkErrorNotAllowed'],
+  ];
+  describe.each(['en', 'es'])('in %s', (lng) => {
+    it.each(reasons)('says what %s means, with or without the marker', async (reason, key) => {
+      await i18n.changeLanguage(lng);
+      expect(i18n.t(key)).not.toBe(key.split(':')[1]);
+      window.history.replaceState(null, '', `/login/sso/complete?error=${reason}`);
+      auth.isAuthenticated = true;
+      renderPage();
+      expect(await screen.findByText(i18n.t(key))).toBeTruthy();
+      expect(screen.queryByText(i18n.t('login:ssoLinkRefused'))).toBeNull();
+      expect(completeSso).not.toHaveBeenCalled();
+    });
+  });
+
+  it("keeps a sign-in's link_required a sign-in's", async () => {
+    window.history.replaceState(null, '', '/login/sso/complete?error=link_required');
+    seedPending();
+    renderPage();
+    expect(await screen.findByText(t('login:ssoErrorLinkRequired'))).toBeTruthy();
+    expect(screen.queryByText(t('login:ssoLinkContinue'))).toBeNull();
+  });
+
   it('still reads an error with no link in progress as a sign-in refusal', async () => {
     window.history.replaceState(null, '', '/login/sso/complete?error=refused');
     seedPending();

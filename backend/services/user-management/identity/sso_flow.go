@@ -229,12 +229,10 @@ func (m *Manager) BeginSso(ctx context.Context, in BeginSsoInput, source string)
 	if in.Connection != "" {
 		conn, err = m.iam.IdpConnectionByToken(ctx, in.Connection)
 	} else {
-		var domain string
-		domain, err = emailDomain(in.Email)
-		if err != nil {
-			return nil, ErrSsoInvalidRequest
+		conn, err = m.connectionForEmail(ctx, in.Email)
+		if errors.Is(err, ErrSsoInvalidRequest) {
+			return nil, err
 		}
-		conn, err = m.iam.IdpConnectionByDomain(ctx, domain)
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, nil
 		}
@@ -249,6 +247,21 @@ func (m *Manager) BeginSso(ctx context.Context, in BeginSsoInput, source string)
 	return m.beginWithState(ctx, conn, ssoState{
 		Kind: ssoKindLogin, ReturnTo: returnTo, CodeChallenge: in.CodeChallenge,
 	})
+}
+
+// connectionForEmail is THE lookup of the connection that speaks for an address: the one a
+// superuser asserted the address's domain for. Every flow that picks a connection from an
+// email goes through it -- sign-in, the authorize page, and linking one's own account -- so
+// they cannot disagree about which provider an address belongs to. It returns
+// ErrSsoInvalidRequest for something that is not an address, and gorm.ErrRecordNotFound
+// when no connection has the domain. The connection is returned whether or not it is
+// usable; that is each caller's judgement.
+func (m *Manager) connectionForEmail(ctx context.Context, email string) (*iam.IdpConnection, error) {
+	domain, err := emailDomain(email)
+	if err != nil {
+		return nil, ErrSsoInvalidRequest
+	}
+	return m.iam.IdpConnectionByDomain(ctx, domain)
 }
 
 // emailDomain returns the normalised domain of an address, or an error.

@@ -27,14 +27,98 @@ import (
 // SsoOutcomeLinked is the outcome of a completed user-initiated link.
 const SsoOutcomeLinked = "linked"
 
+// The GraphQL extension codes of beginSsoLink's refusals. Every one of them is about the
+// caller's OWN identity and its OWN email domain, so naming which check failed tells the
+// caller nothing about anyone else.
+const (
+	CodeSsoLinkSessionRequired  = "SSO_LINK_SESSION_REQUIRED"
+	CodeSsoLinkPasswordRequired = "SSO_LINK_PASSWORD_REQUIRED"
+	CodeSsoLinkNotAllowed       = "SSO_LINK_NOT_ALLOWED"
+	CodeSsoLinkNoConnection     = "SSO_LINK_NO_CONNECTION"
+	CodeSsoLinkAlreadyLinked    = "SSO_LINK_ALREADY_LINKED"
+)
+
+// The `error` classes a link's provider return carries. A link is begun by a signed-in
+// person for their own identity, and the connection is the one their own domain names, so
+// these say which of THEIR checks failed; a sign-in's return keeps its coarse classes.
+const (
+	linkErrorEmailMismatch   = "link_email_mismatch"
+	linkErrorUnverifiedEmail = "link_unverified_email"
+	linkErrorSessionEnded    = "link_session_ended"
+	linkErrorAlreadyLinked   = "link_already_linked"
+	linkErrorNotAllowed      = "link_not_allowed"
+)
+
+// SsoLinkError is a typed beginSsoLink refusal. graphql-go copies Extensions onto the error,
+// so a client branches on the code and says what to do in its own language. Two values are
+// the same refusal (errors.Is) when their codes match.
+type SsoLinkError struct {
+	Code    string
+	Message string
+}
+
+func (e *SsoLinkError) Error() string { return e.Message }
+
+// Extensions is what a GraphQL client branches on.
+func (e *SsoLinkError) Extensions() map[string]any { return map[string]any{"code": e.Code} }
+
+// Is matches another SsoLinkError with the same code.
+func (e *SsoLinkError) Is(target error) bool {
+	t, ok := target.(*SsoLinkError)
+	return ok && t.Code == e.Code
+}
+
 var (
+	// ErrSsoLinkSessionRequired refuses an identity token that is invalid, expired, or names
+	// a sign-in that has ended: sign in with the password again, then link.
+	ErrSsoLinkSessionRequired error = &SsoLinkError{
+		Code:    CodeSsoLinkSessionRequired,
+		Message: "your sign-in has ended; sign in with your password again to link an account",
+	}
 	// ErrSsoLinkNeedsPassword refuses a link begun from a session that is itself a single
 	// sign-on. Linking is how a password-holder adds a second way in; a session that came in
 	// through a provider has nothing to prove it is the identity's owner but that provider.
-	ErrSsoLinkNeedsPassword = errors.New("sign in with your password to link an account")
+	ErrSsoLinkNeedsPassword error = &SsoLinkError{
+		Code:    CodeSsoLinkPasswordRequired,
+		Message: "sign in with your password to link an account",
+	}
+	// ErrSsoLinkNotAllowed refuses an identity that holds a system role: a tenant connection
+	// never reaches one, and an instance connection is linked only by a superuser.
+	ErrSsoLinkNotAllowed error = &SsoLinkError{
+		Code:    CodeSsoLinkNotAllowed,
+		Message: "an account with an instance administration role cannot link single sign-on itself; a superuser links it",
+	}
+	// ErrSsoLinkNoConnection refuses an identity whose email domain no enabled, approved
+	// tenant connection has been verified for.
+	ErrSsoLinkNoConnection error = &SsoLinkError{
+		Code:    CodeSsoLinkNoConnection,
+		Message: "no single sign-on connection is set up for your email domain",
+	}
 	// ErrSsoAlreadyLinked refuses a second link for an identity on the same connection.
-	ErrSsoAlreadyLinked = errors.New("this account is already linked to that identity provider")
+	ErrSsoAlreadyLinked error = &SsoLinkError{
+		Code:    CodeSsoLinkAlreadyLinked,
+		Message: "your account is already linked to your organization's identity provider",
+	}
 )
+
+// linkErrorClass is the `error` a link's provider return carries for a refusal outcome, or
+// "" for an outcome that keeps the sign-in's own class (the provider failing, a token that
+// does not verify).
+func linkErrorClass(outcome string) string {
+	switch outcome {
+	case SsoOutcomeRefusedLinkMismatch:
+		return linkErrorEmailMismatch
+	case SsoOutcomeRefusedUnverifiedEmail, SsoOutcomeRefusedUnverifiedDomain:
+		return linkErrorUnverifiedEmail
+	case SsoOutcomeRefusedLinkSession:
+		return linkErrorSessionEnded
+	case SsoOutcomeRefusedAlreadyLinked:
+		return linkErrorAlreadyLinked
+	case SsoOutcomeRefusedSystemRole:
+		return linkErrorNotAllowed
+	}
+	return ""
+}
 
 // resolveSsoIdentity applies rule C to a login-kind sign-in. It returns the identity to sign
 // in, or a refusal outcome, or an error for a store failure. Exactly one of the three is set.
@@ -128,10 +212,13 @@ func (m *Manager) checkAddressForConnection(ctx context.Context, conn *iam.IdpCo
 }
 
 // BeginSsoLink starts the user-initiated link of an external account to the signed-in
-// identity. It needs a PASSWORD sign-in (an identity token whose session record says so), a
-// tenant connection (an instance connection links only by superuser action), and an identity
-// with no link on that connection yet.
-func (m *Manager) BeginSsoLink(ctx context.Context, identityToken, connectionToken, returnTo, source string) (*SsoBegin, error) {
+// identity. It needs a PASSWORD sign-in (an identity token whose session record says so) and
+// an identity with no system role. The connection is not chosen by the caller: it is the
+// tenant connection a superuser verified the identity's OWN email domain for, found by the
+// same lookup a sign-in by email uses, and it must be enabled and approved. An identity
+// already linked on it is refused. Every refusal but an unusable instance or a malformed
+// return address is a typed SsoLinkError.
+func (m *Manager) BeginSsoLink(ctx context.Context, identityToken, returnTo, source string) (*SsoBegin, error) {
 	if !m.SsoReady() {
 		return nil, ErrSsoUnavailable
 	}
@@ -139,40 +226,49 @@ func (m *Manager) BeginSsoLink(ctx context.Context, identityToken, connectionTok
 		m.countSso("unknown", SsoOutcomeRateLimited)
 		return nil, ErrSsoRateLimited
 	}
-	subject, err := m.IdentitySubject(identityToken)
-	if err != nil {
-		return nil, err
-	}
-	id, err := m.sessionIdentity(ctx, subject.Email, subject.SessionEpoch, subject.SessionID)
-	if err != nil {
-		if errors.Is(err, errSessionEnded) {
-			return nil, ErrInvalidToken
-		}
-		return nil, err
-	}
-	rec, err := m.loadSession(subject.SessionID, id.Email)
-	if err != nil {
-		if errors.Is(err, errSessionEnded) {
-			return nil, ErrInvalidToken
-		}
-		return nil, err
-	}
-	if rec.Method != SessionMethodPassword {
-		return nil, ErrSsoLinkNeedsPassword
-	}
-	if len(connectionToken) > 128 || len(returnTo) > maxSsoField {
+	if len(returnTo) > maxSsoField {
 		return nil, ErrSsoInvalidRequest
 	}
 	checked, err := m.checkReturnTo(returnTo)
 	if err != nil {
 		return nil, ErrSsoInvalidRequest
 	}
-	conn, err := m.iam.IdpConnectionByToken(ctx, connectionToken)
+	subject, err := m.IdentitySubject(identityToken)
 	if err != nil {
+		return nil, ErrSsoLinkSessionRequired
+	}
+	id, err := m.sessionIdentity(ctx, subject.Email, subject.SessionEpoch, subject.SessionID)
+	if err != nil {
+		if errors.Is(err, errSessionEnded) {
+			return nil, ErrSsoLinkSessionRequired
+		}
+		return nil, err
+	}
+	rec, err := m.loadSession(subject.SessionID, id.Email)
+	if err != nil {
+		if errors.Is(err, errSessionEnded) {
+			return nil, ErrSsoLinkSessionRequired
+		}
+		return nil, err
+	}
+	if rec.Method != SessionMethodPassword {
+		return nil, ErrSsoLinkNeedsPassword
+	}
+	if len(id.SystemRoles) > 0 {
+		return nil, ErrSsoLinkNotAllowed
+	}
+	conn, err := m.connectionForEmail(ctx, id.Email)
+	switch {
+	case errors.Is(err, gorm.ErrRecordNotFound), errors.Is(err, ErrSsoInvalidRequest):
+		return nil, ErrSsoLinkNoConnection
+	case err != nil:
+		log.Error().Err(err).Msg("beginSsoLink could not resolve its connection.")
 		return nil, ErrSsoUnavailable
 	}
-	if conn.Kind != iam.IdpKindTenant || len(id.SystemRoles) > 0 {
-		return nil, ErrSsoUnavailable
+	// An instance connection is linked only by a superuser; a disabled or unapproved one
+	// cannot begin anything. To the person, all three are "no connection for your domain".
+	if conn.Kind != iam.IdpKindTenant || !usableConnection(conn) {
+		return nil, ErrSsoLinkNoConnection
 	}
 	links, err := m.iam.LinksForIdentity(ctx, id.ID)
 	if err != nil {
@@ -191,10 +287,20 @@ func (m *Manager) BeginSsoLink(ctx context.Context, identityToken, connectionTok
 // finishLink completes a link-kind state: the provider has vouched for an account, and the
 // password session that began the flow is still open.
 func (m *Manager) finishLink(ctx context.Context, conn *iam.IdpConnection, st ssoState, c *ssoClaims,
-	returnTo string, finish func(string, string, url.Values) SsoCallbackResult) SsoCallbackResult {
+	returnTo string, finishRefusal func(string, string, url.Values) SsoCallbackResult) SsoCallbackResult {
 
+	// A link's refusals name the check that failed on the return address (see
+	// linkErrorClass); anything else keeps the sign-in's coarse class.
+	finish := func(outcome, email string, params url.Values) SsoCallbackResult {
+		if class := linkErrorClass(outcome); class != "" {
+			params = url.Values{"error": {class}}
+		}
+		return finishRefusal(outcome, email, params)
+	}
 	if conn.Kind != iam.IdpKindTenant {
-		return finish(SsoOutcomeRefusedLinkMismatch, c.Email, nil)
+		// Unreachable from beginSsoLink, which picks only tenant connections; refused rather
+		// than trusted all the same.
+		return finishRefusal(SsoOutcomeRefusedLinkMismatch, c.Email, url.Values{"error": {linkErrorNotAllowed}})
 	}
 	// The session that began the flow must still be open, and still a password session.
 	rec, err := m.loadSession(st.LinkSession, st.LinkEmail)

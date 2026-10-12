@@ -1,9 +1,11 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// The "Link single sign-on account" action: it starts the server's link flow and navigates to
-// the address the server returns, exactly as given; a refusal is shown, not swallowed; and
-// only a password session is offered it.
+// The "Link single sign-on account" action: it starts the server's link flow (the server picks
+// the connection from the person's own email domain) and navigates to the address the server
+// returns, exactly as given; each typed refusal is shown in the person's language; a lapsed
+// password sign-in is told to sign in again rather than the action disappearing; and a session
+// that came through single sign-on is not offered it.
 
 import '@/i18n/config';
 import { GraphQLRequestError } from '@devicechain/client';
@@ -17,11 +19,19 @@ import { resetSsoStateForTests } from '@/lib/sso';
 import { LinkSsoAccount } from './LinkSsoAccount';
 import { NavUser } from './NavUser';
 
+// An unsigned JWT-shaped string: the action only reads its expiry.
+const jwt = (claims: Record<string, unknown>) =>
+  `h.${btoa(JSON.stringify(claims)).replace(/=+$/, '')}.s`;
+const LIVE = jwt({ exp: Math.floor(Date.now() / 1000) + 600 });
+const LAPSED = jwt({ exp: Math.floor(Date.now() / 1000) - 60 });
+
 const mocks = vi.hoisted(() => ({
   beginSsoLink: vi.fn(),
+  logout: vi.fn(),
   auth: {
-    identityToken: 'id-token' as string | null,
+    identityToken: '' as string | null,
     signInMethod: 'password' as 'password' | 'sso' | null,
+    superuser: false,
   },
 }));
 
@@ -32,8 +42,8 @@ vi.mock('@/lib/api/user-management', () => ({
 vi.mock('@/auth/AuthProvider', () => ({
   useAuth: () => ({
     claims: { username: 'pat@example.com' },
-    logout: vi.fn(),
-    superuser: false,
+    logout: mocks.logout,
+    superuser: mocks.auth.superuser,
     isIdentityAuthenticated: mocks.auth.identityToken !== null,
     identityToken: mocks.auth.identityToken,
     signInMethod: mocks.auth.signInMethod,
@@ -81,9 +91,11 @@ const assign = vi.fn();
 
 beforeEach(async () => {
   mocks.beginSsoLink.mockReset();
+  mocks.logout.mockReset();
   assign.mockReset();
-  mocks.auth.identityToken = 'id-token';
+  mocks.auth.identityToken = LIVE;
   mocks.auth.signInMethod = 'password';
+  mocks.auth.superuser = false;
   resetSsoStateForTests();
   window.sessionStorage.clear();
   Object.defineProperty(window, 'location', {
@@ -98,58 +110,83 @@ beforeEach(async () => {
   });
   await i18n.changeLanguage('en');
 });
-afterEach(() => {
+afterEach(async () => {
   cleanup();
   Object.defineProperty(window, 'location', { configurable: true, value: realLocation });
+  await i18n.changeLanguage('en');
 });
 
-function link(connection: string) {
-  fireEvent.change(screen.getByLabelText(t('userMenu:linkSsoConnectionLabel')), {
-    target: { value: connection },
-  });
-  fireEvent.click(screen.getByRole('button', { name: t('userMenu:linkSsoContinue') }));
-}
+const continueButton = () => screen.getByRole('button', { name: t('userMenu:linkSsoContinue') });
+const refusal = (code: string) =>
+  new GraphQLRequestError('server prose', 200, [{ message: 'server prose', extensions: { code } }]);
 
 describe('LinkSsoAccount', () => {
-  it('starts the link with the identity token and the completion page, and navigates to the server URL as given', async () => {
+  it('starts the link with the identity token and the completion page alone, and navigates to the server URL as given', async () => {
     mocks.beginSsoLink.mockResolvedValue(PROVIDER_URL);
     render(<LinkSsoAccount />);
-    link(' acme-sso ');
+    // Nothing to type: the server picks the connection from the account's email domain.
+    expect(screen.queryByRole('textbox')).toBeNull();
+    fireEvent.click(continueButton());
     await waitFor(() => expect(assign).toHaveBeenCalledWith(PROVIDER_URL));
     expect(mocks.beginSsoLink).toHaveBeenCalledWith({
-      identityToken: 'id-token',
-      connection: 'acme-sso',
+      identityToken: LIVE,
       returnTo: window.location.origin + '/login/sso/complete',
     });
     // The page needs to know, on return, that an error= belongs to a link.
     expect(window.sessionStorage.getItem('dc-sso-link-pending')).toBe('1');
   });
 
-  it('shows the server refusal, navigates nowhere, and leaves no link marker', async () => {
-    mocks.beginSsoLink.mockRejectedValue(
-      new GraphQLRequestError('this account is already linked to that identity provider', 200),
-    );
-    render(<LinkSsoAccount />);
-    link('acme-sso');
-    expect(await screen.findByText('this account is already linked to that identity provider')).toBeTruthy();
-    expect(assign).not.toHaveBeenCalled();
-    expect(window.sessionStorage.getItem('dc-sso-link-pending')).toBeNull();
+  const codes: [string, string][] = [
+    ['SSO_LINK_NO_CONNECTION', 'userMenu:linkSsoErrorNoConnection'],
+    ['SSO_LINK_ALREADY_LINKED', 'userMenu:linkSsoErrorAlreadyLinked'],
+    ['SSO_LINK_NOT_ALLOWED', 'userMenu:linkSsoErrorNotAllowed'],
+  ];
+  describe.each(['en', 'es'])('in %s', (lng) => {
+    it.each(codes)('maps %s to its text, navigates nowhere, and leaves no link marker', async (code, key) => {
+      await i18n.changeLanguage(lng);
+      expect(i18n.t(key)).not.toBe(key.split(':')[1]);
+      mocks.beginSsoLink.mockRejectedValue(refusal(code));
+      render(<LinkSsoAccount />);
+      fireEvent.click(continueButton());
+      expect(await screen.findByText(i18n.t(key))).toBeTruthy();
+      expect(screen.queryByText('server prose')).toBeNull();
+      expect(assign).not.toHaveBeenCalled();
+      expect(window.sessionStorage.getItem('dc-sso-link-pending')).toBeNull();
+    });
+
+    it.each([
+      ['SSO_LINK_SESSION_REQUIRED', 'userMenu:linkSsoSessionEnded'],
+      ['SSO_LINK_PASSWORD_REQUIRED', 'userMenu:linkSsoErrorPasswordRequired'],
+    ])('answers %s by offering to sign in again', async (code, key) => {
+      await i18n.changeLanguage(lng);
+      mocks.beginSsoLink.mockRejectedValue(refusal(code));
+      render(<LinkSsoAccount />);
+      fireEvent.click(continueButton());
+      expect(await screen.findByText(i18n.t(key))).toBeTruthy();
+      fireEvent.click(screen.getByRole('button', { name: i18n.t('userMenu:linkSsoSignInAgain') }));
+      expect(mocks.logout).toHaveBeenCalled();
+    });
   });
 
-  it('asks for a connection before calling the server', () => {
+  it('shows an uncoded refusal as the server gave it', async () => {
+    mocks.beginSsoLink.mockRejectedValue(new GraphQLRequestError('single sign-on is not available', 200));
     render(<LinkSsoAccount />);
-    link('  ');
-    expect(screen.getByText(t('userMenu:linkSsoConnectionRequired'))).toBeTruthy();
-    expect(mocks.beginSsoLink).not.toHaveBeenCalled();
+    fireEvent.click(continueButton());
+    expect(await screen.findByText('single sign-on is not available')).toBeTruthy();
   });
 
-  it.each(['en', 'es'])('says the sign-in ended when no identity session is held, in %s', async (lng) => {
-    await i18n.changeLanguage(lng);
-    mocks.auth.identityToken = null;
+  it.each([
+    ['the identity token has lapsed', 'password', LAPSED],
+    ['no identity session is held', 'password', null],
+    ['the sign-in method is unknown', null, LIVE],
+  ] as const)('says to sign in again, without calling the server, when %s', (_name, method, token) => {
+    mocks.auth.signInMethod = method;
+    mocks.auth.identityToken = token;
     render(<LinkSsoAccount />);
-    link('acme-sso');
-    expect(screen.getByText(i18n.t('userMenu:linkSsoSessionEnded'))).toBeTruthy();
-    expect(i18n.t('userMenu:linkSsoSessionEnded')).not.toBe('linkSsoSessionEnded');
+    expect(screen.getByText(t('userMenu:linkSsoSessionEnded'))).toBeTruthy();
+    expect(screen.queryByRole('button', { name: t('userMenu:linkSsoContinue') })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: t('userMenu:linkSsoSignInAgain') }));
+    expect(mocks.logout).toHaveBeenCalled();
     expect(mocks.beginSsoLink).not.toHaveBeenCalled();
   });
 });
@@ -162,25 +199,41 @@ describe('the user menu offers the link', () => {
       </MemoryRouter>,
     );
 
-  it('to a password session', () => {
+  it.each([
+    ['a live password session', 'password', LIVE],
+    // The action stays, and explains, rather than disappearing after 15 minutes.
+    ['a password session whose identity token has lapsed', 'password', null],
+    ['a session whose sign-in method is unknown', null, null],
+  ] as const)('to %s', (_name, method, token) => {
+    mocks.auth.signInMethod = method;
+    mocks.auth.identityToken = token;
     renderMenu();
     expect(screen.getByRole('button', { name: t('userMenu:linkSso') })).toBeTruthy();
   });
 
-  it.each([
-    ['a session that came through single sign-on', 'sso', 'id-token'],
-    ['a session whose sign-in method is unknown', null, 'id-token'],
-    ['a password session whose identity token has lapsed', 'password', null],
-  ] as const)('but not to %s', (_name, method, token) => {
-    mocks.auth.signInMethod = method;
-    mocks.auth.identityToken = token;
+  it('opening it after the password sign-in lapsed says to sign in again', () => {
+    mocks.auth.identityToken = null;
+    renderMenu();
+    fireEvent.click(screen.getByRole('button', { name: t('userMenu:linkSso') }));
+    expect(screen.getByText(t('userMenu:linkSsoSessionEnded'))).toBeTruthy();
+  });
+
+  it('but not to a session that came through single sign-on', () => {
+    mocks.auth.signInMethod = 'sso';
     renderMenu();
     expect(screen.queryByRole('button', { name: t('userMenu:linkSso') })).toBeNull();
   });
 
-  it('opening it shows the connection form', () => {
+  it('nor to a superuser', () => {
+    mocks.auth.superuser = true;
+    renderMenu();
+    expect(screen.queryByRole('button', { name: t('userMenu:linkSso') })).toBeNull();
+  });
+
+  it('opening it shows where it goes, with nothing to type', () => {
     renderMenu();
     fireEvent.click(screen.getByRole('button', { name: t('userMenu:linkSso') }));
-    expect(screen.getByLabelText(t('userMenu:linkSsoConnectionLabel'))).toBeTruthy();
+    expect(screen.getByText(t('userMenu:linkSsoExplain'))).toBeTruthy();
+    expect(continueButton()).toBeTruthy();
   });
 });

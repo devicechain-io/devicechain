@@ -586,7 +586,7 @@ func TestUserInitiatedLinkRequiresPasswordSid(t *testing.T) {
 	require.NoError(t, err)
 
 	begin := func(token string) (*SsoBegin, error) {
-		return e.m.BeginSsoLink(ctx, token, "acme-idp", ssoTestReturnTo, e.source())
+		return e.m.BeginSsoLink(ctx, token, ssoTestReturnTo, e.source())
 	}
 	link := func(b *SsoBegin, sub, email string) ssoLanding {
 		state, code := e.op.authorize(b.AuthorizationURL, sub, email)
@@ -599,6 +599,7 @@ func TestUserInitiatedLinkRequiresPasswordSid(t *testing.T) {
 	require.NoError(t, err)
 	l := link(b, "victim-sub", "victim@"+ssoTestDomain)
 	e.refused(t, l, "acme-idp", SsoOutcomeRefusedLinkMismatch)
+	require.Equal(t, "link_email_mismatch", l.Error)
 
 	// An unverified address is refused here as well.
 	e.op.mutate = func(c jwt.MapClaims) { c["email_verified"] = false }
@@ -606,6 +607,7 @@ func TestUserInitiatedLinkRequiresPasswordSid(t *testing.T) {
 	require.NoError(t, err)
 	l = link(b, "sub-pat", linkedEmail)
 	e.refused(t, l, "acme-idp", SsoOutcomeRefusedUnverifiedEmail)
+	require.Equal(t, "link_unverified_email", l.Error)
 	e.op.mutate = nil
 
 	// A session that ended between begin and callback cannot complete the link.
@@ -616,7 +618,19 @@ func TestUserInitiatedLinkRequiresPasswordSid(t *testing.T) {
 	require.NoError(t, e.m.Logout(ctx, ia.IdentityToken))
 	l = link(b, "sub-pat", linkedEmail)
 	e.refused(t, l, "acme-idp", SsoOutcomeRefusedLinkSession)
+	require.Equal(t, "link_session_ended", l.Error)
+	// ...and the ended sign-in cannot begin another.
+	_, err = begin(ia.IdentityToken)
+	require.ErrorIs(t, err, ErrSsoLinkSessionRequired)
 	ia = other
+
+	// A provider account already linked to SOMEONE ELSE is refused at the return.
+	e.ssoIdentity(t, "lee@"+ssoTestDomain, "acme-idp", "sub-taken", "acme")
+	b, err = begin(ia.IdentityToken)
+	require.NoError(t, err)
+	l = link(b, "sub-taken", linkedEmail)
+	e.refused(t, l, "acme-idp", SsoOutcomeRefusedAlreadyLinked)
+	require.Equal(t, "link_already_linked", l.Error)
 
 	// Control: the owner's own account, verified, in the domain, from a live password sign-in.
 	b, err = begin(ia.IdentityToken)
@@ -635,10 +649,60 @@ func TestUserInitiatedLinkRequiresPasswordSid(t *testing.T) {
 	_, err = begin(got.IdentityToken)
 	require.ErrorIs(t, err, ErrSsoLinkNeedsPassword)
 
-	// An instance connection links only by superuser action.
-	e.addConnection(t, "ops-idp", iam.IdpKindInstance, "")
-	_, err = e.m.BeginSsoLink(ctx, ia.IdentityToken, "ops-idp", ssoTestReturnTo, e.source())
-	require.ErrorIs(t, err, ErrSsoUnavailable)
+	// A token that is not one at all.
+	_, err = begin("not-a-token")
+	require.ErrorIs(t, err, ErrSsoLinkSessionRequired)
+}
+
+// The connection a person links is the one their OWN email domain names; nothing else.
+func TestUserInitiatedLinkPicksTheConnectionByDomain(t *testing.T) {
+	e := newSsoEnv(t)
+	ctx := context.Background()
+	login := func(email string) string {
+		t.Helper()
+		e.createMember(t, email, "pw-1")
+		ia, err := e.m.Login(ctx, email, "pw-1")
+		require.NoError(t, err)
+		return ia.IdentityToken
+	}
+	begin := func(token string) error {
+		_, err := e.m.BeginSsoLink(ctx, token, ssoTestReturnTo, e.source())
+		return err
+	}
+
+	// A domain no connection was verified for.
+	require.ErrorIs(t, begin(login("kim@elsewhere-corp.com")), ErrSsoLinkNoConnection)
+
+	// A domain verified for an INSTANCE connection: those link only by superuser action.
+	e.addConnection(t, "ops-idp", iam.IdpKindInstance, "ops-corp.com")
+	require.ErrorIs(t, begin(login("ops@ops-corp.com")), ErrSsoLinkNoConnection)
+
+	// An identity with a system role is never linked by itself.
+	e.createMember(t, "root@"+ssoTestDomain, "pw-1")
+	e.grantSuperuser(t, "root@"+ssoTestDomain)
+	su, err := e.m.Login(ctx, "root@"+ssoTestDomain, "pw-1")
+	require.NoError(t, err)
+	require.ErrorIs(t, begin(su.IdentityToken), ErrSsoLinkNotAllowed)
+
+	// The domain's tenant connection, disabled: no connection to link. Enabled again: the
+	// flow goes to THAT connection's provider.
+	pat := login(linkedEmail)
+	off, on := false, true
+	_, err = e.m.UpdateIdpConnection(ctx, "acme-idp", &IdpConnectionUpdateRequest{Enabled: dcgraphql.OptionalBool{Set: true, Value: &off}})
+	require.NoError(t, err)
+	require.ErrorIs(t, begin(pat), ErrSsoLinkNoConnection)
+	_, err = e.m.UpdateIdpConnection(ctx, "acme-idp", &IdpConnectionUpdateRequest{Enabled: dcgraphql.OptionalBool{Set: true, Value: &on}})
+	require.NoError(t, err)
+	b, err := e.m.BeginSsoLink(ctx, pat, ssoTestReturnTo, e.source())
+	require.NoError(t, err)
+	state, code := e.op.authorize(b.AuthorizationURL, "sub-pat", linkedEmail)
+	l := e.callback(t, "acme-idp", url.Values{"state": {state}, "code": {code}})
+	require.True(t, l.Linked, "the domain's own connection links: %+v", l)
+
+	// Every refusal is typed for the client to branch on.
+	var typed *SsoLinkError
+	require.ErrorAs(t, begin(pat), &typed)
+	require.Equal(t, map[string]any{"code": CodeSsoLinkAlreadyLinked}, typed.Extensions())
 }
 
 // ---- identity: what the provider must vouch for ----------------------------------------

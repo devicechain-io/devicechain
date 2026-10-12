@@ -90,7 +90,6 @@ export type CompleteSsoMutation = { completeSso: { identityToken: string, expire
 
 export type BeginSsoLinkMutationVariables = Exact<{
   identityToken: string;
-  connection: string;
   returnTo: string;
 }>;
 
@@ -285,12 +284,8 @@ export const CompleteSsoDocument = new TypedDocumentString(`
 }
     `) as unknown as TypedDocumentString<CompleteSsoMutation, CompleteSsoMutationVariables>;
 export const BeginSsoLinkDocument = new TypedDocumentString(`
-    mutation BeginSsoLink($identityToken: String!, $connection: String!, $returnTo: String!) {
-  beginSsoLink(
-    identityToken: $identityToken
-    connection: $connection
-    returnTo: $returnTo
-  ) {
+    mutation BeginSsoLink($identityToken: String!, $returnTo: String!) {
+  beginSsoLink(identityToken: $identityToken, returnTo: $returnTo) {
     authorizationUrl
   }
 }

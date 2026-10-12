@@ -131,20 +131,20 @@ export async function startSso(opts: StartSsoOptions): Promise<string | null> {
 const LINK_PENDING_KEY = 'dc-sso-link-pending';
 
 /**
- * Starts linking the signed-in person's account at `connection` and returns the address to
- * navigate to, exactly as the server gave it. The caller navigates; this does not. A refused
- * begin leaves no marker behind.
+ * Starts linking the signed-in person's account at the identity provider their email domain
+ * belongs to (the server picks it) and returns the address to navigate to, exactly as the
+ * server gave it. The caller navigates; this does not. A refused begin leaves no marker
+ * behind.
  */
-export async function startSsoLink(identityToken: string, connection: string): Promise<string> {
+export async function startSsoLink(identityToken: string): Promise<string> {
   try {
     window.sessionStorage.setItem(LINK_PENDING_KEY, '1');
   } catch {
-    // sessionStorage unavailable: a refused return will read as a sign-in refusal.
+    // sessionStorage unavailable: only a link_* refusal will still read as a link's.
   }
   try {
     return await beginSsoLink({
       identityToken,
-      connection,
       returnTo: window.location.origin + SSO_COMPLETE_PATH,
     });
   } catch (err) {
@@ -171,23 +171,40 @@ export type SsoLinkReturn =
   | { linked: true }
   | {
       linked: false;
-      /** The coarse class the server put on the return address (refused, idp_error, ...). */
+      /**
+       * The class the server put on the return address: a link's own reason (link_email_mismatch,
+       * link_session_ended, ...) or a sign-in's coarse class (refused, idp_error).
+       */
       providerError: string;
     };
 
 let linkReturn: SsoLinkReturn | null | undefined;
 
 /**
+ * The `error=` reasons only a link's return ever carries. Exact names, not a prefix: a
+ * sign-in's own `link_required` must stay a sign-in's.
+ */
+export const SSO_LINK_ERRORS: ReadonlySet<string> = new Set([
+  'link_email_mismatch',
+  'link_unverified_email',
+  'link_session_ended',
+  'link_already_linked',
+  'link_not_allowed',
+]);
+
+/**
  * Whether this return is the end of a link rather than a sign-in, and how it went: `linked=1`
- * is success; an `error=` is a link refusal only when this tab began a link. Null for a
- * sign-in. Read once and remembered, so React StrictMode's second mount sees the same answer.
+ * is success; an `error=` is a link's when it is one of SSO_LINK_ERRORS, or when this tab
+ * began a link. Null for a sign-in. Read once and remembered, so React StrictMode's second
+ * mount sees the same answer.
  */
 export function resolveSsoLinkReturn(): SsoLinkReturn | null {
   if (linkReturn !== undefined) return linkReturn;
   const ret = captureSsoReturn();
   const pending = takeLinkPending();
   if (ret.linked === '1') linkReturn = { linked: true };
-  else if (ret.error && pending) linkReturn = { linked: false, providerError: ret.error };
+  else if (ret.error && (pending || SSO_LINK_ERRORS.has(ret.error)))
+    linkReturn = { linked: false, providerError: ret.error };
   else linkReturn = null;
   return linkReturn;
 }

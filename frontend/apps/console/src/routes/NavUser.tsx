@@ -39,17 +39,19 @@ function UserAvatar({ name }: { name: string }) {
 
 export function NavUser() {
   const { t } = useTranslation('userMenu');
-  const { claims, logout, superuser, isIdentityAuthenticated, identityToken, signInMethod } = useAuth();
+  const { claims, logout, superuser, isIdentityAuthenticated, signInMethod } = useAuth();
   const user = useCurrentUser();
   const { isMobile } = useSidebar();
   const { toast } = useToast();
   const navigate = useNavigate();
   const [editing, setEditing] = useState(false);
   const [linking, setLinking] = useState(false);
-  // Linking needs the identity token of a PASSWORD sign-in: a session that came through a
-  // provider is refused by the server, so it is not offered one. A session stored before the
-  // sign-in method was kept has no method, and is not offered it either.
-  const canLinkSso = signInMethod === 'password' && identityToken !== null;
+  // Linking needs the identity token of a PASSWORD sign-in. A session known to have come
+  // through a provider is not offered it (the server refuses one), nor is a superuser (an
+  // identity with a system role is linked only by a superuser). Every other session is: when
+  // its password sign-in has lapsed, or its method is unknown, the drawer says to sign in
+  // again instead of the action disappearing without a word.
+  const canLinkSso = signInMethod !== 'sso' && !superuser;
   // Metrics (Grafana) is instance-level + cross-tenant, so the link is operator-only.
   // Only probe (and only ever show it) for an authenticated superuser.
   const metricsAvailable = useMetricsAvailable(superuser && isIdentityAuthenticated);

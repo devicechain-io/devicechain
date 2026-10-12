@@ -39,10 +39,15 @@ const PROVIDER_ERROR_KEYS: Record<string, string> = {
   groups_overage: 'login:ssoErrorGroupsOverage',
 };
 
-// A link's refusal comes back as a coarse class only; the server deliberately does not say
-// which check failed (the provider's address differing from the account's, an account already
-// linked, the password session having ended), so the text lists what to check.
+// A link's refusal names the check that failed (lib/sso SSO_LINK_ERRORS); the provider failing
+// keeps the sign-in's class. Anything else (a token that did not verify, an unknown reason)
+// gets the general text, which lists what to check.
 const LINK_ERROR_KEYS: Record<string, string> = {
+  link_email_mismatch: 'ssoLinkErrorEmailMismatch',
+  link_unverified_email: 'ssoLinkErrorUnverifiedEmail',
+  link_session_ended: 'ssoLinkErrorSessionEnded',
+  link_already_linked: 'ssoLinkErrorAlreadyLinked',
+  link_not_allowed: 'ssoLinkErrorNotAllowed',
   idp_error: 'ssoErrorIdp',
 };
 
