@@ -35,6 +35,11 @@ type fakeInstance struct {
 	readOK   func(n int) bool
 	// empty makes an accepted read answer "nothing under that token".
 	empty bool
+	// superuser marks every sign-in as the superuser's, and admin answers the admin
+	// plane (/admin/graphql); both are for the admin-plane rows of sso.go.
+	superuser bool
+	admin     http.HandlerFunc
+	adminRows []Recorded // the receipt's admin-plane rows
 
 	mu     sync.Mutex
 	logins int
@@ -69,6 +74,13 @@ func newFakeInstance(t *testing.T) *fakeInstance {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/user-management/graphql", f.userManagement)
 	mux.HandleFunc("/api/"+f.e.Area+"/graphql", f.read)
+	mux.HandleFunc("/api/user-management/admin/graphql", func(w http.ResponseWriter, r *http.Request) {
+		if f.admin == nil {
+			http.Error(w, "no admin plane in this fixture", http.StatusNotFound)
+			return
+		}
+		f.admin(w, r)
+	})
 	f.srv = httptest.NewServer(mux)
 	t.Cleanup(f.srv.Close)
 	return f
@@ -90,7 +102,7 @@ func (f *fakeInstance) userManagement(w http.ResponseWriter, r *http.Request) {
 		f.logins++
 		n := f.logins
 		f.mu.Unlock()
-		_, _ = fmt.Fprintf(w, `{"data":{"login":{"identityToken":"id-%d","expiresAt":%q}}}`, n, exp)
+		_, _ = fmt.Fprintf(w, `{"data":{"login":{"identityToken":"id-%d","expiresAt":%q,"superuser":%t}}}`, n, exp, f.superuser)
 	case strings.Contains(req.Query, "selectTenant("):
 		var n int
 		_, _ = fmt.Sscanf(fmt.Sprint(req.Variables["identityToken"]), "id-%d", &n)
@@ -139,6 +151,7 @@ func (f *fakeInstance) verify(extra ...string) error {
 			Name: f.e.Name, Area: f.e.Area, Token: probeToken,
 			Object: json.RawMessage(`{"token":"` + probeToken + `"}`), Fields: f.e.Fields,
 		}},
+		Admin: f.adminRows,
 	}); err != nil {
 		f.t.Fatal(err)
 	}

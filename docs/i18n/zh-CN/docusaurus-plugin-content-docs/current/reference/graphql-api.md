@@ -563,7 +563,7 @@ token 会拼入基础设施命名空间：租户 ID 成为 NATS subject 中按 `
 如果相同请求持续收到此响应，说明 API 中看不到的内容仍引用该记录。
 请附上请求时间报告，服务器日志会记录导致拒绝的引用。
 
-指定不存在记录的写入，通常在写入前被服务查询拒绝，消息指出 token，但没有代码。
+指定不存在记录的写入，通常在写入前被服务查询拒绝，携带 [`NOT_FOUND`](#not-found) 而不是此代码。
 只有该记录在写入进行期间被删除时，才携带 `REFERENCE_VIOLATION`。
 
 `INVALID_VALUE` 表示请求包含记录不允许的值，而服务未在写入前发现。消息为：
@@ -576,6 +576,23 @@ token 会拼入基础设施命名空间：租户 ID 成为 NATS subject 中按 `
 两种代码都不是 `CONFLICT`，所以把 `CONFLICT` 当作“记录已存在”的代码不会把它们当作成功。
 同时涉及唯一值和其中一种问题的拒绝，会携带 `REFERENCE_VIOLATION` 或 `INVALID_VALUE`，绝不携带 `CONFLICT`，
 消息使用对应代码的句子，而非值已占用的句子。
+
+### 记录不存在 {#not-found}
+
+因所指定的记录不存在（或在你的租户中不存在）而被拒绝的操作，会将 `extensions.code` 设为 `NOT_FOUND`：
+
+```json
+{
+  "errors": [{
+    "message": "record not found",
+    "path": ["cancelCommandBatch"],
+    "extensions": { "code": "NOT_FOUND" }
+  }]
+}
+```
+
+请根据代码而非消息进行判断，服务可能会在消息前加上它当时正在执行的操作。
+少数操作会用自己的代码说明缺少的是什么（例如 `ARTIFACT_NOT_FOUND`），这些操作保留自己的代码。
 
 ## 请求限制 {#request-limits}
 

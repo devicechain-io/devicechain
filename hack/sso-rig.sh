@@ -37,21 +37,10 @@
 # REACH IT. It is therefore never exposed: the rig reaches it only through a
 # `kubectl port-forward` on 127.0.0.1, and it exists in a throwaway cluster.
 #
-# 🔴 TRUSTING DEX'S CERTIFICATE -- WHAT PRODUCTION DOES NOT OFFER, SAID PLAINLY.
-# Discovery must be https and the provider is reached through the egress guard. Neither
-# is configurable per connection, and PRODUCTION HAS NO WAY TO TRUST A PRIVATE CA:
-# user-management's HTTP client uses the system roots of its image, and the chart has no
-# value to add a CA bundle or mount one. A provider with a private certificate therefore
-# cannot be connected today. That is a product gap, reported rather than papered over:
-# nothing in the platform is weakened for this rig. Instead the rig changes ITS OWN
-# cluster's Deployment: it mounts a ConfigMap holding (the node's system roots + the rig
-# CA) and sets SSL_CERT_FILE, which Go's standard library honours on Linux, on the
-# user-management Deployment of THIS instance only. The next `helm upgrade` of this
-# instance would revert it, which is acceptable for a rig that is torn down.
-#
-# THE EGRESS ALLOWANCE is the same kind of rig-only edit: Dex's ClusterIP, as a /32, is
-# written into THIS instance's config Secret under
-# infrastructure.egress.allowedDestinations. The default stays deny.
+# The stub provider, its certificate and the rig-only TRUST AND EGRESS edits (a private CA
+# cannot be trusted in production, so this rig mounts one into its own cluster's
+# user-management) live in hack/lib/sso-stub-idp.sh, which hack/upgrade-rig.sh shares; read
+# its header for what those edits are and are not.
 #
 # Requires: kind, kubectl, docker, jq, curl, openssl, a Go toolchain (the script builds
 # dcctl) and `tofu` OR `terraform` on PATH. It binds host ports 80 and 443 (the kind
@@ -61,7 +50,9 @@
 
 # GraphQL documents are single-quoted on purpose: their $variables are GraphQL's, not the
 # shell's.
-# shellcheck disable=SC2016
+# The dex_* names are defined by hack/lib/sso-stub-idp.sh, which shellcheck does not follow
+# (SC1091 is excluded repo-wide), so their use here reads as unassigned.
+# shellcheck disable=SC2016,SC2154
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -77,15 +68,10 @@ api="http://localhost"
 um="$api/api/user-management"
 return_to="$api/login/sso/complete"
 
-dex_ns="dex"
-dex_host="dex.$dex_ns.svc.cluster.local"
-dex_port=5556
-dex_issuer="https://$dex_host:$dex_port/dex"
-dex_client="dc-rig"
-dex_secret="rig-client-secret-not-a-secret"
-
 tenant="sso-rig"
 connection="dex"
+# shellcheck disable=SC2034 # read by hack/lib/sso-stub-idp.sh
+sso_stub_redirect_uri="$um/sso/callback/$connection"
 verified_domain="rig.example"
 mapped_group="dc-viewers"
 mapped_role="sso-viewer"
@@ -122,10 +108,12 @@ else
   image_args=(--build)
 fi
 
-# Pinned by digest like every image a tracked script pulls (hack/check-image-pins.sh).
-dex_image="ghcr.io/dexidp/dex:v2.41.1@sha256:bc7cfce7c17f52864e2bb2a4dc1d2f86a41e3019f6d42e81d92a301fad0c8a1d"
-
 k() { kubectl --context "$kube_context" "$@"; }
+
+# The stub provider (Dex), its certificate, and the rig-only trust and egress edits, shared
+# with hack/upgrade-rig.sh. It reads rig_tmp, cluster, namespace, instance and k from here.
+# shellcheck source=lib/sso-stub-idp.sh
+. "$repo_root/hack/lib/sso-stub-idp.sh"
 
 build_dcctl() {
   say "building dcctl"
@@ -142,115 +130,6 @@ create_cluster() {
   kind create cluster --name "$cluster" --config "$repo_root/deploy/local/kind-cluster.yaml" --wait 120s
 }
 
-# ---------------------------------------------------------------------------
-# Dex
-# ---------------------------------------------------------------------------
-
-# make_pki writes a CA and a server certificate for the Dex Service's DNS name into
-# $rig_tmp. The CA never leaves the rig.
-make_pki() {
-  [[ -s "$rig_tmp/ca.crt" ]] && return 0
-  say "minting the rig CA and Dex's certificate"
-  openssl req -x509 -newkey rsa:2048 -nodes -days 2 -subj "/CN=dc-sso-rig-ca" \
-    -keyout "$rig_tmp/ca.key" -out "$rig_tmp/ca.crt" 2>/dev/null
-  openssl req -newkey rsa:2048 -nodes -subj "/CN=$dex_host" \
-    -keyout "$rig_tmp/tls.key" -out "$rig_tmp/tls.csr" 2>/dev/null
-  printf 'subjectAltName=DNS:%s\n' "$dex_host" >"$rig_tmp/san.ext"
-  openssl x509 -req -in "$rig_tmp/tls.csr" -CA "$rig_tmp/ca.crt" -CAkey "$rig_tmp/ca.key" \
-    -CAcreateserial -days 2 -extfile "$rig_tmp/san.ext" -out "$rig_tmp/tls.crt" 2>/dev/null
-  [[ -s "$rig_tmp/tls.crt" ]] || fail "could not mint Dex's certificate"
-}
-
-install_dex() {
-  make_pki
-  say "installing Dex ($dex_image)"
-  k create namespace "$dex_ns" --dry-run=client -o yaml | k apply -f - >/dev/null
-  k -n "$dex_ns" create secret tls dex-tls --cert="$rig_tmp/tls.crt" --key="$rig_tmp/tls.key" \
-    --dry-run=client -o yaml | k apply -f - >/dev/null
-  k apply -f - <<EOF >/dev/null
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: dex
-  namespace: $dex_ns
-data:
-  config.yaml: |
-    issuer: $dex_issuer
-    storage:
-      type: memory
-    web:
-      https: 0.0.0.0:$dex_port
-      tlsCert: /tls/tls.crt
-      tlsKey: /tls/tls.key
-    oauth2:
-      skipApprovalScreen: true
-    staticClients:
-      - id: $dex_client
-        name: DeviceChain rig
-        secret: $dex_secret
-        redirectURIs:
-          - $um/sso/callback/$connection
-    connectors:
-      - type: authproxy
-        id: proxy
-        name: Rig proxy
-        config:
-          userHeader: X-Remote-User
-          emailHeader: X-Remote-Email
-          groupHeader: X-Remote-Group
----
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: dex
-  namespace: $dex_ns
-spec:
-  replicas: 1
-  selector:
-    matchLabels: {app: dex}
-  template:
-    metadata:
-      labels: {app: dex}
-    spec:
-      containers:
-        - name: dex
-          image: $dex_image
-          args: ["dex", "serve", "/etc/dex/config.yaml"]
-          ports:
-            - containerPort: $dex_port
-          volumeMounts:
-            - {name: config, mountPath: /etc/dex}
-            - {name: tls, mountPath: /tls, readOnly: true}
-      volumes:
-        - name: config
-          configMap: {name: dex}
-        - name: tls
-          secret: {secretName: dex-tls}
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: dex
-  namespace: $dex_ns
-spec:
-  selector: {app: dex}
-  ports:
-    - port: $dex_port
-      targetPort: $dex_port
-EOF
-  k -n "$dex_ns" rollout status deployment/dex --timeout=180s
-}
-
-# um_deploy prints THIS instance's user-management Deployment as deployment.apps/<name>.
-um_deploy() {
-  local deploy
-  deploy="$(k -n "$namespace" get deploy -o name)"
-  deploy="$(grep 'user-management' <<<"$deploy" || true)"
-  [[ "$(wc -l <<<"$deploy" | tr -d ' ')" == 1 && -n "$deploy" ]] ||
-    fail "expected exactly one user-management Deployment in $namespace, found: ${deploy:-none}"
-  printf '%s\n' "$deploy"
-}
-
 # sso_outcome_total <outcome> [connection] prints the sum, across every user-management pod,
 # of devicechain_usermanagement_sso_logins_total for that outcome (and connection, when
 # given). It reads each pod's /metrics through the API server's pod proxy, so it needs no
@@ -258,7 +137,7 @@ um_deploy() {
 # let a control "see" a refusal it never measured.
 sso_outcome_total() {
   local outcome="$1" connection="${2:-}" deploy port selector pods pod body total=0 n
-  deploy="$(um_deploy)"
+  deploy="$(sso_stub_um_deploy)"
   port="$(k -n "$namespace" get "$deploy" -o jsonpath='{.spec.template.spec.containers[0].ports[?(@.name=="graphql")].containerPort}')"
   [[ -n "$port" ]] || fail "user-management has no container port named graphql to read metrics from"
   selector="$(k -n "$namespace" get "$deploy" -o json |
@@ -274,45 +153,6 @@ sso_outcome_total() {
     total=$((total + n))
   done
   printf '%s\n' "$total"
-}
-
-# trust_and_egress is the RIG-ONLY edit described at the top of this file.
-trust_and_egress() {
-  say "letting THIS instance's user-management reach and trust Dex (rig-only edits)"
-  local cidr doc new bundle deploy container
-  cidr="$(k -n "$dex_ns" get svc dex -o jsonpath='{.spec.clusterIP}')/32"
-  [[ "$cidr" != "/32" ]] || fail "Dex's Service has no ClusterIP"
-  note "egress allowance: $cidr (instance config Secret dci-$instance-config)"
-
-  doc="$(k -n "$namespace" get secret "dci-$instance-config" -o jsonpath='{.data.instance}' | base64 -d)"
-  jq -e . >/dev/null <<<"$doc" ||
-    fail "the instance configuration document is not JSON, so this rig cannot edit it safely"
-  new="$(jq --arg cidr "$cidr" '
-    walk(if type == "object"
-         then with_entries(if (.key | ascii_downcase) == "alloweddestinations" then .value = [$cidr] else . end)
-         else . end)' <<<"$doc")"
-  jq -e --arg cidr "$cidr" '[.. | objects | to_entries[] | select((.key | ascii_downcase) == "alloweddestinations") | .value[]] | index($cidr) != null' \
-    >/dev/null <<<"$new" ||
-    fail "the instance configuration has no egress allowedDestinations key to set; the document shape changed"
-  k -n "$namespace" patch secret "dci-$instance-config" --type merge \
-    -p "$(jq -n --arg v "$(printf '%s\n' "$new" | openssl base64 -A)" '{data: {instance: $v}}')" >/dev/null
-
-  # The CA the node trusts, plus the rig CA. SSL_CERT_FILE REPLACES the system roots, so
-  # the bundle has to carry them or every other https call of the service would fail.
-  bundle="$rig_tmp/bundle.crt"
-  docker exec "$cluster-control-plane" cat /etc/ssl/certs/ca-certificates.crt >"$bundle"
-  cat "$rig_tmp/ca.crt" >>"$bundle"
-  k -n "$namespace" create configmap sso-rig-ca --from-file=ca.crt="$bundle" \
-    --dry-run=client -o yaml | k apply -f - >/dev/null
-
-  deploy="$(um_deploy)"
-  container="$(k -n "$namespace" get "$deploy" -o jsonpath='{.spec.template.spec.containers[0].name}')"
-  k -n "$namespace" patch "$deploy" -p "$(jq -n --arg c "$container" '{spec: {template: {spec: {
-    volumes: [{name: "sso-rig-ca", configMap: {name: "sso-rig-ca"}}],
-    containers: [{name: $c,
-      env: [{name: "SSL_CERT_FILE", value: "/etc/sso-rig-ca/ca.crt"}],
-      volumeMounts: [{name: "sso-rig-ca", mountPath: "/etc/sso-rig-ca", readOnly: true}]}]}}}}')" >/dev/null
-  k -n "$namespace" rollout status "$deploy" --timeout=240s
 }
 
 forward_dex() {
@@ -497,8 +337,8 @@ Choose another name with DC_SSO_INSTANCE; this rig will not bootstrap over anoth
   if [[ -n "$(k -n "$namespace" get networkpolicy -o name 2>/dev/null || true)" ]]; then
     warn "the instance namespace has NetworkPolicies; user-management's egress to Dex may be blocked"
   fi
-  install_dex
-  trust_and_egress
+  sso_stub_install_dex
+  sso_stub_trust_and_egress
   say "UP COMPLETE: run 'hack/sso-rig.sh control' then 'hack/sso-rig.sh verify'"
 }
 
@@ -524,7 +364,7 @@ configure_connection() {
       '{r:{token:$t,name:"Dex (rig)",kind:"tenant",issuer:$i,clientId:$c,clientSecret:$s,
            scopes:["openid","email","profile","groups"]}}')" >/dev/null ||
     fail "the connection could not be created. If the message names a certificate or a blocked address,
-the rig's trust or egress edit did not take effect (see trust_and_egress)."
+the rig's trust or egress edit did not take effect (see sso_stub_trust_and_egress in hack/lib/sso-stub-idp.sh)."
   fp="$(adm 'query($t:String!){idpConnection(token:$t){discovery{fingerprint}}}' "$(jq -n --arg t "$connection" '{t:$t}')" |
     jq -r '.idpConnection.discovery.fingerprint')"
   adm 'mutation($t:String!,$f:String!){approveIdpDiscovery(token:$t,fingerprint:$f){token}}' \
@@ -590,7 +430,7 @@ cmd_verify() {
 fetch_ca() {
   k -n "$namespace" get configmap sso-rig-ca -o jsonpath='{.data.ca\.crt}' >"$rig_tmp/bundle.crt" 2>/dev/null ||
     fail "the rig CA ConfigMap is missing; run 'hack/sso-rig.sh up' first"
-  # The rig CA is the LAST certificate in the bundle (trust_and_egress appends it).
+  # The rig CA is the LAST certificate in the bundle (sso_stub_trust_and_egress appends it).
   awk '/-----BEGIN CERTIFICATE-----/{n++} {a[n]=a[n] $0 "\n"} END{printf "%s", a[n]}' "$rig_tmp/bundle.crt" >"$rig_tmp/ca.crt"
   [[ -s "$rig_tmp/ca.crt" ]] || fail "could not recover the rig CA"
 }
