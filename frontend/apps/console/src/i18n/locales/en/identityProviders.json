@@ -144,7 +144,7 @@
   "servedTenantsPlaceholder": "Select tenants",
   "settingsTab": "Settings",
   "signOutDescription": "When someone who signed in through this connection signs out, also send them to the provider's sign-out page. That ends their session at the provider for every application it serves, so leave this off unless your organisation wants it. The sign-out here always completes first, whatever the provider does.",
-  "signOutNoEndpoint": "The approved discovery document names no sign-out endpoint, so signing out ends the session here only. Refresh and approve the discovery document if the provider has added one.",
+  "signOutNoEndpoint": "There is no approved sign-out endpoint for this provider: either its discovery document has not been approved, or the approved one names none. Signing out ends the session here only. Refresh and approve the discovery document if the provider offers one.",
   "signOutOffToast": "Sign-out at the provider turned off",
   "signOutOnToast": "Sign-out at the provider turned on",
   "signOutReturnUrlsDescription": "Register these exact addresses at the provider as post-logout redirect URIs. The provider sends people back to the console's sign-in page or to the dashboard app.",

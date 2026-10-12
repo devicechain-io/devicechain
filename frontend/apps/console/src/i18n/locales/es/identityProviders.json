@@ -144,7 +144,7 @@
   "servedTenantsPlaceholder": "Seleccione inquilinos",
   "settingsTab": "Configuración",
   "signOutDescription": "Cuando alguien que inició sesión mediante esta conexión cierre la sesión, envíelo también a la página de cierre de sesión del proveedor. Eso cierra su sesión en el proveedor para todas las aplicaciones a las que sirve, así que déjelo desactivado salvo que su organización lo quiera. El cierre de sesión aquí siempre se completa primero, haga lo que haga el proveedor.",
-  "signOutNoEndpoint": "El documento de descubrimiento aprobado no nombra ningún endpoint de cierre de sesión, así que cerrar la sesión solo la cierra aquí. Actualice y apruebe el documento de descubrimiento si el proveedor ha añadido uno.",
+  "signOutNoEndpoint": "Este proveedor no tiene un endpoint de cierre de sesión aprobado: o bien su documento de descubrimiento no se ha aprobado, o el aprobado no nombra ninguno. Cerrar la sesión solo la cierra aquí. Actualice y apruebe el documento de descubrimiento si el proveedor ofrece uno.",
   "signOutOffToast": "Cierre de sesión en el proveedor desactivado",
   "signOutOnToast": "Cierre de sesión en el proveedor activado",
   "signOutReturnUrlsDescription": "Registre exactamente estas direcciones en el proveedor como URI de redirección tras el cierre de sesión (post-logout). El proveedor devuelve a las personas a la página de inicio de sesión de la consola o a la aplicación de paneles.",
