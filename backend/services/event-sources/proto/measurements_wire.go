@@ -33,6 +33,11 @@ import (
 // what proto.Marshal does too unless asked to be deterministic, and nothing downstream
 // reads the bytes as anything but a message.
 //
+// 🔴 A field added to either message in the .proto must be added here too, or it never
+// reaches the wire. measurements_wire_shape_test.go populates every field the generated
+// descriptor declares, sends it through the consumer's decoder and this writer, and fails,
+// naming the field, until both carry it.
+//
 // 🔴 A reading name or value that is not valid UTF-8 is REFUSED, as proto.Marshal refuses
 // it for a proto3 string. The receiving side would refuse the message anyway, and refusing
 // it here keeps that a publish-time error rather than a poisoned message in the stream.
