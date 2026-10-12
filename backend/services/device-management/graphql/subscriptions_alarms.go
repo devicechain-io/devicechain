@@ -102,7 +102,9 @@ func (r *SchemaResolver) AlarmStream(ctx context.Context, args struct {
 		id, err := r.GetApi(ctx).ResolveEntityToken(ctx, *args.OriginatorType, *args.Originator)
 		if err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
-				return nil, fmt.Errorf("originator %q not found", *args.Originator)
+				// The miss stays in the chain: it is what the GraphQL boundary answers
+				// with NOT_FOUND, as it does for every other service's miss.
+				return nil, fmt.Errorf("originator %q: %w", *args.Originator, err)
 			}
 			return nil, err
 		}

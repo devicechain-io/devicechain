@@ -679,7 +679,7 @@ something you cannot see through the API still refers to the record. Report it w
 the request; the server logs which reference refused it.
 
 A write that names a record that does not exist is normally refused by the service's own lookup
-before the write, with a message naming the token rather than with this code. It carries
+before the write, with [`NOT_FOUND`](#not-found) rather than with this code. It carries
 `REFERENCE_VIOLATION` only when that record was removed while the write ran.
 
 `INVALID_VALUE` means a value in the request is one the record does not allow, and the service did

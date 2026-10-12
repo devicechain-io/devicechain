@@ -720,7 +720,7 @@ la API todavía se refiere al registro. Infórmalo con la hora de la solicitud; 
 qué referencia la rechazó.
 
 Una escritura que nombra un registro que no existe la rechaza normalmente la búsqueda propia del
-servicio antes de la escritura, con un mensaje que nombra el token y no con este código. Solo lleva
+servicio antes de la escritura, con [`NOT_FOUND`](#not-found) y no con este código. Solo lleva
 `REFERENCE_VIOLATION` cuando ese registro se eliminó mientras la escritura se ejecutaba.
 
 `INVALID_VALUE` significa que un valor de la solicitud no está permitido en el registro y el
