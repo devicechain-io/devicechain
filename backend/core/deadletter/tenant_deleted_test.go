@@ -99,3 +99,26 @@ func TestTheGateIsBuiltOnTheFirstLetterNotWithTheProducer(t *testing.T) {
 		t.Fatalf("the gate was built %d times over two letters; want 1", *builds)
 	}
 }
+
+// A gate handed in before the first letter is the one asked, and one handed in after is
+// refused: the gate is built once, so a sink that has already relied on an answer cannot see a
+// different one.
+func TestAGateHandedInIsUsedOnlyBeforeTheFirstLetter(t *testing.T) {
+	builds := stubDeletedTenants(t)
+	p, _ := testProducer(t, "device-management")
+	if !p.UseTenantGate(func(tenant string) bool { return tenant == "acme" }) {
+		t.Fatal("a gate handed in before any letter was refused")
+	}
+	if !p.TenantDeleted("acme") || p.TenantDeleted("globex") {
+		t.Error("TenantDeleted did not answer from the gate handed in")
+	}
+	if *builds != 0 {
+		t.Errorf("the configured gate was built %d times beside the one handed in; want 0", *builds)
+	}
+	if p.UseTenantGate(func(string) bool { return false }) {
+		t.Error("a gate handed in after the first answer was accepted")
+	}
+	if !p.TenantDeleted("acme") {
+		t.Error("a late gate replaced the answer a sink had already relied on")
+	}
+}

@@ -127,6 +127,8 @@ type InboundEventsProcessor struct {
 	// record of a failed event that cannot be encoded, so the failure is recorded nowhere (see
 	// loseRecord). Set by WithDeadLetters, whose absence is caught where the loss is counted
 	// (Producer.Lost refuses a nil producer) and, in production, by the service's wiring test.
+	// It is also what the resolvers ask whether a failed event's tenant has been deleted (see
+	// tenantDeleted), since a failed-event record is a new record of that tenant's data.
 	deadLetters *deadletter.Producer
 
 	// Shutdown coordination (A5): procCancel stops the read loop; the WaitGroups
@@ -245,6 +247,13 @@ func WithDeadLetters(p *deadletter.Producer) InboundOption {
 // DeadLetters is the producer WithDeadLetters set, or nil. It exists so the service's wiring
 // test can check main.go hands on the producer core/service built.
 func (iproc *InboundEventsProcessor) DeadLetters() *deadletter.Producer { return iproc.deadLetters }
+
+// tenantDeleted answers the dead-letter producer's tenant-deletion gate, reading "not deleted"
+// with no producer. It is a method, and the resolvers hold it as a method value, so the
+// producer is read when a resolution fails rather than copied when the pool is built.
+func (iproc *InboundEventsProcessor) tenantDeleted(tenant string) bool {
+	return iproc.deadLetters != nil && iproc.deadLetters.TenantDeleted(tenant)
+}
 
 // Create a new inbound events processor. authMode is the device authentication
 // policy applied while resolving inbound events (transport security, ADR-014);
@@ -675,6 +684,7 @@ func (iproc *InboundEventsProcessor) initializeEventResolvers(ctx context.Contex
 			locationMemo)
 		resolver.slow = slow
 		resolver.SecretTransit = iproc.secretTransit
+		resolver.tenantDeleted = iproc.tenantDeleted
 		iproc.resolvers = append(iproc.resolvers, resolver)
 		// Resolvers run on a background context (not the cancelable read context)
 		// so that on shutdown they drain the remaining buffered messages to

@@ -38,7 +38,7 @@ const payloadOverhead = 4 << 10
 //     declares (connector-dispatch.dead for connector-dispatch).
 //
 // Before it writes anything it asks the PRODUCER whether the tenant has been deleted
-// (Producer.tenantDeleted), the same rule every sink the producer builds applies; a manager
+// (Producer.TenantDeleted), the same rule every sink the producer builds applies; a manager
 // whose only reader is on dead-letters never asks, because it writes no letters.
 //
 // It refuses to build when a reader's stream declares no DeadLetterKind or an undeclared
@@ -122,7 +122,7 @@ func (r *maxDeliveryRecorder) record(ctx context.Context, d messaging.MaxDeliver
 	// Checked before writing, so a letter is not filed for a tenant already on its way out —
 	// the producer's rule, the same one every sink applies. A purge that starts after this
 	// check can still race the write; its next pass erases it.
-	if r.producer.tenantDeleted(tenant) {
+	if r.producer.TenantDeleted(tenant) {
 		return messaging.MaxDeliveryTenantDeleted, nil
 	}
 	tctx := core.WithTenant(ctx, tenant)

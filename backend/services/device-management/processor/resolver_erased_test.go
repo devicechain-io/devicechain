@@ -12,6 +12,8 @@ import (
 
 	dmodel "github.com/devicechain-io/dc-device-management/model"
 	esproto "github.com/devicechain-io/dc-event-sources/proto"
+	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/deadletter"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/stretchr/testify/mock"
@@ -65,6 +67,62 @@ func (suite *InboundEventsProcessorTestSuite) TestARelationshipEventRefusedByThe
 			}
 			if !tc.reported {
 				suite.Equal(int32(1), ack.n.Load(), "an erased tenant's event must be settled on the delivery it arrived on")
+			}
+		})
+	}
+}
+
+// An event of a tenant that has been DELETED is settled and reported nowhere whatever its
+// resolution failed on — here a device the deletion has already removed, which never reaches a
+// write the erasure fence could refuse. It is settled on its FIRST delivery, not retried to the
+// cap and then recorded on failed-events. The counterweight is a live tenant failing the same
+// way: retried, and reported at the cap, so the deleted rows cannot pass on a path that never
+// reports. The gate is reached the way the service reaches it: through the processor's
+// dead-letter producer, which the resolver pool consults when a resolution fails.
+func (suite *InboundEventsProcessorTestSuite) TestADeletedTenantsUnresolvableEventIsSettledNotReported() {
+	for _, tc := range []struct {
+		name      string
+		deleted   bool
+		delivered int
+		acked     int32
+		reported  bool
+	}{
+		{"deleted tenant, first delivery", true, 1, 1, false},
+		{"deleted tenant, final delivery", true, messaging.MaxDeliver, 1, false},
+		{"control: live tenant, first delivery", false, 1, 0, false},
+		{"control: live tenant, final delivery", false, messaging.MaxDeliver, 0, true},
+	} {
+		suite.Run(tc.name, func() {
+			suite.SetupTest()
+			producer := deadletter.NewProducer(&core.Microservice{FunctionalArea: "device-management"})
+			deleted := tc.deleted
+			if !producer.UseTenantGate(func(string) bool { return deleted }) {
+				suite.FailNow("the producer's tenant gate was already built")
+			}
+			suite.IP.deadLetters = producer
+
+			bytes, err := esproto.MarshalUnresolvedEvent(buildNewAssignmentEvent())
+			suite.Require().NoError(err)
+			ack := &atomicAck{}
+			msg := messaging.NewConsumedMessage(testTenantSubject, bytes, tc.delivered, nil, ack)
+			suite.Inbound.Mock.On("ReadMessage", mock.Anything).Return(msg, nil)
+			// The device is gone: resolution fails before anything is written.
+			suite.API.Mock.On("DevicesByToken", mock.Anything, mock.Anything).Return([]*dmodel.Device{}, nil)
+
+			readAndHandleOne(suite.IP, context.Background())
+
+			select {
+			case item := <-suite.IP.failed:
+				if !tc.reported {
+					suite.Failf("reported", "an event was routed to failed-events: %+v", item.event)
+				}
+			case <-time.After(2 * time.Second):
+				if tc.reported {
+					suite.Fail("a live tenant's event that failed at the cap was not reported")
+				}
+			}
+			if !tc.reported {
+				suite.Equal(tc.acked, ack.n.Load(), "acknowledgements")
 			}
 		})
 	}
