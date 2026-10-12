@@ -2056,11 +2056,81 @@ gh attestation verify <archive> --repo devicechain-io/devicechain \
 
 无须操作。
 
-### 下一发布 {#next-upgrade}
+### v0.20.0：通过你自己的身份提供商登录，组件以包的形式发布 {#v0200-upgrade}
 
-随开发合并收集 `v0.19.0` 之后版本的变化。
+`v0.20.0` 可从 `v0.19.0` 原地升级：先为集群执行 `dcctl install`，再为每个实例执行 `dcctl
+upgrade`，如[v0.17.0](#v0170-upgrade)所述。从 `v0.18.0` 升级时，还请阅读
+[`v0.19.0` 说明](#v0190-upgrade)：其中的行数和 chunk 数检查及各项步骤同样适用于本次升级。
+由 `v0.16.0` 或更早版本构建的实例仍必须[销毁重建](#pre-declaration-recreate)。
 
-#### 退出登录现在会在服务器端结束会话，所有人需重新登录一次 {#next-upgrade-server-side-logout}
+本发布大部分是新功能，在你使用之前不会改变任何行为：用户可以通过你自己的 OpenID Connect 身份提供商登录，
+仪表板可以显示来自你自己的包的组件，设备可以接收配置，空中升级（OTA）也推出了第一部分。对所有人都有影响的变化：
+每个用户需重新登录一次，速率上限按其计量对象重新命名，X.509 设备凭据被拒绝，设备密码只以单向摘要保存，
+升级前发布的仪表板需要重新发布，许多 API 输入新增了上限。处理每条事件的服务使用调优后的垃圾回收器运行，
+`device-management` 将其查找结果保留数分钟而不是数秒。
+
+#### 升级前 {#v0200-before}
+
+1. **重命名速率上限键**，凡是你设置过的服务 `config` 都要改：
+   `ingestRateLimit.messagesPerSecond` 改为 `ingestRateLimit.readingsPerSecond`（`event-sources`、
+   `lwm2m-ingest`、`sparkplug-ingest`），`outboundMessagesPerSecond` 改为
+   `outboundCallsPerSecond`（`event-processing`、`outbound-connectors`）。仍发现旧键的服务会拒绝启动。
+   通过 API 读取或设置租户上限的脚本也需要使用新字段名。参见[速率上限按其计量对象重新命名](#v0200-rate-key-rename)。
+2. **让设备停用 X.509 凭据。** 类型为 `X509_CERTIFICATE` 的凭据在升级后不再能认证。请先为每台此类设备
+   提供 `ACCESS_TOKEN` 或 `MQTT_BASIC` 凭据。参见[不再接受 X.509 设备凭据](#v0200-x509)。
+3. **使用 S3 对象存储时，为凭据授予存储桶上的 `s3:ListBucket` 权限**，否则已删除租户的清除无法完成。参见
+   [删除租户现在会清除其对象存储前缀下的全部内容](#v0200-object-prefix-erase)。
+4. **事件存储较大时，考虑先构建两个索引。** `event-management` 首次启动会在尚未压缩的基础事件上构建两个索引，
+   当待索引的行超过 4,000,000，或某张表的 chunk 超过 500 个时，它会拒绝执行且不做任何更改。两节都给出了
+   在升级前或升级后手动构建索引的语句：[设备事件列表只读取本租户的行](#tenant-device-index)和
+   [两台设备现在可以在同一时刻发送相同的 `altId`](#device-alt-id-key)。
+5. **如果你在 chart values 的顶层设置了 `gogc` 或 `goMemLimitPercent`**，处理每条事件的五个服务现在
+   设置了各自的值，并且以它们为准。参见[事件路径服务使用调优后的垃圾回收器运行](#v0200-gogc)。
+6. **大型设备群需检查 `device-management` 的内存。** 其查找结果现在保留 5 分钟，每个副本都需要容纳整个活跃设备群。
+   参见[`device-management` 将查找结果保留数分钟](#v0200-resolve-caches)。
+7. **停止其他任何读取 `device-events-capture` 流的程序**，例如 `nats stream view`。
+   它现在只接受 `event-sources` 拥有的消费者。参见
+   [设备接入流在消息转发后即删除](#v0200-capture-stream)。
+8. **重新创建邮箱地址域名含非 ASCII 字符（`user@bücher.example`）或不是有效 `local@domain` 的身份。**
+   升级后，在管理员重新创建它之前，它无法登录。请删除它，用 `xn--` 形式的域名（`user@xn--bcher-kva.example`）
+   重新创建，并恢复其成员关系。参见[邮箱的域名现在只有一种写法](#v0200-email-idna)。
+9. **对照以下各节检查你的 API 客户端以及你所依赖构建的包：**
+   [现在会被拒绝的请求](#v0200-input-bounds)、
+   [仪表板：发布即让版本上线](#v0200-dashboard-publishing)和
+   [发布的包](#v0200-packages)。
+
+#### 升级期间 {#v0200-during}
+
+- **设备密码会被转换。** 新版 `device-management` 首次启动时，会把每个已存储的 `MQTT_BASIC` 密码替换为单向摘要。
+  在每个 `device-management` Pod 都运行新版本之前，旧 Pod 找不到已转换凭据的密码，因此会拒绝该设备的 MQTT 连接
+  以及其事件的密码校验；设备会重试并连到新 Pod。滚动升级期间在任一版本上设置的密码，就是最终保留的那个。
+- **同时升级 `event-sources` 和 `device-management`。** 两者运行不同版本时，正文中携带设备密码或访问令牌的事件
+  可能被拒绝。参见[正文中携带设备密码或访问令牌的事件](#v0200-body-password)。
+- **在滚动升级完成前，避免修改租户或层级。** 在被替换之前，旧的接入或对外 Pod 按平台默认值计量所有租户，
+  旧的 `user-management` Pod 处理的租户读写会失败。参见[速率上限按其计量对象重新命名](#v0200-rate-key-rename)。
+- **`event-management` 首次启动时会构建两个索引**；每个索引构建期间，基础事件的写入会等待，读取不会。
+- **`event-sources` 先转发设备接入流中保存的消息，再重新创建该流。** 如果流在五分钟内没有变空，
+  `event-sources` 会以错误停止，且不删除任何内容。
+- **检测改为通过新的消费者读取已解析事件。** 参见
+  [检测通过新的消费者读取其事件](#v0200-ack-floor)。
+
+升级后回退到 `v0.19.0`，会使每台使用 `MQTT_BASIC` 密码的设备无法认证，因为 `v0.19.0` 无法读取摘要；
+如果回退，请设置新密码并装入这些设备。上述索引和流的变化各自说明了回退需要做什么。
+
+#### 升级后 {#v0200-after}
+
+- **所有人需重新登录一次**，MCP 代理等 OAuth 客户端需重新授权。参见
+  [退出登录现在会在服务器端结束会话](#v0200-server-side-logout)。
+- **重新发布每个应让查看者看到的仪表板。** 在此之前，查看者会被告知该仪表板尚未发布。
+  参见[仪表板：发布即让版本上线](#v0200-dashboard-publishing)。
+- **可能会触发新告警。** 当某个服务在缺少一个可选安全闸门的情况下运行时，会触发 `SafetyGateDisabled`。
+  其他告警列在[新告警](#v0200-alerts)中。
+- **本发布之前 bootstrap 的实例没有对象存储，升级也不会添加。** 租户徽标和更新制品都需要对象存储。参见
+  [`dcctl bootstrap` 可以为实例提供对象存储](#v0200-object-store)。
+
+#### 变化内容 {#v0200-what-changed}
+
+##### 退出登录现在会在服务器端结束会话，所有人需重新登录一次 {#v0200-server-side-logout}
 
 以前在控制台或嵌入式仪表板应用中退出登录只会清除浏览器中的状态：刷新令牌仍然有效，最长可达 7 天，控制台保留的登录令牌在最多 15 分钟内仍可发起新会话。新的 `logout` 变更会在服务器端结束该次登录。从那一刻起，该次登录的令牌交换都会被拒绝：它的刷新令牌在任何租户中都无法再刷新，它的登录令牌无法再选择租户，在该次登录期间授权的 OAuth 授权也无法再刷新。MCP 授权页面会单独登录，因此在控制台中退出登录不会终止在那里完成的授权；该授权在那次登录到期时结束（默认 7 天）。同一账户的其他登录不受影响。已签发的访问令牌和登录令牌（包括在管理 API 上）无法撤回，在过期前仍然有效，最长 15 分钟。如果退出登录时无法连接服务器，应用仍会在本地退出，并提示服务器端会话未能结束。
 
@@ -2068,7 +2138,7 @@ gh attestation verify <archive> --repo devicechain-io/devicechain \
 
 升级前签发的令牌没有登录记录，会被拒绝，因此**所有人需重新登录一次**：控制台、仪表板应用、SDK 和 OAuth 会话在下次刷新时结束，最迟在升级后 15 分钟内（除非你修改了访问令牌有效期）。MCP 代理等 OAuth 客户端需重新授权。无需其他操作。
 
-#### 版本混合期间，正文中携带设备密码或访问令牌的事件会受到影响 {#next-upgrade-body-password}
+##### 版本混合期间，正文中携带设备密码或访问令牌的事件会受到影响 {#v0200-body-password}
 
 从本版本起，`event-sources` 与 `device-management` 以另一种形式传递出现在事件正文中的设备密码或访问令牌，
 且双方都需要新版本才能读取对方的内容。在滚动升级期间，只要两者的新旧版本并存：
@@ -2080,7 +2150,7 @@ gh attestation verify <archive> --repo devicechain-io/devicechain \
 
 请同时升级 `event-sources` 与 `device-management`，或接受这些事件的短暂丢失。
 
-#### `MQTT_BASIC` 设备密码只显示一次，之后无法再次显示 {#next-upgrade-device-password-show-once}
+##### `MQTT_BASIC` 设备密码只显示一次，之后无法再次显示 {#v0200-device-password-show-once}
 
 平台现在只保存 `MQTT_BASIC` 设备密码带密钥的单向摘要，而不是密码本身。API 读取时从不返回密码，因此任何查询结果都不变。变化在于，平台这边也无法再找回它：控制台在你添加凭据或设置新密码后只显示一次密码，并带复制按钮，此后只表明已设置密码。凭据所在行新增**设置新密码（Set new password）**操作，表单提供**生成强密码（Generate strong password）**。
 
@@ -2088,7 +2158,7 @@ gh attestation verify <archive> --repo devicechain-io/devicechain \
 
 无需任何操作。
 
-#### 设备事件列表只读取本租户的行 {#tenant-device-index}
+##### 设备事件列表只读取本租户的行 {#tenant-device-index}
 
 设备事件列表索引现在以租户开头。
 v0.19.0 中列表总数和按事件类型过滤的设备列表，会访问该设备 token 的所有尚未压缩行，
@@ -2118,7 +2188,7 @@ v0.19.0 中列表总数和按事件类型过滤的设备列表，会访问该设
   改为 `hypertable_name IN ('events')`。
 - 回退 v0.19.0 保留新索引，旧版能使用它。
 
-#### 两台设备现在可以在同一时刻发送相同的 `altId`，两个事件都会被存储 {#device-alt-id-key}
+##### 两台设备现在可以在同一时刻发送相同的 `altId`，两个事件都会被存储 {#device-alt-id-key}
 
 事件的 `altId` 是发送方自己的消息 ID，写入侧用它加上事件的 `occurredTime` 来丢弃被重新投递的副本。这个键按租户划分，因此同一租户的两台设备在同一时刻发送相同的 `altId` 时，第二个事件会被当作第一个的重新投递而被静默丢弃。现在键中包含设备：两个事件都会被存储，而同一设备在同一时刻再次发送相同的 `altId` 仍会被去重。如果你依赖一台设备的 `altId` 抑制另一台设备的事件，这种情况不会再发生；如有需要，请自行保证 `altId` 在你的设备之间唯一。
 
@@ -2136,7 +2206,7 @@ v0.19.0 中列表总数和按事件类型过滤的设备列表，会访问该设
 - **要避免被拒绝，请在升级前构建索引。** 在未压缩基础事件超过 `4000000` 的 `v0.19.0` 实例上，先执行上面两条语句；`v0.19.0` 可以与之配合工作，升级随后只需删除旧索引。统计基础事件数量时，使用[检查行数](#v0190-row-count)下的查询，并将条件改为 `hypertable_name IN ('events')`。
 - 回退到 `v0.19.0` 会保留新索引，`v0.19.0` 可以使用它：重新投递的事件仍会被去重，但该版本仍按租户检查，因此会再次丢弃第二台设备的事件。
 
-#### 设备接入流在消息转发后即删除 {#next-upgrade-capture-stream}
+##### 设备接入流在消息转发后即删除 {#v0200-capture-stream}
 
 保存每条设备发布、直到 `event-sources` 转发的流（`device-events-capture`），现在在 `event-sources` 确认消息时就将其删除。在 `v0.19.0` 中，消息转发后仍保留最多七天。尚未转发的发布与之前完全一样地保留，因此 `event-sources` 中断时仍不丢失任何消息。
 
@@ -2144,25 +2214,25 @@ v0.19.0 中列表总数和按事件类型过滤的设备列表，会访问该设
 - **其他任何程序都不能读取该流。**它只接受一个消费者，即 `event-sources` 拥有的那个，因此 `nats stream view` 和 `device-events-capture` 上的任何其他消费者都将失效。要查看设备发送的内容，请读取保存已解码事件的 `inbound-events` 流。
 - 回退到 `v0.19.0` 需要先在 `event-sources` 停止时删除该流，因为 `v0.19.0` 会拒绝针对采用新保留方式的流启动；它会在下次启动时重新创建该流。删除时尚未转发的内容将丢失。
 
-#### 无法编码失败记录的入站事件，不再存成空记录 {#next-upgrade-failed-record-encode}
+##### 无法编码失败记录的入站事件，不再存成空记录 {#v0200-failed-record-encode}
 
 device-management 无法编码失败入站事件的记录时，此前仍存储空记录并确认事件。读回的失败没有原因和文本，真正失败没有记录在任何地方。现在不为该事件发布任何内容，确认事件，并在 `dead_letter_lost_total` 统计损失，因此 `DeadLetterWriteLost` 触发，Pod 日志的 `LOST` 行说明哪个事件。今天设备能够发送的事件都不会触发此路径；这是缺陷路径，告警让你知道此类缺陷。`DeadLetterWriteLost` 因而有第四个原因，列于[告警表](./detection-engine.md#what-to-watch)。
 
 无需操作。
 
-#### `dcctl install --dry-run` 按实际 install 拒绝重新安装 {#dcctl-install---dry-run-makes-the-re-install-refusals-the-install-makes}
+##### `dcctl install --dry-run` 按实际 install 拒绝重新安装 {#v0200-dry-run}
 
 集群响应时，dry run 现在读取安装记录，设置改变时查询集群上运行哪些实例；若因现有集群内容导致安装拒绝，则使用 install 自己的消息失败：在没有集群状态的机器重新安装、有实例运行时更改设置、或无法工作的 `--backup-snapshot-class`。此前打印计划并以 0 退出。面向尚不存在或无法连接的集群仍打印计划，并说明未执行这些检查。Dry run 不检查 install 拒绝的全部情况；例如关系存储由旧发布构建的集群，仍只在真正 install 时拒绝。
 
 无需操作。
 
-#### `dcctl install` 和 `dcctl bootstrap` 等待每个数据库实例加入 {#next-upgrade-wait-database-instances}
+##### `dcctl install` 和 `dcctl bootstrap` 等待每个数据库实例加入 {#v0200-wait-database-instances}
 
 此前 `dcctl install` 在关系数据库主库接受连接后返回，`dcctl bootstrap` 只等待服务。因此任一命令都可能报告成功，bootstrap 甚至打印两个数据库已复制，而副本仍在创建。Install 现在记录自身、释放集群锁，再等待最多 15 分钟，直到关系数据库每个实例都加入。Bootstrap 先等待服务，再最多等待 15 分钟，直到实例事件存储每个实例都加入。如果仍有实例未及时加入，命令以错误退出，指出数据库和就绪实例数。重新运行同一命令可继续等待（install 会重新应用前提组件，执行期间拒绝 bootstrap；如果只想观察请用 `kubectl` 监视数据库）；这样结束的 bootstrap 不会撤销，install 已记录，所以期间仍能引导实例。健康安装额外耗时几秒。
 
 无需其他操作。
 
-#### 速率上限按其计量对象重新命名 {#next-upgrade-rate-key-rename}
+##### 速率上限按其计量对象重新命名 {#v0200-rate-key-rename}
 
 接入上限早已按读数计量，对外上限按连接器调用计量，但两者仍以"消息"命名。现已全面改名，不保留旧拼写：
 
@@ -2178,20 +2248,20 @@ device-management 无法编码失败入站事件的记录时，此前仍存储�
 - **已存数据自动转换。** 升级会重命名租户覆盖列，并以相同取值为每个已存层级配置（包括随附层级和已删除层级）更换键名。
 - **滚动升级期间。** 在所有 Pod 都运行新版本之前，旧 Pod 与新的 `user-management` 互不兼容。旧的接入或对外 Pod 请求旧的 `tenantGovernance` 字段，请求失败，该 Pod 按平台默认值计量所有租户，可能因此触发 `TenantsMeteredAtPlatformDefault`。新 Pod 重命名列后，旧的 `user-management` Pod 仍使用旧列名，它处理的租户读写会失败，直到被替换。两者均在滚动升级结束时消失；在此之前请避免修改租户或层级。
 
-#### 删除租户现在会清除其对象存储前缀下的全部内容 {#next-upgrade-object-prefix-erase}
+##### 删除租户现在会清除其对象存储前缀下的全部内容 {#v0200-object-prefix-erase}
 
 此前清除已删除的租户时，只会移除 user-management 某一行所引用的对象。现在还会移除该租户在对象存储中前缀下的所有对象，无论由哪个服务存入，因此更新制品以及引用已丢失的对象都会随租户一起清除。
 
 - **使用 S3 后端时，凭据现在还需要对存储桶拥有 `s3:ListBucket` 权限**，此外仍需 `s3:GetObject`、`s3:PutObject` 和 `s3:DeleteObject`。缺少该权限时，租户清除的对象步骤会失败并在每一轮重试，清除因此无法完成。请在升级前授予。文件系统后端无需任何改动。
 
-#### 单点登录是新增功能，你无需做任何操作 {#next-upgrade-sso}
+##### 单点登录是新增功能，你无需做任何操作 {#v0200-sso}
 
-用户现在可以通过外部 OpenID Connect 身份提供商登录，租户也可以要求使用它。在超级用户创建连接之前，一切都不会启用，因此升级后的实例行为与之前一致。无需迁移，密码登录继续可用。[服务器端退出登录](#next-upgrade-server-side-logout)导致的一次性重新登录已在前文说明。
+用户现在可以通过外部 OpenID Connect 身份提供商登录，租户也可以要求使用它。在超级用户创建连接之前，一切都不会启用，因此升级后的实例行为与之前一致。无需迁移，密码登录继续可用。[服务器端退出登录](#v0200-server-side-logout)导致的一次性重新登录已在前文说明。
 
 - **设置提供商**见[配置单点登录](../guides/configuring-sso.md)，其行为见[单点登录](../concepts/single-sign-on.md)。
 - **结束会话不会收回已经签发的令牌。**在退出登录、撤销、取消链接或禁用连接之后，已签发的访问令牌和身份令牌在过期前仍然有效，默认 15 分钟。
 
-#### 单点登录需要实例的公开地址，因此 chart 现在会自动推导 {#next-upgrade-sso-issuer}
+##### 单点登录需要实例的公开地址，因此 chart 现在会自动推导 {#v0200-sso-issuer}
 
 通过外部 OpenID Connect 身份提供方登录，以及 MCP 客户端使用的 OAuth 授权服务器，都需要知道本实例
 的访问地址，因为登录完成后必须返回到某个地方。user-management 的 `auth.issuerUrl` 过去除非手动设置，
@@ -2206,7 +2276,7 @@ chart 会从 ingress 推导出 `https://<host>/api/user-management`，并且你�
 - **使用真实主机名的纯 http 实例不会得到签发者**，因为 user-management 拒绝在回环主机之外使用 http 签发者。
   授权服务器和单点登录保持关闭，`helm install` 和 `dcctl bootstrap` 会明确提示。请通过 https 提供实例服务以开启它们。
 
-#### 单点登录告警 {#next-upgrade-sso-alerts}
+##### 单点登录告警 {#v0200-sso-alerts}
 
 三个告警报告单点登录的故障。如果你按名称路由或静音告警，这些是新增的。
 
@@ -2216,12 +2286,228 @@ chart 会从 ingress 推导出 `https://<host>/api/user-management`，并且你�
 | `SsoUnverifiedIdentityRefused` | warning | 提供方已为某次登录担保，但该登录仍被拒绝，结果见 `outcome` 标签：`refused_unverified_email`、`refused_unverified_domain`、`refused_required_claim` 或 `refused_system_role_identity`。没有任何人登录成功。 | 通常是连接配置有误，或有人在探测。请在审计日志中查找提供方所声明的地址，并查看提供方自己的登录日志。 |
 | `SsoStateStoreFull` | critical | 保存已开始登录的存储已满，因此在条目过期（十分钟后）之前，user-management 拒绝通过任何提供方开始任何单点登录。密码登录不受影响。 | 几乎可以肯定有人在循环调用公开的登录开始接口：请在 ingress 日志中找到这些流量并在上游拦截。若流量合法，请调高 `instance.config.infrastructure.nats.kvStateMaxBytes`。 |
 
-#### 邮箱的域名现在只有一种写法，域名含非 ASCII 字符的已存储地址将不再匹配 {#next-upgrade-email-idna}
+##### 邮箱的域名现在只有一种写法，域名含非 ASCII 字符的已存储地址将不再匹配 {#v0200-email-idna}
 
 邮箱地址现在以唯一的规范形式存储、查找和比较：本地部分与之前一样去除空白并转为小写，域名转换为小写 ASCII（国际化域名使用 `xn--` 形式），且不带末尾的点。因此 `user@bücher.example` 与 `user@xn--bcher-kva.example` 在密码登录、单点登录和关联请求中是同一个身份，连接所声明的域名也按同样的形式匹配。不是严格 `local@domain` 形式，或域名不是有效主机名的地址会被拒绝。
 
 - **域名为 ASCII 的地址不受影响。** 无需任何操作。
-- **以非 ASCII 域名（`user@bücher.example`）存储的身份保留旧形式，在管理员重新创建它之前会被拒绝。** 它无法通过密码或单点登录登录，已持有的会话会在下一次交换时结束；此时选择租户或刷新会返回代码 `IDENTITY_EMAIL_NOT_CANONICAL`。管理操作仍可按其存储的地址找到它，因此你可以禁用它、结束其会话、取消关联并删除它。要恢复访问，请取消关联并删除旧身份，然后重新创建（域名的两种写法均可：它会以 `xn--` 形式存储），并恢复其成员关系和关联。在升级之前完成这些操作可避免中断。已存储地址不是有效 `local@domain` 的身份同样适用。
+- **以非 ASCII 域名（`user@bücher.example`）存储的身份保留旧形式，在管理员重新创建它之前会被拒绝。** 它无法通过密码或单点登录登录，已持有的会话会在下一次交换时结束；此时选择租户或刷新会返回代码 `IDENTITY_EMAIL_NOT_CANONICAL`。管理操作仍可按其存储的地址找到它，因此你可以禁用它、结束其会话、取消关联并删除它。要恢复访问，请取消关联并删除旧身份，然后重新创建（域名的两种写法均可：它会以 `xn--` 形式存储），并恢复其成员关系和关联。在升级之前完成这些操作（域名使用其 `xn--` 形式）可避免中断：参见[升级前](#v0200-before)。已存储地址不是有效 `local@domain` 的身份同样适用。
+
+##### 不再接受 X.509 设备凭据 {#v0200-x509}
+
+在支持证书校验之前，不接受 `X509_CERTIFICATE` 凭据类型。创建该类型的凭据、把凭据改为该类型，以及用该类型
+的凭据替换设备，都会以 `UNSUPPORTED` 被拒绝，且不写入任何内容。控制台不再提供该类型。升级前存储的该类型凭据
+不再能认证，也不会被转换：请在升级前为每台此类设备提供 `ACCESS_TOKEN` 或 `MQTT_BASIC` 凭据。参见
+[设备凭据](../guides/device-credentials.md)。
+
+##### `MQTT_BASIC` 密码至少需要 16 字节 {#v0200-mqtt-password-length}
+
+创建 `MQTT_BASIC` 凭据或设置其密码时，现在会拒绝短于 16 字节或长于 4096 字节的密码（按发送的内容计算）。
+过短的密码以 `INVALID_VALUE` 被拒绝。设备密码是预置的而不是靠人记住的，因此下限是按生成的秘密设定的；
+控制台的**生成强密码（Generate strong password）**可以生成一个。现有的较短密码在被重新设置之前继续可用。
+把凭据改为 `MQTT_BASIC` 时，必须在同一请求中设置其密码。
+
+##### 仪表板：发布即让版本上线 {#v0200-dashboard-publishing}
+
+发布仪表板现在会让它创建的版本成为提供给查看者的版本，`activateDashboardVersion` 可让较早的版本重新上线；
+没有取消发布操作。查看者通过 `publishedDashboard` 读取上线版本，`/dash` 按其令牌打开它。草稿供仪表板作者使用。
+
+- **升级前发布的仪表板不会上线。** 之前没有记录它们提供的是哪个版本，因此在作者重新发布之前，查看者会被告知
+  该仪表板尚未发布（`NOT_PUBLISHED`）。
+- **`publishDashboard` 返回 `DashboardPublication`**，其中包含新的 `version` 和 `dashboard`。
+- **读取仪表板的 `definition`，或通过 `dashboardVersion` 读取某个版本的正文，需要
+  `dashboard:write`。** 只有 `dashboard:read` 的调用方读取 `publishedDashboard`。
+- **`dashboards` 搜索返回 `DashboardSummary`**，其中没有 `definition`。
+- **`dashboardVersions` 采用分页**，最新的在前：除非传入 `limit`（最多 1000）和 `offset`，否则返回 100 个版本，
+  且不包含各版本的正文。
+- `rollbackDashboard` 接受可选的 `expectedUpdatedAt`，并拒绝过时的回滚。
+- `dashboards` 搜索的名称过滤器把 `%`、`_` 和 `\` 按字面匹配，而不是作为通配符。
+- 修改正在删除的租户的仪表板会以 `TENANT_DELETED` 被拒绝；删除仪表板则不会。
+- 当某个版本上有未解析的组件时，控制台不会发布该版本。参见
+  [在组件未解析时发布](../guides/adding-widget-packages.md#publishing-while-a-widget-is-unresolved)。
+
+##### 测量值聚合需要开始时间，并且有上限 {#v0200-aggregation-bounds}
+
+`bucketedMeasurements` 现在要求提供 `startTime`，缺少时以 `INVALID_VALUE` 被拒绝；`endTime` 默认为当前时间。
+当读取会产生超过 10,000 个桶，或者桶数乘以测量值名称数超过 50,000 时，读取会以 `LIMIT_EXCEEDED` 被拒绝，
+而不是被截断。没有 `name` 过滤器时，计入的名称是该读取匹配到的不同名称。MCP 的
+`aggregate_measurements` 工具有相同的要求和上限。
+
+##### 现在会被拒绝的请求 {#v0200-input-bounds}
+
+过去任意大小都会被接受的输入，现在超过以下上限时会被拒绝，除非另有说明，错误码为 `LIMIT_EXCEEDED`。
+恰好等于上限的值会被接受。[GraphQL 参考](../reference/graphql-api.md#input-validation)列出了这些上限。
+
+| 内容 | 上限 |
+| --- | --- |
+| 在每个服务中按令牌、ID 或外部 ID 进行的一次查找中的键，以及一次 `removeEntityRelationships` 的令牌 | 1,000 |
+| JSON 输入：元数据、属性、配置、载荷、收件人等 | 64 KiB |
+| 命令入队或批量提交时的载荷或元数据 | 64 KiB（`PAYLOAD_TOO_LARGE`、`METADATA_TOO_LARGE`） |
+| 命令名称 | 128 字节（`COMMAND_NAME_TOO_LONG`） |
+| 属性键，以及属性值 | 128 字节，以及 64 KiB |
+| 检测规则的定义，及其编辑图 | 各 256 KiB |
+| 一台设备的被跟踪关系 | 256 |
+| 一个 profile 的指标定义、命令定义和检测规则 | 每种 1,000 |
+| 一次 `createEntityRelationships` 创建的关系 | 1,000 |
+| `deviceProfileVersions`、`entityGroupVersions`、`assetTypeVersions` 和 `connectorVersions` 返回的版本 | 最新的 1,000 个，除非使用新增的 `limit` 和 `offset` 分页 |
+| 一条通知规则的收件人 | 100 |
+| OAuth 客户端的 `redirectUris` 及其 `scopes` | 各 16 项，每项最多 2,048 和 64 个字符 |
+| 租户层级，以及一次 `reorderTenantTiers` 的令牌 | 100 |
+| 通过管理 API 设置的密码 | 72 字节 |
+| 一次管理请求中的角色、权限或角色令牌 | 100 |
+| 运行一次 GraphQL 查询或变更 | 60 秒 |
+| 在 GraphQL 以及 OAuth 和 MCP 端点上接收请求正文 | 30 秒；停滞的正文会得到 `400` 响应并关闭连接 |
+
+另有三种值现在会在创建或更新记录时被拒绝，过去它们会被存储，之后才失败或不起作用：
+
+- 类型为 `gcp_pubsub` 的连接器，它还没有投递客户端（`UNSUPPORTED`）；之前存储的此类连接器在派发时
+  仍会被记为死信；
+- 设置了任何内容的 AI 提供商 `params`（`UNSUPPORTED`），因为没有提供商客户端会应用它们；
+  空值、null 和 `{}` 会被接受；
+- webhook 通知通道中投递时会被拒绝的自定义标头：无效名称、值中含控制字符、保留的 `Authorization` 或
+  `X-DC-*` 标头，或重复标头。
+
+##### 事件路径服务使用调优后的垃圾回收器运行 {#v0200-gogc}
+
+`event-sources`、`event-management`、`device-management`、`device-state` 和 `event-processing` 现在以
+`GOGC=400` 运行，并把软内存限制（`GOMEMLIMIT`）设为其内存限制的 75%，`event-processing` 的内存限制至少为
+384Mi。在 Google Kubernetes Engine 上以每秒 6,000 事件运行，并与同一会话中的对照运行比较，每事件 CPU 在
+`device-management` 和 `event-management` 中下降 18%，在 `device-state` 中下降 15%，在 `event-sources` 中下降 4%，
+在 `event-processing` 中下降 5%。
+
+它们是 chart values：`functionalAreas.<area>.gogc` 和 `functionalAreas.<area>.goMemLimitPercent`，
+另有新增的顶层 `gogc`（默认 `0`，关闭），与现有的顶层 `goMemLimitPercent` 并列。功能区自身的值优先于顶层值，
+因此对这五个服务而言，顶层的 `0` 不再关闭软限制：要为某个功能区关闭其中任一项，请把该功能区自身的值设为 `0`。
+
+##### `device-management` 将查找结果保留数分钟，变更会传达到每个副本 {#v0200-resolve-caches}
+
+`device-management` 会查找每个事件的凭据、设备、被跟踪关系、profile 和分组成员关系，过去在每个副本的内存中
+保留 5 秒，因此上报间隔比这更长的设备每次都要重新查找。现在默认保留 5 分钟：
+
+| `device-management` 配置键 | 默认值 | 范围 |
+| --- | --- | --- |
+| `inMemoryCache.ttlSeconds`（新增） | 300 | 1-3600 |
+| `inMemoryCache.credentialCacheMiB`（新增；过去固定为 16 MiB） | 32 | 1-256 |
+| `deviceCacheTtlSeconds`、`relationshipCacheTtlSeconds`、`metricDefCacheTtlSeconds`、`membershipCacheTtlSeconds`（过去为 60） | 300 | 1-3600 |
+
+超出范围的值会使服务无法启动。现在一次变更会让每个副本丢弃存储的副本，而不仅是做出变更的那个副本；
+与代理的连接恢复的副本会丢弃它持有的全部内容，清除已删除的租户会让每个副本丢弃该租户的副本。
+更新设备（包括更改其类型）以及创建关系（无论单个还是批量、通过兑现或重新打开认领，还是通过更改关系类型）
+过去不会丢弃它们所改动的副本，现在会。
+
+- **按整个活跃设备群为每个副本确定规格**，而不是设备群除以副本数：每个副本几乎都会看到每台设备。
+  对于 60,000 台、每台有一个被跟踪关系的设备，大约需要 `inMemoryCache.credentialCacheMiB` 为 80、
+  `inMemoryCache.perDeviceCacheMiB` 为 64，内存限制为 512Mi。小于设备群的上限会使缓存几乎无法命中。
+- **撤销同样受这 5 分钟约束。** 某个副本若错过了通知它丢弃已撤销凭据的消息，又没有断开与代理的连接，
+  就可能在其副本过期之前继续认证该凭据的事件。连接总是对照数据库检查。
+  参见[撤销多快生效](../guides/device-credentials.md#revocation-timing)。
+
+##### 读取方默认预取 {#v0200-fetch-ahead}
+
+读取 stream 的服务现在会在分发当前批次的同时请求下一批，并且每次请求 128 条消息而不是 64 条。在 Google
+Kubernetes Engine 上实测，这让检测引擎在重负载下的积压保持在几百条消息，而不是数万条；关闭它时，吞吐上限和
+每个服务的每事件 CPU 都相同。设置 `instance.config.infrastructure.nats.fetch.ahead: false` 可将其关闭。参见
+[预取](./observability.md#fetch-ahead)。
+
+##### 检测通过新的消费者读取其事件 {#v0200-ack-floor}
+
+`event-processing` 现在在每个检查点确认一次已解析事件，通过一个名称以 `_ackfloor` 结尾的新持久消费者
+（`<instance>_event-processing_resolved-events_ackfloor`）。新消费者首次启动时，从已保存状态覆盖的最后一个
+事件之后开始，新版本的第一个 leader 会删除旧消费者。无需迁移任何内容。你自己的仪表板或告警若按 `durable`
+标签选择 `event-processing` 的已解析事件消费者，需要使用新名称；随附的告警两者都匹配。回退到 `v0.19.0`
+会使检测再读取一次 stream 中保留的事件，并跳过已经见过的事件。
+
+实时检测现在还会回读未投递给它的一段事件，而不是跳过，并有两个告警报告这一情况（`DetectLiveGapFillFailing`、
+`DetectLiveDeliveriesRecovered`）。停止推进的检测循环会触发 `DetectLoopStalled`，每个检查点现在都在一个截止时间内
+运行，其下限为新增的 `checkpointTimeoutSeconds`（默认 10，最多 120）。
+
+##### AI 起草超时 {#v0200-inference-timeout}
+
+`ai-inference` 对模型提供商单次调用的默认上限从 60 秒降为 40 秒（`inferenceTimeoutMs`，最多 120000）。
+根据描述起草规则现在会等待到该上限，总预算为 50 秒，未能及时回答的模型会如实报告为超时，而不是报告为提供商
+不可用。如果你依赖 60 秒的默认值，请自行设置 `inferenceTimeoutMs`。
+
+##### `dcctl bootstrap` 可以为实例提供对象存储 {#v0200-object-store}
+
+租户徽标和更新制品保存在对象存储中，而由 `dcctl` 构建的实例没有对象存储，因此两者都以
+`OBJECT_STORE_NOT_CONFIGURED` 被拒绝。`dcctl bootstrap` 现在接受 `--object-store none|filesystem|s3`，
+并提供指定卷或存储桶的参数。不带该参数时，`dcctl` 创建的集群上的实例会得到 5Gi 的文件系统存储，通过
+`--kube-context` 指定的集群上的实例则没有。所做选择会被记录，并由 `dcctl upgrade` 保留，它会拒绝会使已存对象
+无处可寻的更改。**`dcctl upgrade` 不会为没有对象存储的实例添加存储**：在 `v1.0.0` 之前，请销毁该实例，再带上
+该参数重新 bootstrap。参见[对象存储](./bootstrap.md#object-store)。
+
+##### 设备可以接收配置 {#v0200-device-configuration}
+
+设备 profile 版本声明其设备的哪些共享属性对设备可见，可在 profile 编辑器的**配置（Configuration）**标签页中
+声明，或使用 `setDeviceProfileConfigurationDeclaration`。写入已声明的共享属性会创建一个带编号的配置修订版，
+并在设备自己的配置主题上发送给设备；设备报告 `RECEIVED`、`APPLIED` 或 `REJECTED`，并通过 `sync` 请求当前修订版，
+新发布的 profile 也是这样到达设备的。控制台中的设备页面显示声明、当前修订版以及设备最近报告的内容，
+`deviceConfiguration` 和 `deviceConfigurationRevisions` 读取这些信息。写入已声明的属性时，若文档会超过 64 KiB，
+以 `CONFIGURATION_TOO_LARGE` 被拒绝；若值不符合声明的类型，以 `CONFIGURATION_VALUE_TYPE_MISMATCH` 被拒绝。
+目前仅支持 MQTT 设备。参见[配置投递主题](../guides/connecting-a-device.md#reserved-device-topics)。
+
+##### 空中升级（OTA）：第一部分 {#v0200-updates}
+
+新的 `update-management` 服务为每个租户维护固件、软件和配置镜像目录，上传时会对照声明的大小和 SHA-256 摘要
+进行检查。制品一次分配给一台设备；设备在其配置主题上收到通知，使用可断点续传的短期授权下载镜像，每次尝试
+都会被跟踪，直到设备运行该版本。它需要主动启用：在 `full` 部署配置中运行，或使用
+`--enable-area update-management`。它需要对象存储，并且：
+
+- **在设置 `updates.allowUnverifiedArtifacts: true` 之前，无法分配任何制品**，因为目前还没有任何机制能认证
+  制品的生产者。
+- **在设置 `updates.downloadBaseUrl` 之前，设备得不到下载授权。**
+- **不要让下载路径的查询字符串进入访问日志。** chart 在一个关闭了访问日志的独立 ingress 上提供该路径；
+  若位于其他代理之后，也请这样做。
+- 目前还没有设备群推送，并且只能更新 MQTT 设备。
+
+##### 发布的包 {#v0200-packages}
+
+- **`@devicechain/widget-sdk` 是新增的包。** 它用于定义组件（`defineWidget`）并构建组件注册表
+  （`createWidgetRegistry`）；参见[编写自定义组件](../guides/writing-a-custom-widget.md)。
+  `@devicechain/widgets` 将其声明为 peer 依赖，因此请在 `@devicechain/widgets` 旁边安装它。
+- **`@devicechain/widgets` 不再导出 `WIDGET_REGISTRY`、`ALARM_WIDGET_REGISTRY`、
+  `CONTROL_WIDGET_REGISTRY`、`SELECTION_WIDGET_REGISTRY` 或 `LOCATION_WIDGET_REGISTRY`。** 请通过注册表查找组件，
+  例如 `createBuiltinWidgetRegistry` 构建的注册表。
+- **`echarts` 是 `@devicechain/widgets` 的 peer 依赖，而不是普通依赖：** 请在你的应用中添加 `echarts`
+  （`^6.0.0`）。图表辅助函数位于 `@devicechain/widget-sdk/echarts`。
+- **peer 版本范围已提高：** `react` 和 `react-dom` 升至 `^19.3.0`，`maplibre-gl` 升至 `^6.11.2`。
+- **`DashboardHubConfig.bindings` 和 `DashboardHub.setBindings` 已从 `@devicechain/dashboards` 中移除。**
+  请把绑定传给 `DashboardRenderer`，并使用 `useDashboardHub`。
+  `fetchWidgetHistory` 和 `widgetSubjectLabel` 接受数据源已解析的组件。
+- **`parseDashboardDefinition(raw, { catalog })`** 接受用于校验的组件目录。类型未知的组件，或目录无法读取的组件，
+  会作为占位符保留（`UnknownWidgetInstance`，属于 `WidgetInstance` 联合类型），并按存储时的原样写回，
+  过去这会导致整个定义失败。存储的类型为 `unbound` 的数据源会被拒绝。
+- **.NET SDK** 自行建立订阅，不再经过系统 HTTP 代理。设备可以选择并发处理命令（`MaxConcurrentCommands`），
+  每条命令带有其到达顺序（`DeviceCommand.Sequence`），在重新连接期间完成的响应会在重连后发送，而不是被丢弃。
+
+##### 新告警 {#v0200-alerts}
+
+如果你按名称路由或静音告警，除了[单点登录告警](#v0200-sso-alerts)之外，以下告警也是新增的：
+
+| 告警 | 报告内容 |
+| --- | --- |
+| `SafetyGateDisabled` | 某个服务在缺少一个可选安全闸门的情况下运行：租户生命周期闸门、命令在线状态，或在发布时校验检测规则。 |
+| `DetectLoopStalled` | 检测 leader 已有数分钟没有推进。 |
+| `DetectLiveGapFillFailing`、`DetectLiveDeliveriesRecovered` | 实时检测无法回读，或已回读未投递给它的事件。 |
+| `SparkplugIngestLeaderCountNotOne`、`Lwm2mIngestLeaderCountNotOne`、`Lwm2mIngestLeaderNotServing` | 某个边缘接入服务的 leader 不恰好是一个，或其 leader 没有在提供服务。没有任何源的 `sparkplug-ingest` 没有 leader，会触发此告警。 |
+| `SparkplugIngestDroppingData`、`SparkplugIngestSubscriptionRefused`、`SparkplugIngestBrokerUnreachable`、`Lwm2mIngestDroppingNotifications` | Sparkplug 或 LwM2M 接入正在丢失数据，或无法连接其代理。 |
+| `CNPGCollectorAbsent` | Prometheus 已停止抓取某个数据库的指标。 |
+
+`dcctl install` 还会停止抓取 Google Kubernetes Engine 等托管集群不运行的控制平面组件，也不再为其告警，
+因此它们的 `...Down` 告警不会再在那里触发。
+
+##### 其他值得了解的行为 {#v0200-other}
+
+- **Sparkplug。** 替换在线会话的节点出生消息现在会把旧会话的子设备标记为已断开；过去它们会保持在线。
+- **通知。** 类型不为 `notification-management` 所知的告警事件会先重试再记为死信，而不是被丢弃。
+- **死信和解码失败**保留的载荷中，凭据字段会被替换为 `[redacted]`。不是 JSON 的正文只保留其长度和 SHA-256。
+- **命令响应**的 `payload` 可以是任意 JSON 值，而不仅是字符串。
+- 平台生成的**关联 ID** 为 22 个字符，而不是 36 个字符的 UUID；请将其视为不透明字符串。
+- **GraphQL 描述**只来自 schema 中的 `"""` 字符串，现在每个元素都有描述；内省不再显示 `#` 注释。
+- **带 `--kube-context` 的 `dcctl install` 和 `dcctl bootstrap`** 不再需要 Docker 或 `kind`，并会检查目标上下文的
+  Kubernetes 版本。kubeconfig 中缺少指定的上下文会使预检失败。
+- **检测可以把其状态拆分**到多个 `detectShards`（1-64，默认 1）。各分片仍依次运行，因此多于一个分片目前还不会
+  让检测更快。
 
 ### v0.19.0：按每秒 6,000 事件实测定规格，满流拒绝新事件 {#v0190-upgrade}
 

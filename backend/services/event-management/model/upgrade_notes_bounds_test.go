@@ -33,6 +33,16 @@ var upgradeNotesPages = map[string]string{
 		"deployment", "releases-and-upgrades.md"),
 }
 
+// upgradeNotesAnchorPages adds the Simplified Chinese page to the two above. The figure
+// checks read numbers in the forms the English and Spanish pages write them and do not read
+// it; the anchor check below does not depend on the language, so it holds all three.
+var upgradeNotesAnchorPages = map[string]string{
+	"en": upgradeNotesPages["en"],
+	"es": upgradeNotesPages["es"],
+	"zh-CN": filepath.Join("..", "..", "..", "..", "docs", "i18n", "zh-CN", "docusaurus-plugin-content-docs", "current",
+		"deployment", "releases-and-upgrades.md"),
+}
+
 // publishedRowBound matches a figure the page gives as a number of rows: "4,000,000 rows",
 // "4,000,000 such rows", "4 000 000 de filas", "4 000 000 de esas filas", "4 million rows",
 // "4 millones de filas", and the bare figure the count is compared with, "more than
@@ -121,7 +131,7 @@ func TestUpgradeNotesPublishTheRebuildBounds(t *testing.T) {
 func TestUpgradeNotesLocalesCarryTheSameAnchors(t *testing.T) {
 	headingID := regexp.MustCompile(`(?m)^#{2,6} .*\{#([a-z0-9-]+)\}\s*$`)
 	ids := map[string][]string{}
-	for locale, path := range upgradeNotesPages {
+	for locale, path := range upgradeNotesAnchorPages {
 		raw, err := os.ReadFile(path)
 		require.NoError(t, err)
 		for _, m := range headingID.FindAllStringSubmatch(string(raw), -1) {
@@ -142,7 +152,7 @@ func TestUpgradeNotesLocalesCarryTheSameAnchors(t *testing.T) {
 	require.Regexp(t, `^v\d+\.\d+\.\d+(-.+)?$`, highlights.Version, "release-highlights.json version")
 	base, _, _ := strings.Cut(highlights.Version, "-")
 	upgradeID := strings.ReplaceAll(base, ".", "") + "-upgrade"
-	for _, locale := range []string{"en", "es"} {
+	for _, locale := range []string{"en", "es", "zh-CN"} {
 		require.Contains(t, ids[locale], upgradeID,
 			"the %s upgrade notes have no {#%s} heading for %s, which the release's notes link to",
 			locale, upgradeID, highlights.Version)
@@ -150,4 +160,18 @@ func TestUpgradeNotesLocalesCarryTheSameAnchors(t *testing.T) {
 	require.Contains(t, ids["en"], "v0190-row-count")
 	require.Contains(t, ids["en"], "v0190-chunk-count")
 	assert.Equal(t, ids["en"], ids["es"], "the English and Spanish upgrade notes give their headings different ids")
+	// The Simplified Chinese page also pins English-style ids on headings the English page
+	// leaves to its own slugs, so its links match the English ones. Those extra ids are
+	// allowed; every English id must be there, in the same order.
+	inEnglish := map[string]bool{}
+	for _, id := range ids["en"] {
+		inEnglish[id] = true
+	}
+	var shared []string
+	for _, id := range ids["zh-CN"] {
+		if inEnglish[id] {
+			shared = append(shared, id)
+		}
+	}
+	assert.Equal(t, ids["en"], shared, "the Simplified Chinese upgrade notes lack, or reorder, ids the English notes give their headings")
 }
