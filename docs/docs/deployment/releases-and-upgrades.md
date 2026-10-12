@@ -3751,6 +3751,27 @@ therefore has a fourth cause, listed in [the alert table](./detection-engine.md#
 
 Nothing needs doing.
 
+##### A service that cannot reach the message broker at startup stops after a minute {#v0200-broker-unreachable-at-start}
+
+Every service waits for the message broker (NATS) when it starts. In `v0.19.0` it waited 30
+seconds and then started anyway. Services that create a bucket at startup then stopped with an
+error that blamed the broker's version (`key-value requires at least server version 2.6.2`), and
+the others reported ready while unable to send or receive anything. A service now waits up to a
+minute, and if the broker has not answered by then it stops with an error that names the broker
+address and the last connection error, and Kubernetes restarts it. A broker that comes up within
+the minute is handled as before.
+
+- **A pod that restarts with `the NATS broker was not reachable before the startup connection wait
+  ran out`** could not connect to the broker at the address in the instance configuration. Check
+  that the broker's pods are running and ready, and read the connection error at the end of the
+  message: a name that does not resolve, a refused connection and a rejected certificate or
+  credential each point somewhere different.
+- **A broker that is away for longer costs restarts, not a service that stays down.** Each restart
+  tries again, under Kubernetes' usual restart backoff, and the service starts once the broker
+  answers.
+
+Nothing needs doing.
+
 ##### `dcctl install --dry-run` makes the re-install refusals the install makes {#v0200-dry-run}
 
 On a cluster that answers, a dry run now reads the install record, asks which instances run on

@@ -376,13 +376,16 @@ func waitFor(t *testing.T, what string, cond func() bool) {
 // merely not reachable YET.
 //
 // Under RetryOnFailedConnect, nats.Connect returns a non-nil connection and a nil
-// error while it is still dialling, so at the end of ExecuteInitialize the client
-// is routinely not connected. Reporting the clamp there told a correctly
-// configured 3-node instance that its broker was unclustered and it was not HA —
-// on every cold start, every node drain, and every helm upgrade that rolls the
-// NATS StatefulSet alongside the Deployments. It is the same false negative the
-// clamp itself was fixed for, one layer up, and it points the operator at the one
-// lever they already set correctly.
+// error while it is still dialling. Reporting the clamp from the connect path told
+// a correctly configured 3-node instance that its broker was unclustered and it
+// was not HA — on every cold start, every node drain, and every helm upgrade that
+// rolls the NATS StatefulSet alongside the Deployments. It is the same false
+// negative the clamp itself was fixed for, one layer up, and it points the
+// operator at the one lever they already set correctly.
+//
+// ExecuteInitialize now fails outright when the broker never answers, so the
+// failure must be the ONLY thing it reports about the broker: being unreachable is
+// not evidence of being unclustered.
 func TestReplicaClampIsNotReportedBeforeTheBrokerIsReachable(t *testing.T) {
 	logs := captureLogs(t)
 
@@ -394,15 +397,15 @@ func TestReplicaClampIsNotReportedBeforeTheBrokerIsReachable(t *testing.T) {
 	cfg.Infrastructure.Nats.StreamReplicas = 3
 	nmgr := &NatsManager{Microservice: &core.Microservice{
 		InstanceId: "test", FunctionalArea: "area", InstanceConfiguration: *cfg,
-	}}
+	}, connectWait: 300 * time.Millisecond}
 
-	if err := nmgr.ExecuteInitialize(t.Context()); err != nil {
-		t.Fatalf("ExecuteInitialize should not fail while retrying: %v", err)
-	}
-	t.Cleanup(nmgr.closeConn)
-
-	if nmgr.nc.IsConnected() {
-		t.Fatal("the client connected to a port with nothing on it; this test proves nothing")
+	err := nmgr.ExecuteInitialize(t.Context())
+	if !errors.Is(err, ErrBrokerUnreachable) {
+		if err == nil {
+			t.Cleanup(nmgr.closeConn)
+		}
+		t.Fatalf("ExecuteInitialize against a port with nothing on it returned %v, want "+
+			"ErrBrokerUnreachable; this test proves nothing otherwise", err)
 	}
 	if rec := findLog(logs, "not highly available"); rec != nil {
 		t.Errorf("an instance whose broker is merely unreachable was told it is not highly "+

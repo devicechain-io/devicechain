@@ -175,6 +175,12 @@ func TestAnAbandonedStartupDoesNotFailLiveness(t *testing.T) {
 		t.Fatalf("Initialize failed with %v, want the cancellation; the close under test is "+
 			"the one that path makes", err)
 	}
+	// A cancellation says the caller stopped wanting the service, not that the broker is
+	// unreachable — and the broker error would still wrap the cancellation, so the check
+	// above alone cannot tell the two outcomes apart.
+	if errors.Is(err, ErrBrokerUnreachable) {
+		t.Errorf("a cancelled startup was reported as an unreachable broker: %v", err)
+	}
 
 	waitFor(t, "the startup close to be handled", func() bool {
 		return findLog(logs, "closed during shutdown") != nil
