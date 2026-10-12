@@ -103,7 +103,7 @@ Requiring single sign-on does not remove anyone's password. To make an individua
 
 Each connection has a **session ceiling**: how long a sign-in through it may last, counted from the moment DeviceChain accepted it (not the provider's own authentication time) and never extended by a refresh. The default is 12 hours; the range is 15 minutes to 7 days, and the upper bound is lower if the deployment's refresh-token lifetime is shorter. When the ceiling passes, the session ends at its next exchange and the person signs in again. It applies to sessions already open.
 
-- **Sign-out** from the console or dashboard ends the DeviceChain session on the server. It does not sign the person out of the identity provider.
+- **Sign-out** from the console or dashboard ends the DeviceChain session on the server. By default it does not sign the person out of the identity provider. A connection can be set to do that too: after the DeviceChain session has ended, the browser is sent to the provider's approved sign-out endpoint and comes back to the sign-in page (see [Sign out at the provider](../guides/configuring-sso.md#provider-sign-out)). In the API, `logout` with `returnTo` (`CONSOLE` or `DASHBOARD`) answers `providerSignOutUrl`, the address to send the browser to, or null when there is nothing more to do.
 - **Revoking** (`revokeSessions` in the admin API; the console has no button for it yet) ends every sign-in an identity has on every device, password and SSO, including MCP grants.
 - **Disabling or deleting a connection**, or unlinking an identity, ends the sessions that depended on it at their next exchange.
 

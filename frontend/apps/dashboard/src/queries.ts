@@ -115,9 +115,12 @@ export const COMPLETE_SSO = `
 // Anonymous (the token is the argument). Ends the sign-in server-side, so the refresh
 // token this viewer was handed stops working instead of living out its lifetime. The
 // viewer never uses the refresh token itself - it exists only to be handed back here.
+// It names this app as the one to come back to, so a sign-in through a connection set to
+// sign people out at the identity provider too is answered with the provider's sign-out
+// address; the server builds the address the provider returns to, never this viewer.
 
 export interface LogoutResult {
-  logout: boolean;
+  logout: { providerSignOutUrl: string | null } | null;
 }
 export interface LogoutVariables {
   token: string;
@@ -125,7 +128,9 @@ export interface LogoutVariables {
 
 export const LOGOUT = `
   mutation Logout($token: String!) {
-    logout(token: $token)
+    logout(token: $token, returnTo: DASHBOARD) {
+      providerSignOutUrl
+    }
   }
 ` as unknown as TypedDocument<LogoutResult, LogoutVariables>;
 

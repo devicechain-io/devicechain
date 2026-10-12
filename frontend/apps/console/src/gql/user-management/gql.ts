@@ -22,7 +22,7 @@ type Documents = {
     "\n  mutation SelectTenant($identityToken: String!, $tenant: String!) {\n    selectTenant(identityToken: $identityToken, tenant: $tenant) {\n      accessToken\n      refreshToken\n      expiresAt\n    }\n  }\n": typeof types.SelectTenantDocument,
     "\n  query IdentityMemberships($identityToken: String!) {\n    identityMemberships(identityToken: $identityToken) {\n      tenant\n      roles\n      ssoRequired\n    }\n  }\n": typeof types.IdentityMembershipsDocument,
     "\n  mutation Refresh($refreshToken: String!) {\n    refresh(refreshToken: $refreshToken) {\n      accessToken\n      refreshToken\n      expiresAt\n    }\n  }\n": typeof types.RefreshDocument,
-    "\n  mutation Logout($token: String!) {\n    logout(token: $token)\n  }\n": typeof types.LogoutDocument,
+    "\n  mutation Logout($token: String!) {\n    logout(token: $token, returnTo: CONSOLE) {\n      providerSignOutUrl\n    }\n  }\n": typeof types.LogoutDocument,
     "\n  fragment TenantFields on Tenant {\n    token\n    name\n    description\n    branding {\n      title\n      logo\n      logoMaxHeight\n      primary\n      background\n      foreground\n      accent\n      updatedAt\n    }\n    brandingOverride {\n      title\n      logo\n      logoMaxHeight\n      primary\n      background\n      foreground\n      accent\n      updatedAt\n    }\n    basemap {\n      tileUrl\n      attribution\n      centerLat\n      centerLon\n      zoom\n    }\n    basemapOverride {\n      tileUrl\n      attribution\n      centerLat\n      centerLon\n      zoom\n    }\n    locale\n    localeOverride\n  }\n": typeof types.TenantFieldsFragmentDoc,
     "\n  query CurrentTenant {\n    tenant {\n      ...TenantFields\n    }\n  }\n": typeof types.CurrentTenantDocument,
     "\n  mutation SetTenantBranding($input: TenantBrandingInput!) {\n    setTenantBranding(input: $input) {\n      ...TenantFields\n    }\n  }\n": typeof types.SetTenantBrandingDocument,
@@ -42,7 +42,7 @@ const documents: Documents = {
     "\n  mutation SelectTenant($identityToken: String!, $tenant: String!) {\n    selectTenant(identityToken: $identityToken, tenant: $tenant) {\n      accessToken\n      refreshToken\n      expiresAt\n    }\n  }\n": types.SelectTenantDocument,
     "\n  query IdentityMemberships($identityToken: String!) {\n    identityMemberships(identityToken: $identityToken) {\n      tenant\n      roles\n      ssoRequired\n    }\n  }\n": types.IdentityMembershipsDocument,
     "\n  mutation Refresh($refreshToken: String!) {\n    refresh(refreshToken: $refreshToken) {\n      accessToken\n      refreshToken\n      expiresAt\n    }\n  }\n": types.RefreshDocument,
-    "\n  mutation Logout($token: String!) {\n    logout(token: $token)\n  }\n": types.LogoutDocument,
+    "\n  mutation Logout($token: String!) {\n    logout(token: $token, returnTo: CONSOLE) {\n      providerSignOutUrl\n    }\n  }\n": types.LogoutDocument,
     "\n  fragment TenantFields on Tenant {\n    token\n    name\n    description\n    branding {\n      title\n      logo\n      logoMaxHeight\n      primary\n      background\n      foreground\n      accent\n      updatedAt\n    }\n    brandingOverride {\n      title\n      logo\n      logoMaxHeight\n      primary\n      background\n      foreground\n      accent\n      updatedAt\n    }\n    basemap {\n      tileUrl\n      attribution\n      centerLat\n      centerLon\n      zoom\n    }\n    basemapOverride {\n      tileUrl\n      attribution\n      centerLat\n      centerLon\n      zoom\n    }\n    locale\n    localeOverride\n  }\n": types.TenantFieldsFragmentDoc,
     "\n  query CurrentTenant {\n    tenant {\n      ...TenantFields\n    }\n  }\n": types.CurrentTenantDocument,
     "\n  mutation SetTenantBranding($input: TenantBrandingInput!) {\n    setTenantBranding(input: $input) {\n      ...TenantFields\n    }\n  }\n": types.SetTenantBrandingDocument,
@@ -86,7 +86,7 @@ export function graphql(source: "\n  mutation Refresh($refreshToken: String!) {\
 /**
  * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
  */
-export function graphql(source: "\n  mutation Logout($token: String!) {\n    logout(token: $token)\n  }\n"): typeof import('./graphql').LogoutDocument;
+export function graphql(source: "\n  mutation Logout($token: String!) {\n    logout(token: $token, returnTo: CONSOLE) {\n      providerSignOutUrl\n    }\n  }\n"): typeof import('./graphql').LogoutDocument;
 /**
  * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
  */

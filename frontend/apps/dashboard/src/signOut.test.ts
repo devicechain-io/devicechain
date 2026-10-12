@@ -17,7 +17,7 @@ vi.mock('@devicechain/client', async (importOriginal) => ({
   },
 }));
 
-const { endServerSession } = await import('./signOut');
+const { endServerSession, finishSignOut } = await import('./signOut');
 const { LOGOUT, SELECT_TENANT } = await import('./queries');
 
 beforeEach(() => {
@@ -27,8 +27,8 @@ afterEach(() => vi.restoreAllMocks());
 
 describe('endServerSession', () => {
   it('sends the refresh token to the logout mutation, anonymously', async () => {
-    h.impl = async () => ({ logout: true });
-    expect(await endServerSession('rt-1')).toBe(true);
+    h.impl = async () => ({ logout: { providerSignOutUrl: null } });
+    expect(await endServerSession('rt-1')).toEqual({ ended: true, providerSignOut: null });
     expect(h.calls).toHaveLength(1);
     const [area, doc, vars, opts] = h.calls[0];
     expect(area).toBe('user-management');
@@ -42,19 +42,66 @@ describe('endServerSession', () => {
     h.impl = async () => {
       throw new Error('Failed to fetch');
     };
-    expect(await endServerSession('rt-1')).toBe(false);
+    expect(await endServerSession('rt-1')).toEqual({ ended: false, providerSignOut: null });
     expect(log).toHaveBeenCalledTimes(1);
   });
 
   it('reports a server that answers without confirming', async () => {
     vi.spyOn(console, 'error').mockImplementation(() => {});
-    h.impl = async () => ({ logout: false });
-    expect(await endServerSession('rt-1')).toBe(false);
+    h.impl = async () => ({ logout: null });
+    expect(await endServerSession('rt-1')).toEqual({ ended: false, providerSignOut: null });
+  });
+
+  it('hands back the provider sign-out address the server answered', async () => {
+    const at = 'https://idp.example.com/logout?client_id=dc&post_logout_redirect_uri=https%3A%2F%2Fdc.example.com%2Fdash%2F';
+    h.impl = async () => ({ logout: { providerSignOutUrl: at } });
+    expect(await endServerSession('rt-1')).toEqual({ ended: true, providerSignOut: at });
+  });
+
+  it('drops a provider address no browser should be sent to', async () => {
+    h.impl = async () => ({ logout: { providerSignOutUrl: 'javascript:alert(1)' } });
+    expect(await endServerSession('rt-1')).toEqual({ ended: true, providerSignOut: null });
   });
 
   it('has nothing to end without a token, and does not call the server', async () => {
-    expect(await endServerSession(null)).toBe(true);
+    expect(await endServerSession(null)).toEqual({ ended: true, providerSignOut: null });
     expect(h.calls).toHaveLength(0);
+  });
+});
+
+// What App's sign-out does with the answer: report a failure, and leave for the provider
+// only after the server confirmed.
+describe('finishSignOut', () => {
+  const at = 'https://idp.example.com/logout?client_id=dc';
+
+  it('sends the browser to the provider address once the server confirmed', async () => {
+    h.impl = async () => ({ logout: { providerSignOutUrl: at } });
+    const failed: boolean[] = [];
+    const left: string[] = [];
+    await finishSignOut('rt-1', (f) => failed.push(f), (u) => left.push(u));
+    expect(failed).toEqual([false]);
+    expect(left).toEqual([at]);
+  });
+
+  it('stays here when the server answered no provider address', async () => {
+    h.impl = async () => ({ logout: { providerSignOutUrl: null } });
+    const failed: boolean[] = [];
+    const left: string[] = [];
+    await finishSignOut('rt-1', (f) => failed.push(f), (u) => left.push(u));
+    expect(failed).toEqual([false]);
+    expect(left).toEqual([]);
+  });
+
+  it('reports the failure and never leaves when the server did not confirm', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    h.impl = async () => {
+      throw new Error('Failed to fetch');
+    };
+    const failed: boolean[] = [];
+    const left: string[] = [];
+    await finishSignOut('rt-1', (f) => failed.push(f), (u) => left.push(u));
+    expect(failed).toEqual([true]);
+    expect(left).toEqual([]);
   });
 });
 
@@ -63,7 +110,8 @@ describe('the documents', () => {
   it('selectTenant asks for the refresh token', () => {
     expect(String(SELECT_TENANT)).toContain('refreshToken');
   });
-  it('logout takes the token and needs no selection', () => {
-    expect(String(LOGOUT)).toMatch(/logout\(token: \$token\)/);
+  it('logout takes the token and names this app to come back to', () => {
+    expect(String(LOGOUT)).toMatch(/logout\(token: \$token, returnTo: DASHBOARD\)/);
+    expect(String(LOGOUT)).toContain('providerSignOutUrl');
   });
 });

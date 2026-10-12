@@ -86,6 +86,8 @@ const IDP_CONNECTION = graphql(`
       }
       tenants
       callbackUrl
+      providerSignOut
+      signOutReturnUrls
       discovery {
         authorizationEndpoint
         tokenEndpoint
@@ -162,6 +164,7 @@ export interface IdpConnectionChanges {
   emailClaim?: string;
   scopes?: string[];
   requiredAmr?: string[];
+  providerSignOut?: boolean;
 }
 
 export async function updateIdpConnection(

@@ -62,6 +62,12 @@ type ServedSso struct {
 	CreateMember func(email, password string)
 	// CreateIdentity creates a password identity with no membership at all.
 	CreateIdentity func(email, password string)
+	// PublishEndSession makes the stub provider publish an end_session_endpoint at path.
+	PublishEndSession func(path string)
+	// ProviderURL is the stub provider's base address.
+	ProviderURL string
+	// ClientID is the connection's client identifier.
+	ClientID string
 }
 
 // NewServedSsoManager builds the single sign-on harness and a password superuser.
@@ -88,6 +94,9 @@ func NewServedSsoManager(t *testing.T) *ServedSso {
 			_, err := e.admin.CreateIdentity(context.Background(), admin.CreateIdentityInput{Email: email, Password: password, Enabled: true})
 			require.NoError(t, err)
 		},
+		PublishEndSession: func(path string) { e.op.endSession = path },
+		ProviderURL:       e.op.url(),
+		ClientID:          ssoTestClientID,
 	}
 }
 

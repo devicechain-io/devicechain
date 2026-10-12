@@ -11,7 +11,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const h = vi.hoisted(() => ({
   logoutCalls: [] as string[],
-  logoutImpl: (async (_t: string) => {}) as (t: string) => Promise<void>,
+  logoutImpl: (async (_t: string) => null) as (t: string) => Promise<string | null>,
   toasts: [] as Array<[string, string | undefined]>,
 }));
 
@@ -56,7 +56,7 @@ function mount() {
 beforeEach(() => {
   h.logoutCalls = [];
   h.toasts = [];
-  h.logoutImpl = async () => {};
+  h.logoutImpl = async () => null;
   window.localStorage.clear();
   window.localStorage.setItem('dc-auth', JSON.stringify({ accessToken: ACCESS, refreshToken: REFRESH }));
   window.localStorage.setItem(
@@ -96,7 +96,7 @@ describe('AuthProvider.logout', () => {
         window.localStorage.getItem('dc-auth'),
         window.localStorage.getItem('dc-identity'),
       ];
-      return new Promise<void>((r) => releases.push(r));
+      return new Promise<string | null>((r) => releases.push(() => r(null)));
     };
     let done: Promise<void> = Promise.resolve();
     act(() => {
@@ -137,5 +137,57 @@ describe('AuthProvider.logout', () => {
       await auth.logout();
     });
     expect(h.logoutCalls).toEqual([]);
+  });
+
+  // Signing out at the identity provider: only after the server confirmed the sign-out
+  // here, and only to the address the server answered.
+  describe('at the identity provider', () => {
+    const realLocation = window.location;
+    const assign = vi.fn();
+    beforeEach(() => {
+      assign.mockReset();
+      Object.defineProperty(window, 'location', {
+        configurable: true,
+        value: { ...realLocation, assign, origin: realLocation.origin },
+      });
+    });
+    afterEach(() => {
+      Object.defineProperty(window, 'location', { configurable: true, value: realLocation });
+    });
+
+    it('sends the browser to the provider address the server answered, after clearing local state', async () => {
+      const at = 'https://idp.example.com/logout?client_id=dc&post_logout_redirect_uri=https%3A%2F%2Fdc.example.com%2Flogin';
+      // One of the two calls reached the sign-in first and answered; the other found it gone.
+      h.logoutImpl = async (t) => (t === REFRESH ? at : null);
+      mount();
+      await act(async () => {
+        await auth.logout();
+      });
+      expect(window.localStorage.getItem('dc-auth')).toBeNull();
+      expect(assign).toHaveBeenCalledTimes(1);
+      expect(assign).toHaveBeenCalledWith(at);
+    });
+
+    it('stays here when the server answers no provider address', async () => {
+      mount();
+      await act(async () => {
+        await auth.logout();
+      });
+      expect(assign).not.toHaveBeenCalled();
+    });
+
+    it('does not leave for the provider when the server did not confirm the sign-out', async () => {
+      vi.spyOn(console, 'error').mockImplementation(() => {});
+      h.logoutImpl = async (t) => {
+        if (t === REFRESH) throw new Error('Failed to fetch');
+        return 'https://idp.example.com/logout';
+      };
+      mount();
+      await act(async () => {
+        await auth.logout();
+      });
+      expect(assign).not.toHaveBeenCalled();
+      expect(h.toasts).toHaveLength(1);
+    });
   });
 });

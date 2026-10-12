@@ -190,15 +190,38 @@ export async function refresh(refreshToken: string): Promise<AuthToken> {
 // identity token minted from that sign-in stops working, rather than living out its
 // lifetime in whatever copy of it survives the browser. Anonymous - the token is the
 // argument - so it works for a session whose access token has already lapsed.
+//
+// It names the console as the app to come back to, so a sign-in through a connection set
+// to sign people out at the identity provider too is answered with the provider's sign-out
+// address (null otherwise). The server has ended the sign-in either way, and it builds the
+// return address itself: the console never supplies one.
 const LOGOUT = graphql(`
   mutation Logout($token: String!) {
-    logout(token: $token)
+    logout(token: $token, returnTo: CONSOLE) {
+      providerSignOutUrl
+    }
   }
 `);
 
-export async function logout(token: string): Promise<void> {
+export async function logout(token: string): Promise<string | null> {
   const data = await gql('user-management', LOGOUT, { token }, { anonymous: true });
-  if (data.logout !== true) throw new Error('The server did not confirm the sign-out');
+  if (!data.logout) throw new Error('The server did not confirm the sign-out');
+  return providerSignOutTarget(data.logout.providerSignOutUrl ?? null);
+}
+
+/**
+ * The provider sign-out address the server answered, if it is one a browser may be sent
+ * to: an absolute http(s) URL. Anything else (a `javascript:` URL, a relative path) is
+ * dropped rather than navigated to, so a malformed answer degrades to signing out here only.
+ */
+export function providerSignOutTarget(raw: string | null): string | null {
+  if (!raw) return null;
+  try {
+    const u = new URL(raw);
+    return u.protocol === 'https:' || u.protocol === 'http:' ? u.toString() : null;
+  } catch {
+    return null;
+  }
 }
 
 // ── Current tenant (authenticated) ──────────────────────────────────────

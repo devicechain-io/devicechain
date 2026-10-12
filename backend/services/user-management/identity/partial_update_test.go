@@ -67,6 +67,7 @@ func idpConnectionFamily() putest.Family[*Manager] {
 			"name": c.Name, "enabled": putest.BoolString(c.Enabled), "clientId": c.ClientID,
 			"emailClaim": c.EmailClaim, "groupsClaim": c.GroupsClaim,
 			"scopes": putest.RenderStringList(c.Scopes), "requiredAmr": putest.RenderStringList(c.RequiredAmr),
+			"providerSignOut": putest.BoolString(c.ProviderSignOut),
 		}
 	}
 	return putest.Family[*Manager]{
@@ -115,6 +116,8 @@ func idpConnectionFamily() putest.Family[*Manager] {
 				func(r *IdpConnectionUpdateRequest) *dcgraphql.OptionalStringList { return &r.Scopes }),
 			putest.OptionalStringListField("requiredAmr", []string{"mfa"}, []string{"hwk", "otp"},
 				func(r *IdpConnectionUpdateRequest) *dcgraphql.OptionalStringList { return &r.RequiredAmr }),
+			putest.RequiredBoolField("providerSignOut", false,
+				func(r *IdpConnectionUpdateRequest) *dcgraphql.OptionalBool { return &r.ProviderSignOut }),
 		},
 	}
 }

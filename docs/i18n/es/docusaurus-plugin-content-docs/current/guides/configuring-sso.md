@@ -32,6 +32,21 @@ Los mismos pasos están disponibles en la API GraphQL de administración: `creat
 
 Una conexión de instancia (para tus propios operadores) se crea del mismo modo con el tipo `instance`, y además necesita `requiredAmr` (por ejemplo `["mfa"]`) o `mfaEnforcedByIdp: true`. Vincula a cada operador explícitamente con `linkIdentity`; nada los vincula automáticamente.
 
+## Cerrar sesión en el proveedor {#provider-sign-out}
+
+Por defecto, cerrar sesión en la consola o en la aplicación de paneles termina solo la sesión de DeviceChain. La persona sigue con la sesión iniciada en el proveedor de identidad, así que su siguiente **Sign in with SSO** puede pasar directamente sin pedir contraseña. Una conexión también puede enviar a las personas a la página de cierre de sesión del propio proveedor cuando cierran sesión (cierre de sesión iniciado por el RP de OpenID Connect). Está **desactivado por defecto**, porque cerrar sesión en el proveedor suele terminar la sesión de la persona allí para todas las aplicaciones a las que sirve el proveedor.
+
+1. Comprueba que el documento de descubrimiento aprobado muestra un **Sign-out endpoint**. Un proveedor que no publica ninguno no permite cerrar sesión de esta forma: el ajuste no tiene efecto, y cerrar sesión sigue terminando la sesión de DeviceChain.
+2. En la pestaña **Settings** de la conexión, en **Sign out at the provider**, copia las dos **Post-logout redirect addresses** y regístralas en el proveedor como URI de redirección tras el cierre de sesión (post-logout). Son `<origen>/login` para la consola y `<origen>/dash/` para la aplicación de paneles, donde `<origen>` es el esquema y el host de la [dirección pública](#issuer-url) de la instancia.
+3. Marca **Also sign people out at the provider**. En la API de administración es `updateIdpConnection` con `providerSignOut: true`.
+
+Qué ocurre cuando alguien cierra sesión:
+
+- **La sesión de DeviceChain siempre termina primero**, en el servidor, haga lo que haga el proveedor después. Solo entonces se envía el navegador al proveedor, que lo devuelve a la página de inicio de sesión.
+- La solicitud lleva el id de cliente de la conexión y la dirección de retorno, y nada más. DeviceChain no guarda el token de ID del proveedor, así que no envía `id_token_hint`, y el proveedor puede pedir a la persona que lo confirme. Un proveedor que rechaza una solicitud de cierre de sesión sin `id_token_hint` no se puede usar con este ajuste; déjalo desactivado.
+- El servidor construye la dirección de retorno a partir de la dirección pública de la instancia, y quien llama no puede indicarla. Si no está registrada en el proveedor, el proveedor muestra su propio error en lugar de devolver a la persona; la sesión de DeviceChain ha terminado de todos modos.
+- Solo se aplica a los inicios de sesión a través de esa conexión mientras está habilitada y su documento de descubrimiento está aprobado. Un inicio de sesión con contraseña solo cierra la sesión de DeviceChain.
+
 ## Recetas por proveedor {#recipes}
 
 En cada receta, reemplaza `<callback URL>` por la callback URL de la conexión.
