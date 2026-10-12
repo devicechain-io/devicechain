@@ -383,10 +383,17 @@ func TestTheLoopFilesTheOutcomeItActuallySaw(t *testing.T) {
 
 	t.Run("a skipped pass is filed as skipped and is not timed", func(t *testing.T) {
 		m, reg := newTaskMetrics(t, "sweep")
+		// Signal from the SECOND pass: the loop is sequential, so the second pass can only
+		// start after the first has been filed. Signalling from inside the first pass races
+		// Stop, which cancels the task context before the loop classifies the pass it just
+		// ran, and classifyPass (rightly) files a pass finished under a cancelled context
+		// as cancelled.
 		done := make(chan struct{})
-		var once sync.Once
-		task := NewPeriodicTask("test-area", "sweep", time.Hour, func(context.Context) error {
-			once.Do(func() { close(done) })
+		var calls atomic.Int64
+		task := NewPeriodicTask("test-area", "sweep", time.Millisecond, func(context.Context) error {
+			if calls.Add(1) == 2 {
+				close(done)
+			}
 			return ErrPassSkipped
 		}, NewNoOpLifecycleCallbacks(), WithImmediateFirstPass(), WithoutJitter(), WithPassMetrics(m))
 		require.NoError(t, task.Initialize(context.Background()))
@@ -394,7 +401,7 @@ func TestTheLoopFilesTheOutcomeItActuallySaw(t *testing.T) {
 		<-done
 		require.NoError(t, task.Stop(context.Background()))
 
-		assert.EqualValues(t, 1, testutil.ToFloat64(m.passes.WithLabelValues(PassSkipped)))
+		assert.GreaterOrEqual(t, testutil.ToFloat64(m.passes.WithLabelValues(PassSkipped)), float64(1))
 		assert.True(t, math.IsNaN(testutil.ToFloat64(m.lastSuccess)),
 			"declining to run is not succeeding; an instance where every replica skipped "+
 				"would otherwise report itself freshly swept forever")
@@ -405,10 +412,13 @@ func TestTheLoopFilesTheOutcomeItActuallySaw(t *testing.T) {
 
 	t.Run("a completed pass is filed as complete and stamps the gauge", func(t *testing.T) {
 		m, _ := newTaskMetrics(t, "sweep")
+		// Signalled from the second pass for the same reason as the skipped case above.
 		done := make(chan struct{})
-		var once sync.Once
-		task := NewPeriodicTask("test-area", "sweep", time.Hour, func(context.Context) error {
-			once.Do(func() { close(done) })
+		var calls atomic.Int64
+		task := NewPeriodicTask("test-area", "sweep", time.Millisecond, func(context.Context) error {
+			if calls.Add(1) == 2 {
+				close(done)
+			}
 			return nil
 		}, NewNoOpLifecycleCallbacks(), WithImmediateFirstPass(), WithoutJitter(), WithPassMetrics(m))
 		require.NoError(t, task.Initialize(context.Background()))
@@ -416,7 +426,7 @@ func TestTheLoopFilesTheOutcomeItActuallySaw(t *testing.T) {
 		<-done
 		require.NoError(t, task.Stop(context.Background()))
 
-		assert.EqualValues(t, 1, testutil.ToFloat64(m.passes.WithLabelValues(PassComplete)))
+		assert.GreaterOrEqual(t, testutil.ToFloat64(m.passes.WithLabelValues(PassComplete)), float64(1))
 		assert.False(t, math.IsNaN(testutil.ToFloat64(m.lastSuccess)),
 			"a completed pass is what the last-success gauge is for")
 	})
