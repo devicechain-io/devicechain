@@ -660,13 +660,13 @@ type Mutation {
     """
     Starts a single sign-on through an external identity provider. Give either the person's
     email (the connection is the one that speaks for its domain) or a connection token. Returns
-    where to send the browser, or null when an email's domain has no single sign-on connection,
-    in which case sign in some other way. `returnTo` must be this instance's own
+    where to send the browser, or null when an email's domain has no single sign-on connection
+    that is enabled and approved, in which case sign in some other way. `returnTo` must be this instance's own
     `/login/sso/complete` or `/dash/sso/complete` address. `codeChallenge` is the SHA-256 of a
     random secret you keep in the browser, base64url-encoded without padding (43 characters);
     completeSso needs that secret, so only the browser that began the sign-in can finish it.
-    Needs no token. Fails with "single sign-on is not available" when the instance or
-    connection is not set up for it, and is rate limited per source address.
+    Needs no token. Fails with "single sign-on is not available" when the instance, or a
+    connection named by token, is not set up for it, and is rate limited per source address.
     """
     beginSso(
         """The person's email address, to find their connection by domain. Give this or `connection`."""
