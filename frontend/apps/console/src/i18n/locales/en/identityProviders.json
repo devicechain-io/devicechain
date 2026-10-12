@@ -143,6 +143,7 @@
   "servedTenantsLabel": "Tenants served",
   "servedTenantsPlaceholder": "Select tenants",
   "settingsTab": "Settings",
+  "strandedRefusal": "This would leave tenants that require single sign-on with no enabled connection serving them, locking their members out: {{tenants}}. Stop requiring SSO for those tenants, or enable another connection that serves them, then try again.",
   "subjectChangedBadge": "Subject changed",
   "subjectChangedHint": "This identity is already linked on this connection under a different subject, which is what a recycled email address looks like. Approval is refused while that link exists: if you are sure it is the same person, remove the existing link first; otherwise reject the request.",
   "tenantsDescription": "Exactly which tenants sign-ins through this connection can enter, and no others.",

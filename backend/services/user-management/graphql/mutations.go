@@ -162,11 +162,9 @@ func (r *SchemaResolver) CompleteSso(ctx context.Context, args struct {
 // BeginSsoLink starts linking the signed-in person's provider account to their identity.
 func (r *SchemaResolver) BeginSsoLink(ctx context.Context, args struct {
 	IdentityToken string
-	Connection    string
 	ReturnTo      string
 }) (*SsoBeginResolver, error) {
-	b, err := r.getIdentityManager(ctx).BeginSsoLink(ctx, args.IdentityToken, args.Connection, args.ReturnTo,
-		gqlcore.SourceAddr(ctx))
+	b, err := r.getIdentityManager(ctx).BeginSsoLink(ctx, args.IdentityToken, args.ReturnTo, gqlcore.SourceAddr(ctx))
 	if err != nil {
 		return nil, err
 	}

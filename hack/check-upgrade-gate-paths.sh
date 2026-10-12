@@ -104,6 +104,10 @@ GATE_PATHS=(
   'backend/core/streams/**'
   'backend/core/messaging/**'
   'hack/upgrade-rig.sh'
+  # The stub identity provider the drill creates a single sign-on connection against, and
+  # the trust and egress edits that let the instance reach it. Shared with the SSO rig, so
+  # an edit made for that rig still lands in front of this one.
+  'hack/lib/sso-stub-idp.sh'
   # The file that decides WHICH drill runs. A change here does not alter what an
   # instance holds — it alters what the gate measures, which is the one edit the gate
   # must never be able to make unwatched: moving the recreate ceiling up stands the

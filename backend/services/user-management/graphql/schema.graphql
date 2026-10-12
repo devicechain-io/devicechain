@@ -694,16 +694,24 @@ type Mutation {
     ): IdentityAuth!
     """
     Starts linking the signed-in person's own account at an external identity provider to their
-    identity, so they can sign in through it afterwards. Needs the identity token of a PASSWORD
-    sign-in; a sign-in that itself came through a provider is refused. Only tenant connections can
-    be linked this way, and the provider must report the identity's own email address. Returns where
-    to send the browser; the provider then returns to `returnTo` with `linked=1` or `error=`.
+    identity, so they can sign in through it afterwards. The connection is not named by the
+    caller: it is the tenant connection whose verified domain is the identity's own email
+    domain, and it must be enabled and approved. Needs the identity token of a PASSWORD sign-in,
+    and the provider must report the identity's own email address. Returns where to send the
+    browser; the provider then returns to `returnTo` with `linked=1`, or with `error=` set to
+    `link_email_mismatch` (the provider reported a different address), `link_unverified_email`
+    (the provider did not vouch for the address), `link_session_ended` (the password sign-in
+    ended first), `link_already_linked` (the provider account or this identity is already
+    linked), `link_not_allowed`, or a sign-in's own `idp_error` or `refused`. Each refusal here
+    carries `extensions.code`: SSO_LINK_SESSION_REQUIRED (the identity token is invalid or
+    expired, or its sign-in ended: sign in with the password again), SSO_LINK_PASSWORD_REQUIRED
+    (the sign-in came through a provider), SSO_LINK_NOT_ALLOWED (the identity holds a system
+    role), SSO_LINK_NO_CONNECTION (no enabled, approved tenant connection serves the email
+    domain) or SSO_LINK_ALREADY_LINKED. Rate limited per source address.
     """
     beginSsoLink(
-        """The identity token from login."""
+        """The identity token from a password login."""
         identityToken: String!
-        """Token of the connection to link."""
-        connection: String!
         """Where the provider's answer sends the browser back to: this instance's own completion page."""
         returnTo: String!
     ): SsoBegin!

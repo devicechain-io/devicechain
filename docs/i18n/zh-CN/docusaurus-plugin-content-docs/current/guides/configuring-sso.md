@@ -104,3 +104,8 @@ user-management 的 `auth.issuerUrl` 必须是其 API 可从外部访问的地�
 | 提供商变更后被拒绝 | 提供商迁移了端点：**Refresh from provider** 并重新批准。 |
 | "no enabled identity provider connection serves this tenant" | 请先连接并启用一个提供商，再开启 **Require SSO**。 （错误码 `SSO_ENFORCE_NO_CONNECTION`。） |
 | "this is the last enabled identity provider connection" | 请先为该租户关闭 **Require SSO**，或启用另一个为它服务的连接，再禁用或删除该连接。 （错误码 `SSO_ENFORCED_TENANT_STRANDED`；控制台会给出说明。） |
+| 链接账号时：“Single sign-on is not set up for your email domain” | 没有任何已启用并已批准的租户连接拥有该用户的邮箱域名。请把该域名添加到连接，或启用、批准该连接。（`SSO_LINK_NO_CONNECTION`。） |
+| 链接账号时：“sign in again” | 密码登录已超过 15 分钟、已结束，或是通过单点登录完成的。请用密码登录后再链接。（`SSO_LINK_SESSION_REQUIRED`、`SSO_LINK_PASSWORD_REQUIRED`，或返回时的 `link_session_ended`。） |
+| 链接账号时：“a different email address” | 用户在提供商处以其他人身份登录，或提供商报告了另一个地址。（返回时的 `link_email_mismatch`。） |
+| 链接账号时：“already linked” | 该身份已在该连接上链接，或该提供商账号已链接到另一个身份：请先解除链接。（`SSO_LINK_ALREADY_LINKED`，或返回时的 `link_already_linked`。） |
+| 链接账号时：“Ask a superuser to link it” | 该身份持有系统角色；请用 `linkIdentity` 链接。（`SSO_LINK_NOT_ALLOWED`。） |
