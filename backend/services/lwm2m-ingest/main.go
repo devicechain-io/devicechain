@@ -704,7 +704,7 @@ func reconstructPresence(ctx context.Context, epoch *adapter.EpochSource, reconc
 	}
 	if len(pending) > 0 {
 		// Retry the failed reads in the background so serving can start after the first pass (F4).
-		go retryReconstruct(ctx, epoch, reconciler, reg, rev, pending)
+		reg.Go(func() { retryReconstruct(ctx, epoch, reconciler, reg, rev, pending) })
 	}
 }
 
@@ -745,14 +745,16 @@ func reconstructTenant(ctx context.Context, epoch *adapter.EpochSource, reconcil
 	log.Info().Str("tenant", tenant).Int("assertedDevices", len(devices)).Int("shadows", shadows).Int("orphans", len(orphans)).
 		Msg("Reconstructed LwM2M presence for tenant on leadership acquisition (ADR-075 L3b).")
 	if len(orphans) > 0 {
-		go func() {
+		// Tracked by the registry so the term's unwind joins it (reg.Wait) before the lease is
+		// released and the broker connection drained; it is bound by ctx, the term.
+		reg.Go(func() {
 			for _, ext := range orphans {
 				if ctx.Err() != nil {
 					return
 				}
 				reg.ReconstructDisconnect(ctx, tenant, ext)
 			}
-		}()
+		})
 	}
 	return true
 }
@@ -1151,6 +1153,7 @@ func serveAsLeader(ctx context.Context, lease leaseTerm) bool {
 	setLeader(false)
 	stopServing()    // on a term that served: records intent, THEN Stops the socket, so the ensuing Serve return is graceful. On one that did not: the bare Stop that closes the bound socket
 	reg.Stop()       // terminal: refuse further work + stop this term's lifetime timers (no presence emitted — a handover is not a device disconnect)
+	reg.Wait()       // join the term's reconstruction goroutines (orphan DISCONNECTs, the in-term retry): all bound by the cancelled leaderCtx, so this does not wait out an emit budget
 	<-dispatcherDone // wait for the dispatcher's reader + workers to unwind (in-flight command ops abort on the cancelled leaderCtx and are left unacked to redeliver to the next leader)
 	evict()
 

@@ -144,6 +144,9 @@ type Registry struct {
 	// leadership gate BEFORE the term was cancelled finishes its out-of-lock resolve+emit and would
 	// otherwise install an entry — arming a lifetime timer that fires in a dead term on a standby.
 	stopped bool
+	// bg tracks the background goroutines this term started through Go, so the term's unwind can
+	// wait for them (Wait) before it releases the lease and the broker connection is drained.
+	bg sync.WaitGroup
 
 	resolver deviceResolver
 	emitter  presenceEmitter
@@ -651,7 +654,10 @@ func (r *Registry) ReconstructDisconnect(ctx context.Context, tenant, externalId
 	epoch := r.epoch.Mint()
 	log.Info().Str("tenant", tenant).Str("externalId", externalId).Uint64("session", epoch).
 		Msg("DISCONNECTING an asserted LwM2M device whose credential was decommissioned (ADR-075 L3b / B6).")
-	r.emitDisconnect(tenant, token, externalId, epoch, r.now(), "reconstruct-orphan", disconnectAttempts)
+	// Bound by ctx (the leadership term), so an ending term does not wait out the emit retry
+	// budget on a broker that is going away. An abandoned emit is the same bounded loss as an
+	// exhausted one: the row stays asserted and the next acquisition re-attempts.
+	r.emitDisconnectCtx(ctx, tenant, token, externalId, epoch, r.now(), "reconstruct-orphan", disconnectAttempts)
 }
 
 // onShadowExpiry runs when a reconstruction shadow's lifetime timer lapses with no re-Register:
@@ -770,6 +776,13 @@ func (r *Registry) removeLocked(e *entry) {
 // CONNECTED). The dedup id keys on (tenant, device, session, state), so any re-drive is
 // idempotent.
 func (r *Registry) emitDisconnect(tenant, token, externalId string, epoch uint64, occurredAt time.Time, reason string, attempts int) bool {
+	return r.emitDisconnectCtx(context.Background(), tenant, token, externalId, epoch, occurredAt, reason, attempts)
+}
+
+// emitDisconnectCtx is emitDisconnect bounded by ctx: a cancelled ctx abandons the emit and its
+// retry backoff, which is how a leadership term that is ending stops waiting on a broker that is
+// not answering.
+func (r *Registry) emitDisconnectCtx(ctx context.Context, tenant, token, externalId string, epoch uint64, occurredAt time.Time, reason string, attempts int) bool {
 	ev := adapter.PresenceEvent{
 		ExternalId: externalId,
 		Connected:  false,
@@ -777,7 +790,7 @@ func (r *Registry) emitDisconnect(tenant, token, externalId string, epoch uint64
 		SessionId:  epoch,
 		OccurredAt: occurredAt,
 	}
-	if err := r.emitPresence(context.Background(), tenant, token, ev, attempts); err != nil {
+	if err := r.emitPresence(ctx, tenant, token, ev, attempts); err != nil {
 		incr(r.metrics.Dropped, 1)
 		log.Warn().Err(err).Str("tenant", tenant).Str("externalId", externalId).Str("reason", reason).
 			Msg("Could not emit DISCONNECTED after the retry budget; L3 reconstruction is the backstop.")
@@ -848,6 +861,30 @@ func (r *Registry) isStopped() bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.stopped
+}
+
+// Go runs fn on a goroutine the registry tracks, and reports whether it started. Once the registry
+// is stopped it starts nothing and returns false: the Add happens under the same lock Stop takes,
+// so no goroutine can begin after Stop has returned and Wait can never race an Add from zero.
+// fn must return promptly once the term's context is cancelled, or Wait will wait on it.
+func (r *Registry) Go(fn func()) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.stopped {
+		return false
+	}
+	r.bg.Add(1)
+	go func() {
+		defer r.bg.Done()
+		fn()
+	}()
+	return true
+}
+
+// Wait blocks until every goroutine started through Go has returned. Call it after Stop (which
+// refuses new ones) and after cancelling the context they run under.
+func (r *Registry) Wait() {
+	r.bg.Wait()
 }
 
 // Stop is TERMINAL: it marks the registry stopped (refusing all further Register/Update/

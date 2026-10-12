@@ -8,6 +8,7 @@ import (
 	"errors"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -797,4 +798,49 @@ func TestTheInertTransportEndsTheProcessWhenItDiesAndNotWhenItIsStopped(t *testi
 		t.Fatal("the inert transport died and nothing ended the process; the pod would sit Ready " +
 			"answering no probe, with nothing to restart it — its transport IS the service")
 	}
+}
+
+// 🔴 THE TERM'S UNWIND JOINS THE RECONSTRUCTION GOROUTINES BEFORE IT RELEASES THE LEASE.
+//
+// The orphan-DISCONNECT pass and the in-term read retry run in the background of the term, and
+// emit through the broker connection that the shutdown drains right after the leadership unwind.
+// Nothing joined them, so an emit could be in flight at the drain. The registry tracks them and
+// serveAsLeader waits for them after cancelling the term; this pins that the lease is not
+// released, nor the unwind finished, while one is still running.
+//
+// The tracked goroutine below ignores the cancellation for a moment on purpose — a term that did
+// not wait for it would release the lease while it was still running.
+func TestTheTermUnwindJoinsItsBackgroundReconstructionBeforeReleasingTheLease(t *testing.T) {
+	srv, reg := newTermServer(t)
+	var finished atomic.Bool
+	lease := &recordingLease{}
+
+	fuse := leadershipTestGlobals(t, func(leaderCtx context.Context, _ map[string]config.PskBinding) (*server.Server, *registry.Registry, *downlink.Dispatcher, error) {
+		require.True(t, reg.Go(func() {
+			<-leaderCtx.Done()
+			time.Sleep(200 * time.Millisecond)
+			lease.record("background-done")
+			finished.Store(true)
+		}))
+		return srv, reg, nil, nil
+	})
+	fuse.lease = lease
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	returned := make(chan bool, 1)
+	go func() { returned <- serveAsLeader(ctx, lease) }()
+
+	require.Eventually(t, func() bool { return testutil.ToFloat64(servingGauge) == 1 }, 10*time.Second, 5*time.Millisecond,
+		"the term never started serving")
+	cancel()
+	select {
+	case <-returned:
+	case <-time.After(20 * time.Second):
+		t.Fatal("serveAsLeader never returned after the term was cancelled")
+	}
+
+	assert.True(t, finished.Load(), "the term returned while a background reconstruction goroutine was still running")
+	assert.Equal(t, []string{"background-done", "release"}, lease.recorded(),
+		"the lease was released before the term's background goroutines were joined")
 }

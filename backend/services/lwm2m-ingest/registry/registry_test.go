@@ -1079,3 +1079,74 @@ func TestReconstructDisconnectSilentForADeletedTenant(t *testing.T) {
 
 	assert.Empty(t, em.all(), "a deleted tenant's orphan must not produce a DISCONNECT")
 }
+
+// ctxBlockedEmitter blocks every emit until its context ends, which is a broker that is not
+// answering. entered closes when the first emit begins.
+type ctxBlockedEmitter struct {
+	entered chan struct{}
+	once    sync.Once
+}
+
+func (e *ctxBlockedEmitter) EmitPresence(ctx context.Context, _, _, _ string, _ adapter.PresenceEvent) error {
+	e.once.Do(func() { close(e.entered) })
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+// A goroutine started through Go is joined by Wait, and once the registry is stopped Go starts
+// nothing: that refusal, taken under the lock Stop takes, is what lets the term's unwind Wait
+// without racing a late Add.
+func TestGoIsJoinedByWaitAndRefusedAfterStop(t *testing.T) {
+	r := newTestRegistry(okResolver(), &fakeEmitter{}, &testClock{t: time.Unix(1_700_000_000, 0)}, nil)
+
+	release := make(chan struct{})
+	finished := make(chan struct{})
+	require.True(t, r.Go(func() { <-release; close(finished) }))
+	r.Stop()
+	require.False(t, r.Go(func() { t.Error("a goroutine started after Stop") }), "Go must refuse once stopped")
+
+	waited := make(chan struct{})
+	go func() { r.Wait(); close(waited) }()
+	select {
+	case <-waited:
+		t.Fatal("Wait returned while a tracked goroutine was still running")
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(release)
+	select {
+	case <-waited:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Wait did not return after the tracked goroutine finished")
+	}
+	select {
+	case <-finished:
+	default:
+		t.Fatal("Wait returned before the goroutine finished")
+	}
+}
+
+// An orphan DISCONNECT in flight when the term ends is abandoned rather than waited out: its emit
+// is bound by the term context, so the unwind that joins it is not held for the retry budget by a
+// broker that is going away.
+func TestReconstructDisconnectIsAbandonedWhenTheTermEnds(t *testing.T) {
+	em := &ctxBlockedEmitter{entered: make(chan struct{})}
+	r := New(okResolver(), em, adapter.NewEpochSource(nil), Metrics{}, Options{Source: SourceLwM2M})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	require.True(t, r.Go(func() { r.ReconstructDisconnect(ctx, "acme", "dev-1") }))
+	select {
+	case <-em.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the orphan DISCONNECT never reached the emitter")
+	}
+
+	r.Stop()
+	cancel()
+	done := make(chan struct{})
+	go func() { r.Wait(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("an in-flight orphan DISCONNECT was not abandoned when the term context ended")
+	}
+}

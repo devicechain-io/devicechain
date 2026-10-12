@@ -271,3 +271,88 @@ func TestReconstructPresenceRetriesFailedRead(t *testing.T) {
 	require.Eventually(t, func() bool { return testutil.ToFloat64(gauge) == 1 }, 2*time.Second, 5*time.Millisecond,
 		"the in-term retry installs the shadow once device-state recovers (F4)")
 }
+
+// gatedEmitter holds every emit until release is closed. entered closes when the first emit
+// begins, so a test knows the background goroutine is mid-emit.
+type gatedEmitter struct {
+	entered chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (g *gatedEmitter) EmitPresence(_ context.Context, _, _, _ string, _ adapter.PresenceEvent) error {
+	g.once.Do(func() { close(g.entered) })
+	<-g.release
+	return nil
+}
+
+// waitReturns reports whether reg.Wait returns within d, leaving the waiter running if not.
+func waitReturns(reg *registry.Registry, d time.Duration) (returned bool, done <-chan struct{}) {
+	ch := make(chan struct{})
+	go func() { reg.Wait(); close(ch) }()
+	select {
+	case <-ch:
+		return true, ch
+	case <-time.After(d):
+		return false, ch
+	}
+}
+
+// 🔴 THE CALLER, NOT JUST Registry.Go: the orphan-DISCONNECT pass reconstructPresence starts is one
+// the registry tracks, so the term's unwind (reg.Stop, reg.Wait) joins it before the lease is
+// released. A bare go statement here passes every registry test and leaves the join waiting on
+// nothing.
+func TestReconstructPresenceOrphanDisconnectIsJoinedByTheRegistry(t *testing.T) {
+	rec := &mainReconciler{
+		devices:  map[string][]adapter.AssertedDevice{"acme": {{ExternalId: "plant-a/orphan-9", SessionId: 5}}},
+		maxByTen: map[string]uint64{"acme": 5},
+	}
+	em := &gatedEmitter{entered: make(chan struct{}), release: make(chan struct{})}
+	reg := registry.New(&mainResolver{token: "tok-1", outcome: adapter.ResolveFound}, em,
+		adapter.NewEpochSource(nil), registry.Metrics{}, registry.Options{Source: registry.SourceLwM2M})
+
+	// The tenant is bound (reconstruction walks bound tenants), but not to the asserted device.
+	reconstructPresence(context.Background(), adapter.NewEpochSource(nil), rec, reg,
+		map[string]config.PskBinding{"id-1": {Tenant: "acme", ExternalId: "plant-a/sensor-1"}})
+	select {
+	case <-em.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the orphan DISCONNECT never reached the emitter")
+	}
+
+	returned, done := waitReturns(reg, 100*time.Millisecond)
+	require.False(t, returned, "reg.Wait returned while the orphan DISCONNECT was still in flight: the pass is not tracked")
+	close(em.release)
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("reg.Wait did not return once the orphan DISCONNECT finished")
+	}
+}
+
+// The in-term reconstruction retry reconstructPresence starts is tracked the same way: the unwind
+// waits for it, and it ends once the term is cancelled.
+func TestReconstructPresenceRetryIsJoinedByTheRegistry(t *testing.T) {
+	prev := reconstructReadRetryInterval
+	reconstructReadRetryInterval = 10 * time.Millisecond
+	defer func() { reconstructReadRetryInterval = prev }()
+
+	rec := &mainReconciler{failN: 1 << 30} // device-state never recovers in this term
+	reg := newReconTestRegistry(&mainResolver{token: "tok-1", outcome: adapter.ResolveFound}, &mainEmitter{},
+		adapter.NewEpochSource(nil), prometheus.NewGauge(prometheus.GaugeOpts{Name: "active"}))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	reconstructPresence(ctx, adapter.NewEpochSource(nil), rec, reg,
+		map[string]config.PskBinding{"id-1": {Tenant: "acme", ExternalId: "plant-a/sensor-1"}})
+
+	returned, done := waitReturns(reg, 100*time.Millisecond)
+	require.False(t, returned, "reg.Wait returned while the in-term retry was still running: the retry is not tracked")
+	reg.Stop()
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("reg.Wait did not return once the term was cancelled")
+	}
+}
