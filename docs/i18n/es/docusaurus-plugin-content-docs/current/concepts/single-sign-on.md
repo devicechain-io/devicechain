@@ -14,7 +14,7 @@ El inicio de sesión único habla **OpenID Connect**. SAML no es compatible. Las
 
 ## Conexiones {#connections}
 
-Una **conexión** es un proveedor de identidad registrado en la instancia. Solo un superusuario crea, modifica o elimina conexiones, mediante **Admin → Identity providers** en la consola o la API de administración. Hay dos tipos:
+Una **conexión** es un proveedor de identidad registrado en la instancia. Solo un administrador de la instancia crea, modifica o elimina conexiones (un superusuario, o una identidad cuyo rol de sistema tenga `user:write`, la autoridad que comprueban todas las operaciones de conexión, vinculación y obligatoriedad), mediante **Admin → Identity providers** en la consola o la API de administración. Hay dos tipos:
 
 | | Conexión de inquilino | Conexión de instancia |
 | --- | --- | --- |
@@ -58,7 +58,7 @@ La consola y la aplicación de paneles muestran **Sign in with SSO** junto al fo
 
 La página que recibe el código (`/login/sso/complete` para la consola, `/dash/sso/complete` para la aplicación de dashboards) lo quita de la barra de direcciones de inmediato y se sirve con `Referrer-Policy: no-referrer`, así que nada de lo que carga puede llevar la dirección. Al terminar el inicio de sesión, o si la persona vuelve al formulario de inicio de sesión, la aplicación se carga de nuevo en lugar de seguir en esa página, de modo que el resto de la sesión envía un `Referer` normal; el mapa base predeterminado de OpenStreetMap lo exige. Si tu propio proxy está delante de la consola, limita cualquier cabecera que elimine el Referer a esas dos rutas exactas.
 
-Cuando se rechaza un inicio de sesión, la persona ve un mensaje genérico ("Single sign-on did not allow this account in", "your account is not linked yet") y nunca qué comprobación falló. (Vincular la propia cuenta es la excepción: la persona ya inició sesión y cada comprobación trata de su propia cuenta, así que un rechazo de vínculo dice qué comprobación falló; consulta [vínculos](#linking).) El resultado exacto se cuenta en la métrica `devicechain_usermanagement_sso_logins_total` y los rechazos se escriben en el diario de auditoría con la dirección que afirmó el proveedor.
+Cuando se rechaza un inicio de sesión, la persona ve un mensaje genérico ("El inicio de sesión único no permitió el acceso a esta cuenta", "Tu cuenta existe pero aún no está vinculada a este proveedor de identidad") y nunca qué comprobación falló. (Vincular la propia cuenta es la excepción: la persona ya inició sesión y cada comprobación trata de su propia cuenta, así que un rechazo de vínculo dice qué comprobación falló; consulta [vínculos](#linking).) El resultado exacto se cuenta en la métrica `devicechain_usermanagement_sso_logins_total` y los rechazos se escriben en el diario de auditoría con la dirección que afirmó el proveedor.
 
 ## Identidades, vínculos y aprovisionamiento {#linking}
 

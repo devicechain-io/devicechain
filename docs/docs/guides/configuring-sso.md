@@ -13,7 +13,7 @@ The recipes for Microsoft Entra ID, Okta and Google Workspace below are written 
 ## Before you start {#before}
 
 - **The instance needs a public address.** Single sign-on needs `auth.issuerUrl` ([below](#deployment)). If it is empty, creating a connection fails with "sso requires a public issuer URL".
-- **You need a superuser sign-in** to the console (**Admin → Identity providers**) or the admin API.
+- **You need a superuser sign-in** (or an identity whose system role holds `user:write`) to the console (**Admin → Identity providers**) or the admin API.
 - **At the provider** you need to register DeviceChain as an application (a "web" or "confidential" client using the authorization code flow) and note its client id and client secret.
 - **Decide the tenant and the domain.** A tenant connection serves tenants you name, and speaks for the email domains you assert.
 

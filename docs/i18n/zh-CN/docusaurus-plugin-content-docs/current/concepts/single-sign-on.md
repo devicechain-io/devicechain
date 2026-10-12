@@ -14,7 +14,7 @@ title: 单点登录
 
 ## 连接 {#connections}
 
-**连接（connection）**是在实例上注册的一个身份提供商。只有超级用户可以通过控制台的 **Admin → Identity providers（管理 → 身份提供商）**或管理 API 创建、修改和删除连接。连接分为两种：
+**连接（connection）**是在实例上注册的一个身份提供商。只有实例管理员（超级用户，或其系统角色拥有 `user:write` 的身份；所有连接、关联和强制登录操作都检查这一权限）可以通过控制台的 **Admin → Identity providers（管理 → 身份提供商）**或管理 API 创建、修改和删除连接。连接分为两种：
 
 | | 租户连接 | 实例连接 |
 | --- | --- | --- |
@@ -58,7 +58,7 @@ title: 单点登录
 
 接收代码的页面（控制台为 `/login/sso/complete`，仪表板应用为 `/dash/sso/complete`）会立即把代码从地址栏中移除，并以 `Referrer-Policy: no-referrer` 提供，因此它加载的任何内容都无法携带该地址。登录完成后，或用户返回登录表单时，应用会重新加载，而不是继续停留在该页面上，因此会话的其余部分会发送正常的 `Referer`；默认的 OpenStreetMap 底图需要它。如果你自己的代理位于控制台之前，请把任何去除 Referer 的响应头限定在这两个确切路径上。
 
-登录被拒绝时，用户只会看到笼统的提示（“Single sign-on did not allow this account in”、“your account is not linked yet”），不会知道是哪项检查未通过。（链接自己的账号是例外：此时用户已经登录，每项检查都针对其自己的账号，因此链接被拒绝时会说明是哪项检查未通过；参见[链接](#linking)。）确切的结果由指标 `devicechain_usermanagement_sso_logins_total` 计数，拒绝事件连同提供商断言的地址一起写入审计日志。
+登录被拒绝时，用户只会看到笼统的提示（“Single sign-on did not allow this account in”、“Your account exists but is not linked to this identity provider yet”），不会知道是哪项检查未通过。（链接自己的账号是例外：此时用户已经登录，每项检查都针对其自己的账号，因此链接被拒绝时会说明是哪项检查未通过；参见[链接](#linking)。）确切的结果由指标 `devicechain_usermanagement_sso_logins_total` 计数，拒绝事件连同提供商断言的地址一起写入审计日志。
 
 ## 身份、链接与预配 {#linking}
 

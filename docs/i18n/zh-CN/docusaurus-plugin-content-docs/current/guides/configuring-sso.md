@@ -13,7 +13,7 @@ title: 配置单点登录
 ## 开始之前 {#before}
 
 - **实例需要一个公开地址。**单点登录需要 `auth.issuerUrl`（见[下文](#deployment)）。如果它为空，创建连接会失败，并提示 "sso requires a public issuer URL"。
-- **你需要以超级用户身份登录**控制台（**Admin → Identity providers（管理 → 身份提供商）**）或管理 API。
+- **你需要以超级用户身份**（或以系统角色拥有 `user:write` 的身份）**登录**控制台（**Admin → Identity providers（管理 → 身份提供商）**）或管理 API。
 - **在提供商处**，你需要把 DeviceChain 注册为一个应用（使用授权码流程的“web”或“confidential”客户端），并记下它的客户端 ID 和客户端密钥。
 - **确定租户和域名。**租户连接为你指定的租户服务，并代表你断言的邮箱域名。
 
