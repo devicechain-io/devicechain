@@ -7,6 +7,7 @@ import (
 	"context"
 	"database/sql"
 	"testing"
+	"time"
 
 	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/rdb"
@@ -55,6 +56,67 @@ func newPartialUpdateManager(t *testing.T, tables ...any) *Manager {
 	return &Manager{iam: iam.NewStore(&rdb.RdbManager{Database: db}), db: &rdb.RdbManager{Database: db}}
 }
 
+const idpToken = "acme-idp"
+
+// idpConnectionFamily is updateIdpConnection: a connection's mutable settings. Its issuer,
+// kind and token are not on the request at all (a different issuer is a different
+// connection), so there is no state of them to drive.
+func idpConnectionFamily() putest.Family[*Manager] {
+	reading := func(c *iam.IdpConnection) map[string]string {
+		return map[string]string{
+			"name": c.Name, "enabled": putest.BoolString(c.Enabled), "clientId": c.ClientID,
+			"emailClaim": c.EmailClaim,
+			"scopes":     putest.RenderStringList(c.Scopes), "requiredAmr": putest.RenderStringList(c.RequiredAmr),
+		}
+	}
+	return putest.Family[*Manager]{
+		Name:  "idp connection",
+		Token: idpToken,
+		Migrate: []any{&iam.IdpConnection{}, &iam.IdpConnectionTenant{}, &iam.IdpConnectionDomain{},
+			&iam.Role{}, &iam.Membership{}, &iam.Identity{}},
+		Seed: func(t *testing.T, m *Manager, ctx context.Context) {
+			now := time.Now().UTC()
+			if err := m.iam.CreateIdpConnection(ctx, &iam.IdpConnection{
+				Token: idpToken, Name: "Acme", Kind: iam.IdpKindTenant, Issuer: "https://idp.example.com",
+				ClientID: "client-1", EmailClaim: "email",
+				Scopes: []string{"openid", "email"}, RequiredAmr: []string{"mfa"},
+				// Approved, so that enabling is a legal request the harness may send.
+				DiscoverySnapshot: &iam.DiscoverySnapshot{Issuer: "https://idp.example.com", JwksURI: "https://idp.example.com/k",
+					AuthorizationEndpoint: "https://idp.example.com/a", TokenEndpoint: "https://idp.example.com/t", FetchedAt: now},
+				DiscoveryApprovedAt: &now, DiscoveryApprovedBy: "admin",
+			}); err != nil {
+				t.Fatalf("seed connection: %v", err)
+			}
+		},
+		Read: func(t *testing.T, m *Manager, ctx context.Context) map[string]string {
+			c, err := m.iam.IdpConnectionByToken(ctx, idpToken)
+			if err != nil {
+				t.Fatalf("reload connection: %v", err)
+			}
+			return reading(c)
+		},
+		NewRequest: func() any { return new(IdpConnectionUpdateRequest) },
+		Update: func(m *Manager, ctx context.Context, token string, req any) error {
+			_, err := m.UpdateIdpConnection(ctx, token, req.(*IdpConnectionUpdateRequest))
+			return err
+		},
+		Fields: []putest.Field{
+			putest.RequiredStringField("name", "Acme", "Acme Corp",
+				func(r *IdpConnectionUpdateRequest) *dcgraphql.OptionalString { return &r.Name }),
+			putest.RequiredBoolField("enabled", false,
+				func(r *IdpConnectionUpdateRequest) *dcgraphql.OptionalBool { return &r.Enabled }),
+			putest.RequiredStringField("clientId", "client-1", "client-2",
+				func(r *IdpConnectionUpdateRequest) *dcgraphql.OptionalString { return &r.ClientID }),
+			putest.RequiredStringField("emailClaim", "email", "mail",
+				func(r *IdpConnectionUpdateRequest) *dcgraphql.OptionalString { return &r.EmailClaim }),
+			putest.OptionalStringListField("scopes", []string{"openid", "email"}, []string{"openid"},
+				func(r *IdpConnectionUpdateRequest) *dcgraphql.OptionalStringList { return &r.Scopes }),
+			putest.OptionalStringListField("requiredAmr", []string{"mfa"}, []string{"hwk", "otp"},
+				func(r *IdpConnectionUpdateRequest) *dcgraphql.OptionalStringList { return &r.RequiredAmr }),
+		},
+	}
+}
+
 // TestPartialUpdate drives every property over the profile family.
 func TestPartialUpdate(t *testing.T) {
 	putest.Run(t, putest.Suite[*Manager]{
@@ -76,7 +138,7 @@ func TestPartialUpdate(t *testing.T) {
 }
 
 func partialUpdateFamilies() []putest.Family[*Manager] {
-	return []putest.Family[*Manager]{profileFamily()}
+	return []putest.Family[*Manager]{profileFamily(), idpConnectionFamily()}
 }
 
 func profileFamily() putest.Family[*Manager] {
@@ -141,11 +203,11 @@ func TestEveryUpdateTakesADedicatedUpdateRequest(t *testing.T) {
 		// residual is zero" is a statement rather than an absence.
 		Exempt:            map[string]string{},
 		NotAnEntityUpdate: map[string]string{},
-		// The TOTAL number of Update* methods on the Manager, which is one. A floor of one
+		// The TOTAL number of Update* methods on the Manager: UpdateProfile and UpdateIdpConnection. A floor of two
 		// is weak by construction — it is the honest number here, not a floor lowered to
 		// make a walk pass, and the day this service gains a second update the guard fails
 		// until someone raises it and looks at what was added.
-		MinUpdateMethods: 1,
+		MinUpdateMethods: 2,
 	})
 }
 

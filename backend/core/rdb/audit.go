@@ -29,6 +29,19 @@ const (
 	AuditOpLoginFailed = "login_failed"
 	AuditOpRefresh     = "refresh"
 	AuditOpLogout      = "logout"
+	// AuditOpIdentityLinked and AuditOpIdentityUnlinked record an external-identity-provider
+	// account being bound to, or removed from, an identity. The actor is the administrator
+	// (or, for a self-service link, the identity itself).
+	AuditOpIdentityLinked   = "identity_linked"
+	AuditOpIdentityUnlinked = "identity_unlinked"
+	// AuditOpSsoLogin and AuditOpSsoRefused record a single sign-on completing, and one
+	// being refused after the provider vouched for the person. The actor is the email the
+	// provider asserted; no token, code or claim value is ever recorded.
+	AuditOpSsoLogin   = "sso_login"
+	AuditOpSsoRefused = "sso_refused"
+	// AuditOpIdpMfaAcknowledged records an administrator creating an instance connection
+	// on their own assurance that the provider enforces multi-factor sign-in.
+	AuditOpIdpMfaAcknowledged = "idp_mfa_acknowledged"
 )
 
 // AuditEvent is one row of the tenant-scoped audit journal (ADR-019): a record,

@@ -107,6 +107,14 @@ var partialUpdateMutations = []partialUpdateMutation{
 		forbidden: []string{"token"},
 	},
 	{
+		mutation: "updateIdpConnection", input: "IdpConnectionUpdateRequest", admin: true,
+		args:      []wireArg{{"token", "String!", "whatever"}},
+		selection: "token name",
+		// A connection's issuer and kind are fixed at creation: a different issuer is a
+		// different connection, and the rules that pin an issuer ran against this one.
+		forbidden: []string{"issuer", "kind"},
+	},
+	{
 		mutation: "updateProfile", input: "ProfileUpdateRequest",
 		// Self-scoped: the identity is named by the caller's own token subject, so this
 		// mutation has NO identity argument. `email` is what an input would have to carry

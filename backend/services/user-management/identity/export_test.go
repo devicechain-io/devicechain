@@ -3,7 +3,27 @@
 
 package identity
 
-import "testing"
+import (
+	"testing"
+	"time"
+
+	"github.com/devicechain-io/dc-microservice/auth"
+	"github.com/stretchr/testify/require"
+)
+
+// InstallSigningForTest gives a Manager built by NewManager the two things a successful
+// password sign-in needs beyond its credential checker -- a signing key and a session store
+// (a stub) -- which Initialize would otherwise provide from NATS and the secret store. With
+// them the external test package can drive a login through the served schema all the way to
+// an issued token, instead of to a nil dereference that graphql-go recovers into an
+// ordinary-looking error.
+func InstallSigningForTest(t *testing.T, m *Manager) {
+	t.Helper()
+	key, err := auth.GenerateKeyPair()
+	require.NoError(t, err)
+	m.issuer = auth.NewIssuer(key, "test", time.Minute, time.Hour)
+	m.refreshKV = &stubRefreshKV{}
+}
 
 // NewServedManager hands the external identity_test package a Manager built the way the
 // session tests build one - real issuer and validator, refresh state in a real JetStream
@@ -16,3 +36,38 @@ func NewServedManager(t *testing.T) *Manager {
 	e.createMember(t, "pat@example.com", "pw-1")
 	return e.m
 }
+
+// ServedSso is a Manager wired for single sign-on over a stub provider, for the external
+// test package that serves it through the real GraphQL handlers.
+type ServedSso struct {
+	Manager *Manager
+	// Authorize plays the provider's sign-in page for (sub, email): it returns the state and
+	// code the browser is redirected back with.
+	Authorize func(authURL, sub, email string) (state, code string)
+	// Connection is the token of the tenant connection, serving acme; LinkedEmail is linked
+	// to it. SuperuserEmail/SuperuserPassword sign in with a password.
+	Connection        string
+	LinkedEmail       string
+	SuperuserEmail    string
+	SuperuserPassword string
+	ReturnTo          string
+	Secret            string
+	CallbackPrefix    string
+}
+
+// NewServedSsoManager builds the single sign-on harness and a password superuser.
+func NewServedSsoManager(t *testing.T) *ServedSso {
+	t.Helper()
+	e := newSsoEnv(t)
+	e.linkedPat(t)
+	e.createMember(t, "su@example.com", "su-pass")
+	e.grantSuperuser(t, "su@example.com")
+	return &ServedSso{
+		Manager: e.m, Authorize: e.op.authorize, Connection: "acme-idp", LinkedEmail: linkedEmail,
+		SuperuserEmail: "su@example.com", SuperuserPassword: "su-pass",
+		ReturnTo: ssoTestReturnTo, Secret: ssoTestSecret, CallbackPrefix: SsoCallbackPrefix,
+	}
+}
+
+// ChallengeForTest is the S256 code challenge for a browser secret.
+func ChallengeForTest(verifier string) string { return pkceChallenge(verifier) }

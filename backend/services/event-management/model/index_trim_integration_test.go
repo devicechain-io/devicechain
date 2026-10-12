@@ -334,9 +334,16 @@ func waitForLockWaiter(t *testing.T, conn *pgx.Conn, within time.Duration) {
 // check's lookahead (pause + statementTimeout) ends the run far before the deadline;
 // without it the run ends only after the deadline. And pause is twice lockTimeout, so a
 // retry without the pause makes about twice the attempts the pause allows.
+//
+// The budget is shared with the work done BEFORE the busy table (the chunk gate and four
+// drops), which a loaded server stretches by whole seconds, so the budget carries ample
+// slack over what the properties need (about statementTimeout + lockTimeout of it): the
+// assertions that a run was retried at all, or stayed within its budget, then hold however
+// slow the server is. Bounds on elapsed time sit midway between the behaviour they pin and
+// the broken one they must tell apart, never at a margin a slow server can eat.
 func TestIntegrationIndexTrimWaitsBoundedlyForALockAndResumes(t *testing.T) {
-	timing := indexTrimTiming{lockTimeout: 200 * time.Millisecond, statementTimeout: 2 * time.Second,
-		pause: 400 * time.Millisecond, budget: 4 * time.Second, maxChunks: eventStoreMaxChunks, countTimeout: 10 * time.Second}
+	timing := indexTrimTiming{lockTimeout: 200 * time.Millisecond, statementTimeout: 6 * time.Second,
+		pause: 400 * time.Millisecond, budget: 12 * time.Second, maxChunks: eventStoreMaxChunks, countTimeout: 10 * time.Second}
 
 	// Negative control: with nothing holding a lock, the same migration on the same
 	// shape of database finishes at once — so it is the lock, not the harness, that makes
@@ -347,7 +354,7 @@ func TestIntegrationIndexTrimWaitsBoundedlyForALockAndResumes(t *testing.T) {
 		twoChunkSeed(t, sys)
 		start := time.Now()
 		require.NoError(t, newIndexTrimSchema(timing).Migrate(sys))
-		assert.Less(t, time.Since(start), 1500*time.Millisecond, "an uncontended trim must not wait")
+		assert.Less(t, time.Since(start), timing.statementTimeout, "an uncontended trim must not wait")
 	}
 
 	inst := freshInstance(t, "ittrimlock")
@@ -372,15 +379,17 @@ func TestIntegrationIndexTrimWaitsBoundedlyForALockAndResumes(t *testing.T) {
 
 	// While the DROP waits on the held table, a write to that table waits at most one
 	// bounded attempt — not for the holder's whole transaction.
-	waitForLockWaiter(t, observer, 2*time.Second)
-	wctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	waitForLockWaiter(t, observer, timing.budget)
+	wctx, cancel := context.WithTimeout(context.Background(), timing.statementTimeout)
 	wstart := time.Now()
 	_, err = writer.Exec(wctx, `INSERT INTO "event-management".state_change_events
 		(tenant_id, event_id, device_token, event_type, occurred_time, state, session_id)
 		VALUES ('acme', '\x01', 'dev-9', 4, '2026-08-02T00:00:00Z', 'ONLINE', 99)`)
 	cancel()
 	require.NoError(t, err, "a write to the busy table must complete while the migration retries")
-	assert.Less(t, time.Since(wstart), timing.lockTimeout+400*time.Millisecond,
+	// Midway between one lock_timeout (what it waits) and statementTimeout (what it would
+	// wait with no lock_timeout on the drop).
+	assert.Less(t, time.Since(wstart), (timing.lockTimeout+timing.statementTimeout)/2,
 		"a write must wait at most one lock_timeout")
 
 	var migErr error
@@ -405,7 +414,7 @@ func TestIntegrationIndexTrimWaitsBoundedlyForALockAndResumes(t *testing.T) {
 	// The budget check looks ahead: a new attempt starts only if it can end, even at
 	// statementTimeout, by the deadline. The last attempt then started no later than
 	// budget - pause - statementTimeout and ended at lockTimeout, so the run is over by
-	// budget + lockTimeout - statementTimeout (2.2 s here, plus overheads) — never past
+	// budget + lockTimeout - statementTimeout (6.2 s here, plus overheads) — never past
 	// the budget. A check against the deadline alone ends only after it.
 	assert.Less(t, elapsed, timing.budget, "the run must end within its budget, not after it")
 

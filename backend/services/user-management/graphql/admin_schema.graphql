@@ -1280,6 +1280,168 @@ type TenantDeletion {
 }
 
 """
+An identity provider connection: an external OpenID Connect provider that people sign in
+through. The provider's client secret is write-only and is never returned.
+"""
+type IdpConnection {
+    """Short unique token of the connection; it appears in the connection's callback address."""
+    token: String!
+    """Display name."""
+    name: String!
+    """
+    Whose provider this is: `tenant` for a provider that serves one or more tenants' own people
+    (its sign-ins can enter only those tenants and can never reach an identity holding a system
+    role), or `instance` for the operator's own provider (linked to identities only by explicit
+    action, and entering a tenant only as a superuser).
+    """
+    kind: String!
+    """Whether sign-ins through this connection are accepted. A connection is created disabled."""
+    enabled: Boolean!
+    """The provider's issuer. Fixed when the connection is created."""
+    issuer: String!
+    """The client identifier registered at the provider."""
+    clientId: String!
+    """Whether a client secret is stored. The secret itself can never be read."""
+    hasSecret: Boolean!
+    """OAuth scopes requested at sign-in."""
+    scopes: [String!]!
+    """Name of the claim carrying the person's email address."""
+    emailClaim: String!
+    """Claims every sign-in must carry with exactly these values."""
+    requiredClaims: [IdpClaimRequirement!]!
+    """Authentication methods of which a sign-in must report at least one; empty for none required."""
+    requiredAmr: [String!]!
+    """Email domains this connection speaks for."""
+    domains: [IdpDomain!]!
+    """Tokens of the tenants a tenant connection serves; empty for an instance connection."""
+    tenants: [String!]!
+    """The address to register at the provider as this connection's redirect (callback) URI."""
+    callbackUrl: String!
+    """The provider's discovery document as last fetched; sign-ins use only the endpoints approved here."""
+    discovery: IdpDiscovery!
+    """When the connection was created."""
+    createdAt: String
+    """When the connection was last changed."""
+    updatedAt: String
+}
+
+"""A claim a sign-in must carry, with the value it must have."""
+type IdpClaimRequirement {
+    """Claim name."""
+    name: String!
+    """Required value."""
+    value: String!
+}
+
+"""A claim requirement to set on a connection."""
+input IdpClaimRequirementInput {
+    """Claim name, for example `hd` or `tid`."""
+    name: String!
+    """Required value."""
+    value: String!
+}
+
+"""An email domain asserted for a connection."""
+type IdpDomain {
+    """The domain, lower-case ASCII."""
+    domain: String!
+    """When it was asserted."""
+    verifiedAt: String!
+    """Who asserted it."""
+    verifiedBy: String!
+}
+
+"""The endpoints a connection will use, as fetched from the provider's discovery document."""
+type IdpDiscovery {
+    """The authorization endpoint."""
+    authorizationEndpoint: String!
+    """The token endpoint."""
+    tokenEndpoint: String!
+    """The address of the provider's signing keys."""
+    jwksUri: String!
+    """The provider's sign-out endpoint, when it has one."""
+    endSessionEndpoint: String
+    """When the document was fetched."""
+    fetchedAt: String
+    """Identifies this exact set of endpoints; pass it to approveIdpDiscovery to approve what you reviewed."""
+    fingerprint: String!
+    """Whether a person has approved these endpoints. Sign-ins are refused until they have."""
+    approved: Boolean!
+    """Who approved them."""
+    approvedBy: String
+    """When they were approved."""
+    approvedAt: String
+}
+
+"""Data to create a connection."""
+input IdpConnectionCreateRequest {
+    """Short unique token for the connection (letters, digits and hyphens)."""
+    token: String!
+    """Display name."""
+    name: String!
+    """`tenant` or `instance`."""
+    kind: String!
+    """The provider's issuer, an https address. A shared multi-tenant issuer must be pinned to your organisation by a required claim."""
+    issuer: String!
+    """The client identifier registered at the provider."""
+    clientId: String!
+    """The client secret. Write-only; leave out for a public client."""
+    clientSecret: String
+    """OAuth scopes to request; defaults to openid, email and profile."""
+    scopes: [String!]
+    """Name of the claim carrying the email address; defaults to `email`."""
+    emailClaim: String
+    """Claims every sign-in must carry with exactly these values (Google needs `hd`, Microsoft needs `tid`)."""
+    requiredClaims: [IdpClaimRequirementInput!]
+    """Authentication methods of which a sign-in must report at least one."""
+    requiredAmr: [String!]
+    """
+    For an instance connection with no required authentication methods: your statement that the
+    provider enforces multi-factor sign-in. It is recorded in the audit journal.
+    """
+    mfaEnforcedByIdp: Boolean
+}
+
+"""
+Changes to a connection. A partial update: leaving a field out keeps its stored value. The
+issuer, kind and token cannot be changed.
+"""
+input IdpConnectionUpdateRequest {
+    """New display name."""
+    name: String
+    """True to accept sign-ins through the connection; enabling needs approved discovery."""
+    enabled: Boolean
+    """New client identifier."""
+    clientId: String
+    """New email claim name."""
+    emailClaim: String
+    """The complete new list of scopes."""
+    scopes: [String!]
+    """The complete new list of required authentication methods."""
+    requiredAmr: [String!]
+}
+
+"""A sign-in that was refused because it matched an existing identity with no link. It grants nothing."""
+type SsoLinkRequest {
+    """Identifier of the request."""
+    id: ID!
+    """Token of the connection the sign-in came through."""
+    connection: String!
+    """The external account's subject at the provider."""
+    subject: String!
+    """The email address the provider asserted."""
+    email: String!
+    """When the sign-in was refused."""
+    createdAt: String
+    """Whether an identity with that email exists now."""
+    identityExists: Boolean!
+    """True when that identity is already linked on this connection under a different subject, which is what a recycled email address looks like."""
+    subjectChanged: Boolean!
+    """Tenants this connection serves where the identity already has a membership that no connection manages."""
+    manualMemberships: [String!]!
+}
+
+"""
 Read operations of the instance administration API. This API takes an identity token, not
 a tenant access token, and each operation additionally requires the authority named in its
 description. A superuser holds every authority.
@@ -1421,6 +1583,25 @@ type Query {
     """The registered OAuth clients. Requires client:read."""
     # List the OAuth 2.1 client registry (requires client:read).
     oauthClients: [AdminOAuthClient!]!
+
+    """
+    Lists the configured identity provider connections. Client secrets are never included.
+    Requires user:read.
+    """
+    idpConnections: [IdpConnection!]!
+    """
+    Returns one identity provider connection, or null if there is none with that token.
+    Requires user:read.
+    """
+    idpConnection(
+        """Token of the connection."""
+        token: String!
+    ): IdpConnection
+    """
+    Lists the sign-ins refused because they matched an existing identity with no link, oldest
+    first, for a superuser to approve or reject. Requires user:read.
+    """
+    ssoLinkRequests: [SsoLinkRequest!]!
 }
 
 """
@@ -1765,6 +1946,151 @@ type Mutation {
     deleteOauthClient(
         """The clientId of the client to delete."""
         clientId: String!
+    ): Boolean!
+
+    """
+    Creates an identity provider connection and returns it. The connection starts disabled and
+    its discovery document is fetched (through the egress guard) and held for approval; review it
+    with idpConnection, then approveIdpDiscovery and updateIdpConnection to enable it. Fails if
+    this instance has no public issuer address ("sso requires a public issuer URL"), the token is
+    taken, the issuer cannot be pinned to one organisation (Microsoft needs its tenant id and a
+    `tid` requirement; Google needs an `hd` requirement), the provider cannot be reached, or an
+    instance connection has neither required authentication methods nor mfaEnforcedByIdp.
+    Requires user:write.
+    """
+    createIdpConnection(
+        """The connection to create."""
+        request: IdpConnectionCreateRequest!
+    ): IdpConnection!
+    """
+    Applies a partial update to a connection and returns it. Enabling a connection needs its
+    discovery snapshot approved. Requires user:write.
+    """
+    updateIdpConnection(
+        """Token of the connection."""
+        token: String!
+        """The changes to apply."""
+        request: IdpConnectionUpdateRequest!
+    ): IdpConnection!
+    """
+    Replaces the claims every sign-in through the connection must carry, and returns the
+    connection. The issuer rules still apply: a Google connection cannot drop `hd` nor a
+    Microsoft one `tid`. Requires user:write.
+    """
+    setIdpRequiredClaims(
+        """Token of the connection."""
+        token: String!
+        """The complete new list of required claims."""
+        claims: [IdpClaimRequirementInput!]!
+    ): IdpConnection!
+    """
+    Deletes a connection together with its tenants, domains, links, pending requests and sealed
+    client secret. Memberships it managed are disabled, not removed. Its sign-ins end at their next
+    exchange. Returns true if it was deleted and false if there was no such connection. Requires
+    user:write.
+    """
+    deleteIdpConnection(
+        """Token of the connection."""
+        token: String!
+    ): Boolean!
+    """
+    Stores a connection's client secret, replacing any earlier one, and returns the connection.
+    The secret is write-only and can never be read back. Requires user:write.
+    """
+    setIdpConnectionSecret(
+        """Token of the connection."""
+        token: String!
+        """The client secret."""
+        secret: String!
+    ): IdpConnection!
+    """
+    Sets exactly which tenants a tenant connection serves, and returns it. Sign-ins through it
+    can enter those tenants and no others. Fails for an instance connection or an unknown tenant.
+    Requires user:write.
+    """
+    setIdpConnectionTenants(
+        """Token of the connection."""
+        token: String!
+        """Tokens of the tenants it serves."""
+        tenants: [String!]!
+    ): IdpConnection!
+    """
+    Asserts that a connection speaks for an email domain, recorded with your name, and returns the
+    connection. Freemail providers and public suffixes are refused, and a domain belongs to one
+    connection. Requires user:write.
+    """
+    addIdpDomain(
+        """Token of the connection."""
+        token: String!
+        """The domain, for example `example.com`."""
+        domain: String!
+    ): IdpConnection!
+    """Removes a domain from a connection and returns the connection. Requires user:write."""
+    removeIdpDomain(
+        """Token of the connection."""
+        token: String!
+        """The domain to remove."""
+        domain: String!
+    ): IdpConnection!
+    """
+    Fetches the provider's discovery document again and returns the connection. If the endpoints
+    changed, the new ones replace the snapshot and its approval is withdrawn: the connection
+    refuses sign-ins until approveIdpDiscovery. Requires user:write.
+    """
+    refreshIdpDiscovery(
+        """Token of the connection."""
+        token: String!
+    ): IdpConnection!
+    """
+    Approves the connection's current discovery snapshot and returns the connection. Fails if the
+    snapshot is no longer the one with this fingerprint. Requires user:write.
+    """
+    approveIdpDiscovery(
+        """Token of the connection."""
+        token: String!
+        """The fingerprint of the snapshot you reviewed."""
+        fingerprint: String!
+    ): IdpConnection!
+    """
+    Links an external account to an identity: signing in at the provider as this subject signs in
+    as this identity. This is how an instance connection reaches an identity. A tenant connection
+    refuses an identity that holds a system role. Fails if the identity or connection does not
+    exist, or either side is already linked. Requires user:write.
+    """
+    linkIdentity(
+        """Email of the identity."""
+        email: String!
+        """Token of the connection."""
+        connection: String!
+        """The external account's subject at the provider."""
+        subject: String!
+    ): Boolean!
+    """
+    Removes an identity's link on a connection; its sign-ins through that connection end at their
+    next exchange. Returns true if a link was removed. Requires user:write.
+    """
+    unlinkIdentity(
+        """Email of the identity."""
+        email: String!
+        """Token of the connection."""
+        connection: String!
+    ): Boolean!
+    """
+    Approves a pending link request: the external account is linked to the identity that has the
+    request's email NOW. If that identity already holds memberships in the connection's tenants
+    that no connection manages, say what becomes of them: `convert` makes the connection manage
+    them, `keep_manual` leaves them. Requires user:write.
+    """
+    approveSsoLinkRequest(
+        """Identifier of the request."""
+        id: ID!
+        """`convert` or `keep_manual`; required when the identity has such memberships."""
+        membershipDisposition: String
+    ): Boolean!
+    """Rejects a pending link request, deleting it. Returns true if it existed. Requires user:write."""
+    rejectSsoLinkRequest(
+        """Identifier of the request."""
+        id: ID!
     ): Boolean!
 }
 

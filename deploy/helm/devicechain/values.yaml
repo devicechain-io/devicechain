@@ -1719,10 +1719,17 @@ functionalAreas:
     # is why both derive from one origin rather than being spelled out twice. Both are
     # external https origins (http only for a localhost value).
     #
-    # NOTE the OAuth AS is OFF unless user-management's auth.issuerUrl is set: mcp
-    # still starts and serves its metadata (it fetches JWKS in the background), but no
-    # client can obtain a token until the AS is enabled — a separate, deliberate
-    # switch, since setting the issuer changes the `iss` claim of EVERY minted token.
+    # NOTE the OAuth AS runs only when user-management has an issuer URL
+    # (functionalAreas.user-management.config.auth.issuerUrl), and the chart now DERIVES
+    # one from the ingress, the same <origin>/api/user-management as above, when the
+    # origin is https or a loopback host. So on such an instance the AS is on and a
+    # client can obtain a token. Set user-management's issuerUrl yourself to use another
+    # address (it must equal the value above), or to "" to keep the AS — and single
+    # sign-on, which needs the same address — off. On a plain-http instance on a real
+    # hostname nothing is derived (the service would refuse the value) and both stay
+    # off; `helm install` says so. Setting the issuer changes the `iss` claim of every
+    # token minted afterwards; the validators pin neither `iss` nor `aud`, so tokens
+    # already issued keep working until they expire.
     #
     # ONE SERVING POD, and the render refuses more. mcp holds each connected client's
     # protocol session in memory on the pod that created it; sessions are not shared and
@@ -1752,8 +1759,8 @@ functionalAreas:
     # Discovery does not finish here. The document above names user-management as the
     # authorization server, and a client then fetches THAT server's metadata at
     # <origin>/.well-known/oauth-authorization-server/api/user-management. The chart
-    # routes it — but only once auth.issuerUrl is set on user-management (see below),
-    # because until then there is no authorization server to route to.
+    # routes it — whenever user-management has an issuer URL (derived from the ingress, or
+    # set explicitly), because without one there is no authorization server to route to.
     #
     # 🔴 replicas IS PINNED HERE FOR THE SAME REASON sparkplug-ingest AND lwm2m-ingest
     # PIN THEIRS: mcp can only run one serving pod, the template fails the render

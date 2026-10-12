@@ -184,6 +184,13 @@ type Manager struct {
 	// over the egress guard (NewSsoHTTPClient) and installed by main; nil means SSO fetches
 	// refuse rather than fall back to a client that would dial anywhere.
 	ssoClient *http.Client
+	// ssoStateKV and ssoCodesKV back the single sign-on flow (dc_sso_state, dc_sso_codes),
+	// apart from every other bucket so neither redeemer can be handed the other's record.
+	// Both nil leaves single sign-on off.
+	ssoStateKV, ssoCodesKV nats.KeyValue
+	ssoMetrics             SsoMetrics
+	ssoLimiter             sourceLimiter
+	ssoKeySets             ssoKeySetCache
 
 	// mu guards the signing-key material, which a rotation replaces while the
 	// service is live. The validator pointer is created once (request handlers
@@ -501,11 +508,14 @@ func (m *Manager) SelectTenant(ctx context.Context, identityToken, tenant string
 		return nil, ErrInvalidCredentials
 	}
 
-	roles, authorities, err := m.resolveTenantGrant(ctx, tenant, mem, su)
+	roles, authorities, err := m.resolveTenantGrant(ctx, claims.SessionID, id, tenant, mem, su)
 	if err != nil {
 		if errors.Is(err, errTenantAccessDenied) {
 			m.recordAuth(ctx, rdb.AuditOpLoginFailed, id.Email, tenant)
 			return nil, ErrInvalidCredentials
+		}
+		if errors.Is(err, errSessionEnded) {
+			return nil, ErrInvalidToken
 		}
 		return nil, err
 	}
@@ -532,7 +542,7 @@ func (m *Manager) Memberships(ctx context.Context, identityToken string) ([]Memb
 		}
 		return nil, err
 	}
-	return membershipInfos(id.Memberships), nil
+	return m.sessionMemberships(ctx, claims.SessionID, id)
 }
 
 // IdentitySubject is the authenticated subject an identity token names: its email
@@ -817,7 +827,7 @@ func (m *Manager) Refresh(ctx context.Context, refreshToken string) (*TokenPair,
 	if mem == nil && !su {
 		return nil, m.refuseRefresh(claims.ID, rev, errNotAMember)
 	}
-	roles, authorities, err := m.resolveTenantGrant(ctx, claims.Tenant, mem, su)
+	roles, authorities, err := m.resolveTenantGrant(ctx, claims.SessionID, id, claims.Tenant, mem, su)
 	if err != nil {
 		return nil, m.refuseRefresh(claims.ID, rev, err)
 	}
@@ -874,7 +884,13 @@ var errTenantAccessDenied = errors.New("tenant access denied")
 // remediate (actingAsSuperuser is recorded for audit). A regular member is denied
 // if the tenant or its membership is disabled. mem is non-nil for a non-superuser
 // (callers reject non-members first).
-func (m *Manager) resolveTenantGrant(ctx context.Context, tenant string, mem *iam.Membership, su bool) (roles, authorities []string, err error) {
+func (m *Manager) resolveTenantGrant(ctx context.Context, sid auth.SessionID, id *iam.Identity, tenant string, mem *iam.Membership, su bool) (roles, authorities []string, err error) {
+	// The sign-in's own terms come first: a session that may not enter this tenant gets no
+	// grant from the identity's memberships, superuser or not (admitTenant says which
+	// sessions a superuser's break-glass still applies to).
+	if err := m.admitTenant(ctx, sid, id, tenant, su); err != nil {
+		return nil, nil, err
+	}
 	if su {
 		if mem != nil {
 			roles = roleTokens(mem.TenantRoles)

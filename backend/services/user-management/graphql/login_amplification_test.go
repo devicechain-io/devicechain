@@ -121,6 +121,13 @@ func (f *loginFixture) postAs(t *testing.T, doc, email string) (int, gqlResponse
 	h.ServeHTTP(rec, req)
 	var out gqlResponse
 	require.NoErrorf(t, json.Unmarshal(rec.Body.Bytes(), &out), "not GraphQL JSON (status %d): %s", rec.Code, rec.Body.String())
+	// graphql-go recovers a resolver's panic into an ordinary-looking error, so a test that
+	// tolerates some errors would also tolerate a fixture that cannot do what it is driving
+	// (a login that reaches the mint with no signing key or session store). Refuse it here,
+	// for every test on this fixture.
+	for _, e := range out.Errors {
+		require.NotContainsf(t, e.Message, "panic occurred", "a resolver panicked: %+v", e)
+	}
 	return rec.Code, out
 }
 

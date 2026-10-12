@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/auth"
+	gqlcore "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-user-management/identity"
 )
 
@@ -115,4 +116,58 @@ func (r *SchemaResolver) UpdateProfile(ctx context.Context, args struct {
 		return nil, err
 	}
 	return &CurrentIdentityResolver{id: id}, nil
+}
+
+// SsoBeginResolver resolves the SsoBegin GraphQL type.
+type SsoBeginResolver struct {
+	b *identity.SsoBegin
+}
+
+func (r *SsoBeginResolver) AuthorizationUrl() string { return r.b.AuthorizationURL }
+
+// BeginSso starts a single sign-on. Public, and rate limited per source address.
+func (r *SchemaResolver) BeginSso(ctx context.Context, args struct {
+	Email         *string
+	Connection    *string
+	ReturnTo      string
+	CodeChallenge string
+}) (*SsoBeginResolver, error) {
+	in := identity.BeginSsoInput{ReturnTo: args.ReturnTo, CodeChallenge: args.CodeChallenge}
+	if args.Email != nil {
+		in.Email = *args.Email
+	}
+	if args.Connection != nil {
+		in.Connection = *args.Connection
+	}
+	b, err := r.getIdentityManager(ctx).BeginSso(ctx, in, gqlcore.SourceAddr(ctx))
+	if err != nil || b == nil {
+		return nil, err
+	}
+	return &SsoBeginResolver{b: b}, nil
+}
+
+// CompleteSso finishes a single sign-on with the login code and the browser's verifier.
+func (r *SchemaResolver) CompleteSso(ctx context.Context, args struct {
+	Code         string
+	CodeVerifier string
+}) (*IdentityAuthResolver, error) {
+	res, err := r.getIdentityManager(ctx).CompleteSso(ctx, args.Code, args.CodeVerifier)
+	if err != nil {
+		return nil, err
+	}
+	return &IdentityAuthResolver{auth: res}, nil
+}
+
+// BeginSsoLink starts linking the signed-in person's provider account to their identity.
+func (r *SchemaResolver) BeginSsoLink(ctx context.Context, args struct {
+	IdentityToken string
+	Connection    string
+	ReturnTo      string
+}) (*SsoBeginResolver, error) {
+	b, err := r.getIdentityManager(ctx).BeginSsoLink(ctx, args.IdentityToken, args.Connection, args.ReturnTo,
+		gqlcore.SourceAddr(ctx))
+	if err != nil {
+		return nil, err
+	}
+	return &SsoBeginResolver{b: b}, nil
 }
