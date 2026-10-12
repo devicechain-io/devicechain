@@ -384,7 +384,7 @@ When an artifact is assigned to the device, the platform publishes on `device-de
 {"v":1,"kind":"update.assignment","attemptId":"att-7f3k","assignmentId":"asg-91xq","component":"firmware","trust":"UNVERIFIED","artifact":{"version":"1.4.2","digest":"sha256:…","size":8388608,"requiresReboot":true}}
 ```
 
-`component` names the part of the device to update; a device works on at most one assignment per component. `trust` is always `UNVERIFIED`: the platform has checked that the bytes are the bytes that were declared, not who produced them, so a device that needs to know an image is genuine must check a signature of its own.
+`component` names the part of the device to update; a device works on at most one assignment per component. `requiresReboot` is true for a firmware artifact and false for software and configuration. `trust` is always `UNVERIFIED`: the platform has checked that the bytes are the bytes that were declared, not who produced them, so a device that needs to know an image is genuine must check a signature of its own.
 
 To fetch the image, ask for a download grant on `device-reports`:
 
@@ -412,7 +412,7 @@ Report each stage on `device-reports` with `update.progress`:
 - `progress` (bytes held, and the total if known) is allowed only with `DOWNLOADING`.
 - Report `VERIFIED` only once the SHA-256 of the bytes you hold equals `artifact.digest`.
 - `FAILED` must carry `result`: `{"code":"FLASH_WRITE","detail":"…"}`, a code of up to 64 capital letters, digits and underscores, and a detail of up to 512 bytes.
-- `RUNNING` must carry `running`: `{"version":"1.4.2"}`, optionally with the `digest` of what runs. Send it once the new version is running.
+- `RUNNING` must carry `running`: `{"version":"1.4.2"}`, optionally with the `digest` of what runs. Send it once the new version is running. A `RUNNING` report that names any other version is not applied: if the device is not on the target, report `FAILED`.
 - `bootId` is required on every report: an identifier of the current boot, up to 128 printable characters, that changes every time the device boots. When `requiresReboot` is true, the platform accepts `RUNNING` as proof of the update only from a boot other than the one the device installed in.
 
 `update.cancel` (`{"v":1,"kind":"update.cancel","attemptId":"att-7f3k","assignmentId":"asg-91xq"}`) asks the device to stop working on that assignment. If it has not begun installing, it reports `stage` `ABANDONED`; once installation has started an update cannot be recalled.

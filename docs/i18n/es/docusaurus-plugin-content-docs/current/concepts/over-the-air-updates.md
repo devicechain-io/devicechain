@@ -79,7 +79,7 @@ hacia **un objetivo por componente**:
 
 - asignar mientras la actualización anterior del componente sigue en curso se rechaza hasta que esa
   actualización se cancele;
-- asignar de nuevo el mismo artefacto devuelve la asignación existente;
+- asignar de nuevo el mismo artefacto mientras esa actualización está en curso devuelve la asignación existente;
 - asignar cuando la actualización anterior ya terminó la **sustituye**, y se conserva el historial.
 
 `cancelUpdate` cancela al instante una actualización en cola. Antes de que empiece la instalación
@@ -104,14 +104,14 @@ dispositivo:
 | `UPDATING` | El dispositivo está instalando. |
 | `REBOOTING` | El dispositivo se está reiniciando en la nueva versión. |
 | `UPDATED` | El dispositivo ejecuta la versión objetivo. |
-| `FAILED` | El dispositivo informó de un fallo, o volvió con una versión distinta de la objetivo. |
+| `FAILED` | El dispositivo informó de un fallo o, en una actualización `UNKNOWN`, su inventario mostró que había reiniciado con una versión distinta de la objetivo. |
 | `TIMED_OUT` | Pasó un plazo antes de que se informara del inicio de la instalación. |
 | `UNKNOWN` | Pasó un plazo durante la instalación o el reinicio. |
 | `CANCELLED` | La actualización se canceló antes de empezar la instalación, o un operador abandonó una actualización `UNKNOWN`. |
 
 Los informes solo hacen avanzar un intento; un informe de una etapa anterior se ignora. **`UPDATED`
 solo se alcanza con pruebas**: el dispositivo informa de que la versión objetivo está en ejecución
-y, cuando el artefacto necesita un reinicio, desde un arranque distinto de aquel en el que la
+y, cuando el artefacto necesita un reinicio (todo artefacto `FIRMWARE` lo necesita; los `SOFTWARE` y `CONFIGURATION`, no), desde un arranque distinto de aquel en el que la
 instaló. Una confirmación de recepción, o el propio "éxito" de un instalador, no es una prueba.
 
 ### Plazos {#deadlines}

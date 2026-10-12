@@ -385,7 +385,7 @@ Cuando se asigna un artefacto al dispositivo, la plataforma publica en `device-d
 {"v":1,"kind":"update.assignment","attemptId":"att-7f3k","assignmentId":"asg-91xq","component":"firmware","trust":"UNVERIFIED","artifact":{"version":"1.4.2","digest":"sha256:…","size":8388608,"requiresReboot":true}}
 ```
 
-`component` nombra la parte del dispositivo que se actualiza; un dispositivo trabaja como máximo en una asignación por componente. `trust` es siempre `UNVERIFIED`: la plataforma ha comprobado que los bytes son los que se declararon, no quién los produjo, así que un dispositivo que necesite saber que una imagen es auténtica debe comprobar una firma propia.
+`component` nombra la parte del dispositivo que se actualiza; un dispositivo trabaja como máximo en una asignación por componente. `requiresReboot` es true para un artefacto de firmware y false para los de software y configuración. `trust` es siempre `UNVERIFIED`: la plataforma ha comprobado que los bytes son los que se declararon, no quién los produjo, así que un dispositivo que necesite saber que una imagen es auténtica debe comprobar una firma propia.
 
 Para obtener la imagen, pide una concesión de descarga en `device-reports`:
 
@@ -413,7 +413,7 @@ Informa de cada etapa en `device-reports` con `update.progress`:
 - `progress` (los bytes que tienes y el total, si se conoce) solo se admite con `DOWNLOADING`.
 - Informa de `VERIFIED` solo cuando el SHA-256 de los bytes que tienes coincida con `artifact.digest`.
 - `FAILED` debe llevar `result`: `{"code":"FLASH_WRITE","detail":"…"}`, un código de hasta 64 letras mayúsculas, dígitos y guiones bajos, y un detalle de hasta 512 bytes.
-- `RUNNING` debe llevar `running`: `{"version":"1.4.2"}`, opcionalmente con el `digest` de lo que se ejecuta. Envíalo en cuanto la nueva versión esté en ejecución.
+- `RUNNING` debe llevar `running`: `{"version":"1.4.2"}`, opcionalmente con el `digest` de lo que se ejecuta. Envíalo en cuanto la nueva versión esté en ejecución. Un informe `RUNNING` que nombra cualquier otra versión no se aplica: si el dispositivo no está en la objetivo, informa `FAILED`.
 - `bootId` es obligatorio en cada informe: un identificador del arranque actual, de hasta 128 caracteres imprimibles, que cambia cada vez que el dispositivo arranca. Cuando `requiresReboot` es true, la plataforma acepta `RUNNING` como prueba de la actualización solo desde un arranque distinto de aquel en el que el dispositivo la instaló.
 
 `update.cancel` (`{"v":1,"kind":"update.cancel","attemptId":"att-7f3k","assignmentId":"asg-91xq"}`) pide al dispositivo que deje de trabajar en esa asignación. Si no ha empezado a instalar, informa de la `stage` `ABANDONED`; una vez iniciada la instalación, la actualización no se puede revocar.

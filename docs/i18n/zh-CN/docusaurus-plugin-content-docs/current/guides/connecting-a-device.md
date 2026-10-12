@@ -376,7 +376,7 @@ mosquitto_pub \
 {"v":1,"kind":"update.assignment","attemptId":"att-7f3k","assignmentId":"asg-91xq","component":"firmware","trust":"UNVERIFIED","artifact":{"version":"1.4.2","digest":"sha256:…","size":8388608,"requiresReboot":true}}
 ```
 
-`component` 指明要更新的设备部件；每个部件上设备最多同时处理一个分配。`trust` 始终为 `UNVERIFIED`：平台只检查了字节是否与声明的一致，而不检查由谁生成，因此需要确认镜像真实性的设备必须自行校验签名。
+`component` 指明要更新的设备部件；每个部件上设备最多同时处理一个分配。固件制品的 `requiresReboot` 为 true，软件和配置制品为 false。`trust` 始终为 `UNVERIFIED`：平台只检查了字节是否与声明的一致，而不检查由谁生成，因此需要确认镜像真实性的设备必须自行校验签名。
 
 要获取镜像，请在 `device-reports` 上申请下载授权：
 
@@ -404,7 +404,7 @@ mosquitto_pub \
 - `progress`（已持有的字节数，以及已知时的总数）只允许与 `DOWNLOADING` 一起出现。
 - 只有当所持字节的 SHA-256 等于 `artifact.digest` 时才报告 `VERIFIED`。
 - `FAILED` 必须携带 `result`：`{"code":"FLASH_WRITE","detail":"…"}`，其中 code 最多 64 个大写字母、数字和下划线，detail 最多 512 字节。
-- `RUNNING` 必须携带 `running`：`{"version":"1.4.2"}`，可选附带正在运行内容的 `digest`。新版本运行后立即发送。
+- `RUNNING` 必须携带 `running`：`{"version":"1.4.2"}`，可选附带正在运行内容的 `digest`。新版本运行后立即发送。报告其他版本的 `RUNNING` 不会被应用：如果设备未处于目标版本，请报告 `FAILED`。
 - 每次报告都必须带 `bootId`：当前启动的标识，最多 128 个可打印字符，每次设备启动时都会改变。当 `requiresReboot` 为 true 时，只有来自与安装时不同的启动的 `RUNNING`，平台才接受为更新成功的证据。
 
 `update.cancel`（`{"v":1,"kind":"update.cancel","attemptId":"att-7f3k","assignmentId":"asg-91xq"}`）要求设备停止处理该分配。如果尚未开始安装，设备报告 `stage` 为 `ABANDONED`；安装一旦开始，更新就无法撤回。

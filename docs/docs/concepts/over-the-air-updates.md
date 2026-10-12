@@ -77,7 +77,7 @@ The device's profile must be on the artifact's compatible list, and the assignme
 
 - assigning while the component's previous update is still in progress is refused until that update
   is cancelled;
-- assigning the same artifact again returns the existing assignment;
+- assigning the same artifact again while that update is in progress returns the existing assignment;
 - assigning after the previous update finished **supersedes** it, and the history is kept.
 
 `cancelUpdate` cancels a queued update at once. Before installation starts it records the request,
@@ -101,14 +101,14 @@ reports:
 | `UPDATING` | The device is installing. |
 | `REBOOTING` | The device is rebooting into the new version. |
 | `UPDATED` | The device is running the target version. |
-| `FAILED` | The device reported a failure, or came back on a version other than the target. |
+| `FAILED` | The device reported a failure, or, for an `UNKNOWN` update, its inventory showed it had rebooted onto a version other than the target. |
 | `TIMED_OUT` | A deadline passed before installation was reported started. |
 | `UNKNOWN` | A deadline passed during installation or reboot. |
 | `CANCELLED` | The update was cancelled before installation began, or an operator abandoned an `UNKNOWN` update. |
 
 Reports only move an attempt forward; a report for an earlier stage is ignored. **`UPDATED` is
 reached only on evidence**: the device reports the target version running, and when the artifact
-needs a reboot, from a boot other than the one it installed in. An acknowledgement, or an
+needs a reboot (every `FIRMWARE` artifact does; `SOFTWARE` and `CONFIGURATION` artifacts do not), from a boot other than the one it installed in. An acknowledgement, or an
 installer's own "success", is not evidence.
 
 ### Deadlines {#deadlines}
