@@ -17,6 +17,7 @@ import (
 	esproto "github.com/devicechain-io/dc-event-sources/proto"
 	mscfg "github.com/devicechain-io/dc-microservice/config"
 	core "github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/credential"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/streams"
 	dctest "github.com/devicechain-io/dc-microservice/test"
@@ -81,13 +82,31 @@ func BenchmarkCaptureIngestThroughput(b *testing.B) {
 	}
 }
 
+// benchTransit is the transit key the bench seals presented tokens under, from a fixed root key.
+var benchTransit = func() *credential.SecretTransit {
+	t, err := credential.DeriveSecretTransit(make([]byte, 32))
+	if err != nil {
+		panic(err)
+	}
+	return t
+}()
+
 // benchInboundMessage is a bench-local copy of what event-sources' main package does to
 // turn a decoded event into its inbound-events message (inboundEventMessage), without the
-// metric, so every arm is charged the same build.
+// metric, so every arm is charged the same build. That includes sealing a bearer token:
+// MarshalUnresolvedEvent refuses an event still carrying one in the clear, so a copy that
+// skipped the seal would build nothing for the HTTP bench's ACCESS_TOKEN body.
 func benchInboundMessage(source, tenant string, event *model.UnresolvedEvent, payload interface{},
 	captureSeq uint64) (context.Context, messaging.Message, bool) {
 	event.Source = source
 	event.Payload = payload
+	if esproto.IsBearerCredentialType(event.CredentialType) && event.CredentialId != nil {
+		sealed, err := benchTransit.SealToken(tenant, *event.CredentialType, *event.CredentialId)
+		if err != nil {
+			return nil, messaging.Message{}, false
+		}
+		event.CredentialId, event.SealedCredentialId = nil, &sealed
+	}
 	bytes, err := esproto.MarshalUnresolvedEvent(event)
 	if err != nil {
 		return nil, messaging.Message{}, false
