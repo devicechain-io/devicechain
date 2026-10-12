@@ -10,7 +10,9 @@ import (
 )
 
 // The clone functions below are what lets the cached API read the in-process tier's DECODED
-// values (messaging.GetCloned) instead of decoding JSON on every hit.
+// values (messaging.GetCloned) instead of decoding JSON on every hit. The profile
+// resolution has none: it cannot be changed once built, so the cache shares it
+// (messaging.GetShared, and see ProfileResolution).
 //
 // 🔴 EACH ONE MUST SHARE NO MEMORY WITH ITS ARGUMENT. The argument is the value the cache
 // keeps for every reader, so a slice, map or pointer left shared lets one event's write
@@ -31,27 +33,6 @@ func cloneBool(in *bool) *bool {
 func cloneMemberships(in *[]GroupMembership) *[]GroupMembership {
 	out := cloneSlice(*in)
 	return &out
-}
-
-func cloneProfileResolution(in *ProfileResolution) *ProfileResolution {
-	out := *in
-	out.Metrics = cloneResolvedMetrics(in.Metrics)
-	return &out
-}
-
-func cloneResolvedMetrics(in []ResolvedMetric) []ResolvedMetric {
-	if in == nil {
-		return nil
-	}
-	out := make([]ResolvedMetric, len(in))
-	for i := range in {
-		out[i] = in[i]
-		out[i].Unit = clonePtr(in[i].Unit)
-		out[i].MinValue = clonePtr(in[i].MinValue)
-		out[i].MaxValue = clonePtr(in[i].MaxValue)
-		out[i].Enum = cloneSlice(in[i].Enum)
-	}
-	return out
 }
 
 func cloneRelationshipResults(in *EntityRelationshipSearchResults) *EntityRelationshipSearchResults {

@@ -58,9 +58,9 @@ type s3Presigner interface {
 const (
 	// s3UnboundedPutCap bounds an object written with PutOptions.MaxSize == 0 so a
 	// caller that sets no ceiling cannot make the store buffer without limit (the S3
-	// backend buffers to hand PutObject a known length). The current consumer
-	// (branding logos) always sets MaxSize; large streaming/multipart uploads
-	// (firmware) are a later slice, together with the range-read.
+	// backend buffers to hand PutObject a known length). The current consumers
+	// (branding logos, update artifacts) always set MaxSize; streaming/multipart
+	// uploads of very large images are a later slice.
 	s3UnboundedPutCap = 64 << 20 // 64 MiB
 	// defaultPresignExpiry / maxPresignExpiry bound a minted URL's lifetime; the S3
 	// signature protocol caps presigned URLs at 7 days.

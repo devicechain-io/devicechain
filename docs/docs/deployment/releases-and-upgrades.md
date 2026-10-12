@@ -3512,11 +3512,101 @@ gh attestation verify <archive> --repo devicechain-io/devicechain \
 
 Nothing needs doing.
 
-### Next release {#next-upgrade}
+### v0.20.0 — sign in through your own identity provider; widgets ship as packages {#v0200-upgrade}
 
-What the release after `v0.19.0` changes, collected as it lands.
+`v0.20.0` is an in-place upgrade from `v0.19.0`: `dcctl install` for the cluster, then `dcctl
+upgrade` for each instance, as described [for v0.17.0](#v0170-upgrade). Coming from `v0.18.0`, read
+the [`v0.19.0` notes](#v0190-upgrade) as well: their row and chunk counts and their steps apply to
+this upgrade too. An instance built by `v0.16.0` or earlier still has to be
+[destroyed and built again](#pre-declaration-recreate).
 
-#### Signing out now ends the session on the server, and everyone signs in again once {#next-upgrade-server-side-logout}
+Most of this release is new capability that changes nothing until you use it: people can sign in
+through your own OpenID Connect identity provider, dashboards can show widgets from your own
+packages, devices can receive configuration, and over-the-air updates arrive as a first slice. What
+changes for everyone: every user signs in again once, the rate ceilings are renamed after what they
+count, X.509 device credentials are refused, a device password is kept only as a one-way digest,
+dashboards published before the upgrade have to be published again, and many API inputs gain a
+bound. The services that handle every event run with a tuned garbage collector, and
+`device-management` keeps its lookups for minutes rather than seconds.
+
+#### Before you upgrade {#v0200-before}
+
+1. **Rename the rate ceiling keys** in any service `config` you set:
+   `ingestRateLimit.messagesPerSecond` becomes `ingestRateLimit.readingsPerSecond` (`event-sources`,
+   `lwm2m-ingest`, `sparkplug-ingest`) and `outboundMessagesPerSecond` becomes
+   `outboundCallsPerSecond` (`event-processing`, `outbound-connectors`). A service that still finds
+   an old key refuses to start. Scripts that read or set tenant ceilings through the API need the
+   new field names too. See [The rate ceilings are renamed](#v0200-rate-key-rename).
+2. **Move devices off X.509 credentials.** A credential of type `X509_CERTIFICATE` stops
+   authenticating at the upgrade. Give each such device an `ACCESS_TOKEN` or `MQTT_BASIC` credential
+   first. See [X.509 device credentials are no longer accepted](#v0200-x509).
+3. **On an S3 object store, grant the credential `s3:ListBucket`** on the bucket, or a deleted
+   tenant's erasure does not complete. See
+   [Deleting a tenant now erases everything stored under its object-store prefix](#v0200-object-prefix-erase).
+4. **On a large event store, consider building two indexes first.** The first start of
+   `event-management` builds two indexes over the base events not yet compressed, and refuses,
+   changing nothing, when there are more than 4,000,000 rows to index or a table has more than
+   500 chunks. Both sections give the statements that build the index by hand, before or after the
+   upgrade: [A device's event list reads only its own tenant's rows](#tenant-device-index) and
+   [Two devices can now send the same `altId` at the same instant](#device-alt-id-key).
+5. **If you set `gogc` or `goMemLimitPercent` at the top level of your chart values**, the five
+   services that handle every event now set their own, which win. See
+   [The event-path services run with a tuned garbage collector](#v0200-gogc).
+6. **Check `device-management`'s memory for a large fleet.** Its lookups are now kept for 5 minutes,
+   and each replica needs room for the whole active fleet. See
+   [`device-management` keeps its lookups for minutes](#v0200-resolve-caches).
+7. **Stop anything else that reads the `device-events-capture` stream**, such as `nats stream view`.
+   It now accepts only the consumer `event-sources` owns. See
+   [The device intake stream deletes each message once it has been forwarded](#v0200-capture-stream).
+8. **Recreate any identity whose email address has a non-ASCII domain** (`user@bücher.example`), or
+   is not a valid `local@domain`. After the upgrade it cannot sign in until an administrator
+   recreates it. Delete it, create it again with the domain in its `xn--` form
+   (`user@xn--bcher-kva.example`), and restore its memberships. See
+   [An email's domain now has one spelling](#v0200-email-idna).
+9. **Check your API clients and the packages you build against** against
+   [Requests that are now refused](#v0200-input-bounds),
+   [Dashboards: publishing makes a version live](#v0200-dashboard-publishing) and
+   [The published packages](#v0200-packages).
+
+#### During the upgrade {#v0200-during}
+
+- **Device passwords are converted.** The first start of the new `device-management` replaces every
+  stored `MQTT_BASIC` password with a one-way digest. Until every `device-management` pod runs the
+  new release, an older pod finds no password for a converted credential, so it refuses that
+  device's MQTT connects and the password checks on its events; the device retries and reaches a new
+  pod. A password set on either version during the rollout is the one that survives.
+- **Upgrade `event-sources` and `device-management` together.** While they run different versions,
+  events that carry a device password or access token in their body can be refused. See
+  [Events that carry a device password or access token in the body](#v0200-body-password).
+- **Avoid changing tenants or tiers until the rollout finishes.** An older ingest or outbound pod
+  meters every tenant at the platform default, and an older `user-management` pod fails the tenant
+  reads and writes it serves, until it is replaced. See [The rate ceilings are renamed](#v0200-rate-key-rename).
+- **`event-management` builds two indexes** on its first start; writes of base events wait while
+  each builds, and reads do not.
+- **`event-sources` forwards what the device intake stream holds, then recreates it.** If the stream
+  is not empty within five minutes, `event-sources` stops with an error and deletes nothing.
+- **Detection moves to a new consumer of the resolved events.** See
+  [Detection reads its events through a new consumer](#v0200-ack-floor).
+
+Going back to `v0.19.0` after the upgrade leaves every device that uses an `MQTT_BASIC` password
+unable to authenticate, because `v0.19.0` cannot read a digest; set new passwords and load them onto
+those devices if you do. The index and stream changes above each say what going back needs.
+
+#### After the upgrade {#v0200-after}
+
+- **Everyone signs in again once**, and OAuth clients such as MCP agents authorize again. See
+  [Signing out now ends the session on the server](#v0200-server-side-logout).
+- **Publish again every dashboard that viewers should see.** Until then, viewers are told it is not
+  published. See [Dashboards: publishing makes a version live](#v0200-dashboard-publishing).
+- **New alerts may fire.** `SafetyGateDisabled` fires for an optional safety gate a service runs
+  without. The others are listed under [New alerts](#v0200-alerts).
+- **An instance bootstrapped before this release has no object store, and the upgrade does not add
+  one.** Tenant logos and update artifacts need one. See
+  [`dcctl bootstrap` can give an instance an object store](#v0200-object-store).
+
+#### What changed {#v0200-what-changed}
+
+##### Signing out now ends the session on the server, and everyone signs in again once {#v0200-server-side-logout}
 
 Signing out of the console or the embedded dashboard app used to clear only the browser: the refresh token stayed valid for up to 7 days, and the sign-in token the console keeps could still start a new session for up to 15 minutes. A new `logout` mutation ends the sign-in on the server. From that moment the sign-in's exchanges are refused: its refresh tokens no longer refresh, in any tenant, its sign-in token can no longer choose a tenant, and an OAuth grant authorized during that sign-in no longer refreshes. The MCP authorization page signs in on its own, so a grant made there is not ended by signing out of the console; it ends when that sign-in runs out (7 days by default). Other sign-ins of the same account are not affected. Access tokens and sign-in tokens already issued, including on the admin API, cannot be recalled and stay valid until they expire, within 15 minutes. If the server cannot be reached when a user signs out, the app still signs them out locally and tells them the server-side session could not be ended.
 
@@ -3524,7 +3614,7 @@ Each sign-in is now a record that lasts as long as a refresh token (7 days by de
 
 Tokens issued before the upgrade carry no sign-in record and are refused, so **everyone signs in again once**: console, dashboard app, SDK and OAuth sessions end at their next refresh, within 15 minutes of the upgrade unless you changed the access-token lifetime. OAuth clients such as MCP agents authorize again. Nothing else needs doing.
 
-#### Events that carry a device password or access token in the body are affected while versions are mixed {#next-upgrade-body-password}
+##### Events that carry a device password or access token in the body are affected while versions are mixed {#v0200-body-password}
 
 From this release, `event-sources` and `device-management` pass a device password or access token that
 arrives in an event body in a different form, and each needs the new version to read the other's. While
@@ -3539,7 +3629,7 @@ old and new versions of the two run side by side during a rolling upgrade:
 
 Upgrade `event-sources` and `device-management` together, or accept the brief loss of those events.
 
-#### An `MQTT_BASIC` device password is shown once, and cannot be shown again {#next-upgrade-device-password-show-once}
+##### An `MQTT_BASIC` device password is shown once, and cannot be shown again {#v0200-device-password-show-once}
 
 The platform now keeps only a one-way, keyed digest of an `MQTT_BASIC` device password, not the password. The API never returned the password on read, so no query result changes. What changes is that nobody can recover it from the platform either: the console shows a password once, right after you add the credential or set a new one, with a copy button, and afterwards only says that a password is set. Its credential row gains a **Set new password** action, and the form offers **Generate strong password**.
 
@@ -3547,7 +3637,7 @@ Existing passwords are converted to digests the first time device-management sta
 
 Nothing needs doing.
 
-#### A device's event list reads only its own tenant's rows {#tenant-device-index}
+##### A device's event list reads only its own tenant's rows {#tenant-device-index}
 
 The index that serves a device's event list now starts with the tenant. In `v0.19.0` the list's
 total, and a device's list filtered by event type, visited every row with that device's token that
@@ -3588,7 +3678,7 @@ because it carries the tenant.
   the query under [Check the row count](#v0190-row-count) with `hypertable_name IN ('events')`.
 - Going back to `v0.19.0` keeps the new index, and `v0.19.0` works with it.
 
-#### Two devices can now send the same `altId` at the same instant, and both events are stored {#device-alt-id-key}
+##### Two devices can now send the same `altId` at the same instant, and both events are stored {#device-alt-id-key}
 
 An event's `altId` is the sender's own message id, and the write side used it, with the event's
 `occurredTime`, to drop a redelivered copy. That key was per tenant, so when two devices of one tenant
@@ -3629,7 +3719,7 @@ yourself if you need that.
   still deduplicated, but that release still checks per tenant, so it goes back to discarding the
   second device's event.
 
-#### The device intake stream deletes each message once it has been forwarded {#next-upgrade-capture-stream}
+##### The device intake stream deletes each message once it has been forwarded {#v0200-capture-stream}
 
 The stream that holds every device publish until `event-sources` has forwarded it
 (`device-events-capture`) now deletes a message when `event-sources` acknowledges it. In `v0.19.0`
@@ -3649,7 +3739,7 @@ forwarded yet is kept exactly as before, so an outage of `event-sources` still l
   `v0.19.0` refuses to start against a stream with the new retention; it creates the stream again
   on its next start. Anything not yet forwarded when you delete it is lost.
 
-#### An inbound event whose failure record cannot be encoded is no longer stored as an empty record {#next-upgrade-failed-record-encode}
+##### An inbound event whose failure record cannot be encoded is no longer stored as an empty record {#v0200-failed-record-encode}
 
 When device-management could not encode the record of an inbound event that failed, it used to
 store an empty record anyway and acknowledge the event. The record read back as a failure with no
@@ -3661,7 +3751,7 @@ therefore has a fourth cause, listed in [the alert table](./detection-engine.md#
 
 Nothing needs doing.
 
-#### `dcctl install --dry-run` makes the re-install refusals the install makes
+##### `dcctl install --dry-run` makes the re-install refusals the install makes {#v0200-dry-run}
 
 On a cluster that answers, a dry run now reads the install record, asks which instances run on
 the cluster when the settings change, and fails with the install's own message when the install would be refused for what
@@ -3674,7 +3764,7 @@ release is still refused only when the install runs.
 
 Nothing to do.
 
-#### `dcctl install` and `dcctl bootstrap` wait until every database instance has joined {#next-upgrade-wait-database-instances}
+##### `dcctl install` and `dcctl bootstrap` wait until every database instance has joined {#v0200-wait-database-instances}
 
 Before, `dcctl install` returned once the relational database's primary accepted a connection, and
 `dcctl bootstrap` waited only for the services, so either could report success, and bootstrap could
@@ -3690,7 +3780,7 @@ bootstrapped meanwhile. A healthy install adds a few seconds.
 
 Nothing else needs doing.
 
-#### The rate ceilings are renamed after what they count {#next-upgrade-rate-key-rename}
+##### The rate ceilings are renamed after what they count {#v0200-rate-key-rename}
 
 The ingest ceiling has counted readings for some time, and the outbound ceiling counts connector
 calls, but both were still named for messages. They are renamed everywhere, with no old spelling
@@ -3722,7 +3812,7 @@ kept alongside:
   serves fail until it is replaced. Both end when the rollout finishes; avoid changing tenants or
   tiers until it has.
 
-#### Deleting a tenant now erases everything stored under its object-store prefix {#next-upgrade-object-prefix-erase}
+##### Deleting a tenant now erases everything stored under its object-store prefix {#v0200-object-prefix-erase}
 
 Erasing a deleted tenant used to remove only the objects that a user-management row named. It now
 also removes every object under that tenant's prefix in the object store, whichever service stored
@@ -3733,14 +3823,14 @@ it, so update artifacts and any object whose reference was lost are erased with 
   erasure fails and is retried on every pass, so the erasure does not complete. Grant it before
   you upgrade. The filesystem backend needs nothing.
 
-#### Single sign-on is new, and needs nothing from you {#next-upgrade-sso}
+##### Single sign-on is new, and needs nothing from you {#v0200-sso}
 
-People can now sign in through an external OpenID Connect identity provider, and a tenant can require it. Nothing is on until a superuser creates a connection, so an upgraded instance behaves as before. There is nothing to migrate and password sign-in keeps working. The one-time re-sign-in that [server-side sign-out](#next-upgrade-server-side-logout) causes is already described.
+People can now sign in through an external OpenID Connect identity provider, and a tenant can require it. Nothing is on until a superuser creates a connection, so an upgraded instance behaves as before. There is nothing to migrate and password sign-in keeps working. The one-time re-sign-in that [server-side sign-out](#v0200-server-side-logout) causes is already described.
 
 - **Setting up a provider** is described in [Configure single sign-on](../guides/configuring-sso.md), and how it behaves in [Single sign-on](../concepts/single-sign-on.md).
 - **Ending a session does not recall tokens already issued.** After a sign-out, a revoke, an unlink or a disabled connection, the access and identity tokens already issued keep working until they expire, 15 minutes by default.
 
-#### Single sign-on needs the instance's public address, so the chart now derives it {#next-upgrade-sso-issuer}
+##### Single sign-on needs the instance's public address, so the chart now derives it {#v0200-sso-issuer}
 
 Signing in through an external OpenID Connect identity provider, and the OAuth authorization server
 that MCP clients use, both need to know the address this instance is reached at, because a sign-in
@@ -3759,7 +3849,7 @@ value always wins. Three things follow:
   http issuer on anything but a loopback host. The authorization server and single sign-on stay off,
   and `helm install` and `dcctl bootstrap` say so. Serve the instance over https to turn them on.
 
-#### Single sign-on alerts {#next-upgrade-sso-alerts}
+##### Single sign-on alerts {#v0200-sso-alerts}
 
 Three alerts report the failures of single sign-on. If you route or silence alerts by name, these
 are new.
@@ -3770,12 +3860,271 @@ are new.
 | `SsoUnverifiedIdentityRefused` | warning | A sign-in was refused although the provider vouched for it, with the outcome in the `outcome` label: `refused_unverified_email`, `refused_unverified_domain`, `refused_required_claim` or `refused_system_role_identity`. Nobody was signed in. | Usually a misconfigured connection or someone probing one. Look in the audit journal for the address the provider asserted, and at the provider's own sign-in log. |
 | `SsoStateStoreFull` | critical | The store that holds begun sign-ins is full, so user-management refuses to begin any single sign-on through any provider until entries expire, ten minutes later. Password sign-in is unaffected. | Someone is almost certainly calling the public sign-in start in a loop: find the traffic in the ingress logs and block it upstream. If the volume is legitimate, raise `instance.config.infrastructure.nats.kvStateMaxBytes`. |
 
-#### An email's domain now has one spelling, and a stored address with a non-ASCII domain no longer matches {#next-upgrade-email-idna}
+##### An email's domain now has one spelling, and a stored address with a non-ASCII domain no longer matches {#v0200-email-idna}
 
 An email address is now stored, looked up and compared in one canonical form: the local part trimmed and lower-cased as before, and the domain converted to lower-case ASCII (the `xn--` form for an internationalised name) with no trailing dot. `user@bücher.example` and `user@xn--bcher-kva.example` are therefore the same identity at password sign-in, at single sign-on and in a link request, and the domain a connection claims is matched in the same form. An address that is not exactly `local@domain`, or whose domain is not a valid hostname, is refused.
 
 - **An address with an ASCII domain is unchanged.** Nothing needs doing for it.
-- **An identity stored with a non-ASCII domain (`user@bücher.example`) keeps its old form, and is refused until an administrator recreates it.** It cannot sign in with a password or through single sign-on, and a session it already holds ends at its next exchange; selecting a tenant or refreshing then reports the code `IDENTITY_EMAIL_NOT_CANONICAL`. Administrator actions still find it by the address as it is stored, so you can disable it, end its sessions, unlink it and delete it. To restore access, unlink and delete the old identity, then create it again (under either spelling of the domain: it is stored in the `xn--` form) and restore its memberships and links. Doing this before upgrading avoids the interruption. The same applies to an identity whose stored address is not a valid `local@domain`.
+- **An identity stored with a non-ASCII domain (`user@bücher.example`) keeps its old form, and is refused until an administrator recreates it.** It cannot sign in with a password or through single sign-on, and a session it already holds ends at its next exchange; selecting a tenant or refreshing then reports the code `IDENTITY_EMAIL_NOT_CANONICAL`. Administrator actions still find it by the address as it is stored, so you can disable it, end its sessions, unlink it and delete it. To restore access, unlink and delete the old identity, then create it again (under either spelling of the domain: it is stored in the `xn--` form) and restore its memberships and links. Doing this before upgrading, with the domain in its `xn--` form, avoids the interruption: see [Before you upgrade](#v0200-before). The same applies to an identity whose stored address is not a valid `local@domain`.
+
+##### X.509 device credentials are no longer accepted {#v0200-x509}
+
+The `X509_CERTIFICATE` credential type is not accepted until certificate verification is supported.
+Creating a credential of that type, changing one to it, and replacing a device with one are refused
+with `UNSUPPORTED`, and nothing is written. The console no longer offers it. A credential of that
+type stored before the upgrade no longer authenticates, and nothing converts it: before you upgrade,
+give each such device an `ACCESS_TOKEN` or `MQTT_BASIC` credential. See
+[Device credentials](../guides/device-credentials.md).
+
+##### An `MQTT_BASIC` password must be at least 16 bytes {#v0200-mqtt-password-length}
+
+Creating an `MQTT_BASIC` credential, or setting its password, now refuses a password shorter than 16
+bytes, or longer than 4096, counted as sent. A short password is refused with `INVALID_VALUE`. A
+device password is provisioned rather than remembered, so the floor is set for a generated secret; the
+console's **Generate strong password** makes one. Existing shorter passwords keep working until they
+are set again. Changing a credential to `MQTT_BASIC` must set its password in the same request.
+
+##### Dashboards: publishing makes a version live {#v0200-dashboard-publishing}
+
+Publishing a dashboard now makes the version it creates the one viewers are served, and
+`activateDashboardVersion` makes an earlier version live again; there is no unpublish. Viewers read
+the live version with `publishedDashboard`, and `/dash` opens it by its token. The draft is for the
+dashboard's authors.
+
+- **Dashboards published before the upgrade are not live.** Nothing recorded which version they
+  served, so viewers are told the dashboard is not published (`NOT_PUBLISHED`) until an author
+  publishes it again.
+- **`publishDashboard` returns a `DashboardPublication`**, with the new `version` and the `dashboard`.
+- **Reading a dashboard's `definition`, or a version's body with `dashboardVersion`, needs
+  `dashboard:write`.** A caller with only `dashboard:read` reads `publishedDashboard`.
+- **The `dashboards` search returns `DashboardSummary`**, which has no `definition`.
+- **`dashboardVersions` is paged**, newest first: 100 versions unless you pass `limit` (at most
+  1000) and `offset`, and without each version's body.
+- `rollbackDashboard` takes an optional `expectedUpdatedAt` and refuses a stale rollback.
+- The name filter of the `dashboards` search matches `%`, `_` and `\` as themselves, not as
+  wildcards.
+- Changing a dashboard of a tenant being deleted is refused with `TENANT_DELETED`; deleting it is not.
+- The console will not publish a version while a widget on it is unresolved. See
+  [Publishing while a widget is unresolved](../guides/adding-widget-packages.md#publishing-while-a-widget-is-unresolved).
+
+##### Measurement aggregation needs a start time, and is bounded {#v0200-aggregation-bounds}
+
+`bucketedMeasurements` now requires `startTime`, and is refused with `INVALID_VALUE` without one;
+`endTime` defaults to now. A read is refused with `LIMIT_EXCEEDED`, rather than truncated, when it
+would produce more than 10,000 buckets, or when its buckets times its measurement names exceed
+50,000. Without a `name` filter, the names counted are the distinct names the read matches. The MCP
+`aggregate_measurements` tool has the same requirement and bounds.
+
+##### Requests that are now refused {#v0200-input-bounds}
+
+Inputs that were accepted at any size are now refused above these bounds, with `LIMIT_EXCEEDED`
+unless another code is named. A value exactly at a bound is accepted. The
+[GraphQL reference](../reference/graphql-api.md#input-validation) lists them.
+
+| What | Bound |
+| --- | --- |
+| Keys in one lookup by token, id or external id, in every service, and the tokens of one `removeEntityRelationships` | 1,000 |
+| A JSON input: metadata, properties, configuration, a payload, recipients and the like | 64 KiB |
+| A command's payload or metadata, when it is enqueued or batched | 64 KiB (`PAYLOAD_TOO_LARGE`, `METADATA_TOO_LARGE`) |
+| A command name | 128 bytes (`COMMAND_NAME_TOO_LONG`) |
+| An attribute key, and an attribute value | 128 bytes, and 64 KiB |
+| A detection rule's definition, and its authoring graph | 256 KiB each |
+| Tracked relationships of one device | 256 |
+| Metric definitions, command definitions and detection rules of one profile | 1,000 of each |
+| Relationships created by one `createEntityRelationships` | 1,000 |
+| Versions returned by `deviceProfileVersions`, `entityGroupVersions`, `assetTypeVersions` and `connectorVersions` | the newest 1,000, unless paged with their new `limit` and `offset` |
+| Recipients of one notification rule | 100 |
+| An OAuth client's `redirectUris`, and its `scopes` | 16 entries each, of at most 2,048 and 64 characters |
+| Tenant tiers, and the tokens of one `reorderTenantTiers` | 100 |
+| A password set through the admin API | 72 bytes |
+| Roles, authorities or role tokens in one admin request | 100 |
+| Running one GraphQL query or mutation | 60 seconds |
+| Receiving a request body, on GraphQL and on the OAuth and MCP endpoints | 30 seconds; a stalled body is answered `400` and the connection closed |
+
+Three values are also refused when a record is created or updated, where before they were stored and
+failed later or did nothing:
+
+- a connector of type `gcp_pubsub`, which has no delivery client yet (`UNSUPPORTED`); one stored
+  earlier is still dead-lettered when it is dispatched;
+- AI provider `params` that set anything (`UNSUPPORTED`), since no provider client applies them;
+  empty, null and `{}` are accepted;
+- a webhook notification channel's custom headers that delivery would refuse: an invalid name,
+  control characters in a value, a reserved `Authorization` or `X-DC-*` header, or a duplicate.
+
+##### The event-path services run with a tuned garbage collector {#v0200-gogc}
+
+`event-sources`, `event-management`, `device-management`, `device-state` and `event-processing` now
+run with `GOGC=400` and a soft memory limit (`GOMEMLIMIT`) at 75% of their memory limit, and
+`event-processing`'s memory limit is at least 384Mi. On Google Kubernetes Engine at 6,000 events a
+second, against a control run in the same session, CPU per event fell 18% in `device-management` and
+`event-management`, 15% in `device-state`, 4% in `event-sources` and 5% in `event-processing`.
+
+They are chart values, `functionalAreas.<area>.gogc` and `functionalAreas.<area>.goMemLimitPercent`,
+and a new top-level `gogc` (default `0`, off) beside the existing top-level `goMemLimitPercent`. An
+area's own value wins over the top level, so a top-level `0` no longer turns the soft limit off for
+these five: set the area's own value to `0` to turn either off for that area.
+
+##### `device-management` keeps its lookups for minutes, and a change reaches every replica {#v0200-resolve-caches}
+
+`device-management` looks up each event's credential, device, tracked relationships, profile and
+group memberships, and kept them in each replica's memory for 5 seconds, so a device that reported
+less often than that was looked up afresh every time. They are now kept for 5 minutes by default:
+
+| `device-management` config key | Default | Range |
+| --- | --- | --- |
+| `inMemoryCache.ttlSeconds` (new) | 300 | 1-3600 |
+| `inMemoryCache.credentialCacheMiB` (new; was a fixed 16 MiB) | 32 | 1-256 |
+| `deviceCacheTtlSeconds`, `relationshipCacheTtlSeconds`, `metricDefCacheTtlSeconds`, `membershipCacheTtlSeconds` (were 60) | 300 | 1-3600 |
+
+A value outside its range stops the service from starting. A change now drops the stored copy on
+every replica, not only on the one that made it; a replica whose broker connection comes back drops
+everything it holds, and erasing a deleted tenant drops that tenant's copies on every replica.
+Updating a device, including changing its type, and creating a relationship, in one call or many,
+by redeeming or reopening a claim, or by changing a relationship type, did not drop the copies they
+changed, and now do.
+
+- **Size each replica for the whole active fleet**, not the fleet divided by replicas: every replica
+  sees nearly every device. For 60,000 devices with one tracked relationship each, that is about 80 for
+  `inMemoryCache.credentialCacheMiB`, 64 for `inMemoryCache.perDeviceCacheMiB` and a memory limit of
+  512Mi. A bound smaller
+  than the fleet makes the cache answer almost nothing.
+- **A revocation is bounded by the same 5 minutes.** A replica that misses the message telling it
+  to drop a revoked credential, without losing its broker connection, can go on authenticating that
+  credential's events until its copy expires. Connections are always checked against the database.
+  See [How quickly a revocation takes effect](../guides/device-credentials.md#revocation-timing).
+
+##### Readers fetch ahead by default {#v0200-fetch-ahead}
+
+A service that reads a stream now asks for its next batch while it hands out the current one, and
+asks for 128 messages at a time instead of 64. Measured on Google Kubernetes Engine, this kept the
+detection engine's backlog under heavy load at a few hundred messages instead of tens of thousands;
+the throughput ceiling and every service's CPU per event were the same with it off. Set
+`instance.config.infrastructure.nats.fetch.ahead: false` to turn it off. See
+[Fetching ahead](./observability.md#fetch-ahead).
+
+##### Detection reads its events through a new consumer {#v0200-ack-floor}
+
+`event-processing` now acknowledges the resolved events once per checkpoint, through a new durable
+consumer whose name ends in `_ackfloor`
+(`<instance>_event-processing_resolved-events_ackfloor`). On its first start the new consumer begins
+just after the last event the saved state covers, and the first leader of the new release deletes
+the old consumer. Nothing needs migrating. A dashboard or alert of your own that selects
+`event-processing`'s resolved-events consumer by its `durable` label needs the new name; the shipped
+alerts match both. Going back to `v0.19.0` makes detection read the stream's retained events once
+more, and it skips those it has already seen.
+
+Live detection also reads back a range of events it was not delivered, instead of skipping it, and
+two alerts report it (`DetectLiveGapFillFailing`, `DetectLiveDeliveriesRecovered`). A detection loop
+that stops making progress raises `DetectLoopStalled`, and each checkpoint now runs under a deadline
+whose floor is the new `checkpointTimeoutSeconds` (default 10, at most 120).
+
+##### The AI drafting timeout {#v0200-inference-timeout}
+
+The default ceiling on one call from `ai-inference` to a model provider falls from 60 to 40 seconds
+(`inferenceTimeoutMs`, at most 120000). Drafting a rule from a description now waits for that
+ceiling, with an overall budget of 50 seconds, and a model that does not answer in time is reported
+as that rather than as an unavailable provider. If you relied on the 60 second default, set
+`inferenceTimeoutMs` yourself.
+
+##### `dcctl bootstrap` can give an instance an object store {#v0200-object-store}
+
+Tenant logos and update artifacts are kept in an object store, and an instance built by `dcctl` had
+none, so both were refused with `OBJECT_STORE_NOT_CONFIGURED`. `dcctl bootstrap` now takes
+`--object-store none|filesystem|s3`, with flags for the volume or the bucket. Without the flag, an
+instance on a cluster `dcctl` creates gets a 5Gi filesystem store, and one on a cluster named with
+`--kube-context` gets none. The choice is recorded and kept by `dcctl upgrade`, which refuses a change
+that would strand stored objects. **`dcctl upgrade` does not add a store to an instance built
+without one**: before `v1.0.0`, destroy it and bootstrap it again with the flag. See
+[The object store](./bootstrap.md#object-store).
+
+##### Devices can receive configuration {#v0200-device-configuration}
+
+A device profile version declares which of its devices' shared attributes a device may see, in the
+profile editor's **Configuration** tab or with `setDeviceProfileConfigurationDeclaration`. Writing a
+declared shared attribute creates a numbered configuration revision, which is sent to the device on
+its own configuration topic; the device reports `RECEIVED`, `APPLIED` or `REJECTED`, and asks for the
+current revision with a `sync`, which is also how a newly published profile reaches it. The device's
+page in the console shows the declaration, the current revision and what the device last reported,
+and `deviceConfiguration` and `deviceConfigurationRevisions` read them. Writing a declared attribute
+is refused with `CONFIGURATION_TOO_LARGE` when the document would pass 64 KiB, and with
+`CONFIGURATION_VALUE_TYPE_MISMATCH` when the value does not fit the declared type. MQTT devices only,
+for now. See [Configuration delivery topics](../guides/connecting-a-device.md#reserved-device-topics).
+
+##### Over-the-air updates: a first slice {#v0200-updates}
+
+The new `update-management` service keeps a per-tenant catalogue of firmware, software and
+configuration images, with an upload checked against its declared size and SHA-256 digest. An
+artifact is assigned to one device at a time; the device is told on its configuration topic,
+downloads the image with a short-lived grant it can resume, and each attempt is tracked through to
+the running version. It is opt-in: it runs in the `full` profile, or with
+`--enable-area update-management`. It needs an object store, and:
+
+- **No artifact can be assigned until you set `updates.allowUnverifiedArtifacts: true`**, because
+  nothing yet authenticates who produced an artifact.
+- **Devices get no download grant until `updates.downloadBaseUrl` is set.**
+- **Keep the download path's query string out of access logs.** The chart serves it on an ingress of
+  its own with the access log off; behind another proxy, do the same.
+- There are no fleet rollouts yet, and only MQTT devices can be updated.
+
+##### The published packages {#v0200-packages}
+
+- **`@devicechain/widget-sdk` is new.** It defines a widget (`defineWidget`) and builds a registry
+  of them (`createWidgetRegistry`); see [Writing a custom widget](../guides/writing-a-custom-widget.md).
+  `@devicechain/widgets` declares it as a peer dependency, so install it beside `@devicechain/widgets`.
+- **`@devicechain/widgets` no longer exports `WIDGET_REGISTRY`, `ALARM_WIDGET_REGISTRY`,
+  `CONTROL_WIDGET_REGISTRY`, `SELECTION_WIDGET_REGISTRY` or `LOCATION_WIDGET_REGISTRY`.** Look a
+  widget up through a registry, such as the one `createBuiltinWidgetRegistry` builds.
+- **`echarts` is a peer dependency of `@devicechain/widgets`, not a dependency:** add `echarts`
+  (`^6.0.0`) to your application. The chart helpers are at `@devicechain/widget-sdk/echarts`.
+- **Peer ranges rose:** `react` and `react-dom` to `^19.3.0`, `maplibre-gl` to `^6.11.2`.
+- **`DashboardHubConfig.bindings` and `DashboardHub.setBindings` are removed from
+  `@devicechain/dashboards`.** Pass bindings to `DashboardRenderer`, and use `useDashboardHub`.
+  `fetchWidgetHistory` and `widgetSubjectLabel` take a widget whose data source is already resolved.
+- **`parseDashboardDefinition(raw, { catalog })`** takes the widget catalog to check against. A
+  widget of an unknown type, or one the catalog cannot read, is kept as a placeholder
+  (`UnknownWidgetInstance`, part of the `WidgetInstance` union) and written back exactly as stored,
+  where it used to fail the whole definition. A stored data source of kind `unbound` is refused.
+- **The .NET SDK** opens subscriptions itself and no longer goes through the system HTTP proxy. A
+  device can opt in to handling commands concurrently (`MaxConcurrentCommands`), each command carries
+  its arrival order (`DeviceCommand.Sequence`), and a response finished during a reconnect is sent
+  after it instead of being dropped.
+
+##### New alerts {#v0200-alerts}
+
+If you route or silence alerts by name, these are new, besides the
+[single sign-on alerts](#v0200-sso-alerts):
+
+| Alert | What it reports |
+| --- | --- |
+| `SafetyGateDisabled` | A service runs without one of its optional safety gates: the tenant lifecycle gate, command presence, or validating detection rules at publish. |
+| `DetectLoopStalled` | The detection leader has not made progress for minutes. |
+| `DetectLiveGapFillFailing`, `DetectLiveDeliveriesRecovered` | Live detection could not read back, or did read back, events it was not delivered. |
+| `SparkplugIngestLeaderCountNotOne`, `Lwm2mIngestLeaderCountNotOne`, `Lwm2mIngestLeaderNotServing` | An edge ingest service does not have exactly one leader, or its leader is not serving. A `sparkplug-ingest` with no sources has no leader and fires. |
+| `SparkplugIngestDroppingData`, `SparkplugIngestSubscriptionRefused`, `SparkplugIngestBrokerUnreachable`, `Lwm2mIngestDroppingNotifications` | Sparkplug or LwM2M ingest is losing data or cannot reach its broker. |
+| `CNPGCollectorAbsent` | Prometheus has stopped scraping a database's metrics. |
+
+`dcctl install` also stops scraping, and alerting on, the control-plane components a managed
+cluster such as Google Kubernetes Engine does not run, so their `...Down` alerts no longer fire
+there.
+
+##### Other behaviour worth knowing about {#v0200-other}
+
+- **Sparkplug.** A node birth that replaces an online session now marks the old session's child
+  devices disconnected; they used to stay online.
+- **Notifications.** An alarm event of a type `notification-management` does not know is retried and
+  then dead-lettered, instead of being dropped.
+- **Dead letters and failed decodes** keep a payload with its credential fields replaced by
+  `[redacted]`. A body that is not JSON is kept as its length and SHA-256.
+- **Command responses** may carry any JSON value as their `payload`, not only a string.
+- **Correlation ids** that the platform generates are 22 characters instead of a 36-character UUID;
+  treat them as opaque strings.
+- **GraphQL descriptions** come only from the schemas' `"""` strings, and every element now has one;
+  introspection no longer shows `#` comments.
+- **`dcctl install` and `dcctl bootstrap` with `--kube-context`** no longer need Docker or `kind`, and
+  check the Kubernetes version of the context they target. A named context missing from the
+  kubeconfig fails the preflight.
+- **Detection can split its state** across `detectShards` (1-64, default 1). The shards still run one
+  after another, so more than one does not make detection faster yet.
 
 ### v0.19.0 — sized from measurement at 6,000 events a second; a full stream refuses {#v0190-upgrade}
 

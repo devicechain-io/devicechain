@@ -426,7 +426,7 @@ instance:
         # - "10.42.0.17/32"   # the in-cluster SMTP relay
       blob:
         # Object/asset-store backend for opaque binaries that do not belong in
-        # Postgres (branding logos today; firmware/OTA + exports later, ADR-058).
+        # Postgres (branding logos and firmware/OTA update artifacts; exports later, ADR-058).
         # Default: the local filesystem. directory is the store root — it MUST be a
         # MOUNTED, SHARED volume (an RWX PVC) when user-management runs more than one
         # replica, since a filesystem store is not shared across pods otherwise.

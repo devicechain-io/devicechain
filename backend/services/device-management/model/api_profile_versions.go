@@ -612,19 +612,19 @@ type ProfileScope struct {
 // A missing type, a type with no profile, or an unpublished profile yields an empty
 // version token and no metrics rather than an error: the device simply has no resolvable
 // rules and no declared metrics.
-func (api *Api) ProfileResolutionByDeviceType(ctx context.Context, deviceTypeId uint) (*ProfileResolution, error) {
+func (api *Api) ProfileResolutionByDeviceType(ctx context.Context, deviceTypeId uint) (ProfileResolution, error) {
 	// The fence-set version (ADR-078) is resolved FIRST and on every path, including the
 	// "no such device type" early return below. A device whose type has been deleted still
 	// reports positions, and stamping it with 0 would claim the tenant has no fences when
 	// it may have a hundred — a lie that survives into the immutable event.
 	fenceSetVersion, err := api.CurrentFenceSetVersion(ctx)
 	if err != nil {
-		return nil, err
+		return ProfileResolution{}, err
 	}
 	scope := ProfileScope{FenceSetVersion: fenceSetVersion}
 	types, err := api.DeviceTypesById(ctx, []uint{deviceTypeId})
 	if err != nil {
-		return nil, err
+		return ProfileResolution{}, err
 	}
 	if len(types) == 0 {
 		return NewProfileResolution(scope, nil), nil
@@ -636,7 +636,7 @@ func (api *Api) ProfileResolutionByDeviceType(ctx context.Context, deviceTypeId 
 	profileId := *types[0].ProfileId
 	profiles, err := api.DeviceProfilesById(ctx, []uint{profileId})
 	if err != nil {
-		return nil, err
+		return ProfileResolution{}, err
 	}
 	if len(profiles) == 0 || !profiles[0].ActiveVersion.Valid {
 		return NewProfileResolution(scope, nil), nil
@@ -644,7 +644,7 @@ func (api *Api) ProfileResolutionByDeviceType(ctx context.Context, deviceTypeId 
 	version := profiles[0].ActiveVersion.Int32
 	snap, err := api.profileVersionSnapshot(ctx, profileId, version)
 	if err != nil {
-		return nil, err
+		return ProfileResolution{}, err
 	}
 	scope.ProfileVersionToken = fmt.Sprintf("%s@%d", profiles[0].Token, version)
 	return NewProfileResolution(scope, snap.Metrics), nil

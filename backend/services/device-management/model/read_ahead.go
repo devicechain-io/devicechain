@@ -230,12 +230,12 @@ func (r *eventReads) take(k heldKey) (heldRead, bool) {
 	return h, ok
 }
 
-func (r *eventReads) ProfileResolutionByDeviceType(ctx context.Context, deviceTypeId uint) (*ProfileResolution, error) {
+func (r *eventReads) ProfileResolutionByDeviceType(ctx context.Context, deviceTypeId uint) (ProfileResolution, error) {
 	if tenant, ok := core.TenantFromContext(ctx); ok {
 		key := profileResolutionByTypeKey(tenant, deviceTypeId)
 		if h, ok := r.take(heldKey{readProfile, key}); ok {
 			if h.answered {
-				return h.value.(*ProfileResolution), nil
+				return *h.value.(*ProfileResolution), nil
 			}
 			return r.capi.loadProfileResolution(ctx, key, deviceTypeId)
 		}

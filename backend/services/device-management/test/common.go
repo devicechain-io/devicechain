@@ -242,11 +242,11 @@ func (api *MockApi) MetricDefinitions(ctx context.Context, criteria model.Metric
 // ProfileResolutionByDeviceType returns the suite-set ProfileScopeResult and
 // MetricDefsResult as one resolution, or an empty one when neither is set (the default
 // for tests that don't care about it).
-func (api *MockApi) ProfileResolutionByDeviceType(ctx context.Context, deviceTypeId uint) (*model.ProfileResolution, error) {
+func (api *MockApi) ProfileResolutionByDeviceType(ctx context.Context, deviceTypeId uint) (model.ProfileResolution, error) {
 	api.ProfileResolutionArg = deviceTypeId
 	api.ProfileResolutionCalls++
 	if api.ProfileResolutionErr != nil {
-		return nil, api.ProfileResolutionErr
+		return model.ProfileResolution{}, api.ProfileResolutionErr
 	}
 	scope := model.ProfileScope{}
 	if api.ProfileScopeResult != nil {

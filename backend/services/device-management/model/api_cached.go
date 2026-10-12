@@ -257,10 +257,11 @@ func (capi *CachedApi) cachedAnyScopedGroups(ctx context.Context, tenant string,
 	return value, answered, settled
 }
 
-// readCache reads key from c: the cache half of every cached read here, so all of them
-// treat a miss and a cache error alike, as not answered, and go on to the database. It
-// returns a deep clone (see the clone functions) of the decoded value the in-process tier
-// keeps, so a hit costs no JSON decode and no caller can change what the next one reads.
+// readCache reads key from c: the cache half of every cached read here but the profile
+// resolution's (readSharedCache), so all of them treat a miss and a cache error alike, as
+// not answered, and go on to the database. It returns a deep clone (see the clone
+// functions) of the decoded value the in-process tier keeps, so a hit costs no JSON decode
+// and no caller can change what the next one reads.
 //
 // With memoryOnly it asks only the in-process copy, and settled reports whether that was
 // enough to decide: false when memory held nothing live, and the caller must ask again
@@ -269,14 +270,34 @@ func readCache[T any](ctx context.Context, c *messaging.Cache, key string, clone
 	memoryOnly bool) (value *T, answered, settled bool) {
 	if memoryOnly {
 		v, found, err := messaging.GetClonedFromMemory(c, key, clone)
-		if err != nil {
-			// Held, but it would not decode: as Get's decode error does, go to the database.
-			return nil, false, true
-		}
-		return v, found, found
+		return settleRead(v, found, err, true)
 	}
 	v, found, err := messaging.GetCloned(ctx, c, key, clone)
-	if err != nil || !found {
+	return settleRead(v, found, err, false)
+}
+
+// readSharedCache is readCache for a type that cannot be changed once built
+// (messaging.GetShared): every hit returns the one value the in-process tier keeps, with no
+// copy. decode builds it, once per entry.
+func readSharedCache[T any](ctx context.Context, c *messaging.Cache, key string,
+	decode func([]byte) (*T, error), memoryOnly bool) (value *T, answered, settled bool) {
+	if memoryOnly {
+		v, found, err := messaging.GetSharedFromMemory(c, key, decode)
+		return settleRead(v, found, err, true)
+	}
+	v, found, err := messaging.GetShared(ctx, c, key, decode)
+	return settleRead(v, found, err, false)
+}
+
+// settleRead turns a typed cache read into readCache's three results. A held entry that
+// would not decode goes to the database, as Get's decode error does.
+func settleRead[T any](v *T, found bool, err error, memoryOnly bool) (*T, bool, bool) {
+	switch {
+	case err != nil:
+		return nil, false, true
+	case memoryOnly:
+		return v, found, found
+	case !found:
 		return nil, false, true
 	}
 	return v, true, true
@@ -494,7 +515,11 @@ func profileResolutionByTypeKey(tenant string, deviceTypeId uint) string {
 // from cache, including empty resolutions (an untyped or unpublished device type is
 // common and must not query on every event). A lookup without a tenant in context
 // bypasses the cache and goes straight to the DB.
-func (capi *CachedApi) ProfileResolutionByDeviceType(ctx context.Context, deviceTypeId uint) (*ProfileResolution, error) {
+//
+// A hit is the cached resolution itself, shared by every event of the type and never
+// copied: ProfileResolution cannot be changed once built (see its comment), and it is
+// returned by value, so the holder's copy is the only thing it can assign to.
+func (capi *CachedApi) ProfileResolutionByDeviceType(ctx context.Context, deviceTypeId uint) (ProfileResolution, error) {
 	tenant, hasTenant := core.TenantFromContext(ctx)
 	if !hasTenant {
 		return capi.Api.ProfileResolutionByDeviceType(ctx, deviceTypeId)
@@ -502,29 +527,25 @@ func (capi *CachedApi) ProfileResolutionByDeviceType(ctx context.Context, device
 
 	key := profileResolutionByTypeKey(tenant, deviceTypeId)
 	if cached, answered, _ := capi.cachedProfileResolution(ctx, key, false); answered {
-		return cached, nil
+		return *cached, nil
 	}
 	return capi.loadProfileResolution(ctx, key, deviceTypeId)
 }
 
 // cachedProfileResolution is the cache half of ProfileResolutionByDeviceType (see
-// readCache).
+// readSharedCache). The pointer is the one the cache shares; it stays in this package.
 func (capi *CachedApi) cachedProfileResolution(ctx context.Context, key string,
 	memoryOnly bool) (*ProfileResolution, bool, bool) {
-	cached, answered, settled := readCache(ctx, capi.caches.ProfileResolutionByType, key,
-		cloneProfileResolution, memoryOnly)
-	if !answered {
-		return nil, false, settled
-	}
-	return cached, true, settled
+	return readSharedCache(ctx, capi.caches.ProfileResolutionByType, key,
+		decodeProfileResolution, memoryOnly)
 }
 
 // loadProfileResolution is the database half of ProfileResolutionByDeviceType.
-func (capi *CachedApi) loadProfileResolution(ctx context.Context, key string, deviceTypeId uint) (*ProfileResolution, error) {
+func (capi *CachedApi) loadProfileResolution(ctx context.Context, key string, deviceTypeId uint) (ProfileResolution, error) {
 	gen := capi.caches.ProfileResolutionByType.Generation()
 	res, err := capi.Api.ProfileResolutionByDeviceType(ctx, deviceTypeId)
 	if err != nil {
-		return nil, err
+		return ProfileResolution{}, err
 	}
 	_ = capi.caches.ProfileResolutionByType.SetIfUnchanged(ctx, key, res, gen)
 	return res, nil

@@ -77,7 +77,7 @@ func resolveMeasurements(t *testing.T, ms map[string]string) []model.ResolvedMea
 		},
 	}
 	out, err := orderResolver().ResolveMeasurementsEventPayload(
-		context.Background(), deviceWithToken("TEST-123"), nil, event)
+		context.Background(), deviceWithToken("TEST-123"), model.ProfileResolution{}, event)
 	require.NoError(t, err)
 	payload, ok := out.(*model.ResolvedMeasurementsPayload)
 	require.True(t, ok, "expected *model.ResolvedMeasurementsPayload, got %T", out)
@@ -139,7 +139,7 @@ func TestTheDeviceSampleOrderIsNotSorted(t *testing.T) {
 	}
 
 	out, err := orderResolver().ResolveMeasurementsEventPayload(
-		context.Background(), deviceWithToken("TEST-123"), nil, event)
+		context.Background(), deviceWithToken("TEST-123"), model.ProfileResolution{}, event)
 	require.NoError(t, err)
 	payload := out.(*model.ResolvedMeasurementsPayload)
 	require.Len(t, payload.Entries, 2)

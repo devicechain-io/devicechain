@@ -21,7 +21,16 @@ import (
 // microseconds per definition, so a profile declaring a couple of hundred metrics would add
 // over a millisecond to every event. The fields here are exactly the ones read below and in
 // the resolver's classifier stamp; a new one is added by reading it through Resolved().
+//
+// 🔴 IT IS READ-ONLY, because the cached ProfileResolution that holds it is shared by every
+// event of a device type: its one field is unexported, and the accessors return values. A
+// new accessor must not hand out the Enum slice or a pointer into the definition.
 type ResolvedMetric struct {
+	m resolvedMetricWire
+}
+
+// resolvedMetricWire is a resolved metric's fields, in the form the cache stores them.
+type resolvedMetricWire struct {
 	ID        uint     `json:"id"`
 	MetricKey string   `json:"key"`
 	DataType  string   `json:"type"`
@@ -33,10 +42,27 @@ type ResolvedMetric struct {
 	Enum []string `json:"enum,omitempty"`
 }
 
+// ID is the definition's id, stamped onto a measurement as its classifier.
+func (r *ResolvedMetric) ID() uint { return r.m.ID }
+
+// Key is the metric key a measurement names.
+func (r *ResolvedMetric) Key() string { return r.m.MetricKey }
+
+// DataType is the declared data type.
+func (r *ResolvedMetric) DataType() string { return r.m.DataType }
+
+// Unit is the declared unit, and whether one is declared.
+func (r *ResolvedMetric) Unit() (string, bool) {
+	if r.m.Unit == nil {
+		return "", false
+	}
+	return *r.m.Unit, true
+}
+
 // Resolved projects a metric definition onto what event resolution reads. It is the one
 // place the projection is defined.
 func (def *MetricDefinition) Resolved() ResolvedMetric {
-	r := ResolvedMetric{ID: def.ID, MetricKey: def.MetricKey, DataType: def.DataType}
+	r := resolvedMetricWire{ID: def.ID, MetricKey: def.MetricKey, DataType: def.DataType}
 	if def.Unit.Valid {
 		unit := def.Unit.String
 		r.Unit = &unit
@@ -58,7 +84,7 @@ func (def *MetricDefinition) Resolved() ResolvedMetric {
 			r.Enum = allowed
 		}
 	}
-	return r
+	return ResolvedMetric{m: r}
 }
 
 // ValidateMetricValue checks a measurement value against the metric definition it
@@ -71,11 +97,11 @@ func (def *MetricDefinition) Resolved() ResolvedMetric {
 // Validation is value-shaped, not unit-converting: Unit is metadata exposed
 // through the API, not coerced here (normalization is a later step).
 func ValidateMetricValue(def *ResolvedMetric, value string) error {
-	switch MetricDataType(def.DataType) {
+	switch MetricDataType(def.m.DataType) {
 	case MetricDouble:
 		f, err := strconv.ParseFloat(value, 64)
 		if err != nil {
-			return fmt.Errorf("metric %q: %q is not a valid %s", def.MetricKey, value, def.DataType)
+			return fmt.Errorf("metric %q: %q is not a valid %s", def.m.MetricKey, value, def.m.DataType)
 		}
 		if err := checkBounds(def, f); err != nil {
 			return err
@@ -83,14 +109,14 @@ func ValidateMetricValue(def *ResolvedMetric, value string) error {
 	case MetricInt:
 		i, err := strconv.ParseInt(value, 10, 64)
 		if err != nil {
-			return fmt.Errorf("metric %q: %q is not a valid %s", def.MetricKey, value, def.DataType)
+			return fmt.Errorf("metric %q: %q is not a valid %s", def.m.MetricKey, value, def.m.DataType)
 		}
 		if err := checkBounds(def, float64(i)); err != nil {
 			return err
 		}
 	case MetricBoolean:
 		if _, err := strconv.ParseBool(value); err != nil {
-			return fmt.Errorf("metric %q: %q is not a valid %s", def.MetricKey, value, def.DataType)
+			return fmt.Errorf("metric %q: %q is not a valid %s", def.m.MetricKey, value, def.m.DataType)
 		}
 	case MetricString:
 		// Any string parses; only the optional Enum constrains it (checked below).
@@ -104,11 +130,11 @@ func ValidateMetricValue(def *ResolvedMetric, value string) error {
 
 // checkBounds enforces the optional MinValue/MaxValue numeric bounds.
 func checkBounds(def *ResolvedMetric, v float64) error {
-	if def.MinValue != nil && v < *def.MinValue {
-		return fmt.Errorf("metric %q: %v is below the minimum %v", def.MetricKey, v, *def.MinValue)
+	if def.m.MinValue != nil && v < *def.m.MinValue {
+		return fmt.Errorf("metric %q: %v is below the minimum %v", def.m.MetricKey, v, *def.m.MinValue)
 	}
-	if def.MaxValue != nil && v > *def.MaxValue {
-		return fmt.Errorf("metric %q: %v is above the maximum %v", def.MetricKey, v, *def.MaxValue)
+	if def.m.MaxValue != nil && v > *def.m.MaxValue {
+		return fmt.Errorf("metric %q: %v is above the maximum %v", def.m.MetricKey, v, *def.m.MaxValue)
 	}
 	return nil
 }
@@ -118,27 +144,13 @@ func checkBounds(def *ResolvedMetric, v float64) error {
 // imposes no constraint; a malformed Enum is treated as no constraint (a profile fault
 // must not reject device data) — Resolved() leaves both nil.
 func checkEnum(def *ResolvedMetric, value string) error {
-	if len(def.Enum) == 0 {
+	if len(def.m.Enum) == 0 {
 		return nil
 	}
-	for _, a := range def.Enum {
+	for _, a := range def.m.Enum {
 		if value == a {
 			return nil
 		}
 	}
-	return fmt.Errorf("metric %q: %q is not one of the allowed values %v", def.MetricKey, value, def.Enum)
-}
-
-// ValidateMeasurement looks up the definition for a measurement by its key in defs
-// and validates the value against it. Lenient by design (ADR-016): a measurement
-// whose key is not declared on the profile passes through unvalidated, so the
-// metric model is an additive typing layer rather than a strict allow-list. defs
-// is the device's resolved metric definitions (device → type → profile, ADR-045),
-// keyed by MetricKey.
-func ValidateMeasurement(defs map[string]*ResolvedMetric, name string, value string) error {
-	def, declared := defs[name]
-	if !declared {
-		return nil
-	}
-	return ValidateMetricValue(def, value)
+	return fmt.Errorf("metric %q: %q is not one of the allowed values %v", def.m.MetricKey, value, def.m.Enum)
 }

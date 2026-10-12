@@ -157,7 +157,7 @@ func TestReadsMemoryHoldsNeverLeaveIt(t *testing.T) {
 	// bucket.
 	tenant := "acme"
 	require.NoError(t, capi.caches.ProfileResolutionByType.Set(ctx, profileResolutionByTypeKey(tenant, 7),
-		&ProfileResolution{Metrics: []ResolvedMetric{{MetricKey: "temp"}}}))
+		NewProfileResolution(ProfileScope{}, []*MetricDefinition{{MetricKey: "temp"}})))
 	require.NoError(t, capi.caches.RelationshipsBySource.Set(ctx, relationshipsBySourceKey(tenant, deviceId),
 		&EntityRelationshipSearchResults{}))
 	require.NoError(t, capi.caches.ScopedGroupsExist.Set(ctx, tenant, true))
@@ -180,7 +180,7 @@ func TestReadsMemoryHoldsNeverLeaveIt(t *testing.T) {
 	// tables, so an answer from the database would be an error.
 	res, err := warm.ProfileResolutionByDeviceType(ctx, 7)
 	require.NoError(t, err)
-	require.Len(t, res.Metrics, 1)
+	require.Equal(t, 1, res.MetricCount())
 	scoped, err := warm.AnyScopedGroups(ctx)
 	require.NoError(t, err)
 	require.True(t, scoped)

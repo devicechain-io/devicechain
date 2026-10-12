@@ -188,7 +188,7 @@ func TestAMeasurementBatchKeepsEachSamplesOwnInstant(t *testing.T) {
 		}},
 	}
 	resolved, err := resolverWithMetricDefs(t, 5*time.Minute).
-		ResolveMeasurementsEventPayload(context.Background(), deviceWithToken("TEST-123"), nil, event)
+		ResolveMeasurementsEventPayload(context.Background(), deviceWithToken("TEST-123"), model.ProfileResolution{}, event)
 	require.NoError(t, err)
 	payload, ok := resolved.(*model.ResolvedMeasurementsPayload)
 	require.True(t, ok, "expected *model.ResolvedMeasurementsPayload, got %T", resolved)
@@ -214,7 +214,7 @@ func TestAMeasurementSampleTimeIsBounded(t *testing.T) {
 		}},
 	}
 	resolved, err := resolverWithMetricDefs(t, skew).
-		ResolveMeasurementsEventPayload(context.Background(), deviceWithToken("TEST-123"), nil, event)
+		ResolveMeasurementsEventPayload(context.Background(), deviceWithToken("TEST-123"), model.ProfileResolution{}, event)
 	require.NoError(t, err)
 	payload := resolved.(*model.ResolvedMeasurementsPayload)
 	require.Len(t, payload.Entries, 1)
