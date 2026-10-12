@@ -4,10 +4,12 @@
 package identity
 
 import (
+	"context"
 	"testing"
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/auth"
+	"github.com/devicechain-io/dc-user-management/iam"
 	"github.com/stretchr/testify/require"
 )
 
@@ -53,6 +55,10 @@ type ServedSso struct {
 	ReturnTo          string
 	Secret            string
 	CallbackPrefix    string
+	// EnsureRole creates a role in the given scope ("tenant" or "system").
+	EnsureRole func(scope, token string, authorities ...string)
+	// CreateMember creates a password identity with a membership in acme.
+	CreateMember func(email, password string)
 }
 
 // NewServedSsoManager builds the single sign-on harness and a password superuser.
@@ -66,6 +72,14 @@ func NewServedSsoManager(t *testing.T) *ServedSso {
 		Manager: e.m, Authorize: e.op.authorize, Connection: "acme-idp", LinkedEmail: linkedEmail,
 		SuperuserEmail: "su@example.com", SuperuserPassword: "su-pass",
 		ReturnTo: ssoTestReturnTo, Secret: ssoTestSecret, CallbackPrefix: SsoCallbackPrefix,
+		EnsureRole: func(scope, token string, authorities ...string) {
+			t.Helper()
+			require.NoError(t, e.store.EnsureRole(context.Background(), iam.RoleScope(scope), token, token, authorities))
+		},
+		CreateMember: func(email, password string) {
+			t.Helper()
+			e.createMember(t, email, password)
+		},
 	}
 }
 

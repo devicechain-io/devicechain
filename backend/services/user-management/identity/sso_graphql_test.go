@@ -256,3 +256,58 @@ func TestConnectionAdministrationNeverReturnsTheSecretOverTheWire(t *testing.T) 
 	r = post(t, s.admin, `{ssoLinkRequests{id}}`, nil, su.IdentityToken, "", "")
 	require.Empty(t, r.Errors)
 }
+
+func TestRoleMappingsOverTheWire(t *testing.T) {
+	s := newSsoServed(t)
+	s.s.EnsureRole("tenant", "operator", "device:write")
+	s.s.EnsureRole("tenant", "owner", "*")
+	s.s.EnsureRole("system", "ops-admin", "tenant:write")
+	var su struct{ IdentityToken string }
+	post(t, s.pub, loginSu, map[string]any{"e": s.s.SuperuserEmail, "p": s.s.SuperuserPassword}, "", "", "").field(t, "login", &su)
+
+	const set = `mutation($c:String!,$t:String!,$m:[IdpRoleMappingInput!]!,$a:Boolean){setIdpRoleMappings(connection:$c,tenant:$t,mappings:$m,acknowledgeFullAuthority:$a){roleMappings{tenant group role fullAuthority} groupsClaim jitEnabled}}`
+	mapping := func(g, r string) []map[string]any { return []map[string]any{{"group": g, "role": r}} }
+
+	// No token, no mapping.
+	require.Equal(t, http.StatusUnauthorized, post(t, s.admin, set,
+		map[string]any{"c": "acme-idp", "t": "acme", "m": mapping("g", "operator")}, "", "", "").Status)
+
+	// A system role is refused, and so is a tenant the connection does not serve.
+	r := post(t, s.admin, set, map[string]any{"c": "acme-idp", "t": "acme", "m": mapping("g", "ops-admin")}, su.IdentityToken, "", "")
+	require.Contains(t, r.failed(t), "no tenant role")
+	r = post(t, s.admin, set, map[string]any{"c": "acme-idp", "t": "beta", "m": mapping("g", "operator")}, su.IdentityToken, "", "")
+	require.Contains(t, r.failed(t), "does not serve")
+
+	// A full-authority role needs the acknowledgement.
+	r = post(t, s.admin, set, map[string]any{"c": "acme-idp", "t": "acme", "m": mapping("g", "owner")}, su.IdentityToken, "", "")
+	require.Contains(t, r.failed(t), "acknowledgeFullAuthority")
+
+	// A misnamed field is a request error, not a half-applied mapping.
+	r = post(t, s.admin, set, map[string]any{"c": "acme-idp", "t": "acme", "m": []map[string]any{{"group": "g", "roleToken": "operator"}}}, su.IdentityToken, "", "")
+	require.NotEmpty(t, r.Errors)
+
+	var out struct {
+		RoleMappings []struct {
+			Tenant, Group, Role string
+			FullAuthority       bool
+		}
+		GroupsClaim string
+		JitEnabled  bool
+	}
+	post(t, s.admin, set, map[string]any{"c": "acme-idp", "t": "acme", "m": mapping("eng", "operator")}, su.IdentityToken, "", "").
+		field(t, "setIdpRoleMappings", &out)
+	require.Len(t, out.RoleMappings, 1)
+	require.Equal(t, "operator", out.RoleMappings[0].Role)
+	require.False(t, out.RoleMappings[0].FullAuthority)
+	require.Equal(t, "groups", out.GroupsClaim)
+	require.False(t, out.JitEnabled)
+
+	var jit struct {
+		JitEnabled         bool
+		DefaultTenantRoles []string
+	}
+	post(t, s.admin, `mutation{setIdpJit(connection:"acme-idp",enabled:true,defaultTenantRoles:["operator"]){jitEnabled defaultTenantRoles}}`,
+		nil, su.IdentityToken, "", "").field(t, "setIdpJit", &jit)
+	require.True(t, jit.JitEnabled)
+	require.Equal(t, []string{"operator"}, jit.DefaultTenantRoles)
+}

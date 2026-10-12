@@ -209,7 +209,8 @@ const kvTenantSeparator = "|"
 func KvPurgeExemptions() []string {
 	return []string{
 		kv.BucketRefreshTokens + ": holds one entry per live refresh token, keyed by an opaque " +
-			"jti with the owner's email as its value. Neither names a tenant, because a refresh " +
+			"jti with the owner's email as its value, and each sign-in's record and index entry " +
+			"(keyed by session id and by a hash of the email). None of them names a tenant, because a refresh " +
 			"token belongs to the PERSON — the same identity the relational sweep deliberately " +
 			"keeps. It is also inert for a deleted tenant: the refresh flow re-resolves membership " +
 			"at exchange time, and that tenant's membership rows are gone, so the token buys " +

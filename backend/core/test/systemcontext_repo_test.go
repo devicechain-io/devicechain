@@ -39,7 +39,7 @@ import (
 // knowing when the number moves. Methods are qualified by receiver, because two types
 // in one file routinely carry methods of the same name.
 var sanctionedSystemContexts = map[string][]string{
-	"backend/core/rdb/audit.go":                  {"RdbManager.RecordAuthEvent"},
+	"backend/core/rdb/audit.go":                  {"RdbManager.RecordAuthEventLabeled"},
 	"backend/core/rdb/rdb.go":                    {"RdbManager.ExecuteInitialize"},
 	"backend/core/secrets/selftest.go":           {"SelfTest"},
 	"backend/core/secrets/store.go":              {"gormStore.ctxDB"},

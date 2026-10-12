@@ -65,20 +65,20 @@ func idpConnectionFamily() putest.Family[*Manager] {
 	reading := func(c *iam.IdpConnection) map[string]string {
 		return map[string]string{
 			"name": c.Name, "enabled": putest.BoolString(c.Enabled), "clientId": c.ClientID,
-			"emailClaim": c.EmailClaim,
-			"scopes":     putest.RenderStringList(c.Scopes), "requiredAmr": putest.RenderStringList(c.RequiredAmr),
+			"emailClaim": c.EmailClaim, "groupsClaim": c.GroupsClaim,
+			"scopes": putest.RenderStringList(c.Scopes), "requiredAmr": putest.RenderStringList(c.RequiredAmr),
 		}
 	}
 	return putest.Family[*Manager]{
 		Name:  "idp connection",
 		Token: idpToken,
 		Migrate: []any{&iam.IdpConnection{}, &iam.IdpConnectionTenant{}, &iam.IdpConnectionDomain{},
-			&iam.Role{}, &iam.Membership{}, &iam.Identity{}},
+			&iam.IdpRoleMapping{}, &iam.Role{}, &iam.Membership{}, &iam.Identity{}},
 		Seed: func(t *testing.T, m *Manager, ctx context.Context) {
 			now := time.Now().UTC()
 			if err := m.iam.CreateIdpConnection(ctx, &iam.IdpConnection{
 				Token: idpToken, Name: "Acme", Kind: iam.IdpKindTenant, Issuer: "https://idp.example.com",
-				ClientID: "client-1", EmailClaim: "email",
+				ClientID: "client-1", EmailClaim: "email", GroupsClaim: "groups",
 				Scopes: []string{"openid", "email"}, RequiredAmr: []string{"mfa"},
 				// Approved, so that enabling is a legal request the harness may send.
 				DiscoverySnapshot: &iam.DiscoverySnapshot{Issuer: "https://idp.example.com", JwksURI: "https://idp.example.com/k",
@@ -109,6 +109,8 @@ func idpConnectionFamily() putest.Family[*Manager] {
 				func(r *IdpConnectionUpdateRequest) *dcgraphql.OptionalString { return &r.ClientID }),
 			putest.RequiredStringField("emailClaim", "email", "mail",
 				func(r *IdpConnectionUpdateRequest) *dcgraphql.OptionalString { return &r.EmailClaim }),
+			putest.RequiredStringField("groupsClaim", "groups", "roles",
+				func(r *IdpConnectionUpdateRequest) *dcgraphql.OptionalString { return &r.GroupsClaim }),
 			putest.OptionalStringListField("scopes", []string{"openid", "email"}, []string{"openid"},
 				func(r *IdpConnectionUpdateRequest) *dcgraphql.OptionalStringList { return &r.Scopes }),
 			putest.OptionalStringListField("requiredAmr", []string{"mfa"}, []string{"hwk", "otp"},

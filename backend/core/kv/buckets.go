@@ -81,8 +81,9 @@ var All = []Bucket{
 	{
 		Name: BucketRefreshTokens,
 		Tier: State,
-		Why: "One entry per live refresh token (jti -> email), so it scales with " +
-			"concurrent signed-in humans, not with devices. A full bucket refuses " +
+		Why: "One entry per live refresh token (jti -> email), plus two small entries " +
+			"per sign-in (its record and its per-identity index entry), so it scales " +
+			"with concurrent signed-in humans, not with devices. A full bucket refuses " +
 			"the write in identity.Manager, which fails the login that issued it.",
 	},
 	{

@@ -190,6 +190,15 @@ func (s *Service) DeleteRole(ctx context.Context, scope, token string) (bool, er
 	if n > 0 {
 		return false, fmt.Errorf("%w (%d mapping(s) name %q)", ErrRoleInUseByMapping, n, token)
 	}
+	if r.Scope == iam.ScopeTenant {
+		d, err := s.iam.CountConnectionsDefaultingToRole(ctx, token)
+		if err != nil {
+			return false, err
+		}
+		if d > 0 {
+			return false, fmt.Errorf("%w (%d connection(s) grant %q to everyone who signs in)", ErrRoleInUseByMapping, d, token)
+		}
+	}
 	if err := s.iam.DeleteRole(ctx, r); err != nil {
 		return false, err
 	}

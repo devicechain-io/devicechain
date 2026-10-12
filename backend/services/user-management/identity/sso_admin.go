@@ -58,6 +58,9 @@ const (
 
 const maxIdpClaims = 16
 
+// DefaultGroupsClaim is the claim a connection reads group values from unless told otherwise.
+const DefaultGroupsClaim = "groups"
+
 // actor is the administrator making the call, for the records that name one.
 func actor(ctx context.Context) string {
 	if c, ok := auth.ClaimsFromContext(ctx); ok && c.Username != "" {
@@ -75,9 +78,12 @@ type IdpConnectionInput struct {
 	ClientID string
 	// ClientSecret is optional (a public client has none). It is sealed in the secret store
 	// and never read back.
-	ClientSecret   string
-	Scopes         []string
-	EmailClaim     string
+	ClientSecret string
+	Scopes       []string
+	EmailClaim   string
+	// GroupsClaim names the claim carrying the person's group values; empty means "groups".
+	// Only a tenant connection reads it.
+	GroupsClaim    string
 	RequiredClaims map[string]string
 	RequiredAmr    []string
 	// MfaEnforcedByIdp is an instance connection's alternative to RequiredAmr: the
@@ -88,13 +94,15 @@ type IdpConnectionInput struct {
 
 // IdpConnectionUpdateRequest is the partial update of a connection. The issuer, kind and
 // token are fixed at creation: a different issuer is a different connection, and the rules
-// that pin an issuer to one organisation ran against this one. The ceiling, JIT and mapping
-// settings are not here because their enforcement lands in later releases.
+// that pin an issuer to one organisation ran against this one. Provisioning and group
+// mappings have their own calls (SetIdpJit, SetIdpRoleMappings), and so does the session
+// ceiling (SetIdpSessionMaxAge).
 type IdpConnectionUpdateRequest struct {
 	Name        dcgraphql.OptionalString
 	Enabled     dcgraphql.OptionalBool
 	ClientID    dcgraphql.OptionalString
 	EmailClaim  dcgraphql.OptionalString
+	GroupsClaim dcgraphql.OptionalString
 	Scopes      dcgraphql.OptionalStringList
 	RequiredAmr dcgraphql.OptionalStringList
 }
@@ -106,6 +114,8 @@ type IdpConnectionDetail struct {
 	Tenants     []string
 	HasSecret   bool
 	CallbackURL string
+	// RoleMappings are the connection's group-to-role mappings, across its tenants.
+	RoleMappings []IdpRoleMappingDetail
 	// Fingerprint identifies the discovery snapshot, so an approval is of THE snapshot the
 	// administrator saw.
 	Fingerprint string
@@ -182,6 +192,13 @@ func (m *Manager) CreateIdpConnection(ctx context.Context, in IdpConnectionInput
 		return nil, invalid("an instance connection needs required authentication methods (for example mfa) " +
 			"or an acknowledgement that the provider enforces multi-factor sign-in")
 	}
+	groupsClaim := in.GroupsClaim
+	if groupsClaim == "" {
+		groupsClaim = DefaultGroupsClaim
+	}
+	if len(groupsClaim) > 64 {
+		return nil, invalid("the groups claim name is up to 64 characters")
+	}
 	snap, err := m.FetchIdpDiscovery(ctx, in.Issuer)
 	if err != nil {
 		return nil, err
@@ -192,7 +209,7 @@ func (m *Manager) CreateIdpConnection(ctx context.Context, in IdpConnectionInput
 	}
 	conn := &iam.IdpConnection{
 		Token: in.Token, Name: strings.TrimSpace(in.Name), Kind: in.Kind, Issuer: in.Issuer,
-		ClientID: in.ClientID, Scopes: scopes, EmailClaim: in.EmailClaim,
+		ClientID: in.ClientID, Scopes: scopes, EmailClaim: in.EmailClaim, GroupsClaim: groupsClaim,
 		RequiredClaims: in.RequiredClaims, RequiredAmr: in.RequiredAmr,
 		DiscoverySnapshot: snap,
 	}
@@ -209,7 +226,7 @@ func (m *Manager) CreateIdpConnection(ctx context.Context, in IdpConnectionInput
 		}
 	}
 	if in.Kind == iam.IdpKindInstance && in.MfaEnforcedByIdp {
-		m.recordAuth(ctx, rdb.AuditOpIdpMfaAcknowledged, actor(ctx), "")
+		m.recordAuthLabeled(ctx, rdb.AuditOpIdpMfaAcknowledged, actor(ctx), "", conn.Token)
 	}
 	return m.IdpConnection(ctx, conn.Token)
 }
@@ -263,8 +280,12 @@ func (m *Manager) connectionDetail(ctx context.Context, conn *iam.IdpConnection)
 			return nil, err
 		}
 	}
+	mappings, err := m.roleMappingDetails(ctx, conn.ID)
+	if err != nil {
+		return nil, err
+	}
 	return &IdpConnectionDetail{
-		Connection: *conn, Domains: domains, Tenants: tenants, HasSecret: has,
+		Connection: *conn, Domains: domains, Tenants: tenants, HasSecret: has, RoleMappings: mappings,
 		CallbackURL: m.SsoCallbackURL(conn.Token), Fingerprint: snapshotFingerprint(conn.DiscoverySnapshot),
 	}, nil
 }
@@ -301,6 +322,9 @@ func (m *Manager) UpdateIdpConnection(ctx context.Context, token string, req *Id
 	if conn.EmailClaim, err = req.EmailClaim.ApplyToRequired("emailClaim", conn.EmailClaim); err != nil {
 		return nil, err
 	}
+	if conn.GroupsClaim, err = req.GroupsClaim.ApplyToRequired("groupsClaim", conn.GroupsClaim); err != nil {
+		return nil, err
+	}
 	conn.Scopes = req.Scopes.ApplyTo(conn.Scopes)
 	conn.RequiredAmr = req.RequiredAmr.ApplyTo(conn.RequiredAmr)
 	enabled, err := req.Enabled.ApplyToRequired("enabled", conn.Enabled)
@@ -308,8 +332,8 @@ func (m *Manager) UpdateIdpConnection(ctx context.Context, token string, req *Id
 		return nil, err
 	}
 	if strings.TrimSpace(conn.Name) == "" || len(conn.Name) > 256 || len(conn.ClientID) > 256 ||
-		len(conn.EmailClaim) > 64 {
-		return nil, invalid("name, client id or email claim is out of bounds")
+		len(conn.EmailClaim) > 64 || len(conn.GroupsClaim) > 64 {
+		return nil, invalid("name, client id, email claim or groups claim is out of bounds")
 	}
 	if err := validateClaimRequirements(conn.RequiredClaims, conn.RequiredAmr); err != nil {
 		return nil, err
@@ -321,6 +345,11 @@ func (m *Manager) UpdateIdpConnection(ctx context.Context, token string, req *Id
 	}
 	if enabled && (conn.DiscoverySnapshot == nil || conn.DiscoveryApprovedAt == nil) {
 		return nil, ErrIdpNotApproved
+	}
+	if !enabled {
+		if err := m.refuseStrandingEnforcedTenants(ctx, conn, nil); err != nil {
+			return nil, err
+		}
 	}
 	conn.Enabled = enabled
 	if err := m.iam.UpdateIdpConnection(ctx, conn); err != nil {
@@ -358,6 +387,9 @@ func (m *Manager) DeleteIdpConnection(ctx context.Context, token string) (bool, 
 	if err != nil {
 		return false, err
 	}
+	if err := m.refuseStrandingEnforcedTenants(ctx, conn, nil); err != nil {
+		return false, err
+	}
 	if err := m.iam.DeleteIdpConnection(ctx, m.secrets, conn); err != nil {
 		return false, err
 	}
@@ -378,6 +410,9 @@ func (m *Manager) SetIdpConnectionTenants(ctx context.Context, token string, ten
 		if err := core.ValidateToken(t); err != nil {
 			return nil, invalid("%q is not a valid tenant token", t)
 		}
+	}
+	if err := m.refuseStrandingEnforcedTenants(ctx, conn, tenants); err != nil {
+		return nil, err
 	}
 	if err := m.iam.ReplaceConnectionTenants(ctx, conn, tenants); err != nil {
 		return nil, err
