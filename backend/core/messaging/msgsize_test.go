@@ -76,16 +76,21 @@ func TestWireSizeDoesNotEncode(t *testing.T) {
 	}
 }
 
-// FuzzWireSize compares wireSize with nats.Msg.Size on arbitrary keys and values, one key
-// with two values plus a second key.
+// FuzzWireSize compares wireSize with nats.Msg.Size on arbitrary subjects, replies, keys
+// and values: a first key holding none to three of the values (shape picks how many, and
+// whether that key is present at all), plus a second key.
 func FuzzWireSize(f *testing.F) {
-	f.Add("subj", "K", "v", "w", "L", "x", []byte("data"))
-	f.Add("s", "Nats-Msg-Id", " trimmed\r\n", "", "dc-cid", "héllo", []byte{})
-	f.Add("s", "bad:key", "v", "w", "ok", "\t", []byte{0})
-	f.Add("", "", "", "", "", "", []byte(nil))
-	f.Fuzz(func(t *testing.T, subject, k1, v1, v2, k2, v3 string, data []byte) {
-		nm := &nats.Msg{Subject: subject, Data: data, Header: nats.Header{}}
-		nm.Header[k1] = []string{v1, v2}
+	f.Add("subj", "", "K", "v", "w", "L", "x", byte(2), []byte("data"))
+	f.Add("s", "_INBOX.r", "Nats-Msg-Id", " trimmed\r\n", "", "dc-cid", "héllo", byte(3), []byte{})
+	f.Add("s", "", "bad:key", "v", "w", "ok", "\t", byte(1), []byte{0})
+	f.Add("s", "r", "K", "v", "w", "L", "x", byte(0), []byte{1})
+	f.Add("s", "", "K", "v", "w", "L", "x", byte(4), []byte{1})
+	f.Add("", "", "", "", "", "", "", byte(0), []byte(nil))
+	f.Fuzz(func(t *testing.T, subject, reply, k1, v1, v2, k2, v3 string, shape byte, data []byte) {
+		nm := &nats.Msg{Subject: subject, Reply: reply, Data: data, Header: nats.Header{}}
+		if n := int(shape % 5); n < 4 {
+			nm.Header[k1] = []string{v1, v2, v3}[:n]
+		}
 		if k2 != k1 {
 			nm.Header[k2] = []string{v3}
 		}
