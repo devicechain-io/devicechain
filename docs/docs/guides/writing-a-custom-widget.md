@@ -1,0 +1,249 @@
+---
+sidebar_position: 9
+title: Writing a Custom Widget
+---
+
+# Writing a Custom Widget
+
+A custom widget is a React component plus a small piece of plain data that describes it. You write
+both with `@devicechain/widget-sdk`, ship them in an npm package, and register the package in the
+application that shows dashboards. The built-in widgets are declared through exactly the same
+interface, so a custom widget gets the same data binding, option validation and error handling.
+
+Your widget receives resolved data. It does not authenticate, resolve datasources, poll, or open a
+telemetry connection. The host does all of that and hands your component a snapshot.
+
+A complete package you can copy is in the repository under `examples/widget-tank-level`. It builds
+outside the monorepo against packed SDK tarballs.
+
+## Install the SDK
+
+```bash
+npm install @devicechain/widget-sdk @devicechain/dashboards react
+```
+
+In your widget package, declare `@devicechain/widget-sdk`, `@devicechain/dashboards` and `react` as
+**peer dependencies**, never as dependencies. The SDK defines the React contexts a widget reads
+(selection, time zone, theme root), and a context is identified by the object that created it. The
+host and every widget package must therefore resolve one copy of the SDK.
+
+The SDK root entry has no chart or map code. A widget that only draws DOM imports from the root and
+adds neither Apache ECharts nor MapLibre nor the built-in widgets to the host's bundle. Chart helpers
+(`EChart`, `buildLineOption`, `buildGaugeOption`, `useChartTheme`) are on
+`@devicechain/widget-sdk/echarts`, and `echarts` is an optional peer needed only by a package that
+imports that entry.
+
+## Declare a widget
+
+```tsx
+import { WidgetFrame, defineWidget, formatValue, pickSample } from '@devicechain/widget-sdk';
+
+export const tankLevelWidget = defineWidget({
+  descriptor: {
+    id: 'acme/tank-level',
+    version: '1.0.0',
+    sdkApiVersion: 1,
+    optionsVersion: 1,
+    display: { title: 'Tank level', category: 'Telemetry' },
+    channel: 'measurement',
+    datasource: { mode: 'required', selectors: ['device', 'slot'] },
+    binding: { window: { option: 'window', min: 1, default: 1 } },
+    options: {
+      unit: { kind: 'string', doc: 'Unit shown beside the level.', label: 'Unit' },
+      window: { kind: 'number', integer: true, min: 1, doc: 'Samples kept.', label: 'Samples kept' },
+    },
+    defaults: { unit: '%', window: 1 },
+    interactions: {},
+  },
+  implementation: {
+    kind: 'trusted-react',
+    component: ({ data }) => (
+      <WidgetFrame title="Tank level">{formatValue(pickSample(data.latest, undefined)?.value, 1)}</WidgetFrame>
+    ),
+  },
+});
+```
+
+`defineWidget` infers the channel and the option schema from the literal. A component whose data
+disagrees with the channel, defaults that disagree with the schema, a binding that names a missing
+option, or an interaction the channel cannot carry is a compile error. The registry checks the same
+rules again when the host builds it, for callers that bypass the compiler.
+
+### The descriptor
+
+The descriptor is plain JSON-serializable data. It holds no component, callback, import URL or token,
+so the definition parser and the validators can read it without loading or trusting your code.
+
+| Field | Meaning |
+| --- | --- |
+| `id` | A namespaced id, `scope/name` such as `acme/tank-level`, in lowercase letters, digits and hyphens. Ids without a slash are reserved for the built-in widgets. Namespace ownership is a convention between operators in this release; it does not prove who published a package. |
+| `version` | The release of this widget, as `MAJOR.MINOR.PATCH`. It is provenance. See [widget versions and compatibility](./widget-versions-and-compatibility.md). |
+| `sdkApiVersion` | The generation of the SDK contract the widget was written for. Currently `1`. |
+| `optionsVersion` | The shape of the stored options. Bump it only when stored options stop meaning the same thing. |
+| `display` | `title`, and optionally `description` and `category`, for a host's Add menu. `titleId` and `categoryId` are optional message ids, described under [labels and help text](#labels-and-help-text). |
+| `channel` | Which data the widget consumes. See below. |
+| `datasource` | `{ mode: 'none' }`, or `mode: 'optional'` or `'required'` with the `selectors` an author may pick: `device`, `anchor` or `slot`. A `control` channel widget targets one device, so it offers only `device` and `slot`. |
+| `binding` | How the host subscribes, written as constants and references to your own option keys. |
+| `options` | The option schema. |
+| `constraints` | Optional rules that span more than one option, such as `greater-than`. |
+| `defaults` | The starting options of a newly added widget. |
+| `interactions` | The host callbacks the widget asks for. |
+
+### Channels and binding policy
+
+A widget declares one channel:
+
+| Channel | Component receives | Binding policy |
+| --- | --- | --- |
+| `measurement` | `latest` by measurement name, a rolling `samples` window, and an `error` | `window`: how many samples to keep |
+| `alarm` | The current alarm rows, a total count, and load and error flags | `pageSize`, and optionally `state`, `severity` and `acknowledged` filters |
+| `control` | Command history for a target device | `pageSize` |
+| `location` | Location samples for the bound entity | none |
+| `selection` | No data. The widget drives a slot from the host's candidate lookup. | none |
+| `none` | No data. A static widget. | none |
+
+A binding value is either a constant, `{ const: 25 }`, or a reference to an option key,
+`{ option: 'window', min: 1, default: 1 }`. The reference is checked against the option's kind when
+you compile. You cannot supply a GraphQL string or a subscription function: the host owns the
+transport. The `selection` and `none` channels open no data channel and must declare
+`datasource: { mode: 'none' }`.
+
+When a slot has no device, or a bound device is deleted, the host shows its standard unbound or
+unavailable state and does not hand your component the previous entity's data.
+
+## Options
+
+An option has a `kind` (`string`, `number`, `boolean` or `enum`) and a `doc` sentence. A number can
+declare `min`, `max` and `integer`. An enum declares its `values`. A string can declare
+`format: 'json'`, which requires the value to parse as JSON. `required` marks an option whose
+absence leaves the widget with nothing to show; an empty string counts as absent. The host
+validates stored options against the schema, and the console generates its settings form from it.
+
+Read options defensively with the SDK helpers `optString`, `optNumber` and `optBoolean`. They return
+`undefined` for a hand-edited value of the wrong type instead of throwing.
+
+### Labels and help text {#labels-and-help-text}
+
+Give every option a portable `label`, and a `help` where one sentence helps. A host that has never
+heard of your widget shows that text as is, so your options are understandable without any
+translation on the host. Each piece of text can also carry a message id that a host looks up in its
+own translations first:
+
+| Text | Portable text | Optional message id |
+| --- | --- | --- |
+| Option label | `label` | `labelId` |
+| Option help | `help` | `helpId` |
+| Enum choices | `valueLabels`, keyed by value | `valueLabelIds`, keyed by value |
+| The unset entry of an enum | `placeholder` | `placeholderId` |
+| Widget title and category | `display.title`, `display.category` | `display.titleId`, `display.categoryId` |
+
+The console uses the message id when its own translations define it, then your portable text. A
+label with neither falls back to the option key made readable (`maxRows` shows as "Max rows"), and an
+enum choice with neither shows its raw value. A message id the host does not define is not an error,
+so your package works in a host that has never seen it.
+
+```tsx
+options: {
+  show: {
+    kind: 'enum',
+    values: ['bar', 'number'],
+    doc: 'Whether the card draws the fill bar under the number.',
+    label: 'Show',
+    valueLabels: { bar: 'Number and fill bar', number: 'Number only' },
+    placeholder: 'Number and fill bar',
+  },
+},
+```
+
+### Specialized authoring controls
+
+An option can name a specialized authoring workflow in its `control` field. This is unrelated to the
+`control` data channel. Without it, the option gets the generic field for its kind: a text box, a
+number box, a checkbox or a drop-down.
+
+The vocabulary is open. Any non-empty string registers, and a host that does not implement the
+named control shows the generic field for that option instead. A package therefore stays installable
+on a host older than the controls it names. Name your own controls in your namespace, such as
+`acme/capacity-presets`. Unprefixed names belong to the host.
+
+The console implements the controls listed in `HOST_OPTION_CONTROLS`, exported by
+`@devicechain/dashboards`:
+
+| Control | Workflow |
+| --- | --- |
+| `command-vocabulary` | Picks one of the bound device's commands and writes its key, label and parameters together. |
+| `slot-target` | Picks one of the dashboard's slots. |
+| `basemap` | Marks the raster map tile source and its attribution. |
+
+A control the console does not implement, including every namespaced one, gets the generic field.
+To give your options an authoring experience of their own, ship an editor.
+
+### A custom editor
+
+`implementation.editor` is an optional React component. When a widget has one, the console shows it
+in place of the generated option fields. The datasource fields and the console's notices stay the
+console's. The editor receives `WidgetEditorProps`, exported by `@devicechain/widget-sdk`:
+
+| Prop | Meaning |
+| --- | --- |
+| `options` | The widget's stored options, read-only. |
+| `setOptions(patch)` | The only way to change them. Several keys in one call apply together. |
+| `services` | Host services, passed explicitly. See below. |
+| `descriptor` | Your registration's descriptor, for its option labels, bounds and enum values. |
+
+`setOptions` is checked against your option schema before it is applied. A key the schema does not
+declare, or a value of the wrong kind, throws at the moment the editor makes the mistake rather than
+being stored for nothing to read. `undefined` and an empty string remove a key, as does `false` for a
+boolean. A number outside the declared bounds is brought within them.
+
+`services` (`WidgetEditorServices`) holds:
+
+| Service | Meaning |
+| --- | --- |
+| `slots` | The dashboard's slots, keyed by name. Empty on a dashboard with none. |
+| `deviceToken` | The token of the device the widget is bound to directly, when it is. |
+| `commandChoices(deviceToken)` | The commands a device accepts. Optional: a host without a command vocabulary leaves it out. |
+
+An editor receives no hub, no client and no access token, and it must not import anything from the
+host application. A service the host cannot supply is absent, and your editor must cope with that.
+If the editor throws while rendering, the console replaces it with an error message and a retry
+button, and the author's other changes on the dashboard are kept.
+
+```tsx
+implementation: {
+  kind: 'trusted-react',
+  component: TankLevelCard,
+  editor: function TankLevelCardEditor({ options, setOptions, descriptor }) {
+    return (
+      <label>
+        {descriptor.options.unit?.label ?? 'unit'}
+        <input value={options.unit ?? ''} onChange={(e) => setOptions({ unit: e.target.value })} />
+      </label>
+    );
+  },
+},
+```
+
+Inside `defineWidget`, `options` and `setOptions` are typed from your option schema, so a misspelled
+key is also a compile error. The example package's card widget has a complete editor.
+
+## Interactions and the trust model
+
+`interactions` lists the host callbacks the widget uses: `alarmActions` (acknowledge and clear, alarm
+channel only), `commandSend` (control channel only), `selection` and `candidates`. The host supplies
+only the callbacks you declared, further limited to what the host supports and what the viewer is
+allowed to do. A widget with no callback behaves as read-only. The server stays authoritative: an
+action the viewer may not take is refused by the server, and the refusal reaches your component.
+
+**A widget package is trusted code.** It is bundled into the host application at build time and runs
+in the host page with the host's privileges. The declarations in a descriptor shape the API; they are
+not a security boundary and do not stop malicious code in a package. The SDK does not pass your
+component the access token, the client or the raw hub, but nothing prevents code on the same page
+from reaching them. Install only packages you have reviewed, from publishers you trust. The host
+wraps every widget in an error boundary, so a widget that throws shows an error in its own frame and
+its siblings keep rendering. That does not contain an infinite loop or hostile code.
+
+## Next
+
+- [Add the package to the console and the dashboard app](./adding-widget-packages.md).
+- [How stored widgets stay compatible across package upgrades](./widget-versions-and-compatibility.md).
