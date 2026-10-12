@@ -34,7 +34,8 @@ import { LoadingState } from '@/components/ui/loading-state';
 import { PageShell } from '@/components/ui/page-shell';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useToast } from '@/components/ui/toast';
-import { errMessage, StatusBadge, useReload } from '@/routes/common';
+import { StatusBadge, useReload } from '@/routes/common';
+import { idpErrorMessage } from './idpError';
 import { DiscoveryPanel } from './DiscoveryPanel';
 import { DomainsPanel, TenantsPanel } from './ServedPanels';
 import { SettingsPanel } from './SettingsPanel';
@@ -109,7 +110,7 @@ function Editor({
       toast(enabled ? t('enabledToast') : t('disabledToast'));
       onChanged();
     } catch (err) {
-      setError(errMessage(err));
+      setError(idpErrorMessage(err, t));
     } finally {
       setBusy(false);
     }
@@ -129,7 +130,7 @@ function Editor({
       toast(t('deletedToast', { token: c.token }));
       navigate(IDENTITY_PROVIDERS_BASE);
     } catch (err) {
-      setError(errMessage(err));
+      setError(idpErrorMessage(err, t));
       setBusy(false);
     }
   };

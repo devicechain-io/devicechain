@@ -33,6 +33,7 @@ import { MultiSelect } from '@/components/ui/multi-select';
 import { SectionPanel } from '@/components/ui/section-panel';
 import { useToast } from '@/components/ui/toast';
 import { errMessage } from '@/routes/common';
+import { idpErrorMessage } from './idpError';
 
 interface PanelProps {
   connection: IdpConnection;
@@ -74,7 +75,7 @@ export function TenantsPanel({ connection: c, reading, onChanged }: PanelProps) 
       toast(t('tenantsSavedToast'));
       onChanged();
     } catch (err) {
-      setError(errMessage(err));
+      setError(idpErrorMessage(err, t));
     } finally {
       setBusy(false);
     }
