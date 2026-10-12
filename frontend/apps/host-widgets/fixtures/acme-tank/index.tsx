@@ -67,7 +67,7 @@ export const acmeTankWidget = defineWidget({
 export const ACME_TANK_WIDGET_JSON = {
   id: 'tank-1',
   type: ACME_TANK_ID,
-  widget: { version: '1.2.0', optionsVersion: 1 },
+  widget: { version: '1.2.0', optionsVersion: 1, sdkApiVersion: 1 },
   layout: { base: { col: 0, colSpan: 8, row: 0, rowSpan: 4, z: 1 } },
   datasource: { kind: 'slot', slot: 'tank', measurements: ['level'] },
   options: { heading: 'Main tank', unit: '%', capacity: 5000 },

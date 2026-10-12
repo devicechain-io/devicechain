@@ -105,14 +105,16 @@ export function updateWidget(def: DashboardDefinition, id: string, next: WidgetI
 // keyed by widget id. Returns the new definition and the new widget's id so the caller can
 // select it.
 //
-// The new widget records the release and settings version of the registration it was
-// authored against (`widget: { version, optionsVersion }`). For an extension that record is
-// what lets the next load match it to the installed package at all — a registered extension
-// stored without it is incomplete and parses to a placeholder — and for a built-in it is the
-// provenance the editor's version-drift notice compares against.
+// The new widget records the registration it was authored against: its release, its settings
+// version and its SDK generation (`widget: { version, optionsVersion, sdkApiVersion }`). For
+// an extension that record is what lets the next load match it to the installed package at
+// all — a registered extension stored without it is incomplete and parses to a placeholder.
+// `optionsVersion` and `sdkApiVersion` are the compatibility key (with the id), so both are
+// recorded: a reference without the SDK generation could never be refused by a host that has
+// moved to a newer one. `version` is the provenance the editor's version notice compares.
 export function addWidget(
   def: DashboardDefinition,
-  descriptor: Pick<WidgetDescriptor, 'id' | 'defaults' | 'version' | 'optionsVersion'>,
+  descriptor: Pick<WidgetDescriptor, 'id' | 'defaults' | 'version' | 'optionsVersion' | 'sdkApiVersion'>,
 ): { definition: DashboardDefinition; id: string } {
   const maxZ = def.widgets.reduce((m, w) => Math.max(m, baseBox(w).z), 0);
   const id = generateWidgetId();
@@ -120,7 +122,11 @@ export function addWidget(
   const box: WidgetBox = { col: 0, colSpan: 8, row: 0, rowSpan: 4, z: maxZ + 1 };
   const common = {
     id,
-    widget: { version: descriptor.version, optionsVersion: descriptor.optionsVersion },
+    widget: {
+      version: descriptor.version,
+      optionsVersion: descriptor.optionsVersion,
+      sdkApiVersion: descriptor.sdkApiVersion,
+    },
     layout: { [BASE_BREAKPOINT]: box },
     options: { ...descriptor.defaults },
   };

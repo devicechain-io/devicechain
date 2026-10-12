@@ -1566,6 +1566,18 @@ jobs:
       - name: Verify the packed artifacts
         run: npm run verify:packages
 
+      # The step above checks each tarball on its own; this one checks that somebody
+      # outside the monorepo can BUILD a widget package from them. It copies
+      # examples/widget-tank-level out of the checkout, installs the packed SDK tarballs
+      # there, builds it, asserts its DOM-only entry bundles no ECharts, MapLibre or
+      # built-in widget code, and then plants a chart import in that entry and requires
+      # the check to fail. The work directory must lie outside the repository, or Node
+      # would resolve a missing dependency from frontend/node_modules and prove nothing.
+      - name: Widget package proof (example built from packed artifacts)
+        env:
+          DC_WIDGET_PROOF_WORK: ${{ runner.temp }}/widget-package-proof
+        run: ../hack/widget-package-proof.sh all
+
       - name: Codegen drift check
         run: |
           # Regenerate and fail if the committed output in the console's src/gql
