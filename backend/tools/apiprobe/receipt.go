@@ -22,6 +22,12 @@ type Receipt struct {
 	Written  time.Time  `json:"written"`
 	Entities []Recorded `json:"entities"`
 
+	// Admin is the rows written through user-management's admin schema by the
+	// superuser rather than through a tenant schema by the tenant administrator —
+	// today the single sign-on connection (sso.go). Kept apart from Entities because
+	// verify reads them as a different principal.
+	Admin []Recorded `json:"admin,omitempty"`
+
 	// Skipped names the entities the seed could NOT write, because the release it
 	// was seeding did not declare them (see baseline.go). It travels on the
 	// receipt so that verify's report is about the same coverage the seed had —

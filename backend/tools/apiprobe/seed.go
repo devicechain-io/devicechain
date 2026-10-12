@@ -20,6 +20,13 @@ func runSeed(ctx context.Context, argv []string) error {
 	fs.StringVar(&receipt, "receipt", "", "path to write the receipt verify will read (required)")
 	fs.StringVar(&baselineDir, "baseline-schemas", "",
 		"a `backend/services` tree from the release being seeded, so entities that release cannot express are skipped instead of refused")
+	var sso ssoOptions
+	fs.StringVar(&sso.issuer, "idp-issuer", "",
+		"https issuer of an identity provider the INSTANCE can reach; seeds a single sign-on connection "+
+			"(admin plane). Without it the connection is skipped by name, and the table sweep then reports "+
+			"the tables it feeds as uncovered")
+	fs.StringVar(&sso.clientID, "idp-client-id", ssoDefaultClientID, "client identifier registered at the --idp-issuer provider")
+	fs.StringVar(&sso.domain, "idp-domain", ssoDefaultDomain, "email domain asserted for the seeded connection")
 	deployedFn := bindDeployedAreas(fs)
 	if err := fs.Parse(argv); err != nil {
 		return failWith(exitSetup, "%w", err)
@@ -152,6 +159,25 @@ func runSeed(ctx context.Context, argv []string) error {
 				return failWith(exitRefused, "after creating %s: %w", e.Name, err)
 			}
 		}
+	}
+
+	// The admin-plane row. Skipped by name, like an entity, when the caller named no
+	// provider or the baseline cannot express it; never silently.
+	switch ok, why := sso.willSeed(base); {
+	case ok:
+		admin, err := c.adminSession(ctx)
+		if err != nil {
+			return err
+		}
+		row, err := seedConnection(ctx, admin, c.adminURL(), c.tenant, sso)
+		if err != nil {
+			return err
+		}
+		out.Admin = append(out.Admin, row)
+		fmt.Printf("  seeded  %-26s %s\n", row.Name, row.Token)
+	default:
+		skipped = append(skipped, ssoRowName)
+		fmt.Printf("  skipped %-26s %s\n", ssoRowName, why)
 	}
 
 	// A receipt with nothing on it makes verify pass instantly, having checked
