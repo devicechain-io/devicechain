@@ -203,7 +203,7 @@ de la consola siguen siendo de la consola. El editor recibe `WidgetEditorProps`,
 
 `setOptions` se comprueba contra tu esquema de opciones antes de aplicarse. Una clave que el esquema
 no declara, o un valor del tipo equivocado, lanza una excepción en el momento en que el editor
-comete el error, en lugar de almacenarse sin que nada la lea. `undefined` y una cadena vacía
+comete el error, en lugar de almacenarse sin que nada la lea. La consola captura ese error y lo muestra junto a tu editor, y no se escribe nada. `undefined` y una cadena vacía
 eliminan una clave, igual que `false` en un booleano. Un número fuera de los límites declarados se
 ajusta a ellos.
 
@@ -213,7 +213,7 @@ ajusta a ellos.
 | --- | --- |
 | `slots` | Los slots del panel, por nombre. Vacío en un panel sin slots. |
 | `deviceToken` | El token del dispositivo al que el widget está enlazado directamente, cuando lo está. |
-| `commandChoices(deviceToken)` | Los comandos que acepta un dispositivo. Opcional: un anfitrión sin vocabulario de comandos lo omite. |
+| `commandChoices(deviceToken)` | Los comandos que acepta un dispositivo. Opcional: solo se proporciona cuando tu descriptor declara el control `command-vocabulary` en una opción, y un anfitrión sin vocabulario de comandos lo omite. |
 
 Un editor no recibe hub, ni cliente, ni token de acceso, y no debe importar nada de la aplicación
 anfitriona. Un servicio que el anfitrión no puede proporcionar está ausente, y tu editor debe

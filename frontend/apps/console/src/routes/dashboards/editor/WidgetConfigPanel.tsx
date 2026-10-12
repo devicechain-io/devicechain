@@ -32,7 +32,7 @@ import {
   type UnknownWidgetInstance,
 } from '@devicechain/dashboards';
 import type { WidgetEditorProps, WidgetEditorServices } from '@devicechain/widget-sdk';
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
 import { X } from 'lucide-react';
@@ -71,6 +71,13 @@ import { defaultWidgetRegistry, type EditorWidgetRegistry } from './widgetRegist
 // decorative — which means a map bound through a panel that forgot this would show its
 // empty state forever with nothing failing to say why.
 const LATEST_LOCATION: LocationSelection = { series: 'latest' };
+
+// The text of whatever an editor's write or a host service threw. An editor's mistake is
+// rarely an Error from the transport, so a non-Error is shown as itself rather than as a
+// generic network failure.
+function errorText(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
 
 // withLocationSeries stamps (or leaves off) the location series on the selector the
 // datasource form produced. Applied at the panel's edge so every path through the form —
@@ -191,13 +198,43 @@ export function WidgetConfigPanel({
   // descriptor's schema (applyOptionPatch): a key the descriptor does not declare, or a value
   // of the wrong kind, throws where the editor made the mistake instead of becoming a stored
   // option nothing reads.
+  //
+  // A throw here happens inside an editor's event handler, where React reports it to the
+  // browser console and nothing else -- the author would see a control that does nothing. It
+  // is caught and shown beside the editor instead; the write itself never happened. The same
+  // holds when the editor calls setOptions from a promise continuation: the wrapper catches it
+  // wherever the call came from.
+  const [editorError, setEditorError] = useState<{
+    key: 'widgetEditorWriteFailed' | 'widgetEditorServiceFailed';
+    error: string;
+  } | null>(null);
+  useEffect(() => setEditorError(null), [widget.id]);
   const setOptions = (patch: Record<string, unknown>) => {
     if (!descriptor) return;
-    onChange({
-      ...widget,
-      options: applyOptionPatch(descriptor.options, widget.options, patch, widget.type),
-    });
+    try {
+      onChange({
+        ...widget,
+        options: applyOptionPatch(descriptor.options, widget.options, patch, widget.type),
+      });
+      setEditorError(null);
+    } catch (err) {
+      console.error('widget editor setOptions failed', err);
+      setEditorError({ key: 'widgetEditorWriteFailed', error: errorText(err) });
+    }
   };
+  // The command lookup as a package's own editor receives it. A rejection still reaches the
+  // editor (it may handle it), and is ALSO shown beside it: an editor that lets the promise go
+  // unhandled would otherwise leave the author with an empty picker and no reason. Memoised so
+  // its identity is as stable as the service's, since an editor may key a query on it.
+  const reportedCommandChoices = useCallback(
+    (deviceToken: string) =>
+      commandChoicesService(deviceToken).catch((err: unknown) => {
+        console.error('widget editor commandChoices failed', err);
+        setEditorError({ key: 'widgetEditorServiceFailed', error: errorText(err) });
+        throw err;
+      }),
+    [],
+  );
 
   // A widget whose id this console's registry does not hold has no schema to derive fields
   // from. Say so plainly rather than render an empty panel that reads as "nothing to configure".
@@ -221,10 +258,15 @@ export function WidgetConfigPanel({
   const isControl = channel === 'control';
   const isLocation = channel === 'location';
 
+  // Host CALLBACKS go only to an editor whose descriptor declared the control that needs them.
+  // `slots` and `deviceToken` are not callbacks: they are read-only facts about the board and
+  // the widget's own binding, both already in the definition the author is editing, and they
+  // reach no backend. They are passed to every editor, as the SDK's interface promises.
+  const declaresCommands = Object.values(descriptor.options).some((spec) => spec.control === 'command-vocabulary');
   const services: WidgetEditorServices = {
     slots: slots ?? {},
     deviceToken: datasource?.kind === 'device' ? datasource.deviceToken : undefined,
-    commandChoices: commandChoicesService,
+    ...(declaresCommands ? { commandChoices: commandChoicesService } : {}),
   };
   const fieldContext: OptionFieldContext = { widget, descriptor, setOption, setOptions, services };
   // A package's own editor for the whole widget, when its registration ships one. It takes
@@ -234,7 +276,7 @@ export function WidgetConfigPanel({
   const editorProps: WidgetEditorProps = {
     options: widget.options ?? {},
     setOptions,
-    services,
+    services: { ...services, ...(declaresCommands ? { commandChoices: reportedCommandChoices } : {}) },
     descriptor,
   };
   // Provenance, not a fault: a widget authored with one release of its package and rendered
@@ -280,6 +322,15 @@ export function WidgetConfigPanel({
           </ErrorBoundary>
         ) : (
           <WidgetOptionFields ctx={fieldContext} leading />
+        )}
+        {editorError && (
+          <p
+            className="rounded-md border border-destructive/40 bg-destructive/5 p-2 text-xs text-destructive"
+            role="alert"
+            data-testid="widget-editor-write-error"
+          >
+            {t(editorError.key, { error: editorError.error })}
+          </p>
         )}
 
         {policy.mode !== 'none' && (

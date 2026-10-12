@@ -193,7 +193,7 @@ console's. The editor receives `WidgetEditorProps`, exported by `@devicechain/wi
 
 `setOptions` is checked against your option schema before it is applied. A key the schema does not
 declare, or a value of the wrong kind, throws at the moment the editor makes the mistake rather than
-being stored for nothing to read. `undefined` and an empty string remove a key, as does `false` for a
+being stored for nothing to read. The console catches that error and shows it beside your editor, and nothing is written. `undefined` and an empty string remove a key, as does `false` for a
 boolean. A number outside the declared bounds is brought within them.
 
 `services` (`WidgetEditorServices`) holds:
@@ -202,7 +202,7 @@ boolean. A number outside the declared bounds is brought within them.
 | --- | --- |
 | `slots` | The dashboard's slots, keyed by name. Empty on a dashboard with none. |
 | `deviceToken` | The token of the device the widget is bound to directly, when it is. |
-| `commandChoices(deviceToken)` | The commands a device accepts. Optional: a host without a command vocabulary leaves it out. |
+| `commandChoices(deviceToken)` | The commands a device accepts. Optional: supplied only when your descriptor declares the `command-vocabulary` control on an option, and left out by a host without a command vocabulary. |
 
 An editor receives no hub, no client and no access token, and it must not import anything from the
 host application. A service the host cannot supply is absent, and your editor must cope with that.
