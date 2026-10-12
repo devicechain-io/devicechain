@@ -20,6 +20,7 @@ import (
 	gqlcore "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-microservice/secrets"
+	"github.com/devicechain-io/dc-microservice/service"
 	"github.com/devicechain-io/dc-microservice/svcclient"
 	"github.com/rs/zerolog/log"
 )
@@ -28,8 +29,10 @@ var (
 	Microservice  *core.Microservice
 	Configuration *config.AiInferenceConfiguration
 
-	RdbManager     *rdb.RdbManager
-	GraphQLManager *gqlcore.GraphQLManager
+	// Svc owns the managers below and the order of all four of their lifecycle phases.
+	Svc *service.Service
+
+	RdbManager *rdb.RdbManager
 
 	SecretStore       secrets.SecretStore
 	Api               *model.Api
@@ -136,58 +139,72 @@ func buildRateLimiter(def governance.Limits, infra mscfg.InfrastructureConfigura
 
 // afterMicroserviceInitialized initializes components after the microservice is up.
 // The service is synchronous (no NATS): it persists the provider list and, from slice
-// 0c, serves inference requests over GraphQL.
+// 0c, serves inference requests over GraphQL. core/service builds the relational and
+// GraphQL managers and owns the order of all four lifecycle phases.
 func afterMicroserviceInitialized(ctx context.Context) error {
 	if err := parseConfiguration(); err != nil {
 		return err
 	}
 
-	// Create and initialize the rdb manager (runs the secret-store + provider
-	// migrations under the startup advisory lock). It must be initialized before the
-	// secret store, which reads from the same database.
-	RdbManager = rdb.NewRdbManager(Microservice, core.NewNoOpLifecycleCallbacks(), schema.Migrations,
-		Microservice.InstanceConfiguration.Persistence.Rdb, Configuration.RdbConfiguration)
-	if err := RdbManager.Initialize(ctx); err != nil {
-		return err
-	}
+	var providers map[gqlcore.ContextKey]interface{}
+	var metrics *graphql.Metrics
 
-	// Build the envelope-encrypted secret store (ADR-059) over the service DB: each
-	// provider API key lives here, resolved server-internal at inference time. Fails
-	// startup closed on an unbuilt backend/provider or a missing instance root key.
-	store, err := secrets.NewFromConfig(ctx, Microservice.InstanceConfiguration.Infrastructure.Secrets, RdbManager.Database)
-	if err != nil {
-		return err
-	}
-	SecretStore = store
+	Svc = service.New(Microservice, service.Spec{
+		// The rdb manager runs the secret-store + provider migrations under the startup
+		// advisory lock. It is initialized before the secret store, which reads from the
+		// same database.
+		Rdb: &service.RdbSpec{
+			Migrations: schema.Migrations,
+			Instance:   Microservice.InstanceConfiguration.Persistence.Rdb,
+			Config:     Configuration.RdbConfiguration,
+		},
+		AfterRdb: func(ctx context.Context, m *service.Managers) error {
+			RdbManager = m.Rdb
 
-	// Build the provider store and inject it as a GraphQL provider so the resolvers
-	// resolve it (and its secret store, for hasSecret) from the request context.
-	Api = model.NewApi(RdbManager, SecretStore)
+			// Build the envelope-encrypted secret store (ADR-059) over the service DB: each
+			// provider API key lives here, resolved server-internal at inference time. Fails
+			// startup closed on an unbuilt backend/provider or a missing instance root key.
+			store, err := secrets.NewFromConfig(ctx, Microservice.InstanceConfiguration.Infrastructure.Secrets, RdbManager.Database)
+			if err != nil {
+				return err
+			}
+			SecretStore = store
 
-	// Build the fail-closed inference resolver: the menu resolution + the
-	// external-routing consent gate + key resolution + provider construction. It is the
-	// ONE place external routing is authorized (ADR-056). The root resolver holds it.
-	InferenceResolver = buildInferenceResolver()
+			// Build the provider store and inject it as a GraphQL provider so the resolvers
+			// resolve it (and its secret store, for hasSecret) from the request context.
+			Api = model.NewApi(RdbManager, SecretStore)
 
-	providers := map[gqlcore.ContextKey]interface{}{
-		gqlcore.ContextRdbKey: RdbManager,
-		gqlcore.ContextApiKey: Api,
-	}
-	// One Metrics instance across both planes: an operator smoke test and a tenant
-	// draft spend the same key against the same budget, so they must count into the
-	// same series (see runInference).
-	metrics := graphql.NewMetrics(Microservice)
+			// Build the fail-closed inference resolver: the menu resolution + the
+			// external-routing consent gate + key resolution + provider construction. It is
+			// the ONE place external routing is authorized (ADR-056). The root resolver holds it.
+			InferenceResolver = buildInferenceResolver()
 
-	parsed := gqlcore.MustParseSchema(graphql.SchemaContent, &graphql.SchemaResolver{
-		Area:      string(Microservice.FunctionalArea),
-		Inference: InferenceResolver,
-		Metrics:   metrics,
+			providers = map[gqlcore.ContextKey]interface{}{
+				gqlcore.ContextRdbKey: RdbManager,
+				gqlcore.ContextApiKey: Api,
+			}
+			// One Metrics instance across both planes: an operator smoke test and a tenant
+			// draft spend the same key against the same budget, so they must count into the
+			// same series (see runInference).
+			metrics = graphql.NewMetrics(Microservice)
+
+			Microservice.StartInstanceAuthGate(ctx)
+			return nil
+		},
+		GraphQL: &service.GraphQLSpec{
+			Schema: graphql.SchemaContent,
+			Resolver: func() interface{} {
+				return &graphql.SchemaResolver{
+					Area:      string(Microservice.FunctionalArea),
+					Inference: InferenceResolver,
+					Metrics:   metrics,
+				}
+			},
+			Providers:   func() map[gqlcore.ContextKey]interface{} { return providers },
+			ExecTimeout: graphQLExecTimeout(),
+		},
 	})
-	Microservice.StartInstanceAuthGate(ctx)
-	GraphQLManager = gqlcore.NewGraphQLManager(Microservice, core.NewNoOpLifecycleCallbacks(),
-		parsed, providers, Microservice.Readiness)
-	GraphQLManager.ExecTimeout = graphQLExecTimeout()
-	if err := GraphQLManager.Initialize(ctx); err != nil {
+	if err := Svc.Initialize(ctx); err != nil {
 		return err
 	}
 
@@ -234,24 +251,15 @@ func graphQLExecTimeout() time.Duration {
 
 // afterMicroserviceStarted starts components after the microservice is started.
 func afterMicroserviceStarted(ctx context.Context) error {
-	if err := RdbManager.Start(ctx); err != nil {
-		return err
-	}
-	return GraphQLManager.Start(ctx)
+	return Svc.Start(ctx)
 }
 
 // beforeMicroserviceStopped stops components in reverse dependency order.
 func beforeMicroserviceStopped(ctx context.Context) error {
-	if err := GraphQLManager.Stop(ctx); err != nil {
-		return err
-	}
-	return RdbManager.Stop(ctx)
+	return Svc.Stop(ctx)
 }
 
 // beforeMicroserviceTerminated terminates components in reverse dependency order.
 func beforeMicroserviceTerminated(ctx context.Context) error {
-	if err := GraphQLManager.Terminate(ctx); err != nil {
-		return err
-	}
-	return RdbManager.Terminate(ctx)
+	return Svc.Terminate(ctx)
 }
