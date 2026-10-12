@@ -10,6 +10,7 @@ import (
 
 	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-microservice/rdb"
+	"github.com/devicechain-io/dc-microservice/tenantpurge"
 	"github.com/devicechain-io/dc-user-management/iam"
 	"github.com/devicechain-io/dc-user-management/purge"
 	"gorm.io/gorm"
@@ -92,6 +93,14 @@ type AdminTenantDeletionResolver struct {
 
 func (r *AdminTenantDeletionResolver) Token() string { return r.M.Token }
 func (r *AdminTenantDeletionResolver) Epoch() string { return formatPurgeTime(r.M.Epoch) }
+
+// RetainedAuditTenant is the tenant value this deletion's retained audit-journal rows are filed
+// under (tenantpurge.RetainedTenant). It is computed from the same two fields that identify the
+// record, by the same function the purge re-keys the rows with, so the record and the rows
+// cannot name different keys.
+func (r *AdminTenantDeletionResolver) RetainedAuditTenant() string {
+	return tenantpurge.RetainedTenant(r.M.Token, r.M.Epoch)
+}
 func (r *AdminTenantDeletionResolver) CompletedAt() *string {
 	return formatPurgeTimePtr(r.M.CompletedAt)
 }

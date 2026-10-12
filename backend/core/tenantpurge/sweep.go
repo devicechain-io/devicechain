@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"gorm.io/gorm"
 
@@ -45,9 +46,10 @@ type Result struct {
 	// first having to look at what was left behind.
 	Deferred []Entry
 
-	// Redacted lists every table whose rows were KEPT with their identifiers destroyed —
-	// rows redacted when this came from Sweep, rows STILL CARRYING an identifier when it
-	// came from Residue.
+	// Redacted lists every table whose rows were KEPT with their identifiers destroyed and
+	// their tenant re-keyed — rows retained on this pass when this came from Sweep, rows
+	// STILL UNFINISHED (under the bare token, or still naming someone) when it came from
+	// Residue.
 	//
 	// 🔴 IT IS A SEPARATE FIELD BECAUSE Tables CANNOT CARRY IT HONESTLY. That field means
 	// "deleted" on one side of the call and "still present" on the other, and a redacted
@@ -126,9 +128,12 @@ type Precondition func(tx *gorm.DB) error
 //
 // The tenant's own row survives in `purging` state for the whole purge, and its unique
 // index on the token is what stops a successor being created at that token meanwhile.
-// So while this runs the token is unambiguous and the sweep needs no epoch bound. The
-// epoch is load-bearing for what OUTLIVES the sweep — the deletion record, and any fence
-// that survives the row — not for the delete itself.
+// So while this runs the token is unambiguous and the deletes need no epoch bound. The
+// epoch is load-bearing for what OUTLIVES the sweep — the deletion record, any fence that
+// survives the row, and the rows a redaction retains, which are re-keyed under
+// RetainedTenant(tenant, epoch) so they outlive the token's release without staying under
+// it. A zero epoch is refused for that reason: every purge would file its retained rows
+// under one key.
 //
 // # 🔴 CALLER'S PRECONDITION: the tenant must already be in `purging`
 //
@@ -148,11 +153,16 @@ type Precondition func(tx *gorm.DB) error
 // peer starts its own. pre is what makes that race lose safely. It may be nil, for a
 // caller with no lifecycle to consult (a test, or a database that does not hold the
 // tenant table) — and such a caller has the weaker guarantee, by construction.
-func Sweep(ctx context.Context, db *gorm.DB, plan *Plan, tenant string, pre Precondition) (Result, error) {
+func Sweep(ctx context.Context, db *gorm.DB, plan *Plan, tenant string, epoch time.Time,
+	pre Precondition) (Result, error) {
 	res := Result{Tenant: tenant, Deferred: plan.OfClass(ClassDeferred)}
 	if err := checkSweepable(plan, tenant); err != nil {
 		return res, err
 	}
+	if err := checkEpoch(tenant, epoch); err != nil {
+		return res, err
+	}
+	retained := RetainedTenant(tenant, epoch)
 	idx := plan.index()
 
 	err := db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
@@ -183,33 +193,11 @@ func Sweep(ctx context.Context, db *gorm.DB, plan *Plan, tenant string, pre Prec
 		// a redaction that committed while the sweep rolled back would leave a journal
 		// that could no longer say who did what, over data still present.
 		for _, e := range plan.OfClass(ClassRedacted) {
-			where, args, err := tenantPredicate(idx, e.Table, tenant, 0)
+			stmt, args, err := redactStatement(e, tenant, retained)
 			if err != nil {
 				return err
 			}
-			sets := make([]string, 0, len(e.Redact))
-			setArgs := make([]any, 0, len(e.Redact))
-			carrying := make([]string, 0, len(e.Redact))
-			for _, col := range e.Redact {
-				sets = append(sets, fmt.Sprintf("%s = ?", rdb.QuoteIdentifier(col)))
-				setArgs = append(setArgs, "")
-				carrying = append(carrying, fmt.Sprintf("%s <> ''", rdb.QuoteIdentifier(col)))
-			}
-			// 🔴 THE UPDATE EXCLUDES ROWS IT HAS ALREADY EMPTIED, and that clause is what
-			// makes the count mean anything. A purge sweeps on every pass, and without it
-			// this statement would rewrite the tenant's whole journal every minute for
-			// twelve hours and report a non-zero figure forever — so "identifiers
-			// destroyed on this pass" would be indistinguishable from "identifiers
-			// destroyed at some point", which is the number the deletion record cites.
-			//
-			// It is NOT what keeps the purge completable, and reading it that way would
-			// be the dangerous mistake: the settle window is restarted by Outcome.Rows,
-			// which carries the DELETE count alone (purge/coordinator.go, eraseOne). A
-			// redaction that ran forever would waste work and lie in the ledger; it would
-			// not stall the erasure. Both are worth fixing, only one is worth fearing.
-			out := tx.Exec(fmt.Sprintf("UPDATE %s SET %s WHERE %s AND (%s)",
-				e.Table.quoted(), strings.Join(sets, ", "), where, strings.Join(carrying, " OR ")),
-				append(setArgs, args...)...)
+			out := tx.Exec(stmt, args...)
 			if out.Error != nil {
 				return fmt.Errorf("redacting %s: %w", e.Table, out.Error)
 			}
@@ -225,6 +213,81 @@ func Sweep(ctx context.Context, db *gorm.DB, plan *Plan, tenant string, pre Prec
 		return Result{Tenant: tenant, Deferred: res.Deferred}, err
 	}
 	return res, nil
+}
+
+// retainedWhere selects the rows of a retained table that a purge of tenant has not yet
+// finished with, given retained = RetainedTenant(tenant, epoch). It is one predicate shared
+// by the statement that retains the rows and the scan that re-verifies them, so the two
+// cannot disagree about which rows are done.
+//
+// Two kinds of row are unfinished:
+//
+//   - any row still filed under the bare token, whatever it holds. Being under the token is
+//     itself the problem once the token is released: it is what a later tenant created with
+//     that token would read back as its own history.
+//   - a row already re-keyed that still names someone — a pass whose emptying did not take.
+//
+// A row that is re-keyed and empty is finished, and is excluded. That exclusion is what makes
+// the retained count mean anything: a purge sweeps on every pass, and without it the
+// statement would rewrite the tenant's whole journal every pass and report a non-zero figure
+// forever — so "retained on this pass" would be indistinguishable from "retained at some
+// point", which is the number the deletion record cites. It is also what makes a re-run safe:
+// a second pass finds nothing to do.
+//
+// It is NOT what keeps the purge completable, and reading it that way would be the dangerous
+// mistake: the settle window is restarted by Outcome.Rows, which carries the DELETE count
+// alone (purge/coordinator.go, eraseOne). A redaction that ran forever would waste work and
+// lie in the ledger; it would not stall the erasure.
+func retainedWhere(e Entry, tenant, retained string) (string, []any, error) {
+	if e.Column == "" {
+		return "", nil, fmt.Errorf("%s is %s but carries no tenant column", e.Table, e.Class)
+	}
+	if len(e.Redact) == 0 {
+		return "", nil, fmt.Errorf("%s is classified redacted but names no columns to empty, so "+
+			"the purge would report its identifiers destroyed having touched nothing", e.Table)
+	}
+	col := rdb.QuoteIdentifier(e.Column)
+	carrying := make([]string, 0, len(e.Redact))
+	for _, c := range e.Redact {
+		// A bare `<> ''` is right, and it is worth saying why rather than reaching for
+		// coalesce. `NULL <> ''` evaluates to NULL, so a NULL is not counted — and "not
+		// counted" is the correct answer for a column holding no identifier. Both spellings
+		// of absent, the empty string this purge writes and the NULL a row may always have
+		// carried, read as clean because they ARE clean.
+		carrying = append(carrying, fmt.Sprintf("%s <> ''", rdb.QuoteIdentifier(c)))
+	}
+	return fmt.Sprintf("(%s = ? OR (%s = ? AND (%s)))", col, col, strings.Join(carrying, " OR ")),
+		[]any{tenant, retained}, nil
+}
+
+// redactStatement builds the UPDATE that retains a redacted table's unfinished rows for a
+// purge: each one is re-keyed under retained and has its identifying columns emptied, in one
+// statement, so no row is ever re-keyed and still naming someone, or emptied and still
+// readable by a later tenant at the token.
+func redactStatement(e Entry, tenant, retained string) (string, []any, error) {
+	where, whereArgs, err := retainedWhere(e, tenant, retained)
+	if err != nil {
+		return "", nil, err
+	}
+	sets := []string{fmt.Sprintf("%s = ?", rdb.QuoteIdentifier(e.Column))}
+	args := []any{retained}
+	for _, c := range e.Redact {
+		sets = append(sets, fmt.Sprintf("%s = ?", rdb.QuoteIdentifier(c)))
+		args = append(args, "")
+	}
+	return fmt.Sprintf("UPDATE %s SET %s WHERE %s", e.Table.quoted(), strings.Join(sets, ", "), where),
+		append(args, whereArgs...), nil
+}
+
+// checkEpoch refuses a purge with no epoch, which is the half of a retained row's key that
+// tells two purges of one token apart.
+func checkEpoch(tenant string, epoch time.Time) error {
+	if epoch.IsZero() {
+		return fmt.Errorf("refusing to act on %q with no purge epoch: the rows a purge retains are "+
+			"filed under the token and epoch together, and without one every purge of every "+
+			"token would file them under the same key", tenant)
+	}
+	return nil
 }
 
 // Residue counts the rows that still identify as tenant's after a sweep — the re-verify
@@ -250,9 +313,14 @@ func Sweep(ctx context.Context, db *gorm.DB, plan *Plan, tenant string, pre Prec
 //
 // It is worth running twice with a pause between. A scan run the instant the transaction
 // commits can only see writes that were already in flight.
-func Residue(ctx context.Context, db *gorm.DB, plan *Plan, tenant string) (Result, error) {
+//
+// epoch is the purge's, as given to Sweep: it locates the rows the sweep retained.
+func Residue(ctx context.Context, db *gorm.DB, plan *Plan, tenant string, epoch time.Time) (Result, error) {
 	res := Result{Tenant: tenant, Deferred: plan.OfClass(ClassDeferred)}
 	if err := checkSweepable(plan, tenant); err != nil {
+		return res, err
+	}
+	if err := checkEpoch(tenant, epoch); err != nil {
 		return res, err
 	}
 	idx := plan.index()
@@ -277,30 +345,19 @@ func Residue(ctx context.Context, db *gorm.DB, plan *Plan, tenant string) (Resul
 
 	// 🔴 A RETAINED TABLE NEEDS ITS OWN RE-VERIFY, and counting its rows would be the
 	// wrong question — they are supposed to be there. What is checked is that none of
-	// them still carries an identifier. Without this the redaction is the one step in
-	// the whole purge that grades itself: the UPDATE reports a row count, and a row
-	// count is exactly what a WHERE clause that selected the wrong rows also produces.
+	// them is unfinished: still filed under the bare token, or re-keyed and still naming
+	// someone (retainedWhere). Without this the redaction is the one step in the whole
+	// purge that grades itself: the UPDATE reports a row count, and a row count is exactly
+	// what a WHERE clause that selected the wrong rows also produces.
+	retained := RetainedTenant(tenant, epoch)
 	for _, e := range plan.OfClass(ClassRedacted) {
-		if len(e.Redact) == 0 {
-			return res, fmt.Errorf("%s is classified redacted but names no columns to empty, so "+
-				"the purge would report its identifiers destroyed having touched nothing", e.Table)
-		}
-		where, args, err := tenantPredicate(idx, e.Table, tenant, 0)
+		where, args, err := retainedWhere(e, tenant, retained)
 		if err != nil {
 			return res, err
 		}
-		carrying := make([]string, 0, len(e.Redact))
-		for _, col := range e.Redact {
-			// A bare `<> ''` is right, and it is worth saying why rather than reaching for
-			// coalesce. `NULL <> ''` evaluates to NULL, so a NULL is not counted — and
-			// "not counted" is the correct answer for a column holding no identifier.
-			// Both spellings of absent, the empty string this purge writes and the NULL a
-			// row may always have carried, read as clean because they ARE clean.
-			carrying = append(carrying, fmt.Sprintf("%s <> ''", rdb.QuoteIdentifier(col)))
-		}
 		var n int64
-		q := db.WithContext(ctx).Raw(fmt.Sprintf("SELECT count(*) FROM %s WHERE %s AND (%s)",
-			e.Table.quoted(), where, strings.Join(carrying, " OR ")), args...).Scan(&n)
+		q := db.WithContext(ctx).Raw(fmt.Sprintf("SELECT count(*) FROM %s WHERE %s",
+			e.Table.quoted(), where), args...).Scan(&n)
 		if q.Error != nil {
 			return res, fmt.Errorf("residual identifier scan %s: %w", e.Table, q.Error)
 		}
@@ -312,7 +369,7 @@ func Residue(ctx context.Context, db *gorm.DB, plan *Plan, tenant string) (Resul
 	return res, nil
 }
 
-// Retained reports whether a residual scan found rows still carrying an identifier in a
+// Retained reports whether a residual scan found unfinished rows (see retainedWhere) in a
 // table the purge keeps. It is deliberately not folded into Rows: a caller reading Rows
 // is asking "did the deletes take", and a caller reading this is asking "did the
 // retention keep its promise". Both must be false for an area to ack.

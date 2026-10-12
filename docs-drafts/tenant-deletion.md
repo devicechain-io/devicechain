@@ -736,15 +736,25 @@ is assigned **before** the column check, naming the columns it destroys.
 identifiers are destroyed or nothing moved — a redaction that committed while the sweep rolled back
 would leave a journal that could no longer say who did what, over data still present.
 
+**The retained rows are also moved off the token.** The same statement sets `tenant_id` to
+`tenantpurge.RetainedTenant(token, epoch)` — `{token}~{epoch}`, the epoch exactly as the deletion
+record publishes it. `~` is outside the token grammar, so no tenant can ever be created whose
+tenant-scoped reads match it, and a tenant created later with the released token starts with an empty
+journal. The rows stay findable from the record: the deletion record on the admin plane (field
+`retainedAuditTenant` on `TenantDeletion`) returns the key, which is the `tenant` filter for
+`auditEvents`. One key per deletion, so two deletions of one token keep their rows apart. The
+statement selects every row still under the token, plus any already re-keyed row that still names
+someone, and nothing else — so a repeated pass changes nothing and reports nothing.
+
 🔴 **And it is re-verified independently, because it is the one step that would otherwise grade
 itself.** The `UPDATE` reports a row count, and a row count is exactly what a `WHERE` clause
 selecting the wrong rows also produces. `Residue` asks a different question — how many retained rows
-still carry an identifier — and the relational store turns a non-zero answer into its own error with
+are still under the token or still carry an identifier — and the relational store turns a non-zero answer into its own error with
 its own sentence, because "something is still writing" would send an operator looking for a service
 to stop.
 
 **What survives is the shape of the activity**: when, which table, which operation, how many rows,
-and (on the operator plane) which tenant. An auditor can still see that three deletes happened on
+and (on the operator plane) which deletion. An auditor can still see that three deletes happened on
 `devices` at 14:02 during the purge. Nobody is named.
 
 🔴 **A LARGE CLASS OF ROW IS OUT OF REACH, and the first draft of this paragraph badly understated

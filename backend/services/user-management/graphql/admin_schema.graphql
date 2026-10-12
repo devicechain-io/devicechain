@@ -840,7 +840,8 @@ input AdminAuditEventSearchCriteria {
     actor: String
     """
     Only entries belonging to the tenant with this token. Exact match. Entries that belong
-    to no tenant are excluded when this is set.
+    to no tenant are excluded when this is set. A deleted tenant's entries are kept under
+    its deletion's `retainedAuditTenant`, not under its token.
     """
     # Restrict to a single tenant's rows (by tenant token). Tenant-less auth
     # events are excluded when set.
@@ -1249,6 +1250,16 @@ type TenantDeletion {
     """
     # When the deletion was requested (RFC3339). With the token, this identifies the record.
     epoch: String!
+    """
+    The tenant value the deleted tenant's audit journal entries are kept under: the token and
+    the epoch joined by `~`. The entries are kept as evidence of the deletion, with the names
+    in them removed, and are moved off the token so that a new tenant created later with the
+    same token does not see them. Pass this as the `tenant` filter of `auditEvents` to read
+    them.
+    """
+    # tenantpurge.RetainedTenant(token, epoch): what the purge re-keys every area's retained
+    # audit_events rows to. One value per deletion, so two deletions of one token stay apart.
+    retainedAuditTenant: String!
     """
     When every storage system had reported clean and the token was released, as an RFC 3339
     timestamp. Null while the deletion is in progress.

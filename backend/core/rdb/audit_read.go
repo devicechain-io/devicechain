@@ -16,10 +16,12 @@ import (
 //
 // Rows are only ever appended by the platform and never edited through any API,
 // with one deliberate exception worth knowing about when reading results: the
-// ADR-077 tenant purge empties `actor` and `entity_label` for a deleted tenant, so
-// a row from before an erasure reads back with both fields blank. That is the
-// retention working, not data missing. Every filter is optional except pagination — a bounded time range is
-// recommended for a busy tenant.
+// ADR-077 tenant purge empties `actor` and `entity_label` for a deleted tenant, and
+// moves its rows from the token to tenantpurge.RetainedTenant(token, epoch), so they
+// read back with both fields blank, and only through a system-context read filtered on
+// that key — never through a tenant-scoped read by a later tenant at the same token.
+// That is the retention working, not data missing. Every filter is optional except
+// pagination — a bounded time range is recommended for a busy tenant.
 type AuditEventSearchCriteria struct {
 	Pagination
 	StartTime *time.Time

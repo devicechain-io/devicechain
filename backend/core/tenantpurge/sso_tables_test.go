@@ -126,7 +126,7 @@ func TestTenantPurgeRemovesSsoRows(t *testing.T) {
 	cols, fks := ssoCatalog()
 	plan := planOf(t, cols, fks)
 
-	res, err := Sweep(context.Background(), db, plan, "acme", nil)
+	res, err := Sweep(context.Background(), db, plan, "acme", testEpoch, nil)
 	require.NoError(t, err)
 	assert.Positive(t, res.Rows)
 

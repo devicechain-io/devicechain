@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/devicechain-io/dc-microservice/tenantpurge"
 	"gorm.io/driver/postgres"
@@ -302,7 +303,11 @@ func runTableSweep(ctx context.Context, argv []string) error {
 	// Residue counts THIS tenant's rows per table with the sweep's own predicate, and
 	// omits the tables contributing none — so its result is the covered set, and the
 	// gap is everything in Actionable() it did not mention.
-	res, err := tenantpurge.Residue(ctx, db, plan, tenant)
+	//
+	// The tenant is live and no purge is running, so the epoch is a stand-in: it locates the
+	// rows a purge at this moment would have retained, which is none, and only the retained
+	// half of the result reads it. Tables, the only half read here, does not.
+	res, err := tenantpurge.Residue(ctx, db, plan, tenant, time.Now().UTC())
 	if err != nil {
 		return failWith(exitSetup, "could not count rows for tenant %q: %w", tenant, err)
 	}
