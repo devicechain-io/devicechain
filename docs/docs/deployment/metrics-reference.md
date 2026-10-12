@@ -79,7 +79,9 @@ bus: read them with `dcctl dead-letters`.
 | `alarm_event_dead_lettered_total` | Alarm state-change events that could not be published to the alarm-events stream and were written to the dead-letter stream instead. Each one is an alarm transition that reached the database but not the bus, so nobody was paged about it — it is visible to an operator rather than only logged. |
 | `callout_in_flight` | Device auth-callout requests being authorized right now. |
 | `callout_refused_busy_total` | Device auth-callout requests refused with the generic denial because the in-flight bound was reached. |
+| `config_reports_rejected_total{reason}` | Messages on the [device-reports topic](../guides/connecting-a-device.md#reserved-device-topics) that device-management refused: `malformed` (did not decode), `throttled` (a sync inside the per-device cooldown), `unattributable` (no tenant or device in the topic), `unknown_device`, `unknown_revision`, `digest_mismatch` and `stale` (older than what is recorded). A steady rate from one fleet is a device-side bug. |
 | `credential_misconfigured_total{path}` | Device credential checks refused because the stored secret can never match: none is stored, or its digest was made under a different key than this instance's root key derives (most likely a database restored next to the wrong root key). path="connect" is the MQTT auth callout, path="event" the per-event check. Wrong passwords are not counted here. |
+| `device_reports_dead_lettered_total` | Device messages written to the dead-letter stream because they could not be understood or named a configuration revision the device does not have. Read them with `dcctl dead-letters`. |
 | `geofence_set_publish_failures_total` | Geofence-set manifests that could not be published — a marshal error, a broker refusal, or a transport fault. Each one means event-processing was not told about a fence edit, so containment for that tenant holds its previous fence set until a reconcile sweep repairs it. A sustained non-zero rate means fence edits are not reaching the detection engine. |
 | `raise_alarm_dead_lettered_total` | Raise-alarm edges written to the dead-letter stream after every attempt to apply them failed, so an alarm that should have been raised or cleared is visible rather than only logged. |
 | `resolve_event_time_bounded_total` | Reported event times refused for leading the server clock by more than the configured tolerance, and replaced with the latest time the tolerance allows. |
@@ -261,6 +263,22 @@ the store could not take is recorded nowhere, and `DeadLetterStoreLosing` fires 
 | `dead_letters_stored_total` | Dead letters written to the queryable store, so a failure a consumer gave up on outlives the stream's own seven-day window. |
 | `dead_letters_unstorable_total` | Dead-letter messages this consumer could not make sense of — no parseable tenant, or a body that is not an envelope. They are ACKED and counted rather than retried, because no redelivery makes a malformed message parse. |
 | `dead_letters_unstored_total` | Dead letters that exhausted every delivery attempt without being stored — the store was unreachable for longer than the retries last. The failure they described is now recorded nowhere, which is the one thing this consumer exists to prevent. |
+
+## Update management {#update-management}
+
+Prefix: `devicechain_updatemanagement_`. The service is opt-in; see [Over-the-air updates](../concepts/over-the-air-updates.md).
+
+`update_download_grants_total{result="not_configured"}` rising means `updates.downloadBaseUrl` is unset and no device can download. `update_attempts_expired_total` counts devices that went quiet during an update; an `UNKNOWN` one waits for the device's inventory or an operator's `abandonUnknownUpdate`.
+
+| Metric | Means |
+| --- | --- |
+| `update_attempts_expired_total{state}` | Update attempts the deadline sweep moved because the device went quiet: `TIMED_OUT` before installation was reported started, `UNKNOWN` during installation or reboot. |
+| `update_desired_publish_failures_total` | Update assignments, download grants and cancels that could not be put on a device's desired topic. The device picks the state up at its next sync. |
+| `update_download_bytes_total` | Artifact bytes streamed to devices. |
+| `update_download_grants_total{result}` | Download grants devices asked for, by outcome: `granted`, or why not (`unknown_assignment`, `superseded`, `finished`, `cancel_requested`, `artifact_unavailable`, `not_configured`, `error`). |
+| `update_downloads_total{result}` | Artifact download requests, by outcome: `served`, `aborted` (the client went away or the object could not be read mid-stream), or why it was refused before any byte was served (`capability_malformed`, `capability_invalid`, `capability_expired`, `stale`, `gone`, `range_not_satisfiable`, `busy`, `error`). A rising `capability_invalid` rate is someone guessing. |
+| `update_reports_rejected_total{reason}` | Device messages update-management refused before applying them: `malformed`, `unattributable` and `throttled`. |
+| `update_reports_total{verdict}` | Update progress and inventory reports, by the verdict the update state machine gave: `APPLIED`, or why not (`DUPLICATE`, `STALE_ATTEMPT`, `DIGEST_MISMATCH`, `WRONG_COMPONENT`, `REGRESSION`, `UNCONFIRMED`, `NOT_CANCELLABLE`, `LATE`, `CONFLICT`, `INVALID_ATTEMPT`, `WRONG_KIND`, `UNKNOWN_ASSIGNMENT`). A rising non-applied rate from one fleet is a device-side bug. |
 
 ## Every service {#every-service}
 

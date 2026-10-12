@@ -86,7 +86,7 @@ A reading is one stored datum. For measurements, that is one *metric key*, so an
 
 That fan-out is what the limit exists for. The per-tenant ingest ceiling counts readings over time, so it bounds how many a tenant sends per second, and one message can cost no more than the tier's burst. But the burst is a tier setting: a tier whose burst is raised to forty thousand could send one message of forty thousand. Without the limit, what one message costs the whole instance would be set by the largest burst any tier allows. A device with a deeper backlog uploads it as several messages.
 
-Over the limit, a message is **refused whole**, never trimmed to fit. A batch quietly cut short would be answered `202`, and the missing readings would be undetectable from either end. Nothing is stored and nothing is lost: the message is routed intact to the failed-decode stream.
+Over the limit, a message is **refused whole**, never trimmed to fit. A batch quietly cut short would be answered `202`, and the missing readings would be undetectable from either end. Nothing is stored. For diagnosis the message is routed to the failed-decode stream with any credential it carried removed, and with its body cut to the first 16 KiB.
 
 How the device finds out depends on the transport:
 
@@ -333,7 +333,18 @@ This topic used to be tenant-wide (`{instanceId}/{tenant}/command-responses`, wi
 A command that is never answered stays `SENT` until its TTL turns it into `TIMEOUT`. Without a response, the platform knows only that the command was dispatched, not that the device acted on it. If your devices do not respond, set an `expiresAt` when issuing commands so they reach a terminal state on your schedule rather than on the platform's seven-day default.
 :::
 
-### Configuration delivery topics {#reserved-device-topics}
+### Why the nonce is required {#why-the-nonce-is-required}
+
+Echoing `dispatchNonce` tells the platform your answer belongs to **this** delivery of the command. That matters because a command can legitimately be published more than once. If a publish reports an error, the platform cannot tell a message that was lost from one whose acknowledgement was lost, so it queues the command to be sent again. Without the nonce, an answer to the first delivery arriving after the second went out would close the command before the device had carried out the second one.
+
+For a device you build yourself, this has two consequences:
+
+- A response with **no** `dispatchNonce` is refused. The command is not settled, and the answer is recorded on the platform's dead-letter stream rather than dropped, so the refusal is visible rather than silent.
+- A response quoting a `dispatchNonce` the command has **moved off** is refused the same way. Answer with the nonce from the delivery you are actually responding to.
+
+Store the nonce alongside the command while you carry it out, and overwrite it if the same command is delivered again before you answer.
+
+## Configuration delivery topics {#reserved-device-topics}
 
 A device receives its configuration, and tells the platform what it did with it, over two per-device topics:
 
@@ -343,6 +354,8 @@ A device receives its configuration, and tells the platform what it did with it,
 ```
 
 As with commands, a device is authorized only for the topic carrying its own device token, and only in the direction shown. The platform takes the tenant and the device from the topic, never from the message, so a message must not carry a device identity (one that does is refused), and a device can report only for itself.
+
+The configuration is built from the device's `SHARED` attributes, but only from the keys its profile declares as device-visible configuration: declare them in the console's profile editor (or with `setDeviceProfileConfigurationDeclaration`), and they reach devices when the profile is published. A shared key the declaration does not name is never sent, and a declared key whose stored value does not fit its declared type is left out. A shared-attribute write that would make a device's configuration larger than 64 KiB is refused. The console's device page shows the latest revision, what the device last reported and whether the revision is still pending; the `deviceConfiguration` query returns the same.
 
 Whenever the device's configuration changes, the platform publishes a revision on `device-desired`:
 
@@ -361,16 +374,58 @@ The device answers on `device-reports`. Every message is JSON, at most 4 KiB, an
 
 The platform records a `config.status` only when the device has that revision and the digest matches it; the device stops showing the revision as pending once it has reported `APPLIED` for it. Reports are processed at least once, so repeating one is safe, and an older report never overwrites a newer one. A message that does not decode, names a revision the device was not sent, or carries a digest that is not that revision's is refused and recorded on the dead-letter stream rather than dropped. Devices that speak only HTTP are not served by this channel.
 
-### Why the nonce is required {#why-the-nonce-is-required}
+## Over-the-air updates {#over-the-air-updates}
 
-Echoing `dispatchNonce` tells the platform your answer belongs to **this** delivery of the command. That matters because a command can legitimately be published more than once. If a publish reports an error, the platform cannot tell a message that was lost from one whose acknowledgement was lost, so it queues the command to be sent again. Without the nonce, an answer to the first delivery arriving after the second went out would close the command before the device had carried out the second one.
+On an instance running the update service (see [Over-the-Air Updates](../concepts/over-the-air-updates.md)), the same two topics carry firmware and software updates. The rules above apply here too: every message carries `"v":1` and a `kind`, unknown or repeated fields are refused, and a message must not carry a device identity. Update messages in either direction are at most 4 KiB.
 
-For a device you build yourself, this has two consequences:
+When an artifact is assigned to the device, the platform publishes on `device-desired`:
 
-- A response with **no** `dispatchNonce` is refused. The command is not settled, and the answer is recorded on the platform's dead-letter stream rather than dropped, so the refusal is visible rather than silent.
-- A response quoting a `dispatchNonce` the command has **moved off** is refused the same way. Answer with the nonce from the delivery you are actually responding to.
+```json
+{"v":1,"kind":"update.assignment","attemptId":"att-7f3k","assignmentId":"asg-91xq","component":"firmware","trust":"UNVERIFIED","artifact":{"version":"1.4.2","digest":"sha256:…","size":8388608,"requiresReboot":true}}
+```
 
-Store the nonce alongside the command while you carry it out, and overwrite it if the same command is delivered again before you answer.
+`component` names the part of the device to update; a device works on at most one assignment per component. `trust` is always `UNVERIFIED`: the platform has checked that the bytes are the bytes that were declared, not who produced them, so a device that needs to know an image is genuine must check a signature of its own.
+
+To fetch the image, ask for a download grant on `device-reports`:
+
+```json
+{"v":1,"kind":"download.request","assignmentId":"asg-91xq"}
+```
+
+The platform answers on `device-desired` with a URL that works, with no other credential, for this one artifact until `expiresAt` (at most fifteen minutes):
+
+```json
+{"v":1,"kind":"download.grant","assignmentId":"asg-91xq","url":"https://…/api/update-management/updates/download/…?cap=…","expiresAt":"2026-10-12T10:15:00Z"}
+```
+
+Download it with an HTTP `GET`. The endpoint answers `Range` requests, so an interrupted download resumes from the bytes you hold; when the grant expires, send the same `download.request` again for a new one. If the assignment is no longer current, the answer is an `update.cancel` instead of a grant.
+
+Report each stage on `device-reports` with `update.progress`:
+
+```json
+{"v":1,"kind":"update.progress","attemptId":"att-7f3k","assignmentId":"asg-91xq","component":"firmware","artifactDigest":"sha256:…","seq":3,"stage":"DOWNLOADING","progress":{"bytes":4194304,"total":8388608},"bootId":"b-20261012-0815"}
+```
+
+- `attemptId`, `assignmentId`, `component` and `artifactDigest` repeat the assignment; a report that names another attempt or digest is not applied.
+- `seq` starts at 1 and rises with every report for the attempt. Sending the same report again is harmless; a different report under a `seq` already used is a conflict and is not applied.
+- `stage` is one of `RECEIVED`, `DOWNLOADING`, `DOWNLOADED`, `VERIFIED`, `INSTALLING`, `REBOOTING`, `RUNNING`, `FAILED` and `ABANDONED`. You may skip a stage whose report was lost, but never go back to an earlier one.
+- `progress` (bytes held, and the total if known) is allowed only with `DOWNLOADING`.
+- Report `VERIFIED` only once the SHA-256 of the bytes you hold equals `artifact.digest`.
+- `FAILED` must carry `result`: `{"code":"FLASH_WRITE","detail":"…"}`, a code of up to 64 capital letters, digits and underscores, and a detail of up to 512 bytes.
+- `RUNNING` must carry `running`: `{"version":"1.4.2"}`, optionally with the `digest` of what runs. Send it once the new version is running.
+- `bootId` is required on every report: an identifier of the current boot, up to 128 printable characters, that changes every time the device boots. When `requiresReboot` is true, the platform accepts `RUNNING` as proof of the update only from a boot other than the one the device installed in.
+
+`update.cancel` (`{"v":1,"kind":"update.cancel","attemptId":"att-7f3k","assignmentId":"asg-91xq"}`) asks the device to stop working on that assignment. If it has not begun installing, it reports `stage` `ABANDONED`; once installation has started an update cannot be recalled.
+
+After it boots, a device reports what each component runs with `update.inventory`, which names no attempt:
+
+```json
+{"v":1,"kind":"update.inventory","component":"firmware","running":{"version":"1.4.2"},"bootId":"b-20261012-0821"}
+```
+
+That is how an update the platform marked `UNKNOWN`, because the device went quiet while installing or rebooting, is resolved.
+
+The `sync` a device sends on every connect (see [Configuration delivery topics](#reserved-device-topics)) also makes the platform resend each update the device should still be working on, and a cancel for any whose cancellation the device has not confirmed. Assignments are not retained, so subscribe to `device-desired` before you sync.
 
 ## What happens next
 

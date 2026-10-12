@@ -4,14 +4,14 @@ title: Object Storage
 
 # Object Storage
 
-Some things a platform holds are neither rows nor time-series points: a tenant's **logo** today, and eventually firmware packages. These are opaque binary assets, and they do not belong in the relational database. DeviceChain stores them in a **pluggable object store** — one interface in the shared core library, with storage backends you select by configuration.
+Some things a platform holds are neither rows nor time-series points: a tenant's **logo**, or a firmware image for an over-the-air update. These are opaque binary assets, and they do not belong in the relational database. DeviceChain stores them in a **pluggable object store** — one interface in the shared core library, with storage backends you select by configuration.
 
 The object store is the sibling of the [encrypted secret store](./architecture.md#secret-handling) and follows the same design: one interface, many backends, and typed configuration that rejects an unknown or invalid backend at startup rather than silently ignoring it. The division of labor between the two is strict. The object store holds **non-secret** binary assets only; credentials and other secrets live only in the envelope-encrypted secret store, never here.
 
 :::note Status
-**Available today:** the object-store interface with two backends, **filesystem** (the default) and **S3-compatible** (AWS S3 or MinIO) as a drop-in. The first consumer is **tenant white-labeling** (per-tenant branding logos).
+**Available today:** the object-store interface with two backends, **filesystem** (the default) and **S3-compatible** (AWS S3 or MinIO) as a drop-in. Its consumers are **tenant white-labeling** (per-tenant branding logos) and **[over-the-air updates](./over-the-air-updates.md)** (update artifacts).
 
-**Planned:** a Google Cloud Storage backend; larger branding images such as login backgrounds; firmware/OTA packages and tenant data exports, all behind the same interface. This repository is the source of truth for what currently builds.
+**Planned:** a Google Cloud Storage backend; larger branding images such as login backgrounds; tenant data exports, all behind the same interface. This repository is the source of truth for what currently builds.
 :::
 
 ## One interface, many backends {#one-seam-many-backends}
@@ -37,7 +37,7 @@ There is **no public bucket by default**. Every read is either authorized throug
 
 | Data | Where it lives |
 |---|---|
-| Branding logos today; firmware packages and other binary assets as they land | **Object store** (this page) |
+| Branding logos, over-the-air update artifacts, and other binary assets as they land | **Object store** (this page) |
 | SMTP passwords, webhook tokens, connector credentials | [Encrypted secret store](./architecture.md#secret-handling) — envelope-encrypted, write-only, resolved by handle |
 | Device telemetry and events | TimescaleDB hypertables, via [event-management](./architecture.md#components) |
 | Entities (devices, profiles, dashboards, …) | The relational database |
@@ -50,7 +50,7 @@ The filesystem default needs only a **persistent volume**. Set `blob.directory` 
 
 Selecting the S3 backend is a configuration change on the instance. The endpoint and bucket are non-secret config. The access credential resolves from the deployment's credential chain — for example, environment variables from the instance's Kubernetes Secret, or workload identity on a cloud cluster. The credential needs `s3:GetObject`, `s3:PutObject` and `s3:DeleteObject` on the bucket's objects and `s3:ListBucket` on the bucket: the last one lets the erasure of a deleted tenant find and remove every object under its prefix.
 
-Like every DeviceChain config surface, the object-store configuration is typed and strict: a misspelled backend name is a startup error, not a silent fallback. A filesystem backend with no directory is treated as "object store not configured". The service still starts, the logo upload and read endpoints return **503**, and inline and URL logos keep working.
+Like every DeviceChain config surface, the object-store configuration is typed and strict: a misspelled backend name is a startup error, not a silent fallback. A filesystem backend with no directory is treated as "object store not configured". The services still start, the logo upload and read endpoints return **503**, inline and URL logos keep working, and declaring an update artifact is refused with `OBJECT_STORE_NOT_CONFIGURED`.
 
 On an instance built with `dcctl`, none of this is hand-written: `dcctl bootstrap` chooses the store with `--object-store` (a small filesystem volume on a local cluster by default, or an S3 bucket with the credentials taken from an existing Secret) and records it on the instance. See [the object store](../deployment/bootstrap.md#object-store).
 
@@ -58,7 +58,7 @@ On an instance built with `dcctl`, none of this is hand-written: `dcctl bootstra
 
 Tenant white-labeling is the first feature built on the object store. A tenant's logo uploads into the store and is referenced by handle from the tenant's branding configuration. Very small assets can still be supplied inline (a bounded data-URI) for deployments with no storage wired up, but real image assets go through the store. The branding record's `background` is a hex color, not an image.
 
-Firmware/OTA distribution, the main case for large binaries, is planned on the same interface.
+The second consumer is [over-the-air updates](./over-the-air-updates.md). Each update artifact's content is stored here: streamed in on upload, verified against its declared size and digest, and served to devices through a short-lived download grant. On the S3 backend an upload is buffered in memory, so artifacts are limited to 64 MiB there.
 
 ## Related
 
