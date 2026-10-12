@@ -187,9 +187,15 @@ func benchServer(b *testing.B) *natsserver.Server {
 func benchManager(b *testing.B, srv *natsserver.Server, instance string, replicas int) *NatsManager {
 	b.Helper()
 	addr := srv.Addr().(*net.TCPAddr)
+	return benchManagerAt(b, addr.IP.String(), addr.Port, instance, replicas)
+}
+
+// benchManagerAt is benchManager for a broker at host:port, which need not be in this process.
+func benchManagerAt(b *testing.B, host string, port int, instance string, replicas int) *NatsManager {
+	b.Helper()
 	ms := &core.Microservice{InstanceId: instance, FunctionalArea: "bench", Readiness: core.NewReadinessGate()}
-	ms.InstanceConfiguration.Infrastructure.Nats.Hostname = addr.IP.String()
-	ms.InstanceConfiguration.Infrastructure.Nats.Port = uint32(addr.Port)
+	ms.InstanceConfiguration.Infrastructure.Nats.Hostname = host
+	ms.InstanceConfiguration.Infrastructure.Nats.Port = uint32(port)
 	ms.InstanceConfiguration.Infrastructure.Nats.StreamReplicas = uint32(replicas)
 	ms.Readiness.MarkReadyWithoutAuthSurface()
 	nmgr := NewNatsManager(ms, core.NewNoOpLifecycleCallbacks(), func(*NatsManager) error { return nil })
