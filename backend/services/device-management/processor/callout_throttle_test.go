@@ -381,7 +381,7 @@ func TestNewCalloutResponderRequiresChecker(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	r, err := NewCalloutResponder(nil, fakeAuthApi{}, nil, creds.IssuerSeed, "inst-1", nil)
+	r, err := NewCalloutResponder(nil, fakeAuthApi{}, nil, creds.IssuerSeed, "inst-1", nil, noFence)
 	if !errors.Is(err, errNoCredentialChecker) || r != nil {
 		t.Fatalf("got (%v, %v), want (nil, errNoCredentialChecker)", r, err)
 	}

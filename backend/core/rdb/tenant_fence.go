@@ -46,9 +46,10 @@ import (
 //
 // 🔴 LIFTING THE FENCE AT COMPLETION IS SAFE ONLY BECAUSE OF THE TOKEN HOLD, and that is
 // the whole argument — do not shorten one without the other. A purge does not complete
-// until it has been clean for the settle window AND older than the token hold, which
-// defaults to the broker JWT's full lifetime. By then no session minted before the
-// deletion can still authenticate, so there is no writer left for the fence to stop.
+// until it has been clean for the settle window AND the token hold has elapsed since it
+// went clean, which defaults to the broker JWT's full lifetime. No broker credential can
+// be minted for the tenant once its credential rows are swept, so by then none minted for
+// it can still authenticate, and there is no writer left for the fence to stop.
 //
 // This type is core-owned and migrated by core (see rdb.go), like the audit journal:
 // it exists in EVERY functional area's schema with no per-service wiring, because an
@@ -253,6 +254,21 @@ func tenantFenceCheck(db *gorm.DB) {
 // column-array write (insert_columns.go) asks for it by this name: it reads the fence
 // exactly when a gorm Create on the same handle would.
 const fenceCreateCallback = "dc:tenant_fence_create"
+
+// CheckTenantFence answers, for one tenant, the same question the write callbacks ask: nil
+// when no erasure fence stands for it in this area's schema, ErrTenantPurged when one does,
+// and a wrapped read error when the fence could not be read.
+//
+// It exists for decisions that are not themselves a write but would let one happen later —
+// the device auth callout, which mints a broker credential from rows the purge has not yet
+// swept. A credential minted while the fence stands is valid for its whole lifetime, long
+// after the sweep removed the rows it was minted from, so refusing to mint is the only point
+// at which the fence can act on it. Callers should refuse on ANY error, as the write path
+// does: the fence is read from the area's own schema, so a read that cannot answer means the
+// lookup that would justify the decision cannot be trusted either.
+func CheckTenantFence(ctx context.Context, db *gorm.DB, tenant string) error {
+	return readFence(db.Session(&gorm.Session{NewDB: true, Context: ctx}), []string{tenant})
+}
 
 // readFence is the fence read itself, for the tenants tokens: nil when no fence stands for
 // any of them, ErrTenantPurged when one does, and the read's own error, wrapped, when the

@@ -18,6 +18,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/credential"
 	"github.com/devicechain-io/dc-microservice/credential/credentialtest"
 	"github.com/devicechain-io/dc-microservice/natsauth"
+	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/nats-io/jwt/v2"
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nkeys"
@@ -81,7 +82,7 @@ func testChecker(t *testing.T, store credential.Store, opts ...credential.Option
 // mustResponder is NewCalloutResponder for a test that has no reason to see it refuse.
 func mustResponder(t *testing.T, conn *nats.Conn, api model.DeviceManagementApi, creds *credential.Checker, seed string, gate func(string) bool) *CalloutResponder {
 	t.Helper()
-	r, err := NewCalloutResponder(conn, api, creds, seed, "inst-1", gate)
+	r, err := NewCalloutResponder(conn, api, creds, seed, "inst-1", gate, noFence)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -481,5 +482,67 @@ func TestAuthorizeResolvesTheDeviceBeforeCheckingTheClientID(t *testing.T) {
 	if !authenticated {
 		t.Error("the device was never resolved, so the required client id could not have been " +
 			"derived — the comparison was made against something other than the device token")
+	}
+}
+
+// noFence is the erasure-fence read for a tenant this area has not fenced.
+func noFence(context.Context, string) error { return nil }
+
+// A tenant whose data this area is erasing must not be minted a broker credential, even
+// while the lifecycle gate still reads it as live (it caches and fails open) and its
+// credential rows have not been swept yet. A credential minted then stays valid for its
+// whole lifetime, long after the rows it was minted from are gone.
+//
+// An UNREADABLE fence refuses too: "could not ask" is not "no fence stands".
+func TestAuthorizeRefusesATenantWhoseErasureFenceStands(t *testing.T) {
+	for name, fenceErr := range map[string]error{
+		"fence stands":     rdb.ErrTenantPurged,
+		"fence unreadable": errors.New("relation purged_tenants does not exist"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			creds, err := natsauth.GenerateCredentials()
+			if err != nil {
+				t.Fatal(err)
+			}
+			api := fakeAuthApi{authFn: func(context.Context, *model.PresentedCredential) (*model.Device, error) {
+				d := &model.Device{}
+				d.Token = "sensor-001"
+				return d, nil
+			}}
+			var asked string
+			r, err := NewCalloutResponder(nil, api, testChecker(t, credentialtest.NewStore()), creds.IssuerSeed, "inst-1",
+				func(string) bool { return false },
+				func(ctx context.Context, tenant string) error {
+					asked = tenant
+					if got, ok := core.TenantFromContext(ctx); !ok || got != tenant {
+						t.Errorf("the fence must be read under the connecting tenant's context, got %q", got)
+					}
+					return fenceErr
+				})
+			if err != nil {
+				t.Fatal(err)
+			}
+			r.now = func() time.Time { return time.Unix(1_780_000_000, 0) }
+
+			userJWT, errMsg := r.authorize(testRequest(t, "acme-corp:dev1", "s3cret"))
+			if userJWT != "" || errMsg != genericAuthFailure {
+				t.Errorf("a fenced tenant must be denied generically, got jwt=%q err=%q", userJWT, errMsg)
+			}
+			if asked != "acme-corp" {
+				t.Errorf("the fence was asked about %q, want the connecting tenant", asked)
+			}
+		})
+	}
+}
+
+// A responder with no fence read is refused, never built to mint without consulting it.
+func TestNewCalloutResponderRequiresTheFenceRead(t *testing.T) {
+	creds, err := natsauth.GenerateCredentials()
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, err := NewCalloutResponder(nil, fakeAuthApi{}, testChecker(t, credentialtest.NewStore()), creds.IssuerSeed, "inst-1", nil, nil)
+	if !errors.Is(err, errNoTenantFence) || r != nil {
+		t.Fatalf("got (%v, %v), want (nil, errNoTenantFence)", r, err)
 	}
 }

@@ -723,7 +723,12 @@ func afterMicroserviceStarted(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		CalloutResponder, err = processor.NewCalloutResponder(NatsManager.Conn(), CachedApi, creds, seed, Microservice.InstanceId, gate)
+		// The erasure-fence read: refuses a mint for a tenant whose data this area is
+		// erasing, from this service's own schema, with no remote dependency.
+		fenced := func(ctx context.Context, tenant string) error {
+			return rdb.CheckTenantFence(ctx, RdbManager.Database, tenant)
+		}
+		CalloutResponder, err = processor.NewCalloutResponder(NatsManager.Conn(), CachedApi, creds, seed, Microservice.InstanceId, gate, fenced)
 		if err != nil {
 			return err
 		}

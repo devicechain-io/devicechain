@@ -77,6 +77,13 @@ type CalloutResponder struct {
 	// without a live user-management — the same injection shape event-sources uses for
 	// its ingest limiter. Never nil; see NewCalloutResponder.
 	tenantDeleted func(tenant string) bool
+	// tenantFenced reads this area's own erasure fence for a tenant (rdb.CheckTenantFence):
+	// nil when none stands, an error otherwise — including when it cannot be read. Unlike
+	// tenantDeleted it is local, uncached and never fails open, so it is what refuses a
+	// mint once the purge has reached this schema even while the lifecycle gate still
+	// reads "active". Never nil: NewCalloutResponder refuses to build a responder without
+	// one.
+	tenantFenced func(ctx context.Context, tenant string) error
 	// creds compares every MQTT password behind DeviceCredentialPolicy's backoff. Never
 	// nil: NewCalloutResponder refuses to build a responder without one.
 	creds *credential.Checker
@@ -196,6 +203,12 @@ func (r *rateLimitedLog) allow(now time.Time) (bool, int) {
 var errNoCredentialChecker = errors.New("the device auth callout needs a credential checker: " +
 	"without one every MQTT password would be compared unthrottled")
 
+// errNoTenantFence is NewCalloutResponder's refusal to build a responder that could mint a
+// broker credential for a tenant whose data this area is erasing.
+var errNoTenantFence = errors.New("the device auth callout needs the erasure-fence read: " +
+	"without it a credential could be minted for a tenant being deleted, valid long after " +
+	"its credential rows are gone")
+
 // NewCalloutResponder builds a responder over an established NATS connection (the
 // service's own trusted connection), the device-management API, the account issuer
 // seed the minted user JWTs are signed with, and the instance id the minted device
@@ -211,9 +224,16 @@ var errNoCredentialChecker = errors.New("the device auth callout needs a credent
 // creds is the Checker every MQTT password is compared through (built over the
 // device credential-attempt store, with DeviceCredentialPolicies). It is REQUIRED: a
 // nil one is refused with an error rather than defaulting to a compare with no backoff.
-func NewCalloutResponder(conn *nats.Conn, api model.DeviceManagementApi, creds *credential.Checker, issuerSeed, instanceId string, tenantDeleted func(string) bool) (*CalloutResponder, error) {
+//
+// tenantFenced reads this area's erasure fence for a tenant (main wires
+// rdb.CheckTenantFence over the service's own database). It is REQUIRED for the same
+// reason: a nil one is refused rather than defaulting to "no fence stands".
+func NewCalloutResponder(conn *nats.Conn, api model.DeviceManagementApi, creds *credential.Checker, issuerSeed, instanceId string, tenantDeleted func(string) bool, tenantFenced func(context.Context, string) error) (*CalloutResponder, error) {
 	if creds == nil {
 		return nil, errNoCredentialChecker
+	}
+	if tenantFenced == nil {
+		return nil, errNoTenantFence
 	}
 	if tenantDeleted == nil {
 		tenantDeleted = func(string) bool { return false }
@@ -228,6 +248,7 @@ func NewCalloutResponder(conn *nats.Conn, api model.DeviceManagementApi, creds *
 		ttl:           natsauth.DefaultUserJWTTTL,
 		now:           time.Now,
 		tenantDeleted: tenantDeleted,
+		tenantFenced:  tenantFenced,
 		maxInFlight:   DefaultCalloutMaxInFlight,
 		sem:           make(chan struct{}, DefaultCalloutMaxInFlight),
 		lookupTimeout: DefaultCalloutLookupTimeout,
@@ -472,6 +493,25 @@ func (c *CalloutResponder) authorize(req jwt.AuthorizationRequest) (userJWT stri
 		log.Debug().Str("tenant", tenant).Str("presented", req.ClientInformation.MQTT).
 			Str("required", required).
 			Msg("Auth-callout refused a device connect whose MQTT client id is not the device's own.")
+		return "", genericAuthFailure
+	}
+
+	// The erasure fence, read from this area's own schema immediately before minting. The
+	// lifecycle gate above is a cached remote read that fails open, so after a delete it
+	// can keep reading "active" for up to its TTL — or indefinitely while user-management
+	// is unreachable — and until the purge sweeps this tenant's credential rows the lookup
+	// above still succeeds. A credential minted then is valid for its whole lifetime, long
+	// past the sweep. The fence is planted, in its own committed transaction, before that
+	// sweep runs, so from that moment this refuses the mint without depending on anything
+	// remote. Scoped by construction: a fence exists only for a tenant being deleted, so
+	// this can never refuse a live tenant's connects, and a fence that cannot be read is a
+	// local database that also could not have answered the lookup above.
+	//
+	// Checked after the credential succeeded rather than before it, so a live tenant's
+	// failed connect costs nothing extra and the read is one per granted connect.
+	if err := c.tenantFenced(ctx, tenant); err != nil {
+		log.Debug().Err(err).Str("tenant", tenant).
+			Msg("Auth-callout refused a device connect: this tenant's data is being erased, or the erasure fence could not be read.")
 		return "", genericAuthFailure
 	}
 

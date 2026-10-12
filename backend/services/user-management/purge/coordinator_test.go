@@ -591,6 +591,61 @@ func TestTheTokenIsHeldUntilNoPreDeletionSessionCanWrite(t *testing.T) {
 	require.False(t, h.exists("acme"))
 }
 
+// slowStore erases rows on its first call and takes `takes` of the harness clock to do it,
+// the way a large tenant's relational sweep does.
+type slowStore struct {
+	name  string
+	h     *harness
+	takes time.Duration
+	calls int
+}
+
+func (s *slowStore) Name() string { return s.name }
+
+func (s *slowStore) Erase(context.Context, string, time.Time) (Outcome, error) {
+	s.calls++
+	if s.calls == 1 {
+		s.h.clock = s.h.clock.Add(s.takes)
+		return Outcome{Rows: 5}, nil
+	}
+	return Outcome{}, nil
+}
+
+// TestTheTokenHoldCoversCredentialsMintedDuringASlowSweep pins that clean-since dates the end
+// of the pass that erased rows, not its start, and that the hold runs from it.
+//
+// Until the sweep commits, the tenant's credential rows exist and a broker credential can be
+// minted from them, valid for the full hold from that moment. A sweep that runs for two hours
+// therefore leaves credentials valid until two hours past the epoch plus the hold. Stamped at
+// the start of the pass, or held from the epoch, the token would be released while they are
+// still live.
+func TestTheTokenHoldCoversCredentialsMintedDuringASlowSweep(t *testing.T) {
+	h := newHarness(t)
+	store := &slowStore{name: "rdb", h: h, takes: 2 * time.Hour}
+	h.coord.stores = []Store{store}
+	h.coord.tokenHold = 12 * time.Hour
+	tenant := h.deleteTenant("acme")
+	epoch := *tenant.PurgeEpoch
+
+	h.pass()
+	sweptAt := epoch.Add(2 * time.Hour)
+	line := h.ledger("acme", epoch)["rdb"]
+	require.NotNil(t, line.CleanSince)
+	require.True(t, line.CleanSince.Equal(sweptAt),
+		"clean-since must date the end of the pass that erased rows (%s), got %s", sweptAt, *line.CleanSince)
+
+	// Twelve hours and a bit after the epoch: past a hold counted from the epoch, but a
+	// credential minted just before the sweep committed is still valid.
+	h.clock = epoch.Add(12*time.Hour + time.Minute)
+	h.pass()
+	require.True(t, h.exists("acme"),
+		"the token must stay held while a credential minted before the sweep committed can still be valid")
+
+	h.clock = sweptAt.Add(12 * time.Hour).Add(MintSlack).Add(time.Second)
+	h.pass()
+	require.False(t, h.exists("acme"), "once every such credential has expired the token is released")
+}
+
 // TestAnIncompleteLineForAnUnregisteredStoreBlocksCompletion covers de-registering or
 // renaming a store mid-purge.
 //

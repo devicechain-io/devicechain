@@ -82,9 +82,10 @@ func PlantFence(ctx context.Context, db *gorm.DB, plan *Plan, tenant string, epo
 //
 // 🔴 THIS IS THE ACT THAT LETS A SUCCESSOR TENANT WRITE, so it is safe only because of
 // what has to be true before it is called: the purge has been clean for the settle
-// window AND older than the token hold, which defaults to the full lifetime of a broker
-// JWT. No session minted before the deletion can still authenticate by then, so there is
-// no pre-deletion writer left for the fence to stop. Shortening the token hold without
+// window AND the token hold has elapsed since it went clean, which defaults to the full
+// lifetime of a broker JWT. No credential can be minted for the tenant once its credential
+// rows are swept, so none minted for it can still authenticate by then, and there is no
+// pre-deletion writer left for the fence to stop. Shortening the token hold without
 // re-deriving this is how a released token starts inheriting writes again.
 //
 // It is called BEFORE the token is released, not after, and the ordering is chosen for

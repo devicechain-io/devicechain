@@ -127,6 +127,9 @@ type Registrar struct {
 	tokenPrefix string
 
 	cache *tokenCache
+	// now is the cache's clock (time.Now), replaced in tests so an entry's expiry can be
+	// reached without sleeping through tokenCacheTTL.
+	now func() time.Time
 	// tenantDeleted reports whether a tenant has been through the ADR-077 delete door.
 	// A closure rather than the governance resolver type, matching NewIngestLimiter's
 	// injection: the adapter stays testable without a live user-management, and the
@@ -147,7 +150,7 @@ func NewRegistrar(client GraphQLClient, graphqlURL, tokenPrefix string, tenantDe
 	}
 	return &Registrar{
 		client: client, url: graphqlURL, tokenPrefix: tokenPrefix,
-		cache: newTokenCache(), tenantDeleted: tenantDeleted,
+		cache: newTokenCache(), now: time.Now, tenantDeleted: tenantDeleted,
 	}
 }
 
@@ -160,7 +163,7 @@ func (r *Registrar) Resolve(ctx context.Context, tenant, externalId string, poli
 	// The ADR-077 lifecycle gate, checked BEFORE the cache and therefore before every
 	// other path in this function. Placing it first is what makes it one gate instead of
 	// three: it stops a hot device that resolves from memory (the case device deletion
-	// alone cannot stop, since the cache never expires and never re-asks), it stops the
+	// alone cannot stop until its cache entry expires, since the cache does not re-ask), it stops the
 	// lookup, and it stops auto-registration — which is the worst of the three, because
 	// a cache miss under an auto-register policy issues createDevice under a SERVICE
 	// token naming the purged tenant, re-seeding the entity root every other area's rows
@@ -172,7 +175,7 @@ func (r *Registrar) Resolve(ctx context.Context, tenant, externalId string, poli
 		r.cache.invalidateTenant(tenant)
 		return "", ResolveTenantGone, nil
 	}
-	if tok, ok := r.cache.get(tenant, externalId); ok {
+	if tok, ok := r.cache.get(tenant, externalId, r.now()); ok {
 		return tok, ResolveFound, nil
 	}
 	tok, found, err := r.lookup(ctx, tenant, externalId)
@@ -180,7 +183,7 @@ func (r *Registrar) Resolve(ctx context.Context, tenant, externalId string, poli
 		return "", ResolveDropped, err
 	}
 	if found {
-		r.cache.put(tenant, externalId, tok)
+		r.cache.put(tenant, externalId, tok, r.now())
 		return tok, ResolveFound, nil
 	}
 	if !policy.AutoRegister {
@@ -200,12 +203,12 @@ func (r *Registrar) Resolve(ctx context.Context, tenant, externalId string, poli
 		// device behind (a bad device type, or device-management down) is returned for
 		// the caller to retry.
 		if again, found2, lerr := r.lookup(ctx, tenant, externalId); lerr == nil && found2 {
-			r.cache.put(tenant, externalId, again)
+			r.cache.put(tenant, externalId, again, r.now())
 			return again, ResolveFound, nil
 		}
 		return "", ResolveDropped, err
 	}
-	r.cache.put(tenant, externalId, token)
+	r.cache.put(tenant, externalId, token, r.now())
 	return token, ResolveCreated, nil
 }
 
