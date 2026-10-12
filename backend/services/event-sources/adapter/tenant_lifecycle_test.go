@@ -6,6 +6,7 @@ package adapter
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -49,9 +50,9 @@ func TestResolveRefusesToAutoRegisterIntoADeletedTenant(t *testing.T) {
 
 // 🔴 The gate runs BEFORE the cache, which is the part device deletion alone cannot do.
 //
-// The cache never expires and never re-asks, so a device already resolved keeps
-// resolving from memory forever — deleting its row in device-management does not stop
-// it. A gate placed after the cache read would leave exactly the hot, high-rate devices
+// The cache does not re-ask until its entry expires (tokenCacheTTL), so a device already
+// resolved keeps resolving from memory until then — deleting its row in device-management
+// does not stop it. A gate placed after the cache read would leave exactly the hot, high-rate devices
 // ingesting, which are the ones that matter.
 func TestResolveRefusesEvenAnAlreadyCachedDevice(t *testing.T) {
 	gql := &fakeGraphQL{responder: func(string, map[string]any) (any, error) { return lookupHit("dev-1"), nil }}
@@ -82,14 +83,14 @@ func TestResolveEvictsADeletedTenantsCachedEntries(t *testing.T) {
 
 	_, _, err := r.Resolve(context.Background(), "acme", "g/n", IngestPolicy{})
 	require.NoError(t, err)
-	_, ok := r.cache.get("acme", "g/n")
+	_, ok := r.cache.get("acme", "g/n", r.now())
 	require.True(t, ok, "the cache should be warm before the delete, or this test proves nothing")
 
 	deleted = true
 	_, _, err = r.Resolve(context.Background(), "acme", "g/n", IngestPolicy{})
 	require.NoError(t, err)
 
-	_, ok = r.cache.get("acme", "g/n")
+	_, ok = r.cache.get("acme", "g/n", r.now())
 	assert.False(t, ok, "the purged tenant's cached tokens must be dropped, not just skipped")
 }
 
@@ -98,18 +99,18 @@ func TestResolveEvictsADeletedTenantsCachedEntries(t *testing.T) {
 // flat key layout with a sloppy prefix match would take "acme-corp" out with "acme".
 func TestInvalidateTenantLeavesOtherTenantsAlone(t *testing.T) {
 	c := newTokenCache()
-	c.put("acme", "g/n", "dev-1")
-	c.put("acme-corp", "g/n", "dev-2")
-	c.put("other", "g/n", "dev-3")
+	c.put("acme", "g/n", "dev-1", fixedNow())
+	c.put("acme-corp", "g/n", "dev-2", fixedNow())
+	c.put("other", "g/n", "dev-3", fixedNow())
 
 	c.invalidateTenant("acme")
 
-	_, ok := c.get("acme", "g/n")
+	_, ok := c.get("acme", "g/n", fixedNow())
 	assert.False(t, ok)
-	tok, ok := c.get("acme-corp", "g/n")
+	tok, ok := c.get("acme-corp", "g/n", fixedNow())
 	assert.True(t, ok, "a tenant whose token merely starts with the purged one must survive")
 	assert.Equal(t, "dev-2", tok)
-	_, ok = c.get("other", "g/n")
+	_, ok = c.get("other", "g/n", fixedNow())
 	assert.True(t, ok)
 }
 
@@ -183,4 +184,45 @@ func TestADeletedTenantsDropIsCountedApartFromAnUnknownDevice(t *testing.T) {
 		"g/n", []Sample{{Name: "t", Value: 1, Time: fixedNowMs}}))
 	assert.Equal(t, float64(1), read("tenantGone"))
 	assert.Equal(t, float64(1), read("dropped"), "a purge must not be counted as an unknown device")
+}
+
+// 🔴 A tenant that stays idle for its whole purge is never refused, so the refusal-path
+// eviction above never runs for it — and once its token is released, a SUCCESSOR at the
+// same token would resolve its external ids to the PREDECESSOR's cached device tokens.
+//
+// A cached resolution therefore expires (tokenCacheTTL), well inside the purge's token hold,
+// which is counted from when the purge swept the device rows the entry was resolved from:
+// whatever was cached before that sweep has expired before the token can be reused, and the
+// next message asks device-management again, which answers for the tenant that exists NOW.
+func TestACachedResolutionExpiresWellInsideTheTokenHold(t *testing.T) {
+	answer := "predecessor-dev"
+	gql := &fakeGraphQL{responder: func(string, map[string]any) (any, error) { return lookupHit(answer), nil }}
+	r := NewRegistrar(gql, "url", "sp-", nil)
+	clock := time.Unix(1_700_000_000, 0)
+	r.now = func() time.Time { return clock }
+
+	tok, _, err := r.Resolve(context.Background(), "acme", "g/n", IngestPolicy{})
+	require.NoError(t, err)
+	require.Equal(t, "predecessor-dev", tok)
+	require.Equal(t, 1, gql.lookups)
+
+	// Inside the TTL the cache answers: steady-state telemetry must not re-hit
+	// device-management on every message.
+	clock = clock.Add(tokenCacheTTL - time.Second)
+	tok, _, err = r.Resolve(context.Background(), "acme", "g/n", IngestPolicy{})
+	require.NoError(t, err)
+	require.Equal(t, "predecessor-dev", tok)
+	require.Equal(t, 1, gql.lookups, "a fresh entry must be served from memory")
+
+	// The tenant is purged and its token reused while this process sat idle. Past the TTL
+	// the resolution is asked again and answers for the tenant that exists now.
+	answer = "successor-dev"
+	clock = clock.Add(2 * time.Second)
+	tok, _, err = r.Resolve(context.Background(), "acme", "g/n", IngestPolicy{})
+	require.NoError(t, err)
+	assert.Equal(t, "successor-dev", tok, "an expired entry must not be served")
+	assert.Equal(t, 2, gql.lookups)
+
+	assert.Less(t, tokenCacheTTL, 12*time.Hour/4,
+		"the TTL must sit well inside the default token hold (the broker credential lifetime)")
 }
