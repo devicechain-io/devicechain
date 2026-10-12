@@ -18,6 +18,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/deadletter"
 	"github.com/devicechain-io/dc-microservice/messaging"
+	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/rs/zerolog/log"
 )
@@ -947,6 +948,18 @@ func (cproc *CommandDeliveryProcessor) handleResponse(ctx context.Context, msg m
 					"against it")
 			_ = msg.Ack()
 			done(core.ResultFailed)
+			return true
+		}
+		// 🔴 A DELETED TENANT IS TERMINAL, NOT TRANSIENT. Its commands have been erased and
+		// this area's fence refuses the write on every delivery, so retrying would spend the
+		// whole budget and then letter an answer to a command that no longer exists, for a
+		// tenant being erased. Dropped at once — the dead-letter writeback makes the same
+		// call for the same reason.
+		if errors.Is(err, rdb.ErrTenantPurged) {
+			log.Info().Str("command", response.CommandToken).Str("correlation", msg.CorrelationID()).
+				Msg("Dropping a command response for a deleted tenant; its commands have been erased.")
+			_ = msg.Ack()
+			done(core.ResultInvalid)
 			return true
 		}
 		// Treat a failed persist as transient. Leave it unacked to retry until

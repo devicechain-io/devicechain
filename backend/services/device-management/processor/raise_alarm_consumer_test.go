@@ -6,6 +6,7 @@ package processor
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -14,6 +15,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/deadletter"
 	"github.com/devicechain-io/dc-microservice/messaging"
+	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-microservice/streams"
 )
 
@@ -306,6 +308,27 @@ func TestARaiseAlarmEdgeThatCannotBeAppliedIsDeadLettered(t *testing.T) {
 	}
 	if ack.acks != 1 {
 		t.Fatalf("a dead-lettered edge must still be acked: acks=%d", ack.acks)
+	}
+}
+
+// 🔴 A DELETED TENANT'S EDGE IS DROPPED AT ONCE, NOT RETRIED AND LETTERED. The erasure fence
+// refuses the write on every delivery, so retrying spends the whole redelivery budget and then
+// files a letter about a tenant whose data is being erased — at the cap here, which is the
+// delivery the letter would be written on.
+func TestARaiseAlarmEdgeForADeletedTenantIsDroppedNotLettered(t *testing.T) {
+	api := &fakeAlarmApi{devices: []*model.Device{{}}, edgeErr: fmt.Errorf("applying the edge: %w", rdb.ErrTenantPurged)}
+	dead := &deadRecorder{}
+	rc := consumerWithDeadLetters(t, api, dead)
+
+	first := &fakeAck{}
+	rc.handle(context.Background(), raiseMsg(t, "acme", validReq(), 1, first))
+	if first.acks != 1 {
+		t.Fatalf("an edge the fence refuses must be acked on its first delivery: acks=%d", first.acks)
+	}
+	atcap := &fakeAck{}
+	rc.handle(context.Background(), raiseMsg(t, "acme", validReq(), messaging.MaxDeliver, atcap))
+	if atcap.acks != 1 || len(dead.msgs) != 0 {
+		t.Fatalf("an edge for a deleted tenant must be dropped, never lettered: acks=%d letters=%d", atcap.acks, len(dead.msgs))
 	}
 }
 

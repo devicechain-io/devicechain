@@ -6,6 +6,7 @@ package processor
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -13,6 +14,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/ota"
+	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-update-management/model"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
@@ -222,6 +224,34 @@ func TestATransientFailureIsRetriedAndThenDeadLettered(t *testing.T) {
 	exhausted.NumDelivered = messaging.MaxDeliver
 	c.retryOrDrop(context.Background(), exhausted, "dev-1", func(r string) { results = append(results, r) }, api.applyErr, "update.progress")
 	require.Equal(t, []string{core.ResultRetry, core.ResultFailed}, results)
+}
+
+// ackRecorder observes whether the consumer acknowledged a message.
+type ackRecorder struct{ acks int }
+
+func (a *ackRecorder) Ack() error { a.acks++; return nil }
+
+// A deleted tenant's report is refused by the erasure fence on every delivery, so it is
+// acknowledged on the FIRST one: retrying it would spend the whole redelivery budget and then
+// file a dead letter about a tenant whose data is being erased.
+func TestAReportForADeletedTenantIsDroppedOnItsFirstDelivery(t *testing.T) {
+	api := &fakeApi{applyErr: fmt.Errorf("applying: %w", rdb.ErrTenantPurged)}
+	c, reg := newConsumerWithRegistry(t, api)
+	ack := &ackRecorder{}
+	c.handle(context.Background(), messaging.NewConsumedMessage(reportsSubject, []byte(progressBody("RECEIVED")), 1, nil, ack))
+	require.Equal(t, 1, ack.acks, "a report the fence refuses was left for redelivery")
+	require.EqualValues(t, 1, handled(t, reg, core.ResultInvalid))
+	require.Zero(t, handled(t, reg, core.ResultRetry))
+	require.Zero(t, handled(t, reg, core.ResultFailed))
+
+	// The download-request path reaches the same store.
+	api.applyErr = nil
+	api.grantErr = rdb.ErrTenantPurged
+	ack = &ackRecorder{}
+	c.handle(context.Background(), messaging.NewConsumedMessage(reportsSubject,
+		[]byte(`{"v":1,"kind":"download.request","assignmentId":"asg-1"}`), 1, nil, ack))
+	require.Equal(t, 1, ack.acks, "a download request the fence refuses was left for redelivery")
+	require.EqualValues(t, 2, handled(t, reg, core.ResultInvalid))
 }
 
 // A report that could not be applied (the store is down) must be left for redelivery, not

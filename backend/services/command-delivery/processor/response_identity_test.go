@@ -6,6 +6,7 @@ package processor
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"strings"
 	"testing"
@@ -14,6 +15,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/deadletter"
 	"github.com/devicechain-io/dc-microservice/messaging"
+	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-microservice/streams"
 	"github.com/prometheus/client_golang/prometheus"
 	dto "github.com/prometheus/client_model/go"
@@ -212,6 +214,37 @@ func TestACommandResponseThatCannotBeRecordedIsDeadLettered(t *testing.T) {
 	if d := dead.tenants[0]; d != "acme" {
 		t.Fatalf("the letter was written under tenant %q; the real writer is fail-closed on "+
 			"the context's tenant, so a wrong one loses every letter silently", d)
+	}
+}
+
+// 🔴 A DELETED TENANT'S RESPONSE IS DROPPED, NOT RETRIED AND LETTERED. The erasure fence
+// refuses the write identically on every delivery, so treating it as a persist failure spends
+// the whole redelivery budget and then files a letter — about a command that has been erased,
+// for a tenant whose data is being erased. Both the first delivery and the final one ack, and
+// neither writes a letter.
+func TestACommandResponseForADeletedTenantIsDroppedNotLettered(t *testing.T) {
+	for _, delivery := range []int{1, messaging.MaxDeliver} {
+		api := &fakeApi{responseErr: fmt.Errorf("recording the answer: %w", rdb.ErrTenantPurged)}
+		dead := &deadRecorder{}
+		acked := 0
+		p := &CommandDeliveryProcessor{
+			Api:  api,
+			dead: testDeadSink(dead),
+			CommandResponsesReader: &oneMessageReader{msg: responseMessage(
+				[]byte(`{"commandToken":"cmd-1","success":true}`), delivery, nil, ackCounter{&acked})},
+		}
+
+		readAndHandleOne(p, context.Background())
+
+		if len(api.responseCalls) != 1 {
+			t.Fatalf("delivery %d: MarkResponse called %d times, want 1", delivery, len(api.responseCalls))
+		}
+		if acked != 1 {
+			t.Fatalf("delivery %d: acked %d times, want 1: the fence refuses it on every delivery", delivery, acked)
+		}
+		if len(dead.msgs) != 0 {
+			t.Fatalf("delivery %d: wrote %d dead letters for a deleted tenant, want 0", delivery, len(dead.msgs))
+		}
 	}
 }
 
