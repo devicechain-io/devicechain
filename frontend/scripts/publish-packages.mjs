@@ -204,6 +204,53 @@ export function isAlreadyPublishedRefusal(stderr, version) {
   return listed.includes(version);
 }
 
+// ---------------------------------------------------------------------------
+// Is a trusted publisher configured for this package, as THIS job?
+//
+// Asked with the exchange `npm publish` itself performs under OIDC (npm CLI
+// lib/utils/oidc.js): a GitHub ID token for the audience `npm:registry.npmjs.org`,
+// POSTed to the registry's per-package exchange endpoint. npm answers with a
+// short-lived publish token when a trusted publisher matches this repository and
+// workflow, and refuses otherwise. npm's own publish swallows that refusal and goes on
+// to fail with an anonymous 404; asking first is what lets the refusal be reported per
+// package, before anything has been published. The token npm mints is discarded.
+//
+// Only ever called inside Actions, where assertOidcReady() has already proved the
+// token endpoint is present and the registry is registry.npmjs.org.
+// ---------------------------------------------------------------------------
+const REGISTRY = 'https://registry.npmjs.org/';
+
+async function githubIdToken() {
+  const url = new URL(process.env.ACTIONS_ID_TOKEN_REQUEST_URL);
+  url.searchParams.append('audience', `npm:${new URL(REGISTRY).hostname}`);
+  const response = await fetch(url, {
+    headers: { Accept: 'application/json', Authorization: `Bearer ${process.env.ACTIONS_ID_TOKEN_REQUEST_TOKEN}` },
+  });
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok || typeof body.value !== 'string') {
+    fail(`GitHub would not issue an OIDC ID token (HTTP ${response.status}), so nothing was published`);
+  }
+  return body.value;
+}
+
+// null when npm would let this job publish `name`, otherwise what npm said.
+async function trustedPublisherRefusal(name, idToken) {
+  const escaped = name.replace('/', '%2f');
+  const response = await fetch(new URL(`-/npm/v1/oidc/token/exchange/package/${escaped}`, REGISTRY), {
+    method: 'POST',
+    headers: { Accept: 'application/json', Authorization: `Bearer ${idToken}` },
+  });
+  if (response.ok) return null;
+  const text = await response.text().catch(() => '');
+  let message = text.trim();
+  try {
+    message = JSON.parse(text).message ?? message;
+  } catch {
+    // not JSON — report the body as it came
+  }
+  return `HTTP ${response.status}${message ? `: ${message.slice(0, 200)}` : ''}`;
+}
+
 function sleep(ms) {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
@@ -211,7 +258,7 @@ function sleep(ms) {
 // ---------------------------------------------------------------------------
 // main
 // ---------------------------------------------------------------------------
-function main(argv) {
+async function main(argv) {
   const { version, tag, dryRun } = parseArgs(argv);
   const here = path.dirname(fileURLToPath(import.meta.url));
   const packages = resolvePackages(path.join(path.dirname(here), 'packages'));
@@ -233,23 +280,28 @@ function main(argv) {
     );
   }
 
+  // 🔴 EVERY PACKAGE'S BOOTSTRAP STATE IS CHECKED BEFORE THE FIRST PUBLISH, for the
+  // same reason as the manifests above. Two states make a package unpublishable from
+  // this job, and both used to surface only when the loop below reached that package —
+  // the first by refusing at the first absent package (so the message named one of
+  // them), the second by `npm publish` failing with a bare 404 after every package
+  // before it in the chain was already on the registry for good.
+  //
+  //  - ABSENT. A trusted publisher can only be configured on a package that already
+  //    EXISTS, and npm's staged-publish flow cannot stage a brand-new package. So
+  //    version one of each package is a manual, interactive, 2FA'd `npm publish` from
+  //    a maintainer's machine; this job takes over from version two.
+  //  - NO TRUSTED PUBLISHER. The package exists (the manual publish happened) but
+  //    nobody configured release.yml as its trusted publisher, so npm refuses the OIDC
+  //    exchange. That is asked of npm directly, with the same exchange `npm publish`
+  //    performs, rather than inferred.
+  const absent = [];
   const plan = [];
   for (const { dir, pkg } of packages) {
     const existing = publishedVersions(pkg.name);
     if (existing === null) {
-      // 🔴 THE FIRST PUBLISH OF A PACKAGE CANNOT HAPPEN HERE, and this is the message
-      // that says so rather than letting npm report a bare 403. A trusted publisher can
-      // only be configured on a package that already EXISTS, and npm's staged-publish
-      // flow explicitly cannot stage a brand-new package. So version one of each
-      // package is a manual, interactive, 2FA'd `npm publish` from a maintainer's
-      // machine; this job takes over from version two.
-      fail(
-        `${pkg.name} does not exist on the registry.\n` +
-          '  A trusted publisher (OIDC) can only be configured on a package that already exists, and\n' +
-          '  npm cannot stage a brand-new package either — so the FIRST version of each package must be\n' +
-          '  published by hand by a maintainer, who then configures the trusted publisher on npmjs.com.\n' +
-          '  This job publishes every version after that one.',
-      );
+      absent.push(pkg.name);
+      continue;
     }
     if (existing.includes(version)) {
       // Not an error. A release job re-run after a later step failed would otherwise
@@ -260,6 +312,49 @@ function main(argv) {
       continue;
     }
     plan.push({ dir, name: pkg.name });
+  }
+
+  // Only the packages this run would actually publish need the exchange; one already at
+  // this version is skipped below whatever its trusted-publisher state. Absent packages
+  // are not asked about: the exchange cannot succeed for them, and their remedy is the
+  // one already being reported.
+  const untrusted = [];
+  if (process.env.GITHUB_ACTIONS === 'true') {
+    const idToken = await githubIdToken();
+    for (const { name } of plan) {
+      const refusal = await trustedPublisherRefusal(name, idToken);
+      if (refusal !== null) untrusted.push(`${name} (${refusal})`);
+    }
+  } else if (plan.length > 0) {
+    console.log('  (not in GitHub Actions: the trusted-publisher check is skipped — it asks npm as release.yml)');
+  }
+
+  if (absent.length > 0 || untrusted.length > 0) {
+    const sections = [];
+    if (absent.length > 0) {
+      sections.push(
+        `these packages do not exist on the registry:\n${absent.map((n) => `    ${n}`).join('\n')}\n` +
+          '  A trusted publisher (OIDC) can only be configured on a package that already exists, and npm\n' +
+          '  cannot stage a brand-new package either. For each one, a maintainer must:\n' +
+          '    1. publish its FIRST version by hand (`npm publish` from the package directory, with 2FA), then\n' +
+          '    2. on npmjs.com, add a trusted publisher for it: GitHub Actions, this repository,\n' +
+          '       workflow file release.yml.\n' +
+          '  This job publishes every version after that one.',
+      );
+    }
+    if (untrusted.length > 0) {
+      sections.push(
+        `npm refused the OIDC exchange for these packages, so publishing them from here would fail:\n` +
+          `${untrusted.map((n) => `    ${n}`).join('\n')}\n` +
+          '  Each exists on the registry but has no trusted publisher matching this job. On npmjs.com,\n' +
+          '  add one for it: GitHub Actions, this repository, workflow file release.yml.',
+      );
+    }
+    fail(
+      `NOTHING WAS PUBLISHED — every package must be publishable before any is, because a published\n` +
+        `  version can never be republished.\n  ${sections.join('\n  ')}\n` +
+        '  Then re-run this job.',
+    );
   }
 
   for (const [index, { dir, name }] of plan.entries()) {
@@ -349,7 +444,7 @@ function main(argv) {
 
 if (fileURLToPath(import.meta.url) === path.resolve(process.argv[1] ?? '')) {
   try {
-    main(process.argv.slice(2));
+    await main(process.argv.slice(2));
   } catch (err) {
     if (!(err instanceof PackageError)) throw err;
     console.error(`\n==> publish-packages: ${err.message}\n`);
