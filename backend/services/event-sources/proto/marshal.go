@@ -81,21 +81,10 @@ func MarshalPayloadForLocationsEvent(payload *model.UnresolvedLocationsPayload) 
 	return bytes, nil
 }
 
-// Marshal payload for a measurements event.
+// Marshal payload for a measurements event: the PUnresolvedMeasurementsPayload wire
+// format, written directly rather than through proto.Marshal (see measurements_wire.go).
 func MarshalPayloadForMeasurementsEvent(payload *model.UnresolvedMeasurementsPayload) ([]byte, error) {
-	pbpayload := &PUnresolvedMeasurementsPayload{}
-	for _, entry := range payload.Entries {
-		pbentry := &PUnresolvedMeasurementsEntry{
-			Measurements: entry.Measurements,
-			OccurredTime: marshalEntryTime(entry.OccurredTime),
-		}
-		pbpayload.Entries = append(pbpayload.Entries, pbentry)
-	}
-	bytes, err := proto.Marshal(pbpayload)
-	if err != nil {
-		return nil, err
-	}
-	return bytes, nil
+	return marshalMeasurementsPayload(payload)
 }
 
 // Marshal payload for an alerts event.

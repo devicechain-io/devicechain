@@ -80,6 +80,9 @@ func TestNonCanonicalStoredEmailAuthenticatesNowhere(t *testing.T) {
 	require.ErrorIs(t, err, ErrIdentityEmailNotCanonical, "select tenant")
 	_, err = e.m.Memberships(ctx, identityToken)
 	require.ErrorIs(t, err, ErrIdentityEmailNotCanonical, "memberships")
+	// Linking says what is wrong, not "sign in with a password", which cannot help.
+	_, err = e.m.BeginSsoLink(ctx, identityToken, ssoTestReturnTo, e.source())
+	require.ErrorIs(t, err, ErrIdentityEmailNotCanonical, "begin sso link")
 	_, err = e.m.Refresh(ctx, pair.RefreshToken)
 	require.ErrorIs(t, err, ErrIdentityEmailNotCanonical, "refresh")
 	_, err = e.m.Refresh(ctx, pair.RefreshToken)

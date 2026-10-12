@@ -104,3 +104,8 @@ The metrics behind them are `devicechain_usermanagement_sso_logins_total{connect
 | Refused after a provider change | The provider moved an endpoint: **Refresh from provider** and approve again. |
 | "no enabled identity provider connection serves this tenant" | Connect and enable a provider before turning on **Require SSO**. (error code `SSO_ENFORCE_NO_CONNECTION`.) |
 | "this is the last enabled identity provider connection" | Turn **Require SSO** off for the tenant, or enable another connection that serves it, first; then disable or delete the connection. (error code `SSO_ENFORCED_TENANT_STRANDED`; the console explains it.) |
+| Linking an account: "Single sign-on is not set up for your email domain" | No enabled, approved tenant connection has the person's email domain. Add the domain to the connection, or enable or approve it. (`SSO_LINK_NO_CONNECTION`.) |
+| Linking an account: "sign in again" | The password sign-in is older than 15 minutes, has ended, or came through single sign-on. Sign in with the password and link again. (`SSO_LINK_SESSION_REQUIRED`, `SSO_LINK_PASSWORD_REQUIRED`, or `link_session_ended` on return.) |
+| Linking an account: "a different email address" | The person signed in at the provider as someone else, or the provider reports another address. (`link_email_mismatch` on return.) |
+| Linking an account: "already linked" | The identity is already linked on that connection, or the provider account is linked to another identity: unlink it first. (`SSO_LINK_ALREADY_LINKED`, or `link_already_linked` on return.) |
+| Linking an account: "Ask a superuser to link it" | The identity holds a system role; link it with `linkIdentity`. (`SSO_LINK_NOT_ALLOWED`.) |

@@ -6,6 +6,7 @@ package processor
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"strings"
 	"testing"
@@ -14,9 +15,11 @@ import (
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/deadletter"
 	"github.com/devicechain-io/dc-microservice/messaging"
+	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-microservice/streams"
 	"github.com/prometheus/client_golang/prometheus"
 	dto "github.com/prometheus/client_model/go"
+	"gorm.io/gorm"
 )
 
 // counterValue reads a counter's current value.
@@ -213,6 +216,139 @@ func TestACommandResponseThatCannotBeRecordedIsDeadLettered(t *testing.T) {
 		t.Fatalf("the letter was written under tenant %q; the real writer is fail-closed on "+
 			"the context's tenant, so a wrong one loses every letter silently", d)
 	}
+}
+
+// 🔴 A DELETED TENANT'S RESPONSE IS DROPPED, NOT RETRIED AND LETTERED. The erasure fence
+// refuses the write identically on every delivery, so treating it as a persist failure spends
+// the whole redelivery budget and then files a letter — about a command that has been erased,
+// for a tenant whose data is being erased. Both the first delivery and the final one ack, and
+// neither writes a letter.
+func TestACommandResponseForADeletedTenantIsDroppedNotLettered(t *testing.T) {
+	for _, delivery := range []int{1, messaging.MaxDeliver} {
+		api := &fakeApi{responseErr: fmt.Errorf("recording the answer: %w", rdb.ErrTenantPurged)}
+		dead := &deadRecorder{}
+		acked := 0
+		p := &CommandDeliveryProcessor{
+			Api:  api,
+			dead: testDeadSink(dead),
+			CommandResponsesReader: &oneMessageReader{msg: responseMessage(
+				[]byte(`{"commandToken":"cmd-1","success":true}`), delivery, nil, ackCounter{&acked})},
+		}
+
+		readAndHandleOne(p, context.Background())
+
+		if len(api.responseCalls) != 1 {
+			t.Fatalf("delivery %d: MarkResponse called %d times, want 1", delivery, len(api.responseCalls))
+		}
+		if acked != 1 {
+			t.Fatalf("delivery %d: acked %d times, want 1: the fence refuses it on every delivery", delivery, acked)
+		}
+		if len(dead.msgs) != 0 {
+			t.Fatalf("delivery %d: wrote %d dead letters for a deleted tenant, want 0", delivery, len(dead.msgs))
+		}
+	}
+}
+
+// And through the constructor main.go uses, read back from the registry the service exports
+// through: the drop is counted INVALID, never as a recorded response or a retry still pending.
+func TestACommandResponseForADeletedTenantIsCountedInvalid(t *testing.T) {
+	results := gatheredResult
+	for _, delivery := range []int{1, messaging.MaxDeliver} {
+		dead := &deadRecorder{}
+		p, reg := constructorBuiltProcessor(t, dead,
+			&fakeApi{responseErr: fmt.Errorf("recording the answer: %w", rdb.ErrTenantPurged)}, delivery)
+
+		readAndHandleOne(p, context.Background())
+
+		if got := results(t, reg, core.ResultInvalid); got != 1 {
+			t.Fatalf("delivery %d: response results{invalid} = %v, want 1", delivery, got)
+		}
+		for _, other := range []string{core.ResultOK, core.ResultRetry, core.ResultFailed} {
+			if got := results(t, reg, other); got != 0 {
+				t.Fatalf("delivery %d: response results{%s} = %v, want 0", delivery, other, got)
+			}
+		}
+		if len(dead.msgs) != 0 {
+			t.Fatalf("delivery %d: wrote %d dead letters for a deleted tenant, want 0", delivery, len(dead.msgs))
+		}
+	}
+}
+
+// 🔴 AFTER THE SWEEP THE FENCE IS NOT WHAT ANSWERS. The purge deletes this area's commands
+// right after planting the fence, so a deleted tenant's late response finds no command and
+// MarkResponse answers NOT-FOUND — no write is attempted, so no fence refusal ever arises. The
+// lifecycle gate names that case: such an answer is dropped on its first delivery and never
+// lettered. The same not-found for a LIVE tenant (or with the gate naming a DIFFERENT tenant,
+// which is what pins that the gate is asked about this message's tenant) keeps its old
+// disposition and is lettered at the cap, and a response that RECORDS is untouched by the gate.
+func TestALateResponseForADeletedTenantWhoseCommandWasSweptIsDropped(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		tenant   string // the tenant the response's subject names
+		deleted  string // the one tenant the lifecycle gate reports deleted
+		err      error
+		delivery int
+		result   string
+		letters  int
+	}{
+		{"deleted, command swept, first delivery", "acme", "acme", gorm.ErrRecordNotFound, 1, core.ResultInvalid, 0},
+		{"deleted, command swept, at the cap", "acme", "acme", gorm.ErrRecordNotFound, messaging.MaxDeliver, core.ResultInvalid, 0},
+		{"a second deleted tenant", "globex", "globex", gorm.ErrRecordNotFound, 1, core.ResultInvalid, 0},
+		{"live tenant, not found, at the cap", "acme", "", gorm.ErrRecordNotFound, messaging.MaxDeliver, core.ResultFailed, 1},
+		{"another tenant deleted, at the cap", "acme", "globex", gorm.ErrRecordNotFound, messaging.MaxDeliver, core.ResultFailed, 1},
+		{"deleted, but the answer recorded", "acme", "acme", nil, 1, core.ResultOK, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ms := &core.Microservice{InstanceId: "test", FunctionalArea: "command-delivery"}
+			reg := prometheus.NewRegistry()
+			ms.UseMetricsRegistry(reg)
+			dead := &deadRecorder{}
+			acked := 0
+			msg := messaging.NewConsumedMessage("inst-1."+tc.tenant+".command-responses.pump-1",
+				[]byte(`{"commandToken":"cmd-1","success":true}`), tc.delivery, nil, ackCounter{&acked}).
+				WithOrigin(messaging.Origin{Suffix: streams.CommandResponses, Stream: "inst-1_command-responses",
+					Consumer: "inst-1_command-delivery_command-responses", Seq: 11})
+			p := NewCommandDeliveryProcessor(ms, &oneMessageReader{msg: msg},
+				nil, core.NewNoOpLifecycleCallbacks(), &fakeApi{responseErr: tc.err},
+				func(tenant string) bool { return tenant == tc.deleted }, nil,
+				deadletter.NewProducer(ms).NewSink(dead), NewDeliveryMetrics(ms))
+
+			readAndHandleOne(p, context.Background())
+
+			if acked != 1 {
+				t.Fatalf("acked %d times, want 1", acked)
+			}
+			if len(dead.msgs) != tc.letters {
+				t.Fatalf("wrote %d dead letters, want %d", len(dead.msgs), tc.letters)
+			}
+			if got := gatheredResult(t, reg, tc.result); got != 1 {
+				t.Fatalf("response results{%s} = %v, want 1", tc.result, got)
+			}
+		})
+	}
+}
+
+// gatheredResult reads the response loop's RED counter for one result off the registry.
+func gatheredResult(t *testing.T, reg *prometheus.Registry, result string) float64 {
+	t.Helper()
+	families, err := reg.Gather()
+	if err != nil {
+		t.Fatalf("gathering the registry: %v", err)
+	}
+	var total float64
+	for _, f := range families {
+		if !strings.HasSuffix(f.GetName(), "_response_messages_total") {
+			continue
+		}
+		for _, m := range f.GetMetric() {
+			for _, l := range m.GetLabel() {
+				if l.GetName() == "result" && l.GetValue() == result {
+					total += m.GetCounter().GetValue()
+				}
+			}
+		}
+	}
+	return total
 }
 
 // 🔴 AND NOT BELOW THE CAP — a response still being retried has not been given up on.

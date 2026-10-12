@@ -12,7 +12,7 @@
 // amr or the MFA statement, a server refusal reaches the form, and no write is clickable
 // while a re-read is in flight.
 
-import '@/i18n/config';
+import i18n from '@/i18n/config';
 import { GraphQLRequestError } from '@devicechain/client';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
@@ -587,5 +587,96 @@ describe('link requests', () => {
     fireEvent.click(within(row).getByRole('button', { name: /reject/i }));
     expect(await screen.findByText('not permitted')).toBeTruthy();
     expect(api.confirm).toHaveBeenCalled();
+  });
+});
+
+// A disable, a delete and a dropped tenant can each be refused because they would leave a
+// tenant that requires single sign-on with no enabled connection. The server names the
+// tenants in extensions.tenants; the page says what to do about it in the operator's language
+// instead of showing the server's English prose.
+describe('the stranded-tenant refusal', () => {
+  const PROSE =
+    'this is the last enabled identity provider connection serving a tenant that requires single sign-on (tenants: acme, globex)';
+  const STRANDED = new GraphQLRequestError(PROSE, 200, [
+    {
+      message: PROSE,
+      extensions: { code: 'SSO_ENFORCED_TENANT_STRANDED', tenants: ['acme', 'globex'] },
+    },
+  ]);
+  const enabledConnection = () =>
+    connection({ enabled: true, discovery: discovery({ approved: true }) });
+
+  beforeEach(() => {
+    api.getIdpConnection.mockResolvedValue(enabledConnection());
+  });
+  afterEach(async () => {
+    await i18n.changeLanguage('en');
+  });
+
+  const expected = () => i18n.t('identityProviders:strandedRefusal', { tenants: 'acme, globex' });
+
+  // The assertions compare against what i18next resolves, and an unknown key resolves to its
+  // own name, so a missing catalog entry would pass silently without this.
+  it.each(['en', 'es'])('has its text in %s, naming the tenants and the fix', async (lng) => {
+    await i18n.changeLanguage(lng);
+    const text = expected();
+    expect(text).not.toContain('strandedRefusal');
+    expect(text).toContain('acme, globex');
+  });
+
+  const flows: [string, (label: (k: string) => string) => Promise<void>, () => void][] = [
+    [
+      'disable',
+      async (label) => {
+        fireEvent.click(await screen.findByRole('button', { name: label('identityProviders:disableButton') }));
+      },
+      () => expect(api.updateIdpConnection).toHaveBeenCalledWith('acme-sso', { enabled: false }),
+    ],
+    [
+      'delete',
+      async (label) => {
+        fireEvent.click(await screen.findByRole('button', { name: label('common:delete') }));
+      },
+      () => expect(api.deleteIdpConnection).toHaveBeenCalledWith('acme-sso'),
+    ],
+    [
+      'dropping a tenant',
+      async (label) => {
+        openTab(new RegExp(label('identityProviders:tenantsTab'), 'i'));
+        fireEvent.click(await screen.findByRole('button', { name: label('common:removeItem').replace('{{label}}', 'Acme') }));
+        fireEvent.click(screen.getByRole('button', { name: label('identityProviders:saveTenantsButton') }));
+      },
+      () => expect(api.setIdpConnectionTenants).toHaveBeenCalledWith('acme-sso', []),
+    ],
+  ];
+
+  describe.each(flows)('%s', (_name, act, called) => {
+    it.each(['en', 'es'])('shows the mapped text in %s, not the server prose', async (lng) => {
+      await i18n.changeLanguage(lng);
+      api.updateIdpConnection.mockRejectedValue(STRANDED);
+      api.deleteIdpConnection.mockRejectedValue(STRANDED);
+      api.setIdpConnectionTenants.mockRejectedValue(STRANDED);
+      renderDetail();
+      await screen.findByText(FP_OLD);
+      await act((k) => (k === 'common:removeItem' ? i18n.t(k, { label: '{{label}}' }) : i18n.t(k)));
+      await waitFor(called);
+      expect(await screen.findByText(expected())).toBeTruthy();
+      expect(screen.queryByText(PROSE)).toBeNull();
+    });
+
+    it('falls back to the server message for an unknown code', async () => {
+      const other = new GraphQLRequestError('something else refused', 200, [
+        { message: 'something else refused', extensions: { code: 'SOMETHING_ELSE', tenants: ['acme'] } },
+      ]);
+      api.updateIdpConnection.mockRejectedValue(other);
+      api.deleteIdpConnection.mockRejectedValue(other);
+      api.setIdpConnectionTenants.mockRejectedValue(other);
+      renderDetail();
+      await screen.findByText(FP_OLD);
+      await act((k) => (k === 'common:removeItem' ? i18n.t(k, { label: '{{label}}' }) : i18n.t(k)));
+      await waitFor(called);
+      expect(await screen.findByText('something else refused')).toBeTruthy();
+      expect(screen.queryByText(expected())).toBeNull();
+    });
   });
 });

@@ -98,12 +98,11 @@ func (m *Manager) BeginAuthorizeSso(ctx context.Context, email string, p Authori
 	if err != nil {
 		return nil, err
 	}
-	domain, err := emailDomain(email)
+	conn, err := m.connectionForEmail(ctx, email)
 	if err != nil {
-		return nil, ErrSsoInvalidRequest
-	}
-	conn, err := m.iam.IdpConnectionByDomain(ctx, domain)
-	if err != nil {
+		if errors.Is(err, ErrSsoInvalidRequest) {
+			return nil, err
+		}
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, nil
 		}
