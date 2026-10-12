@@ -68,6 +68,12 @@ type baseline struct {
 	// have skipped it silently — the fail-open described above. The AST answers the
 	// question actually being asked, with the server's own parser.
 	schemas map[string]*ast.Schema
+
+	// admin is user-management's admin-plane schema, PARSED, or nil when the release
+	// serves none. It is held apart from schemas because it is a different principal's
+	// surface (the superuser's), which the tenant-plane table never touches; only the
+	// admin-plane rows of sso.go ask it anything.
+	admin *ast.Schema
 }
 
 // loadBaseline reads every tenant-plane schema under dir, which is expected to be
@@ -110,6 +116,11 @@ func loadBaseline(dir string) (*baseline, error) {
 		}
 		b.schemas[e.Name()] = parsed.AST()
 	}
+	admin, err := loadBaselineAdmin(dir)
+	if err != nil {
+		return nil, err
+	}
+	b.admin = admin
 	if len(b.schemas) == 0 {
 		// An empty tree would mark every entity unsupported and produce a receipt
 		// with nothing on it — a verify that passes having checked nothing. Refuse
@@ -117,6 +128,55 @@ func loadBaseline(dir string) (*baseline, error) {
 		return nil, failWith(exitSetup, "%s holds no served schemas; a baseline that declares nothing would skip the whole table", dir)
 	}
 	return b, nil
+}
+
+// loadBaselineAdmin parses user-management's admin-plane schema from the baseline tree,
+// returning nil (no error) when that release serves none: an old enough release has no
+// such surface, and "the baseline cannot express this" is an answer, not a failure.
+func loadBaselineAdmin(dir string) (*ast.Schema, error) {
+	sdl, served, err := schemaplane.SDLAt(filepath.Join(dir, "user-management", "graphql"), schemaplane.MountAdmin)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return nil, nil
+	case err != nil:
+		return nil, failWith(exitSetup, "scan the user-management admin schema at %s: %w", dir, err)
+	case !served:
+		return nil, nil
+	}
+	parsed, err := graphql.ParseSchema(sdl, nil, graphql.UseFieldResolvers())
+	if err != nil {
+		return nil, failWith(exitSetup, "parse the user-management admin baseline schema: %w", err)
+	}
+	return parsed.AST(), nil
+}
+
+// supportsConnection reports whether the baseline can express the single sign-on
+// connection row, and if not, why. A nil baseline supports everything, as in plan.
+//
+// It asks for every operation the seed uses, not just the create: a release that can
+// create a connection but not approve its discovery would fail halfway through the
+// walk with a refusal that names the wrong operation.
+func (b *baseline) supportsConnection() (bool, string) {
+	if b == nil {
+		return true, ""
+	}
+	if b.admin == nil {
+		return false, "the baseline serves no user-management admin schema"
+	}
+	for _, need := range []struct{ op, field, arg string }{
+		{"mutation", "createRole", "request"},
+		{"mutation", "createIdpConnection", "request"},
+		{"mutation", "approveIdpDiscovery", "token"},
+		{"mutation", "addIdpDomain", "token"},
+		{"mutation", "setIdpConnectionTenants", "token"},
+		{"mutation", "setIdpRoleMappings", "connection"},
+		{"query", "idpConnection", "token"},
+	} {
+		if !rootFieldTakes(b.admin, need.op, need.field, need.arg) {
+			return false, "the baseline does not declare " + need.field + "(" + need.arg + ":…)"
+		}
+	}
+	return true, ""
 }
 
 // supports reports whether the baseline can express this entity, and if not, why

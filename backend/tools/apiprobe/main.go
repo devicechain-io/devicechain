@@ -156,6 +156,11 @@ const usage = `apiprobe — write one of every creatable entity, then prove it r
         seeded; entities that release cannot express are SKIPPED by name instead
         of being refused mid-run. This is what lets a drill seed an OLD version
         with a table built from the new one.
+        --idp-issuer <url>  an https identity provider the INSTANCE can reach (it
+        fetches the discovery document, through its egress guard); seeds a single
+        sign-on connection as the superuser, left disabled. Without it the
+        connection is skipped by name and the table sweep reports the tables it
+        feeds as uncovered. --idp-client-id and --idp-domain have defaults.
 
   apiprobe verify   --receipt <path> [flags]
         Read every entity on the receipt back through the same API and compare
@@ -196,6 +201,12 @@ const usage = `apiprobe — write one of every creatable entity, then prove it r
         each belongs to, and what the controls break. This is the tool's coverage
         CLAIM — read it before believing a green run means the API is covered.
         With a baseline, also print what a drill from that release would SKIP.
+
+  apiprobe ssobaseline --baseline-schemas <dir>
+        Print "supported" or "unsupported: <reason>": whether a seed against that
+        release will write the single sign-on connection (admin plane). A rig asks
+        before the baseline install, so it stands up the stub identity provider only
+        when the baseline can use it.
 
   apiprobe areas
         Print the functional areas the table writes to, one per line, so a rig can
@@ -247,6 +258,8 @@ func main() {
 		err = runTableSweep(ctx, os.Args[2:])
 	case "tamper":
 		err = runTamper(ctx, os.Args[2:])
+	case "ssobaseline":
+		err = runSSOBaseline(os.Args[2:])
 	case "coverage":
 		err = runCoverage(os.Args[2:])
 	case "areas":

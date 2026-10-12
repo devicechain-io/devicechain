@@ -120,10 +120,26 @@ func verifyTo(ctx context.Context, argv []string, out io.Writer) error {
 		fmt.Fprintf(out, "  ok      %-26s %s\n", r.Name, r.Token)
 	}
 
+	// The admin-plane rows, as the superuser. After the tenant reads, so a signing key
+	// the upgrade replaced has been settled by the time this signs in.
+	adminChecked := 0
+	if len(rec.Admin) > 0 {
+		admin, err := c.adminSession(ctx)
+		if err != nil {
+			return err
+		}
+		if adminChecked, err = verifyAdminRows(ctx, admin, c.adminURL(), rec, out); err != nil {
+			return err
+		}
+	}
+
 	// A pass is only worth reading if it says how much it covered. "verified"
 	// with no number is how a run that checked nothing reads exactly like one
 	// that checked everything.
 	fmt.Fprint(out, coverageSummary(rec, checked))
+	if len(rec.Admin) > 0 {
+		fmt.Fprintf(out, "%d of %d recorded admin-plane rows read back unchanged.\n", adminChecked, len(rec.Admin))
+	}
 	fmt.Fprint(out, session.settledNote())
 	return nil
 }

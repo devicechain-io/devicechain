@@ -465,6 +465,76 @@ apiprobe="$work/bin/apiprobe"
 receipt="$work/receipt.json"
 sweep_receipt="$work/receipt-coverage.json"
 pf_log="$work/port-forward.log"
+
+# ---------------------------------------------------------------------------
+# a stub identity provider, for the single sign-on connection
+# ---------------------------------------------------------------------------
+# apiprobe seeds a single sign-on connection (`--idp-issuer`), and creating one makes the
+# INSTANCE fetch the provider's discovery document: over https, through its egress guard,
+# against the system's trusted roots. A drill with no provider cannot create one, and the
+# two tables that hang off a connection then stay empty — which is how they came to be
+# exempt from the table sweep, with a note that the drill "runs without external network".
+#
+# It does not need the external network. A stub provider inside the cluster, a CA the
+# instance's user-management is made to trust, and an egress allowance for the stub's
+# address are enough; hack/lib/sso-stub-idp.sh builds all three and says plainly what
+# production offers instead (nothing: a private CA cannot be trusted there, and nothing is
+# weakened for this rig). The same file is the SSO rig's.
+#
+# 🔴 THE EDITS ARE TO THIS RIG'S CLUSTER AND ARE APPLIED WHERE THE CONNECTION IS CREATED.
+# Right after an upgrade for the sweep tenant, where the instance is already running the
+# code under test; before the baseline seed only when the baseline can create a connection
+# at all (idp_baseline_supported). An upgrade reverts them, which is why they are never
+# applied early "to be safe".
+rig_tmp="$work/idp-stub"
+# shellcheck disable=SC2034 # the library reads these three (shellcheck does not follow it)
+namespace="$(instance_namespace)"
+# shellcheck disable=SC2034
+sso_stub_redirect_uri="https://stub.invalid/unused" # no sign-in is ever driven here
+# shellcheck disable=SC2034
+sso_stub_ca_configmap="upgrade-rig-idp-ca"
+# The caller contract of the library, in order: the stub's helpers need k, say, note and
+# fail (all defined above or below this block, and only CALLED later).
+k() { kubectl --context "$kube_context" "$@"; }
+# shellcheck source=lib/sso-stub-idp.sh
+. "$repo_root/hack/lib/sso-stub-idp.sh"
+
+# idp_baseline_supported succeeds when a seed against the baseline's tree will write the
+# single sign-on connection, i.e. when the baseline serves the admin operations to create
+# one. apiprobe answers it from the SAME schema check the seed makes, so this cannot
+# disagree with what the seed then does. An answer that is neither word is a failure of
+# the instrument, never "no".
+idp_baseline_supported() {
+  local answer
+  answer="$("$apiprobe" ssobaseline --baseline-schemas "$baseline_src/backend/services")" ||
+    fail "apiprobe could not say whether $baseline_tag can create a single sign-on connection"
+  case "$answer" in
+    supported) return 0 ;;
+    unsupported:*)
+      note "$baseline_tag cannot create a single sign-on connection (${answer#unsupported: }); the seed skips it by name"
+      return 1
+      ;;
+    *) fail "apiprobe ssobaseline answered '$answer', which is neither 'supported' nor 'unsupported: <reason>'" ;;
+  esac
+}
+
+# idp_stub_up stands the stub provider up and lets the instance's user-management reach
+# and trust it. Idempotent: the certificate is minted once per run, the manifests apply
+# over themselves, and the patches converge.
+idp_stub_up() {
+  mkdir -p "$rig_tmp"
+  chmod 700 "$rig_tmp"
+  sso_stub_install_dex
+  sso_stub_trust_and_egress
+}
+
+# What the Dex client is told, and what the seed is told about it. The issuer is the
+# stub's in-cluster address, which only the INSTANCE resolves (apiprobe never connects to it).
+idp_seed_args() {
+  # shellcheck disable=SC2154 # defined by the sourced library
+  printf '%s\n' --idp-issuer "$dex_issuer" --idp-client-id "$dex_client"
+}
+
 # What the upgrade moved TO — registry on line 1, tag on line 2. Written by
 # `upgrade` and read by `operator`, so the operator check measures against the
 # version this run actually deployed rather than against one it assumes.
@@ -1174,9 +1244,25 @@ cmd_up() {
   # refusal that looks like a platform defect.
   local admin_pw
   admin_pw="$(superuser_password)" || fail "could not settle the superuser password the baseline seeded (see above)"
+
+  # THE SINGLE SIGN-ON CONNECTION IS SEEDED HERE ONLY IF THE BASELINE CAN CREATE ONE. A
+  # release that predates single sign-on has no such rows for the upgrade to carry, and
+  # standing a provider up for it would be a rollout nothing reads. The day the baseline
+  # moves onto a release that has it, this starts seeding the connection with no edit:
+  # the answer comes from the baseline's own served schema, and verify then reads it
+  # back after the upgrade. Until then the seed names the row as skipped.
+  local idp_args=()
+  if idp_baseline_supported; then
+    say "$baseline_tag can create a single sign-on connection: standing up the stub provider it will be seeded against"
+    idp_stub_up
+    wait_for_every_api
+    mapfile -t idp_args < <(idp_seed_args)
+  fi
+
   DC_ADMIN_PASSWORD="$admin_pw" "$apiprobe" seed --instance "$instance" --receipt "$receipt" \
     --server "$api_server" --scheme "$api_scheme" \
-    --baseline-schemas "$baseline_src/backend/services" ||
+    --baseline-schemas "$baseline_src/backend/services" \
+    ${idp_args[@]+"${idp_args[@]}"} ||
     fail "seeding $baseline_tag failed (apiprobe exit $?). Nothing was upgraded, so this
 says nothing about the release under test — it says the baseline install could not
 be written to."
@@ -1754,8 +1840,16 @@ control, not a finding about the platform."
 # the caller decides — the DR drill learned this the same way. Any arguments are
 # passed on to `apiprobe verify`.
 run_verify() {
-  local rc=0
-  "$apiprobe" verify --receipt "$receipt" \
+  local rc=0 admin_pw=""
+  # A receipt that records admin-plane rows (the single sign-on connection) is read back
+  # as the superuser, so verify needs that password. It is fetched ONLY for such a
+  # receipt: the baseline seeded it, and a baseline with no such rows has nothing to
+  # read, so a password lookup that could fail has no business gating its verify.
+  if grep -qs '"admin":' "$receipt"; then
+    admin_pw="$(superuser_password)" || fail "the receipt records admin-plane rows, which verify reads as the
+superuser, and the superuser's password could not be settled (see above)"
+  fi
+  DC_ADMIN_PASSWORD="$admin_pw" "$apiprobe" verify --receipt "$receipt" \
     --server "$api_server" --scheme "$api_scheme" "$@" || rc=$?
   return "$rc"
 }
@@ -2038,9 +2132,21 @@ cmd_tablesweep() {
   # password is the one the baseline's release seeded. See superuser_password.
   local admin_pw
   admin_pw="$(superuser_password)" || fail "could not settle the superuser password the baseline seeded (see above)"
+
+  # The single sign-on connection needs a provider the instance can reach, and unlike the
+  # baseline seed this one ALWAYS gets it: the instance is running the release under test,
+  # which can create a connection, and the two tables that hang off one are covered only if
+  # it does. See "a stub identity provider" above for what is stood up and why it is here.
+  say "standing up the stub identity provider the sweep tenant's single sign-on connection is seeded against"
+  idp_stub_up
+  wait_for_every_api
+  local idp_args=()
+  mapfile -t idp_args < <(idp_seed_args)
+
   DC_ADMIN_PASSWORD="$admin_pw" "$apiprobe" seed --instance "$instance" --receipt "$sweep_receipt" \
     --tenant "$sweep_tenant" --deployed-areas "$deployed_areas" \
-    --server "$api_server" --scheme "$api_scheme" ||
+    --server "$api_server" --scheme "$api_scheme" \
+    "${idp_args[@]}" ||
     fail "the UPGRADED release could not create one of every entity (apiprobe exit $?).
 This is a finding about the release, not about the upgrade: verify and the read sweep
 have already passed, so the rows carried across and every door still answers. What
@@ -2761,12 +2867,17 @@ passed by ABSENCE. It would hold just as well against a filter that had stopped 
   # run it against a stub that records its argv and exits with a chosen code, so both
   # directions are measured: the flag arrives, and apiprobe's verdict comes back.
   say "drill_verify"
-  local stub_dir saved_apiprobe="$apiprobe" argv_file drc
+  local stub_dir saved_apiprobe="$apiprobe" argv_file drc saved_receipt="$receipt"
   stub_dir="$(mktemp -d)"
   argv_file="$stub_dir/argv"
+  # A private receipt for everything below: run_verify looks inside it, and a real one left
+  # by an earlier run could send this check to a cluster it has no business reading.
+  receipt="$stub_dir/receipt.json"
+  printf '{"entities": []}\n' > "$receipt"
   cat > "$stub_dir/apiprobe" <<STUB
 #!/usr/bin/env bash
 printf '%s\n' "\$*" > "$argv_file"
+printf '%s' "\${DC_ADMIN_PASSWORD:-}" > "$argv_file.pw"
 exit "\${STUB_EXIT:-0}"
 STUB
   chmod +x "$stub_dir/apiprobe"
@@ -2782,6 +2893,64 @@ want 'verify ... --auth-window $want'"
   done
   drc=0; STUB_EXIT=8 drill_verify || drc=$?
   [[ $drc -eq 8 ]] || fail "SELF-TEST FAILED: drill_verify returned $drc over a stub apiprobe that exited 8"
+
+  # ...and the superuser's password reaches verify when, and ONLY when, the receipt records
+  # admin-plane rows (the single sign-on connection): without it verify cannot read them
+  # back, and a password lookup that can fail must not gate a baseline that has none.
+  local saved_su
+  saved_su="$(declare -f superuser_password)"
+  superuser_password() { printf 'selftest-superuser-pw'; }
+  printf '{"entities": [], "admin": [{"name": "idp-connection"}]}\n' > "$receipt"
+  : > "$argv_file.pw"
+  drc=0; run_verify || drc=$?
+  [[ "$(cat "$argv_file.pw")" == selftest-superuser-pw ]] ||
+    fail "SELF-TEST FAILED: a receipt with admin-plane rows reached apiprobe verify without the superuser's
+password ('$(cat "$argv_file.pw")'), so verify could not have read them back"
+  printf '{"entities": []}\n' > "$receipt"
+  superuser_password() { return 1; }
+  drc=0; run_verify || drc=$?
+  [[ $drc -eq 0 && -z "$(cat "$argv_file.pw")" ]] ||
+    fail "SELF-TEST FAILED: a receipt with no admin-plane rows looked the password up anyway (exit $drc), so a
+baseline that has none can now fail its verify on a lookup it does not need"
+  eval "$saved_su"
+  receipt="$saved_receipt"
+  note "the superuser's password reaches verify for admin-plane rows and for nothing else"
+
+  # idp_baseline_supported decides whether the BASELINE seed gets a provider, and it fails
+  # in the quiet direction: an answer read as "no" skips the baseline's connection by name
+  # on every drill, and every drill stays green. So only the exact word "supported" is a
+  # yes, "unsupported: ..." is a no, and anything else -- another word, or apiprobe failing
+  # to answer -- must END the run (fail), never fall through to "no". Run in a subshell,
+  # because fail exits: "returned N" is printed only when the function RETURNED.
+  local idp_stub saved_src="${baseline_src:-}" got
+  idp_stub="$stub_dir/ssobaseline"
+  cat > "$idp_stub" <<'STUB'
+#!/usr/bin/env bash
+[[ "$1 $2" == "ssobaseline --baseline-schemas" ]] || { echo "unexpected argv: $*" >&2; exit 64; }
+printf '%s\n' "$STUB_ANSWER"
+exit "${STUB_EXIT:-0}"
+STUB
+  chmod +x "$idp_stub"
+  apiprobe="$idp_stub"
+  baseline_src="$stub_dir"
+  local answer want
+  for answer in "supported|returned 0" "unsupported: no admin schema|returned 1" \
+    "Supported|ENDED" "unsupported|ENDED" "|ENDED" "supported, mostly|ENDED"; do
+    want="${answer#*|}"
+    got="$(STUB_ANSWER="${answer%%|*}" bash -c "$(declare -f fail_code fail say note idp_baseline_supported)
+      $(declare -p apiprobe baseline_src baseline_tag)
+      idp_baseline_supported; echo \"returned \$?\"" 2>/dev/null | grep -o 'returned [0-9]*' || true)"
+    [[ "${got:-ENDED}" == "$want" ]] ||
+      fail "SELF-TEST FAILED: idp_baseline_supported over the answer '${answer%%|*}' gave '${got:-ENDED}', want '$want'"
+  done
+  got="$(STUB_ANSWER=supported STUB_EXIT=1 bash -c "$(declare -f fail_code fail say note idp_baseline_supported)
+    $(declare -p apiprobe baseline_src baseline_tag)
+    idp_baseline_supported; echo \"returned \$?\"" 2>/dev/null | grep -o 'returned [0-9]*' || true)"
+  [[ -z "$got" ]] ||
+    fail "SELF-TEST FAILED: idp_baseline_supported read a FAILED apiprobe (exit 1) as an answer ('$got')"
+  baseline_src="$saved_src"
+  note "only the exact word 'supported' stands the stub provider up for the baseline; an unreadable answer ends the run"
+
   apiprobe="$saved_apiprobe"
   baseline_tag="$saved"
   rm -rf "$stub_dir"
