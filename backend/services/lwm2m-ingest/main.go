@@ -536,18 +536,18 @@ func buildPresenceLayer(leaderCtx context.Context, bindings map[string]config.Ps
 	// tenant's devices and a session that would auto-register them straight back into the
 	// tenant being erased. A SEPARATE service token, scoped to tenant:read alone.
 	//
-	// What it does NOT do, stated because a reader will assume otherwise: it refuses new
-	// REGISTRATIONS and new telemetry, not sessions already installed. A device that
-	// registered before the delete keeps its entry here, because Update never re-resolves,
-	// and the entry lapses only when its own lifetime does.
+	// It also ENDS registrations already installed, because a registration outlives the
+	// delete on its own: it holds the device token resolved at Register, an Update never
+	// re-resolves it, and its lifetime can be a day — longer than a purge holds the tenant's
+	// token. The registry ends a deleted tenant's registration on its next Update, and a
+	// per-term sweep (registry.RunTenantSweep, started below) ends the rest, so none is still
+	// installed — with its downlink conn — when the token is released to a successor.
 	//
-	// What that entry can still CAUSE is now bounded elsewhere rather than here. The
-	// presence it would write lands in device-state, whose writes go through the ADR-077
-	// erasure fence (rdb.RegisterTenantFence) like every other tenant-scoped write, so a
-	// stale registration cannot re-create a projection row for a tenant whose data has
-	// been reclaimed. This gate stops the inflow; the fence is the correctness path, and
-	// it is at the area that owns the row rather than at the transport that would have
-	// caused it.
+	// Writes a stale registration could still make while the purge runs are bounded
+	// elsewhere. The presence it would write lands in device-state, whose writes go through
+	// the ADR-077 erasure fence (rdb.RegisterTenantFence) like every other tenant-scoped
+	// write, so it cannot re-create a projection row for a tenant whose data has been
+	// reclaimed.
 	tenantGate := governance.NewTenantLifecycleGate(infra.UserManagement, infra.ServiceAuth.Secret, "lwm2m-ingest", safetyGates)
 	registrar := adapter.NewRegistrar(client, ingestURL, "lw-", tenantGate)
 	// authenticatedTransport=true: LwM2M devices authenticate at the DTLS-PSK
@@ -590,7 +590,13 @@ func buildPresenceLayer(leaderCtx context.Context, bindings map[string]config.Ps
 			obsManager.Cancel(identity, epoch)
 			connTable.End(identity, epoch)
 		},
+		// The same lifecycle gate the registrar uses: a deleted tenant's registrations are
+		// ended (through OnSessionEnd above, so their observations and downlink conns go too)
+		// rather than kept alive into whatever tenant holds the token after the purge.
+		TenantDeleted: tenantGate,
 	})
+	// Bound to this term: a fresh term builds a fresh registry and starts its own sweep.
+	go reg.RunTenantSweep(leaderCtx, registry.DefaultTenantSweepInterval)
 	handlers := registry.NewHandlers(reg, bindings, registryMetrics, obsManager, connTable, decode.DefaultObjectAllowlist, limiter, leaderCtx)
 
 	// The L4b wake-drain fetcher reads a waking device's backlogged commands from command-delivery so
