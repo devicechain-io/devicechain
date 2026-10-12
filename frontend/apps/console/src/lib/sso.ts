@@ -24,7 +24,7 @@
 // The code is never logged and never stored.
 
 import type { IdentityAuth } from '@/lib/api/user-management';
-import { beginSso } from '@/lib/api/user-management';
+import { beginSso, beginSsoLink } from '@/lib/api/user-management';
 
 /** The only address the server will return a console sign-in to. */
 export const SSO_COMPLETE_PATH = '/login/sso/complete';
@@ -124,10 +124,80 @@ export async function startSso(opts: StartSsoOptions): Promise<string | null> {
   }
 }
 
+// Linking one's own account (beginSsoLink) returns to the SAME completion path, but with
+// `linked=1` or `error=` and never a `code`: there is nothing to redeem, the person is
+// already signed in with a password. The marker below is what lets the page tell a link's
+// `error=` from a sign-in's; it carries no secret.
+const LINK_PENDING_KEY = 'dc-sso-link-pending';
+
+/**
+ * Starts linking the signed-in person's account at `connection` and returns the address to
+ * navigate to, exactly as the server gave it. The caller navigates; this does not. A refused
+ * begin leaves no marker behind.
+ */
+export async function startSsoLink(identityToken: string, connection: string): Promise<string> {
+  try {
+    window.sessionStorage.setItem(LINK_PENDING_KEY, '1');
+  } catch {
+    // sessionStorage unavailable: a refused return will read as a sign-in refusal.
+  }
+  try {
+    return await beginSsoLink({
+      identityToken,
+      connection,
+      returnTo: window.location.origin + SSO_COMPLETE_PATH,
+    });
+  } catch (err) {
+    try {
+      window.sessionStorage.removeItem(LINK_PENDING_KEY);
+    } catch {
+      // nothing to clean up
+    }
+    throw err;
+  }
+}
+
+function takeLinkPending(): boolean {
+  try {
+    const had = window.sessionStorage.getItem(LINK_PENDING_KEY) !== null;
+    window.sessionStorage.removeItem(LINK_PENDING_KEY);
+    return had;
+  } catch {
+    return false;
+  }
+}
+
+export type SsoLinkReturn =
+  | { linked: true }
+  | {
+      linked: false;
+      /** The coarse class the server put on the return address (refused, idp_error, ...). */
+      providerError: string;
+    };
+
+let linkReturn: SsoLinkReturn | null | undefined;
+
+/**
+ * Whether this return is the end of a link rather than a sign-in, and how it went: `linked=1`
+ * is success; an `error=` is a link refusal only when this tab began a link. Null for a
+ * sign-in. Read once and remembered, so React StrictMode's second mount sees the same answer.
+ */
+export function resolveSsoLinkReturn(): SsoLinkReturn | null {
+  if (linkReturn !== undefined) return linkReturn;
+  const ret = captureSsoReturn();
+  const pending = takeLinkPending();
+  if (ret.linked === '1') linkReturn = { linked: true };
+  else if (ret.error && pending) linkReturn = { linked: false, providerError: ret.error };
+  else linkReturn = null;
+  return linkReturn;
+}
+
 export interface SsoReturn {
   code: string | null;
   /** The provider-side failure class the server put on the return address, if any. */
   error: string | null;
+  /** "1" when a self-service link completed. */
+  linked: string | null;
 }
 
 let captured: SsoReturn | null = null;
@@ -140,7 +210,7 @@ let captured: SsoReturn | null = null;
 export function captureSsoReturn(): SsoReturn {
   if (captured) return captured;
   const params = new URLSearchParams(window.location.search);
-  captured = { code: params.get('code'), error: params.get('error') };
+  captured = { code: params.get('code'), error: params.get('error'), linked: params.get('linked') };
   try {
     window.history.replaceState(window.history.state, '', window.location.pathname);
   } catch {
@@ -207,4 +277,5 @@ export function leaveSsoCompletion(dest: string): void {
 export function resetSsoStateForTests(): void {
   captured = null;
   completion = null;
+  linkReturn = undefined;
 }

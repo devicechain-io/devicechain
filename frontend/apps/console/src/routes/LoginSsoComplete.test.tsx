@@ -221,3 +221,49 @@ describe('LoginSsoCompletePage', () => {
     expect(replace).not.toHaveBeenCalled();
   });
 });
+
+// A return from linking one's OWN account (beginSsoLink) lands on the same page with
+// `linked=1` or `error=` and no code. The person is signed in already, so nothing is
+// redeemed and nothing is navigated until they choose to continue.
+describe('LoginSsoCompletePage: the return from linking an account', () => {
+  const markLinkPending = () => window.sessionStorage.setItem('dc-sso-link-pending', '1');
+
+  it('says the account is linked, redeems nothing, and continues home on request', async () => {
+    window.history.replaceState(null, '', '/login/sso/complete?linked=1');
+    auth.isAuthenticated = true;
+    renderPage();
+    expect(await screen.findByText(t('login:ssoLinkDone'))).toBeTruthy();
+    expect(completeSso).not.toHaveBeenCalled();
+    expect(replace).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: t('login:ssoLinkContinue') }));
+    expect(replace).toHaveBeenCalledWith('/');
+  });
+
+  it.each(['en', 'es'])('names what to check when the server refuses the link, in %s', async (lng) => {
+    await i18n.changeLanguage(lng);
+    window.history.replaceState(null, '', '/login/sso/complete?error=refused');
+    markLinkPending();
+    auth.isAuthenticated = true;
+    renderPage();
+    expect(await screen.findByText(i18n.t('login:ssoLinkRefused'))).toBeTruthy();
+    expect(i18n.t('login:ssoLinkRefused')).not.toBe('ssoLinkRefused');
+    expect(screen.queryByText(i18n.t('login:ssoErrorRefused'))).toBeNull();
+    expect(completeSso).not.toHaveBeenCalled();
+    expect(replace).not.toHaveBeenCalled();
+  });
+
+  it('reports a provider failure during a link as that', async () => {
+    window.history.replaceState(null, '', '/login/sso/complete?error=idp_error');
+    markLinkPending();
+    renderPage();
+    expect(await screen.findByText(t('login:ssoErrorIdp'))).toBeTruthy();
+  });
+
+  it('still reads an error with no link in progress as a sign-in refusal', async () => {
+    window.history.replaceState(null, '', '/login/sso/complete?error=refused');
+    seedPending();
+    renderPage();
+    expect(await screen.findByText(t('login:ssoErrorRefused'))).toBeTruthy();
+    expect(screen.queryByText(t('login:ssoLinkRefused'))).toBeNull();
+  });
+});

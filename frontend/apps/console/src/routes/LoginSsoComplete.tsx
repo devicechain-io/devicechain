@@ -9,7 +9,12 @@ import { Logo } from '@/components/brand/Logo';
 import { ErrorBanner } from '@/components/ui/error-banner';
 import { LoadingState } from '@/components/ui/loading-state';
 import { signInErrorKey } from '@/i18n/signInError';
-import { captureSsoReturn, leaveSsoCompletion, runSsoCompletion } from '@/lib/sso';
+import {
+  captureSsoReturn,
+  leaveSsoCompletion,
+  resolveSsoLinkReturn,
+  runSsoCompletion,
+} from '@/lib/sso';
 import type { IdentityAuth } from '@/lib/api/user-management';
 
 // Where the identity provider sends the browser back to. The address carries a one-time
@@ -34,11 +39,22 @@ const PROVIDER_ERROR_KEYS: Record<string, string> = {
   groups_overage: 'login:ssoErrorGroupsOverage',
 };
 
+// A link's refusal comes back as a coarse class only; the server deliberately does not say
+// which check failed (the provider's address differing from the account's, an account already
+// linked, the password session having ended), so the text lists what to check.
+const LINK_ERROR_KEYS: Record<string, string> = {
+  idp_error: 'ssoErrorIdp',
+};
+
 export default function LoginSsoCompletePage() {
   const { isAuthenticated, completeSso, selectTenant } = useAuth();
   const { t } = useTranslation('login');
   // Strips the query before anything else in this tree can read or send it.
   captureSsoReturn();
+  // A return from linking one's OWN account (beginSsoLink) lands here too, with `linked=1`
+  // or `error=` and no code: the person is already signed in, nothing is redeemed, and the
+  // page only says how the link went.
+  const linkReturn = resolveSsoLinkReturn();
 
   const [error, setError] = useState<string | null>(null);
   const [identity, setIdentity] = useState<IdentityAuth | null>(null);
@@ -64,6 +80,7 @@ export default function LoginSsoCompletePage() {
   };
 
   useEffect(() => {
+    if (linkReturn) return;
     if (arrivedSignedIn) {
       leave('/');
       return;
@@ -126,6 +143,33 @@ export default function LoginSsoCompletePage() {
       setEntering(false);
     }
   };
+
+  if (linkReturn) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-background px-4">
+        <div className="w-full max-w-sm">
+          <div className="mb-8 flex flex-col items-center text-center">
+            <Logo deviceColor="currentColor" className="mb-4 h-16 w-auto" />
+          </div>
+          <div className="space-y-3 rounded-lg border border-border bg-card p-6">
+            {linkReturn.linked ? (
+              <p className="text-sm text-foreground">{t('ssoLinkDone')}</p>
+            ) : (
+              <ErrorBanner message={t(LINK_ERROR_KEYS[linkReturn.providerError] ?? 'ssoLinkRefused')} />
+            )}
+            <Button
+              variant="outline"
+              className="w-full"
+              disabled={leaving}
+              onClick={() => leave('/')}
+            >
+              {t('ssoLinkContinue')}
+            </Button>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="flex min-h-screen items-center justify-center bg-background px-4">

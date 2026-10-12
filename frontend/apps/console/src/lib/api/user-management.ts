@@ -99,6 +99,30 @@ export async function completeSso(code: string, codeVerifier: string): Promise<I
   return data.completeSso;
 }
 
+// beginSsoLink starts linking the signed-in person's own account at a tenant connection to
+// their identity. It takes the identity token of a PASSWORD sign-in and answers with where to
+// send the browser, as beginSso does; the provider then returns to the completion page with
+// `linked=1` or `error=`.
+const BEGIN_SSO_LINK = graphql(`
+  mutation BeginSsoLink($identityToken: String!, $connection: String!, $returnTo: String!) {
+    beginSsoLink(identityToken: $identityToken, connection: $connection, returnTo: $returnTo) {
+      authorizationUrl
+    }
+  }
+`);
+
+export interface BeginSsoLinkRequest {
+  identityToken: string;
+  connection: string;
+  returnTo: string;
+}
+
+/** The provider's authorization address to navigate the browser to, exactly as given. */
+export async function beginSsoLink(req: BeginSsoLinkRequest): Promise<string> {
+  const data = await gql('user-management', BEGIN_SSO_LINK, { ...req }, { anonymous: true });
+  return data.beginSsoLink.authorizationUrl;
+}
+
 const SELECT_TENANT = graphql(`
   mutation SelectTenant($identityToken: String!, $tenant: String!) {
     selectTenant(identityToken: $identityToken, tenant: $tenant) {

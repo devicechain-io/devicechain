@@ -88,6 +88,15 @@ export type CompleteSsoMutationVariables = Exact<{
 
 export type CompleteSsoMutation = { completeSso: { identityToken: string, expiresAt: string, superuser: boolean, memberships: Array<{ tenant: string, roles: Array<string>, ssoRequired: boolean }> } };
 
+export type BeginSsoLinkMutationVariables = Exact<{
+  identityToken: string;
+  connection: string;
+  returnTo: string;
+}>;
+
+
+export type BeginSsoLinkMutation = { beginSsoLink: { authorizationUrl: string } };
+
 export type SelectTenantMutationVariables = Exact<{
   identityToken: string;
   tenant: string;
@@ -275,6 +284,17 @@ export const CompleteSsoDocument = new TypedDocumentString(`
   }
 }
     `) as unknown as TypedDocumentString<CompleteSsoMutation, CompleteSsoMutationVariables>;
+export const BeginSsoLinkDocument = new TypedDocumentString(`
+    mutation BeginSsoLink($identityToken: String!, $connection: String!, $returnTo: String!) {
+  beginSsoLink(
+    identityToken: $identityToken
+    connection: $connection
+    returnTo: $returnTo
+  ) {
+    authorizationUrl
+  }
+}
+    `) as unknown as TypedDocumentString<BeginSsoLinkMutation, BeginSsoLinkMutationVariables>;
 export const SelectTenantDocument = new TypedDocumentString(`
     mutation SelectTenant($identityToken: String!, $tenant: String!) {
   selectTenant(identityToken: $identityToken, tenant: $tenant) {
