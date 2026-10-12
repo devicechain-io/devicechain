@@ -377,6 +377,11 @@ type IdentityAuth struct {
 type MembershipInfo struct {
 	Tenant string
 	Roles  []string
+	// SsoRequired marks a tenant that requires single sign-on, listed to a PASSWORD sign-in
+	// so the person is told why it cannot enter instead of the tenant silently vanishing.
+	// The grant itself is still refused (admitTenant). Always false for a superuser, whose
+	// password sign-in is let through, and for a single sign-on.
+	SsoRequired bool
 }
 
 // Login verifies an email/password and returns an identity token plus the
@@ -519,6 +524,12 @@ func (m *Manager) SelectTenant(ctx context.Context, identityToken, tenant string
 
 	roles, authorities, err := m.resolveTenantGrant(ctx, claims.SessionID, id, tenant, mem, su)
 	if err != nil {
+		// Named only to a member (the non-member refusal above comes first): see
+		// SsoRequiredError for why that leaks nothing.
+		if errors.Is(err, errSsoRequired) {
+			m.recordAuth(ctx, rdb.AuditOpLoginFailed, id.Email, tenant)
+			return nil, ErrSsoRequired
+		}
 		if errors.Is(err, errTenantAccessDenied) {
 			m.recordAuth(ctx, rdb.AuditOpLoginFailed, id.Email, tenant)
 			return nil, ErrInvalidCredentials
@@ -867,6 +878,12 @@ func (m *Manager) refuseRefresh(jti string, rev uint64, cause error) error {
 		// re-checked and denied the same way until it expires.
 		if err := m.refreshKV.Delete(jti, nats.LastRevision(rev)); err != nil && !errors.Is(err, nats.ErrKeyRevisionMismatch) {
 			log.Warn().Err(err).Msg("A denied refresh could not burn its token; it stays denied at every later use.")
+		}
+		// The tenant has started requiring single sign-on under a password session. The
+		// token is burned like any denial, but the caller (a member: Refresh refuses a
+		// non-member first) is told why, so it can send the person to their provider.
+		if errors.Is(cause, errSsoRequired) {
+			return ErrSsoRequired
 		}
 		return ErrInvalidToken
 	}

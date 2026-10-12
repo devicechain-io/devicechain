@@ -2020,7 +2020,8 @@ type Mutation {
     refresh tokens stop working at once, and an access token already issued runs until it
     expires (15 minutes by default). An identity token already issued for an instance connection
     likewise keeps working on the admin API until it expires. Disabling the last enabled
-    connection serving a tenant that requires single sign-on is refused: turn the requirement off
+    connection serving a tenant that requires single sign-on is refused with the error code
+    SSO_ENFORCED_TENANT_STRANDED (its `tenants` extension names them): turn the requirement off
     with setTenantSsoEnforced first. Requires user:write.
     """
     updateIdpConnection(
@@ -2045,8 +2046,9 @@ type Mutation {
     client secret. Memberships it managed are disabled, not removed. Its sign-ins end at their next
     exchange; an identity token already issued for an instance connection keeps working on the
     admin API until it expires (15 minutes by default). Deleting the last enabled connection
-    serving a tenant that requires single sign-on is refused: turn the requirement off with
-    setTenantSsoEnforced first. Returns true if it was deleted and false if there was no such
+    serving a tenant that requires single sign-on is refused with the error code
+    SSO_ENFORCED_TENANT_STRANDED: turn the requirement off with setTenantSsoEnforced first.
+    Returns true if it was deleted and false if there was no such
     connection. Requires user:write.
     """
     deleteIdpConnection(
@@ -2067,7 +2069,7 @@ type Mutation {
     Sets exactly which tenants a tenant connection serves, and returns it. Sign-ins through it
     can enter those tenants and no others. Fails for an instance connection or an unknown tenant,
     and refuses to drop a tenant that requires single sign-on when this is the last enabled
-    connection serving it. Requires user:write.
+    connection serving it, with the error code SSO_ENFORCED_TENANT_STRANDED. Requires user:write.
     """
     setIdpConnectionTenants(
         """Token of the connection."""
@@ -2185,7 +2187,8 @@ type Mutation {
     """
     Requires (or stops requiring) that a tenant's people sign in through single sign-on, and
     returns the tenant. Turning it on needs at least one enabled connection serving the tenant,
-    so its people are not locked out, and ends the password sessions already inside the tenant
+    so its people are not locked out (refused otherwise with the error code
+    SSO_ENFORCE_NO_CONNECTION), and ends the password sessions already inside the tenant
     at their next refresh. Superusers are exempt and each of their entries is audited, so an
     identity provider outage never locks the operator out. Requires user:write.
     """

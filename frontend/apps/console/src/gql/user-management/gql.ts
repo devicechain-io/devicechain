@@ -15,9 +15,11 @@ import * as types from './graphql';
  * Learn more about it here: https://the-guild.dev/graphql/codegen/plugins/presets/preset-client#reducing-bundle-size
  */
 type Documents = {
-    "\n  mutation Login($email: String!, $password: String!) {\n    login(email: $email, password: $password) {\n      identityToken\n      expiresAt\n      superuser\n      memberships {\n        tenant\n        roles\n      }\n    }\n  }\n": typeof types.LoginDocument,
+    "\n  mutation Login($email: String!, $password: String!) {\n    login(email: $email, password: $password) {\n      identityToken\n      expiresAt\n      superuser\n      memberships {\n        tenant\n        roles\n        ssoRequired\n      }\n    }\n  }\n": typeof types.LoginDocument,
+    "\n  mutation BeginSso($email: String, $connection: String, $returnTo: String!, $codeChallenge: String!) {\n    beginSso(\n      email: $email\n      connection: $connection\n      returnTo: $returnTo\n      codeChallenge: $codeChallenge\n    ) {\n      authorizationUrl\n    }\n  }\n": typeof types.BeginSsoDocument,
+    "\n  mutation CompleteSso($code: String!, $codeVerifier: String!) {\n    completeSso(code: $code, codeVerifier: $codeVerifier) {\n      identityToken\n      expiresAt\n      superuser\n      memberships {\n        tenant\n        roles\n        ssoRequired\n      }\n    }\n  }\n": typeof types.CompleteSsoDocument,
     "\n  mutation SelectTenant($identityToken: String!, $tenant: String!) {\n    selectTenant(identityToken: $identityToken, tenant: $tenant) {\n      accessToken\n      refreshToken\n      expiresAt\n    }\n  }\n": typeof types.SelectTenantDocument,
-    "\n  query IdentityMemberships($identityToken: String!) {\n    identityMemberships(identityToken: $identityToken) {\n      tenant\n      roles\n    }\n  }\n": typeof types.IdentityMembershipsDocument,
+    "\n  query IdentityMemberships($identityToken: String!) {\n    identityMemberships(identityToken: $identityToken) {\n      tenant\n      roles\n      ssoRequired\n    }\n  }\n": typeof types.IdentityMembershipsDocument,
     "\n  mutation Refresh($refreshToken: String!) {\n    refresh(refreshToken: $refreshToken) {\n      accessToken\n      refreshToken\n      expiresAt\n    }\n  }\n": typeof types.RefreshDocument,
     "\n  mutation Logout($token: String!) {\n    logout(token: $token)\n  }\n": typeof types.LogoutDocument,
     "\n  fragment TenantFields on Tenant {\n    token\n    name\n    description\n    branding {\n      title\n      logo\n      logoMaxHeight\n      primary\n      background\n      foreground\n      accent\n      updatedAt\n    }\n    brandingOverride {\n      title\n      logo\n      logoMaxHeight\n      primary\n      background\n      foreground\n      accent\n      updatedAt\n    }\n    basemap {\n      tileUrl\n      attribution\n      centerLat\n      centerLon\n      zoom\n    }\n    basemapOverride {\n      tileUrl\n      attribution\n      centerLat\n      centerLon\n      zoom\n    }\n    locale\n    localeOverride\n  }\n": typeof types.TenantFieldsFragmentDoc,
@@ -32,9 +34,11 @@ type Documents = {
     "\n  query TenantTokenMasks {\n    tokenMasks\n  }\n": typeof types.TenantTokenMasksDocument,
 };
 const documents: Documents = {
-    "\n  mutation Login($email: String!, $password: String!) {\n    login(email: $email, password: $password) {\n      identityToken\n      expiresAt\n      superuser\n      memberships {\n        tenant\n        roles\n      }\n    }\n  }\n": types.LoginDocument,
+    "\n  mutation Login($email: String!, $password: String!) {\n    login(email: $email, password: $password) {\n      identityToken\n      expiresAt\n      superuser\n      memberships {\n        tenant\n        roles\n        ssoRequired\n      }\n    }\n  }\n": types.LoginDocument,
+    "\n  mutation BeginSso($email: String, $connection: String, $returnTo: String!, $codeChallenge: String!) {\n    beginSso(\n      email: $email\n      connection: $connection\n      returnTo: $returnTo\n      codeChallenge: $codeChallenge\n    ) {\n      authorizationUrl\n    }\n  }\n": types.BeginSsoDocument,
+    "\n  mutation CompleteSso($code: String!, $codeVerifier: String!) {\n    completeSso(code: $code, codeVerifier: $codeVerifier) {\n      identityToken\n      expiresAt\n      superuser\n      memberships {\n        tenant\n        roles\n        ssoRequired\n      }\n    }\n  }\n": types.CompleteSsoDocument,
     "\n  mutation SelectTenant($identityToken: String!, $tenant: String!) {\n    selectTenant(identityToken: $identityToken, tenant: $tenant) {\n      accessToken\n      refreshToken\n      expiresAt\n    }\n  }\n": types.SelectTenantDocument,
-    "\n  query IdentityMemberships($identityToken: String!) {\n    identityMemberships(identityToken: $identityToken) {\n      tenant\n      roles\n    }\n  }\n": types.IdentityMembershipsDocument,
+    "\n  query IdentityMemberships($identityToken: String!) {\n    identityMemberships(identityToken: $identityToken) {\n      tenant\n      roles\n      ssoRequired\n    }\n  }\n": types.IdentityMembershipsDocument,
     "\n  mutation Refresh($refreshToken: String!) {\n    refresh(refreshToken: $refreshToken) {\n      accessToken\n      refreshToken\n      expiresAt\n    }\n  }\n": types.RefreshDocument,
     "\n  mutation Logout($token: String!) {\n    logout(token: $token)\n  }\n": types.LogoutDocument,
     "\n  fragment TenantFields on Tenant {\n    token\n    name\n    description\n    branding {\n      title\n      logo\n      logoMaxHeight\n      primary\n      background\n      foreground\n      accent\n      updatedAt\n    }\n    brandingOverride {\n      title\n      logo\n      logoMaxHeight\n      primary\n      background\n      foreground\n      accent\n      updatedAt\n    }\n    basemap {\n      tileUrl\n      attribution\n      centerLat\n      centerLon\n      zoom\n    }\n    basemapOverride {\n      tileUrl\n      attribution\n      centerLat\n      centerLon\n      zoom\n    }\n    locale\n    localeOverride\n  }\n": types.TenantFieldsFragmentDoc,
@@ -52,7 +56,15 @@ const documents: Documents = {
 /**
  * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
  */
-export function graphql(source: "\n  mutation Login($email: String!, $password: String!) {\n    login(email: $email, password: $password) {\n      identityToken\n      expiresAt\n      superuser\n      memberships {\n        tenant\n        roles\n      }\n    }\n  }\n"): typeof import('./graphql').LoginDocument;
+export function graphql(source: "\n  mutation Login($email: String!, $password: String!) {\n    login(email: $email, password: $password) {\n      identityToken\n      expiresAt\n      superuser\n      memberships {\n        tenant\n        roles\n        ssoRequired\n      }\n    }\n  }\n"): typeof import('./graphql').LoginDocument;
+/**
+ * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
+ */
+export function graphql(source: "\n  mutation BeginSso($email: String, $connection: String, $returnTo: String!, $codeChallenge: String!) {\n    beginSso(\n      email: $email\n      connection: $connection\n      returnTo: $returnTo\n      codeChallenge: $codeChallenge\n    ) {\n      authorizationUrl\n    }\n  }\n"): typeof import('./graphql').BeginSsoDocument;
+/**
+ * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
+ */
+export function graphql(source: "\n  mutation CompleteSso($code: String!, $codeVerifier: String!) {\n    completeSso(code: $code, codeVerifier: $codeVerifier) {\n      identityToken\n      expiresAt\n      superuser\n      memberships {\n        tenant\n        roles\n        ssoRequired\n      }\n    }\n  }\n"): typeof import('./graphql').CompleteSsoDocument;
 /**
  * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
  */
@@ -60,7 +72,7 @@ export function graphql(source: "\n  mutation SelectTenant($identityToken: Strin
 /**
  * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
  */
-export function graphql(source: "\n  query IdentityMemberships($identityToken: String!) {\n    identityMemberships(identityToken: $identityToken) {\n      tenant\n      roles\n    }\n  }\n"): typeof import('./graphql').IdentityMembershipsDocument;
+export function graphql(source: "\n  query IdentityMemberships($identityToken: String!) {\n    identityMemberships(identityToken: $identityToken) {\n      tenant\n      roles\n      ssoRequired\n    }\n  }\n"): typeof import('./graphql').IdentityMembershipsDocument;
 /**
  * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
  */

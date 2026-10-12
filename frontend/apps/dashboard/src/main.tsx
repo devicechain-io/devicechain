@@ -13,6 +13,11 @@ import { ErrorBoundary } from './ErrorBoundary';
 // configured i18next.
 import './i18n/config';
 import './theme.css';
+import { SSO_COMPLETE_PATH, captureSsoReturn } from './sso';
+
+// The single sign-on return carries a one-time code in its query. Take it out of the
+// address bar (and stop the page sending a Referer) before anything renders.
+if (window.location.pathname === SSO_COMPLETE_PATH) captureSsoReturn();
 
 // Auth is interactive now — the App renders its own login form and registers the
 // SDK token getter itself (this is the reference external viewer; it brings its own

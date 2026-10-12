@@ -53,8 +53,17 @@ type wireReply struct {
 	Body   string
 	Data   map[string]json.RawMessage
 	Errors []struct {
-		Message string `json:"message"`
+		Message    string         `json:"message"`
+		Extensions map[string]any `json:"extensions"`
 	}
+}
+
+// code is the first error's extensions.code, or "" when it carries none.
+func (r wireReply) code(t *testing.T) string {
+	t.Helper()
+	require.NotEmpty(t, r.Errors, "expected an error, got data %s", r.Body)
+	c, _ := r.Errors[0].Extensions["code"].(string)
+	return c
 }
 
 func (r wireReply) field(t *testing.T, name string, v any) {

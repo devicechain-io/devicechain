@@ -7,6 +7,7 @@ import { useTranslation } from 'react-i18next';
 import {
   Building2,
   ChevronRight,
+  KeyRound,
   Layers,
   Trash2,
   List,
@@ -72,6 +73,8 @@ const NAV: NavNode[] = [
       // Identities (the same "configuration OF the parent" logic that puts Tiers under
       // Tenants) rather than sitting as its own top-level peer.
       { labelKey: 'adminRoles', href: '/admin/roles', icon: ShieldCheck },
+      // Sign-in providers are how identities authenticate, so they nest here as well.
+      { labelKey: 'adminIdentityProviders', href: '/admin/identity-providers', icon: KeyRound },
     ],
   },
   { labelKey: 'adminAiProviders', href: '/admin/ai-providers', icon: Sparkles },

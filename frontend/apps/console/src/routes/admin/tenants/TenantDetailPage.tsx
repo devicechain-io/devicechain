@@ -18,6 +18,7 @@ import { listTenants, setTenantEnabled, deleteTenant } from '@/lib/api/admin';
 import { PurgeBadge, StatusBadge, errMessage, useReload } from '@/routes/common';
 import { TenantForm } from '@/routes/admin/tenants/TenantForm';
 import { TenantSettingsPanel } from '@/routes/admin/tenants/TenantSettingsPanel';
+import { TenantSsoPanel } from '@/routes/admin/tenants/TenantSsoPanel';
 import { TenantDeletionPanel } from './TenantDeletionPanel';
 import { TenantAiModelsPanel } from '@/routes/admin/tenants/TenantAiModelsPanel';
 import { TierPill } from '@/components/tiers/TierPill';
@@ -141,6 +142,16 @@ export default function TenantDetailPage() {
           tab is the read-only RESULT of what Settings sets, folded onto the tenant's
           tier — re-read after every save, not another way to edit it. TenantForm renders
           its own per-tab SectionPanels, so it is not wrapped here. */}
+      {/* Not offered once the tenant is deleted: there is nobody left to require it of. */}
+      {!purged && (
+        <div className="mb-6">
+          <TenantSsoPanel
+            tenant={tenant.token}
+            enforced={tenant.ssoEnforced}
+            onChanged={reload}
+          />
+        </div>
+      )}
       <TenantForm
         tenant={tenant}
         onDone={(m) => {

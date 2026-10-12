@@ -49,6 +49,10 @@ func SourceAddr(ctx context.Context) string {
 	return s
 }
 
+// RequestSourceAddr is the value SourceAddr returns for r, for the plain-HTTP endpoints that
+// ration themselves per source the way the GraphQL ones do (same trust caveats).
+func RequestSourceAddr(r *http.Request) string { return requestSourceAddr(r) }
+
 // requestSourceAddr is the value SourceAddr returns for r.
 func requestSourceAddr(r *http.Request) string {
 	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {

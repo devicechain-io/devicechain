@@ -31,6 +31,7 @@
   "adminTiers": "Niveles",
   "adminIdentities": "Identidades",
   "adminRoles": "Roles",
+  "adminIdentityProviders": "Proveedores de identidad",
   "adminAiProviders": "Proveedores de IA",
   "adminAiPackaging": "Paquetes de IA",
   "adminSettings": "Configuración",

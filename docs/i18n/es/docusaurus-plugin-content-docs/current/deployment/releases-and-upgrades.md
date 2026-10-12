@@ -4009,6 +4009,13 @@ actualización y cualquier objeto cuya referencia se perdió se borran con el in
   un inquilino falla y se reintenta en cada pasada, así que el borrado no termina. Concédelo antes
   de actualizar. El backend filesystem no necesita nada.
 
+#### El inicio de sesión único es nuevo y no te pide nada {#next-upgrade-sso}
+
+Las personas ahora pueden iniciar sesión mediante un proveedor de identidad externo OpenID Connect, y un inquilino puede exigirlo. Nada se activa hasta que un superusuario crea una conexión, así que una instancia actualizada se comporta como antes. No hay nada que migrar y el inicio de sesión con contraseña sigue funcionando. El nuevo inicio de sesión que provoca el [cierre de sesión en el servidor](#next-upgrade-server-side-logout) ya está descrito.
+
+- **Configurar un proveedor** se describe en [Configurar el inicio de sesión único](../guides/configuring-sso.md), y su comportamiento en [Inicio de sesión único](../concepts/single-sign-on.md).
+- **Terminar una sesión no recupera los tokens ya emitidos.** Tras un cierre de sesión, una revocación, una desvinculación o una conexión deshabilitada, los tokens de acceso y de inicio de sesión ya emitidos siguen funcionando hasta que caducan, 15 minutos por defecto.
+
 #### El inicio de sesión único necesita la dirección pública de la instancia, así que el chart ahora la deriva {#next-upgrade-sso-issuer}
 
 Iniciar sesión mediante un proveedor de identidad externo OpenID Connect, y el servidor de

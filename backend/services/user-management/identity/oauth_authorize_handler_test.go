@@ -41,6 +41,14 @@ func (f *fakeAuthorizeSvc) IssueAuthorizationCode(context.Context, *iam.OAuthCli
 	return f.code, f.codeErr
 }
 
+func (f *fakeAuthorizeSvc) SsoReady() bool { return false }
+func (f *fakeAuthorizeSvc) BeginAuthorizeSso(context.Context, string, AuthorizeParams, string) (*AuthorizeSsoBegin, error) {
+	return nil, ErrSsoUnavailable
+}
+func (f *fakeAuthorizeSvc) ResumeAuthorizeSso(context.Context, string, string) (*AuthorizeResume, error) {
+	return nil, ErrSsoCodeInvalid
+}
+
 // validClient is registered for read-only with a loopback redirect.
 func validClient() *iam.OAuthClient {
 	return &iam.OAuthClient{ClientId: "mcp", Scopes: []string{"read-only"}, RedirectURIs: []string{"http://127.0.0.1/cb"}, Enabled: true}

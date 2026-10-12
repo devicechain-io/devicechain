@@ -268,6 +268,66 @@ export type DeletionWait =
    */
   | 'TOKEN_HOLD';
 
+/** A claim requirement to set on a connection. */
+export type IdpClaimRequirementInput = {
+  /** Claim name, for example `hd` or `tid`. */
+  name: string;
+  /** Required value. */
+  value: string;
+};
+
+/** Data to create a connection. */
+export type IdpConnectionCreateRequest = {
+  /** The client identifier registered at the provider. */
+  clientId: string;
+  /** The client secret. Write-only; leave out for a public client. */
+  clientSecret?: string | null | undefined;
+  /** Name of the claim carrying the email address; defaults to `email`. */
+  emailClaim?: string | null | undefined;
+  /** Name of the claim carrying group values; defaults to `groups`. */
+  groupsClaim?: string | null | undefined;
+  /** The provider's issuer, an https address. A shared multi-tenant issuer must be pinned to your organisation by a required claim. */
+  issuer: string;
+  /** `tenant` or `instance`. */
+  kind: string;
+  /**
+   * For an instance connection with no required authentication methods: your statement that the
+   * provider enforces multi-factor sign-in. It is recorded in the audit journal.
+   */
+  mfaEnforcedByIdp?: boolean | null | undefined;
+  /** Display name. */
+  name: string;
+  /** Authentication methods of which a sign-in must report at least one. */
+  requiredAmr?: Array<string> | null | undefined;
+  /** Claims every sign-in must carry with exactly these values (Google needs `hd`, Microsoft needs `tid`). */
+  requiredClaims?: Array<IdpClaimRequirementInput> | null | undefined;
+  /** OAuth scopes to request; defaults to openid, email and profile. */
+  scopes?: Array<string> | null | undefined;
+  /** Short unique token for the connection (letters, digits and hyphens). */
+  token: string;
+};
+
+/**
+ * Changes to a connection. A partial update: leaving a field out keeps its stored value. The
+ * issuer, kind and token cannot be changed.
+ */
+export type IdpConnectionUpdateRequest = {
+  /** New client identifier. */
+  clientId?: string | null | undefined;
+  /** New email claim name. */
+  emailClaim?: string | null | undefined;
+  /** True to accept sign-ins through the connection; enabling needs approved discovery. */
+  enabled?: boolean | null | undefined;
+  /** New groups claim name. */
+  groupsClaim?: string | null | undefined;
+  /** New display name. */
+  name?: string | null | undefined;
+  /** The complete new list of required authentication methods. */
+  requiredAmr?: Array<string> | null | undefined;
+  /** The complete new list of scopes. */
+  scopes?: Array<string> | null | undefined;
+};
+
 /** Paging and an optional completion filter for listing tenant deletions. */
 export type TenantDeletionSearchCriteria = {
   /** True for deletions that have finished, false for those still in progress. Omit it for both. */
@@ -286,7 +346,7 @@ export type IdentitiesQuery = { identities: Array<{ id: string, email: string, f
 export type TenantsQueryVariables = Exact<{ [key: string]: never; }>;
 
 
-export type TenantsQuery = { tenants: Array<{ id: string, token: string, name: string | null, enabled: boolean, purgeState: string, purgeEpoch: string | null, config: string | null, ingestReadingsPerSecond: number | null, ingestBurst: number | null, outboundCallsPerSecond: number | null, outboundBurst: number | null, aiExternalEnabled: boolean | null, aiInferenceRequestsPerMinute: number | null, aiInferenceBurst: number | null, heldCommandCeiling: number | null, shedPriority: number | null, geoFencePositionCeiling: number | null, geoFenceCeiling: number | null, geoFencePositionBudget: number | null, createdAt: string | null, updatedAt: string | null, tier: { token: string, name: string | null, color: string | null }, effectiveSettings: Array<{ dimension: { name: string, label: string, rateUnit: string }, rate: { source: string, value: number | null, tier: number | null, override: number | null }, burst: { source: string, value: number | null, tier: number | null, override: number | null } }> }> };
+export type TenantsQuery = { tenants: Array<{ id: string, token: string, name: string | null, enabled: boolean, purgeState: string, purgeEpoch: string | null, ssoEnforced: boolean, config: string | null, ingestReadingsPerSecond: number | null, ingestBurst: number | null, outboundCallsPerSecond: number | null, outboundBurst: number | null, aiExternalEnabled: boolean | null, aiInferenceRequestsPerMinute: number | null, aiInferenceBurst: number | null, heldCommandCeiling: number | null, shedPriority: number | null, geoFencePositionCeiling: number | null, geoFenceCeiling: number | null, geoFencePositionBudget: number | null, createdAt: string | null, updatedAt: string | null, tier: { token: string, name: string | null, color: string | null }, effectiveSettings: Array<{ dimension: { name: string, label: string, rateUnit: string }, rate: { source: string, value: number | null, tier: number | null, override: number | null }, burst: { source: string, value: number | null, tier: number | null, override: number | null } }> }> };
 
 export type GovernanceDimensionsQueryVariables = Exact<{ [key: string]: never; }>;
 
@@ -478,6 +538,14 @@ export type SetTenantEnabledMutationVariables = Exact<{
 
 export type SetTenantEnabledMutation = { setTenantEnabled: { id: string, token: string, name: string | null, enabled: boolean, config: string | null, ingestReadingsPerSecond: number | null, ingestBurst: number | null, outboundCallsPerSecond: number | null, outboundBurst: number | null, aiExternalEnabled: boolean | null, aiInferenceRequestsPerMinute: number | null, aiInferenceBurst: number | null, heldCommandCeiling: number | null, shedPriority: number | null, geoFencePositionCeiling: number | null, geoFenceCeiling: number | null, geoFencePositionBudget: number | null, createdAt: string | null, updatedAt: string | null, tier: { token: string, name: string | null, color: string | null } } };
 
+export type SetTenantSsoEnforcedMutationVariables = Exact<{
+  tenant: string;
+  enforced: boolean;
+}>;
+
+
+export type SetTenantSsoEnforcedMutation = { setTenantSsoEnforced: { token: string, ssoEnforced: boolean } };
+
 export type DeleteTenantMutationVariables = Exact<{
   token: string;
 }>;
@@ -504,6 +572,115 @@ export type AdminFunctionalAreasQueryVariables = Exact<{ [key: string]: never; }
 
 
 export type AdminFunctionalAreasQuery = { functionalAreas: Array<string> };
+
+export type IdpConnectionsQueryVariables = Exact<{ [key: string]: never; }>;
+
+
+export type IdpConnectionsQuery = { idpConnections: Array<{ token: string, name: string, kind: string, enabled: boolean, issuer: string, hasSecret: boolean, tenants: Array<string>, domains: Array<{ domain: string }>, discovery: { approved: boolean, fingerprint: string } }> };
+
+export type IdpConnectionQueryVariables = Exact<{
+  token: string;
+}>;
+
+
+export type IdpConnectionQuery = { idpConnection: { token: string, name: string, kind: string, enabled: boolean, issuer: string, clientId: string, hasSecret: boolean, scopes: Array<string>, emailClaim: string, requiredAmr: Array<string>, tenants: Array<string>, callbackUrl: string, createdAt: string | null, updatedAt: string | null, requiredClaims: Array<{ name: string, value: string }>, domains: Array<{ domain: string, verifiedAt: string, verifiedBy: string }>, discovery: { authorizationEndpoint: string, tokenEndpoint: string, jwksUri: string, endSessionEndpoint: string | null, fetchedAt: string | null, fingerprint: string, approved: boolean, approvedBy: string | null, approvedAt: string | null } } | null };
+
+export type SsoLinkRequestsQueryVariables = Exact<{ [key: string]: never; }>;
+
+
+export type SsoLinkRequestsQuery = { ssoLinkRequests: Array<{ id: string, connection: string, subject: string, email: string, createdAt: string | null, identityExists: boolean, subjectChanged: boolean, manualMemberships: Array<string> }> };
+
+export type CreateIdpConnectionMutationVariables = Exact<{
+  request: IdpConnectionCreateRequest;
+}>;
+
+
+export type CreateIdpConnectionMutation = { createIdpConnection: { token: string } };
+
+export type UpdateIdpConnectionMutationVariables = Exact<{
+  token: string;
+  request: IdpConnectionUpdateRequest;
+}>;
+
+
+export type UpdateIdpConnectionMutation = { updateIdpConnection: { token: string } };
+
+export type SetIdpRequiredClaimsMutationVariables = Exact<{
+  token: string;
+  claims: Array<IdpClaimRequirementInput> | IdpClaimRequirementInput;
+}>;
+
+
+export type SetIdpRequiredClaimsMutation = { setIdpRequiredClaims: { token: string } };
+
+export type DeleteIdpConnectionMutationVariables = Exact<{
+  token: string;
+}>;
+
+
+export type DeleteIdpConnectionMutation = { deleteIdpConnection: boolean };
+
+export type SetIdpConnectionSecretMutationVariables = Exact<{
+  token: string;
+  secret: string;
+}>;
+
+
+export type SetIdpConnectionSecretMutation = { setIdpConnectionSecret: { token: string } };
+
+export type SetIdpConnectionTenantsMutationVariables = Exact<{
+  token: string;
+  tenants: Array<string> | string;
+}>;
+
+
+export type SetIdpConnectionTenantsMutation = { setIdpConnectionTenants: { token: string } };
+
+export type AddIdpDomainMutationVariables = Exact<{
+  token: string;
+  domain: string;
+}>;
+
+
+export type AddIdpDomainMutation = { addIdpDomain: { token: string } };
+
+export type RemoveIdpDomainMutationVariables = Exact<{
+  token: string;
+  domain: string;
+}>;
+
+
+export type RemoveIdpDomainMutation = { removeIdpDomain: { token: string } };
+
+export type RefreshIdpDiscoveryMutationVariables = Exact<{
+  token: string;
+}>;
+
+
+export type RefreshIdpDiscoveryMutation = { refreshIdpDiscovery: { token: string } };
+
+export type ApproveIdpDiscoveryMutationVariables = Exact<{
+  token: string;
+  fingerprint: string;
+}>;
+
+
+export type ApproveIdpDiscoveryMutation = { approveIdpDiscovery: { token: string } };
+
+export type ApproveSsoLinkRequestMutationVariables = Exact<{
+  id: string | number;
+  membershipDisposition?: string | null | undefined;
+}>;
+
+
+export type ApproveSsoLinkRequestMutation = { approveSsoLinkRequest: boolean };
+
+export type RejectSsoLinkRequestMutationVariables = Exact<{
+  id: string | number;
+}>;
+
+
+export type RejectSsoLinkRequestMutation = { rejectSsoLinkRequest: boolean };
 
 export class TypedDocumentString<TResult, TVariables>
   extends String
@@ -552,6 +729,7 @@ export const TenantsDocument = new TypedDocumentString(`
     enabled
     purgeState
     purgeEpoch
+    ssoEnforced
     tier {
       token
       name
@@ -974,6 +1152,14 @@ export const SetTenantEnabledDocument = new TypedDocumentString(`
   }
 }
     `) as unknown as TypedDocumentString<SetTenantEnabledMutation, SetTenantEnabledMutationVariables>;
+export const SetTenantSsoEnforcedDocument = new TypedDocumentString(`
+    mutation SetTenantSsoEnforced($tenant: String!, $enforced: Boolean!) {
+  setTenantSsoEnforced(tenant: $tenant, enforced: $enforced) {
+    token
+    ssoEnforced
+  }
+}
+    `) as unknown as TypedDocumentString<SetTenantSsoEnforcedMutation, SetTenantSsoEnforcedMutationVariables>;
 export const DeleteTenantDocument = new TypedDocumentString(`
     mutation DeleteTenant($token: String!) {
   deleteTenant(token: $token)
@@ -1037,3 +1223,155 @@ export const AdminFunctionalAreasDocument = new TypedDocumentString(`
   functionalAreas
 }
     `) as unknown as TypedDocumentString<AdminFunctionalAreasQuery, AdminFunctionalAreasQueryVariables>;
+export const IdpConnectionsDocument = new TypedDocumentString(`
+    query IdpConnections {
+  idpConnections {
+    token
+    name
+    kind
+    enabled
+    issuer
+    hasSecret
+    tenants
+    domains {
+      domain
+    }
+    discovery {
+      approved
+      fingerprint
+    }
+  }
+}
+    `) as unknown as TypedDocumentString<IdpConnectionsQuery, IdpConnectionsQueryVariables>;
+export const IdpConnectionDocument = new TypedDocumentString(`
+    query IdpConnection($token: String!) {
+  idpConnection(token: $token) {
+    token
+    name
+    kind
+    enabled
+    issuer
+    clientId
+    hasSecret
+    scopes
+    emailClaim
+    requiredClaims {
+      name
+      value
+    }
+    requiredAmr
+    domains {
+      domain
+      verifiedAt
+      verifiedBy
+    }
+    tenants
+    callbackUrl
+    discovery {
+      authorizationEndpoint
+      tokenEndpoint
+      jwksUri
+      endSessionEndpoint
+      fetchedAt
+      fingerprint
+      approved
+      approvedBy
+      approvedAt
+    }
+    createdAt
+    updatedAt
+  }
+}
+    `) as unknown as TypedDocumentString<IdpConnectionQuery, IdpConnectionQueryVariables>;
+export const SsoLinkRequestsDocument = new TypedDocumentString(`
+    query SsoLinkRequests {
+  ssoLinkRequests {
+    id
+    connection
+    subject
+    email
+    createdAt
+    identityExists
+    subjectChanged
+    manualMemberships
+  }
+}
+    `) as unknown as TypedDocumentString<SsoLinkRequestsQuery, SsoLinkRequestsQueryVariables>;
+export const CreateIdpConnectionDocument = new TypedDocumentString(`
+    mutation CreateIdpConnection($request: IdpConnectionCreateRequest!) {
+  createIdpConnection(request: $request) {
+    token
+  }
+}
+    `) as unknown as TypedDocumentString<CreateIdpConnectionMutation, CreateIdpConnectionMutationVariables>;
+export const UpdateIdpConnectionDocument = new TypedDocumentString(`
+    mutation UpdateIdpConnection($token: String!, $request: IdpConnectionUpdateRequest!) {
+  updateIdpConnection(token: $token, request: $request) {
+    token
+  }
+}
+    `) as unknown as TypedDocumentString<UpdateIdpConnectionMutation, UpdateIdpConnectionMutationVariables>;
+export const SetIdpRequiredClaimsDocument = new TypedDocumentString(`
+    mutation SetIdpRequiredClaims($token: String!, $claims: [IdpClaimRequirementInput!]!) {
+  setIdpRequiredClaims(token: $token, claims: $claims) {
+    token
+  }
+}
+    `) as unknown as TypedDocumentString<SetIdpRequiredClaimsMutation, SetIdpRequiredClaimsMutationVariables>;
+export const DeleteIdpConnectionDocument = new TypedDocumentString(`
+    mutation DeleteIdpConnection($token: String!) {
+  deleteIdpConnection(token: $token)
+}
+    `) as unknown as TypedDocumentString<DeleteIdpConnectionMutation, DeleteIdpConnectionMutationVariables>;
+export const SetIdpConnectionSecretDocument = new TypedDocumentString(`
+    mutation SetIdpConnectionSecret($token: String!, $secret: String!) {
+  setIdpConnectionSecret(token: $token, secret: $secret) {
+    token
+  }
+}
+    `) as unknown as TypedDocumentString<SetIdpConnectionSecretMutation, SetIdpConnectionSecretMutationVariables>;
+export const SetIdpConnectionTenantsDocument = new TypedDocumentString(`
+    mutation SetIdpConnectionTenants($token: String!, $tenants: [String!]!) {
+  setIdpConnectionTenants(token: $token, tenants: $tenants) {
+    token
+  }
+}
+    `) as unknown as TypedDocumentString<SetIdpConnectionTenantsMutation, SetIdpConnectionTenantsMutationVariables>;
+export const AddIdpDomainDocument = new TypedDocumentString(`
+    mutation AddIdpDomain($token: String!, $domain: String!) {
+  addIdpDomain(token: $token, domain: $domain) {
+    token
+  }
+}
+    `) as unknown as TypedDocumentString<AddIdpDomainMutation, AddIdpDomainMutationVariables>;
+export const RemoveIdpDomainDocument = new TypedDocumentString(`
+    mutation RemoveIdpDomain($token: String!, $domain: String!) {
+  removeIdpDomain(token: $token, domain: $domain) {
+    token
+  }
+}
+    `) as unknown as TypedDocumentString<RemoveIdpDomainMutation, RemoveIdpDomainMutationVariables>;
+export const RefreshIdpDiscoveryDocument = new TypedDocumentString(`
+    mutation RefreshIdpDiscovery($token: String!) {
+  refreshIdpDiscovery(token: $token) {
+    token
+  }
+}
+    `) as unknown as TypedDocumentString<RefreshIdpDiscoveryMutation, RefreshIdpDiscoveryMutationVariables>;
+export const ApproveIdpDiscoveryDocument = new TypedDocumentString(`
+    mutation ApproveIdpDiscovery($token: String!, $fingerprint: String!) {
+  approveIdpDiscovery(token: $token, fingerprint: $fingerprint) {
+    token
+  }
+}
+    `) as unknown as TypedDocumentString<ApproveIdpDiscoveryMutation, ApproveIdpDiscoveryMutationVariables>;
+export const ApproveSsoLinkRequestDocument = new TypedDocumentString(`
+    mutation ApproveSsoLinkRequest($id: ID!, $membershipDisposition: String) {
+  approveSsoLinkRequest(id: $id, membershipDisposition: $membershipDisposition)
+}
+    `) as unknown as TypedDocumentString<ApproveSsoLinkRequestMutation, ApproveSsoLinkRequestMutationVariables>;
+export const RejectSsoLinkRequestDocument = new TypedDocumentString(`
+    mutation RejectSsoLinkRequest($id: ID!) {
+  rejectSsoLinkRequest(id: $id)
+}
+    `) as unknown as TypedDocumentString<RejectSsoLinkRequestMutation, RejectSsoLinkRequestMutationVariables>;

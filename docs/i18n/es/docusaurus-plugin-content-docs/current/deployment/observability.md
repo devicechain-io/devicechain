@@ -177,8 +177,10 @@ instancias arrancadas en ese clúster:
 
 ## Iniciar sesión en Grafana
 
-Grafana usa su propio **inicio de sesión de administrador**. Iniciar sesión en Grafana a
-través del inicio de sesión único de DeviceChain no está disponible actualmente.
+Grafana usa su propio **inicio de sesión de administrador**. Grafana no está integrado con el
+inicio de sesión de DeviceChain: ni una contraseña de DeviceChain ni un proveedor de identidad
+conectado (consulta [Inicio de sesión único](../concepts/single-sign-on.md)) te permiten
+iniciar sesión en él.
 
 Las métricas son a nivel de instancia y entre inquilinos, por lo que Grafana es una superficie
 de *operador*, no algo a lo que los usuarios de inquilinos puedan acceder. Los inquilinos ven

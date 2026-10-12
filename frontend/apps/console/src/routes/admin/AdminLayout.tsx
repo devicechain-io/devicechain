@@ -14,6 +14,7 @@ const PAGE_TITLES: { pattern: string; key: string }[] = [
   { pattern: '/admin/tiers', key: 'adminTiers' },
   { pattern: '/admin/identities', key: 'adminIdentities' },
   { pattern: '/admin/roles', key: 'adminRoles' },
+  { pattern: '/admin/identity-providers', key: 'adminIdentityProviders' },
   { pattern: '/admin/ai-providers', key: 'adminAiProviders' },
   // Reached from the AI Providers screen (not a sidebar entry); listed so its top-bar
   // title reads "AI Packaging" rather than the generic "Admin". Not a detail route, so it

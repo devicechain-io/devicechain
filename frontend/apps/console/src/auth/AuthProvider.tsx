@@ -14,6 +14,7 @@ import {
 } from 'react';
 import {
   login as apiLogin,
+  completeSso as apiCompleteSso,
   selectTenant as apiSelectTenant,
   refresh as apiRefresh,
   logout as apiLogout,
@@ -28,6 +29,7 @@ import {
   type DecodedClaims,
 } from '@devicechain/client';
 import { useToast } from '@/components/ui/toast';
+import { serverErrorCode } from '@/i18n/signInError';
 
 // The access/refresh pair is persisted to localStorage so a reload keeps the
 // session. The GraphQL client never reads storage directly: this provider
@@ -67,6 +69,12 @@ interface AuthContextValue {
    * returned identityToken to do that.
    */
   login: (email: string, password: string) => Promise<IdentityAuth>;
+  /**
+   * Redeem the one-time code a single sign-on returned (with the verifier held since the
+   * sign-in began). The result is stored exactly as login's is, so every later step
+   * (selectTenant, refresh, logout) is the same for both ways of signing in.
+   */
+  completeSso: (code: string, verifier: string) => Promise<IdentityAuth>;
   /** Exchange an identity token for a tenant-scoped session. */
   selectTenant: (identityToken: string, tenant: string) => Promise<void>;
   /**
@@ -140,24 +148,32 @@ function writeStoredIdentity(identity: StoredIdentity | null) {
 // mysterious.
 const SESSION_EXPIRED_KEY = 'dc-session-expired';
 
-function flagSessionExpired() {
+/**
+ * Why a session was dropped: it lapsed, or its tenant started requiring single sign-on
+ * (the server refused the refresh with SSO_REQUIRED), which a fresh password sign-in
+ * cannot fix, so the login screen says so instead of "your session expired".
+ */
+export type SessionEndReason = 'expired' | 'ssoRequired';
+
+function flagSessionExpired(reason: SessionEndReason = 'expired') {
   try {
-    window.sessionStorage.setItem(SESSION_EXPIRED_KEY, '1');
+    window.sessionStorage.setItem(SESSION_EXPIRED_KEY, reason === 'ssoRequired' ? 'sso' : '1');
   } catch {
     // sessionStorage unavailable — the login notice is best-effort
   }
 }
 
-export function consumeSessionExpired(): boolean {
+export function consumeSessionExpired(): SessionEndReason | null {
   try {
-    if (window.sessionStorage.getItem(SESSION_EXPIRED_KEY) === '1') {
+    const v = window.sessionStorage.getItem(SESSION_EXPIRED_KEY);
+    if (v === '1' || v === 'sso') {
       window.sessionStorage.removeItem(SESSION_EXPIRED_KEY);
-      return true;
+      return v === 'sso' ? 'ssoRequired' : 'expired';
     }
   } catch {
     // ignore
   }
-  return false;
+  return null;
 }
 
 // How long sign-out waits for the server before leaving anyway. The user asked to go; a
@@ -239,8 +255,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // cause for the login screen. Clearing the session state flips the route guards,
   // which redirect to /login — instead of leaving a dead session in place to fire
   // failing requests and render a raw error.
-  const expireTenant = useCallback(() => {
-    flagSessionExpired();
+  const expireTenant = useCallback((reason: SessionEndReason = 'expired') => {
+    flagSessionExpired(reason);
     refreshInFlight.current = null;
     applyTokens(null);
   }, [applyTokens]);
@@ -274,10 +290,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           if (tokensRef.current !== current) return null;
           applyTokens({ accessToken: pair.accessToken, refreshToken: pair.refreshToken });
           return pair.accessToken;
-        } catch {
+        } catch (err) {
           // Only expire the session this refresh belonged to — not one that has
           // since been logged out or replaced.
-          if (tokensRef.current === current) expireTenant();
+          if (tokensRef.current === current) {
+            expireTenant(serverErrorCode(err) === 'SSO_REQUIRED' ? 'ssoRequired' : 'expired');
+          }
           return null;
         } finally {
           refreshInFlight.current = null;
@@ -316,6 +334,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const login = useCallback(
     async (email: string, password: string) => {
       const auth = await apiLogin(email, password);
+      applyIdentity({
+        identityToken: auth.identityToken,
+        superuser: auth.superuser,
+        memberships: auth.memberships,
+      });
+      return auth;
+    },
+    [applyIdentity],
+  );
+
+  // Single sign-on's step 1: the code from the provider's return replaces the password.
+  const completeSso = useCallback(
+    async (code: string, verifier: string) => {
+      const auth = await apiCompleteSso(code, verifier);
       applyIdentity({
         identityToken: auth.identityToken,
         superuser: auth.superuser,
@@ -369,6 +401,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       isAuthenticated: sessionAlive,
       isLoading,
       login,
+      completeSso,
       selectTenant,
       refreshMemberships,
       logout,
@@ -383,6 +416,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       identityAlive,
       isLoading,
       login,
+      completeSso,
       selectTenant,
       refreshMemberships,
       logout,

@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"testing"
 
+	"github.com/devicechain-io/dc-user-management/identity"
 	"github.com/stretchr/testify/require"
 )
 
@@ -34,8 +35,22 @@ func TestSessionPolicyOverTheWire(t *testing.T) {
 			map[string]any{"e": true, "s": 3600}, "", "", "").Status)
 	}
 
-	// Enforcement: read back on the tenant, refused to a password member, not to the
-	// superuser, and listed nowhere for the member.
+	// A password session inside acme from BEFORE enforcement, whose refresh is refused after;
+	// and an identity that belongs to no tenant at all, the outsider.
+	const refreshDoc = `mutation($r:String!){refresh(refreshToken:$r){accessToken}}`
+	var before struct {
+		IdentityToken string
+	}
+	post(t, s.pub, loginSu, map[string]any{"e": "member@example.com", "p": "pw-1"}, "", "", "").field(t, "login", &before)
+	var pair struct{ RefreshToken string }
+	post(t, s.pub, `mutation($i:String!){selectTenant(identityToken:$i,tenant:"acme"){refreshToken}}`,
+		map[string]any{"i": before.IdentityToken}, "", "", "").field(t, "selectTenant", &pair)
+	s.s.CreateIdentity("outsider@example.com", "pw-out")
+	var outsider struct{ IdentityToken string }
+	post(t, s.pub, loginSu, map[string]any{"e": "outsider@example.com", "p": "pw-out"}, "", "", "").field(t, "login", &outsider)
+
+	// Enforcement: read back on the tenant, refused to a password member with the typed
+	// code, not to the superuser, and listed to the member MARKED.
 	var tenant struct {
 		Token       string
 		SsoEnforced bool
@@ -46,13 +61,39 @@ func TestSessionPolicyOverTheWire(t *testing.T) {
 
 	var member struct {
 		IdentityToken string
-		Memberships   []struct{ Tenant string }
+		Memberships   []struct {
+			Tenant      string
+			SsoRequired bool
+		}
 	}
-	const loginMember = `mutation($e:String!,$p:String!){login(email:$e,password:$p){identityToken memberships{tenant}}}`
+	const loginMember = `mutation($e:String!,$p:String!){login(email:$e,password:$p){identityToken memberships{tenant ssoRequired}}}`
 	post(t, s.pub, loginMember, map[string]any{"e": "member@example.com", "p": "pw-1"}, "", "", "").field(t, "login", &member)
-	require.Empty(t, member.Memberships, "the password sign-in listed a tenant that requires single sign-on")
+	require.Len(t, member.Memberships, 1, "the password sign-in hid a tenant that requires single sign-on")
+	require.Equal(t, "acme", member.Memberships[0].Tenant)
+	require.True(t, member.Memberships[0].SsoRequired, "the password sign-in listed an enforced tenant unmarked")
+	var reread []struct{ SsoRequired bool }
+	post(t, s.pub, `query($i:String!){identityMemberships(identityToken:$i){ssoRequired}}`,
+		map[string]any{"i": member.IdentityToken}, "", "", "").field(t, "identityMemberships", &reread)
+	require.Len(t, reread, 1)
+	require.True(t, reread[0].SsoRequired, "the membership re-read listed an enforced tenant unmarked")
+
 	r := post(t, s.pub, selectSso, map[string]any{"i": member.IdentityToken}, "", "", "")
+	require.Equal(t, identity.CodeSsoRequired, r.code(t), "selectTenant refused a member without the typed code: %s", r.Body)
+	r = post(t, s.pub, refreshDoc, map[string]any{"r": pair.RefreshToken}, "", "", "")
+	require.Equal(t, identity.CodeSsoRequired, r.code(t), "refresh refused a member's password session without the typed code: %s", r.Body)
+	r = post(t, s.pub, refreshDoc, map[string]any{"r": pair.RefreshToken}, "", "", "")
+	require.Equal(t, "invalid or expired token", r.failed(t), "the refused refresh token was not consumed")
+	require.Empty(t, r.code(t))
+
+	// Nobody but a member learns that acme requires single sign-on: not an identity that is
+	// not a member, and not a caller with no valid token.
+	r = post(t, s.pub, selectSso, map[string]any{"i": outsider.IdentityToken}, "", "", "")
 	require.Equal(t, "invalid credentials", r.failed(t))
+	require.Empty(t, r.code(t), "a non-member was told the tenant requires single sign-on")
+	r = post(t, s.pub, selectSso, map[string]any{"i": "not-a-token"}, "", "", "")
+	require.Equal(t, "invalid or expired token", r.failed(t))
+	require.Empty(t, r.code(t), "an unauthenticated caller was told the tenant requires single sign-on")
+
 	var su2 struct{ AccessToken string }
 	post(t, s.pub, selectSso, map[string]any{"i": su.IdentityToken}, "", "", "").field(t, "selectTenant", &su2)
 	require.NotEmpty(t, su2.AccessToken, "control: the superuser enters an enforced tenant")
@@ -85,11 +126,11 @@ func TestSessionPolicyOverTheWire(t *testing.T) {
 	require.NoError(t, json.Unmarshal(r.Data["idpConnection"], &read.IdpConnection))
 	require.Equal(t, 7200, read.IdpConnection.SessionMaxAgeSeconds, "a refused ceiling was stored")
 
-	// Sign out everywhere: the member's sign-in ends, a second call finds nothing, and an
-	// unknown identity is named.
+	// Sign out everywhere: the member's two sign-ins (before and after enforcement) end, a
+	// second call finds nothing, and an unknown identity is named.
 	var n int
 	post(t, s.admin, revokeDoc, map[string]any{"e": "member@example.com"}, su.IdentityToken, "", "").field(t, "revokeSessions", &n)
-	require.Equal(t, 1, n)
+	require.Equal(t, 2, n)
 	r = post(t, s.pub, selectSso, map[string]any{"i": member.IdentityToken}, "", "", "")
 	require.Equal(t, "invalid or expired token", r.failed(t))
 	post(t, s.admin, revokeDoc, map[string]any{"e": "member@example.com"}, su.IdentityToken, "", "").field(t, "revokeSessions", &n)
@@ -107,4 +148,49 @@ func TestSessionPolicyOverTheWire(t *testing.T) {
 	require.Equal(t, "member@example.com", id.Email)
 	r = post(t, s.pub, loginMember, map[string]any{"e": "member@example.com", "p": "pw-1"}, "", "", "")
 	require.Equal(t, "invalid credentials", r.failed(t))
+}
+
+// The refusals that keep a tenant's people from being locked out reach the administrator
+// with a code the console can translate, and with prose that names no API operation.
+func TestSsoLockoutRefusalsOverTheWire(t *testing.T) {
+	s := newSsoServed(t)
+	var su struct{ IdentityToken string }
+	post(t, s.pub, loginSu, map[string]any{"e": s.s.SuperuserEmail, "p": s.s.SuperuserPassword}, "", "", "").field(t, "login", &su)
+	admin := func(doc string, vars map[string]any) wireReply {
+		t.Helper()
+		return post(t, s.admin, doc, vars, su.IdentityToken, "", "")
+	}
+	const (
+		enforceDoc = `mutation($e:Boolean!){setTenantSsoEnforced(tenant:"acme",enforced:$e){ssoEnforced}}`
+		tenantsDoc = `mutation($ts:[String!]!){setIdpConnectionTenants(token:"acme-idp",tenants:$ts){token}}`
+		disableDoc = `mutation{updateIdpConnection(token:"acme-idp",request:{enabled:false}){token}}`
+		deleteDoc  = `mutation{deleteIdpConnection(token:"acme-idp")}`
+	)
+	refused := func(r wireReply, code string) {
+		t.Helper()
+		require.Equal(t, code, r.code(t), r.Body)
+		msg := r.failed(t)
+		for _, op := range []string{"setTenantSsoEnforced", "setIdpConnectionTenants", "updateIdpConnection", "deleteIdpConnection"} {
+			require.NotContains(t, msg, op, "the refusal's prose names an API operation")
+		}
+	}
+
+	// No connection serves acme: requiring single sign-on is refused, by code.
+	require.Empty(t, admin(tenantsDoc, map[string]any{"ts": []string{}}).Errors)
+	refused(admin(enforceDoc, map[string]any{"e": true}), identity.CodeSsoEnforceNoConnection)
+
+	// Served again and required: every way of removing the last connection is refused, by
+	// code, naming the tenant it would strand.
+	require.Empty(t, admin(tenantsDoc, map[string]any{"ts": []string{"acme"}}).Errors)
+	require.Empty(t, admin(enforceDoc, map[string]any{"e": true}).Errors)
+	r := admin(tenantsDoc, map[string]any{"ts": []string{}})
+	refused(r, identity.CodeSsoEnforcedTenantStranded)
+	require.Equal(t, []any{"acme"}, r.Errors[0].Extensions["tenants"])
+	refused(admin(disableDoc, nil), identity.CodeSsoEnforcedTenantStranded)
+	refused(admin(deleteDoc, nil), identity.CodeSsoEnforcedTenantStranded)
+
+	// Control: once the requirement is off, the connection can go.
+	require.Empty(t, admin(enforceDoc, map[string]any{"e": false}).Errors)
+	r = admin(deleteDoc, nil)
+	require.Empty(t, r.Errors, r.Body)
 }

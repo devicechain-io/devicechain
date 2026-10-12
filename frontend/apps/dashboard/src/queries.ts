@@ -20,6 +20,11 @@ import type { TypedDocument } from '@devicechain/client';
 export interface Membership {
   tenant: string;
   roles: string[];
+  /**
+   * The tenant requires single sign-on and this was a password sign-in: selectTenant
+   * refuses it (code SSO_REQUIRED). Listed so the viewer can say why, not offered as a choice.
+   */
+  ssoRequired: boolean;
 }
 export interface LoginResult {
   login: { identityToken: string; memberships: Membership[] };
@@ -36,6 +41,7 @@ export const LOGIN = `
       memberships {
         tenant
         roles
+        ssoRequired
       }
     }
   }
@@ -61,6 +67,49 @@ export const SELECT_TENANT = `
     }
   }
 ` as unknown as TypedDocument<SelectTenantResult, SelectTenantVariables>;
+
+// ── user-management: single sign-on ──────────────────────────────────────────
+// Anonymous. beginSso answers with the identity provider's address (null when no
+// connection speaks for the email's domain); completeSso redeems the one-time code the
+// provider's return carried and answers like login does, so selectTenant follows.
+
+export interface BeginSsoResult {
+  beginSso: { authorizationUrl: string } | null;
+}
+export interface BeginSsoVariables {
+  email: string;
+  returnTo: string;
+  codeChallenge: string;
+}
+
+export const BEGIN_SSO = `
+  mutation BeginSso($email: String, $returnTo: String!, $codeChallenge: String!) {
+    beginSso(email: $email, returnTo: $returnTo, codeChallenge: $codeChallenge) {
+      authorizationUrl
+    }
+  }
+` as unknown as TypedDocument<BeginSsoResult, BeginSsoVariables>;
+
+export interface CompleteSsoResult {
+  completeSso: { identityToken: string; memberships: Membership[] };
+}
+export interface CompleteSsoVariables {
+  code: string;
+  codeVerifier: string;
+}
+
+export const COMPLETE_SSO = `
+  mutation CompleteSso($code: String!, $codeVerifier: String!) {
+    completeSso(code: $code, codeVerifier: $codeVerifier) {
+      identityToken
+      memberships {
+        tenant
+        roles
+        ssoRequired
+      }
+    }
+  }
+` as unknown as TypedDocument<CompleteSsoResult, CompleteSsoVariables>;
 
 // ── user-management: end the sign-in ─────────────────────────────────────────
 // Anonymous (the token is the argument). Ends the sign-in server-side, so the refresh

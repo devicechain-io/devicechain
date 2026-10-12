@@ -52,7 +52,7 @@ import (
 const (
 	ssoKindLogin     = "login"
 	ssoKindLink      = "link"
-	ssoKindAuthorize = "authorize" // reserved for the MCP authorize page; nothing writes it yet
+	ssoKindAuthorize = "authorize" // the MCP authorize page's sign-in; resumed only by ResumeAuthorizeSso
 )
 
 // Outcomes, as counted on devicechain_usermanagement_sso_logins_total and written to the
@@ -121,6 +121,9 @@ type ssoState struct {
 	// LinkSession and LinkEmail bind a link-kind state to the password sign-in that began it.
 	LinkSession auth.SessionID `json:"link_sid,omitempty"`
 	LinkEmail   string         `json:"link_email,omitempty"`
+	// Authorize is the pending OAuth authorization request (authorize kind), held HERE so it
+	// never travels through the provider or comes back from the browser.
+	Authorize *AuthorizeParams `json:"authorize,omitempty"`
 }
 
 // ssoCode is the record the callback writes and completeSso consumes.
@@ -130,6 +133,8 @@ type ssoCode struct {
 	Email         string    `json:"email"`
 	CodeChallenge string    `json:"code_challenge"`
 	Anchor        time.Time `json:"anchor"`
+	// Authorize carries the pending request from an authorize-kind state to its resume.
+	Authorize *AuthorizeParams `json:"authorize,omitempty"`
 }
 
 const (
@@ -442,7 +447,14 @@ func (m *Manager) HandleSsoCallback(ctx context.Context, connectionToken string,
 		m.countSso(conn.Token, SsoOutcomeStateInvalid)
 		return SsoCallbackResult{Outcome: SsoOutcomeStateInvalid}
 	}
-	returnTo, err := m.checkReturnTo(st.ReturnTo)
+	// An authorize-kind state returns to the authorize endpoint itself, an address the server
+	// computes; it is never read from the record, so no state can send a browser elsewhere.
+	var returnTo string
+	if st.Kind == ssoKindAuthorize {
+		returnTo, err = m.authorizeReturnURL()
+	} else {
+		returnTo, err = m.checkReturnTo(st.ReturnTo)
+	}
 	if err != nil {
 		m.countSso(conn.Token, SsoOutcomeStateInvalid)
 		return SsoCallbackResult{Outcome: SsoOutcomeStateInvalid}
@@ -506,12 +518,14 @@ func (m *Manager) HandleSsoCallback(ctx context.Context, connectionToken string,
 	}
 
 	switch st.Kind {
-	case ssoKindLogin:
+	case ssoKindLogin, ssoKindAuthorize:
+		// Same identity resolution; they differ in the record written (its kind, and for
+		// authorize the pending request) and in who may redeem it.
 		return m.finishLogin(ctx, conn, st, claims, returnTo, finish)
 	case ssoKindLink:
 		return m.finishLink(ctx, conn, st, claims, returnTo, finish)
 	}
-	// An authorize-kind (or unknown) state is not completable here.
+	// An unknown-kind state is not completable.
 	return finish(SsoOutcomeStateInvalid, "", nil)
 }
 
@@ -615,14 +629,18 @@ func (m *Manager) finishLogin(ctx context.Context, conn *iam.IdpConnection, st s
 		return finish(SsoOutcomeServerError, claims.Email, nil)
 	}
 	rec, _ := json.Marshal(ssoCode{
-		Kind: ssoKindLogin, ConnectionID: conn.ID, Email: id.Email,
-		CodeChallenge: st.CodeChallenge, Anchor: time.Now().UTC(),
+		Kind: st.Kind, ConnectionID: conn.ID, Email: id.Email,
+		CodeChallenge: st.CodeChallenge, Anchor: time.Now().UTC(), Authorize: st.Authorize,
 	})
 	if _, err := m.ssoCodesKV.Create(code, rec); err != nil {
 		log.Error().Err(err).Msg("Single sign-on could not write its login code.")
 		return finish(SsoOutcomeServerError, claims.Email, nil)
 	}
-	return SsoCallbackResult{Location: withQuery(returnTo, url.Values{"code": {code}}), Outcome: SsoOutcomeSuccess}
+	param := "code"
+	if st.Kind == ssoKindAuthorize {
+		param = authorizeResumeParam
+	}
+	return SsoCallbackResult{Location: withQuery(returnTo, url.Values{param: {code}}), Outcome: SsoOutcomeSuccess}
 }
 
 // CompleteSso exchanges a login code and the beginning browser's PKCE verifier for the same
@@ -655,6 +673,13 @@ func (m *Manager) CompleteSso(ctx context.Context, code, codeVerifier string) (*
 	if !verifyPKCE(codeVerifier, rec.CodeChallenge) {
 		return nil, ErrSsoCodeInvalid
 	}
+	return m.completeSsoRecord(ctx, rec)
+}
+
+// completeSsoRecord starts the session for a login code that has already been consumed, kind
+// checked and matched to its browser's secret. It is shared by CompleteSso and the authorize
+// page's resume, which differ only in who may redeem a record.
+func (m *Manager) completeSsoRecord(ctx context.Context, rec ssoCode) (*IdentityAuth, error) {
 	if time.Since(rec.Anchor) > SsoCodeTTL+10*time.Second {
 		return nil, ErrSsoCodeInvalid
 	}

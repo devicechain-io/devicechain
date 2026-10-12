@@ -9,9 +9,11 @@ import (
 	"html/template"
 	"net/http"
 	"net/url"
+	"time"
 
 	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-microservice/credential"
+	gqlcore "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-user-management/iam"
 )
 
@@ -37,6 +39,14 @@ type AuthorizeService interface {
 	// returns ErrInvalidToken when the subject's session has ended since the identity
 	// token was minted.
 	IssueAuthorizationCode(ctx context.Context, client *iam.OAuthClient, p AuthorizeParams, subject IdentitySubject, tenant string) (string, error)
+	// SsoReady reports whether the page may offer single sign-on at all.
+	SsoReady() bool
+	// BeginAuthorizeSso parks the (already resolved and validated) request server-side and
+	// returns where to send the browser. (nil, nil) means no connection serves the address.
+	BeginAuthorizeSso(ctx context.Context, email string, p AuthorizeParams, source string) (*AuthorizeSsoBegin, error)
+	// ResumeAuthorizeSso redeems the resume code the callback produced, with the beginning
+	// browser's secret, and returns the re-resolved request and the new sign-in.
+	ResumeAuthorizeSso(ctx context.Context, code, browserSecret string) (*AuthorizeResume, error)
 }
 
 // AuthorizeHandler builds the OAuth 2.1 authorization endpoint (ADR-047 / RFC 6749
@@ -58,6 +68,13 @@ func AuthorizeHandler(svc AuthorizeService) http.Handler {
 		values, err := authorizeValues(w, r)
 		if err != nil {
 			renderAuthorizeError(w, http.StatusBadRequest, "Invalid request", "The request could not be parsed.")
+			return
+		}
+
+		// The way back from a single sign-on carries NO request parameters: the pending
+		// request is read from the server's record, so none of it is trusted from here.
+		if values.Has(authorizeResumeParam) || values.Has("error") {
+			handleAuthorizeSsoReturn(w, r, svc, values)
 			return
 		}
 		p := ParseAuthorizeParams(values)
@@ -90,10 +107,103 @@ func AuthorizeHandler(svc AuthorizeService) http.Handler {
 			handleAuthorizeLogin(w, r, svc, client, p)
 		case "consent":
 			handleAuthorizeConsent(w, r, svc, client, p)
+		case "sso":
+			handleAuthorizeSsoBegin(w, r, svc, p)
 		default:
-			renderAuthorizeLogin(w, p, "")
+			renderAuthorizeLogin(w, p, "", svc.SsoReady())
 		}
 	}), maxAuthorizeBodyBytes)
+}
+
+// handleAuthorizeSsoBegin parks the validated request server-side and sends the browser to
+// the provider, with a cookie that binds this browser to the way back. A POST only, and a
+// request a browser itself marks cross-site is refused: nothing here is secret, but a page
+// elsewhere should not be able to start a sign-in in this browser.
+func handleAuthorizeSsoBegin(w http.ResponseWriter, r *http.Request, svc AuthorizeService, p AuthorizeParams) {
+	if r.Method != http.MethodPost || r.Header.Get("Sec-Fetch-Site") == "cross-site" {
+		renderAuthorizeError(w, http.StatusBadRequest, "Invalid request", "The request could not be processed.")
+		return
+	}
+	begin, err := svc.BeginAuthorizeSso(r.Context(), r.PostFormValue("email"), p, gqlcore.RequestSourceAddr(r))
+	switch {
+	case errors.Is(err, ErrSsoRateLimited):
+		renderAuthorizeLogin(w, p, "Too many attempts. Try again shortly.", svc.SsoReady())
+		return
+	case err != nil || begin == nil:
+		// One answer for "no connection serves that address", "it cannot be used" and a
+		// malformed address, so the page does not say which.
+		renderAuthorizeLogin(w, p, "Single sign-on is not available for that address.", svc.SsoReady())
+		return
+	}
+	http.SetCookie(w, &http.Cookie{
+		Name: AuthorizeBrowserCookie, Value: begin.BrowserSecret, Path: begin.CookiePath,
+		MaxAge: int(SsoStateTTL / time.Second), HttpOnly: true, Secure: begin.Secure, SameSite: http.SameSiteLaxMode,
+	})
+	// The destination is the provider's authorization endpoint from the approved snapshot of
+	// a connection a superuser enabled; nothing in the request chooses it.
+	//
+	// It is a page that moves the browser on, not a 302: this page's CSP pins form-action to
+	// itself, and a browser applies that to the redirects that follow a form submission, so a
+	// 302 to the provider would be blocked. A meta refresh (and a link, for a browser that
+	// ignores it) is navigation, not a form submission.
+	authorizePageHeaders(w)
+	_ = authorizeSsoGoTmpl.Execute(w, map[string]string{
+		"Refresh": "0;url=" + begin.AuthorizationURL, "URL": begin.AuthorizationURL,
+	})
+}
+
+// handleAuthorizeSsoReturn is the page the callback sends the browser back to: either a
+// resume code (render consent for the request the server parked) or a coarse error class.
+// Any other parameter alongside either is refused, whatever it says.
+func handleAuthorizeSsoReturn(w http.ResponseWriter, r *http.Request, svc AuthorizeService, values url.Values) {
+	setNoReferrer(w)
+	if r.Method != http.MethodGet || len(values) != 1 {
+		renderAuthorizeError(w, http.StatusBadRequest, "Invalid request", "The request could not be processed.")
+		return
+	}
+	if values.Has("error") {
+		renderAuthorizeError(w, http.StatusForbidden, "Sign-in failed", ssoReturnMessage(values.Get("error")))
+		return
+	}
+	var secret string
+	if c, err := r.Cookie(AuthorizeBrowserCookie); err == nil {
+		secret = c.Value
+	}
+	// The cookie is not cleared here: the path it was set for is the PUBLIC one (the ingress
+	// strips a prefix this handler never sees), so a clear could miss it. It is worthless once
+	// the resume code is consumed -- the record it matches is gone -- and expires on its own.
+	res, err := svc.ResumeAuthorizeSso(r.Context(), values.Get(authorizeResumeParam), secret)
+	switch {
+	case err == nil:
+		renderAuthorizeConsentFor(w, res.Params, res.Client, res.Identity, res.Email)
+	case errors.Is(err, ErrAuthorizeClientUnknown), errors.Is(err, ErrAuthorizeRedirectUnregistered):
+		renderAuthorizeError(w, http.StatusBadRequest, "Invalid request",
+			"The client or redirect URI is not recognized. Do not proceed.")
+	case errors.Is(err, ErrSsoCodeInvalid):
+		renderAuthorizeError(w, http.StatusBadRequest, "Sign-in expired",
+			"This sign-in link is not valid or has already been used. Start the authorization again.")
+	default:
+		renderAuthorizeError(w, http.StatusForbidden, "Sign-in failed",
+			"The sign-in could not be completed. Start the authorization again.")
+	}
+}
+
+// ssoReturnMessage is the page text for the callback's coarse error classes.
+func ssoReturnMessage(class string) string {
+	switch class {
+	case "link_required":
+		return "Your single sign-on account is not linked to a DeviceChain identity. Ask an administrator to link it, then start the authorization again."
+	case "idp_error":
+		return "The identity provider could not complete the sign-in. Try again shortly."
+	default:
+		return "The sign-in was not accepted. Start the authorization again."
+	}
+}
+
+// setNoReferrer keeps the page's address (which may carry a resume code) out of any Referer.
+func setNoReferrer(w http.ResponseWriter) {
+	w.Header().Set("Referrer-Policy", "no-referrer")
+	w.Header().Set("Cache-Control", "no-store")
 }
 
 // handleAuthorizeLogin authenticates the login POST and renders the consent form on
@@ -107,10 +217,10 @@ func AuthorizeHandler(svc AuthorizeService) http.Handler {
 func handleAuthorizeLogin(w http.ResponseWriter, r *http.Request, svc AuthorizeService, client *iam.OAuthClient, p AuthorizeParams) {
 	ident, err := svc.Login(r.Context(), r.PostFormValue("email"), r.PostFormValue("password"))
 	if err != nil {
-		renderAuthorizeLogin(w, p, authorizeLoginError(err))
+		renderAuthorizeLogin(w, p, authorizeLoginError(err), svc.SsoReady())
 		return
 	}
-	renderAuthorizeConsent(w, p, client, ident)
+	renderAuthorizeConsentFor(w, p, client, ident, "")
 }
 
 // authorizeLoginError is the message the authorize login form shows for a failed login.
@@ -228,11 +338,15 @@ func buildRedirect(redirectURI string, params map[string]string) string {
 type authorizeFormData struct {
 	Params AuthorizeParams
 	Error  string
+	// Sso is whether to offer "Continue with SSO".
+	Sso bool
 }
 
 type authorizeConsentData struct {
-	Params        AuthorizeParams
-	ClientName    string
+	Params     AuthorizeParams
+	ClientName string
+	// SignedInAs is shown for a single sign-on, where nobody typed the address.
+	SignedInAs    string
 	IdentityToken string
 	Memberships   []MembershipInfo
 	Superuser     bool
@@ -271,26 +385,37 @@ func authorizePageHeaders(w http.ResponseWriter) {
 	h.Set("Content-Type", "text/html; charset=utf-8")
 	h.Set("Cache-Control", "no-store")
 	h.Set("Pragma", "no-cache")
+	h.Set("Referrer-Policy", "no-referrer")
 	h.Set("X-Frame-Options", "DENY")
 	h.Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'")
 }
 
-func renderAuthorizeLogin(w http.ResponseWriter, p AuthorizeParams, errMsg string) {
+func renderAuthorizeLogin(w http.ResponseWriter, p AuthorizeParams, errMsg string, sso bool) {
 	authorizePageHeaders(w)
-	_ = authorizeLoginTmpl.Execute(w, authorizeFormData{Params: p, Error: errMsg})
+	_ = authorizeLoginTmpl.Execute(w, authorizeFormData{Params: p, Error: errMsg, Sso: sso})
 }
 
-func renderAuthorizeConsent(w http.ResponseWriter, p AuthorizeParams, client *iam.OAuthClient, ident *IdentityAuth) {
+func renderAuthorizeConsentFor(w http.ResponseWriter, p AuthorizeParams, client *iam.OAuthClient, ident *IdentityAuth, signedInAs string) {
 	name := client.ClientId
 	if client.Name.Valid && client.Name.String != "" {
 		name = client.Name.String
+	}
+	// A tenant that requires single sign-on is listed to a password sign-in only so a client
+	// can explain the refusal; consent would be refused for it, so it is not offered here.
+	// (This page's own single sign-on branch is a separate change.)
+	offered := make([]MembershipInfo, 0, len(ident.Memberships))
+	for _, m := range ident.Memberships {
+		if !m.SsoRequired {
+			offered = append(offered, m)
+		}
 	}
 	authorizePageHeaders(w)
 	_ = authorizeConsentTmpl.Execute(w, authorizeConsentData{
 		Params:        p,
 		ClientName:    name,
+		SignedInAs:    signedInAs,
 		IdentityToken: ident.IdentityToken,
-		Memberships:   ident.Memberships,
+		Memberships:   offered,
 		Superuser:     ident.Superuser,
 		Scopes:        consentScopes(p.Scope),
 	})
@@ -334,21 +459,31 @@ button.secondary{background:#334155}
 
 var authorizeLoginTmpl = template.Must(template.New("login").Parse(hiddenParamsPartial + `
 <!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Sign in — DeviceChain</title>` + pageStyle + `</head>
-<body><form class="card" method="post" action="">
+<body><div class="card">
 <h1>Sign in to DeviceChain</h1>
 {{if .Error}}<div class="err">{{.Error}}</div>{{end}}
+<form method="post" action="">
 {{template "hidden" .Params}}
 <input type="hidden" name="step" value="login">
 <label>Email</label><input type="email" name="email" autocomplete="username" required autofocus>
 <label>Password</label><input type="password" name="password" autocomplete="current-password" required>
 <button type="submit">Continue</button>
-</form></body></html>`))
+</form>
+{{if .Sso}}<hr>
+<form method="post" action="">
+{{template "hidden" .Params}}
+<input type="hidden" name="step" value="sso">
+<label>Work email</label><input type="email" name="email" autocomplete="username" required>
+<button type="submit" class="secondary">Sign in with SSO</button>
+</form>{{end}}
+</div></body></html>`))
 
 var authorizeConsentTmpl = template.Must(template.New("consent").Parse(hiddenParamsPartial + `
 <!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Authorize — DeviceChain</title>` + pageStyle + `</head>
 <body><form class="card" method="post" action="">
 <h1>Authorize {{.ClientName}}</h1>
 <p class="muted">{{.ClientName}} is requesting access to your DeviceChain account.</p>
+{{if .SignedInAs}}<p class="muted">Signed in as {{.SignedInAs}}</p>{{end}}
 {{template "hidden" .Params}}
 <input type="hidden" name="step" value="consent">
 <input type="hidden" name="identity_token" value="{{.IdentityToken}}">
@@ -364,6 +499,11 @@ var authorizeConsentTmpl = template.Must(template.New("consent").Parse(hiddenPar
 <button type="submit" name="action" value="deny" class="secondary">Deny</button>
 </div>
 </form></body></html>`))
+
+var authorizeSsoGoTmpl = template.Must(template.New("ssogo").Parse(`
+<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="refresh" content="{{.Refresh}}"><title>Single sign-on — DeviceChain</title>` + pageStyle + `</head>
+<body><div class="card"><h1>Redirecting to your identity provider</h1>
+<p class="muted">If nothing happens, <a href="{{.URL}}" style="color:#a5b4fc">continue to sign in</a>.</p></div></body></html>`))
 
 var authorizeErrorTmpl = template.Must(template.New("error").Parse(`
 <!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>{{.Title}} — DeviceChain</title>` + pageStyle + `</head>

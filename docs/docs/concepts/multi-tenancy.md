@@ -25,7 +25,7 @@ A fresh instance has no tenants. It seeds only a superuser, who creates the firs
   - the messaging write and subscribe points reject a malformed tenant segment.
 
   As a result, a device cannot publish into or subscribe to another tenant's subjects.
-- **Auth.** JWTs carry tenant claims that resolve the request's tenant. Services validate them locally, without a network call per request.
+- **Auth.** JWTs carry tenant claims that resolve the request's tenant. Services validate them locally, without a network call per request. People can sign in with a password or through their organization's identity provider, and a tenant can require the latter: see [Single sign-on](./single-sign-on.md).
 
 ## Deleting a tenant
 

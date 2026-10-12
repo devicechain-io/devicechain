@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -235,8 +236,39 @@ func (m *Manager) admitPasswordSession(ctx context.Context, id *iam.Identity, te
 		m.recordAuthLabeled(ctx, rdb.AuditOpSsoEnforcementBypassed, id.Email, tenant, "")
 		return nil
 	}
-	return errTenantAccessDenied
+	return errSsoRequired
 }
+
+// errSsoRequired is admitPasswordSession's refusal. It IS an errTenantAccessDenied, so every
+// grant point that does not name it (OAuth redemption and refresh, the authorize step)
+// treats it exactly as before; SelectTenant and Refresh turn it into ErrSsoRequired.
+var errSsoRequired = fmt.Errorf("%w: the tenant requires single sign-on", errTenantAccessDenied)
+
+// CodeSsoRequired is the GraphQL extension code of ErrSsoRequired.
+const CodeSsoRequired = "SSO_REQUIRED"
+
+// SsoRequiredError is the typed refusal of a password session in a tenant that requires
+// single sign-on, so a client can send the person to their identity provider instead of
+// reporting a wrong password or an expired session.
+//
+// It is only ever returned to a caller that has ALREADY proved who it is (a valid identity
+// or refresh token) and is a member of the tenant: SelectTenant and Refresh refuse a
+// non-member before admitTenant is reached. So it tells a member something about their own
+// tenant, which the membership list already shows (MembershipInfo.SsoRequired), and never
+// tells an unauthenticated caller or an outsider whether a tenant enforces single sign-on.
+type SsoRequiredError struct{}
+
+func (SsoRequiredError) Error() string {
+	return "this tenant requires single sign-on; sign in through your identity provider"
+}
+
+// Extensions makes the refusal machine-readable: graphql-go copies it onto `extensions`.
+func (SsoRequiredError) Extensions() map[string]any {
+	return map[string]any{"code": CodeSsoRequired}
+}
+
+// ErrSsoRequired is the one SsoRequiredError value (errors.Is matches it).
+var ErrSsoRequired error = SsoRequiredError{}
 
 // admitSsoSession applies the rules that bind a single sign-on whatever tenant it is headed
 // for, and returns the connection it came through. It is shared by admitTenant and the
@@ -282,11 +314,11 @@ func (m *Manager) admitSsoSession(ctx context.Context, rec *sessionRecord, id *i
 }
 
 // sessionMemberships is the membership list a sign-in is shown: for a password sign-in,
-// every membership except those in a tenant that requires single sign-on (a superuser sees
-// all), and for a single sign-on only the tenants admitTenant would let it enter (none
-// through an instance connection, whose operator enters a tenant by breaking glass rather
-// than by membership). Listing a tenant the session cannot enter would offer a choice that
-// fails.
+// every membership, with those in a tenant that requires single sign-on marked SsoRequired
+// (never for a superuser, who is let in), so the person is told to use their identity
+// provider rather than finding the tenant gone; and for a single sign-on only the tenants
+// admitTenant would let it enter (none through an instance connection, whose operator
+// enters a tenant by breaking glass rather than by membership).
 func (m *Manager) sessionMemberships(ctx context.Context, sid auth.SessionID, id *iam.Identity) ([]MembershipInfo, error) {
 	rec, err := m.loadSession(sid, id.Email)
 	if err != nil {
@@ -307,11 +339,11 @@ func (m *Manager) sessionMemberships(ctx context.Context, sid auth.SessionID, id
 		if err != nil {
 			return nil, err
 		}
-		out := []MembershipInfo{}
+		out := make([]MembershipInfo, 0, len(id.Memberships))
 		for _, mem := range id.Memberships {
-			if !enforced[mem.TenantId] {
-				out = append(out, MembershipInfo{Tenant: mem.TenantId, Roles: roleTokens(mem.TenantRoles)})
-			}
+			out = append(out, MembershipInfo{
+				Tenant: mem.TenantId, Roles: roleTokens(mem.TenantRoles), SsoRequired: enforced[mem.TenantId],
+			})
 		}
 		return out, nil
 	}

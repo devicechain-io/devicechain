@@ -3733,6 +3733,13 @@ it, so update artifacts and any object whose reference was lost are erased with 
   erasure fails and is retried on every pass, so the erasure does not complete. Grant it before
   you upgrade. The filesystem backend needs nothing.
 
+#### Single sign-on is new, and needs nothing from you {#next-upgrade-sso}
+
+People can now sign in through an external OpenID Connect identity provider, and a tenant can require it. Nothing is on until a superuser creates a connection, so an upgraded instance behaves as before. There is nothing to migrate and password sign-in keeps working. The one-time re-sign-in that [server-side sign-out](#next-upgrade-server-side-logout) causes is already described.
+
+- **Setting up a provider** is described in [Configure single sign-on](../guides/configuring-sso.md), and how it behaves in [Single sign-on](../concepts/single-sign-on.md).
+- **Ending a session does not recall tokens already issued.** After a sign-out, a revoke, an unlink or a disabled connection, the access and identity tokens already issued keep working until they expire, 15 minutes by default.
+
 #### Single sign-on needs the instance's public address, so the chart now derives it {#next-upgrade-sso-issuer}
 
 Signing in through an external OpenID Connect identity provider, and the OAuth authorization server
