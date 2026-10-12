@@ -599,6 +599,19 @@ func (m *Manager) endSignIn(ctx context.Context, token string) (*sessionRecord, 
 			log.Warn().Err(err).Msg("Logout ended the session but could not burn the presented refresh token.")
 		}
 	}
+	// The sign-out is filed under the token's tenant only if the token belongs to that
+	// tenant's current incarnation. A refresh token issued for an earlier tenant at the same
+	// token (deleted, then re-created) has already ended its sign-in above, as logout must,
+	// but filing it would put the earlier tenant's event in the new tenant's journal. An
+	// identity token names no tenant and is filed as before.
+	if claims.TokenType == auth.TokenTypeRefresh {
+		if err := m.admitRefreshTenant(ctx, claims); err != nil {
+			if !errors.Is(err, errTenantAccessDenied) {
+				log.Warn().Err(err).Msg("Logout ended the sign-in but could not place its token's tenant; the sign-out is not audited.")
+			}
+			return ended, nil
+		}
+	}
 	m.recordAuth(ctx, rdb.AuditOpLogout, claims.Username, claims.Tenant)
 	return ended, nil
 }

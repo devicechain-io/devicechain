@@ -190,6 +190,28 @@ func TestLogoutIsAudited(t *testing.T) {
 	require.Equal(t, int64(1), e.auditCount(t, rdb.AuditOpLogout), "a refused logout must not be audited as a sign-out")
 }
 
+// A refresh token issued for a tenant that has since been deleted and re-created at the same
+// token still ends its sign-in, but the sign-out is not filed under the new tenant: the token
+// belongs to the earlier tenant, and the new one's journal must hold only its own events.
+func TestLogoutWithAPredecessorTenantsTokenIsNotAuditedUnderTheSuccessor(t *testing.T) {
+	e := newSessionEnv(t)
+	ctx := context.Background()
+	e.createMember(t, "pat@example.com", "pw-1")
+	_, pair := e.login(t, "pat@example.com", "pw-1")
+	at, jti := e.issuedAt(t, pair.RefreshToken)
+	e.recreateTenant(t, "acme", at, "pat@example.com")
+
+	require.NoError(t, e.m.Logout(ctx, pair.RefreshToken), "logout must still end the session")
+	e.requireBurned(t, jti)
+	require.Equal(t, int64(0), e.auditCount(t, rdb.AuditOpLogout),
+		"a predecessor tenant's sign-out was audited under the successor")
+
+	// Control: a sign-out of a token issued for the current tenant is audited.
+	_, fresh := e.login(t, "pat@example.com", "pw-1")
+	require.NoError(t, e.m.Logout(ctx, fresh.RefreshToken))
+	require.Equal(t, int64(1), e.auditCount(t, rdb.AuditOpLogout))
+}
+
 // faultyKV fails the operations a test names on keys with the given prefix and passes
 // everything else to the real bucket.
 type faultyKV struct {
