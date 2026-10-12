@@ -10,10 +10,14 @@
 import { describe, expect, it } from 'vitest';
 import NGINX from '../../../../deploy/nginx.conf?raw';
 
+/** s with every regular-expression metacharacter (backslash included) escaped. */
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&');
+}
+
 /** The body of the exact-match location for path, or null when there is none. */
 function exactLocation(path: string): string | null {
-  const escaped = path.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&');
-  const m = new RegExp(`location\\s*=\\s*${escaped}\\s*\\{([^}]*)\\}`).exec(NGINX);
+  const m = new RegExp(`location\\s*=\\s*${escapeRegExp(path)}\\s*\\{([^}]*)\\}`).exec(NGINX);
   return m ? m[1] : null;
 }
 
@@ -27,6 +31,6 @@ describe('the single sign-on return pages are served with no Referer and no cach
     expect(body).toMatch(/add_header\s+Referrer-Policy\s+"no-referrer"\s+always\s*;/);
     expect(body).toMatch(/add_header\s+Cache-Control\s+"no-store"\s+always\s*;/);
     // Served from this location (so its headers apply), as the right app's index.
-    expect(body).toMatch(new RegExp(`try_files\\s+${index.replace(/[./]/g, '\\$&')}\\s+=404\\s*;`));
+    expect(body).toMatch(new RegExp(`try_files\\s+${escapeRegExp(index)}\\s+=404\\s*;`));
   });
 });

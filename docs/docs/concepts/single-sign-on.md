@@ -56,6 +56,8 @@ The console and the dashboard app show **Sign in with SSO** beside the password 
 4. DeviceChain checks the answer: the state and the connection match, the token's signature, issuer, audience, expiry and nonce, the connection's required claims and methods, and the identity rules below.
 5. It hands the browser a one-minute, single-use code. The browser redeems it with the secret from step 1, so only the browser that began the sign-in can finish it, and receives the same kind of identity token a password sign-in gives. The person then chooses a tenant as usual.
 
+The page that receives the code (`/login/sso/complete` for the console, `/dash/sso/complete` for the dashboard app) takes it out of the address bar at once and is served with `Referrer-Policy: no-referrer`, so nothing it loads can carry the address. Once the sign-in is finished, or the person goes back to the sign-in form, the app is loaded afresh rather than continuing on that page, so the rest of the session sends a normal `Referer`; the default OpenStreetMap basemap requires one. If your own proxy sits in front of the console, scope any Referer-stripping header to those two exact paths.
+
 When a sign-in is refused, the person sees a coarse message ("Single sign-on did not allow this account in", "your account is not linked yet") and never which check failed; the precise outcome is counted in the `devicechain_usermanagement_sso_logins_total` metric and refusals are written to the audit journal with the address the provider asserted.
 
 ## Identities, linking and provisioning {#linking}

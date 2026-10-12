@@ -13,8 +13,9 @@
 // returns to /dash/sso/complete?code=... and the code, being one-time, is handled in this
 // order: captureSsoReturn() reads it and strips the query from the address bar before
 // anything renders, and tells the page to send no Referer; runSsoCompletion() redeems it
-// once, shared across React StrictMode's double mount. The code is never logged or stored,
-// and the tokens it yields live in memory only (App.tsx).
+// once, shared across React StrictMode's double mount; the page is then left with a full
+// navigation (below). The code is never logged or stored, and the tokens it yields live in
+// memory only (App.tsx), save for the one hop out of the return page.
 
 import { gql } from '@devicechain/client';
 
@@ -144,8 +145,82 @@ export function runSsoCompletion(): Promise<SsoOutcome> {
   return completion;
 }
 
+// ── Leaving the return page ─────────────────────────────────────────────────
+// The return page forbids the Referer (nginx's header and the meta tag above), and a
+// document keeps that policy for as long as it lives. /dash is a single-page app, so
+// staying in this document after the sign-in would carry the policy into every dashboard
+// it renders next — and the default basemap's tiles must be fetched WITH a Referer. So the
+// page is left with a full navigation and /dash/ loads as a fresh document.
+//
+// That costs this viewer its session, which lives in memory only. The session therefore
+// crosses the one hop in sessionStorage: written immediately before the navigation, taken
+// (read AND removed) by the next document's first render, and never written anywhere else.
+// sessionStorage is this tab's alone and dies with it; a hop that never lands leaves the
+// pair there until the tab closes or /dash next loads in it, whichever is first. The
+// alternative of redeeming in the next document instead would put the one-time code and
+// its verifier in the same place for the same hop, which is no smaller, and would spend the
+// code outside the page built to handle its failures.
+
+const HANDOFF_KEY = 'dc-dash-sso-session';
+
+/** The tenant session the return page hands to the next document. */
+export interface SsoSession {
+  accessToken: string;
+  refreshToken: string;
+}
+
+/**
+ * Hands the session to the next document and leaves the return page for /dash/ with a
+ * full navigation. Returns false, having navigated nowhere, when the session could not be
+ * written: the caller must then treat the sign-in as failed rather than stay signed in on
+ * this document.
+ */
+export function leaveWithSession(session: SsoSession): boolean {
+  try {
+    window.sessionStorage.setItem(HANDOFF_KEY, JSON.stringify(session));
+  } catch {
+    return false;
+  }
+  leaveSsoReturn();
+  return true;
+}
+
+/** Leaves the return page for /dash/ with a full navigation, never a history push. */
+export function leaveSsoReturn(): void {
+  window.location.replace('/dash/');
+}
+
+let handedOver: SsoSession | null | undefined;
+
+/**
+ * Takes the session a return page handed over, once per page: the first call reads and
+ * removes it, later calls (React StrictMode renders twice) get the same answer.
+ */
+export function takeSsoSession(): SsoSession | null {
+  if (handedOver !== undefined) return handedOver;
+  handedOver = null;
+  try {
+    const raw = window.sessionStorage.getItem(HANDOFF_KEY);
+    window.sessionStorage.removeItem(HANDOFF_KEY);
+    if (!raw) return null;
+    const s = JSON.parse(raw) as Partial<SsoSession>;
+    if (typeof s.accessToken === 'string' && s.accessToken !== '' && typeof s.refreshToken === 'string') {
+      handedOver = { accessToken: s.accessToken, refreshToken: s.refreshToken };
+    }
+  } catch {
+    // storage unavailable or the value is not ours: no session, so the sign-in form shows
+  }
+  return handedOver;
+}
+
+/** Drops the handed-over session from memory too (sign-out). */
+export function forgetSsoSession(): void {
+  handedOver = null;
+}
+
 /** Test seam: forget the page-lifetime state. */
 export function resetSsoStateForTests(): void {
   captured = null;
   completion = null;
+  handedOver = undefined;
 }

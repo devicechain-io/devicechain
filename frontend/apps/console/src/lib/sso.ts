@@ -17,7 +17,10 @@
 //      header) so nothing it loads can carry the address;
 //   3. runSsoCompletion() redeems it exactly once. The outcome is held for the page's
 //      lifetime, so React StrictMode's second mount shares the first mount's redemption
-//      instead of spending the code twice.
+//      instead of spending the code twice;
+//   4. the page is left with leaveSsoCompletion(), a FULL navigation, so the no-Referer
+//      policy dies with this document instead of following the person into the console,
+//      where the default basemap's tiles must be fetched with a Referer.
 // The code is never logged and never stored.
 
 import type { IdentityAuth } from '@/lib/api/user-management';
@@ -185,6 +188,19 @@ export function runSsoCompletion(
     }
   })();
   return completion;
+}
+
+/**
+ * Leaves the completion page for dest with a FULL navigation, never the router. The page
+ * forbids the Referer (its response header and the meta tag above), and a document keeps
+ * that policy for as long as it lives: a client-side hop would carry it into every console
+ * page rendered next, maps included. So the completion document is discarded and dest loads
+ * as a fresh one. Nothing is lost on the way: completeSso and selectTenant have already
+ * stored the session in localStorage, the way a password sign-in does. dest must be a
+ * same-origin path — a sanitized returnTo, or a fixed console path.
+ */
+export function leaveSsoCompletion(dest: string): void {
+  window.location.replace(dest);
 }
 
 /** Test seam: forget the page-lifetime state. */

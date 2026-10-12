@@ -48,11 +48,15 @@ import { loadDashboard, loadPublishedDashboard, type Loaded } from './load';
 import { MAP_RUNTIME } from './map-runtime';
 import { LOGIN, type Membership, SELECT_TENANT, TENANT_BASEMAP } from './queries';
 import { endServerSession } from './signOut';
-import { SSO_COMPLETE_PATH, runSsoCompletion, startSso } from './sso';
-
-// Where /dash lives; the address bar is returned here once a single sign-on return has
-// been consumed, so a reload does not try to redeem anything.
-const DASH_HOME = '/dash/';
+import {
+  SSO_COMPLETE_PATH,
+  forgetSsoSession,
+  leaveSsoReturn,
+  leaveWithSession,
+  runSsoCompletion,
+  startSso,
+  takeSsoSession,
+} from './sso';
 
 // The provider-side failure classes the server names on a refused return.
 const SSO_PROVIDER_ERROR_KEYS: Record<string, string> = {
@@ -65,12 +69,15 @@ const SSO_PROVIDER_ERROR_KEYS: Record<string, string> = {
 export default function App() {
   // The tenant access token, once signed in. Kept in state (to drive the UI) AND a
   // ref (so the token getter, registered once, always reads the latest value).
-  const [token, setToken] = useState<string | null>(null);
+  // A single sign-on hands its session over from the return page (sso.ts, leaveWithSession);
+  // otherwise both start empty.
+  const [handedOver] = useState(takeSsoSession);
+  const [token, setToken] = useState<string | null>(handedOver?.accessToken ?? null);
   const tokenRef = useRef<string | null>(null);
   tokenRef.current = token;
   // The refresh token the server issued with it. This viewer never refreshes; it holds the
   // token only to hand it back to logout, so signing out ends the session on the server.
-  const refreshTokenRef = useRef<string | null>(null);
+  const refreshTokenRef = useRef<string | null>(handedOver?.refreshToken ?? null);
   // Set when the last sign-out could not be confirmed by the server, so the sign-in screen
   // can say so rather than pretend the session is closed.
   const [signOutFailed, setSignOutFailed] = useState(false);
@@ -89,6 +96,7 @@ export default function App() {
   const signOut = () => {
     const refreshToken = refreshTokenRef.current;
     refreshTokenRef.current = null;
+    forgetSsoSession();
     // Local state clears at once so the viewer is out whatever the network does; the
     // server call runs behind it and reports a failure on the sign-in screen.
     setToken(null);
@@ -103,28 +111,9 @@ export default function App() {
   };
 
   // The identity provider's return lands on /dash/sso/complete. The query has already been
-  // stripped (main.tsx); once the return is consumed the address goes back to /dash/.
-  const [ssoReturn, setSsoReturn] = useState(() => window.location.pathname === SSO_COMPLETE_PATH);
-  const leaveSsoReturn = () => {
-    try {
-      window.history.replaceState(null, '', DASH_HOME);
-    } catch {
-      // history unavailable: the page still works
-    }
-    setSsoReturn(false);
-  };
-
-  if (!token && ssoReturn) {
-    return (
-      <SsoComplete
-        onAuthed={(accessToken, refreshToken) => {
-          leaveSsoReturn();
-          onAuthed(accessToken, refreshToken);
-        }}
-        onBack={leaveSsoReturn}
-      />
-    );
-  }
+  // stripped (main.tsx). This document is never signed in: the return page only ever leaves
+  // by a full navigation (sso.ts explains why), so it renders nothing else.
+  if (window.location.pathname === SSO_COMPLETE_PATH) return <SsoComplete />;
   if (!token) return <SignIn onAuthed={onAuthed} signOutFailed={signOutFailed} />; // Step 1
   if (!loaded) return <Load onRender={setLoaded} onSignOut={signOut} />; // Step 2
   // The viewer's authorities gate action controls (alarm ack/clear); the server enforces
@@ -298,15 +287,10 @@ function SignIn({
 // The identity provider's callback lands here with a one-time code (already taken out of
 // the address bar by main.tsx). runSsoCompletion redeems it once, even under StrictMode's
 // double mount. A failure shows its reason and a way back to the sign-in form; nothing
-// here retries by itself.
+// here retries by itself. Every way out — signed in, or back to the form — is a full
+// navigation to /dash/, never a client-side hop (sso.ts, leaveWithSession).
 
-function SsoComplete({
-  onAuthed,
-  onBack,
-}: {
-  onAuthed: (accessToken: string, refreshToken: string) => void;
-  onBack: () => void;
-}) {
+function SsoComplete() {
   const { t } = useTranslation();
   const [identityToken, setIdentityToken] = useState<string | null>(null);
   const [memberships, setMemberships] = useState<Membership[]>([]);
@@ -317,7 +301,15 @@ function SsoComplete({
     setBusy(true);
     setError(null);
     return gql('user-management', SELECT_TENANT, { identityToken: idToken, tenant }, { anonymous: true })
-      .then((r) => onAuthed(r.selectTenant.accessToken, r.selectTenant.refreshToken))
+      .then((r) => {
+        const session = { accessToken: r.selectTenant.accessToken, refreshToken: r.selectTenant.refreshToken };
+        if (leaveWithSession(session)) return; // the browser is on its way to /dash/
+        // The session could not cross to the next document. Staying signed in HERE is the
+        // one thing this page must not do, so end it on the server and say the sign-in failed.
+        void endServerSession(session.refreshToken);
+        setError(t('signIn:ssoErrorRedeemFailed'));
+        setBusy(false);
+      })
       .catch((err: unknown) => {
         setError(t(signInErrorKey(err, 'signIn:enterTenantFailed')));
         setBusy(false);
@@ -385,7 +377,7 @@ function SsoComplete({
             ))}
           </div>
         )}
-        {error && <HeaderButton onClick={onBack}>{t('signIn:ssoBack')}</HeaderButton>}
+        {error && <HeaderButton onClick={leaveSsoReturn}>{t('signIn:ssoBack')}</HeaderButton>}
         <LocaleSwitcher />
       </Card>
     </Centered>

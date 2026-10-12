@@ -25,6 +25,7 @@ import { SSO_COMPLETE_PATH, resetSsoStateForTests } from './sso';
 
 const t = (key: string) => i18n.t(key);
 const PENDING = 'dc-dash-sso-verifier';
+const HANDOFF = 'dc-dash-sso-session';
 
 function landOn(path: string) {
   window.history.replaceState(null, '', path);
@@ -160,7 +161,29 @@ describe('beginning a single sign-on', () => {
 });
 
 describe('the return to /dash/sso/complete', () => {
-  beforeEach(() => landOn(`${SSO_COMPLETE_PATH}?code=ONETIME`));
+  // The return page forbids the Referer for its whole life, so it must leave by a full
+  // navigation (location.replace) rather than render the viewer in place. replace cannot
+  // be spied on in jsdom, so location is swapped for a view of the real one with replace
+  // faked; everything else still reads the real address.
+  const realLocation = window.location;
+  const replace = vi.fn();
+  beforeEach(() => {
+    replace.mockReset();
+    landOn(`${SSO_COMPLETE_PATH}?code=ONETIME`);
+    Object.defineProperty(window, 'location', {
+      configurable: true,
+      value: new Proxy({} as Location, {
+        get: (_target, key) => {
+          if (key === 'replace') return replace;
+          const v: unknown = Reflect.get(realLocation, key, realLocation);
+          return typeof v === 'function' ? v.bind(realLocation) : v;
+        },
+      }),
+    });
+  });
+  afterEach(() => {
+    Object.defineProperty(window, 'location', { configurable: true, value: realLocation });
+  });
 
   function renderStrict() {
     render(
@@ -170,7 +193,7 @@ describe('the return to /dash/sso/complete', () => {
     );
   }
 
-  it('strips the code, sends no Referer, redeems once under StrictMode, and signs in', async () => {
+  it('strips the code, sends no Referer, redeems once under StrictMode, and leaves by a full navigation', async () => {
     window.sessionStorage.setItem(PENDING, 'VERIFIER');
     serve({
       complete: () => ({
@@ -184,13 +207,31 @@ describe('the return to /dash/sso/complete', () => {
     expect(document.head.querySelector('meta[name="referrer"]')?.getAttribute('content')).toBe(
       'no-referrer',
     );
-    // Past the sign-in screens: the address is back at /dash/ once the return is consumed.
-    await waitFor(() => expect(window.location.pathname).toBe('/dash/'));
+    // Leaves for /dash/ as a fresh document, once, with the session handed over for the hop.
+    await waitFor(() => expect(replace).toHaveBeenCalledWith('/dash/'));
+    expect(replace).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(window.sessionStorage.getItem(HANDOFF) ?? 'null')).toEqual({
+      accessToken: 'a.b.c',
+      refreshToken: 'r',
+    });
+    // Not signed in HERE: this document never renders the viewer (or its maps).
+    expect(screen.queryByRole('button', { name: t('common:signOut') })).toBeNull();
+    expect(window.location.pathname).toBe(SSO_COMPLETE_PATH);
     const completes = h.gql.mock.calls.filter((c) => c[1] === COMPLETE_SSO);
     expect(completes).toHaveLength(1);
     expect(completes[0][2]).toEqual({ code: 'ONETIME', codeVerifier: 'VERIFIER' });
     expect(h.gql.mock.calls.filter((c) => c[1] === SELECT_TENANT)).toHaveLength(1);
     expect(window.sessionStorage.getItem(PENDING)).toBeNull();
+  });
+
+  it('the next document takes the handed-over session once, and is signed in', async () => {
+    window.sessionStorage.setItem(HANDOFF, JSON.stringify({ accessToken: 'a.b.c', refreshToken: 'r' }));
+    landOn('/dash/');
+    serve({});
+    renderStrict();
+    expect(await screen.findByRole('button', { name: t('common:signOut') })).toBeTruthy();
+    expect(window.sessionStorage.getItem(HANDOFF)).toBeNull();
+    expect(replace).not.toHaveBeenCalled();
   });
 
   it('shows an error and a way back when the redeem fails, without retrying', async () => {
@@ -203,9 +244,13 @@ describe('the return to /dash/sso/complete', () => {
     renderStrict();
     await screen.findByText(t('signIn:ssoErrorRedeemFailed'));
     expect(h.gql.mock.calls.filter((c) => c[1] === COMPLETE_SSO)).toHaveLength(1);
+    expect(replace).not.toHaveBeenCalled();
+    // The way back is a full navigation too, not the form rendered in this document.
     fireEvent.click(screen.getByRole('button', { name: t('signIn:ssoBack') }));
-    await screen.findByLabelText(t('signIn:passwordLabel'));
+    expect(replace).toHaveBeenCalledWith('/dash/');
+    expect(screen.queryByLabelText(t('signIn:passwordLabel'))).toBeNull();
     expect(h.gql.mock.calls.filter((c) => c[1] === COMPLETE_SSO)).toHaveLength(1);
+    expect(window.sessionStorage.getItem(HANDOFF)).toBeNull();
   });
 
   it('names a missing verifier and never redeems', async () => {

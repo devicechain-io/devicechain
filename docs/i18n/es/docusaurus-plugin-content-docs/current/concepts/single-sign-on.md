@@ -56,6 +56,8 @@ La consola y la aplicación de paneles muestran **Sign in with SSO** junto al fo
 4. DeviceChain comprueba la respuesta: que el estado y la conexión coincidan, la firma, el emisor, la audiencia, la caducidad y el nonce del token, las afirmaciones y métodos que exige la conexión, y las reglas de identidad que siguen.
 5. Entrega al navegador un código de un minuto y de un solo uso. El navegador lo canjea con el secreto del paso 1, así que solo el navegador que empezó el inicio de sesión puede terminarlo, y recibe el mismo tipo de token de identidad que da un inicio de sesión con contraseña. Después la persona elige un inquilino como de costumbre.
 
+La página que recibe el código (`/login/sso/complete` para la consola, `/dash/sso/complete` para la aplicación de dashboards) lo quita de la barra de direcciones de inmediato y se sirve con `Referrer-Policy: no-referrer`, así que nada de lo que carga puede llevar la dirección. Al terminar el inicio de sesión, o si la persona vuelve al formulario de inicio de sesión, la aplicación se carga de nuevo en lugar de seguir en esa página, de modo que el resto de la sesión envía un `Referer` normal; el mapa base predeterminado de OpenStreetMap lo exige. Si tu propio proxy está delante de la consola, limita cualquier cabecera que elimine el Referer a esas dos rutas exactas.
+
 Cuando se rechaza un inicio de sesión, la persona ve un mensaje genérico ("Single sign-on did not allow this account in", "your account is not linked yet") y nunca qué comprobación falló; el resultado exacto se cuenta en la métrica `devicechain_usermanagement_sso_logins_total` y los rechazos se escriben en el diario de auditoría con la dirección que afirmó el proveedor.
 
 ## Identidades, vínculos y aprovisionamiento {#linking}

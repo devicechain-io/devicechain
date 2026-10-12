@@ -7,7 +7,7 @@
 
 import '@/i18n/config';
 import { GraphQLRequestError } from '@devicechain/client';
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { StrictMode } from 'react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -19,8 +19,10 @@ import LoginSsoCompletePage from './LoginSsoComplete';
 const completeSso = vi.fn();
 const selectTenant = vi.fn();
 
+const auth = vi.hoisted(() => ({ isAuthenticated: false }));
+
 vi.mock('@/auth/AuthProvider', () => ({
-  useAuth: () => ({ isAuthenticated: false, completeSso, selectTenant }),
+  useAuth: () => ({ isAuthenticated: auth.isAuthenticated, completeSso, selectTenant }),
 }));
 
 // What the address bar held while the page's first child rendered. Effects run AFTER the
@@ -40,38 +42,68 @@ function seedPending(returnTo = '/alarms') {
   window.sessionStorage.setItem('dc-sso-pending', JSON.stringify({ verifier: 'VERIFIER', returnTo }));
 }
 
+// Every route the page could reach through the ROUTER renders a marker, so a client-side hop
+// shows up as one: the page must leave by a full navigation (location.replace) instead,
+// because this document forbids the Referer for its whole life and the console's maps need it.
 function renderPage() {
   render(
     <StrictMode>
       <MemoryRouter initialEntries={['/login/sso/complete']}>
         <Routes>
           <Route path="/login/sso/complete" element={<LoginSsoCompletePage />} />
-          <Route path="/login" element={<div>login screen</div>} />
-          <Route path="/admin" element={<div>admin home</div>} />
-          <Route path="/alarms" element={<div>alarms page</div>} />
+          <Route path="/" element={<div>routed: home</div>} />
+          <Route path="/login" element={<div>routed: login screen</div>} />
+          <Route path="/admin" element={<div>routed: admin home</div>} />
+          <Route path="/alarms" element={<div>routed: alarms page</div>} />
         </Routes>
       </MemoryRouter>
     </StrictMode>,
   );
 }
 
+/** Nothing reached through the router: the completion page is still the one rendered. */
+function expectNoRouterHop() {
+  expect(screen.queryByText(/^routed:/)).toBeNull();
+}
+
+// location.replace cannot be spied on in place (jsdom makes it non-configurable), so the
+// whole location is swapped for a view of the real one with replace faked. Everything
+// else — search, pathname, href after history.replaceState — still reads the real thing.
+const realLocation = window.location;
+const replace = vi.fn();
+
 beforeEach(async () => {
   completeSso.mockReset();
   selectTenant.mockReset();
+  replace.mockReset();
   resetSsoStateForTests();
   seenAtRender.length = 0;
   window.sessionStorage.clear();
   document.head.querySelectorAll('meta[name="referrer"]').forEach((m) => m.remove());
   window.history.replaceState(null, '', '/login/sso/complete?code=ONETIME');
+  Object.defineProperty(window, 'location', {
+    configurable: true,
+    // An empty target: a Proxy of the real Location may not answer differently for its
+    // non-configurable replace.
+    value: new Proxy({} as Location, {
+      get: (_target, key) => {
+        if (key === 'replace') return replace;
+        const v: unknown = Reflect.get(realLocation, key, realLocation);
+        return typeof v === 'function' ? v.bind(realLocation) : v;
+      },
+    }),
+  });
+  auth.isAuthenticated = false;
   await i18n.changeLanguage('en');
 });
 afterEach(() => {
   cleanup();
+  Object.defineProperty(window, 'location', { configurable: true, value: realLocation });
   window.history.replaceState(null, '', '/');
 });
 
 describe('LoginSsoCompletePage', () => {
-  it('strips the code, sends no Referer, redeems once under StrictMode, and routes to returnTo', async () => {
+  it('strips the code, sends no Referer, redeems once under StrictMode, and leaves for returnTo by a full navigation', async () => {
     seedPending('/alarms');
     completeSso.mockResolvedValue({
       identityToken: 'id',
@@ -88,20 +120,35 @@ describe('LoginSsoCompletePage', () => {
       'no-referrer',
     );
 
-    expect(await screen.findByText('alarms page')).toBeTruthy();
+    await waitFor(() => expect(replace).toHaveBeenCalledWith('/alarms'));
+    expect(replace).toHaveBeenCalledTimes(1);
+    expectNoRouterHop();
     expect(seenAtRender.length).toBeGreaterThan(0);
     expect(seenAtRender.filter((href) => href.includes('ONETIME'))).toEqual([]);
     expect(completeSso).toHaveBeenCalledTimes(1);
     expect(completeSso).toHaveBeenCalledWith('ONETIME', 'VERIFIER');
     expect(selectTenant).toHaveBeenCalledWith('id', 'acme');
+    // The tenant session was stored (selectTenant) BEFORE the page was thrown away.
+    expect(selectTenant.mock.invocationCallOrder[0]).toBeLessThan(replace.mock.invocationCallOrder[0]);
   });
 
-  it('sends a superuser to the admin console', async () => {
+  it('sends a superuser to the admin console by a full navigation', async () => {
     seedPending();
     completeSso.mockResolvedValue({ identityToken: 'id', superuser: true, memberships: [] });
     renderPage();
-    expect(await screen.findByText('admin home')).toBeTruthy();
+    await waitFor(() => expect(replace).toHaveBeenCalledWith('/admin'));
+    expectNoRouterHop();
     expect(selectTenant).not.toHaveBeenCalled();
+  });
+
+  it('sends someone already signed in home by a full navigation, without spending the code', async () => {
+    seedPending();
+    auth.isAuthenticated = true;
+    renderPage();
+    await waitFor(() => expect(replace).toHaveBeenCalledWith('/'));
+    expect(replace).toHaveBeenCalledTimes(1);
+    expectNoRouterHop();
+    expect(completeSso).not.toHaveBeenCalled();
   });
 
   it('offers a choice when the identity has several tenants', async () => {
@@ -118,7 +165,8 @@ describe('LoginSsoCompletePage', () => {
     renderPage();
     (await screen.findByRole('button', { name: 'globex' })).click();
     await waitFor(() => expect(selectTenant).toHaveBeenCalledWith('id', 'globex'));
-    expect(await screen.findByText('alarms page')).toBeTruthy();
+    await waitFor(() => expect(replace).toHaveBeenCalledWith('/alarms'));
+    expectNoRouterHop();
   });
 
   it('shows an error and a way back when the redeem is refused, and does not retry', async () => {
@@ -128,9 +176,15 @@ describe('LoginSsoCompletePage', () => {
     );
     renderPage();
     expect(await screen.findByText(t('login:ssoErrorRedeemFailed'))).toBeTruthy();
-    expect(screen.getByRole('link', { name: t('login:ssoBackToSignIn') })).toBeTruthy();
     expect(completeSso).toHaveBeenCalledTimes(1);
     expect(selectTenant).not.toHaveBeenCalled();
+    // The failure stays on screen (nothing navigates by itself)...
+    expect(replace).not.toHaveBeenCalled();
+    // ...and the way back is a full navigation too, not the router.
+    fireEvent.click(screen.getByRole('button', { name: t('login:ssoBackToSignIn') }));
+    expect(replace).toHaveBeenCalledWith('/login');
+    expectNoRouterHop();
+    expect(completeSso).toHaveBeenCalledTimes(1);
   });
 
   it('reports an unreachable server as that, not as a spent code', async () => {
@@ -164,5 +218,6 @@ describe('LoginSsoCompletePage', () => {
     selectTenant.mockRejectedValue(new GraphQLRequestError('invalid credentials', 200, [{ message: 'x' }]));
     renderPage();
     expect(await screen.findByText(t('login:enterTenantFailed'))).toBeTruthy();
+    expect(replace).not.toHaveBeenCalled();
   });
 });

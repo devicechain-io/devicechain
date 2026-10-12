@@ -1,8 +1,7 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
-import { useEffect, useState } from 'react';
-import { Link, Navigate, useNavigate } from 'react-router-dom';
+import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useAuth } from '@/auth/AuthProvider';
 import { Button } from '@/components/ui/button';
@@ -10,7 +9,7 @@ import { Logo } from '@/components/brand/Logo';
 import { ErrorBanner } from '@/components/ui/error-banner';
 import { LoadingState } from '@/components/ui/loading-state';
 import { signInErrorKey } from '@/i18n/signInError';
-import { captureSsoReturn, runSsoCompletion } from '@/lib/sso';
+import { captureSsoReturn, leaveSsoCompletion, runSsoCompletion } from '@/lib/sso';
 import type { IdentityAuth } from '@/lib/api/user-management';
 
 // Where the identity provider sends the browser back to. The address carries a one-time
@@ -21,8 +20,11 @@ import type { IdentityAuth } from '@/lib/api/user-management';
 //     call is idempotent). It also tells the page to send no Referer.
 //   - the code is redeemed once, by runSsoCompletion, whose result is shared across
 //     React StrictMode's double mount;
-//   - a failure shows its reason and a link back to sign-in. Nothing here retries or
-//     navigates on its own, so a bad return cannot loop.
+//   - a failure shows its reason and a way back to sign-in. Nothing here retries or
+//     navigates on its own, so a bad return cannot loop;
+//   - every way out — into a tenant, the admin console, or back to sign-in — is a FULL
+//     navigation (leaveSsoCompletion), never the router. This document forbids the
+//     Referer, and a client-side hop would carry that into the console, maps included.
 // The code is never logged.
 
 const PROVIDER_ERROR_KEYS: Record<string, string> = {
@@ -35,7 +37,6 @@ const PROVIDER_ERROR_KEYS: Record<string, string> = {
 export default function LoginSsoCompletePage() {
   const { isAuthenticated, completeSso, selectTenant } = useAuth();
   const { t } = useTranslation('login');
-  const navigate = useNavigate();
   // Strips the query before anything else in this tree can read or send it.
   captureSsoReturn();
 
@@ -43,13 +44,30 @@ export default function LoginSsoCompletePage() {
   const [identity, setIdentity] = useState<IdentityAuth | null>(null);
   const [returnTo, setReturnTo] = useState('/');
   const [entering, setEntering] = useState(false);
+  // Whether a session already existed when this page opened: such a person is sent on
+  // without the code being spent.
+  const [arrivedSignedIn] = useState(isAuthenticated);
+  // Once leaving, the page shows only its loading state: a session that becomes live
+  // during the hop must not render anything in this document.
+  const [leaving, setLeaving] = useState(false);
+  const left = useRef(false);
+  const leave = (dest: string) => {
+    if (left.current) return;
+    left.current = true;
+    setLeaving(true);
+    leaveSsoCompletion(dest);
+  };
 
   const enterTenant = async (auth: IdentityAuth, tenant: string, dest: string) => {
     await selectTenant(auth.identityToken, tenant);
-    navigate(dest, { replace: true });
+    leave(dest);
   };
 
   useEffect(() => {
+    if (arrivedSignedIn) {
+      leave('/');
+      return;
+    }
     let live = true;
     void runSsoCompletion(completeSso).then(async (out) => {
       if (!live) return;
@@ -75,7 +93,7 @@ export default function LoginSsoCompletePage() {
       setReturnTo(out.returnTo);
       try {
         if (auth.superuser) {
-          navigate('/admin', { replace: true });
+          leave('/admin');
         } else if (auth.memberships.length === 0) {
           setError(t('noTenantAccess'));
         } else if (auth.memberships.length === 1) {
@@ -95,7 +113,7 @@ export default function LoginSsoCompletePage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  if (isAuthenticated) return <Navigate to="/" replace />;
+  const backToSignIn = () => leave('/login');
 
   const choose = async (tenant: string) => {
     if (!identity) return;
@@ -116,8 +134,10 @@ export default function LoginSsoCompletePage() {
           <Logo deviceColor="currentColor" className="mb-4 h-16 w-auto" />
         </div>
         <div className="space-y-3 rounded-lg border border-border bg-card p-6">
-          {error && <ErrorBanner message={error} />}
-          {identity && !error ? (
+          {error && !leaving && <ErrorBanner message={error} />}
+          {leaving || isAuthenticated ? (
+            <LoadingState description={t('ssoCompleting')} />
+          ) : identity && !error ? (
             <>
               <p className="text-sm text-muted-foreground">{t('chooseTenantSubtitle')}</p>
               {identity.memberships.map((m) => (
@@ -133,10 +153,8 @@ export default function LoginSsoCompletePage() {
               ))}
             </>
           ) : error ? (
-            <Button asChild variant="outline" className="w-full">
-              <Link to="/login" replace>
-                {t('ssoBackToSignIn')}
-              </Link>
+            <Button variant="outline" className="w-full" onClick={backToSignIn}>
+              {t('ssoBackToSignIn')}
             </Button>
           ) : (
             <LoadingState description={t('ssoCompleting')} />

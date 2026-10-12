@@ -56,6 +56,8 @@ title: 单点登录
 4. DeviceChain 检查应答：state 与连接是否匹配，令牌的签名、颁发者、受众、有效期和 nonce，连接要求的声明和方法，以及下文的身份规则。
 5. 它向浏览器交付一个有效期一分钟、只能使用一次的代码。浏览器用第 1 步的密钥兑换该代码，因此只有发起登录的浏览器才能完成登录，并获得与密码登录相同类型的身份令牌。之后用户照常选择租户。
 
+接收代码的页面（控制台为 `/login/sso/complete`，仪表板应用为 `/dash/sso/complete`）会立即把代码从地址栏中移除，并以 `Referrer-Policy: no-referrer` 提供，因此它加载的任何内容都无法携带该地址。登录完成后，或用户返回登录表单时，应用会重新加载，而不是继续停留在该页面上，因此会话的其余部分会发送正常的 `Referer`；默认的 OpenStreetMap 底图需要它。如果你自己的代理位于控制台之前，请把任何去除 Referer 的响应头限定在这两个确切路径上。
+
 登录被拒绝时，用户只会看到笼统的提示（“Single sign-on did not allow this account in”、“your account is not linked yet”），不会知道是哪项检查未通过；确切的结果由指标 `devicechain_usermanagement_sso_logins_total` 计数，拒绝事件连同提供商断言的地址一起写入审计日志。
 
 ## 身份、链接与预配 {#linking}
