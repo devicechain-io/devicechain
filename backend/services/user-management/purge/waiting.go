@@ -57,7 +57,7 @@ type Progress struct {
 // and acts on the result; anything reporting purge progress calls it too. That is the whole
 // reason it is a function rather than a paragraph in a resolver: the arithmetic — all stores
 // clean, then the settle window measured from the LAST store to go clean, then the token hold
-// measured from the epoch and not from clean-since — is easy to restate slightly wrong, and a
+// measured from that same moment (never earlier than the epoch) — is easy to restate slightly wrong, and a
 // surface that restates it wrong tells an operator a deletion will finish at a time it will
 // not. Restating it also silently stops tracking the real rule the moment either changes.
 //
@@ -89,11 +89,36 @@ func Waiting(lines []iam.TenantPurgeStore, epoch, now time.Time, settle, tokenHo
 	// The second window, and it is not a longer version of the first. Settling asks whether
 	// everything already admitted has finished arriving; this asks whether anything can
 	// still be admitted at all.
-	if releaseAt := epoch.Add(tokenHold); now.Before(releaseAt) {
+	//
+	// 🔴 IT RUNS FROM WHEN THE PURGE WENT CLEAN, NOT FROM THE EPOCH. What it waits out is
+	// the broker credentials issued for the tenant, each valid for the hold from the moment
+	// it was minted — and one can be minted for as long as the tenant's credential rows
+	// exist, which is until the relational sweep commits, not until the operator's delete.
+	// The lifecycle gate in front of the mint caches its answer and fails open, so it does
+	// not close that interval; the sweep does. Clean-since is stamped when the pass that
+	// last erased rows FINISHED (Coordinator.eraseOne), so for the store holding those rows
+	// it dates the commit or later, and the latest store's clean-since bounds every store's.
+	// Taking the latest rather than the relational line by name costs only a later release
+	// when some other store went clean last; naming the store would quietly stop covering
+	// the credentials the day they moved. It is persisted on the ledger, so a coordinator
+	// restart resumes the same hold.
+	start := epoch
+	if lastCleanAt.After(start) {
+		start = lastCleanAt
+	}
+	if releaseAt := start.Add(tokenHold).Add(MintSlack); now.Before(releaseAt) {
 		return Progress{Awaiting: WaitTokenHold, ElapsesAt: &releaseAt}
 	}
 	return Progress{Awaiting: WaitNone}
 }
+
+// MintSlack is added to the token hold to cover a broker credential minted from a credential
+// row read just BEFORE the sweep that deleted it committed, and signed just after — the
+// device-management auth callout bounds that read-to-sign gap by its own lookup timeout (a few
+// seconds) — plus ordinary clock skew between the replica that minted the credential and the
+// one deciding to release the token. It is a margin, not a window anything waits on
+// deliberately.
+const MintSlack = time.Minute
 
 // blockingReason renders one not-clean line as a sentence.
 //

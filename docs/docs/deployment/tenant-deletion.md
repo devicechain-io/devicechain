@@ -177,7 +177,7 @@ the default".
 |---|---|---|
 | `intervalSeconds` | `60` | How often the coordinator runs. A **negative value disables it** entirely. |
 | `settleSeconds` | `300` | How long every storage system must keep reporting clean. Must be greater than 140. |
-| `tokenHoldSeconds` | `43200` | How long a deleted token stays reserved, measured from the delete. |
+| `tokenHoldSeconds` | `43200` | How long a deleted token stays reserved, measured from when the last storage system finished erasing the tenant's data. |
 
 Disabling the coordinator is a supported operational lever, for example during a maintenance window
 in which nothing should be deleting rows. It is safe: pending deletions stay pending rather than being

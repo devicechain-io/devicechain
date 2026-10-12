@@ -196,7 +196,7 @@ Estos ajustes residen bajo `tenantPurge` en el servicio user-management. En los 
 |---|---|---|
 | `intervalSeconds` | `60` | Cada cuánto se ejecuta el coordinador. Un **valor negativo lo deshabilita** por completo. |
 | `settleSeconds` | `300` | Cuánto tiempo debe cada sistema de almacenamiento seguir informando de que está limpio. Debe ser mayor que 140. |
-| `tokenHoldSeconds` | `43200` | Cuánto tiempo permanece reservado un identificador eliminado, medido desde la eliminación. |
+| `tokenHoldSeconds` | `43200` | Cuánto tiempo permanece reservado un identificador eliminado, medido desde que el último sistema de almacenamiento terminó de borrar los datos del inquilino. |
 
 Deshabilitar el coordinador es una palanca operativa admitida, por ejemplo durante una ventana de
 mantenimiento en la que nada debería estar borrando filas. Es seguro: las eliminaciones pendientes

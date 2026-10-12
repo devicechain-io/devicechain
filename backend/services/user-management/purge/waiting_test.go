@@ -70,25 +70,56 @@ func TestWaitingReportsTheOutstandingGate(t *testing.T) {
 
 	t.Run("clean and settled, waiting out the token hold", func(t *testing.T) {
 		young := now.Add(-time.Hour)
-		lines := []iam.TenantPurgeStore{cleanLine("rdb", at(now, -30*time.Minute))}
+		cleanAt := now.Add(-30 * time.Minute)
+		lines := []iam.TenantPurgeStore{cleanLine("rdb", &cleanAt)}
 		p := Waiting(lines, young, now, waitSettle, waitTokenHold)
 
 		assert.Equal(t, WaitTokenHold, p.Awaiting)
 		assert.Empty(t, p.BlockedBy)
 		require.NotNil(t, p.ElapsesAt)
-		assert.Equal(t, young.Add(waitTokenHold), *p.ElapsesAt,
-			"the token hold runs from the EPOCH, not from clean-since — it asks whether anything "+
-				"can still be admitted at all, which the sweep going quiet does not answer")
+		assert.Equal(t, cleanAt.Add(waitTokenHold).Add(MintSlack), *p.ElapsesAt,
+			"the token hold runs from when the purge went clean — a credential can be minted until "+
+				"the sweep removes the rows it is minted from, and each is valid for the hold from then")
 	})
 
 	t.Run("nothing outstanding", func(t *testing.T) {
-		lines := []iam.TenantPurgeStore{cleanLine("rdb", at(now, -time.Hour))}
+		lines := []iam.TenantPurgeStore{cleanLine("rdb", at(now, -13*time.Hour))}
 		p := Waiting(lines, epoch, now, waitSettle, waitTokenHold)
 
 		assert.Equal(t, WaitNone, p.Awaiting)
 		assert.Empty(t, p.BlockedBy)
 		assert.Nil(t, p.ElapsesAt)
 	})
+}
+
+// TestTheTokenHoldRunsFromWhenThePurgeWentClean pins where the token hold starts.
+//
+// A broker credential can be minted for a tenant for as long as its credential rows exist,
+// and they exist until the relational sweep commits — which can be well after the epoch (a
+// slow sweep, a store that failed for hours before it could run). Every credential minted in
+// that interval is valid for the full hold from the moment it was minted, so a hold measured
+// from the epoch would release the token while those credentials are still live.
+func TestTheTokenHoldRunsFromWhenThePurgeWentClean(t *testing.T) {
+	now := time.Now().UTC()
+	epoch := now.Add(-13 * time.Hour)
+	cleanAt := epoch.Add(3 * time.Hour)
+	lines := []iam.TenantPurgeStore{
+		cleanLine("rdb", &cleanAt),
+		cleanLine("kv", at(epoch, time.Minute)),
+	}
+
+	p := Waiting(lines, epoch, now, waitSettle, waitTokenHold)
+
+	require.Equal(t, WaitTokenHold, p.Awaiting,
+		"thirteen hours after the epoch is past a hold measured from it, but only ten hours after "+
+			"the sweep that removed the last credential a session could be minted from")
+	require.NotNil(t, p.ElapsesAt)
+	assert.Equal(t, cleanAt.Add(waitTokenHold).Add(MintSlack), *p.ElapsesAt)
+
+	// And the hold does elapse: once a full hold has passed since the purge went clean, the
+	// token is released.
+	later := cleanAt.Add(waitTokenHold).Add(MintSlack).Add(time.Second)
+	assert.Equal(t, WaitNone, Waiting(lines, epoch, later, waitSettle, waitTokenHold).Awaiting)
 }
 
 // TestTheSettleWindowIsCheckedBeforeTheTokenHold is the ordering control the subtests above
@@ -117,7 +148,7 @@ func TestTheSettleWindowIsCheckedBeforeTheTokenHold(t *testing.T) {
 // notes its exempted buckets on every single pass of every single deletion.
 func TestANoteNeverBlocks(t *testing.T) {
 	now := time.Now().UTC()
-	line := cleanLine("kv", at(now, -time.Hour))
+	line := cleanLine("kv", at(now, -13*time.Hour))
 	line.Note = "the exempted buckets were not scanned"
 
 	p := Waiting([]iam.TenantPurgeStore{line}, now.Add(-24*time.Hour), now, waitSettle, waitTokenHold)
