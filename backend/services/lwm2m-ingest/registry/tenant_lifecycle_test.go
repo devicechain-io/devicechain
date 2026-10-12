@@ -117,3 +117,30 @@ func TestRunTenantSweepSweepsUntilCancelled(t *testing.T) {
 		t.Fatal("RunTenantSweep did not return after its context was cancelled")
 	}
 }
+
+// A registration whose lifetime lapses after its tenant was deleted still ends its session (its
+// observations and downlink conn go), but writes no DISCONNECTED: the tenant's data is being
+// erased. A live tenant's expiry in the same registry still writes one.
+func TestAnExpiryForADeletedTenantEndsTheSessionWithoutWritingPresence(t *testing.T) {
+	res, em := okResolver(), &fakeEmitter{}
+	clk := &testClock{t: time.Unix(1_700_000_000, 0)}
+	ends := &sessionEnds{}
+	r := newTestRegistry(res, em, clk, func(o *Options) {
+		o.TenantDeleted = func(tenant string) bool { return tenant == testBinding.Tenant }
+		o.OnSessionEnd = ends.hook
+	})
+	other := testBinding
+	other.Tenant = "acme-corp"
+	other.ExternalId = "plant-b/sensor-9"
+	result, deletedReg, _, _ := r.Register(context.Background(), "dev-1", testBinding, 300)
+	require.Equal(t, RegisterOK, result)
+	result, liveReg, _, _ := r.Register(context.Background(), "dev-2", other, 300)
+	require.Equal(t, RegisterOK, result)
+
+	r.onExpiry(deletedReg, 0)
+	assert.Equal(t, []string{"dev-1"}, ends.all(), "the lapsed session must still end")
+	assert.Empty(t, em.disconnects(), "nothing is written into a tenant whose data is being erased")
+
+	r.onExpiry(liveReg, 0)
+	assert.Len(t, em.disconnects(), 1, "a live tenant's expiry still writes its DISCONNECTED")
+}

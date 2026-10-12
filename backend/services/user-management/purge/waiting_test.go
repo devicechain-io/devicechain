@@ -122,6 +122,24 @@ func TestTheTokenHoldRunsFromWhenThePurgeWentClean(t *testing.T) {
 	assert.Equal(t, WaitNone, Waiting(lines, epoch, later, waitSettle, waitTokenHold).Awaiting)
 }
 
+// TestTheTokenHoldOutlastsACredentialSignedJustAfterTheSweep pins the margin on top of the hold,
+// in absolute terms rather than in terms of MintSlack itself (a case written against the
+// constant moves with it and cannot notice it shrinking).
+//
+// A credential can be signed a moment after the sweep that removed its row committed — the
+// callout read the row before the commit and signs after it, within its own lookup timeout —
+// and the replica that signed it need not share the deciding replica's clock exactly. Half a
+// minute past the bare hold, such a credential can still be valid, so the token is still held.
+func TestTheTokenHoldOutlastsACredentialSignedJustAfterTheSweep(t *testing.T) {
+	cleanAt := time.Now().UTC().Add(-24 * time.Hour)
+	epoch := cleanAt.Add(-time.Minute)
+	lines := []iam.TenantPurgeStore{cleanLine("rdb", &cleanAt)}
+
+	p := Waiting(lines, epoch, cleanAt.Add(waitTokenHold).Add(30*time.Second), waitSettle, waitTokenHold)
+	assert.Equal(t, WaitTokenHold, p.Awaiting,
+		"30s past the bare hold is inside the read-to-sign and clock-skew margin")
+}
+
 // TestTheSettleWindowIsCheckedBeforeTheTokenHold is the ordering control the subtests above
 // cannot give on their own.
 //

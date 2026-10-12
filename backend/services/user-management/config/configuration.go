@@ -173,7 +173,7 @@ func (c *UserManagementConfiguration) TenantPurgeSettle() time.Duration {
 	return time.Duration(c.TenantPurge.SettleSeconds) * time.Second
 }
 
-// TenantPurgeTokenHold is the minimum age of a purge before its token may be released.
+// TenantPurgeTokenHold is how long a purged token stays reserved after the purge went clean.
 func (c *UserManagementConfiguration) TenantPurgeTokenHold() time.Duration {
 	return time.Duration(c.TenantPurge.TokenHoldSeconds) * time.Second
 }
