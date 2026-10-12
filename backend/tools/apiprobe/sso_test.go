@@ -103,7 +103,7 @@ func (f *fakeAdmin) Query(_ context.Context, _ string, doc string, vars map[stri
 func seededReceipt(t *testing.T, f *fakeAdmin) Receipt {
 	t.Helper()
 	row, err := seedConnection(context.Background(), f, "http://x/admin", "apiprobe",
-		ssoOptions{issuer: "https://idp.invalid", clientID: "apiprobe", domain: ssoDefaultDomain})
+		ssoOptions{issuer: "https://idp.invalid", clientID: "apiprobe"})
 	if err != nil {
 		t.Fatalf("seed: %v", err)
 	}
@@ -140,7 +140,7 @@ func TestTheSeedWalksTheConnectionThroughEveryStep(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(obj.Tenants) != 1 || obj.Tenants[0] != "apiprobe" || !obj.Discovery.Approved ||
-		len(obj.RoleMappings) != 1 || obj.RoleMappings[0].Group != ssoGroup || obj.RoleMappings[0].Role != ssoRoleToken {
+		len(obj.RoleMappings) != 1 || obj.RoleMappings[0].Group != ssoGroup || obj.RoleMappings[0].Role != ssoRoleToken("apiprobe") {
 		t.Fatalf("the recorded connection does not carry the walk: %s", rec.Admin[0].Object)
 	}
 }
@@ -152,7 +152,7 @@ func TestARefusedStepFailsTheSeedAndNamesTheStep(t *testing.T) {
 		"addIdpDomain", "setIdpConnectionTenants", "setIdpRoleMappings"} {
 		f := &fakeAdmin{refuseOn: step}
 		_, err := seedConnection(context.Background(), f, "http://x/admin", "apiprobe",
-			ssoOptions{issuer: "https://idp.invalid", clientID: "apiprobe", domain: ssoDefaultDomain})
+			ssoOptions{issuer: "https://idp.invalid", clientID: "apiprobe"})
 		if err == nil {
 			t.Errorf("%s was refused and the seed still succeeded", step)
 			continue
@@ -169,7 +169,7 @@ func TestARefusedStepFailsTheSeedAndNamesTheStep(t *testing.T) {
 func TestAnEmptyDiscoveryFingerprintIsAShapeFindingNotAnApproval(t *testing.T) {
 	f := &fakeAdmin{noPrint: true}
 	_, err := seedConnection(context.Background(), f, "http://x/admin", "apiprobe",
-		ssoOptions{issuer: "https://idp.invalid", clientID: "apiprobe", domain: ssoDefaultDomain})
+		ssoOptions{issuer: "https://idp.invalid", clientID: "apiprobe"})
 	if codeOf(err) != exitShape {
 		t.Fatalf("exit = %d (%v), want exitShape", codeOf(err), err)
 	}
@@ -230,16 +230,16 @@ func TestVerifyReadsTheConnectionBackAndFailsForEachKindOfDamage(t *testing.T) {
 		rec := seededReceipt(t, f)
 		rec.Admin[0].Fields += " extra"
 		_, err := verifyAdminRows(ctx, f, "http://x/admin", rec, &bytes.Buffer{})
-		if codeOf(err) != exitSetup {
-			t.Fatalf("exit = %d (%v), want exitSetup", codeOf(err), err)
-		}
+		// assertCode, not codeOf: codeOf(nil) IS exitSetup, so a verify that wrongly
+		// passed would satisfy a bare comparison.
+		assertCode(t, err, exitSetup)
 	})
 	t.Run("an admin row this build cannot read", func(t *testing.T) {
 		rec := Receipt{Admin: []Recorded{{Name: "something-new", Token: "x"}}}
 		_, err := verifyAdminRows(ctx, &fakeAdmin{}, "http://x/admin", rec, &bytes.Buffer{})
-		if codeOf(err) != exitSetup {
-			t.Fatalf("exit = %d (%v), want exitSetup", codeOf(err), err)
-		}
+		// assertCode, not codeOf: codeOf(nil) IS exitSetup, so a verify that wrongly
+		// passed would satisfy a bare comparison.
+		assertCode(t, err, exitSetup)
 	})
 }
 
@@ -335,17 +335,17 @@ func TestEveryConnectionDocumentValidatesAgainstTheAdminSchema(t *testing.T) {
 		vars map[string]any
 	}{
 		{"createRole", createRoleMutation, map[string]any{"r": map[string]any{
-			"scope": "tenant", "token": ssoRoleToken, "name": "n", "authorities": []string{}}}},
+			"scope": "tenant", "token": ssoRoleToken("apiprobe"), "name": "n", "authorities": []string{}}}},
 		{"createIdpConnection", createIdpConnectionMutation, map[string]any{"r": map[string]any{
-			"token": ssoConnectionToken, "name": "n", "kind": "tenant", "issuer": "https://idp.invalid",
+			"token": ssoConnectionToken("apiprobe"), "name": "n", "kind": "tenant", "issuer": "https://idp.invalid",
 			"clientId": "c", "clientSecret": "s", "scopes": []string{"openid"}}}},
-		{"fingerprint", idpFingerprintQuery, map[string]any{"t": ssoConnectionToken}},
-		{"approveIdpDiscovery", approveIdpMutation, map[string]any{"t": ssoConnectionToken, "f": "fp"}},
-		{"addIdpDomain", addIdpDomainMut, map[string]any{"t": ssoConnectionToken, "d": ssoDefaultDomain}},
-		{"setIdpConnectionTenants", setIdpTenantsMut, map[string]any{"t": ssoConnectionToken, "x": []string{"apiprobe"}}},
-		{"setIdpRoleMappings", setIdpMappingsMut, map[string]any{"c": ssoConnectionToken, "t": "apiprobe",
-			"m": []any{map[string]any{"group": ssoGroup, "role": ssoRoleToken}}}},
-		{"read", idpConnectionReadQuery, map[string]any{"t": ssoConnectionToken}},
+		{"fingerprint", idpFingerprintQuery, map[string]any{"t": ssoConnectionToken("apiprobe")}},
+		{"approveIdpDiscovery", approveIdpMutation, map[string]any{"t": ssoConnectionToken("apiprobe"), "f": "fp"}},
+		{"addIdpDomain", addIdpDomainMut, map[string]any{"t": ssoConnectionToken("apiprobe"), "d": ssoOptions{}.domainFor("apiprobe")}},
+		{"setIdpConnectionTenants", setIdpTenantsMut, map[string]any{"t": ssoConnectionToken("apiprobe"), "x": []string{"apiprobe"}}},
+		{"setIdpRoleMappings", setIdpMappingsMut, map[string]any{"c": ssoConnectionToken("apiprobe"), "t": "apiprobe",
+			"m": []any{map[string]any{"group": ssoGroup, "role": ssoRoleToken("apiprobe")}}}},
+		{"read", idpConnectionReadQuery, map[string]any{"t": ssoConnectionToken("apiprobe")}},
 	} {
 		if errs := schema.ValidateWithVariables(c.doc, c.vars); len(errs) > 0 {
 			t.Errorf("%s does not validate against the served admin schema: %v\n  document: %s", c.name, errs, c.doc)

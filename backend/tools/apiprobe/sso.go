@@ -44,16 +44,51 @@ const (
 	// written before an upgrade is read after it.
 	ssoRowName = "idp-connection"
 
-	ssoConnectionToken = "apiprobe-idp"
-	ssoRoleToken       = "apiprobe-sso-viewer"
-	ssoGroup           = "apiprobe-viewers"
+	ssoGroup = "apiprobe-viewers"
 
-	// ssoDefaultDomain is the email domain asserted for the connection. Freemail
+	// ssoDomainSuffix is the parent of every derived email domain (domainFor). Freemail
 	// providers and public suffixes are refused, so it has to be a name of its own;
 	// .example is reserved and will never be anyone's.
-	ssoDefaultDomain   = "apiprobe.example"
+	ssoDomainSuffix    = "apiprobe.example"
 	ssoDefaultClientID = "apiprobe"
 )
+
+// 🔴 EVERY NAME THE SEED CREATES ON THE ADMIN PLANE IS PER TENANT. The role, the
+// connection and the email domain are INSTANCE-wide records, each unique across the
+// instance, and the upgrade drill seeds a connection twice on one instance once its
+// baseline can: for the baseline's tenant before the upgrade, and for the sweep tenant
+// after it. A constant name would make the second seed's create refused, which the rig
+// reports as a finding about the release. (A tenant token near the length limit makes
+// these exceed it; the platform then refuses the create, loudly.)
+
+// ssoConnectionToken is the connection the seed creates for tenant.
+func ssoConnectionToken(tenant string) string { return "apiprobe-idp-" + tenant }
+
+// ssoRoleToken is the tenant role the seed's group mapping grants, for tenant.
+func ssoRoleToken(tenant string) string { return "apiprobe-sso-viewer-" + tenant }
+
+// domainFor is the email domain asserted for tenant's connection: --idp-domain when
+// given, else a label derived from the tenant under ssoDomainSuffix. A tenant token may
+// carry capitals and underscores, which a domain label may not, so those are folded.
+func (o ssoOptions) domainFor(tenant string) string {
+	if d := strings.TrimSpace(o.domain); d != "" {
+		return d
+	}
+	label := strings.Trim(strings.Map(func(r rune) rune {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9', r == '-':
+			return r
+		case r >= 'A' && r <= 'Z':
+			return r - 'A' + 'a'
+		default:
+			return '-'
+		}
+	}, tenant), "-")
+	if label == "" {
+		label = "tenant"
+	}
+	return label + "." + ssoDomainSuffix
+}
 
 // idpConnectionFields is the connection's read selection, used verbatim by the seed's
 // read-back and by verify (the same reason entity.Fields is one string).
@@ -121,6 +156,7 @@ func seedConnection(ctx context.Context, q querier, adminURL, tenant string, o s
 		return Recorded{}, failWith(exitRefused, "%s: %w\n   (a certificate or blocked-address message here means the instance "+
 			"cannot reach the identity provider at %s: see the rig's trust and egress setup)", what, err, o.issuer)
 	}
+	conn, role := ssoConnectionToken(tenant), ssoRoleToken(tenant)
 
 	secret, err := randomToken()
 	if err != nil {
@@ -129,21 +165,21 @@ func seedConnection(ctx context.Context, q querier, adminURL, tenant string, o s
 
 	if err := q.Query(ctx, adminURL, createRoleMutation, map[string]any{
 		"r": map[string]any{
-			"scope": "tenant", "token": ssoRoleToken, "name": "API probe SSO viewer",
+			"scope": "tenant", "token": role, "name": "API probe SSO viewer",
 			"authorities": []string{},
 		},
 	}, nil); err != nil {
-		return refuse("create role "+ssoRoleToken, err)
+		return refuse("create role "+role, err)
 	}
 
 	if err := q.Query(ctx, adminURL, createIdpConnectionMutation, map[string]any{
 		"r": map[string]any{
-			"token": ssoConnectionToken, "name": "API probe identity provider", "kind": "tenant",
+			"token": conn, "name": "API probe identity provider", "kind": "tenant",
 			"issuer": o.issuer, "clientId": o.clientID, "clientSecret": secret,
 			"scopes": []string{"openid", "email", "profile", "groups"},
 		},
 	}, nil); err != nil {
-		return refuse("create identity-provider connection "+ssoConnectionToken, err)
+		return refuse("create identity-provider connection "+conn, err)
 	}
 
 	var fp struct {
@@ -153,11 +189,11 @@ func seedConnection(ctx context.Context, q querier, adminURL, tenant string, o s
 			} `json:"discovery"`
 		} `json:"idpConnection"`
 	}
-	if err := q.Query(ctx, adminURL, idpFingerprintQuery, map[string]any{"t": ssoConnectionToken}, &fp); err != nil {
-		return refuse("read the discovery fingerprint of "+ssoConnectionToken, err)
+	if err := q.Query(ctx, adminURL, idpFingerprintQuery, map[string]any{"t": conn}, &fp); err != nil {
+		return refuse("read the discovery fingerprint of "+conn, err)
 	}
 	if fp.IdpConnection.Discovery.Fingerprint == "" {
-		return Recorded{}, failWith(exitShape, "connection %s reports an empty discovery fingerprint, so there is nothing to approve", ssoConnectionToken)
+		return Recorded{}, failWith(exitShape, "connection %s reports an empty discovery fingerprint, so there is nothing to approve", conn)
 	}
 
 	steps := []struct {
@@ -166,27 +202,27 @@ func seedConnection(ctx context.Context, q querier, adminURL, tenant string, o s
 		vars map[string]any
 	}{
 		{"approve the discovery snapshot", approveIdpMutation,
-			map[string]any{"t": ssoConnectionToken, "f": fp.IdpConnection.Discovery.Fingerprint}},
+			map[string]any{"t": conn, "f": fp.IdpConnection.Discovery.Fingerprint}},
 		{"assert the email domain", addIdpDomainMut,
-			map[string]any{"t": ssoConnectionToken, "d": o.domain}},
+			map[string]any{"t": conn, "d": o.domainFor(tenant)}},
 		{"serve the probe tenant", setIdpTenantsMut,
-			map[string]any{"t": ssoConnectionToken, "x": []string{tenant}}},
+			map[string]any{"t": conn, "x": []string{tenant}}},
 		{"map a group to a tenant role", setIdpMappingsMut,
-			map[string]any{"c": ssoConnectionToken, "t": tenant,
-				"m": []map[string]any{{"group": ssoGroup, "role": ssoRoleToken}}}},
+			map[string]any{"c": conn, "t": tenant,
+				"m": []map[string]any{{"group": ssoGroup, "role": role}}}},
 	}
 	for _, s := range steps {
 		if err := q.Query(ctx, adminURL, s.doc, s.vars, nil); err != nil {
-			return refuse(s.what+" for "+ssoConnectionToken, err)
+			return refuse(s.what+" for "+conn, err)
 		}
 	}
 
-	object, err := readConnection(ctx, q, adminURL, ssoConnectionToken)
+	object, err := readConnection(ctx, q, adminURL, conn)
 	if err != nil {
 		return Recorded{}, err
 	}
 	return Recorded{
-		Name: ssoRowName, Area: "user-management", Token: ssoConnectionToken,
+		Name: ssoRowName, Area: "user-management", Token: conn,
 		Object: object, Fields: idpConnectionFields,
 	}, nil
 }
