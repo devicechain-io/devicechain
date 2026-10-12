@@ -89,7 +89,9 @@ interface AuthContextValue {
    * Sign out: clears the local session at once, then ends the sign-in on the server (so
    * its refresh and identity tokens stop working). The local session is gone even when the
    * server cannot be reached - the user asked to leave - but that failure is logged and
-   * shown, not swallowed, because the server-side session is then still open.
+   * shown, not swallowed, because the server-side session is then still open. When the
+   * server confirms, and the sign-in came through a connection set to sign people out at
+   * the identity provider too, the browser is then sent to the provider's sign-out page.
    */
   logout: () => Promise<void>;
 
@@ -192,8 +194,10 @@ export function consumeSessionExpired(): SessionEndReason | null {
 const LOGOUT_TIMEOUT_MS = 5000;
 
 // endServerSessions calls the logout mutation for each token and rejects if any call
-// failed or the server took too long (every call is still attempted).
-async function endServerSessions(tokens: string[]): Promise<void> {
+// failed or the server took too long (every call is still attempted). It resolves to the
+// identity provider's sign-out address when the server answered one (a single sign-on
+// through a connection set to sign people out at the provider too), else null.
+async function endServerSessions(tokens: string[]): Promise<string | null> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<never>((_, reject) => {
     timer = setTimeout(() => reject(new Error('sign-out timed out')), LOGOUT_TIMEOUT_MS);
@@ -205,6 +209,11 @@ async function endServerSessions(tokens: string[]): Promise<void> {
     ]);
     const failed = results.find((r): r is PromiseRejectedResult => r.status === 'rejected');
     if (failed) throw failed.reason;
+    // Both tokens usually name one sign-in, and whichever call reached it first answers.
+    for (const r of results) {
+      if (r.status === 'fulfilled' && r.value) return r.value;
+    }
+    return null;
   } finally {
     clearTimeout(timer);
   }
@@ -253,12 +262,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     refreshInFlight.current = null;
     applyTokens(null);
     applyIdentity(null);
+    let providerSignOut: string | null = null;
     try {
-      await endServerSessions(held);
+      providerSignOut = await endServerSessions(held);
     } catch (err) {
       console.error('Sign-out: the server did not confirm the session ended', err);
       toast(i18n.t('login:signOutFailed'), 'error');
+      return;
     }
+    // Only once the server has confirmed the sign-out here: send the browser to the
+    // provider to end the session there too. It comes back to the sign-in page.
+    if (providerSignOut) window.location.assign(providerSignOut);
   }, [applyTokens, applyIdentity, toast]);
 
   // expireTenant / expireIdentity drop a session that can no longer be sustained

@@ -552,29 +552,39 @@ collect:
 // signature and expiry alone (identity tokens on the admin API included), so each runs
 // on for at most its own lifetime.
 func (m *Manager) Logout(ctx context.Context, token string) error {
+	_, err := m.endSignIn(ctx, token)
+	return err
+}
+
+// endSignIn is Logout, handing back the record it ended so SignOut can tell how the person
+// signed in. The record is nil when it could not be read (already ended, run out, or
+// unreadable); the sign-in is ended all the same.
+func (m *Manager) endSignIn(ctx context.Context, token string) (*sessionRecord, error) {
 	claims, err := m.validator.ParseSignatureOnly(token)
 	if err != nil {
-		return ErrInvalidToken
+		return nil, ErrInvalidToken
 	}
 	if claims.TokenType != auth.TokenTypeRefresh && claims.TokenType != auth.TokenTypeIdentity {
-		return ErrInvalidToken
+		return nil, ErrInvalidToken
 	}
 	if claims.SessionID == "" {
-		return ErrInvalidToken
+		return nil, ErrInvalidToken
 	}
 	// The record names its owner, which is what finds the index entry that points at it.
 	// Read before the delete; an unreadable record only costs the entry its early removal,
 	// because it expires with the bucket.
 	var owner string
+	var ended *sessionRecord
 	if entry, err := m.refreshKV.Get(sessionKey(claims.SessionID)); err == nil {
 		var rec sessionRecord
 		if json.Unmarshal(entry.Value(), &rec) == nil {
 			owner = rec.Email
+			ended = &rec
 		}
 	}
 	if err := m.refreshKV.Delete(sessionKey(claims.SessionID)); err != nil && !errors.Is(err, nats.ErrKeyNotFound) {
 		log.Error().Err(err).Msg("Logout could not end the sign-in's session record.")
-		return ErrLogoutUnavailable
+		return nil, ErrLogoutUnavailable
 	}
 	if owner != "" {
 		if err := m.refreshKV.Delete(sessionIndexKey(owner, claims.SessionID)); err != nil && !errors.Is(err, nats.ErrKeyNotFound) {
@@ -590,7 +600,7 @@ func (m *Manager) Logout(ctx context.Context, token string) error {
 		}
 	}
 	m.recordAuth(ctx, rdb.AuditOpLogout, claims.Username, claims.Tenant)
-	return nil
+	return ended, nil
 }
 
 // ErrLogoutUnavailable is Logout's failure when the session store could not be written. Its

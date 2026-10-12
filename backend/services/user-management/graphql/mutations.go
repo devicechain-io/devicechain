@@ -86,14 +86,35 @@ func (r *SchemaResolver) Refresh(ctx context.Context, args struct {
 	return &AuthTokenResolver{pair: pair}, nil
 }
 
-// Logout ends the sign-in a refresh or identity token belongs to (server-side sign-out).
+// Logout ends the sign-in a refresh or identity token belongs to (server-side sign-out)
+// and, when asked for an app to return to, says where to sign out at the provider too.
 func (r *SchemaResolver) Logout(ctx context.Context, args struct {
-	Token string
-}) (bool, error) {
-	if err := r.getIdentityManager(ctx).Logout(ctx, args.Token); err != nil {
-		return false, err
+	Token    string
+	ReturnTo *string
+}) (*SignOutResolver, error) {
+	var app identity.SignOutReturn
+	if args.ReturnTo != nil {
+		// The schema's enum has already refused any other value.
+		app = identity.SignOutReturn(*args.ReturnTo)
 	}
-	return true, nil
+	u, err := r.getIdentityManager(ctx).SignOut(ctx, args.Token, app)
+	if err != nil {
+		return nil, err
+	}
+	return &SignOutResolver{providerURL: u}, nil
+}
+
+// SignOutResolver resolves SignOut.
+type SignOutResolver struct {
+	providerURL string
+}
+
+// ProviderSignOutUrl is the provider's sign-out address, or null when there is none.
+func (r *SignOutResolver) ProviderSignOutUrl() *string {
+	if r.providerURL == "" {
+		return nil
+	}
+	return &r.providerURL
 }
 
 // UpdateProfile lets the signed-in user edit their own display name (first/last).

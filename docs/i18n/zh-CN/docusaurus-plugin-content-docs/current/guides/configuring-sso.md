@@ -32,6 +32,21 @@ title: 配置单点登录
 
 实例连接（供你自己的运营人员使用）的创建方式相同，类型为 `instance`，另外需要 `requiredAmr`（例如 `["mfa"]`）或 `mfaEnforcedByIdp: true`。请用 `linkIdentity` 逐个显式链接运营人员；系统不会自动链接任何人。
 
+## 在提供商处退出登录 {#provider-sign-out}
+
+默认情况下，从控制台或仪表盘应用退出登录只会结束 DeviceChain 会话。用户在身份提供商处仍保持登录状态，因此下次 **Sign in with SSO** 可能无需输入密码即可直接通过。连接也可以在用户退出登录时将其发送到提供商自己的退出登录页面（OpenID Connect RP 发起的登出）。此功能**默认关闭**，因为在提供商处退出登录通常会结束该用户在提供商所服务的所有应用中的会话。
+
+1. 确认已批准的发现文档显示了 **Sign-out endpoint**。不发布该端点的提供商无法以这种方式退出登录：此设置不起作用，退出登录仍会结束 DeviceChain 会话。
+2. 在连接的 **Settings** 选项卡中的 **Sign out at the provider** 下，复制两个 **Post-logout redirect addresses**，并在提供商处将它们注册为退出登录后（post-logout）重定向 URI。它们是控制台的 `<源>/login` 和仪表盘应用的 `<源>/dash/`，其中 `<源>` 是实例[公共地址](#issuer-url)的协议和主机。
+3. 勾选 **Also sign people out at the provider**。在管理 API 中对应 `updateIdpConnection` 并设置 `providerSignOut: true`。
+
+用户退出登录时会发生什么：
+
+- **DeviceChain 会话总是先结束**，在服务器上完成，无论提供商之后如何处理。之后浏览器才会被发送到提供商，提供商再将其送回登录页面。
+- 请求只携带连接的客户端 ID 和返回地址，不包含其他内容。DeviceChain 不保存提供商的 ID 令牌，因此不会发送 `id_token_hint`，提供商可能会要求用户确认。如果提供商拒绝不带 `id_token_hint` 的退出登录请求，则不能使用此设置，请保持关闭。
+- 返回地址由服务器根据实例的公共地址构建，调用方无法指定。如果未在提供商处注册该地址，提供商会显示自己的错误页面，而不会把用户送回；无论如何，DeviceChain 会话都已结束。
+- 仅适用于该连接处于启用状态且其发现文档已批准时通过该连接的登录。密码登录只会退出 DeviceChain。
+
 ## 提供商配置方案 {#recipes}
 
 在每个方案中，请将 `<callback URL>` 替换为该连接的回调 URL。

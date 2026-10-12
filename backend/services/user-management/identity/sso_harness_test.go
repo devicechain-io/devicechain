@@ -92,6 +92,9 @@ type stubOP struct {
 	authorizePath string
 	// signKey signs with a key other than the published one.
 	signKey *rsa.PrivateKey
+	// endSession, when set, is published as the end_session_endpoint (a path and query on
+	// the stub's own address).
+	endSession string
 }
 
 func newStubOP(t *testing.T) *stubOP {
@@ -121,12 +124,16 @@ func (op *stubOP) discovery(w http.ResponseWriter, r *http.Request) {
 	if iss == "" {
 		iss = op.url()
 	}
-	_ = json.NewEncoder(w).Encode(map[string]string{
+	doc := map[string]string{
 		"issuer":                 iss,
 		"authorization_endpoint": op.url() + op.authzPath(),
 		"token_endpoint":         op.url() + "/token",
 		"jwks_uri":               op.url() + "/keys",
-	})
+	}
+	if op.endSession != "" {
+		doc["end_session_endpoint"] = op.url() + op.endSession
+	}
+	_ = json.NewEncoder(w).Encode(doc)
 }
 
 func b64(b []byte) string { return base64.RawURLEncoding.EncodeToString(b) }

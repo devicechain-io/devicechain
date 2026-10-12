@@ -105,5 +105,8 @@ var (
 		// iam_tenants.sso_enforced. One migration for the whole feature; nothing here is served
 		// until the slices that enforce it land.
 		NewSsoConnectionsMigration(),
+		// A connection's switch to sign people out at the provider too (OpenID Connect
+		// RP-initiated logout) when they sign out here. Off for every existing connection.
+		NewSsoProviderSignOutMigration(),
 	}
 )

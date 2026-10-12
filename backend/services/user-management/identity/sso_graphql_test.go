@@ -412,3 +412,83 @@ func TestBeginSsoLinkOverTheWire(t *testing.T) {
 	require.Equal(t, "link_session_ended", q.Get("error"))
 	require.Equal(t, identity.CodeSsoLinkSessionRequired, begin(maxTok).code(t))
 }
+
+// Signing out at the provider, end to end as a superuser and a browser reach it: the
+// superuser approves a snapshot naming a sign-out endpoint and switches the setting on over
+// the admin plane; a single sign-on then signs out over the public plane and is handed the
+// provider's address, built from the approved endpoint and the fixed return address.
+func TestProviderSignOutOverTheWire(t *testing.T) {
+	s := newSsoServed(t)
+	var su struct{ IdentityToken string }
+	post(t, s.pub, loginSu, map[string]any{"e": s.s.SuperuserEmail, "p": s.s.SuperuserPassword}, "", "", "").field(t, "login", &su)
+
+	s.s.PublishEndSession("/logout")
+	var refreshed struct {
+		Discovery struct{ Fingerprint, EndSessionEndpoint string }
+	}
+	post(t, s.admin, `mutation{refreshIdpDiscovery(token:"acme-idp"){discovery{fingerprint endSessionEndpoint}}}`, nil, su.IdentityToken, "", "").
+		field(t, "refreshIdpDiscovery", &refreshed)
+	require.Equal(t, s.s.ProviderURL+"/logout", refreshed.Discovery.EndSessionEndpoint)
+	r := post(t, s.admin, `mutation($f:String!){approveIdpDiscovery(token:"acme-idp",fingerprint:$f){token}}`,
+		map[string]any{"f": refreshed.Discovery.Fingerprint}, su.IdentityToken, "", "")
+	require.Empty(t, r.Errors, r.Body)
+
+	var conn struct {
+		ProviderSignOut   bool
+		SignOutReturnUrls []string
+	}
+	post(t, s.admin, `{idpConnection(token:"acme-idp"){providerSignOut signOutReturnUrls}}`, nil, su.IdentityToken, "", "").
+		field(t, "idpConnection", &conn)
+	require.False(t, conn.ProviderSignOut, "provider sign-out must start switched off")
+	require.Equal(t, []string{"https://dc.example.com/login", "https://dc.example.com/dash/"}, conn.SignOutReturnUrls)
+
+	post(t, s.admin, `mutation{updateIdpConnection(token:"acme-idp",request:{providerSignOut:true}){providerSignOut}}`, nil, su.IdentityToken, "", "").
+		field(t, "updateIdpConnection", &conn)
+	require.True(t, conn.ProviderSignOut)
+
+	// A single sign-on through the connection; each sign-out below needs a sign-in of its own.
+	verifier := strings.Repeat("v", 43)
+	signIn := func() string {
+		t.Helper()
+		var begin struct{ AuthorizationUrl string }
+		post(t, s.pub, beginDoc, map[string]any{"c": s.s.Connection, "r": s.s.ReturnTo, "h": challengeOf(verifier)}, "", "192.0.2.9:1234", "").
+			field(t, "beginSso", &begin)
+		state, code := s.s.Authorize(begin.AuthorizationUrl, "sub-pat", s.s.LinkedEmail)
+		rec := httptest.NewRecorder()
+		s.mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, s.s.CallbackPrefix+s.s.Connection+"?"+url.Values{"state": {state}, "code": {code}}.Encode(), nil))
+		loc, err := url.Parse(rec.Header().Get("Location"))
+		require.NoError(t, err)
+		var done struct{ IdentityToken string }
+		post(t, s.pub, completeDoc, map[string]any{"c": loc.Query().Get("code"), "v": verifier}, "", "", "").field(t, "completeSso", &done)
+		return done.IdentityToken
+	}
+	const signOutDoc = `mutation($t:String!,$r:SignOutReturn){logout(token:$t,returnTo:$r){providerSignOutUrl}}`
+
+	// Each app named over the wire comes back to ITS address: the resolver hands the
+	// caller's choice through, not a default.
+	for app, returnTo := range map[string]string{
+		"CONSOLE":   "https://dc.example.com/login",
+		"DASHBOARD": "https://dc.example.com/dash/",
+	} {
+		idTok := signIn()
+		var out struct{ ProviderSignOutUrl *string }
+		post(t, s.pub, signOutDoc, map[string]any{"t": idTok, "r": app}, "", "", "").field(t, "logout", &out)
+		require.NotNilf(t, out.ProviderSignOutUrl, "no provider address for %s", app)
+		got, err := url.Parse(*out.ProviderSignOutUrl)
+		require.NoError(t, err)
+		require.Equal(t, s.s.ProviderURL+"/logout", got.Scheme+"://"+got.Host+got.Path)
+		require.Equalf(t, url.Values{"client_id": {s.s.ClientID}, "post_logout_redirect_uri": {returnTo}}, got.Query(), "app %s", app)
+
+		// The platform sign-in ended before the address was handed back.
+		r = post(t, s.pub, selectSso, map[string]any{"i": idTok}, "", "", "")
+		require.Equal(t, "invalid or expired token", r.failed(t))
+	}
+
+	// No app named: this platform only, even with the connection switched on.
+	idTok := signIn()
+	var out struct{ ProviderSignOutUrl *string }
+	post(t, s.pub, signOutDoc, map[string]any{"t": idTok}, "", "", "").field(t, "logout", &out)
+	require.Nil(t, out.ProviderSignOutUrl, "a sign-out that named no app was handed a provider address")
+	r = post(t, s.pub, selectSso, map[string]any{"i": idTok}, "", "", "")
+	require.Equal(t, "invalid or expired token", r.failed(t))
+}

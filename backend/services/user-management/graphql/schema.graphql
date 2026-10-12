@@ -581,6 +581,26 @@ type SsoBegin {
     authorizationUrl: String!
 }
 
+"""The app a sign-out at the identity provider returns the browser to."""
+enum SignOutReturn {
+    """The console's sign-in page."""
+    CONSOLE
+    """The dashboard app."""
+    DASHBOARD
+}
+
+"""The outcome of signing out. The sign-in has ended on this platform."""
+type SignOut {
+    """
+    Where to send the browser to sign out at the identity provider as well, or null when
+    there is nothing more to do: the sign-in did not come through single sign-on, its
+    connection is not set to sign people out at the provider, the provider publishes no
+    sign-out address, or `returnTo` was not given. The provider sends the browser back to
+    the app named by `returnTo`.
+    """
+    providerSignOutUrl: String
+}
+
 """
 Sign in, choose a tenant, refresh the session, sign out, and edit the signed-in user's profile and
 their tenant's look and defaults.
@@ -649,13 +669,24 @@ type Mutation {
     has expired still ends its sign-in. Fails with "invalid or expired token" for a
     token this instance did not sign or that names no sign-in, and with a retryable
     error, leaving the sign-in open, if the sign-out could not be recorded.
+
+    With `returnTo`, the answer also says where to send the browser to sign out at the
+    identity provider, when the sign-in came through single sign-on and its connection is
+    set to sign people out there too; otherwise that address is null and the sign-out is
+    complete. The sign-in here has ended either way: the provider is never contacted by
+    this call, so it cannot make it fail.
     """
     # Server-side sign-out (see description). token is the sign-in's refresh token, or its
     # identity token when no tenant has been selected yet.
     logout(
         """A refresh token from selectTenant or refresh, or the identity token from login."""
         token: String!
-    ): Boolean!
+        """
+        The app to come back to after signing out at the identity provider. Leave it out to
+        sign out of this platform only.
+        """
+        returnTo: SignOutReturn
+    ): SignOut!
 
     """
     Starts a single sign-on through an external identity provider. Give either the person's

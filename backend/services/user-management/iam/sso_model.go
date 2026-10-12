@@ -94,6 +94,12 @@ type IdpConnection struct {
 
 	SessionMaxAgeSeconds int `gorm:"not null"`
 
+	// ProviderSignOut is the administrator's choice to end the person's session at the
+	// provider too when they sign out (OpenID Connect RP-initiated logout), through the
+	// approved snapshot's end_session_endpoint. Off unless switched on: signing out at the
+	// provider signs the person out of every application it serves.
+	ProviderSignOut bool `gorm:"not null;default:false"`
+
 	DiscoverySnapshot   *DiscoverySnapshot `gorm:"serializer:json"`
 	DiscoveryApprovedAt *time.Time
 	DiscoveryApprovedBy string `gorm:"not null;size:256"`

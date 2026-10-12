@@ -123,7 +123,7 @@ export type LogoutMutationVariables = Exact<{
 }>;
 
 
-export type LogoutMutation = { logout: boolean };
+export type LogoutMutation = { logout: { providerSignOutUrl: string | null } };
 
 export type TenantFieldsFragment = { token: string, name: string | null, description: string | null, locale: string | null, localeOverride: string | null, branding: { title: string | null, logo: string | null, logoMaxHeight: number | null, primary: string | null, background: string | null, foreground: string | null, accent: string | null, updatedAt: string | null }, brandingOverride: { title: string | null, logo: string | null, logoMaxHeight: number | null, primary: string | null, background: string | null, foreground: string | null, accent: string | null, updatedAt: string | null }, basemap: { tileUrl: string | null, attribution: string | null, centerLat: number | null, centerLon: number | null, zoom: number | null }, basemapOverride: { tileUrl: string | null, attribution: string | null, centerLat: number | null, centerLon: number | null, zoom: number | null } };
 
@@ -319,7 +319,9 @@ export const RefreshDocument = new TypedDocumentString(`
     `) as unknown as TypedDocumentString<RefreshMutation, RefreshMutationVariables>;
 export const LogoutDocument = new TypedDocumentString(`
     mutation Logout($token: String!) {
-  logout(token: $token)
+  logout(token: $token, returnTo: CONSOLE) {
+    providerSignOutUrl
+  }
 }
     `) as unknown as TypedDocumentString<LogoutMutation, LogoutMutationVariables>;
 export const CurrentTenantDocument = new TypedDocumentString(`

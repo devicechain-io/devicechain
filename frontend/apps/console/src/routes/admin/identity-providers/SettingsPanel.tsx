@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // A connection's editable settings: display name, client id, scopes, email claim,
-// required authentication methods, required claims, and the write-only client secret.
-// The issuer, kind and token are fixed at creation and shown read-only.
+// required authentication methods, required claims, the write-only client secret, and
+// whether signing out also signs people out at the provider. The issuer, kind and token are fixed at creation and shown read-only.
 //
 // 🔴 THE SECRET NEVER COMES BACK. The read side only says whether one is stored, so the
 // secret input is only ever for a NEW value: it mounts empty, it is never seeded from the
@@ -25,6 +25,7 @@ import {
 } from '@/lib/api/identity-providers';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { Checkbox } from '@/components/ui/checkbox';
 import { CopyToken } from '@/components/ui/copy-token';
 import { ErrorBanner } from '@/components/ui/error-banner';
 import { FormField } from '@/components/ui/form-field';
@@ -50,6 +51,7 @@ export function SettingsPanel(props: PanelProps) {
       <GeneralSettings {...props} />
       <SecretPanel {...props} />
       <ClaimsPanel {...props} />
+      <SignOutPanel {...props} />
     </div>
   );
 }
@@ -131,6 +133,64 @@ function GeneralSettings({ connection: c, reading, onChanged }: PanelProps) {
         <Button onClick={() => void save()} loading={busy} disabled={busy || reading || !dirty}>
           {t('saveButton')}
         </Button>
+      </div>
+    </SectionPanel>
+  );
+}
+
+// Signing out at the provider too (OpenID Connect RP-initiated logout). Off unless switched
+// on, because it ends the person's session at the provider for every application it serves.
+// The switch saves at once (it is one field, and a partial update), and the panel says
+// plainly when it can have no effect: the approved snapshot names no sign-out endpoint.
+function SignOutPanel({ connection: c, reading, onChanged }: PanelProps) {
+  const { t } = useTranslation('identityProviders');
+  const { toast } = useToast();
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const noEndpoint = !c.discovery.endSessionEndpoint || !c.discovery.approved;
+
+  const toggle = async (on: boolean) => {
+    setError(null);
+    setBusy(true);
+    try {
+      await updateIdpConnection(c.token, { providerSignOut: on });
+      toast(on ? t('signOutOnToast') : t('signOutOffToast'));
+      onChanged();
+    } catch (err) {
+      setError(errMessage(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <SectionPanel title={t('signOutTitle')} description={t('signOutDescription')}>
+      <div className="space-y-4">
+        {error && <ErrorBanner message={error} onDismiss={() => setError(null)} />}
+        <label className="flex items-start gap-2 text-sm">
+          <Checkbox
+            checked={c.providerSignOut}
+            disabled={busy || reading}
+            onCheckedChange={(v) => void toggle(v === true)}
+            aria-label={t('signOutToggleLabel')}
+          />
+          <span>{t('signOutToggleLabel')}</span>
+        </label>
+        {c.providerSignOut && noEndpoint && (
+          <p className="text-sm text-muted-foreground">{t('signOutNoEndpoint')}</p>
+        )}
+        {c.signOutReturnUrls.length > 0 && (
+          <FormField label={t('signOutReturnUrlsLabel')} description={t('signOutReturnUrlsDescription')}>
+            <ul className="space-y-1">
+              {c.signOutReturnUrls.map((u) => (
+                <li key={u} className="flex items-center gap-2 text-sm">
+                  <span className="break-all font-mono text-xs">{u}</span>
+                  <CopyToken value={u} />
+                </li>
+              ))}
+            </ul>
+          </FormField>
+        )}
       </div>
     </SectionPanel>
   );

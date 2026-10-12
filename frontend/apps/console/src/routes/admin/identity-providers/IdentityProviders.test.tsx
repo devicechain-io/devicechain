@@ -96,6 +96,8 @@ function connection(over: Record<string, unknown> = {}) {
     domains: [{ domain: 'example.com', verifiedAt: '2026-10-01T10:00:00Z', verifiedBy: 'root@example.com' }],
     tenants: ['acme'],
     callbackUrl: 'https://dc.example.com/api/user-management/sso/callback/acme-sso',
+    providerSignOut: false,
+    signOutReturnUrls: ['https://dc.example.com/login', 'https://dc.example.com/dash/'],
     discovery: discovery(),
     createdAt: null,
     updatedAt: null,
@@ -503,6 +505,46 @@ describe('the client secret', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
     await waitFor(() => expect(api.updateIdpConnection).toHaveBeenCalledTimes(1));
     expect(api.updateIdpConnection).toHaveBeenCalledWith('acme-sso', { clientId: 'client-2' });
+  });
+});
+
+describe('signing out at the provider', () => {
+  it('starts off, lists the addresses to register, and saves only that one field', async () => {
+    renderDetail();
+    await screen.findByText(FP_OLD);
+    openTab(/settings/i);
+    const box = await screen.findByRole('checkbox', { name: 'Also sign people out at the provider' });
+    expect(box.getAttribute('aria-checked')).toBe('false');
+    expect(screen.getAllByText('https://dc.example.com/login').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('https://dc.example.com/dash/').length).toBeGreaterThan(0);
+    fireEvent.click(box);
+    await waitFor(() => expect(api.updateIdpConnection).toHaveBeenCalledTimes(1));
+    expect(api.updateIdpConnection).toHaveBeenCalledWith('acme-sso', { providerSignOut: true });
+  });
+
+  it('says when it can have no effect: the approved snapshot names no sign-out endpoint', async () => {
+    api.getIdpConnection.mockResolvedValue(
+      connection({ providerSignOut: true, discovery: discovery({ approved: true, endSessionEndpoint: null }) }),
+    );
+    renderDetail();
+    await screen.findByText(FP_OLD);
+    openTab(/settings/i);
+    expect(await screen.findByText(/names no sign-out endpoint/)).toBeTruthy();
+  });
+
+  it('says nothing more once the approved snapshot names one', async () => {
+    api.getIdpConnection.mockResolvedValue(
+      connection({
+        providerSignOut: true,
+        discovery: discovery({ approved: true, endSessionEndpoint: 'https://login.example.com/logout' }),
+      }),
+    );
+    renderDetail();
+    await screen.findByText(FP_OLD);
+    openTab(/settings/i);
+    const box = await screen.findByRole('checkbox', { name: 'Also sign people out at the provider' });
+    expect(box.getAttribute('aria-checked')).toBe('true');
+    expect(screen.queryByText(/names no sign-out endpoint/)).toBeNull();
   });
 });
 

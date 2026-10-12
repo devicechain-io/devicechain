@@ -47,7 +47,7 @@ import { signInErrorKey } from './i18n/signInError';
 import { loadDashboard, loadPublishedDashboard, type Loaded } from './load';
 import { MAP_RUNTIME } from './map-runtime';
 import { LOGIN, type Membership, SELECT_TENANT, TENANT_BASEMAP } from './queries';
-import { endServerSession } from './signOut';
+import { endServerSession, finishSignOut } from './signOut';
 import {
   SSO_COMPLETE_PATH,
   forgetSsoSession,
@@ -101,7 +101,9 @@ export default function App() {
     // server call runs behind it and reports a failure on the sign-in screen.
     setToken(null);
     setLoaded(null);
-    void endServerSession(refreshToken).then((ended) => setSignOutFailed(!ended));
+    // Only once the server confirmed does it go on to end the session at the identity
+    // provider too, which sends the browser back to this app's sign-in screen.
+    void finishSignOut(refreshToken, setSignOutFailed);
   };
 
   const onAuthed = (accessToken: string, refreshToken: string) => {
