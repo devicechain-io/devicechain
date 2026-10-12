@@ -5,9 +5,13 @@ package service
 
 import (
 	"context"
+	"io"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -372,4 +376,42 @@ func TestTheGraphQLSpecCarriesItsExecTimeoutToTheManager(t *testing.T) {
 		"the Spec's ExecTimeout never reached the GraphQL manager")
 	require.Zero(t, build(0).GraphQL.ExecTimeout,
 		"an unset ExecTimeout must keep the platform bound")
+}
+
+// blockedResolver answers a query that waits for its context to end, so the only thing
+// that can answer it is the execution deadline.
+type blockedResolver struct{}
+
+func (*blockedResolver) Blocked(ctx context.Context) (bool, error) {
+	<-ctx.Done()
+	return false, ctx.Err()
+}
+
+// TestTheSpecsExecTimeoutIsTheDeadlineTheDataPlaneServes is the half the test above cannot
+// see. Reading the manager's field after Initialize passes just as well when the value is
+// written AFTER Initialize — the moment the handler has already copied the deadline — so
+// this asks the served /graphql handler instead: with the platform bound raised far above
+// it, a blocked query must still be ended at the Spec's deadline.
+func TestTheSpecsExecTimeoutIsTheDeadlineTheDataPlaneServes(t *testing.T) {
+	t.Setenv(gqlcore.EnvGraphQLExecTimeout, "60")
+	ephemeralProbes(t)
+	ms := testMicroservice(t)
+	svc := New(ms, Spec{GraphQL: &GraphQLSpec{
+		Schema:      "type Query { blocked: Boolean! }",
+		Resolver:    func() interface{} { return &blockedResolver{} },
+		ExecTimeout: 200 * time.Millisecond,
+	}})
+	require.NoError(t, svc.Initialize(context.Background()))
+	srv := httptest.NewServer(ms.Mux())
+	t.Cleanup(srv.Close)
+
+	client := http.Client{Timeout: 10 * time.Second}
+	start := time.Now()
+	resp, err := client.Post(srv.URL+"/graphql", "application/json", strings.NewReader(`{"query":"{ blocked }"}`))
+	require.NoError(t, err, "the blocked query was not ended at the Spec's deadline")
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	require.Contains(t, string(body), "deadline exceeded", "status %d", resp.StatusCode)
+	require.Less(t, time.Since(start), 5*time.Second,
+		"the data plane served the platform bound, not the Spec's ExecTimeout")
 }

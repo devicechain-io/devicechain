@@ -70,6 +70,10 @@ func TestMainAssemblesItsManagersThroughCoreService(t *testing.T) {
 	require.True(t, callsIn(t, "beforeMicroserviceStopped")["Svc.Stop"])
 	require.True(t, callsIn(t, "beforeMicroserviceTerminated")["Svc.Terminate"])
 	require.True(t, init["registerAdminHandler"], "the admin plane is no longer registered")
+	// The auth gate is started inside the AfterRdb hook, a closure in the initialize
+	// function, so it is read from there. Without it the readiness gate never opens.
+	require.True(t, init["Microservice.StartInstanceAuthGate"],
+		"the auth gate is no longer started before the GraphQL manager is built")
 	require.True(t, execTimeoutIsSetOnTheSpec(t),
 		"the GraphQL Spec no longer carries graphQLExecTimeout(), so the data plane silently "+
 			"reverts to the platform execution bound and ends calls that are waiting on a provider")
@@ -131,4 +135,25 @@ func TestTheGraphQLServerIsStoppedBeforeTheDatabase(t *testing.T) {
 	require.True(t, graphqlStopped, "the GraphQL manager was never stopped (the database was stopped first)")
 	require.ErrorContains(t, err, "relational database manager",
 		"beforeMicroserviceStopped did not reach the database after the GraphQL stop")
+}
+
+// TestAnInitializeFailureIsReturnedFromTheCallback pins that a manager refusing to initialize
+// fails the service's initialize callback, which is what makes the process exit non-zero
+// rather than run on with no database. No relational database type is configured, so the
+// relational manager refuses at once without dialling anything.
+func TestAnInitializeFailureIsReturnedFromTheCallback(t *testing.T) {
+	prevMs, prevSvc, prevCfg := Microservice, Svc, Configuration
+	t.Cleanup(func() { Microservice, Svc, Configuration = prevMs, prevSvc, prevCfg })
+	Microservice = &core.Microservice{
+		InstanceId:                   "ai-inference-initfail",
+		FunctionalArea:               "ai-inference-initfail",
+		Readiness:                    core.NewReadinessGate(),
+		MicroserviceConfigurationRaw: []byte(`{}`),
+	}
+	Microservice.UseMetricsRegistry(prometheus.NewRegistry())
+
+	err := afterMicroserviceInitialized(context.Background())
+
+	require.ErrorContains(t, err, "not currently supported",
+		"a relational manager that refused to initialize did not fail the initialize callback")
 }

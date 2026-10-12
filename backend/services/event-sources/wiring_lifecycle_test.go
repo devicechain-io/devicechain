@@ -75,9 +75,9 @@ func TestMainAssemblesItsManagersThroughCoreService(t *testing.T) {
 }
 
 // TestTheGraphQLServerIsStoppedBeforeTheBroker drives beforeMicroserviceStopped over the
-// real core/service sequence. The relational manager is built but never initialized (that
-// needs a live Postgres), so its stop is refused: that refusal is the end marker proving
-// the stopper reached the database AFTER the GraphQL manager, whose stop is recorded.
+// real core/service sequence. The broker manager is built but never initialized (that
+// needs a live broker), so its stop is refused: that refusal is the end marker proving
+// the stopper reached the broker AFTER the GraphQL manager, whose stop is recorded.
 func TestTheGraphQLServerIsStoppedBeforeTheBroker(t *testing.T) {
 	prevMs, prevSvc, prevSources := Microservice, Svc, EventSources
 	t.Cleanup(func() { Microservice, Svc, EventSources = prevMs, prevSvc, prevSources })
@@ -105,4 +105,53 @@ func TestTheGraphQLServerIsStoppedBeforeTheBroker(t *testing.T) {
 	require.True(t, graphqlStopped, "the GraphQL manager was never stopped (the broker was stopped first)")
 	require.ErrorContains(t, err, "broker manager",
 		"beforeMicroserviceStopped did not reach the broker after the GraphQL stop")
+}
+
+// orderedSource is an event source that records its stop and terminate into a shared log.
+// Only those two are driven here; anything else reaching it panics on the nil embed.
+type orderedSource struct {
+	core.LifecycleComponent
+	log *[]string
+}
+
+func (s *orderedSource) Stop(context.Context) error {
+	*s.log = append(*s.log, "source stopped")
+	return nil
+}
+
+func (s *orderedSource) Terminate(context.Context) error {
+	*s.log = append(*s.log, "source terminated")
+	return nil
+}
+
+// TestTheSourcesStopBeforeTheManagers pins the one ordering this service keeps outside
+// core/service: its event sources are stopped and terminated BEFORE the managers, so a
+// source still delivering never publishes into a broker manager that has already drained.
+// Nothing else drives the shutdown callbacks with a source in them.
+func TestTheSourcesStopBeforeTheManagers(t *testing.T) {
+	prevMs, prevSvc, prevSources := Microservice, Svc, EventSources
+	t.Cleanup(func() { Microservice, Svc, EventSources = prevMs, prevSvc, prevSources })
+	Microservice = &core.Microservice{
+		InstanceId:     "event-sources-order",
+		FunctionalArea: "event-sources-order",
+		Readiness:      core.NewReadinessGate(),
+	}
+	Microservice.UseMetricsRegistry(prometheus.NewRegistry())
+
+	var log []string
+	cb := core.NewNoOpLifecycleCallbacks()
+	cb.Stopper.Postprocess = func(context.Context) error { log = append(log, "graphql stopped"); return nil }
+	cb.Terminator.Postprocess = func(context.Context) error { log = append(log, "graphql terminated"); return nil }
+	parsed := gqlcore.MustParseSchema(graphql.SchemaContent, &graphql.SchemaResolver{})
+	gql := gqlcore.NewGraphQLManager(Microservice, cb, parsed,
+		map[gqlcore.ContextKey]interface{}{}, Microservice.Readiness)
+	require.NoError(t, gql.Initialize(context.Background()))
+	Svc = service.FromManagers(Microservice, service.Managers{GraphQL: gql})
+	EventSources = []core.LifecycleComponent{&orderedSource{log: &log}}
+
+	require.NoError(t, beforeMicroserviceStopped(context.Background()))
+	require.NoError(t, beforeMicroserviceTerminated(context.Background()))
+
+	require.Equal(t, []string{"source stopped", "graphql stopped", "source terminated", "graphql terminated"}, log,
+		"the event sources must stop and terminate before the managers under them")
 }

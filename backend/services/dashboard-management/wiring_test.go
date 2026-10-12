@@ -104,3 +104,24 @@ func TestTheGraphQLServerIsStoppedBeforeTheDatabase(t *testing.T) {
 	require.ErrorContains(t, err, "relational database manager",
 		"beforeMicroserviceStopped did not reach the database after the GraphQL stop")
 }
+
+// TestAnInitializeFailureIsReturnedFromTheCallback pins that a manager refusing to initialize
+// fails the service's initialize callback, which is what makes the process exit non-zero
+// rather than run on with no database. No relational database type is configured, so the
+// relational manager refuses at once without dialling anything.
+func TestAnInitializeFailureIsReturnedFromTheCallback(t *testing.T) {
+	prevMs, prevSvc, prevCfg := Microservice, Svc, Configuration
+	t.Cleanup(func() { Microservice, Svc, Configuration = prevMs, prevSvc, prevCfg })
+	Microservice = &core.Microservice{
+		InstanceId:                   "dashboard-initfail",
+		FunctionalArea:               "dashboard-initfail",
+		Readiness:                    core.NewReadinessGate(),
+		MicroserviceConfigurationRaw: []byte(`{}`),
+	}
+	Microservice.UseMetricsRegistry(prometheus.NewRegistry())
+
+	err := afterMicroserviceInitialized(context.Background())
+
+	require.ErrorContains(t, err, "not currently supported",
+		"a relational manager that refused to initialize did not fail the initialize callback")
+}
