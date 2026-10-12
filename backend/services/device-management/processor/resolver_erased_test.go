@@ -41,6 +41,7 @@ func (suite *InboundEventsProcessorTestSuite) TestARelationshipEventRefusedByThe
 	} {
 		suite.Run(tc.name, func() {
 			suite.SetupTest()
+			reg := suite.withRegistry()
 			bytes, err := esproto.MarshalUnresolvedEvent(buildNewAssignmentEvent())
 			suite.Require().NoError(err)
 			ack := &atomicAck{}
@@ -67,6 +68,7 @@ func (suite *InboundEventsProcessorTestSuite) TestARelationshipEventRefusedByThe
 			}
 			if !tc.reported {
 				suite.Equal(int32(1), ack.n.Load(), "an erased tenant's event must be settled on the delivery it arrived on")
+				suite.Equal(1.0, loopResults(suite.T(), reg, "resolve", core.ResultErased), "resolve_messages_total{result=erased}")
 			}
 		})
 	}
@@ -94,6 +96,7 @@ func (suite *InboundEventsProcessorTestSuite) TestADeletedTenantsUnresolvableEve
 	} {
 		suite.Run(tc.name, func() {
 			suite.SetupTest()
+			reg := suite.withRegistry()
 			producer := deadletter.NewProducer(&core.Microservice{FunctionalArea: "device-management"})
 			deleted := tc.deleted
 			if !producer.UseTenantGate(func(string) bool { return deleted }) {
@@ -123,6 +126,8 @@ func (suite *InboundEventsProcessorTestSuite) TestADeletedTenantsUnresolvableEve
 			}
 			if !tc.reported {
 				suite.Equal(tc.acked, ack.n.Load(), "acknowledgements")
+				suite.Equal(float64(tc.acked), loopResults(suite.T(), reg, "resolve", core.ResultErased),
+					"resolve_messages_total{result=erased}")
 			}
 		})
 	}
