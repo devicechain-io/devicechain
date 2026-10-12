@@ -239,6 +239,10 @@ func (m *Manager) BeginSsoLink(ctx context.Context, identityToken, returnTo, sou
 	}
 	id, err := m.sessionIdentity(ctx, subject.Email, subject.SessionEpoch, subject.SessionID)
 	if err != nil {
+		if errors.Is(err, errEmailNotCanonical) {
+			// Signing in again cannot help this identity; say what can.
+			return nil, ErrIdentityEmailNotCanonical
+		}
 		if errors.Is(err, errSessionEnded) {
 			return nil, ErrSsoLinkSessionRequired
 		}

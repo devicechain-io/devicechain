@@ -508,7 +508,11 @@ func (m *Manager) LinkIdentity(ctx context.Context, email, connectionToken, subj
 	if subject == "" || len(subject) > 512 {
 		return invalid("a subject of up to 512 characters is required")
 	}
-	id, err := m.iam.IdentityByEmail(ctx, iam.NormalizeEmail(email))
+	email, err = iam.CanonicalEmail(email)
+	if err != nil {
+		return fmt.Errorf("%w: %v", ErrIdpInvalid, err)
+	}
+	id, err := m.iam.IdentityByEmail(ctx, email)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return fmt.Errorf("%w: no identity with that email", ErrIdpInvalid)
@@ -538,10 +542,15 @@ func (m *Manager) UnlinkIdentity(ctx context.Context, email, connectionToken str
 	if err != nil {
 		return false, err
 	}
-	id, err := m.iam.IdentityByEmail(ctx, iam.NormalizeEmail(email))
+	// An administrator action: IdentityForAdmin also finds an identity whose stored email is
+	// not canonical, so its link can be removed and the subject linked to its replacement.
+	id, err := m.iam.IdentityForAdmin(ctx, email)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return false, nil
+		}
+		if errors.Is(err, iam.ErrEmailInvalid) {
+			return false, fmt.Errorf("%w: %v", ErrIdpInvalid, err)
 		}
 		return false, err
 	}

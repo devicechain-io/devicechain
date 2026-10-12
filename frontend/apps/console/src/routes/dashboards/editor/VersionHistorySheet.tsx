@@ -49,10 +49,17 @@ import { Textarea } from '@/components/ui/textarea';
 import { formatTime } from '@/lib/utils';
 import { validateDefinitionOptions } from '@devicechain/widgets';
 import { OPTION_ISSUE_MESSAGE_KEYS, UNRESOLVED_REASON_KEYS, widgetLabel } from './optionIssues';
-import { unresolvedWidgets, type DashboardDefinition } from '@devicechain/dashboards';
+import {
+  parseDashboardDefinition,
+  unresolvedWidgets,
+  type DashboardDefinition,
+  type UnresolvedWidgetReport,
+} from '@devicechain/dashboards';
 import { defaultWidgetRegistry, type EditorWidgetRegistry } from './widgetRegistry';
+import { resolveText, useMessageLookup } from './optionWording';
 import {
   activateDashboardVersion,
+  getDashboardVersionDefinition,
   getPublishedVersion,
   listDashboardVersions,
   publishDashboard,
@@ -64,6 +71,10 @@ import {
 const VERSION_PAGE = 100;
 // dashboard-management clamps a page to its maximum page size.
 const VERSION_PAGE_MAX = 1000;
+
+// What reading an older version for unresolved widgets found: the list, or that the check
+// could not run. Kept distinct so a failed read is never shown as a clean result.
+type VersionCheck = { checked: true; unresolved: UnresolvedWidgetReport[] } | { checked: false };
 
 export interface VersionHistorySheetProps {
   token: string;
@@ -163,6 +174,7 @@ function VersionHistoryBody({
   const { t } = useTranslation(['dashboards', 'common']);
   const { toast } = useToast();
   const confirm = useConfirm();
+  const lookup = useMessageLookup();
 
   const [refreshKey, setRefreshKey] = useState(0);
   // The server pages the history (newest first, at most VERSION_PAGE_MAX per request), so
@@ -219,7 +231,77 @@ function VersionHistoryBody({
     }
   };
 
+  // Widgets in an OLDER version this console cannot resolve. Re-serving or rolling back to it
+  // is not blocked (only a NEW version is: the stored JSON is kept and a console that has the
+  // package renders it), but the author is told before they confirm.
+  //
+  // The check is advisory, so a version this drawer cannot read (the request fails, the version
+  // is gone, the stored JSON does not parse) does not stop the action -- the server is the
+  // authority on whether it may happen. But "could not check" is NOT reported as "nothing to
+  // report": the author is told the check did not run. It is fetched fresh on each click, not
+  // cached, so it always describes the version as stored now.
+  const checkVersion = async (v: DashboardVersion): Promise<VersionCheck> => {
+    setBusy(true);
+    try {
+      const raw = await getDashboardVersionDefinition(token, v.version);
+      if (raw === null) return { checked: false };
+      const def = parseDashboardDefinition(JSON.parse(raw), { catalog: registry.catalog });
+      return { checked: true, unresolved: unresolvedWidgets(def) };
+    } catch (err) {
+      console.error('could not read dashboard version to check its widgets', err);
+      return { checked: false };
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // An unresolved widget is named by its package's title when this console has the package (a
+  // settings-version or SDK mismatch), else by its id; its stored type follows as data.
+  const unresolvedName = (u: UnresolvedWidgetReport) => {
+    const descriptor = u.type ? registry.descriptor(u.type) : undefined;
+    return (descriptor && resolveText(lookup, descriptor.display.titleId, descriptor.display.title)) || u.widgetId;
+  };
+
+  // The confirm dialog's description renders inside a paragraph, so this is built from
+  // block spans rather than a list.
+  const versionNotice = (check: VersionCheck) => {
+    if (!check.checked) {
+      return (
+        <span className="mt-2 block text-foreground" data-testid="version-unresolved-unchecked">
+          {t('versionUnresolvedUnchecked')}
+        </span>
+      );
+    }
+    if (check.unresolved.length === 0) return null;
+    return (
+      <span className="mt-2 block text-foreground" data-testid="version-unresolved-warning">
+        {t('versionUnresolvedWarning', { count: check.unresolved.length })}
+        {check.unresolved.map((u) => (
+          <span key={u.widgetId} className="block">
+            {unresolvedName(u)}
+            {/* The stored type is data (an id), not prose. */}
+            <span className="ml-1">({u.type || u.widgetId})</span>
+            <span className="ml-1">— {t(UNRESOLVED_REASON_KEYS[u.reason.code])}</span>
+          </span>
+        ))}
+      </span>
+    );
+  };
+
   const activate = async (v: DashboardVersion) => {
+    const check = await checkVersion(v);
+    // Making a version live had no confirmation before this check existed, and a version with
+    // nothing to report still has none.
+    const notice = versionNotice(check);
+    if (
+      notice !== null &&
+      !(await confirm({
+        title: t('versionActivateConfirmTitle', { version: v.version }),
+        description: notice,
+        confirmLabel: t('versionActivate'),
+      }))
+    )
+      return;
     setBusy(true);
     try {
       await activateDashboardVersion(token, v.version);
@@ -233,10 +315,16 @@ function VersionHistoryBody({
   };
 
   const rollback = async (v: DashboardVersion) => {
+    const check = await checkVersion(v);
     if (
       !(await confirm({
         title: t('versionRollbackConfirmTitle', { version: v.version }),
-        description: t('versionRollbackConfirmDescription'),
+        description: (
+          <>
+            {t('versionRollbackConfirmDescription')}
+            {versionNotice(check)}
+          </>
+        ),
         confirmLabel: t('versionRollback'),
       }))
     )

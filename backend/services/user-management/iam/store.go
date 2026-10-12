@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/core"
@@ -72,6 +73,45 @@ func (s *Store) IdentityByEmail(ctx context.Context, email string) (*Identity, e
 	return &id, nil
 }
 
+// IdentityForAdmin resolves the identity an ADMINISTRATOR names, for the actions that
+// manage it (disable, delete, revoke its sessions, clear its password, unlink it, change
+// its roles and memberships). It looks the address up in canonical form (CanonicalEmail)
+// and, failing that, by the exact spelling given and by that spelling trimmed and
+// lower-cased -- the form addresses were stored in before the canonical one -- so an
+// identity whose stored email is not canonical can still be found and repaired or removed.
+//
+// 🔴 NEVER call this from a path that authenticates or issues a credential. Those look an
+// address up by its canonical form only (IdentityByEmail), and refuse an identity whose
+// stored email is not canonical; the fallback here exists only so such an identity is not
+// beyond an administrator's reach.
+//
+// An address that is not canonicalisable and matches no stored spelling returns the
+// CanonicalEmail error (ErrEmailInvalid); one that is valid and matches nothing returns
+// gorm.ErrRecordNotFound.
+func (s *Store) IdentityForAdmin(ctx context.Context, raw string) (*Identity, error) {
+	canonical, cerr := CanonicalEmail(raw)
+	if cerr == nil {
+		id, err := s.IdentityByEmail(ctx, canonical)
+		if err == nil || !errors.Is(err, gorm.ErrRecordNotFound) {
+			return id, err
+		}
+	}
+	trimmed := strings.TrimSpace(raw)
+	for _, spelling := range []string{trimmed, strings.ToLower(trimmed)} {
+		if spelling == "" || (cerr == nil && spelling == canonical) {
+			continue
+		}
+		id, err := s.IdentityByEmail(ctx, spelling)
+		if err == nil || !errors.Is(err, gorm.ErrRecordNotFound) {
+			return id, err
+		}
+	}
+	if cerr != nil {
+		return nil, cerr
+	}
+	return nil, gorm.ErrRecordNotFound
+}
+
 // ListIdentities returns every identity, preloading system roles and memberships
 // (each with its tenant roles) so the admin console can render the full directory
 // in one call. Ordered by email for a stable listing.
@@ -97,6 +137,9 @@ func (s *Store) ListTenants(ctx context.Context) ([]Tenant, error) {
 // CreateIdentity inserts an identity (with any associated roles/memberships set
 // on the struct).
 func (s *Store) CreateIdentity(ctx context.Context, id *Identity) error {
+	if err := requireCanonicalEmail(id.Email); err != nil {
+		return err
+	}
 	return s.sys(ctx).Create(id).Error
 }
 
@@ -651,6 +694,9 @@ func (s *Store) EnsureRole(ctx context.Context, scope RoleScope, token, name str
 // super-authority for both). Doing it transactionally avoids a half-seeded,
 // locked-out superuser.
 func (s *Store) SeedSuperuser(ctx context.Context, email, passwordHash string, systemAuthorities, tenantAdminAuthorities []string) error {
+	if err := requireCanonicalEmail(email); err != nil {
+		return err
+	}
 	suName, adminName := "Superuser", "Tenant Administrator"
 	return s.sys(ctx).Transaction(func(tx *gorm.DB) error {
 		suRole := Role{Scope: ScopeSystem, Token: SuperuserRoleToken,

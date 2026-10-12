@@ -51,6 +51,7 @@ export const acmeTankWidget = defineWidget({
         <div data-testid={`acme-tank-${widget.id}`}>
           <h3>{typeof options.heading === 'string' ? options.heading : ''}</h3>
           <span data-testid={`acme-tank-value-${widget.id}`}>
+            {/* eslint-disable-next-line i18next/no-literal-string -- test-only third-party stand-in: it ships no catalog. */}
             {sample && sample.value !== null ? `${String(sample.value)}${typeof options.unit === 'string' ? options.unit : ''}` : 'no reading'}
           </span>
         </div>

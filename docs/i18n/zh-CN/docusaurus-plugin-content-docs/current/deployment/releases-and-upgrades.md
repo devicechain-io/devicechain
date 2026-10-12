@@ -2216,6 +2216,13 @@ chart 会从 ingress 推导出 `https://<host>/api/user-management`，并且你�
 | `SsoUnverifiedIdentityRefused` | warning | 提供方已为某次登录担保，但该登录仍被拒绝，结果见 `outcome` 标签：`refused_unverified_email`、`refused_unverified_domain`、`refused_required_claim` 或 `refused_system_role_identity`。没有任何人登录成功。 | 通常是连接配置有误，或有人在探测。请在审计日志中查找提供方所声明的地址，并查看提供方自己的登录日志。 |
 | `SsoStateStoreFull` | critical | 保存已开始登录的存储已满，因此在条目过期（十分钟后）之前，user-management 拒绝通过任何提供方开始任何单点登录。密码登录不受影响。 | 几乎可以肯定有人在循环调用公开的登录开始接口：请在 ingress 日志中找到这些流量并在上游拦截。若流量合法，请调高 `instance.config.infrastructure.nats.kvStateMaxBytes`。 |
 
+#### 邮箱的域名现在只有一种写法，域名含非 ASCII 字符的已存储地址将不再匹配 {#next-upgrade-email-idna}
+
+邮箱地址现在以唯一的规范形式存储、查找和比较：本地部分与之前一样去除空白并转为小写，域名转换为小写 ASCII（国际化域名使用 `xn--` 形式），且不带末尾的点。因此 `user@bücher.example` 与 `user@xn--bcher-kva.example` 在密码登录、单点登录和关联请求中是同一个身份，连接所声明的域名也按同样的形式匹配。不是严格 `local@domain` 形式，或域名不是有效主机名的地址会被拒绝。
+
+- **域名为 ASCII 的地址不受影响。** 无需任何操作。
+- **以非 ASCII 域名（`user@bücher.example`）存储的身份保留旧形式，在管理员重新创建它之前会被拒绝。** 它无法通过密码或单点登录登录，已持有的会话会在下一次交换时结束；此时选择租户或刷新会返回代码 `IDENTITY_EMAIL_NOT_CANONICAL`。管理操作仍可按其存储的地址找到它，因此你可以禁用它、结束其会话、取消关联并删除它。要恢复访问，请取消关联并删除旧身份，然后重新创建（域名的两种写法均可：它会以 `xn--` 形式存储），并恢复其成员关系和关联。在升级之前完成这些操作可避免中断。已存储地址不是有效 `local@domain` 的身份同样适用。
+
 ### v0.19.0：按每秒 6,000 事件实测定规格，满流拒绝新事件 {#v0190-upgrade}
 
 v0.19.0 可从 v0.18.0 原地升级：先为集群 dcctl install，再逐实例 dcctl upgrade，
