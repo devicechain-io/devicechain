@@ -21,6 +21,7 @@ release notes before upgrading. They are ESM-only and built for a bundler — se
 | [`@devicechain/client`](https://www.npmjs.com/package/@devicechain/client) | The TypeScript SDK: auth token handling, GraphQL over fetch, JWT decode, and live subscriptions. Framework-agnostic; no React. |
 | [`@devicechain/dashboards`](https://www.npmjs.com/package/@devicechain/dashboards) | The `DashboardHub`, which owns the connection, resolves selectors and multiplexes telemetry subscriptions. Also the definition, selector, slot and binding-manifest types. |
 | [`@devicechain/widgets`](https://www.npmjs.com/package/@devicechain/widgets) | The React widgets and the renderer that lays a board out. |
+| [`@devicechain/widget-sdk`](https://www.npmjs.com/package/@devicechain/widget-sdk) | The contract for writing a dashboard widget: `defineWidget`, the option helpers and the sealed widget registry. See [Writing a custom widget](../guides/writing-a-custom-widget.md). |
 | [`@devicechain/brand`](https://www.npmjs.com/package/@devicechain/brand) | The brand tokens and the generated stylesheets. Optional: the widgets are themed entirely with CSS custom properties and require none of it. |
 
 ```bash
@@ -28,7 +29,7 @@ npm install @devicechain/widgets @devicechain/dashboards @devicechain/client \
             graphql react react-dom
 ```
 
-`@devicechain/dashboards` and `@devicechain/client` are **peer dependencies** of the widgets, pinned
+`@devicechain/dashboards`, `@devicechain/client` and `@devicechain/widget-sdk` are **peer dependencies** of the widgets, pinned
 to the exact same version. npm 7 and later install peers for you, so that install line is all you
 need.
 
@@ -40,7 +41,7 @@ outage.
 
 ## Versions and dist-tags
 
-All four packages are published together, at one version, from the release that cuts the platform
+All five packages are published together, at one version, from the release that cuts the platform
 itself. Version `0.14.0` of the widgets goes with version `0.14.0` of the SDK; there is no
 independent package versioning to reason about.
 
@@ -183,7 +184,7 @@ dependency nobody declared is a dependency nobody gets.
 ## Basemap tiles
 
 `TenantBasemapProvider` supplies the tile source, and it is optional: with no provider, the map
-falls back to a plain view. The resolution cascade lives in `@devicechain/client`, so every
+draws a bundled world basemap of continents and borders. The resolution cascade lives in `@devicechain/client`, so every
 DeviceChain surface resolves a per-user override over the tenant default in the same way. See
 [Basemaps](../concepts/basemaps.md).
 

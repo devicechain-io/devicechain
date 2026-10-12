@@ -29,7 +29,7 @@ The definition format and the renderer carry a per-breakpoint box for every widg
 
 ## Widgets
 
-Built-in widgets span five channels: telemetry, alarm, control, selection, and location. The time-series chart and the gauge render over [Apache ECharts](https://echarts.apache.org/), and the map over [MapLibre GL](https://maplibre.org/). The rest are plain DOM.
+Built-in widgets span six channels: telemetry, static (no data), alarm, control, selection, and location. The time-series chart and the gauge render over [Apache ECharts](https://echarts.apache.org/), and the map over [MapLibre GL](https://maplibre.org/). The rest are plain DOM.
 
 | Widget | Channel | Shows |
 |---|---|---|
@@ -37,8 +37,8 @@ Built-in widgets span five channels: telemetry, alarm, control, selection, and l
 | **Gauge** | telemetry | a single latest value against a range / thresholds |
 | **Latest-value card** | telemetry | a single current reading with its timestamp |
 | **Table** | telemetry | recent rows for a device or anchor |
-| **Label** | telemetry | static text |
-| **Image** | telemetry | a static image (e.g. a floor plan behind other widgets) |
+| **Label** | static | static text |
+| **Image** | static | a static image (e.g. a floor plan behind other widgets) |
 | **Alarm table** | alarm | live alarms for a device or anchor |
 | **Alarm count** | alarm | a rolled-up count of open alarms |
 | **Command / control** | control | a typed parameter form that dispatches a command and shows its live delivery lifecycle |
@@ -79,7 +79,7 @@ Two further kinds, `devices` and `relatedTraversal`, are reserved so a stored de
 
 Selectors are resolved through the client SDK against the GraphQL API. That makes resolution:
 
-- **live** — a device newly assigned to an area appears on that area's dashboard without editing it;
+- **current** — a device newly assigned to an area appears on that area's dashboard without editing it, the next time the dashboard is opened (a board already open keeps the members it resolved until it is reloaded);
 - **permission-checked** — it uses the caller's own tenant-scoped, authenticated API access.
 
 How live values arrive depends on the channel:

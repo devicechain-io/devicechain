@@ -21,6 +21,7 @@ construidos para un bundler; consulta [Qué asumen estos paquetes](#qué-asumen-
 | [`@devicechain/client`](https://www.npmjs.com/package/@devicechain/client) | El SDK de TypeScript: gestión de tokens de autenticación, GraphQL sobre fetch, decodificación de JWT y suscripciones en vivo. Agnóstico del framework; sin React. |
 | [`@devicechain/dashboards`](https://www.npmjs.com/package/@devicechain/dashboards) | El `DashboardHub`, que es dueño de la conexión, resuelve selectores y multiplexa las suscripciones de telemetría. También los tipos de definición, selector, slot y manifiesto de vinculación. |
 | [`@devicechain/widgets`](https://www.npmjs.com/package/@devicechain/widgets) | Los widgets de React y el renderizador que dispone el panel. |
+| [`@devicechain/widget-sdk`](https://www.npmjs.com/package/@devicechain/widget-sdk) | El contrato para escribir un widget de panel: `defineWidget`, los ayudantes de opciones y el registro de widgets sellado. Consulta [Escribir un widget personalizado](../guides/writing-a-custom-widget.md). |
 | [`@devicechain/brand`](https://www.npmjs.com/package/@devicechain/brand) | Los tokens de marca y las hojas de estilo generadas. Opcional: los widgets se tematizan enteramente con propiedades personalizadas de CSS y no requieren nada de esto. |
 
 ```bash
@@ -28,7 +29,7 @@ npm install @devicechain/widgets @devicechain/dashboards @devicechain/client \
             graphql react react-dom
 ```
 
-`@devicechain/dashboards` y `@devicechain/client` son **dependencias peer** de los widgets, fijadas a
+`@devicechain/dashboards`, `@devicechain/client` y `@devicechain/widget-sdk` son **dependencias peer** de los widgets, fijadas a
 exactamente la misma versión. npm 7 y posteriores instalan las peers por ti, así que esa línea de
 instalación es todo lo que necesitas.
 
@@ -40,7 +41,7 @@ una caída del servicio.
 
 ## Versiones y dist-tags
 
-Los cuatro paquetes se publican juntos, en una sola versión, desde la misma release que corta la
+Los cinco paquetes se publican juntos, en una sola versión, desde la misma release que corta la
 plataforma. La versión `0.14.0` de los widgets va con la versión `0.14.0` del SDK; no hay un
 versionado independiente por paquete que tengas que razonar.
 
@@ -187,8 +188,8 @@ similar, donde una dependencia que nadie declaró es una dependencia que nadie o
 
 ## Teselas de mapa base
 
-`TenantBasemapProvider` suministra la fuente de teselas, y es opcional: sin proveedor, el mapa recae
-en una vista simple. La cascada de resolución vive en `@devicechain/client`, de modo que toda
+`TenantBasemapProvider` suministra la fuente de teselas, y es opcional: sin proveedor, el mapa dibuja
+un mapa base mundial incluido, con continentes y fronteras. La cascada de resolución vive en `@devicechain/client`, de modo que toda
 superficie de DeviceChain resuelve del mismo modo una anulación por usuario sobre el valor por
 defecto del inquilino. Consulta [Mapas base](../concepts/basemaps.md).
 
