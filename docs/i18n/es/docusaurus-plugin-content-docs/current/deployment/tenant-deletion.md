@@ -46,8 +46,9 @@ estaba conectado conserva su credencial del bróker hasta que esta caduca, hasta
 credenciales se han borrado, así que no puede volver a conectarse, pero la conexión existente
 sobrevive. Liberar el identificador antes de ese momento permitiría que las escrituras de un
 rezagado aterrizasen bajo un nombre con el que después podría crearse un inquilino *nuevo*, que las
-heredaría. Evitar eso es el objetivo de todo el proceso, así que la espera se mide desde el momento
-de la eliminación y coincide con la vida útil de la credencial.
+heredaría. Evitar eso es el objetivo de todo el proceso, así que la espera coincide con la vida útil
+de la credencial y se mide desde que el último sistema de almacenamiento terminó de borrar los datos
+del inquilino, a partir de lo cual ya no puede emitirse ninguna credencial nueva para él.
 
 Hasta que ambas esperas hayan pasado, el identificador sigue ocupado. Intentar crear un inquilino
 con él devuelve un error que lo indica.
@@ -69,6 +70,18 @@ sistema de almacenamiento por turno:
 
 Una eliminación no puede darse por terminada hasta que todos informen de que están limpios. Un
 sistema de almacenamiento inaccesible se reintenta en la siguiente pasada, no se omite.
+
+### Lo que debes retirar tú {#operator-steps}
+
+Algunos ajustes que nombran a un inquilino forman parte de la configuración de un servicio, no de
+los datos del inquilino, así que una eliminación no los toca.
+
+**Identidades de dispositivos LwM2M.** Cada identidad DTLS-PSK de LwM2M está vinculada a un
+inquilino y a un identificador externo en la configuración de lwm2m-ingest. Después de eliminar un
+inquilino, retira sus identidades de esa configuración: en una instancia instalada con `dcctl`,
+quítalas del archivo indicado en `--lwm2m-identities` y vuelve a ejecutar `dcctl bootstrap` con él.
+De lo contrario, los vínculos se mantienen y se aplican a cualquier inquilino que se cree más
+adelante con el mismo identificador.
 
 ## Qué se conserva deliberadamente {#retained}
 
