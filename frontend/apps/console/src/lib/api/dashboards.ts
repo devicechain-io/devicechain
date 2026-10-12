@@ -270,6 +270,21 @@ export async function listDashboardVersions(
   return data.dashboardVersions;
 }
 
+const DASHBOARD_VERSION_DEFINITION = graphql(`
+  query DashboardVersionDefinition($token: String!, $version: Int!) {
+    dashboardVersion(token: $token, version: $version) {
+      definition
+    }
+  }
+`);
+
+// The stored definition JSON of one published version, so the drawer can tell the author
+// what rolling back to or re-serving it would bring along before they confirm.
+export async function getDashboardVersionDefinition(token: string, version: number): Promise<string | null> {
+  const data = await gql('dashboard-management', DASHBOARD_VERSION_DEFINITION, { token, version });
+  return data.dashboardVersion?.definition ?? null;
+}
+
 const PUBLISH_DASHBOARD = graphql(`
   mutation PublishDashboard(
     $token: String!

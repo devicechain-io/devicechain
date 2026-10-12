@@ -11,6 +11,7 @@
   "scripts": {
     "pretypecheck": "node ../../scripts/build-packages.mjs",
     "typecheck": "tsc --noEmit",
+    "lint": "eslint \"src/**/*.{ts,tsx}\" \"fixtures/**/*.{ts,tsx}\"",
     "pretest": "node ../../scripts/build-packages.mjs",
     "test": "vitest run"
   },
@@ -20,7 +21,13 @@
     "@devicechain/widgets": "0.0.0-dev"
   },
   "devDependencies": {
+    "@babel/core": "^8.0.6",
+    "@babel/eslint-parser": "^8.0.6",
+    "@babel/preset-react": "^8.0.1",
+    "@babel/preset-typescript": "^8.0.1",
     "@types/react": "^19.3.0",
+    "eslint": "^10.11.0",
+    "eslint-plugin-i18next": "^6.1.5",
     "react": "^19.3.0",
     "typescript": "~7.0.2",
     "vitest": "^5.0.3"
