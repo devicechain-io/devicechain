@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 
 	"github.com/devicechain-io/dc-microservice/userclient"
@@ -313,7 +314,11 @@ func (c *connection) adminSession(ctx context.Context) (*userclient.AdminSession
 // (a non-zero exit is a setup failure, never an answer). The rig asks BEFORE the baseline
 // install so it can stand up the stub provider the instance has to be able to reach when,
 // and only when, the release being upgraded from can create a connection at all.
-func runSSOBaseline(argv []string) error {
+func runSSOBaseline(argv []string) error { return runSSOBaselineTo(argv, os.Stdout) }
+
+// runSSOBaselineTo is runSSOBaseline writing its answer to w, so the answer the rig
+// parses is tested as printed.
+func runSSOBaselineTo(argv []string, w io.Writer) error {
 	fs := flagSetFor("ssobaseline")
 	var dir string
 	fs.StringVar(&dir, "baseline-schemas", "", "a `backend/services` tree from the release being seeded (required)")
@@ -328,9 +333,9 @@ func runSSOBaseline(argv []string) error {
 		return err
 	}
 	if ok, why := base.supportsConnection(); !ok {
-		fmt.Printf("unsupported: %s\n", why)
+		fmt.Fprintf(w, "unsupported: %s\n", why)
 		return nil
 	}
-	fmt.Println("supported")
+	fmt.Fprintln(w, "supported")
 	return nil
 }

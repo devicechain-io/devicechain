@@ -2916,6 +2916,41 @@ baseline that has none can now fail its verify on a lookup it does not need"
   receipt="$saved_receipt"
   note "the superuser's password reaches verify for admin-plane rows and for nothing else"
 
+  # idp_baseline_supported decides whether the BASELINE seed gets a provider, and it fails
+  # in the quiet direction: an answer read as "no" skips the baseline's connection by name
+  # on every drill, and every drill stays green. So only the exact word "supported" is a
+  # yes, "unsupported: ..." is a no, and anything else -- another word, or apiprobe failing
+  # to answer -- must END the run (fail), never fall through to "no". Run in a subshell,
+  # because fail exits: "returned N" is printed only when the function RETURNED.
+  local idp_stub saved_src="${baseline_src:-}" got
+  idp_stub="$stub_dir/ssobaseline"
+  cat > "$idp_stub" <<'STUB'
+#!/usr/bin/env bash
+[[ "$1 $2" == "ssobaseline --baseline-schemas" ]] || { echo "unexpected argv: $*" >&2; exit 64; }
+printf '%s\n' "$STUB_ANSWER"
+exit "${STUB_EXIT:-0}"
+STUB
+  chmod +x "$idp_stub"
+  apiprobe="$idp_stub"
+  baseline_src="$stub_dir"
+  local answer want
+  for answer in "supported|returned 0" "unsupported: no admin schema|returned 1" \
+    "Supported|ENDED" "unsupported|ENDED" "|ENDED" "supported, mostly|ENDED"; do
+    want="${answer#*|}"
+    got="$(STUB_ANSWER="${answer%%|*}" bash -c "$(declare -f fail_code fail say note idp_baseline_supported)
+      $(declare -p apiprobe baseline_src baseline_tag)
+      idp_baseline_supported; echo \"returned \$?\"" 2>/dev/null | grep -o 'returned [0-9]*' || true)"
+    [[ "${got:-ENDED}" == "$want" ]] ||
+      fail "SELF-TEST FAILED: idp_baseline_supported over the answer '${answer%%|*}' gave '${got:-ENDED}', want '$want'"
+  done
+  got="$(STUB_ANSWER=supported STUB_EXIT=1 bash -c "$(declare -f fail_code fail say note idp_baseline_supported)
+    $(declare -p apiprobe baseline_src baseline_tag)
+    idp_baseline_supported; echo \"returned \$?\"" 2>/dev/null | grep -o 'returned [0-9]*' || true)"
+  [[ -z "$got" ]] ||
+    fail "SELF-TEST FAILED: idp_baseline_supported read a FAILED apiprobe (exit 1) as an answer ('$got')"
+  baseline_src="$saved_src"
+  note "only the exact word 'supported' stands the stub provider up for the baseline; an unreadable answer ends the run"
+
   apiprobe="$saved_apiprobe"
   baseline_tag="$saved"
   rm -rf "$stub_dir"

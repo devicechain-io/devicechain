@@ -9,6 +9,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -127,4 +129,42 @@ func TestSeedAdminRowsRecordsWhatItWroteOrWhatItSkipped(t *testing.T) {
 			t.Fatalf("err=%v", err)
 		}
 	})
+}
+
+// 🔴 THE ANSWER THE RIG PARSES, as printed. hack/upgrade-rig.sh stands the stub provider
+// up, and passes --idp-issuer to the baseline seed, only on the exact word "supported".
+// An answer stuck on "unsupported" would skip the baseline's connection BY NAME on every
+// drill, forever, and every drill would stay green — so the current tree, which can
+// create a connection, must get "supported", and a tree that cannot must not.
+func TestSSOBaselinePrintsTheWordTheRigParses(t *testing.T) {
+	var out bytes.Buffer
+	if err := runSSOBaselineTo([]string{"--baseline-schemas", filepath.Join("..", "..", "services")}, &out); err != nil {
+		t.Fatal(err)
+	}
+	if out.String() != "supported\n" {
+		t.Fatalf("the current tree answered %q, want exactly \"supported\n\"", out.String())
+	}
+
+	dir := t.TempDir()
+	graphqlDir := filepath.Join(dir, "user-management", "graphql")
+	if err := os.MkdirAll(graphqlDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(graphqlDir, "schema.graphql"), []byte("type Query { ping: String }\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	if err := runSSOBaselineTo([]string{"--baseline-schemas", dir}, &out); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(out.String(), "unsupported: ") {
+		t.Fatalf("a tree with no admin schema answered %q", out.String())
+	}
+
+	// No tree is a setup failure, never an answer the rig could read as either word.
+	out.Reset()
+	assertCode(t, runSSOBaselineTo(nil, &out), exitSetup)
+	if out.Len() != 0 {
+		t.Fatalf("a refused question still printed an answer: %q", out.String())
+	}
 }
