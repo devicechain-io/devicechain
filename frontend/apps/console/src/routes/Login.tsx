@@ -1,7 +1,7 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
-import { useState, type FormEvent } from 'react';
+import { useRef, useState, type FormEvent } from 'react';
 import { Navigate, useNavigate, useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { useAuth, consumeSessionExpired } from '@/auth/AuthProvider';
@@ -48,6 +48,7 @@ export default function LoginPage() {
   // 'password' is everything else, and the screen the explicit SSO button falls back to.
   const [step, setStep] = useState<'identify' | 'sso' | 'password'>('identify');
   const [ssoUrl, setSsoUrl] = useState<string | null>(null);
+  const emailRef = useRef<HTMLInputElement>(null);
   const [identity, setIdentity] = useState<IdentityAuth | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -179,6 +180,16 @@ export default function LoginPage() {
     setStep('identify');
     setPassword('');
     setError(null);
+    // The email field stays mounted, so its autoFocus does not fire again.
+    emailRef.current?.focus();
+  };
+
+  // The single sign-on step's form submission (its button, or Enter, which the email field
+  // still has after Enter on the first screen). This step has no password field, so the
+  // form must never go to handleCredentials from here: that would send an empty password.
+  const handleContinueSso = (e: FormEvent) => {
+    e.preventDefault();
+    if (ssoUrl !== null) window.location.assign(ssoUrl);
   };
 
   const handleUsePassword = () => {
@@ -251,13 +262,16 @@ export default function LoginPage() {
           </div>
         ) : (
           <form
-            onSubmit={step === 'identify' ? handleIdentify : handleCredentials}
+            onSubmit={
+              step === 'identify' ? handleIdentify : step === 'sso' ? handleContinueSso : handleCredentials
+            }
             className="space-y-4 rounded-lg border border-border bg-card p-6"
           >
             {error && <ErrorBanner message={error} onDismiss={() => setError(null)} />}
 
             <FormField label={t('emailLabel')} htmlFor="email">
               <Input
+                ref={emailRef}
                 id="email"
                 type="email"
                 autoComplete="username"
@@ -291,11 +305,7 @@ export default function LoginPage() {
             {step === 'sso' && (
               <>
                 <p className="text-sm text-muted-foreground">{t('ssoDomainNotice')}</p>
-                <Button
-                  type="button"
-                  className="w-full"
-                  onClick={() => ssoUrl !== null && window.location.assign(ssoUrl)}
-                >
+                <Button type="submit" className="w-full" autoFocus>
                   {t('ssoContinue')}
                 </Button>
                 <Button type="button" variant="outline" className="w-full" onClick={handleUsePassword}>

@@ -426,6 +426,47 @@ describe('the first screen asks for the email alone', () => {
     fireEvent.click(screen.getByRole('button', { name: t('login:ssoButton') }));
     await waitFor(() => expect(assign).toHaveBeenCalledWith(GIVEN));
   });
+
+  // 🔴 Enter on the single sign-on step. The email field keeps focus after Enter on the
+  // first screen, so a second Enter submits the SAME form, which on this step has no
+  // password field: it must continue to the provider, never send a password sign-in with
+  // an empty password (a failed attempt counted against the account).
+  it('continues to the provider on Enter at a domain with a connection, and sends no password', async () => {
+    startSso.mockResolvedValue(GIVEN);
+    renderLogin();
+    typeEmail('someone@acme.com');
+    clickContinue();
+    const sso = await screen.findByRole('button', { name: t('login:ssoContinue') });
+    expect(document.activeElement).toBe(sso);
+
+    fireEvent.submit(screen.getByLabelText(t('login:emailLabel')).closest('form')!);
+    await waitFor(() => expect(assign).toHaveBeenCalledWith(GIVEN));
+    expect(login).not.toHaveBeenCalled();
+    expect(startSso).toHaveBeenCalledTimes(1);
+  });
+
+  it('drops the begun sign-in when the email is changed at a domain with a connection', async () => {
+    startSso.mockResolvedValue(GIVEN);
+    renderLogin();
+    typeEmail('someone@acme.com');
+    clickContinue();
+    fireEvent.click(await screen.findByRole('button', { name: t('login:changeEmail') }));
+
+    expect(discardPendingSso).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText(t('login:ssoDomainNotice'))).toBeNull();
+    const field = screen.getByLabelText(t('login:emailLabel')) as HTMLInputElement;
+    expect(field.readOnly).toBe(false);
+    expect(document.activeElement).toBe(field);
+    expect(assign).not.toHaveBeenCalled();
+  });
+
+  it('moves focus to the password field when the password is asked for', async () => {
+    renderLogin();
+    typeEmail('someone@acme.com');
+    clickContinue();
+    const password = await screen.findByLabelText(t('login:passwordLabel'));
+    expect(document.activeElement).toBe(password);
+  });
 });
 
 // 🔴 THE INSTRUMENT CHECK. Every assertion above compares against a string i18next
