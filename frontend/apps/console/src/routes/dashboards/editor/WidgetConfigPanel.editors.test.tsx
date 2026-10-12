@@ -194,7 +194,35 @@ describe('a trusted package supplying its own editor', () => {
     // Each service is an explicit, named capability; anything else reaching an editor is a leak.
     const services = seen!.services as Record<string, unknown>;
     expect(Object.keys(services).filter((k) => !['slots', 'deviceToken', 'commandChoices'].includes(k))).toEqual([]);
-    expect(typeof services.commandChoices).toBe('function');
+    // This editor declared no command control, so it is handed no command lookup.
+    expect('commandChoices' in services).toBe(false);
+  });
+
+  it('hands the command lookup only to an editor whose descriptor declares the command control', () => {
+    let seen: WidgetEditorProps | undefined;
+    const Spy = (props: WidgetEditorProps) => {
+      seen = props;
+      return null;
+    };
+    const cmdWidget = defineWidget({
+      descriptor: {
+        ...descriptorWith({ commandName: cv(), commandLabel: cv(), parameterSchema: cv() }),
+        id: 'acme/cmd' as const,
+      },
+      implementation: { kind: 'trusted-react', component: () => null, editor: Spy },
+    });
+    render(
+      <WidgetConfigPanel
+        widget={{ ...widget, type: 'acme/cmd' as ResolvedWidgetInstance['type'], options: {} } as ResolvedWidgetInstance}
+        registry={createWidgetRegistry([cmdWidget])}
+        datasource={undefined}
+        slots={slots}
+        onChange={vi.fn()}
+        onDatasource={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+    expect(typeof seen!.services.commandChoices).toBe('function');
   });
 
   it('contains an editor that throws while rendering to the editor, not the panel or the page', () => {
@@ -236,17 +264,21 @@ describe('a trusted package supplying its own editor', () => {
 
   it('refuses a value the schema cannot hold and a key it does not declare, writing nothing', () => {
     const onChange = renderPanel();
-    // React reports an event handler's throw on the window; the write must not have happened.
     const quiet = vi.spyOn(console, 'error').mockImplementation(() => {});
-    const swallow = (e: ErrorEvent) => e.preventDefault();
-    window.addEventListener('error', swallow);
     try {
+      expect(screen.queryByTestId('widget-editor-write-error')).toBeNull();
       fireEvent.click(screen.getByRole('button', { name: 'bad value' }));
+      // The author is told, in the panel, instead of only the browser console.
+      expect(screen.getByTestId('widget-editor-write-error').textContent).toMatch(/zigzag|curve/);
       fireEvent.click(screen.getByRole('button', { name: 'bad key' }));
+      expect(screen.getByTestId('widget-editor-write-error').textContent).toMatch(/nope/);
     } finally {
-      window.removeEventListener('error', swallow);
       quiet.mockRestore();
     }
     expect(onChange).not.toHaveBeenCalled();
+    // The workspace survives and a good write clears the message.
+    fireEvent.click(screen.getByRole('button', { name: 'quadratic' }));
+    expect(onChange).toHaveBeenCalledTimes(1);
+    expect(screen.queryByTestId('widget-editor-write-error')).toBeNull();
   });
 });

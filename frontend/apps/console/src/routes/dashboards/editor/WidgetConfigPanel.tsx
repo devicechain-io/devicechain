@@ -191,12 +191,24 @@ export function WidgetConfigPanel({
   // descriptor's schema (applyOptionPatch): a key the descriptor does not declare, or a value
   // of the wrong kind, throws where the editor made the mistake instead of becoming a stored
   // option nothing reads.
+  //
+  // A throw here happens inside an editor's event handler, where React reports it to the
+  // browser console and nothing else -- the author would see a control that does nothing. It
+  // is caught and shown beside the editor instead; the write itself never happened.
+  const [editorError, setEditorError] = useState<string | null>(null);
+  useEffect(() => setEditorError(null), [widget.id]);
   const setOptions = (patch: Record<string, unknown>) => {
     if (!descriptor) return;
-    onChange({
-      ...widget,
-      options: applyOptionPatch(descriptor.options, widget.options, patch, widget.type),
-    });
+    try {
+      onChange({
+        ...widget,
+        options: applyOptionPatch(descriptor.options, widget.options, patch, widget.type),
+      });
+      setEditorError(null);
+    } catch (err) {
+      console.error('widget editor setOptions failed', err);
+      setEditorError(err instanceof Error ? err.message : String(err));
+    }
   };
 
   // A widget whose id this console's registry does not hold has no schema to derive fields
@@ -224,7 +236,10 @@ export function WidgetConfigPanel({
   const services: WidgetEditorServices = {
     slots: slots ?? {},
     deviceToken: datasource?.kind === 'device' ? datasource.deviceToken : undefined,
-    commandChoices: commandChoicesService,
+    // Host callbacks only to an editor whose descriptor declared the control that needs them.
+    ...(Object.values(descriptor.options).some((spec) => spec.control === 'command-vocabulary')
+      ? { commandChoices: commandChoicesService }
+      : {}),
   };
   const fieldContext: OptionFieldContext = { widget, descriptor, setOption, setOptions, services };
   // A package's own editor for the whole widget, when its registration ships one. It takes
@@ -280,6 +295,15 @@ export function WidgetConfigPanel({
           </ErrorBoundary>
         ) : (
           <WidgetOptionFields ctx={fieldContext} leading />
+        )}
+        {editorError && (
+          <p
+            className="rounded-md border border-destructive/40 bg-destructive/5 p-2 text-xs text-destructive"
+            role="alert"
+            data-testid="widget-editor-write-error"
+          >
+            {t('widgetEditorWriteFailed', { error: editorError })}
+          </p>
         )}
 
         {policy.mode !== 'none' && (
