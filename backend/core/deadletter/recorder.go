@@ -35,10 +35,11 @@ const payloadOverhead = 4 << 10
 // The build runs at the manager's start, after the readers exist, and makes:
 //
 //   - a writer on dead-letters, and one on each VERBATIM-COPY stream a reader's stream
-//     declares (connector-dispatch.dead for connector-dispatch);
-//   - a tenant-deletion gate, but only when some reader is on a stream whose give-ups are
-//     lettered — a manager whose only reader is on dead-letters writes no letters and has
-//     no tenant to ask about.
+//     declares (connector-dispatch.dead for connector-dispatch).
+//
+// Before it writes anything it asks the PRODUCER whether the tenant has been deleted
+// (Producer.tenantDeleted), the same rule every sink the producer builds applies; a manager
+// whose only reader is on dead-letters never asks, because it writes no letters.
 //
 // It refuses to build when a reader's stream declares no DeadLetterKind or an undeclared
 // one: that is a stream whose abandoned deliveries would be neither lettered nor counted.
@@ -46,7 +47,6 @@ func MaxDeliveryRecorder(p *Producer) func(*messaging.NatsManager) (messaging.Ma
 	p.mustBeBuilt("MaxDeliveryRecorder")
 	return func(nmgr *messaging.NatsManager) (messaging.MaxDeliveryFunc, error) {
 		r := &maxDeliveryRecorder{producer: p, copies: map[string]Writer{}}
-		lettered := false
 		for _, suffix := range nmgr.ReaderSuffixes() {
 			switch kind := streams.DeadLetterKindFor(suffix); {
 			case kind == streams.NotLettered:
@@ -55,7 +55,6 @@ func MaxDeliveryRecorder(p *Producer) func(*messaging.NatsManager) (messaging.Ma
 				return nil, fmt.Errorf("stream %q declares dead-letter kind %q, which is not in the "+
 					"vocabulary; its abandoned deliveries could not be lettered", suffix, kind)
 			}
-			lettered = true
 			if c := streams.VerbatimCopyFor(suffix); c != "" && r.copies[c] == nil {
 				w, err := nmgr.NewWriter(c)
 				if err != nil {
@@ -71,15 +70,11 @@ func MaxDeliveryRecorder(p *Producer) func(*messaging.NatsManager) (messaging.Ma
 		// The recorder counts its own losses (MaxDeliveryLost, on the producer's counter), so
 		// the sink's own hook is a no-op: a loss is then counted once, where the outcome is
 		// decided.
+		//
+		// It has no tenant-deletion gate of its own: record asks the producer's before it
+		// writes anything, the verbatim copy included.
 		r.sink = &Sink{writer: letters, source: p.source, onLoss: func(error) {}}
 		r.maxLetter = int(nmgr.MaxMsgSize(streams.DeadLetters))
-		if lettered {
-			infra := nmgr.Microservice.InstanceConfiguration.Infrastructure
-			// nil gates: the owning service reports the gate's state on its own gauge, and this
-			// is the same configuration read a second time.
-			r.deleted = tenantLifecycleGate(infra.UserManagement, infra.ServiceAuth.Secret,
-				nmgr.Microservice.FunctionalArea, nil)
-		}
 		return r.record, nil
 	}
 }
@@ -90,9 +85,6 @@ type maxDeliveryRecorder struct {
 	sink     *Sink
 	// copies holds a writer per verbatim-copy suffix the area's streams declare.
 	copies map[string]Writer
-	// deleted reports a deleted tenant; nil when the gate is not configured, which reads as
-	// "not deleted", the same default every other consumer of the gate has.
-	deleted func(string) bool
 	// maxLetter is the dead-letter stream's largest message.
 	maxLetter int
 }
@@ -127,9 +119,10 @@ func (r *maxDeliveryRecorder) record(ctx context.Context, d messaging.MaxDeliver
 			Msg("A message ran out of deliveries with no outcome, and carries no tenant it can be lettered under")
 		return messaging.MaxDeliveryUnattributable, nil
 	}
-	// Checked before writing, so a letter is not filed for a tenant already on its way out.
-	// A purge that starts after this check can still race the write; its next pass erases it.
-	if r.deleted != nil && r.deleted(tenant) {
+	// Checked before writing, so a letter is not filed for a tenant already on its way out —
+	// the producer's rule, the same one every sink applies. A purge that starts after this
+	// check can still race the write; its next pass erases it.
+	if r.producer.tenantDeleted(tenant) {
 		return messaging.MaxDeliveryTenantDeleted, nil
 	}
 	tctx := core.WithTenant(ctx, tenant)
