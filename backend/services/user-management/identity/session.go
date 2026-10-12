@@ -407,11 +407,9 @@ var ErrIdentityNotFound = errors.New("identity not found")
 // deleted: from that moment every session is ended, so a failure deleting the records
 // must not leave the revoke unrecorded.
 func (m *Manager) RevokeSessions(ctx context.Context, email string) (int, error) {
-	email, err := normalizeEmail(email)
-	if err != nil {
-		return 0, err
-	}
-	id, err := m.iam.IdentityByEmail(ctx, email)
+	// An administrator action: IdentityForAdmin also finds an identity whose stored email
+	// is not canonical, so its sessions can be ended.
+	id, err := m.iam.IdentityForAdmin(ctx, email)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return 0, ErrIdentityNotFound
@@ -440,11 +438,8 @@ var ErrClearPasswordNoOtherWayIn = errors.New("the identity is not linked to an 
 // nobody can use until someone sets a password again. Like RevokeSessions, the audit row
 // is written as soon as the password is gone.
 func (m *Manager) ClearPassword(ctx context.Context, email string) (*iam.Identity, error) {
-	email, err := normalizeEmail(email)
-	if err != nil {
-		return nil, err
-	}
-	id, err := m.iam.IdentityByEmail(ctx, email)
+	// An administrator action (see RevokeSessions).
+	id, err := m.iam.IdentityForAdmin(ctx, email)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, ErrIdentityNotFound

@@ -131,11 +131,8 @@ func (s *Service) SetPassword(ctx context.Context, email, password string) (*iam
 // DeleteIdentity removes an identity and its dependent rows. Idempotent: a missing
 // identity returns (false, nil).
 func (s *Service) DeleteIdentity(ctx context.Context, email string) (bool, error) {
-	email, err := iam.CanonicalEmail(email)
-	if err != nil {
-		return false, err
-	}
-	id, err := s.iam.IdentityByEmail(ctx, email)
+	// IdentityForAdmin, so an identity whose stored email is not canonical can be removed.
+	id, err := s.iam.IdentityForAdmin(ctx, email)
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return false, nil
 	}
@@ -242,14 +239,11 @@ func (s *Service) RemoveMembership(ctx context.Context, email, tenant string) (*
 	return s.loadIdentity(ctx, id.Email)
 }
 
-// loadIdentity resolves an identity by (normalized) email, mapping not-found to
-// ErrIdentityNotFound.
+// loadIdentity resolves the identity an administrator names (iam.Store.IdentityForAdmin:
+// canonical form first, then the stored spelling, so an identity whose stored email is not
+// canonical can still be managed), mapping not-found to ErrIdentityNotFound.
 func (s *Service) loadIdentity(ctx context.Context, email string) (*iam.Identity, error) {
-	email, err := iam.CanonicalEmail(email)
-	if err != nil {
-		return nil, err
-	}
-	id, err := s.iam.IdentityByEmail(ctx, email)
+	id, err := s.iam.IdentityForAdmin(ctx, email)
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, ErrIdentityNotFound
 	}

@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/core"
@@ -70,6 +71,45 @@ func (s *Store) IdentityByEmail(ctx context.Context, email string) (*Identity, e
 		return nil, err
 	}
 	return &id, nil
+}
+
+// IdentityForAdmin resolves the identity an ADMINISTRATOR names, for the actions that
+// manage it (disable, delete, revoke its sessions, clear its password, unlink it, change
+// its roles and memberships). It looks the address up in canonical form (CanonicalEmail)
+// and, failing that, by the exact spelling given and by that spelling trimmed and
+// lower-cased -- the form addresses were stored in before the canonical one -- so an
+// identity whose stored email is not canonical can still be found and repaired or removed.
+//
+// 🔴 NEVER call this from a path that authenticates or issues a credential. Those look an
+// address up by its canonical form only (IdentityByEmail), and refuse an identity whose
+// stored email is not canonical; the fallback here exists only so such an identity is not
+// beyond an administrator's reach.
+//
+// An address that is not canonicalisable and matches no stored spelling returns the
+// CanonicalEmail error (ErrEmailInvalid); one that is valid and matches nothing returns
+// gorm.ErrRecordNotFound.
+func (s *Store) IdentityForAdmin(ctx context.Context, raw string) (*Identity, error) {
+	canonical, cerr := CanonicalEmail(raw)
+	if cerr == nil {
+		id, err := s.IdentityByEmail(ctx, canonical)
+		if err == nil || !errors.Is(err, gorm.ErrRecordNotFound) {
+			return id, err
+		}
+	}
+	trimmed := strings.TrimSpace(raw)
+	for _, spelling := range []string{trimmed, strings.ToLower(trimmed)} {
+		if spelling == "" || (cerr == nil && spelling == canonical) {
+			continue
+		}
+		id, err := s.IdentityByEmail(ctx, spelling)
+		if err == nil || !errors.Is(err, gorm.ErrRecordNotFound) {
+			return id, err
+		}
+	}
+	if cerr != nil {
+		return nil, cerr
+	}
+	return nil, gorm.ErrRecordNotFound
 }
 
 // ListIdentities returns every identity, preloading system roles and memberships

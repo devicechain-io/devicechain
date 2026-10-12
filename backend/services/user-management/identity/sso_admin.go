@@ -542,14 +542,15 @@ func (m *Manager) UnlinkIdentity(ctx context.Context, email, connectionToken str
 	if err != nil {
 		return false, err
 	}
-	email, err = iam.CanonicalEmail(email)
-	if err != nil {
-		return false, fmt.Errorf("%w: %v", ErrIdpInvalid, err)
-	}
-	id, err := m.iam.IdentityByEmail(ctx, email)
+	// An administrator action: IdentityForAdmin also finds an identity whose stored email is
+	// not canonical, so its link can be removed and the subject linked to its replacement.
+	id, err := m.iam.IdentityForAdmin(ctx, email)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return false, nil
+		}
+		if errors.Is(err, iam.ErrEmailInvalid) {
+			return false, fmt.Errorf("%w: %v", ErrIdpInvalid, err)
 		}
 		return false, err
 	}
