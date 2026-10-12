@@ -6,8 +6,11 @@ import { gql, GraphQLRequestError } from '@devicechain/client';
 import {
   parseDashboardDefinition,
   serializeDefinition,
+  unresolvedWidgets,
   type DashboardDefinition,
+  type WidgetCatalog,
 } from '@devicechain/dashboards';
+import { hostWidgetCatalog } from '@devicechain/host-widgets';
 import { validateDefinitionOptions } from '@devicechain/widgets';
 import { graphql } from '@/gql/dashboard-management';
 import type {
@@ -235,6 +238,12 @@ export const CONFLICT_MARKER = 'modified by another writer';
 // So this is a stable, greppable prefix for the message and for the tests, nothing more.
 export const INVALID_DEFINITION_MARKER = 'dashboard definition is not publishable';
 
+// UNRESOLVED_WIDGETS_MARKER prefixes the refusal for a board carrying a widget this console
+// cannot resolve to an installed implementation (see publishDashboard). Same status as
+// INVALID_DEFINITION_MARKER: the drawer names the widgets and disables Publish first, so
+// this text is read by whoever bypassed it.
+export const UNRESOLVED_WIDGETS_MARKER = 'dashboard has widgets this console cannot resolve';
+
 // ── Versioning (ADR-039) ──────────────────────────────────────────────────
 
 const DASHBOARD_VERSIONS = graphql(`
@@ -324,9 +333,28 @@ export async function publishDashboard(
     // failure the `definition` parameter exists to prevent, re-entering by the back
     // door. `null` is still expressible, and means "publish whatever is there".
     expectedUpdatedAt: string | null;
+    // The catalog `definition` was parsed with. Defaults to the deployment's own, so a
+    // caller cannot validate an extension widget against a built-ins-only view by omission.
+    catalog?: WidgetCatalog;
   },
 ): Promise<{ version: number; updatedAt: string | null }> {
-  const issues = validateDefinitionOptions(input.definition);
+  // 🔴 A WIDGET THIS CONSOLE CANNOT RESOLVE BLOCKS A NEW VERSION. A published version is
+  // immutable and is what viewers are served; freezing one that carries a widget this build
+  // has no registration for (a package not installed here, or a settings version it cannot
+  // read) would publish something the author could not see rendered or configure. The
+  // DRAFT is deliberately unrestricted -- loading, layout edits and saving all keep the
+  // widget's stored JSON byte for byte -- so the author resolves it (install the package,
+  // or remove the widget) and then publishes. Checked before the option check and before
+  // the network, for the same reason as below.
+  const unresolved = unresolvedWidgets(input.definition);
+  if (unresolved.length > 0) {
+    throw new Error(
+      `${UNRESOLVED_WIDGETS_MARKER}: ${unresolved
+        .map((u) => `${u.widgetId} (${u.type || 'unknown'}): ${u.reason.message}`)
+        .join('; ')}`,
+    );
+  }
+  const issues = validateDefinitionOptions(input.definition, { catalog: input.catalog ?? hostWidgetCatalog() });
   if (issues.length > 0) {
     throw new Error(
       `${INVALID_DEFINITION_MARKER}: ${issues

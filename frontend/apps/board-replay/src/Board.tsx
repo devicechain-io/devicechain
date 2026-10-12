@@ -25,18 +25,22 @@ import {
   useResolvedBindings,
   useSlotCandidates,
 } from '@devicechain/widgets';
+import type { WidgetRegistry } from '@devicechain/host-widgets';
 import { memo, useCallback, useMemo, useState } from 'react';
 
 import { MAP_RUNTIME } from './map-runtime';
 
 function BoardView({
   definition,
+  registry,
   source,
   resolver,
   lister,
   themeRoot,
 }: {
   definition: DashboardDefinition;
+  // The registry the definition was parsed with (see LoadedReplay).
+  registry: WidgetRegistry;
   source: WidgetDataSource;
   resolver: DeviceResolver;
   lister: EntityCandidateLister;
@@ -59,6 +63,7 @@ function BoardView({
         <DashboardRenderer
           definition={definition}
           hub={source}
+          registry={registry}
           seedHistory={false}
           // Recorded instants print on the recording's own clock, not the viewer's.
           timeZone="UTC"

@@ -47,6 +47,7 @@ COPY package.json package-lock.json ./
 COPY apps/console/package.json apps/console/
 COPY apps/dashboard/package.json apps/dashboard/
 COPY apps/board-replay/package.json apps/board-replay/
+COPY apps/host-widgets/package.json apps/host-widgets/
 COPY packages/brand/package.json packages/brand/
 COPY packages/client/package.json packages/client/
 COPY packages/dashboards/package.json packages/dashboards/

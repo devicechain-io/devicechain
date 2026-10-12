@@ -233,6 +233,29 @@ are on the SDK's separate `/echarts` entry, so a DOM-only widget importing the S
 ECharts nor MapLibre nor the built-in catalog (asserted on the built artifact in
 `frontend/packages/widget-sdk/src/dist-shape.test.ts`).
 
+🔑 **Every host app composes ONE registry, from one source file.** The console, the `/dash` viewer
+and the board-replay player all take their registry from `frontend/apps/host-widgets`
+(`hostWidgetRegistry`), which is the built-ins plus the operator's list in
+`frontend/apps/host-widgets/src/extensions.ts` — the one place a widget package is added (a
+dependency of that workspace, an import, a rebuild of every app). The same registry and its catalog
+are threaded into every path: `parseDashboardDefinition(raw, { catalog })` in each host's loader,
+`validateDefinitionOptions`, the renderer, the editor's Add menu and settings panel, the synthetic
+preview and the recording player. `/dash` and the replay loader return the registry beside the
+definition they parsed, so the viewer renders with the registry that parsed. A parse with no catalog
+reads every extension as a placeholder and never checks a built-in's settings version, which is why
+no host spells one.
+
+**The console refuses to publish a new version while any widget is unresolved**
+(`publishDashboard` in `frontend/apps/console/src/lib/api/dashboards.ts`, with the drawer explaining
+it): loading, layout edits and draft saves still work and keep the stored JSON byte for byte, so
+the author installs the package or removes the widget and then publishes. A widget rendered by a
+different release of its package than it was authored with is NOT unresolved; the editor shows a
+non-blocking version notice. The specialised option workflows (command vocabulary, slot target,
+basemap notice) are editors registered in `frontend/apps/console/src/routes/dashboards/editor/controlEditors.tsx`,
+chosen by an option's declared `control` and written against the same `WidgetEditorProps` a package's
+own `implementation.editor` receives (options, a schema-validated `setOptions`, explicit host
+services); an unknown control falls back to the generic field.
+
 A widget id the registry cannot resolve never crashes the board: the parser keeps its raw JSON as a
 placeholder with a specific reason, it opens no channel and is handed no actions, and the serializer
 writes the stored object back untouched. Everything else degrades silently — a malformed datasource

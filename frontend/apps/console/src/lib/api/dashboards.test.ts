@@ -27,7 +27,11 @@ const {
   getPublishedVersion,
   isNotPublishedError,
   INVALID_DEFINITION_MARKER,
+  UNRESOLVED_WIDGETS_MARKER,
 } = await import('./dashboards');
+const { parseDashboardDefinition } = await import('@devicechain/dashboards');
+const { createHostWidgetRegistry } = await import('@devicechain/host-widgets');
+const { ACME_TANK_WIDGET_JSON, acmeTankWidget } = await import('@devicechain/host-widgets/fixtures/acme-tank');
 const { GraphQLRequestError } = await import('@devicechain/client');
 
 function widget(id: string, type: WidgetType, options?: Record<string, unknown>): WidgetInstance {
@@ -116,6 +120,51 @@ describe('publishDashboard', () => {
     await expect(
       publishDashboard('ops', { definition, expectedUpdatedAt: null }),
     ).rejects.toThrow(/minimum/);
+    expect(gqlMock).not.toHaveBeenCalled();
+  });
+});
+
+// A widget this console cannot resolve blocks a NEW version -- before any request -- while
+// everything that resolves still publishes. The board is parsed the way the console parses it
+// (with a catalog), so an unresolved widget is the parser's own placeholder.
+describe('publishDashboard with extension widgets', () => {
+  const layout = { base: { col: 0, colSpan: 4, row: 0, rowSpan: 2, z: 0 } };
+  const board = (widgets: unknown[]) => ({ title: 'T', slots: { tank: { type: 'device' } }, widgets });
+  const installed = createHostWidgetRegistry([acmeTankWidget]);
+  const tank = { ...ACME_TANK_WIDGET_JSON, layout };
+
+  it('publishes a board whose extension widget is installed, judged by ITS schema', async () => {
+    const definition = parseDashboardDefinition(board([tank]), { catalog: installed.catalog });
+    await expect(
+      publishDashboard('ops', { definition, catalog: installed.catalog, expectedUpdatedAt: null }),
+    ).resolves.toEqual({ version: 7, updatedAt: '2026-08-02T10:00:00Z' });
+    expect(gqlMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports an installed extension's invalid option, which a built-ins-only gate could not judge", async () => {
+    const bad = { ...tank, options: { ...tank.options, capacity: 'lots' } };
+    const definition = parseDashboardDefinition(board([bad]), { catalog: installed.catalog });
+    await expect(
+      publishDashboard('ops', { definition, catalog: installed.catalog, expectedUpdatedAt: null }),
+    ).rejects.toThrow(/tank-1 \(acme\/tank-level\).*capacity/);
+    expect(gqlMock).not.toHaveBeenCalled();
+  });
+
+  it('refuses, before any request, a board with a widget whose package is not installed', async () => {
+    const none = createHostWidgetRegistry([]);
+    const definition = parseDashboardDefinition(board([tank]), { catalog: none.catalog });
+    await expect(publishDashboard('ops', { definition, expectedUpdatedAt: null })).rejects.toThrow(
+      UNRESOLVED_WIDGETS_MARKER,
+    );
+    expect(gqlMock).not.toHaveBeenCalled();
+  });
+
+  it('refuses a built-in saved against a settings version this release does not read', async () => {
+    const stale = { id: 'g', type: 'gauge', widget: { version: '1.0.0', optionsVersion: 9 }, layout, options: {} };
+    const definition = parseDashboardDefinition(board([stale]), { catalog: installed.catalog });
+    await expect(publishDashboard('ops', { definition, expectedUpdatedAt: null })).rejects.toThrow(
+      /g \(gauge\).*settings version/,
+    );
     expect(gqlMock).not.toHaveBeenCalled();
   });
 });

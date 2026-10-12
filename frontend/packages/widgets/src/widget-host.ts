@@ -43,8 +43,14 @@ function guardAsync<A extends unknown[], R>(
 const ALARM_AUTHORITY = 'alarm:write';
 const COMMAND_AUTHORITY = 'command:write';
 
-function undeclared(capability: string): () => Promise<never> {
-  return () => Promise.reject(new Error(`this widget did not declare the ${capability} interaction`));
+// A call to an interaction the widget did not declare rejects, and the rejection is reported
+// on the widget like any other failed host callback: a widget that fires and forgets
+// (`void actions.acknowledgeAlarm(t)`) must still SHOW the refusal, not swallow it.
+function undeclared(capability: string, report: ReportRejection): () => Promise<never> {
+  return guardAsync(
+    () => Promise.reject(new Error(`this widget did not declare the ${capability} interaction`)),
+    report,
+  );
 }
 
 // narrowActions returns the action seam a widget may use. A widget that declares neither
@@ -61,8 +67,10 @@ export function narrowActions(
   const command = descriptor.interactions.commandSend === true;
   if (!alarm && !command) return undefined;
   const narrowed: WidgetActions = {
-    acknowledgeAlarm: alarm ? guardAsync((t) => actions.acknowledgeAlarm(t), report) : undeclared('alarmActions'),
-    clearAlarm: alarm ? guardAsync((t) => actions.clearAlarm(t), report) : undeclared('alarmActions'),
+    acknowledgeAlarm: alarm
+      ? guardAsync((t) => actions.acknowledgeAlarm(t), report)
+      : undeclared('alarmActions', report),
+    clearAlarm: alarm ? guardAsync((t) => actions.clearAlarm(t), report) : undeclared('alarmActions', report),
     can: (authority) => {
       if (authority === ALARM_AUTHORITY && !alarm) return false;
       if (authority === COMMAND_AUTHORITY && !command) return false;

@@ -288,6 +288,10 @@ export interface UnknownWidgetInstance {
 
 export type WidgetInstance = KnownWidgetInstance | ExtensionWidgetInstance | UnknownWidgetInstance;
 
+// A widget some installed implementation resolved: a built-in or a registered extension, i.e.
+// everything but a placeholder. What an editor panel is typed against.
+export type ResolvedWidgetInstance = KnownWidgetInstance | ExtensionWidgetInstance;
+
 export interface CanvasBackground {
   color?: string | null;
   imageUrl?: string | null;

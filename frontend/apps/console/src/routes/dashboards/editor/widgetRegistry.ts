@@ -4,18 +4,15 @@
 // The widget registry the editor authors against.
 //
 // The editor is handed ONE registry and reads descriptors from it; it never lists widgets
-// itself. A host that composes extra widgets passes its own registry down from the
-// workspace; without one, the built-ins are used, built once and shared (a registry is
-// sealed, so sharing it is safe).
+// itself. The default is the deployment's shared composition (@devicechain/host-widgets) --
+// the same registry /dash and the replay player build -- so a package an operator installs
+// there is authorable here with no change to the console. A test composes its own through
+// the `registry` prop.
 
-import type { WidgetRegistry } from '@devicechain/widget-sdk';
-import { createBuiltinWidgetRegistry } from '@devicechain/widgets';
+import { hostWidgetRegistry, type WidgetRegistry } from '@devicechain/host-widgets';
 
 export type EditorWidgetRegistry = WidgetRegistry;
 
-let builtin: EditorWidgetRegistry | undefined;
-
 export function defaultWidgetRegistry(): EditorWidgetRegistry {
-  builtin ??= createBuiltinWidgetRegistry();
-  return builtin;
+  return hostWidgetRegistry();
 }

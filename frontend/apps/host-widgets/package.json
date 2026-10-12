@@ -1,0 +1,28 @@
+{
+  "name": "@devicechain/host-widgets",
+  "private": true,
+  "version": "0.0.0-dev",
+  "description": "The widget composition shared by the console, the /dash viewer and the board-replay player: the built-in widgets plus the extension packages this deployment installs.",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./fixtures/acme-tank": "./fixtures/acme-tank/index.tsx"
+  },
+  "scripts": {
+    "pretypecheck": "node ../../scripts/build-packages.mjs",
+    "typecheck": "tsc --noEmit",
+    "pretest": "node ../../scripts/build-packages.mjs",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@devicechain/dashboards": "0.0.0-dev",
+    "@devicechain/widget-sdk": "0.0.0-dev",
+    "@devicechain/widgets": "0.0.0-dev"
+  },
+  "devDependencies": {
+    "@types/react": "^19.3.0",
+    "react": "^19.3.0",
+    "typescript": "~7.0.2",
+    "vitest": "^5.0.3"
+  }
+}

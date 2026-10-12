@@ -97,7 +97,7 @@ describe('updateWidget', () => {
 });
 
 describe('addWidget', () => {
-  const gauge = { id: 'gauge', defaults: { title: 'Gauge' } } as const;
+  const gauge = { id: 'gauge', version: '1.0.0', optionsVersion: 1, defaults: { title: 'Gauge' } } as const;
 
   it('appends a widget with a unique id, on top, and the descriptor defaults', () => {
     const d = def();
@@ -114,13 +114,29 @@ describe('addWidget', () => {
   });
 
   it('takes its starting options from the descriptor, whatever the widget id', () => {
-    const { definition } = addWidget(def(), { id: 'acme/tank-level', defaults: { title: 'Tank', unit: '%' } });
+    const { definition } = addWidget(def(), {
+      id: 'acme/tank-level',
+      version: '1.2.0',
+      optionsVersion: 3,
+      defaults: { title: 'Tank', unit: '%' },
+    });
     expect(definition.widgets[2].type).toBe('acme/tank-level');
     expect(definition.widgets[2].options).toEqual({ title: 'Tank', unit: '%' });
   });
 
+  it('records the release and settings version it was authored against', () => {
+    const ext = addWidget(def(), {
+      id: 'acme/tank-level',
+      version: '1.2.0',
+      optionsVersion: 3,
+      defaults: {},
+    }).definition.widgets[2];
+    expect(ext.widget).toEqual({ version: '1.2.0', optionsVersion: 3 });
+    expect(addWidget(def(), gauge).definition.widgets[2].widget).toEqual({ version: '1.0.0', optionsVersion: 1 });
+  });
+
   it('gives each widget its own copy of the defaults', () => {
-    const shared = { id: 'label', defaults: { text: 'New label' } } as const;
+    const shared = { id: 'label', version: '1.0.0', optionsVersion: 1, defaults: { text: 'New label' } } as const;
     const first = addWidget(def(), shared).definition.widgets[2];
     expect(first.options).not.toBe(shared.defaults);
   });

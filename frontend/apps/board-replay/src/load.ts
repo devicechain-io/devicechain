@@ -26,6 +26,7 @@ import {
   type BoardRecording,
   type DashboardDefinition,
 } from '@devicechain/dashboards';
+import { hostWidgetRegistry, type WidgetRegistry } from '@devicechain/host-widgets';
 
 export type ReplayErrorCode =
   | 'missingUrl'
@@ -48,6 +49,10 @@ export class ReplayLoadError extends Error {
 export interface LoadedReplay {
   recording: BoardRecording;
   definition: DashboardDefinition;
+  // The widget registry the board was PARSED with; the player renders with this same one, so
+  // an extension widget on a recorded board is recognized and drawn rather than shown as a
+  // placeholder.
+  registry: WidgetRegistry;
   // The anchors the board binds to; every device of the recorded site is a member.
   siteAnchors: AnchorTarget[];
 }
@@ -58,6 +63,9 @@ export interface LoadOptions {
   fetchFn?: typeof fetch;
   // The page origin the two URLs must resolve to. Defaults to the current page.
   origin?: string;
+  // The registry to parse and render the board with. Defaults to the deployment's shared
+  // composition (@devicechain/host-widgets).
+  registry?: WidgetRegistry;
 }
 
 // The upper bound on either file, so a wrong URL pointing at something huge cannot freeze
@@ -115,6 +123,7 @@ export function anchorsOf(definition: DashboardDefinition): AnchorTarget[] {
 export async function loadReplay(options: LoadOptions): Promise<LoadedReplay> {
   const origin = options.origin ?? globalThis.location.origin;
   const fetchFn = options.fetchFn ?? globalThis.fetch.bind(globalThis);
+  const registry = options.registry ?? hostWidgetRegistry();
   const recordingUrl = sameOriginUrl(options.recordingUrl, origin);
   const boardUrl = sameOriginUrl(options.boardUrl, origin);
 
@@ -132,10 +141,12 @@ export async function loadReplay(options: LoadOptions): Promise<LoadedReplay> {
   }
   let definition: DashboardDefinition;
   try {
-    definition = migrateToSlots(parseDashboardDefinition(JSON.parse(new TextDecoder().decode(boardBytes))));
+    definition = migrateToSlots(
+      parseDashboardDefinition(JSON.parse(new TextDecoder().decode(boardBytes)), { catalog: registry.catalog }),
+    );
   } catch (err) {
     throw new ReplayLoadError('boardInvalid', detailOf(err));
   }
 
-  return { recording, definition, siteAnchors: anchorsOf(definition) };
+  return { recording, definition, registry, siteAnchors: anchorsOf(definition) };
 }

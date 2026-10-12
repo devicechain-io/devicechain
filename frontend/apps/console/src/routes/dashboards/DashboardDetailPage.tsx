@@ -24,6 +24,7 @@ import {
   type Dashboard,
 } from '@/lib/api/dashboards';
 import { DashboardWorkspace } from './editor/DashboardWorkspace';
+import { defaultWidgetRegistry } from './editor/widgetRegistry';
 
 // The marker loadPublished answers for a dashboard that exists but was never published.
 const NOT_PUBLISHED = Symbol('not-published');
@@ -68,6 +69,9 @@ export default function DashboardDetailPage() {
   // The resolver (anchor → device tokens) that backs the hub's stream resolution.
   // The hub itself is created by the workspace, once per (resolver, authorities).
   const resolver = useMemo(() => createDeviceResolver(), []);
+  // The one widget registry this deployment composed (shared with /dash and the replay
+  // player): parse, edit, validate, preview and render all go through it.
+  const registry = defaultWidgetRegistry();
 
   // Parse the stored JSON into a DashboardDefinition. A malformed definition must
   // surface as an error state, not a white screen — hence the guarded parse. The
@@ -79,7 +83,10 @@ export default function DashboardDetailPage() {
   >(() => {
     if (!data || data === NOT_PUBLISHED) return null;
     try {
-      let definition = parseDashboardDefinition(JSON.parse(data.definition));
+      // Parsed WITH the deployment's catalog: an installed extension widget is recognized
+      // (not read as a placeholder) and a stored widget's settings version is checked
+      // against the installed one. The workspace is handed the same registry below.
+      let definition = parseDashboardDefinition(JSON.parse(data.definition), { catalog: registry.catalog });
       if (definition.title === '' && data.name) definition = setTitle(definition, data.name);
       // Decisive pre-GA cutover: rewrite any concrete device/anchor selectors into
       // default-bound slots on load (idempotent), so authoring is slot-based and the
@@ -89,7 +96,7 @@ export default function DashboardDetailPage() {
     } catch (err) {
       return { error: err instanceof Error ? err.message : t('detailInvalidDefinition') };
     }
-  }, [data, t]);
+  }, [data, t, registry]);
 
   if (loading) {
     return (
@@ -138,6 +145,7 @@ export default function DashboardDetailPage() {
       updatedAt={data.updatedAt ?? null}
       loaded={parsed.definition}
       resolver={resolver}
+      registry={registry}
     />
   );
 }
