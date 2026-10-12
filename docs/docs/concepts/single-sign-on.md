@@ -14,7 +14,7 @@ Single sign-on speaks **OpenID Connect**. SAML is not supported. The recipes for
 
 ## Connections {#connections}
 
-A **connection** is one identity provider registered with the instance. Only an instance administrator creates, changes or deletes connections (a superuser, or an identity whose system role holds `user:write`, the authority every connection, link and enforcement operation checks), through **Admin → Identity providers** in the console or the admin API. There are two kinds:
+A **connection** is one identity provider registered with the instance. Only an instance administrator creates, changes or deletes connections: a superuser, through **Admin → Identity providers** in the console or the admin API, or an identity whose system role holds `user:write` (the authority every connection, link and enforcement operation checks), through the admin API only, since the console's admin pages open for a superuser alone. There are two kinds:
 
 | | Tenant connection | Instance connection |
 | --- | --- | --- |

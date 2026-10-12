@@ -14,7 +14,7 @@ El inicio de sesión único habla **OpenID Connect**. SAML no es compatible. Las
 
 ## Conexiones {#connections}
 
-Una **conexión** es un proveedor de identidad registrado en la instancia. Solo un administrador de la instancia crea, modifica o elimina conexiones (un superusuario, o una identidad cuyo rol de sistema tenga `user:write`, la autoridad que comprueban todas las operaciones de conexión, vinculación y obligatoriedad), mediante **Admin → Identity providers** en la consola o la API de administración. Hay dos tipos:
+Una **conexión** es un proveedor de identidad registrado en la instancia. Solo un administrador de la instancia crea, modifica o elimina conexiones: un superusuario, mediante **Admin → Identity providers** en la consola o la API de administración, o una identidad cuyo rol de sistema tenga `user:write` (la autoridad que comprueban todas las operaciones de conexión, vinculación y obligatoriedad), solo mediante la API de administración, porque las páginas de administración de la consola se abren únicamente para un superusuario. Hay dos tipos:
 
 | | Conexión de inquilino | Conexión de instancia |
 | --- | --- | --- |

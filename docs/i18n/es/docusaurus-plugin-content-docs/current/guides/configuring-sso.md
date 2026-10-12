@@ -13,7 +13,7 @@ Las recetas para Microsoft Entra ID, Okta y Google Workspace que siguen están e
 ## Antes de empezar {#before}
 
 - **La instancia necesita una dirección pública.** El inicio de sesión único necesita `auth.issuerUrl` ([más abajo](#deployment)). Si está vacío, crear una conexión falla con "sso requires a public issuer URL".
-- **Necesitas iniciar sesión como superusuario** (o con una identidad cuyo rol de sistema tenga `user:write`) en la consola (**Admin → Identity providers**) o en la API de administración.
+- **Necesitas iniciar sesión como superusuario** en la consola (**Admin → Identity providers**) o en la API de administración. Una identidad cuyo rol de sistema tenga `user:write` también puede usar la API de administración, pero no las páginas de administración de la consola, que solo se abren para un superusuario.
 - **En el proveedor** necesitas registrar DeviceChain como aplicación (un cliente "web" o "confidential" que use el flujo de código de autorización) y anotar su id de cliente y su secreto de cliente.
 - **Decide el inquilino y el dominio.** Una conexión de inquilino sirve a los inquilinos que nombres y representa los dominios de correo que afirmes.
 
