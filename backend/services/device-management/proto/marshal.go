@@ -13,17 +13,6 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-// optionalString maps a model string to a proto3 optional field: an empty value
-// is encoded as absent (nil) rather than a present empty string, so a device with
-// no resolvable profile version reads back as the empty token via the generated
-// Get* accessor.
-func optionalString(s string) *string {
-	if s == "" {
-		return nil
-	}
-	return &s
-}
-
 // marshalEntryTime renders one sample's own instant onto the wire. A resolved entry
 // always carries one, so this never encodes absence — the field stays proto3 `optional`
 // only so bytes published before per-sample times existed still decode (see
@@ -134,32 +123,10 @@ func MarshalPayloadForLocationsEvent(payload *model.ResolvedLocationsPayload) ([
 	return bytes, nil
 }
 
-// Marshal payload for a measurements event.
+// Marshal payload for a measurements event. It is written directly onto the wire
+// (resolved_wire.go), byte for byte what proto.Marshal writes for the generated message.
 func MarshalPayloadForMeasurementsEvent(payload *model.ResolvedMeasurementsPayload) ([]byte, error) {
-	pbpayload := &PResolvedMeasurementsPayload{}
-	for _, mxsentry := range payload.Entries {
-		pmxentries := make([]*PResolvedMeasurementEntry, 0)
-		for _, mxentry := range mxsentry.Entries {
-			pmxentry := &PResolvedMeasurementEntry{
-				Name:       mxentry.Name,
-				Value:      mxentry.Value,
-				Classifier: mxentry.Classifier,
-				Unit:       mxentry.Unit,
-				DataType:   mxentry.DataType,
-			}
-			pmxentries = append(pmxentries, pmxentry)
-		}
-		pbentry := &PResolvedMeasurementsEntry{
-			Measurements: pmxentries,
-			OccurredTime: marshalEntryTime(mxsentry.OccurredTime),
-		}
-		pbpayload.Entries = append(pbpayload.Entries, pbentry)
-	}
-	bytes, err := proto.Marshal(pbpayload)
-	if err != nil {
-		return nil, err
-	}
-	return bytes, nil
+	return marshalMeasurementsPayload(payload)
 }
 
 // Marshal payload for an alerts event.
@@ -599,55 +566,11 @@ func parseOptionalTime(s string) (time.Time, error) {
 	return time.Parse(time.RFC3339Nano, s)
 }
 
-// Marshal a resolved event to protobuf bytes.
+// Marshal a resolved event to protobuf bytes. It is written directly onto the wire
+// (resolved_wire.go), byte for byte what proto.Marshal writes for the generated message:
+// every resolved event device-management publishes passes through here.
 func MarshalResolvedEvent(event *model.ResolvedEvent) ([]byte, error) {
-	// Encode payload.
-	pybytes, err := MarshalResolvedPayload(event.EventType, event.Payload)
-	if err != nil {
-		return nil, err
-	}
-
-	// Encode protobuf event.
-	anchors := make([]*PResolvedAnchor, 0, len(event.Anchors))
-	for _, a := range event.Anchors {
-		anchors = append(anchors, &PResolvedAnchor{
-			AnchorType:     a.AnchorType,
-			AnchorToken:    a.AnchorToken,
-			RelationshipId: uint64(a.RelationshipId),
-		})
-	}
-	memberships := make([]*PScopeMembership, 0, len(event.ScopeMemberships))
-	for _, m := range event.ScopeMemberships {
-		memberships = append(memberships, &PScopeMembership{
-			GroupToken: m.GroupToken,
-			Version:    m.Version,
-		})
-	}
-	pbevent := &PResolvedEvent{
-		Source:              event.Source,
-		AltId:               event.AltId,
-		SourceDeviceToken:   event.SourceDeviceToken,
-		Anchors:             anchors,
-		DeviceTypeToken:     optionalString(event.DeviceTypeToken),
-		ProfileVersionToken: optionalString(event.ProfileVersionToken),
-		ScopeMemberships:    memberships,
-		ExternalId:          optionalString(event.ExternalId),
-		// The geofence stamp (ADR-078). Carried straight through: it is 0 on every event
-		// type but Location, and proto3 simply omits a zero scalar from the wire.
-		FenceSetVersion: event.FenceSetVersion,
-		OccurredTime:    event.OccurredTime.Format(time.RFC3339Nano),
-		ProcessedTime:   event.ProcessedTime.Format(time.RFC3339Nano),
-		EventType:       int64(event.EventType),
-		Payload:         pybytes,
-	}
-
-	// Marshal event to bytes.
-	bytes, err := proto.Marshal(pbevent)
-	if err != nil {
-		return nil, err
-	}
-
-	return bytes, nil
+	return marshalResolvedEvent(event)
 }
 
 // Unmarshal encoded resolved event.
