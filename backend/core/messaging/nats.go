@@ -165,6 +165,10 @@ type NatsManager struct {
 	oncreate func(*NatsManager) error
 	nc       *nats.Conn
 	js       nats.JetStreamContext
+	// connectWait overrides connectWaitTimeout when positive. Only tests set it, so
+	// that a broker that never answers can be shown to fail initialization without
+	// waiting out the production minute.
+	connectWait time.Duration
 	// readers is appended and read under streamMu, because the metrics sampler reads it
 	// (via trackedDurables) for the per-durable unread-loss series while it runs, and
 	// ExecuteStop reads it (via readersSnapshot) while that sampler may not have joined.
@@ -520,8 +524,10 @@ func (nmgr *NatsManager) brokerIsClustered() bool {
 //
 // 🔴 IT MUST NOT RUN AT CONNECT TIME. Under RetryOnFailedConnect, nats.Connect
 // returns a non-nil connection and a nil error while it is still dialling, and
-// nc.JetStream() does no I/O — so at the end of ExecuteInitialize IsConnected()
-// is routinely false. brokerIsClustered() then reads false for a broker that is
+// nc.JetStream() does no I/O. ExecuteInitialize now refuses to finish until the
+// connection is CONNECTED, but a one-shot read there still answers for a single
+// instant, and the connection can drop in the next one. Whenever IsConnected() is
+// false, brokerIsClustered() reads false for a broker that is
 // merely NOT YET REACHABLE, and a correctly configured 3-node instance gets told
 // its broker is not clustered and it is not highly available, pointing the
 // operator at the one lever they already set right.
@@ -2918,31 +2924,37 @@ func (nmgr *NatsManager) ExecuteInitialize(ctx context.Context) error {
 	//     every restart with an error blaming the server's version.
 	//
 	// The second one is the reason this waits rather than each call site guarding
-	// itself. ensureStream is wrapped in RetryInfraConnect and survives; the KV
-	// path is not, so a service whose first act is to create a bucket dies. Making
-	// initialization mean "connected" fixes both, and every future reader of
-	// connection state, in one place — and it makes the log line below true, which
-	// it was not.
+	// itself. Making initialization mean "connected" fixes both, and every future
+	// reader of connection state, in one place — and it makes the log line below
+	// true.
 	//
-	// Bounded, and a timeout is NOT fatal: the retry loop inside nats.go keeps
-	// running, the connection handlers log the arrival, and the caller's own
-	// RetryInfraConnect wrappers still apply. Failing startup here would trade a
-	// confusing error for an outage.
-	if err := waitForConnected(ctx, nc, connectWaitTimeout); err != nil {
-		// A CANCELLATION IS NOT A TIMEOUT, and the two must not share an outcome. The
-		// paragraph above argues that running out of the 30s wait is survivable — the
-		// broker may still arrive and the retry wrappers still apply. A cancelled
-		// context says something different: the caller has stopped wanting this service
-		// at all, so there is nothing left for a degraded start to be useful for.
-		// Continuing would build a JetStream context and report a successful initialize
-		// for a process that is on its way out.
+	// 🔴 SO RUNNING OUT OF THE WAIT IS A FAILED INITIALIZE, NOT A DEGRADED ONE. An
+	// earlier version logged a warning here and carried on, on the theory that the
+	// broker might still arrive. What it actually did was report SUCCESS for a
+	// service with no broker: it built a JetStream context on the still-dialling
+	// connection, logged "Verified connectivity", and returned nil. From there the
+	// service either died a little later with an error about something else (the
+	// KV version error above, for any service that makes a bucket during startup)
+	// or came up and served while unable to publish or receive anything.
+	//
+	// A late broker is still tolerated — that is what the wait is for, and why it is
+	// generous. Past it, the process exits non-zero naming the broker it could not
+	// reach, and the pod restart that follows is the retry: a crash loop whose log
+	// says "broker unreachable" is the honest report of an unreachable broker.
+	if err := waitForConnected(ctx, nc, nmgr.connectWaitOrDefault()); err != nil {
+		// Close what was dialled either way, so nats.go's background retry stops with
+		// the failed initialize instead of outliving it.
+		closeConn(nc, requested)
+		// A CANCELLATION IS NOT A TIMEOUT: the caller has stopped wanting this service,
+		// which says nothing about the broker. It keeps its own error, so a shutdown
+		// during startup is not reported as an unreachable broker.
 		if ctx.Err() != nil {
-			closeConn(nc, requested)
 			return err
 		}
-		log.Warn().Err(err).Str("url", url).Msg(
-			"NATS connection is not established yet; continuing to retry in the background. " +
-				"Components that read connection state during initialization may degrade until it lands")
+		if last := nc.LastError(); last != nil {
+			err = fmt.Errorf("%w (last connection error: %v)", err, last)
+		}
+		return fmt.Errorf("%w: %s: %w", ErrBrokerUnreachable, url, err)
 	}
 	js, err := nc.JetStream()
 	if err != nil {
@@ -2957,12 +2969,30 @@ func (nmgr *NatsManager) ExecuteInitialize(ctx context.Context) error {
 	return nil
 }
 
+// ErrBrokerUnreachable is what Initialize returns when the broker never answered
+// within the connection wait. The service cannot do its job without one, so it does
+// not start; the error names the address it was trying.
+var ErrBrokerUnreachable = errors.New("messaging: the NATS broker was not reachable before " +
+	"the startup connection wait ran out; this service cannot start without it")
+
 // connectWaitTimeout bounds how long initialization waits for the connection to
-// actually be established. Generous, because the thing being waited on is a
-// broker that may still be starting, and every second here is cheaper than a
-// crashloop; bounded, because a service that never comes up is worse than one
-// that comes up degraded and says so.
-const connectWaitTimeout = 30 * time.Second
+// actually be established, after which Initialize fails with ErrBrokerUnreachable.
+// Generous, because the thing being waited on is a broker that may still be
+// starting — a cold start of the whole instance, or a rollout of the NATS
+// StatefulSet alongside the Deployments. It matches the roughly one minute core.RetryInfraConnect
+// allows the relational database, which is initialized first: the two together stay
+// inside the chart's default startup probe allowance (5s x 30), so a process that is
+// going to fail on its broker says so itself before the kubelet kills it for silence.
+const connectWaitTimeout = 60 * time.Second
+
+// connectWaitOrDefault is the connection wait this manager uses: connectWaitTimeout,
+// unless a test has set a shorter one.
+func (nmgr *NatsManager) connectWaitOrDefault() time.Duration {
+	if nmgr.connectWait > 0 {
+		return nmgr.connectWait
+	}
+	return connectWaitTimeout
+}
 
 // waitForConnected blocks until the connection reports CONNECTED, the timeout
 // elapses, or ctx is cancelled. It polls rather than using a handler because the
@@ -2971,7 +3001,7 @@ const connectWaitTimeout = 30 * time.Second
 //
 // The poll sleeps in a select rather than a time.Sleep, which is the whole of what
 // makes ctx observable here: a bare sleep would still have to run out its 100ms and,
-// worse, would keep going round for the remainder of the 30s. Cancellation is checked
+// worse, would keep going round for the remainder of the wait. Cancellation is checked
 // before the first IsConnected too, so an already-cancelled caller never waits at all.
 func waitForConnected(ctx context.Context, nc *nats.Conn, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)

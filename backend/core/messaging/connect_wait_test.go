@@ -5,10 +5,13 @@ package messaging
 
 import (
 	"context"
+	"errors"
+	"net"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/devicechain-io/dc-microservice/core"
 	dctest "github.com/devicechain-io/dc-microservice/test"
 	natsserver "github.com/nats-io/nats-server/v2/server"
 	nats "github.com/nats-io/nats.go"
@@ -131,4 +134,87 @@ func runTestServer(t *testing.T) *natsserver.Server {
 	}
 	t.Cleanup(srv.Shutdown)
 	return srv
+}
+
+// A broker that never answers must fail initialization, not report it.
+//
+// Initialize used to run out its connection wait, log a warning, build a JetStream
+// context on the still-dialling connection, log "Verified connectivity" and return nil
+// — so a service whose broker was unreachable at startup looked initialized, and either
+// served while mute or died later with an error about something else (a KV bucket
+// refusing a "server version 2.6.2" it was never asked about).
+//
+// It goes through Initialize, the call every service makes, so the lifecycle wrapper
+// is shown to carry the error rather than absorb it.
+func TestInitializeFailsWhenTheBrokerNeverAnswers(t *testing.T) {
+	logs := captureLogs(t)
+	ms := &core.Microservice{InstanceId: "test", FunctionalArea: uniqueArea("unreachable")}
+	ms.InstanceConfiguration.ApplyDefaults()
+	ms.InstanceConfiguration.Infrastructure.Nats.Hostname = "127.0.0.1"
+	ms.InstanceConfiguration.Infrastructure.Nats.Port = 1 // nothing listening
+	nmgr := NewNatsManager(ms, core.NewNoOpLifecycleCallbacks(), func(*NatsManager) error { return nil })
+	nmgr.connectWait = 300 * time.Millisecond
+
+	err := nmgr.Initialize(t.Context())
+	if err == nil {
+		t.Cleanup(nmgr.closeConn)
+		t.Fatal("Initialize reported success against a broker that never answered")
+	}
+	if !errors.Is(err, ErrBrokerUnreachable) {
+		t.Fatalf("Initialize failed with %v, want ErrBrokerUnreachable", err)
+	}
+	if !strings.Contains(err.Error(), "127.0.0.1:1") {
+		t.Errorf("the error does not name the broker address it could not reach: %q", err)
+	}
+	if rec := findLog(logs, "Verified connectivity"); rec != nil {
+		t.Errorf("a failed connect logged that connectivity was verified: %v", rec["message"])
+	}
+	if nmgr.Conn() != nil {
+		t.Error("a failed initialize kept the connection it could not establish")
+	}
+	// The dialled connection is closed, so the client's background retry ends with the
+	// failed initialize — and the close is this process's own, so it does not also mark
+	// the process as needing a restart for a dead connection.
+	waitFor(t, "the abandoned connection to be closed", func() bool {
+		return findLog(logs, "closed during shutdown") != nil
+	})
+	if err := ms.Live(); err != nil {
+		t.Errorf("a failed initialize marked the process not live: %v", err)
+	}
+}
+
+// The counterweight: a broker that is merely LATE — it starts while initialization is
+// waiting — is still tolerated. That is what the wait exists for (a cold start of the
+// whole instance races the services against NATS), and failing the unreachable case
+// must not have shortened it to nothing.
+func TestInitializeToleratesABrokerThatArrivesWithinTheWait(t *testing.T) {
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("reserving a port: %v", err)
+	}
+	port := l.Addr().(*net.TCPAddr).Port
+	_ = l.Close()
+
+	ms := &core.Microservice{InstanceId: "test", FunctionalArea: uniqueArea("late-broker")}
+	ms.InstanceConfiguration.ApplyDefaults()
+	ms.InstanceConfiguration.Infrastructure.Nats.Hostname = "127.0.0.1"
+	ms.InstanceConfiguration.Infrastructure.Nats.Port = uint32(port)
+	nmgr := NewNatsManager(ms, core.NewNoOpLifecycleCallbacks(), func(*NatsManager) error { return nil })
+	nmgr.connectWait = 20 * time.Second
+
+	started := make(chan struct{})
+	go func() {
+		defer close(started)
+		time.Sleep(500 * time.Millisecond)
+		startBrokerOnPort(t, port)
+	}()
+	err = nmgr.Initialize(t.Context())
+	<-started
+	if err != nil {
+		t.Fatalf("a broker that arrived inside the wait failed initialization: %v", err)
+	}
+	t.Cleanup(nmgr.closeConn)
+	if c := nmgr.Conn(); c == nil || !c.IsConnected() {
+		t.Fatal("Initialize succeeded without a live connection")
+	}
 }
