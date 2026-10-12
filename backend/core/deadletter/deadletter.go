@@ -38,8 +38,11 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
+
+	"github.com/rs/zerolog/log"
 
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/messaging"
@@ -421,9 +424,20 @@ const writeDeadline = 30 * time.Second
 // list to keep. A service with two sinks shares the one counter, which is also why it
 // must not be built in the NATS start callback: that callback runs on every start, and a
 // second registration of the same name panics.
+//
+// 🔑 IT IS ALSO THE ONE PLACE THAT DECIDES WHETHER A LETTER MAY BE WRITTEN FOR A TENANT. A
+// tenant that has been deleted gets none, from any of this producer's sinks or from the
+// max-delivery recorder: its data is being erased, and a letter is a new record of it (see
+// TenantDeleted).
 type Producer struct {
 	source string
 	lost   prometheus.Counter
+
+	// ms is read for the tenant-deletion gate's configuration, which is not loaded yet when
+	// the producer is built.
+	ms       *core.Microservice
+	gateOnce sync.Once
+	gate     func(string) bool
 }
 
 // NewProducer builds the producer for ms. It panics on a nil ms or a blank functional
@@ -443,6 +457,7 @@ func NewProducer(ms *core.Microservice) *Producer {
 			"letter it stamped would have no source, and Validate would refuse them all")
 	}
 	return &Producer{
+		ms:     ms,
 		source: ms.FunctionalArea,
 		lost: ms.NewCounter(LostCounterName,
 			"Dead letters this service gave up on and could NOT record: the work is gone with "+
@@ -472,7 +487,7 @@ func (p *Producer) NewSink(w Writer) *Sink {
 	if w == nil {
 		panic("deadletter: NewSink needs a writer; pass a nil *Sink to disable dead-lettering")
 	}
-	return &Sink{writer: w, source: p.source, onLoss: func(error) { p.lost.Inc() }}
+	return &Sink{writer: w, source: p.source, onLoss: func(error) { p.lost.Inc() }, deleted: p.TenantDeleted}
 }
 
 // NewIndexSink builds a sink whose loss is the CALLER'S to count, through onLoss, and is
@@ -494,7 +509,7 @@ func (p *Producer) NewIndexSink(w Writer, onLoss func(err error)) *Sink {
 		panic("deadletter: NewIndexSink needs a loss hook; an index sink's losses are " +
 			"counted by its caller or not at all")
 	}
-	return &Sink{writer: w, source: p.source, onLoss: onLoss}
+	return &Sink{writer: w, source: p.source, onLoss: onLoss, deleted: p.TenantDeleted}
 }
 
 // Lost counts one loss on dead_letter_lost_total, for a producer whose give-up write cannot
@@ -505,6 +520,45 @@ func (p *Producer) NewIndexSink(w Writer, onLoss func(err error)) *Sink {
 func (p *Producer) Lost() {
 	p.mustBeBuilt("Lost")
 	p.lost.Inc()
+}
+
+// TenantDeleted reports whether tenant has been through the delete door, in which case no
+// letter is written for it: consumers settle an erased tenant's message without one
+// (messaging.Dispose), and this is the same rule applied to every other give-up — a letter
+// is a new record of a tenant whose data is being erased, whatever the failure that caused
+// it. Every sink this producer builds and the max-delivery recorder ask it; it is exported
+// for the give-up records that are written past a sink — a verbatim copy on a service's own
+// dead-letter subject, a failed-events record — so they follow the same rule.
+//
+// It asks the platform's tenant-deletion gate, built on first use because the instance
+// configuration it reads is loaded after the producer is built. The gate is cached and
+// fails OPEN — an unconfigured gate or an unanswerable lookup reads "not deleted" — so a
+// letter it lets through is stored, and swept by the purge with the rest of the tenant's
+// rows. What it can never do is drop a letter for a tenant that was not deleted.
+func (p *Producer) TenantDeleted(tenant string) bool {
+	p.mustBeBuilt("TenantDeleted")
+	p.gateOnce.Do(func() {
+		infra := p.ms.InstanceConfiguration.Infrastructure
+		// nil gates: the owning service reports the gate's state on its own gauge, and this
+		// is the same configuration read a second time.
+		p.gate = tenantLifecycleGate(infra.UserManagement, infra.ServiceAuth.Secret, p.ms.FunctionalArea, nil)
+	})
+	return p.gate != nil && p.gate(tenant)
+}
+
+// UseTenantGate makes gate the producer's tenant-deletion gate in place of the one it would
+// build from the instance configuration, so a test can answer TenantDeleted without a
+// user-management behind it. It takes effect only BEFORE the gate is first asked for, and
+// reports whether it did: the gate is built once and never swapped, so a later call cannot
+// change an answer a sink has already relied on.
+func (p *Producer) UseTenantGate(gate func(string) bool) bool {
+	p.mustBeBuilt("UseTenantGate")
+	used := false
+	p.gateOnce.Do(func() {
+		p.gate = gate
+		used = true
+	})
+	return used
 }
 
 func (p *Producer) mustBeBuilt(call string) {
@@ -531,6 +585,11 @@ type Sink struct {
 	// HERE rather than off the returned error, so the counter cannot drift away from the
 	// condition it claims to measure.
 	onLoss func(err error)
+	// deleted is the producer's TenantDeleted: a letter for a deleted tenant is not written.
+	// Every sink a producer builds carries it; only the max-delivery recorder's own sink
+	// leaves it nil, because the recorder asks the same question itself before it writes
+	// anything (the verbatim copy included).
+	deleted func(string) bool
 }
 
 // detach returns a context carrying ctx's values — the TENANT, which is what scopes the
@@ -663,7 +722,17 @@ func originID(stream, consumer string, seq uint64) string {
 
 // write is the one write path: validate, then retry within the detached deadline. dedupID,
 // when set, is published as the letter's Nats-Msg-Id.
+//
+// A letter for a deleted tenant (Producer.TenantDeleted) is not written, and that is not a
+// loss: nothing is counted on onLoss and nil is returned, because the record is withheld on
+// purpose rather than failed. A context with no tenant is left for the writer to refuse,
+// fail-closed, as before.
 func (s *Sink) write(ctx context.Context, e Envelope, dedupID, suffix string) error {
+	if tenant, ok := core.TenantFromContext(ctx); ok && s.deleted != nil && s.deleted(tenant) {
+		log.Info().Str("tenant", tenant).Str("kind", string(e.Kind)).Str("source", s.source).
+			Msg("Not dead-lettering for a deleted tenant; its data is being erased.")
+		return nil
+	}
 	e.Payload = payloadFor(suffix, e.Kind, e.Payload)
 	return s.writePrepared(ctx, e, dedupID)
 }

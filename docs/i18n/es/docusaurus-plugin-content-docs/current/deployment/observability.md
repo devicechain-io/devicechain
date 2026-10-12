@@ -42,6 +42,22 @@ sirve las dos sondas estándar de Kubernetes:
 Debido a que cada pod habla las mismas convenciones, la pila de monitoreo recolecta métricas de
 toda la instancia de manera uniforme; no hay trabajo de integración por servicio.
 
+### Resultados de los mensajes {#message-results}
+
+La mayoría de los servicios que consumen un flujo cuentan cada mensaje que terminan de tratar en un
+contador llamado `devicechain_<area>_<loop>_messages_total`, por ejemplo
+`devicechain_eventmanagement_persist_messages_total`. Su etiqueta `result` indica qué fue del
+mensaje:
+
+| Resultado | Qué fue del mensaje |
+| --- | --- |
+| `ok` | Se trató. |
+| `invalid` | Se descartó al llegar: no se pudo leer, no llevaba inquilino o se rechazó por lo que contiene. |
+| `failed` | Se abandonó y se registró, como carta muerta o en el flujo `failed-events`. |
+| `dropped` | Se abandonó tras su última entrega y deliberadamente no se registró, porque lo que habría actualizado se puede reconstruir. |
+| `retry` | Su tratamiento falló por una causa que puede desaparecer, así que se dejó para que se entregue de nuevo. |
+| `erased` | Su inquilino se ha eliminado y la base de datos del servicio rechazó la escritura. Se liquidó en la misma entrega en que llegó y no se registró en ningún sitio. Consulte [Eliminación de inquilinos](./tenant-deletion.md#database-writes). |
+
 Cada servicio puede servir además perfiles del runtime de Go en un listener propio. Está
 desactivado por defecto; consulta [Perfilar un servicio](#profiling).
 
@@ -659,7 +675,11 @@ inquilino del lote en lugar de una vez por cada evento. Los eventos de conexión
 siguen escribiendo uno a uno dentro del lote. Un evento se reconoce solo después de que la
 transacción que lo contiene se haya confirmado. Si se rechaza un evento de un lote, no se conserva
 nada de esa transacción: el evento rechazado se vuelve a escribir por separado, y se reintenta o se
-notifica exactamente como sin lotes. El resto del lote se vuelve a confirmar sin él. Cuando la base
+notifica exactamente como sin lotes. El resto del lote se vuelve a confirmar sin él. Un evento
+rechazado porque su inquilino se ha eliminado es la excepción: el rechazo se aplica a todos los
+eventos de ese inquilino, así que ninguno se vuelve a escribir. Se reconocen enseguida, no se
+notifican en ningún sitio y se cuentan como `erased` (consulte
+[Eliminación de inquilinos](./tenant-deletion.md#database-writes)). Cuando la base
 de datos rechaza una fila de una sentencia que lleva varios eventos, no indica de qué evento venía,
 así que primero el lote se vuelve a escribir en una transacción nueva, evento a evento, para
 encontrarlo. Si la transacción falla por una causa que no se debe a ningún evento concreto, como una
@@ -678,7 +698,7 @@ esa espera una sola vez.
 | Métrica | Qué indica |
 | --- | --- |
 | `devicechain_eventmanagement_persist_batch_size` | Eventos por transacción confirmada. Lotes pequeños indican que los escritores van al día. Lotes que crecen hacia el límite indican que los escritores están ocupados. Con 10 escritores compartiendo un mismo flujo, los lotes rara vez llegan al límite aunque el almacenamiento vaya retrasado, así que léala junto a la cola del consumidor. |
-| `devicechain_eventmanagement_persist_batch_fallbacks_total` | Transacciones de lote que no se confirmaron, tras lo cual sus eventos se volvieron a escribir. Un aumento ocasional es un evento rechazado, o dos cuando la base de datos rechazó una fila de una sentencia que llevaba varios eventos, porque encontrar el evento requiere un segundo intento. Un ritmo constante indica que algo rechaza escrituras una y otra vez, por ejemplo un inquilino eliminado cuyos dispositivos siguen enviando: cada lote que contiene sus eventos cuesta una transacción adicional, por muchos que contenga. Esos eventos aparecen en `persist_messages_total` como `failed` o `retry`. |
+| `devicechain_eventmanagement_persist_batch_fallbacks_total` | Transacciones de lote que no se confirmaron, tras lo cual sus eventos se volvieron a escribir. Un aumento ocasional es un evento rechazado, o dos cuando la base de datos rechazó una fila de una sentencia que llevaba varios eventos, porque encontrar el evento requiere un segundo intento. Un ritmo constante indica que algo rechaza escrituras una y otra vez, por ejemplo un inquilino eliminado cuyos dispositivos siguen enviando: cada lote que contiene sus eventos cuesta una transacción adicional, por muchos que contenga. Esos eventos aparecen en `persist_messages_total` como `erased`. |
 | `devicechain_eventmanagement_persist_inflight` | Eventos que tienen los escritores, incluidos los que esperan a que su lote se confirme. |
 
 `persist_duration_seconds` mide cada evento desde que un escritor lo toma hasta que su lote se

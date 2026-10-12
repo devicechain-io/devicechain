@@ -48,7 +48,8 @@ func (a *recordingAck) Ack() error {
 }
 
 // consumed turns a produced message into a consumed one carrying ack. NumDelivered is 1,
-// below MaxDeliver, so a refused write is left UNACKED for redelivery rather than dropped.
+// below MaxDeliver, so a write that fails transiently is left UNACKED for redelivery rather
+// than given up on.
 func consumed(m messaging.Message, ack *recordingAck) messaging.Message {
 	return messaging.NewConsumedMessage(m.Subject, m.Value, 1, nil, ack)
 }
@@ -265,14 +266,16 @@ func TestFenceCostOfAMeasurementEvent(t *testing.T) {
 	}
 }
 
-// A fenced tenant's event is refused on device-state's real models and left for
-// redelivery, and the projection it would have advanced does not move.
+// A fenced tenant's event is refused on device-state's real models, the projection it would
+// have advanced does not move, and the message is SETTLED on its first delivery: the fence
+// refuses that tenant on every delivery, so a redelivery could only be refused again.
 //
 // This is the test that stops a later change from making the path cheaper by disarming
 // the fence: the counts above would go DOWN under that change and still pass their own
 // arithmetic if rewritten, while this one goes red.
-func TestAMeasurementEventForAFencedTenantIsRefusedAndLeftForRedelivery(t *testing.T) {
+func TestAMeasurementEventForAFencedTenantIsRefusedAndSettledAtOnce(t *testing.T) {
 	sp, db, counter := newFencedStateProcessor(t)
+	reg := stateRegistry(sp)
 	t0 := time.Date(2026, 9, 20, 12, 0, 0, 0, time.UTC)
 	t1 := t0.Add(time.Minute)
 	seed(t, sp, threeMetrics(t, "fc-02", t0))
@@ -284,10 +287,16 @@ func TestAMeasurementEventForAFencedTenantIsRefusedAndLeftForRedelivery(t *testi
 	if all != 2 || fence != 1 {
 		t.Errorf("a refused merge made %d statements with %d fence reads; want 2 with 1", all, fence)
 	}
-	if acked != 0 {
-		t.Fatalf("a refused merge was acked %d time(s); it must be left for redelivery", acked)
-	}
 	assertProjectedAt(t, sp, "fc-02", t0)
+	if acked != 1 {
+		t.Errorf("a merge refused by the fence was acked %d time(s) on its first delivery; want 1", acked)
+	}
+	if v, _, _, _ := gathered(t, reg, "state_messages_total", core.ResultErased); v != 1 {
+		t.Errorf("state_messages_total{result=erased} = %v; want 1", v)
+	}
+	if v, _, _, _ := gathered(t, reg, "state_messages_total", core.ResultRetry); v != 0 {
+		t.Errorf("state_messages_total{result=retry} = %v; want 0", v)
+	}
 
 	// Negative control: with the fence lifted, the SAME message lands and the SAME reads
 	// see it — so the assertions above could have seen a write had one happened.

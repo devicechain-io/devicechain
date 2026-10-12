@@ -67,6 +67,13 @@ type EventResolver struct {
 	// decided HERE and nowhere else; the age refusal also runs upstream, from the same
 	// constant (see package eventtime).
 	eventTime EventTimePolicy
+	// tenantDeleted reports a tenant that has been through the delete door (the pool sets it
+	// to the processor's, which asks the dead-letter producer). Nil reads "not deleted". It is
+	// asked only when resolution FAILS: a deleted tenant's event usually fails before any
+	// write the erasure fence could refuse — its device and credentials are among the first
+	// rows the deletion removes — and would otherwise be retried to the cap and recorded on
+	// failed-events, a new record of the data being erased.
+	tenantDeleted func(string) bool
 }
 
 // EventTimePolicy is the resolution-time event-time policy: the tolerance a
@@ -324,7 +331,9 @@ func (rez *EventResolver) HandleNewRelationshipEvent(ctx context.Context,
 	// Create new relationship from the event payload.
 	created, reason, err := rez.CreateNewEntityRelationship(ctx, device, *relcreate)
 	if err != nil {
-		return nil, reason, errors.New("could not create relationship")
+		// Wrapped, not replaced: the cause decides the message's disposition — an erased
+		// tenant's refusal is settled at once rather than retried into a failure report.
+		return nil, reason, fmt.Errorf("could not create relationship: %w", err)
 	}
 
 	// Convert to resolved payload with the uniform (type, id) target.
@@ -1107,7 +1116,19 @@ func (rez *EventResolver) Process(ctx context.Context) {
 				// times the event carries immutably, so every redelivery would answer the
 				// same, and leaving it unacked only holds it in flight for minutes. ONLY that
 				// refusal: a not-yet-registered device must still get its redeliveries.
-				if unresolved.NumDelivered >= messaging.MaxDeliver || errors.Is(err, eventtime.ErrTooOld) {
+				//
+				// A write refused because the tenant has been deleted is settled at once and
+				// reported NOWHERE (messaging.Dispose): the fence refuses it on every delivery,
+				// and a failed-events copy would be a new record of the data being erased. So is
+				// ANY failure for a tenant that has been deleted (tenantDeleted): its device and
+				// credentials are swept early, so its events mostly fail before reaching a write.
+				disposition := messaging.Dispose(unresolved, err)
+				if disposition == messaging.TenantErased || (rez.tenantDeleted != nil && rez.tenantDeleted(tenant)) {
+					log.Info().Str("correlation", correlation).
+						Msg("Settling an event for a deleted tenant; this area's data has been erased.")
+					_ = unresolved.Ack()
+					done(core.ResultErased)
+				} else if disposition == messaging.Exhausted || errors.Is(err, eventtime.ErrTooOld) {
 					rez.Failed(unresolved, tenant, reason, *event, err)
 					done(core.ResultFailed)
 				} else {

@@ -414,10 +414,12 @@ func (sp *StateProcessor) admit(ctx context.Context, msg messaging.Message) (pen
 // does not commit — merges its messages again without the part to blame.
 //
 // Every statement in a batch is one tenant's, so the smallest thing a refused statement can
-// be pinned on is its tenant (model.BatchRefusal). That tenant's messages are merged one at a
-// time, through the unchanged per-message path, so the one that is really refused is retried
-// or dropped exactly as it always was and its tenant-mates still land; the other tenants'
-// messages are merged together again without them. A failure nothing can be blamed for
+// be pinned on is its tenant (model.BatchRefusal). When the erasure fence refused it, every
+// message of that tenant is settled with the refusal (dispose), since the fence refuses them
+// all. Otherwise that tenant's messages are merged one at a time, through the unchanged
+// per-message path, so the one that is really refused is retried or dropped exactly as it
+// always was and its tenant-mates still land. Either way the other tenants' messages are
+// merged together again without them. A failure nothing can be blamed for
 // (BEGIN, COMMIT, a lost connection) merges every message on its own.
 //
 // ctx is the WORKER's context and carries no tenant (see model.MergeProjectionBatch).
@@ -450,14 +452,23 @@ func (sp *StateProcessor) mergeBatch(ctx context.Context, batch []pendingMerge) 
 			}
 			return
 		}
+		// The erasure fence refuses a TENANT, not a statement, so a fence refusal settles every
+		// message of that tenant with it at once (dispose: an erased tenant's message is acked
+		// and recorded nowhere) rather than merging each again alone only to be refused the
+		// same way. Any other refusal merges that tenant's messages one at a time.
+		erased := errors.Is(err, rdb.ErrTenantPurged)
 		log.Warn().Err(err).Int("events", len(batch)).Str("tenant", refused.Tenant).
-			Bool("tenantPurged", errors.Is(err, rdb.ErrTenantPurged)).
-			Msg("A device state batch was refused for one tenant; merging that tenant's events one at a time")
+			Bool("tenantPurged", erased).
+			Msg("A device state batch was refused for one tenant; disposing of that tenant's events on their own")
 		// A fresh slice: the remainder must not alias the batch it came from.
 		rest := make([]pendingMerge, 0, len(batch))
 		for _, p := range batch {
 			if p.update.Tenant == refused.Tenant {
-				sp.mergeAdmitted(p)
+				if erased {
+					sp.dispose(p, err, fmt.Sprintf("device state batch for device %s", p.update.DeviceToken))
+				} else {
+					sp.mergeAdmitted(p)
+				}
 				continue
 			}
 			rest = append(rest, p)
@@ -494,35 +505,12 @@ func (sp *StateProcessor) mergeOne(ctx context.Context, msg messaging.Message) {
 func (sp *StateProcessor) mergeAdmitted(p pendingMerge) {
 	msg, event, u := p.msg, p.event, p.update
 
-	// disposeTransient applies the A3 retry-or-drop disposition for a transient
-	// (retryable) projection-write error: redeliver until the finite MaxDeliver
-	// cap, then give up (the projection is reconstructable, so dropping beats
-	// looping forever). Shared by every write below.
-	disposeTransient := func(err error, detail string) {
-		log.Error().Err(err).Str("correlation", msg.CorrelationID()).Msg(detail)
-		if msg.NumDelivered >= messaging.MaxDeliver {
-			log.Error().Str("correlation", msg.CorrelationID()).Msg(fmt.Sprintf("Giving up on %s after %d attempts", detail, msg.NumDelivered))
-			msg.Ack()
-			// 🔑 "dropped", NOT "failed". This projection has no dead-letter path and wants
-			// none: it is rebuildable from the event history, so a state change nobody could
-			// apply is discarded rather than kept for inspection. Reporting it as "failed"
-			// would put it in the same bucket as the consumers that DO record what they gave
-			// up on, and an operator counting dead letters would be counting this too.
-			p.done(core.ResultDropped)
-		} else {
-			// Transient: leave it UNACKED (do not nak) so AckWait paces redelivery —
-			// an immediate nak would burn MaxDeliver in ~1.4ms inside an outage.
-			// Reference disposition: event-sources' settler (ADR-030).
-			p.done(core.ResultRetry)
-		}
-	}
-
 	// Update the originating device's live connectivity projection for every event.
 	if err := sp.retryOnConflict(p.ctx, func() error {
 		_, err := sp.Api.MergeDeviceState(p.ctx, u.DeviceToken, u.OccurredAt, u.Presence, u.Identity)
 		return err
 	}); err != nil {
-		disposeTransient(err, fmt.Sprintf("device state projection update for device %s", u.DeviceToken))
+		sp.dispose(p, err, fmt.Sprintf("device state projection update for device %s", u.DeviceToken))
 		return
 	}
 
@@ -531,7 +519,7 @@ func (sp *StateProcessor) mergeAdmitted(p pendingMerge) {
 		if err := sp.retryOnConflict(p.ctx, func() error {
 			return sp.Api.MergeLatestMeasurements(p.ctx, u.DeviceToken, u.Measurements)
 		}); err != nil {
-			disposeTransient(err, fmt.Sprintf("latest-measurement projection update for device %s", u.DeviceToken))
+			sp.dispose(p, err, fmt.Sprintf("latest-measurement projection update for device %s", u.DeviceToken))
 			return
 		}
 	}
@@ -542,7 +530,7 @@ func (sp *StateProcessor) mergeAdmitted(p pendingMerge) {
 		if err := sp.retryOnConflict(p.ctx, func() error {
 			return sp.Api.MergeLatestLocations(p.ctx, u.DeviceToken, u.Locations)
 		}); err != nil {
-			disposeTransient(err, fmt.Sprintf("latest-location projection update for device %s", u.DeviceToken))
+			sp.dispose(p, err, fmt.Sprintf("latest-location projection update for device %s", u.DeviceToken))
 			return
 		}
 	}
@@ -551,6 +539,39 @@ func (sp *StateProcessor) mergeAdmitted(p pendingMerge) {
 	sp.metrics.committed(1)
 	msg.Ack()
 	p.done(core.ResultOK)
+}
+
+// dispose applies the platform's failure disposition (messaging.Dispose) to p after a
+// projection write failed with err: settled at once for an erased tenant, redelivered until
+// the finite MaxDeliver cap, then given up on (the projection is reconstructable, so dropping
+// beats looping forever). detail names the write, for the log.
+func (sp *StateProcessor) dispose(p pendingMerge, err error, detail string) {
+	msg := p.msg
+	switch messaging.Dispose(msg, err) {
+	case messaging.TenantErased:
+		// The fence refuses this tenant on every delivery, and the projection it would
+		// have advanced is being erased: there is nothing a redelivery could apply.
+		log.Info().Str("correlation", msg.CorrelationID()).
+			Msg(fmt.Sprintf("Settling %s for a deleted tenant; this area's data has been erased", detail))
+		msg.Ack()
+		p.done(core.ResultErased)
+	case messaging.Exhausted:
+		log.Error().Err(err).Str("correlation", msg.CorrelationID()).Msg(detail)
+		log.Error().Str("correlation", msg.CorrelationID()).Msg(fmt.Sprintf("Giving up on %s after %d attempts", detail, msg.NumDelivered))
+		msg.Ack()
+		// 🔑 "dropped", NOT "failed". This projection has no dead-letter path and wants
+		// none: it is rebuildable from the event history, so a state change nobody could
+		// apply is discarded rather than kept for inspection. Reporting it as "failed"
+		// would put it in the same bucket as the consumers that DO record what they gave
+		// up on, and an operator counting dead letters would be counting this too.
+		p.done(core.ResultDropped)
+	default:
+		// Transient: leave it UNACKED (do not nak) so AckWait paces redelivery —
+		// an immediate nak would burn MaxDeliver in ~1.4ms inside an outage.
+		// Reference disposition: event-sources' settler (ADR-030).
+		log.Error().Err(err).Str("correlation", msg.CorrelationID()).Msg(detail)
+		p.done(core.ResultRetry)
+	}
 }
 
 // measurementInputs extracts the numeric measurements from a resolved measurement event,

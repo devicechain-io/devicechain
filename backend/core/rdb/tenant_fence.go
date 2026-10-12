@@ -5,7 +5,6 @@ package rdb
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"reflect"
 	"sync"
@@ -76,8 +75,24 @@ const FenceTable = "purged_tenants"
 
 // ErrTenantPurged is the refusal. It is returned to the caller as the write's error, so
 // it says what happened and what it means rather than naming a table.
-var ErrTenantPurged = errors.New("this tenant has been deleted and its data in this area erased; " +
-	"the write was refused so it cannot resurrect any part of it")
+//
+// It also answers TenantErased, which is how core/messaging's Dispose recognises it without
+// importing this package (and the database driver with it) into every service that reads a
+// stream: a consumer handed this error, however wrapped, settles the message on the delivery
+// it arrived on and records nothing about it. errors.Is matches it exactly as before. An
+// UNREADABLE fence is a different error (see readFence) and does not answer it, so it stays
+// a transient failure that is retried.
+var ErrTenantPurged error = &tenantPurgedError{msg: "this tenant has been deleted and its data in " +
+	"this area erased; the write was refused so it cannot resurrect any part of it"}
+
+// tenantPurgedError is ErrTenantPurged's type; there is exactly one value of it. It is not
+// zero-sized, so its one pointer cannot compare equal to some other allocation's.
+type tenantPurgedError struct{ msg string }
+
+func (e *tenantPurgedError) Error() string { return e.msg }
+
+// TenantErased marks the refusal for messaging.Dispose.
+func (*tenantPurgedError) TenantErased() bool { return true }
 
 // RegisterTenantFence installs the global GORM callbacks that refuse a write for a
 // tenant this area has fenced.
@@ -298,14 +313,17 @@ func readFence(db *gorm.DB, tokens []string) error {
 // 🔴 THE BAR IS "CANNOT RESURRECT", NOT "IS INCONVENIENT TO FENCE". A model qualifies only
 // if writing it for a purged tenant adds nothing that could be inherited by a successor at
 // that token: a record OF a failure, not a row the platform would go on to act on. Two
-// implement it, and both are core-owned:
+// tables are exempt:
 //
 //   - the audit journal, whose row is written AFTER the mutation it describes has already
 //     committed (gorm sorts its After hook past the commit callback), so fencing it hands
-//     the sweeper a refusal for rows it has already deleted;
-//   - the dead-letter store, whose row says work did NOT happen. Refusing it during a purge
-//     would delete the evidence that a tenant's last alarms went nowhere, and would report
-//     the refusal as a database outage.
+//     the sweeper a refusal for rows it has already deleted. It is matched by its schema
+//     name (see fenceExempt), not through this interface;
+//   - the dead-letter store, whose row says work did NOT happen. Whether a deleted tenant
+//     gets a letter at all is decided upstream — it gets none (messaging.Dispose, and the
+//     dead-letter producer's tenant gate) — so a row reaching the store is one that gate
+//     let through while failing open. Refusing it here would not unwrite it; it would turn
+//     it into a store failure reported as a lost letter.
 //
 // Both are swept by the ordinary tenant purge like any other tenant-bearing table, so
 // exempting them from the FENCE does not exempt them from the erasure.

@@ -187,6 +187,56 @@ func TestHandleTransientDeadLettersAtCap(t *testing.T) {
 	}
 }
 
+// The verbatim copy on connector-dispatch.dead is written by this service's own writer, not by a
+// dead-letter sink, so it must ask the producer's tenant-deletion rule itself. A tenant deleted
+// while its dispatch was being retried — the admission gate still read it live — gets no copy at
+// the cap: nothing written, acked, counted tenant_deleted. The live row is the control: the same
+// dispatch at the same cap IS copied, so the deleted row cannot pass on a path that writes nothing.
+func TestAGiveUpWritesNoCopyForATenantTheProducerKnowsIsDeleted(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		deleted bool
+		copies  int
+		outcome string
+	}{
+		{"deleted tenant", true, 0, outcomeTenantDeleted},
+		{"control: live tenant", false, 1, outcomeDead},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(503) }))
+			defer srv.Close()
+			producer := deadletter.NewProducer(&core.Microservice{FunctionalArea: "outbound-connectors"})
+			deleted := tc.deleted
+			if !producer.UseTenantGate(func(tenant string) bool { return deleted && tenant == "acme" }) {
+				t.Fatal("the producer's tenant gate was already built")
+			}
+			vec := prometheus.NewCounterVec(
+				prometheus.CounterOpts{Name: "test_connector_dispatch_total"}, []string{"action", "outcome"})
+			dead := &fakeWriter{}
+			e := NewExecutor(NewSecretResolver(&fakeSecretStore{}), nil, loopbackGuard(), 5*time.Second)
+			// The admission gate reads every tenant live, as it would before it learned of the
+			// deletion.
+			c := NewDispatchConsumer(&fakeReader{}, dead, nil, producer, e, nil, 5*time.Second,
+				func(string) bool { return false }, 1, nil, core.NewReadPacer(nil, "test"))
+			c.metrics = &DispatchMetrics{dispatched: vec}
+			ack := &fakeAck{}
+			c.handle(context.Background(), wireMsg(t, dispatchSubject, messaging.MaxDeliver,
+				&connectorwire.ConnectorDispatchRequest{Kind: connectorwire.ConnectorKindHTTPCall, Tenant: "acme",
+					HTTPCall: &connectorwire.HTTPCallDispatch{URL: srv.URL}}, ack))
+
+			if got := len(dead.written()); got != tc.copies {
+				t.Errorf("wrote %d copies to the dead-letter subject; want %d", got, tc.copies)
+			}
+			if !ack.acked {
+				t.Error("the final delivery was not acked")
+			}
+			if got := testutil.ToFloat64(vec.WithLabelValues(connectorwire.ConnectorKindHTTPCall, tc.outcome)); got != 1 {
+				t.Errorf("connector_dispatch_total{outcome=%q} = %v; want 1", tc.outcome, got)
+			}
+		})
+	}
+}
+
 // TestHandleUnsupportedDeadLetters dead-letters (and acks) a publish dispatch this build cannot run.
 func TestHandleUnsupportedDeadLetters(t *testing.T) {
 	dead := &fakeWriter{}

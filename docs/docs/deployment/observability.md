@@ -42,6 +42,22 @@ serves the two standard Kubernetes probes:
 Because every pod speaks the same conventions, the monitoring stack scrapes the
 whole instance uniformly — there is no per-service integration work.
 
+### Message results {#message-results}
+
+Most services that consume a stream count each message they finish with in a counter named
+`devicechain_<area>_<loop>_messages_total`, for example
+`devicechain_eventmanagement_persist_messages_total`. Its `result` label says what became of the
+message:
+
+| Result | What became of the message |
+| --- | --- |
+| `ok` | It was handled. |
+| `invalid` | It was discarded on arrival: it could not be read, carried no tenant, or was refused for what it holds. |
+| `failed` | It was given up on and recorded, as a dead letter or on the `failed-events` stream. |
+| `dropped` | It was given up on after its last delivery and deliberately not recorded, because what it would have updated can be rebuilt. |
+| `retry` | Handling it failed for a reason that may clear, so it was left to be delivered again. |
+| `erased` | Its tenant has been deleted and the service's database refused the write. It was settled on the delivery it arrived on and recorded nowhere. See [Tenant deletion](./tenant-deletion.md#database-writes). |
+
 Each service can also serve Go runtime profiles on a listener of its own. This is off
 by default; see [Profiling a service](#profiling).
 
@@ -634,7 +650,10 @@ the batch rather than once for each event. Connect and disconnect events are sti
 a time within the batch. An event is acknowledged only after the transaction holding it has
 committed. If an event in a batch is refused, nothing in that transaction is kept: the refused
 event is written again on its own, and is retried or reported exactly as it would be without
-batching. The rest of the batch is committed again without it. When the database refuses a row in
+batching. The rest of the batch is committed again without it. An event refused because its tenant
+has been deleted is the exception: the refusal applies to every event of that tenant, so none of
+them is written again. They are acknowledged at once, reported nowhere, and counted as `erased`
+(see [Tenant deletion](./tenant-deletion.md#database-writes)). When the database refuses a row in
 a statement that carries several events, it does not say which event the row came from, so the
 batch is first written again in a new transaction, one event at a time, to find it. If the
 transaction fails for a reason no single event caused, such as a lost database connection, every
@@ -652,7 +671,7 @@ wait once.
 | Metric | What it tells you |
 | --- | --- |
 | `devicechain_eventmanagement_persist_batch_size` | Events per committed transaction. Small batches mean the writers are keeping up. Batches that grow towards the limit mean the writers are busy. With 10 writers sharing one stream, batches seldom reach the limit even when storing is behind, so read this beside the consumer's backlog. |
-| `devicechain_eventmanagement_persist_batch_fallbacks_total` | Batch transactions that did not commit, after which their events were written again. An occasional increase is one refused event, or two when the database refused a row in a statement that carried several events, because finding the event takes a second attempt. A steady rate means something is refusing writes repeatedly, such as a deleted tenant whose devices are still sending: each batch that holds its events costs one extra transaction, however many of them it holds. Those events show up in `persist_messages_total` under `failed` or `retry`. |
+| `devicechain_eventmanagement_persist_batch_fallbacks_total` | Batch transactions that did not commit, after which their events were written again. An occasional increase is one refused event, or two when the database refused a row in a statement that carried several events, because finding the event takes a second attempt. A steady rate means something is refusing writes repeatedly, such as a deleted tenant whose devices are still sending: each batch that holds its events costs one extra transaction, however many of them it holds. Those events show up in `persist_messages_total` under `erased`. |
 | `devicechain_eventmanagement_persist_inflight` | Events writers hold, including those waiting for their batch to commit. |
 
 `persist_duration_seconds` measures each event from when a writer takes it until its batch commits,

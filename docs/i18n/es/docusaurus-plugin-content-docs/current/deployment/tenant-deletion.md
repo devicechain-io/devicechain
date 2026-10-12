@@ -243,6 +243,22 @@ cesado. El rechazo se levanta únicamente cuando la eliminación se completa, qu
 libera el identificador, de modo que un inquilino nuevo creado con ese identificador escribe con
 normalidad desde su primera petición.
 
+Una escritura rechazada no se reintenta. Un servicio que se encuentra con el rechazo al tratar un
+mensaje de un flujo reconoce el mensaje en la misma entrega en que llegó y no registra nada sobre
+él: ni una carta muerta ni un registro en `failed-events`, porque cualquiera de los dos sería una
+copia nueva de los datos que se están borrando. Cuenta el mensaje como `erased` (consulte
+[Resultados de los mensajes](./observability.md#message-results)). Cuando un servicio escribe en una
+sola transacción mensajes de varios inquilinos, el rechazo liquida a la vez todos los mensajes del
+inquilino eliminado que contiene, y los mensajes de los demás inquilinos se escriben sin ellos. Una
+base de datos que no puede decir si el inquilino se ha eliminado no es un rechazo: esos mensajes se
+reintentan como cualquier otra escritura fallida.
+
+El trabajo de un inquilino eliminado también puede fallar antes de llegar a una escritura, por
+ejemplo porque la eliminación ya ha borrado el dispositivo o el comando al que se refiere. Tampoco
+se escribe una carta muerta por ello, siempre que el servicio pueda saber por user-management que el
+inquilino se ha eliminado. Si no puede, la carta se escribe, y la que se escribe antes de que
+termine la eliminación se borra junto con los demás registros del inquilino.
+
 El rechazo se comprueba en la primera escritura de una transacción para un inquilino, así que una
 transacción que ya había escrito para el inquilino cuando empezó la eliminación todavía puede
 confirmarse, incluidas las escrituras que haga después. La eliminación las recoge siempre que la

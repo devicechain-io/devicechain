@@ -18,7 +18,6 @@ import (
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/deadletter"
 	"github.com/devicechain-io/dc-microservice/messaging"
-	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/rs/zerolog/log"
 )
@@ -964,17 +963,18 @@ func (cproc *CommandDeliveryProcessor) handleResponse(ctx context.Context, msg m
 		// names that case. It can only add drops for a tenant already through the delete
 		// door, and its fail-open (an unanswerable lookup reads as live) only keeps the old
 		// behaviour, so it is consulted on the failure path alone.
-		if errors.Is(err, rdb.ErrTenantPurged) || cproc.tenantDeleted(tenant) {
+		disposition := messaging.Dispose(msg, err)
+		if disposition == messaging.TenantErased || cproc.tenantDeleted(tenant) {
 			log.Info().Str("command", response.CommandToken).Str("correlation", msg.CorrelationID()).
 				Msg("Dropping a command response for a deleted tenant; its commands have been erased.")
 			_ = msg.Ack()
-			done(core.ResultInvalid)
+			done(core.ResultErased)
 			return true
 		}
 		// Treat a failed persist as transient. Leave it unacked to retry until
 		// the redelivery cap, then ack to give up (the device can resend and the
 		// command sweep handles redelivery of the command itself).
-		if msg.NumDelivered >= messaging.MaxDeliver {
+		if disposition == messaging.Exhausted {
 			log.Error().Err(err).Str("command", response.CommandToken).Str("correlation", msg.CorrelationID()).Int("attempts", msg.NumDelivered).
 				Msg("dead-lettering command response after maximum delivery attempts")
 			cproc.deadLetterResponse(tenantCtx, msg, response.CommandToken, err,

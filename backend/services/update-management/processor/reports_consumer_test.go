@@ -242,7 +242,7 @@ func TestAReportForADeletedTenantIsDroppedOnItsFirstDelivery(t *testing.T) {
 	ack := &ackRecorder{}
 	c.handle(context.Background(), messaging.NewConsumedMessage(reportsSubject, []byte(progressBody("RECEIVED")), 1, nil, ack))
 	require.Equal(t, 1, ack.acks, "a report the fence refuses was left for redelivery")
-	require.EqualValues(t, 1, handled(t, reg, core.ResultInvalid))
+	require.EqualValues(t, 1, handled(t, reg, core.ResultErased))
 	require.Zero(t, handled(t, reg, core.ResultRetry))
 	require.Zero(t, handled(t, reg, core.ResultFailed))
 
@@ -253,7 +253,7 @@ func TestAReportForADeletedTenantIsDroppedOnItsFirstDelivery(t *testing.T) {
 	c.handle(context.Background(), messaging.NewConsumedMessage(reportsSubject,
 		[]byte(`{"v":1,"kind":"download.request","assignmentId":"asg-1"}`), 1, nil, ack))
 	require.Equal(t, 1, ack.acks, "a download request the fence refuses was left for redelivery")
-	require.EqualValues(t, 2, handled(t, reg, core.ResultInvalid))
+	require.EqualValues(t, 2, handled(t, reg, core.ResultErased))
 }
 
 // letterRecorder is a dead-letter writer that keeps what it was handed.
@@ -275,7 +275,7 @@ func TestAReportForADeletedTenantAtTheCapIsNotLettered(t *testing.T) {
 		letters int
 		result  string
 	}{
-		{"deleted tenant", fmt.Errorf("applying: %w", rdb.ErrTenantPurged), 0, core.ResultInvalid},
+		{"deleted tenant", fmt.Errorf("applying: %w", rdb.ErrTenantPurged), 0, core.ResultErased},
 		{"store failure", errors.New("database down"), 1, core.ResultFailed},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

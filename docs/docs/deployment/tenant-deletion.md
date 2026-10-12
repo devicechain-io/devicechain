@@ -218,6 +218,21 @@ again, and the deletion does not complete until the writes have stopped. The ref
 when the deletion completes, which is also when the token is released, so a new tenant created at
 that token writes normally from its first request.
 
+A refused write is not retried. A service that meets the refusal while handling a message from a
+stream acknowledges the message on the delivery it arrived on and records nothing about it: no dead
+letter and no `failed-events` record, because either would be a new copy of the data being erased.
+It counts the message as `erased` (see [Message results](./observability.md#message-results)).
+Where a service writes several tenants' messages in one transaction, the refusal settles every
+message of the deleted tenant in it at once, and the other tenants' messages are written without
+them. A database that cannot say whether the tenant has been deleted is not a refusal: those
+messages are retried like any other failed write.
+
+Work for a deleted tenant can also fail before it reaches a write, for example because the deletion
+has already removed the device or command it refers to. No dead letter is written for that either,
+provided the service can learn from user-management that the tenant has been deleted. If it cannot,
+the letter is written, and one written before the deletion finishes is removed with the tenant's
+other records.
+
 The refusal is checked at a transaction's first write for a tenant, so a transaction that had
 already written for the tenant when the deletion began can still commit, including writes it makes
 afterwards. The deletion catches such writes, provided the transaction commits before the

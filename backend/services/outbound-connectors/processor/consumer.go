@@ -502,6 +502,20 @@ const deadLetterWriteAttempts = 3
 // alertable LOSS (never the false "will retry") so an operator sees a dispatch that could be neither
 // delivered nor dead-lettered.
 func (c *DispatchConsumer) deadLetter(tctx context.Context, msg messaging.Message, rule, action, outcome string) {
+	// 🔴 NO COPY FOR A DELETED TENANT. The verbatim copy is written by this service's own writer,
+	// not through a dead-letter sink, so the producer's rule that a deleted tenant gets no letter
+	// (deadletter.Producer.TenantDeleted) is asked HERE, before either record: the copy is the
+	// tenant's payload, and the index entry that points at it would be withheld anyway, leaving a
+	// copy no list shows. The admission gate above already refuses a tenant it knows is deleted;
+	// this catches one deleted while its dispatch was being retried, or one that gate had not yet
+	// learned about. Like that gate it fails open, so a live tenant's dispatch is always recorded.
+	if tenant, ok := core.TenantFromContext(tctx); ok && c.deadLetters.TenantDeleted(tenant) {
+		log.Debug().Str("rule", rule).Str("tenant", tenant).Str("action", action).
+			Msg("Not dead-lettering a connector dispatch for a tenant that has been deleted; dropping it.")
+		c.metrics.recordOutcome(action, outcomeTenantDeleted)
+		c.ack(msg)
+		return
+	}
 	// Stamp the disposition on the dead-lettered message (not just the metric/log) so an operator or a
 	// future replay tool can tell a healthy-but-rate-shed dispatch (replayable) apart from genuine
 	// poison (unsupported/invalid/permanently-failed) sharing this terminal subject. The header rides

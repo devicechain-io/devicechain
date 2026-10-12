@@ -265,4 +265,9 @@ const (
 	ResultFailed  = "failed"  // gave up and DEAD-LETTERED: the work is recorded (ADR-024)
 	ResultDropped = "dropped" // gave up and DISCARDED: nothing records it, deliberately
 	ResultRetry   = "retry"   // transient failure, redelivery requested
+	// ResultErased: the message's tenant has been deleted and this area's data erased, so
+	// its write was refused. Settled on the delivery it arrived on and recorded NOWHERE —
+	// no dead letter, no failed-events copy — because a record of an erased tenant's data
+	// is the thing the erasure removes. See messaging.Dispose.
+	ResultErased = "erased"
 )

@@ -205,7 +205,7 @@ func medianRTT(tb testing.TB, mgr *rdb.RdbManager) float64 {
 }
 
 // The fence refuses a device-state write on the real server, over the real migration
-// chain and callback chain: the event is left unacked, the projection does not move, and
+// chain and callback chain: the event is settled (acked once), the projection does not move, and
 // exactly one fence read is made. Lifting the fence is the negative control.
 func TestTheFenceRefusesADeviceStateWriteOnPostgres(t *testing.T) {
 	mgr, counter := newFenceBenchManager(t, "dsfencetest", true)
@@ -237,14 +237,16 @@ func TestTheFenceRefusesADeviceStateWriteOnPostgres(t *testing.T) {
 	sp.mergeOne(context.Background(), benchMeasurement(t, tenant, "fr-device", t1, ack))
 	counter.Arm(false)
 	all, fence := counter.Counts()
-	if ack.n.Load() != 0 {
-		t.Fatalf("a merge for a fenced tenant was acked")
-	}
 	if all != 2 || fence != 1 {
 		t.Errorf("a refused merge made %d statements with %d fence reads; want 2 with 1", all, fence)
 	}
 	if got := lastActivity(); !got.Equal(t0) {
 		t.Errorf("LastActivityTime moved to %v under a standing fence; want %v", got, t0)
+	}
+	// Refused, and settled: the fence refuses the tenant on every delivery, so the message
+	// is acknowledged on this one rather than left to be refused again.
+	if ack.n.Load() != 1 {
+		t.Fatalf("a merge the fence refused was acked %d time(s); want 1", ack.n.Load())
 	}
 
 	liftOn(t, mgr, tenant)

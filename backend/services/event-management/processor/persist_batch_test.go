@@ -19,6 +19,7 @@ import (
 	"github.com/devicechain-io/dc-event-management/model"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/messaging"
+	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-microservice/rdb/rdbtest"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/prometheus/client_golang/prometheus"
@@ -363,10 +364,12 @@ func TestAStreamOfRefusedMessagesStillCommitsInBatches(t *testing.T) {
 }
 
 // The erasure fence still refuses a purged tenant's messages inside a batch that carries
-// other tenants' messages. The purged tenant's messages are left for redelivery exactly as
-// they were before batching (not acknowledged, recorded retry, no rows) and their
-// batch-mates are stored. The lifted-fence row is the negative control: the same batch
-// commits whole, so the refusals above came from the fence.
+// other tenants' messages, and their batch-mates are stored. The purged tenant's messages
+// leave no rows and are settled on whatever delivery they are on — the first as much as the
+// last, because the fence refuses that tenant on every delivery — and NOTHING about them is
+// reported: a failed-events copy of an erased tenant's event would be a new record of the
+// data being erased. The lifted-fence row is the negative control: the same batch commits
+// whole, so the refusals above came from the fence.
 func TestAFencedTenantInABatchIsRefusedAndItsBatchMatesAreStored(t *testing.T) {
 	for _, tc := range []struct {
 		name      string
@@ -414,55 +417,67 @@ func TestAFencedTenantInABatchIsRefusedAndItsBatchMatesAreStored(t *testing.T) {
 			if got := tenantEvents(t, r.db, "gone"); got != 0 {
 				t.Errorf("stored %d events for the purged tenant; want none", got)
 			}
-			// One failed batch, which sets aside every message of the purged tenant at once;
-			// each of those on its own; and the live four together. Setting them aside one
-			// failed batch at a time would take 4 + 4 + 1 = 9.
-			if got := r.api.txs.Load(); got != 6 {
-				t.Errorf("took %d transactions; want 6", got)
+			// One failed batch, which settles every message of the purged tenant at once with
+			// its refusal, and the live four together. Writing each purged message again on
+			// its own would take 1 + 4 + 1 = 6; setting them aside one failed batch at a time,
+			// 4 + 4 + 1 = 9.
+			if got := r.api.txs.Load(); got != 2 {
+				t.Errorf("took %d transactions; want 2", got)
 			}
 			if got := r.metric(t, metricFallbacks, "", ""); got != 1 {
 				t.Errorf("fallbacks = %v; want 1", got)
 			}
-			for i := 0; i < 8; i += 2 {
+			if got := r.reported(); len(got) != 0 {
+				t.Errorf("reported %+v on the failed-events path; want nothing about an erased tenant", got)
+			}
+			for i := 0; i < 8; i++ {
 				if acked[i] != 1 {
-					t.Errorf("live message %d acknowledged %d times; want 1", i, acked[i])
+					t.Errorf("message %d acknowledged %d times; want 1 (live: stored; purged: settled)", i, acked[i])
 				}
 			}
-			if tc.delivered < messaging.MaxDeliver {
-				for i := 1; i < 8; i += 2 {
-					if acked[i] != 0 {
-						t.Errorf("purged tenant's message %d was acknowledged; want it left for redelivery", i)
-					}
-				}
-				if got := r.metric(t, metricMessages, "result", core.ResultRetry); got != 4 {
-					t.Errorf("recorded %v retries; want 4", got)
-				}
-				if got := len(r.reported()); got != 0 {
-					t.Errorf("reported %d failures on a first delivery; want none", got)
-				}
-				return
+			if got := r.metric(t, metricMessages, "result", core.ResultErased); got != 4 {
+				t.Errorf("recorded %v erased; want the purged tenant's 4", got)
 			}
-			// On the last delivery each is given up on as a downstream failure and acked.
-			got := r.reported()
-			if len(got) != 4 {
-				t.Fatalf("reported %+v; want the purged tenant's 4 messages", got)
-			}
-			for _, f := range got {
-				if f.tenant != "gone" || f.reason != uint(dmproto.FailureReason_ApiCallFailed) {
-					t.Errorf("reported %+v; want tenant gone with reason ApiCallFailed", f)
-				}
-			}
-			for i := 1; i < 8; i += 2 {
-				if acked[i] != 1 {
-					t.Errorf("purged tenant's message %d acknowledged %d times on its last delivery; want 1", i, acked[i])
+			for _, result := range []string{core.ResultRetry, core.ResultFailed} {
+				if got := r.metric(t, metricMessages, "result", result); got != 0 {
+					t.Errorf("recorded %v %s; want 0", got, result)
 				}
 			}
 		})
 	}
 }
 
+// The counterweight to the test above: an UNREADABLE fence is a database that could not
+// answer, not a refusal, so nothing is settled — every message is left for redelivery,
+// nothing is stored, and nothing is reported. Were the fence-read error taken for the
+// refusal, a broken fence table would silently discard every tenant's events.
+func TestAnUnreadableFenceInABatchSettlesNothing(t *testing.T) {
+	r := newBatchRig(t, 8)
+	if err := r.db.Migrator().DropTable(&rdb.PurgedTenant{}); err != nil {
+		t.Fatalf("drop the fence table: %v", err)
+	}
+	r.run(r.messages(t, 8, fenceCostTenant, true))
+
+	if got := tenantEvents(t, r.db, fenceCostTenant); got != 0 {
+		t.Errorf("stored %d events over an unreadable fence; want none", got)
+	}
+	if got := len(r.acks.acked()); got != 0 {
+		t.Errorf("%d messages acknowledged over an unreadable fence; want none", got)
+	}
+	if got := r.metric(t, metricMessages, "result", core.ResultRetry); got != 8 {
+		t.Errorf("recorded %v retries; want 8", got)
+	}
+	if got := r.metric(t, metricMessages, "result", core.ResultErased); got != 0 {
+		t.Errorf("recorded %v erased over an unreadable fence; want 0", got)
+	}
+	if got := r.reported(); len(got) != 0 {
+		t.Errorf("reported %+v on a first delivery; want nothing", got)
+	}
+}
+
 // A purged tenant still sending costs its batch-mates one transaction, not their batching:
-// 31 live messages and 1 refused take 3 transactions, not 33.
+// 31 live messages and 1 refused take 2 transactions — the refused batch, then the 31 — not
+// 33, and the refused message is settled without a transaction of its own.
 func TestASinglePurgedTenantMessageCostsItsBatchTwoTransactions(t *testing.T) {
 	r := newBatchRig(t, 32)
 	plantFence(t, r.db, "gone")
@@ -470,21 +485,22 @@ func TestASinglePurgedTenantMessageCostsItsBatchTwoTransactions(t *testing.T) {
 	msgs[10] = consumed(t, r.acks, 10, "gone", 1, batchEvent(10, true, batchT0))
 	r.run(msgs)
 
-	if got := r.api.txs.Load(); got != 3 {
-		t.Errorf("took %d transactions; want 3", got)
+	if got := r.api.txs.Load(); got != 2 {
+		t.Errorf("took %d transactions; want 2", got)
 	}
 	if got := tenantEvents(t, r.db, fenceCostTenant); got != 31 {
 		t.Errorf("stored %d live events; want 31", got)
 	}
-	if got := len(r.acks.acked()); got != 31 {
-		t.Errorf("%d acknowledged; want the 31 live messages", got)
+	if got := len(r.acks.acked()); got != 32 {
+		t.Errorf("%d acknowledged; want all 32: the 31 live messages stored, the purged one settled", got)
 	}
 }
 
 // A purged tenant sending half of every batch costs each batch one failed transaction, not
-// one per purged message: 16 of 32 messages from it take 1 + 16 + 1 = 18 transactions.
-// Setting its messages aside one failed batch at a time would take 16 + 16 + 1 = 33, and
-// roll back about 16 x 16 / 2 live writes on the way.
+// one per purged message: 16 of 32 messages from it take 2 transactions, the refused batch
+// and the live 16, because the refusal settles all 16 at once. Writing each again on its own
+// would take 1 + 16 + 1 = 18; setting them aside one failed batch at a time 16 + 16 + 1 = 33,
+// rolling back about 16 x 16 / 2 live writes on the way.
 func TestAPurgedTenantIsSetAsideFromItsBatchAllAtOnce(t *testing.T) {
 	r := newBatchRig(t, 32)
 	plantFence(t, r.db, "gone")
@@ -498,8 +514,8 @@ func TestAPurgedTenantIsSetAsideFromItsBatchAllAtOnce(t *testing.T) {
 	}
 	r.run(msgs)
 
-	if got := r.api.txs.Load(); got != 18 {
-		t.Errorf("took %d transactions; want 18", got)
+	if got := r.api.txs.Load(); got != 2 {
+		t.Errorf("took %d transactions; want 2", got)
 	}
 	if got := r.metric(t, metricFallbacks, "", ""); got != 1 {
 		t.Errorf("fallbacks = %v; want 1", got)
@@ -510,14 +526,13 @@ func TestAPurgedTenantIsSetAsideFromItsBatchAllAtOnce(t *testing.T) {
 	if got := tenantEvents(t, r.db, "gone"); got != 0 {
 		t.Errorf("stored %d events for the purged tenant; want none", got)
 	}
-	if got := r.metric(t, metricMessages, "result", core.ResultRetry); got != 16 {
-		t.Errorf("recorded %v retries; want the purged tenant's 16", got)
+	if got := r.metric(t, metricMessages, "result", core.ResultErased); got != 16 {
+		t.Errorf("recorded %v erased; want the purged tenant's 16", got)
 	}
 	acked := r.acks.acked()
 	for i := 0; i < 32; i++ {
-		want := 1 - i%2
-		if acked[i] != want {
-			t.Errorf("message %d acknowledged %d times; want %d", i, acked[i], want)
+		if acked[i] != 1 {
+			t.Errorf("message %d acknowledged %d times; want 1", i, acked[i])
 		}
 	}
 }

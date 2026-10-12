@@ -398,10 +398,9 @@ type evidence struct {
 
 func (evidence) FenceExempt() bool { return true }
 
-// 🔴 A RECORD OF A FAILURE MUST NOT BE FENCED. Deleting a tenant refuses its upstream
-// writes; those consumers then dead-letter, and the letter's own row would be refused too —
-// deleting the evidence that a tenant's last alarms went nowhere, and reporting it to an
-// operator as a database outage.
+// 🔴 A RECORD OF A FAILURE MUST NOT BE FENCED. Whether one is written for a deleted tenant is
+// decided before it reaches the store; a refusal at the store would not unwrite it, only
+// report it to an operator as a lost record, as if the database were down.
 func TestAModelThatOptsOutOfTheFenceIsNotRefused(t *testing.T) {
 	db := newFenceDB(t)
 	require.NoError(t, db.AutoMigrate(&evidence{}))
