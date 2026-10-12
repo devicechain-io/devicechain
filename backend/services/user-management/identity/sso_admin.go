@@ -105,6 +105,8 @@ type IdpConnectionUpdateRequest struct {
 	GroupsClaim dcgraphql.OptionalString
 	Scopes      dcgraphql.OptionalStringList
 	RequiredAmr dcgraphql.OptionalStringList
+	// ProviderSignOut switches signing out at the provider too on or off.
+	ProviderSignOut dcgraphql.OptionalBool
 }
 
 // IdpConnectionDetail is a connection with everything an administrator reviews beside it.
@@ -114,6 +116,9 @@ type IdpConnectionDetail struct {
 	Tenants     []string
 	HasSecret   bool
 	CallbackURL string
+	// SignOutReturnURLs are the addresses a provider sends the browser back to after
+	// signing the person out, one per app, to register at the provider.
+	SignOutReturnURLs []string
 	// RoleMappings are the connection's group-to-role mappings, across its tenants.
 	RoleMappings []IdpRoleMappingDetail
 	// Fingerprint identifies the discovery snapshot, so an approval is of THE snapshot the
@@ -287,6 +292,7 @@ func (m *Manager) connectionDetail(ctx context.Context, conn *iam.IdpConnection)
 	return &IdpConnectionDetail{
 		Connection: *conn, Domains: domains, Tenants: tenants, HasSecret: has, RoleMappings: mappings,
 		CallbackURL: m.SsoCallbackURL(conn.Token), Fingerprint: snapshotFingerprint(conn.DiscoverySnapshot),
+		SignOutReturnURLs: m.signOutReturnURLs(),
 	}, nil
 }
 
@@ -329,6 +335,9 @@ func (m *Manager) UpdateIdpConnection(ctx context.Context, token string, req *Id
 	conn.RequiredAmr = req.RequiredAmr.ApplyTo(conn.RequiredAmr)
 	enabled, err := req.Enabled.ApplyToRequired("enabled", conn.Enabled)
 	if err != nil {
+		return nil, err
+	}
+	if conn.ProviderSignOut, err = req.ProviderSignOut.ApplyToRequired("providerSignOut", conn.ProviderSignOut); err != nil {
 		return nil, err
 	}
 	if strings.TrimSpace(conn.Name) == "" || len(conn.Name) > 256 || len(conn.ClientID) > 256 ||

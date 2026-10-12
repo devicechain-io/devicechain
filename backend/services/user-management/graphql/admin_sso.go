@@ -89,6 +89,12 @@ func (r *IdpConnectionResolver) SessionMaxAgeSeconds() int32 {
 	return int32(r.d.Connection.SessionMaxAgeSeconds)
 }
 func (r *IdpConnectionResolver) CallbackUrl() string { return r.d.CallbackURL }
+func (r *IdpConnectionResolver) ProviderSignOut() bool {
+	return r.d.Connection.ProviderSignOut
+}
+func (r *IdpConnectionResolver) SignOutReturnUrls() []string {
+	return nonNil(r.d.SignOutReturnURLs)
+}
 func (r *IdpConnectionResolver) Discovery() *IdpDiscoveryResolver {
 	return &IdpDiscoveryResolver{d: r.d}
 }

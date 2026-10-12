@@ -68,7 +68,7 @@ const (
 	loginDoc   = `mutation($e:String!,$p:String!){login(email:$e,password:$p){identityToken}}`
 	selectDoc  = `mutation($i:String!){selectTenant(identityToken:$i,tenant:"acme"){accessToken refreshToken}}`
 	refreshDoc = `mutation($r:String!){refresh(refreshToken:$r){accessToken refreshToken}}`
-	logoutDoc  = `mutation($t:String!){logout(token:$t)}`
+	logoutDoc  = `mutation($t:String!){logout(token:$t,returnTo:CONSOLE){providerSignOutUrl}}`
 )
 
 func (s *served) signIn(t *testing.T) (identityToken, refreshToken string) {
@@ -87,9 +87,10 @@ func TestLogoutMutationEndsTheSignInOverHTTP(t *testing.T) {
 	idTok, refresh := s.signIn(t)
 	_, otherRefresh := s.signIn(t)
 
-	var ok bool
-	s.do(t, logoutDoc, map[string]any{"t": refresh}).field(t, "logout", &ok)
-	require.True(t, ok)
+	// A password sign-in has no provider to sign out at, even when an app is named.
+	var out struct{ ProviderSignOutUrl *string }
+	s.do(t, logoutDoc, map[string]any{"t": refresh}).field(t, "logout", &out)
+	require.Nil(t, out.ProviderSignOutUrl)
 
 	s.do(t, refreshDoc, map[string]any{"r": refresh}).failedWith(t, "invalid or expired token")
 	s.do(t, selectDoc, map[string]any{"i": idTok}).failedWith(t, "invalid or expired token")
@@ -99,12 +100,32 @@ func TestLogoutMutationEndsTheSignInOverHTTP(t *testing.T) {
 	require.NotEmpty(t, pair.RefreshToken, "another sign-in was ended by this one's logout")
 
 	// Repeating it, or sending the identity token of the ended sign-in, still succeeds.
-	ok = false
-	s.do(t, logoutDoc, map[string]any{"t": refresh}).field(t, "logout", &ok)
-	require.True(t, ok)
-	ok = false
-	s.do(t, logoutDoc, map[string]any{"t": idTok}).field(t, "logout", &ok)
-	require.True(t, ok)
+	s.do(t, logoutDoc, map[string]any{"t": refresh}).field(t, "logout", &out)
+	s.do(t, logoutDoc, map[string]any{"t": idTok}).field(t, "logout", &out)
 
 	s.do(t, logoutDoc, map[string]any{"t": "not-a-token"}).failedWith(t, "invalid or expired token")
+}
+
+// The return app is an ENUM on the served schema, so a caller cannot hand the server an
+// address: anything but CONSOLE or DASHBOARD is refused before a resolver runs, and the
+// sign-in is not ended by the refused request.
+func TestLogoutRefusesAReturnThatIsNotOneOfTheApps(t *testing.T) {
+	s := newServed(t)
+	idTok, refresh := s.signIn(t)
+	const doc = `mutation($t:String!,$r:SignOutReturn){logout(token:$t,returnTo:$r){providerSignOutUrl}}`
+
+	for _, bad := range []string{"https://evil.example/", "/login", "console", ""} {
+		r := s.do(t, doc, map[string]any{"t": refresh, "r": bad})
+		require.NotEmptyf(t, r.Errors, "returnTo %q was accepted", bad)
+	}
+	// The refused requests ended nothing: the sign-in still refreshes.
+	var pair struct{ RefreshToken string }
+	s.do(t, refreshDoc, map[string]any{"r": refresh}).field(t, "refresh", &pair)
+	require.NotEmpty(t, pair.RefreshToken)
+
+	// Control: an app the schema names is accepted, and ends the sign-in.
+	var out struct{ ProviderSignOutUrl *string }
+	s.do(t, doc, map[string]any{"t": idTok, "r": "DASHBOARD"}).field(t, "logout", &out)
+	require.Nil(t, out.ProviderSignOutUrl, "a password sign-in has no provider to sign out at")
+	s.do(t, refreshDoc, map[string]any{"r": pair.RefreshToken}).failedWith(t, "invalid or expired token")
 }

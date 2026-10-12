@@ -101,7 +101,12 @@ export default function App() {
     // server call runs behind it and reports a failure on the sign-in screen.
     setToken(null);
     setLoaded(null);
-    void endServerSession(refreshToken).then((ended) => setSignOutFailed(!ended));
+    void endServerSession(refreshToken).then(({ ended, providerSignOut }) => {
+      setSignOutFailed(!ended);
+      // Only once the server confirmed: end the session at the identity provider too. It
+      // sends the browser back to this app's sign-in screen.
+      if (ended && providerSignOut) window.location.assign(providerSignOut);
+    });
   };
 
   const onAuthed = (accessToken: string, refreshToken: string) => {

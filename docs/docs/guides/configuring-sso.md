@@ -32,6 +32,21 @@ The same steps are available in the admin GraphQL API: `createIdpConnection`, `a
 
 An instance connection (for your own operators) is created the same way with kind `instance`, and additionally needs `requiredAmr` (for example `["mfa"]`) or `mfaEnforcedByIdp: true`. Link each operator explicitly with `linkIdentity`; nothing links them automatically.
 
+## Sign out at the provider {#provider-sign-out}
+
+By default, signing out of the console or the dashboard app ends the DeviceChain session only. The person stays signed in at the identity provider, so their next **Sign in with SSO** may go straight through without asking for a password. A connection can also send people to the provider's own sign-out page when they sign out (OpenID Connect RP-initiated logout). It is **off by default**, because signing out at the provider usually ends the person's session there for every application the provider serves.
+
+1. Check that the approved discovery document shows a **Sign-out endpoint**. A provider that publishes none cannot be signed out of this way: the setting then has no effect, and signing out still ends the DeviceChain session.
+2. On the connection's **Settings** tab, under **Sign out at the provider**, copy the two **Post-logout redirect addresses** and register them at the provider as post-logout (sign-out) redirect URIs. They are `<origin>/login` for the console and `<origin>/dash/` for the dashboard app, where `<origin>` is the scheme and host of the instance's [public address](#issuer-url).
+3. Tick **Also sign people out at the provider**. In the admin API this is `updateIdpConnection` with `providerSignOut: true`.
+
+What happens when someone signs out:
+
+- **The DeviceChain session always ends first**, on the server, whatever the provider does afterwards. Only then is the browser sent to the provider, which sends it back to the sign-in page.
+- The request carries the connection's client id and the return address, and nothing else. DeviceChain does not keep the provider's ID token, so it sends no `id_token_hint`, and the provider may ask the person to confirm. A provider that refuses a sign-out request without `id_token_hint` cannot be used with this setting; leave it off.
+- The return address is built by the server from the instance's public address and cannot be supplied by a caller. If it is not registered at the provider, the provider shows its own error instead of returning the person; the DeviceChain session has ended regardless.
+- It applies only to sign-ins through that connection while it is enabled and its discovery document is approved. A password sign-in signs out of DeviceChain only.
+
 ## Provider recipes {#recipes}
 
 In each recipe, replace `<callback URL>` with the connection's callback URL.

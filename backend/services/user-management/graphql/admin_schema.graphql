@@ -1345,6 +1345,19 @@ type IdpConnection {
     tenants: [String!]!
     """The address to register at the provider as this connection's redirect (callback) URI."""
     callbackUrl: String!
+    """
+    Whether signing out also signs the person out at the provider, through its approved
+    sign-out endpoint. Off unless switched on with updateIdpConnection: signing out at the
+    provider ends the person's session there for every application it serves. Has no effect
+    while the approved discovery document names no sign-out endpoint.
+    """
+    providerSignOut: Boolean!
+    """
+    The addresses to register at the provider as post-logout redirect URIs, one per app (the
+    console's sign-in page and the dashboard app), for signing out at the provider. Empty when
+    the instance has no public address.
+    """
+    signOutReturnUrls: [String!]!
     """The provider's discovery document as last fetched; sign-ins use only the endpoints approved here."""
     discovery: IdpDiscovery!
     """When the connection was created."""
@@ -1471,6 +1484,8 @@ input IdpConnectionUpdateRequest {
     scopes: [String!]
     """The complete new list of required authentication methods."""
     requiredAmr: [String!]
+    """True to sign people out at the provider too when they sign out; see IdpConnection.providerSignOut."""
+    providerSignOut: Boolean
 }
 
 """A sign-in that was refused because it matched an existing identity with no link. It grants nothing."""

@@ -322,6 +322,8 @@ export type IdpConnectionUpdateRequest = {
   groupsClaim?: string | null | undefined;
   /** New display name. */
   name?: string | null | undefined;
+  /** True to sign people out at the provider too when they sign out; see IdpConnection.providerSignOut. */
+  providerSignOut?: boolean | null | undefined;
   /** The complete new list of required authentication methods. */
   requiredAmr?: Array<string> | null | undefined;
   /** The complete new list of scopes. */
@@ -583,7 +585,7 @@ export type IdpConnectionQueryVariables = Exact<{
 }>;
 
 
-export type IdpConnectionQuery = { idpConnection: { token: string, name: string, kind: string, enabled: boolean, issuer: string, clientId: string, hasSecret: boolean, scopes: Array<string>, emailClaim: string, requiredAmr: Array<string>, tenants: Array<string>, callbackUrl: string, createdAt: string | null, updatedAt: string | null, requiredClaims: Array<{ name: string, value: string }>, domains: Array<{ domain: string, verifiedAt: string, verifiedBy: string }>, discovery: { authorizationEndpoint: string, tokenEndpoint: string, jwksUri: string, endSessionEndpoint: string | null, fetchedAt: string | null, fingerprint: string, approved: boolean, approvedBy: string | null, approvedAt: string | null } } | null };
+export type IdpConnectionQuery = { idpConnection: { token: string, name: string, kind: string, enabled: boolean, issuer: string, clientId: string, hasSecret: boolean, scopes: Array<string>, emailClaim: string, requiredAmr: Array<string>, tenants: Array<string>, callbackUrl: string, providerSignOut: boolean, signOutReturnUrls: Array<string>, createdAt: string | null, updatedAt: string | null, requiredClaims: Array<{ name: string, value: string }>, domains: Array<{ domain: string, verifiedAt: string, verifiedBy: string }>, discovery: { authorizationEndpoint: string, tokenEndpoint: string, jwksUri: string, endSessionEndpoint: string | null, fetchedAt: string | null, fingerprint: string, approved: boolean, approvedBy: string | null, approvedAt: string | null } } | null };
 
 export type SsoLinkRequestsQueryVariables = Exact<{ [key: string]: never; }>;
 
@@ -1267,6 +1269,8 @@ export const IdpConnectionDocument = new TypedDocumentString(`
     }
     tenants
     callbackUrl
+    providerSignOut
+    signOutReturnUrls
     discovery {
       authorizationEndpoint
       tokenEndpoint
