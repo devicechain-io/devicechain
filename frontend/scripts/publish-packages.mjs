@@ -213,41 +213,82 @@ export function isAlreadyPublishedRefusal(stderr, version) {
 // short-lived publish token when a trusted publisher matches this repository and
 // workflow, and refuses otherwise. npm's own publish swallows that refusal and goes on
 // to fail with an anonymous 404; asking first is what lets the refusal be reported per
-// package, before anything has been published. The token npm mints is discarded.
+// package, before anything has been published. The token npm mints is discarded and
+// never printed; neither is the GitHub ID token.
+//
+// As `npm publish` does, a FRESH ID token is requested for every exchange rather than
+// one being replayed across packages, so the check cannot be refused for a reason the
+// publish itself would never meet. And as npm does, an exchange only counts as granted
+// when the answer carries a token: npm reads a 2xx without one as a failed exchange.
+//
+// A registry that cannot be ASKED (no answer, 429, 5xx) is not a refusal and is not
+// reported as one: it is retried briefly, and then the run stops with nothing
+// published and a message saying npm could not be reached, so an outage is never
+// mistaken for a missing trusted publisher, nor for a "ready".
 //
 // Only ever called inside Actions, where assertOidcReady() has already proved the
 // token endpoint is present and the registry is registry.npmjs.org.
 // ---------------------------------------------------------------------------
 const REGISTRY = 'https://registry.npmjs.org/';
+const ASK_ATTEMPTS = 3;
+const ASK_RETRY_MS = 2000;
+
+const transient = (status) => status === 429 || status >= 500;
+
+// fetch, retried on a network failure or a transient status; any other answer is
+// returned for the caller to judge. `what` names the request in the failure only.
+async function ask(what, url, init) {
+  let last = '';
+  for (let attempt = 1; attempt <= ASK_ATTEMPTS; attempt += 1) {
+    try {
+      const response = await fetch(url, init);
+      if (!transient(response.status)) return response;
+      last = `HTTP ${response.status}`;
+    } catch (err) {
+      last = err?.cause?.code ?? err?.message ?? 'network error';
+    }
+    if (attempt < ASK_ATTEMPTS) sleep(ASK_RETRY_MS);
+  }
+  return fail(
+    `${what} could not be reached (${last}, ${ASK_ATTEMPTS} attempts), so NOTHING WAS PUBLISHED.\n` +
+      '  This says nothing about whether the packages can be published. Re-run this job.',
+  );
+}
 
 async function githubIdToken() {
   const url = new URL(process.env.ACTIONS_ID_TOKEN_REQUEST_URL);
   url.searchParams.append('audience', `npm:${new URL(REGISTRY).hostname}`);
-  const response = await fetch(url, {
+  const response = await ask("GitHub's OIDC token endpoint", url, {
     headers: { Accept: 'application/json', Authorization: `Bearer ${process.env.ACTIONS_ID_TOKEN_REQUEST_TOKEN}` },
   });
   const body = await response.json().catch(() => ({}));
-  if (!response.ok || typeof body.value !== 'string') {
+  if (!response.ok || typeof body.value !== 'string' || body.value === '') {
     fail(`GitHub would not issue an OIDC ID token (HTTP ${response.status}), so nothing was published`);
   }
   return body.value;
 }
 
 // null when npm would let this job publish `name`, otherwise what npm said.
-async function trustedPublisherRefusal(name, idToken) {
+async function trustedPublisherRefusal(name) {
+  const idToken = await githubIdToken();
   const escaped = name.replace('/', '%2f');
-  const response = await fetch(new URL(`-/npm/v1/oidc/token/exchange/package/${escaped}`, REGISTRY), {
-    method: 'POST',
-    headers: { Accept: 'application/json', Authorization: `Bearer ${idToken}` },
-  });
-  if (response.ok) return null;
+  const response = await ask(
+    `npm's OIDC exchange for ${name}`,
+    new URL(`-/npm/v1/oidc/token/exchange/package/${escaped}`, REGISTRY),
+    { method: 'POST', headers: { Accept: 'application/json', Authorization: `Bearer ${idToken}` } },
+  );
   const text = await response.text().catch(() => '');
-  let message = text.trim();
+  let body = null;
   try {
-    message = JSON.parse(text).message ?? message;
+    body = JSON.parse(text);
   } catch {
-    // not JSON — report the body as it came
+    // not JSON — reported as it came, below
   }
+  if (response.ok) {
+    if (typeof body?.token === 'string' && body.token !== '') return null;
+    return `HTTP ${response.status}, but the answer carried no token`;
+  }
+  const message = typeof body?.message === 'string' ? body.message : text.trim();
   return `HTTP ${response.status}${message ? `: ${message.slice(0, 200)}` : ''}`;
 }
 
@@ -320,9 +361,8 @@ async function main(argv) {
   // one already being reported.
   const untrusted = [];
   if (process.env.GITHUB_ACTIONS === 'true') {
-    const idToken = await githubIdToken();
     for (const { name } of plan) {
-      const refusal = await trustedPublisherRefusal(name, idToken);
+      const refusal = await trustedPublisherRefusal(name);
       if (refusal !== null) untrusted.push(`${name} (${refusal})`);
     }
   } else if (plan.length > 0) {

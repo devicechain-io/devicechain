@@ -69,24 +69,39 @@ process.exit(2);
 
 // The GitHub OIDC token endpoint and npm's token exchange. Every request is recorded so
 // a test can tell an exchange that was refused from one that was never attempted.
+//
+// The token endpoint only answers the request token GitHub hands the job, and issues a
+// distinct ID token per request; the exchange only answers an ID token that endpoint
+// issued. So an exchange sent with the wrong credential is refused here as it would be
+// by npm, and the log shows which ID token each exchange carried.
 const FAKE_FETCH = `
 import fs from 'node:fs';
 const state = JSON.parse(process.env.FAKE_NPM_STATE);
 const EXCHANGE = 'https://registry.npmjs.org/-/npm/v1/oidc/token/exchange/package/';
+let issued = 0;
 globalThis.fetch = async (input, init = {}) => {
   const url = String(input);
-  fs.appendFileSync(process.env.FAKE_FETCH_LOG, (init.method ?? 'GET') + ' ' + url + '\\n');
+  const auth = (init.headers ?? {}).Authorization ?? '';
+  fs.appendFileSync(process.env.FAKE_FETCH_LOG, (init.method ?? 'GET') + ' ' + url + ' ' + auth + '\\n');
   if (url.startsWith('https://token.actions.test/')) {
+    if (auth !== 'Bearer request-token') return new Response('bad request token', { status: 401 });
+    if (state.githubRefuses) return Response.json({ message: 'no id-token permission' }, { status: 403 });
     const audience = new URL(url).searchParams.get('audience');
     if (audience !== 'npm:registry.npmjs.org') return new Response('bad audience', { status: 400 });
-    return Response.json({ value: 'github-id-token' });
+    issued += 1;
+    return Response.json({ value: 'github-id-token-' + issued });
   }
   if (url.startsWith(EXCHANGE) && init.method === 'POST') {
-    const name = decodeURIComponent(url.slice(EXCHANGE.length));
+    const m = /^Bearer github-id-token-(\\d+)$/.exec(auth);
+    if (!m || Number(m[1]) > issued) return Response.json({ message: 'invalid id token' }, { status: 401 });
+    if (state.exchange === 'down') return new Response('upstream unavailable', { status: 503 });
+    if (state.exchange === 'unreachable') throw new TypeError('fetch failed');
+    const name = decodeURIComponent(url.slice(EXCHANGE.length).split('?')[0]);
     if (state.untrusted.includes(name) || state.absent.includes(name)) {
       return Response.json({ message: 'No trusted publisher configured for this package' }, { status: 404 });
     }
-    return Response.json({ token: 'npm-publish-token' }, { status: 201 });
+    if (state.exchange === 'tokenless') return Response.json({}, { status: 201 });
+    return Response.json({ token: 'npm-publish-token-secret' }, { status: 201 });
   }
   return new Response('unexpected', { status: 500 });
 };
@@ -96,7 +111,7 @@ let runs = 0;
 
 // A fresh frontend/ copy (scripts + STAMPED manifests) per run, so one run's publish
 // log cannot leak into the next.
-function runPublisher({ absent = [], untrusted = [] } = {}) {
+function runPublisher({ absent = [], untrusted = [], githubRefuses = false, exchange = 'ok' } = {}) {
   runs += 1;
   const root = path.join(scratch, `run-${runs}`);
   const scripts = path.join(root, 'frontend', 'scripts');
@@ -131,13 +146,16 @@ function runPublisher({ absent = [], untrusted = [] } = {}) {
     ],
     {
       encoding: 'utf8',
+      // A run that gets past the refusals reaches the registry assertion, which polls
+      // for fifteen minutes; bounded so such a defect fails the test instead of hanging it.
+      timeout: 120000,
       env: {
         ...process.env,
         npm_execpath: path.join(fake, 'npm-cli.js'),
         GITHUB_ACTIONS: 'true',
         ACTIONS_ID_TOKEN_REQUEST_URL: 'https://token.actions.test/token?api-version=2.0',
         ACTIONS_ID_TOKEN_REQUEST_TOKEN: 'request-token',
-        FAKE_NPM_STATE: JSON.stringify({ version: VERSION, absent, untrusted }),
+        FAKE_NPM_STATE: JSON.stringify({ version: VERSION, absent, untrusted, githubRefuses, exchange }),
         FAKE_NPM_LOG: npmLog,
         FAKE_FETCH_LOG: fetchLog,
       },
@@ -153,14 +171,31 @@ function runPublisher({ absent = [], untrusted = [] } = {}) {
 }
 
 const ALL = ORDER.map((name) => `@devicechain/${name}`);
+const exchanged = (run) =>
+  run.fetched.filter((l) => l.startsWith('POST ')).map((l) => decodeURIComponent(l.split(' ')[1].split('/package/')[1]));
+// Neither credential may reach the job log: the ID token, or the publish token npm mints.
+function assertNoTokenPrinted(run) {
+  assert.doesNotMatch(run.output, /github-id-token|npm-publish-token|request-token/, run.output);
+}
 
 describe('publish-packages refuses before publishing anything', () => {
-  // The control. Without it, the two refusals below could pass because the harness
-  // never publishes at all.
+  // The control. Without it, the refusals below could pass because the harness never
+  // publishes at all.
   it('publishes every package, leaf-first, when every package is ready', () => {
     const run = runPublisher();
     assert.equal(run.status, 0, run.output);
     assert.deepEqual(run.published, ALL);
+    // EVERY package was asked about, not just the one a refusal test happens to name.
+    assert.deepEqual(exchanged(run), ALL, run.fetched.join('\n'));
+    assertNoTokenPrinted(run);
+  });
+
+  it('asks the exchange as npm publish does: a fresh ID token for every package', () => {
+    const run = runPublisher();
+    assert.equal(run.status, 0, run.output);
+    const used = run.fetched.filter((l) => l.startsWith('POST ')).map((l) => l.split(' ').slice(2).join(' '));
+    assert.equal(used.length, ALL.length);
+    assert.equal(new Set(used).size, used.length, `an ID token was replayed:\n${used.join('\n')}`);
   });
 
   it('a package with no trusted publisher stops the run before the first publish', () => {
@@ -172,10 +207,41 @@ describe('publish-packages refuses before publishing anything', () => {
     assert.match(run.output, /release\.yml/);
     // ...and it was the exchange that said so, not a guess.
     assert.ok(
-      run.fetched.some((l) => l.startsWith('POST ') && l.endsWith('/package/@devicechain%2fwidget-sdk')),
+      run.fetched.some((l) => l.startsWith('POST ') && l.includes('/package/@devicechain%2fwidget-sdk ')),
       run.fetched.join('\n'),
     );
+    assertNoTokenPrinted(run);
   });
+
+  it('an exchange answered without a token is a refusal, not a ready', () => {
+    const run = runPublisher({ exchange: 'tokenless' });
+    assert.notEqual(run.status, 0, run.output);
+    assert.deepEqual(run.published, []);
+    assert.match(run.output, /NOTHING WAS PUBLISHED/);
+    assert.match(run.output, /no token/);
+  });
+
+  it('GitHub refusing the ID token publishes nothing', () => {
+    const run = runPublisher({ githubRefuses: true });
+    assert.notEqual(run.status, 0, run.output);
+    assert.deepEqual(run.published, []);
+    assert.match(run.output, /OIDC ID token/);
+  });
+
+  // A registry that cannot be asked is not a missing trusted publisher, and above all
+  // not a "ready": it refuses everything, says npm could not be reached, and exits
+  // cleanly rather than with a stack trace.
+  for (const exchange of ['down', 'unreachable']) {
+    it(`an exchange that cannot be asked (${exchange}) publishes nothing and says so`, () => {
+      const run = runPublisher({ exchange });
+      assert.equal(run.status, 1, run.output);
+      assert.deepEqual(run.published, []);
+      assert.match(run.output, /could not be reached/);
+      assert.match(run.output, /NOTHING WAS PUBLISHED/);
+      assert.doesNotMatch(run.output, /no trusted publisher matching/);
+      assertNoTokenPrinted(run);
+    });
+  }
 
   it('names EVERY package that has never been published, and publishes none', () => {
     const run = runPublisher({ absent: ['@devicechain/widget-sdk', '@devicechain/widgets'] });
