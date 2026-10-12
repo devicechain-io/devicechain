@@ -3771,11 +3771,114 @@ gh attestation verify <archive> --repo devicechain-io/devicechain \
 
 No hay que hacer nada.
 
-### Próxima versión {#next-upgrade}
+### v0.20.0 — inicia sesión con tu propio proveedor de identidad; los widgets se distribuyen como paquetes {#v0200-upgrade}
 
-Lo que cambia la versión posterior a `v0.19.0`, recogido a medida que llega.
+`v0.20.0` es una actualización en su sitio desde `v0.19.0`: `dcctl install` para el clúster y
+después `dcctl upgrade` para cada instancia, como se describe [para la v0.17.0](#v0170-upgrade). Si
+vienes de `v0.18.0`, lee también las [notas de `v0.19.0`](#v0190-upgrade): sus recuentos de filas y
+de fragmentos y sus pasos se aplican también a esta actualización. Una instancia creada por la
+`v0.16.0` o una versión anterior sigue teniendo que [destruirse y crearse de nuevo](#pre-declaration-recreate).
 
-#### Cerrar sesión ahora termina la sesión en el servidor, y todos inician sesión de nuevo una vez {#next-upgrade-server-side-logout}
+La mayor parte de esta versión es capacidad nueva que no cambia nada hasta que la usas: las personas
+pueden iniciar sesión mediante tu propio proveedor de identidad OpenID Connect, los paneles pueden
+mostrar widgets de tus propios paquetes, los dispositivos pueden recibir configuración y las
+actualizaciones por aire llegan como una primera entrega. Lo que cambia para todos: cada usuario
+inicia sesión de nuevo una vez, los techos de tasa se renombran según lo que cuentan, se rechazan
+las credenciales de dispositivo X.509, la contraseña de un dispositivo se conserva solo como un
+resumen irreversible, los paneles publicados antes de la actualización tienen que publicarse de
+nuevo y muchas entradas de la API pasan a tener un límite. Los servicios que procesan cada evento
+se ejecutan con un recolector de basura ajustado, y `device-management` conserva sus búsquedas
+durante minutos en lugar de segundos.
+
+#### Antes de actualizar {#v0200-before}
+
+1. **Renombra las claves de los techos de tasa** en cualquier `config` de servicio que fijes:
+   `ingestRateLimit.messagesPerSecond` pasa a ser `ingestRateLimit.readingsPerSecond` (`event-sources`,
+   `lwm2m-ingest`, `sparkplug-ingest`) y `outboundMessagesPerSecond` pasa a ser
+   `outboundCallsPerSecond` (`event-processing`, `outbound-connectors`). Un servicio que aún encuentra
+   una clave anterior se niega a arrancar. Los scripts que leen o fijan techos de inquilinos mediante
+   la API también necesitan los nuevos nombres de campo. Consulta
+   [Los techos de tasa se renombran](#v0200-rate-key-rename).
+2. **Saca los dispositivos de las credenciales X.509.** Una credencial de tipo `X509_CERTIFICATE`
+   deja de autenticar con la actualización. Da antes a cada uno de esos dispositivos una credencial
+   `ACCESS_TOKEN` o `MQTT_BASIC`. Consulta
+   [Ya no se aceptan credenciales de dispositivo X.509](#v0200-x509).
+3. **En un almacén de objetos S3, concede a la credencial `s3:ListBucket`** sobre el bucket, o el
+   borrado de un inquilino eliminado no termina. Consulta
+   [Eliminar un inquilino ahora borra todo lo guardado bajo su prefijo del almacén de objetos](#v0200-object-prefix-erase).
+4. **En un almacén de eventos grande, plantéate construir antes dos índices.** El primer arranque de
+   `event-management` construye dos índices sobre los eventos base aún sin comprimir, y se niega, sin
+   cambiar nada, cuando hay más de 4 000 000 de filas que indexar o una tabla tiene más de 500
+   fragmentos. Ambas secciones dan las sentencias que construyen el índice a mano, antes o después de
+   la actualización: [La lista de eventos de un dispositivo lee solo las filas de su inquilino](#tenant-device-index)
+   y [Dos dispositivos pueden enviar el mismo `altId` en el mismo instante](#device-alt-id-key).
+5. **Si fijas `gogc` o `goMemLimitPercent` en el nivel superior de los valores del chart**, los cinco
+   servicios que procesan cada evento fijan ahora los suyos, que prevalecen. Consulta
+   [Los servicios de la ruta de eventos se ejecutan con un recolector de basura ajustado](#v0200-gogc).
+6. **Comprueba la memoria de `device-management` para una flota grande.** Sus búsquedas se conservan
+   ahora durante 5 minutos, y cada réplica necesita sitio para toda la flota activa. Consulta
+   [`device-management` conserva sus búsquedas durante minutos](#v0200-resolve-caches).
+7. **Detén cualquier otra cosa que lea el flujo `device-events-capture`**, como `nats stream view`.
+   Ahora solo admite el consumidor que posee `event-sources`. Consulta
+   [El flujo de entrada de dispositivos elimina cada mensaje una vez reenviado](#v0200-capture-stream).
+8. **Vuelve a crear toda identidad cuya dirección de correo tenga un dominio no ASCII**
+   (`user@bücher.example`), o no sea un `local@dominio` válido. Tras la actualización no puede
+   iniciar sesión hasta que un administrador la vuelva a crear. Elimínala, créala de nuevo con el
+   dominio en su forma `xn--` (`user@xn--bcher-kva.example`) y restaura sus membresías. Consulta
+   [El dominio de un correo ahora tiene una sola grafía](#v0200-email-idna).
+9. **Revisa tus clientes de la API y los paquetes con los que compilas** frente a
+   [Peticiones que ahora se rechazan](#v0200-input-bounds),
+   [Paneles: publicar pone en vigor una versión](#v0200-dashboard-publishing) y
+   [Los paquetes publicados](#v0200-packages).
+
+#### Durante la actualización {#v0200-during}
+
+- **Las contraseñas de dispositivo se convierten.** El primer arranque del nuevo `device-management`
+  sustituye cada contraseña `MQTT_BASIC` guardada por un resumen irreversible. Hasta que todos los
+  pods de `device-management` ejecutan la nueva versión, un pod anterior no encuentra contraseña para
+  una credencial convertida, así que rechaza las conexiones MQTT de ese dispositivo y las
+  comprobaciones de contraseña de sus eventos; el dispositivo reintenta y llega a un pod nuevo. Una
+  contraseña establecida en cualquiera de las dos versiones durante el despliegue es la que perdura.
+- **Actualiza `event-sources` y `device-management` a la vez.** Mientras ejecutan versiones
+  distintas, se pueden rechazar los eventos que llevan una contraseña de dispositivo o un token de
+  acceso en el cuerpo. Consulta
+  [Eventos que llevan una contraseña de dispositivo o un token de acceso en el cuerpo](#v0200-body-password).
+- **Evita modificar inquilinos o niveles hasta que termine el despliegue.** Un pod de ingesta o de
+  salida anterior mide a todos los inquilinos con el valor predeterminado de la plataforma, y un pod
+  de `user-management` anterior hace fallar las lecturas y escrituras de inquilinos que atiende,
+  hasta que se sustituye. Consulta [Los techos de tasa se renombran](#v0200-rate-key-rename).
+- **`event-management` construye dos índices** en su primer arranque; las escrituras de eventos base
+  esperan mientras se construye cada uno, y las lecturas no.
+- **`event-sources` reenvía lo que contiene el flujo de entrada de dispositivos y después lo crea de
+  nuevo.** Si el flujo no queda vacío en cinco minutos, `event-sources` se detiene con un error y no
+  elimina nada.
+- **La detección pasa a un nuevo consumidor de los eventos resueltos.** Consulta
+  [La detección lee sus eventos mediante un nuevo consumidor](#v0200-ack-floor).
+
+Volver a `v0.19.0` tras la actualización deja sin poder autenticarse a todos los dispositivos que
+usan una contraseña `MQTT_BASIC`, porque `v0.19.0` no sabe leer un resumen; si lo haces, establece
+contraseñas nuevas y cárgalas en esos dispositivos. Los cambios de índices y de flujo anteriores
+indican cada uno lo que exige volver atrás.
+
+#### Después de actualizar {#v0200-after}
+
+- **Todos inician sesión de nuevo una vez**, y los clientes OAuth, como los agentes MCP, se
+  autorizan de nuevo. Consulta
+  [Cerrar sesión ahora termina la sesión en el servidor](#v0200-server-side-logout).
+- **Publica de nuevo cada panel que deban ver los espectadores.** Hasta entonces, a los espectadores
+  se les indica que no está publicado. Consulta
+  [Paneles: publicar pone en vigor una versión](#v0200-dashboard-publishing).
+- **Pueden dispararse alertas nuevas.** `SafetyGateDisabled` se dispara por una compuerta de
+  seguridad opcional sin la que se ejecuta un servicio. Las demás se enumeran en
+  [Alertas nuevas](#v0200-alerts).
+- **Una instancia creada con bootstrap antes de esta versión no tiene almacén de objetos, y la
+  actualización no le añade uno.** Los logotipos de inquilino y los artefactos de actualización lo
+  necesitan. Consulta
+  [`dcctl bootstrap` puede dar a una instancia un almacén de objetos](#v0200-object-store).
+
+#### Qué cambia {#v0200-what-changed}
+
+##### Cerrar sesión ahora termina la sesión en el servidor, y todos inician sesión de nuevo una vez {#v0200-server-side-logout}
 
 Cerrar sesión en la consola o en la aplicación de paneles incrustada solo borraba el navegador: el token de actualización seguía siendo válido hasta 7 días, y el token de inicio de sesión que conserva la consola aún podía iniciar una sesión nueva durante hasta 15 minutos. Una nueva mutación `logout` termina el inicio de sesión en el servidor. Desde ese momento se rechazan los intercambios de ese inicio de sesión: sus tokens de actualización ya no se renuevan, en ningún inquilino, su token de inicio de sesión ya no puede elegir un inquilino, y una concesión OAuth autorizada durante ese inicio de sesión ya no se renueva. La página de autorización de MCP inicia sesión por su cuenta, así que cerrar sesión en la consola no termina una concesión hecha allí; termina cuando caduca ese inicio de sesión (7 días por defecto). Los demás inicios de sesión de la misma cuenta no se ven afectados. Los tokens de acceso y los tokens de inicio de sesión ya emitidos, también en la API de administración, no se pueden revocar y siguen siendo válidos hasta que caducan, en un plazo de 15 minutos. Si no se puede contactar con el servidor al cerrar sesión, la aplicación cierra la sesión localmente igualmente e informa de que no se pudo terminar la sesión del servidor.
 
@@ -3783,7 +3886,7 @@ Cada inicio de sesión es ahora un registro que dura lo mismo que un token de ac
 
 Los tokens emitidos antes de la actualización no tienen registro de inicio de sesión y se rechazan, por lo que **todos inician sesión de nuevo una vez**: las sesiones de la consola, de la aplicación de paneles, del SDK y de OAuth terminan en su siguiente renovación, dentro de los 15 minutos posteriores a la actualización salvo que hayas cambiado la vida del token de acceso. Los clientes OAuth, como los agentes MCP, se autorizan de nuevo. No hay que hacer nada más.
 
-#### Los eventos que llevan una contraseña de dispositivo o un token de acceso en el cuerpo se ven afectados mientras conviven versiones {#next-upgrade-body-password}
+##### Los eventos que llevan una contraseña de dispositivo o un token de acceso en el cuerpo se ven afectados mientras conviven versiones {#v0200-body-password}
 
 Desde esta versión, `event-sources` y `device-management` se pasan en otra forma la contraseña de
 dispositivo o el token de acceso que llega en el cuerpo de un evento, y cada uno necesita la versión
@@ -3799,7 +3902,7 @@ actualización progresiva:
 
 Actualiza `event-sources` y `device-management` a la vez, o acepta la breve pérdida de esos eventos.
 
-#### La contraseña de un dispositivo `MQTT_BASIC` se muestra una vez y no puede volver a mostrarse {#next-upgrade-device-password-show-once}
+##### La contraseña de un dispositivo `MQTT_BASIC` se muestra una vez y no puede volver a mostrarse {#v0200-device-password-show-once}
 
 La plataforma conserva ahora solo un resumen irreversible con clave de la contraseña de un dispositivo `MQTT_BASIC`, no la contraseña. La API nunca devolvía la contraseña en una lectura, así que ningún resultado de consulta cambia. Lo que cambia es que nadie puede recuperarla tampoco de la plataforma: la consola muestra una contraseña una sola vez, justo después de agregar la credencial o de establecer una nueva, con un botón de copiar, y después solo indica que hay una contraseña establecida. La fila de la credencial incorpora la acción **Establecer nueva contraseña**, y el formulario ofrece **Generar contraseña segura**.
 
@@ -3807,7 +3910,7 @@ Las contraseñas existentes se convierten en resúmenes la primera vez que devic
 
 No hay nada que hacer.
 
-#### La lista de eventos de un dispositivo lee solo las filas de su inquilino {#tenant-device-index}
+##### La lista de eventos de un dispositivo lee solo las filas de su inquilino {#tenant-device-index}
 
 El índice que sirve la lista de eventos de un dispositivo empieza ahora por el inquilino. En
 `v0.19.0`, el total de la lista, y la lista de un dispositivo filtrada por tipo de evento, recorrían
@@ -3852,7 +3955,7 @@ incluye el inquilino.
   `hypertable_name IN ('events')`.
 - Volver a `v0.19.0` conserva el nuevo índice, y `v0.19.0` funciona con él.
 
-#### Dos dispositivos pueden enviar el mismo `altId` en el mismo instante y se guardan ambos eventos {#device-alt-id-key}
+##### Dos dispositivos pueden enviar el mismo `altId` en el mismo instante y se guardan ambos eventos {#device-alt-id-key}
 
 El `altId` de un evento es el identificador de mensaje del propio emisor, y el lado de escritura lo
 usaba, junto con el `occurredTime` del evento, para descartar una copia reentregada. Esa clave era
@@ -3897,7 +4000,7 @@ entre sus dispositivos si lo necesita.
   siguen deduplicándose, pero esa versión sigue comprobando por inquilino, así que vuelve a
   descartar el evento del segundo dispositivo.
 
-#### El flujo de entrada de dispositivos elimina cada mensaje una vez reenviado {#next-upgrade-capture-stream}
+##### El flujo de entrada de dispositivos elimina cada mensaje una vez reenviado {#v0200-capture-stream}
 
 El flujo que guarda cada publicación de un dispositivo hasta que `event-sources` la reenvía
 (`device-events-capture`) ahora elimina un mensaje cuando `event-sources` lo confirma. En `v0.19.0`
@@ -3920,7 +4023,7 @@ nada.
   se niega a arrancar contra un flujo con la nueva retención; lo crea de nuevo en su siguiente
   arranque. Lo que aún no se haya reenviado cuando lo elimine se pierde.
 
-#### Un evento entrante cuyo registro de fallo no se puede codificar ya no se guarda como un registro vacío {#next-upgrade-failed-record-encode}
+##### Un evento entrante cuyo registro de fallo no se puede codificar ya no se guarda como un registro vacío {#v0200-failed-record-encode}
 
 Cuando device-management no podía codificar el registro de un evento entrante que había fallado,
 guardaba de todos modos un registro vacío y confirmaba el evento. El registro se leía como un fallo
@@ -3931,7 +4034,7 @@ evento que pueda enviar un dispositivo llega hoy hasta ahí; es una ruta de defe
 la forma de enterarse de uno. Por eso `DeadLetterWriteLost` tiene una cuarta causa, indicada en
 [la tabla de alertas](./detection-engine.md#what-to-watch).
 
-#### `dcctl install --dry-run` aplica los rechazos de reinstalación que aplica la instalación
+##### `dcctl install --dry-run` aplica los rechazos de reinstalación que aplica la instalación {#v0200-dry-run}
 
 En un clúster que responde, una ejecución en seco ahora lee el registro de instalación, pregunta
 qué instancias se ejecutan en el clúster cuando cambian los ajustes, y falla con el mismo mensaje que la instalación cuando
@@ -3945,7 +4048,7 @@ anterior se sigue rechazando solo cuando la instalación se ejecuta.
 
 No hay nada que hacer.
 
-#### `dcctl install` y `dcctl bootstrap` esperan a que se hayan unido todas las instancias de la base de datos {#next-upgrade-wait-database-instances}
+##### `dcctl install` y `dcctl bootstrap` esperan a que se hayan unido todas las instancias de la base de datos {#v0200-wait-database-instances}
 
 Antes, `dcctl install` volvía en cuanto el primario de la base de datos relacional aceptaba una
 conexión, y `dcctl bootstrap` solo esperaba a los servicios, de modo que cualquiera de los dos
@@ -3962,7 +4065,7 @@ pueden hacer bootstrap de instancias. Una instalación sana añade unos segundos
 
 No hace falta nada más.
 
-#### Los techos de tasa se renombran según lo que cuentan {#next-upgrade-rate-key-rename}
+##### Los techos de tasa se renombran según lo que cuentan {#v0200-rate-key-rename}
 
 El techo de ingesta cuenta lecturas desde hace tiempo, y el techo de salida cuenta llamadas de
 conector, pero ambos seguían nombrados por mensajes. Se renombran en todas partes, sin conservar la
@@ -3997,7 +4100,7 @@ grafía anterior:
   fallan hasta que se sustituye. Ambas cosas terminan al acabar el despliegue; evite modificar
   inquilinos o niveles hasta entonces.
 
-#### Eliminar un inquilino ahora borra todo lo guardado bajo su prefijo del almacén de objetos {#next-upgrade-object-prefix-erase}
+##### Eliminar un inquilino ahora borra todo lo guardado bajo su prefijo del almacén de objetos {#v0200-object-prefix-erase}
 
 El borrado de un inquilino eliminado solo quitaba los objetos que nombraba una fila de
 user-management. Ahora también quita todos los objetos bajo el prefijo de ese inquilino en el
@@ -4009,14 +4112,14 @@ actualización y cualquier objeto cuya referencia se perdió se borran con el in
   un inquilino falla y se reintenta en cada pasada, así que el borrado no termina. Concédelo antes
   de actualizar. El backend filesystem no necesita nada.
 
-#### El inicio de sesión único es nuevo y no te pide nada {#next-upgrade-sso}
+##### El inicio de sesión único es nuevo y no te pide nada {#v0200-sso}
 
-Las personas ahora pueden iniciar sesión mediante un proveedor de identidad externo OpenID Connect, y un inquilino puede exigirlo. Nada se activa hasta que un superusuario crea una conexión, así que una instancia actualizada se comporta como antes. No hay nada que migrar y el inicio de sesión con contraseña sigue funcionando. El nuevo inicio de sesión que provoca el [cierre de sesión en el servidor](#next-upgrade-server-side-logout) ya está descrito.
+Las personas ahora pueden iniciar sesión mediante un proveedor de identidad externo OpenID Connect, y un inquilino puede exigirlo. Nada se activa hasta que un superusuario crea una conexión, así que una instancia actualizada se comporta como antes. No hay nada que migrar y el inicio de sesión con contraseña sigue funcionando. El nuevo inicio de sesión que provoca el [cierre de sesión en el servidor](#v0200-server-side-logout) ya está descrito.
 
 - **Configurar un proveedor** se describe en [Configurar el inicio de sesión único](../guides/configuring-sso.md), y su comportamiento en [Inicio de sesión único](../concepts/single-sign-on.md).
 - **Terminar una sesión no recupera los tokens ya emitidos.** Tras un cierre de sesión, una revocación, una desvinculación o una conexión deshabilitada, los tokens de acceso y de inicio de sesión ya emitidos siguen funcionando hasta que caducan, 15 minutos por defecto.
 
-#### El inicio de sesión único necesita la dirección pública de la instancia, así que el chart ahora la deriva {#next-upgrade-sso-issuer}
+##### El inicio de sesión único necesita la dirección pública de la instancia, así que el chart ahora la deriva {#v0200-sso-issuer}
 
 Iniciar sesión mediante un proveedor de identidad externo OpenID Connect, y el servidor de
 autorización OAuth que usan los clientes MCP, necesitan conocer la dirección en la que se accede a
@@ -4038,7 +4141,7 @@ loopback (`localhost`, `127.0.0.1`, `::1`), y tu propio valor siempre prevalece.
   inicio de sesión único siguen desactivados, y `helm install` y `dcctl bootstrap` lo indican. Sirve
   la instancia por https para activarlos.
 
-#### Alertas del inicio de sesión único {#next-upgrade-sso-alerts}
+##### Alertas del inicio de sesión único {#v0200-sso-alerts}
 
 Tres alertas informan de los fallos del inicio de sesión único. Si enrutas o silencias alertas por
 nombre, estas son nuevas.
@@ -4049,12 +4152,287 @@ nombre, estas son nuevas.
 | `SsoUnverifiedIdentityRefused` | warning | Se rechazó un inicio de sesión aunque el proveedor lo avalaba, con el resultado en la etiqueta `outcome`: `refused_unverified_email`, `refused_unverified_domain`, `refused_required_claim` o `refused_system_role_identity`. No se inició sesión a nadie. | Suele ser una conexión mal configurada o alguien que la está sondeando. Busca en el diario de auditoría la dirección que afirmó el proveedor, y en el registro de inicios de sesión del propio proveedor. |
 | `SsoStateStoreFull` | critical | El almacén que guarda los inicios de sesión comenzados está lleno, así que user-management se niega a comenzar cualquier inicio de sesión único con cualquier proveedor hasta que las entradas caduquen, diez minutos después. El inicio de sesión con contraseña no se ve afectado. | Casi seguro que alguien llama en bucle al inicio público de sesión: localiza el tráfico en los registros del ingress y bloquéalo aguas arriba. Si el volumen es legítimo, aumenta `instance.config.infrastructure.nats.kvStateMaxBytes`. |
 
-#### El dominio de un correo ahora tiene una sola grafía, y una dirección almacenada con dominio no ASCII deja de coincidir {#next-upgrade-email-idna}
+##### El dominio de un correo ahora tiene una sola grafía, y una dirección almacenada con dominio no ASCII deja de coincidir {#v0200-email-idna}
 
 Una dirección de correo ahora se almacena, se busca y se compara en una única forma canónica: la parte local recortada y en minúsculas como antes, y el dominio convertido a ASCII en minúsculas (la forma `xn--` para un nombre internacionalizado) y sin punto final. Por tanto, `user@bücher.example` y `user@xn--bcher-kva.example` son la misma identidad en el inicio de sesión con contraseña, en el inicio de sesión único y en una solicitud de vinculación, y el dominio que reclama una conexión se compara en la misma forma. Se rechaza una dirección que no sea exactamente `local@dominio`, o cuyo dominio no sea un nombre de host válido.
 
 - **Una dirección con dominio ASCII no cambia.** No tienes que hacer nada.
-- **Una identidad almacenada con un dominio no ASCII (`user@bücher.example`) conserva la forma antigua, y se rechaza hasta que un administrador la vuelva a crear.** No puede iniciar sesión con contraseña ni mediante inicio de sesión único, y una sesión que ya tenga abierta termina en su siguiente intercambio; al seleccionar un tenant o renovar se informa entonces el código `IDENTITY_EMAIL_NOT_CANONICAL`. Las acciones de administración siguen encontrándola por la dirección tal como está almacenada, así que puedes deshabilitarla, terminar sus sesiones, desvincularla y eliminarla. Para restaurar el acceso, desvincula y elimina la identidad antigua, vuelve a crearla (con cualquiera de las dos grafías del dominio: se almacena en la forma `xn--`) y restaura sus membresías y vínculos. Hacerlo antes de actualizar evita la interrupción. Lo mismo vale para una identidad cuya dirección almacenada no sea un `local@dominio` válido.
+- **Una identidad almacenada con un dominio no ASCII (`user@bücher.example`) conserva la forma antigua, y se rechaza hasta que un administrador la vuelva a crear.** No puede iniciar sesión con contraseña ni mediante inicio de sesión único, y una sesión que ya tenga abierta termina en su siguiente intercambio; al seleccionar un tenant o renovar se informa entonces el código `IDENTITY_EMAIL_NOT_CANONICAL`. Las acciones de administración siguen encontrándola por la dirección tal como está almacenada, así que puedes deshabilitarla, terminar sus sesiones, desvincularla y eliminarla. Para restaurar el acceso, desvincula y elimina la identidad antigua, vuelve a crearla (con cualquiera de las dos grafías del dominio: se almacena en la forma `xn--`) y restaura sus membresías y vínculos. Hacerlo antes de actualizar, con el dominio en su forma `xn--`, evita la interrupción: consulta [Antes de actualizar](#v0200-before). Lo mismo vale para una identidad cuya dirección almacenada no sea un `local@dominio` válido.
+
+##### Ya no se aceptan credenciales de dispositivo X.509 {#v0200-x509}
+
+El tipo de credencial `X509_CERTIFICATE` no se acepta hasta que se admita la verificación de
+certificados. Crear una credencial de ese tipo, cambiar una a ese tipo y sustituir un dispositivo
+por uno que la tenga se rechazan con `UNSUPPORTED`, y no se escribe nada. La consola ya no lo
+ofrece. Una credencial de ese tipo guardada antes de la actualización deja de autenticar, y nada la
+convierte: antes de actualizar, da a cada uno de esos dispositivos una credencial `ACCESS_TOKEN` o
+`MQTT_BASIC`. Consulta [Credenciales de dispositivo](../guides/device-credentials.md).
+
+##### Una contraseña `MQTT_BASIC` debe tener al menos 16 bytes {#v0200-mqtt-password-length}
+
+Crear una credencial `MQTT_BASIC`, o establecer su contraseña, rechaza ahora una contraseña de menos
+de 16 bytes, o de más de 4096, contados tal como se envían. Una contraseña corta se rechaza con
+`INVALID_VALUE`. La contraseña de un dispositivo se aprovisiona en lugar de recordarse, así que el
+mínimo está pensado para un secreto generado; **Generar contraseña segura** en la consola genera
+uno. Las contraseñas más cortas existentes siguen funcionando hasta que se establecen de nuevo.
+Cambiar una credencial a `MQTT_BASIC` debe establecer su contraseña en la misma petición.
+
+##### Paneles: publicar pone en vigor una versión {#v0200-dashboard-publishing}
+
+Publicar un panel hace ahora que la versión que crea sea la que se sirve a los espectadores, y
+`activateDashboardVersion` vuelve a poner en vigor una versión anterior; no hay forma de despublicar.
+Los espectadores leen la versión en vigor con `publishedDashboard`, y `/dash` la abre por su token.
+El borrador es para los autores del panel.
+
+- **Los paneles publicados antes de la actualización no están en vigor.** Nada registraba qué
+  versión servían, así que a los espectadores se les indica que el panel no está publicado
+  (`NOT_PUBLISHED`) hasta que un autor lo publica de nuevo.
+- **`publishDashboard` devuelve un `DashboardPublication`**, con la nueva `version` y el `dashboard`.
+- **Leer la `definition` de un panel, o el cuerpo de una versión con `dashboardVersion`, necesita
+  `dashboard:write`.** Quien solo tiene `dashboard:read` lee `publishedDashboard`.
+- **La búsqueda `dashboards` devuelve `DashboardSummary`**, que no tiene `definition`.
+- **`dashboardVersions` se pagina**, de la más reciente a la más antigua: 100 versiones salvo que
+  pases `limit` (como máximo 1000) y `offset`, y sin el cuerpo de cada versión.
+- `rollbackDashboard` acepta un `expectedUpdatedAt` opcional y rechaza una reversión obsoleta.
+- El filtro de nombre de la búsqueda `dashboards` trata `%`, `_` y `\` como sí mismos, no como
+  comodines.
+- Modificar un panel de un inquilino que se está eliminando se rechaza con `TENANT_DELETED`;
+  eliminarlo no.
+- La consola no publica una versión mientras un widget de ella esté sin resolver. Consulta
+  [Publicar mientras un widget no está resuelto](../guides/adding-widget-packages.md#publishing-while-a-widget-is-unresolved).
+
+##### La agregación de mediciones necesita una hora de inicio, y está acotada {#v0200-aggregation-bounds}
+
+`bucketedMeasurements` exige ahora `startTime`, y sin él se rechaza con `INVALID_VALUE`; `endTime`
+es por defecto el momento actual. Una lectura se rechaza con `LIMIT_EXCEEDED`, en lugar de
+truncarse, cuando produciría más de 10 000 intervalos, o cuando sus intervalos multiplicados por sus
+nombres de medición superan 50 000. Sin un filtro `name`, los nombres contados son los nombres
+distintos que coinciden con la lectura. La herramienta MCP `aggregate_measurements` tiene la misma
+exigencia y los mismos límites.
+
+##### Peticiones que ahora se rechazan {#v0200-input-bounds}
+
+Entradas que se aceptaban de cualquier tamaño se rechazan ahora por encima de estos límites, con
+`LIMIT_EXCEEDED` salvo que se indique otro código. Un valor exactamente en el límite se acepta. La
+[referencia de GraphQL](../reference/graphql-api.md#input-validation) los enumera.
+
+| Qué | Límite |
+| --- | --- |
+| Claves en una búsqueda por token, id o id externo, en todos los servicios, y los tokens de un `removeEntityRelationships` | 1000 |
+| Una entrada JSON: metadatos, propiedades, configuración, una carga útil, destinatarios y similares | 64 KiB |
+| La carga útil o los metadatos de un comando, al ponerlo en cola o en lote | 64 KiB (`PAYLOAD_TOO_LARGE`, `METADATA_TOO_LARGE`) |
+| El nombre de un comando | 128 bytes (`COMMAND_NAME_TOO_LONG`) |
+| Una clave de atributo, y un valor de atributo | 128 bytes, y 64 KiB |
+| La definición de una regla de detección, y su grafo de autoría | 256 KiB cada uno |
+| Relaciones rastreadas de un dispositivo | 256 |
+| Definiciones de métricas, definiciones de comandos y reglas de detección de un perfil | 1000 de cada una |
+| Relaciones creadas por un `createEntityRelationships` | 1000 |
+| Versiones devueltas por `deviceProfileVersions`, `entityGroupVersions`, `assetTypeVersions` y `connectorVersions` | las 1000 más recientes, salvo que se paginen con sus nuevos `limit` y `offset` |
+| Destinatarios de una regla de notificación | 100 |
+| Los `redirectUris` de un cliente OAuth, y sus `scopes` | 16 entradas cada uno, de como máximo 2048 y 64 caracteres |
+| Niveles de inquilino, y los tokens de un `reorderTenantTiers` | 100 |
+| Una contraseña establecida mediante la API de administración | 72 bytes |
+| Roles, autoridades o tokens de rol en una petición de administración | 100 |
+| Ejecutar una consulta o mutación GraphQL | 60 segundos |
+| Recibir el cuerpo de una petición, en GraphQL y en los endpoints de OAuth y MCP | 30 segundos; a un cuerpo detenido se responde `400` y se cierra la conexión |
+
+También se rechazan tres valores al crear o actualizar un registro, que antes se guardaban y
+fallaban más tarde o no hacían nada:
+
+- un conector de tipo `gcp_pubsub`, que aún no tiene cliente de entrega (`UNSUPPORTED`); uno
+  guardado antes sigue enviándose a mensajes fallidos cuando se despacha;
+- `params` de un proveedor de IA que fijen algo (`UNSUPPORTED`), ya que ningún cliente de proveedor
+  los aplica; se aceptan vacío, null y `{}`;
+- las cabeceras personalizadas de un canal de notificación webhook que la entrega rechazaría: un
+  nombre no válido, caracteres de control en un valor, una cabecera reservada `Authorization` o
+  `X-DC-*`, o un duplicado.
+
+##### Los servicios de la ruta de eventos se ejecutan con un recolector de basura ajustado {#v0200-gogc}
+
+`event-sources`, `event-management`, `device-management`, `device-state` y `event-processing` se
+ejecutan ahora con `GOGC=400` y un límite de memoria blando (`GOMEMLIMIT`) al 75% de su límite de
+memoria, y el límite de memoria de `event-processing` es de al menos 384Mi. En Google Kubernetes
+Engine a 6000 eventos por segundo, frente a una ejecución de control en la misma sesión, la CPU por
+evento bajó un 18% en `device-management` y `event-management`, un 15% en `device-state`, un 4% en
+`event-sources` y un 5% en `event-processing`.
+
+Son valores del chart, `functionalAreas.<area>.gogc` y `functionalAreas.<area>.goMemLimitPercent`,
+y un nuevo `gogc` de nivel superior (por defecto `0`, desactivado) junto al `goMemLimitPercent` de
+nivel superior ya existente. El valor propio de un área prevalece sobre el de nivel superior, así
+que un `0` de nivel superior ya no desactiva el límite blando para estos cinco: fija el valor propio
+del área en `0` para desactivar cualquiera de los dos en esa área.
+
+##### `device-management` conserva sus búsquedas durante minutos, y un cambio llega a todas las réplicas {#v0200-resolve-caches}
+
+`device-management` busca la credencial, el dispositivo, las relaciones rastreadas, el perfil y las
+pertenencias a grupos de cada evento, y los conservaba en la memoria de cada réplica durante 5
+segundos, así que un dispositivo que informaba con menos frecuencia se buscaba de nuevo cada vez.
+Ahora se conservan durante 5 minutos por defecto:
+
+| Clave de configuración de `device-management` | Valor por defecto | Rango |
+| --- | --- | --- |
+| `inMemoryCache.ttlSeconds` (nueva) | 300 | 1-3600 |
+| `inMemoryCache.credentialCacheMiB` (nueva; era un valor fijo de 16 MiB) | 32 | 1-256 |
+| `deviceCacheTtlSeconds`, `relationshipCacheTtlSeconds`, `metricDefCacheTtlSeconds`, `membershipCacheTtlSeconds` (eran 60) | 300 | 1-3600 |
+
+Un valor fuera de su rango impide que el servicio arranque. Un cambio descarta ahora la copia
+guardada en todas las réplicas, no solo en la que lo hizo; una réplica cuya conexión con el bróker
+se restablece descarta todo lo que conserva, y el borrado de un inquilino eliminado descarta las
+copias de ese inquilino en todas las réplicas. Actualizar un dispositivo, incluido cambiar su tipo,
+y crear una relación, en una llamada o en varias, al canjear o reabrir una reclamación, o al cambiar
+un tipo de relación, no descartaban las copias que modificaban, y ahora sí lo hacen.
+
+- **Dimensiona cada réplica para toda la flota activa**, no para la flota dividida entre las
+  réplicas: cada réplica ve casi todos los dispositivos. Para 60 000 dispositivos con una relación
+  rastreada cada uno, eso son unos 80 para `inMemoryCache.credentialCacheMiB`, 64 para
+  `inMemoryCache.perDeviceCacheMiB` y un límite de memoria de 512Mi. Un límite menor que la flota
+  hace que la caché no responda casi nada.
+- **Una revocación está acotada por los mismos 5 minutos.** Una réplica que pierde el mensaje que le
+  indica descartar una credencial revocada, sin perder su conexión con el bróker, puede seguir
+  autenticando los eventos de esa credencial hasta que caduque su copia. Las conexiones siempre se
+  comprueban contra la base de datos. Consulta
+  [Cuánto tarda en aplicarse una revocación](../guides/device-credentials.md#revocation-timing).
+
+##### Los lectores usan la lectura anticipada por defecto {#v0200-fetch-ahead}
+
+Un servicio que lee un stream pide ahora su siguiente lote mientras entrega el actual, y pide 128
+mensajes cada vez en lugar de 64. Según lo medido en Google Kubernetes Engine, esto mantuvo la cola
+pendiente del motor de detección bajo carga intensa en unos cientos de mensajes en lugar de decenas
+de miles; el techo de rendimiento y la CPU por evento de cada servicio fueron los mismos con ello
+desactivado. Fija `instance.config.infrastructure.nats.fetch.ahead: false` para desactivarlo.
+Consulta [Lectura anticipada](./observability.md#fetch-ahead).
+
+##### La detección lee sus eventos mediante un nuevo consumidor {#v0200-ack-floor}
+
+`event-processing` confirma ahora los eventos resueltos una vez por punto de control, mediante un
+nuevo consumidor duradero cuyo nombre termina en `_ackfloor`
+(`<instance>_event-processing_resolved-events_ackfloor`). En su primer arranque, el nuevo consumidor
+empieza justo después del último evento que cubre el estado guardado, y el primer líder de la nueva
+versión elimina el consumidor anterior. No hay nada que migrar. Un panel o una alerta propios que
+seleccionen el consumidor de eventos resueltos de `event-processing` por su etiqueta `durable`
+necesitan el nuevo nombre; las alertas incluidas coinciden con ambos. Volver a `v0.19.0` hace que la
+detección lea una vez más los eventos retenidos del stream, y omite los que ya ha visto.
+
+La detección en vivo también vuelve a leer un tramo de eventos que no se le entregó, en lugar de
+saltárselo, y dos alertas lo notifican (`DetectLiveGapFillFailing`, `DetectLiveDeliveriesRecovered`).
+Un bucle de detección que deja de avanzar dispara `DetectLoopStalled`, y cada punto de control se
+ejecuta ahora con un plazo cuyo mínimo es el nuevo `checkpointTimeoutSeconds` (por defecto 10, como
+máximo 120).
+
+##### El tiempo de espera del borrador con IA {#v0200-inference-timeout}
+
+El techo por defecto de una llamada de `ai-inference` a un proveedor de modelos baja de 60 a 40
+segundos (`inferenceTimeoutMs`, como máximo 120000). Redactar una regla a partir de una descripción
+espera ahora ese techo, con un presupuesto total de 50 segundos, y un modelo que no responde a
+tiempo se notifica como tal y no como un proveedor no disponible. Si dependías del valor por
+defecto de 60 segundos, fija `inferenceTimeoutMs` tú mismo.
+
+##### `dcctl bootstrap` puede dar a una instancia un almacén de objetos {#v0200-object-store}
+
+Los logotipos de inquilino y los artefactos de actualización se guardan en un almacén de objetos, y
+una instancia creada por `dcctl` no tenía ninguno, así que ambos se rechazaban con
+`OBJECT_STORE_NOT_CONFIGURED`. `dcctl bootstrap` acepta ahora
+`--object-store none|filesystem|s3`, con opciones para el volumen o el bucket. Sin la opción, una
+instancia en un clúster que crea `dcctl` recibe un almacén filesystem de 5Gi, y una en un clúster
+indicado con `--kube-context` no recibe ninguno. La elección queda registrada y `dcctl upgrade` la
+conserva, y rechaza un cambio que dejaría huérfanos los objetos guardados. **`dcctl upgrade` no
+añade un almacén a una instancia creada sin él**: antes de `v1.0.0`, destrúyela y vuelve a crearla
+con bootstrap con la opción. Consulta [El almacén de objetos](./bootstrap.md#object-store).
+
+##### Los dispositivos pueden recibir configuración {#v0200-device-configuration}
+
+Una versión de perfil de dispositivo declara cuáles de los atributos compartidos de sus dispositivos
+puede ver un dispositivo, en la pestaña **Configuración** del editor de perfiles o con
+`setDeviceProfileConfigurationDeclaration`. Escribir un atributo compartido declarado crea una
+revisión de configuración numerada, que se envía al dispositivo por su propio topic de
+configuración; el dispositivo informa `RECEIVED`, `APPLIED` o `REJECTED`, y pide la revisión actual
+con un `sync`, que es también como le llega un perfil recién publicado. La página del dispositivo en
+la consola muestra la declaración, la revisión actual y lo último que informó el dispositivo, y
+`deviceConfiguration` y `deviceConfigurationRevisions` los leen. Escribir un atributo declarado se
+rechaza con `CONFIGURATION_TOO_LARGE` cuando el documento superaría 64 KiB, y con
+`CONFIGURATION_VALUE_TYPE_MISMATCH` cuando el valor no encaja con el tipo declarado. Por ahora, solo
+dispositivos MQTT. Consulta
+[Topics de entrega de configuración](../guides/connecting-a-device.md#reserved-device-topics).
+
+##### Actualizaciones por aire: una primera entrega {#v0200-updates}
+
+El nuevo servicio `update-management` mantiene un catálogo por inquilino de imágenes de firmware,
+software y configuración, con una subida comprobada contra su tamaño declarado y su resumen
+SHA-256. Un artefacto se asigna a un dispositivo cada vez; al dispositivo se le avisa por su topic
+de configuración, descarga la imagen con una concesión de corta duración que puede reanudar, y cada
+intento se sigue hasta la versión en ejecución. Es opcional: se ejecuta en el perfil `full`, o con
+`--enable-area update-management`. Necesita un almacén de objetos, y:
+
+- **No se puede asignar ningún artefacto hasta que fijes `updates.allowUnverifiedArtifacts: true`**,
+  porque nada autentica aún quién produjo un artefacto.
+- **Los dispositivos no reciben concesión de descarga hasta que se fija `updates.downloadBaseUrl`.**
+- **Mantén la cadena de consulta de la ruta de descarga fuera de los registros de acceso.** El chart
+  la sirve en un ingress propio con el registro de acceso desactivado; detrás de otro proxy, haz lo
+  mismo.
+- Aún no hay despliegues a toda la flota, y solo se pueden actualizar dispositivos MQTT.
+
+##### Los paquetes publicados {#v0200-packages}
+
+- **`@devicechain/widget-sdk` es nuevo.** Define un widget (`defineWidget`) y construye un registro
+  de ellos (`createWidgetRegistry`); consulta [Escribir un widget personalizado](../guides/writing-a-custom-widget.md).
+  `@devicechain/widgets` lo declara como dependencia par, así que instálalo junto a `@devicechain/widgets`.
+- **`@devicechain/widgets` ya no exporta `WIDGET_REGISTRY`, `ALARM_WIDGET_REGISTRY`,
+  `CONTROL_WIDGET_REGISTRY`, `SELECTION_WIDGET_REGISTRY` ni `LOCATION_WIDGET_REGISTRY`.** Busca un
+  widget mediante un registro, como el que construye `createBuiltinWidgetRegistry`.
+- **`echarts` es una dependencia par de `@devicechain/widgets`, no una dependencia:** añade `echarts`
+  (`^6.0.0`) a tu aplicación. Las utilidades de gráficos están en `@devicechain/widget-sdk/echarts`.
+- **Suben los rangos de las dependencias par:** `react` y `react-dom` a `^19.3.0`, `maplibre-gl` a `^6.11.2`.
+- **Se eliminan `DashboardHubConfig.bindings` y `DashboardHub.setBindings` de
+  `@devicechain/dashboards`.** Pasa los enlaces a `DashboardRenderer` y usa `useDashboardHub`.
+  `fetchWidgetHistory` y `widgetSubjectLabel` aceptan un widget cuya fuente de datos ya está resuelta.
+- **`parseDashboardDefinition(raw, { catalog })`** acepta el catálogo de widgets contra el que
+  comprobar. Un widget de un tipo desconocido, o uno que el catálogo no sabe leer, se conserva como
+  marcador (`UnknownWidgetInstance`, parte de la unión `WidgetInstance`) y se vuelve a escribir
+  exactamente como estaba guardado, donde antes hacía fallar toda la definición. Se rechaza una
+  fuente de datos guardada de tipo `unbound`.
+- **El SDK de .NET** abre las suscripciones por sí mismo y ya no pasa por el proxy HTTP del sistema.
+  Un dispositivo puede optar por procesar comandos de forma concurrente (`MaxConcurrentCommands`),
+  cada comando lleva su orden de llegada (`DeviceCommand.Sequence`), y una respuesta terminada
+  durante una reconexión se envía después de ella en lugar de descartarse.
+
+##### Alertas nuevas {#v0200-alerts}
+
+Si enrutas o silencias alertas por nombre, estas son nuevas, además de las
+[alertas del inicio de sesión único](#v0200-sso-alerts):
+
+| Alerta | Qué informa |
+| --- | --- |
+| `SafetyGateDisabled` | Un servicio se ejecuta sin una de sus compuertas de seguridad opcionales: la compuerta del ciclo de vida del inquilino, la presencia de comandos o la validación de las reglas de detección al publicar. |
+| `DetectLoopStalled` | El líder de detección lleva minutos sin avanzar. |
+| `DetectLiveGapFillFailing`, `DetectLiveDeliveriesRecovered` | La detección en vivo no pudo volver a leer, o sí volvió a leer, eventos que no se le entregaron. |
+| `SparkplugIngestLeaderCountNotOne`, `Lwm2mIngestLeaderCountNotOne`, `Lwm2mIngestLeaderNotServing` | Un servicio de ingesta perimetral no tiene exactamente un líder, o su líder no está sirviendo. Un `sparkplug-ingest` sin fuentes no tiene líder y la dispara. |
+| `SparkplugIngestDroppingData`, `SparkplugIngestSubscriptionRefused`, `SparkplugIngestBrokerUnreachable`, `Lwm2mIngestDroppingNotifications` | La ingesta Sparkplug o LwM2M está perdiendo datos o no puede alcanzar su bróker. |
+| `CNPGCollectorAbsent` | Prometheus ha dejado de recoger las métricas de una base de datos. |
+
+`dcctl install` también deja de recoger métricas, y de alertar, de los componentes del plano de
+control que no ejecuta un clúster gestionado como Google Kubernetes Engine, así que sus alertas
+`...Down` ya no se disparan allí.
+
+##### Otros comportamientos que conviene conocer {#v0200-other}
+
+- **Sparkplug.** Un nacimiento de nodo que sustituye a una sesión en línea marca ahora como
+  desconectados los dispositivos hijos de la sesión anterior; antes seguían en línea.
+- **Notificaciones.** Un evento de alarma de un tipo que `notification-management` no conoce se
+  reintenta y después se envía a mensajes fallidos, en lugar de descartarse.
+- **Los mensajes fallidos y las decodificaciones fallidas** conservan una carga útil con sus campos
+  de credencial sustituidos por `[redacted]`. Un cuerpo que no es JSON se conserva como su longitud
+  y su SHA-256.
+- **Las respuestas a comandos** pueden llevar cualquier valor JSON como `payload`, no solo una
+  cadena.
+- **Los identificadores de correlación** que genera la plataforma tienen 22 caracteres en lugar de
+  un UUID de 36; trátalos como cadenas opacas.
+- **Las descripciones de GraphQL** provienen solo de las cadenas `"""` de los esquemas, y ahora cada
+  elemento tiene una; la introspección ya no muestra comentarios `#`.
+- **`dcctl install` y `dcctl bootstrap` con `--kube-context`** ya no necesitan Docker ni `kind`, y
+  comprueban la versión de Kubernetes del contexto al que se dirigen. Un contexto indicado que falta
+  en el kubeconfig hace fallar la comprobación previa.
+- **La detección puede dividir su estado** en `detectShards` (1-64, por defecto 1). Las particiones
+  siguen ejecutándose una tras otra, así que más de una aún no acelera la detección.
 
 ### v0.19.0 — dimensionada a partir de lo medido a 6000 eventos por segundo; un stream lleno rechaza {#v0190-upgrade}
 
