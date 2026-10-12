@@ -49,10 +49,11 @@ import { Textarea } from '@/components/ui/textarea';
 import { formatTime } from '@/lib/utils';
 import { validateDefinitionOptions } from '@devicechain/widgets';
 import { OPTION_ISSUE_MESSAGE_KEYS, UNRESOLVED_REASON_KEYS, widgetLabel } from './optionIssues';
-import { unresolvedWidgets, type DashboardDefinition } from '@devicechain/dashboards';
+import { parseDashboardDefinition, unresolvedWidgets, type DashboardDefinition } from '@devicechain/dashboards';
 import { defaultWidgetRegistry, type EditorWidgetRegistry } from './widgetRegistry';
 import {
   activateDashboardVersion,
+  getDashboardVersionDefinition,
   getPublishedVersion,
   listDashboardVersions,
   publishDashboard,
@@ -219,7 +220,39 @@ function VersionHistoryBody({
     }
   };
 
+  // Widgets in an OLDER version this console cannot resolve. Re-serving or rolling back to it
+  // is not blocked (only a NEW version is: the stored JSON is kept and a console that has the
+  // package renders it), but the author is told before they confirm. Best effort: if the
+  // version cannot be read here, the action proceeds as it did and the server is the authority.
+  const unresolvedIn = async (v: DashboardVersion) => {
+    try {
+      const raw = await getDashboardVersionDefinition(token, v.version);
+      if (!raw) return [];
+      const def = parseDashboardDefinition(JSON.parse(raw), { catalog: registry.catalog });
+      return unresolvedWidgets(def).map((u) => `${u.widgetId} (${u.type || u.widgetId})`);
+    } catch {
+      return [];
+    }
+  };
+
+  const unresolvedNotice = (names: string[]) =>
+    names.length === 0 ? null : (
+      <span className="mt-2 block text-foreground" data-testid="version-unresolved-warning">
+        {t('versionUnresolvedWarning', { count: names.length })} {names.join(', ')}
+      </span>
+    );
+
   const activate = async (v: DashboardVersion) => {
+    const names = await unresolvedIn(v);
+    if (
+      names.length > 0 &&
+      !(await confirm({
+        title: t('versionActivateConfirmTitle', { version: v.version }),
+        description: unresolvedNotice(names),
+        confirmLabel: t('versionActivate'),
+      }))
+    )
+      return;
     setBusy(true);
     try {
       await activateDashboardVersion(token, v.version);
@@ -233,10 +266,16 @@ function VersionHistoryBody({
   };
 
   const rollback = async (v: DashboardVersion) => {
+    const names = await unresolvedIn(v);
     if (
       !(await confirm({
         title: t('versionRollbackConfirmTitle', { version: v.version }),
-        description: t('versionRollbackConfirmDescription'),
+        description: (
+          <>
+            {t('versionRollbackConfirmDescription')}
+            {unresolvedNotice(names)}
+          </>
+        ),
         confirmLabel: t('versionRollback'),
       }))
     )
