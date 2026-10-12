@@ -13,11 +13,24 @@ import { LocaleSwitcher } from '@/components/LocaleSwitcher';
 import { ErrorBanner } from '@/components/ui/error-banner';
 import { signInErrorKey } from '@/i18n/signInError';
 import type { IdentityAuth } from '@/lib/api/user-management';
-import { startSso } from '@/lib/sso';
+import { discardPendingSso, startSso } from '@/lib/sso';
 
 // Login is two-step (ADR-033): authenticate the email/password to get an identity
 // token + the tenants the identity may act in, then select a tenant to start the
 // session. A single membership is auto-selected so the common case stays one step.
+//
+// The first screen asks for the email ALONE (identifier-first). The server is asked which
+// connection, if any, speaks for the email's domain (beginSso answers with the provider's
+// address or null); a domain with one offers single sign-on, anything else gets the
+// password field. The lookup is about the DOMAIN and never about the person: it is the
+// same answer whether or not an account exists, so it cannot be used to find accounts, and
+// an address at an unknown domain and one at a password-only domain both get null and so
+// the same screen. Nothing here hides the password field on the strength of a tenant's
+// policy: that policy is enforced by the server (selectTenant refuses a password session
+// with SSO_REQUIRED), and exposing it before sign-in would tell anyone which domains belong
+// to a tenant that requires single sign-on. A domain with a connection puts the password
+// one step behind "Use a password instead" rather than removing it, so an account that has
+// only a password (an operator, say) can still sign in.
 //
 // This is the reference i18n-converted screen (ADR-066): every user-facing string
 // flows through the `login` catalog (frontend/apps/console/src/i18n/locales/en),
@@ -30,6 +43,11 @@ export default function LoginPage() {
   const [searchParams] = useSearchParams();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  // Which question the first screen is asking. 'identify' is the email alone; 'sso' is a
+  // domain with a connection (the provider's address is held in ssoUrl, not yet visited);
+  // 'password' is everything else, and the screen the explicit SSO button falls back to.
+  const [step, setStep] = useState<'identify' | 'sso' | 'password'>('identify');
+  const [ssoUrl, setSsoUrl] = useState<string | null>(null);
   const [identity, setIdentity] = useState<IdentityAuth | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -110,6 +128,9 @@ export default function LoginPage() {
     try {
       const url = await startSso({ email: address, returnTo: searchParams.get('returnTo') });
       if (url === null) {
+        // Said, and the password field is put in front of them: the person asked for
+        // single sign-on by name, so they are owed the answer.
+        setStep('password');
         setError(t('ssoNotConfigured'));
         setSubmitting(false);
         return;
@@ -119,6 +140,52 @@ export default function LoginPage() {
       failure(err, 'login:ssoUnavailable');
       setSubmitting(false);
     }
+  };
+
+  // The first screen's question: which way does this email sign in? One begin request is
+  // the whole lookup, and the browser is NOT sent anywhere yet: a domain with a connection
+  // gets a choice, so a password-only account at that domain is never stranded.
+  //
+  // Every failure of the lookup falls through to the password field, without a banner. An
+  // instance with no single sign-on, a throttled address and an unreachable server all end
+  // up in the same place, and none of them says anything about the email: what a person
+  // can still do is sign in with a password, which the server then judges on its own, and
+  // the SSO button on that screen asks again by name.
+  const handleIdentify = async (e: FormEvent) => {
+    e.preventDefault();
+    setError(null);
+    const address = email.trim();
+    if (!address) return;
+    setSubmitting(true);
+    try {
+      const url = await startSso({ email: address, returnTo: searchParams.get('returnTo') });
+      if (url === null) {
+        setStep('password');
+      } else {
+        setSsoUrl(url);
+        setStep('sso');
+      }
+    } catch {
+      setStep('password');
+    }
+    setSubmitting(false);
+  };
+
+  // Back to the email. Whatever the lookup left behind (the held address, the secret only
+  // this tab keeps for finishing a sign-in) is dropped with it.
+  const handleChangeEmail = () => {
+    discardPendingSso();
+    setSsoUrl(null);
+    setStep('identify');
+    setPassword('');
+    setError(null);
+  };
+
+  const handleUsePassword = () => {
+    discardPendingSso();
+    setSsoUrl(null);
+    setStep('password');
+    setError(null);
   };
 
   const handleSelectTenant = async (tenant: string) => {
@@ -184,7 +251,7 @@ export default function LoginPage() {
           </div>
         ) : (
           <form
-            onSubmit={handleCredentials}
+            onSubmit={step === 'identify' ? handleIdentify : handleCredentials}
             className="space-y-4 rounded-lg border border-border bg-card p-6"
           >
             {error && <ErrorBanner message={error} onDismiss={() => setError(null)} />}
@@ -194,36 +261,89 @@ export default function LoginPage() {
                 id="email"
                 type="email"
                 autoComplete="username"
-                autoFocus
+                autoFocus={step === 'identify'}
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
+                // Past the first screen the address is the thing being signed in, so it
+                // stays visible (and in the form, for a password manager) but not editable.
+                readOnly={step !== 'identify'}
                 required
               />
             </FormField>
 
-            <FormField label={t('passwordLabel')} htmlFor="password">
-              <Input
-                id="password"
-                type="password"
-                autoComplete="current-password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                required
-              />
-            </FormField>
+            {step === 'identify' && (
+              <>
+                <Button type="submit" className="w-full" loading={submitting} disabled={submitting}>
+                  {t('continue')}
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="w-full"
+                  disabled={submitting}
+                  onClick={handleSso}
+                >
+                  {t('ssoButton')}
+                </Button>
+              </>
+            )}
 
-            <Button type="submit" className="w-full" loading={submitting} disabled={submitting}>
-              {t('signIn')}
-            </Button>
-            <Button
-              type="button"
-              variant="outline"
-              className="w-full"
-              disabled={submitting}
-              onClick={handleSso}
-            >
-              {t('ssoButton')}
-            </Button>
+            {step === 'sso' && (
+              <>
+                <p className="text-sm text-muted-foreground">{t('ssoDomainNotice')}</p>
+                <Button
+                  type="button"
+                  className="w-full"
+                  onClick={() => ssoUrl !== null && window.location.assign(ssoUrl)}
+                >
+                  {t('ssoContinue')}
+                </Button>
+                <Button type="button" variant="outline" className="w-full" onClick={handleUsePassword}>
+                  {t('usePassword')}
+                </Button>
+                <Button type="button" variant="ghost" className="w-full" onClick={handleChangeEmail}>
+                  {t('changeEmail')}
+                </Button>
+              </>
+            )}
+
+            {step === 'password' && (
+              <>
+                <FormField label={t('passwordLabel')} htmlFor="password">
+                  <Input
+                    id="password"
+                    type="password"
+                    autoComplete="current-password"
+                    autoFocus
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    required
+                  />
+                </FormField>
+
+                <Button type="submit" className="w-full" loading={submitting} disabled={submitting}>
+                  {t('signIn')}
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="w-full"
+                  disabled={submitting}
+                  onClick={handleSso}
+                >
+                  {t('ssoButton')}
+                </Button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  className="w-full"
+                  disabled={submitting}
+                  onClick={handleChangeEmail}
+                >
+                  {t('changeEmail')}
+                </Button>
+              </>
+            )}
           </form>
         )}
 

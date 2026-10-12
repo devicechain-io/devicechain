@@ -48,9 +48,13 @@ Every request to a provider goes through the platform's egress guard, so a provi
 
 ## Signing in {#sign-in}
 
-The console and the dashboard app show **Sign in with SSO** beside the password form. The flow is OpenID Connect authorization code with PKCE:
+The console opens on the email address alone. If an enabled connection speaks for the address's domain, it offers **Continue with single sign-on**, with **Use a password instead** beside it, so an account that has only a password (an operator's, say) can still sign in. Any other address is asked for its password. **Sign in with SSO** stays on the screen for anyone who wants to go straight to their provider, and the dashboard app keeps its single form with that button beside the password.
 
-1. The person enters their email and chooses **Sign in with SSO**. The browser keeps a random secret and sends its hash.
+The check is about the **domain, never the person**. It answers the same way whether or not an identity exists for the address, so it cannot be used to find accounts. A domain nobody has set up and a domain whose people use passwords get exactly the same screen, and so does an instance with single sign-on switched off, a throttled address or an unreachable server: the only difference a person can see is whether single sign-on is offered. The console is not told whether a tenant requires single sign-on, which would reveal which domains belong to such a tenant, so it never hides the password field on that basis; the server judges that when a tenant is chosen (see below).
+
+The flow is OpenID Connect authorization code with PKCE:
+
+1. The person enters their email and chooses **Continue with single sign-on** (or **Sign in with SSO**). The browser keeps a random secret and sends its hash.
 2. DeviceChain records the sign-in (valid ten minutes, usable once) and sends the browser to the provider.
 3. The provider authenticates the person and returns to `<issuerUrl>/sso/callback/<connection>`.
 4. DeviceChain checks the answer: the state and the connection match, the token's signature, issuer, audience, expiry and nonce, the connection's required claims and methods, and the identity rules below.

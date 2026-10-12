@@ -97,7 +97,7 @@ Las métricas detrás de ellas son `devicechain_usermanagement_sso_logins_total{
 
 | Síntoma | Causa probable |
 | --- | --- |
-| "Single sign-on is not set up for that email address" | El dominio no está afirmado en ninguna conexión. |
+| La consola pide una contraseña para una dirección que debería usar el inicio de sesión único, o **Iniciar sesión con SSO** dice "Single sign-on is not set up for that email address" | El dominio no está afirmado en ninguna conexión. La consola responde igual para un dominio sin conexión, una conexión deshabilitada y una instancia sin inicio de sesión único, así que revisa **Admin → Identity providers**. |
 | "Single sign-on is not available right now" | La conexión de ese dominio está deshabilitada, o su descubrimiento no está aprobado. |
 | "Your account exists but is not linked" | La dirección ya tiene una identidad: aprueba su solicitud de vínculo. |
 | Todos los inicios de sesión se rechazan como no verificados | El proveedor no envía un correo verificado (para Entra, añade `xms_edov`). |

@@ -97,7 +97,7 @@ The metrics behind them are `devicechain_usermanagement_sso_logins_total{connect
 
 | Symptom | Likely cause |
 | --- | --- |
-| "Single sign-on is not set up for that email address" | The domain is not asserted on any connection. |
+| The console asks for a password for an address that should use single sign-on, or **Sign in with SSO** says "Single sign-on is not set up for that email address" | The domain is not asserted on any connection. The console answers the same way for a domain with no connection, a disabled connection and an instance without single sign-on, so check **Admin → Identity providers**. |
 | "Single sign-on is not available right now" | The connection for that domain is disabled, or its discovery is not approved. |
 | "Your account exists but is not linked" | The address already has an identity: approve its link request. |
 | Every sign-in refused as unverified | The provider does not send a verified email (for Entra, add `xms_edov`). |

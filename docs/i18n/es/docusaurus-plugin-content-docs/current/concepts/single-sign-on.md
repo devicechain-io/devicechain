@@ -48,9 +48,13 @@ Toda solicitud a un proveedor pasa por la protección de salida de la plataforma
 
 ## Iniciar sesión {#sign-in}
 
-La consola y la aplicación de paneles muestran **Sign in with SSO** junto al formulario de contraseña. El flujo es el código de autorización de OpenID Connect con PKCE:
+La consola se abre solo con la dirección de correo. Si una conexión habilitada habla por el dominio de la dirección, ofrece **Continuar con el inicio de sesión único**, con **Usar una contraseña** al lado, de modo que una cuenta que solo tiene contraseña (la de un operador, por ejemplo) todavía pueda iniciar sesión. A cualquier otra dirección se le pide la contraseña. **Iniciar sesión con SSO** sigue en la pantalla para quien quiera ir directo a su proveedor, y la aplicación de paneles conserva su formulario único con ese botón junto a la contraseña.
 
-1. La persona escribe su correo y elige **Sign in with SSO**. El navegador conserva un secreto aleatorio y envía su hash.
+La comprobación trata del **dominio, nunca de la persona**. Responde igual exista o no una identidad para la dirección, así que no sirve para descubrir cuentas. Un dominio que nadie ha configurado y un dominio cuyas personas usan contraseñas reciben exactamente la misma pantalla, y también una instancia con el inicio de sesión único desactivado, una dirección limitada por tasa o un servidor inaccesible: la única diferencia visible es si se ofrece el inicio de sesión único. A la consola no se le dice si un inquilino exige inicio de sesión único, lo que revelaría qué dominios pertenecen a ese inquilino, así que nunca oculta el campo de contraseña por ese motivo; lo decide el servidor al elegir un inquilino (véase más abajo).
+
+El flujo es el código de autorización de OpenID Connect con PKCE:
+
+1. La persona escribe su correo y elige **Continuar con el inicio de sesión único** (o **Iniciar sesión con SSO**). El navegador conserva un secreto aleatorio y envía su hash.
 2. DeviceChain registra el inicio de sesión (válido diez minutos, de un solo uso) y envía el navegador al proveedor.
 3. El proveedor autentica a la persona y vuelve a `<issuerUrl>/sso/callback/<connection>`.
 4. DeviceChain comprueba la respuesta: que el estado y la conexión coincidan, la firma, el emisor, la audiencia, la caducidad y el nonce del token, las afirmaciones y métodos que exige la conexión, y las reglas de identidad que siguen.

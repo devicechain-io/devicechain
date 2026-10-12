@@ -97,7 +97,7 @@ user-management 的 `auth.issuerUrl` 必须是其 API 可从外部访问的地�
 
 | 现象 | 可能原因 |
 | --- | --- |
-| "Single sign-on is not set up for that email address" | 该域名没有在任何连接上断言。 |
+| 控制台对本应使用单点登录的地址要求输入密码，或 **Sign in with SSO** 提示 "Single sign-on is not set up for that email address" | 该域名没有在任何连接上断言。对于没有连接的域名、已禁用的连接以及未启用单点登录的实例，控制台的回应相同，因此请检查 **Admin → Identity providers**。 |
 | "Single sign-on is not available right now" | 该域名对应的连接已禁用，或其发现文档尚未批准。 |
 | "Your account exists but is not linked" | 该地址已有身份：请批准它的链接请求。 |
 | 每次登录都因未验证而被拒绝 | 提供商没有发送已验证的邮箱（对 Entra，请添加 `xms_edov`）。 |
