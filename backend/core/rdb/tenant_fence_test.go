@@ -427,3 +427,35 @@ func TestOptingOutDoesNotOpenTheFenceForEverythingElse(t *testing.T) {
 		t.Fatalf("an ordinary model was admitted alongside an exempt one: %v", err)
 	}
 }
+
+// TestCheckTenantFenceAnswersWhatAWriteWouldBeTold pins the read the device auth callout uses
+// to refuse minting a credential for a fenced tenant: it must answer exactly as a write
+// would — refused while the fence stands, clear once it is lifted, clear for another tenant,
+// and an error (not a clear answer) when the fence cannot be read.
+func TestCheckTenantFenceAnswersWhatAWriteWouldBeTold(t *testing.T) {
+	db := newFenceDB(t)
+	ctx := core.WithTenant(context.Background(), "acme")
+
+	if err := CheckTenantFence(ctx, db, "acme"); err != nil {
+		t.Fatalf("no fence planted: got %v, want nil", err)
+	}
+	plant(t, db, "acme")
+	if err := CheckTenantFence(ctx, db, "acme"); !errors.Is(err, ErrTenantPurged) {
+		t.Fatalf("standing fence: got %v, want ErrTenantPurged", err)
+	}
+	if err := CheckTenantFence(core.WithTenant(context.Background(), "acme-2"), db, "acme-2"); err != nil {
+		t.Fatalf("a different tenant: got %v, want nil", err)
+	}
+	lift(t, db, "acme")
+	if err := CheckTenantFence(ctx, db, "acme"); err != nil {
+		t.Fatalf("lifted fence: got %v, want nil", err)
+	}
+
+	if err := db.Migrator().DropTable(&PurgedTenant{}); err != nil {
+		t.Fatalf("dropping the fence table: %v", err)
+	}
+	err := CheckTenantFence(ctx, db, "acme")
+	if err == nil || errors.Is(err, ErrTenantPurged) {
+		t.Fatalf("unreadable fence: got %v, want a read error that is not ErrTenantPurged", err)
+	}
+}
