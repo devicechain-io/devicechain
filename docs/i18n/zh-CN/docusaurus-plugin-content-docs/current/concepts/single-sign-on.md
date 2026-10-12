@@ -58,7 +58,7 @@ title: 单点登录
 
 接收代码的页面（控制台为 `/login/sso/complete`，仪表板应用为 `/dash/sso/complete`）会立即把代码从地址栏中移除，并以 `Referrer-Policy: no-referrer` 提供，因此它加载的任何内容都无法携带该地址。登录完成后，或用户返回登录表单时，应用会重新加载，而不是继续停留在该页面上，因此会话的其余部分会发送正常的 `Referer`；默认的 OpenStreetMap 底图需要它。如果你自己的代理位于控制台之前，请把任何去除 Referer 的响应头限定在这两个确切路径上。
 
-登录被拒绝时，用户只会看到笼统的提示（“Single sign-on did not allow this account in”、“your account is not linked yet”），不会知道是哪项检查未通过；确切的结果由指标 `devicechain_usermanagement_sso_logins_total` 计数，拒绝事件连同提供商断言的地址一起写入审计日志。
+登录被拒绝时，用户只会看到笼统的提示（“Single sign-on did not allow this account in”、“your account is not linked yet”），不会知道是哪项检查未通过。（链接自己的账号是例外：此时用户已经登录，每项检查都针对其自己的账号，因此链接被拒绝时会说明是哪项检查未通过；参见[链接](#linking)。）确切的结果由指标 `devicechain_usermanagement_sso_logins_total` 计数，拒绝事件连同提供商断言的地址一起写入审计日志。
 
 ## 身份、链接与预配 {#linking}
 
@@ -67,7 +67,7 @@ DeviceChain 绝不会因为邮箱地址看起来相似，就把外部账号链�
 - **预配（即时，just-in-time）。**在开启预配的租户连接上，如果登录的地址**没有任何身份**，就会创建一个（无密码）并链接。这是唯一的自动写入。
 - **超级用户批准链接请求。**如果登录既未链接也未被预配（其地址已有身份，或该连接不做预配），登录会被拒绝，并在 **Identity providers → Link requests** 下出现一条**链接请求**。超级用户批准或拒绝它。如果该身份在连接所服务的租户中已有、且没有任何连接管理的成员关系，批准时需要做出选择：`convert` 表示此后由该连接管理这些成员关系，`keep_manual` 表示保持原样。标记为 *subject changed* 的请求表示该身份已在该连接上链接到另一个不同的账号，这正是邮箱地址被回收复用时的表现，请保持警惕。
 - **超级用户直接链接**（管理 API 中的 `linkIdentity`、`unlinkIdentity`）。实例连接只能由超级用户链接：通过这种方式，或通过批准链接请求。
-- **用户链接自己的账号。**以密码登录后，用户可以发起 `beginSsoLink`；提供商必须报告该身份自己的邮箱地址。此功能可通过 API 使用，控制台暂时还没有对应按钮。
+- **用户链接自己的账号。**以密码登录后，用户可以发起 `beginSsoLink`。无需指定连接：DeviceChain 使用其已验证域名正是该身份自己邮箱域名的租户连接（与按邮箱登录使用同一查找），且该连接必须已启用并已批准。提供商必须报告该身份自己的邮箱地址。在控制台中，从用户菜单选择 **Link single sign-on account**（链接单点登录账号），然后继续前往提供商；同样的操作也可通过 API 使用。所需的密码登录有效期为 15 分钟，超过后控制台会请用户先重新登录。每次拒绝都会说明哪项检查未通过：在前往提供商之前，`beginSsoLink` 以 `extensions.code` 失败（`SSO_LINK_NO_CONNECTION`、`SSO_LINK_ALREADY_LINKED`、`SSO_LINK_SESSION_REQUIRED`、`SSO_LINK_PASSWORD_REQUIRED`、`SSO_LINK_NOT_ALLOWED`）；之后，返回地址带有 `error=link_email_mismatch`、`link_unverified_email`、`link_session_ended`、`link_already_linked` 或 `link_not_allowed`。
 
 租户连接会拒绝持有任何系统角色的身份，即使链接是在授予该角色之前建立的。已链接到某个连接的身份，不能在同一连接上再绑定第二个账号。
 

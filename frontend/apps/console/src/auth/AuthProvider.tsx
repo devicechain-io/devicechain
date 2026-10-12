@@ -54,6 +54,8 @@ interface StoredIdentity {
   identityToken: string;
   superuser: boolean;
   memberships: IdentityAuth['memberships'];
+  /** How this identity session was started; absent on a session stored before this was kept. */
+  method?: SignInMethod;
 }
 
 interface AuthContextValue {
@@ -100,7 +102,16 @@ interface AuthContextValue {
   memberships: IdentityAuth['memberships'];
   /** The live identity token, or null when the identity session is absent/expired. */
   identityToken: string | null;
+  /**
+   * How the stored identity session was started, EVEN after its token has lapsed (so the
+   * console can say "sign in again" rather than hide what needs a fresh sign-in); null when
+   * none is stored or it predates this. Whether the session is usable is identityToken.
+   */
+  signInMethod: SignInMethod | null;
 }
+
+/** How the person signed in: with a password, or through an identity provider. */
+export type SignInMethod = 'password' | 'sso';
 
 const AuthContext = createContext<AuthContextValue | null>(null);
 
@@ -336,6 +347,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const auth = await apiLogin(email, password);
       applyIdentity({
         identityToken: auth.identityToken,
+        method: 'password',
         superuser: auth.superuser,
         memberships: auth.memberships,
       });
@@ -350,6 +362,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const auth = await apiCompleteSso(code, verifier);
       applyIdentity({
         identityToken: auth.identityToken,
+        method: 'sso',
         superuser: auth.superuser,
         memberships: auth.memberships,
       });
@@ -409,6 +422,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       superuser: identityAlive && (identity?.superuser ?? false),
       memberships: identity?.memberships ?? [],
       identityToken: identityAlive ? (identity?.identityToken ?? null) : null,
+      signInMethod: identity?.method ?? null,
     }),
     [
       claims,

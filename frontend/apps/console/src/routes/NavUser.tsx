@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { useState } from 'react';
-import { ChevronsUpDown, LineChart, LogOut, ShieldCheck, UserPen } from 'lucide-react';
+import { ChevronsUpDown, LineChart, Link2, LogOut, ShieldCheck, UserPen } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { useAuth } from '@/auth/AuthProvider';
@@ -12,6 +12,7 @@ import { ThemeToggle } from '@/components/ThemeToggle';
 import { LocaleSwitcher } from '@/components/LocaleSwitcher';
 import { FormDrawer } from '@/components/registry';
 import { ProfileForm } from '@/routes/ProfileForm';
+import { LinkSsoAccount } from '@/routes/LinkSsoAccount';
 import { useToast } from '@/components/ui/toast';
 import {
   DropdownMenu,
@@ -38,12 +39,19 @@ function UserAvatar({ name }: { name: string }) {
 
 export function NavUser() {
   const { t } = useTranslation('userMenu');
-  const { claims, logout, superuser, isIdentityAuthenticated } = useAuth();
+  const { claims, logout, superuser, isIdentityAuthenticated, signInMethod } = useAuth();
   const user = useCurrentUser();
   const { isMobile } = useSidebar();
   const { toast } = useToast();
   const navigate = useNavigate();
   const [editing, setEditing] = useState(false);
+  const [linking, setLinking] = useState(false);
+  // Linking needs the identity token of a PASSWORD sign-in. A session known to have come
+  // through a provider is not offered it (the server refuses one), nor is a superuser (an
+  // identity with a system role is linked only by a superuser). Every other session is: when
+  // its password sign-in has lapsed, or its method is unknown, the drawer says to sign in
+  // again instead of the action disappearing without a word.
+  const canLinkSso = signInMethod !== 'sso' && !superuser;
   // Metrics (Grafana) is instance-level + cross-tenant, so the link is operator-only.
   // Only probe (and only ever show it) for an authenticated superuser.
   const metricsAvailable = useMetricsAvailable(superuser && isIdentityAuthenticated);
@@ -100,6 +108,13 @@ export function NavUser() {
               {t('editProfile')}
             </DropdownMenuItem>
 
+            {canLinkSso && (
+              <DropdownMenuItem onClick={() => setLinking(true)} className="cursor-pointer">
+                <Link2 size={16} />
+                {t('linkSso')}
+              </DropdownMenuItem>
+            )}
+
             {superuser && isIdentityAuthenticated && (
               <>
                 <DropdownMenuSeparator />
@@ -142,6 +157,17 @@ export function NavUser() {
             }}
           />
         </FormDrawer>
+
+        {canLinkSso && (
+          <FormDrawer
+            open={linking}
+            onOpenChange={setLinking}
+            title={t('linkSso')}
+            description={t('linkSsoDescription')}
+          >
+            <LinkSsoAccount />
+          </FormDrawer>
+        )}
       </SidebarMenuItem>
     </SidebarMenu>
   );

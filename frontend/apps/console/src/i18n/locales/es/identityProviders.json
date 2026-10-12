@@ -143,6 +143,7 @@
   "servedTenantsLabel": "Inquilinos atendidos",
   "servedTenantsPlaceholder": "Seleccione inquilinos",
   "settingsTab": "Configuración",
+  "strandedRefusal": "Esto dejaría a inquilinos que exigen el inicio de sesión único sin ninguna conexión habilitada que los sirva, y sus miembros quedarían fuera: {{tenants}}. Deje de exigir SSO para esos inquilinos, o habilite otra conexión que los sirva, y vuelva a intentarlo.",
   "subjectChangedBadge": "Subject cambiado",
   "subjectChangedHint": "Esta identidad ya está vinculada en esta conexión con un subject distinto, que es lo que parece una dirección de correo reciclada. La aprobación se rechaza mientras exista ese vínculo: si está seguro de que es la misma persona, quite primero el vínculo existente; si no, rechace la solicitud.",
   "tenantsDescription": "Exactamente en qué inquilinos pueden entrar los inicios de sesión de esta conexión, y en ningún otro.",
