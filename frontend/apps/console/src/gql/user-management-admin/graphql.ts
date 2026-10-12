@@ -569,7 +569,7 @@ export type TenantDeletionsQueryVariables = Exact<{
 }>;
 
 
-export type TenantDeletionsQuery = { tenantDeletions: { results: Array<{ token: string, epoch: string, completedAt: string | null, rowsErased: number, awaiting: DeletionWait, elapsesAt: string | null, blockedBy: Array<string>, stores: Array<{ store: string, complete: boolean, rowsErased: number, retaining: string | null, lastError: string | null, note: string | null, attemptedAt: string | null, cleanSince: string | null }> }>, pagination: { pageStart: number | null, pageEnd: number | null, totalRecords: number | null } } };
+export type TenantDeletionsQuery = { tenantDeletions: { results: Array<{ token: string, epoch: string, retainedAuditTenant: string, completedAt: string | null, rowsErased: number, awaiting: DeletionWait, elapsesAt: string | null, blockedBy: Array<string>, stores: Array<{ store: string, complete: boolean, rowsErased: number, retaining: string | null, lastError: string | null, note: string | null, attemptedAt: string | null, cleanSince: string | null }> }>, pagination: { pageStart: number | null, pageEnd: number | null, totalRecords: number | null } } };
 
 export type AdminFunctionalAreasQueryVariables = Exact<{ [key: string]: never; }>;
 
@@ -1197,6 +1197,7 @@ export const TenantDeletionsDocument = new TypedDocumentString(`
     results {
       token
       epoch
+      retainedAuditTenant
       completedAt
       rowsErased
       awaiting

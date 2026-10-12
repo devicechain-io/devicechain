@@ -6,7 +6,13 @@ import { useTranslation } from 'react-i18next';
 import { formatTime } from '@/lib/utils';
 import { useQuery } from '@/lib/hooks/use-query';
 import { useDebouncedValue } from '@/lib/hooks/use-debounced-value';
-import { listAdminAuditEvents, listTenants, type AdminAuditEvent } from '@/lib/api/admin';
+import {
+  listAdminAuditEvents,
+  listTenantDeletions,
+  listTenants,
+  type AdminAuditEvent,
+} from '@/lib/api/admin';
+import { tenantFilterOptions } from './auditTenantOptions';
 import { PageShell } from '@/components/ui/page-shell';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
@@ -91,6 +97,18 @@ export default function AdminAuditPage() {
 
   // Tenants populate the tenant filter dropdown (this is the cross-tenant view).
   const { data: tenants } = useQuery(() => listTenants(), []);
+  // A completed deletion's retained journal is filed under its own key, not the token, so the
+  // live tenants alone can never reach it. A failed read leaves the live options in place.
+  const { data: deletions } = useQuery(
+    () => listTenantDeletions({ pageNumber: 1, pageSize: 1000, completed: true }),
+    [],
+  );
+  const tenantOptions = tenantFilterOptions(
+    (tenants ?? []).map((tr) => tr.token),
+    deletions?.results ?? [],
+    (token, completedAt) =>
+      t('deletedTenantOption', { token, date: new Date(completedAt).toLocaleDateString() }),
+  );
 
   // Reset to the first page whenever a filter changes.
   useEffect(() => setPageNumber(1), [category, tenant, actor]);
@@ -117,11 +135,11 @@ export default function AdminAuditPage() {
       action={
         <div className="flex items-center gap-2">
           <Combobox
-            className="h-9 w-44"
+            className="h-9 w-56"
             placeholder={t('allTenantsPlaceholder')}
             value={tenant}
             onChange={setTenant}
-            options={(tenants ?? []).map((tr) => ({ value: tr.token }))}
+            options={tenantOptions}
           />
           <Combobox
             className="h-9 w-44"

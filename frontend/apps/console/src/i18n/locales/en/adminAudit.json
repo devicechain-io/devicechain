@@ -9,6 +9,7 @@
   "colTarget": "Target",
   "colTenant": "Tenant",
   "colTime": "Time",
+  "deletedTenantOption": "{{token}} (deleted {{date}})",
   "description": "Authentication events and identity, role & tenant administration across the instance.",
   "filterByActorPlaceholder": "Filter by actor…",
   "loadingAuditLog": "Loading audit log…",
