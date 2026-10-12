@@ -11,6 +11,7 @@ import (
 	"time"
 
 	esmodel "github.com/devicechain-io/dc-event-sources/model"
+	"google.golang.org/protobuf/encoding/protowire"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protodesc"
 	"google.golang.org/protobuf/reflect/protoreflect"
@@ -59,7 +60,10 @@ func populatedString(n int) string {
 }
 
 // populatedScalar is a non-default value of fd's kind, so proto3 cannot omit it. Signed
-// values are negative, so a writer that did not sign-extend would differ.
+// values are negative. That does NOT make this guard see a writer that forgets to
+// sign-extend an int32: the runtime decodes an int32 from the low 32 bits of its varint, so
+// a zero-extended -1 decodes as -1 all the same. Only the byte-for-byte equivalence tests
+// (resolved_wire_test.go) see that.
 func populatedScalar(t *testing.T, fd protoreflect.FieldDescriptor, n int) protoreflect.Value {
 	t.Helper()
 	switch fd.Kind() {
@@ -237,16 +241,72 @@ func TestResolvedEventWireCarriesEveryDeclaredField(t *testing.T) {
 	}
 }
 
+// resolvedWireMessages is every message the writer writes itself.
+var resolvedWireMessages = []string{
+	"PResolvedEvent", "PResolvedAnchor", "PScopeMembership",
+	"PResolvedMeasurementsPayload", "PResolvedMeasurementsEntry", "PResolvedMeasurementEntry",
+}
+
+// fieldsBeyondOneByteTags names every field of the writer's messages whose number does
+// not encode, with its wire type, in one byte.
+func fieldsBeyondOneByteTags(t *testing.T, file protoreflect.FileDescriptor) []string {
+	t.Helper()
+	var beyond []string
+	for _, name := range resolvedWireMessages {
+		md := file.Messages().ByName(protoreflect.Name(name))
+		if md == nil {
+			t.Fatalf("%s is not in the file descriptor", name)
+		}
+		for i := 0; i < md.Fields().Len(); i++ {
+			fd := md.Fields().Get(i)
+			if protowire.SizeTag(fd.Number()) != tagSize {
+				beyond = append(beyond, fmt.Sprintf("%s = %d", fd.FullName(), fd.Number()))
+			}
+		}
+	}
+	return beyond
+}
+
+// TestResolvedWireFieldNumbersFitTheTagSize pins the writer's tagSize assumption: every
+// tag it writes is sized as one byte, which holds only for field numbers up to 15. A field
+// numbered 16 or above in any message the writer writes fails here, by name, rather than
+// as a sized-versus-written mismatch once the writer is taught it.
+func TestResolvedWireFieldNumbersFitTheTagSize(t *testing.T) {
+	if beyond := fieldsBeyondOneByteTags(t, File_proto_dc_device_management_events_proto); len(beyond) > 0 {
+		t.Fatalf("the direct writer (resolved_wire.go) sizes every tag as %d byte, which these fields "+
+			"do not fit; size their tags with protowire.SizeTag:\n  %s", tagSize, strings.Join(beyond, "\n  "))
+	}
+
+	// The negative control: field 16 added to each message must be named.
+	for _, message := range resolvedWireMessages {
+		fdp := protodesc.ToFileDescriptorProto(File_proto_dc_device_management_events_proto)
+		for _, m := range fdp.MessageType {
+			if m.GetName() == message {
+				m.Field = append(m.Field, &descriptorpb.FieldDescriptorProto{
+					Name: proto.String("sixteenth"), JsonName: proto.String("sixteenth"), Number: proto.Int32(16),
+					Label: descriptorpb.FieldDescriptorProto_LABEL_OPTIONAL.Enum(),
+					Type:  descriptorpb.FieldDescriptorProto_TYPE_STRING.Enum(),
+				})
+			}
+		}
+		file, err := protodesc.NewFile(fdp, nil)
+		if err != nil {
+			t.Fatalf("the extended descriptor does not build: %v", err)
+		}
+		beyond := fieldsBeyondOneByteTags(t, file)
+		if len(beyond) != 1 || !strings.Contains(beyond[0], message+".sixteenth") {
+			t.Errorf("field 16 added to %s: named %v, want exactly it", message, beyond)
+		}
+	}
+}
+
 // TestResolvedEventFieldGuardFailsOnANewField is that guard's negative control. For each
 // message the writer writes, it adds a field to a copy of the generated descriptor —
 // exactly what editing the .proto and regenerating would do — and requires the guard to
 // fail, naming the field. A guard that cannot fail on the change it exists for would pass
 // forever.
 func TestResolvedEventFieldGuardFailsOnANewField(t *testing.T) {
-	for _, message := range []string{
-		"PResolvedEvent", "PResolvedAnchor", "PScopeMembership",
-		"PResolvedMeasurementsPayload", "PResolvedMeasurementsEntry", "PResolvedMeasurementEntry",
-	} {
+	for _, message := range resolvedWireMessages {
 		t.Run(message, func(t *testing.T) {
 			fdp := protodesc.ToFileDescriptorProto(File_proto_dc_device_management_events_proto)
 			var target *descriptorpb.DescriptorProto
@@ -276,6 +336,13 @@ func TestResolvedEventFieldGuardFailsOnANewField(t *testing.T) {
 			}
 			if !strings.Contains(err.Error(), message+".added_later") {
 				t.Fatalf("the field guard failed without naming the new field:\n%v", err)
+			}
+			// And it names nothing else: a guard that also blames fields the hop carried
+			// sends whoever reads it after the wrong ones.
+			for _, line := range strings.Split(err.Error(), "\n") {
+				if strings.HasPrefix(line, "  ") && !strings.Contains(line, ".added_later") {
+					t.Fatalf("the field guard named a field the hop carried, %q:\n%v", strings.TrimSpace(line), err)
+				}
 			}
 			t.Logf("the guard's refusal, as whoever adds a field will see it:\n%v", err)
 		})

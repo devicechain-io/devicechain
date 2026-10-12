@@ -258,7 +258,13 @@ func TestResolvedEventWireRefusesWhatProtoMarshalRefuses(t *testing.T) {
 	for name, event := range map[string]*model.ResolvedEvent{
 		"measurement without a payload":      {EventType: esmodel.Measurement, OccurredTime: at},
 		"measurement with another's payload": {EventType: esmodel.Measurement, Payload: &model.ResolvedAlertsPayload{}},
-		"unknown event type":                 {EventType: esmodel.EventType(99)},
+		// The inverse: the writer takes the in-place path only for a MEASUREMENT event, so
+		// a measurements payload under any other type is refused as the runtime refuses it,
+		// never written as though the type had been right.
+		"another type with a measurements payload": {EventType: esmodel.Alert, OccurredTime: at,
+			Payload: &model.ResolvedMeasurementsPayload{Entries: []model.ResolvedMeasurementsEntry{
+				{OccurredTime: at, Entries: []model.ResolvedMeasurementEntry{{Name: "n", Value: "v"}}}}}},
+		"unknown event type": {EventType: esmodel.EventType(99)},
 	} {
 		t.Run(name, func(t *testing.T) {
 			_, refErr := referenceMarshalResolvedEvent(event)
@@ -354,14 +360,20 @@ func TestResolvedEventWireAllocatesOnlyItsOutput(t *testing.T) {
 	}
 }
 
-// FuzzResolvedEventWire builds a resolved measurement event from arbitrary input and
-// requires the writer and proto.Marshal to agree exactly: the same bytes, or both refusing.
+// FuzzResolvedEventWire builds a resolved event from arbitrary input and requires the
+// writer and proto.Marshal to agree exactly: the same bytes, or both refusing. kind picks
+// the event type and payload: a measurement (written in place), every other type with its
+// own payload (marshalled by the runtime and copied in), a measurements payload under
+// another type, and an arbitrary event type.
 func FuzzResolvedEventWire(f *testing.F) {
-	f.Add("http", "dev", "alt", "a", "t", "g", "21.5", "Cel", uint64(7), int64(1), int32(2), int32(0), uint8(1), uint8(1), uint8(0x3f))
-	f.Add("", "", "", "", "", "", "", "", uint64(0), int64(-1), int32(-1), int32(-5), uint8(0), uint8(3), uint8(0))
-	f.Add("ok\xff", "d", "", "", "", "", "v", "", uint64(1<<63), int64(1<<40), int32(1<<31-1), int32(9), uint8(4), uint8(0), uint8(0xff))
+	f.Add("http", "dev", "alt", "a", "t", "g", "21.5", "Cel", uint64(7), int64(1), int32(2), int32(0), uint8(1), uint8(1), uint8(0x3f), uint8(0))
+	f.Add("", "", "", "", "", "", "", "", uint64(0), int64(-1), int32(-1), int32(-5), uint8(0), uint8(3), uint8(0), uint8(0))
+	f.Add("ok\xff", "d", "", "", "", "", "v", "", uint64(1<<63), int64(1<<40), int32(1<<31-1), int32(9), uint8(4), uint8(0), uint8(0xff), uint8(0))
+	for kind := uint8(1); kind < 7; kind++ {
+		f.Add("mqtt", "dev", "", "a", "t", "g", "1.5", "m", uint64(300), int64(5), int32(-2), int32(3), uint8(2), uint8(2), uint8(0x0f), kind)
+	}
 	f.Fuzz(func(t *testing.T, source, device, alt, anchor, token, group, value, unit string,
-		classifier uint64, nanos int64, version, fence int32, entries, perEntry, flags uint8) {
+		classifier uint64, nanos int64, version, fence int32, entries, perEntry, flags, kind uint8) {
 		at := time.Unix(1_760_000_000, nanos%1_000_000_000).In(time.FixedZone("z", int(version%50000)))
 		event := &model.ResolvedEvent{
 			Source: source, SourceDeviceToken: device, OccurredTime: at, ProcessedTime: at.UTC(),
@@ -398,6 +410,28 @@ func FuzzResolvedEventWire(f *testing.F) {
 			payload.Entries = append(payload.Entries, entry)
 		}
 		event.Payload = payload
+		refused := false // refused whatever its strings hold
+		switch kind % 7 {
+		case 1:
+			event.EventType = esmodel.Location
+			event.Payload = &model.ResolvedLocationsPayload{Entries: []model.ResolvedLocationEntry{
+				{Latitude: strp(value), Longitude: strp(unit), OccurredTime: at}}}
+		case 2:
+			event.EventType = esmodel.Alert
+			event.Payload = &model.ResolvedAlertsPayload{Entries: []model.ResolvedAlertEntry{
+				{Type: value, Level: uint32(classifier), Message: unit, Source: source, OccurredTime: at}}}
+		case 3:
+			event.EventType = esmodel.StateChange
+			event.Payload = &model.ResolvedStateChangePayload{State: value, Reason: unit, SessionId: classifier}
+		case 4:
+			event.EventType = esmodel.NewRelationship
+			event.Payload = &model.ResolvedNewRelationshipPayload{RelationshipTypeId: classifier, TargetType: strp(unit)}
+		case 5:
+			event.EventType, refused = esmodel.Alert, true // a measurements payload under another type
+		case 6:
+			event.EventType = esmodel.EventType(version)
+			refused = event.EventType != esmodel.Measurement
+		}
 
 		want, wantErr := referenceMarshalResolvedEvent(event)
 		got, err := MarshalResolvedEvent(event)
@@ -407,11 +441,14 @@ func FuzzResolvedEventWire(f *testing.F) {
 		if err == nil && !bytes.Equal(want, got) {
 			t.Fatalf("bytes differ:\n proto.Marshal %x\n writer        %x", want, got)
 		}
+		if refused && err == nil {
+			t.Fatalf("event type %v with a measurements payload was written", event.EventType)
+		}
 		allValid := true
 		for _, s := range []string{source, device, alt, anchor, token, group, value, unit} {
 			allValid = allValid && utf8.ValidString(s)
 		}
-		if wantErr != nil && allValid {
+		if wantErr != nil && allValid && !refused {
 			t.Fatalf("proto.Marshal refused valid UTF-8: %v", wantErr)
 		}
 	})
