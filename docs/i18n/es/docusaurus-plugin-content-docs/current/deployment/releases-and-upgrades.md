@@ -4036,6 +4036,27 @@ la forma de enterarse de uno. Por eso `DeadLetterWriteLost` tiene una cuarta cau
 
 No hay que hacer nada.
 
+##### Un servicio que no alcanza el broker de mensajería al arrancar se detiene al cabo de un minuto {#v0200-broker-unreachable-at-start}
+
+Cada servicio espera al broker de mensajería (NATS) al arrancar. En `v0.19.0` esperaba 30 segundos
+y luego arrancaba de todos modos. Los servicios que crean un bucket al arrancar se detenían entonces
+con un error que culpaba a la versión del broker (`key-value requires at least server version
+2.6.2`), y los demás se declaraban listos sin poder enviar ni recibir nada. Ahora un servicio espera
+hasta un minuto y, si el broker no ha respondido para entonces, se detiene con un error que indica
+la dirección del broker y el último error de conexión, y Kubernetes lo reinicia. Un broker que
+arranca dentro de ese minuto se trata igual que antes.
+
+- **Un pod que se reinicia con `the NATS broker was not reachable before the startup connection
+  wait ran out`** no pudo conectarse al broker en la dirección de la configuración de la instancia.
+  Compruebe que los pods del broker están en ejecución y listos, y lea el error de conexión al final
+  del mensaje: un nombre que no se resuelve, una conexión rechazada y un certificado o credencial
+  rechazados apuntan a sitios distintos.
+- **Un broker ausente durante más tiempo cuesta reinicios, no un servicio que se queda caído.** Cada
+  reinicio vuelve a intentarlo, con la espera entre reinicios habitual de Kubernetes, y el servicio
+  arranca en cuanto el broker responde.
+
+No hay que hacer nada.
+
 ##### `dcctl install --dry-run` aplica los rechazos de reinstalación que aplica la instalación {#v0200-dry-run}
 
 En un clúster que responde, una ejecución en seco ahora lee el registro de instalación, pregunta

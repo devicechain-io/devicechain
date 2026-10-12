@@ -352,6 +352,32 @@ func TestAFailedRelationalInitializeDoesNotRunTheHook(t *testing.T) {
 			"and would take a nil")
 }
 
+// The broker's twin of the test above. A broker manager that fails to initialize — a
+// broker that never answered within its wait is the case that matters, and the one an
+// earlier version of the manager reported as success — must stop the service there, with
+// the error, rather than run the hook that builds on the connection. A fetch setting the
+// manager refuses before it dials is the same return path without the wait.
+func TestAFailedBrokerInitializeStopsTheService(t *testing.T) {
+	ms := testMicroservice(t)
+	ms.InstanceConfiguration.ApplyDefaults()
+	ms.InstanceConfiguration.Infrastructure.Nats.Fetch.AheadHoldBudgetMillis = 1 << 30
+	ran := false
+	svc := New(ms, Spec{
+		Nats: &NatsSpec{OnCreate: func(*messaging.NatsManager) error { return nil }},
+		AfterNats: func(context.Context, *Managers) error {
+			ran = true
+			return nil
+		},
+	})
+
+	err := svc.Initialize(context.Background())
+
+	require.ErrorContains(t, err, "aheadHoldBudgetMillis",
+		"the broker manager's refusal did not reach the service's Initialize, so the process "+
+			"would start without the broker it could not set up")
+	require.False(t, ran, "AfterNats ran although the broker manager never initialized")
+}
+
 // TestTheGraphQLSpecCarriesItsExecTimeoutToTheManager pins the one setting a service used
 // to apply BETWEEN constructing its GraphQL manager and initializing it, which the Spec
 // could not express and so kept ai-inference on hand-written wiring.
