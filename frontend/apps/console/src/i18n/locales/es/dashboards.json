@@ -227,6 +227,7 @@
   "versionActivateConfirmTitle": "¿Servir la versión {{version}} a los espectadores?",
   "versionUnresolvedWarning_one": "Aviso: {{count}} widget de esa versión no puede resolverse en esta consola y no se mostrará aquí hasta que se instale su paquete:",
   "versionUnresolvedWarning_other": "Aviso: {{count}} widgets de esa versión no pueden resolverse en esta consola y no se mostrarán aquí hasta que se instalen sus paquetes:",
+  "versionUnresolvedUnchecked": "Esta consola no pudo leer esa versión para comprobar si contiene widgets que no puede mostrar, así que no se ha comprobado. Puede continuar igualmente.",
   "versionUnresolvedBlocked_one": "{{count}} widget de este panel no puede resolverse en esta consola, por lo que no se puede publicar una nueva versión. Instale su paquete o elimine el widget. Guardar el borrador conserva sin cambios sus ajustes almacenados.",
   "versionUnresolvedBlocked_other": "{{count}} widgets de este panel no pueden resolverse en esta consola, por lo que no se puede publicar una nueva versión. Instale sus paquetes o elimine los widgets. Guardar el borrador conserva sin cambios sus ajustes almacenados.",
   "unresolvedReasonUnregistered": "su paquete no está instalado en esta consola",

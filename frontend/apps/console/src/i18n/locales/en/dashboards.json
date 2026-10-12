@@ -227,6 +227,7 @@
   "versionActivateConfirmTitle": "Serve version {{version}} to viewers?",
   "versionUnresolvedWarning_one": "Warning: {{count}} widget in that version cannot be resolved by this console and will not render here until its package is installed:",
   "versionUnresolvedWarning_other": "Warning: {{count}} widgets in that version cannot be resolved by this console and will not render here until their packages are installed:",
+  "versionUnresolvedUnchecked": "This console could not read that version to check it for widgets it cannot render, so it has not been checked. You can still go ahead.",
   "versionUnresolvedBlocked_one": "{{count}} widget on this dashboard cannot be resolved by this console, so a new version cannot be published. Install its package or remove the widget. Saving the draft still keeps its stored settings unchanged.",
   "versionUnresolvedBlocked_other": "{{count}} widgets on this dashboard cannot be resolved by this console, so a new version cannot be published. Install their packages or remove the widgets. Saving the draft still keeps their stored settings unchanged.",
   "unresolvedReasonUnregistered": "its package is not installed in this console",

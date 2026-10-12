@@ -11,7 +11,7 @@ import { parseDashboardDefinition } from '@devicechain/dashboards';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const net = vi.hoisted(() => ({ ops: [] as string[], definition: '' }));
+const net = vi.hoisted(() => ({ ops: [] as string[], definition: '', definitionFails: false }));
 
 vi.mock('@devicechain/client', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@devicechain/client')>();
@@ -31,6 +31,7 @@ vi.mock('@devicechain/client', async (importOriginal) => {
         case 'DashboardPublishedVersion':
           return { dashboard: { publishedVersion: 2 } };
         case 'DashboardVersionDefinition':
+          if (net.definitionFails) throw new Error('version read refused');
           return { dashboardVersion: { definition: net.definition } };
         case 'RollbackDashboard':
           return { rollbackDashboard: { definition: net.definition, updatedAt: '2026-10-12T10:00:00Z' } };
@@ -83,7 +84,13 @@ function mount(onRolledBack = vi.fn()) {
 
 beforeEach(() => {
   net.ops.length = 0;
+  net.definitionFails = false;
 });
+
+const confirmIn = (dialog: HTMLElement) => {
+  const buttons = dialog.querySelectorAll('button');
+  fireEvent.click(buttons[buttons.length - 1]);
+};
 afterEach(cleanup);
 
 describe('rolling back to a version with unresolved widgets', () => {
@@ -124,5 +131,67 @@ describe('rolling back to a version with unresolved widgets', () => {
     const buttons = dialog.querySelectorAll('button');
     fireEvent.click(buttons[buttons.length - 1]);
     await waitFor(() => expect(net.ops).toContain('ActivateDashboardVersion'));
+  });
+
+  it('re-serves a version with nothing to report without asking, as before the check existed', async () => {
+    net.definition = JSON.stringify(CLEAN);
+    mount();
+    fireEvent.click(await screen.findByRole('button', { name: /make live/i }));
+    await waitFor(() => expect(net.ops).toContain('ActivateDashboardVersion'));
+    expect(net.ops).toContain('DashboardVersionDefinition');
+    // The drawer is itself a dialog; what must not appear is the confirmation.
+    expect(screen.queryByText(/serve version 1/i)).toBeNull();
+  });
+
+  it('names a widget whose package is installed by the package title, with its type and reason', async () => {
+    net.definition = JSON.stringify({
+      title: 'Plant',
+      widgets: [
+        {
+          id: 'g1',
+          type: 'gauge',
+          // Saved under a settings version the installed gauge does not use.
+          widget: { version: '1.0.0', optionsVersion: 99 },
+          layout: { base: { col: 0, colSpan: 4, row: 0, rowSpan: 3, z: 0 } },
+          options: {},
+        },
+      ],
+    });
+    mount();
+    fireEvent.click((await screen.findAllByRole('button', { name: /roll back/i }))[1]);
+    const warning = await screen.findByTestId('version-unresolved-warning');
+    expect(warning.textContent).toContain('Gauge');
+    expect(warning.textContent).toContain('(gauge)');
+    expect(warning.textContent).toContain('settings version');
+  });
+
+  it('says the check could not run when the version cannot be read, and still rolls back', async () => {
+    net.definitionFails = true;
+    const quiet = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const onRolledBack = mount();
+      fireEvent.click((await screen.findAllByRole('button', { name: /roll back/i }))[1]);
+      expect(await screen.findByTestId('version-unresolved-unchecked')).toBeTruthy();
+      expect(screen.queryByTestId('version-unresolved-warning')).toBeNull();
+      confirmIn(screen.getByRole('dialog'));
+      await waitFor(() => expect(onRolledBack).toHaveBeenCalledTimes(1));
+    } finally {
+      quiet.mockRestore();
+    }
+  });
+
+  it('says the check could not run before re-serving an unreadable version, and goes ahead on confirm', async () => {
+    net.definitionFails = true;
+    const quiet = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      mount();
+      fireEvent.click(await screen.findByRole('button', { name: /make live/i }));
+      expect(await screen.findByTestId('version-unresolved-unchecked')).toBeTruthy();
+      expect(net.ops).not.toContain('ActivateDashboardVersion');
+      confirmIn(screen.getByRole('dialog'));
+      await waitFor(() => expect(net.ops).toContain('ActivateDashboardVersion'));
+    } finally {
+      quiet.mockRestore();
+    }
   });
 });
