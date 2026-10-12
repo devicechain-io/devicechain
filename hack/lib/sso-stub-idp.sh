@@ -194,23 +194,37 @@ sso_stub_trust_and_egress() {
 
   deploy="$(sso_stub_um_deploy)"
   container="$(k -n "$namespace" get "$deploy" -o jsonpath='{.spec.template.spec.containers[0].name}')"
-  k -n "$namespace" patch "$deploy" -p "$(jq -n --arg c "$container" --arg cm "$sso_stub_ca_configmap" '{spec: {template: {spec: {
+  # 🔴 THE PATCH MUST ALWAYS ROLL THE PODS, which is what the stamp is for. The egress
+  # allowance is in the instance config Secret, which a service reads ONLY at startup (there
+  # is no in-place reload), so it takes effect only through a new pod. Without the stamp a
+  # second application -- the upgrade drill's, after an upgrade that rewrote the Secret but
+  # left this out-of-band patch on the Deployment in place -- would be a no-op patch: no
+  # rollout, the running pod keeps a config with no allowance, and the connection is refused
+  # for a reason that has nothing to do with the release. A timestamp, not a hash of what was
+  # applied: the question is whether the RUNNING pod read it, not whether it changed.
+  k -n "$namespace" patch "$deploy" -p "$(jq -n --arg c "$container" --arg cm "$sso_stub_ca_configmap" \
+    --arg stamp "$(date -u +%Y%m%dT%H%M%SZ)-$$-$RANDOM" '{spec: {template: {
+    metadata: {annotations: {"devicechain.io/sso-stub-applied": $stamp}},
+    spec: {
     volumes: [{name: "sso-stub-ca", configMap: {name: $cm}}],
     containers: [{name: $c,
       env: [{name: "SSL_CERT_FILE", value: "/etc/sso-stub-ca/ca.crt"}],
       volumeMounts: [{name: "sso-stub-ca", mountPath: "/etc/sso-stub-ca", readOnly: true}]}]}}}}')" >/dev/null
   k -n "$namespace" rollout status "$deploy" --timeout=240s
 
-  # 🔴 `rollout status` returns when the NEW pod is ready, not when the OLD one is gone, and the
+  # 🔴 `rollout status` returns when the NEW pods are ready, not when the OLD ones are gone, and an
   # old pod keeps answering for its termination grace period -- through the ingress's kept-alive
   # connections -- with neither the trust nor the egress allowance just applied. A request in that
-  # window is refused for a reason the new pod would not give. Wait for the old one to go.
-  local pods="" i
+  # window is refused for a reason a new pod would not give. Wait until only the Deployment's own
+  # replica count of pods remains (bounded: 90 polls, 2 s apart).
+  local pods="" i want
+  want="$(k -n "$namespace" get "$deploy" -o jsonpath='{.spec.replicas}')"
+  [[ "$want" =~ ^[1-9][0-9]*$ ]] || fail "could not read the replica count of $deploy (got '$want')"
   for ((i = 0; i < 90; i++)); do
     pods="$(k -n "$namespace" get pods -o name)"
-    [[ "$(grep -c user-management <<<"$pods" || true)" == 1 ]] && break
+    [[ "$(grep -c user-management <<<"$pods" || true)" == "$want" ]] && break
     sleep 2
   done
-  [[ "$(grep -c user-management <<<"$pods" || true)" == 1 ]] ||
-    fail "user-management still has more than one pod after the rollout, so a request could still reach one without the trust and egress edits: $pods"
+  [[ "$(grep -c user-management <<<"$pods" || true)" == "$want" ]] ||
+    fail "user-management still has more pods than its $want replica(s) after the rollout, so a request could still reach one without the trust and egress edits: $pods"
 }
