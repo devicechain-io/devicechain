@@ -7,6 +7,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"os"
 	"strings"
 	"time"
 )
@@ -20,6 +22,15 @@ func runSeed(ctx context.Context, argv []string) error {
 	fs.StringVar(&receipt, "receipt", "", "path to write the receipt verify will read (required)")
 	fs.StringVar(&baselineDir, "baseline-schemas", "",
 		"a `backend/services` tree from the release being seeded, so entities that release cannot express are skipped instead of refused")
+	var sso ssoOptions
+	fs.StringVar(&sso.issuer, "idp-issuer", "",
+		"https issuer of an identity provider the INSTANCE can reach; seeds a single sign-on connection "+
+			"(admin plane). Without it the connection is skipped by name, and the table sweep then reports "+
+			"the tables it feeds as uncovered")
+	fs.StringVar(&sso.clientID, "idp-client-id", ssoDefaultClientID, "client identifier registered at the --idp-issuer provider")
+	fs.StringVar(&sso.domain, "idp-domain", "",
+		"email domain asserted for the seeded connection (default: one derived from the tenant, under "+ssoDomainSuffix+
+			"; a domain is unique across the instance, so two tenants' seeds must not share one)")
 	deployedFn := bindDeployedAreas(fs)
 	if err := fs.Parse(argv); err != nil {
 		return failWith(exitSetup, "%w", err)
@@ -154,6 +165,17 @@ func runSeed(ctx context.Context, argv []string) error {
 		}
 	}
 
+	// The admin-plane row. Skipped by name, like an entity, when the caller named no
+	// provider or the baseline cannot express it; never silently.
+	entitySkips := len(skipped)
+	adminRows, adminSkipped, err := seedAdminRows(ctx, sso, base, c.tenant, c.adminURL(),
+		func(ctx context.Context) (querier, error) { return c.adminSession(ctx) }, os.Stdout)
+	if err != nil {
+		return err
+	}
+	out.Admin = adminRows
+	skipped = append(skipped, adminSkipped...)
+
 	// A receipt with nothing on it makes verify pass instantly, having checked
 	// nothing. That is the vacuous green this whole rig exists to refuse, and a
 	// baseline filter is the most plausible way to produce one by accident.
@@ -166,16 +188,50 @@ func runSeed(ctx context.Context, argv []string) error {
 	if err := writeReceipt(receipt, out); err != nil {
 		return err
 	}
+	// The entity count is of ENTITIES: the admin-plane row is not one of them, so its
+	// skip must not be subtracted from them, and it is stated on a line of its own.
 	fmt.Printf("\n%d rows from %d of %d entities seeded into tenant %q; receipt at %s\n",
-		len(out.Entities), len(entities)-len(skipped), len(entities), c.tenant, receipt)
-	if len(skipped) > 0 {
+		len(out.Entities), len(entities)-entitySkips, len(entities), c.tenant, receipt)
+	fmt.Printf("%d admin-plane row(s) seeded\n", len(out.Admin))
+	if entitySkips > 0 {
 		// Named, not just counted. "24 of 26" tells a reader how much was
 		// covered; only the names tell them what a green verify says nothing
 		// about.
-		fmt.Printf("skipped, because the baseline at %s cannot express them: %s\n",
-			baselineDir, strings.Join(skipped, ", "))
+		fmt.Printf("skipped, because the baseline at %s cannot express them or their area is not deployed: %s\n",
+			baselineDir, strings.Join(skipped[:entitySkips], ", "))
+	}
+	if len(adminSkipped) > 0 {
+		fmt.Printf("skipped admin-plane row(s), for the reason printed beside each above: %s\n",
+			strings.Join(adminSkipped, ", "))
 	}
 	return nil
+}
+
+// seedAdminRows writes the admin-plane rows (today the single sign-on connection) or
+// names each one skipped, with its reason. The superuser's session is opened only when
+// a row will be written, so a seed with nothing to write there needs no password.
+//
+// Its own function so the decision and the receipt bookkeeping are tested through the
+// code runSeed calls, not a copy of it: a row seeded and then left off the receipt, or a
+// skip left off the skipped list, would both make verify's report claim more than ran.
+func seedAdminRows(ctx context.Context, o ssoOptions, base *baseline, tenant, adminURL string,
+	session func(context.Context) (querier, error), w io.Writer,
+) ([]Recorded, []string, error) {
+	ok, why := o.willSeed(base)
+	if !ok {
+		fmt.Fprintf(w, "  skipped %-26s %s\n", ssoRowName, why)
+		return nil, []string{ssoRowName}, nil
+	}
+	admin, err := session(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	row, err := seedConnection(ctx, admin, adminURL, tenant, o)
+	if err != nil {
+		return nil, nil, err
+	}
+	fmt.Fprintf(w, "  seeded  %-26s %s\n", row.Name, row.Token)
+	return []Recorded{row}, nil, nil
 }
 
 // createdObjects unwraps a create response into the objects it actually made:
