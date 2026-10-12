@@ -48,12 +48,14 @@ The platform broker is the MQTT server built into NATS. An MQTT topic and the NA
 | [Event](#device-event) | device → platform | `{instanceId}/{tenant}/devices/{deviceToken}/events` | `{instanceId}.{tenant}.devices.{deviceToken}.events` |
 | [Command delivery](#command-delivery) | platform → device | `{instanceId}/{tenant}/device-commands/{deviceToken}` | `{instanceId}.{tenant}.device-commands.{deviceToken}` |
 | [Command response](#command-response) | device → platform | `{instanceId}/{tenant}/command-responses/{deviceToken}` | `{instanceId}.{tenant}.command-responses.{deviceToken}` |
+| [Configuration](../guides/connecting-a-device.md#reserved-device-topics) and [update](../guides/connecting-a-device.md#over-the-air-updates) messages | platform → device | `{instanceId}/{tenant}/device-desired/{deviceToken}` | `{instanceId}.{tenant}.device-desired.{deviceToken}` |
+| Configuration and update reports | device → platform | `{instanceId}/{tenant}/device-reports/{deviceToken}` | `{instanceId}.{tenant}.device-reports.{deviceToken}` |
 
 - A device is authorized to publish and subscribe only on the topics carrying **its own** device token. It cannot read another device's commands or publish as another device.
 - **Devices connect over MQTT, not raw NATS.** A device credential authorizes an MQTT connection only: a plain NATS client presenting one is refused at connect. The subject column is what an operator sees in NATS tooling, not a second way in. Connection settings (the client id, the `{tenant}:{credentialId}` username, TLS) are in [Connection settings](../guides/connecting-a-device.md#connection-settings).
 - Publish events at QoS 0, or at QoS 1 with an [`altId`](#device-event). QoS 2 publishes are refused by default and the broker closes the connection; see [Quality of service](../guides/connecting-a-device.md#quality-of-service).
 
-Over **HTTP**, a device can send events only. `POST` the same [event body](#device-event) to `/{instanceId}/{tenant}/events` on the `event-sources` service (port 8081). There is no HTTP downlink: an HTTP-only device cannot receive commands.
+Over **HTTP**, a device can send events only. `POST` the same [event body](#device-event) to `/{instanceId}/{tenant}/events` on the `event-sources` service (port 8081). There is no HTTP downlink: an HTTP-only device cannot receive commands, configuration or update assignments.
 
 ## Device event {#device-event}
 

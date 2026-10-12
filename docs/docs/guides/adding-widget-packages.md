@@ -73,7 +73,8 @@ Deploy every application together. A dashboard authored in the console with your
 placeholder in a `/dash` or replay build that does not include the package.
 
 If the composition is invalid, for example two packages claim the same id or a descriptor is
-malformed, the registry throws one error listing every fault and the application fails as it loads, so
+malformed, the registry throws one error listing every fault the first time the application builds it (when a
+dashboard is first opened or edited), so
 a broken package shows up in the build you test rather than one widget at a time in production.
 
 This list is trusted code compiled into the application. It is not a runtime installer, and a

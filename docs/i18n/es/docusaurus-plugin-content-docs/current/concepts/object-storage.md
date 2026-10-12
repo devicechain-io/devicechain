@@ -4,14 +4,14 @@ title: Almacenamiento de objetos
 
 # Almacenamiento de objetos
 
-Algunas cosas que guarda una plataforma no son ni filas ni puntos de series temporales: hoy, el **logo** de un inquilino y, más adelante, los paquetes de firmware. Son activos binarios opacos y no tienen cabida en la base de datos relacional. DeviceChain los guarda en un **almacén de objetos pluggable**: una sola interfaz en la biblioteca core compartida, con backends de almacenamiento que eliges por configuración.
+Algunas cosas que guarda una plataforma no son ni filas ni puntos de series temporales: el **logo** de un inquilino, o una imagen de firmware para una actualización over-the-air. Son activos binarios opacos y no tienen cabida en la base de datos relacional. DeviceChain los guarda en un **almacén de objetos pluggable**: una sola interfaz en la biblioteca core compartida, con backends de almacenamiento que eliges por configuración.
 
 El almacén de objetos es el hermano del [almacén de secretos encriptado](./architecture.md#secret-handling) y sigue el mismo diseño: una interfaz, muchos backends y una configuración tipada que rechaza en el arranque un backend desconocido o inválido en lugar de ignorarlo en silencio. La división de responsabilidades entre ambos es estricta. El almacén de objetos guarda solo activos binarios **no secretos**; las credenciales y demás secretos viven únicamente en el almacén de secretos con encriptación de sobre (envelope encryption), nunca aquí.
 
 :::note Estado
-**Disponible hoy:** la interfaz del almacén de objetos con dos backends, **filesystem** (el predeterminado) y **compatible con S3** (AWS S3 o MinIO) como reemplazo directo. El primer consumidor es el **white-labeling de inquilino** (logos de marca por inquilino).
+**Disponible hoy:** la interfaz del almacén de objetos con dos backends, **filesystem** (el predeterminado) y **compatible con S3** (AWS S3 o MinIO) como reemplazo directo. Sus consumidores son el **white-labeling de inquilino** (logos de marca por inquilino) y las **[actualizaciones over-the-air](./over-the-air-updates.md)** (artefactos de actualización).
 
-**Planificado:** un backend de Google Cloud Storage; imágenes de marca más grandes, como fondos de inicio de sesión; paquetes de firmware/OTA y exportaciones de datos de inquilino, todo detrás de la misma interfaz. Este repositorio es la fuente de verdad de lo que se construye actualmente.
+**Planificado:** un backend de Google Cloud Storage; imágenes de marca más grandes, como fondos de inicio de sesión; exportaciones de datos de inquilino, todo detrás de la misma interfaz. Este repositorio es la fuente de verdad de lo que se construye actualmente.
 :::
 
 ## Una interfaz, muchos backends {#one-seam-many-backends}
@@ -37,7 +37,7 @@ Las claves de objeto llevan **prefijo de instancia y de inquilino**, de modo que
 
 | Dato | Dónde vive |
 |---|---|
-| Logos de marca hoy; paquetes de firmware y otros activos binarios a medida que lleguen | **Almacén de objetos** (esta página) |
+| Logos de marca, artefactos de actualización over-the-air y otros activos binarios a medida que lleguen | **Almacén de objetos** (esta página) |
 | Contraseñas SMTP, tokens de webhook, credenciales de conectores | [Almacén de secretos encriptado](./architecture.md#secret-handling): encriptación de sobre, solo escritura, resuelto por handle |
 | Telemetría y eventos de dispositivo | Hypertables de TimescaleDB, vía [event-management](./architecture.md#components) |
 | Entidades (dispositivos, perfiles, paneles, …) | La base de datos relacional |
@@ -50,7 +50,7 @@ El filesystem predeterminado solo necesita un **volumen persistente**. Establece
 
 Seleccionar el backend S3 es un cambio de configuración en la instancia. El endpoint y el bucket son configuración no secreta. La credencial de acceso se resuelve desde la cadena de credenciales del despliegue: por ejemplo, variables de entorno a partir del Secret de Kubernetes de la instancia, o la identidad de carga de trabajo en un clúster en la nube. La credencial necesita `s3:GetObject`, `s3:PutObject` y `s3:DeleteObject` sobre los objetos del bucket y `s3:ListBucket` sobre el bucket: este último permite que el borrado de un inquilino eliminado encuentre y quite todos los objetos bajo su prefijo.
 
-Como toda superficie de configuración de DeviceChain, la configuración del almacén de objetos es tipada y estricta: un nombre de backend mal escrito es un error de arranque, no un fallback silencioso. Un backend filesystem sin directorio se trata como "almacén de objetos no configurado". El servicio arranca igualmente, los endpoints de subida y lectura del logo devuelven **503**, y los logos en línea y por URL siguen funcionando.
+Como toda superficie de configuración de DeviceChain, la configuración del almacén de objetos es tipada y estricta: un nombre de backend mal escrito es un error de arranque, no un fallback silencioso. Un backend filesystem sin directorio se trata como "almacén de objetos no configurado". Los servicios arrancan igualmente, los endpoints de subida y lectura del logo devuelven **503**, los logos en línea y por URL siguen funcionando, y declarar un artefacto de actualización se rechaza con `OBJECT_STORE_NOT_CONFIGURED`.
 
 En una instancia creada con `dcctl`, nada de esto se escribe a mano: `dcctl bootstrap` elige el almacén con `--object-store` (por defecto, un pequeño volumen de sistema de archivos en un clúster local, o un bucket de S3 con las credenciales tomadas de un Secret existente) y lo registra en la instancia. Consulta [el almacén de objetos](../deployment/bootstrap.md#object-store).
 
@@ -58,7 +58,7 @@ En una instancia creada con `dcctl`, nada de esto se escribe a mano: `dcctl boot
 
 El white-labeling de inquilino es la primera funcionalidad construida sobre el almacén de objetos. El logo de un inquilino se sube al almacén y se referencia por handle desde la configuración de marca del inquilino. Los activos muy pequeños aún pueden suministrarse en línea (un data-URI acotado) en despliegues sin almacenamiento configurado, pero los activos de imagen reales pasan por el almacén. El campo `background` del registro de marca es un color hexadecimal, no una imagen.
 
-La distribución de firmware/OTA, el caso principal de binarios grandes, está planificada sobre la misma interfaz.
+El segundo consumidor son las [actualizaciones over-the-air](./over-the-air-updates.md). El contenido de cada artefacto de actualización se guarda aquí: entra en streaming al subirse, se verifica contra el tamaño y el digest declarados, y se sirve a los dispositivos mediante una concesión de descarga de corta duración. En el backend S3 una subida se almacena en memoria, así que allí los artefactos están limitados a 64 MiB.
 
 ## Relacionado
 

@@ -29,7 +29,7 @@ El formato de definición y el renderizador incluyen una caja por punto de quieb
 
 ## Widgets
 
-Los widgets integrados abarcan cinco canales: telemetría, alarma, control, selección y ubicación. El gráfico de series temporales y el medidor se renderizan sobre [Apache ECharts](https://echarts.apache.org/), y el mapa sobre [MapLibre GL](https://maplibre.org/). El resto son DOM simple.
+Los widgets integrados abarcan seis canales: telemetría, estático (sin datos), alarma, control, selección y ubicación. El gráfico de series temporales y el medidor se renderizan sobre [Apache ECharts](https://echarts.apache.org/), y el mapa sobre [MapLibre GL](https://maplibre.org/). El resto son DOM simple.
 
 | Widget | Canal | Muestra |
 |---|---|---|
@@ -37,8 +37,8 @@ Los widgets integrados abarcan cinco canales: telemetría, alarma, control, sele
 | **Medidor (gauge)** | telemetría | un único valor más reciente frente a un rango / umbrales |
 | **Tarjeta de último valor** | telemetría | una sola lectura actual con su marca de tiempo |
 | **Tabla** | telemetría | filas recientes de un dispositivo o ancla |
-| **Etiqueta** | telemetría | texto estático |
-| **Imagen** | telemetría | una imagen estática (p. ej., un plano de planta detrás de otros widgets) |
+| **Etiqueta** | estático | texto estático |
+| **Imagen** | estático | una imagen estática (p. ej., un plano de planta detrás de otros widgets) |
 | **Tabla de alarmas** | alarma | alarmas en vivo de un dispositivo o ancla |
 | **Conteo de alarmas** | alarma | un recuento agregado de alarmas abiertas |
 | **Comando / control** | control | un formulario de parámetros tipado que despacha un comando y muestra en vivo su ciclo de vida de entrega |
@@ -79,7 +79,7 @@ Otros dos tipos, `devices` y `relatedTraversal`, están reservados para que una 
 
 Los selectores se resuelven a través del SDK de cliente contra la API GraphQL. Eso hace que la resolución sea:
 
-- **en vivo** — un dispositivo recién asignado a un área aparece en el panel de esa área sin editarlo;
+- **actual** — un dispositivo recién asignado a un área aparece en el panel de esa área sin editarlo, la próxima vez que se abre el panel (un panel ya abierto conserva los miembros que resolvió hasta que se recarga);
 - **verificada por permisos** — usa el propio acceso autenticado a la API, con alcance de inquilino, de quien lo solicita.
 
 Cómo llegan los valores en vivo depende del canal:

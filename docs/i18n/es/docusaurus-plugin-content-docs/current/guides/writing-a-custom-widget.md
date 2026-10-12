@@ -126,8 +126,9 @@ valida las opciones almacenadas contra el esquema, y la consola genera su formul
 partir de él.
 
 Lee las opciones de forma defensiva con los ayudantes del SDK `optString`, `optNumber` y
-`optBoolean`. Devuelven `undefined` ante un valor editado a mano del tipo equivocado en lugar de
-lanzar una excepción.
+`optBoolean`. Ante un valor editado a mano del tipo equivocado no lanzan
+una excepción: `optString` y `optNumber` devuelven `undefined`, y `optBoolean` devuelve `false`
+para cualquier cosa que no sea un `true` almacenado.
 
 ### Etiquetas y textos de ayuda {#labels-and-help-text}
 

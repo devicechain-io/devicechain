@@ -616,7 +616,9 @@ vez. Lo que el almacén clave-valor no puede responder se lee de la base de dato
 tras otra, así que un resolvedor sigue ocupando como máximo una conexión a la base de datos. Un
 resolvedor pasa la mayor parte de cada evento esperando respuestas, no usando CPU. Varios resolvedores trabajan a la
 vez. Los eventos que llegan mientras todos están ocupados esperan delante de ellos, en orden: hasta
-100 en la cola de entrega del pod y hasta 64 más en el último lote leído del flujo. El resto espera
+100 en la cola de entrega del pod y, detrás de ellos, los lotes leídos del flujo: hasta 128 en el
+lote que se está entregando y, con la [lectura anticipada](#fetch-ahead) activada, hasta 128 más
+en el lote pedido por adelantado. El resto espera
 en el flujo.
 
 | Métrica | Qué indica |

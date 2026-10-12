@@ -83,10 +83,10 @@ llamador. Algunas autoridades no coinciden con la intuición:
 `sparkplug-ingest` y `lwm2m-ingest` no sirven GraphQL en absoluto y se mantienen deliberadamente
 fuera del router `/api`. `event-sources` sí está enrutado, pero responde con un esquema marcador de
 posición: la ingesta llega a él por los transportes del plano de dispositivo, no por esta API.
-`update-management` también está enrutado: su API es el catálogo de artefactos (declarar,
-consultar y retirar artefactos de actualización) y la asignación de un artefacto disponible a un
+`update-management` también está enrutado: su API es el catálogo de artefactos (`createArtifact`,
+`artifact`, `artifacts`, `retireArtifact`) y la asignación de un artefacto disponible a un
 dispositivo (`assignArtifact`, `cancelUpdate`, `updateAssignment`, `updateAssignments`). Una asignación
-lleva un intento de actualización cuyo estado pasa de `QUEUED` por `DOWNLOADING`, `VERIFIED`, `UPDATING`
+lleva un intento de actualización cuyo estado pasa de `QUEUED` por `INITIATED`, `DOWNLOADING`, `DOWNLOADED`, `VERIFIED`, `UPDATING`
 y `REBOOTING` hasta `UPDATED`, o a `FAILED`, `TIMED_OUT`, `UNKNOWN` o `CANCELLED`; `UPDATED` solo se alcanza
 cuando el dispositivo informa de que la versión de destino está en ejecución, con un nuevo arranque cuando
 la actualización lo requiere. Asignar un artefacto que nada ha autenticado se rechaza salvo que la instancia
@@ -94,7 +94,7 @@ active `updates.allowUnverifiedArtifacts`, valor que se muestra en `updateManage
 instalación o el reinicio) bloquea una nueva asignación de ese componente hasta que el dispositivo informe de lo que ejecuta;
 si nunca lo hará, `abandonUnknownUpdate(assignmentToken, reason)` la cierra como `CANCELLED` con su motivo registrado,
 deja constancia del cambio a su nombre y avisa al dispositivo. No averigua qué ejecuta el dispositivo, que puede estar en
-cualquiera de las dos versiones, así que compruebe su inventario antes de dar por buena una u otra. El contenido del artefacto no viaja por GraphQL:
+cualquiera de las dos versiones, así que compruebe su inventario antes de dar por buena una u otra. [Actualizaciones over-the-air](../concepts/over-the-air-updates.md) describe el ciclo de vida y los ajustes. El contenido del artefacto no viaja por GraphQL:
 se sube con `PUT /api/update-management/updates/artifacts/{token}/content`, autenticado con un token
 de acceso del inquilino que tenga `artifact:write`. El chart da a esa ruta un Ingress propio, con el límite de cuerpo de petición fijado por
 `ingress.uploadMaxBodySize` (por defecto `1g`) y el almacenamiento en búfer de la petición desactivado. Con
@@ -720,7 +720,7 @@ la API todavía se refiere al registro. Infórmalo con la hora de la solicitud; 
 qué referencia la rechazó.
 
 Una escritura que nombra un registro que no existe la rechaza normalmente la búsqueda propia del
-servicio antes de la escritura, con un mensaje que nombra el token y sin código. Solo lleva
+servicio antes de la escritura, con [`NOT_FOUND`](#not-found) y no con este código. Solo lleva
 `REFERENCE_VIOLATION` cuando ese registro se eliminó mientras la escritura se ejecutaba.
 
 `INVALID_VALUE` significa que un valor de la solicitud no está permitido en el registro y el
@@ -736,6 +736,25 @@ Ninguno de los dos códigos es `CONFLICT`, así que el código que trata `CONFLI
 ya existe" no los trata como un éxito. Un rechazo en el que intervienen a la vez un valor que debe
 ser único y uno de estos lleva `REFERENCE_VIOLATION` o `INVALID_VALUE`, nunca `CONFLICT`, y su
 mensaje usa la frase de ese código en lugar de la de un valor que ya está en uso.
+
+### Un registro que no existe {#not-found}
+
+Una operación que se rechaza porque el registro que nombra no existe, o no existe en tu tenant,
+lleva `extensions.code` con el valor `NOT_FOUND`:
+
+```json
+{
+  "errors": [{
+    "message": "record not found",
+    "path": ["cancelCommandBatch"],
+    "extensions": { "code": "NOT_FOUND" }
+  }]
+}
+```
+
+Decide según el código, no según el mensaje, al que un servicio puede anteponer lo que estaba
+haciendo. Algunas operaciones responden a un registro que falta con un código propio que dice qué
+falta, como `ARTIFACT_NOT_FOUND`, y esas conservan su propio código.
 
 ## Límites de las solicitudes {#request-limits}
 

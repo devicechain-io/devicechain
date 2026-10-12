@@ -33,7 +33,7 @@ tools is missing. A gap costs you the first ten seconds rather than ten minutes.
 - Kubernetes **1.29 or newer**, either way. Older versions are refused, because the database
   charts refuse them.
 
-`dcctl preflight local` runs exactly these checks without bootstrapping anything. The
+`dcctl preflight local` runs the same checks, and those of your Docker engine, kernel limits, disk and ports, without bootstrapping anything. The
 [bootstrap guide](../deployment/bootstrap.md#prerequisites) has the detail.
 
 The commands below assume the instance is reachable at `localhost` over plain HTTP, which is what

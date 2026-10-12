@@ -62,6 +62,10 @@
       "sourceSha256": "1ba29dfe2911de7ad5e883661f3a98beea5bfdac0f3ded4a5dcecc9fe6c8e0de",
       "translationSha256": "12adcdfb098a473cf02eaa5e52d8be48f233f62d9bd16fb7bd9c3c6ec03f9f41"
     },
+    "concepts/over-the-air-updates.md": {
+      "sourceSha256": "934af0f96162cababb46b23280799a0238a4e766c382c4cd5e1cb44b3007a268",
+      "translationSha256": "ff7ce7142c62817d2071f5a4eddae8306e6df37ad5e7c2c4c6e455a773c1e67f"
+    },
     "concepts/single-sign-on.md": {
       "sourceSha256": "e31ba494aa05050918005edc2ddfe9635841b4a83f94f69abf15c037c92a907e",
       "translationSha256": "9e3e7d4879c652f45a66d70fd2872bc4d89652fd408a1fadf272e99e13011208"

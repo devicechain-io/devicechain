@@ -84,7 +84,9 @@ que un cambio de estado llegó a la base de datos pero no al bus: léelos con `d
 | `alarm_event_dead_lettered_total` | Eventos de cambio de estado de alarma que no se pudieron publicar en el flujo de eventos de alarma y se escribieron en el flujo de mensajes no entregados. Cada uno es una transición de alarma que llegó a la base de datos pero no al bus, así que nadie recibió aviso de ella: queda visible para un operador y no solo registrada en el log. |
 | `callout_in_flight` | Solicitudes de auth-callout de dispositivos que se están autorizando ahora mismo. |
 | `callout_refused_busy_total` | Solicitudes de auth-callout de dispositivos rechazadas con la denegación genérica porque se alcanzó la cota de solicitudes en curso. |
+| `config_reports_rejected_total{reason}` | Mensajes del [topic device-reports](../guides/connecting-a-device.md#reserved-device-topics) que device-management rechazó: `malformed` (no se pudo decodificar), `throttled` (un sync dentro del periodo de espera por dispositivo), `unattributable` (sin inquilino ni dispositivo en el topic), `unknown_device`, `unknown_revision`, `digest_mismatch` y `stale` (más antiguo que lo registrado). Una tasa constante desde una flota es un fallo del lado del dispositivo. |
 | `credential_misconfigured_total{path}` | Comprobaciones de credenciales de dispositivos rechazadas porque el secreto almacenado nunca puede coincidir: no hay ninguno almacenado, o su resumen se hizo con una clave distinta de la que deriva la clave raíz de esta instancia (lo más probable, una base de datos restaurada junto a la clave raíz equivocada). path="connect" es el auth callout de MQTT, path="event" la comprobación por evento. Las contraseñas incorrectas no se cuentan aquí. |
+| `device_reports_dead_lettered_total` | Mensajes de dispositivo escritos en el flujo de mensajes fallidos porque no se pudieron entender o nombraban una revisión de configuración que el dispositivo no tiene. Léelos con `dcctl dead-letters`. |
 | `geofence_set_publish_failures_total` | Manifiestos de conjuntos de geocercas que no se pudieron publicar: un error de serialización, un rechazo del broker o un fallo de transporte. Cada uno significa que no se avisó a event-processing de una edición de geocercas, así que la contención de ese inquilino conserva su conjunto de geocercas anterior hasta que una pasada de reconciliación lo repare. Una tasa sostenida distinta de cero significa que las ediciones de geocercas no están llegando al motor de detección. |
 | `raise_alarm_dead_lettered_total` | Aristas de raise-alarm escritas en el flujo de mensajes no entregados tras fallar todos los intentos de aplicarlas, de modo que una alarma que debía haberse levantado o despejado queda visible en lugar de solo registrada en el log. |
 | `resolve_event_time_bounded_total` | Horas de evento informadas rechazadas por adelantarse al reloj del servidor más de la tolerancia configurada, y sustituidas por la última hora que permite la tolerancia. |
@@ -268,6 +270,22 @@ Estos cuentan el consumidor de mensajes no entregados, que guarda un fallo del q
 | `dead_letters_stored_total` | Mensajes no entregados escritos en el almacén consultable, de modo que un fallo del que un consumidor se rindió sobrevive a la propia ventana de siete días del flujo. |
 | `dead_letters_unstorable_total` | Mensajes no entregados que este consumidor no pudo interpretar: sin inquilino interpretable, o un cuerpo que no es un sobre. Se CONFIRMAN y se cuentan en lugar de reintentarse, porque ninguna reentrega hace que un mensaje malformado se pueda interpretar. |
 | `dead_letters_unstored_total` | Mensajes no entregados que agotaron todos los intentos de entrega sin almacenarse: el almacén estuvo inalcanzable durante más tiempo del que duran los reintentos. El fallo que describían ya no queda registrado en ningún lugar, que es justo lo que este consumidor existe para evitar. |
+
+## Update management {#update-management}
+
+Prefijo: `devicechain_updatemanagement_`. El servicio es opcional; consulta [Actualizaciones over-the-air](../concepts/over-the-air-updates.md).
+
+Si sube `update_download_grants_total{result="not_configured"}`, `updates.downloadBaseUrl` no está definido y ningún dispositivo puede descargar. `update_attempts_expired_total` cuenta los dispositivos que callaron durante una actualización; uno en `UNKNOWN` espera el inventario del dispositivo o un `abandonUnknownUpdate` de un operador.
+
+| Métrica | Significado |
+| --- | --- |
+| `update_attempts_expired_total{state}` | Intentos de actualización que el barrido de plazos movió porque el dispositivo calló: `TIMED_OUT` antes de que se informara del inicio de la instalación, `UNKNOWN` durante la instalación o el reinicio. |
+| `update_desired_publish_failures_total` | Asignaciones de actualización, concesiones de descarga y cancelaciones que no se pudieron poner en el topic desired de un dispositivo. El dispositivo recoge el estado en su siguiente sync. |
+| `update_download_bytes_total` | Bytes de artefactos enviados a los dispositivos. |
+| `update_download_grants_total{result}` | Concesiones de descarga pedidas por dispositivos, por resultado: `granted`, o el motivo de no concederla (`unknown_assignment`, `superseded`, `finished`, `cancel_requested`, `artifact_unavailable`, `not_configured`, `error`). |
+| `update_downloads_total{result}` | Peticiones de descarga de artefactos, por resultado: `served`, `aborted` (el cliente se fue o el objeto no se pudo leer a mitad), o el motivo del rechazo antes de servir ningún byte (`capability_malformed`, `capability_invalid`, `capability_expired`, `stale`, `gone`, `range_not_satisfiable`, `busy`, `error`). Una tasa creciente de `capability_invalid` es alguien adivinando. |
+| `update_reports_rejected_total{reason}` | Mensajes de dispositivo que update-management rechazó antes de aplicarlos: `malformed`, `unattributable` y `throttled`. |
+| `update_reports_total{verdict}` | Informes de progreso e inventario de actualizaciones, por el veredicto de la máquina de estados: `APPLIED`, o el motivo de no aplicarlo (`DUPLICATE`, `STALE_ATTEMPT`, `DIGEST_MISMATCH`, `WRONG_COMPONENT`, `REGRESSION`, `UNCONFIRMED`, `NOT_CANCELLABLE`, `LATE`, `CONFLICT`, `INVALID_ATTEMPT`, `WRONG_KIND`, `UNKNOWN_ASSIGNMENT`). Una tasa creciente de no aplicados desde una flota es un fallo del lado del dispositivo. |
 
 ## Todos los servicios {#every-service}
 

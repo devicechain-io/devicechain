@@ -78,9 +78,9 @@ authorities do not line up with intuition:
 `sparkplug-ingest` and `lwm2m-ingest` serve no GraphQL at all and are deliberately kept off the
 `/api` router entirely. `event-sources` is routed but answers with a placeholder schema: ingest
 reaches it over the device-plane transports, not this API. `update-management` is routed too: its API is the artifact
-catalogue (declare, inspect and retire update artifacts) and the assignment of an available artifact to a
+catalogue (`createArtifact`, `artifact`, `artifacts`, `retireArtifact`) and the assignment of an available artifact to a
 device (`assignArtifact`, `cancelUpdate`, `updateAssignment`, `updateAssignments`). An assignment carries
-an update attempt whose state moves from `QUEUED` through `DOWNLOADING`, `VERIFIED`, `UPDATING` and
+an update attempt whose state moves from `QUEUED` through `INITIATED`, `DOWNLOADING`, `DOWNLOADED`, `VERIFIED`, `UPDATING` and
 `REBOOTING` to `UPDATED`, or to `FAILED`, `TIMED_OUT`, `UNKNOWN` or `CANCELLED`; `UPDATED` is reached only
 when the device reports the target version running, on a new boot when the update needs a reboot. Assigning
 an artifact that nothing has authenticated is refused unless the instance sets
@@ -89,7 +89,7 @@ an artifact that nothing has authenticated is refused unless the instance sets
 device reports what it runs; if it never will, `abandonUnknownUpdate(assignmentToken, reason)` ends the update
 as `CANCELLED` with your reason recorded, journals the change under your name, and tells the device. It does not
 find out what the device runs, which may be either version, so check its inventory before relying on either.
-The artifact content itself is not sent
+[Over-the-air updates](../concepts/over-the-air-updates.md) describes the lifecycle and the settings. The artifact content itself is not sent
 through GraphQL: it is uploaded with `PUT /api/update-management/updates/artifacts/{token}/content`,
 authenticated with a tenant access token that holds `artifact:write`. The chart gives that route an Ingress of its own, with the request-body limit set by
 `ingress.uploadMaxBodySize` (default `1g`) and request buffering turned off. Behind any other ingress
@@ -679,8 +679,8 @@ something you cannot see through the API still refers to the record. Report it w
 the request; the server logs which reference refused it.
 
 A write that names a record that does not exist is normally refused by the service's own lookup
-before the write, with a message naming the token and no code. It carries `REFERENCE_VIOLATION`
-only when that record was removed while the write ran.
+before the write, with [`NOT_FOUND`](#not-found) rather than with this code. It carries
+`REFERENCE_VIOLATION` only when that record was removed while the write ran.
 
 `INVALID_VALUE` means a value in the request is one the record does not allow, and the service did
 not catch it before the write. The message is:
@@ -695,6 +695,25 @@ treats `CONFLICT` as "the record already exists" does not treat them as success.
 involves both a value that must be unique and one of these carries `REFERENCE_VIOLATION` or
 `INVALID_VALUE`, never `CONFLICT`, and its message uses that code's sentence in place of the one for
 a value already in use.
+
+### A record that does not exist {#not-found}
+
+An operation refused because the record it names does not exist, or does not exist in your tenant,
+carries `extensions.code` set to `NOT_FOUND`:
+
+```json
+{
+  "errors": [{
+    "message": "record not found",
+    "path": ["cancelCommandBatch"],
+    "extensions": { "code": "NOT_FOUND" }
+  }]
+}
+```
+
+Branch on the code, not on the message, which a service may prefix with what it was doing. A few
+operations answer a missing record with a code of their own that says what is missing, such as
+`ARTIFACT_NOT_FOUND`, and those keep their own code.
 
 ## Request limits {#request-limits}
 

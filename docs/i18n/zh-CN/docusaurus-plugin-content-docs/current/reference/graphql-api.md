@@ -71,7 +71,7 @@ Ingress 将 `/api/<area>/graphql` 路由到各功能区服务，并移除前缀�
 
 `sparkplug-ingest` 和 `lwm2m-ingest` 完全不提供 GraphQL，且有意不进入 `/api` 路由。
 `event-sources` 虽有路由，但只返回占位 Schema；设备通过传输协议接入它，而不是通过该 API。
-`update-management` 同样有路由：其 API 是制品目录（声明、查看和停用更新制品），以及将可用制品分配给设备（`assignArtifact`、`cancelUpdate`、`updateAssignment`、`updateAssignments`）。每个分配带有一次更新尝试，其状态从 `QUEUED` 经 `DOWNLOADING`、`VERIFIED`、`UPDATING`、`REBOOTING` 到 `UPDATED`，或进入 `FAILED`、`TIMED_OUT`、`UNKNOWN`、`CANCELLED`；只有当设备报告目标版本正在运行（更新需要重启时还须是新的一次启动）时才会到达 `UPDATED`。分配一个尚无任何机制验证其来源的制品会被拒绝，除非实例设置了 `updates.allowUnverifiedArtifacts`，该值会显示在 `updateManagementInfo` 中。停在 `UNKNOWN`（设备在安装或重启期间不再出声）的更新会阻止该组件的新分配，直到设备报告它正在运行什么；如果它永远不会报告，可用 `abandonUnknownUpdate(assignmentToken, reason)` 将该更新以 `CANCELLED` 结束，并记录你填写的原因、以你的名义写入审计日志，同时通知设备。它不会查明设备实际运行什么，设备可能处于任一版本，因此在依赖任何一方之前请先查看设备的清单。制品内容本身不通过 GraphQL 传输，而是使用 `PUT /api/update-management/updates/artifacts/{token}/content` 上传，需携带具有 `artifact:write` 权限的租户访问令牌。该 Chart 会为这条路由单独创建一个 Ingress，请求体大小限制由 `ingress.uploadMaxBodySize`（默认 `1g`）设定，并关闭请求缓冲。使用其他 Ingress 控制器时，请在该路径上设置同样两项：对 ingress-nginx，将 `nginx.ingress.kubernetes.io/proxy-body-size` 设为不小于你最大的制品，并设置 `nginx.ingress.kubernetes.io/proxy-request-buffering: "off"`。缺少后者时，nginx 会先把整个请求体读入磁盘，服务才能看到请求，因此直到整个镜像到达之后才会校验令牌。
+`update-management` 同样有路由：其 API 是制品目录（`createArtifact`、`artifact`、`artifacts`、`retireArtifact`），以及将可用制品分配给设备（`assignArtifact`、`cancelUpdate`、`updateAssignment`、`updateAssignments`）。每个分配带有一次更新尝试，其状态从 `QUEUED` 经 `INITIATED`、`DOWNLOADING`、`DOWNLOADED`、`VERIFIED`、`UPDATING`、`REBOOTING` 到 `UPDATED`，或进入 `FAILED`、`TIMED_OUT`、`UNKNOWN`、`CANCELLED`；只有当设备报告目标版本正在运行（更新需要重启时还须是新的一次启动）时才会到达 `UPDATED`。分配一个尚无任何机制验证其来源的制品会被拒绝，除非实例设置了 `updates.allowUnverifiedArtifacts`，该值会显示在 `updateManagementInfo` 中。停在 `UNKNOWN`（设备在安装或重启期间不再出声）的更新会阻止该组件的新分配，直到设备报告它正在运行什么；如果它永远不会报告，可用 `abandonUnknownUpdate(assignmentToken, reason)` 将该更新以 `CANCELLED` 结束，并记录你填写的原因、以你的名义写入审计日志，同时通知设备。它不会查明设备实际运行什么，设备可能处于任一版本，因此在依赖任何一方之前请先查看设备的清单。[空中（OTA）更新](../concepts/over-the-air-updates.md)介绍了其生命周期和设置。制品内容本身不通过 GraphQL 传输，而是使用 `PUT /api/update-management/updates/artifacts/{token}/content` 上传，需携带具有 `artifact:write` 权限的租户访问令牌。该 Chart 会为这条路由单独创建一个 Ingress，请求体大小限制由 `ingress.uploadMaxBodySize`（默认 `1g`）设定，并关闭请求缓冲。使用其他 Ingress 控制器时，请在该路径上设置同样两项：对 ingress-nginx，将 `nginx.ingress.kubernetes.io/proxy-body-size` 设为不小于你最大的制品，并设置 `nginx.ingress.kubernetes.io/proxy-request-buffering: "off"`。缺少后者时，nginx 会先把整个请求体读入磁盘，服务才能看到请求，因此直到整个镜像到达之后才会校验令牌。
 
 设备通过 `GET /api/update-management/updates/download/{artifact}?cap=...` 获取已分配的制品。该请求不携带任何租户凭据：`cap` 是平台通过设备已认证的 MQTT 会话发给它的一项授权，只针对某个分配下的一个设备、一个制品，并在十五分钟内过期。需要更多时间的设备可再次请求，得到同一制品的新授权。由于 `cap` 位于查询字符串中，该 Chart 会为这条路由单独创建一个关闭 ingress-nginx 访问日志的 Ingress；使用其他 Ingress 控制器时，请确保 `/api/update-management/updates/download/` 的查询字符串不会写入访问日志。该端点对 `Range` 请求返回 `206`，因此中断的下载可从中断处继续；在读取制品的任何内容之前，它就会拒绝伪造、已过期或已不再有效的授权。请将 `updates.downloadBaseUrl` 设为设备访问该服务所用的公开 URL（例如 `https://<ingress 主机>/api/update-management`）；未设置时，任何设备都无法获得授权。
 
@@ -563,7 +563,7 @@ token 会拼入基础设施命名空间：租户 ID 成为 NATS subject 中按 `
 如果相同请求持续收到此响应，说明 API 中看不到的内容仍引用该记录。
 请附上请求时间报告，服务器日志会记录导致拒绝的引用。
 
-指定不存在记录的写入，通常在写入前被服务查询拒绝，消息指出 token，但没有代码。
+指定不存在记录的写入，通常在写入前被服务查询拒绝，携带 [`NOT_FOUND`](#not-found) 而不是此代码。
 只有该记录在写入进行期间被删除时，才携带 `REFERENCE_VIOLATION`。
 
 `INVALID_VALUE` 表示请求包含记录不允许的值，而服务未在写入前发现。消息为：
@@ -576,6 +576,23 @@ token 会拼入基础设施命名空间：租户 ID 成为 NATS subject 中按 `
 两种代码都不是 `CONFLICT`，所以把 `CONFLICT` 当作“记录已存在”的代码不会把它们当作成功。
 同时涉及唯一值和其中一种问题的拒绝，会携带 `REFERENCE_VIOLATION` 或 `INVALID_VALUE`，绝不携带 `CONFLICT`，
 消息使用对应代码的句子，而非值已占用的句子。
+
+### 记录不存在 {#not-found}
+
+因所指定的记录不存在（或在你的租户中不存在）而被拒绝的操作，会将 `extensions.code` 设为 `NOT_FOUND`：
+
+```json
+{
+  "errors": [{
+    "message": "record not found",
+    "path": ["cancelCommandBatch"],
+    "extensions": { "code": "NOT_FOUND" }
+  }]
+}
+```
+
+请根据代码而非消息进行判断，服务可能会在消息前加上它当时正在执行的操作。
+少数操作会用自己的代码说明缺少的是什么（例如 `ARTIFACT_NOT_FOUND`），这些操作保留自己的代码。
 
 ## 请求限制 {#request-limits}
 

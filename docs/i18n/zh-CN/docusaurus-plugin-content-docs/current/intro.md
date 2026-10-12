@@ -29,16 +29,17 @@ DeviceChain 由一组基于共享核心库协作的微服务组成：
 | **event-sources** | 可插拔的入站传输（目前支持 MQTT 和 HTTP；计划支持 WebSocket），将原始设备消息解码并送入处理流水线。 |
 | **sparkplug-ingest** _（可选启用）_ | [Eclipse Sparkplug B](./concepts/sparkplug.md) 主机应用。它接入现有的 Sparkplug MQTT 环境，将数据送入同一流水线，并根据上线/离线握手确定设备在线状态。 |
 | **lwm2m-ingest** _（可选启用）_ | 通过 DTLS 终止 CoAP/UDP 连接的 [OMA LwM2M](./concepts/lwm2m.md) 服务器。它使用每台设备的预共享密钥身份进行认证，并根据注册生命周期确定在线状态。 |
-| **device-management** | 管理设备、设备类型、支持版本管理的设备配置文件、关系图、告警对象及其生命周期，以及事件解析。 |
+| **device-management** | 管理设备、设备类型、支持版本管理的设备配置文件、关系图、告警对象及其生命周期、事件解析，以及由配置文件声明、由平台下发到每台设备的设备配置。 |
 | **event-processing** | 处理已解析事件的检测与动作流水线。它运行流式规则（阈值、持续时间、重复、变化率、缺失、窗口聚合、区域关联），在事件重放时产生相同结果，并执行自动响应（触发告警、发送命令和调用出站连接器）。检测在此运行；它触发的告警对象仍由 device-management 管理。 |
 | **event-management** | 将已解析事件持久化到 TimescaleDB，并提供时序查询，包括通过 graphql-ws 桥接提供的实时订阅。 |
 | **device-state** | 每台设备的实时最新已知状态投影（每项测量的当前读数）。 |
 | **command-delivery** | 向设备持久化投递双向命令。 |
+| **update-management** _（可选启用）_ | [空中（OTA）更新](./concepts/over-the-air-updates.md)：按租户保存固件、软件和配置镜像目录（每个镜像都按声明的大小和摘要校验），将其分配给设备，并跟踪每次更新尝试直至设备运行目标版本。 |
 | **dashboard-management** | 支持版本管理的仪表板定义（草稿、发布/回滚、导出），由可嵌入的组件包渲染。 |
 | **notification-management** | 通过电子邮件（SMTP）和 webhook 将已触发的告警通知相关人员，支持按严重程度路由，并升级持续未确认、未解除的告警。 |
 | **outbound-connectors** | 通过支持版本管理、使用密钥认证的连接器，将流水线的出站动作（webhook `httpCall`，以及向 MQTT/Kafka/AWS SNS/SQS 执行 `publish`）投递到外部系统。 |
 | **ai-inference** _（可选启用）_ | 根据自然语言描述起草检测规则，并提交给人工编写规则所用的同一编译器。AI 只提出建议；编译器决定哪些内容有效。AI 不参与实时检测，因此规则在事件重放时产生相同结果。参见 [AI 辅助编写](./concepts/ai-authoring.md)。 |
-| **user-management** | 管理全局身份、各租户的成员关系、角色目录、JWT 签发与验证，以及租户层级（平台运营方定义并分配给租户的服务组合）。 |
+| **user-management** | 管理全局身份、各租户的成员关系、角色目录、JWT 签发与验证、通过租户自己的 OpenID Connect 身份提供方登录（[单点登录](./concepts/single-sign-on.md)），以及租户层级（平台运营方定义并分配给租户的服务组合）。 |
 | **mcp** _（可选启用）_ | 只读的 [Model Context Protocol](./concepts/mcp.md) 服务器，使 AI 助手（Claude、Cursor、VS Code）能够使用用户自己的令牌，代表用户查询租户。 |
 | **operator (k8s)** | 管理 `Instance` 自定义资源。目前其协调循环只观察资源；平台工作负载由 Helm Chart 渲染。 |
 

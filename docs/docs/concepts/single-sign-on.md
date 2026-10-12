@@ -14,7 +14,7 @@ Single sign-on speaks **OpenID Connect**. SAML is not supported. The recipes for
 
 ## Connections {#connections}
 
-A **connection** is one identity provider registered with the instance. Only a superuser creates, changes or deletes connections, through **Admin → Identity providers** in the console or the admin API. There are two kinds:
+A **connection** is one identity provider registered with the instance. Only an instance administrator creates, changes or deletes connections: a superuser, through **Admin → Identity providers** in the console or the admin API, or an identity whose system role holds `user:write` (the authority every connection, link and enforcement operation checks), through the admin API only, since the console's admin pages open for a superuser alone. There are two kinds:
 
 | | Tenant connection | Instance connection |
 | --- | --- | --- |
@@ -58,7 +58,7 @@ The console and the dashboard app show **Sign in with SSO** beside the password 
 
 The page that receives the code (`/login/sso/complete` for the console, `/dash/sso/complete` for the dashboard app) takes it out of the address bar at once and is served with `Referrer-Policy: no-referrer`, so nothing it loads can carry the address. Once the sign-in is finished, or the person goes back to the sign-in form, the app is loaded afresh rather than continuing on that page, so the rest of the session sends a normal `Referer`; the default OpenStreetMap basemap requires one. If your own proxy sits in front of the console, scope any Referer-stripping header to those two exact paths.
 
-When a sign-in is refused, the person sees a coarse message ("Single sign-on did not allow this account in", "your account is not linked yet") and never which check failed. (Linking one's own account is the exception: the person is already signed in and every check is about their own account, so a link refusal says which check failed; see [linking](#linking).) The precise outcome is counted in the `devicechain_usermanagement_sso_logins_total` metric and refusals are written to the audit journal with the address the provider asserted.
+When a sign-in is refused, the person sees a coarse message ("Single sign-on did not allow this account in", "Your account exists but is not linked to this identity provider yet") and never which check failed. (Linking one's own account is the exception: the person is already signed in and every check is about their own account, so a link refusal says which check failed; see [linking](#linking).) The precise outcome is counted in the `devicechain_usermanagement_sso_logins_total` metric and refusals are written to the audit journal with the address the provider asserted.
 
 ## Identities, linking and provisioning {#linking}
 
