@@ -50,6 +50,18 @@ func (r *IdpConnectionResolver) Scopes() []string { return nonNil(r.d.Connection
 func (r *IdpConnectionResolver) EmailClaim() string {
 	return r.d.Connection.EmailClaim
 }
+func (r *IdpConnectionResolver) GroupsClaim() string { return r.d.Connection.GroupsClaim }
+func (r *IdpConnectionResolver) JitEnabled() bool    { return r.d.Connection.JitEnabled }
+func (r *IdpConnectionResolver) DefaultTenantRoles() []string {
+	return nonNil(r.d.Connection.DefaultTenantRoles)
+}
+func (r *IdpConnectionResolver) RoleMappings() []*IdpRoleMappingResolver {
+	out := make([]*IdpRoleMappingResolver, 0, len(r.d.RoleMappings))
+	for i := range r.d.RoleMappings {
+		out = append(out, &IdpRoleMappingResolver{d: r.d.RoleMappings[i]})
+	}
+	return out
+}
 func (r *IdpConnectionResolver) RequiredClaims() []*IdpClaimRequirementResolver {
 	names := make([]string, 0, len(r.d.Connection.RequiredClaims))
 	for k := range r.d.Connection.RequiredClaims {
@@ -72,7 +84,10 @@ func (r *IdpConnectionResolver) Domains() []*IdpDomainResolver {
 	}
 	return out
 }
-func (r *IdpConnectionResolver) Tenants() []string   { return nonNil(r.d.Tenants) }
+func (r *IdpConnectionResolver) Tenants() []string { return nonNil(r.d.Tenants) }
+func (r *IdpConnectionResolver) SessionMaxAgeSeconds() int32 {
+	return int32(r.d.Connection.SessionMaxAgeSeconds)
+}
 func (r *IdpConnectionResolver) CallbackUrl() string { return r.d.CallbackURL }
 func (r *IdpConnectionResolver) Discovery() *IdpDiscoveryResolver {
 	return &IdpDiscoveryResolver{d: r.d}
@@ -90,6 +105,14 @@ func nonNil(s []string) []string {
 	}
 	return s
 }
+
+// IdpRoleMappingResolver resolves the IdpRoleMapping type.
+type IdpRoleMappingResolver struct{ d identity.IdpRoleMappingDetail }
+
+func (r *IdpRoleMappingResolver) Tenant() string      { return r.d.Tenant }
+func (r *IdpRoleMappingResolver) Group() string       { return r.d.Group }
+func (r *IdpRoleMappingResolver) Role() string        { return r.d.Role }
+func (r *IdpRoleMappingResolver) FullAuthority() bool { return r.d.FullAuthority }
 
 // IdpClaimRequirementResolver resolves the IdpClaimRequirement type.
 type IdpClaimRequirementResolver struct{ name, value string }
@@ -212,6 +235,7 @@ type idpConnectionCreateInput struct {
 	ClientSecret     *string
 	Scopes           *[]string
 	EmailClaim       *string
+	GroupsClaim      *string
 	RequiredClaims   *[]idpClaimRequirementInput
 	RequiredAmr      *[]string
 	MfaEnforcedByIdp *bool
@@ -255,6 +279,9 @@ func (r *AdminResolver) CreateIdpConnection(ctx context.Context, args struct {
 	}
 	if rq.EmailClaim != nil {
 		in.EmailClaim = *rq.EmailClaim
+	}
+	if rq.GroupsClaim != nil {
+		in.GroupsClaim = *rq.GroupsClaim
 	}
 	if rq.RequiredAmr != nil {
 		in.RequiredAmr = *rq.RequiredAmr
@@ -415,4 +442,43 @@ func (r *AdminResolver) RejectSsoLinkRequest(ctx context.Context, args struct{ I
 		return false, err
 	}
 	return r.sso(ctx).RejectSsoLinkRequest(ctx, id)
+}
+
+type idpRoleMappingInput struct {
+	Group string
+	Role  string
+}
+
+// SetIdpRoleMappings replaces a connection's group mappings for a tenant (requires
+// user:write).
+func (r *AdminResolver) SetIdpRoleMappings(ctx context.Context, args struct {
+	Connection               string
+	Tenant                   string
+	Mappings                 []idpRoleMappingInput
+	AcknowledgeFullAuthority *bool
+}) (*IdpConnectionResolver, error) {
+	if err := auth.Authorize(ctx, auth.UserWrite); err != nil {
+		return nil, err
+	}
+	in := make([]identity.RoleMappingInput, 0, len(args.Mappings))
+	for _, m := range args.Mappings {
+		in = append(in, identity.RoleMappingInput{Group: m.Group, Role: m.Role})
+	}
+	ack := args.AcknowledgeFullAuthority != nil && *args.AcknowledgeFullAuthority
+	return wrapIdp(r.sso(ctx).SetIdpRoleMappings(ctx, args.Connection, args.Tenant, in, ack))
+}
+
+// SetIdpJit sets just-in-time provisioning and the default tenant roles (requires
+// user:write).
+func (r *AdminResolver) SetIdpJit(ctx context.Context, args struct {
+	Connection               string
+	Enabled                  bool
+	DefaultTenantRoles       []string
+	AcknowledgeFullAuthority *bool
+}) (*IdpConnectionResolver, error) {
+	if err := auth.Authorize(ctx, auth.UserWrite); err != nil {
+		return nil, err
+	}
+	ack := args.AcknowledgeFullAuthority != nil && *args.AcknowledgeFullAuthority
+	return wrapIdp(r.sso(ctx).SetIdpJit(ctx, args.Connection, args.Enabled, args.DefaultTenantRoles, ack))
 }

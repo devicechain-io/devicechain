@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 
 	"github.com/devicechain-io/dc-microservice/conflict"
 	"github.com/devicechain-io/dc-microservice/rdb"
@@ -25,6 +26,12 @@ var (
 	// tenant), so it carries extensions.code CONFLICT. dcctl's sim flow tolerates that
 	// code on a re-run, which is what makes adding the membership idempotent.
 	ErrAlreadyMember error = conflict.New("identity already has a membership in this tenant")
+	// ErrMembershipOrphaned refuses re-enabling a membership that an identity provider
+	// connection managed and that was disabled when the connection was deleted or stopped
+	// serving the tenant. Nothing would ever revoke it again, so enabling it would turn a
+	// grant the provider made into a permanent manual one. Remove it and add a membership on
+	// purpose instead.
+	ErrMembershipOrphaned = errors.New("this membership was managed by an identity provider connection that no longer exists or no longer serves this tenant; remove it and add a new membership instead of enabling it")
 )
 
 // CreateIdentityInput is the data to create a global identity (ADR-033). Password
@@ -192,6 +199,22 @@ func (s *Service) SetMembershipEnabled(ctx context.Context, email, tenant string
 	id, mem, err := s.loadMembership(ctx, email, tenant)
 	if err != nil {
 		return nil, err
+	}
+	if enabled && mem.ManagedBy != nil {
+		if _, err := s.iam.IdpConnectionByID(ctx, *mem.ManagedBy); errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, ErrMembershipOrphaned
+		} else if err != nil {
+			return nil, err
+		}
+		// A connection that no longer serves the tenant never recomputes the membership
+		// either, so enabling it would be the same permanent grant.
+		served, err := s.iam.ConnectionTenants(ctx, *mem.ManagedBy)
+		if err != nil {
+			return nil, err
+		}
+		if !slices.Contains(served, mem.TenantId) {
+			return nil, ErrMembershipOrphaned
+		}
 	}
 	if err := s.iam.SetMembershipEnabled(ctx, mem, enabled); err != nil {
 		return nil, err

@@ -554,6 +554,8 @@ func (m *Manager) ssoRefusal(ctx context.Context, conn *iam.IdpConnection, outco
 		class = "link_required"
 	case SsoOutcomeIdpError, SsoOutcomeServerError:
 		class = "idp_error"
+	case SsoOutcomeRefusedGroupsOverage:
+		class = "groups_overage"
 	}
 	q := url.Values{"error": {class}}
 	for k, v := range params {
@@ -575,6 +577,24 @@ func withQuery(base string, q url.Values) string {
 func (m *Manager) finishLogin(ctx context.Context, conn *iam.IdpConnection, st ssoState, claims *ssoClaims,
 	returnTo string, finish func(string, string, url.Values) SsoCallbackResult) SsoCallbackResult {
 
+	// Rule E reads the person's groups BEFORE an identity is resolved, so a token whose group
+	// list cannot be trusted refuses the sign-in without provisioning anyone.
+	var (
+		groups   map[string]struct{}
+		mappings []iam.IdpRoleMappingView
+	)
+	if conn.Kind == iam.IdpKindTenant {
+		var err error
+		if mappings, err = m.iam.ListIdpRoleMappings(ctx, conn.ID); err != nil {
+			log.Error().Err(err).Str("connection", conn.Token).Msg("Single sign-on could not read the connection's role mappings.")
+			return finish(SsoOutcomeServerError, claims.Email, nil)
+		}
+		var refused string
+		if groups, refused = ssoGroups(conn, claims, len(mappings) > 0); refused != "" {
+			log.Warn().Str("connection", conn.Token).Str("outcome", refused).Msg("A sign-in's groups could not be used.")
+			return finish(refused, claims.Email, nil)
+		}
+	}
 	id, outcome, err := m.resolveSsoIdentity(ctx, conn, claims)
 	if err != nil {
 		log.Error().Err(err).Str("connection", conn.Token).Msg("Single sign-on could not resolve an identity.")
@@ -582,6 +602,13 @@ func (m *Manager) finishLogin(ctx context.Context, conn *iam.IdpConnection, st s
 	}
 	if outcome != "" {
 		return finish(outcome, claims.Email, nil)
+	}
+	// Rule E: the managed memberships follow the provider's groups at every sign-in.
+	if conn.Kind == iam.IdpKindTenant {
+		if err := m.syncSsoMemberships(ctx, conn, id, groups, mappings); err != nil {
+			log.Error().Err(err).Str("connection", conn.Token).Msg("Single sign-on could not update the person's memberships.")
+			return finish(SsoOutcomeServerError, claims.Email, nil)
+		}
 	}
 	code, err := randomKey()
 	if err != nil {

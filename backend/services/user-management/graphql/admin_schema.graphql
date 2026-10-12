@@ -236,6 +236,13 @@ type AdminTenant {
     # which is what lets a later sweep tell a purged tenant's residue from a
     # successor's legitimate rows.
     purgeEpoch: String
+    """
+    Whether the tenant's people must sign in through single sign-on. While true, a session that
+    began with a password cannot enter the tenant (at sign-in, tenant selection, refresh or an
+    MCP authorization), and the password sign-in does not list the tenant. A superuser is exempt
+    and each of their entries is audited. Change it with setTenantSsoEnforced.
+    """
+    ssoEnforced: Boolean!
     """The tier the tenant is packaged at. Every tenant has exactly one."""
     # The tier this tenant is packaged at (ADR-065). Never null: every tenant has a
     # tier, enforced by a NOT NULL FK, so there is no un-tiered state.
@@ -1307,10 +1314,31 @@ type IdpConnection {
     scopes: [String!]!
     """Name of the claim carrying the person's email address."""
     emailClaim: String!
+    """
+    Name of the claim carrying the person's group values, which role mappings match. Only a
+    tenant connection reads it.
+    """
+    groupsClaim: String!
+    """
+    Whether a first sign-in creates an identity for a person no identity has the address of. An
+    address that already has an identity is never linked automatically: it leaves a link request.
+    """
+    jitEnabled: Boolean!
+    """Tokens of the tenant roles everyone who signs in through the connection holds in each tenant it serves."""
+    defaultTenantRoles: [String!]!
+    """The group-to-role mappings, across the tenants the connection serves."""
+    roleMappings: [IdpRoleMapping!]!
     """Claims every sign-in must carry with exactly these values."""
     requiredClaims: [IdpClaimRequirement!]!
     """Authentication methods of which a sign-in must report at least one; empty for none required."""
     requiredAmr: [String!]!
+    """
+    How long a session through this connection lasts, in seconds, counted from the moment this
+    service accepted the sign-in (not the provider's own authentication time) and never extended
+    by a refresh. When it passes, the session ends at its next exchange and the person signs in
+    again. 12 hours (43200) unless changed with setIdpSessionMaxAge.
+    """
+    sessionMaxAgeSeconds: Int!
     """Email domains this connection speaks for."""
     domains: [IdpDomain!]!
     """Tokens of the tenants a tenant connection serves; empty for an instance connection."""
@@ -1323,6 +1351,26 @@ type IdpConnection {
     createdAt: String
     """When the connection was last changed."""
     updatedAt: String
+}
+
+"""A mapping from a provider group to a tenant role, within one tenant a connection serves."""
+type IdpRoleMapping {
+    """Token of the tenant."""
+    tenant: String!
+    """The group value in the provider's groups claim."""
+    group: String!
+    """Token of the tenant role members of the group hold."""
+    role: String!
+    """Whether the role carries the tenant's super-authority."""
+    fullAuthority: Boolean!
+}
+
+"""One group-to-role mapping to set."""
+input IdpRoleMappingInput {
+    """The group value in the provider's groups claim."""
+    group: String!
+    """Token of a tenant role. System roles are refused."""
+    role: String!
 }
 
 """A claim a sign-in must carry, with the value it must have."""
@@ -1391,6 +1439,8 @@ input IdpConnectionCreateRequest {
     scopes: [String!]
     """Name of the claim carrying the email address; defaults to `email`."""
     emailClaim: String
+    """Name of the claim carrying group values; defaults to `groups`."""
+    groupsClaim: String
     """Claims every sign-in must carry with exactly these values (Google needs `hd`, Microsoft needs `tid`)."""
     requiredClaims: [IdpClaimRequirementInput!]
     """Authentication methods of which a sign-in must report at least one."""
@@ -1415,6 +1465,8 @@ input IdpConnectionUpdateRequest {
     clientId: String
     """New email claim name."""
     emailClaim: String
+    """New groups claim name."""
+    groupsClaim: String
     """The complete new list of scopes."""
     scopes: [String!]
     """The complete new list of required authentication methods."""
@@ -1964,7 +2016,12 @@ type Mutation {
     ): IdpConnection!
     """
     Applies a partial update to a connection and returns it. Enabling a connection needs its
-    discovery snapshot approved. Requires user:write.
+    discovery snapshot approved. Disabling it ends its sessions at their next exchange: their
+    refresh tokens stop working at once, and an access token already issued runs until it
+    expires (15 minutes by default). An identity token already issued for an instance connection
+    likewise keeps working on the admin API until it expires. Disabling the last enabled
+    connection serving a tenant that requires single sign-on is refused: turn the requirement off
+    with setTenantSsoEnforced first. Requires user:write.
     """
     updateIdpConnection(
         """Token of the connection."""
@@ -1986,8 +2043,11 @@ type Mutation {
     """
     Deletes a connection together with its tenants, domains, links, pending requests and sealed
     client secret. Memberships it managed are disabled, not removed. Its sign-ins end at their next
-    exchange. Returns true if it was deleted and false if there was no such connection. Requires
-    user:write.
+    exchange; an identity token already issued for an instance connection keeps working on the
+    admin API until it expires (15 minutes by default). Deleting the last enabled connection
+    serving a tenant that requires single sign-on is refused: turn the requirement off with
+    setTenantSsoEnforced first. Returns true if it was deleted and false if there was no such
+    connection. Requires user:write.
     """
     deleteIdpConnection(
         """Token of the connection."""
@@ -2005,8 +2065,9 @@ type Mutation {
     ): IdpConnection!
     """
     Sets exactly which tenants a tenant connection serves, and returns it. Sign-ins through it
-    can enter those tenants and no others. Fails for an instance connection or an unknown tenant.
-    Requires user:write.
+    can enter those tenants and no others. Fails for an instance connection or an unknown tenant,
+    and refuses to drop a tenant that requires single sign-on when this is the last enabled
+    connection serving it. Requires user:write.
     """
     setIdpConnectionTenants(
         """Token of the connection."""
@@ -2087,6 +2148,89 @@ type Mutation {
         """`convert` or `keep_manual`; required when the identity has such memberships."""
         membershipDisposition: String
     ): Boolean!
+    """
+    Replaces a tenant connection's group-to-role mappings for one tenant it serves, and returns
+    the connection. At each sign-in the person's membership in that tenant is recomputed: the
+    connection's default roles plus the role of every mapping whose group they hold; none at all
+    disables it. Only memberships the connection manages are touched, never manual ones. Roles
+    are tenant roles only: a system role is refused. A role with full authority in the tenant
+    needs acknowledgeFullAuthority. Takes effect at each person's next sign-in. Requires user:write.
+    """
+    setIdpRoleMappings(
+        """Token of the connection."""
+        connection: String!
+        """Token of the tenant; the connection must serve it."""
+        tenant: String!
+        """The complete new set of mappings for the tenant."""
+        mappings: [IdpRoleMappingInput!]!
+        """Must be true to map a group to a role with full authority."""
+        acknowledgeFullAuthority: Boolean
+    ): IdpConnection!
+    """
+    Sets whether a tenant connection creates identities at first sign-in (only for an address no
+    identity has) and the tenant roles everyone who signs in through it holds, and returns the
+    connection. An instance connection takes neither. A role with full authority needs
+    acknowledgeFullAuthority. Requires user:write.
+    """
+    setIdpJit(
+        """Token of the connection."""
+        connection: String!
+        """Whether first sign-ins create identities."""
+        enabled: Boolean!
+        """Tokens of the tenant roles every person holds in each tenant the connection serves."""
+        defaultTenantRoles: [String!]!
+        """Must be true to grant a role with full authority to everyone."""
+        acknowledgeFullAuthority: Boolean
+    ): IdpConnection!
+    """
+    Requires (or stops requiring) that a tenant's people sign in through single sign-on, and
+    returns the tenant. Turning it on needs at least one enabled connection serving the tenant,
+    so its people are not locked out, and ends the password sessions already inside the tenant
+    at their next refresh. Superusers are exempt and each of their entries is audited, so an
+    identity provider outage never locks the operator out. Requires user:write.
+    """
+    setTenantSsoEnforced(
+        """Token of the tenant."""
+        tenant: String!
+        """Whether single sign-on is required."""
+        enforced: Boolean!
+    ): AdminTenant!
+    """
+    Sets how long a session through a connection lasts, in seconds, and returns the connection.
+    The allowed range is 900 (15 minutes) to 604800 (7 days); the upper bound is lower when the
+    deployment's refresh token lifetime is shorter, and a value set before that lifetime was
+    shortened is held to the new bound when sessions are checked. The lifetime counts from the moment this
+    service accepted the sign-in and is never extended by a refresh. It applies to sessions
+    already open, at their next exchange. Requires user:write.
+    """
+    setIdpSessionMaxAge(
+        """Token of the connection."""
+        connection: String!
+        """The session lifetime in seconds."""
+        seconds: Int!
+    ): IdpConnection!
+    """
+    Ends every session an identity has, on every device: password and single sign-on, console,
+    dashboard and MCP. Each ends at its next exchange; the access and identity tokens already
+    issued stop working when they expire, 15 minutes by default (on the admin API too). The password
+    is unchanged and the person can sign in again at once. Returns how many sign-ins it ended.
+    Fails if the identity does not exist. Requires user:write.
+    """
+    revokeSessions(
+        """Email of the identity."""
+        email: String!
+    ): Int!
+    """
+    Removes an identity's password, so it can sign in only through single sign-on, and ends
+    every session it has. Returns the identity. Fails if the identity does not exist, and is
+    refused unless the identity is linked to an enabled connection it can sign in through (an
+    instance connection for an identity holding a system role), so it is never left with no way
+    in. Requires user:write.
+    """
+    clearPassword(
+        """Email of the identity."""
+        email: String!
+    ): AdminIdentity!
     """Rejects a pending link request, deleting it. Returns true if it existed. Requires user:write."""
     rejectSsoLinkRequest(
         """Identifier of the request."""

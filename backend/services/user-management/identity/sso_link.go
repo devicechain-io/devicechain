@@ -68,6 +68,35 @@ func (m *Manager) resolveSsoIdentity(ctx context.Context, conn *iam.IdpConnectio
 		return nil, outcome, err
 	}
 
+	// C.4: no link and NO identity with this address, on a tenant connection that provisions:
+	// create the identity and its link. This is the only automatic write, and an address that
+	// already has an identity never reaches it.
+	if conn.Kind == iam.IdpKindTenant && conn.JitEnabled {
+		_, err := m.iam.IdentityByEmail(ctx, c.Email)
+		switch {
+		case errors.Is(err, gorm.ErrRecordNotFound):
+			id, perr := m.provisionIdentity(ctx, conn, c)
+			if perr == nil {
+				return id, "", nil
+			}
+			// Two first sign-ins of one person can race: the loser finds the winner's
+			// link (or, if another route took the address meanwhile, falls through to a
+			// request below).
+			if link, lerr := m.iam.LinkBySubject(ctx, conn.ID, c.Subject); lerr == nil {
+				id, ierr := m.iam.IdentityByID(ctx, link.IdentityID)
+				if ierr != nil {
+					return nil, "", ierr
+				}
+				return id, "", nil
+			}
+			if _, ierr := m.iam.IdentityByEmail(ctx, c.Email); ierr != nil {
+				return nil, "", perr
+			}
+		case err != nil:
+			return nil, "", err
+		}
+	}
+
 	// C.3: never link automatically. Leave a request for a superuser (whether or not an
 	// identity with this address exists yet -- the request is how the superuser learns the
 	// external subject to link) and refuse.

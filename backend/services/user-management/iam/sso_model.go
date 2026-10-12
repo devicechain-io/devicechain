@@ -151,13 +151,18 @@ func (IdpRoleMapping) TableName() string { return "iam_idp_role_mappings" }
 
 // IdentityLink binds an external (connection, subject) to an Identity. Created only by an
 // explicit act; nothing links by email.
+//
+// The two unique indexes are the migration's (schema/migration_sso.go), repeated here so
+// every store built from the live models enforces them too: (connection, subject) is what
+// makes the loser of two concurrent first sign-ins fail instead of linking a second
+// identity, and (connection, identity) refuses a second subject for a linked identity.
 type IdentityLink struct {
 	ID        uint `gorm:"primarykey"`
 	CreatedAt time.Time
 
-	IdentityID   uint   `gorm:"not null"`
-	ConnectionID uint   `gorm:"not null"`
-	Subject      string `gorm:"not null;size:512"`
+	IdentityID   uint   `gorm:"not null;uniqueIndex:idx_iam_identity_links_connection_identity,priority:2"`
+	ConnectionID uint   `gorm:"not null;uniqueIndex:idx_iam_identity_links_connection_subject,priority:1;uniqueIndex:idx_iam_identity_links_connection_identity,priority:1"`
+	Subject      string `gorm:"not null;size:512;uniqueIndex:idx_iam_identity_links_connection_subject,priority:2"`
 	CreatedBy    string `gorm:"not null;size:256"`
 }
 

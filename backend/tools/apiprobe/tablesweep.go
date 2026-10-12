@@ -234,17 +234,23 @@ var tableSweepExemptions = map[string]string{
 		"actually dispatched. It follows an ALARM, which follows a rule firing, which the drill does " +
 		"not do — so it is downstream of two things that are exempt above for their own reasons.",
 
-	// ---- single sign-on, before any API can create it --------------------------
+	// ---- single sign-on: needs a reachable identity provider -------------------
 	//
-	// These two exemptions are TEMPORARY. The tables exist ahead of the API that fills
-	// them; the slice that adds that API must replace each exemption with a seed in
-	// entities.go, at which point these entries go STALE and the sweep says so.
+	// Creating a connection makes the instance fetch the provider's discovery document
+	// through the egress guard, over https, verified against the system's trusted roots
+	// (a private address also needs an operator allow entry). The upgrade drill is a gating
+	// job and runs without external network, so it cannot create one, and both tables hang
+	// off a connection. A stub issuer in the rig would get past the guard with an allow
+	// entry, but its certificate would still need a private CA that user-management trusts:
+	// a production trust setting that does not exist and should not be added for a drill.
+	// If the rig ever gains such an issuer, seed both tables; these entries then go STALE,
+	// which the sweep reports.
 	"user-management.iam_idp_connection_tenants": "which tenants an identity-provider connection " +
-		"serves. This release ships the storage only: no API or sign-in path can create a " +
-		"connection, so no tenant can own a row yet.",
+		"serves. Creating a connection requires a reachable public identity provider; the drill " +
+		"runs without external network, so it cannot create one.",
 	"user-management.iam_idp_role_mappings": "group-to-role mappings of an identity-provider " +
-		"connection, keyed to a tenant the connection serves. Same as iam_idp_connection_tenants: " +
-		"no API can create a connection in this release.",
+		"connection, keyed to a tenant the connection serves. Creating a connection requires a " +
+		"reachable public identity provider; the drill runs without external network.",
 }
 
 func runTableSweep(ctx context.Context, argv []string) error {

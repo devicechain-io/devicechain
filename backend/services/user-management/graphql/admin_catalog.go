@@ -68,6 +68,9 @@ func (r *AdminTenantResolver) PurgeEpoch() *string { return formatPurgeTimePtr(r
 // means the tenant is not opted in.
 func (r *AdminTenantResolver) AiExternalEnabled() *bool { return r.M.AiExternalEnabled }
 
+// SsoEnforced resolves whether the tenant requires single sign-on.
+func (r *AdminTenantResolver) SsoEnforced() bool { return r.M.SsoEnforced }
+
 func (r *AdminTenantResolver) AiInferenceRequestsPerMinute() *float64 {
 	return r.M.AiInferenceRequestsPerMinute
 }

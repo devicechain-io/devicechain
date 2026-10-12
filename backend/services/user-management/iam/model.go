@@ -284,6 +284,13 @@ type Tenant struct {
 	Enabled bool           `gorm:"not null;default:true"`
 	Config  map[string]any `gorm:"serializer:json"`
 
+	// SsoEnforced says the tenant's people must sign in through single sign-on: a session
+	// that began with a password is refused entry (identity.Manager.admitTenant, at every
+	// place a tenant grant is minted). A superuser is exempt, so an identity-provider
+	// outage never locks the operator out of a tenant, and every such entry is audited.
+	// Written only by Store.SetTenantSsoEnforced, never through the tenant update path.
+	SsoEnforced bool `gorm:"not null;default:false"`
+
 	// The ADR-077 lifecycle. A tenant is not deleted on the spot, it is PURGED: the row
 	// survives FOR AS LONG AS THE PURGE RUNS so its token stays taken, because the token
 	// is the isolation key every other area stores and a successor at a reused token
