@@ -234,23 +234,16 @@ var tableSweepExemptions = map[string]string{
 		"actually dispatched. It follows an ALARM, which follows a rule firing, which the drill does " +
 		"not do — so it is downstream of two things that are exempt above for their own reasons.",
 
-	// ---- single sign-on: needs a reachable identity provider -------------------
+	// ---- single sign-on is NOT here, and it used to be --------------------------
 	//
-	// Creating a connection makes the instance fetch the provider's discovery document
-	// through the egress guard, over https, verified against the system's trusted roots
-	// (a private address also needs an operator allow entry). The upgrade drill is a gating
-	// job and runs without external network, so it cannot create one, and both tables hang
-	// off a connection. A stub issuer in the rig would get past the guard with an allow
-	// entry, but its certificate would still need a private CA that user-management trusts:
-	// a production trust setting that does not exist and should not be added for a drill.
-	// If the rig ever gains such an issuer, seed both tables; these entries then go STALE,
-	// which the sweep reports.
-	"user-management.iam_idp_connection_tenants": "which tenants an identity-provider connection " +
-		"serves. Creating a connection requires a reachable public identity provider; the drill " +
-		"runs without external network, so it cannot create one.",
-	"user-management.iam_idp_role_mappings": "group-to-role mappings of an identity-provider " +
-		"connection, keyed to a tenant the connection serves. Creating a connection requires a " +
-		"reachable public identity provider; the drill runs without external network.",
+	// iam_idp_connection_tenants and iam_idp_role_mappings were exempt while the drill had no
+	// identity provider the instance could create a connection against. It has one now (a
+	// stub the rig installs and the instance is configured to trust, hack/lib/
+	// sso-stub-idp.sh), and `apiprobe seed --idp-issuer` writes a connection that serves the
+	// probe tenant and maps a group to a role (sso.go). Both tables therefore hold rows, and
+	// an exemption on either would be reported STALE. A run with no provider named leaves
+	// them UNCOVERED, which is the intended signal: a drill that can no longer create a
+	// connection has stopped covering them.
 }
 
 func runTableSweep(ctx context.Context, argv []string) error {

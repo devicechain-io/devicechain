@@ -230,6 +230,11 @@ func TestGrantToUnknownProvider(t *testing.T) {
 
 	err = api.GrantProviderToTenant(ctx, "acme", "nope")
 	assert.ErrorIs(t, err, ErrUnknownProvider)
+
+	// And it is still a MISS: the store's sentinel stays in the chain, which is what the
+	// GraphQL boundary answers with NOT_FOUND, as it does for every other unknown token.
+	assert.ErrorIs(t, err, gorm.ErrRecordNotFound)
+	assert.ErrorIs(t, api.SetTierDefault(ctx, "gold", "nope"), gorm.ErrRecordNotFound)
 }
 
 // TestUpdateConflict pins the optimistic-concurrency precondition.

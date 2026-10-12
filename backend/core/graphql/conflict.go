@@ -4,6 +4,7 @@
 package graphql
 
 import (
+	"errors"
 	"maps"
 
 	"github.com/devicechain-io/dc-microservice/conflict"
@@ -12,7 +13,13 @@ import (
 	gqlerrors "github.com/graph-gophers/graphql-go/errors"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
+	"gorm.io/gorm"
 )
+
+// CodeNotFound is the extensions.code of a resolver error whose chain holds
+// gorm.ErrRecordNotFound and no code of its own: the record the request named does not
+// exist (in the caller's tenant). See answerIntegrity.
+const CodeNotFound = "NOT_FOUND"
 
 // answerIntegrity gives every resolver error whose chain holds an integrity refusal its
 // code — CONFLICT for a taken unique value, REFERENCE_VIOLATION for a refused reference
@@ -42,7 +49,18 @@ import (
 //  3. only when there is none, a conflict (a service *conflict.Error or a driver unique
 //     violation) answers CONFLICT. CONFLICT is the one code a client treats as "already
 //     exists, carry on", so it is never served over a chain that also holds a refusal
-//     re-running cannot fix.
+//     re-running cannot fix;
+//  4. only when there is none of those, a miss — gorm.ErrRecordNotFound in the chain —
+//     answers NOT_FOUND (CodeNotFound). The message is left as the service wrote it.
+//
+// 🔑 THE MISS IS HERE BECAUSE IT IS THE SAME SHAPE OF GAP. Most services report "that record
+// does not exist" by returning the store's own sentinel, wrapped or bare, and it reached the
+// client with no code at all — while the services that wrap a miss in a typed refusal
+// answered with one. The same failure therefore did and did not carry a code depending on
+// which service a client happened to ask, and only prose distinguished "not there" from any
+// other failure. Classifying it once, at the one place that reads every chain, gives every
+// service the same answer without asking any of them to remember it. A typed error that
+// chose a code for its own miss keeps that code (step 1).
 //
 // The redaction applies regardless of which code was chosen, and to EVERY driver
 // violation in the chain, so a service error joined with a driver error cannot shield
@@ -62,6 +80,8 @@ func answerIntegrity(errs []*gqlerrors.QueryError) {
 			chosen, _, _ = integrity.Answer(class)
 		} else if conflict.Is(err) {
 			chosen = conflict.Code
+		} else if errors.Is(err, gorm.ErrRecordNotFound) {
+			chosen = CodeNotFound
 		}
 		if chosen != "" {
 			if _, set := qe.Extensions["code"]; !set {

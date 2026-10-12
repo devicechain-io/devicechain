@@ -120,14 +120,15 @@ func TestARepeatedCommandKeyAnswersConflict(t *testing.T) {
 }
 
 // The control: a refusal that is not about a taken value carries no CONFLICT. Nor is it
-// a REFERENCE_VIOLATION: an unknown token is refused by the service's own lookup, which
-// carries no code, not by a foreign key.
+// a REFERENCE_VIOLATION: an unknown token is refused by the service's own lookup, not by
+// a foreign key, and a lookup that finds nothing answers NOT_FOUND — the code every
+// service's miss carries, served by the same boundary that serves CONFLICT.
 func TestAnUnknownProfileIsNotAConflict(t *testing.T) {
 	ctx := conflictWireCtx(t)
 	qe := onlyError(t, execServed(t, ctx, wireCreateCommand, map[string]any{"request": map[string]any{
 		"token": "cmd-1", "deviceProfileToken": "nope", "commandKey": "drive"}}))
-	if got := qe.Extensions["code"]; got != nil {
-		t.Fatalf("a missing profile was answered with code %v: %s", got, qe.Message)
+	if got := qe.Extensions["code"]; got != "NOT_FOUND" {
+		t.Fatalf("a missing profile was answered with code %v, want NOT_FOUND: %s", got, qe.Message)
 	}
 }
 
