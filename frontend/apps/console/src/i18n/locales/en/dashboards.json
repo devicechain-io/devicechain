@@ -224,6 +224,10 @@
   "widgetCategoryLocation": "Location",
   "widgetMenuDetail": "{{id}} · v{{version}}",
   "widgetNotInstalled": "This widget type is not installed in this console, so its settings cannot be shown.",
+  "versionActivateConfirmTitle": "Serve version {{version}} to viewers?",
+  "versionUnresolvedWarning_one": "Warning: {{count}} widget in that version cannot be resolved by this console and will not render here until its package is installed:",
+  "versionUnresolvedWarning_other": "Warning: {{count}} widgets in that version cannot be resolved by this console and will not render here until their packages are installed:",
+  "versionUnresolvedUnchecked": "This console could not read that version to check it for widgets it cannot render, so it has not been checked. You can still go ahead.",
   "versionUnresolvedBlocked_one": "{{count}} widget on this dashboard cannot be resolved by this console, so a new version cannot be published. Install its package or remove the widget. Saving the draft still keeps its stored settings unchanged.",
   "versionUnresolvedBlocked_other": "{{count}} widgets on this dashboard cannot be resolved by this console, so a new version cannot be published. Install their packages or remove the widgets. Saving the draft still keeps their stored settings unchanged.",
   "unresolvedReasonUnregistered": "its package is not installed in this console",
@@ -232,5 +236,7 @@
   "unresolvedReasonOptionsVersion": "it was saved with a different settings version than the installed package uses",
   "unresolvedReasonSdkIncompatible": "it was written for a different widget SDK version",
   "widgetVersionDrift": "Authored with version {{authored}}. This console renders it with version {{installed}}; check that it still looks right.",
-  "widgetEditorFailed": "This widget's settings editor stopped with an error. Your other changes are kept; the details are in the browser console."
+  "widgetEditorFailed": "This widget's settings editor stopped with an error. Your other changes are kept; the details are in the browser console.",
+  "widgetEditorWriteFailed": "The settings editor tried to save a value this widget cannot hold, so nothing was changed: {{error}}",
+  "widgetEditorServiceFailed": "The settings editor asked this console for information and the request failed: {{error}}"
 }

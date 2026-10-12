@@ -98,6 +98,14 @@ export type DashboardVersionsQueryVariables = Exact<{
 
 export type DashboardVersionsQuery = { dashboardVersions: Array<{ version: number, label: string | null, description: string | null, publishedAt: string, publishedBy: string | null }> };
 
+export type DashboardVersionDefinitionQueryVariables = Exact<{
+  token: string;
+  version: number;
+}>;
+
+
+export type DashboardVersionDefinitionQuery = { dashboardVersion: { definition: string } | null };
+
 export type PublishDashboardMutationVariables = Exact<{
   token: string;
   label?: string | null | undefined;
@@ -230,6 +238,13 @@ export const DashboardVersionsDocument = new TypedDocumentString(`
   }
 }
     `) as unknown as TypedDocumentString<DashboardVersionsQuery, DashboardVersionsQueryVariables>;
+export const DashboardVersionDefinitionDocument = new TypedDocumentString(`
+    query DashboardVersionDefinition($token: String!, $version: Int!) {
+  dashboardVersion(token: $token, version: $version) {
+    definition
+  }
+}
+    `) as unknown as TypedDocumentString<DashboardVersionDefinitionQuery, DashboardVersionDefinitionQueryVariables>;
 export const PublishDashboardDocument = new TypedDocumentString(`
     mutation PublishDashboard($token: String!, $label: String, $description: String, $expectedUpdatedAt: String) {
   publishDashboard(

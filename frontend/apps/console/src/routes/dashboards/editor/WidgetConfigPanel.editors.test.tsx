@@ -18,8 +18,12 @@ import { WidgetConfigPanel } from './WidgetConfigPanel';
 vi.mock('./EntityPicker', () => ({ EntityPicker: () => null }));
 // The panel's own command lookup would hit the API; an editor driven directly never calls it,
 // and the panel-level tests below never open a command control.
+const api = vi.hoisted(() => ({ fails: false }));
 vi.mock('@/lib/api/device-management', () => ({
-  getDeviceCommandVocabulary: async () => null,
+  getDeviceCommandVocabulary: async () => {
+    if (api.fails) throw new Error('vocabulary lookup refused');
+    return null;
+  },
   listCommandDefinitionsForDevice: async () => [],
 }));
 
@@ -122,6 +126,9 @@ describe('a trusted package supplying its own editor', () => {
         <button type="button" onClick={() => loose({ nope: 1 })}>
           bad key
         </button>
+        <button type="button" onClick={() => void Promise.resolve().then(() => loose({ curve: 'zigzag' }))}>
+          bad value later
+        </button>
       </div>
     );
   }
@@ -194,7 +201,35 @@ describe('a trusted package supplying its own editor', () => {
     // Each service is an explicit, named capability; anything else reaching an editor is a leak.
     const services = seen!.services as Record<string, unknown>;
     expect(Object.keys(services).filter((k) => !['slots', 'deviceToken', 'commandChoices'].includes(k))).toEqual([]);
-    expect(typeof services.commandChoices).toBe('function');
+    // This editor declared no command control, so it is handed no command lookup.
+    expect('commandChoices' in services).toBe(false);
+  });
+
+  it('hands the command lookup only to an editor whose descriptor declares the command control', () => {
+    let seen: WidgetEditorProps | undefined;
+    const Spy = (props: WidgetEditorProps) => {
+      seen = props;
+      return null;
+    };
+    const cmdWidget = defineWidget({
+      descriptor: {
+        ...descriptorWith({ commandName: cv(), commandLabel: cv(), parameterSchema: cv() }),
+        id: 'acme/cmd' as const,
+      },
+      implementation: { kind: 'trusted-react', component: () => null, editor: Spy },
+    });
+    render(
+      <WidgetConfigPanel
+        widget={{ ...widget, type: 'acme/cmd' as ResolvedWidgetInstance['type'], options: {} } as ResolvedWidgetInstance}
+        registry={createWidgetRegistry([cmdWidget])}
+        datasource={undefined}
+        slots={slots}
+        onChange={vi.fn()}
+        onDatasource={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+    expect(typeof seen!.services.commandChoices).toBe('function');
   });
 
   it('contains an editor that throws while rendering to the editor, not the panel or the page', () => {
@@ -236,17 +271,99 @@ describe('a trusted package supplying its own editor', () => {
 
   it('refuses a value the schema cannot hold and a key it does not declare, writing nothing', () => {
     const onChange = renderPanel();
-    // React reports an event handler's throw on the window; the write must not have happened.
     const quiet = vi.spyOn(console, 'error').mockImplementation(() => {});
-    const swallow = (e: ErrorEvent) => e.preventDefault();
-    window.addEventListener('error', swallow);
     try {
+      expect(screen.queryByTestId('widget-editor-write-error')).toBeNull();
       fireEvent.click(screen.getByRole('button', { name: 'bad value' }));
+      // The author is told, in the panel, instead of only the browser console.
+      expect(screen.getByTestId('widget-editor-write-error').textContent).toMatch(/zigzag|curve/);
       fireEvent.click(screen.getByRole('button', { name: 'bad key' }));
+      expect(screen.getByTestId('widget-editor-write-error').textContent).toMatch(/nope/);
     } finally {
-      window.removeEventListener('error', swallow);
       quiet.mockRestore();
     }
     expect(onChange).not.toHaveBeenCalled();
+    // The workspace survives and a good write clears the message.
+    fireEvent.click(screen.getByRole('button', { name: 'quadratic' }));
+    expect(onChange).toHaveBeenCalledTimes(1);
+    expect(screen.queryByTestId('widget-editor-write-error')).toBeNull();
+  });
+
+  it('surfaces a refused write made from a promise continuation, not only from the click itself', async () => {
+    const onChange = renderPanel();
+    const quiet = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      fireEvent.click(screen.getByRole('button', { name: 'bad value later' }));
+      expect((await screen.findByTestId('widget-editor-write-error')).textContent).toMatch(/zigzag|curve/);
+    } finally {
+      quiet.mockRestore();
+    }
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it('drops a refusal message when the panel is pointed at another widget', () => {
+    const onChange = vi.fn();
+    const props = {
+      registry: createWidgetRegistry([valveWidget]),
+      datasource: undefined,
+      slots,
+      onChange,
+      onDatasource: vi.fn(),
+      onClose: vi.fn(),
+    };
+    const { rerender } = render(<WidgetConfigPanel widget={widget} {...props} />);
+    const quiet = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      fireEvent.click(screen.getByRole('button', { name: 'bad value' }));
+    } finally {
+      quiet.mockRestore();
+    }
+    expect(screen.getByTestId('widget-editor-write-error')).toBeTruthy();
+    rerender(<WidgetConfigPanel widget={{ ...widget, id: 'w2' } as ResolvedWidgetInstance} {...props} />);
+    expect(screen.queryByTestId('widget-editor-write-error')).toBeNull();
+  });
+
+  it('surfaces a rejected host lookup beside the editor and still hands the rejection to it', async () => {
+    let caught: unknown;
+    const Looker = ({ services }: WidgetEditorProps) => (
+      <button
+        type="button"
+        onClick={() => {
+          services.commandChoices!('dev-1').catch((err: unknown) => {
+            caught = err;
+          });
+        }}
+      >
+        look up
+      </button>
+    );
+    const cmdWidget = defineWidget({
+      descriptor: {
+        ...descriptorWith({ commandName: cv(), commandLabel: cv(), parameterSchema: cv() }),
+        id: 'acme/cmd' as const,
+      },
+      implementation: { kind: 'trusted-react', component: () => null, editor: Looker },
+    });
+    api.fails = true;
+    const quiet = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      render(
+        <WidgetConfigPanel
+          widget={{ ...widget, type: 'acme/cmd' as ResolvedWidgetInstance['type'], options: {} } as ResolvedWidgetInstance}
+          registry={createWidgetRegistry([cmdWidget])}
+          datasource={undefined}
+          slots={slots}
+          onChange={vi.fn()}
+          onDatasource={vi.fn()}
+          onClose={vi.fn()}
+        />,
+      );
+      fireEvent.click(screen.getByRole('button', { name: 'look up' }));
+      expect((await screen.findByTestId('widget-editor-write-error')).textContent).toMatch(/vocabulary lookup refused/);
+      expect(caught).toBeInstanceOf(Error);
+    } finally {
+      quiet.mockRestore();
+      api.fails = false;
+    }
   });
 });
