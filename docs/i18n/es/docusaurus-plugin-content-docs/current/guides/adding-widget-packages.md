@@ -75,8 +75,8 @@ Despliega todas las aplicaciones a la vez. Un panel creado en la consola con tu 
 marcador de posición en una compilación de `/dash` o del reproductor que no incluya el paquete.
 
 Si la composición no es válida, por ejemplo porque dos paquetes reclaman el mismo id o un
-descriptor está mal formado, el registro lanza un único error que enumera todos los fallos y la
-aplicación falla al cargarse, de modo que un paquete roto aparece en la compilación que pruebas y no
+descriptor está mal formado, el registro lanza un único error que enumera todos los fallos la
+primera vez que la aplicación lo construye (al abrir o editar un panel por primera vez), de modo que un paquete roto aparece en la compilación que pruebas y no
 widget a widget en producción.
 
 Esta lista es código de confianza compilado en la aplicación. No es un instalador en tiempo de

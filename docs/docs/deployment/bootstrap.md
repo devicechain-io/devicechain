@@ -18,10 +18,10 @@ dcctl bootstrap local my-instance
 operator manifests are all embedded in it, so you never need a checkout of the source tree
 or `git` to deploy.
 
-It does not carry its own tools. `install` and `bootstrap` drive `docker`, `kubectl`, `helm`
-and `tofu` (or `terraform`) as binaries on your `PATH`, plus `kind` on the `local` provider.
-Both commands check for all of them before they start and stop if one is missing, so install
-them first. The full list is under [Prerequisites](#prerequisites).
+It does not carry its own tools. `install` and `bootstrap` drive `kubectl`, `helm` and `tofu`
+(or `terraform`) as binaries on your `PATH`, plus `docker` and `kind` when dcctl runs the cluster
+itself (the `local` provider) and `docker` when it builds images (`--build`). Both commands check
+for the ones the run needs before they start and stop if one is missing, so install them first. The full list is under [Prerequisites](#prerequisites).
 
 :::note Status
 DeviceChain is pre-release. `dcctl install local` and `dcctl bootstrap local` are implemented
@@ -639,9 +639,11 @@ The alerts for snapshots are described under
   [opentofu.org](https://opentofu.org). Run `dcctl preflight local` to check that it is there,
   and the rest of your environment, up front. The preflight does not check its version; an older
   one fails when it loads the infrastructure configuration.
-- **`docker`, `kubectl` and `helm`** on your `PATH`, and **`kind`** for the `local` provider.
-  The preflight check fails if any of them is missing. Docker should be a native Docker engine
-  rather than Docker Desktop, and its daemon must be reachable.
+- **`kubectl` and `helm`** on your `PATH`, and **`docker`** and **`kind`** for the `local`
+  provider. The preflight check fails if any the run needs is missing. Docker is needed only for a
+  local kind cluster or for `--build`: an install into a cluster you name with `--kube-context`,
+  from published images, does not check for it or use it. Where it is needed, it should be a
+  native Docker engine rather than Docker Desktop, and its daemon must be reachable.
 - **`ko`**, only to build images from source with `--build`. The preflight check warns rather
   than fails when it is missing.
 
@@ -724,7 +726,8 @@ pass it a passphrase, and checks an existing one every time it runs. See
 ### The object store {#object-store}
 
 Tenant branding logos and update artifacts live in an object store rather than in the database.
-Without one, uploading either is refused with `OBJECT_STORE_NOT_CONFIGURED`. The store is
+Without one, declaring an update artifact is refused with `OBJECT_STORE_NOT_CONFIGURED`, and
+a logo upload is answered with `503`. The store is
 **fixed configuration**: it is chosen at bootstrap, written into the instance's mounted
 configuration, and adopted by rolling the pods. It is not a runtime setting.
 

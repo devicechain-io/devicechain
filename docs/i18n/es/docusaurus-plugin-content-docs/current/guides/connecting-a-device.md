@@ -86,7 +86,7 @@ Una lectura es un dato almacenado. En mediciones, es una *clave de métrica*, as
 
 Ese abanico es la razón de ser del límite. El techo de ingesta por inquilino cuenta lecturas a lo largo del tiempo, así que limita cuántas envía un inquilino por segundo, y un mensaje no puede costar más que la ráfaga del nivel. Pero la ráfaga es un ajuste del nivel: un nivel cuya ráfaga se eleve a cuarenta mil podría enviar un mensaje de cuarenta mil. Sin el límite, lo que un mensaje le cuesta a toda la instancia lo fijaría la mayor ráfaga que permita cualquier nivel. Un dispositivo con un backlog más profundo lo sube en varios mensajes.
 
-Por encima del límite, el mensaje se **rechaza entero**, nunca se recorta para que quepa. Un lote recortado en silencio se respondería con `202`, y las lecturas ausentes serían indetectables desde ambos extremos. No se almacena nada y no se pierde nada: el mensaje se enruta íntegro al flujo de decodificación fallida.
+Por encima del límite, el mensaje se **rechaza entero**, nunca se recorta para que quepa. Un lote recortado en silencio se respondería con `202`, y las lecturas ausentes serían indetectables desde ambos extremos. No se almacena nada. Para el diagnóstico, el mensaje se enruta al flujo de decodificación fallida sin la credencial que llevara y con su cuerpo recortado a los primeros 16 KiB.
 
 Cómo se entera el dispositivo depende del transporte:
 
@@ -334,7 +334,18 @@ Este topic era antes de alcance de inquilino (`{instanceId}/{tenant}/command-res
 Un comando que nunca se responde permanece en `SENT` hasta que su TTL lo convierte en `TIMEOUT`. Sin una respuesta, la plataforma solo sabe que el comando se despachó, no que el dispositivo actuó sobre él. Si tus dispositivos no responden, configura un `expiresAt` al emitir comandos para que alcancen un estado terminal en tu propio plazo y no en el predeterminado de siete días de la plataforma.
 :::
 
-### Topics de entrega de configuración {#reserved-device-topics}
+### Por qué el nonce es obligatorio {#why-the-nonce-is-required}
+
+Devolver `dispatchNonce` le indica a la plataforma que tu respuesta corresponde a **esta** entrega del comando. Importa porque un comando puede publicarse legítimamente más de una vez. Si una publicación informa de un error, la plataforma no puede distinguir un mensaje que se perdió de uno cuyo acuse de recibo se perdió, así que vuelve a encolar el comando para enviarlo de nuevo. Sin el nonce, una respuesta a la primera entrega que llegue después de enviarse la segunda cerraría el comando antes de que el dispositivo hubiera ejecutado esa segunda entrega.
+
+Para un dispositivo que construyes tú, esto tiene dos consecuencias:
+
+- Una respuesta **sin** `dispatchNonce` se rechaza. El comando no se cierra, y la respuesta queda registrada en el flujo de mensajes descartados de la plataforma en lugar de perderse, de modo que el rechazo es visible y no silencioso.
+- Una respuesta que cita un `dispatchNonce` del que el comando ya **se ha movido** se rechaza igual. Responde con el nonce de la entrega que realmente estás contestando.
+
+Guarda el nonce junto al comando mientras lo ejecutas, y sobrescríbelo si el mismo comando se entrega de nuevo antes de que respondas.
+
+## Topics de entrega de configuración {#reserved-device-topics}
 
 Un dispositivo recibe su configuración, y le dice a la plataforma qué hizo con ella, mediante dos topics por dispositivo:
 
@@ -344,6 +355,8 @@ Un dispositivo recibe su configuración, y le dice a la plataforma qué hizo con
 ```
 
 Igual que con los comandos, un dispositivo solo está autorizado para el topic que lleva su propio token de dispositivo, y únicamente en el sentido indicado. La plataforma toma el tenant y el dispositivo del topic, nunca del mensaje, así que un mensaje no debe llevar la identidad de un dispositivo (si la lleva, se rechaza) y un dispositivo solo puede informar por sí mismo.
+
+La configuración se construye a partir de los atributos `SHARED` del dispositivo, pero solo con las claves que su perfil declara como configuración visible para el dispositivo: decláralas en el editor de perfiles de la consola (o con `setDeviceProfileConfigurationDeclaration`), y llegan a los dispositivos cuando se publica el perfil. Una clave compartida que la declaración no nombra nunca se envía, y una clave declarada cuyo valor almacenado no encaja con su tipo declarado se omite. Una escritura de atributo compartido que haría la configuración de un dispositivo mayor de 64 KiB se rechaza. La página del dispositivo en la consola muestra la última revisión, lo último que informó el dispositivo y si la revisión sigue pendiente; la consulta `deviceConfiguration` devuelve lo mismo.
 
 Cada vez que cambia la configuración del dispositivo, la plataforma publica una revisión en `device-desired`:
 
@@ -362,16 +375,58 @@ El dispositivo responde en `device-reports`. Cada mensaje es JSON, de como máxi
 
 La plataforma registra un `config.status` solo cuando el dispositivo tiene esa revisión y el digest coincide con ella; el dispositivo deja de figurar como pendiente de esa revisión cuando ha informado `APPLIED` para ella. Los informes se procesan al menos una vez, así que repetir uno es seguro, y un informe antiguo nunca sobrescribe uno más reciente. Un mensaje que no se decodifica, que nombra una revisión que no se envió al dispositivo o que lleva un digest que no es el de esa revisión se rechaza y se registra en el flujo de mensajes fallidos (dead-letter) en lugar de descartarse. Los dispositivos que solo hablan HTTP no se atienden por este canal.
 
-### Por qué el nonce es obligatorio {#why-the-nonce-is-required}
+## Actualizaciones over-the-air {#over-the-air-updates}
 
-Devolver `dispatchNonce` le indica a la plataforma que tu respuesta corresponde a **esta** entrega del comando. Importa porque un comando puede publicarse legítimamente más de una vez. Si una publicación informa de un error, la plataforma no puede distinguir un mensaje que se perdió de uno cuyo acuse de recibo se perdió, así que vuelve a encolar el comando para enviarlo de nuevo. Sin el nonce, una respuesta a la primera entrega que llegue después de enviarse la segunda cerraría el comando antes de que el dispositivo hubiera ejecutado esa segunda entrega.
+En una instancia que ejecuta el servicio de actualizaciones (consulta [Actualizaciones over-the-air](../concepts/over-the-air-updates.md)), los mismos dos topics transportan actualizaciones de firmware y software. Las reglas anteriores también se aplican aquí: cada mensaje lleva `"v":1` y un `kind`, los campos desconocidos o repetidos se rechazan, y un mensaje no debe llevar una identidad de dispositivo. Los mensajes de actualización, en cualquier sentido, ocupan como máximo 4 KiB.
 
-Para un dispositivo que construyes tú, esto tiene dos consecuencias:
+Cuando se asigna un artefacto al dispositivo, la plataforma publica en `device-desired`:
 
-- Una respuesta **sin** `dispatchNonce` se rechaza. El comando no se cierra, y la respuesta queda registrada en el flujo de mensajes descartados de la plataforma en lugar de perderse, de modo que el rechazo es visible y no silencioso.
-- Una respuesta que cita un `dispatchNonce` del que el comando ya **se ha movido** se rechaza igual. Responde con el nonce de la entrega que realmente estás contestando.
+```json
+{"v":1,"kind":"update.assignment","attemptId":"att-7f3k","assignmentId":"asg-91xq","component":"firmware","trust":"UNVERIFIED","artifact":{"version":"1.4.2","digest":"sha256:…","size":8388608,"requiresReboot":true}}
+```
 
-Guarda el nonce junto al comando mientras lo ejecutas, y sobrescríbelo si el mismo comando se entrega de nuevo antes de que respondas.
+`component` nombra la parte del dispositivo que se actualiza; un dispositivo trabaja como máximo en una asignación por componente. `requiresReboot` es true para un artefacto de firmware y false para los de software y configuración. `trust` es siempre `UNVERIFIED`: la plataforma ha comprobado que los bytes son los que se declararon, no quién los produjo, así que un dispositivo que necesite saber que una imagen es auténtica debe comprobar una firma propia.
+
+Para obtener la imagen, pide una concesión de descarga en `device-reports`:
+
+```json
+{"v":1,"kind":"download.request","assignmentId":"asg-91xq"}
+```
+
+La plataforma responde en `device-desired` con una URL que funciona, sin ninguna otra credencial, para este único artefacto hasta `expiresAt` (como máximo quince minutos):
+
+```json
+{"v":1,"kind":"download.grant","assignmentId":"asg-91xq","url":"https://…/api/update-management/updates/download/…?cap=…","expiresAt":"2026-10-12T10:15:00Z"}
+```
+
+Descárgala con un `GET` HTTP. El endpoint responde a peticiones `Range`, así que una descarga interrumpida se reanuda desde los bytes que ya tienes; cuando la concesión caduca, envía de nuevo el mismo `download.request` para obtener otra. Si la asignación ya no es la vigente, la respuesta es un `update.cancel` en lugar de una concesión.
+
+Informa de cada etapa en `device-reports` con `update.progress`:
+
+```json
+{"v":1,"kind":"update.progress","attemptId":"att-7f3k","assignmentId":"asg-91xq","component":"firmware","artifactDigest":"sha256:…","seq":3,"stage":"DOWNLOADING","progress":{"bytes":4194304,"total":8388608},"bootId":"b-20261012-0815"}
+```
+
+- `attemptId`, `assignmentId`, `component` y `artifactDigest` repiten los de la asignación; un informe que nombra otro intento u otro digest no se aplica.
+- `seq` empieza en 1 y aumenta con cada informe del intento. Enviar de nuevo el mismo informe es inocuo; un informe distinto con un `seq` ya usado es un conflicto y no se aplica.
+- `stage` es uno de `RECEIVED`, `DOWNLOADING`, `DOWNLOADED`, `VERIFIED`, `INSTALLING`, `REBOOTING`, `RUNNING`, `FAILED` y `ABANDONED`. Puedes saltarte una etapa cuyo informe se perdió, pero nunca volver a una anterior.
+- `progress` (los bytes que tienes y el total, si se conoce) solo se admite con `DOWNLOADING`.
+- Informa de `VERIFIED` solo cuando el SHA-256 de los bytes que tienes coincida con `artifact.digest`.
+- `FAILED` debe llevar `result`: `{"code":"FLASH_WRITE","detail":"…"}`, un código de hasta 64 letras mayúsculas, dígitos y guiones bajos, y un detalle de hasta 512 bytes.
+- `RUNNING` debe llevar `running`: `{"version":"1.4.2"}`, opcionalmente con el `digest` de lo que se ejecuta. Envíalo en cuanto la nueva versión esté en ejecución. Un informe `RUNNING` que nombra cualquier otra versión no se aplica: si el dispositivo no está en la objetivo, informa `FAILED`.
+- `bootId` es obligatorio en cada informe: un identificador del arranque actual, de hasta 128 caracteres imprimibles, que cambia cada vez que el dispositivo arranca. Cuando `requiresReboot` es true, la plataforma acepta `RUNNING` como prueba de la actualización solo desde un arranque distinto de aquel en el que el dispositivo la instaló.
+
+`update.cancel` (`{"v":1,"kind":"update.cancel","attemptId":"att-7f3k","assignmentId":"asg-91xq"}`) pide al dispositivo que deje de trabajar en esa asignación. Si no ha empezado a instalar, informa de la `stage` `ABANDONED`; una vez iniciada la instalación, la actualización no se puede revocar.
+
+Después de arrancar, un dispositivo informa de lo que ejecuta cada componente con `update.inventory`, que no nombra ningún intento:
+
+```json
+{"v":1,"kind":"update.inventory","component":"firmware","running":{"version":"1.4.2"},"bootId":"b-20261012-0821"}
+```
+
+Así es como se resuelve una actualización que la plataforma marcó como `UNKNOWN` porque el dispositivo calló mientras instalaba o reiniciaba.
+
+El `sync` que un dispositivo envía en cada conexión (consulta [Topics de entrega de configuración](#reserved-device-topics)) también hace que la plataforma reenvíe cada actualización en la que el dispositivo todavía debería estar trabajando, y una cancelación para cualquiera cuya cancelación el dispositivo no haya confirmado. Las asignaciones no se retienen, así que suscríbete a `device-desired` antes de enviar el sync.
 
 ## Qué sucede a continuación
 

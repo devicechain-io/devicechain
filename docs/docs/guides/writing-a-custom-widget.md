@@ -119,8 +119,9 @@ declare `min`, `max` and `integer`. An enum declares its `values`. A string can 
 absence leaves the widget with nothing to show; an empty string counts as absent. The host
 validates stored options against the schema, and the console generates its settings form from it.
 
-Read options defensively with the SDK helpers `optString`, `optNumber` and `optBoolean`. They return
-`undefined` for a hand-edited value of the wrong type instead of throwing.
+Read options defensively with the SDK helpers `optString`, `optNumber` and `optBoolean`. For a hand-edited
+value of the wrong type they do not throw: `optString` and `optNumber` return `undefined`, and
+`optBoolean` returns `false` for anything but a stored `true`.
 
 ### Labels and help text {#labels-and-help-text}
 

@@ -19,10 +19,11 @@ dcctl bootstrap local my-instance
 de Helm y los manifiestos del operador están todos incrustados en él, así que nunca necesitas
 un checkout del árbol de código fuente ni `git` para desplegar.
 
-Lo que no lleva son sus propias herramientas. `install` y `bootstrap` ejecutan `docker`,
-`kubectl`, `helm` y `tofu` (o `terraform`) como binarios en tu `PATH`, y además `kind` en el
-proveedor `local`. Ambos comandos comprueban que estén todos antes de empezar y se detienen
-si falta alguno, así que instálalos primero. La lista completa está en
+Lo que no lleva son sus propias herramientas. `install` y `bootstrap` ejecutan `kubectl`,
+`helm` y `tofu` (o `terraform`) como binarios en tu `PATH`, y además `docker` y `kind` cuando
+dcctl gestiona el propio clúster (el proveedor `local`) y `docker` cuando construye imágenes
+(`--build`). Ambos comandos comprueban que estén las que necesita la ejecución antes de empezar
+y se detienen si falta alguna, así que instálalas primero. La lista completa está en
 [Prerrequisitos](#prerequisites).
 
 :::note Estado
@@ -696,9 +697,12 @@ Las alertas de las instantáneas se describen en
   [opentofu.org](https://opentofu.org). Ejecuta `dcctl preflight local` para comprobar que está
   y el resto de tu entorno de antemano. La comprobación previa no mira su versión; una anterior
   falla al cargar la configuración de la infraestructura.
-- **`docker`, `kubectl` y `helm`** en tu `PATH`, y **`kind`** para el proveedor `local`. La
-  comprobación previa falla si falta alguno. Docker debería ser un motor de Docker nativo y no
-  Docker Desktop, y su daemon tiene que ser accesible.
+- **`kubectl` y `helm`** en tu `PATH`, y **`docker`** y **`kind`** para el proveedor `local`. La
+  comprobación previa falla si falta alguno de los que necesita la ejecución. Docker solo hace
+  falta para un clúster local de kind o para `--build`: una instalación en un clúster que nombras
+  con `--kube-context`, a partir de imágenes publicadas, no lo comprueba ni lo usa. Donde hace
+  falta, debería ser un motor de Docker nativo y no Docker Desktop, y su daemon tiene que ser
+  accesible.
 - **`ko`**, solo para compilar imágenes desde el código fuente con `--build`. La comprobación
   previa avisa, en lugar de fallar, cuando falta.
 
@@ -782,8 +786,8 @@ una frase de paso, y comprueba uno existente cada vez que se ejecuta. Consulta
 ### El almacén de objetos {#object-store}
 
 Los logotipos de marca de los tenants y los artefactos de actualización viven en un almacén de
-objetos, no en la base de datos. Sin uno, subir cualquiera de ellos se rechaza con
-`OBJECT_STORE_NOT_CONFIGURED`. El almacén es **configuración fija**: se elige al hacer bootstrap,
+objetos, no en la base de datos. Sin uno, declarar un artefacto de actualización se rechaza con
+`OBJECT_STORE_NOT_CONFIGURED`, y una subida de logotipo se responde con `503`. El almacén es **configuración fija**: se elige al hacer bootstrap,
 se escribe en la configuración montada de la instancia y se adopta reiniciando los pods. No es un
 ajuste en tiempo de ejecución.
 

@@ -14,7 +14,7 @@ Single sign-on speaks **OpenID Connect**. SAML is not supported. The recipes for
 
 ## Connections {#connections}
 
-A **connection** is one identity provider registered with the instance. Only a superuser creates, changes or deletes connections, through **Admin → Identity providers** in the console or the admin API. There are two kinds:
+A **connection** is one identity provider registered with the instance. Only an instance administrator creates, changes or deletes connections: a superuser, through **Admin → Identity providers** in the console or the admin API, or an identity whose system role holds `user:write` (the authority every connection, link and enforcement operation checks), through the admin API only, since the console's admin pages open for a superuser alone. There are two kinds:
 
 | | Tenant connection | Instance connection |
 | --- | --- | --- |
@@ -48,9 +48,13 @@ Every request to a provider goes through the platform's egress guard, so a provi
 
 ## Signing in {#sign-in}
 
-The console and the dashboard app show **Sign in with SSO** beside the password form. The flow is OpenID Connect authorization code with PKCE:
+The console opens on the email address alone. If an enabled connection speaks for the address's domain, it offers **Continue with single sign-on**, with **Use a password instead** beside it, so an account that has only a password (an operator's, say) can still sign in. Any other address is asked for its password. **Sign in with SSO** stays on the screen for anyone who wants to go straight to their provider, and the dashboard app keeps its single form with that button beside the password.
 
-1. The person enters their email and chooses **Sign in with SSO**. The browser keeps a random secret and sends its hash.
+The check is about the **domain, never the person**. It answers the same way whether or not an identity exists for the address, so it cannot be used to find accounts. A domain nobody has set up and a domain whose people use passwords get exactly the same screen, and so does an instance with single sign-on switched off, a throttled address or an unreachable server: the only difference a person can see is whether single sign-on is offered. The console is not told whether a tenant requires single sign-on, which would reveal which domains belong to such a tenant, so it never hides the password field on that basis; the server judges that when a tenant is chosen (see below).
+
+The flow is OpenID Connect authorization code with PKCE:
+
+1. The person enters their email and chooses **Continue with single sign-on** (or **Sign in with SSO**). The browser keeps a random secret and sends its hash.
 2. DeviceChain records the sign-in (valid ten minutes, usable once) and sends the browser to the provider.
 3. The provider authenticates the person and returns to `<issuerUrl>/sso/callback/<connection>`.
 4. DeviceChain checks the answer: the state and the connection match, the token's signature, issuer, audience, expiry and nonce, the connection's required claims and methods, and the identity rules below.
@@ -58,7 +62,7 @@ The console and the dashboard app show **Sign in with SSO** beside the password 
 
 The page that receives the code (`/login/sso/complete` for the console, `/dash/sso/complete` for the dashboard app) takes it out of the address bar at once and is served with `Referrer-Policy: no-referrer`, so nothing it loads can carry the address. Once the sign-in is finished, or the person goes back to the sign-in form, the app is loaded afresh rather than continuing on that page, so the rest of the session sends a normal `Referer`; the default OpenStreetMap basemap requires one. If your own proxy sits in front of the console, scope any Referer-stripping header to those two exact paths.
 
-When a sign-in is refused, the person sees a coarse message ("Single sign-on did not allow this account in", "your account is not linked yet") and never which check failed. (Linking one's own account is the exception: the person is already signed in and every check is about their own account, so a link refusal says which check failed; see [linking](#linking).) The precise outcome is counted in the `devicechain_usermanagement_sso_logins_total` metric and refusals are written to the audit journal with the address the provider asserted.
+When a sign-in is refused, the person sees a coarse message ("Single sign-on did not allow this account in", "Your account exists but is not linked to this identity provider yet") and never which check failed. (Linking one's own account is the exception: the person is already signed in and every check is about their own account, so a link refusal says which check failed; see [linking](#linking).) The precise outcome is counted in the `devicechain_usermanagement_sso_logins_total` metric and refusals are written to the audit journal with the address the provider asserted.
 
 ## Identities, linking and provisioning {#linking}
 

@@ -48,12 +48,14 @@ El broker de la plataforma es el servidor MQTT integrado en NATS. Un topic MQTT 
 | [Evento](#device-event) | dispositivo → plataforma | `{instanceId}/{tenant}/devices/{deviceToken}/events` | `{instanceId}.{tenant}.devices.{deviceToken}.events` |
 | [Entrega de comando](#command-delivery) | plataforma → dispositivo | `{instanceId}/{tenant}/device-commands/{deviceToken}` | `{instanceId}.{tenant}.device-commands.{deviceToken}` |
 | [Respuesta a comando](#command-response) | dispositivo → plataforma | `{instanceId}/{tenant}/command-responses/{deviceToken}` | `{instanceId}.{tenant}.command-responses.{deviceToken}` |
+| Mensajes de [configuración](../guides/connecting-a-device.md#reserved-device-topics) y de [actualización](../guides/connecting-a-device.md#over-the-air-updates) | plataforma → dispositivo | `{instanceId}/{tenant}/device-desired/{deviceToken}` | `{instanceId}.{tenant}.device-desired.{deviceToken}` |
+| Informes de configuración y de actualización | dispositivo → plataforma | `{instanceId}/{tenant}/device-reports/{deviceToken}` | `{instanceId}.{tenant}.device-reports.{deviceToken}` |
 
 - Un dispositivo solo está autorizado a publicar y suscribirse en los topics que llevan **su propio** token. No puede leer los comandos de otro dispositivo ni publicar como otro dispositivo.
 - **Los dispositivos se conectan por MQTT, no por NATS directo.** Una credencial de dispositivo autoriza solo una conexión MQTT: un cliente NATS simple que presente una se rechaza al conectar. La columna de subjects es lo que ve un operador en las herramientas de NATS, no una segunda vía de entrada. La configuración de la conexión (el client id, el usuario `{tenant}:{credentialId}`, TLS) está en [Ajustes de conexión](../guides/connecting-a-device.md#connection-settings).
 - Publica los eventos con QoS 0, o con QoS 1 y un [`altId`](#device-event). Las publicaciones QoS 2 se rechazan por defecto y el broker cierra la conexión; consulta [Calidad de servicio](../guides/connecting-a-device.md#quality-of-service).
 
-Por **HTTP**, un dispositivo solo puede enviar eventos. Haz `POST` del mismo [cuerpo de evento](#device-event) a `/{instanceId}/{tenant}/events` en el servicio `event-sources` (puerto 8081). No hay canal de bajada por HTTP: un dispositivo que solo usa HTTP no puede recibir comandos.
+Por **HTTP**, un dispositivo solo puede enviar eventos. Haz `POST` del mismo [cuerpo de evento](#device-event) a `/{instanceId}/{tenant}/events` en el servicio `event-sources` (puerto 8081). No hay canal de bajada por HTTP: un dispositivo que solo usa HTTP no puede recibir comandos, configuración ni asignaciones de actualización.
 
 ## Evento de dispositivo {#device-event}
 

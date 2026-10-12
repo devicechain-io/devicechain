@@ -13,7 +13,7 @@ Las recetas para Microsoft Entra ID, Okta y Google Workspace que siguen están e
 ## Antes de empezar {#before}
 
 - **La instancia necesita una dirección pública.** El inicio de sesión único necesita `auth.issuerUrl` ([más abajo](#deployment)). Si está vacío, crear una conexión falla con "sso requires a public issuer URL".
-- **Necesitas iniciar sesión como superusuario** en la consola (**Admin → Identity providers**) o en la API de administración.
+- **Necesitas iniciar sesión como superusuario** en la consola (**Admin → Identity providers**) o en la API de administración. Una identidad cuyo rol de sistema tenga `user:write` también puede usar la API de administración, pero no las páginas de administración de la consola, que solo se abren para un superusuario.
 - **En el proveedor** necesitas registrar DeviceChain como aplicación (un cliente "web" o "confidential" que use el flujo de código de autorización) y anotar su id de cliente y su secreto de cliente.
 - **Decide el inquilino y el dominio.** Una conexión de inquilino sirve a los inquilinos que nombres y representa los dominios de correo que afirmes.
 
@@ -97,8 +97,8 @@ Las métricas detrás de ellas son `devicechain_usermanagement_sso_logins_total{
 
 | Síntoma | Causa probable |
 | --- | --- |
-| "Single sign-on is not set up for that email address" | El dominio no está afirmado en ninguna conexión. |
-| "Single sign-on is not available right now" | La conexión de ese dominio está deshabilitada, o su descubrimiento no está aprobado. |
+| La consola pide una contraseña para una dirección que debería usar el inicio de sesión único, o **Iniciar sesión con SSO** dice "Single sign-on is not set up for that email address" | Ninguna conexión utilizable habla por el dominio: no está afirmado en ninguna conexión, o su conexión está deshabilitada o su descubrimiento no está aprobado. Un inicio de sesión por dirección responde igual en todos estos casos (la conexión aparece con el resultado `refused_connection_unavailable`), y la consola también pide una contraseña cuando la instancia no tiene inicio de sesión único, así que revisa **Admin → Identity providers**. |
+| "Single sign-on is not available right now" | La instancia no está configurada para el inicio de sesión único (véase [Despliegue](#deployment)), o se iniciaron demasiados inicios de sesión desde la misma dirección: espera un momento y vuelve a intentarlo. |
 | "Your account exists but is not linked" | La dirección ya tiene una identidad: aprueba su solicitud de vínculo. |
 | Todos los inicios de sesión se rechazan como no verificados | El proveedor no envía un correo verificado (para Entra, añade `xms_edov`). |
 | Rechazo tras un cambio del proveedor | El proveedor movió un endpoint: **Refresh from provider** y aprueba de nuevo. |

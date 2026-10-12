@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/rsa"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -341,6 +342,58 @@ func TestBeginByEmailFindsTheConnectionByVerifiedDomainOnly(t *testing.T) {
 		require.NoError(t, err)
 		require.Nil(t, b, "%s is not in a verified domain: no connection, sign in another way", email)
 	}
+}
+
+// A domain asserted for a connection that cannot begin a sign-in (switched off, or its
+// discovery snapshot awaiting approval) answers by email exactly as a domain with no
+// connection does: null, nothing written. The sign-in screen asks this for every address,
+// so the answer must not tell a claimed-but-unusable domain from an unclaimed one. Named by
+// TOKEN the connection still refuses out loud, and the operator's counter still sees it.
+func TestBeginByEmailAnswersAnUnusableConnectionAsNone(t *testing.T) {
+	e := newSsoEnv(t)
+	ctx := context.Background()
+	_, challenge := verifierPair()
+	byEmail := BeginSsoInput{Email: "someone@" + ssoTestDomain, ReturnTo: ssoTestReturnTo, CodeChallenge: challenge}
+	stateKeys := func() int {
+		keys, err := e.m.ssoStateKV.Keys()
+		if errors.Is(err, nats.ErrNoKeysFound) {
+			return 0
+		}
+		require.NoError(t, err)
+		return len(keys)
+	}
+
+	_, err := e.m.UpdateIdpConnection(ctx, "acme-idp", &IdpConnectionUpdateRequest{Enabled: optBool(false)})
+	require.NoError(t, err)
+	b, err := e.m.BeginSso(ctx, byEmail, e.source())
+	require.NoError(t, err, "a disabled connection is not a different answer from no connection")
+	require.Nil(t, b)
+	require.Equal(t, 0, stateKeys(), "nothing is begun for a connection that cannot be used")
+	require.Equal(t, 1, e.metrics.count("acme-idp", SsoOutcomeRefusedConnectionUnusable))
+
+	_, err = e.m.BeginSso(ctx, BeginSsoInput{Connection: "acme-idp", ReturnTo: ssoTestReturnTo, CodeChallenge: challenge}, e.source())
+	require.ErrorIs(t, err, ErrSsoUnavailable, "named by token, it still refuses")
+
+	// Enabled again, but with an endpoint move awaiting approval: the same null.
+	_, err = e.m.UpdateIdpConnection(ctx, "acme-idp", &IdpConnectionUpdateRequest{Enabled: optBool(true)})
+	require.NoError(t, err)
+	e.op.authorizePath = "/moved/authorize"
+	_, err = e.m.RefreshIdpDiscovery(ctx, "acme-idp")
+	require.NoError(t, err)
+	b, err = e.m.BeginSso(ctx, byEmail, e.source())
+	require.NoError(t, err)
+	require.Nil(t, b)
+	require.Equal(t, 0, stateKeys())
+
+	// Control: a usable connection by the same email begins.
+	moved, err := e.m.IdpConnection(ctx, "acme-idp")
+	require.NoError(t, err)
+	_, err = e.m.ApproveIdpDiscovery(ctx, "acme-idp", moved.Fingerprint)
+	require.NoError(t, err)
+	b, err = e.m.BeginSso(ctx, byEmail, e.source())
+	require.NoError(t, err)
+	require.NotNil(t, b)
+	require.Equal(t, 1, stateKeys())
 }
 
 // ---- the discovery snapshot -------------------------------------------------------------

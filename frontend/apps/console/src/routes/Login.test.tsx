@@ -22,8 +22,12 @@ import LoginPage from './Login';
 const login = vi.fn();
 const selectTenant = vi.fn();
 const startSso = vi.fn();
+const discardPendingSso = vi.fn();
 
-vi.mock('@/lib/sso', () => ({ startSso: (...a: unknown[]) => startSso(...a) }));
+vi.mock('@/lib/sso', () => ({
+  startSso: (...a: unknown[]) => startSso(...a),
+  discardPendingSso: () => discardPendingSso(),
+}));
 
 // The provider is the app's session machinery (token storage, refresh timers, GraphQL
 // getters); none of it is this file's subject. Stubbed to the two calls the screen makes.
@@ -35,6 +39,11 @@ vi.mock('@/auth/AuthProvider', () => ({
 beforeEach(async () => {
   login.mockReset();
   selectTenant.mockReset();
+  // The first screen asks the server which way the email signs in. Unless a case says
+  // otherwise, no connection speaks for the domain, which is the password path.
+  startSso.mockReset();
+  startSso.mockResolvedValue(null);
+  discardPendingSso.mockReset();
   await i18n.changeLanguage('en');
 });
 
@@ -50,13 +59,14 @@ function renderLogin() {
 
 const t = (key: string) => i18n.t(key);
 
+// The email first, then the password once the screen has asked for it.
 async function submitCredentials() {
   fireEvent.change(screen.getByLabelText(t('login:emailLabel')), {
     target: { value: 'someone@example.com' },
   });
-  fireEvent.change(screen.getByLabelText(t('login:passwordLabel')), {
-    target: { value: 'hunter2' },
-  });
+  fireEvent.click(screen.getByRole('button', { name: t('login:continue') }));
+  const password = await screen.findByLabelText(t('login:passwordLabel'));
+  fireEvent.change(password, { target: { value: 'hunter2' } });
   fireEvent.submit(screen.getByRole('button', { name: t('login:signIn') }));
 }
 
@@ -146,7 +156,6 @@ describe('signing in with single sign-on', () => {
   const realLocation = window.location;
   const assign = vi.fn();
   beforeEach(() => {
-    startSso.mockReset();
     assign.mockReset();
     Object.defineProperty(window, 'location', {
       configurable: true,
@@ -249,6 +258,217 @@ describe('signing in with single sign-on', () => {
   });
 });
 
+// IDENTIFIER-FIRST. The first screen asks for the email alone and asks the server which
+// way it signs in. What these cases pin is the part that is easy to get subtly wrong: the
+// answer is about the DOMAIN, so it must look the same however the person got there.
+describe('the first screen asks for the email alone', () => {
+  const realLocation = window.location;
+  const assign = vi.fn();
+  beforeEach(() => {
+    assign.mockReset();
+    Object.defineProperty(window, 'location', {
+      configurable: true,
+      value: { ...realLocation, assign, origin: realLocation.origin },
+    });
+  });
+  afterEach(() => {
+    Object.defineProperty(window, 'location', { configurable: true, value: realLocation });
+  });
+
+  const typeEmail = (v: string) =>
+    fireEvent.change(screen.getByLabelText(t('login:emailLabel')), { target: { value: v } });
+  const clickContinue = () =>
+    fireEvent.click(screen.getByRole('button', { name: t('login:continue') }));
+  const passwordField = () => screen.queryByLabelText(t('login:passwordLabel'));
+  const GIVEN = 'https://idp.example.com/authorize?state=a%2Fb&nonce=n#x';
+
+  // What a person sees, as the set of things they can do next: the buttons by name and
+  // whether a password field exists. Two screens with the same shape here are
+  // indistinguishable to anyone not reading the DOM's text.
+  const shape = () =>
+    JSON.stringify({
+      buttons: screen.getAllByRole('button').map((b) => b.textContent),
+      password: passwordField() !== null,
+      notice: screen.queryByText(t('login:ssoDomainNotice')) !== null,
+    });
+
+  it('shows no password field and sends nothing but the email', () => {
+    renderLogin();
+    expect(passwordField()).toBeNull();
+    expect(screen.getByRole('button', { name: t('login:continue') })).toBeTruthy();
+    expect(screen.getByRole('button', { name: t('login:ssoButton') })).toBeTruthy();
+    expect(startSso).not.toHaveBeenCalled();
+    expect(login).not.toHaveBeenCalled();
+  });
+
+  it('asks about the trimmed email, and signs in nothing while it asks', async () => {
+    renderLogin();
+    typeEmail(' someone@acme.com ');
+    clickContinue();
+    await screen.findByLabelText(t('login:passwordLabel'));
+    expect(startSso).toHaveBeenCalledTimes(1);
+    expect(startSso).toHaveBeenCalledWith({ email: 'someone@acme.com', returnTo: null });
+    expect(login).not.toHaveBeenCalled();
+  });
+
+  it('offers single sign-on for a domain with a connection, and does not navigate by itself', async () => {
+    startSso.mockResolvedValue(GIVEN);
+    renderLogin();
+    typeEmail('someone@acme.com');
+    clickContinue();
+    await screen.findByText(t('login:ssoDomainNotice'));
+    expect(assign).not.toHaveBeenCalled();
+    expect(passwordField()).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: t('login:ssoContinue') }));
+    // The address the server gave, untouched.
+    expect(assign).toHaveBeenCalledWith(GIVEN);
+  });
+
+  it('keeps the password reachable at such a domain, and drops the begun sign-in when it is chosen', async () => {
+    startSso.mockResolvedValue(GIVEN);
+    login.mockResolvedValue({
+      identityToken: 'id',
+      expiresAt: 'x',
+      superuser: false,
+      memberships: [{ tenant: 'acme', roles: [], ssoRequired: false }],
+    });
+    renderLogin();
+    typeEmail('someone@acme.com');
+    clickContinue();
+    fireEvent.click(await screen.findByRole('button', { name: t('login:usePassword') }));
+
+    expect(discardPendingSso).toHaveBeenCalledTimes(1);
+    expect(assign).not.toHaveBeenCalled();
+    fireEvent.change(await screen.findByLabelText(t('login:passwordLabel')), {
+      target: { value: 'hunter2' },
+    });
+    fireEvent.submit(screen.getByRole('button', { name: t('login:signIn') }));
+    await waitFor(() => expect(login).toHaveBeenCalledWith('someone@acme.com', 'hunter2'));
+  });
+
+  it('goes to the password for a domain with no connection, without a word about single sign-on', async () => {
+    renderLogin();
+    typeEmail('someone@nowhere.example');
+    clickContinue();
+    await screen.findByLabelText(t('login:passwordLabel'));
+    expect(screen.queryByText(t('login:ssoNotConfigured'))).toBeNull();
+    expect(screen.queryByText(t('login:ssoDomainNotice'))).toBeNull();
+    expect(screen.queryByRole('alert')).toBeNull();
+    // ...and the explicit button is still there.
+    expect(screen.getByRole('button', { name: t('login:ssoButton') })).toBeTruthy();
+  });
+
+  // 🔴 THE ENUMERATION CASE. A domain nobody has set up and a domain whose people use
+  // passwords both come back null, and must be the very same screen. The only difference
+  // the UI may make is the one the person is owed: whether single sign-on is offered.
+  it('shows an unknown domain and a password-only domain as the same screen', async () => {
+    renderLogin();
+    typeEmail('someone@unknown.example');
+    clickContinue();
+    await screen.findByLabelText(t('login:passwordLabel'));
+    const unknown = shape();
+    cleanup();
+
+    renderLogin();
+    typeEmail('someone@passwords-only.example');
+    clickContinue();
+    await screen.findByLabelText(t('login:passwordLabel'));
+    expect(shape()).toBe(unknown);
+  });
+
+  it.each([
+    ['the instance has no single sign-on', REJECTED],
+    ['the address is throttled', new GraphQLRequestError('too many requests', 429)],
+    ['the server is unreachable', new GraphQLRequestError('Failed to fetch', 0)],
+  ])('falls to the password field, quietly, when %s', async (_label, err) => {
+    startSso.mockRejectedValue(err);
+    renderLogin();
+    typeEmail('someone@acme.com');
+    clickContinue();
+    await screen.findByLabelText(t('login:passwordLabel'));
+    expect(screen.queryByRole('alert')).toBeNull();
+    // The failure is the SAME screen as a domain with no connection.
+    expect(screen.getByRole('button', { name: t('login:ssoButton') })).toBeTruthy();
+  });
+
+  it('lets the person change the email, and forgets the password they typed', async () => {
+    renderLogin();
+    typeEmail('someone@acme.com');
+    clickContinue();
+    fireEvent.change(await screen.findByLabelText(t('login:passwordLabel')), {
+      target: { value: 'hunter2' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: t('login:changeEmail') }));
+
+    expect(passwordField()).toBeNull();
+    expect((screen.getByLabelText(t('login:emailLabel')) as HTMLInputElement).readOnly).toBe(false);
+    typeEmail('other@acme.com');
+    clickContinue();
+    const again = (await screen.findByLabelText(t('login:passwordLabel'))) as HTMLInputElement;
+    expect(again.value).toBe('');
+  });
+
+  it('does not let the address be edited once the password is asked for', async () => {
+    renderLogin();
+    typeEmail('someone@acme.com');
+    clickContinue();
+    await screen.findByLabelText(t('login:passwordLabel'));
+    expect((screen.getByLabelText(t('login:emailLabel')) as HTMLInputElement).readOnly).toBe(true);
+  });
+
+  it('keeps Sign in with SSO working from the password step', async () => {
+    renderLogin();
+    typeEmail('someone@acme.com');
+    clickContinue();
+    await screen.findByLabelText(t('login:passwordLabel'));
+    startSso.mockResolvedValue(GIVEN);
+    fireEvent.click(screen.getByRole('button', { name: t('login:ssoButton') }));
+    await waitFor(() => expect(assign).toHaveBeenCalledWith(GIVEN));
+  });
+
+  // 🔴 Enter on the single sign-on step. The email field keeps focus after Enter on the
+  // first screen, so a second Enter submits the SAME form, which on this step has no
+  // password field: it must continue to the provider, never send a password sign-in with
+  // an empty password (a failed attempt counted against the account).
+  it('continues to the provider on Enter at a domain with a connection, and sends no password', async () => {
+    startSso.mockResolvedValue(GIVEN);
+    renderLogin();
+    typeEmail('someone@acme.com');
+    clickContinue();
+    const sso = await screen.findByRole('button', { name: t('login:ssoContinue') });
+    expect(document.activeElement).toBe(sso);
+
+    fireEvent.submit(screen.getByLabelText(t('login:emailLabel')).closest('form')!);
+    await waitFor(() => expect(assign).toHaveBeenCalledWith(GIVEN));
+    expect(login).not.toHaveBeenCalled();
+    expect(startSso).toHaveBeenCalledTimes(1);
+  });
+
+  it('drops the begun sign-in when the email is changed at a domain with a connection', async () => {
+    startSso.mockResolvedValue(GIVEN);
+    renderLogin();
+    typeEmail('someone@acme.com');
+    clickContinue();
+    fireEvent.click(await screen.findByRole('button', { name: t('login:changeEmail') }));
+
+    expect(discardPendingSso).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText(t('login:ssoDomainNotice'))).toBeNull();
+    const field = screen.getByLabelText(t('login:emailLabel')) as HTMLInputElement;
+    expect(field.readOnly).toBe(false);
+    expect(document.activeElement).toBe(field);
+    expect(assign).not.toHaveBeenCalled();
+  });
+
+  it('moves focus to the password field when the password is asked for', async () => {
+    renderLogin();
+    typeEmail('someone@acme.com');
+    clickContinue();
+    const password = await screen.findByLabelText(t('login:passwordLabel'));
+    expect(document.activeElement).toBe(password);
+  });
+});
+
 // 🔴 THE INSTRUMENT CHECK. Every assertion above compares against a string i18next
 // resolved, and i18next answers an unknown key with the key's own tail — so a renamed or
 // deleted catalog entry would have this suite comparing 'serverUnreachable' to
@@ -263,6 +483,11 @@ describe('the messages this screen can show are real prose', () => {
     'login:sessionSsoRequired',
     'login:ssoNotConfigured',
     'login:ssoUnavailable',
+    'login:continue',
+    'login:changeEmail',
+    'login:ssoContinue',
+    'login:ssoDomainNotice',
+    'login:usePassword',
   ])(
     '%s resolves to text, not to its own key',
     async (key) => {

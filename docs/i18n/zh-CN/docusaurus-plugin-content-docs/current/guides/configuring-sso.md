@@ -13,7 +13,7 @@ title: 配置单点登录
 ## 开始之前 {#before}
 
 - **实例需要一个公开地址。**单点登录需要 `auth.issuerUrl`（见[下文](#deployment)）。如果它为空，创建连接会失败，并提示 "sso requires a public issuer URL"。
-- **你需要以超级用户身份登录**控制台（**Admin → Identity providers（管理 → 身份提供商）**）或管理 API。
+- **你需要以超级用户身份登录**控制台（**Admin → Identity providers（管理 → 身份提供商）**）或管理 API。系统角色拥有 `user:write` 的身份也可以使用管理 API，但不能使用控制台的管理页面，这些页面只对超级用户开放。
 - **在提供商处**，你需要把 DeviceChain 注册为一个应用（使用授权码流程的“web”或“confidential”客户端），并记下它的客户端 ID 和客户端密钥。
 - **确定租户和域名。**租户连接为你指定的租户服务，并代表你断言的邮箱域名。
 
@@ -97,8 +97,8 @@ user-management 的 `auth.issuerUrl` 必须是其 API 可从外部访问的地�
 
 | 现象 | 可能原因 |
 | --- | --- |
-| "Single sign-on is not set up for that email address" | 该域名没有在任何连接上断言。 |
-| "Single sign-on is not available right now" | 该域名对应的连接已禁用，或其发现文档尚未批准。 |
+| 控制台对本应使用单点登录的地址要求输入密码，或 **Sign in with SSO** 提示 "Single sign-on is not set up for that email address" | 没有可用的连接负责该域名：该域名没有在任何连接上断言，或其连接已禁用，或其发现文档尚未批准。按地址登录时，这几种情况的回应相同（该连接会计入 `refused_connection_unavailable` 结果）；实例未启用单点登录时，控制台同样会要求输入密码，因此请检查 **Admin → Identity providers**。 |
+| "Single sign-on is not available right now" | 该实例尚未配置单点登录（见[部署](#deployment)），或同一地址发起的登录过多：请稍等片刻再试。 |
 | "Your account exists but is not linked" | 该地址已有身份：请批准它的链接请求。 |
 | 每次登录都因未验证而被拒绝 | 提供商没有发送已验证的邮箱（对 Entra，请添加 `xms_edov`）。 |
 | 提供商变更后被拒绝 | 提供商迁移了端点：**Refresh from provider** 并重新批准。 |

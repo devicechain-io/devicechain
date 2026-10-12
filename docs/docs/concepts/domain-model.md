@@ -39,7 +39,7 @@ DeviceChain separates current state from history:
 - **Attributes** are the current key-value state of an entity, in three scopes:
   - `CLIENT`: reported by the device.
   - `SERVER`: platform-only metadata the device never sees.
-  - `SHARED`: set by the platform and readable by the device. This is the channel for remote configuration and OTA targets.
+  - `SHARED`: set by the platform for the device. The shared keys a device's profile declares as configuration are delivered to the device as its [configuration](../guides/connecting-a-device.md#reserved-device-topics); shared keys the declaration does not name are never sent. Firmware and software updates travel separately, as [over-the-air update](./over-the-air-updates.md) assignments.
 
 ## Facets and dynamic groups {#facets-and-dynamic-groups}
 

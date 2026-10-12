@@ -209,6 +209,15 @@ export function resolveSsoLinkReturn(): SsoLinkReturn | null {
   return linkReturn;
 }
 
+/**
+ * Forgets the secret a begun sign-in is waiting to finish with. For a begin whose address
+ * was never visited (the person chose a password after all, or another email): the
+ * provider will not send the browser back, and the secret has no other use.
+ */
+export function discardPendingSso(): void {
+  writePending(null);
+}
+
 export interface SsoReturn {
   code: string | null;
   /** The provider-side failure class the server put on the return address, if any. */

@@ -39,7 +39,7 @@ DeviceChain separa el estado actual del historial:
 - Los **atributos** son el estado actual de clave-valor de una entidad, en tres ámbitos:
   - `CLIENT`: informado por el dispositivo.
   - `SERVER`: metadatos exclusivos de la plataforma que el dispositivo nunca ve.
-  - `SHARED`: definido por la plataforma y legible por el dispositivo. Es el canal para la configuración remota y los destinos OTA.
+  - `SHARED`: definido por la plataforma para el dispositivo. Las claves compartidas que el perfil del dispositivo declara como configuración se entregan al dispositivo como su [configuración](../guides/connecting-a-device.md#reserved-device-topics); las claves compartidas que la declaración no nombra nunca se envían. Las actualizaciones de firmware y software viajan por separado, como asignaciones de [actualización over-the-air](./over-the-air-updates.md).
 
 ## Facetas y grupos dinámicos {#facets-and-dynamic-groups}
 

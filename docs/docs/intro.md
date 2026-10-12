@@ -29,16 +29,17 @@ DeviceChain is a set of cooperating microservices over a shared core library:
 | **event-sources** | Pluggable inbound transports (MQTT and HTTP today; WebSocket planned) that decode raw device messages onto the pipeline. |
 | **sparkplug-ingest** _(opt-in)_ | An [Eclipse Sparkplug B](./concepts/sparkplug.md) Host Application. It joins your existing Sparkplug MQTT environment, feeds the same pipeline, and asserts authoritative device presence from the birth/death handshake. |
 | **lwm2m-ingest** _(opt-in)_ | An [OMA LwM2M](./concepts/lwm2m.md) server that terminates CoAP/UDP over DTLS. It authenticates each device by its pre-shared-key identity and asserts presence from the registration lifecycle. |
-| **device-management** | Devices, device types and versioned device profiles, the relationship graph, the alarm object and its lifecycle, and event resolution. |
+| **device-management** | Devices, device types and versioned device profiles, the relationship graph, the alarm object and its lifecycle, event resolution, and the per-device configuration a profile declares and the platform delivers to each device. |
 | **event-processing** | The detection and action pipeline over resolved events. It runs streaming rules (threshold, duration, repeating, rate-of-change, absence, windowed aggregate, area correlation) that give the same result when events are replayed, and automated responses (raise alarm, send command, and outbound connectors). Detection lives here; the alarm object it raises stays in device-management. |
 | **event-management** | Persists resolved events to TimescaleDB and serves time-series queries, including live subscriptions over a graphql-ws bridge. |
 | **device-state** | The live last-known-state projection per device (the current reading per measurement). |
 | **command-delivery** | Persistent two-way command dispatch to devices. |
+| **update-management** _(opt-in)_ | [Over-the-air updates](./concepts/over-the-air-updates.md): a per-tenant catalogue of firmware, software and configuration images, each checked against its declared size and digest, their assignment to devices, and tracking of each update attempt to the running version. |
 | **dashboard-management** | Versioned dashboard definitions (draft, publish/rollback, export), rendered by the embeddable widget packages. |
 | **notification-management** | Routes triggered alarms to people over email (SMTP) and webhook, with per-severity routing and escalation of alarms that stay unacknowledged and uncleared. |
 | **outbound-connectors** | Delivers the pipeline's outbound actions (webhook `httpCall`, and `publish` to MQTT/Kafka/AWS SNS/SQS) to external systems over versioned, secret-authenticated connectors. |
 | **ai-inference** _(opt-in)_ | Drafts a detection rule from a natural-language description and hands it to the same compiler people use. The AI only proposes; the compiler decides what is valid. The AI never runs in live detection, so a rule gives the same result when events are replayed. See [AI-assisted authoring](./concepts/ai-authoring.md). |
-| **user-management** | Global identities, per-tenant memberships, the role catalog, JWT issuance and validation, and tenant tiers (the packaging a platform operator defines and assigns to tenants). |
+| **user-management** | Global identities, per-tenant memberships, the role catalog, JWT issuance and validation, sign-in through a tenant's own OpenID Connect identity provider ([single sign-on](./concepts/single-sign-on.md)), and tenant tiers (the packaging a platform operator defines and assigns to tenants). |
 | **mcp** _(opt-in)_ | A read-only [Model Context Protocol](./concepts/mcp.md) server that lets AI assistants (Claude, Cursor, VS Code) query a tenant on a user's behalf, under the user's own token. |
 | **operator (k8s)** | Owns the `Instance` custom resource. Today its reconcile loop only observes the resource; the Helm chart renders the platform workloads. |
 

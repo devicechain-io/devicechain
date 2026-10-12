@@ -94,7 +94,7 @@ export const tankLevelWidget = defineWidget({
 
 选项有 `kind`（`string`、`number`、`boolean` 或 `enum`）和一句 `doc` 说明。数字可声明 `min`、`max` 和 `integer`。枚举声明其 `values`。字符串可声明 `format: 'json'`，要求其值能解析为 JSON。`required` 标记一个缺失就会让组件无内容可显示的选项；空字符串视为缺失。宿主会依据模式校验已存储的选项，控制台也据此生成设置表单。
 
-使用 SDK 的辅助函数 `optString`、`optNumber` 和 `optBoolean` 以防御方式读取选项。对于手工编辑后类型错误的值，它们返回 `undefined`，而不是抛出异常。
+使用 SDK 的辅助函数 `optString`、`optNumber` 和 `optBoolean` 以防御方式读取选项。对于手工编辑后类型错误的值，它们不会抛出异常：`optString` 和 `optNumber` 返回 `undefined`，`optBoolean` 对除已存储的 `true` 以外的任何值都返回 `false`。
 
 ### 标签与帮助文字 {#labels-and-help-text}
 

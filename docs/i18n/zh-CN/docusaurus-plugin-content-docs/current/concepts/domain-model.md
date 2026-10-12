@@ -39,7 +39,7 @@ DeviceChain 将当前状态与历史记录分开：
 - **属性**是实体当前的键值状态，分为三个作用域：
   - `CLIENT`：由设备上报。
   - `SERVER`：仅供平台使用的元数据，设备不可见。
-  - `SHARED`：由平台设置，设备可以读取。这是远程配置和 OTA 目标的传递通道。
+  - `SHARED`：由平台为设备设置。设备配置文件声明为配置项的共享键会作为设备的[配置](../guides/connecting-a-device.md#reserved-device-topics)下发给设备；声明中未列出的共享键永远不会发送。固件和软件更新单独传递，作为[空中（OTA）更新](./over-the-air-updates.md)分配。
 
 ## 分类维度与动态分组 {#facets-and-dynamic-groups}
 

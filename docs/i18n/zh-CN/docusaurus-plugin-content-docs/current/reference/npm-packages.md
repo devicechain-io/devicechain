@@ -19,6 +19,7 @@ title: npm 包
 | [`@devicechain/client`](https://www.npmjs.com/package/@devicechain/client) | TypeScript SDK：处理认证令牌、通过 fetch 调用 GraphQL、解码 JWT，以及实时订阅。不依赖特定框架，也不依赖 React。 |
 | [`@devicechain/dashboards`](https://www.npmjs.com/package/@devicechain/dashboards) | 提供管理连接、解析选择器和复用遥测订阅的 `DashboardHub`，以及定义、选择器、槽位和绑定清单的类型。 |
 | [`@devicechain/widgets`](https://www.npmjs.com/package/@devicechain/widgets) | React 组件和负责仪表盘布局的渲染器。 |
+| [`@devicechain/widget-sdk`](https://www.npmjs.com/package/@devicechain/widget-sdk) | 以 React 组件形式编写仪表板组件的契约：`defineWidget`、`createWidgetRegistry`（宿主用内置组件和自己的组件包构建的密封注册表）以及选项辅助函数。其 peer 依赖为 `@devicechain/dashboards`、`echarts` 和 `react`。参见[编写自定义组件](../guides/writing-a-custom-widget.md)。 |
 | [`@devicechain/brand`](https://www.npmjs.com/package/@devicechain/brand) | 品牌设计变量和生成的样式表。此包可选：组件完全通过 CSS 自定义属性设置主题，不要求使用它。 |
 
 ```bash
@@ -26,7 +27,7 @@ npm install @devicechain/widgets @devicechain/dashboards @devicechain/client \
             graphql react react-dom
 ```
 
-`@devicechain/dashboards` 和 `@devicechain/client` 是组件包的 **peer dependencies**，锁定为完全相同的版本。
+`@devicechain/dashboards`、`@devicechain/client` 和 `@devicechain/widget-sdk` 是组件包的 **peer dependencies**，锁定为完全相同的版本。
 npm 7 及更高版本会自动安装这些依赖，因此只需运行上面的安装命令。
 
 锁定版本是有意的：它防止 npm 在组件包下面悄悄嵌套安装第二份 SDK。
@@ -35,7 +36,7 @@ npm 7 及更高版本会自动安装这些依赖，因此只需运行上面的�
 
 ## 版本和 dist-tag {#versions-and-dist-tags}
 
-四个包随平台发布一起发布，使用同一个版本号。组件的 `0.14.0` 版本对应 SDK 的 `0.14.0` 版本，
+五个包随平台发布一起发布，使用同一个版本号。组件的 `0.14.0` 版本对应 SDK 的 `0.14.0` 版本，
 无需考虑独立的包版本规则。
 
 | 标签 | 指向 |
@@ -167,7 +168,7 @@ npm install maplibre-gl
 
 ## 底图瓦片 {#basemap-tiles}
 
-`TenantBasemapProvider` 提供瓦片源，它是可选的：没有 Provider 时，地图退回到普通视图。
+`TenantBasemapProvider` 提供瓦片源，它是可选的：没有 Provider 时，地图会绘制内置的世界底图（大陆与国界）。
 解析优先级位于 `@devicechain/client` 中，因此 DeviceChain 的所有界面都以相同方式，让用户覆盖项优先于租户默认值。
 参见[底图](../concepts/basemaps.md)。
 

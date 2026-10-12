@@ -14,7 +14,7 @@ title: 单点登录
 
 ## 连接 {#connections}
 
-**连接（connection）**是在实例上注册的一个身份提供商。只有超级用户可以通过控制台的 **Admin → Identity providers（管理 → 身份提供商）**或管理 API 创建、修改和删除连接。连接分为两种：
+**连接（connection）**是在实例上注册的一个身份提供商。只有实例管理员可以创建、修改和删除连接：超级用户可通过控制台的 **Admin → Identity providers（管理 → 身份提供商）**或管理 API 操作；系统角色拥有 `user:write`（所有连接、关联和强制登录操作都检查这一权限）的身份只能通过管理 API 操作，因为控制台的管理页面只对超级用户开放。连接分为两种：
 
 | | 租户连接 | 实例连接 |
 | --- | --- | --- |
@@ -48,9 +48,13 @@ title: 单点登录
 
 ## 登录 {#sign-in}
 
-控制台和仪表盘应用在密码表单旁显示 **Sign in with SSO**。流程是带 PKCE 的 OpenID Connect 授权码流程：
+控制台首先只要求输入邮箱地址。如果有已启用的连接负责该地址的域名，就会提供 **Continue with single sign-on**，旁边是 **Use a password instead**，因此只有密码的账户（例如运维人员的账户）仍可登录。其他任何地址则会要求输入密码。**Sign in with SSO** 仍保留在屏幕上，供想直接前往提供商的用户使用；仪表盘应用保留它的单一表单，该按钮位于密码旁。
 
-1. 用户输入邮箱并选择 **Sign in with SSO**。浏览器保留一个随机密钥，并发送其哈希。
+该检查针对的是**域名，而不是个人**。无论该地址是否存在对应的身份，它的回答都相同，因此无法用来查找账户。没有人配置过的域名与其用户使用密码的域名会得到完全相同的界面；单点登录被关闭的实例、被限流的地址、无法访问的服务器也是如此：用户能看到的唯一区别是是否提供单点登录。控制台不会被告知某个租户是否要求单点登录（那会泄露哪些域名属于这样的租户），因此从不以此为由隐藏密码字段；这由服务器在选择租户时判定（见下文）。
+
+流程是带 PKCE 的 OpenID Connect 授权码流程：
+
+1. 用户输入邮箱并选择 **Continue with single sign-on**（或 **Sign in with SSO**）。浏览器保留一个随机密钥，并发送其哈希。
 2. DeviceChain 记录该次登录（有效期十分钟，只能使用一次），并将浏览器重定向到提供商。
 3. 提供商对用户进行认证，然后返回 `<issuerUrl>/sso/callback/<connection>`。
 4. DeviceChain 检查应答：state 与连接是否匹配，令牌的签名、颁发者、受众、有效期和 nonce，连接要求的声明和方法，以及下文的身份规则。
@@ -58,7 +62,7 @@ title: 单点登录
 
 接收代码的页面（控制台为 `/login/sso/complete`，仪表板应用为 `/dash/sso/complete`）会立即把代码从地址栏中移除，并以 `Referrer-Policy: no-referrer` 提供，因此它加载的任何内容都无法携带该地址。登录完成后，或用户返回登录表单时，应用会重新加载，而不是继续停留在该页面上，因此会话的其余部分会发送正常的 `Referer`；默认的 OpenStreetMap 底图需要它。如果你自己的代理位于控制台之前，请把任何去除 Referer 的响应头限定在这两个确切路径上。
 
-登录被拒绝时，用户只会看到笼统的提示（“Single sign-on did not allow this account in”、“your account is not linked yet”），不会知道是哪项检查未通过。（链接自己的账号是例外：此时用户已经登录，每项检查都针对其自己的账号，因此链接被拒绝时会说明是哪项检查未通过；参见[链接](#linking)。）确切的结果由指标 `devicechain_usermanagement_sso_logins_total` 计数，拒绝事件连同提供商断言的地址一起写入审计日志。
+登录被拒绝时，用户只会看到笼统的提示（“Single sign-on did not allow this account in”、“Your account exists but is not linked to this identity provider yet”），不会知道是哪项检查未通过。（链接自己的账号是例外：此时用户已经登录，每项检查都针对其自己的账号，因此链接被拒绝时会说明是哪项检查未通过；参见[链接](#linking)。）确切的结果由指标 `devicechain_usermanagement_sso_logins_total` 计数，拒绝事件连同提供商断言的地址一起写入审计日志。
 
 ## 身份、链接与预配 {#linking}
 
