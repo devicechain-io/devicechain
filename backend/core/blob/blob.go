@@ -15,8 +15,9 @@
 //   - filesystem (DEFAULT) — a mounted volume/PVC; zero cloud dependency, works in
 //     kind and self-host out of the box. Reads are served through an authorizing
 //     API proxy (Open) — there is no public path, so URL is unsupported.
-//   - s3 / gcs (opt-in, later slices) — object storage; reads MAY additionally use
-//     a presigned, expiring URL (URL) as well as the proxy.
+//   - s3 (opt-in) — S3-compatible object storage; reads MAY additionally use
+//     a presigned, expiring URL (URL) as well as the proxy. gcs is a recognized
+//     backend whose client has not shipped (New fails closed on it).
 //
 // Isolation (ADR-048/015): every object key is instance- AND tenant-prefixed
 // ({instanceId}/{tenant}/{purpose}/{id}); the instance prefix is fixed at store
@@ -25,9 +26,9 @@
 // default bucket — a consumer authorizes each read (proxy) or mints a short-lived
 // signed URL (cloud) itself.
 //
-// This slice ships the interface + typed config + the filesystem default backend.
-// The S3-compatible and GCS backends land behind these exact signatures in later
-// slices (additive, no consumer change).
+// The interface, typed config, the filesystem default backend and the S3-compatible
+// backend ship; a GCS backend would land behind these exact signatures (additive, no
+// consumer change).
 //
 // OpenRange serves a bounded byte window of an object on every backend, for
 // resumable HTTP Range GETs of large firmware/OTA images (ADR-012/018). Open stays

@@ -84,8 +84,8 @@ func NewUpdateReportsMetrics(ms *core.Microservice) UpdateReportsMetrics {
 		metrics: ms.NewProcessorMetrics("update_reports"),
 		reports: ms.NewCounterVec("update_reports_total",
 			"Update progress and inventory reports from devices, by the verdict the update state machine gave: "+
-				"applied, or why it was not (duplicate, stale_attempt, digest_mismatch, regression, unconfirmed, late, "+
-				"conflict, unknown_assignment, ...). A rising non-applied rate from one fleet is a device-side bug.",
+				"APPLIED, or why it was not (DUPLICATE, STALE_ATTEMPT, DIGEST_MISMATCH, REGRESSION, UNCONFIRMED, LATE, "+
+				"CONFLICT, UNKNOWN_ASSIGNMENT, ...). A rising non-applied rate from one fleet is a device-side bug.",
 			[]string{"verdict"}),
 		grants: ms.NewCounterVec("update_download_grants_total",
 			"Download capabilities requested by devices, by outcome: granted, or the reason the assignment could not be "+

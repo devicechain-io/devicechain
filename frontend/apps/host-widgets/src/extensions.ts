@@ -16,8 +16,8 @@
 //      authored in the console renders in /dash only if /dash was built with the same
 //      package, and a viewer without it shows a labelled placeholder rather than the widget.
 //
-//   import { tankLevelWidget } from '@acme/devicechain-widgets';
-//   export const extensionWidgets = [tankLevelWidget];
+//   import { tankLevelWidgets } from '@acme/devicechain-tank-level';
+//   export const extensionWidgets = [...tankLevelWidgets];
 //
 // This is a build-time list of TRUSTED code: a widget runs in the page with the page's
 // privileges. It is not a runtime installer, and a dashboard cannot add to it.

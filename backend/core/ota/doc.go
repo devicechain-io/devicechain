@@ -4,9 +4,9 @@
 // Package ota is the device update contract: the vocabulary, the wire format and the pure
 // reducer that decides what a device's report does to one update attempt (ADR-012).
 //
-// It is a contract only. Nothing persists an Attempt, nothing carries a Report over a transport,
-// and nothing here authenticates or signs an update — the digest an attempt carries is compared
-// for equality and nothing more.
+// It is a contract only. This package persists nothing and carries nothing over a transport:
+// update-management persists the Attempt and consumes the Report, and nothing here authenticates
+// or signs an update — the digest an attempt carries is compared for equality and nothing more.
 //
 // # State mapping
 //
