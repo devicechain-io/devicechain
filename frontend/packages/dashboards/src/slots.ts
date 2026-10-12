@@ -285,15 +285,27 @@ export type ConcreteSelector =
 // resolveConcrete gives the config panel a slot-free view of a widget's data source:
 // the bound entity + the series the widget reads (measurement names, and the location
 // series when it names one), or undefined when unbound.
+//
+// 🔴 A SELECTOR THE AUTHOR IS STILL FILLING IN IS RETURNED AS IT STANDS. Choosing the Device
+// kind stores `{kind:'device', deviceToken:''}` on the widget (the workspace keeps a partial
+// selector concrete rather than slotting it -- see applyDatasource). It names no entity, so
+// it has no binding; but the panel renders from THIS value, and answering undefined for it
+// snapped the Kind control straight back to "None" and never showed the device picker, so a
+// device could not be chosen at all.
 export function resolveConcrete(
   def: DashboardDefinition,
   widget: WidgetInstance,
 ): ConcreteSelector | undefined {
   const binding = widgetBinding(def, widget);
-  if (!binding) return undefined;
   const measurements = widget.datasource?.measurements ?? [];
   const location = widget.datasource?.location;
   const base = location ? { measurements, location } : { measurements };
+  if (!binding) {
+    const ds = widget.datasource;
+    if (ds?.kind === 'device') return { kind: 'device', deviceToken: ds.deviceToken, ...base };
+    if (ds?.kind === 'anchor') return { kind: 'anchor', anchor: ds.anchor, ...base };
+    return undefined;
+  }
   return binding.kind === 'device'
     ? { kind: 'device', deviceToken: binding.deviceToken, ...base }
     : { kind: 'anchor', anchor: binding.anchor, ...base };

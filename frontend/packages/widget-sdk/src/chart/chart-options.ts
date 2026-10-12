@@ -7,9 +7,10 @@
 
 import type { MeasurementSample } from '@devicechain/dashboards';
 
+import type { ElementSize } from '../hooks';
+
+import type { ChartTheme } from './chart-theme';
 import type { EChartOption } from './echart';
-import type { ElementSize } from './hooks';
-import type { ChartTheme } from './theme';
 
 // distinctNames returns the measurement names present in `samples`, in first-seen
 // order — used when a chart's datasource doesn't pin an explicit series list.

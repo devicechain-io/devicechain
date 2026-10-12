@@ -6,11 +6,20 @@
 
 import type { CSSProperties } from 'react';
 
-import { FlashValue } from '../flash';
-import { formatTimestamp } from '../format';
-import { WidgetFrame, useWidgetTimeZone } from '../frame';
-import { css } from '../theme';
-import { optBoolean, optNumber, optString, type WidgetProps } from '../widget';
+import {
+  css,
+  defineWidget,
+  FlashValue,
+  formatTimestamp,
+  optBoolean,
+  optNumber,
+  optString,
+  useWidgetTimeZone,
+  WidgetFrame,
+  type WidgetProps,
+} from '@devicechain/widget-sdk';
+
+import { builtinWidgetDescriptors } from '../builtin-descriptors';
 
 const cell: CSSProperties = { padding: '6px 12px', textAlign: 'left' };
 const headCell: CSSProperties = {
@@ -76,3 +85,10 @@ export function Table({ widget, data }: WidgetProps) {
     </WidgetFrame>
   );
 }
+
+// The registration: this widget's portable descriptor paired with its component, declared
+// through the same public `defineWidget` a third-party package uses.
+export const tableWidget = defineWidget({
+  descriptor: builtinWidgetDescriptors['table'],
+  implementation: { kind: 'trusted-react', component: Table },
+});

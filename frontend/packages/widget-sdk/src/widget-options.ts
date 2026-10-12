@@ -1,14 +1,11 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// The widget contract's helpers: small functions for reading a widget's opaque `options` bag and
-// picking the measurement a single-value widget should show.
+// Small helpers for reading a widget's opaque `options` bag and picking the measurement a
+// single-value widget should show. They are the SDK's, not the built-ins': a third-party
+// widget reads its own options the same defensive way.
 
 import type { MeasurementSample, WidgetInstance } from '@devicechain/dashboards';
-
-// WidgetProps / WidgetComponent are defined ONCE, in the SDK, and re-exported here so the
-// existing imports keep resolving.
-export type { WidgetComponent, WidgetProps } from '@devicechain/widget-sdk';
 
 // pickSample chooses the sample a single-value widget (card, gauge) shows: the
 // named measurement, or the first available when no name is pinned.

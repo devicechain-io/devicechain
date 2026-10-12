@@ -18,15 +18,21 @@ afterEach(cleanup);
 
 // jsdom has no canvas, so stub the ECharts wrapper and expose the option it was
 // given so the gauge test can assert the value→chart mapping.
-vi.mock('./echart', () => ({
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  EChart: ({ option }: { option: any }) => (
-    <div data-testid="echart" data-series={JSON.stringify(option.series)} />
-  ),
-}));
+vi.mock('@devicechain/widget-sdk/echarts', async (importOriginal) => {
+  // Only the canvas wrapper is replaced (jsdom has no canvas); the pure option builders and
+  // the colour theme stay real so a chart widget still builds the option it would draw.
+  const actual = await importOriginal<typeof import('@devicechain/widget-sdk/echarts')>();
+  return {
+    ...actual,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    EChart: ({ option }: { option: any }) => (
+      <div data-testid="echart" data-series={JSON.stringify(option.series)} />
+    ),
+  };
+});
 
 import { ConnectedWidget } from './connected-widget';
-import type { MeasurementStreamState } from './hooks';
+import { type MeasurementStreamState } from '@devicechain/widget-sdk';
 import { Gauge } from './widgets/gauge';
 import { Image } from './widgets/image';
 import { Label } from './widgets/label';
@@ -92,15 +98,15 @@ describe('widgets (pure, from resolved data)', () => {
   });
 
   it('Label renders static text and needs no data', () => {
-    render(<Label widget={widget('label', { text: 'Zone A' }, undefined)} data={data()} />);
+    render(<Label widget={widget('label', { text: 'Zone A' }, undefined)} data={null} />);
     expect(screen.getByText('Zone A')).toBeTruthy();
   });
 
   it('Image shows a placeholder without a url and an <img> with one', () => {
-    const { rerender } = render(<Image widget={widget('image', {}, undefined)} data={data()} />);
+    const { rerender } = render(<Image widget={widget('image', {}, undefined)} data={null} />);
     expect(screen.getByText('No image URL')).toBeTruthy();
     rerender(
-      <Image widget={widget('image', { url: 'http://x/y.png', alt: 'floor plan' }, undefined)} data={data()} />,
+      <Image widget={widget('image', { url: 'http://x/y.png', alt: 'floor plan' }, undefined)} data={null} />,
     );
     expect(screen.getByAltText('floor plan')).toBeTruthy();
   });

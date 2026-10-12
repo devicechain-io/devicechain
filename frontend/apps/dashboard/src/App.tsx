@@ -379,7 +379,7 @@ export function View({
   onSignOut: () => void;
 }) {
   const { t } = useTranslation();
-  const { definition, manifest } = loaded;
+  const { definition, manifest, registry } = loaded;
 
   // base = definition defaults merged with the pasted manifest override; the cascade
   // (useResolvedBindings) resolves scoped slots from their parent + the selection overlay
@@ -436,6 +436,7 @@ export function View({
             <DashboardRenderer
               definition={definition}
               hub={hub}
+              registry={registry}
               actions={hub}
               bindings={bindings}
               select={select}

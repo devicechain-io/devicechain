@@ -30,7 +30,7 @@ vi.mock('maplibre-gl', () => {
   throw new Error('simulated: the maplibre-gl chunk could not be fetched');
 });
 
-import type { LocationStreamState } from '../hooks';
+import { type LocationStreamState } from '@devicechain/widget-sdk';
 import { MapRuntimeProvider, type MapRuntime } from '../map-runtime-context';
 import { MapWidget } from './map';
 

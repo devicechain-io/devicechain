@@ -18,7 +18,7 @@ import type {
   CanvasGrid,
   CanvasSizing,
   DashboardDefinition,
-  KnownWidgetInstance,
+  ResolvedWidgetInstance,
   WidgetBox,
   WidgetInstance,
 } from './types';
@@ -104,22 +104,29 @@ export function updateWidget(def: DashboardDefinition, id: string, next: WidgetI
 // are the descriptor's own `defaults` — the widget's declaration, not a table in the editor
 // keyed by widget id. Returns the new definition and the new widget's id so the caller can
 // select it.
+//
+// The new widget records the release and settings version of the registration it was
+// authored against (`widget: { version, optionsVersion }`). For an extension that record is
+// what lets the next load match it to the installed package at all — a registered extension
+// stored without it is incomplete and parses to a placeholder — and for a built-in it is the
+// provenance the editor's version-drift notice compares against.
 export function addWidget(
   def: DashboardDefinition,
-  descriptor: Pick<WidgetDescriptor, 'id' | 'defaults'>,
+  descriptor: Pick<WidgetDescriptor, 'id' | 'defaults' | 'version' | 'optionsVersion'>,
 ): { definition: DashboardDefinition; id: string } {
   const maxZ = def.widgets.reduce((m, w) => Math.max(m, baseBox(w).z), 0);
   const id = generateWidgetId();
   // A sensible starter tile on a high-res grid: a third of a 24-col canvas, 4 rows.
   const box: WidgetBox = { col: 0, colSpan: 8, row: 0, rowSpan: 4, z: maxZ + 1 };
-  const widget: WidgetInstance = {
+  const common = {
     id,
-    // A registered extension id is not in the built-in widget-type union; the instance shape
-    // that carries one belongs to the definition/runtime work, so this narrows until then.
-    type: descriptor.id as KnownWidgetInstance['type'],
+    widget: { version: descriptor.version, optionsVersion: descriptor.optionsVersion },
     layout: { [BASE_BREAKPOINT]: box },
     options: { ...descriptor.defaults },
   };
+  // The id came from a registered descriptor, so it names either a built-in or a namespaced
+  // extension; which one is the registry's knowledge, and this transform does not branch on it.
+  const widget = { ...common, type: descriptor.id } as ResolvedWidgetInstance;
   return { definition: { ...def, widgets: [...def.widgets, widget] }, id };
 }
 

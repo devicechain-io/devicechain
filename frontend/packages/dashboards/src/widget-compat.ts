@@ -16,6 +16,7 @@ import type { WidgetCatalog } from './widget-catalog';
 import type { WidgetDescriptor } from './widget-descriptor';
 import type {
   DashboardDefinition,
+  ResolvedWidgetInstance,
   UnresolvedWidgetReason,
   WidgetImplementationRef,
   WidgetInstance,
@@ -29,6 +30,12 @@ const BUILTIN_TYPES: ReadonlySet<string> = new Set(WIDGET_TYPES);
 // built-in union and must not be handed an extension widget.
 export function isBuiltinWidget(widget: WidgetInstance): widget is KnownWidgetInstance {
   return BUILTIN_TYPES.has(widget.type);
+}
+
+// isResolvedWidget narrows a parsed widget to one an installed implementation resolved (a
+// built-in or a registered extension): everything that is not a placeholder.
+export function isResolvedWidget(widget: WidgetInstance): widget is ResolvedWidgetInstance {
+  return widget.type !== UNKNOWN_WIDGET_TYPE;
 }
 
 const SEMVER = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;

@@ -19,6 +19,7 @@ export type {
   KnownWidgetInstance,
   ExtensionWidgetInstance,
   ExtensionWidgetType,
+  ResolvedWidgetInstance,
   UnknownWidgetInstance,
   UnknownWidgetType,
   UnresolvedWidgetCode,
@@ -221,6 +222,7 @@ export type {
   MeasurementStreamState,
 } from './channel-snapshots';
 export {
+  applyOptionPatch,
   clampNumberOption,
   enumValues,
   numberSpec,
@@ -279,6 +281,7 @@ export {
 
 export {
   isBuiltinWidget,
+  isResolvedWidget,
   parseWidgetRef,
   checkWidgetCompatibility,
   widgetVersionNotice,

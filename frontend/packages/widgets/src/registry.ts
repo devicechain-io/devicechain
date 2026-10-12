@@ -1,117 +1,35 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// The widget registries + the channel classifier. A renderer (ConnectedWidget) looks a
-// widget up by `widget.type`, but FIRST reads WIDGET_CHANNEL to decide which data
-// channel — and therefore which registry + hook — binds it: measurement widgets stream
-// telemetry samples; alarm widgets consume the raised-alarm surface; location widgets
-// read the bound devices' positions. Custom widgets extend these same maps.
+// The by-id views of the built-in registrations that older consumers still import.
+//
+// 🔴 READ-ONLY PROJECTIONS, NOT A REGISTRY. A widget's channel and whether it binds a
+// datasource are declared once, on its descriptor (builtin-descriptors.ts), and the
+// renderer resolves everything through a registry instance (createWidgetRegistry) -- never
+// through these. They exist so code that wants to ask "which channel is this built-in on?"
+// without building a registry (the console's config panel, fixtures) keeps working. They are
+// frozen, computed from the descriptors at module load, and there is no way to add an
+// entry: an extension widget registers through createWidgetRegistry, not here.
 
-import type { WidgetChannel, WidgetType } from '@devicechain/dashboards';
+import type { BuiltinWidgetId, WidgetChannel } from '@devicechain/dashboards';
 
-import type { AlarmStreamState, CommandStreamState, LocationStreamState } from './hooks';
-import type { WidgetComponent } from './widget';
-import { AlarmCount } from './widgets/alarm-count';
-import { AlarmTable } from './widgets/alarm-table';
-import { CommandButton } from './widgets/command-button';
-import { EntitySelector } from './widgets/entity-selector';
-import { Gauge } from './widgets/gauge';
-import { Image } from './widgets/image';
-import { Label } from './widgets/label';
-import { LatestCard } from './widgets/latest-card';
-import { MapWidget } from './widgets/map';
-import { Table } from './widgets/table';
-import { TimeSeriesChart } from './widgets/time-series-chart';
+import { builtinWidgetDescriptors } from './builtin-descriptors';
 
-// A widget's data channel: which hub subscription + registry the renderer binds it
-// through. WIDGET_CHANNEL is the SINGLE source of truth — `satisfies` keeps it
-// exhaustive over WidgetType (a new type won't compile without a channel), and the
-// per-channel type subsets are DERIVED from it, so the channel map and the two
-// registries can't drift out of sync.
-// WidgetChannel itself is declared once, in @devicechain/dashboards (it also gains `none`
-// there); re-exported so this module's importers are unchanged.
+// WidgetChannel itself is declared once, in @devicechain/dashboards; re-exported so this
+// module's importers are unchanged.
 export type { WidgetChannel };
 
-export const WIDGET_CHANNEL = {
-  'timeseries-chart': 'measurement',
-  'latest-card': 'measurement',
-  gauge: 'measurement',
-  table: 'measurement',
-  label: 'measurement',
-  image: 'measurement',
-  'alarm-table': 'alarm',
-  'alarm-count': 'alarm',
-  'command-button': 'control',
-  'entity-selector': 'selection',
-  map: 'location',
-} as const satisfies Record<WidgetType, WidgetChannel>;
+type Descriptors = typeof builtinWidgetDescriptors;
 
-// The widget types on each channel, derived from WIDGET_CHANNEL so the registries below
-// stay exhaustive without a hand-maintained parallel union. Each channel derives its
-// members the same way (a self-describing `extends '<channel>'` filter), so adding a
-// fourth channel never silently folds its types into another registry.
-type WidgetTypeOn<C extends WidgetChannel> = {
-  [K in WidgetType]: (typeof WIDGET_CHANNEL)[K] extends C ? K : never;
-}[WidgetType];
-type MeasurementWidgetType = WidgetTypeOn<'measurement'>;
-type AlarmWidgetType = WidgetTypeOn<'alarm'>;
-type ControlWidgetType = WidgetTypeOn<'control'>;
-type SelectionWidgetType = WidgetTypeOn<'selection'>;
-type LocationWidgetType = WidgetTypeOn<'location'>;
+const entries = Object.entries(builtinWidgetDescriptors) as Array<[BuiltinWidgetId, Descriptors[BuiltinWidgetId]]>;
 
-export const WIDGET_REGISTRY: Record<MeasurementWidgetType, WidgetComponent> = {
-  'timeseries-chart': TimeSeriesChart,
-  'latest-card': LatestCard,
-  gauge: Gauge,
-  table: Table,
-  label: Label,
-  image: Image,
-};
+// A built-in's data channel, as its descriptor declares it.
+export const WIDGET_CHANNEL: { readonly [K in BuiltinWidgetId]: Descriptors[K]['channel'] } = Object.freeze(
+  Object.fromEntries(entries.map(([id, d]) => [id, d.channel])),
+) as { readonly [K in BuiltinWidgetId]: Descriptors[K]['channel'] };
 
-export const ALARM_WIDGET_REGISTRY: Record<AlarmWidgetType, WidgetComponent<AlarmStreamState>> = {
-  'alarm-table': AlarmTable,
-  'alarm-count': AlarmCount,
-};
-
-export const CONTROL_WIDGET_REGISTRY: Record<ControlWidgetType, WidgetComponent<CommandStreamState>> = {
-  'command-button': CommandButton,
-};
-
-// Selection widgets carry no hub data — they read the ambient candidate provider + selection
-// callback and drive a slot binding. `null` marks the empty data channel (see ConnectedWidget).
-export const SELECTION_WIDGET_REGISTRY: Record<SelectionWidgetType, WidgetComponent<null>> = {
-  'entity-selector': EntitySelector,
-};
-
-// Location widgets read the hub's location channel: the bound devices' last-known
-// positions, plus the refusal state the `location:read` authority produces.
-export const LOCATION_WIDGET_REGISTRY: Record<LocationWidgetType, WidgetComponent<LocationStreamState>> = {
-  map: MapWidget,
-};
-
-// Whether a widget type binds a DATASOURCE — the entity whose data it reads.
-//
-// Not derivable from the channel: label and image sit on the measurement channel
-// (ConnectedWidget's default branch) and read no stream at all, while the alarm and
-// control widgets carry one as a SCOPE rather than a value selector. An authoring UI
-// needs this to decide whether to offer a datasource picker, and it had it as a
-// hand-written set that no compiler checked.
-//
-// `satisfies` keeps it exhaustive, so a new widget type does not compile until it
-// says whether it binds anything — which is the question the config panel silently
-// answered "no" to for every type nobody remembered to add.
-export const WIDGET_BINDS_DATASOURCE = {
-  'timeseries-chart': true,
-  'latest-card': true,
-  gauge: true,
-  table: true,
-  label: false,
-  image: false,
-  'alarm-table': true,
-  'alarm-count': true,
-  'command-button': true,
-  'entity-selector': false,
-  // A map binds a datasource, and needs it: the selector names both the devices whose
-  // positions to plot and (in its own field) the location series to read.
-  map: true,
-} as const satisfies Record<WidgetType, boolean>;
+// Whether a built-in binds a DATASOURCE -- the entity whose data it reads. Derived from the
+// descriptor's datasource mode: `none` binds nothing (label, image, the entity selector).
+export const WIDGET_BINDS_DATASOURCE: { readonly [K in BuiltinWidgetId]: boolean } = Object.freeze(
+  Object.fromEntries(entries.map(([id, d]) => [id, d.datasource.mode !== 'none'])),
+) as { readonly [K in BuiltinWidgetId]: boolean };

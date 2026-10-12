@@ -48,8 +48,9 @@ import { errMessage } from '@/routes/common';
 import { Textarea } from '@/components/ui/textarea';
 import { formatTime } from '@/lib/utils';
 import { validateDefinitionOptions } from '@devicechain/widgets';
-import { OPTION_ISSUE_MESSAGE_KEYS, widgetLabel } from './optionIssues';
-import type { DashboardDefinition } from '@devicechain/dashboards';
+import { OPTION_ISSUE_MESSAGE_KEYS, UNRESOLVED_REASON_KEYS, widgetLabel } from './optionIssues';
+import { unresolvedWidgets, type DashboardDefinition } from '@devicechain/dashboards';
+import { defaultWidgetRegistry, type EditorWidgetRegistry } from './widgetRegistry';
 import {
   activateDashboardVersion,
   getPublishedVersion,
@@ -89,6 +90,9 @@ export interface VersionHistorySheetProps {
   // stripUnknownOptions in @devicechain/widgets). The workspace owns the definition, so
   // the repair happens there; this drawer only offers it.
   onStripUnknownOptions: () => void;
+  // The registry `saved` was parsed with: the catalog its option schemas are judged against.
+  // Defaults to the deployment's.
+  registry?: EditorWidgetRegistry;
 }
 
 export function VersionHistorySheet({
@@ -102,6 +106,7 @@ export function VersionHistorySheet({
   expectedUpdatedAt,
   onRolledBack,
   onStripUnknownOptions,
+  registry = defaultWidgetRegistry(),
 }: VersionHistorySheetProps) {
   const { t } = useTranslation(['dashboards', 'common']);
   return (
@@ -123,6 +128,7 @@ export function VersionHistorySheet({
             expectedUpdatedAt={expectedUpdatedAt}
             onRolledBack={onRolledBack}
             onStripUnknownOptions={onStripUnknownOptions}
+            registry={registry}
             onClose={() => onOpenChange(false)}
           />
         )}
@@ -140,6 +146,7 @@ function VersionHistoryBody({
   expectedUpdatedAt,
   onRolledBack,
   onStripUnknownOptions,
+  registry,
   onClose,
 }: {
   token: string;
@@ -150,6 +157,7 @@ function VersionHistoryBody({
   expectedUpdatedAt: string | null;
   onRolledBack: (result: { definition: string; updatedAt: string | null }) => void;
   onStripUnknownOptions: () => void;
+  registry: EditorWidgetRegistry;
   onClose: () => void;
 }) {
   const { t } = useTranslation(['dashboards', 'common']);
@@ -177,7 +185,11 @@ function VersionHistoryBody({
   // never the working copy. While the editor is dirty those differ, and reporting the
   // working copy's issues would tell an author their board is fine (or broken) about a
   // document publish will not touch.
-  const issues = useMemo(() => validateDefinitionOptions(saved), [saved]);
+  const issues = useMemo(() => validateDefinitionOptions(saved, { catalog: registry.catalog }), [saved, registry]);
+  // Widgets this console cannot resolve to an installed implementation. They block a NEW
+  // version (a published version is immutable and viewers are served it) but nothing else:
+  // the draft keeps their stored JSON, and saves, layout edits and loading all still work.
+  const unresolved = useMemo(() => unresolvedWidgets(saved), [saved]);
   const strippable = issues.some((i) => i.code === 'unknown');
 
   const publish = async () => {
@@ -185,6 +197,7 @@ function VersionHistoryBody({
     try {
       const { version } = await publishDashboard(token, {
         definition: saved,
+        catalog: registry.catalog,
         label,
         description,
         expectedUpdatedAt,
@@ -265,6 +278,24 @@ function VersionHistoryBody({
           {dirty ? (
             <p className="text-sm text-muted-foreground">{t('versionSaveBeforePublish')}</p>
           ) : null}
+          {unresolved.length > 0 && (
+            <div
+              className="space-y-2 rounded-md border border-destructive/40 bg-destructive/5 p-3"
+              data-testid="publish-blocked-unresolved"
+            >
+              <p className="text-sm font-medium">{t('versionUnresolvedBlocked', { count: unresolved.length })}</p>
+              <ul className="space-y-1 text-sm text-muted-foreground">
+                {unresolved.map((u) => (
+                  <li key={u.widgetId}>
+                    <span className="text-foreground">{widgetLabel(saved, u.widgetId)}</span>
+                    {/* The stored type is data (an id), not prose. */}
+                    <span className="ml-1">({u.type || u.widgetId})</span>
+                    <span className="ml-1">— {t(UNRESOLVED_REASON_KEYS[u.reason.code])}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
           {issues.length > 0 && (
             <div className="space-y-2 rounded-md border border-destructive/40 bg-destructive/5 p-3">
               <p className="text-sm font-medium">
@@ -302,7 +333,7 @@ function VersionHistoryBody({
             size="sm"
             onClick={publish}
             loading={busy}
-            disabled={dirty || saving || issues.length > 0}
+            disabled={dirty || saving || issues.length > 0 || unresolved.length > 0}
           >
             {t('versionPublishButton')}
           </Button>

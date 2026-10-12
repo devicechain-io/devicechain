@@ -27,7 +27,9 @@ import { WIDGET_BINDS_DATASOURCE, WIDGET_CHANNEL } from './registry';
 
 const SRC = dirname(fileURLToPath(import.meta.url));
 // The dashboards package reads a widget's options too (slots.ts), so the gate spans both.
-const ROOTS = [SRC, join(SRC, '..', '..', 'dashboards', 'src')];
+// The widget SDK holds the shared option readers (primaryMeasurementName) the built-ins call,
+// so it is scanned too: a read moved out of this package must not leave the gate.
+const ROOTS = [SRC, join(SRC, '..', '..', 'dashboards', 'src'), join(SRC, '..', '..', 'widget-sdk', 'src')];
 
 // ---- The drift gate ---------------------------------------------------------
 //
@@ -74,7 +76,11 @@ const WIDGET_SOURCES: Record<WidgetType, string> = {
 // this list because it read `title` to label a report — a read that is not renderer
 // evidence and needed a paragraph saying so. It reads no option key now, which is the
 // better fix: the list means one thing again.
-const SHARED_SOURCES = ['connected-widget.tsx', 'widget.ts', '../../dashboards/src/slots.ts'];
+const SHARED_SOURCES = [
+  'connected-widget.tsx',
+  '../../widget-sdk/src/widget-options.ts',
+  '../../dashboards/src/slots.ts',
+];
 
 // Which types each shared read actually applies to. A shared file cannot say this itself —
 // ConnectedWidget reads `state` inside alarmSubscription(), which runs for the alarm

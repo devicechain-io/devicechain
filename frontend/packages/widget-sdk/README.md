@@ -19,6 +19,18 @@ identified by the object that created it, so every widget package and the host m
 the same single copy of this package. Declare it as a peer in your own widget package too,
 never as a dependency.
 
+## What is in the box
+
+The root entry is chart-free and map-free: the card frame (`WidgetFrame`), theme-variable
+references (`css`), formatters, the change-flash cue, option readers (`optString`,
+`optNumber`, ...) and the React hooks that bind a hub channel to widget state. A widget
+that only draws DOM imports from here and pulls in neither Apache ECharts nor MapLibre nor
+the built-in widgets.
+
+Chart helpers live on a separate entry, `@devicechain/widget-sdk/echarts`: the `EChart`
+wrapper, `buildLineOption` / `buildGaugeOption` and the chart colour theme. `echarts` is an
+**optional peer dependency**, needed only by a widget that imports that entry.
+
 ## Declare a widget
 
 ```tsx

@@ -163,10 +163,17 @@ describe('the built package', () => {
   // THIS package if this package really does import its siblings by bare specifier
   // rather than having bundled them in — which is what this asserts.
   //
-  // `echarts/core`, not `echarts`: the widgets import ECharts by subpath and never by
-  // its bare name, so that is the specifier the artifact actually carries.
+  // The SDK is imported twice, by its root and by its `/echarts` subpath: the widgets no
+  // longer import ECharts themselves (the SDK's chart helpers own it), and the subpath
+  // specifier surviving the bundle is what keeps ONE copy of the chart wrapper in a host.
   it('imports its sibling packages by bare specifier, rather than bundling them', () => {
-    for (const peer of ['@devicechain/client', '@devicechain/dashboards', 'react', 'echarts/core']) {
+    for (const peer of [
+      '@devicechain/client',
+      '@devicechain/dashboards',
+      '@devicechain/widget-sdk',
+      '@devicechain/widget-sdk/echarts',
+      'react',
+    ]) {
       expect(main.imports, `${peer} is not imported as an external`).toContain(peer);
     }
   });

@@ -21,7 +21,7 @@ import { describe, expect, it } from 'vitest';
 
 import type { WidgetInstance, WidgetType } from '@devicechain/dashboards';
 
-import { OPTION_ISSUE_MESSAGE_KEYS, widgetLabel } from './optionIssues';
+import { OPTION_ISSUE_MESSAGE_KEYS, UNRESOLVED_REASON_KEYS, widgetLabel } from './optionIssues';
 
 const NS = 'dashboards';
 const CODES = Object.entries(OPTION_ISSUE_MESSAGE_KEYS);
@@ -59,6 +59,24 @@ describe('option issue wording', () => {
           i18n.getResource(locale.code, NS, key),
           `${locale.code}/${code} is the English string verbatim`,
         ).not.toBe(i18n.getResource('en', NS, key));
+      }
+    }
+  });
+});
+
+// The same two-sided gate for the reasons the publish drawer gives for an unresolved widget,
+// read through getResource for the reason the block above explains.
+describe('unresolved widget wording', () => {
+  it('gives every reason its own, genuinely translated string in every locale', () => {
+    for (const locale of SUPPORTED_LOCALES) {
+      for (const [code, key] of Object.entries(UNRESOLVED_REASON_KEYS)) {
+        const text = i18n.getResource(locale.code, NS, key) as string | undefined;
+        expect(text, `${locale.code}/${code} is missing`).toBeTypeOf('string');
+        if (locale.code !== 'en') {
+          expect(text, `${locale.code}/${code} is the English string verbatim`).not.toBe(
+            i18n.getResource('en', NS, key),
+          );
+        }
       }
     }
   });

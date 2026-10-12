@@ -30,10 +30,9 @@ import {
   resolveContextBindings,
   resolveSlotCandidates,
 } from '@devicechain/dashboards';
-import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type RefObject } from 'react';
+import { useEffect, useMemo, useRef, useState, type RefObject } from 'react';
 
-import { useWidgetThemeRoot, useWidgetCandidates, type WidgetCandidates } from './frame';
-import { resolveChartTheme, type ChartTheme } from './theme';
+import { useWidgetCandidates, type WidgetCandidates } from './context';
 
 // The channel snapshots moved to @devicechain/dashboards (they are pure data over the hub's
 // row types); re-exported so every import site here keeps resolving.
@@ -521,59 +520,4 @@ export function useElementSize<T extends HTMLElement>(): [RefObject<T | null>, E
   }, []);
 
   return [ref, size];
-}
-
-// --- shared chart-theme store ------------------------------------------------
-//
-// Charts need concrete colors resolved from the CSS-variable theme. Rather than
-// have every chart widget mount its own MutationObserver on <html> and recompute
-// the same theme, one page-wide observer resolves it once per change and every
-// widget reads the shared, memoized value via useSyncExternalStore — so a busy
-// dashboard pays O(1), not O(number of charts), per theme toggle.
-
-let sharedTheme: ChartTheme | null = null;
-const themeListeners = new Set<() => void>();
-let themeObserver: MutationObserver | null = null;
-
-function recomputeTheme(): void {
-  sharedTheme = resolveChartTheme(document.documentElement);
-}
-
-function subscribeTheme(listener: () => void): () => void {
-  if (!themeObserver) {
-    recomputeTheme();
-    themeObserver = new MutationObserver(() => {
-      recomputeTheme();
-      for (const l of themeListeners) l();
-    });
-    themeObserver.observe(document.documentElement, {
-      attributes: true,
-      attributeFilter: ['class', 'style'],
-    });
-  }
-  themeListeners.add(listener);
-  return () => {
-    themeListeners.delete(listener);
-    if (themeListeners.size === 0 && themeObserver) {
-      themeObserver.disconnect();
-      themeObserver = null;
-      sharedTheme = null;
-    }
-  };
-}
-
-function getThemeSnapshot(): ChartTheme {
-  if (!sharedTheme) recomputeTheme();
-  return sharedTheme as ChartTheme;
-}
-
-// useChartTheme returns the current chart colors and re-renders the caller when
-// the document theme changes (a light/dark class or inline-style swap on <html>).
-export function useChartTheme(): ChartTheme {
-  const shared = useSyncExternalStore(subscribeTheme, getThemeSnapshot, getThemeSnapshot);
-  // A host that scopes its tokens to a container says so (WidgetThemeRoot); its tokens are
-  // fixed for the container's life, so they are read once there rather than observed.
-  const root = useWidgetThemeRoot();
-  const scoped = useMemo(() => (root ? resolveChartTheme(root) : null), [root]);
-  return scoped ?? shared;
 }

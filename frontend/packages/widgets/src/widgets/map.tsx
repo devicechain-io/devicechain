@@ -37,10 +37,16 @@ import { renderableBasemap, resolveBasemap } from '@devicechain/client';
 
 import { useTenantBasemap } from '../basemap-context';
 import { useMapRuntime, type MapRuntime } from '../map-runtime-context';
-import { WidgetFrame } from '../frame';
-import type { LocationStreamState } from '../hooks';
-import { css } from '../theme';
-import { optString, type WidgetProps } from '../widget';
+import {
+  css,
+  defineWidget,
+  type LocationStreamState,
+  optString,
+  WidgetFrame,
+  type WidgetProps,
+} from '@devicechain/widget-sdk';
+
+import { builtinWidgetDescriptors } from '../builtin-descriptors';
 import {
   describePosition,
   loadLandStyle,
@@ -489,3 +495,10 @@ function MapNotice({ glyph, heading, detail }: { glyph?: string; heading: string
     </div>
   );
 }
+
+// The registration: this widget's portable descriptor paired with its component, declared
+// through the same public `defineWidget` a third-party package uses.
+export const mapWidget = defineWidget({
+  descriptor: builtinWidgetDescriptors['map'],
+  implementation: { kind: 'trusted-react', component: MapWidget },
+});

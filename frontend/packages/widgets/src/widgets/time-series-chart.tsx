@@ -7,11 +7,16 @@
 
 import { useMemo } from 'react';
 
-import { buildLineOption } from '../chart-options';
-import { EChart } from '../echart';
-import { WidgetFrame } from '../frame';
-import { useChartTheme, useElementSize } from '../hooks';
-import { optString, type WidgetProps } from '../widget';
+import {
+  defineWidget,
+  optString,
+  useElementSize,
+  WidgetFrame,
+  type WidgetProps,
+} from '@devicechain/widget-sdk';
+import { buildLineOption, EChart, useChartTheme } from '@devicechain/widget-sdk/echarts';
+
+import { builtinWidgetDescriptors } from '../builtin-descriptors';
 
 export function TimeSeriesChart({ widget, data }: WidgetProps) {
   const theme = useChartTheme();
@@ -31,3 +36,10 @@ export function TimeSeriesChart({ widget, data }: WidgetProps) {
     </WidgetFrame>
   );
 }
+
+// The registration: this widget's portable descriptor paired with its component, declared
+// through the same public `defineWidget` a third-party package uses.
+export const timeSeriesChartWidget = defineWidget({
+  descriptor: builtinWidgetDescriptors['timeseries-chart'],
+  implementation: { kind: 'trusted-react', component: TimeSeriesChart },
+});

@@ -203,3 +203,13 @@ func (r *DeviceProfileSearchResultsResolver) Pagination() *SearchResultsPaginati
 		C: r.C,
 	}
 }
+
+// ActiveProfileVersion is the published version a device resolves through this profile,
+// or null when the profile has never been published.
+func (r *DeviceProfileResolver) ActiveProfileVersion() (*DeviceProfileVersionResolver, error) {
+	v, err := r.S.GetApi(r.C).ActiveDeviceProfileVersion(r.C, &r.M)
+	if err != nil || v == nil {
+		return nil, err
+	}
+	return &DeviceProfileVersionResolver{M: *v, S: r.S, C: r.C}, nil
+}

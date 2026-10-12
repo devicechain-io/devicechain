@@ -46,7 +46,7 @@ import '@/i18n/config';
 import { cleanup, render, fireEvent, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { WIDGET_TYPES, type SlotDefinition, type KnownWidgetInstance, type WidgetType } from '@devicechain/dashboards';
+import { WIDGET_TYPES, type SlotDefinition, type KnownWidgetInstance, type ResolvedWidgetInstance, type WidgetType } from '@devicechain/dashboards';
 import {
   WIDGET_OPTIONS,
   numberOptionSpec,
@@ -246,7 +246,7 @@ function widgetOf(type: WidgetType, options: Record<string, unknown> = {}): Know
 // author that key"; that reading is right, so the fixture must not be the reason.
 function renderPanel(
   type: WidgetType,
-  onChange: (next: KnownWidgetInstance) => void,
+  onChange: (next: ResolvedWidgetInstance) => void,
   options: Record<string, unknown> = {},
 ) {
   return render(

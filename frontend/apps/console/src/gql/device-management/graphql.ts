@@ -200,6 +200,20 @@ export type CommandDefinitionUpdateRequest = {
   parameterSchema?: string | null | undefined;
 };
 
+/**
+ * One key of a configuration declaration. The key must follow the attribute-key grammar
+ * (letters, digits, hyphens and underscores, starting with a letter or digit), be unique
+ * within the declaration, and carry a valid value type.
+ */
+export type ConfigurationKeyInput = {
+  /** An optional human-readable note. */
+  description?: string | null | undefined;
+  /** The shared attribute key. */
+  key: string;
+  /** How the key's value is typed: STRING, LONG, DOUBLE, BOOLEAN or JSON. */
+  valueType: string;
+};
+
 export type CustomerCreateRequest = {
   customerTypeToken: string;
   description?: string | null | undefined;
@@ -1174,7 +1188,22 @@ export type DeviceConfigurationDeclarationQueryVariables = Exact<{
 }>;
 
 
-export type DeviceConfigurationDeclarationQuery = { devicesByToken: Array<{ token: string, deviceType: { token: string, profile: { token: string, configurationDeclaration: Array<{ key: string, valueType: string, description: string | null }> } | null } }> };
+export type DeviceConfigurationDeclarationQuery = { devicesByToken: Array<{ token: string, deviceType: { token: string, profile: { token: string, activeProfileVersion: { version: number, configurationDeclaration: Array<{ key: string, valueType: string, description: string | null }> } | null } | null } }> };
+
+export type ProfileConfigurationDeclarationQueryVariables = Exact<{
+  tokens: Array<string> | string;
+}>;
+
+
+export type ProfileConfigurationDeclarationQuery = { deviceProfilesByToken: Array<{ token: string, configurationDeclaration: Array<{ key: string, valueType: string, description: string | null }> }> };
+
+export type SetDeviceProfileConfigurationDeclarationMutationVariables = Exact<{
+  token: string;
+  keys: Array<ConfigurationKeyInput> | ConfigurationKeyInput;
+}>;
+
+
+export type SetDeviceProfileConfigurationDeclarationMutation = { setDeviceProfileConfigurationDeclaration: { token: string, configurationDeclaration: Array<{ key: string, valueType: string, description: string | null }> } };
 
 export type DevicesQueryVariables = Exact<{
   criteria: DeviceSearchCriteria;
@@ -2525,16 +2554,43 @@ export const DeviceConfigurationDeclarationDocument = new TypedDocumentString(`
       token
       profile {
         token
-        configurationDeclaration {
-          key
-          valueType
-          description
+        activeProfileVersion {
+          version
+          configurationDeclaration {
+            key
+            valueType
+            description
+          }
         }
       }
     }
   }
 }
     `) as unknown as TypedDocumentString<DeviceConfigurationDeclarationQuery, DeviceConfigurationDeclarationQueryVariables>;
+export const ProfileConfigurationDeclarationDocument = new TypedDocumentString(`
+    query ProfileConfigurationDeclaration($tokens: [String!]!) {
+  deviceProfilesByToken(tokens: $tokens) {
+    token
+    configurationDeclaration {
+      key
+      valueType
+      description
+    }
+  }
+}
+    `) as unknown as TypedDocumentString<ProfileConfigurationDeclarationQuery, ProfileConfigurationDeclarationQueryVariables>;
+export const SetDeviceProfileConfigurationDeclarationDocument = new TypedDocumentString(`
+    mutation SetDeviceProfileConfigurationDeclaration($token: String!, $keys: [ConfigurationKeyInput!]!) {
+  setDeviceProfileConfigurationDeclaration(token: $token, keys: $keys) {
+    token
+    configurationDeclaration {
+      key
+      valueType
+      description
+    }
+  }
+}
+    `) as unknown as TypedDocumentString<SetDeviceProfileConfigurationDeclarationMutation, SetDeviceProfileConfigurationDeclarationMutationVariables>;
 export const DevicesDocument = new TypedDocumentString(`
     query Devices($criteria: DeviceSearchCriteria!) {
   devices(criteria: $criteria) {

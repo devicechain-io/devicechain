@@ -223,5 +223,14 @@
   "widgetCategoryNavigation": "Navegación",
   "widgetCategoryLocation": "Ubicación",
   "widgetMenuDetail": "{{id}} · v{{version}}",
-  "widgetNotInstalled": "Este tipo de widget no está instalado en esta consola, por lo que no se pueden mostrar sus ajustes."
+  "widgetNotInstalled": "Este tipo de widget no está instalado en esta consola, por lo que no se pueden mostrar sus ajustes.",
+  "versionUnresolvedBlocked_one": "{{count}} widget de este panel no puede resolverse en esta consola, por lo que no se puede publicar una nueva versión. Instale su paquete o elimine el widget. Guardar el borrador conserva sin cambios sus ajustes almacenados.",
+  "versionUnresolvedBlocked_other": "{{count}} widgets de este panel no pueden resolverse en esta consola, por lo que no se puede publicar una nueva versión. Instale sus paquetes o elimine los widgets. Guardar el borrador conserva sin cambios sus ajustes almacenados.",
+  "unresolvedReasonUnregistered": "su paquete no está instalado en esta consola",
+  "unresolvedReasonUnversioned": "se guardó sin información de versión",
+  "unresolvedReasonInvalidMetadata": "su información de versión almacenada no es válida",
+  "unresolvedReasonOptionsVersion": "se guardó con una versión de ajustes distinta de la que usa el paquete instalado",
+  "unresolvedReasonSdkIncompatible": "se escribió para otra versión del SDK de widgets",
+  "widgetVersionDrift": "Creado con la versión {{authored}}. Esta consola lo muestra con la versión {{installed}}; compruebe que sigue viéndose bien.",
+  "widgetEditorFailed": "El editor de ajustes de este widget se detuvo con un error. Sus demás cambios se conservan; los detalles están en la consola del navegador."
 }

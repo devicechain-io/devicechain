@@ -15,7 +15,7 @@ import type {
   WidgetInstance,
 } from '@devicechain/dashboards';
 
-import { optNumber, optString } from './widget';
+import { optNumber, optString } from '@devicechain/widget-sdk';
 
 // The shapes a policy value takes at runtime (the descriptor is validated at registration,
 // so a ref names a declared option of a compatible kind; the value stored in a widget may

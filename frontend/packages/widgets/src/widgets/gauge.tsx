@@ -5,19 +5,22 @@
 
 import { useMemo } from 'react';
 
-import { buildGaugeOption } from '../chart-options';
-import { EChart } from '../echart';
-import { flashBackgroundStyle, useFlashOnChange } from '../flash';
-import { WidgetFrame } from '../frame';
-import { useChartTheme, useElementSize } from '../hooks';
 import {
+  defineWidget,
+  flashBackgroundStyle,
   optBoolean,
   optNumber,
   optString,
   pickSample,
   primaryMeasurementName,
+  useElementSize,
+  useFlashOnChange,
+  WidgetFrame,
   type WidgetProps,
-} from '../widget';
+} from '@devicechain/widget-sdk';
+import { buildGaugeOption, EChart, useChartTheme } from '@devicechain/widget-sdk/echarts';
+
+import { builtinWidgetDescriptors } from '../builtin-descriptors';
 
 export function Gauge({ widget, data }: WidgetProps) {
   const theme = useChartTheme();
@@ -51,3 +54,10 @@ export function Gauge({ widget, data }: WidgetProps) {
     </WidgetFrame>
   );
 }
+
+// The registration: this widget's portable descriptor paired with its component, declared
+// through the same public `defineWidget` a third-party package uses.
+export const gaugeWidget = defineWidget({
+  descriptor: builtinWidgetDescriptors['gauge'],
+  implementation: { kind: 'trusted-react', component: Gauge },
+});

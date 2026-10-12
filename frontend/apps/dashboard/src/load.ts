@@ -31,6 +31,7 @@ import {
   type DashboardDefinition,
   type SlotBinding,
 } from '@devicechain/dashboards';
+import { hostWidgetRegistry, type WidgetRegistry } from '@devicechain/host-widgets';
 
 import { PUBLISHED_DASHBOARD } from './queries';
 
@@ -38,6 +39,10 @@ import { PUBLISHED_DASHBOARD } from './queries';
 // (the host's override map) it renders against.
 export interface Loaded {
   definition: DashboardDefinition;
+  // The widget registry the definition was PARSED with. The viewer renders with this same
+  // one: a definition parsed against one catalog and rendered against another would show an
+  // extension widget as an unresolved placeholder, or the reverse.
+  registry: WidgetRegistry;
   manifest: Record<string, SlotBinding>;
 }
 
@@ -80,9 +85,13 @@ export function errorDetail(err: unknown): string | null {
 // The manifest it returns is the host's OVERRIDE map, not the bindings the board
 // renders against: merging it over the definition's slot defaults is effectiveBindings,
 // which View does, so what the user typed survives as its own thing.
+//
+// `registry` is the deployment's shared composition (@devicechain/host-widgets) unless a
+// caller composes its own; the parse and the returned `loaded.registry` are always the same one.
 export function loadDashboard(
   definitionText: string,
   manifestText: string,
+  registry: WidgetRegistry = hostWidgetRegistry(),
 ): { loaded: Loaded } | { error: LoadError } {
   // Bound the paste on the main thread (parse is synchronous) — matches the
   // server's definition cap; a giant paste would only freeze this tab.
@@ -97,13 +106,13 @@ export function loadDashboard(
   // The definition (required).
   let definition: DashboardDefinition;
   try {
-    definition = migrateToSlots(parseDashboardDefinition(JSON.parse(definitionText)));
+    definition = migrateToSlots(parseDashboardDefinition(JSON.parse(definitionText), { catalog: registry.catalog }));
   } catch (err) {
     return { error: { code: 'definitionInvalid', detail: errorDetail(err) } };
   }
 
   // The manifest (optional — empty → no overrides).
-  if (manifestText.trim() === '') return { loaded: { definition, manifest: {} } };
+  if (manifestText.trim() === '') return { loaded: { definition, registry, manifest: {} } };
 
   let rawManifest: unknown;
   try {
@@ -123,7 +132,7 @@ export function loadDashboard(
     return { error: { code: 'manifestDropped', slots: dropped } };
   }
 
-  return { loaded: { definition, manifest } };
+  return { loaded: { definition, registry, manifest } };
 }
 
 /**
@@ -140,6 +149,7 @@ export function loadDashboard(
 export async function loadPublishedDashboard(
   token: string,
   manifestText: string,
+  registry: WidgetRegistry = hostWidgetRegistry(),
 ): Promise<{ loaded: Loaded } | { error: LoadError }> {
   let definition: string;
   try {
@@ -149,7 +159,7 @@ export async function loadPublishedDashboard(
   } catch (err) {
     return { error: fetchError(err) };
   }
-  return loadDashboard(definition, manifestText);
+  return loadDashboard(definition, manifestText, registry);
 }
 
 // Classify a failed fetch by the server's machine-readable code where there is one, and

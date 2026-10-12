@@ -5,7 +5,7 @@ import type { SelectionCandidate } from '@devicechain/dashboards';
 import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { WidgetCandidatesProvider, type WidgetCandidates } from './frame';
+import { WidgetCandidatesProvider, type WidgetCandidates } from './context';
 import { useCandidates } from './hooks';
 
 afterEach(cleanup);
