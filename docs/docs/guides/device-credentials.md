@@ -62,6 +62,8 @@ When you disable, delete or change a credential, or replace, edit or delete its 
 
 Connections are not affected. Every MQTT connect, with a password or an access token, is checked against the database, so a revoked credential cannot open a new connection on any replica. When a deleted tenant's data is erased, every replica drops that tenant's copies.
 
+What a device presents is not kept in the clear on its way through the platform either. The password or access token that arrives with an event is sealed before the event is put on the platform's internal event stream, and the copy of a message kept for diagnosis, such as one that could not be decoded, has its credentials removed.
+
 ## Two layers: the connection and the event
 
 The credential in the event body is the **per-event** check. MQTT and NATS **connections** are also authenticated, at the broker itself:
@@ -112,7 +114,7 @@ Because the platform keeps only a digest of an `MQTT_BASIC` password, nobody can
 
 - **The password is shown once**, in a banner with a copy button, when you add the credential or set a new password. After that the credential's row says only that a password is set. No screen ever shows a stored password or its digest, and no form is filled in with one.
 - **A password that is lost cannot be recovered.** Set a new one.
-- **To rotate a password**, click **Set new password** on the credential's row, type one or click **Generate strong password**, and click **Save password**. The new password is shown once, as above. The device's current password stops working as soon as you save, so have the new one ready to load onto the device. The credential's other fields are left as they were.
+- **To rotate a password**, click **Set new password** on the credential's row, type one or click **Generate strong password**, and click **Save password**. The new password is shown once, as above. The device's current password stops opening new connections as soon as you save; on events it stops as a revocation does, within minutes by default (see [How quickly a revocation takes effect](#revocation-timing)). Have the new one ready to load onto the device. The credential's other fields are left as they were.
 - **Generated passwords** are 24 random bytes from the browser's secure random source, written in URL-safe base64 (32 characters).
 - **Length.** The platform refuses an `MQTT_BASIC` password shorter than 16 bytes. The console warns as you type, counting UTF-8 bytes rather than characters (a character outside ASCII takes two to four), and still sends what you typed, so the platform's own refusal is the one you see if it disagrees.
 

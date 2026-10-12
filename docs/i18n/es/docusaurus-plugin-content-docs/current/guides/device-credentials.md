@@ -62,6 +62,8 @@ Cuando deshabilitas, borras o cambias una credencial, o reemplazas, editas o bor
 
 Las conexiones no se ven afectadas. Cada conexión MQTT, con contraseña o con token de acceso, se comprueba contra la base de datos, así que una credencial revocada no puede abrir una conexión nueva en ninguna réplica. Cuando se borran los datos de un inquilino eliminado, todas las réplicas descartan las copias de ese inquilino.
 
+Lo que presenta un dispositivo tampoco se guarda en claro mientras recorre la plataforma. La contraseña o el token de acceso que llega con un evento se sella antes de que el evento se ponga en el flujo de eventos interno de la plataforma, y a la copia de un mensaje que se guarda para diagnóstico, como uno que no se pudo decodificar, se le quitan las credenciales.
+
 ## Dos capas: la conexión y el evento
 
 La credencial del cuerpo del evento es la verificación **por evento**. Las **conexiones** MQTT y NATS también se autentican, en el propio broker:
@@ -112,7 +114,7 @@ Como la plataforma conserva solo un resumen de una contraseña `MQTT_BASIC`, nad
 
 - **La contraseña se muestra una vez**, en un aviso con un botón de copiar, al agregar la credencial o al establecer una contraseña nueva. Después, la fila de la credencial solo indica que hay una contraseña establecida. Ninguna pantalla muestra una contraseña almacenada ni su resumen, y ningún formulario se rellena con una.
 - **Una contraseña perdida no se puede recuperar.** Establece una nueva.
-- **Para rotar una contraseña**, haz clic en **Establecer nueva contraseña** en la fila de la credencial, escribe una o haz clic en **Generar contraseña segura**, y haz clic en **Guardar contraseña**. La contraseña nueva se muestra una vez, como se indicó. La contraseña actual del dispositivo deja de funcionar en cuanto guardas, así que ten lista la nueva para cargarla en el dispositivo. Los demás campos de la credencial no cambian.
+- **Para rotar una contraseña**, haz clic en **Establecer nueva contraseña** en la fila de la credencial, escribe una o haz clic en **Generar contraseña segura**, y haz clic en **Guardar contraseña**. La contraseña nueva se muestra una vez, como se indicó. La contraseña actual del dispositivo deja de abrir conexiones nuevas en cuanto guardas; en los eventos deja de funcionar como una revocación, en cuestión de minutos de forma predeterminada (consulta [Cuánto tarda en aplicarse una revocación](#revocation-timing)). Ten lista la nueva para cargarla en el dispositivo. Los demás campos de la credencial no cambian.
 - **Las contraseñas generadas** son 24 bytes aleatorios de la fuente aleatoria segura del navegador, escritos en base64 seguro para URL (32 caracteres).
 - **Longitud.** La plataforma rechaza una contraseña `MQTT_BASIC` de menos de 16 bytes. La consola avisa mientras escribes, contando bytes UTF-8 y no caracteres (un carácter fuera de ASCII ocupa de dos a cuatro), y aun así envía lo escrito, de modo que si la plataforma discrepa verás su propio rechazo.
 

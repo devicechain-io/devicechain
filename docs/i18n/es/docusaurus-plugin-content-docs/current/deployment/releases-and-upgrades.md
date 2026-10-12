@@ -4034,6 +4034,8 @@ evento que pueda enviar un dispositivo llega hoy hasta ahí; es una ruta de defe
 la forma de enterarse de uno. Por eso `DeadLetterWriteLost` tiene una cuarta causa, indicada en
 [la tabla de alertas](./detection-engine.md#what-to-watch).
 
+No hay que hacer nada.
+
 ##### `dcctl install --dry-run` aplica los rechazos de reinstalación que aplica la instalación {#v0200-dry-run}
 
 En un clúster que responde, una ejecución en seco ahora lee el registro de instalación, pregunta
