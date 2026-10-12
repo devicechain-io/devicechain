@@ -106,6 +106,11 @@ match a hash back to one, which would be erasure in name only.
 After a deletion, a journal entry for that tenant still shows the shape of what happened ("three
 devices deleted at 14:02") with nobody named. That is the retention working, not data missing.
 
+The kept entries are filed under the deletion rather than under the tenant's token, so a new tenant
+created later with the same token starts with an empty journal. The deletion record's
+`retainedAuditTenant` field is the value they are filed under: pass it as the `tenant` filter of the
+admin API's `auditEvents` query to read that deletion's entries in the administrative journal.
+
 :::warning Sign-in records belong to no tenant, and are not reached
 A former member's sign-in history survives a tenant deletion. If your obligations extend to sign-in
 records, handle them through database and log retention rather than through tenant deletion.

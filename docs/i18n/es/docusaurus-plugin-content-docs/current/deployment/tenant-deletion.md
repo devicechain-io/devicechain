@@ -118,6 +118,12 @@ Tras una eliminación, una entrada del diario de ese inquilino sigue mostrando l
 pasó («tres dispositivos eliminados a las 14:02») sin nombrar a nadie. Eso es la conservación
 funcionando, no datos que faltan.
 
+Las entradas conservadas se archivan bajo la eliminación y no bajo el token del inquilino, así que un
+inquilino nuevo creado más tarde con el mismo token empieza con un diario vacío. El campo
+`retainedAuditTenant` del registro de eliminación es el valor bajo el que se archivan: pásalo como
+filtro `tenant` de la consulta `auditEvents` de la API de administración para leer las entradas de
+esa eliminación en el diario administrativo.
+
 :::warning Los registros de inicio de sesión no pertenecen a ningún inquilino, y no se alcanzan
 El historial de inicios de sesión de un antiguo miembro sobrevive a la eliminación de un inquilino.
 Si tus obligaciones alcanzan a los registros de inicio de sesión, gestiónalos mediante la retención
