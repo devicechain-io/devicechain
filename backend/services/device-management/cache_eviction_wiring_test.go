@@ -224,7 +224,7 @@ func TestAPublishReachesAnotherReplicasProfileResolutionCache(t *testing.T) {
 	version := func(rep replica) string {
 		res, err := rep.capi.ProfileResolutionByDeviceType(r.ctx, dt.ID)
 		require.NoError(t, err)
-		return res.Scope.ProfileVersionToken
+		return res.Scope().ProfileVersionToken
 	}
 	for name, rep := range r.each() {
 		require.Equal(t, "p@1", version(rep), "warm %s", name)

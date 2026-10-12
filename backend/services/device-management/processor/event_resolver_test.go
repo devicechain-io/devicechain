@@ -450,7 +450,7 @@ func (suite *EventResolverTestSuite) TestMeasurementClassifierBound() {
 		Unit: sql.NullString{String: "Cel", Valid: true}}
 
 	out, err := suite.resolver(config.AuthModeOptional).ResolveMeasurementsEventPayload(
-		context.Background(), deviceWithToken("TEST-123"), defsByKey(def), measurementEvent("temp", "42"))
+		context.Background(), deviceWithToken("TEST-123"), declaring(def), measurementEvent("temp", "42"))
 
 	assert.NoError(suite.T(), err)
 	entry := out.(*dmodel.ResolvedMeasurementsPayload).Entries[0].Entries[0]
@@ -473,7 +473,7 @@ func (suite *EventResolverTestSuite) TestMeasurementBooleanNormalized() {
 	def := &dmodel.MetricDefinition{Model: gorm.Model{ID: 7}, MetricKey: "engaged", DataType: "BOOLEAN"}
 
 	out, err := suite.resolver(config.AuthModeOptional).ResolveMeasurementsEventPayload(
-		context.Background(), deviceWithToken("TEST-123"), defsByKey(def), measurementEvent("engaged", "true"))
+		context.Background(), deviceWithToken("TEST-123"), declaring(def), measurementEvent("engaged", "true"))
 
 	assert.NoError(suite.T(), err)
 	entry := out.(*dmodel.ResolvedMeasurementsPayload).Entries[0].Entries[0]
@@ -490,7 +490,7 @@ func (suite *EventResolverTestSuite) TestMeasurementBooleanNormalized() {
 func (suite *EventResolverTestSuite) TestMeasurementUndeclaredUnclassified() {
 
 	out, err := suite.resolver(config.AuthModeOptional).ResolveMeasurementsEventPayload(
-		context.Background(), deviceWithToken("TEST-123"), nil, measurementEvent("humidity", "55"))
+		context.Background(), deviceWithToken("TEST-123"), dmodel.ProfileResolution{}, measurementEvent("humidity", "55"))
 
 	assert.NoError(suite.T(), err)
 	entry := out.(*dmodel.ResolvedMeasurementsPayload).Entries[0].Entries[0]
@@ -516,7 +516,7 @@ func (suite *EventResolverTestSuite) TestMeasurementUndeclaredNonNumericDropped(
 	}
 
 	out, err := suite.resolver(config.AuthModeOptional).ResolveMeasurementsEventPayload(
-		context.Background(), deviceWithToken("TEST-123"), nil, event)
+		context.Background(), deviceWithToken("TEST-123"), dmodel.ProfileResolution{}, event)
 
 	assert.NoError(suite.T(), err)
 	entries := out.(*dmodel.ResolvedMeasurementsPayload).Entries[0].Entries
@@ -543,7 +543,7 @@ func (suite *EventResolverTestSuite) TestMeasurementDeclaredNonStorableDropped()
 	}
 
 	out, err := suite.resolver(config.AuthModeOptional).ResolveMeasurementsEventPayload(
-		context.Background(), deviceWithToken("TEST-123"), defsByKey(def), event)
+		context.Background(), deviceWithToken("TEST-123"), declaring(def), event)
 
 	assert.NoError(suite.T(), err)
 	entries := out.(*dmodel.ResolvedMeasurementsPayload).Entries[0].Entries
@@ -552,10 +552,10 @@ func (suite *EventResolverTestSuite) TestMeasurementDeclaredNonStorableDropped()
 	}
 }
 
-// defsByKey indexes declared definitions the way the resolver receives them: projected
-// through the one ProfileResolution the event reads.
-func defsByKey(defs ...*dmodel.MetricDefinition) map[string]*dmodel.ResolvedMetric {
-	return dmodel.NewProfileResolution(dmodel.ProfileScope{}, defs).MetricsByKey()
+// declaring is the profile read the resolver receives for declared definitions: the one
+// ProfileResolution the event reads, projecting them.
+func declaring(defs ...*dmodel.MetricDefinition) dmodel.ProfileResolution {
+	return dmodel.NewProfileResolution(dmodel.ProfileScope{}, defs)
 }
 
 // A tracked relationship builds a device with ID 1 as source and the given target.

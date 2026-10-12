@@ -413,8 +413,9 @@ type failingRelationships struct {
 	model.DeviceManagementApi
 }
 
-func (failingRelationships) ProfileResolutionByDeviceType(context.Context, uint) (*model.ProfileResolution, error) {
-	return &model.ProfileResolution{Metrics: []model.ResolvedMetric{{MetricKey: "temp", DataType: string(model.MetricInt)}}}, nil
+func (failingRelationships) ProfileResolutionByDeviceType(context.Context, uint) (model.ProfileResolution, error) {
+	return model.NewProfileResolution(model.ProfileScope{},
+		[]*model.MetricDefinition{{MetricKey: "temp", DataType: string(model.MetricInt)}}), nil
 }
 
 func (failingRelationships) TrackedRelationshipsForDevice(context.Context, uint) (*model.EntityRelationshipSearchResults, error) {

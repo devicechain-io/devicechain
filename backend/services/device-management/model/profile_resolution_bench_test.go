@@ -40,10 +40,11 @@ func benchDefinitions(n int) []*MetricDefinition {
 	return defs
 }
 
-// BenchmarkDecodeProfileResolution is the per-event decode cost of the per-device-type
-// cache entry as it is cached — the scope plus the metric definitions projected to what
-// resolution reads — against what decoding the full definitions would cost. Every
-// resolved event of every type pays the projected row once.
+// BenchmarkDecodeProfileResolution is the decode cost of the per-device-type cache entry
+// as it is cached — the scope plus the metric definitions projected to what resolution
+// reads, with the key index built — against what decoding the full definitions would
+// cost. The in-process tier pays it once per entry; a read the tier cannot answer pays it
+// once per event.
 func BenchmarkDecodeProfileResolution(b *testing.B) {
 	for _, n := range []int{0, 20, 200} {
 		defs := benchDefinitions(n)
@@ -61,8 +62,7 @@ func BenchmarkDecodeProfileResolution(b *testing.B) {
 			b.ReportAllocs()
 			b.SetBytes(int64(len(projected)))
 			for i := 0; i < b.N; i++ {
-				var out ProfileResolution
-				if err := json.Unmarshal(projected, &out); err != nil {
+				if _, err := decodeProfileResolution(projected); err != nil {
 					b.Fatal(err)
 				}
 			}

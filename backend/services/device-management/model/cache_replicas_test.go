@@ -82,7 +82,7 @@ func TestAnotherReplicaSeesAPublishOnceItsCopyExpires(t *testing.T) {
 	r := newProfileResolutionRig(t)
 	const ttl = 2 * time.Second
 	b := NewCachedApi(r.api, &Caches{ProfileResolutionByType: r.kv.NewCache(messaging.WithLocalTTL(ttl))})
-	readB := func() *ProfileResolution {
+	readB := func() ProfileResolution {
 		t.Helper()
 		res, err := b.ProfileResolutionByDeviceType(r.ctx, r.typeId)
 		if err != nil {
@@ -91,24 +91,24 @@ func TestAnotherReplicaSeesAPublishOnceItsCopyExpires(t *testing.T) {
 		return res
 	}
 	start := time.Now()
-	if got := readB().Scope.ProfileVersionToken; got != "p@1" {
+	if got := readB().Scope().ProfileVersionToken; got != "p@1" {
 		t.Fatalf("replica B's warm read = %q, want p@1", got)
 	}
 
 	r.editUnitAndPublish(t, "K") // through replica A, the Api's evictor
-	if got := r.read(t); got.Scope.ProfileVersionToken != "p@2" {
-		t.Errorf("replica A, which published, reads %q, want p@2", got.Scope.ProfileVersionToken)
+	if got := r.read(t); got.Scope().ProfileVersionToken != "p@2" {
+		t.Errorf("replica A, which published, reads %q, want p@2", got.Scope().ProfileVersionToken)
 	}
-	if got := readB(); got.Scope.ProfileVersionToken != "p@1" {
+	if got := readB(); got.Scope().ProfileVersionToken != "p@1" {
 		if time.Since(start) < ttl {
 			t.Errorf("replica B inside its in-process TTL reads %q, want p@1 (the documented bound)",
-				got.Scope.ProfileVersionToken)
+				got.Scope().ProfileVersionToken)
 		}
 	}
 
 	time.Sleep(ttl - time.Since(start) + 50*time.Millisecond)
-	if got := readB(); got.Scope.ProfileVersionToken != "p@2" || unitOf(t, got) != "K" {
+	if got := readB(); got.Scope().ProfileVersionToken != "p@2" || unitOf(t, got) != "K" {
 		t.Errorf("replica B after its copy expired reads %q with unit %q, want p@2 with K",
-			got.Scope.ProfileVersionToken, unitOf(t, got))
+			got.Scope().ProfileVersionToken, unitOf(t, got))
 	}
 }

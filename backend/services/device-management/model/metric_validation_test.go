@@ -39,6 +39,27 @@ func TestValidateMetricValue(t *testing.T) {
 			&MetricDefinition{MetricKey: "temp", DataType: "DOUBLE", MaxValue: sql.NullFloat64{Float64: 100, Valid: true}},
 			"120", false,
 		},
+		// The bounds are inclusive, and nothing past them is let through.
+		{
+			"at max",
+			&MetricDefinition{MetricKey: "temp", DataType: "DOUBLE", MaxValue: sql.NullFloat64{Float64: 100, Valid: true}},
+			"100", true,
+		},
+		{
+			"just above max",
+			&MetricDefinition{MetricKey: "temp", DataType: "DOUBLE", MaxValue: sql.NullFloat64{Float64: 100, Valid: true}},
+			"100.5", false,
+		},
+		{
+			"at min",
+			&MetricDefinition{MetricKey: "temp", DataType: "DOUBLE", MinValue: sql.NullFloat64{Float64: 0, Valid: true}},
+			"0", true,
+		},
+		{
+			"just below min",
+			&MetricDefinition{MetricKey: "temp", DataType: "DOUBLE", MinValue: sql.NullFloat64{Float64: 0, Valid: true}},
+			"-0.5", false,
+		},
 		{
 			"within bounds",
 			&MetricDefinition{MetricKey: "temp", DataType: "DOUBLE",
@@ -79,16 +100,15 @@ func TestValidateMetricValue(t *testing.T) {
 // ValidateMeasurement is lenient: an undeclared key passes; a declared key is
 // validated against its definition.
 func TestValidateMeasurementLenient(t *testing.T) {
-	temp := (&MetricDefinition{MetricKey: "temp", DataType: "DOUBLE",
-		MaxValue: sql.NullFloat64{Float64: 100, Valid: true}}).Resolved()
-	defs := map[string]*ResolvedMetric{"temp": &temp}
-	if err := ValidateMeasurement(defs, "humidity", "not-a-number"); err != nil {
+	defs := NewProfileResolution(ProfileScope{}, []*MetricDefinition{{MetricKey: "temp", DataType: "DOUBLE",
+		MaxValue: sql.NullFloat64{Float64: 100, Valid: true}}})
+	if err := defs.ValidateMeasurement("humidity", "not-a-number"); err != nil {
 		t.Fatalf("undeclared key must pass through unvalidated, got: %v", err)
 	}
-	if err := ValidateMeasurement(defs, "temp", "42"); err != nil {
+	if err := defs.ValidateMeasurement("temp", "42"); err != nil {
 		t.Fatalf("declared conforming value should pass, got: %v", err)
 	}
-	if err := ValidateMeasurement(defs, "temp", "150"); err == nil {
+	if err := defs.ValidateMeasurement("temp", "150"); err == nil {
 		t.Fatalf("declared out-of-bounds value should be rejected")
 	}
 }

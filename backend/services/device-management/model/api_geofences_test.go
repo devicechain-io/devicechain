@@ -326,11 +326,11 @@ func TestProfileScopeCarriesCurrentFenceSetVersion(t *testing.T) {
 	if err != nil {
 		t.Fatalf("scope: %v", err)
 	}
-	if scope.Scope.DeviceTypeToken != "excavator" {
-		t.Fatalf("scope device type = %q, want excavator", scope.Scope.DeviceTypeToken)
+	if scope.Scope().DeviceTypeToken != "excavator" {
+		t.Fatalf("scope device type = %q, want excavator", scope.Scope().DeviceTypeToken)
 	}
-	if scope.Scope.FenceSetVersion != 0 {
-		t.Fatalf("fence set version = %d before any fence, want 0", scope.Scope.FenceSetVersion)
+	if scope.Scope().FenceSetVersion != 0 {
+		t.Fatalf("fence set version = %d before any fence, want 0", scope.Scope().FenceSetVersion)
 	}
 
 	if _, err := api.CreateGeoFence(ctx, &GeoFenceCreateRequest{Token: "yard", Geometry: yardGeometry}); err != nil {
@@ -340,7 +340,7 @@ func TestProfileScopeCarriesCurrentFenceSetVersion(t *testing.T) {
 	if err != nil {
 		t.Fatalf("scope: %v", err)
 	}
-	if afterCreate.Scope.FenceSetVersion == 0 {
+	if afterCreate.Scope().FenceSetVersion == 0 {
 		t.Fatal("the scope still reports version 0 after a fence was created")
 	}
 
@@ -352,8 +352,8 @@ func TestProfileScopeCarriesCurrentFenceSetVersion(t *testing.T) {
 	if err != nil {
 		t.Fatalf("scope: %v", err)
 	}
-	if afterEdit.Scope.FenceSetVersion == afterCreate.Scope.FenceSetVersion {
-		t.Errorf("the scope did not follow the fence edit (still %d)", afterEdit.Scope.FenceSetVersion)
+	if afterEdit.Scope().FenceSetVersion == afterCreate.Scope().FenceSetVersion {
+		t.Errorf("the scope did not follow the fence edit (still %d)", afterEdit.Scope().FenceSetVersion)
 	}
 
 	// A device whose TYPE is unknown still gets the tenant's real fence version — it
@@ -363,9 +363,9 @@ func TestProfileScopeCarriesCurrentFenceSetVersion(t *testing.T) {
 	if err != nil {
 		t.Fatalf("orphan scope: %v", err)
 	}
-	if orphan.Scope.FenceSetVersion != afterEdit.Scope.FenceSetVersion {
+	if orphan.Scope().FenceSetVersion != afterEdit.Scope().FenceSetVersion {
 		t.Errorf("orphan-type scope fence version = %d, want %d",
-			orphan.Scope.FenceSetVersion, afterEdit.Scope.FenceSetVersion)
+			orphan.Scope().FenceSetVersion, afterEdit.Scope().FenceSetVersion)
 	}
 }
 
