@@ -446,29 +446,49 @@ func TestProviderSignOutOverTheWire(t *testing.T) {
 		field(t, "updateIdpConnection", &conn)
 	require.True(t, conn.ProviderSignOut)
 
-	// A single sign-on, then sign out with the console named as the app to return to.
+	// A single sign-on through the connection; each sign-out below needs a sign-in of its own.
 	verifier := strings.Repeat("v", 43)
-	var begin struct{ AuthorizationUrl string }
-	post(t, s.pub, beginDoc, map[string]any{"c": s.s.Connection, "r": s.s.ReturnTo, "h": challengeOf(verifier)}, "", "192.0.2.9:1234", "").
-		field(t, "beginSso", &begin)
-	state, code := s.s.Authorize(begin.AuthorizationUrl, "sub-pat", s.s.LinkedEmail)
-	rec := httptest.NewRecorder()
-	s.mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, s.s.CallbackPrefix+s.s.Connection+"?"+url.Values{"state": {state}, "code": {code}}.Encode(), nil))
-	loc, err := url.Parse(rec.Header().Get("Location"))
-	require.NoError(t, err)
-	var done struct{ IdentityToken string }
-	post(t, s.pub, completeDoc, map[string]any{"c": loc.Query().Get("code"), "v": verifier}, "", "", "").field(t, "completeSso", &done)
+	signIn := func() string {
+		t.Helper()
+		var begin struct{ AuthorizationUrl string }
+		post(t, s.pub, beginDoc, map[string]any{"c": s.s.Connection, "r": s.s.ReturnTo, "h": challengeOf(verifier)}, "", "192.0.2.9:1234", "").
+			field(t, "beginSso", &begin)
+		state, code := s.s.Authorize(begin.AuthorizationUrl, "sub-pat", s.s.LinkedEmail)
+		rec := httptest.NewRecorder()
+		s.mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, s.s.CallbackPrefix+s.s.Connection+"?"+url.Values{"state": {state}, "code": {code}}.Encode(), nil))
+		loc, err := url.Parse(rec.Header().Get("Location"))
+		require.NoError(t, err)
+		var done struct{ IdentityToken string }
+		post(t, s.pub, completeDoc, map[string]any{"c": loc.Query().Get("code"), "v": verifier}, "", "", "").field(t, "completeSso", &done)
+		return done.IdentityToken
+	}
+	const signOutDoc = `mutation($t:String!,$r:SignOutReturn){logout(token:$t,returnTo:$r){providerSignOutUrl}}`
 
+	// Each app named over the wire comes back to ITS address: the resolver hands the
+	// caller's choice through, not a default.
+	for app, returnTo := range map[string]string{
+		"CONSOLE":   "https://dc.example.com/login",
+		"DASHBOARD": "https://dc.example.com/dash/",
+	} {
+		idTok := signIn()
+		var out struct{ ProviderSignOutUrl *string }
+		post(t, s.pub, signOutDoc, map[string]any{"t": idTok, "r": app}, "", "", "").field(t, "logout", &out)
+		require.NotNilf(t, out.ProviderSignOutUrl, "no provider address for %s", app)
+		got, err := url.Parse(*out.ProviderSignOutUrl)
+		require.NoError(t, err)
+		require.Equal(t, s.s.ProviderURL+"/logout", got.Scheme+"://"+got.Host+got.Path)
+		require.Equalf(t, url.Values{"client_id": {s.s.ClientID}, "post_logout_redirect_uri": {returnTo}}, got.Query(), "app %s", app)
+
+		// The platform sign-in ended before the address was handed back.
+		r = post(t, s.pub, selectSso, map[string]any{"i": idTok}, "", "", "")
+		require.Equal(t, "invalid or expired token", r.failed(t))
+	}
+
+	// No app named: this platform only, even with the connection switched on.
+	idTok := signIn()
 	var out struct{ ProviderSignOutUrl *string }
-	post(t, s.pub, `mutation($t:String!){logout(token:$t,returnTo:CONSOLE){providerSignOutUrl}}`, map[string]any{"t": done.IdentityToken}, "", "", "").
-		field(t, "logout", &out)
-	require.NotNil(t, out.ProviderSignOutUrl)
-	got, err := url.Parse(*out.ProviderSignOutUrl)
-	require.NoError(t, err)
-	require.Equal(t, s.s.ProviderURL+"/logout", got.Scheme+"://"+got.Host+got.Path)
-	require.Equal(t, url.Values{"client_id": {s.s.ClientID}, "post_logout_redirect_uri": {"https://dc.example.com/login"}}, got.Query())
-
-	// The platform sign-in ended before the address was handed back.
-	r = post(t, s.pub, selectSso, map[string]any{"i": done.IdentityToken}, "", "", "")
+	post(t, s.pub, signOutDoc, map[string]any{"t": idTok}, "", "", "").field(t, "logout", &out)
+	require.Nil(t, out.ProviderSignOutUrl, "a sign-out that named no app was handed a provider address")
+	r = post(t, s.pub, selectSso, map[string]any{"i": idTok}, "", "", "")
 	require.Equal(t, "invalid or expired token", r.failed(t))
 }

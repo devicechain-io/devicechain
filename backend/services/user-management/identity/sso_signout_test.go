@@ -208,3 +208,39 @@ func TestTheSignOutReturnAddressIsOnlyEverOneOfTheFixedTwo(t *testing.T) {
 		"post_logout_redirect_uri": {consoleSignOutReturn},
 	}, got.Query(), "the endpoint's own parameters are kept, but never its return address or client")
 }
+
+// The request is built only from an endpoint a browser may safely be sent to, even if the
+// stored snapshot holds one discovery would refuse today (a row written before a rule
+// tightened, or edited in the database): never a non-https address off loopback, never a
+// non-web scheme, and never with a fragment, which RP-initiated logout does not allow.
+func TestTheProviderSignOutRequestRefusesAnUnsafeEndpoint(t *testing.T) {
+	conn := func(endpoint string) *iam.IdpConnection {
+		c := &iam.IdpConnection{
+			ClientID: "dc-client", Enabled: true, ProviderSignOut: true,
+			DiscoverySnapshot: &iam.DiscoverySnapshot{EndSessionEndpoint: endpoint},
+		}
+		now := c.CreatedAt
+		c.DiscoveryApprovedAt = &now
+		return c
+	}
+
+	// Controls: the shapes discovery accepts do build a request.
+	require.NotEmpty(t, providerSignOutRequest(conn("https://idp.example/logout"), consoleSignOutReturn))
+	require.NotEmpty(t, providerSignOutRequest(conn("http://127.0.0.1:5556/logout"), consoleSignOutReturn))
+
+	for _, bad := range []string{
+		"http://idp.example/logout",
+		"javascript://idp.example/%0Aalert(1)",
+		"data://idp.example/logout",
+		"ftp://idp.example/logout",
+		"/logout",
+		"",
+	} {
+		require.Emptyf(t, providerSignOutRequest(conn(bad), consoleSignOutReturn), "endpoint %q built a request", bad)
+	}
+
+	got, err := url.Parse(providerSignOutRequest(conn("https://idp.example/logout#frag"), consoleSignOutReturn))
+	require.NoError(t, err)
+	require.Empty(t, got.Fragment, "the endpoint's fragment was carried into the request")
+	require.Equal(t, "https://idp.example/logout", got.Scheme+"://"+got.Host+got.Path)
+}
