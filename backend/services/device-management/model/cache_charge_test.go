@@ -75,12 +75,33 @@ func measuredMetrics(n int, rich bool, key string) ProfileResolution {
 	return NewProfileResolution(scope, defs)
 }
 
+// shortKeyMetrics is a resolution declaring n INT metrics under n DISTINCT keys of one or two
+// characters, with one-digit ids: the least JSON per key-index entry, so the worst ratio of
+// heap to encoded length a resolution reaches. (measuredMetrics's one-character fixture
+// repeats ONE key, so its index holds one entry and prices none of the others.)
+func shortKeyMetrics(n int) ProfileResolution {
+	const chars = "abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+	var defs []*MetricDefinition
+	for i := 0; i < n; i++ {
+		key := string(chars[i%len(chars)])
+		if i >= len(chars) {
+			key += string(chars[(i/len(chars)-1)%len(chars)])
+		}
+		d := &MetricDefinition{MetricKey: key, DataType: "INT"}
+		d.ID = uint(i % 10)
+		defs = append(defs, d)
+	}
+	return NewProfileResolution(ProfileScope{}, defs)
+}
+
 // TestDecodedChargeCoversTheHeap measures what decoded values of representative sizes hold
 // on the heap and requires the charge the caches make for them (see decodedCharge) to be at least that. The charge is what the byte bound counts for the
 // decoded copy; if it fell below the heap the bound would promise less memory than the
 // cache uses. Measured on Go 1.26, windows/amd64, the heap of a decoded value was up to
-// 3.8 times its encoded length for a resolution (its key index included) and about 1.3
-// times or less for the rest.
+// 5.0 times its encoded length for a resolution (its key index included, with many
+// distinct short keys) and about 1.3 times or less for the rest. The counterweight: the
+// resolution's factor must stay within 1.5x of the worst ratio measured, so the charge
+// cannot drift arbitrarily high either.
 func TestDecodedChargeCoversTheHeap(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0).UTC()
 	meta := datatypes.JSON(`{"site":"north-yard","floor":3,"owner":"facilities"}`)
@@ -140,6 +161,12 @@ func TestDecodedChargeCoversTheHeap(t *testing.T) {
 	short := measuredMetrics(100, false, "k")
 	add("resolution 100 short-key metrics", resolution(marshal(short), 500), short)
 	add("resolution 100 metrics", resolution(marshal(r100), 500), r100)
+	// Many distinct short keys: the index's share is largest here. 62 and 484 sit just past
+	// growths of the index's table, where (Go 1.26) the heap measured 4.8x and 5.0x the
+	// encoding, above the 4x this cache was once charged.
+	s62, s484 := shortKeyMetrics(62), shortKeyMetrics(484)
+	add("resolution 62 distinct short keys", resolution(marshal(s62), 1000), s62)
+	add("resolution 484 distinct short keys", resolution(marshal(s484), 100), s484)
 	current = relationshipsCharge
 	add("relationships 5", heapPerDecoded[EntityRelationshipSearchResults](t, marshal(rels), 2000), rels)
 	current = membershipsCharge
@@ -148,6 +175,16 @@ func TestDecodedChargeCoversTheHeap(t *testing.T) {
 	current = scopedGroupsCharge
 	add("bool", heapPerDecoded[bool](t, []byte("true"), 2000), true)
 
+	worstResolution := 0.0
+	for _, c := range cases {
+		if c.charge == resolutionCharge {
+			worstResolution = max(worstResolution, (c.heap-float64(c.charge.base))/float64(c.enc))
+		}
+	}
+	if limit := 1.5 * worstResolution; float64(resolutionCharge.factor) > limit {
+		t.Errorf("the resolution factor %d is above 1.5x the worst ratio measured (%.2f): it charges for memory no resolution holds",
+			resolutionCharge.factor, worstResolution)
+	}
 	for _, c := range cases {
 		charge := float64(c.charge.bytes(c.enc))
 		t.Logf("%-28s encoded %5d B  heap %7.0f B  charge %6.0f B  (%.2fx encoded)", c.name, c.enc, c.heap, charge, c.heap/float64(c.enc))

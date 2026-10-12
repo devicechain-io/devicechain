@@ -37,6 +37,36 @@ func copiesWhole(t reflect.Type) bool {
 	return true
 }
 
+// TestCopiesWholeSeesEveryReference is copiesWhole's negative control: the shape test below
+// passes trivially if copiesWhole stops recognizing a reference kind, since nothing that
+// returns one exists today for it to catch.
+func TestCopiesWholeSeesEveryReference(t *testing.T) {
+	type nested struct {
+		ok  [2]int
+		ref struct{ p *int }
+	}
+	shares := map[string]reflect.Type{
+		"pointer":       reflect.TypeOf((*ResolvedMetric)(nil)),
+		"slice":         reflect.TypeOf([]string(nil)),
+		"map":           reflect.TypeOf(map[string]int(nil)),
+		"chan":          reflect.TypeOf((chan int)(nil)),
+		"func":          reflect.TypeOf((func())(nil)),
+		"interface":     reflect.TypeOf((*error)(nil)).Elem(),
+		"array of ptr":  reflect.TypeOf([1]*int{}),
+		"nested struct": reflect.TypeOf(nested{}),
+	}
+	for name, typ := range shares {
+		if copiesWhole(typ) {
+			t.Errorf("copiesWhole(%s) = true, but a copy of a %s shares memory", typ, name)
+		}
+	}
+	for _, typ := range []reflect.Type{reflect.TypeOf(ProfileScope{}), reflect.TypeOf(""), reflect.TypeOf([3]int{})} {
+		if !copiesWhole(typ) {
+			t.Errorf("copiesWhole(%s) = false, but it holds no reference", typ)
+		}
+	}
+}
+
 // TestAResolutionHandsOutNothingWritable pins the shape that makes a cached resolution
 // safe to share without a copy (see ProfileResolution). The compiler enforces each part
 // once it is in place; this fails when a change takes one away:
@@ -193,6 +223,16 @@ func TestProfileResolutionWireIsUnchanged(t *testing.T) {
 			t.Fatalf("%s encodes as\n%s (%v)\nwant\n%s", name, got, err, wire)
 		}
 	}
+	// The empty resolution (an untyped or unpublished device type, the common case) as the
+	// exported-field form encoded it, checked against that form's own encoder.
+	const emptyWire = `{"Scope":{"DeviceTypeToken":"","ProfileVersionToken":"","FenceSetVersion":2},"Metrics":[]}`
+	if got, err := json.Marshal(NewProfileResolution(ProfileScope{FenceSetVersion: 2}, nil)); err != nil || string(got) != emptyWire {
+		t.Fatalf("the empty resolution encodes as\n%s (%v)\nwant\n%s", got, err, emptyWire)
+	}
+	if empty, err := decodeProfileResolution([]byte(emptyWire)); err != nil || empty.MetricCount() != 0 || empty.Scope().FenceSetVersion != 2 {
+		t.Fatalf("the empty wire decodes as %+v (%v)", empty, err)
+	}
+
 	decoded, err := decodeProfileResolution([]byte(wire))
 	if err != nil {
 		t.Fatal(err)

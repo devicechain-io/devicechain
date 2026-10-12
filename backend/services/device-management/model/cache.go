@@ -215,14 +215,16 @@ func InitializeCaches(nmgr *messaging.NatsManager, cfg *config.DeviceManagementC
 // base. The factors are the measured ratio of heap to JSON length for what each cache
 // holds, rounded up, and TestDecodedChargeCoversTheHeap measures it again and fails if a
 // charge falls below the heap. A resolution is a slice of structs with pointer fields plus
-// its key index, and holds several times its encoding; the others hold about what they encode, so they are not
-// charged more, which would shrink the per-device caches' capacity for nothing.
+// its key index, and holds several times its encoding: up to about 5x for many distinct
+// keys of one or two characters, where the index costs the most per encoded byte. The
+// others hold about what they encode, so they are not charged more, which would shrink the
+// per-device caches' capacity for nothing.
 type decodedCharge struct{ factor, base int }
 
 var (
 	deviceCharge        = decodedCharge{factor: 1, base: 64}
 	relationshipsCharge = decodedCharge{factor: 2, base: 64}
-	resolutionCharge    = decodedCharge{factor: 4, base: 64}
+	resolutionCharge    = decodedCharge{factor: 6, base: 64}
 	membershipsCharge   = decodedCharge{factor: 1, base: 64}
 	scopedGroupsCharge  = decodedCharge{factor: 1, base: 64}
 )
