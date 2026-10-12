@@ -48,12 +48,14 @@ Schema 表达不了的内容：
 | [事件](#device-event) | 设备 → 平台 | `{instanceId}/{tenant}/devices/{deviceToken}/events` | `{instanceId}.{tenant}.devices.{deviceToken}.events` |
 | [命令下发](#command-delivery) | 平台 → 设备 | `{instanceId}/{tenant}/device-commands/{deviceToken}` | `{instanceId}.{tenant}.device-commands.{deviceToken}` |
 | [命令响应](#command-response) | 设备 → 平台 | `{instanceId}/{tenant}/command-responses/{deviceToken}` | `{instanceId}.{tenant}.command-responses.{deviceToken}` |
+| [配置](../guides/connecting-a-device.md#reserved-device-topics)与[更新](../guides/connecting-a-device.md#over-the-air-updates)消息 | 平台 → 设备 | `{instanceId}/{tenant}/device-desired/{deviceToken}` | `{instanceId}.{tenant}.device-desired.{deviceToken}` |
+| 配置与更新报告 | 设备 → 平台 | `{instanceId}/{tenant}/device-reports/{deviceToken}` | `{instanceId}.{tenant}.device-reports.{deviceToken}` |
 
 - 设备只被授权在带有**自身**设备令牌的主题上发布和订阅。它无法读取其他设备的命令，也无法冒充其他设备发布。
 - **设备通过 MQTT 连接，而不是直接使用 NATS。** 设备凭据只授权 MQTT 连接：出示设备凭据的普通 NATS 客户端在连接时即被拒绝。subject 一列是运维人员在 NATS 工具中看到的名称，而不是第二条接入途径。连接设置（client id、`{tenant}:{credentialId}` 用户名、TLS）见[连接设置](../guides/connecting-a-device.md#connection-settings)。
 - 以 QoS 0 发布事件，或以 QoS 1 发布并携带 [`altId`](#device-event)。QoS 2 发布默认被拒绝，且 broker 会关闭连接；见[服务质量](../guides/connecting-a-device.md#quality-of-service)。
 
-通过 **HTTP**，设备只能发送事件。将同样的[事件正文](#device-event)以 `POST` 发送到 `event-sources` 服务（端口 8081）的 `/{instanceId}/{tenant}/events`。HTTP 没有下行通道：只使用 HTTP 的设备无法接收命令。
+通过 **HTTP**，设备只能发送事件。将同样的[事件正文](#device-event)以 `POST` 发送到 `event-sources` 服务（端口 8081）的 `/{instanceId}/{tenant}/events`。HTTP 没有下行通道：只使用 HTTP 的设备无法接收命令、配置或更新分配。
 
 ## 设备事件 {#device-event}
 

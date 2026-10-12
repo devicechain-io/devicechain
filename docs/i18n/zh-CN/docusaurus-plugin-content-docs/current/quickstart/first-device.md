@@ -23,7 +23,7 @@ title: 你的第一台设备
 - 无需事先准备集群。`dcctl install local` 会查找名为 `devicechain` 的 kind 集群（或通过 `--cluster` 指定的名称）；如果不存在，就会询问是否创建。`--kube-context <name>` 可指向你已有的集群，该命令绝不会创建或删除这个集群。
 - 无论采用哪种方式，都需要 Kubernetes **1.29 或更新版本**。旧版本会被拒绝，因为数据库 Chart 不支持它们。
 
-`dcctl preflight local` 会运行完全相同的检查，但不初始化任何内容。[初始化指南](../deployment/bootstrap.md#prerequisites)提供了详细说明。
+`dcctl preflight local` 会运行相同的检查，并检查 Docker 引擎、内核限制、磁盘和端口，但不初始化任何内容。[初始化指南](../deployment/bootstrap.md#prerequisites)提供了详细说明。
 
 下列命令假设实例可以通过 `localhost` 上的普通 HTTP 访问，这正是第 1 步中的参数所配置的方式。
 

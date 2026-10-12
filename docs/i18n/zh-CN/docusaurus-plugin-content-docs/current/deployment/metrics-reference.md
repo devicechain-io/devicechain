@@ -55,7 +55,9 @@ title: 指标参考
 | `alarm_event_dead_lettered_total` | 无法发布到告警事件流而改写入死信流的告警状态变更事件。每一条都是到达了数据库却没有到达总线的告警转换，因此没有人因此被通知，它对运维人员可见，而不是只写进日志。 |
 | `callout_in_flight` | 此刻正在授权的设备认证标注请求。 |
 | `callout_refused_busy_total` | 因达到并发上限而以通用拒绝回应的设备认证标注请求。 |
+| `config_reports_rejected_total{reason}` | device-management 拒绝的 [device-reports 主题](../guides/connecting-a-device.md#reserved-device-topics)消息：`malformed`（无法解码）、`throttled`（在单设备冷却期内的 sync）、`unattributable`（主题中没有租户或设备）、`unknown_device`、`unknown_revision`、`digest_mismatch` 和 `stale`（比已记录的更旧）。某一批设备持续产生此类拒绝，说明设备端存在缺陷。 |
 | `credential_misconfigured_total{path}` | 因存储的密钥永远无法匹配而被拒绝的设备凭据检查：未存储任何密钥，或其摘要由与本实例根密钥所派生的不同密钥生成（最可能是数据库被恢复到了错误的根密钥旁）。path="connect" 是 MQTT 认证标注，path="event" 是逐事件检查。错误密码不在此计数。 |
+| `device_reports_dead_lettered_total` | 因无法理解或引用了设备没有的配置修订而写入死信流的设备消息。使用 `dcctl dead-letters` 查看。 |
 | `geofence_set_publish_failures_total` | 无法发布的地理围栏集清单：序列化错误、代理拒绝或传输故障。每一条都表示事件处理未被告知某次围栏编辑，因此该租户的包含判定沿用先前的围栏集，直到协调扫描将其修复。持续的非零速率表示围栏编辑没有到达检测引擎。 |
 | `raise_alarm_dead_lettered_total` | 在应用它们的所有尝试都失败后写入死信流的触发告警边，使本应被触发或清除的告警可以被看到，而不是只写进日志。 |
 | `resolve_event_time_bounded_total` | 因报告的事件时间领先服务器时钟超过配置的容差而被拒绝、并被替换为容差允许的最晚时间的情况。 |
@@ -214,6 +216,22 @@ title: 指标参考
 | `dead_letters_stored_total` | 写入可查询存储的死信，使消费者放弃的失败存续时间超过流自身的七天窗口。 |
 | `dead_letters_unstorable_total` | 此消费者无法理解的死信消息：没有可解析的租户，或正文不是信封。它们被确认并计数而不重试，因为重投递不会让格式错误的消息变得可解析。 |
 | `dead_letters_unstored_total` | 耗尽所有投递尝试仍未被存储的死信：存储不可达的时间超过了重试持续的时间。它们所描述的失败现在不被记录在任何地方，而这正是此消费者存在要防止的唯一一件事。 |
+
+## 更新管理 {#update-management}
+
+前缀：`devicechain_updatemanagement_`。该服务为可选启用；参见[空中（OTA）更新](../concepts/over-the-air-updates.md)。
+
+`update_download_grants_total{result="not_configured"}` 上升表示未设置 `updates.downloadBaseUrl`，任何设备都无法下载。`update_attempts_expired_total` 统计更新期间失去响应的设备；处于 `UNKNOWN` 的更新会等待设备的清单报告或运维人员执行 `abandonUnknownUpdate`。
+
+| 指标 | 含义 |
+| --- | --- |
+| `update_attempts_expired_total{state}` | 因设备失去响应而被截止期扫描移动的更新尝试：在报告开始安装之前为 `TIMED_OUT`，安装或重启期间为 `UNKNOWN`。 |
+| `update_desired_publish_failures_total` | 无法写入设备 desired 主题的更新分配、下载授权和取消消息。设备会在下次 sync 时获取该状态。 |
+| `update_download_bytes_total` | 向设备流式传输的制品字节数。 |
+| `update_download_grants_total{result}` | 设备申请的下载授权，按结果分类：`granted`，或未授予的原因（`unknown_assignment`、`superseded`、`finished`、`cancel_requested`、`artifact_unavailable`、`not_configured`、`error`）。 |
+| `update_downloads_total{result}` | 制品下载请求，按结果分类：`served`、`aborted`（客户端离开或传输中途无法读取对象），或在发送任何字节前被拒绝的原因（`capability_malformed`、`capability_invalid`、`capability_expired`、`stale`、`gone`、`range_not_satisfiable`、`busy`、`error`）。`capability_invalid` 速率上升说明有人在猜测。 |
+| `update_reports_rejected_total{reason}` | update-management 在应用前拒绝的设备消息：`malformed`、`unattributable` 和 `throttled`。 |
+| `update_reports_total{verdict}` | 更新进度和清单报告，按更新状态机给出的结论分类：`APPLIED`，或未应用的原因（`DUPLICATE`、`STALE_ATTEMPT`、`DIGEST_MISMATCH`、`WRONG_COMPONENT`、`REGRESSION`、`UNCONFIRMED`、`NOT_CANCELLABLE`、`LATE`、`CONFLICT`、`INVALID_ATTEMPT`、`WRONG_KIND`、`UNKNOWN_ASSIGNMENT`）。某一批设备的未应用速率上升说明设备端存在缺陷。 |
 
 ## 所有服务 {#every-service}
 

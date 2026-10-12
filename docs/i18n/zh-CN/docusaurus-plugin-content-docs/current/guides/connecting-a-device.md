@@ -86,7 +86,7 @@ MQTT 和 HTTP 摄取已可用。资源受限设备也可通过 [LwM2M 摄取](..
 
 该限制就是为了约束这种分发放大。逐租户摄取上限按时间统计读数，因此约束租户每秒发送多少读数，而且一条消息的成本不能超过套餐的突发额度。但突发额度是套餐设置：如果某个套餐将突发额度提高到四万，就可能发送一条包含四万个读数的消息。没有此限制时，一条消息对整个实例的成本就会由所有套餐允许的最大突发额度决定。积压更多的设备应将其拆成多条消息上传。
 
-超限消息会**整条拒绝**，绝不会裁剪以满足限制。悄然截短的批次会收到 `202`，而两端都无法发现缺失读数。不会存储任何内容，也不会丢失任何内容：消息会完整路由到解码失败流。
+超限消息会**整条拒绝**，绝不会裁剪以满足限制。悄然截短的批次会收到 `202`，而两端都无法发现缺失读数。不会存储任何内容。为便于诊断，消息会被路由到解码失败流，其中携带的凭据会被移除，消息体只保留前 16 KiB。
 
 设备如何得知结果取决于传输：
 
@@ -325,7 +325,18 @@ mosquitto_pub \
 从未获得应答的命令会保持 `SENT`，直到 TTL 将其转为 `TIMEOUT`。没有响应，平台只知道命令已分发，不知道设备是否执行。如果设备不响应，发出命令时应设置 `expiresAt`，使其按你的时间安排达到终态，而不是采用平台默认七天。
 :::
 
-### 配置下发主题 {#reserved-device-topics}
+### 为何需要 nonce {#why-the-nonce-is-required}
+
+返回 `dispatchNonce` 可告知平台，你的应答属于命令的**这一次**送达。这很重要，因为命令可能合理地被发布多次。发布报告错误时，平台无法区分消息丢失和确认丢失，因此会将命令重新排队发送。没有 nonce，第一次送达的应答若在第二次发出后才到达，就会在设备执行第二次之前关闭命令。
+
+对于自己开发的设备，这有两个影响：
+
+- **没有** `dispatchNonce` 的响应会被拒绝。命令不会结算，应答会记录到平台死信流，而不是丢弃，因此拒绝可见，不会静默发生。
+- 引用了命令**已不再使用**的 `dispatchNonce` 的响应，也会以同样方式拒绝。请使用实际应答那次送达的 nonce。
+
+执行命令期间，将 nonce 与命令一同保存；应答前若同一命令再次送达，则覆盖它。
+
+## 配置下发主题 {#reserved-device-topics}
 
 设备通过两个按设备划分的主题接收配置，并向平台报告处理结果：
 
@@ -335,6 +346,8 @@ mosquitto_pub \
 ```
 
 与命令一样，设备只被授权使用带有自身设备令牌的主题，且仅限所示方向。平台从主题而不是消息中获取租户和设备，因此消息中不得携带设备身份（携带的会被拒绝），设备也只能为自己报告。
+
+配置由设备的 `SHARED` 属性构建，但只包含其配置文件声明为设备可见配置的键：在控制台的配置文件编辑器中声明这些键（或使用 `setDeviceProfileConfigurationDeclaration`），配置文件发布后它们才会下发到设备。声明中未列出的共享键永远不会发送；已声明但存储值与声明类型不符的键会被省略。会使设备配置超过 64 KiB 的共享属性写入会被拒绝。控制台的设备页面显示最新修订、设备最近报告的内容以及该修订是否仍待应用；`deviceConfiguration` 查询返回相同信息。
 
 每当设备的配置发生变化，平台会在 `device-desired` 上发布一个修订版本：
 
@@ -353,16 +366,58 @@ mosquitto_pub \
 
 只有当设备确实拥有该修订版本且摘要与之一致时，平台才会记录 `config.status`；设备对该修订版本报告 `APPLIED` 后，就不再显示为待处理。报告至少被处理一次，因此重复发送是安全的，较旧的报告也不会覆盖较新的报告。无法解码、指向未发给该设备的修订版本、或摘要与该修订版本不符的消息会被拒绝，并记录到死信流，而不是被丢弃。仅使用 HTTP 的设备不通过此通道提供服务。
 
-### 为何需要 nonce {#why-the-nonce-is-required}
+## 空中（OTA）更新 {#over-the-air-updates}
 
-返回 `dispatchNonce` 可告知平台，你的应答属于命令的**这一次**送达。这很重要，因为命令可能合理地被发布多次。发布报告错误时，平台无法区分消息丢失和确认丢失，因此会将命令重新排队发送。没有 nonce，第一次送达的应答若在第二次发出后才到达，就会在设备执行第二次之前关闭命令。
+在运行更新服务的实例上（参见[空中（OTA）更新](../concepts/over-the-air-updates.md)），同样的两个主题也传递固件和软件更新。上述规则在此同样适用：每条消息都带有 `"v":1` 和 `kind`，未知或重复的字段会被拒绝，消息不得携带设备身份。任一方向的更新消息最大 4 KiB。
 
-对于自己开发的设备，这有两个影响：
+当某个制品被分配给设备时，平台在 `device-desired` 上发布：
 
-- **没有** `dispatchNonce` 的响应会被拒绝。命令不会结算，应答会记录到平台死信流，而不是丢弃，因此拒绝可见，不会静默发生。
-- 引用了命令**已不再使用**的 `dispatchNonce` 的响应，也会以同样方式拒绝。请使用实际应答那次送达的 nonce。
+```json
+{"v":1,"kind":"update.assignment","attemptId":"att-7f3k","assignmentId":"asg-91xq","component":"firmware","trust":"UNVERIFIED","artifact":{"version":"1.4.2","digest":"sha256:…","size":8388608,"requiresReboot":true}}
+```
 
-执行命令期间，将 nonce 与命令一同保存；应答前若同一命令再次送达，则覆盖它。
+`component` 指明要更新的设备部件；每个部件上设备最多同时处理一个分配。固件制品的 `requiresReboot` 为 true，软件和配置制品为 false。`trust` 始终为 `UNVERIFIED`：平台只检查了字节是否与声明的一致，而不检查由谁生成，因此需要确认镜像真实性的设备必须自行校验签名。
+
+要获取镜像，请在 `device-reports` 上申请下载授权：
+
+```json
+{"v":1,"kind":"download.request","assignmentId":"asg-91xq"}
+```
+
+平台在 `device-desired` 上回复一个 URL。在 `expiresAt` 之前（最长十五分钟），无需其他凭据即可通过该 URL 下载这一个制品：
+
+```json
+{"v":1,"kind":"download.grant","assignmentId":"asg-91xq","url":"https://…/api/update-management/updates/download/…?cap=…","expiresAt":"2026-10-12T10:15:00Z"}
+```
+
+使用 HTTP `GET` 下载。该端点支持 `Range` 请求，因此中断的下载可以从已持有的字节处续传；授权过期后，再次发送相同的 `download.request` 即可获得新的授权。如果该分配已不是当前分配，平台回复的是 `update.cancel` 而不是授权。
+
+在 `device-reports` 上用 `update.progress` 报告每个阶段：
+
+```json
+{"v":1,"kind":"update.progress","attemptId":"att-7f3k","assignmentId":"asg-91xq","component":"firmware","artifactDigest":"sha256:…","seq":3,"stage":"DOWNLOADING","progress":{"bytes":4194304,"total":8388608},"bootId":"b-20261012-0815"}
+```
+
+- `attemptId`、`assignmentId`、`component` 和 `artifactDigest` 重复分配中的值；指向其他尝试或摘要的报告不会被应用。
+- `seq` 从 1 开始，该尝试的每次报告都递增。重复发送同一报告无害；以已使用的 `seq` 发送不同内容的报告属于冲突，不会被应用。
+- `stage` 取值为 `RECEIVED`、`DOWNLOADING`、`DOWNLOADED`、`VERIFIED`、`INSTALLING`、`REBOOTING`、`RUNNING`、`FAILED` 和 `ABANDONED` 之一。可以跳过报告丢失的阶段，但不得退回到更早的阶段。
+- `progress`（已持有的字节数，以及已知时的总数）只允许与 `DOWNLOADING` 一起出现。
+- 只有当所持字节的 SHA-256 等于 `artifact.digest` 时才报告 `VERIFIED`。
+- `FAILED` 必须携带 `result`：`{"code":"FLASH_WRITE","detail":"…"}`，其中 code 最多 64 个大写字母、数字和下划线，detail 最多 512 字节。
+- `RUNNING` 必须携带 `running`：`{"version":"1.4.2"}`，可选附带正在运行内容的 `digest`。新版本运行后立即发送。报告其他版本的 `RUNNING` 不会被应用：如果设备未处于目标版本，请报告 `FAILED`。
+- 每次报告都必须带 `bootId`：当前启动的标识，最多 128 个可打印字符，每次设备启动时都会改变。当 `requiresReboot` 为 true 时，只有来自与安装时不同的启动的 `RUNNING`，平台才接受为更新成功的证据。
+
+`update.cancel`（`{"v":1,"kind":"update.cancel","attemptId":"att-7f3k","assignmentId":"asg-91xq"}`）要求设备停止处理该分配。如果尚未开始安装，设备报告 `stage` 为 `ABANDONED`；安装一旦开始，更新就无法撤回。
+
+设备启动后，用 `update.inventory` 报告每个部件正在运行的内容，该消息不指向任何尝试：
+
+```json
+{"v":1,"kind":"update.inventory","component":"firmware","running":{"version":"1.4.2"},"bootId":"b-20261012-0821"}
+```
+
+当设备在安装或重启期间失去响应、平台将更新标记为 `UNKNOWN` 时，就是靠它来确定结果的。
+
+设备每次连接时发送的 `sync`（参见[配置下发主题](#reserved-device-topics)）也会让平台重新发送设备仍应处理的每个更新，并对设备尚未确认取消的更新再次发送取消消息。分配不会被保留，因此请先订阅 `device-desired` 再发送 sync。
 
 ## 接下来会发生什么 {#what-happens-next}
 

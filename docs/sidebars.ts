@@ -70,6 +70,7 @@ const sidebars: SidebarsConfig = {
             // or held is decided by whether the device is present, so the two read
             // as one story.
             'concepts/commands',
+            'concepts/over-the-air-updates',
           ],
         },
         {

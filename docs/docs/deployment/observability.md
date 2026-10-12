@@ -592,7 +592,9 @@ are made at the same time. Whatever the key-value store cannot answer is read fr
 one lookup at a time, so a resolver still holds at most one database connection. A resolver
 spends most of each event waiting for replies rather than using CPU. Several resolvers
 work at once. Events that arrive while all of them are busy wait in front of them, in order: up
-to 100 in the pod's hand-off queue and up to 64 more in the batch last fetched from the stream.
+to 100 in the pod's hand-off queue and, behind them, the batches fetched from the stream: up to 128
+in the batch being handed out and, with [fetching ahead](#fetch-ahead) on, up to 128 more in the
+batch asked for ahead.
 The rest wait in the stream.
 
 | Metric | What it tells you |

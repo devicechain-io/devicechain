@@ -14,7 +14,7 @@ dcctl bootstrap local my-instance
 
 `dcctl` 内嵌自己的内容，包括 OpenTofu 配置、Helm chart 和 Operator 清单，部署无需源码检出或 `git`。
 
-它不包含工具本身。两个命令调用 `PATH` 中的 `docker`、`kubectl`、`helm`、`tofu`（或 `terraform`），`local` 还需要 `kind`。启动前检查全部工具，缺少时停止，因此应先安装，完整列表见[前置条件](#prerequisites)。
+它不包含工具本身。两个命令调用 `PATH` 中的 `kubectl`、`helm`、`tofu`（或 `terraform`）；由 dcctl 自己运行集群时（`local` 提供方）还需要 `docker` 和 `kind`，构建镜像时（`--build`）还需要 `docker`。启动前检查本次运行所需的工具，缺少时停止，因此应先安装，完整列表见[前置条件](#prerequisites)。
 
 :::note 状态
 DeviceChain 尚未正式发布。`dcctl install local` 和 `dcctl bootstrap local` 已实现，并在本地 kind Kubernetes 上端到端验证。不存在 kind 集群时，install 会创建，除非指定 `--yes` 否则先确认。`gcp` 提供商是计划中的后续工作。
@@ -274,7 +274,7 @@ kind 不强制卷大小限制，可使用宿主机可用磁盘。
 - **默认 StorageClass 上的持久卷磁盘。** 非本地集群（非 kind、minikube、k3d、docker-desktop、rancher-desktop）使用默认设置，没有 `--compact`、`--no-cnpg`、`--no-monitoring`、`--backup-credentials-file` 时，`dcctl install --ha` 为集群申请 204 GiB，包括三个关系型数据库卷、160 GiB [备份存储](#backup-store-size)和 Prometheus。每实例再申请 144 GiB，用于三个事件存储卷及三个代理卷；单实例集群合计 348 GiB。无 `--ha` 时集群 188 GiB，每实例 48 GiB。每个额外持续摄取实例还需增加约 160 GiB 备份容量，详见[备份存储容量](#backup-store-size)。云环境先核对磁盘配额。新的 Google Cloud 项目每区域 SSD 默认 500 GB 配额，每 GiB 卷按一 GB 计，两种 GKE 磁盘类均计入。单实例卷容量低于配额；[GKE 指南](https://github.com/devicechain-io/devicechain/blob/main/deploy/gke/README.md#before-you-start)使用标准启动盘，计入不同配额，因此默认高可用单实例也适用。平衡型或 SSD 启动盘则计入 SSD 配额。指南说明多实例需申请的配额。本地集群监控不使用持久卷，kind 不强制容量。
 - **满足请求的 CPU 和内存。** 非 `--compact` 时，处理每个事件的五个服务合计请求约 4 CPU；`--ha` 下 `event-management` 两个 Pod，合计约 5 CPU。每个 NATS 服务器请求 500m CPU 和 768Mi 内存，高可用下有三个，另需其他服务、数据库和集群组件资源。无法容纳的 Pod 保持 `Pending`，安装等待至超时。各项见[服务容量配置](#service-sizing)；笔记本等资源有限集群使用 [`--compact`](#--compact)。
 - **OpenTofu 1.9 或更新版本**（`tofu`，也支持 `terraform` 1.9 或更新）位于 `PATH`。`dcctl` 使用它部署基础设施，安装见 [opentofu.org](https://opentofu.org)。`dcctl preflight local` 提前检查工具及环境，但不检查其版本；旧版本加载配置时失败。
-- **`docker`、`kubectl`、`helm`** 位于 `PATH`；`local` 提供方还需 **`kind`**。缺少工具会使预检失败。Docker 应为原生引擎，而非 Docker Desktop，且守护进程可访问。
+- **`kubectl`、`helm`** 位于 `PATH`；`local` 提供方还需 **`docker`** 和 **`kind`**。缺少本次运行所需的工具会使预检失败。只有本地 kind 集群或 `--build` 才需要 Docker：使用已发布镜像安装到 `--kube-context` 指定的集群时，既不检查也不使用它。需要时应为原生引擎，而非 Docker Desktop，且守护进程可访问。
 - **`ko`** 仅 `--build` 源码构建需要，缺少时预检警告而非失败。
 
 ## 镜像来源 {#image-source}
@@ -338,8 +338,8 @@ dcctl bootstrap local scratch --dev
 
 ### 对象存储 {#object-store}
 
-租户的品牌标志和更新制品保存在对象存储中，而不是数据库里。没有对象存储时，上传这两类内容都会被拒绝，并返回
-`OBJECT_STORE_NOT_CONFIGURED`。对象存储属于**固定配置**：在初始化时选定，写入实例挂载的配置，并通过滚动重启 Pod 生效，
+租户的品牌标志和更新制品保存在对象存储中，而不是数据库里。没有对象存储时，声明更新制品会被拒绝并返回
+`OBJECT_STORE_NOT_CONFIGURED`，上传标志则返回 `503`。对象存储属于**固定配置**：在初始化时选定，写入实例挂载的配置，并通过滚动重启 Pod 生效，
 不是运行时设置。
 
 | 模式 | 效果 |
