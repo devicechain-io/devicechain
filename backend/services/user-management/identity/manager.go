@@ -118,6 +118,9 @@ func (m *Manager) sessionIdentity(ctx context.Context, email string, epoch auth.
 	if auth.SessionEpoch(id.SessionEpoch) != epoch {
 		return nil, errSessionEnded
 	}
+	if err := admitStoredEmail(id); err != nil {
+		return nil, err
+	}
 	return id, nil
 }
 
@@ -425,6 +428,12 @@ func (m *Manager) Login(ctx context.Context, email, password string) (*IdentityA
 				// Unknown or disabled: the checker compares a dummy hash, at the same cost.
 				return "", nil
 			}
+			// A stored email not in canonical form authenticates nowhere. Treated as
+			// unknown (dummy compare, ErrInvalidCredentials), so the answer never says
+			// whether the password was right.
+			if admitStoredEmail(found) != nil {
+				return "", nil
+			}
 			id = found
 			return found.PasswordHash, nil
 		})
@@ -504,7 +513,7 @@ func (m *Manager) SelectTenant(ctx context.Context, identityToken, tenant string
 	id, err := m.sessionIdentity(ctx, claims.Email, claims.SessionEpoch, claims.SessionID)
 	if err != nil {
 		if errors.Is(err, errSessionEnded) {
-			return nil, ErrInvalidToken
+			return nil, sessionRefusal(err)
 		}
 		return nil, err
 	}
@@ -540,7 +549,7 @@ func (m *Manager) SelectTenant(ctx context.Context, identityToken, tenant string
 			return nil, ErrInvalidCredentials
 		}
 		if errors.Is(err, errSessionEnded) {
-			return nil, ErrInvalidToken
+			return nil, sessionRefusal(err)
 		}
 		return nil, err
 	}
@@ -563,7 +572,7 @@ func (m *Manager) Memberships(ctx context.Context, identityToken string) ([]Memb
 	id, err := m.sessionIdentity(ctx, claims.Email, claims.SessionEpoch, claims.SessionID)
 	if err != nil {
 		if errors.Is(err, errSessionEnded) {
-			return nil, ErrInvalidToken
+			return nil, sessionRefusal(err)
 		}
 		return nil, err
 	}
@@ -890,7 +899,7 @@ func (m *Manager) refuseRefresh(jti string, rev uint64, cause error) error {
 		if errors.Is(cause, errSsoRequired) {
 			return ErrSsoRequired
 		}
-		return ErrInvalidToken
+		return sessionRefusal(cause)
 	}
 	log.Error().Err(cause).Msg("Refresh could not re-check the grant; the token is left unconsumed.")
 	return ErrRefreshUnavailable

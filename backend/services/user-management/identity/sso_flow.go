@@ -695,6 +695,11 @@ func (m *Manager) completeSsoRecord(ctx context.Context, rec ssoCode) (*Identity
 	if err != nil || !id.Enabled {
 		return nil, ErrSsoCodeInvalid
 	}
+	// A link resolves its identity by subject, not by address, so it can still name an
+	// identity whose stored email is not canonical: no session starts for one.
+	if admitStoredEmail(id) != nil {
+		return nil, ErrIdentityEmailNotCanonical
+	}
 	// And the link the callback resolved must still exist: an identity unlinked since then
 	// is not signed in by a code minted before the unlink.
 	if linked, err := m.iam.IdentityLinkedTo(ctx, id.ID, conn.ID); err != nil || !linked {
