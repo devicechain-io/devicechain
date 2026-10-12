@@ -81,12 +81,21 @@ func (s *Store) SsoEnforcedAmong(ctx context.Context, tokens []string) (map[stri
 // leaves that connection out of the count, so a caller about to disable, delete or narrow it
 // can ask what would remain.
 func (s *Store) CountEnabledConnectionsServing(ctx context.Context, tenant string, except uint) (int64, error) {
+	// Two model-scoped reads rather than a join over table-name strings, which no tenant
+	// scope can see (check-bare-table-statements).
+	var serving []uint
+	if err := s.sys(ctx).Model(&IdpConnectionTenant{}).
+		Where("tenant_id = ?", tenant).Pluck("connection_id", &serving).Error; err != nil {
+		return 0, err
+	}
+	if len(serving) == 0 {
+		return 0, nil
+	}
 	var n int64
-	q := s.sys(ctx).Table("iam_idp_connection_tenants AS ct").
-		Joins("JOIN iam_idp_connections AS c ON c.id = ct.connection_id").
-		Where("ct.tenant_id = ? AND c.enabled = ? AND c.kind = ?", tenant, true, IdpKindTenant)
+	q := s.sys(ctx).Model(&IdpConnection{}).
+		Where("id IN ? AND enabled = ? AND kind = ?", serving, true, IdpKindTenant)
 	if except != 0 {
-		q = q.Where("c.id <> ?", except)
+		q = q.Where("id <> ?", except)
 	}
 	err := q.Count(&n).Error
 	return n, err
