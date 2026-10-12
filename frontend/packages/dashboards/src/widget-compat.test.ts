@@ -108,6 +108,34 @@ describe('a registered extension widget', () => {
     expect(widgetVersionNotice('tank-1', def.widgets[0].widget, TANK)).toMatch(/authored with version 1\.1\.0.*1\.2\.0/);
     expect(widgetVersionNotice('tank-1', { version: '1.2.0', optionsVersion: 1 }, TANK)).toBeUndefined();
   });
+
+  // The SDK generation is part of the key whenever it is recorded (authoring now always
+  // records it), and a reference written before it was recorded keeps resolving.
+  it('resolves a reference that records the installed SDK generation', () => {
+    const def = parseDashboardDefinition(
+      board([tank({ widget: { version: '1.2.0', optionsVersion: 1, sdkApiVersion: 1 } })]),
+      { catalog },
+    );
+    expect(def.widgets[0].type).toBe('acme/tank-level');
+    expect(def.widgets[0].widget).toEqual({ version: '1.2.0', optionsVersion: 1, sdkApiVersion: 1 });
+    expect(unresolvedWidgets(def)).toEqual([]);
+  });
+
+  it('keeps resolving a legacy reference that records no SDK generation', () => {
+    const def = parseDashboardDefinition(board([tank({ widget: { version: '1.2.0', optionsVersion: 1 } })]), { catalog });
+    expect(def.widgets[0].type).toBe('acme/tank-level');
+    expect(unresolvedWidgets(def)).toEqual([]);
+  });
+
+  it('turns a reference to an SDK generation the installed widget does not use into a placeholder that says so', () => {
+    const def = parseDashboardDefinition(
+      board([tank({ widget: { version: '1.2.0', optionsVersion: 1, sdkApiVersion: 2 } })]),
+      { catalog },
+    );
+    const [report] = unresolvedWidgets(def);
+    expect(report.reason.code).toBe('sdk-incompatible');
+    expect(report.reason.message).toMatch(/widget SDK API 2.*uses API 1/);
+  });
 });
 
 describe('a widget the catalog cannot resolve', () => {

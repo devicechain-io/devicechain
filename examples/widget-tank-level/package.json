@@ -1,0 +1,44 @@
+{
+  "name": "@acme/devicechain-tank-level",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Example DeviceChain widget package: a DOM-only tank-level card and a chart variant, built against the published widget SDK only.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./card": {
+      "types": "./dist/card.d.ts",
+      "import": "./dist/card.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "node build.mjs && tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit"
+  },
+  "peerDependencies": {
+    "@devicechain/dashboards": "0.0.0-dev",
+    "@devicechain/widget-sdk": "0.0.0-dev",
+    "echarts": "^6.0.0",
+    "react": "^19.3.0"
+  },
+  "peerDependenciesMeta": {
+    "echarts": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@types/react": "^19.3.0",
+    "esbuild": "^0.28.2",
+    "typescript": "~7.0.2"
+  }
+}
