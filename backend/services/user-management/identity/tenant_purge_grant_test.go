@@ -27,7 +27,17 @@ func newGrantTestManager(t *testing.T) (*Manager, *iam.Store) {
 	require.NoError(t, rdb.RegisterTokenGrammar(db))
 	require.NoError(t, db.AutoMigrate(&iam.TenantTier{}, &iam.Tenant{}))
 	store := iam.NewStore(&rdb.RdbManager{Database: db})
-	return &Manager{iam: store}, store
+	return &Manager{iam: store, refreshKV: &stubRefreshKV{}}, store
+}
+
+// openPasswordSignIn opens the password sign-in a grant is resolved for. resolveTenantGrant
+// admits the sign-in before it looks at the tenant, so a grant needs one to resolve at all.
+func openPasswordSignIn(t *testing.T, m *Manager) (auth.SessionID, *iam.Identity) {
+	t.Helper()
+	id := &iam.Identity{Email: "pat@example.com"}
+	sid, err := m.startSession(id.Email)
+	require.NoError(t, err)
+	return sid, id
 }
 
 func seedGrantTenant(t *testing.T, store *iam.Store, token string, state iam.PurgeState, enabled bool) {
@@ -60,7 +70,8 @@ func TestResolveTenantGrantRefusesAPurgingTenant(t *testing.T) {
 	seedGrantTenant(t, store, "acme", iam.PurgePurging, false)
 
 	mem := &iam.Membership{Enabled: true}
-	_, _, err := m.resolveTenantGrant(context.Background(), "acme", mem, false)
+	sid, id := openPasswordSignIn(t, m)
+	_, _, err := m.resolveTenantGrant(context.Background(), sid, id, "acme", mem, false)
 	require.ErrorIs(t, err, errTenantAccessDenied)
 }
 
@@ -76,7 +87,8 @@ func TestResolveTenantGrantRefusesAPurgingTenantEvenWhenReEnabled(t *testing.T) 
 	seedGrantTenant(t, store, "acme", iam.PurgePurging, true) // purging, but enabled again
 
 	mem := &iam.Membership{Enabled: true}
-	_, _, err := m.resolveTenantGrant(context.Background(), "acme", mem, false)
+	sid, id := openPasswordSignIn(t, m)
+	_, _, err := m.resolveTenantGrant(context.Background(), sid, id, "acme", mem, false)
 	require.ErrorIs(t, err, errTenantAccessDenied,
 		"re-enabling a purging tenant must not readmit its members")
 }
@@ -90,7 +102,8 @@ func TestResolveTenantGrantAllowsSuperuserBreakGlassIntoAPurgingTenant(t *testin
 	m, store := newGrantTestManager(t)
 	seedGrantTenant(t, store, "acme", iam.PurgePurging, false)
 
-	_, authorities, err := m.resolveTenantGrant(context.Background(), "acme", nil, true)
+	sid, id := openPasswordSignIn(t, m)
+	_, authorities, err := m.resolveTenantGrant(context.Background(), sid, id, "acme", nil, true)
 	require.NoError(t, err)
 	require.Equal(t, []string{string(auth.AuthorityAll)}, authorities)
 }
@@ -122,6 +135,7 @@ func TestResolveTenantGrantStillAdmitsAnActiveTenant(t *testing.T) {
 	seedGrantTenant(t, store, "acme", iam.PurgeActive, true)
 
 	mem := &iam.Membership{Enabled: true}
-	_, _, err := m.resolveTenantGrant(context.Background(), "acme", mem, false)
+	sid, id := openPasswordSignIn(t, m)
+	_, _, err := m.resolveTenantGrant(context.Background(), sid, id, "acme", mem, false)
 	require.NoError(t, err)
 }

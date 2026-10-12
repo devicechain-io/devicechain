@@ -70,7 +70,7 @@ func NewSsoHTTPClient(infra mscfg.InfrastructureConfiguration) (*http.Client, er
 		return nil, err
 	}
 	return &http.Client{
-		Transport: guard.Transport(),
+		Transport: boundResponses(guard.Transport(), maxIdpResponseBytes),
 		Timeout:   discoveryTimeout,
 		CheckRedirect: func(*http.Request, []*http.Request) error {
 			return http.ErrUseLastResponse
@@ -309,3 +309,56 @@ func isGUID(s string) bool {
 	}
 	return true
 }
+
+// errIdpResponseTooLarge is what a read of an identity provider's response returns once it
+// passes the bound.
+var errIdpResponseTooLarge = errors.New("the identity provider's response is larger than the bound")
+
+// boundResponses wraps rt so that no response body can be read past max bytes. go-oidc reads
+// a key set with io.ReadAll and oauth2 reads a token response likewise, neither with a
+// bound of its own; the bound has to live where both pass, which is the transport. Reading
+// past it fails the read with errIdpResponseTooLarge rather than truncating, because a
+// silently truncated key set or token response would parse as something it is not.
+func boundResponses(rt http.RoundTripper, max int64) http.RoundTripper {
+	return boundTripFunc(func(r *http.Request) (*http.Response, error) {
+		resp, err := rt.RoundTrip(r)
+		if err != nil || resp.Body == nil {
+			return resp, err
+		}
+		if resp.ContentLength > max {
+			resp.Body.Close()
+			return nil, errIdpResponseTooLarge
+		}
+		resp.Body = &boundedBody{rc: resp.Body, left: max}
+		return resp, nil
+	})
+}
+
+type boundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f boundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+type boundedBody struct {
+	rc   io.ReadCloser
+	left int64
+}
+
+func (b *boundedBody) Read(p []byte) (int, error) {
+	if b.left <= 0 {
+		// Exactly max bytes were read; one more byte existing is the overrun.
+		var one [1]byte
+		n, err := b.rc.Read(one[:])
+		if n > 0 {
+			return 0, errIdpResponseTooLarge
+		}
+		return 0, err
+	}
+	if int64(len(p)) > b.left {
+		p = p[:b.left]
+	}
+	n, err := b.rc.Read(p)
+	b.left -= int64(n)
+	return n, err
+}
+
+func (b *boundedBody) Close() error { return b.rc.Close() }

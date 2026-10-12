@@ -39,6 +39,9 @@ const AuthCodeBucket = kv.BucketOAuthCodes
 // surface without affecting the flow.
 const AuthCodeTTL = 60 * time.Second
 
+// authCodeKind is the Kind of an OAuth authorization-code record.
+const authCodeKind = "oauth"
+
 // AuthorizationCode is the grant an issued authorization code stands in for
 // (ADR-047). It captures the client + PKCE binding the token endpoint re-checks
 // and the identity + tenant + scope the resulting tokens are minted for. It is
@@ -51,6 +54,11 @@ const AuthCodeTTL = 60 * time.Second
 // it through sessionIdentity like every other credential exchange — so a code issued
 // just before a password reset, disable or delete cannot be redeemed after it.
 type AuthorizationCode struct {
+	// Kind says what this record is. Every redeemer of a code-bucket record checks its kind
+	// FIRST, so a record written for another purpose -- a single sign-on login code -- is
+	// refused here even if it somehow reached this bucket, rather than being read as an
+	// authorization code because the two share field names.
+	Kind          string            `json:"kind"`
 	ClientId      string            `json:"client_id"`
 	RedirectURI   string            `json:"redirect_uri"`
 	CodeChallenge string            `json:"code_challenge"` // PKCE S256 challenge (RFC 7636)
@@ -214,6 +222,7 @@ func (m *Manager) SaveAuthorizationCode(code string, rec AuthorizationCode) erro
 	if m.codesKV == nil {
 		return errors.New("authorization-code store not configured")
 	}
+	rec.Kind = authCodeKind
 	b, err := json.Marshal(rec)
 	if err != nil {
 		return err
@@ -246,6 +255,9 @@ func (m *Manager) RedeemAuthorizationCode(ctx context.Context, code, clientId, r
 	var rec AuthorizationCode
 	if err := json.Unmarshal(entry.Value(), &rec); err != nil {
 		return nil, errServer("corrupt authorization code")
+	}
+	if rec.Kind != authCodeKind {
+		return nil, errInvalidGrant("authorization code is invalid or expired")
 	}
 
 	// The token request's client must match the one the code was issued to, and the
@@ -483,10 +495,13 @@ func (m *Manager) resolveScopedGrant(ctx context.Context, email string, epoch au
 	if mem == nil && !su {
 		return scopedGrant{}, errInvalidGrant("subject is no longer a member of the tenant")
 	}
-	roles, authorities, err := m.resolveTenantGrant(ctx, tenant, mem, su)
+	roles, authorities, err := m.resolveTenantGrant(ctx, sid, id, tenant, mem, su)
 	if err != nil {
 		if errors.Is(err, errTenantAccessDenied) {
 			return scopedGrant{}, errInvalidGrant("tenant access denied")
+		}
+		if errors.Is(err, errSessionEnded) {
+			return scopedGrant{}, errInvalidGrant("subject is no longer valid")
 		}
 		log.Error().Err(err).Msg("Could not load the tenant to re-check an OAuth grant.")
 		return scopedGrant{}, errServer(errGrantUnavailable)

@@ -1082,6 +1082,9 @@ func stepReport(ctx context.Context, st *State) error {
 		scheme := st.Values["scheme"]
 		fmt.Printf("  %s %s\n", color.WhiteString("Console:"), color.GreenString("%s://%s/", scheme, host))
 		fmt.Printf("  %s %s\n", color.WhiteString("GraphQL:"), color.GreenString("%s://%s/api/<area>/graphql", scheme, host))
+		if note := ssoUnavailableNote(scheme, host); note != "" {
+			fmt.Printf("  %s %s\n", color.WhiteString("Single sign-on:"), color.YellowString("%s", note))
+		}
 	}
 	// The superuser: its email, where its seed password lives, and — once, when this
 	// run generated it — the password itself. The bootstrap is tenant-less (ADR-033):
@@ -1204,6 +1207,22 @@ func stepReport(ctx context.Context, st *State) error {
 		}
 	}
 	return nil
+}
+
+// ssoUnavailableNote says why single sign-on and the MCP authorization server are OFF on an
+// instance reached at scheme://host, or "" when they are on.
+//
+// The chart derives user-management's issuer from the ingress, and only for an origin the
+// service will accept: https, or a loopback host. A plain-HTTP instance on a real hostname
+// (`--no-tls` with a host other than localhost) gets no issuer, and the sign-in buttons that
+// depend on one would silently not be there. This is the same rule as the chart's
+// devicechain.userManagementDerivedIssuerUrl, kept in step by the chart render guard
+// hack/check-oauth-discovery-routing.sh, which renders every combination.
+func ssoUnavailableNote(scheme, host string) string {
+	if scheme == "https" || isLoopbackHost(host) {
+		return ""
+	}
+	return "off: it needs an https address. Bootstrap without --no-tls, or with --host localhost, to turn it on."
 }
 
 // isLoopbackHost reports whether a host resolves to the local machine with no

@@ -2184,6 +2184,31 @@ device-management 无法编码失败入站事件的记录时，此前仍存储�
 
 - **使用 S3 后端时，凭据现在还需要对存储桶拥有 `s3:ListBucket` 权限**，此外仍需 `s3:GetObject`、`s3:PutObject` 和 `s3:DeleteObject`。缺少该权限时，租户清除的对象步骤会失败并在每一轮重试，清除因此无法完成。请在升级前授予。文件系统后端无需任何改动。
 
+#### 单点登录需要实例的公开地址，因此 chart 现在会自动推导 {#next-upgrade-sso-issuer}
+
+通过外部 OpenID Connect 身份提供方登录，以及 MCP 客户端使用的 OAuth 授权服务器，都需要知道本实例
+的访问地址，因为登录完成后必须返回到某个地方。user-management 的 `auth.issuerUrl` 过去除非手动设置，
+否则为空。现在，当实例通过 https 提供服务，或位于回环主机（`localhost`、`127.0.0.1`、`::1`）上时，
+chart 会从 ingress 推导出 `https://<host>/api/user-management`，并且你自己设置的值始终优先。由此带来三点变化：
+
+- **这些实例上的 OAuth 授权服务器会开启。** 在默认安装中，MCP 客户端以前无法获得令牌，因为在你设置该值
+  之前它是关闭的。若要保持关闭（单点登录也随之关闭），请将
+  `functionalAreas.user-management.config.auth.issuerUrl` 设为 `""`。
+- **升级后签发的令牌以该地址作为签发者**，而不再是每个实例的标识符。各服务的令牌校验器既不检查签发者，
+  也不检查受众，因此升级前签发的令牌在过期之前继续有效。无需任何操作。
+- **使用真实主机名的纯 http 实例不会得到签发者**，因为 user-management 拒绝在回环主机之外使用 http 签发者。
+  授权服务器和单点登录保持关闭，`helm install` 和 `dcctl bootstrap` 会明确提示。请通过 https 提供实例服务以开启它们。
+
+#### 单点登录告警 {#next-upgrade-sso-alerts}
+
+三个告警报告单点登录的故障。如果你按名称路由或静音告警，这些是新增的。
+
+| 告警 | 严重程度 | 报告内容 | 处理方式 |
+| --- | --- | --- | --- |
+| `SsoIdpUnreachable` | warning | 十分钟内，user-management 一直无法连接某个已配置身份提供方的令牌端点或签名密钥，因此通过它登录的用户被拒绝。密码登录不受影响。 | 检查提供方是否在线、其地址能否从集群内解析、出站允许列表（`instance.config.infrastructure.egress`）是否允许本地部署提供方的地址范围；如果提供方迁移了端点，请刷新并批准该连接的发现快照。 |
+| `SsoUnverifiedIdentityRefused` | warning | 提供方已为某次登录担保，但该登录仍被拒绝，结果见 `outcome` 标签：`refused_unverified_email`、`refused_unverified_domain`、`refused_required_claim` 或 `refused_system_role_identity`。没有任何人登录成功。 | 通常是连接配置有误，或有人在探测。请在审计日志中查找提供方所声明的地址，并查看提供方自己的登录日志。 |
+| `SsoStateStoreFull` | critical | 保存已开始登录的存储已满，因此在条目过期（十分钟后）之前，user-management 拒绝通过任何提供方开始任何单点登录。密码登录不受影响。 | 几乎可以肯定有人在循环调用公开的登录开始接口：请在 ingress 日志中找到这些流量并在上游拦截。若流量合法，请调高 `instance.config.infrastructure.nats.kvStateMaxBytes`。 |
+
 ### v0.19.0：按每秒 6,000 事件实测定规格，满流拒绝新事件 {#v0190-upgrade}
 
 v0.19.0 可从 v0.18.0 原地升级：先为集群 dcctl install，再逐实例 dcctl upgrade，

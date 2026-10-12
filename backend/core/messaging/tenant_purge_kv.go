@@ -218,6 +218,10 @@ func KvPurgeExemptions() []string {
 		kv.BucketOAuthCodes + ": single-use authorization codes with a 60-second lifetime. A code " +
 			"issued before the cut expires long before a purge can complete, because the settle " +
 			"window is measured in minutes and is floored well above it",
+		kv.BucketSsoState + " and " + kv.BucketSsoCodes + ": single sign-on attempts (a ten-minute " +
+			"state record) and completed sign-ins awaiting completion (a single-use record with " +
+			"a 60-second lifetime). A record names an external account and the connection it came " +
+			"through, never a tenant, and both expire inside the settle window",
 		kv.BucketCredentialAttempts + ": sign-in backoff state, one entry per recently failing " +
 			"principal of a throttled kind, keyed by a hash of the presented identifier (today an " +
 			"email). It names no tenant — a sign-in attempt belongs to the PERSON, like the refresh-token store — and " +

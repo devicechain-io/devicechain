@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -28,7 +29,40 @@ const (
 	// resolvers can open a live tenant-scoped feed (SubscribeLive). Stored as an
 	// opaque value here to avoid a core/graphql → messaging import.
 	ContextNatsKey ContextKey = "nats"
+	// contextRemoteAddrKey carries the caller's source address (see SourceAddr).
+	contextRemoteAddrKey ContextKey = "remote-addr"
 )
+
+// SourceAddr returns the network address a GraphQL request came from, as the handler
+// recorded it, or "" outside a handler. It exists for the few unauthenticated operations
+// that ration themselves per source.
+//
+// It is the address of the NEAREST hop that is not this process: the last entry of
+// X-Forwarded-For when a proxy appended one, else the peer of the connection. Only that
+// last entry is taken because it is the one the proxy nearest the service wrote; every
+// earlier entry is whatever the client sent. A caller can still change what a
+// directly-connected peer or an untrusted proxy puts there, so treat the value as a
+// fairness key and never as an identity: anything that must hold against a determined
+// sender needs a limit that does not depend on it.
+func SourceAddr(ctx context.Context) string {
+	s, _ := ctx.Value(contextRemoteAddrKey).(string)
+	return s
+}
+
+// requestSourceAddr is the value SourceAddr returns for r.
+func requestSourceAddr(r *http.Request) string {
+	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+		parts := strings.Split(xff, ",")
+		if last := strings.TrimSpace(parts[len(parts)-1]); last != "" {
+			return last
+		}
+	}
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
+	}
+	return host
+}
 
 // authPolicy decides how a handler authenticates a request before dispatching to
 // its schema. Its authenticate function verifies a present bearer token and
@@ -183,6 +217,7 @@ func (h *HttpHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	for key, value := range h.ContextProviders {
 		r = r.WithContext(context.WithValue(r.Context(), key, value))
 	}
+	r = r.WithContext(context.WithValue(r.Context(), contextRemoteAddrKey, requestSourceAddr(r)))
 
 	// Authenticate via the verified JWT (ADR-008), which replaces the former
 	// trusted X-DC-Tenant gateway header: a verified token's claims cannot be

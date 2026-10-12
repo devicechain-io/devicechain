@@ -189,3 +189,28 @@ func TestOAuthRoutesAcrossEveryConfigurationShape(t *testing.T) {
 				"constructs this path FIRST and aborts its discovery walk when it 404s")
 	})
 }
+
+// The single sign-on callback is registered exactly when the instance has a public issuer
+// URL, and on the owned mux with its method and its connection segment.
+//
+// 🔴 PRODUCTION'S GATE, NOT A COPY OF IT: registerSsoHandlersIfEnabled is the function the
+// initializer calls. The same switch turns OAuth on, because a sign-in that has nowhere
+// public to return to cannot complete.
+func TestSsoCallbackRouteIsRegisteredIffAnIssuerIsConfigured(t *testing.T) {
+	const callback = "/sso/callback/acme-idp"
+
+	t.Run("no issuer: nothing is served", func(t *testing.T) {
+		ms := newUserManagementForRoutes(t, "")
+		registerSsoHandlersIfEnabled()
+		require.Empty(t, registeredPattern(ms, callback),
+			"the callback is served with no public issuer URL; single sign-on must stay off, fail-closed")
+	})
+
+	t.Run("issuer set: the per-connection callback is served", func(t *testing.T) {
+		ms := newUserManagementForRoutes(t, "https://iot.example.com/api/user-management")
+		registerSsoHandlersIfEnabled()
+		require.Equal(t, identity.SsoCallbackPattern, registeredPattern(ms, callback))
+		require.Equal(t, identity.SsoCallbackPattern, registeredPattern(ms, "/sso/callback/another-connection"),
+			"every connection has its own path under the same route")
+	})
+}

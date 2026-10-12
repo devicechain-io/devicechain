@@ -1,0 +1,21 @@
+{{- /*
+Printed after `helm install` and `helm upgrade`.
+
+It exists to say out loud what would otherwise be a silent absence. Single sign-on and the
+OAuth authorization server MCP depends on both need user-management's issuer URL, which this
+chart derives from the ingress -- but only for an origin the service will accept (https, or a
+loopback host). An instance that gets none has no sign-in with an external provider and no
+MCP login, and nothing else in a default install says so.
+*/ -}}
+{{- if and .Values.ingress.enabled (not (include "devicechain.userManagementIssuerUrl" .)) }}
+Single sign-on and the MCP authorization server are OFF on this instance.
+
+  They need user-management's issuer URL ("auth.issuerUrl"), and none is set. The chart derives
+  one from the ingress when the instance is served over https (ingress.tls.enabled=true) or on a
+  loopback host (ingress.host=localhost); this instance is neither, so nothing was derived.
+
+  To turn them on, serve the instance over https, or set the issuer yourself:
+
+    --set functionalAreas.user-management.config.auth.issuerUrl=https://<host>/api/user-management
+
+{{- end }}

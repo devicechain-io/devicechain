@@ -220,6 +220,8 @@ exact same source. Takes the root context.
 {{- if eq $area "mcp" }}
 {{- $cfg = include "devicechain.mcpMergedConfig" $root | fromJson }}
 {{- include "devicechain.validateMcpConfig" (dict "root" $root "cfg" $cfg) }}
+{{- else if eq $area "user-management" }}
+{{- $cfg = include "devicechain.userManagementMergedConfig" $root | fromJson }}
 {{- end }}
 {{ $area }}: {{ $cfg | toJson | quote }}
 {{- end }}
@@ -356,18 +358,75 @@ validateMcpConfig fails the render on.
 {{- end -}}
 
 {{/*
-devicechain.userManagementIssuerUrl is the OAuth 2.1 Authorization Server's issuer, or
-empty when the AS is off.
+devicechain.userManagementDerivedIssuerUrl is the issuer user-management gets when the
+operator sets none: the ingress origin plus /api/user-management, the SAME value mcp
+derives for itself (devicechain.mcpDerivedConfig), so the two agree byte for byte because
+they come from one place.
 
-It is operator-set (functionalAreas.user-management.config.auth.issuerUrl) and NOT
-derived from the ingress, deliberately: setting an issuer changes the `iss` claim of
-every token the instance mints, not only the ones MCP uses, so it is its own switch.
-The ingress uses it to decide whether to route the AS metadata document — with no
-issuer there is no AS, and a route to one would be a route to a 404.
+It is derived ONLY WHEN IT WOULD BE ACCEPTED. user-management's configuration validator
+refuses an http issuer on anything but a loopback host, and a rendered value it refuses
+would not be a default, it would be a service that CrashLoops. So the origin must be https
+(ingress.tls.enabled) or a loopback host (localhost, 127.0.0.1, ::1). Otherwise this renders
+empty and the OAuth authorization server and single sign-on stay off -- which
+templates/NOTES.txt says out loud, rather than leaving the operator to infer it from a
+missing login button.
+
+WHY DERIVE AT ALL. Single sign-on, and the OAuth authorization server MCP depends on, both
+need the instance's public address (a sign-in has to return to somewhere) and both used to
+be off by default behind a switch nobody was told to throw. Setting the issuer changes the
+`iss` claim of every token minted afterwards, but nothing pins `iss` -- the platform's
+validators select keys by `kid` -- so tokens already issued keep working until they expire.
+*/}}
+{{- define "devicechain.userManagementDerivedIssuerUrl" -}}
+{{- $origin := include "devicechain.publicOrigin" . -}}
+{{- if $origin -}}
+{{- $host := .Values.ingress.host | lower -}}
+{{- $loopback := or (eq $host "localhost") (eq $host "127.0.0.1") (eq $host "::1") -}}
+{{- if or (hasPrefix "https://" $origin) $loopback -}}
+{{- printf "%s/api/user-management" $origin -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+devicechain.userManagementIssuerUrl is user-management's FINAL issuer, or empty when the
+OAuth authorization server and single sign-on are off.
+
+AN EXPLICIT VALUE ALWAYS WINS, an explicit empty string included: setting
+functionalAreas.user-management.config.auth.issuerUrl to "" is the way to keep the
+authorization server and single sign-on off on an instance that would otherwise derive one.
+That is why this checks whether the key is PRESENT rather than whether it is non-empty.
+Otherwise the issuer is derived from the ingress (see
+devicechain.userManagementDerivedIssuerUrl).
+
+The ingress uses it to decide whether to route the AS metadata document -- with no issuer
+there is no AS, and a route to one would be a route to a 404.
 */}}
 {{- define "devicechain.userManagementIssuerUrl" -}}
 {{- $cfg := get (get (.Values.functionalAreas | default dict) "user-management" | default dict) "config" | default dict -}}
-{{- get (get $cfg "auth" | default dict) "issuerUrl" | default "" -}}
+{{- $auth := get $cfg "auth" | default dict -}}
+{{- if hasKey $auth "issuerUrl" -}}
+{{- get $auth "issuerUrl" | default "" -}}
+{{- else -}}
+{{- include "devicechain.userManagementDerivedIssuerUrl" . -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+devicechain.userManagementMergedConfig is the config user-management actually receives, as
+JSON: the operator's explicit value with auth.issuerUrl filled in from the ingress when the
+operator set none. The explicit config is COPIED first -- `set` on a dict from .Values
+would edit the values themselves, and every later template would see the edit.
+*/}}
+{{- define "devicechain.userManagementMergedConfig" -}}
+{{- $cfg := deepCopy (get (get (.Values.functionalAreas | default dict) "user-management" | default dict) "config" | default dict) -}}
+{{- $issuer := include "devicechain.userManagementIssuerUrl" . -}}
+{{- if $issuer -}}
+{{- $auth := get $cfg "auth" | default dict -}}
+{{- $_ := set $auth "issuerUrl" $issuer -}}
+{{- $_ := set $cfg "auth" $auth -}}
+{{- end -}}
+{{- $cfg | toJson -}}
 {{- end -}}
 
 {{/*

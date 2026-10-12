@@ -78,24 +78,12 @@ func TestBudgetHoldsWhateverTheRootFieldCount(t *testing.T) {
 	assert.Equal(t, int64(1), f.audit(t, rdb.AuditOpLoginFailed))
 }
 
-// A normal sign-in — the one login every client sends — is evaluated and ACCEPTED under
-// the handler's budget: one compare, and the `login` audit row Login writes only once
-// the checker has accepted the password. That row is the observation point because this
-// fixture's Manager has no signing key (Initialize needs the NATS lock), so the token it
-// would mint next cannot be minted here; identity's TestLoginWithinARequestBudget runs
-// the same budget through to an issued token.
-func TestSingleLoginIsEvaluatedAndAccepted(t *testing.T) {
-	f := newLoginFixture(t, generousFree)
-	doc := fmt.Sprintf("mutation($e:String!){login(email:$e,password:%q){identityToken}}", victimPassword)
-	_, resp := f.post(t, doc)
-	for _, e := range resp.Errors {
-		assert.NotEqual(t, credential.CodeTooManyCredentialChecks, e.Extensions["code"], "%+v", e)
-		assert.NotEqual(t, "invalid credentials", e.Message)
-	}
-	assert.Equal(t, int32(1), f.compares.Load())
-	assert.Equal(t, int64(1), f.audit(t, rdb.AuditOpLogin), "the checker accepted the password")
-	assert.Equal(t, int64(0), f.audit(t, rdb.AuditOpLoginFailed))
-}
+// A normal sign-in accepted under the handler's budget is tested where it can MINT:
+// identity's TestSingleServedLoginIsAcceptedAndMintsAToken drives the same served schema
+// to an issued token. This fixture's Manager has no signing key or session store
+// (Initialize installs both from NATS), so a correct password here reaches a nil
+// dereference -- which postAs now refuses rather than letting graphql-go's recover pass it
+// off as an ordinary error.
 
 // The budget is per REQUEST: each request gets its own, so a client that signs in,
 // fails, and tries again is evaluated both times.

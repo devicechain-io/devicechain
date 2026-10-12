@@ -213,3 +213,166 @@ tests:
             exp_annotations:
               summary: "MQTT password connects are being checked without their per-username backoff"
               description: "The device credential-attempt store is full, so device-management is checking MQTT password connects WITHOUT slowing down repeated failures on any username that is not already waiting out a delay -- and one that is waiting is protected only until that delay ends, at most 30 seconds. Connects still work -- refusing them would let whoever filled the store keep every password device off the platform -- but guessing a device's password is now limited only by how fast the broker accepts connects. Every connect, successful or not, holds an entry for ten minutes, so the store fills either when connects are sent for a very large number of distinct usernames (someone spraying usernames: find where the MQTT connects come from and block it upstream) or when a very large fleet reconnects all at once, for example after a broker restart. It drains on its own as entries expire, ten minutes after the wave stops. If the connect volume is legitimate, raise instance.config.infrastructure.nats.kvStateMaxBytes, which sizes every state bucket."
+
+  # ==================================================================
+  # Single sign-on: SsoIdpUnreachable, SsoUnverifiedIdentityRefused, SsoStateStoreFull,
+  # over devicechain_usermanagement_sso_logins_total{connection,outcome} and
+  # devicechain_usermanagement_sso_idp_fetch_failures_total{connection}.
+  # ==================================================================
+
+  # ------------------------------------------------------------------
+  # A provider that keeps failing: one failed request is a blip and does not page; ten
+  # minutes of them does; and once they stop the alert clears.
+  # ------------------------------------------------------------------
+  - interval: 1m
+    input_series:
+      - series: "devicechain_usermanagement_sso_idp_fetch_failures_total{namespace=\"dci-devicechain\", pod=\"dc-user-management-7c9f-abcde\", job=\"devicechain/user-management\", connection=\"acme-idp\"}"
+        values: '0x5 1+1x30 31x40'
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: SsoIdpUnreachable
+        exp_alerts: []
+      - eval_time: 25m
+        alertname: SsoIdpUnreachable
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              devicechain_instance: devicechain
+              connection: acme-idp
+            exp_annotations:
+              summary: "An identity provider cannot be reached for single sign-on"
+              description: "user-management has been failing to reach the identity provider of connection acme-idp (its token endpoint or its signing keys) for ten minutes, so people who sign in through it are being refused. Password sign-in is unaffected. The connection's endpoints are the ones recorded and approved in its discovery snapshot, and every request goes through the egress guard: check that the provider is up, that its address resolves from the cluster, and that the egress allow list (instance.config.infrastructure.egress) permits an on-premises provider's range. If the provider moved an endpoint, run refreshIdpDiscovery and approve the new snapshot."
+      - eval_time: 70m
+        alertname: SsoIdpUnreachable
+        exp_alerts: []
+
+  # A single failure inside an otherwise healthy hour is not an alert.
+  - interval: 1m
+    input_series:
+      - series: "devicechain_usermanagement_sso_idp_fetch_failures_total{namespace=\"dci-devicechain\", pod=\"dc-user-management-7c9f-abcde\", job=\"devicechain/user-management\", connection=\"acme-idp\"}"
+        values: '0x20 1x40'
+    alert_rule_test:
+      - eval_time: 40m
+        alertname: SsoIdpUnreachable
+        exp_alerts: []
+
+  # ------------------------------------------------------------------
+  # refused_required_claim is a SECURITY event: one is enough, there is no pending period, and the 10m
+  # window lets go ten minutes after the last.
+  # ------------------------------------------------------------------
+  - interval: 1m
+    input_series:
+      - series: "devicechain_usermanagement_sso_logins_total{namespace=\"dci-devicechain\", pod=\"dc-user-management-7c9f-abcde\", job=\"devicechain/user-management\", connection=\"acme-idp\", outcome=\"refused_required_claim\"}"
+        values: '0x5 1x55'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: SsoUnverifiedIdentityRefused
+        exp_alerts: []
+      - eval_time: 7m
+        alertname: SsoUnverifiedIdentityRefused
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              devicechain_instance: devicechain
+              connection: acme-idp
+              outcome: refused_required_claim
+            exp_annotations:
+              summary: "Single sign-on refused a sign-in that an identity provider vouched for"
+              description: "Connection acme-idp had a sign-in refused with outcome refused_required_claim. Nobody was signed in. Each of these outcomes is the platform's own check overriding the provider: refused_unverified_email (the provider did not vouch for the address), refused_unverified_domain (the address is not in a domain asserted for this connection), refused_required_claim (the token lacks a claim the connection requires, for example the Workspace domain or the Microsoft tenant id), or refused_system_role_identity (a tenant's provider asserted an identity that holds a system role). They are usually a misconfigured connection or someone probing one, and occasionally an attempt to sign in as another person. Look at the audit journal for the asserted address, and at the provider's own sign-in log."
+      - eval_time: 30m
+        alertname: SsoUnverifiedIdentityRefused
+        exp_alerts: []
+
+  # ------------------------------------------------------------------
+  # refused_system_role_identity is a SECURITY event: one is enough, there is no pending period, and the 10m
+  # window lets go ten minutes after the last.
+  # ------------------------------------------------------------------
+  - interval: 1m
+    input_series:
+      - series: "devicechain_usermanagement_sso_logins_total{namespace=\"dci-devicechain\", pod=\"dc-user-management-7c9f-abcde\", job=\"devicechain/user-management\", connection=\"acme-idp\", outcome=\"refused_system_role_identity\"}"
+        values: '0x5 1x55'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: SsoUnverifiedIdentityRefused
+        exp_alerts: []
+      - eval_time: 7m
+        alertname: SsoUnverifiedIdentityRefused
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              devicechain_instance: devicechain
+              connection: acme-idp
+              outcome: refused_system_role_identity
+            exp_annotations:
+              summary: "Single sign-on refused a sign-in that an identity provider vouched for"
+              description: "Connection acme-idp had a sign-in refused with outcome refused_system_role_identity. Nobody was signed in. Each of these outcomes is the platform's own check overriding the provider: refused_unverified_email (the provider did not vouch for the address), refused_unverified_domain (the address is not in a domain asserted for this connection), refused_required_claim (the token lacks a claim the connection requires, for example the Workspace domain or the Microsoft tenant id), or refused_system_role_identity (a tenant's provider asserted an identity that holds a system role). They are usually a misconfigured connection or someone probing one, and occasionally an attempt to sign in as another person. Look at the audit journal for the asserted address, and at the provider's own sign-in log."
+      - eval_time: 30m
+        alertname: SsoUnverifiedIdentityRefused
+        exp_alerts: []
+
+  # ------------------------------------------------------------------
+  # 🔴 THE QUIET CASE: a busy instance where sign-ins succeed, people are told to ask for a
+  # link, tokens fail verification, and begin calls are rate limited. None of those is the
+  # provider vouching for someone it should not have, and neither of the two alerts that
+  # read this counter fires.
+  # ------------------------------------------------------------------
+  - interval: 1m
+    input_series:
+      - series: "devicechain_usermanagement_sso_logins_total{namespace=\"dci-devicechain\", pod=\"dc-user-management-7c9f-abcde\", job=\"devicechain/user-management\", connection=\"acme-idp\", outcome=\"success\"}"
+        values: '0+500x60'
+      - series: "devicechain_usermanagement_sso_logins_total{namespace=\"dci-devicechain\", pod=\"dc-user-management-7c9f-abcde\", job=\"devicechain/user-management\", connection=\"acme-idp\", outcome=\"refused_link_required\"}"
+        values: '0+200x60'
+      - series: "devicechain_usermanagement_sso_logins_total{namespace=\"dci-devicechain\", pod=\"dc-user-management-7c9f-abcde\", job=\"devicechain/user-management\", connection=\"acme-idp\", outcome=\"idp_error\"}"
+        values: '0+50x60'
+      - series: "devicechain_usermanagement_sso_logins_total{namespace=\"dci-devicechain\", pod=\"dc-user-management-7c9f-abcde\", job=\"devicechain/user-management\", connection=\"acme-idp\", outcome=\"state_invalid\"}"
+        values: '0+500x60'
+      - series: "devicechain_usermanagement_sso_logins_total{namespace=\"dci-devicechain\", pod=\"dc-user-management-7c9f-abcde\", job=\"devicechain/user-management\", connection=\"acme-idp\", outcome=\"rate_limited\"}"
+        values: '0+500x60'
+      - series: "devicechain_usermanagement_sso_logins_total{namespace=\"dci-devicechain\", pod=\"dc-user-management-7c9f-abcde\", job=\"devicechain/user-management\", connection=\"acme-idp\", outcome=\"refused_token_invalid\"}"
+        values: '0+30x60'
+    alert_rule_test:
+      - eval_time: 60m
+        alertname: SsoUnverifiedIdentityRefused
+        exp_alerts: []
+      - eval_time: 60m
+        alertname: SsoStateStoreFull
+        exp_alerts: []
+
+  # ------------------------------------------------------------------
+  # The state bucket fills: begin fails closed, which the counter records.
+  # ------------------------------------------------------------------
+  - interval: 1m
+    input_series:
+      - series: "devicechain_usermanagement_sso_logins_total{namespace=\"dci-devicechain\", pod=\"dc-user-management-7c9f-abcde\", job=\"devicechain/user-management\", connection=\"acme-idp\", outcome=\"state_store_full\"}"
+        values: '0x5 1x55'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: SsoStateStoreFull
+        exp_alerts: []
+      - eval_time: 7m
+        alertname: SsoStateStoreFull
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              devicechain_instance: devicechain
+            exp_annotations:
+              summary: "Single sign-on is refusing every sign-in because its state store is full"
+              description: "The single sign-on state store is full, so user-management is refusing to begin any sign-in through any identity provider (it fails closed rather than drop the protection that makes a replayed callback useless). Password sign-in still works. The store fills when an enormous number of sign-ins are begun inside ten minutes, which almost always means someone is calling beginSso in a loop: the call is public and is limited per source address and globally, but a distributed sender can still fill it. Find the traffic in the ingress logs and block it upstream; the store drains on its own ten minutes after the flood stops. If the volume is legitimate, raise instance.config.infrastructure.nats.kvStateMaxBytes, which sizes every state bucket."
+      - eval_time: 30m
+        alertname: SsoStateStoreFull
+        exp_alerts: []
+
+  # Nothing scraped at all: none of the three fires (the tenant-purge group's visibility
+  # alert is what reports a user-management nobody is scraping).
+  - interval: 1m
+    input_series: []
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: SsoIdpUnreachable
+        exp_alerts: []
+      - eval_time: 30m
+        alertname: SsoUnverifiedIdentityRefused
+        exp_alerts: []
+      - eval_time: 30m
+        alertname: SsoStateStoreFull
+        exp_alerts: []

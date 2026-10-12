@@ -3733,6 +3733,36 @@ it, so update artifacts and any object whose reference was lost are erased with 
   erasure fails and is retried on every pass, so the erasure does not complete. Grant it before
   you upgrade. The filesystem backend needs nothing.
 
+#### Single sign-on needs the instance's public address, so the chart now derives it {#next-upgrade-sso-issuer}
+
+Signing in through an external OpenID Connect identity provider, and the OAuth authorization server
+that MCP clients use, both need to know the address this instance is reached at, because a sign-in
+has to return to somewhere. user-management's `auth.issuerUrl` used to be empty unless you set it.
+The chart now derives it from the ingress, as `https://<host>/api/user-management`, when the
+instance is served over https or on a loopback host (`localhost`, `127.0.0.1`, `::1`), and your own
+value always wins. Three things follow:
+
+- **The OAuth authorization server turns on** for those instances. On a default install MCP clients
+  could not obtain a token before, because it was off until you set this value. To keep it off, and
+  single sign-on with it, set `functionalAreas.user-management.config.auth.issuerUrl` to `""`.
+- **Tokens issued after the upgrade carry that address as their issuer**, instead of the
+  per-instance identifier. The services' token validators check neither the issuer nor the
+  audience, so tokens issued before the upgrade keep working until they expire. Nothing needs doing.
+- **A plain-http instance on a real hostname gets no issuer**, because user-management refuses an
+  http issuer on anything but a loopback host. The authorization server and single sign-on stay off,
+  and `helm install` and `dcctl bootstrap` say so. Serve the instance over https to turn them on.
+
+#### Single sign-on alerts {#next-upgrade-sso-alerts}
+
+Three alerts report the failures of single sign-on. If you route or silence alerts by name, these
+are new.
+
+| Alert | Severity | What it reports | What to do |
+| --- | --- | --- | --- |
+| `SsoIdpUnreachable` | warning | For ten minutes, user-management has failed to reach a configured identity provider's token endpoint or signing keys, so people who sign in through it are refused. Password sign-in is unaffected. | Check that the provider is up and its address resolves from the cluster, that the egress allow list (`instance.config.infrastructure.egress`) permits an on-premises provider's range, and, if the provider moved an endpoint, refresh and approve the connection's discovery snapshot. |
+| `SsoUnverifiedIdentityRefused` | warning | A sign-in was refused although the provider vouched for it, with the outcome in the `outcome` label: `refused_unverified_email`, `refused_unverified_domain`, `refused_required_claim` or `refused_system_role_identity`. Nobody was signed in. | Usually a misconfigured connection or someone probing one. Look in the audit journal for the address the provider asserted, and at the provider's own sign-in log. |
+| `SsoStateStoreFull` | critical | The store that holds begun sign-ins is full, so user-management refuses to begin any single sign-on through any provider until entries expire, ten minutes later. Password sign-in is unaffected. | Someone is almost certainly calling the public sign-in start in a loop: find the traffic in the ingress logs and block it upstream. If the volume is legitimate, raise `instance.config.infrastructure.nats.kvStateMaxBytes`. |
+
 ### v0.19.0 — sized from measurement at 6,000 events a second; a full stream refuses {#v0190-upgrade}
 
 `v0.19.0` is an in-place upgrade from `v0.18.0`: `dcctl install` for the cluster, then `dcctl

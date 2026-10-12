@@ -564,6 +564,15 @@ type Query {
 }
 
 """
+The start of a single sign-on: the address of the identity provider's sign-in page. Send the
+browser there; the provider sends it back to the `returnTo` address you gave.
+"""
+type SsoBegin {
+    """The provider's authorization address, to navigate the browser to."""
+    authorizationUrl: String!
+}
+
+"""
 Sign in, choose a tenant, refresh the session, sign out, and edit the signed-in user's profile and
 their tenant's look and defaults.
 """
@@ -633,6 +642,57 @@ type Mutation {
         """A refresh token from selectTenant or refresh, or the identity token from login."""
         token: String!
     ): Boolean!
+
+    """
+    Starts a single sign-on through an external identity provider. Give either the person's
+    email (the connection is the one that speaks for its domain) or a connection token. Returns
+    where to send the browser, or null when an email's domain has no single sign-on connection,
+    in which case sign in some other way. `returnTo` must be this instance's own
+    `/login/sso/complete` or `/dash/sso/complete` address. `codeChallenge` is the SHA-256 of a
+    random secret you keep in the browser, base64url-encoded without padding (43 characters);
+    completeSso needs that secret, so only the browser that began the sign-in can finish it.
+    Needs no token. Fails with "single sign-on is not available" when the instance or
+    connection is not set up for it, and is rate limited per source address.
+    """
+    beginSso(
+        """The person's email address, to find their connection by domain. Give this or `connection`."""
+        email: String
+        """Token of the connection to use. Give this or `email`."""
+        connection: String
+        """Where the provider's answer sends the browser back to: this instance's own completion page."""
+        returnTo: String!
+        """Base64url SHA-256 of the secret only this browser holds."""
+        codeChallenge: String!
+    ): SsoBegin
+    """
+    Finishes a single sign-on. After the provider sends the browser back to the `returnTo`
+    address with a `code` in its query, call this with that code and the secret whose hash you
+    gave to beginSso. Returns what login returns: an identity token and the tenants it may enter
+    (only the tenants the connection serves), to be chosen with selectTenant. Needs no token. Each
+    code works once, for one minute; fails with "invalid or expired sign-in code" for a code that
+    is unknown, used, expired or not matched by the secret.
+    """
+    completeSso(
+        """The `code` from the return address."""
+        code: String!
+        """The secret whose SHA-256 you gave to beginSso."""
+        codeVerifier: String!
+    ): IdentityAuth!
+    """
+    Starts linking the signed-in person's own account at an external identity provider to their
+    identity, so they can sign in through it afterwards. Needs the identity token of a PASSWORD
+    sign-in; a sign-in that itself came through a provider is refused. Only tenant connections can
+    be linked this way, and the provider must report the identity's own email address. Returns where
+    to send the browser; the provider then returns to `returnTo` with `linked=1` or `error=`.
+    """
+    beginSsoLink(
+        """The identity token from login."""
+        identityToken: String!
+        """Token of the connection to link."""
+        connection: String!
+        """Where the provider's answer sends the browser back to: this instance's own completion page."""
+        returnTo: String!
+    ): SsoBegin!
     """
     Changes the signed-in user's own first and last name and returns the updated user. The
     email cannot be changed here. Fields left out of the request keep their stored value.

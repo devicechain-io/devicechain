@@ -41,6 +41,7 @@ cd "$(dirname "$0")/.."
 
 CHART="deploy/helm/devicechain"
 WELLKNOWN_GO="backend/core/auth/wellknown.go"
+SSO_GO="backend/services/user-management/identity/sso_callback_handler.go"
 ISSUER="https://iot.example.com/api/user-management"
 
 # render [extra helm args...] — the full profile on an ingress, with the Authorization
@@ -64,7 +65,7 @@ render() {
 # 🔴 A missing YAML parser is a HARD FAILURE, never a skip. A guard that cannot read its
 # input must not report on it: "clean" and "never looked" have to be distinguishable.
 check() {
-  python3 - "$1" "$2" <<'PY'
+  python3 - "$1" "$2" "$3" <<'PY'
 import json
 import re
 import sys
@@ -76,7 +77,7 @@ except ImportError:
     sys.exit("ERROR: PyYAML is not available, so this guard parsed nothing. That is a "
              "failure, not a pass.")
 
-manifest, gosrc = sys.argv[1], sys.argv[2]
+manifest, gosrc, ssosrc = sys.argv[1], sys.argv[2], sys.argv[3]
 
 # --- the suffix constants, from the Go source that defines them -------------------
 # The pattern requires a const ASSIGNMENT, so a mention in a comment or a doc example
@@ -228,6 +229,60 @@ expect(AS_SUFFIX, "user-management", "Prefix", None,
        f"client aborts on the first error, so an unrouted step 3 ends the walk even "
        f"though later fallback locations exist.")
 
+# --- 4. the single sign-on callback -----------------------------------------------
+# A provider redirects the browser to <issuer>/sso/callback/<connection>, an address the
+# service builds from its own issuer and the Go route prefix below. Nothing in the service
+# can tell whether the edge delivers it: it must match the API route for user-management,
+# survive that route's rewrite as the pod-local path the handler is registered at, and not
+# be refused by the snippet that 404s /api/<area>/auth/* (which is why the surface is
+# /sso/ and not /auth/).
+#
+# 🔴 THE PREFIX IS READ OUT OF THE GO SOURCE, not spelled here, for the reason the
+# well-known suffixes are: the only thing the two sides share is that string.
+m = re.search(r'^const\s+SsoCallbackPrefix\s*=\s*"([^"]+)"\s*$', open(ssosrc).read(), re.MULTILINE)
+if not m:
+    sys.exit(f"ERROR: {ssosrc} declares no const SsoCallbackPrefix. The service registers "
+             f"whatever that says, so the callback route cannot be checked against anything.")
+SSO_PREFIX = m.group(1)
+issuer_path = urlsplit(issuer).path.rstrip("/")
+callback = f"{issuer_path}{SSO_PREFIX}acme-idp"
+
+routed = []
+for ing in ingresses:
+    meta = ing.get("metadata") or {}
+    ann = meta.get("annotations") or {}
+    for rule in (ing.get("spec") or {}).get("rules") or []:
+        for p in ((rule.get("http") or {}).get("paths") or []):
+            pat = str(p.get("path", ""))
+            if p.get("pathType") != "ImplementationSpecific" or not pat.startswith("/api/"):
+                continue
+            mm = re.match(pat, callback)
+            if mm:
+                routed.append((meta.get("name", "<unnamed>"), pat, mm, ann,
+                               (((p.get("backend") or {}).get("service")) or {}).get("name")))
+if not routed:
+    problems.append(f"no API route matches the single sign-on callback {callback!r}, so a "
+                    f"provider's redirect would reach the console and fail there.")
+for name, pat, mm, ann, svc in routed:
+    where = f"ingress {name} path {pat!r}"
+    if svc != "user-management":
+        problems.append(f"{where} carries the single sign-on callback {callback!r} to "
+                        f"{svc!r}, not user-management.")
+    rewrite = ann.get("nginx.ingress.kubernetes.io/rewrite-target")
+    if rewrite != "/$2":
+        problems.append(f"{where} has rewrite-target {rewrite!r}; the callback needs '/$2' to "
+                        f"arrive at the pod as {SSO_PREFIX}acme-idp.")
+    else:
+        arrives = "/" + mm.group(2)
+        if arrives != f"{SSO_PREFIX}acme-idp":
+            problems.append(f"{where} delivers the callback as {arrives!r}, not "
+                            f"{SSO_PREFIX + 'acme-idp'!r}, the path user-management registers.")
+    snippet = ann.get("nginx.ingress.kubernetes.io/configuration-snippet") or ""
+    for refusal in re.findall(r'\$request_uri ~\*? "([^"]+)"\) \{ return 404; \}', snippet):
+        if re.search(refusal, callback, re.IGNORECASE):
+            problems.append(f"{where} refuses {callback!r} at the edge (its snippet 404s "
+                            f"{refusal!r}); the callback would never reach the service.")
+
 if problems:
     print("OAuth discovery routing check FAILED:", file=sys.stderr)
     for p in problems:
@@ -238,6 +293,7 @@ print(f"OAuth discovery routing OK on host {resource_host}")
 print(f"  1. endpoint   {resource_path}(/|$)(.*) -> mcp, rewritten to '/'")
 print(f"  2. resource   {PR_SUFFIX} (prefix) -> mcp, unrewritten")
 print(f"  3. auth srv   {AS_SUFFIX} (prefix) -> user-management, unrewritten")
+print(f"  4. sso        {callback} -> user-management, rewritten to {SSO_PREFIX}acme-idp, not refused")
 print(f"  also served   {resource_path}{PR_SUFFIX} -> mcp, rewritten to '{PR_SUFFIX}' "
       f"(the appended form, for clients that build it)")
 PY
@@ -303,8 +359,10 @@ render_guards() {
 
   # 5. With no Authorization Server issuer there is no AS, so there must be no route to
   # one. Exercising the conditional in BOTH directions is what stops "the rule is always
-  # there" from passing as "the rule appears when it should".
-  out="$(render --set 'functionalAreas.user-management.config.auth.issuerUrl=null' 2>&1)"
+  # there" from passing as "the rule appears when it should". An explicit EMPTY issuer is
+  # how an operator keeps the AS (and single sign-on) off on an instance that would derive
+  # one, so it must win over the derivation.
+  out="$(render --set 'functionalAreas.user-management.config.auth.issuerUrl=' 2>&1)"
   if grep -q 'oauth-authorization-server' <<<"$out"; then
     echo "FAILED: an authorization-server metadata route rendered with no issuer" >&2
     echo "configured. There is no AS to route to, so the rule points at a 404." >&2
@@ -313,6 +371,99 @@ render_guards() {
 
   echo "mcp render guards OK: replicas>1, off-host and trailing-slash identifiers refused"
   echo "  by name; the loopback override accepted; no AS route without an issuer"
+}
+
+# ---------------------------------------------------------------------------
+# issuer_derivation_guards
+# ---------------------------------------------------------------------------
+# user-management's issuer is DERIVED from the ingress when the operator sets none, which is
+# what makes single sign-on and the OAuth authorization server work on a default install.
+# Derivation is only safe for an origin the service will accept (https, or a loopback host);
+# for any other it must render NOTHING rather than a value that CrashLoops the service.
+#
+# These render the default profile (no mcp: mcp refuses an http origin on a real host, which
+# is a different guard) and read what the service would receive from the config ConfigMap.
+issuer_derivation_guards() {
+  local key out
+  key="$(openssl rand -base64 32)"
+
+  issuer_of() { # issuer_of [helm args...] — prints the rendered auth.issuerUrl or nothing
+    # Render into a variable first: the reader below stops at its first match, and a pipe
+    # from helm would then SIGPIPE helm, which pipefail turns into exit 141.
+    local rendered
+    rendered="$(helm template "$CHART" \
+        --set ingress.enabled=true --set ingress.host=iot.example.com \
+        --set "instance.config.infrastructure.secrets.rootKey=$key" "$@")" || return 1
+    python3 -c '
+import json, sys, yaml
+for d in yaml.safe_load_all(sys.stdin):
+    if d and d.get("kind") == "ConfigMap" and "user-management" in (d.get("data") or {}):
+        print((json.loads(d["data"]["user-management"]).get("auth") or {}).get("issuerUrl", ""))
+        break
+else:
+    sys.exit("no user-management configuration rendered")
+' <<<"$rendered"
+  }
+
+  expect_issuer() { # expect_issuer <want> <description> [helm args...]
+    local want="$1" what="$2" got; shift 2
+    got="$(issuer_of "$@")"
+    if [ "$got" != "$want" ]; then
+      echo "FAILED: $what: user-management would receive issuerUrl '$got', want '$want'." >&2
+      exit 1
+    fi
+  }
+
+  expect_issuer "https://iot.example.com/api/user-management" \
+      "an https ingress derives the issuer" --set ingress.tls.enabled=true
+  # Derived from the same origin as mcp's, so the two agree byte for byte.
+  render_no_issuer | python3 -c '
+import json, sys, yaml
+um = mcp = None
+for d in yaml.safe_load_all(sys.stdin):
+    if d and d.get("kind") == "ConfigMap":
+        data = d.get("data") or {}
+        if "user-management" in data:
+            um = (json.loads(data["user-management"]).get("auth") or {}).get("issuerUrl")
+        if "mcp" in data:
+            mcp = json.loads(data["mcp"]).get("issuerUrl")
+if not um or um != mcp:
+    sys.exit("FAILED: user-management derived %r but mcp points at %r; they must be the same string" % (um, mcp))
+'
+  # http on a real host would be refused by the service at startup, so nothing is derived.
+  expect_issuer "" "an http ingress on a real host derives nothing" --set ingress.tls.enabled=false
+  expect_issuer "http://iot.example.com/api/user-management" \
+      "(control) the same http origin IS used when the operator sets it explicitly" \
+      --set ingress.tls.enabled=false \
+      --set 'functionalAreas.user-management.config.auth.issuerUrl=http://iot.example.com/api/user-management'
+  expect_issuer "http://localhost/api/user-management" "a loopback http ingress derives" \
+      --set ingress.host=localhost --set ingress.tls.enabled=false
+  # An explicit value, empty included, wins over the derivation.
+  expect_issuer "https://sso.example.com/custom" "an explicit issuer wins" \
+      --set ingress.tls.enabled=true \
+      --set 'functionalAreas.user-management.config.auth.issuerUrl=https://sso.example.com/custom'
+  expect_issuer "" "an explicit empty issuer switches the derivation off" \
+      --set ingress.tls.enabled=true --set 'functionalAreas.user-management.config.auth.issuerUrl='
+  # No ingress, no origin, no issuer.
+  got="$(helm template "$CHART" --set "instance.config.infrastructure.secrets.rootKey=$key" |
+    python3 -c '
+import json, sys, yaml
+for d in yaml.safe_load_all(sys.stdin):
+    if d and d.get("kind") == "ConfigMap" and "user-management" in (d.get("data") or {}):
+        print((json.loads(d["data"]["user-management"]).get("auth") or {}).get("issuerUrl", ""))
+')"
+  if [ -n "$got" ]; then
+    echo "FAILED: an instance with no ingress was given the issuer '$got'." >&2
+    exit 1
+  fi
+  echo "issuer derivation guards OK: https and loopback derive, other http does not, an"
+  echo "  explicit value (empty included) wins, no ingress derives nothing"
+}
+
+# render_no_issuer — the full profile on a TLS ingress with NO issuer set, so mcp and
+# user-management both derive theirs.
+render_no_issuer() {
+  helm template "$CHART" --set profile=full     --set ingress.enabled=true --set ingress.host=iot.example.com --set ingress.tls.enabled=true     --set "instance.config.infrastructure.secrets.rootKey=$(openssl rand -base64 32)"
 }
 
 self_test() {
@@ -326,7 +477,7 @@ self_test() {
   trap 'rm -rf "$tmp"' RETURN
   render > "$tmp/full.yaml"
 
-  if ! check "$tmp/full.yaml" "$WELLKNOWN_GO" >/dev/null; then
+  if ! check "$tmp/full.yaml" "$WELLKNOWN_GO" "$SSO_GO" >/dev/null; then
     echo "self-test: the unmodified render already fails, so a failure proves nothing." >&2
     exit 1
   fi
@@ -342,7 +493,7 @@ if not ns.get("touched"):
              "would be meaningless.")
 yaml.safe_dump_all(docs, open(sys.argv[2], "w"))
 PY
-    if check "$tmp/$1.yaml" "$WELLKNOWN_GO" >/dev/null 2>&1; then
+    if check "$tmp/$1.yaml" "$WELLKNOWN_GO" "$SSO_GO" >/dev/null 2>&1; then
       echo "self-test FAILED: the check passed a render corrupted by '$1'." >&2
       exit 1
     fi
@@ -401,19 +552,65 @@ for d in docs:
 PYOP
   corrupt tls-removed "$tmp/op.py"
 
+  # The single sign-on callback: one corruption per way it can stop arriving.
+  cat > "$tmp/op.py" <<'PYOP'
+touched = False
+for d in docs:
+    if d.get("kind") == "Ingress" and (d.get("metadata") or {}).get("name") == "devicechain-api":
+        for rule in (d.get("spec") or {}).get("rules") or []:
+            for p in ((rule.get("http") or {}).get("paths") or []):
+                if str(p.get("path", "")).startswith("/api/user-management"):
+                    p["backend"]["service"]["name"] = "frontend"
+                    touched = True
+PYOP
+  corrupt sso-wrong-backend "$tmp/op.py"
+
+  cat > "$tmp/op.py" <<'PYOP'
+touched = False
+for d in docs:
+    if d.get("kind") == "Ingress" and (d.get("metadata") or {}).get("name") == "devicechain-api":
+        ann = d["metadata"]["annotations"]
+        key = "nginx.ingress.kubernetes.io/configuration-snippet"
+        if "auth(/|$)" in ann.get(key, ""):
+            ann[key] = ann[key].replace("auth(/|$)", "(auth|sso)(/|$)")
+            touched = True
+PYOP
+  corrupt sso-refused-at-the-edge "$tmp/op.py"
+
+  cat > "$tmp/op.py" <<'PYOP'
+touched = False
+for d in docs:
+    if d.get("kind") == "Ingress" and (d.get("metadata") or {}).get("name") == "devicechain-api":
+        d["metadata"]["annotations"]["nginx.ingress.kubernetes.io/rewrite-target"] = "/x/$2"
+        touched = True
+PYOP
+  corrupt sso-rewritten "$tmp/op.py"
+
+  # The service moving its callback under /auth/, which the edge refuses.
+  sed 's|"/sso/callback/"|"/auth/sso/callback/"|' "$SSO_GO" > "$tmp/sso-under-auth.go"
+  if ! grep -q '/auth/sso/callback/' "$tmp/sso-under-auth.go"; then
+    echo "self-test: the prefix mutation did not apply." >&2
+    exit 1
+  fi
+  if check "$tmp/full.yaml" "$WELLKNOWN_GO" "$tmp/sso-under-auth.go" >/dev/null 2>&1; then
+    echo "self-test FAILED: the check passed a callback prefix the edge refuses." >&2
+    exit 1
+  fi
+
   # And the suffix source: a constant the chart no longer matches must fail, since the
   # split between this check and the Go tests rests entirely on that one shared string.
   sed 's|/.well-known/oauth-protected-resource|/.well-known/moved|' \
     "$WELLKNOWN_GO" > "$tmp/wellknown-moved.go"
-  if check "$tmp/full.yaml" "$tmp/wellknown-moved.go" >/dev/null 2>&1; then
+  if check "$tmp/full.yaml" "$tmp/wellknown-moved.go" "$SSO_GO" >/dev/null 2>&1; then
     echo "self-test FAILED: the check passed a render whose route no longer matches the" >&2
     echo "suffix constant the services serve." >&2
     exit 1
   fi
 
   echo "self-test passed: the check fails on a missing route, a wrong pathType, a wrong"
-  echo "  port name, a wrong backend, a rewritten path, a wrong host, missing TLS, and a"
-  echo "  moved suffix constant."
+  echo "  port name, a wrong backend, a rewritten path, a wrong host, missing TLS, a moved"
+  echo "  suffix constant, and a single sign-on callback sent to the wrong service, rewritten,"
+  echo "  or refused at the edge."
 }
 
 case "${1-}" in
@@ -422,8 +619,9 @@ case "${1-}" in
     tmp="$(mktemp -d)"
     trap 'rm -rf "$tmp"' EXIT
     render > "$tmp/full.yaml"
-    check "$tmp/full.yaml" "$WELLKNOWN_GO"
+    check "$tmp/full.yaml" "$WELLKNOWN_GO" "$SSO_GO"
     render_guards
+    issuer_derivation_guards
     ;;
   *) echo "usage: $0 [--self-test]" >&2; exit 2 ;;
 esac
