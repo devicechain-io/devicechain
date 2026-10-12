@@ -42,6 +42,27 @@ const (
 	// AuditOpIdpMfaAcknowledged records an administrator creating an instance connection
 	// on their own assurance that the provider enforces multi-factor sign-in.
 	AuditOpIdpMfaAcknowledged = "idp_mfa_acknowledged"
+	// AuditOpIdentityProvisioned records a first single sign-on creating the identity it
+	// signed in as (just-in-time provisioning). The actor is the email the provider asserted.
+	AuditOpIdentityProvisioned = "identity_provisioned"
+	// AuditOpRoleMappingChanged records an administrator replacing a connection's group
+	// mappings for a tenant, or its just-in-time provisioning settings. The actor is the
+	// administrator and the tenant is the one the change applies to, when there is one.
+	AuditOpRoleMappingChanged = "role_mapping_changed"
+	// AuditOpSsoBreakGlass records a superuser, signed in through the operator's identity
+	// provider, entering a tenant. The tenant is the one entered and the label names the
+	// connection.
+	AuditOpSsoBreakGlass = "sso_break_glass"
+	// AuditOpSsoEnforcementBypassed records a superuser with a PASSWORD session entering a
+	// tenant that requires single sign-on, the one exemption from that requirement. The
+	// tenant is the one entered.
+	AuditOpSsoEnforcementBypassed = "sso_enforcement_bypassed"
+	// AuditOpSessionsRevoked records an administrator ending every session an identity
+	// has. The label names the identity.
+	AuditOpSessionsRevoked = "sessions_revoked"
+	// AuditOpPasswordCleared records an administrator removing an identity's password,
+	// leaving it able to sign in only through single sign-on. The label names the identity.
+	AuditOpPasswordCleared = "password_cleared"
 )
 
 // AuditEvent is one row of the tenant-scoped audit journal (ADR-019): a record,
@@ -311,12 +332,20 @@ func auditPrimaryKey(db *gorm.DB) string {
 // audit-write error, since failing every login when the audit table blips would
 // be a worse outcome (and a denial-of-service lever) than a missed row.
 func (rdb *RdbManager) RecordAuthEvent(ctx context.Context, operation, actor, tenant string) error {
+	return rdb.RecordAuthEventLabeled(ctx, operation, actor, tenant, "")
+}
+
+// RecordAuthEventLabeled is RecordAuthEvent for an event that concerns something besides
+// the actor and the tenant, naming it in the row's EntityLabel (a connection's token, the
+// identity an administrator acted on). The label is a name, never a credential.
+func (rdb *RdbManager) RecordAuthEventLabeled(ctx context.Context, operation, actor, tenant, label string) error {
 	row := &AuditEvent{
 		OccurredTime: time.Now().UTC(),
 		TenantId:     tenant,
 		Category:     AuditCategoryAuth,
 		Actor:        actor,
 		Operation:    operation,
+		EntityLabel:  label,
 	}
 	return rdb.DB(core.WithSystemContext(ctx)).Create(row).Error
 }

@@ -38,7 +38,7 @@ import (
 type stubRefreshKV struct {
 	nats.KeyValue
 	puts map[string]string
-	// sessions holds the sign-in records (sid.*), apart from puts so a test counting the
+	// sessions holds the sign-in records (sid.*) and their index entries (sidx.*), apart from puts so a test counting the
 	// refresh jtis it minted is not counting those.
 	sessions map[string]string
 }
@@ -52,7 +52,7 @@ func (s *stubRefreshKV) Get(key string) (nats.KeyValueEntry, error) {
 }
 
 func (s *stubRefreshKV) Put(key string, value []byte) (uint64, error) {
-	if strings.HasPrefix(key, sessionKeyPrefix) {
+	if strings.HasPrefix(key, sessionKeyPrefix) || strings.HasPrefix(key, sessionIndexPrefix) {
 		if s.sessions == nil {
 			s.sessions = map[string]string{}
 		}

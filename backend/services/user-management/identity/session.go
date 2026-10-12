@@ -5,8 +5,11 @@ package identity
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/auth"
@@ -33,6 +36,27 @@ import (
 const sessionKeyPrefix = "sid."
 
 func sessionKey(sid auth.SessionID) string { return sessionKeyPrefix + string(sid) }
+
+// A sign-in record is keyed by its sid, which a token carries but an administrator does not
+// know. "Sign this person out everywhere" starts from an email, so each sign-in also writes
+// an INDEX entry, sidx.<hash of the email>.<sid>, and revoking lists the entries under the
+// email's prefix with a filtered watch. One key per (identity, sign-in) rather than one
+// list per identity on purpose: a list needs a read-modify-write that two concurrent
+// sign-ins would race on, while a key per sign-in needs only a put, and the bucket's own
+// expiry removes it with the record it points at. The hash keeps the email, which is not a
+// legal key, out of the key space.
+const sessionIndexPrefix = "sidx."
+
+func sessionIndexPattern(email string) string { return sessionIndexPrefix + emailKey(email) + ".*" }
+
+func sessionIndexKey(email string, sid auth.SessionID) string {
+	return sessionIndexPrefix + emailKey(email) + "." + string(sid)
+}
+
+func emailKey(email string) string {
+	sum := sha256.Sum256([]byte(email))
+	return hex.EncodeToString(sum[:])
+}
 
 // Sign-in methods a session record carries.
 const (
@@ -75,6 +99,14 @@ func (m *Manager) putSession(rec sessionRecord) (auth.SessionID, error) {
 	}
 	sid := auth.SessionID(uuid.NewString())
 	if _, err := m.refreshKV.Put(sessionKey(sid), b); err != nil {
+		return "", err
+	}
+	// The index is written AFTER the record and the sign-in is refused if it cannot be: a
+	// session that "sign out everywhere" could not find would be one it could not end.
+	if _, err := m.refreshKV.Put(sessionIndexKey(rec.Email, sid), []byte(sid)); err != nil {
+		if derr := m.refreshKV.Delete(sessionKey(sid)); derr != nil && !errors.Is(derr, nats.ErrKeyNotFound) {
+			log.Warn().Err(derr).Msg("A sign-in whose index entry could not be written left its record behind; it expires with the bucket.")
+		}
 		return "", err
 	}
 	return sid, nil
@@ -126,19 +158,27 @@ func (m *Manager) sessionLive(sid auth.SessionID, email string) error {
 // redemption and refresh (the last through resolveTenantGrant) -- so a rule added here
 // cannot be skipped by one of them.
 //
-// A password sign-in is admitted wherever the identity's memberships allow; the rules below
-// bind a single sign-on:
+// A PASSWORD sign-in is admitted wherever the identity's memberships allow, except into a
+// tenant that requires single sign-on (Tenant.SsoEnforced): there it is refused, unless the
+// identity is a superuser, who is let through so an identity-provider outage cannot lock the
+// operator out, and the entry is audited. This is also what keeps the MCP authorize page's
+// password form from reaching an enforced tenant, since consent mints its code through here.
+//
+// The rules below bind a single sign-on (admitSsoSession):
 //
 //   - the connection it came through must still exist and be enabled, and the identity must
 //     still be linked on it, so deleting or disabling a connection, or unlinking the
 //     identity, ends its sessions at their next exchange;
+//   - the sign-in must be younger than the connection's session ceiling, counted from the
+//     moment OUR callback accepted it and never extended by a refresh;
 //   - through a TENANT connection the session reaches only the tenants that connection
 //     serves, and never an identity that holds a system role. The second rule is checked
 //     here as well as at sign-in because a role granted AFTER the link was made must stop
 //     working at once, not at the next sign-in;
-//   - through an INSTANCE connection a tenant is entered only by a superuser breaking glass.
-//     The operator's identity provider authenticates the operator; it does not give
-//     ordinary membership access, which is the tenant's own sign-in to give.
+//   - through an INSTANCE connection a tenant is entered only by a superuser breaking glass,
+//     and each entry is audited with the connection. The operator's identity provider
+//     authenticates the operator; it does not give ordinary membership access, which is the
+//     tenant's own sign-in to give.
 //
 // su is whether the identity is a superuser. The denials are errTenantAccessDenied (the
 // sign-in is open but may not enter this tenant) and errSessionEnded (it is over).
@@ -148,32 +188,14 @@ func (m *Manager) admitTenant(ctx context.Context, sid auth.SessionID, id *iam.I
 		return err
 	}
 	if rec.Method != SessionMethodSso {
-		return nil
+		return m.admitPasswordSession(ctx, id, tenant, su)
 	}
-	conn, err := m.iam.IdpConnectionByID(ctx, rec.ConnectionID)
-	if err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return errSessionEnded
-		}
-		return err
-	}
-	if !conn.Enabled {
-		return errSessionEnded
-	}
-	// The link the sign-in rested on must still exist: unlinking an identity ends the
-	// sessions it signed in with.
-	linked, err := m.iam.IdentityLinkedTo(ctx, id.ID, conn.ID)
+	conn, err := m.admitSsoSession(ctx, rec, id)
 	if err != nil {
 		return err
-	}
-	if !linked {
-		return errSessionEnded
 	}
 	switch conn.Kind {
 	case iam.IdpKindTenant:
-		if len(id.SystemRoles) > 0 {
-			return errSessionEnded
-		}
 		served, err := m.iam.ConnectionTenants(ctx, conn.ID)
 		if err != nil {
 			return err
@@ -186,6 +208,7 @@ func (m *Manager) admitTenant(ctx context.Context, sid auth.SessionID, id *iam.I
 		return errTenantAccessDenied
 	case iam.IdpKindInstance:
 		if su {
+			m.recordAuthLabeled(ctx, rdb.AuditOpSsoBreakGlass, id.Email, tenant, conn.Token)
 			return nil
 		}
 		return errTenantAccessDenied
@@ -194,11 +217,76 @@ func (m *Manager) admitTenant(ctx context.Context, sid auth.SessionID, id *iam.I
 	return errSessionEnded
 }
 
-// sessionMemberships is the membership list a sign-in is shown: every membership for a
-// password sign-in, and for a single sign-on only the tenants admitTenant would let it
-// enter (none through an instance connection, whose operator enters a tenant by breaking
-// glass rather than by membership). Listing a tenant the session cannot enter would offer a
-// choice that fails.
+// admitPasswordSession applies the tenant's own sign-in requirement to a password sign-in.
+func (m *Manager) admitPasswordSession(ctx context.Context, id *iam.Identity, tenant string, su bool) error {
+	t, err := m.iam.TenantByToken(ctx, tenant)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			// No such tenant: nothing to enforce here. The grant itself refuses a member (and
+			// admits a superuser, as it always has).
+			return nil
+		}
+		return err
+	}
+	if !t.SsoEnforced {
+		return nil
+	}
+	if su {
+		m.recordAuthLabeled(ctx, rdb.AuditOpSsoEnforcementBypassed, id.Email, tenant, "")
+		return nil
+	}
+	return errTenantAccessDenied
+}
+
+// admitSsoSession applies the rules that bind a single sign-on whatever tenant it is headed
+// for, and returns the connection it came through. It is shared by admitTenant and the
+// membership listing, so a sign-in that has ended is refused by both even when the
+// identity has no membership for the per-tenant rules to look at.
+func (m *Manager) admitSsoSession(ctx context.Context, rec *sessionRecord, id *iam.Identity) (*iam.IdpConnection, error) {
+	conn, err := m.iam.IdpConnectionByID(ctx, rec.ConnectionID)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, errSessionEnded
+		}
+		return nil, err
+	}
+	if !conn.Enabled {
+		return nil, errSessionEnded
+	}
+	// The link the sign-in rested on must still exist: unlinking an identity ends the
+	// sessions it signed in with.
+	linked, err := m.iam.IdentityLinkedTo(ctx, id.ID, conn.ID)
+	if err != nil {
+		return nil, err
+	}
+	if !linked {
+		return nil, errSessionEnded
+	}
+	// The ceiling is counted from OUR callback time (rec.Anchor), so a provider that omits
+	// or backdates its own auth_time changes nothing, and it is never moved by a refresh:
+	// the record is written once, at sign-in. A ceiling that is not positive ends the
+	// session rather than lasting forever. The stored value is capped again here by the
+	// same bound the API applies, so a refresh lifetime configured shorter AFTER a connection
+	// was given a longer ceiling shortens its sessions instead of being outlived by them.
+	maxAge := time.Duration(conn.SessionMaxAgeSeconds) * time.Second
+	if limit := m.MaxSessionMaxAge(); maxAge > limit {
+		maxAge = limit
+	}
+	if !m.clock().Before(rec.Anchor.Add(maxAge)) {
+		return nil, errSessionEnded
+	}
+	if conn.Kind == iam.IdpKindTenant && len(id.SystemRoles) > 0 {
+		return nil, errSessionEnded
+	}
+	return conn, nil
+}
+
+// sessionMemberships is the membership list a sign-in is shown: for a password sign-in,
+// every membership except those in a tenant that requires single sign-on (a superuser sees
+// all), and for a single sign-on only the tenants admitTenant would let it enter (none
+// through an instance connection, whose operator enters a tenant by breaking glass rather
+// than by membership). Listing a tenant the session cannot enter would offer a choice that
+// fails.
 func (m *Manager) sessionMemberships(ctx context.Context, sid auth.SessionID, id *iam.Identity) ([]MembershipInfo, error) {
 	rec, err := m.loadSession(sid, id.Email)
 	if err != nil {
@@ -208,7 +296,30 @@ func (m *Manager) sessionMemberships(ctx context.Context, sid auth.SessionID, id
 		return nil, err
 	}
 	if rec.Method != SessionMethodSso {
-		return membershipInfos(id.Memberships), nil
+		if isSuperuser(id) {
+			return membershipInfos(id.Memberships), nil
+		}
+		tokens := make([]string, 0, len(id.Memberships))
+		for _, mem := range id.Memberships {
+			tokens = append(tokens, mem.TenantId)
+		}
+		enforced, err := m.iam.SsoEnforcedAmong(ctx, tokens)
+		if err != nil {
+			return nil, err
+		}
+		out := []MembershipInfo{}
+		for _, mem := range id.Memberships {
+			if !enforced[mem.TenantId] {
+				out = append(out, MembershipInfo{Tenant: mem.TenantId, Roles: roleTokens(mem.TenantRoles)})
+			}
+		}
+		return out, nil
+	}
+	if _, err := m.admitSsoSession(ctx, rec, id); err != nil {
+		if errors.Is(err, errSessionEnded) {
+			return nil, ErrInvalidToken
+		}
+		return nil, err
 	}
 	out := []MembershipInfo{}
 	for _, mem := range id.Memberships {
@@ -223,6 +334,169 @@ func (m *Manager) sessionMemberships(ctx context.Context, sid auth.SessionID, id
 		}
 	}
 	return out, nil
+}
+
+// clock is the current time, from the manager's injectable source.
+func (m *Manager) clock() time.Time {
+	if m.now != nil {
+		return m.now()
+	}
+	return time.Now()
+}
+
+// recordAuthLabeled is recordAuth for an event that names something besides the actor and
+// the tenant. Best-effort, like recordAuth.
+func (m *Manager) recordAuthLabeled(ctx context.Context, operation, actor, tenant, label string) {
+	if err := m.db.RecordAuthEventLabeled(ctx, operation, actor, tenant, label); err != nil {
+		log.Error().Err(err).Str("operation", operation).Msg("Failed to record auth audit event")
+	}
+}
+
+// ErrIdentityNotFound is returned by a call that names an identity there is none of.
+var ErrIdentityNotFound = errors.New("identity not found")
+
+// RevokeSessions ends every sign-in the identity has, wherever it is: password or single
+// sign-on, console, dashboard or MCP grant. It is the administrator's "sign out everywhere".
+//
+// Two things end the sessions, and both are needed. Rotating the identity's session epoch
+// kills every refresh token, identity token and authorization code minted under the old
+// one at its next exchange, and is the part that cannot be missed. Deleting the sign-in
+// records (found through the per-identity index) is what ends them by name, so each is
+// gone for every path that checks the record and not only those that compare the epoch.
+// The password is untouched: the person can sign in again at once. It returns how many
+// sign-in records it ended.
+//
+// Access tokens and identity tokens already issued run on until they expire (the configured
+// access-token lifetime, fifteen minutes by default), because they are verified by
+// signature and expiry alone -- on the admin API too. That bound is the same one a logout
+// has.
+//
+// The audit row is written as soon as the epoch has rotated, before the records are
+// deleted: from that moment every session is ended, so a failure deleting the records
+// must not leave the revoke unrecorded.
+func (m *Manager) RevokeSessions(ctx context.Context, email string) (int, error) {
+	email = normalizeEmail(email)
+	id, err := m.iam.IdentityByEmail(ctx, email)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return 0, ErrIdentityNotFound
+		}
+		return 0, err
+	}
+	if err := m.iam.RotateSessionEpoch(ctx, id); err != nil {
+		return 0, err
+	}
+	m.recordAuthLabeled(ctx, rdb.AuditOpSessionsRevoked, actor(ctx), "", id.Email)
+	return m.endSessionRecords(id.Email)
+}
+
+// ErrClearPasswordNoOtherWayIn refuses removing the password of an identity that has no
+// other way to sign in.
+var ErrClearPasswordNoOtherWayIn = errors.New("the identity is not linked to an enabled identity provider connection it can sign in through, so removing its password would leave it no way in; link it first")
+
+// ClearPassword removes an identity's password and ends its sessions, leaving it able to
+// sign in only through single sign-on. An empty stored hash never matches a password (the
+// compare runs against a dummy at the same cost as an unknown email), and the epoch
+// rotates in the same write, so every session the old password opened ends.
+//
+// It is refused for an identity with no link it could sign in through -- an enabled
+// connection, and for an identity holding a system role an INSTANCE one, since a tenant
+// connection never reaches such an identity -- because the result would be an identity
+// nobody can use until someone sets a password again. Like RevokeSessions, the audit row
+// is written as soon as the password is gone.
+func (m *Manager) ClearPassword(ctx context.Context, email string) (*iam.Identity, error) {
+	id, err := m.iam.IdentityByEmail(ctx, normalizeEmail(email))
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, ErrIdentityNotFound
+		}
+		return nil, err
+	}
+	ok, err := m.hasSsoWayIn(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return nil, ErrClearPasswordNoOtherWayIn
+	}
+	if err := m.iam.SetPasswordHash(ctx, id, ""); err != nil {
+		return nil, err
+	}
+	m.recordAuthLabeled(ctx, rdb.AuditOpPasswordCleared, actor(ctx), "", id.Email)
+	if _, err := m.endSessionRecords(id.Email); err != nil {
+		return nil, err
+	}
+	return id, nil
+}
+
+// hasSsoWayIn reports whether the identity is linked to an enabled connection that would
+// let it sign in.
+func (m *Manager) hasSsoWayIn(ctx context.Context, id *iam.Identity) (bool, error) {
+	links, err := m.iam.LinksForIdentity(ctx, id.ID)
+	if err != nil {
+		return false, err
+	}
+	for _, l := range links {
+		conn, err := m.iam.IdpConnectionByID(ctx, l.ConnectionID)
+		if err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				continue
+			}
+			return false, err
+		}
+		if !conn.Enabled {
+			continue
+		}
+		if conn.Kind == iam.IdpKindInstance || len(id.SystemRoles) == 0 {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// endSessionRecords deletes every sign-in record the index lists for email, and the index
+// entries with them. Deleting what is already gone is not an error, so a retry after a
+// partial failure finishes the job.
+func (m *Manager) endSessionRecords(email string) (int, error) {
+	w, err := m.refreshKV.Watch(sessionIndexPattern(email), nats.IgnoreDeletes(), nats.MetaOnly())
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = w.Stop() }()
+	var keys []string
+	timeout := time.After(10 * time.Second)
+collect:
+	for {
+		select {
+		case e := <-w.Updates():
+			if e == nil {
+				// nil marks the end of the entries that existed when the watch began.
+				break collect
+			}
+			keys = append(keys, e.Key())
+		case <-timeout:
+			return 0, errors.New("listing the identity's sessions timed out; try again")
+		}
+	}
+	ended := 0
+	prefix := sessionIndexPrefix + emailKey(email) + "."
+	for _, k := range keys {
+		sid := auth.SessionID(strings.TrimPrefix(k, prefix))
+		// Count only a record that was still there: deleting an absent key succeeds, and a
+		// revoke that reports sessions it did not end would mislead whoever reads the count.
+		if _, err := m.refreshKV.Get(sessionKey(sid)); err == nil {
+			ended++
+		} else if !errors.Is(err, nats.ErrKeyNotFound) {
+			return ended, err
+		}
+		if err := m.refreshKV.Delete(sessionKey(sid)); err != nil && !errors.Is(err, nats.ErrKeyNotFound) {
+			return ended, err
+		}
+		if err := m.refreshKV.Delete(k); err != nil && !errors.Is(err, nats.ErrKeyNotFound) {
+			return ended, err
+		}
+	}
+	return ended, nil
 }
 
 // Logout ends the sign-in a token belongs to: it deletes the session record, which ends
@@ -254,9 +528,24 @@ func (m *Manager) Logout(ctx context.Context, token string) error {
 	if claims.SessionID == "" {
 		return ErrInvalidToken
 	}
+	// The record names its owner, which is what finds the index entry that points at it.
+	// Read before the delete; an unreadable record only costs the entry its early removal,
+	// because it expires with the bucket.
+	var owner string
+	if entry, err := m.refreshKV.Get(sessionKey(claims.SessionID)); err == nil {
+		var rec sessionRecord
+		if json.Unmarshal(entry.Value(), &rec) == nil {
+			owner = rec.Email
+		}
+	}
 	if err := m.refreshKV.Delete(sessionKey(claims.SessionID)); err != nil && !errors.Is(err, nats.ErrKeyNotFound) {
 		log.Error().Err(err).Msg("Logout could not end the sign-in's session record.")
 		return ErrLogoutUnavailable
+	}
+	if owner != "" {
+		if err := m.refreshKV.Delete(sessionIndexKey(owner, claims.SessionID)); err != nil && !errors.Is(err, nats.ErrKeyNotFound) {
+			log.Warn().Err(err).Msg("Logout ended the session but could not remove its index entry; it expires with the bucket.")
+		}
 	}
 	// The presented refresh token's own jti, so the token itself is dead even to a path
 	// that read it before the record was gone. Best effort: the session record is what

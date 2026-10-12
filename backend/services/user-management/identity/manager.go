@@ -191,6 +191,9 @@ type Manager struct {
 	ssoMetrics             SsoMetrics
 	ssoLimiter             sourceLimiter
 	ssoKeySets             ssoKeySetCache
+	// now is the clock the session ceiling is judged against; nil means time.Now. Tests
+	// move it to age a sign-in without waiting out a ceiling of hours.
+	now func() time.Time
 
 	// mu guards the signing-key material, which a rotation replaces while the
 	// service is live. The validator pointer is created once (request handlers
@@ -449,11 +452,17 @@ func (m *Manager) Login(ctx context.Context, email, password string) (*IdentityA
 		}
 		return nil, err
 	}
+	// The same list Memberships returns, so a person is not offered a tenant that requires
+	// single sign-on when they signed in with a password.
+	memberships, err := m.sessionMemberships(ctx, sid, id)
+	if err != nil {
+		return nil, err
+	}
 	return &IdentityAuth{
 		IdentityToken: tok.Token,
 		ExpiresAt:     tok.ExpiresAt,
 		Superuser:     isSuperuser(id),
-		Memberships:   membershipInfos(id.Memberships),
+		Memberships:   memberships,
 	}, nil
 }
 
