@@ -21,7 +21,7 @@ construidos para un bundler; consulta [Qué asumen estos paquetes](#qué-asumen-
 | [`@devicechain/client`](https://www.npmjs.com/package/@devicechain/client) | El SDK de TypeScript: gestión de tokens de autenticación, GraphQL sobre fetch, decodificación de JWT y suscripciones en vivo. Agnóstico del framework; sin React. |
 | [`@devicechain/dashboards`](https://www.npmjs.com/package/@devicechain/dashboards) | El `DashboardHub`, que es dueño de la conexión, resuelve selectores y multiplexa las suscripciones de telemetría. También los tipos de definición, selector, slot y manifiesto de vinculación. |
 | [`@devicechain/widgets`](https://www.npmjs.com/package/@devicechain/widgets) | Los widgets de React y el renderizador que dispone el panel. |
-| [`@devicechain/widget-sdk`](https://www.npmjs.com/package/@devicechain/widget-sdk) | El contrato para escribir un widget de panel: `defineWidget`, los ayudantes de opciones y el registro de widgets sellado. Consulta [Escribir un widget personalizado](../guides/writing-a-custom-widget.md). |
+| [`@devicechain/widget-sdk`](https://www.npmjs.com/package/@devicechain/widget-sdk) | El contrato para escribir un widget de panel como componente de React: `defineWidget`, `createWidgetRegistry` (el registro sellado que un host construye con los widgets integrados y sus propios paquetes de widgets) y los ayudantes de opciones. Sus peers son `@devicechain/dashboards`, `echarts` y `react`. Consulta [Escribir un widget personalizado](../guides/writing-a-custom-widget.md). |
 | [`@devicechain/brand`](https://www.npmjs.com/package/@devicechain/brand) | Los tokens de marca y las hojas de estilo generadas. Opcional: los widgets se tematizan enteramente con propiedades personalizadas de CSS y no requieren nada de esto. |
 
 ```bash

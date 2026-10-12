@@ -19,7 +19,7 @@ title: npm 包
 | [`@devicechain/client`](https://www.npmjs.com/package/@devicechain/client) | TypeScript SDK：处理认证令牌、通过 fetch 调用 GraphQL、解码 JWT，以及实时订阅。不依赖特定框架，也不依赖 React。 |
 | [`@devicechain/dashboards`](https://www.npmjs.com/package/@devicechain/dashboards) | 提供管理连接、解析选择器和复用遥测订阅的 `DashboardHub`，以及定义、选择器、槽位和绑定清单的类型。 |
 | [`@devicechain/widgets`](https://www.npmjs.com/package/@devicechain/widgets) | React 组件和负责仪表盘布局的渲染器。 |
-| [`@devicechain/widget-sdk`](https://www.npmjs.com/package/@devicechain/widget-sdk) | 编写仪表板组件的契约：`defineWidget`、选项辅助函数和密封的组件注册表。参见[编写自定义组件](../guides/writing-a-custom-widget.md)。 |
+| [`@devicechain/widget-sdk`](https://www.npmjs.com/package/@devicechain/widget-sdk) | 以 React 组件形式编写仪表板组件的契约：`defineWidget`、`createWidgetRegistry`（宿主用内置组件和自己的组件包构建的密封注册表）以及选项辅助函数。其 peer 依赖为 `@devicechain/dashboards`、`echarts` 和 `react`。参见[编写自定义组件](../guides/writing-a-custom-widget.md)。 |
 | [`@devicechain/brand`](https://www.npmjs.com/package/@devicechain/brand) | 品牌设计变量和生成的样式表。此包可选：组件完全通过 CSS 自定义属性设置主题，不要求使用它。 |
 
 ```bash

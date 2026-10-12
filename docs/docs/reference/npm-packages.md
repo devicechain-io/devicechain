@@ -21,7 +21,7 @@ release notes before upgrading. They are ESM-only and built for a bundler — se
 | [`@devicechain/client`](https://www.npmjs.com/package/@devicechain/client) | The TypeScript SDK: auth token handling, GraphQL over fetch, JWT decode, and live subscriptions. Framework-agnostic; no React. |
 | [`@devicechain/dashboards`](https://www.npmjs.com/package/@devicechain/dashboards) | The `DashboardHub`, which owns the connection, resolves selectors and multiplexes telemetry subscriptions. Also the definition, selector, slot and binding-manifest types. |
 | [`@devicechain/widgets`](https://www.npmjs.com/package/@devicechain/widgets) | The React widgets and the renderer that lays a board out. |
-| [`@devicechain/widget-sdk`](https://www.npmjs.com/package/@devicechain/widget-sdk) | The contract for writing a dashboard widget: `defineWidget`, the option helpers and the sealed widget registry. See [Writing a custom widget](../guides/writing-a-custom-widget.md). |
+| [`@devicechain/widget-sdk`](https://www.npmjs.com/package/@devicechain/widget-sdk) | The contract for writing a dashboard widget as a React component: `defineWidget`, `createWidgetRegistry` (the sealed registry a host builds from the built-ins and its own widget packages) and the option helpers. Its peers are `@devicechain/dashboards`, `echarts` and `react`. See [Writing a custom widget](../guides/writing-a-custom-widget.md). |
 | [`@devicechain/brand`](https://www.npmjs.com/package/@devicechain/brand) | The brand tokens and the generated stylesheets. Optional: the widgets are themed entirely with CSS custom properties and require none of it. |
 
 ```bash
