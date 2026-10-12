@@ -61,10 +61,8 @@
 // user-management has its own validator and calls MarkReady, and the ingest services open
 // it with no auth surface at all. Three different answers is not a default.
 //
-// Nor is this for every service yet. ai-inference, dashboard-management and event-sources
-// still wire their managers by hand; nothing prevents them adopting it, it has simply not
-// been done. user-management is different in kind, and it is the one to read before
-// extending this API.
+// Nor is this for every service yet. user-management still wires its managers by hand, and
+// it is different in kind: it is the one to read before extending this API.
 //
 // 🔑 THE INGEST SERVICES USED TO BE LISTED HERE AS AN EXCEPTION, AND THE REASON GIVEN WAS
 // WRONG. It said lwm2m-ingest's NATS stop had to come LAST. What its shutdown actually
@@ -93,6 +91,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"time"
 
 	gormigrate "github.com/go-gormigrate/gormigrate/v2"
 
@@ -158,6 +157,18 @@ type GraphQLSpec struct {
 	// starts and serves — failing at the first query rather than at startup.
 	Resolver  func() interface{}
 	Providers func() map[gqlcore.ContextKey]interface{}
+
+	// ExecTimeout raises the execution deadline of the /graphql handler above the platform
+	// bound; zero keeps the platform bound. It is a plain value, unlike the two above,
+	// because it is read from the service's parsed configuration, which exists before the
+	// Spec does.
+	//
+	// 🔑 IT IS HERE BECAUSE IT MUST LAND BETWEEN CONSTRUCTING THE MANAGER AND INITIALIZING
+	// IT: the handler copies the deadline in GraphQLManager.ExecuteInitialize, so setting
+	// it on the manager afterwards is read by nothing. A service assembling its own manager
+	// can do that in the gap; one going through a Spec has no gap, which is why this field
+	// exists.
+	ExecTimeout time.Duration
 }
 
 // Spec describes the managers a service wants and the one place it needs to do its own
@@ -326,6 +337,7 @@ func (s *Service) Initialize(ctx context.Context) error {
 		}
 		s.GraphQL = gqlcore.NewGraphQLManager(s.Microservice, core.NewNoOpLifecycleCallbacks(),
 			parsed, providers, s.Microservice.Readiness)
+		s.GraphQL.ExecTimeout = s.spec.GraphQL.ExecTimeout
 		if err := s.GraphQL.Initialize(ctx); err != nil {
 			return fmt.Errorf("initializing the GraphQL manager: %w", err)
 		}

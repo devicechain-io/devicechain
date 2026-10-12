@@ -347,3 +347,29 @@ func TestAFailedRelationalInitializeDoesNotRunTheHook(t *testing.T) {
 			"longer runs AFTER that construction — every adopter reads m.Rdb as its first line "+
 			"and would take a nil")
 }
+
+// TestTheGraphQLSpecCarriesItsExecTimeoutToTheManager pins the one setting a service used
+// to apply BETWEEN constructing its GraphQL manager and initializing it, which the Spec
+// could not express and so kept ai-inference on hand-written wiring.
+//
+// 🔑 IT HAS TO LAND BEFORE Initialize, because the data-plane handler is built in
+// GraphQLManager.ExecuteInitialize and copies the deadline at that moment; a value set on
+// the manager afterwards is read by nothing. The assertion therefore reads the manager's
+// field after Initialize, and a zero Spec value must leave the platform bound (zero) alone.
+func TestTheGraphQLSpecCarriesItsExecTimeoutToTheManager(t *testing.T) {
+	build := func(timeout time.Duration) *Service {
+		ephemeralProbes(t)
+		svc := New(testMicroservice(t), Spec{GraphQL: &GraphQLSpec{
+			Schema:      "type Query { ok: Boolean }",
+			Resolver:    func() interface{} { return &okResolver{} },
+			ExecTimeout: timeout,
+		}})
+		require.NoError(t, svc.Initialize(context.Background()))
+		return svc
+	}
+
+	require.Equal(t, 90*time.Second, build(90*time.Second).GraphQL.ExecTimeout,
+		"the Spec's ExecTimeout never reached the GraphQL manager")
+	require.Zero(t, build(0).GraphQL.ExecTimeout,
+		"an unset ExecTimeout must keep the platform bound")
+}

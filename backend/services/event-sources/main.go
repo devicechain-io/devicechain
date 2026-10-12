@@ -20,11 +20,11 @@ import (
 	mscfg "github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/credential"
-	"github.com/devicechain-io/dc-microservice/deadletter"
 	"github.com/devicechain-io/dc-microservice/governance"
 	gqlcore "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/payloadredact"
+	"github.com/devicechain-io/dc-microservice/service"
 	"github.com/devicechain-io/dc-microservice/svcclient"
 	"github.com/prometheus/client_golang/prometheus"
 )
@@ -34,8 +34,10 @@ var (
 	Configuration *config.EventSourcesConfiguration
 	EventSources  []core.LifecycleComponent
 
-	GraphQLManager *gqlcore.GraphQLManager
-	NatsManager    *messaging.NatsManager
+	// Svc owns the managers below and the order of all four of their lifecycle phases.
+	Svc *service.Service
+
+	NatsManager *messaging.NatsManager
 
 	// SecretTransit seals a device's presented credential secret before the event is
 	// published, so the inbound stream never stores a password as sent. Derived from the
@@ -1005,32 +1007,28 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	// Initialize metrics.
 	initializeMetrics()
 
-	// Create and initialize nats manager.
-	NatsManager = messaging.NewNatsManager(Microservice, core.NewNoOpLifecycleCallbacks(), createNatsComponents)
-	// This service builds its manager by hand rather than through core/service, so it
-	// installs the max-delivery recorder itself: a capture delivery that runs out with no
-	// outcome is lettered like any other. The manager refuses to start its reader without it.
-	NatsManager.RecordMaxDeliveries(deadletter.MaxDeliveryRecorder(deadletter.NewProducer(Microservice)))
-	err = NatsManager.Initialize(ctx)
-	if err != nil {
-		return err
-	}
+	// core/service builds the broker manager and the GraphQL manager and owns the order of
+	// all four lifecycle phases. It also installs the max-delivery recorder on the broker
+	// manager, so a capture delivery that runs out with no outcome is lettered like any
+	// other; the manager refuses to start its reader without it.
+	Svc = service.New(Microservice, service.Spec{
+		Nats: &service.NatsSpec{OnCreate: createNatsComponents},
+		AfterNats: func(ctx context.Context, m *service.Managers) error {
+			NatsManager = m.Nats
 
-	// Map of providers that will be injected into graphql http context.
-	providers := map[gqlcore.ContextKey]interface{}{}
-
-	// Create and initialize graphql manager.
-	schema := graphql.SchemaContent
-	parsed := gqlcore.MustParseSchema(schema, &graphql.SchemaResolver{})
-
-	// Auth degrades instead of failing startup (ADR-022 decision 3): fetch the
-	// validator in the background and gate the data plane on readiness rather
-	// than exiting when user-management is briefly unreachable (amends ADR-008).
-	Microservice.StartInstanceAuthGate(ctx)
-
-	GraphQLManager = gqlcore.NewGraphQLManager(Microservice, core.NewNoOpLifecycleCallbacks(), parsed, providers, Microservice.Readiness)
-	err = GraphQLManager.Initialize(ctx)
-	if err != nil {
+			// Auth degrades instead of failing startup (ADR-022 decision 3): fetch the
+			// validator in the background and gate the data plane on readiness rather
+			// than exiting when user-management is briefly unreachable (amends ADR-008).
+			Microservice.StartInstanceAuthGate(ctx)
+			return nil
+		},
+		GraphQL: &service.GraphQLSpec{
+			Schema:    graphql.SchemaContent,
+			Resolver:  func() interface{} { return &graphql.SchemaResolver{} },
+			Providers: func() map[gqlcore.ContextKey]interface{} { return map[gqlcore.ContextKey]interface{}{} },
+		},
+	})
+	if err = Svc.Initialize(ctx); err != nil {
 		return err
 	}
 
@@ -1047,14 +1045,8 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 
 // Called after microservice has been started.
 func afterMicroserviceStarted(ctx context.Context) error {
-	// Start nats manager.
-	err := NatsManager.Start(ctx)
-	if err != nil {
-		return err
-	}
-
-	// Start graphql manager.
-	err = GraphQLManager.Start(ctx)
+	// Start the broker manager, then the GraphQL manager.
+	err := Svc.Start(ctx)
 	if err != nil {
 		return err
 	}
@@ -1119,19 +1111,8 @@ func beforeMicroserviceStopped(ctx context.Context) error {
 		}
 	}
 
-	// Stop graphql manager.
-	err := GraphQLManager.Stop(ctx)
-	if err != nil {
-		return err
-	}
-
-	// Stop nats manager.
-	err = NatsManager.Stop(ctx)
-	if err != nil {
-		return err
-	}
-
-	return nil
+	// Stop the GraphQL manager, then the broker manager.
+	return Svc.Stop(ctx)
 }
 
 // Called before microservice has been terminated.
@@ -1144,19 +1125,8 @@ func beforeMicroserviceTerminated(ctx context.Context) error {
 		}
 	}
 
-	// Terminate graphql manager.
-	err := GraphQLManager.Terminate(ctx)
-	if err != nil {
-		return err
-	}
-
-	// Terminate nats manager.
-	err = NatsManager.Terminate(ctx)
-	if err != nil {
-		return err
-	}
-
-	return nil
+	// Terminate the GraphQL manager, then the broker manager.
+	return Svc.Terminate(ctx)
 }
 
 // failedDecodeMaxBytes bounds the (redacted) body kept on the failed-decode stream.
