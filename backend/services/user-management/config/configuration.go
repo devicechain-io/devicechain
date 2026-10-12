@@ -101,8 +101,9 @@ type TenantPurgeConfiguration struct {
 	// default is on defaultTenantPurgeSettleSeconds below.
 	SettleSeconds int
 
-	// TokenHoldSeconds is the minimum age of the purge itself — measured from the cut,
-	// not from when the stores went quiet — before the token may be released.
+	// TokenHoldSeconds is how long the token stays reserved after every store went clean
+	// (never counted from earlier than the cut) — the moment no further broker credential
+	// can be minted for the tenant, because its credential rows are gone.
 	//
 	// It answers a different question from SettleSeconds and neither substitutes for the
 	// other. Settling asks "has everything already written stopped arriving?". This asks
@@ -172,7 +173,7 @@ func (c *UserManagementConfiguration) TenantPurgeSettle() time.Duration {
 	return time.Duration(c.TenantPurge.SettleSeconds) * time.Second
 }
 
-// TenantPurgeTokenHold is the minimum age of a purge before its token may be released.
+// TenantPurgeTokenHold is how long a purged token stays reserved after the purge went clean.
 func (c *UserManagementConfiguration) TenantPurgeTokenHold() time.Duration {
 	return time.Duration(c.TenantPurge.TokenHoldSeconds) * time.Second
 }
@@ -305,7 +306,11 @@ const (
 // the fence's epoch identifies the PURGE, not the writer, because a device presenting a
 // pre-deletion credential has no epoch to present.
 //
-// What can still present itself at that point is a session established BEFORE the cut. Its
+// What can still present itself at that point is a session whose credential was minted
+// before the sweep removed the rows it was minted from — which is not the same moment as the
+// cut: the lifecycle gate in front of the mint caches and fails open, so a device can be
+// issued a fresh credential after the delete until the relational sweep commits. That is why
+// the hold is counted from when the purge went clean (purge.Waiting), not from the epoch. Its
 // credential rows were swept, so it cannot re-authenticate — but the broker arms its
 // force-close on the JWT's own expiry, so an already-connected device keeps its live
 // connection for up to one credential TTL. Release the token before that elapses and a
@@ -372,14 +377,13 @@ func (c *UserManagementConfiguration) Validate() error {
 	// is gone while the broker is still handing its retained payloads to whoever
 	// subscribes next.
 	//
-	// 🔴 THE FLOOR IS THE CACHE WINDOW PLUS PurgeTimeout, AND THE SECOND TERM IS NOT PADDING.
-	// The settle window is measured from a store's clean-since, and the coordinator stamps
-	// that BEFORE calling the store (Coordinator.eraseOne) — so the purge that empties the
-	// retained stream, and therefore the last moment its payloads can be stamped into the
-	// broker's cache, can land up to a whole broker PurgeTimeout after the timestamp being
-	// measured from. A floor of the cache window alone leaves that gap uncovered: a
-	// configured 121s would pass validation and still allow completion while a retained
-	// payload is servable.
+	// THE FLOOR IS THE CACHE WINDOW PLUS PurgeTimeout. The second term was introduced when
+	// the coordinator stamped a store's clean-since BEFORE calling it, so the purge that
+	// empties the retained stream could land up to a whole broker PurgeTimeout after the
+	// timestamp the settle window is measured from. Clean-since is now stamped when the
+	// pass finishes (Coordinator.eraseOne), which closes that gap on its own; the term is
+	// kept as margin, because a floor that only just clears the cache window would make
+	// the next change to how the stamp is taken a correctness change.
 	//
 	// Strictly greater, not merely equal, for the same reason at the other end: the last
 	// stamp can be the instant of the purge, so equality puts completion exactly on the

@@ -166,6 +166,9 @@ type Registry struct {
 	// deregister): there the new session's Establish already supersedes the old observations.
 	onSessionEnd func(identity string, epoch uint64)
 
+	// tenantDeleted is Options.TenantDeleted, never nil.
+	tenantDeleted func(string) bool
+
 	now      func() time.Time
 	newRegID func() string
 }
@@ -188,8 +191,13 @@ type Options struct {
 	// Deregister or lifetime-expiry. The service wires it to the observe manager's Cancel so
 	// a device's observations are torn down when its presence ends (L2b).
 	OnSessionEnd func(identity string, epoch uint64)
-	Now          func() time.Time // nil ⇒ time.Now
-	NewRegID     func() string    // nil ⇒ crypto-random hex
+	// TenantDeleted is the tenant lifecycle gate (the same closure the device resolver
+	// carries). A registration of a tenant it reports deleted is ENDED rather than kept
+	// alive: on the device's next Update, and by the periodic sweep (RunTenantSweep) for a
+	// device that sleeps through the purge. nil ⇒ no tenant reads deleted.
+	TenantDeleted func(string) bool
+	Now           func() time.Time // nil ⇒ time.Now
+	NewRegID      func() string    // nil ⇒ crypto-random hex
 }
 
 // New builds a Registry over the shared adapter's device resolver + presence emitter and
@@ -227,6 +235,9 @@ func New(resolver deviceResolver, emitter presenceEmitter, epoch *adapter.EpochS
 	if opts.ReplaceBackoff <= 0 {
 		opts.ReplaceBackoff = DefaultReplaceBackoff
 	}
+	if opts.TenantDeleted == nil {
+		opts.TenantDeleted = func(string) bool { return false }
+	}
 	return &Registry{
 		byRegId:        map[string]*entry{},
 		byIdentity:     map[string]*entry{},
@@ -241,6 +252,7 @@ func New(resolver deviceResolver, emitter presenceEmitter, epoch *adapter.EpochS
 		grace:          opts.Grace,
 		replaceBackoff: opts.ReplaceBackoff,
 		onSessionEnd:   opts.OnSessionEnd,
+		tenantDeleted:  opts.TenantDeleted,
 		now:            opts.Now,
 		newRegID:       opts.NewRegID,
 	}
@@ -473,11 +485,21 @@ const (
 // presence is emitted: the device is already CONNECTED for this session.
 func (r *Registry) Update(identity, regId string, ltSeconds int) UpdateResult {
 	r.mu.Lock()
-	defer r.mu.Unlock()
+	res, ended, epoch := r.updateLocked(identity, regId, ltSeconds)
+	r.mu.Unlock()
+	if ended {
+		r.fireSessionEnd(identity, epoch)
+	}
+	return res
+}
+
+// updateLocked is Update under r.mu. ended reports a registration it removed (a deleted
+// tenant's), whose session-end hook the caller fires once the lock is released.
+func (r *Registry) updateLocked(identity, regId string, ltSeconds int) (res UpdateResult, ended bool, endedEpoch uint64) {
 	// A Stopped (evicted) term's table is cleared, so this is 4.04 anyway; the explicit check keeps
 	// the contract obvious and refuses even if a clear ever raced an install.
 	if r.stopped {
-		return UpdateUnknown
+		return UpdateUnknown, false, 0
 	}
 	e := r.byRegId[regId]
 	// A shadow is never servable (ADR-075 L3b): its opaque regId is not one any device was ever
@@ -486,7 +508,18 @@ func (r *Registry) Update(identity, regId string, ltSeconds int) UpdateResult {
 	// as unknown → 4.04 → re-Register — defense-in-depth so a shadow's day-long timer can never be
 	// kept alive by an Update, nor its empty token ever reach a Deregister emit.
 	if e == nil || e.identity != identity || e.shadow {
-		return UpdateUnknown
+		return UpdateUnknown, false, 0
+	}
+	// 🔴 A DELETED TENANT'S REGISTRATION IS ENDED, NOT EXTENDED. The entry carries the device
+	// token resolved at Register, and an Update never re-resolves it, so extending it would keep
+	// that token — and the downlink conn bound to it — alive across the purge, into whatever
+	// tenant holds the token after it is released. Ending it answers 4.04, the device
+	// re-Registers, and the Register meets the lifecycle gate in the resolver. No DISCONNECTED is
+	// written: the tenant's data is being erased. The gate is a cached, non-blocking read, so
+	// asking it under the table lock costs no I/O.
+	if r.tenantDeleted(e.tenant) {
+		r.removeLocked(e)
+		return UpdateUnknown, true, e.epoch
 	}
 	if ltSeconds > 0 {
 		e.lifetime = r.clampLifetime(ltSeconds)
@@ -498,7 +531,7 @@ func (r *Registry) Update(identity, regId string, ltSeconds int) UpdateResult {
 	}
 	e.timer = time.AfterFunc(e.lifetime+r.grace, func() { r.onExpiry(regId, gen) })
 	incr(r.metrics.Updates, 1)
-	return UpdateOK
+	return UpdateOK, false, 0
 }
 
 // Deregister handles a DELETE /rd/{regId}: it removes the registration and emits
@@ -564,9 +597,82 @@ func (r *Registry) onExpiry(regId string, gen uint64) {
 	// its observations down before the emit stops it ingesting telemetry for a device we have
 	// already decided is gone.
 	r.fireSessionEnd(identity, epoch)
+	// Nothing is written into a tenant whose data is being erased.
+	if r.tenantDeleted(tenant) {
+		return
+	}
 	// This runs on a dedicated timer goroutine (it blocks no request), so it gets the
 	// GENEROUS retry budget: it is the only actor that re-drives this DISCONNECT.
 	r.emitDisconnect(tenant, token, externalId, epoch, r.disconnectStamp(connectedAt), "lifetime-expiry", disconnectAttempts)
+}
+
+// DefaultTenantSweepInterval is how often RunTenantSweep ends the registrations of deleted
+// tenants. It needs only to see the tenant as deleted once while its purge runs, and a purge
+// holds its token for hours; a minute keeps the lifecycle lookups it triggers to one per
+// registered tenant per minute.
+const DefaultTenantSweepInterval = time.Minute
+
+// SweepDeletedTenants ends every registration (shadows included) of a tenant the lifecycle
+// gate reports deleted, firing the session-end hook for each live one so its observations
+// and downlink conn go with it. It writes no DISCONNECTED: the tenant's data is being erased.
+//
+// 🔴 IT EXISTS FOR THE DEVICE THAT SLEEPS THROUGH THE PURGE. Update ends a deleted tenant's
+// registration, but only when the device sends one, and a registration lifetime can be a
+// day — longer than a purge holds its token. Left alone, such a registration would still
+// hold its device token and downlink conn when the token was released, and its next Update
+// would be accepted for whatever tenant held the token then. The gate is asked once per
+// tenant per sweep; it is a cached, non-blocking read that refreshes itself in the
+// background, so a tenant not yet known is answered on a later sweep.
+func (r *Registry) SweepDeletedTenants() {
+	type ended struct {
+		identity string
+		epoch    uint64
+	}
+	var live []ended
+	r.mu.Lock()
+	if r.stopped {
+		r.mu.Unlock()
+		return
+	}
+	verdict := map[string]bool{}
+	for _, e := range r.byRegId {
+		deleted, seen := verdict[e.tenant]
+		if !seen {
+			deleted = r.tenantDeleted(e.tenant)
+			verdict[e.tenant] = deleted
+		}
+		if !deleted {
+			continue
+		}
+		r.removeLocked(e)
+		if !e.shadow {
+			live = append(live, ended{e.identity, e.epoch})
+		}
+	}
+	r.mu.Unlock()
+	for _, e := range live {
+		log.Info().Str("identity", e.identity).Uint64("session", e.epoch).
+			Msg("Ended an LwM2M registration whose tenant has been deleted.")
+		r.fireSessionEnd(e.identity, e.epoch)
+	}
+}
+
+// RunTenantSweep calls SweepDeletedTenants every interval until ctx ends or the registry is
+// stopped. The service runs it for each leadership term, beside the registry it sweeps.
+func (r *Registry) RunTenantSweep(ctx context.Context, every time.Duration) {
+	t := time.NewTicker(every)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			if r.isStopped() {
+				return
+			}
+			r.SweepDeletedTenants()
+		}
+	}
 }
 
 // ReconstructShadow installs a SHADOW registration for an asserted-active device recovered

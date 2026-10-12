@@ -58,11 +58,11 @@ type Coordinator struct {
 	// complete — see iam.TenantPurgeStore.CleanSince for why one clean observation is not
 	// the claim it looks like.
 	settle time.Duration
-	// tokenHold is the minimum age of the purge itself before its token may be released,
-	// measured from the cut rather than from when the stores went quiet. It covers what
-	// settling cannot: a device session established before the delete can keep writing
-	// until its broker credential expires, and completion is what removes the fence that
-	// was refusing it. See config.defaultTenantPurgeTokenHoldSeconds.
+	// tokenHold is how long the token stays reserved after the purge went clean (never
+	// counted from earlier than the cut; see Waiting). It covers what settling cannot: a
+	// device session whose broker credential was minted before the sweep removed the rows it
+	// was minted from can keep writing until that credential expires, and completion is what
+	// removes the fence that was refusing it. See config.defaultTenantPurgeTokenHoldSeconds.
 	tokenHold time.Duration
 
 	// now is time.Now, replaced in tests. The settle window is a comparison between two
@@ -406,8 +406,16 @@ func (c *Coordinator) eraseOne(ctx context.Context, store Store, tenant string, 
 	// telemetry store reports clean over a database that does not exist yet; when the
 	// cluster is restored underneath it, the next pass finds real rows to erase. Without
 	// this, that pass could complete on a window measured from before the data existed.
+	//
+	// 🔴 AND THE NEW CLEAN-SINCE IS WHEN THIS PASS FINISHED, NOT WHEN IT STARTED. The rows a
+	// pass erases are there until its sweep commits, which for a large tenant can be long
+	// after the pass began; among them are the credential rows a device's broker
+	// credential is minted from, and the token hold is measured from this timestamp
+	// (Waiting). Dating it from the start of the pass would let the hold begin before the
+	// last credential could have been minted.
 	if outcome.Rows > 0 || wasCleanSince == nil {
-		line.CleanSince = &at
+		done := c.now()
+		line.CleanSince = &done
 	} else {
 		line.CleanSince = wasCleanSince
 	}

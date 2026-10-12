@@ -32,7 +32,7 @@ deleteTenant (admin GraphQL)
         │                                             ├─ any line not clean ⇒ no completion, retry
         │                                             │
         │                       every store clean for the settle window (5 min)
-        │                                    and the purge older than the token hold (12 h)
+        │                                    and the token hold (12 h) since the last went clean
         ▼
       completion: record stamped, tenant row hard-deleted, token released
 ```
@@ -153,15 +153,20 @@ clean by that definition, and measuring the window from a moment the store demon
 the data is the opposite of what settling is for.
 
 **The token hold** (default 12h) asks a different question: *can anything still be admitted at all?*
-It is measured from the epoch, not from when the stores went quiet, and it exists because of a
-property that is easy to miss:
+It is measured from the latest store's clean-since (never earlier than the epoch), and
+clean-since dates the END of the pass that last erased rows — because a credential can be minted
+for as long as the tenant's credential rows exist, which is until the relational sweep commits,
+not until the delete. It exists because of a property that is easy to miss:
 
 > **The fence dies with the tenant row.** Every device-plane gate resolves the tenant's lifecycle
 > through user-management, and an unknown tenant reads as *not deleted*. So the instant completion
 > removes the row, every one of those gates starts admitting the released token again. Nothing
 > downstream is epoch-aware; the data plane knows only tokens.
 
-What can still present itself at that moment is a session established *before* the cut. Its
+What can still present itself at that moment is a session whose credential was minted before the
+sweep removed the rows it was minted from (the lifecycle gate in front of the mint caches for 60s and
+fails open, so that can be after the cut; and the device-management callout refuses to mint while
+its own schema's erasure fence stands, which narrows it to the time before the first sweep). Its
 credential rows were swept so it cannot re-authenticate, but the broker arms its force-close on the
 JWT's own expiry, so an already-connected device keeps its live connection for up to one credential
 TTL. Release the token before that elapses and a straggler's writes land under it, to be inherited
@@ -801,7 +806,7 @@ the other two reject it at load, and that asymmetry is the point rather than an 
 | --- | --- | --- | --- |
 | `intervalSeconds` | 60 | **disables the coordinator** | pass frequency |
 | `settleSeconds` | 300 | **rejected at load** | how long every store must stay clean; must also exceed 140s |
-| `tokenHoldSeconds` | 43200 (12h) | **rejected at load** | minimum age of the purge before the token is released |
+| `tokenHoldSeconds` | 43200 (12h) | **rejected at load** | how long the token stays reserved after the last store went clean |
 
 Disabling the interval is a real operational lever — a maintenance window where nothing should be
 deleting rows — and it is safe by construction: the tenant row is the work list, so a disabled

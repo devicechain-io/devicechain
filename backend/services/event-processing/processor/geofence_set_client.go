@@ -141,3 +141,20 @@ func (c *fenceSetClient) ResolveManifest(ctx context.Context, tenant string,
 	manifest *dmmodel.GeoFenceSetManifest) (*geofence.FenceSet, error) {
 	return c.assemble(ctx, tenant, manifest)
 }
+
+// geometryPurger is a fence-set source that holds a tenant's compiled geometry in memory and
+// can drop it. The tenant eviction asks the wired source for it rather than taking the cache
+// as a field of its own, so the one cache main builds is the one the eviction clears.
+type geometryPurger interface {
+	PurgeTenant(tenant string) int
+}
+
+// The production source must satisfy it, or the eviction's type assertion silently finds
+// nothing to purge.
+var _ geometryPurger = (*fenceSetClient)(nil)
+
+// PurgeTenant drops the tenant's compiled fence geometry from the client's cache and reports
+// how many entries it removed (geofence.GeometryCache.PurgeTenant).
+func (c *fenceSetClient) PurgeTenant(tenant string) int {
+	return c.cache.PurgeTenant(tenant)
+}

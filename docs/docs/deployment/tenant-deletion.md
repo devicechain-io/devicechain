@@ -42,8 +42,9 @@ whenever a pass still finds something to erase.
 connected keeps its broker credential until that credential expires, up to 12 hours. Its credentials
 have been erased, so it cannot reconnect, but the existing connection survives. Releasing the token
 before then would let a straggler's writes land under a name that a *new* tenant could then be
-created at, and inherit. Preventing that is the point of the whole process, so the wait is measured
-from the moment of the delete and matches the credential lifetime.
+created at, and inherit. Preventing that is the point of the whole process, so the wait matches the
+credential lifetime and is measured from when the last storage system finished erasing the tenant's
+data, after which no new credential can be issued for it.
 
 Until both waits have passed, the token stays taken. Creating a tenant at it returns an error saying
 so.
@@ -63,6 +64,17 @@ A tenant's data does not live in one place, so the reclamation asks each storage
 
 A deletion cannot be reported as finished until all of them report clean. A storage system that is
 unreachable is retried on the next pass, not skipped.
+
+### What you remove yourself {#operator-steps}
+
+Some settings that name a tenant are part of a service's configuration rather than the tenant's
+data, so a deletion does not touch them.
+
+**LwM2M device identities.** Each LwM2M DTLS-PSK identity is bound to a tenant and an external id in
+the lwm2m-ingest configuration. After deleting a tenant, remove its identities from that
+configuration: for an instance installed with `dcctl`, remove them from the file passed as
+`--lwm2m-identities` and re-run `dcctl bootstrap` with it. Otherwise the bindings stay in place and
+apply to any tenant later created at the same token.
 
 ## What is deliberately kept {#retained}
 
@@ -182,7 +194,7 @@ the default".
 |---|---|---|
 | `intervalSeconds` | `60` | How often the coordinator runs. A **negative value disables it** entirely. |
 | `settleSeconds` | `300` | How long every storage system must keep reporting clean. Must be greater than 140. |
-| `tokenHoldSeconds` | `43200` | How long a deleted token stays reserved, measured from the delete. |
+| `tokenHoldSeconds` | `43200` | How long a deleted token stays reserved, measured from when the last storage system finished erasing the tenant's data. |
 
 Disabling the coordinator is a supported operational lever, for example during a maintenance window
 in which nothing should be deleting rows. It is safe: pending deletions stay pending rather than being

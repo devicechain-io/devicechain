@@ -250,6 +250,13 @@ func (rp *ResolvedEventsProcessor) applyTenantPurge(tenant string) tenantPurgeRe
 		// with the tenant. Nothing else clears them before a restart.
 		n += int64(rp.fenceView.RemoveTenant(tenant))
 	}
+	if g, ok := rp.FenceSets.(geometryPurger); ok {
+		// The same geometry again, one layer down: the fence-set client's compiled-geometry
+		// cache, keyed by tenant and shared by every fence-set read. It is not the loop's (it
+		// is mutex-guarded, like the dead-letter ring), and nothing else clears it before a
+		// restart.
+		n += int64(g.PurgeTenant(tenant))
+	}
 	if rp.publisher != nil {
 		// The dead-letter ring is the one thing swept here that the loop does not own — it is
 		// mutex-guarded and shared with the publish path — and the one whose contents are pure
