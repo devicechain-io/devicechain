@@ -97,6 +97,9 @@ func (s *Store) ListTenants(ctx context.Context) ([]Tenant, error) {
 // CreateIdentity inserts an identity (with any associated roles/memberships set
 // on the struct).
 func (s *Store) CreateIdentity(ctx context.Context, id *Identity) error {
+	if err := requireCanonicalEmail(id.Email); err != nil {
+		return err
+	}
 	return s.sys(ctx).Create(id).Error
 }
 
@@ -651,6 +654,9 @@ func (s *Store) EnsureRole(ctx context.Context, scope RoleScope, token, name str
 // super-authority for both). Doing it transactionally avoids a half-seeded,
 // locked-out superuser.
 func (s *Store) SeedSuperuser(ctx context.Context, email, passwordHash string, systemAuthorities, tenantAdminAuthorities []string) error {
+	if err := requireCanonicalEmail(email); err != nil {
+		return err
+	}
 	suName, adminName := "Superuser", "Tenant Administrator"
 	return s.sys(ctx).Transaction(func(tx *gorm.DB) error {
 		suRole := Role{Scope: ScopeSystem, Token: SuperuserRoleToken,

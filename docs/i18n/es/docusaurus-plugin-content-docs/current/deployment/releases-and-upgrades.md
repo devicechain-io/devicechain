@@ -4049,6 +4049,13 @@ nombre, estas son nuevas.
 | `SsoUnverifiedIdentityRefused` | warning | Se rechazó un inicio de sesión aunque el proveedor lo avalaba, con el resultado en la etiqueta `outcome`: `refused_unverified_email`, `refused_unverified_domain`, `refused_required_claim` o `refused_system_role_identity`. No se inició sesión a nadie. | Suele ser una conexión mal configurada o alguien que la está sondeando. Busca en el diario de auditoría la dirección que afirmó el proveedor, y en el registro de inicios de sesión del propio proveedor. |
 | `SsoStateStoreFull` | critical | El almacén que guarda los inicios de sesión comenzados está lleno, así que user-management se niega a comenzar cualquier inicio de sesión único con cualquier proveedor hasta que las entradas caduquen, diez minutos después. El inicio de sesión con contraseña no se ve afectado. | Casi seguro que alguien llama en bucle al inicio público de sesión: localiza el tráfico en los registros del ingress y bloquéalo aguas arriba. Si el volumen es legítimo, aumenta `instance.config.infrastructure.nats.kvStateMaxBytes`. |
 
+#### El dominio de un correo ahora tiene una sola grafía, y una dirección almacenada con dominio no ASCII deja de coincidir {#next-upgrade-email-idna}
+
+Una dirección de correo ahora se almacena, se busca y se compara en una única forma canónica: la parte local recortada y en minúsculas como antes, y el dominio convertido a ASCII en minúsculas (la forma `xn--` para un nombre internacionalizado) y sin punto final. Por tanto, `user@bücher.example` y `user@xn--bcher-kva.example` son la misma identidad en el inicio de sesión con contraseña, en el inicio de sesión único y en una solicitud de vinculación, y el dominio que reclama una conexión se compara en la misma forma. Se rechaza una dirección que no sea exactamente `local@dominio`, o cuyo dominio no sea un nombre de host válido.
+
+- **Una dirección con dominio ASCII no cambia.** No tienes que hacer nada.
+- **Una identidad almacenada con un dominio no ASCII (`user@bücher.example`) está guardada en la forma antigua**, así que iniciar sesión con esa dirección ya no la encuentra. Antes de actualizar, lista tus identidades; para cada una cuyo dominio no sea ASCII, vuelve a crearla con la forma `xn--` y traslada sus membresías, o recrea la instancia si es desechable. Una identidad cuya dirección almacenada no sea un `local@dominio` válido tampoco podrá iniciar sesión con contraseña tras la actualización, por el mismo motivo.
+
 ### v0.19.0 — dimensionada a partir de lo medido a 6000 eventos por segundo; un stream lleno rechaza {#v0190-upgrade}
 
 `v0.19.0` es una actualización en su sitio desde `v0.18.0`: `dcctl install` para el clúster y

@@ -253,12 +253,11 @@ func (m *Manager) BeginSso(ctx context.Context, in BeginSsoInput, source string)
 
 // emailDomain returns the normalised domain of an address, or an error.
 func emailDomain(email string) (string, error) {
-	email = iam.NormalizeEmail(email)
-	at := strings.LastIndex(email, "@")
-	if at <= 0 || strings.Count(email, "@") != 1 {
+	email, err := iam.CanonicalEmail(email)
+	if err != nil {
 		return "", ErrSsoInvalidRequest
 	}
-	return NormalizeDomain(email[at+1:])
+	return NormalizeDomain(iam.EmailDomain(email))
 }
 
 // usableConnection is whether a connection can begin a sign-in at all: enabled, with a

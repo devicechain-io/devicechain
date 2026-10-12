@@ -486,6 +486,9 @@ func (s *Store) CountConnectionsDefaultingToRole(ctx context.Context, token stri
 // identity is refused (ErrEmailTaken) if the email is already an identity's: provisioning
 // never adopts an existing one.
 func (s *Store) CreateProvisionedIdentity(ctx context.Context, id *Identity, l *IdentityLink) error {
+	if err := requireCanonicalEmail(id.Email); err != nil {
+		return err
+	}
 	return s.sys(ctx).Transaction(func(tx *gorm.DB) error {
 		var n int64
 		if err := tx.Model(&Identity{}).Where("email = ?", id.Email).Count(&n).Error; err != nil {

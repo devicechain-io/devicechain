@@ -408,9 +408,14 @@ func (m *Manager) Login(ctx context.Context, email, password string) (*IdentityA
 	if m.credentials == nil {
 		return nil, errNoCredentialChecker
 	}
-	email = normalizeEmail(email)
+	// A malformed address (or one whose domain is not valid IDNA) cannot name an identity:
+	// refused as any other failed sign-in, with no lookup and no attempt recorded against it.
+	email, err := normalizeEmail(email)
+	if err != nil {
+		return nil, ErrInvalidCredentials
+	}
 	var id *iam.Identity
-	err := m.credentials.Check(ctx, credential.Principal{Kind: credential.KindIdentity, ID: email}, password,
+	err = m.credentials.Check(ctx, credential.Principal{Kind: credential.KindIdentity, ID: email}, password,
 		func(ctx context.Context) (string, error) {
 			found, err := m.iam.IdentityByEmail(ctx, email)
 			if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
@@ -1095,7 +1100,10 @@ func (m *Manager) seed(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		email := normalizeEmail(m.bootstrap.SuperuserEmail)
+		email, err := normalizeEmail(m.bootstrap.SuperuserEmail)
+		if err != nil {
+			return fmt.Errorf("auth.superuserEmail: %w", err)
+		}
 		all := []string{string(auth.AuthorityAll)}
 		if err := m.iam.SeedSuperuser(ctx, email, string(hash), all, all); err != nil {
 			return err
@@ -1173,10 +1181,15 @@ func stringSlicesEqual(a, b []string) bool {
 	return true
 }
 
-// normalizeEmail lower-cases and trims an email so lookups and uniqueness are
-// case-insensitive. Delegates to the shared iam normalizer so the auth and admin
-// paths agree.
-func normalizeEmail(e string) string { return iam.NormalizeEmail(e) }
+// ErrEmailInvalid refuses an email that is not a well-formed address (including one whose
+// domain is not valid IDNA). It is iam.ErrEmailInvalid, the error the one canonical form
+// returns.
+var ErrEmailInvalid = iam.ErrEmailInvalid
+
+// normalizeEmail returns the canonical form of an email (iam.CanonicalEmail) so lookups,
+// uniqueness and the per-identity session index all agree across spellings. The auth and
+// admin paths share that one definition.
+func normalizeEmail(e string) (string, error) { return iam.CanonicalEmail(e) }
 
 // roleTokens projects roles to their token strings.
 func roleTokens(roles []iam.Role) []string {
