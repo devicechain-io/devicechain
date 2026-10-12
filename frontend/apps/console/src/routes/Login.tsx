@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { useState, type FormEvent } from 'react';
-import { Navigate, useNavigate } from 'react-router-dom';
+import { Navigate, useNavigate, useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { useAuth, consumeSessionExpired } from '@/auth/AuthProvider';
 import { Button } from '@/components/ui/button';
@@ -13,6 +13,7 @@ import { LocaleSwitcher } from '@/components/LocaleSwitcher';
 import { ErrorBanner } from '@/components/ui/error-banner';
 import { signInErrorKey } from '@/i18n/signInError';
 import type { IdentityAuth } from '@/lib/api/user-management';
+import { startSso } from '@/lib/sso';
 
 // Login is two-step (ADR-033): authenticate the email/password to get an identity
 // token + the tenants the identity may act in, then select a tenant to start the
@@ -26,6 +27,7 @@ export default function LoginPage() {
   const { isAuthenticated, login, selectTenant } = useAuth();
   const { t } = useTranslation('login');
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [identity, setIdentity] = useState<IdentityAuth | null>(null);
@@ -71,6 +73,14 @@ export default function LoginPage() {
         setSubmitting(false);
         return;
       }
+      // A tenant that requires single sign-on is listed (ssoRequired) so it does not just
+      // vanish, but this password sign-in cannot enter it. When none can be entered, say
+      // so here, next to the SSO button, instead of offering choices that would fail.
+      if (auth.memberships.every((m) => m.ssoRequired)) {
+        setError(t('ssoRequired'));
+        setSubmitting(false);
+        return;
+      }
       if (auth.memberships.length === 1) {
         await enterTenant(auth, auth.memberships[0].tenant);
         return;
@@ -81,6 +91,32 @@ export default function LoginPage() {
     } catch (err) {
       // The backend deliberately doesn't distinguish bad-email vs bad-password.
       failure(err, 'login:invalidCredentials');
+      setSubmitting(false);
+    }
+  };
+
+  // Single sign-on: the server picks the connection that speaks for the email's domain
+  // and answers with the provider's address, which the browser is sent to as given. A
+  // null answer means no connection covers the domain. `returnTo` is only a hint for
+  // where to land afterwards; lib/sso sanitizes it to a same-origin path.
+  const handleSso = async () => {
+    setError(null);
+    const address = email.trim();
+    if (!address) {
+      setError(t('ssoEmailRequired'));
+      return;
+    }
+    setSubmitting(true);
+    try {
+      const url = await startSso({ email: address, returnTo: searchParams.get('returnTo') });
+      if (url === null) {
+        setError(t('ssoNotConfigured'));
+        setSubmitting(false);
+        return;
+      }
+      window.location.assign(url);
+    } catch (err) {
+      failure(err, 'login:ssoUnavailable');
       setSubmitting(false);
     }
   };
@@ -111,7 +147,7 @@ export default function LoginPage() {
 
         {expired && !identity && (
           <p className="mb-4 rounded-md border border-border bg-muted/50 px-3 py-2 text-center text-sm text-muted-foreground">
-            {t('sessionExpired')}
+            {expired === 'ssoRequired' ? t('sessionSsoRequired') : t('sessionExpired')}
           </p>
         )}
 
@@ -122,11 +158,16 @@ export default function LoginPage() {
               <Button
                 key={m.tenant}
                 variant="outline"
-                className="w-full justify-start"
-                disabled={submitting}
+                className="w-full justify-between"
+                // Shown so the tenant does not silently vanish, but a password sign-in
+                // cannot enter it: the server would refuse it (SSO_REQUIRED).
+                disabled={submitting || m.ssoRequired}
                 onClick={() => handleSelectTenant(m.tenant)}
               >
-                {m.tenant}
+                <span>{m.tenant}</span>
+                {m.ssoRequired && (
+                  <span className="text-xs text-muted-foreground">{t('ssoRequiredBadge')}</span>
+                )}
               </Button>
             ))}
             <Button
@@ -173,6 +214,15 @@ export default function LoginPage() {
 
             <Button type="submit" className="w-full" loading={submitting} disabled={submitting}>
               {t('signIn')}
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              className="w-full"
+              disabled={submitting}
+              onClick={handleSso}
+            >
+              {t('ssoButton')}
             </Button>
           </form>
         )}

@@ -81,7 +81,7 @@ DeviceChain 内置可观测性：每个服务都提供 **Prometheus 指标**和�
 
 ## 登录 Grafana {#signing-in-to-grafana}
 
-Grafana 使用自己的**管理员登录**，目前不能通过 DeviceChain 单点登录。
+Grafana 使用自己的**管理员登录**。Grafana 没有与 DeviceChain 登录集成：无论是 DeviceChain 密码，还是已连接的身份提供商（参见[单点登录](../concepts/single-sign-on.md)），都不能用来登录 Grafana。
 
 指标为实例级且跨租户，因此 Grafana 是*运营方*界面，不向租户用户开放。租户通过控制台和仪表盘查看自身数据，不通过 Grafana。
 

@@ -173,8 +173,9 @@ instance bootstrapped on that cluster is watched by it:
 
 ## Signing in to Grafana
 
-Grafana uses its own **admin login**. Signing in to Grafana through DeviceChain's
-single sign-on is not currently available.
+Grafana uses its own **admin login**. Grafana is not integrated with DeviceChain
+sign-in: neither a DeviceChain password nor a connected identity provider
+(see [Single sign-on](../concepts/single-sign-on.md)) signs you in to it.
 
 Metrics are instance-level and cross-tenant, so Grafana is an *operator* surface, not
 something tenant users can reach. Tenants see their own data through the console and

@@ -25,7 +25,7 @@ Una instancia recién creada no tiene inquilinos. Solo siembra un superusuario, 
   - los puntos de escritura y suscripción de mensajería rechazan un segmento de inquilino malformado.
 
   Como resultado, un dispositivo no puede publicar en los asuntos de otro inquilino ni suscribirse a ellos.
-- **Autenticación.** Los JWT llevan afirmaciones de inquilino que resuelven el inquilino de la solicitud. Los servicios las validan localmente, sin una llamada de red por solicitud.
+- **Autenticación.** Los JWT llevan afirmaciones de inquilino que resuelven el inquilino de la solicitud. Los servicios las validan localmente, sin una llamada de red por solicitud. Las personas pueden iniciar sesión con una contraseña o a través del proveedor de identidad de su organización, y un inquilino puede exigir esto último: consulta [Inicio de sesión único](./single-sign-on.md).
 
 ## Eliminar un inquilino
 

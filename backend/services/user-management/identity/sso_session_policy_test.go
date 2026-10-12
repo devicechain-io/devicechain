@@ -69,7 +69,9 @@ func TestPasswordSessionRefusedBySsoEnforcedTenant(t *testing.T) {
 	oauth := e.oauthSession(t, idTok)
 	pendingCode, err := e.issueCode(t, idTok)
 	require.NoError(t, err)
-	_, err = e.m.Refresh(ctx, pair.RefreshToken)
+	// The control ROTATES the refresh token, so the refusal below must use the new one: the
+	// spent one is refused whatever the tenant requires, which proves nothing.
+	pair, err = e.m.Refresh(ctx, pair.RefreshToken)
 	require.NoError(t, err, "control: refresh works before enforcement")
 	ms, err := e.m.Memberships(ctx, idTok)
 	require.NoError(t, err)
@@ -78,9 +80,11 @@ func TestPasswordSessionRefusedBySsoEnforcedTenant(t *testing.T) {
 	e.enforce(t, "acme", true)
 
 	_, err = e.m.SelectTenant(ctx, idTok, "acme")
-	require.ErrorIs(t, err, ErrInvalidCredentials, "selectTenant entered a tenant that requires single sign-on with a password session")
+	require.ErrorIs(t, err, ErrSsoRequired, "selectTenant entered a tenant that requires single sign-on with a password session, or refused it untyped")
 	_, err = e.m.Refresh(ctx, pair.RefreshToken)
-	require.ErrorIs(t, err, ErrInvalidToken, "refresh kept a password session inside an enforced tenant")
+	require.ErrorIs(t, err, ErrSsoRequired, "refresh kept a password session inside an enforced tenant, or refused it untyped")
+	_, err = e.m.Refresh(ctx, pair.RefreshToken)
+	require.ErrorIs(t, err, ErrInvalidToken, "the refused refresh token was not consumed")
 	_, err = e.issueCode(t, idTok)
 	require.ErrorIs(t, err, errTenantAccessDenied, "the OAuth authorize step issued a code for an enforced tenant")
 	_, err = e.redeem(pendingCode)
@@ -88,13 +92,15 @@ func TestPasswordSessionRefusedBySsoEnforcedTenant(t *testing.T) {
 	_, err = e.refreshOAuth(oauth.RefreshToken)
 	assertOAuthErrorCode(t, err, "invalid_grant")
 
-	// The password sign-in does not even offer the tenant, on a fresh login or a re-read.
+	// The password sign-in lists the tenant MARKED, on a fresh login and a re-read, so the
+	// person is told to use single sign-on rather than finding the tenant gone.
 	ms, err = e.m.Memberships(ctx, idTok)
 	require.NoError(t, err)
-	require.Empty(t, ms)
+	require.Equal(t, []MembershipInfo{{Tenant: "acme", Roles: ms[0].Roles, SsoRequired: true}}, ms)
 	fresh, err := e.m.Login(ctx, pwMember, "pw-1")
 	require.NoError(t, err)
-	require.Empty(t, fresh.Memberships)
+	require.Len(t, fresh.Memberships, 1)
+	require.True(t, fresh.Memberships[0].SsoRequired, "login listed an enforced tenant without marking it")
 
 	// Controls: a single sign-on session still enters, and turning enforcement off lets the
 	// password sign-in back in.
@@ -177,6 +183,7 @@ func TestSuperuserBypassesEnforcementAudited(t *testing.T) {
 	ia, err := e.m.Login(ctx, "root@example.com", "pw-root")
 	require.NoError(t, err)
 	require.Len(t, ia.Memberships, 1, "the superuser's password sign-in lists the enforced tenant")
+	require.False(t, ia.Memberships[0].SsoRequired, "the superuser is let in, so the tenant is not marked for it")
 	got, err := e.m.SelectTenant(ctx, idTok, "acme")
 	require.NoError(t, err, "the superuser was locked out of an enforced tenant")
 	claims, err := e.validator.Validate(got.AccessToken)
@@ -199,7 +206,7 @@ func TestSuperuserBypassesEnforcementAudited(t *testing.T) {
 	before := len(rows)
 	mem, _ := e.login2(t, pwMember, "pw-1")
 	_, err = e.m.SelectTenant(ctx, mem, "acme")
-	require.ErrorIs(t, err, ErrInvalidCredentials)
+	require.ErrorIs(t, err, ErrSsoRequired)
 	require.Len(t, e.auditRows(t, rdb.AuditOpSsoEnforcementBypassed), before)
 }
 
@@ -712,14 +719,15 @@ func TestTenantAdminIsNotExemptFromEnforcement(t *testing.T) {
 	e.enforce(t, "acme", true)
 
 	_, err = e.m.SelectTenant(ctx, idTok, "acme")
-	require.ErrorIs(t, err, ErrInvalidCredentials, "a tenant administrator's password session entered an enforced tenant")
+	require.ErrorIs(t, err, ErrSsoRequired, "a tenant administrator's password session entered an enforced tenant")
 	_, err = e.m.Refresh(ctx, pair.RefreshToken)
-	require.ErrorIs(t, err, ErrInvalidToken)
+	require.ErrorIs(t, err, ErrSsoRequired)
 	_, err = e.issueCode(t, idTok)
 	require.ErrorIs(t, err, errTenantAccessDenied)
 	ms, err := e.m.Memberships(ctx, idTok)
 	require.NoError(t, err)
-	require.Empty(t, ms, "a tenant administrator's password sign-in listed an enforced tenant")
+	require.Len(t, ms, 1)
+	require.True(t, ms[0].SsoRequired, "a tenant administrator's password sign-in listed an enforced tenant unmarked")
 	require.Empty(t, e.auditRows(t, rdb.AuditOpSsoEnforcementBypassed), "a tenant administrator was recorded as bypassing")
 }
 

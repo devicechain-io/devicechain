@@ -108,7 +108,7 @@ const config: CodegenConfig = {
     // operations never mix with the tenant-scoped user-management ones.
     './src/gql/user-management-admin/': {
       schema: '../../../backend/services/user-management/graphql/admin_schema.graphql',
-      documents: ['src/lib/api/admin.ts'],
+      documents: ['src/lib/api/admin.ts', 'src/lib/api/identity-providers.ts'],
       preset: 'client',
       presetConfig: { fragmentMasking: false },
       config: { documentMode: 'string' },

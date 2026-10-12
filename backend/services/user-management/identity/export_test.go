@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/auth"
+	"github.com/devicechain-io/dc-user-management/admin"
 	"github.com/devicechain-io/dc-user-management/iam"
 	"github.com/stretchr/testify/require"
 )
@@ -59,6 +60,8 @@ type ServedSso struct {
 	EnsureRole func(scope, token string, authorities ...string)
 	// CreateMember creates a password identity with a membership in acme.
 	CreateMember func(email, password string)
+	// CreateIdentity creates a password identity with no membership at all.
+	CreateIdentity func(email, password string)
 }
 
 // NewServedSsoManager builds the single sign-on harness and a password superuser.
@@ -79,6 +82,11 @@ func NewServedSsoManager(t *testing.T) *ServedSso {
 		CreateMember: func(email, password string) {
 			t.Helper()
 			e.createMember(t, email, password)
+		},
+		CreateIdentity: func(email, password string) {
+			t.Helper()
+			_, err := e.admin.CreateIdentity(context.Background(), admin.CreateIdentityInput{Email: email, Password: password, Enabled: true})
+			require.NoError(t, err)
 		},
 	}
 }

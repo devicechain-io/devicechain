@@ -34,6 +34,7 @@ const LOGIN = graphql(`
       memberships {
         tenant
         roles
+        ssoRequired
       }
     }
   }
@@ -42,6 +43,60 @@ const LOGIN = graphql(`
 export async function login(email: string, password: string): Promise<IdentityAuth> {
   const data = await gql('user-management', LOGIN, { email, password }, { anonymous: true });
   return data.login;
+}
+
+// ── Single sign-on (unauthenticated) ────────────────────────────────────
+//
+// beginSso answers with where to send the browser (the identity provider's own sign-in
+// page), or null when the email's domain has no connection. The address is navigated to
+// exactly as given. completeSso redeems the one-time `code` the provider's callback put on
+// the return address, with the secret whose hash beginSso was given, and returns what
+// login returns, so the two paths share everything after this point.
+
+const BEGIN_SSO = graphql(`
+  mutation BeginSso($email: String, $connection: String, $returnTo: String!, $codeChallenge: String!) {
+    beginSso(
+      email: $email
+      connection: $connection
+      returnTo: $returnTo
+      codeChallenge: $codeChallenge
+    ) {
+      authorizationUrl
+    }
+  }
+`);
+
+export interface BeginSsoRequest {
+  email?: string;
+  connection?: string;
+  returnTo: string;
+  codeChallenge: string;
+}
+
+/** The provider's authorization address, or null when no connection speaks for the email. */
+export async function beginSso(req: BeginSsoRequest): Promise<string | null> {
+  const data = await gql('user-management', BEGIN_SSO, { ...req }, { anonymous: true });
+  return data.beginSso?.authorizationUrl ?? null;
+}
+
+const COMPLETE_SSO = graphql(`
+  mutation CompleteSso($code: String!, $codeVerifier: String!) {
+    completeSso(code: $code, codeVerifier: $codeVerifier) {
+      identityToken
+      expiresAt
+      superuser
+      memberships {
+        tenant
+        roles
+        ssoRequired
+      }
+    }
+  }
+`);
+
+export async function completeSso(code: string, codeVerifier: string): Promise<IdentityAuth> {
+  const data = await gql('user-management', COMPLETE_SSO, { code, codeVerifier }, { anonymous: true });
+  return data.completeSso;
 }
 
 const SELECT_TENANT = graphql(`
@@ -69,6 +124,7 @@ const IDENTITY_MEMBERSHIPS = graphql(`
     identityMemberships(identityToken: $identityToken) {
       tenant
       roles
+      ssoRequired
     }
   }
 `);

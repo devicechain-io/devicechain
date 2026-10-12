@@ -6,7 +6,6 @@ package identity
 import (
 	"context"
 	"errors"
-	"fmt"
 	"sort"
 	"strings"
 	"time"
@@ -16,16 +15,64 @@ import (
 	"gorm.io/gorm"
 )
 
+// The GraphQL extension codes of the lock-out refusals below, so a client can say what to do
+// in its own language rather than show this package's prose.
+const (
+	CodeSsoEnforceNoConnection    = "SSO_ENFORCE_NO_CONNECTION"
+	CodeSsoEnforcedTenantStranded = "SSO_ENFORCED_TENANT_STRANDED"
+)
+
+// SsoLockoutError is a refusal that would otherwise lock a tenant's people out: requiring
+// single sign-on where no connection serves the tenant, or removing the last connection that
+// serves a tenant that requires it. It carries a machine-readable code (graphql-go copies
+// Extensions onto the error) and, for a stranding, the tenants it would have stranded. Two
+// values are the same refusal (errors.Is) when their codes match.
+type SsoLockoutError struct {
+	Code    string
+	Message string
+	// Tenants are the tenants the change would have stranded, sorted; empty otherwise.
+	Tenants []string
+}
+
+func (e *SsoLockoutError) Error() string {
+	if len(e.Tenants) == 0 {
+		return e.Message
+	}
+	return e.Message + " (tenants: " + strings.Join(e.Tenants, ", ") + ")"
+}
+
+// Extensions is what a GraphQL client branches on.
+func (e *SsoLockoutError) Extensions() map[string]any {
+	ext := map[string]any{"code": e.Code}
+	if len(e.Tenants) > 0 {
+		ext["tenants"] = e.Tenants
+	}
+	return ext
+}
+
+// Is matches another SsoLockoutError with the same code, so a stranding that names its
+// tenants still errors.Is ErrSsoEnforcedTenantStranded.
+func (e *SsoLockoutError) Is(target error) bool {
+	t, ok := target.(*SsoLockoutError)
+	return ok && t.Code == e.Code
+}
+
 var (
 	// ErrSsoEnforceNoConnection refuses requiring single sign-on for a tenant no enabled
 	// connection serves: its people would have no way in.
-	ErrSsoEnforceNoConnection = errors.New("no enabled identity provider connection serves this tenant, so requiring single sign-on would lock its people out; connect one first")
+	ErrSsoEnforceNoConnection error = &SsoLockoutError{
+		Code:    CodeSsoEnforceNoConnection,
+		Message: "no enabled identity provider connection serves this tenant, so requiring single sign-on would lock its people out; connect one first",
+	}
 	// ErrTenantNotFound is returned for a tenant that does not exist.
 	ErrTenantNotFound = errors.New("tenant not found")
 	// ErrSsoEnforcedTenantStranded refuses disabling or deleting a connection, or dropping a
 	// tenant from it, when that would leave a tenant that requires single sign-on with no
 	// enabled connection serving it: the inverse of ErrSsoEnforceNoConnection.
-	ErrSsoEnforcedTenantStranded = errors.New("this is the last enabled identity provider connection serving a tenant that requires single sign-on, so the change would lock its people out; turn the requirement off for the tenant (setTenantSsoEnforced) or connect another provider first")
+	ErrSsoEnforcedTenantStranded error = &SsoLockoutError{
+		Code:    CodeSsoEnforcedTenantStranded,
+		Message: "this is the last enabled identity provider connection serving a tenant that requires single sign-on, so the change would lock its people out; stop requiring single sign-on for the tenant or connect another provider first",
+	}
 )
 
 // refuseStrandingEnforcedTenants refuses a change to conn that would leave a tenant which
@@ -82,7 +129,10 @@ func (m *Manager) refuseStrandingEnforcedTenants(ctx context.Context, conn *iam.
 	}
 	if len(stranded) > 0 {
 		sort.Strings(stranded)
-		return fmt.Errorf("%w (tenants: %s)", ErrSsoEnforcedTenantStranded, strings.Join(stranded, ", "))
+		// Returned as itself, not wrapped: graphql-go reads the code off the error the
+		// resolver returns, and a wrapper would carry none.
+		base := ErrSsoEnforcedTenantStranded.(*SsoLockoutError)
+		return &SsoLockoutError{Code: base.Code, Message: base.Message, Tenants: stranded}
 	}
 	return nil
 }

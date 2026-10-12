@@ -39,6 +39,7 @@ import enAudit from './locales/en/audit.json';
 import enIdentities from './locales/en/identities.json';
 import enRoles from './locales/en/roles.json';
 import enAiProviders from './locales/en/aiProviders.json';
+import enIdentityProviders from './locales/en/identityProviders.json';
 import enAiPackaging from './locales/en/aiPackaging.json';
 import enAdminSettings from './locales/en/adminSettings.json';
 import enAdminAudit from './locales/en/adminAudit.json';
@@ -67,6 +68,7 @@ import esAudit from './locales/es/audit.json';
 import esIdentities from './locales/es/identities.json';
 import esRoles from './locales/es/roles.json';
 import esAiProviders from './locales/es/aiProviders.json';
+import esIdentityProviders from './locales/es/identityProviders.json';
 import esAiPackaging from './locales/es/aiPackaging.json';
 import esAdminSettings from './locales/es/adminSettings.json';
 import esAdminAudit from './locales/es/adminAudit.json';
@@ -143,6 +145,7 @@ export const NAMESPACES = [
   'identities',
   'roles',
   'aiProviders',
+  'identityProviders',
   'aiPackaging',
   'adminSettings',
   'adminAudit',
@@ -181,6 +184,7 @@ const resources = {
     identities: enIdentities,
     roles: enRoles,
     aiProviders: enAiProviders,
+    identityProviders: enIdentityProviders,
     aiPackaging: enAiPackaging,
     adminSettings: enAdminSettings,
     adminAudit: enAdminAudit,
@@ -210,6 +214,7 @@ const resources = {
     identities: esIdentities,
     roles: esRoles,
     aiProviders: esAiProviders,
+    identityProviders: esIdentityProviders,
     aiPackaging: esAiPackaging,
     adminSettings: esAdminSettings,
     adminAudit: esAdminAudit,

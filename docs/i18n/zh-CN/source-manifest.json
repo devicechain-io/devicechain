@@ -51,8 +51,8 @@
       "translationSha256": "42037e1c79028dd5d1c8ed79cc91a768696c4029005c06f73ae53858a2ed3ac4"
     },
     "concepts/multi-tenancy.md": {
-      "sourceSha256": "370c4846e34cf73a76dc42e8c7915d02c7b9bda6bc843f89b3e3314488547846",
-      "translationSha256": "65f35e6928559d503cd4d8b172f8baa3a20a8284b8b78c865b48a67b17ea8307"
+      "sourceSha256": "6c53158cae94b162a915c4d4a9b9828f9a0539117d53b53bac07d358385ed9b6",
+      "translationSha256": "8a60eff9f68fad58331a477deb2956276fe9422500d470e5b172d9a363645fa4"
     },
     "concepts/object-storage.md": {
       "sourceSha256": "d929ae7a8fb446c8a78f86f5221dccebfa5c03608d652bb0ee2e570d55494c7e",
@@ -61,6 +61,10 @@
     "concepts/outbound-connectors.md": {
       "sourceSha256": "1ba29dfe2911de7ad5e883661f3a98beea5bfdac0f3ded4a5dcecc9fe6c8e0de",
       "translationSha256": "12adcdfb098a473cf02eaa5e52d8be48f233f62d9bd16fb7bd9c3c6ec03f9f41"
+    },
+    "concepts/single-sign-on.md": {
+      "sourceSha256": "e31ba494aa05050918005edc2ddfe9635841b4a83f94f69abf15c037c92a907e",
+      "translationSha256": "9e3e7d4879c652f45a66d70fd2872bc4d89652fd408a1fadf272e99e13011208"
     },
     "concepts/sparkplug.md": {
       "sourceSha256": "c5755e76a94f2f592689eff34ebacf5694b2615cbe5ade6f7d396b31354203d9",
@@ -103,12 +107,12 @@
       "translationSha256": "961470ae9ae48bf170fdc5cddde14bb7016ce9fb8990407bff9db39a638f5850"
     },
     "deployment/observability.md": {
-      "sourceSha256": "3d5d93a4e87d58c79603806e4a5a0a3d5064e91f7746995281be2844b544979b",
-      "translationSha256": "eb6f7f800c8819483153b6da905fdcbc24debdcf778f036485c3fd1a84736ad1"
+      "sourceSha256": "c1345a7e561a2898118fd424df6cf8bca56761687d8c8cfc3a2f4dbe92ee9b50",
+      "translationSha256": "b618443dc6afc58422cf696314036bdb1ef464dbe8ceb019662ec96917b79b13"
     },
     "deployment/releases-and-upgrades.md": {
-      "sourceSha256": "582a3b898e4fb06eb8b31541e146bc0c3595322f2bd12fbb46b07418cad83f5f",
-      "translationSha256": "75f05fa8ddaf46256a05c646fb3fb63f4d9ec8bbf8ebd220ed4d60495cc37d0c"
+      "sourceSha256": "b2f1ac349478dbe3e433cbcc72e6b02ed89d9cc55aa1620ef98c9a4b961135e0",
+      "translationSha256": "6ec4c5a5fb20786eec25b82007c5c11195cb64b04832590d84fe680e13faeb32"
     },
     "deployment/tenant-deletion.md": {
       "sourceSha256": "b2c45251dc27f0e035f1017f67255172a20c2bf102ed72c44c6faa54d504ebc4",
@@ -125,6 +129,10 @@
     "guides/commanding-a-fleet.md": {
       "sourceSha256": "355f7cff1be7e56d1b4b9932ad8edb36b4cd8556fbe3b24f4fc7745172f12bf8",
       "translationSha256": "644febcd3785fbcb692e7bc8424424b04356808bab0904399e33b6e8c8528ceb"
+    },
+    "guides/configuring-sso.md": {
+      "sourceSha256": "a9f6955d712bc53391676efac0230733c2240423aafb7e829870d7d2fbb04a50",
+      "translationSha256": "82a86791503b3145b87cb038e32b88d9929a7ad46fcccb3247b53088b03505fe"
     },
     "guides/connecting-a-device.md": {
       "sourceSha256": "0b1cfb8671348decbe6f55b070b5af421e46430bda1a0a1f988ead121016ec56",

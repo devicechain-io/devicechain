@@ -9,12 +9,18 @@ import { ToastProvider } from '@/components/ui/toast';
 import { ConfirmProvider } from '@/components/ui/confirm-dialog';
 import { AuthProvider } from '@/auth/AuthProvider';
 import { AreaCapabilityProvider } from '@/lib/capabilities';
+import { SSO_COMPLETE_PATH, captureSsoReturn } from '@/lib/sso';
 import App from './App';
 // Initializes the shared i18next instance (ADR-066) as a side effect, before any
 // component renders — react-i18next reads it through context/useTranslation.
 import '@/i18n/config';
 import '@fontsource-variable/inter';
 import './index.css';
+
+// The single sign-on return carries a one-time code in its query. Take it out of the
+// address bar (and stop the page sending a Referer) before the router reads the location
+// or anything renders; the completion page picks the captured code up from lib/sso.
+if (window.location.pathname === SSO_COMPLETE_PATH) captureSsoReturn();
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>

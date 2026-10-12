@@ -68,7 +68,25 @@ export type LoginMutationVariables = Exact<{
 }>;
 
 
-export type LoginMutation = { login: { identityToken: string, expiresAt: string, superuser: boolean, memberships: Array<{ tenant: string, roles: Array<string> }> } };
+export type LoginMutation = { login: { identityToken: string, expiresAt: string, superuser: boolean, memberships: Array<{ tenant: string, roles: Array<string>, ssoRequired: boolean }> } };
+
+export type BeginSsoMutationVariables = Exact<{
+  email?: string | null | undefined;
+  connection?: string | null | undefined;
+  returnTo: string;
+  codeChallenge: string;
+}>;
+
+
+export type BeginSsoMutation = { beginSso: { authorizationUrl: string } | null };
+
+export type CompleteSsoMutationVariables = Exact<{
+  code: string;
+  codeVerifier: string;
+}>;
+
+
+export type CompleteSsoMutation = { completeSso: { identityToken: string, expiresAt: string, superuser: boolean, memberships: Array<{ tenant: string, roles: Array<string>, ssoRequired: boolean }> } };
 
 export type SelectTenantMutationVariables = Exact<{
   identityToken: string;
@@ -83,7 +101,7 @@ export type IdentityMembershipsQueryVariables = Exact<{
 }>;
 
 
-export type IdentityMembershipsQuery = { identityMemberships: Array<{ tenant: string, roles: Array<string> }> };
+export type IdentityMembershipsQuery = { identityMemberships: Array<{ tenant: string, roles: Array<string>, ssoRequired: boolean }> };
 
 export type RefreshMutationVariables = Exact<{
   refreshToken: string;
@@ -226,10 +244,37 @@ export const LoginDocument = new TypedDocumentString(`
     memberships {
       tenant
       roles
+      ssoRequired
     }
   }
 }
     `) as unknown as TypedDocumentString<LoginMutation, LoginMutationVariables>;
+export const BeginSsoDocument = new TypedDocumentString(`
+    mutation BeginSso($email: String, $connection: String, $returnTo: String!, $codeChallenge: String!) {
+  beginSso(
+    email: $email
+    connection: $connection
+    returnTo: $returnTo
+    codeChallenge: $codeChallenge
+  ) {
+    authorizationUrl
+  }
+}
+    `) as unknown as TypedDocumentString<BeginSsoMutation, BeginSsoMutationVariables>;
+export const CompleteSsoDocument = new TypedDocumentString(`
+    mutation CompleteSso($code: String!, $codeVerifier: String!) {
+  completeSso(code: $code, codeVerifier: $codeVerifier) {
+    identityToken
+    expiresAt
+    superuser
+    memberships {
+      tenant
+      roles
+      ssoRequired
+    }
+  }
+}
+    `) as unknown as TypedDocumentString<CompleteSsoMutation, CompleteSsoMutationVariables>;
 export const SelectTenantDocument = new TypedDocumentString(`
     mutation SelectTenant($identityToken: String!, $tenant: String!) {
   selectTenant(identityToken: $identityToken, tenant: $tenant) {
@@ -244,6 +289,7 @@ export const IdentityMembershipsDocument = new TypedDocumentString(`
   identityMemberships(identityToken: $identityToken) {
     tenant
     roles
+    ssoRequired
   }
 }
     `) as unknown as TypedDocumentString<IdentityMembershipsQuery, IdentityMembershipsQueryVariables>;

@@ -48,16 +48,36 @@ import { loadDashboard, loadPublishedDashboard, type Loaded } from './load';
 import { MAP_RUNTIME } from './map-runtime';
 import { LOGIN, type Membership, SELECT_TENANT, TENANT_BASEMAP } from './queries';
 import { endServerSession } from './signOut';
+import {
+  SSO_COMPLETE_PATH,
+  forgetSsoSession,
+  leaveSsoReturn,
+  leaveWithSession,
+  runSsoCompletion,
+  startSso,
+  takeSsoSession,
+} from './sso';
+
+// The provider-side failure classes the server names on a refused return.
+const SSO_PROVIDER_ERROR_KEYS: Record<string, string> = {
+  refused: 'signIn:ssoErrorRefused',
+  link_required: 'signIn:ssoErrorLinkRequired',
+  idp_error: 'signIn:ssoErrorIdp',
+  groups_overage: 'signIn:ssoErrorGroupsOverage',
+};
 
 export default function App() {
   // The tenant access token, once signed in. Kept in state (to drive the UI) AND a
   // ref (so the token getter, registered once, always reads the latest value).
-  const [token, setToken] = useState<string | null>(null);
+  // A single sign-on hands its session over from the return page (sso.ts, leaveWithSession);
+  // otherwise both start empty.
+  const [handedOver] = useState(takeSsoSession);
+  const [token, setToken] = useState<string | null>(handedOver?.accessToken ?? null);
   const tokenRef = useRef<string | null>(null);
   tokenRef.current = token;
   // The refresh token the server issued with it. This viewer never refreshes; it holds the
   // token only to hand it back to logout, so signing out ends the session on the server.
-  const refreshTokenRef = useRef<string | null>(null);
+  const refreshTokenRef = useRef<string | null>(handedOver?.refreshToken ?? null);
   // Set when the last sign-out could not be confirmed by the server, so the sign-in screen
   // can say so rather than pretend the session is closed.
   const [signOutFailed, setSignOutFailed] = useState(false);
@@ -76,6 +96,7 @@ export default function App() {
   const signOut = () => {
     const refreshToken = refreshTokenRef.current;
     refreshTokenRef.current = null;
+    forgetSsoSession();
     // Local state clears at once so the viewer is out whatever the network does; the
     // server call runs behind it and reports a failure on the sign-in screen.
     setToken(null);
@@ -89,6 +110,10 @@ export default function App() {
     setToken(accessToken);
   };
 
+  // The identity provider's return lands on /dash/sso/complete. The query has already been
+  // stripped (main.tsx). This document is never signed in: the return page only ever leaves
+  // by a full navigation (sso.ts explains why), so it renders nothing else.
+  if (window.location.pathname === SSO_COMPLETE_PATH) return <SsoComplete />;
   if (!token) return <SignIn onAuthed={onAuthed} signOutFailed={signOutFailed} />; // Step 1
   if (!loaded) return <Load onRender={setLoaded} onSignOut={signOut} />; // Step 2
   // The viewer's authorities gate action controls (alarm ack/clear); the server enforces
@@ -145,6 +170,13 @@ function SignIn({
           setBusy(false);
           return;
         }
+        // Every tenant requires single sign-on, which a password cannot enter: say so on
+        // the form, where the SSO button is, rather than offering choices that fail.
+        if (mships.every((m) => m.ssoRequired)) {
+          setError(t('signIn:ssoRequired'));
+          setBusy(false);
+          return;
+        }
         if (mships.length === 1) {
           selectTenant(idToken, mships[0].tenant);
           return;
@@ -162,6 +194,32 @@ function SignIn({
       });
   };
 
+  // Single sign-on: the server picks the connection that speaks for the email's domain and
+  // answers with the provider's address, which the browser is sent to as given. A null
+  // answer means no connection covers the domain.
+  const sso = () => {
+    const address = email.trim();
+    if (!address) {
+      setError(t('signIn:ssoEmailRequired'));
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    startSso(address)
+      .then((url) => {
+        if (url === null) {
+          setError(t('signIn:ssoNotConfigured'));
+          setBusy(false);
+          return;
+        }
+        window.location.assign(url);
+      })
+      .catch((err: unknown) => {
+        setError(t(signInErrorKey(err, 'signIn:ssoUnavailable')));
+        setBusy(false);
+      });
+  };
+
   // Tenant picker (only when the identity has more than one membership).
   if (identityToken) {
     return (
@@ -174,9 +232,11 @@ function SignIn({
               <HeaderButton
                 key={m.tenant}
                 onClick={() => selectTenant(identityToken, m.tenant)}
-                disabled={busy}
+                // A tenant that requires single sign-on is shown, so its absence is not a
+                // mystery, but cannot be chosen with this password sign-in.
+                disabled={busy || m.ssoRequired}
               >
-                {m.tenant}
+                {m.ssoRequired ? t('signIn:ssoRequiredTenant', { tenant: m.tenant }) : m.tenant}
               </HeaderButton>
             ))}
           </div>
@@ -213,9 +273,113 @@ function SignIn({
           <HeaderButton type="submit" primary disabled={busy}>
             {busy ? t('signIn:submitting') : t('signIn:submit')}
           </HeaderButton>
+          <HeaderButton onClick={sso} disabled={busy}>
+            {t('signIn:ssoButton')}
+          </HeaderButton>
           <LocaleSwitcher />
         </Card>
       </form>
+    </Centered>
+  );
+}
+
+// ── Step 1, single sign-on return ───────────────────────────────────────────
+// The identity provider's callback lands here with a one-time code (already taken out of
+// the address bar by main.tsx). runSsoCompletion redeems it once, even under StrictMode's
+// double mount. A failure shows its reason and a way back to the sign-in form; nothing
+// here retries by itself. Every way out — signed in, or back to the form — is a full
+// navigation to /dash/, never a client-side hop (sso.ts, leaveWithSession).
+
+function SsoComplete() {
+  const { t } = useTranslation();
+  const [identityToken, setIdentityToken] = useState<string | null>(null);
+  const [memberships, setMemberships] = useState<Membership[]>([]);
+  const [busy, setBusy] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  const selectTenant = (idToken: string, tenant: string) => {
+    setBusy(true);
+    setError(null);
+    return gql('user-management', SELECT_TENANT, { identityToken: idToken, tenant }, { anonymous: true })
+      .then((r) => {
+        const session = { accessToken: r.selectTenant.accessToken, refreshToken: r.selectTenant.refreshToken };
+        if (leaveWithSession(session)) return; // the browser is on its way to /dash/
+        // The session could not cross to the next document. Staying signed in HERE is the
+        // one thing this page must not do, so end it on the server and say the sign-in failed.
+        void endServerSession(session.refreshToken);
+        setError(t('signIn:ssoErrorRedeemFailed'));
+        setBusy(false);
+      })
+      .catch((err: unknown) => {
+        setError(t(signInErrorKey(err, 'signIn:enterTenantFailed')));
+        setBusy(false);
+      });
+  };
+
+  useEffect(() => {
+    let live = true;
+    void runSsoCompletion().then((out) => {
+      if (!live) return;
+      if (!out.ok) {
+        setBusy(false);
+        switch (out.reason) {
+          case 'provider':
+            setError(t(SSO_PROVIDER_ERROR_KEYS[out.providerError ?? ''] ?? 'signIn:ssoErrorRefused'));
+            return;
+          case 'missingCode':
+            setError(t('signIn:ssoErrorMissingCode'));
+            return;
+          case 'missingVerifier':
+            setError(t('signIn:ssoErrorMissingVerifier'));
+            return;
+          case 'redeemFailed':
+            setError(t(signInErrorKey(out.cause, 'signIn:ssoErrorRedeemFailed')));
+            return;
+        }
+      }
+      if (out.memberships.length === 0) {
+        setError(t('signIn:noTenants'));
+        setBusy(false);
+      } else if (out.memberships.length === 1) {
+        void selectTenant(out.identityToken, out.memberships[0].tenant);
+      } else {
+        setIdentityToken(out.identityToken);
+        setMemberships(out.memberships);
+        setBusy(false);
+      }
+    });
+    return () => {
+      live = false;
+    };
+    // Page-lifetime state: only the mount matters; the second StrictMode mount shares the
+    // first one's redemption.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  return (
+    <Centered>
+      <Card>
+        <div style={{ fontSize: 18, fontWeight: 600 }}>
+          {identityToken ? t('signIn:chooseTenant') : t('signIn:title')}
+        </div>
+        {busy && !error && <div>{t('signIn:ssoCompleting')}</div>}
+        {error && <ErrorText>{error}</ErrorText>}
+        {identityToken && !error && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {memberships.map((m) => (
+              <HeaderButton
+                key={m.tenant}
+                onClick={() => void selectTenant(identityToken, m.tenant)}
+                disabled={busy}
+              >
+                {m.tenant}
+              </HeaderButton>
+            ))}
+          </div>
+        )}
+        {error && <HeaderButton onClick={leaveSsoReturn}>{t('signIn:ssoBack')}</HeaderButton>}
+        <LocaleSwitcher />
+      </Card>
     </Centered>
   );
 }

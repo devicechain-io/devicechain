@@ -55,8 +55,10 @@ type IdentityAuth {
     superuser: Boolean!
     """
     The identity's tenant memberships as of login, including any that are disabled or in a
-    tenant that is disabled or being deleted; selectTenant refuses those. Call
-    identityMemberships to re-read them later without logging in again.
+    tenant that is disabled or being deleted; selectTenant refuses those. After a password
+    sign-in, a tenant that requires single sign-on is listed with ssoRequired set, and
+    selectTenant refuses it. Call identityMemberships to re-read them later without logging
+    in again.
     """
     memberships: [Membership!]!
 }
@@ -67,6 +69,13 @@ type Membership {
     tenant: String!
     """Tokens of the roles this identity holds in the tenant. Empty if it holds none."""
     roles: [String!]!
+    """
+    True when the tenant requires single sign-on and this sign-in used a password, so
+    selectTenant refuses it with the error code SSO_REQUIRED: sign in through the identity
+    provider (beginSso) to enter it. Always false for a superuser, and for a sign-in that came
+    through single sign-on.
+    """
+    ssoRequired: Boolean!
 }
 
 """
@@ -598,7 +607,9 @@ type Mutation {
     enabled membership in an enabled tenant; a superuser may enter any tenant. Needs no
     Authorization header, since the identity token is the argument. Fails with "invalid or
     expired token" if the identity token is expired or from a session that has ended, and
-    with "invalid credentials" if the identity may not enter that tenant.
+    with "invalid credentials" if the identity may not enter that tenant. A member whose
+    tenant requires single sign-on (Membership.ssoRequired) and who signed in with a password
+    is refused with the error code SSO_REQUIRED instead; a non-member never sees that code.
     """
     # Exchange an identity token for a tenant-scoped access/refresh pair.
     selectTenant(
@@ -613,8 +624,11 @@ type Mutation {
     afresh, so a change to the user's role or membership applies from the next refresh. Needs
     no Authorization header. Fails with "invalid or expired token" if the refresh token is
     expired, already used, or belongs to a session that has ended or a membership or tenant
-    that is no longer allowed in. If the failure is temporary the error says the session
-    could not be refreshed right now and the same refresh token remains usable.
+    that is no longer allowed in. If the tenant has started requiring single sign-on and the
+    session came from a password sign-in, the error carries the code SSO_REQUIRED and the
+    refresh token is consumed: sign in through the identity provider. If the failure is
+    temporary the error says the session could not be refreshed right now and the same
+    refresh token remains usable.
     """
     # Exchange a valid refresh token for a new pair (rotates the refresh token).
     refresh(

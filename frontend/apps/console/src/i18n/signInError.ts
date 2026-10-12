@@ -87,6 +87,10 @@ export function signInErrorKey(err: unknown, rejectedKey: string): string {
       return 'login:tooManyAttempts';
     case 'UNAVAILABLE':
       return 'login:signInUnavailable';
+    // A password sign-in refused because the tenant requires single sign-on. Matched on
+    // the code like the two above, never on the message text.
+    case 'SSO_REQUIRED':
+      return 'login:ssoRequired';
   }
   return serverRejectedRequest(err) ? rejectedKey : 'login:serverUnreachable';
 }

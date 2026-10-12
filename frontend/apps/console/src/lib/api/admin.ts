@@ -114,6 +114,8 @@ const TENANTS = graphql(`
       # inherit them. The row (and the token) go once the reclamation finishes.
       purgeState
       purgeEpoch
+      # Whether the tenant's people must sign in through single sign-on.
+      ssoEnforced
       tier {
         token
         name
@@ -826,6 +828,31 @@ const SET_TENANT_ENABLED = graphql(`
 export async function setTenantEnabled(token: string, enabled: boolean): Promise<AdminTenantRecord> {
   const data = await gql('user-management/admin', SET_TENANT_ENABLED, { token, enabled }, { identity: true });
   return data.setTenantEnabled;
+}
+
+// Requires (or stops requiring) single sign-on for a tenant. The server refuses to turn it
+// on while no enabled connection serves the tenant, since that would lock its people out;
+// the refusal's text is the server's own and callers show it as written.
+const SET_TENANT_SSO_ENFORCED = graphql(`
+  mutation SetTenantSsoEnforced($tenant: String!, $enforced: Boolean!) {
+    setTenantSsoEnforced(tenant: $tenant, enforced: $enforced) {
+      token
+      ssoEnforced
+    }
+  }
+`);
+
+export async function setTenantSsoEnforced(
+  tenant: string,
+  enforced: boolean,
+): Promise<{ token: string; ssoEnforced: boolean }> {
+  const data = await gql(
+    'user-management/admin',
+    SET_TENANT_SSO_ENFORCED,
+    { tenant, enforced },
+    { identity: true },
+  );
+  return data.setTenantSsoEnforced;
 }
 
 const DELETE_TENANT = graphql(`

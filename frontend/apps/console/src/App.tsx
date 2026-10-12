@@ -6,6 +6,7 @@ import { useTranslation } from 'react-i18next';
 import { useAuth } from '@/auth/AuthProvider';
 import { LoadingState } from '@/components/ui/loading-state';
 import LoginPage from '@/routes/Login';
+import LoginSsoCompletePage from '@/routes/LoginSsoComplete';
 import AppLayout from '@/routes/AppLayout';
 import Dashboard from '@/routes/Dashboard';
 import DevicesPage from '@/routes/devices/DevicesPage';
@@ -47,6 +48,8 @@ import AdminAuditPage from '@/routes/admin/AuditPage';
 import AdminNewRolePage from '@/routes/admin/roles/NewRolePage';
 import AdminRoleDetailPage from '@/routes/admin/roles/RoleDetailPage';
 import AdminSettingsPage from '@/routes/admin/settings/SettingsPage';
+import AdminIdentityProvidersPage from '@/routes/admin/identity-providers/IdentityProvidersPage';
+import AdminIdentityProviderDetailPage from '@/routes/admin/identity-providers/IdentityProviderDetailPage';
 import { REGISTRY_RESOURCES } from '@/routes/resources';
 
 
@@ -72,6 +75,8 @@ export default function App() {
     <ErrorBoundary>
       <Routes>
       <Route path="/login" element={<LoginPage />} />
+      {/* Where the identity provider's callback sends the browser back with a one-time code. */}
+      <Route path="/login/sso/complete" element={<LoginSsoCompletePage />} />
 
       <Route element={<ProtectedRoute />}>
         <Route path="/" element={<AppLayout />}>
@@ -131,6 +136,8 @@ export default function App() {
           <Route path="roles" element={<AdminRolesPage />} />
           <Route path="roles/new" element={<AdminNewRolePage />} />
           <Route path="roles/:scope/:token" element={<AdminRoleDetailPage />} />
+          <Route path="identity-providers" element={<AdminIdentityProvidersPage />} />
+          <Route path="identity-providers/:token" element={<AdminIdentityProviderDetailPage />} />
           <Route path="audit" element={<AdminAuditPage />} />
           {/* Instance-scoped AI provider config: an operator resource, so it lives
               on the admin plane rather than inside a tenant (ADR-065). */}
