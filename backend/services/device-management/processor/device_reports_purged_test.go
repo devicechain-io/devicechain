@@ -15,7 +15,32 @@ import (
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-microservice/streams"
+	"github.com/prometheus/client_golang/prometheus"
 )
+
+// loopResults reads, from the registry the service exports through, how many messages the
+// named consumer loop finished with the given result.
+func loopResults(t *testing.T, reg *prometheus.Registry, loop, result string) float64 {
+	t.Helper()
+	mfs, err := reg.Gather()
+	if err != nil {
+		t.Fatalf("gathering metrics: %v", err)
+	}
+	var total float64
+	for _, mf := range mfs {
+		if !strings.HasSuffix(mf.GetName(), "_"+loop+"_messages_total") {
+			continue
+		}
+		for _, m := range mf.GetMetric() {
+			for _, l := range m.GetLabel() {
+				if l.GetName() == "result" && l.GetValue() == result {
+					total += m.GetCounter().GetValue()
+				}
+			}
+		}
+	}
+	return total
+}
 
 // purgedReportsApi answers every call the way a deleted tenant's writes are answered: the
 // erasure fence refuses them, identically on every delivery.
@@ -37,6 +62,8 @@ func (a *purgedReportsApi) ApplyDeviceConfigurationReport(context.Context, strin
 // tenant whose data is being erased. Both kinds this consumer applies reach a fenced write.
 func TestADeviceReportForADeletedTenantIsDroppedNotLettered(t *testing.T) {
 	ms := &core.Microservice{InstanceId: "test", FunctionalArea: "device-management"}
+	reg := prometheus.NewRegistry()
+	ms.UseMetricsRegistry(reg)
 	dead := &deadRecorder{}
 	api := &purgedReportsApi{}
 	rc := NewDeviceReportsConsumer(ms, nil, core.NewNoOpLifecycleCallbacks(), api,
@@ -67,5 +94,14 @@ func TestADeviceReportForADeletedTenantIsDroppedNotLettered(t *testing.T) {
 	}
 	if len(dead.msgs) != 0 {
 		t.Fatalf("wrote %d dead letters for a deleted tenant, want 0", len(dead.msgs))
+	}
+	// Counted invalid — not a success, and not a retry still pending.
+	if got := loopResults(t, reg, "device_reports", core.ResultInvalid); got != 4 {
+		t.Fatalf("device_reports results{invalid} = %v, want 4", got)
+	}
+	for _, other := range []string{core.ResultOK, core.ResultRetry, core.ResultFailed} {
+		if got := loopResults(t, reg, "device_reports", other); got != 0 {
+			t.Fatalf("device_reports results{%s} = %v, want 0", other, got)
+		}
 	}
 }

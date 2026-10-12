@@ -791,7 +791,7 @@ func (cproc *CommandDeliveryProcessor) handleResponse(ctx context.Context, msg m
 
 	// Derive the per-message tenant from the subject (fail-closed). A response
 	// we cannot route to a tenant is poison: ack it so it does not redeliver.
-	tenantCtx, _, ok := messaging.TenantContextFromSubject(ctx, msg.Subject)
+	tenantCtx, tenant, ok := messaging.TenantContextFromSubject(ctx, msg.Subject)
 	if !ok {
 		log.Warn().Str("correlation", msg.CorrelationID()).Msg(fmt.Sprintf("Skipping command response with no parseable tenant in subject %q", msg.Subject))
 		_ = msg.Ack()
@@ -955,7 +955,16 @@ func (cproc *CommandDeliveryProcessor) handleResponse(ctx context.Context, msg m
 		// whole budget and then letter an answer to a command that no longer exists, for a
 		// tenant being erased. Dropped at once — the dead-letter writeback makes the same
 		// call for the same reason.
-		if errors.Is(err, rdb.ErrTenantPurged) {
+		//
+		// 🔴 THE FENCE IS NOT THE ONLY WAY A DELETED TENANT'S ANSWER FAILS HERE, AND NOT THE
+		// LIKELY ONE. The purge sweeps this area's commands right after it plants the fence,
+		// so a response arriving after that sweep never reaches a write: MarkResponse finds
+		// no command and answers not-found, which the arm below would retry to the cap and
+		// letter as exhausted. The lifecycle gate the delivery sweeps already consult is what
+		// names that case. It can only add drops for a tenant already through the delete
+		// door, and its fail-open (an unanswerable lookup reads as live) only keeps the old
+		// behaviour, so it is consulted on the failure path alone.
+		if errors.Is(err, rdb.ErrTenantPurged) || cproc.tenantDeleted(tenant) {
 			log.Info().Str("command", response.CommandToken).Str("correlation", msg.CorrelationID()).
 				Msg("Dropping a command response for a deleted tenant; its commands have been erased.")
 			_ = msg.Ack()

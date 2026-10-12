@@ -12,9 +12,11 @@ import (
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/deadletter"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/ota"
 	"github.com/devicechain-io/dc-microservice/rdb"
+	"github.com/devicechain-io/dc-microservice/streams"
 	"github.com/devicechain-io/dc-update-management/model"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
@@ -252,6 +254,47 @@ func TestAReportForADeletedTenantIsDroppedOnItsFirstDelivery(t *testing.T) {
 		[]byte(`{"v":1,"kind":"download.request","assignmentId":"asg-1"}`), 1, nil, ack))
 	require.Equal(t, 1, ack.acks, "a download request the fence refuses was left for redelivery")
 	require.EqualValues(t, 2, handled(t, reg, core.ResultInvalid))
+}
+
+// letterRecorder is a dead-letter writer that keeps what it was handed.
+type letterRecorder struct{ msgs []messaging.Message }
+
+func (l *letterRecorder) WriteMessages(_ context.Context, msgs ...messaging.Message) error {
+	l.msgs = append(l.msgs, msgs...)
+	return nil
+}
+
+// And at the CAP — the delivery the letter would be written on — a deleted tenant's report is
+// still dropped and never lettered, through a consumer that DOES letter: the same report failing
+// for any other reason at the cap writes one, which is what keeps the first half from passing on
+// a sink that could not letter at all.
+func TestAReportForADeletedTenantAtTheCapIsNotLettered(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		err     error
+		letters int
+		result  string
+	}{
+		{"deleted tenant", fmt.Errorf("applying: %w", rdb.ErrTenantPurged), 0, core.ResultInvalid},
+		{"store failure", errors.New("database down"), 1, core.ResultFailed},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			reg := prometheus.NewRegistry()
+			ms := &core.Microservice{InstanceId: "inst", FunctionalArea: "update-management"}
+			ms.UseMetricsRegistry(reg)
+			dead := &letterRecorder{}
+			c := NewReportsConsumer(ms, nil, core.NewNoOpLifecycleCallbacks(), &fakeApi{applyErr: tc.err},
+				deadletter.NewProducer(ms).NewSink(dead), NewUpdateReportsMetrics(ms))
+			ack := &ackRecorder{}
+			m := messaging.NewConsumedMessage(reportsSubject, []byte(progressBody("RECEIVED")), messaging.MaxDeliver, nil, ack).
+				WithOrigin(messaging.Origin{Suffix: streams.DeviceReports, Stream: "dc_device-reports",
+					Consumer: "dc_update-management_device-reports", Seq: 7})
+			c.handle(context.Background(), m)
+			require.Equal(t, 1, ack.acks)
+			require.Len(t, dead.msgs, tc.letters)
+			require.EqualValues(t, 1, handled(t, reg, tc.result))
+		})
+	}
 }
 
 // A report that could not be applied (the store is down) must be left for redelivery, not

@@ -17,6 +17,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-microservice/streams"
+	"github.com/prometheus/client_golang/prometheus"
 )
 
 // fakeAlarmApi implements DeviceManagementApi by embedding a (nil) MockApi to satisfy the whole
@@ -318,7 +319,26 @@ func TestARaiseAlarmEdgeThatCannotBeAppliedIsDeadLettered(t *testing.T) {
 func TestARaiseAlarmEdgeForADeletedTenantIsDroppedNotLettered(t *testing.T) {
 	api := &fakeAlarmApi{devices: []*model.Device{{}}, edgeErr: fmt.Errorf("applying the edge: %w", rdb.ErrTenantPurged)}
 	dead := &deadRecorder{}
-	rc := consumerWithDeadLetters(t, api, dead)
+	reg := prometheus.NewRegistry()
+	ms := &core.Microservice{InstanceId: "test", FunctionalArea: "device-management"}
+	ms.UseMetricsRegistry(reg)
+	rc := NewRaiseAlarmConsumer(ms, nil, core.NewNoOpLifecycleCallbacks(), api,
+		deadletter.NewProducer(ms).NewSink(dead), NewRaiseAlarmMetrics(ms))
+	if err := rc.Initialize(context.Background()); err != nil {
+		t.Fatalf("initializing the consumer: %v", err)
+	}
+	// Read back from the registry, so the assertion is on what the service EXPORTS: a drop for a
+	// deleted tenant is counted invalid, never as a success or as a retry still pending.
+	defer func() {
+		if got := loopResults(t, reg, "raise_alarm", core.ResultInvalid); got != 2 {
+			t.Errorf("raise_alarm results{invalid} = %v, want 2", got)
+		}
+		for _, other := range []string{core.ResultOK, core.ResultRetry, core.ResultFailed} {
+			if got := loopResults(t, reg, "raise_alarm", other); got != 0 {
+				t.Errorf("raise_alarm results{%s} = %v, want 0", other, got)
+			}
+		}
+	}()
 
 	first := &fakeAck{}
 	rc.handle(context.Background(), raiseMsg(t, "acme", validReq(), 1, first))
