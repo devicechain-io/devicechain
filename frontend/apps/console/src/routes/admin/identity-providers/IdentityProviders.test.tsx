@@ -529,7 +529,21 @@ describe('signing out at the provider', () => {
     renderDetail();
     await screen.findByText(FP_OLD);
     openTab(/settings/i);
-    expect(await screen.findByText(/names no sign-out endpoint/)).toBeTruthy();
+    expect(await screen.findByText(/no approved sign-out endpoint/)).toBeTruthy();
+  });
+
+  it('says the same when the snapshot names one but has not been approved', async () => {
+    api.getIdpConnection.mockResolvedValue(
+      connection({
+        providerSignOut: true,
+        discovery: discovery({ approved: false, endSessionEndpoint: 'https://login.example.com/logout' }),
+      }),
+    );
+    renderDetail();
+    await screen.findByText(FP_OLD);
+    openTab(/settings/i);
+    const note = await screen.findByText(/no approved sign-out endpoint/);
+    expect(note.textContent).toMatch(/has not been approved/);
   });
 
   it('says nothing more once the approved snapshot names one', async () => {
@@ -544,7 +558,7 @@ describe('signing out at the provider', () => {
     openTab(/settings/i);
     const box = await screen.findByRole('checkbox', { name: 'Also sign people out at the provider' });
     expect(box.getAttribute('aria-checked')).toBe('true');
-    expect(screen.queryByText(/names no sign-out endpoint/)).toBeNull();
+    expect(screen.queryByText(/no approved sign-out endpoint/)).toBeNull();
   });
 });
 

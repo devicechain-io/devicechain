@@ -904,6 +904,7 @@ const TENANT_DELETIONS = graphql(`
       results {
         token
         epoch
+        retainedAuditTenant
         completedAt
         rowsErased
         awaiting
