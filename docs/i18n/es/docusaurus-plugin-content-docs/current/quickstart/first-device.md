@@ -34,7 +34,7 @@ segundos y no diez minutos.
 - Kubernetes **1.29 o posterior**, en cualquier caso. Las versiones más antiguas se rechazan, porque
   los charts de la base de datos las rechazan.
 
-`dcctl preflight local` ejecuta exactamente estas comprobaciones sin arrancar nada. La
+`dcctl preflight local` ejecuta las mismas comprobaciones, y las de tu motor de Docker, los límites del kernel, el disco y los puertos, sin arrancar nada. La
 [guía de arranque inicial](../deployment/bootstrap.md#prerequisites) tiene el detalle.
 
 Los comandos de abajo suponen que la instancia es alcanzable en `localhost` por HTTP sin cifrar, que
