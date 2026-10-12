@@ -861,6 +861,9 @@ func (m *Manager) Refresh(ctx context.Context, refreshToken string) (*TokenPair,
 	if mem == nil && !su {
 		return nil, m.refuseRefresh(claims.ID, rev, errNotAMember)
 	}
+	if err := m.admitRefreshTenant(ctx, claims); err != nil {
+		return nil, m.refuseRefresh(claims.ID, rev, err)
+	}
 	roles, authorities, err := m.resolveTenantGrant(ctx, claims.SessionID, id, claims.Tenant, mem, su)
 	if err != nil {
 		return nil, m.refuseRefresh(claims.ID, rev, err)
@@ -903,6 +906,60 @@ func (m *Manager) refuseRefresh(jti string, rev uint64, cause error) error {
 	}
 	log.Error().Err(cause).Msg("Refresh could not re-check the grant; the token is left unconsumed.")
 	return ErrRefreshUnavailable
+}
+
+// admitRefreshTenant refuses a refresh token issued before the tenant it names was created.
+//
+// A tenant token is released when a deletion completes, and a new tenant may then be
+// created with it. A refresh token names its tenant by token alone and lives for days, so
+// without this a token issued to the earlier tenant would be redeemed against the later one
+// for anyone who is a member of both, or a superuser. The tenant row's creation time is
+// what tells the two apart: every token issued for the later tenant was issued after its
+// row was created.
+//
+// It reads the row for every caller, superuser included — resolveTenantGrant does not read
+// it for a superuser at all. A tenant that no longer exists is a denial for the same
+// reason: the token belongs to a tenant that is gone.
+//
+// A missing issued-at is a denial, not a pass: every token this service issues carries one,
+// so a token without one is not a token this check can place.
+func (m *Manager) admitRefreshTenant(ctx context.Context, claims *auth.Claims) error {
+	if claims.IssuedAt == nil {
+		return errTenantAccessDenied
+	}
+	t, err := m.iam.TenantByToken(ctx, claims.Tenant)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return errTenantAccessDenied
+		}
+		return err
+	}
+	if issuedBeforeTenant(claims.IssuedAt.Time, t.CreatedAt) {
+		return errTenantAccessDenied
+	}
+	return nil
+}
+
+// issuedBeforeTenant reports whether a token issued at iat predates a tenant row created at
+// created.
+//
+// 🔴 THE COMPARISON IS AT THE TOKEN'S PRECISION, WHOLE SECONDS, and the rounding is chosen
+// rather than inherited. A JWT carries its issued-at truncated to the second, so a token
+// issued a moment AFTER the row was created, in the same second, carries an issued-at
+// earlier than created. Comparing at full precision would refuse it — and a sign-in in the
+// second a tenant is created is ordinary for automation that creates a tenant and then
+// enters it. So created is truncated to its second as well, and a token is refused only
+// when it was issued in an EARLIER second than the row.
+//
+// What that admits is a token issued earlier in the creation second, before the row
+// existed. For the earlier tenant at the same token that needs a token issued for it in
+// the second the new tenant was created, after its deletion completed: its members lost
+// their grants before the deletion began, so only a superuser could hold one, and a
+// superuser is admitted to the new tenant anyway. Both timestamps come from this service —
+// the issuer's clock, and the creation time this service writes — so the skew that remains
+// is between replicas of one service.
+func issuedBeforeTenant(iat, created time.Time) bool {
+	return iat.Before(created.Truncate(time.Second))
 }
 
 // isRefreshDenial reports whether a refresh re-check failed on POLICY rather than on a store

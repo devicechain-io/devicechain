@@ -214,7 +214,9 @@ func KvPurgeExemptions() []string {
 			"token belongs to the PERSON — the same identity the relational sweep deliberately " +
 			"keeps. It is also inert for a deleted tenant: the refresh flow re-resolves membership " +
 			"at exchange time, and that tenant's membership rows are gone, so the token buys " +
-			"nothing. Deleting by the tenant's user emails would log those humans out of their " +
+			"nothing; and it refuses a token issued before the tenant row it names was created, so " +
+			"a token outliving the purge buys nothing in a later tenant created with the same token " +
+			"either. Deleting by the tenant's user emails would log those humans out of their " +
 			"OTHER tenants, which is the same mistake as deleting the identity",
 		kv.BucketOAuthCodes + ": single-use authorization codes with a 60-second lifetime. A code " +
 			"issued before the cut expires long before a purge can complete, because the settle " +
