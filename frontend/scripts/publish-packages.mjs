@@ -271,7 +271,8 @@ async function githubIdToken() {
 // null when npm would let this job publish `name`, otherwise what npm said.
 async function trustedPublisherRefusal(name) {
   const idToken = await githubIdToken();
-  const escaped = name.replace('/', '%2f');
+  // A scoped name has exactly one '/', so this matches npm's own escapedName.
+  const escaped = name.replaceAll('/', '%2f');
   const response = await ask(
     `npm's OIDC exchange for ${name}`,
     new URL(`-/npm/v1/oidc/token/exchange/package/${escaped}`, REGISTRY),
