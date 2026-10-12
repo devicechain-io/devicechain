@@ -146,7 +146,7 @@ func (m *Manager) BeginSsoLink(ctx context.Context, identityToken, connectionTok
 	id, err := m.sessionIdentity(ctx, subject.Email, subject.SessionEpoch, subject.SessionID)
 	if err != nil {
 		if errors.Is(err, errSessionEnded) {
-			return nil, ErrInvalidToken
+			return nil, sessionRefusal(err)
 		}
 		return nil, err
 	}

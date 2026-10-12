@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 
 	"github.com/devicechain-io/dc-microservice/conflict"
 	"github.com/devicechain-io/dc-microservice/rdb"
@@ -51,9 +52,12 @@ type CreateIdentityInput struct {
 // the password. The email is normalized; the unique constraint rejects a
 // duplicate. Returns the freshly-loaded identity.
 func (s *Service) CreateIdentity(ctx context.Context, in CreateIdentityInput) (*iam.Identity, error) {
-	email := iam.NormalizeEmail(in.Email)
-	if email == "" {
+	if strings.TrimSpace(in.Email) == "" {
 		return nil, fmt.Errorf("email is required")
+	}
+	email, err := iam.CanonicalEmail(in.Email)
+	if err != nil {
+		return nil, err
 	}
 	if in.Password == "" {
 		return nil, fmt.Errorf("password is required")
@@ -127,7 +131,8 @@ func (s *Service) SetPassword(ctx context.Context, email, password string) (*iam
 // DeleteIdentity removes an identity and its dependent rows. Idempotent: a missing
 // identity returns (false, nil).
 func (s *Service) DeleteIdentity(ctx context.Context, email string) (bool, error) {
-	id, err := s.iam.IdentityByEmail(ctx, iam.NormalizeEmail(email))
+	// IdentityForAdmin, so an identity whose stored email is not canonical can be removed.
+	id, err := s.iam.IdentityForAdmin(ctx, email)
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return false, nil
 	}
@@ -234,10 +239,11 @@ func (s *Service) RemoveMembership(ctx context.Context, email, tenant string) (*
 	return s.loadIdentity(ctx, id.Email)
 }
 
-// loadIdentity resolves an identity by (normalized) email, mapping not-found to
-// ErrIdentityNotFound.
+// loadIdentity resolves the identity an administrator names (iam.Store.IdentityForAdmin:
+// canonical form first, then the stored spelling, so an identity whose stored email is not
+// canonical can still be managed), mapping not-found to ErrIdentityNotFound.
 func (s *Service) loadIdentity(ctx context.Context, email string) (*iam.Identity, error) {
-	id, err := s.iam.IdentityByEmail(ctx, iam.NormalizeEmail(email))
+	id, err := s.iam.IdentityForAdmin(ctx, email)
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, ErrIdentityNotFound
 	}

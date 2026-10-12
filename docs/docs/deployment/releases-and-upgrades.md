@@ -3770,6 +3770,13 @@ are new.
 | `SsoUnverifiedIdentityRefused` | warning | A sign-in was refused although the provider vouched for it, with the outcome in the `outcome` label: `refused_unverified_email`, `refused_unverified_domain`, `refused_required_claim` or `refused_system_role_identity`. Nobody was signed in. | Usually a misconfigured connection or someone probing one. Look in the audit journal for the address the provider asserted, and at the provider's own sign-in log. |
 | `SsoStateStoreFull` | critical | The store that holds begun sign-ins is full, so user-management refuses to begin any single sign-on through any provider until entries expire, ten minutes later. Password sign-in is unaffected. | Someone is almost certainly calling the public sign-in start in a loop: find the traffic in the ingress logs and block it upstream. If the volume is legitimate, raise `instance.config.infrastructure.nats.kvStateMaxBytes`. |
 
+#### An email's domain now has one spelling, and a stored address with a non-ASCII domain no longer matches {#next-upgrade-email-idna}
+
+An email address is now stored, looked up and compared in one canonical form: the local part trimmed and lower-cased as before, and the domain converted to lower-case ASCII (the `xn--` form for an internationalised name) with no trailing dot. `user@bücher.example` and `user@xn--bcher-kva.example` are therefore the same identity at password sign-in, at single sign-on and in a link request, and the domain a connection claims is matched in the same form. An address that is not exactly `local@domain`, or whose domain is not a valid hostname, is refused.
+
+- **An address with an ASCII domain is unchanged.** Nothing needs doing for it.
+- **An identity stored with a non-ASCII domain (`user@bücher.example`) keeps its old form, and is refused until an administrator recreates it.** It cannot sign in with a password or through single sign-on, and a session it already holds ends at its next exchange; selecting a tenant or refreshing then reports the code `IDENTITY_EMAIL_NOT_CANONICAL`. Administrator actions still find it by the address as it is stored, so you can disable it, end its sessions, unlink it and delete it. To restore access, unlink and delete the old identity, then create it again (under either spelling of the domain: it is stored in the `xn--` form) and restore its memberships and links. Doing this before upgrading avoids the interruption. The same applies to an identity whose stored address is not a valid `local@domain`.
+
 ### v0.19.0 — sized from measurement at 6,000 events a second; a full stream refuses {#v0190-upgrade}
 
 `v0.19.0` is an in-place upgrade from `v0.18.0`: `dcctl install` for the cluster, then `dcctl

@@ -6,11 +6,11 @@ package identity
 import (
 	"errors"
 	"fmt"
-	"net"
 	"strings"
 
-	"golang.org/x/net/idna"
 	"golang.org/x/net/publicsuffix"
+
+	"github.com/devicechain-io/dc-user-management/iam"
 )
 
 // A superuser asserts that an identity provider speaks for an email domain: every sign-in
@@ -28,22 +28,11 @@ import (
 
 var (
 	// ErrDomainInvalid refuses something that is not a well-formed domain name.
-	ErrDomainInvalid = errors.New("not a valid domain name")
+	ErrDomainInvalid = iam.ErrDomainInvalid
 	// ErrDomainPublicSuffix refuses a domain that is itself a public suffix.
 	ErrDomainPublicSuffix = errors.New("a public suffix cannot be asserted for an identity provider")
 	// ErrDomainFreemail refuses a domain run by a mailbox provider that issues addresses to anyone.
 	ErrDomainFreemail = errors.New("a freemail domain cannot be asserted for an identity provider")
-)
-
-// domainProfile is the IDNA profile domains are normalised under: UTS-46 mapping (which
-// lowercases and folds), STD3 rules, and the DNS length limits. Non-transitional, so "ß"
-// stays "ß" and encodes to its own punycode rather than collapsing into "ss".
-var domainProfile = idna.New(
-	idna.MapForLookup(),
-	idna.StrictDomainName(true),
-	idna.BidiRule(),
-	idna.VerifyDNSLength(true),
-	idna.Transitional(false),
 )
 
 // NormalizeDomain returns the canonical stored form of a domain: IDNA-mapped, lowercase
@@ -51,37 +40,12 @@ var domainProfile = idna.New(
 // name the same domain return the same string; anything that is not a domain name returns
 // ErrDomainInvalid.
 //
+// It is iam.NormalizeDomain -- the SAME definition an identity's email domain is normalised
+// by (iam.CanonicalEmail), so a verified-domain assertion and an address can never disagree
+// about what a domain is called.
+//
 // It deliberately does NOT judge whether the domain may be asserted — see ValidateDomain.
-func NormalizeDomain(raw string) (string, error) {
-	d := strings.TrimSpace(raw)
-	d = strings.TrimSuffix(d, ".")
-	if d == "" {
-		return "", fmt.Errorf("%w: empty", ErrDomainInvalid)
-	}
-	// ONE trailing dot is the DNS root and is dropped above. A second is an empty label,
-	// which the IDNA profile tolerates as a trailing root dot — so "example.com.." would
-	// come back as "example.com.", a second spelling of a stored domain.
-	if strings.HasSuffix(d, ".") {
-		return "", fmt.Errorf("%w: %q has an empty label", ErrDomainInvalid, raw)
-	}
-	// An address or a URL pasted where a domain belongs is a mistake worth naming rather than
-	// letting the IDNA profile describe in its own words.
-	if strings.ContainsAny(d, "@/:\\ ?#") {
-		return "", fmt.Errorf("%w: %q must be a bare domain, not an address or URL", ErrDomainInvalid, raw)
-	}
-	ascii, err := domainProfile.ToASCII(d)
-	if err != nil {
-		return "", fmt.Errorf("%w: %q: %v", ErrDomainInvalid, raw, err)
-	}
-	ascii = strings.ToLower(ascii)
-	if !strings.Contains(ascii, ".") {
-		return "", fmt.Errorf("%w: %q has a single label", ErrDomainInvalid, raw)
-	}
-	if net.ParseIP(ascii) != nil {
-		return "", fmt.Errorf("%w: %q is an IP address", ErrDomainInvalid, raw)
-	}
-	return ascii, nil
-}
+func NormalizeDomain(raw string) (string, error) { return iam.NormalizeDomain(raw) }
 
 // ValidateDomain normalises a domain and refuses it unless it is one an identity provider
 // may be asserted for: not a public suffix and not a freemail domain (nor a subdomain of
