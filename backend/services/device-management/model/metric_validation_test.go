@@ -79,16 +79,15 @@ func TestValidateMetricValue(t *testing.T) {
 // ValidateMeasurement is lenient: an undeclared key passes; a declared key is
 // validated against its definition.
 func TestValidateMeasurementLenient(t *testing.T) {
-	temp := (&MetricDefinition{MetricKey: "temp", DataType: "DOUBLE",
-		MaxValue: sql.NullFloat64{Float64: 100, Valid: true}}).Resolved()
-	defs := map[string]*ResolvedMetric{"temp": &temp}
-	if err := ValidateMeasurement(defs, "humidity", "not-a-number"); err != nil {
+	defs := NewProfileResolution(ProfileScope{}, []*MetricDefinition{{MetricKey: "temp", DataType: "DOUBLE",
+		MaxValue: sql.NullFloat64{Float64: 100, Valid: true}}})
+	if err := defs.ValidateMeasurement("humidity", "not-a-number"); err != nil {
 		t.Fatalf("undeclared key must pass through unvalidated, got: %v", err)
 	}
-	if err := ValidateMeasurement(defs, "temp", "42"); err != nil {
+	if err := defs.ValidateMeasurement("temp", "42"); err != nil {
 		t.Fatalf("declared conforming value should pass, got: %v", err)
 	}
-	if err := ValidateMeasurement(defs, "temp", "150"); err == nil {
+	if err := defs.ValidateMeasurement("temp", "150"); err == nil {
 		t.Fatalf("declared out-of-bounds value should be rejected")
 	}
 }

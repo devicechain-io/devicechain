@@ -429,7 +429,7 @@ type DeviceManagementApi interface {
 	// ProfileResolutionByDeviceType resolves a device type's active published profile
 	// version as one value: its metric definitions and its rule-scoping identity
 	// (ADR-016/045/051). Served through the cache on the resolve path.
-	ProfileResolutionByDeviceType(ctx context.Context, deviceTypeId uint) (*ProfileResolution, error)
+	ProfileResolutionByDeviceType(ctx context.Context, deviceTypeId uint) (ProfileResolution, error)
 
 	// LocationDeclarationByDeviceType resolves whether a device type's active PUBLISHED
 	// profile version declares that its devices report their own position (ADR-078),

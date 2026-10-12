@@ -199,7 +199,6 @@ func TestCacheClonesShareNoMemory(t *testing.T) {
 	deviceSkip := map[string]bool{"DeviceType.Profile": true, "DeviceType.Devices": true}
 
 	checkClone(t, "Device", cloneCachedDevice, deviceSkip)
-	checkClone(t, "ProfileResolution", cloneProfileResolution, nil)
 	checkClone(t, "EntityRelationshipSearchResults", cloneRelationshipResults, nil)
 	checkClone(t, "Memberships", cloneMemberships, nil)
 	checkClone(t, "bool", cloneBool, nil)
@@ -245,32 +244,5 @@ func TestCacheClonesPreserveNilAndEmpty(t *testing.T) {
 	empty := []GroupMembership{}
 	if got := cloneMemberships(&empty); *got == nil || len(*got) != 0 {
 		t.Error("an empty membership list became nil")
-	}
-	res := ProfileResolution{Metrics: []ResolvedMetric{{MetricKey: "a"}}}
-	got := cloneProfileResolution(&res)
-	if got.Metrics[0].Enum != nil || got.Metrics[0].Unit != nil {
-		t.Error("an absent enum or unit became present")
-	}
-	if cloneProfileResolution(&ProfileResolution{}).Metrics != nil {
-		t.Error("nil metrics became non-nil")
-	}
-}
-
-// TestACachedReadCannotBeChangedByItsCaller reads a resolution through the cached API,
-// writes to everything reachable from the result, and reads again: the cache must still
-// hold what the database gave it. A clone that copied only the struct would fail here.
-func TestACachedReadCannotBeChangedByItsCaller(t *testing.T) {
-	r := newProfileResolutionRig(t)
-	for i := 0; i < 6; i++ { // read 0 decodes and attaches; 1.. are attached hits, each read back by the next
-		res := r.read(t)
-		if got := unitOf(t, res); got != "Cel" {
-			t.Fatalf("read %d: unit = %q, want Cel (an earlier caller's write leaked into the cache)", i, got)
-		}
-		m := &res.Metrics[0]
-		*m.Unit = "MUTATED"
-		m.MetricKey = "MUTATED"
-		m.Enum = append(m.Enum, "MUTATED")
-		res.Scope.ProfileVersionToken = "MUTATED"
-		res.Metrics = append(res.Metrics, ResolvedMetric{MetricKey: "MUTATED"})
 	}
 }

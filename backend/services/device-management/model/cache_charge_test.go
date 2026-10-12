@@ -21,13 +21,23 @@ import (
 // n copies are decoded and kept live, and the heap is read before and after.
 func heapPerDecoded[T any](t *testing.T, raw []byte, n int) float64 {
 	t.Helper()
+	return heapPer(t, raw, n, func(raw []byte) (*T, error) {
+		v := new(T)
+		return v, json.Unmarshal(raw, v)
+	})
+}
+
+// heapPer is heapPerDecoded for a value the cache builds with decode rather than
+// json.Unmarshal: what it holds is what decode built, an index included.
+func heapPer[T any](t *testing.T, raw []byte, n int, decode func([]byte) (*T, error)) float64 {
+	t.Helper()
 	var sink = make([]*T, 0, n)
 	runtime.GC()
 	var before, after runtime.MemStats
 	runtime.ReadMemStats(&before)
 	for i := 0; i < n; i++ {
-		v := new(T)
-		if err := json.Unmarshal(raw, v); err != nil {
+		v, err := decode(raw)
+		if err != nil {
 			t.Fatal(err)
 		}
 		sink = append(sink, v)
@@ -42,25 +52,35 @@ func heapPerDecoded[T any](t *testing.T, raw []byte, n int) float64 {
 	return float64(grew) / float64(n)
 }
 
-func measuredMetrics(n int, rich bool) ProfileResolution {
-	res := ProfileResolution{Scope: ProfileScope{DeviceTypeToken: "thermostat", ProfileVersionToken: "thermostat-profile@12", FenceSetVersion: 3}}
+// measuredMetrics is a resolution declaring n metrics, keyed metric_<i> or, with key set,
+// all key (the worst ratio of heap to encoded length is keys of one character).
+func measuredMetrics(n int, rich bool, key string) ProfileResolution {
+	scope := ProfileScope{DeviceTypeToken: "thermostat", ProfileVersionToken: "thermostat-profile@12", FenceSetVersion: 3}
+	var defs []*MetricDefinition
 	for i := 0; i < n; i++ {
-		m := ResolvedMetric{ID: uint(i + 1), MetricKey: fmt.Sprintf("metric_%d", i), DataType: "DOUBLE"}
-		if rich {
-			unit, lo, hi := "Cel", -40.0, 125.0
-			m.Unit, m.MinValue, m.MaxValue = &unit, &lo, &hi
-			m.Enum = []string{"a", "b", "c"}
+		d := &MetricDefinition{MetricKey: fmt.Sprintf("metric_%d", i), DataType: "DOUBLE"}
+		d.ID = uint(i + 1)
+		if key != "" {
+			d.MetricKey, d.ID = key, uint(i%10)
 		}
-		res.Metrics = append(res.Metrics, m)
+		if rich {
+			enum := datatypes.JSON(`["a","b","c"]`)
+			d.Unit = sql.NullString{String: "Cel", Valid: true}
+			d.MinValue = sql.NullFloat64{Float64: -40, Valid: true}
+			d.MaxValue = sql.NullFloat64{Float64: 125, Valid: true}
+			d.Enum = &enum
+		}
+		defs = append(defs, d)
 	}
-	return res
+	return NewProfileResolution(scope, defs)
 }
 
 // TestDecodedChargeCoversTheHeap measures what decoded values of representative sizes hold
 // on the heap and requires the charge the caches make for them (see decodedCharge) to be at least that. The charge is what the byte bound counts for the
 // decoded copy; if it fell below the heap the bound would promise less memory than the
 // cache uses. Measured on Go 1.26, windows/amd64, the heap of a decoded value was up to
-// 3.4 times its encoded length for a resolution and about 1.3 times or less for the rest.
+// 3.8 times its encoded length for a resolution (its key index included) and about 1.3
+// times or less for the rest.
 func TestDecodedChargeCoversTheHeap(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0).UTC()
 	meta := datatypes.JSON(`{"site":"north-yard","floor":3,"owner":"facilities"}`)
@@ -106,21 +126,20 @@ func TestDecodedChargeCoversTheHeap(t *testing.T) {
 	}
 	marshal := func(v any) []byte { raw, _ := json.Marshal(v); return raw }
 
-	r10, r100, r20 := measuredMetrics(10, false), measuredMetrics(100, false), measuredMetrics(20, true)
-	r1 := measuredMetrics(1, false)
+	r10, r100, r20 := measuredMetrics(10, false, ""), measuredMetrics(100, false, ""), measuredMetrics(20, true, "")
+	r1 := measuredMetrics(1, false, "")
+	// What the cache keeps for a resolution is what decodeProfileResolution builds: the
+	// metrics and their key index.
+	resolution := func(raw []byte, n int) float64 { return heapPer(t, raw, n, decodeProfileResolution) }
 	current = deviceCharge
 	add("device", heapPerDecoded[Device](t, marshal(device), 2000), device)
 	current = resolutionCharge
-	add("resolution 1 metric", heapPerDecoded[ProfileResolution](t, marshal(r1), 2000), r1)
-	add("resolution 10 metrics", heapPerDecoded[ProfileResolution](t, marshal(r10), 2000), r10)
-	add("resolution 20 rich metrics", heapPerDecoded[ProfileResolution](t, marshal(r20), 2000), r20)
-	short := measuredMetrics(100, false) // the worst ratio: keys of one character
-	for i := range short.Metrics {
-		short.Metrics[i].MetricKey = "k"
-		short.Metrics[i].ID = uint(i % 10)
-	}
-	add("resolution 100 short-key metrics", heapPerDecoded[ProfileResolution](t, marshal(short), 500), short)
-	add("resolution 100 metrics", heapPerDecoded[ProfileResolution](t, marshal(r100), 500), r100)
+	add("resolution 1 metric", resolution(marshal(r1), 2000), r1)
+	add("resolution 10 metrics", resolution(marshal(r10), 2000), r10)
+	add("resolution 20 rich metrics", resolution(marshal(r20), 2000), r20)
+	short := measuredMetrics(100, false, "k")
+	add("resolution 100 short-key metrics", resolution(marshal(short), 500), short)
+	add("resolution 100 metrics", resolution(marshal(r100), 500), r100)
 	current = relationshipsCharge
 	add("relationships 5", heapPerDecoded[EntityRelationshipSearchResults](t, marshal(rels), 2000), rels)
 	current = membershipsCharge

@@ -304,7 +304,7 @@ func (instantApi) DevicesByToken(_ context.Context, tokens []string) ([]*dmodel.
 func (instantApi) AnyScopedGroups(context.Context) (bool, error) { return false, nil }
 
 // ProfileResolutionByDeviceType answers an unscoped profile that declares no metrics.
-func (instantApi) ProfileResolutionByDeviceType(context.Context, uint) (*dmodel.ProfileResolution, error) {
+func (instantApi) ProfileResolutionByDeviceType(context.Context, uint) (dmodel.ProfileResolution, error) {
 	return dmodel.NewProfileResolution(dmodel.ProfileScope{}, nil), nil
 }
 

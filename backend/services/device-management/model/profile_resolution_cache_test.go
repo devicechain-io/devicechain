@@ -53,7 +53,7 @@ func newProfileResolutionRig(t *testing.T) *profileResolutionRig {
 	return &profileResolutionRig{api: api, capi: capi, kv: kv, ctx: ctx, typeId: dt.ID}
 }
 
-func (r *profileResolutionRig) read(t *testing.T) *ProfileResolution {
+func (r *profileResolutionRig) read(t *testing.T) ProfileResolution {
 	t.Helper()
 	res, err := r.capi.ProfileResolutionByDeviceType(r.ctx, r.typeId)
 	if err != nil {
@@ -62,16 +62,17 @@ func (r *profileResolutionRig) read(t *testing.T) *ProfileResolution {
 	return res
 }
 
-func unitOf(t *testing.T, res *ProfileResolution) string {
+func unitOf(t *testing.T, res ProfileResolution) string {
 	t.Helper()
-	m, ok := res.MetricsByKey()["temp"]
+	m, ok := res.Metric("temp")
 	if !ok {
 		return ""
 	}
-	if m.Unit == nil {
+	unit, declared := m.Unit()
+	if !declared {
 		return "<none>"
 	}
-	return *m.Unit
+	return unit
 }
 
 // editUnitAndPublish changes the draft unit of "temp" and publishes it, through the
@@ -99,17 +100,17 @@ func TestTheProfileResolutionEntryIsDroppedByEveryTrigger(t *testing.T) {
 	cases := []struct {
 		name    string
 		trigger func(t *testing.T, r *profileResolutionRig)
-		check   func(t *testing.T, before, after *ProfileResolution)
+		check   func(t *testing.T, before, after ProfileResolution)
 	}{
 		{
 			name: "publish",
 			trigger: func(t *testing.T, r *profileResolutionRig) {
 				r.editUnitAndPublish(t, "K")
 			},
-			check: func(t *testing.T, before, after *ProfileResolution) {
-				if after.Scope.ProfileVersionToken != "p@2" || unitOf(t, after) != "K" {
+			check: func(t *testing.T, before, after ProfileResolution) {
+				if after.Scope().ProfileVersionToken != "p@2" || unitOf(t, after) != "K" {
 					t.Errorf("after publish: %q with unit %q, want p@2 with K",
-						after.Scope.ProfileVersionToken, unitOf(t, after))
+						after.Scope().ProfileVersionToken, unitOf(t, after))
 				}
 			},
 		},
@@ -124,10 +125,10 @@ func TestTheProfileResolutionEntryIsDroppedByEveryTrigger(t *testing.T) {
 					t.Fatalf("rollback: %v", err)
 				}
 			},
-			check: func(t *testing.T, before, after *ProfileResolution) {
-				if after.Scope.ProfileVersionToken != "p@1" || unitOf(t, after) != "Cel" {
+			check: func(t *testing.T, before, after ProfileResolution) {
+				if after.Scope().ProfileVersionToken != "p@1" || unitOf(t, after) != "Cel" {
 					t.Errorf("after rollback: %q with unit %q, want p@1 with Cel",
-						after.Scope.ProfileVersionToken, unitOf(t, after))
+						after.Scope().ProfileVersionToken, unitOf(t, after))
 				}
 			},
 		},
@@ -138,10 +139,10 @@ func TestTheProfileResolutionEntryIsDroppedByEveryTrigger(t *testing.T) {
 					t.Fatalf("detach profile: %v", err)
 				}
 			},
-			check: func(t *testing.T, before, after *ProfileResolution) {
-				if after.Scope.ProfileVersionToken != "" || len(after.Metrics) != 0 {
+			check: func(t *testing.T, before, after ProfileResolution) {
+				if after.Scope().ProfileVersionToken != "" || after.MetricCount() != 0 {
 					t.Errorf("after detaching the profile: %q with %d metrics, want none",
-						after.Scope.ProfileVersionToken, len(after.Metrics))
+						after.Scope().ProfileVersionToken, after.MetricCount())
 				}
 			},
 		},
@@ -152,9 +153,9 @@ func TestTheProfileResolutionEntryIsDroppedByEveryTrigger(t *testing.T) {
 					t.Fatalf("create fence: %v", err)
 				}
 			},
-			check: func(t *testing.T, before, after *ProfileResolution) {
-				if after.Scope.FenceSetVersion == before.Scope.FenceSetVersion {
-					t.Errorf("fence-set version still %d after a fence was created", after.Scope.FenceSetVersion)
+			check: func(t *testing.T, before, after ProfileResolution) {
+				if after.Scope().FenceSetVersion == before.Scope().FenceSetVersion {
+					t.Errorf("fence-set version still %d after a fence was created", after.Scope().FenceSetVersion)
 				}
 				if unitOf(t, after) != "Cel" {
 					t.Errorf("the re-read lost the metric definitions: unit %q", unitOf(t, after))
@@ -166,8 +167,8 @@ func TestTheProfileResolutionEntryIsDroppedByEveryTrigger(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			r := newProfileResolutionRig(t)
 			before := r.read(t)
-			if unitOf(t, before) != "Cel" || before.Scope.ProfileVersionToken != "p@1" {
-				t.Fatalf("warm read: %q with unit %q, want p@1 with Cel", before.Scope.ProfileVersionToken, unitOf(t, before))
+			if unitOf(t, before) != "Cel" || before.Scope().ProfileVersionToken != "p@1" {
+				t.Fatalf("warm read: %q with unit %q, want p@1 with Cel", before.Scope().ProfileVersionToken, unitOf(t, before))
 			}
 			if r.kv.Puts != 1 || r.kv.Len() != 1 {
 				t.Fatalf("warm read stored %d entries in %d puts, want 1 in 1", r.kv.Len(), r.kv.Puts)

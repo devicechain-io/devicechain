@@ -37,7 +37,7 @@ func (a barrierApi) DevicesByToken(ctx context.Context, tokens []string) ([]*dmo
 
 // ProfileResolutionByDeviceType is declared here as well as on instantApi so this test does
 // not depend on the benchmark file's double: an unscoped profile declaring no metrics.
-func (barrierApi) ProfileResolutionByDeviceType(context.Context, uint) (*dmodel.ProfileResolution, error) {
+func (barrierApi) ProfileResolutionByDeviceType(context.Context, uint) (dmodel.ProfileResolution, error) {
 	return dmodel.NewProfileResolution(dmodel.ProfileScope{}, nil), nil
 }
 

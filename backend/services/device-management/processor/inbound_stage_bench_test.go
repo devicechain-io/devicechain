@@ -249,7 +249,7 @@ func (a latencyApi) DevicesByToken(ctx context.Context, tokens []string) ([]*dmo
 	return a.instantApi.DevicesByToken(ctx, tokens)
 }
 
-func (a latencyApi) ProfileResolutionByDeviceType(ctx context.Context, id uint) (*dmodel.ProfileResolution, error) {
+func (a latencyApi) ProfileResolutionByDeviceType(ctx context.Context, id uint) (dmodel.ProfileResolution, error) {
 	a.wait()
 	return a.instantApi.ProfileResolutionByDeviceType(ctx, id)
 }

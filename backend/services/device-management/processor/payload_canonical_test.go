@@ -202,7 +202,7 @@ func TestPayloadEncodingIsStableAcrossResolutions(t *testing.T) {
 					nil, nil, nil, nil, nil, nil)
 
 				out, err := rez.ResolveEventPayload(context.Background(),
-					deviceWithToken("TEST-123"), nil, fixture.event())
+					deviceWithToken("TEST-123"), model.ProfileResolution{}, fixture.event())
 				require.NoError(t, err)
 
 				raw, err := json.Marshal(out)
