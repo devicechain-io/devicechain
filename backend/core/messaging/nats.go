@@ -2883,6 +2883,16 @@ func (nmgr *NatsManager) ExecuteInitialize(ctx context.Context) error {
 		func() { nmgr.writeStalled.Store(true) })...)
 	requested := new(atomic.Bool)
 	opts = append(opts, nmgr.connectionEventHandlers(requested)...)
+	// nats.go keeps nothing of a dial that fails before the handshake — LastError is nil
+	// for a name that does not resolve, a refused port or a dial that times out, which
+	// are exactly what an unreachable broker produces — and reports each failed retry
+	// only to this callback. Kept so that a failed initialize can say WHY.
+	lastDialErr := new(atomic.Pointer[error])
+	opts = append(opts, nats.ReconnectErrHandler(func(_ *nats.Conn, err error) {
+		if err != nil {
+			lastDialErr.Store(&err)
+		}
+	}))
 	// When the broker terminates TLS (ADR-025) every client must dial over TLS or
 	// the handshake on the TLS-required port fails; verify the server against the
 	// CA threaded into the instance config.
@@ -2951,8 +2961,14 @@ func (nmgr *NatsManager) ExecuteInitialize(ctx context.Context) error {
 		if ctx.Err() != nil {
 			return err
 		}
-		if last := nc.LastError(); last != nil {
-			err = fmt.Errorf("%w (last connection error: %v)", err, last)
+		// A handshake or authorization failure is on LastError; a dial failure only
+		// ever reached the retry callback.
+		last := nc.LastError()
+		if p := lastDialErr.Load(); last == nil && p != nil {
+			last = *p
+		}
+		if last != nil {
+			err = fmt.Errorf("%w (last connection error: %w)", err, last)
 		}
 		return fmt.Errorf("%w: %s: %w", ErrBrokerUnreachable, url, err)
 	}
@@ -2980,9 +2996,17 @@ var ErrBrokerUnreachable = errors.New("messaging: the NATS broker was not reacha
 // Generous, because the thing being waited on is a broker that may still be
 // starting — a cold start of the whole instance, or a rollout of the NATS
 // StatefulSet alongside the Deployments. It matches the roughly one minute core.RetryInfraConnect
-// allows the relational database, which is initialized first: the two together stay
-// inside the chart's default startup probe allowance (5s x 30), so a process that is
-// going to fail on its broker says so itself before the kubelet kills it for silence.
+// allows the relational database, which is initialized first: when the database answers
+// (or refuses) promptly, the two together stay inside the chart's default startup probe
+// allowance (5s x 30), so a process that is going to fail on its broker says so itself
+// before the kubelet kills it for silence. (A database whose every attempt runs out its
+// 5s dial timeout can take longer than that on its own; the probe then wins either way.)
+//
+// It is deliberately not a setting. The startup probe bounds the whole initialization
+// anyway, so a longer wait would only be cut short by the kubelet, and a failed wait is
+// not fatal to the instance: the pod restart is the next attempt. A broker that is away
+// for longer costs restarts, under the kubelet's backoff, not a service that never comes
+// back.
 const connectWaitTimeout = 60 * time.Second
 
 // connectWaitOrDefault is the connection wait this manager uses: connectWaitTimeout,

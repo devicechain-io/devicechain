@@ -153,18 +153,34 @@ func TestInitializeFailsWhenTheBrokerNeverAnswers(t *testing.T) {
 	ms.InstanceConfiguration.Infrastructure.Nats.Hostname = "127.0.0.1"
 	ms.InstanceConfiguration.Infrastructure.Nats.Port = 1 // nothing listening
 	nmgr := NewNatsManager(ms, core.NewNoOpLifecycleCallbacks(), func(*NatsManager) error { return nil })
-	nmgr.connectWait = 300 * time.Millisecond
+	// Long enough for one retry: the client waits its reconnect interval (2s plus jitter)
+	// before the first, and the initial attempt's error is not kept anywhere.
+	nmgr.connectWait = 3 * time.Second
 
+	start := time.Now()
 	err := nmgr.Initialize(t.Context())
+	elapsed := time.Since(start)
 	if err == nil {
 		t.Cleanup(nmgr.closeConn)
 		t.Fatal("Initialize reported success against a broker that never answered")
+	}
+	if elapsed > nmgr.connectWait+10*time.Second {
+		t.Errorf("Initialize took %s to fail with a %s wait; the wait it applied is not the "+
+			"manager's", elapsed, nmgr.connectWait)
 	}
 	if !errors.Is(err, ErrBrokerUnreachable) {
 		t.Fatalf("Initialize failed with %v, want ErrBrokerUnreachable", err)
 	}
 	if !strings.Contains(err.Error(), "127.0.0.1:1") {
 		t.Errorf("the error does not name the broker address it could not reach: %q", err)
+	}
+	// WHY it could not reach it is the half an operator acts on (a name that does not
+	// resolve, a refused port, a dial that times out), and nats.go keeps none of it for a
+	// dial that fails before the handshake: LastError is nil for exactly the failures an
+	// unreachable broker produces.
+	var dialErr *net.OpError
+	if !errors.As(err, &dialErr) {
+		t.Errorf("the error does not carry the dial failure that made the broker unreachable: %q", err)
 	}
 	if rec := findLog(logs, "Verified connectivity"); rec != nil {
 		t.Errorf("a failed connect logged that connectivity was verified: %v", rec["message"])
