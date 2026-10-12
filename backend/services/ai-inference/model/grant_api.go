@@ -245,7 +245,11 @@ func (api *Api) providerIDByToken(ctx context.Context, token string) (uint, erro
 		return 0, err
 	}
 	if len(matches) == 0 {
-		return 0, fmt.Errorf("%w: %q", ErrUnknownProvider, token)
+		// Both sentinels: ErrUnknownProvider names WHAT is missing, and the store's miss is
+		// what the GraphQL boundary answers with NOT_FOUND, as it does for every other
+		// unknown token. Every caller returns this error as-is, before any of them asks
+		// whether a later lookup missed, so carrying the miss changes no branch here.
+		return 0, fmt.Errorf("%w: %q (%w)", ErrUnknownProvider, token, gorm.ErrRecordNotFound)
 	}
 	return matches[0].ID, nil
 }
