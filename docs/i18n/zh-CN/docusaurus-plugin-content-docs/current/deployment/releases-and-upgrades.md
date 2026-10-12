@@ -2220,6 +2220,15 @@ device-management 无法编码失败入站事件的记录时，此前仍存储�
 
 无需操作。
 
+##### 启动时无法连接消息 broker 的服务会在一分钟后停止 {#v0200-broker-unreachable-at-start}
+
+每个服务启动时都会等待消息 broker（NATS）。在 `v0.19.0` 中，它等待 30 秒后无论如何都会启动。启动时创建 bucket 的服务随后会以一个归咎于 broker 版本的错误停止（`key-value requires at least server version 2.6.2`），其他服务则报告就绪，却无法发送或接收任何内容。现在服务最多等待一分钟；如果届时 broker 仍未响应，服务会停止，错误中给出 broker 地址和最后一次连接错误，然后由 Kubernetes 重启。在这一分钟内启动的 broker 与之前一样处理。
+
+- **Pod 以 `the NATS broker was not reachable before the startup connection wait ran out` 重启**，说明它无法连接实例配置中地址上的 broker。请检查 broker 的 Pod 是否在运行并已就绪，并阅读消息末尾的连接错误：无法解析的名称、被拒绝的连接、被拒绝的证书或凭据，各自指向不同的问题。
+- **broker 离开更久只会带来重启，而不会让服务一直停止。** 每次重启都会重试（遵循 Kubernetes 通常的重启退避），broker 一旦响应，服务即可启动。
+
+无需操作。
+
 ##### `dcctl install --dry-run` 按实际 install 拒绝重新安装 {#v0200-dry-run}
 
 集群响应时，dry run 现在读取安装记录，设置改变时查询集群上运行哪些实例；若因现有集群内容导致安装拒绝，则使用 install 自己的消息失败：在没有集群状态的机器重新安装、有实例运行时更改设置、或无法工作的 `--backup-snapshot-class`。此前打印计划并以 0 退出。面向尚不存在或无法连接的集群仍打印计划，并说明未执行这些检查。Dry run 不检查 install 拒绝的全部情况；例如关系存储由旧发布构建的集群，仍只在真正 install 时拒绝。
