@@ -1232,11 +1232,12 @@ func (w *natsWriter) publish(ctx context.Context, deviceToken string, msgs ...Me
 			_, err = w.nmgr.js.PublishMsg(nm, nats.Context(pctx))
 			w.nmgr.metrics.observePublish(w.suffix, publishModeSync, time.Since(start))
 			if err == nil {
-				// Subject, headers and data, as sent (nats.Msg.Size): the headers natsMsg
-				// always sets can be most of a small event's record, and counting the data
-				// alone would measure a byte-bound stream of small events far less often
-				// than backpressureKickShare says.
-				w.gate.notePublished(nm.Size())
+				// Subject, headers and data, as sent (wireSize: nats.Msg.Size, counted
+				// rather than encoded): the headers natsMsg always sets can be most of a
+				// small event's record, and counting the data alone would measure a
+				// byte-bound stream of small events far less often than
+				// backpressureKickShare says.
+				w.gate.notePublished(wireSize(nm))
 			}
 		}
 		cancel()
