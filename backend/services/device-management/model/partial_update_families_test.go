@@ -463,6 +463,7 @@ func deviceFamily() putest.Family[*Api] {
 			got := readMember(&namedRow{e.NamedEntity, e.Metadata}, "deviceTypeToken",
 				refTokenOf(t, e.DeviceType == nil, func() string { return e.DeviceType.Token }))
 			got["externalId"] = nullStr(e.ExternalId)
+			got["enabled"] = boolStr(!e.IsDisabled())
 			return got
 		},
 		NewRequest: func() any { return new(DeviceUpdateRequest) },
@@ -479,6 +480,10 @@ func deviceFamily() putest.Family[*Api] {
 			),
 			putest.OptionalStringField("externalId", externalIdSeed, "ext-new",
 				func(r *DeviceUpdateRequest) *dcgraphql.OptionalString { return &r.ExternalId }),
+			// Stored as a nullable disabled-since instant, read here as the flag the
+			// API exposes. Required: a null is refused, never read as "disable".
+			putest.RequiredBoolField("enabled", true,
+				func(r *DeviceUpdateRequest) *dcgraphql.OptionalBool { return &r.Enabled }),
 		),
 	}
 }

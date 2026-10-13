@@ -74,6 +74,34 @@ The credential in the event body is the **per-event** check. MQTT and NATS **con
 
 See [Connecting a Device](./connecting-a-device.md) for the transport details.
 
+## Disabling a device {#disabling-a-device}
+
+Disabling a device shuts it out without deleting it or touching its credentials. Use it to quarantine a device that is compromised or flooding the platform, then enable it again when it is fixed.
+
+While a device is disabled:
+
+- **Its events are discarded.** They are refused when they arrive, whichever credential or transport they came in on, and counted in `devicechain_devicemanagement_resolve_device_disabled_total`. They are not stored and not dead-lettered, and they do not come back when the device is enabled again.
+- **It cannot open a new connection.** The broker refuses the connect with the same answer as a wrong password. A connection the device already had stays open until it ends, but everything it publishes on it is discarded.
+- **Commands to it are refused** with `DEVICE_DISABLED`. A fleet command lists it among the refused devices. See [When an enqueue is refused](./sending-commands.md#when-an-enqueue-is-refused). Commands queued for it **before** it was disabled are not cancelled: they are delivered over a connection it still has open, or after it is enabled and connects again. [Cancel them](./sending-commands.md#cancel-one) if they must not reach it.
+- **It raises no silence alarm.** A rule that alarms when a device stops reporting ignores a disabled device. When it is enabled again, the rule waits a full silence window from that moment before it can report it silent.
+- **Everything else is kept**: its data, credentials, configuration, relationships and group memberships.
+
+The change takes effect on every replica on the device's next event: it is a change to the device, so it drops the cached copies the same way a [revocation](#revocation-timing) does.
+
+In the console, open the device and choose **Disable** (or **Enable**); a disabled device shows a **Disabled** badge on its page and in the device list. Through GraphQL, set `enabled` in a partial update. `null` is refused, and disabling a device that is already disabled keeps the time it was first disabled, which `disabledAt` reports:
+
+```graphql
+mutation {
+  updateDevice(token: "pump-7", request: { enabled: false }) {
+    token
+    enabled
+    disabledAt
+  }
+}
+```
+
+A device can also be created disabled, with `enabled: false` in `createDevice`. The change is recorded in the audit log as an update of the device.
+
 ## Repeated failed connects are slowed down {#connect-backoff}
 
 After repeated failures, MQTT connects that present a username and password are slowed down, so a password cannot be guessed at the rate the broker accepts connections.

@@ -72,6 +72,7 @@ mutation {
 |---|---|---|
 | `HELD_CEILING_EXCEEDED` | 租户达到**未投递**命令上限：全部 `QUEUED`、`HELD`、`PARKED`，不只离线设备保留命令。 | **是**，这些命令投递后会解除 |
 | `DEVICE_NOT_FOUND` | 此租户没有该令牌设备。 | 否 |
+| `DEVICE_DISABLED` | 设备已[停用](./device-credentials.md#disabling-a-device)。命令不会保留到以后。 | 否 — 先启用设备 |
 | `COMMAND_NOT_IN_VOCABULARY` | 配置文件限制命令，而此键不在集合中。检查大小写。 | 否 |
 | `PAYLOAD_SCHEMA_VIOLATION` | 载荷违反参数模式：未知参数、错误类型、超范围或缺少必填参数。 | 否 |
 | `PAYLOAD_NOT_JSON` / `METADATA_NOT_JSON` | 字符串不是有效 JSON。 | 否 |

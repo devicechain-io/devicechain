@@ -59,6 +59,8 @@ Un perfil de dispositivo declara los comandos que aceptan sus dispositivos. Un c
 
 Un dispositivo tiene una **identidad** estable a la que hace referencia todo lo demás, separada de sus **credenciales**, el material que usa para autenticarse. Las credenciales son conectables (pluggable): token de acceso y MQTT-basic (usuario + contraseña). Así, un dispositivo puede rotar credenciales o tener varias sin cambiar su identidad.
 
+Un dispositivo también se puede **deshabilitar** por completo, tenga las credenciales que tenga: sus eventos se descartan, no puede abrir una conexión nueva y los comandos que se le envían se rechazan, hasta que se vuelve a habilitar. Consulta [Deshabilitar un dispositivo](../guides/device-credentials.md#disabling-a-device).
+
 El secreto de una credencial es de **solo escritura**: lo envías cuando registras la credencial y nunca se devuelve en una lectura. Eso cubre solo la contraseña de MQTT-basic. Para un token de acceso, el id de la credencial es en sí mismo la prueba de posesión, así que leer las credenciales de un dispositivo requiere la autoridad `device:write` y no `device:read`. Consulta [Credenciales de dispositivo](../guides/device-credentials.md#reading-a-credential).
 
 Un dispositivo también puede llevar un **`externalId`** opcional: una clave de negocio propiedad del cliente, como un VIN, un número de serie, un código GS1 o una etiqueta de activo. Es distinto tanto de la identidad interna como de la credencial. Es:

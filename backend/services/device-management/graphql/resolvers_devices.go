@@ -181,6 +181,17 @@ func (r *DeviceResolver) Metadata() *string {
 	return util.MetadataStr(r.M.Metadata)
 }
 
+func (r *DeviceResolver) Enabled() bool {
+	return !r.M.IsDisabled()
+}
+
+func (r *DeviceResolver) DisabledAt() *string {
+	if r.M.DisabledAt.Valid {
+		return util.FormatTime(r.M.DisabledAt.Time)
+	}
+	return nil
+}
+
 func (r *DeviceResolver) DeviceType() *DeviceTypeResolver {
 	if r.M.DeviceType != nil {
 		return &DeviceTypeResolver{
