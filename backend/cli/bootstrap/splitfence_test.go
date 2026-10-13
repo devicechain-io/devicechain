@@ -147,7 +147,7 @@ func TestAnInstanceBuiltBeforeTheSplitIsRefused(t *testing.T) {
 	for _, want := range []string{
 		"module.cnpg_rdb.helm_release.cluster",          // which resource
 		"dcctl destroy <provider> prod --without-state", // what to do about it
-		"prevent_destroy",                               // why the guard they know about did not save them
+		"prevent_destroy", // why the guard they know about did not save them
 		// ...and the case where that remedy is not enough: destroy leaves a cluster
 		// dcctl did not create running, prerequisites and all.
 		"--kube-context",
