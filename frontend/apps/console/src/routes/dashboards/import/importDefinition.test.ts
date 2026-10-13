@@ -261,7 +261,9 @@ describe('refusals', () => {
   });
 
   it('does not count brackets inside strings as nesting', () => {
-    expect(() => prepareImport(nested(1, '[{'.repeat(MAX_IMPORT_NESTING) + '\\"['), catalog)).not.toThrow();
+    expect(() => prepareImport(nested(1, '[{'.repeat(MAX_IMPORT_NESTING)), catalog)).not.toThrow();
+    // An escaped quote does not end the string: the brackets after it are still text.
+    expect(() => prepareImport(nested(1, 'a"' + '[{'.repeat(MAX_IMPORT_NESTING)), catalog)).not.toThrow();
   });
 
   it('refuses a payload that grew past the limit after the review', () => {
