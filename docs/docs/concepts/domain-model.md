@@ -55,6 +55,25 @@ In the console, the **Browse** screen composes a selector from facet axes, previ
 
 A device profile declares the commands its devices accept. An issued command is persisted and tracked through a lifecycle rather than fired and forgotten. [Commands](./commands.md) covers both.
 
+## Exporting a profile as a W3C Thing Model {#wot-thing-model}
+
+Every published version of a device profile can be exported as a [W3C Web of Things](https://www.w3.org/TR/wot-thing-description11/) **Thing Model**, the standard JSON-LD description of a class of devices. A profile describes every device of its types and no one device in particular, so the export is a Thing Model rather than a Thing Description: it carries no device address, protocol binding or security, which a Thing Description for one device would add.
+
+- Each **metric** becomes a read-only, observable **property** named by its metric key. Its data type becomes the property's type (`DOUBLE` → `number`, `INT` → `integer`, `BOOLEAN` → `boolean`, `STRING` → `string`), and its unit, minimum, maximum and allowed values are carried over. A metric's **descriptor** becomes the property's `@type`, so a semantic tag such as `saref:Temperature` reaches tools that understand it.
+- Each **command** becomes an **action** named by its command key. Its parameters become the action's `input`: an object schema with one property per parameter, typed the same way, nested parameters as nested objects, and the required ones listed as required.
+- The model's `version.model` is the profile version number. A version never changes once published, so neither does its model.
+
+In the console, open the profile's **Versions** tab and choose **WoT Thing Model** on a version to download it. Through GraphQL, select `thingModel` on a profile version; it is the JSON-LD as text:
+
+```graphql
+query {
+  deviceProfileVersions(token: "pump", limit: 1) {
+    version
+    thingModel
+  }
+}
+```
+
 ## Identity and credentials
 
 A device has a stable **identity** that everything else references, kept separate from its **credentials**, the material it uses to authenticate. Credentials are pluggable: access token and MQTT-basic (username + password). A device can therefore rotate credentials or hold several without changing its identity.

@@ -97,6 +97,7 @@ type Documents = {
     "\n  mutation RenameDeviceProfile($token: String!, $newToken: String!) {\n    renameDeviceProfile(token: $token, newToken: $newToken) {\n      id\n      token\n    }\n  }\n": typeof types.RenameDeviceProfileDocument,
     "\n  mutation DeleteDeviceProfile($token: String!) {\n    deleteDeviceProfile(token: $token)\n  }\n": typeof types.DeleteDeviceProfileDocument,
     "\n  query DeviceProfileVersions($token: String!) {\n    deviceProfileVersions(token: $token) {\n      version\n      label\n      description\n      publishedAt\n      publishedBy\n    }\n  }\n": typeof types.DeviceProfileVersionsDocument,
+    "\n  query DeviceProfileThingModel($token: String!, $offset: Int) {\n    deviceProfileVersions(token: $token, limit: 1, offset: $offset) {\n      version\n      thingModel\n    }\n  }\n": typeof types.DeviceProfileThingModelDocument,
     "\n  query FacetValues($facet: DeviceFacet!) {\n    facetValues(facet: $facet)\n  }\n": typeof types.FacetValuesDocument,
     "\n  mutation PublishDeviceProfile($token: String!, $label: String, $description: String) {\n    publishDeviceProfile(token: $token, label: $label, description: $description) {\n      version\n    }\n  }\n": typeof types.PublishDeviceProfileDocument,
     "\n  mutation RollbackDeviceProfile($token: String!, $version: Int!) {\n    rollbackDeviceProfile(token: $token, version: $version) {\n      token\n      activeVersion\n    }\n  }\n": typeof types.RollbackDeviceProfileDocument,
@@ -218,6 +219,7 @@ const documents: Documents = {
     "\n  mutation RenameDeviceProfile($token: String!, $newToken: String!) {\n    renameDeviceProfile(token: $token, newToken: $newToken) {\n      id\n      token\n    }\n  }\n": types.RenameDeviceProfileDocument,
     "\n  mutation DeleteDeviceProfile($token: String!) {\n    deleteDeviceProfile(token: $token)\n  }\n": types.DeleteDeviceProfileDocument,
     "\n  query DeviceProfileVersions($token: String!) {\n    deviceProfileVersions(token: $token) {\n      version\n      label\n      description\n      publishedAt\n      publishedBy\n    }\n  }\n": types.DeviceProfileVersionsDocument,
+    "\n  query DeviceProfileThingModel($token: String!, $offset: Int) {\n    deviceProfileVersions(token: $token, limit: 1, offset: $offset) {\n      version\n      thingModel\n    }\n  }\n": types.DeviceProfileThingModelDocument,
     "\n  query FacetValues($facet: DeviceFacet!) {\n    facetValues(facet: $facet)\n  }\n": types.FacetValuesDocument,
     "\n  mutation PublishDeviceProfile($token: String!, $label: String, $description: String) {\n    publishDeviceProfile(token: $token, label: $label, description: $description) {\n      version\n    }\n  }\n": types.PublishDeviceProfileDocument,
     "\n  mutation RollbackDeviceProfile($token: String!, $version: Int!) {\n    rollbackDeviceProfile(token: $token, version: $version) {\n      token\n      activeVersion\n    }\n  }\n": types.RollbackDeviceProfileDocument,
@@ -585,6 +587,10 @@ export function graphql(source: "\n  mutation DeleteDeviceProfile($token: String
  * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
  */
 export function graphql(source: "\n  query DeviceProfileVersions($token: String!) {\n    deviceProfileVersions(token: $token) {\n      version\n      label\n      description\n      publishedAt\n      publishedBy\n    }\n  }\n"): typeof import('./graphql').DeviceProfileVersionsDocument;
+/**
+ * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
+ */
+export function graphql(source: "\n  query DeviceProfileThingModel($token: String!, $offset: Int) {\n    deviceProfileVersions(token: $token, limit: 1, offset: $offset) {\n      version\n      thingModel\n    }\n  }\n"): typeof import('./graphql').DeviceProfileThingModelDocument;
 /**
  * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
  */

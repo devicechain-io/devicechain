@@ -1400,6 +1400,14 @@ export type DeviceProfileVersionsQueryVariables = Exact<{
 
 export type DeviceProfileVersionsQuery = { deviceProfileVersions: Array<{ version: number, label: string | null, description: string | null, publishedAt: string, publishedBy: string | null }> };
 
+export type DeviceProfileThingModelQueryVariables = Exact<{
+  token: string;
+  offset?: number | null | undefined;
+}>;
+
+
+export type DeviceProfileThingModelQuery = { deviceProfileVersions: Array<{ version: number, thingModel: string }> };
+
 export type FacetValuesQueryVariables = Exact<{
   facet: DeviceFacet;
 }>;
@@ -3065,6 +3073,14 @@ export const DeviceProfileVersionsDocument = new TypedDocumentString(`
   }
 }
     `) as unknown as TypedDocumentString<DeviceProfileVersionsQuery, DeviceProfileVersionsQueryVariables>;
+export const DeviceProfileThingModelDocument = new TypedDocumentString(`
+    query DeviceProfileThingModel($token: String!, $offset: Int) {
+  deviceProfileVersions(token: $token, limit: 1, offset: $offset) {
+    version
+    thingModel
+  }
+}
+    `) as unknown as TypedDocumentString<DeviceProfileThingModelQuery, DeviceProfileThingModelQueryVariables>;
 export const FacetValuesDocument = new TypedDocumentString(`
     query FacetValues($facet: DeviceFacet!) {
   facetValues(facet: $facet)

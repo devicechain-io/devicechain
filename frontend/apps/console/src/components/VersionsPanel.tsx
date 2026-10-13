@@ -19,7 +19,7 @@
 // caller carrying a full copy of the generic strings, which is the duplication this
 // exists to remove, one level down.
 
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Rocket, RotateCcw } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -83,6 +83,7 @@ export function VersionsPanel<V extends PublishedVersion>({
   publish,
   rollback,
   onChanged,
+  rowAction,
 }: {
   /** The parent resource's token — also the reload key, so switching rows refetches. */
   token: string;
@@ -96,10 +97,17 @@ export function VersionsPanel<V extends PublishedVersion>({
   rollback: (token: string, version: number) => Promise<unknown>;
   /** Refresh the parent detail so the active-version badge updates after a change. */
   onChanged: () => void;
+  /**
+   * A resource-specific action on one version that READS it, such as an export. Shown to
+   * every caller, unlike rollback, which needs the write authority. It is handed the
+   * whole list too, newest first, for an action that needs to place the row in it.
+   */
+  rowAction?: (version: V, versions: V[]) => ReactNode;
 }) {
   const { t } = useTranslation(['versions', 'common']);
   const { claims } = useAuth();
   const canWrite = hasAuthority(claims, authority);
+  const hasActions = canWrite || rowAction !== undefined;
   const { toast } = useToast();
   const confirm = useConfirm();
   const [reloadKey, reload] = useReload();
@@ -236,7 +244,7 @@ export function VersionsPanel<V extends PublishedVersion>({
             <DataTableHeaderCell>{t('versions:labelFieldLabel')}</DataTableHeaderCell>
             <DataTableHeaderCell>{t('versions:colPublished')}</DataTableHeaderCell>
             <DataTableHeaderCell>{t('versions:colBy')}</DataTableHeaderCell>
-            {canWrite && (
+            {hasActions && (
               <DataTableHeaderCell className="text-right">
                 {t('common:colActions')}
               </DataTableHeaderCell>
@@ -262,17 +270,20 @@ export function VersionsPanel<V extends PublishedVersion>({
                 <DataTableCell className="text-muted-foreground">
                   {v.publishedBy || '—'}
                 </DataTableCell>
-                {canWrite && (
+                {hasActions && (
                   <DataTableCell className="text-right">
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => doRollback(v.version)}
-                      loading={rolling.has(v.version)}
-                      disabled={v.version === activeVersion}
-                    >
-                      <RotateCcw size={14} /> {t('versions:rollbackButton')}
-                    </Button>
+                    {rowAction?.(v, versions)}
+                    {canWrite && (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => doRollback(v.version)}
+                        loading={rolling.has(v.version)}
+                        disabled={v.version === activeVersion}
+                      >
+                        <RotateCcw size={14} /> {t('versions:rollbackButton')}
+                      </Button>
+                    )}
                   </DataTableCell>
                 )}
               </DataTableRow>
