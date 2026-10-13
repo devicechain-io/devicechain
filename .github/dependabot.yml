@@ -73,6 +73,7 @@ updates:
     directories:
       - "/frontend"
       - "/docs"
+      - "/hack/guide-capture"
     schedule:
       interval: "weekly"
       day: "monday"
