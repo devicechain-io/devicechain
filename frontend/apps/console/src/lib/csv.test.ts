@@ -18,6 +18,26 @@ describe('csvCell', () => {
     expect(csvCell('say "hi"')).toBe('"say ""hi"""');
     expect(csvCell('l1\nl2')).toBe('"l1\nl2"');
     expect(csvCell('l1\r\nl2')).toBe('"l1\r\nl2"');
+    expect(csvCell('l1\rl2')).toBe('"l1\rl2"');
+  });
+
+  // A trimming importer, or a full-width trigger an IME typed, must not slip past the guard.
+  it.each([' =1+1', '\n=1+1', ' @x', '＝1+1', '＋A1', '－1', '＠x', ' -5'])(
+    'defuses %j, a formula behind whitespace or in full-width form',
+    (v) => {
+      expect(csvCell(v).replace(/^"/, '').startsWith("'")).toBe(true);
+    },
+  );
+
+  it.each(['-1e999', '+1', '.5', '-0', 'x=1', 'a-b', ' 12', '１'])(
+    'leaves %j alone: a number, or text whose first visible character is no trigger',
+    (v) => {
+      expect(csvCell(v)).toBe(v);
+    },
+  );
+
+  it('guards a plain-looking number that hides a second line', () => {
+    expect(csvCell('-1\n=2+3')).toBe(`"'-1\n=2+3"`);
   });
 
   it.each(['=1+1', '+SUM(A1)', '-2+3', '@cmd', '\tx', '\rx'])(

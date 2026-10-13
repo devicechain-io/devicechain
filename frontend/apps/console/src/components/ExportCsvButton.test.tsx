@@ -64,6 +64,34 @@ describe('ExportCsvButton', () => {
     expect(screen.getByRole('button', { name: /export csv/i })).toBeTruthy();
   });
 
+  // A page that never answers must not hold the cancel hostage.
+  it('cancels at once while a page is still in flight', async () => {
+    const fetchPage = vi.fn(() => new Promise<ReturnType<typeof page>>(() => {}));
+    render(<ExportCsvButton fileStem="things" columns={columns} fetchPage={fetchPage} />);
+    fireEvent.click(screen.getByRole('button', { name: /export csv/i }));
+    fireEvent.click(await screen.findByRole('button', { name: /cancel export/i }));
+    await screen.findByText(/export cancelled/i);
+    expect(screen.getByRole('button', { name: /export csv/i })).toBeTruthy();
+    expect(blobs).toHaveLength(0);
+  });
+
+  // The file would describe a list the operator is no longer looking at.
+  it('abandons an export when the filter changes under it', async () => {
+    let release: (v: ReturnType<typeof page>) => void = () => {};
+    const fetchPage = vi.fn(
+      () => new Promise<ReturnType<typeof page>>((resolve) => (release = resolve)),
+    );
+    const { rerender } = render(
+      <ExportCsvButton fileStem="things" columns={columns} fetchPage={fetchPage} scopeKey="a" />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: /export csv/i }));
+    await screen.findByRole('button', { name: /cancel export/i });
+    rerender(<ExportCsvButton fileStem="things" columns={columns} fetchPage={fetchPage} scopeKey="b" />);
+    release(page([{ name: 'a' }], 1));
+    await screen.findByText(/export cancelled/i);
+    expect(blobs).toHaveLength(0);
+  });
+
   it('reports a failed page instead of downloading a partial file', async () => {
     const fetchPage = vi.fn(async () => {
       throw new Error('boom');

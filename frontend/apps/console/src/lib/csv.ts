@@ -30,11 +30,24 @@ export interface CsvColumn<T> {
 // character in it (`-1+cmd|...`) fails the match and is guarded.
 const PLAIN_NUMBER = /^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$/;
 
+// The formula triggers, plus their full-width forms (an IME produces those, and some
+// spreadsheet builds normalise them on entry). Matched after any leading whitespace too:
+// an importer that trims cells (LibreOffice's "Trim spaces", a pasted range) would
+// otherwise hand ` =cmd` to the formula parser with its guard trimmed away.
+const FORMULA_LEAD = /^[=+\-@＝＋－＠]/;
+
+/** True when a spreadsheet could read the text as a formula. */
+function formulaLike(text: string): boolean {
+  if (/^[\t\r]/.test(text)) return true;
+  const lead = text.replace(/^\s+/, '');
+  return FORMULA_LEAD.test(lead) && !PLAIN_NUMBER.test(text);
+}
+
 /** Encodes one cell: formula-guarded, then quoted when RFC 4180 requires it. */
 export function csvCell(value: CsvValue): string {
   if (value === null || value === undefined) return '';
   let text = typeof value === 'string' ? value : String(value);
-  if (typeof value === 'string' && /^[=+\-@\t\r]/.test(text) && !PLAIN_NUMBER.test(text)) {
+  if (typeof value === 'string' && formulaLike(text)) {
     text = `'${text}`;
   }
   return /[",\r\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
@@ -73,6 +86,30 @@ export interface PageResult<T> {
   pagination: { totalRecords?: number | null };
 }
 
+const cancelled = () => new DOMException('Export cancelled', 'AbortError');
+
+// Settles with the page, or rejects the moment the signal fires — so a cancel takes effect
+// at once rather than after a slow page returns. The list API takes no signal, so the
+// request itself still completes in the background; its result is discarded.
+function abortable<R>(work: Promise<R>, signal?: AbortSignal): Promise<R> {
+  if (!signal) return work;
+  if (signal.aborted) return Promise.reject(cancelled());
+  return new Promise<R>((resolve, reject) => {
+    const onAbort = () => reject(cancelled());
+    signal.addEventListener('abort', onAbort, { once: true });
+    work.then(
+      (v) => {
+        signal.removeEventListener('abort', onAbort);
+        resolve(v);
+      },
+      (e: unknown) => {
+        signal.removeEventListener('abort', onAbort);
+        reject(e);
+      },
+    );
+  });
+}
+
 /**
  * Pages through a list query until it is exhausted or the cap is reached. Rejects with an
  * AbortError when the signal fires, and never returns a partial result in that case.
@@ -85,9 +122,9 @@ export async function collectPages<T>(
   const cap = opts.cap ?? EXPORT_ROW_CAP;
   const rows: T[] = [];
   for (let pageNumber = 1; ; pageNumber++) {
-    if (opts.signal?.aborted) throw new DOMException('Export cancelled', 'AbortError');
-    const page = await fetchPage(pageNumber, pageSize);
-    if (opts.signal?.aborted) throw new DOMException('Export cancelled', 'AbortError');
+    const page = await abortable(fetchPage(pageNumber, pageSize), opts.signal);
+    // A page that resolved in the same tick as the abort still counts as cancelled.
+    if (opts.signal?.aborted) throw cancelled();
     const total = page.pagination.totalRecords;
     const room = cap - rows.length;
     if (page.results.length > room) {
