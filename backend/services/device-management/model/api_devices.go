@@ -236,6 +236,36 @@ func (api *Api) DeviceTypes(ctx context.Context, criteria DeviceTypeSearchCriter
 	}, nil
 }
 
+// disabledAtOnCreate is the stored form of a create request's enabled flag: NULL (enabled)
+// unless the caller sent false, in which case the device is disabled from now. Stored at
+// microsecond precision, which is what the column keeps, so the answer a create returns is
+// the value a read of it returns.
+func disabledAtOnCreate(enabled *bool, now time.Time) sql.NullTime {
+	if enabled == nil || *enabled {
+		return sql.NullTime{}
+	}
+	return sql.NullTime{Time: now.UTC().Truncate(time.Microsecond), Valid: true}
+}
+
+// applyEnabled applies a partial update's enabled flag to the stored disabled-since
+// instant. Omitted leaves it alone and null is refused. Disabling a device that is already
+// disabled keeps the instant it was first disabled, so "disabled since" does not move when
+// the same request is sent twice.
+func applyEnabled(field dcgraphql.OptionalBool, current sql.NullTime, now time.Time) (sql.NullTime, error) {
+	enabled, err := field.ApplyToRequired("enabled", !current.Valid)
+	if err != nil {
+		return current, err
+	}
+	switch {
+	case enabled:
+		return sql.NullTime{}, nil
+	case current.Valid:
+		return current, nil
+	default:
+		return sql.NullTime{Time: now.UTC().Truncate(time.Microsecond), Valid: true}, nil
+	}
+}
+
 // Create a new device.
 func (api *Api) CreateDevice(ctx context.Context, request *DeviceCreateRequest) (*Device, error) {
 	matches, err := api.DeviceTypesByToken(ctx, []string{request.DeviceTypeToken})
@@ -265,6 +295,7 @@ func (api *Api) CreateDevice(ctx context.Context, request *DeviceCreateRequest) 
 			Metadata: metadataJSON,
 		},
 		DeviceType: matches[0],
+		DisabledAt: disabledAtOnCreate(request.Enabled, time.Now()),
 	}
 	result := api.RDB.DB(ctx).Create(created)
 	if result.Error != nil {
@@ -333,6 +364,7 @@ func (api *Api) CreateDevices(ctx context.Context, requests []*DeviceCreateReque
 	}
 
 	created := make([]*Device, 0, len(requests))
+	now := time.Now()
 	err = api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
 		for i, request := range requests {
 			dt := typesByToken[request.DeviceTypeToken]
@@ -351,6 +383,7 @@ func (api *Api) CreateDevices(ctx context.Context, requests []*DeviceCreateReque
 				// Set the FK by id (not the association) so a bulk create of N
 				// devices sharing a type does not re-touch device_types per row.
 				DeviceTypeId: dt.ID,
+				DisabledAt:   disabledAtOnCreate(request.Enabled, now),
 			}
 			if err := tx.Create(device).Error; err != nil {
 				return err
@@ -642,6 +675,11 @@ func (api *Api) UpdateDevice(ctx context.Context, token string, request *DeviceU
 		return nil, err
 	}
 	updated.Metadata = metadataJSON
+	disabledAt, err := applyEnabled(request.Enabled, updated.DisabledAt, time.Now())
+	if err != nil {
+		return nil, err
+	}
+	updated.DisabledAt = disabledAt
 	if retyped {
 		// The membership of the (possibly new) profile begins now, and it is STORED with the
 		// re-type: the roster fact below and the detection engine's reconcile both read it back.
@@ -653,9 +691,20 @@ func (api *Api) UpdateDevice(ctx context.Context, token string, request *DeviceU
 	// concurrent re-point of the device's type (UpdateDeviceType stamps expected_since on
 	// every device of the type) put the stale membership instant back, and the roster page
 	// would then disagree with the fact that re-point emitted.
-	db := api.RDB.DB(ctx)
+	//
+	// disabled_at is written only by an update that names `enabled`, for the same reason:
+	// a rename racing a disable would otherwise write back the enabled state it loaded and
+	// silently re-enable a device an operator had just quarantined.
+	omit := make([]string, 0, 2)
 	if !retyped {
-		db = db.Omit("ExpectedSince")
+		omit = append(omit, "ExpectedSince")
+	}
+	if !request.Enabled.Set {
+		omit = append(omit, "DisabledAt")
+	}
+	db := api.RDB.DB(ctx)
+	if len(omit) > 0 {
+		db = db.Omit(omit...)
 	}
 	result := db.Save(updated)
 	if result.Error != nil {

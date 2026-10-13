@@ -67,7 +67,7 @@ const (
 // cardinality vector the tenant-label rule exists to prevent. The bound has to be
 // structural, not a convention we intend to honour.
 //
-// The three relayed entries are the ones device-management produces today. They earn
+// The four relayed entries are the ones device-management produces today. They earn
 // their place because they are the most common refusals a real fleet write produces —
 // folding COMMAND_NOT_IN_VOCABULARY into "other" would blind the one panel an operator
 // most needs after a heterogeneous fan-out.
@@ -94,6 +94,7 @@ var metricSafeCodes = map[RejectionCode]struct{}{
 	"DEVICE_NOT_FOUND":          {},
 	"COMMAND_NOT_IN_VOCABULARY": {},
 	"PAYLOAD_SCHEMA_VIOLATION":  {},
+	"DEVICE_DISABLED":           {},
 }
 
 // BatchMetrics are the fleet-write counters.

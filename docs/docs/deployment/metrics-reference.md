@@ -84,6 +84,7 @@ bus: read them with `dcctl dead-letters`.
 | `device_reports_dead_lettered_total` | Device messages written to the dead-letter stream because they could not be understood or named a configuration revision the device does not have. Read them with `dcctl dead-letters`. |
 | `geofence_set_publish_failures_total` | Geofence-set manifests that could not be published — a marshal error, a broker refusal, or a transport fault. Each one means event-processing was not told about a fence edit, so containment for that tenant holds its previous fence set until a reconcile sweep repairs it. A sustained non-zero rate means fence edits are not reaching the detection engine. |
 | `raise_alarm_dead_lettered_total` | Raise-alarm edges written to the dead-letter stream after every attempt to apply them failed, so an alarm that should have been raised or cleared is visible rather than only logged. |
+| `resolve_device_disabled_total` | Events refused because their device is [disabled](../guides/device-credentials.md#disabling-a-device). They are discarded, not dead-lettered. |
 | `resolve_event_time_bounded_total` | Reported event times refused for leading the server clock by more than the configured tolerance, and replaced with the latest time the tolerance allows. |
 
 ## Event processing: detection {#event-processing-detect}

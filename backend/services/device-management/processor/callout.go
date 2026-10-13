@@ -456,6 +456,19 @@ func (c *CalloutResponder) authorize(req jwt.AuthorizationRequest) (userJWT stri
 		return "", genericAuthFailure
 	}
 
+	// A disabled device is refused a session, with the same generic answer as every other
+	// refusal. Checked after the credential succeeded, like the client-id pin below: it is a
+	// property of the DEVICE, which only a successful credential check names, and it is not
+	// a credential failure, so it is not charged to the password backoff. Both connect
+	// lookups read the device's disabled-since column for this (connectDeviceFields,
+	// authDeviceFields). A session already open when the device was disabled is not ended
+	// here; its events are refused at resolution and its commands at enqueue.
+	if device.IsDisabled() {
+		log.Debug().Str("tenant", tenant).Str("device", device.Token).
+			Msg("Auth-callout refused a device connect: the device is disabled.")
+		return "", genericAuthFailure
+	}
+
 	// An MQTT client id is a SESSION KEY: unchecked, any device that can authenticate at
 	// all can evict any other device's session, across tenants. The full reasoning — and
 	// why this admits a device-chosen discriminator rather than one exact value — is on

@@ -370,7 +370,8 @@ func (api *Api) DeviceCredentialByCredentialId(ctx context.Context, credentialTy
 // connectCredentialColumns and connectDeviceFields are everything an MQTT password
 // connect reads from a resolved credential and its device: what checkExpiry,
 // storedSecret and credentialDevice read on the credential, and the device's id, tenant
-// and token.
+// and token, and when it was disabled — the callout refuses a disabled device, and a NULL
+// here reads as "enabled", so leaving the field out would admit one.
 //
 // The credential's columns are written table-qualified, as the WHERE clause is: a
 // root-statement Select by FIELD name renders an unqualified column, and id, tenant_id,
@@ -389,7 +390,7 @@ var (
 		"device_credentials.secret_digest",
 		"device_credentials.expires_at",
 	}
-	connectDeviceFields = []string{"ID", "TenantId", "Token"}
+	connectDeviceFields = []string{"ID", "TenantId", "Token", "DisabledAt"}
 )
 
 // deviceCredentialForConnect is DeviceCredentialByCredentialId reading only
@@ -424,7 +425,8 @@ func (api *Api) deviceCredentialForConnect(ctx context.Context, credentialType s
 // On the credential: evaluateCredential and credentialDevice (id, tenant, device id, type,
 // stored secret, expiry), the enabled flag and type CredentialCache.fill requires before it
 // keeps a row. On the device: what the event resolver reads of the authenticated device
-// (id, tenant, token, device type, external id) and what the callout reads (token).
+// (id, tenant, token, device type, external id), what the callout reads (token), and when
+// the device was disabled, which both refuse.
 //
 // The credential's columns are table-qualified for the reason connectCredentialColumns
 // states. An allowlist on purpose: a column added to either model later is not read, and
@@ -441,7 +443,7 @@ var (
 		"device_credentials.enabled",
 		"device_credentials.expires_at",
 	}
-	authDeviceFields = []string{"ID", "TenantId", "Token", "DeviceTypeId", "ExternalId"}
+	authDeviceFields = []string{"ID", "TenantId", "Token", "DeviceTypeId", "ExternalId", "DisabledAt"}
 )
 
 // deviceCredentialForAuth is DeviceCredentialByCredentialId reading only

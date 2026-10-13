@@ -16,6 +16,7 @@ enum FailureReason {
     ApiCallFailed = 2; // API call required for resolution failed
     DeviceNotFound = 3; // Device token could not be resolved to a device
     Unauthenticated = 4; // Presented device credential was missing or invalid (ADR-014)
+    DeviceDisabled = 5; // The device was resolved, but an operator has disabled it
 }
 
 /**

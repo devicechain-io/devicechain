@@ -139,6 +139,9 @@ type DeviceCreateRequest struct {
 	Description     *string
 	DeviceTypeToken string
 	Metadata        *string
+	// Enabled creates the device already disabled when false. Omitted or null is true:
+	// a new device takes part in ingest and commanding unless the caller says otherwise.
+	Enabled *bool
 }
 
 // MaxBulkDeviceCount bounds how many devices one CreateDevices call renders and
@@ -188,7 +191,17 @@ type DeviceUpdateRequest struct {
 	// field the post-commit roster fan-out watches.
 	DeviceTypeToken dcgraphql.OptionalString
 	Metadata        dcgraphql.OptionalString
+	// Enabled disables (false) or re-enables (true) the device. Omitted leaves it as it
+	// is. An explicit NULL IS REFUSED rather than read as false: a null that quietly
+	// quarantined a device would cut it off from ingest and commanding with a 200.
+	Enabled dcgraphql.OptionalBool
 }
+
+// ErrDeviceDisabled is the refusal for a device an operator has disabled: its events are
+// refused at resolution, its broker connects are refused, and commands to it are refused
+// at enqueue. It is permanent for as long as the device stays disabled, so nothing that
+// receives it should retry.
+var ErrDeviceDisabled = errors.New("the device is disabled")
 
 // Represents a device.
 type Device struct {
@@ -209,6 +222,30 @@ type Device struct {
 	// NULL to created_at, so the roster facts this service emits and the roster page the
 	// engine reconciles from cannot disagree about it.
 	ExpectedSince sql.NullTime
+
+	// DisabledAt is when an operator disabled the device; NULL means it is enabled. A
+	// disabled device's events are refused at resolution, its broker connects are
+	// refused at the auth callout, and commands to it are refused at enqueue. It is
+	// surfaced as `enabled` (DisabledAt NULL); the timestamp says since when.
+	//
+	// 🔴 THE STORED FORM IS "DISABLED SINCE", NOT AN `enabled` BOOLEAN, BECAUSE OF WHAT A
+	// ZERO VALUE MEANS. Devices are read through narrow column lists (the credential
+	// lookups' allowlists) and through the device-by-token key-value bucket, whose entries
+	// are JSON written by whichever replica filled them — during a rolling upgrade, by a
+	// replica that has never heard of this field. An `Enabled bool` would decode as false
+	// from every such entry and refuse the whole fleet's events until each entry expired.
+	// A NULL timestamp decodes as "enabled", which is what every device was before. The
+	// price is the opposite direction: a narrow read that forgot this column would read a
+	// disabled device as enabled, which is why the credential lookups' column lists carry
+	// it and a test pins both (TestADisabledDeviceIsRefusedThroughEveryLookup).
+	//
+	// Nullable with no default, for the reason migration_device_disabled.go records.
+	DisabledAt sql.NullTime
+}
+
+// IsDisabled reports whether an operator has disabled the device.
+func (d *Device) IsDisabled() bool {
+	return d != nil && d.DisabledAt.Valid
 }
 
 // DefaultOrder implements rdb.Sortable with the registry default: newest first, token

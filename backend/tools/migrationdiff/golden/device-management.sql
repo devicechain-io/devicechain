@@ -782,7 +782,8 @@ CREATE TABLE "device-management".devices (
  metadata jsonb,
  device_type_id bigint,
  external_id character varying(256),
- expected_since timestamp with time zone
+ expected_since timestamp with time zone,
+ disabled_at timestamp with time zone
 );
 CREATE TABLE "device-management".entity_attributes (
  id bigint NOT NULL,
