@@ -55,6 +55,7 @@ on:
       # this directory, add that file here.
       - 'deploy/images/timescaledb/versions.conf'
       - 'deploy/images/timescaledb/Dockerfile'
+      - 'deploy/images/timescaledb/pg-minor.sh'
   # Rebuild on demand — a base-image CVE fix lands in the CNPG base without any
   # change here, and the pins in versions.conf are what make that rebuild safe.
   workflow_dispatch:
@@ -114,6 +115,9 @@ jobs:
       # real gate waved a known-bad bump through.
       - name: Compatibility gate self-test
         run: ${{ env.DIR }}/verify-compat.sh --self-test
+
+      - name: PG minor derivation self-test
+        run: ${{ env.DIR }}/pg-minor.sh --self-test
 
       # 🔴 The base ref is the event's real base, not HEAD~1.
       #
@@ -210,11 +214,11 @@ jobs:
         run: |
           set -a; . "${DIR}/versions.conf"; set +a
 
-          pg_minor="${PG_IMAGE##*:}"; pg_minor="${pg_minor%%-*}"
-          # A digest-pinned base would leave the hex here and produce a tag like
-          # `sha256...-ts2.28.3`. Fail loudly rather than publish that.
-          if ! printf '%s' "$pg_minor" | grep -qE '^[0-9]+\.[0-9]+$'; then
-            echo "::error::could not derive a PostgreSQL minor from PG_IMAGE='${PG_IMAGE}' (got '${pg_minor}')"
+          # pg-minor.sh strips a `@sha256:` digest before taking the tag (a bare
+          # `${PG_IMAGE##*:}` returns the digest hex once pinned) and refuses
+          # anything that is not `N.N`. Fail loudly rather than publish a bad tag.
+          if ! pg_minor="$("${DIR}/pg-minor.sh" "$PG_IMAGE")"; then
+            echo "::error::could not derive a PostgreSQL minor from PG_IMAGE='${PG_IMAGE}'"
             exit 1
           fi
 

@@ -1,0 +1,58 @@
+{
+  "version": 1,
+  "dependencies": {
+    "net8.0": {
+      "Microsoft.DotNet.ILCompiler": {
+        "type": "Direct",
+        "requested": "[8.0.31, )",
+        "resolved": "8.0.31",
+        "contentHash": "FPlzoyWyfrMrnZghOyfIH5LILgtGSEfhlutcZJOx+HzwvkL0JUXFgj6pQBUo+JK32leyYK+cyhlZxgRCmLxKvQ=="
+      },
+      "Microsoft.NET.ILLink.Tasks": {
+        "type": "Direct",
+        "requested": "[8.0.31, )",
+        "resolved": "8.0.31",
+        "contentHash": "OJdAGATV2QoVWL11zlDLEluA06q8rK+cgZR47ohrO8V+Qj5z9dlvN7bG9/0e5t0IOe+yD8tREC0bpsEgDGrzIQ=="
+      },
+      "MQTTnet": {
+        "type": "Transitive",
+        "resolved": "4.3.7.1207",
+        "contentHash": "ah7aHXoedWp5m5a4zy2u4phOEVj0QFYzOb5tFKQeV8RRBrxp+1QREF4ymZuG8D+hzB2dhtrrG81WxTFv0PzOeQ=="
+      },
+      "System.Text.Json": {
+        "type": "Transitive",
+        "resolved": "8.0.5",
+        "contentHash": "0f1B50Ss7rqxXiaBJyzUu9bWFOO2/zSlifZ/UNMdiIpDYe4cY4LQQicP4nirK1OS31I43rn062UIJ1Q9bpmHpg=="
+      },
+      "System.Threading.Channels": {
+        "type": "Transitive",
+        "resolved": "8.0.0",
+        "contentHash": "CMaFr7v+57RW7uZfZkPExsPB6ljwzhjACWW1gfU35Y56rk72B/Wu+sTqxVmGSk4SFUlPc3cjeKND0zktziyjBA=="
+      },
+      "devicechain.sdk": {
+        "type": "Project",
+        "dependencies": {
+          "MQTTnet": "[4.3.7.1207, )",
+          "System.Text.Json": "[8.0.5, )",
+          "System.Threading.Channels": "[8.0.0, )"
+        }
+      }
+    },
+    "net8.0/linux-x64": {
+      "Microsoft.DotNet.ILCompiler": {
+        "type": "Direct",
+        "requested": "[8.0.31, )",
+        "resolved": "8.0.31",
+        "contentHash": "FPlzoyWyfrMrnZghOyfIH5LILgtGSEfhlutcZJOx+HzwvkL0JUXFgj6pQBUo+JK32leyYK+cyhlZxgRCmLxKvQ==",
+        "dependencies": {
+          "runtime.linux-x64.Microsoft.DotNet.ILCompiler": "8.0.31"
+        }
+      },
+      "runtime.linux-x64.Microsoft.DotNet.ILCompiler": {
+        "type": "Transitive",
+        "resolved": "8.0.31",
+        "contentHash": "kkBeqITEI4aKmAjeYm8KkPZ3qNLcRCMG6HILMZi5JHdQumXJGYJhDHH4hBhTAIAhS+5BzJmJkhB7Zie9CRZeOQ=="
+      }
+    }
+  }
+}

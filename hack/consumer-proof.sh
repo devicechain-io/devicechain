@@ -198,9 +198,11 @@ arms() {
   [ -d "$WORK/tarballs" ] || fail "no tarballs yet. Run: $0 pack"
   require_fresh_tarballs
   say "installing the harness"
+  # The harness is a fixed tool (puppeteer-core), not the thing under test, so it installs
+  # from its committed lockfile. The arms below install tarballs the way a consumer would.
   mkdir -p "$WORK/harness"
   cp "$RIG/harness"/* "$WORK/harness/"
-  (cd "$WORK/harness" && npm install --no-audit --no-fund)
+  (cd "$WORK/harness" && npm ci --no-audit --no-fund)
   for arm in "${ARMS[@]}"; do
     materialize "$arm"
     install_arm "$arm"

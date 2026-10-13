@@ -1171,15 +1171,13 @@ run_assertions() {
   if [[ -f $versions_conf ]]; then
     # shellcheck disable=SC1090
     source "$versions_conf"
-    pg_minor=${PG_IMAGE##*:}
-    pg_minor=${pg_minor%%-*}
-    # Guarded, because the workflow this formula is copied from guards it too. A
-    # digest-pinned PG_IMAGE leaves hex here, and the assertion would then fail
-    # pointing at variables.tf when the problem is PG_IMAGE.
-    if ! grep -qE '^[0-9]+\.[0-9]+$' <<<"$pg_minor"; then
-      echo >&2 "MISSING: could not parse a PostgreSQL minor version from PG_IMAGE=$PG_IMAGE (got '$pg_minor')."
-      failures=$((failures + 1))
+    # The same helper the publish workflow uses, so the two cannot disagree; it
+    # strips a `@sha256:` pin first. Guarded so an unparseable PG_IMAGE fails
+    # pointing at PG_IMAGE rather than at variables.tf.
+    if ! pg_minor=$("$repo_root/deploy/images/timescaledb/pg-minor.sh" "$PG_IMAGE"); then
       pg_minor=""
+      echo >&2 "MISSING: could not parse a PostgreSQL minor version from PG_IMAGE=$PG_IMAGE."
+      failures=$((failures + 1))
     fi
     want_image="ghcr.io/devicechain-io/postgresql-timescaledb:${pg_minor}-ts${TIMESCALEDB_VERSION}-r${IMAGE_REVISION}"
     # `tofu console` renders a string result WITH its quotes, so the expected value

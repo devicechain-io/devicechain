@@ -1696,7 +1696,7 @@ jobs:
           echo "the MQTT gateway never came up:"; cat "$RUNNER_TEMP/nats.log"; exit 1
 
       - name: Restore
-        run: dotnet restore
+        run: dotnet restore --locked-mode
 
       - name: Build
         run: dotnet build --no-restore -c Release
@@ -1826,7 +1826,7 @@ jobs:
           dotnet-version: '8.0.x'
 
       - name: Restore
-        run: dotnet restore
+        run: dotnet restore --locked-mode
 
       - name: Build (runtime, test kit, tests, and the old-NUnit compile)
         run: dotnet build --no-restore -c Release

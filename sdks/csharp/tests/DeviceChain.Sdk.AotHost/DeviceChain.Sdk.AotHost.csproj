@@ -22,6 +22,9 @@
     <Nullable>enable</Nullable>
     <IsPackable>false</IsPackable>
     <PublishAot>true</PublishAot>
+    <!-- Declared so the locked restore records the linux-x64 graph that CI's publish -r linux-x64
+         needs; without it the publish re-resolves and rewrites packages.lock.json. -->
+    <RuntimeIdentifiers>linux-x64</RuntimeIdentifiers>
     <!-- Surface every trim/AOT warning individually rather than one rolled-up line, so a new
          one names the offending call site. -->
     <TrimmerSingleWarn>false</TrimmerSingleWarn>

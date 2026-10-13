@@ -23,5 +23,8 @@
     <GenerateDocumentationFile>false</GenerateDocumentationFile>
     <IsPackable>false</IsPackable>
     <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <!-- NuGet lock file (packages.lock.json, committed): CI restores in locked mode, so a
+         dependency resolves to exactly the version and content hash recorded here. -->
+    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
   </PropertyGroup>
 </Project>

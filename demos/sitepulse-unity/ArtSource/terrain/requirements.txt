@@ -1,0 +1,19 @@
+# Pinned, hash-verified dependencies for the sitepulse terrain scripts
+# (quarry_*.py), installed by .github/workflows/sitepulse-fleet.yml with
+#   pip install --require-hashes -r requirements.txt
+# CI runs Python 3.10 on Linux, so the hashes cover the cp310 manylinux wheels
+# (x86_64 plus the other architectures PyPI ships for them). Source
+# distributions are deliberately NOT listed: with --require-hashes pip refuses
+# anything unlisted, so a platform without a wheel fails loudly instead of
+# compiling from source. To bump a version, regenerate the hashes from
+# https://pypi.org/pypi/<name>/<version>/json (the `urls[].digests.sha256` of
+# each wheel for the interpreter you run), and update both lines together.
+numpy==1.24.2 \
+    --hash=sha256:6524630f71631be2dabe0c541e7675db82651eb998496bbe16bc4f77f0772253 \
+    --hash=sha256:a51725a815a6188c662fb66fb32077709a9ca38053f0274640293a14fdd22978
+Pillow==9.5.0 \
+    --hash=sha256:5ba1b81ee69573fe7124881762bb4cd2e4b6ed9dd28c9c60a632902fe8db8b38 \
+    --hash=sha256:fe7e1c262d3392afcf5071df9afa574544f28eac825284596ac6db56e6d11062 \
+    --hash=sha256:8f36397bf3f7d7c6a3abdea815ecf6fd14e7fcd4418ab24bae01008d8d8ca15e \
+    --hash=sha256:252a03f1bdddce077eff2354c3861bf437c892fb1832f75ce813ee94347aa9b5 \
+    --hash=sha256:85ec677246533e27770b0de5cf0f9d6e4ec0c212a1f89dfc941b64b21226009d
