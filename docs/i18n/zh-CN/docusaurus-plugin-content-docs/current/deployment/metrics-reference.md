@@ -36,6 +36,7 @@ title: 指标参考
 | `command_delivery_nudges_dropped_total` | 因队列已满而丢弃的分发触发。这是延迟信号，不是错误率：指令仍会在投递扫描时发出，扫描是所有触发之下的兜底。 |
 | `command_delivery_nudges_requested_total` | 被接受进入入队时分发队列的分发触发，每条通过 createCommand 创建的指令一个（机群批次不发出任何触发）。 |
 | `command_delivery_presence_read_errors_total` | 无法读取在线状态投影的扫描轮次；该门失败即放行，因此这里持续有速率，表示指令正在无门控地分发。 |
+| `command_delivery_disabled_gate_errors_total` | 无法为某个分发批次读取已停用设备记录（该批次不分发），或无法从 device-management 同步该记录的次数。持续有速率表示指令被延迟，而不是丢失。 |
 | `command_delivery_responses_dead_lettered_total` | 在记录它们的所有尝试都失败后写入死信流的设备指令响应，使设备确实给出的应答可以被看到，而不会让其指令看起来没有被应答。 |
 | `command_delivery_responses_refused_total` | 因发布的设备并不拥有其所指指令而被拒绝的设备响应。预期为零：要么某设备在替另一设备应答，要么分发把指令发给了错误的设备。 |
 | `command_delivery_stranded_observed_total` | 发现停留在 SENT 且没有结果的指令，其停留时间超过平台仍可能在重试的时长。 |

@@ -150,7 +150,7 @@ query {
 
 Use `statuses` when you care about a set. "Everything still in flight for this device" is:
 
-- `HELD` — withheld because the device is away.
+- `HELD` — withheld because the device is away, or because it is disabled.
 - `PARKED` — published to a device that turned out not to be awake.
 - `SENT` — dispatched and unanswered.
 
@@ -190,6 +190,36 @@ A token that matches no command *is* an error.
 `cancelCommandBatch` applies exactly this brake to a whole fleet write: the same states are
 cancelled, and it stops at the same line, `SENT`. See
 [Cancelling a batch](../concepts/commands.md#cancelling-a-batch).
+
+### Commands held for a disabled device {#held-while-disabled}
+
+When a device is [disabled](./device-credentials.md#disabling-a-device), the commands already
+queued for it are **held**: they move to `HELD`, are not published, and are not cancelled. When
+the device is enabled they are released and go out, oldest first. While they wait they still
+lapse at their own `expiresAt`, as `EXPIRED`. This hold ends only when the device is enabled,
+which is what separates it from a command held for a device that is merely offline.
+
+To see what is held, ask for the device's hold. `heldCount` is every command the device still
+has that has not been sent (`QUEUED`, `HELD` or `PARKED`), and is `0` for an enabled device:
+
+```graphql
+query {
+  deviceCommandHold(deviceToken: "pump-17") { disabled heldCount }
+}
+```
+
+To discard them instead, cancel everything the platform still holds for the device. It applies
+the same rule as `cancelCommand` to each command, so a `SENT` command is never touched, and it
+reports how many it cancelled:
+
+```graphql
+mutation {
+  cancelDeviceCommands(deviceToken: "pump-17") { cancelled }
+}
+```
+
+The console shows the same on the device's **Commands** tab: "N queued commands held while this
+device is disabled", with a **Cancel all** button for operators who can write commands.
 
 ## Set a TTL you can live with {#set-a-ttl-you-can-live-with}
 
