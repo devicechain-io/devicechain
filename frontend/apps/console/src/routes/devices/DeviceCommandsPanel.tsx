@@ -20,6 +20,7 @@ import { Combobox } from '@/components/ui/combobox';
 import { HintText } from '@/components/ui/hint-text';
 import { FormField } from '@/components/ui/form-field';
 import { CommandParameterForm } from './CommandParameterForm';
+import { HeldWhileDisabledNotice } from './HeldWhileDisabledNotice';
 import { LoadingState } from '@/components/ui/loading-state';
 import { ErrorState } from '@/components/ui/error-state';
 import { EmptyState } from '@/components/ui/empty-state';
@@ -231,6 +232,9 @@ export function DeviceCommandsPanel({ deviceToken }: { deviceToken: string }) {
 
   return (
     <div className="space-y-6">
+      {/* Commands queued for a DISABLED device are held, not sent and not cancelled. */}
+      <HeldWhileDisabledNotice deviceToken={deviceToken} reloadKey={version} onCancelled={reload} />
+
       {/* Issue form. A command:write failure surfaces as a toast on submit. */}
       <div className="space-y-3">
         {vocabularyLoading ? (
