@@ -33,7 +33,7 @@ const (
 // paths on its own). Over-refusing a spelling a device would never accept costs nothing; missing a
 // spelling it would accept is the failure this exists to prevent.
 func IsFactoryResetPath(path string) bool {
-	var segs []int
+	var segs []uint64
 	for _, s := range strings.Split(strings.TrimSpace(path), "/") {
 		if s == "" {
 			continue
@@ -42,7 +42,7 @@ func IsFactoryResetPath(path string) bool {
 		if err != nil {
 			return false
 		}
-		segs = append(segs, int(n))
+		segs = append(segs, n)
 	}
 	return len(segs) > factoryResetResourceSlot &&
 		segs[0] == deviceObjectID && segs[factoryResetResourceSlot] == factoryResetResourceID
