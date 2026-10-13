@@ -5,6 +5,7 @@ package registry
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"sync"
 	"testing"
@@ -402,4 +403,53 @@ func TestDisabledDeviceRegistrationIsForbiddenOverTheWire(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, codes.Created, resp.Code())
 	assert.Len(t, em.connects(), 1)
+}
+
+// 🔴 A DEVICE DISABLED WHILE REGISTERED IS PUSHED OUT AT ITS NEXT UPDATE. The registration it holds
+// is removed (and its session ended, so storm control cannot hand the old location back), the Update
+// is answered 4.04, the device re-registers and meets 4.03; once enabled it registers (2.01) with
+// nothing left over.
+func TestDisabledWhileRegisteredIsEndedAtItsNextUpdate(t *testing.T) {
+	addr, res, em := startIntegration(t)
+	conn := dial(t, addr, "dev-1")
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	setDisabled := func(v bool) {
+		res.mu.Lock()
+		res.disabled = v
+		res.mu.Unlock()
+	}
+
+	resp, err := conn.Post(ctx, "/rd", message.TextPlain, nil, query("lt=300")...)
+	require.NoError(t, err)
+	require.Equal(t, codes.Created, resp.Code())
+	regId := locationRegID(t, resp)
+
+	// A lookup that FAILS must not push a healthy fleet out: the Update is still 2.04.
+	res.mu.Lock()
+	res.disabledErr = errors.New("device-management unreachable")
+	res.mu.Unlock()
+	upd, err := conn.Post(ctx, "/rd/"+regId, message.TextPlain, nil, query("lt=300")...)
+	require.NoError(t, err)
+	assert.Equal(t, codes.Changed, upd.Code(), "an unanswerable disabled check must not end a registration")
+	res.mu.Lock()
+	res.disabledErr = nil
+	res.mu.Unlock()
+
+	setDisabled(true)
+	upd, err = conn.Post(ctx, "/rd/"+regId, message.TextPlain, nil, query("lt=300")...)
+	require.NoError(t, err)
+	assert.Equal(t, codes.NotFound, upd.Code(), "a disabled device's Update must be 4.04")
+
+	// Re-registering straight away (inside the storm-control backoff) is 4.03, not the old location.
+	again, err := conn.Post(ctx, "/rd", message.TextPlain, nil, query("lt=300")...)
+	require.NoError(t, err)
+	assert.Equal(t, codes.Forbidden, again.Code())
+
+	setDisabled(false)
+	back, err := conn.Post(ctx, "/rd", message.TextPlain, nil, query("lt=300")...)
+	require.NoError(t, err)
+	require.Equal(t, codes.Created, back.Code())
+	assert.NotEqual(t, regId, locationRegID(t, back), "the old location was handed back")
+	assert.Len(t, em.connects(), 2)
 }

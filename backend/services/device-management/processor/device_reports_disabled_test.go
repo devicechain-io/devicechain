@@ -38,7 +38,8 @@ func (a *disabledReportsApi) ApplyDeviceConfigurationReport(context.Context, str
 // into the dead-letter store. It is counted in config_reports_rejected_total{reason="device_disabled"}.
 func TestADisabledDevicesConfigurationReportsAreCountedAndSettled(t *testing.T) {
 	ms := &core.Microservice{InstanceId: "test", FunctionalArea: "device-management"}
-	ms.UseMetricsRegistry(prometheus.NewRegistry())
+	reg := prometheus.NewRegistry()
+	ms.UseMetricsRegistry(reg)
 	dead := &deadRecorder{}
 	api := &disabledReportsApi{}
 	rc := NewDeviceReportsConsumer(ms, nil, core.NewNoOpLifecycleCallbacks(), api,
@@ -64,6 +65,9 @@ func TestADisabledDevicesConfigurationReportsAreCountedAndSettled(t *testing.T) 
 	}
 	if len(dead.msgs) != 0 {
 		t.Fatalf("wrote %d dead letters for a disabled device, want 0", len(dead.msgs))
+	}
+	if got := loopResults(t, reg, "device_reports", core.ResultDropped); got != 2 {
+		t.Fatalf("device_reports results{dropped} = %v, want 2 (the label update-management uses for the same refusal)", got)
 	}
 	if got := testutil.ToFloat64(rc.rejected.WithLabelValues(model.ReportRejectedDeviceDisabled)); got != 2 {
 		t.Fatalf("config_reports_rejected_total{reason=device_disabled} = %v, want 2", got)

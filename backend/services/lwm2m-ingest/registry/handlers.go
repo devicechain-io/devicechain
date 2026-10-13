@@ -229,6 +229,12 @@ func (h *Handlers) handleRdItem(w mux.ResponseWriter, r *mux.Message) {
 			h.respond(w, codes.TooManyRequests)
 			return
 		}
+		// A device disabled since it registered is pushed out here: 4.04, so it re-registers and is
+		// refused (4.03). Before Update, which holds the table lock and must do no network I/O.
+		if h.reg.EndIfDisabled(r.Context(), identity, regId) {
+			h.respond(w, codes.NotFound)
+			return
+		}
 		if h.reg.Update(identity, regId, parseLifetime(parseQueries(r))) == UpdateOK {
 			h.respond(w, codes.Changed) // 2.04
 			conn := w.Conn()

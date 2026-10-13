@@ -265,6 +265,12 @@ func (rc *DeviceReportsConsumer) refused(ctx context.Context, msg messaging.Mess
 		log.Warn().Str("device", token).Str("reason", refusal.Reason).
 			Msg("Device configuration report refused: it names a revision the device was not sent.")
 		rc.deadLetter(ctx, msg, token, "device configuration report refused", refusal)
+	case model.ReportRejectedDeviceDisabled:
+		// Discarded, as update-management and event resolution discard a disabled device's traffic.
+		log.Debug().Str("device", token).Msg("Discarding a configuration report from a disabled device.")
+		msg.Ack()
+		done(core.ResultDropped)
+		return
 	default:
 		log.Debug().Str("device", token).Str("reason", refusal.Reason).Msg("Device configuration report refused.")
 	}
