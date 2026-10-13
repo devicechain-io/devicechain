@@ -368,6 +368,14 @@ var afterPublish = []entity{
 			}}
 		},
 		After: uploadProbeArtifact,
+		// The upload is what makes it AVAILABLE, so the create response (UPLOADING) is
+		// not what it holds afterwards; the seed records the settled read instead.
+		Settled: func(f map[string]any) error {
+			if s := str(f["state"]); s != "AVAILABLE" {
+				return fmt.Errorf("state is %q, want AVAILABLE", s)
+			}
+			return nil
+		},
 	},
 	{
 		// Depends on: device, artifact-available.
