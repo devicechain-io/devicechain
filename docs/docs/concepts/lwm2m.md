@@ -59,6 +59,21 @@ A command for a device that is currently asleep is **held durably and delivered 
 
 Either way the platform still holds the command, so you can still cancel it. If its time-to-live runs out first, the record says it never reached a device rather than blaming the device for not answering.
 
+### Named operations and device information
+
+Two standard Device-object operations are available by name, so nobody has to type `/3/0/4`:
+
+| Command key | What it does |
+| --- | --- |
+| `lwm2m.reboot` | Executes the Device object's Reboot resource. Takes no parameters. |
+| `lwm2m.readDeviceInfo` | Reads manufacturer, model number, serial number, firmware version and battery level, and answers with the values it read and a list of the resources it could not. |
+
+They are ordinary commands. Declare them on the device profile like any other command (the profile's Commands tab has an **Add LwM2M standard commands** button that adds both), and they go through the same enqueue check, permissions, audit trail and hold-and-drain delivery as every other command. A resource the device does not have is reported as missing, with the reason, rather than failing the whole read.
+
+Factory Reset is deliberately not offered by name: it is destructive and cannot be undone. A device that supports it can still be sent an `lwm2m.execute` of `/3/0/5` by an operator who types the path. Firmware update likewise stays the operator sequence described above.
+
+The same Device-object information is also collected for you. When a device registers, DeviceChain reads those resources once and records them on the device as **client attributes** (`manufacturer`, `modelNumber`, `serialNumber`, `firmwareVersion`, `batteryLevel`), so they show on the device page. Resources the device did not report are listed in the `lwm2m.deviceInfoMissing` attribute. This never delays registration or telemetry: it runs after the registration is complete, in the same per-device order as commands, asks each resource once, retries a silent device only once, and reads a given device at most once an hour. Values that have not changed are not rewritten.
+
 ### The same pipeline
 
 Decoded measurements and presence changes flow through the normal decode → resolve → persist path, so everything downstream treats LwM2M devices like any other.

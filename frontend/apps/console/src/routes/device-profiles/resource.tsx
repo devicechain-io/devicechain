@@ -30,6 +30,7 @@ import { DefinitionsPanel, type DefinitionColumn } from './DefinitionsPanel';
 import { VersionsPanel } from './VersionsPanel';
 import { ConfigurationDeclarationPanel } from './ConfigurationDeclarationPanel';
 import { MetricDefinitionForm, CommandDefinitionForm } from './DefinitionForms';
+import { Lwm2mStandardCommands } from './Lwm2mStandardCommands';
 import { DetectionRuleAuthoring } from './DetectionRuleAuthoring';
 import { RuleHealthPanel } from './RuleHealthPanel';
 import {
@@ -229,17 +230,24 @@ function commandColumns(t: (key: string) => string): DefinitionColumn<CommandDef
 
 function CommandsTab({ profile }: { profile: DeviceProfile }) {
   const { t } = useTranslation(['deviceProfiles']);
+  // Remounting the list (a new key) is how it re-reads after the LwM2M shortcut added rows;
+  // the panel owns its own load and exposes no reload handle.
+  const [listVersion, setListVersion] = useState(0);
   return (
-    <DefinitionsPanel
-      profileToken={profile.token}
-      i18nKey="defCommand"
-      description={t('defCommandDescription')}
-      load={listCommandDefinitions}
-      remove={deleteCommandDefinition}
-      removeConfirm={(d) => t('defCommandRemoveConfirm', { key: d.commandKey })}
-      columns={commandColumns(t)}
-      renderForm={(e, onDone) => <CommandDefinitionForm profileToken={profile.token} entity={e} onDone={onDone} />}
-    />
+    <div className="space-y-4">
+      <Lwm2mStandardCommands profileToken={profile.token} onAdded={() => setListVersion((v) => v + 1)} />
+      <DefinitionsPanel
+        key={listVersion}
+        profileToken={profile.token}
+        i18nKey="defCommand"
+        description={t('defCommandDescription')}
+        load={listCommandDefinitions}
+        remove={deleteCommandDefinition}
+        removeConfirm={(d) => t('defCommandRemoveConfirm', { key: d.commandKey })}
+        columns={commandColumns(t)}
+        renderForm={(e, onDone) => <CommandDefinitionForm profileToken={profile.token} entity={e} onDone={onDone} />}
+      />
+    </div>
   );
 }
 

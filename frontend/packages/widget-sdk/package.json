@@ -58,7 +58,7 @@
   "devDependencies": {
     "@devicechain/dashboards": "0.0.0-dev",
     "@testing-library/react": "^16.3.3",
-    "@types/node": "^26.6.4",
+    "@types/node": "^26.6.5",
     "@types/react": "^19.3.0",
     "echarts": "^6.0.0",
     "esbuild": "^0.28.2",

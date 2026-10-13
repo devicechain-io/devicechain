@@ -1,0 +1,221 @@
+{
+  "canvas": {
+    "breakpoints": {
+      "base": 0
+    },
+    "grid": {
+      "columns": 24,
+      "gap": 8,
+      "rowHeight": 40
+    },
+    "sizing": "fill"
+  },
+  "schemaVersion": 1,
+  "slots": {
+    "device": {
+      "label": "Device",
+      "type": "device"
+    }
+  },
+  "title": "Device detail",
+  "widgets": [
+    {
+      "datasource": {
+        "kind": "slot",
+        "measurements": [
+          "temperature"
+        ],
+        "slot": "device"
+      },
+      "id": "w-temp",
+      "layout": {
+        "base": {
+          "col": 0,
+          "colSpan": 6,
+          "row": 0,
+          "rowSpan": 4,
+          "z": 0
+        }
+      },
+      "options": {
+        "flashOnChange": true,
+        "measurement": "temperature",
+        "precision": 1,
+        "title": "Temperature",
+        "unit": "C"
+      },
+      "type": "latest-card"
+    },
+    {
+      "datasource": {
+        "kind": "slot",
+        "measurements": [
+          "humidity"
+        ],
+        "slot": "device"
+      },
+      "id": "w-hum",
+      "layout": {
+        "base": {
+          "col": 6,
+          "colSpan": 6,
+          "row": 0,
+          "rowSpan": 4,
+          "z": 0
+        }
+      },
+      "options": {
+        "flashOnChange": true,
+        "measurement": "humidity",
+        "precision": 1,
+        "title": "Humidity",
+        "unit": "%"
+      },
+      "type": "latest-card"
+    },
+    {
+      "datasource": {
+        "kind": "slot",
+        "measurements": [
+          "temperature"
+        ],
+        "slot": "device"
+      },
+      "id": "w-gauge",
+      "layout": {
+        "base": {
+          "col": 12,
+          "colSpan": 6,
+          "row": 0,
+          "rowSpan": 4,
+          "z": 0
+        }
+      },
+      "options": {
+        "max": 40,
+        "measurement": "temperature",
+        "min": 0,
+        "title": "Temperature",
+        "unit": "C"
+      },
+      "type": "gauge"
+    },
+    {
+      "datasource": {
+        "kind": "slot",
+        "measurements": [],
+        "slot": "device"
+      },
+      "id": "w-alarms-count",
+      "layout": {
+        "base": {
+          "col": 18,
+          "colSpan": 6,
+          "row": 0,
+          "rowSpan": 4,
+          "z": 0
+        }
+      },
+      "options": {
+        "state": "ACTIVE",
+        "title": "Active alarms"
+      },
+      "type": "alarm-count"
+    },
+    {
+      "datasource": {
+        "kind": "slot",
+        "measurements": [
+          "temperature",
+          "humidity"
+        ],
+        "slot": "device"
+      },
+      "id": "w-chart",
+      "layout": {
+        "base": {
+          "col": 0,
+          "colSpan": 16,
+          "row": 4,
+          "rowSpan": 8,
+          "z": 0
+        }
+      },
+      "options": {
+        "title": "Telemetry",
+        "window": 300
+      },
+      "type": "timeseries-chart"
+    },
+    {
+      "datasource": {
+        "kind": "slot",
+        "location": {
+          "series": "latest"
+        },
+        "measurements": [],
+        "slot": "device"
+      },
+      "id": "w-map",
+      "layout": {
+        "base": {
+          "col": 16,
+          "colSpan": 8,
+          "row": 4,
+          "rowSpan": 8,
+          "z": 0
+        }
+      },
+      "options": {
+        "title": "Location"
+      },
+      "type": "map"
+    },
+    {
+      "datasource": {
+        "kind": "slot",
+        "measurements": [],
+        "slot": "device"
+      },
+      "id": "w-table",
+      "layout": {
+        "base": {
+          "col": 0,
+          "colSpan": 12,
+          "row": 12,
+          "rowSpan": 6,
+          "z": 0
+        }
+      },
+      "options": {
+        "flashOnChange": true,
+        "precision": 2,
+        "title": "Latest values"
+      },
+      "type": "table"
+    },
+    {
+      "datasource": {
+        "kind": "slot",
+        "measurements": [],
+        "slot": "device"
+      },
+      "id": "w-alarms",
+      "layout": {
+        "base": {
+          "col": 12,
+          "colSpan": 12,
+          "row": 12,
+          "rowSpan": 6,
+          "z": 0
+        }
+      },
+      "options": {
+        "maxRows": 25,
+        "state": "ACTIVE",
+        "title": "Alarms"
+      },
+      "type": "alarm-table"
+    }
+  ]
+}

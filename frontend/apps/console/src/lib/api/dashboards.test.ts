@@ -21,6 +21,7 @@ vi.mock('@devicechain/client', async (importOriginal) => ({
 }));
 
 const {
+  createDashboard,
   publishDashboard,
   activateDashboardVersion,
   getPublishedDashboard,
@@ -211,5 +212,24 @@ describe('publishing and serving', () => {
       ),
     ).toBe(false);
     expect(isNotPublishedError(new Error('NOT_PUBLISHED'))).toBe(false);
+  });
+});
+
+describe('createDashboard', () => {
+  it('sends the definition it is given verbatim (an import, a clone or a template)', async () => {
+    gqlMock.mockResolvedValue({ createDashboard: { token: 'copy' } });
+    const definition = '{"schemaVersion":1,"title":"Plant","widgets":[]}';
+    await createDashboard({ token: 'copy', name: 'Copy', definition });
+    expect(gqlMock).toHaveBeenCalledTimes(1);
+    expect(gqlMock.mock.calls[0][2]).toEqual({
+      request: { token: 'copy', name: 'Copy', description: null, definition },
+    });
+  });
+
+  it('seeds an empty board titled with the name when no definition is given', async () => {
+    gqlMock.mockResolvedValue({ createDashboard: { token: 'blank' } });
+    await createDashboard({ token: 'blank', name: 'Blank' });
+    const sent = (gqlMock.mock.calls[0][2] as { request: { definition: string } }).request.definition;
+    expect(JSON.parse(sent)).toMatchObject({ title: 'Blank', widgets: [] });
   });
 });
