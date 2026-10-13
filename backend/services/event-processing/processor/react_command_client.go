@@ -56,6 +56,8 @@ var permanentRejectionCodes = map[string]bool{
 	// A disabled device accepts no command while it stays disabled, and a rule firing at a
 	// quarantined device would otherwise spend its whole retry budget on each detection.
 	string(dmmodel.RejectDeviceDisabled): true,
+	// A raw Factory Reset is refused identically every time; the rule would otherwise retry it.
+	string(dmmodel.RejectCommandDestructiveRefused): true,
 	// Answered by command-delivery itself, on the request as written.
 	"PAYLOAD_NOT_JSON":   true,
 	"METADATA_NOT_JSON":  true,

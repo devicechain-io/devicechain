@@ -91,10 +91,11 @@ var metricSafeCodes = map[RejectionCode]struct{}{
 
 	// Relayed from device-management's enqueue gate. Listed for the label only; this
 	// is not a mirror of that service's enum and must not be treated as one.
-	"DEVICE_NOT_FOUND":          {},
-	"COMMAND_NOT_IN_VOCABULARY": {},
-	"PAYLOAD_SCHEMA_VIOLATION":  {},
-	"DEVICE_DISABLED":           {},
+	"DEVICE_NOT_FOUND":            {},
+	"COMMAND_NOT_IN_VOCABULARY":   {},
+	"PAYLOAD_SCHEMA_VIOLATION":    {},
+	"DEVICE_DISABLED":             {},
+	"COMMAND_DESTRUCTIVE_REFUSED": {},
 }
 
 // BatchMetrics are the fleet-write counters.

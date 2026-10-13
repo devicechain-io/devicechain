@@ -14,6 +14,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/devicechain-io/dc-microservice/lwm2mpath"
 	"github.com/plgd-dev/go-coap/v3/message"
 	"github.com/plgd-dev/go-coap/v3/message/codes"
 	"github.com/plgd-dev/go-coap/v3/mux"
@@ -155,6 +156,12 @@ func (o *Ops) write(ctx context.Context, conn mux.Conn, payload []byte) OpResult
 // execute issues a CoAP POST (LwM2M Execute) on the path with the optional argument string as
 // text/plain (the LwM2M execute-arguments format). An empty Args is a bare Execute.
 func (o *Ops) execute(ctx context.Context, conn mux.Conn, payload []byte) OpResult {
+	// Defence in depth: the enqueue gate already refuses this, but this is the last stop before the
+	// wire and must not depend on every path having gone through that gate. Checked before path
+	// validation so every spelling gets the same, specific refusal.
+	if lwm2mpath.IsRefusedRawExecute(CommandExecute, payload) {
+		return refuse(labelExecute, "Factory Reset cannot be sent as a raw execute")
+	}
 	p, err := parsePayload(payload)
 	if err != nil {
 		return refuse(labelExecute, err.Error())
