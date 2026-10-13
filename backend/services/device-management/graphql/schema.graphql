@@ -347,6 +347,21 @@ type DeviceProfileVersion {
     changes after publication.
     """
     configurationDeclaration: [ConfigurationKey!]!
+    """
+    This version as a W3C Web of Things Thing Model (TD 1.1), as JSON-LD text. Each metric
+    is a read-only, observable property typed from its data type, with its unit, bounds,
+    allowed values and descriptor (as the property's @type); each command is an action
+    whose input is its typed parameters. A Thing Model describes every device of the
+    profile, so it carries no device address, protocol binding or security. Detection
+    rules, the location and configuration declarations, and metadata are not part of it.
+    The title and description are the profile's current ones, so the text changes only
+    when those do. A version holding a constraint a Thing Model cannot express exactly
+    (allowed values that are not text, or that repeat once typed; bounds on a non-numeric
+    metric) is refused with an error rather than exported without it. A descriptor is
+    emitted as written, so it should be an absolute IRI or a prefixed term the consumer
+    knows.
+    """
+    thingModel: String!
 }
 
 # Represents a typed, unit-bearing metric declared on a device profile (ADR-016/ADR-045).
@@ -400,7 +415,10 @@ type MetricDefinition implements Model & TokenReference & NamedEntity & Metadata
     strings restricts nothing.
     """
     enum: String
-    """Optional semantic tag for the metric, such as a Web of Things type. Stored and returned; not interpreted."""
+    """
+    Optional semantic tag for the metric, such as a Web of Things type. Not interpreted on
+    ingest; a published version's thingModel carries it as the property's @type.
+    """
     descriptor: String
     """Caller-defined metadata as a JSON document, or null when none is set."""
     metadata: String
