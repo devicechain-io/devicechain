@@ -42,6 +42,7 @@
   "deleteDeviceConfirm": "¿Eliminar “{{token}}”? Esto no se puede deshacer.",
   "deleteDeviceTitle": "Eliminar dispositivo",
   "description": "Dispositivos registrados en este inquilino",
+  "exportColTypeToken": "Token del tipo",
   "deviceAssigned": "Dispositivo asignado",
   "deviceDeleted": "Dispositivo “{{token}}” eliminado",
   "deviceNotFound": "No se encontró el dispositivo “{{token}}”.",

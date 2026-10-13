@@ -42,7 +42,10 @@ import {
   getCommandBatch,
   listBatchCommands,
   type CommandBatch,
+  type CommandSearchResults,
 } from '@/lib/api/command-delivery';
+import { isoTime, type CsvColumn } from '@/lib/csv';
+import { ExportCsvButton } from '@/components/ExportCsvButton';
 import { TargetKindBadge } from './TargetKindBadge';
 import { Fact } from './Fact';
 import { groupRefusals, totalRefused, type RefusalGroup } from './refusals';
@@ -50,6 +53,8 @@ import { RefusalGroupList } from './RefusalGroups';
 import { CancelBatchButton, CancelBatchReport, useBatchCancel } from './CancelBatchAction';
 
 const commandsPageSize = 25;
+
+type BatchCommand = CommandSearchResults['results'][number];
 
 export default function CommandBatchDetailPage() {
   const { t } = useTranslation('commandBatches');
@@ -254,23 +259,42 @@ function BatchCommandsPanel({ batchToken, reloadKey }: { batchToken: string; rel
   );
 
   const commands = data?.results ?? [];
+  const exportColumns: CsvColumn<BatchCommand>[] = [
+    { header: t('common:colToken'), value: (c) => c.token },
+    { header: t('colDevice'), value: (c) => c.deviceToken },
+    { header: t('common:colStatus'), value: (c) => c.status },
+    { header: t('colQueued'), value: (c) => isoTime(c.queuedTime) },
+    { header: t('colResult'), value: (c) => c.error || c.responsePayload },
+  ];
 
   return (
     <SectionPanel
       title={t('commandsTitle')}
       description={t('commandsDescription')}
       action={
-        <Combobox
-          className="h-9 w-44"
-          // The lifecycle vocabulary as the frontend holds it — one shared list, so this
-          // filter cannot fall behind the statuses the badges already know about. The
-          // values are the wire strings and are never localized.
-          options={COMMAND_STATUSES.map((s) => ({ value: s, label: s }))}
-          value={status}
-          onChange={setStatus}
-          placeholder={t('filterAllStatuses')}
-          ariaLabel={t('filterStatusLabel')}
-        />
+        <div className="flex items-center gap-2">
+          <Combobox
+            className="h-9 w-44"
+            // The lifecycle vocabulary as the frontend holds it — one shared list, so this
+            // filter cannot fall behind the statuses the badges already know about. The
+            // values are the wire strings and are never localized.
+            options={COMMAND_STATUSES.map((s) => ({ value: s, label: s }))}
+            value={status}
+            onChange={setStatus}
+            placeholder={t('filterAllStatuses')}
+            ariaLabel={t('filterStatusLabel')}
+          />
+          {/* The batch's per-device results, in admitted order, for the status filter in
+              force. The result column is exactly what the table shows (error or response). */}
+          <ExportCsvButton
+            fileStem={`batch-${batchToken}`}
+            columns={exportColumns}
+            scopeKey={`${batchToken}|${status}`}
+            fetchPage={(pageNumber, pageSize) =>
+              listBatchCommands({ batchToken, pageNumber, pageSize, status: status || undefined })
+            }
+          />
+        </div>
       }
     >
       {loading && !data ? (

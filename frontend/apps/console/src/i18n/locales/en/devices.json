@@ -42,6 +42,7 @@
   "deleteDeviceConfirm": "Delete “{{token}}”? This cannot be undone.",
   "deleteDeviceTitle": "Delete device",
   "description": "Devices registered in this tenant",
+  "exportColTypeToken": "Type token",
   "deviceAssigned": "Device assigned",
   "deviceDeleted": "Device “{{token}}” deleted",
   "deviceNotFound": "Device “{{token}}” not found.",
