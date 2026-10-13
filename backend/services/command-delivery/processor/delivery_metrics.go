@@ -110,6 +110,12 @@ type DeliveryMetrics struct {
 	UndeliverableFailed prometheus.Counter
 	PresenceReadErrors  prometheus.Counter
 
+	// DisabledGateErrors counts the times the disabled-device record could not be read for a
+	// dispatch batch (the batch is then NOT dispatched, because publishing is an actuation and
+	// the record is the only thing that says the device is shut out) or could not be corrected
+	// from device-management. A standing rate means commands are being delayed, not lost.
+	DisabledGateErrors prometheus.Counter
+
 	// HoldsReleased counts withheld commands returned to QUEUED because their device
 	// came back. Read it against HoldsPlaced: the two should track each other over a
 	// fleet's duty cycle, and holds placed with nothing released is the signature of a
@@ -270,6 +276,9 @@ func NewDeliveryMetrics(ms *core.Microservice) DeliveryMetrics {
 		PresenceReadErrors: ms.NewCounter("command_delivery_presence_read_errors_total",
 			"Sweep passes that could not read the presence projection; the gate fails OPEN, so a "+
 				"standing rate here means commands are being dispatched ungated"),
+		DisabledGateErrors: ms.NewCounter("command_delivery_disabled_gate_errors_total",
+			"Times the disabled-device record could not be read for a dispatch batch (that batch "+
+				"is not dispatched) or could not be synced from device-management"),
 		HoldsReleased: ms.NewCounter("command_delivery_holds_released_total",
 			"Withheld commands returned to the dispatch queue because their device came back"),
 		StrandedObserved: ms.NewCounter("command_delivery_stranded_observed_total",

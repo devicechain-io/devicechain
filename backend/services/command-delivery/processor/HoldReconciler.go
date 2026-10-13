@@ -110,7 +110,18 @@ func (cproc *CommandDeliveryProcessor) reconcileTenantBatch(ctx context.Context,
 			Int("asked", len(distinctDevices(batch.commands))).Int("answered", len(states)).
 			Msg("Could not read presence for some withheld commands' devices; those stay withheld.")
 	}
+	// 🔴 A HOLD PLACED BECAUSE THE DEVICE IS DISABLED IS NOT THIS RECONCILER'S TO RELEASE. Its
+	// question is "is the device still absent?", and a disabled device being present says
+	// nothing about it: only an enable releases those (ResumeDevice). A tenant whose record
+	// cannot be read is skipped whole, since releasing is the direction that dispatches.
+	disabled, known := cproc.disabledAmong(tenantCtx, batch.tenant, distinctDevices(batch.commands))
+	if !known {
+		return
+	}
 	for _, cmd := range batch.commands {
+		if disabled[cmd.DeviceToken] {
+			continue
+		}
 		// 🔴🔴 THE UNANSWERED QUESTION IS SKIPPED BEFORE ANY VERDICT IS ASKED FOR, AND
 		// THIS LINE IS LOAD-BEARING IN A WAY THE NEXT ONE HIDES. A device the read could
 		// not cover is absent from States, which Decide answers Dispatch — i.e. NOT Hold

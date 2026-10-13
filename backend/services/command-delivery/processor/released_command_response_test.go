@@ -45,7 +45,7 @@ func realApi(t *testing.T) *model.Api {
 	// whether a failed publish returns the command to the queue or retires it as cancelled.
 	// Without the table the release fails on "no such table" and the premise of this test
 	// collapses in a way that looks unrelated.
-	if err := db.AutoMigrate(&model.Command{}, &model.CommandBatch{}); err != nil {
+	if err := db.AutoMigrate(&model.Command{}, &model.CommandBatch{}, &model.DeviceGate{}); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
 	if err := rdb.CreateTenantTokenIndex(db, &model.Command{}); err != nil {

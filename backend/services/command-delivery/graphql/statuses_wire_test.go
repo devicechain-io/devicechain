@@ -66,7 +66,7 @@ func newWireTestCtx(t *testing.T) (context.Context, *model.Api) {
 	if err := rdb.RegisterTokenGrammar(db); err != nil {
 		t.Fatalf("failed to register token grammar: %v", err)
 	}
-	if err := db.AutoMigrate(&model.Command{}, &model.CommandBatch{}); err != nil {
+	if err := db.AutoMigrate(&model.Command{}, &model.CommandBatch{}, &model.DeviceGate{}); err != nil {
 		t.Fatalf("failed to migrate: %v", err)
 	}
 	for _, table := range []any{&model.Command{}, &model.CommandBatch{}} {

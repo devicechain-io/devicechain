@@ -170,6 +170,23 @@ type CommandDeliveryProcessor struct {
 	// configuration, not a misconfiguration.
 	Presence presence.Reader
 
+	// DisabledSource is where the disabled-device record is corrected from, at startup and every
+	// few minutes (see DisabledGate.go). MAY BE NIL, and nil is a degraded mode, not a clean
+	// one: the record then rests on the device-roster facts alone, so a device disabled before
+	// this service first ran stays dispatchable until its next roster change. main logs that
+	// loudly. With a source wired, dispatch for a tenant waits for that tenant's first read.
+	DisabledSource DisabledSource
+
+	// gateMu guards the sync's progress: whether the tenant list has been read, and which tenants
+	// have not yet had their first successful read.
+	gateMu      sync.Mutex
+	gateBooted  bool
+	gatePending map[string]bool
+	// gateSyncEvery and gateRetryEvery override the sync cadence; zero means the platform
+	// defaults. Only a test sets them.
+	gateSyncEvery  time.Duration
+	gateRetryEvery time.Duration
+
 	// dead records a device response that could not be recorded against its command
 	// (ADR-024). Nil when no dead-letter sink is configured, in which case the response
 	// is dropped as it was before. The sink stamps this service as the letter's source
@@ -497,6 +514,14 @@ func groupByTenant(pending []*model.Command, deleted func(string) bool) []tenant
 func (cproc *CommandDeliveryProcessor) deliverTenantBatch(ctx context.Context, batch tenantBatch,
 	path dispatchPath) {
 	tenantCtx := core.WithTenant(ctx, batch.tenant)
+	// 🔴 A DISABLED DEVICE'S COMMANDS ARE WITHHELD BEFORE ANY OTHER VERDICT, on every path that
+	// reaches here (the sweep, the nudge, an enable's resume). They are held, never cancelled
+	// and never published, and a batch the record cannot be read for is left untouched.
+	commands, ok := cproc.withholdDisabled(tenantCtx, batch.tenant, batch.commands)
+	if !ok || len(commands) == 0 {
+		return
+	}
+	batch.commands = commands
 	states := cproc.presenceStates(tenantCtx, distinctDevices(batch.commands))
 	for _, cmd := range batch.commands {
 		// 🔴 A MISSING KEY READS AS State{Known:false}, WHICH Decide ANSWERS Dispatch.
@@ -1216,6 +1241,10 @@ func (cproc *CommandDeliveryProcessor) ExecuteStart(ctx context.Context) error {
 	// behaviour was reachable by anything but the ticker's real interval.
 	cproc.startPeriodic(func() { cproc.runHoldReconcileTicker(ctx) })
 	cproc.startPeriodic(func() { cproc.runStrandedReconcileTicker(ctx) })
+
+	// The disabled-device record's corrective walk. Its first pass is what opens dispatch when
+	// a source is wired, so it starts now rather than on a tick.
+	cproc.startPeriodic(func() { cproc.runGateSyncTicker(ctx) })
 	return nil
 }
 

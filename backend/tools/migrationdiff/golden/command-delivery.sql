@@ -1,6 +1,7 @@
 ALTER SEQUENCE "command-delivery".audit_events_id_seq OWNED BY "command-delivery".audit_events.id;
 ALTER SEQUENCE "command-delivery".command_batches_id_seq OWNED BY "command-delivery".command_batches.id;
 ALTER SEQUENCE "command-delivery".commands_id_seq OWNED BY "command-delivery".commands.id;
+ALTER SEQUENCE "command-delivery".device_gates_id_seq OWNED BY "command-delivery".device_gates.id;
 ALTER TABLE ONLY "command-delivery".audit_events
  ADD CONSTRAINT audit_events_pkey PRIMARY KEY (id);
 ALTER TABLE ONLY "command-delivery".audit_events ALTER COLUMN id SET DEFAULT nextval('"command-delivery".audit_events_id_seq'::regclass);
@@ -12,6 +13,9 @@ ALTER TABLE ONLY "command-delivery".command_delivery_migrations
 ALTER TABLE ONLY "command-delivery".commands
  ADD CONSTRAINT commands_pkey PRIMARY KEY (id);
 ALTER TABLE ONLY "command-delivery".commands ALTER COLUMN id SET DEFAULT nextval('"command-delivery".commands_id_seq'::regclass);
+ALTER TABLE ONLY "command-delivery".device_gates
+ ADD CONSTRAINT device_gates_pkey PRIMARY KEY (id);
+ALTER TABLE ONLY "command-delivery".device_gates ALTER COLUMN id SET DEFAULT nextval('"command-delivery".device_gates_id_seq'::regclass);
 ALTER TABLE ONLY "command-delivery".purged_tenants
  ADD CONSTRAINT purged_tenants_pkey PRIMARY KEY (token, epoch);
 CREATE INDEX "idx_command-delivery_command_batches_deleted_at" ON "command-delivery".command_batches USING btree (deleted_at);
@@ -28,6 +32,7 @@ CREATE INDEX idx_commands_drainable ON "command-delivery".commands USING btree (
 CREATE INDEX idx_commands_queued_device ON "command-delivery".commands USING btree (tenant_id, device_token, id) WHERE ((deleted_at IS NULL) AND ((status)::text = 'QUEUED'::text));
 CREATE INDEX idx_commands_stranded_sent ON "command-delivery".commands USING btree (sent_time, id) WHERE ((deleted_at IS NULL) AND ((status)::text = 'SENT'::text));
 CREATE INDEX idx_commands_tenant_status ON "command-delivery".commands USING btree (tenant_id, status) WHERE (deleted_at IS NULL);
+CREATE INDEX idx_device_gates_disabled ON "command-delivery".device_gates USING btree (tenant_id, device_token) WHERE disabled;
 CREATE SCHEMA "command-delivery";
 CREATE SEQUENCE "command-delivery".audit_events_id_seq
  START WITH 1
@@ -42,6 +47,12 @@ CREATE SEQUENCE "command-delivery".command_batches_id_seq
  NO MAXVALUE
  CACHE 1;
 CREATE SEQUENCE "command-delivery".commands_id_seq
+ START WITH 1
+ INCREMENT BY 1
+ NO MINVALUE
+ NO MAXVALUE
+ CACHE 1;
+CREATE SEQUENCE "command-delivery".device_gates_id_seq
  START WITH 1
  INCREMENT BY 1
  NO MINVALUE
@@ -106,6 +117,13 @@ CREATE TABLE "command-delivery".commands (
  dispatch_nonce character varying(64),
  dispatch_failures integer DEFAULT 0 NOT NULL
 );
+CREATE TABLE "command-delivery".device_gates (
+ id bigint NOT NULL,
+ tenant_id character varying(128) NOT NULL,
+ device_token character varying(128) NOT NULL,
+ disabled boolean NOT NULL,
+ updated_at timestamp with time zone
+);
 CREATE TABLE "command-delivery".purged_tenants (
  token character varying(128) NOT NULL,
  epoch timestamp with time zone NOT NULL,
@@ -115,3 +133,4 @@ CREATE TABLE "command-delivery".purged_tenants (
 CREATE UNIQUE INDEX uix_command_batches_tenant_token ON "command-delivery".command_batches USING btree (tenant_id, token) WHERE (deleted_at IS NULL);
 CREATE UNIQUE INDEX uix_commands_batch_device ON "command-delivery".commands USING btree (tenant_id, batch_id, device_token) WHERE ((batch_id IS NOT NULL) AND (deleted_at IS NULL));
 CREATE UNIQUE INDEX uix_commands_tenant_token ON "command-delivery".commands USING btree (tenant_id, token) WHERE (deleted_at IS NULL);
+CREATE UNIQUE INDEX uix_device_gates_tenant_device ON "command-delivery".device_gates USING btree (tenant_id, device_token);
