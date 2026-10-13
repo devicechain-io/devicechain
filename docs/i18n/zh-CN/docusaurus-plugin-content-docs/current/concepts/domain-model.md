@@ -55,6 +55,25 @@ DeviceChain 将当前状态与历史记录分开：
 
 设备配置文件声明设备接受的命令。发出的命令会持久化并跟踪完整生命周期，而不是发出后就不再关注。[命令](./commands.md)介绍了这两部分。
 
+## 将配置文件导出为 W3C Thing Model {#wot-thing-model}
+
+设备配置文件的每个已发布版本都可以导出为 [W3C Web of Things](https://www.w3.org/TR/wot-thing-description11/) **Thing Model**，即描述一类设备的标准 JSON-LD 文档。配置文件描述的是其设备类型下的所有设备，而不是某一台具体设备，因此导出的是 Thing Model 而不是 Thing Description：它不包含设备地址、协议绑定或安全信息，这些是针对单台设备的 Thing Description 才会添加的内容。
+
+- 每个**指标**成为一个只读、可观察的**属性（property）**，以其指标键命名。其数据类型成为属性的类型（`DOUBLE` → `number`、`INT` → `integer`、`BOOLEAN` → `boolean`、`STRING` → `string`），其单位、最小值、最大值和允许值也会保留。指标的**描述符（descriptor）**成为属性的 `@type`，因此诸如 `saref:Temperature` 的语义标签可以传递给能理解它的工具。
+- 每个**命令**成为一个**动作（action）**，以其命令键命名。其参数成为动作的 `input`：一个对象模式，每个参数对应一个属性，类型映射方式相同，嵌套参数为嵌套对象，必填参数列为必填。
+- 模型的 `version.model` 是配置文件的版本号。版本一经发布便不会改变，其模型也不会改变。
+
+在控制台中，打开配置文件的**版本（Versions）**选项卡，在某个版本上选择 **WoT Thing Model** 即可下载。通过 GraphQL，在配置文件版本上选择 `thingModel`；它是以文本形式返回的 JSON-LD：
+
+```graphql
+query {
+  deviceProfileVersions(token: "pump", limit: 1) {
+    version
+    thingModel
+  }
+}
+```
+
 ## 身份与凭据 {#identity-and-credentials}
 
 设备具有稳定的**身份**，供其他对象引用；身份与用于认证的**凭据**分开保存。凭据可插拔，支持访问令牌和 MQTT-basic（用户名 + 密码）。因此，设备可以轮换凭据或同时持有多个凭据，而无需改变身份。

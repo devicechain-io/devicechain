@@ -52,6 +52,16 @@ func (r *DeviceProfileVersionResolver) PublishedBy() *string {
 	return &r.M.PublishedBy
 }
 
+// ThingModel renders the version as a W3C WoT Thing Model. A snapshot that cannot be
+// rendered is an error, never an empty model.
+func (r *DeviceProfileVersionResolver) ThingModel() (string, error) {
+	out, err := r.S.GetApi(r.C).DeviceProfileVersionThingModel(r.C, &r.M)
+	if err != nil {
+		return "", err
+	}
+	return string(out), nil
+}
+
 // ConfigurationDeclaration is the device-visible configuration declaration frozen into
 // this version. A snapshot that cannot be decoded is an error, not an empty declaration:
 // "declares nothing" is a statement devices act on.

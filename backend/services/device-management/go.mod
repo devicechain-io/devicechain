@@ -18,6 +18,7 @@ require (
 	github.com/nats-io/nkeys v0.4.16
 	github.com/prometheus/client_golang v1.24.1
 	github.com/rs/zerolog v1.35.1
+	github.com/santhosh-tekuri/jsonschema/v6 v6.0.3
 	github.com/stretchr/testify v1.12.1
 	golang.org/x/crypto v0.57.0
 	google.golang.org/protobuf v1.36.12

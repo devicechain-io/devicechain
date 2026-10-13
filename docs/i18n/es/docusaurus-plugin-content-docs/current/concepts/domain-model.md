@@ -55,6 +55,25 @@ En la consola, la pantalla **Explorar** compone un selector a partir de los ejes
 
 Un perfil de dispositivo declara los comandos que aceptan sus dispositivos. Un comando emitido se persiste y se rastrea a lo largo de un ciclo de vida, en lugar de enviarse y olvidarse. [Comandos](./commands.md) cubre ambos aspectos.
 
+## Exportar un perfil como Thing Model de W3C {#wot-thing-model}
+
+Cada versión publicada de un perfil de dispositivo puede exportarse como **Thing Model** de [W3C Web of Things](https://www.w3.org/TR/wot-thing-description11/), la descripción estándar en JSON-LD de una clase de dispositivos. Un perfil describe todos los dispositivos de sus tipos y ningún dispositivo en concreto, así que la exportación es un Thing Model y no una Thing Description: no lleva dirección del dispositivo, enlace de protocolo ni seguridad, que añadiría una Thing Description de un dispositivo concreto.
+
+- Cada **métrica** se convierte en una **propiedad** de solo lectura y observable con el nombre de su clave de métrica. Su tipo de datos pasa a ser el tipo de la propiedad (`DOUBLE` → `number`, `INT` → `integer`, `BOOLEAN` → `boolean`, `STRING` → `string`), y se conservan su unidad, mínimo, máximo y valores permitidos. El **descriptor** de una métrica pasa a ser el `@type` de la propiedad, de modo que una etiqueta semántica como `saref:Temperature` llega a las herramientas que la entienden.
+- Cada **comando** se convierte en una **acción** con el nombre de su clave de comando. Sus parámetros pasan a ser el `input` de la acción: un esquema de objeto con una propiedad por parámetro, tipada del mismo modo, los parámetros anidados como objetos anidados y los obligatorios listados como obligatorios.
+- El `version.model` del modelo es el número de versión del perfil. Una versión no cambia una vez publicada, y su modelo tampoco.
+
+En la consola, abre la pestaña **Versiones** del perfil y elige **Thing Model de WoT** en una versión para descargarlo. Mediante GraphQL, selecciona `thingModel` en una versión del perfil; es el JSON-LD como texto:
+
+```graphql
+query {
+  deviceProfileVersions(token: "pump", limit: 1) {
+    version
+    thingModel
+  }
+}
+```
+
 ## Identidad y credenciales
 
 Un dispositivo tiene una **identidad** estable a la que hace referencia todo lo demás, separada de sus **credenciales**, el material que usa para autenticarse. Las credenciales son conectables (pluggable): token de acceso y MQTT-basic (usuario + contraseña). Así, un dispositivo puede rotar credenciales o tener varias sin cambiar su identidad.

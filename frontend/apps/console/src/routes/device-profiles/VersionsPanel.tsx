@@ -20,6 +20,7 @@ import {
   publishDeviceProfile,
   rollbackDeviceProfile,
 } from '@/lib/api/device-management';
+import { ThingModelDownload } from './ThingModelDownload';
 
 // The authority string is a permission name, not user-facing prose, so it is hoisted
 // out of the JSX tree — the i18n literal-string lint walks every node under a JSX
@@ -62,6 +63,13 @@ export function VersionsPanel({
       publish={publishDeviceProfile}
       rollback={rollbackDeviceProfile}
       onChanged={onChanged}
+      rowAction={(v, versions) => (
+        <ThingModelDownload
+          profileToken={profileToken}
+          version={v.version}
+          latest={versions[0]?.version ?? v.version}
+        />
+      )}
     />
   );
 }

@@ -841,6 +841,38 @@ export async function listDeviceProfileVersions(token: string): Promise<DevicePr
   return data.deviceProfileVersions;
 }
 
+// The list is newest first, so the version numbered `version` sits at offset
+// (latest - version); asking for one row there renders one Thing Model, not every
+// version's.
+const DEVICE_PROFILE_THING_MODEL = graphql(`
+  query DeviceProfileThingModel($token: String!, $offset: Int) {
+    deviceProfileVersions(token: $token, limit: 1, offset: $offset) {
+      version
+      thingModel
+    }
+  }
+`);
+
+// getDeviceProfileThingModel returns one published version of a profile as a W3C Web of
+// Things Thing Model (JSON-LD text). latest is the newest version number, which places
+// the requested one in the newest-first list. It fails rather than return another
+// version's model if the list moved underneath (a publish in between).
+export async function getDeviceProfileThingModel(
+  token: string,
+  version: number,
+  latest: number,
+): Promise<string> {
+  const data = await gql('device-management', DEVICE_PROFILE_THING_MODEL, {
+    token,
+    offset: latest - version,
+  });
+  const row = data.deviceProfileVersions[0];
+  if (!row || row.version !== version) {
+    throw new Error(`version ${version} of profile ${token} was not found`);
+  }
+  return row.thingModel;
+}
+
 // ── Discovery facets (ADR-045 decision 8) ─────────────────────────────────
 
 const FACET_VALUES = graphql(`
