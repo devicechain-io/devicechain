@@ -1045,6 +1045,14 @@ type DeviceRosterEntry {
     expectedSince: String!
 }
 
+"""One page of the tokens of the tenant's disabled devices."""
+type DisabledDevicePage {
+    """The tokens of the disabled devices on this page."""
+    deviceTokens: [String!]!
+    """The cursor to pass as afterId for the next page; null when the walk is complete."""
+    nextCursor: String
+}
+
 type DeviceRosterPage {
     entries: [DeviceRosterEntry!]!
     # The cursor to pass as afterId for the next page; null when the walk is complete.
@@ -2960,6 +2968,19 @@ type Query {
     # One page of the device roster: every device, the profile its type adopts (empty when
     # none) and when that membership began.
     deviceRosterPage(afterId: String, limit: Int!): DeviceRosterPage!
+    """
+    One page of the tokens of the devices an operator has disabled, in device order. Pass the
+    previous page's nextCursor as afterId and stop when it is null; a limit outside 1..1000 is
+    refused. command-delivery walks it at startup and every few minutes to correct its record of
+    which devices are disabled, because commands already queued for a disabled device are held
+    rather than sent. Requires device:read.
+    """
+    disabledDevicePage(
+        """The nextCursor of the previous page; omit for the first page."""
+        afterId: String
+        """Page size, 1 to 1000."""
+        limit: Int!
+    ): DisabledDevicePage!
     # One page of the numeric SHARED and SERVER device attributes a dynamic detection
     # threshold can read. A page may hold fewer entries than its limit and still have a
     # nextCursor; only a null cursor ends the walk.
