@@ -215,7 +215,9 @@ describe('external content', () => {
       widgets: [
         ...board.widgets,
         { id: 'i1', type: 'image', layout: box, options: { url: 'https://img.example.org/a.png' } },
-        { id: 'i2', type: 'image', layout: box, options: { url: '//img.example.org/b.png' } },
+        { id: 'i2', type: 'image', layout: box, options: { url: 'https://img.example.org/b.png' } },
+        // Protocol-relative: fetched over the page's own scheme.
+        { id: 'i4', type: 'image', layout: box, options: { url: '//pixel.example.com/p.gif' } },
         { id: 'i3', type: 'image', layout: box, options: { url: '/static/local.png' } },
         { id: 'm1', type: 'map', layout: box, options: { tileUrl: 'http://tiles.example.net/{z}/{x}/{y}.png' } },
         // A widget this console cannot resolve still renders once its package is installed.
@@ -226,6 +228,7 @@ describe('external content', () => {
       'http://tiles.example.net',
       'https://cdn.example.com',
       'https://img.example.org',
+      'https://pixel.example.com',
       'https://vendor.example.io',
     ]);
   });
