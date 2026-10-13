@@ -4,6 +4,6 @@
   "version": "0.0.0",
   "type": "module",
   "dependencies": {
-    "puppeteer-core": "^24.30.0"
+    "puppeteer-core": "^25.13.0"
   }
 }
