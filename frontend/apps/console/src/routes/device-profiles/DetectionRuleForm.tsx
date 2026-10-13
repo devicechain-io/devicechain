@@ -1304,7 +1304,15 @@ export function outboundHint(t: TFunction, act: ActionRow): string | null {
   if (act.type === 'httpCall') {
     const url = (act.url ?? '').trim();
     if (!url) return t('ruleHintHttpUrlRequired');
-    if (!/^https?:\/\/\S+$/i.test(url)) return t('ruleHintHttpUrlScheme');
+    // Only what httpsink.ValidateURL refuses: a scheme other than http/https, no host, or a
+    // host Go's parser cannot read (whitespace in it). A space in the PATH or query is NOT
+    // refused there — net/http escapes it on send — so it must not be refused here either, or
+    // a stored rule the server accepts could never be saved from this form again.
+    const authority = /^https?:\/\/([^/?#]*)/i.exec(url)?.[1];
+    if (!authority || /\s/.test(authority)) return t('ruleHintHttpUrlScheme');
+    // Userinfo is refused by the compiler too, but a draft is stored before it is compiled,
+    // so a password typed into the URL would be persisted in the rule. Stop it here.
+    if (authority.includes('@')) return t('ruleHintHttpUrlCredentials');
     const bad = malformedHeaderLine(act.headers ?? '');
     if (bad != null) return t('ruleHintHeaderMalformed', { line: bad });
     const handle = (act.secretRef ?? '').trim();

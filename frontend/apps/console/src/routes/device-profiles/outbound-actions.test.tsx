@@ -37,6 +37,7 @@ import type { DetectionRule } from '@/lib/api/device-management';
 import { buildDefinition, parseDefinition, rebuildFrom, type ActionRow, type BuildArgs } from './rule-model';
 import { ruleSurvivesRoundTrip, sameLogicalRule } from './rule-equal';
 import { graphFromDefinition } from './canvas/roundtrip';
+import { selectOption } from '@/test/select';
 import GOLDEN from '../../../../../../backend/services/event-processing/internal/rules/graph/testdata/synthesis/guarded-and-outbound.json';
 
 afterEach(cleanup);
@@ -134,6 +135,72 @@ describe('editing the outbound actions in the form', () => {
     expect(saved().actions[0].guard).toBe('value > 100.0');
   });
 
+  it('keeps a canvas guard on a publish action across a save', async () => {
+    const guarded = { ...publish, guard: 'value < 0.0' };
+    render(<DetectionRuleForm profileToken="p" entity={rule(withActions([guarded]))} onDone={() => {}} />);
+
+    fireEvent.change(screen.getByLabelText('Payload (CEL)'), { target: { value: '"cold"' } });
+    fireEvent.click(screen.getByRole('button', { name: /save changes/i }));
+    await waitFor(() => expect(updateDetectionRule).toHaveBeenCalledTimes(1));
+    expect(saved().actions[0]).toEqual({ ...publish, publish: { ...publish.publish, payloadTemplate: '"cold"' }, guard: 'value < 0.0' });
+  });
+
+  // Every test above edits an action that was ALREADY outbound. This one authors them from
+  // scratch, which is the feature: the picker must offer both kinds and each must save.
+  it('authors a new publish action and a new webhook action from the action picker', async () => {
+    const cmd = { type: 'sendCommand', sendCommand: { command: 'reset' } };
+    render(<DetectionRuleForm profileToken="p" entity={rule(withActions([cmd, cmd]))} onDone={() => {}} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Action 1' }));
+    fireEvent.click(screen.getByRole('button', { name: /Publish to a connector/ }));
+    await selectOption(screen.getByLabelText('Connector'), /Pager \(pager\)/);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Action 2' }));
+    fireEvent.click(screen.getByRole('button', { name: /Call a webhook/ }));
+    fireEvent.change(screen.getByLabelText('URL'), { target: { value: 'https://hooks.example.com/new' } });
+
+    fireEvent.click(screen.getByRole('button', { name: /save changes/i }));
+    await waitFor(() => expect(updateDetectionRule).toHaveBeenCalledTimes(1));
+    expect(saved().actions).toEqual([
+      { type: 'publish', publish: { connectorRef: 'pager' } },
+      { type: 'httpCall', httpCall: { url: 'https://hooks.example.com/new' } },
+    ]);
+  });
+
+  // When the caller's connector list cannot be read, a stored ref is neither labelled "not
+  // found" (nobody knows that) nor cleared — it is shown as itself and saved as itself.
+  it('keeps a stored connector when the connector list fails to load', async () => {
+    vi.mocked(listConnectors).mockRejectedValueOnce(new Error('forbidden'));
+    render(<DetectionRuleForm profileToken="p" entity={rule(withActions([publish]))} onDone={() => {}} />);
+
+    expect(await screen.findByText(/connector list could not be loaded/)).toBeTruthy();
+    expect(screen.queryByText(/not found/)).toBeNull();
+    fireEvent.change(screen.getByLabelText('Payload (CEL)'), { target: { value: '"x"' } });
+    fireEvent.click(screen.getByRole('button', { name: /save changes/i }));
+    await waitFor(() => expect(updateDetectionRule).toHaveBeenCalledTimes(1));
+    expect(saved().actions[0].publish.connectorRef).toBe('pager');
+  });
+
+  // A canvas-authored rule carries its graph sidecar. An incidental save keeps it; an edit to
+  // an outbound action changes the rule, so the stale sidecar must be cleared, not kept.
+  it('keeps the canvas graph across an unchanged save and drops it when an action changes', async () => {
+    const graph = '{"nodes":[],"edges":[]}';
+    const canvasRule = { ...rule(withActions([webhook])), authoringGraph: graph } as unknown as DetectionRule;
+    const graphSent = (n: number) => (vi.mocked(updateDetectionRule).mock.calls[n][1] as { authoringGraph: unknown }).authoringGraph;
+
+    const first = render(<DetectionRuleForm profileToken="p" entity={canvasRule} onDone={() => {}} />);
+    fireEvent.click(screen.getByRole('button', { name: /save changes/i }));
+    await waitFor(() => expect(updateDetectionRule).toHaveBeenCalledTimes(1));
+    expect(graphSent(0)).toBe(graph);
+    first.unmount();
+
+    render(<DetectionRuleForm profileToken="p" entity={canvasRule} onDone={() => {}} />);
+    fireEvent.change(screen.getByLabelText('URL'), { target: { value: 'https://hooks.example.com/moved' } });
+    fireEvent.click(screen.getByRole('button', { name: /save changes/i }));
+    await waitFor(() => expect(updateDetectionRule).toHaveBeenCalledTimes(2));
+    expect(graphSent(1)).toBeNull();
+  });
+
   it('says nothing is lost when it opens a stored webhook or publish action', () => {
     render(<DetectionRuleForm profileToken="p" entity={rule(withActions([webhook, publish]))} onDone={() => {}} />);
     expect(screen.queryByText(/cannot express everything/)).toBeNull();
@@ -147,7 +214,12 @@ describe('the outbound hints', () => {
   it.each([
     ['no url', row({ url: '' }), 'ruleHintHttpUrlRequired'],
     ['a non-http url', row({ url: 'ftp://x.example.com' }), 'ruleHintHttpUrlScheme'],
-    ['a url with a space', row({ url: 'https://x.example.com/a b' }), 'ruleHintHttpUrlScheme'],
+    ['a space in the host', row({ url: 'https://exa mple.com/' }), 'ruleHintHttpUrlScheme'],
+    ['no host at all', row({ url: 'http:///hook' }), 'ruleHintHttpUrlScheme'],
+    ['a password in the url', row({ url: 'https://user:hunter2@x.example.com/' }), 'ruleHintHttpUrlCredentials'],
+    ['a header with an empty key', row({ url: 'https://x.example.com', headers: ': value' }), 'ruleHintHeaderMalformed'],
+    ['a negative timeout', row({ url: 'https://x.example.com', timeoutMs: '-1' }), 'ruleHintTimeoutRange'],
+    ['a handle one byte over the cap', row({ url: 'https://x.example.com', secretRef: 'a'.repeat(257) }), 'ruleHintSecretHandleInvalid'],
     ['a header with no key', row({ url: 'https://x.example.com', headers: 'no colon here' }), 'ruleHintHeaderMalformed'],
     ['a bad secret handle', row({ url: 'https://x.example.com', secretRef: '/abs' }), 'ruleHintSecretHandleInvalid'],
     ['a dot segment in the handle', row({ url: 'https://x.example.com', secretRef: 'a/../b' }), 'ruleHintSecretHandleInvalid'],
@@ -164,6 +236,11 @@ describe('the outbound hints', () => {
     row({ url: 'https://x.example.com/hook', headers: 'A: b', secretRef: 'team/token.v1', timeoutMs: '20000' }),
     row({ url: 'http://x.example.com', timeoutMs: '' }),
     row({ type: 'publish', connectorRef: 'pager', payloadTemplate: '"x"', timeoutMs: '0' }),
+    // The server's URL check is a parse, not a whitespace ban: a space in the path or query is
+    // accepted there (net/http escapes it), so a stored rule carrying one must stay saveable.
+    row({ url: 'https://x.example.com/a b?q=c d' }),
+    // Exactly at the handle's byte cap.
+    row({ url: 'https://x.example.com', secretRef: 'a'.repeat(256) }),
   ])('accepts a complete action', (r) => {
     expect(outboundHint(t, r)).toBeNull();
   });

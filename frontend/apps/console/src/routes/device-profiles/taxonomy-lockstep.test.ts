@@ -227,6 +227,33 @@ describe('the round-trip corpus', () => {
     expect(parsed).not.toBeNull();
     expect(ruleSurvivesRoundTrip(exotic, rebuildFrom(parsed!))).toBe(false);
   });
+
+  // 🔴 THE "EVERY FIELD" SHAPES ABOVE ARE HAND-WRITTEN, SO THEY COVER THE FIELDS THAT EXISTED
+  // WHEN SOMEBODY WROTE THEM. The outbound actions no longer pass through verbatim: the form
+  // rebuilds them from what it models, and a field the compiler gains tomorrow (a method list,
+  // a retry count) would be dropped on every save behind nothing louder than the lossy-open
+  // banner. So the field set is read from the Go structs themselves, and a field with no sample
+  // here fails this test — which is the prompt to teach the form the field, then add it.
+  it.each([
+    ['HTTPCallAction', 'httpCall'],
+    ['PublishAction', 'publish'],
+  ])('opens and re-saves every field of %s the compiler declares', (struct, wire) => {
+    const body = new RegExp(`type ${struct} struct \\{([\\s\\S]*?)\\n\\}`).exec(SCHEMA_GO);
+    expect(body, `${struct} not found in schema.go`).not.toBeNull();
+    const tags = [...body![1].matchAll(/json:"([A-Za-z]+)/g)].map((m) => m[1]);
+    expect(tags.length).toBeGreaterThan(1);
+    const SAMPLES: Record<string, unknown> = {
+      url: 'https://example.invalid/hook', method: 'POST', headers: { 'X-A': 'b' }, bodyTemplate: '"x"',
+      secretRef: 'team/h', timeoutMs: 2000, connectorRef: 'c', payloadTemplate: '"y"',
+    };
+    const unmodelled = tags.filter((tg) => !(tg in SAMPLES));
+    expect(unmodelled, `${struct} declares fields this test has no sample for — model them in the form first`).toEqual([]);
+    const definition = JSON.stringify({
+      name: 'r', type: 'threshold', when: { metric: 'tempC', op: 'gt', threshold: 30 },
+      actions: [{ type: wire, guard: 'value > 1.0', [wire]: Object.fromEntries(tags.map((tg) => [tg, SAMPLES[tg]])) }],
+    });
+    expect(ruleSurvivesRoundTrip(definition, rebuildFrom(parseDefinition(definition)!))).toBe(true);
+  });
 });
 
 
