@@ -33,8 +33,18 @@ type authBroker struct {
 
 func runAuthBroker(t *testing.T, password string) *authBroker {
 	t.Helper()
+	// NoSystemAccount: the broker's $SYS event machinery is not under test here (the close
+	// semantics are the client library's and the guard's), and with it on, revoke() trips a
+	// data race INSIDE nats-server (v2.15.0 and v2.15.1): reloading auth drops a connected
+	// client through sendAccountAuthErrorEvent/sendAuthErrorEvent (events.go), which read
+	// the client's message counters non-atomically while its read loop (server.go
+	// createClientEx -> client.go readLoop) adds to them with atomic.AddInt64. Only -race
+	// sees it, it is unrelated to anything this package does, and no wait on the client side
+	// can order it (the detector sees no happens-before across the socket). With events off
+	// the broker never takes that path; the revocation it exercises is unchanged.
 	opts := &natsserver.Options{Host: "127.0.0.1", Port: -1, NoLog: true, NoSigs: true,
-		Users: []*natsserver.User{{Username: "sys", Password: password}}}
+		NoSystemAccount: true,
+		Users:           []*natsserver.User{{Username: "sys", Password: password}}}
 	srv, err := natsserver.NewServer(opts)
 	require.NoError(t, err, "start an embedded broker")
 	go srv.Start()
