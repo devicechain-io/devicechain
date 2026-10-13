@@ -82,9 +82,28 @@ func (o *Ops) Execute(ctx context.Context, conn mux.Conn, name string, payload [
 		return o.write(ctx, conn, payload)
 	case CommandExecute:
 		return o.execute(ctx, conn, payload)
+	case CommandReboot:
+		return o.reboot(ctx, conn)
+	case CommandReadDeviceInfo:
+		return o.readDeviceInfo(ctx, conn)
 	default:
-		return refuse(labelOther, fmt.Sprintf("unknown LwM2M command %q (expected %s/%s/%s)", name, CommandRead, CommandWrite, CommandExecute))
+		return refuse(labelOther, fmt.Sprintf("unknown LwM2M command %q (expected %s/%s/%s or the named %s/%s)",
+			name, CommandRead, CommandWrite, CommandExecute, CommandReboot, CommandReadDeviceInfo))
 	}
+}
+
+// reboot is the named Reboot operation: a bare Execute on Object 3's Reboot resource. It ignores
+// any payload — the path is not the operator's to choose, which is what makes it a named operation
+// rather than lwm2m.execute with a fixed argument.
+func (o *Ops) reboot(ctx context.Context, conn mux.Conn) OpResult {
+	resp, err := conn.Post(ctx, rebootPath, message.TextPlain, bytes.NewReader(nil))
+	if err != nil {
+		return transportFail(ctx, labelReboot, err)
+	}
+	if !isSuccess(resp.Code()) {
+		return deviceFail(labelReboot, resp.Code())
+	}
+	return OpResult{Op: labelReboot, Success: true}
 }
 
 // read issues a CoAP GET on the path and returns the device's response body (as text; base64 when
