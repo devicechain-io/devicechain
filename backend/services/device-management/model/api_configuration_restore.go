@@ -35,6 +35,11 @@ import (
 // profile version does not declare as configuration, so the target could not hold it.
 const CodeConfigurationKeyUndeclared = "CONFIGURATION_KEY_UNDECLARED"
 
+// CodeConfigurationConflict: a restore or copy wrote the device's declared keys but the
+// document they now produce is not the one asked for, because another write to the same
+// device's configuration committed while it ran. Nothing was applied; retrying is safe.
+const CodeConfigurationConflict = "CONFIGURATION_CONFLICT"
+
 // RestoreDeviceConfiguration makes the device's desired configuration equal to the content
 // of one of its own past revisions, by minting a new revision. An unknown device or
 // revision is gorm.ErrRecordNotFound.
@@ -43,26 +48,42 @@ func (api *Api) RestoreDeviceConfiguration(ctx context.Context, deviceToken stri
 	if err != nil {
 		return nil, err
 	}
-	var rows []DeviceConfigurationRevision
-	if err := api.RDB.DB(ctx).Where("device_id = ? AND revision = ?", deviceId, revision).
-		Limit(1).Find(&rows).Error; err != nil {
+	rev, err := deviceConfigurationRevision(api.RDB.DB(ctx), deviceId, revision)
+	if err != nil {
 		return nil, err
 	}
-	if len(rows) == 0 {
+	if rev == nil {
 		return nil, fmt.Errorf("device %q has no configuration revision %d: %w", deviceToken, revision, gorm.ErrRecordNotFound)
 	}
-	if err := api.applyConfigurationDocument(ctx, deviceToken, deviceId, rows[0].Document); err != nil {
+	if err := api.applyConfigurationDocument(ctx, deviceToken, deviceId, rev.Document); err != nil {
 		return nil, err
 	}
 	return api.DeviceConfigurationByToken(ctx, deviceToken)
 }
 
-// CopyDeviceConfiguration makes the target device's desired configuration equal to the
-// source device's latest revision. Both devices are resolved in the caller's tenant, so a
-// device of another tenant is simply not found. A source with no revision has nothing to
-// copy and is refused as not found rather than copied as an empty document, which would
-// clear every declared key on the target.
-func (api *Api) CopyDeviceConfiguration(ctx context.Context, fromToken, toToken string) (*DeviceConfiguration, error) {
+// deviceConfigurationRevision is one revision OF THIS DEVICE by number, or nil when the
+// device has none with that number. The device predicate is what keeps another device's
+// revision with the same number out of reach.
+func deviceConfigurationRevision(db *gorm.DB, deviceId uint, revision int64) (*DeviceConfigurationRevision, error) {
+	var rows []DeviceConfigurationRevision
+	if err := db.Where("device_id = ? AND revision = ?", deviceId, revision).Limit(1).Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	if len(rows) == 0 {
+		return nil, nil
+	}
+	return &rows[0], nil
+}
+
+// CopyDeviceConfiguration makes the target device's desired configuration equal to one of
+// the source device's revisions: fromRevision when it is given, else the source's latest.
+// A caller that previewed the copy passes the revision it previewed, so a source that
+// changes between the preview and the copy cannot make the copy apply something other
+// than what was shown. Both devices are resolved in the caller's tenant, so a device of
+// another tenant is simply not found. A source with no revision (or without fromRevision)
+// has nothing to copy and is refused as not found rather than copied as an empty
+// document, which would clear every declared key on the target.
+func (api *Api) CopyDeviceConfiguration(ctx context.Context, fromToken, toToken string, fromRevision *int64) (*DeviceConfiguration, error) {
 	fromId, err := api.deviceIdByToken(ctx, fromToken)
 	if err != nil {
 		return nil, fmt.Errorf("source device %q: %w", fromToken, err)
@@ -71,14 +92,19 @@ func (api *Api) CopyDeviceConfiguration(ctx context.Context, fromToken, toToken 
 	if err != nil {
 		return nil, fmt.Errorf("target device %q: %w", toToken, err)
 	}
-	latest, err := latestConfigurationRevision(api.RDB.DB(ctx), fromId)
+	var source *DeviceConfigurationRevision
+	if fromRevision != nil {
+		source, err = deviceConfigurationRevision(api.RDB.DB(ctx), fromId, *fromRevision)
+	} else {
+		source, err = latestConfigurationRevision(api.RDB.DB(ctx), fromId)
+	}
 	if err != nil {
 		return nil, err
 	}
-	if latest == nil {
+	if source == nil {
 		return nil, fmt.Errorf("source device %q has no configuration revision to copy: %w", fromToken, gorm.ErrRecordNotFound)
 	}
-	if err := api.applyConfigurationDocument(ctx, toToken, toId, latest.Document); err != nil {
+	if err := api.applyConfigurationDocument(ctx, toToken, toId, source.Document); err != nil {
 		return nil, err
 	}
 	return api.DeviceConfigurationByToken(ctx, toToken)
@@ -141,6 +167,7 @@ func (api *Api) applyConfigurationDocument(ctx context.Context, deviceToken stri
 		}
 		sort.Strings(keys)
 		now := time.Now()
+		changed := make([]string, 0, len(keys))
 		for _, key := range keys {
 			decl := byKey[key]
 			var existing []EntityAttribute
@@ -189,7 +216,14 @@ func (api *Api) applyConfigurationDocument(ctx context.Context, deviceToken stri
 					EntityType: deviceType, Entity: deviceToken, Scope: shared, AttrKey: key,
 					ValueType: decl.ValueType, Value: &value}, at: now})
 			}
-			if membershipScopeEligible(deviceType, shared) {
+			changed = append(changed, key)
+		}
+		// Group membership is recomputed once every attribute row is written, not between
+		// them: a recompute between two row writes would hold membership rows while waiting
+		// for the next attribute row, the reverse of the order a concurrent single attribute
+		// write takes them in (its row, then membership), which is a lock cycle.
+		if membershipScopeEligible(deviceType, shared) {
+			for _, key := range changed {
 				t, err := api.recomputeMembershipForAttr(ctx, tx, deviceType, deviceId, key)
 				touched = touched || t
 				if err != nil {
@@ -210,11 +244,15 @@ func (api *Api) applyConfigurationDocument(ctx context.Context, deviceToken stri
 				"the device's configuration document would be %d bytes, over the %d byte limit",
 				len(doc.Canonical), MaxConfigurationDocumentBytes)}
 		}
-		// The document now built must BE the target. Anything else is a defect in the value
-		// round trip, and a revision minted from it would be a restore that restored
-		// something else.
+		// The document now built must BE the target, or a revision minted from it would be a
+		// restore that restored something else. The one way it differs in practice is a
+		// concurrent write to one of the device's declared keys committing between this
+		// transaction's reads and its configuration lock; that is refused with a code of its
+		// own, which a caller can retry, rather than as an internal error.
 		if !bytes.Equal(doc.Canonical, []byte(document)) {
-			return fmt.Errorf("the configuration written for device %q does not reproduce the document it was given", deviceToken)
+			return &ConfigurationRefusal{Code: CodeConfigurationConflict, Message: fmt.Sprintf(
+				"the configuration of device %q changed while it was being written; nothing was applied, try again",
+				deviceToken)}
 		}
 		rev, isNew, err := mintConfigurationRevision(tx, deviceId, doc, versionId, configurationActor(ctx))
 		if err != nil {

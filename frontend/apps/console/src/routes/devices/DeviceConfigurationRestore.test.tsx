@@ -93,6 +93,22 @@ describe('diffConfigurationDocuments', () => {
       { key: 'a', kind: 'added', before: null, after: '1' },
     ]);
   });
+
+  it('compares and shows a value by its exact text, so a LONG past 2^53 is not rounded', () => {
+    // Both parse to the same double; they are different LONGs.
+    expect(diffConfigurationDocuments('{"n":9007199254740992}', '{"n":9007199254740993}')).toEqual([
+      { key: 'n', kind: 'changed', before: '9007199254740992', after: '9007199254740993' },
+    ]);
+  });
+
+  it('reads nested values and strings holding delimiters whole', () => {
+    expect(
+      diffConfigurationDocuments('{"j":{"x":[1,{"y":"}],"}]},"s":"a,\\"b}"}', '{"j":{"x":[1,{"y":"}],"}]},"s":"a,\\"b}"}'),
+    ).toEqual([
+      { key: 'j', kind: 'unchanged', before: '{"x":[1,{"y":"}],"}]}', after: '{"x":[1,{"y":"}],"}]}' },
+      { key: 's', kind: 'unchanged', before: '"a,\\"b}"', after: '"a,\\"b}"' },
+    ]);
+  });
 });
 
 describe('DeviceConfigurationPanel restore and copy', () => {
@@ -146,6 +162,8 @@ describe('DeviceConfigurationPanel restore and copy', () => {
     await waitFor(() => expect(toastMock).toHaveBeenCalledWith('Configuration applied as revision #3'));
     const sent = calls.filter((c) => c.doc.includes('mutation CopyDeviceConfiguration'));
     expect(sent).toHaveLength(1);
-    expect(sent[0].vars).toEqual({ fromDeviceToken: 'twin', toDeviceToken: 'dozer-01' });
+    // The copy names the source revision that was previewed (twin's 7), so a source that
+    // changes before Apply cannot make it apply something else.
+    expect(sent[0].vars).toEqual({ fromDeviceToken: 'twin', toDeviceToken: 'dozer-01', fromRevision: 7 });
   });
 });

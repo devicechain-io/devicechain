@@ -382,6 +382,8 @@ A device's configuration can be set back to an earlier revision, or made the sam
 - The console first shows a preview: every key, its current value, the value it will have, and whether it is added, changed or removed. Nothing changes until you choose **Apply**.
 - Applying sets the device's `SHARED` attributes for its declared keys to the values in that revision. A declared key the revision does not carry is removed. A **new** revision is created and sent to the device as usual. Earlier revisions are never changed. If the device already holds that configuration, nothing is created.
 - The whole change is refused, and nothing is written, if the device's profile does not declare a key the revision carries (`CONFIGURATION_KEY_UNDECLARED`), if a value does not fit the type now declared for its key (`CONFIGURATION_VALUE_TYPE_MISMATCH`), or if the result is over the size limit (`CONFIGURATION_TOO_LARGE`). Restoring an old revision after the profile's declaration has changed can therefore be refused. A device of another tenant, an unknown revision, or a source device with no revision is `NOT_FOUND`.
+- If another change to the device's configuration lands while the restore or copy is being applied, it is refused with `CONFIGURATION_CONFLICT` and nothing is written; it is safe to try again.
+- A copy applies the source revision the console previewed, even if the source device's configuration changes before you choose **Apply**. Through GraphQL, pass that revision as `fromRevision`; without it, `copyDeviceConfiguration` copies the source's latest revision.
 
 ```graphql
 mutation {

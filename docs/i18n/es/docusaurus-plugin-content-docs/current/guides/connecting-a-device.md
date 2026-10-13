@@ -383,6 +383,8 @@ La configuración de un dispositivo puede volver a una revisión anterior, o hac
 - La consola muestra primero una vista previa: cada clave, su valor actual, el valor que tendrá y si se añade, se cambia o se elimina. Nada cambia hasta que eliges **Aplicar**.
 - Al aplicar, los atributos `SHARED` del dispositivo para sus claves declaradas toman los valores de esa revisión. Una clave declarada que la revisión no contiene se elimina. Se crea una revisión **nueva** y se envía al dispositivo como de costumbre. Las revisiones anteriores nunca se modifican. Si el dispositivo ya tiene esa configuración, no se crea nada.
 - Todo el cambio se rechaza, sin escribir nada, si el perfil del dispositivo no declara una clave que contiene la revisión (`CONFIGURATION_KEY_UNDECLARED`), si un valor no encaja en el tipo declarado ahora para su clave (`CONFIGURATION_VALUE_TYPE_MISMATCH`), o si el resultado supera el límite de tamaño (`CONFIGURATION_TOO_LARGE`). Por eso, restaurar una revisión antigua después de que haya cambiado la declaración del perfil puede rechazarse. Un dispositivo de otro inquilino, una revisión desconocida o un dispositivo de origen sin revisión dan `NOT_FOUND`.
+- Si otro cambio en la configuración del dispositivo llega mientras se aplica la restauración o la copia, se rechaza con `CONFIGURATION_CONFLICT` y no se escribe nada; es seguro volver a intentarlo.
+- Una copia aplica la revisión de origen que mostró la vista previa de la consola, aunque la configuración del dispositivo de origen cambie antes de elegir **Aplicar**. Con GraphQL, pasa esa revisión como `fromRevision`; sin ella, `copyDeviceConfiguration` copia la revisión más reciente del origen.
 
 ```graphql
 mutation {

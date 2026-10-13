@@ -133,12 +133,15 @@ export async function getDeviceConfigurationView(
   };
 }
 
-// The document a device should now hold (its latest revision), or null when it has none
-// or no device has the token. The copy action reads the SOURCE device through this to
-// preview what the target will become.
-export async function getDesiredConfigurationDocument(deviceToken: string): Promise<string | null> {
+// The revision a device should now hold (its latest) and its document, or null when it has
+// none or no device has the token. The copy action reads the SOURCE device through this to
+// preview what the target will become, and then copies exactly that revision.
+export async function getDesiredConfigurationDocument(
+  deviceToken: string,
+): Promise<{ revision: number; document: string } | null> {
   const data = await gql('device-management', DEVICE_CONFIGURATION, { deviceToken });
-  return data.deviceConfiguration?.desired?.document ?? null;
+  const desired = data.deviceConfiguration?.desired;
+  return desired ? { revision: desired.revision, document: desired.document } : null;
 }
 
 // ── Restore and copy (device:write) ───────────────────────────────────────
@@ -165,8 +168,12 @@ export async function restoreDeviceConfiguration(
 }
 
 const COPY_DEVICE_CONFIGURATION = graphql(`
-  mutation CopyDeviceConfiguration($fromDeviceToken: String!, $toDeviceToken: String!) {
-    copyDeviceConfiguration(fromDeviceToken: $fromDeviceToken, toDeviceToken: $toDeviceToken) {
+  mutation CopyDeviceConfiguration($fromDeviceToken: String!, $toDeviceToken: String!, $fromRevision: Int) {
+    copyDeviceConfiguration(
+      fromDeviceToken: $fromDeviceToken
+      toDeviceToken: $toDeviceToken
+      fromRevision: $fromRevision
+    ) {
       desired {
         revision
       }
@@ -174,14 +181,17 @@ const COPY_DEVICE_CONFIGURATION = graphql(`
   }
 `);
 
-// Makes the target's configuration equal to the source's latest revision.
+// Makes the target's configuration equal to the source revision fromRevision (the one the
+// operator previewed).
 export async function copyDeviceConfiguration(
   fromDeviceToken: string,
   toDeviceToken: string,
+  fromRevision: number,
 ): Promise<number | null> {
   const data = await gql('device-management', COPY_DEVICE_CONFIGURATION, {
     fromDeviceToken,
     toDeviceToken,
+    fromRevision,
   });
   return data.copyDeviceConfiguration.desired?.revision ?? null;
 }

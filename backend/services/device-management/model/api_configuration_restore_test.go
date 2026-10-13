@@ -222,7 +222,7 @@ func TestCopyingConfigurationFromAnotherDevice(t *testing.T) {
 	setShared(t, api, ctx, "dst", "gain", AttributeValueDouble, "9")
 	source := desiredOf(t, api, ctx, "src")
 
-	cfg, err := api.CopyDeviceConfiguration(ctx, "src", "dst")
+	cfg, err := api.CopyDeviceConfiguration(ctx, "src", "dst", nil)
 	if err != nil {
 		t.Fatalf("copy: %v", err)
 	}
@@ -245,7 +245,7 @@ func TestCopyingToADeviceThatDoesNotDeclareTheKeysIsRefused(t *testing.T) {
 	setShared(t, api, ctx, "dst", "interval", AttributeValueLong, "5")
 	before := desiredOf(t, api, ctx, "dst")
 
-	_, err := api.CopyDeviceConfiguration(ctx, "src", "dst")
+	_, err := api.CopyDeviceConfiguration(ctx, "src", "dst", nil)
 	if got := refusalCode(err); got != CodeConfigurationKeyUndeclared {
 		t.Fatalf("refusal code %q (%v), want %q", got, err, CodeConfigurationKeyUndeclared)
 	}
@@ -263,7 +263,7 @@ func TestCopyingFromADeviceWithNoRevisionIsNotFound(t *testing.T) {
 		t.Fatal(err)
 	}
 	setShared(t, api, ctx, "dst", "interval", AttributeValueLong, "5")
-	if _, err := api.CopyDeviceConfiguration(ctx, "src", "dst"); !errors.Is(err, gorm.ErrRecordNotFound) {
+	if _, err := api.CopyDeviceConfiguration(ctx, "src", "dst", nil); !errors.Is(err, gorm.ErrRecordNotFound) {
 		t.Fatalf("copy from a device with no revision: %v, want not found", err)
 	}
 	if got := desiredOf(t, api, ctx, "dst").Document; got != `{"interval":5}` {
@@ -282,10 +282,10 @@ func TestCopyingAcrossTenantsIsNotFound(t *testing.T) {
 	setShared(t, api, beta, "foreign", "interval", AttributeValueLong, "2")
 	foreignBefore := desiredOf(t, api, beta, "foreign")
 
-	if _, err := api.CopyDeviceConfiguration(acme, "foreign", "dev"); !errors.Is(err, gorm.ErrRecordNotFound) {
+	if _, err := api.CopyDeviceConfiguration(acme, "foreign", "dev", nil); !errors.Is(err, gorm.ErrRecordNotFound) {
 		t.Fatalf("copy FROM another tenant's device: %v, want not found", err)
 	}
-	if _, err := api.CopyDeviceConfiguration(acme, "dev", "foreign"); !errors.Is(err, gorm.ErrRecordNotFound) {
+	if _, err := api.CopyDeviceConfiguration(acme, "dev", "foreign", nil); !errors.Is(err, gorm.ErrRecordNotFound) {
 		t.Fatalf("copy TO another tenant's device: %v, want not found", err)
 	}
 	if got := desiredOf(t, api, acme, "dev").Document; got != `{"interval":1}` {

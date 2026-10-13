@@ -1208,6 +1208,7 @@ export type RestoreDeviceConfigurationMutation = { restoreDeviceConfiguration: {
 export type CopyDeviceConfigurationMutationVariables = Exact<{
   fromDeviceToken: string;
   toDeviceToken: string;
+  fromRevision?: number | null | undefined;
 }>;
 
 
@@ -2600,10 +2601,11 @@ export const RestoreDeviceConfigurationDocument = new TypedDocumentString(`
 }
     `) as unknown as TypedDocumentString<RestoreDeviceConfigurationMutation, RestoreDeviceConfigurationMutationVariables>;
 export const CopyDeviceConfigurationDocument = new TypedDocumentString(`
-    mutation CopyDeviceConfiguration($fromDeviceToken: String!, $toDeviceToken: String!) {
+    mutation CopyDeviceConfiguration($fromDeviceToken: String!, $toDeviceToken: String!, $fromRevision: Int) {
   copyDeviceConfiguration(
     fromDeviceToken: $fromDeviceToken
     toDeviceToken: $toDeviceToken
+    fromRevision: $fromRevision
   ) {
     desired {
       revision

@@ -34,10 +34,12 @@ import { configurationBanner } from './configurationState';
 import { diffConfigurationDocuments } from './configurationDiff';
 
 // A change the operator has asked to preview: restoring one of this device's revisions, or
-// copying another device's latest one. Nothing is written until the preview is applied.
+// copying another device's latest one. Nothing is written until the preview is applied. A
+// copy remembers the source revision it previewed and copies exactly that one, so a source
+// that changes before Apply cannot make the copy apply something the operator was not shown.
 type Proposal =
   | { kind: 'restore'; revision: number; document: string }
-  | { kind: 'copy'; from: string; document: string };
+  | { kind: 'copy'; from: string; fromRevision: number; document: string };
 
 // DeviceConfigurationPanel shows what a device is meant to be running and what it
 // says it is running: the declared keys, the current desired document and revision,
@@ -81,7 +83,8 @@ export function DeviceConfigurationPanel({
   const cfg = view.configuration;
   if (!cfg) return <EmptyState description={t('configurationDeviceNotFound')} />;
 
-  const proposeCopy = (from: string, document: string) => setProposal({ kind: 'copy', from, document });
+  const proposeCopy = (from: string, source: { revision: number; document: string }) =>
+    setProposal({ kind: 'copy', from, fromRevision: source.revision, document: source.document });
   const proposeRestore = (r: { revision: number; document: string }) =>
     setProposal({ kind: 'restore', revision: r.revision, document: r.document });
 
@@ -126,7 +129,7 @@ function CopyFromDevice({
   onPreview,
 }: {
   deviceToken: string;
-  onPreview: (from: string, document: string) => void;
+  onPreview: (from: string, source: { revision: number; document: string }) => void;
 }) {
   const { t } = useTranslation('devices');
   const { toast } = useToast();
@@ -136,12 +139,12 @@ function CopyFromDevice({
   const preview = async () => {
     setBusy(true);
     try {
-      const document = await getDesiredConfigurationDocument(from);
-      if (document === null) {
+      const source = await getDesiredConfigurationDocument(from);
+      if (source === null) {
         toast(t('configCopyNoRevision', { token: from }), 'error');
         return;
       }
-      onPreview(from, document);
+      onPreview(from, source);
     } catch (err) {
       toast(errMessage(err), 'error');
     } finally {
@@ -198,7 +201,7 @@ function ChangePreview({
       const revision =
         proposal.kind === 'restore'
           ? await restoreDeviceConfiguration(deviceToken, proposal.revision)
-          : await copyDeviceConfiguration(proposal.from, deviceToken);
+          : await copyDeviceConfiguration(proposal.from, deviceToken, proposal.fromRevision);
       toast(t('configChangeApplied', { revision: revision ?? '—' }));
       onApplied();
     } catch (err) {
