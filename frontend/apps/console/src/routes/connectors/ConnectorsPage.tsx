@@ -107,7 +107,7 @@ export default function ConnectorsPage() {
         ) : undefined
       }
     >
-      <FormDrawer open={creating} onOpenChange={setCreating} title={t('newConnector')}>
+      <FormDrawer shot="connector-new" open={creating} onOpenChange={setCreating} title={t('newConnector')}>
         <ConnectorCreateForm
           onDone={(token) => {
             toast(t('created', { token }));

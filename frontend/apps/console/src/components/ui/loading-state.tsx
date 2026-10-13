@@ -20,14 +20,14 @@ export function LoadingState({ description, spinner = false, className }: Loadin
   const text = description ?? 'Loading...';
   if (spinner) {
     return (
-      <div className={cn('flex flex-col items-center justify-center py-12', className)}>
+      <div className={cn('flex flex-col items-center justify-center py-12', className)} data-shot="loading">
         <Spinner size="md" />
         <p className="text-sm text-muted-foreground mt-3">{text}</p>
       </div>
     );
   }
   return (
-    <div className={cn('flex items-center justify-center h-64', className)}>
+    <div className={cn('flex items-center justify-center h-64', className)} data-shot="loading">
       <p className="text-muted-foreground text-sm">{text}</p>
     </div>
   );

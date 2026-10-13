@@ -23,6 +23,7 @@ export default defineConfig({
   testDir: '.',
   testMatch: 'capture.spec.ts',
   globalSetup: './global-setup.ts',
+  globalTeardown: './global-teardown.ts',
   fullyParallel: false,
   workers: 1,
   retries: 0,

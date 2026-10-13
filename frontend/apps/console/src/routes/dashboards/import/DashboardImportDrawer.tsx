@@ -64,7 +64,7 @@ export function DashboardImportDrawer({
 }) {
   const { t } = useTranslation('dashboards');
   return (
-    <FormDrawer open={open} onOpenChange={onOpenChange} title={title} description={t('importDescription')}>
+    <FormDrawer shot="dashboard-import" open={open} onOpenChange={onOpenChange} title={title} description={t('importDescription')}>
       {/* Mounted only while open: closing the drawer drops the half-reviewed import. */}
       {open && <ImportFlow source={source} onCreated={onCreated} />}
     </FormDrawer>

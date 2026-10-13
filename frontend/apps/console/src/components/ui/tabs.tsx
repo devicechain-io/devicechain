@@ -26,6 +26,8 @@ const TabsTrigger = React.forwardRef<
 >(({ className, ...props }, ref) => (
   <TabsPrimitive.Trigger
     ref={ref}
+    // data-shot-tab: the user-guide capture anchor (CONVENTIONS.md); the tab key, never the label.
+    data-shot-tab={props.value}
     className={cn(
       'px-4 py-2 text-sm font-medium transition-colors',
       'text-muted-foreground hover:text-foreground',

@@ -124,6 +124,7 @@ export function DefinitionsPanel<TDef extends { id: string; token: string }>({
       </div>
 
       <FormDrawer
+        shot={`profile-${i18nKey}`}
         open={drawer.open}
         onOpenChange={(open) => setDrawer((s) => ({ ...s, open }))}
         title={drawer.entity ? e('EditTitle') : e('NewTitle')}

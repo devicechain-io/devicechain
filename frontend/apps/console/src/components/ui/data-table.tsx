@@ -52,9 +52,16 @@ export const DataTableRow = forwardRef<HTMLTableRowElement, React.HTMLAttributes
   },
 );
 
-export function DataTableCell({ children, className }: { children: React.ReactNode; className?: string }) {
+export function DataTableCell({
+  children,
+  className,
+  ...rest
+}: { children: React.ReactNode; className?: string } & Pick<React.TdHTMLAttributes<HTMLTableCellElement>, 'colSpan'> & {
+    /** User-guide capture: paint over this cell's (moving) content. See CONVENTIONS.md. */
+    'data-shot-mask'?: boolean;
+  }) {
   return (
-    <td className={cn('px-4 py-3 text-sm', className)}>
+    <td className={cn('px-4 py-3 text-sm', className)} {...rest}>
       {children}
     </td>
   );

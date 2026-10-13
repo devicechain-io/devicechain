@@ -115,7 +115,7 @@ export default function AiProvidersPage() {
         </>
       }
     >
-      <FormDrawer open={creating} onOpenChange={setCreating} title={t('newProviderDrawerTitle')}>
+      <FormDrawer shot="ai-provider-new" open={creating} onOpenChange={setCreating} title={t('newProviderDrawerTitle')}>
         <AiProviderCreateForm
           kinds={kinds ?? []}
           onDone={(token) => {

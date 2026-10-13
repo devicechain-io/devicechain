@@ -145,6 +145,7 @@ export function NavUser() {
         </DropdownMenu>
 
         <FormDrawer
+          shot="edit-profile"
           open={editing}
           onOpenChange={setEditing}
           title={t('editProfile')}
@@ -160,6 +161,7 @@ export function NavUser() {
 
         {canLinkSso && (
           <FormDrawer
+            shot="link-sso-account"
             open={linking}
             onOpenChange={setLinking}
             title={t('linkSso')}

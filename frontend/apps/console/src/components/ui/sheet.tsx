@@ -102,6 +102,8 @@ const SheetContent = React.forwardRef<
       {isModal ? <SheetOverlay /> : null}
       <SheetPrimitive.Content
         ref={ref}
+        // User-guide capture anchor; FormDrawer overrides it through props with "drawer".
+        data-shot="sheet"
         className={cn(sheetVariants({ side }), className)}
         onOpenAutoFocus={(e) => {
           if (!autoFocusOnOpen) e.preventDefault()

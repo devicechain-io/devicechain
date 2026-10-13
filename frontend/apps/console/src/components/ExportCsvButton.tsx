@@ -117,7 +117,7 @@ export function ExportCsvButton<T>({
           </Button>
         </>
       ) : (
-        <Button variant="outline" onClick={start} disabled={disabled}>
+        <Button variant="outline" onClick={start} disabled={disabled} data-shot="export-csv">
           <Download size={16} /> {t('exportCsv')}
         </Button>
       )}

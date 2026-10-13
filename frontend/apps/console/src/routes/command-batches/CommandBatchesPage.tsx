@@ -128,6 +128,7 @@ export default function CommandBatchesPage() {
       }
     >
       <FormDrawer
+        shot="command-batch-new"
         open={creating}
         onOpenChange={setCreating}
         title={t('newBatch')}

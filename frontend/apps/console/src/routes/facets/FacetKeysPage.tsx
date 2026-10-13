@@ -114,7 +114,7 @@ export default function FacetKeysPage() {
         ) : undefined
       }
     >
-      <FormDrawer open={creating} onOpenChange={setCreating} title={t('newFacet')}>
+      <FormDrawer shot="facet-key-new" open={creating} onOpenChange={setCreating} title={t('newFacet')}>
         <FacetKeyForm
           onDone={() => {
             setCreating(false);

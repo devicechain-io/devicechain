@@ -50,6 +50,8 @@ const EXTRA_ATTRS = [
   'color', 'fill', 'stroke', 'deviceColor', 'defaultTheme',
   'to', 'href', 'target', 'rel', 'role', 'name', 'htmlFor',
   'autoComplete', 'inputMode', 'dir', 'slot', 'data-testid',
+  // User-guide capture anchors (CONVENTIONS.md, hack/guide-capture): stable kebab-case ids, never text.
+  'data-shot', 'data-shot-tab', 'data-shot-drawer', 'shot',
   // FilePicker's `accept` is a MIME-type list ('image/png,image/jpeg'), never text.
   'accept',
   // radix/shadcn discriminants — Tabs/Select/RadioGroup `value`/`defaultValue`

@@ -23,6 +23,7 @@ export function FormDrawer({
   description,
   children,
   contentClassName,
+  shot,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -31,10 +32,12 @@ export function FormDrawer({
   children: ReactNode;
   /** Overrides the default drawer width — e.g. a wide surface for the canvas editor. */
   contentClassName?: string;
+  /** Stable kebab-case id for the user-guide capture (data-shot-drawer); the title is translated, so it cannot be selected on. */
+  shot?: string;
 }) {
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent side="right" className={cn('w-full overflow-y-auto sm:max-w-lg', contentClassName)}>
+      <SheetContent side="right" data-shot="drawer" data-shot-drawer={shot} className={cn('w-full overflow-y-auto sm:max-w-lg', contentClassName)}>
         <SheetHeader className="mb-6">
           <SheetTitle>{title}</SheetTitle>
           {description && <SheetDescription>{description}</SheetDescription>}

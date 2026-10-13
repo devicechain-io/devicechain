@@ -213,7 +213,7 @@ export default function BrowsePage() {
       {/* Saved dynamic groups for this family */}
       <SavedGroups family={family} version={groupsVersion} />
 
-      <FormDrawer open={saving} onOpenChange={setSaving} title={t('saveAsDynamicGroupTitle')}>
+      <FormDrawer shot="save-dynamic-group" open={saving} onOpenChange={setSaving} title={t('saveAsDynamicGroupTitle')}>
         {built.selector && (
           <SaveGroupForm
             family={family}
@@ -487,6 +487,7 @@ function SavedGroups({ family, version }: { family: string; version: number }) {
       )}
 
       <FormDrawer
+        shot="group-members"
         open={viewing !== null}
         onOpenChange={(open) => !open && setViewing(null)}
         title={viewing ? t('membersOfTitle', { token: viewing.token }) : ''}
