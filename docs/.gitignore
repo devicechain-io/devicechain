@@ -16,3 +16,8 @@
 # every start and build from the same SDL — never committed, for the same reason.
 /generated/
 /i18n/*/docusaurus-plugin-content-docs-graphql-reference/
+
+# The user-guide screenshots, fetched at the commit in guide-assets.lock by
+# scripts/fetch-guide-assets.mjs on every start and build. They live in the
+# devicechain-io/guide-assets repository, never here.
+/static/img/guide/

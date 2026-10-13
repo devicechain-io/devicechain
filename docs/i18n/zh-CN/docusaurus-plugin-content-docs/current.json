@@ -58,5 +58,9 @@
   "sidebar.docs.category.Platform Services": {
     "message": "平台服务",
     "description": "The label for category 'Platform Services' in sidebar 'docs'"
+  },
+  "sidebar.docs.category.User guide": {
+    "message": "用户指南",
+    "description": "The label for category 'User guide' in sidebar 'docs'"
   }
 }

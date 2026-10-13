@@ -197,6 +197,10 @@
     "reference/transport-matrix.md": {
       "sourceSha256": "ba33ad7f0231e2fbfbc42c31b76329dc426da287dc61b50d7d52fd54285cc5ff",
       "translationSha256": "537017fd2d281fe0e2de9da13b1afbc207f6b0cd3d0182838577d91a0bd595d4"
+    },
+    "user-guide/index.md": {
+      "sourceSha256": "1be4a88d6a0980101d6ce5ef20dcb5a092b173a53115205d18d8fcacaa9d9cbb",
+      "translationSha256": "4927b288e1c37dc918a4f27a911a7c2c7496f50e84930f1c32a82fa5ae935c1d"
     }
   }
 }
