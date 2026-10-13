@@ -21,9 +21,24 @@ import { useAuth } from '@/auth/AuthProvider';
 import { errMessage } from '@/routes/common';
 import { createCommandDefinition, listCommandDefinitions } from '@/lib/api/device-management';
 
+// The name and description are stored on the profile, a shared tenant resource, so they are the
+// canonical (English) text rather than the language of whoever pressed the button: the same
+// profile must not read differently depending on who declared its commands. They can be edited
+// afterwards like any other command definition.
 export const LWM2M_STANDARD_COMMANDS = [
-  { commandKey: 'lwm2m.reboot', slug: 'lwm2m-reboot', i18n: 'Reboot' },
-  { commandKey: 'lwm2m.readDeviceInfo', slug: 'lwm2m-read-device-info', i18n: 'ReadDeviceInfo' },
+  {
+    commandKey: 'lwm2m.reboot',
+    slug: 'lwm2m-reboot',
+    name: 'Reboot',
+    description: 'Reboots the device (LwM2M Device object, Reboot resource).',
+  },
+  {
+    commandKey: 'lwm2m.readDeviceInfo',
+    slug: 'lwm2m-read-device-info',
+    name: 'Read device information',
+    description:
+      'Reads manufacturer, model number, serial number, firmware version and battery level, and reports any the device did not provide.',
+  },
 ] as const;
 
 export function Lwm2mStandardCommands({
@@ -50,8 +65,8 @@ export function Lwm2mStandardCommands({
           token: `${profileToken}-${c.slug}`,
           deviceProfileToken: profileToken,
           commandKey: c.commandKey,
-          name: t(`lwm2mCommand${c.i18n}Name`),
-          description: t(`lwm2mCommand${c.i18n}Description`),
+          name: c.name,
+          description: c.description,
           parameterSchema: null,
           metadata: null,
         });

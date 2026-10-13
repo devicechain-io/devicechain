@@ -6,7 +6,7 @@
 // What this file pins: the shortcut declares exactly the adapter's two named keys, only the ones the
 // profile does not already declare, with the profile-scoped tokens; and a server refusal is shown
 // rather than swallowed.
-import '@/i18n/config';
+import i18n from '@/i18n/config';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -66,6 +66,21 @@ describe('Lwm2mStandardCommands', () => {
     expect(created.map((c) => c.request.token)).toEqual(['gateway-lwm2m-reboot', 'gateway-lwm2m-read-device-info']);
     expect(created.every((c) => c.request.deviceProfileToken === 'gateway')).toBe(true);
     expect(created.every((c) => c.request.parameterSchema === null)).toBe(true);
+  });
+
+  it('stores the canonical names whatever language the console is in', async () => {
+    await i18n.changeLanguage('es');
+    try {
+      const created = install([]);
+      const onAdded = vi.fn();
+      render(<Lwm2mStandardCommands profileToken="gateway" onAdded={onAdded} />);
+      fireEvent.click(screen.getByRole('button', { name: /Añadir comandos estándar de LwM2M/ }));
+      await waitFor(() => expect(onAdded).toHaveBeenCalled());
+      expect(created.map((c) => c.request.name)).toEqual(['Reboot', 'Read device information']);
+      expect(String(created[1].request.description)).toMatch(/^Reads manufacturer/);
+    } finally {
+      await i18n.changeLanguage('en');
+    }
   });
 
   it('adds only what is missing and leaves a hand-declared command alone', async () => {
