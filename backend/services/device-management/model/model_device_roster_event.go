@@ -34,6 +34,10 @@ type DeviceRosterEvent struct {
 	// that must tell "disabled" from "its type has no profile" (update-management) need not infer
 	// it. It is additive on the wire: a consumer that predates it reads the field as false.
 	Disabled bool
+	// Enabled marks the fact an operator's disabled-to-enabled toggle emits, and no other: a create,
+	// a re-type or a type re-point leave it false. A consumer that must catch a device up on enable
+	// (update-management) acts on it alone; a producer that predates it sends false.
+	Enabled bool
 }
 
 // DeviceRosterPublisher publishes device-roster events (ADR-051 slice 4c-2). Like the

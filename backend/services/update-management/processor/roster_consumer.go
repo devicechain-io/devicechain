@@ -18,7 +18,7 @@ import (
 
 // RosterApi is the slice of the update-management API the roster consumer uses.
 type RosterApi interface {
-	DeviceRosterChanged(ctx context.Context, deviceToken string, disabled bool) error
+	DeviceRosterChanged(ctx context.Context, deviceToken string, enabled bool) error
 }
 
 // RosterConsumer reads device-management's device-roster facts, which it emits when a device is
@@ -100,7 +100,7 @@ func (rc *RosterConsumer) handle(ctx context.Context, msg messaging.Message) {
 		msg.Ack()
 		return
 	}
-	if err := rc.Api.DeviceRosterChanged(msgctx, ev.DeviceToken, ev.Disabled); err != nil {
+	if err := rc.Api.DeviceRosterChanged(msgctx, ev.DeviceToken, ev.Enabled); err != nil {
 		rc.retryOrDrop(msgctx, msg, ev.DeviceToken, err)
 		return
 	}

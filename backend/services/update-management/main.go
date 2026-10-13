@@ -326,7 +326,7 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	if err := ReportsConsumer.Initialize(context.Background()); err != nil {
 		return err
 	}
-	rosterReader, err := nmgr.NewReader(streams.DeviceRoster)
+	rosterReader, err := nmgr.NewReader(streams.DeviceRoster, messaging.ReaderWithDeliverNew())
 	if err != nil {
 		return err
 	}

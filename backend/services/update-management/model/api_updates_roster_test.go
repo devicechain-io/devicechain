@@ -27,12 +27,12 @@ func TestARosterFactDropsTheCachedDisabledAnswer(t *testing.T) {
 	// Disabled inside the TTL: still unseen, until the fact arrives.
 	e.devices.disabled = map[string]bool{"acme/dev-1": true}
 	require.NoError(t, report(2), "fixture: the stale answer is the premise")
-	require.NoError(t, e.api.DeviceRosterChanged(ctx, "dev-1", true))
+	require.NoError(t, e.api.DeviceRosterChanged(ctx, "dev-1", false))
 	require.ErrorIs(t, report(3), ErrDeviceDisabled, "the disable fact must take effect at once")
 
 	// And the enable, inside the TTL of the cached disabled answer.
 	e.devices.disabled = nil
-	require.NoError(t, e.api.DeviceRosterChanged(ctx, "dev-1", false))
+	require.NoError(t, e.api.DeviceRosterChanged(ctx, "dev-1", true))
 	require.NoError(t, report(4), "the enable fact must take effect at once")
 }
 
@@ -48,13 +48,12 @@ func TestAnEnableFactReOffersTheCurrentAssignment(t *testing.T) {
 	e.advance(DisabledCacheTTL)
 
 	sent := len(e.desired.sent)
-	// The disable fact, and an enable fact the device-management lookup does not bear out, offer nothing.
+	// An enable fact the device-management lookup does not bear out offers nothing.
 	require.NoError(t, e.api.DeviceRosterChanged(ctx, "dev-1", true))
-	require.NoError(t, e.api.DeviceRosterChanged(ctx, "dev-1", false))
 	require.Len(t, e.desired.sent, sent, "a still-disabled device was re-offered its assignment")
 
 	e.devices.disabled = nil
-	require.NoError(t, e.api.DeviceRosterChanged(ctx, "dev-1", false))
+	require.NoError(t, e.api.DeviceRosterChanged(ctx, "dev-1", true))
 	require.Len(t, e.desired.sent, sent+1, "the enable must re-offer the assignment exactly once")
 	require.Equal(t, "dev-1", e.desired.sent[sent].device)
 }
@@ -64,7 +63,7 @@ func TestAnEnableFactReOffersTheCurrentAssignment(t *testing.T) {
 func TestAnEnableFactWithNothingAssignedOffersNothingAndAFailedLookupIsRetried(t *testing.T) {
 	e := newUpdateEnv(t)
 	ctx := tenantCtx("acme")
-	require.NoError(t, e.api.DeviceRosterChanged(ctx, "dev-2", false))
+	require.NoError(t, e.api.DeviceRosterChanged(ctx, "dev-2", true))
 	require.Empty(t, e.desired.sent)
 	require.Zero(t, e.devices.lookups)
 
@@ -72,7 +71,7 @@ func TestAnEnableFactWithNothingAssignedOffersNothingAndAFailedLookupIsRetried(t
 	_, err := e.api.AssignArtifact(ctx, "dev-1", "fw-1")
 	require.NoError(t, err)
 	e.devices.err = errUnreachable
-	require.ErrorIs(t, e.api.DeviceRosterChanged(ctx, "dev-1", false), errUnreachable)
+	require.ErrorIs(t, e.api.DeviceRosterChanged(ctx, "dev-1", true), errUnreachable)
 }
 
 // The hold on a disabled device's desired channel covers the messages that DELIVER work (an
@@ -98,4 +97,25 @@ func TestACancelStillReachesADisabledDeviceButNothingElseDoes(t *testing.T) {
 	_, err = e.api.CancelUpdate(ctx, v.Assignment.Token)
 	require.NoError(t, err)
 	require.Len(t, e.desired.sent, sent+1, "the cancel was held back")
+}
+
+// Only the enable TOGGLE re-offers. A disable fact and a re-type / create / type re-point fact (enabled
+// false) drop the cached answer and cost no lookup and no publish, however many arrive: a campaign's
+// bulk re-point must not become one lookup and one duplicate assignment per device.
+func TestOnlyAnEnableToggleReOffersAndOtherFactsCostNoLookup(t *testing.T) {
+	e := newUpdateEnv(t)
+	e.availableArtifact(t, "acme", "fw-1", "1.0.0", []byte("firmware one"))
+	ctx := tenantCtx("acme")
+	_, err := e.api.AssignArtifact(ctx, "dev-1", "fw-1")
+	require.NoError(t, err)
+	lookups, sent := e.devices.lookups, len(e.desired.sent)
+
+	for range 3 {
+		require.NoError(t, e.api.DeviceRosterChanged(ctx, "dev-1", false))
+	}
+	require.Equal(t, lookups, e.devices.lookups, "a non-enable fact asked device-management")
+	require.Len(t, e.desired.sent, sent, "a non-enable fact re-offered the assignment")
+
+	require.NoError(t, e.api.DeviceRosterChanged(ctx, "dev-1", true))
+	require.Len(t, e.desired.sent, sent+1)
 }

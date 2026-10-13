@@ -89,3 +89,25 @@ func TestRevisionMintedWhileDisabledIsHeldUntilEnable(t *testing.T) {
 		t.Fatalf("enable published %+v, want exactly revision 2", got)
 	}
 }
+
+// 🔴 A disable that commits between an enable's save and its publish must win. The device held in
+// memory still reads as enabled; the row does not, and the row is what decides.
+func TestAResyncReadsTheDisabledColumnAgainBeforePublishing(t *testing.T) {
+	api, ctx := configTestApi(t)
+	dev := seedConfiguredDevice(t, api, ctx, []ConfigurationKey{{Key: "mode", ValueType: "STRING"}})
+	mintOne(t, api, ctx)
+	pub := &recordingDesired{}
+	api.DeviceDesiredPublisher = pub
+
+	stale := *dev // as the enable's UpdateDevice holds it: enabled
+	if _, err := api.UpdateDevice(ctx, "dev", &DeviceUpdateRequest{Enabled: dcgraphql.OptionalBoolOf(false)}); err != nil {
+		t.Fatal(err)
+	}
+	if stale.IsDisabled() {
+		t.Fatal("fixture: the in-memory device must read as enabled")
+	}
+	api.publishLatestConfiguration(ctx, &stale)
+	if got := pub.snapshot(); len(got) != 0 {
+		t.Fatalf("a device disabled in the database was sent %+v", got)
+	}
+}

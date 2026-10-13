@@ -22,12 +22,12 @@ type fakeRosterApi struct {
 
 type rosterCall struct {
 	tenant, device string
-	disabled       bool
+	enabled        bool
 }
 
-func (f *fakeRosterApi) DeviceRosterChanged(ctx context.Context, device string, disabled bool) error {
+func (f *fakeRosterApi) DeviceRosterChanged(ctx context.Context, device string, enabled bool) error {
 	tenant, _ := core.TenantFromContext(ctx)
-	f.calls = append(f.calls, rosterCall{tenant, device, disabled})
+	f.calls = append(f.calls, rosterCall{tenant, device, enabled})
 	return f.err
 }
 
@@ -36,20 +36,20 @@ func rosterConsumerOver(api RosterApi) *RosterConsumer {
 	return NewRosterConsumer(ms, nil, core.NewNoOpLifecycleCallbacks(), api, nil)
 }
 
-func rosterFact(t *testing.T, device string, disabled bool) []byte {
+func rosterFact(t *testing.T, device string, enabled bool) []byte {
 	t.Helper()
-	b, err := dmproto.MarshalDeviceRosterEvent(&dmmodel.DeviceRosterEvent{DeviceToken: device, Disabled: disabled})
+	b, err := dmproto.MarshalDeviceRosterEvent(&dmmodel.DeviceRosterEvent{DeviceToken: device, Enabled: enabled, Disabled: !enabled})
 	require.NoError(t, err)
 	return b
 }
 
-// The explicit disabled flag on the real roster fact reaches the API, on the tenant of the subject.
-func TestTheRosterConsumerPassesTheDisabledFlagOnTheSubjectsTenant(t *testing.T) {
+// The enabled flag (and only it) on the real roster fact reaches the API, on the tenant of the subject.
+func TestTheRosterConsumerPassesTheEnabledFlagOnTheSubjectsTenant(t *testing.T) {
 	api := &fakeRosterApi{}
 	c := rosterConsumerOver(api)
-	for _, disabled := range []bool{true, false} {
+	for _, enabled := range []bool{true, false} {
 		ack := &ackRecorder{}
-		c.handle(context.Background(), messaging.NewConsumedMessage("inst.acme.device-roster", rosterFact(t, "dev-1", disabled), 1, nil, ack))
+		c.handle(context.Background(), messaging.NewConsumedMessage("inst.acme.device-roster", rosterFact(t, "dev-1", enabled), 1, nil, ack))
 		require.Equal(t, 1, ack.acks)
 	}
 	require.Equal(t, []rosterCall{{"acme", "dev-1", true}, {"acme", "dev-1", false}}, api.calls)

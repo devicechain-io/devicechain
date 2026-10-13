@@ -218,6 +218,14 @@ func TestMarshalDeviceRosterEventRoundTrips(t *testing.T) {
 	got, err = UnmarshalDeviceRosterEvent(bytes)
 	assert.NoError(t, err)
 	assert.True(t, got.Disabled, "the disabled flag survives the wire")
+	assert.False(t, got.Enabled)
+
+	event.Disabled, event.Enabled = false, true
+	bytes, err = MarshalDeviceRosterEvent(event)
+	assert.NoError(t, err)
+	got, err = UnmarshalDeviceRosterEvent(bytes)
+	assert.NoError(t, err)
+	assert.True(t, got.Enabled, "the enable-transition flag survives the wire")
 }
 
 // A fact written before the disabled field existed (no field 4) still decodes, as enabled: the

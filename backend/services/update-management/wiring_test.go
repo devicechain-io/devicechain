@@ -7,6 +7,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"os"
 	"testing"
 
 	"github.com/devicechain-io/dc-update-management/config"
@@ -71,6 +72,14 @@ func TestTheLifecycleStartsTheConsumerAndTheSweep(t *testing.T) {
 }
 
 // startSweeper builds the sweep from the configured cadence and starts it; stopping it ends it.
+// The roster durable starts at NEW facts: a first start (or a re-created durable) that replayed the
+// stream would re-offer on every fact in its retention window.
+func TestTheRosterReaderStartsFromNewFacts(t *testing.T) {
+	src, err := os.ReadFile("main.go")
+	require.NoError(t, err)
+	require.Contains(t, string(src), "nmgr.NewReader(streams.DeviceRoster, messaging.ReaderWithDeliverNew())")
+}
+
 func TestStartSweeperStartsTheConfiguredSweep(t *testing.T) {
 	prevCfg, prevApi, prevSweeper, prevMetrics := Configuration, Api, Sweeper, ReportsMetrics
 	t.Cleanup(func() { Configuration, Api, Sweeper, ReportsMetrics = prevCfg, prevApi, prevSweeper, prevMetrics })

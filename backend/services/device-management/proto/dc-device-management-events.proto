@@ -299,6 +299,10 @@ message PDeviceRosterEvent {
     // detection engine keys on that and is unchanged); this is the explicit statement, so a
     // consumer that must tell "disabled" from "its type has no profile" does not infer it.
     bool disabled = 4;
+    // True only on the fact an operator's disabled-to-enabled toggle emits. A create, a re-type or a
+    // type re-point carry false, so a consumer that must act on an ENABLE (and not on every
+    // membership change) can tell them apart. A producer that predates the field sends false.
+    bool enabled = 5;
 }
 
 /**

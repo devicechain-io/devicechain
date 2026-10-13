@@ -495,6 +495,7 @@ func MarshalDeviceRosterEvent(event *model.DeviceRosterEvent) ([]byte, error) {
 		ProfileToken:  event.ProfileToken,
 		ExpectedSince: formatOptionalTime(event.ExpectedSince),
 		Disabled:      event.Disabled,
+		Enabled:       event.Enabled,
 	})
 }
 
@@ -513,6 +514,7 @@ func UnmarshalDeviceRosterEvent(encoded []byte) (*model.DeviceRosterEvent, error
 		ProfileToken:  pbevent.ProfileToken,
 		ExpectedSince: expectedSince,
 		Disabled:      pbevent.Disabled,
+		Enabled:       pbevent.Enabled,
 	}, nil
 }
 

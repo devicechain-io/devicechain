@@ -111,7 +111,19 @@ func (api *Api) publishMintedConfiguration(ctx context.Context, deviceId uint, r
 // moved is still reconciled by the device's own sync) and sends nothing for a device that has no
 // revision. Best-effort like every desired publish: the device's next sync repairs a miss.
 func (api *Api) publishLatestConfiguration(ctx context.Context, device *Device) {
-	if api.DeviceDesiredPublisher == nil || device.IsDisabled() {
+	if api.DeviceDesiredPublisher == nil {
+		return
+	}
+	// The disabled column is read again here, as publishMintedConfiguration does: a disable that
+	// committed between the enable's save and this publish must win, and the in-memory device
+	// cannot see it.
+	var rows []Device
+	if err := api.RDB.DB(ctx).Select("id", "disabled_at").Where("id = ?", device.ID).Limit(1).Find(&rows).Error; err != nil {
+		log.Warn().Err(err).Str("device", device.Token).
+			Msg("Could not re-check a re-enabled device before resending its configuration; it picks it up at its next sync.")
+		return
+	}
+	if len(rows) == 0 || rows[0].IsDisabled() {
 		return
 	}
 	latest, err := latestConfigurationRevision(api.RDB.DB(ctx), device.ID)
