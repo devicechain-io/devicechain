@@ -123,6 +123,13 @@ created later with the same token starts with an empty journal. The deletion rec
 `retainedAuditTenant` field is the value they are filed under: pass it as the `tenant` filter of the
 admin API's `auditEvents` query to read that deletion's entries in the administrative journal.
 
+In the console, open **Admin → Audit** and use the tenant filter. It lists each completed deletion as
+`<token> (deleted <date>)`, and choosing one shows the entries kept for that deletion.
+
+A tenant created with a deleted tenant's token also does not inherit that tenant's sessions. A refresh
+token issued in an earlier second than the new tenant was created is refused, for every caller, so someone who was signed
+in to the earlier tenant has to sign in again.
+
 :::warning Sign-in records belong to no tenant, and are not reached
 A former member's sign-in history survives a tenant deletion. If your obligations extend to sign-in
 records, handle them through database and log retention rather than through tenant deletion.

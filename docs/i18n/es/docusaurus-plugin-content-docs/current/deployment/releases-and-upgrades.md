@@ -4135,11 +4135,48 @@ actualización y cualquier objeto cuya referencia se perdió se borran con el in
   un inquilino falla y se reintenta en cada pasada, así que el borrado no termina. Concédelo antes
   de actualizar. El backend filesystem no necesita nada.
 
+##### El token de un inquilino eliminado se retiene hasta que todo lo emitido para él haya caducado, y un inquilino nuevo con ese token empieza limpio {#v0200-token-hold}
+
+El token de un inquilino eliminado se liberaba un tiempo fijo después de empezar la eliminación. La
+retención (`tokenHoldSeconds`, 12 horas por defecto) ahora se cuenta desde que el último sistema de
+almacenamiento terminó de borrar los datos del inquilino, más un minuto de margen, de modo que una
+credencial emitida para el inquilino eliminado haya caducado antes de que el token pueda reutilizarse.
+Por eso una eliminación retiene su token algo más que antes. Tres cambios lo respaldan:
+
+- **No se emite ninguna credencial de dispositivo una vez iniciado el borrado.** Desde ese momento se
+  rechaza la conexión de un dispositivo de ese inquilino.
+- **Los servicios LwM2M y Sparkplug olvidan una búsqueda de dispositivo en caché después de una hora**,
+  y un registro LwM2M de un inquilino eliminado se termina en lugar de prorrogarse.
+- **Se rechaza un token de actualización emitido en un segundo anterior a la creación del inquilino**, para cualquier
+  llamante. Cuando se elimina un inquilino y se crea otro con el mismo token, quienes tenían la sesión
+  iniciada en el primero deben volver a iniciar sesión.
+
+Las entradas de auditoría conservadas de un inquilino eliminado ahora se archivan bajo la eliminación y
+no bajo el token del inquilino, así que el diario del inquilino nuevo empieza vacío. El tipo
+`TenantDeletion` de la API de administración incorpora `retainedAuditTenant`, que es el filtro `tenant`
+de `auditEvents` que lee esas entradas; en la consola, **Administración → Auditoría** muestra cada
+eliminación completada como `<token> (eliminado el <fecha>)` en su filtro de inquilino. No hay nada que
+hacer. Consulta [Eliminación de un inquilino](./tenant-deletion.md#audit).
+
+##### Un registro que no existe se responde con `NOT_FOUND` {#v0200-not-found}
+
+Una petición que nombra un registro que no existe llegaba al cliente como un `record not found` sin
+`extensions.code` en la mayoría de los servicios. Ahora lleva `extensions.code` con el valor
+`NOT_FOUND`, y el mensaje no cambia. Un rechazo que ya tenía su propio código para un registro
+inexistente, como `ARTIFACT_NOT_FOUND`, lo conserva. En esta versión las API de user-management todavía
+responden algunos casos (un inquilino, un rol, una identidad o una pertenencia que no existe) con un
+mensaje como `tenant not found` y sin código. Un cliente que distinguía un registro
+inexistente de otros fallos leyendo el mensaje puede pasar a usar el código. Consulta la
+[referencia de GraphQL](../reference/graphql-api.md#not-found).
+
 ##### El inicio de sesión único es nuevo y no te pide nada {#v0200-sso}
 
 Las personas ahora pueden iniciar sesión mediante un proveedor de identidad externo OpenID Connect, y un inquilino puede exigirlo. Nada se activa hasta que un superusuario crea una conexión, así que una instancia actualizada se comporta como antes. No hay nada que migrar y el inicio de sesión con contraseña sigue funcionando. El nuevo inicio de sesión que provoca el [cierre de sesión en el servidor](#v0200-server-side-logout) ya está descrito.
 
 - **Configurar un proveedor** se describe en [Configurar el inicio de sesión único](../guides/configuring-sso.md), y su comportamiento en [Inicio de sesión único](../concepts/single-sign-on.md).
+- **La pantalla de inicio de sesión empieza solo con la dirección de correo.** A una dirección cuyo dominio tiene una conexión habilitada y aprobada se le ofrece **Continuar con el inicio de sesión único**, con **Usar una contraseña** al lado; cualquier otra dirección pasa al campo de contraseña. `beginSso` llamado con un correo responde `null` para un dominio sin conexión y para uno cuya conexión está deshabilitada o pendiente de aprobación. Una conexión indicada por token sigue rechazando con «single sign-on is not available». El inicio de sesión con contraseña nunca se elimina, así que una cuenta que solo tiene contraseña no queda aislada.
+- **Cada persona vincula su propia cuenta.** Quien inició sesión con contraseña puede vincular una cuenta de inicio de sesión único desde el menú de usuario. `beginSsoLink` no recibe un token de conexión: el servidor usa la conexión para la que un superusuario verificó el dominio del correo de la persona. Cada rechazo lleva un código (`SSO_LINK_SESSION_REQUIRED`, `SSO_LINK_PASSWORD_REQUIRED`, `SSO_LINK_NOT_ALLOWED`, `SSO_LINK_NO_CONNECTION`, `SSO_LINK_ALREADY_LINKED`), y un rechazo en el retorno desde el proveedor indica qué comprobación falló.
+- **Una conexión también puede cerrar la sesión en el proveedor de identidad.** Está desactivado hasta que un administrador lo activa, porque cerrar sesión en el proveedor termina la sesión allí para todas las aplicaciones que atiende. La actualización añade el ajuste (`providerSignOut`, desactivado por defecto) a cada conexión; nada cambia hasta que se establece. `logout` acepta un `returnTo` opcional (`CONSOLE` o `DASHBOARD`) y responde `SignOut { providerSignOutUrl }`, que es `null` cuando no queda nada más por hacer. Las direcciones que hay que registrar en el proveedor están en la conexión (`signOutReturnUrls`). Consulta [Cerrar sesión en el proveedor](../guides/configuring-sso.md#provider-sign-out).
 - **Terminar una sesión no recupera los tokens ya emitidos.** Tras un cierre de sesión, una revocación, una desvinculación o una conexión deshabilitada, los tokens de acceso y de inicio de sesión ya emitidos siguen funcionando hasta que caducan, 15 minutos por defecto.
 
 ##### El inicio de sesión único necesita la dirección pública de la instancia, así que el chart ahora la deriva {#v0200-sso-issuer}

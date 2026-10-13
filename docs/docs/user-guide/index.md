@@ -27,10 +27,10 @@ Chapters are published as they are completed.
 |---|---|---|
 | 1 | Signing in | The sign-in steps, single sign-on, choosing a tenant, an expired session, and the user menu (theme, language, profile). |
 | 2 | The console at a glance | The home page, the sidebar, the tenant chip, and what you see when an area is unavailable. |
-| 3 | Devices | Listing, creating and importing devices; the device detail tabs, including assignment, connectivity and location, events, commands, configuration, credentials and replacement. |
-| 4 | Device types and profiles | Device types and versioned device profiles: metrics, commands, configuration, and publishing or rolling back a version. |
+| 3 | Devices | Listing, creating and bulk-creating devices, and exporting the list as CSV; disabling and enabling a device; the device detail tabs, including assignment, connectivity and location, events, commands, configuration (with restoring an earlier revision or copying another device's), credentials and replacement. |
+| 4 | Device types and profiles | Device types and versioned device profiles: metrics, commands, configuration, publishing or rolling back a version, and downloading a version as a Thing Model. |
 | 5 | Detection rules | Authoring rules as a form, on the canvas, or in plain language; replay preview; rule health and the live feed. |
-| 6 | Alarms | The live alarm list, filters, acknowledging and clearing. |
+| 6 | Alarms | The live alarm list, filters, acknowledging and clearing, and exporting the list as CSV. |
 | 7 | Commanding a fleet | Command batches: creating one, following its progress, refusals and cancellation. |
 | 8 | Dashboards | Templates and import, viewing, editing on the canvas, widgets and bindings, export, and version history. |
 | 9 | Assets, customers and areas | The registry families: lists, hierarchy, property schemas and members. |

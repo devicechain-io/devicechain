@@ -54,7 +54,13 @@ commands and detection rules. Publishing a new profile version changes the behav
 device of that type in one step, and rollback undoes it. Devices can be linked to assets, areas
 and customers. The links you mark as tracked are written onto each event when it arrives, so a
 query for everything in one building finds its readings without walking the relationship graph,
-and history stays where it was when a device is moved. See the
+and history stays where it was when a device is moved. A profile can also declare the
+configuration a device receives; each device has its own copy, and you can restore an earlier
+revision of it or copy another device's
+([configuration](https://docs.devicechain.io/guides/connecting-a-device#restore-copy-configuration)).
+A device can be disabled, which discards its events and refuses commands to it, and keeps its data
+([disabling a device](https://docs.devicechain.io/guides/device-credentials#disabling-a-device)).
+Any published profile version can be exported as a W3C Web of Things Thing Model. See the
 [domain model](https://docs.devicechain.io/concepts/domain-model).
 
 ### Detection and alarms
@@ -75,7 +81,18 @@ Commands are validated against the device's profile, then tracked until the devi
 result or the command's time-to-live runs out
 ([commands](https://docs.devicechain.io/concepts/commands)). Dashboards are versioned per tenant
 and render with React widget packages published to npm, which you can embed in your own
-application ([dashboards](https://docs.devicechain.io/concepts/dashboards)).
+application ([dashboards](https://docs.devicechain.io/concepts/dashboards)). A dashboard can be imported,
+cloned or started from a template. The console exports the device list, the alarm list, a command
+batch and the audit journals as CSV, up to 10,000 rows each.
+
+### Sign-in and updates
+
+People can sign in through your own OpenID Connect identity provider, and a tenant can require it
+([single sign-on](https://docs.devicechain.io/concepts/single-sign-on)). Over-the-air updates are
+an opt-in first release: a per-tenant artifact catalogue, assignment to one device at a time and a
+resumable download. Nothing yet verifies who produced an artifact, so assigning one has to be
+allowed explicitly, and there are no console screens for it
+([over-the-air updates](https://docs.devicechain.io/concepts/over-the-air-updates)).
 
 ### APIs and data access
 
@@ -143,10 +160,12 @@ or Windows from the [releases page](https://github.com/devicechain-io/devicechai
 carries the Helm chart, the operator manifests and the OpenTofu configuration inside it, so the
 binary is all you need from this repository. It drives these tools, which must be on your `PATH`:
 
-- `docker`
 - `kubectl`
 - `helm`
 - OpenTofu (`tofu`) or `terraform`
+- `docker`, only when `dcctl` runs the cluster itself (the `local` provider, which runs kind on
+  Docker) or builds images from source (`--build`). Installing into an existing cluster with
+  `--kube-context` from published images needs no Docker daemon.
 - `kind`, for the local provider
 
 The cluster must run Kubernetes 1.29 or newer. `dcctl preflight local` checks the tools, and the
