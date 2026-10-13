@@ -174,6 +174,11 @@ title: 指标参考
 | `commands_succeeded_total{op}` | 设备以 2.xx 确认的 LwM2M 指令，按操作区分。 |
 | `commands_tenant_deleted_total` | 因其租户已被删除、数据正在回收而被确认丢弃的指令：平台拒绝驱动已退出客户的硬件。 |
 | `deregistrations_total` | LwM2M 显式注销（`DELETE /rd/{id}`）。 |
+| `device_info_attribute_write_errors_total` | 采集到的设备信息属性未能写入 device-management 的次数；在该设备下次采集时重新写入。 |
+| `device_info_attribute_writes_shed_total` | 因属性写入池繁忙而丢弃的已采集属性批次；在该设备下次采集时写入。持续增长说明 device-management 响应缓慢。 |
+| `device_info_harvest_retries_total` | 因设备未响应而重试一次的设备信息采集。 |
+| `device_info_harvest_skipped_total` | 未执行的设备信息采集请求：该设备在过去一小时内已采集过、其分片队列已满，或设备已不可达。 |
+| `device_info_harvests_total{outcome}` | 设备变为可达时执行的设备信息读取，按结果区分：`complete`（全部资源已读取）、`partial`（部分缺失）、`empty`（有响应但未提供任何资源）、`unanswered`（未响应）。 |
 | `devices_registered_total` | 首次 LwM2M 注册时自动创建的设备。 |
 | `handshakes_total` | 完成的 DTLS 握手（每次都是一个新的已认证 LwM2M 会话）。 |
 | `measurements_emitted_total` | 由 LwM2M Observe/Notify 持久写入的单个测量样本。 |

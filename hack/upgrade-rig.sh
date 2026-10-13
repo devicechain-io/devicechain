@@ -1128,15 +1128,14 @@ rig_areas() {
 #
 # 🔴 WHY THE PROBE IS TOLD, INSTEAD OF THE RIG ENABLING THE MISSING AREA. The instance was
 # installed by the baseline's dcctl, and nothing an operator types can add the area
-# afterwards: `dcctl upgrade` has no area or object-store flag (cmd/upgrade.go), the area
-# set is the one bootstrap recorded, and dcctl never writes a blob directory or volume into
-# the instance (bootstrap/composeconfig.go: the document carries the chart's default, "no
-# directory, hence no store"). Editing the release's values or its config Secret by hand
-# would be the rig doing something no operator does, and the next `dcctl upgrade` would
-# undo it. So the areas the instance really runs are stated, apiprobe skips the rest BY
-# NAME in the seed, the read sweep and the table sweep, and the table sweep fails if the
-# database holds a table of an area declared undeployed. Coverage of the artifact table
-# begins with the first baseline that ships the area.
+# afterwards: `dcctl upgrade` has no area flag (cmd/upgrade.go) and the area set is the one
+# bootstrap recorded. Editing the release's values by hand would be the rig doing something
+# no operator does, and the next `dcctl upgrade` would undo it. So the areas the instance
+# really runs are stated, apiprobe skips the rest BY NAME in the seed, the read sweep and
+# the table sweep, and the table sweep fails if the database holds a table of an area
+# declared undeployed. Coverage of the artifact table begins with the first baseline that
+# ships the area -- and the object store that area writes to is dcctl's own default, which the
+# rig gets by naming its cluster the way a default install does (see choose_cluster_target).
 set_deployed_areas() {
   local csv="" area
   while read -r area; do
@@ -1145,6 +1144,136 @@ set_deployed_areas() {
   done < <(rig_areas)
   [[ -n "$csv" ]] || fail "no probe area is shipped by $baseline_tag, so there is nothing to probe"
   deployed_areas="$csv"
+}
+
+# HOW EVERY dcctl CALL NAMES THIS RIG'S CLUSTER, decided once by `up` and read by every
+# later phase from $cluster_target_file. Two answers:
+#
+#   cluster       --cluster $cluster on install/bootstrap; NOTHING on upgrade/destroy, which
+#                 then find the instance where bootstrap recorded it -- the documented
+#                 operator procedure, word for word.
+#   kube-context  --kube-context $kube_context everywhere (a baseline older than --cluster).
+#
+# 🔴 WHY IT MATTERS: THE OBJECT STORE. dcctl gives an instance a small filesystem object
+# store by default only on the kind cluster it names by convention (`kind-<cluster>`,
+# created or REUSED -- bootstrap.ClusterBinding.Managed); on a cluster it was pointed at
+# with --kube-context the default is no store at all. And that store is only valid on its
+# own cluster: user-management and update-management both mount it, and the chart refuses
+# a ReadWriteOnce claim shared by two pods unless dcctl pins them to one node, which it does
+# for its own cluster only. So a rig that points dcctl at its cluster by context installs a
+# baseline with no object store, every artifact create is refused, and the drill dies in
+# the baseline seed; asking for `--object-store filesystem` on top of that is refused by
+# the chart instead. Naming the cluster puts the instance exactly where a developer's
+# `kind create cluster` + `dcctl install local` + `dcctl bootstrap local` puts it, with
+# dcctl's own defaults -- which is what the drill should be upgrading. The binding is
+# immutable once recorded, so every later call has to agree with it, hence one decision.
+#
+# Asked of the baseline BINARY'S help, the way the install/bootstrap split is asked of the
+# extracted tree. An answer that cannot be read ENDS the run rather than counting as "no
+# flag": that would quietly move the drill onto a cluster binding with no object store.
+cluster_target_file="$work/cluster-target"
+choose_cluster_target() {
+  local help mode
+  help="$("$baseline_dcctl" bootstrap --help 2>&1)" ||
+    fail "$baseline_tag's 'dcctl bootstrap --help' failed, so how to name the cluster to it is unknown:
+$help"
+  # The control: a flag every baseline's bootstrap has had. Help text without it is not a
+  # flag list, and "no --cluster in it" would then mean nothing.
+  grep -Eq -- '^[[:space:]]*--kube-context[[:space:]]' <<<"$help" ||
+    fail "$baseline_tag's 'dcctl bootstrap --help' lists no --kube-context flag, so it is not the flag list
+this rig reads; how to name the cluster to it is unknown"
+  if grep -Eq -- '^[[:space:]]*--cluster[[:space:]]' <<<"$help"; then
+    mode=cluster
+    note "$baseline_tag's dcctl names kind clusters (--cluster): binding to $cluster as a default install does"
+  else
+    mode=kube-context
+    note "$baseline_tag's dcctl predates --cluster: pointing it at $kube_context"
+  fi
+  printf '%s\n' "$mode" >"$cluster_target_file"
+}
+
+# load_cluster_target sets install_target (install, bootstrap) and instance_target
+# (upgrade, destroy) from the decision `up` recorded. Globals, as set_deployed_areas.
+install_target=()
+instance_target=()
+load_cluster_target() {
+  local mode
+  [[ -s "$cluster_target_file" ]] ||
+    fail "no $cluster_target_file: 'up' records how the cluster is named, and nothing after it may guess"
+  mode="$(<"$cluster_target_file")"
+  case "$mode" in
+    cluster)
+      install_target=(--cluster "$cluster")
+      instance_target=()
+      ;;
+    kube-context)
+      install_target=(--kube-context "$kube_context")
+      instance_target=(--kube-context "$kube_context")
+      ;;
+    *) fail "$cluster_target_file says '$mode', which is neither 'cluster' nor 'kube-context'" ;;
+  esac
+}
+
+# allow_unverified_artifacts_doc rewrites update-management's typed config document (stdin)
+# to allow an unverified artifact to be assigned, keeping every other setting in it.
+allow_unverified_artifacts_doc() {
+  jq -ce 'if type == "object" then .updates = ((.updates // {}) + {allowUnverifiedArtifacts: true}) else error("not a JSON object") end'
+}
+
+# allow_unverified_artifacts is a RIG-ONLY edit: it lets THIS instance's update-management
+# assign an unverified artifact, which the seed's update-assignment row needs.
+#
+# 🔴 WHY IT IS AN EDIT AND NOT A FLAG. Every artifact is UNVERIFIED today, and with
+# updates.allowUnverifiedArtifacts at its default (false) NO artifact can be assigned, so
+# the seed's update-assignment is refused by name. dcctl has no flag for it; it is chart
+# configuration (functionalAreas.update-management.config.updates), and the area's own
+# documentation says a development instance sets it. apiprobe deliberately REFUSES rather
+# than skips the row on an instance that does not allow it (publishes.go): a skip would be
+# coverage that quietly stops existing, two tables (update_assignments, update_attempts)
+# going uncovered with every check green.
+#
+# Applied the way the stub provider's edits are: where the row is created, never early "to
+# be safe". The upgrade re-renders the ConfigMap and reverts it, which is why the table
+# sweep applies it again before its own seed. The pods read the document only at start,
+# so the Deployment is rolled with a stamp that always changes (see sso_stub_trust_and_egress
+# for why a stamp and not a hash), and the edit is complete only when no old pod is left
+# to answer.
+#
+# An instance that does not run the area has no key for it in the ConfigMap (the chart
+# renders one per enabled area); there is then nothing to allow, and the seed skips the
+# area's rows by name.
+allow_unverified_artifacts() {
+  local cm doc new deploy pods i want
+  cm="dct-$instance-config"
+  doc="$(k -n "$namespace" get configmap "$cm" -o json)" ||
+    fail "could not read the per-area configuration ConfigMap $namespace/$cm"
+  if ! jq -e '.data | has("update-management")' >/dev/null <<<"$doc"; then
+    note "update-management is not enabled on this instance (no key in $cm), so there is no assignment to allow"
+    return 0
+  fi
+  say "letting THIS instance's update-management assign unverified artifacts (rig-only edit)"
+  new="$(jq -r '.data["update-management"]' <<<"$doc" | allow_unverified_artifacts_doc)" ||
+    fail "update-management's configuration in $cm is not a JSON object, so this rig cannot edit it safely"
+  k -n "$namespace" patch configmap "$cm" --type merge \
+    -p "$(jq -n --arg v "$new" '{data: {"update-management": $v}}')" >/dev/null
+
+  deploy="$(k -n "$namespace" get deploy -o name)"
+  deploy="$(grep 'update-management' <<<"$deploy" || true)"
+  [[ "$(wc -l <<<"$deploy" | tr -d ' ')" == 1 && -n "$deploy" ]] ||
+    fail "expected exactly one update-management Deployment in $namespace, found: ${deploy:-none}"
+  k -n "$namespace" patch "$deploy" -p "$(jq -n --arg stamp "$(date -u +%Y%m%dT%H%M%SZ)-$$-$RANDOM" \
+    '{spec: {template: {metadata: {annotations: {"devicechain.io/upgrade-rig-unverified-artifacts": $stamp}}}}}')" >/dev/null
+  k -n "$namespace" rollout status "$deploy" --timeout=240s
+
+  want="$(k -n "$namespace" get "$deploy" -o jsonpath='{.spec.replicas}')"
+  [[ "$want" =~ ^[1-9][0-9]*$ ]] || fail "could not read the replica count of $deploy (got '$want')"
+  for ((i = 0; i < 90; i++)); do
+    pods="$(k -n "$namespace" get pods -o name)"
+    [[ "$(grep -c update-management <<<"$pods" || true)" == "$want" ]] && break
+    sleep 2
+  done
+  [[ "$(grep -c update-management <<<"$pods" || true)" == "$want" ]] ||
+    fail "update-management still has more pods than its $want replica(s) after the rollout, so an assignment could still reach one that refuses it: $pods"
 }
 
 wait_for_every_api() {
@@ -1175,7 +1304,7 @@ cmd_up() {
   chmod 700 "$work"
   # The marker from a previous session must not certify this one. See ran_file. The
   # infrastructure readings taken before the upgrade, likewise: see infra_before_file.
-  rm -f "$ran_file" "$infra_before_file" "$infra_inventory_before"
+  rm -f "$ran_file" "$infra_before_file" "$infra_inventory_before" "$cluster_target_file"
   build_apiprobe
   extract_baseline
   build_baseline_dcctl
@@ -1197,6 +1326,8 @@ cmd_up() {
   [[ ${#area_args[@]} -gt 0 ]] || fail "apiprobe named no functional areas; the seed would have nothing to write to"
 
   pin_baseline_charts
+  choose_cluster_target
+  load_cluster_target
 
   say "installing $baseline_tag with its own dcctl"
   note "areas beyond the default profile are requested explicitly: ${area_args[*]}"
@@ -1223,17 +1354,19 @@ cmd_up() {
     # the upgrade phase re-installs at the TARGET tag and `cmd_operator` measures that
     # the controller moved, which it cannot do if both ends were the same build.
     "$baseline_dcctl" install local --yes --compact \
-      --kube-context "$kube_context" --version "$baseline_tag"
+      "${install_target[@]}" --version "$baseline_tag"
     "$baseline_dcctl" bootstrap local "$instance" --yes \
-      --kube-context "$kube_context" --host localhost --no-escrow \
+      "${install_target[@]}" --host localhost --no-escrow \
       --version "$baseline_tag" "${area_args[@]}"
   else
     note "$baseline_tag predates 'dcctl install': a single bootstrap provisions everything"
     "$baseline_dcctl" bootstrap local "$instance" --yes --compact \
-      --kube-context "$kube_context" --host localhost --no-escrow \
+      "${install_target[@]}" --host localhost --no-escrow \
       --version "$baseline_tag" "${area_args[@]}"
   fi
 
+  wait_for_every_api
+  allow_unverified_artifacts
   wait_for_every_api
 
   say "seeding one of every entity $baseline_tag can express"
@@ -1320,6 +1453,7 @@ resolve_upgrade_target() {
 cmd_upgrade() {
   need_all
   [[ -s "$receipt" ]] || fail "$receipt is missing or empty; run 'up' first"
+  load_cluster_target
   build_apiprobe
 
   # 🔴 THE DATA DRILL REFUSES TO RUN ON A BASELINE THE RELEASE DOES NOT UPGRADE ONTO,
@@ -1389,7 +1523,7 @@ $baseline_tag will actually meet."
   # of that comparison, which is why re-installing at the target tag is allowed.
   say "dcctl install → the cluster's operator and CRDs to $target_tag"
   "$target_dcctl" install local --yes --compact \
-    --kube-context "$kube_context" \
+    "${install_target[@]}" \
     --registry "$target_registry" --version "$target_tag" ||
     fail "THE CLUSTER INSTALL FAILED, before the instance was touched at all. This is a
 finding: an operator on $baseline_tag following the documented procedure types this
@@ -1399,7 +1533,7 @@ means it never became ready. Nothing was upgraded, so nothing below has run."
 
   say "dcctl upgrade → instance configuration and services to $target_tag"
   "$target_dcctl" upgrade local "$instance" \
-    --kube-context "$kube_context" \
+    ${instance_target[@]+"${instance_target[@]}"} \
     --registry "$target_registry" --version "$target_tag" ||
     fail "the upgrade itself FAILED. This is a finding: an operator on $baseline_tag
 running the documented procedure would see exactly this. Read the output above — it
@@ -1507,6 +1641,7 @@ baseline never installed one; neither is evidence about the refusal."
 cmd_recreate() {
   need_all
   [[ -s "$receipt" ]] || fail "$receipt is missing or empty; run 'up' first"
+  load_cluster_target
   build_apiprobe
   load_exit_codes
 
@@ -1541,7 +1676,7 @@ there is nothing for a refused upgrade to damage. Run 'up' first."
   # to the terminal is a measurement the drill cannot make. It is echoed afterwards so
   # the log still carries it.
   out="$("$target_dcctl" upgrade local "$instance" \
-    --kube-context "$kube_context" \
+    ${instance_target[@]+"${instance_target[@]}"} \
     --registry "$target_registry" --version "$target_tag" 2>&1)" || rc=$?
   printf '%s\n' "$out" | sed 's/^/    /'
 
@@ -2139,6 +2274,9 @@ cmd_tablesweep() {
   # it does. See "a stub identity provider" above for what is stood up and why it is here.
   say "standing up the stub identity provider the sweep tenant's single sign-on connection is seeded against"
   idp_stub_up
+  # The upgrade re-rendered update-management's configuration, so the rig-only edit the
+  # baseline seed needed is gone; this seed assigns an artifact too.
+  allow_unverified_artifacts
   wait_for_every_api
   local idp_args=()
   mapfile -t idp_args < <(idp_seed_args)
@@ -3148,8 +3286,136 @@ commit-ish without the chart, or this check has quietly stopped checking."
 
   selftest_policy
   selftest_superuser_password
+  selftest_baseline_writable
 
   say "SELF-TEST PASSED"
+}
+
+# selftest_baseline_writable covers the two things a baseline that ships update-management
+# needs before the seed can write its rows: the object store dcctl gives a cluster it names
+# (choose_cluster_target), and the rig-only edit that lets an artifact be assigned. Both
+# fail in the LOUD direction on a real run (a refusal by name), but only after a cluster
+# and several minutes, which is why the decisions are pinned here.
+selftest_baseline_writable() {
+  say "the baseline is bound the way a default install is, and can assign an artifact"
+  local stub_dir saved_dcctl="$baseline_dcctl" saved_target_file="$cluster_target_file" case want got
+  stub_dir="$(mktemp -d)"
+  # Help text as cobra prints it: the real lines, cut down. HELP_KIND picks the variant.
+  cat > "$stub_dir/dcctl" <<'STUB'
+#!/usr/bin/env bash
+[[ "$1 $2" == "bootstrap --help" ]] || { echo "unexpected argv: $*" >&2; exit 64; }
+case "$HELP_KIND" in
+  named)    printf '%s\n' 'Flags:' \
+              '      --cluster string                              kind cluster to target (default "devicechain")' \
+              '      --kube-context string                         build the instance on the cluster this context reaches' ;;
+  unnamed)  printf '%s\n' 'Flags:' \
+              '      --kube-context string                         build the instance on the cluster this context reaches' ;;
+  prefix)   printf '%s\n' 'Flags:' \
+              '      --cluster-name string                         a prefix of the flag is not the flag' \
+              '      --kube-context string                         build the instance on the cluster this context reaches' ;;
+  notflags) printf '%s\n' 'Error: unknown command "bootstrap" for "dcctl"' ;;
+  failed)   printf '%s\n' 'Flags:' '      --cluster string' '      --kube-context string'; exit 1 ;;
+esac
+STUB
+  chmod +x "$stub_dir/dcctl"
+  baseline_dcctl="$stub_dir/dcctl"
+  cluster_target_file="$stub_dir/cluster-target"
+  # Run in a subshell, because fail exits: "mode=..." is printed only when the function
+  # RETURNED, so a run it ended reads ENDED, never as the kube-context answer.
+  for case in "named|mode=cluster" "unnamed|mode=kube-context" "prefix|mode=kube-context" \
+    "notflags|ENDED" "failed|ENDED"; do
+    want="${case#*|}"
+    rm -f "$cluster_target_file"
+    got="$(HELP_KIND="${case%%|*}" bash -c "set -euo pipefail
+      $(declare -f fail_code fail say note choose_cluster_target)
+      $(declare -p baseline_dcctl baseline_tag cluster kube_context cluster_target_file)
+      choose_cluster_target; echo \"mode=\$(cat \"\$cluster_target_file\")\"" 2>/dev/null | grep '^mode=' || true)"
+    [[ "${got:-ENDED}" == "$want" ]] ||
+      fail "SELF-TEST FAILED: choose_cluster_target over help '${case%%|*}' gave '${got:-ENDED}', want '$want'"
+  done
+  note "a baseline that takes --cluster is bound by name; one that predates it by context; an unreadable flag list ends the run"
+
+  # ...and what each recorded answer makes every later call pass. The empty instance_target
+  # is the point of the 'cluster' answer: upgrade and destroy then read the binding bootstrap
+  # recorded, and a --kube-context there would name a binding the instance does not have.
+  for case in "cluster|--cluster $cluster||" \
+    "kube-context|--kube-context $kube_context|--kube-context $kube_context|" \
+    "|ENDED" "context|ENDED"; do
+    want="${case#*|}"
+    printf '%s' "${case%%|*}" >"$cluster_target_file"
+    got="$(bash -c "set -euo pipefail
+      $(declare -f fail_code fail say note load_cluster_target)
+      $(declare -p cluster kube_context cluster_target_file)
+      load_cluster_target; echo \"targets=\${install_target[*]:-}|\${instance_target[*]:-}|\"" 2>/dev/null | grep '^targets=' || true)"
+    got="${got#targets=}"
+    [[ "${got:-ENDED}" == "$want" ]] ||
+      fail "SELF-TEST FAILED: load_cluster_target over '${case%%|*}' gave '${got:-ENDED}', want '$want'"
+  done
+  rm -f "$cluster_target_file"
+  got="$(bash -c "set -euo pipefail
+    $(declare -f fail_code fail say note load_cluster_target)
+    $(declare -p cluster kube_context cluster_target_file)
+    load_cluster_target; echo loaded" 2>/dev/null || true)"
+  [[ -z "$got" ]] || fail "SELF-TEST FAILED: load_cluster_target with no recorded answer returned instead of ending the run"
+  baseline_dcctl="$saved_dcctl" cluster_target_file="$saved_target_file"
+  rm -rf "$stub_dir"
+  note "each recorded answer sets both targets; a missing or unknown one ends the run"
+
+  # 🔴 THE CALL SITES, which is where the failure this exists for actually happened: every
+  # function above was correct and the install simply named the cluster by context. Every
+  # dcctl install/bootstrap goes through install_target, every upgrade through
+  # instance_target, and none names the context by hand; and both seeds that can write
+  # update-assignment are preceded by the edit that lets them.
+  local fn body line n
+  for fn in cmd_up cmd_upgrade cmd_recreate; do
+    body="$(declare -f "$fn")"
+    n=0
+    while IFS= read -r line; do
+      case "$line" in
+        *'_dcctl" install local'* | *'_dcctl" bootstrap local'*)
+          [[ "$line" == *install_target* && "$line" != *--kube-context* ]] ||
+            fail "SELF-TEST FAILED: $fn runs a dcctl install/bootstrap that does not name the cluster through
+install_target: $line"
+          n=$((n + 1))
+          ;;
+        *'_dcctl" upgrade local'*)
+          [[ "$line" == *instance_target* && "$line" != *--kube-context* ]] ||
+            fail "SELF-TEST FAILED: $fn runs a dcctl upgrade that does not name the cluster through instance_target: $line"
+          n=$((n + 1))
+          ;;
+      esac
+    done <<<"$body"
+    [[ $n -gt 0 ]] || fail "SELF-TEST FAILED: found no dcctl install/bootstrap/upgrade in $fn, so the check above checked nothing"
+    [[ "$fn" == cmd_up || "$body" == *load_cluster_target* ]] ||
+      fail "SELF-TEST FAILED: $fn names the cluster without loading what 'up' recorded"
+  done
+  body="$(declare -f cmd_up)"
+  [[ "$body" == *choose_cluster_target*load_cluster_target*'_dcctl" '*' local '* ]] ||
+    fail "SELF-TEST FAILED: cmd_up does not choose and load the cluster target before it installs"
+  local name
+  for name in cmd_up cmd_tablesweep; do
+    body="$(declare -f "$name")"
+    [[ "$body" == *allow_unverified_artifacts*'" seed '* ]] ||
+      fail "SELF-TEST FAILED: $name does not let update-management assign an unverified artifact before it
+seeds, so the seed's update-assignment is refused on every baseline that ships the area"
+  done
+  note "every dcctl install, bootstrap and upgrade names the cluster as recorded, and both seeds follow the assignment edit"
+
+  # The document edit keeps what was there and adds the one setting. The empty document
+  # is the real case (the chart renders "{}" for an area with no override); the second
+  # proves a setting already present survives rather than being replaced.
+  local doc
+  for case in '{}|{"updates":{"allowUnverifiedArtifacts":true}}' \
+    '{"updates":{"maxArtifactBytes":5}}|{"updates":{"maxArtifactBytes":5,"allowUnverifiedArtifacts":true}}' \
+    '{"rdbConfiguration":{"x":1}}|{"rdbConfiguration":{"x":1},"updates":{"allowUnverifiedArtifacts":true}}'; do
+    doc="${case%%|*}" want="${case#*|}"
+    got="$(allow_unverified_artifacts_doc <<<"$doc")"
+    [[ "$(jq -cS . <<<"$got")" == "$(jq -cS . <<<"$want")" ]] ||
+      fail "SELF-TEST FAILED: allow_unverified_artifacts_doc turned '$doc' into '$got', want '$want'"
+  done
+  ! got="$(allow_unverified_artifacts_doc <<<'"not an object"' 2>/dev/null)" ||
+    fail "SELF-TEST FAILED: allow_unverified_artifacts_doc accepted a non-object document and produced '$got'"
+  note "the assignment edit adds the one setting and keeps the rest"
 }
 
 # selftest_superuser_password covers how the drill decides which password the baseline
@@ -3378,7 +3644,9 @@ delete_cluster() {
 #
 # --kube-context is passed rather than left to the instance record, which a baseline
 # dcctl may never have written: without one destroy guesses kind-<instance>, which is
-# not this rig's cluster.
+# not this rig's cluster. The exception is an instance bound by --cluster (see
+# choose_cluster_target): that binding is the record's, and the record is checked for
+# below; a --kube-context would name a binding the instance does not have.
 destroy_rig_instance() {
   if [[ ! -x "$target_dcctl" ]]; then
     note "not destroying instance $instance: the working tree's dcctl is not built at $target_dcctl"
@@ -3393,7 +3661,13 @@ destroy_rig_instance() {
     return 0
   fi
   say "destroying instance $instance in kind cluster $cluster with the working tree's dcctl"
-  "$target_dcctl" destroy local "$instance" --yes --kube-context "$kube_context" ||
+  # The binding `up` recorded (choose_cluster_target), so destroy names the cluster the way
+  # the instance was bound to it; a run that never got that far keeps --kube-context.
+  local target=(--kube-context "$kube_context")
+  if [[ "$(cat "$cluster_target_file" 2>/dev/null || true)" == cluster ]]; then
+    target=()
+  fi
+  "$target_dcctl" destroy local "$instance" --yes ${target[@]+"${target[@]}"} ||
     warn "dcctl destroy of instance $instance exited $? (an instance the baseline built may be refused); deleting the cluster anyway"
 }
 

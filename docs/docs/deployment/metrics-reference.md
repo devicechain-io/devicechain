@@ -216,6 +216,11 @@ although the device was not at fault.
 | `commands_succeeded_total{op}` | LwM2M commands the device acknowledged with a 2.xx, by operation. |
 | `commands_tenant_deleted_total` | Commands ack-dropped because their tenant has been deleted and its data is being reclaimed — the platform declining to actuate an offboarded customer's hardware. |
 | `deregistrations_total` | LwM2M explicit deregistrations (`DELETE /rd/{id}`). |
+| `device_info_attribute_write_errors_total` | Harvested device-information attributes that could not be written to device-management; written again at the device's next harvest. |
+| `device_info_attribute_writes_shed_total` | Harvested attribute batches dropped because the attribute-write pool was busy; written at the device's next harvest. A steady rate means device-management is slow to answer. |
+| `device_info_harvest_retries_total` | Device-information harvests retried once because the device did not answer. |
+| `device_info_harvest_skipped_total` | Device-information harvest requests not run: the device was harvested within the last hour, its shard's queue was full, or it was no longer reachable. |
+| `device_info_harvests_total{outcome}` | Device-information reads run when a device became reachable, by outcome: `complete` (every resource read), `partial` (some missing), `empty` (answered, but gave none), `unanswered` (did not respond). |
 | `devices_registered_total` | Devices auto-created on their first LwM2M registration. |
 | `handshakes_total` | Completed DTLS handshakes (each is a new authenticated LwM2M session). |
 | `measurements_emitted_total` | Individual measurement samples durably written from LwM2M Observe/Notify. |

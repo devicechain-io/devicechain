@@ -42,7 +42,11 @@ import { buildDefinition, parseDefinition, rebuildFrom, type ActionRow, type Bui
 import { ruleSurvivesRoundTrip, sameLogicalRule } from './rule-equal';
 import { graphFromDefinition } from './canvas/roundtrip';
 import { selectOption } from '@/test/select';
-import GOLDEN from '../../../../../../backend/services/event-processing/internal/rules/graph/testdata/synthesis/guarded-and-outbound.json';
+// Imported ?raw, like the lockstep tests' Go sources: a .json import makes tsc read the
+// file, and the console image builds without backend/ in its context.
+import GOLDEN_JSON from '../../../../../../backend/services/event-processing/internal/rules/graph/testdata/synthesis/guarded-and-outbound.json?raw';
+
+const GOLDEN = JSON.parse(GOLDEN_JSON) as { definition: unknown };
 
 afterEach(cleanup);
 beforeEach(() => vi.clearAllMocks());
