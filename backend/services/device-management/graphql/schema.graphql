@@ -3208,6 +3208,46 @@ type Mutation {
         keys: [ConfigurationKeyInput!]!
     ): DeviceProfile!
     """
+    Makes a device's desired configuration equal to the content of one of its own earlier
+    revisions. The device's shared attributes for its declared keys are set to that
+    revision's values (declared keys the revision does not carry are removed) and a NEW
+    revision is minted and delivered; earlier revisions are never changed. Nothing is minted
+    when the device already holds that content. The whole call is refused, writing nothing,
+    with CONFIGURATION_KEY_UNDECLARED when the device's current profile version no longer
+    declares a key the revision carries, CONFIGURATION_VALUE_TYPE_MISMATCH when a value
+    cannot be carried as the type now declared, CONFIGURATION_TOO_LARGE over the document
+    size limit, and CONFIGURATION_CONFLICT when another write to the device's configuration
+    committed while this one ran (retrying is safe). An unknown device or revision is
+    NOT_FOUND. Requires device:write.
+    """
+    restoreDeviceConfiguration(
+        """Token of the device to restore."""
+        deviceToken: String!
+        """The revision number whose content to restore."""
+        revision: Int!
+    ): DeviceConfiguration!
+    """
+    Makes one device's desired configuration equal to another device's latest revision (or
+    the revision fromRevision names), by setting the target's shared attributes for its
+    declared keys and minting a new revision on the target; the source is not changed. Both
+    devices must be in the caller's tenant (another tenant's device is NOT_FOUND), and the
+    target's profile must declare every key the source's document carries. Refused, writing
+    nothing, with the same codes as restoreDeviceConfiguration; a source with no revision,
+    or without fromRevision, is NOT_FOUND. Requires device:write.
+    """
+    copyDeviceConfiguration(
+        """Token of the device whose configuration to copy."""
+        fromDeviceToken: String!
+        """Token of the device to copy it to."""
+        toDeviceToken: String!
+        """
+        The source revision to copy; omitted or null copies the source's latest. Pass the
+        revision you previewed, so a source that changes in between cannot make the copy
+        apply something you were not shown.
+        """
+        fromRevision: Int
+    ): DeviceConfiguration!
+    """
     Deletes a device profile together with its metric, command and detection-rule
     definitions and all its published versions. Returns true when it was deleted and false
     when no profile has the token. Refused with REFERENCE_VIOLATION while any device type

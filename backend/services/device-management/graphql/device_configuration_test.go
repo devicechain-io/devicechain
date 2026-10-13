@@ -116,6 +116,45 @@ func TestGraphQLOversizeConfigurationCarriesItsCode(t *testing.T) {
 	}
 }
 
+// Restore and copy over the wire: restoring revision 1 answers with the new revision 3
+// carrying revision 1's document; an unknown revision is NOT_FOUND; a copy whose source
+// carries a key the target cannot hold is refused with its code.
+func TestGraphQLRestoresAndCopiesDeviceConfiguration(t *testing.T) {
+	ctx := deviceConfigurationCtx(t)
+	execProfileGql(t, ctx, setSharedAttrMutation, map[string]any{"key": "interval", "type": "LONG", "value": "30"})
+	execProfileGql(t, ctx, setSharedAttrMutation, map[string]any{"key": "interval", "type": "LONG", "value": "60"})
+
+	data := execProfileGql(t, ctx, `mutation { restoreDeviceConfiguration(deviceToken: "dev", revision: 1) {
+	  desired { revision document } stale } }`, nil)
+	if want := `{"restoreDeviceConfiguration":{"desired":{"revision":3,"document":"{\"interval\":30}"},"stale":false}}`; string(data) != want {
+		t.Fatalf("restore answered %s, want %s", data, want)
+	}
+
+	qe := onlyError(t, execServed(t, ctx, `mutation { restoreDeviceConfiguration(deviceToken: "dev", revision: 9) { stale } }`, nil))
+	if qe.Extensions["code"] != "NOT_FOUND" {
+		t.Fatalf("an unknown revision answered %v, want NOT_FOUND", qe)
+	}
+
+	api := ctx.Value(gqlcore.ContextApiKey).(*model.Api)
+	if _, err := api.CreateDeviceProfile(ctx, &model.DeviceProfileCreateRequest{Token: "bare"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := api.PublishDeviceProfile(ctx, "bare", nil, nil, "tester"); err != nil {
+		t.Fatal(err)
+	}
+	bare := "bare"
+	if _, err := api.CreateDeviceType(ctx, &model.DeviceTypeCreateRequest{Token: "plain", ProfileToken: &bare}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := api.CreateDevice(ctx, &model.DeviceCreateRequest{Token: "other", DeviceTypeToken: "plain"}); err != nil {
+		t.Fatal(err)
+	}
+	qe = onlyError(t, execServed(t, ctx, `mutation { copyDeviceConfiguration(fromDeviceToken: "dev", toDeviceToken: "other") { stale } }`, nil))
+	if qe.Extensions["code"] != model.CodeConfigurationKeyUndeclared {
+		t.Fatalf("a copy to a device declaring nothing answered %v, want %s", qe, model.CodeConfigurationKeyUndeclared)
+	}
+}
+
 // No mutation writes a device's reported configuration state: it is the device's own
 // report, written only by the device-report path. Pinned by listing every mutation.
 func TestNoMutationWritesReportedConfigurationState(t *testing.T) {
@@ -144,6 +183,13 @@ func TestNoMutationWritesReportedConfigurationState(t *testing.T) {
 	if len(parsed.Type.Fields) < 50 {
 		t.Fatalf("listed only %d mutations; the introspection read is broken", len(parsed.Type.Fields))
 	}
+	// The two mutations that change a device's DESIRED configuration. They write the device's
+	// SHARED attributes and mint a revision exactly as an attribute write does, and return the
+	// device's configuration so the caller sees the revision they minted. They are named here,
+	// one by one, so a new mutation returning a configuration type still fails this test until
+	// someone decides it belongs on this list; the reported state stays unwritable either way,
+	// because no mutation name may mention it.
+	desiredWriters := map[string]bool{"restoreDeviceConfiguration": false, "copyDeviceConfiguration": false}
 	for _, f := range parsed.Type.Fields {
 		lower := strings.ToLower(f.Name)
 		returns := ""
@@ -153,9 +199,22 @@ func TestNoMutationWritesReportedConfigurationState(t *testing.T) {
 			returns = *f.Type.OfType.Name
 		}
 		if strings.Contains(lower, "reported") || strings.Contains(lower, "configurationstate") ||
-			strings.Contains(lower, "configurationreport") || strings.Contains(lower, "configurationrevision") ||
-			strings.HasPrefix(returns, "DeviceConfiguration") {
+			strings.Contains(lower, "configurationreport") || strings.Contains(lower, "configurationrevision") {
 			t.Errorf("mutation %s (returns %s) writes device configuration state", f.Name, returns)
+			continue
+		}
+		if strings.HasPrefix(returns, "DeviceConfiguration") {
+			if _, ok := desiredWriters[f.Name]; ok && returns == "DeviceConfiguration" {
+				desiredWriters[f.Name] = true
+				continue
+			}
+			t.Errorf("mutation %s (returns %s) writes device configuration state", f.Name, returns)
+		}
+	}
+	for name, seen := range desiredWriters {
+		if !seen {
+			t.Errorf("mutation %s is not served, or no longer returns DeviceConfiguration; "+
+				"the exemption above names something that is not there", name)
 		}
 	}
 }

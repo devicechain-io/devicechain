@@ -1197,6 +1197,23 @@ export type DeviceConfigurationDeclarationQueryVariables = Exact<{
 
 export type DeviceConfigurationDeclarationQuery = { devicesByToken: Array<{ token: string, deviceType: { token: string, profile: { token: string, activeProfileVersion: { version: number, configurationDeclaration: Array<{ key: string, valueType: string, description: string | null }> } | null } | null } }> };
 
+export type RestoreDeviceConfigurationMutationVariables = Exact<{
+  deviceToken: string;
+  revision: number;
+}>;
+
+
+export type RestoreDeviceConfigurationMutation = { restoreDeviceConfiguration: { desired: { revision: number } | null } };
+
+export type CopyDeviceConfigurationMutationVariables = Exact<{
+  fromDeviceToken: string;
+  toDeviceToken: string;
+  fromRevision?: number | null | undefined;
+}>;
+
+
+export type CopyDeviceConfigurationMutation = { copyDeviceConfiguration: { desired: { revision: number } | null } };
+
 export type ProfileConfigurationDeclarationQueryVariables = Exact<{
   tokens: Array<string> | string;
 }>;
@@ -2574,6 +2591,28 @@ export const DeviceConfigurationDeclarationDocument = new TypedDocumentString(`
   }
 }
     `) as unknown as TypedDocumentString<DeviceConfigurationDeclarationQuery, DeviceConfigurationDeclarationQueryVariables>;
+export const RestoreDeviceConfigurationDocument = new TypedDocumentString(`
+    mutation RestoreDeviceConfiguration($deviceToken: String!, $revision: Int!) {
+  restoreDeviceConfiguration(deviceToken: $deviceToken, revision: $revision) {
+    desired {
+      revision
+    }
+  }
+}
+    `) as unknown as TypedDocumentString<RestoreDeviceConfigurationMutation, RestoreDeviceConfigurationMutationVariables>;
+export const CopyDeviceConfigurationDocument = new TypedDocumentString(`
+    mutation CopyDeviceConfiguration($fromDeviceToken: String!, $toDeviceToken: String!, $fromRevision: Int) {
+  copyDeviceConfiguration(
+    fromDeviceToken: $fromDeviceToken
+    toDeviceToken: $toDeviceToken
+    fromRevision: $fromRevision
+  ) {
+    desired {
+      revision
+    }
+  }
+}
+    `) as unknown as TypedDocumentString<CopyDeviceConfigurationMutation, CopyDeviceConfigurationMutationVariables>;
 export const ProfileConfigurationDeclarationDocument = new TypedDocumentString(`
     query ProfileConfigurationDeclaration($tokens: [String!]!) {
   deviceProfilesByToken(tokens: $tokens) {

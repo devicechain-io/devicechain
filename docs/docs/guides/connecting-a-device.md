@@ -374,6 +374,25 @@ The device answers on `device-reports`. Every message is JSON, at most 4 KiB, an
 
 The platform records a `config.status` only when the device has that revision and the digest matches it; the device stops showing the revision as pending once it has reported `APPLIED` for it. Reports are processed at least once, so repeating one is safe, and an older report never overwrites a newer one. A message that does not decode, names a revision the device was not sent, or carries a digest that is not that revision's is refused and recorded on the dead-letter stream rather than dropped. Devices that speak only HTTP are not served by this channel.
 
+### Restoring or copying a configuration {#restore-copy-configuration}
+
+A device's configuration can be set back to an earlier revision, or made the same as another device's: for example, to undo a bad change, or to give a replacement unit the configuration of the unit it replaced. Both are done from the **Configuration** tab of the device page by an operator with `device:write`, or with the `restoreDeviceConfiguration` and `copyDeviceConfiguration` mutations.
+
+- **Restore** takes one of the device's own revisions from the revision history. **Copy from another device** takes the latest revision of another device in the same tenant.
+- The console first shows a preview: every key, its current value, the value it will have, and whether it is added, changed or removed. Nothing changes until you choose **Apply**.
+- Applying sets the device's `SHARED` attributes for its declared keys to the values in that revision. A declared key the revision does not carry is removed. A **new** revision is created and sent to the device as usual. Earlier revisions are never changed. If the device already holds that configuration, nothing is created.
+- The whole change is refused, and nothing is written, if the device's profile does not declare a key the revision carries (`CONFIGURATION_KEY_UNDECLARED`), if a value does not fit the type now declared for its key (`CONFIGURATION_VALUE_TYPE_MISMATCH`), or if the result is over the size limit (`CONFIGURATION_TOO_LARGE`). Restoring an old revision after the profile's declaration has changed can therefore be refused. A device of another tenant, an unknown revision, or a source device with no revision is `NOT_FOUND`.
+- If another change to the device's configuration lands while the restore or copy is being applied, it is refused with `CONFIGURATION_CONFLICT` and nothing is written; it is safe to try again.
+- A copy applies the source revision the console previewed, even if the source device's configuration changes before you choose **Apply**. Through GraphQL, pass that revision as `fromRevision`; without it, `copyDeviceConfiguration` copies the source's latest revision.
+
+```graphql
+mutation {
+  restoreDeviceConfiguration(deviceToken: "pump-7", revision: 3) {
+    desired { revision document }
+  }
+}
+```
+
 ## Over-the-air updates {#over-the-air-updates}
 
 On an instance running the update service (see [Over-the-Air Updates](../concepts/over-the-air-updates.md)), the same two topics carry firmware and software updates. The rules above apply here too: every message carries `"v":1` and a `kind`, unknown or repeated fields are refused, and a message must not carry a device identity. Update messages in either direction are at most 4 KiB.
