@@ -109,6 +109,16 @@ const sidebars: SidebarsConfig = {
         },
       ],
     },
+    // After Concepts: the console walkthrough. The category links to its own
+    // introduction page rather than a generated index; chapters are added to
+    // `items` as they are written. Its label's translations live in
+    // i18n/<locale>/.../current.json under `sidebar.docs.category.User guide`.
+    {
+      type: 'category',
+      label: 'User guide',
+      link: { type: 'doc', id: 'user-guide/index' },
+      items: [],
+    },
     {
       type: 'category',
       label: 'Guides',
