@@ -15,16 +15,16 @@ Todo lo que describe esta página se aplica una vez desplegada el área. Para a�
 :::
 
 :::note Estado
-**Disponible hoy:** la acción de webhook `httpCall`, y una acción `publish` que entrega a MQTT, Apache Kafka, AWS SNS y AWS SQS a través de un conector versionado con alcance de inquilino, cuyas credenciales se guardan en el almacén de secretos cifrado. Ambas se pueden configurar como nodos de acción en el lienzo de automatización. `gcp_pubsub` es un tipo reconocido que todavía no se puede crear (consulta [más abajo](#publish--send-to-a-connector)).
+**Disponible hoy:** la acción de webhook `httpCall`, y una acción `publish` que entrega a MQTT, Apache Kafka, AWS SNS y AWS SQS a través de un conector versionado con alcance de inquilino, cuyas credenciales se guardan en el almacén de secretos cifrado. Ambas se pueden configurar como nodos de acción en el lienzo de automatización y como acciones en el formulario de reglas. `gcp_pubsub` es un tipo reconocido que todavía no se puede crear (consulta [más abajo](#publish--send-to-a-connector)).
 
 **Planificado:** más destinos de `publish` (RabbitMQ, Azure, NATS, Redis, Slack, Splunk) bajo el mismo modelo. Este repositorio es la fuente de verdad de lo que se construye actualmente.
 :::
 
 ## Las dos acciones de salida
 
-Ambas son [acciones](./event-processing.md#automated-actions) que creas en el **lienzo de automatización**, junto a *levantar alarma* y *enviar comando*. Cada una puede estar **protegida (guarded)** por una condición sobre el disparo.
+Ambas son [acciones](./event-processing.md#automated-actions) que creas en el **lienzo de automatización** o en el **generador de formularios**, junto a *levantar alarma* y *enviar comando*. Cada una puede estar **protegida (guarded)** por una condición sobre el disparo.
 
-El selector de acciones del generador de formularios solo ofrece *levantar alarma* y *enviar comando*. Si una regla ya lleva una acción de salida, el formulario muestra esa acción en modo de solo lectura y la conserva, de modo que cambiar entre el lienzo y el formulario nunca la descarta.
+El selector de acciones del generador de formularios ofrece las cuatro acciones. Una acción de webhook lleva allí una URL, una plantilla de cuerpo opcional, cabeceras, un identificador de secreto y un tiempo de espera; una acción de publicar lleva un conector y una plantilla de carga. La lista de conectores es la que puedes ver: un conector de otro inquilino, o al que no tienes acceso, no se ofrece. Un error como una URL ausente, una URL que no es http ni https o un tiempo de espera por encima del límite se indica junto a la acción, y el compilador informa de una plantilla no válida o de una cabecera reservada antes de publicar. Una regla creada en cualquiera de las dos superficies se abre igual en la otra, de modo que cambiar entre el lienzo y el formulario nunca descarta una acción.
 
 ### `httpCall` — llamar a un webhook
 

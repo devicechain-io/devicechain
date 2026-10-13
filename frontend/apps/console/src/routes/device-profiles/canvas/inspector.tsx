@@ -10,15 +10,14 @@
 import { AreaUnavailableInline } from '@/components/AreaUnavailable';
 import { AREA, useAreaAbsent } from '@/lib/capabilities';
 import { useState } from 'react';
-import { Link } from 'react-router-dom';
 import { Trans, useTranslation } from 'react-i18next';
 import { Input } from '@/components/ui/input';
 import { FormField } from '@/components/ui/form-field';
 import { Select, SelectItem } from '@/components/ui/select';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Textarea } from '@/components/ui/textarea';
-import { useQuery } from '@/lib/hooks/use-query';
-import { listConnectors } from '@/lib/api/connectors';
+import { ConnectorPicker } from '../ConnectorPicker';
+import { formatHeaders, parseHeaders } from '../rule-model';
 import {
   AGG_FUNCS,
   COMPARE_OPS,
@@ -485,7 +484,7 @@ function ActionFields({
       {kind === 'publish' && !connectorsAbsent && (
         <>
           <FormField label={t('inspectorConnectorLabel')} htmlFor="cfg-connectorref" description={t('inspectorConnectorDescription')}>
-            <ConnectorPicker value={strVal(config.connectorRef)} onChange={(v) => set({ connectorRef: v || undefined })} />
+            <ConnectorPicker id="cfg-connectorref" value={strVal(config.connectorRef)} onChange={(v) => set({ connectorRef: v || undefined })} />
           </FormField>
           <FormField label={t('inspectorPayloadCelLabel')} htmlFor="cfg-payloadtemplate" description={t('inspectorPayloadCelDescription')}>
             <Textarea id="cfg-payloadtemplate" value={strVal(config.payloadTemplate)} onChange={(e) => set({ payloadTemplate: e.target.value || undefined })} placeholder={t('inspectorPayloadCelPlaceholder')} />
@@ -493,39 +492,6 @@ function ActionFields({
         </>
       )}
     </div>
-  );
-}
-
-// ConnectorPicker lists the tenant's connectors for the publish action. Only a
-// published connector actually dispatches, but the list is all connectors (the
-// publish-time existence check is server-side); an unknown/stale current value is
-// still shown so it isn't silently dropped.
-function ConnectorPicker({ value, onChange }: { value: string; onChange: (v: string) => void }) {
-  const { t } = useTranslation('deviceProfiles');
-  const { data, loading } = useQuery(() => listConnectors({ pageNumber: 1, pageSize: 100 }), []);
-  const connectors = data?.results ?? [];
-  const known = connectors.some((c) => c.token === value);
-  // Only show the "no connectors" hint when there's also nothing selected — a stale/deleted
-  // ref (value set, list empty) must still render the Select so the author can see and clear it.
-  if (!loading && connectors.length === 0 && !value) {
-    return (
-      <p className="rounded-md border border-dashed px-3 py-2 text-xs text-muted-foreground">
-        <Trans t={t} i18nKey="inspectorNoConnectorsHint" components={{ link: <Link to="/connectors" className="text-primary hover:underline" /> }} />
-      </p>
-    );
-  }
-  return (
-    <Select id="cfg-connectorref" value={value} onChange={onChange}>
-      <SelectItem value="">{loading ? t('common:loading') : t('inspectorSelectConnectorPlaceholder')}</SelectItem>
-      {/* Show a "(not found)" row for a value not in the list — but only once loaded, so a valid
-          ref doesn't flash as not-found while the query is in flight. */}
-      {!loading && value && !known && <SelectItem value={value}>{t('inspectorConnectorNotFound', { token: value })}</SelectItem>}
-      {connectors.map((c) => (
-        <SelectItem key={c.token} value={c.token}>
-          {c.name ? `${c.name} (${c.token})` : c.token}
-        </SelectItem>
-      ))}
-    </Select>
   );
 }
 
@@ -548,26 +514,4 @@ function HeadersField({ value, onChange }: { value: unknown; onChange: (h: Recor
       placeholder={t('inspectorHeadersPlaceholder')}
     />
   );
-}
-
-// parseHeaders turns a "Key: Value" per line textarea into a header map (or undefined
-// when empty). formatHeaders is the inverse for display.
-function parseHeaders(raw: string): Record<string, string> | undefined {
-  const out: Record<string, string> = {};
-  for (const line of raw.split('\n')) {
-    const t = line.trim();
-    if (!t) continue;
-    const i = t.indexOf(':');
-    if (i < 0) continue;
-    const k = t.slice(0, i).trim();
-    if (k) out[k] = t.slice(i + 1).trim();
-  }
-  return Object.keys(out).length > 0 ? out : undefined;
-}
-
-function formatHeaders(h: unknown): string {
-  if (!h || typeof h !== 'object') return '';
-  return Object.entries(h as Record<string, string>)
-    .map(([k, v]) => `${k}: ${v}`)
-    .join('\n');
 }
