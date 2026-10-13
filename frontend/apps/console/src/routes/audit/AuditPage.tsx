@@ -7,6 +7,8 @@ import { formatTime } from '@/lib/utils';
 import { useQuery } from '@/lib/hooks/use-query';
 import { useDebouncedValue } from '@/lib/hooks/use-debounced-value';
 import { listAuditEvents, type AuditEvent } from '@/lib/api/audit';
+import { isoTime, type CsvColumn } from '@/lib/csv';
+import { ExportCsvButton } from '@/components/ExportCsvButton';
 import { PageShell } from '@/components/ui/page-shell';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
@@ -25,6 +27,7 @@ import {
 } from '@/components/ui/data-table';
 
 const pageSize = 25;
+const EXPORT_STEM = 'audit';
 
 // Options carry a `labelKey` into the `audit` catalog (ADR-066), resolved with t()
 // inside the component; the `value` is the wire enum and never localized.
@@ -89,6 +92,15 @@ export default function AuditPage() {
     [pageNumber, operation, actor],
   );
 
+  const exportColumns: CsvColumn<AuditEvent>[] = [
+    { header: t('colTime'), value: (r) => isoTime(r.occurredTime) },
+    { header: t('colActor'), value: (r) => r.actor },
+    { header: t('colOperation'), value: (r) => r.operation },
+    { header: t('colTable'), value: (r) => r.tableName },
+    { header: t('colTarget'), value: (r) => r.entityLabel || (r.entityPk ? `#${r.entityPk}` : '') },
+    { header: t('colRows'), value: (r) => r.rowsAffected },
+  ];
+
   const results: AuditEvent[] = data?.results ?? [];
   const operationOptions = OPERATION_OPTIONS.map((o) => ({ value: o.value, label: t(o.labelKey) }));
 
@@ -110,6 +122,19 @@ export default function AuditPage() {
             placeholder={t('actorPlaceholder')}
             value={actorInput}
             onChange={(e) => setActorInput(e.target.value)}
+          />
+          <ExportCsvButton
+            fileStem={EXPORT_STEM}
+            columns={exportColumns}
+            scopeKey={`${operation}|${actor}`}
+            fetchPage={(pageNumber, pageSize) =>
+              listAuditEvents({
+                pageNumber,
+                pageSize,
+                operation: operation || undefined,
+                actor: actor || undefined,
+              })
+            }
           />
         </div>
       }

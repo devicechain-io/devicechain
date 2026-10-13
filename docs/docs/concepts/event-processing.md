@@ -152,7 +152,7 @@ This machine-to-human path is kept distinct from the machine-to-machine **[outbo
 
 Alarms surface live in two places without any extra wiring:
 
-- The console **Alarms** view — a live, tenant-wide list, filterable and acknowledgeable in place.
+- The console **Alarms** view — a live, tenant-wide list, filterable and acknowledgeable in place, with an **Export CSV** button that saves every alarm matching the current filter (up to 10,000 rows) rather than only the visible page.
 - **Dashboard widgets** — a live **alarm table** and an **alarm count** widget (see [Dashboards](./dashboards.md)), including **acknowledge/clear actions** that the server authorizes against the operator's own rights.
 
 Both are fed by live subscriptions, so state changes appear as they happen.

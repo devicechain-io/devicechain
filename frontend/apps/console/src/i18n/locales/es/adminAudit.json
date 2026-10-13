@@ -9,6 +9,8 @@
   "colTarget": "Objetivo",
   "colTenant": "Inquilino",
   "colTime": "Hora",
+  "colTable": "Tabla",
+  "colRows": "Filas",
   "deletedTenantOption": "{{token}} (eliminado el {{date}})",
   "description": "Eventos de autenticación y administración de identidades, roles e inquilinos en toda la instancia.",
   "filterByActorPlaceholder": "Filtrar por actor…",

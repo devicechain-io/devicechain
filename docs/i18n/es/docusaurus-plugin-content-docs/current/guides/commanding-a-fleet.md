@@ -289,6 +289,10 @@ Esta dirección importa porque una sola fila de comando no puede mostrarte la pa
 escritura de flota: los dispositivos que *rechazó*. No se les dio ningún comando, así que no aparecen
 en el historial de ningún dispositivo. Solo el registro del lote sabe que fueron seleccionados.
 
+En la consola, la página de detalle de un lote muestra estos comandos y tiene un botón **Exportar CSV**.
+Exporta todos los comandos que cumplen el filtro de estado vigente, no solo la página visible, hasta
+10 000 filas; si el lote es mayor, la consola lo indica y acotas el filtro para obtener el resto.
+
 ## Cancela un lote {#call-the-whole-thing-off}
 
 ```graphql

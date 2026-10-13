@@ -13,6 +13,8 @@ import {
   type AdminAuditEvent,
 } from '@/lib/api/admin';
 import { tenantFilterOptions } from './auditTenantOptions';
+import { isoTime, type CsvColumn } from '@/lib/csv';
+import { ExportCsvButton } from '@/components/ExportCsvButton';
 import { PageShell } from '@/components/ui/page-shell';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
@@ -31,6 +33,7 @@ import {
 } from '@/components/ui/data-table';
 
 const pageSize = 25;
+const EXPORT_STEM = 'admin-audit';
 
 // Wire enum → catalog key for the operation badge. An operation this map does not
 // cover (should not occur) falls back to its raw value rather than a blank cell —
@@ -125,6 +128,19 @@ export default function AdminAuditPage() {
     [pageNumber, category, tenant, actor],
   );
 
+  // Wire values for category/operation (stable for filtering in a spreadsheet); the table
+  // and the affected row's label are separate columns rather than the list's joined text.
+  const exportColumns: CsvColumn<AdminAuditEvent>[] = [
+    { header: t('colTime'), value: (r) => isoTime(r.occurredTime) },
+    { header: t('colCategory'), value: (r) => r.category },
+    { header: t('colActor'), value: (r) => r.actor },
+    { header: t('colOperation'), value: (r) => r.operation },
+    { header: t('colTenant'), value: (r) => r.tenant },
+    { header: t('colTable'), value: (r) => r.tableName },
+    { header: t('colTarget'), value: (r) => r.entityLabel || (r.entityPk ? `#${r.entityPk}` : '') },
+    { header: t('colRows'), value: (r) => r.rowsAffected },
+  ];
+
   const results: AdminAuditEvent[] = data?.results ?? [];
   const categoryOptions = CATEGORY_OPTIONS.map((o) => ({ value: o.value, label: t(o.labelKey) }));
 
@@ -153,6 +169,20 @@ export default function AdminAuditPage() {
             placeholder={t('filterByActorPlaceholder')}
             value={actorInput}
             onChange={(e) => setActorInput(e.target.value)}
+          />
+          <ExportCsvButton
+            fileStem={EXPORT_STEM}
+            columns={exportColumns}
+            scopeKey={`${category}|${tenant}|${actor}`}
+            fetchPage={(pageNumber, pageSize) =>
+              listAdminAuditEvents({
+                pageNumber,
+                pageSize,
+                category: category || undefined,
+                tenant: tenant || undefined,
+                actor: actor || undefined,
+              })
+            }
           />
         </div>
       }

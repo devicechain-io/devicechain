@@ -16,6 +16,8 @@ import {
   type AlarmEvent,
 } from '@/lib/api/alarms';
 import { errMessage, useReload } from '@/routes/common';
+import { isoTime, type CsvColumn } from '@/lib/csv';
+import { ExportCsvButton } from '@/components/ExportCsvButton';
 import { PageShell } from '@/components/ui/page-shell';
 import { Button } from '@/components/ui/button';
 import { Combobox } from '@/components/ui/combobox';
@@ -36,6 +38,7 @@ import {
 import { AlarmEventTypeBadge, AlarmSeverityBadge, AlarmStatusBadge } from './badges';
 
 const pageSize = 25;
+const EXPORT_STEM = 'alarms';
 
 // Options carry a `labelKey` into the `alarms` catalog (ADR-066), resolved with t()
 // inside the component; the `value` is the wire enum and never localized.
@@ -198,6 +201,20 @@ export default function AlarmsPage() {
     }
   };
 
+  // Wire values for the enums (stable for a spreadsheet filter), ISO-8601 for times.
+  const exportColumns: CsvColumn<Alarm>[] = [
+    { header: t('common:colToken'), value: (a) => a.token },
+    { header: t('colSeverity'), value: (a) => a.severity },
+    { header: t('common:colStatus'), value: (a) => a.state },
+    { header: t('colAcknowledged'), value: (a) => a.acknowledged },
+    { header: t('colOriginator'), value: (a) => originatorLabel(a) },
+    { header: t('colAlarm'), value: (a) => a.alarmKey },
+    { header: t('colMetric'), value: (a) => a.metricKey },
+    { header: t('common:colValue'), value: (a) => a.lastValue },
+    { header: t('colRaised'), value: (a) => isoTime(a.raisedTime) },
+    { header: t('colCleared'), value: (a) => isoTime(a.clearedTime) },
+  ];
+
   const results: Alarm[] = data?.results ?? [];
   // Keep the table mounted through a background reconcile: useQuery preserves the
   // prior data while re-fetching, so gate the full-screen states on data absence, not
@@ -243,6 +260,20 @@ export default function AlarmsPage() {
             value={ack}
             onChange={setAck}
             options={ackOptions}
+          />
+          <ExportCsvButton
+            fileStem={EXPORT_STEM}
+            columns={exportColumns}
+            scopeKey={`${state}|${severity}|${ack}`}
+            fetchPage={(pageNumber, pageSize) =>
+              listAlarms({
+                pageNumber,
+                pageSize,
+                state: state || undefined,
+                severity: severity || undefined,
+                acknowledged,
+              })
+            }
           />
         </div>
       }

@@ -13,7 +13,7 @@
 // look wrong. So the capped case is asserted here, in the numbers an operator reads.
 
 import '@/i18n/config';
-import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -77,14 +77,14 @@ function commandRow(deviceToken: string, status = 'QUEUED') {
     token: `tok-${deviceToken}`,
     deviceToken,
     name: 'reboot',
-    payload: null,
+    payload: null as string | null,
     status,
     queuedTime: '2026-08-12T12:00:00Z',
     sentTime: null,
     respondedTime: null,
     expiresAt: null,
-    responsePayload: null,
-    error: null,
+    responsePayload: null as string | null,
+    error: null as string | null,
   };
 }
 
@@ -324,5 +324,38 @@ describe('CommandBatchDetailPage commands', () => {
     renderPage();
 
     expect(await screen.findByText('No commands match.')).toBeTruthy();
+  });
+});
+
+describe('CommandBatchDetailPage CSV export', () => {
+  // The export must page the SAME filtered query with its own page size (not the table's
+  // page), and write exactly the panel's columns — the command payload is not one of them.
+  it('exports every command for the status filter in force, in the panel’s columns', async () => {
+    const blobs: Blob[] = [];
+    URL.createObjectURL = vi.fn((b: Blob) => {
+      blobs.push(b);
+      return 'blob:x';
+    });
+    URL.revokeObjectURL = vi.fn();
+    const failed = { ...commandRow('dev-a', 'FAILED'), payload: '{"secret":"p"}', error: 'timeout' };
+    respondWith(batch(), [failed]);
+
+    renderPage();
+    await screen.findByText('dev-a');
+    fireEvent.click(screen.getByRole('button', { name: /Any status/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'FAILED' }));
+    await waitFor(() => expect(lastCommandsCriteria().status).toBe('FAILED'));
+    fireEvent.click(screen.getByRole('button', { name: /export csv/i }));
+    await waitFor(() => expect(blobs).toHaveLength(1));
+
+    const exportCall = gqlMock.mock.calls
+      .map((c) => (c[2] as { criteria?: Record<string, unknown> } | undefined)?.criteria)
+      .find((c) => c?.pageSize === 500);
+    expect(exportCall).toMatchObject({ batchToken: 'batch-1', pageNumber: 1, status: 'FAILED' });
+    const text = new TextDecoder().decode(new Uint8Array(await blobs[0].arrayBuffer()).slice(3));
+    expect(text).toBe(
+      'Token,Device,Status,Queued,Result\r\n' +
+        'tok-dev-a,dev-a,FAILED,2026-08-12T12:00:00.000Z,timeout\r\n',
+    );
   });
 });
