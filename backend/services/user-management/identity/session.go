@@ -385,7 +385,7 @@ func (m *Manager) recordAuthLabeled(ctx context.Context, operation, actor, tenan
 }
 
 // ErrIdentityNotFound is returned by a call that names an identity there is none of.
-var ErrIdentityNotFound = errors.New("identity not found")
+var ErrIdentityNotFound = rdb.NewNotFound("identity not found")
 
 // RevokeSessions ends every sign-in the identity has, wherever it is: password or single
 // sign-on, console, dashboard or MCP grant. It is the administrator's "sign out everywhere".
