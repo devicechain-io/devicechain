@@ -152,7 +152,7 @@ Esta vía de máquina a humano se mantiene distinta de los **[conectores salient
 
 Las alarmas aparecen en vivo en dos lugares sin cableado adicional:
 
-- La vista **Alarmas** de la consola: una lista en vivo, a nivel de todo el inquilino, filtrable y reconocible en el mismo lugar.
+- La vista **Alarmas** de la consola: una lista en vivo, a nivel de todo el inquilino, filtrable y reconocible en el mismo lugar, con un botón **Exportar CSV** que guarda todas las alarmas que cumplen el filtro actual (hasta 10 000 filas) y no solo la página visible.
 - **Widgets de panel**: un widget de **tabla de alarmas** en vivo y un widget de **conteo de alarmas** (consulta [Paneles](./dashboards.md)), con **acciones de reconocer/limpiar** que el servidor autoriza contra los propios derechos del operador.
 
 Ambos se alimentan de suscripciones en vivo, de modo que los cambios de estado aparecen a medida que ocurren.

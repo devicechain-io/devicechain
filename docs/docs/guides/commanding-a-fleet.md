@@ -282,6 +282,10 @@ This direction matters because a single command row cannot show you the interest
 write: the devices it *refused*. They were given no command, so they appear in no device's history.
 Only the batch record knows they were targeted at all.
 
+In the console, a batch's detail page lists these commands and has an **Export CSV** button. It
+exports every command matching the status filter in force, not only the visible page, up to 10,000
+rows; if the batch is larger the file says so and you narrow the filter to get the rest.
+
 ## Cancel a batch {#call-the-whole-thing-off}
 
 ```graphql
