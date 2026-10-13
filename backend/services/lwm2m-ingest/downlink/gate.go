@@ -146,6 +146,9 @@ type shardState struct {
 	nudge chan struct{} // capacity 1: "a drain turn may be runnable"
 	devs  map[deviceKey]*gate
 	ready []deviceKey // devices wanting a drain turn, oldest first; de-duplicated by gate.wanted
+	// harvests are queued device-information harvests (harvest.go), run one per worker iteration
+	// after the live task and drain turn. Bounded by harvestMaxPending.
+	harvests []harvestJob
 	// overflow is the term's park pool, which the worker hands its own parks to (handOff). Set by
 	// Run; nil only for the tests that drive a shard's methods directly.
 	overflow chan<- overflowItem

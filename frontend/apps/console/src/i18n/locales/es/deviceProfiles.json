@@ -479,5 +479,14 @@
   "cfgTypeLONG": "Entero (long)",
   "cfgTypeDOUBLE": "Decimal (double)",
   "cfgTypeBOOLEAN": "Booleano",
-  "cfgTypeJSON": "JSON"
+  "cfgTypeJSON": "JSON",
+  "lwm2mCommandsAddButton": "Añadir comandos estándar de LwM2M",
+  "lwm2mCommandsDescription": "Para dispositivos LwM2M: declara Reiniciar y Leer información del dispositivo como comandos con nombre, para poder elegirlos y enviarlos sin escribir la ruta de un objeto. Los comandos ya declarados se dejan como están.",
+  "lwm2mCommandsAdded_one": "Se añadió {{count}} comando LwM2M. Publica el perfil para que los dispositivos lo acepten.",
+  "lwm2mCommandsAdded_other": "Se añadieron {{count}} comandos LwM2M. Publica el perfil para que los dispositivos los acepten.",
+  "lwm2mCommandsAlreadyDeclared": "Ambos comandos LwM2M ya están declarados.",
+  "lwm2mCommandRebootName": "Reiniciar",
+  "lwm2mCommandRebootDescription": "Reinicia el dispositivo (objeto Device de LwM2M, recurso Reboot).",
+  "lwm2mCommandReadDeviceInfoName": "Leer información del dispositivo",
+  "lwm2mCommandReadDeviceInfoDescription": "Lee fabricante, número de modelo, número de serie, versión de firmware y nivel de batería, e informa de los que el dispositivo no proporcionó."
 }

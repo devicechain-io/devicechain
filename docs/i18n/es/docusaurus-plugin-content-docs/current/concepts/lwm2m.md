@@ -59,6 +59,21 @@ Un comando para un dispositivo que está dormido se **retiene de forma durable y
 
 En cualquier caso, la plataforma sigue teniendo el comando en su poder, así que todavía puedes cancelarlo. Si su tiempo de vida se agota antes, el registro dice que nunca llegó a un dispositivo en lugar de culpar al dispositivo por no responder.
 
+### Operaciones con nombre e información del dispositivo
+
+Dos operaciones estándar del objeto Device están disponibles por nombre, para que nadie tenga que escribir `/3/0/4`:
+
+| Clave de comando | Qué hace |
+| --- | --- |
+| `lwm2m.reboot` | Ejecuta el recurso Reboot del objeto Device. No toma parámetros. |
+| `lwm2m.readDeviceInfo` | Lee fabricante, número de modelo, número de serie, versión de firmware y nivel de batería, y responde con los valores leídos y una lista de los recursos que no pudo leer. |
+
+Son comandos ordinarios. Decláralos en el perfil de dispositivo como cualquier otro comando (la pestaña Comandos del perfil tiene un botón **Añadir comandos estándar de LwM2M** que añade ambos) y pasan por la misma verificación al encolar, los mismos permisos, el mismo rastro de auditoría y la misma entrega con retención y drenaje que el resto de comandos. Un recurso que el dispositivo no tiene se informa como ausente, con el motivo, en lugar de hacer fallar toda la lectura.
+
+El restablecimiento de fábrica (Factory Reset) no se ofrece por nombre a propósito: es destructivo y no se puede deshacer. Un dispositivo que lo admita puede recibir igualmente un `lwm2m.execute` de `/3/0/5` de un operador que escriba la ruta. La actualización de firmware también sigue siendo la secuencia del operador descrita arriba.
+
+La misma información del objeto Device también se recopila por ti. Cuando un dispositivo se registra, DeviceChain lee esos recursos una vez y los guarda en el dispositivo como **atributos de cliente** (`manufacturer`, `modelNumber`, `serialNumber`, `firmwareVersion`, `batteryLevel`), de modo que aparecen en la página del dispositivo. Los recursos que el dispositivo no informó se listan en el atributo `lwm2m.deviceInfoMissing`. Esto nunca retrasa el registro ni la telemetría: se ejecuta cuando el registro ya terminó, en el mismo orden por dispositivo que los comandos, pide cada recurso una sola vez, reintenta una sola vez a un dispositivo que no responde y lee un mismo dispositivo como máximo una vez por hora. Los valores que no han cambiado no se reescriben.
+
 ### El mismo pipeline
 
 Las mediciones decodificadas y los cambios de presencia fluyen por la ruta normal de decodificación → resolución → persistencia, de modo que todo lo que sigue trata a los dispositivos LwM2M igual que a cualquier otro.

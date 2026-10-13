@@ -288,6 +288,8 @@ type Dispatcher struct {
 	tenantDeleted func(tenant string) bool
 	workers       int
 	opTimeout     time.Duration
+	// harvester runs the device-information harvest (harvest.go); nil disables it.
+	harvester *Harvester
 	// shardsPtr publishes the CURRENT leadership term's shards so Drain (called from the /rd
 	// handler goroutine, off the Run loop) can gate a device and wake its shard. It is nil whenever
 	// this replica is not the serving leader (before Run, and after it returns), so a Drain on a
@@ -339,6 +341,9 @@ type Options struct {
 	// that degrades to the previous release and shows up on a graph does not need the
 	// compiler to catch it.
 	Parker commandParker
+	// Harvester reads a newly reachable device's Device-object information and records it as
+	// CLIENT attributes. Nil disables the harvest; it degrades nothing else.
+	Harvester *Harvester
 }
 
 // NewDispatcher builds a Dispatcher over the durable command reader, the command-responses writer,
@@ -387,6 +392,7 @@ func NewDispatcher(rdr reader, responses responsePublisher, conns connLookup, ex
 		fetcher:       fetcher,
 		claimer:       claimer,
 		parker:        opts.Parker,
+		harvester:     opts.Harvester,
 		metrics:       metrics,
 		readPacer:     opts.ReadPacer,
 		tenantDeleted: opts.TenantDeleted,
@@ -566,6 +572,7 @@ func (d *Dispatcher) serveShard(ctx context.Context, s *shardState) {
 			}
 		}
 		d.runOneDrainTurn(ctx, s)
+		d.runOneHarvest(ctx, s)
 	}
 }
 

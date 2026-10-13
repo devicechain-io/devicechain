@@ -32,6 +32,60 @@ A device's CoAP response class decides the outcome: `2.xx` → `SUCCESSFUL`; `4.
 with the code; no response within the timeout → `FAILED` (timeout). A `lwm2m.read` returns the
 response body in the command's `responsePayload`.
 
+## Named standard-object operations
+
+Two further command keys name a standard Device-object (Object 3) operation, so an operator does not
+type the path. They are ordinary command keys: a profile declares them as command definitions, so the
+enqueue gate, `command:write` authorization, the audit journal and the whole claim / park / drain
+machinery apply exactly as they do to the three above. There is no parallel API.
+
+| Command key            | CoAP op | Payload | Success → `command-responses` |
+|------------------------|---------|---------|-------------------------------|
+| `lwm2m.reboot`         | POST (Execute `/3/0/4`) | none (any payload is ignored) | `success:true` |
+| `lwm2m.readDeviceInfo` | GET `/3/0/0`, `/3/0/1`, `/3/0/2`, `/3/0/3`, `/3/0/9` | none | `success:true`, `payload` = JSON of the values read plus a `missing` list |
+
+`lwm2m.readDeviceInfo` answers with `{"manufacturer":…,"modelNumber":…,"serialNumber":…,
+"firmwareVersion":…,"batteryLevel":<int>,"missing":[{"resource","path","reason"}]}`. A resource the
+device does not report (4.04), will not give the server (4.01/4.03/4.05) or returns in a format other
+than text/plain is left out of the values and named in `missing` with the reason; the command is
+`SUCCESSFUL` when at least one resource was read and `FAILED` (with the reasons) when none was. A
+transport failure ends the read, and the resources not yet asked are listed as not read.
+
+**Not offered, deliberately:**
+
+- **Factory Reset (`/3/0/5`)** is destructive and irreversible, and a command key on a profile is a
+  one-step send. It stays reachable only as an explicit `lwm2m.execute` of that path until a
+  confirmation flow is decided.
+- **Firmware write/execute (Object 5)** stays the operator runbook below. A firmware update is a
+  stateful sequence (URI, download, state and result polling), and modelling it as one named command
+  would duplicate what the managed update service owns; it should be driven from there.
+
+## Device information on registration
+
+When a device becomes reachable (a Register, or an Update that re-handshakes), the adapter reads the
+same Device-object resources as `lwm2m.readDeviceInfo` and records them as the device's **CLIENT**
+attributes `manufacturer`, `modelNumber`, `serialNumber`, `firmwareVersion` and `batteryLevel`
+(LONG, 0-100), plus `lwm2m.deviceInfoMissing`, a JSON array naming every resource that was not
+read and why (written even when empty, so a resource that appears later clears its record).
+
+It must never cost the registration or telemetry anything, so:
+
+- the `/rd` handler only notes that the device is live; the reads run later on the device's own
+  dispatch worker (the one that serializes its commands), after that worker's live task and drain
+  turn, so a harvest never overlaps a command and never runs on the CoAP read loop;
+- one GET per resource, each bounded by `downlink.timeoutSeconds`; the first transport failure ends
+  the harvest, and a device that did not answer at all is retried **once**, 30 s later;
+- a device is harvested at most once an hour, and an attribute whose value equals the last one
+  written is not rewritten (a stable fleet re-registering produces no audit rows);
+- the attribute writes go to a pool of four goroutines, not the worker; a busy pool drops the batch
+  (counted) and the next harvest sends it again;
+- values are device-controlled text: non-UTF-8, control characters and over-long values are refused
+  or trimmed (256 bytes), and battery level must be an integer percentage.
+
+Counters: `device_info_harvests_total{outcome}` (`complete`, `partial`, `empty`, `unanswered`),
+`device_info_harvest_retries_total`, `device_info_harvest_skipped_total`,
+`device_info_attribute_write_errors_total`, `device_info_attribute_writes_shed_total`.
+
 ## Queue-mode hold-and-drain
 
 A command for a device that is **connected right now** is dispatched immediately (the live path). A
