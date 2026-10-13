@@ -10,6 +10,7 @@ import (
 
 	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/rdb"
+	"gorm.io/gorm"
 )
 
 func boolp(b bool) *bool { return &b }
@@ -232,5 +233,38 @@ func TestDisablingADeviceIsJournaled(t *testing.T) {
 	}
 	if len(rows) != 1 {
 		t.Fatalf("journal holds %d update rows for the device, want 1", len(rows))
+	}
+}
+
+// An update that does not name `enabled` must not write disabled_at at all. UpdateDevice
+// loads the device, edits it and saves it; a disable that commits in between would
+// otherwise be overwritten with the enabled state the rename loaded, silently re-enabling
+// a device an operator had just quarantined. The disable is injected between the load and
+// the save, inside the save's own statement path, which is exactly that interleaving.
+func TestARenameRacingADisableDoesNotReEnableTheDevice(t *testing.T) {
+	f := newDisabledDeviceFixture(t)
+	db := f.api.RDB.Database
+	armed := true
+	if err := db.Callback().Update().Before("gorm:update").Register("test:racing-disable", func(d *gorm.DB) {
+		row, ok := d.Statement.Dest.(*Device)
+		if !armed || !ok || row.Token != "dev" {
+			return
+		}
+		armed = false
+		_ = d.Session(&gorm.Session{NewDB: true}).Model(&Device{}).Where("id = ?", row.ID).
+			UpdateColumn("disabled_at", time.Now().UTC()).Error
+	}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Callback().Update().Remove("test:racing-disable") })
+
+	if _, err := f.api.UpdateDevice(f.ctx, "dev", &DeviceUpdateRequest{Name: dcgraphql.OptionalStringOf("renamed")}); err != nil {
+		t.Fatalf("rename: %v", err)
+	}
+	if armed {
+		t.Fatal("the racing disable never ran; the test proves nothing")
+	}
+	if !disabledOf(t, f, "dev").IsDisabled() {
+		t.Fatal("a rename that did not mention enabled re-enabled a device disabled while it ran")
 	}
 }
