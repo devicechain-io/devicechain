@@ -71,11 +71,68 @@ export interface ActionRow {
   // saving does not silently strip the guard; a guarded row shows a read-only note steering the
   // author back to the canvas to change it.
   guard?: string;
-  // The outbound REACT actions (httpCall / publish, ADR-060) are authored on the Canvas, not in
-  // this form. The form carries such an action through VERBATIM (the original wire object) so a
-  // canvas-authored connector rule opened here and saved is not corrupted — mirroring the guard
-  // pass-through. `raw`, when set, is the whole wire action and is emitted unchanged.
-  raw?: Record<string, unknown>;
+  // The outbound REACT actions are authored here AND on the canvas, and both write the same wire
+  // fields. httpCall: an inline webhook (url / method / headers / bodyTemplate / secretRef /
+  // timeoutMs). publish: a registered connector by token (connectorRef / payloadTemplate /
+  // timeoutMs). Everything is held as the text the author types; empty means "omit".
+  url?: string;
+  // Only POST is accepted today, so the form never offers it; it is carried so a stored value
+  // survives a save instead of being silently dropped (a non-POST one is then refused by the
+  // compiler with its own message rather than quietly rewritten to POST).
+  method?: string;
+  // "Key: Value" per line, the same text the canvas inspector edits.
+  headers?: string;
+  bodyTemplate?: string;
+  secretRef?: string;
+  connectorRef?: string;
+  payloadTemplate?: string;
+  // Milliseconds, as typed. Shared by httpCall + publish; empty ⇒ the dispatcher default.
+  timeoutMs?: string;
+}
+
+export const isOutboundAction = (k: ActionKind): k is 'httpCall' | 'publish' => k === 'httpCall' || k === 'publish';
+
+/**
+ * The compiler's ceiling on a connector action's per-dispatch timeout (rules.MaxActionTimeoutMs,
+ * which is connectorwire.MaxTimeoutMs). Mirrored for the same reason as MAX_ACTIONS_PER_RULE and
+ * pinned against the Go const by the lockstep test.
+ */
+export const MAX_ACTION_TIMEOUT_MS = 20_000;
+
+// parseHeaders turns a "Key: Value" per line textarea into a header map (or undefined when
+// empty); formatHeaders is the inverse for display. Shared by the form and the canvas inspector so
+// the two surfaces read and write a header block identically.
+export function parseHeaders(raw: string): Record<string, string> | undefined {
+  const out: Record<string, string> = {};
+  for (const line of raw.split('\n')) {
+    const t = line.trim();
+    if (!t) continue;
+    const i = t.indexOf(':');
+    if (i < 0) continue;
+    const k = t.slice(0, i).trim();
+    if (k) out[k] = t.slice(i + 1).trim();
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
+export function formatHeaders(h: unknown): string {
+  if (!h || typeof h !== 'object') return '';
+  return Object.entries(h as Record<string, string>)
+    .map(([k, v]) => `${k}: ${v}`)
+    .join('\n');
+}
+
+// The first non-blank header line with no `Key:` shape, or null. parseHeaders silently skips such a
+// line (the canvas types freely), so the form checks it up front rather than save a header block
+// that quietly lost a line.
+export function malformedHeaderLine(raw: string): string | null {
+  for (const line of raw.split('\n')) {
+    const t = line.trim();
+    if (!t) continue;
+    const i = t.indexOf(':');
+    if (i <= 0 || !t.slice(0, i).trim()) return t;
+  }
+  return null;
 }
 
 // Per-type authoring shape derived from compile.go.
@@ -218,11 +275,26 @@ function buildWhen(a: BuildArgs): Record<string, unknown> | undefined {
 }
 
 function buildAction(a: ActionRow): Record<string, unknown> {
-  // An outbound action (httpCall / publish) the form doesn't edit is emitted verbatim from the
-  // wire object captured at load (guard already inside it), so a canvas rule round-trips losslessly.
-  if (a.raw) return a.raw;
   // Preserve a canvas-authored guard verbatim (the form cannot edit it, but must not drop it).
   const withGuard = (o: Record<string, unknown>): Record<string, unknown> => (a.guard ? { ...o, guard: a.guard } : o);
+  if (a.type === 'httpCall') {
+    const h: Record<string, unknown> = { url: (a.url ?? '').trim() };
+    if (a.method) h.method = a.method;
+    const headers = parseHeaders(a.headers ?? '');
+    if (headers) h.headers = headers;
+    if ((a.bodyTemplate ?? '').trim()) h.bodyTemplate = a.bodyTemplate;
+    if ((a.secretRef ?? '').trim()) h.secretRef = (a.secretRef ?? '').trim();
+    const ms = intOrZero(a.timeoutMs ?? '');
+    if (ms) h.timeoutMs = ms;
+    return withGuard({ type: 'httpCall', httpCall: h });
+  }
+  if (a.type === 'publish') {
+    const p: Record<string, unknown> = { connectorRef: (a.connectorRef ?? '').trim() };
+    if ((a.payloadTemplate ?? '').trim()) p.payloadTemplate = a.payloadTemplate;
+    const ms = intOrZero(a.timeoutMs ?? '');
+    if (ms) p.timeoutMs = ms;
+    return withGuard({ type: 'publish', publish: p });
+  }
   if (a.type === 'sendCommand') {
     const sc: Record<string, unknown> = { command: a.command.trim() };
     if (a.payload.trim()) sc.payload = a.payload;
@@ -386,10 +458,24 @@ export function parseDefinition(raw: string): ParsedDefinition | null {
   const rawActions = Array.isArray(d.actions) ? (d.actions as Record<string, unknown>[]) : [];
   const actions: ActionRow[] = rawActions.map((act) => {
     const wireType = str(act.type);
-    // Outbound actions (ADR-060) are canvas-authored; carry them through verbatim so a save
-    // from the form doesn't rewrite them as a raiseAlarm (which the fallback below would do).
-    if (wireType === 'httpCall' || wireType === 'publish') {
-      return { type: wireType, alarmKey: '', command: '', payload: '', raw: act };
+    // Outbound actions: read into the same editable fields the canvas inspector uses, so a rule
+    // authored on either surface opens identically on the other.
+    if (wireType === 'httpCall') {
+      const h = (act.httpCall ?? {}) as Record<string, unknown>;
+      return {
+        type: 'httpCall', alarmKey: '', command: '', payload: '',
+        url: str(h.url), method: str(h.method), headers: formatHeaders(h.headers),
+        bodyTemplate: str(h.bodyTemplate), secretRef: str(h.secretRef), timeoutMs: numStr(h.timeoutMs),
+        guard: str(act.guard) || undefined,
+      };
+    }
+    if (wireType === 'publish') {
+      const p = (act.publish ?? {}) as Record<string, unknown>;
+      return {
+        type: 'publish', alarmKey: '', command: '', payload: '',
+        connectorRef: str(p.connectorRef), payloadTemplate: str(p.payloadTemplate), timeoutMs: numStr(p.timeoutMs),
+        guard: str(act.guard) || undefined,
+      };
     }
     const t = wireType === 'sendCommand' ? 'sendCommand' : 'raiseAlarm';
     const ra = (act.raiseAlarm ?? {}) as Record<string, unknown>;

@@ -75,6 +75,8 @@ export default defineConfig(({ mode }) => {
           path.resolve(__dirname, '../../../backend/services/event-processing/internal/rules'),
           // The CEL predicate environment (cel-vocabulary.test.ts).
           path.resolve(__dirname, '../../../backend/services/event-processing/internal/detect/predicate'),
+          // The connector-action timeout ceiling (taxonomy-lockstep.test.ts).
+          path.resolve(__dirname, '../../../backend/services/event-processing/connectorwire'),
         ],
       },
       proxy: {
