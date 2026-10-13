@@ -395,7 +395,18 @@ mutation {
 {"v":1,"kind":"update.assignment","attemptId":"att-7f3k","assignmentId":"asg-91xq","component":"firmware","trust":"UNVERIFIED","artifact":{"version":"1.4.2","digest":"sha256:…","size":8388608,"requiresReboot":true}}
 ```
 
-`component` 指明要更新的设备部件；每个部件上设备最多同时处理一个分配。固件制品的 `requiresReboot` 为 true，软件和配置制品为 false。`trust` 始终为 `UNVERIFIED`：平台只检查了字节是否与声明的一致，而不检查由谁生成，因此需要确认镜像真实性的设备必须自行校验签名。
+`component` 指明要更新的设备部件；每个部件上设备最多同时处理一个分配。固件制品的 `requiresReboot` 为 true，软件和配置制品为 false。`trust` 为 `UNVERIFIED` 或 `SIGNED`。`UNVERIFIED` 表示平台只检查了字节是否与声明的一致，而不检查由谁生成；它不携带签名字段，携带则会被拒绝。`SIGNED` 增加三个字段，全部必填，如下所示，设备在报告 `VERIFIED` 之前**必须**验证它们：平台只转发签名，是否信任由设备决定。
+
+```json
+{"v":1,"kind":"update.assignment","attemptId":"att-7f3k","assignmentId":"asg-91xq","component":"firmware","trust":"SIGNED","artifact":{"version":"1.4.2","digest":"sha256:…","size":8388608,"requiresReboot":true},"signature":"MEUCIQ…","keyId":"fb401ebc…","algorithm":"ECDSA_P256_SHA256"}
+```
+
+- `signature` 是分离式签名，使用标准字母表的 base64。
+- `keyId` 是 64 个小写十六进制字符：签名者公钥按 DER `SubjectPublicKeyInfo` 编码后的 SHA-256。设备在其信任的公钥中查找它。
+- `algorithm` 为 `ECDSA_P256_SHA256`（ASN.1 DER 签名，即 `cosign sign-blob` 产生的形式）或 `ED25519`。其他取值会被拒绝。
+- 两种算法签名的都是制品的**原始 32 字节 SHA-256 摘要**，而不是其十六进制文本，也不是 `sha256:` 字符串。Ed25519 直接以这 32 字节作为消息。请根据下载到的字节计算摘要，而不是取自 `artifact.digest`，并先确认它等于 `artifact.digest`。
+
+如果签名验证失败，以 `FAILED` 终止更新，`result.code` 为 `SIGNATURE_INVALID`。如果 `keyId` 指向设备不信任的密钥，使用 `UNKNOWN_SIGNER`；当设备要求签名镜像而收到 `UNVERIFIED` 分配时，也使用该代码。二者都在下载结束时报告（在 `DOWNLOADED` 之后，与摘要不匹配相同），并且都不会改变上述阶段。签名覆盖的是镜像而不是版本，因此需要拒绝降级的设备必须自行实施。
 
 要获取镜像，请在 `device-reports` 上申请下载授权：
 
@@ -421,8 +432,8 @@ mutation {
 - `seq` 从 1 开始，该尝试的每次报告都递增。重复发送同一报告无害；以已使用的 `seq` 发送不同内容的报告属于冲突，不会被应用。
 - `stage` 取值为 `RECEIVED`、`DOWNLOADING`、`DOWNLOADED`、`VERIFIED`、`INSTALLING`、`REBOOTING`、`RUNNING`、`FAILED` 和 `ABANDONED` 之一。可以跳过报告丢失的阶段，但不得退回到更早的阶段。
 - `progress`（已持有的字节数，以及已知时的总数）只允许与 `DOWNLOADING` 一起出现。
-- 只有当所持字节的 SHA-256 等于 `artifact.digest` 时才报告 `VERIFIED`。
-- `FAILED` 必须携带 `result`：`{"code":"FLASH_WRITE","detail":"…"}`，其中 code 最多 64 个大写字母、数字和下划线，detail 最多 512 字节。
+- 只有当所持字节的 SHA-256 等于 `artifact.digest`，并且（对 `SIGNED` 分配）签名验证通过时才报告 `VERIFIED`。
+- `FAILED` 必须携带 `result`：`{"code":"FLASH_WRITE","detail":"…"}`，其中 code 最多 64 个大写字母、数字和下划线，detail 最多 512 字节。代码 `SIGNATURE_INVALID` 和 `UNKNOWN_SIGNER` 表示设备拒绝了镜像的签名，详见上文。
 - `RUNNING` 必须携带 `running`：`{"version":"1.4.2"}`，可选附带正在运行内容的 `digest`。新版本运行后立即发送。报告其他版本的 `RUNNING` 不会被应用：如果设备未处于目标版本，请报告 `FAILED`。
 - 每次报告都必须带 `bootId`：当前启动的标识，最多 128 个可打印字符，每次设备启动时都会改变。当 `requiresReboot` 为 true 时，只有来自与安装时不同的启动的 `RUNNING`，平台才接受为更新成功的证据。
 

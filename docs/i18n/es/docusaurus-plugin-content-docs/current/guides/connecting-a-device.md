@@ -404,7 +404,18 @@ Cuando se asigna un artefacto al dispositivo, la plataforma publica en `device-d
 {"v":1,"kind":"update.assignment","attemptId":"att-7f3k","assignmentId":"asg-91xq","component":"firmware","trust":"UNVERIFIED","artifact":{"version":"1.4.2","digest":"sha256:…","size":8388608,"requiresReboot":true}}
 ```
 
-`component` nombra la parte del dispositivo que se actualiza; un dispositivo trabaja como máximo en una asignación por componente. `requiresReboot` es true para un artefacto de firmware y false para los de software y configuración. `trust` es siempre `UNVERIFIED`: la plataforma ha comprobado que los bytes son los que se declararon, no quién los produjo, así que un dispositivo que necesite saber que una imagen es auténtica debe comprobar una firma propia.
+`component` nombra la parte del dispositivo que se actualiza; un dispositivo trabaja como máximo en una asignación por componente. `requiresReboot` es true para un artefacto de firmware y false para los de software y configuración. `trust` es `UNVERIFIED` o `SIGNED`. `UNVERIFIED` significa que la plataforma ha comprobado que los bytes son los que se declararon, no quién los produjo; no lleva campos de firma, y si los lleva se rechaza. `SIGNED` añade tres campos, todos obligatorios, como se muestra a continuación, y el dispositivo **debe** verificarlos antes de informar `VERIFIED`: la plataforma transmite la firma, el dispositivo decide si confía en ella.
+
+```json
+{"v":1,"kind":"update.assignment","attemptId":"att-7f3k","assignmentId":"asg-91xq","component":"firmware","trust":"SIGNED","artifact":{"version":"1.4.2","digest":"sha256:…","size":8388608,"requiresReboot":true},"signature":"MEUCIQ…","keyId":"fb401ebc…","algorithm":"ECDSA_P256_SHA256"}
+```
+
+- `signature` es la firma separada, en base64 con el alfabeto estándar.
+- `keyId` son 64 caracteres hexadecimales en minúscula: el SHA-256 de la clave pública del firmante en DER `SubjectPublicKeyInfo`. El dispositivo la busca entre las claves públicas en las que confía.
+- `algorithm` es `ECDSA_P256_SHA256` (una firma ASN.1 DER, la forma que produce `cosign sign-blob`) o `ED25519`. Cualquier otro valor se rechaza.
+- Ambos algoritmos firman el **resumen SHA-256 en bruto de 32 bytes** del artefacto, no su texto hexadecimal ni la cadena `sha256:`. Ed25519 firma esos 32 bytes directamente como mensaje. Calcula el resumen a partir de los bytes descargados, nunca a partir de `artifact.digest`, y comprueba antes que es igual a `artifact.digest`.
+
+Si la firma no se verifica, falla la actualización con `FAILED` y `result.code` `SIGNATURE_INVALID`. Si `keyId` nombra una clave en la que el dispositivo no confía, usa `UNKNOWN_SIGNER`; usa el mismo código para una asignación `UNVERIFIED` cuando el dispositivo exige imágenes firmadas. Ambos se informan cuando termina la descarga (después de `DOWNLOADED`, como una discrepancia de resumen), y ninguno cambia las etapas anteriores. La firma cubre la imagen, no la versión, así que un dispositivo que deba rechazar degradaciones tiene que imponerlo por su cuenta.
 
 Para obtener la imagen, pide una concesión de descarga en `device-reports`:
 
@@ -430,8 +441,8 @@ Informa de cada etapa en `device-reports` con `update.progress`:
 - `seq` empieza en 1 y aumenta con cada informe del intento. Enviar de nuevo el mismo informe es inocuo; un informe distinto con un `seq` ya usado es un conflicto y no se aplica.
 - `stage` es uno de `RECEIVED`, `DOWNLOADING`, `DOWNLOADED`, `VERIFIED`, `INSTALLING`, `REBOOTING`, `RUNNING`, `FAILED` y `ABANDONED`. Puedes saltarte una etapa cuyo informe se perdió, pero nunca volver a una anterior.
 - `progress` (los bytes que tienes y el total, si se conoce) solo se admite con `DOWNLOADING`.
-- Informa de `VERIFIED` solo cuando el SHA-256 de los bytes que tienes coincida con `artifact.digest`.
-- `FAILED` debe llevar `result`: `{"code":"FLASH_WRITE","detail":"…"}`, un código de hasta 64 letras mayúsculas, dígitos y guiones bajos, y un detalle de hasta 512 bytes.
+- Informa de `VERIFIED` solo cuando el SHA-256 de los bytes que tienes coincida con `artifact.digest` y, en una asignación `SIGNED`, la firma se verifique.
+- `FAILED` debe llevar `result`: `{"code":"FLASH_WRITE","detail":"…"}`, un código de hasta 64 letras mayúsculas, dígitos y guiones bajos, y un detalle de hasta 512 bytes. Los códigos `SIGNATURE_INVALID` y `UNKNOWN_SIGNER` significan que el dispositivo rechazó la firma de la imagen, como se describe arriba.
 - `RUNNING` debe llevar `running`: `{"version":"1.4.2"}`, opcionalmente con el `digest` de lo que se ejecuta. Envíalo en cuanto la nueva versión esté en ejecución. Un informe `RUNNING` que nombra cualquier otra versión no se aplica: si el dispositivo no está en la objetivo, informa `FAILED`.
 - `bootId` es obligatorio en cada informe: un identificador del arranque actual, de hasta 128 caracteres imprimibles, que cambia cada vez que el dispositivo arranca. Cuando `requiresReboot` es true, la plataforma acepta `RUNNING` como prueba de la actualización solo desde un arranque distinto de aquel en el que el dispositivo la instaló.
 

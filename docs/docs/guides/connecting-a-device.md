@@ -403,7 +403,18 @@ When an artifact is assigned to the device, the platform publishes on `device-de
 {"v":1,"kind":"update.assignment","attemptId":"att-7f3k","assignmentId":"asg-91xq","component":"firmware","trust":"UNVERIFIED","artifact":{"version":"1.4.2","digest":"sha256:…","size":8388608,"requiresReboot":true}}
 ```
 
-`component` names the part of the device to update; a device works on at most one assignment per component. `requiresReboot` is true for a firmware artifact and false for software and configuration. `trust` is always `UNVERIFIED`: the platform has checked that the bytes are the bytes that were declared, not who produced them, so a device that needs to know an image is genuine must check a signature of its own.
+`component` names the part of the device to update; a device works on at most one assignment per component. `requiresReboot` is true for a firmware artifact and false for software and configuration. `trust` is `UNVERIFIED` or `SIGNED`. `UNVERIFIED` means the platform has checked that the bytes are the bytes that were declared, not who produced them; it carries no signature fields, and one that does is refused. `SIGNED` adds three fields, all required, as shown below, and the device **must** verify them before it reports `VERIFIED`: the platform relays the signature, the device decides whether to trust it.
+
+```json
+{"v":1,"kind":"update.assignment","attemptId":"att-7f3k","assignmentId":"asg-91xq","component":"firmware","trust":"SIGNED","artifact":{"version":"1.4.2","digest":"sha256:…","size":8388608,"requiresReboot":true},"signature":"MEUCIQ…","keyId":"fb401ebc…","algorithm":"ECDSA_P256_SHA256"}
+```
+
+- `signature` is the detached signature, base64 with the standard alphabet.
+- `keyId` is 64 lowercase hex characters: the SHA-256 of the signer's public key as DER `SubjectPublicKeyInfo`. The device looks it up in the public keys it trusts.
+- `algorithm` is `ECDSA_P256_SHA256` (an ASN.1 DER signature, the form `cosign sign-blob` produces) or `ED25519`. Any other value is refused.
+- Both algorithms sign the **raw 32-byte SHA-256 digest** of the artifact, not its hex text and not the `sha256:` string. Ed25519 signs those 32 bytes directly as its message. Compute the digest from the bytes you downloaded, never from `artifact.digest`, and check it equals `artifact.digest` first.
+
+If the signature does not verify, fail the update with `FAILED` and `result.code` `SIGNATURE_INVALID`. If `keyId` names a key the device does not trust, use `UNKNOWN_SIGNER`; use the same code for an `UNVERIFIED` assignment when the device requires signed images. Both are reported at the point the download ends (after `DOWNLOADED`, like a digest mismatch), and neither changes the stages above. A signature covers the image, not the version, so a device that must refuse downgrades has to enforce that itself.
 
 To fetch the image, ask for a download grant on `device-reports`:
 
@@ -429,8 +440,8 @@ Report each stage on `device-reports` with `update.progress`:
 - `seq` starts at 1 and rises with every report for the attempt. Sending the same report again is harmless; a different report under a `seq` already used is a conflict and is not applied.
 - `stage` is one of `RECEIVED`, `DOWNLOADING`, `DOWNLOADED`, `VERIFIED`, `INSTALLING`, `REBOOTING`, `RUNNING`, `FAILED` and `ABANDONED`. You may skip a stage whose report was lost, but never go back to an earlier one.
 - `progress` (bytes held, and the total if known) is allowed only with `DOWNLOADING`.
-- Report `VERIFIED` only once the SHA-256 of the bytes you hold equals `artifact.digest`.
-- `FAILED` must carry `result`: `{"code":"FLASH_WRITE","detail":"…"}`, a code of up to 64 capital letters, digits and underscores, and a detail of up to 512 bytes.
+- Report `VERIFIED` only once the SHA-256 of the bytes you hold equals `artifact.digest` and, for a `SIGNED` assignment, the signature verifies.
+- `FAILED` must carry `result`: `{"code":"FLASH_WRITE","detail":"…"}`, a code of up to 64 capital letters, digits and underscores, and a detail of up to 512 bytes. The codes `SIGNATURE_INVALID` and `UNKNOWN_SIGNER` mean the device refused the image's signature, as described above.
 - `RUNNING` must carry `running`: `{"version":"1.4.2"}`, optionally with the `digest` of what runs. Send it once the new version is running. A `RUNNING` report that names any other version is not applied: if the device is not on the target, report `FAILED`.
 - `bootId` is required on every report: an identifier of the current boot, up to 128 printable characters, that changes every time the device boots. When `requiresReboot` is true, the platform accepts `RUNNING` as proof of the update only from a boot other than the one the device installed in.
 
