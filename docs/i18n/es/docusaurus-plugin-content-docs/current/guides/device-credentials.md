@@ -82,7 +82,8 @@ Mientras un dispositivo está deshabilitado:
 
 - **Sus eventos se descartan.** Se rechazan al llegar, sea cual sea la credencial o el transporte por el que llegaron, y se cuentan en `devicechain_devicemanagement_resolve_device_disabled_total`. No se almacenan ni van a la cola de mensajes fallidos (dead-letter), y no se recuperan cuando el dispositivo vuelve a habilitarse.
 - **No puede abrir una conexión nueva.** El broker rechaza la conexión con la misma respuesta que una contraseña incorrecta. Una conexión que el dispositivo ya tenía sigue abierta hasta que termina, pero todo lo que publica por ella se descarta.
-- **Los comandos que se le envían se rechazan** con `DEVICE_DISABLED`. Un comando de flota lo incluye entre los dispositivos rechazados. Consulta [Cuando se rechaza una admisión](./sending-commands.md#when-an-enqueue-is-refused).
+- **Los comandos que se le envían se rechazan** con `DEVICE_DISABLED`. Un comando de flota lo incluye entre los dispositivos rechazados. Consulta [Cuando se rechaza una admisión](./sending-commands.md#when-an-enqueue-is-refused). Los comandos encolados para él **antes** de deshabilitarlo no se cancelan: se entregan por una conexión que todavía tenga abierta, o cuando se vuelva a habilitar y se conecte de nuevo. [Cancélalos](./sending-commands.md#cancel-one) si no deben llegarle.
+- **No genera alarmas de silencio.** Una regla que genera una alarma cuando un dispositivo deja de informar ignora un dispositivo deshabilitado. Cuando se vuelve a habilitar, la regla espera una ventana de silencio completa desde ese momento antes de poder considerarlo silencioso.
 - **Todo lo demás se conserva**: sus datos, credenciales, configuración, relaciones y pertenencia a grupos.
 
 El cambio se aplica en todas las réplicas con el siguiente evento del dispositivo: es un cambio del dispositivo, así que descarta las copias en caché igual que una [revocación](#revocation-timing).

@@ -675,18 +675,25 @@ func (api *Api) UpdateDevice(ctx context.Context, token string, request *DeviceU
 		return nil, err
 	}
 	updated.Metadata = metadataJSON
-	disabledAt, err := applyEnabled(request.Enabled, updated.DisabledAt, time.Now())
+	now := time.Now()
+	disabledAt, err := applyEnabled(request.Enabled, updated.DisabledAt, now)
 	if err != nil {
 		return nil, err
 	}
+	// An enable or a disable changes what the detection engine expects of the device: a
+	// disabled device is rostered with no profile so no absence rule raises "device silent"
+	// for the traffic it is refused (rosterEntries), and an enabled one is rostered under its
+	// profile again. Disabling a device that is already disabled changes nothing.
+	toggled := disabledAt.Valid != updated.DisabledAt.Valid
 	updated.DisabledAt = disabledAt
-	if retyped {
+	if retyped || toggled {
 		// The membership of the (possibly new) profile begins now, and it is STORED with the
-		// re-type: the roster fact below and the detection engine's reconcile both read it back.
-		updated.ExpectedSince = sql.NullTime{Time: time.Now().UTC().Truncate(time.Microsecond), Valid: true}
+		// re-type or the toggle: the roster fact below and the detection engine's reconcile both
+		// read it back. After an enable it is the base of a fresh grace window.
+		updated.ExpectedSince = sql.NullTime{Time: nextMembershipInstant(updated, now), Valid: true}
 	}
 
-	// expected_since is written only by a re-type. Without one it is omitted, because
+	// expected_since is written only by a re-type or an enable/disable. Otherwise it is omitted, because
 	// `updated` was loaded before this Save: writing it whole would let an edit racing a
 	// concurrent re-point of the device's type (UpdateDeviceType stamps expected_since on
 	// every device of the type) put the stale membership instant back, and the roster page
@@ -696,7 +703,7 @@ func (api *Api) UpdateDevice(ctx context.Context, token string, request *DeviceU
 	// a rename racing a disable would otherwise write back the enabled state it loaded and
 	// silently re-enable a device an operator had just quarantined.
 	omit := make([]string, 0, 2)
-	if !retyped {
+	if !retyped && !toggled {
 		omit = append(omit, "ExpectedSince")
 	}
 	if !request.Enabled.Set {
@@ -738,10 +745,30 @@ func (api *Api) UpdateDevice(ctx context.Context, token string, request *DeviceU
 	// A device token rename remains unreachable through this method — the update input
 	// carries no token — so the roster's device-token key is stable here; a future
 	// rename path would need its own re-roster/removal.
-	if retyped {
+	//
+	// An enable or disable re-rosters for the reason given where `toggled` is computed.
+	if retyped || toggled {
 		api.emitDeviceRosterForDevice(ctx, updated)
 	}
 	return updated, nil
+}
+
+// nextMembershipInstant is the expected_since a re-type or an enable/disable stores: now, at
+// the column's microsecond precision, but STRICTLY after the instant the device's current
+// roster entry carries. event-processing applies a roster fact only when it is strictly newer
+// than the one it holds, so a disable and an enable landing in the same clock tick (a coarse
+// clock, or two quick clicks) would otherwise leave the second one ignored there — a device
+// left armed for absence while disabled, or never re-armed after it was enabled.
+func nextMembershipInstant(d *Device, now time.Time) time.Time {
+	stamp := now.UTC().Truncate(time.Microsecond)
+	current := d.CreatedAt
+	if d.ExpectedSince.Valid {
+		current = d.ExpectedSince.Time
+	}
+	if !stamp.After(current) {
+		stamp = current.UTC().Truncate(time.Microsecond).Add(time.Microsecond)
+	}
+	return stamp
 }
 
 // Get devices by id.

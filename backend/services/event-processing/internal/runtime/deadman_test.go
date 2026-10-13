@@ -458,3 +458,41 @@ func TestReconcileSweepsHeartbeatAbsenceTimers(t *testing.T) {
 		t.Fatal("live device's heartbeat absence timer was wrongly swept")
 	}
 }
+
+// TestArmerDisabledDeviceIsDisarmedAndReArmedOnEnable: device-management rosters a DISABLED device
+// with an empty profile token (its events are refused at resolution, so an absence rule would raise
+// "device silent" for a device an operator shut out on purpose), and rosters it under its profile
+// again, at the enable instant, when it is enabled. That contract only holds if an empty-profile
+// entry disarms the device AND makes a heartbeat-armed absence for it not live, and if the
+// re-enable arms it at the enable instant rather than at its old membership start.
+func TestArmerDisabledDeviceIsDisarmedAndReArmedOnEnable(t *testing.T) {
+	reg := NewRuleRegistry([]ScopedRule{absScoped("t1", "p1@v1", "r1")})
+	fe := newFakeArmer()
+	d := NewDeadmanArmer(reg, fe)
+	d.ApplyActiveVersion(ActiveEntry{Tenant: "t1", ProfileToken: "p1", ActiveVersionToken: "p1@v1", PublishedAt: ts(100)})
+	d.ApplyDeviceMembership(RosterEntry{Tenant: "t1", DeviceToken: "dev", ProfileToken: "p1", ExpectedSince: ts(50)}, true)
+	key := core.SeriesKey{Rule: ComposeRuleID("t1", "p1@v1/r1"), Series: "dev"}
+	if !d.AbsenceLive(key) {
+		t.Fatal("precondition: an enabled device under the active version is live")
+	}
+
+	// Disabled: still rostered (live), but with no profile.
+	d.ApplyDeviceMembership(RosterEntry{Tenant: "t1", DeviceToken: "dev", ProfileToken: "", ExpectedSince: ts(600)}, true)
+	if got := fe.armedKeys(); len(got) != 0 {
+		t.Fatalf("a disabled device is still armed for absence: %v", got)
+	}
+	if d.AbsenceLive(key) {
+		t.Fatal("a heartbeat-armed absence for a disabled device would still publish")
+	}
+	// A later publish of the profile must not re-arm it.
+	d.ApplyActiveVersion(ActiveEntry{Tenant: "t1", ProfileToken: "p1", ActiveVersionToken: "p1@v1", PublishedAt: ts(700)})
+	if got := fe.armedKeys(); len(got) != 0 {
+		t.Fatalf("a publish re-armed a disabled device: %v", got)
+	}
+
+	// Enabled again: armed under its profile, from the enable instant.
+	d.ApplyDeviceMembership(RosterEntry{Tenant: "t1", DeviceToken: "dev", ProfileToken: "p1", ExpectedSince: ts(900)}, true)
+	if got := fe.armedKeys(); len(got) != 1 || got[0] != key || !fe.armed[key].Equal(ts(900)) {
+		t.Fatalf("enable did not re-arm the device at the enable instant 900: %v (%v)", got, fe.armed)
+	}
+}
