@@ -606,7 +606,7 @@ jobs:
 
       - name: Upload self-test report
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: selftest-report
           path: ${{ runner.temp }}/selftest-report.json
@@ -678,7 +678,7 @@ jobs:
 
       - name: Upload L1 report
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: l1-report
           path: ${{ runner.temp }}/l1-report.json
@@ -721,7 +721,7 @@ jobs:
 
       - name: Upload detection report
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: detection-report
           path: ${{ runner.temp }}/detection-report.json
@@ -789,7 +789,7 @@ jobs:
 
       - name: Upload command report
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: command-report
           path: ${{ runner.temp }}/command-report.json
@@ -869,7 +869,7 @@ jobs:
 
       - name: Upload presence reports
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: presence-reports
           path: |
@@ -935,7 +935,7 @@ jobs:
 
       - name: Upload batch reports
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: batch-reports
           path: |
@@ -1143,7 +1143,7 @@ jobs:
 
       - name: Upload L3 reports
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: l3-reports
           path: ${{ runner.temp }}/l3-*-report.json
@@ -1367,7 +1367,7 @@ jobs:
 
       - name: Upload load-test baseline
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: loadtest-baseline
           path: ${{ runner.temp }}/loadtest-baseline.json
