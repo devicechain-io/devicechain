@@ -130,7 +130,10 @@ describe('DashboardImportDrawer', () => {
 
   // A board well inside 1 MiB compact, in a file over 1 MiB: the indentation of a
   // pretty-printed export does not count against the limit.
-  const padded = () => exported.replace('{', '{' + ' '.repeat((1 << 20) + 100));
+  const padded = () => {
+    expect(exported.startsWith('{')).toBe(true);
+    return '{' + ' '.repeat((1 << 20) + 100) + exported.slice(1);
+  };
 
   it('reviews an uploaded file over 1 MiB whose definition fits compact', async () => {
     h.have.add('press-7');
