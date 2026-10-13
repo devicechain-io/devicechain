@@ -490,5 +490,10 @@
   "cfgTypeLONG": "Integer (long)",
   "cfgTypeDOUBLE": "Decimal (double)",
   "cfgTypeBOOLEAN": "Boolean",
-  "cfgTypeJSON": "JSON"
+  "cfgTypeJSON": "JSON",
+  "lwm2mCommandsAddButton": "Add LwM2M standard commands",
+  "lwm2mCommandsDescription": "For LwM2M devices: declare Reboot and Read device information as named commands, so they can be picked and sent without typing an object path. Commands already declared are left as they are.",
+  "lwm2mCommandsAdded_one": "Added {{count}} LwM2M command. Publish the profile for devices to accept it.",
+  "lwm2mCommandsAdded_other": "Added {{count}} LwM2M commands. Publish the profile for devices to accept them.",
+  "lwm2mCommandsAlreadyDeclared": "Both LwM2M commands are already declared."
 }

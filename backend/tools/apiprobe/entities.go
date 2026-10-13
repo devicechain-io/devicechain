@@ -165,7 +165,20 @@ type entity struct {
 	// tenant session. It is for the one step a GraphQL mutation cannot express: an
 	// artifact is declared over GraphQL and its bytes go over an HTTP PUT. A failure
 	// is a refusal of the platform, reported like one.
+	//
+	// 🔴 AN AFTER STEP CHANGES THE ROW THE CREATE RETURNED, so that response is NOT what
+	// the row holds once the seed is done: uploading an artifact's bytes moves it from
+	// UPLOADING to AVAILABLE. Recording the create response would make verify report
+	// that transition, which the seed itself made, as a change across the upgrade. So an
+	// entity with After must also name Settled, and the seed records a fresh read taken
+	// with verify's own query (readRow) once Settled accepts it. See seedOne.
 	After func(ctx context.Context, c *connection, sess *userclient.TenantSession, st *state) error
+
+	// Settled says whether a read-back shows the row in the state its After step leaves
+	// it in, or why not. The seed re-reads, boundedly, until it does, and fails loudly
+	// if it never does. It checks only; the comparison verify makes is still over every
+	// selected field, the state included.
+	Settled func(fields map[string]any) error
 }
 
 // param is one named, typed argument of a Params write.

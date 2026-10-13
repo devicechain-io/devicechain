@@ -73,32 +73,7 @@ func verifyTo(ctx context.Context, argv []string, out io.Writer) error {
 			return err
 		}
 
-		// The criteria-addressed reads take their whole variable from the table; the
-		// token-addressed ones take it from the receipt. Both are deterministic, which
-		// is what lets verify run in a different process from seed with only a receipt.
-		readVars := map[string]any{"token": r.Token}
-		if e.ReadInput != "" {
-			readVars = map[string]any{"c": e.ReadVars}
-		}
-
-		var envelope map[string]json.RawMessage
-		if err := session.Query(ctx, c.areaURL(e.Area), e.readDoc(), readVars, &envelope); err != nil {
-			// 🔴 A verdict the session already reached passes through as it is: a token
-			// refused past the window (exitDenied), a sign-in that failed (exitSetup).
-			// Wrapping it below would hide it, because codeOf resolves the OUTERMOST
-			// code, and a refused token would be reported as a schema that moved.
-			var decided *codedError
-			if errors.As(err, &decided) {
-				return err
-			}
-			// The server rejected the QUERY. The row may be perfectly intact; a
-			// field this tool selects no longer exists on the type. Reporting
-			// that as missing data sends a reader into the migrations hunting for
-			// something that was never wrong.
-			return failWith(exitShape, "read %s %q back: %w", r.Name, r.Token, err)
-		}
-
-		found, err := readObject(e, envelope, r.Token, r.Object)
+		found, err := readRow(ctx, session, c.areaURL(e.Area), e, r.Token, r.Object)
 		if err != nil {
 			return err
 		}
@@ -187,6 +162,39 @@ func coverageSummary(rec Receipt, checked int) string {
 // longer matching the schema, and that is exitShape: the row may be perfectly
 // intact, and reporting it as data loss sends a reader into the migrations
 // hunting for something that was never wrong.
+//
+// readRow is the whole read-back of one row: the query verify sends and the object it
+// compares. The seed calls it too, to record a row whose state settles after its create
+// (see entity.Settled), so what the seed records and what verify reads come from one
+// function with one selection.
+func readRow(ctx context.Context, q querier, url string, e entity, token string, written json.RawMessage) (json.RawMessage, error) {
+	// The criteria-addressed reads take their whole variable from the table; the
+	// token-addressed ones take it from the receipt. Both are deterministic, which
+	// is what lets verify run in a different process from seed with only a receipt.
+	readVars := map[string]any{"token": token}
+	if e.ReadInput != "" {
+		readVars = map[string]any{"c": e.ReadVars}
+	}
+
+	var envelope map[string]json.RawMessage
+	if err := q.Query(ctx, url, e.readDoc(), readVars, &envelope); err != nil {
+		// 🔴 A verdict the session already reached passes through as it is: a token
+		// refused past the window (exitDenied), a sign-in that failed (exitSetup).
+		// Wrapping it below would hide it, because codeOf resolves the OUTERMOST
+		// code, and a refused token would be reported as a schema that moved.
+		var decided *codedError
+		if errors.As(err, &decided) {
+			return nil, err
+		}
+		// The server rejected the QUERY. The row may be perfectly intact; a
+		// field this tool selects no longer exists on the type. Reporting
+		// that as missing data sends a reader into the migrations hunting for
+		// something that was never wrong.
+		return nil, failWith(exitShape, "read %s %q back: %w", e.Name, token, err)
+	}
+	return readObject(e, envelope, token, written)
+}
+
 func readObject(e entity, envelope map[string]json.RawMessage, token string, written json.RawMessage) (json.RawMessage, error) {
 	raw, ok := envelope[e.Read]
 	if !ok {
