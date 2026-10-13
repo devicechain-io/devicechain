@@ -8,7 +8,11 @@
 // line with no key) are stopped at the form with a plain sentence rather than at publish.
 
 import '@/i18n/config';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render as rtlRender, screen, waitFor } from '@testing-library/react';
+import { ConfirmProvider } from '@/components/ui/confirm-dialog';
+
+// The form confirms a lossy save through the app-level confirm dialog, so it renders inside one.
+const render = (ui: Parameters<typeof rtlRender>[0]) => rtlRender(ui, { wrapper: ConfirmProvider });
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { TFunction } from 'i18next';
 

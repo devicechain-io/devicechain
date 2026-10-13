@@ -59,7 +59,7 @@ If you need a longer span, an operator can raise the limit for the instance ([`m
 
 The form builder and the automation canvas both author Connectivity rules. The presence edge is the whole signal, so neither offers a condition or parameters for the type: on the canvas it is a **Connectivity** node that takes the source's stream and feeds actions, like any other condition.
 
-Neither surface silently rewrites a rule it cannot show in full. If the form opens a stored rule it cannot hold completely (a field it does not model, or a type it does not know), it warns that part of the definition is not shown and that saving would replace the original with only what you can see. That warning is distinct from the "could not be read" notice shown for a definition that is not valid JSON. A Connectivity rule opens with neither.
+Neither surface silently rewrites a rule it cannot show in full. If the form opens a stored rule it cannot hold completely (a field it does not model, or a type it does not know), it warns that part of the definition is not shown and lists the fields it would not keep. Saving such a rule asks you to confirm first: the dialog names the same fields, **Save anyway** replaces the original with only what you can see, and **Cancel** saves nothing. A rule the form holds completely saves without the dialog. That warning is distinct from the "could not be read" notice shown for a definition that is not valid JSON. A Connectivity rule opens with neither.
 
 The canvas is stricter. When it opens a stored rule, it asks the compiler whether saving the rule as laid out would keep everything the stored definition says. When the answer is not yes, the canvas says why and turns saving off for that rule:
 

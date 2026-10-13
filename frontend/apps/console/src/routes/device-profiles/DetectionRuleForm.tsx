@@ -49,7 +49,8 @@ import {
 import { previewSelector } from '@/lib/api/browse';
 import { validateDetectionRule, type RuleWarning } from '@/lib/api/event-processing';
 import { ruleWarningText } from '@/lib/ruleWarnings';
-import { ruleSurvivesRoundTrip, sameLogicalRule } from './rule-equal';
+import { lostFields, ruleSurvivesRoundTrip, sameLogicalRule } from './rule-equal';
+import { useConfirm } from '@/components/ui/confirm-dialog';
 import {
   MAX_ACTIONS_PER_RULE,
   MAX_ACTION_TIMEOUT_MS,
@@ -152,6 +153,23 @@ function DurationField({
     <FormField label={label} htmlFor={id} description={t('ruleDurationFieldDescription')}>
       <Input id={id} value={value} onChange={(e) => onChange(e.target.value)} placeholder={placeholder} />
     </FormField>
+  );
+}
+
+// The stored-definition paths a Save from this form would drop. Spans, not a list: it is also
+// rendered inside the confirm dialog's description, which is a paragraph.
+function LostFieldList({ paths }: { paths: string[] }) {
+  const { t } = useTranslation('deviceProfiles');
+  return (
+    <span className="block">
+      {t('ruleLossyFieldsLabel')}{' '}
+      {paths.map((p, i) => (
+        <span key={p}>
+          {i > 0 && ', '}
+          <code className="font-mono text-xs">{p}</code>
+        </span>
+      ))}
+    </span>
   );
 }
 
@@ -328,6 +346,7 @@ export function DetectionRuleForm({
   onDone: (message: string) => void;
 }) {
   const { t } = useTranslation('deviceProfiles');
+  const confirm = useConfirm();
   const connectorsAbsent = useAreaAbsent(AREA.outboundConnectors);
   const editing = entity != null;
   // Pre-fill precedence: the stored rule when editing, else an NL/handoff draft, else blank.
@@ -435,10 +454,16 @@ export function DetectionRuleForm({
   // that whether a stored rule survives this form is a property of the STORED BYTES, fixed for
   // the life of the drawer; recomputing it on every keystroke invited the reading that it
   // tracks what the operator is typing, which would be a different and wrong check.
-  const lossyOpen = useMemo(
-    () => source != null && initial != null && !ruleSurvivesRoundTrip(source, rebuildFrom(initial)),
-    [source, initial],
-  );
+  //
+  // `lostOnOpen` is null when nothing is lost, else the paths the form cannot carry (possibly
+  // empty when they cannot be named). The banner and the confirm-before-save dialog both read
+  // it, so the two never disagree about what Save would drop.
+  const lostOnOpen = useMemo<string[] | null>(() => {
+    if (source == null || initial == null) return null;
+    const rebuilt = rebuildFrom(initial);
+    if (ruleSurvivesRoundTrip(source, rebuilt)) return null;
+    return lostFields(source, rebuilt).filter((p) => p !== '');
+  }, [source, initial]);
 
   // Client-side guard for the obvious omissions, so the button hints instantly (no round
   // trip) before the inline compiler check or the publish gate rejects. It mirrors only the
@@ -647,6 +672,25 @@ export function DetectionRuleForm({
 
   const submit = async () => {
     if (definition == null || unmodelledType != null || unparseable) return; // guarded by the disabled button; satisfies the type narrowing
+    // 🔴 A LOSSY SAVE IS CONFIRMED, NOT MERELY WARNED ABOUT. The banner says what this form
+    // cannot carry; a Save from here replaces the stored definition with only what it can, so
+    // the operator must say so explicitly. Cancel (or any dismissal) writes nothing. A rule the
+    // form holds completely never sees this dialog.
+    if (lostOnOpen != null) {
+      const ok = await confirm({
+        title: t('ruleLossySaveTitle'),
+        description: (
+          <span className="space-y-2">
+            <span className="block">{t('ruleLossySaveDescription')}</span>
+            {lostOnOpen.length > 0 && <LostFieldList paths={lostOnOpen} />}
+          </span>
+        ),
+        confirmLabel: t('ruleLossySaveConfirm'),
+        cancelLabel: t('common:cancel'),
+        destructive: true,
+      });
+      if (!ok) return;
+    }
     setFormError(null);
     setBusy(true);
     try {
@@ -789,7 +833,12 @@ export function DetectionRuleForm({
   return (
     <div className="space-y-4">
       {formError && <ErrorBanner message={formError} onDismiss={() => setFormError(null)} />}
-      {lossyOpen && <p className="rounded-md border border-amber-500/50 bg-amber-500/10 px-3 py-2 text-sm text-amber-700 dark:text-amber-400">{t('ruleLossyOpenWarning')}</p>}
+      {lostOnOpen != null && (
+        <div className="space-y-1 rounded-md border border-amber-500/50 bg-amber-500/10 px-3 py-2 text-sm text-amber-700 dark:text-amber-400">
+          <p>{t('ruleLossyOpenWarning')}</p>
+          {lostOnOpen.length > 0 && <LostFieldList paths={lostOnOpen} />}
+        </div>
+      )}
 
       <FormField label={t('common:colName')} htmlFor="dr-name" description={t('ruleNameDescription')}>
         <Input id="dr-name" value={name} onChange={(e) => setName(e.target.value)} placeholder={t('ruleNamePlaceholder')} />
