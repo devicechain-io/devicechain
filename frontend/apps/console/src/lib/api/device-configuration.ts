@@ -3,7 +3,8 @@
 
 // Typed GraphQL operations behind the device configuration panel: the device's
 // desired/reported configuration, its revision history, and the configuration keys
-// its profile declares. All three are reads at device:read; nothing here writes.
+// its profile declares, read at device:read; and the two device:write actions that
+// restore an earlier revision's content or copy another device's.
 import { gql } from '@devicechain/client';
 import { graphql } from '@/gql/device-management';
 import type {
@@ -130,6 +131,59 @@ export async function getDeviceConfigurationView(
     totalRevisions: revs.deviceConfigurationRevisions.pagination.totalRecords ?? 0,
     declaration: decl,
   };
+}
+
+// The document a device should now hold (its latest revision), or null when it has none
+// or no device has the token. The copy action reads the SOURCE device through this to
+// preview what the target will become.
+export async function getDesiredConfigurationDocument(deviceToken: string): Promise<string | null> {
+  const data = await gql('device-management', DEVICE_CONFIGURATION, { deviceToken });
+  return data.deviceConfiguration?.desired?.document ?? null;
+}
+
+// ── Restore and copy (device:write) ───────────────────────────────────────
+
+const RESTORE_DEVICE_CONFIGURATION = graphql(`
+  mutation RestoreDeviceConfiguration($deviceToken: String!, $revision: Int!) {
+    restoreDeviceConfiguration(deviceToken: $deviceToken, revision: $revision) {
+      desired {
+        revision
+      }
+    }
+  }
+`);
+
+// Mints a NEW revision with the content of an earlier one; history is never rewritten.
+// Answers the device's desired revision number afterwards (unchanged when the device
+// already held that content).
+export async function restoreDeviceConfiguration(
+  deviceToken: string,
+  revision: number,
+): Promise<number | null> {
+  const data = await gql('device-management', RESTORE_DEVICE_CONFIGURATION, { deviceToken, revision });
+  return data.restoreDeviceConfiguration.desired?.revision ?? null;
+}
+
+const COPY_DEVICE_CONFIGURATION = graphql(`
+  mutation CopyDeviceConfiguration($fromDeviceToken: String!, $toDeviceToken: String!) {
+    copyDeviceConfiguration(fromDeviceToken: $fromDeviceToken, toDeviceToken: $toDeviceToken) {
+      desired {
+        revision
+      }
+    }
+  }
+`);
+
+// Makes the target's configuration equal to the source's latest revision.
+export async function copyDeviceConfiguration(
+  fromDeviceToken: string,
+  toDeviceToken: string,
+): Promise<number | null> {
+  const data = await gql('device-management', COPY_DEVICE_CONFIGURATION, {
+    fromDeviceToken,
+    toDeviceToken,
+  });
+  return data.copyDeviceConfiguration.desired?.revision ?? null;
 }
 
 // ── Profile configuration declaration (authoring) ─────────────────────────

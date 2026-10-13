@@ -375,6 +375,23 @@ El dispositivo responde en `device-reports`. Cada mensaje es JSON, de como máxi
 
 La plataforma registra un `config.status` solo cuando el dispositivo tiene esa revisión y el digest coincide con ella; el dispositivo deja de figurar como pendiente de esa revisión cuando ha informado `APPLIED` para ella. Los informes se procesan al menos una vez, así que repetir uno es seguro, y un informe antiguo nunca sobrescribe uno más reciente. Un mensaje que no se decodifica, que nombra una revisión que no se envió al dispositivo o que lleva un digest que no es el de esa revisión se rechaza y se registra en el flujo de mensajes fallidos (dead-letter) en lugar de descartarse. Los dispositivos que solo hablan HTTP no se atienden por este canal.
 
+### Restaurar o copiar una configuración {#restore-copy-configuration}
+
+La configuración de un dispositivo puede volver a una revisión anterior, o hacerse igual a la de otro dispositivo: por ejemplo, para deshacer un cambio erróneo o para dar a una unidad de reemplazo la configuración de la unidad que reemplazó. Ambas cosas se hacen desde la pestaña **Configuración** de la página del dispositivo, por un operador con `device:write`, o con las mutaciones `restoreDeviceConfiguration` y `copyDeviceConfiguration`.
+
+- **Restaurar** toma una de las revisiones del propio dispositivo del historial de revisiones. **Copiar de otro dispositivo** toma la revisión más reciente de otro dispositivo del mismo inquilino.
+- La consola muestra primero una vista previa: cada clave, su valor actual, el valor que tendrá y si se añade, se cambia o se elimina. Nada cambia hasta que eliges **Aplicar**.
+- Al aplicar, los atributos `SHARED` del dispositivo para sus claves declaradas toman los valores de esa revisión. Una clave declarada que la revisión no contiene se elimina. Se crea una revisión **nueva** y se envía al dispositivo como de costumbre. Las revisiones anteriores nunca se modifican. Si el dispositivo ya tiene esa configuración, no se crea nada.
+- Todo el cambio se rechaza, sin escribir nada, si el perfil del dispositivo no declara una clave que contiene la revisión (`CONFIGURATION_KEY_UNDECLARED`), si un valor no encaja en el tipo declarado ahora para su clave (`CONFIGURATION_VALUE_TYPE_MISMATCH`), o si el resultado supera el límite de tamaño (`CONFIGURATION_TOO_LARGE`). Por eso, restaurar una revisión antigua después de que haya cambiado la declaración del perfil puede rechazarse. Un dispositivo de otro inquilino, una revisión desconocida o un dispositivo de origen sin revisión dan `NOT_FOUND`.
+
+```graphql
+mutation {
+  restoreDeviceConfiguration(deviceToken: "pump-7", revision: 3) {
+    desired { revision document }
+  }
+}
+```
+
 ## Actualizaciones over-the-air {#over-the-air-updates}
 
 En una instancia que ejecuta el servicio de actualizaciones (consulta [Actualizaciones over-the-air](../concepts/over-the-air-updates.md)), los mismos dos topics transportan actualizaciones de firmware y software. Las reglas anteriores también se aplican aquí: cada mensaje lleva `"v":1` y un `kind`, los campos desconocidos o repetidos se rechazan, y un mensaje no debe llevar una identidad de dispositivo. Los mensajes de actualización, en cualquier sentido, ocupan como máximo 4 KiB.

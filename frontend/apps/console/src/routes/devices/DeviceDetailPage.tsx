@@ -204,7 +204,11 @@ export default function DeviceDetailPage() {
         <TabsContent value="configuration">
           <SectionPanel>
             {/* Keyed by device so no state survives a move to another device. */}
-            <DeviceConfigurationPanel key={device.token} deviceToken={device.token} />
+            <DeviceConfigurationPanel
+              key={device.token}
+              deviceToken={device.token}
+              canWrite={canManageCredentials}
+            />
           </SectionPanel>
         </TabsContent>
         {canManageCredentials && (
