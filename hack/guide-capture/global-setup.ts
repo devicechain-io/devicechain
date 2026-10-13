@@ -27,7 +27,7 @@ export default async function globalSetup() {
     }
   }
 
-  const sim = readSimHandshake(process.env.GUIDE_SIM ?? 'guide');
+  const sim = readSimHandshake(process.env.GUIDE_SIM ?? 'acme');
   const tenant = await signIn(BASE_URL, sim.email, sim.password, sim.tenant);
   writeFileSync(`${AUTH_DIR}/tenant.json`, JSON.stringify(tenant), { mode: 0o600 });
   console.log('tenant session minted');

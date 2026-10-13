@@ -9,6 +9,8 @@ import type { Session } from './session';
 
 const OUT = process.env.GUIDE_OUT ?? 'out';
 const MASK_COLOR = '#e2e8f0';
+// What every [data-shot-pii] element reads in a screenshot (see the frame preparation below).
+const PERSONA_EMAIL = 'dana.okafor@acme-properties.example';
 
 // Map tiles come from a HAR recorded once at the guide's fixed map views, so captures
 // are deterministic, offline, and put no load on public tile servers. Record with
@@ -115,13 +117,30 @@ for (const recipe of recipes) {
     await page.evaluate(() => document.fonts.ready);
     await page.waitForLoadState('networkidle');
 
+    // Prepare the frame, in this order. (1) Toasts are transient and their text depends on what
+    // the setup just did; hide the container rather than race its timer. (2) Focus rings on a
+    // clicked tab or button are an artefact of the capture, not of the screen: blur. (3) Every
+    // [data-shot-pii] element (the operator's address, in the sidebar, version and audit tables)
+    // is SUBSTITUTED with a fixed persona instead of painted over, so a column that exists to say
+    // who did something still says it.
+    await page.addStyleTag({ content: '[data-sonner-toaster], [data-sonner-toast] { display: none !important; }' });
+    await page.evaluate((persona) => {
+      (document.activeElement as HTMLElement | null)?.blur?.();
+      for (const el of document.querySelectorAll('[data-shot-pii]')) {
+        if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) {
+          // The audit filter: show the persona, not the seed identity's real address.
+          el.value = persona;
+        } else {
+          el.textContent = persona;
+        }
+      }
+    }, PERSONA_EMAIL);
+
     const opts = {
       animations: 'disabled' as const,
       caret: 'hide' as const,
-      // [data-shot-pii] (the signed-in email) is always painted over: it is a property of the
-      // seed identity, not of any screen. [data-shot-mask] only where a recipe asks.
-      mask: [page.locator('[data-shot-pii]'), ...(recipe.mask ? [page.locator('[data-shot-mask]')] : [])],
-      maskColor: MASK_COLOR,
+      // [data-shot-mask] only where a recipe asks.
+      ...(recipe.mask ? { mask: [page.locator('[data-shot-mask]')], maskColor: MASK_COLOR } : {}),
     };
     const png = recipe.clip
       ? await page.locator(recipe.clip).first().screenshot(opts)

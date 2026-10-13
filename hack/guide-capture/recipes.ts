@@ -18,10 +18,14 @@ export interface Recipe {
   route: string;
   /** Drives the page into the state to shoot (open a drawer, pick a tab). Throwing fails the recipe. */
   setup?: (page: Page) => Promise<void>;
+  /** The page-specific half of `setup` for tab recipes (kept so the anchor check can read it). */
+  then?: (page: Page) => Promise<void>;
   /** Must be visible once setup has run, or the recipe fails (fail closed). */
   anchor: string;
   /** Crop to this element instead of the whole viewport. */
   clip?: string;
+  /** The screen shows the operator's address: it must be marked data-shot-pii in `sources`. */
+  pii?: boolean;
   /** Paint over every [data-shot-mask] region (live times, live values, status). */
   mask?: boolean;
   /** Freeze `Date` at this instant, for pages where "now" shows. Not for pages with live data. */
@@ -71,9 +75,9 @@ function deviceTab(
   id: string,
   token: string,
   tab: string,
-  opts: Partial<Recipe> & { then?: (page: Page) => Promise<void> } = {},
+  opts: Partial<Recipe> = {},
 ): Recipe {
-  const { then, ...rest } = opts;
+  const { then = async () => {}, ...rest } = opts;
   return {
     id,
     session: 'tenant',
@@ -84,6 +88,7 @@ function deviceTab(
     },
     anchor: `[data-shot-tab="${tab}"][data-state="active"]`,
     sources: [DEVICE_DETAIL],
+    then,
     ...rest,
   };
 }
@@ -94,9 +99,9 @@ function resourceTab(
   route: string,
   tab: string,
   source: string,
-  opts: Partial<Recipe> & { then?: (page: Page) => Promise<void>; spa?: boolean } = {},
+  opts: Partial<Recipe> & { spa?: boolean } = {},
 ): Recipe {
-  const { then, spa: viaRouter, ...rest } = opts;
+  const { then = async () => {}, spa: viaRouter, ...rest } = opts;
   return {
     id,
     session: 'tenant',
@@ -111,6 +116,7 @@ function resourceTab(
     },
     anchor: `[data-shot-tab="${tab}"][data-state="active"]`,
     sources: [source],
+    then,
     ...rest,
   };
 }
@@ -174,6 +180,7 @@ export const recipes: Recipe[] = [
       await page.locator('[data-shot="user-menu"]').click();
     },
     anchor: '[data-shot="user-menu-content"]',
+    pii: true,
     sources: ['routes/NavUser.tsx'],
   },
   {
@@ -185,6 +192,7 @@ export const recipes: Recipe[] = [
       await page.locator('[data-shot="user-menu-profile"]').click();
     },
     anchor: `${DRAWER}[data-shot-drawer="edit-profile"]`,
+    pii: true,
     sources: ['routes/NavUser.tsx'],
   },
 
@@ -291,7 +299,9 @@ export const recipes: Recipe[] = [
     then: async (page) => {
       await page.locator('[data-shot="config-restore"]').first().click();
       await page.locator('[data-shot="config-preview"]').waitFor({ timeout: 30_000 });
+      await page.locator('[data-shot="config-preview"]').evaluate((el) => el.scrollIntoView({ block: 'center' }));
     },
+    pii: true,
     sources: [DEVICE_DETAIL, 'routes/devices/DeviceConfigurationPanel.tsx'],
   }),
   deviceTab('device-configuration-copy', 'bp-therm-001', 'configuration', {
@@ -299,6 +309,7 @@ export const recipes: Recipe[] = [
       await pick(page, '[data-shot="config-copy-source"]', 'bp-therm-002');
       await page.locator('[data-shot="config-copy-preview"]').click();
       await page.locator('[data-shot="config-preview"]').waitFor({ timeout: 30_000 });
+      await page.locator('[data-shot="config-preview"]').evaluate((el) => el.scrollIntoView({ block: 'center' }));
     },
     sources: [DEVICE_DETAIL, 'routes/devices/DeviceConfigurationPanel.tsx'],
   }),
@@ -319,8 +330,9 @@ export const recipes: Recipe[] = [
     },
     sources: [DEVICE_DETAIL, 'routes/devices/DeviceCredentialsPanel.tsx'],
   }),
-  deviceTab('device-detail-replacement', 'bp-therm-005', 'replacement', {
+  deviceTab('device-detail-replacement', 'bp-therm-boiler', 'replacement', {
     mask: true,
+    pii: true,
     then: async (page) => {
       // The inputs are read-only until focused (an autofill guard), so focus them first.
       await page.locator('[data-shot="replacement-reason"]').click();
@@ -346,7 +358,8 @@ export const recipes: Recipe[] = [
   }),
   resourceTab('profile-configuration', PROFILE_ROUTE, 'configuration', PROFILE),
   resourceTab('profile-versions', PROFILE_ROUTE, 'versions', PROFILE, {
-    sources: [PROFILE, 'routes/device-profiles/ThingModelDownload.tsx'],
+    pii: true,
+    sources: [PROFILE, 'routes/device-profiles/ThingModelDownload.tsx', 'components/VersionsPanel.tsx'],
     then: async (page) => {
       await page.locator('[data-shot="thing-model-download"]').first().waitFor({ timeout: 30_000 });
     },
@@ -374,7 +387,7 @@ export const recipes: Recipe[] = [
       await page.locator('[data-shot="definition-add"]').click();
     },
     anchor: `${DRAWER} [data-shot-option="form"]`,
-    sources: [PROFILE, 'routes/device-profiles/DefinitionsPanel.tsx'],
+    sources: [PROFILE, 'routes/device-profiles/DefinitionsPanel.tsx', 'routes/device-profiles/DetectionRuleAuthoring.tsx'],
   }),
   resourceTab('rule-canvas', PROFILE_ROUTE, 'detection-rules', PROFILE, {
     then: async (page) => {
@@ -408,7 +421,7 @@ export const recipes: Recipe[] = [
     },
     // This instance does not run ai-inference, so the draft is answered "unavailable".
     anchor: '[data-shot="nl-unavailable"]',
-    sources: [PROFILE, 'routes/device-profiles/DefinitionsPanel.tsx', 'routes/device-profiles/DetectionRuleNLDraft.tsx'],
+    sources: [PROFILE, 'routes/device-profiles/DefinitionsPanel.tsx', 'routes/device-profiles/DetectionRuleAuthoring.tsx', 'routes/device-profiles/DetectionRuleNLDraft.tsx'],
   }),
   resourceTab('rule-health', PROFILE_ROUTE, 'rule-health', PROFILE, { allowEmpty: true }),
 
@@ -582,7 +595,8 @@ export const recipes: Recipe[] = [
       await page.locator('[data-shot="dashboard-history"]').click();
     },
     anchor: '[data-shot="sheet"]',
-    sources: ['routes/dashboards/editor/DashboardWorkspace.tsx'],
+    pii: true,
+    sources: ['routes/dashboards/editor/DashboardWorkspace.tsx', 'routes/dashboards/editor/VersionHistorySheet.tsx'],
   },
 
   // ---- Chapter 9: Assets, customers and areas ----------------------------------------------------
@@ -714,6 +728,7 @@ export const recipes: Recipe[] = [
       await page.locator('[data-shot-tab="versions"]').click();
     },
     anchor: '[data-shot-tab="versions"][data-state="active"]',
+    pii: true,
     sources: ['routes/connectors/ConnectorDetailPage.tsx', 'routes/connectors/ConnectorVersionsPanel.tsx'],
   },
 
@@ -723,12 +738,16 @@ export const recipes: Recipe[] = [
     session: 'tenant',
     route: '/audit',
     setup: async (page) => {
-      // The simulator's alarm churn would fill the journal, so show what the operator's own
-      // identity changed. The address typed here is masked (data-shot-pii).
-      await page.locator('[data-shot="audit-actor"]').fill('guide@sim.devicechain.local');
+      // The simulator's alarm churn would fill the journal, and the guide's own runs add UPDATE rows
+      // (a rotated password, an acknowledged alarm). So show what the operator's identity CREATED:
+      // the seed's own work, which no capture run changes. The address typed here is substituted
+      // with the persona (data-shot-pii).
+      await page.locator('[data-shot="audit-actor"]').fill(`${process.env.GUIDE_SIM ?? 'acme'}@sim.devicechain.local`);
+      await pick(page, PAGE, 'create');
       await page.waitForTimeout(1500);
     },
     anchor: ROWS,
+    pii: true,
     sources: ['routes/audit/AuditPage.tsx'],
     minRows: { selector: ROWS, count: 5 },
   },

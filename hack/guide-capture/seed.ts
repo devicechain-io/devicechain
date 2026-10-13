@@ -24,7 +24,7 @@ import { join } from 'node:path';
 import { readSimHandshake, signIn } from './session.ts';
 
 const BASE = process.env.GUIDE_BASE_URL ?? 'http://localhost';
-const SIM = process.env.GUIDE_SIM ?? 'guide';
+const SIM = process.env.GUIDE_SIM ?? 'acme';
 
 let accessToken = '';
 
@@ -114,7 +114,7 @@ const ZONE: Record<string, string> = {
 const PROFILE = 'bp-thermostat-profile';
 const DEVICE_A = 'bp-therm-001'; // the device the device-detail shots are about
 const DEVICE_B = 'bp-therm-002';
-const SPARE = 'bp-therm-spare-01'; // the second device the replacement shot needs
+const SPARE = 'bp-therm-boiler'; // a device the seed owns and the simulator never drives: the replacement shot's subject
 
 const RULE_GRAPH = {
   schemaVersion: 1,
@@ -123,7 +123,7 @@ const RULE_GRAPH = {
       id: 'source',
       type: 'source',
       config: { scope: { kind: 'profile', profileToken: PROFILE } },
-      ui: { x: 40, y: 140 },
+      ui: { x: 60, y: 20 },
     },
     {
       id: 'early-heat',
@@ -134,13 +134,13 @@ const RULE_GRAPH = {
         severity: 'warning',
         when: { metric: 'temperature', op: 'gt', threshold: { kind: 'literal', value: 29 } },
       },
-      ui: { x: 340, y: 140 },
+      ui: { x: 60, y: 150 },
     },
     {
       id: 'raise',
       type: 'action',
       config: { action: 'raiseAlarm', alarmKey: 'bp-early-heat' },
-      ui: { x: 680, y: 140 },
+      ui: { x: 60, y: 280 },
     },
   ],
   edges: [
@@ -220,7 +220,10 @@ async function seedProfile() {
   // A configuration declaration: what an operator may push to the device.
   await ensure(
     'configuration declaration',
-    async () => ((await profile())?.configurationDeclaration.length ?? 0) >= 3,
+    async () => {
+      const have = new Set<string>((await profile())?.configurationDeclaration.map((c: any) => c.key));
+      return ['setpoint', 'schedule', 'reportIntervalSeconds'].every((k) => have.has(k));
+    },
     () =>
       gql(DM, `mutation($t:String!,$k:[ConfigurationKeyInput!]!){setDeviceProfileConfigurationDeclaration(token:$t,keys:$k){token}}`, {
         t: PROFILE,
@@ -246,9 +249,17 @@ async function seedProfile() {
         d: 'Adds the set-setpoint and identify commands and declares the configuration an operator can push.',
       }),
   );
-  assertThat('profile has two published versions and a typed command vocabulary', async () => {
+  assertThat('profile has a published version after the sim\'s, and declares set-setpoint, identify and its 3 configuration keys', async () => {
     const p = await profile();
-    return (await versions()).length >= 2 && (p?.activeVersion ?? 0) >= 2 && p.commandDefinitions.length >= 2;
+    const keys = new Set<string>(p?.commandDefinitions.map((c: any) => c.commandKey));
+    const cfg = new Set<string>(p?.configurationDeclaration.map((c: any) => c.key));
+    return (
+      (await versions()).length >= 2 &&
+      (p?.activeVersion ?? 0) >= 2 &&
+      keys.has('set-setpoint') &&
+      keys.has('identify') &&
+      ['setpoint', 'schedule', 'reportIntervalSeconds'].every((k) => cfg.has(k))
+    );
   });
 }
 
@@ -270,9 +281,12 @@ async function seedFacetsAndGroup() {
   );
 
   // The attribute values the facets read. Browse sees only the SHARED scope.
-  const attrs = await gql(DM, `query{entityAttributes(criteria:{pageNumber:1,pageSize:200,entityType:"device",scope:"SHARED"}){results{entity{token} attrKey}}}`);
-  const have = new Set<string>(attrs.entityAttributes.results.map((a: any) => `${a.entity.token}/${a.attrKey}`));
+  // Read per device, filtered to the two keys, so no page limit can hide one.
+  const facetAttrs = async (token: string) =>
+    (await gql(DM, `query($e:String!){entityAttributes(criteria:{pageNumber:1,pageSize:10,entityType:"device",entity:$e,scope:"SHARED",attrKeys:["zone","floor"]}){results{attrKey value}}}`, { e: token }))
+      .entityAttributes.results as { attrKey: string; value: string }[];
   for (const token of Object.keys(ZONE)) {
+    const have = new Set((await facetAttrs(token)).map((a) => `${token}/${a.attrKey}`));
     for (const [key, valueType, value] of [
       ['zone', 'STRING', ZONE[token]],
       ['floor', 'LONG', String(FLOOR[token])],
@@ -288,11 +302,12 @@ async function seedFacetsAndGroup() {
     }
   }
 
+  // Two separate ensures: a failure between create and publish converges on the next run.
   await ensure(
     'dynamic group rooftop-units',
     async () => (await gql(DM, `query($t:[String!]!){entityGroupsByToken(tokens:$t){token}}`, { t: ['rooftop-units'] })).entityGroupsByToken.length > 0,
-    async () => {
-      await gql(DM, `mutation($r:EntityGroupCreateRequest){createEntityGroup(request:$r){token}}`, {
+    () =>
+      gql(DM, `mutation($r:EntityGroupCreateRequest){createEntityGroup(request:$r){token}}`, {
         r: {
           token: 'rooftop-units',
           memberType: 'device',
@@ -301,14 +316,23 @@ async function seedFacetsAndGroup() {
           name: 'Rooftop units',
           description: 'Every thermostat on the roof: the air handlers and their return-air sensors.',
         },
-      });
-      await gql(DM, `mutation($t:String!,$l:String){publishEntityGroup(token:$t,label:$l){version}}`, { t: 'rooftop-units', l: 'First cut' });
-    },
+      }),
   );
-  assertThat('facet keys and the dynamic group exist', async () => {
+  const groupVersions = async () =>
+    (await gql(DM, `query($t:String!){entityGroupVersions(token:$t){version}}`, { t: 'rooftop-units' })).entityGroupVersions as unknown[];
+  await ensure(
+    'dynamic group rooftop-units first version',
+    async () => (await groupVersions()).length > 0,
+    () => gql(DM, `mutation($t:String!,$l:String){publishEntityGroup(token:$t,label:$l){version}}`, { t: 'rooftop-units', l: 'First cut' }),
+  );
+  assertThat('facet keys, every device\'s zone and floor, and the published dynamic group exist', async () => {
     const k = (await gql(DM, `query{facetKeys(criteria:{pageNumber:1,pageSize:50,memberType:"device"}){results{key}}}`)).facetKeys.results.map((x: any) => x.key);
     const g = await gql(DM, `query($t:[String!]!){entityGroupsByToken(tokens:$t){token}}`, { t: ['rooftop-units'] });
-    return k.includes('floor') && k.includes('zone') && g.entityGroupsByToken.length === 1;
+    for (const token of Object.keys(ZONE)) {
+      const a = await facetAttrs(token);
+      if (a.find((x) => x.attrKey === 'zone')?.value !== ZONE[token] || a.find((x) => x.attrKey === 'floor')?.value !== String(FLOOR[token])) return false;
+    }
+    return k.includes('floor') && k.includes('zone') && g.entityGroupsByToken.length === 1 && (await groupVersions()).length > 0;
   });
 }
 
@@ -359,50 +383,40 @@ async function seedCommands() {
     },
   );
 
-  // Two batches over the rooftop units: one left to run its course, one cancelled.
+  // Three batches over the rooftop units, each created and (where it is called off) cancelled
+  // by its own ensure, so a failure between the two converges on the next run.
   const batch = async (token: string) => (await gql(CD, `query($t:[String!]!){commandBatchesByToken(tokens:$t){token accepted cancelledAt}}`, { t: [token] })).commandBatchesByToken[0];
   const rooftop = ['bp-therm-002', 'bp-therm-003'];
+  const makeBatch = (token: string, req: Record<string, unknown>) => async () => {
+    const r = await gql(CD, `mutation($r:CommandBatchCreateRequest!){createCommandBatch(request:$r){batch{token} rejection{code reason}}}`, { r: { token, deviceTokens: rooftop, ...req } });
+    if (r.createCommandBatch.rejection) throw new Error(`rejected ${r.createCommandBatch.rejection.code}: ${r.createCommandBatch.rejection.reason}`);
+  };
+  const cancel = (token: string) => () => gql(CD, `mutation($t:String!){cancelCommandBatch(token:$t){cancelled matched}}`, { t: token });
   await ensure(
     'command batch (identify, completed)',
     async () => !!(await batch('batch-identify-rooftop')),
-    async () => {
-      const r = await gql(CD, `mutation($r:CommandBatchCreateRequest!){createCommandBatch(request:$r){batch{token} rejection{code reason}}}`, {
-        // Short expiry: the units are not connected, so the batch resolves by running out.
-        r: { token: 'batch-identify-rooftop', name: 'identify', payload: JSON.stringify({ seconds: 10 }), expiresAt: new Date(Date.now() + 4000).toISOString(), deviceTokens: rooftop, allowPartial: false },
-      });
-      if (r.createCommandBatch.rejection) throw new Error(`rejected ${r.createCommandBatch.rejection.code}: ${r.createCommandBatch.rejection.reason}`);
-    },
+    // Short expiry: the units are not connected, so the batch resolves by running out.
+    makeBatch('batch-identify-rooftop', { name: 'identify', payload: JSON.stringify({ seconds: 10 }), expiresAt: new Date(Date.now() + 4000).toISOString(), allowPartial: false }),
   );
   await ensure(
-    'command batch (set-setpoint, cancelled)',
+    'command batch (set-setpoint)',
     async () => !!(await batch('batch-setpoint-cancelled')),
-    async () => {
-      const r = await gql(CD, `mutation($r:CommandBatchCreateRequest!){createCommandBatch(request:$r){batch{token} rejection{code reason}}}`, {
-        r: { token: 'batch-setpoint-cancelled', name: 'set-setpoint', payload: JSON.stringify({ setpoint: 17, mode: 'auto' }), expiresAt: FAR, deviceTokens: rooftop, allowPartial: true },
-      });
-      if (r.createCommandBatch.rejection) throw new Error(`rejected ${r.createCommandBatch.rejection.code}: ${r.createCommandBatch.rejection.reason}`);
-      await gql(CD, `mutation($t:String!){cancelCommandBatch(token:$t){cancelled matched}}`, { t: 'batch-setpoint-cancelled' });
-    },
+    makeBatch('batch-setpoint-cancelled', { name: 'set-setpoint', payload: JSON.stringify({ setpoint: 17, mode: 'auto' }), expiresAt: FAR, allowPartial: true }),
   );
+  await ensure('command batch (set-setpoint) called off', async () => !!(await batch('batch-setpoint-cancelled'))?.cancelledAt, cancel('batch-setpoint-cancelled'));
   // A batch whose command the profile does not declare: every device is refused, which is the
-  // refusals table the batch detail page exists to show. (A batch's name IS its command key, so
-  // this reads like a title but names a command no device accepts. It is then called off.)
+  // refusals table the batch detail page exists to show. It is then called off.
   await ensure(
     'command batch (night-setback, refused)',
     async () => !!(await batch('batch-night-setback')),
-    async () => {
-      const r = await gql(CD, `mutation($r:CommandBatchCreateRequest!){createCommandBatch(request:$r){batch{token} rejection{code reason}}}`, {
-        r: { token: 'batch-night-setback', name: 'Night setback, all rooftop units', payload: JSON.stringify({ mode: 'auto', setpoint: 17 }), expiresAt: FAR, deviceTokens: rooftop, allowPartial: true },
-      });
-      if (r.createCommandBatch.rejection) throw new Error(`rejected ${r.createCommandBatch.rejection.code}: ${r.createCommandBatch.rejection.reason}`);
-      await gql(CD, `mutation($t:String!){cancelCommandBatch(token:$t){cancelled matched}}`, { t: 'batch-night-setback' });
-    },
+    makeBatch('batch-night-setback', { name: 'night-setback', payload: JSON.stringify({ mode: 'auto', setpoint: 17 }), expiresAt: FAR, allowPartial: true }),
   );
-  assertThat('an issued command and two command batches (one cancelled)', async () => {
+  await ensure('command batch (night-setback) called off', async () => !!(await batch('batch-night-setback'))?.cancelledAt, cancel('batch-night-setback'));
+  assertThat('an issued command and three command batches (two called off, one refused)', async () => {
     const a = await batch('batch-identify-rooftop');
     const b = await batch('batch-setpoint-cancelled');
     const c = await batch('batch-night-setback');
-    return (await cmds({ deviceToken: DEVICE_A })).results.length > 0 && !!a && !!b && !!c && !!b.cancelledAt;
+    return (await cmds({ deviceToken: DEVICE_A })).results.length > 0 && !!a && !!b?.cancelledAt && !!c?.cancelledAt;
   });
 }
 
@@ -465,32 +479,42 @@ async function seedConnector() {
     return;
   }
   const connector = async () => (await gql(OC, `query($t:String!){connector(token:$t){token type}}`, { t: 'facilities-broker' }).catch(() => ({ connector: null }))).connector;
+  const versions = async () => (await gql(OC, `query($t:String!){connectorVersions(token:$t){version}}`, { t: 'facilities-broker' })).connectorVersions as unknown[];
+  const URLS = ['mqtts://broker.facilities.acme-properties.example:8883'];
   await ensure(
-    'connector facilities-broker + 2 versions',
+    'connector facilities-broker',
     async () => !!(await connector()),
-    async () => {
-      await gql(OC, `mutation($r:ConnectorCreateRequest!){createConnector(request:$r){token}}`, {
+    () =>
+      gql(OC, `mutation($r:ConnectorCreateRequest!){createConnector(request:$r){token}}`, {
         r: {
           token: 'facilities-broker',
           name: 'Facilities event broker',
           description: 'Publishes alarm events to the facilities team broker.',
           type: 'mqtt',
-          config: JSON.stringify({ urls: ['mqtts://broker.facilities.acme-properties.example:8883'], topic: 'acme/alarms', qos: 1, clientId: 'devicechain' }),
+          config: JSON.stringify({ urls: URLS, topic: 'acme/alarms', qos: 1, clientId: 'devicechain' }),
           secret: 'example-broker-password',
         },
-      });
-      await gql(OC, `mutation($t:String!,$l:String){publishConnector(token:$t,label:$l){version}}`, { t: 'facilities-broker', l: 'Initial' });
+      }),
+  );
+  // Version 1 is the draft as created; version 2 is the draft after the topic moved. Each is its
+  // own ensure, so a failure part-way converges: the draft is only edited once version 1 exists.
+  await ensure(
+    'connector facilities-broker version 1',
+    async () => (await versions()).length >= 1,
+    () => gql(OC, `mutation($t:String!,$l:String){publishConnector(token:$t,label:$l){version}}`, { t: 'facilities-broker', l: 'Initial' }),
+  );
+  await ensure(
+    'connector facilities-broker version 2',
+    async () => (await versions()).length >= 2,
+    async () => {
       await gql(OC, `mutation($t:String!,$r:ConnectorUpdateRequest!){updateConnector(token:$t,request:$r){token}}`, {
         t: 'facilities-broker',
-        r: { config: JSON.stringify({ urls: ['mqtts://broker.facilities.acme-properties.example:8883'], topic: 'acme/building-ops/alarms', qos: 2, clientId: 'devicechain' }) },
+        r: { config: JSON.stringify({ urls: URLS, topic: 'acme/building-ops/alarms', qos: 2, clientId: 'devicechain' }) },
       });
       await gql(OC, `mutation($t:String!,$l:String){publishConnector(token:$t,label:$l){version}}`, { t: 'facilities-broker', l: 'Route to building-ops topic' });
     },
   );
-  assertThat('the connector exists with two versions', async () => {
-    const v = await gql(OC, `query($t:String!){connectorVersions(token:$t){version}}`, { t: 'facilities-broker' });
-    return !!(await connector()) && v.connectorVersions.length >= 2;
-  });
+  assertThat('the connector exists with two versions', async () => !!(await connector()) && (await versions()).length >= 2);
 }
 
 async function seedAlarmAck() {
@@ -527,18 +551,23 @@ async function seedAssignment() {
         r: [{ token: `assign-${DEVICE_A}-bp-hvac-01`, sourceType: 'device', source: DEVICE_A, targetType: 'asset', target: 'bp-hvac-01', relationshipType: 'assigned' }],
       }),
   );
-  assertThat('assignments to customer, area and asset', async () => (await has(`assign-${DEVICE_A}-bp-hvac-01`)) && (await has(`assign-${DEVICE_A}-bp-acme`)));
+  // The sim assigns each device to the customer and to one building; this adds the asset.
+  assertThat('the lobby thermostat is assigned to an asset, plus the customer and area the sim gave it', async () => {
+    const edges = await gql(DM, `query($d:String){entityRelationships(criteria:{pageNumber:1,pageSize:20,sourceType:"device",source:$d}){pagination{totalRecords}}}`, { d: DEVICE_A });
+    return (await has(`assign-${DEVICE_A}-bp-hvac-01`)) && edges.entityRelationships.pagination.totalRecords >= 3;
+  });
 }
 
 async function seedAssets() {
   const typeOf = async (t: string) =>
     (await gql(DM, `query($t:[String!]!){assetTypesByToken(tokens:$t){token propertySchema activeVersion}}`, { t: [t] })).assetTypesByToken[0];
-  // The HVAC unit type declares what an HVAC unit carries; publishing it makes the contract binding.
+  // The HVAC unit type declares what an HVAC unit carries; publishing it makes the contract
+  // binding. Declare and publish are separate ensures.
   await ensure(
-    'asset type bp-hvac property contract (published)',
+    'asset type bp-hvac property contract',
     async () => !!(await typeOf('bp-hvac'))?.propertySchema,
-    async () => {
-      await gql(DM, `mutation($t:String!,$r:AssetTypeUpdateRequest!){updateAssetType(token:$t,request:$r){token}}`, {
+    () =>
+      gql(DM, `mutation($t:String!,$r:AssetTypeUpdateRequest!){updateAssetType(token:$t,request:$r){token}}`, {
         t: 'bp-hvac',
         r: {
           propertySchema: JSON.stringify([
@@ -548,9 +577,12 @@ async function seedAssets() {
             { name: 'serviceTier', dataType: 'STRING', enum: ['standard', 'critical'] },
           ]),
         },
-      });
-      await gql(DM, `mutation($t:String!,$l:String){publishAssetType(token:$t,label:$l){version}}`, { t: 'bp-hvac', l: 'Nameplate properties' });
-    },
+      }),
+  );
+  await ensure(
+    'asset type bp-hvac published',
+    async () => ((await typeOf('bp-hvac'))?.activeVersion ?? 0) >= 1,
+    () => gql(DM, `mutation($t:String!,$l:String){publishAssetType(token:$t,label:$l){version}}`, { t: 'bp-hvac', l: 'Nameplate properties' }),
   );
   const asset = async (t: string) =>
     (await gql(DM, `query($t:[String!]!){assetsByToken(tokens:$t){token properties}}`, { t: [t] })).assetsByToken[0];
@@ -564,37 +596,47 @@ async function seedAssets() {
       }),
   );
   // Two components filed under the first HVAC unit, so the hierarchy tab has a tree to show.
+  // Create and file are separate ensures (the parent is read back from the hierarchy).
+  const parentOf = async (t: string) =>
+    (await gql(DM, `query($t:String!){assetParent(token:$t){token}}`, { t }))?.assetParent?.token as string | undefined;
   for (const [token, name] of [
     ['bp-hvac-01-compressor', 'Compressor'],
     ['bp-hvac-01-supply-fan', 'Supply fan motor'],
   ] as const) {
     await ensure(
-      `asset ${token} under bp-hvac-01`,
+      `asset ${token}`,
       async () => !!(await asset(token)),
-      async () => {
-        await gql(DM, `mutation($r:AssetCreateRequest){createAsset(request:$r){token}}`, {
+      () =>
+        gql(DM, `mutation($r:AssetCreateRequest){createAsset(request:$r){token}}`, {
           r: { token, name, assetTypeToken: 'bp-hvac', properties: JSON.stringify({ manufacturer: 'Carrier' }) },
-        });
-        await gql(DM, `mutation($c:String!,$p:String!){setAssetParent(childToken:$c,parentToken:$p){id}}`, { c: token, p: 'bp-hvac-01' });
-      },
+        }),
+    );
+    await ensure(
+      `asset ${token} filed under bp-hvac-01`,
+      async () => (await parentOf(token)) === 'bp-hvac-01',
+      () => gql(DM, `mutation($c:String!,$p:String!){setAssetParent(childToken:$c,parentToken:$p){id}}`, { c: token, p: 'bp-hvac-01' }),
     );
   }
-  assertThat('HVAC unit has properties and two child assets', async () => {
-    const kids = await gql(DM, `query{assetChildren(parentToken:"bp-hvac-01",pagination:{pageNumber:1,pageSize:10}){pagination{totalRecords}}}`);
-    return !!(await asset('bp-hvac-01'))?.properties && kids.assetChildren.pagination.totalRecords >= 2;
+  assertThat('HVAC unit has properties, a published contract, and both components filed under it', async () => {
+    return (
+      !!(await asset('bp-hvac-01'))?.properties &&
+      ((await typeOf('bp-hvac'))?.activeVersion ?? 0) >= 1 &&
+      (await parentOf('bp-hvac-01-compressor')) === 'bp-hvac-01' &&
+      (await parentOf('bp-hvac-01-supply-fan')) === 'bp-hvac-01'
+    );
   });
 }
 
 async function seedSpareDevice() {
   await ensure(
-    'spare thermostat for replacement',
+    'boiler-room thermostat (replacement subject)',
     async () => (await gql(DM, `query($t:[String!]!){devicesByToken(tokens:$t){token}}`, { t: [SPARE] })).devicesByToken.length > 0,
     () =>
       gql(DM, `mutation($r:DeviceCreateRequest!){createDevice(request:$r){token}}`, {
-        r: { token: SPARE, name: 'Spare thermostat (stockroom)', externalId: 'AST-00099', description: 'Kept on the shelf to swap in when a unit fails.', deviceTypeToken: 'bp-thermostat' },
+        r: { token: SPARE, name: 'Boiler room thermostat', externalId: 'AST-00099', description: 'Installed with the boiler retrofit; not part of the building automation loop.', deviceTypeToken: 'bp-thermostat' },
       }),
   );
-  assertThat('the spare device exists', async () => (await gql(DM, `query($t:[String!]!){devicesByToken(tokens:$t){token}}`, { t: [SPARE] })).devicesByToken.length === 1);
+  assertThat('the boiler-room device exists', async () => (await gql(DM, `query($t:[String!]!){devicesByToken(tokens:$t){token}}`, { t: [SPARE] })).devicesByToken.length === 1);
 }
 
 async function seedMqttCredentialAndReplacement() {
@@ -609,14 +651,25 @@ async function seedMqttCredentialAndReplacement() {
         r: { token: 'cred-rooftop-ahu-2-mqtt', deviceToken: 'bp-therm-003', credentialType: 'MQTT_BASIC', credentialId: 'rooftop-ahu-2', credentialValue: 'Rooftop-AHU2-9f3kQ7vL', enabled: true },
       }),
   );
-  // One completed replacement on the server-room thermostat, so its Replacement tab has history.
-  const reps = async () => (await gql(DM, `query($d:String){deviceReplacements(criteria:{pageNumber:1,pageSize:5,device:$d}){results{id}}}`, { d: 'bp-therm-005' })).deviceReplacements.results;
+  // One completed replacement on the boiler-room thermostat, so its Replacement tab has history.
+  // 🔴 The device must be one the SEED owns and the simulator never drives: a replacement retires
+  // the device's credentials, and the simulator never re-enables its own (bp-therm-005 once went
+  // offline for good this way).
+  const reps = async () => (await gql(DM, `query($d:String){deviceReplacements(criteria:{pageNumber:1,pageSize:5,device:$d}){results{id}}}`, { d: SPARE })).deviceReplacements.results;
   await ensure(
-    'replacement history on bp-therm-005',
+    `credential for ${SPARE}`,
+    async () => (await gql(DM, `query($d:String){deviceCredentials(criteria:{pageNumber:1,pageSize:5,device:$d}){results{token}}}`, { d: SPARE })).deviceCredentials.results.length > 0,
+    () =>
+      gql(DM, `mutation($r:DeviceCredentialCreateRequest){createDeviceCredential(request:$r){token}}`, {
+        r: { token: `cred-${SPARE}-1`, deviceToken: SPARE, credentialType: 'ACCESS_TOKEN', credentialId: 'boiler-room-thermostat-key', enabled: true },
+      }),
+  );
+  await ensure(
+    `replacement history on ${SPARE}`,
     async () => (await reps()).length > 0,
     () =>
       gql(DM, `mutation($r:DeviceReplaceRequest!){replaceDevice(request:$r){device{token}}}`, {
-        r: { deviceToken: 'bp-therm-005', reason: 'Failed sensor, swapped for the stockroom spare', unitIdentifier: 'SN-4471-B' },
+        r: { deviceToken: SPARE, reason: 'Failed sensor, swapped for the stockroom spare', unitIdentifier: 'SN-4471-B' },
       }),
   );
   assertThat('an MQTT credential and a replacement exist', async () => (await mq()).length > 0 && (await reps()).length > 0);
@@ -636,16 +689,19 @@ async function seedCredential() {
 }
 
 async function seedBrandingAndProfile() {
+  // The guide shoots the console in its DEFAULT look; the branding screen shows a live preview of
+  // values its recipe types in without saving. So the seed leaves branding UNSET (and asserts it).
   await gql(UM, `mutation($i:TenantBrandingInput!){setTenantBranding(input:$i){token}}`, {
-    i: { title: 'Acme Properties: Building Operations', primary: '#0f766e', accent: '#14b8a6' },
+    i: { title: null, logoMaxHeight: null, primary: null, background: null, foreground: null, accent: null },
   });
   await gql(UM, `mutation($r:ProfileUpdateRequest!){updateProfile(request:$r){email}}`, { r: { firstName: 'Dana', lastName: 'Okafor' } }).catch((e) => {
     problems.push(`profile name: ${e.message}`);
   });
-  created.push('tenant branding + operator display name (idempotent set)');
-  assertThat('tenant branding is set', async () => {
-    const d = await gql(UM, `{tenant{brandingOverride{title}}}`).catch(() => null);
-    return d?.tenant?.brandingOverride?.title === 'Acme Properties: Building Operations';
+  created.push('tenant branding cleared + operator display name (idempotent set)');
+  assertThat('tenant branding is unset', async () => {
+    const d = await gql(UM, `{tenant{brandingOverride{title primary accent}}}`);
+    const o = d.tenant.brandingOverride;
+    return !o.title && !o.primary && !o.accent;
   });
 }
 

@@ -19,7 +19,7 @@
 #
 # Environment (defaults match `dcctl bootstrap local guide`):
 #   GUIDE_INSTANCE=guide  GUIDE_KUBE_CONTEXT=kind-devicechain
-#   GUIDE_SIMS="guide:8090 widgets:8091"   name:control-port, one actor per sim. The hero sim
+#   GUIDE_SIMS="acme:8090 widgets:8091"   name:control-port, one actor per sim. The hero sim
 #       (buildingpulse) is required; any other sim whose handshake does not exist is skipped
 #       with a note (the dashboards chapter needs widgets: `dcctl sim create widgets
 #       --manifest widgetlab --control-addr http://localhost:8091 -i guide`).
@@ -34,7 +34,7 @@ root="$(cd "$here/../.." && pwd)"
 run="$here/.run"
 instance="${GUIDE_INSTANCE:-guide}"
 kctx="${GUIDE_KUBE_CONTEXT:-kind-devicechain}"
-sims="${GUIDE_SIMS:-guide:8090 widgets:8091}"
+sims="${GUIDE_SIMS:-acme:8090 widgets:8091}"
 
 case "$(uname -s)" in MINGW* | MSYS* | CYGWIN*) win=1 ;; *) win=0 ;; esac
 exe=""
