@@ -3,7 +3,7 @@
 
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Plus, Trash2 } from 'lucide-react';
+import { Copy, Plus, Trash2, Upload } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { useQuery } from '@/lib/hooks/use-query';
 import {
@@ -28,6 +28,11 @@ import { useConfirm } from '@/components/ui/confirm-dialog';
 import { errMessage, rowLinkProps, useReload } from '@/routes/common';
 import { Textarea } from '@/components/ui/textarea';
 import { FormDrawer } from '@/components/registry';
+import { DashboardImportDrawer, type ImportSource } from './import/DashboardImportDrawer';
+import { DASHBOARD_TEMPLATES } from './import/templates';
+import { exportDefinitionJson } from './editor/exportDefinition';
+import { defaultWidgetRegistry } from './editor/widgetRegistry';
+import { migrateToSlots, parseDashboardDefinition } from '@devicechain/dashboards';
 import {
   DataTable,
   DataTableBody,
@@ -46,6 +51,8 @@ export default function DashboardsPage() {
   const confirm = useConfirm();
   const [pageNumber, setPageNumber] = useState(1);
   const [creating, setCreating] = useState(false);
+  // The import drawer's input: pasted/uploaded JSON (no text), a template, or a clone.
+  const [importing, setImporting] = useState<ImportSource | null>(null);
   const [version, reload] = useReload();
   const { data, loading, error } = useQuery(
     () => listDashboards({ pageNumber, pageSize }),
@@ -75,17 +82,60 @@ export default function DashboardsPage() {
     }
   };
 
+  // Clone reads the stored draft and hands it to the import flow, so a clone is checked,
+  // given a new token and created as a draft exactly like any other import.
+  const clone = async (token: string) => {
+    try {
+      const source = await getDashboard(token);
+      if (!source) {
+        toast(t('detailNotFound', { token }), 'error');
+        return;
+      }
+      // Normalized through the editor's own parser so the clone is what the editor shows.
+      const parsed = migrateToSlots(
+        parseDashboardDefinition(JSON.parse(source.definition), { catalog: defaultWidgetRegistry().catalog }),
+      );
+      const name = source.name || parsed.title || token;
+      setImporting({
+        text: exportDefinitionJson(parsed, false),
+        name: t('cloneName', { name }),
+        description: source.description ?? undefined,
+      });
+    } catch (err) {
+      toast(errMessage(err), 'error');
+    }
+  };
+
   return (
     <PageShell
       title={t('title')}
       description={t('description')}
       banner="dashboard"
       action={
-        <Button onClick={() => setCreating(true)}>
-          <Plus size={16} /> {t('newDashboard')}
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button variant="outline" onClick={() => setImporting({})}>
+            <Upload size={16} /> {t('importDashboard')}
+          </Button>
+          <Button onClick={() => setCreating(true)}>
+            <Plus size={16} /> {t('newDashboard')}
+          </Button>
+        </div>
       }
     >
+      <DashboardImportDrawer
+        // Remounts per source so a template/clone starts clean.
+        key={importing?.text ?? 'paste'}
+        open={importing !== null}
+        onOpenChange={(open) => !open && setImporting(null)}
+        title={t('importDashboard')}
+        source={importing ?? {}}
+        onCreated={(token) => {
+          toast(t('created', { token }));
+          setImporting(null);
+          reload();
+          navigate(`/dashboards/${encodeURIComponent(token)}`);
+        }}
+      />
       <FormDrawer open={creating} onOpenChange={setCreating} title={t('newDashboard')}>
         <DashboardCreateForm
           onDone={(token) => {
@@ -95,6 +145,24 @@ export default function DashboardsPage() {
             navigate(`/dashboards/${encodeURIComponent(token)}`);
           }}
         />
+        <div className="mt-8 space-y-2 border-t border-border pt-4">
+          <p className="text-sm font-medium">{t('templatesHeading')}</p>
+          <p className="text-sm text-muted-foreground">{t('templatesNote')}</p>
+          {DASHBOARD_TEMPLATES.map((template) => (
+            <Button
+              key={template.id}
+              variant="outline"
+              className="h-auto w-full flex-col items-start gap-0 whitespace-normal py-2 text-left"
+              onClick={() => {
+                setCreating(false);
+                setImporting({ text: template.json, name: t(template.nameKey) });
+              }}
+            >
+              <span className="font-medium">{t(template.nameKey)}</span>
+              <span className="text-xs font-normal text-muted-foreground">{t(template.descriptionKey)}</span>
+            </Button>
+          ))}
+        </div>
       </FormDrawer>
       {loading ? (
         <LoadingState description={t('loading')} />
@@ -131,6 +199,17 @@ export default function DashboardsPage() {
                   <DataTableCell className="text-right">
                     {/* This cell hosts an interactive control, so it must swallow
                         the row's click/keyboard activation rather than navigate. */}
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        void clone(dashboard.token);
+                      }}
+                      onKeyDown={(e) => e.stopPropagation()}
+                    >
+                      <Copy size={14} /> {t('clone')}
+                    </Button>
                     <Button
                       variant="ghost"
                       size="sm"
