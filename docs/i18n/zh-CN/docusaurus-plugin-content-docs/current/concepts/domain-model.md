@@ -78,7 +78,7 @@ query {
 
 设备具有稳定的**身份**，供其他对象引用；身份与用于认证的**凭据**分开保存。凭据可插拔，支持访问令牌和 MQTT-basic（用户名 + 密码）。因此，设备可以轮换凭据或同时持有多个凭据，而无需改变身份。
 
-无论持有哪些凭据，设备也可以被整体**停用**：在重新启用之前，其事件被丢弃、无法建立新连接、发往它的命令被拒绝。参见[停用设备](../guides/device-credentials.md#disabling-a-device)。
+无论持有哪些凭据，设备也可以被整体**停用**：在重新启用之前，其事件被丢弃、无法建立新连接、其配置和更新流量被拒绝、发往它的命令被拒绝。参见[停用设备](../guides/device-credentials.md#disabling-a-device)。
 
 凭据中的密钥是**只写**的：注册凭据时提交，读取时绝不返回。这只适用于 MQTT-basic 密码。对于访问令牌，凭据 ID 本身就是持有凭据的证明，因此读取设备凭据需要 `device:write` 权限，而不是 `device:read`。参见[设备凭据](../guides/device-credentials.md#reading-a-credential)。
 

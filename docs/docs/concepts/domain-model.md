@@ -78,7 +78,7 @@ query {
 
 A device has a stable **identity** that everything else references, kept separate from its **credentials**, the material it uses to authenticate. Credentials are pluggable: access token and MQTT-basic (username + password). A device can therefore rotate credentials or hold several without changing its identity.
 
-A device can also be **disabled** as a whole, whatever credentials it holds: its events are discarded, it cannot open a new connection and commands to it are refused, until it is enabled again. See [Disabling a device](../guides/device-credentials.md#disabling-a-device).
+A device can also be **disabled** as a whole, whatever credentials it holds: its events are discarded, it cannot open a new connection, its configuration and update traffic is refused and commands to it are refused, until it is enabled again. See [Disabling a device](../guides/device-credentials.md#disabling-a-device).
 
 A credential's secret is **write-only**: you submit it when you register the credential, and it is never returned on read. That covers only the MQTT-basic password. For an access token, the credential id is itself the proof of possession, so reading a device's credentials at all requires the `device:write` authority rather than `device:read`. See [Device credentials](../guides/device-credentials.md#reading-a-credential).
 

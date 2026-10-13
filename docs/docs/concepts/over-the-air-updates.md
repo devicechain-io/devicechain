@@ -73,7 +73,10 @@ assignments; its record and content are kept.
 
 `assignArtifact(deviceToken, artifactToken)` tells one device to install one `AVAILABLE` artifact.
 The device's profile must be on the artifact's compatible list, and the assignment is refused while
-`allowUnverifiedArtifacts` is off. A device works toward **one target per component**:
+`allowUnverifiedArtifacts` is off. A [disabled device](../guides/device-credentials.md#disabling-a-device)
+is refused with `DEVICE_DISABLED`; while a device is disabled, its update reports and download
+requests are discarded and a download link it was already given stops working, until it is enabled
+again. A device works toward **one target per component**:
 
 - assigning while the component's previous update is still in progress is refused until that update
   is cancelled;

@@ -74,8 +74,11 @@ retira de nuevas asignaciones; su registro y su contenido se conservan.
 
 `assignArtifact(deviceToken, artifactToken)` indica a un dispositivo que instale un artefacto
 `AVAILABLE`. El perfil del dispositivo debe estar en la lista de compatibles del artefacto, y la
-asignación se rechaza mientras `allowUnverifiedArtifacts` esté desactivado. Un dispositivo trabaja
-hacia **un objetivo por componente**:
+asignación se rechaza mientras `allowUnverifiedArtifacts` esté desactivado. Un
+[dispositivo deshabilitado](../guides/device-credentials.md#disabling-a-device) se rechaza con
+`DEVICE_DISABLED`; mientras un dispositivo está deshabilitado, sus informes de actualización y
+solicitudes de descarga se descartan y un enlace de descarga que ya tenía deja de funcionar, hasta
+que se vuelve a habilitar. Un dispositivo trabaja hacia **un objetivo por componente**:
 
 - asignar mientras la actualización anterior del componente sigue en curso se rechaza hasta que esa
   actualización se cancele;
