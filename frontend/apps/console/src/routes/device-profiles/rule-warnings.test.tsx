@@ -7,7 +7,11 @@
 // clean rule shows none, which is what keeps the advice worth reading.
 
 import '@/i18n/config';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render as rtlRender, screen, waitFor } from '@testing-library/react';
+import { ConfirmProvider } from '@/components/ui/confirm-dialog';
+
+// The form confirms a lossy save through the app-level confirm dialog, so it renders inside one.
+const render = (ui: Parameters<typeof rtlRender>[0]) => rtlRender(ui, { wrapper: ConfirmProvider });
 import i18n from 'i18next';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 

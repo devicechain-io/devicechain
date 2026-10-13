@@ -15,16 +15,16 @@ title: 出站连接器
 :::
 
 :::note 状态
-**目前可用：**`httpCall` webhook 动作，以及通过租户作用域、支持版本管理的连接器向 MQTT、Apache Kafka、AWS SNS 和 AWS SQS 投递的 `publish` 动作；连接器凭据保存在加密密钥存储中。两者都可以在自动化画布上配置为动作节点。`gcp_pubsub` 是可识别的类型，但目前无法创建（见[下文](#publish--send-to-a-connector)）。
+**目前可用：**`httpCall` webhook 动作，以及通过租户作用域、支持版本管理的连接器向 MQTT、Apache Kafka、AWS SNS 和 AWS SQS 投递的 `publish` 动作；连接器凭据保存在加密密钥存储中。两者都可以在自动化画布上配置为动作节点，也可以在规则表单中配置为动作。`gcp_pubsub` 是可识别的类型，但目前无法创建（见[下文](#publish--send-to-a-connector)）。
 
 **计划中：**更多 `publish` 目标（RabbitMQ、Azure、NATS、Redis、Slack、Splunk），采用同一模型。本仓库是判断当前哪些功能能够构建的权威依据。
 :::
 
 ## 两种出站动作 {#the-two-outbound-actions}
 
-两者都是在**自动化画布**上编写的[动作](./event-processing.md#automated-actions)，与*触发告警*和*发送命令*并列。每个动作都可以根据触发结果的条件设置**守卫条件**。
+两者都是可在**自动化画布**或**表单构建器**中编写的[动作](./event-processing.md#automated-actions)，与*触发告警*和*发送命令*并列。每个动作都可以根据触发结果的条件设置**守卫条件**。
 
-表单构建器的动作选择器只提供*触发告警*和*发送命令*。如果规则已有出站动作，表单会以只读方式显示并保留它，因此在画布与表单之间切换不会丢失该动作。
+表单构建器的动作选择器提供全部四种动作。其中 webhook 动作包含 URL、可选的请求体模板、请求头、密钥句柄和超时；发布动作包含连接器和负载模板。连接器列表只包含你能看到的连接器：其他租户的连接器或你无权访问的连接器不会出现。缺少 URL、URL 不是 http 或 https、超时超出上限等错误会显示在动作旁；无效的模板或保留请求头则由编译器在发布前报告。在任一界面编写的规则在另一界面打开时完全一致，因此在画布与表单之间切换不会丢失任何动作。
 
 ### `httpCall`：调用 webhook {#httpcall--call-a-webhook}
 
