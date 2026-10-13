@@ -268,17 +268,24 @@ func (nmgr *NatsManager) ownDurable(suffix string) string {
 // with the stream when the stream is recreated. A stream that holds messages and has no
 // durable of this service's to say they were read is NOT drained. why names what is
 // outstanding when it is not. A stream that does not exist (another replica is between its
-// delete and its create) is not drained either, and is not an error.
+// delete and its create) is not drained either, and is not an error. That holds for either
+// read: the stream and its durable are two requests, and another replica's delete can land
+// between them, so the durable's read finding no stream is the same answer as the stream's.
 func (nmgr *NatsManager) streamDrained(ctx context.Context, name, durable string) (info *nats.StreamInfo, drained bool, why string, err error) {
+	const gone = "the stream does not exist (being recreated by another replica)"
 	info, err = nmgr.js.StreamInfo(name, nats.Context(ctx))
 	if errors.Is(err, nats.ErrStreamNotFound) {
-		return nil, false, "the stream does not exist (being recreated by another replica)", nil
+		return nil, false, gone, nil
 	}
 	if err != nil {
 		return nil, false, "", err
 	}
 	ci, err := nmgr.js.ConsumerInfo(name, durable, nats.Context(ctx))
 	switch {
+	case errors.Is(err, nats.ErrStreamNotFound):
+		// The info read above describes a stream that is no longer there. It is not returned,
+		// so no caller can act on it: the lock path compares its creation time.
+		return nil, false, gone, nil
 	case errors.Is(err, nats.ErrConsumerNotFound):
 		if info.State.Msgs > 0 {
 			return info, false, fmt.Sprintf("%d messages and no durable %s", info.State.Msgs, durable), nil

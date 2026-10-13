@@ -10,6 +10,8 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -220,6 +222,83 @@ func TestTheCreateAfterTheDeleteIsRetried(t *testing.T) {
 	info, err := nmgr.js.StreamInfo(captureStreamOn("test"))
 	require.NoError(t, err)
 	require.Equal(t, nats.WorkQueuePolicy, info.Config.Retention)
+}
+
+// otherReplicaJS plays a second replica of the area that deletes and recreates the stream in
+// the gap between the drain check's two reads: the first ConsumerInfo the drain check issues
+// after armed is set runs with the stream deleted, and the stream is then recreated with the
+// declared retention, as the other replica's migration would leave it.
+type otherReplicaJS struct {
+	nats.JetStreamContext
+	armed atomic.Bool
+	fired atomic.Bool
+}
+
+// calledFromDrainCheck reports whether streamDrained is on the stack. The stream sampler, the
+// readers and the backpressure gate also call ConsumerInfo on this context, and the gap has to
+// land on the drain check's call, not on one of theirs.
+func calledFromDrainCheck() bool {
+	pcs := make([]uintptr, 16)
+	frames := runtime.CallersFrames(pcs[:runtime.Callers(3, pcs)])
+	for {
+		f, more := frames.Next()
+		if strings.HasSuffix(f.Function, ".(*NatsManager).streamDrained") {
+			return true
+		}
+		if !more {
+			return false
+		}
+	}
+}
+
+func (o *otherReplicaJS) ConsumerInfo(stream, durable string, opts ...nats.JSOpt) (*nats.ConsumerInfo, error) {
+	if !o.armed.Load() || !calledFromDrainCheck() || !o.fired.CompareAndSwap(false, true) {
+		return o.JetStreamContext.ConsumerInfo(stream, durable, opts...)
+	}
+	old, err := o.JetStreamContext.StreamInfo(stream)
+	if err != nil {
+		panic(err)
+	}
+	if err := o.JetStreamContext.DeleteStream(stream); err != nil {
+		panic(err)
+	}
+	ci, cerr := o.JetStreamContext.ConsumerInfo(stream, durable, opts...)
+	cfg := old.Config
+	cfg.Retention = nats.WorkQueuePolicy
+	cfg.FirstSeq = old.State.LastSeq + 1 + retentionSeqMargin
+	if _, err := o.JetStreamContext.AddStream(&cfg); err != nil {
+		panic(err)
+	}
+	return ci, cerr
+}
+
+// A replica whose drain check reads the stream, and then finds it gone when it asks for its
+// durable, has met another replica between that replica's delete and its create. That is the
+// other replica's migration in progress, not a failure of this one: it waits, finds the stream
+// recreated with the declared retention, and leaves it alone.
+func TestADrainCheckThatMeetsAnotherReplicasRecreateWaitsForIt(t *testing.T) {
+	srv := startEmbeddedServer(t)
+	// Swapped before Start, for the reason given in TestTheCreateAfterTheDeleteIsRetried.
+	var other *otherReplicaJS
+	nmgr, reader := replicaManagerWith(t, srv, uniqueArea("mid-recreate"), 2, func(n *NatsManager) {
+		other = &otherReplicaJS{JetStreamContext: n.js}
+		n.js = other
+		n.retentionDrainPoll = 20 * time.Millisecond
+	})
+	consumeCaptured(t, reader)
+	other.armed.Store(true)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	require.NoError(t, nmgr.MigratePendingRetention(ctx))
+	require.True(t, other.fired.Load(), "the other replica's recreate never landed inside the drain check")
+
+	info, err := nmgr.js.StreamInfo(captureStreamOn("test"))
+	require.NoError(t, err)
+	require.Equal(t, nats.WorkQueuePolicy, info.Config.Retention)
+	require.EqualValues(t, 2+1+retentionSeqMargin, publishCaptured(t, nmgr.js, "after"),
+		"the stream the other replica recreated was recreated again")
+	require.Empty(t, nmgr.PendingRetentionMigrations())
 }
 
 // A capture stream created with no predecessor to read (the restart after a failed recreate,
