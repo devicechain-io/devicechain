@@ -30,9 +30,8 @@ import { Textarea } from '@/components/ui/textarea';
 import { FormDrawer } from '@/components/registry';
 import { DashboardImportDrawer, type ImportSource } from './import/DashboardImportDrawer';
 import { DASHBOARD_TEMPLATES } from './import/templates';
-import { exportDefinitionJson } from './editor/exportDefinition';
 import { defaultWidgetRegistry } from './editor/widgetRegistry';
-import { migrateToSlots, parseDashboardDefinition } from '@devicechain/dashboards';
+import { migrateToSlots, parseDashboardDefinition, serializeDefinition } from '@devicechain/dashboards';
 import {
   DataTable,
   DataTableBody,
@@ -97,7 +96,9 @@ export default function DashboardsPage() {
       );
       const name = source.name || parsed.title || token;
       setImporting({
-        text: exportDefinitionJson(parsed, false),
+        // Compact, as a save writes it: the pretty-printed export form can be larger than
+        // the size limit for a board that is well inside it.
+        text: serializeDefinition(parsed),
         name: t('cloneName', { name }),
         description: source.description ?? undefined,
       });

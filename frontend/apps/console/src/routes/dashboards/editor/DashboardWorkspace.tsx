@@ -721,7 +721,9 @@ export function DashboardWorkspace({
         open
         onOpenChange={setCloneOpen}
         title={t('workspaceClone')}
-        source={{ text: exportJson(false), name: t('cloneName', { name: heading }) }}
+        // Compact, as a save writes it: the pretty-printed export form can be larger than
+        // the size limit for a board that is well inside it.
+        source={{ text: serializeDefinition(working), name: t('cloneName', { name: heading }) }}
         onCreated={(created) => {
           toast(t('created', { token: created }));
           setCloneOpen(false);

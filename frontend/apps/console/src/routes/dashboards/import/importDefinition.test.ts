@@ -192,6 +192,47 @@ describe('refusals', () => {
     expect(text.length).toBeLessThan(MAX_DEFINITION_BYTES);
     expect(() => prepareImport(text, catalog)).toThrow(/limit/);
   });
+
+  it('refuses oversized text as too large without reading it as JSON first', () => {
+    // Not JSON at all: a check that ran after JSON.parse would report it as malformed.
+    const text = '{' + 'x'.repeat(MAX_DEFINITION_BYTES);
+    expect(() => prepareImport(text, catalog)).toThrow(expect.objectContaining({ code: 'tooLarge' }));
+  });
+
+  it('refuses a payload that grew past the limit after the review', () => {
+    // The input was under the limit; the title the user typed pushes the saved board over.
+    expect(() => buildImportPayload(parsed(), 'x'.repeat(MAX_DEFINITION_BYTES))).toThrow(
+      expect.objectContaining({ code: 'tooLarge' }),
+    );
+  });
+});
+
+describe('external content', () => {
+  it('lists the origin of every absolute URL the board would fetch, once each', () => {
+    const text = JSON.stringify({
+      ...board,
+      canvas: { background: { imageUrl: 'https://cdn.example.com/bg.png' } },
+      widgets: [
+        ...board.widgets,
+        { id: 'i1', type: 'image', layout: box, options: { url: 'https://img.example.org/a.png' } },
+        { id: 'i2', type: 'image', layout: box, options: { url: '//img.example.org/b.png' } },
+        { id: 'i3', type: 'image', layout: box, options: { url: '/static/local.png' } },
+        { id: 'm1', type: 'map', layout: box, options: { tileUrl: 'http://tiles.example.net/{z}/{x}/{y}.png' } },
+        // A widget this console cannot resolve still renders once its package is installed.
+        { id: 'x1', type: 'vendor.frame', layout: box, options: { nested: { src: 'https://vendor.example.io/x' } } },
+      ],
+    });
+    expect(prepareImport(text, catalog).externalOrigins).toEqual([
+      'http://tiles.example.net',
+      'https://cdn.example.com',
+      'https://img.example.org',
+      'https://vendor.example.io',
+    ]);
+  });
+
+  it('reports none for a board with no absolute URLs', () => {
+    expect(prepareImport(JSON.stringify(board), catalog).externalOrigins).toEqual([]);
+  });
 });
 
 describe('widgets this console cannot resolve', () => {
@@ -222,6 +263,7 @@ describe('starter templates', () => {
     expect(prepared.unresolved).toEqual([]);
     expect(prepared.optionIssues).toEqual([]);
     expect(prepared.concreteSelectors).toBe(0);
+    expect(prepared.externalOrigins).toEqual([]);
     expect(prepared.definition.widgets.length).toBeGreaterThan(0);
     // A template names no entity of its own tenant.
     for (const ref of collectBindingRefs(prepared.definition)) expect(ref.token).toBeNull();

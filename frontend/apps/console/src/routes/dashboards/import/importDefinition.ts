@@ -88,6 +88,48 @@ export interface PreparedImport {
   // Widgets still carrying a concrete (non-slot) entity selector after slot migration; they
   // are not rebindable here and may name entities this tenant does not have.
   concreteSelectors: number;
+  // Origins (scheme://host) of every absolute URL the definition carries: an image widget's
+  // picture, a map's tile server, the canvas background. The browser fetches these as soon
+  // as the board is opened, so an imported file decides which hosts see the viewer's
+  // requests. Informational, like optionIssues: the user sees them before anything is saved.
+  externalOrigins: string[];
+}
+
+// Values nested deeper than this are not searched for URLs. Every URL-bearing option a
+// widget defines sits one or two levels down; the cap keeps a pathologically nested (but
+// size-bounded) options object from costing anything.
+const MAX_URL_SEARCH_DEPTH = 8;
+
+// externalOrigins lists, sorted and once each, the origin of every string in the canvas
+// background or any widget (a placeholder's stored object included) that is an absolute or
+// protocol-relative http(s) URL.
+export function externalOrigins(definition: DashboardDefinition): string[] {
+  const found = new Set<string>();
+  const visit = (value: unknown, depth: number) => {
+    if (depth > MAX_URL_SEARCH_DEPTH) return;
+    if (typeof value === 'string') {
+      const origin = originOf(value);
+      if (origin) found.add(origin);
+    } else if (Array.isArray(value)) {
+      for (const item of value) visit(item, depth + 1);
+    } else if (value !== null && typeof value === 'object') {
+      for (const item of Object.values(value)) visit(item, depth + 1);
+    }
+  };
+  visit(definition.canvas?.background, 0);
+  for (const widget of definition.widgets) visit(widget, 0);
+  return [...found].sort();
+}
+
+function originOf(text: string): string | null {
+  const value = text.trim();
+  if (!/^(https?:)?\/\//i.test(value)) return null;
+  try {
+    // A protocol-relative URL takes the page's scheme; https stands in for it here.
+    return new URL(value, 'https://origin.invalid').origin;
+  } catch {
+    return null;
+  }
 }
 
 // prepareImport parses `text` exactly as the editor parses a stored board. It throws a
@@ -117,6 +159,7 @@ export function prepareImport(text: string, catalog: WidgetCatalog | undefined):
     concreteSelectors: definition.widgets.filter(
       (w) => 'datasource' in w && w.datasource !== undefined && w.datasource.kind !== 'slot',
     ).length,
+    externalOrigins: externalOrigins(definition),
   };
 }
 

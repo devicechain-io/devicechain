@@ -236,8 +236,15 @@ function ImportFlow({ source, onCreated }: { source: ImportSource; onCreated: (t
 
 function ReviewNotes({ prepared }: { prepared: PreparedImport }) {
   const { t } = useTranslation('dashboards');
-  const { unresolved, optionIssues, concreteSelectors } = prepared;
-  if (unresolved.length === 0 && optionIssues.length === 0 && concreteSelectors === 0) return null;
+  const { unresolved, optionIssues, concreteSelectors, externalOrigins } = prepared;
+  if (
+    unresolved.length === 0 &&
+    optionIssues.length === 0 &&
+    concreteSelectors === 0 &&
+    externalOrigins.length === 0
+  ) {
+    return null;
+  }
   return (
     <div className="space-y-2 rounded-md border border-border p-3 text-sm" role="status">
       {unresolved.length > 0 && (
@@ -266,6 +273,17 @@ function ReviewNotes({ prepared }: { prepared: PreparedImport }) {
         </div>
       )}
       {concreteSelectors > 0 && <p className="text-muted-foreground">{t('importConcreteNote', { n: concreteSelectors })}</p>}
+      {externalOrigins.length > 0 && (
+        <div>
+          <p className="font-medium">{t('importExternalHeading', { n: externalOrigins.length })}</p>
+          <p className="text-muted-foreground">{t('importExternalNote')}</p>
+          <ul className="list-disc pl-5 font-mono text-xs text-muted-foreground">
+            {externalOrigins.map((origin) => (
+              <li key={origin}>{origin}</li>
+            ))}
+          </ul>
+        </div>
+      )}
     </div>
   );
 }

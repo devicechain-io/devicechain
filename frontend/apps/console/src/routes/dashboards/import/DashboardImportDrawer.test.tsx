@@ -13,19 +13,32 @@ import '@/i18n/config';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const h = vi.hoisted(() => ({ have: new Set<string>() }));
+const h = vi.hoisted(() => ({
+  have: new Set<string>(),
+  checkAvailability: undefined as undefined | ((token: string) => Promise<boolean>),
+}));
 
+// Every write the dashboard API offers is faked, so a test can assert the import made only
+// the one it should: a create. An update would overwrite, a publish would skip the draft.
 vi.mock('@/lib/api/dashboards', () => ({
   createDashboard: vi.fn(),
   getDashboard: vi.fn(),
+  updateDashboard: vi.fn(),
+  publishDashboard: vi.fn(),
 }));
 vi.mock('./entityExists', () => ({
   entityExists: async (_kind: string, token: string) => h.have.has(token),
 }));
 vi.mock('@/components/ui/token-field', () => ({
-  TokenField: (p: { id?: string; value: string; onChange: (v: string) => void }) => (
-    <input aria-label="token" id={p.id} value={p.value} onChange={(e) => p.onChange(e.target.value)} />
-  ),
+  TokenField: (p: {
+    id?: string;
+    value: string;
+    onChange: (v: string) => void;
+    checkAvailability?: (token: string) => Promise<boolean>;
+  }) => {
+    h.checkAvailability = p.checkAvailability;
+    return <input aria-label="token" id={p.id} value={p.value} onChange={(e) => p.onChange(e.target.value)} />;
+  },
 }));
 vi.mock('../editor/EntityPicker', () => ({
   EntityPicker: (p: { id?: string; kind: string; value: string; onChange: (v: string) => void }) => (
@@ -33,7 +46,8 @@ vi.mock('../editor/EntityPicker', () => ({
   ),
 }));
 
-import { createDashboard } from '@/lib/api/dashboards';
+import { createDashboard, getDashboard, publishDashboard, updateDashboard } from '@/lib/api/dashboards';
+import { MAX_DEFINITION_BYTES } from './importDefinition';
 import { DashboardImportDrawer } from './DashboardImportDrawer';
 import { DASHBOARD_TEMPLATES } from './templates';
 
@@ -60,6 +74,10 @@ function open(source: { text?: string; name?: string }, onCreated = vi.fn()) {
 
 beforeEach(() => {
   h.have = new Set();
+  h.checkAvailability = undefined;
+  vi.mocked(getDashboard).mockReset();
+  vi.mocked(updateDashboard).mockReset();
+  vi.mocked(publishDashboard).mockReset();
   vi.mocked(createDashboard).mockReset();
   vi.mocked(createDashboard).mockImplementation(async (o) => ({ token: o.token }));
 });
@@ -81,6 +99,47 @@ describe('DashboardImportDrawer', () => {
     expect(call.token).toBe('plant-copy');
     const stored = JSON.parse(call.definition ?? '') as { slots: Record<string, { defaultBinding?: unknown }> };
     expect(stored.slots.press.defaultBinding).toEqual({ kind: 'device', deviceToken: 'press-9' });
+    // A create and nothing else: no overwrite of an existing board, no publish.
+    expect(updateDashboard).not.toHaveBeenCalled();
+    expect(publishDashboard).not.toHaveBeenCalled();
+  });
+
+  it('reports a token that belongs to an existing dashboard as unavailable', async () => {
+    vi.mocked(getDashboard).mockImplementation(async (token) =>
+      token === 'taken' ? ({ token: 'taken' } as Awaited<ReturnType<typeof getDashboard>>) : null,
+    );
+    open({ text: exported });
+    await screen.findByRole('button', { name: 'Create draft' });
+    expect(h.checkAvailability).toBeDefined();
+    await expect(h.checkAvailability!('taken')).resolves.toBe(false);
+    await expect(h.checkAvailability!('free')).resolves.toBe(true);
+  });
+
+  it('refuses an oversized file without reading it', async () => {
+    const { container } = render(
+      <DashboardImportDrawer open onOpenChange={() => {}} title="Import" source={{}} onCreated={vi.fn()} />,
+    );
+    const input = (container.ownerDocument ?? document).querySelector('input[type="file"]') as HTMLInputElement;
+    const file = new File(['x'.repeat(MAX_DEFINITION_BYTES + 1)], 'big.json', { type: 'application/json' });
+    const read = vi.spyOn(file, 'text');
+    fireEvent.change(input, { target: { files: [file] } });
+    await screen.findByText(/larger than the 1 MiB limit/);
+    expect(read).not.toHaveBeenCalled();
+    expect(screen.queryByRole('button', { name: 'Create draft' })).toBeNull();
+  });
+
+  it('lists the external sites an imported board loads content from', async () => {
+    h.have.add('press-7');
+    const withImage = JSON.stringify({
+      ...JSON.parse(exported),
+      widgets: [
+        ...(JSON.parse(exported) as { widgets: unknown[] }).widgets,
+        { id: 'i1', type: 'image', layout: box, options: { url: 'https://img.example.org/a.png' } },
+      ],
+    });
+    open({ text: withImage });
+    await screen.findByText(/Loads content from 1 external site/);
+    expect(screen.getByText('https://img.example.org')).toBeTruthy();
   });
 
   it('imports the slot unbound when no replacement is picked', async () => {
