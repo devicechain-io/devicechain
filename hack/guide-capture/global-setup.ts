@@ -33,6 +33,9 @@ export default async function globalSetup() {
   const adminPassword = process.env.DC_ADMIN_PASSWORD;
   rmSync(`${AUTH_DIR}/superuser.json`, { force: true });
   if (!adminPassword) {
+    if (process.env.GUIDE_REQUIRE_SUPERUSER === '1') {
+      throw new Error('GUIDE_REQUIRE_SUPERUSER=1 but $DC_ADMIN_PASSWORD is not set');
+    }
     console.warn(
       '\n*** SUPERUSER RECIPES WILL BE SKIPPED: $DC_ADMIN_PASSWORD is not set. ' +
         'Export the bootstrap admin password to capture the admin chapter. ***\n',

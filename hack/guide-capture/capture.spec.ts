@@ -28,6 +28,9 @@ for (const recipe of recipes) {
     const locale = info.project.name;
     const session = loadSession(recipe.session);
     if (!session) {
+      if (process.env.GUIDE_REQUIRE_SUPERUSER === '1') {
+        throw new Error(`${recipe.id}: no ${recipe.session} session and GUIDE_REQUIRE_SUPERUSER=1`);
+      }
       const why = `${recipe.id}: SKIPPED, no ${recipe.session} session (set $DC_ADMIN_PASSWORD for superuser recipes)`;
       console.warn(why);
       test.skip(true, why);
@@ -66,14 +69,25 @@ for (const recipe of recipes) {
     }
     // Nothing may still be loading: an empty state is only meaningful once the reads settled,
     // and a shot taken mid-load would document a spinner.
-    await page.locator('[data-shot="loading"]').first().waitFor({ state: 'detached', timeout: 30_000 }).catch(() => {
-      throw new Error(`${recipe.id}: the screen is still loading after 30s`);
-    });
-    // Fail closed: a screen that rendered an empty or error state is not the screen
-    // the guide means to show.
+    try {
+      await page.locator('[data-shot="loading"]').first().waitFor({ state: 'detached', timeout: 30_000 });
+    } catch (err) {
+      if (err instanceof Error && err.name === 'TimeoutError') {
+        throw new Error(`${recipe.id}: the screen is still loading after 30s`);
+      }
+      throw err;
+    }
+    // Fail closed. An error state is never a screenshot; an empty state is one only where
+    // the recipe says the screen is meant to be empty.
+    const errors = await page.locator('[data-shot="error"]').count();
+    if (errors > 0) throw new Error(`${recipe.id}: the screen shows an error state (${errors}); not shooting it`);
     if (!recipe.allowEmpty) {
-      const bad = await page.locator('[data-shot="empty"], [data-shot="error"]').count();
-      if (bad > 0) throw new Error(`${recipe.id}: the screen shows an empty/error state (${bad}); not shooting it`);
+      const empty = await page.locator('[data-shot="empty"]').count();
+      if (empty > 0) throw new Error(`${recipe.id}: the screen shows an empty state (${empty}); not shooting it`);
+    }
+    // A mask that matches nothing is a recipe that thinks it is hiding live values and is not.
+    if (recipe.mask && (await page.locator('[data-shot-mask]').count()) === 0) {
+      throw new Error(`${recipe.id}: mask is set but the screen has no [data-shot-mask] region`);
     }
 
     await page.evaluate(() => document.fonts.ready);

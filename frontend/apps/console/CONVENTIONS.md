@@ -222,8 +222,10 @@ translated, so a text selector would break the `es` run). The attributes are ine
   reading, a connectivity status). A recipe that sets `mask: true` paints over every one.
 - **Ids are stable.** Renaming an anchor means renaming it in `hack/guide-capture/recipes.ts`
   in the same change; `node hack/guide-capture/check-anchors.mjs` (a CI step in the frontend
-  job) greps the source for every anchor a recipe names and fails on a miss. It proves the
-  attribute exists, not that it sits on the right element; the capture run proves that.
+  job) imports the recipes and greps the source for every anchor each names, in the file the
+  recipe lists under `sources`, and fails on a miss. The primitives' own output is pinned by
+  `src/components/guideAnchors.test.tsx`. Neither proves an anchor sits on the right
+  element on a live page; the capture run does.
 
 ## Gotchas
 

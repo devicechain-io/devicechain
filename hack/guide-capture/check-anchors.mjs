@@ -1,17 +1,22 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// Static anchor check: every anchor recipes.ts relies on must still exist in the console
-// source. No instance, no browser, no dependencies; it runs in the frontend CI job and
-// catches the real risk, a refactor that quietly drops an attribute a screenshot recipe
-// selects on. (It cannot tell that an anchor sits on the RIGHT element; the capture run
-// does that.)
+// Static anchor check: every anchor the recipes rely on must still exist in the console
+// source. No instance, no browser, no node_modules (it runs before `npm ci` in the frontend
+// CI job, on Node 26 where .ts files load natively). It catches the real risk: a refactor
+// that drops an attribute a screenshot recipe selects on.
+//
+// recipes.ts is IMPORTED, not pattern-matched, so a recipe built by a helper is checked
+// as the string the browser will actually receive, and a recipe that yields no anchor at
+// all fails instead of passing vacuously. The primitives' own behaviour (a drawer really
+// renders data-shot-drawer, a tab really renders data-shot-tab, ...) is pinned by the
+// console unit test src/components/guideAnchors.test.tsx, not here.
 //
 //   node hack/guide-capture/check-anchors.mjs [console-src-dir]
 
 import { readdirSync, readFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { dirname, join, relative, sep } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const srcDir = process.argv[2] ?? join(here, '..', '..', 'frontend', 'apps', 'console', 'src');
@@ -27,52 +32,86 @@ function walk(dir) {
   return out;
 }
 
-const recipes = readFileSync(join(here, 'recipes.ts'), 'utf8');
-// Comments are stripped before matching: a comment that merely MENTIONS an anchor (this
-// file's own convention is documented in tabs.tsx, sheet.tsx ...) must not satisfy it.
-const stripComments = (s) => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/.*$/gm, '$1');
-const files = walk(srcDir).map((p) => ({ p, text: stripComments(readFileSync(p, 'utf8')) }));
-const anywhere = (re) => files.some((f) => re.test(f.text));
-const esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+// Comment-only lines are dropped before matching, so a comment that merely MENTIONS an
+// anchor cannot satisfy it. (Lines, not a tokenizer: JSX text holds apostrophes and `//`
+// inside strings, which defeat a string-unaware stripper in the other direction.)
+const COMMENT_LINE = /^\s*(\/\/|\*|\/\*|\{\/\*)/;
+const code = (text) => text.split('\n').filter((l) => !COMMENT_LINE.test(l)).join('\n');
 
-// What recipes.ts references: [data-shot="v"], [data-shot-tab="v"], [data-shot-drawer="v"],
-// [data-testid="v"], bare [data-shot-mask], and deviceTab('v') (a tab key passed to the
-// helper, which builds a dynamic data-shot-tab selector the regex below cannot see).
-const refs = new Map(); // key -> {attr, value}
-const add = (attr, value) => refs.set(`${attr}=${value ?? ''}`, { attr, value });
-for (const m of recipes.matchAll(/\[(data-shot(?:-tab|-drawer)?|data-testid)="([^"$]+)"\]/g)) add(m[1], m[2]);
-for (const m of recipes.matchAll(/\[(data-shot-mask)\]/g)) add(m[1]);
-for (const m of recipes.matchAll(/deviceTab\('([\w-]+)'/g)) add('data-shot-tab', m[1]);
-// The harness itself selects on these regardless of any one recipe.
-for (const a of ['page', 'empty', 'error', 'loading']) add('data-shot', a);
-add('data-shot-mask');
+const files = walk(srcDir).map((p) => ({
+  rel: relative(srcDir, p).split(sep).join('/'),
+  text: code(readFileSync(p, 'utf8')),
+}));
+const esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+// data-table.tsx declares the data-shot-mask prop TYPE; only a JSX use counts as a use.
+const JSX_MASK = /\sdata-shot-mask[\s>={/]/;
+
+// Anchors of the shared primitives: any file may carry them, and guideAnchors.test.tsx
+// proves they render. Everything else belongs to the screen a recipe names in `sources`.
+const PRIMITIVE = new Set(['page', 'drawer', 'confirm', 'sheet', 'empty', 'error', 'loading']);
 
 const rules = {
   'data-shot': (v) => new RegExp(`data-shot=["']${esc(v)}["']`),
   'data-testid': (v) => new RegExp(`data-testid=["']${esc(v)}["']`),
   // A drawer id is the `shot` prop of a FormDrawer call site (a template literal counts).
-  'data-shot-drawer': (v) => new RegExp(`shot=(?:"${esc(v)}"|\\{\`${esc(v)}[\`$])`),
+  // The lookbehind keeps `data-shot="x"` from passing as a drawer id.
+  'data-shot-drawer': (v) => new RegExp(`(?<![\\w-])shot=(?:"${esc(v)}"|\\{\`${esc(v)}[\`$])`),
   // A tab id is the `value` of a TabsTrigger.
   'data-shot-tab': (v) => new RegExp(`<TabsTrigger[^>]*value="${esc(v)}"`),
 };
 
-const missing = [];
-for (const { attr, value } of refs.values()) {
-  const found = value === undefined ? anywhere(new RegExp(esc(attr))) : anywhere(rules[attr](value));
-  if (!found) missing.push(value === undefined ? attr : `${attr}="${value}"`);
-}
-// The primitives must still render the attributes the rules above assume.
-for (const [attr, file] of [
-  ['data-shot-tab', 'components/ui/tabs.tsx'],
-  ['data-shot-drawer', 'components/registry/FormDrawer.tsx'],
-]) {
-  const f = files.find((x) => x.p.replace(/\\/g, '/').endsWith(file));
-  if (!f || !new RegExp(`${attr}=`).test(f.text)) missing.push(`${attr} (primitive ${file})`);
+// Every [data-shot*="v"] / [data-testid="v"] / [data-shot-mask] inside a selector string.
+const SELECTOR_REF = /\[(data-shot(?:-tab|-drawer|-mask)?|data-testid)(?:=["']([^"'$]+)["'])?\]/g;
+function refsIn(str) {
+  return [...str.matchAll(SELECTOR_REF)].map((m) => ({ attr: m[1], value: m[2] }));
 }
 
-if (missing.length) {
-  console.error(`check-anchors: ${missing.length} anchor(s) referenced by recipes.ts not found in ${srcDir}:`);
-  for (const m of missing) console.error(`  - ${m}`);
+const { recipes } = await import(pathToFileURL(join(here, 'recipes.ts')).href);
+if (!Array.isArray(recipes) || recipes.length === 0) {
+  console.error('check-anchors: recipes.ts exported no recipes');
   process.exit(1);
 }
-console.log(`check-anchors: ${refs.size} anchor(s) referenced by recipes.ts all present in the console source`);
+
+const problems = [];
+const find = (re, among) => (among ?? files).some((f) => re.test(f.text));
+
+for (const r of recipes) {
+  const sources = (r.sources ?? []).map((rel) => {
+    const f = files.find((x) => x.rel === rel);
+    if (!f) problems.push(`${r.id}: source file ${rel} does not exist`);
+    return f;
+  });
+  const among = r.sources ? sources.filter(Boolean) : undefined;
+
+  const selectors = [r.anchor, r.clip, r.minRows?.selector, r.setup?.toString()].filter(Boolean);
+  const refs = selectors.flatMap(refsIn);
+  // A recipe that names no anchor at all would be vacuously green.
+  if (!refs.some((x) => x.attr !== 'data-shot-mask' && x.value !== undefined)) {
+    problems.push(`${r.id}: no data-shot*/data-testid anchor found in its anchor, clip, minRows or setup`);
+  }
+  for (const { attr, value } of refs) {
+    if (attr === 'data-shot-mask') continue; // handled by r.mask below
+    const scoped = !(attr === 'data-shot' && PRIMITIVE.has(value));
+    if (!find(rules[attr](value), scoped ? among : undefined)) {
+      problems.push(`${r.id}: ${attr}="${value}" not found${scoped && r.sources ? ` in ${r.sources.join(', ')}` : ''}`);
+    }
+  }
+  if (r.mask) {
+    const pool = (among ?? files).filter((f) => f.rel !== 'components/ui/data-table.tsx');
+    if (!pool.some((f) => JSX_MASK.test(f.text))) {
+      problems.push(`${r.id}: mask is set but no JSX use of data-shot-mask exists${r.sources ? ` in ${r.sources.join(', ')}` : ''}`);
+    }
+  }
+}
+
+// What the harness itself selects on, whichever recipes exist.
+for (const a of PRIMITIVE) {
+  if (!find(rules['data-shot'](a))) problems.push(`harness: data-shot="${a}" not found anywhere`);
+}
+
+if (problems.length) {
+  console.error(`check-anchors: ${problems.length} problem(s) in ${srcDir}:`);
+  for (const p of problems) console.error(`  - ${p}`);
+  process.exit(1);
+}
+console.log(`check-anchors: ${recipes.length} recipes, every anchor present in the console source`);

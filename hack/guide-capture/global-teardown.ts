@@ -1,7 +1,7 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
-import { readdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readdirSync, writeFileSync } from 'node:fs';
 import sharp from 'sharp';
 import { BASE_URL } from './playwright.config';
 
@@ -26,6 +26,7 @@ async function consoleVersion(): Promise<string> {
 // so it cannot advertise a shot that failed to capture. The shape is a contract with the
 // docs build (GuideShot): schemaVersion 1.
 export default async function globalTeardown() {
+  mkdirSync(OUT, { recursive: true });
   const shots: Record<string, { locales: string[]; width: number; height: number }> = {};
   for (const f of readdirSync(OUT).sort()) {
     const m = /^(.+)\.([a-zA-Z-]+)\.webp$/.exec(f);
