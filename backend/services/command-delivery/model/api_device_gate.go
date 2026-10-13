@@ -21,6 +21,9 @@ const gateChunk = 1000
 type DeviceGateReader interface {
 	// DisabledAmong reports which of the named devices of the context's tenant are disabled.
 	DisabledAmong(ctx context.Context, deviceTokens []string) (map[string]bool, error)
+	// EnabledAmong reports which of the named devices the record holds as ENABLED: a row exists
+	// and says not disabled. A device the record never heard of is in neither answer.
+	EnabledAmong(ctx context.Context, deviceTokens []string) (map[string]bool, error)
 	// ReleaseHeldForDevice returns the device's withheld commands to QUEUED.
 	ReleaseHeldForDevice(ctx context.Context, deviceToken string) (int64, error)
 	// QueuedCommandsForDevice reads the front of the device's QUEUED backlog, oldest first.
@@ -41,6 +44,47 @@ func (api *Api) disabledDevices(ctx context.Context) *gorm.DB {
 		Select("tenant_id, device_token").Where("disabled = true")
 }
 
+// DatabaseNow is the database's clock, falling back to this process's where the database has no
+// now() (the in-memory test database).
+//
+// 🔴 EVERY TIMESTAMP THE RECORD COMPARES COMES FROM HERE. The corrective walk changes a row only
+// if it is older than the instant the walk began reading, and the rows are written by whichever
+// pod heard the fact. Stamped from each pod's own clock, two pods a few seconds apart would let a
+// fact written by the faster one look newer than a walk begun by the slower one, or the reverse.
+// One clock, the database's, removes the question.
+func (api *Api) DatabaseNow(ctx context.Context) (time.Time, error) {
+	db := api.RDB.DB(ctx)
+	if db.Dialector == nil || db.Dialector.Name() != "postgres" {
+		return time.Now().UTC(), nil
+	}
+	var now time.Time
+	if err := db.Raw("SELECT now()").Scan(&now).Error; err != nil {
+		return time.Time{}, err
+	}
+	return now.UTC(), nil
+}
+
+// TenantGateSynced reports whether the context's tenant has ever had its record corrected.
+func (api *Api) TenantGateSynced(ctx context.Context) (bool, error) {
+	var count int64
+	if err := api.RDB.DB(ctx).Model(&DeviceGateSync{}).Count(&count).Error; err != nil {
+		return false, err
+	}
+	return count > 0, nil
+}
+
+// MarkTenantGateSynced records that the context's tenant has had its record corrected.
+func (api *Api) MarkTenantGateSynced(ctx context.Context) error {
+	now, err := api.DatabaseNow(ctx)
+	if err != nil {
+		return err
+	}
+	return api.RDB.DB(ctx).Clauses(clause.OnConflict{
+		Columns:   []clause.Column{{Name: "tenant_id"}},
+		DoUpdates: clause.AssignmentColumns([]string{"synced_at"}),
+	}).Create(&DeviceGateSync{SyncedAt: now}).Error
+}
+
 // SetDeviceDisabled records, for the context's tenant, whether a device is disabled, and reports
 // whether it was disabled until now. The write is an upsert on (tenant, device): the device-roster
 // fact is the only caller that knows a state, and it names the whole state on every fact.
@@ -50,8 +94,12 @@ func (api *Api) SetDeviceDisabled(ctx context.Context, deviceToken string, disab
 		return false, err
 	}
 	wasDisabled := len(prior) == 1 && prior[0].Disabled
-	row := &DeviceGate{DeviceToken: deviceToken, Disabled: disabled, UpdatedAt: time.Now().UTC()}
-	err := api.RDB.DB(ctx).Clauses(clause.OnConflict{
+	now, err := api.DatabaseNow(ctx)
+	if err != nil {
+		return false, err
+	}
+	row := &DeviceGate{DeviceToken: deviceToken, Disabled: disabled, UpdatedAt: now}
+	err = api.RDB.DB(ctx).Clauses(clause.OnConflict{
 		Columns:   []clause.Column{{Name: "tenant_id"}, {Name: "device_token"}},
 		DoUpdates: clause.AssignmentColumns([]string{"disabled", "updated_at"}),
 	}).Create(row).Error
@@ -70,6 +118,25 @@ func (api *Api) DisabledAmong(ctx context.Context, deviceTokens []string) (map[s
 		var found []string
 		if err := api.RDB.DB(ctx).Model(&DeviceGate{}).
 			Where("device_token IN ? AND disabled = true", deviceTokens[start:end]).
+			Pluck("device_token", &found).Error; err != nil {
+			return nil, err
+		}
+		for _, tok := range found {
+			out[tok] = true
+		}
+	}
+	return out, nil
+}
+
+// EnabledAmong reports which of the named devices of the context's tenant the record holds as
+// enabled (a row that says not disabled), as opposed to never recorded.
+func (api *Api) EnabledAmong(ctx context.Context, deviceTokens []string) (map[string]bool, error) {
+	out := make(map[string]bool)
+	for start := 0; start < len(deviceTokens); start += gateChunk {
+		end := min(start+gateChunk, len(deviceTokens))
+		var found []string
+		if err := api.RDB.DB(ctx).Model(&DeviceGate{}).
+			Where("device_token IN ? AND disabled = false", deviceTokens[start:end]).
 			Pluck("device_token", &found).Error; err != nil {
 			return nil, err
 		}
@@ -99,7 +166,10 @@ func (api *Api) DisabledDeviceTokens(ctx context.Context) ([]string, error) {
 // walk must not overwrite it with the older one. That is also why a row is never deleted: the
 // enabled row is the evidence that a fact already spoke.
 func (api *Api) ReconcileDisabled(ctx context.Context, disabled []string, readStarted time.Time) ([]string, error) {
-	now := time.Now().UTC()
+	now, err := api.DatabaseNow(ctx)
+	if err != nil {
+		return nil, err
+	}
 	readStarted = readStarted.UTC()
 	listed := make(map[string]bool, len(disabled))
 	for _, tok := range disabled {

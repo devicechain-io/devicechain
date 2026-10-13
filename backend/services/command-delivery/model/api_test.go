@@ -95,7 +95,7 @@ func newTestApi(t *testing.T) *Api {
 	// command to the queue or retires it because the batch was called off. Production
 	// always has both tables, so a fixture with only one measures a schema that does not
 	// exist — and the symptom is an unrelated release test failing on "no such table".
-	if err := db.AutoMigrate(&Command{}, &CommandBatch{}, &DeviceGate{}); err != nil {
+	if err := db.AutoMigrate(&Command{}, &CommandBatch{}, &DeviceGate{}, &DeviceGateSync{}); err != nil {
 		t.Fatalf("failed to migrate: %v", err)
 	}
 	// Create the per-tenant partial unique index on token exactly as the real migration does

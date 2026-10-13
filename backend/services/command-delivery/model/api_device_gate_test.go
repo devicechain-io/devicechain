@@ -165,3 +165,37 @@ func TestDeviceCommandHoldAndCancelAll(t *testing.T) {
 	require.NoError(t, err)
 	assert.Zero(t, held)
 }
+
+// The "synced once" marker is per tenant: one tenant's sync says nothing of another's.
+func TestTheSyncedMarkerIsPerTenant(t *testing.T) {
+	api := newTestApi(t)
+	synced, err := api.TenantGateSynced(gateCtx("A"))
+	require.NoError(t, err)
+	assert.False(t, synced)
+
+	require.NoError(t, api.MarkTenantGateSynced(gateCtx("A")))
+	require.NoError(t, api.MarkTenantGateSynced(gateCtx("A")), "marking twice is not an error")
+
+	synced, err = api.TenantGateSynced(gateCtx("A"))
+	require.NoError(t, err)
+	assert.True(t, synced)
+	synced, err = api.TenantGateSynced(gateCtx("B"))
+	require.NoError(t, err)
+	assert.False(t, synced, "tenant B was never synced")
+}
+
+// EnabledAmong names a device the record holds as enabled, and not one it never heard of.
+func TestEnabledAmongIsNeitherDisabledNorUnknown(t *testing.T) {
+	api := newTestApi(t)
+	ctx := gateCtx("A")
+	_, err := api.SetDeviceDisabled(ctx, "was-off", true)
+	require.NoError(t, err)
+	_, err = api.SetDeviceDisabled(ctx, "was-off", false)
+	require.NoError(t, err)
+	_, err = api.SetDeviceDisabled(ctx, "off", true)
+	require.NoError(t, err)
+
+	got, err := api.EnabledAmong(ctx, []string{"was-off", "off", "unknown"})
+	require.NoError(t, err)
+	assert.Equal(t, map[string]bool{"was-off": true}, got)
+}

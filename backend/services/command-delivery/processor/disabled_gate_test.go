@@ -179,6 +179,24 @@ type fakeSource struct {
 	disabled map[string][]string
 	fail     map[string]error
 	tenantsE error
+	// deleted names devices LiveDevices reports as gone; liveErr makes the lookup fail.
+	deleted map[string]bool
+	liveErr error
+}
+
+func (f *fakeSource) LiveDevices(_ context.Context, _ string, tokens []string) ([]string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.liveErr != nil {
+		return nil, f.liveErr
+	}
+	var live []string
+	for _, t := range tokens {
+		if !f.deleted[t] {
+			live = append(live, t)
+		}
+	}
+	return live, nil
 }
 
 func (f *fakeSource) Tenants(context.Context) ([]string, error) {

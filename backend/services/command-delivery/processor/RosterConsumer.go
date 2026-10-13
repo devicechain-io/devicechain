@@ -28,7 +28,7 @@ type RosterApi interface {
 
 // Resumer is what an enable triggers (CommandDeliveryProcessor.ResumeDevice).
 type Resumer interface {
-	ResumeDevice(ctx context.Context, tenant, deviceToken string)
+	ResumeDevice(ctx context.Context, tenant, deviceToken string) error
 }
 
 // RosterConsumer reads device-management's device-roster facts, which it emits when a device is
@@ -117,14 +117,22 @@ func (rc *RosterConsumer) handle(ctx context.Context, msg messaging.Message) {
 		rc.retryOrDrop(msgctx, msg, ev.DeviceToken, err)
 		return
 	}
-	msg.Ack()
 	// An enable resumes the device. The explicit toggle flag is the signal; a device the record
 	// had as disabled and the fact now says is not is the same event seen through a lost one.
-	// Resuming after the ack is deliberate: it is best-effort acceleration, and the hold
-	// reconciler and the sweep cover a resume that does not happen.
+	//
+	// 🔴 THE RESUME COMES BEFORE THE ACK. By now the record already says "enabled", so the
+	// corrective sync will never see a flip to act on; a fact acked over a resume that failed (or
+	// over a pod that died between the two) would leave the device's commands HELD until the hold
+	// reconciler found them. Unacked, the fact is redelivered and tried again. The redelivery
+	// carries the toggle flag but, if it was the record that told us, not wasDisabled: the hold
+	// reconciler's release of an enabled device's holds covers that remainder.
 	if !ev.Disabled && (ev.Enabled || wasDisabled) && rc.Resumer != nil {
-		rc.Resumer.ResumeDevice(ctx, tenant, ev.DeviceToken)
+		if err := rc.Resumer.ResumeDevice(ctx, tenant, ev.DeviceToken); err != nil {
+			rc.retryOrDrop(msgctx, msg, ev.DeviceToken, err)
+			return
+		}
 	}
+	msg.Ack()
 }
 
 // retryOrDrop leaves a transiently failed fact unacked for redelivery, or dead-letters and acks it

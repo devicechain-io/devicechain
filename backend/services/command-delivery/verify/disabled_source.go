@@ -81,3 +81,29 @@ func (s *DisabledSource) DisabledDevices(ctx context.Context, tenant string) ([]
 		cursor = out.DisabledDevicePage.NextCursor
 	}
 }
+
+const devicesByTokenQuery = `query($tokens: [String!]!) {
+  devicesByToken(tokens: $tokens) { token }
+}`
+
+// LiveDevices answers which of the named devices exist in the tenant (device-management omits
+// the ones that match no device, soft-deleted included). It tells a device that left the disabled
+// list because it was enabled from one that left because it was deleted.
+func (s *DisabledSource) LiveDevices(ctx context.Context, tenant string, deviceTokens []string) ([]string, error) {
+	var live []string
+	for start := 0; start < len(deviceTokens); start += disabledPageSize {
+		chunk := deviceTokens[start:min(start+disabledPageSize, len(deviceTokens))]
+		var out struct {
+			DevicesByToken []struct {
+				Token string `json:"token"`
+			} `json:"devicesByToken"`
+		}
+		if err := s.client.Query(ctx, s.dmURL, tenant, devicesByTokenQuery, map[string]any{"tokens": chunk}, &out); err != nil {
+			return nil, fmt.Errorf("looking up %d devices of tenant %q: %w", len(chunk), tenant, err)
+		}
+		for _, d := range out.DevicesByToken {
+			live = append(live, d.Token)
+		}
+	}
+	return live, nil
+}

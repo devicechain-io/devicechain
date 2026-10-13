@@ -36,3 +36,18 @@ type DeviceGate struct {
 	// than the instant it started reading, so a fact that landed during the walk always wins.
 	UpdatedAt time.Time
 }
+
+// DeviceGateSync records that a tenant's disabled-device record has been corrected against
+// device-management at least once.
+//
+// It is the shared answer to "may dispatch for this tenant start?". The record is only trustworthy
+// once something has filled it, and a table that is merely empty cannot be told from one nobody
+// has filled. Held in the database rather than in a pod, a restart does not close the gate again
+// when earlier pods already filled the table: only a tenant never synced anywhere waits.
+type DeviceGateSync struct {
+	ID uint `gorm:"primarykey"`
+
+	TenantId string `gorm:"not null;size:128;uniqueIndex:uix_device_gate_syncs_tenant"`
+
+	SyncedAt time.Time
+}

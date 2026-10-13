@@ -79,7 +79,7 @@ func (cproc *CommandDeliveryProcessor) reconcileOnePage(ctx context.Context) err
 		// Skipped, not complete: there is nothing to reconcile AGAINST, so this pass did
 		// not do its work — it correctly declined to. Reported as success it would keep
 		// the last-success gauge fresh on an instance where holds are lapsing to EXPIRED.
-		return core.ErrPassSkipped
+		return cproc.releaseEnabledHolds(ctx)
 	}
 	held, next, err := cproc.Api.HeldCommands(core.WithSystemContext(ctx), cproc.reconcileCursor, reconcilePageSize)
 	if err != nil {
@@ -167,4 +167,54 @@ func (cproc *CommandDeliveryProcessor) releaseHold(ctx context.Context, cmd *mod
 	incr(cproc.HoldsReleased, 1)
 	log.Debug().Str("command", cmd.Token).Str("device", cmd.DeviceToken).
 		Msg("Released a withheld command; its device is reachable again.")
+}
+
+// releaseEnabledHolds is the hold reconciler's pass when there is no presence gate to ask: it
+// releases the holds of devices the disabled-device record says are ENABLED.
+//
+// 🔴 IT IS THE BACKSTOP FOR A LOST RESUME, AND ONLY FOR THAT. Enabling a device releases its
+// held commands (ResumeDevice), but the roster fact that triggers it is acked, redelivered or
+// lost like any other message, and the record already reads "enabled" by then, so the sync has
+// no flip left to act on. With a presence gate the pass above releases such holds (the device is
+// present, so nothing withholds them). Without one it returned at the top and the commands sat in
+// HELD until their TTL.
+//
+// What it releases is narrow on purpose: a hold whose device has a row in the record saying NOT
+// disabled, which only a device that was disabled at some point can have. A device the record
+// never heard of is left alone, and so is a disabled one. The cost is that a presence hold
+// placed before the gate was turned off, on a device that was also once disabled, is released
+// with the rest; that is the dispatch the gate being off permits anyway.
+//
+// With no disabled-device record to read it has nothing to reconcile against and skips, as the
+// pass always did.
+func (cproc *CommandDeliveryProcessor) releaseEnabledHolds(ctx context.Context) error {
+	reader := cproc.gateReader()
+	if reader == nil {
+		return core.ErrPassSkipped
+	}
+	held, next, err := cproc.Api.HeldCommands(core.WithSystemContext(ctx), cproc.reconcileCursor, reconcilePageSize)
+	if err != nil {
+		log.Error().Err(err).Msg("unable to read withheld commands for reconciliation")
+		return fmt.Errorf("reading withheld commands: %w", err)
+	}
+	cproc.reconcileCursor = next
+	for _, batch := range groupByTenant(held, cproc.tenantDeleted) {
+		tenantCtx := core.WithTenant(ctx, batch.tenant)
+		if !cproc.gateReady(tenantCtx, batch.tenant) {
+			continue
+		}
+		enabled, err := reader.EnabledAmong(tenantCtx, distinctDevices(batch.commands))
+		if err != nil {
+			incr(cproc.DisabledGateErrors, 1)
+			log.Warn().Err(err).Str("tenant", batch.tenant).
+				Msg("Could not read the disabled-device record; the holds of enabled devices stay held this pass.")
+			continue
+		}
+		for _, cmd := range batch.commands {
+			if enabled[cmd.DeviceToken] {
+				cproc.releaseHold(tenantCtx, cmd)
+			}
+		}
+	}
+	return nil
 }

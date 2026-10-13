@@ -182,6 +182,9 @@ type CommandDeliveryProcessor struct {
 	gateMu      sync.Mutex
 	gateBooted  bool
 	gatePending map[string]bool
+	// gateSynced remembers the tenants known to have been synced, so the shared marker is read
+	// from the database once per tenant and not once per batch.
+	gateSynced map[string]bool
 	// gateSyncEvery and gateRetryEvery override the sync cadence; zero means the platform
 	// defaults. Only a test sets them.
 	gateSyncEvery  time.Duration
