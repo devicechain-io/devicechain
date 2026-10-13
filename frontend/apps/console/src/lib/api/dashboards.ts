@@ -141,16 +141,20 @@ const CREATE_DASHBOARD = graphql(`
   }
 `);
 
+// `definition` is the serialized board to start from (an import, a clone or a template);
+// omitted, the dashboard is seeded with a canonical empty one. Either way it is created as a
+// DRAFT -- publishing is a separate, explicit step.
 export async function createDashboard(opts: {
   token: string;
   name?: string;
   description?: string;
+  definition?: string;
 }): Promise<{ token: string }> {
   // Seed the dashboard with a canonical empty definition so the stored JSON is
   // always a valid, round-trippable DashboardDefinition (ADR-039).
-  const definition = serializeDefinition(
-    parseDashboardDefinition({ title: opts.name ?? '', widgets: [] }),
-  );
+  const definition =
+    opts.definition ??
+    serializeDefinition(parseDashboardDefinition({ title: opts.name ?? '', widgets: [] }));
   const data = await gql('dashboard-management', CREATE_DASHBOARD, {
     request: {
       token: opts.token,

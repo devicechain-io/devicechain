@@ -29,8 +29,6 @@ import {
   setCanvasSizing,
   setSlotScope,
   setTitle,
-  storedDefinition,
-  stripDefaultBindings,
   UNKNOWN_WIDGET_TYPE,
   isResolvedWidget,
   updateWidget,
@@ -73,6 +71,8 @@ import { DashboardCanvas } from './DashboardCanvas';
 import { UnknownWidgetPanel, WidgetConfigPanel } from './WidgetConfigPanel';
 import { VersionHistorySheet } from './VersionHistorySheet';
 import { AddWidgetMenu } from './AddWidgetMenu';
+import { exportDefinitionJson } from './exportDefinition';
+import { DashboardImportDrawer } from '../import/DashboardImportDrawer';
 import { defaultWidgetRegistry, type EditorWidgetRegistry } from './widgetRegistry';
 
 type SaveState = { kind: 'clean' } | { kind: 'saving' } | { kind: 'error'; message: string };
@@ -304,6 +304,8 @@ export function DashboardWorkspace({
   // Advanced after every save/rollback so a subsequent save doesn't self-conflict.
   const [expectedUpdatedAt, setExpectedUpdatedAt] = useState<string | null>(updatedAt);
   const [historyOpen, setHistoryOpen] = useState(false);
+  // Clone hands the board on screen to the import flow: a new token, checked, saved as a draft.
+  const [cloneOpen, setCloneOpen] = useState(false);
   // Preview mode swaps the live hub for a client-side synthetic source so the author
   // can validate layout/scales/thresholds before any device reports. It's a view
   // concern only — it never touches the definition, so it can't affect dirty/save.
@@ -501,13 +503,9 @@ export function DashboardWorkspace({
     </Button>
   );
 
-  // Export the current definition (ADR-039). A plain export keeps the slot default
-  // bindings (renders as-is); "as template" strips them so a host must supply a binding
-  // manifest (the reference /dash viewer). Pretty-printed for a readable file/paste.
-  const exportJson = (template: boolean) =>
-    // storedDefinition, not the parsed model: a widget of a type this console does not
-    // know must be exported as its stored object, exactly as a save writes it.
-    JSON.stringify(storedDefinition(template ? stripDefaultBindings(working) : working), null, 2);
+  // Export the current definition. A plain export keeps the slot default bindings (renders
+  // as-is); "as template" strips them so an importer must supply a binding per slot.
+  const exportJson = (template: boolean) => exportDefinitionJson(working, template);
   const copyExport = async (template: boolean) => {
     // navigator.clipboard is undefined on a non-secure context (plain http over a LAN
     // IP) — the optional chain would resolve silently and falsely claim "copied".
@@ -543,6 +541,9 @@ export function DashboardWorkspace({
         <DropdownMenuItem onSelect={downloadExport}>{t('workspaceDownloadJson')}</DropdownMenuItem>
         <DropdownMenuItem onSelect={() => void copyExport(false)}>{t('workspaceCopyJson')}</DropdownMenuItem>
         <DropdownMenuItem onSelect={() => void copyExport(true)}>{t('workspaceCopyTemplate')}</DropdownMenuItem>
+        <DropdownMenuItem disabled={!canEdit} onSelect={() => setCloneOpen(true)}>
+          {t('workspaceClone')}
+        </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
   );
@@ -715,6 +716,21 @@ export function DashboardWorkspace({
         </div>
       )}
     </PageShell>
+    {cloneOpen && (
+      <DashboardImportDrawer
+        open
+        onOpenChange={setCloneOpen}
+        title={t('workspaceClone')}
+        // Compact, as a save writes it: the pretty-printed export form can be larger than
+        // the size limit for a board that is well inside it.
+        source={{ text: serializeDefinition(working), name: t('cloneName', { name: heading }) }}
+        onCreated={(created) => {
+          toast(t('created', { token: created }));
+          setCloneOpen(false);
+          navigate(`/dashboards/${encodeURIComponent(created)}`);
+        }}
+      />
+    )}
     <VersionHistorySheet
       token={token}
       open={historyOpen}
