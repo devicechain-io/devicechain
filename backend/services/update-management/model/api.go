@@ -131,6 +131,9 @@ type Api struct {
 
 	keys capabilityKeys
 
+	// disabled caches the device-disabled answer behind the device-facing operations (see DisabledCacheTTL).
+	disabled disabledCache
+
 	// beforeSave runs between an attempt being read and its compare-and-set write. A seam for the
 	// one thing a unit test cannot otherwise reach: a second writer landing in that window.
 	beforeSave func(row UpdateAttempt)

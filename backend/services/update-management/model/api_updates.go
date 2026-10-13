@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/auth"
@@ -74,29 +75,90 @@ type DeviceLookup interface {
 // stays disabled, so nothing that receives it should retry.
 var ErrDeviceDisabled = errors.New("the device is disabled")
 
+// DisabledCacheTTL bounds how stale the disabled answer behind the device-facing operations can be.
+// A disable therefore reaches update-management within this long (an enable likewise). It is
+// short on purpose: it exists to spare device-management one lookup per message in a burst (a sync
+// storm after a reconnect, a download's progress reports), not to remember a device.
+const DisabledCacheTTL = 5 * time.Second
+
+// maxDisabledCache bounds the cache's memory; past it, expired entries are swept and, if it is
+// still full, the answer is simply not remembered (the next message asks again).
+const maxDisabledCache = 50_000
+
+type disabledEntry struct {
+	disabled bool
+	at       time.Time
+}
+
+// disabledCache remembers, per (tenant, device), whether the device was disabled when last asked.
+// Both answers are kept for DisabledCacheTTL; a failed lookup is never kept.
+type disabledCache struct {
+	mu sync.Mutex
+	m  map[string]disabledEntry
+}
+
+func (c *disabledCache) get(key string, now time.Time) (disabled, ok bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	e, hit := c.m[key]
+	if !hit || now.Sub(e.at) >= DisabledCacheTTL || now.Before(e.at) {
+		return false, false
+	}
+	return e.disabled, true
+}
+
+func (c *disabledCache) put(key string, disabled bool, now time.Time) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.m == nil {
+		c.m = map[string]disabledEntry{}
+	}
+	if len(c.m) >= maxDisabledCache {
+		for k, e := range c.m {
+			if now.Sub(e.at) >= DisabledCacheTTL {
+				delete(c.m, k)
+			}
+		}
+		if len(c.m) >= maxDisabledCache {
+			return
+		}
+	}
+	c.m[key] = disabledEntry{disabled: disabled, at: now}
+}
+
 // refuseIfDisabled is the quarantine gate of the device-facing operations. A device an operator
 // has disabled keeps whatever session it had open, so the broker cannot be what cuts it off here:
-// every report, sync answer and download grant asks device-management afresh and refuses with
-// ErrDeviceDisabled, and enabling the device takes effect on its next message because nothing is
-// remembered. A lookup that cannot be answered is an error, never "enabled", and the message is
-// retried. A device device-management does not have is not refused here: it has no assignment,
-// and the operation answers that on its own terms.
+// every report, sync answer and download grant asks device-management (through a cache no staler
+// than DisabledCacheTTL) and refuses with ErrDeviceDisabled. Enabling takes effect within the same
+// bound, because only the answer is remembered, never a decision. A device device-management does
+// not have is not refused here: it has no assignment, and the operation answers that on its own.
 //
-// With no lookup wired no assignment can exist (assigning is refused without one), so there is
-// nothing to protect and nothing to ask.
+// It FAILS CLOSED everywhere it cannot answer: a lookup that errors (not cached) and a service
+// with no lookup wired both return an error and the message is retried, then dead-lettered. Assignments
+// outlive a restart, so "nothing is assigned without a lookup" is not a premise this can lean on.
 func (api *Api) refuseIfDisabled(ctx context.Context, deviceToken string) error {
 	if api.Devices == nil {
-		return nil
+		return refuse(CodeDeviceLookupUnavailable,
+			"device-facing update traffic is refused: devices cannot be looked up, because the device-management endpoint or service secret is not configured")
 	}
 	tenant, ok := core.TenantFromContext(ctx)
 	if !ok {
 		return errors.New("a device-facing update operation requires a tenant")
 	}
+	key := tenant + "/" + deviceToken
+	if disabled, hit := api.disabled.get(key, api.now()); hit {
+		if disabled {
+			return ErrDeviceDisabled
+		}
+		return nil
+	}
 	facts, found, err := api.Devices.DeviceOf(ctx, tenant, deviceToken)
 	if err != nil {
 		return fmt.Errorf("checking whether device %q is disabled: %w", deviceToken, err)
 	}
-	if found && facts.Disabled {
+	disabled := found && facts.Disabled
+	api.disabled.put(key, disabled, api.now())
+	if disabled {
 		return ErrDeviceDisabled
 	}
 	return nil

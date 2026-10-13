@@ -37,6 +37,8 @@ func TestADisabledDevicesUpdateReportsAreCountedAndSettled(t *testing.T) {
 		require.Equal(t, 1, ack.acks, "%s from a disabled device was left for redelivery", kind)
 		require.EqualValues(t, n, counter(c, "rejected", rejectedDeviceDisabled), kind)
 	}
+	require.EqualValues(t, 0, counter(c, "grants", "error"),
+		"a disabled device's download request was counted as a grant error")
 	require.Empty(t, api.published, "a disabled device was given a grant")
 	require.Zero(t, api.answers, "a disabled device was answered a sync")
 	require.EqualValues(t, n, handled(t, reg, core.ResultDropped))

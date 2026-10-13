@@ -580,12 +580,14 @@ func TestACapabilityIsRefusedWhileItsDeviceIsDisabled(t *testing.T) {
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 
 	e.devices.disabled["acme/dev-1"] = true
+	e.clock = e.clock.Add(model.DisabledCacheTTL) // the disabled answer is remembered for at most this long
 	opens := e.store.opens.Load()
 	resp, _ = get(t, target)
 	require.Equal(t, http.StatusForbidden, resp.StatusCode, "a disabled device was served")
 	require.Equal(t, opens, e.store.opens.Load(), "the artifact was opened for a disabled device")
 
 	delete(e.devices.disabled, "acme/dev-1")
+	e.clock = e.clock.Add(model.DisabledCacheTTL)
 	resp, body := get(t, target)
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 	require.Len(t, body, 1000)
