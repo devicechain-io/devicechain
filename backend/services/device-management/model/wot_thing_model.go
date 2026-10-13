@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"strconv"
 
 	"gorm.io/gorm"
@@ -61,8 +62,21 @@ func wotDataType(t MetricDataType) (string, error) {
 //     an object schema built from the command's typed parameters (none when it declares
 //     none).
 //
-// The output is deterministic: keys are emitted sorted, so the same version always renders
-// the same bytes.
+// What the snapshot holds and the model deliberately leaves out:
+//
+//   - detection rules: they are what the platform does with a device's data, not part of
+//     the device's interface, so a consumer of the model has no use for them;
+//   - the location declaration and the configuration declaration: both describe what the
+//     PLATFORM keeps about a device (where it is, which shared attributes it is sent), and
+//     the model describes what a device reports and accepts;
+//   - metadata on the profile, its metrics and its commands: free-form, with no WoT term;
+//   - a parameter's default, for the reason wotParameterSchema gives.
+//
+// A constraint the model cannot carry faithfully is refused, never dropped or approximated:
+// a model that lost one would tell a consumer a property accepts more than it does.
+//
+// The output is deterministic: keys are emitted sorted, so the same version, under the same
+// profile name and description, always renders the same bytes.
 func ThingModelOf(profile *DeviceProfile, version *DeviceProfileVersion) ([]byte, error) {
 	if profile == nil || version == nil {
 		return nil, fmt.Errorf("a Thing Model needs a profile and one of its published versions")
@@ -152,6 +166,9 @@ func wotProperty(m *MetricDefinition) (map[string]any, error) {
 	if m.Unit.Valid && m.Unit.String != "" {
 		prop["unit"] = m.Unit.String
 	}
+	if (m.MinValue.Valid || m.MaxValue.Valid) && typ != "number" && typ != "integer" {
+		return nil, fmt.Errorf("it has numeric bounds, which a %s property cannot carry", typ)
+	}
 	if m.MinValue.Valid {
 		prop["minimum"] = m.MinValue.Float64
 	}
@@ -164,24 +181,59 @@ func wotProperty(m *MetricDefinition) (map[string]any, error) {
 			return nil, fmt.Errorf("its allowed values are not a list of distinct values, which a Thing Model cannot carry")
 		}
 		if values != nil {
-			// Allowed values are documented as strings; a numeric or boolean metric's are
-			// rendered as values of its type, so they can match what the device reports.
+			// Allowed values are declared as text, and ingest enforces them only in that
+			// form; a member that is not text is a constraint the platform does not apply,
+			// so it is refused rather than advertised. A numeric or boolean metric's values
+			// are rendered as values of its type, so they can match what the device reports.
+			texts := make([]string, len(values))
 			for i, v := range values {
-				if s, isText := v.(string); isText && typ != "string" {
-					typed, err := wotTypedValue(typ, s)
-					if err != nil {
-						return nil, err
-					}
-					values[i] = typed
+				s, isText := v.(string)
+				if !isText {
+					return nil, fmt.Errorf("allowed value %s is not text, which is how allowed values are declared", mustText(v))
 				}
+				texts[i] = s
 			}
-			if _, distinct := wotEnum(mustJSON(values)); !distinct {
-				return nil, fmt.Errorf("its allowed values repeat once read as %s", typ)
+			typed, err := wotTypedEnum(typ, texts)
+			if err != nil {
+				return nil, err
 			}
-			prop["enum"] = values
+			prop["enum"] = typed
 		}
 	}
 	return prop, nil
+}
+
+// wotTypedEnum reads allowed values declared as text as values of the WoT type typ, and
+// refuses a list whose members repeat once typed ("1" and "01" are one integer): a Thing
+// Model's enum must hold distinct values.
+func wotTypedEnum(typ string, texts []string) ([]any, error) {
+	values := make([]any, len(texts))
+	seen := make(map[string]bool, len(texts))
+	for i, text := range texts {
+		v, err := wotTypedValue(typ, text)
+		if err != nil {
+			return nil, err
+		}
+		key, err := json.Marshal(v)
+		if err != nil {
+			return nil, fmt.Errorf("allowed value %q cannot be written as %s: %w", text, typ, err)
+		}
+		if seen[string(key)] {
+			return nil, fmt.Errorf("its allowed values repeat once read as %s (%s)", typ, key)
+		}
+		seen[string(key)] = true
+		values[i] = v
+	}
+	return values, nil
+}
+
+// mustText renders a decoded JSON value for an error message.
+func mustText(v any) string {
+	out, err := json.Marshal(v)
+	if err != nil {
+		return fmt.Sprint(v)
+	}
+	return string(out)
 }
 
 // wotEnum reads a stored allowed-values document as a WoT enum: a non-empty array of
@@ -209,15 +261,6 @@ func wotEnum(raw []byte) ([]any, bool) {
 		seen[string(key)] = true
 	}
 	return values, true
-}
-
-// mustJSON encodes values decoded from JSON a moment ago, which cannot fail to encode.
-func mustJSON(values []any) []byte {
-	out, err := json.Marshal(values)
-	if err != nil {
-		panic("model: re-encoding decoded JSON values failed: " + err.Error())
-	}
-	return out
 }
 
 // wotAction renders one command definition. Its parameters become the action's input: an
@@ -282,7 +325,8 @@ func wotTypedValue(typ, text string) (any, error) {
 		return v, nil
 	case "number":
 		v, err := strconv.ParseFloat(text, 64)
-		if err != nil {
+		// ParseFloat accepts "NaN" and "Inf", which JSON has no way to write.
+		if err != nil || math.IsNaN(v) || math.IsInf(v, 0) {
 			return nil, fmt.Errorf("allowed value %q is not a number", text)
 		}
 		return v, nil
@@ -324,13 +368,9 @@ func wotParameterSchema(s ParameterSpec) (map[string]any, error) {
 			schema["maximum"] = *s.MaxValue
 		}
 		if len(s.Enum) > 0 {
-			values := make([]any, len(s.Enum))
-			for i, v := range s.Enum {
-				typed, err := wotTypedValue(typ, v)
-				if err != nil {
-					return nil, err
-				}
-				values[i] = typed
+			values, err := wotTypedEnum(typ, s.Enum)
+			if err != nil {
+				return nil, err
 			}
 			schema["enum"] = values
 		}

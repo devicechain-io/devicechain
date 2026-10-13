@@ -352,8 +352,14 @@ type DeviceProfileVersion {
     is a read-only, observable property typed from its data type, with its unit, bounds,
     allowed values and descriptor (as the property's @type); each command is an action
     whose input is its typed parameters. A Thing Model describes every device of the
-    profile, so it carries no device address, protocol binding or security. The text is
-    the same every time it is read.
+    profile, so it carries no device address, protocol binding or security. Detection
+    rules, the location and configuration declarations, and metadata are not part of it.
+    The title and description are the profile's current ones, so the text changes only
+    when those do. A version holding a constraint a Thing Model cannot express exactly
+    (allowed values that are not text, or that repeat once typed; bounds on a non-numeric
+    metric) is refused with an error rather than exported without it. A descriptor is
+    emitted as written, so it should be an absolute IRI or a prefixed term the consumer
+    knows.
     """
     thingModel: String!
 }
