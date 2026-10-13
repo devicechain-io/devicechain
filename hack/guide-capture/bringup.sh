@@ -47,7 +47,7 @@ alive() {
   local pid="$1"
   [ -n "$pid" ] || return 1
   if [ "$win" = 1 ]; then
-    tasklist //FI "PID eq $pid" //NH 2>/dev/null | grep -q "$pid"
+    grep -q "$pid" <<<"$(tasklist //FI "PID eq $pid" //NH 2>/dev/null)"
   else
     kill -0 "$pid" 2>/dev/null
   fi
@@ -64,12 +64,12 @@ os_pid() {
 image_of() {
   local pid="$1" img=""
   if [ "$win" = 1 ]; then
-    img="$(tasklist //FI "PID eq $pid" //FO CSV //NH 2>/dev/null | head -1 | cut -d, -f1 | tr -d '"')"
+    img="$(tasklist //FI "PID eq $pid" //FO CSV //NH 2>/dev/null | sed -n '1p' | cut -d, -f1 | tr -d '"')"
   else
     img="$(ps -o comm= -p "$pid" 2>/dev/null || true)"
   fi
   img="${img##*/}"
-  img="$(printf '%s' "$img" | tr 'A-Z' 'a-z')"
+  img="$(printf '%s' "$img" | tr '[:upper:]' '[:lower:]')"
   echo "${img%.exe}"
 }
 
