@@ -1128,15 +1128,14 @@ rig_areas() {
 #
 # 🔴 WHY THE PROBE IS TOLD, INSTEAD OF THE RIG ENABLING THE MISSING AREA. The instance was
 # installed by the baseline's dcctl, and nothing an operator types can add the area
-# afterwards: `dcctl upgrade` has no area or object-store flag (cmd/upgrade.go), the area
-# set is the one bootstrap recorded, and dcctl never writes a blob directory or volume into
-# the instance (bootstrap/composeconfig.go: the document carries the chart's default, "no
-# directory, hence no store"). Editing the release's values or its config Secret by hand
-# would be the rig doing something no operator does, and the next `dcctl upgrade` would
-# undo it. So the areas the instance really runs are stated, apiprobe skips the rest BY
-# NAME in the seed, the read sweep and the table sweep, and the table sweep fails if the
-# database holds a table of an area declared undeployed. Coverage of the artifact table
-# begins with the first baseline that ships the area.
+# afterwards: `dcctl upgrade` has no area flag (cmd/upgrade.go) and the area set is the one
+# bootstrap recorded. Editing the release's values by hand would be the rig doing something
+# no operator does, and the next `dcctl upgrade` would undo it. So the areas the instance
+# really runs are stated, apiprobe skips the rest BY NAME in the seed, the read sweep and
+# the table sweep, and the table sweep fails if the database holds a table of an area
+# declared undeployed. Coverage of the artifact table begins with the first baseline that
+# ships the area -- and the object store that area writes to is asked for at bootstrap,
+# where an operator asks for it too (see baseline_object_store_args).
 set_deployed_areas() {
   local csv="" area
   while read -r area; do
@@ -1145,6 +1144,109 @@ set_deployed_areas() {
   done < <(rig_areas)
   [[ -n "$csv" ]] || fail "no probe area is shipped by $baseline_tag, so there is nothing to probe"
   deployed_areas="$csv"
+}
+
+# baseline_object_store_args sets object_store_args to the object-store flags the baseline's
+# bootstrap is given: `--object-store filesystem` when its dcctl has the flag, none when it
+# predates the object store. (A global, for the reason set_deployed_areas gives.)
+#
+# 🔴 WHY THE RIG MUST ASK, WHEN A DEFAULT INSTALL GETS A STORE WITHOUT ASKING. dcctl's
+# default is a small filesystem store on a cluster dcctl CREATED and no store on a cluster
+# it was pointed at with --kube-context (bootstrap.DefaultsToFilesystemObjectStore). This
+# rig creates its own kind cluster (create_cluster: it needs the port mappings in
+# $kind_config) and points dcctl at it, so it lands on the second default: "object store:
+# none". Every artifact create is then refused, and the baseline seed dies before anything
+# is upgraded. Asking for the filesystem store is what puts the instance where
+# `dcctl install local` + `dcctl bootstrap local` leave an operator who did not pass
+# --kube-context. The store is recorded on the Instance declaration, so `dcctl upgrade`
+# keeps it rather than the rig having to re-assert it. (One node, so the volume's
+# ReadWriteOnce is no obstacle to the two areas that mount it.)
+#
+# Asked of the BINARY'S help rather than of a version number, the way the install/bootstrap
+# split is asked of the extracted tree: the flag is the interface, and a baseline that
+# predates it would refuse it. An answer that cannot be read ENDS the run instead of being
+# taken as "no flag": a missing store is a refusal several minutes later that names the
+# store and not this function.
+object_store_args=()
+baseline_object_store_args() {
+  local help
+  help="$("$baseline_dcctl" bootstrap --help 2>&1)" ||
+    fail "$baseline_tag's 'dcctl bootstrap --help' failed, so whether it can be given an object store is unknown:
+$help"
+  # The control: a flag every baseline's bootstrap has had, and one this rig passes. Help
+  # text without it is not a flag list, and "no --object-store in it" would mean nothing.
+  grep -Eq -- '^[[:space:]]*--kube-context[[:space:]]' <<<"$help" ||
+    fail "$baseline_tag's 'dcctl bootstrap --help' lists no --kube-context flag, so it is not the flag list
+this rig reads; whether it can be given an object store is unknown"
+  object_store_args=()
+  if grep -Eq -- '^[[:space:]]*--object-store[[:space:]]' <<<"$help"; then
+    object_store_args=(--object-store filesystem)
+    note "$baseline_tag's bootstrap takes --object-store: asking for the filesystem store a default install gets"
+  else
+    note "$baseline_tag's bootstrap has no --object-store flag: it predates the object store, so there is none to ask for"
+  fi
+}
+
+# allow_unverified_artifacts_doc rewrites update-management's typed config document (stdin)
+# to allow an unverified artifact to be assigned, keeping every other setting in it.
+allow_unverified_artifacts_doc() {
+  jq -ce 'if type == "object" then .updates = ((.updates // {}) + {allowUnverifiedArtifacts: true}) else error("not a JSON object") end'
+}
+
+# allow_unverified_artifacts is a RIG-ONLY edit: it lets THIS instance's update-management
+# assign an unverified artifact, which the seed's update-assignment row needs.
+#
+# 🔴 WHY IT IS AN EDIT AND NOT A FLAG. Every artifact is UNVERIFIED today, and with
+# updates.allowUnverifiedArtifacts at its default (false) NO artifact can be assigned, so
+# the seed's update-assignment is refused by name. dcctl has no flag for it; it is chart
+# configuration (functionalAreas.update-management.config.updates), and the area's own
+# documentation says a development instance sets it. apiprobe deliberately REFUSES rather
+# than skips the row on an instance that does not allow it (publishes.go): a skip would be
+# coverage that quietly stops existing, two tables (update_assignments, update_attempts)
+# going uncovered with every check green.
+#
+# Applied the way the stub provider's edits are: where the row is created, never early "to
+# be safe". The upgrade re-renders the ConfigMap and reverts it, which is why the table
+# sweep applies it again before its own seed. The pods read the document only at start,
+# so the Deployment is rolled with a stamp that always changes (see sso_stub_trust_and_egress
+# for why a stamp and not a hash), and the edit is complete only when no old pod is left
+# to answer.
+#
+# An instance that does not run the area has no key for it in the ConfigMap (the chart
+# renders one per enabled area); there is then nothing to allow, and the seed skips the
+# area's rows by name.
+allow_unverified_artifacts() {
+  local cm doc new deploy pods i want
+  cm="dct-$instance-config"
+  doc="$(k -n "$namespace" get configmap "$cm" -o json)" ||
+    fail "could not read the per-area configuration ConfigMap $namespace/$cm"
+  if ! jq -e '.data | has("update-management")' >/dev/null <<<"$doc"; then
+    note "update-management is not enabled on this instance (no key in $cm), so there is no assignment to allow"
+    return 0
+  fi
+  say "letting THIS instance's update-management assign unverified artifacts (rig-only edit)"
+  new="$(jq -r '.data["update-management"]' <<<"$doc" | allow_unverified_artifacts_doc)" ||
+    fail "update-management's configuration in $cm is not a JSON object, so this rig cannot edit it safely"
+  k -n "$namespace" patch configmap "$cm" --type merge \
+    -p "$(jq -n --arg v "$new" '{data: {"update-management": $v}}')" >/dev/null
+
+  deploy="$(k -n "$namespace" get deploy -o name)"
+  deploy="$(grep 'update-management' <<<"$deploy" || true)"
+  [[ "$(wc -l <<<"$deploy" | tr -d ' ')" == 1 && -n "$deploy" ]] ||
+    fail "expected exactly one update-management Deployment in $namespace, found: ${deploy:-none}"
+  k -n "$namespace" patch "$deploy" -p "$(jq -n --arg stamp "$(date -u +%Y%m%dT%H%M%SZ)-$$-$RANDOM" \
+    '{spec: {template: {metadata: {annotations: {"devicechain.io/upgrade-rig-unverified-artifacts": $stamp}}}}}')" >/dev/null
+  k -n "$namespace" rollout status "$deploy" --timeout=240s
+
+  want="$(k -n "$namespace" get "$deploy" -o jsonpath='{.spec.replicas}')"
+  [[ "$want" =~ ^[1-9][0-9]*$ ]] || fail "could not read the replica count of $deploy (got '$want')"
+  for ((i = 0; i < 90; i++)); do
+    pods="$(k -n "$namespace" get pods -o name)"
+    [[ "$(grep -c update-management <<<"$pods" || true)" == "$want" ]] && break
+    sleep 2
+  done
+  [[ "$(grep -c update-management <<<"$pods" || true)" == "$want" ]] ||
+    fail "update-management still has more pods than its $want replica(s) after the rollout, so an assignment could still reach one that refuses it: $pods"
 }
 
 wait_for_every_api() {
@@ -1197,6 +1299,7 @@ cmd_up() {
   [[ ${#area_args[@]} -gt 0 ]] || fail "apiprobe named no functional areas; the seed would have nothing to write to"
 
   pin_baseline_charts
+  baseline_object_store_args
 
   say "installing $baseline_tag with its own dcctl"
   note "areas beyond the default profile are requested explicitly: ${area_args[*]}"
@@ -1226,14 +1329,18 @@ cmd_up() {
       --kube-context "$kube_context" --version "$baseline_tag"
     "$baseline_dcctl" bootstrap local "$instance" --yes \
       --kube-context "$kube_context" --host localhost --no-escrow \
-      --version "$baseline_tag" "${area_args[@]}"
+      --version "$baseline_tag" "${area_args[@]}" \
+      ${object_store_args[@]+"${object_store_args[@]}"}
   else
     note "$baseline_tag predates 'dcctl install': a single bootstrap provisions everything"
     "$baseline_dcctl" bootstrap local "$instance" --yes --compact \
       --kube-context "$kube_context" --host localhost --no-escrow \
-      --version "$baseline_tag" "${area_args[@]}"
+      --version "$baseline_tag" "${area_args[@]}" \
+      ${object_store_args[@]+"${object_store_args[@]}"}
   fi
 
+  wait_for_every_api
+  allow_unverified_artifacts
   wait_for_every_api
 
   say "seeding one of every entity $baseline_tag can express"
@@ -2139,6 +2246,9 @@ cmd_tablesweep() {
   # it does. See "a stub identity provider" above for what is stood up and why it is here.
   say "standing up the stub identity provider the sweep tenant's single sign-on connection is seeded against"
   idp_stub_up
+  # The upgrade re-rendered update-management's configuration, so the rig-only edit the
+  # baseline seed needed is gone; this seed assigns an artifact too.
+  allow_unverified_artifacts
   wait_for_every_api
   local idp_args=()
   mapfile -t idp_args < <(idp_seed_args)
@@ -3148,8 +3258,94 @@ commit-ish without the chart, or this check has quietly stopped checking."
 
   selftest_policy
   selftest_superuser_password
+  selftest_baseline_writable
 
   say "SELF-TEST PASSED"
+}
+
+# selftest_baseline_writable covers the two things a baseline that ships update-management
+# needs before the seed can write its rows: an object store asked for at bootstrap, and the
+# rig-only edit that lets an artifact be assigned. Both fail in the LOUD direction on a real
+# run (the seed is refused by name), but only after a cluster and several minutes, which is
+# why the decisions are pinned here.
+selftest_baseline_writable() {
+  say "the baseline is installed with an object store, and can assign an artifact"
+  local stub_dir saved_dcctl="$baseline_dcctl" case want got
+  stub_dir="$(mktemp -d)"
+  # Help text as cobra prints it: the real lines, cut down. HELP_KIND picks the variant.
+  cat > "$stub_dir/dcctl" <<'STUB'
+#!/usr/bin/env bash
+[[ "$1 $2" == "bootstrap --help" ]] || { echo "unexpected argv: $*" >&2; exit 64; }
+case "$HELP_KIND" in
+  store)    printf '%s\n' 'Flags:' \
+              '      --kube-context string                         build the instance on the cluster this context reaches' \
+              '      --object-store string                         where the instance keeps tenant logos and update artifacts' \
+              '      --object-store-size string                    filesystem store: size of the volume' ;;
+  nostore)  printf '%s\n' 'Flags:' \
+              '      --kube-context string                         build the instance on the cluster this context reaches' ;;
+  sizeonly) printf '%s\n' 'Flags:' \
+              '      --kube-context string                         build the instance on the cluster this context reaches' \
+              '      --object-store-size string                    a prefix of the flag is not the flag' ;;
+  notflags) printf '%s\n' 'Error: unknown command "bootstrap" for "dcctl"' ;;
+  failed)   printf '%s\n' 'Flags:' '      --kube-context string' '      --object-store string'; exit 1 ;;
+esac
+STUB
+  chmod +x "$stub_dir/dcctl"
+  baseline_dcctl="$stub_dir/dcctl"
+  # Run in a subshell, because fail exits: "args=..." is printed only when the function
+  # RETURNED, so a run it ended reads ENDED, never as an empty (no-store) answer.
+  for case in "store|args=--object-store filesystem" "nostore|args=" "sizeonly|args=" \
+    "notflags|ENDED" "failed|ENDED"; do
+    want="${case#*|}"
+    got="$(HELP_KIND="${case%%|*}" bash -c "set -euo pipefail
+      $(declare -f fail_code fail say note baseline_object_store_args)
+      $(declare -p baseline_dcctl baseline_tag)
+      baseline_object_store_args; echo \"args=\${object_store_args[*]:-}\"" 2>/dev/null | grep '^args=' || true)"
+    [[ "${got:-ENDED}" == "$want" ]] ||
+      fail "SELF-TEST FAILED: baseline_object_store_args over help '${case%%|*}' gave '${got:-ENDED}', want '$want'"
+  done
+  baseline_dcctl="$saved_dcctl"
+  rm -rf "$stub_dir"
+  note "a baseline whose bootstrap takes --object-store is asked for the filesystem store; an unreadable flag list ends the run"
+
+  # 🔴 THE CALL SITES, which is where the failure this exists for actually happened: the
+  # flag was always there to pass, and the install simply did not pass it. Every baseline
+  # bootstrap carries the array, and both seeds that can write update-assignment are
+  # preceded by the edit that lets them.
+  local up_body sweep_body boots carrying
+  up_body="$(declare -f cmd_up)"
+  boots="$(grep -c 'bootstrap local' <<<"$up_body" || true)"
+  carrying="$(grep 'bootstrap local' <<<"$up_body" | grep -c 'object_store_args' || true)"
+  [[ "$boots" -ge 1 && "$carrying" == "$boots" ]] ||
+    fail "SELF-TEST FAILED: $carrying of cmd_up's $boots baseline bootstrap(s) pass object_store_args. A
+bootstrap without it lands on dcctl's no-store default on this rig's cluster, and the
+baseline seed is then refused at its first artifact"
+  sweep_body="$(declare -f cmd_tablesweep)"
+  local body name
+  for name in cmd_up cmd_tablesweep; do
+    body="$up_body"
+    [[ "$name" == cmd_up ]] || body="$sweep_body"
+    [[ "$body" == *allow_unverified_artifacts*'" seed '* ]] ||
+      fail "SELF-TEST FAILED: $name does not let update-management assign an unverified artifact before it
+seeds, so the seed's update-assignment is refused on every baseline that ships the area"
+  done
+  note "every baseline bootstrap asks for the store, and both seeds are preceded by the assignment edit"
+
+  # The document edit keeps what was there and adds the one setting. The empty document
+  # is the real case (the chart renders "{}" for an area with no override); the second
+  # proves a setting already present survives rather than being replaced.
+  local doc
+  for case in '{}|{"updates":{"allowUnverifiedArtifacts":true}}' \
+    '{"updates":{"maxArtifactBytes":5}}|{"updates":{"maxArtifactBytes":5,"allowUnverifiedArtifacts":true}}' \
+    '{"rdbConfiguration":{"x":1}}|{"rdbConfiguration":{"x":1},"updates":{"allowUnverifiedArtifacts":true}}'; do
+    doc="${case%%|*}" want="${case#*|}"
+    got="$(allow_unverified_artifacts_doc <<<"$doc")"
+    [[ "$(jq -cS . <<<"$got")" == "$(jq -cS . <<<"$want")" ]] ||
+      fail "SELF-TEST FAILED: allow_unverified_artifacts_doc turned '$doc' into '$got', want '$want'"
+  done
+  ! got="$(allow_unverified_artifacts_doc <<<'"not an object"' 2>/dev/null)" ||
+    fail "SELF-TEST FAILED: allow_unverified_artifacts_doc accepted a non-object document and produced '$got'"
+  note "the assignment edit adds the one setting and keeps the rest"
 }
 
 # selftest_superuser_password covers how the drill decides which password the baseline
