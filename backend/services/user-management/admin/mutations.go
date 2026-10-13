@@ -20,9 +20,9 @@ import (
 // Admin control-plane errors. Sentinels so the resolver layer (or a future error
 // mapper) can distinguish them without string matching.
 var (
-	ErrIdentityNotFound   = errors.New("identity not found")
-	ErrMembershipNotFound = errors.New("membership not found")
-	ErrTenantNotFound     = errors.New("tenant not found")
+	ErrIdentityNotFound   = rdb.NewNotFound("identity not found")
+	ErrMembershipNotFound = rdb.NewNotFound("membership not found")
+	ErrTenantNotFound     = rdb.NewNotFound("tenant not found")
 	// ErrAlreadyMember is a uniqueness conflict (one membership per identity and
 	// tenant), so it carries extensions.code CONFLICT. dcctl's sim flow tolerates that
 	// code on a re-run, which is what makes adding the membership idempotent.

@@ -218,6 +218,11 @@ translated, so a text selector would break the `es` run). The attributes are ine
 - **Page-specific anchors** (`data-shot="device-new-button"`) go on an element only when a
   recipe must open something no primitive covers. Prefer an existing `data-testid` where it
   already sits on the right element.
+- **More primitives:** `data-shot="combobox"` on a Combobox / MultiSelect trigger with
+  `data-shot="combobox-option"` + `data-shot-value` on each option (a recipe picks by VALUE, not
+  translated text); `data-shot-option={value}` on each SegmentedControl option;
+  `data-shot-pii` on anything that shows an operator's e-mail address (always painted over,
+  whatever the recipe).
 - **`data-shot-mask`** marks a region whose content moves on its own (a live time, a live
   reading, a connectivity status). A recipe that sets `mask: true` paints over every one.
 - **Ids are stable.** Renaming an anchor means renaming it in `hack/guide-capture/recipes.ts`

@@ -248,7 +248,7 @@ function FacetAxis({
   const isMulti = state.operator === 'eq' && facet.valueType === 'STRING' && vocab.length > 0;
 
   return (
-    <div className="rounded-lg border border-border p-3">
+    <div className="rounded-lg border border-border p-3" data-shot="facet-axis" data-shot-for={facet.key}>
       <div className="mb-2 flex items-center justify-between gap-2">
         <span className="flex items-center gap-2 text-sm font-medium text-foreground">
           {facet.label || facet.key}
@@ -256,7 +256,7 @@ function FacetAxis({
         </span>
       </div>
       <div className="flex flex-wrap items-center gap-2">
-        <div className="w-40">
+        <div className="w-40" data-shot="facet-operator">
           <Combobox
             value={state.operator}
             onChange={(v) => onChange({ operator: v as ConditionState['operator'], values: [] })}
@@ -266,7 +266,7 @@ function FacetAxis({
         </div>
         {needsValue &&
           (isMulti ? (
-            <div className="min-w-52 flex-1">
+            <div className="min-w-52 flex-1" data-shot="facet-value">
               <MultiSelect
                 options={vocab.map((v) => ({ value: v, label: v }))}
                 value={state.values}
@@ -382,7 +382,7 @@ function PreviewPanel({
                   {t('matchCount', { count: total })}
                 </p>
                 {canSave && (
-                  <Button size="sm" onClick={onSave} disabled={pending}>
+                  <Button size="sm" onClick={onSave} disabled={pending} data-shot="save-group-button">
                     <Plus size={15} /> {t('saveAsGroup')}
                   </Button>
                 )}

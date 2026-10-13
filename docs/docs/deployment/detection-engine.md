@@ -305,7 +305,7 @@ completes or the next session closes with the condition no longer true, which ma
 **The intended pattern is to pair such a rule with an absence rule**, so a device that stops
 reporting raises a distinct, actionable signal rather than leaving a stale one standing.
 
-Three more causes worth checking:
+Four more causes worth checking:
 
 - **An operator "clear" does not remove the underlying condition.** If the condition is still true,
   the next event re-activates the same alarm. Clearing is an acknowledgement that you have seen it,
@@ -315,6 +315,11 @@ Three more causes worth checking:
 - **The rule that raised it no longer runs.** A rule that is skipped at load — the profile's
   **Rule Health** tab shows it as a compile error — is not evaluated, so nothing resolves the alarm
   it raised before. Clear the alarm by hand once you have fixed or retired the rule.
+- **A silence (absence) alarm that is still raised after the device or rule changed.** Unlike the
+  rule kinds above, an absence alarm is cleared for you when its device leaves the rule's scope: the
+  device is disabled, deleted or moved to a device type with a different profile, or a republish removes the
+  rule. A republish that **keeps** the rule leaves the alarm raised, with its acknowledgement, rather
+  than clearing it and raising it again when the new silence window ends.
 
 ## A rule that is not firing
 

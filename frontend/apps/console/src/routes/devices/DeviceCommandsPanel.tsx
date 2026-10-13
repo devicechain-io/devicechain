@@ -241,6 +241,7 @@ export function DeviceCommandsPanel({ deviceToken }: { deviceToken: string }) {
               label={t('commandLabel')}
               description={t('commandHint')}
             >
+              <div data-shot="command-picker">
               <Combobox
                 options={publishedCommands.map((c) => ({
                   value: c.commandKey,
@@ -251,6 +252,7 @@ export function DeviceCommandsPanel({ deviceToken }: { deviceToken: string }) {
                 onChange={setSelectedKey}
                 placeholder={t('selectCommand')}
               />
+              </div>
             </FormField>
             {selected && needsRawPayload ? (
               <FormField
@@ -341,7 +343,7 @@ export function DeviceCommandsPanel({ deviceToken }: { deviceToken: string }) {
           <DataTableBody>
             {commands.map((command) => (
               <DataTableRow key={command.id}>
-                <DataTableCell className="whitespace-nowrap text-muted-foreground">
+                <DataTableCell className="whitespace-nowrap text-muted-foreground" data-shot-mask>
                   {formatTime(command.queuedTime)}
                 </DataTableCell>
                 <DataTableCell className="font-medium text-foreground">

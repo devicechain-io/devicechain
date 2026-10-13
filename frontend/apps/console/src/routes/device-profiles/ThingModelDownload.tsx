@@ -56,6 +56,7 @@ export function ThingModelDownload({
       variant="ghost"
       size="sm"
       onClick={download}
+      data-shot="thing-model-download"
       loading={busy}
       aria-label={t('thingModelDownloadLabel', { version })}
     >

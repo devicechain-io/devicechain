@@ -22,7 +22,7 @@ import (
 // distinguish the failure modes without string matching.
 var (
 	// ErrClaimNotFound means the device has no claim row at all.
-	ErrClaimNotFound = errors.New("device has no claim")
+	ErrClaimNotFound = rdb.NewNotFound("device has no claim")
 	// ErrClaimNotOpen means the device's claim is not open (already redeemed or
 	// canceled) and cannot be redeemed.
 	ErrClaimNotOpen = errors.New("device claim is not open")

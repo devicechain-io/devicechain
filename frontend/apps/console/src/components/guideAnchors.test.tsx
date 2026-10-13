@@ -7,7 +7,7 @@
 // the right element (e.g. a drawer is "drawer", not "sheet"). See CONVENTIONS.md.
 
 import '@/i18n/config';
-import { cleanup, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
 import { useEffect } from 'react';
 
@@ -19,6 +19,9 @@ import { ConfirmProvider, useConfirm } from '@/components/ui/confirm-dialog';
 import { EmptyState } from '@/components/ui/empty-state';
 import { ErrorState } from '@/components/ui/error-state';
 import { LoadingState } from '@/components/ui/loading-state';
+import { Combobox } from '@/components/ui/combobox';
+import { MultiSelect } from '@/components/ui/multi-select';
+import { SegmentedControl } from '@/components/ui/segmented-control';
 
 afterEach(() => cleanup());
 
@@ -99,6 +102,26 @@ describe('guide anchors on the shared primitives', () => {
     );
     expect(await screen.findByText('Sure?')).toBeTruthy();
     expect(document.querySelectorAll('[data-shot="confirm"]')).toHaveLength(1);
+  });
+
+  it('a Combobox marks its trigger, and each option carries its value once it is open', () => {
+    render(<Combobox options={[{ value: 'a', label: 'Alpha' }, { value: 'b', label: 'Beta' }]} value="" onChange={() => {}} />);
+    const trigger = document.querySelector('[data-shot="combobox"]');
+    expect(trigger).not.toBeNull();
+    fireEvent.click(trigger!);
+    const options = [...document.querySelectorAll('[data-shot="combobox-option"]')];
+    expect(options.map((o) => o.getAttribute('data-shot-value'))).toEqual(['a', 'b']);
+  });
+
+  it('a MultiSelect marks its trigger and options the same way', () => {
+    render(<MultiSelect options={[{ value: 'x', label: 'Ex' }]} value={[]} onChange={() => {}} />);
+    fireEvent.click(document.querySelector('[data-shot="combobox"]')!);
+    expect(document.querySelector('[data-shot="combobox-option"]')?.getAttribute('data-shot-value')).toBe('x');
+  });
+
+  it('a SegmentedControl option carries its value as data-shot-option', () => {
+    render(<SegmentedControl ariaLabel="mode" value="form" onValueChange={() => {}} options={[{ value: 'form', label: 'Form' }, { value: 'canvas', label: 'Canvas' }]} />);
+    expect([...document.querySelectorAll('[data-shot-option]')].map((o) => o.getAttribute('data-shot-option'))).toEqual(['form', 'canvas']);
   });
 
   it('the shared state components mark themselves empty / error / loading', () => {

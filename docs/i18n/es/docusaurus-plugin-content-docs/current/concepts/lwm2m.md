@@ -9,7 +9,7 @@ Las flotas restringidas y celulares suelen hablar [**OMA LwM2M**](https://lwm2m.
 La ingesta Sparkplug se conecta hacia *tu* broker. LwM2M funciona al revés: los dispositivos se conectan **hacia dentro**, al endpoint CoAP asegurado de DeviceChain, con la misma forma que la ruta MQTT estándar.
 
 :::note Estado
-La ingesta LwM2M está disponible como servicio opcional (opt-in) sobre CoAP/UDP con DTLS-PSK. Impulsa la [presencia de dispositivo](./device-presence.md) autoritativa, ingiere los objetos de sensor observados como mediciones y envía comandos Read/Write/Execute en sentido descendente (downlink), con retención y drenaje durables para dispositivos dormidos. La decodificación de Notify es **solo SenML-JSON**, así que un cliente solo LwM2M 1.0 obtiene presencia y comandos, pero ninguna medición hasta que llegue la decodificación TLV. El alcance de la disponibilidad general (GA) son las credenciales PSK; X.509 / clave pública sin procesar y un servidor Bootstrap están planeados.
+La ingesta LwM2M está disponible como servicio opcional (opt-in) sobre CoAP/UDP con DTLS-PSK. Impulsa la [presencia de dispositivo](./device-presence.md) autoritativa, ingiere los objetos de sensor observados como mediciones y envía comandos Read/Write/Execute en sentido descendente (downlink), con retención y drenaje durables para dispositivos dormidos. Reiniciar y leer la información del dispositivo están disponibles [por nombre](#named-operations-and-device-information), y el fabricante, el modelo, el número de serie, la versión de firmware y el nivel de batería de cada dispositivo se leen cuando se registra y se guardan como atributos. La decodificación de Notify es **solo SenML-JSON**, así que un cliente solo LwM2M 1.0 obtiene presencia y comandos, pero ninguna medición hasta que llegue la decodificación TLV. El alcance de la disponibilidad general (GA) son las credenciales PSK; X.509 / clave pública sin procesar y un servidor Bootstrap están planeados.
 :::
 
 ## Qué hace
@@ -48,7 +48,7 @@ Hoy solo se decodifican las notificaciones en **SenML-JSON**, y conviene que lo 
 
 Los comandos de la plataforma se convierten en operaciones LwM2M de **Read / Write / Execute** sobre los recursos del dispositivo.
 
-Una actualización de firmware se impulsa de la misma manera, como una secuencia que ejecuta el operador y no como una única operación de la plataforma. Eres tú quien emite los Write y el Execute contra el objeto estándar Firmware Update, como comandos ordinarios. DeviceChain mantiene los comandos de un mismo dispositivo en el orden en que los encolaste, así que un write de firmware y su execute nunca pueden reordenarse. No modela la actualización como un único trabajo gestionado.
+Una actualización de firmware se impulsa de la misma manera, como una secuencia que ejecuta el operador y no como una única operación de la plataforma. Eres tú quien emite los Write y el Execute contra el objeto estándar Firmware Update, como comandos ordinarios. DeviceChain mantiene los comandos de un mismo dispositivo en el orden en que los encolaste, así que un write de firmware y su execute nunca pueden reordenarse. No modela la actualización como un único trabajo gestionado, y las [actualizaciones por aire (OTA)](./over-the-air-updates.md) de la plataforma no llegan a los dispositivos LwM2M.
 
 Cuando un dispositivo tarda en responder y sus comandos se acumulan, los siguientes comandos para él se apartan y se entregan momentos después, todavía en orden. Un dispositivo lento no retrasa los comandos de los demás.
 
@@ -59,7 +59,7 @@ Un comando para un dispositivo que está dormido se **retiene de forma durable y
 
 En cualquier caso, la plataforma sigue teniendo el comando en su poder, así que todavía puedes cancelarlo. Si su tiempo de vida se agota antes, el registro dice que nunca llegó a un dispositivo en lugar de culpar al dispositivo por no responder.
 
-### Operaciones con nombre e información del dispositivo
+### Operaciones con nombre e información del dispositivo {#named-operations-and-device-information}
 
 Dos operaciones estándar del objeto Device están disponibles por nombre, para que nadie tenga que escribir `/3/0/4`:
 

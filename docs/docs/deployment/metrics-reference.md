@@ -126,7 +126,7 @@ it is stale while `detect_is_leader` and `detect_live` both read 1, the loop is 
 | `detect_loop_heartbeat_timestamp_seconds` | Unix time of the last pass of the DETECT single-writer loop, refreshed at least once per tick while a term is live. Stale while detect_is_leader and detect_live read 1 means the loop is hung inside a call. |
 | `detect_restore_seconds` | Time to restore engine state from the snapshot store at startup. |
 | `detect_rules_active` | Rules loaded into the DETECT engine. |
-| `detect_stale_absence_dropped_total` | Absence detections dropped at publish because the device left the rule's scope: it was deleted, re-typed, or the rule version was superseded. |
+| `detect_stale_absence_dropped_total` | Absence **raises** dropped at publish because the device left the rule's scope: it was deleted, disabled, re-typed, or the rule version was superseded. It also counts a raise's paired clear when that raise was dropped in the same pass, and the clear a republish withholds because the new version keeps the rule. The clear for a device that has left scope is not dropped, so the alarm it raised is cleared. |
 | `detect_superseded_frontier_dropped_total` | Detections of the duration, session and aggregate kinds that fire from the passage of time, dropped at publish because their profile version has been superseded. |
 | `detect_tenants_over_live_key_budget` | Tenants currently exceeding the per-tenant live-key budget. |
 | `detect_tenants_over_retained_sample_budget` | Tenants currently exceeding the per-tenant retained-sample budget. |

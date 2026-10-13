@@ -16,8 +16,11 @@ with deadlines.
 
 **Not yet:** nothing authenticates **who produced** an artifact (the platform checks only that the
 bytes are the bytes that were declared), so assigning one must be allowed explicitly; there is no
-fleet rollout (staged or percentage-based assignment across many devices); and devices that speak
-only HTTP cannot receive updates, because assignments travel on the device's MQTT channel.
+fleet rollout (staged or percentage-based assignment across many devices); there are no console
+screens for updates, so you use GraphQL and the HTTP upload; and devices that speak only HTTP
+cannot receive updates, because assignments travel on the device's MQTT channel. For the same reason
+[LwM2M](./lwm2m.md) and [Sparkplug](./sparkplug.md) devices cannot receive them either; an LwM2M
+device's firmware is driven with ordinary commands instead.
 :::
 
 ## Turning it on {#enabling}

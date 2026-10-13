@@ -498,7 +498,7 @@ export function DashboardWorkspace({
   );
 
   const historyButton = (
-    <Button variant="outline" size="sm" onClick={() => setHistoryOpen(true)}>
+    <Button variant="outline" size="sm" onClick={() => setHistoryOpen(true)} data-shot="dashboard-history">
       <History size={14} /> {t('workspaceHistory')}
     </Button>
   );
@@ -533,7 +533,7 @@ export function DashboardWorkspace({
   const exportMenu = (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button variant="outline" size="sm">
+        <Button variant="outline" size="sm" data-shot="dashboard-export">
           <Download size={14} /> {t('workspaceExport')}
         </Button>
       </DropdownMenuTrigger>
@@ -565,6 +565,7 @@ export function DashboardWorkspace({
         variant={preview ? 'default' : 'outline'}
         size="sm"
         aria-pressed={preview}
+        data-shot="dashboard-preview"
         onClick={() => setPreview((p) => !p)}
         title={t('workspacePreviewHint')}
       >
@@ -582,7 +583,7 @@ export function DashboardWorkspace({
       {previewControl}
       {exportMenu}
       {historyButton}
-      <Button variant="outline" size="sm" onClick={toggleMode} disabled={!canEdit}>
+      <Button variant="outline" size="sm" onClick={toggleMode} disabled={!canEdit} data-shot="dashboard-edit">
         {t('workspaceEdit')}
       </Button>
       <Button variant="destructive" size="sm" onClick={remove} disabled={!canEdit}>

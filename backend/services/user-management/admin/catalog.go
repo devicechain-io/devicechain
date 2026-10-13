@@ -32,11 +32,11 @@ import (
 // removing the memberships is what revokes access), but it is still "removes a record
 // other records still refer to", so it carries the same code.
 var (
-	ErrRoleNotFound         = errors.New("role not found")
+	ErrRoleNotFound         = rdb.NewNotFound("role not found")
 	ErrProtectedRole        = errors.New("the superuser system role cannot be deleted")
 	ErrTenantHasMemberships = integrity.NewRefusal(integrity.ClassReference, "tenant still has memberships; remove them first")
 	ErrRoleInUseByMapping   = integrity.NewRefusal(integrity.ClassReference, "role is still mapped from an identity provider group; remove the mapping first")
-	ErrTierNotFound         = errors.New("tenant tier not found")
+	ErrTierNotFound         = rdb.NewNotFound("tenant tier not found")
 	ErrTierInUse            = integrity.NewRefusal(integrity.ClassReference, "tenant tier still has tenants; move them to another tier first")
 	ErrUnknownTierColor     = errors.New("unknown tier color (must be a palette token or empty)")
 

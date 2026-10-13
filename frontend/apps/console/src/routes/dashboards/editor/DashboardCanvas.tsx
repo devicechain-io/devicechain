@@ -165,7 +165,7 @@ export function DashboardCanvas({
                   `inert` removes it from pointer AND keyboard/focus, so an action widget's
                   controls (alarm Ack/Clear) can't fire a real mutation via Tab+Enter mid-
                   layout — pointer-events alone wouldn't stop keyboard activation. */}
-              <div inert style={{ width: '100%', height: '100%', pointerEvents: 'none' }}>
+              <div inert data-shot="dashboard-widget" style={{ width: '100%', height: '100%', pointerEvents: 'none' }}>
                 {/* Same resolved-entity subtitle the viewer shows, so the widget's frame
                     (and hence its body height) is WYSIWYG between editing and viewing.
                     Read from the selector the widget subscribes with — edit mode has no

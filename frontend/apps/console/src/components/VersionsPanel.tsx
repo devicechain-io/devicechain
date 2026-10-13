@@ -180,7 +180,7 @@ export function VersionsPanel<V extends PublishedVersion>({
           {copy.notice && <p className="text-amber-600 dark:text-amber-500">{copy.notice}</p>}
         </div>
         {canWrite && (
-          <Button size="sm" onClick={() => setPublishing(true)} className="shrink-0">
+          <Button size="sm" onClick={() => setPublishing(true)} className="shrink-0" data-shot="version-publish-button">
             <Rocket size={16} /> {t('versions:publishButton')}
           </Button>
         )}
@@ -268,7 +268,7 @@ export function VersionsPanel<V extends PublishedVersion>({
                 <DataTableCell className="whitespace-nowrap text-muted-foreground">
                   {fmtTime(v.publishedAt)}
                 </DataTableCell>
-                <DataTableCell className="text-muted-foreground">
+                <DataTableCell className="text-muted-foreground" data-shot-pii>
                   {v.publishedBy || '—'}
                 </DataTableCell>
                 {hasActions && (
@@ -279,6 +279,7 @@ export function VersionsPanel<V extends PublishedVersion>({
                         variant="ghost"
                         size="sm"
                         onClick={() => doRollback(v.version)}
+                        data-shot="version-rollback"
                         loading={rolling.has(v.version)}
                         disabled={v.version === activeVersion}
                       >

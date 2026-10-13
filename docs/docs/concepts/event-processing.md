@@ -155,6 +155,8 @@ Alarms surface live in two places without any extra wiring:
 - The console **Alarms** view — a live, tenant-wide list, filterable and acknowledgeable in place, with an **Export CSV** button that saves every alarm matching the current filter (up to 10,000 rows) rather than only the visible page.
 - **Dashboard widgets** — a live **alarm table** and an **alarm count** widget (see [Dashboards](./dashboards.md)), including **acknowledge/clear actions** that the server authorizes against the operator's own rights.
 
+The **Export CSV** button is not specific to alarms. The console's **Devices** list (every device), the tenant **Audit** page and **Admin → Audit** have it too, and so does a [command batch's detail page](../guides/commanding-a-fleet.md#follow-the-commands-it-created). Each export is capped at 10,000 rows. Because a device name, an alarm key or an audit actor can be set by someone other than the person opening the file, every text cell that begins with `=`, `+`, `-`, `@`, a tab or a carriage return is written with a leading `'`, so a spreadsheet shows it as text instead of running it as a formula. A cell that is only a plain number, such as `-12.5`, is left as it is.
+
 Both are fed by live subscriptions, so state changes appear as they happen.
 
 A profile's own editor also shows **rule health** — per-rule status, last-fired time, and fire count — alongside a **live feed** of detections as they occur. You can confirm a newly published rule is behaving before it ever raises an alarm.

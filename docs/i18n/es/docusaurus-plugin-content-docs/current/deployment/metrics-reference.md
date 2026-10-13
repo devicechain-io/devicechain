@@ -132,7 +132,7 @@ está bloqueado dentro de una llamada.
 | `detect_loop_heartbeat_timestamp_seconds` | Hora Unix de la última pasada del bucle de escritor único de DETECT, refrescada al menos una vez por ciclo mientras hay un turno activo. Obsoleta mientras detect_is_leader y detect_live marcan 1 significa que el bucle está bloqueado dentro de una llamada. |
 | `detect_restore_seconds` | Tiempo para restaurar el estado del motor desde el almacén de instantáneas al arrancar. |
 | `detect_rules_active` | Reglas cargadas en el motor DETECT. |
-| `detect_stale_absence_dropped_total` | Detecciones de ausencia descartadas al publicar porque el dispositivo salió del alcance de la regla: se eliminó, se cambió de tipo, o la versión de la regla fue reemplazada. |
+| `detect_stale_absence_dropped_total` | **Activaciones** de ausencia descartadas al publicar porque el dispositivo salió del alcance de la regla: se eliminó, se deshabilitó, se cambió de tipo, o la versión de la regla fue reemplazada. También cuenta el cierre emparejado de una activación cuando esa activación se descartó en la misma pasada, y el cierre que una republicación retiene porque la nueva versión conserva la regla. El cierre de un dispositivo que salió del alcance no se descarta, así que la alarma que levantó se cierra. |
 | `detect_superseded_frontier_dropped_total` | Detecciones de los tipos duración, sesión y agregado, que se disparan por el paso del tiempo, descartadas al publicar porque su versión de perfil ha sido reemplazada. |
 | `detect_tenants_over_live_key_budget` | Inquilinos que superan actualmente el presupuesto de claves vivas por inquilino. |
 | `detect_tenants_over_retained_sample_budget` | Inquilinos que superan actualmente el presupuesto de muestras retenidas por inquilino. |

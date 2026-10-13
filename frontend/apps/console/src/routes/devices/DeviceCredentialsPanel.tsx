@@ -315,7 +315,7 @@ export function DeviceCredentialsPanel({ deviceToken }: { deviceToken: string })
                 </DataTableCell>
                 <DataTableCell>
                   <div className="flex items-center gap-1.5">
-                    <span className="font-mono text-xs text-foreground">{c.credentialId}</span>
+                    <span className="font-mono text-xs text-foreground" data-shot-mask={c.credentialType === 'ACCESS_TOKEN' || undefined}>{c.credentialId}</span>
                     <IconButton
                       label={t('copyIdAriaLabel')}
                       variant="quiet"
@@ -333,6 +333,7 @@ export function DeviceCredentialsPanel({ deviceToken }: { deviceToken: string })
                           <div className="flex gap-2">
                             <Input
                               type="password"
+                              data-shot="credential-new-password"
                               aria-label={t('newPasswordLabel')}
                               value={newSecret}
                               onChange={(e) => setNewSecret(e.target.value)}
@@ -355,7 +356,7 @@ export function DeviceCredentialsPanel({ deviceToken }: { deviceToken: string })
                           )}
                           <p className="text-xs text-muted-foreground">{t('rotateWarning')}</p>
                           <div className="flex gap-2">
-                            <Button size="sm" onClick={() => rotate(c)} loading={rotatingBusy} disabled={rotatingBusy}>
+                            <Button size="sm" onClick={() => rotate(c)} data-shot="credential-rotate-save" loading={rotatingBusy} disabled={rotatingBusy}>
                               {t('savePassword')}
                             </Button>
                             <Button
@@ -388,7 +389,7 @@ export function DeviceCredentialsPanel({ deviceToken }: { deviceToken: string })
                 </DataTableCell>
                 <DataTableCell className="text-right">
                   {c.credentialType === 'MQTT_BASIC' && rotating !== c.token && (
-                    <Button variant="outline" size="sm" className="mr-2" onClick={() => startRotate(c)}>
+                    <Button variant="outline" size="sm" className="mr-2" onClick={() => startRotate(c)} data-shot="credential-rotate">
                       <KeyRound size={13} /> {t('setNewPassword')}
                     </Button>
                   )}

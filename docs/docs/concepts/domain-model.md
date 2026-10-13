@@ -61,7 +61,8 @@ Every published version of a device profile can be exported as a [W3C Web of Thi
 
 - Each **metric** becomes a read-only, observable **property** named by its metric key. Its data type becomes the property's type (`DOUBLE` → `number`, `INT` → `integer`, `BOOLEAN` → `boolean`, `STRING` → `string`), and its unit, minimum, maximum and allowed values are carried over. A metric's **descriptor** becomes the property's `@type`, so a semantic tag such as `saref:Temperature` reaches tools that understand it.
 - Each **command** becomes an **action** named by its command key. Its parameters become the action's `input`: an object schema with one property per parameter, typed the same way, nested parameters as nested objects, and the required ones listed as required.
-- The model's `version.model` is the profile version number. A version never changes once published, so neither does its model.
+- The model's `version.model` is the profile version number. The metrics and commands come from the published version, which never changes, but the model's `title` and `description` are the profile's **current** name and description, so exporting the same version after the profile is renamed gives a different title.
+- A version that declares a constraint a Thing Model cannot express is **refused**, not exported without the constraint. Numeric bounds on a property that is not numeric, allowed values that are not a list of distinct text values, and allowed values that cannot be written in the property's type are examples. The refusal names the metric or command, so you can correct it in a new version.
 
 In the console, open the profile's **Versions** tab and choose **WoT Thing Model** on a version to download it. Through GraphQL, select `thingModel` on a profile version; it is the JSON-LD as text:
 

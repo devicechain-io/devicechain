@@ -267,7 +267,7 @@ export function CancelBatchButton({ state }: { state: BatchCancelState }) {
   const { t } = useTranslation('commandBatches');
   if (!state.canCancel) return null;
   return (
-    <Button variant="destructive" onClick={state.cancel} loading={state.busy} disabled={state.busy}>
+    <Button variant="destructive" onClick={state.cancel} loading={state.busy} disabled={state.busy} data-shot="batch-cancel">
       {/* Named for what pressing it does NOW. On a stamped batch this is not the first
           cancellation and must not offer itself as one — "Cancel batch" there reads as an
           action with no effect, which is exactly the reading that got the header hidden in
