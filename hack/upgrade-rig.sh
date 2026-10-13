@@ -1134,8 +1134,8 @@ rig_areas() {
 # really runs are stated, apiprobe skips the rest BY NAME in the seed, the read sweep and
 # the table sweep, and the table sweep fails if the database holds a table of an area
 # declared undeployed. Coverage of the artifact table begins with the first baseline that
-# ships the area -- and the object store that area writes to is asked for at bootstrap,
-# where an operator asks for it too (see baseline_object_store_args).
+# ships the area -- and the object store that area writes to is dcctl's own default, which the
+# rig gets by naming its cluster the way a default install does (see choose_cluster_target).
 set_deployed_areas() {
   local csv="" area
   while read -r area; do
@@ -1146,45 +1146,72 @@ set_deployed_areas() {
   deployed_areas="$csv"
 }
 
-# baseline_object_store_args sets object_store_args to the object-store flags the baseline's
-# bootstrap is given: `--object-store filesystem` when its dcctl has the flag, none when it
-# predates the object store. (A global, for the reason set_deployed_areas gives.)
+# HOW EVERY dcctl CALL NAMES THIS RIG'S CLUSTER, decided once by `up` and read by every
+# later phase from $cluster_target_file. Two answers:
 #
-# 🔴 WHY THE RIG MUST ASK, WHEN A DEFAULT INSTALL GETS A STORE WITHOUT ASKING. dcctl's
-# default is a small filesystem store on a cluster dcctl CREATED and no store on a cluster
-# it was pointed at with --kube-context (bootstrap.DefaultsToFilesystemObjectStore). This
-# rig creates its own kind cluster (create_cluster: it needs the port mappings in
-# $kind_config) and points dcctl at it, so it lands on the second default: "object store:
-# none". Every artifact create is then refused, and the baseline seed dies before anything
-# is upgraded. Asking for the filesystem store is what puts the instance where
-# `dcctl install local` + `dcctl bootstrap local` leave an operator who did not pass
-# --kube-context. The store is recorded on the Instance declaration, so `dcctl upgrade`
-# keeps it rather than the rig having to re-assert it. (One node, so the volume's
-# ReadWriteOnce is no obstacle to the two areas that mount it.)
+#   cluster       --cluster $cluster on install/bootstrap; NOTHING on upgrade/destroy, which
+#                 then find the instance where bootstrap recorded it -- the documented
+#                 operator procedure, word for word.
+#   kube-context  --kube-context $kube_context everywhere (a baseline older than --cluster).
 #
-# Asked of the BINARY'S help rather than of a version number, the way the install/bootstrap
-# split is asked of the extracted tree: the flag is the interface, and a baseline that
-# predates it would refuse it. An answer that cannot be read ENDS the run instead of being
-# taken as "no flag": a missing store is a refusal several minutes later that names the
-# store and not this function.
-object_store_args=()
-baseline_object_store_args() {
-  local help
+# 🔴 WHY IT MATTERS: THE OBJECT STORE. dcctl gives an instance a small filesystem object
+# store by default only on the kind cluster it names by convention (`kind-<cluster>`,
+# created or REUSED -- bootstrap.ClusterBinding.Managed); on a cluster it was pointed at
+# with --kube-context the default is no store at all. And that store is only valid on its
+# own cluster: user-management and update-management both mount it, and the chart refuses
+# a ReadWriteOnce claim shared by two pods unless dcctl pins them to one node, which it does
+# for its own cluster only. So a rig that points dcctl at its cluster by context installs a
+# baseline with no object store, every artifact create is refused, and the drill dies in
+# the baseline seed; asking for `--object-store filesystem` on top of that is refused by
+# the chart instead. Naming the cluster puts the instance exactly where a developer's
+# `kind create cluster` + `dcctl install local` + `dcctl bootstrap local` puts it, with
+# dcctl's own defaults -- which is what the drill should be upgrading. The binding is
+# immutable once recorded, so every later call has to agree with it, hence one decision.
+#
+# Asked of the baseline BINARY'S help, the way the install/bootstrap split is asked of the
+# extracted tree. An answer that cannot be read ENDS the run rather than counting as "no
+# flag": that would quietly move the drill onto a cluster binding with no object store.
+cluster_target_file="$work/cluster-target"
+choose_cluster_target() {
+  local help mode
   help="$("$baseline_dcctl" bootstrap --help 2>&1)" ||
-    fail "$baseline_tag's 'dcctl bootstrap --help' failed, so whether it can be given an object store is unknown:
+    fail "$baseline_tag's 'dcctl bootstrap --help' failed, so how to name the cluster to it is unknown:
 $help"
-  # The control: a flag every baseline's bootstrap has had, and one this rig passes. Help
-  # text without it is not a flag list, and "no --object-store in it" would mean nothing.
+  # The control: a flag every baseline's bootstrap has had. Help text without it is not a
+  # flag list, and "no --cluster in it" would then mean nothing.
   grep -Eq -- '^[[:space:]]*--kube-context[[:space:]]' <<<"$help" ||
     fail "$baseline_tag's 'dcctl bootstrap --help' lists no --kube-context flag, so it is not the flag list
-this rig reads; whether it can be given an object store is unknown"
-  object_store_args=()
-  if grep -Eq -- '^[[:space:]]*--object-store[[:space:]]' <<<"$help"; then
-    object_store_args=(--object-store filesystem)
-    note "$baseline_tag's bootstrap takes --object-store: asking for the filesystem store a default install gets"
+this rig reads; how to name the cluster to it is unknown"
+  if grep -Eq -- '^[[:space:]]*--cluster[[:space:]]' <<<"$help"; then
+    mode=cluster
+    note "$baseline_tag's dcctl names kind clusters (--cluster): binding to $cluster as a default install does"
   else
-    note "$baseline_tag's bootstrap has no --object-store flag: it predates the object store, so there is none to ask for"
+    mode=kube-context
+    note "$baseline_tag's dcctl predates --cluster: pointing it at $kube_context"
   fi
+  printf '%s\n' "$mode" >"$cluster_target_file"
+}
+
+# load_cluster_target sets install_target (install, bootstrap) and instance_target
+# (upgrade, destroy) from the decision `up` recorded. Globals, as set_deployed_areas.
+install_target=()
+instance_target=()
+load_cluster_target() {
+  local mode
+  [[ -s "$cluster_target_file" ]] ||
+    fail "no $cluster_target_file: 'up' records how the cluster is named, and nothing after it may guess"
+  mode="$(<"$cluster_target_file")"
+  case "$mode" in
+    cluster)
+      install_target=(--cluster "$cluster")
+      instance_target=()
+      ;;
+    kube-context)
+      install_target=(--kube-context "$kube_context")
+      instance_target=(--kube-context "$kube_context")
+      ;;
+    *) fail "$cluster_target_file says '$mode', which is neither 'cluster' nor 'kube-context'" ;;
+  esac
 }
 
 # allow_unverified_artifacts_doc rewrites update-management's typed config document (stdin)
@@ -1277,7 +1304,7 @@ cmd_up() {
   chmod 700 "$work"
   # The marker from a previous session must not certify this one. See ran_file. The
   # infrastructure readings taken before the upgrade, likewise: see infra_before_file.
-  rm -f "$ran_file" "$infra_before_file" "$infra_inventory_before"
+  rm -f "$ran_file" "$infra_before_file" "$infra_inventory_before" "$cluster_target_file"
   build_apiprobe
   extract_baseline
   build_baseline_dcctl
@@ -1299,7 +1326,8 @@ cmd_up() {
   [[ ${#area_args[@]} -gt 0 ]] || fail "apiprobe named no functional areas; the seed would have nothing to write to"
 
   pin_baseline_charts
-  baseline_object_store_args
+  choose_cluster_target
+  load_cluster_target
 
   say "installing $baseline_tag with its own dcctl"
   note "areas beyond the default profile are requested explicitly: ${area_args[*]}"
@@ -1326,17 +1354,15 @@ cmd_up() {
     # the upgrade phase re-installs at the TARGET tag and `cmd_operator` measures that
     # the controller moved, which it cannot do if both ends were the same build.
     "$baseline_dcctl" install local --yes --compact \
-      --kube-context "$kube_context" --version "$baseline_tag"
+      "${install_target[@]}" --version "$baseline_tag"
     "$baseline_dcctl" bootstrap local "$instance" --yes \
-      --kube-context "$kube_context" --host localhost --no-escrow \
-      --version "$baseline_tag" "${area_args[@]}" \
-      ${object_store_args[@]+"${object_store_args[@]}"}
+      "${install_target[@]}" --host localhost --no-escrow \
+      --version "$baseline_tag" "${area_args[@]}"
   else
     note "$baseline_tag predates 'dcctl install': a single bootstrap provisions everything"
     "$baseline_dcctl" bootstrap local "$instance" --yes --compact \
-      --kube-context "$kube_context" --host localhost --no-escrow \
-      --version "$baseline_tag" "${area_args[@]}" \
-      ${object_store_args[@]+"${object_store_args[@]}"}
+      "${install_target[@]}" --host localhost --no-escrow \
+      --version "$baseline_tag" "${area_args[@]}"
   fi
 
   wait_for_every_api
@@ -1427,6 +1453,7 @@ resolve_upgrade_target() {
 cmd_upgrade() {
   need_all
   [[ -s "$receipt" ]] || fail "$receipt is missing or empty; run 'up' first"
+  load_cluster_target
   build_apiprobe
 
   # 🔴 THE DATA DRILL REFUSES TO RUN ON A BASELINE THE RELEASE DOES NOT UPGRADE ONTO,
@@ -1496,7 +1523,7 @@ $baseline_tag will actually meet."
   # of that comparison, which is why re-installing at the target tag is allowed.
   say "dcctl install → the cluster's operator and CRDs to $target_tag"
   "$target_dcctl" install local --yes --compact \
-    --kube-context "$kube_context" \
+    "${install_target[@]}" \
     --registry "$target_registry" --version "$target_tag" ||
     fail "THE CLUSTER INSTALL FAILED, before the instance was touched at all. This is a
 finding: an operator on $baseline_tag following the documented procedure types this
@@ -1506,7 +1533,7 @@ means it never became ready. Nothing was upgraded, so nothing below has run."
 
   say "dcctl upgrade → instance configuration and services to $target_tag"
   "$target_dcctl" upgrade local "$instance" \
-    --kube-context "$kube_context" \
+    ${instance_target[@]+"${instance_target[@]}"} \
     --registry "$target_registry" --version "$target_tag" ||
     fail "the upgrade itself FAILED. This is a finding: an operator on $baseline_tag
 running the documented procedure would see exactly this. Read the output above — it
@@ -1614,6 +1641,7 @@ baseline never installed one; neither is evidence about the refusal."
 cmd_recreate() {
   need_all
   [[ -s "$receipt" ]] || fail "$receipt is missing or empty; run 'up' first"
+  load_cluster_target
   build_apiprobe
   load_exit_codes
 
@@ -1648,7 +1676,7 @@ there is nothing for a refused upgrade to damage. Run 'up' first."
   # to the terminal is a measurement the drill cannot make. It is echoed afterwards so
   # the log still carries it.
   out="$("$target_dcctl" upgrade local "$instance" \
-    --kube-context "$kube_context" \
+    ${instance_target[@]+"${instance_target[@]}"} \
     --registry "$target_registry" --version "$target_tag" 2>&1)" || rc=$?
   printf '%s\n' "$out" | sed 's/^/    /'
 
@@ -3264,72 +3292,114 @@ commit-ish without the chart, or this check has quietly stopped checking."
 }
 
 # selftest_baseline_writable covers the two things a baseline that ships update-management
-# needs before the seed can write its rows: an object store asked for at bootstrap, and the
-# rig-only edit that lets an artifact be assigned. Both fail in the LOUD direction on a real
-# run (the seed is refused by name), but only after a cluster and several minutes, which is
-# why the decisions are pinned here.
+# needs before the seed can write its rows: the object store dcctl gives a cluster it names
+# (choose_cluster_target), and the rig-only edit that lets an artifact be assigned. Both
+# fail in the LOUD direction on a real run (a refusal by name), but only after a cluster
+# and several minutes, which is why the decisions are pinned here.
 selftest_baseline_writable() {
-  say "the baseline is installed with an object store, and can assign an artifact"
-  local stub_dir saved_dcctl="$baseline_dcctl" case want got
+  say "the baseline is bound the way a default install is, and can assign an artifact"
+  local stub_dir saved_dcctl="$baseline_dcctl" saved_target_file="$cluster_target_file" case want got
   stub_dir="$(mktemp -d)"
   # Help text as cobra prints it: the real lines, cut down. HELP_KIND picks the variant.
   cat > "$stub_dir/dcctl" <<'STUB'
 #!/usr/bin/env bash
 [[ "$1 $2" == "bootstrap --help" ]] || { echo "unexpected argv: $*" >&2; exit 64; }
 case "$HELP_KIND" in
-  store)    printf '%s\n' 'Flags:' \
-              '      --kube-context string                         build the instance on the cluster this context reaches' \
-              '      --object-store string                         where the instance keeps tenant logos and update artifacts' \
-              '      --object-store-size string                    filesystem store: size of the volume' ;;
-  nostore)  printf '%s\n' 'Flags:' \
+  named)    printf '%s\n' 'Flags:' \
+              '      --cluster string                              kind cluster to target (default "devicechain")' \
               '      --kube-context string                         build the instance on the cluster this context reaches' ;;
-  sizeonly) printf '%s\n' 'Flags:' \
-              '      --kube-context string                         build the instance on the cluster this context reaches' \
-              '      --object-store-size string                    a prefix of the flag is not the flag' ;;
+  unnamed)  printf '%s\n' 'Flags:' \
+              '      --kube-context string                         build the instance on the cluster this context reaches' ;;
+  prefix)   printf '%s\n' 'Flags:' \
+              '      --cluster-name string                         a prefix of the flag is not the flag' \
+              '      --kube-context string                         build the instance on the cluster this context reaches' ;;
   notflags) printf '%s\n' 'Error: unknown command "bootstrap" for "dcctl"' ;;
-  failed)   printf '%s\n' 'Flags:' '      --kube-context string' '      --object-store string'; exit 1 ;;
+  failed)   printf '%s\n' 'Flags:' '      --cluster string' '      --kube-context string'; exit 1 ;;
 esac
 STUB
   chmod +x "$stub_dir/dcctl"
   baseline_dcctl="$stub_dir/dcctl"
-  # Run in a subshell, because fail exits: "args=..." is printed only when the function
-  # RETURNED, so a run it ended reads ENDED, never as an empty (no-store) answer.
-  for case in "store|args=--object-store filesystem" "nostore|args=" "sizeonly|args=" \
+  cluster_target_file="$stub_dir/cluster-target"
+  # Run in a subshell, because fail exits: "mode=..." is printed only when the function
+  # RETURNED, so a run it ended reads ENDED, never as the kube-context answer.
+  for case in "named|mode=cluster" "unnamed|mode=kube-context" "prefix|mode=kube-context" \
     "notflags|ENDED" "failed|ENDED"; do
     want="${case#*|}"
+    rm -f "$cluster_target_file"
     got="$(HELP_KIND="${case%%|*}" bash -c "set -euo pipefail
-      $(declare -f fail_code fail say note baseline_object_store_args)
-      $(declare -p baseline_dcctl baseline_tag)
-      baseline_object_store_args; echo \"args=\${object_store_args[*]:-}\"" 2>/dev/null | grep '^args=' || true)"
+      $(declare -f fail_code fail say note choose_cluster_target)
+      $(declare -p baseline_dcctl baseline_tag cluster kube_context cluster_target_file)
+      choose_cluster_target; echo \"mode=\$(cat \"\$cluster_target_file\")\"" 2>/dev/null | grep '^mode=' || true)"
     [[ "${got:-ENDED}" == "$want" ]] ||
-      fail "SELF-TEST FAILED: baseline_object_store_args over help '${case%%|*}' gave '${got:-ENDED}', want '$want'"
+      fail "SELF-TEST FAILED: choose_cluster_target over help '${case%%|*}' gave '${got:-ENDED}', want '$want'"
   done
-  baseline_dcctl="$saved_dcctl"
-  rm -rf "$stub_dir"
-  note "a baseline whose bootstrap takes --object-store is asked for the filesystem store; an unreadable flag list ends the run"
+  note "a baseline that takes --cluster is bound by name; one that predates it by context; an unreadable flag list ends the run"
 
-  # 🔴 THE CALL SITES, which is where the failure this exists for actually happened: the
-  # flag was always there to pass, and the install simply did not pass it. Every baseline
-  # bootstrap carries the array, and both seeds that can write update-assignment are
-  # preceded by the edit that lets them.
-  local up_body sweep_body boots carrying
-  up_body="$(declare -f cmd_up)"
-  boots="$(grep -c 'bootstrap local' <<<"$up_body" || true)"
-  carrying="$(grep 'bootstrap local' <<<"$up_body" | grep -c 'object_store_args' || true)"
-  [[ "$boots" -ge 1 && "$carrying" == "$boots" ]] ||
-    fail "SELF-TEST FAILED: $carrying of cmd_up's $boots baseline bootstrap(s) pass object_store_args. A
-bootstrap without it lands on dcctl's no-store default on this rig's cluster, and the
-baseline seed is then refused at its first artifact"
-  sweep_body="$(declare -f cmd_tablesweep)"
-  local body name
+  # ...and what each recorded answer makes every later call pass. The empty instance_target
+  # is the point of the 'cluster' answer: upgrade and destroy then read the binding bootstrap
+  # recorded, and a --kube-context there would name a binding the instance does not have.
+  for case in "cluster|--cluster $cluster||" \
+    "kube-context|--kube-context $kube_context|--kube-context $kube_context|" \
+    "|ENDED" "context|ENDED"; do
+    want="${case#*|}"
+    printf '%s' "${case%%|*}" >"$cluster_target_file"
+    got="$(bash -c "set -euo pipefail
+      $(declare -f fail_code fail say note load_cluster_target)
+      $(declare -p cluster kube_context cluster_target_file)
+      load_cluster_target; echo \"targets=\${install_target[*]:-}|\${instance_target[*]:-}|\"" 2>/dev/null | grep '^targets=' || true)"
+    got="${got#targets=}"
+    [[ "${got:-ENDED}" == "$want" ]] ||
+      fail "SELF-TEST FAILED: load_cluster_target over '${case%%|*}' gave '${got:-ENDED}', want '$want'"
+  done
+  rm -f "$cluster_target_file"
+  got="$(bash -c "set -euo pipefail
+    $(declare -f fail_code fail say note load_cluster_target)
+    $(declare -p cluster kube_context cluster_target_file)
+    load_cluster_target; echo loaded" 2>/dev/null || true)"
+  [[ -z "$got" ]] || fail "SELF-TEST FAILED: load_cluster_target with no recorded answer returned instead of ending the run"
+  baseline_dcctl="$saved_dcctl" cluster_target_file="$saved_target_file"
+  rm -rf "$stub_dir"
+  note "each recorded answer sets both targets; a missing or unknown one ends the run"
+
+  # 🔴 THE CALL SITES, which is where the failure this exists for actually happened: every
+  # function above was correct and the install simply named the cluster by context. Every
+  # dcctl install/bootstrap goes through install_target, every upgrade through
+  # instance_target, and none names the context by hand; and both seeds that can write
+  # update-assignment are preceded by the edit that lets them.
+  local fn body line n
+  for fn in cmd_up cmd_upgrade cmd_recreate; do
+    body="$(declare -f "$fn")"
+    n=0
+    while IFS= read -r line; do
+      case "$line" in
+        *'_dcctl" install local'* | *'_dcctl" bootstrap local'*)
+          [[ "$line" == *install_target* && "$line" != *--kube-context* ]] ||
+            fail "SELF-TEST FAILED: $fn runs a dcctl install/bootstrap that does not name the cluster through
+install_target: $line"
+          n=$((n + 1))
+          ;;
+        *'_dcctl" upgrade local'*)
+          [[ "$line" == *instance_target* && "$line" != *--kube-context* ]] ||
+            fail "SELF-TEST FAILED: $fn runs a dcctl upgrade that does not name the cluster through instance_target: $line"
+          n=$((n + 1))
+          ;;
+      esac
+    done <<<"$body"
+    [[ $n -gt 0 ]] || fail "SELF-TEST FAILED: found no dcctl install/bootstrap/upgrade in $fn, so the check above checked nothing"
+    [[ "$fn" == cmd_up || "$body" == *load_cluster_target* ]] ||
+      fail "SELF-TEST FAILED: $fn names the cluster without loading what 'up' recorded"
+  done
+  body="$(declare -f cmd_up)"
+  [[ "$body" == *choose_cluster_target*load_cluster_target*'_dcctl" '*' local '* ]] ||
+    fail "SELF-TEST FAILED: cmd_up does not choose and load the cluster target before it installs"
+  local name
   for name in cmd_up cmd_tablesweep; do
-    body="$up_body"
-    [[ "$name" == cmd_up ]] || body="$sweep_body"
+    body="$(declare -f "$name")"
     [[ "$body" == *allow_unverified_artifacts*'" seed '* ]] ||
       fail "SELF-TEST FAILED: $name does not let update-management assign an unverified artifact before it
 seeds, so the seed's update-assignment is refused on every baseline that ships the area"
   done
-  note "every baseline bootstrap asks for the store, and both seeds are preceded by the assignment edit"
+  note "every dcctl install, bootstrap and upgrade names the cluster as recorded, and both seeds follow the assignment edit"
 
   # The document edit keeps what was there and adds the one setting. The empty document
   # is the real case (the chart renders "{}" for an area with no override); the second
@@ -3574,7 +3644,9 @@ delete_cluster() {
 #
 # --kube-context is passed rather than left to the instance record, which a baseline
 # dcctl may never have written: without one destroy guesses kind-<instance>, which is
-# not this rig's cluster.
+# not this rig's cluster. The exception is an instance bound by --cluster (see
+# choose_cluster_target): that binding is the record's, and the record is checked for
+# below; a --kube-context would name a binding the instance does not have.
 destroy_rig_instance() {
   if [[ ! -x "$target_dcctl" ]]; then
     note "not destroying instance $instance: the working tree's dcctl is not built at $target_dcctl"
@@ -3589,7 +3661,13 @@ destroy_rig_instance() {
     return 0
   fi
   say "destroying instance $instance in kind cluster $cluster with the working tree's dcctl"
-  "$target_dcctl" destroy local "$instance" --yes --kube-context "$kube_context" ||
+  # The binding `up` recorded (choose_cluster_target), so destroy names the cluster the way
+  # the instance was bound to it; a run that never got that far keeps --kube-context.
+  local target=(--kube-context "$kube_context")
+  if [[ "$(cat "$cluster_target_file" 2>/dev/null || true)" == cluster ]]; then
+    target=()
+  fi
+  "$target_dcctl" destroy local "$instance" --yes ${target[@]+"${target[@]}"} ||
     warn "dcctl destroy of instance $instance exited $? (an instance the baseline built may be refused); deleting the cluster anyway"
 }
 
