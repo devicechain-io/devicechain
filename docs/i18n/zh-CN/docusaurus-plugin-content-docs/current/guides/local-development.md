@@ -13,7 +13,7 @@ DeviceChain 尚未正式发布。本指南介绍如何开发源代码：构建 G
 
 ## 前提条件 {#prerequisites}
 
-- **Go** 1.26 或更新版本。工作区声明 `go 1.26.6`，CI 使用 `go.work` 指定的版本构建。
+- **Go** 1.27 或更新版本。工作区声明 `go 1.27.0`，CI 使用 `go.work` 指定的版本构建。
 - **Node** 22 或更新版本，用于前端和本文档。CI 使用 26 构建。
 - **Docker**，用于运行 TimescaleDB。
 - **nats-server**，约 10 MB 的单个二进制文件。
