@@ -13,10 +13,13 @@ import { DASHBOARD_TEMPLATES } from './templates';
 import {
   applyBindingChoices,
   buildImportPayload,
+  byteLength,
   checkBindingRefs,
   collectBindingRefs,
   DashboardImportError,
   MAX_DEFINITION_BYTES,
+  MAX_IMPORT_NESTING,
+  MAX_IMPORT_TEXT_BYTES,
   prepareImport,
 } from './importDefinition';
 
@@ -176,27 +179,89 @@ describe('refusals', () => {
     }
   });
 
-  it('refuses an oversized definition before parsing it', () => {
-    const big = JSON.stringify({ widgets: [], pad: 'x'.repeat(MAX_DEFINITION_BYTES) });
-    try {
-      prepareImport(big, catalog);
-      throw new Error('expected a refusal');
-    } catch (err) {
-      expect((err as DashboardImportError).code).toBe('tooLarge');
-    }
+  it('refuses a definition over the limit compact, however it is formatted', () => {
+    // The title is kept by the parser, so the compact form really is over 1 MiB.
+    const compact = JSON.stringify({ widgets: [], title: 'x'.repeat(MAX_DEFINITION_BYTES) });
+    expect(compact.length).toBeLessThan(MAX_IMPORT_TEXT_BYTES);
+    expect(() => prepareImport(compact, catalog)).toThrow(
+      expect.objectContaining({ code: 'tooLarge', limitBytes: MAX_DEFINITION_BYTES }),
+    );
   });
 
   it('counts bytes, not characters, against the limit', () => {
     // Each '€' is three bytes: under the limit in characters, over it in bytes.
-    const text = JSON.stringify({ widgets: [], pad: '€'.repeat(Math.ceil(MAX_DEFINITION_BYTES / 3)) });
+    const text = JSON.stringify({ widgets: [], title: '€'.repeat(Math.ceil(MAX_DEFINITION_BYTES / 3)) });
     expect(text.length).toBeLessThan(MAX_DEFINITION_BYTES);
-    expect(() => prepareImport(text, catalog)).toThrow(/limit/);
+    expect(() => prepareImport(text, catalog)).toThrow(
+      expect.objectContaining({ code: 'tooLarge', limitBytes: MAX_DEFINITION_BYTES }),
+    );
   });
 
   it('refuses oversized text as too large without reading it as JSON first', () => {
     // Not JSON at all: a check that ran after JSON.parse would report it as malformed.
-    const text = '{' + 'x'.repeat(MAX_DEFINITION_BYTES);
-    expect(() => prepareImport(text, catalog)).toThrow(expect.objectContaining({ code: 'tooLarge' }));
+    const text = '{' + 'x'.repeat(MAX_IMPORT_TEXT_BYTES);
+    expect(() => prepareImport(text, catalog)).toThrow(
+      expect.objectContaining({ code: 'tooLarge', limitBytes: MAX_IMPORT_TEXT_BYTES }),
+    );
+  });
+
+  it('imports the pretty-printed export of a board just under the limit compact', () => {
+    // Enough widgets that indentation inflates the export well past 1 MiB, then a title
+    // that brings the compact form to just under the limit.
+    const widgets = Array.from({ length: 3000 }, (_, i) => ({
+      id: `w${i}`,
+      type: 'latest-card',
+      layout: { base: { col: 0, colSpan: 6, row: i * 4, rowSpan: 4, z: 0 } },
+      options: { title: `Card ${i}`, measurement: 'temperature', precision: 1, unit: 'C' },
+      datasource: { kind: 'slot', slot: 'press', measurements: ['temperature'] },
+    }));
+    const base = { ...board, widgets };
+    const size = (def: object) => byteLength(serializeDefinition(parseDashboardDefinition(def, { catalog })));
+    const room = MAX_DEFINITION_BYTES - size({ ...base, title: '' }) - 16;
+    expect(room).toBeGreaterThan(0);
+    const original = parseDashboardDefinition({ ...base, title: 'p'.repeat(room) }, { catalog });
+    const compact = serializeDefinition(original);
+    expect(byteLength(compact)).toBeLessThanOrEqual(MAX_DEFINITION_BYTES);
+    expect(byteLength(compact)).toBeGreaterThan(MAX_DEFINITION_BYTES - 64);
+
+    const exported = exportDefinitionJson(original, false);
+    expect(byteLength(exported)).toBeGreaterThan(MAX_DEFINITION_BYTES); // the case under test
+    expect(byteLength(exported)).toBeLessThanOrEqual(MAX_IMPORT_TEXT_BYTES);
+
+    const prepared = prepareImport(exported, catalog);
+    // What is sent is the compact form, identical to the original's.
+    expect(buildImportPayload(prepared.definition, '')).toBe(compact);
+  });
+
+  // A label widget whose options hold `depth` nested arrays. The document itself opens four
+  // levels before them ({ widgets [ widget { options {), so the total is depth + 4.
+  const nested = (depth: number, text = 'x') =>
+    '{"widgets":[{"id":"a","type":"label","layout":{"base":{"col":0,"colSpan":2,"row":0,"rowSpan":2,"z":0}},' +
+    `"options":{"text":${JSON.stringify(text)},"deep":` +
+    '['.repeat(depth) +
+    ']'.repeat(depth) +
+    '}}]}';
+
+  it('refuses nesting as deep as the text limit allows, quickly and without overflowing the stack', () => {
+    // Serializing this to check its compact size would take many seconds; it must be
+    // refused before it is parsed.
+    const depth = Math.floor((MAX_IMPORT_TEXT_BYTES - nested(0).length) / 2);
+    const text = nested(depth);
+    expect(byteLength(text)).toBeLessThanOrEqual(MAX_IMPORT_TEXT_BYTES);
+    const started = Date.now();
+    expect(() => prepareImport(text, catalog)).toThrow(expect.objectContaining({ code: 'invalid' }));
+    expect(Date.now() - started).toBeLessThan(2000);
+  });
+
+  it('accepts nesting up to the limit and refuses one level more', () => {
+    expect(() => prepareImport(nested(MAX_IMPORT_NESTING - 4), catalog)).not.toThrow();
+    expect(() => prepareImport(nested(MAX_IMPORT_NESTING - 3), catalog)).toThrow(
+      expect.objectContaining({ code: 'invalid' }),
+    );
+  });
+
+  it('does not count brackets inside strings as nesting', () => {
+    expect(() => prepareImport(nested(1, '[{'.repeat(MAX_IMPORT_NESTING) + '\\"['), catalog)).not.toThrow();
   });
 
   it('refuses a payload that grew past the limit after the review', () => {

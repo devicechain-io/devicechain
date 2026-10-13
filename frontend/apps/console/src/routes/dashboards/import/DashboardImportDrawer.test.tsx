@@ -47,7 +47,7 @@ vi.mock('../editor/EntityPicker', () => ({
 }));
 
 import { createDashboard, getDashboard, publishDashboard, updateDashboard } from '@/lib/api/dashboards';
-import { MAX_DEFINITION_BYTES } from './importDefinition';
+import { MAX_IMPORT_TEXT_BYTES } from './importDefinition';
 import { DashboardImportDrawer } from './DashboardImportDrawer';
 import { DASHBOARD_TEMPLATES } from './templates';
 
@@ -120,10 +120,10 @@ describe('DashboardImportDrawer', () => {
       <DashboardImportDrawer open onOpenChange={() => {}} title="Import" source={{}} onCreated={vi.fn()} />,
     );
     const input = (container.ownerDocument ?? document).querySelector('input[type="file"]') as HTMLInputElement;
-    const file = new File(['x'.repeat(MAX_DEFINITION_BYTES + 1)], 'big.json', { type: 'application/json' });
+    const file = new File(['x'.repeat(MAX_IMPORT_TEXT_BYTES + 1)], 'big.json', { type: 'application/json' });
     const read = vi.spyOn(file, 'text');
     fireEvent.change(input, { target: { files: [file] } });
-    await screen.findByText(/larger than the 1 MiB limit/);
+    await screen.findByText(/larger than the 4 MiB an import reads/);
     expect(read).not.toHaveBeenCalled();
     expect(screen.queryByRole('button', { name: 'Create draft' })).toBeNull();
   });
@@ -180,10 +180,10 @@ describe('DashboardImportDrawer', () => {
 
   it('refuses an oversized paste before parsing it', () => {
     open({});
-    const big = JSON.stringify({ widgets: [], pad: 'x'.repeat((1 << 20) + 10) });
+    const big = JSON.stringify({ widgets: [], pad: 'x'.repeat(MAX_IMPORT_TEXT_BYTES + 10) });
     fireEvent.change(screen.getByLabelText('Dashboard JSON'), { target: { value: big } });
     expect((screen.getByRole('button', { name: 'Review' }) as HTMLButtonElement).disabled).toBe(true);
-    expect(screen.getByText(/larger than the 1 MiB limit/)).toBeTruthy();
+    expect(screen.getByText(/larger than the 4 MiB an import reads/)).toBeTruthy();
   });
 
   it('lists a widget this console cannot resolve, and keeps it in the draft', async () => {

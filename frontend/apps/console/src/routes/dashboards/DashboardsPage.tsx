@@ -5,6 +5,8 @@ import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Copy, Plus, Trash2, Upload } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
+import { hasAuthority } from '@devicechain/client';
+import { useAuth } from '@/auth/AuthProvider';
 import { useQuery } from '@/lib/hooks/use-query';
 import {
   listDashboards,
@@ -48,6 +50,11 @@ export default function DashboardsPage() {
   const navigate = useNavigate();
   const { toast } = useToast();
   const confirm = useConfirm();
+  // Clone reads the source's DRAFT and creates a dashboard, both of which need
+  // dashboard:write -- the check the editor's own Clone item uses. A read-only member is
+  // not offered a button that can only fail.
+  const { claims } = useAuth();
+  const canWrite = hasAuthority(claims, 'dashboard:write');
   const [pageNumber, setPageNumber] = useState(1);
   const [creating, setCreating] = useState(false);
   // The import drawer's input: pasted/uploaded JSON (no text), a template, or a clone.
@@ -200,17 +207,19 @@ export default function DashboardsPage() {
                   <DataTableCell className="text-right">
                     {/* This cell hosts an interactive control, so it must swallow
                         the row's click/keyboard activation rather than navigate. */}
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        void clone(dashboard.token);
-                      }}
-                      onKeyDown={(e) => e.stopPropagation()}
-                    >
-                      <Copy size={14} /> {t('clone')}
-                    </Button>
+                    {canWrite && (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          void clone(dashboard.token);
+                        }}
+                        onKeyDown={(e) => e.stopPropagation()}
+                      >
+                        <Copy size={14} /> {t('clone')}
+                      </Button>
+                    )}
                     <Button
                       variant="ghost"
                       size="sm"

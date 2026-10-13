@@ -33,10 +33,26 @@ import {
 import { validateDefinitionOptions, type DefinitionOptionIssue } from '@devicechain/widgets';
 
 // The server refuses a stored definition above this many bytes (dashboard-management
-// maxDefinitionBytes, 1 MiB). Checking it here as well means an oversized paste or file is
-// refused before it is read into the page, parsed, or sent, with a message that names the
-// limit instead of a bare server error. The server remains the authority.
+// maxDefinitionBytes, 1 MiB). The limit is on the COMPACT form, which is what a save writes
+// and what an import sends; checking it here as well refuses an oversized board with a
+// message that names the limit instead of a bare server error. The server remains the
+// authority.
 export const MAX_DEFINITION_BYTES = 1 << 20;
+
+// The bound on the TEXT pasted or uploaded, checked before it is read into the page or
+// parsed. It is a multiple of the definition limit, not the limit itself, because an export
+// is pretty-printed: indentation can make the file of a board well inside 1 MiB larger than
+// 1 MiB, and that file must still import. Whatever the text's size, the definition it
+// parses to must fit MAX_DEFINITION_BYTES compact.
+export const MAX_IMPORT_TEXT_BYTES = 4 * MAX_DEFINITION_BYTES;
+
+// The deepest nesting of objects and arrays an import accepts. A real definition nests a
+// handful of levels (an option holding a list of threshold objects is about eight); the
+// bound exists because the compact-size check serializes the parsed board, and serializing
+// is far slower than linear in nesting depth -- text nested millions of levels deep, which
+// the text cap allows, would hold the page for seconds before the size check could refuse
+// it. Checked on the text, before it is parsed, in one linear pass.
+export const MAX_IMPORT_NESTING = 128;
 
 export type ImportErrorCode = 'empty' | 'tooLarge' | 'notJson' | 'invalid';
 
@@ -44,14 +60,46 @@ export class DashboardImportError extends Error {
   constructor(
     readonly code: ImportErrorCode,
     message: string,
+    // For 'tooLarge': the limit, in bytes, that was exceeded.
+    readonly limitBytes?: number,
   ) {
     super(message);
     this.name = 'DashboardImportError';
   }
 }
 
+function tooLarge(limitBytes: number, what: string): DashboardImportError {
+  return new DashboardImportError(
+    'tooLarge',
+    `The ${what} is larger than the ${limitBytes / (1 << 20)} MiB limit.`,
+    limitBytes,
+  );
+}
+
 export function byteLength(text: string): number {
   return new TextEncoder().encode(text).length;
+}
+
+// nestsDeeperThan reports whether JSON text opens more than `max` objects/arrays inside one
+// another. Brackets inside string literals do not count. It does not validate the JSON --
+// JSON.parse does that next -- so malformed text only has to be scanned, not understood.
+export function nestsDeeperThan(text: string, max: number): boolean {
+  let depth = 0;
+  let inString = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text.charCodeAt(i);
+    if (inString) {
+      if (c === 0x5c /* \ */) i++;
+      else if (c === 0x22 /* " */) inString = false;
+    } else if (c === 0x22) {
+      inString = true;
+    } else if (c === 0x7b /* { */ || c === 0x5b /* [ */) {
+      if (++depth > max) return true;
+    } else if (c === 0x7d /* } */ || c === 0x5d /* ] */) {
+      depth--;
+    }
+  }
+  return false;
 }
 
 // The entity kinds a slot binding can name.
@@ -135,10 +183,15 @@ function originOf(text: string): string | null {
 // prepareImport parses `text` exactly as the editor parses a stored board. It throws a
 // DashboardImportError for anything that must not become a dashboard: empty, oversized, not
 // JSON, or not a definition the parser accepts.
+//
+// Two size checks, in this order: the text against MAX_IMPORT_TEXT_BYTES before anything
+// reads it, then the parsed definition, compact, against MAX_DEFINITION_BYTES -- the limit
+// the server applies to what is saved.
 export function prepareImport(text: string, catalog: WidgetCatalog | undefined): PreparedImport {
   if (text.trim() === '') throw new DashboardImportError('empty', 'Nothing to import.');
-  if (byteLength(text) > MAX_DEFINITION_BYTES) {
-    throw new DashboardImportError('tooLarge', 'The definition is larger than the 1 MiB limit.');
+  if (byteLength(text) > MAX_IMPORT_TEXT_BYTES) throw tooLarge(MAX_IMPORT_TEXT_BYTES, 'text');
+  if (nestsDeeperThan(text, MAX_IMPORT_NESTING)) {
+    throw new DashboardImportError('invalid', `Nested more than ${MAX_IMPORT_NESTING} levels deep.`);
   }
   let raw: unknown;
   try {
@@ -151,6 +204,9 @@ export function prepareImport(text: string, catalog: WidgetCatalog | undefined):
     definition = migrateToSlots(parseDashboardDefinition(raw, { catalog }));
   } catch (err) {
     throw new DashboardImportError('invalid', err instanceof Error ? err.message : 'Not a dashboard definition.');
+  }
+  if (byteLength(serializeDefinition(definition)) > MAX_DEFINITION_BYTES) {
+    throw tooLarge(MAX_DEFINITION_BYTES, 'definition');
   }
   return {
     definition,
@@ -256,7 +312,7 @@ export function buildImportPayload(definition: DashboardDefinition, title: strin
   const serialized = serializeDefinition(titled);
   // The repaired document can differ in size from the text that was checked.
   if (byteLength(serialized) > MAX_DEFINITION_BYTES) {
-    throw new DashboardImportError('tooLarge', 'The definition is larger than the 1 MiB limit.');
+    throw tooLarge(MAX_DEFINITION_BYTES, 'definition');
   }
   return serialized;
 }

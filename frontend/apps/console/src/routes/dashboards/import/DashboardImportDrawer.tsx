@@ -34,6 +34,7 @@ import {
   collectBindingRefs,
   DashboardImportError,
   MAX_DEFINITION_BYTES,
+  MAX_IMPORT_TEXT_BYTES,
   prepareImport,
   type BindingChoices,
   type BindingRefStatus,
@@ -86,13 +87,18 @@ function ImportFlow({ source, onCreated }: { source: ImportSource; onCreated: (t
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
+  // The text an import reads is bounded separately from the definition it parses to.
+  const textTooLarge = () => t('importErrorTextTooLarge', { limit: MAX_IMPORT_TEXT_BYTES / (1 << 20) });
+
   const describe = (err: unknown): string => {
     if (err instanceof DashboardImportError) {
       switch (err.code) {
         case 'empty':
           return t('importErrorEmpty');
         case 'tooLarge':
-          return t('importErrorTooLarge', { limit: MAX_DEFINITION_BYTES / (1 << 20) });
+          return err.limitBytes === MAX_IMPORT_TEXT_BYTES
+            ? textTooLarge()
+            : t('importErrorTooLarge', { limit: MAX_DEFINITION_BYTES / (1 << 20) });
         case 'notJson':
           return t('importErrorNotJson', { detail: err.message });
         case 'invalid':
@@ -128,9 +134,9 @@ function ImportFlow({ source, onCreated }: { source: ImportSource; onCreated: (t
 
   const pickFile = (file: File) => {
     // Refuse by size BEFORE reading the file into the page.
-    if (file.size > MAX_DEFINITION_BYTES) {
+    if (file.size > MAX_IMPORT_TEXT_BYTES) {
       setReview(null);
-      setError(t('importErrorTooLarge', { limit: MAX_DEFINITION_BYTES / (1 << 20) }));
+      setError(textTooLarge());
       return;
     }
     file
@@ -163,7 +169,7 @@ function ImportFlow({ source, onCreated }: { source: ImportSource; onCreated: (t
     }
   };
 
-  const oversize = byteLength(text) > MAX_DEFINITION_BYTES;
+  const oversize = byteLength(text) > MAX_IMPORT_TEXT_BYTES;
 
   return (
     <div className="space-y-4">
@@ -188,7 +194,7 @@ function ImportFlow({ source, onCreated }: { source: ImportSource; onCreated: (t
               {t('importReview')}
             </Button>
           </div>
-          {oversize && <p className="text-sm text-destructive">{t('importErrorTooLarge', { limit: 1 })}</p>}
+          {oversize && <p className="text-sm text-destructive">{textTooLarge()}</p>}
         </>
       )}
 
