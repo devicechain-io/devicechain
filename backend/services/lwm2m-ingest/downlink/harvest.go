@@ -281,6 +281,16 @@ func (h *Harvester) skip() {
 
 // ── Dispatcher side ───────────────────────────────────────────────────────
 
+// OnLive is the conn table's live hook (ConnTable.SetOnLive): a device that became reachable on a
+// fresh conn is gated and woken for a drain of its held commands FIRST, and only then queued for a
+// harvest. The order matters: Drain marks the device as wanting a drain turn, which is what keeps
+// takeHarvest from running its harvest ahead of its commands. One method, so main.go and the
+// wiring test share the order rather than each restating it.
+func (d *Dispatcher) OnLive(tenant, deviceToken string) {
+	d.Drain(tenant, deviceToken)
+	d.Harvest(tenant, deviceToken)
+}
+
 // Harvest asks for a device-information harvest of a device that has just become reachable. It
 // never blocks and never does I/O: it checks the throttle and queues the request on the device's
 // shard, whose worker runs it. A no-op without a harvester, and on a standby (no active term).

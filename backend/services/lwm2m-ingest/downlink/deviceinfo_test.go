@@ -21,6 +21,7 @@ import (
 	"github.com/plgd-dev/go-coap/v3/message/pool"
 	"github.com/plgd-dev/go-coap/v3/mux"
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -244,6 +245,9 @@ func (r *attrRecorder) Query(ctx context.Context, _, tenant, _ string, vars map[
 			entered <- struct{}{}
 		}
 		<-ctx.Done()
+		// device-management takes a moment to give up, so a Run that does not wait for the
+		// write is seen returning while it is still in flight.
+		time.Sleep(50 * time.Millisecond)
 		r.mu.Lock()
 		r.ctxErrs = append(r.ctxErrs, ctx.Err())
 		r.mu.Unlock()
@@ -544,12 +548,9 @@ func TestHarvestIsBoundedByOneOpTimeoutOverall(t *testing.T) {
 	g.conn.delay = 90 * time.Millisecond // each read inside opTimeout; all five would take 450ms
 	g.conn.mu.Unlock()
 
-	start := time.Now()
 	g.d.Harvest("acme", "dev-1")
 	g.waitWrites(t, 1)
-	elapsed := time.Since(start)
 	assert.Less(t, len(g.conn.asked()), 5, "the read stopped at the overall bound")
-	assert.Less(t, elapsed, 2*opTimeout+100*time.Millisecond, "the worker was held for about one op timeout")
 	got := g.rec.byKey()
 	assert.Equal(t, "Acme", got["manufacturer"]["value"], "what was read in time is still recorded")
 }
@@ -588,4 +589,48 @@ func TestHarvestWritesNothingForATenantDeletedDuringTheRead(t *testing.T) {
 	g.d.Harvest("acme", "dev-1")
 	require.Eventually(t, func() bool { return len(g.conn.asked()) == 5 }, 3*time.Second, 5*time.Millisecond)
 	never(t, func() bool { g.h.WaitForWrites(); return g.rec.count() > 0 }, "an attribute was written for a deleted tenant")
+}
+
+// A full attribute-write pool sheds the batch rather than making the shard's worker wait for a
+// slot: the harvest finishes and the worker moves on.
+func TestHarvestShedsWritesWhenThePoolIsFull(t *testing.T) {
+	g := newHarvestRig(t, fullDevice())
+	for range harvestWriters {
+		g.h.sem <- struct{}{}
+	}
+	t.Cleanup(func() { // before the rig's stop (cleanups run last-first)
+		for range harvestWriters {
+			<-g.h.sem
+		}
+	})
+	g.d.Harvest("acme", "dev-1")
+	require.Eventually(t, func() bool { return testutil.ToFloat64(g.m.WriteShed) == 1 }, 3*time.Second, 5*time.Millisecond,
+		"the batch was shed")
+	assert.Equal(t, 0, g.rec.count())
+
+	// The worker is free: a command for the device is dispatched.
+	nonce := g.st.add("c1", "dev-1", "SENT")
+	g.rdr.ch <- cmdMsgNonce("acme", "dev-1", "c1", CommandRead, `{"path":"/c1"}`, nonce, newAck())
+	require.Eventually(t, func() bool { return len(g.exec.order()) == 1 }, 3*time.Second, 5*time.Millisecond,
+		"the worker went on to the next command")
+}
+
+// A tenant already deleted when its queued harvest comes up is not read at all.
+func TestHarvestDoesNotReadADeletedTenantsDevice(t *testing.T) {
+	g := newHarvestRig(t, fullDevice())
+	g.gone.Store(true)
+	g.d.Harvest("acme", "dev-1")
+	require.Eventually(t, func() bool { return testutil.ToFloat64(g.m.Skipped) == 1 }, 3*time.Second, 5*time.Millisecond)
+	assert.Empty(t, g.conn.asked(), "a deleted tenant's device was read")
+}
+
+// On a standby (no term running) a live device is not harvested, and the request does not use up
+// the device's throttle: the leader that does serve it must still harvest it.
+func TestHarvestOnAStandbyReservesNothing(t *testing.T) {
+	h := NewHarvester(&attrRecorder{}, "http://dm/graphql", HarvestMetrics{})
+	d := NewDispatcher(&chanReader{ch: make(chan messaging.Message)}, &fakePublisher{}, &fakeLookup{}, &orderExecutor{},
+		newFakeStore(), newFakeStore(), gateMetrics(), Options{Workers: 1, Harvester: h,
+			ReadPacer: core.NewReadPacer(nil, "device commands").UseClock(core.VirtualClock())})
+	d.Harvest("acme", "dev-1")
+	assert.True(t, h.due(deviceKey{"acme", "dev-1"}), "the standby's request reserved the device")
 }

@@ -657,13 +657,10 @@ func buildPresenceLayer(leaderCtx context.Context, bindings map[string]config.Ps
 		dispatcher = downlink.NewDispatcher(CommandReader, ResponseWriter, connTable, downlink.NewOps(), fetcher, claimer, downlinkMetrics, opts)
 		// Wire the wake-drain: a device becoming reachable on a fresh conn (Register / re-handshake
 		// Update) gates its live commands and triggers a drain of its held commands. A no-op when draining is disabled or on a
-		// standby (Drain guards both). Set before serving begins.
-		connTable.SetOnLive(func(tenant, deviceToken string) {
-			dispatcher.Drain(tenant, deviceToken)
-			// Throttled per device, queued (never run) here, and executed later on the device's
-			// own shard worker, so it cannot delay the registration that triggered it.
-			dispatcher.Harvest(tenant, deviceToken)
-		})
+		// standby (Drain guards both). Then the device-information harvest: throttled per device,
+		// queued (never run) here, and executed later on the device's own shard worker after its
+		// commands, so it cannot delay the registration that triggered it. Set before serving begins.
+		connTable.SetOnLive(dispatcher.OnLive)
 	}
 	return handlers, reg, epoch, reconciler, dispatcher, nil
 }

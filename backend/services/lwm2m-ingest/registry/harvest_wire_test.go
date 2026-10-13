@@ -87,10 +87,7 @@ func TestRegisterHarvestsDeviceInfoWithoutDelayingTheRegistration(t *testing.T) 
 			Workers: 2, Harvester: harvester,
 			ReadPacer: core.NewReadPacer(nil, "device commands").UseClock(core.VirtualClock()),
 		})
-	connTable.SetOnLive(func(tenant, token string) {
-		disp.Drain(tenant, token)
-		disp.Harvest(tenant, token)
-	})
+	connTable.SetOnLive(disp.OnLive) // exactly as main.go wires it
 	runCtx, stop := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() { disp.Run(runCtx); close(done) }()
