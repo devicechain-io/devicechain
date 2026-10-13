@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
+	"regexp"
 	"strings"
 
 	"github.com/rs/zerolog/log"
@@ -267,7 +268,7 @@ func ensureProfile(ctx context.Context, rt *Runtime, p ProfileSpec) error {
 	if err != nil {
 		return err
 	}
-	if !hasActive || active.Label != marker {
+	if !hasActive || active.Marker != marker {
 		var out struct {
 			PublishDeviceProfile struct {
 				Version int `json:"version"`
@@ -276,13 +277,13 @@ func ensureProfile(ctx context.Context, rt *Runtime, p ProfileSpec) error {
 		if err := rt.Session.Query(ctx, rt.Endpoints.DeviceMgmtGraphQL, mutationPublishDeviceProfile,
 			map[string]any{
 				"token":       p.Token,
-				"label":       marker,
-				"description": "Published by the sim scenario that declares this profile.",
+				"label":       profileVersionLabel(p),
+				"description": profileVersionDescription(marker),
 			}, &out); err != nil {
 			return fmt.Errorf("publishDeviceProfile: %w", err)
 		}
 		log.Info().Str("token", p.Token).Int("version", out.PublishDeviceProfile.Version).
-			Str("label", marker).Msg("published device profile")
+			Str("label", profileVersionLabel(p)).Str("marker", marker).Msg("published device profile")
 
 		// Post-assert the ACTIVE version now carries this content. publishDeviceProfile
 		// returning a version number says a row was written, not that the row is the
@@ -292,10 +293,10 @@ func ensureProfile(ctx context.Context, rt *Runtime, p ProfileSpec) error {
 		if verifyErr != nil {
 			return verifyErr
 		}
-		if !hasActive || republished.Label != marker {
-			return fmt.Errorf("published profile %q but its active version carries label %q, not %q "+
+		if !hasActive || republished.Marker != marker {
+			return fmt.Errorf("published profile %q but its active version carries marker %q, not %q "+
 				"(hasActive=%t): something republished it concurrently, and the running platform is "+
-				"serving content this scenario did not declare", p.Token, republished.Label, marker, hasActive)
+				"serving content this scenario did not declare", p.Token, republished.Marker, marker, hasActive)
 		}
 		active = republished
 	}
@@ -310,6 +311,11 @@ func ensureProfile(ctx context.Context, rt *Runtime, p ProfileSpec) error {
 // contributes to a published version. It is used as the version LABEL, which makes
 // "has this exact content ever been published?" a question the tenant itself can
 // answer — see ensureProfile.
+//
+// The marker is stored in the version's DESCRIPTION (see profileVersionDescription),
+// not its label: the label is what a console user reads in the version history, so
+// it is a human name. Versions published by older builds carry the marker AS the
+// label; versionMarker still recognises those.
 //
 // It hashes the declared content in declaration order. Order is part of the
 // identity on purpose: reordering is a change a reader would expect to see
@@ -326,10 +332,51 @@ func profileContentMarker(p ProfileSpec) string {
 	for _, r := range p.DetectionRules {
 		fmt.Fprintf(h, "rule\x00%s\x00%s\x00%s\x00%t\n", r.Token, r.Name, r.Definition, r.Enabled)
 	}
-	return "sim-" + hex.EncodeToString(h.Sum(nil))[:16]
+	return markerPrefix + hex.EncodeToString(h.Sum(nil))[:16]
 }
 
-const queryDeviceProfileVersions = `query($token:String!){deviceProfileVersions(token:$token){version label}}`
+const markerPrefix = "sim-"
+
+// markerDescriptionKey introduces the marker inside a version description.
+const markerDescriptionKey = "Content marker: "
+
+var markerInDescription = regexp.MustCompile(regexp.QuoteMeta(markerDescriptionKey) + `(sim-[0-9a-f]{16})`)
+
+// profileVersionLabel is the human-readable label of the version the sim publishes.
+func profileVersionLabel(p ProfileSpec) string {
+	label := "Initial profile"
+	if name := strings.TrimSpace(p.Name); name != "" {
+		label = name
+		if !strings.HasSuffix(strings.ToLower(name), "profile") {
+			label += " profile"
+		}
+	}
+	if r := []rune(label); len(r) > 128 { // the API's label limit
+		label = string(r[:128])
+	}
+	return label
+}
+
+// profileVersionDescription is the notes text of the published version; it carries
+// the scenario content marker the republish decision reads back.
+func profileVersionDescription(marker string) string {
+	return "Published by the sim scenario that declares this profile. " + markerDescriptionKey + marker
+}
+
+// versionMarker extracts the scenario content marker from a published version: the
+// description's marker, else a legacy label of the form sim-<16 hex> (written by
+// builds that used the marker as the label). "" means the version is not the sim's.
+func versionMarker(label, description string) string {
+	if m := markerInDescription.FindStringSubmatch(description); m != nil {
+		return m[1]
+	}
+	if strings.HasPrefix(label, markerPrefix) {
+		return label
+	}
+	return ""
+}
+
+const queryDeviceProfileVersions = `query($token:String!){deviceProfileVersions(token:$token){version label description}}`
 
 // activeProfileVersion is the profile's ACTIVE published version: its number and its
 // label. Superseded versions are ignored — only the active version is live (ADR-045:
@@ -343,6 +390,9 @@ const queryDeviceProfileVersions = `query($token:String!){deviceProfileVersions(
 type activeProfileVersion struct {
 	Version int
 	Label   string
+	// Marker is the scenario content marker this version carries, or "" when it
+	// carries none (a version somebody else published). See versionMarker.
+	Marker string
 }
 
 func activeVersionOf(ctx context.Context, rt *Runtime, token string) (activeProfileVersion, bool, error) {
@@ -356,8 +406,9 @@ func activeVersionOf(ctx context.Context, rt *Runtime, token string) (activeProf
 
 	var out struct {
 		DeviceProfileVersions []struct {
-			Version int    `json:"version"`
-			Label   string `json:"label"`
+			Version     int    `json:"version"`
+			Label       string `json:"label"`
+			Description string `json:"description"`
 		} `json:"deviceProfileVersions"`
 	}
 	if err := rt.Session.Query(ctx, rt.Endpoints.DeviceMgmtGraphQL, queryDeviceProfileVersions,
@@ -366,7 +417,7 @@ func activeVersionOf(ctx context.Context, rt *Runtime, token string) (activeProf
 	}
 	for _, v := range out.DeviceProfileVersions {
 		if v.Version == *profile.ActiveVersion {
-			return activeProfileVersion{Version: v.Version, Label: v.Label}, true, nil
+			return activeProfileVersion{Version: v.Version, Label: v.Label, Marker: versionMarker(v.Label, v.Description)}, true, nil
 		}
 	}
 	// An active version number with no matching row is not "unpublished" — it is the
