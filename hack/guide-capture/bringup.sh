@@ -18,8 +18,11 @@
 #   hack/guide-capture/bringup.sh down
 #
 # Environment (defaults match `dcctl bootstrap local guide`):
-#   GUIDE_INSTANCE=guide  GUIDE_SIM=guide  GUIDE_KUBE_CONTEXT=kind-devicechain
-#   GUIDE_CONTROL_ADDR=localhost:8090
+#   GUIDE_INSTANCE=guide  GUIDE_KUBE_CONTEXT=kind-devicechain
+#   GUIDE_SIMS="guide:8090 widgets:8091"   name:control-port, one actor per sim. The hero sim
+#       (buildingpulse) is required; any other sim whose handshake does not exist is skipped
+#       with a note (the dashboards chapter needs widgets: `dcctl sim create widgets
+#       --manifest widgetlab --control-addr http://localhost:8091 -i guide`).
 #
 # Git Bash on Windows is the supported shell; it works unchanged on Linux/macOS.
 # Never prints the sim handshake: that file holds the sim identity's password.
@@ -30,10 +33,8 @@ here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 root="$(cd "$here/../.." && pwd)"
 run="$here/.run"
 instance="${GUIDE_INSTANCE:-guide}"
-sim="${GUIDE_SIM:-guide}"
 kctx="${GUIDE_KUBE_CONTEXT:-kind-devicechain}"
-control="${GUIDE_CONTROL_ADDR:-localhost:8090}"
-handshake="$HOME/.devicechain/sims/$sim.json"
+sims="${GUIDE_SIMS:-guide:8090 widgets:8091}"
 
 case "$(uname -s)" in MINGW* | MSYS* | CYGWIN*) win=1 ;; *) win=0 ;; esac
 exe=""
@@ -102,8 +103,10 @@ start_bg() { # name, then the command
 }
 
 up() {
-  [ -f "$handshake" ] || {
-    echo "no sim handshake at $handshake: run 'dcctl sim create $sim --manifest buildingpulse --seed 42 -i $instance' first" >&2
+  # The hero sim is mandatory; the others are skipped when their handshake is absent.
+  local hero="${sims%%:*}"
+  [ -f "$HOME/.devicechain/sims/$hero.json" ] || {
+    echo "no sim handshake for $hero: run 'dcctl sim create $hero --manifest buildingpulse --seed 42 -i $instance' first" >&2
     exit 1
   }
 
@@ -126,37 +129,55 @@ up() {
     }
   fi
 
-  # 2. the simulator actor
-  if ours dc-simulator dc-simulator; then
-    echo "dc-simulator: ours (pid $(cat "$run/dc-simulator.pid")) and running"
-  elif port_open "$control"; then
-    if [ "${GUIDE_ADOPT_EXISTING:-}" = 1 ]; then
-      echo "dc-simulator: $control is answering for a process this script did not start; adopting it (GUIDE_ADOPT_EXISTING=1)"
-    else
-      echo "$control is already answering, but not from a process this script started. Stop it, or set GUIDE_ADOPT_EXISTING=1 to use it as is." >&2
-      exit 1
+  # 2. one simulator actor per sim, each on its own control port
+  local built=0 entry name control
+  for entry in $sims; do
+    name="${entry%%:*}"
+    control="localhost:${entry##*:}"
+    if [ ! -f "$HOME/.devicechain/sims/$name.json" ]; then
+      echo "dc-simulator[$name]: no handshake, skipped (create it with dcctl sim create)"
+      continue
     fi
-  else
-    (cd "$root/backend/sims/dc-simulator" && go build -o "$run/dc-simulator$exe" .)
-    start_bg dc-simulator "$run/dc-simulator$exe" --handshake "$handshake"
-    for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do port_open "$control" && break; sleep 1; done
-    port_open "$control" || {
-      echo "dc-simulator did not come up on $control; see $run/dc-simulator.log" >&2
-      exit 1
-    }
-  fi
+    if ours "dc-simulator-$name" dc-simulator; then
+      echo "dc-simulator[$name]: ours (pid $(cat "$run/dc-simulator-$name.pid")) and running"
+    elif port_open "$control"; then
+      if [ "${GUIDE_ADOPT_EXISTING:-}" = 1 ]; then
+        echo "dc-simulator[$name]: $control is answering for a process this script did not start; adopting it (GUIDE_ADOPT_EXISTING=1)"
+      else
+        echo "$control is already answering, but not from a process this script started. Stop it, or set GUIDE_ADOPT_EXISTING=1 to use it as is." >&2
+        exit 1
+      fi
+    else
+      if [ "$built" = 0 ]; then
+        (cd "$root/backend/sims/dc-simulator" && go build -o "$run/dc-simulator$exe" .)
+        built=1
+      fi
+      start_bg "dc-simulator-$name" "$run/dc-simulator$exe" --handshake "$HOME/.devicechain/sims/$name.json" --port "${entry##*:}"
+      for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do port_open "$control" && break; sleep 1; done
+      port_open "$control" || {
+        echo "dc-simulator[$name] did not come up on $control; see $run/dc-simulator-$name.log" >&2
+        exit 1
+      }
+    fi
+  done
   echo "bring-up complete"
 }
 
 status() {
   ours port-forward kubectl && echo "port-forward: ours, running (pid $(cat "$run/port-forward.pid"))" || echo "port-forward: not started by this script"
-  ours dc-simulator dc-simulator && echo "dc-simulator: ours, running (pid $(cat "$run/dc-simulator.pid"))" || echo "dc-simulator: not started by this script"
   port_open localhost:8081 && echo "localhost:8081: open" || echo "localhost:8081: closed"
-  port_open "$control" && echo "$control: open" || echo "$control: closed"
+  local entry name
+  for entry in $sims; do
+    name="${entry%%:*}"
+    ours "dc-simulator-$name" dc-simulator && echo "dc-simulator[$name]: ours, running (pid $(cat "$run/dc-simulator-$name.pid"))" || echo "dc-simulator[$name]: not started by this script"
+    port_open "localhost:${entry##*:}" && echo "localhost:${entry##*:}: open" || echo "localhost:${entry##*:}: closed"
+  done
 }
 
 down() {
-  for pair in dc-simulator:dc-simulator port-forward:kubectl; do
+  local entry pairs=""
+  for entry in $sims; do pairs="$pairs dc-simulator-${entry%%:*}:dc-simulator"; done
+  for pair in $pairs dc-simulator:dc-simulator port-forward:kubectl; do
     local name="${pair%%:*}" want="${pair##*:}"
     if [ -f "$run/$name.pid" ]; then
       local pid

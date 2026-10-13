@@ -48,20 +48,27 @@ const JSX_MASK = /\sdata-shot-mask[\s>={/]/;
 
 // Anchors of the shared primitives: any file may carry them, and guideAnchors.test.tsx
 // proves they render. Everything else belongs to the screen a recipe names in `sources`.
-const PRIMITIVE = new Set(['page', 'drawer', 'confirm', 'sheet', 'empty', 'error', 'loading']);
+const PRIMITIVE = new Set(['page', 'drawer', 'confirm', 'sheet', 'empty', 'error', 'loading', 'combobox', 'combobox-option']);
 
 const rules = {
-  'data-shot': (v) => new RegExp(`data-shot=["']${esc(v)}["']`),
+  // A literal (`data-shot="x"`) or an expression that names it (`data-shot={a ? 'x' : 'y'}`).
+  // A props object (`{ 'data-shot': 'x' }`, for a component that forwards extra props) counts too.
+  'data-shot': (v) =>
+    new RegExp(`data-shot=(?:["']${esc(v)}["']|\\{[^}]*["']${esc(v)}["'])|["']data-shot["']:\\s*["']${esc(v)}["']`),
+  // The value of a segmented-control option is data (the option's own value), so only the
+  // primitive carrying the attribute is checked.
+  'data-shot-option': () => /data-shot-option=\{/,
   'data-testid': (v) => new RegExp(`data-testid=["']${esc(v)}["']`),
   // A drawer id is the `shot` prop of a FormDrawer call site (a template literal counts).
   // The lookbehind keeps `data-shot="x"` from passing as a drawer id.
   'data-shot-drawer': (v) => new RegExp(`(?<![\\w-])shot=(?:"${esc(v)}"|\\{\`${esc(v)}[\`$])`),
-  // A tab id is the `value` of a TabsTrigger.
-  'data-shot-tab': (v) => new RegExp(`<TabsTrigger[^>]*value="${esc(v)}"`),
+  // A tab id is the `value` of a TabsTrigger, or the `value:` of a registry resource's tab entry
+  // (ResourceDetailPage renders those through one dynamic TabsTrigger).
+  'data-shot-tab': (v) => new RegExp(`<TabsTrigger[^>]*value="${esc(v)}"|\\bvalue:\\s*['"]${esc(v)}['"]`),
 };
 
 // Every [data-shot*="v"] / [data-testid="v"] / [data-shot-mask] inside a selector string.
-const SELECTOR_REF = /\[(data-shot(?:-tab|-drawer|-mask)?|data-testid)(?:=["']([^"'$]+)["'])?\]/g;
+const SELECTOR_REF = /\[(data-shot(?:-tab|-drawer|-mask|-option)?|data-testid)(?:=["']([^"'$]+)["'])?\]/g;
 function refsIn(str) {
   return [...str.matchAll(SELECTOR_REF)].map((m) => ({ attr: m[1], value: m[2] }));
 }
@@ -91,7 +98,8 @@ for (const r of recipes) {
   }
   for (const { attr, value } of refs) {
     if (attr === 'data-shot-mask') continue; // handled by r.mask below
-    const scoped = !(attr === 'data-shot' && PRIMITIVE.has(value));
+    if (value === undefined && attr !== 'data-shot-option') continue; // a bare [data-shot-tab] names no particular anchor
+    const scoped = !(attr === 'data-shot' && PRIMITIVE.has(value)) && attr !== 'data-shot-option';
     if (!find(rules[attr](value), scoped ? among : undefined)) {
       problems.push(`${r.id}: ${attr}="${value}" not found${scoped && r.sources ? ` in ${r.sources.join(', ')}` : ''}`);
     }

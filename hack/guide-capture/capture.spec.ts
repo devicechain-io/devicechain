@@ -18,7 +18,20 @@ const TILE_HAR = 'tiles.har';
 const TILE_URL = /tile\.openstreetmap\.org|\/\d+\/\d+\/\d+\.(png|pbf|mvt|webp|jpg)(\?|$)/;
 const RECORD_TILES = process.env.GUIDE_HAR_RECORD === '1';
 
-function loadSession(name: Recipe['session']): Session | null {
+// A HAR recorded here held only aborted requests (MapLibre fetches tiles from a worker the
+// recorder did not see), so a HAR with no 200 entry is treated as absent rather than replayed
+// into a map that would never finish loading.
+function hasUsableHar(): boolean {
+  if (!existsSync(TILE_HAR)) return false;
+  try {
+    const har = JSON.parse(readFileSync(TILE_HAR, 'utf8')) as { log: { entries: { response: { status: number } }[] } };
+    return har.log.entries.some((e) => e.response.status === 200);
+  } catch {
+    return false;
+  }
+}
+
+function loadSession(name: Exclude<Recipe['session'], 'none'>): Session | null {
   const file = `.auth/${name}.json`;
   return existsSync(file) ? (JSON.parse(readFileSync(file, 'utf8')) as Session) : null;
 }
@@ -26,8 +39,12 @@ function loadSession(name: Recipe['session']): Session | null {
 for (const recipe of recipes) {
   test(`${recipe.id}`, async ({ page, context }, info) => {
     const locale = info.project.name;
-    const session = loadSession(recipe.session);
-    if (!session) {
+    // `none` is the sign-in screens: the real form, no storage state at all.
+    const session = recipe.session === 'none' ? null : loadSession(recipe.session);
+    if (!session && recipe.session !== 'none') {
+      // Only the superuser session is optional (it needs a password this harness never reads
+      // from the cluster). A tenant session that is missing is a broken bring-up, not a skip.
+      if (recipe.session !== 'superuser') throw new Error(`${recipe.id}: no ${recipe.session} session was minted; see global-setup`);
       if (process.env.GUIDE_REQUIRE_SUPERUSER === '1') {
         throw new Error(`${recipe.id}: no ${recipe.session} session and GUIDE_REQUIRE_SUPERUSER=1`);
       }
@@ -41,8 +58,10 @@ for (const recipe of recipes) {
     // The locale comes from localStorage (the detector ignores ?lng=).
     await context.addInitScript(
       ({ s, loc }) => {
-        if (s.auth) localStorage.setItem('dc-auth', JSON.stringify(s.auth));
-        localStorage.setItem('dc-identity', JSON.stringify(s.identity));
+        if (s) {
+          if (s.auth) localStorage.setItem('dc-auth', JSON.stringify(s.auth));
+          localStorage.setItem('dc-identity', JSON.stringify(s.identity));
+        }
         localStorage.setItem('dc.locale', loc);
         localStorage.setItem('dc-theme', 'light');
       },
@@ -52,12 +71,15 @@ for (const recipe of recipes) {
 
     if (recipe.clock) await page.clock.setFixedTime(new Date(recipe.clock));
     if (recipe.tiles) {
-      if (RECORD_TILES) await page.routeFromHAR(TILE_HAR, { url: TILE_URL, update: true, updateContent: 'embed' });
-      else await page.routeFromHAR(TILE_HAR, { url: TILE_URL, notFound: 'abort' });
+      if (RECORD_TILES) await context.routeFromHAR(TILE_HAR, { url: TILE_URL, update: true, updateContent: 'embed' });
+      else if (hasUsableHar()) await context.routeFromHAR(TILE_HAR, { url: TILE_URL, notFound: 'abort' });
+      else if (process.env.GUIDE_REQUIRE_HAR === '1') throw new Error(`${recipe.id}: no usable ${TILE_HAR} and GUIDE_REQUIRE_HAR=1`);
+      else console.warn(`${recipe.id}: no usable ${TILE_HAR}; map tiles load LIVE from the network (not offline-deterministic)`);
     }
 
     await page.goto(recipe.route);
-    await page.locator('[data-shot="page"]').waitFor({ timeout: 30_000 });
+    // Signed-out screens have no app shell, so there is no page region to wait for.
+    if (recipe.session !== 'none') await page.locator('[data-shot="page"]').waitFor({ timeout: 30_000 });
     await recipe.setup?.(page);
     await page.locator(recipe.anchor).first().waitFor({ state: 'visible', timeout: 30_000 });
 
@@ -96,13 +118,21 @@ for (const recipe of recipes) {
     const opts = {
       animations: 'disabled' as const,
       caret: 'hide' as const,
-      ...(recipe.mask ? { mask: [page.locator('[data-shot-mask]')], maskColor: MASK_COLOR } : {}),
+      // [data-shot-pii] (the signed-in email) is always painted over: it is a property of the
+      // seed identity, not of any screen. [data-shot-mask] only where a recipe asks.
+      mask: [page.locator('[data-shot-pii]'), ...(recipe.mask ? [page.locator('[data-shot-mask]')] : [])],
+      maskColor: MASK_COLOR,
     };
     const png = recipe.clip
       ? await page.locator(recipe.clip).first().screenshot(opts)
       : await page.screenshot(opts);
 
     mkdirSync(OUT, { recursive: true });
+    // GUIDE_PNG=1 keeps the lossless capture beside the WebP, for eyeballing a recipe run.
+    if (process.env.GUIDE_PNG === '1') {
+      mkdirSync(`${OUT}/png`, { recursive: true });
+      writeFileSync(`${OUT}/png/${recipe.id}.${locale}.png`, png);
+    }
     const webp = await sharp(png).webp({ quality: 80 }).toBuffer();
     const file = `${OUT}/${recipe.id}.${locale}.webp`;
     writeFileSync(file, webp);
