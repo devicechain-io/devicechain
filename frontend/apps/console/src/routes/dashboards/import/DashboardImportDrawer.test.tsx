@@ -128,6 +128,32 @@ describe('DashboardImportDrawer', () => {
     expect(screen.queryByRole('button', { name: 'Create draft' })).toBeNull();
   });
 
+  // A board well inside 1 MiB compact, in a file over 1 MiB: the indentation of a
+  // pretty-printed export does not count against the limit.
+  const padded = () => exported.replace('{', '{' + ' '.repeat((1 << 20) + 100));
+
+  it('reviews an uploaded file over 1 MiB whose definition fits compact', async () => {
+    h.have.add('press-7');
+    const { container } = render(
+      <DashboardImportDrawer open onOpenChange={() => {}} title="Import" source={{}} onCreated={vi.fn()} />,
+    );
+    const input = (container.ownerDocument ?? document).querySelector('input[type="file"]') as HTMLInputElement;
+    const file = new File([padded()], 'export.json', { type: 'application/json' });
+    expect(file.size).toBeGreaterThan(1 << 20);
+    fireEvent.change(input, { target: { files: [file] } });
+    await screen.findByRole('button', { name: 'Create draft' });
+  });
+
+  it('reviews a paste over 1 MiB whose definition fits compact', async () => {
+    h.have.add('press-7');
+    open({});
+    fireEvent.change(screen.getByLabelText('Dashboard JSON'), { target: { value: padded() } });
+    const review = screen.getByRole('button', { name: 'Review' }) as HTMLButtonElement;
+    expect(review.disabled).toBe(false);
+    fireEvent.click(review);
+    await screen.findByRole('button', { name: 'Create draft' });
+  });
+
   it('lists the external sites an imported board loads content from', async () => {
     h.have.add('press-7');
     const withImage = JSON.stringify({
