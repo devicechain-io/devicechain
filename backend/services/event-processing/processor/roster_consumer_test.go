@@ -120,6 +120,43 @@ func TestRosterConsumerPersistsThenAcks(t *testing.T) {
 	}
 }
 
+// 🔴 The explicit `disabled` flag on the roster fact is for other consumers (update-management).
+// This one keeps keying on the EMPTY PROFILE, exactly as before: a disabled device's fact (empty
+// profile, disabled=true) persists as a roster row under no profile, so no absence rule arms for
+// it, and the flag changes nothing else about what is stored.
+func TestRosterConsumerStillKeysOnTheEmptyProfileForADisabledDevice(t *testing.T) {
+	ack := &fakeAck{acked: make(chan struct{}, 1)}
+	store := newProcRosterStore(t)
+	rp := newTestProcessor(newTestStore(t), nil, 1)
+	rp.RosterStore = store
+	b, err := dmproto.MarshalDeviceRosterEvent(&dmmodel.DeviceRosterEvent{
+		DeviceToken: "dev1", ProfileToken: "", ExpectedSince: testBase, Disabled: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := messaging.NewConsumedMessage("dc.acme.device-roster", b, 0, nil, ack)
+	m.StreamSeq = 1
+	rp.RosterReader = &fakeReader{results: []readResult{{msg: m}}}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rp.procCtx = ctx
+	rp.readerWG.Add(1)
+	go rp.runRosterConsumer()
+
+	waitForAck(t, ack)
+	cancel()
+	rp.readerWG.Wait()
+
+	rows, err := store.LoadAll(context.Background())
+	if err != nil {
+		t.Fatalf("load roster: %v", err)
+	}
+	if len(rows) != 1 || rows[0].DeviceToken != "dev1" || rows[0].ProfileToken != "" || !rows[0].ExpectedSince.Equal(testBase) {
+		t.Fatalf("a disabled device's roster fact must persist under no profile: %+v", rows)
+	}
+}
+
 // A DEVICE deletion removes its roster entry; a non-device deletion is acked and ignored.
 func TestEntityDeletedConsumerRemovesDeviceOnly(t *testing.T) {
 	store := newProcRosterStore(t)

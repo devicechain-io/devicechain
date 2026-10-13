@@ -29,6 +29,11 @@ type DeviceRosterEvent struct {
 	DeviceToken   string
 	ProfileToken  string
 	ExpectedSince time.Time
+	// Disabled is the explicit statement that an operator has the device disabled. ProfileToken is
+	// empty for the same reason, and event-processing keys on that; Disabled exists so a consumer
+	// that must tell "disabled" from "its type has no profile" (update-management) need not infer
+	// it. It is additive on the wire: a consumer that predates it reads the field as false.
+	Disabled bool
 }
 
 // DeviceRosterPublisher publishes device-roster events (ADR-051 slice 4c-2). Like the

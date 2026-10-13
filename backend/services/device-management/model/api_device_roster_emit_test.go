@@ -283,7 +283,9 @@ func TestUpdateDevice_DisableTakesTheDeviceOutOfAbsenceAndEnableGivesAFreshGrace
 	assert.Equal(t, "", disabled.ProfileToken, "a disabled device is rostered with no profile, so no absence rule arms for it")
 	assert.True(t, disabled.ExpectedSince.After(past.Add(time.Hour)),
 		"the disable fact must be newer than the creation fact or the projection ignores it: got %s", disabled.ExpectedSince)
+	assert.True(t, disabled.Disabled, "the disable fact says so explicitly, not only through an empty profile")
 	assert.Equal(t, "", rosterOf().ProfileToken, "the reconcile page agrees with the fact")
+	assert.True(t, rosterOf().Disabled, "the reconcile page carries the flag too")
 
 	cap.events = nil
 	if _, err := api.UpdateDevice(ctx, "d1", &DeviceUpdateRequest{Enabled: dcgraphql.OptionalBoolOf(false)}); err != nil {
@@ -297,6 +299,7 @@ func TestUpdateDevice_DisableTakesTheDeviceOutOfAbsenceAndEnableGivesAFreshGrace
 	if assert.Len(t, cap.events, 1, "an enable emits exactly one roster fact") {
 		enabled := cap.events[0]
 		assert.Equal(t, "sensor-profile", enabled.ProfileToken, "an enabled device is rostered under its profile again")
+		assert.False(t, enabled.Disabled, "the enable fact clears the flag")
 		assert.True(t, enabled.ExpectedSince.After(disabled.ExpectedSince),
 			"the enable fact must be strictly newer than the disable fact: got %s, disable was %s",
 			enabled.ExpectedSince, disabled.ExpectedSince)

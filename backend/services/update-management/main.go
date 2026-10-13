@@ -78,7 +78,12 @@ var (
 	// progress, download requests, sync); Sweeper times out attempts whose device went quiet.
 	ReportsReader   messaging.MessageReader
 	ReportsConsumer *processor.ReportsConsumer
-	Sweeper         *processor.DeadlineSweeper
+
+	// RosterReader and RosterConsumer read device-management's device-roster facts, so a device's
+	// disable or enable is felt at once and an enable re-offers its assignment.
+	RosterReader   messaging.MessageReader
+	RosterConsumer *processor.RosterConsumer
+	Sweeper        *processor.DeadlineSweeper
 )
 
 func main() {
@@ -318,7 +323,16 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	}
 	ReportsReader = reader
 	ReportsConsumer = newReportsConsumer(reader, dead)
-	return ReportsConsumer.Initialize(context.Background())
+	if err := ReportsConsumer.Initialize(context.Background()); err != nil {
+		return err
+	}
+	rosterReader, err := nmgr.NewReader(streams.DeviceRoster)
+	if err != nil {
+		return err
+	}
+	RosterReader = rosterReader
+	RosterConsumer = processor.NewRosterConsumer(Microservice, rosterReader, core.NewNoOpLifecycleCallbacks(), Api, dead)
+	return RosterConsumer.Initialize(context.Background())
 }
 
 // newDeadLetterSink builds this service sink over the platform dead-letter stream, stamped by
@@ -346,6 +360,9 @@ func afterMicroserviceStarted(ctx context.Context) error {
 	if err := ReportsConsumer.Start(ctx); err != nil {
 		return err
 	}
+	if err := RosterConsumer.Start(ctx); err != nil {
+		return err
+	}
 	startSweeper()
 	return nil
 }
@@ -355,6 +372,11 @@ func afterMicroserviceStarted(ctx context.Context) error {
 func beforeMicroserviceStopped(ctx context.Context) error {
 	if Sweeper != nil {
 		Sweeper.Stop()
+	}
+	if RosterConsumer != nil {
+		if err := RosterConsumer.Stop(ctx); err != nil {
+			return err
+		}
 	}
 	if ReportsConsumer != nil {
 		if err := ReportsConsumer.Stop(ctx); err != nil {
@@ -366,6 +388,11 @@ func beforeMicroserviceStopped(ctx context.Context) error {
 
 // Called before microservice has been terminated, in the same order as the stop.
 func beforeMicroserviceTerminated(ctx context.Context) error {
+	if RosterConsumer != nil {
+		if err := RosterConsumer.Terminate(ctx); err != nil {
+			return err
+		}
+	}
 	if ReportsConsumer != nil {
 		if err := ReportsConsumer.Terminate(ctx); err != nil {
 			return err

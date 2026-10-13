@@ -444,6 +444,7 @@ func (api *Api) emitRosterEntries(ctx context.Context, where func(*gorm.DB) *gor
 			DeviceToken:   e.DeviceToken,
 			ProfileToken:  e.ProfileToken,
 			ExpectedSince: e.ExpectedSince,
+			Disabled:      e.Disabled,
 		})
 	}
 }
@@ -749,6 +750,11 @@ func (api *Api) UpdateDevice(ctx context.Context, token string, request *DeviceU
 	// An enable or disable re-rosters for the reason given where `toggled` is computed.
 	if retyped || toggled {
 		api.emitDeviceRosterForDevice(ctx, updated)
+	}
+	// An ENABLE resends the device its latest configuration revision (publishLatestConfiguration):
+	// nothing else would, and the device cannot tell its refused syncs from "nothing new".
+	if toggled && !updated.DisabledAt.Valid {
+		api.publishLatestConfiguration(ctx, updated)
 	}
 	return updated, nil
 }

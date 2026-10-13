@@ -182,6 +182,7 @@ func (api *Api) rosterEntries(ctx context.Context, where func(*gorm.DB) *gorm.DB
 			DeviceToken:   r.DeviceToken,
 			ProfileToken:  profile,
 			ExpectedSince: since.UTC(),
+			Disabled:      r.DisabledAt.Valid,
 		})
 	}
 	return out, nil

@@ -79,7 +79,7 @@ The device's profile must be on the artifact's compatible list, and the assignme
 `allowUnverifiedArtifacts` is off. A [disabled device](../guides/device-credentials.md#disabling-a-device)
 is refused with `DEVICE_DISABLED`; while a device is disabled, its update reports and download
 requests are discarded and a download link it was already given stops working, until it is enabled
-again. An update already in progress is not cancelled by a disable: the [deadlines](#deadlines)
+again, when it is re-offered its current assignment. An update already in progress is not cancelled by a disable: the [deadlines](#deadlines)
 keep running and may move it to `TIMED_OUT` or `UNKNOWN`; if the device is enabled again before
 the phase deadline passes, its next report continues the update, and a download link it was
 already given works again. A device works toward **one target per component**:
