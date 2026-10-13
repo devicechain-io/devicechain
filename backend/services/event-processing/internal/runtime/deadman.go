@@ -239,6 +239,40 @@ func (d *DeadmanArmer) AbsenceLive(key core.SeriesKey) bool {
 	return a.version == sr.ProfileVersionToken
 }
 
+// AbsenceCarriedForward reports whether an absence key's rule continues under the SAME stable identity in
+// the device's current active version: the rule is registered, the device is rostered, its profile's
+// active version differs from the rule's, and that active version holds an absence rule with the same
+// StableRuleKey. It marks the Resolved a republish emits for a still-in-scope device (ApplyActiveVersion
+// disarms the old version) as a handoff, not a clear — the alarm contributor id is stable across
+// versions, so publishing it would flap a still-silent device's alarm CLEARED then ACTIVE. It is false
+// for a disabled/deleted/re-typed device (the stable key's profile prefix, or the roster, no longer
+// matches) and for a republish that REMOVED the rule, both of which must clear. Deliberately not
+// VersionSuperseded, which is also true for a re-type.
+func (d *DeadmanArmer) AbsenceCarriedForward(key core.SeriesKey) bool {
+	sr, ok := d.reg.Lookup(key.Rule)
+	if !ok {
+		return false
+	}
+	m, ok := d.roster[devKey{sr.Tenant, key.Series}]
+	if !ok {
+		return false
+	}
+	a, ok := d.active[profKey{sr.Tenant, m.profileToken}]
+	if !ok || a.version == sr.ProfileVersionToken {
+		return false
+	}
+	stable, ok := StableRuleKey(key.Rule)
+	if !ok {
+		return false
+	}
+	for _, nr := range d.reg.AbsenceRulesFor(sr.Tenant, a.version) {
+		if k, ok := StableRuleKey(nr.Compiled.ID); ok && k == stable {
+			return true
+		}
+	}
+	return false
+}
+
 // VersionSuperseded reports whether a detection's (rule, device) belongs to a CONFIRMED-superseded
 // profile version: the device is rostered, its profile HAS a known active version, and that active
 // version is NOT the one owning the rule. It is the publish-time gate that stops a superseded version's
