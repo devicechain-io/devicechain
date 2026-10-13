@@ -2823,9 +2823,11 @@ func rollUpToTenants(byRule map[string]int) (map[string]int, int) {
 // superseded version's retained rule. It runs at the single publish choke point (every event-driven,
 // idle-advance, and replay fire flows through publishPending), evaluated against the loop-owned roster +
 // active views so a membership/version change since arming is honored. Two gates:
-//   - ABSENCE (always frontier-triggered, membership-gated): dropped whenever it is not AbsenceLive —
-//     the device left the rule's scope (deleted / re-typed / version superseded). Fail-safe toward a
-//     missed absence: AbsenceLive treats an unknown device/rule as NOT live.
+//   - ABSENCE (always frontier-triggered, membership-gated): a RAISE is dropped whenever it is not
+//     AbsenceLive — the device left the rule's scope (deleted / disabled / re-typed / version superseded).
+//     Fail-safe toward a missed absence: AbsenceLive treats an unknown device/rule as NOT live. A RESOLVED
+//     is NOT gated on liveness (it is the clear the departure itself emits for an already-published
+//     raise); it is dropped only when its own raise was dropped in the same pass.
 //   - DURATION / SESSION / AGGREGATE (frontier-triggered, ADR-057 D6): dropped only on a CONFIRMED
 //     version supersession (VersionSuperseded) — otherwise a superseded pane-close/timer would contribute
 //     a false edge to the alarm object under the stable contributor id (a stale unsatisfied pane-close
@@ -2840,14 +2842,27 @@ func (rp *ResolvedEventsProcessor) dropSupersededDetections() {
 		return
 	}
 	kept := rp.pendingDets[:0]
+	var droppedRaise map[detectcore.SeriesKey]struct{} // absence raises dropped in THIS pass
 	for _, d := range rp.pendingDets {
 		key := detectcore.SeriesKey{Rule: d.RuleID, Series: d.Series}
 		var drop bool
 		switch {
 		case d.Kind == detectcore.Absence:
-			// Absence is always frontier-triggered AND membership-gated: drop on ANY non-liveness
-			// (deleted / re-typed / version superseded), fail-safe toward a missed absence.
-			drop = !rp.armer.AbsenceLive(key)
+			// Absence is always frontier-triggered AND membership-gated: drop a RAISE on ANY
+			// non-liveness (deleted / disabled / re-typed / version superseded), fail-safe toward a
+			// missed absence. The gate exists to discard stale RAISES; a RESOLVED is the opposite
+			// kind of edge. Disarming a departed device (RemoveExpected) emits a Resolved precisely so
+			// the alarm raised before the departure is cleared, and at publish that device is by
+			// definition no longer live — gating the clear on liveness would leave the alarm raised
+			// forever. Publishing a clear for a non-live key is safe: the engine emits one only for a
+			// latched raise (at most one per raise, in order, so it cannot clear a newer raise — a
+			// later re-raise follows it in the buffer and is gated on its own liveness), and the one
+			// case where downstream never saw the raise — the raise was dropped in this same pass —
+			// is paired off below.
+			if !rp.armer.AbsenceLive(key) {
+				_, raiseDropped := droppedRaise[key]
+				drop = d.Edge != detectcore.EdgeResolved || raiseDropped
+			}
 		case frontierTriggeredKind(d.Kind):
 			// The OTHER frontier kinds (Duration/Session timers, Aggregate pane closes) ride the shared
 			// watermark, so a SUPERSEDED version's retained rule still fires them even though the fan-out
@@ -2866,6 +2881,12 @@ func (rp *ResolvedEventsProcessor) dropSupersededDetections() {
 		// Resolved drop needs no clear (resolve already cleared the latch on emit).
 		if d.Edge == detectcore.EdgeRaised {
 			rp.engine.ClearRaised(key)
+			if d.Kind == detectcore.Absence {
+				if droppedRaise == nil {
+					droppedRaise = map[detectcore.SeriesKey]struct{}{}
+				}
+				droppedRaise[key] = struct{}{}
+			}
 		}
 		if d.Kind == detectcore.Absence {
 			rp.metrics.recordStaleAbsenceDropped()
