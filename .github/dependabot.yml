@@ -74,6 +74,7 @@ updates:
       - "/frontend"
       - "/docs"
       - "/hack/guide-capture"
+      - "/hack/consumer-proof/harness"
     schedule:
       interval: "weekly"
       day: "monday"
@@ -108,10 +109,14 @@ updates:
   #     that indirection is UNVERIFIED. Adding it blind would be a config that
   #     cannot fail: it would look like coverage and might update nothing.
   #     Worth an experiment, but it must be confirmed against a real weekly run
-  #     before anyone counts it as covered. Note also that digest-pinning THAT
-  #     file is blocked on a separate defect — operand-image.yml derives the PG
-  #     minor with `${PG_IMAGE##*:}`, which returns the digest hex once a
-  #     `@sha256:` suffix is present.
+  #     before anyone counts it as covered. Its base IS now digest-pinned
+  #     (`tag@sha256:` in both the Dockerfile's `ARG PG_IMAGE` default and
+  #     versions.conf), and the old blocker — a PG-minor derivation that returned
+  #     the digest hex — is fixed by deploy/images/timescaledb/pg-minor.sh, shared
+  #     by operand-image.yml and check-tofu-validations.sh. Until the experiment
+  #     above succeeds, bump it BY HAND: see the how-to in versions.conf
+  #     (`docker buildx imagetools inspect`, replace tag + digest in both files,
+  #     raise IMAGE_REVISION).
   - package-ecosystem: "docker"
     directories:
       - "/backend/k8s"

@@ -85,6 +85,14 @@
     <IsAotCompatible>true</IsAotCompatible>
   </PropertyGroup>
 
+  <!-- The Native-AOT host publishes with -r linux-x64 and references this project, which puts
+       a linux-x64 graph into this project's restore. Declaring it keeps that graph in the committed
+       packages.lock.json, so the publish does not rewrite the lock file. Restore-time only; it does
+       not change what is built or packed. -->
+  <PropertyGroup>
+    <RuntimeIdentifiers>linux-x64</RuntimeIdentifiers>
+  </PropertyGroup>
+
   <ItemGroup>
     <!-- Packed from the repository's single brand-asset directory rather than a copy
          beside this csproj: one file, so the icon cannot drift away from the logo it
