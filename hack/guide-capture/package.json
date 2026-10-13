@@ -1,0 +1,15 @@
+{
+  "name": "dc-guide-capture",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "description": "Console user-guide screenshot harness (maintainer tooling, not part of the npm workspaces)",
+  "scripts": {
+    "capture": "playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.64.0",
+    "@types/node": "^22.0.0",
+    "sharp": "^0.34.0"
+  }
+}
