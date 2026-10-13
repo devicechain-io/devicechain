@@ -26,6 +26,14 @@ func TestIsRefusedRawExecute(t *testing.T) {
 	if !IsRefusedRawExecute("lwm2m.execute", []byte(`{"Path":"3/0/5/","args":"x"}`)) {
 		t.Error("variant spelling must be refused")
 	}
+	for _, amb := range []string{`{"path":"/3/0/5","Path":"/3/0/9"}`, `{"path":"/3/0/9","PATH":"/3/0/5"}`} {
+		if !IsRefusedRawExecute("lwm2m.execute", []byte(amb)) || !HasAmbiguousPath([]byte(amb)) {
+			t.Errorf("ambiguous payload %s must be refused", amb)
+		}
+	}
+	if HasAmbiguousPath([]byte(`{"path":"/3/0/9","args":"x"}`)) || HasAmbiguousPath([]byte(`nope`)) {
+		t.Error("single-key and non-object payloads are not ambiguous")
+	}
 	for _, c := range []struct {
 		key     string
 		payload string

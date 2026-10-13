@@ -256,11 +256,11 @@ func decideAgainstVocabulary(vocab *CommandVocabulary, commandKey string, payloa
 	// Before the free-form backward path, not after it: an unconstrained profile accepts any
 	// ad-hoc command, and that must not include a raw wipe of the device.
 	if lwm2mpath.IsRefusedRawExecute(commandKey, payload) {
-		return vocabularyDecision{
-			code:       RejectCommandDestructiveRefused,
-			reason:     "this LwM2M path performs a Factory Reset, which cannot be sent as a raw " + commandKey + "; a confirmed named operation is planned",
-			commandKey: commandKey,
+		reason := "this LwM2M path performs a Factory Reset, which cannot be sent as a raw " + commandKey + "; a confirmed named operation is planned"
+		if lwm2mpath.HasAmbiguousPath(payload) {
+			reason = "ambiguous path: the payload names its path more than once"
 		}
+		return vocabularyDecision{code: RejectCommandDestructiveRefused, reason: reason, commandKey: commandKey}
 	}
 	// Decision 4 backward path: no declared vocabulary ⇒ free-form, as today.
 	if !vocab.Constrained {

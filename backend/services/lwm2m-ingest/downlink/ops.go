@@ -160,6 +160,9 @@ func (o *Ops) execute(ctx context.Context, conn mux.Conn, payload []byte) OpResu
 	// wire and must not depend on every path having gone through that gate. Checked before path
 	// validation so every spelling gets the same, specific refusal.
 	if lwm2mpath.IsRefusedRawExecute(CommandExecute, payload) {
+		if lwm2mpath.HasAmbiguousPath(payload) {
+			return refuse(labelExecute, "ambiguous path: the payload names its path more than once")
+		}
 		return refuse(labelExecute, "Factory Reset cannot be sent as a raw execute")
 	}
 	p, err := parsePayload(payload)
@@ -189,6 +192,9 @@ func parsePayload(payload []byte) (cmdPayload, error) {
 	}
 	if err := json.Unmarshal(payload, &p); err != nil {
 		return p, fmt.Errorf("command payload is not valid JSON: %w", err)
+	}
+	if lwm2mpath.HasAmbiguousPath(payload) {
+		return p, errors.New("ambiguous path: the payload names its path more than once")
 	}
 	if err := validatePath(p.Path); err != nil {
 		return p, err

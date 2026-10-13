@@ -48,12 +48,35 @@ func IsFactoryResetPath(path string) bool {
 		segs[0] == deviceObjectID && segs[factoryResetResourceSlot] == factoryResetResourceID
 }
 
+// HasAmbiguousPath reports whether a command payload carries more than one key that names the
+// path under Go's case-insensitive JSON key matching (for example "path" and "Path"). Decoders
+// disagree about which one wins once a store has re-ordered the keys, so such a payload is refused
+// rather than guessed at. A payload that is not a JSON object is not ambiguous (it is malformed,
+// which the executor rejects separately).
+func HasAmbiguousPath(payload []byte) bool {
+	var keys map[string]json.RawMessage
+	if err := json.Unmarshal(payload, &keys); err != nil {
+		return false
+	}
+	n := 0
+	for k := range keys {
+		if strings.EqualFold(k, "path") {
+			n++
+		}
+	}
+	return n > 1
+}
+
 // IsRefusedRawExecute reports whether a command named commandKey with the given payload is a raw
-// lwm2m.execute of the Factory Reset resource. A payload that is not a JSON object with a string
-// path is not this command (the executor rejects it separately).
+// lwm2m.execute that must be refused: one addressing the Factory Reset resource, or one whose path
+// is ambiguous (see HasAmbiguousPath). A payload that is not a JSON object with a string path is
+// not this command (the executor rejects it separately).
 func IsRefusedRawExecute(commandKey string, payload []byte) bool {
 	if commandKey != ExecuteCommand {
 		return false
+	}
+	if HasAmbiguousPath(payload) {
+		return true
 	}
 	var p struct {
 		Path string `json:"path"`

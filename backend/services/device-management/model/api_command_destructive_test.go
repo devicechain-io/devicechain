@@ -51,6 +51,17 @@ func TestRawFactoryResetExecuteIsRefused(t *testing.T) {
 			})
 		}
 
+		for _, amb := range []string{`{"path":"/3/0/5","Path":"/3/0/9"}`, `{"path":"/3/0/9","PATH":"/3/0/5"}`} {
+			v, err := api.ValidateCommandEnqueue(ctx, "dev", "lwm2m.execute", []byte(amb))
+			if err != nil || v.Allowed || string(v.Code) != "COMMAND_DESTRUCTIVE_REFUSED" {
+				t.Fatalf("%s single (%s): %+v, %v", amb, vocab, v, err)
+			}
+			refusals, err := api.ValidateCommandEnqueueBatch(ctx, []string{"dev"}, "lwm2m.execute", []byte(amb))
+			if err != nil || len(refusals) != 1 || string(refusals[0].Code) != "COMMAND_DESTRUCTIVE_REFUSED" {
+				t.Fatalf("%s batch (%s): %+v, %v", amb, vocab, refusals, err)
+			}
+		}
+
 		// The counterweights: Reboot and other executes still pass, and so does a read of /3/0/5.
 		for _, c := range []struct{ key, payload string }{
 			{"lwm2m.execute", `{"path":"/3/0/4"}`},
