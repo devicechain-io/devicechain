@@ -301,6 +301,76 @@ func TestADrainCheckThatMeetsAnotherReplicasRecreateWaitsForIt(t *testing.T) {
 	require.Empty(t, nmgr.PendingRetentionMigrations())
 }
 
+// durableReadJS answers the drain check's durable read with a not-found while armed: the
+// stream's when streamGone is set, the durable's when durableGone is. Every other caller, and
+// the drain check's stream read, reaches the broker.
+type durableReadJS struct {
+	nats.JetStreamContext
+	streamGone, durableGone atomic.Bool
+}
+
+func (d *durableReadJS) ConsumerInfo(stream, durable string, opts ...nats.JSOpt) (*nats.ConsumerInfo, error) {
+	if calledFromDrainCheck() {
+		switch {
+		case d.streamGone.Load():
+			return nil, nats.ErrStreamNotFound
+		case d.durableGone.Load():
+			return nil, nats.ErrConsumerNotFound
+		}
+	}
+	return d.JetStreamContext.ConsumerInfo(stream, durable, opts...)
+}
+
+// Waiting for another replica's recreate is bounded. A stream that a replica deleted and never
+// recreated fails the start within the bound, says the stream is missing rather than that it
+// holds unforwarded messages, and is not created by this replica.
+func TestAStreamThatStaysMissingFailsTheMigrationWithinTheBound(t *testing.T) {
+	srv := startEmbeddedServer(t)
+	var fake *durableReadJS
+	nmgr, reader := replicaManagerWith(t, srv, uniqueArea("stays-missing"), 1, func(n *NatsManager) {
+		fake = &durableReadJS{JetStreamContext: n.js}
+		n.js = fake
+		n.retentionDrainBound = 300 * time.Millisecond
+		n.retentionDrainPoll = 20 * time.Millisecond
+	})
+	consumeCaptured(t, reader)
+	fake.streamGone.Store(true)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	err := nmgr.MigratePendingRetention(ctx)
+	require.Error(t, err)
+	require.NotErrorIs(t, err, context.DeadlineExceeded, "the wait was not bounded by the drain bound")
+	require.Contains(t, err.Error(), "was still missing")
+	require.NotContains(t, err.Error(), "unforwarded")
+
+	info, serr := nmgr.js.StreamInfo(captureStreamOn("test"))
+	require.NoError(t, serr)
+	require.Equal(t, nats.LimitsPolicy, info.Config.Retention, "the stream was recreated by a replica that never saw it drain")
+	require.Equal(t, []string{captureSuffix}, nmgr.PendingRetentionMigrations())
+}
+
+// A missing DURABLE is not a missing stream. An empty stream with no durable of this
+// service's has nothing waiting to be read, so it is drained and recreated.
+func TestAnEmptyStreamWithNoDurableIsDrained(t *testing.T) {
+	srv := startEmbeddedServer(t)
+	var fake *durableReadJS
+	nmgr, _ := replicaManagerWith(t, srv, uniqueArea("no-durable"), 0, func(n *NatsManager) {
+		fake = &durableReadJS{JetStreamContext: n.js}
+		n.js = fake
+		n.retentionDrainBound = 2 * time.Second
+		n.retentionDrainPoll = 20 * time.Millisecond
+	})
+	fake.durableGone.Store(true)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	require.NoError(t, nmgr.MigratePendingRetention(ctx))
+	info, err := nmgr.js.StreamInfo(captureStreamOn("test"))
+	require.NoError(t, err)
+	require.Equal(t, nats.WorkQueuePolicy, info.Config.Retention)
+}
+
 // A capture stream created with no predecessor to read (the restart after a failed recreate,
 // or a fresh install) does not start at 1.
 func TestACaptureStreamWithNoPredecessorStartsPastAnyOldSequence(t *testing.T) {

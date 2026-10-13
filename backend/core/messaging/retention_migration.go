@@ -159,6 +159,10 @@ func (nmgr *NatsManager) migrateRetention(ctx context.Context, suffix, name stri
 				break
 			}
 			if time.Now().After(deadline) {
+				if info == nil {
+					return fmt.Errorf("messaging: stream %s was still missing after %s: it was deleted, and not "+
+						"recreated, while this replica waited to migrate it; refusing to start", name, bound)
+				}
 				return fmt.Errorf("messaging: stream %s still holds unforwarded messages after %s (%s); refusing to "+
 					"start rather than delete them. It has to be emptied, by its reader or by an operator, before "+
 					"its retention can change", name, bound, why)
@@ -283,8 +287,9 @@ func (nmgr *NatsManager) streamDrained(ctx context.Context, name, durable string
 	ci, err := nmgr.js.ConsumerInfo(name, durable, nats.Context(ctx))
 	switch {
 	case errors.Is(err, nats.ErrStreamNotFound):
-		// The info read above describes a stream that is no longer there. It is not returned,
-		// so no caller can act on it: the lock path compares its creation time.
+		// The info read above describes a stream that is no longer there, so it is not
+		// returned: the answer is exactly the first read's not-found, and no caller is left
+		// holding a stream that does not exist.
 		return nil, false, gone, nil
 	case errors.Is(err, nats.ErrConsumerNotFound):
 		if info.State.Msgs > 0 {
