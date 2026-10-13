@@ -1494,7 +1494,10 @@ type PDeviceRosterEvent struct {
 	DeviceToken   string `protobuf:"bytes,1,opt,name=device_token,json=deviceToken,proto3" json:"device_token,omitempty"`
 	ProfileToken  string `protobuf:"bytes,2,opt,name=profile_token,json=profileToken,proto3" json:"profile_token,omitempty"`
 	ExpectedSince string `protobuf:"bytes,3,opt,name=expected_since,json=expectedSince,proto3" json:"expected_since,omitempty"`
-	Disabled      bool   `protobuf:"varint,4,opt,name=disabled,proto3" json:"disabled,omitempty"`
+	// True while an operator has the device disabled. The profile_token is empty then too (the
+	// detection engine keys on that and is unchanged); this is the explicit statement, so a
+	// consumer that must tell "disabled" from "its type has no profile" does not infer it.
+	Disabled bool `protobuf:"varint,4,opt,name=disabled,proto3" json:"disabled,omitempty"`
 }
 
 func (x *PDeviceRosterEvent) Reset() {
