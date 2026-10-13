@@ -23,6 +23,13 @@ export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '');
   return {
     plugins: [react(), tailwindcss()],
+    build: {
+      // Hashed build output lives under /_app/, NOT Vite's default /assets/: the console has a
+      // client-side route at /assets/<token> (the asset registry), and a static directory of the
+      // same name makes nginx answer a refresh or shared link with the immutable-cache 404 block.
+      // Keep this in step with the `location /_app/` block in deploy/nginx.conf.
+      assetsDir: '_app',
+    },
     // The console is a browser app, so its unit tests default to a DOM
     // environment: anything touching window/localStorage (the i18n config and
     // its browser language detector, ADR-066) needs it, and a per-file
