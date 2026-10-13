@@ -208,7 +208,7 @@ metadata:
   labels:
     {{- include "devicechain.instanceLabels" . | nindent 4 }}
   annotations:
-    # No rewrite: the console nginx serves /assets/* verbatim and falls back to
+    # No rewrite: the console nginx serves /_app/* verbatim and falls back to
     # index.html itself, so the path must reach it unchanged.
     #
     # No cert-manager annotation here: the API ingress above owns the Certificate
