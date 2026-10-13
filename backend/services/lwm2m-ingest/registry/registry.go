@@ -83,6 +83,9 @@ const (
 // Registry depends on the interface so its logic is testable without device-management.
 type deviceResolver interface {
 	Resolve(ctx context.Context, tenant, externalId string, policy adapter.IngestPolicy) (string, adapter.ResolveOutcome, error)
+	// Disabled reports whether an operator has disabled the device, asking device-management
+	// afresh (never the resolver's token cache). An error means the answer could not be had.
+	Disabled(ctx context.Context, tenant, deviceToken string) (bool, error)
 }
 
 // presenceEmitter writes one presence StateChange durably (ADR-067). *adapter.Emitter
@@ -107,6 +110,7 @@ type Metrics struct {
 	Dropped              prometheus.Counter // unknown device (auto-register off) OR emit budget exhausted
 	AuthErrors           prometheus.Counter // identity un-recoverable / no binding (handler layer)
 	BadRequests          prometheus.Counter // malformed /rd request (handler layer)
+	DisabledRefused      prometheus.Counter // registrations refused (4.03) because an operator disabled the device
 	ObservationOverflow  prometheus.Counter // telemetry instances a registration declared beyond the per-registration observe cap (L2b)
 }
 
@@ -285,6 +289,9 @@ const (
 	// RegisterUnavailable — a retryable failure (device-management/NATS unreachable),
 	// → 5.03; the device's own LwM2M retry re-drives it.
 	RegisterUnavailable
+	// RegisterDeviceDisabled — an operator has disabled (quarantined) the device, so it may not
+	// register (a definitive refusal, → 4.03, until the device is enabled again).
+	RegisterDeviceDisabled
 )
 
 // Register handles a POST /rd for an already-authenticated identity + its resolved
@@ -346,6 +353,25 @@ func (r *Registry) Register(ctx context.Context, identity string, binding config
 		log.Debug().Str("tenant", binding.Tenant).Str("externalId", binding.ExternalId).
 			Msgf("Refusing LwM2M registration (%s).", reason)
 		return RegisterUnknownDevice, "", 0, false
+	}
+	// 🔴 A DISABLED (QUARANTINED) DEVICE DOES NOT REGISTER. This is the one door LwM2M has: there is
+	// no broker auth-callout in front of the DTLS handshake, so without this the device would be
+	// CONNECTED, observed and harvested like any other. It is asked of device-management afresh,
+	// not of the resolver's hour-long token cache, and it fails closed: an answer that cannot be
+	// had refuses the registration as retryable rather than letting a possibly-quarantined device
+	// in. It comes before anything is emitted or installed, so a refusal leaves nothing behind
+	// and enabling the device needs no repair.
+	disabled, derr := r.resolver.Disabled(ctx, binding.Tenant, token)
+	if derr != nil {
+		log.Warn().Err(derr).Str("tenant", binding.Tenant).Str("externalId", binding.ExternalId).
+			Msg("Could not check whether an LwM2M device is disabled; refusing the registration so the device re-Registers.")
+		return RegisterUnavailable, "", 0, false
+	}
+	if disabled {
+		incr(r.metrics.DisabledRefused, 1)
+		log.Debug().Str("tenant", binding.Tenant).Str("externalId", binding.ExternalId).
+			Msg("Refusing LwM2M registration (the device is disabled).")
+		return RegisterDeviceDisabled, "", 0, false
 	}
 	if outcome == adapter.ResolveCreated {
 		incr(r.metrics.DevicesRegistered, 1)

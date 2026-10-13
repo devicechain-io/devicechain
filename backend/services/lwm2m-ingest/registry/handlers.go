@@ -194,6 +194,8 @@ func (h *Handlers) handleRd(w mux.ResponseWriter, r *mux.Message) {
 		}
 	case RegisterUnknownDevice:
 		h.respond(w, codes.Forbidden) // 4.03 — device not provisioned, this credential does not auto-register
+	case RegisterDeviceDisabled:
+		h.respond(w, codes.Forbidden) // 4.03 — an operator disabled the device; it may register again once enabled
 	default: // RegisterUnavailable
 		h.respond(w, codes.ServiceUnavailable) // 5.03 — retryable; the device re-Registers
 	}

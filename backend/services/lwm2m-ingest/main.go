@@ -350,6 +350,8 @@ func buildMetrics() {
 			"/rd requests refused because no authenticated PSK identity (or its tenancy binding) could be recovered."),
 		BadRequests: Microservice.NewCounter("bad_requests_total",
 			"Malformed /rd requests (e.g. a registration-item request with no location)."),
+		DisabledRefused: Microservice.NewCounter("registrations_disabled_refused_total",
+			"LwM2M /rd registrations refused (4.03) because an operator has disabled the device."),
 		ObservationOverflow: Microservice.NewCounter("observation_overflow_total",
 			"Telemetry object instances a registration declared beyond the per-registration observe cap (dropped, not observed)."),
 	}
@@ -653,7 +655,7 @@ func buildPresenceLayer(leaderCtx context.Context, bindings map[string]config.Ps
 		opts.Parker = parker
 		// The device-information harvest writes CLIENT attributes to device-management over the
 		// registrar's own client and coordinate (the service token carries device:write).
-		opts.Harvester = downlink.NewHarvester(client, ingestURL, harvestMetrics)
+		opts.Harvester = downlink.NewHarvester(client, ingestURL, harvestMetrics, registrar.Disabled)
 		dispatcher = downlink.NewDispatcher(CommandReader, ResponseWriter, connTable, downlink.NewOps(), fetcher, claimer, downlinkMetrics, opts)
 		// Wire the wake-drain: a device becoming reachable on a fresh conn (Register / re-handshake
 		// Update) gates its live commands and triggers a drain of its held commands. A no-op when draining is disabled or on a

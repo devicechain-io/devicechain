@@ -305,6 +305,14 @@ type harvestRig struct {
 	m    HarvestMetrics
 	// gone is the tenant-deleted answer the dispatcher sees.
 	gone atomic.Bool
+	// disabled is the "has an operator disabled this device" answer the harvester sees; disabledErr,
+	// when set, makes the question itself fail; asked counts the questions.
+	disabled    atomic.Bool
+	disabledErr atomic.Bool
+	asked       atomic.Int32
+	// disableAfter, when positive, flips disabled on once that many questions have been asked, so a
+	// device can be disabled between the harvest's start and its writes.
+	disableAfter atomic.Int32
 	// stop ends the term (cancels Run's ctx) and waits for Run to return.
 	stop func()
 }
@@ -320,7 +328,16 @@ func newHarvestRig(t *testing.T, replies map[string]infoReply, tweak ...func(*Op
 		st:   newFakeStore(),
 		m:    harvestMetricsForTest(),
 	}
-	g.h = NewHarvester(g.rec, "http://dm/graphql", g.m)
+	g.h = NewHarvester(g.rec, "http://dm/graphql", g.m, func(context.Context, string, string) (bool, error) {
+		n := g.asked.Add(1)
+		if after := g.disableAfter.Load(); after > 0 && n >= after {
+			g.disabled.Store(true)
+		}
+		if g.disabledErr.Load() {
+			return false, errors.New("device-management unreachable")
+		}
+		return g.disabled.Load(), nil
+	})
 	g.h.now = g.clk.Now
 	look := &fakeLookup{conn: g.conn, reaches: map[string]Reach{"acme/dev-1": ReachLive}}
 	opts := Options{
@@ -627,10 +644,51 @@ func TestHarvestDoesNotReadADeletedTenantsDevice(t *testing.T) {
 // On a standby (no term running) a live device is not harvested, and the request does not use up
 // the device's throttle: the leader that does serve it must still harvest it.
 func TestHarvestOnAStandbyReservesNothing(t *testing.T) {
-	h := NewHarvester(&attrRecorder{}, "http://dm/graphql", HarvestMetrics{})
+	h := NewHarvester(&attrRecorder{}, "http://dm/graphql", HarvestMetrics{}, neverDisabled)
 	d := NewDispatcher(&chanReader{ch: make(chan messaging.Message)}, &fakePublisher{}, &fakeLookup{}, &orderExecutor{},
 		newFakeStore(), newFakeStore(), gateMetrics(), Options{Workers: 1, Harvester: h,
 			ReadPacer: core.NewReadPacer(nil, "device commands").UseClock(core.VirtualClock())})
 	d.Harvest("acme", "dev-1")
 	assert.True(t, h.due(deviceKey{"acme", "dev-1"}), "the standby's request reserved the device")
+}
+
+func neverDisabled(context.Context, string, string) (bool, error) { return false, nil }
+
+// 🔴 A DISABLED DEVICE IS NEITHER READ NOR WRITTEN. The harvest is a read toward the device and
+// a set of attribute writes about it; a quarantined device gets neither. The answer is asked of
+// device-management at harvest time (the device may have been disabled after it registered), and
+// enabling the device lets the next harvest run, because the refusal reserved nothing.
+func TestHarvestSkipsADisabledDeviceAndReleasesItOnEnable(t *testing.T) {
+	g := newHarvestRig(t, fullDevice())
+	g.disabled.Store(true)
+	g.d.Harvest("acme", "dev-1")
+	require.Eventually(t, func() bool { return testutil.ToFloat64(g.m.Skipped) == 1 }, 3*time.Second, 5*time.Millisecond)
+	assert.Empty(t, g.conn.asked(), "a disabled device was read")
+	g.h.WaitForWrites()
+	assert.Zero(t, g.rec.count(), "a disabled device had attributes written")
+
+	g.disabled.Store(false)
+	g.d.Harvest("acme", "dev-1") // no clock advance: the refusal must not have used the throttle
+	g.waitWrites(t, 6)
+}
+
+// A device disabled WHILE it is being read (the read takes up to an op timeout) is not written.
+func TestHarvestRechecksBeforeWritingWhatItRead(t *testing.T) {
+	g := newHarvestRig(t, fullDevice())
+	g.disableAfter.Store(2) // enabled when the harvest starts, disabled by the time it would write
+	g.d.Harvest("acme", "dev-1")
+	require.Eventually(t, func() bool { return g.asked.Load() >= 2 }, 3*time.Second, 5*time.Millisecond)
+	g.h.WaitForWrites()
+	assert.Len(t, g.conn.asked(), 5, "the device was read while still enabled")
+	assert.Zero(t, g.rec.count(), "attributes were written for a device disabled mid-harvest")
+}
+
+// A disabled-state question that cannot be answered is not "enabled": no read, no write.
+func TestHarvestFailsClosedWhenDisabledStateCannotBeRead(t *testing.T) {
+	g := newHarvestRig(t, fullDevice())
+	g.disabledErr.Store(true)
+	g.d.Harvest("acme", "dev-1")
+	require.Eventually(t, func() bool { return testutil.ToFloat64(g.m.Skipped) == 1 }, 3*time.Second, 5*time.Millisecond)
+	assert.Empty(t, g.conn.asked())
+	assert.Zero(t, g.rec.count())
 }

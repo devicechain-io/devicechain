@@ -377,3 +377,29 @@ func TestShedRegisterEmitsNoPresence(t *testing.T) {
 	assert.Empty(t, em.connects(), "a shed Register must not durably emit presence")
 	assert.Equal(t, 1, lim.callCount())
 }
+
+// 🔴 OVER A REAL DTLS HANDSHAKE, a disabled device's registration is answered 4.03 Forbidden, with
+// no Location and no CONNECTED emitted; once the device is enabled the same credential registers
+// (2.01) with nothing left over.
+func TestDisabledDeviceRegistrationIsForbiddenOverTheWire(t *testing.T) {
+	addr, res, em := startIntegration(t)
+	res.mu.Lock()
+	res.disabled = true
+	res.mu.Unlock()
+	conn := dial(t, addr, "dev-1")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	resp, err := conn.Post(ctx, "/rd", message.TextPlain, nil, query("ep=x", "lt=300")...)
+	require.NoError(t, err)
+	require.Equal(t, codes.Forbidden, resp.Code(), "a disabled device's registration must be 4.03")
+	assert.Empty(t, em.connects(), "a refused registration emitted a CONNECTED")
+
+	res.mu.Lock()
+	res.disabled = false
+	res.mu.Unlock()
+	resp, err = conn.Post(ctx, "/rd", message.TextPlain, nil, query("ep=x", "lt=300")...)
+	require.NoError(t, err)
+	require.Equal(t, codes.Created, resp.Code())
+	assert.Len(t, em.connects(), 1)
+}

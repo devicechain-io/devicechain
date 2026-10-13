@@ -168,6 +168,9 @@ func (m *mainResolver) Resolve(_ context.Context, _, _ string, _ adapter.IngestP
 	return m.token, m.outcome, nil
 }
 
+// Disabled reports every device enabled: these tests are about the term's lifecycle, not quarantine.
+func (m *mainResolver) Disabled(context.Context, string, string) (bool, error) { return false, nil }
+
 type mainEmitter struct {
 	mu     sync.Mutex
 	events []adapter.PresenceEvent
