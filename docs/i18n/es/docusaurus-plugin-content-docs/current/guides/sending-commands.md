@@ -203,8 +203,10 @@ lote](../concepts/commands.md#cancelling-a-batch).
 
 Cuando un dispositivo se [deshabilita](./device-credentials.md#disabling-a-device), los comandos
 que ya estaban encolados para él quedan **retenidos**: pasan a `HELD`, no se publican y no se
-cancelan. Cuando el dispositivo se habilita se liberan y salen, del más antiguo al más reciente.
-Mientras esperan siguen venciendo en su propio `expiresAt`, como `EXPIRED`. Esta retención termina
+cancelan. Cuando el dispositivo se habilita se liberan y salen, del más antiguo al más reciente, siempre
+que el dispositivo esté conectado: uno que sigue desconectado al habilitarlo los mantiene en
+`HELD` hasta que se reconecte, como cualquier dispositivo desconectado. Mientras esperan siguen
+venciendo en su propio `expiresAt`, como `EXPIRED`. Esta retención termina
 solo cuando se habilita el dispositivo, y eso la distingue de un comando retenido para un
 dispositivo que simplemente está desconectado.
 

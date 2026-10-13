@@ -195,8 +195,9 @@ cancelled, and it stops at the same line, `SENT`. See
 
 When a device is [disabled](./device-credentials.md#disabling-a-device), the commands already
 queued for it are **held**: they move to `HELD`, are not published, and are not cancelled. When
-the device is enabled they are released and go out, oldest first. While they wait they still
-lapse at their own `expiresAt`, as `EXPIRED`. This hold ends only when the device is enabled,
+the device is enabled they are released and go out, oldest first, provided the device is
+connected: one that is still offline when it is enabled keeps them `HELD` until it reconnects, as
+any offline device does. While they wait they still lapse at their own `expiresAt`, as `EXPIRED`. This hold ends only when the device is enabled,
 which is what separates it from a command held for a device that is merely offline.
 
 To see what is held, ask for the device's hold. `heldCount` is every command the device still
