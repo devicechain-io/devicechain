@@ -90,6 +90,7 @@ var reportShape = shape{
 	"config": {"haveRevision": nil},
 	// The assignment and download kinds (assignment.go) share the envelope too.
 	"url": nil, "expiresAt": nil, "trust": nil,
+	"signature": nil, "keyId": nil, "algorithm": nil,
 	"artifact": {"version": nil, "digest": nil, "size": nil, "requiresReboot": nil},
 }
 

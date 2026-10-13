@@ -28,6 +28,9 @@
 //   - duplicate reports: Faults.DuplicateNext, and a crash after a send but before the device
 //     recorded it;
 //   - failed verification: Faults.FailVerification, or a Source that serves corrupt bytes;
+//   - failed authenticity: Faults.CorruptSignature, an assignment signed by a key outside
+//     Config.TrustedKeys (UNKNOWN_SIGNER), or an UNVERIFIED one while Config.RequireSignature is
+//     in force, which is the default;
 //   - a reboot that never confirms: Faults.NoConfirmAfterReboot (device boots, says nothing), and
 //     Faults.BootOldImage (device boots its previous image);
 //   - restarts: Faults.Crash kills the updater at a named point; Open on the same file is the
@@ -97,6 +100,13 @@ type Config struct {
 	ChunkSize int64
 	// InitialVersion is the version running on a fresh device (no state file yet).
 	InitialVersion string
+	// TrustedKeys are the PEM public keys (ECDSA P-256 or Ed25519, "PUBLIC KEY" blocks) whose
+	// signatures this device accepts. A private key is refused without being echoed.
+	TrustedKeys []string
+	// RequireSignature is whether an UNVERIFIED update is refused (UNKNOWN_SIGNER). Nil means
+	// true: a device that does not say otherwise does not install unsigned images. Use
+	// RequireSignatureOption(false) for a device that predates signing.
+	RequireSignature *bool
 }
 
 // Assignment is what the platform tells the device to install. Its wire form belongs to a later
@@ -110,6 +120,11 @@ type Assignment struct {
 	Version        string
 	Size           int64
 	RequiresReboot bool
+	// Trust is UNVERIFIED (or empty) or SIGNED; a SIGNED assignment carries the other three.
+	Trust     string
+	Signature string // base64, standard alphabet
+	KeyID     string // lowercase hex SHA-256 of the signer's DER SubjectPublicKeyInfo
+	Algorithm string // ECDSA_P256_SHA256 or ED25519
 }
 
 // CrashPoint names where in a step a Faults.Crash hook may kill the updater.
@@ -149,6 +164,8 @@ type Faults struct {
 	NoConfirmAfterReboot bool
 	// BootOldImage makes the reboot come up on the previous image (the new slot was rejected).
 	BootOldImage bool
+	// CorruptSignature flips a bit of the signature before it is verified.
+	CorruptSignature bool
 }
 
 // Updater is the fake device-side updater. Methods are safe for concurrent use but run one at a
@@ -160,6 +177,7 @@ type Updater struct {
 	h      hash.Hash
 	faults Faults
 	dead   bool
+	keys   map[string]any // keyId -> public key
 }
 
 // Open loads the state file (or starts fresh when there is none) and returns the updater. A file
@@ -180,6 +198,10 @@ func Open(cfg Config) (*Updater, error) {
 	if cfg.ChunkSize == 0 {
 		cfg.ChunkSize = 64 << 10
 	}
+	keys, err := parseTrustedKeys(cfg.TrustedKeys)
+	if err != nil {
+		return nil, err
+	}
 	st, existed, err := loadState(cfg.StatePath)
 	if err != nil {
 		return nil, err
@@ -193,7 +215,7 @@ func Open(cfg Config) (*Updater, error) {
 		}
 		st = state{Component: cfg.Component, BootSeq: 1, BootID: bootID(1), RunningVersion: cfg.InitialVersion}
 	}
-	u := &Updater{cfg: cfg, st: st, h: sha256.New()}
+	u := &Updater{cfg: cfg, st: st, h: sha256.New(), keys: keys}
 	if a := u.st.Attempt; a != nil && len(a.HashState) > 0 {
 		if err := u.h.(encoding.BinaryUnmarshaler).UnmarshalBinary(a.HashState); err != nil {
 			return nil, fmt.Errorf("%w: %s: hash state: %v", ErrCorruptState, cfg.StatePath, err)
@@ -289,7 +311,8 @@ func (u *Updater) Assign(a Assignment) error {
 	if cur := u.st.Attempt; cur != nil {
 		if cur.AttemptID == a.AttemptID {
 			if cur.AssignmentID == a.AssignmentID && cur.Digest == a.ArtifactDigest && cur.Version == a.Version &&
-				cur.Size == a.Size && cur.RequiresReboot == a.RequiresReboot {
+				cur.Size == a.Size && cur.RequiresReboot == a.RequiresReboot && cur.Trust == a.Trust &&
+				cur.Signature == a.Signature && cur.KeyID == a.KeyID && cur.Algorithm == a.Algorithm {
 				return nil
 			}
 			return fmt.Errorf("updater: attempt %q is already assigned with different content", a.AttemptID)
@@ -302,6 +325,7 @@ func (u *Updater) Assign(a Assignment) error {
 	u.st.Attempt = &attemptState{
 		AttemptID: a.AttemptID, AssignmentID: a.AssignmentID, Digest: a.ArtifactDigest,
 		Version: a.Version, Size: a.Size, RequiresReboot: a.RequiresReboot,
+		Trust: a.Trust, Signature: a.Signature, KeyID: a.KeyID, Algorithm: a.Algorithm,
 	}
 	u.h = sha256.New()
 	return u.save()
@@ -370,6 +394,9 @@ func (u *Updater) advance(a *attemptState) (done bool, err error) {
 			return false, u.fail(a, "VERIFICATION_FAILED", "verification failed (injected)")
 		case got != a.Digest:
 			return false, u.fail(a, "VERIFICATION_FAILED", fmt.Sprintf("digest mismatch: downloaded %s, expected %s", got, a.Digest))
+		}
+		if code, detail := u.checkSignature(a, u.h.Sum(nil)); code != "" {
+			return false, u.fail(a, code, detail)
 		}
 		return false, u.report(a, wireReport{Stage: stageVerified})
 

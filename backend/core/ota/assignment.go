@@ -4,9 +4,11 @@
 package ota
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/url"
+	"regexp"
 	"time"
 	"unicode/utf8"
 
@@ -37,9 +39,25 @@ const (
 	KindDownloadGrant    = "download.grant"
 	KindUpdateCancel     = "update.cancel"
 
-	// TrustUnverified is the only trust a down assignment carries: the platform checked that the
-	// bytes are the bytes that were declared, and did not authenticate who produced them.
+	// TrustUnverified: the platform checked that the bytes are the bytes that were declared, and
+	// did not authenticate who produced them. It carries no signature fields.
 	TrustUnverified = "UNVERIFIED"
+
+	// TrustSigned: the artifact carries a detached signature by a registered signer. The
+	// assignment carries signature, keyId and algorithm, and the device MUST verify them.
+	TrustSigned = "SIGNED"
+
+	// The signature algorithms. Both sign the RAW 32-byte SHA-256 digest of the artifact (not
+	// its hex or "sha256:" text form): ECDSA_P256_SHA256 is an ASN.1 DER signature over that
+	// digest (the form `cosign sign-blob` produces), ED25519 signs the 32 bytes as the message.
+	AlgorithmECDSAP256SHA256 = "ECDSA_P256_SHA256"
+	AlgorithmEd25519         = "ED25519"
+
+	// The failure codes a device reports (result.code, stage FAILED, failing at stage
+	// DOWNLOADED like VERIFICATION_FAILED) when it refuses a SIGNED assignment, or an
+	// UNVERIFIED one while it requires signatures.
+	CodeSignatureInvalid = "SIGNATURE_INVALID"
+	CodeUnknownSigner    = "UNKNOWN_SIGNER"
 
 	// MaxAssignmentBytes bounds an encoded update.assignment, download.grant or update.cancel.
 	MaxAssignmentBytes = 4096
@@ -83,6 +101,60 @@ type UpdateAssignment struct {
 	Component    string             `json:"component"`
 	Trust        string             `json:"trust"`
 	Artifact     AssignmentArtifact `json:"artifact"`
+	// Signature (base64, standard alphabet), KeyID (64 lowercase hex: SHA-256 of the signer's
+	// public key as DER SubjectPublicKeyInfo) and Algorithm are present exactly when Trust is
+	// SIGNED.
+	Signature string `json:"signature,omitempty"`
+	KeyID     string `json:"keyId,omitempty"`
+	Algorithm string `json:"algorithm,omitempty"`
+}
+
+// AssignmentSignature is the signature block of a SIGNED assignment.
+type AssignmentSignature struct {
+	Signature string
+	KeyID     string
+	Algorithm string
+}
+
+var keyIDGrammar = regexp.MustCompile(`^[0-9a-f]{64}$`)
+
+// maxSignatureB64 bounds the signature: an ECDSA P-256 DER signature is at most 72 bytes and an
+// Ed25519 one is 64, so 128 bytes of raw signature is generous.
+const maxSignatureB64 = 172
+
+func (u UpdateAssignment) validateTrust() error {
+	switch u.Trust {
+	case TrustUnverified:
+		if u.Signature != "" || u.KeyID != "" || u.Algorithm != "" {
+			return fmt.Errorf("ota: an %s assignment must not carry signature, keyId or algorithm", TrustUnverified)
+		}
+		return nil
+	case TrustSigned:
+		if u.Signature == "" || u.KeyID == "" || u.Algorithm == "" {
+			return fmt.Errorf("ota: a %s assignment requires signature, keyId and algorithm", TrustSigned)
+		}
+		switch u.Algorithm {
+		case AlgorithmECDSAP256SHA256, AlgorithmEd25519:
+		default:
+			return fmt.Errorf("ota: unknown algorithm %q", u.Algorithm)
+		}
+		if !keyIDGrammar.MatchString(u.KeyID) {
+			return fmt.Errorf("ota: keyId must be 64 lowercase hex characters")
+		}
+		if len(u.Signature) > maxSignatureB64 {
+			return fmt.Errorf("ota: signature is %d bytes, over the %d byte limit", len(u.Signature), maxSignatureB64)
+		}
+		raw, err := base64.StdEncoding.Strict().DecodeString(u.Signature)
+		if err != nil || len(raw) == 0 {
+			return fmt.Errorf("ota: signature must be standard base64")
+		}
+		if u.Algorithm == AlgorithmEd25519 && len(raw) != 64 {
+			return fmt.Errorf("ota: an %s signature is 64 bytes, got %d", AlgorithmEd25519, len(raw))
+		}
+		return nil
+	default:
+		return fmt.Errorf("ota: unknown trust %q", u.Trust)
+	}
 }
 
 // Validate checks an update.assignment against the wire grammar.
@@ -105,8 +177,8 @@ func (u UpdateAssignment) Validate() error {
 	if !componentGrammar.MatchString(u.Component) {
 		return fmt.Errorf("ota: component %q must match %s", u.Component, componentGrammar)
 	}
-	if u.Trust != TrustUnverified {
-		return fmt.Errorf("ota: unknown trust %q", u.Trust)
+	if err := u.validateTrust(); err != nil {
+		return err
 	}
 	a := u.Artifact
 	if err := checkLen("artifact.version", a.Version, maxVersionLen); err != nil {
@@ -204,9 +276,13 @@ func checkID(name, v string) error {
 }
 
 // EncodeUpdateAssignment builds the down message that hands a device an update.
-func EncodeUpdateAssignment(attemptID, assignmentID, component string, a AssignmentArtifact) ([]byte, error) {
+// trust is TrustUnverified (sig must be nil) or TrustSigned (sig is required).
+func EncodeUpdateAssignment(attemptID, assignmentID, component, trust string, sig *AssignmentSignature, a AssignmentArtifact) ([]byte, error) {
 	m := UpdateAssignment{V: ReportVersion, Kind: KindUpdateAssignment, AttemptID: attemptID,
-		AssignmentID: assignmentID, Component: component, Trust: TrustUnverified, Artifact: a}
+		AssignmentID: assignmentID, Component: component, Trust: trust, Artifact: a}
+	if sig != nil {
+		m.Signature, m.KeyID, m.Algorithm = sig.Signature, sig.KeyID, sig.Algorithm
+	}
 	if err := m.Validate(); err != nil {
 		return nil, err
 	}

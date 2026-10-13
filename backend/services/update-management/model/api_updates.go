@@ -621,7 +621,7 @@ func (api *Api) publishAssignment(ctx context.Context, v *UpdateAssignmentView) 
 	if v.Attempt.CancelRequested || ota.State(v.Attempt.State).Terminal() {
 		return
 	}
-	body, err := ota.EncodeUpdateAssignment(v.Attempt.Token, v.Assignment.Token, v.Assignment.Component, ota.AssignmentArtifact{
+	body, err := ota.EncodeUpdateAssignment(v.Attempt.Token, v.Assignment.Token, v.Assignment.Component, ota.TrustUnverified, nil, ota.AssignmentArtifact{
 		Version: v.Artifact.Version, Digest: v.Artifact.Digest, Size: v.Artifact.SizeBytes, RequiresReboot: v.Attempt.RequiresReboot,
 	})
 	if err != nil {

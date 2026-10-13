@@ -117,7 +117,7 @@ func newRig(t *testing.T, requiresReboot bool) *rig {
 	r := &rig{t: t, clock: clock, platform: p, link: link, src: src, asg: asg}
 	r.cfg = updater.Config{
 		StatePath: filepath.Join(t.TempDir(), "updater-state.json"), Component: "firmware",
-		Transport: link, Source: src, ChunkSize: chunk, InitialVersion: "1.0.0",
+		Transport: link, Source: src, ChunkSize: chunk, InitialVersion: "1.0.0", RequireSignature: updater.RequireSignatureOption(false),
 	}
 	r.up = r.open()
 	return r
