@@ -96,6 +96,58 @@ function contains(whole: unknown, part: unknown): boolean {
   return true;
 }
 
+// lostFields names WHERE `rebuilt` falls short of `stored` — the detail behind a false
+// ruleSurvivesRoundTrip, for the lossy banner and the confirm-before-save dialog. Paths are
+// dotted keys with [i] array indexes, e.g. `actions[0].httpCall.retries` or `futureKnob`.
+//
+// It follows `contains` exactly, with one refinement: two arrays of EQUAL length that differ
+// are descended element by element so the path names the field rather than the whole list.
+// An array whose length changed is reported as the array itself — that is the loss. If a
+// descent finds nothing to name (the element differs only in a way containment tolerates),
+// the array path is reported anyway, so an unequal pair never yields an empty answer.
+//
+// ruleSurvivesRoundTrip stays the AUTHORITY on whether anything is lost; this only says what.
+// An unparseable side yields [] — the caller asks ruleSurvivesRoundTrip first.
+export function lostFields(stored: string, rebuilt: string): string[] {
+  let whole: unknown;
+  let part: unknown;
+  try {
+    whole = prune(JSON.parse(rebuilt));
+    part = prune(JSON.parse(stored));
+  } catch {
+    return [];
+  }
+  const out: string[] = [];
+  const join = (path: string, k: string) => (path ? `${path}.${k}` : k);
+  const collect = (w: unknown, p: unknown, path: string): void => {
+    if (p === null || typeof p !== 'object') {
+      if (stableStringify(w) !== stableStringify(p)) out.push(path);
+      return;
+    }
+    if (Array.isArray(p)) {
+      if (stableStringify(w) === stableStringify(p)) return;
+      if (Array.isArray(w) && w.length === p.length) {
+        const before = out.length;
+        p.forEach((pv, i) => collect(w[i], pv, `${path}[${i}]`));
+        if (out.length > before) return;
+      }
+      out.push(path);
+      return;
+    }
+    if (w === null || typeof w !== 'object' || Array.isArray(w)) {
+      out.push(path);
+      return;
+    }
+    const wo = w as Record<string, unknown>;
+    for (const [k, pv] of Object.entries(p as Record<string, unknown>)) {
+      if (!(k in wo)) out.push(join(path, k));
+      else collect(wo[k], pv, join(path, k));
+    }
+  };
+  collect(whole, part, '');
+  return out;
+}
+
 // ruleSurvivesRoundTrip reports whether `rebuilt` — what this form would emit for a rule it
 // has just read — still carries everything `stored` said. It is the OPEN-time counterpart of
 // sameLogicalRule, and it is deliberately ONE-DIRECTIONAL where that one is symmetric.

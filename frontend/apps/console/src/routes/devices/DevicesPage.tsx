@@ -7,7 +7,9 @@ import { Plus, Layers } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { cn } from '@/lib/utils';
 import { useQuery } from '@/lib/hooks/use-query';
-import { listDevices } from '@/lib/api/device-management';
+import { listDevices, type DeviceSearchResults } from '@/lib/api/device-management';
+import { isoTime, type CsvColumn } from '@/lib/csv';
+import { ExportCsvButton } from '@/components/ExportCsvButton';
 import { getDeviceStates } from '@/lib/api/device-state';
 import { presenceKind, type PresenceFacts } from '@/lib/presence';
 import { PageShell } from '@/components/ui/page-shell';
@@ -32,6 +34,9 @@ import {
 } from '@/components/ui/data-table';
 
 const pageSize = 20;
+const EXPORT_STEM = 'devices';
+
+type DeviceRow = DeviceSearchResults['results'][number];
 
 // StatusDot shows a device's connectivity at a glance. It is handed the whole state
 // row rather than its `active` flag, because the flag alone cannot tell a REPORTED
@@ -72,6 +77,17 @@ export default function DevicesPage() {
     [pageNumber, version],
   );
 
+  // The export mirrors the list's columns (status is a live projection, so it is left out)
+  // plus the type's token; timestamps are ISO-8601.
+  const exportColumns: CsvColumn<DeviceRow>[] = [
+    { header: t('common:colToken'), value: (d) => d.token },
+    { header: t('common:colName'), value: (d) => d.name },
+    { header: t('common:colType'), value: (d) => d.deviceType?.name },
+    { header: t('exportColTypeToken'), value: (d) => d.deviceType?.token },
+    { header: t('common:colDescription'), value: (d) => d.description },
+    { header: t('common:colCreated'), value: (d) => isoTime(d.createdAt) },
+  ];
+
   const results = data?.results ?? [];
   const tokens = results.map((d) => d.token);
   // Status is best-effort and loaded separately: if state:read is missing or no
@@ -86,6 +102,11 @@ export default function DevicesPage() {
       banner="devices"
       action={
         <div className="flex gap-2">
+          <ExportCsvButton
+            fileStem={EXPORT_STEM}
+            columns={exportColumns}
+            fetchPage={(pageNumber, pageSize) => listDevices({ pageNumber, pageSize })}
+          />
           <Button variant="outline" onClick={() => setBulkCreating(true)}>
             <Layers size={16} /> {t('bulkCreate')}
           </Button>

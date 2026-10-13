@@ -223,6 +223,11 @@ la culpa.
 | `commands_succeeded_total{op}` | Comandos LwM2M que el dispositivo confirmó con un 2.xx, por operación. |
 | `commands_tenant_deleted_total` | Comandos descartados con confirmación porque su inquilino ha sido eliminado y sus datos se están recuperando: la plataforma declinando actuar sobre el hardware de un cliente dado de baja. |
 | `deregistrations_total` | Bajas explícitas de LwM2M (`DELETE /rd/{id}`). |
+| `device_info_attribute_write_errors_total` | Atributos de información del dispositivo recopilados que no se pudieron escribir en device-management; se escriben de nuevo en la siguiente recopilación del dispositivo. |
+| `device_info_attribute_writes_shed_total` | Lotes de atributos recopilados descartados porque el grupo de escritura de atributos estaba ocupado; se escriben en la siguiente recopilación del dispositivo. Una tasa constante indica que device-management tarda en responder. |
+| `device_info_harvest_retries_total` | Recopilaciones de información del dispositivo reintentadas una vez porque el dispositivo no respondió. |
+| `device_info_harvest_skipped_total` | Solicitudes de recopilación de información del dispositivo no ejecutadas: el dispositivo se recopiló en la última hora, la cola de su fragmento estaba llena o ya no era alcanzable. |
+| `device_info_harvests_total{outcome}` | Lecturas de información del dispositivo ejecutadas cuando un dispositivo pasó a ser alcanzable, por resultado: `complete` (todos los recursos leídos), `partial` (faltan algunos), `empty` (respondió, pero no dio ninguno), `unanswered` (no respondió). |
 | `devices_registered_total` | Dispositivos creados automáticamente en su primer registro LwM2M. |
 | `handshakes_total` | Handshakes DTLS completados (cada uno es una nueva sesión LwM2M autenticada). |
 | `measurements_emitted_total` | Muestras de medición individuales escritas de forma duradera desde LwM2M Observe/Notify. |

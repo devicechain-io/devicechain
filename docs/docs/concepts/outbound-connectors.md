@@ -15,16 +15,16 @@ Everything on this page applies once the area is deployed. To add it, bring the 
 :::
 
 :::note Status
-**Available today:** the `httpCall` webhook action, and a `publish` action that delivers to MQTT, Apache Kafka, AWS SNS and AWS SQS through a tenant-scoped, versioned connector whose credentials are held in the encrypted secret store. Both are configurable as action nodes on the automation canvas. A `gcp_pubsub` connector is a recognized type that cannot be created yet (see [below](#publish--send-to-a-connector)).
+**Available today:** the `httpCall` webhook action, and a `publish` action that delivers to MQTT, Apache Kafka, AWS SNS and AWS SQS through a tenant-scoped, versioned connector whose credentials are held in the encrypted secret store. Both are configurable as action nodes on the automation canvas and as actions in the rule form. A `gcp_pubsub` connector is a recognized type that cannot be created yet (see [below](#publish--send-to-a-connector)).
 
 **Planned:** more `publish` targets (RabbitMQ, Azure, NATS, Redis, Slack, Splunk) behind the same model. This repository is the source of truth for what currently builds.
 :::
 
 ## The two outbound actions
 
-Both are [actions](./event-processing.md#automated-actions) you author on the **automation canvas**, alongside *raise alarm* and *send command*. Each can be **guarded** by a condition on the firing.
+Both are [actions](./event-processing.md#automated-actions) you author on the **automation canvas** or in the **form builder**, alongside *raise alarm* and *send command*. Each can be **guarded** by a condition on the firing.
 
-The form builder's action picker offers only *raise alarm* and *send command*. If a rule already carries an outbound action, the form shows that action read-only and preserves it, so switching between the canvas and the form never drops it.
+The form builder's action picker offers all four actions. A webhook action there takes a URL, an optional body template, headers, a secret handle and a timeout; a publish action takes a connector and a payload template. The connector list is the one you can see: a connector outside your tenant, or one you have no access to, is not offered. A mistake such as a missing URL, a URL that is not http or https, or a timeout over the limit is reported next to the action, and the compiler reports an invalid template or a reserved header before you publish. A rule authored on either surface opens identically on the other, so switching between the canvas and the form never drops an action.
 
 ### `httpCall` — call a webhook
 

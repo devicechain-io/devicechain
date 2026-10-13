@@ -138,6 +138,7 @@ var (
 	// is rebuilt per term, and a counter registered per term would panic on the second.
 	limiterUnresolved func(core.CeilingSource)
 	downlinkMetrics   downlink.Metrics
+	harvestMetrics    downlink.HarvestMetrics
 	leaderGauge       prometheus.Gauge
 	servingGauge      prometheus.Gauge
 
@@ -466,6 +467,20 @@ func buildMetrics() {
 		TenantGoneRefused: Microservice.NewCounter("commands_tenant_deleted_total",
 			"Commands ack-dropped because their tenant has been deleted and its data is being reclaimed — the platform declining to actuate an offboarded customer's hardware."),
 	}
+	// Device-information harvest. The outcome label is a bounded set; no tenant or device label.
+	harvestMetrics = downlink.HarvestMetrics{
+		Runs: Microservice.NewCounterVec("device_info_harvests_total",
+			"Device-object information harvests run on newly reachable devices, by outcome (complete: every supported resource read; partial: some resources missing; empty: the device answered but gave none; unanswered: the device did not respond).",
+			[]string{"outcome"}),
+		Retries: Microservice.NewCounter("device_info_harvest_retries_total",
+			"Harvests re-queued once because the device did not answer."),
+		Skipped: Microservice.NewCounter("device_info_harvest_skipped_total",
+			"Harvest requests not run: the device was harvested recently, the shard queue was full, or the device was no longer reachable."),
+		WriteErrors: Microservice.NewCounter("device_info_attribute_write_errors_total",
+			"Harvested attributes that could not be written to device-management; retried at the device's next harvest."),
+		WriteShed: Microservice.NewCounter("device_info_attribute_writes_shed_total",
+			"Harvested attribute batches dropped because the attribute-write pool was busy; retried at the device's next harvest."),
+	}
 }
 
 // serverConfig builds the transport configuration from the parsed config. It is called per
@@ -636,11 +651,16 @@ func buildPresenceLayer(leaderCtx context.Context, bindings map[string]config.Ps
 			ReadPacer: core.NewReadPacer(Microservice, "device commands"),
 		}
 		opts.Parker = parker
+		// The device-information harvest writes CLIENT attributes to device-management over the
+		// registrar's own client and coordinate (the service token carries device:write).
+		opts.Harvester = downlink.NewHarvester(client, ingestURL, harvestMetrics)
 		dispatcher = downlink.NewDispatcher(CommandReader, ResponseWriter, connTable, downlink.NewOps(), fetcher, claimer, downlinkMetrics, opts)
 		// Wire the wake-drain: a device becoming reachable on a fresh conn (Register / re-handshake
 		// Update) gates its live commands and triggers a drain of its held commands. A no-op when draining is disabled or on a
-		// standby (Drain guards both). Set before serving begins.
-		connTable.SetOnLive(dispatcher.Drain)
+		// standby (Drain guards both). Then the device-information harvest: throttled per device,
+		// queued (never run) here, and executed later on the device's own shard worker after its
+		// commands, so it cannot delay the registration that triggered it. Set before serving begins.
+		connTable.SetOnLive(dispatcher.OnLive)
 	}
 	return handlers, reg, epoch, reconciler, dispatcher, nil
 }

@@ -368,6 +368,14 @@ var afterPublish = []entity{
 			}}
 		},
 		After: uploadProbeArtifact,
+		// The upload is what makes it AVAILABLE, so the create response (UPLOADING) is
+		// not what it holds afterwards; the seed records the settled read instead.
+		Settled: func(f map[string]any) error {
+			if s := str(f["state"]); s != "AVAILABLE" {
+				return fmt.Errorf("state is %q, want AVAILABLE", s)
+			}
+			return nil
+		},
 	},
 	{
 		// Depends on: device, artifact-available.
@@ -384,9 +392,10 @@ var afterPublish = []entity{
 		// ⚠️ IT NEEDS THE INSTANCE TO ALLOW UNVERIFIED ARTIFACTS
 		// (updates.allowUnverifiedArtifacts), because every artifact is UNVERIFIED today. An
 		// instance that does not refuses this seed, by name, rather than skipping it: a
-		// silent skip would be coverage that quietly stops existing. The area is not in any
-		// released baseline yet, so the upgrade rig skips this row until one ships it, and
-		// the rig that installs such a baseline must set the flag.
+		// silent skip would be coverage that quietly stops existing. The upgrade rig sets the
+		// flag on its own instance before each seed that writes this row
+		// (allow_unverified_artifacts in hack/upgrade-rig.sh), and installs a baseline that
+		// ships the area with the object store the artifact rows need.
 		Name:     "update-assignment",
 		Area:     "update-management",
 		Mutation: "assignArtifact",

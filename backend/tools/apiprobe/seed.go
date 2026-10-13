@@ -100,69 +100,15 @@ func runSeed(ctx context.Context, argv []string) error {
 		// what the mutation acted on.
 		vars := e.Vars(st)
 
-		var envelope map[string]json.RawMessage
-		if err := session.Query(ctx, c.areaURL(e.Area), e.createDoc(), vars, &envelope); err != nil {
-			// exitRefused, not exitSetup: the API answered and said no. That is a
-			// verdict about the platform — a validation rule that tightened, a
-			// field that was renamed — and it must not be filed under "the
-			// environment was not ready".
-			return failWith(exitRefused, "create %s via %s: %w", e.Name, c.areaURL(e.Area), err)
+		var after func(context.Context) error
+		if e.After != nil {
+			after = func(ctx context.Context) error { return e.After(ctx, &c, session, st) }
 		}
-
-		created, ok := envelope[e.Mutation]
-		if !ok {
-			return failWith(exitShape, "create %s returned no %q key; the mutation's shape has changed", e.Name, e.Mutation)
-		}
-
-		objects, err := createdObjects(e, created)
+		rows, err := seedOne(ctx, session, c.areaURL(e.Area), e, vars, st, after, os.Stdout)
 		if err != nil {
 			return err
 		}
-		for i, object := range objects {
-			var fields map[string]any
-			if err := json.Unmarshal(object, &fields); err != nil {
-				return failWith(exitShape, "create %s returned a non-object: %w", e.Name, err)
-			}
-			token := str(fields["token"])
-			if e.TokenFrom != nil {
-				// The created object carries no token of its own — a natural-keyed row,
-				// addressed by (entityType, entity, scope, attrKey) or (memberType, key).
-				// The receipt still needs a KEY, and it is only that: the read-back is
-				// addressed by the table's criteria, never by this string.
-				token = e.TokenFrom(st)
-			}
-			if e.Publish {
-				// A published version has no token of its own — it is addressed by
-				// (parent token, version number) — so the receipt records the PARENT's,
-				// which is also exactly what its read-back query is keyed by. Taken from
-				// the variables that were SENT rather than invented here, so the value
-				// recorded is the one the mutation actually acted on.
-				token = str(vars["token"])
-			}
-			if token == "" {
-				// Every entity in the table is token-addressed, because that is
-				// how verify finds it again. One that came back without a token
-				// cannot be read back at all, and recording it would produce a
-				// receipt that verify reports as missing forever.
-				return failWith(exitShape, "create %s returned no token; verify would have nothing to look it up by", e.Name)
-			}
-			// Only the first of a bulk create feeds the state. Later entries
-			// reference ONE token, and silently taking the last of N would make
-			// which one they got depend on the batch size.
-			if e.Record != nil && i == 0 {
-				e.Record(st, fields)
-			}
-
-			out.Entities = append(out.Entities, Recorded{
-				Name: e.Name, Area: e.Area, Token: token, Object: object, Fields: e.Fields,
-			})
-			fmt.Printf("  seeded  %-26s %s\n", e.Name, token)
-		}
-		if e.After != nil {
-			if err := e.After(ctx, &c, session, st); err != nil {
-				return failWith(exitRefused, "after creating %s: %w", e.Name, err)
-			}
-		}
+		out.Entities = append(out.Entities, rows...)
 	}
 
 	// The admin-plane row. Skipped by name, like an entity, when the caller named no
@@ -243,6 +189,134 @@ func seedAdminRows(ctx context.Context, o ssoOptions, base *baseline, tenant, ad
 // understood, and was declined with a reason. Reporting that as a shape problem
 // would send a reader looking for a schema change; it is exitRefused, and the
 // whole envelope is quoted so the code and reason travel with it.
+// How long the seed waits for a row its After step changed to read back settled, and how
+// often it asks. Variables so a test can make the wait instant; nothing else sets them.
+var (
+	settleTimeout  = 30 * time.Second
+	settleInterval = time.Second
+)
+
+// seedOne creates one entity, runs its After step, and returns the rows to record.
+//
+// 🔑 WHAT IS RECORDED IS WHAT VERIFY WILL READ, ON A HEALTHY INSTANCE. For a plain create
+// that is the create response. For an entity with an After step it is NOT: the step
+// changes the row (an upload makes an artifact AVAILABLE), so the response describes a row
+// that no longer exists. The row is then read back with readRow, the very query verify
+// sends, until the entity's Settled accepts it, and THAT is recorded. Nothing is dropped
+// from the comparison: a state an upgrade changes still fails verify.
+func seedOne(ctx context.Context, q querier, url string, e entity, vars map[string]any, st *state,
+	after func(context.Context) error, w io.Writer) ([]Recorded, error) {
+	if e.After != nil && e.Settled == nil {
+		return nil, failWith(exitSetup, "%s has an After step but no Settled check, so the row it changes "+
+			"cannot be recorded as it will be read back", e.Name)
+	}
+
+	var envelope map[string]json.RawMessage
+	if err := q.Query(ctx, url, e.createDoc(), vars, &envelope); err != nil {
+		// exitRefused, not exitSetup: the API answered and said no. That is a
+		// verdict about the platform — a validation rule that tightened, a
+		// field that was renamed — and it must not be filed under "the
+		// environment was not ready".
+		return nil, failWith(exitRefused, "create %s via %s: %w", e.Name, url, err)
+	}
+
+	created, ok := envelope[e.Mutation]
+	if !ok {
+		return nil, failWith(exitShape, "create %s returned no %q key; the mutation's shape has changed", e.Name, e.Mutation)
+	}
+
+	objects, err := createdObjects(e, created)
+	if err != nil {
+		return nil, err
+	}
+	var rows []Recorded
+	for i, object := range objects {
+		var fields map[string]any
+		if err := json.Unmarshal(object, &fields); err != nil {
+			return nil, failWith(exitShape, "create %s returned a non-object: %w", e.Name, err)
+		}
+		token := str(fields["token"])
+		if e.TokenFrom != nil {
+			// The created object carries no token of its own — a natural-keyed row,
+			// addressed by (entityType, entity, scope, attrKey) or (memberType, key).
+			// The receipt still needs a KEY, and it is only that: the read-back is
+			// addressed by the table's criteria, never by this string.
+			token = e.TokenFrom(st)
+		}
+		if e.Publish {
+			// A published version has no token of its own — it is addressed by
+			// (parent token, version number) — so the receipt records the PARENT's,
+			// which is also exactly what its read-back query is keyed by. Taken from
+			// the variables that were SENT rather than invented here, so the value
+			// recorded is the one the mutation actually acted on.
+			token = str(vars["token"])
+		}
+		if token == "" {
+			// Every entity in the table is token-addressed, because that is
+			// how verify finds it again. One that came back without a token
+			// cannot be read back at all, and recording it would produce a
+			// receipt that verify reports as missing forever.
+			return nil, failWith(exitShape, "create %s returned no token; verify would have nothing to look it up by", e.Name)
+		}
+		// Only the first of a bulk create feeds the state. Later entries
+		// reference ONE token, and silently taking the last of N would make
+		// which one they got depend on the batch size.
+		if e.Record != nil && i == 0 {
+			e.Record(st, fields)
+		}
+		rows = append(rows, Recorded{Name: e.Name, Area: e.Area, Token: token, Object: object, Fields: e.Fields})
+	}
+
+	if e.After != nil {
+		if len(rows) != 1 {
+			return nil, failWith(exitSetup, "%s has an After step but created %d rows; it can settle exactly one", e.Name, len(rows))
+		}
+		if err := after(ctx); err != nil {
+			return nil, failWith(exitRefused, "after creating %s: %w", e.Name, err)
+		}
+		settled, err := readSettled(ctx, q, url, e, rows[0])
+		if err != nil {
+			return nil, err
+		}
+		rows[0].Object = settled
+	}
+	for _, r := range rows {
+		fmt.Fprintf(w, "  seeded  %-26s %s\n", r.Name, r.Token)
+	}
+	return rows, nil
+}
+
+// readSettled reads r back with verify's own query until e.Settled accepts it, for at
+// most settleTimeout. A row that never settles is a refusal of the platform, named with
+// the last reason Settled gave: recording it unsettled would turn into a false CHANGED
+// after the upgrade, and skipping it would be coverage that quietly stops existing.
+func readSettled(ctx context.Context, q querier, url string, e entity, r Recorded) (json.RawMessage, error) {
+	deadline := time.Now().Add(settleTimeout)
+	for {
+		found, err := readRow(ctx, q, url, e, r.Token, r.Object)
+		if err != nil {
+			return nil, err
+		}
+		var fields map[string]any
+		if err := json.Unmarshal(found, &fields); err != nil {
+			return nil, failWith(exitShape, "read %s back: not an object: %w", e.Name, err)
+		}
+		why := e.Settled(fields)
+		if why == nil {
+			return found, nil
+		}
+		if !time.Now().Before(deadline) {
+			return nil, failWith(exitRefused, "%s %q never settled after its After step (waited %s): %v",
+				e.Name, r.Token, settleTimeout, why)
+		}
+		select {
+		case <-ctx.Done():
+			return nil, failWith(exitSetup, "waiting for %s to settle: %w", e.Name, ctx.Err())
+		case <-time.After(settleInterval):
+		}
+	}
+}
+
 func createdObjects(e entity, created json.RawMessage) ([]json.RawMessage, error) {
 	if e.Wrap != "" {
 		var wrapper map[string]json.RawMessage

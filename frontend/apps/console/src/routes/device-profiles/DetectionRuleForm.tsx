@@ -32,6 +32,9 @@ import { Combobox, type ComboboxOption } from '@/components/ui/combobox';
 import { ErrorBanner } from '@/components/ui/error-banner';
 import { Checkbox } from '@/components/ui/checkbox';
 import { errMessage } from '@/routes/common';
+import { AreaUnavailableInline } from '@/components/AreaUnavailable';
+import { AREA, useAreaAbsent } from '@/lib/capabilities';
+import { ConnectorPicker } from './ConnectorPicker';
 import { Textarea } from '@/components/ui/textarea';
 import {
   createDetectionRule,
@@ -46,10 +49,13 @@ import {
 import { previewSelector } from '@/lib/api/browse';
 import { validateDetectionRule, type RuleWarning } from '@/lib/api/event-processing';
 import { ruleWarningText } from '@/lib/ruleWarnings';
-import { ruleSurvivesRoundTrip, sameLogicalRule } from './rule-equal';
+import { lostFields, ruleSurvivesRoundTrip, sameLogicalRule } from './rule-equal';
+import { useConfirm } from '@/components/ui/confirm-dialog';
 import {
   MAX_ACTIONS_PER_RULE,
+  MAX_ACTION_TIMEOUT_MS,
   RULE_TYPES,
+  malformedHeaderLine,
   actionsForbidden,
   buildDefinition,
   conditionForbidden,
@@ -146,6 +152,33 @@ function DurationField({
   return (
     <FormField label={label} htmlFor={id} description={t('ruleDurationFieldDescription')}>
       <Input id={id} value={value} onChange={(e) => onChange(e.target.value)} placeholder={placeholder} />
+    </FormField>
+  );
+}
+
+// The stored-definition paths a Save from this form would drop. Spans, not a list: it is also
+// rendered inside the confirm dialog's description, which is a paragraph.
+function LostFieldList({ paths }: { paths: string[] }) {
+  const { t } = useTranslation('deviceProfiles');
+  return (
+    <span className="block">
+      {t('ruleLossyFieldsLabel')}{' '}
+      {paths.map((p, i) => (
+        <span key={p}>
+          {i > 0 && ', '}
+          <code className="font-mono text-xs">{p}</code>
+        </span>
+      ))}
+    </span>
+  );
+}
+
+// The per-dispatch timeout shared by the webhook and publish actions.
+function TimeoutField({ id, value, onChange }: { id: string; value: string; onChange: (v: string) => void }) {
+  const { t } = useTranslation('deviceProfiles');
+  return (
+    <FormField label={t('ruleActionTimeoutLabel')} htmlFor={id} description={t('ruleActionTimeoutDescription', { max: MAX_ACTION_TIMEOUT_MS })}>
+      <Input id={id} type="number" min={0} value={value} onChange={(e) => onChange(e.target.value)} placeholder="5000" />
     </FormField>
   );
 }
@@ -313,6 +346,8 @@ export function DetectionRuleForm({
   onDone: (message: string) => void;
 }) {
   const { t } = useTranslation('deviceProfiles');
+  const confirm = useConfirm();
+  const connectorsAbsent = useAreaAbsent(AREA.outboundConnectors);
   const editing = entity != null;
   // Pre-fill precedence: the stored rule when editing, else an NL/handoff draft, else blank.
   // The stored bytes this drawer opened on, if any: the rule being edited, else a handed-off
@@ -419,10 +454,16 @@ export function DetectionRuleForm({
   // that whether a stored rule survives this form is a property of the STORED BYTES, fixed for
   // the life of the drawer; recomputing it on every keystroke invited the reading that it
   // tracks what the operator is typing, which would be a different and wrong check.
-  const lossyOpen = useMemo(
-    () => source != null && initial != null && !ruleSurvivesRoundTrip(source, rebuildFrom(initial)),
-    [source, initial],
-  );
+  //
+  // `lostOnOpen` is null when nothing is lost, else the paths the form cannot carry (possibly
+  // empty when they cannot be named). The banner and the confirm-before-save dialog both read
+  // it, so the two never disagree about what Save would drop.
+  const lostOnOpen = useMemo<string[] | null>(() => {
+    if (source == null || initial == null) return null;
+    const rebuilt = rebuildFrom(initial);
+    if (ruleSurvivesRoundTrip(source, rebuilt)) return null;
+    return lostFields(source, rebuilt).filter((p) => p !== '');
+  }, [source, initial]);
 
   // Client-side guard for the obvious omissions, so the button hints instantly (no round
   // trip) before the inline compiler check or the publish gate rejects. It mirrors only the
@@ -631,6 +672,25 @@ export function DetectionRuleForm({
 
   const submit = async () => {
     if (definition == null || unmodelledType != null || unparseable) return; // guarded by the disabled button; satisfies the type narrowing
+    // 🔴 A LOSSY SAVE IS CONFIRMED, NOT MERELY WARNED ABOUT. The banner says what this form
+    // cannot carry; a Save from here replaces the stored definition with only what it can, so
+    // the operator must say so explicitly. Cancel (or any dismissal) writes nothing. A rule the
+    // form holds completely never sees this dialog.
+    if (lostOnOpen != null) {
+      const ok = await confirm({
+        title: t('ruleLossySaveTitle'),
+        description: (
+          <span className="space-y-2">
+            <span className="block">{t('ruleLossySaveDescription')}</span>
+            {lostOnOpen.length > 0 && <LostFieldList paths={lostOnOpen} />}
+          </span>
+        ),
+        confirmLabel: t('ruleLossySaveConfirm'),
+        cancelLabel: t('common:cancel'),
+        destructive: true,
+      });
+      if (!ok) return;
+    }
     setFormError(null);
     setBusy(true);
     try {
@@ -773,7 +833,12 @@ export function DetectionRuleForm({
   return (
     <div className="space-y-4">
       {formError && <ErrorBanner message={formError} onDismiss={() => setFormError(null)} />}
-      {lossyOpen && <p className="rounded-md border border-amber-500/50 bg-amber-500/10 px-3 py-2 text-sm text-amber-700 dark:text-amber-400">{t('ruleLossyOpenWarning')}</p>}
+      {lostOnOpen != null && (
+        <div className="space-y-1 rounded-md border border-amber-500/50 bg-amber-500/10 px-3 py-2 text-sm text-amber-700 dark:text-amber-400">
+          <p>{t('ruleLossyOpenWarning')}</p>
+          {lostOnOpen.length > 0 && <LostFieldList paths={lostOnOpen} />}
+        </div>
+      )}
 
       <FormField label={t('common:colName')} htmlFor="dr-name" description={t('ruleNameDescription')}>
         <Input id="dr-name" value={name} onChange={(e) => setName(e.target.value)} placeholder={t('ruleNamePlaceholder')} />
@@ -1079,31 +1144,22 @@ export function DetectionRuleForm({
             <div key={i} className="space-y-3 rounded-md border p-3">
               <div className="flex items-center justify-between gap-2">
                 <FormField label={t('ruleActionNumberLabel', { number: i + 1 })} htmlFor={`dr-action-${i}`}>
-                  {a.raw ? (
-                    // An outbound action (httpCall / publish) is Canvas-authored; the form shows it
-                    // read-only and preserves it. No Combobox — it can't be retyped here.
-                    <Input
-                      id={`dr-action-${i}`}
-                      value={a.type === 'publish' ? t('ruleActionKindPublishReadonly') : t('ruleActionKindHttpCallReadonly')}
-                      readOnly
-                      disabled
-                    />
-                  ) : (
-                    <Combobox
-                      id={`dr-action-${i}`}
-                      value={a.type}
-                      onChange={(v) => setActionAt(i, { type: v as ActionKind })}
-                      // 'raiseAlarm'/'sendCommand' are the ActionKind discriminant, never user
-                      // text — only the labels (translated above) are display text.
-                      /* eslint-disable i18next/no-literal-string */
-                      options={[
-                        { value: 'raiseAlarm', label: t('ruleActionKindRaiseAlarmLabel') },
-                        { value: 'sendCommand', label: t('ruleActionKindSendCommandLabel') },
-                      ]}
-                      /* eslint-enable i18next/no-literal-string */
-                      allowClear={false}
-                    />
-                  )}
+                  <Combobox
+                    id={`dr-action-${i}`}
+                    value={a.type}
+                    onChange={(v) => setActionAt(i, { type: v as ActionKind })}
+                    // The values are the ActionKind discriminant, never user text — only the
+                    // labels (translated above) are display text.
+                    /* eslint-disable i18next/no-literal-string */
+                    options={[
+                      { value: 'raiseAlarm', label: t('ruleActionKindRaiseAlarmLabel') },
+                      { value: 'sendCommand', label: t('ruleActionKindSendCommandLabel') },
+                      { value: 'httpCall', label: t('ruleActionKindHttpCallLabel') },
+                      { value: 'publish', label: t('ruleActionKindPublishLabel') },
+                    ]}
+                    /* eslint-enable i18next/no-literal-string */
+                    allowClear={false}
+                  />
                 </FormField>
                 <Button size="sm" variant="ghost" onClick={() => removeAction(i)}>
                   {t('ruleRemoveActionButton')}
@@ -1119,12 +1175,70 @@ export function DetectionRuleForm({
                   />
                 </p>
               )}
-              {a.raw ? (
-                <p className="rounded-md border border-dashed bg-muted/30 px-2 py-1.5 text-xs text-muted-foreground">
-                  {t('ruleOutboundActionNote', {
-                    kind: a.type === 'publish' ? t('ruleOutboundKindPublish') : t('ruleOutboundKindWebhook'),
-                  })}
-                </p>
+              {a.type === 'httpCall' ? (
+                <div className="space-y-3">
+                  <FormField label={t('inspectorUrlLabel')} htmlFor={`dr-http-url-${i}`} description={t('inspectorUrlDescription')}>
+                    <Input
+                      id={`dr-http-url-${i}`}
+                      value={a.url ?? ''}
+                      onChange={(e) => setActionAt(i, { url: e.target.value })}
+                      placeholder={t('inspectorUrlPlaceholder')}
+                    />
+                  </FormField>
+                  <FormField label={t('inspectorBodyCelLabel')} htmlFor={`dr-http-body-${i}`} description={t('inspectorBodyCelDescription')}>
+                    <Textarea
+                      id={`dr-http-body-${i}`}
+                      value={a.bodyTemplate ?? ''}
+                      onChange={(e) => setActionAt(i, { bodyTemplate: e.target.value })}
+                      placeholder={t('inspectorBodyCelPlaceholder')}
+                      className="min-h-16 font-mono text-xs"
+                    />
+                  </FormField>
+                  <FormField label={t('inspectorHeadersLabel')} htmlFor={`dr-http-headers-${i}`} description={t('inspectorHeadersDescription')}>
+                    <Textarea
+                      id={`dr-http-headers-${i}`}
+                      value={a.headers ?? ''}
+                      onChange={(e) => setActionAt(i, { headers: e.target.value })}
+                      placeholder={t('inspectorHeadersPlaceholder')}
+                      className="min-h-16 font-mono text-xs"
+                    />
+                  </FormField>
+                  <FormField label={t('inspectorSecretHandleLabel')} htmlFor={`dr-http-secret-${i}`} description={t('inspectorSecretHandleDescription')}>
+                    <Input
+                      id={`dr-http-secret-${i}`}
+                      value={a.secretRef ?? ''}
+                      onChange={(e) => setActionAt(i, { secretRef: e.target.value })}
+                      placeholder={t('inspectorSecretHandlePlaceholder')}
+                    />
+                  </FormField>
+                  <TimeoutField id={`dr-http-timeout-${i}`} value={a.timeoutMs ?? ''} onChange={(v) => setActionAt(i, { timeoutMs: v })} />
+                </div>
+              ) : a.type === 'publish' ? (
+                connectorsAbsent ? (
+                  // The publish action stays selectable on an instance without outbound-connectors;
+                  // say why it cannot work here instead of firing a request that fails.
+                  <AreaUnavailableInline area={AREA.outboundConnectors} />
+                ) : (
+                  <div className="space-y-3">
+                    <FormField label={t('inspectorConnectorLabel')} htmlFor={`dr-connector-${i}`} description={t('inspectorConnectorDescription')}>
+                      <ConnectorPicker
+                        id={`dr-connector-${i}`}
+                        value={a.connectorRef ?? ''}
+                        onChange={(v) => setActionAt(i, { connectorRef: v })}
+                      />
+                    </FormField>
+                    <FormField label={t('inspectorPayloadCelLabel')} htmlFor={`dr-publish-payload-${i}`} description={t('inspectorPayloadCelDescription')}>
+                      <Textarea
+                        id={`dr-publish-payload-${i}`}
+                        value={a.payloadTemplate ?? ''}
+                        onChange={(e) => setActionAt(i, { payloadTemplate: e.target.value })}
+                        placeholder={t('inspectorPayloadCelPlaceholder')}
+                        className="min-h-16 font-mono text-xs"
+                      />
+                    </FormField>
+                    <TimeoutField id={`dr-publish-timeout-${i}`} value={a.timeoutMs ?? ''} onChange={(v) => setActionAt(i, { timeoutMs: v })} />
+                  </div>
+                )
               ) : a.type === 'raiseAlarm' ? (
                 <FormField
                   label={t('ruleAlarmKeyLabel')}
@@ -1231,6 +1345,48 @@ interface HintArgs {
   actions: ActionRow[];
 }
 
+// The cheap, unambiguous outbound-action checks: what the author can be told instantly, before the
+// inline compiler check (which owns URL reachability rules, header reservations and CEL template
+// type/cost) answers. They mirror compile.go's validateHTTPCall / validatePublish / validateTimeout /
+// validateSecretHandle structural rules and decide nothing the compiler does not re-decide.
+export function outboundHint(t: TFunction, act: ActionRow): string | null {
+  if (act.type === 'httpCall') {
+    const url = (act.url ?? '').trim();
+    if (!url) return t('ruleHintHttpUrlRequired');
+    // Only what httpsink.ValidateURL refuses: a scheme other than http/https, no host, or a
+    // host Go's parser cannot read (whitespace in it). A space in the PATH or query is NOT
+    // refused there — net/http escapes it on send — so it must not be refused here either, or
+    // a stored rule the server accepts could never be saved from this form again.
+    const authority = /^https?:\/\/([^/?#]*)/i.exec(url)?.[1];
+    if (!authority || /\s/.test(authority)) return t('ruleHintHttpUrlScheme');
+    // Userinfo is refused by the compiler too, but a draft is stored before it is compiled,
+    // so a password typed into the URL would be persisted in the rule. Stop it here.
+    if (authority.includes('@')) return t('ruleHintHttpUrlCredentials');
+    const bad = malformedHeaderLine(act.headers ?? '');
+    if (bad != null) return t('ruleHintHeaderMalformed', { line: bad });
+    const handle = (act.secretRef ?? '').trim();
+    if (handle && !validSecretHandle(handle)) return t('ruleHintSecretHandleInvalid');
+  }
+  if (act.type === 'publish' && !(act.connectorRef ?? '').trim()) return t('ruleHintConnectorRequired');
+  if (act.type === 'httpCall' || act.type === 'publish') {
+    const ms = (act.timeoutMs ?? '').trim();
+    if (ms) {
+      const n = Number(ms);
+      if (!Number.isInteger(n) || n < 0 || n > MAX_ACTION_TIMEOUT_MS) {
+        return t('ruleHintTimeoutRange', { max: MAX_ACTION_TIMEOUT_MS });
+      }
+    }
+  }
+  return null;
+}
+
+// compile.go validateSecretHandle: bounded, alphanumeric plus - _ / ., no leading slash and no
+// empty or dot path segment.
+function validSecretHandle(h: string): boolean {
+  if (h.length > 256 || !/^[A-Za-z0-9\-_/.]+$/.test(h) || h.startsWith('/')) return false;
+  return h.split('/').every((seg) => seg !== '' && seg !== '.' && seg !== '..');
+}
+
 // validationHint returns the first obvious omission to surface before submit, or null. It is a
 // UX convenience, NOT the authority — event-processing's compiler re-checks everything at
 // publish (structure, CEL type/cost, injection). It deliberately mirrors only the cheap,
@@ -1297,6 +1453,8 @@ function validationHint(a: HintArgs): string | null {
     if (a.hasRaiseAlarm && !a.severity) return t('ruleHintRaiseAlarmSeverity');
     for (const act of a.actions) {
       if (act.type === 'sendCommand' && !act.command.trim()) return t('ruleHintSendCommandNeedsCommand');
+      const hintOutbound = outboundHint(t, act);
+      if (hintOutbound) return hintOutbound;
     }
   }
   return null;

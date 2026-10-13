@@ -25,7 +25,8 @@ import COMPILE_GO from '../../../../../../backend/services/event-processing/inte
 import SCHEMA_GO from '../../../../../../backend/services/event-processing/internal/rules/schema.go?raw';
 // The model comes from the model module; only the picker's option list — which needs
 // translation and is therefore presentation — comes from the component.
-import { MAX_ACTIONS_PER_RULE, RULE_TYPES, conditionForbidden, parseDefinition, rebuildFrom, unmodelledRuleType } from './rule-model';
+import CONNECTORWIRE_GO from '../../../../../../backend/services/event-processing/connectorwire/connectorwire.go?raw';
+import { MAX_ACTIONS_PER_RULE, MAX_ACTION_TIMEOUT_MS, RULE_TYPES, conditionForbidden, parseDefinition, rebuildFrom, unmodelledRuleType } from './rule-model';
 import { ruleTypeOptions } from './DetectionRuleForm';
 import FORM_SRC from './DetectionRuleForm.tsx?raw';
 import { CONDITION_TYPES, NODE_CATALOG, type NodeSpec } from './canvas/model';
@@ -168,13 +169,13 @@ describe('the round-trip corpus', () => {
   // pass-throughs they pin (`raw` for outbound actions, `guard` for canvas branches) exist
   // precisely because losing them corrupts a rule the form was only supposed to read.
   const SHAPES: Record<string, string> = {
-    'an httpCall action carried through verbatim': JSON.stringify({
+    'an httpCall action with every field': JSON.stringify({
       name: 'r', type: 'threshold', when: { metric: 'tempC', op: 'gt', threshold: 30 },
-      actions: [{ type: 'httpCall', httpCall: { url: 'https://example.invalid/hook', secretRef: 'h', timeoutMs: 2000 } }],
+      actions: [{ type: 'httpCall', httpCall: { url: 'https://example.invalid/hook', method: 'POST', headers: { 'X-A': 'b' }, bodyTemplate: '"x"', secretRef: 'h', timeoutMs: 2000 } }],
     }),
-    'a publish action carried through verbatim': JSON.stringify({
+    'a publish action with every field': JSON.stringify({
       name: 'r', type: 'threshold', when: { metric: 'tempC', op: 'gt', threshold: 30 },
-      actions: [{ type: 'publish', publish: { connector: 'c', payload: '"x"' } }],
+      actions: [{ type: 'publish', publish: { connectorRef: 'c', payloadTemplate: '"x"', timeoutMs: 1000 } }],
     }),
     'a canvas-authored guard on an action': JSON.stringify({
       name: 'r', type: 'threshold', when: { metric: 'tempC', op: 'gt', threshold: 30 },
@@ -225,6 +226,33 @@ describe('the round-trip corpus', () => {
     const parsed = parseDefinition(exotic);
     expect(parsed).not.toBeNull();
     expect(ruleSurvivesRoundTrip(exotic, rebuildFrom(parsed!))).toBe(false);
+  });
+
+  // 🔴 THE "EVERY FIELD" SHAPES ABOVE ARE HAND-WRITTEN, SO THEY COVER THE FIELDS THAT EXISTED
+  // WHEN SOMEBODY WROTE THEM. The outbound actions no longer pass through verbatim: the form
+  // rebuilds them from what it models, and a field the compiler gains tomorrow (a method list,
+  // a retry count) would be dropped on every save behind nothing louder than the lossy-open
+  // banner. So the field set is read from the Go structs themselves, and a field with no sample
+  // here fails this test — which is the prompt to teach the form the field, then add it.
+  it.each([
+    ['HTTPCallAction', 'httpCall'],
+    ['PublishAction', 'publish'],
+  ])('opens and re-saves every field of %s the compiler declares', (struct, wire) => {
+    const body = new RegExp(`type ${struct} struct \\{([\\s\\S]*?)\\n\\}`).exec(SCHEMA_GO);
+    expect(body, `${struct} not found in schema.go`).not.toBeNull();
+    const tags = [...body![1].matchAll(/json:"([A-Za-z]+)/g)].map((m) => m[1]);
+    expect(tags.length).toBeGreaterThan(1);
+    const SAMPLES: Record<string, unknown> = {
+      url: 'https://example.invalid/hook', method: 'POST', headers: { 'X-A': 'b' }, bodyTemplate: '"x"',
+      secretRef: 'team/h', timeoutMs: 2000, connectorRef: 'c', payloadTemplate: '"y"',
+    };
+    const unmodelled = tags.filter((tg) => !(tg in SAMPLES));
+    expect(unmodelled, `${struct} declares fields this test has no sample for — model them in the form first`).toEqual([]);
+    const definition = JSON.stringify({
+      name: 'r', type: 'threshold', when: { metric: 'tempC', op: 'gt', threshold: 30 },
+      actions: [{ type: wire, guard: 'value > 1.0', [wire]: Object.fromEntries(tags.map((tg) => [tg, SAMPLES[tg]])) }],
+    });
+    expect(ruleSurvivesRoundTrip(definition, rebuildFrom(parseDefinition(definition)!))).toBe(true);
   });
 });
 
@@ -446,6 +474,15 @@ describe('ceilings mirrored from the compiler', () => {
 
   it('caps the action chain where the compiler does', () => {
     expect(MAX_ACTIONS_PER_RULE).toBe(intConst(SCHEMA_GO, 'MaxActionsPerRule'));
+  });
+
+  // The connector-action timeout ceiling lives in the connectorwire leaf (`MaxTimeoutMs = 20_000`),
+  // which the compiler aliases as MaxActionTimeoutMs.
+  it('caps a connector action timeout where the compiler does', () => {
+    expect(SCHEMA_GO).toMatch(/const MaxActionTimeoutMs = connectorwire\.MaxTimeoutMs/);
+    const m = /const MaxTimeoutMs = ([\d_]+)/.exec(CONNECTORWIRE_GO);
+    expect(m, 'connectorwire.MaxTimeoutMs not found').not.toBeNull();
+    expect(MAX_ACTION_TIMEOUT_MS).toBe(Number(m![1].replace(/_/g, '')));
   });
 });
 

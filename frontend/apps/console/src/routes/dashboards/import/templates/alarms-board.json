@@ -1,0 +1,123 @@
+{
+  "canvas": {
+    "breakpoints": {
+      "base": 0
+    },
+    "grid": {
+      "columns": 24,
+      "gap": 8,
+      "rowHeight": 40
+    },
+    "sizing": "fill"
+  },
+  "schemaVersion": 1,
+  "title": "Alarms board",
+  "widgets": [
+    {
+      "id": "w-active",
+      "layout": {
+        "base": {
+          "col": 0,
+          "colSpan": 6,
+          "row": 0,
+          "rowSpan": 4,
+          "z": 0
+        }
+      },
+      "options": {
+        "state": "ACTIVE",
+        "title": "Active"
+      },
+      "type": "alarm-count"
+    },
+    {
+      "id": "w-unack",
+      "layout": {
+        "base": {
+          "col": 6,
+          "colSpan": 6,
+          "row": 0,
+          "rowSpan": 4,
+          "z": 0
+        }
+      },
+      "options": {
+        "acknowledged": "false",
+        "state": "ACTIVE",
+        "title": "Unacknowledged"
+      },
+      "type": "alarm-count"
+    },
+    {
+      "id": "w-crit",
+      "layout": {
+        "base": {
+          "col": 12,
+          "colSpan": 6,
+          "row": 0,
+          "rowSpan": 4,
+          "z": 0
+        }
+      },
+      "options": {
+        "severity": "CRITICAL",
+        "state": "ACTIVE",
+        "title": "Critical"
+      },
+      "type": "alarm-count"
+    },
+    {
+      "id": "w-cleared",
+      "layout": {
+        "base": {
+          "col": 18,
+          "colSpan": 6,
+          "row": 0,
+          "rowSpan": 4,
+          "z": 0
+        }
+      },
+      "options": {
+        "state": "CLEARED",
+        "title": "Cleared"
+      },
+      "type": "alarm-count"
+    },
+    {
+      "id": "w-table",
+      "layout": {
+        "base": {
+          "col": 0,
+          "colSpan": 24,
+          "row": 4,
+          "rowSpan": 10,
+          "z": 0
+        }
+      },
+      "options": {
+        "maxRows": 100,
+        "state": "ACTIVE",
+        "title": "Active alarms"
+      },
+      "type": "alarm-table"
+    },
+    {
+      "id": "w-recent",
+      "layout": {
+        "base": {
+          "col": 0,
+          "colSpan": 24,
+          "row": 14,
+          "rowSpan": 6,
+          "z": 0
+        }
+      },
+      "options": {
+        "maxRows": 25,
+        "state": "CLEARED",
+        "title": "Recently cleared"
+      },
+      "type": "alarm-table"
+    }
+  ]
+}

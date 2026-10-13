@@ -59,7 +59,7 @@ If you need a longer span, an operator can raise the limit for the instance ([`m
 
 The form builder and the automation canvas both author Connectivity rules. The presence edge is the whole signal, so neither offers a condition or parameters for the type: on the canvas it is a **Connectivity** node that takes the source's stream and feeds actions, like any other condition.
 
-Neither surface silently rewrites a rule it cannot show in full. If the form opens a stored rule it cannot hold completely (a field it does not model, or a type it does not know), it warns that part of the definition is not shown and that saving would replace the original with only what you can see. That warning is distinct from the "could not be read" notice shown for a definition that is not valid JSON. A Connectivity rule opens with neither.
+Neither surface silently rewrites a rule it cannot show in full. If the form opens a stored rule it cannot hold completely (a field it does not model, or a type it does not know), it warns that part of the definition is not shown and lists the fields it would not keep. Saving such a rule asks you to confirm first: the dialog names the same fields, **Save anyway** replaces the original with only what you can see, and **Cancel** saves nothing. A rule the form holds completely saves without the dialog. That warning is distinct from the "could not be read" notice shown for a definition that is not valid JSON. A Connectivity rule opens with neither.
 
 The canvas is stricter. When it opens a stored rule, it asks the compiler whether saving the rule as laid out would keep everything the stored definition says. When the answer is not yes, the canvas says why and turns saving off for that rule:
 
@@ -113,7 +113,7 @@ A firing is **edge-triggered**: a rising edge when the condition starts holding,
 
 You author rules in the console in three ways. All three use the same schema, and the **same server-side compiler** validates all of them before publish:
 
-- A **form builder** — a typed form per condition type, the quickest path for a single rule. As you edit, it shows the compiler's type and cost feedback inline, before you publish. Its action picker offers only raise alarm and send command. Guards and the outbound actions are authored on the canvas; the form shows them read-only and preserves them when you save.
+- A **form builder** — a typed form per condition type, the quickest path for a single rule. As you edit, it shows the compiler's type and cost feedback inline, before you publish. Its action picker offers all four actions: raise alarm, send command, call a webhook and publish to a connector. A webhook takes a URL, an optional body template, headers, a secret handle and a timeout; a publish action takes a connector chosen from the connectors you can use, a payload template and a timeout. The form checks the obvious mistakes as you type (a missing or non-http URL, a header line without a key, a missing connector, a timeout over the limit) and the compiler's feedback covers the rest, including the body and payload templates. A connector that no longer exists is shown as "not found" rather than dropped. Guards are authored on the canvas; the form shows them and preserves them when you save. A rule authored in the form opens on the canvas with the same actions, and the reverse.
 - A **visual automation canvas** — a node graph (source → condition → optional branches → actions) for richer flows. The canvas **compiles to the same rule** a form would produce; it is an authoring surface, not a second engine. It adds **branch** nodes (route a firing to different actions by a guard) and **compute** nodes (name a reusable derived value and reference it in a condition or guard). It offers a node for every condition type.
 - A natural-language **"Describe" door** — where the AI service is enabled, you describe the rule in words and get a drafted candidate to review and publish. It is offered when you create a new rule, and it produces a rule in the same schema the other two produce. See [AI-Assisted Authoring](./ai-authoring.md).
 
@@ -152,7 +152,7 @@ This machine-to-human path is kept distinct from the machine-to-machine **[outbo
 
 Alarms surface live in two places without any extra wiring:
 
-- The console **Alarms** view — a live, tenant-wide list, filterable and acknowledgeable in place.
+- The console **Alarms** view — a live, tenant-wide list, filterable and acknowledgeable in place, with an **Export CSV** button that saves every alarm matching the current filter (up to 10,000 rows) rather than only the visible page.
 - **Dashboard widgets** — a live **alarm table** and an **alarm count** widget (see [Dashboards](./dashboards.md)), including **acknowledge/clear actions** that the server authorizes against the operator's own rights.
 
 Both are fed by live subscriptions, so state changes appear as they happen.
