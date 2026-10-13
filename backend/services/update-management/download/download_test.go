@@ -83,13 +83,18 @@ type env struct {
 	srv     *httptest.Server
 	clock   time.Time
 	profile map[string]string
+	devices *fakeDevices
 }
 
-type fakeDevices map[string]string
+type fakeDevices struct {
+	profiles map[string]string
+	// disabled is the set of tenant/device keys an operator has disabled; a test flips it mid-run.
+	disabled map[string]bool
+}
 
-func (f fakeDevices) ProfileOf(_ context.Context, tenant, device string) (string, bool, error) {
-	p, ok := f[tenant+"/"+device]
-	return p, ok, nil
+func (f *fakeDevices) DeviceOf(_ context.Context, tenant, device string) (model.DeviceFacts, bool, error) {
+	p, ok := f.profiles[tenant+"/"+device]
+	return model.DeviceFacts{Profile: p, Disabled: f.disabled[tenant+"/"+device]}, ok, nil
 }
 
 type nullDesired struct{}
@@ -124,7 +129,9 @@ func newEnv(t *testing.T, maxConcurrent int) *env {
 		MaxArtifactBytes: 64 << 20, ConfiguredMaxArtifactBytes: 64 << 20, MaxTenantArtifactBytes: 256 << 20,
 	})
 	api.Profiles = profiles{}
-	api.Devices = fakeDevices{"acme/dev-1": "gateway", "acme/dev-2": "gateway", "globex/dev-1": "gateway"}
+	e.devices = &fakeDevices{profiles: map[string]string{"acme/dev-1": "gateway", "acme/dev-2": "gateway", "globex/dev-1": "gateway"},
+		disabled: map[string]bool{}}
+	api.Devices = e.devices
 	api.Desired = nullDesired{}
 	api.Secrets = secrets.NewStore(db, kp)
 	api.Policy = ota.Policy{Acknowledge: time.Hour, Download: time.Hour, Verify: time.Hour, Install: time.Hour, Confirm: time.Hour}
@@ -558,4 +565,28 @@ func TestADownloadThatRunsPastItsWindowIsCut(t *testing.T) {
 		r, body := get(t, e.rebase(t, minted))
 		return r.StatusCode == http.StatusOK && len(body) == len(data)
 	}, 5*time.Second, 50*time.Millisecond)
+}
+
+// 🔴 A CAPABILITY MINTED BEFORE A DEVICE WAS DISABLED DOES NOT OUTLIVE THE QUARANTINE. The
+// device is mid-download on a connection nothing has closed: its next request is refused (403)
+// before the first byte of the artifact is read, and enabling the device lets the same capability
+// work again, because nothing was recorded against it.
+func TestACapabilityIsRefusedWhileItsDeviceIsDisabled(t *testing.T) {
+	e := newEnv(t, 4)
+	e.artifact(t, "acme", "fw-1", content(1000))
+	_, minted := e.grant(t, "acme", "dev-1", "fw-1")
+	target := e.rebase(t, minted)
+	resp, _ := get(t, target)
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	e.devices.disabled["acme/dev-1"] = true
+	opens := e.store.opens.Load()
+	resp, _ = get(t, target)
+	require.Equal(t, http.StatusForbidden, resp.StatusCode, "a disabled device was served")
+	require.Equal(t, opens, e.store.opens.Load(), "the artifact was opened for a disabled device")
+
+	delete(e.devices.disabled, "acme/dev-1")
+	resp, body := get(t, target)
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	require.Len(t, body, 1000)
 }

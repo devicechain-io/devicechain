@@ -37,6 +37,9 @@ const (
 	CodeInvalidAssignment       = "INVALID_ASSIGNMENT"
 	CodeNotUnknown              = "UPDATE_NOT_UNKNOWN"
 	CodeInvalidReason           = "INVALID_REASON"
+	// CodeDeviceDisabled: an operator has disabled the device (quarantined it), so nothing can be
+	// assigned to it. The same code device-management gives a command to a disabled device.
+	CodeDeviceDisabled = "DEVICE_DISABLED"
 )
 
 // Verdicts the platform adds to the reducer's own: a report that names no assignment this device
@@ -50,11 +53,53 @@ const (
 // a couple of losses in a row means something is wrong rather than busy.
 const casRetries = 6
 
-// DeviceLookup resolves a device's profile in device-management. found is false for a device the
-// tenant does not have; an error means the answer could not be obtained, which callers treat as a
-// refusal and never as "compatible".
+// DeviceFacts is what update-management asks device-management about a device.
+type DeviceFacts struct {
+	// Profile is the token of the device-profile the device resolves through, empty for a device
+	// whose type has none.
+	Profile string
+	// Disabled is true while an operator has the device disabled (quarantined).
+	Disabled bool
+}
+
+// DeviceLookup resolves a device in device-management. found is false for a device the tenant does
+// not have; an error means the answer could not be obtained, which callers treat as a refusal and
+// never as "compatible" or "enabled".
 type DeviceLookup interface {
-	ProfileOf(ctx context.Context, tenant, deviceToken string) (profile string, found bool, err error)
+	DeviceOf(ctx context.Context, tenant, deviceToken string) (facts DeviceFacts, found bool, err error)
+}
+
+// ErrDeviceDisabled is returned by the device-facing operations (a report, a sync answer, a
+// download grant) for a device an operator has disabled. It is permanent for as long as the device
+// stays disabled, so nothing that receives it should retry.
+var ErrDeviceDisabled = errors.New("the device is disabled")
+
+// refuseIfDisabled is the quarantine gate of the device-facing operations. A device an operator
+// has disabled keeps whatever session it had open, so the broker cannot be what cuts it off here:
+// every report, sync answer and download grant asks device-management afresh and refuses with
+// ErrDeviceDisabled, and enabling the device takes effect on its next message because nothing is
+// remembered. A lookup that cannot be answered is an error, never "enabled", and the message is
+// retried. A device device-management does not have is not refused here: it has no assignment,
+// and the operation answers that on its own terms.
+//
+// With no lookup wired no assignment can exist (assigning is refused without one), so there is
+// nothing to protect and nothing to ask.
+func (api *Api) refuseIfDisabled(ctx context.Context, deviceToken string) error {
+	if api.Devices == nil {
+		return nil
+	}
+	tenant, ok := core.TenantFromContext(ctx)
+	if !ok {
+		return errors.New("a device-facing update operation requires a tenant")
+	}
+	facts, found, err := api.Devices.DeviceOf(ctx, tenant, deviceToken)
+	if err != nil {
+		return fmt.Errorf("checking whether device %q is disabled: %w", deviceToken, err)
+	}
+	if found && facts.Disabled {
+		return ErrDeviceDisabled
+	}
+	return nil
 }
 
 // DesiredPublisher puts one encoded message on a device's desired-state channel. The tenant comes
@@ -253,20 +298,23 @@ func (api *Api) AssignArtifact(ctx context.Context, deviceToken, artifactToken s
 			"artifact %q is UNVERIFIED and this instance does not allow assigning unverified artifacts "+
 				"(updates.allowUnverifiedArtifacts)", artifact.Token)
 	}
-	profile, found, err := api.Devices.ProfileOf(ctx, tenant, deviceToken)
+	facts, found, err := api.Devices.DeviceOf(ctx, tenant, deviceToken)
 	if err != nil {
 		return nil, refuse(CodeDeviceLookupUnavailable, "the device could not be looked up in device-management: %v", err)
 	}
 	if !found {
 		return nil, refuse(CodeDeviceNotFound, "no device with token %q", deviceToken)
 	}
+	if facts.Disabled {
+		return nil, refuse(CodeDeviceDisabled, "device %q is disabled; enable it before assigning an update", deviceToken)
+	}
 	var compatible []string
 	if err := json.Unmarshal(artifact.CompatibleProfiles, &compatible); err != nil {
 		return nil, fmt.Errorf("artifact %q has an unreadable compatibleProfiles document: %w", artifact.Token, err)
 	}
-	if profile == "" || !slices.Contains(compatible, profile) {
+	if facts.Profile == "" || !slices.Contains(compatible, facts.Profile) {
 		return nil, refuse(CodeIncompatibleProfile,
-			"device %q (profile %q) is not on artifact %q's compatible profile list", deviceToken, profile, artifact.Token)
+			"device %q (profile %q) is not on artifact %q's compatible profile list", deviceToken, facts.Profile, artifact.Token)
 	}
 
 	var view *UpdateAssignmentView
@@ -506,6 +554,9 @@ func (api *Api) PublishCancelFor(ctx context.Context, deviceToken, attemptToken,
 // with the core reducer, and stores the result when the reducer applied it. The device is the one
 // the subject named; a report can only ever reach that device's own assignments.
 func (api *Api) ApplyReport(ctx context.Context, deviceToken string, rep ota.Report) (ota.Verdict, error) {
+	if err := api.refuseIfDisabled(ctx, deviceToken); err != nil {
+		return "", err
+	}
 	if rep.Kind == ota.KindInventory {
 		return api.applyInventory(ctx, deviceToken, rep)
 	}
@@ -585,6 +636,10 @@ func (api *Api) CurrentUpdates(ctx context.Context, deviceToken string) ([]Updat
 	if len(current) == 0 {
 		return nil, nil
 	}
+	// Asked only now that there is something to answer with: a sync with nothing to say costs no lookup.
+	if err := api.refuseIfDisabled(ctx, deviceToken); err != nil {
+		return nil, err
+	}
 	views, err := api.viewsOf(ctx, current)
 	if err != nil {
 		return nil, err
@@ -647,6 +702,9 @@ func (api *Api) GrantDownload(ctx context.Context, deviceToken, assignmentToken 
 	tenant, ok := core.TenantFromContext(ctx)
 	if !ok {
 		return nil, errors.New("a download grant requires a tenant")
+	}
+	if err := api.refuseIfDisabled(ctx, deviceToken); err != nil {
+		return nil, err
 	}
 	if api.DownloadBaseURL == "" {
 		return nil, &GrantRefusal{Reason: GrantNotConfigured}
@@ -721,6 +779,9 @@ var (
 	ErrDownloadStale = errors.New("the assignment this capability was minted for is no longer current")
 	// ErrDownloadGone: the artifact was retired or its bytes are not available. 410.
 	ErrDownloadGone = errors.New("the artifact is no longer available")
+	// ErrDownloadDisabled: an operator has disabled the device the capability was minted for. A
+	// capability minted earlier does not outlive the quarantine. 403.
+	ErrDownloadDisabled = errors.New("the device this capability was minted for is disabled")
 )
 
 // ResolveDownload checks that the database state a verified capability refers to still holds: the
@@ -744,6 +805,14 @@ func (api *Api) ResolveDownload(ctx context.Context, c *Capability) (*DownloadTa
 	}
 	if row == nil || ota.State(row.State).Terminal() || row.CancelRequested || row.TargetDigest != c.Digest {
 		return nil, ErrDownloadStale
+	}
+	// After the cheap staleness checks, so a stale request costs no lookup. A capability minted
+	// before the device was disabled does not outlive the quarantine.
+	if err := api.refuseIfDisabled(ctx, c.DeviceToken); err != nil {
+		if errors.Is(err, ErrDeviceDisabled) {
+			return nil, ErrDownloadDisabled
+		}
+		return nil, err
 	}
 	artifact, err := api.artifactByID(ctx, asg.ArtifactId)
 	if err != nil {

@@ -25,16 +25,17 @@ import (
 
 // fakeApi records what the consumer asks of the update plane.
 type fakeApi struct {
-	applied   []ota.Report
-	verdict   ota.Verdict
-	applyErr  error
-	views     []model.UpdateAssignmentView
-	grant     *model.Grant
-	grantErr  error
-	grantsFor []string
-	cancels   []string
-	answers   int
-	published []string
+	applied    []ota.Report
+	verdict    ota.Verdict
+	applyErr   error
+	views      []model.UpdateAssignmentView
+	grant      *model.Grant
+	grantErr   error
+	grantsFor  []string
+	cancels    []string
+	answers    int
+	published  []string
+	currentErr error
 }
 
 func (f *fakeApi) ApplyReport(_ context.Context, device string, rep ota.Report) (ota.Verdict, error) {
@@ -49,6 +50,9 @@ func (f *fakeApi) ApplyReport(_ context.Context, device string, rep ota.Report) 
 }
 
 func (f *fakeApi) CurrentUpdates(context.Context, string) ([]model.UpdateAssignmentView, error) {
+	if f.currentErr != nil {
+		return nil, f.currentErr
+	}
 	return f.views, nil
 }
 

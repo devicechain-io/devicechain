@@ -19,11 +19,14 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-type devices map[string]string
+type devices struct {
+	profiles map[string]string
+	disabled map[string]bool
+}
 
-func (d devices) ProfileOf(_ context.Context, tenant, device string) (string, bool, error) {
-	p, ok := d[tenant+"/"+device]
-	return p, ok, nil
+func (d devices) DeviceOf(_ context.Context, tenant, device string) (model.DeviceFacts, bool, error) {
+	p, ok := d.profiles[tenant+"/"+device]
+	return model.DeviceFacts{Profile: p, Disabled: d.disabled[tenant+"/"+device]}, ok, nil
 }
 
 type sink struct{ n int }
@@ -37,7 +40,8 @@ func updatePlane(t *testing.T, allowUnverified bool) (*plane, *sink) {
 	require.NoError(t, err)
 	out := &sink{}
 	p.api.Secrets = secrets.NewStore(p.api.RDB.Database, kp)
-	p.api.Devices = devices{"acme/dev-1": "gateway", "acme/dev-2": "other", "globex/dev-1": "gateway"}
+	p.api.Devices = devices{profiles: map[string]string{"acme/dev-1": "gateway", "acme/dev-2": "other", "acme/dev-off": "gateway", "globex/dev-1": "gateway"},
+		disabled: map[string]bool{"acme/dev-off": true}}
 	p.api.Desired = out
 	p.api.AllowUnverified = allowUnverified
 	p.schema = gql.MustParseSchema(SchemaContent, &SchemaResolver{Area: "update-management", AllowUnverifiedArtifacts: allowUnverified})
@@ -145,6 +149,8 @@ func TestAssignRefusalsCarryTheirCodes(t *testing.T) {
 	require.JSONEq(t, `{"updateManagementInfo":{"allowUnverifiedArtifacts":true}}`, string(resp.Data))
 	require.Equal(t, model.CodeIncompatibleProfile, code(p.exec(writer, assignMutation, map[string]any{"d": "dev-2", "a": "fw-1"})))
 	require.Equal(t, model.CodeDeviceNotFound, code(p.exec(writer, assignMutation, map[string]any{"d": "ghost", "a": "fw-1"})))
+	require.Equal(t, model.CodeDeviceDisabled, code(p.exec(writer, assignMutation, map[string]any{"d": "dev-off", "a": "fw-1"})),
+		"assigning to a disabled device is refused with the typed DEVICE_DISABLED code")
 	require.Equal(t, model.CodeArtifactNotFound, code(p.exec(writer, assignMutation, map[string]any{"d": "dev-1", "a": "nope"})))
 	require.Equal(t, model.CodeAssignmentNotFound, code(p.exec(writer, `mutation { cancelUpdate(assignmentToken:"nope"){ token } }`, nil)))
 }
