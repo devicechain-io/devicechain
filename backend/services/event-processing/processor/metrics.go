@@ -184,7 +184,7 @@ func NewDetectMetrics(ms *core.Microservice) *DetectMetrics {
 		idleAdvancesTotal:   ms.NewCounter("detect_idle_advances_total", "Wall-clock idle advances that produced at least one detection."),
 		idleDetectionsTotal: ms.NewCounter("detect_idle_detections_total", "Detections produced by wall-clock idle advance (absence/duration/session firing on silence)."),
 
-		staleAbsenceDropped:       ms.NewCounter("detect_stale_absence_dropped_total", "Absence detections dropped at publish because the device left the rule's scope (deleted/re-typed/version superseded)."),
+		staleAbsenceDropped:       ms.NewCounter("detect_stale_absence_dropped_total", "Absence RAISES (and their paired clears) dropped at publish because the device left the rule's scope (deleted/disabled/re-typed/version superseded), plus republish handoff clears."),
 		supersededFrontierDropped: ms.NewCounter("detect_superseded_frontier_dropped_total", "Non-absence frontier-triggered detections (Duration/Session/Aggregate) dropped at publish because their profile version is superseded (ADR-057 D6)."),
 
 		liveKeys:                 ms.NewGauge("detect_live_keys", "Total live keyed window/timer state entries across all tenants (the per-tenant state-budget aggregate)."),

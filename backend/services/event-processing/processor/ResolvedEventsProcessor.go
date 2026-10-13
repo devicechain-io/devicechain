@@ -2827,7 +2827,9 @@ func rollUpToTenants(byRule map[string]int) (map[string]int, int) {
 //     AbsenceLive — the device left the rule's scope (deleted / disabled / re-typed / version superseded).
 //     Fail-safe toward a missed absence: AbsenceLive treats an unknown device/rule as NOT live. A RESOLVED
 //     is NOT gated on liveness (it is the clear the departure itself emits for an already-published
-//     raise); it is dropped only when its own raise was dropped in the same pass.
+//     raise); it is dropped only when its own raise was dropped in the same pass, or when the rule is
+//     carried forward under the same stable identity by the device's new active version (a republish
+//     handoff, which must not flap the alarm — AbsenceCarriedForward).
 //   - DURATION / SESSION / AGGREGATE (frontier-triggered, ADR-057 D6): dropped only on a CONFIRMED
 //     version supersession (VersionSuperseded) — otherwise a superseded pane-close/timer would contribute
 //     a false edge to the alarm object under the stable contributor id (a stale unsatisfied pane-close
@@ -2861,7 +2863,10 @@ func (rp *ResolvedEventsProcessor) dropSupersededDetections() {
 			// is paired off below.
 			if !rp.armer.AbsenceLive(key) {
 				_, raiseDropped := droppedRaise[key]
-				drop = d.Edge != detectcore.EdgeResolved || raiseDropped
+				// A republish's disarm of the old version for a still-in-scope device is a handoff, not a
+				// clear: the contributor id is stable across versions, so publishing it would flap the
+				// alarm CLEARED then ACTIVE (resetting its acknowledgement) when the new grace expires.
+				drop = d.Edge != detectcore.EdgeResolved || raiseDropped || rp.armer.AbsenceCarriedForward(key)
 			}
 		case frontierTriggeredKind(d.Kind):
 			// The OTHER frontier kinds (Duration/Session timers, Aggregate pane closes) ride the shared
