@@ -357,7 +357,7 @@ func (f *e2e) openDevice(tenant, device string, chunk int64, httpc *http.Client,
 	l := f.link(tenant, device)
 	c, err := updater.OpenClient(updater.ClientConfig{
 		StatePath: statePath, Component: "firmware", InitialVersion: "1.0.0", ChunkSize: chunk,
-		Transport: l, HTTP: httpc, Now: f.now,
+		Transport: l, HTTP: httpc, Now: f.now, RequireSignature: updater.RequireSignatureOption(false),
 	})
 	require.NoError(f.t, err)
 	l.listen(c)

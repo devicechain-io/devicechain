@@ -25,6 +25,10 @@ type attemptState struct {
 	Version        string `json:"version"`
 	Size           int64  `json:"size"`
 	RequiresReboot bool   `json:"requiresReboot"`
+	Trust          string `json:"trust,omitempty"`
+	Signature      string `json:"signature,omitempty"`
+	KeyID          string `json:"keyId,omitempty"`
+	Algorithm      string `json:"algorithm,omitempty"`
 
 	// Stage is the stage of the last report GENERATED, which may still be Pending.
 	Stage     string `json:"stage"`

@@ -65,6 +65,7 @@ func TestCommandSuccessDoesNotMoveAttempt(t *testing.T) {
 	up, err := updater.Open(updater.Config{
 		StatePath: filepath.Join(t.TempDir(), "state.json"), Component: "firmware",
 		Transport: link, Source: img, ChunkSize: chunk, InitialVersion: "1.0.0",
+		RequireSignature: updater.RequireSignatureOption(false),
 	})
 	require.NoError(t, err)
 	require.NoError(t, up.Assign(updater.Assignment{

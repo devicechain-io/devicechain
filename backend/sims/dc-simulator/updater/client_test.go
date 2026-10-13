@@ -168,10 +168,10 @@ func newClientRig(t *testing.T) *clientRig {
 	r := &clientRig{t: t, cap: &capture{t: t}, srv: srv, now: time.Date(2026, 10, 11, 12, 0, 0, 0, time.UTC)}
 	r.cfg = updater.ClientConfig{
 		StatePath: filepath.Join(t.TempDir(), "state.json"), Component: "firmware", InitialVersion: "1.0.0",
-		ChunkSize: clientChunk, Transport: r.cap, Now: func() time.Time { return r.now },
+		ChunkSize: clientChunk, Transport: r.cap, RequireSignature: updater.RequireSignatureOption(false), Now: func() time.Time { return r.now },
 	}
 	r.client = r.open()
-	asg, err := ota.EncodeUpdateAssignment("att-1", "asg-1", "firmware", ota.AssignmentArtifact{
+	asg, err := ota.EncodeUpdateAssignment("att-1", "asg-1", "firmware", ota.TrustUnverified, nil, ota.AssignmentArtifact{
 		Version: "2.0.0", Digest: digestOf(data), Size: int64(len(data)), RequiresReboot: true})
 	require.NoError(t, err)
 	r.asg = asg
