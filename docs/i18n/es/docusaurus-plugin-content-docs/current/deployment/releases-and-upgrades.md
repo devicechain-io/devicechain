@@ -4147,7 +4147,7 @@ Por eso una eliminación retiene su token algo más que antes. Tres cambios lo r
   rechaza la conexión de un dispositivo de ese inquilino.
 - **Los servicios LwM2M y Sparkplug olvidan una búsqueda de dispositivo en caché después de una hora**,
   y un registro LwM2M de un inquilino eliminado se termina en lugar de prorrogarse.
-- **Se rechaza un token de actualización emitido antes de crearse el inquilino**, para cualquier
+- **Se rechaza un token de actualización emitido en un segundo anterior a la creación del inquilino**, para cualquier
   llamante. Cuando se elimina un inquilino y se crea otro con el mismo token, quienes tenían la sesión
   iniciada en el primero deben volver a iniciar sesión.
 
@@ -4158,12 +4158,14 @@ de `auditEvents` que lee esas entradas; en la consola, **Administración → Aud
 eliminación completada como `<token> (eliminado el <fecha>)` en su filtro de inquilino. No hay nada que
 hacer. Consulta [Eliminación de un inquilino](./tenant-deletion.md#audit).
 
-##### Un registro que no existe se responde con `NOT_FOUND`, en todas las API GraphQL {#v0200-not-found}
+##### Un registro que no existe se responde con `NOT_FOUND` {#v0200-not-found}
 
 Una petición que nombra un registro que no existe llegaba al cliente como un `record not found` sin
-`extensions.code` en la mayoría de los servicios, y con un código propio del servicio (como
-`ARTIFACT_NOT_FOUND`) en unos pocos. Ahora lleva `extensions.code` con el valor `NOT_FOUND`; el mensaje
-no cambia, y un rechazo que ya tiene su propio código lo conserva. Un cliente que distinguía un registro
+`extensions.code` en la mayoría de los servicios. Ahora lleva `extensions.code` con el valor
+`NOT_FOUND`, y el mensaje no cambia. Un rechazo que ya tenía su propio código para un registro
+inexistente, como `ARTIFACT_NOT_FOUND`, lo conserva. En esta versión las API de user-management todavía
+responden algunos casos (un inquilino, un rol, una identidad o una pertenencia que no existe) con un
+mensaje como `tenant not found` y sin código. Un cliente que distinguía un registro
 inexistente de otros fallos leyendo el mensaje puede pasar a usar el código. Consulta la
 [referencia de GraphQL](../reference/graphql-api.md#not-found).
 

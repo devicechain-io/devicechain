@@ -89,7 +89,7 @@ batch and the audit journals as CSV, up to 10,000 rows each.
 
 People can sign in through your own OpenID Connect identity provider, and a tenant can require it
 ([single sign-on](https://docs.devicechain.io/concepts/single-sign-on)). Over-the-air updates are
-an opt-in first slice: a per-tenant artifact catalogue, assignment to one device at a time and a
+an opt-in first release: a per-tenant artifact catalogue, assignment to one device at a time and a
 resumable download. Nothing yet verifies who produced an artifact, so assigning one has to be
 allowed explicitly, and there are no console screens for it
 ([over-the-air updates](https://docs.devicechain.io/concepts/over-the-air-updates)).

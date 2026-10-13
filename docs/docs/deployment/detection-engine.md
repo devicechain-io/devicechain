@@ -317,7 +317,7 @@ Four more causes worth checking:
   it raised before. Clear the alarm by hand once you have fixed or retired the rule.
 - **A silence (absence) alarm that is still raised after the device or rule changed.** Unlike the
   rule kinds above, an absence alarm is cleared for you when its device leaves the rule's scope: the
-  device is disabled, deleted or re-typed to a profile without the rule, or a republish removes the
+  device is disabled, deleted or moved to a device type with a different profile, or a republish removes the
   rule. A republish that **keeps** the rule leaves the alarm raised, with its acknowledgement, rather
   than clearing it and raising it again when the new silence window ends.
 

@@ -127,7 +127,7 @@ In the console, open **Admin → Audit** and use the tenant filter. It lists eac
 `<token> (deleted <date>)`, and choosing one shows the entries kept for that deletion.
 
 A tenant created with a deleted tenant's token also does not inherit that tenant's sessions. A refresh
-token issued before the new tenant was created is refused, for every caller, so someone who was signed
+token issued in an earlier second than the new tenant was created is refused, for every caller, so someone who was signed
 in to the earlier tenant has to sign in again.
 
 :::warning Sign-in records belong to no tenant, and are not reached

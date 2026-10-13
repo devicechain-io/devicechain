@@ -59,7 +59,7 @@ A command for a device that is currently asleep is **held durably and delivered 
 
 Either way the platform still holds the command, so you can still cancel it. If its time-to-live runs out first, the record says it never reached a device rather than blaming the device for not answering.
 
-### Named operations and device information
+### Named operations and device information {#named-operations-and-device-information}
 
 Two standard Device-object operations are available by name, so nobody has to type `/3/0/4`:
 

@@ -3856,7 +3856,7 @@ did. Three changes support it:
   refused from then on.
 - **The LwM2M and Sparkplug services forget a cached device lookup after an hour**, and an LwM2M
   registration of a deleted tenant is ended instead of extended.
-- **A refresh token issued before a tenant was created is refused**, for every caller. When a tenant
+- **A refresh token issued in an earlier second than the tenant was created is refused**, for every caller. When a tenant
   is deleted and another is created with the same token, people who were signed in to the first one
   sign in again.
 
@@ -3866,13 +3866,15 @@ gains `retainedAuditTenant`, which is the `tenant` filter of `auditEvents` that 
 in the console, **Admin → Audit** lists each completed deletion as `<token> (deleted <date>)` in its
 tenant filter. Nothing needs doing. See [Tenant deletion](./tenant-deletion.md#audit).
 
-##### A record that does not exist is answered with `NOT_FOUND`, in every GraphQL API {#v0200-not-found}
+##### A record that does not exist is answered with `NOT_FOUND` {#v0200-not-found}
 
 A request that names a record which does not exist used to reach the client as a bare `record not
-found` with no `extensions.code` in most services, and with a service-specific code (such as
-`ARTIFACT_NOT_FOUND`) in a few. It now carries `extensions.code` `NOT_FOUND`; the message is unchanged,
-and a refusal that already has its own code keeps it. A client that told a missing record from other
-failures by reading the message can switch to the code. See the
+found` with no `extensions.code` in most services. It now carries `extensions.code` `NOT_FOUND`, and
+the message is unchanged. A refusal that already had its own code for a miss, such as
+`ARTIFACT_NOT_FOUND`, keeps it. In this release the user-management APIs still answer some misses (a
+tenant, role, identity or membership that does not exist) with a message such as `tenant not found` and
+no code. A client that told a missing record from other failures by reading the message can switch to
+the code. See the
 [GraphQL reference](../reference/graphql-api.md#not-found).
 
 ##### Single sign-on is new, and needs nothing from you {#v0200-sso}

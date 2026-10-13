@@ -350,8 +350,8 @@ Cuatro causas más que conviene revisar:
   regla.
 - **Una alarma de silencio (ausencia) que sigue levantada después de que cambió el dispositivo o la
   regla.** A diferencia de los tipos de regla anteriores, una alarma de ausencia se cierra sola cuando
-  su dispositivo sale del alcance de la regla: el dispositivo se deshabilita, se elimina o se cambia
-  de tipo a un perfil sin la regla, o una republicación retira la regla. Una republicación que
+  su dispositivo sale del alcance de la regla: el dispositivo se deshabilita, se elimina o pasa a un
+  tipo de dispositivo con un perfil distinto, o una republicación retira la regla. Una republicación que
   **conserva** la regla deja la alarma levantada, con su acuse de recibo, en lugar de cerrarla y
   volver a levantarla cuando termina la nueva ventana de silencio.
 

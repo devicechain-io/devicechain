@@ -142,7 +142,7 @@ completada como `<token> (eliminado el <fecha>)`, y al elegir una se ven las ent
 eliminación.
 
 Un inquilino creado con el token de uno eliminado tampoco hereda las sesiones de ese inquilino. Un token
-de actualización (refresh token) emitido antes de que se creara el inquilino nuevo se rechaza, para
+de actualización (refresh token) emitido en un segundo anterior a la creación del inquilino nuevo se rechaza, para
 cualquier llamante, así que quien tenía la sesión iniciada en el inquilino anterior debe volver a iniciar
 sesión.
 
