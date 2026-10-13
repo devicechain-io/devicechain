@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -25,10 +26,13 @@ import (
 //
 //   - It is OFF the registration path. The handler only notes that the device became live; the
 //     reads happen later, on the device's own shard worker (the one that serializes its commands),
-//     after the live task and drain turn that worker was already taking. So a harvest never overlaps
-//     a command, never runs on the CoAP read loop, and takes one slot of that worker per device.
-//   - It is bounded. One GET per resource, each bounded by the op timeout; the first transport
-//     failure ends the harvest. One bounded retry later if the device did not answer at all.
+//     and only once that device has no drain turn, live task or park waiting there (takeHarvest).
+//     So a harvest never overlaps a command, never goes ahead of the device's held commands, never
+//     runs on the CoAP read loop, and takes one slot of that worker per device.
+//   - It is bounded. One GET per resource, the whole read bounded by ONE op timeout; the first
+//     transport failure ends the harvest. One bounded retry later if the device did not answer.
+//   - It belongs to the leadership term. Its queue is the term's shards, its retry checks the term,
+//     and its attribute writes are bound by the term's ctx and joined by Run.
 //   - It is throttled per device (harvestMinInterval): a device that re-handshakes every wake, or a
 //     fleet re-registering after a failover, does not re-read or re-write what it already gave.
 //   - Its attribute writes do not run on the worker. They are a device-management round trip each,
@@ -87,6 +91,9 @@ type Harvester struct {
 	sem     chan struct{}
 	// inflight counts running attribute-write goroutines so tests can wait for them.
 	inflight atomic.Int32
+	// writers joins the attribute-write goroutines at the end of the term (Dispatcher.Run), so a
+	// replica that has lost leadership is not still writing a device's attributes when it returns.
+	writers sync.WaitGroup
 }
 
 // NewHarvester builds a harvester that writes attributes through the device-management GraphQL
@@ -182,7 +189,12 @@ const setAttributeMutation = `mutation($request: EntityAttributeSetRequest!) {
 
 // publish writes the harvest's attributes off the caller's goroutine. It never blocks: a busy pool
 // drops the batch (the next harvest re-plans it, since nothing was remembered).
-func (h *Harvester) publish(k deviceKey, info DeviceInfo) {
+//
+// The writes are bound by ctx, the leadership term's: when the term ends they stop at the next
+// write rather than running on a replica that no longer serves the device, and Run joins them
+// (wait). tenantGone is re-checked before every write, because the device read that produced them
+// took up to an op timeout and the tenant may have been deleted meanwhile.
+func (h *Harvester) publish(ctx context.Context, k deviceKey, info DeviceInfo, tenantGone func(string) bool) {
 	writes := h.plan(k, info)
 	if len(writes) == 0 {
 		return
@@ -196,12 +208,17 @@ func (h *Harvester) publish(k deviceKey, info DeviceInfo) {
 		return
 	}
 	h.inflight.Add(1)
+	h.writers.Add(1)
 	go func() {
+		defer h.writers.Done()
 		defer h.inflight.Add(-1)
 		defer func() { <-h.sem }()
 		for _, a := range writes {
-			ctx, cancel := context.WithTimeout(context.Background(), harvestWriteTimeout)
-			err := h.client.Query(ctx, h.baseURL, k.tenant, setAttributeMutation, map[string]any{
+			if ctx.Err() != nil || (tenantGone != nil && tenantGone(k.tenant)) {
+				return // nothing remembered: a later harvest re-plans what was not written
+			}
+			wctx, cancel := context.WithTimeout(ctx, harvestWriteTimeout)
+			err := h.client.Query(wctx, h.baseURL, k.tenant, setAttributeMutation, map[string]any{
 				"request": map[string]any{
 					"entityType": "device",
 					"entity":     k.deviceToken,
@@ -224,6 +241,10 @@ func (h *Harvester) publish(k deviceKey, info DeviceInfo) {
 		}
 	}()
 }
+
+// wait joins every attribute-write goroutine. Run calls it after its workers have exited, so no
+// publish can race it.
+func (h *Harvester) wait() { h.writers.Wait() }
 
 // WaitForWrites blocks until in-flight attribute writes finish. Tests use it; nothing in the service does.
 func (h *Harvester) WaitForWrites() {
@@ -301,19 +322,29 @@ func (s *shardState) addHarvest(j harvestJob) bool {
 	return true
 }
 
-// takeHarvest pops the oldest queued job.
+// takeHarvest pops the oldest queued job whose device has no command work waiting on this shard.
+//
+// 🔴 COMMANDS FIRST, PER DEVICE. Drain wakes the device before Harvest queues it, but the worker
+// serves the ready list and the harvest queue one entry each per iteration, so with other devices
+// ahead in the ready list a device's harvest could otherwise run BEFORE its own drain turn — and a
+// sleeping device's held commands would wait behind up to an op timeout of information reads, in
+// the short window it is awake. A device that still wants a drain turn, or has a live task queued
+// or a park in flight, is skipped; the worker iteration that serves that work runs runOneHarvest
+// right after it, so the skipped job is reconsidered then.
 func (s *shardState) takeHarvest() (harvestJob, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if len(s.harvests) == 0 {
-		return harvestJob{}, false
+	for i, j := range s.harvests {
+		if g := s.devs[deviceKey{j.tenant, j.deviceToken}]; g != nil && (g.wanted || g.queuedLive > 0 || g.parksInFlight > 0) {
+			continue
+		}
+		s.harvests = slices.Delete(s.harvests, i, i+1)
+		if len(s.harvests) > 0 {
+			defer s.poke()
+		}
+		return j, true
 	}
-	j := s.harvests[0]
-	s.harvests = s.harvests[1:]
-	if len(s.harvests) > 0 {
-		defer s.poke()
-	}
-	return j, true
+	return harvestJob{}, false
 }
 
 // runOneHarvest runs at most one queued harvest on the shard's worker, after the worker's live task
@@ -339,7 +370,12 @@ func (d *Dispatcher) runOneHarvest(ctx context.Context, s *shardState) {
 		d.harvester.skip()
 		return
 	}
-	info := ReadDeviceInfo(ctx, conn, d.opTimeout)
+	// The WHOLE read is bounded by one op timeout — the same bound lwm2m.readDeviceInfo gets as a
+	// command — not one per resource: a device that answers each GET just inside the timeout would
+	// otherwise hold this shard's worker, and every other device's commands on it, for five.
+	hctx, cancel := context.WithTimeout(ctx, d.opTimeout)
+	info := ReadDeviceInfo(hctx, conn, d.opTimeout)
+	cancel()
 	if ctx.Err() != nil {
 		return
 	}
@@ -366,5 +402,5 @@ func (d *Dispatcher) runOneHarvest(ctx context.Context, s *shardState) {
 			Str("missing", fmt.Sprint(summarizeMissing(info.Missing))).
 			Msg("LwM2M device information harvested with resources missing.")
 	}
-	d.harvester.publish(key, info)
+	d.harvester.publish(ctx, key, info, d.tenantDeleted)
 }

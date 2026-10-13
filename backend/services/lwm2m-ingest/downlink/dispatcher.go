@@ -526,6 +526,11 @@ func (d *Dispatcher) Run(ctx context.Context) {
 	// cancelled and this is a no-op, and an exhausted read budget, where it is not.
 	stopWorkers()
 	wg.Wait()
+	// The workers are gone, so no harvest can start another attribute write; join the ones in
+	// flight (bound by runCtx, now cancelled) so the term's unwind waits for them too.
+	if d.harvester != nil {
+		d.harvester.wait()
+	}
 }
 
 // serveShard is one shard's worker loop: take a live task if there is one, otherwise wait for a live

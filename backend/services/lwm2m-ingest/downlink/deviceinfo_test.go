@@ -9,9 +9,12 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/plgd-dev/go-coap/v3/message"
 	"github.com/plgd-dev/go-coap/v3/message/codes"
@@ -41,13 +44,29 @@ type infoConn struct {
 	replies map[string]infoReply
 	calls   []string
 	posts   []string
+	bodies  []string
+	// delay is how long the device takes to answer each GET (bounded by the request's ctx).
+	delay time.Duration
+	// onGet, when set, runs as each GET arrives.
+	onGet func(path string)
 }
 
-func (c *infoConn) Get(_ context.Context, path string, _ ...message.Option) (*pool.Message, error) {
+func (c *infoConn) Get(ctx context.Context, path string, _ ...message.Option) (*pool.Message, error) {
 	c.mu.Lock()
 	c.calls = append(c.calls, path)
 	r, ok := c.replies[path]
+	delay, onGet := c.delay, c.onGet
 	c.mu.Unlock()
+	if onGet != nil {
+		onGet(path)
+	}
+	if delay > 0 {
+		select {
+		case <-time.After(delay):
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
 	if !ok {
 		r = infoReply{code: codes.NotFound}
 	}
@@ -65,9 +84,14 @@ func (c *infoConn) Get(_ context.Context, path string, _ ...message.Option) (*po
 	return m, nil
 }
 
-func (c *infoConn) Post(_ context.Context, path string, _ message.MediaType, _ io.ReadSeeker, _ ...message.Option) (*pool.Message, error) {
+func (c *infoConn) Post(_ context.Context, path string, _ message.MediaType, body io.ReadSeeker, _ ...message.Option) (*pool.Message, error) {
+	var b []byte
+	if body != nil {
+		b, _ = io.ReadAll(body)
+	}
 	c.mu.Lock()
 	c.posts = append(c.posts, path)
+	c.bodies = append(c.bodies, string(b))
 	c.mu.Unlock()
 	m := pool.NewMessage(context.Background())
 	m.SetCode(codes.Changed)
@@ -99,6 +123,7 @@ func TestRebootIsABareExecuteOnObject3(t *testing.T) {
 	require.True(t, res.Success)
 	assert.Equal(t, labelReboot, res.Op)
 	assert.Equal(t, []string{"/3/0/4"}, conn.posts)
+	assert.Equal(t, []string{""}, conn.bodies, "the Execute carries no argument")
 }
 
 func TestRebootDeviceRefusalIsAFailure(t *testing.T) {
@@ -203,9 +228,27 @@ type attrRecorder struct {
 	mu   sync.Mutex
 	sets []map[string]any
 	fail bool
+	// hang, when set, makes every write wait for its ctx (a device-management that never
+	// answers); entered receives once per write that started.
+	hang    bool
+	entered chan struct{}
+	ctxErrs []error
 }
 
-func (r *attrRecorder) Query(_ context.Context, _, tenant, _ string, vars map[string]any, _ any) error {
+func (r *attrRecorder) Query(ctx context.Context, _, tenant, _ string, vars map[string]any, _ any) error {
+	r.mu.Lock()
+	hang, entered := r.hang, r.entered
+	r.mu.Unlock()
+	if hang {
+		if entered != nil {
+			entered <- struct{}{}
+		}
+		<-ctx.Done()
+		r.mu.Lock()
+		r.ctxErrs = append(r.ctxErrs, ctx.Err())
+		r.mu.Unlock()
+		return ctx.Err()
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.fail {
@@ -256,9 +299,13 @@ type harvestRig struct {
 	rdr  *chanReader
 	st   *fakeStore
 	m    HarvestMetrics
+	// gone is the tenant-deleted answer the dispatcher sees.
+	gone atomic.Bool
+	// stop ends the term (cancels Run's ctx) and waits for Run to return.
+	stop func()
 }
 
-func newHarvestRig(t *testing.T, replies map[string]infoReply) *harvestRig {
+func newHarvestRig(t *testing.T, replies map[string]infoReply, tweak ...func(*Options)) *harvestRig {
 	t.Helper()
 	g := &harvestRig{
 		rec:  &attrRecorder{},
@@ -272,13 +319,18 @@ func newHarvestRig(t *testing.T, replies map[string]infoReply) *harvestRig {
 	g.h = NewHarvester(g.rec, "http://dm/graphql", g.m)
 	g.h.now = g.clk.Now
 	look := &fakeLookup{conn: g.conn, reaches: map[string]Reach{"acme/dev-1": ReachLive}}
-	g.d = NewDispatcher(g.rdr, &fakePublisher{}, look, g.exec, g.st, g.st, gateMetrics(), Options{
+	opts := Options{
 		Workers: 1, Parker: g.st, Harvester: g.h,
-		ReadPacer: core.NewReadPacer(nil, "device commands").UseClock(core.VirtualClock()),
-	})
+		ReadPacer:     core.NewReadPacer(nil, "device commands").UseClock(core.VirtualClock()),
+		TenantDeleted: func(string) bool { return g.gone.Load() },
+	}
+	for _, f := range tweak {
+		f(&opts)
+	}
+	g.d = NewDispatcher(g.rdr, &fakePublisher{}, look, g.exec, g.st, g.st, gateMetrics(), opts)
 	g.d.clock = g.clk
-	stop := runDispatcher(t, g.d)
-	t.Cleanup(stop)
+	g.stop = runDispatcher(t, g.d)
+	t.Cleanup(g.stop)
 	return g
 }
 
@@ -425,4 +477,115 @@ func TestHarvestSkipsADeviceThatIsNoLongerLive(t *testing.T) {
 	g := newHarvestRig(t, fullDevice())
 	g.d.Harvest("acme", "ghost") // not served: the lookup answers ReachNotServed
 	never(t, func() bool { return len(g.conn.asked()) > 0 }, "an unreachable device was read")
+}
+
+// The byte cap must not cut a multi-byte character in half: the stored value stays valid UTF-8 and
+// as long as whole characters allow, never longer than the cap.
+func TestReadDeviceInfoCapDoesNotSplitACharacter(t *testing.T) {
+	long := strings.Repeat("€", 200) // 3 bytes each: 600 bytes
+	info := ReadDeviceInfo(context.Background(), &infoConn{replies: map[string]infoReply{
+		"/3/0/0": {code: codes.Content, body: long, cf: textPlain()},
+	}}, time.Second)
+	got := info.Values["manufacturer"]
+	assert.True(t, utf8.ValidString(got), "the capped value is valid UTF-8")
+	assert.Equal(t, strings.Repeat("€", maxInfoValueBytes/3), got, "as many whole characters as fit")
+}
+
+// Bidirectional overrides and isolates are format characters a device can use to make one value
+// read as another in the console; they are stripped like control characters.
+func TestReadDeviceInfoStripsBidiOverrides(t *testing.T) {
+	info := ReadDeviceInfo(context.Background(), &infoConn{replies: map[string]infoReply{
+		"/3/0/0": {code: codes.Content, body: "Ac‮me⁦x⁩", cf: textPlain()},
+	}}, time.Second)
+	assert.Equal(t, "Acmex", info.Values["manufacturer"])
+}
+
+// COMMANDS FIRST: a device that still has a drain turn (or a live task, or a park in flight) waiting
+// on its shard is not harvested ahead of it, while a device with no command work is.
+func TestHarvestIsNotTakenAheadOfTheDevicesOwnCommandWork(t *testing.T) {
+	s := newShardState()
+	busy := deviceKey{"acme", "dev-busy"}
+	idle := deviceKey{"acme", "dev-idle"}
+	s.wake(busy) // gated, and wanting a drain turn
+	require.True(t, s.addHarvest(harvestJob{tenant: busy.tenant, deviceToken: busy.deviceToken}))
+	require.True(t, s.addHarvest(harvestJob{tenant: idle.tenant, deviceToken: idle.deviceToken}))
+
+	j, ok := s.takeHarvest()
+	require.True(t, ok)
+	assert.Equal(t, idle.deviceToken, j.deviceToken, "the device with no command work goes first")
+	_, ok = s.takeHarvest()
+	assert.False(t, ok, "a device whose drain turn is still waiting is not harvested")
+
+	for _, block := range []func(g *gate){
+		func(g *gate) { g.wanted = false; g.queuedLive = 1 },
+		func(g *gate) { g.queuedLive = 0; g.parksInFlight = 1 },
+	} {
+		s.mu.Lock()
+		block(s.devs[busy])
+		s.mu.Unlock()
+		_, ok = s.takeHarvest()
+		assert.False(t, ok, "command work is still pending for the device")
+	}
+
+	s.mu.Lock()
+	s.devs[busy].parksInFlight = 0
+	s.mu.Unlock()
+	j, ok = s.takeHarvest()
+	require.True(t, ok, "once its command work is done the device is harvested")
+	assert.Equal(t, busy.deviceToken, j.deviceToken)
+}
+
+// The whole harvest is bounded by ONE op timeout, as the readDeviceInfo command is: a device that
+// answers each read just inside the timeout cannot hold its shard's worker for five of them.
+func TestHarvestIsBoundedByOneOpTimeoutOverall(t *testing.T) {
+	const opTimeout = 200 * time.Millisecond
+	g := newHarvestRig(t, fullDevice(), func(o *Options) { o.OpTimeout = opTimeout })
+	g.conn.mu.Lock()
+	g.conn.delay = 90 * time.Millisecond // each read inside opTimeout; all five would take 450ms
+	g.conn.mu.Unlock()
+
+	start := time.Now()
+	g.d.Harvest("acme", "dev-1")
+	g.waitWrites(t, 1)
+	elapsed := time.Since(start)
+	assert.Less(t, len(g.conn.asked()), 5, "the read stopped at the overall bound")
+	assert.Less(t, elapsed, 2*opTimeout+100*time.Millisecond, "the worker was held for about one op timeout")
+	got := g.rec.byKey()
+	assert.Equal(t, "Acme", got["manufacturer"]["value"], "what was read in time is still recorded")
+}
+
+// When the term ends, the attribute writes stop and Run does not return until they have: a replica
+// that has lost leadership is not left writing device attributes.
+func TestHarvestWritesEndWithTheTerm(t *testing.T) {
+	g := newHarvestRig(t, fullDevice())
+	entered := make(chan struct{}, 8)
+	g.rec.mu.Lock()
+	g.rec.hang, g.rec.entered = true, entered
+	g.rec.mu.Unlock()
+
+	g.d.Harvest("acme", "dev-1")
+	recv(t, entered, "the first attribute write to start")
+
+	g.stop() // fails the test if Run does not return
+	assert.Equal(t, int32(0), g.h.inflight.Load(), "Run returned only after the writes ended")
+	g.rec.mu.Lock()
+	defer g.rec.mu.Unlock()
+	require.Len(t, g.rec.ctxErrs, 1, "the write in flight was cancelled and no further write started")
+	assert.ErrorIs(t, g.rec.ctxErrs[0], context.Canceled, "cancelled by the term, not by its own timeout")
+}
+
+// A tenant deleted while its device was being read gets none of the attributes written.
+func TestHarvestWritesNothingForATenantDeletedDuringTheRead(t *testing.T) {
+	g := newHarvestRig(t, fullDevice())
+	g.conn.mu.Lock()
+	g.conn.onGet = func(path string) {
+		if path == "/3/0/9" { // the last read
+			g.gone.Store(true)
+		}
+	}
+	g.conn.mu.Unlock()
+
+	g.d.Harvest("acme", "dev-1")
+	require.Eventually(t, func() bool { return len(g.conn.asked()) == 5 }, 3*time.Second, 5*time.Millisecond)
+	never(t, func() bool { g.h.WaitForWrites(); return g.rec.count() > 0 }, "an attribute was written for a deleted tenant")
 }

@@ -71,14 +71,17 @@ read and why (written even when empty, so a resource that appears later clears i
 It must never cost the registration or telemetry anything, so:
 
 - the `/rd` handler only notes that the device is live; the reads run later on the device's own
-  dispatch worker (the one that serializes its commands), after that worker's live task and drain
-  turn, so a harvest never overlaps a command and never runs on the CoAP read loop;
-- one GET per resource, each bounded by `downlink.timeoutSeconds`; the first transport failure ends
-  the harvest, and a device that did not answer at all is retried **once**, 30 s later;
+  dispatch worker (the one that serializes its commands), and only once that device has no drain
+  turn, live command or park waiting there — its held commands go first — so a harvest never
+  overlaps a command and never runs on the CoAP read loop;
+- one GET per resource, the whole harvest bounded by one `downlink.timeoutSeconds` (as
+  `lwm2m.readDeviceInfo` is); the first transport failure ends the harvest, and a device that did
+  not answer at all is retried **once**, 30 s later;
 - a device is harvested at most once an hour, and an attribute whose value equals the last one
   written is not rewritten (a stable fleet re-registering produces no audit rows);
 - the attribute writes go to a pool of four goroutines, not the worker; a busy pool drops the batch
-  (counted) and the next harvest sends it again;
+  (counted) and the next harvest sends it again. The writes belong to the leadership term: they stop
+  when it ends, the term's unwind waits for them, and none is sent for a tenant deleted meanwhile;
 - values are device-controlled text: non-UTF-8, control characters and over-long values are refused
   or trimmed (256 bytes), and battery level must be an integer percentage.
 
