@@ -52,7 +52,7 @@ export function AddWidgetMenu({
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button variant="outline" size="sm">
+        <Button variant="outline" size="sm" data-shot="dashboard-add-widget">
           <Plus size={14} /> {t('workspaceAddWidget')}
         </Button>
       </DropdownMenuTrigger>

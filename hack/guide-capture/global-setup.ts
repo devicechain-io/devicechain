@@ -1,7 +1,9 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
-import { mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 import { BASE_URL } from './playwright.config';
 import { readSimHandshake, signIn } from './session';
 
@@ -25,10 +27,20 @@ export default async function globalSetup() {
     }
   }
 
-  const sim = readSimHandshake(process.env.GUIDE_SIM ?? 'guide');
+  const sim = readSimHandshake(process.env.GUIDE_SIM ?? 'acme');
   const tenant = await signIn(BASE_URL, sim.email, sim.password, sim.tenant);
   writeFileSync(`${AUTH_DIR}/tenant.json`, JSON.stringify(tenant), { mode: 0o600 });
   console.log('tenant session minted');
+
+  // The widgetlab tenant (dashboards chapter). Absent handshake = no sim created yet; the
+  // dashboards recipes then fail loudly (capture.spec) instead of shooting the wrong tenant.
+  const widgetsName = process.env.GUIDE_WIDGETS_SIM ?? 'widgets';
+  rmSync(`${AUTH_DIR}/widgets.json`, { force: true });
+  if (existsSync(join(homedir(), '.devicechain', 'sims', `${widgetsName}.json`))) {
+    const w = readSimHandshake(widgetsName);
+    writeFileSync(`${AUTH_DIR}/widgets.json`, JSON.stringify(await signIn(BASE_URL, w.email, w.password, w.tenant)), { mode: 0o600 });
+    console.log('widgets session minted');
+  }
 
   const adminPassword = process.env.DC_ADMIN_PASSWORD;
   rmSync(`${AUTH_DIR}/superuser.json`, { force: true });

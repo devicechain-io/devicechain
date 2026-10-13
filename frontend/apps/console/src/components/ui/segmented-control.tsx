@@ -154,6 +154,7 @@ export function SegmentedControl<T extends string>({
         <RadioGroupPrimitive.Item
           key={opt.value}
           value={opt.value}
+          data-shot-option={opt.value}
           disabled={opt.disabled}
           aria-label={opt.ariaLabel}
           title={opt.title}

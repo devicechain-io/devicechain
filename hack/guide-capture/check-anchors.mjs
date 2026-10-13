@@ -44,24 +44,34 @@ const files = walk(srcDir).map((p) => ({
 }));
 const esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 // data-table.tsx declares the data-shot-mask prop TYPE; only a JSX use counts as a use.
-const JSX_MASK = /\sdata-shot-mask[\s>={/]/;
+const JSX_PII = /\sdata-shot-pii[\s>={/]/;
+const JSX_MASK =/\sdata-shot-mask[\s>={/]/;
 
 // Anchors of the shared primitives: any file may carry them, and guideAnchors.test.tsx
 // proves they render. Everything else belongs to the screen a recipe names in `sources`.
-const PRIMITIVE = new Set(['page', 'drawer', 'confirm', 'sheet', 'empty', 'error', 'loading']);
+const PRIMITIVE = new Set(['page', 'drawer', 'confirm', 'sheet', 'empty', 'error', 'loading', 'combobox', 'combobox-option']);
 
 const rules = {
-  'data-shot': (v) => new RegExp(`data-shot=["']${esc(v)}["']`),
+  // A literal (`data-shot="x"`) or an expression that names it (`data-shot={a ? 'x' : 'y'}`).
+  // A props object (`{ 'data-shot': 'x' }`, for a component that forwards extra props) counts too.
+  'data-shot': (v) =>
+    new RegExp(`data-shot=(?:["']${esc(v)}["']|\\{[^}]*["']${esc(v)}["'])|["']data-shot["']:\\s*["']${esc(v)}["']`),
+  // A segmented-control option: its value is the `value:` of an options entry in the screen's
+  // source. (That the primitive renders the attribute at all is checked globally, below.)
+  'data-shot-option': (v) => new RegExp(`\\bvalue:\\s*['"]${esc(v)}['"]`),
+  // An element keyed by data: only the presence of the attribute on the screen is checked.
+  'data-shot-for': () => /data-shot-for=\{/,
   'data-testid': (v) => new RegExp(`data-testid=["']${esc(v)}["']`),
   // A drawer id is the `shot` prop of a FormDrawer call site (a template literal counts).
   // The lookbehind keeps `data-shot="x"` from passing as a drawer id.
   'data-shot-drawer': (v) => new RegExp(`(?<![\\w-])shot=(?:"${esc(v)}"|\\{\`${esc(v)}[\`$])`),
-  // A tab id is the `value` of a TabsTrigger.
-  'data-shot-tab': (v) => new RegExp(`<TabsTrigger[^>]*value="${esc(v)}"`),
+  // A tab id is the `value` of a TabsTrigger, or the `value:` of a registry resource's tab entry
+  // (ResourceDetailPage renders those through one dynamic TabsTrigger).
+  'data-shot-tab': (v) => new RegExp(`<TabsTrigger[^>]*value="${esc(v)}"|\\bvalue:\\s*['"]${esc(v)}['"]`),
 };
 
 // Every [data-shot*="v"] / [data-testid="v"] / [data-shot-mask] inside a selector string.
-const SELECTOR_REF = /\[(data-shot(?:-tab|-drawer|-mask)?|data-testid)(?:=["']([^"'$]+)["'])?\]/g;
+const SELECTOR_REF = /\[(data-shot(?:-tab|-drawer|-mask|-option|-for)?|data-testid)(?:=["']([^"'$]+)["'])?\]/g;
 function refsIn(str) {
   return [...str.matchAll(SELECTOR_REF)].map((m) => ({ attr: m[1], value: m[2] }));
 }
@@ -83,7 +93,10 @@ for (const r of recipes) {
   });
   const among = r.sources ? sources.filter(Boolean) : undefined;
 
-  const selectors = [r.anchor, r.clip, r.minRows?.selector, r.setup?.toString()].filter(Boolean);
+  const selectors = [r.anchor, r.clip, r.minRows?.selector, r.setup?.toString(), r.then?.toString()].filter(Boolean);
+  // A tab recipe's page-specific steps live in `then`; the wrapper's setup only calls it. A
+  // recipe that calls it without carrying it would hide every anchor in it from this check.
+  if (r.setup?.toString().includes('then?.(') && !r.then) problems.push(`${r.id}: setup calls then?.() but the recipe carries no then`);
   const refs = selectors.flatMap(refsIn);
   // A recipe that names no anchor at all would be vacuously green.
   if (!refs.some((x) => x.attr !== 'data-shot-mask' && x.value !== undefined)) {
@@ -91,9 +104,17 @@ for (const r of recipes) {
   }
   for (const { attr, value } of refs) {
     if (attr === 'data-shot-mask') continue; // handled by r.mask below
+    if (value === undefined) continue; // a bare [data-shot-tab] names no particular anchor
     const scoped = !(attr === 'data-shot' && PRIMITIVE.has(value));
     if (!find(rules[attr](value), scoped ? among : undefined)) {
       problems.push(`${r.id}: ${attr}="${value}" not found${scoped && r.sources ? ` in ${r.sources.join(', ')}` : ''}`);
+    }
+  }
+  // A screen that shows the operator's address must mark it, or the harness cannot swap it.
+  if (r.pii) {
+    const pool = among ?? files;
+    if (!pool.some((f) => JSX_PII.test(f.text))) {
+      problems.push(`${r.id}: pii is set but no JSX use of data-shot-pii exists${r.sources ? ` in ${r.sources.join(', ')}` : ''}`);
     }
   }
   if (r.mask) {
@@ -108,6 +129,10 @@ for (const r of recipes) {
 for (const a of PRIMITIVE) {
   if (!find(rules['data-shot'](a))) problems.push(`harness: data-shot="${a}" not found anywhere`);
 }
+
+// Attributes the harness acts on without any one recipe naming them.
+if (!find(/data-shot-option=\{/)) problems.push('harness: no primitive renders data-shot-option');
+if (!find(JSX_PII)) problems.push('harness: no JSX use of data-shot-pii anywhere');
 
 if (problems.length) {
   console.error(`check-anchors: ${problems.length} problem(s) in ${srcDir}:`);

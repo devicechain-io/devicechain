@@ -135,6 +135,7 @@ export function DeviceReplacementPanel({ deviceToken }: { deviceToken: string })
         <FormField label={t('replacementReasonLabel')} description={t('replacementReasonHint')}>
           <Input
             value={reason}
+            data-shot="replacement-reason"
             onChange={(e) => setReason(e.target.value)}
             placeholder={t('replacementReasonPlaceholder')}
             {...noAutofill}
@@ -143,6 +144,7 @@ export function DeviceReplacementPanel({ deviceToken }: { deviceToken: string })
         <FormField label={t('newUnitIdentifierLabel')} description={t('newUnitIdentifierHint')}>
           <Input
             value={unitIdentifier}
+            data-shot="replacement-unit"
             onChange={(e) => setUnitIdentifier(e.target.value)}
             placeholder={t('newUnitIdentifierPlaceholder')}
             {...noAutofill}
@@ -171,8 +173,8 @@ export function DeviceReplacementPanel({ deviceToken }: { deviceToken: string })
           <DataTableBody>
             {replacements.map((r) => (
               <DataTableRow key={r.id}>
-                <DataTableCell>{formatTime(r.occurredTime)}</DataTableCell>
-                <DataTableCell className="text-muted-foreground">{r.actor || '—'}</DataTableCell>
+                <DataTableCell data-shot-mask>{formatTime(r.occurredTime)}</DataTableCell>
+                <DataTableCell className="text-muted-foreground" data-shot-pii>{r.actor || '—'}</DataTableCell>
                 <DataTableCell className="text-muted-foreground">{r.reason || '—'}</DataTableCell>
                 <DataTableCell className="font-mono text-xs">{r.unitIdentifier || '—'}</DataTableCell>
                 {/* A count, not the tokens: the number is what an operator reads,

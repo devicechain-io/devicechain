@@ -459,7 +459,7 @@ function VersionHistoryBody({
                   <DataTableCell className="text-muted-foreground">
                     {formatTime(v.publishedAt)}
                   </DataTableCell>
-                  <DataTableCell className="text-muted-foreground">{v.publishedBy || '—'}</DataTableCell>
+                  <DataTableCell className="text-muted-foreground" data-shot-pii>{v.publishedBy || '—'}</DataTableCell>
                   <DataTableCell className="text-right">
                     {canWrite && (
                       <div className="flex justify-end gap-2">

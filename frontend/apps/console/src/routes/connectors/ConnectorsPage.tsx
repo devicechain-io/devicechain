@@ -101,7 +101,7 @@ export default function ConnectorsPage() {
       banner="dashboard"
       action={
         canWrite ? (
-          <Button onClick={() => setCreating(true)}>
+          <Button onClick={() => setCreating(true)} data-shot="new-button">
             <Plus size={16} /> {t('newConnector')}
           </Button>
         ) : undefined

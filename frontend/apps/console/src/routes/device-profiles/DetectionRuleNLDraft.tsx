@@ -123,6 +123,7 @@ export function DetectionRuleNLDraft({
       </div>
 
       <Textarea
+        data-shot="nl-prompt"
         value={text}
         onChange={(e) => setText(e.target.value)}
         rows={4}
@@ -141,7 +142,7 @@ export function DetectionRuleNLDraft({
       />
 
       <div className="flex items-center gap-3">
-        <Button type="button" onClick={() => void submit()} disabled={busy || !text.trim()}>
+        <Button type="button" onClick={() => void submit()} disabled={busy || !text.trim()} data-shot="nl-draft">
           {busy ? t('nlDraftButtonBusy') : t('nlDraftButtonIdle')}
         </Button>
         <span className="text-xs text-muted-foreground">{t('nlFooterNote')}</span>
@@ -150,7 +151,7 @@ export function DetectionRuleNLDraft({
       {error && <ErrorBanner message={error} onDismiss={() => setError(null)} />}
 
       {unavailable && (
-        <div className="rounded-md border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm text-amber-700 dark:text-amber-400">
+        <div className="rounded-md border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm text-amber-700 dark:text-amber-400" data-shot="nl-unavailable">
           {result?.unavailableReason ?? t('nlUnavailableDefaultReason')}
         </div>
       )}

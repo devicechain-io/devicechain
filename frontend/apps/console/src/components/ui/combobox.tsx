@@ -132,6 +132,7 @@ export function Combobox({
       )}
       <PopoverTrigger
         id={triggerId}
+        data-shot="combobox"
         type="button"
         aria-labelledby={ariaLabel ? `${labelId} ${triggerId}` : undefined}
         disabled={disabled}
@@ -177,6 +178,8 @@ export function Combobox({
                 <button
                   key={o.value}
                   ref={i === active ? activeRef : undefined}
+                  data-shot="combobox-option"
+                  data-shot-value={o.value}
                   type="button"
                   onMouseEnter={() => setActive(i)}
                   onClick={() => choose(o.value)}

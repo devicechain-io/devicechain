@@ -139,6 +139,7 @@ export function ConnectorVersionsPanel({
           <Button
             size="sm"
             onClick={() => setPublishing(true)}
+            data-shot="version-publish-button"
             disabled={dirty}
             title={dirty ? t('publishDisabledTitle') : undefined}
             className="shrink-0"
@@ -209,13 +210,14 @@ export function ConnectorVersionsPanel({
                 </DataTableCell>
                 <DataTableCell>{v.label || <span className="text-muted-foreground">—</span>}</DataTableCell>
                 <DataTableCell className="whitespace-nowrap text-muted-foreground">{fmtTime(v.publishedAt)}</DataTableCell>
-                <DataTableCell className="text-muted-foreground">{v.publishedBy || '—'}</DataTableCell>
+                <DataTableCell className="text-muted-foreground" data-shot-pii>{v.publishedBy || '—'}</DataTableCell>
                 {canWrite && (
                   <DataTableCell className="text-right">
                     <Button
                       variant="ghost"
                       size="sm"
                       onClick={() => doRollback(v.version)}
+                      data-shot="version-rollback"
                       loading={rolling.has(v.version)}
                     >
                       <RotateCcw size={14} /> {t('restore')}

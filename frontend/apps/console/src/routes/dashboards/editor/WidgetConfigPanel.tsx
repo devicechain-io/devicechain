@@ -285,7 +285,7 @@ export function WidgetConfigPanel({
   const versionDrift = authoredVersion !== undefined && authoredVersion !== descriptor.version;
 
   return (
-    <aside className="w-80 shrink-0 overflow-auto border-l bg-card p-4">
+    <aside className="w-80 shrink-0 overflow-auto border-l bg-card p-4" data-shot="widget-config">
       <div className="mb-4 flex items-center justify-between">
         <div className="text-sm font-semibold">
           {resolveText(lookup, descriptor.display.titleId, descriptor.display.title)}

@@ -224,7 +224,7 @@ export default function LoginPage() {
         </div>
 
         {expired && !identity && (
-          <p className="mb-4 rounded-md border border-border bg-muted/50 px-3 py-2 text-center text-sm text-muted-foreground">
+          <p className="mb-4 rounded-md border border-border bg-muted/50 px-3 py-2 text-center text-sm text-muted-foreground" data-shot="login-session-expired">
             {expired === 'ssoRequired' ? t('sessionSsoRequired') : t('sessionExpired')}
           </p>
         )}
@@ -262,6 +262,7 @@ export default function LoginPage() {
           </div>
         ) : (
           <form
+            data-shot={step === 'identify' ? 'login-step-identify' : step === 'password' ? 'login-step-password' : 'login-step-sso'}
             onSubmit={
               step === 'identify' ? handleIdentify : step === 'sso' ? handleContinueSso : handleCredentials
             }
@@ -273,6 +274,7 @@ export default function LoginPage() {
               <Input
                 ref={emailRef}
                 id="email"
+                data-shot="login-email"
                 type="email"
                 autoComplete="username"
                 autoFocus={step === 'identify'}
@@ -287,7 +289,7 @@ export default function LoginPage() {
 
             {step === 'identify' && (
               <>
-                <Button type="submit" className="w-full" loading={submitting} disabled={submitting}>
+                <Button type="submit" className="w-full" loading={submitting} disabled={submitting} data-shot="login-continue">
                   {t('continue')}
                 </Button>
                 <Button
@@ -322,6 +324,7 @@ export default function LoginPage() {
                 <FormField label={t('passwordLabel')} htmlFor="password">
                   <Input
                     id="password"
+                    data-shot="login-password"
                     type="password"
                     autoComplete="current-password"
                     autoFocus

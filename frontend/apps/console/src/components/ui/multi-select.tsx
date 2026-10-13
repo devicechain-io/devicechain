@@ -65,6 +65,7 @@ export function MultiSelect({
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger
         id={id}
+        data-shot="combobox"
         type="button"
         disabled={disabled}
         className={cn(
@@ -118,6 +119,8 @@ export function MultiSelect({
               return (
                 <button
                   key={o.value}
+                  data-shot="combobox-option"
+                  data-shot-value={o.value}
                   type="button"
                   onClick={() => toggle(o.value)}
                   className="flex w-full items-start gap-2 rounded-sm px-2 py-1.5 text-left text-sm text-foreground hover:bg-accent hover:text-accent-foreground"
