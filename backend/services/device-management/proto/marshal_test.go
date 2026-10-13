@@ -11,6 +11,7 @@ import (
 	esmodel "github.com/devicechain-io/dc-event-sources/model"
 	"github.com/devicechain-io/dc-microservice/entity"
 	"github.com/stretchr/testify/assert"
+	"google.golang.org/protobuf/encoding/protowire"
 )
 
 // A resolved event's OccurredTime/ProcessedTime must survive the marshal/unmarshal
@@ -209,6 +210,35 @@ func TestMarshalDeviceRosterEventRoundTrips(t *testing.T) {
 	assert.Equal(t, "device-001", got.DeviceToken)
 	assert.Equal(t, "sensor-profile", got.ProfileToken)
 	assert.True(t, got.ExpectedSince.Equal(since), "expected-since round-trip (nanos): got %s want %s", got.ExpectedSince, since)
+	assert.False(t, got.Disabled, "an enabled device's fact decodes as enabled")
+
+	event.Disabled = true
+	bytes, err = MarshalDeviceRosterEvent(event)
+	assert.NoError(t, err)
+	got, err = UnmarshalDeviceRosterEvent(bytes)
+	assert.NoError(t, err)
+	assert.True(t, got.Disabled, "the disabled flag survives the wire")
+	assert.False(t, got.Enabled)
+
+	event.Disabled, event.Enabled = false, true
+	bytes, err = MarshalDeviceRosterEvent(event)
+	assert.NoError(t, err)
+	got, err = UnmarshalDeviceRosterEvent(bytes)
+	assert.NoError(t, err)
+	assert.True(t, got.Enabled, "the enable-transition flag survives the wire")
+}
+
+// A fact written before the disabled field existed (no field 4) still decodes, as enabled: the
+// field is additive, so a consumer or a producer one version behind is not broken by it.
+func TestUnmarshalDeviceRosterEventWithoutDisabledField(t *testing.T) {
+	old := protowire.AppendTag(nil, 1, protowire.BytesType)
+	old = protowire.AppendString(old, "device-001")
+	old = protowire.AppendTag(old, 2, protowire.BytesType)
+	old = protowire.AppendString(old, "sensor-profile")
+	got, err := UnmarshalDeviceRosterEvent(old)
+	assert.NoError(t, err)
+	assert.Equal(t, "device-001", got.DeviceToken)
+	assert.False(t, got.Disabled)
 }
 
 func TestMarshalDeviceAttributeEventRoundTrips(t *testing.T) {

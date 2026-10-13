@@ -7,6 +7,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"os"
 	"testing"
 
 	"github.com/devicechain-io/dc-update-management/config"
@@ -62,15 +63,23 @@ func requireCalls(t *testing.T, fn string, want ...string) {
 }
 
 func TestTheLifecycleStartsTheConsumerAndTheSweep(t *testing.T) {
-	requireCalls(t, "afterMicroserviceStarted", "Svc.Start", "ReportsConsumer.Start", "startSweeper")
+	requireCalls(t, "afterMicroserviceStarted", "Svc.Start", "ReportsConsumer.Start", "RosterConsumer.Start", "startSweeper")
 	requireCalls(t, "startSweeper", "processor.NewDeadlineSweeper", "Sweeper.Start")
-	requireCalls(t, "beforeMicroserviceStopped", "Sweeper.Stop", "ReportsConsumer.Stop", "Svc.Stop")
-	requireCalls(t, "beforeMicroserviceTerminated", "ReportsConsumer.Terminate", "Svc.Terminate")
-	requireCalls(t, "createNatsComponents", "ReportsConsumer.Initialize", "processor.NewDesiredWriter")
+	requireCalls(t, "beforeMicroserviceStopped", "Sweeper.Stop", "RosterConsumer.Stop", "ReportsConsumer.Stop", "Svc.Stop")
+	requireCalls(t, "beforeMicroserviceTerminated", "RosterConsumer.Terminate", "ReportsConsumer.Terminate", "Svc.Terminate")
+	requireCalls(t, "createNatsComponents", "ReportsConsumer.Initialize", "RosterConsumer.Initialize", "processor.NewDesiredWriter")
 	requireCalls(t, "afterMicroserviceInitialized", "buildMetrics", "registerUploadHandler", "registerDownloadHandler")
 }
 
 // startSweeper builds the sweep from the configured cadence and starts it; stopping it ends it.
+// The roster durable starts at NEW facts: a first start (or a re-created durable) that replayed the
+// stream would re-offer on every fact in its retention window.
+func TestTheRosterReaderStartsFromNewFacts(t *testing.T) {
+	src, err := os.ReadFile("main.go")
+	require.NoError(t, err)
+	require.Contains(t, string(src), "nmgr.NewReader(streams.DeviceRoster, messaging.ReaderWithDeliverNew())")
+}
+
 func TestStartSweeperStartsTheConfiguredSweep(t *testing.T) {
 	prevCfg, prevApi, prevSweeper, prevMetrics := Configuration, Api, Sweeper, ReportsMetrics
 	t.Cleanup(func() { Configuration, Api, Sweeper, ReportsMetrics = prevCfg, prevApi, prevSweeper, prevMetrics })

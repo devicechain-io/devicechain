@@ -67,6 +67,9 @@ type DeviceRosterEntry struct {
 	DeviceToken   string
 	ProfileToken  string
 	ExpectedSince time.Time
+	// Disabled is true while an operator has the device disabled. ProfileToken is empty then as
+	// well (the detection engine keys on that); this is the explicit statement of why.
+	Disabled bool
 }
 
 // DeviceRosterPage is one keyset page of the device roster.

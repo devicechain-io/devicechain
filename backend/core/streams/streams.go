@@ -801,7 +801,7 @@ var All = []Stream{
 	// durable projection, and a fact that never reaches the stream is repaired by
 	// event-processing's reconcile against device-management (at every DETECT term
 	// start and every five minutes), not by replay.
-	{Suffix: DeviceRoster, PlatformAuthored: true, Areas: []string{"device-management", "event-processing"}, Tier: Cold, DeadLetterKind: kindControlFact, Why: "roster projection updates"},
+	{Suffix: DeviceRoster, PlatformAuthored: true, Areas: []string{"device-management", "event-processing", "update-management"}, Tier: Cold, DeadLetterKind: kindControlFact, Why: "roster projection updates"},
 
 	// Emitted post-commit whenever a geofence change mints a new fence-set version, naming that
 	// version's fences and the content address of each one's geometry so event-processing's live

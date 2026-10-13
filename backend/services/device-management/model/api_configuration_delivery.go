@@ -82,17 +82,60 @@ const SystemActorDeviceSync = "system:device-sync"
 
 // publishMintedConfiguration delivers a freshly minted revision after its transaction has
 // committed. A nil revision (nothing minted) or a missing publisher is a no-op.
+//
+// A DISABLED device is sent nothing: the revision is minted and stored, but its desired channel is
+// held shut like every other inbound and outbound path of a quarantined device. Nothing is lost by
+// that, because enabling the device publishes its latest revision (publishLatestConfiguration),
+// which supersedes any minted meanwhile.
 func (api *Api) publishMintedConfiguration(ctx context.Context, deviceId uint, rev *DeviceConfigurationRevision) {
 	if rev == nil || api.DeviceDesiredPublisher == nil {
 		return
 	}
 	var rows []Device
-	if err := api.RDB.DB(ctx).Select("id", "token").Where("id = ?", deviceId).Limit(1).Find(&rows).Error; err != nil || len(rows) == 0 {
+	if err := api.RDB.DB(ctx).Select("id", "token", "disabled_at").Where("id = ?", deviceId).Limit(1).Find(&rows).Error; err != nil || len(rows) == 0 {
 		log.Warn().Err(err).Uint("device", deviceId).
 			Msg("Could not resolve a device to deliver its new configuration revision; it picks the revision up at its next sync.")
 		return
 	}
+	if rows[0].IsDisabled() {
+		return
+	}
 	api.DeviceDesiredPublisher.PublishDesiredConfiguration(ctx, rows[0].Token, rev)
+}
+
+// publishLatestConfiguration delivers a device's latest stored configuration revision on its
+// desired channel, the way a newly minted one is. It is the answer to an ENABLE: a device that
+// tried to sync while disabled was refused in silence and cannot tell that from "nothing new",
+// and a revision minted while it was disabled was held back, so without this it would stay on a
+// stale revision until its next boot or sync. It mints nothing (the document a profile publish
+// moved is still reconciled by the device's own sync) and sends nothing for a device that has no
+// revision. Best-effort like every desired publish: the device's next sync repairs a miss.
+func (api *Api) publishLatestConfiguration(ctx context.Context, device *Device) {
+	if api.DeviceDesiredPublisher == nil {
+		return
+	}
+	// The disabled column is read again here, as publishMintedConfiguration does: a disable that
+	// committed between the enable's save and this publish must win, and the in-memory device
+	// cannot see it.
+	var rows []Device
+	if err := api.RDB.DB(ctx).Select("id", "disabled_at").Where("id = ?", device.ID).Limit(1).Find(&rows).Error; err != nil {
+		log.Warn().Err(err).Str("device", device.Token).
+			Msg("Could not re-check a re-enabled device before resending its configuration; it picks it up at its next sync.")
+		return
+	}
+	if len(rows) == 0 || rows[0].IsDisabled() {
+		return
+	}
+	latest, err := latestConfigurationRevision(api.RDB.DB(ctx), device.ID)
+	if err != nil {
+		log.Warn().Err(err).Str("device", device.Token).
+			Msg("Could not read a re-enabled device's latest configuration revision; it picks it up at its next sync.")
+		return
+	}
+	if latest == nil {
+		return
+	}
+	api.DeviceDesiredPublisher.PublishDesiredConfiguration(ctx, device.Token, latest)
 }
 
 // reportingDeviceId resolves the device a sync or a report names, and refuses it when an operator

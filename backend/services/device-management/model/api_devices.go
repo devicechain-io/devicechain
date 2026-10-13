@@ -308,7 +308,7 @@ func (api *Api) CreateDevice(ctx context.Context, request *DeviceCreateRequest) 
 	// failure never fails the create — the device is durable; a missed roster fact is repaired
 	// by event-processing's reconcile against this service (at its leadership-term start and
 	// every five minutes).
-	api.emitDeviceRosterForDevice(ctx, created)
+	api.emitDeviceRosterForDevice(ctx, created, false)
 	return created, nil
 }
 
@@ -424,7 +424,7 @@ func (api *Api) emitDeviceRosterBatch(ctx context.Context, devices []*Device) {
 		for _, d := range devices[start:end] {
 			ids = append(ids, d.ID)
 		}
-		api.emitRosterEntries(ctx, func(q *gorm.DB) *gorm.DB { return q.Where("devices.id IN ?", ids) },
+		api.emitRosterEntries(ctx, false, func(q *gorm.DB) *gorm.DB { return q.Where("devices.id IN ?", ids) },
 			"devices", fmt.Sprintf("%d created devices", len(ids)))
 	}
 }
@@ -432,7 +432,7 @@ func (api *Api) emitDeviceRosterBatch(ctx context.Context, devices []*Device) {
 // emitRosterEntries reads roster entries back through rosterEntries — the query the detection
 // engine's reconcile reads, so the fact and the repair cannot disagree — and emits one fact per
 // device. A read error is logged and swallowed (what names the skipped devices for the log).
-func (api *Api) emitRosterEntries(ctx context.Context, where func(*gorm.DB) *gorm.DB, key, what string) {
+func (api *Api) emitRosterEntries(ctx context.Context, enabledTransition bool, where func(*gorm.DB) *gorm.DB, key, what string) {
 	entries, err := api.rosterEntries(ctx, where)
 	if err != nil {
 		log.Error().Err(err).Str(key, what).
@@ -444,6 +444,8 @@ func (api *Api) emitRosterEntries(ctx context.Context, where func(*gorm.DB) *gor
 			DeviceToken:   e.DeviceToken,
 			ProfileToken:  e.ProfileToken,
 			ExpectedSince: e.ExpectedSince,
+			Disabled:      e.Disabled,
+			Enabled:       enabledTransition && !e.Disabled,
 		})
 	}
 }
@@ -599,11 +601,11 @@ const (
 // fire: the fleet-burst the grace-period base exists to prevent). Best-effort: a read error is
 // logged and swallowed rather than failing the caller's already-committed write — the roster is
 // a convenience projection, never the source of truth.
-func (api *Api) emitDeviceRosterForDevice(ctx context.Context, device *Device) {
+func (api *Api) emitDeviceRosterForDevice(ctx context.Context, device *Device, enabledTransition bool) {
 	if api.DeviceRosterPublisher == nil {
 		return // no publisher wired: skip the read-back entirely
 	}
-	api.emitRosterEntries(ctx, func(q *gorm.DB) *gorm.DB { return q.Where("devices.id = ?", device.ID) },
+	api.emitRosterEntries(ctx, enabledTransition, func(q *gorm.DB) *gorm.DB { return q.Where("devices.id = ?", device.ID) },
 		"device", device.Token)
 }
 
@@ -619,7 +621,7 @@ func (api *Api) emitDeviceRosterForType(ctx context.Context, deviceTypeId uint) 
 	if api.DeviceRosterPublisher == nil {
 		return
 	}
-	api.emitRosterEntries(ctx, func(q *gorm.DB) *gorm.DB { return q.Where("devices.device_type_id = ?", deviceTypeId) },
+	api.emitRosterEntries(ctx, false, func(q *gorm.DB) *gorm.DB { return q.Where("devices.device_type_id = ?", deviceTypeId) },
 		"deviceType", strconv.FormatUint(uint64(deviceTypeId), 10))
 }
 
@@ -748,7 +750,12 @@ func (api *Api) UpdateDevice(ctx context.Context, token string, request *DeviceU
 	//
 	// An enable or disable re-rosters for the reason given where `toggled` is computed.
 	if retyped || toggled {
-		api.emitDeviceRosterForDevice(ctx, updated)
+		api.emitDeviceRosterForDevice(ctx, updated, toggled && !updated.DisabledAt.Valid)
+	}
+	// An ENABLE resends the device its latest configuration revision (publishLatestConfiguration):
+	// nothing else would, and the device cannot tell its refused syncs from "nothing new".
+	if toggled && !updated.DisabledAt.Valid {
+		api.publishLatestConfiguration(ctx, updated)
 	}
 	return updated, nil
 }

@@ -126,6 +126,50 @@ func (c *disabledCache) put(key string, disabled bool, now time.Time) {
 	c.m[key] = disabledEntry{disabled: disabled, at: now}
 }
 
+func (c *disabledCache) forget(key string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	delete(c.m, key)
+}
+
+// DeviceRosterChanged reacts to device-management's device-roster fact for a device, which it
+// emits whenever an operator disables or enables the device (and on a create or a re-type).
+//
+// It always drops the device's cached disabled answer, so the change is felt by the very next
+// device-facing message instead of up to DisabledCacheTTL later. The fact is only a prompt to
+// ask again, never the answer: facts are at-most-once and may arrive out of order, so a stale one
+// can do no more than cost a lookup. (The cache is per replica and the fact reaches one of them;
+// the others keep the TTL bound.)
+//
+// Only a fact that marks a disabled-to-enabled TOGGLE (enabled=true) also re-offers the device what
+// it should be working on, exactly as a sync would be answered. That is the ENABLE half: a sync the
+// device made while disabled was refused without a word, so it cannot tell that from "nothing
+// assigned" and would otherwise wait for its next boot. The re-offer asks device-management afresh
+// (the cache was just dropped), so a fact that claims an enable for a device that is in truth still
+// disabled re-offers nothing. A create, a re-type or a type re-point fact (which a campaign can
+// fan out to thousands of devices) and a disable fact drop the cache and cost no lookup; a producer
+// that predates the field sends enabled=false, and such a device is caught up by its next sync. An
+// error means the re-offer could not be decided and the caller retries; ErrDeviceDisabled never is one.
+func (api *Api) DeviceRosterChanged(ctx context.Context, deviceToken string, enabled bool) error {
+	tenant, ok := core.TenantFromContext(ctx)
+	if !ok {
+		return errors.New("a device roster change requires a tenant")
+	}
+	api.disabled.forget(tenant + "/" + deviceToken)
+	if !enabled {
+		return nil
+	}
+	views, err := api.CurrentUpdates(ctx, deviceToken)
+	if errors.Is(err, ErrDeviceDisabled) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	api.PublishSyncAnswer(ctx, deviceToken, views)
+	return nil
+}
+
 // refuseIfDisabled is the quarantine gate of the device-facing operations. A device an operator
 // has disabled keeps whatever session it had open, so the broker cannot be what cuts it off here:
 // every report, sync answer and download grant asks device-management (through a cache no staler

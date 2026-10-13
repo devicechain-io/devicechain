@@ -126,6 +126,7 @@ func TestUpdateDevice_RetypeEmitsNewProfileAndMembershipTime(t *testing.T) {
 	if assert.Len(t, cap.events, 1, "a re-type emits exactly one roster fact") {
 		ev := cap.events[0]
 		assert.Equal(t, "profile-b", ev.ProfileToken, "re-rostered under the new type's profile")
+		assert.False(t, ev.Enabled, "a re-type is not an enable transition")
 		assert.True(t, ev.ExpectedSince.After(past.Add(time.Hour)), "expected-since is membership-began (now), not the back-dated creation time: got %s", ev.ExpectedSince)
 	}
 }
@@ -283,7 +284,10 @@ func TestUpdateDevice_DisableTakesTheDeviceOutOfAbsenceAndEnableGivesAFreshGrace
 	assert.Equal(t, "", disabled.ProfileToken, "a disabled device is rostered with no profile, so no absence rule arms for it")
 	assert.True(t, disabled.ExpectedSince.After(past.Add(time.Hour)),
 		"the disable fact must be newer than the creation fact or the projection ignores it: got %s", disabled.ExpectedSince)
+	assert.True(t, disabled.Disabled, "the disable fact says so explicitly, not only through an empty profile")
+	assert.False(t, disabled.Enabled, "a disable is not an enable transition")
 	assert.Equal(t, "", rosterOf().ProfileToken, "the reconcile page agrees with the fact")
+	assert.True(t, rosterOf().Disabled, "the reconcile page carries the flag too")
 
 	cap.events = nil
 	if _, err := api.UpdateDevice(ctx, "d1", &DeviceUpdateRequest{Enabled: dcgraphql.OptionalBoolOf(false)}); err != nil {
@@ -297,6 +301,8 @@ func TestUpdateDevice_DisableTakesTheDeviceOutOfAbsenceAndEnableGivesAFreshGrace
 	if assert.Len(t, cap.events, 1, "an enable emits exactly one roster fact") {
 		enabled := cap.events[0]
 		assert.Equal(t, "sensor-profile", enabled.ProfileToken, "an enabled device is rostered under its profile again")
+		assert.False(t, enabled.Disabled, "the enable fact clears the flag")
+		assert.True(t, enabled.Enabled, "the enable toggle is marked as one")
 		assert.True(t, enabled.ExpectedSince.After(disabled.ExpectedSince),
 			"the enable fact must be strictly newer than the disable fact: got %s, disable was %s",
 			enabled.ExpectedSince, disabled.ExpectedSince)
