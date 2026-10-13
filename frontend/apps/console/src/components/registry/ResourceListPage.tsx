@@ -52,7 +52,7 @@ export function ResourceListPage<T>({ resource }: { resource: RegistryResource<T
       description={e('ListDescription')}
       banner={resource.banner}
       action={
-        <Button onClick={() => setCreating(true)}>
+        <Button onClick={() => setCreating(true)} data-shot="new-button">
           <Plus size={16} /> {e('New')}
         </Button>
       }

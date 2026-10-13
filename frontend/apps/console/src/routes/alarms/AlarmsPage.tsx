@@ -333,6 +333,7 @@ export default function AlarmsPage() {
                               loading={acting.has(`${a.token}:ack`)}
                               disabled={rowBusy(a.token)}
                               onClick={() => act(a.token, 'ack')}
+                              data-shot="alarm-acknowledge"
                             >
                               {t('acknowledge')}
                             </Button>

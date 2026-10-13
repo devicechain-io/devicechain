@@ -98,7 +98,7 @@ export function CommandParameterForm({
   if (params.length === 0) return null;
 
   return (
-    <div className="grid gap-3 sm:grid-cols-2">
+    <div className="grid gap-3 sm:grid-cols-2" data-shot="command-parameters">
       {params.map((param) => {
         const label = param.required ? `${param.name} *` : param.name;
         const error = errors[param.name];

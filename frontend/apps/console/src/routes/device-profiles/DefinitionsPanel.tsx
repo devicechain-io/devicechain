@@ -117,7 +117,7 @@ export function DefinitionsPanel<TDef extends { id: string; token: string }>({
       <div className="flex items-start justify-between gap-4">
         <p className="max-w-prose text-sm text-muted-foreground">{description}</p>
         {canWrite && (
-          <Button size="sm" onClick={() => setDrawer({ open: true })} className="shrink-0">
+          <Button size="sm" onClick={() => setDrawer({ open: true })} className="shrink-0" data-shot="definition-add">
             <Plus size={16} /> {e('New')}
           </Button>
         )}
@@ -160,7 +160,7 @@ export function DefinitionsPanel<TDef extends { id: string; token: string }>({
                 {canWrite && (
                   <DataTableCell className="text-right">
                     <div className="flex justify-end gap-1">
-                      <Button variant="ghost" size="sm" onClick={() => setDrawer({ open: true, entity: d })}>
+                      <Button variant="ghost" size="sm" onClick={() => setDrawer({ open: true, entity: d })} data-shot="definition-edit" data-shot-for={d.token}>
                         <Pencil size={14} /> {t('deviceProfiles:defEdit')}
                       </Button>
                       <Button

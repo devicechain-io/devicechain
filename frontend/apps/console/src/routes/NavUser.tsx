@@ -69,13 +69,14 @@ export function NavUser() {
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <SidebarMenuButton
+              data-shot="user-menu"
               size="lg"
               className="data-[state=open]:bg-sidebar-accent data-[state=open]:text-sidebar-accent-foreground"
             >
               <UserAvatar name={name} />
               <div className="grid flex-1 text-left text-sm leading-tight">
                 <span className="truncate font-semibold">{name}</span>
-                <span className="truncate text-xs text-muted-foreground">{email}</span>
+                <span className="truncate text-xs text-muted-foreground" data-shot-pii>{email}</span>
               </div>
               <ChevronsUpDown className="ml-auto size-4" />
             </SidebarMenuButton>
@@ -84,6 +85,7 @@ export function NavUser() {
             // Fixed width so the panel is sized by its controls, not by its
             // longest line of text (which localizes and would otherwise stretch
             // the menu). Text inside wraps within this width.
+            data-shot="user-menu-content"
             className="w-72 rounded-lg"
             side={isMobile ? 'bottom' : 'right'}
             align="end"
@@ -91,7 +93,7 @@ export function NavUser() {
           >
             <div className="px-2 py-2">
               <p className="break-words text-sm font-medium text-foreground">{name}</p>
-              <p className="break-words text-xs text-muted-foreground">{email}</p>
+              <p className="break-words text-xs text-muted-foreground" data-shot-pii>{email}</p>
             </div>
 
             <div className="px-2 py-1.5">
@@ -103,7 +105,7 @@ export function NavUser() {
 
             <DropdownMenuSeparator />
 
-            <DropdownMenuItem onClick={() => setEditing(true)} className="cursor-pointer">
+            <DropdownMenuItem onClick={() => setEditing(true)} className="cursor-pointer" data-shot="user-menu-profile">
               <UserPen size={16} />
               {t('editProfile')}
             </DropdownMenuItem>

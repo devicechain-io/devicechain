@@ -157,13 +157,14 @@ function CopyFromDevice({
       <h3 className="text-sm font-medium text-foreground">{t('configCopyTitle')}</h3>
       <p className="text-xs text-muted-foreground">{t('configCopyHint')}</p>
       <div className="flex flex-wrap items-center gap-2">
-        <div className="min-w-64">
+        <div className="min-w-64" data-shot="config-copy-source">
           <EntityPicker kind={SOURCE_KIND} value={from} onChange={setFrom} id="config-copy-from" />
         </div>
         <Button
           variant="outline"
           size="sm"
           onClick={preview}
+          data-shot="config-copy-preview"
           disabled={!from || from === deviceToken || busy}
         >
           {t('configPreviewChanges')}
@@ -212,7 +213,7 @@ function ChangePreview({
   };
 
   return (
-    <section className="space-y-3 rounded-md border border-border p-3" aria-label={t('configPreviewTitle')}>
+    <section className="space-y-3 rounded-md border border-border p-3" aria-label={t('configPreviewTitle')} data-shot="config-preview">
       <h3 className="text-sm font-medium text-foreground">
         {proposal.kind === 'restore'
           ? t('configPreviewRestoreTitle', { revision: proposal.revision })
@@ -467,7 +468,7 @@ function RevisionHistory({
                   <DataTableCell className="text-muted-foreground">
                     {formatTime(r.createdAt)}
                   </DataTableCell>
-                  <DataTableCell className="text-muted-foreground">{r.actor || '—'}</DataTableCell>
+                  <DataTableCell className="text-muted-foreground" data-shot-pii>{r.actor || '—'}</DataTableCell>
                   {onRestore && (
                     <DataTableCell>
                       {r.revision !== current && (
@@ -475,6 +476,7 @@ function RevisionHistory({
                           variant="outline"
                           size="sm"
                           onClick={() => onRestore(r)}
+                          data-shot="config-restore"
                           aria-label={t('configRestoreRevisionLabel', { revision: r.revision })}
                         >
                           {t('configRestore')}

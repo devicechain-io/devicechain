@@ -128,6 +128,7 @@ export function PreviewPanel({
           size="sm"
           variant="outline"
           onClick={run}
+          data-shot="preview-run"
           loading={state.status === 'running'}
           disabled={notReadyReason !== null || state.status === 'running'}
           title={notReadyReason ?? undefined}

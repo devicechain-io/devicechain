@@ -120,6 +120,8 @@ export default function AuditPage() {
           <Input
             className="h-9 w-48"
             placeholder={t('actorPlaceholder')}
+            data-shot="audit-actor"
+            data-shot-pii
             value={actorInput}
             onChange={(e) => setActorInput(e.target.value)}
           />
@@ -162,7 +164,7 @@ export default function AuditPage() {
                   <DataTableCell className="whitespace-nowrap text-muted-foreground">
                     {formatTime(row.occurredTime)}
                   </DataTableCell>
-                  <DataTableCell className="font-medium text-foreground">
+                  <DataTableCell className="font-medium text-foreground" data-shot-pii>
                     {row.actor || '—'}
                   </DataTableCell>
                   <DataTableCell>

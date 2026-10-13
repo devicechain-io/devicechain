@@ -121,10 +121,10 @@ export default function DashboardsPage() {
       banner="dashboard"
       action={
         <div className="flex items-center gap-2">
-          <Button variant="outline" onClick={() => setImporting({})}>
+          <Button variant="outline" onClick={() => setImporting({})} data-shot="dashboard-import-button">
             <Upload size={16} /> {t('importDashboard')}
           </Button>
-          <Button onClick={() => setCreating(true)}>
+          <Button onClick={() => setCreating(true)} data-shot="new-button">
             <Plus size={16} /> {t('newDashboard')}
           </Button>
         </div>
@@ -159,6 +159,7 @@ export default function DashboardsPage() {
           {DASHBOARD_TEMPLATES.map((template) => (
             <Button
               key={template.id}
+              data-shot="dashboard-template"
               variant="outline"
               className="h-auto w-full flex-col items-start gap-0 whitespace-normal py-2 text-left"
               onClick={() => {

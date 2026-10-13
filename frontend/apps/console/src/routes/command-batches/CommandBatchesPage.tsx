@@ -121,7 +121,7 @@ export default function CommandBatchesPage() {
             placeholder={t('filterAllTargets')}
             ariaLabel={t('filterTargetLabel')}
           />
-          <Button onClick={() => setCreating(true)}>
+          <Button onClick={() => setCreating(true)} data-shot="new-button">
             <Plus size={16} /> {t('newBatch')}
           </Button>
         </>
