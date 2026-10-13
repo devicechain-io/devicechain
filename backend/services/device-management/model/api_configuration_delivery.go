@@ -47,6 +47,10 @@ const (
 	// arriving after the same revision's outcome. Reports are at-least-once and may reorder, so
 	// this is expected traffic rather than a fault, and it is refused only so that it is counted.
 	ReportRejectedStale = "stale"
+	// ReportRejectedDeviceDisabled: an operator has disabled the device. A session it already had
+	// open is not ended by that, so its syncs and reports are refused here, per message, until it
+	// is enabled again.
+	ReportRejectedDeviceDisabled = "device_disabled"
 )
 
 // ConfigurationReportRefusal is a device report that was understood and refused. It is not a
@@ -91,6 +95,25 @@ func (api *Api) publishMintedConfiguration(ctx context.Context, deviceId uint, r
 	api.DeviceDesiredPublisher.PublishDesiredConfiguration(ctx, rows[0].Token, rev)
 }
 
+// reportingDeviceId resolves the device a sync or a report names, and refuses it when an operator
+// has disabled it (a *ConfigurationReportRefusal, ReportRejectedDeviceDisabled). It reads the
+// column on every call: a disabled device keeps whatever session it had open, so the check is
+// per message, never per connect, and enabling the device takes effect on its next message. The
+// refusal comes before the cooldown, the lock and any write, so a refused message leaves no trace.
+func (api *Api) reportingDeviceId(ctx context.Context, token string) (uint, error) {
+	var rows []Device
+	if err := api.RDB.DB(ctx).Select("id", "disabled_at").Where("token = ?", token).Limit(1).Find(&rows).Error; err != nil {
+		return 0, err
+	}
+	if len(rows) == 0 {
+		return 0, gorm.ErrRecordNotFound
+	}
+	if rows[0].IsDisabled() {
+		return 0, &ConfigurationReportRefusal{Reason: ReportRejectedDeviceDisabled}
+	}
+	return rows[0].ID, nil
+}
+
 // SyncDeviceConfiguration answers a device's sync. Under the device's configuration lock it
 // mints a revision when the document the device's current declaration and SHARED attributes
 // produce differs from the latest one (this is how a profile publish reaches a device, since
@@ -102,7 +125,7 @@ func (api *Api) publishMintedConfiguration(ctx context.Context, deviceId uint, r
 // A device with nothing to deliver (no revision, and an empty document) is told nothing. The
 // error is gorm.ErrRecordNotFound for a device the tenant does not have.
 func (api *Api) SyncDeviceConfiguration(ctx context.Context, deviceToken string, haveRevision int64) (*DeviceConfigurationRevision, error) {
-	deviceId, err := api.deviceIdByToken(ctx, deviceToken)
+	deviceId, err := api.reportingDeviceId(ctx, deviceToken)
 	if err != nil {
 		return nil, err
 	}
@@ -182,7 +205,7 @@ func (api *Api) ApplyDeviceConfigurationReport(ctx context.Context, deviceToken 
 	if !slices.Contains([]ConfigurationStatus{ConfigurationReceived, ConfigurationApplied, ConfigurationRejected}, status) {
 		return fmt.Errorf("unknown configuration status %q", status)
 	}
-	deviceId, err := api.deviceIdByToken(ctx, deviceToken)
+	deviceId, err := api.reportingDeviceId(ctx, deviceToken)
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return &ConfigurationReportRefusal{Reason: ReportRejectedUnknownDevice}
 	}
