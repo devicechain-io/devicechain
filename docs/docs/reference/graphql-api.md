@@ -83,8 +83,11 @@ device (`assignArtifact`, `cancelUpdate`, `updateAssignment`, `updateAssignments
 an update attempt whose state moves from `QUEUED` through `INITIATED`, `DOWNLOADING`, `DOWNLOADED`, `VERIFIED`, `UPDATING` and
 `REBOOTING` to `UPDATED`, or to `FAILED`, `TIMED_OUT`, `UNKNOWN` or `CANCELLED`; `UPDATED` is reached only
 when the device reports the target version running, on a new boot when the update needs a reboot. Assigning
-an artifact that nothing has authenticated is refused unless the instance sets
-`updates.allowUnverifiedArtifacts`, which is shown in `updateManagementInfo`. An update left `UNKNOWN`
+an artifact that no active signer has signed is refused unless the instance sets
+`updates.allowUnverifiedArtifacts`, which is shown in `updateManagementInfo`. Signers are public keys
+registered with `registerArtifactSigner` and revoked with `revokeArtifactSigner` (both need
+`artifact:trust`); `addArtifactSignature` attaches a signature that is verified against the artifact's
+digest. An update left `UNKNOWN`
 (the device went quiet during installation or reboot) blocks a new assignment for that component until the
 device reports what it runs; if it never will, `abandonUnknownUpdate(assignmentToken, reason)` ends the update
 as `CANCELLED` with your reason recorded, journals the change under your name, and tells the device. It does not

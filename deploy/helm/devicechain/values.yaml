@@ -1861,9 +1861,10 @@ functionalAreas:
     # (blobStorage), so artifacts cannot be declared until a blob backend is configured.
     #
     # Two settings are deliberate decisions, both under `config.updates`:
-    #   allowUnverifiedArtifacts: false   # nothing authenticates who produced an artifact, so
-    #                                     # with this false NO artifact can be assigned; set it
-    #                                     # true on a development instance only
+    #   allowUnverifiedArtifacts: false   # with this false only an artifact signed by an active
+    #                                     # signer (registered per tenant with artifact:trust)
+    #                                     # can be assigned; set it true on a development
+    #                                     # instance only, to assign unsigned artifacts
     #   downloadBaseUrl: ""               # the public URL devices reach this service at, for
     #                                     # example https://<ingress.host>/api/update-management;
     #                                     # unset, no device can be given a download capability

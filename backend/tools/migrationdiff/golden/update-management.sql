@@ -1,8 +1,16 @@
+ALTER SEQUENCE "update-management".artifact_signatures_id_seq OWNED BY "update-management".artifact_signatures.id;
+ALTER SEQUENCE "update-management".artifact_signers_id_seq OWNED BY "update-management".artifact_signers.id;
 ALTER SEQUENCE "update-management".artifacts_id_seq OWNED BY "update-management".artifacts.id;
 ALTER SEQUENCE "update-management".audit_events_id_seq OWNED BY "update-management".audit_events.id;
 ALTER SEQUENCE "update-management".secrets_id_seq OWNED BY "update-management".secrets.id;
 ALTER SEQUENCE "update-management".update_assignments_id_seq OWNED BY "update-management".update_assignments.id;
 ALTER SEQUENCE "update-management".update_attempts_id_seq OWNED BY "update-management".update_attempts.id;
+ALTER TABLE ONLY "update-management".artifact_signatures
+ ADD CONSTRAINT artifact_signatures_pkey PRIMARY KEY (id);
+ALTER TABLE ONLY "update-management".artifact_signatures ALTER COLUMN id SET DEFAULT nextval('"update-management".artifact_signatures_id_seq'::regclass);
+ALTER TABLE ONLY "update-management".artifact_signers
+ ADD CONSTRAINT artifact_signers_pkey PRIMARY KEY (id);
+ALTER TABLE ONLY "update-management".artifact_signers ALTER COLUMN id SET DEFAULT nextval('"update-management".artifact_signers_id_seq'::regclass);
 ALTER TABLE ONLY "update-management".artifacts
  ADD CONSTRAINT artifacts_pkey PRIMARY KEY (id);
 ALTER TABLE ONLY "update-management".artifacts ALTER COLUMN id SET DEFAULT nextval('"update-management".artifacts_id_seq'::regclass);
@@ -22,6 +30,10 @@ ALTER TABLE ONLY "update-management".update_attempts
 ALTER TABLE ONLY "update-management".update_attempts ALTER COLUMN id SET DEFAULT nextval('"update-management".update_attempts_id_seq'::regclass);
 ALTER TABLE ONLY "update-management".update_management_migrations
  ADD CONSTRAINT update_management_migrations_pkey PRIMARY KEY (id);
+CREATE INDEX "idx_update-management_artifact_signatures_artifact_id" ON "update-management".artifact_signatures USING btree (artifact_id);
+CREATE INDEX "idx_update-management_artifact_signatures_signer_id" ON "update-management".artifact_signatures USING btree (signer_id);
+CREATE INDEX "idx_update-management_artifact_signatures_tenant_id" ON "update-management".artifact_signatures USING btree (tenant_id);
+CREATE INDEX "idx_update-management_artifact_signers_tenant_id" ON "update-management".artifact_signers USING btree (tenant_id);
 CREATE INDEX "idx_update-management_artifacts_deleted_at" ON "update-management".artifacts USING btree (deleted_at);
 CREATE INDEX "idx_update-management_artifacts_tenant_id" ON "update-management".artifacts USING btree (tenant_id);
 CREATE INDEX "idx_update-management_artifacts_token" ON "update-management".artifacts USING btree (token);
@@ -36,6 +48,18 @@ CREATE INDEX "idx_update-management_update_attempts_tenant_id" ON "update-manage
 CREATE INDEX idx_audit_tenant_time ON "update-management".audit_events USING btree (tenant_id, occurred_time DESC);
 CREATE INDEX ix_update_attempts_state_report ON "update-management".update_attempts USING btree (state, last_report_at);
 CREATE SCHEMA "update-management";
+CREATE SEQUENCE "update-management".artifact_signatures_id_seq
+ START WITH 1
+ INCREMENT BY 1
+ NO MINVALUE
+ NO MAXVALUE
+ CACHE 1;
+CREATE SEQUENCE "update-management".artifact_signers_id_seq
+ START WITH 1
+ INCREMENT BY 1
+ NO MINVALUE
+ NO MAXVALUE
+ CACHE 1;
 CREATE SEQUENCE "update-management".artifacts_id_seq
  START WITH 1
  INCREMENT BY 1
@@ -66,6 +90,30 @@ CREATE SEQUENCE "update-management".update_attempts_id_seq
  NO MINVALUE
  NO MAXVALUE
  CACHE 1;
+CREATE TABLE "update-management".artifact_signatures (
+ id bigint NOT NULL,
+ created_at timestamp with time zone,
+ tenant_id character varying(128) NOT NULL,
+ artifact_id bigint NOT NULL,
+ signer_id bigint NOT NULL,
+ signature bytea NOT NULL,
+ actor character varying(256)
+);
+CREATE TABLE "update-management".artifact_signers (
+ id bigint NOT NULL,
+ created_at timestamp with time zone,
+ updated_at timestamp with time zone,
+ tenant_id character varying(128) NOT NULL,
+ token character varying(128) NOT NULL,
+ name character varying(128) NOT NULL,
+ algorithm character varying(32) NOT NULL,
+ public_key_pem character varying(4096) NOT NULL,
+ key_id character varying(64) NOT NULL,
+ state character varying(16) NOT NULL,
+ revoked_at timestamp with time zone,
+ created_by character varying(256),
+ revoked_by character varying(256)
+);
 CREATE TABLE "update-management".artifacts (
  id bigint NOT NULL,
  created_at timestamp with time zone,
@@ -162,6 +210,9 @@ CREATE TABLE "update-management".update_attempts (
 CREATE TABLE "update-management".update_management_migrations (
  id character varying(255) NOT NULL
 );
+CREATE UNIQUE INDEX uix_artifact_signatures_artifact_signer ON "update-management".artifact_signatures USING btree (artifact_id, signer_id);
+CREATE UNIQUE INDEX uix_artifact_signers_tenant_key ON "update-management".artifact_signers USING btree (tenant_id, key_id);
+CREATE UNIQUE INDEX uix_artifact_signers_tenant_token ON "update-management".artifact_signers USING btree (tenant_id, token);
 CREATE UNIQUE INDEX uix_artifacts_tenant_identity ON "update-management".artifacts USING btree (tenant_id, name, component, version) WHERE (deleted_at IS NULL);
 CREATE UNIQUE INDEX uix_artifacts_tenant_token ON "update-management".artifacts USING btree (tenant_id, token) WHERE (deleted_at IS NULL);
 CREATE UNIQUE INDEX uix_secrets_tenant_scope_name ON "update-management".secrets USING btree (tenant_id, scope, name) WHERE (deleted_at IS NULL);

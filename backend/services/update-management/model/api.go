@@ -116,9 +116,8 @@ type Api struct {
 	Secrets secrets.SecretStore
 	// Policy is how long the platform waits in each phase of an attempt.
 	Policy ota.Policy
-	// AllowUnverified is the FIXED config updates.allowUnverifiedArtifacts. While every
-	// artifact is UNVERIFIED (nothing authenticates an artifact's origin yet), false means
-	// nothing can be assigned.
+	// AllowUnverified is the FIXED config updates.allowUnverifiedArtifacts. False means only an
+	// artifact with a signature by an ACTIVE signer (derived trust SIGNED) can be assigned.
 	AllowUnverified bool
 	// DownloadBaseURL is the public base a device reaches the download endpoint at, with no
 	// trailing path. Empty means no capability URL can be minted, and a download request is
@@ -329,6 +328,8 @@ func (api *Api) CreateArtifact(ctx context.Context, req *ArtifactCreateRequest) 
 	if err != nil {
 		return nil, err
 	}
+	// A new artifact has no signatures, so there is nothing to derive.
+	created.Trust = TrustUnverified
 	return created, nil
 }
 
@@ -430,13 +431,33 @@ func (api *Api) ArtifactByToken(ctx context.Context, token string) (*Artifact, e
 	if len(found) == 0 {
 		return nil, nil
 	}
+	if err := api.fillTrust(ctx, found[0]); err != nil {
+		return nil, err
+	}
 	return found[0], nil
 }
 
 // Artifacts searches the tenant's artifacts.
 func (api *Api) Artifacts(ctx context.Context, criteria ArtifactSearchCriteria) (*ArtifactSearchResults, error) {
 	results := make([]Artifact, 0)
+	var signed *gorm.DB
+	if criteria.TrustStatus != nil {
+		if *criteria.TrustStatus != TrustSigned && *criteria.TrustStatus != TrustUnverified {
+			return nil, refuse(CodeInvalidTrustFilter, "trustStatus must be %s or %s", TrustSigned, TrustUnverified)
+		}
+		var err error
+		if signed, err = api.signedArtifactIDs(ctx); err != nil {
+			return nil, err
+		}
+	}
 	db, pag := api.RDB.ListOf(ctx, &Artifact{}, func(q *gorm.DB) *gorm.DB {
+		if criteria.TrustStatus != nil {
+			if *criteria.TrustStatus == TrustSigned {
+				q = q.Where("artifacts.id IN (?)", signed)
+			} else {
+				q = q.Where("artifacts.id NOT IN (?)", signed)
+			}
+		}
 		if criteria.Kind != nil {
 			q = q.Where("kind = ?", *criteria.Kind)
 		}
@@ -449,6 +470,13 @@ func (api *Api) Artifacts(ctx context.Context, criteria ArtifactSearchCriteria) 
 		return q
 	}, criteria.Pagination)
 	if err := db.Find(&results).Error; err != nil {
+		return nil, err
+	}
+	ptrs := make([]*Artifact, len(results))
+	for i := range results {
+		ptrs[i] = &results[i]
+	}
+	if err := api.fillTrust(ctx, ptrs...); err != nil {
 		return nil, err
 	}
 	return &ArtifactSearchResults{Results: results, Pagination: pag}, nil

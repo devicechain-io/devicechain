@@ -291,6 +291,9 @@ func (api *Api) artifactByID(ctx context.Context, id uint) (*Artifact, error) {
 	if len(found) == 0 {
 		return nil, nil
 	}
+	if err := api.fillTrust(ctx, &found[0]); err != nil {
+		return nil, err
+	}
 	return &found[0], nil
 }
 
@@ -313,6 +316,13 @@ func (api *Api) viewsOf(ctx context.Context, asg []UpdateAssignment) ([]UpdateAs
 	byAssignment := make(map[uint]UpdateAttempt, len(attempts))
 	for _, at := range attempts {
 		byAssignment[at.AssignmentId] = at
+	}
+	ptrs := make([]*Artifact, len(artifacts))
+	for i := range artifacts {
+		ptrs[i] = &artifacts[i]
+	}
+	if err := api.fillTrust(ctx, ptrs...); err != nil {
+		return nil, err
 	}
 	byID := make(map[uint]Artifact, len(artifacts))
 	for _, a := range artifacts {
@@ -399,7 +409,8 @@ func (api *Api) AssignArtifact(ctx context.Context, deviceToken, artifactToken s
 		return nil, refuse(CodeArtifactNotAvailable, "artifact %q is %s; only an %s artifact can be assigned",
 			artifact.Token, artifact.State, StateAvailable)
 	}
-	if artifact.TrustStatus == TrustUnverified && !api.AllowUnverified {
+	// The gate reads the DERIVED trust (ArtifactByToken filled it), never the stored column.
+	if artifact.Trust != TrustSigned && !api.AllowUnverified {
 		return nil, refuse(CodeUnverifiedRefused,
 			"artifact %q is UNVERIFIED and this instance does not allow assigning unverified artifacts "+
 				"(updates.allowUnverifiedArtifacts)", artifact.Token)

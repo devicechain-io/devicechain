@@ -9,7 +9,7 @@ title: 空中（OTA）更新
 :::note 状态
 **目前可用：**带校验的流式上传制品目录、一次分配给一台设备、通过短期授权进行可续传的下载，以及带截止期的尝试跟踪。
 
-**尚未提供：**没有任何机制验证制品**由谁生成**（平台只检查字节是否与声明的一致），因此必须显式允许才能分配制品；没有面向整个设备群的发布（分阶段或按百分比分配给大量设备）；更新没有控制台界面，需通过 GraphQL 和 HTTP 上传来使用；只使用 HTTP 的设备无法接收更新，因为分配通过设备的 MQTT 通道传递。出于同样的原因，[LwM2M](./lwm2m.md) 和 [Sparkplug](./sparkplug.md) 设备也无法接收更新；LwM2M 设备的固件改为通过普通命令驱动。
+**尚未提供：**设备目前还拿不到制品的签名，因此无法自行校验；没有面向整个设备群的发布（分阶段或按百分比分配给大量设备）；更新没有控制台界面，需通过 GraphQL 和 HTTP 上传来使用；只使用 HTTP 的设备无法接收更新，因为分配通过设备的 MQTT 通道传递。出于同样的原因，[LwM2M](./lwm2m.md) 和 [Sparkplug](./sparkplug.md) 设备也无法接收更新；LwM2M 设备的固件改为通过普通命令驱动。
 :::
 
 ## 启用 {#enabling}
@@ -20,7 +20,7 @@ title: 空中（OTA）更新
 
 | 设置 | 默认值 | 含义 |
 | --- | --- | --- |
-| `allowUnverifiedArtifacts` | `false` | 目前所有制品都未经验证，因此设为 `false` 时**无法分配任何制品**。请在开发或测试实例上设为 `true`。该值会显示在 `updateManagementInfo` 查询中，从而可以看出实例启用了它。 |
+| `allowUnverifiedArtifacts` | `false` | 设为 `false` 时，只有由处于活动状态的[签名者](#signers)签名的制品才能被分配。请在开发或测试实例上设为 `true`，以便也能分配未签名的制品。该值会显示在 `updateManagementInfo` 查询中，从而可以看出实例启用了它。 |
 | `downloadBaseUrl` | 未设置 | 设备访问该服务的公共 URL，例如 `https://<ingress host>/api/update-management`，不含查询参数或片段。未设置时无法向任何设备发放下载授权：设备的请求会被拒绝并计数。 |
 
 其余设置用于限制服务：
@@ -45,7 +45,7 @@ title: 空中（OTA）更新
 
 ## 分配更新 {#assigning}
 
-`assignArtifact(deviceToken, artifactToken)` 让一台设备安装一个 `AVAILABLE` 制品。设备的配置文件必须在制品的兼容列表中，且在 `allowUnverifiedArtifacts` 关闭时分配会被拒绝。对[已停用的设备](../guides/device-credentials.md#disabling-a-device)分配会以 `DEVICE_DISABLED` 被拒绝；设备被停用期间，它的更新报告和下载请求会被丢弃，它已获得的下载链接也会失效，直到它重新启用，届时会重新向它提供其当前的分配。停用不会取消正在进行的更新：[截止期](#deadlines)照常计时，可能把更新转为 `TIMED_OUT` 或 `UNKNOWN`；如果设备在该阶段截止期之前重新启用，它的下一次报告会继续该更新，它已获得的下载链接也会重新生效。设备**每个部件只有一个目标**：
+`assignArtifact(deviceToken, artifactToken)` 让一台设备安装一个 `AVAILABLE` 制品。设备的配置文件必须在制品的兼容列表中，除非制品已由处于活动状态的签名者[签名](#signers)，或 `allowUnverifiedArtifacts` 已开启，否则分配会被拒绝（`UNVERIFIED_ARTIFACT_REFUSED`）。对[已停用的设备](../guides/device-credentials.md#disabling-a-device)分配会以 `DEVICE_DISABLED` 被拒绝；设备被停用期间，它的更新报告和下载请求会被丢弃，它已获得的下载链接也会失效，直到它重新启用，届时会重新向它提供其当前的分配。停用不会取消正在进行的更新：[截止期](#deadlines)照常计时，可能把更新转为 `TIMED_OUT` 或 `UNKNOWN`；如果设备在该阶段截止期之前重新启用，它的下一次报告会继续该更新，它已获得的下载链接也会重新生效。设备**每个部件只有一个目标**：
 
 - 该部件的上一次更新仍在进行时，新的分配会被拒绝，直到上一次更新被取消；
 - 在该更新仍在进行时再次分配同一个制品，会返回已有的分配；
@@ -53,7 +53,7 @@ title: 空中（OTA）更新
 
 `cancelUpdate` 会立即取消排队中的更新。在安装开始之前，它会记录取消请求，当设备确认已放弃该工作时更新变为 `CANCELLED`。设备一旦开始安装，取消就会被拒绝：安装无法撤回。
 
-读取目录和分配需要 `artifact:read`；任何更改都需要 `artifact:write`。
+读取目录、分配和签名者需要 `artifact:read`。更改目录、分配以及附加签名需要 `artifact:write`。注册或吊销签名者需要 `artifact:trust`，它是有意分开的：能够发布二进制文件，并不包含决定谁的签名使其可信的权力。
 
 ## 尝试如何推进 {#states}
 
@@ -90,9 +90,19 @@ title: 空中（OTA）更新
 
 安装或重启期间的沉默是 **`UNKNOWN`**，既不是失败也不是成功：设备可能处于任一版本。`UNKNOWN` 尝试只有凭证据才能离开该状态。设备的下一次清单报告会说明它在运行什么，尝试随之变为 `UPDATED`，或者在设备已重启但不在目标版本时变为 `FAILED`。在此之前，该部件的新分配会被拒绝。如果设备永远不会报告，`abandonUnknownUpdate(assignmentToken, reason)` 会将更新以 `CANCELLED` 结束，保存你的原因，以你的名义记录变更，通知设备并释放该部件。它不会查明设备实际运行什么，因此在依赖任一版本之前请先确认。
 
+## 签名者 {#signers}
+
+制品的**信任状态**表明是否有你信任的一方为它担保。在你注册的至少一个**签名者**为它签名之前，它是 `UNVERIFIED`；签名之后为 `SIGNED`。该状态在每次读取时根据已记录的签名及其签名者的状态计算得出，因此 `artifacts` 可以按 `trustStatus` 过滤。
+
+签名者就是一个公钥。`registerArtifactSigner(name, publicKeyPem)` 接收一个包含 ECDSA P-256 或 Ed25519 公钥的 SPKI `PUBLIC KEY` PEM 块；其他密钥类型和曲线会被拒绝。只注册公钥这一半：平台从不需要私钥，收到私钥会被拒绝（`SIGNER_KEY_REFUSED`），并且不会回显、不会写入日志、也不会保存。签名者的 `keyId` 是密钥 DER 编码的 SHA-256 小写十六进制，同一个密钥在一个租户内只能注册一次。
+
+你用自己保管的私钥对制品的 **SHA-256 摘要**签名，对象是 32 个原始字节，而不是十六进制文本：ECDSA P-256 生成摘要的 ASN.1 DER 签名，Ed25519 则对这 32 个摘要字节签名。`addArtifactSignature(artifactToken, signerToken, signature)` 接收标准 base64 编码的签名，并用平台在声明制品时保存的摘要来校验。无法通过校验的签名会被拒绝（`SIGNATURE_INVALID`），因此针对其他字节生成的签名无法附加；已吊销的签名者会被拒绝（`SIGNER_REVOKED`）。同一签名者重复签名不会产生任何变化。签名只覆盖摘要：它不说明镜像对应哪个版本或部件，所以以另一个版本声明的同一镜像，同样由这个签名担保。
+
+`revokeArtifactSigner(token)` 不可撤销。该签名者的签名仍保留在记录中，但不再计入，因此仅由它担保的制品会立即变为 `UNVERIFIED`，不能再被分配（除非开启了 `allowUnverifiedArtifacts`）；不会改写任何制品。签名者的 `soleSignedArtifactCount` 会预先告诉你这会影响多少制品。已经做出的分配不会被收回。
+
 ## “已校验”的含义 {#verified}
 
-`VERIFIED` 以及上传时的大小与摘要检查，确立的是**完整性**：字节与声明的一致。它们不说明这些字节由谁生成。每个制品的信任状态都是 `UNVERIFIED`，每个分配告知设备的信任级别也是如此，因此需要确认镜像真实性的设备必须自行校验签名。
+`VERIFIED` 以及上传时的大小与摘要检查，确立的是**完整性**：字节与声明的一致。它们不说明这些字节由谁生成；这正是[签名](#signers)补充的内容。目前分配告知设备的信任级别仍是 `UNVERIFIED`，因此需要确认镜像真实性的设备必须自行校验签名。
 
 ## 设备端 {#device-side}
 

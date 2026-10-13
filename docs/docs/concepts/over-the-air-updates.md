@@ -14,9 +14,8 @@ the device proves it is running the new version.
 device at a time, a resumable download through a short-lived grant, and tracking of each attempt
 with deadlines.
 
-**Not yet:** nothing authenticates **who produced** an artifact (the platform checks only that the
-bytes are the bytes that were declared), so assigning one must be allowed explicitly; there is no
-fleet rollout (staged or percentage-based assignment across many devices); there are no console
+**Not yet:** a device is not yet given an artifact's signature, so it cannot check one itself;
+there is no fleet rollout (staged or percentage-based assignment across many devices); there are no console
 screens for updates, so you use GraphQL and the HTTP upload; and devices that speak only HTTP
 cannot receive updates, because assignments travel on the device's MQTT channel. For the same reason
 [LwM2M](./lwm2m.md) and [Sparkplug](./sparkplug.md) devices cannot receive them either; an LwM2M
@@ -36,7 +35,7 @@ Two settings are deliberate decisions rather than defaults to leave alone. Both 
 
 | Setting | Default | Meaning |
 | --- | --- | --- |
-| `allowUnverifiedArtifacts` | `false` | Every artifact is unverified today, so with this `false` **no artifact can be assigned**. Set it to `true` on a development or test instance. The value is shown in the `updateManagementInfo` query, so an instance running with it can be seen to be. |
+| `allowUnverifiedArtifacts` | `false` | With this `false`, only an artifact signed by an active [signer](#signers) can be assigned. Set it to `true` on a development or test instance to assign unsigned artifacts too. The value is shown in the `updateManagementInfo` query, so an instance running with it can be seen to be. |
 | `downloadBaseUrl` | unset | The public URL devices reach the service at, for example `https://<ingress host>/api/update-management`, with no query or fragment. Without it no device can be given a download grant: a device's request is refused and counted. |
 
 The remaining settings bound the service:
@@ -75,8 +74,9 @@ assignments; its record and content are kept.
 ## Assigning an update {#assigning}
 
 `assignArtifact(deviceToken, artifactToken)` tells one device to install one `AVAILABLE` artifact.
-The device's profile must be on the artifact's compatible list, and the assignment is refused while
-`allowUnverifiedArtifacts` is off. A [disabled device](../guides/device-credentials.md#disabling-a-device)
+The device's profile must be on the artifact's compatible list, and the assignment is refused
+(`UNVERIFIED_ARTIFACT_REFUSED`) unless the artifact is [signed](#signers) by an active signer or
+`allowUnverifiedArtifacts` is on. A [disabled device](../guides/device-credentials.md#disabling-a-device)
 is refused with `DEVICE_DISABLED`; while a device is disabled, its update reports and download
 requests are discarded and a download link it was already given stops working, until it is enabled
 again, when it is re-offered its current assignment. An update already in progress is not cancelled by a disable: the [deadlines](#deadlines)
@@ -93,7 +93,10 @@ already given works again. A device works toward **one target per component**:
 and the update becomes `CANCELLED` when the device confirms it has dropped the work. Once the device
 has begun installing, cancelling is refused: an installation cannot be recalled.
 
-Reading the catalogue and assignments needs `artifact:read`; every change needs `artifact:write`.
+Reading the catalogue, assignments and signers needs `artifact:read`. Changing the catalogue, assigning,
+and attaching a signature need `artifact:write`. Registering or revoking a signer needs `artifact:trust`,
+which is separate on purpose: being able to publish a binary does not include deciding whose signature
+makes it trusted.
 
 ## How an attempt progresses {#states}
 
@@ -141,12 +144,40 @@ device will never report, `abandonUnknownUpdate(assignmentToken, reason)` ends t
 `CANCELLED`, keeps your reason, journals the change under your name, tells the device, and frees the
 component. It does not find out what the device runs, so check before relying on either version.
 
+## Signers {#signers}
+
+An artifact's **trust status** says whether someone you trust has vouched for it. It is `UNVERIFIED`
+until at least one **signer** you registered has signed it, and `SIGNED` after. It is worked out each
+time it is read, from the signatures on record and the state of the signers behind them, so
+`artifacts` can be filtered by `trustStatus`.
+
+A signer is a public key. `registerArtifactSigner(name, publicKeyPem)` takes one SPKI `PUBLIC KEY` PEM
+block holding an ECDSA P-256 or Ed25519 key; other key types and curves are refused. Register only the
+public half: the platform never needs a private key, and one is refused (`SIGNER_KEY_REFUSED`) without
+being echoed, logged or stored. The signer's `keyId` is the lowercase hex SHA-256 of the key's DER
+encoding, and a key can be registered only once per tenant.
+
+You sign the artifact's **SHA-256 digest**, the 32 raw bytes and not the hex text, with the private
+key you keep: ECDSA P-256 produces an ASN.1 DER signature of the digest, and Ed25519 signs the 32 digest
+bytes. `addArtifactSignature(artifactToken, signerToken, signature)` takes the signature as standard
+base64 and checks it against the digest the platform stored when the artifact was declared. A signature
+that does not verify is refused (`SIGNATURE_INVALID`), so a signature made over other bytes cannot be
+attached, and a revoked signer is refused (`SIGNER_REVOKED`). Signing again with the same signer changes
+nothing. The signature covers the digest only: it does not say which version or component the image is
+for, so the same image declared under another version is vouched for by the same signature.
+
+`revokeArtifactSigner(token)` is final. The signer's signatures stay on record but stop counting, so
+every artifact it alone vouched for reads `UNVERIFIED` straight away and can no longer be assigned
+(unless `allowUnverifiedArtifacts` is on); no artifact is rewritten. A signer's
+`soleSignedArtifactCount` tells you beforehand how many artifacts that would affect. An assignment
+already made is not recalled.
+
 ## What "verified" means {#verified}
 
 `VERIFIED`, and the size and digest check at upload, establish **integrity**: the bytes are the bytes
-that were declared. They say nothing about who produced them. Every artifact's trust status is
-`UNVERIFIED`, and so is the trust every assignment tells the device, so a device that needs to know
-an image is genuine must check a signature of its own.
+that were declared. They say nothing about who produced them; that is what a [signature](#signers) adds.
+An assignment still tells the device `UNVERIFIED` today, so a device that needs to know an image is
+genuine must check a signature of its own.
 
 ## On the device {#device-side}
 
