@@ -51,6 +51,9 @@ type fakeProfileServer struct {
 	rules    map[string]fakeRule
 	// Published version labels, in order. The active version is the last one.
 	versions []string
+	// descriptions[i] is versions[i]'s notes; shorter than versions when a test
+	// appended a version directly (treated as empty).
+	descriptions []string
 	// Counters, so a test can distinguish "did nothing" from "did the same thing".
 	updates int
 	// failNextPublish makes exactly one publish fail, modelling the ADR-044
@@ -202,7 +205,11 @@ func (f *fakeProfileServer) dispatch(query string, vars map[string]any) (map[str
 	case strings.Contains(query, "deviceProfileVersions"):
 		out := make([]any, 0, len(f.versions))
 		for i, label := range f.versions {
-			out = append(out, map[string]any{"version": i + 1, "label": label})
+			desc := ""
+			if i < len(f.descriptions) {
+				desc = f.descriptions[i]
+			}
+			out = append(out, map[string]any{"version": i + 1, "label": label, "description": desc})
 		}
 		return map[string]any{"deviceProfileVersions": out}, 0
 
@@ -213,7 +220,12 @@ func (f *fakeProfileServer) dispatch(query string, vars map[string]any) (map[str
 			return nil, http.StatusInternalServerError
 		}
 		label, _ := vars["label"].(string)
+		desc, _ := vars["description"].(string)
+		for len(f.descriptions) < len(f.versions) {
+			f.descriptions = append(f.descriptions, "")
+		}
 		f.versions = append(f.versions, label)
+		f.descriptions = append(f.descriptions, desc)
 		// Publishing hands a new active version to the engine — EVENTUALLY. Only
 		// ENABLED rules are loaded, matching the runtime (a disabled rule is inert and
 		// the publish gate does not even submit it).
@@ -763,8 +775,79 @@ func TestEnsureProfileRepublishesWhenSomethingElseSupersededIt(t *testing.T) {
 	f.mu.Lock()
 	active := f.versions[len(f.versions)-1]
 	f.mu.Unlock()
-	if !strings.HasPrefix(active, "sim-") {
-		t.Errorf("the active version's label is %q, not the scenario's content marker", active)
+	f.mu.Lock()
+	desc := f.descriptions[len(f.descriptions)-1]
+	f.mu.Unlock()
+	if got := versionMarker(active, desc); got != profileContentMarker(spec) {
+		t.Errorf("the active version (label %q) carries marker %q, not the scenario's", active, got)
+	}
+}
+
+// The label is for people: readable, and not the marker. The marker lives in the
+// description, where the republish decision reads it back.
+func TestEnsureProfileLabelIsReadableAndMarkerIsStored(t *testing.T) {
+	f, rt := newFakeProfileServer(t)
+	spec := widgetlabProfileSpec(t)
+	if err := run(t, rt, spec); err != nil {
+		t.Fatal(err)
+	}
+	f.mu.Lock()
+	label, desc := f.versions[0], f.descriptions[0]
+	f.mu.Unlock()
+	if strings.HasPrefix(label, markerPrefix) || label != profileVersionLabel(spec) {
+		t.Errorf("label %q is not the readable label %q", label, profileVersionLabel(spec))
+	}
+	if !strings.Contains(desc, profileContentMarker(spec)) {
+		t.Errorf("description %q does not carry the marker", desc)
+	}
+}
+
+func TestProfileVersionLabelFallsBackToInitial(t *testing.T) {
+	if got := profileVersionLabel(ProfileSpec{}); got != "Initial profile" {
+		t.Errorf("got %q", got)
+	}
+}
+
+// A plain restart with the same scenario publishes nothing; a changed scenario does.
+func TestEnsureProfileRestartDoesNotRepublishButScenarioChangeDoes(t *testing.T) {
+	f, rt := newFakeProfileServer(t)
+	spec := widgetlabProfileSpec(t)
+	for i := 0; i < 3; i++ {
+		if err := run(t, rt, spec); err != nil {
+			t.Fatalf("run %d: %v", i, err)
+		}
+	}
+	if got := f.versionCount(); got != 1 {
+		t.Fatalf("%d versions after two restarts, want 1", got)
+	}
+	changed := spec
+	changed.Metrics = append([]MetricSpec(nil), spec.Metrics...)
+	changed.Metrics[0].Unit += "x"
+	if err := run(t, rt, changed); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.versionCount(); got != 2 {
+		t.Errorf("%d versions after a scenario change, want 2", got)
+	}
+}
+
+// A tenant provisioned by an older build has the marker AS the label and no
+// description; that version must still count as the scenario's content.
+func TestEnsureProfileRecognisesLegacyHashLabel(t *testing.T) {
+	f, rt := newFakeProfileServer(t)
+	spec := widgetlabProfileSpec(t)
+	if err := run(t, rt, spec); err != nil {
+		t.Fatal(err)
+	}
+	f.mu.Lock()
+	f.versions[0] = profileContentMarker(spec)
+	f.descriptions[0] = "Published by the sim scenario that declares this profile."
+	f.mu.Unlock()
+	if err := run(t, rt, spec); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.versionCount(); got != 1 {
+		t.Errorf("a legacy hash-labelled version was republished (%d versions)", got)
 	}
 }
 
