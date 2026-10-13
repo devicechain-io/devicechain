@@ -55,6 +55,46 @@ func (r *SchemaResolver) DeviceConfigurationRevisions(ctx context.Context, args 
 	return &DeviceConfigurationRevisionSearchResultsResolver{M: *found, S: r, C: ctx}, nil
 }
 
+// RestoreDeviceConfiguration makes a device's desired configuration equal to one of its own
+// past revisions, by writing its SHARED attributes and minting a new revision. Requires
+// device:write, the authority a SHARED attribute write requires.
+func (r *SchemaResolver) RestoreDeviceConfiguration(ctx context.Context, args struct {
+	DeviceToken string
+	Revision    int32
+}) (*DeviceConfigurationResolver, error) {
+	if err := auth.Authorize(ctx, auth.DeviceWrite); err != nil {
+		return nil, err
+	}
+	found, err := r.GetApi(ctx).RestoreDeviceConfiguration(ctx, args.DeviceToken, int64(args.Revision))
+	if err != nil {
+		return nil, err
+	}
+	return &DeviceConfigurationResolver{M: *found}, nil
+}
+
+// CopyDeviceConfiguration makes one device's desired configuration equal to another's
+// latest revision (or the revision fromRevision names), in the caller's tenant. Requires
+// device:write.
+func (r *SchemaResolver) CopyDeviceConfiguration(ctx context.Context, args struct {
+	FromDeviceToken string
+	ToDeviceToken   string
+	FromRevision    *int32
+}) (*DeviceConfigurationResolver, error) {
+	if err := auth.Authorize(ctx, auth.DeviceWrite); err != nil {
+		return nil, err
+	}
+	var fromRevision *int64
+	if args.FromRevision != nil {
+		v := int64(*args.FromRevision)
+		fromRevision = &v
+	}
+	found, err := r.GetApi(ctx).CopyDeviceConfiguration(ctx, args.FromDeviceToken, args.ToDeviceToken, fromRevision)
+	if err != nil {
+		return nil, err
+	}
+	return &DeviceConfigurationResolver{M: *found}, nil
+}
+
 type DeviceConfigurationResolver struct {
 	M model.DeviceConfiguration
 }
