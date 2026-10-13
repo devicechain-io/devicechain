@@ -56,7 +56,7 @@ function StatusDot({ state }: { state: PresenceFacts | undefined }) {
   if (kind === 'unknown') return <span className="text-muted-foreground">—</span>;
   const online = kind === 'online';
   return (
-    <span className="inline-flex items-center gap-1.5 text-sm">
+    <span className="inline-flex items-center gap-1.5 text-sm" data-shot-mask>
       <span className={cn('inline-block size-2 rounded-full', online ? 'bg-success' : 'bg-muted-foreground/40')} />
       <span className={online ? 'text-foreground' : 'text-muted-foreground'}>
         {online ? t('online') : kind === 'disconnected' ? t('disconnected') : t('offline')}
@@ -108,16 +108,16 @@ export default function DevicesPage() {
             columns={exportColumns}
             fetchPage={(pageNumber, pageSize) => listDevices({ pageNumber, pageSize })}
           />
-          <Button variant="outline" onClick={() => setBulkCreating(true)}>
+          <Button variant="outline" onClick={() => setBulkCreating(true)} data-shot="device-bulk-button">
             <Layers size={16} /> {t('bulkCreate')}
           </Button>
-          <Button onClick={() => setCreating(true)}>
+          <Button onClick={() => setCreating(true)} data-shot="device-new-button">
             <Plus size={16} /> {t('newDevice')}
           </Button>
         </div>
       }
     >
-      <FormDrawer open={creating} onOpenChange={setCreating} title={t('newDevice')}>
+      <FormDrawer shot="device-new" open={creating} onOpenChange={setCreating} title={t('newDevice')}>
         <DeviceForm
           onDone={(m) => {
             toast(m);
@@ -126,7 +126,7 @@ export default function DevicesPage() {
           }}
         />
       </FormDrawer>
-      <FormDrawer open={bulkCreating} onOpenChange={setBulkCreating} title={t('bulkCreateTitle')}>
+      <FormDrawer shot="device-bulk" open={bulkCreating} onOpenChange={setBulkCreating} title={t('bulkCreateTitle')}>
         <DeviceBulkForm
           onDone={(m) => {
             toast(m);

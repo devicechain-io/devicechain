@@ -149,6 +149,7 @@ export function ConnectorVersionsPanel({
       </div>
 
       <FormDrawer
+        shot="connector-version-publish"
         open={publishing}
         onOpenChange={(open) => {
           setPublishing(open);

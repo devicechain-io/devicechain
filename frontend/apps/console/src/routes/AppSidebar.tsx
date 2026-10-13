@@ -224,7 +224,7 @@ export function AppSidebar() {
   const toggle = (key: string) => setOpenGroup((cur) => (cur === key ? null : key));
 
   return (
-    <Sidebar collapsible="icon">
+    <Sidebar collapsible="icon" data-shot="sidebar">
       <SidebarHeader className="pt-4">
         <SidebarMenu>
           <SidebarMenuItem>

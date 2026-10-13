@@ -200,6 +200,31 @@ hardcoded — but **new** copy must be written i18n-aware from now on.
   (`ms-*`/`me-*`, `start`/`end`) over `left`/`right` where it's free, so a future RTL
   locale is cheaper — RTL is out of GA scope.
 
+## Screenshot anchors (`data-shot*`)
+
+The user guide's screenshots are captured by `hack/guide-capture`, which drives the console an
+instance serves and selects on attributes, never on CSS classes or visible text (text is
+translated, so a text selector would break the `es` run). The attributes are inert markup.
+
+- **Primitives carry the anchors, so one edit covers the whole console.**
+  `data-shot-tab={value}` on every tab trigger (the tab key, e.g. `connectivity`);
+  `data-shot="drawer"` on `FormDrawer`, with `data-shot-drawer` from its `shot` prop;
+  `data-shot="confirm"` on the confirm dialog; `data-shot="sheet"` on any other sheet;
+  `data-shot="page"` on the content region of `AppLayout` and `AdminLayout`;
+  `data-shot="empty" | "error" | "loading"` on the shared state components, which is how a
+  recipe refuses to photograph a spinner or an empty table.
+- **Every `FormDrawer` call site passes `shot`:** a stable kebab-case id (`device-new`,
+  `profile-defMetric`). Its `title` is translated, so it cannot be selected on.
+- **Page-specific anchors** (`data-shot="device-new-button"`) go on an element only when a
+  recipe must open something no primitive covers. Prefer an existing `data-testid` where it
+  already sits on the right element.
+- **`data-shot-mask`** marks a region whose content moves on its own (a live time, a live
+  reading, a connectivity status). A recipe that sets `mask: true` paints over every one.
+- **Ids are stable.** Renaming an anchor means renaming it in `hack/guide-capture/recipes.ts`
+  in the same change; `node hack/guide-capture/check-anchors.mjs` (a CI step in the frontend
+  job) greps the source for every anchor a recipe names and fails on a miss. It proves the
+  attribute exists, not that it sits on the right element; the capture run proves that.
+
 ## Gotchas
 
 - **Radix Tabs `forceMount` does not reliably hide inactive tab content in this Tailwind

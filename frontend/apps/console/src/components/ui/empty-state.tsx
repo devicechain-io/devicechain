@@ -18,7 +18,7 @@ export const EMPTY_STATE_ACTION_CLASS =
 
 export function EmptyState({ description, action }: EmptyStateProps) {
   return (
-    <div className="text-center py-12">
+    <div className="text-center py-12" data-shot="empty">
       <p className="text-muted-foreground text-sm">{description}</p>
       {action}
     </div>

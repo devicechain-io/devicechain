@@ -17,13 +17,13 @@ interface ErrorStateProps {
 export function ErrorState({ description, details, className }: ErrorStateProps) {
   if (details) {
     return (
-      <div className={cn('px-6 py-8 max-w-3xl mx-auto', className)}>
+      <div className={cn('px-6 py-8 max-w-3xl mx-auto', className)} data-shot="error">
         <ErrorBanner message={description} details={details} />
       </div>
     );
   }
   return (
-    <div className={cn('flex items-center justify-center h-64', className)}>
+    <div className={cn('flex items-center justify-center h-64', className)} data-shot="error">
       <p className="text-destructive text-sm">{description}</p>
     </div>
   );

@@ -10,8 +10,8 @@ import { join } from 'node:path';
 // depends on the sign-in UI. The sign-in screens get their own recipes.
 
 export interface Session {
-  /** localStorage `dc-auth` */
-  auth: { accessToken: string; refreshToken: string };
+  /** localStorage `dc-auth`; absent for a superuser session, which acts on the identity token alone. */
+  auth: { accessToken: string; refreshToken: string } | null;
   /** localStorage `dc-identity` */
   identity: {
     identityToken: string;
@@ -46,7 +46,8 @@ export function readSimHandshake(name: string): { email: string; password: strin
   return { email: rec.simEmail, password: rec.simPassword, tenant: rec.tenant };
 }
 
-export async function signIn(base: string, email: string, password: string, tenant: string): Promise<Session> {
+/** tenant omitted = identity-only session (the superuser, whose /admin console uses the identity token). */
+export async function signIn(base: string, email: string, password: string, tenant?: string): Promise<Session> {
   const { login } = await gql<{
     login: { identityToken: string; superuser: boolean; memberships: Session['identity']['memberships'] };
   }>(
@@ -58,15 +59,19 @@ export async function signIn(base: string, email: string, password: string, tena
      }`,
     { email, password },
   );
-  const { selectTenant } = await gql<{ selectTenant: Session['auth'] }>(
-    base,
-    `mutation SelectTenant($identityToken: String!, $tenant: String!) {
-       selectTenant(identityToken: $identityToken, tenant: $tenant) { accessToken refreshToken }
-     }`,
-    { identityToken: login.identityToken, tenant },
-  );
+  let auth: Session['auth'] = null;
+  if (tenant) {
+    const { selectTenant } = await gql<{ selectTenant: { accessToken: string; refreshToken: string } }>(
+      base,
+      `mutation SelectTenant($identityToken: String!, $tenant: String!) {
+         selectTenant(identityToken: $identityToken, tenant: $tenant) { accessToken refreshToken }
+       }`,
+      { identityToken: login.identityToken, tenant },
+    );
+    auth = { accessToken: selectTenant.accessToken, refreshToken: selectTenant.refreshToken };
+  }
   return {
-    auth: { accessToken: selectTenant.accessToken, refreshToken: selectTenant.refreshToken },
+    auth,
     identity: {
       identityToken: login.identityToken,
       superuser: login.superuser,

@@ -205,6 +205,7 @@ export function ConfigurationDeclarationPanel({ profileToken }: { profileToken: 
       </div>
 
       <FormDrawer
+        shot="profile-configuration-key"
         open={drawer.open}
         onOpenChange={(open) => setDrawer((s) => ({ ...s, open }))}
         title={drawer.existing ? t('deviceProfiles:cfgEditTitle') : t('deviceProfiles:cfgNewTitle')}

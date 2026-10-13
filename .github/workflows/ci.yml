@@ -1540,6 +1540,12 @@ jobs:
       - name: Release package plumbing tests
         run: npm run test:scripts
 
+      # The user-guide screenshot recipes select on data-shot* attributes; a refactor that
+      # drops one would only show up in a capture run against a live instance. This reads
+      # recipes.ts and greps the console source, so it needs no dependencies and no cluster.
+      - name: Guide capture anchors present
+        run: node ../hack/guide-capture/check-anchors.mjs
+
       - name: Install dependencies
         run: npm ci
 

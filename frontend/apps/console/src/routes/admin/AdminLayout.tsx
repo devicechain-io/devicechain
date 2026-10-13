@@ -62,7 +62,7 @@ export default function AdminLayout() {
             </span>
           </div>
         </header>
-        <div className="app-gradient flex min-h-0 flex-1 flex-col">
+        <div data-shot="page" className="app-gradient flex min-h-0 flex-1 flex-col">
           <ErrorBoundary key={pathname}>
             <Outlet />
           </ErrorBoundary>

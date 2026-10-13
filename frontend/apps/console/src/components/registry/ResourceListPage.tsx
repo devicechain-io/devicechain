@@ -57,7 +57,7 @@ export function ResourceListPage<T>({ resource }: { resource: RegistryResource<T
         </Button>
       }
     >
-      <FormDrawer open={creating} onOpenChange={setCreating} title={e('New')}>
+      <FormDrawer open={creating} onOpenChange={setCreating} title={e('New')} shot={`${resource.i18nKey}-new`}>
         {resource.renderForm(undefined, (m) => {
           toast(m);
           setCreating(false);

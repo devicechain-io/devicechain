@@ -187,6 +187,7 @@ export function VersionsPanel<V extends PublishedVersion>({
       </div>
 
       <FormDrawer
+        shot="version-publish"
         open={publishing}
         onOpenChange={(open) => {
           setPublishing(open);

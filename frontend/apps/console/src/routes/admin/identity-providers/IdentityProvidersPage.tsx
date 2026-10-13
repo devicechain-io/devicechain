@@ -56,7 +56,7 @@ export default function IdentityProvidersPage() {
         </Button>
       }
     >
-      <FormDrawer open={creating} onOpenChange={setCreating} title={t('newDrawerTitle')}>
+      <FormDrawer shot="identity-provider-new" open={creating} onOpenChange={setCreating} title={t('newDrawerTitle')}>
         <IdpCreateForm
           onDone={(token) => {
             toast(t('createdToast', { token }));

@@ -300,11 +300,11 @@ function DeviceStatePanel({ deviceToken }: { deviceToken: string }) {
         */}
         <dd className="text-foreground">{sourceKey ? t(sourceKey) : state.presenceSource}</dd>
         <dt className="text-muted-foreground">{t('lastConnectLabel')}</dt>
-        <dd className="text-foreground">{formatTime(state.lastConnectTime)}</dd>
+        <dd className="text-foreground" data-shot-mask>{formatTime(state.lastConnectTime)}</dd>
         <dt className="text-muted-foreground">{t('lastActivityLabel')}</dt>
-        <dd className="text-foreground">{formatTime(state.lastActivityTime)}</dd>
+        <dd className="text-foreground" data-shot-mask>{formatTime(state.lastActivityTime)}</dd>
         <dt className="text-muted-foreground">{t('lastDisconnectLabel')}</dt>
-        <dd className="text-foreground">{formatTime(state.lastDisconnectTime)}</dd>
+        <dd className="text-foreground" data-shot-mask>{formatTime(state.lastDisconnectTime)}</dd>
       </dl>
     </div>
   );
@@ -340,8 +340,8 @@ function DeviceReadingsPanel({ deviceToken }: { deviceToken: string }) {
         {readings.map((m) => (
           <DataTableRow key={m.id}>
             <DataTableCell className="font-medium text-foreground">{m.name}</DataTableCell>
-            <DataTableCell className="font-mono text-foreground">{m.value ?? '—'}</DataTableCell>
-            <DataTableCell className="text-muted-foreground">{formatTime(m.occurredTime)}</DataTableCell>
+            <DataTableCell className="font-mono text-foreground" data-shot-mask>{m.value ?? '—'}</DataTableCell>
+            <DataTableCell className="text-muted-foreground" data-shot-mask>{formatTime(m.occurredTime)}</DataTableCell>
           </DataTableRow>
         ))}
       </DataTableBody>
@@ -380,7 +380,7 @@ function DeviceEventsPanel({ deviceToken }: { deviceToken: string }) {
         <DataTableBody>
           {results.map((event) => (
             <DataTableRow key={event.id}>
-              <DataTableCell className="text-muted-foreground">
+              <DataTableCell className="text-muted-foreground" data-shot-mask>
                 {formatTime(event.occurredTime)}
               </DataTableCell>
               <DataTableCell className="text-foreground">

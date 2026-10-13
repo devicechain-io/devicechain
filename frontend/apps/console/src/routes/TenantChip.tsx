@@ -17,7 +17,7 @@ export function TenantChip() {
 
   const label = tenant.name || tenant.token;
   return (
-    <div className="flex items-center gap-2 rounded-md border border-border bg-card px-2.5 py-1">
+    <div data-shot="tenant-chip" className="flex items-center gap-2 rounded-md border border-border bg-card px-2.5 py-1">
       {logo ? (
         <img src={logo} alt="" className="size-6 rounded object-contain" />
       ) : (

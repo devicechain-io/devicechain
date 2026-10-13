@@ -144,7 +144,7 @@ export default function DashboardsPage() {
           navigate(`/dashboards/${encodeURIComponent(token)}`);
         }}
       />
-      <FormDrawer open={creating} onOpenChange={setCreating} title={t('newDashboard')}>
+      <FormDrawer shot="dashboard-new" open={creating} onOpenChange={setCreating} title={t('newDashboard')}>
         <DashboardCreateForm
           onDone={(token) => {
             toast(t('created', { token }));

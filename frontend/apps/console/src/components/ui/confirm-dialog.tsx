@@ -132,6 +132,7 @@ export function ConfirmProvider({ children }: { children: React.ReactNode }) {
             // reference + dev warning. When a description IS present, let Radix
             // wire it (don't pass the prop, or the linkage breaks).
             {...(description == null ? { 'aria-describedby': undefined } : {})}
+            data-shot="confirm"
             className={cn(
               'fixed left-1/2 top-1/2 z-50 grid w-full max-w-md -translate-x-1/2 -translate-y-1/2 gap-4',
               'rounded-lg border bg-background p-6 shadow-lg',
