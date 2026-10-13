@@ -78,7 +78,11 @@ asignación se rechaza mientras `allowUnverifiedArtifacts` esté desactivado. Un
 [dispositivo deshabilitado](../guides/device-credentials.md#disabling-a-device) se rechaza con
 `DEVICE_DISABLED`; mientras un dispositivo está deshabilitado, sus informes de actualización y
 solicitudes de descarga se descartan y un enlace de descarga que ya tenía deja de funcionar, hasta
-que se vuelve a habilitar. Un dispositivo trabaja hacia **un objetivo por componente**:
+que se vuelve a habilitar. Deshabilitar no cancela una actualización en curso: los
+[plazos](#deadlines) siguen corriendo y pueden pasarla a `TIMED_OUT` o `UNKNOWN`; si el dispositivo
+se vuelve a habilitar antes de que venza el plazo de la fase, su siguiente informe continúa la
+actualización y un enlace de descarga que ya tenía vuelve a funcionar. Un dispositivo trabaja hacia
+**un objetivo por componente**:
 
 - asignar mientras la actualización anterior del componente sigue en curso se rechaza hasta que esa
   actualización se cancele;

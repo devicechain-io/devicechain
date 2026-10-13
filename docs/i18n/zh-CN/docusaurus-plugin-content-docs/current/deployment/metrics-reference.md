@@ -55,7 +55,7 @@ title: 指标参考
 | `alarm_event_dead_lettered_total` | 无法发布到告警事件流而改写入死信流的告警状态变更事件。每一条都是到达了数据库却没有到达总线的告警转换，因此没有人因此被通知，它对运维人员可见，而不是只写进日志。 |
 | `callout_in_flight` | 此刻正在授权的设备认证标注请求。 |
 | `callout_refused_busy_total` | 因达到并发上限而以通用拒绝回应的设备认证标注请求。 |
-| `config_reports_rejected_total{reason}` | device-management 拒绝的 [device-reports 主题](../guides/connecting-a-device.md#reserved-device-topics)消息：`malformed`（无法解码）、`throttled`（在单设备冷却期内的 sync）、`unattributable`（主题中没有租户或设备）、`unknown_device`、`unknown_revision`、`digest_mismatch` 和 `stale`（比已记录的更旧）。某一批设备持续产生此类拒绝，说明设备端存在缺陷。 |
+| `config_reports_rejected_total{reason}` | device-management 拒绝的 [device-reports 主题](../guides/connecting-a-device.md#reserved-device-topics)消息：`malformed`（无法解码）、`throttled`（在单设备冷却期内的 sync）、`unattributable`（主题中没有租户或设备）、`unknown_device`、`unknown_revision`、`digest_mismatch`、`stale`（比已记录的更旧）和 `device_disabled`（设备已被[停用](../guides/device-credentials.md#disabling-a-device)）。某一批设备持续产生此类拒绝，说明设备端存在缺陷。 |
 | `credential_misconfigured_total{path}` | 因存储的密钥永远无法匹配而被拒绝的设备凭据检查：未存储任何密钥，或其摘要由与本实例根密钥所派生的不同密钥生成（最可能是数据库被恢复到了错误的根密钥旁）。path="connect" 是 MQTT 认证标注，path="event" 是逐事件检查。错误密码不在此计数。 |
 | `device_reports_dead_lettered_total` | 因无法理解或引用了设备没有的配置修订而写入死信流的设备消息。使用 `dcctl dead-letters` 查看。 |
 | `geofence_set_publish_failures_total` | 无法发布的地理围栏集清单：序列化错误、代理拒绝或传输故障。每一条都表示事件处理未被告知某次围栏编辑，因此该租户的包含判定沿用先前的围栏集，直到协调扫描将其修复。持续的非零速率表示围栏编辑没有到达检测引擎。 |
@@ -177,7 +177,7 @@ title: 指标参考
 | `device_info_attribute_write_errors_total` | 采集到的设备信息属性未能写入 device-management 的次数；在该设备下次采集时重新写入。 |
 | `device_info_attribute_writes_shed_total` | 因属性写入池繁忙而丢弃的已采集属性批次；在该设备下次采集时写入。持续增长说明 device-management 响应缓慢。 |
 | `device_info_harvest_retries_total` | 因设备未响应而重试一次的设备信息采集。 |
-| `device_info_harvest_skipped_total` | 未执行的设备信息采集请求：该设备在过去一小时内已采集过、其分片队列已满，或设备已不可达。 |
+| `device_info_harvest_skipped_total` | 未执行的设备信息采集请求：该设备在过去一小时内已采集过、其分片队列已满、设备已不可达，或设备已被停用（或无法确认其是否被停用）。 |
 | `device_info_harvests_total{outcome}` | 设备变为可达时执行的设备信息读取，按结果区分：`complete`（全部资源已读取）、`partial`（部分缺失）、`empty`（有响应但未提供任何资源）、`unanswered`（未响应）。 |
 | `devices_registered_total` | 首次 LwM2M 注册时自动创建的设备。 |
 | `handshakes_total` | 完成的 DTLS 握手（每次都是一个新的已认证 LwM2M 会话）。 |
@@ -185,6 +185,7 @@ title: 指标参考
 | `notifies_received_total` | 在被观察对象实例上收到的 LwM2M Notify 消息。 |
 | `observe_terminal_notifications_total` | 终止了一次观察的通知（RFC 7641，例如被观察实例被删除后的 4.04）。 |
 | `presence_dropped_total` | 被丢弃的在线状态转换：不自动注册凭据下的未注册设备，或持久发出预算已用尽。 |
+| `registrations_disabled_refused_total` | 因运维人员已停用设备而被拒绝的注册（`4.03`），以及在下一次更新时被终止的注册（`4.04`）。 |
 | `sessions_rejected_total` | 因达到在线会话上限（maxSessions）而被拒绝的新会话。 |
 | `telemetry_devices_registered_total` | 首个遥测样本时自动创建的设备（罕见：LwM2M 设备在 /rd 注册时创建）。 |
 | `telemetry_tenant_deleted_dropped_total` | 因租户已被删除、数据正在回收而丢弃的遥测样本。 |
@@ -235,8 +236,8 @@ title: 指标参考
 | `update_desired_publish_failures_total` | 无法写入设备 desired 主题的更新分配、下载授权和取消消息。设备会在下次 sync 时获取该状态。 |
 | `update_download_bytes_total` | 向设备流式传输的制品字节数。 |
 | `update_download_grants_total{result}` | 设备申请的下载授权，按结果分类：`granted`，或未授予的原因（`unknown_assignment`、`superseded`、`finished`、`cancel_requested`、`artifact_unavailable`、`not_configured`、`error`）。 |
-| `update_downloads_total{result}` | 制品下载请求，按结果分类：`served`、`aborted`（客户端离开或传输中途无法读取对象），或在发送任何字节前被拒绝的原因（`capability_malformed`、`capability_invalid`、`capability_expired`、`stale`、`gone`、`range_not_satisfiable`、`busy`、`error`）。`capability_invalid` 速率上升说明有人在猜测。 |
-| `update_reports_rejected_total{reason}` | update-management 在应用前拒绝的设备消息：`malformed`、`unattributable` 和 `throttled`。 |
+| `update_downloads_total{result}` | 制品下载请求，按结果分类：`served`、`aborted`（客户端离开或传输中途无法读取对象），或在发送任何字节前被拒绝的原因（`capability_malformed`、`capability_invalid`、`capability_expired`、`stale`、`gone`、`range_not_satisfiable`、`busy`、`device_disabled`、`error`）。`capability_invalid` 速率上升说明有人在猜测。 |
+| `update_reports_rejected_total{reason}` | update-management 在应用前拒绝的设备消息：`malformed`、`unattributable`、`throttled` 和 `device_disabled`（设备已被停用）。 |
 | `update_reports_total{verdict}` | 更新进度和清单报告，按更新状态机给出的结论分类：`APPLIED`，或未应用的原因（`DUPLICATE`、`STALE_ATTEMPT`、`DIGEST_MISMATCH`、`WRONG_COMPONENT`、`REGRESSION`、`UNCONFIRMED`、`NOT_CANCELLABLE`、`LATE`、`CONFLICT`、`INVALID_ATTEMPT`、`WRONG_KIND`、`UNKNOWN_ASSIGNMENT`）。某一批设备的未应用速率上升说明设备端存在缺陷。 |
 
 ## 所有服务 {#every-service}
