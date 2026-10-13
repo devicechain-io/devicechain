@@ -72,7 +72,12 @@ func parseTrustedKeys(pems []string) (map[string]any, error) {
 			default:
 				return nil, fmt.Errorf("%w (entry %d)", ErrBadTrustedKey, i)
 			}
-			sum := sha256.Sum256(blk.Bytes)
+			// The canonical DER of the parsed key, not the bytes as the PEM happened to carry them.
+			der, err := x509.MarshalPKIXPublicKey(pub)
+			if err != nil {
+				return nil, fmt.Errorf("%w (entry %d)", ErrBadTrustedKey, i)
+			}
+			sum := sha256.Sum256(der)
 			keys[hex.EncodeToString(sum[:])] = pub
 		}
 		if found == 0 {

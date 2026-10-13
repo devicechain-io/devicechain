@@ -15,6 +15,7 @@ import (
 	"encoding/pem"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/devicechain-io/dc-microservice/ota"
@@ -172,10 +173,10 @@ func TestTrustedKeysAreValidated(t *testing.T) {
 	require.ErrorIs(t, err, updater.ErrBadTrustedKey, "only P-256 is accepted")
 }
 
-// The signed golden fixtures are genuinely signed: the device accepts them, and each verifies
-// under the fixture's own public key over the fixture digest's raw bytes. A fixture that merely
-// parsed would let the contract and the device agree on a signature nobody can verify.
-func TestSignedFixturesAreAcceptedAndVerify(t *testing.T) {
+// The device accepts the signed golden fixtures. That they are genuinely signed (verify under the
+// fixture's own key over the raw digest) is pinned where the fixtures live, in the contract
+// package's TestSignedFixturesVerify.
+func TestTheDeviceAcceptsEverySignedFixture(t *testing.T) {
 	dir := filepath.Join("..", "..", "..", "core", "ota", "testdata", "update")
 	for name, keyFile := range map[string]string{
 		"update-assignment-signed-ecdsa":   "signer-ecdsa-p256.pub.pem",
@@ -191,5 +192,88 @@ func TestSignedFixturesAreAcceptedAndVerify(t *testing.T) {
 		c.client = c.open()
 		require.NoError(t, c.client.HandleDesired(ctx, raw), name)
 		require.Equal(t, "att-0001", c.client.Updater().Snapshot().AttemptID, name)
+	}
+}
+
+func TestSignatureStillCheckedWhenUnsignedIsAllowed(t *testing.T) {
+	for _, alg := range []string{ota.AlgorithmECDSAP256SHA256, ota.AlgorithmEd25519} {
+		t.Run(alg+" corrupted", func(t *testing.T) {
+			s := newSigner(t, alg)
+			r := signedRig(t, s, s)
+			r.cfg.RequireSignature = updater.RequireSignatureOption(false)
+			r.up = r.open()
+			r.up.SetFaults(updater.Faults{CorruptSignature: true})
+			requireFailsWith(t, r, "SIGNATURE_INVALID")
+		})
+		t.Run(alg+" foreign key", func(t *testing.T) {
+			s, other := newSigner(t, alg), newSigner(t, alg)
+			r := signedRig(t, s, other)
+			r.cfg.RequireSignature = updater.RequireSignatureOption(false)
+			r.up = r.open()
+			requireFailsWith(t, r, "UNKNOWN_SIGNER")
+		})
+	}
+}
+
+func TestUnsupportedAlgorithmAndTrustAreRefused(t *testing.T) {
+	s := newSigner(t, ota.AlgorithmEd25519)
+	r := signedRig(t, s, s)
+	r.asg.Algorithm = "RSA_PKCS1"
+	requireFailsWith(t, r, "SIGNATURE_INVALID")
+
+	r = signedRig(t, s, s)
+	r.asg.Trust = "FOO"
+	r.assign()
+	r.runToEnd()
+	a := r.platform.Attempt()
+	assert.Equal(t, ota.StateFailed, a.State)
+	require.NotNil(t, a.Failure)
+	assert.Equal(t, "SIGNATURE_INVALID", a.Failure.Code)
+	assert.NotContains(t, stages(r.link), "VERIFIED")
+}
+
+func TestHandleDesiredRefusesTrustThatDisagreesWithItsSignatureFields(t *testing.T) {
+	r := newClientRig(t)
+	d := "sha256:" + strings.Repeat("a", 64)
+	body := func(trust, extra string) []byte {
+		return []byte(`{"v":1,"kind":"update.assignment","attemptId":"att-9","assignmentId":"asg-9","component":"firmware",` +
+			`"trust":"` + trust + `","artifact":{"version":"2","digest":"` + d + `","size":1,"requiresReboot":false}` + extra + `}`)
+	}
+	key := `"keyId":"` + strings.Repeat("a", 64) + `"`
+	sig := `"signature":"AAAA"`
+	alg := `"algorithm":"ED25519"`
+	for name, b := range map[string][]byte{
+		"UNVERIFIED with all three": body("UNVERIFIED", ","+sig+","+key+","+alg),
+		"UNVERIFIED with keyId":     body("UNVERIFIED", ","+key),
+		"UNVERIFIED with signature": body("UNVERIFIED", ","+sig),
+		"UNVERIFIED with algorithm": body("UNVERIFIED", ","+alg),
+		"SIGNED with nothing":       body("SIGNED", ""),
+		"SIGNED without signature":  body("SIGNED", ","+key+","+alg),
+		"SIGNED without keyId":      body("SIGNED", ","+sig+","+alg),
+		"SIGNED without algorithm":  body("SIGNED", ","+sig+","+key),
+		"unknown trust":             body("FOO", ""),
+	} {
+		assert.Error(t, r.client.HandleDesired(ctx, b), name)
+		assert.Empty(t, r.client.Updater().Snapshot().AttemptID, name+": nothing was assigned")
+	}
+	require.NoError(t, r.client.HandleDesired(ctx, body("SIGNED", ","+sig+","+key+","+alg)))
+}
+
+func TestReassigningWithADifferentSignatureIsRefused(t *testing.T) {
+	s := newSigner(t, ota.AlgorithmEd25519)
+	r := signedRig(t, s, s)
+	r.assign()
+	require.NoError(t, r.up.Assign(r.asg), "the identical assignment is a no-op")
+	for name, mut := range map[string]func(*updater.Assignment){
+		"signature": func(a *updater.Assignment) { a.Signature = base64.StdEncoding.EncodeToString(make([]byte, 64)) },
+		"keyId":     func(a *updater.Assignment) { a.KeyID = strings.Repeat("b", 64) },
+		"algorithm": func(a *updater.Assignment) { a.Algorithm = ota.AlgorithmECDSAP256SHA256 },
+		"trust": func(a *updater.Assignment) {
+			a.Trust, a.Signature, a.KeyID, a.Algorithm = ota.TrustUnverified, "", "", ""
+		},
+	} {
+		c := r.asg
+		mut(&c)
+		assert.Error(t, r.up.Assign(c), name)
 	}
 }

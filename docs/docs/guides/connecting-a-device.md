@@ -406,13 +406,30 @@ When an artifact is assigned to the device, the platform publishes on `device-de
 `component` names the part of the device to update; a device works on at most one assignment per component. `requiresReboot` is true for a firmware artifact and false for software and configuration. `trust` is `UNVERIFIED` or `SIGNED`. `UNVERIFIED` means the platform has checked that the bytes are the bytes that were declared, not who produced them; it carries no signature fields, and one that does is refused. `SIGNED` adds three fields, all required, as shown below, and the device **must** verify them before it reports `VERIFIED`: the platform relays the signature, the device decides whether to trust it.
 
 ```json
-{"v":1,"kind":"update.assignment","attemptId":"att-7f3k","assignmentId":"asg-91xq","component":"firmware","trust":"SIGNED","artifact":{"version":"1.4.2","digest":"sha256:…","size":8388608,"requiresReboot":true},"signature":"MEUCIQ…","keyId":"fb401ebc…","algorithm":"ECDSA_P256_SHA256"}
+{"v":1,"kind":"update.assignment","attemptId":"att-7f3k","assignmentId":"asg-91xq","component":"firmware","trust":"SIGNED","artifact":{"version":"1.4.2","digest":"sha256:…","size":8388608,"requiresReboot":true},"signature":"MEQCIHGf…","keyId":"f3ef3f7c…","algorithm":"ECDSA_P256_SHA256"}
 ```
 
 - `signature` is the detached signature, base64 with the standard alphabet.
 - `keyId` is 64 lowercase hex characters: the SHA-256 of the signer's public key as DER `SubjectPublicKeyInfo`. The device looks it up in the public keys it trusts.
 - `algorithm` is `ECDSA_P256_SHA256` (an ASN.1 DER signature, the form `cosign sign-blob` produces) or `ED25519`. Any other value is refused.
 - Both algorithms sign the **raw 32-byte SHA-256 digest** of the artifact, not its hex text and not the `sha256:` string. Ed25519 signs those 32 bytes directly as its message. Compute the digest from the bytes you downloaded, never from `artifact.digest`, and check it equals `artifact.digest` first.
+
+To produce a signature by hand (`file` is the artifact, `k.pem` the private key):
+
+```bash
+# keyId: SHA-256 of the public key as DER SubjectPublicKeyInfo
+openssl pkey -in k.pem -pubout -outform DER | openssl dgst -sha256
+
+# ECDSA_P256_SHA256 (a P-256 key): signs SHA-256(file)
+openssl dgst -sha256 -sign k.pem -binary file | base64 | tr -d '\n'
+cosign sign-blob --key k.key file          # the same signature, base64
+
+# ED25519: sign the 32 digest bytes themselves
+openssl dgst -sha256 -binary file > digest
+openssl pkeyutl -sign -rawin -inkey k.pem -in digest | base64 | tr -d '\n'
+```
+
+For Ed25519, `cosign` and `openssl pkeyutl -sign -rawin -in file` sign the **file**, not its digest, so a device would reject their signatures: use the `digest` form above. ECDSA is the algorithm `cosign sign-blob` is compatible with.
 
 If the signature does not verify, fail the update with `FAILED` and `result.code` `SIGNATURE_INVALID`. If `keyId` names a key the device does not trust, use `UNKNOWN_SIGNER`; use the same code for an `UNVERIFIED` assignment when the device requires signed images. Both are reported at the point the download ends (after `DOWNLOADED`, like a digest mismatch), and neither changes the stages above. A signature covers the image, not the version, so a device that must refuse downgrades has to enforce that itself.
 

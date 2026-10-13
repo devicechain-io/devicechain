@@ -210,6 +210,16 @@ func TestDownloadKindsDoNotBlend(t *testing.T) {
 	assert.Error(t, err)
 	_, err = DecodeDeviceReport([]byte(`{"v":1,"kind":"download.request","assignmentId":"a","attemptId":"b"}`))
 	assert.Error(t, err)
+	// The signature fields are known to the key scan so an assignment can carry them, but an
+	// UP report must still refuse them: its struct has no such field.
+	for _, extra := range []string{`"signature":"AAAA"`, `"keyId":"` + strings.Repeat("a", 64) + `"`, `"algorithm":"ED25519"`} {
+		_, err = DecodeDeviceReport([]byte(`{"v":1,"kind":"update.progress","attemptId":"a","assignmentId":"b","component":"firmware",` +
+			`"artifactDigest":"sha256:` + strings.Repeat("a", 64) + `","seq":1,"stage":"RECEIVED","bootId":"b",` + extra + `}`))
+		assert.Error(t, err, extra)
+		_, err = DecodeDeviceReport([]byte(`{"v":1,"kind":"update.inventory","component":"firmware","bootId":"b",` +
+			`"running":{"version":"1"},` + extra + `}`))
+		assert.Error(t, err, extra)
+	}
 	// A down kind is not an up kind.
 	_, err = DecodeDeviceReport([]byte(`{"v":1,"kind":"download.grant","assignmentId":"a","url":"https://x.test/","expiresAt":"2026-10-11T12:00:00Z"}`))
 	assert.ErrorContains(t, err, "unknown report kind")
@@ -233,10 +243,12 @@ func TestSignedFixturesVerify(t *testing.T) {
 		require.NoError(t, err)
 		blk, _ := pem.Decode(pemBytes)
 		require.NotNil(t, blk, name)
-		id := sha256.Sum256(blk.Bytes)
-		assert.Equal(t, hex.EncodeToString(id[:]), a.KeyID, name)
 		pub, err := x509.ParsePKIXPublicKey(blk.Bytes)
 		require.NoError(t, err, name)
+		der, err := x509.MarshalPKIXPublicKey(pub)
+		require.NoError(t, err, name)
+		id := sha256.Sum256(der)
+		assert.Equal(t, hex.EncodeToString(id[:]), a.KeyID, name)
 		digest, err := hex.DecodeString(strings.TrimPrefix(a.Artifact.Digest, "sha256:"))
 		require.NoError(t, err)
 		sig, err := base64.StdEncoding.DecodeString(a.Signature)

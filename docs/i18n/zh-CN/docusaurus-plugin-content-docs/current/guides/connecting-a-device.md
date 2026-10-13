@@ -398,13 +398,30 @@ mutation {
 `component` 指明要更新的设备部件；每个部件上设备最多同时处理一个分配。固件制品的 `requiresReboot` 为 true，软件和配置制品为 false。`trust` 为 `UNVERIFIED` 或 `SIGNED`。`UNVERIFIED` 表示平台只检查了字节是否与声明的一致，而不检查由谁生成；它不携带签名字段，携带则会被拒绝。`SIGNED` 增加三个字段，全部必填，如下所示，设备在报告 `VERIFIED` 之前**必须**验证它们：平台只转发签名，是否信任由设备决定。
 
 ```json
-{"v":1,"kind":"update.assignment","attemptId":"att-7f3k","assignmentId":"asg-91xq","component":"firmware","trust":"SIGNED","artifact":{"version":"1.4.2","digest":"sha256:…","size":8388608,"requiresReboot":true},"signature":"MEUCIQ…","keyId":"fb401ebc…","algorithm":"ECDSA_P256_SHA256"}
+{"v":1,"kind":"update.assignment","attemptId":"att-7f3k","assignmentId":"asg-91xq","component":"firmware","trust":"SIGNED","artifact":{"version":"1.4.2","digest":"sha256:…","size":8388608,"requiresReboot":true},"signature":"MEQCIHGf…","keyId":"f3ef3f7c…","algorithm":"ECDSA_P256_SHA256"}
 ```
 
 - `signature` 是分离式签名，使用标准字母表的 base64。
 - `keyId` 是 64 个小写十六进制字符：签名者公钥按 DER `SubjectPublicKeyInfo` 编码后的 SHA-256。设备在其信任的公钥中查找它。
 - `algorithm` 为 `ECDSA_P256_SHA256`（ASN.1 DER 签名，即 `cosign sign-blob` 产生的形式）或 `ED25519`。其他取值会被拒绝。
 - 两种算法签名的都是制品的**原始 32 字节 SHA-256 摘要**，而不是其十六进制文本，也不是 `sha256:` 字符串。Ed25519 直接以这 32 字节作为消息。请根据下载到的字节计算摘要，而不是取自 `artifact.digest`，并先确认它等于 `artifact.digest`。
+
+手工生成签名（`file` 是制品，`k.pem` 是私钥）：
+
+```bash
+# keyId：公钥按 DER SubjectPublicKeyInfo 编码后的 SHA-256
+openssl pkey -in k.pem -pubout -outform DER | openssl dgst -sha256
+
+# ECDSA_P256_SHA256 （P-256 密钥）：对 SHA-256(file) 签名
+openssl dgst -sha256 -sign k.pem -binary file | base64 | tr -d '\n'
+cosign sign-blob --key k.key file          # 同样的签名，base64
+
+# ED25519：对 32 字节摘要本身签名
+openssl dgst -sha256 -binary file > digest
+openssl pkeyutl -sign -rawin -inkey k.pem -in digest | base64 | tr -d '\n'
+```
+
+对于 Ed25519，`cosign` 和 `openssl pkeyutl -sign -rawin -in file` 签名的是**文件**而不是其摘要，设备会拒绝这样的签名：请使用上面的 `digest` 形式。ECDSA 是与 `cosign sign-blob` 兼容的算法。
 
 如果签名验证失败，以 `FAILED` 终止更新，`result.code` 为 `SIGNATURE_INVALID`。如果 `keyId` 指向设备不信任的密钥，使用 `UNKNOWN_SIGNER`；当设备要求签名镜像而收到 `UNVERIFIED` 分配时，也使用该代码。二者都在下载结束时报告（在 `DOWNLOADED` 之后，与摘要不匹配相同），并且都不会改变上述阶段。签名覆盖的是镜像而不是版本，因此需要拒绝降级的设备必须自行实施。
 
