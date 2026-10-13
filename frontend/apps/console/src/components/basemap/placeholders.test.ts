@@ -28,29 +28,61 @@
 // packages/widgets/src/sim-dashboard-fixture.test.ts.
 
 import { existsSync, readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { dirname, resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
-// The shared chunk carrying Tile.prototype.getTileURL.
+// The code the console actually bundles: the package's ESM entry, plus every chunk it
+// pulls in through a relative static import.
 //
-// Both paths are resolved from the package root (vitest's cwd), not from this file,
+// 🔴 NOT A FIXED CHUNK NAME. This used to read dist/maplibre-gl-shared.mjs, where
+// Tile.prototype.getTileURL lived through 6.12. In 6.13 the entry stopped importing
+// that chunk and inlined the tile code instead, yet the file still ships — so a
+// hardcoded path would go on reading a file that exists and that nothing loads.
+// Following the entry's own imports reads whatever the bundler is handed, however the
+// next release splits it.
+//
+// Every path is resolved from the package root (vitest's cwd), not from this file,
 // because `import.meta.url` is not a file: URL under the jsdom environment.
-const MAPLIBRE_SOURCE = resolve(
-  process.cwd(),
-  '../../node_modules/maplibre-gl/dist/maplibre-gl-shared.mjs',
-);
+const MAPLIBRE_PACKAGE = resolve(process.cwd(), '../../node_modules/maplibre-gl');
 
 const GO_VALIDATOR = resolve(
   process.cwd(),
   '../../../backend/services/user-management/basemap/basemap.go',
 );
 
+/** The ESM entry named by the package's `exports['.'].import`. */
+function maplibreEntry(): string {
+  const pkg = JSON.parse(readFileSync(resolve(MAPLIBRE_PACKAGE, 'package.json'), 'utf8'));
+  const entry = pkg.exports?.['.']?.import;
+  if (typeof entry !== 'string') {
+    throw new Error("maplibre-gl's package.json has no exports['.'].import string");
+  }
+  return resolve(MAPLIBRE_PACKAGE, entry);
+}
+
+/** The entry and every module reachable from it through relative static imports. */
+function maplibreSources(): string[] {
+  const seen = new Set<string>();
+  const queue = [maplibreEntry()];
+  while (queue.length > 0) {
+    const file = queue.shift()!;
+    if (seen.has(file)) continue;
+    seen.add(file);
+    const src = readFileSync(file, 'utf8');
+    for (const m of src.matchAll(/(?:\bfrom|\bimport)\s*["'`](\.{1,2}\/[^"'`]+\.m?js)["'`]/g)) {
+      queue.push(resolve(dirname(file), m[1]));
+    }
+  }
+  return [...seen].map((file) => readFileSync(file, 'utf8'));
+}
+
 /** Every `{token}` MapLibre substitutes, read out of its `.replace(/{token}/g, …)` chain. */
 function rendererTokens(): Set<string> {
-  const src = readFileSync(MAPLIBRE_SOURCE, 'utf8');
   const found = new Set<string>();
-  for (const m of src.matchAll(/\.replace\(\/\\?\{([a-z0-9-]+)\\?\}\/g/gi)) {
-    found.add(m[1]);
+  for (const src of maplibreSources()) {
+    for (const m of src.matchAll(/\.replace\(\/\\?\{([a-z0-9-]+)\\?\}\/g/gi)) {
+      found.add(m[1]);
+    }
   }
   return found;
 }
@@ -73,7 +105,8 @@ describe('the placeholder allow-list', () => {
   it('can actually read both sides', () => {
     // 🔴 Path first. readFileSync would throw anyway, but a named assertion turns
     // "some file moved" into a one-line diagnosis instead of an ENOENT stack.
-    expect(existsSync(MAPLIBRE_SOURCE), `no MapLibre source at ${MAPLIBRE_SOURCE}`).toBe(true);
+    expect(existsSync(MAPLIBRE_PACKAGE), `no MapLibre package at ${MAPLIBRE_PACKAGE}`).toBe(true);
+    expect(existsSync(maplibreEntry()), `no MapLibre entry at ${maplibreEntry()}`).toBe(true);
     expect(existsSync(GO_VALIDATOR), `no Go validator at ${GO_VALIDATOR}`).toBe(true);
 
     const renderer = rendererTokens();

@@ -11,7 +11,11 @@
 // comment; an enforcer nothing exercises is a comment with a function signature.
 
 import '@/i18n/config';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render as rtlRender, screen, waitFor } from '@testing-library/react';
+import { ConfirmProvider } from '@/components/ui/confirm-dialog';
+
+// The form confirms a lossy save through the app-level confirm dialog, so it renders inside one.
+const render = (ui: Parameters<typeof rtlRender>[0]) => rtlRender(ui, { wrapper: ConfirmProvider });
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // The form talks to three areas on mount. None of them is what this file measures, and a real
@@ -36,6 +40,7 @@ vi.mock('@/lib/api/event-processing', () => ({ validateDetectionRule: vi.fn(asyn
 import { DetectionRuleForm } from './DetectionRuleForm';
 import { updateDetectionRule, createDetectionRule } from '@/lib/api/device-management';
 import type { DetectionRule } from '@/lib/api/device-management';
+import { lostFields } from './rule-equal';
 
 afterEach(cleanup);
 beforeEach(() => vi.clearAllMocks());
@@ -219,5 +224,78 @@ describe('opening a rule of a type the form does not model', () => {
     await waitFor(() => expect(updateDetectionRule).toHaveBeenCalledTimes(1));
     const sent = JSON.parse((vi.mocked(updateDetectionRule).mock.calls[0][1] as { definition: string }).definition);
     expect(sent).toEqual(connectivity);
+  });
+});
+
+// 🔴 A LOSSY SAVE IS CONFIRMED, NOT JUST WARNED ABOUT. The banner alone left Save one click
+// away from replacing the stored definition with less of it. Save now asks first, names what
+// would go, and Cancel writes nothing.
+describe('saving a rule the form cannot fully hold', () => {
+  const CONFIRM_TITLE = /Save and lose part of this rule/;
+  const lossy = JSON.stringify({
+    ...JSON.parse(threshold),
+    futureKnob: 'a field from a later release',
+    actions: [{ type: 'httpCall', httpCall: { url: 'https://hooks.example.com/a', retries: 3 } }],
+  });
+
+  it('names what would be lost, and Cancel saves nothing', async () => {
+    render(<DetectionRuleForm profileToken="p" entity={rule(lossy)} onDone={() => {}} />);
+
+    fireEvent.click(screen.getByRole('button', { name: /save changes/i }));
+    const dialog = await screen.findByRole('dialog');
+    expect(dialog.textContent).toMatch(CONFIRM_TITLE);
+    expect(dialog.textContent).toContain('futureKnob');
+    expect(dialog.textContent).toContain('actions[0].httpCall.retries');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    await new Promise((r) => setTimeout(r, 50));
+    expect(updateDetectionRule).not.toHaveBeenCalled();
+  });
+
+  it('saves after Save anyway', async () => {
+    render(<DetectionRuleForm profileToken="p" entity={rule(lossy)} onDone={() => {}} />);
+
+    fireEvent.click(screen.getByRole('button', { name: /save changes/i }));
+    await screen.findByRole('dialog');
+    expect(updateDetectionRule).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Save anyway' }));
+    await waitFor(() => expect(updateDetectionRule).toHaveBeenCalledTimes(1));
+    const sent = JSON.parse((vi.mocked(updateDetectionRule).mock.calls[0][1] as { definition: string }).definition);
+    expect(sent.futureKnob).toBeUndefined();
+  });
+
+  it('shows the same detail in the banner', () => {
+    render(<DetectionRuleForm profileToken="p" entity={rule(lossy)} onDone={() => {}} />);
+    const banner = screen.getByText(WARNING).parentElement!;
+    expect(banner.textContent).toContain('futureKnob');
+    expect(banner.textContent).toContain('actions[0].httpCall.retries');
+  });
+
+  // The counterweight: a dialog on every save would be clicked through without reading.
+  it('saves a rule it holds completely with no dialog', async () => {
+    render(<DetectionRuleForm profileToken="p" entity={rule(threshold)} onDone={() => {}} />);
+
+    fireEvent.click(screen.getByRole('button', { name: /save changes/i }));
+    await waitFor(() => expect(updateDetectionRule).toHaveBeenCalledTimes(1));
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+});
+
+describe('lostFields', () => {
+  const base = { name: 'r', type: 'threshold', when: { metric: 'tempC', op: 'gt', threshold: 30 } };
+  it('names a dropped top-level key and a dropped field inside an action', () => {
+    const stored = JSON.stringify({ ...base, futureKnob: 1, actions: [{ type: 'publish', publish: { connectorRef: 'c', retries: 2 } }] });
+    const rebuilt = JSON.stringify({ ...base, actions: [{ type: 'publish', publish: { connectorRef: 'c' } }] });
+    expect(lostFields(stored, rebuilt)).toEqual(['futureKnob', 'actions[0].publish.retries']);
+  });
+  it('names the whole list when an action is dropped', () => {
+    const stored = JSON.stringify({ ...base, actions: [{ type: 'raiseAlarm' }, { type: 'sendCommand', sendCommand: { command: 'x' } }] });
+    const rebuilt = JSON.stringify({ ...base, actions: [{ type: 'raiseAlarm' }] });
+    expect(lostFields(stored, rebuilt)).toEqual(['actions']);
+  });
+  it('names nothing for a rule that survives', () => {
+    const s = JSON.stringify(base);
+    expect(lostFields(s, s)).toEqual([]);
   });
 });
