@@ -72,3 +72,21 @@ func TestAnAlarmStreamForAnUnknownOriginatorKeepsTheMiss(t *testing.T) {
 		t.Fatalf("the refusal %q lost the store's miss, so it is served with no NOT_FOUND code", err)
 	}
 }
+
+// Redeeming a claim on a device that has no claim is a miss, and a miss carries NOT_FOUND:
+// ErrClaimNotFound replaced the store's sentinel with a plain one, which dropped the code.
+func TestRedeemingAClaimThatDoesNotExistCarriesNotFound(t *testing.T) {
+	ctx := conflictWireCtx(t)
+	api := ctx.Value(gqlcore.ContextApiKey).(*model.Api)
+	if err := api.RDB.Database.WithContext(core.WithSystemContext(context.Background())).
+		AutoMigrate(&model.Device{}, &model.DeviceClaim{}); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	qe := onlyError(t, execServed(t, ctx,
+		`mutation($request: DeviceClaimRequest!) { claimDevice(request: $request) { id } }`,
+		map[string]any{"request": map[string]any{
+			"deviceToken": "ghost", "claimSecret": "s", "customerToken": "c", "relationshipType": "owns"}}))
+	if qe.Extensions["code"] != "NOT_FOUND" {
+		t.Fatalf("code = %v (%q), want NOT_FOUND", qe.Extensions["code"], qe.Message)
+	}
+}

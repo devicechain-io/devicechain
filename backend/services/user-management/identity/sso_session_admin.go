@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/auth"
+	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-user-management/iam"
 	"gorm.io/gorm"
 )
@@ -65,7 +66,7 @@ var (
 		Message: "no enabled identity provider connection serves this tenant, so requiring single sign-on would lock its people out; connect one first",
 	}
 	// ErrTenantNotFound is returned for a tenant that does not exist.
-	ErrTenantNotFound = errors.New("tenant not found")
+	ErrTenantNotFound = rdb.NewNotFound("tenant not found")
 	// ErrSsoEnforcedTenantStranded refuses disabling or deleting a connection, or dropping a
 	// tenant from it, when that would leave a tenant that requires single sign-on with no
 	// enabled connection serving it: the inverse of ErrSsoEnforceNoConnection.

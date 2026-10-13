@@ -22,7 +22,7 @@ import (
 
 // ErrOAuthClientNotFound is the sentinel the resolver layer maps to a not-found
 // result for a missing client_id.
-var ErrOAuthClientNotFound = errors.New("oauth client not found")
+var ErrOAuthClientNotFound = rdb.NewNotFound("oauth client not found")
 
 // clientSecretBytes is the entropy of a generated confidential-client secret: 32
 // random bytes → 43 base64url chars, comfortably under bcrypt's 72-byte input cap.

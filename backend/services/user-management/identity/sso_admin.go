@@ -31,7 +31,7 @@ import (
 
 var (
 	// ErrIdpNotFound is returned for a connection token that names nothing.
-	ErrIdpNotFound = errors.New("identity provider connection not found")
+	ErrIdpNotFound = rdb.NewNotFound("identity provider connection not found")
 	// ErrIdpInvalid carries the reason an administrator's input was refused.
 	ErrIdpInvalid = errors.New("invalid identity provider connection")
 	// ErrIdpNotApproved refuses enabling a connection whose discovery snapshot has not been
@@ -41,7 +41,7 @@ var (
 	// was shown.
 	ErrIdpFingerprint = errors.New("the discovery snapshot changed since you reviewed it; review it again")
 	// ErrLinkRequestNotFound is returned for a link request that does not exist (or no longer).
-	ErrLinkRequestNotFound = errors.New("link request not found")
+	ErrLinkRequestNotFound = rdb.NewNotFound("link request not found")
 	// ErrDispositionRequired refuses approving a link for an identity that already holds
 	// memberships in the connection's tenants without saying what becomes of them.
 	ErrDispositionRequired = errors.New("this identity already has manual memberships in the connection's tenants; choose 'convert' or 'keep_manual'")
