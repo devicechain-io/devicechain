@@ -332,6 +332,8 @@ export type DeviceCreateRequest = {
   description?: string | null | undefined;
   /** Token of the device's type. An unknown token fails the request. */
   deviceTypeToken: string;
+  /** False to create the device already disabled. Omitted or null creates it enabled. */
+  enabled?: boolean | null | undefined;
   /**
    * Optional business identifier, up to 256 characters. A value another device in the
    * tenant already has is refused with CONFLICT.
@@ -586,6 +588,11 @@ export type DeviceUpdateRequest = {
    * whole update.
    */
   deviceTypeToken?: string | null | undefined;
+  /**
+   * False to disable the device, true to enable it again. An explicit null is refused.
+   * Disabling a device that is already disabled keeps the time it was first disabled.
+   */
+  enabled?: boolean | null | undefined;
   /** New business identifier, or null to clear it. A value another device already has is refused with CONFLICT. */
   externalId?: string | null | undefined;
   /** New metadata (valid JSON, replacing the stored document), or null to clear it. */
@@ -1210,21 +1217,21 @@ export type DevicesQueryVariables = Exact<{
 }>;
 
 
-export type DevicesQuery = { devices: { results: Array<{ id: string, token: string, name: string | null, description: string | null, externalId: string | null, metadata: string | null, createdAt: string | null, deviceType: { id: string, token: string, name: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null } }>, pagination: { pageStart: number | null, pageEnd: number | null, totalRecords: number | null } } };
+export type DevicesQuery = { devices: { results: Array<{ id: string, token: string, name: string | null, description: string | null, externalId: string | null, metadata: string | null, createdAt: string | null, enabled: boolean, disabledAt: string | null, deviceType: { id: string, token: string, name: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null } }>, pagination: { pageStart: number | null, pageEnd: number | null, totalRecords: number | null } } };
 
 export type DeviceByTokenQueryVariables = Exact<{
   tokens: Array<string> | string;
 }>;
 
 
-export type DeviceByTokenQuery = { devicesByToken: Array<{ id: string, token: string, name: string | null, description: string | null, externalId: string | null, metadata: string | null, createdAt: string | null, deviceType: { id: string, token: string, name: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null } }> };
+export type DeviceByTokenQuery = { devicesByToken: Array<{ id: string, token: string, name: string | null, description: string | null, externalId: string | null, metadata: string | null, createdAt: string | null, enabled: boolean, disabledAt: string | null, deviceType: { id: string, token: string, name: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null } }> };
 
 export type CreateDeviceMutationVariables = Exact<{
   request?: DeviceCreateRequest | null | undefined;
 }>;
 
 
-export type CreateDeviceMutation = { createDevice: { id: string, token: string, name: string | null, description: string | null, externalId: string | null, metadata: string | null, createdAt: string | null, deviceType: { id: string, token: string, name: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null } } };
+export type CreateDeviceMutation = { createDevice: { id: string, token: string, name: string | null, description: string | null, externalId: string | null, metadata: string | null, createdAt: string | null, enabled: boolean, disabledAt: string | null, deviceType: { id: string, token: string, name: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null } } };
 
 export type CreateDevicesMutationVariables = Exact<{
   request: DeviceBulkCreateRequest;
@@ -1239,7 +1246,7 @@ export type UpdateDeviceMutationVariables = Exact<{
 }>;
 
 
-export type UpdateDeviceMutation = { updateDevice: { id: string, token: string, name: string | null, description: string | null, externalId: string | null, metadata: string | null, createdAt: string | null, deviceType: { id: string, token: string, name: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null } } };
+export type UpdateDeviceMutation = { updateDevice: { id: string, token: string, name: string | null, description: string | null, externalId: string | null, metadata: string | null, createdAt: string | null, enabled: boolean, disabledAt: string | null, deviceType: { id: string, token: string, name: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null } } };
 
 export type DeleteDeviceMutationVariables = Exact<{
   token: string;
@@ -2602,6 +2609,8 @@ export const DevicesDocument = new TypedDocumentString(`
       externalId
       metadata
       createdAt
+      enabled
+      disabledAt
       deviceType {
         id
         token
@@ -2630,6 +2639,8 @@ export const DeviceByTokenDocument = new TypedDocumentString(`
     externalId
     metadata
     createdAt
+    enabled
+    disabledAt
     deviceType {
       id
       token
@@ -2652,6 +2663,8 @@ export const CreateDeviceDocument = new TypedDocumentString(`
     externalId
     metadata
     createdAt
+    enabled
+    disabledAt
     deviceType {
       id
       token
@@ -2683,6 +2696,8 @@ export const UpdateDeviceDocument = new TypedDocumentString(`
     externalId
     metadata
     createdAt
+    enabled
+    disabledAt
     deviceType {
       id
       token

@@ -175,6 +175,10 @@ type ResolveMetrics struct {
 	// before the platform received them. ONE counter for the pool, for the same reason.
 	eventTimeTooOld prometheus.Counter
 
+	// deviceDisabled counts events refused because their device is disabled. ONE counter
+	// for the pool, for the same reason.
+	deviceDisabled prometheus.Counter
+
 	// workers is the resolver pool width this pod runs. Beside red's resolve_inflight it
 	// says whether the pool is saturated. Nil in a zero ResolveMetrics.
 	workers prometheus.Gauge
@@ -197,6 +201,9 @@ func NewResolveMetrics(ms *core.Microservice) ResolveMetrics {
 		eventTimeTooOld: ms.NewCounter(
 			"resolve_event_time_too_old_total",
 			"Events refused because a reported time is more than 366 days before the platform received it; each is dead-lettered with reason Invalid"),
+		deviceDisabled: ms.NewCounter(
+			"resolve_device_disabled_total",
+			"Events refused because their device is disabled; each is discarded, not dead-lettered"),
 		workers: ms.NewGauge("resolve_workers",
 			"Resolvers this pod runs (resolution.workers). resolve_inflight held at this value means every resolver is busy and inbound events are queueing in front of them."),
 	}
@@ -685,6 +692,7 @@ func (iproc *InboundEventsProcessor) initializeEventResolvers(ctx context.Contex
 		resolver.slow = slow
 		resolver.SecretTransit = iproc.secretTransit
 		resolver.tenantDeleted = iproc.tenantDeleted
+		resolver.deviceDisabled = iproc.metrics.deviceDisabled
 		iproc.resolvers = append(iproc.resolvers, resolver)
 		// Resolvers run on a background context (not the cancelable read context)
 		// so that on shutdown they drain the remaining buffered messages to

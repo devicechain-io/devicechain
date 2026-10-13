@@ -106,6 +106,8 @@ const DEVICES = graphql(`
         externalId
         metadata
         createdAt
+        enabled
+        disabledAt
         deviceType {
           id
           token
@@ -150,6 +152,8 @@ const DEVICE_BY_TOKEN = graphql(`
       externalId
       metadata
       createdAt
+      enabled
+      disabledAt
       deviceType {
         id
         token
@@ -178,6 +182,8 @@ const CREATE_DEVICE = graphql(`
       externalId
       metadata
       createdAt
+      enabled
+      disabledAt
       deviceType {
         id
         token
@@ -224,6 +230,8 @@ const UPDATE_DEVICE = graphql(`
       externalId
       metadata
       createdAt
+      enabled
+      disabledAt
       deviceType {
         id
         token
@@ -251,6 +259,12 @@ export async function updateDevice(
 ): Promise<Device> {
   const data = await gql('device-management', UPDATE_DEVICE, { token, request });
   return data.updateDevice;
+}
+
+// setDeviceEnabled disables (false) or re-enables (true) a device: a partial update
+// that names `enabled` and nothing else.
+export function setDeviceEnabled(token: string, enabled: boolean): Promise<Device> {
+  return updateDevice(token, { enabled });
 }
 
 

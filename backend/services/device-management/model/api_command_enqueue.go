@@ -36,6 +36,10 @@ const (
 	// violates that definition's parameter schema (a missing required parameter, a
 	// wrong type, an out-of-range value). Permanent for this payload.
 	RejectPayloadSchemaViolation EnqueueRejectionCode = "PAYLOAD_SCHEMA_VIOLATION"
+	// RejectDeviceDisabled: the device exists but an operator has disabled it.
+	// Permanent for as long as it stays disabled; a command is not held for it, so
+	// re-enabling the device does not deliver what was refused.
+	RejectDeviceDisabled EnqueueRejectionCode = "DEVICE_DISABLED"
 )
 
 // CommandEnqueueVerdict is the answer to "may this command be enqueued to this
@@ -93,19 +97,27 @@ type CommandVocabulary struct {
 // listing at all, because it moves the failure from "I guessed wrong" to "the
 // platform lied to me".
 func (api *Api) DeviceCommandVocabulary(ctx context.Context, deviceToken string) (*CommandVocabulary, error) {
+	_, vocab, err := api.deviceVocabulary(ctx, deviceToken)
+	return vocab, err
+}
+
+// deviceVocabulary is DeviceCommandVocabulary returning the device it resolved as well (nil
+// when none exists), so the enqueue gate can decide on the device itself without reading
+// it a second time.
+func (api *Api) deviceVocabulary(ctx context.Context, deviceToken string) (*Device, *CommandVocabulary, error) {
 	devices, err := api.DevicesByToken(ctx, []string{deviceToken})
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if len(devices) == 0 {
-		return &CommandVocabulary{DeviceExists: false}, nil
+		return nil, &CommandVocabulary{DeviceExists: false}, nil
 	}
 
 	definitions, err := api.CommandDefinitionsByDeviceType(ctx, devices[0].DeviceTypeId)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return vocabularyOf(definitions), nil
+	return devices[0], vocabularyOf(definitions), nil
 }
 
 // vocabularyOf builds the vocabulary of a device that EXISTS, from the definition list
@@ -156,6 +168,8 @@ func rejectedVerdict(code EnqueueRejectionCode, format string, args ...any) *Com
 // Strictness follows ADR-043 decision 3 + 4 exactly, and the distinction matters:
 //
 //   - device not found (or soft-deleted)   → REJECT
+//   - device disabled by an operator       → REJECT (DEVICE_DISABLED), before any
+//     vocabulary question: a disabled device accepts nothing
 //   - profile declares NO command vocabulary → ALLOW, free-form (decision 4: an
 //     absent or not-yet-published profile keeps accepting ad-hoc commands during
 //     migration; this is NOT a silent skip of validation, it is the documented
@@ -167,14 +181,23 @@ func rejectedVerdict(code EnqueueRejectionCode, format string, args ...any) *Com
 // Blanket strictness would break every device whose profile is unpublished or
 // carries no definitions — which pre-GA is most of them.
 func (api *Api) ValidateCommandEnqueue(ctx context.Context, deviceToken string, commandKey string, payload []byte) (*CommandEnqueueVerdict, error) {
-	vocab, err := api.DeviceCommandVocabulary(ctx, deviceToken)
+	device, vocab, err := api.deviceVocabulary(ctx, deviceToken)
 	if err != nil {
 		return nil, err
 	}
 	if !vocab.DeviceExists {
 		return rejectedVerdict(RejectDeviceNotFound, "%s", deviceNotFoundReason(deviceToken)), nil
 	}
+	if device.IsDisabled() {
+		return rejectedVerdict(RejectDeviceDisabled, "%s", deviceDisabledReason(deviceToken)), nil
+	}
 	return decideAgainstVocabulary(vocab, commandKey, payload).verdictFor(deviceToken), nil
+}
+
+// deviceDisabledReason is the disabled-device refusal's wording, shared by both gates for
+// the reason deviceNotFoundReason is.
+func deviceDisabledReason(deviceToken string) string {
+	return fmt.Sprintf("device %q is disabled", deviceToken)
 }
 
 // deviceNotFoundReason is the one rejection wording both gates must share. The batch gate

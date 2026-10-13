@@ -241,6 +241,7 @@ recuentos para saber si se acotó.
 El `code` por dispositivo usa el mismo vocabulario abierto que el rechazo de una admisión individual:
 
 - `DEVICE_NOT_FOUND`
+- `DEVICE_DISABLED`
 - `COMMAND_NOT_IN_VOCABULARY`
 - `PAYLOAD_SCHEMA_VIOLATION`, transmitido desde el perfil del dispositivo
 - `HELD_CEILING_EXCEEDED`, para los dispositivos que no cupieron en el espacio restante del inquilino

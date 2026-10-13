@@ -60,6 +60,7 @@ title: 指标参考
 | `device_reports_dead_lettered_total` | 因无法理解或引用了设备没有的配置修订而写入死信流的设备消息。使用 `dcctl dead-letters` 查看。 |
 | `geofence_set_publish_failures_total` | 无法发布的地理围栏集清单：序列化错误、代理拒绝或传输故障。每一条都表示事件处理未被告知某次围栏编辑，因此该租户的包含判定沿用先前的围栏集，直到协调扫描将其修复。持续的非零速率表示围栏编辑没有到达检测引擎。 |
 | `raise_alarm_dead_lettered_total` | 在应用它们的所有尝试都失败后写入死信流的触发告警边，使本应被触发或清除的告警可以被看到，而不是只写进日志。 |
+| `resolve_device_disabled_total` | 因设备已[停用](../guides/device-credentials.md#disabling-a-device)而被拒绝的事件。这些事件被丢弃，不进入死信。 |
 | `resolve_event_time_bounded_total` | 因报告的事件时间领先服务器时钟超过配置的容差而被拒绝、并被替换为容差允许的最晚时间的情况。 |
 
 ## 事件处理：检测 {#event-processing-detect}

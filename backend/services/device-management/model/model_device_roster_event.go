@@ -17,7 +17,9 @@ import (
 // the "{profileToken}@{version}" token — so a re-publish that mints a new version never
 // staleness-orphans the roster entry; event-processing cross-references the latest
 // published version at arming time. It is empty when the type has no profile (a roster
-// entry with no resolvable rules, retained so a later re-type re-homes it).
+// entry with no resolvable rules, retained so a later re-type re-homes it), and empty
+// while the device is DISABLED: its events are refused at resolution, so it must arm no
+// absence rule. An enable or a disable emits a fact of its own.
 //
 // ExpectedSince is when the device's membership of that profile began — its creation, or the
 // stored instant of its last re-type or its type's last re-point (devices.expected_since) — the

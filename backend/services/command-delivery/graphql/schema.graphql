@@ -205,7 +205,7 @@ type CommandEnqueueRejection {
     """
     Stable, machine-readable classification: PAYLOAD_NOT_JSON, METADATA_NOT_JSON,
     COMMAND_NAME_TOO_LONG, PAYLOAD_TOO_LARGE, METADATA_TOO_LARGE, EXPIRES_AT_INVALID,
-    HELD_CEILING_EXCEEDED, TOKEN_IN_USE, DEVICE_NOT_FOUND,
+    HELD_CEILING_EXCEEDED, TOKEN_IN_USE, DEVICE_NOT_FOUND, DEVICE_DISABLED,
     COMMAND_NOT_IN_VOCABULARY, PAYLOAD_SCHEMA_VIOLATION, or COMMAND_REJECTED when a refusal
     arrived without a classification.
 
@@ -221,8 +221,8 @@ type CommandEnqueueRejection {
     #
     # Produced here: PAYLOAD_NOT_JSON, METADATA_NOT_JSON, EXPIRES_AT_INVALID,
     # HELD_CEILING_EXCEEDED, TOKEN_IN_USE. Relayed from the enqueue gate that owns the
-    # device and its command vocabulary: DEVICE_NOT_FOUND, COMMAND_NOT_IN_VOCABULARY,
-    # PAYLOAD_SCHEMA_VIOLATION. COMMAND_REJECTED means a rejection arrived carrying no
+    # device and its command vocabulary: DEVICE_NOT_FOUND, DEVICE_DISABLED,
+    # COMMAND_NOT_IN_VOCABULARY, PAYLOAD_SCHEMA_VIOLATION. COMMAND_REJECTED means a rejection arrived carrying no
     # classification. The list is open — treat an unrecognized code as a rejection you
     # cannot classify, never as a success.
     #
@@ -325,8 +325,9 @@ type CommandBatchDeviceRefusal {
     deviceToken: String!
     """
     Machine-readable classification, from the same open vocabulary as
-    CommandEnqueueRejection.code (for example DEVICE_NOT_FOUND, COMMAND_NOT_IN_VOCABULARY,
-    PAYLOAD_SCHEMA_VIOLATION or HELD_CEILING_EXCEEDED). Branch on this, not on reason.
+    CommandEnqueueRejection.code (for example DEVICE_NOT_FOUND, DEVICE_DISABLED,
+    COMMAND_NOT_IN_VOCABULARY, PAYLOAD_SCHEMA_VIOLATION or HELD_CEILING_EXCEEDED). Branch on
+    this, not on reason.
     """
     # The machine-readable classification. It is the SAME open vocabulary a single
     # enqueue rejection uses — DEVICE_NOT_FOUND, COMMAND_NOT_IN_VOCABULARY,

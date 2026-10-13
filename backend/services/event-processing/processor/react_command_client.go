@@ -53,6 +53,9 @@ var permanentRejectionCodes = map[string]bool{
 	string(dmmodel.RejectDeviceNotFound):         true,
 	string(dmmodel.RejectCommandNotInVocabulary): true,
 	string(dmmodel.RejectPayloadSchemaViolation): true,
+	// A disabled device accepts no command while it stays disabled, and a rule firing at a
+	// quarantined device would otherwise spend its whole retry budget on each detection.
+	string(dmmodel.RejectDeviceDisabled): true,
 	// Answered by command-delivery itself, on the request as written.
 	"PAYLOAD_NOT_JSON":   true,
 	"METADATA_NOT_JSON":  true,
