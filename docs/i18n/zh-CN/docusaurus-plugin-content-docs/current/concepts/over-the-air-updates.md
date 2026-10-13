@@ -45,7 +45,7 @@ title: 空中（OTA）更新
 
 ## 分配更新 {#assigning}
 
-`assignArtifact(deviceToken, artifactToken)` 让一台设备安装一个 `AVAILABLE` 制品。设备的配置文件必须在制品的兼容列表中，且在 `allowUnverifiedArtifacts` 关闭时分配会被拒绝。设备**每个部件只有一个目标**：
+`assignArtifact(deviceToken, artifactToken)` 让一台设备安装一个 `AVAILABLE` 制品。设备的配置文件必须在制品的兼容列表中，且在 `allowUnverifiedArtifacts` 关闭时分配会被拒绝。对[已停用的设备](../guides/device-credentials.md#disabling-a-device)分配会以 `DEVICE_DISABLED` 被拒绝；设备被停用期间，它的更新报告和下载请求会被丢弃，它已获得的下载链接也会失效，直到它重新启用。停用不会取消正在进行的更新：[截止期](#deadlines)照常计时，可能把更新转为 `TIMED_OUT` 或 `UNKNOWN`；如果设备在该阶段截止期之前重新启用，它的下一次报告会继续该更新，它已获得的下载链接也会重新生效。设备**每个部件只有一个目标**：
 
 - 该部件的上一次更新仍在进行时，新的分配会被拒绝，直到上一次更新被取消；
 - 在该更新仍在进行时再次分配同一个制品，会返回已有的分配；

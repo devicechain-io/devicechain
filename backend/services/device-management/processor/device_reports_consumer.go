@@ -55,6 +55,10 @@ const (
 // tenant cannot reach another's rows: the tenant context is built from the subject and the
 // storage layer refuses a query without one.
 //
+// A device an operator has DISABLED is cut off here too, per message: a session it already had
+// open stays open, so neither a sync nor a config.status from it is applied or answered. Both are
+// settled on the first delivery, counted (device_disabled) and not dead-lettered.
+//
 // Anything that cannot be understood is DEAD-LETTERED, not dropped: a body that does not decode
 // (malformed, oversized, a field it must not carry, a duplicate key), a kind this version does
 // not understand, and a report naming a revision the device does not have or a digest that does
@@ -97,7 +101,7 @@ type DeviceReportsMetrics struct {
 var deviceReportRejectionReasons = []string{
 	reportRejectedMalformed, reportRejectedUnattributable, reportRejectedThrottled,
 	model.ReportRejectedUnknownDevice, model.ReportRejectedUnknownRevision,
-	model.ReportRejectedDigestMismatch, model.ReportRejectedStale,
+	model.ReportRejectedDigestMismatch, model.ReportRejectedStale, model.ReportRejectedDeviceDisabled,
 }
 
 // NewDeviceReportsMetrics builds the consumer's instruments. Call it from the initialize phase
@@ -109,7 +113,8 @@ func NewDeviceReportsMetrics(ms *core.Microservice) DeviceReportsMetrics {
 			"Device messages on the device-reports channel that were refused, by reason: malformed "+
 				"(did not decode), throttled (a sync inside the per-device cooldown), unattributable (no tenant or device in the "+
 				"subject), unknown_device, unknown_revision, digest_mismatch (the device named a "+
-				"revision it was not sent), and stale (older than what is recorded).",
+				"revision it was not sent), stale (older than what is recorded), and device_disabled (an operator has disabled the "+
+				"device; its syncs and reports are discarded until it is enabled again).",
 			[]string{"reason"}),
 		deadLettered: ms.NewCounter("device_reports_dead_lettered_total",
 			"Device messages written to the dead-letter stream because they could not be "+
@@ -204,6 +209,11 @@ func (rc *DeviceReportsConsumer) handle(ctx context.Context, msg messaging.Messa
 				rc.unknownDevice(msg, token, done)
 				return
 			}
+			var refusal *model.ConfigurationReportRefusal
+			if errors.As(err, &refusal) {
+				rc.refused(msgctx, msg, token, refusal, done)
+				return
+			}
 			if errors.Is(err, model.ErrSyncThrottled) {
 				rc.rejected.WithLabelValues(reportRejectedThrottled).Inc()
 				msg.Ack()
@@ -255,6 +265,12 @@ func (rc *DeviceReportsConsumer) refused(ctx context.Context, msg messaging.Mess
 		log.Warn().Str("device", token).Str("reason", refusal.Reason).
 			Msg("Device configuration report refused: it names a revision the device was not sent.")
 		rc.deadLetter(ctx, msg, token, "device configuration report refused", refusal)
+	case model.ReportRejectedDeviceDisabled:
+		// Discarded, as update-management and event resolution discard a disabled device's traffic.
+		log.Debug().Str("device", token).Msg("Discarding a configuration report from a disabled device.")
+		msg.Ack()
+		done(core.ResultDropped)
+		return
 	default:
 		log.Debug().Str("device", token).Str("reason", refusal.Reason).Msg("Device configuration report refused.")
 	}

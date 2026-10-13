@@ -194,6 +194,8 @@ func (h *Handlers) handleRd(w mux.ResponseWriter, r *mux.Message) {
 		}
 	case RegisterUnknownDevice:
 		h.respond(w, codes.Forbidden) // 4.03 — device not provisioned, this credential does not auto-register
+	case RegisterDeviceDisabled:
+		h.respond(w, codes.Forbidden) // 4.03 — an operator disabled the device; it may register again once enabled
 	default: // RegisterUnavailable
 		h.respond(w, codes.ServiceUnavailable) // 5.03 — retryable; the device re-Registers
 	}
@@ -225,6 +227,12 @@ func (h *Handlers) handleRdItem(w mux.ResponseWriter, r *mux.Message) {
 		// session alive against the device's intent.
 		if h.limit != nil && !h.limit.AllowMessage(binding.Tenant) {
 			h.respond(w, codes.TooManyRequests)
+			return
+		}
+		// A device disabled since it registered is pushed out here: 4.04, so it re-registers and is
+		// refused (4.03). Before Update, which holds the table lock and must do no network I/O.
+		if h.reg.EndIfDisabled(r.Context(), identity, regId) {
+			h.respond(w, codes.NotFound)
 			return
 		}
 		if h.reg.Update(identity, regId, parseLifetime(parseQueries(r))) == UpdateOK {

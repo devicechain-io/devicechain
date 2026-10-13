@@ -79,7 +79,7 @@ bus: read them with `dcctl dead-letters`.
 | `alarm_event_dead_lettered_total` | Alarm state-change events that could not be published to the alarm-events stream and were written to the dead-letter stream instead. Each one is an alarm transition that reached the database but not the bus, so nobody was paged about it — it is visible to an operator rather than only logged. |
 | `callout_in_flight` | Device auth-callout requests being authorized right now. |
 | `callout_refused_busy_total` | Device auth-callout requests refused with the generic denial because the in-flight bound was reached. |
-| `config_reports_rejected_total{reason}` | Messages on the [device-reports topic](../guides/connecting-a-device.md#reserved-device-topics) that device-management refused: `malformed` (did not decode), `throttled` (a sync inside the per-device cooldown), `unattributable` (no tenant or device in the topic), `unknown_device`, `unknown_revision`, `digest_mismatch` and `stale` (older than what is recorded). A steady rate from one fleet is a device-side bug. |
+| `config_reports_rejected_total{reason}` | Messages on the [device-reports topic](../guides/connecting-a-device.md#reserved-device-topics) that device-management refused: `malformed` (did not decode), `throttled` (a sync inside the per-device cooldown), `unattributable` (no tenant or device in the topic), `unknown_device`, `unknown_revision`, `digest_mismatch`, `stale` (older than what is recorded) and `device_disabled` (the device is [disabled](../guides/device-credentials.md#disabling-a-device)). A steady rate from one fleet is a device-side bug. |
 | `credential_misconfigured_total{path}` | Device credential checks refused because the stored secret can never match: none is stored, or its digest was made under a different key than this instance's root key derives (most likely a database restored next to the wrong root key). path="connect" is the MQTT auth callout, path="event" the per-event check. Wrong passwords are not counted here. |
 | `device_reports_dead_lettered_total` | Device messages written to the dead-letter stream because they could not be understood or named a configuration revision the device does not have. Read them with `dcctl dead-letters`. |
 | `geofence_set_publish_failures_total` | Geofence-set manifests that could not be published — a marshal error, a broker refusal, or a transport fault. Each one means event-processing was not told about a fence edit, so containment for that tenant holds its previous fence set until a reconcile sweep repairs it. A sustained non-zero rate means fence edits are not reaching the detection engine. |
@@ -219,7 +219,7 @@ although the device was not at fault.
 | `device_info_attribute_write_errors_total` | Harvested device-information attributes that could not be written to device-management; written again at the device's next harvest. |
 | `device_info_attribute_writes_shed_total` | Harvested attribute batches dropped because the attribute-write pool was busy; written at the device's next harvest. A steady rate means device-management is slow to answer. |
 | `device_info_harvest_retries_total` | Device-information harvests retried once because the device did not answer. |
-| `device_info_harvest_skipped_total` | Device-information harvest requests not run: the device was harvested within the last hour, its shard's queue was full, or it was no longer reachable. |
+| `device_info_harvest_skipped_total` | Device-information harvest requests not run: the device was harvested within the last hour, its shard's queue was full, it was no longer reachable, or it is disabled (or whether it is could not be checked). |
 | `device_info_harvests_total{outcome}` | Device-information reads run when a device became reachable, by outcome: `complete` (every resource read), `partial` (some missing), `empty` (answered, but gave none), `unanswered` (did not respond). |
 | `devices_registered_total` | Devices auto-created on their first LwM2M registration. |
 | `handshakes_total` | Completed DTLS handshakes (each is a new authenticated LwM2M session). |
@@ -227,6 +227,7 @@ although the device was not at fault.
 | `notifies_received_total` | LwM2M Notify messages received on an observed object instance. |
 | `observe_terminal_notifications_total` | Notifications that terminated an observation (RFC 7641, e.g. 4.04 after the observed instance was deleted). |
 | `presence_dropped_total` | Presence transitions dropped: an unregistered device on a no-auto-register credential, or a durable-emit budget exhausted. |
+| `registrations_disabled_refused_total` | Registrations refused (`4.03`), and registrations ended at the next update (`4.04`), because an operator has disabled the device. |
 | `sessions_rejected_total` | New sessions refused because the live-session ceiling (maxSessions) was reached. |
 | `telemetry_devices_registered_total` | Devices auto-created on a first telemetry sample (rare: LwM2M devices are created at /rd registration). |
 | `telemetry_tenant_deleted_dropped_total` | Telemetry samples dropped because the tenant has been deleted and its data is being reclaimed. |
@@ -282,8 +283,8 @@ Prefix: `devicechain_updatemanagement_`. The service is opt-in; see [Over-the-ai
 | `update_desired_publish_failures_total` | Update assignments, download grants and cancels that could not be put on a device's desired topic. The device picks the state up at its next sync. |
 | `update_download_bytes_total` | Artifact bytes streamed to devices. |
 | `update_download_grants_total{result}` | Download grants devices asked for, by outcome: `granted`, or why not (`unknown_assignment`, `superseded`, `finished`, `cancel_requested`, `artifact_unavailable`, `not_configured`, `error`). |
-| `update_downloads_total{result}` | Artifact download requests, by outcome: `served`, `aborted` (the client went away or the object could not be read mid-stream), or why it was refused before any byte was served (`capability_malformed`, `capability_invalid`, `capability_expired`, `stale`, `gone`, `range_not_satisfiable`, `busy`, `error`). A rising `capability_invalid` rate is someone guessing. |
-| `update_reports_rejected_total{reason}` | Device messages update-management refused before applying them: `malformed`, `unattributable` and `throttled`. |
+| `update_downloads_total{result}` | Artifact download requests, by outcome: `served`, `aborted` (the client went away or the object could not be read mid-stream), or why it was refused before any byte was served (`capability_malformed`, `capability_invalid`, `capability_expired`, `stale`, `gone`, `range_not_satisfiable`, `busy`, `device_disabled`, `error`). A rising `capability_invalid` rate is someone guessing. |
+| `update_reports_rejected_total{reason}` | Device messages update-management refused before applying them: `malformed`, `unattributable`, `throttled` and `device_disabled` (the device is disabled). |
 | `update_reports_total{verdict}` | Update progress and inventory reports, by the verdict the update state machine gave: `APPLIED`, or why not (`DUPLICATE`, `STALE_ATTEMPT`, `DIGEST_MISMATCH`, `WRONG_COMPONENT`, `REGRESSION`, `UNCONFIRMED`, `NOT_CANCELLABLE`, `LATE`, `CONFLICT`, `INVALID_ATTEMPT`, `WRONG_KIND`, `UNKNOWN_ASSIGNMENT`). A rising non-applied rate from one fleet is a device-side bug. |
 
 ## Every service {#every-service}

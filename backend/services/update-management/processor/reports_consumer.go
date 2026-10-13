@@ -39,6 +39,9 @@ const (
 	rejectedMalformed      = "malformed"
 	rejectedUnattributable = "unattributable"
 	rejectedThrottled      = "throttled"
+	// rejectedDeviceDisabled: an operator has disabled the device. A session it already had open
+	// is not ended by that, so its reports, syncs and download requests are refused per message.
+	rejectedDeviceDisabled = "device_disabled"
 
 	maxDeadLetterPayload = 4096
 
@@ -93,8 +96,8 @@ func NewUpdateReportsMetrics(ms *core.Microservice) UpdateReportsMetrics {
 			[]string{"result"}),
 		rejected: ms.NewCounterVec("update_reports_rejected_total",
 			"Device messages on the device-reports channel that update-management refused before applying: malformed "+
-				"(did not decode), unattributable (no tenant or device in the subject) and throttled (a sync inside "+
-				"the per-device cooldown).",
+				"(did not decode), unattributable (no tenant or device in the subject), throttled (a sync inside "+
+				"the per-device cooldown) and device_disabled (an operator has disabled the device).",
 			[]string{"reason"}),
 		expired: ms.NewCounterVec("update_attempts_expired_total",
 			"Update attempts the deadline sweep moved because the device went quiet: timed_out before installation "+
@@ -110,7 +113,7 @@ func NewUpdateReportsMetrics(ms *core.Microservice) UpdateReportsMetrics {
 	for _, r := range grantResults {
 		m.grants.WithLabelValues(r).Add(0)
 	}
-	for _, r := range []string{rejectedMalformed, rejectedUnattributable, rejectedThrottled} {
+	for _, r := range []string{rejectedMalformed, rejectedUnattributable, rejectedThrottled, rejectedDeviceDisabled} {
 		m.rejected.WithLabelValues(r).Add(0)
 	}
 	for _, s := range []ota.State{ota.StateTimedOut, ota.StateUnknown} {
@@ -133,6 +136,10 @@ func NewUpdateReportsMetrics(ms *core.Microservice) UpdateReportsMetrics {
 // two consumers see every message and each acknowledges the kinds that are not its own without
 // saying anything about them. A body that does not decode is device-management's to dead-letter (it
 // sees it too), so it is only counted here: lettering it twice would be two records of one fault.
+//
+// A device an operator has DISABLED is cut off here per message, not per connect: its session may
+// stay open, so each report, sync answer and download request is refused (model.ErrDeviceDisabled),
+// counted and discarded.
 //
 // 🔴 THE DEVICE AND THE TENANT COME FROM THE SUBJECT, NEVER FROM THE BODY. The broker confines a
 // device's grant to publishing on its own device-reports subject, so the token in the subject is the
@@ -235,6 +242,9 @@ func (rc *ReportsConsumer) handle(ctx context.Context, msg messaging.Message) {
 	case rep.Update != nil:
 		verdict, err := rc.Api.ApplyReport(msgctx, token, *rep.Update)
 		if err != nil {
+			if rc.settleDisabled(err, msg, token, rep.Kind, done) {
+				return
+			}
 			rc.retryOrDrop(msgctx, msg, token, done, err, rep.Kind)
 			return
 		}
@@ -245,6 +255,9 @@ func (rc *ReportsConsumer) handle(ctx context.Context, msg messaging.Message) {
 		}
 	case rep.DownloadRequest != nil:
 		if err := rc.grant(msgctx, token, rep.DownloadRequest.AssignmentID); err != nil {
+			if rc.settleDisabled(err, msg, token, rep.Kind, done) {
+				return
+			}
 			rc.retryOrDrop(msgctx, msg, token, done, err, rep.Kind)
 			return
 		}
@@ -258,6 +271,9 @@ func (rc *ReportsConsumer) handle(ctx context.Context, msg messaging.Message) {
 		views, err := rc.Api.CurrentUpdates(msgctx, token)
 		if err != nil {
 			rc.gate.forget(tenant + "/" + token)
+			if rc.settleDisabled(err, msg, token, rep.Kind, done) {
+				return
+			}
 			rc.retryOrDrop(msgctx, msg, token, done, err, rep.Kind)
 			return
 		}
@@ -268,6 +284,22 @@ func (rc *ReportsConsumer) handle(ctx context.Context, msg messaging.Message) {
 
 	msg.Ack()
 	done(core.ResultOK)
+}
+
+// settleDisabled settles a message from a device an operator has disabled, and reports whether it
+// was one. It is settled on its first delivery and discarded: no redelivery can answer differently
+// while the device stays disabled, and a device is disabled precisely when its traffic is unwanted,
+// so a dead letter per message would move the flood into the dead-letter store. It is counted
+// (update_reports_rejected_total{reason="device_disabled"}), and the device is told nothing.
+func (rc *ReportsConsumer) settleDisabled(err error, msg messaging.Message, token, kind string, done func(string)) bool {
+	if !errors.Is(err, model.ErrDeviceDisabled) {
+		return false
+	}
+	log.Debug().Str("device", token).Str("kind", kind).Msg("Discarding a device report from a disabled device.")
+	rc.rejected.WithLabelValues(rejectedDeviceDisabled).Inc()
+	msg.Ack()
+	done(core.ResultDropped)
+	return true
 }
 
 // grant answers a download.request. A refusal is not an error of the message: it is counted, and
@@ -288,6 +320,8 @@ func (rc *ReportsConsumer) grant(ctx context.Context, device, assignment string)
 			rc.Api.PublishCancelFor(ctx, device, refusal.AttemptToken, assignment)
 		}
 		return nil
+	case errors.Is(err, model.ErrDeviceDisabled):
+		return err
 	default:
 		rc.grants.WithLabelValues("error").Inc()
 		return err

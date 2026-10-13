@@ -70,6 +70,10 @@ type HarvestMetrics struct {
 	WriteShed   prometheus.Counter     // attribute batches dropped because the write pool was busy
 }
 
+// DeviceDisabledCheck reports whether an operator has disabled a device, asking device-management
+// afresh. An error means the answer could not be had.
+type DeviceDisabledCheck func(ctx context.Context, tenant, deviceToken string) (bool, error)
+
 // harvestJob is one queued harvest for one device.
 type harvestJob struct {
 	tenant      string
@@ -84,6 +88,8 @@ type Harvester struct {
 	baseURL string
 	metrics HarvestMetrics
 	now     func() time.Time
+	// disabled asks whether an operator has disabled a device. Never nil.
+	disabled DeviceDisabledCheck
 
 	mu      sync.Mutex
 	last    map[deviceKey]time.Time
@@ -98,16 +104,44 @@ type Harvester struct {
 
 // NewHarvester builds a harvester that writes attributes through the device-management GraphQL
 // client + URL (the registrar's pair; the service token already carries device:write).
-func NewHarvester(client commandQuerier, baseURL string, metrics HarvestMetrics) *Harvester {
-	return &Harvester{
-		client:  client,
-		baseURL: baseURL,
-		metrics: metrics,
-		now:     time.Now,
-		last:    map[deviceKey]time.Time{},
-		written: map[deviceKey]map[string]string{},
-		sem:     make(chan struct{}, harvestWriters),
+func NewHarvester(client commandQuerier, baseURL string, metrics HarvestMetrics, disabled DeviceDisabledCheck) *Harvester {
+	if disabled == nil {
+		// A harvest that cannot ask whether the device is quarantined would read and write about
+		// it regardless; refuse to build one rather than fail open.
+		panic("downlink.NewHarvester: a DeviceDisabledCheck is required")
 	}
+	return &Harvester{
+		client:   client,
+		baseURL:  baseURL,
+		metrics:  metrics,
+		disabled: disabled,
+		now:      time.Now,
+		last:     map[deviceKey]time.Time{},
+		written:  map[deviceKey]map[string]string{},
+		sem:      make(chan struct{}, harvestWriters),
+	}
+}
+
+// refusesDisabled reports whether the harvest must not touch this device because an operator has
+// disabled it, or because that could not be established; either way it releases the device's
+// throttle reservation (so enabling it needs no repair) and counts the request as skipped.
+//
+// 🔴 IT FAILS CLOSED. A harvest is a read toward the device and attribute writes about it, so a
+// question that cannot be answered is not "enabled": the next registration or wake asks again.
+func (h *Harvester) refusesDisabled(ctx context.Context, k deviceKey) bool {
+	disabled, err := h.disabled(ctx, k.tenant, k.deviceToken)
+	switch {
+	case err != nil:
+		log.Debug().Err(err).Str("tenant", k.tenant).
+			Msg("Skipping an LwM2M device-information harvest: could not check whether the device is disabled.")
+	case disabled:
+		log.Debug().Str("tenant", k.tenant).Msg("Skipping an LwM2M device-information harvest: the device is disabled.")
+	default:
+		return false
+	}
+	h.forget(k)
+	h.skip()
+	return true
 }
 
 // due reports whether the device is past its throttle, and if so reserves it.
@@ -380,6 +414,12 @@ func (d *Dispatcher) runOneHarvest(ctx context.Context, s *shardState) {
 		d.harvester.skip()
 		return
 	}
+	// A quarantined device is neither read nor written about. Asked now rather than when the job was
+	// queued: the device may have been disabled since it registered, and a harvest runs on a session
+	// the disable did not end.
+	if d.harvester.refusesDisabled(ctx, key) {
+		return
+	}
 	// The WHOLE read is bounded by one op timeout — the same bound lwm2m.readDeviceInfo gets as a
 	// command — not one per resource: a device that answers each GET just inside the timeout would
 	// otherwise hold this shard's worker, and every other device's commands on it, for five.
@@ -411,6 +451,11 @@ func (d *Dispatcher) runOneHarvest(ctx context.Context, s *shardState) {
 		log.Debug().Str("tenant", j.tenant).Str("outcome", outcome).
 			Str("missing", fmt.Sprint(summarizeMissing(info.Missing))).
 			Msg("LwM2M device information harvested with resources missing.")
+	}
+	// Asked again: the read above took up to an op timeout, and the device may have been disabled
+	// during it. Nothing read is written for a device that is disabled now.
+	if d.harvester.refusesDisabled(ctx, key) {
+		return
 	}
 	d.harvester.publish(ctx, key, info, d.tenantDeleted)
 }

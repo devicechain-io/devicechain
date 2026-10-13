@@ -80,7 +80,8 @@ func (a *attrSink) get(key string) (string, bool) {
 // attributes.
 func TestRegisterHarvestsDeviceInfoWithoutDelayingTheRegistration(t *testing.T) {
 	sink := &attrSink{}
-	harvester := downlink.NewHarvester(sink, "http://device-management/graphql", downlink.HarvestMetrics{})
+	harvester := downlink.NewHarvester(sink, "http://device-management/graphql", downlink.HarvestMetrics{},
+		func(context.Context, string, string) (bool, error) { return false, nil })
 	connTable := downlink.NewConnTable()
 	disp := downlink.NewDispatcher(idleReader{}, nil, connTable, downlink.NewOps(), noBacklog{}, nil,
 		downlink.Metrics{}, downlink.Options{

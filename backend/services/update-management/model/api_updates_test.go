@@ -20,15 +20,20 @@ import (
 // fakeDevices maps tenant/device to a profile token.
 type fakeDevices struct {
 	profiles map[string]string
+	// disabled is the set of tenant/device keys an operator has disabled.
+	disabled map[string]bool
 	err      error
+	// lookups counts the questions asked, so a test can pin when the platform does not ask.
+	lookups int
 }
 
-func (f *fakeDevices) ProfileOf(_ context.Context, tenant, device string) (string, bool, error) {
+func (f *fakeDevices) DeviceOf(_ context.Context, tenant, device string) (DeviceFacts, bool, error) {
+	f.lookups++
 	if f.err != nil {
-		return "", false, f.err
+		return DeviceFacts{}, false, f.err
 	}
 	p, ok := f.profiles[tenant+"/"+device]
-	return p, ok, nil
+	return DeviceFacts{Profile: p, Disabled: f.disabled[tenant+"/"+device]}, ok, nil
 }
 
 type published struct {

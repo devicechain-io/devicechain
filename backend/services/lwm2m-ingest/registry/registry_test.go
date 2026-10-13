@@ -37,6 +37,18 @@ type fakeResolver struct {
 	err     error
 	delay   time.Duration
 	calls   []resolveCall
+	// disabled / disabledErr script the answer to "has an operator disabled this device"; disabledCalls
+	// counts how often it was asked.
+	disabled      bool
+	disabledErr   error
+	disabledCalls int
+}
+
+func (f *fakeResolver) Disabled(_ context.Context, _, _ string) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.disabledCalls++
+	return f.disabled, f.disabledErr
 }
 
 func (f *fakeResolver) Resolve(_ context.Context, tenant, externalId string, policy adapter.IngestPolicy) (string, adapter.ResolveOutcome, error) {

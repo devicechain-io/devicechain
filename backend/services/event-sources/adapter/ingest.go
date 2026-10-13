@@ -5,6 +5,7 @@ package adapter
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"hash/fnv"
 	"sort"
@@ -210,6 +211,43 @@ func (r *Registrar) Resolve(ctx context.Context, tenant, externalId string, poli
 	}
 	r.cache.put(tenant, externalId, token, r.now())
 	return token, ResolveCreated, nil
+}
+
+// deviceEnabledQuery reads one device's enabled flag by token.
+const deviceEnabledQuery = `query($tokens: [String!]!) {
+  devicesByToken(tokens: $tokens) { token enabled }
+}`
+
+// Disabled reports whether an operator has disabled the device with this token.
+//
+// 🔴 IT NEVER READS THE TOKEN CACHE. Resolve caches a device for an hour, which is right for
+// "which device is this" and wrong for "is it quarantined": a device disabled after it resolved
+// would read as live until the entry expired. Registration is rare, so a caller that must refuse a
+// quarantined device (an LwM2M registration) pays one round trip for the truth instead.
+//
+// It fails closed: an error, or an answer without the flag, is returned as an error and never as
+// "enabled". A device the tenant no longer has is not disabled; there is nothing to quarantine.
+func (r *Registrar) Disabled(ctx context.Context, tenant, deviceToken string) (bool, error) {
+	var out struct {
+		DevicesByToken []struct {
+			Token   string `json:"token"`
+			Enabled *bool  `json:"enabled"`
+		} `json:"devicesByToken"`
+	}
+	vars := map[string]any{"tokens": []string{deviceToken}}
+	if err := r.client.Query(ctx, r.url, tenant, deviceEnabledQuery, vars, &out); err != nil {
+		return false, err
+	}
+	for _, d := range out.DevicesByToken {
+		if d.Token != deviceToken {
+			continue
+		}
+		if d.Enabled == nil {
+			return false, errors.New("device-management's answer carries no enabled flag")
+		}
+		return !*d.Enabled, nil
+	}
+	return false, nil
 }
 
 // lookup asks device-management for a device carrying externalId, returning its token

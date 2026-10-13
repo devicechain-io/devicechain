@@ -265,9 +265,9 @@ func buildApi(ctx context.Context) (*model.Api, error) {
 
 	switch {
 	case infra.ServiceAuth.Secret == "":
-		log.Warn().Msg("Service secret not configured - createArtifact and assignArtifact will be REFUSED: profiles and devices cannot be looked up in device-management.")
+		log.Warn().Msg("Service secret not configured - createArtifact and assignArtifact will be REFUSED, and every device-facing update message (reports, syncs, download requests, downloads) will be REFUSED and retried: profiles and devices cannot be looked up in device-management.")
 	case infra.DeviceManagement.Hostname == "" || infra.DeviceManagement.Port == 0:
-		log.Warn().Msg("device-management endpoint not configured (infrastructure.deviceManagement) - createArtifact and assignArtifact will be REFUSED: profiles and devices cannot be looked up.")
+		log.Warn().Msg("device-management endpoint not configured (infrastructure.deviceManagement) - createArtifact and assignArtifact will be REFUSED, and every device-facing update message (reports, syncs, download requests, downloads) will be REFUSED and retried: profiles and devices cannot be looked up.")
 	default:
 		client := svcclient.New(infra.UserManagement, infra.ServiceAuth.Secret, "update-management",
 			[]string{string(auth.DeviceRead)})

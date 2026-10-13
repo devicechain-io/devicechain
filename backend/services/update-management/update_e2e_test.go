@@ -73,9 +73,9 @@ func startEmbeddedNats(t *testing.T) (string, uint32) {
 // fixtureDevices maps tenant/device to a profile token.
 type fixtureDevices map[string]string
 
-func (f fixtureDevices) ProfileOf(_ context.Context, tenant, device string) (string, bool, error) {
+func (f fixtureDevices) DeviceOf(_ context.Context, tenant, device string) (model.DeviceFacts, bool, error) {
 	p, ok := f[tenant+"/"+device]
-	return p, ok, nil
+	return model.DeviceFacts{Profile: p}, ok, nil
 }
 
 type fixtureProfiles struct{}

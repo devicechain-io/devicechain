@@ -53,45 +53,66 @@ func TestAnEmptyAnswerMeansEverythingIsMissing(t *testing.T) {
 	require.Equal(t, []string{"a", "b"}, missing)
 }
 
-func TestProfileOfReadsTheProfileThroughTheDeviceType(t *testing.T) {
+func TestDeviceOfReadsTheProfileThroughTheDeviceType(t *testing.T) {
 	q := &fakeQuerier{respond: func(v map[string]any) (string, error) {
 		require.Equal(t, []string{"dev-1"}, v["tokens"])
-		return `{"devicesByToken":[{"token":"dev-1","deviceType":{"profile":{"token":"gateway"}}}]}`, nil
+		return `{"devicesByToken":[{"token":"dev-1","enabled":true,"deviceType":{"profile":{"token":"gateway"}}}]}`, nil
 	}}
-	profile, found, err := New(q, "http://dm/graphql").ProfileOf(context.Background(), "acme", "dev-1")
+	facts, found, err := New(q, "http://dm/graphql").DeviceOf(context.Background(), "acme", "dev-1")
 	require.NoError(t, err)
 	require.True(t, found)
-	require.Equal(t, "gateway", profile)
+	require.Equal(t, "gateway", facts.Profile)
+	require.False(t, facts.Disabled)
 	require.Equal(t, "acme", q.tenant)
 }
 
-func TestProfileOfDistinguishesNoDeviceNoProfileAndNoAnswer(t *testing.T) {
+func TestDeviceOfDistinguishesNoDeviceNoProfileAndNoAnswer(t *testing.T) {
 	// A device on a type with no profile exists, and has an empty profile.
 	q := &fakeQuerier{respond: func(map[string]any) (string, error) {
-		return `{"devicesByToken":[{"token":"dev-1","deviceType":{"profile":null}}]}`, nil
+		return `{"devicesByToken":[{"token":"dev-1","enabled":true,"deviceType":{"profile":null}}]}`, nil
 	}}
-	profile, found, err := New(q, "u").ProfileOf(context.Background(), "acme", "dev-1")
+	facts, found, err := New(q, "u").DeviceOf(context.Background(), "acme", "dev-1")
 	require.NoError(t, err)
 	require.True(t, found)
-	require.Empty(t, profile)
+	require.Empty(t, facts.Profile)
 
 	// A device the tenant does not have is absent, not an error.
 	q = &fakeQuerier{respond: func(map[string]any) (string, error) { return `{"devicesByToken":[]}`, nil }}
-	_, found, err = New(q, "u").ProfileOf(context.Background(), "acme", "ghost")
+	_, found, err = New(q, "u").DeviceOf(context.Background(), "acme", "ghost")
 	require.NoError(t, err)
 	require.False(t, found)
 
 	// An answer naming some other device is not this device.
 	q = &fakeQuerier{respond: func(map[string]any) (string, error) {
-		return `{"devicesByToken":[{"token":"other","deviceType":{"profile":{"token":"gateway"}}}]}`, nil
+		return `{"devicesByToken":[{"token":"other","enabled":true,"deviceType":{"profile":{"token":"gateway"}}}]}`, nil
 	}}
-	_, found, err = New(q, "u").ProfileOf(context.Background(), "acme", "dev-1")
+	_, found, err = New(q, "u").DeviceOf(context.Background(), "acme", "dev-1")
 	require.NoError(t, err)
 	require.False(t, found)
 
 	// A failed lookup is an error, never "not found".
 	q = &fakeQuerier{respond: func(map[string]any) (string, error) { return "", errors.New("connection refused") }}
-	_, found, err = New(q, "u").ProfileOf(context.Background(), "acme", "dev-1")
+	_, found, err = New(q, "u").DeviceOf(context.Background(), "acme", "dev-1")
 	require.Error(t, err)
 	require.False(t, found)
+}
+
+// 🔴 `enabled` IS READ, AND ITS ABSENCE IS AN ERROR. A disabled device must read as disabled, and an
+// answer that cannot say must never read as enabled: the lookup is what keeps a quarantined device
+// out of the update plane.
+func TestDeviceOfReadsTheDisabledFlagAndRefusesAnAnswerWithoutIt(t *testing.T) {
+	q := &fakeQuerier{respond: func(map[string]any) (string, error) {
+		return `{"devicesByToken":[{"token":"dev-1","enabled":false,"deviceType":{"profile":{"token":"gateway"}}}]}`, nil
+	}}
+	facts, found, err := New(q, "u").DeviceOf(context.Background(), "acme", "dev-1")
+	require.NoError(t, err)
+	require.True(t, found)
+	require.True(t, facts.Disabled)
+	require.Equal(t, "gateway", facts.Profile)
+
+	q = &fakeQuerier{respond: func(map[string]any) (string, error) {
+		return `{"devicesByToken":[{"token":"dev-1","deviceType":{"profile":{"token":"gateway"}}}]}`, nil
+	}}
+	_, _, err = New(q, "u").DeviceOf(context.Background(), "acme", "dev-1")
+	require.Error(t, err)
 }

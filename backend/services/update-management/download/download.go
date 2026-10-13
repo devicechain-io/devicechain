@@ -65,6 +65,7 @@ const (
 	ResultCapInvalid   = "capability_invalid"
 	ResultCapExpired   = "capability_expired"
 	ResultStale        = "stale"
+	ResultDisabled     = "device_disabled"
 	ResultGone         = "gone"
 	ResultBadRange     = "range_not_satisfiable"
 	ResultBusy         = "busy"
@@ -73,7 +74,7 @@ const (
 
 // Results lists every label value, so each series exists at zero from startup.
 var Results = []string{ResultServed, ResultAborted, ResultCapMalformed, ResultCapInvalid, ResultCapExpired,
-	ResultStale, ResultGone, ResultBadRange, ResultBusy, ResultError}
+	ResultStale, ResultDisabled, ResultGone, ResultBadRange, ResultBusy, ResultError}
 
 // Metrics are the download endpoint's instruments. Nil-safe.
 type Metrics struct {
@@ -168,6 +169,11 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case err == nil:
 	case errors.Is(err, model.ErrDownloadStale):
 		h.refuse(w, http.StatusForbidden, ResultStale, "download refused")
+		return
+	case errors.Is(err, model.ErrDownloadDisabled):
+		// The device was disabled after it was granted this capability. Same answer as a stale
+		// one on the wire: the device learns nothing it could not learn by asking again.
+		h.refuse(w, http.StatusForbidden, ResultDisabled, "download refused")
 		return
 	case errors.Is(err, model.ErrDownloadGone):
 		h.refuse(w, http.StatusGone, ResultGone, "the artifact is no longer available")

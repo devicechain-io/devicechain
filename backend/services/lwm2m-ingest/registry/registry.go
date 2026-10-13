@@ -83,6 +83,9 @@ const (
 // Registry depends on the interface so its logic is testable without device-management.
 type deviceResolver interface {
 	Resolve(ctx context.Context, tenant, externalId string, policy adapter.IngestPolicy) (string, adapter.ResolveOutcome, error)
+	// Disabled reports whether an operator has disabled the device, asking device-management
+	// afresh (never the resolver's token cache). An error means the answer could not be had.
+	Disabled(ctx context.Context, tenant, deviceToken string) (bool, error)
 }
 
 // presenceEmitter writes one presence StateChange durably (ADR-067). *adapter.Emitter
@@ -107,6 +110,7 @@ type Metrics struct {
 	Dropped              prometheus.Counter // unknown device (auto-register off) OR emit budget exhausted
 	AuthErrors           prometheus.Counter // identity un-recoverable / no binding (handler layer)
 	BadRequests          prometheus.Counter // malformed /rd request (handler layer)
+	DisabledRefused      prometheus.Counter // registrations refused (4.03) because an operator disabled the device
 	ObservationOverflow  prometheus.Counter // telemetry instances a registration declared beyond the per-registration observe cap (L2b)
 }
 
@@ -285,6 +289,9 @@ const (
 	// RegisterUnavailable — a retryable failure (device-management/NATS unreachable),
 	// → 5.03; the device's own LwM2M retry re-drives it.
 	RegisterUnavailable
+	// RegisterDeviceDisabled — an operator has disabled (quarantined) the device, so it may not
+	// register (a definitive refusal, → 4.03, until the device is enabled again).
+	RegisterDeviceDisabled
 )
 
 // Register handles a POST /rd for an already-authenticated identity + its resolved
@@ -319,7 +326,21 @@ func (r *Registry) Register(ctx context.Context, identity string, binding config
 	// lifetime change; the backoff (seconds) is far below the minimum lifetime, so a real
 	// lifetime update is never lost this way. establish=true: a reboot within the backoff may
 	// be on a NEW conn, and the observe manager's equal-epoch CAS re-establishes on it.
-	if rid, ep, ok := r.recentRegistration(identity); ok {
+	if rid, ep, tok, ok := r.recentRegistration(identity); ok {
+		// 🔴 THE DISABLED CHECK COMES FIRST. Without it, a device disabled since it registered gets
+		// its old location back (a 2.01) for as long as the backoff lasts. A shadow carries no token
+		// to ask about (it is resolved lazily) and keeps the old behaviour.
+		if tok != "" {
+			disabled, derr := r.resolver.Disabled(ctx, binding.Tenant, tok)
+			if derr != nil {
+				return RegisterUnavailable, "", 0, false
+			}
+			if disabled {
+				r.endRegistration(identity, rid)
+				incr(r.metrics.DisabledRefused, 1)
+				return RegisterDeviceDisabled, "", 0, false
+			}
+		}
 		return RegisterOK, rid, ep, true
 	}
 
@@ -346,6 +367,25 @@ func (r *Registry) Register(ctx context.Context, identity string, binding config
 		log.Debug().Str("tenant", binding.Tenant).Str("externalId", binding.ExternalId).
 			Msgf("Refusing LwM2M registration (%s).", reason)
 		return RegisterUnknownDevice, "", 0, false
+	}
+	// 🔴 A DISABLED (QUARANTINED) DEVICE DOES NOT REGISTER. This is the one door LwM2M has: there is
+	// no broker auth-callout in front of the DTLS handshake, so without this the device would be
+	// CONNECTED, observed and harvested like any other. It is asked of device-management afresh,
+	// not of the resolver's hour-long token cache, and it fails closed: an answer that cannot be
+	// had refuses the registration as retryable rather than letting a possibly-quarantined device
+	// in. It comes before anything is emitted or installed, so a refusal leaves nothing behind
+	// and enabling the device needs no repair.
+	disabled, derr := r.resolver.Disabled(ctx, binding.Tenant, token)
+	if derr != nil {
+		log.Warn().Err(derr).Str("tenant", binding.Tenant).Str("externalId", binding.ExternalId).
+			Msg("Could not check whether an LwM2M device is disabled; refusing the registration so the device re-Registers.")
+		return RegisterUnavailable, "", 0, false
+	}
+	if disabled {
+		incr(r.metrics.DisabledRefused, 1)
+		log.Debug().Str("tenant", binding.Tenant).Str("externalId", binding.ExternalId).
+			Msg("Refusing LwM2M registration (the device is disabled).")
+		return RegisterDeviceDisabled, "", 0, false
 	}
 	if outcome == adapter.ResolveCreated {
 		incr(r.metrics.DevicesRegistered, 1)
@@ -456,17 +496,69 @@ func (r *Registry) DeviceToken(identity string) (string, bool) {
 // recentRegistration reports the live location for an identity whose registration is
 // younger than the replace backoff (R5 storm control), so a rapid re-Register is
 // idempotent rather than a fresh session.
-func (r *Registry) recentRegistration(identity string) (string, uint64, bool) {
+func (r *Registry) recentRegistration(identity string) (regId string, epoch uint64, token string, ok bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	cur := r.byIdentity[identity]
 	if cur == nil {
-		return "", 0, false
+		return "", 0, "", false
 	}
 	if r.now().Sub(cur.connectedAt) < r.replaceBackoff {
-		return cur.regId, cur.epoch, true
+		return cur.regId, cur.epoch, cur.token, true
 	}
-	return "", 0, false
+	return "", 0, "", false
+}
+
+// endRegistration removes the identity's registration regId (if it is still the current one) and
+// fires its session end, so the downlink conn and observations go with it. It writes no presence:
+// the registration belongs to a disabled device, whose events are discarded at resolution.
+func (r *Registry) endRegistration(identity, regId string) bool {
+	r.mu.Lock()
+	e := r.byRegId[regId]
+	if e == nil || e.identity != identity {
+		r.mu.Unlock()
+		return false
+	}
+	r.removeLocked(e)
+	epoch := e.epoch
+	r.mu.Unlock()
+	r.fireSessionEnd(identity, epoch)
+	return true
+}
+
+// EndIfDisabled is the Update-time quarantine check, called by the handler BEFORE Update and not
+// under r.mu (it is a network call). If the identity's live registration regId belongs to a device an
+// operator has disabled, the registration is ended and true is returned: the handler answers 4.04, the
+// device re-registers, and the Register refuses it (4.03).
+//
+// 🔴 THE ASYMMETRY IS DELIBERATE. A Register FAILS CLOSED when the disabled state cannot be read
+// (5.03), but this check does NOT: on a lookup error it returns false and the Update is answered
+// 2.04 as usual. A device-management outage must not push the whole registered fleet into
+// re-registering against 5.03; a device disabled during the outage is ended at the first Update
+// after it recovers, and its events are discarded at resolution meanwhile.
+func (r *Registry) EndIfDisabled(ctx context.Context, identity, regId string) bool {
+	r.mu.Lock()
+	e := r.byRegId[regId]
+	if r.stopped || e == nil || e.identity != identity || e.shadow || e.token == "" {
+		r.mu.Unlock()
+		return false
+	}
+	tenant, token := e.tenant, e.token
+	r.mu.Unlock()
+	disabled, err := r.resolver.Disabled(ctx, tenant, token)
+	if err != nil {
+		log.Debug().Err(err).Str("tenant", tenant).Msg("Could not check whether a registered LwM2M device is disabled; keeping its registration.")
+		return false
+	}
+	if !disabled {
+		return false
+	}
+	if r.endRegistration(identity, regId) {
+		incr(r.metrics.DisabledRefused, 1)
+		log.Info().Str("tenant", tenant).Str("regId", regId).Msg("Ended the LwM2M registration of a device that has been disabled.")
+		return true
+	}
+	return false
 }
 
 // UpdateResult is the outcome of an Update the handler maps to a CoAP reply.

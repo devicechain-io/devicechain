@@ -7,9 +7,11 @@ package profilecheck
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/devicechain-io/dc-microservice/svcclient"
+	"github.com/devicechain-io/dc-update-management/model"
 )
 
 // Querier is the slice of svcclient.Client this package uses.
@@ -56,16 +58,17 @@ func (c *Checker) Missing(ctx context.Context, tenant string, tokens []string) (
 	return missing, nil
 }
 
-const deviceProfile = `query($tokens: [String!]!) { devicesByToken(tokens: $tokens) { token deviceType { profile { token } } } }`
+const deviceFacts = `query($tokens: [String!]!) { devicesByToken(tokens: $tokens) { token enabled deviceType { profile { token } } } }`
 
-// ProfileOf implements model.DeviceLookup: the token of the device-profile a device resolves
-// through, found=false for a device the tenant does not have, and an empty profile for a device
-// whose type has none. An error means the answer could not be obtained; it is never reported as a
-// device that does not exist.
-func (c *Checker) ProfileOf(ctx context.Context, tenant, deviceToken string) (profile string, found bool, err error) {
+// DeviceOf implements model.DeviceLookup: the token of the device-profile a device resolves
+// through (empty for a device whose type has none), whether an operator has disabled it, and
+// found=false for a device the tenant does not have. An error means the answer could not be
+// obtained; it is never reported as a device that does not exist or one that is enabled.
+func (c *Checker) DeviceOf(ctx context.Context, tenant, deviceToken string) (facts model.DeviceFacts, found bool, err error) {
 	var out struct {
 		DevicesByToken []struct {
 			Token      string `json:"token"`
+			Enabled    *bool  `json:"enabled"`
 			DeviceType struct {
 				Profile *struct {
 					Token string `json:"token"`
@@ -73,17 +76,22 @@ func (c *Checker) ProfileOf(ctx context.Context, tenant, deviceToken string) (pr
 			} `json:"deviceType"`
 		} `json:"devicesByToken"`
 	}
-	if err := c.client.Query(ctx, c.url, tenant, deviceProfile, map[string]any{"tokens": []string{deviceToken}}, &out); err != nil {
-		return "", false, fmt.Errorf("device-management device lookup: %w", err)
+	if err := c.client.Query(ctx, c.url, tenant, deviceFacts, map[string]any{"tokens": []string{deviceToken}}, &out); err != nil {
+		return model.DeviceFacts{}, false, fmt.Errorf("device-management device lookup: %w", err)
 	}
 	for _, d := range out.DevicesByToken {
 		if d.Token != deviceToken {
 			continue
 		}
-		if d.DeviceType.Profile != nil {
-			profile = d.DeviceType.Profile.Token
+		// `enabled` is non-null in the schema; an answer without it is not "enabled".
+		if d.Enabled == nil {
+			return model.DeviceFacts{}, false, errors.New("device-management device lookup: the answer carries no enabled flag")
 		}
-		return profile, true, nil
+		facts.Disabled = !*d.Enabled
+		if d.DeviceType.Profile != nil {
+			facts.Profile = d.DeviceType.Profile.Token
+		}
+		return facts, true, nil
 	}
-	return "", false, nil
+	return model.DeviceFacts{}, false, nil
 }
