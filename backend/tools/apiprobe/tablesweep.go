@@ -169,6 +169,12 @@ var tableSweepExemptions = map[string]string{
 		"Delivery and reporting are proven end to end by the device-management delivery tests. The " +
 		"revision a report would answer is covered: entity-attribute-configuration mints " +
 		"device_configuration_revisions through the real API.",
+	"update-management.secrets": "the per-tenant download-capability signing key, created on first " +
+		"use by GrantDownload -- and the only caller is update-management's consumer of the " +
+		"device-reports channel, answering a DEVICE's request to download its current assignment. " +
+		"No GraphQL mutation mints a capability, so seeding a key would mean a device session this " +
+		"drill deliberately does not open. The assignment and attempt that a grant would answer are " +
+		"covered: update-assignment writes both through the real API.",
 	"device-management.alarms": "alarm objects are RAISED by the REACT pipeline when a rule fires. " +
 		"Nothing fires in a drill that sends no telemetry, and creating one by hand would assert " +
 		"the row rather than the engine that produces it.",
