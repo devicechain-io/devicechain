@@ -74,6 +74,10 @@ type EventResolver struct {
 	// rows the deletion removes — and would otherwise be retried to the cap and recorded on
 	// failed-events, a new record of the data being erased.
 	tenantDeleted func(string) bool
+	// deviceDisabled counts events refused because their device is disabled. ONE counter
+	// for the pool (initializeEventResolvers sets it), label-free; nil in tests that do not
+	// look at it.
+	deviceDisabled prometheus.Counter
 }
 
 // EventTimePolicy is the resolution-time event-time policy: the tolerance a
@@ -1040,6 +1044,18 @@ func (rez *EventResolver) ResolveEvent(ctx context.Context, unrez *esmodel.Unres
 	if err != nil {
 		return nil, reason, err
 	}
+	// A disabled device's events are refused here, on every path that resolved it — a
+	// credential, a trusted token, a transport-authenticated event — and after the device
+	// is known, so the refusal names a device that exists. The credential path refused
+	// first when the presented credential was bad: a disabled device does not turn a
+	// failed authentication into a different answer.
+	if device.IsDisabled() {
+		if rez.deviceDisabled != nil {
+			rez.deviceDisabled.Inc()
+		}
+		return nil, uint(dmproto.FailureReason_DeviceDisabled),
+			fmt.Errorf("%w: event for device %q refused", model.ErrDeviceDisabled, device.Token)
+	}
 	return rez.HandleEvent(ctx, device, unrez)
 }
 
@@ -1122,12 +1138,23 @@ func (rez *EventResolver) Process(ctx context.Context) {
 				// and a failed-events copy would be a new record of the data being erased. So is
 				// ANY failure for a tenant that has been deleted (tenantDeleted): its device and
 				// credentials are swept early, so its events mostly fail before reaching a write.
+				//
+				// An event from a DISABLED device is settled on its first delivery and
+				// discarded: no redelivery can answer differently while the device stays
+				// disabled, and a device is disabled precisely when its traffic is unwanted
+				// — often a flood — so a failed-events copy of each event would move the
+				// flood into the dead-letter store. It is counted
+				// (resolve_device_disabled_total) and reported as dropped.
 				disposition := messaging.Dispose(unresolved, err)
 				if disposition == messaging.TenantErased || (rez.tenantDeleted != nil && rez.tenantDeleted(tenant)) {
 					log.Info().Str("correlation", correlation).
 						Msg("Settling an event for a deleted tenant; this area's data has been erased.")
 					_ = unresolved.Ack()
 					done(core.ResultErased)
+				} else if errors.Is(err, model.ErrDeviceDisabled) {
+					log.Debug().Str("correlation", correlation).Err(err).Msg("Discarding an event from a disabled device.")
+					_ = unresolved.Ack()
+					done(core.ResultDropped)
 				} else if disposition == messaging.Exhausted || errors.Is(err, eventtime.ErrTooOld) {
 					rez.Failed(unresolved, tenant, reason, *event, err)
 					done(core.ResultFailed)

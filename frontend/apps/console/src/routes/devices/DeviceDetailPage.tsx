@@ -34,6 +34,7 @@ import { formatTime } from '@/lib/utils';
 import { presenceKind, presenceSourceLabelKey } from '@/lib/presence';
 import { errMessage, useReload } from '@/routes/common';
 import { DeviceForm } from '@/routes/devices/DeviceForm';
+import { DeviceEnabledAction } from '@/routes/devices/DeviceEnabledAction';
 import { DeviceCommandsPanel } from '@/routes/devices/DeviceCommandsPanel';
 import { DeviceCredentialsPanel } from '@/routes/devices/DeviceCredentialsPanel';
 import { DeviceReplacementPanel } from '@/routes/devices/DeviceReplacementPanel';
@@ -109,12 +110,23 @@ export default function DeviceDetailPage() {
       description={
         <div className="flex flex-wrap items-center gap-2">
           <TypeCapsule appearance={appearanceOf(device.deviceType)} />
+          {!device.enabled && (
+            <Badge
+              variant="warning"
+              title={device.disabledAt ? t('disabledSince', { time: formatTime(device.disabledAt) }) : undefined}
+            >
+              {t('deviceDisabledBadge')}
+            </Badge>
+          )}
         </div>
       }
       action={
-        <Button variant="destructive" size="sm" onClick={remove}>
-          <Trash2 size={14} /> {t('delete')}
-        </Button>
+        <div className="flex flex-wrap items-center gap-2">
+          <DeviceEnabledAction device={device} onChanged={reload} />
+          <Button variant="destructive" size="sm" onClick={remove}>
+            <Trash2 size={14} /> {t('delete')}
+          </Button>
+        </div>
       }
     >
       {/* Connectivity + events sit in their own tabs, so they load only when

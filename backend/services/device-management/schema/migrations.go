@@ -39,5 +39,6 @@ var (
 		NewProfileConfigurationDeclarationSchema(),
 		NewDeviceConfigurationSchema(),
 		NewCredentialSecretDigestSchema(),
+		NewDeviceDisabledSchema(),
 	}
 )

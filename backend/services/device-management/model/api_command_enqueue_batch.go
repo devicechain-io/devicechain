@@ -115,6 +115,16 @@ func (api *Api) ValidateCommandEnqueueBatch(ctx context.Context, deviceTokens []
 			})
 			continue
 		}
+		// Per DEVICE, not per type: the one refusal here that the type's vocabulary cannot
+		// decide. It is checked before the vocabulary, as the single gate checks it.
+		if device.IsDisabled() {
+			refusals = append(refusals, &BatchEnqueueRefusal{
+				DeviceToken: token,
+				Code:        RejectDeviceDisabled,
+				Reason:      deviceDisabledReason(token),
+			})
+			continue
+		}
 
 		decision, resolved := decisions[device.DeviceTypeId]
 		if !resolved {

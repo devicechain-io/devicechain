@@ -74,6 +74,34 @@ La credencial del cuerpo del evento es la verificación **por evento**. Las **co
 
 Consulta [Conexión de un dispositivo](./connecting-a-device.md) para los detalles de transporte.
 
+## Deshabilitar un dispositivo {#disabling-a-device}
+
+Deshabilitar un dispositivo lo deja fuera sin eliminarlo ni tocar sus credenciales. Úsalo para poner en cuarentena un dispositivo comprometido o que está inundando la plataforma, y vuelve a habilitarlo cuando esté corregido.
+
+Mientras un dispositivo está deshabilitado:
+
+- **Sus eventos se descartan.** Se rechazan al llegar, sea cual sea la credencial o el transporte por el que llegaron, y se cuentan en `devicechain_devicemanagement_resolve_device_disabled_total`. No se almacenan ni van a la cola de mensajes fallidos (dead-letter), y no se recuperan cuando el dispositivo vuelve a habilitarse.
+- **No puede abrir una conexión nueva.** El broker rechaza la conexión con la misma respuesta que una contraseña incorrecta. Una conexión que el dispositivo ya tenía sigue abierta hasta que termina, pero todo lo que publica por ella se descarta.
+- **Los comandos que se le envían se rechazan** con `DEVICE_DISABLED`. Un comando de flota lo incluye entre los dispositivos rechazados. Consulta [Cuando se rechaza una admisión](./sending-commands.md#when-an-enqueue-is-refused). Los comandos encolados para él **antes** de deshabilitarlo no se cancelan: se entregan por una conexión que todavía tenga abierta, o cuando se vuelva a habilitar y se conecte de nuevo. [Cancélalos](./sending-commands.md#cancel-one) si no deben llegarle.
+- **No genera alarmas de silencio.** Una regla que genera una alarma cuando un dispositivo deja de informar ignora un dispositivo deshabilitado. Cuando se vuelve a habilitar, la regla espera una ventana de silencio completa desde ese momento antes de poder considerarlo silencioso.
+- **Todo lo demás se conserva**: sus datos, credenciales, configuración, relaciones y pertenencia a grupos.
+
+El cambio se aplica en todas las réplicas con el siguiente evento del dispositivo: es un cambio del dispositivo, así que descarta las copias en caché igual que una [revocación](#revocation-timing).
+
+En la consola, abre el dispositivo y elige **Deshabilitar** (o **Habilitar**); un dispositivo deshabilitado muestra una insignia **Deshabilitado** en su página y en la lista de dispositivos. Mediante GraphQL, establece `enabled` en una actualización parcial. Se rechaza `null`, y deshabilitar un dispositivo que ya está deshabilitado conserva el momento en que se deshabilitó por primera vez, que informa `disabledAt`:
+
+```graphql
+mutation {
+  updateDevice(token: "pump-7", request: { enabled: false }) {
+    token
+    enabled
+    disabledAt
+  }
+}
+```
+
+También se puede crear un dispositivo ya deshabilitado, con `enabled: false` en `createDevice`. El cambio queda registrado en el registro de auditoría como una actualización del dispositivo.
+
 ## Las conexiones fallidas repetidas se ralentizan {#connect-backoff}
 
 Tras fallos repetidos, las conexiones MQTT que presentan usuario y contraseña se ralentizan, de modo que una contraseña no puede adivinarse al ritmo al que el broker acepta conexiones.

@@ -236,3 +236,89 @@ func TestRollbackDeviceProfile_EmitsRolledBackRules(t *testing.T) {
 		}
 	}
 }
+
+// A disabled device's events are refused at resolution, so to the detection engine it is
+// a device that has gone silent. It must not raise an absence alarm for that: disabling
+// re-rosters it with NO profile, which disarms every absence rule for it, and the roster
+// page the engine reconciles from says the same. Enabling re-rosters it under its profile
+// with the membership beginning at the enable, so it gets a fresh grace window rather than
+// an absence fired at once for the time it spent disabled.
+//
+// Each fact's ExpectedSince must be STRICTLY after the previous one's: event-processing's
+// roster projection applies a fact only when it is strictly newer than the row it holds, so
+// a disable that kept the old instant would be ignored there and the device would stay
+// armed.
+func TestUpdateDevice_DisableTakesTheDeviceOutOfAbsenceAndEnableGivesAFreshGrace(t *testing.T) {
+	api := newRosterEmitTestApi(t)
+	ctx := core.WithTenant(context.Background(), "acme")
+	cap := &captureRoster{}
+	api.DeviceRosterPublisher = cap
+
+	seedType(t, api, ctx, "sensor", "sensor-profile")
+	if _, err := api.CreateDevice(ctx, &DeviceCreateRequest{Token: "d1", DeviceTypeToken: "sensor"}); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	past := time.Now().Add(-24 * time.Hour)
+	if err := api.RDB.DB(ctx).Model(&Device{}).Where("token = ?", "d1").Update("created_at", past).Error; err != nil {
+		t.Fatalf("backdate: %v", err)
+	}
+	cap.events = nil
+
+	rosterOf := func() DeviceRosterEntry {
+		t.Helper()
+		page, err := api.DeviceRosterPage(ctx, 0, 10)
+		if err != nil || len(page.Entries) != 1 {
+			t.Fatalf("roster page: %v (%d entries)", err, len(page.Entries))
+		}
+		return page.Entries[0]
+	}
+
+	if _, err := api.UpdateDevice(ctx, "d1", &DeviceUpdateRequest{Enabled: dcgraphql.OptionalBoolOf(false)}); err != nil {
+		t.Fatalf("disable: %v", err)
+	}
+	if !assert.Len(t, cap.events, 1, "a disable emits exactly one roster fact") {
+		return
+	}
+	disabled := cap.events[0]
+	assert.Equal(t, "", disabled.ProfileToken, "a disabled device is rostered with no profile, so no absence rule arms for it")
+	assert.True(t, disabled.ExpectedSince.After(past.Add(time.Hour)),
+		"the disable fact must be newer than the creation fact or the projection ignores it: got %s", disabled.ExpectedSince)
+	assert.Equal(t, "", rosterOf().ProfileToken, "the reconcile page agrees with the fact")
+
+	cap.events = nil
+	if _, err := api.UpdateDevice(ctx, "d1", &DeviceUpdateRequest{Enabled: dcgraphql.OptionalBoolOf(false)}); err != nil {
+		t.Fatalf("disable again: %v", err)
+	}
+	assert.Empty(t, cap.events, "disabling a disabled device changes no membership and emits nothing")
+
+	if _, err := api.UpdateDevice(ctx, "d1", &DeviceUpdateRequest{Enabled: dcgraphql.OptionalBoolOf(true)}); err != nil {
+		t.Fatalf("enable: %v", err)
+	}
+	if assert.Len(t, cap.events, 1, "an enable emits exactly one roster fact") {
+		enabled := cap.events[0]
+		assert.Equal(t, "sensor-profile", enabled.ProfileToken, "an enabled device is rostered under its profile again")
+		assert.True(t, enabled.ExpectedSince.After(disabled.ExpectedSince),
+			"the enable fact must be strictly newer than the disable fact: got %s, disable was %s",
+			enabled.ExpectedSince, disabled.ExpectedSince)
+		entry := rosterOf()
+		assert.Equal(t, "sensor-profile", entry.ProfileToken)
+		assert.True(t, entry.ExpectedSince.Equal(enabled.ExpectedSince), "the reconcile page agrees with the fact")
+	}
+}
+
+// A device created disabled is rostered with no profile from the start.
+func TestCreateDevice_DisabledIsRosteredWithNoProfile(t *testing.T) {
+	api := newRosterEmitTestApi(t)
+	ctx := core.WithTenant(context.Background(), "acme")
+	cap := &captureRoster{}
+	api.DeviceRosterPublisher = cap
+	off := false
+
+	seedType(t, api, ctx, "sensor", "sensor-profile")
+	if _, err := api.CreateDevice(ctx, &DeviceCreateRequest{Token: "d1", DeviceTypeToken: "sensor", Enabled: &off}); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if assert.Len(t, cap.events, 1) {
+		assert.Equal(t, "", cap.events[0].ProfileToken)
+	}
+}

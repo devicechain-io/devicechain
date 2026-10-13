@@ -6,6 +6,7 @@ package processor
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"sync/atomic"
@@ -482,6 +483,34 @@ func TestAuthorizeResolvesTheDeviceBeforeCheckingTheClientID(t *testing.T) {
 	if !authenticated {
 		t.Error("the device was never resolved, so the required client id could not have been " +
 			"derived — the comparison was made against something other than the device token")
+	}
+}
+
+// A disabled device is refused a session on both connect paths, with the generic answer,
+// while the same device enabled is granted — the counterweight that shows the refusal is
+// the disabled flag's and not some other property of the fixture.
+func TestAuthorizeRefusesADisabledDevice(t *testing.T) {
+	for _, tc := range []struct{ name, user, pass string }{
+		{"password", "acme-corp:dev1", "s3cret"},
+		{"access token", "acme-corp:tok-abc", ""},
+	} {
+		for _, disabled := range []bool{true, false} {
+			t.Run(fmt.Sprintf("%s/disabled=%v", tc.name, disabled), func(t *testing.T) {
+				r, _ := newTestResponder(t, func(context.Context, *model.PresentedCredential) (*model.Device, error) {
+					d := &model.Device{}
+					d.Token = "sensor-001"
+					d.DisabledAt.Valid = disabled
+					return d, nil
+				})
+				userJWT, errMsg := r.authorize(testRequest(t, tc.user, tc.pass))
+				if disabled && (userJWT != "" || errMsg != genericAuthFailure) {
+					t.Fatalf("a disabled device was not refused generically: jwt=%q err=%q", userJWT, errMsg)
+				}
+				if !disabled && (userJWT == "" || errMsg != "") {
+					t.Fatalf("an enabled device was refused: err=%q", errMsg)
+				}
+			})
+		}
 	}
 }
 

@@ -490,6 +490,35 @@ var entities = []entity{
 		},
 	},
 	{
+		// Depends on: device-type. A device created DISABLED, so the drill watches the
+		// disabled-since column across an upgrade: a quarantine lost to an upgrade re-admits
+		// the device's traffic with nothing to show for it but a healthy-looking device.
+		//
+		// Its own row, gated on the one field it sends, for the reason asset-type-schema
+		// gives: the device row above keeps seeding against a baseline that has no
+		// `enabled`, and this one appears from the release that can express it. A leaf —
+		// nothing reads its token.
+		//
+		// disabledAt is NOT selected. The create response and the stored row disagree on
+		// its precision for the reason timestampFieldsThatRoundTrip documents, so `enabled`
+		// is the stored fact compared.
+		Name:     "device-disabled",
+		Area:     "device-management",
+		Mutation: "createDevice",
+		Input:    "DeviceCreateRequest!",
+		Read:     "devicesByToken",
+		Requires: []string{"DeviceCreateRequest.enabled"},
+		Fields:   "token name enabled deviceType{token}",
+		Vars: func(s *state) map[string]any {
+			return map[string]any{"req": map[string]any{
+				"token":           s.tok("device-disabled"),
+				"name":            "apiprobe disabled device",
+				"deviceTypeToken": s.tokens["deviceType"],
+				"enabled":         false,
+			}}
+		},
+	},
+	{
 		// Depends on: device. One physical-unit swap, so the append-only replacement
 		// journal has a row the drill can watch across an upgrade — a lifecycle record
 		// nobody can re-derive is exactly the kind of row whose survival is worth

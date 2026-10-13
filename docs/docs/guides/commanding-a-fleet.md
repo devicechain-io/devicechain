@@ -234,6 +234,7 @@ whether it was capped.
 The per-device `code` uses the same open vocabulary as a single enqueue rejection:
 
 - `DEVICE_NOT_FOUND`
+- `DEVICE_DISABLED`
 - `COMMAND_NOT_IN_VOCABULARY`
 - `PAYLOAD_SCHEMA_VIOLATION`, relayed from the device's profile
 - `HELD_CEILING_EXCEEDED`, for the devices that did not fit under the tenant's remaining headroom

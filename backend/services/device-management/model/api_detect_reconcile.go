@@ -134,6 +134,7 @@ type rosterRow struct {
 	ExpectedSince sql.NullTime
 	CreatedAt     time.Time
 	ProfileToken  sql.NullString
+	DisabledAt    sql.NullTime
 }
 
 // rosterEntries is the ONE query that says what a device's roster entry is: its token, the STABLE
@@ -147,13 +148,20 @@ type rosterRow struct {
 // one, so a later first publish can arm absence for it. An empty token (no profile) is still an
 // entry, retained so a later re-type re-homes it.
 //
+// A DISABLED device is rostered with an empty profile token too, whatever its type adopts. Its
+// events are refused at resolution, so to the detection engine it is a device that has gone
+// silent, and an absence rule would raise a "device silent" alarm for a device an operator
+// deliberately shut out. With no profile it arms no absence rule; enabling it restores the
+// profile, with its membership beginning at the enable (UpdateDevice stamps expected_since), so
+// it gets a fresh grace window rather than an absence for the time it spent disabled.
+//
 // where narrows the statement (a device id, a type, a keyset page). Rows come back in id order.
 func (api *Api) rosterEntries(ctx context.Context, where func(*gorm.DB) *gorm.DB) ([]DeviceRosterEntry, error) {
 	rows := make([]rosterRow, 0)
 	q := api.RDB.DB(ctx).Model(&Device{}).
 		Select("devices.id AS device_id, devices.token AS device_token, " +
 			"devices.expected_since AS expected_since, devices.created_at AS created_at, " +
-			"device_profiles.token AS profile_token").
+			"device_profiles.token AS profile_token, devices.disabled_at AS disabled_at").
 		Joins("LEFT JOIN device_types ON device_types.id = devices.device_type_id AND device_types.deleted_at IS NULL").
 		Joins("LEFT JOIN device_profiles ON device_profiles.id = device_types.profile_id AND device_profiles.deleted_at IS NULL")
 	if err := where(q).Order("devices.id").Scan(&rows).Error; err != nil {
@@ -165,10 +173,14 @@ func (api *Api) rosterEntries(ctx context.Context, where func(*gorm.DB) *gorm.DB
 		if r.ExpectedSince.Valid {
 			since = r.ExpectedSince.Time
 		}
+		profile := r.ProfileToken.String
+		if r.DisabledAt.Valid {
+			profile = ""
+		}
 		out = append(out, DeviceRosterEntry{
 			DeviceId:      r.DeviceId,
 			DeviceToken:   r.DeviceToken,
-			ProfileToken:  r.ProfileToken.String,
+			ProfileToken:  profile,
 			ExpectedSince: since.UTC(),
 		})
 	}

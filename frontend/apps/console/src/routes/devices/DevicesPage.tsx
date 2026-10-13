@@ -14,6 +14,7 @@ import { getDeviceStates } from '@/lib/api/device-state';
 import { presenceKind, type PresenceFacts } from '@/lib/presence';
 import { PageShell } from '@/components/ui/page-shell';
 import { Button } from '@/components/ui/button';
+import { Badge } from '@/components/ui/badge';
 import { LoadingState } from '@/components/ui/loading-state';
 import { ErrorState } from '@/components/ui/error-state';
 import { EmptyState } from '@/components/ui/empty-state';
@@ -164,7 +165,10 @@ export default function DevicesPage() {
                     <span className="font-mono text-xs text-foreground">{device.token}</span>
                   </DataTableCell>
                   <DataTableCell className="font-medium text-foreground">
-                    {device.name || '—'}
+                    <span className="inline-flex items-center gap-2">
+                      {device.name || '—'}
+                      {!device.enabled && <Badge variant="warning">{t('deviceDisabledBadge')}</Badge>}
+                    </span>
                   </DataTableCell>
                   <DataTableCell>
                     <TypeCapsule appearance={appearanceOf(device.deviceType)} />

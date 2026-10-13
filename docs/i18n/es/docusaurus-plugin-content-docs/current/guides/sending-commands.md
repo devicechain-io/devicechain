@@ -103,6 +103,7 @@ redacción puede cambiar.
 |---|---|---|
 | `HELD_CEILING_EXCEEDED` | El inquilino está en su límite de comandos **no entregados** — todo lo que sigue en `QUEUED`, `HELD` o `PARKED`, no solo lo retenido para dispositivos ausentes. | **Sí** — se libera conforme esos comandos salen |
 | `DEVICE_NOT_FOUND` | No hay ningún dispositivo con ese token en este inquilino. | No |
+| `DEVICE_DISABLED` | El dispositivo está [deshabilitado](./device-credentials.md#disabling-a-device). El comando no se guarda para más tarde. | No — habilita primero el dispositivo |
 | `COMMAND_NOT_IN_VOCABULARY` | El perfil restringe los comandos y esta clave no es uno de ellos. Revisa mayúsculas y minúsculas. | No |
 | `PAYLOAD_SCHEMA_VIOLATION` | La carga útil incumplió el esquema de parámetros del comando — parámetro desconocido, tipo incorrecto, fuera de rango, o falta uno requerido. | No |
 | `PAYLOAD_NOT_JSON` / `METADATA_NOT_JSON` | La cadena no es JSON válido. | No |

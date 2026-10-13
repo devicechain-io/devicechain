@@ -75,6 +75,9 @@ type deviceProjection struct {
 	ID, DeviceTypeId     uint
 	Tenant, Token, ExtID string
 	ExtIDValid           bool
+	// Disabled is whether the device reads as disabled. The resolver refuses a disabled
+	// device's events, so a narrow read that dropped the column would let them through.
+	Disabled bool
 }
 
 func projectCredential(c *DeviceCredential) credProjection {
@@ -90,7 +93,7 @@ func projectDevice(d *Device) deviceProjection {
 		return deviceProjection{}
 	}
 	return deviceProjection{ID: d.ID, DeviceTypeId: d.DeviceTypeId, Tenant: d.TenantId, Token: d.Token,
-		ExtID: d.ExternalId.String, ExtIDValid: d.ExternalId.Valid}
+		ExtID: d.ExternalId.String, ExtIDValid: d.ExternalId.Valid, Disabled: d.IsDisabled()}
 }
 
 // The narrow read resolves exactly what the full read resolves, for every shape of
@@ -151,6 +154,14 @@ func TestTheEventLookupResolvesWhatTheFullReadResolves(t *testing.T) {
 	}
 	mustExec(t, db().Model(&DeviceCredential{}).Where("credential_id = ?", "tok-cross").Update("device_id", foreign.ID))
 
+	quarantined, err := f.api.CreateDevice(f.ctx, &DeviceCreateRequest{Token: "quarantined", DeviceTypeToken: "dt",
+		Enabled: boolp(false)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mk("c-10", "tok-quarantined", CredentialAccessToken, true, nil)
+	mustExec(t, db().Model(&DeviceCredential{}).Where("credential_id = ?", "tok-quarantined").Update("device_id", quarantined.ID))
+
 	cases := []struct {
 		name  string
 		ctx   context.Context
@@ -168,6 +179,7 @@ func TestTheEventLookupResolvesWhatTheFullReadResolves(t *testing.T) {
 		{"disabled credential", f.ctx, CredentialAccessToken, "tok-off", ""},
 		{"soft-deleted device", f.ctx, CredentialAccessToken, "tok-gone", ""},
 		{"device in another tenant", f.ctx, CredentialAccessToken, "tok-cross", ""},
+		{"disabled device", f.ctx, CredentialAccessToken, "tok-quarantined", ""},
 		{"unknown credential", f.ctx, CredentialAccessToken, "nope", ""},
 		{"another tenant's context", other, CredentialAccessToken, "tok-1", ""},
 		{"no tenant in context", context.Background(), CredentialAccessToken, "tok-1", ""},

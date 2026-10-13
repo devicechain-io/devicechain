@@ -176,6 +176,7 @@ resolved = accepted + the sum of refusalCounts
 每台设备的 `code` 使用与单条入队拒绝相同的开放词汇：
 
 - `DEVICE_NOT_FOUND`
+- `DEVICE_DISABLED`
 - `COMMAND_NOT_IN_VOCABULARY`
 - `PAYLOAD_SCHEMA_VIOLATION`，从设备配置档转达
 - `HELD_CEILING_EXCEEDED`，表示设备超出租户剩余容量

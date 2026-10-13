@@ -238,7 +238,9 @@ func TestRefusalCodeLabelsAreClosed(t *testing.T) {
 		// These are produced by another service and deliberately not re-declared as
 		// constants here. They are allowlisted by value so the most common refusals a
 		// heterogeneous fleet write produces are not all lumped into "other".
-		for _, code := range []RejectionCode{"COMMAND_NOT_IN_VOCABULARY", "DEVICE_NOT_FOUND"} {
+		for _, code := range []RejectionCode{
+			"COMMAND_NOT_IN_VOCABULARY", "DEVICE_NOT_FOUND", "PAYLOAD_SCHEMA_VIOLATION", "DEVICE_DISABLED",
+		} {
 			if got := metricCodeLabel(code); got != string(code) {
 				t.Errorf("metricCodeLabel(%s) = %q, want it unchanged", code, got)
 			}

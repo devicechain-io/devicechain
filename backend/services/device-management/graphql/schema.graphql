@@ -522,9 +522,10 @@ type CommandEnqueueVerdict {
     allowed: Boolean!
     """
     Why the command was refused, as a stable code; null when allowed. One of
-    DEVICE_NOT_FOUND (no device has the token), COMMAND_NOT_IN_VOCABULARY (the device's
-    published profile declares commands and this key is not one of them) or
-    PAYLOAD_SCHEMA_VIOLATION (the payload does not satisfy the command's parameters).
+    DEVICE_NOT_FOUND (no device has the token), DEVICE_DISABLED (the device is disabled and
+    accepts no commands), COMMAND_NOT_IN_VOCABULARY (the device's published profile declares
+    commands and this key is not one of them) or PAYLOAD_SCHEMA_VIOLATION (the payload does
+    not satisfy the command's parameters).
     Branch on this, not on reason.
     """
     code: String
@@ -540,7 +541,7 @@ type BatchEnqueueRefusal {
     """The refused device's token, exactly as it appeared in the request."""
     deviceToken: String!
     """
-    Why the command was refused, as a stable code: DEVICE_NOT_FOUND,
+    Why the command was refused, as a stable code: DEVICE_NOT_FOUND, DEVICE_DISABLED,
     COMMAND_NOT_IN_VOCABULARY or PAYLOAD_SCHEMA_VIOLATION, with the same meanings as in
     validateCommandEnqueue. Branch on this, not on reason.
     """
@@ -1432,6 +1433,14 @@ type Device implements Model & TokenReference & NamedEntity & MetadataEntity & E
     deviceType: DeviceType!
     """Caller-defined metadata as a JSON document, or null when none is set."""
     metadata: String
+    """
+    False when the device has been disabled. A disabled device's events are discarded
+    rather than stored, it cannot open a new broker connection, and commands sent to it are
+    refused with DEVICE_DISABLED. Its data, credentials and configuration are kept.
+    """
+    enabled: Boolean!
+    """When the device was disabled, as an RFC 3339 timestamp; null while it is enabled."""
+    disabledAt: String
 }
 
 """Fields for a new device."""
@@ -1451,6 +1460,8 @@ input DeviceCreateRequest {
     deviceTypeToken: String!
     """Caller-defined metadata. Must be valid JSON; an empty string means none."""
     metadata: String
+    """False to create the device already disabled. Omitted or null creates it enabled."""
+    enabled: Boolean
 }
 
 # There is no `token` member — the mutation's own `token` argument names the row. It used
@@ -1483,6 +1494,11 @@ input DeviceUpdateRequest {
     deviceTypeToken: String
     """New metadata (valid JSON, replacing the stored document), or null to clear it."""
     metadata: String
+    """
+    False to disable the device, true to enable it again. An explicit null is refused.
+    Disabling a device that is already disabled keeps the time it was first disabled.
+    """
+    enabled: Boolean
 }
 
 """
