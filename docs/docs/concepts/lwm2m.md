@@ -9,7 +9,7 @@ Constrained and cellular fleets often speak [**OMA LwM2M**](https://lwm2m.openmo
 Sparkplug ingestion connects out to *your* broker. LwM2M works the other way: devices connect **in** to DeviceChain's secured CoAP endpoint, the same shape as the standard MQTT path.
 
 :::note Status
-LwM2M ingestion is available as an opt-in service over CoAP/UDP with DTLS-PSK. It drives authoritative [device presence](./device-presence.md), ingests observed sensor objects as measurements, and sends Read/Write/Execute commands downlink, with durable hold-and-drain for sleeping devices. Notify decoding is **SenML-JSON only**, so an LwM2M 1.0-only client gets presence and commands but no measurements until TLV decoding lands. GA scope is PSK credentials; X.509 / raw-public-key and a Bootstrap server are planned.
+LwM2M ingestion is available as an opt-in service over CoAP/UDP with DTLS-PSK. It drives authoritative [device presence](./device-presence.md), ingests observed sensor objects as measurements, and sends Read/Write/Execute commands downlink, with durable hold-and-drain for sleeping devices. Reboot and a device-information read are available [by name](#named-operations-and-device-information), and each device's manufacturer, model, serial number, firmware version and battery level are read when it registers and kept as attributes. Notify decoding is **SenML-JSON only**, so an LwM2M 1.0-only client gets presence and commands but no measurements until TLV decoding lands. GA scope is PSK credentials; X.509 / raw-public-key and a Bootstrap server are planned.
 :::
 
 ## What it does
@@ -48,7 +48,7 @@ Only **SenML-JSON** notifications are decoded today, and you should size that up
 
 Platform commands become LwM2M **Read / Write / Execute** operations on the device's resources.
 
-A firmware update is driven the same way, as an operator sequence rather than a single platform operation. You issue the Writes and the Execute against the standard Firmware Update object yourself, as ordinary commands. DeviceChain keeps one device's commands in the order you enqueued them, so a firmware write and its execute can never reorder. It does not model the update as one managed job.
+A firmware update is driven the same way, as an operator sequence rather than a single platform operation. You issue the Writes and the Execute against the standard Firmware Update object yourself, as ordinary commands. DeviceChain keeps one device's commands in the order you enqueued them, so a firmware write and its execute can never reorder. It does not model the update as one managed job, and the platform's [over-the-air updates](./over-the-air-updates.md) do not reach LwM2M devices.
 
 When a device is slow to answer and its commands queue up, further commands for it are set aside and delivered moments later, still in order. One slow device does not hold up commands to the others.
 

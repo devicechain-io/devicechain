@@ -97,7 +97,7 @@ title: 指标参考
 | `detect_loop_heartbeat_timestamp_seconds` | DETECT 单写入者循环最近一次通过的 Unix 时间，任期有效期间每个周期至少刷新一次。在 detect_is_leader 和 detect_live 读数为 1 时陈旧，表示循环挂在了某次调用内部。 |
 | `detect_restore_seconds` | 启动时从快照存储恢复引擎状态的时间。 |
 | `detect_rules_active` | 加载到 DETECT 引擎的规则。 |
-| `detect_stale_absence_dropped_total` | 因设备离开规则范围（已删除、重新分型，或规则版本已被取代）而在发布时丢弃的缺席检测。 |
+| `detect_stale_absence_dropped_total` | 因设备离开规则范围（已删除、已禁用、重新分型，或规则版本已被取代）而在发布时丢弃的缺席**触发**。当某次触发在同一轮中被丢弃时，与之配对的清除也计入；重新发布时因新版本保留该规则而被扣下的清除同样计入。已离开范围的设备的清除不会被丢弃，因此它此前触发的告警会被清除。 |
 | `detect_superseded_frontier_dropped_total` | 因其档案版本已被取代而在发布时丢弃的、随时间流逝而触发的持续时间、会话和聚合类检测。 |
 | `detect_tenants_over_live_key_budget` | 当前超过逐租户活动键预算的租户。 |
 | `detect_tenants_over_retained_sample_budget` | 当前超过逐租户保留样本预算的租户。 |

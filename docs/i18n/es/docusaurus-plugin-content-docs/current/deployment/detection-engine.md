@@ -336,7 +336,7 @@ no cumplida, lo que puede no ocurrir nunca.
 **El patrón previsto es emparejar una regla así con una regla de ausencia**, para que un dispositivo
 que deja de reportar levante una señal distinta y accionable en lugar de dejar una obsoleta en pie.
 
-Tres causas más que conviene revisar:
+Cuatro causas más que conviene revisar:
 
 - **Un «limpiar» de un operador no elimina la condición subyacente.** Si la condición sigue siendo
   cierta, el siguiente evento reactiva la misma alarma. Limpiar es un acuse de que la ha visto, no
@@ -348,6 +348,12 @@ Tres causas más que conviene revisar:
   **Rule Health** del perfil la muestra como un error de compilación— no se evalúa, así que nada
   resuelve la alarma que levantó antes. Limpie la alarma a mano cuando haya corregido o retirado la
   regla.
+- **Una alarma de silencio (ausencia) que sigue levantada después de que cambió el dispositivo o la
+  regla.** A diferencia de los tipos de regla anteriores, una alarma de ausencia se cierra sola cuando
+  su dispositivo sale del alcance de la regla: el dispositivo se deshabilita, se elimina o se cambia
+  de tipo a un perfil sin la regla, o una republicación retira la regla. Una republicación que
+  **conserva** la regla deja la alarma levantada, con su acuse de recibo, en lugar de cerrarla y
+  volver a levantarla cuando termina la nueva ventana de silencio.
 
 ## Una regla que no se dispara
 

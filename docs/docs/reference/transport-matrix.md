@@ -278,6 +278,9 @@ For constrained devices over CoAP/UDP with DTLS.
 | Read | ◐ | CoAP GET; a response over 8 KiB is silently truncated and still reported successful |
 | Write | ◐ | Single scalar resource, replace only |
 | Execute | ● | With or without arguments |
+| Reboot (`lwm2m.reboot`) | ● | A named command that Executes the Device object's Reboot resource; takes no parameters |
+| Read device information (`lwm2m.readDeviceInfo`) | ● | A named command that reads the Device object's manufacturer, model, serial number, firmware version and battery level, and lists the resources the device did not have |
+| Device-information harvest | ● | On registration the same resources are read once and recorded as client attributes; at most once an hour per device, and it never delays registration or telemetry |
 | Observe | ◐ | SenML-JSON only; numeric resources only; fixed object allowlist; 32 per registration |
 | Discover | ○ | Not implemented |
 | Create | ○ | Not implemented |

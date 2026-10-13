@@ -7,7 +7,7 @@ title: Paneles
 DeviceChain incluye un sistema de paneles (dashboards) embebible y con control de versiones para visualizar datos de dispositivos en vivo. Un panel es un **recurso con alcance de inquilino** que creas en la consola. Se renderiza a partir de una definición JSON portable, y esa misma definición se renderiza en la consola, en el visor de referencia independiente o en cualquier aplicación React que instale los paquetes de runtime desde npm.
 
 :::note Estado
-Disponible: el editor de lienzo (canvas), el conjunto de widgets integrado (widgets de telemetría, alarma y comando/control), las suscripciones en vivo, las acciones de widget (reconocer/limpiar alarma, enviar comando — autorizadas por el servidor), el versionado (publicar / revertir), la vista previa sintética, los slots con nombre y los manifiestos de vinculación (binding manifests), la exportación, el visor de referencia independiente `/dash` y los paquetes de runtime publicados en npm.
+Disponible: el editor de lienzo (canvas), el conjunto de widgets integrado (widgets de telemetría, alarma y comando/control), las suscripciones en vivo, las acciones de widget (reconocer/limpiar alarma, enviar comando — autorizadas por el servidor), el versionado (publicar / revertir), la vista previa sintética, los slots con nombre y los manifiestos de vinculación (binding manifests), la exportación, la importación, la clonación y las plantillas iniciales, el visor de referencia independiente `/dash` y los paquetes de runtime publicados en npm.
 
 Planeado: selectores de fuente de datos más completos (recorrido del grafo de relaciones, drill-down), edición del diseño por punto de quiebre (breakpoint) y widgets adicionales.
 :::

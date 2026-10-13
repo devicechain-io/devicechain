@@ -137,6 +137,15 @@ inquilino nuevo creado más tarde con el mismo token empieza con un diario vací
 filtro `tenant` de la consulta `auditEvents` de la API de administración para leer las entradas de
 esa eliminación en el diario administrativo.
 
+En la consola, abre **Administración → Auditoría** y usa el filtro de inquilino. Muestra cada eliminación
+completada como `<token> (eliminado el <fecha>)`, y al elegir una se ven las entradas conservadas de esa
+eliminación.
+
+Un inquilino creado con el token de uno eliminado tampoco hereda las sesiones de ese inquilino. Un token
+de actualización (refresh token) emitido antes de que se creara el inquilino nuevo se rechaza, para
+cualquier llamante, así que quien tenía la sesión iniciada en el inquilino anterior debe volver a iniciar
+sesión.
+
 :::warning Los registros de inicio de sesión no pertenecen a ningún inquilino, y no se alcanzan
 El historial de inicios de sesión de un antiguo miembro sobrevive a la eliminación de un inquilino.
 Si tus obligaciones alcanzan a los registros de inicio de sesión, gestiónalos mediante la retención

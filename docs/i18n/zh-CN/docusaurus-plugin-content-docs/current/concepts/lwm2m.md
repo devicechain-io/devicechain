@@ -9,7 +9,7 @@ title: LwM2M 接入
 Sparkplug 接入向*你的*消息代理建立出站连接。LwM2M 则相反：设备向 DeviceChain 的安全 CoAP 端点建立**入站**连接，与标准 MQTT 路径的方式相同。
 
 :::note 状态
-LwM2M 接入作为可选服务提供，使用 CoAP/UDP 和 DTLS-PSK。它驱动明确的[设备在线状态](./device-presence.md)，将观测到的传感器对象接入为测量，并下发 Read/Write/Execute 命令，为休眠设备提供持久保留与唤醒后投递。Notify 解码**只支持 SenML-JSON**，因此仅支持 LwM2M 1.0 的客户端可以使用在线状态和命令，但在提供 TLV 解码前无法上报测量。GA 范围是 PSK 凭据；X.509 / 原始公钥和 Bootstrap 服务器仍在计划中。
+LwM2M 接入作为可选服务提供，使用 CoAP/UDP 和 DTLS-PSK。它驱动明确的[设备在线状态](./device-presence.md)，将观测到的传感器对象接入为测量，并下发 Read/Write/Execute 命令，为休眠设备提供持久保留与唤醒后投递。重启和设备信息读取可[按名称](#named-operations-and-device-information)使用，每台设备的制造商、型号、序列号、固件版本和电池电量会在其注册时读取，并保存为属性。Notify 解码**只支持 SenML-JSON**，因此仅支持 LwM2M 1.0 的客户端可以使用在线状态和命令，但在提供 TLV 解码前无法上报测量。GA 范围是 PSK 凭据；X.509 / 原始公钥和 Bootstrap 服务器仍在计划中。
 :::
 
 ## 提供的功能 {#what-it-does}
@@ -48,7 +48,7 @@ DeviceChain 对设备的*传感器*对象实例执行 **Observe**，将每条 **
 
 平台命令转换为对设备资源执行的 LwM2M **Read / Write / Execute** 操作。
 
-固件更新以相同方式驱动，是运维人员执行的一系列步骤，而不是单个平台操作。你自行针对标准 Firmware Update 对象发出 Writes 和 Execute，作为普通命令。DeviceChain 保持同一设备命令的入队顺序，因此固件写入和执行绝不会乱序。它不将更新建模为统一管理的任务。
+固件更新以相同方式驱动，是运维人员执行的一系列步骤，而不是单个平台操作。你自行针对标准 Firmware Update 对象发出 Writes 和 Execute，作为普通命令。DeviceChain 保持同一设备命令的入队顺序，因此固件写入和执行绝不会乱序。它不将更新建模为统一管理的任务，平台的[空中升级](./over-the-air-updates.md)也不会送达 LwM2M 设备。
 
 设备响应缓慢、命令积压时，该设备后续命令会暂时搁置，稍后仍按顺序投递。一台设备缓慢不会阻塞其他设备的命令。
 

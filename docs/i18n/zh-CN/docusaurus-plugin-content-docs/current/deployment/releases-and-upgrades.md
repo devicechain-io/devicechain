@@ -2263,11 +2263,28 @@ device-management 无法编码失败入站事件的记录时，此前仍存储�
 
 - **使用 S3 后端时，凭据现在还需要对存储桶拥有 `s3:ListBucket` 权限**，此外仍需 `s3:GetObject`、`s3:PutObject` 和 `s3:DeleteObject`。缺少该权限时，租户清除的对象步骤会失败并在每一轮重试，清除因此无法完成。请在升级前授予。文件系统后端无需任何改动。
 
+##### 已删除租户的 token 会保留到为其签发的一切都已过期，使用该 token 新建的租户从干净状态开始 {#v0200-token-hold}
+
+已删除租户的 token 过去在删除开始后的固定时间释放。现在保留期（`tokenHoldSeconds`，默认 12 小时）从最后一个存储系统完成清除该租户数据时算起，再加一分钟余量，这样为已删除租户签发的凭据在 token 可被复用之前已经过期。因此一次删除保留其 token 的时间比以前略长。有三项改动支撑这一点：
+
+- **清除开始后不再签发设备凭据。** 从那时起，该租户设备的连接会被拒绝。
+- **LwM2M 和 Sparkplug 服务会在一小时后丢弃缓存的设备查询结果**，已删除租户的 LwM2M 注册会被终止，而不是被延长。
+- **在租户创建之前签发的刷新令牌会被拒绝**，对任何调用方都一样。租户被删除后又用相同 token 新建租户时，原先登录第一个租户的人需要重新登录。
+
+为已删除租户保留的审计条目现在归档在该次删除名下，而不是租户的 token 名下，因此新租户自己的日志从空白开始。管理 API 的 `TenantDeletion` 类型新增 `retainedAuditTenant`，它就是读取这些条目所用的 `auditEvents` 的 `tenant` 过滤值；在控制台中，**Admin → Audit（管理 → 审计）**的租户筛选会把每次已完成的删除列为 `<token> (deleted <date>)`。无需任何操作。参见[租户删除](./tenant-deletion.md#audit)。
+
+##### 不存在的记录在所有 GraphQL API 中都以 `NOT_FOUND` 应答 {#v0200-not-found}
+
+指向不存在记录的请求，过去在大多数服务中以不带 `extensions.code` 的 `record not found` 到达客户端，少数服务则使用自己的代码（如 `ARTIFACT_NOT_FOUND`）。现在它携带 `extensions.code` 为 `NOT_FOUND`；消息保持不变，已有自己代码的拒绝会保留该代码。此前通过读取消息来区分记录不存在与其他失败的客户端，可以改用该代码。参见 [GraphQL 参考](../reference/graphql-api.md#not-found)。
+
 ##### 单点登录是新增功能，你无需做任何操作 {#v0200-sso}
 
 用户现在可以通过外部 OpenID Connect 身份提供商登录，租户也可以要求使用它。在超级用户创建连接之前，一切都不会启用，因此升级后的实例行为与之前一致。无需迁移，密码登录继续可用。[服务器端退出登录](#v0200-server-side-logout)导致的一次性重新登录已在前文说明。
 
 - **设置提供商**见[配置单点登录](../guides/configuring-sso.md)，其行为见[单点登录](../concepts/single-sign-on.md)。
+- **登录界面只从电子邮件地址开始。** 域名拥有已启用且已批准连接的地址，会看到**继续使用单点登录**，旁边是**改用密码**；其他地址直接进入密码字段。带电子邮件调用 `beginSso` 时，对没有连接的域名，以及连接已禁用或等待批准的域名，都返回 `null`。按 token 指定的连接仍会以“single sign-on is not available”拒绝。密码登录不会被移除，因此只有密码的账号不会被锁在外面。
+- **用户可以自行关联自己的账号。** 用密码登录的人可以从用户菜单关联单点登录账号。`beginSsoLink` 不再接收连接 token：服务器使用超级用户为此人自己的电子邮件域名验证过的那个连接。每次拒绝都带有代码（`SSO_LINK_SESSION_REQUIRED`、`SSO_LINK_PASSWORD_REQUIRED`、`SSO_LINK_NOT_ALLOWED`、`SSO_LINK_NO_CONNECTION`、`SSO_LINK_ALREADY_LINKED`），从提供商返回时的拒绝会指明哪项检查失败。
+- **连接还可以同时在身份提供商处退出登录。** 在管理员开启之前它是关闭的，因为在提供商处退出会结束该提供商所服务的每个应用的会话。升级会为每个连接加上该设置（`providerSignOut`，默认关闭）；设置之前不会有任何变化。`logout` 接受可选的 `returnTo`（`CONSOLE` 或 `DASHBOARD`），并返回 `SignOut { providerSignOutUrl }`，没有更多事情要做时为 `null`。需要在提供商处登记的地址位于连接上（`signOutReturnUrls`）。参见[在提供商处退出登录](../guides/configuring-sso.md#provider-sign-out)。
 - **结束会话不会收回已经签发的令牌。**在退出登录、撤销、取消链接或禁用连接之后，已签发的访问令牌和身份令牌在过期前仍然有效，默认 15 分钟。
 
 ##### 单点登录需要实例的公开地址，因此 chart 现在会自动推导 {#v0200-sso-issuer}

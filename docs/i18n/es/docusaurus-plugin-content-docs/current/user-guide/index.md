@@ -27,10 +27,10 @@ Los capítulos se publican a medida que se completan.
 |---|---|---|
 | 1 | Inicio de sesión | Los pasos de inicio de sesión, el inicio de sesión único, la elección de inquilino, una sesión caducada y el menú de usuario (tema, idioma, perfil). |
 | 2 | La consola de un vistazo | La página de inicio, la barra lateral, el indicador de inquilino y lo que se ve cuando un área no está disponible. |
-| 3 | Dispositivos | Listar, crear e importar dispositivos; las pestañas de detalle, incluidas asignación, conectividad y ubicación, eventos, comandos, configuración, credenciales y sustitución. |
-| 4 | Tipos de dispositivo y perfiles | Tipos de dispositivo y perfiles versionados: métricas, comandos, configuración, y publicar o revertir una versión. |
+| 3 | Dispositivos | Listar, crear y crear en lote dispositivos, y exportar la lista como CSV; deshabilitar y habilitar un dispositivo; las pestañas de detalle, incluidas asignación, conectividad y ubicación, eventos, comandos, configuración (con la restauración de una revisión anterior o la copia de la de otro dispositivo), credenciales y sustitución. |
+| 4 | Tipos de dispositivo y perfiles | Tipos de dispositivo y perfiles versionados: métricas, comandos, configuración, publicar o revertir una versión, y descargar una versión como Thing Model. |
 | 5 | Reglas de detección | Crear reglas con un formulario, en el lienzo o en lenguaje natural; vista previa con reproducción; estado de las reglas y flujo en vivo. |
-| 6 | Alarmas | La lista de alarmas en vivo, los filtros, reconocer y limpiar. |
+| 6 | Alarmas | La lista de alarmas en vivo, los filtros, reconocer y limpiar, y exportar la lista como CSV. |
 | 7 | Comandos a una flota | Lotes de comandos: crearlos, seguir su avance, rechazos y cancelación. |
 | 8 | Paneles | Plantillas e importación, visualización, edición en el lienzo, widgets y vinculaciones, exportación e historial de versiones. |
 | 9 | Activos, clientes y áreas | Las familias del registro: listas, jerarquía, esquemas de propiedades y miembros. |

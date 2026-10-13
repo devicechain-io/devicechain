@@ -3844,11 +3844,45 @@ it, so update artifacts and any object whose reference was lost are erased with 
   erasure fails and is retried on every pass, so the erasure does not complete. Grant it before
   you upgrade. The filesystem backend needs nothing.
 
+##### A deleted tenant's token is held until everything issued for it has expired, and a new tenant with that token starts clean {#v0200-token-hold}
+
+A deleted tenant's token used to be released a fixed time after the deletion began. The hold
+(`tokenHoldSeconds`, 12 hours by default) now runs from when the last storage system finished erasing
+the tenant's data, plus a one-minute margin, so a credential minted for the deleted tenant has
+expired before the token can be reused. A deletion therefore holds its token a little longer than it
+did. Three changes support it:
+
+- **No device credential is minted once the erasure has begun.** A device's connect for that tenant is
+  refused from then on.
+- **The LwM2M and Sparkplug services forget a cached device lookup after an hour**, and an LwM2M
+  registration of a deleted tenant is ended instead of extended.
+- **A refresh token issued before a tenant was created is refused**, for every caller. When a tenant
+  is deleted and another is created with the same token, people who were signed in to the first one
+  sign in again.
+
+The audit entries kept for a deleted tenant are now filed under the deletion rather than under the
+tenant's token, so the new tenant's own journal starts empty. The admin API's `TenantDeletion` type
+gains `retainedAuditTenant`, which is the `tenant` filter of `auditEvents` that reads those entries;
+in the console, **Admin → Audit** lists each completed deletion as `<token> (deleted <date>)` in its
+tenant filter. Nothing needs doing. See [Tenant deletion](./tenant-deletion.md#audit).
+
+##### A record that does not exist is answered with `NOT_FOUND`, in every GraphQL API {#v0200-not-found}
+
+A request that names a record which does not exist used to reach the client as a bare `record not
+found` with no `extensions.code` in most services, and with a service-specific code (such as
+`ARTIFACT_NOT_FOUND`) in a few. It now carries `extensions.code` `NOT_FOUND`; the message is unchanged,
+and a refusal that already has its own code keeps it. A client that told a missing record from other
+failures by reading the message can switch to the code. See the
+[GraphQL reference](../reference/graphql-api.md#not-found).
+
 ##### Single sign-on is new, and needs nothing from you {#v0200-sso}
 
 People can now sign in through an external OpenID Connect identity provider, and a tenant can require it. Nothing is on until a superuser creates a connection, so an upgraded instance behaves as before. There is nothing to migrate and password sign-in keeps working. The one-time re-sign-in that [server-side sign-out](#v0200-server-side-logout) causes is already described.
 
 - **Setting up a provider** is described in [Configure single sign-on](../guides/configuring-sso.md), and how it behaves in [Single sign-on](../concepts/single-sign-on.md).
+- **The sign-in screen opens on the email address alone.** An address whose domain has an enabled, approved connection is offered **Continue with single sign-on**, with **Use a password instead** beside it; every other address goes to the password field. `beginSso` called with an email answers `null` for a domain that has no connection, and for one whose connection is disabled or awaiting approval. A connection named by token still refuses with "single sign-on is not available". Password sign-in is never removed, so an account that has only a password is not stranded.
+- **People link their own account.** A person signed in with a password can link a single sign-on account from the user menu. `beginSsoLink` takes no connection token: the server uses the connection a superuser verified the person's own email domain for. Every refusal carries a code (`SSO_LINK_SESSION_REQUIRED`, `SSO_LINK_PASSWORD_REQUIRED`, `SSO_LINK_NOT_ALLOWED`, `SSO_LINK_NO_CONNECTION`, `SSO_LINK_ALREADY_LINKED`), and a refusal at the provider's return says which check failed.
+- **A connection can also sign people out at the identity provider.** It is off until an administrator turns it on, because signing out at the provider ends the session there for every application it serves. The upgrade adds the setting (`providerSignOut`, default off) to each connection; nothing changes until it is set. `logout` takes an optional `returnTo` (`CONSOLE` or `DASHBOARD`) and answers `SignOut { providerSignOutUrl }`, which is `null` when there is nothing more to do. The addresses to register at the provider are on the connection (`signOutReturnUrls`). See [Sign out at the provider](../guides/configuring-sso.md#provider-sign-out).
 - **Ending a session does not recall tokens already issued.** After a sign-out, a revoke, an unlink or a disabled connection, the access and identity tokens already issued keep working until they expire, 15 minutes by default.
 
 ##### Single sign-on needs the instance's public address, so the chart now derives it {#v0200-sso-issuer}
