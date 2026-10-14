@@ -49,7 +49,9 @@ export const BATTERY_LOW_BELOW = 20;
 
 /** The first declared metric whose name looks like a battery level, or null. */
 export function pickBatteryMetric(metrics: readonly string[]): string | null {
-  return metrics.find((m) => BATTERY_METRIC_PATTERN.test(m)) ?? null;
+  const hits = metrics.filter((m) => BATTERY_METRIC_PATTERN.test(m));
+  // A charge level beats a voltage reading: "< 20" is a percentage, not a volt.
+  return hits.find((m) => /level|pct|percent|soc|charge/i.test(m)) ?? hits.find((m) => !/volt|(^|_)v$/i.test(m)) ?? hits[0] ?? null;
 }
 
 const base: BuildArgs = {

@@ -23,11 +23,14 @@ const NOTIFICATION_POLICIES = graphql(`
         token
         name
         enabled
+        deviceTypeToken
         rules {
           severity
+          recipients
           channel {
             token
             enabled
+            channelType
           }
         }
       }
@@ -85,8 +88,29 @@ export function severityCovered(policies: readonly NotificationPolicy[], severit
   return policies.some(
     (p) =>
       p.enabled &&
-      p.rules.some((r) => (r.severity === tier || r.severity === '*') && r.channel != null && r.channel.enabled),
+      // Policies are tenant-wide today and a device-type-scoped one is skipped by the dispatcher,
+      // so one that somehow carries a scope does not count as covering every device.
+      !p.deviceTypeToken &&
+      p.rules.some(
+        (r) =>
+          (r.severity === tier || r.severity === '*') &&
+          r.channel != null &&
+          r.channel.enabled &&
+          // An smtp rule with no recipients is never delivered; a webhook's endpoint is its own
+          // destination and needs none.
+          (r.channel.channelType !== 'smtp' || hasRecipients(r.recipients)),
+      ),
   );
+}
+
+function hasRecipients(raw: string | null): boolean {
+  if (!raw) return false;
+  try {
+    const v: unknown = JSON.parse(raw);
+    return Array.isArray(v) && v.some((x) => typeof x === 'string' && x.trim() !== '');
+  } catch {
+    return false;
+  }
 }
 
 /** Creates a tenant-wide policy that sends one severity through one channel. */

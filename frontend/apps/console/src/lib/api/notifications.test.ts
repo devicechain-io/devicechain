@@ -10,13 +10,23 @@ import { createSeverityPolicy, severityCovered, type NotificationPolicy } from '
 
 beforeEach(() => gql.mockClear());
 
-type Channel = { token: string; enabled: boolean } | null;
-const policy = (o: { enabled?: boolean; severity?: string; channel?: Channel } = {}): NotificationPolicy => ({
+type Channel = { token: string; enabled: boolean; channelType: string } | null;
+const policy = (
+  o: { enabled?: boolean; severity?: string; channel?: Channel; recipients?: string | null; deviceTypeToken?: string | null } = {},
+): NotificationPolicy => ({
   token: 'p',
   name: null,
   enabled: o.enabled ?? true,
-  rules: [{ severity: o.severity ?? 'MAJOR', channel: o.channel === undefined ? { token: 'c', enabled: true } : o.channel }],
+  deviceTypeToken: o.deviceTypeToken ?? null,
+  rules: [
+    {
+      severity: o.severity ?? 'MAJOR',
+      recipients: o.recipients ?? null,
+      channel: o.channel === undefined ? { token: 'c', enabled: true, channelType: 'webhook' } : o.channel,
+    },
+  ],
 });
+const smtp = { token: 'm', enabled: true, channelType: 'smtp' };
 
 describe('severityCovered', () => {
   it('matches the uppercase alarm tier against the lowercase rule severity', () => {
@@ -29,7 +39,18 @@ describe('severityCovered', () => {
   it('ignores a disabled policy, a deleted channel and a disabled channel', () => {
     expect(severityCovered([policy({ enabled: false })], 'major')).toBe(false);
     expect(severityCovered([policy({ channel: null })], 'major')).toBe(false);
-    expect(severityCovered([policy({ channel: { token: 'c', enabled: false } })], 'major')).toBe(false);
+    expect(severityCovered([policy({ channel: { token: 'c', enabled: false, channelType: 'webhook' } })], 'major')).toBe(false);
+  });
+  it('does not count an smtp rule with no usable recipients, but a webhook needs none', () => {
+    expect(severityCovered([policy({ channel: smtp })], 'major')).toBe(false);
+    expect(severityCovered([policy({ channel: smtp, recipients: '[]' })], 'major')).toBe(false);
+    expect(severityCovered([policy({ channel: smtp, recipients: '[" "]' })], 'major')).toBe(false);
+    expect(severityCovered([policy({ channel: smtp, recipients: 'oops' })], 'major')).toBe(false);
+    expect(severityCovered([policy({ channel: smtp, recipients: '["a@x.io"]' })], 'major')).toBe(true);
+    expect(severityCovered([policy()], 'major')).toBe(true);
+  });
+  it('does not count a device-type-scoped policy', () => {
+    expect(severityCovered([policy({ deviceTypeToken: 'sensor' })], 'major')).toBe(false);
   });
   it('is not covered with no policies at all', () => {
     expect(severityCovered([], 'major')).toBe(false);

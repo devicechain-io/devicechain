@@ -18,6 +18,8 @@ import { Button } from '@/components/ui/button';
 import { Combobox, type ComboboxOption } from '@/components/ui/combobox';
 import { FormField } from '@/components/ui/form-field';
 import { Input } from '@/components/ui/input';
+import { hasAuthority } from '@devicechain/client';
+import { useAuth } from '@/auth/AuthProvider';
 import { AREA, useAreaAbsent } from '@/lib/capabilities';
 import { errMessage } from '@/routes/common';
 import {
@@ -36,6 +38,9 @@ const SMTP = 'smtp';
 export function NotificationCoverage({ severity }: { severity: string }) {
   const { t } = useTranslation('deviceProfiles');
   const absent = useAreaAbsent(AREA.notificationManagement);
+  const { claims } = useAuth();
+  // Creating a policy needs notification:write; without it the check still reads, the action is hidden.
+  const canWrite = hasAuthority(claims, 'notification:write');
   const [check, setCheck] = useState<Check>({ status: 'loading' });
   const [creating, setCreating] = useState(false);
 
@@ -78,7 +83,7 @@ export function NotificationCoverage({ severity }: { severity: string }) {
           <p className="text-sm text-amber-600 dark:text-amber-500" data-testid="coverage-uncovered">
             {t('coverageUncovered', { severity: sev })}
           </p>
-          {creating ? (
+          {!canWrite ? null : creating ? (
             <CreatePolicy
               severity={severity}
               severityLabel={sev}

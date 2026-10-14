@@ -59,6 +59,7 @@ describe('the three presets', () => {
   it('Low battery prefers battery|batt|soc by name and leaves the metric empty rather than guess', () => {
     expect(pickBatteryMetric(['temperature', 'SoC'])).toBe('SoC');
     expect(pickBatteryMetric(['temperature', 'batt_v'])).toBe('batt_v');
+    expect(pickBatteryMetric(['battery_voltage', 'battery_level'])).toBe('battery_level');
     expect(pickBatteryMetric(['temperature', 'humidity'])).toBeNull();
     expect(build('lowBattery', ['temperature']).when.metric).toBe('');
     expect(buildPreset('lowBattery', { metrics: ['battery'] }, text('lowBattery')).metricToConfirm).toBe(true);

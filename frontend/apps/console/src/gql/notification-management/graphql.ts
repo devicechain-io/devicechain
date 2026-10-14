@@ -79,7 +79,7 @@ export type NotificationPoliciesQueryVariables = Exact<{
 }>;
 
 
-export type NotificationPoliciesQuery = { notificationPolicies: { results: Array<{ token: string, name: string | null, enabled: boolean, rules: Array<{ severity: string, channel: { token: string, enabled: boolean } | null }> }>, pagination: { totalRecords: number | null } } };
+export type NotificationPoliciesQuery = { notificationPolicies: { results: Array<{ token: string, name: string | null, enabled: boolean, deviceTypeToken: string | null, rules: Array<{ severity: string, recipients: string | null, channel: { token: string, enabled: boolean, channelType: string } | null }> }>, pagination: { totalRecords: number | null } } };
 
 export type NotificationChannelsQueryVariables = Exact<{
   criteria: NotificationChannelSearchCriteria;
@@ -121,11 +121,14 @@ export const NotificationPoliciesDocument = new TypedDocumentString(`
       token
       name
       enabled
+      deviceTypeToken
       rules {
         severity
+        recipients
         channel {
           token
           enabled
+          channelType
         }
       }
     }

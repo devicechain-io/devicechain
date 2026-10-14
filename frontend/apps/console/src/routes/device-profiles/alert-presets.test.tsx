@@ -13,6 +13,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const render = (ui: Parameters<typeof rtlRender>[0]) => rtlRender(ui, { wrapper: ConfirmProvider });
 
+const authState = vi.hoisted(() => ({ authorities: ['notification:write'] as string[] }));
+
 vi.mock('@/lib/api/device-management', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   listEntityGroups: vi.fn(async () => []),
@@ -31,7 +33,7 @@ vi.mock('@xyflow/react', async (importOriginal) => ({
 vi.mock('@/lib/api/browse', () => ({ previewSelector: vi.fn(async () => ({ total: 0, sample: [] })) }));
 vi.mock('@/auth/AuthProvider', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
-  useAuth: () => ({ tenant: null, identity: null, authorities: [], can: () => true }),
+  useAuth: () => ({ tenant: null, identity: null, authorities: [], can: () => true, claims: { authorities: authState.authorities } }),
 }));
 vi.mock('@/lib/api/event-processing', () => ({
   validateDetectionRule: vi.fn(async () => ({ ok: true, message: null, warnings: [] })),
@@ -56,6 +58,7 @@ import type { DetectionRule } from '@/lib/api/device-management';
 afterEach(cleanup);
 beforeEach(() => {
   vi.clearAllMocks();
+  authState.authorities = ['notification:write'];
   vi.mocked(listNotificationPolicies).mockResolvedValue([]);
   vi.mocked(listNotificationChannels).mockResolvedValue([]);
 });
@@ -143,7 +146,7 @@ describe('severity coverage', () => {
 
   it('says "covered" when an enabled policy routes it through a working channel', async () => {
     vi.mocked(listNotificationPolicies).mockResolvedValue([
-      { token: 'p1', name: null, enabled: true, rules: [{ severity: 'MAJOR', channel: { token: 'c', enabled: true } }] },
+      { token: 'p1', name: null, enabled: true, rules: [{ severity: 'MAJOR', channel: { token: 'c', enabled: true, channelType: 'webhook' }, recipients: null }], deviceTypeToken: null },
     ]);
     await silent();
     expect((await screen.findByTestId('coverage-covered')).textContent).toMatch(/Covered/);
@@ -159,7 +162,7 @@ describe('severity coverage', () => {
     await waitFor(() => expect((screen.getByRole('button', { name: /Create major policy/ }) as HTMLButtonElement).disabled).toBe(false));
     // The re-check after the create sees the new policy.
     vi.mocked(listNotificationPolicies).mockResolvedValue([
-      { token: 'n', name: null, enabled: true, rules: [{ severity: 'MAJOR', channel: { token: 'ops-hook', enabled: true } }] },
+      { token: 'n', name: null, enabled: true, rules: [{ severity: 'MAJOR', channel: { token: 'ops-hook', enabled: true, channelType: 'webhook' }, recipients: null }], deviceTypeToken: null },
     ]);
     fireEvent.click(screen.getByRole('button', { name: /Create major policy/ }));
 
@@ -170,6 +173,13 @@ describe('severity coverage', () => {
       recipients: undefined,
     });
     expect(await screen.findByTestId('coverage-covered')).toBeTruthy();
+  });
+
+  it('hides the create action without notification:write but still reports the gap', async () => {
+    authState.authorities = ['alarm:write'];
+    await silent();
+    expect(await screen.findByTestId('coverage-uncovered')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /Create a policy for/ })).toBeNull();
   });
 
   it('asks for recipients on an email channel', async () => {

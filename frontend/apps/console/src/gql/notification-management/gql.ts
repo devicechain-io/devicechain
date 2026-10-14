@@ -15,12 +15,12 @@ import * as types from './graphql';
  * Learn more about it here: https://the-guild.dev/graphql/codegen/plugins/presets/preset-client#reducing-bundle-size
  */
 type Documents = {
-    "\n  query NotificationPolicies($criteria: NotificationPolicySearchCriteria!) {\n    notificationPolicies(criteria: $criteria) {\n      results {\n        token\n        name\n        enabled\n        rules {\n          severity\n          channel {\n            token\n            enabled\n          }\n        }\n      }\n      pagination {\n        totalRecords\n      }\n    }\n  }\n": typeof types.NotificationPoliciesDocument,
+    "\n  query NotificationPolicies($criteria: NotificationPolicySearchCriteria!) {\n    notificationPolicies(criteria: $criteria) {\n      results {\n        token\n        name\n        enabled\n        deviceTypeToken\n        rules {\n          severity\n          recipients\n          channel {\n            token\n            enabled\n            channelType\n          }\n        }\n      }\n      pagination {\n        totalRecords\n      }\n    }\n  }\n": typeof types.NotificationPoliciesDocument,
     "\n  query NotificationChannels($criteria: NotificationChannelSearchCriteria!) {\n    notificationChannels(criteria: $criteria) {\n      results {\n        token\n        name\n        channelType\n        enabled\n      }\n    }\n  }\n": typeof types.NotificationChannelsDocument,
     "\n  mutation CreateNotificationPolicy($request: NotificationPolicyCreateRequest!) {\n    createNotificationPolicy(request: $request) {\n      token\n    }\n  }\n": typeof types.CreateNotificationPolicyDocument,
 };
 const documents: Documents = {
-    "\n  query NotificationPolicies($criteria: NotificationPolicySearchCriteria!) {\n    notificationPolicies(criteria: $criteria) {\n      results {\n        token\n        name\n        enabled\n        rules {\n          severity\n          channel {\n            token\n            enabled\n          }\n        }\n      }\n      pagination {\n        totalRecords\n      }\n    }\n  }\n": types.NotificationPoliciesDocument,
+    "\n  query NotificationPolicies($criteria: NotificationPolicySearchCriteria!) {\n    notificationPolicies(criteria: $criteria) {\n      results {\n        token\n        name\n        enabled\n        deviceTypeToken\n        rules {\n          severity\n          recipients\n          channel {\n            token\n            enabled\n            channelType\n          }\n        }\n      }\n      pagination {\n        totalRecords\n      }\n    }\n  }\n": types.NotificationPoliciesDocument,
     "\n  query NotificationChannels($criteria: NotificationChannelSearchCriteria!) {\n    notificationChannels(criteria: $criteria) {\n      results {\n        token\n        name\n        channelType\n        enabled\n      }\n    }\n  }\n": types.NotificationChannelsDocument,
     "\n  mutation CreateNotificationPolicy($request: NotificationPolicyCreateRequest!) {\n    createNotificationPolicy(request: $request) {\n      token\n    }\n  }\n": types.CreateNotificationPolicyDocument,
 };
@@ -28,7 +28,7 @@ const documents: Documents = {
 /**
  * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
  */
-export function graphql(source: "\n  query NotificationPolicies($criteria: NotificationPolicySearchCriteria!) {\n    notificationPolicies(criteria: $criteria) {\n      results {\n        token\n        name\n        enabled\n        rules {\n          severity\n          channel {\n            token\n            enabled\n          }\n        }\n      }\n      pagination {\n        totalRecords\n      }\n    }\n  }\n"): typeof import('./graphql').NotificationPoliciesDocument;
+export function graphql(source: "\n  query NotificationPolicies($criteria: NotificationPolicySearchCriteria!) {\n    notificationPolicies(criteria: $criteria) {\n      results {\n        token\n        name\n        enabled\n        deviceTypeToken\n        rules {\n          severity\n          recipients\n          channel {\n            token\n            enabled\n            channelType\n          }\n        }\n      }\n      pagination {\n        totalRecords\n      }\n    }\n  }\n"): typeof import('./graphql').NotificationPoliciesDocument;
 /**
  * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
  */
