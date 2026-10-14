@@ -1,8 +1,8 @@
-// The workspace `go` directive must be >= every module's, so it is a floor set by the
-// highest `go` line any workspace module declares. Today several modules declare the
-// value below — the maintainer tools under backend/tools and outbound-connectors among
-// them — so it cannot drop until every one of them does. Ask the tree which, rather than
-// this comment: grep -H '^go ' $(go list -m -f '{{.GoMod}}').
+// The workspace `go` directive must be >= every module's, so it is a floor, normally set by the
+// highest `go` line any workspace module declares. The floor was moved to 1.27.0
+// together with the toolchain (below) as a deliberate step, ahead of any module needing it:
+// every module still declares an older line, which the rule allows. Ask the tree rather
+// than this comment: grep -H '^go ' $(go list -m -f '{{.GoMod}}').
 //
 // 🔴 THIS LINE MOVES WITH A DEPENDENCY BUMP, AND NOTHING BUMPS IT FOR YOU. A dependency
 // that declares a newer language version raises the go directive of the MODULE that
@@ -14,7 +14,7 @@
 //
 // No module or dependency version is named in the comment above deliberately: a number
 // frozen in prose drifts away from the tree, and this one already had.
-go 1.26.6
+go 1.27.0
 
 // 🔑 THE TOOLCHAIN IS PINNED SEPARATELY FROM THE LANGUAGE FLOOR, AND THEY MOVE FOR
 // DIFFERENT REASONS. The `go` line above is a floor set by what our modules declare and
@@ -23,17 +23,19 @@ go 1.26.6
 // cadence, not a dependency one. Conflating them is how a stdlib CVE fix gets blocked on
 // an unrelated language-version argument.
 //
-// At 1.26.9 for eleven reachable standard-library advisories published 2026-10-08 —
+// On the Go 1.27 line since 2026-10-13, at 1.27.2 or newer: that patch release carries the
+// fixes for the eleven reachable standard-library advisories published 2026-10-08 —
 // GO-2026-6599, -6600, -6603, -6605, -6607, -6608, -6610, -6611, -6612, -6613 and
 // -6617, across net/http (HTTP/1 and HTTP/2, client and server), html/template,
-// crypto/tls and net/textproto / mime/multipart — all fixed in this patch release.
+// crypto/tls and net/textproto / mime/multipart. The toolchain, not the floor, is
+// what carries the fixes.
 //
 // 🔴 THIS IS THE CHECK THAT GOES RED WITHOUT ANYONE TOUCHING THE CODE. govulncheck reads
 // a LIVE advisory database, so the same commit that passed this morning fails this
 // afternoon when an advisory lands. A red govulncheck on a PR therefore says nothing
 // about that PR until you have checked whether main is red too — here every failing
 // module was failing on code the PR never touched, including one byte-identical to main.
-toolchain go1.26.9
+toolchain go1.27.2
 
 use (
 	./backend/cli

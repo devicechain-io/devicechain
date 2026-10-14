@@ -17,7 +17,7 @@ instance, use `dcctl` and the [Quickstart](../quickstart/first-device.md) instea
 
 ## Prerequisites
 
-- **Go** 1.26 or newer. The workspace declares `go 1.26.6`, and CI builds with the version `go.work` names.
+- **Go** 1.27 or newer. The workspace declares `go 1.27.0`, and CI builds with the version `go.work` names.
 - **Node** 22 or newer, for the frontend and these docs. CI builds on 26.
 - **Docker**, to run TimescaleDB.
 - **nats-server**, a single binary of about 10 MB.
