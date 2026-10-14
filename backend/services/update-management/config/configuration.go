@@ -71,9 +71,8 @@ type UpdatesConfiguration struct {
 	// default; a negative value is refused at startup.
 	MaxConcurrentUploads int
 
-	// AllowUnverifiedArtifacts lets an UNVERIFIED artifact be assigned. Every artifact is
-	// UNVERIFIED today (nothing authenticates an artifact's origin, only that its bytes are the
-	// declared bytes), so with this false no artifact can be assigned. The default is false;
+	// AllowUnverifiedArtifacts lets an artifact with no signature by an ACTIVE signer (derived
+	// trust UNVERIFIED) be assigned. With this false only a SIGNED artifact can be. The default is false;
 	// development and simulator installs set it, and the value is visible in
 	// updateManagementInfo so an instance running with it can be seen to be.
 	AllowUnverifiedArtifacts bool

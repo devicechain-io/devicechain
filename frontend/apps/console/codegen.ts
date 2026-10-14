@@ -85,6 +85,16 @@ const config: CodegenConfig = {
       presetConfig: { fragmentMasking: false },
       config: { documentMode: 'string' },
     },
+    // The per-tenant notification configuration (ADR-017), served by notification-management:
+    // delivery channels and the severity-routing policies. The detection-rule form reads the
+    // policies to say whether an alarm severity reaches anyone, and can create one inline.
+    './src/gql/notification-management/': {
+      schema: '../../../backend/services/notification-management/graphql/schema.graphql',
+      documents: ['src/lib/api/notifications.ts'],
+      preset: 'client',
+      presetConfig: { fragmentMasking: false },
+      config: { documentMode: 'string' },
+    },
     // The instance-scoped, operator-managed AI inference-provider list (ADR-056),
     // served by the ai-inference service at /admin/graphql. The console lists and
     // authors providers here (create, grant to a tier, write-only API key) and

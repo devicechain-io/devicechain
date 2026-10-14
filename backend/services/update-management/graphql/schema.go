@@ -31,6 +31,8 @@ type SchemaResolver struct {
 	// AllowUnverifiedArtifacts is the instance's fixed updates.allowUnverifiedArtifacts, reported
 	// by updateManagementInfo so an instance running with it can be seen to be.
 	AllowUnverifiedArtifacts bool
+	// MaxArtifactBytes is the effective per-artifact ceiling, reported by updateManagementInfo.
+	MaxArtifactBytes int64
 }
 
 // GetApi returns the catalogue API injected into the request context. It fails loudly
@@ -45,8 +47,13 @@ func (r *SchemaResolver) GetApi(ctx context.Context) (*model.Api, error) {
 }
 
 type serviceInfoResolver struct {
-	area            string
-	allowUnverified bool
+	area             string
+	allowUnverified  bool
+	maxArtifactBytes int64
+}
+
+func (r *serviceInfoResolver) MaxArtifactBytes() string {
+	return strconv.FormatInt(r.maxArtifactBytes, 10)
 }
 
 func (r *serviceInfoResolver) Area() string                   { return r.area }
@@ -54,7 +61,7 @@ func (r *serviceInfoResolver) AllowUnverifiedArtifacts() bool { return r.allowUn
 
 // UpdateManagementInfo is the non-sensitive service identity.
 func (r *SchemaResolver) UpdateManagementInfo() *serviceInfoResolver {
-	return &serviceInfoResolver{area: r.Area, allowUnverified: r.AllowUnverifiedArtifacts}
+	return &serviceInfoResolver{area: r.Area, allowUnverified: r.AllowUnverifiedArtifacts, maxArtifactBytes: r.MaxArtifactBytes}
 }
 
 // Artifact looks an artifact up by token.
@@ -76,11 +83,12 @@ func (r *SchemaResolver) Artifact(ctx context.Context, args struct{ Token string
 // Artifacts searches artifacts.
 func (r *SchemaResolver) Artifacts(ctx context.Context, args struct {
 	Criteria struct {
-		PageNumber int32
-		PageSize   int32
-		Kind       *string
-		State      *string
-		Component  *string
+		PageNumber  int32
+		PageSize    int32
+		Kind        *string
+		State       *string
+		Component   *string
+		TrustStatus *string
 	}
 }) (*ArtifactSearchResultsResolver, error) {
 	if err := auth.Authorize(ctx, auth.ArtifactRead); err != nil {
@@ -91,10 +99,11 @@ func (r *SchemaResolver) Artifacts(ctx context.Context, args struct {
 		return nil, err
 	}
 	found, err := api.Artifacts(ctx, model.ArtifactSearchCriteria{
-		Pagination: rdb.Pagination{PageNumber: args.Criteria.PageNumber, PageSize: args.Criteria.PageSize},
-		Kind:       args.Criteria.Kind,
-		State:      args.Criteria.State,
-		Component:  args.Criteria.Component,
+		Pagination:  rdb.Pagination{PageNumber: args.Criteria.PageNumber, PageSize: args.Criteria.PageSize},
+		Kind:        args.Criteria.Kind,
+		State:       args.Criteria.State,
+		Component:   args.Criteria.Component,
+		TrustStatus: args.Criteria.TrustStatus,
 	})
 	if err != nil {
 		return nil, err
@@ -163,19 +172,27 @@ func (r *SchemaResolver) RetireArtifact(ctx context.Context, args struct{ Token 
 // ArtifactResolver resolves the fields of one artifact.
 type ArtifactResolver struct{ M model.Artifact }
 
-func (r *ArtifactResolver) Id() gql.ID          { return gql.ID(fmt.Sprint(r.M.ID)) }
-func (r *ArtifactResolver) CreatedAt() *string  { return gqlcore.FormatTime(r.M.CreatedAt) }
-func (r *ArtifactResolver) UpdatedAt() *string  { return gqlcore.FormatTime(r.M.UpdatedAt) }
-func (r *ArtifactResolver) Token() string       { return r.M.Token }
-func (r *ArtifactResolver) Kind() string        { return r.M.Kind }
-func (r *ArtifactResolver) Name() string        { return r.M.Name }
-func (r *ArtifactResolver) Version() string     { return r.M.Version }
-func (r *ArtifactResolver) Component() string   { return r.M.Component }
-func (r *ArtifactResolver) SizeBytes() string   { return strconv.FormatInt(r.M.SizeBytes, 10) }
-func (r *ArtifactResolver) Digest() string      { return r.M.Digest }
-func (r *ArtifactResolver) MediaType() string   { return r.M.MediaType }
-func (r *ArtifactResolver) TrustStatus() string { return r.M.TrustStatus }
-func (r *ArtifactResolver) State() string       { return r.M.State }
+func (r *ArtifactResolver) Id() gql.ID         { return gql.ID(fmt.Sprint(r.M.ID)) }
+func (r *ArtifactResolver) CreatedAt() *string { return gqlcore.FormatTime(r.M.CreatedAt) }
+func (r *ArtifactResolver) UpdatedAt() *string { return gqlcore.FormatTime(r.M.UpdatedAt) }
+func (r *ArtifactResolver) Token() string      { return r.M.Token }
+func (r *ArtifactResolver) Kind() string       { return r.M.Kind }
+func (r *ArtifactResolver) Name() string       { return r.M.Name }
+func (r *ArtifactResolver) Version() string    { return r.M.Version }
+func (r *ArtifactResolver) Component() string  { return r.M.Component }
+func (r *ArtifactResolver) SizeBytes() string  { return strconv.FormatInt(r.M.SizeBytes, 10) }
+func (r *ArtifactResolver) Digest() string     { return r.M.Digest }
+func (r *ArtifactResolver) MediaType() string  { return r.M.MediaType }
+func (r *ArtifactResolver) State() string      { return r.M.State }
+
+// TrustStatus is the DERIVED trust. An artifact whose trust was never derived is an error,
+// not UNVERIFIED: a read path that forgot to derive it would otherwise report a plausible value.
+func (r *ArtifactResolver) TrustStatus() (string, error) {
+	if r.M.Trust == "" {
+		return "", fmt.Errorf("artifact %q was read without deriving its trust", r.M.Token)
+	}
+	return r.M.Trust, nil
+}
 
 // CompatibleProfiles decodes the stored JSON array. A row whose document does not decode
 // is corrupt, and is an error rather than an empty list: an empty list would read as

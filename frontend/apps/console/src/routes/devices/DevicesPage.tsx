@@ -3,7 +3,7 @@
 
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Plus, Layers } from 'lucide-react';
+import { Plus, Layers, Upload } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { cn } from '@/lib/utils';
 import { useQuery } from '@/lib/hooks/use-query';
@@ -25,6 +25,7 @@ import { rowLinkProps, useReload } from '@/routes/common';
 import { FormDrawer } from '@/components/registry';
 import { DeviceForm } from '@/routes/devices/DeviceForm';
 import { DeviceBulkForm } from '@/routes/devices/DeviceBulkForm';
+import { DeviceImportForm } from '@/routes/devices/DeviceImportForm';
 import {
   DataTable,
   DataTableBody,
@@ -36,6 +37,8 @@ import {
 
 const pageSize = 20;
 const EXPORT_STEM = 'devices';
+// The import maps columns and lists per-row outcomes, so its drawer is wider than a form's.
+const IMPORT_DRAWER_WIDTH = 'sm:max-w-2xl';
 
 type DeviceRow = DeviceSearchResults['results'][number];
 
@@ -72,6 +75,7 @@ export default function DevicesPage() {
   const [pageNumber, setPageNumber] = useState(1);
   const [creating, setCreating] = useState(false);
   const [bulkCreating, setBulkCreating] = useState(false);
+  const [importing, setImporting] = useState(false);
   const [version, reload] = useReload();
   const { data, loading, error } = useQuery(
     () => listDevices({ pageNumber, pageSize }),
@@ -108,6 +112,9 @@ export default function DevicesPage() {
             columns={exportColumns}
             fetchPage={(pageNumber, pageSize) => listDevices({ pageNumber, pageSize })}
           />
+          <Button variant="outline" onClick={() => setImporting(true)} data-shot="device-import-button">
+            <Upload size={16} /> {t('importDevices')}
+          </Button>
           <Button variant="outline" onClick={() => setBulkCreating(true)} data-shot="device-bulk-button">
             <Layers size={16} /> {t('bulkCreate')}
           </Button>
@@ -131,6 +138,21 @@ export default function DevicesPage() {
           onDone={(m) => {
             toast(m);
             setBulkCreating(false);
+            reload();
+          }}
+        />
+      </FormDrawer>
+      <FormDrawer
+        shot="device-import"
+        open={importing}
+        onOpenChange={setImporting}
+        title={t('importTitle')}
+        contentClassName={IMPORT_DRAWER_WIDTH}
+      >
+        <DeviceImportForm
+          onDone={(m) => {
+            toast(m);
+            setImporting(false);
             reload();
           }}
         />

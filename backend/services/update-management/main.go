@@ -17,8 +17,8 @@
 //     capability rather than by any credential of the tenant;
 //   - a deadline sweep that times out attempts whose device went quiet.
 //
-// What it does not do, so nobody assumes it: nothing here authenticates who produced an
-// artifact (every artifact is UNVERIFIED), and nothing rolls an update out across a fleet.
+// What it does not do, so nobody assumes it: it authenticates who produced an artifact only
+// through signatures by signers the tenant registered, and nothing rolls an update out across a fleet.
 package main
 
 import (
@@ -155,6 +155,8 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 				return &graphql.SchemaResolver{
 					Area:                     string(Microservice.FunctionalArea),
 					AllowUnverifiedArtifacts: Configuration.Updates.AllowUnverifiedArtifacts,
+					MaxArtifactBytes: Configuration.EffectiveMaxArtifactBytes(
+						Microservice.InstanceConfiguration.Infrastructure.Blob.Backend),
 				}
 			},
 			Providers: func() map[gqlcore.ContextKey]interface{} {
@@ -257,8 +259,8 @@ func buildApi(ctx context.Context) (*model.Api, error) {
 	api.DownloadBaseURL = Configuration.Updates.DownloadBaseURL
 	api.CapabilityTTL = time.Duration(Configuration.Updates.CapabilityTTLSeconds) * time.Second
 	if api.AllowUnverified {
-		log.Warn().Msg("updates.allowUnverifiedArtifacts is set: UNVERIFIED artifacts can be assigned to devices. " +
-			"Nothing authenticates who produced an artifact; this is a development setting.")
+		log.Warn().Msg("updates.allowUnverifiedArtifacts is set: artifacts with no active-signer signature can be assigned to devices. " +
+			"Nothing authenticates who produced them; this is a development setting.")
 	}
 	if api.DownloadBaseURL == "" {
 		log.Warn().Msg("updates.downloadBaseUrl is not set - no device can be given a download capability, so no assigned update can be fetched.")

@@ -290,6 +290,13 @@ const (
 	// that devices will later be told to install are different trust decisions.
 	ArtifactRead  Authority = "artifact:read"
 	ArtifactWrite Authority = "artifact:write"
+	// ArtifactTrust gates the per-tenant registry of artifact signers: registering the public key
+	// whose signature makes an artifact trusted, and revoking it. Separate from artifact:write
+	// because publishing a binary and deciding whose signature makes it trustworthy are different
+	// trust decisions: whoever can upload an image must not be able to appoint the signer that
+	// vouches for it. Attaching a signature to an artifact stays artifact:write - the signature is
+	// verified against the registry, so it adds no trust the registry did not already grant.
+	ArtifactTrust Authority = "artifact:trust"
 
 	// Tenant branding self-service (user-management, ADR-038). Gates the
 	// self-scoped setTenantBranding mutation — a tenant admin white-labeling their
@@ -436,6 +443,7 @@ var vocabulary = map[Authority]Tiers{
 	ConnectorWrite:    tenant,
 	ArtifactRead:      tenant,
 	ArtifactWrite:     tenant,
+	ArtifactTrust:     tenant,
 	BrandingWrite:     tenant,
 	BasemapWrite:      tenant,
 	LocaleWrite:       tenant,

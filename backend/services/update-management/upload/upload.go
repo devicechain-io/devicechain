@@ -117,7 +117,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		refuse(w, r, http.StatusBadRequest, "invalid artifact token")
 		return
 	}
-	artifact, err := h.api.ArtifactByToken(ctx, token)
+	artifact, err := h.api.ArtifactRowByToken(ctx, token)
 	if err != nil {
 		log.Error().Err(err).Msg("artifact lookup for upload failed")
 		refuse(w, r, http.StatusInternalServerError, "internal error")

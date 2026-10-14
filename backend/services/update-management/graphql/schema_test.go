@@ -67,8 +67,8 @@ func TestTheOperationSetIsExactlyTheCatalogue(t *testing.T) {
 		sort.Strings(out)
 		return out
 	}
-	require.Equal(t, []string{"artifact", "artifacts", "updateAssignment", "updateAssignments", "updateManagementInfo"}, names(got.Schema.QueryType.Fields))
-	require.Equal(t, []string{"abandonUnknownUpdate", "assignArtifact", "cancelUpdate", "createArtifact", "retireArtifact"}, names(got.Schema.MutationType.Fields))
+	require.Equal(t, []string{"artifact", "artifactSigner", "artifactSigners", "artifacts", "updateAssignment", "updateAssignments", "updateManagementInfo"}, names(got.Schema.QueryType.Fields))
+	require.Equal(t, []string{"abandonUnknownUpdate", "addArtifactSignature", "assignArtifact", "cancelUpdate", "createArtifact", "registerArtifactSigner", "retireArtifact", "revokeArtifactSigner"}, names(got.Schema.MutationType.Fields))
 	require.Nil(t, got.Schema.SubscriptionType)
 }
 
