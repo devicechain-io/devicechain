@@ -26,6 +26,17 @@ type Row = {
   override: number | null;
 };
 
+// The headings the tenant form already uses for each scalar's override field, so the effective
+// view and the edit view name a setting the same way. A key not listed (a scalar added on the
+// server first) falls back to the server's own label rather than disappearing.
+const SCALAR_LABEL_KEY: Record<string, string> = {
+  heldCommandCeiling: 'heldCeilingLabel',
+  shedPriority: 'shedPriorityLabel',
+  geoFenceCeiling: 'fenceCeilingLabel',
+  geoFencePositionCeiling: 'fencePositionCeilingLabel',
+  geoFencePositionBudget: 'fencePositionBudgetLabel',
+};
+
 // SourceBadge names the level that produced the effective value. This is the half of
 // ADR-065 decision 7 that a merged number cannot express: an operator looking at
 // "5000" needs to know whether that is what the tier sells or an exception someone
@@ -83,6 +94,18 @@ export function TenantSettingsPanel({ tenant }: { tenant: AdminTenant }) {
       override: s.burst.override ?? null,
     },
   ]);
+  // The single-number settings (no rate/burst pair) resolve through the same cascade; they follow
+  // the dimension rows in the same table.
+  for (const s of tenant.effectiveScalarSettings) {
+    rows.push({
+      key: `scalar-${s.key}`,
+      label: SCALAR_LABEL_KEY[s.key] ? t(SCALAR_LABEL_KEY[s.key]) : s.label,
+      source: s.source,
+      value: s.value ?? null,
+      tier: s.tier ?? null,
+      override: s.override ?? null,
+    });
+  }
 
   return (
     <div className="space-y-3">

@@ -99,6 +99,7 @@ title: 指标参考
 | `detect_live_gap_sequences_total{outcome}` | 实时缺口填补中的流序号，按结果区分：applied（代理已计为投递、却从未到达循环的消息，现已应用）、absent（不在流中：已被清除或淘汰）、skipped（读回后无法处理，被记为已处理而未应用任何内容）。非零的 applied 速率表示投递正在代理与此循环之间丢失。 |
 | `detect_loop_heartbeat_timestamp_seconds` | DETECT 单写入者循环最近一次通过的 Unix 时间，任期有效期间每个周期至少刷新一次。在 detect_is_leader 和 detect_live 读数为 1 时陈旧，表示循环挂在了某次调用内部。 |
 | `detect_restore_seconds` | 启动时从快照存储恢复引擎状态的时间。 |
+| `detect_rule_stat_write_failures_total` | 失败并被丢弃的规则健康度触发计数写入。检测不受影响（该写入为尽力而为，不在正确性路径上），但此值上升期间控制台的规则健康度计数不再增长；原因见服务日志。 |
 | `detect_rules_active` | 加载到 DETECT 引擎的规则。 |
 | `detect_stale_absence_dropped_total` | 因设备离开规则范围（已删除、已禁用、重新分型，或规则版本已被取代）而在发布时丢弃的缺席**触发**。当某次触发在同一轮中被丢弃时，与之配对的清除也计入；重新发布时因新版本保留该规则而被扣下的清除同样计入。已离开范围的设备的清除不会被丢弃，因此它此前触发的告警会被清除。 |
 | `detect_superseded_frontier_dropped_total` | 因其档案版本已被取代而在发布时丢弃的、随时间流逝而触发的持续时间、会话和聚合类检测。 |

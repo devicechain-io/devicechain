@@ -73,9 +73,13 @@ type DetectMetrics struct {
 	rulesActive       prometheus.Gauge
 	fanoutEventsTotal prometheus.Counter
 	fanoutEvalErrors  prometheus.Counter
-	lateSamplesTotal  prometheus.Counter
-	derivedPublished  prometheus.Counter
-	derivedRejected   *prometheus.CounterVec
+	// ruleStatWriteFailures counts rule-health fire writes that failed and were dropped. No labels:
+	// the recorder swallows the error by design, so this is the only aggregate signal of a broken
+	// projection write (a per-tenant or per-rule label would be unbounded).
+	ruleStatWriteFailures prometheus.Counter
+	lateSamplesTotal      prometheus.Counter
+	derivedPublished      prometheus.Counter
+	derivedRejected       *prometheus.CounterVec
 
 	// Slice-4c idle-advance counters (ADR-051 observability thread). Bounded cardinality
 	// (no labels). idleAdvancesTotal counts wall-clock idle advances that PRODUCED at least one
@@ -174,12 +178,13 @@ func NewDetectMetrics(ms *core.Microservice) *DetectMetrics {
 		consumerPending:    ms.NewGauge("detect_consumer_pending", "Undelivered messages waiting on the resolved-events durable consumer (the primary DETECT lag signal)."),
 		consumerAckPending: ms.NewGauge("detect_consumer_ack_pending", "Delivered-but-unacked messages on the resolved-events durable consumer (in-flight work)."),
 
-		rulesActive:       ms.NewGauge("detect_rules_active", "Rules loaded into the DETECT engine."),
-		fanoutEventsTotal: ms.NewCounter("detect_fanout_events_total", "Per-rule core events produced by the resolved-event fan-out."),
-		fanoutEvalErrors:  ms.NewCounter("detect_fanout_eval_errors_total", "Leaf-predicate evaluation errors during fan-out (the sample is skipped for that rule, not fed as a non-match)."),
-		lateSamplesTotal:  ms.NewCounter("detect_late_samples_total", "Samples that arrived too far behind the watermark to be used, counted once per rule that declined them: after their own trailing window had passed it (Repeating, SlidingAgg, Correlation), or, for a Duration rule, a matching reading more than the rule's hold behind it or a non-matching reading from inside the run of an alarm already raised, older than the raise. A store-and-forward device uploading buffered readings is the usual cause; a sustained non-zero rate means those rules are evaluating less than the device sent."),
-		derivedPublished:  ms.NewCounter("detect_derived_events_published_total", "Derived signal events published (ADR-037)."),
-		derivedRejected:   ms.NewCounterVec("detect_derived_events_rejected_total", "Detections dropped before publish, by reason (bounded enum).", []string{"reason"}),
+		rulesActive:           ms.NewGauge("detect_rules_active", "Rules loaded into the DETECT engine."),
+		fanoutEventsTotal:     ms.NewCounter("detect_fanout_events_total", "Per-rule core events produced by the resolved-event fan-out."),
+		fanoutEvalErrors:      ms.NewCounter("detect_fanout_eval_errors_total", "Leaf-predicate evaluation errors during fan-out (the sample is skipped for that rule, not fed as a non-match)."),
+		ruleStatWriteFailures: ms.NewCounter("detect_rule_stat_write_failures_total", "Rule-health fire counter writes that failed and were dropped. Detection is unaffected (the write is best-effort and off the correctness path), but the console's rule-health counts stop advancing while this rises; the cause is in the service log."),
+		lateSamplesTotal:      ms.NewCounter("detect_late_samples_total", "Samples that arrived too far behind the watermark to be used, counted once per rule that declined them: after their own trailing window had passed it (Repeating, SlidingAgg, Correlation), or, for a Duration rule, a matching reading more than the rule's hold behind it or a non-matching reading from inside the run of an alarm already raised, older than the raise. A store-and-forward device uploading buffered readings is the usual cause; a sustained non-zero rate means those rules are evaluating less than the device sent."),
+		derivedPublished:      ms.NewCounter("detect_derived_events_published_total", "Derived signal events published (ADR-037)."),
+		derivedRejected:       ms.NewCounterVec("detect_derived_events_rejected_total", "Detections dropped before publish, by reason (bounded enum).", []string{"reason"}),
 
 		idleAdvancesTotal:   ms.NewCounter("detect_idle_advances_total", "Wall-clock idle advances that produced at least one detection."),
 		idleDetectionsTotal: ms.NewCounter("detect_idle_detections_total", "Detections produced by wall-clock idle advance (absence/duration/session firing on silence)."),
@@ -271,6 +276,14 @@ func (m *DetectMetrics) recordFactPersistRetry() {
 		return
 	}
 	m.factPersistRetries.Inc()
+}
+
+// recordRuleStatWriteFailure counts one dropped rule-health write. Nil-safe.
+func (m *DetectMetrics) recordRuleStatWriteFailure() {
+	if m == nil {
+		return
+	}
+	m.ruleStatWriteFailures.Inc()
 }
 
 // recordGapFill counts one live gap fill by outcome. Nil-safe.
