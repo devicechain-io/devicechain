@@ -47,6 +47,7 @@ describe('isIdentityArea', () => {
       'command-delivery',
       'dashboard-management',
       'outbound-connectors',
+      'notification-management',
     ];
     for (const area of tenantAreas) {
       expect(isIdentityArea(area), `${area} must authenticate with the tenant access token`).toBe(

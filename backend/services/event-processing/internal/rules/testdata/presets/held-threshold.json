@@ -1,0 +1,1 @@
+{"name":"Above threshold for a duration","type":"duration","description":"Raises an alarm when a metric stays above a limit for 10 minutes.","severity":"major","when":{"metric":"temperature","op":"gt","threshold":80},"hold":"10m","actions":[{"type":"raiseAlarm","raiseAlarm":{"alarmKey":"threshold-held"}}]}
