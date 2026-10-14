@@ -36,7 +36,9 @@ import type {
 } from '@/gql/update-management/graphql';
 
 export type UpdateManagementInfo = UpdateManagementInfoQuery['updateManagementInfo'];
-export type Artifact = NonNullable<ArtifactQuery['artifact']>;
+// The detail read also selects the artifact's signatures; the list and the mutations do not.
+export type ArtifactDetail = NonNullable<ArtifactQuery['artifact']>;
+export type Artifact = Omit<ArtifactDetail, 'signatures'>;
 export type ArtifactSearchResults = ArtifactsQuery['artifacts'];
 export type ArtifactSigner = NonNullable<ArtifactSignerQuery['artifactSigner']>;
 export type ArtifactSignerSearchResults = ArtifactSignersQuery['artifactSigners'];
@@ -118,6 +120,20 @@ const ARTIFACT = graphql(`
       trustStatus
       provenance
       state
+      signatures {
+        id
+        createdAt
+        createdBy
+        countsTowardTrust
+        signer {
+          id
+          token
+          name
+          keyId
+          algorithm
+          state
+        }
+      }
     }
   }
 `);
@@ -591,7 +607,7 @@ export async function listArtifacts(criteria: ArtifactSearchCriteria): Promise<A
   return data.artifacts;
 }
 
-export async function getArtifact(token: string): Promise<Artifact | null> {
+export async function getArtifact(token: string): Promise<ArtifactDetail | null> {
   const data = await gql('update-management', ARTIFACT, { token });
   return data.artifact ?? null;
 }
