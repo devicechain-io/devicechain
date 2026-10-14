@@ -16,6 +16,7 @@ import DashboardDetailPage from '@/routes/dashboards/DashboardDetailPage';
 import AlarmsPage from '@/routes/alarms/AlarmsPage';
 import { AreaGate } from '@/components/AreaUnavailable';
 import { AREA } from '@/lib/capabilities';
+import SignersPage from '@/routes/updates/SignersPage';
 import CommandBatchesPage from '@/routes/command-batches/CommandBatchesPage';
 import CommandBatchDetailPage from '@/routes/command-batches/CommandBatchDetailPage';
 import ConnectorsPage from '@/routes/connectors/ConnectorsPage';
@@ -86,6 +87,9 @@ export default function App() {
           <Route path="dashboards" element={<DashboardsPage />} />
           <Route path="dashboards/:token" element={<DashboardDetailPage />} />
           <Route path="alarms" element={<AlarmsPage />} />
+          {/* Not wrapped in AreaGate: the page renders its own "not deployed" state on
+              status === 'absent', before any query fires. */}
+          <Route path="updates/signers" element={<SignersPage />} />
           {/* Batch commands are read-only here (list + detail); creating and
               cancelling one are separate slices. Gated because command-delivery is
               absent from the telemetry / ingest-only profiles. */}
