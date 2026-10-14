@@ -30,6 +30,7 @@ import enTenants from './locales/en/tenants.json';
 import enTiers from './locales/en/tiers.json';
 import enConnectors from './locales/en/connectors.json';
 import enCommandBatches from './locales/en/commandBatches.json';
+import enUpdateSigners from './locales/en/updateSigners.json';
 import enBranding from './locales/en/branding.json';
 import enBasemap from './locales/en/basemap.json';
 import enLocale from './locales/en/locale.json';
@@ -59,6 +60,7 @@ import esTenants from './locales/es/tenants.json';
 import esTiers from './locales/es/tiers.json';
 import esConnectors from './locales/es/connectors.json';
 import esCommandBatches from './locales/es/commandBatches.json';
+import esUpdateSigners from './locales/es/updateSigners.json';
 import esBranding from './locales/es/branding.json';
 import esBasemap from './locales/es/basemap.json';
 import esLocale from './locales/es/locale.json';
@@ -133,6 +135,7 @@ export const NAMESPACES = [
   'tiers',
   'connectors',
   'commandBatches',
+  'updateSigners',
   'branding',
   'basemap',
   // The tenant's own DEFAULT-language editor (rung 2 of the precedence below), not
@@ -175,6 +178,7 @@ const resources = {
     tiers: enTiers,
     connectors: enConnectors,
     commandBatches: enCommandBatches,
+    updateSigners: enUpdateSigners,
     branding: enBranding,
     basemap: enBasemap,
     locale: enLocale,
@@ -205,6 +209,7 @@ const resources = {
     tiers: esTiers,
     connectors: esConnectors,
     commandBatches: esCommandBatches,
+    updateSigners: esUpdateSigners,
     branding: esBranding,
     basemap: esBasemap,
     locale: esLocale,
