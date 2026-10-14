@@ -48,7 +48,7 @@ export type ArtifactSearchCriteria = {
   component?: string | null | undefined;
   /** Only artifacts of this kind. */
   kind?: ArtifactKind | null | undefined;
-  /** Zero-based page number. */
+  /** Page to return, starting at 1. A value below 1 is treated as 1. */
   pageNumber: number;
   /** Records per page. */
   pageSize: number;
@@ -60,7 +60,7 @@ export type ArtifactSearchCriteria = {
 
 /** Criteria for searching signers. Every filter is optional. */
 export type ArtifactSignerSearchCriteria = {
-  /** Zero-based page number. */
+  /** Page to return, starting at 1. A value below 1 is treated as 1. */
   pageNumber: number;
   /** Records per page. */
   pageSize: number;
@@ -110,7 +110,7 @@ export type UpdateAssignmentSearchCriteria = {
   currentOnly?: boolean | null | undefined;
   /** Only this device's assignments. */
   deviceToken?: string | null | undefined;
-  /** Zero-based page number. */
+  /** Page to return, starting at 1. A value below 1 is treated as 1. */
   pageNumber: number;
   /** Records per page. */
   pageSize: number;
