@@ -1,0 +1,1 @@
+{"name":"Device silent","type":"absence","description":"Raises an alarm when a device in this profile stops reporting for 15 minutes.","severity":"major","timeout":"15m","actions":[{"type":"raiseAlarm","raiseAlarm":{"alarmKey":"device-silent"}}]}
