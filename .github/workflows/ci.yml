@@ -297,6 +297,10 @@ jobs:
       # only), and for the fact that checksum verification stays on. It resolves the module
       # graph the way the build does and fails if it modifies go.mod, go.sum or go.work.sum.
       - name: go mod download
+        env:
+          # The windows vet step below loads files the linux listing skips (x/sys/windows
+          # and friends), so prefetch that package set too or the vet step downloads it bare.
+          DC_GOMOD_EXTRA_GOOS: ${{ matrix.module == 'backend/cli' && 'windows' || '' }}
         run: hack/go-mod-download.sh "${{ matrix.module }}"
 
       - name: gofmt
@@ -1138,6 +1142,11 @@ jobs:
           cache: true
           cache-dependency-path: "**/go.sum"
 
+      # The tool is fetched with `go run ...@latest`, outside any module's graph, so it gets
+      # the retry wrapper's own fetch (and its fallback off the proxy) rather than going bare.
+      - name: Prefetch addlicense
+        run: GOWORK=off hack/go-mod-download.sh --retry -- go install github.com/google/addlicense@latest
+
       - name: Check SPDX headers
         # Go + hand-authored GraphQL/proto sources + the C# SDK + the demos. YAML and
         # the operator Dockerfile are excluded: those manifests are controller-gen-
@@ -1236,7 +1245,7 @@ jobs:
       #   actionlint -shellcheck=/path/to/shellcheck
       - name: actionlint
         run: |
-          GOWORK=off go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
+          GOWORK=off hack/go-mod-download.sh --retry -- go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
           command -v shellcheck >/dev/null || {
             echo "::error::shellcheck is not on PATH; actionlint would silently skip"
             echo "all shell checks and still pass. Refusing to report a weaker result"
@@ -1499,6 +1508,9 @@ jobs:
         with:
           go-version-file: go.work
           cache: false
+
+      - name: go mod download
+        run: hack/go-mod-download.sh backend/tools/docsgql
 
       - name: GraphQL examples validate against the served schemas
         working-directory: backend/tools/docsgql
@@ -2622,7 +2634,7 @@ jobs:
           done
 
           echo "::warning::release asset unavailable after 3 attempts; building ${KO_VERSION} from the Go module proxy"
-          GOWORK=off GOBIN="$dest" go install "github.com/google/ko@${KO_VERSION}"
+          GOWORK=off GOBIN="$dest" hack/go-mod-download.sh --retry -- go install "github.com/google/ko@${KO_VERSION}"
           echo "$dest" >> "$GITHUB_PATH"
           "$dest/ko" version
 

@@ -10,11 +10,18 @@
 #
 # usage: hack/go-mod-download.sh [DIR ...]     prefetch the modules of each DIR (default: .)
 #        hack/go-mod-download.sh --workspace   every module go.work declares
+#        hack/go-mod-download.sh --retry -- CMD...   run CMD (a `go install` / `go run` of a
+#                                              tool, which resolves outside any DIR) with the
+#                                              same retry and fallback shape
 #        hack/go-mod-download.sh --self-test
 #
 # Environment:
 #   DC_GOMOD_ATTEMPTS  total attempts per directory, default 3 (the last one is the fallback)
 #   DC_GOMOD_BACKOFF   seconds to sleep before attempt N+1, multiplied by N; default 5
+#   DC_GOMOD_EXTRA_GOOS  space-separated GOOS values to prefetch IN ADDITION to the host's
+#                      (e.g. "windows" for a job that vets GOOS=windows: files behind a
+#                      windows build constraint import modules a linux `go list` never
+#                      loads, so their zips would otherwise be fetched by the vet step)
 #
 # THE SHAPE, AND WHY. Attempts before the last use the configured GOPROXY unchanged. The
 # LAST attempt rewrites that list so it falls through on any error: every `,` separator
@@ -85,7 +92,11 @@ tree_state() {
 # prefetch resolves and fetches everything build, vet and test compile in DIR, in workspace
 # mode, without touching the tree. The integration and interop tags cover the tagged vet step.
 prefetch() {
-  (cd "$1" && go list -deps -test -tags "integration interop" ./... >/dev/null)
+  local os
+  (cd "$1" && go list -deps -test -tags "integration interop" ./... >/dev/null) || return $?
+  for os in ${DC_GOMOD_EXTRA_GOOS:-}; do
+    (cd "$1" && GOOS="$os" go list -deps -test -tags "integration interop" ./... >/dev/null) || return $?
+  done
 }
 
 download_dir() {
@@ -114,6 +125,35 @@ download_dir() {
     fi
   done
   echo "::error::module prefetch in $dir failed on all $attempts attempts"
+  return 1
+}
+
+# retry_cmd runs a command that fetches modules outside any directory's graph (a `go install
+# tool@version`, a `go run tool@latest`), with the same attempts, backoff and last-attempt
+# fallback as download_dir. There is no tree to guard here. Every attempt streams the command's
+# own output, so the final failure's error is on the log exactly as the command printed it; the
+# exit status is the command's own on the last attempt.
+retry_cmd() {
+  local n rc fb
+  for ((n = 1; n <= attempts; n++)); do
+    rc=0
+    if [ "$n" -eq "$attempts" ] && [ "$attempts" -gt 1 ]; then
+      fb="$(fallback_proxy "$(go env GOPROXY)")"
+      echo "retry '$*': attempt $n/$attempts with GOPROXY=$fb"
+      GOPROXY="$fb" "$@" || rc=$?
+    else
+      echo "retry '$*': attempt $n/$attempts"
+      "$@" || rc=$?
+    fi
+    if [ "$rc" -eq 0 ]; then
+      return 0
+    fi
+    if [ "$n" -lt "$attempts" ]; then
+      echo "::warning::'$*' failed (exit $rc) on attempt $n/$attempts; retrying in $((backoff * n))s"
+      sleep "$((backoff * n))"
+    fi
+  done
+  echo "::error::'$*' failed on all $attempts attempts"
   return 1
 }
 
@@ -181,6 +221,23 @@ FAKE
   run "every directory is prefetched" 0 2 "all" 3 "$tmp/mod" "$tmp/mod2"
   FAKE_FAIL_DIR=mod2 run "a failure in a later directory fails the run" 1 4 "all" 3 "$tmp/mod" "$tmp/mod2"
 
+  # --retry: same shape for an arbitrary command.
+  run "retry mode: a transient failure is retried" 0 2 "2" 3 --retry -- go install example.com/tool@v1
+  run "retry mode: the last attempt falls back through a pipe" 0 3 "fallback" 3 --retry -- go install example.com/tool@v1
+  run "retry mode: every attempt failing is a failure" 1 3 "" 3 --retry -- go install example.com/tool@v1
+  run "retry mode: a missing command is rejected" 2 0 "all" 3 --retry
+
+  # DC_GOMOD_EXTRA_GOOS adds one list per extra OS, and a failure in it fails the run.
+  : >"$tmp/log"
+  DC_GOMOD_EXTRA_GOOS="windows" FAKE_OK_ON=all exec_script "$tmp/mod" && rc=0 || rc=$?
+  if [ "$rc" -ne 0 ] || [ "$(wc -l <"$tmp/log")" -ne 2 ]; then
+    echo "FAIL extra GOOS prefetch"
+    cat "$tmp/log" "$tmp/out"
+    fail=1
+  else
+    echo "ok   an extra GOOS is prefetched too"
+  fi
+
   # Anything that moves go.mod or go.sum must fail the run, not be absorbed.
   : >"$tmp/log"
   FAKE_TOUCH=go.sum FAKE_OK_ON=all exec_script "$tmp/mod" && rc=0 || rc=$?
@@ -231,6 +288,17 @@ FAKE
 
 if [ "${1:-}" = "--self-test" ]; then
   self_test
+  exit $?
+fi
+
+if [ "${1:-}" = "--retry" ]; then
+  shift
+  [ "${1:-}" = "--" ] && shift
+  if [ "$#" -eq 0 ]; then
+    echo "::error::--retry needs a command: hack/go-mod-download.sh --retry -- CMD..." >&2
+    exit 2
+  fi
+  retry_cmd "$@"
   exit $?
 fi
 
