@@ -132,3 +132,81 @@ func TestGovernanceDimensionsFailClosed(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, dims, len(governance.AllDimensions()))
 }
+
+// scalarFor finds one scalar's row in an effective-scalar-settings result.
+func scalarFor(t *testing.T, rows []*AdminTenantScalarSettingResolver, key string) *AdminTenantScalarSettingResolver {
+	t.Helper()
+	for _, row := range rows {
+		if row.Key() == key {
+			return row
+		}
+	}
+	require.FailNowf(t, "scalar missing", "no effective-scalar-settings row for %q", key)
+	return nil
+}
+
+// TestEffectiveScalarSettingsCoversEveryTierKey ties the scalar rows to the tier config registry:
+// every registered key that is not a rate or burst field must appear, so a new scalar cannot be
+// made settable on a tier without an operator being able to see it.
+func TestEffectiveScalarSettingsCoversEveryTierKey(t *testing.T) {
+	rows := (&AdminTenantResolver{M: iam.Tenant{}}).EffectiveScalarSettings()
+	dimKeys := map[string]bool{}
+	for _, d := range governance.AllDimensions() {
+		dimKeys[d.RateField] = true
+		dimKeys[d.BurstField] = true
+	}
+	want := map[string]bool{}
+	for _, k := range iam.TierConfigKeys() {
+		if !dimKeys[k] {
+			want[k] = true
+		}
+	}
+	got := map[string]bool{}
+	for _, r := range rows {
+		got[r.Key()] = true
+		assert.NotEmpty(t, r.Label())
+	}
+	assert.Equal(t, want, got)
+}
+
+// TestEffectiveScalarSettingsSource pins, for each scalar, that the row reports override, tier and
+// platform-default as the winner, with the levels beside it.
+func TestEffectiveScalarSettingsSource(t *testing.T) {
+	type scalar struct {
+		key         string
+		tierVal     float64
+		overrideVal int
+		setOverride func(*iam.Tenant, *int)
+	}
+	scalars := []scalar{
+		{iam.HeldCommandCeilingConfigKey, 50000, 7, func(m *iam.Tenant, v *int) { m.HeldCommandCeiling = v }},
+		{iam.ShedPriorityConfigKey, 90, 10, func(m *iam.Tenant, v *int) { m.ShedPriority = v }},
+		{iam.GeoFenceCeilingConfigKey, 40, 5, func(m *iam.Tenant, v *int) { m.GeoFenceCeiling = v }},
+		{iam.GeoFencePositionCeilingConfigKey, 800, 100, func(m *iam.Tenant, v *int) { m.GeoFencePositionCeiling = v }},
+		{iam.GeoFencePositionBudgetConfigKey, 8000, 1000, func(m *iam.Tenant, v *int) { m.GeoFencePositionBudget = v }},
+	}
+	for _, s := range scalars {
+		t.Run(s.key, func(t *testing.T) {
+			tier := &iam.TenantTier{Token: iam.TierGoldToken, Config: map[string]any{s.key: s.tierVal}}
+
+			m := iam.Tenant{Tier: tier}
+			s.setOverride(&m, ip(s.overrideVal))
+			row := scalarFor(t, (&AdminTenantResolver{M: m}).EffectiveScalarSettings(), s.key)
+			assert.Equal(t, string(iam.SourceOverride), row.Source())
+			assert.EqualValues(t, s.overrideVal, *i32(row.Value()))
+			assert.EqualValues(t, s.overrideVal, *i32(row.Override()))
+			assert.EqualValues(t, s.tierVal, *i32(row.Tier()))
+
+			row = scalarFor(t, (&AdminTenantResolver{M: iam.Tenant{Tier: tier}}).EffectiveScalarSettings(), s.key)
+			assert.Equal(t, string(iam.SourceTier), row.Source())
+			assert.EqualValues(t, s.tierVal, *i32(row.Value()))
+			assert.Nil(t, i32(row.Override()))
+
+			row = scalarFor(t, (&AdminTenantResolver{M: iam.Tenant{Tier: &iam.TenantTier{Token: iam.TierGoldToken}}}).EffectiveScalarSettings(), s.key)
+			assert.Equal(t, string(iam.SourcePlatformDefault), row.Source())
+			assert.Nil(t, i32(row.Value()))
+			assert.Nil(t, i32(row.Tier()))
+			assert.Nil(t, i32(row.Override()))
+		})
+	}
+}

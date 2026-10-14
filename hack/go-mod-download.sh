@@ -10,11 +10,33 @@
 #
 # usage: hack/go-mod-download.sh [DIR ...]     prefetch the modules of each DIR (default: .)
 #        hack/go-mod-download.sh --workspace   every module go.work declares
+#        hack/go-mod-download.sh --retry -- CMD...   run CMD (a `go install` / `go run` of a
+#                                              tool, which resolves outside any DIR) with the
+#                                              same retry and fallback shape
 #        hack/go-mod-download.sh --self-test
 #
 # Environment:
 #   DC_GOMOD_ATTEMPTS  total attempts per directory, default 3 (the last one is the fallback)
 #   DC_GOMOD_BACKOFF   seconds to sleep before attempt N+1, multiplied by N; default 5
+#   DC_GOMOD_EXTRA_GOOS  space-separated GOOS values to prefetch IN ADDITION to the host's
+#                      (e.g. "windows" for a job that vets GOOS=windows: files behind a
+#                      windows build constraint import modules a linux `go list` never
+#                      loads, so their zips would otherwise be fetched by the vet step)
+#   DC_GOMOD_TIDY      "1" to also prefetch what `GOWORK=off go mod tidy -diff` fetches, for a
+#                      job that runs hack/check-go-mod-tidy.sh (see TIDY FETCHES MORE below)
+#
+# 🔴 TIDY FETCHES MORE, AND FROM A DIFFERENT GRAPH. The tidy check resolves the module ON
+# ITS OWN (GOWORK=off), so it wants the module's own versions rather than the workspace's,
+# and tidy loads every build tag, every GOOS and the TESTS OF DEPENDENCIES -- `X tested by
+# X.test imports Y`. None of that is in the `go list -deps -test ./...` set, so before
+# DC_GOMOD_TIDY existed the tidy step was the one that downloaded those zips bare, and it is
+# where both observed proxy failures landed: modernc.org/sqlite@v1.23.1 via
+# `glebarez/go-sqlite.test` (device-state) and filippo.io/edwards25519@v1.2.0 via
+# `jmoiron/sqlx.test` (cli). No `go list` pattern reproduces that set (tidy ignores
+# constraints), so the prefetch runs the same `GOWORK=off go mod tidy -diff` the check runs,
+# which writes nothing. Its VERDICT is not this script's business: drift (exit 1 with a diff
+# on stdout) counts as a completed fetch and is left for the check to report; only a failure
+# to resolve (exit 1 with no diff, or any other status) is retried.
 #
 # THE SHAPE, AND WHY. Attempts before the last use the configured GOPROXY unchanged. The
 # LAST attempt rewrites that list so it falls through on any error: every `,` separator
@@ -85,7 +107,25 @@ tree_state() {
 # prefetch resolves and fetches everything build, vet and test compile in DIR, in workspace
 # mode, without touching the tree. The integration and interop tags cover the tagged vet step.
 prefetch() {
-  (cd "$1" && go list -deps -test -tags "integration interop" ./... >/dev/null)
+  local os
+  (cd "$1" && go list -deps -test -tags "integration interop" ./... >/dev/null) || return $?
+  for os in ${DC_GOMOD_EXTRA_GOOS:-}; do
+    (cd "$1" && GOOS="$os" go list -deps -test -tags "integration interop" ./... >/dev/null) || return $?
+  done
+  if [ "${DC_GOMOD_TIDY:-}" = 1 ]; then
+    prefetch_tidy "$1" || return $?
+  fi
+}
+
+# prefetch_tidy fetches what hack/check-go-mod-tidy.sh will fetch, by running the same command.
+# Tidy and drift are both a completed fetch; anything else is a failure to retry.
+prefetch_tidy() {
+  local out rc=0
+  out="$(cd "$1" && GOWORK=off go mod tidy -diff)" || rc=$?
+  if [ "$rc" -eq 0 ] || { [ "$rc" -eq 1 ] && [[ "$out" == "diff "* ]]; }; then
+    return 0
+  fi
+  return "$rc"
 }
 
 download_dir() {
@@ -117,6 +157,35 @@ download_dir() {
   return 1
 }
 
+# retry_cmd runs a command that fetches modules outside any directory's graph (a `go install
+# tool@version`, a `go run tool@latest`), with the same attempts, backoff and last-attempt
+# fallback as download_dir. There is no tree to guard here. Every attempt streams the command's
+# own output, so the final failure's error is on the log exactly as the command printed it; the
+# exit status is the command's own on the last attempt.
+retry_cmd() {
+  local n rc fb
+  for ((n = 1; n <= attempts; n++)); do
+    rc=0
+    if [ "$n" -eq "$attempts" ] && [ "$attempts" -gt 1 ]; then
+      fb="$(fallback_proxy "$(go env GOPROXY)")"
+      echo "retry '$*': attempt $n/$attempts with GOPROXY=$fb"
+      GOPROXY="$fb" "$@" || rc=$?
+    else
+      echo "retry '$*': attempt $n/$attempts"
+      "$@" || rc=$?
+    fi
+    if [ "$rc" -eq 0 ]; then
+      return 0
+    fi
+    if [ "$n" -lt "$attempts" ]; then
+      echo "::warning::'$*' failed (exit $rc) on attempt $n/$attempts; retrying in $((backoff * n))s"
+      sleep "$((backoff * n))"
+    fi
+  done
+  echo "::error::'$*' failed on all $attempts attempts"
+  return 1
+}
+
 self_test() {
   local tmp bin fail=0
   tmp="$(mktemp -d)"
@@ -135,9 +204,13 @@ self_test() {
   cat >"$bin/go" <<'FAKE'
 #!/usr/bin/env bash
 if [ "$1" = env ]; then printf '%s\n' "$FAKE_GOPROXY"; exit 0; fi
-echo "GOPROXY=${GOPROXY-<unset>} GOWORK=${GOWORK-<unset>} GONOSUMDB=${GONOSUMDB-<unset>} GOSUMDB=${GOSUMDB-<unset>} GOFLAGS=${GOFLAGS-<unset>} GOINSECURE=${GOINSECURE-<unset>} GONOSUMCHECK=${GONOSUMCHECK-<unset>} DIR=$(basename "$PWD")" >>"$FAKE_LOG"
+echo "GOPROXY=${GOPROXY-<unset>} GOWORK=${GOWORK-<unset>} GONOSUMDB=${GONOSUMDB-<unset>} GOSUMDB=${GOSUMDB-<unset>} GOFLAGS=${GOFLAGS-<unset>} GOINSECURE=${GOINSECURE-<unset>} GONOSUMCHECK=${GONOSUMCHECK-<unset>} DIR=$(basename "$PWD") ARGS=$*" >>"$FAKE_LOG"
 n="$(wc -l <"$FAKE_LOG")"
 [ -z "${FAKE_TOUCH-}" ] || echo "# touched" >>"$FAKE_TOUCH"
+if [ "$*" = "mod tidy -diff" ] && [ -n "${FAKE_TIDY_DRIFT-}" ]; then
+  printf 'diff current/go.mod proposed/go.mod\n+require example.com/x v1.0.0\n'
+  exit 1
+fi
 [ -z "${FAKE_FAIL_DIR-}" ] || [ "$(basename "$PWD")" != "$FAKE_FAIL_DIR" ] || { echo "stream error: INTERNAL_ERROR" >&2; exit 1; }
 case " $FAKE_OK_ON " in
   *" $n "*) exit 0 ;;
@@ -180,6 +253,40 @@ FAKE
   run "a single attempt does not use the fallback" 1 1 "fallback" 1 "$tmp/mod"
   run "every directory is prefetched" 0 2 "all" 3 "$tmp/mod" "$tmp/mod2"
   FAKE_FAIL_DIR=mod2 run "a failure in a later directory fails the run" 1 4 "all" 3 "$tmp/mod" "$tmp/mod2"
+
+  # --retry: same shape for an arbitrary command.
+  run "retry mode: a transient failure is retried" 0 2 "2" 3 --retry -- go install example.com/tool@v1
+  run "retry mode: the last attempt falls back through a pipe" 0 3 "fallback" 3 --retry -- go install example.com/tool@v1
+  run "retry mode: every attempt failing is a failure" 1 3 "" 3 --retry -- go install example.com/tool@v1
+  run "retry mode: a missing command is rejected" 2 0 "all" 3 --retry
+
+  # DC_GOMOD_EXTRA_GOOS adds one list per extra OS, and a failure in it fails the run.
+  : >"$tmp/log"
+  DC_GOMOD_EXTRA_GOOS="windows" FAKE_OK_ON=all exec_script "$tmp/mod" && rc=0 || rc=$?
+  if [ "$rc" -ne 0 ] || [ "$(wc -l <"$tmp/log")" -ne 2 ]; then
+    echo "FAIL extra GOOS prefetch"
+    cat "$tmp/log" "$tmp/out"
+    fail=1
+  else
+    echo "ok   an extra GOOS is prefetched too"
+  fi
+
+  # DC_GOMOD_TIDY: the tidy check's own command, resolved GOWORK=off, after the list. Drift is
+  # a completed fetch (the check reports it); a tidy that could not resolve is retried.
+  DC_GOMOD_TIDY=1 run "tidy mode: list then tidy" 0 2 "all" 3 "$tmp/mod"
+  if [ "$(tail -n1 "$tmp/log" | sed 's/.* ARGS=//')" != "mod tidy -diff" ] ||
+    [ "$(tail -n1 "$tmp/log" | awk '{print $2}')" != "GOWORK=off" ] ||
+    [ "$(head -n1 "$tmp/log" | awk '{print $2}')" != "GOWORK=<unset>" ]; then
+    echo "FAIL tidy mode runs GOWORK=off go mod tidy -diff after a workspace-mode list"
+    cat "$tmp/log"
+    fail=1
+  else
+    echo "ok   tidy mode runs GOWORK=off go mod tidy -diff after a workspace-mode list"
+  fi
+  DC_GOMOD_TIDY=1 FAKE_TIDY_DRIFT=1 run "tidy mode: drift is a completed fetch, not a retry" 0 2 "1" 3 "$tmp/mod"
+  DC_GOMOD_TIDY=1 run "tidy mode: a tidy that fails to fetch is retried" 0 4 "1 3 4" 3 "$tmp/mod"
+  DC_GOMOD_TIDY=1 run "tidy mode: a tidy failing on every attempt is a failure" 1 6 "1 3 5" 3 "$tmp/mod"
+  run "without tidy mode no tidy runs" 0 1 "all" 3 "$tmp/mod"
 
   # Anything that moves go.mod or go.sum must fail the run, not be absorbed.
   : >"$tmp/log"
@@ -231,6 +338,17 @@ FAKE
 
 if [ "${1:-}" = "--self-test" ]; then
   self_test
+  exit $?
+fi
+
+if [ "${1:-}" = "--retry" ]; then
+  shift
+  [ "${1:-}" = "--" ] && shift
+  if [ "$#" -eq 0 ]; then
+    echo "::error::--retry needs a command: hack/go-mod-download.sh --retry -- CMD..." >&2
+    exit 2
+  fi
+  retry_cmd "$@"
   exit $?
 fi
 

@@ -234,6 +234,8 @@ export {
   type BooleanOptionSpec,
   type DefaultsOf,
   type EnumOptionSpec,
+  type ListItemFieldSpec,
+  type ListOptionSpec,
   type GreaterThanConstraint,
   type NumberOptionSpec,
   type OptionConstraint,

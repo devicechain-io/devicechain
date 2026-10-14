@@ -239,6 +239,12 @@ jobs:
           go-version-file: go.work
           cache: false
 
+      # Prefetch the module graph with a bounded retry and a fallback off the module proxy, so
+      # one dropped stream from proxy.golang.org does not fail the job inside whichever build
+      # step happened to trigger the download. See hack/go-mod-download.sh.
+      - name: go mod download
+        run: hack/go-mod-download.sh "backend/services/$(hack/list-services.sh | jq -r '.[0]')"
+
       - uses: ko-build/setup-ko@61b4d1d396f5b2e7d6bb6fefdce3dc38d1a13445 # v0.10
         with:
           version: v0.19.1

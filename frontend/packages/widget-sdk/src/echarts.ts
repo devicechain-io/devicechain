@@ -13,6 +13,7 @@ export { EChart, type EChartOption, type EChartProps } from './chart/echart';
 export {
   buildGaugeOption,
   buildLineOption,
+  severityFill,
   type GaugeChartOptions,
   type LineChartOptions,
 } from './chart/chart-options';

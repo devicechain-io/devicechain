@@ -737,7 +737,7 @@ func NewResolvedEventsProcessor(ms *core.Microservice, reader messaging.MessageR
 	// Wire the rule-health fire projection (slice 7b) when a store is supplied. It is off the
 	// correctness path (best-effort writes), so the scaffold/test paths pass nil and record none.
 	if ruleStats != nil {
-		rp.publisher.SetFireRecorder(ruleStatRecorder{store: ruleStats})
+		rp.publisher.SetFireRecorder(ruleStatRecorder{store: ruleStats, metrics: rp.metrics})
 	}
 	rp.metrics.setRulesActive(registry.Count())
 	rpname := fmt.Sprintf("%s-%s", ms.FunctionalArea, "resolved-events-proc")

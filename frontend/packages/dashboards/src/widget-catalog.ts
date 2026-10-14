@@ -198,9 +198,16 @@ function checkOptions(options: unknown, add: Add): WidgetOptionSpecs | undefined
     add('options', 'options must be an object mapping option keys to specs');
     return undefined;
   }
+  return checkOptionsAt(options, 'options.', add) ? (options as unknown as WidgetOptionSpecs) : undefined;
+}
+
+// Checks a table of option specs, reporting each fault under `prefix` + key. True when the table
+// is structurally sound. The same rules judge a list option's item fields (prefix
+// `options.<key>.item.`), so a field cannot be declared more loosely than an option.
+function checkOptionsAt(options: Record<string, unknown>, prefix: string, add: Add): boolean {
   let sound = true;
   for (const [key, spec] of Object.entries(options)) {
-    const at = `options.${key}`;
+    const at = `${prefix}${key}`;
     if (!isRecord(spec)) {
       add(at, 'an option spec must be an object');
       sound = false;
@@ -246,12 +253,35 @@ function checkOptions(options: unknown, add: Add): WidgetOptionSpecs | undefined
           }
         }
         break;
+      case 'list': {
+        if (spec.maxItems !== undefined && (typeof spec.maxItems !== 'number' || !Number.isInteger(spec.maxItems) || spec.maxItems < 1)) {
+          add(`${at}.maxItems`, 'maxItems must be a whole number of at least 1');
+        }
+        if (!isRecord(spec.item) || Object.keys(spec.item).length === 0) {
+          add(`${at}.item`, 'a list option needs an item object declaring at least one field');
+          sound = false;
+          break;
+        }
+        // A field is a scalar spec checked with the same rules as a top-level option, but
+        // nesting a list is not offered: the editor row is flat.
+        const fields = spec.item as Record<string, unknown>;
+        const flat = Object.fromEntries(Object.entries(fields).filter(([, f]) => !isRecord(f) || f.kind !== 'list'));
+        for (const key of Object.keys(fields)) {
+          if (!(key in flat)) add(`${at}.item.${key}`, 'a list item field cannot itself be a list');
+        }
+        if (Object.keys(flat).length !== Object.keys(fields).length) {
+          sound = false;
+          break;
+        }
+        if (!checkOptionsAt(flat, `${at}.item.`, add)) sound = false;
+        break;
+      }
       default:
-        add(`${at}.kind`, `kind must be string, number, boolean or enum, got ${JSON.stringify(spec.kind)}`);
+        add(`${at}.kind`, `kind must be string, number, boolean, enum or list, got ${JSON.stringify(spec.kind)}`);
         sound = false;
     }
   }
-  return sound ? (options as unknown as WidgetOptionSpecs) : undefined;
+  return sound;
 }
 
 function checkConstraints(

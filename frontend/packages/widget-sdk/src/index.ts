@@ -61,6 +61,27 @@ export {
 } from './freshness';
 export { formatDateTime, formatTimestamp, formatValue } from './format';
 export {
+  ALARM_LEVELS,
+  SEVERITY_LEVELS,
+  SEVERITY_TOKENS,
+  isAlarmLevel,
+  isSeverityLevel,
+  levelColor,
+  severityTokenCss,
+  severityVar,
+  useSeverityColors,
+  type AlarmLevel,
+  type SeverityLevel,
+} from './severity';
+export {
+  bandAt,
+  optThresholds,
+  parseThresholds,
+  thresholdBands,
+  type Threshold,
+  type ThresholdBand,
+} from './thresholds';
+export {
   FlashValue,
   flashBackgroundStyle,
   flashTextStyle,
@@ -110,6 +131,8 @@ export {
   type DefaultsOf,
   type DescriptorIssue,
   type EnumOptionSpec,
+  type ListItemFieldSpec,
+  type ListOptionSpec,
   type GreaterThanConstraint,
   type HubConnectionState,
   type NamespacedWidgetId,

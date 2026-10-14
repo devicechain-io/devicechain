@@ -297,6 +297,14 @@ jobs:
       # only), and for the fact that checksum verification stays on. It resolves the module
       # graph the way the build does and fails if it modifies go.mod, go.sum or go.work.sum.
       - name: go mod download
+        env:
+          # The windows vet step below loads files the linux listing skips (x/sys/windows
+          # and friends), so prefetch that package set too or the vet step downloads it bare.
+          DC_GOMOD_EXTRA_GOOS: ${{ matrix.module == 'backend/cli' && 'windows' || '' }}
+          # The tidy step at the end resolves the module ALONE and loads the tests of its
+          # dependencies, every OS and every tag: a different, larger set than the build's,
+          # and the step where both observed proxy stream resets landed. Prefetch it too.
+          DC_GOMOD_TIDY: "1"
         run: hack/go-mod-download.sh "${{ matrix.module }}"
 
       - name: gofmt
@@ -1138,6 +1146,16 @@ jobs:
           cache: true
           cache-dependency-path: "**/go.sum"
 
+      # The tool is fetched outside any module's graph, so it gets the retry wrapper's own
+      # fetch (and its fallback off the proxy) rather than going bare. It is INSTALLED and the
+      # binary run below, not `go run ...@latest` there: `@latest` is a version query that goes
+      # back to the proxy on every invocation, cache or no cache, so a prefetch followed by a
+      # `go run @latest` would still put one bare proxy request in the check step.
+      - name: Install addlicense
+        run: |
+          GOWORK=off GOBIN="$RUNNER_TEMP/addlicense" hack/go-mod-download.sh --retry -- go install github.com/google/addlicense@latest
+          echo "$RUNNER_TEMP/addlicense" >> "$GITHUB_PATH"
+
       - name: Check SPDX headers
         # Go + hand-authored GraphQL/proto sources + the C# SDK + the demos. YAML and
         # the operator Dockerfile are excluded: those manifests are controller-gen-
@@ -1149,7 +1167,7 @@ jobs:
         # package lock) is excluded: Unity rewrites those files whole, so a header
         # would not survive the next save.
         run: >
-          go run github.com/google/addlicense@latest -check
+          addlicense -check
           -ignore '**/*.yaml' -ignore '**/Dockerfile'
           -ignore '**/*.csproj' -ignore '**/*.sln' -ignore '**/*.props'
           -ignore '**/bin/**' -ignore '**/obj/**'
@@ -1236,7 +1254,7 @@ jobs:
       #   actionlint -shellcheck=/path/to/shellcheck
       - name: actionlint
         run: |
-          GOWORK=off go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
+          GOWORK=off hack/go-mod-download.sh --retry -- go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
           command -v shellcheck >/dev/null || {
             echo "::error::shellcheck is not on PATH; actionlint would silently skip"
             echo "all shell checks and still pass. Refusing to report a weaker result"
@@ -1499,6 +1517,9 @@ jobs:
         with:
           go-version-file: go.work
           cache: false
+
+      - name: go mod download
+        run: hack/go-mod-download.sh backend/tools/docsgql
 
       - name: GraphQL examples validate against the served schemas
         working-directory: backend/tools/docsgql
@@ -2628,7 +2649,7 @@ jobs:
           done
 
           echo "::warning::release asset unavailable after 3 attempts; building ${KO_VERSION} from the Go module proxy"
-          GOWORK=off GOBIN="$dest" go install "github.com/google/ko@${KO_VERSION}"
+          GOWORK=off GOBIN="$dest" hack/go-mod-download.sh --retry -- go install "github.com/google/ko@${KO_VERSION}"
           echo "$dest" >> "$GITHUB_PATH"
           "$dest/ko" version
 

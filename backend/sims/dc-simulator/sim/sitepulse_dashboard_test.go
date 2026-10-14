@@ -136,23 +136,45 @@ func TestSitepulseBoardShowsEveryMachinesFuel(t *testing.T) {
 
 func TestSitepulseBoardStatesTheThresholds(t *testing.T) {
 	def := sitepulseBoard(t, sitepulseManifest(t))
+
+	// The numbers live in `thresholds` rather than in prose: a label that restated them would be
+	// a second place to keep in step. Compared as JSON (a decoded map marshals its keys sorted) against literals (the rule's 15 %, 105 C
+	// and 600 kPa, and the severity each rule raises at).
+	thresholdsOf := func(w dashboardWidget) string {
+		raw, err := json.Marshal(w.Options["thresholds"])
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(raw)
+	}
+	const lowFuel = `[{"level":"major","value":0},{"level":"normal","value":15}]`
+	cards := cardsFor(def, "fuel_pct")
+	if len(cards) == 0 {
+		t.Fatal("premise: the board has no fuel cards")
+	}
+	for slot, w := range cards {
+		if got := thresholdsOf(w); got != lowFuel {
+			t.Errorf("%s (%s): thresholds = %s, want %s", w.Id, slot, got, lowFuel)
+		}
+	}
 	label := widgetByID(t, def, "sp-fuel-label")
-	if text, _ := label.Options["text"].(string); !strings.Contains(text, "below 15 %") {
-		t.Errorf("fuel label %q does not state the 15 %% low-fuel threshold", text)
+	if text, _ := label.Options["text"].(string); strings.Contains(text, "15") || strings.Contains(text, "fire") {
+		t.Errorf("fuel label %q still carries the threshold prose", text)
 	}
-	if !strings.Contains(sitepulseFuelBandText(6, 6), fmt.Sprintf("%g", SitepulseLowFuelThreshold)) {
-		t.Error("the fuel label is not derived from SitepulseLowFuelThreshold")
-	}
+
 	for _, c := range []struct {
-		id, contains string
-		min, max     float64
+		id, title, thresholds string
+		min, max              float64
 	}{
-		{"sp-engine-temp", "above 105 °C", 0, 130},
-		{"sp-tyre", "below 600 kPa", 0, 1000},
+		{"sp-engine-temp", "Engine temp", `[{"level":"critical","value":105}]`, 0, 130},
+		{"sp-tyre", "Tyre pressure", `[{"level":"major","value":0},{"level":"normal","value":600}]`, 0, 1000},
 	} {
 		w := widgetByID(t, def, c.id)
-		if title, _ := w.Options["title"].(string); !strings.Contains(title, c.contains) {
-			t.Errorf("%s title %q does not state %q", c.id, title, c.contains)
+		if title, _ := w.Options["title"].(string); title != c.title {
+			t.Errorf("%s title = %q, want %q", c.id, title, c.title)
+		}
+		if got := thresholdsOf(w); got != c.thresholds {
+			t.Errorf("%s thresholds = %s, want %s", c.id, got, c.thresholds)
 		}
 		lo, _ := w.Options["min"].(float64)
 		hi, _ := w.Options["max"].(float64)

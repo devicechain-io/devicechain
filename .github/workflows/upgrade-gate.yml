@@ -259,6 +259,12 @@ jobs:
           cache: true
           cache-dependency-path: "**/go.sum"
 
+      # Prefetch the module graph with a bounded retry and a fallback off the module proxy, so
+      # one dropped stream from proxy.golang.org does not fail the job inside whichever build
+      # step happened to trigger the download. See hack/go-mod-download.sh.
+      - name: go mod download
+        run: hack/go-mod-download.sh backend/cli
+
       # kind: the binary only, pinned to the same version loadtest-gate uses. The
       # rig runs `kind create cluster` itself from deploy/local's config, so this
       # job must never create one -- that would fight the rig for the name.
