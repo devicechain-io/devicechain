@@ -143,6 +143,20 @@ export type UpdateState =
   /** The bytes the device holds hash to the artifact's digest. This is integrity only: it does not say who produced them. */
   | 'VERIFIED';
 
+export type DeviceUpdateAssignmentsQueryVariables = Exact<{
+  criteria: UpdateAssignmentSearchCriteria;
+}>;
+
+
+export type DeviceUpdateAssignmentsQuery = { updateAssignments: { results: Array<{ id: string, createdAt: string | null, token: string, deviceToken: string, component: string, actor: string | null, supersededAt: string | null, current: boolean, artifact: { id: string, token: string, kind: ArtifactKind, name: string, version: string, component: string, trustStatus: ArtifactTrustStatus, state: ArtifactState }, attempt: { token: string, state: UpdateState, targetVersion: string, requiresReboot: boolean, lastReportAt: string | null, cancelRequested: boolean, reconciled: boolean, progress: { bytes: string, total: string } | null, failure: { stage: string, code: string, detail: string, platform: boolean } | null } }>, pagination: { pageStart: number | null, pageEnd: number | null, totalRecords: number | null } } };
+
+export type AssignmentSignerQueryVariables = Exact<{
+  token: string;
+}>;
+
+
+export type AssignmentSignerQuery = { updateAssignment: { token: string, signedBy: { token: string, name: string, keyId: string, algorithm: SignerAlgorithm, state: SignerState } | null } | null };
+
 export type UpdateManagementInfoQueryVariables = Exact<{ [key: string]: never; }>;
 
 
@@ -270,6 +284,70 @@ export class TypedDocumentString<TResult, TVariables>
   }
 }
 
+export const DeviceUpdateAssignmentsDocument = new TypedDocumentString(`
+    query DeviceUpdateAssignments($criteria: UpdateAssignmentSearchCriteria!) {
+  updateAssignments(criteria: $criteria) {
+    results {
+      id
+      createdAt
+      token
+      deviceToken
+      component
+      artifact {
+        id
+        token
+        kind
+        name
+        version
+        component
+        trustStatus
+        state
+      }
+      actor
+      supersededAt
+      current
+      attempt {
+        token
+        state
+        targetVersion
+        requiresReboot
+        lastReportAt
+        progress {
+          bytes
+          total
+        }
+        failure {
+          stage
+          code
+          detail
+          platform
+        }
+        cancelRequested
+        reconciled
+      }
+    }
+    pagination {
+      pageStart
+      pageEnd
+      totalRecords
+    }
+  }
+}
+    `) as unknown as TypedDocumentString<DeviceUpdateAssignmentsQuery, DeviceUpdateAssignmentsQueryVariables>;
+export const AssignmentSignerDocument = new TypedDocumentString(`
+    query AssignmentSigner($token: String!) {
+  updateAssignment(token: $token) {
+    token
+    signedBy {
+      token
+      name
+      keyId
+      algorithm
+      state
+    }
+  }
+}
+    `) as unknown as TypedDocumentString<AssignmentSignerQuery, AssignmentSignerQueryVariables>;
 export const UpdateManagementInfoDocument = new TypedDocumentString(`
     query UpdateManagementInfo {
   updateManagementInfo {
