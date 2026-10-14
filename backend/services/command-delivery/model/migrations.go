@@ -40,5 +40,6 @@ var (
 		NewCommandDispatchFailuresSchema(),
 		NewDeviceGatesSchema(),
 		NewCommandOutcomeSchema(),
+		NewDispatchAfterSchema(),
 	}
 )

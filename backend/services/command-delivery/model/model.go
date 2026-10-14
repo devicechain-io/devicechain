@@ -246,6 +246,26 @@ type Command struct {
 	// in SQL, so every increment on a pre-existing row would write NULL back and the bound
 	// would never be reached, with no error anywhere.
 	DispatchFailures int
+
+	// DispatchAfter is the earliest instant a dispatcher may CLAIM this command: a command
+	// that must wait for its device type's maintenance window carries the window's next
+	// opening here. NULL means no hold.
+	//
+	// 🔴 IT IS READ BY THE CLAIM, NOT BY THE SWEEP, AND THAT IS WHY NO TRANSPORT CAN BYPASS
+	// IT. The delivery sweep, the LwM2M wake drain and the live confirmation all end in a
+	// conditional UPDATE (MarkSent, MarkSentByToken, ConfirmDispatch); each refuses a row
+	// whose stamp is in the future. The reads that feed them filter on it too, but only so
+	// they do not carry rows they cannot claim — the claim is the authority. A fourth
+	// transport that forgot to ask "is the window open?" would still be refused here.
+	//
+	// The row stays QUEUED while it waits: there is no status for it, so every consumer of
+	// the lifecycle (SDKs, dashboards, the batch cancel) is unchanged. A stamp in the past
+	// is history ("this command waited until then"), not a hold.
+	DispatchAfter sql.NullTime
+
+	// WindowToken names the maintenance window DispatchAfter came from, so an edit of that
+	// window can move the rows still waiting on it. NULL for a command that was never held.
+	WindowToken sql.NullString
 }
 
 // DefaultOrder implements rdb.Sortable. Newest-first is the PRODUCT requirement here,

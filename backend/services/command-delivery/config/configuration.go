@@ -95,6 +95,17 @@ const (
 	// them would mean a change to the broker's ack budget silently retuned a ticker.
 	StrandedReconcileInterval = 300
 
+	// WindowRestampInterval is the cadence (in seconds) of the pass that moves commands
+	// waiting on a maintenance window onto the window's CURRENT schedule. It bounds how long
+	// a window edit takes to reach commands already waiting on it, and how long after a
+	// window closes an undelivered command stays claimable before it is rolled to the next
+	// opening. Like the other reconcile cadences it has no operator knob.
+	//
+	// It rides the delivery sweep's tick (one leader, one lock) and is throttled to this
+	// interval, so it is a floor on the cadence, not an independent timer: a sweep slower
+	// than this runs it every sweep.
+	WindowRestampInterval = 60
+
 	// DefaultCommandTTLSeconds is the fallback command time-to-live (168h = 7 days)
 	// stamped onto a command whose creator supplies no explicit expiresAt. It is
 	// deliberately aligned with the device-commands stream MaxAge (core/messaging

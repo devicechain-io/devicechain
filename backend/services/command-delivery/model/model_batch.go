@@ -90,6 +90,12 @@ type CommandBatch struct {
 	Resolved int
 	Accepted int
 
+	// Waiting is how many of the admitted commands were held for a maintenance window when
+	// the batch was created — a stored fact about that moment, like Resolved and Accepted.
+	// Which of them have gone out since is the command search's question. NULL on a batch
+	// created before the column existed.
+	Waiting sql.NullInt32
+
 	// A bounded sample of refusals, and the complete per-code totals.
 	Refusals      *datatypes.JSON
 	RefusalCounts *datatypes.JSON

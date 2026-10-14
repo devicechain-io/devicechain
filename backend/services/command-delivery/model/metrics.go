@@ -102,6 +102,7 @@ var metricSafeCodes = map[RejectionCode]struct{}{
 	"PAYLOAD_SCHEMA_VIOLATION":    {},
 	"DEVICE_DISABLED":             {},
 	"COMMAND_DESTRUCTIVE_REFUSED": {},
+	"WINDOW_AFTER_EXPIRY":         {},
 }
 
 // BatchMetrics are the fleet-write counters.
