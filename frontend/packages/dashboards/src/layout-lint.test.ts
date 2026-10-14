@@ -49,8 +49,9 @@ const TABLE: Record<string, { minSpan: { cols: number; rows: number }; minPx: Pi
   table: { minSpan: { cols: 6, rows: 3 }, minPx: { width: 200, height: 120 } },
   // title, header row, about three alarm rows; the columns shed when narrow.
   'alarm-table': { minSpan: { cols: 8, rows: 3 }, minPx: { width: 240, height: 120 } },
-  // one line of text. A row is 40 px, so one row is already enough.
-  label: { minSpan: { cols: 2, rows: 1 }, minPx: { width: 80, height: 32 } },
+  // one line of text. A row is 40 px, so one row is already enough; 2 columns at 960 are
+  // ~72 px, room for a short caption.
+  label: { minSpan: { cols: 2, rows: 1 }, minPx: { width: 64, height: 32 } },
   image: { minSpan: { cols: 2, rows: 2 }, minPx: { width: 64, height: 64 } },
   // title, the button and its acknowledgement line.
   'command-button': { minSpan: { cols: 5, rows: 3 }, minPx: { width: 160, height: 100 } },
@@ -90,62 +91,109 @@ function load(token: string): DashboardDefinition {
   return parseDashboardDefinition(JSON.parse(readFileSync(join(FIXTURES, `${token}.json`), 'utf8')));
 }
 
-// Known failures: `board|widget|code`. A RATCHET, not a waiver. The test fails on a finding
+// Known failures: `board|widget|code[|breakpoint][|width]`. A RATCHET, not a waiver. The test fails on a finding
 // that is not listed (a regression) AND on a listed one that no longer occurs (the fix
-// landed, so the entry must go). The sitepulse fuel and payload cards are 4x2 and are fixed by
-// the sitepulse re-layout slice, which deletes these lines.
+// landed, so the entry must go). The sitepulse fuel and payload cards are 4x2, and the fuel
+// cards are titled with their slot's label (the machine's external id) over the token. The
+// sitepulse re-layout slice fixes both and deletes these lines.
 const KNOWN_FAILURES: ReadonlySet<string> = new Set<string>([
-  'sp-dashboard|sp-fuel-sp-dozer-01|below-readable-size',
+  'sp-dashboard|sp-fuel-sp-dozer-01|below-readable-size|960',
+  'sp-dashboard|sp-fuel-sp-dozer-01|below-readable-size|1920',
   'sp-dashboard|sp-fuel-sp-dozer-01|span-out-of-limits',
-  'sp-dashboard|sp-fuel-sp-dozer-02|below-readable-size',
+  'sp-dashboard|sp-fuel-sp-dozer-01|title-duplicates-subtitle',
+  'sp-dashboard|sp-fuel-sp-dozer-02|below-readable-size|960',
+  'sp-dashboard|sp-fuel-sp-dozer-02|below-readable-size|1920',
   'sp-dashboard|sp-fuel-sp-dozer-02|span-out-of-limits',
-  'sp-dashboard|sp-fuel-sp-dozer-03|below-readable-size',
+  'sp-dashboard|sp-fuel-sp-dozer-02|title-duplicates-subtitle',
+  'sp-dashboard|sp-fuel-sp-dozer-03|below-readable-size|960',
+  'sp-dashboard|sp-fuel-sp-dozer-03|below-readable-size|1920',
   'sp-dashboard|sp-fuel-sp-dozer-03|span-out-of-limits',
-  'sp-dashboard|sp-fuel-sp-dozer-04|below-readable-size',
+  'sp-dashboard|sp-fuel-sp-dozer-03|title-duplicates-subtitle',
+  'sp-dashboard|sp-fuel-sp-dozer-04|below-readable-size|960',
+  'sp-dashboard|sp-fuel-sp-dozer-04|below-readable-size|1920',
   'sp-dashboard|sp-fuel-sp-dozer-04|span-out-of-limits',
-  'sp-dashboard|sp-fuel-sp-dozer-05|below-readable-size',
+  'sp-dashboard|sp-fuel-sp-dozer-04|title-duplicates-subtitle',
+  'sp-dashboard|sp-fuel-sp-dozer-05|below-readable-size|960',
+  'sp-dashboard|sp-fuel-sp-dozer-05|below-readable-size|1920',
   'sp-dashboard|sp-fuel-sp-dozer-05|span-out-of-limits',
-  'sp-dashboard|sp-fuel-sp-dozer-06|below-readable-size',
+  'sp-dashboard|sp-fuel-sp-dozer-05|title-duplicates-subtitle',
+  'sp-dashboard|sp-fuel-sp-dozer-06|below-readable-size|960',
+  'sp-dashboard|sp-fuel-sp-dozer-06|below-readable-size|1920',
   'sp-dashboard|sp-fuel-sp-dozer-06|span-out-of-limits',
-  'sp-dashboard|sp-fuel-sp-hauler-01|below-readable-size',
-  'sp-dashboard|sp-fuel-sp-hauler-01|span-out-of-limits',
-  'sp-dashboard|sp-fuel-sp-hauler-02|below-readable-size',
-  'sp-dashboard|sp-fuel-sp-hauler-02|span-out-of-limits',
-  'sp-dashboard|sp-fuel-sp-hauler-03|below-readable-size',
-  'sp-dashboard|sp-fuel-sp-hauler-03|span-out-of-limits',
-  'sp-dashboard|sp-fuel-sp-hauler-04|below-readable-size',
-  'sp-dashboard|sp-fuel-sp-hauler-04|span-out-of-limits',
-  'sp-dashboard|sp-fuel-sp-hauler-05|below-readable-size',
-  'sp-dashboard|sp-fuel-sp-hauler-05|span-out-of-limits',
-  'sp-dashboard|sp-fuel-sp-hauler-06|below-readable-size',
-  'sp-dashboard|sp-fuel-sp-hauler-06|span-out-of-limits',
-  'sp-dashboard|sp-fuel-sp-loader-01|below-readable-size',
+  'sp-dashboard|sp-fuel-sp-dozer-06|title-duplicates-subtitle',
+  'sp-dashboard|sp-fuel-sp-loader-01|below-readable-size|960',
+  'sp-dashboard|sp-fuel-sp-loader-01|below-readable-size|1920',
   'sp-dashboard|sp-fuel-sp-loader-01|span-out-of-limits',
-  'sp-dashboard|sp-fuel-sp-loader-02|below-readable-size',
+  'sp-dashboard|sp-fuel-sp-loader-01|title-duplicates-subtitle',
+  'sp-dashboard|sp-fuel-sp-loader-02|below-readable-size|960',
+  'sp-dashboard|sp-fuel-sp-loader-02|below-readable-size|1920',
   'sp-dashboard|sp-fuel-sp-loader-02|span-out-of-limits',
-  'sp-dashboard|sp-fuel-sp-loader-03|below-readable-size',
+  'sp-dashboard|sp-fuel-sp-loader-02|title-duplicates-subtitle',
+  'sp-dashboard|sp-fuel-sp-loader-03|below-readable-size|960',
+  'sp-dashboard|sp-fuel-sp-loader-03|below-readable-size|1920',
   'sp-dashboard|sp-fuel-sp-loader-03|span-out-of-limits',
-  'sp-dashboard|sp-fuel-sp-loader-04|below-readable-size',
+  'sp-dashboard|sp-fuel-sp-loader-03|title-duplicates-subtitle',
+  'sp-dashboard|sp-fuel-sp-loader-04|below-readable-size|960',
+  'sp-dashboard|sp-fuel-sp-loader-04|below-readable-size|1920',
   'sp-dashboard|sp-fuel-sp-loader-04|span-out-of-limits',
-  'sp-dashboard|sp-fuel-sp-loader-05|below-readable-size',
+  'sp-dashboard|sp-fuel-sp-loader-04|title-duplicates-subtitle',
+  'sp-dashboard|sp-fuel-sp-loader-05|below-readable-size|960',
+  'sp-dashboard|sp-fuel-sp-loader-05|below-readable-size|1920',
   'sp-dashboard|sp-fuel-sp-loader-05|span-out-of-limits',
-  'sp-dashboard|sp-fuel-sp-loader-06|below-readable-size',
+  'sp-dashboard|sp-fuel-sp-loader-05|title-duplicates-subtitle',
+  'sp-dashboard|sp-fuel-sp-loader-06|below-readable-size|960',
+  'sp-dashboard|sp-fuel-sp-loader-06|below-readable-size|1920',
   'sp-dashboard|sp-fuel-sp-loader-06|span-out-of-limits',
-  'sp-dashboard|sp-payload-sp-hauler-01|below-readable-size',
+  'sp-dashboard|sp-fuel-sp-loader-06|title-duplicates-subtitle',
+  'sp-dashboard|sp-fuel-sp-hauler-01|below-readable-size|960',
+  'sp-dashboard|sp-fuel-sp-hauler-01|below-readable-size|1920',
+  'sp-dashboard|sp-fuel-sp-hauler-01|span-out-of-limits',
+  'sp-dashboard|sp-fuel-sp-hauler-01|title-duplicates-subtitle',
+  'sp-dashboard|sp-fuel-sp-hauler-02|below-readable-size|960',
+  'sp-dashboard|sp-fuel-sp-hauler-02|below-readable-size|1920',
+  'sp-dashboard|sp-fuel-sp-hauler-02|span-out-of-limits',
+  'sp-dashboard|sp-fuel-sp-hauler-02|title-duplicates-subtitle',
+  'sp-dashboard|sp-fuel-sp-hauler-03|below-readable-size|960',
+  'sp-dashboard|sp-fuel-sp-hauler-03|below-readable-size|1920',
+  'sp-dashboard|sp-fuel-sp-hauler-03|span-out-of-limits',
+  'sp-dashboard|sp-fuel-sp-hauler-03|title-duplicates-subtitle',
+  'sp-dashboard|sp-fuel-sp-hauler-04|below-readable-size|960',
+  'sp-dashboard|sp-fuel-sp-hauler-04|below-readable-size|1920',
+  'sp-dashboard|sp-fuel-sp-hauler-04|span-out-of-limits',
+  'sp-dashboard|sp-fuel-sp-hauler-04|title-duplicates-subtitle',
+  'sp-dashboard|sp-fuel-sp-hauler-05|below-readable-size|960',
+  'sp-dashboard|sp-fuel-sp-hauler-05|below-readable-size|1920',
+  'sp-dashboard|sp-fuel-sp-hauler-05|span-out-of-limits',
+  'sp-dashboard|sp-fuel-sp-hauler-05|title-duplicates-subtitle',
+  'sp-dashboard|sp-fuel-sp-hauler-06|below-readable-size|960',
+  'sp-dashboard|sp-fuel-sp-hauler-06|below-readable-size|1920',
+  'sp-dashboard|sp-fuel-sp-hauler-06|span-out-of-limits',
+  'sp-dashboard|sp-fuel-sp-hauler-06|title-duplicates-subtitle',
+  'sp-dashboard|sp-payload-sp-hauler-01|below-readable-size|960',
+  'sp-dashboard|sp-payload-sp-hauler-01|below-readable-size|1920',
   'sp-dashboard|sp-payload-sp-hauler-01|span-out-of-limits',
-  'sp-dashboard|sp-payload-sp-hauler-02|below-readable-size',
+  'sp-dashboard|sp-payload-sp-hauler-02|below-readable-size|960',
+  'sp-dashboard|sp-payload-sp-hauler-02|below-readable-size|1920',
   'sp-dashboard|sp-payload-sp-hauler-02|span-out-of-limits',
-  'sp-dashboard|sp-payload-sp-hauler-03|below-readable-size',
+  'sp-dashboard|sp-payload-sp-hauler-03|below-readable-size|960',
+  'sp-dashboard|sp-payload-sp-hauler-03|below-readable-size|1920',
   'sp-dashboard|sp-payload-sp-hauler-03|span-out-of-limits',
-  'sp-dashboard|sp-payload-sp-hauler-04|below-readable-size',
+  'sp-dashboard|sp-payload-sp-hauler-04|below-readable-size|960',
+  'sp-dashboard|sp-payload-sp-hauler-04|below-readable-size|1920',
   'sp-dashboard|sp-payload-sp-hauler-04|span-out-of-limits',
-  'sp-dashboard|sp-payload-sp-hauler-05|below-readable-size',
+  'sp-dashboard|sp-payload-sp-hauler-05|below-readable-size|960',
+  'sp-dashboard|sp-payload-sp-hauler-05|below-readable-size|1920',
   'sp-dashboard|sp-payload-sp-hauler-05|span-out-of-limits',
-  'sp-dashboard|sp-payload-sp-hauler-06|below-readable-size',
+  'sp-dashboard|sp-payload-sp-hauler-06|below-readable-size|960',
+  'sp-dashboard|sp-payload-sp-hauler-06|below-readable-size|1920',
   'sp-dashboard|sp-payload-sp-hauler-06|span-out-of-limits',
 ]);
 
-const key = (board: string, f: LayoutFinding) => `${board}|${f.widgetId}|${f.code}`;
+// The breakpoint and the width are part of the key, so a finding that survives at one width
+// (or at one breakpoint's box) after a partial fix cannot hide behind an entry another width
+// or box still earns.
+const key = (board: string, f: LayoutFinding) =>
+  [board, f.widgetId, f.code, f.breakpoint, f.width].filter((p) => p !== undefined).join('|');
 
 describe('the committed sim boards', () => {
   it('include buildingpulse and widgetlab, not only sitepulse', () => {
@@ -159,6 +207,21 @@ describe('the committed sim boards', () => {
       for (const w of load(token).widgets) {
         expect(TABLE, `${token}: ${w.id} is a ${w.type}, which the table does not describe`).toHaveProperty(w.type);
       }
+    }
+  });
+
+  it('are judged by a table that agrees with itself: every minimum span clears its own pixel floor', () => {
+    // A minSpan that renders below its own minPx makes the smallest LEGAL box an error, so
+    // the two numbers would contradict each other on every board that uses it.
+    for (const [type, row] of Object.entries(TABLE)) {
+      const probe = parseDashboardDefinition({
+        schemaVersion: 1,
+        canvas: { grid: { columns: 24, gap: 8, rowHeight: 40 }, sizing: 'fill', breakpoints: { base: 0 } },
+        widgets: [
+          { id: 'probe', type, layout: { base: { col: 0, colSpan: row.minSpan.cols, row: 0, rowSpan: row.minSpan.rows, z: 0 } } },
+        ],
+      });
+      expect(lintLayout(probe, options(24)), type).toEqual([]);
     }
   });
 
@@ -191,8 +254,11 @@ function broken(): DashboardDefinition {
   });
   return parseDashboardDefinition({
     schemaVersion: 1,
-    canvas: { grid: { columns: 24, gap: 8, rowHeight: 40 }, sizing: 'fill', breakpoints: { base: 0 } },
-    slots: { d: { type: 'device', defaultBinding: { kind: 'device', deviceToken: 'dev-1' } } },
+    canvas: { grid: { columns: 24, gap: 8, rowHeight: 40 }, sizing: 'fill', breakpoints: { base: 0, md: 1200 } },
+    slots: {
+      d: { type: 'device', defaultBinding: { kind: 'device', deviceToken: 'dev-1' } },
+      m7: { type: 'device', label: 'Machine 7', defaultBinding: { kind: 'device', deviceToken: 'dev-7' } },
+    },
     widgets: [
       { id: 'tiny', type: 'latest-card', layout: box(0, 1, 0, 1), options: { title: 'Tiny' } },
       { id: 'overrun', type: 'gauge', layout: box(20, 8, 2, 4), options: {} },
@@ -205,6 +271,19 @@ function broken(): DashboardDefinition {
       },
       { id: 'fine', type: 'latest-card', layout: box(8, 8, 6, 3), options: { title: 'Fine' } },
       { id: 'mystery', type: 'not-a-widget', layout: box(0, 4, 9, 2) },
+      {
+        id: 'alias',
+        type: 'latest-card',
+        layout: box(16, 8, 6, 3),
+        options: { title: 'Machine 7' },
+        datasource: { kind: 'slot', slot: 'm7', measurements: ['m'] },
+      },
+      {
+        id: 'narrow-md',
+        type: 'latest-card',
+        layout: { ...box(0, 8, 11, 3), md: { col: 0, colSpan: 1, row: 11, rowSpan: 3, z: 0 } },
+        options: { title: 'Fine at base' },
+      },
     ],
   });
 }
@@ -231,8 +310,33 @@ describe('lintLayout on a deliberately broken board', () => {
   });
 
   it('warns when the title repeats the subject line, whatever the case', () => {
-    const f = findings.find((x) => x.code === 'title-duplicates-subtitle');
-    expect(f).toMatchObject({ widgetId: 'dup', severity: 'warning' });
+    expect(codes('dup')).toEqual(['title-duplicates-subtitle']);
+    expect(findings.find((x) => x.widgetId === 'dup')?.severity).toBe('warning');
+  });
+
+  it('warns when the title is the bound slot label, the same entity under another name', () => {
+    expect(codes('alias')).toEqual(['title-duplicates-subtitle']);
+  });
+
+  it('measures the box the active breakpoint shows at each width', () => {
+    // 8 cols at base is fine at 960; the md box (1 col, from 1200 up) is what 1920 shows.
+    const narrow = findings.filter((f) => f.widgetId === 'narrow-md');
+    expect(narrow.filter((f) => f.code === 'below-readable-size')).toMatchObject([
+      { width: 1920, breakpoint: 'md' },
+    ]);
+    expect(narrow.filter((f) => f.code === 'span-out-of-limits')).toMatchObject([{ breakpoint: 'md' }]);
+  });
+
+  it('errors on a span above a declared maximum', () => {
+    const capped = lintLayout(broken(), {
+      columns: 24,
+      spanLimitsOf: () => ({ maxSpan: { cols: 6, rows: 6 } }),
+    });
+    expect(capped.find((f) => f.widgetId === 'fine')).toMatchObject({
+      code: 'span-out-of-limits',
+      severity: 'error',
+    });
+    expect(capped.find((f) => f.widgetId === 'fine')?.message).toContain('above the 6x6 maximum');
   });
 
   it('is silent about a well-formed widget', () => {

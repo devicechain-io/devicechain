@@ -296,7 +296,7 @@ export {
   type LayoutFinding,
   type LayoutLintCode,
   type LayoutLintOptions,
-  type LintSeverity,
+  type LayoutLintSeverity,
   type PixelSize,
   type Span,
   type SpanLimits,
