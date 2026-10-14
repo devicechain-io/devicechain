@@ -2148,6 +2148,17 @@ upgrade`，如[v0.17.0](#v0170-upgrade)所述。从 `v0.19.0` 或更早版本升
 - **签名不绑定版本。** 对摘要签名说明的是谁生成了这些字节，而不是它们是哪个版本；
   参见[空中升级](../concepts/over-the-air-updates.md)。
 
+分配工件时，活跃签名者最早的一份签名会被**固定**到该分配上（`UpdateAssignment.signedBy` 指明签名者），
+设备收到的正是这份签名。由此有两点：
+
+- **设备必须持有每一个可能被固定的签名者的密钥。** 在吊销旧签名者之前，先把新签名者的密钥放到设备上。
+  固定之后再吊销签名者，不会改变已经发出的消息。
+- **关闭 `allowUnverifiedArtifacts` 会停止发送未签名的分配**，设备同步时的重发也一样。在 `v0.20.0`
+  中做出的分配没有签名，因此设置关闭后，其设备保持现状，直到你分配一个已签名的工件。固定的签名无法读取的分配不会发送，
+  也绝不会以 `UNVERIFIED` 发送。
+
+注册签名者并为工件签名，请参阅[为更新签名](../guides/signing-updates.md)。
+
 ##### 原始的 LwM2M 恢复出厂设置会被拒绝 {#v0210-factory-reset}
 
 对 Device 对象资源 5（`/3/0/5`）的 `lwm2m.execute` 会在入队时以 `COMMAND_DESTRUCTIVE_REFUSED` 被拒绝，
@@ -2182,7 +2193,7 @@ upgrade`，如[v0.17.0](#v0170-upgrade)所述。从 `v0.19.0` 或更早版本升
 | --- | --- |
 | `device-management` | `devices.disabled_at timestamptz`（为空表示已启用）和部分索引 `idx_devices_disabled` |
 | `command-delivery` | `device_gates` 和 `device_gate_syncs`，及其唯一索引和部分索引 |
-| `update-management` | `artifact_signers` 和 `artifact_signatures`（仅含公钥和签名）；工件的信任现在由它们推导，旧的已存储信任列予以保留、不再写入，因此滚动升级是安全的 |
+| `update-management` | `artifact_signers` 和 `artifact_signatures`（仅含公钥和签名）；工件的信任现在由它们推导，旧的已存储信任列予以保留、不再写入，因此滚动升级是安全的；每个分配还新增一个可为空的 `signature_id`，即它所固定的签名 |
 | `user-management` | 身份提供商上的 `ca_bundle` |
 
 ##### 单点登录可以信任私有证书颁发机构 {#v0210-sso-ca}

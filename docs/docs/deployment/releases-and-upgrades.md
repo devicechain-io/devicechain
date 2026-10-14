@@ -3623,6 +3623,20 @@ What this changes:
 - **A signature does not bind the version.** Signing the digest says who produced the bytes, not
   which version they are; see [Over-the-air updates](../concepts/over-the-air-updates.md).
 
+When an artifact is assigned, the oldest signature by an active signer is **pinned** to the
+assignment (`UpdateAssignment.signedBy` names the signer), and that signature is what the device
+receives. Two things follow:
+
+- **A device must hold the key of every signer that could be pinned.** Put a new signer's key on
+  your devices before you revoke the old one. Revoking a signer after the pin does not change a
+  message already sent.
+- **Turning `allowUnverifiedArtifacts` off stops unsigned assignments from being sent**, including
+  a re-send when a device syncs. An assignment made under `v0.20.0` has no signature, so with the
+  setting off its device keeps what it has until you assign a signed artifact. An assignment whose
+  pinned signature cannot be read is not sent; it is never sent as `UNVERIFIED`.
+
+To register a signer and sign an artifact, follow [Signing updates](../guides/signing-updates.md).
+
 ##### A raw LwM2M Factory Reset is refused {#v0210-factory-reset}
 
 An `lwm2m.execute` on the Device object's resource 5 (`/3/0/5`) is refused at enqueue with
@@ -3662,7 +3676,7 @@ by Go 1.26. It is correct JSON, and it is now accepted and stored. Nothing needs
 | --- | --- |
 | `device-management` | `devices.disabled_at timestamptz` (null means enabled) and the partial index `idx_devices_disabled` |
 | `command-delivery` | `device_gates` and `device_gate_syncs`, with their unique and partial indexes |
-| `update-management` | `artifact_signers` and `artifact_signatures` (public keys and signatures only); artifact trust is now derived from them, and the old stored trust column is kept, written no more, so a rolling upgrade is safe |
+| `update-management` | `artifact_signers` and `artifact_signatures` (public keys and signatures only); artifact trust is now derived from them, and the old stored trust column is kept, written no more, so a rolling upgrade is safe; each assignment also gains a nullable `signature_id`, the signature it is pinned to |
 | `user-management` | `ca_bundle` on identity providers |
 
 ##### Single sign-on can trust a private certificate authority {#v0210-sso-ca}

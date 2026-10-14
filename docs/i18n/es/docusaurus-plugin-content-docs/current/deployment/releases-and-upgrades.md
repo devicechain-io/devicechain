@@ -3897,6 +3897,21 @@ Qué cambia con esto:
 - **Una firma no ata la versión.** Firmar el resumen dice quién produjo los bytes, no de qué versión
   son; consulta [Actualizaciones por aire](../concepts/over-the-air-updates.md).
 
+Cuando se asigna un artefacto, la firma más antigua de un firmante activo se **fija** a la
+asignación (`UpdateAssignment.signedBy` nombra al firmante), y esa firma es la que recibe el
+dispositivo. De ello se derivan dos cosas:
+
+- **Un dispositivo debe tener la clave de cada firmante que pueda fijarse.** Pon la clave de un
+  firmante nuevo en tus dispositivos antes de revocar el anterior. Revocar un firmante después de
+  fijar la firma no cambia un mensaje ya enviado.
+- **Desactivar `allowUnverifiedArtifacts` detiene el envío de asignaciones sin firma**, incluido
+  un reenvío cuando un dispositivo sincroniza. Una asignación hecha en `v0.20.0` no tiene firma,
+  así que con el ajuste desactivado su dispositivo conserva lo que tiene hasta que asignes un
+  artefacto firmado. Una asignación cuya firma fijada no se puede leer no se envía; nunca se envía
+  como `UNVERIFIED`.
+
+Para registrar un firmante y firmar un artefacto, sigue [Firmar actualizaciones](../guides/signing-updates.md).
+
 ##### Se rechaza un Factory Reset de LwM2M en bruto {#v0210-factory-reset}
 
 Un `lwm2m.execute` sobre el recurso 5 del objeto Device (`/3/0/5`) se rechaza al encolarse con
@@ -3940,7 +3955,7 @@ guarda. No hay que hacer nada.
 | --- | --- |
 | `device-management` | `devices.disabled_at timestamptz` (nulo significa habilitado) y el índice parcial `idx_devices_disabled` |
 | `command-delivery` | `device_gates` y `device_gate_syncs`, con sus índices únicos y parciales |
-| `update-management` | `artifact_signers` y `artifact_signatures` (solo claves públicas y firmas); la confianza de un artefacto se deriva ahora de ellas, y la antigua columna de confianza guardada se conserva, sin escribirse más, de modo que una actualización gradual es segura |
+| `update-management` | `artifact_signers` y `artifact_signatures` (solo claves públicas y firmas); la confianza de un artefacto se deriva ahora de ellas, y la antigua columna de confianza guardada se conserva, sin escribirse más, de modo que una actualización gradual es segura; cada asignación gana además un `signature_id` nulo, la firma a la que está fijada |
 | `user-management` | `ca_bundle` en los proveedores de identidad |
 
 ##### El inicio de sesión único puede confiar en una autoridad de certificación privada {#v0210-sso-ca}
