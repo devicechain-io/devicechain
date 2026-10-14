@@ -51,6 +51,7 @@ func partialUpdateFamilies() []putest.Family[*Api] {
 		deviceFamily(),
 		metricDefinitionFamily(),
 		commandDefinitionFamily(),
+		maintenanceWindowFamily(),
 		detectionRuleFamily(),
 		geoFenceFamily(),
 		entityGroupFamily(),
@@ -510,11 +511,19 @@ func deviceTypeFamily() putest.Family[*Api] {
 		Name:  "deviceType",
 		Token: "dt-1",
 		Migrate: []any{&Device{}, &DeviceType{}, &DeviceProfile{}, &DeviceProfileVersion{},
-			&MetricDefinition{}, &CommandDefinition{}, &DetectionRule{}, &DetectionRuleScopeRef{}},
+			&MetricDefinition{}, &CommandDefinition{}, &DetectionRule{}, &DetectionRuleScopeRef{},
+			&MaintenanceWindow{}},
 		Seed: func(t *testing.T, api *Api, ctx context.Context) {
 			for _, tok := range []string{profileSeed, "profile-b"} {
 				if _, err := api.CreateDeviceProfile(ctx, &DeviceProfileCreateRequest{Token: tok}); err != nil {
 					t.Fatalf("seed profile %q: %v", tok, err)
+				}
+			}
+			for _, tok := range []string{"mw-a", "mw-b"} {
+				if _, err := api.CreateMaintenanceWindow(ctx, &MaintenanceWindowCreateRequest{
+					Token: tok, Timezone: "UTC", Slots: `[{"day":"SUNDAY","start":"02:00","durationMinutes":60}]`,
+				}); err != nil {
+					t.Fatalf("seed maintenance window %q: %v", tok, err)
 				}
 			}
 			if _, err := api.CreateDeviceType(ctx, &DeviceTypeCreateRequest{
@@ -522,7 +531,7 @@ func deviceTypeFamily() putest.Family[*Api] {
 				ImageUrl: strp(brandedSeed.ImageUrl), Icon: strp(brandedSeed.Icon),
 				BackgroundColor: strp(brandedSeed.Bg), ForegroundColor: strp(brandedSeed.Fg),
 				BorderColor: strp(brandedSeed.Border), Metadata: strp(brandedSeed.Metadata),
-				ProfileToken: strp(profileSeed),
+				ProfileToken: strp(profileSeed), MaintenanceWindowToken: strp("mw-a"),
 				Manufacturer: strp(manufacturerSeed), Model: strp(modelSeed),
 			}); err != nil {
 				t.Fatalf("seed device type: %v", err)
@@ -534,6 +543,14 @@ func deviceTypeFamily() putest.Family[*Api] {
 			got := readBranded(&namedBrandedRow{e.NamedEntity, e.BrandedEntity, e.Metadata})
 			got["manufacturer"] = nullStr(e.Manufacturer)
 			got["model"] = nullStr(e.ModelName)
+			got["maintenanceWindowToken"] = nullMarker
+			if e.MaintenanceWindowId != nil {
+				windows, werr := api.MaintenanceWindowsById(ctx, []uint{*e.MaintenanceWindowId})
+				if werr != nil || len(windows) != 1 {
+					t.Fatalf("resolve assigned window %d: %v (%d matches)", *e.MaintenanceWindowId, werr, len(windows))
+				}
+				got["maintenanceWindowToken"] = windows[0].Token
+			}
 			got["profileToken"] = nullMarker
 			if e.ProfileId != nil {
 				profiles, perr := api.DeviceProfilesById(ctx, []uint{*e.ProfileId})
@@ -568,6 +585,10 @@ func deviceTypeFamily() putest.Family[*Api] {
 			// a state a device type can legitimately be in.
 			putest.OptionalStringField("profileToken", profileSeed, "profile-b",
 				func(r *DeviceTypeUpdateRequest) *dcgraphql.OptionalString { return &r.ProfileToken }),
+			// NULLABLE too: a type with no window dispatches its disruptive commands
+			// whenever the device is reachable.
+			putest.OptionalStringField("maintenanceWindowToken", "mw-a", "mw-b",
+				func(r *DeviceTypeUpdateRequest) *dcgraphql.OptionalString { return &r.MaintenanceWindowToken }),
 		),
 	}
 }
@@ -733,6 +754,7 @@ func commandDefinitionFamily() putest.Family[*Api] {
 				"name":               nullStr(e.Name),
 				"description":        nullStr(e.Description),
 				"parameterSchema":    jsonStr(e.ParameterSchema),
+				"impact":             e.Impact,
 				"metadata":           jsonStr(e.Metadata),
 			}
 		},
@@ -752,8 +774,64 @@ func commandDefinitionFamily() putest.Family[*Api] {
 				func(r *CommandDefinitionUpdateRequest) *dcgraphql.OptionalString { return &r.Description }),
 			putest.OptionalStringField("parameterSchema", schemaSeed, `[{"name":"angle","dataType":"INT"}]`,
 				func(r *CommandDefinitionUpdateRequest) *dcgraphql.OptionalString { return &r.ParameterSchema }),
+			putest.RequiredStringField("impact", ImpactNormal, ImpactDisruptive,
+				func(r *CommandDefinitionUpdateRequest) *dcgraphql.OptionalString { return &r.Impact }),
 			putest.OptionalStringField("metadata", metadataSeed, `{"fleet":"south"}`,
 				func(r *CommandDefinitionUpdateRequest) *dcgraphql.OptionalString { return &r.Metadata }),
+		},
+	}
+}
+
+// ─── MaintenanceWindow ─────────────────────────────────────────────────────
+
+func maintenanceWindowFamily() putest.Family[*Api] {
+	const (
+		nameSeed        = "Original name"
+		descriptionSeed = "Original description"
+		metadataSeed    = `{"fleet":"north"}`
+		zoneSeed        = "Europe/Berlin"
+		slotsSeed       = `[{"day":"SUNDAY","start":"02:00","durationMinutes":240}]`
+		slotsReplace    = `[{"day":"SATURDAY","start":"22:00","durationMinutes":120}]`
+	)
+	return putest.Family[*Api]{
+		Name:    "maintenanceWindow",
+		Token:   "mw-1",
+		Migrate: []any{&MaintenanceWindow{}, &DeviceType{}, &DeviceProfile{}},
+		Seed: func(t *testing.T, api *Api, ctx context.Context) {
+			if _, err := api.CreateMaintenanceWindow(ctx, &MaintenanceWindowCreateRequest{
+				Token: "mw-1", Name: strp(nameSeed), Description: strp(descriptionSeed),
+				Timezone: zoneSeed, Slots: slotsSeed, Metadata: strp(metadataSeed),
+			}); err != nil {
+				t.Fatalf("seed maintenance window: %v", err)
+			}
+		},
+		Read: func(t *testing.T, api *Api, ctx context.Context) map[string]string {
+			rows, err := api.MaintenanceWindowsByToken(ctx, []string{"mw-1"})
+			e := requireOne(t, "maintenance window", rows, err)
+			return map[string]string{
+				"name":        nullStr(e.Name),
+				"description": nullStr(e.Description),
+				"timezone":    e.Timezone,
+				"slots":       jsonStr(&e.Slots),
+				"metadata":    jsonStr(e.Metadata),
+			}
+		},
+		NewRequest: func() any { return new(MaintenanceWindowUpdateRequest) },
+		Update: func(api *Api, ctx context.Context, token string, req any) error {
+			_, err := api.UpdateMaintenanceWindow(ctx, token, req.(*MaintenanceWindowUpdateRequest))
+			return err
+		},
+		Fields: []putest.Field{
+			putest.OptionalStringField("name", nameSeed, "Renamed",
+				func(r *MaintenanceWindowUpdateRequest) *dcgraphql.OptionalString { return &r.Name }),
+			putest.OptionalStringField("description", descriptionSeed, "Rewritten",
+				func(r *MaintenanceWindowUpdateRequest) *dcgraphql.OptionalString { return &r.Description }),
+			putest.RequiredStringField("timezone", zoneSeed, "America/New_York",
+				func(r *MaintenanceWindowUpdateRequest) *dcgraphql.OptionalString { return &r.Timezone }),
+			putest.RequiredStringField("slots", slotsSeed, slotsReplace,
+				func(r *MaintenanceWindowUpdateRequest) *dcgraphql.OptionalString { return &r.Slots }),
+			putest.OptionalStringField("metadata", metadataSeed, `{"fleet":"south"}`,
+				func(r *MaintenanceWindowUpdateRequest) *dcgraphql.OptionalString { return &r.Metadata }),
 		},
 	}
 }

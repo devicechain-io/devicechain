@@ -66,6 +66,10 @@ func (r *CommandDefinitionResolver) ParameterSchema() *string {
 	return util.MetadataStr(r.M.ParameterSchema)
 }
 
+func (r *CommandDefinitionResolver) Impact() string {
+	return r.M.EffectiveImpact()
+}
+
 func (r *CommandDefinitionResolver) DeviceProfile() *DeviceProfileResolver {
 	if r.M.DeviceProfile != nil {
 		return &DeviceProfileResolver{

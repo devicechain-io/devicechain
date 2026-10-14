@@ -1,0 +1,380 @@
+// Copyright The DeviceChain Authors
+// SPDX-License-Identifier: Apache-2.0
+
+package model
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"strings"
+	"time"
+
+	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
+	"github.com/devicechain-io/dc-microservice/maintwindow"
+	"github.com/devicechain-io/dc-microservice/rdb"
+	"gorm.io/datatypes"
+	"gorm.io/gorm"
+)
+
+// decodeSlots reads a window's slots document STRICTLY: an unrecognised key is refused rather
+// than dropped, so a misspelt field cannot create a window that quietly means something else.
+func decodeSlots(raw string) ([]maintwindow.Slot, error) {
+	if strings.TrimSpace(raw) == "" {
+		return nil, fmt.Errorf("%w: slots is required", maintwindow.ErrInvalid)
+	}
+	dec := json.NewDecoder(bytes.NewReader([]byte(raw)))
+	dec.DisallowUnknownFields()
+	var slots []maintwindow.Slot
+	if err := dec.Decode(&slots); err != nil {
+		return nil, fmt.Errorf("%w: slots is not a JSON array of {day, start, durationMinutes}: %v",
+			maintwindow.ErrInvalid, err)
+	}
+	if dec.More() {
+		return nil, fmt.Errorf("%w: slots has trailing content after the array", maintwindow.ErrInvalid)
+	}
+	return slots, nil
+}
+
+// validateWindow checks a (zone, slots) pair by building the schedule from it. Using the
+// calculator itself as the validator means a window that saves is a window that computes.
+func validateWindow(timezone, slotsJSON string) (datatypes.JSON, error) {
+	slots, err := decodeSlots(slotsJSON)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := maintwindow.New(timezone, slots); err != nil {
+		return nil, err
+	}
+	// Re-encode from the decoded value so what is stored is the canonical form, whatever
+	// whitespace or key order the caller used.
+	canonical, err := json.Marshal(slots)
+	if err != nil {
+		return nil, err
+	}
+	return datatypes.JSON(canonical), nil
+}
+
+// CreateMaintenanceWindow creates a window.
+func (api *Api) CreateMaintenanceWindow(ctx context.Context,
+	request *MaintenanceWindowCreateRequest) (*MaintenanceWindow, error) {
+	slots, err := validateWindow(request.Timezone, request.Slots)
+	if err != nil {
+		return nil, err
+	}
+	metadataJSON, err := rdb.JSONInputOf("metadata", request.Metadata)
+	if err != nil {
+		return nil, err
+	}
+	created := &MaintenanceWindow{
+		TokenReference: rdb.TokenReference{Token: request.Token},
+		NamedEntity: rdb.NamedEntity{
+			Name:        rdb.NullStrOf(request.Name),
+			Description: rdb.NullStrOf(request.Description),
+		},
+		MetadataEntity: rdb.MetadataEntity{Metadata: metadataJSON},
+		Timezone:       strings.TrimSpace(request.Timezone),
+		Slots:          slots,
+	}
+	if err := api.RDB.DB(ctx).Create(created).Error; err != nil {
+		return nil, err
+	}
+	return created, nil
+}
+
+// UpdateMaintenanceWindow applies a PARTIAL update. The (zone, slots) pair is validated as
+// the pair it will be after the update, so changing only the zone cannot leave slots that
+// no longer make sense.
+//
+// Command-delivery learns of the edit by polling (see its window re-stamp pass): rows waiting
+// on this window are moved to the new schedule's next opening within one pass.
+func (api *Api) UpdateMaintenanceWindow(ctx context.Context, token string,
+	request *MaintenanceWindowUpdateRequest) (*MaintenanceWindow, error) {
+	matches, err := api.MaintenanceWindowsByToken(ctx, []string{token})
+	if err != nil {
+		return nil, err
+	}
+	if len(matches) == 0 {
+		return nil, gorm.ErrRecordNotFound
+	}
+	updated := matches[0]
+
+	timezone, err := request.Timezone.ApplyToRequired("timezone", updated.Timezone)
+	if err != nil {
+		return nil, err
+	}
+	slotsJSON, err := request.Slots.ApplyToRequired("slots", string(updated.Slots))
+	if err != nil {
+		return nil, err
+	}
+	slots, err := validateWindow(timezone, slotsJSON)
+	if err != nil {
+		return nil, err
+	}
+	metadataJSON, err := rdb.JSONInputOf("metadata", request.Metadata.ApplyTo(dcgraphql.MetadataStr(updated.Metadata)))
+	if err != nil {
+		return nil, err
+	}
+	updated.Timezone = strings.TrimSpace(timezone)
+	updated.Slots = slots
+	updated.Metadata = metadataJSON
+	updated.Name = request.Name.ApplyToNullString(updated.Name)
+	updated.Description = request.Description.ApplyToNullString(updated.Description)
+	if err := api.RDB.DB(ctx).Save(updated).Error; err != nil {
+		return nil, err
+	}
+	return updated, nil
+}
+
+// MaintenanceWindowsById gets windows by id.
+func (api *Api) MaintenanceWindowsById(ctx context.Context, ids []uint) ([]*MaintenanceWindow, error) {
+	return rdb.FindByIds[MaintenanceWindow](api.RDB.DB(ctx), ids)
+}
+
+// MaintenanceWindowsByToken gets windows by token.
+func (api *Api) MaintenanceWindowsByToken(ctx context.Context, tokens []string) ([]*MaintenanceWindow, error) {
+	found := make([]*MaintenanceWindow, 0)
+	if err := rdb.FindByKeys(api.RDB.DB(ctx), &found, "token", tokens); err != nil {
+		return nil, err
+	}
+	return found, nil
+}
+
+// MaintenanceWindows lists windows.
+func (api *Api) MaintenanceWindows(ctx context.Context,
+	criteria MaintenanceWindowSearchCriteria) (*MaintenanceWindowSearchResults, error) {
+	results := make([]MaintenanceWindow, 0)
+	db, pag := api.RDB.ListOf(ctx, &MaintenanceWindow{}, nil, criteria.Pagination)
+	db.Find(&results)
+	if db.Error != nil {
+		return nil, db.Error
+	}
+	return &MaintenanceWindowSearchResults{Results: results, Pagination: pag}, nil
+}
+
+// DeleteMaintenanceWindow deletes a window. Refused while any device type is assigned to it:
+// deleting it would silently un-gate every disruptive command of those types.
+func (api *Api) DeleteMaintenanceWindow(ctx context.Context, token string) (bool, error) {
+	return deleteParentType(ctx, api, (*Api).MaintenanceWindowsByToken,
+		func(m *MaintenanceWindow) uint { return m.ID }, &MaintenanceWindow{}, token,
+		&DeviceType{}, "maintenance_window_id")
+}
+
+// resolveMaintenanceWindowId maps an optional window token to its id, mirroring
+// resolveProfileId: nil or blank clears the assignment, an unknown token is refused.
+func (api *Api) resolveMaintenanceWindowId(ctx context.Context, token *string) (*uint, error) {
+	if token == nil {
+		return nil, nil
+	}
+	trimmed := strings.TrimSpace(*token)
+	if trimmed == "" {
+		return nil, nil
+	}
+	matches, err := api.MaintenanceWindowsByToken(ctx, []string{trimmed})
+	if err != nil {
+		return nil, err
+	}
+	if len(matches) == 0 {
+		return nil, fmt.Errorf("%w: maintenance window %q", gorm.ErrRecordNotFound, trimmed)
+	}
+	id := matches[0].ID
+	return &id, nil
+}
+
+// RejectWindowAfterExpiry: the command is held for the device type's maintenance window and
+// the next opening comes after the command's own expiry, so it could only expire unsent.
+// It is refused at enqueue rather than accepted to lapse. Permanent for this expiry: a later
+// expiresAt, or a window that opens sooner, would be accepted.
+const RejectWindowAfterExpiry EnqueueRejectionCode = "WINDOW_AFTER_EXPIRY"
+
+// CommandDispatchHold is a device's command that must wait: not dispatched before
+// DispatchAfter, because the device type's maintenance window WindowToken is closed.
+type CommandDispatchHold struct {
+	DeviceToken   string
+	WindowToken   string
+	DispatchAfter time.Time
+}
+
+// CommandDispatchSchedule is the dispatch-time half of the window gate, asked at enqueue.
+// For each device it answers one of three things: nothing (the command is not gated, or its
+// window is open now — it may dispatch immediately), a HOLD (not before DispatchAfter), or a
+// REFUSAL (WINDOW_AFTER_EXPIRY — the next opening is after the command expires).
+//
+// Like the enqueue gate it is a function of the device TYPE: the window and the command's
+// impact are resolved once per distinct type, so a ten-thousand-device batch over three
+// types reads three windows.
+//
+// Devices that do not exist or are disabled are skipped, not reported: the enqueue gate has
+// already decided those, and answering here too would make one refusal say two things.
+//
+// An error means the schedule could not be determined (a database failure, or a stored
+// window that no longer validates). The caller must fail closed on it — it must never be
+// read as "no hold".
+//
+// expiresAt is optional; nil means the command never expires and can always wait.
+func (api *Api) CommandDispatchSchedule(ctx context.Context, deviceTokens []string, commandKey string,
+	expiresAt *time.Time, at time.Time) ([]*CommandDispatchHold, []*BatchEnqueueRefusal, error) {
+	holds := make([]*CommandDispatchHold, 0)
+	refusals := make([]*BatchEnqueueRefusal, 0)
+	ordered := dedupeTokens(deviceTokens)
+
+	verdicts := make(map[uint]typeWindowDecision)
+	windows := make(map[uint]*MaintenanceWindow)
+
+	for start := 0; start < len(ordered); start += deviceLookupChunk {
+		end := start + deviceLookupChunk
+		if end > len(ordered) {
+			end = len(ordered)
+		}
+		found, err := api.DevicesByToken(ctx, ordered[start:end])
+		if err != nil {
+			return nil, nil, err
+		}
+		byToken := make(map[string]*Device, len(found))
+		for _, d := range found {
+			if d != nil {
+				byToken[d.Token] = d
+			}
+		}
+		for _, token := range ordered[start:end] {
+			device, ok := byToken[token]
+			if !ok || device.IsDisabled() {
+				continue
+			}
+			v, resolved := verdicts[device.DeviceTypeId]
+			if !resolved {
+				var err error
+				v, err = api.typeWindowVerdict(ctx, device.DeviceTypeId, commandKey, at, windows)
+				if err != nil {
+					return nil, nil, err
+				}
+				verdicts[device.DeviceTypeId] = v
+			}
+			if !v.gated || v.after.IsZero() {
+				continue
+			}
+			if expiresAt != nil && v.after.After(*expiresAt) {
+				refusals = append(refusals, &BatchEnqueueRefusal{
+					DeviceToken: token,
+					Code:        RejectWindowAfterExpiry,
+					Reason: fmt.Sprintf("command %q waits for the maintenance window of device %q, which next "+
+						"opens at %s — after the command expires at %s; extend expiresAt or send it later",
+						commandKey, token, v.after.UTC().Format(time.RFC3339), expiresAt.UTC().Format(time.RFC3339)),
+				})
+				continue
+			}
+			holds = append(holds, &CommandDispatchHold{
+				DeviceToken: token, WindowToken: v.windowToken, DispatchAfter: v.after,
+			})
+		}
+	}
+	return holds, refusals, nil
+}
+
+// typeWindowDecision is the part of a dispatch schedule that depends only on the device TYPE.
+type typeWindowDecision struct {
+	// gated: the command is DISRUPTIVE or DESTRUCTIVE on a type that has a window.
+	gated       bool
+	windowToken string
+	// after is the earliest start; the zero time when the window is open now.
+	after time.Time
+}
+
+// typeWindowVerdict resolves one device type's decision. windows memoizes the windows loaded
+// so far across the types of one call.
+func (api *Api) typeWindowVerdict(ctx context.Context, deviceTypeId uint, commandKey string, at time.Time,
+	windows map[uint]*MaintenanceWindow) (typeWindowDecision, error) {
+	type result = typeWindowDecision
+	definitions, err := api.CommandDefinitionsByDeviceType(ctx, deviceTypeId)
+	if err != nil {
+		return result{}, err
+	}
+	var matched *CommandDefinition
+	for _, def := range definitions {
+		if def != nil && def.CommandKey == commandKey {
+			matched = def
+			break
+		}
+	}
+	if matched == nil || !matched.WindowGated() {
+		return result{}, nil
+	}
+	types, err := api.DeviceTypesById(ctx, []uint{deviceTypeId})
+	if err != nil {
+		return result{}, err
+	}
+	if len(types) == 0 || types[0].MaintenanceWindowId == nil {
+		return result{}, nil // gated command, but the type has no window: nothing to wait for
+	}
+	windowId := *types[0].MaintenanceWindowId
+	window, cached := windows[windowId]
+	if !cached {
+		found, err := api.MaintenanceWindowsById(ctx, []uint{windowId})
+		if err != nil {
+			return result{}, err
+		}
+		if len(found) == 0 {
+			return result{}, fmt.Errorf("device type %d references maintenance window %d, which does not exist",
+				deviceTypeId, windowId)
+		}
+		window = found[0]
+		windows[windowId] = window
+	}
+	schedule, err := window.Schedule()
+	if err != nil {
+		return result{}, fmt.Errorf("maintenance window %q cannot be evaluated: %w", window.Token, err)
+	}
+	after := schedule.DispatchAfter(at)
+	out := result{gated: true, windowToken: window.Token}
+	if after.After(at) {
+		out.after = after
+	}
+	return out, nil
+}
+
+// WindowOpening is the answer to "when may an operation under this window start?".
+type WindowOpening struct {
+	// Found is false when no window has the token (deleted, or never existed).
+	Found bool
+	// OpenNow reports whether the window is open at the instant asked about.
+	OpenNow bool
+	// DispatchAfter is the earliest instant an operation may start: the instant asked about
+	// when the window is open, otherwise the next opening.
+	DispatchAfter time.Time
+	// Closes is when the interval DispatchAfter belongs to ends.
+	Closes time.Time
+}
+
+// MaintenanceWindowOpening resolves a window by token to its next opening — the single entry
+// point other areas use to evaluate a window (command delivery's re-stamp pass today; the
+// over-the-air update gate later), so every consumer gets the calculator's answer and none
+// re-implements it.
+//
+// A window that does not exist is reported as Found=false rather than an error: a caller
+// holding a stamp from a window that was since deleted needs to tell that apart from "the
+// check could not be made".
+func (api *Api) MaintenanceWindowOpening(ctx context.Context, token string, at time.Time) (*WindowOpening, error) {
+	matches, err := api.MaintenanceWindowsByToken(ctx, []string{token})
+	if err != nil {
+		return nil, err
+	}
+	if len(matches) == 0 {
+		return &WindowOpening{Found: false}, nil
+	}
+	schedule, err := matches[0].Schedule()
+	if err != nil {
+		return nil, fmt.Errorf("maintenance window %q cannot be evaluated: %w", token, err)
+	}
+	iv := schedule.Next(at)
+	opening := &WindowOpening{Found: true, OpenNow: !iv.Start.After(at), Closes: iv.End}
+	opening.DispatchAfter = iv.Start
+	if opening.OpenNow {
+		opening.DispatchAfter = at
+	}
+	return opening, nil
+}
+
+// IsInvalidWindow reports whether err is a window validation failure (a caller fault).
+func IsInvalidWindow(err error) bool { return errors.Is(err, maintwindow.ErrInvalid) }

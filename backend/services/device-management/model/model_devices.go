@@ -27,6 +27,10 @@ type DeviceTypeCreateRequest struct {
 	// Optional: a type with no profile is valid, it just grants its devices no
 	// typed capability. Empty/omitted clears the reference.
 	ProfileToken *string
+	// MaintenanceWindowToken assigns the maintenance window that gates this type's
+	// DISRUPTIVE and DESTRUCTIVE commands. Optional: a type with no window dispatches them
+	// whenever the device is reachable. Empty/omitted leaves it unassigned.
+	MaintenanceWindowToken *string
 	// Manufacturer + Model are identity facets (ADR-045 decision 8): they name
 	// the device this type is, and stay correct even when many types share one
 	// profile. Discovery facets, free-text; the authoring UI suggests values
@@ -73,8 +77,11 @@ type DeviceTypeUpdateRequest struct {
 	// the type. Null (or an empty/whitespace token, preserved from the old behaviour)
 	// detaches the profile. An unknown token is rejected.
 	ProfileToken dcgraphql.OptionalString
-	Manufacturer dcgraphql.OptionalString
-	Model        dcgraphql.OptionalString
+	// MaintenanceWindowToken re-points the maintenance window. Omitted keeps the current one,
+	// null (or blank) unassigns it, an unknown token is refused.
+	MaintenanceWindowToken dcgraphql.OptionalString
+	Manufacturer           dcgraphql.OptionalString
+	Model                  dcgraphql.OptionalString
 	// Metadata is an opaque JSON string in the schema, not a map, so it replaces
 	// wholesale when sent and clears on null. There is no per-key merge to choose
 	// between: the API has never been able to address an individual key.
@@ -98,6 +105,11 @@ type DeviceType struct {
 	// capability resolves device → type → profile. Nil means no profile adopted.
 	ProfileId *uint `gorm:"index"`
 	Profile   *DeviceProfile
+
+	// MaintenanceWindowId is the nullable reference to the maintenance window that holds this
+	// type's disruptive commands until it opens. Nil means the type has no window.
+	MaintenanceWindowId *uint `gorm:"index"`
+	MaintenanceWindow   *MaintenanceWindow
 
 	// Manufacturer + Model are indexed identity facets (ADR-045 decision 8): they
 	// back the distinct-value suggestion lists and are meant to be filtered/grouped

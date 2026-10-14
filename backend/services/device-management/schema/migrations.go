@@ -41,5 +41,7 @@ var (
 		NewCredentialSecretDigestSchema(),
 		NewDeviceDisabledSchema(),
 		NewDeviceDisabledIndexSchema(),
+		NewMaintenanceWindowsSchema(),
+		NewCommandImpactSchema(),
 	}
 )

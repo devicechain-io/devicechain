@@ -62,6 +62,14 @@ func (api *Api) CreateCommandDefinition(ctx context.Context,
 	if err := validateRequestSchema(request.ParameterSchema); err != nil {
 		return nil, err
 	}
+	impact := ""
+	if request.Impact != nil {
+		impact = *request.Impact
+	}
+	impact, err = normalizeImpact(impact)
+	if err != nil {
+		return nil, err
+	}
 
 	if err := api.assertCommandKeyUnused(ctx, matches[0].ID, request.CommandKey, 0); err != nil {
 		return nil, err
@@ -93,6 +101,7 @@ func (api *Api) CreateCommandDefinition(ctx context.Context,
 		DeviceProfile:   matches[0],
 		CommandKey:      request.CommandKey,
 		ParameterSchema: parameterSchemaJSON,
+		Impact:          impact,
 	}
 	result := api.RDB.DB(ctx).Create(created)
 	if result.Error != nil {
@@ -137,6 +146,15 @@ func (api *Api) UpdateCommandDefinition(ctx context.Context, token string,
 			return nil, err
 		}
 	}
+	impact, err := request.Impact.ApplyToRequired("impact", updated.EffectiveImpact())
+	if err != nil {
+		return nil, err
+	}
+	if request.Impact.Set {
+		if impact, err = normalizeImpact(impact); err != nil {
+			return nil, err
+		}
+	}
 	parameterSchema := request.ParameterSchema.ApplyTo(dcgraphql.MetadataStr(updated.ParameterSchema))
 	if request.ParameterSchema.Set {
 		if err := validateRequestSchema(parameterSchema); err != nil {
@@ -173,6 +191,7 @@ func (api *Api) UpdateCommandDefinition(ctx context.Context, token string,
 	}
 
 	updated.CommandKey = commandKey
+	updated.Impact = impact
 	updated.Metadata = metadataJSON
 	updated.ParameterSchema = parameterSchemaJSON
 	updated.Name = request.Name.ApplyToNullString(updated.Name)

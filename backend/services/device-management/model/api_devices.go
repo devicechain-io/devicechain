@@ -81,6 +81,10 @@ func (api *Api) CreateDeviceType(ctx context.Context, request *DeviceTypeCreateR
 	if err != nil {
 		return nil, err
 	}
+	windowId, err := api.resolveMaintenanceWindowId(ctx, request.MaintenanceWindowToken)
+	if err != nil {
+		return nil, err
+	}
 	metadataJSON, err := rdb.JSONInputOf("metadata", request.Metadata)
 	if err != nil {
 		return nil, err
@@ -103,9 +107,10 @@ func (api *Api) CreateDeviceType(ctx context.Context, request *DeviceTypeCreateR
 		MetadataEntity: rdb.MetadataEntity{
 			Metadata: metadataJSON,
 		},
-		ProfileId:    profileId,
-		Manufacturer: rdb.NullStrOf(request.Manufacturer),
-		ModelName:    rdb.NullStrOf(request.Model),
+		ProfileId:           profileId,
+		MaintenanceWindowId: windowId,
+		Manufacturer:        rdb.NullStrOf(request.Manufacturer),
+		ModelName:           rdb.NullStrOf(request.Model),
 	}
 	result := api.RDB.DB(ctx).Create(created)
 	if result.Error != nil {
@@ -148,6 +153,14 @@ func (api *Api) UpdateDeviceType(ctx context.Context, token string,
 		}
 	}
 
+	windowId := found.MaintenanceWindowId
+	if request.MaintenanceWindowToken.Set {
+		windowId, err = api.resolveMaintenanceWindowId(ctx, request.MaintenanceWindowToken.Value)
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	found.Name = request.Name.ApplyToNullString(found.Name)
 	found.Description = request.Description.ApplyToNullString(found.Description)
 	found.ImageUrl = request.ImageUrl.ApplyToNullString(found.ImageUrl)
@@ -161,6 +174,10 @@ func (api *Api) UpdateDeviceType(ctx context.Context, token string,
 	}
 	found.Metadata = metadataJSON
 	found.ProfileId = profileId
+	found.MaintenanceWindowId = windowId
+	// gorm's Save syncs a belongs-to FK from the loaded association, and this read does not
+	// preload it, so the association must not be left stale beside the new id.
+	found.MaintenanceWindow = nil
 	found.Manufacturer = request.Manufacturer.ApplyToNullString(found.Manufacturer)
 	found.ModelName = request.Model.ApplyToNullString(found.ModelName)
 

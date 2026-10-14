@@ -94,6 +94,8 @@ func (r *PublishedCommandResolver) ParameterSchema() *string {
 	return util.MetadataStr(r.M.ParameterSchema)
 }
 
+func (r *PublishedCommandResolver) Impact() string { return r.M.EffectiveImpact() }
+
 // DeviceCommandVocabularyResolver exposes the commands a device currently accepts.
 type DeviceCommandVocabularyResolver struct {
 	M model.CommandVocabulary

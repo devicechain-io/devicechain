@@ -63,7 +63,7 @@ func TestProfileSnapshotStoredKeysArePinned(t *testing.T) {
 	}
 	wantCommand := []string{
 		"CommandKey", "CreatedAt", "DeletedAt", "Description", "DeviceProfile",
-		"DeviceProfileId", "ID", "Metadata", "Name", "ParameterSchema", "TenantId",
+		"DeviceProfileId", "ID", "Impact", "Metadata", "Name", "ParameterSchema", "TenantId",
 		"Token", "UpdatedAt",
 	}
 	// AuthoringGraph is deliberately ABSENT: it is `json:"-"`, so publishing does not
