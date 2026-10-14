@@ -319,8 +319,10 @@ func TestEventManagementReplicasLeaveAnotherAreasBlockAlone(t *testing.T) {
 
 // An upgrade that skips the infrastructure moves the services and not the event
 // store's reserve, so a --ha one says so.
+//
+// Not parallel: captureStdout swaps os.Stdout for the whole process, so a parallel
+// test printing meanwhile would land in this one's capture, or be lost from its own.
 func TestASkippedInfrastructureUpgradeSaysTheReserveDidNotMove(t *testing.T) {
-	t.Parallel()
 	opts := UpgradeOptions{Options: Options{Instance: "prod"}}
 	st := persistenceState(true, false, "default")
 	st.SkipInfrastructure = true

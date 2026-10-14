@@ -37,9 +37,40 @@ func profileState(ha, compact bool, profile string) func(string) *State {
 }
 
 // areaOverride is a functionalAreas.<area> block of chart values.
+//
+// 🔴 THE BLOCK IS COPIED ON EVERY CALL, ALL THE WAY DOWN. chartutil.MergeTables writes
+// the release values' own functionalAreas.<area> keys INTO the override's block, so a
+// block handed out by reference is one map every caller merges into. The two suites
+// that range over renderProfiles render the same row at the same time, which made
+// that a concurrent map write; run one after another it was a block that carried the
+// previous render's values into the next.
 func areaOverride(area string, block map[string]interface{}) func() map[string]interface{} {
 	return func() map[string]interface{} {
-		return map[string]interface{}{"functionalAreas": map[string]interface{}{area: block}}
+		return map[string]interface{}{"functionalAreas": map[string]interface{}{area: copyValues(block)}}
+	}
+}
+
+// copyValues deep-copies a chart values table, nested tables and lists included.
+func copyValues(in map[string]interface{}) map[string]interface{} {
+	out := make(map[string]interface{}, len(in))
+	for k, v := range in {
+		out[k] = copyValue(v)
+	}
+	return out
+}
+
+func copyValue(v interface{}) interface{} {
+	switch v := v.(type) {
+	case map[string]interface{}:
+		return copyValues(v)
+	case []interface{}:
+		out := make([]interface{}, len(v))
+		for i, e := range v {
+			out[i] = copyValue(e)
+		}
+		return out
+	default:
+		return v
 	}
 }
 
