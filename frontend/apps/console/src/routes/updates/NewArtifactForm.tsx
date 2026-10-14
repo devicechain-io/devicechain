@@ -38,14 +38,11 @@ import {
   type ArtifactKind,
 } from '@/lib/api/update-management';
 import { formatBytes, parseByteCount, sha256Digest } from '@/lib/artifactUpload';
+import { artifactKindLabel } from '@/lib/enumLabel';
 import { shortDigest } from './badges';
 import { UploadPanel, useArtifactUpload } from './useArtifactUpload';
 
-const KINDS: { value: ArtifactKind; labelKey: string }[] = [
-  { value: 'FIRMWARE', labelKey: 'kindFirmware' },
-  { value: 'SOFTWARE', labelKey: 'kindSoftware' },
-  { value: 'CONFIGURATION', labelKey: 'kindConfiguration' },
-];
+const KINDS: ArtifactKind[] = ['FIRMWARE', 'SOFTWARE', 'CONFIGURATION'];
 
 function slug(s: string): string {
   return s
@@ -189,7 +186,7 @@ export function NewArtifactForm({ onOpen }: { onOpen: (token: string) => void })
       <FormField label={t('fieldKind')} htmlFor="artifact-kind">
         <Combobox
           id="artifact-kind"
-          options={KINDS.map((k) => ({ value: k.value, label: t(k.labelKey) }))}
+          options={KINDS.map((k) => ({ value: k, label: artifactKindLabel(t, k) }))}
           value={kind}
           onChange={(v) => setKind(v as ArtifactKind | '')}
           disabled={locked}

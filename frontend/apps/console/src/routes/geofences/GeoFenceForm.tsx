@@ -20,9 +20,16 @@ import {
   type GeoFence,
   type GeoFenceCreateRequest,
 } from '@/lib/api/geofences';
-import { fallbackView, renderableBasemap, resolveBasemap } from '@devicechain/client';
+import { fallbackView } from '@devicechain/client';
 import { useTenantBasemap } from '@/auth/TenantProvider';
 import { FenceMap } from './FenceMap';
+import {
+  TILE_ATTRIBUTION_KEY,
+  TILE_URL_KEY,
+  readPreference,
+  resolveFenceBasemap,
+  writePreference,
+} from './tileBasemap';
 import {
   MAX_FENCE_VERTICES,
   MIN_VERTICES,
@@ -41,26 +48,6 @@ import {
 // point every self-hosted instance at a public tile service that never agreed to
 // serve it. What changed is that a blank field no longer means a blank map — it
 // means "use whatever the tenant configured".
-const TILE_URL_KEY = 'dc.geofence.tileUrl';
-const TILE_ATTRIBUTION_KEY = 'dc.geofence.tileAttribution';
-
-function readPreference(key: string): string {
-  try {
-    return window.localStorage.getItem(key) ?? '';
-  } catch {
-    // A browser with storage disabled must still be able to draw a fence.
-    return '';
-  }
-}
-
-function writePreference(key: string, value: string) {
-  try {
-    if (value) window.localStorage.setItem(key, value);
-    else window.localStorage.removeItem(key);
-  } catch {
-    /* preference is a convenience; losing it must never fail a save */
-  }
-}
 
 const PROBLEM_KEYS: Record<GeometryProblem, string> = {
   tooFewVertices: 'entities:geofenceErrTooFewVertices',
@@ -181,9 +168,7 @@ export function GeoFenceForm({
   // the tenant's provider for tiles it is not serving. It also does not render those
   // tiles bare — an override missing its credit line is discarded whole, and the
   // tenant's properly-credited basemap is drawn instead.
-  const basemap = renderableBasemap(
-    resolveBasemap({ tileUrl, attribution }, tenantBasemap),
-  );
+  const basemap = resolveFenceBasemap(tenantBasemap, { tileUrl, attribution });
   // 🔴 …which would be SILENT without this. The rule is right and invisible: someone
   // pastes a tile URL, presses tab, and the map goes on showing the tenant's tiles
   // with no indication that what they typed was set aside. Saying so is the whole
@@ -256,6 +241,7 @@ export function GeoFenceForm({
             onChange={applyVertices}
             onClose={() => setClosed(true)}
             tileUrl={basemap?.tileUrl}
+            tileUrlField
             attribution={basemap?.attribution ?? undefined}
             initialCenter={initialView?.center}
             initialZoom={initialView?.zoom ?? undefined}

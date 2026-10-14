@@ -28,7 +28,7 @@ function humanize(segment: string): string {
 // Fully localizing the English "<Singular> Detail" affordance needs number-aware
 // rules and is deferred to the sweep (b) — until then a detail page's top bar shows
 // the section name, not "<Thing> Detail".
-const NAV_SECTION_KEY: Record<string, string> = {
+export const NAV_SECTION_KEY: Record<string, string> = {
   '': 'dashboard',
   devices: 'devices',
   'device-types': 'deviceTypes',
@@ -52,6 +52,10 @@ const NAV_SECTION_KEY: Record<string, string> = {
   browse: 'browse',
   audit: 'audit',
   branding: 'branding',
+  basemap: 'map',
+  locale: 'language',
+  'command-batches': 'commandBatches',
+  updates: 'updates',
 };
 
 export default function AppLayout() {

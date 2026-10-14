@@ -8,6 +8,7 @@ import { useTranslation } from 'react-i18next';
 import { Badge } from '@/components/ui/badge';
 import { CopyToken } from '@/components/ui/copy-token';
 import type { ArtifactState, ArtifactTrustStatus, SignerState } from '@/lib/api/update-management';
+import { artifactStateLabel, signerStateLabel } from '@/lib/enumLabel';
 
 export function TrustBadge({ status }: { status: ArtifactTrustStatus }) {
   const { t } = useTranslation('updates');
@@ -24,20 +25,20 @@ export function ArtifactStateBadge({ state }: { state: ArtifactState }) {
   const { t } = useTranslation('updates');
   switch (state) {
     case 'AVAILABLE':
-      return <Badge variant="success">{t('stateAvailable')}</Badge>;
+      return <Badge variant="success">{artifactStateLabel(t, state)}</Badge>;
     case 'UPLOADING':
-      return <Badge variant="warning">{t('stateUploading')}</Badge>;
+      return <Badge variant="warning">{artifactStateLabel(t, state)}</Badge>;
     default:
-      return <Badge variant="outline">{t('stateRetired')}</Badge>;
+      return <Badge variant="outline">{artifactStateLabel(t, state)}</Badge>;
   }
 }
 
 export function SignerStateBadge({ state }: { state: SignerState }) {
   const { t } = useTranslation('updates');
   return state === 'ACTIVE' ? (
-    <Badge variant="success">{t('signerActive')}</Badge>
+    <Badge variant="success">{signerStateLabel(t, state)}</Badge>
   ) : (
-    <Badge variant="outline">{t('signerRevoked')}</Badge>
+    <Badge variant="outline">{signerStateLabel(t, state)}</Badge>
   );
 }
 

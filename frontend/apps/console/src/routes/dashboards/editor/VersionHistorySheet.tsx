@@ -122,7 +122,7 @@ export function VersionHistorySheet({
   const { t } = useTranslation(['dashboards', 'common']);
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent side="right" className="w-full overflow-y-auto sm:max-w-lg">
+      <SheetContent side="right" className="w-full overflow-y-auto sm:max-w-2xl">
         <SheetHeader className="mb-6">
           <SheetTitle>{t('versionHistoryTitle')}</SheetTitle>
           <SheetDescription>{t('versionHistoryDescription')}</SheetDescription>
@@ -460,9 +460,9 @@ function VersionHistoryBody({
                     {formatTime(v.publishedAt)}
                   </DataTableCell>
                   <DataTableCell className="text-muted-foreground" data-shot-pii>{v.publishedBy || '—'}</DataTableCell>
-                  <DataTableCell className="text-right">
+                  <DataTableCell className="w-px whitespace-nowrap text-right">
                     {canWrite && (
-                      <div className="flex justify-end gap-2">
+                      <div className="flex justify-end gap-2 [&>button]:shrink-0">
                         {v.version !== liveVersion && (
                           <Button
                             variant="outline"

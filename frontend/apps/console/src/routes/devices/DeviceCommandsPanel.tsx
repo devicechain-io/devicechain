@@ -36,6 +36,7 @@ import { useToast } from '@/components/ui/toast';
 import { Textarea } from '@/components/ui/textarea';
 import { formatTime } from '@/lib/utils';
 import { commandStatusVariant } from '@/lib/command-status';
+import { commandStatusLabel } from '@/lib/enumLabel';
 import { CommandWaitingNote } from '@/components/CommandWaitingNote';
 import { useQuery } from '@/lib/hooks/use-query';
 import { errMessage, useReload } from '@/routes/common';
@@ -218,7 +219,7 @@ export function DeviceCommandsPanel({ deviceToken }: { deviceToken: string }) {
         // that the operator's action did NOT take effect, styled so it cannot be mistaken
         // for the success toast one line up.
         toast(
-          t('commandNotCancelled', { name: command.name, status: cancelled.status }),
+          t('commandNotCancelled', { name: command.name, status: commandStatusLabel(t, cancelled.status) }),
           'error',
         );
       }
@@ -376,7 +377,7 @@ export function DeviceCommandsPanel({ deviceToken }: { deviceToken: string }) {
                   )}
                 </DataTableCell>
                 <DataTableCell>
-                  <Badge variant={commandStatusVariant(command.status)}>{command.status}</Badge>
+                  <Badge variant={commandStatusVariant(command.status)}>{commandStatusLabel(t, command.status)}</Badge>
                   <CommandWaitingNote command={command} />
                 </DataTableCell>
                 <DataTableCell className="max-w-xs truncate text-muted-foreground">

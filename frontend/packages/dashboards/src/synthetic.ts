@@ -35,12 +35,9 @@ import type {
 // synthetic); ramp is a sawtooth; random-walk drifts within range.
 export type SyntheticGenerator = 'sine' | 'ramp' | 'random-walk';
 
-// Presentation list for a generator picker (value + human label).
-export const SYNTHETIC_GENERATORS: ReadonlyArray<{ value: SyntheticGenerator; label: string }> = [
-  { value: 'sine', label: 'Sine wave' },
-  { value: 'ramp', label: 'Ramp' },
-  { value: 'random-walk', label: 'Random walk' },
-];
+// Every generator id, for a picker. Ids only: the display name is the host's to localize,
+// and the id is what a definition stores, so it never changes with the language.
+export const SYNTHETIC_GENERATORS: ReadonlyArray<SyntheticGenerator> = ['sine', 'ramp', 'random-walk'];
 
 export interface SyntheticDataSourceConfig {
   generator?: SyntheticGenerator;

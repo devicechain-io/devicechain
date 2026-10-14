@@ -130,7 +130,9 @@ export function DashboardRenderer({
           {widgets.map((widget) => {
             const box = resolveWidgetBox(widget.layout, breakpoint);
             return (
-              <div key={widget.id} style={gridItemStyle(box, grid.columns)}>
+              // data-widget names the grid item a widget occupies, so a check over the rendered
+              // board (the readability gate in apps/board-replay) can find each widget's box.
+              <div key={widget.id} data-widget={widget.id} style={gridItemStyle(box, grid.columns)}>
                 <WidgetSubjectProvider label={widgetSubjectLabel(widget)}>
                   <ConnectedWidget
                     widget={widget}
