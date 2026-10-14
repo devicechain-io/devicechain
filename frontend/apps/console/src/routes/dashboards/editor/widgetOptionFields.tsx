@@ -270,6 +270,24 @@ function ListField({
   return (
     <FormField label={label} description={hint}>
       <div className="flex flex-col gap-2">
+        {rows.length > 0 && (
+          // Visible column headings: a row of bare controls (a number, a select, a text box)
+          // says nothing about which is which to a sighted author. Each cell also carries its
+          // own accessible name, so this row is hidden from a screen reader.
+          <div
+            aria-hidden
+            data-testid={`list-head-${option}`}
+            className="flex items-end gap-2 text-xs font-medium text-muted-foreground"
+          >
+            {Object.entries(spec.item).map(([field, fieldSpec]) => (
+              <div key={field} className="min-w-0 flex-1 truncate">
+                {fieldLabel(field, fieldSpec, lookup)}
+              </div>
+            ))}
+            {/* the remove button's column (IconButton size sm) */}
+            <div className="size-6 shrink-0" />
+          </div>
+        )}
         {rows.map((row, index) => (
           <div
             // Rows are positional (no identity of their own), so the index is the key.

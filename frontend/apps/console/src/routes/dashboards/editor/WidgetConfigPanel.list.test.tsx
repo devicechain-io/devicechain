@@ -126,6 +126,14 @@ describe('the thresholds list control', () => {
     expect(cell(container, 0, 'label').querySelector('input')!.value).toBe('Low');
     expect(cell(container, 1, 'value').querySelector('input')!.value).toBe('9');
     expect(container.querySelector('[data-testid="list-row-thresholds-2"]')).toBeNull();
+    // Each column is named once, visibly, above the rows.
+    expect(container.querySelector('[data-testid="list-head-thresholds"]')!.textContent).toBe('Starts atSeverityLabel');
+  });
+
+  it('shows no column headings when there are no rows', () => {
+    store.options = undefined;
+    const { container } = render(<Harness />);
+    expect(container.querySelector('[data-testid="list-head-thresholds"]')).toBeNull();
   });
 
   it('stops offering Add at the declared maximum', () => {

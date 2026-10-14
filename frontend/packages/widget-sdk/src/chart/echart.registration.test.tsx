@@ -14,7 +14,9 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import { buildGaugeOption, buildLineOption } from './chart-options';
 import type { ChartTheme } from './chart-theme';
-import './echart'; // registers the chart types and components under test
+// Importing the wrapper registers the eager chart types and components; the threshold
+// markers are registered by loadThresholdMarkers, exactly as EChart does on demand.
+import { loadThresholdMarkers, optionUsesMarkers } from './echart';
 
 echarts.use([SVGRenderer]); // test-only: jsdom has no canvas, SSR+SVG is the real engine without one
 
@@ -75,7 +77,28 @@ describe('ECharts component registration', () => {
     expect((buildLineOption(samples.slice(0, 1), theme) as { legend?: unknown }).legend).toBeUndefined();
   });
 
-  it('draws a threshold markLine in its severity colour', () => {
+  // FIRST in this file, before anything loads the markers: this is the negative control for
+  // the two marker tests below, and the proof that the lazy load is what makes them draw.
+  it('draws NO markers before loadThresholdMarkers, then draws them on the SAME instance after', async () => {
+    const option = buildLineOption(samples, theme, {
+      measurements: ['temperature'],
+      thresholds: [{ value: 21, level: 'critical' }],
+    });
+    expect(optionUsesMarkers(option)).toBe(true);
+    const { chart: c, svg: before } = render(option);
+    expect(before).not.toContain('stroke="hsl(5, 5%, 5%)"');
+    await loadThresholdMarkers();
+    c.setOption(option as echarts.EChartsCoreOption, { notMerge: true });
+    expect(c.renderToSVGString()).toContain('stroke="hsl(5, 5%, 5%)"');
+  });
+
+  it('optionUsesMarkers is false for a chart without thresholds and for a gauge', () => {
+    expect(optionUsesMarkers(buildLineOption(samples, theme))).toBe(false);
+    expect(optionUsesMarkers(buildGaugeOption(1, theme, { thresholds: [{ value: 0, level: 'major' }] }))).toBe(false);
+  });
+
+  it('draws a threshold markLine in its severity colour', async () => {
+    await loadThresholdMarkers();
     const { svg } = render(
       buildLineOption(samples, theme, {
         measurements: ['temperature'],
@@ -86,7 +109,8 @@ describe('ECharts component registration', () => {
     expect(svg).toContain('stroke-dasharray');
   });
 
-  it('draws the threshold band (markArea) and keeps the axis finite', () => {
+  it('draws the threshold band (markArea) and keeps the axis finite', async () => {
+    await loadThresholdMarkers();
     const { svg } = render(
       buildLineOption(samples, theme, {
         measurements: ['temperature'],

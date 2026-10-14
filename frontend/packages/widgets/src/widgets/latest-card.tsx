@@ -20,12 +20,12 @@ import {
   pickSample,
   primaryMeasurementName,
   useElementSize,
+  useSeverityColors,
   useFlashOnChange,
   useWidgetTimeZone,
   WidgetFrame,
   type WidgetProps,
 } from '@devicechain/widget-sdk';
-import { useChartTheme } from '@devicechain/widget-sdk/echarts';
 
 import { builtinWidgetDescriptors } from '../builtin-descriptors';
 
@@ -36,7 +36,7 @@ const PAD_Y = 12;
 const TIMESTAMP_ROOM_PX = 18;
 
 export function LatestCard({ widget, data }: WidgetProps) {
-  const theme = useChartTheme();
+  const severity = useSeverityColors();
   const [sizeRef, size] = useElementSize<HTMLDivElement>();
   const timeZone = useWidgetTimeZone();
   const name = primaryMeasurementName(widget);
@@ -50,7 +50,7 @@ export function LatestCard({ widget, data }: WidgetProps) {
   // none) it keeps the foreground. The same severity colours the chart widgets resolve.
   const thresholds = useMemo(() => optThresholds(widget.options, 'thresholds'), [widget.options]);
   const band = bandAt(thresholds, sample?.value);
-  const valueColor = band ? theme.severity[band.level] : css('foreground');
+  const valueColor = band ? severity[band.level] : css('foreground');
 
   // Opt-in directional flash: tint the number green/red on a rise/fall, then fade back. The
   // identity (device + measurement) suppresses a false flash when an anchor's single slot

@@ -66,6 +66,7 @@ export {
   isSeverityLevel,
   severityTokenCss,
   severityVar,
+  useSeverityColors,
   type SeverityLevel,
 } from './severity';
 export {

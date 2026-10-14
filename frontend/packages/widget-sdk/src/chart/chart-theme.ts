@@ -9,7 +9,7 @@
 import { useMemo, useSyncExternalStore } from 'react';
 
 import { useWidgetThemeRoot } from '../context';
-import { SEVERITY_LEVELS, SEVERITY_TOKENS, severityVar, type SeverityLevel } from '../severity';
+import { severityColorsAt, severityFallbackColors, type SeverityLevel } from '../severity';
 
 // Concrete colors for an ECharts canvas, resolved from the CSS variables in scope
 // at a given element (charts can't use CSS vars directly).
@@ -36,30 +36,8 @@ const FALLBACK: ChartTheme = {
     'hsl(280 65% 60%)',
     'hsl(340 75% 55%)',
   ],
-  severity: severityColors(false, () => undefined),
+  severity: severityFallbackColors(),
 };
-
-// A channel triple ("h s% l%", space- or comma-separated) as a comma-form hsl() colour.
-function hslFromChannels(channels: string): string {
-  const [h, s, l] = channels.replace(/,/g, ' ').trim().split(/\s+/);
-  return `hsl(${h}, ${s}, ${l})`;
-}
-
-// The severity colours: a host's `--sev-<level>` token when it defines one, else the SDK's own
-// value for the light or dark ground.
-function severityColors(dark: boolean, host: (cssVar: string) => string | undefined): Record<SeverityLevel, string> {
-  const out = {} as Record<SeverityLevel, string>;
-  for (const level of SEVERITY_LEVELS) {
-    out[level] = hslFromChannels(host(severityVar(level)) || SEVERITY_TOKENS[level][dark ? 'dark' : 'light']);
-  }
-  return out;
-}
-
-// Dark when the element sits under a `.dark` ancestor -- the host convention every token block
-// here uses -- or the document root carries it.
-function isDark(el: Element): boolean {
-  return el.closest('.dark') !== null || el.ownerDocument.documentElement.classList.contains('dark');
-}
 
 function readVar(style: CSSStyleDeclaration, name: string, fallback: string): string {
   const raw = style.getPropertyValue(`--${name}`).trim();
@@ -76,7 +54,7 @@ export function resolveChartTheme(el: Element): ChartTheme {
     mutedForeground: readVar(style, 'muted-foreground', FALLBACK.mutedForeground),
     border: readVar(style, 'border', FALLBACK.border),
     series: FALLBACK.series.map((fallback, i) => readVar(style, `chart-${i + 1}`, fallback)),
-    severity: severityColors(isDark(el), (name) => style.getPropertyValue(name).trim() || undefined),
+    severity: severityColorsAt(el, style),
   };
 }
 
@@ -134,3 +112,4 @@ export function useChartTheme(): ChartTheme {
   const scoped = useMemo(() => (root ? resolveChartTheme(root) : null), [root]);
   return scoped ?? shared;
 }
+

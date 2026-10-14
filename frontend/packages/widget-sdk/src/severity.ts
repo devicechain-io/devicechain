@@ -13,6 +13,10 @@
 // the same values as a stylesheet so a host's token set can be generated from this table
 // instead of re-typed.
 
+import { useMemo, useSyncExternalStore } from 'react';
+
+import { useWidgetThemeRoot } from './context';
+
 export const SEVERITY_LEVELS = ['normal', 'warning', 'minor', 'major', 'critical'] as const;
 export type SeverityLevel = (typeof SEVERITY_LEVELS)[number];
 
@@ -43,4 +47,85 @@ export function severityTokenCss(): string {
   const block = (selector: string, side: 'light' | 'dark') =>
     `${selector} {\n${SEVERITY_LEVELS.map((l) => `  ${severityVar(l)}: ${SEVERITY_TOKENS[l][side]};`).join('\n')}\n}`;
   return `${block(':root', 'light')}\n${block('.dark', 'dark')}\n`;
+}
+
+// --- concrete colours ---------------------------------------------------------------
+//
+// A canvas (and an inline style that must be one value) needs a concrete colour, not
+// `var(--sev-x)`. These resolve the level colours in scope at an element: the host's
+// `--sev-<level>` token when it defines one, else the table above for the light or dark ground.
+// They live HERE, not with the chart theme, so a DOM-only widget (a card colouring its value
+// by threshold) gets them from the SDK root without reaching into the `/echarts` entry; the
+// chart theme reads its severity colours through the same functions.
+
+// A channel triple ("h s% l%", space- or comma-separated) as a comma-form hsl() colour, the
+// form every canvas colour parser accepts and severityFill can add an alpha to.
+function hslFromChannels(channels: string): string {
+  const [h, s, l] = channels.replace(/,/g, ' ').trim().split(/\s+/);
+  return `hsl(${h}, ${s}, ${l})`;
+}
+
+function severityColors(dark: boolean, host: (cssVar: string) => string | undefined): Record<SeverityLevel, string> {
+  const out = {} as Record<SeverityLevel, string>;
+  for (const level of SEVERITY_LEVELS) {
+    out[level] = hslFromChannels(host(severityVar(level)) || SEVERITY_TOKENS[level][dark ? 'dark' : 'light']);
+  }
+  return out;
+}
+
+// Dark when the element sits under a `.dark` ancestor -- the host convention every token block
+// here uses -- or the document root carries it.
+function isDark(el: Element): boolean {
+  return el.closest('.dark') !== null || el.ownerDocument.documentElement.classList.contains('dark');
+}
+
+// The light colours with no host involved (jsdom, a host with no tokens yet).
+export function severityFallbackColors(): Record<SeverityLevel, string> {
+  return severityColors(false, () => undefined);
+}
+
+// The colours in scope at `el`. `style` is its computed style when the caller already has it.
+export function severityColorsAt(el: Element, style: CSSStyleDeclaration = getComputedStyle(el)): Record<SeverityLevel, string> {
+  return severityColors(isDark(el), (name) => style.getPropertyValue(name).trim() || undefined);
+}
+
+// One page-wide observer, shared by every caller (the same O(1)-per-toggle shape as the chart
+// theme store): re-resolved when <html> changes class (light/dark) or inline style (tokens).
+let shared: Record<SeverityLevel, string> | null = null;
+const listeners = new Set<() => void>();
+let observer: MutationObserver | null = null;
+
+function subscribe(listener: () => void): () => void {
+  if (!observer) {
+    shared = severityColorsAt(document.documentElement);
+    observer = new MutationObserver(() => {
+      shared = severityColorsAt(document.documentElement);
+      for (const l of listeners) l();
+    });
+    observer.observe(document.documentElement, { attributes: true, attributeFilter: ['class', 'style'] });
+  }
+  listeners.add(listener);
+  return () => {
+    listeners.delete(listener);
+    if (listeners.size === 0 && observer) {
+      observer.disconnect();
+      observer = null;
+      shared = null;
+    }
+  };
+}
+
+function snapshot(): Record<SeverityLevel, string> {
+  shared ??= severityColorsAt(document.documentElement);
+  return shared;
+}
+
+// useSeverityColors returns the five concrete severity colours and re-renders the caller when
+// the document theme changes. A container-scoped theme (WidgetThemeRoot) is read once there,
+// as the chart theme does.
+export function useSeverityColors(): Record<SeverityLevel, string> {
+  const page = useSyncExternalStore(subscribe, snapshot, snapshot);
+  const root = useWidgetThemeRoot();
+  const scoped = useMemo(() => (root ? severityColorsAt(root) : null), [root]);
+  return scoped ?? page;
 }

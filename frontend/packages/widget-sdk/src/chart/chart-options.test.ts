@@ -138,6 +138,29 @@ describe('buildLineOption units, precision and thresholds', () => {
     expect(opt(buildLineOption(data, theme)).yAxis.min).toBeUndefined();
   });
 
+  it('leaves the auto range alone (null) for a threshold inside the data: a number would FIX the axis end', () => {
+    const o = opt(buildLineOption(data, theme, { thresholds: [{ value: 21, level: 'warning' }] }));
+    expect(o.yAxis.min({ min: 20, max: 22 })).toBeNull();
+    expect(o.yAxis.max({ min: 20, max: 22 })).toBeNull();
+  });
+
+  it('accepts thresholds in any order (the builder is public and sorts them itself)', () => {
+    const o = opt(
+      buildLineOption(data, theme, {
+        thresholds: [
+          { value: 90, level: 'major' },
+          { value: 5, level: 'minor' },
+        ],
+      }),
+    );
+    expect(o.yAxis.min({ min: 20, max: 22 })).toBe(5);
+    expect(o.yAxis.max({ min: 20, max: 22 })).toBe(90);
+    expect(o.series[0].markArea.data.map((a: [{ yAxis: number }, { yAxis: number }]) => [a[0].yAxis, a[1].yAxis])).toEqual([
+      [5, 90],
+      [90, Infinity],
+    ]);
+  });
+
   it('adds no markers without thresholds', () => {
     expect(opt(buildLineOption(data, theme)).series[0].markLine).toBeUndefined();
   });
@@ -208,6 +231,12 @@ describe('buildGaugeOption', () => {
     expect(gauge.axisLine.lineStyle.color).toEqual([[1, '#333']]);
     expect(gauge.progress.show).toBe(true);
     expect(gauge.pointer.itemStyle.color).toBe('#c1');
+  });
+
+  it('keeps the progress arc when every threshold sits above max (no band lands on the arc)', () => {
+    const gauge = seriesOf(buildGaugeOption(50, theme, { min: 0, max: 100, thresholds: [{ value: 150, level: 'critical' }] }))[0];
+    expect(gauge.axisLine.lineStyle.color).toEqual([[1, '#333']]);
+    expect(gauge.progress.show).toBe(true);
   });
 
   it('carries the band in effect at min in from a threshold below the scale', () => {

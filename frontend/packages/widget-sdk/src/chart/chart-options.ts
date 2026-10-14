@@ -11,7 +11,7 @@ import { fitValueFont } from '../fit-text';
 import { formatValue } from '../format';
 import type { ElementSize } from '../hooks';
 import type { SeverityLevel } from '../severity';
-import { bandAt, thresholdBands, type Threshold } from '../thresholds';
+import { bandAt, parseThresholds, thresholdBands, type Threshold } from '../thresholds';
 
 import type { ChartTheme } from './chart-theme';
 import type { EChartOption } from './echart';
@@ -56,7 +56,7 @@ export interface LineChartOptions {
   // Decimal places for axis labels and tooltip values; unset uses the default rounding.
   precision?: number;
   // Severity thresholds, drawn as a labelled line each plus a faint band between them.
-  // Must be sorted ascending (parseThresholds does).
+  // Any order: the builder sorts them.
   thresholds?: readonly Threshold[];
 }
 
@@ -105,7 +105,11 @@ export function buildLineOption(
   const names = options.measurements?.length ? options.measurements : distinctNames(samples);
   const axisFont = clamp(Math.round(shortSide(size) / 22), 8, 12);
 
-  const thresholds = options.thresholds ?? [];
+  // Re-parsed (validated + sorted): the builder is public, and a caller may hand it a list
+  // that never went through parseThresholds. Every rule below assumes ascending order.
+  const thresholds = parseThresholds(options.thresholds ?? []);
+  const lowest = thresholds.length > 0 ? thresholds[0].value : 0;
+  const highest = thresholds.length > 0 ? thresholds[thresholds.length - 1].value : 0;
   const marks = thresholds.length > 0 ? thresholdMarks(theme, thresholds, options.unit, options.precision, axisFont) : undefined;
   const suffix = options.unit ? ` ${options.unit}` : '';
   const precision = options.precision;
@@ -152,12 +156,14 @@ export function buildLineOption(
         // Rounded only when the author asked; otherwise ECharts' own tick rounding applies.
         ...(precision != null ? { formatter: (v: number) => formatValue(v, precision) } : {}),
       },
-      // A threshold outside the data's range must still be on the chart: extend the auto
-      // range to take in every threshold value.
+      // A threshold outside the data's range must still be on the chart: extend the range to
+      // take it in. Only then -- a returned number FIXES that end of the axis (no nice
+      // rounding, no zero baseline), so a threshold inside the data returns null and leaves
+      // ECharts' own auto range exactly as it is without thresholds.
       ...(thresholds.length > 0
         ? {
-            min: (e: { min: number }) => Math.min(e.min, thresholds[0].value),
-            max: (e: { max: number }) => Math.max(e.max, thresholds[thresholds.length - 1].value),
+            min: (e: { min: number }) => (lowest < e.min ? lowest : null),
+            max: (e: { max: number }) => (highest > e.max ? highest : null),
           }
         : {}),
     },
@@ -171,7 +177,7 @@ export interface GaugeChartOptions {
   unit?: string;
   // Decimal places for the readout; unset uses the default rounding.
   precision?: number;
-  // Severity thresholds, drawn as coloured bands on the arc (sorted ascending).
+  // Severity thresholds, drawn as coloured bands on the arc (any order).
   thresholds?: readonly Threshold[];
 }
 
@@ -201,8 +207,11 @@ export function buildGaugeOption(
 ): EChartOption {
   const min = options.min ?? 0;
   const max = options.max ?? 100;
-  const thresholds = options.thresholds ?? [];
+  const thresholds = parseThresholds(options.thresholds ?? []); // validated + sorted, as above
   const bands = thresholdBands(thresholds, min, max);
+  // Banded only when a severity band actually lands on the arc: thresholds that all sit above
+  // `max` leave a plain neutral track, which keeps the progress arc like any other gauge.
+  const banded = bands.some((b) => b.level !== undefined);
   // The needle takes the colour of the band the value sits in; with no bands (or below the
   // lowest) it keeps the chart accent.
   const hit = bandAt(thresholds, value);
@@ -228,7 +237,7 @@ export function buildGaugeOption(
         radius: '95%',
         center: ['50%', '58%'],
         // The progress arc would paint over the bands, so with bands the needle alone marks the value.
-        progress: { show: bands.length === 0, width: arcWidth, itemStyle: { color: accent } },
+        progress: { show: !banded, width: arcWidth, itemStyle: { color: accent } },
         pointer: { itemStyle: { color: accent }, length: '55%', width: clamp(Math.round(s / 50), 2, 6) },
         anchor: { show: false },
         axisLine: { lineStyle: { width: arcWidth, color: gaugeArcColors(bands, min, max, theme) } },
