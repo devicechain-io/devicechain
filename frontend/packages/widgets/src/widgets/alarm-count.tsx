@@ -23,6 +23,9 @@ import { highestSeverity, severityColor, severityLabel } from './severity';
 
 const PAD_X = 16;
 const PAD_Y = 12;
+// The caption under the count (11 px text plus its 6 px margin). It always shows -- it names
+// the worst severity -- so the count is fitted to what is left rather than pushing it out.
+export const ALARM_COUNT_CAPTION_ROOM_PX = 20;
 
 export function AlarmCount({ widget, data }: WidgetProps<AlarmStreamState>) {
   const [sizeRef, size] = useElementSize<HTMLDivElement>();
@@ -35,7 +38,11 @@ export function AlarmCount({ widget, data }: WidgetProps<AlarmStreamState>) {
   const color = alerting ? severityColor(worst) : css('muted-foreground');
 
   const display = loading && total === 0 ? '—' : String(total);
-  const valueFont = fitValueFont(size, display.length);
+  // Unmeasured stays {0,0} so the curve's fallback applies; a measured box never drops to 0.
+  const valueFont = fitValueFont(
+    size.height > 0 ? { width: size.width, height: Math.max(1, size.height - ALARM_COUNT_CAPTION_ROOM_PX) } : size,
+    display.length,
+  );
   const unit = total === 1 ? 'alarm' : 'alarms';
   const ariaLabel = alerting ? `${total} ${unit}, worst severity ${severityLabel(worst)}` : `${total} ${unit}`;
 
@@ -55,7 +62,17 @@ export function AlarmCount({ widget, data }: WidgetProps<AlarmStreamState>) {
           textAlign: 'center',
         }}
       >
-        <div aria-label={ariaLabel} style={{ fontSize: valueFont, fontWeight: 700, lineHeight: 1, color }}>
+        <div
+          aria-label={ariaLabel}
+          style={{
+            fontSize: valueFont,
+            fontWeight: 700,
+            lineHeight: 1,
+            whiteSpace: 'nowrap',
+            fontVariantNumeric: 'tabular-nums',
+            color,
+          }}
+        >
           {display}
         </div>
         <div

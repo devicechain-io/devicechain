@@ -13,15 +13,19 @@
 //
 // `size` is the box the text may occupy, so a caller passes its content box (the measured
 // element minus its own padding). HEIGHT_SHARE leaves room for the line's leading and for a
-// secondary line (unit, caption) beneath it. GLYPH_WIDTH is the average advance of a digit
-// as a fraction of the font size, a little generous so a wide glyph set still fits.
+// secondary line (unit, caption) beneath it. GLYPH_WIDTH is the advance of a digit as a
+// fraction of the font size. Measured: system faces (Segoe UI, Roboto, Arial bold) set a
+// digit at 0.56-0.58 em, but the console's Inter sets them at 0.61-0.62 em on average and
+// 0.67 em at the widest in the 600-700 weights a readout uses. 0.65 covers Inter's digits to
+// within a few percent (which the caller's padding absorbs) without shrinking a system-font
+// number much; a '.' or '-' counted as a full character adds slack.
 
 export const FIT_MIN_FONT_PX = 12;
 // What to use before the first measure (ElementSize is {0,0} until then) or in a non-DOM test.
 export const FIT_FALLBACK_FONT_PX = 32;
 
 const HEIGHT_SHARE = 0.6;
-const GLYPH_WIDTH = 0.6;
+const GLYPH_WIDTH = 0.65;
 
 export function fitValueFont(size: { width: number; height: number }, chars: number): number {
   if (!(size.width > 0) || !(size.height > 0)) return FIT_FALLBACK_FONT_PX;

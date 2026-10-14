@@ -79,6 +79,10 @@ export function LatestCard({ widget, data }: WidgetProps) {
             fontSize: valueFont,
             fontWeight: 600,
             lineHeight: 1.1,
+            // One line, and digits of one width: the fit counts characters, so a live value
+            // must not wrap or shift sideways as its digits change.
+            whiteSpace: 'nowrap',
+            fontVariantNumeric: 'tabular-nums',
             color: css('foreground'),
             ...flashTextStyle(flashDirection),
           }}

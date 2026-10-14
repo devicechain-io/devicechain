@@ -10,7 +10,7 @@ import type { AlarmStreamState, MeasurementStreamState } from '@devicechain/widg
 import { cleanup, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { AlarmCount } from './widgets/alarm-count';
+import { ALARM_COUNT_CAPTION_ROOM_PX, AlarmCount } from './widgets/alarm-count';
 import { ALARM_TABLE_NARROW_PX, AlarmTable } from './widgets/alarm-table';
 import { LatestCard } from './widgets/latest-card';
 
@@ -109,6 +109,14 @@ describe('alarm-count', () => {
     const { container } = render(<AlarmCount widget={widget('alarm-count')} data={alarms} />);
     expect(columnOf(container).style.justifyContent).toBe('safe center');
     expect(columnOf(container).style.overflow).toBe('hidden');
+  });
+
+  it('fits the count to the room the caption leaves in a short box', () => {
+    stubElementSize(200, 40);
+    render(<AlarmCount widget={widget('alarm-count')} data={alarms} />);
+    const font = parseInt(screen.getByText('1').style.fontSize, 10);
+    // lineHeight is 1, so the count's line is its font size; the caption sits under it.
+    expect(font + ALARM_COUNT_CAPTION_ROOM_PX).toBeLessThanOrEqual(40);
   });
 
   it('grows the count past the old 56 px cap in a large box', () => {

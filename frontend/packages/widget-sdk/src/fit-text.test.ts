@@ -55,7 +55,7 @@ describe('fitValueFont', () => {
     const box = { width: 153 - 2 - 32, height: 88 - 2 - 30 - 24 };
     const chars = 6;
     const f = fitValueFont(box, chars);
-    expect(f * 0.6 * chars).toBeLessThanOrEqual(box.width);
+    expect(f * 0.65 * chars).toBeLessThanOrEqual(box.width);
     expect(f * 1.1).toBeLessThanOrEqual(box.height + 1);
   });
 });

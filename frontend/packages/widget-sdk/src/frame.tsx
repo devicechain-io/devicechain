@@ -82,8 +82,9 @@ export function WidgetFrame({ title, subtitle, children, bodyStyle }: WidgetFram
           ) : null}
         </div>
       ) : null}
-      {/* The body clips: a widget that outgrows its slot is cut at the card edge instead of
-          painting over its neighbours. minWidth 0 lets it shrink inside the flex column. */}
+      {/* The body clips: the card root already stops a widget painting outside the card, and
+          this stops one that outgrows its slot painting up over the title bar. minWidth 0
+          lets it shrink inside the flex column. */}
       <div data-widget-body="" style={{ flex: 1, minHeight: 0, minWidth: 0, overflow: 'hidden', ...bodyStyle }}>
         {children}
       </div>
