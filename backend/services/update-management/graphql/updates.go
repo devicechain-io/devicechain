@@ -28,7 +28,7 @@ func (r *SchemaResolver) UpdateAssignment(ctx context.Context, args struct{ Toke
 	if err != nil || v == nil {
 		return nil, err
 	}
-	return &UpdateAssignmentResolver{M: *v}, nil
+	return &UpdateAssignmentResolver{api: api, M: *v}, nil
 }
 
 // UpdateAssignments searches update assignments.
@@ -58,7 +58,7 @@ func (r *SchemaResolver) UpdateAssignments(ctx context.Context, args struct {
 	if err != nil {
 		return nil, err
 	}
-	return &UpdateAssignmentSearchResultsResolver{M: *found}, nil
+	return &UpdateAssignmentSearchResultsResolver{api: api, M: *found}, nil
 }
 
 // AssignArtifact tells a device to install an artifact.
@@ -77,7 +77,7 @@ func (r *SchemaResolver) AssignArtifact(ctx context.Context, args struct {
 	if err != nil {
 		return nil, err
 	}
-	return &UpdateAssignmentResolver{M: *v}, nil
+	return &UpdateAssignmentResolver{api: api, M: *v}, nil
 }
 
 // CancelUpdate cancels an update.
@@ -93,7 +93,7 @@ func (r *SchemaResolver) CancelUpdate(ctx context.Context, args struct{ Assignme
 	if err != nil {
 		return nil, err
 	}
-	return &UpdateAssignmentResolver{M: *v}, nil
+	return &UpdateAssignmentResolver{api: api, M: *v}, nil
 }
 
 // AbandonUnknownUpdate ends an UNKNOWN update on an operator decision.
@@ -112,11 +112,14 @@ func (r *SchemaResolver) AbandonUnknownUpdate(ctx context.Context, args struct {
 	if err != nil {
 		return nil, err
 	}
-	return &UpdateAssignmentResolver{M: *v}, nil
+	return &UpdateAssignmentResolver{api: api, M: *v}, nil
 }
 
 // UpdateAssignmentResolver resolves the fields of one update assignment.
-type UpdateAssignmentResolver struct{ M model.UpdateAssignmentView }
+type UpdateAssignmentResolver struct {
+	api *model.Api
+	M   model.UpdateAssignmentView
+}
 
 func (r *UpdateAssignmentResolver) Id() gql.ID { return gql.ID(fmt.Sprint(r.M.Assignment.ID)) }
 func (r *UpdateAssignmentResolver) CreatedAt() *string {
@@ -128,7 +131,7 @@ func (r *UpdateAssignmentResolver) DeviceToken() string {
 }
 func (r *UpdateAssignmentResolver) Component() string { return r.M.Assignment.Component }
 func (r *UpdateAssignmentResolver) Artifact() *ArtifactResolver {
-	return &ArtifactResolver{M: r.M.Artifact}
+	return newArtifactResolver(r.api, r.M.Artifact)
 }
 func (r *UpdateAssignmentResolver) Actor() *string {
 	if r.M.Assignment.Actor == "" {
@@ -206,12 +209,15 @@ func (r *updateFailureResolver) Detail() string { return r.m.FailureDetail }
 func (r *updateFailureResolver) Platform() bool { return r.m.FailurePlatform }
 
 // UpdateAssignmentSearchResultsResolver resolves a page of update assignments.
-type UpdateAssignmentSearchResultsResolver struct{ M model.UpdateAssignmentResults }
+type UpdateAssignmentSearchResultsResolver struct {
+	api *model.Api
+	M   model.UpdateAssignmentResults
+}
 
 func (r *UpdateAssignmentSearchResultsResolver) Results() []*UpdateAssignmentResolver {
 	out := make([]*UpdateAssignmentResolver, 0, len(r.M.Results))
 	for _, v := range r.M.Results {
-		out = append(out, &UpdateAssignmentResolver{M: v})
+		out = append(out, &UpdateAssignmentResolver{api: r.api, M: v})
 	}
 	return out
 }

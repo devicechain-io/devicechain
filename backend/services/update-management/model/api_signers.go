@@ -15,6 +15,7 @@ import (
 	"encoding/hex"
 	"encoding/pem"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -371,4 +372,54 @@ func (api *Api) SoleSignedArtifactCount(ctx context.Context, s *ArtifactSigner) 
 	err = api.RDB.DB(ctx).Model(&ArtifactSignature{}).
 		Where("signer_id = ? AND artifact_id NOT IN (?)", s.ID, others).Count(&n).Error
 	return n, err
+}
+
+// SignatureView is one signature on record with the signer that made it.
+type SignatureView struct {
+	Signature ArtifactSignature
+	Signer    ArtifactSigner
+}
+
+// CountsTowardTrust reports whether the signature currently vouches for its artifact: its signer
+// is ACTIVE. A revoked signer's signatures stay on record and stop counting.
+func (v SignatureView) CountsTowardTrust() bool { return v.Signer.State == SignerActive }
+
+// SignaturesOf returns the signatures on the given artifacts, grouped by artifact id, oldest
+// first, with their signers. It issues two queries however many artifacts there are, both through
+// the tenant-scoped handle, so another tenant's rows are never returned.
+func (api *Api) SignaturesOf(ctx context.Context, artifactIDs ...uint) (map[uint][]SignatureView, error) {
+	out := make(map[uint][]SignatureView, len(artifactIDs))
+	if len(artifactIDs) == 0 {
+		return out, nil
+	}
+	var sigs []ArtifactSignature
+	if err := api.RDB.DB(ctx).Where("artifact_id IN ?", artifactIDs).
+		Order("created_at ASC, id ASC").Find(&sigs).Error; err != nil {
+		return nil, err
+	}
+	if len(sigs) == 0 {
+		return out, nil
+	}
+	signerIDs := make([]uint, 0, len(sigs))
+	for _, sg := range sigs {
+		signerIDs = append(signerIDs, sg.SignerId)
+	}
+	var signers []ArtifactSigner
+	if err := api.RDB.DB(ctx).Where("id IN ?", signerIDs).Find(&signers).Error; err != nil {
+		return nil, err
+	}
+	byID := make(map[uint]ArtifactSigner, len(signers))
+	for _, sn := range signers {
+		byID[sn.ID] = sn
+	}
+	for _, sg := range sigs {
+		sn, ok := byID[sg.SignerId]
+		if !ok {
+			// A signature whose signer cannot be read is an error, not a signature that
+			// quietly does not count.
+			return nil, fmt.Errorf("signature %d refers to a signer that cannot be read", sg.ID)
+		}
+		out[sg.ArtifactId] = append(out[sg.ArtifactId], SignatureView{Signature: sg, Signer: sn})
+	}
+	return out, nil
 }
