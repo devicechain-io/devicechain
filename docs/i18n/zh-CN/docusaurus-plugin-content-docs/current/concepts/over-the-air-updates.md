@@ -96,7 +96,7 @@ title: 空中（OTA）更新
 
 签名者就是一个公钥。`registerArtifactSigner(name, publicKeyPem)` 接收一个包含 ECDSA P-256 或 Ed25519 公钥的 SPKI `PUBLIC KEY` PEM 块；其他密钥类型和曲线会被拒绝。只注册公钥这一半：平台从不需要私钥，收到私钥会被拒绝（`SIGNER_KEY_REFUSED`），并且不会回显、不会写入日志、也不会保存。签名者的 `keyId` 是密钥 DER 编码的 SHA-256 小写十六进制，同一个密钥在一个租户内只能注册一次。
 
-你用自己保管的私钥对制品的 **SHA-256 摘要**签名，对象是 32 个原始字节，而不是十六进制文本：ECDSA P-256 生成摘要的 ASN.1 DER 签名，Ed25519 则对这 32 个摘要字节签名。`addArtifactSignature(artifactToken, signerToken, signature)` 接收标准 base64 编码的签名，并用平台在声明制品时保存的摘要来校验。无法通过校验的签名会被拒绝（`SIGNATURE_INVALID`），因此针对其他字节生成的签名无法附加；已吊销的签名者会被拒绝（`SIGNER_REVOKED`）。同一签名者重复签名不会产生任何变化。签名只覆盖摘要：它不说明镜像对应哪个版本或部件，所以以另一个版本声明的同一镜像，同样由这个签名担保。
+你用自己保管的私钥对制品的 **SHA-256 摘要**签名，对象是 32 个原始字节，而不是十六进制文本：ECDSA P-256 生成摘要的 ASN.1 DER 签名，Ed25519 则对这 32 个摘要字节签名。`addArtifactSignature(artifactToken, signerToken, signature)` 接收标准 base64 编码的签名，并用平台在声明制品时保存的摘要来校验。无法通过校验的签名会被拒绝（`SIGNATURE_INVALID`），因此针对其他字节生成的签名无法附加；已吊销的签名者会被拒绝（`SIGNER_REVOKED`）。同一签名者重复签名不会产生任何变化。签名只覆盖摘要：它不说明镜像对应哪个版本、部件或兼容的配置文件，所以以另一个版本声明的同一镜像，同样由这个签名担保。
 
 `revokeArtifactSigner(token)` 不可撤销。该签名者的签名仍保留在记录中，但不再计入，因此仅由它担保的制品会立即变为 `UNVERIFIED`，不能再被分配（除非开启了 `allowUnverifiedArtifacts`）；不会改写任何制品。签名者的 `soleSignedArtifactCount` 会预先告诉你这会影响多少制品。已经做出的分配不会被收回。
 

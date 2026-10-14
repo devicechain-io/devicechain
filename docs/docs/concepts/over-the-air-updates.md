@@ -163,8 +163,8 @@ bytes. `addArtifactSignature(artifactToken, signerToken, signature)` takes the s
 base64 and checks it against the digest the platform stored when the artifact was declared. A signature
 that does not verify is refused (`SIGNATURE_INVALID`), so a signature made over other bytes cannot be
 attached, and a revoked signer is refused (`SIGNER_REVOKED`). Signing again with the same signer changes
-nothing. The signature covers the digest only: it does not say which version or component the image is
-for, so the same image declared under another version is vouched for by the same signature.
+nothing. The signature covers the digest only: it does not say which version, component or compatible profiles the
+image is for, so the same image declared under another version is vouched for by the same signature.
 
 `revokeArtifactSigner(token)` is final. The signer's signatures stay on record but stop counting, so
 every artifact it alone vouched for reads `UNVERIFIED` straight away and can no longer be assigned

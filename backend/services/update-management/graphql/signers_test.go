@@ -168,3 +168,39 @@ func TestServiceInfoReportsTheArtifactCeiling(t *testing.T) {
 	require.Empty(t, resp.Errors)
 	require.JSONEq(t, `{"updateManagementInfo":{"maxArtifactBytes":"1073741824"}}`, string(resp.Data))
 }
+
+// F2: an artifact reached through an assignment carries its derived trust, on both the list path
+// and the single-assignment path.
+func TestAssignmentsCarryTheArtifactsDerivedTrust(t *testing.T) {
+	p, _ := updatePlane(t, true)
+	content := []byte("image")
+	p.available("fw-1", content)
+	writer := p.ctx("acme", auth.ArtifactRead, auth.ArtifactWrite)
+	trust := p.ctx("acme", auth.ArtifactTrust)
+
+	k, pub := newKey(t)
+	resp := p.exec(trust, registerSigner, map[string]any{"n": "release", "k": pub})
+	require.Empty(t, resp.Errors)
+	var reg struct{ RegisterArtifactSigner struct{ Token string } }
+	require.NoError(t, json.Unmarshal(resp.Data, &reg))
+	require.Empty(t, p.exec(writer, addSignature,
+		map[string]any{"a": "fw-1", "s": reg.RegisterArtifactSigner.Token, "sig": signContent(t, k, content)}).Errors)
+
+	resp = p.exec(writer, assignMutation, map[string]any{"d": "dev-1", "a": "fw-1"})
+	require.Empty(t, resp.Errors)
+	var got struct{ AssignArtifact struct{ Token string } }
+	require.NoError(t, json.Unmarshal(resp.Data, &got))
+
+	resp = p.exec(writer, `{ updateAssignments(criteria:{pageNumber:0,pageSize:5}){ results { artifact { trustStatus } } } }`, nil)
+	require.Empty(t, resp.Errors)
+	require.JSONEq(t, `{"updateAssignments":{"results":[{"artifact":{"trustStatus":"SIGNED"}}]}}`, string(resp.Data))
+
+	resp = p.exec(writer, `mutation($t: String!) { cancelUpdate(assignmentToken: $t) { artifact { trustStatus } } }`,
+		map[string]any{"t": got.AssignArtifact.Token})
+	require.Empty(t, resp.Errors)
+	require.JSONEq(t, `{"cancelUpdate":{"artifact":{"trustStatus":"SIGNED"}}}`, string(resp.Data))
+
+	resp = p.exec(writer, `query($t: String!) { updateAssignment(token: $t) { artifact { trustStatus } } }`,
+		map[string]any{"t": got.AssignArtifact.Token})
+	require.JSONEq(t, `{"updateAssignment":{"artifact":{"trustStatus":"SIGNED"}}}`, string(resp.Data))
+}

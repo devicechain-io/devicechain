@@ -169,7 +169,7 @@ que conservas tú: ECDSA P-256 produce una firma ASN.1 DER del digest, y Ed25519
 contra el digest que la plataforma guardó al declarar el artefacto. Una firma que no se verifica se rechaza
 (`SIGNATURE_INVALID`), de modo que no se puede adjuntar una firma hecha sobre otros bytes, y un firmante
 revocado se rechaza (`SIGNER_REVOKED`). Volver a firmar con el mismo firmante no cambia nada. La firma cubre
-solo el digest: no indica para qué versión o componente es la imagen, así que la misma imagen declarada con otra
+solo el digest: no indica para qué versión, componente o perfiles compatibles es la imagen, así que la misma imagen declarada con otra
 versión queda avalada por la misma firma.
 
 `revokeArtifactSigner(token)` es definitivo. Las firmas del firmante siguen registradas pero dejan de contar,

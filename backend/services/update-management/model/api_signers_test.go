@@ -449,3 +449,88 @@ func TestSignerNameAndStoredKeyAreBounded(t *testing.T) {
 	_, err = env.api.RegisterSigner(tenantCtx("acme"), "k", strings.Repeat("A", maxPEMBytes+1))
 	requireRefusal(t, err, CodeInvalidSigner)
 }
+
+// F1: revocation does not free the key. A revoked signer still holds its (tenant, key) slot, so
+// the same key cannot be registered again as a fresh ACTIVE signer.
+func TestARevokedKeyCannotBeRegisteredAgain(t *testing.T) {
+	env := newTestEnv(t)
+	ctx := tenantCtx("acme")
+	kp := newP256(t)
+	s := env.register(t, "acme", "k", kp)
+	_, err := env.api.RevokeSigner(ctx, s.Token)
+	require.NoError(t, err)
+
+	_, err = env.api.RegisterSigner(ctx, "k again", kp.pem)
+	requireRefusal(t, err, CodeSignerExists)
+
+	var rows []ArtifactSigner
+	require.NoError(t, env.api.RDB.DB(ctx).Find(&rows).Error)
+	require.Len(t, rows, 1)
+	require.Equal(t, SignerRevoked, rows[0].State)
+}
+
+// F3: forged signature rows - written straight into the table, as a bug or a bad restore might -
+// never make another tenant's artifact SIGNED, in the read or in the trustStatus filter.
+func TestForgedCrossTenantSignatureRowsDoNotSignAnArtifact(t *testing.T) {
+	env := newTestEnv(t)
+	ctx := tenantCtx("acme")
+	content := []byte("img")
+	art := env.declare(t, "acme", "fw-1", content)
+	acmeSigner := env.register(t, "acme", "a", newP256(t))
+	globexSigner := env.register(t, "globex", "g", newEd25519(t))
+	db := env.api.RDB.Database
+
+	insert := func(tenant string, signerID uint) {
+		require.NoError(t, db.Exec(`INSERT INTO artifact_signatures (tenant_id, artifact_id, signer_id, signature)
+			VALUES (?, ?, ?, x'01')`, tenant, art.ID, signerID).Error)
+	}
+	check := func(what string) {
+		require.Equal(t, TrustUnverified, env.trustOf(t, "acme", "fw-1"), what)
+		signed := TrustSigned
+		res, err := env.api.Artifacts(ctx, ArtifactSearchCriteria{Pagination: rdb.Pagination{PageSize: 10}, TrustStatus: &signed})
+		require.NoError(t, err)
+		require.Empty(t, res.Results, what+" (filter)")
+		unv := TrustUnverified
+		res, err = env.api.Artifacts(ctx, ArtifactSearchCriteria{Pagination: rdb.Pagination{PageSize: 10}, TrustStatus: &unv})
+		require.NoError(t, err)
+		require.Len(t, res.Results, 1, what+" (filter)")
+	}
+
+	// A row stamped with another tenant, naming this tenant's artifact, by that tenant's active signer.
+	insert("globex", globexSigner.ID)
+	check("globex-stamped signature")
+	require.NoError(t, db.Exec(`DELETE FROM artifact_signatures`).Error)
+
+	// A row stamped with this tenant but by another tenant's active signer.
+	insert("acme", globexSigner.ID)
+	check("signature by another tenant's signer")
+	require.NoError(t, db.Exec(`DELETE FROM artifact_signatures`).Error)
+
+	// A row stamped with another tenant that names this tenant's own active signer.
+	insert("globex", acmeSigner.ID)
+	check("globex-stamped signature by an acme signer")
+	require.NoError(t, db.Exec(`DELETE FROM artifact_signatures`).Error)
+
+	// Control: the same shape with this tenant's own active signer does count.
+	insert("acme", acmeSigner.ID)
+	require.Equal(t, TrustSigned, env.trustOf(t, "acme", "fw-1"))
+}
+
+// The artifact a download resolves to carries its derived trust, like every other read path.
+func TestTheDownloadTargetCarriesDerivedTrust(t *testing.T) {
+	e := newUpdateEnv(t)
+	content := []byte("firmware one")
+	e.availableArtifact(t, "acme", "fw-1", "1.0.0", content)
+	ctx := tenantCtx("acme")
+	kp := newP256(t)
+	s := e.register(t, "acme", "k", kp)
+	_, err := e.api.AddSignature(ctx, "fw-1", s.Token, b64(kp.sign(rawDigest(content))))
+	require.NoError(t, err)
+	v, err := e.api.AssignArtifact(ctx, "dev-1", "fw-1")
+	require.NoError(t, err)
+	c := &Capability{Tenant: "acme", DeviceToken: "dev-1", AssignmentID: v.Assignment.Token,
+		Digest: v.Attempt.TargetDigest, ArtifactTok: "fw-1", Expires: e.clock.Add(1e9)}
+	target, err := e.api.ResolveDownload(ctx, c)
+	require.NoError(t, err)
+	require.Equal(t, TrustSigned, target.Artifact.Trust)
+}
