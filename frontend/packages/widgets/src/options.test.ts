@@ -80,6 +80,8 @@ const SHARED_SOURCES = [
   'connected-widget.tsx',
   '../../widget-sdk/src/widget-options.ts',
   '../../dashboards/src/slots.ts',
+  // lintLayout reads every widget's title to catch one repeating the subject line.
+  '../../dashboards/src/layout-lint.ts',
 ];
 
 // Which types each shared read actually applies to. A shared file cannot say this itself —

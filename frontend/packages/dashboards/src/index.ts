@@ -288,3 +288,16 @@ export {
   unresolvedWidgets,
   type UnresolvedWidgetReport,
 } from './widget-compat';
+
+// The layout lint: placement against what each widget can show. Widget knowledge (span
+// limits, the temporary pixel floor) is injected, so this package stays free of `widgets`.
+export {
+  lintLayout,
+  type LayoutFinding,
+  type LayoutLintCode,
+  type LayoutLintOptions,
+  type LayoutLintSeverity,
+  type PixelSize,
+  type Span,
+  type SpanLimits,
+} from './layout-lint';
