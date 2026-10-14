@@ -58,8 +58,43 @@ function artifact(over: Record<string, unknown> = {}) {
     trustStatus: 'UNVERIFIED',
     provenance: '{"source":"ci-build-42"}',
     state: 'AVAILABLE',
+    signatures: [],
     ...over,
   };
+}
+
+function signature(over: Record<string, unknown> = {}) {
+  return {
+    id: 'sig-1',
+    createdAt: '2026-10-02T09:30:00Z',
+    createdBy: 'alice',
+    countsTowardTrust: true,
+    signer: {
+      id: 's1',
+      token: 'release-key',
+      name: 'Release key',
+      keyId: KEY_ID,
+      algorithm: 'ED25519',
+      state: 'ACTIVE',
+    },
+    ...over,
+  };
+}
+
+function revokedSignature() {
+  return signature({
+    id: 'sig-2',
+    createdBy: 'bob',
+    countsTowardTrust: false,
+    signer: {
+      id: 's2',
+      token: 'old-key',
+      name: 'Old key',
+      keyId: REVOKED_KEY_ID,
+      state: 'REVOKED',
+      algorithm: 'ED25519',
+    },
+  });
 }
 
 function signer(over: Record<string, unknown> = {}) {
@@ -124,7 +159,11 @@ beforeEach(() => {
     if (doc.includes('mutation AddArtifactSignature')) {
       world.signed.push(variables);
       if (world.signError) return Promise.reject(world.signError);
-      world.artifact = { ...world.artifact, trustStatus: 'SIGNED' };
+      world.artifact = {
+        ...world.artifact,
+        trustStatus: 'SIGNED',
+        signatures: [...((world.artifact?.signatures as unknown[]) ?? []), signature({ id: 'sig-new', createdBy: 'carol' })],
+      };
       return Promise.resolve({ addArtifactSignature: world.artifact });
     }
     if (doc.includes('query ArtifactSigners')) {
@@ -222,13 +261,51 @@ describe('ArtifactDetailPage trust and the unverified notice', () => {
     expect(screen.queryByTestId('unverified-notice')).toBeNull();
   });
 
-  it('lists the registered signers with their state, and says the per-artifact list is not available', async () => {
+  it("lists the artifact's signatures and says which still count toward trust", async () => {
+    world.artifact = artifact({ trustStatus: 'SIGNED', signatures: [signature(), revokedSignature()] });
     renderPage();
-    expect(await screen.findByText('Release key')).toBeTruthy();
-    expect(screen.getByText('Old key')).toBeTruthy();
-    expect(screen.getByText('Active')).toBeTruthy();
-    expect(screen.getByText('Revoked')).toBeTruthy();
-    expect(screen.getByText(/does not list an artifact's individual signatures/)).toBeTruthy();
+    const rows = await screen.findAllByTestId('signature-row');
+    expect(rows).toHaveLength(2);
+    expect(rows[0].textContent).toContain('Release key');
+    expect(rows[0].textContent).toContain('alice');
+    expect(rows[0].textContent).toContain('Active');
+    expect(rows[0].textContent).toContain('Counts toward trust');
+    expect(rows[0].textContent).not.toContain('No longer counts');
+    expect(rows[1].textContent).toContain('Old key');
+    expect(rows[1].textContent).toContain('bob');
+    expect(rows[1].textContent).toContain('Revoked');
+    expect(rows[1].textContent).toContain('No longer counts');
+    expect(rows[1].textContent).not.toContain('Counts toward trust');
+    // The old note and the registry listing are gone.
+    expect(screen.queryByText(/does not list an artifact's individual signatures/)).toBeNull();
+  });
+
+  it('says so when the artifact has no signatures, and does not list unrelated registered signers', async () => {
+    renderPage();
+    expect(await screen.findByText(/No signatures are recorded for this artifact/)).toBeTruthy();
+    expect(screen.queryByTestId('signature-row')).toBeNull();
+    expect(screen.queryByText('Release key')).toBeNull();
+  });
+
+  it('shows a field error as an error, never as an empty list', async () => {
+    world.artifactError = new Error('signer for signature sig-1 could not be read');
+    renderPage();
+    expect(await screen.findByText('Failed to load data.')).toBeTruthy();
+    expect(screen.queryByText(/No signatures are recorded/)).toBeNull();
+  });
+
+  it('flags a failed re-read instead of passing the stale list off as current', async () => {
+    authorities.value = ['artifact:read', 'artifact:write'];
+    world.artifact = artifact({ signatures: [signature()] });
+    renderPage();
+    await screen.findAllByTestId('signature-row');
+    world.artifactError = new Error('signer unreadable');
+    world.signError = null;
+    fireEvent.change(screen.getByLabelText('Signer key ID'), { target: { value: KEY_ID } });
+    fireEvent.change(screen.getByLabelText('Signature (base64)'), { target: { value: 'QUJD' } });
+    await screen.findByText(/Signer: Release key/);
+    fireEvent.click(screen.getByRole('button', { name: /Add signature/ }));
+    expect(await screen.findByTestId('signatures-refresh-error')).toBeTruthy();
   });
 });
 
@@ -312,7 +389,7 @@ describe('ArtifactDetailPage add signature', () => {
   async function openForm() {
     renderPage();
     await screen.findByText('sensor-fw 1.2.0');
-    await screen.findAllByText('Release key');
+    await screen.findByTestId('add-signature-form');
   }
   const keyField = () => screen.getByLabelText('Signer key ID');
   const sigField = () => screen.getByLabelText('Signature (base64)');
@@ -333,6 +410,21 @@ describe('ArtifactDetailPage add signature', () => {
     );
     // The new trust comes back with the mutation and is reported.
     await waitFor(() => expect(toastMock).toHaveBeenCalledWith('Signature added. Trust is now Signed.'));
+  });
+
+  it('re-reads the artifact after an add so the new signature appears', async () => {
+    await openForm();
+    expect(screen.queryByTestId('signature-row')).toBeNull();
+    const reads = () => gqlMock.mock.calls.filter((c) => String(c[1]).includes('query Artifact(')).length;
+    const before = reads();
+    fireEvent.change(keyField(), { target: { value: KEY_ID } });
+    fireEvent.change(sigField(), { target: { value: 'QUJD' } });
+    await screen.findByText(/Signer: Release key/);
+    fireEvent.click(submit());
+    const rows = await screen.findAllByTestId('signature-row');
+    expect(rows).toHaveLength(1);
+    expect(rows[0].textContent).toContain('carol');
+    expect(reads()).toBeGreaterThan(before);
   });
 
   it('refuses to send for a key ID no registered signer has', async () => {

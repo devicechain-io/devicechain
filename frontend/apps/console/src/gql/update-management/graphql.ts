@@ -174,7 +174,7 @@ export type ArtifactQueryVariables = Exact<{
 }>;
 
 
-export type ArtifactQuery = { artifact: { id: string, createdAt: string | null, updatedAt: string | null, token: string, kind: ArtifactKind, name: string, version: string, component: string, sizeBytes: string, digest: string, mediaType: string, compatibleProfiles: Array<string>, trustStatus: ArtifactTrustStatus, provenance: string | null, state: ArtifactState } | null };
+export type ArtifactQuery = { artifact: { id: string, createdAt: string | null, updatedAt: string | null, token: string, kind: ArtifactKind, name: string, version: string, component: string, sizeBytes: string, digest: string, mediaType: string, compatibleProfiles: Array<string>, trustStatus: ArtifactTrustStatus, provenance: string | null, state: ArtifactState, signatures: Array<{ id: string, createdAt: string | null, createdBy: string | null, countsTowardTrust: boolean, signer: { id: string, token: string, name: string, keyId: string, algorithm: SignerAlgorithm, state: SignerState } }> } | null };
 
 export type CreateArtifactMutationVariables = Exact<{
   request: ArtifactCreateRequest;
@@ -403,6 +403,20 @@ export const ArtifactDocument = new TypedDocumentString(`
     trustStatus
     provenance
     state
+    signatures {
+      id
+      createdAt
+      createdBy
+      countsTowardTrust
+      signer {
+        id
+        token
+        name
+        keyId
+        algorithm
+        state
+      }
+    }
   }
 }
     `) as unknown as TypedDocumentString<ArtifactQuery, ArtifactQueryVariables>;
