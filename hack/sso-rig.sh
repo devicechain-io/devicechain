@@ -80,6 +80,11 @@ bad_email="mallory@evil.example"
 
 rig_tmp="$(mktemp -d "${TMPDIR:-/tmp}/dc-sso-rig.XXXXXX")"
 pf_pid_file="$rig_tmp/pf.pid"
+# How curl trusts Dex: the rig CA, and verification otherwise unchanged. --ssl-no-revoke is
+# for the Schannel curl of a Windows git-bash, which asks for revocation status that the rig
+# CA (no CRL, no OCSP) cannot give and refuses with CERT_TRUST_REVOCATION_STATUS_UNKNOWN; an
+# OpenSSL curl, which checks no revocation by default, accepts and ignores it.
+dex_tls=(--cacert "$rig_tmp/ca.crt" --ssl-no-revoke)
 trap 'stop_forward; rm -rf "$rig_tmp"' EXIT
 
 say() { printf '\n\033[1;36m==> %s\033[0m\n' "$*"; }
@@ -157,22 +162,35 @@ sso_outcome_total() {
 
 forward_dex() {
   [[ -s "$pf_pid_file" ]] && kill -0 "$(cat "$pf_pid_file")" 2>/dev/null && return 0
-  k -n "$dex_ns" port-forward svc/dex "$dex_port:$dex_port" >"$rig_tmp/pf.log" 2>&1 &
+  # kubectl itself, not the k function: backgrounding a function forks a subshell, so $!
+  # would name the subshell and stop_forward would leave the real port-forward running.
+  kubectl --context "$kube_context" -n "$dex_ns" port-forward svc/dex "$dex_port:$dex_port" >"$rig_tmp/pf.log" 2>&1 &
   echo $! >"$pf_pid_file"
   for _ in $(seq 1 30); do
-    if curl -s --cacert "$rig_tmp/ca.crt" --resolve "$dex_host:$dex_port:127.0.0.1" \
+    if curl -s "${dex_tls[@]}" --resolve "$dex_host:$dex_port:127.0.0.1" \
       -o /dev/null "https://$dex_host:$dex_port/dex/.well-known/openid-configuration"; then
       return 0
     fi
     sleep 1
   done
-  fail "the Dex port-forward never answered (see $rig_tmp/pf.log)"
+  # The scratch directory is removed on exit, so say what the log and a last probe said now.
+  fail "the Dex port-forward never answered. kubectl said: $(tail -n 5 "$rig_tmp/pf.log" 2>/dev/null)
+curl said: $(curl -sS "${dex_tls[@]}" --resolve "$dex_host:$dex_port:127.0.0.1" -o /dev/null \
+    "https://$dex_host:$dex_port/dex/.well-known/openid-configuration" 2>&1 | head -n 1)"
 }
 
 stop_forward() {
-  if [[ -s "$pf_pid_file" ]]; then
-    kill "$(cat "$pf_pid_file")" 2>/dev/null || true
+  [[ -s "$pf_pid_file" ]] || return 0
+  local pid winpid
+  pid="$(cat "$pf_pid_file")"
+  # On a Windows git-bash, kubectl is often a launcher shim that starts the real kubectl as a
+  # child, and `kill` ends only the shim, leaving the real port-forward holding the port. End
+  # the whole Windows process tree instead.
+  if [[ -r "/proc/$pid/winpid" ]] && command -v taskkill >/dev/null 2>&1; then
+    winpid="$(cat "/proc/$pid/winpid")"
+    MSYS_NO_PATHCONV=1 taskkill /F /T /PID "$winpid" >/dev/null 2>&1 || true
   fi
+  kill "$pid" 2>/dev/null || true
 }
 
 # ---------------------------------------------------------------------------
@@ -182,7 +200,10 @@ stop_forward() {
 # gql <url> <token|-> <query> <variables-json> prints .data on success; on a GraphQL
 # error prints the errors to stderr and returns 1.
 gql() {
-  local url="$1" token="$2" query="$3" vars="${4:-\{\}}" body resp
+  # The default is assigned apart: inside double quotes "${4:-\{\}}" keeps the first
+  # backslash, so a call with no variables sent the invalid JSON `\{}`.
+  local url="$1" token="$2" query="$3" vars="${4:-}" body resp
+  [[ -n "$vars" ]] || vars='{}'
   body="$(jq -n --arg q "$query" --argjson v "$vars" '{query: $q, variables: $v}')"
   if [[ "$token" == "-" ]]; then
     resp="$(curl -s -X POST "$url" -H 'Content-Type: application/json' -d "$body")"
@@ -232,7 +253,7 @@ adm_tolerate_exists() {
 
 location_of() { tr -d '\r' | sed -n 's/^[Ll]ocation: //p'; }
 
-dexcurl() { curl -s -i --cacert "$rig_tmp/ca.crt" --resolve "$dex_host:$dex_port:127.0.0.1" "$@"; }
+dexcurl() { curl -s -i "${dex_tls[@]}" --resolve "$dex_host:$dex_port:127.0.0.1" "$@"; }
 
 pkce_challenge() {
   printf '%s' "$1" | openssl dgst -sha256 -binary | openssl base64 -A | tr '+/' '-_' | tr -d '='
