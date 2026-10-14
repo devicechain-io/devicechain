@@ -727,6 +727,29 @@ type CommandBatchSearchResults {
     pagination: SearchResultsPagination!
 }
 
+"""
+What the platform is holding for one device because it is disabled.
+"""
+# A disabled device is cut off from the platform, and commands already queued for it are neither
+# sent nor cancelled: they are held until the device is enabled again (then they go out, oldest
+# first) or until their own expiry lapses them. This is the operator's view of that hold.
+type DeviceCommandHold {
+    """True while the platform has the device recorded as disabled."""
+    disabled: Boolean!
+    """
+    How many commands are held on the device's account: every command it still has that has not
+    been sent (queued, held or parked). Zero for an enabled device, whatever its backlog, because
+    nothing is held on its account then. This is exactly the set `cancelDeviceCommands` cancels.
+    """
+    heldCount: Int!
+}
+
+"""What `cancelDeviceCommands` did."""
+type CancelDeviceCommandsResult {
+    """Commands the platform still held for the device and has now cancelled."""
+    cancelled: Int!
+}
+
 type Query {
     """
     Returns the commands with the given ids, in no particular order. Ids that match nothing are
@@ -746,6 +769,16 @@ type Query {
         """Tokens of the commands. More than 1000 is refused with LIMIT_EXCEEDED."""
         tokens: [String!]!
     ): [Command!]!
+    """
+    Reports whether a device is disabled and how many commands are held for it (see
+    DeviceCommandHold). Answers for any device token: an unknown or enabled device reports
+    `disabled: false, heldCount: 0`. Requires command:read.
+    """
+    # The console's "N commands held while this device is disabled" banner reads this.
+    deviceCommandHold(
+        """Token of the device."""
+        deviceToken: String!
+    ): DeviceCommandHold!
     """Searches the tenant's commands, newest first, one page at a time. Requires command:read."""
     # List all commands that match the given criteria.
     commands(
@@ -876,6 +909,16 @@ type Mutation {
         """Token of the command to cancel."""
         token: String!
     ): Command!
+    """
+    Cancels every command the platform still holds for one device (QUEUED, HELD or PARKED) and
+    reports how many. Commands already sent cannot be recalled and are not touched. It is
+    `cancelCommand` over a device, and the way to discard what a disabled device was holding.
+    Requires command:write.
+    """
+    cancelDeviceCommands(
+        """Token of the device."""
+        deviceToken: String!
+    ): CancelDeviceCommandsResult!
     """
     Calls off a fleet write: stops every command of the batch the platform still holds (QUEUED,
     HELD or PARKED) and reports what it did. Commands already sent cannot be recalled. An

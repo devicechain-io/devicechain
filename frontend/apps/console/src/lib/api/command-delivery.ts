@@ -14,6 +14,8 @@ import type {
   CommandBatchCreateRequest,
   CreateCommandBatchMutation,
   CancelCommandBatchMutation,
+  DeviceCommandHoldQuery,
+  CancelDeviceCommandsMutation,
 } from '@/gql/command-delivery/graphql';
 
 // Public types are derived from the generated operation results so they always
@@ -43,6 +45,10 @@ export type CreateCommandBatchResult = CreateCommandBatchMutation['createCommand
 export type CreatedCommandBatch = NonNullable<CreateCommandBatchResult['batch']>;
 export type CommandBatchRejection = NonNullable<CreateCommandBatchResult['rejection']>;
 export type { CommandBatchCreateRequest };
+
+// What the platform is holding for one device because it is disabled.
+export type DeviceCommandHold = DeviceCommandHoldQuery['deviceCommandHold'];
+export type CancelDeviceCommandsResult = CancelDeviceCommandsMutation['cancelDeviceCommands'];
 
 // What cancelling a fleet write was able to do — four counts that DELIBERATELY NEED NOT
 // SUM. See cancelCommandBatch below, and `cancelOutcome.ts` for the rules that read them.
@@ -225,6 +231,37 @@ const CANCEL_COMMAND_BATCH = graphql(`
     }
   }
 `);
+
+// A disabled device is cut off, and the commands already queued for it are neither sent nor
+// cancelled: they are held until it is enabled again (then they go out) or until their own
+// expiry lapses them. `heldCount` is every command the device still has that has not been
+// sent, and is zero for an enabled device whatever its backlog. Requires command:read.
+const DEVICE_COMMAND_HOLD = graphql(`
+  query DeviceCommandHold($deviceToken: String!) {
+    deviceCommandHold(deviceToken: $deviceToken) {
+      disabled
+      heldCount
+    }
+  }
+`);
+
+// Cancels every command the platform still holds for the device (QUEUED, HELD or PARKED);
+// commands already sent cannot be recalled and are not touched. Requires command:write.
+const CANCEL_DEVICE_COMMANDS = graphql(`
+  mutation CancelDeviceCommands($deviceToken: String!) {
+    cancelDeviceCommands(deviceToken: $deviceToken) {
+      cancelled
+    }
+  }
+`);
+
+export async function getDeviceCommandHold(deviceToken: string): Promise<DeviceCommandHold> {
+  return (await gql('command-delivery', DEVICE_COMMAND_HOLD, { deviceToken })).deviceCommandHold;
+}
+
+export async function cancelDeviceCommands(deviceToken: string): Promise<CancelDeviceCommandsResult> {
+  return (await gql('command-delivery', CANCEL_DEVICE_COMMANDS, { deviceToken })).cancelDeviceCommands;
+}
 
 // List the commands issued to a device, newest first (server default), paged.
 // Requires the command:read authority.

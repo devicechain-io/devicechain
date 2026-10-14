@@ -205,3 +205,11 @@ func canonicalNumber(num string) string {
 	}
 	return "n:" + r.RatString()
 }
+
+// DisabledDevicePage is one keyset page of the tokens of the devices an operator has disabled.
+// NextCursor is the last device id the page scanned when it scanned a full page, and nil when the
+// walk is complete.
+type DisabledDevicePage struct {
+	Tokens     []string
+	NextCursor *uint64
+}
