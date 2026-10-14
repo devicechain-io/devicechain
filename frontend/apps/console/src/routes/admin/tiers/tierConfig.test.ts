@@ -2,7 +2,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { describe, it, expect } from 'vitest';
-import { parseTierConfig, buildTierConfigPatch, type ConfigDimension } from './tierConfig';
+import {
+  parseTierConfig,
+  buildTierConfigPatch,
+  invalidTierScalar,
+  TIER_SCALARS,
+  type ConfigDimension,
+} from './tierConfig';
 
 // The platform's dimensions, as the server hands them over.
 const DIMS: ConfigDimension[] = [
@@ -104,5 +110,51 @@ describe('buildTierConfigPatch', () => {
     const settings = { ...parseTierConfig(GOLD), ingestBurst: 'lots' };
     const out = JSON.parse(buildTierConfigPatch(DIMS, settings, GOLD)!);
     expect(out).not.toHaveProperty('ingestBurst');
+  });
+});
+
+describe('tier scalar settings', () => {
+  const ALL = {
+    heldCommandCeiling: '5000',
+    shedPriority: '80',
+    geoFenceCeiling: '100',
+    geoFencePositionCeiling: '256',
+    geoFencePositionBudget: '20000',
+  };
+
+  it('carries all five scalar keys the server accepts', () => {
+    expect(TIER_SCALARS.map((s) => s.key).sort()).toEqual(Object.keys(ALL).sort());
+  });
+
+  it('writes them as numbers beside the dimensions', () => {
+    const out = JSON.parse(buildTierConfigPatch(DIMS, { ...parseTierConfig(GOLD), ...ALL }, GOLD)!);
+    expect(out).toMatchObject({ ingestBurst: 4000, heldCommandCeiling: 5000, shedPriority: 80, geoFenceCeiling: 100 });
+    expect(out.geoFencePositionBudget).toBe(20000);
+  });
+
+  it('reads stored scalars back so an unrelated save does not drop them', () => {
+    const stored = JSON.stringify({ ingestBurst: 4000, shedPriority: 80, heldCommandCeiling: 5000 });
+    const out = JSON.parse(buildTierConfigPatch(DIMS, parseTierConfig(stored), stored)!);
+    expect(out).toEqual({ ingestBurst: 4000, shedPriority: 80, heldCommandCeiling: 5000 });
+  });
+
+  it('omits a blanked scalar so the tier inherits', () => {
+    const stored = JSON.stringify({ shedPriority: 80 });
+    const out = JSON.parse(buildTierConfigPatch(DIMS, { shedPriority: ' ' }, stored)!);
+    expect(out).not.toHaveProperty('shedPriority');
+  });
+
+  it('refuses values the server would refuse', () => {
+    expect(invalidTierScalar(ALL)).toBeNull();
+    expect(invalidTierScalar({})).toBeNull();
+    expect(invalidTierScalar({ shedPriority: '101' })?.key).toBe('shedPriority');
+    expect(invalidTierScalar({ shedPriority: '0' })?.key).toBe('shedPriority');
+    expect(invalidTierScalar({ geoFencePositionCeiling: '1025' })?.key).toBe('geoFencePositionCeiling');
+    expect(invalidTierScalar({ geoFenceCeiling: '4001' })?.key).toBe('geoFenceCeiling');
+    expect(invalidTierScalar({ geoFencePositionBudget: '128001' })?.key).toBe('geoFencePositionBudget');
+    expect(invalidTierScalar({ heldCommandCeiling: '1.5' })?.key).toBe('heldCommandCeiling');
+    expect(invalidTierScalar({ heldCommandCeiling: 'lots' })?.key).toBe('heldCommandCeiling');
+    expect(invalidTierScalar({ heldCommandCeiling: '2147483647' })).toBeNull();
+    expect(invalidTierScalar({ heldCommandCeiling: '2147483648' })?.key).toBe('heldCommandCeiling');
   });
 });

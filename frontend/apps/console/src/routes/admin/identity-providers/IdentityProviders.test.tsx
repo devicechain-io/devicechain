@@ -815,3 +815,47 @@ describe('the stranded-tenant refusal', () => {
     });
   });
 });
+
+describe('timestamps and the callback address', () => {
+  // The server sends RFC 3339 with nanoseconds; showing it raw is unreadable. The
+  // expectation is computed with the same formatter the rest of the console uses.
+  const raw = '2026-10-01T10:00:00.123456789Z';
+  const shown = new Date(raw).toLocaleString();
+
+  it('formats the fetched and approved times', async () => {
+    api.getIdpConnection.mockResolvedValue(
+      connection({
+        discovery: discovery({
+          fetchedAt: raw,
+          approved: true,
+          approvedBy: 'root@example.com',
+          approvedAt: raw,
+        }),
+      }),
+    );
+    renderDetail();
+    expect((await screen.findAllByText((c) => c.includes(shown))).length).toBe(2);
+    expect(screen.queryByText(/123456789/)).toBeNull();
+  });
+
+  it('formats the domain asserted-at time', async () => {
+    api.getIdpConnection.mockResolvedValue(
+      connection({ domains: [{ domain: 'example.com', verifiedAt: raw, verifiedBy: 'root@example.com' }] }),
+    );
+    renderDetail();
+    await screen.findByText('Acme SSO');
+    openTab(/domains/i);
+    expect(await screen.findByText(shown)).toBeTruthy();
+    expect(screen.queryByText(/123456789/)).toBeNull();
+  });
+
+  it('shows the callback address once, as a copy control', async () => {
+    renderDetail();
+    await screen.findByText('Acme SSO');
+    openTab(/settings/i);
+    await screen.findByText('Callback address');
+    const url = 'https://dc.example.com/api/user-management/sso/callback/acme-sso';
+    expect(screen.getAllByText(url).length).toBe(1);
+    expect(screen.getAllByRole('button').filter((b) => b.getAttribute('aria-label')?.includes(url)).length).toBe(1);
+  });
+});

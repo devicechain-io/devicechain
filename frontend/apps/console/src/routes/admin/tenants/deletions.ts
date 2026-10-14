@@ -1,3 +1,4 @@
+import type { TFunction } from 'i18next';
 import type { AdminTenantDeletion, AdminTenantDeletionStore } from '@/lib/api/admin';
 
 /**
@@ -51,6 +52,17 @@ export function hasNote(line: AdminTenantDeletionStore): boolean {
 export function storeProblem(line: AdminTenantDeletionStore): string | null {
   if (line.complete) return null;
   return line.retaining || line.lastError || null;
+}
+
+/**
+ * The longest store explanation worth showing inline in the table. The server's sentences
+ * are written for whoever reads the ledger, and some run to several lines; anything longer
+ * than this is summarised and the full text kept behind a disclosure.
+ */
+export const INLINE_DETAIL_MAX = 120;
+
+export function isLongDetail(text: string): boolean {
+  return text.length > INLINE_DETAIL_MAX;
 }
 
 /** Whether a record has finished. */
@@ -149,6 +161,22 @@ export function summarize(d: AdminTenantDeletion, now: number): DeletionSummary 
 export function humanize(minutes: number): { amount: number; unit: 'minutes' | 'hours' } {
   if (minutes >= 90) return { amount: Math.round(minutes / 60), unit: 'hours' };
   return { amount: minutes, unit: 'minutes' };
+}
+
+/**
+ * Renders a summary in the active language.
+ *
+ * The amount and unit are folded into one localized `duration` ("12 hours", "12 horas")
+ * before interpolation: handing the raw unit to the sentence put an English word inside a
+ * Spanish one. The unit is a pluralized catalog entry, so each language owns its own forms.
+ */
+export function translateSummary(t: TFunction, summary: DeletionSummary): string {
+  const { amount, unit, ...rest } = summary.values;
+  if (typeof amount !== 'number' || (unit !== 'minutes' && unit !== 'hours')) {
+    return t(summary.key, summary.values);
+  }
+  const duration = t(unit === 'hours' ? 'durationHours' : 'durationMinutes', { count: amount });
+  return t(summary.key, { ...rest, duration });
 }
 
 /**
