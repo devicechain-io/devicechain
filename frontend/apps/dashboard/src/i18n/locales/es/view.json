@@ -1,5 +1,9 @@
 {
   "change": "Cambiar",
+  "connectionLabel": "Conexión de datos en vivo",
+  "connectionLive": "En vivo",
+  "connectionOffline": "Sin conexión",
+  "connectionReconnecting": "Reconectando",
   "enterFullscreen": "Pantalla completa",
   "exitFullscreen": "Salir de pantalla completa",
   "themeToDark": "Tema oscuro",

@@ -1567,6 +1567,12 @@ jobs:
       - name: Guide capture anchors present
         run: node ../hack/guide-capture/check-anchors.mjs
 
+      # The capture harness may read the instance superuser's password from the cluster; this
+      # pins the resolution order (explicit env first) and that the value is never printed.
+      # Node builtins only, so it too runs before `npm ci`.
+      - name: Guide capture superuser resolution
+        run: node --test ../hack/guide-capture/superuser.test.ts
+
       - name: Install dependencies
         run: npm ci
 

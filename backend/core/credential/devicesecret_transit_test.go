@@ -49,7 +49,7 @@ func TestSecretTransitRefusesWhatWasNotSealedForThisCredential(t *testing.T) {
 		"plaintext":          {"acme", "sensor-1", "s3cret-value-long-enough"},
 		"empty":              {"acme", "sensor-1", ""},
 		"truncated":          {"acme", "sensor-1", sealed[:len(sealed)-4]},
-		"tampered":           {"acme", "sensor-1", sealed[:len(sealed)-2] + "AA"},
+		"tampered":           {"acme", "sensor-1", tamperSealed(t, sealed)},
 		"wrong version":      {"acme", "sensor-1", strings.Replace(sealed, "dcs2", "dcs1", 1)},
 		"stored digest form": {"acme", "sensor-1", "v1$00000000$AAAA$BBBB"},
 	} {
@@ -61,6 +61,25 @@ func TestSecretTransitRefusesWhatWasNotSealedForThisCredential(t *testing.T) {
 	var nilTransit *SecretTransit
 	_, err = nilTransit.Open("acme", "sensor-1", sealed)
 	require.ErrorIs(t, err, ErrSealedSecretInvalid, "no key")
+}
+
+// tamperSealed flips one bit of the sealed payload's first ciphertext byte and re-encodes it.
+// Editing the encoded TEXT instead (say, replacing its last two characters with "AA") is a
+// no-op whenever those characters already were "AA", and RawStdEncoding ignores the unused
+// low bits of a final partial character, so such an edit can leave the decoded bytes unchanged
+// and the test failing at random.
+func tamperSealed(t *testing.T, sealed string) string {
+	t.Helper()
+	parts := strings.Split(sealed, sealedSecretSep)
+	require.Len(t, parts, 3)
+	raw, err := base64.RawStdEncoding.DecodeString(parts[2])
+	require.NoError(t, err)
+	require.Greater(t, len(raw), chacha20poly1305.NonceSizeX)
+	raw[chacha20poly1305.NonceSizeX] ^= 0x01
+	parts[2] = base64.RawStdEncoding.EncodeToString(raw)
+	tampered := strings.Join(parts, sealedSecretSep)
+	require.NotEqual(t, sealed, tampered)
+	return tampered
 }
 
 // The transit key and the digest key come from the same root key under different contexts.

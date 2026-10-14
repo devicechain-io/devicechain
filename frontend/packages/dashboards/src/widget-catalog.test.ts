@@ -63,6 +63,12 @@ describe('validateWidgetDescriptor', () => {
     expect(pathsOf({ ...valid(), id: 'a/b/c' })).toEqual(['id']);
   });
 
+  it('accepts freshness: true on a measurement widget, and rejects anything else (path freshness)', () => {
+    expect(issuesOf({ ...valid(), freshness: true })).toEqual([]);
+    expect(pathsOf({ ...valid(), freshness: false })).toEqual(['freshness']);
+    expect(pathsOf({ ...valid(), freshness: 'yes' })).toEqual(['freshness']);
+  });
+
   it('rejects a malformed semver (path version)', () => {
     for (const version of ['1.2', '1.2.x', 'v1.2.3', '01.2.3', '', 3]) {
       expect(pathsOf(withField('version', version))).toEqual(['version']);

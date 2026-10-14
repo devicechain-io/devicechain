@@ -132,3 +132,31 @@ export function WidgetCandidatesProvider({
 export function useWidgetCandidates(): WidgetCandidates | undefined {
   return useContext(WidgetCandidatesContext);
 }
+
+// WidgetFreshness is what the host knows about how current a widget's data is: the time of its
+// newest sample (epoch ms) and the age past which that is stale. Provided only for a widget
+// whose descriptor opts in (`freshness: true`); the frame reads it and draws the age readout.
+// Absent, the frame draws nothing, so a widget that does not opt in is unchanged.
+//
+// `staleAfterSeconds` is undefined when no threshold is known, which means the age is shown
+// and nothing is ever styled stale. `at` is undefined while no sample has arrived.
+export interface WidgetFreshness {
+  at: number | undefined;
+  staleAfterSeconds: number | undefined;
+}
+
+const WidgetFreshnessContext = createContext<WidgetFreshness | undefined>(undefined);
+
+export function WidgetFreshnessProvider({
+  freshness,
+  children,
+}: {
+  freshness: WidgetFreshness | undefined;
+  children: ReactNode;
+}) {
+  return <WidgetFreshnessContext.Provider value={freshness}>{children}</WidgetFreshnessContext.Provider>;
+}
+
+export function useWidgetFreshness(): WidgetFreshness | undefined {
+  return useContext(WidgetFreshnessContext);
+}

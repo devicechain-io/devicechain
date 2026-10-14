@@ -123,7 +123,7 @@ function BrandingDefaultEditor({ value, onChange }: SettingEditorProps<BrandingD
     <div className="grid gap-8 lg:grid-cols-[1fr_20rem]">
       <div className="space-y-6">
         <BrandingThemeFields value={value} onChange={(next) => onChange({ ...value, ...next })} />
-        <FormField label={t('logoLabel')} htmlFor="bd-logo" description={t('logoDescription')}>
+        <FormField label={t('logoLabel')} htmlFor="bd-logo" description={t('instanceLogoDescription')}>
           <Input
             id="bd-logo"
             value={value.logo}
