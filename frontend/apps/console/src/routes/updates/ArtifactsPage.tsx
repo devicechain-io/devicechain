@@ -38,6 +38,7 @@ import {
 } from '@/components/ui/data-table';
 import { FormDrawer } from '@/components/registry';
 import { formatBytes } from '@/lib/artifactUpload';
+import { artifactStateLabel } from '@/lib/enumLabel';
 import { ArtifactStateBadge, DigestChip, TrustBadge } from './badges';
 import { NewArtifactForm } from './NewArtifactForm';
 
@@ -48,11 +49,7 @@ const TRUST_OPTIONS = [
   { value: 'SIGNED', labelKey: 'trustSigned' },
   { value: 'UNVERIFIED', labelKey: 'trustUnverified' },
 ];
-const STATE_OPTIONS = [
-  { value: 'UPLOADING', labelKey: 'stateUploading' },
-  { value: 'AVAILABLE', labelKey: 'stateAvailable' },
-  { value: 'RETIRED', labelKey: 'stateRetired' },
-];
+const STATE_OPTIONS = ['UPLOADING', 'AVAILABLE', 'RETIRED'];
 
 export default function ArtifactsPage() {
   const { t } = useTranslation('updates');
@@ -113,7 +110,7 @@ export default function ArtifactsPage() {
           />
           <Combobox
             className="h-9 w-40"
-            options={STATE_OPTIONS.map((o) => ({ value: o.value, label: t(o.labelKey) }))}
+            options={STATE_OPTIONS.map((s) => ({ value: s, label: artifactStateLabel(t, s) }))}
             value={state}
             onChange={setState}
             placeholder={t('filterAllStates')}

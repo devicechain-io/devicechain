@@ -328,7 +328,7 @@
   "maintenanceWindowDay.SATURDAY": "Sábado",
   "maintenanceWindowDay.SUNDAY": "Domingo",
   "deviceTypeMaintenanceWindow": "Ventana de mantenimiento",
-  "deviceTypeMaintenanceWindowHelp": "Los comandos disruptivos y destructivos para los dispositivos de este tipo esperan a que se abra esta ventana. Déjalo vacío para enviarlos de inmediato.",
+  "deviceTypeMaintenanceWindowHelp": "Los comandos disruptivos y destructivos para los dispositivos de este tipo esperan a que se abra esta ventana. Déjala vacía para enviarlos de inmediato.",
   "deviceTypeMaintenanceWindowPlaceholder": "Sin ventana de mantenimiento",
   "deviceTypeMaintenanceWindowLoading": "Cargando ventanas de mantenimiento…",
   "deviceTypeMaintenanceWindowEmpty": "Todavía no hay ventanas de mantenimiento definidas.",
