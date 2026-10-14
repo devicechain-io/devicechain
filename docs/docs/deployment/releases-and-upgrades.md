@@ -3512,6 +3512,248 @@ gh attestation verify <archive> --repo devicechain-io/devicechain \
 
 Nothing needs doing.
 
+### v0.21.0 — a device can be shut out whole, and updates are signed {#v0210-upgrade}
+
+`v0.21.0` is an in-place upgrade from `v0.20.0`: `dcctl install` for the cluster, then `dcctl
+upgrade` for each instance, as described [for v0.17.0](#v0170-upgrade). Coming from `v0.19.0` or
+earlier, read the [`v0.20.0` notes](#v0200-upgrade) as well: their row and chunk counts and their
+steps apply to this upgrade too. An instance built by `v0.16.0` or earlier still has to be
+[destroyed and built again](#pre-declaration-recreate).
+
+Most of this release is new capability that changes nothing until you use it: a device can be
+disabled as a whole, update artifacts can be signed, a fleet can be imported from a CSV file,
+alert presets and a notification check join the detection-rule form, and a single sign-on
+connection can trust a private certificate authority. What changes for somebody: a device built to
+understand only unsigned update assignments refuses a signed one, an artifact can be assigned only
+when an active signer has signed it, a raw LwM2M Factory Reset is refused, a disabled device is
+cut off from configuration, updates and LwM2M registration with its queued commands held, and the
+console's built files move to a new path. Every binary is now built with Go 1.27.2.
+
+#### Before you upgrade {#v0210-before}
+
+1. **Devices that take over-the-air updates: ship an updater that verifies signatures first.** An
+   assignment can now carry `trust: "SIGNED"` with a signature, a key id and an algorithm, and a
+   device that understands only `UNVERIFIED` refuses it. Nothing signs an assignment until a
+   tenant registers a signer and signs an artifact, so deploy the verifying updater before you do.
+   See [Update assignments can be signed](#v0210-signed-updates).
+2. **Decide how update artifacts are trusted.** With `updates.allowUnverifiedArtifacts` left at
+   `false`, only an artifact signed by an active signer of its tenant can be assigned. If you set
+   the flag to assign unsigned artifacts, it still applies. See
+   [Update assignments can be signed](#v0210-signed-updates).
+3. **Stop sending a raw LwM2M Factory Reset.** A command that executes `/3/0/5` is refused when it
+   is enqueued, from a rule or a batch too. See
+   [A raw LwM2M Factory Reset is refused](#v0210-factory-reset).
+4. **Check what depends on the console's static path.** Its built files are now served from
+   `/_app/` rather than `/assets/`. See [The console's built files move](#v0210-console-app-path).
+
+#### During the upgrade {#v0210-during}
+
+- **Upgrade `device-management` and `command-delivery` together.** `command-delivery` keeps its own
+  record of which devices are disabled and fills it from `device-management`. A tenant's commands
+  are not dispatched until that tenant's first successful sync, so a new `command-delivery` pod
+  that cannot yet reach a `device-management` pod with the new query holds them. They are not
+  lost, and they go out once the sync succeeds.
+- **Four areas apply a migration** on their first start: `device-management` adds a nullable
+  `disabled_at` column and a partial index to the devices table, `command-delivery` creates two
+  small tables, `update-management` creates the signer registry, and `user-management` adds a
+  CA-bundle column to the identity providers. Each is individually re-runnable, none rewrites an
+  existing row, and none needs a recreate. See [New tables and columns](#v0210-migrations).
+- **`update-management` starts reading the device roster** from new facts only, so it needs no
+  catch-up and no operator step.
+
+Going back to `v0.20.0` after the upgrade keeps the new columns and tables, which `v0.20.0`
+ignores. It does not know signers, so `allowUnverifiedArtifacts` alone decides what it can assign.
+
+#### After the upgrade {#v0210-after}
+
+- **Reload the console once.** A browser holding the previous `index.html` asks for the old file
+  paths until it reloads. `index.html` is served with `no-cache`, so that is one navigation.
+- **Give custom roles the new authority if they manage signers.** Tenant admins hold
+  `artifact:trust`; a role you defined does not. See
+  [Update assignments can be signed](#v0210-signed-updates).
+- **Nothing else is required.** Disabling a device, signing, importing, presets and the CA bundle
+  all start unused.
+
+#### What changed {#v0210-what-changed}
+
+##### A disabled device is cut off whole, and its queued commands are held {#v0210-disabled-device}
+
+A device can be disabled as a whole instead of finding and revoking each credential, with
+`updateDevice(enabled: false)` or the Disable action on the device page. While it is disabled:
+
+- its events are refused at resolution, its broker connects are refused, and new commands for it
+  are refused with `DEVICE_DISABLED`;
+- its configuration sync and status reports are refused, as are its update progress and inventory
+  reports, its download grants and its downloads, and a download link issued before the disable
+  answers 403; `assignArtifact` refuses it with `DEVICE_DISABLED`;
+- an LwM2M registration answers 4.03 Forbidden, and a registered device is ended at its next
+  Update so that it re-registers and is refused;
+- its absence rules are disarmed, so no "device silent" alarm is raised or kept for it;
+- commands already queued are **held**: they are neither sent nor cancelled. A held command still
+  lapses by its own TTL. Enabling the device releases them oldest first, and deleting a disabled
+  device cancels them. `deviceCommandHold` and `cancelDeviceCommands` show and clear them.
+
+Enabling the device sends its latest configuration once and re-offers its current update
+assignments. An already open session stays open until the connect is next checked. See
+[Disabling a device](../guides/device-credentials.md#disabling-a-device).
+
+If you disable devices today and rely on their queued commands going out, they now wait.
+
+##### Update assignments can be signed {#v0210-signed-updates}
+
+A tenant can register the public keys it trusts to sign update artifacts: ECDSA P-256 or Ed25519,
+as a single `PUBLIC KEY` PEM. A signature over an artifact's SHA-256 digest is verified when it is
+added, and an artifact counts as **signed** while at least one active signer of the same tenant has
+signed it. Revoking a signer, which is terminal, returns its artifacts to unverified without
+touching them. Anything containing a private key is refused.
+
+What this changes:
+
+- **The new authority `artifact:trust`** registers and revokes signers. It is held by tenant
+  admins and by no role you defined; `artifact:write` adds a signature.
+- **Assignment needs a signed artifact**, unless `updates.allowUnverifiedArtifacts` is `true`. That
+  setting is unchanged and still `false` by default; what moves is that a signed artifact no longer
+  needs it.
+- **The device contract grows.** An `update.assignment` for a signed artifact carries
+  `trust: "SIGNED"`, a `signature` (standard base64), a `keyId` (the lowercase hex SHA-256 of the
+  key's DER-encoded public key) and an `algorithm` (`ECDSA_P256_SHA256` or `ED25519`); both sign the
+  raw 32-byte digest. `"v":1` is unchanged and an unsigned assignment is byte-identical to before.
+  A device that understands only `UNVERIFIED` refuses a `SIGNED` assignment, which fails closed.
+  A device reports `UNKNOWN_SIGNER` or `SIGNATURE_INVALID` under `FAILED` at the downloaded stage.
+- **A signature does not bind the version.** Signing the digest says who produced the bytes, not
+  which version they are; see [Over-the-air updates](../concepts/over-the-air-updates.md).
+
+When an artifact is assigned, the oldest signature by an active signer is **pinned** to the
+assignment (`UpdateAssignment.signedBy` names the signer), and that signature is what the device
+receives. Two things follow:
+
+- **A device must hold the key of every signer that could be pinned.** Put a new signer's key on
+  your devices before you revoke the old one. Revoking a signer after the pin does not change a
+  message already sent.
+- **Turning `allowUnverifiedArtifacts` off stops unsigned assignments from being sent**, including
+  a re-send when a device syncs. An assignment made under `v0.20.0` has no signature, so with the
+  setting off its device keeps what it has until you assign a signed artifact. An assignment whose
+  pinned signature cannot be read is not sent; it is never sent as `UNVERIFIED`.
+
+To register a signer and sign an artifact, follow [Signing updates](../guides/signing-updates.md).
+
+##### A raw LwM2M Factory Reset is refused {#v0210-factory-reset}
+
+An `lwm2m.execute` on the Device object's resource 5 (`/3/0/5`) is refused at enqueue with
+`COMMAND_DESTRUCTIVE_REFUSED`, for a single command, a batch and a command sent by a detection rule,
+in every spelling of the path, and again before it reaches the device. Detection rules treat the
+code as permanent and do not retry. Reboot (`/3/0/4`), other executes and reads are unaffected. A
+confirmed, single-device named operation for Factory Reset is planned; until then the raw route is
+closed. The executor also refuses any read, write or execute payload whose path key appears more
+than once.
+
+##### Batches can be retried by outcome, and an LwM2M request with no answer is a TIMEOUT {#v0210-batch-retry}
+
+Every command that finishes now carries a stored `outcome`, written by the write that finished it:
+`SUCCEEDED`, `NOT_DELIVERED` (the platform can prove it never reached the device), `REJECTED` (the
+device said it did not do it) or `UNKNOWN` (it may have reached the device and acted). A migration adds
+the column and fills it for the commands already finished: `SUCCESSFUL` becomes `SUCCEEDED`, `EXPIRED`
+and `CANCELLED` become `NOT_DELIVERED`, and every other finished command, including one that
+failed or timed out, becomes `UNKNOWN`. `commands` can be searched by `outcomes`.
+
+`retryCommandBatch` issues a new batch, linked both ways to the original (`retryOf`, `retries`), for the
+devices you name that did not succeed. The command is copied from the original, never retyped. Devices
+with an `UNKNOWN` outcome are refused with `RETRY_UNKNOWN_NOT_ACKNOWLEDGED` unless the request sets
+`includeUnknown`, so a command from before the upgrade that failed or timed out needs that flag to be
+retried. A device that already has a live or successful command anywhere in the retry family is refused,
+so no device is sent a command twice because two retries were open. It needs `command:write`. The batch
+page in the console has a **Retry…** action. See
+[Commanding a fleet](../guides/commanding-a-fleet.md#retry-the-devices-that-did-not-succeed).
+
+**Behaviour change.** An LwM2M request that gets no answer from the device is now reported as `TIMEOUT`,
+as on the other transports. If you read an LwM2M command's status to decide what to do next, expect
+`TIMEOUT` there.
+
+##### Disruptive commands can wait for a maintenance window {#v0210-maintenance-windows}
+
+A device type can be given a recurring weekly **maintenance window**: a time zone and 1 to 56 weekly
+slots, managed in the `device-management` API (`device:write`). Each command definition gains an
+`impact` of `NORMAL`, `DISRUPTIVE` or `DESTRUCTIVE`; a definition that already exists reads as `NORMAL`,
+and `lwm2m.reboot` is created `DISRUPTIVE` from now on. Nothing is gated until a window is assigned to a
+device type and a command of that type is `DISRUPTIVE` or `DESTRUCTIVE`.
+
+Then, for a device of that type, such a command enqueued while the window is closed is accepted and
+**waits**, still `QUEUED`, until the next opening. One enqueued while the window is open is bound to that
+opening: if it has not been sent when the window closes, it waits for the next one rather than going out
+whenever the device returns. This holds for a single command, a batch and a command sent by a
+detection rule, and on every path that sends a command or confirms one in flight. A command whose
+`expiresAt` falls before the next opening is refused with `WINDOW_AFTER_EXPIRY`, in a batch as a
+per-device refusal. A batch reports how many of its commands are `waiting`.
+
+Two behaviours to know. A device that confirms a command in flight after the window has closed has the
+confirmation refused; the command then parks and moves to the next opening. And unassigning a window from
+a device type does not release commands already stamped from it.
+
+To set one up, see [Maintenance windows](../guides/maintenance-windows.md).
+
+##### The console's built files move to `/_app/` {#v0210-console-app-path}
+
+A link to an asset's page (`/assets/<token>`) returned 404 on load or refresh, because the console's
+built JavaScript and CSS lived under `/assets/` and the web server answered 404 for anything there
+it did not hold. The built files are now under `/_app/`, with the same one-year immutable cache, and
+the asset page loads from a direct link. The dashboard app under `/dash` is unchanged. If you proxy,
+cache or allow-list the console's paths, allow `/_app/`.
+
+##### A missing record is answered with `NOT_FOUND` {#v0210-not-found}
+
+A request that names a role, tenant tier, identity, membership, tenant, OAuth client, identity
+provider or SSO link request that does not exist, or a device `claimDevice` cannot find, now
+answers with `extensions.code` `NOT_FOUND`, as the [GraphQL reference](../reference/graphql-api.md)
+says it does. It used to carry only a message such as `role not found` and no code. The messages are
+unchanged, so a client that matched the message still works; a client that treated a missing code as
+"other error" should handle the code.
+
+##### Go 1.27.2 accepts event times written with JSON escapes {#v0210-go127}
+
+Every binary is built with Go 1.27.2. A device that wrote an event time with JSON escapes in the
+string, such as `"2026-10-13T12:00:00Z"` for `...Z`, had the event dead-lettered when decoded
+by Go 1.26. It is correct JSON, and it is now accepted and stored. Nothing needs doing.
+
+##### New tables and columns {#v0210-migrations}
+
+| Area | Change |
+| --- | --- |
+| `device-management` | `devices.disabled_at timestamptz` (null means enabled) and the partial index `idx_devices_disabled`; the `maintenance_windows` table, `device_types.maintenance_window_id` and `command_definitions.impact` |
+| `command-delivery` | `device_gates` and `device_gate_syncs`, with their unique and partial indexes; `commands.outcome` (filled for finished commands), `command_batches.retry_of` and a partial index on it; `commands.dispatch_after`, `dispatch_until` and `window_token` with a partial index, and `command_batches.waiting` |
+| `update-management` | `artifact_signers` and `artifact_signatures` (public keys and signatures only); artifact trust is now derived from them, and the old stored trust column is kept, written no more, so a rolling upgrade is safe; each assignment also gains a nullable `signature_id`, the signature it is pinned to |
+| `user-management` | `ca_bundle` on identity providers |
+
+##### Single sign-on can trust a private certificate authority {#v0210-sso-ca}
+
+An identity-provider connection can carry its own CA bundle, set at create or with
+`setIdpCaBundle` (an empty string clears it; both need `user:write` on the instance-admin API). Calls
+to that provider trust the system roots plus the bundle, only for that connection, and still go
+through the outbound guard. Discovery must succeed with the new bundle before it is saved. See
+[Configuring single sign-on](../guides/configuring-sso.md). Nothing changes for a connection without
+a bundle.
+
+##### Other behaviour worth knowing about {#v0210-other}
+
+- **Fleet import.** `importDevices` takes up to 1000 rows and answers each as `CREATED`, `EXISTS`,
+  `CONFLICT`, `INVALID` or `REFUSED`; it only creates, so running a file again is safe, and a dry
+  run writes nothing. It needs `device:write`.
+- **Device configuration.** `restoreDeviceConfiguration` and `copyDeviceConfiguration` re-apply an
+  earlier revision or another device's configuration through the device's declared shared
+  attributes, minting a new revision. They need `device:write` and add the codes
+  `CONFIGURATION_KEY_UNDECLARED` and `CONFIGURATION_CONFLICT`.
+- **Thing Model export.** A published profile version is available as a W3C Web of Things Thing
+  Model through `DeviceProfileVersion.thingModel`.
+- **LwM2M.** `lwm2m.reboot` and `lwm2m.readDeviceInfo` are named operations, and a device's
+  manufacturer, model, serial number, firmware version and battery level are read when it
+  registers (at most once an hour) and kept as client attributes.
+- **Detection rules.** The console form offers presets for a silent device, a value held above a
+  limit and a low battery, and shows whether the rule's severity reaches anyone. An absence alarm
+  clears when its device is disabled, deleted or given another type.
+- **Messaging.** Two replicas that migrate a stream's retention at the same time no longer make one
+  refuse to start.
+- **Batch retry.** `retryCommandBatch`, the `outcome` on every finished command and the `outcomes` search are described under [Batches can be retried by outcome](#v0210-batch-retry).
+- **Maintenance windows.** Windows, `impact` and the hold are described under [Disruptive commands can wait for a maintenance window](#v0210-maintenance-windows).
+
 ### v0.20.0 — sign in through your own identity provider; widgets ship as packages {#v0200-upgrade}
 
 `v0.20.0` is an in-place upgrade from `v0.19.0`: `dcctl install` for the cluster, then `dcctl
