@@ -78,22 +78,36 @@ func NewRuleStatStore(r *rdb.RdbManager) *RuleStatStore {
 // failed stat write must never wedge the correctness-bearing publish/checkpoint loop.
 func (s *RuleStatStore) RecordFire(ctx context.Context, ruleID, tenant string, at time.Time, edge string) error {
 	stat := RuleStat{RuleId: ruleID, Tenant: tenant, LastFiredAt: at, FireCount: 1, LastEdge: edge}
-	// The SET expressions are written dialect-portably (Postgres in production, sqlite in the
-	// store tests): an UNqualified column refers to the existing row and `excluded.col` to the
-	// incoming one — both databases agree on that — and CASE stands in for Postgres GREATEST,
-	// which sqlite lacks. last_fired_at/last_edge advance only when the incoming fire is at least
-	// as recent, so replaying an older detection cannot rewind them; fire_count always increments.
 	// The conflict target is rule_id alone, which cannot collide across tenants (see DetectRuleStore.Upsert).
 	db := rdb.AllowTenantlessUpsert(s.rdb.DB(dccore.WithTenant(ctx, tenant)),
 		"rule_id is {tenant}/... and tokens exclude '/', so it is tenant-unique by construction")
-	return db.Clauses(clause.OnConflict{
+	return db.Clauses(ruleStatUpsert()).Create(&stat).Error
+}
+
+// ruleStatUpsert is RecordFire's ON CONFLICT clause. It is a function of its own so the SET
+// expressions can be checked without a database (TestRuleStatUpsertQualifiesEveryColumn).
+//
+// Every column reference in a SET expression is QUALIFIED: `rule_stats.col` for the existing
+// row, `excluded.col` for the incoming one. That is not style. Postgres rejects an unqualified
+// reference as ambiguous (SQLSTATE 42702), because inside DO UPDATE both the target table and
+// `excluded` are in scope and both carry every column. sqlite resolves it to the existing row
+// without complaint, which is why the sqlite store tests passed while every fire failed in
+// production. Since RecordFire swallows its error (off the correctness path), that failure
+// showed only as a warning per fire and a rule-health view reporting zero fires forever.
+// `rule_stats` is the table's own name, which both databases accept as the existing row's
+// qualifier even though Postgres places the table in a schema. CASE stands in for Postgres
+// GREATEST, which sqlite lacks. last_fired_at/last_edge advance only when the incoming fire is
+// at least as recent, so replaying an older detection cannot rewind them; fire_count always
+// increments.
+func ruleStatUpsert() clause.OnConflict {
+	return clause.OnConflict{
 		Columns: []clause.Column{{Name: "rule_id"}},
 		DoUpdates: clause.Assignments(map[string]interface{}{
-			"fire_count":    gorm.Expr("fire_count + 1"),
-			"last_fired_at": gorm.Expr("CASE WHEN excluded.last_fired_at >= last_fired_at THEN excluded.last_fired_at ELSE last_fired_at END"),
-			"last_edge":     gorm.Expr("CASE WHEN excluded.last_fired_at >= last_fired_at THEN excluded.last_edge ELSE last_edge END"),
+			"fire_count":    gorm.Expr("rule_stats.fire_count + 1"),
+			"last_fired_at": gorm.Expr("CASE WHEN excluded.last_fired_at >= rule_stats.last_fired_at THEN excluded.last_fired_at ELSE rule_stats.last_fired_at END"),
+			"last_edge":     gorm.Expr("CASE WHEN excluded.last_fired_at >= rule_stats.last_fired_at THEN excluded.last_edge ELSE rule_stats.last_edge END"),
 		}),
-	}).Create(&stat).Error
+	}
 }
 
 // LoadByIDs returns the stats for a set of rule ids as a map keyed by rule id (a missing id
