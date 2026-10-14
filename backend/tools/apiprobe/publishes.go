@@ -440,7 +440,7 @@ var afterPublish = []entity{
 		Vars: func(s *state) map[string]any {
 			return map[string]any{"name": "apiprobe signer", "publicKeyPem": probeSignerPEM()}
 		},
-		Record: record("artifact-signer"),
+		Requires: probeSignerGroup,
 	},
 	{
 		// Depends on: device-profile.
@@ -450,6 +450,7 @@ var afterPublish = []entity{
 		// apart from artifact-available leaves that row's trust UNVERIFIED for its assignment.
 		Name:     "artifact-signed",
 		Area:     "update-management",
+		Requires: probeSignerGroup,
 		Mutation: "createArtifact",
 		Input:    "ArtifactCreateRequest!",
 		Read:     "artifact",
@@ -479,6 +480,7 @@ var afterPublish = []entity{
 		// signature, the signer, or the rule that joins them (the artifact reads UNVERIFIED).
 		Name:     "artifact-signature",
 		Area:     "update-management",
+		Requires: probeSignerGroup,
 		Mutation: "addArtifactSignature",
 		Params: []param{
 			{Name: "artifactToken", Type: "String!"},
@@ -491,7 +493,7 @@ var afterPublish = []entity{
 		Vars: func(s *state) map[string]any {
 			return map[string]any{
 				"artifactToken": s.tok("artifact-signed"),
-				"signerToken":   s.tokens["artifact-signer"],
+				"signerToken":   probeSignerToken(),
 				"signature":     probeArtifactSignature(),
 			}
 		},
@@ -593,6 +595,27 @@ func allEntities() []entity {
 		out = append(out, p.entity())
 	}
 	return append(out, afterPublish...)
+}
+
+// probeSignerGroup gates the three signer rows (artifact-signer, artifact-signed,
+// artifact-signature) as ONE group on a field only a release with the signer registry declares.
+//
+// 🔑 THE TOKEN IS COMPUTED, NOT RECORDED. A row that feeds the shared state cannot be skipped by a
+// baseline (plan refuses it, because its dependents would send an empty token), and a release
+// older than the registry cannot express registerArtifactSigner. The platform derives a signer's
+// token from the key, so the dependents compute it too (probeSignerToken); the signer is then a
+// leaf, and every member carries the SAME Requires so they skip together.
+var probeSignerGroup = []string{"ArtifactSigner.keyId"}
+
+// probeSignerToken is the token the platform gives the probe signer: "signer-" and the first 16 hex
+// digits of the SHA-256 of the key's SPKI DER (its keyId).
+func probeSignerToken() string {
+	der, err := x509.MarshalPKIXPublicKey(probeSignerKey().Public())
+	if err != nil {
+		panic(err) // an Ed25519 public key always marshals
+	}
+	sum := sha256.Sum256(der)
+	return "signer-" + hex.EncodeToString(sum[:])[:16]
 }
 
 // probeSignerKey is the signer's key pair, derived from a fixed public seed. It is a test key:

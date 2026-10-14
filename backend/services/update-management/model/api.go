@@ -422,17 +422,29 @@ func firstNonEmpty(vals ...string) string {
 }
 
 // ArtifactByToken returns the tenant's artifact with the given token, or nil when there
-// is none. The tenant scope confines the lookup to the caller's tenant.
+// is none, with its DERIVED trust filled in. The tenant scope confines the lookup to the
+// caller's tenant.
 func (api *Api) ArtifactByToken(ctx context.Context, token string) (*Artifact, error) {
+	a, err := api.ArtifactRowByToken(ctx, token)
+	if err != nil || a == nil {
+		return nil, err
+	}
+	if err := api.fillTrust(ctx, a); err != nil {
+		return nil, err
+	}
+	return a, nil
+}
+
+// ArtifactRowByToken is ArtifactByToken WITHOUT the derived trust (Trust is left empty), for a
+// caller that only needs the row. The upload path is one: it streams a large body, and a lookup
+// that also touches the signer tables costs it work that has nothing to do with the bytes.
+func (api *Api) ArtifactRowByToken(ctx context.Context, token string) (*Artifact, error) {
 	found := make([]*Artifact, 0, 1)
 	if err := rdb.FindByKeys(api.RDB.DB(ctx), &found, "token", []string{token}); err != nil {
 		return nil, err
 	}
 	if len(found) == 0 {
 		return nil, nil
-	}
-	if err := api.fillTrust(ctx, found[0]); err != nil {
-		return nil, err
 	}
 	return found[0], nil
 }
