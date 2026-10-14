@@ -119,7 +119,7 @@ const config: CodegenConfig = {
     // console pages that use it are gated on the area being deployed at all.
     './src/gql/update-management/': {
       schema: '../../../backend/services/update-management/graphql/schema.graphql',
-      documents: ['src/lib/api/update-management.ts'],
+      documents: ['src/lib/api/update-management.ts', 'src/lib/api/device-updates.ts'],
       preset: 'client',
       presetConfig: { fragmentMasking: false },
       config: { documentMode: 'string' },

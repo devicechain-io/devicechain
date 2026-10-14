@@ -41,6 +41,8 @@ import { DeviceReplacementPanel } from '@/routes/devices/DeviceReplacementPanel'
 import { DeviceAssignmentPanel } from '@/routes/devices/DeviceAssignmentPanel';
 import { DeviceLocationPanel } from '@/routes/devices/DeviceLocationPanel';
 import { DeviceConfigurationPanel } from '@/routes/devices/DeviceConfigurationPanel';
+import { DeviceUpdatesPanel } from '@/routes/devices/DeviceUpdatesPanel';
+import { useUpdateAccess } from '@/lib/updateAuthority';
 import { EntityAttributesPanel } from '@/components/EntityAttributesPanel';
 import { EventTypeLabel } from '@/components/EventTypeLabel';
 
@@ -58,6 +60,10 @@ export default function DeviceDetailPage() {
   // its list content is privileged, so a caller without the authority gets no tab
   // at all rather than an empty one or a 403.
   const canManageCredentials = hasAuthority(claims, 'device:write');
+  // The Updates tab belongs to an opt-in area: shown only once the area is KNOWN to be deployed
+  // and the caller may read it (fail closed while discovery is pending), so it never appears
+  // on an instance without update-management or 403s a caller without artifact:read.
+  const updates = useUpdateAccess();
 
   const [version, reload] = useReload();
   const { data: device, loading, error } = useQuery(() => getDevice(token), [version]);
@@ -142,6 +148,9 @@ export default function DeviceDetailPage() {
           <TabsTrigger value="events">{t('tabEvents')}</TabsTrigger>
           <TabsTrigger value="commands">{t('tabCommands')}</TabsTrigger>
           <TabsTrigger value="configuration">{t('tabConfiguration')}</TabsTrigger>
+          {updates.present && updates.canRead && (
+            <TabsTrigger value="updates">{t('tabUpdates')}</TabsTrigger>
+          )}
           {canManageCredentials && (
             <TabsTrigger value="credentials">{t('tabCredentials')}</TabsTrigger>
           )}
@@ -211,6 +220,18 @@ export default function DeviceDetailPage() {
             />
           </SectionPanel>
         </TabsContent>
+        {updates.present && updates.canRead && (
+          <TabsContent value="updates">
+            <SectionPanel>
+              <DeviceUpdatesPanel
+                key={device.token}
+                deviceToken={device.token}
+                deviceEnabled={device.enabled}
+                canWrite={updates.canWrite}
+              />
+            </SectionPanel>
+          </TabsContent>
+        )}
         {canManageCredentials && (
           <TabsContent value="credentials">
             <SectionPanel>
