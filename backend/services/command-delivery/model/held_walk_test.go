@@ -83,7 +83,7 @@ func TestReleaseHoldCannotReviveAnAnsweredCommand(t *testing.T) {
 			ctx := core.WithTenant(context.Background(), "A")
 			created := enqueued(t, api, ctx, "cmd-"+state.String())
 			if err := api.RDB.DB(ctx).Model(&Command{}).Where("id = ?", created.ID).
-				Update("status", state.String()).Error; err != nil {
+				Updates(forcedStatus(state.String())).Error; err != nil {
 				t.Fatalf("staging %s failed: %v", state, err)
 			}
 

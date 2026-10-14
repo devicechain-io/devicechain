@@ -167,6 +167,7 @@ Lo que un dispositivo publica en su topic `command-responses` para cerrar un com
 | `success` | boolean | sí | `true` cierra el comando como `SUCCESSFUL`; `false`, como `FAILED`. Si se omite, se lee como `false`. | `true` |
 | `payload` | cualquier valor JSON | no | Los datos de resultado del comando, almacenados con el comando y devueltos por la API. Un string se almacena como su texto; un objeto, array, número o booleano se almacena como ese valor JSON, tal cual se envió, de modo que un dispositivo puede devolver datos estructurados directamente. Si se omite o es `null`, el comando no tiene payload de respuesta. | `"rebooting in 5s"` o `{"level":3}` |
 | `error` | string | no | Por qué falló el comando. Solo se almacena cuando `success` es `false`; se ignora cuando es `true`. | `"actuator jammed"` |
+| `reach` | string | no | Para una pasarela o adaptador de protocolo que responde en nombre de un dispositivo; un dispositivo que informa su propio resultado lo omite. Solo se lee cuando `success` es `false`. `"UNANSWERED"`: el comando se puso en el canal y no volvió nada, así que se resuelve como `TIMEOUT`. `"UNSENT"`: el adaptador lo rechazó antes de que llegara al dispositivo, así que se resuelve como `FAILED` y se registra como nunca entregado. Omitido, un fallo es la respuesta del propio dispositivo. Un valor no reconocido se trata como `"UNANSWERED"`. | `"UNANSWERED"` |
 
 ```json
 {"commandToken":"6f1c0f8e-6d1e-4a1a-9a3f-1f2b0d0a5c11","dispatchNonce":"0f6f4a2c-9b71-4d0e-8a5b-3c2d1e0f7a94","success":false,"error":"actuator jammed"}

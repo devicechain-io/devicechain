@@ -282,3 +282,42 @@ func (r *SchemaResolver) CancelCommandBatch(ctx context.Context, args struct {
 	}
 	return &CancelCommandBatchResultResolver{M: *cancelled}, nil
 }
+
+// RetryCommandBatch re-issues a batch's command to a chosen subset of its unsuccessful devices
+// as a new, linked batch.
+//
+// 🔴 THE GROUP GATE RUNS BEFORE ANYTHING IS CREATED, AS FOR A CANCEL. The original is loaded
+// first and, when it targeted a group, device:read is required: the retry's refusals describe
+// that batch's devices, and a caller must not learn a group's membership through an operation
+// it was never allowed to read. The retry itself names devices explicitly, so it needs nothing
+// further. A missing original is left to the model, which answers with a coded rejection (or, for
+// a replay of the retry's own token, with the retry).
+//
+// The result is checked once more on the way out: a replay returns whatever the token names only
+// when that is a retry of the named original, so this cannot be used to read an unrelated batch.
+func (r *SchemaResolver) RetryCommandBatch(ctx context.Context, args struct {
+	Request model.CommandBatchRetryRequest
+}) (*CreateCommandBatchResultResolver, error) {
+	if err := auth.Authorize(ctx, auth.CommandWrite); err != nil {
+		return nil, err
+	}
+	api := r.GetApi(ctx)
+	originals, err := api.CommandBatchesByToken(ctx, []string{args.Request.Of})
+	if err != nil {
+		return nil, err
+	}
+	if err := authorizeGroupBatchReads(ctx, originals); err != nil {
+		return nil, err
+	}
+
+	created, err := api.RetryCommandBatch(ctx, &args.Request)
+	if err != nil {
+		if rejection, isRejection := batchRejectionResolver(err); isRejection {
+			return &CreateCommandBatchResultResolver{rejection: rejection}, nil
+		}
+		return nil, err
+	}
+	return &CreateCommandBatchResultResolver{
+		batch: &CommandBatchResolver{M: *created, S: r, C: ctx},
+	}, nil
+}

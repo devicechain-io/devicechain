@@ -75,19 +75,25 @@ var metricSafeCodes = map[RejectionCode]struct{}{
 	// This package's own codes. hack/check-rejection-code-labels.sh asserts every
 	// locally declared code appears here, so OUR drift is caught at CI time; a peer's
 	// new code is caught by the "other" bucket at runtime.
-	RejectPayloadNotJSON:       {},
-	RejectMetadataNotJSON:      {},
-	RejectPayloadTooLarge:      {},
-	RejectMetadataTooLarge:     {},
-	RejectNameTooLong:          {},
-	RejectExpiresAtInvalid:     {},
-	RejectHeldCeilingExceeded:  {},
-	RejectUnclassified:         {},
-	RejectBatchTargetAmbiguous: {},
-	RejectBatchTooLarge:        {},
-	RejectBatchPartialRefused:  {},
-	RejectTokenInUse:           {},
-	RejectGroupUnusable:        {},
+	RejectPayloadNotJSON:              {},
+	RejectMetadataNotJSON:             {},
+	RejectPayloadTooLarge:             {},
+	RejectMetadataTooLarge:            {},
+	RejectNameTooLong:                 {},
+	RejectExpiresAtInvalid:            {},
+	RejectHeldCeilingExceeded:         {},
+	RejectUnclassified:                {},
+	RejectBatchTargetAmbiguous:        {},
+	RejectBatchTooLarge:               {},
+	RejectBatchPartialRefused:         {},
+	RejectTokenInUse:                  {},
+	RejectGroupUnusable:               {},
+	RejectRetryOriginalNotFound:       {},
+	RejectRetryNoTargets:              {},
+	RejectRetryNotAMember:             {},
+	RejectRetryNotEligible:            {},
+	RejectRetryUnknownNotAcknowledged: {},
+	RejectRetryTokenInUse:             {},
 
 	// Relayed from device-management's enqueue gate. Listed for the label only; this
 	// is not a mirror of that service's enum and must not be treated as one.

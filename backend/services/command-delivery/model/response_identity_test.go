@@ -32,7 +32,7 @@ func TestMarkResponseRefusesADeviceAnsweringForAnother(t *testing.T) {
 		t.Fatalf("MarkSent: claimed=%v err=%v", claimed, err)
 	}
 
-	_, err = api.MarkResponse(ctx, "victim", "pump-9", nonceOf(t, api, ctx, created.ID), true, nil, nil)
+	_, err = api.MarkResponse(ctx, "victim", "pump-9", nonceOf(t, api, ctx, created.ID), true, ReachAnswered, nil, nil)
 	if !errors.Is(err, ErrResponderNotCommandOwner) {
 		t.Fatalf("a device answering for another device returned %v, want ErrResponderNotCommandOwner", err)
 	}
@@ -65,7 +65,7 @@ func TestMarkResponseAcceptsTheOwningDevice(t *testing.T) {
 		t.Fatalf("MarkSent: claimed=%v err=%v", claimed, err)
 	}
 
-	got, err := api.MarkResponse(ctx, "mine", "pump-1", nonceOf(t, api, ctx, created.ID), true, nil, nil)
+	got, err := api.MarkResponse(ctx, "mine", "pump-1", nonceOf(t, api, ctx, created.ID), true, ReachAnswered, nil, nil)
 	if err != nil {
 		t.Fatalf("the owning device's response was refused: %v", err)
 	}
@@ -101,7 +101,7 @@ func TestMarkResponseRefusesADeviceAnsweringForAnotherOnATerminalCommand(t *test
 	// A non-empty nonce, so the refusal under test is the IDENTITY one. With an empty nonce
 	// this would still fail — the nonce guard sits just below the identity check — and the
 	// test would then pass without the guard it names ever running.
-	if _, err := api.MarkResponse(ctx, "done", "pump-9", "any-dispatch", true, nil, nil); !errors.Is(err, ErrResponderNotCommandOwner) {
+	if _, err := api.MarkResponse(ctx, "done", "pump-9", "any-dispatch", true, ReachAnswered, nil, nil); !errors.Is(err, ErrResponderNotCommandOwner) {
 		t.Fatalf("a foreign response to a TERMINAL command returned %v, want ErrResponderNotCommandOwner "+
 			"— the identity check must sit above the terminal fast path", err)
 	}
@@ -155,7 +155,7 @@ func TestMarkResponseRefusesStatesNoDispatcherHeld(t *testing.T) {
 					}
 				}
 
-				_, err = api.MarkResponse(ctx, "early", "pump-1", answer.nonce, true, nil, nil)
+				_, err = api.MarkResponse(ctx, "early", "pump-1", answer.nonce, true, ReachAnswered, nil, nil)
 				if !errors.Is(err, answer.want) {
 					t.Fatalf("MarkResponse err = %v, want %v; a caller told nothing acks the "+
 						"message and the device's answer is gone", err, answer.want)
@@ -254,7 +254,7 @@ func TestMarkResponseAcceptsARaceToTerminal(t *testing.T) {
 		}
 	}()
 
-	got, err := api.MarkResponse(ctx, "raced-terminal", "d", nonce, true, nil, nil)
+	got, err := api.MarkResponse(ctx, "raced-terminal", "d", nonce, true, ReachAnswered, nil, nil)
 	if err != nil {
 		t.Fatalf("a response that lost a race to a terminal state must settle quietly, got %v", err)
 	}
@@ -326,7 +326,7 @@ func TestMarkResponseRefusesARowReclaimedUnderTheReRead(t *testing.T) {
 		}
 	}()
 
-	_, err = api.MarkResponse(ctx, "reclaimed", "d", released, true, nil, nil)
+	_, err = api.MarkResponse(ctx, "reclaimed", "d", released, true, ReachAnswered, nil, nil)
 	if !errors.Is(err, ErrResponseNonceMismatch) {
 		t.Fatalf("MarkResponse err = %v, want ErrResponseNonceMismatch; this answer belongs to "+
 			"the dispatch that was released, not to the one now in flight", err)

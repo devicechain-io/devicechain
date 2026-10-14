@@ -23,6 +23,11 @@
     "dispatchNonce": {
       "type": "string",
       "description": "The dispatchNonce of the delivery being answered. A response without one, or with a nonce from a dispatch the command has moved off, does not settle the command and is dead-lettered."
+    },
+    "reach": {
+      "type": "string",
+      "enum": ["UNANSWERED", "UNSENT"],
+      "description": "For gateways and protocol adapters that answer on a device's behalf; a device reporting its own outcome omits it. Read only when success is false. UNANSWERED: the command was put on the wire and nothing came back, so it settles as TIMEOUT with an unknown outcome. UNSENT: the adapter refused the command before it reached the device, so it settles as FAILED and is recorded as never delivered. Omitted, a failure is the device's own answer. A value this platform does not recognise is treated as UNANSWERED."
     }
   },
   "required": ["commandToken", "success", "dispatchNonce"],

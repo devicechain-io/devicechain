@@ -49,6 +49,27 @@ const (
 	// exist, collects something other than devices, was never published, or the named
 	// version does not exist. The owner's own code travels in the reason.
 	RejectGroupUnusable RejectionCode = "BATCH_GROUP_UNUSABLE"
+
+	// The RETRY_* codes are retryCommandBatch's own. All are permanent for the request as sent:
+	// the answer changes only when the facts do (a device finishes, the caller acknowledges).
+
+	// RejectRetryOriginalNotFound: the batch named by `of` does not exist.
+	RejectRetryOriginalNotFound RejectionCode = "RETRY_ORIGINAL_NOT_FOUND"
+	// RejectRetryNoTargets: the retry named no devices.
+	RejectRetryNoTargets RejectionCode = "RETRY_NO_TARGETS"
+	// RejectRetryNotAMember: a named device is not a member of the original batch, or is a device
+	// the original refused whose individual refusal the record did not keep (it stores a bounded
+	// sample per code, so it can only vouch for a refusal it holds in full).
+	RejectRetryNotAMember RejectionCode = "RETRY_NOT_A_MEMBER"
+	// RejectRetryNotEligible: a named device's command succeeded, is still in flight, or another
+	// batch of the same retry family holds a live or successful command for it.
+	RejectRetryNotEligible RejectionCode = "RETRY_NOT_ELIGIBLE"
+	// RejectRetryUnknownNotAcknowledged: a named device's command may already have acted
+	// (outcome UNKNOWN) and the caller did not set includeUnknown.
+	RejectRetryUnknownNotAcknowledged RejectionCode = "RETRY_UNKNOWN_NOT_ACKNOWLEDGED"
+	// RejectRetryTokenInUse: the retry's token already names a batch that is not a retry of this
+	// original. A retry needs its own token; the original token replays the original.
+	RejectRetryTokenInUse RejectionCode = "RETRY_TOKEN_IN_USE"
 )
 
 // BatchRejected is a refused batch: a classification, a client-safe reason, and — when the

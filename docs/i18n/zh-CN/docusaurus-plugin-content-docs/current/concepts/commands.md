@@ -45,11 +45,22 @@ DeviceChain 的命令是**双向且持久化**的。发出的命令会根据设�
   - 平台无法向设备发布命令，并已停止重试。
 
   每种情况下，命令的 `error` 字段都会说明原因，避免将平台侧 `FAILED` 误认为设备报告故障。
-- **`TIMEOUT`**：已派发，但设备从未回答。
+- **`TIMEOUT`**：已派发，但设备从未回答。自行执行交换的传输会以同样方式报告不回答的设备，因此 [LwM2M](./lwm2m.md) 适配器的“无应答”同样落为 `TIMEOUT`（`error` 中保留其自身措辞），而不是 `FAILED`。
 - **`EXPIRED`**：尚未到达设备，TTL 就已耗尽。
 - **`CANCELLED`**：运维人员或租户取消了命令。
 
 `EXPIRED` 和 `TIMEOUT` 回答不同问题，混淆会导致排查方向错误。`EXPIRED` 表示命令未到达设备，连续出现说明投递未成功；`TIMEOUT` 表示命令已发出但没有回复，指向设备。
+
+### 已结束命令的含义 {#outcome}
+
+每条终态命令还带有一个 `outcome`，说明实际发生了什么，因为仅 `FAILED` 就涵盖三种不同的事实：
+
+- **`SUCCEEDED`**：设备报告成功。
+- **`NOT_DELIVERED`**：已证明从未到达设备（`EXPIRED`、`CANCELLED`，以及传输无法承载命令或平台停止发布的 `FAILED` 情形）。
+- **`REJECTED`**：设备收到命令并报告失败。
+- **`UNKNOWN`**：可能已执行：`TIMEOUT`，或设备已回答而平台丢失了回答的 `FAILED`。
+
+它由结束该命令的写入记录，而非根据 `status` 和 `error` 推断，进行中的命令没有该值。[批次重试](../guides/commanding-a-fleet.md#retry-the-devices-that-did-not-succeed)按它选择。
 
 ### 向不在线设备发送命令 {#commands-to-a-device-that-is-away}
 

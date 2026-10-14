@@ -81,6 +81,13 @@ type responseEnvelope struct {
 	Payload      *json.RawMessage `json:"payload,omitempty"`
 	Error        *string          `json:"error,omitempty"`
 
+	// Reach says how far a FAILED command got, as the reporting transport saw it: empty when the
+	// device answered (every native device, which never sends it), UNANSWERED when the exchange
+	// was run and nothing came back, UNSENT when the transport refused it before the wire. It is
+	// read only when Success is false, and it must stay byte-identical with the LwM2M adapter's
+	// envelope. A device can only mis-class its OWN command with it, never another's.
+	Reach model.Reach `json:"reach,omitempty"`
+
 	// DispatchNonce is the value the device echoes from the delivery envelope it acted on,
 	// and it is REQUIRED: an answer that carries none is refused and dead-lettered.
 	//
@@ -97,6 +104,16 @@ type responseEnvelope struct {
 	// stays on the wire even when a client leaves it empty — which is what an operator sees
 	// when they read a dead letter and ask why the answer was refused.
 	DispatchNonce string `json:"dispatchNonce"`
+}
+
+// normalizeReach maps a reach this build does not understand onto UNANSWERED, the conservative
+// class: it records the command as possibly-acted (UNKNOWN), which only ever asks MORE of an
+// operator before a retry, where guessing REJECTED or NOT_DELIVERED would offer it as proven-safe.
+func normalizeReach(r model.Reach) model.Reach {
+	if r.Valid() {
+		return r
+	}
+	return model.ReachUnanswered
 }
 
 // CommandDeliveryProcessor owns the command delivery lifecycle: it delivers
@@ -863,7 +880,7 @@ func (cproc *CommandDeliveryProcessor) handleResponse(ctx context.Context, msg m
 	}
 
 	if _, err := cproc.Api.MarkResponse(tenantCtx, response.CommandToken, responder,
-		response.DispatchNonce, response.Success, responsePayloadText(response.Payload), response.Error); err != nil {
+		response.DispatchNonce, response.Success, normalizeReach(response.Reach), responsePayloadText(response.Payload), response.Error); err != nil {
 		// A device answering for a command it does not own is refused, and the refusal is
 		// TERMINAL, not transient: the same message would be refused on every redelivery,
 		// so retrying it only burns the delivery budget. Ack it, count it as invalid, and

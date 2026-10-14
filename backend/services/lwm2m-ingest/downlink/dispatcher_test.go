@@ -1341,3 +1341,28 @@ func TestResponsesAreAddressedToTheCommandsDevice(t *testing.T) {
 			"a drained command's response must be published as the drained device")
 	})
 }
+
+// The published response carries the reach for a failure and omits it otherwise, so a no-answer
+// reaches command-delivery as UNANSWERED (settled TIMEOUT) rather than as a device refusal.
+func TestPublishedResponseCarriesTheReachOnlyForAFailure(t *testing.T) {
+	for name, tc := range map[string]struct {
+		result OpResult
+		want   string
+	}{
+		"no answer":   {OpResult{Op: labelRead, Err: strptr("device did not respond (timeout)"), Reach: reachUnanswered}, "UNANSWERED"},
+		"never sent":  {OpResult{Op: labelRead, Err: strptr("bad"), Reach: reachUnsent}, "UNSENT"},
+		"device said": {OpResult{Op: labelRead, Err: strptr("device returned 4.04")}, ""},
+		"success":     {OpResult{Op: labelRead, Success: true, Reach: reachUnanswered}, ""},
+	} {
+		ack := newAck()
+		pub := &fakePublisher{}
+		look := &fakeLookup{conn: &fakeConn{}, reaches: map[string]Reach{"acme/pump-1": ReachLive}}
+		d := newDispatcher(nil, pub, look, &fakeExecutor{result: tc.result})
+
+		d.dispatch(context.Background(), liveWork("acme", "pump-1", CommandRead, `{"path":"/3/0/9"}`, ack))
+
+		resp := pub.responses()
+		require.Len(t, resp, 1, name)
+		assert.Equal(t, tc.want, resp[0].Reach, name)
+	}
+}

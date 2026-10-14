@@ -110,6 +110,12 @@ type CommandBatch struct {
 	// other session can see either until they do.
 	CancelledAt    sql.NullTime
 	CancelledCount sql.NullInt32
+
+	// RetryOf is the token of the batch this one RETRIES; null for an ordinary batch. It is the
+	// only provenance stored: the immediate parent, so a retry of a retry names the retry. The
+	// per-device history falls out of joining batches on device_token, so no per-command link
+	// exists. Set only by RetryCommandBatch, inside the creating transaction.
+	RetryOf sql.NullString
 }
 
 // DefaultOrder implements rdb.Sortable. Same reasoning as Command: the batch list is the

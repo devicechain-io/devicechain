@@ -96,7 +96,7 @@ func TestHoldCommandCannotReviveAnAnsweredCommand(t *testing.T) {
 
 			// Drive it terminal behind the gate's back, exactly as a racing writer would.
 			if err := api.RDB.DB(ctx).Model(&Command{}).Where("id = ?", created.ID).
-				Update("status", terminal.String()).Error; err != nil {
+				Updates(forcedStatus(terminal.String())).Error; err != nil {
 				t.Fatalf("staging %s failed: %v", terminal, err)
 			}
 

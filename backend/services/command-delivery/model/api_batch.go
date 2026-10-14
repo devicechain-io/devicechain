@@ -74,7 +74,7 @@ type BatchEnqueueValidator interface {
 // request for a stated, fixable reason. A plain error means the batch could not be DECIDED.
 func (api *Api) CreateCommandBatch(ctx context.Context, request *CommandBatchCreateRequest) (*CommandBatch, error) {
 	acct := batchAccounting{targetKind: requestTargetKindLabel(request)}
-	created, err := api.decideCommandBatch(ctx, request, &acct)
+	created, err := api.decideCommandBatch(ctx, request, &acct, nil)
 	api.recordBatchOutcome(&acct, err)
 	return created, err
 }
@@ -187,12 +187,15 @@ func rejectionCodeOf(err error) (RejectionCode, bool) {
 }
 
 func (api *Api) decideCommandBatch(ctx context.Context, request *CommandBatchCreateRequest,
-	acct *batchAccounting) (*CommandBatch, error) {
+	acct *batchAccounting, retry *retryPlan) (*CommandBatch, error) {
 	existing, replay, err := api.liveBatchByToken(ctx, request.Token)
 	if err != nil {
 		return nil, err
 	}
 	if replay {
+		if err := retryProvenance(existing, request.Token, retry); err != nil {
+			return nil, err
+		}
 		acct.replay = true
 		acct.targetKind = targetKindLabel(BatchTargetKind(existing.TargetKind))
 		// The token IS the identity: the first write wins and a differing re-request does
@@ -268,6 +271,7 @@ func (api *Api) decideCommandBatch(ctx context.Context, request *CommandBatchCre
 		GroupVersion:   targets.groupVersion,
 		AllowPartial:   request.AllowPartial,
 		Resolved:       len(targets.deviceTokens),
+		RetryOf:        retryOfValue(retry),
 	}
 
 	// Named `verdict` rather than `rejected` because `rejected` is this package's rejection
@@ -289,6 +293,15 @@ func (api *Api) decideCommandBatch(ctx context.Context, request *CommandBatchCre
 		// the hot single-enqueue path untouched.
 		if err := lockTenantForBatch(ctx, tx); err != nil {
 			return err
+		}
+		// A retry re-proves its targets under the lock: a late device response can have moved a
+		// command since the check before the remote gate, and the cost of that race must be a
+		// rejection, never a resend.
+		if retry != nil {
+			if err := api.checkRetryEligibility(tx, retry, admissible); err != nil {
+				verdict = err
+				return err
+			}
 		}
 
 		headroom, err := api.undeliveredHeadroom(ctx, tx)
@@ -378,6 +391,9 @@ func (api *Api) decideCommandBatch(ctx context.Context, request *CommandBatchCre
 			// The winner was soft-deleted between its commit and this read. Rare enough to
 			// be worth reporting honestly rather than papering over with a retry loop.
 			return nil, fmt.Errorf("command batch %q was removed while being created", request.Token)
+		}
+		if err := retryProvenance(existing, request.Token, retry); err != nil {
+			return nil, err
 		}
 		return existing, nil
 	}

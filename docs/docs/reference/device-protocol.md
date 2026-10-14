@@ -167,6 +167,7 @@ What a device publishes on its `command-responses` topic to settle a command. Th
 | `success` | boolean | yes | `true` settles the command as `SUCCESSFUL`, `false` as `FAILED`. Omitted, it reads as `false`. | `true` |
 | `payload` | any JSON value | no | The command's result data, stored with the command and returned by the API. A string is stored as its text; an object, array, number or boolean is stored as that JSON value, exactly as sent, so a device can return structured data directly. Omitted or `null`, the command has no response payload. | `"rebooting in 5s"` or `{"level":3}` |
 | `error` | string | no | Why the command failed. Stored only when `success` is `false`; ignored when it is `true`. | `"actuator jammed"` |
+| `reach` | string | no | For a gateway or protocol adapter that answers on a device's behalf; a device reporting its own outcome omits it. Read only when `success` is `false`. `"UNANSWERED"`: the command was put on the wire and nothing came back, so it settles as `TIMEOUT`. `"UNSENT"`: the adapter refused it before it reached the device, so it settles as `FAILED` and is recorded as never delivered. Omitted, a failure is the device's own answer. An unrecognised value is treated as `"UNANSWERED"`. | `"UNANSWERED"` |
 
 ```json
 {"commandToken":"6f1c0f8e-6d1e-4a1a-9a3f-1f2b0d0a5c11","dispatchNonce":"0f6f4a2c-9b71-4d0e-8a5b-3c2d1e0f7a94","success":false,"error":"actuator jammed"}

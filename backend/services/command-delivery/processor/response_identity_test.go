@@ -480,3 +480,28 @@ func TestAnUndecodableResponseIsDeadLetteredAndNotApplied(t *testing.T) {
 type ackCounter struct{ n *int }
 
 func (a ackCounter) Ack() error { *a.n++; return nil }
+
+// The reach a transport reports on a failure travels to MarkResponse unchanged, and a value this
+// build does not understand degrades to the conservative class rather than to "the device said
+// no", which would offer a possibly-acted command as safe to retry.
+func TestAFailureResponseForwardsItsReach(t *testing.T) {
+	for name, tc := range map[string]struct {
+		field string
+		want  model.Reach
+	}{
+		"answered by default": {``, model.ReachAnswered},
+		"no answer":           {`,"reach":"UNANSWERED"`, model.ReachUnanswered},
+		"never sent":          {`,"reach":"UNSENT"`, model.ReachUnsent},
+		"a future value":      {`,"reach":"SOMETHING_NEW"`, model.ReachUnanswered},
+	} {
+		api := &fakeApi{}
+		body := `{"commandToken":"cmd-1","success":false,"dispatchNonce":"n"` + tc.field + `}`
+		p := responseProcessor(t, api, "inst-1.acme.command-responses.pump-1", body)
+
+		readAndHandleOne(p, context.Background())
+
+		if len(api.responseCalls) != 1 || api.responseCalls[0].reach != tc.want {
+			t.Fatalf("%s: calls = %+v, want reach %q", name, api.responseCalls, tc.want)
+		}
+	}
+}

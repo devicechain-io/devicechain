@@ -293,7 +293,7 @@ func isSuccess(code codes.Code) bool {
 
 // refuse builds a validation-refusal result (the command never reached the wire).
 func refuse(op, reason string) OpResult {
-	return OpResult{Op: op, Success: false, Err: strptr(reason)}
+	return OpResult{Op: op, Success: false, Err: strptr(reason), Reach: reachUnsent}
 }
 
 // deviceFail builds a result for a device that answered a non-2.xx CoAP code.
@@ -305,9 +305,9 @@ func deviceFail(op string, code codes.Code) OpResult {
 // reported distinctly (the device did not answer in time) from other transport errors.
 func transportFail(ctx context.Context, op string, err error) OpResult {
 	if ctx.Err() != nil || errors.Is(err, context.DeadlineExceeded) {
-		return OpResult{Op: op, Success: false, Err: strptr("device did not respond (timeout)")}
+		return OpResult{Op: op, Success: false, Err: strptr("device did not respond (timeout)"), Reach: reachUnanswered}
 	}
-	return OpResult{Op: op, Success: false, Err: strptr("transport error contacting the device")}
+	return OpResult{Op: op, Success: false, Err: strptr("transport error contacting the device"), Reach: reachUnanswered}
 }
 
 // strptr returns a pointer to s (responseEnvelope's Payload/Error are *string).

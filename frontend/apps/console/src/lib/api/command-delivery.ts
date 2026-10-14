@@ -16,6 +16,8 @@ import type {
   CancelCommandBatchMutation,
   DeviceCommandHoldQuery,
   CancelDeviceCommandsMutation,
+  RetryCommandBatchMutation,
+  CommandBatchRetryRequest,
 } from '@/gql/command-delivery/graphql';
 
 // Public types are derived from the generated operation results so they always
@@ -49,6 +51,11 @@ export type { CommandBatchCreateRequest };
 // What the platform is holding for one device because it is disabled.
 export type DeviceCommandHold = DeviceCommandHoldQuery['deviceCommandHold'];
 export type CancelDeviceCommandsResult = CancelDeviceCommandsMutation['cancelDeviceCommands'];
+// A retry answers with the same two nullable arms as a fresh batch.
+export type RetryCommandBatchResult = RetryCommandBatchMutation['retryCommandBatch'];
+export type RetriedCommandBatch = NonNullable<RetryCommandBatchResult['batch']>;
+export type CommandBatchRetryRejection = NonNullable<RetryCommandBatchResult['rejection']>;
+export type { CommandBatchRetryRequest };
 
 // What cancelling a fleet write was able to do — four counts that DELIBERATELY NEED NOT
 // SUM. See cancelCommandBatch below, and `cancelOutcome.ts` for the rules that read them.
@@ -80,6 +87,7 @@ const COMMANDS = graphql(`
         expiresAt
         responsePayload
         error
+        outcome
       }
       pagination {
         pageStart
@@ -166,6 +174,8 @@ const COMMAND_BATCHES_BY_TOKEN = graphql(`
       }
       cancelledAt
       cancelledCount
+      retryOf
+      retries
     }
   }
 `);
@@ -202,6 +212,30 @@ const CREATE_COMMAND_BATCH = graphql(`
         refusalCounts {
           code
           count
+        }
+      }
+    }
+  }
+`);
+
+const RETRY_COMMAND_BATCH = graphql(`
+  mutation RetryCommandBatch($request: CommandBatchRetryRequest!) {
+    retryCommandBatch(request: $request) {
+      batch {
+        id
+        token
+        retryOf
+        resolved
+        accepted
+      }
+      rejection {
+        code
+        reason
+        resolved
+        refusals {
+          deviceToken
+          code
+          reason
         }
       }
     }
@@ -467,4 +501,48 @@ export async function cancelCommand(token: string) {
 //    a caller acts on the "cancel again" case above.
 export async function cancelCommandBatch(token: string): Promise<CancelCommandBatchResult> {
   return (await gql('command-delivery', CANCEL_COMMAND_BATCH, { token })).cancelCommandBatch;
+}
+
+// How many commands the retry panel will read from one batch, one page at a time. A batch is
+// capped at 10,000 devices, so this bounds the loop and a result at the cap is flagged.
+const UNSUCCESSFUL_PAGE = 1000;
+export const MAX_UNSUCCESSFUL_READ = 10000;
+
+// Every FINISHED-and-unsuccessful command of one batch: the classes a retry can act on,
+// selected by the STORED outcome rather than by status or error text. Requires command:read.
+// `truncated` is true when the batch has more than the read bound.
+export async function listUnsuccessfulBatchCommands(
+  batchToken: string,
+): Promise<{ commands: Command[]; truncated: boolean }> {
+  const commands: Command[] = [];
+  for (let pageNumber = 1; commands.length < MAX_UNSUCCESSFUL_READ; pageNumber++) {
+    const page = (
+      await gql('command-delivery', COMMANDS, {
+        criteria: {
+          pageNumber,
+          pageSize: UNSUCCESSFUL_PAGE,
+          batchToken,
+          outcomes: ['NOT_DELIVERED', 'REJECTED', 'UNKNOWN'],
+        },
+      })
+    ).commands;
+    commands.push(...page.results);
+    if (page.results.length < UNSUCCESSFUL_PAGE) return { commands, truncated: false };
+  }
+  return { commands, truncated: true };
+}
+
+// Re-issue a batch's command to a chosen subset of its unsuccessful devices, as a new
+// batch linked to the original. Requires command:write (and device:read when the original
+// targeted a group).
+//
+// 🔴 THE CALLER MINTS A FRESH TOKEN, DIFFERENT FROM THE ORIGINAL'S. It is the retry's own
+// idempotency key: re-sending it returns the retry and sends nothing more. It RESOLVES on
+// a refusal exactly like createCommandBatch — branch on `rejection` first, then require
+// `batch`. `includeUnknown` acknowledges that UNKNOWN-outcome devices may already have
+// acted; the server refuses them without it.
+export async function retryCommandBatch(
+  request: CommandBatchRetryRequest,
+): Promise<RetryCommandBatchResult> {
+  return (await gql('command-delivery', RETRY_COMMAND_BATCH, { request })).retryCommandBatch;
 }

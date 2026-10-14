@@ -218,6 +218,60 @@ query {
 
 在控制台中，批次详情页会列出这些命令，并提供**导出 CSV**按钮。它会导出符合当前状态筛选的全部命令（而不只是当前可见页），最多 10,000 行；若批次更大，控制台会明确提示，缩小筛选范围即可导出其余部分。
 
+## 重试未成功的设备 {#retry-the-devices-that-did-not-succeed}
+
+车队写入部分失败时，不应让你手工重建设备列表。每条已结束的命令都带有一个 `outcome`，由结束它的那次写入记录，重试按该结果选择，而不是去读错误文本：
+
+| `outcome` | 发生了什么 | 再次发送 |
+|---|---|---|
+| `SUCCEEDED` | 设备报告成功。 | 不可重试。 |
+| `NOT_DELIVERED` | 平台能证明命令从未到达设备：平台仍持有它时已过期或被取消、传输没有命令通路，或平台放弃了发布。 | 不会执行两次。 |
+| `REJECTED` | 设备收到命令并回答没有执行。 | 有意的再次请求。 |
+| `UNKNOWN` | 命令可能已到达设备并已执行：已发送但从未得到回答（`TIMEOUT`），或设备已回答但平台丢失了回答。 | 可能执行两次。仅在明确确认后才可重试。 |
+
+尚未结束的命令没有结果。仅凭 `status` 无法得到这一信息，因为 `FAILED` 同时涵盖从未送达、被拒绝和结果未知。请按结果搜索：
+
+```graphql
+query {
+  commands(criteria: {
+    pageNumber: 1, pageSize: 100,
+    batchToken: "nightly-reboot-2026-08-14",
+    outcomes: ["NOT_DELIVERED", "REJECTED"]
+  }) {
+    results { deviceToken status outcome error }
+  }
+}
+```
+
+`retryCommandBatch` 把原批次的命令重新发给你指定的设备，作为与原批次关联的**新批次**：
+
+```graphql
+mutation {
+  retryCommandBatch(request: {
+    token: "nightly-reboot-2026-08-14-retry-1",
+    of: "nightly-reboot-2026-08-14",
+    deviceTokens: ["gw-4471", "gw-4472"],
+    includeUnknown: false,
+    allowPartial: true
+  }) {
+    batch { token retryOf resolved accepted }
+    rejection { code reason refusals { deviceToken code reason } }
+  }
+}
+```
+
+- **请求中不含命令。** 平台从原批次复制名称和载荷，因此重试不会变成另一条命令。
+- **每个设备都必须是原批次的成员**且未成功：`NOT_DELIVERED` 或 `REJECTED`。命令已成功或仍在途中的设备会被拒绝（`RETRY_NOT_ELIGIBLE`），不在该批次中的设备会被拒绝（`RETRY_NOT_A_MEMBER`），在同一重试族（原批次、它的任何重试以及这些重试的重试）的另一个批次中已有进行中或成功命令的设备同样被拒绝，因此设备不会因为同时存在两个未完成的重试而收到两次命令。
+- **`UNKNOWN` 需要 `includeUnknown: true`。** 否则这些设备会以 `RETRY_UNKNOWN_NOT_ACKNOWLEDGED` 被拒绝。只有在确认执行两次无害之后才设置它。
+- **原批次拒绝过的设备**只有在批次记录完整保存了该拒绝时才可重试。记录对每个代码最多保存 100 个被拒绝设备（`refusalCounts` 是精确的），因此来自更大集合的设备会以 `RETRY_NOT_A_MEMBER` 被拒绝。
+- **重试与新批次经过相同的检查**：设备当前的命令词汇表、已禁用的设备、平台拒绝原样发送的命令、待处理命令上限以及 `allowPartial`。重试不是绕过其中任何一项的办法。
+- **幂等性是双向的。** 重试有自己的 `token`；再次发送它会返回该重试且不再发送任何内容。把*原*令牌发给 `createCommandBatch` 仍返回原批次且不执行任何操作。已指向一个并非本批次重试的批次的令牌会被拒绝（`RETRY_TOKEN_IN_USE`）。
+- **关联记录在批次上**：`retryOf` 指明重试所重新尝试的批次，原批次上的 `retries` 列出重试过它的批次。重试的重试指向该重试。
+
+重试需要 `command:write`；面向分组的原批次还需要 `device:read`。
+
+在控制台中，批次详情页有**重试…**操作。它把未成功的设备分组列出：*从未送达*和*设备拒绝*默认选中，*触发时被拒绝*（记录保存了它时）可供选择但不会默认选中，*结果未知*不会选中，并保持锁定，直到你勾选确认这些设备可能已经执行过。仍在途中的命令只计数，无法选择。新批次创建后会打开，两个批次相互链接。
+
 ## 取消批次 {#call-the-whole-thing-off}
 
 ```graphql

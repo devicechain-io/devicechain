@@ -82,7 +82,7 @@ These states are terminal. Nothing moves out of a terminal state.
 
   In each of these the command's `error` field says which, so you never mistake a
   platform-side `FAILED` for the device reporting a fault.
-- **`TIMEOUT`** — it was dispatched and the device never answered.
+- **`TIMEOUT`** — it was dispatched and the device never answered. A transport that runs the exchange itself reports a device that does not answer the same way, so the [LwM2M](./lwm2m.md) adapter's "no answer" settles as `TIMEOUT` too, with its own wording in `error`, not as `FAILED`.
 - **`EXPIRED`** — its TTL elapsed before it ever reached a device.
 - **`CANCELLED`** — an operator or a tenant called it off.
 
@@ -90,6 +90,17 @@ These states are terminal. Nothing moves out of a terminal state.
 wrong place. `EXPIRED` means the command never got to a device, so a run of them says deliveries
 are not landing. `TIMEOUT` means a command did go out and nothing came back, which points at the
 device.
+
+### What a finished command amounts to {#outcome}
+
+Every terminal command also carries an `outcome` that says what physically happened, because `FAILED` alone spans three different facts:
+
+- **`SUCCEEDED`** — the device reported success.
+- **`NOT_DELIVERED`** — proven never to have reached the device (`EXPIRED`, `CANCELLED`, and the `FAILED` cases where the transport cannot carry commands or the platform stopped trying to publish).
+- **`REJECTED`** — the device received the command and reported a failure.
+- **`UNKNOWN`** — it may have acted: `TIMEOUT`, or a `FAILED` where the device answered and the platform lost the answer.
+
+It is recorded by the write that finished the command, not worked out from `status` and `error`, and a live command has none. [Retrying a batch](../guides/commanding-a-fleet.md#retry-the-devices-that-did-not-succeed) is selected by it.
 
 ### Commands to a device that is away {#commands-to-a-device-that-is-away}
 

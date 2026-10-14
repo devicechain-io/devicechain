@@ -352,7 +352,7 @@ func TestParkClaimIsANoOpOnACommandThatMovedOn(t *testing.T) {
 	if err != nil || !claimed {
 		t.Fatalf("MarkSent: claimed=%v err=%v", claimed, err)
 	}
-	if _, err := api.MarkResponse(ctx, "answered", "d", nonce, true, nil, nil); err != nil {
+	if _, err := api.MarkResponse(ctx, "answered", "d", nonce, true, ReachAnswered, nil, nil); err != nil {
 		t.Fatalf("MarkResponse: %v", err)
 	}
 
@@ -393,7 +393,7 @@ func TestMarkResponseAcceptsAParkedCommand(t *testing.T) {
 		t.Fatalf("staging the park: landed=%v parked=%v err=%v", landed, parked, err)
 	}
 
-	got, err := api.MarkResponse(ctx, "late-answer", "d", nonce, true, nil, nil)
+	got, err := api.MarkResponse(ctx, "late-answer", "d", nonce, true, ReachAnswered, nil, nil)
 	if err != nil {
 		t.Fatalf("MarkResponse: %v", err)
 	}

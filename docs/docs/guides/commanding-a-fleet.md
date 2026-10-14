@@ -287,6 +287,84 @@ In the console, a batch's detail page lists these commands and has an **Export C
 exports every command matching the status filter in force, not only the visible page, up to 10,000
 rows; if the batch is larger the console says so and you narrow the filter to get the rest.
 
+## Retry the devices that did not succeed {#retry-the-devices-that-did-not-succeed}
+
+A fleet write that partly fails should not make you rebuild the device list by hand. Every command
+that finishes carries an `outcome`, recorded by the write that finished it, and a retry is selected
+by that outcome rather than by reading error text:
+
+| `outcome` | What happened | Sending it again |
+|---|---|---|
+| `SUCCEEDED` | The device reported success. | Not retryable. |
+| `NOT_DELIVERED` | The platform can prove the command never reached the device: it expired or was cancelled while the platform still held it, the transport has no command path, or the platform gave up publishing it. | Cannot act twice. |
+| `REJECTED` | The device received the command and answered that it did not do it. | A deliberate re-ask. |
+| `UNKNOWN` | The command may have reached the device and acted: it was sent and never answered (`TIMEOUT`), or the device answered and the platform lost the answer. | May act twice. Only on explicit acknowledgement. |
+
+A command that has not finished has no outcome. `status` alone cannot give you this, because
+`FAILED` covers all of never-delivered, rejected and unknown. Search by outcome:
+
+```graphql
+query {
+  commands(criteria: {
+    pageNumber: 1, pageSize: 100,
+    batchToken: "nightly-reboot-2026-08-14",
+    outcomes: ["NOT_DELIVERED", "REJECTED"]
+  }) {
+    results { deviceToken status outcome error }
+  }
+}
+```
+
+`retryCommandBatch` re-issues the original batch's command to the devices you name, as a **new batch**
+linked to the original:
+
+```graphql
+mutation {
+  retryCommandBatch(request: {
+    token: "nightly-reboot-2026-08-14-retry-1",
+    of: "nightly-reboot-2026-08-14",
+    deviceTokens: ["gw-4471", "gw-4472"],
+    includeUnknown: false,
+    allowPartial: true
+  }) {
+    batch { token retryOf resolved accepted }
+    rejection { code reason refusals { deviceToken code reason } }
+  }
+}
+```
+
+- **The command is not in the request.** The platform copies the name and payload from the original,
+  so a retry cannot turn into a different command.
+- **Every device must be a member of the original batch** and unsuccessful: `NOT_DELIVERED` or
+  `REJECTED`. A device whose command succeeded or is still in flight is refused
+  (`RETRY_NOT_ELIGIBLE`), a device that was not in the batch is refused (`RETRY_NOT_A_MEMBER`), and
+  a device that already has a live or successful command in another batch of the same retry family
+  (the original, any retry of it, and any retry of those) is refused too, so a device is never sent
+  the command twice because two retries were open at once.
+- **`UNKNOWN` needs `includeUnknown: true`.** Without it those devices are refused with
+  `RETRY_UNKNOWN_NOT_ACKNOWLEDGED`. Set it only after confirming that acting twice is harmless.
+- **Devices the original refused** can be retried only when the batch record holds that refusal. The
+  record keeps at most 100 refused devices per code (`refusalCounts` is exact), so a device from a
+  larger set is refused with `RETRY_NOT_A_MEMBER`.
+- **A retry goes through the same checks as a new batch**: the device's current command vocabulary, a
+  disabled device, a command the platform refuses to send raw, the held-command ceiling and
+  `allowPartial`. Retrying is not a way around any of them.
+- **Idempotency runs both ways.** The retry has its own `token`; sending it again returns the retry
+  and sends nothing more. Sending the *original* token to `createCommandBatch` still returns the
+  original batch and executes nothing. A token that already names a batch which is not a retry of
+  this one is refused (`RETRY_TOKEN_IN_USE`).
+- **The link is on the batch**: `retryOf` names the batch a retry re-attempts, and `retries` on the
+  original lists the batches that retried it. A retry of a retry names the retry.
+
+Retrying needs `command:write`, and a group-targeted original also needs `device:read`.
+
+In the console, a batch's detail page has a **Retry…** action. It lists the unsuccessful devices in
+groups: *never delivered* and *device rejected* are selected for you, *refused when fired* is offered
+(when the record holds it) but not selected, and *outcome unknown* is not selected and stays locked
+until you tick an acknowledgement that those devices may already have acted. Commands still in flight
+are counted and cannot be selected. The new batch opens when it is created, and the two batches link
+to each other.
+
 ## Cancel a batch {#call-the-whole-thing-off}
 
 ```graphql

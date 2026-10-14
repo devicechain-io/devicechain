@@ -178,3 +178,29 @@ func TestTransportErrorMapsTransport(t *testing.T) {
 	assert.False(t, res.Success)
 	assert.Contains(t, *res.Err, "transport error")
 }
+
+// A command's REACH is what lets command-delivery tell "the device said no" from "nothing came
+// back" from "never left": the same Success=false on the wire, three different facts. The mapping
+// below is the contract — in particular, a no-answer must be reported UNANSWERED so it settles as
+// TIMEOUT, the same status the expiry sweep records for the same physical fact.
+func TestFailureReachSeparatesNoAnswerFromRefusalFromNeverSent(t *testing.T) {
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	for name, tc := range map[string]struct {
+		res  OpResult
+		want string
+	}{
+		"timeout": {NewOps().Execute(cancelled, &opConn{respErr: errors.New("context canceled")},
+			CommandRead, []byte(`{"path":"/3/0/9"}`)), reachUnanswered},
+		"transport error": {NewOps().Execute(context.Background(), &opConn{respErr: errors.New("socket boom")},
+			CommandRead, []byte(`{"path":"/3/0/9"}`)), reachUnanswered},
+		"device 4.04": {NewOps().Execute(context.Background(), &opConn{code: codes.NotFound},
+			CommandRead, []byte(`{"path":"/3/0/9"}`)), ""},
+		"refused locally": {NewOps().Execute(context.Background(), &opConn{code: codes.Changed},
+			CommandWrite, []byte(`{"path":"/5/0/1","value":{"a":1}}`)), reachUnsent},
+		"unknown command": {NewOps().Execute(context.Background(), &opConn{}, "nope", nil), reachUnsent},
+	} {
+		assert.False(t, tc.res.Success, name)
+		assert.Equal(t, tc.want, tc.res.Reach, name)
+	}
+}

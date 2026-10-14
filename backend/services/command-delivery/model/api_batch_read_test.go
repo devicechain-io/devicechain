@@ -74,7 +74,7 @@ func TestBatchTokenFilterNarrowsToOneBatchesCommands(t *testing.T) {
 	// answer, because they are frozen at creation time.
 	sent := CommandSent.String()
 	if err := api.RDB.DB(ctx).Model(&Command{}).
-		Where("token = ?", found.Results[0].Token).Update("status", sent).Error; err != nil {
+		Where("token = ?", found.Results[0].Token).Updates(forcedStatus(sent)).Error; err != nil {
 		t.Fatalf("force one command to SENT: %v", err)
 	}
 	narrowed, err := api.Commands(ctx, CommandSearchCriteria{

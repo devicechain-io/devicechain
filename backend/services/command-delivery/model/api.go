@@ -295,7 +295,7 @@ type CommandDeliveryApi interface {
 	// MarkResponse records a device's answer against the dispatch it names. The nonce is
 	// the device's evidence that it actually received that dispatch; an answer carrying
 	// none is refused.
-	MarkResponse(ctx context.Context, commandToken, responder, dispatchNonce string, success bool,
+	MarkResponse(ctx context.Context, commandToken, responder, dispatchNonce string, success bool, reach Reach,
 		payload *string, errMsg *string) (*Command, error)
 	CancelCommand(ctx context.Context, token string) (*Command, error)
 	ExpireStale(ctx context.Context, now time.Time) (int64, map[string]int64, error)
@@ -1196,12 +1196,11 @@ func (api *Api) ReleaseClaim(ctx context.Context, id uint) (CommandStatus, bool,
 	exhausted := api.RDB.DB(ctx).Model(&Command{}).
 		Where(where, args...).
 		Where("status = ? AND dispatch_failures + 1 >= ?", CommandSent.String(), api.maxDispatchFailures()).
-		Updates(map[string]any{
-			"status":            CommandFailed.String(),
+		Updates(terminalUpdate(CommandFailed, OutcomeNotDelivered, map[string]any{
 			"error":             sql.NullString{String: UndispatchableReason, Valid: true},
 			"sent_time":         sql.NullTime{},
 			"dispatch_failures": gorm.Expr("dispatch_failures + 1"),
-		})
+		}))
 	if exhausted.Error != nil {
 		return "", false, exhausted.Error
 	}
@@ -1291,10 +1290,9 @@ func (api *Api) stopCancelledBatchCommand(ctx context.Context, where string, arg
 	stopped := api.RDB.DB(ctx).Model(&Command{}).
 		Where(where, args...).
 		Where("status = ? AND batch_id IN (?)", CommandSent.String(), api.cancelledBatchIds(ctx)).
-		Updates(map[string]any{
-			"status":    CommandCancelled.String(),
+		Updates(terminalUpdate(CommandCancelled, OutcomeNotDelivered, map[string]any{
 			"sent_time": sql.NullTime{},
-		})
+		}))
 	if stopped.Error != nil {
 		return false, stopped.Error
 	}
@@ -1428,10 +1426,9 @@ func (api *Api) HoldCommand(ctx context.Context, id uint) (bool, error) {
 func (api *Api) MarkUndeliverable(ctx context.Context, id uint, reason string) (bool, error) {
 	res := api.RDB.DB(ctx).Model(&Command{Model: gorm.Model{ID: id}}).
 		Where("id = ? AND status = ?", id, CommandQueued.String()).
-		Updates(map[string]any{
-			"status": CommandFailed.String(),
-			"error":  sql.NullString{String: reason, Valid: true},
-		})
+		Updates(terminalUpdate(CommandFailed, OutcomeNotDelivered, map[string]any{
+			"error": sql.NullString{String: reason, Valid: true},
+		}))
 	if res.Error != nil {
 		return false, res.Error
 	}
@@ -1503,10 +1500,9 @@ func (api *Api) MarkResponseLost(ctx context.Context, token string) (bool, error
 	}
 	res := api.RDB.DB(ctx).Model(&Command{}).
 		Where("token = ? AND status IN ?", token, answerableStatusStrings()).
-		Updates(map[string]any{
-			"status": CommandFailed.String(),
-			"error":  sql.NullString{String: ResponseLostReason, Valid: true},
-		})
+		Updates(terminalUpdate(CommandFailed, OutcomeUnknown, map[string]any{
+			"error": sql.NullString{String: ResponseLostReason, Valid: true},
+		}))
 	if res.Error != nil {
 		return false, res.Error
 	}
@@ -1890,7 +1886,7 @@ func (api *Api) rotateDispatch(ctx context.Context, where string, args []any) (s
 // Nothing is written in either refusal — see the sentinels for why each is terminal for the
 // message rather than something to retry.
 func (api *Api) MarkResponse(ctx context.Context, commandToken, responder, dispatchNonce string,
-	success bool, payload *string, errMsg *string) (*Command, error) {
+	success bool, reach Reach, payload *string, errMsg *string) (*Command, error) {
 	matches, err := api.CommandsByToken(ctx, []string{commandToken})
 	if err != nil {
 		return nil, err
@@ -1937,10 +1933,24 @@ func (api *Api) MarkResponse(ctx context.Context, commandToken, responder, dispa
 		// SENT while the sweep retried the same doomed UPDATE every minute.
 		"response_payload": rdb.JSONTextOf(payload),
 	}
-	if success {
+	switch {
+	case success:
 		updates["status"] = CommandSuccessful.String()
-	} else {
+		updates["outcome"] = OutcomeSucceeded.String()
+	case reach == ReachUnanswered:
+		// 🔴 THE SAME PHYSICAL FACT THE EXPIRY SWEEP CALLS TIMEOUT: the command went out and nothing
+		// came back. The reporting transport knows it (it ran the exchange), so it says so, and
+		// the two writers agree on status and on class. The transport's own wording stays in error.
+		updates["status"] = CommandTimeout.String()
+		updates["outcome"] = OutcomeUnknown.String()
+		updates["error"] = rdb.NullStrOf(errMsg)
+	case reach == ReachUnsent:
 		updates["status"] = CommandFailed.String()
+		updates["outcome"] = OutcomeNotDelivered.String()
+		updates["error"] = rdb.NullStrOf(errMsg)
+	default:
+		updates["status"] = CommandFailed.String()
+		updates["outcome"] = OutcomeRejected.String()
 		updates["error"] = rdb.NullStrOf(errMsg)
 	}
 	// ⚠️ `device_token = ?` HERE IS NOT INDEPENDENTLY VERIFIED, AND IT IS RECORDED RATHER
@@ -2060,7 +2070,7 @@ func (api *Api) CancelCommand(ctx context.Context, token string) (*Command, erro
 	}
 	if res := api.RDB.DB(ctx).Model(&Command{Model: gorm.Model{ID: found.ID}}).
 		Where("id = ? AND status IN ?", found.ID, cancellableStatusStrings()).
-		Updates(map[string]any{"status": CommandCancelled.String()}); res.Error != nil {
+		Updates(terminalUpdate(CommandCancelled, OutcomeNotDelivered, nil)); res.Error != nil {
 		return nil, res.Error
 	}
 	return api.loadCommand(ctx, found.ID)
@@ -2234,7 +2244,7 @@ func (api *Api) expireOne(ctx context.Context, id uint, fromStatus, next string)
 	// live to expire on a later pass with the terminal its new state deserves.
 	res := api.RDB.DB(ctx).Model(&Command{Model: gorm.Model{ID: id}}).
 		Where("id = ? AND status = ?", id, fromStatus).
-		Update("status", next)
+		Updates(terminalUpdate(CommandStatus(next), expiredOutcome(next), nil))
 	if res.Error != nil {
 		return false, res.Error
 	}
@@ -2272,6 +2282,11 @@ func (api *Api) Commands(ctx context.Context, criteria CommandSearchCriteria) (*
 		// the driver rather than on the query.
 		if criteria.Statuses != nil && len(*criteria.Statuses) > 0 {
 			db = db.Where("status IN ?", *criteria.Statuses)
+		}
+		// Same empty-means-unfiltered treatment as Statuses. A live command has a NULL outcome,
+		// which matches no IN list, so filtering by outcome never returns an unfinished row.
+		if criteria.Outcomes != nil && len(*criteria.Outcomes) > 0 {
+			db = db.Where("outcome IN ?", *criteria.Outcomes)
 		}
 		// Filtered on the denormalized token rather than joining the batch, matching
 		// DeviceToken above: an empty string is a filter that matches nothing (no

@@ -132,3 +132,8 @@ func (r *CommandSearchResultsResolver) Pagination() *SearchResultsPaginationReso
 		C: r.C,
 	}
 }
+
+// Outcome is the stored class of a finished command; null while it is live.
+func (r *CommandResolver) Outcome() *string {
+	return util.NullStr(r.M.Outcome)
+}

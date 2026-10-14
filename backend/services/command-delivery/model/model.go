@@ -164,6 +164,11 @@ type Command struct {
 	ResponsePayload *datatypes.JSON
 	Error           sql.NullString
 
+	// Outcome is the class of a FINISHED command (see CommandOutcome), stamped by the write that
+	// terminated it and NULL while the command is live. It is stored, not derived from Status and
+	// Error, because only the terminating write knows which fact it is recording.
+	Outcome sql.NullString
+
 	// BatchId links a command to the CommandBatch that created it; null for a command
 	// issued one at a time.
 	//
@@ -314,6 +319,9 @@ type CommandSearchCriteria struct {
 	// is what answers "of the 5,000 this batch queued, how many have gone out?" when
 	// combined with Status or Statuses.
 	BatchToken *string
+	// Outcomes narrows to commands that finished in any of these classes (see CommandOutcome).
+	// An empty list is ignored, like Statuses.
+	Outcomes *[]string
 }
 
 // CommandSearchResults wraps a page of commands.
