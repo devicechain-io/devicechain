@@ -198,3 +198,30 @@ func (r *DeviceThresholdAttributeResolver) Scope() string       { return r.M.Sco
 func (r *DeviceThresholdAttributeResolver) Key() string         { return r.M.AttrKey }
 func (r *DeviceThresholdAttributeResolver) Value() float64      { return r.M.Value }
 func (r *DeviceThresholdAttributeResolver) UpdatedAt() string   { return reconcileTime(r.M.UpdatedAt) }
+
+// DisabledDevicePage resolves one page of the tenant's disabled devices.
+func (r *SchemaResolver) DisabledDevicePage(ctx context.Context, args struct {
+	AfterId *string
+	Limit   int32
+}) (*DisabledDevicePageResolver, error) {
+	if err := auth.Authorize(ctx, auth.DeviceRead); err != nil {
+		return nil, err
+	}
+	afterId, err := optionalCursor(args.AfterId)
+	if err != nil {
+		return nil, err
+	}
+	page, err := r.GetApi(ctx).DisabledDevicePage(ctx, afterId, int(args.Limit))
+	if err != nil {
+		return nil, err
+	}
+	return &DisabledDevicePageResolver{M: *page}, nil
+}
+
+// DisabledDevicePageResolver exposes one page of disabled device tokens.
+type DisabledDevicePageResolver struct {
+	M model.DisabledDevicePage
+}
+
+func (r *DisabledDevicePageResolver) DeviceTokens() []string { return r.M.Tokens }
+func (r *DisabledDevicePageResolver) NextCursor() *string    { return formatCursor(r.M.NextCursor) }

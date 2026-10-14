@@ -22,6 +22,8 @@ type Documents = {
     "\n  mutation CreateCommandBatch($request: CommandBatchCreateRequest!) {\n    createCommandBatch(request: $request) {\n      batch {\n        id\n        token\n        name\n        targetKind\n        resolved\n        accepted\n      }\n      rejection {\n        code\n        reason\n        resolved\n        refusals {\n          deviceToken\n          code\n          reason\n        }\n        refusalCounts {\n          code\n          count\n        }\n      }\n    }\n  }\n": typeof types.CreateCommandBatchDocument,
     "\n  mutation CancelCommand($token: String!) {\n    cancelCommand(token: $token) {\n      id\n      token\n      status\n    }\n  }\n": typeof types.CancelCommandDocument,
     "\n  mutation CancelCommandBatch($token: String!) {\n    cancelCommandBatch(token: $token) {\n      cancelled\n      alreadySent\n      alreadyFinished\n      matched\n    }\n  }\n": typeof types.CancelCommandBatchDocument,
+    "\n  query DeviceCommandHold($deviceToken: String!) {\n    deviceCommandHold(deviceToken: $deviceToken) {\n      disabled\n      heldCount\n    }\n  }\n": typeof types.DeviceCommandHoldDocument,
+    "\n  mutation CancelDeviceCommands($deviceToken: String!) {\n    cancelDeviceCommands(deviceToken: $deviceToken) {\n      cancelled\n    }\n  }\n": typeof types.CancelDeviceCommandsDocument,
 };
 const documents: Documents = {
     "\n  query Commands($criteria: CommandSearchCriteria!) {\n    commands(criteria: $criteria) {\n      results {\n        id\n        token\n        deviceToken\n        batchToken\n        name\n        payload\n        status\n        queuedTime\n        sentTime\n        respondedTime\n        expiresAt\n        responsePayload\n        error\n      }\n      pagination {\n        pageStart\n        pageEnd\n        totalRecords\n      }\n    }\n  }\n": types.CommandsDocument,
@@ -31,6 +33,8 @@ const documents: Documents = {
     "\n  mutation CreateCommandBatch($request: CommandBatchCreateRequest!) {\n    createCommandBatch(request: $request) {\n      batch {\n        id\n        token\n        name\n        targetKind\n        resolved\n        accepted\n      }\n      rejection {\n        code\n        reason\n        resolved\n        refusals {\n          deviceToken\n          code\n          reason\n        }\n        refusalCounts {\n          code\n          count\n        }\n      }\n    }\n  }\n": types.CreateCommandBatchDocument,
     "\n  mutation CancelCommand($token: String!) {\n    cancelCommand(token: $token) {\n      id\n      token\n      status\n    }\n  }\n": types.CancelCommandDocument,
     "\n  mutation CancelCommandBatch($token: String!) {\n    cancelCommandBatch(token: $token) {\n      cancelled\n      alreadySent\n      alreadyFinished\n      matched\n    }\n  }\n": types.CancelCommandBatchDocument,
+    "\n  query DeviceCommandHold($deviceToken: String!) {\n    deviceCommandHold(deviceToken: $deviceToken) {\n      disabled\n      heldCount\n    }\n  }\n": types.DeviceCommandHoldDocument,
+    "\n  mutation CancelDeviceCommands($deviceToken: String!) {\n    cancelDeviceCommands(deviceToken: $deviceToken) {\n      cancelled\n    }\n  }\n": types.CancelDeviceCommandsDocument,
 };
 
 /**
@@ -61,6 +65,14 @@ export function graphql(source: "\n  mutation CancelCommand($token: String!) {\n
  * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
  */
 export function graphql(source: "\n  mutation CancelCommandBatch($token: String!) {\n    cancelCommandBatch(token: $token) {\n      cancelled\n      alreadySent\n      alreadyFinished\n      matched\n    }\n  }\n"): typeof import('./graphql').CancelCommandBatchDocument;
+/**
+ * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
+ */
+export function graphql(source: "\n  query DeviceCommandHold($deviceToken: String!) {\n    deviceCommandHold(deviceToken: $deviceToken) {\n      disabled\n      heldCount\n    }\n  }\n"): typeof import('./graphql').DeviceCommandHoldDocument;
+/**
+ * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
+ */
+export function graphql(source: "\n  mutation CancelDeviceCommands($deviceToken: String!) {\n    cancelDeviceCommands(deviceToken: $deviceToken) {\n      cancelled\n    }\n  }\n"): typeof import('./graphql').CancelDeviceCommandsDocument;
 
 
 export function graphql(source: string) {

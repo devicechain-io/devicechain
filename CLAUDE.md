@@ -2,7 +2,7 @@
 
 ## Repository layout
 
-A Go monorepo using **Go Workspaces** (`go.work`, Go 1.26). The workspace modules are:
+A Go monorepo using **Go Workspaces** (`go.work`, Go 1.27). The workspace modules are:
 
 ```
 backend/

@@ -233,8 +233,8 @@ jobs:
           # go.work, NOT a module's go.mod. setup-go pins GOTOOLCHAIN=local, so
           # the version installed here is the only one available — and a module
           # go.mod carries the LANGUAGE version its own code needs, which is a
-          # floor, not the workspace's. `backend/core/go.mod` says 1.26.0 while
-          # go.work requires >= 1.26.6, and `go build` inside a workspace obeys
+          # floor, not the workspace's. `backend/core/go.mod` says 1.26.0 at the time while
+          # go.work requires >= 1.27.0, and `go build` inside a workspace obeys
           # go.work. That drift broke this workflow silently for three weeks.
           go-version-file: go.work
           cache: false

@@ -224,7 +224,11 @@ func equivCases() []equivCase {
 		{"entry time too old", envelope(m, `{"entries":[{"occurredTime":"2019-05-05T00:00:00Z","measurements":{"a":"1"}}]}`), false},
 		{"entry time number", envelope(m, `{"entries":[{"occurredTime":1759320000,"measurements":{"a":"1"}}]}`), false},
 		{"entry time null", envelope(m, `{"entries":[{"occurredTime":null,"measurements":{"a":"1"}}]}`), true},
-		{"entry time escaped but valid", envelope(m, `{"entries":[{"occurredTime":"2026-10-01T11:00:00\u005a","measurements":{"a":"1"}}]}`), false},
+		// Go 1.27 made time.Time.UnmarshalJSON unescape its string, so the typed decode accepts
+		// this (Go 1.26 refused it, and the single-pass decode declined). The reference accepts it
+		// too, and requireSameDecode holds the results equal; only the fast decode, which takes no
+		// escape at all, still declines.
+		{"entry time escaped but valid", envelope(m, `{"entries":[{"occurredTime":"2026-10-01T11:00:00\u005a","measurements":{"a":"1"}}]}`), true},
 		{"entry time in the future", envelope(m, `{"entries":[{"occurredTime":"2030-01-01T00:00:00Z","measurements":{"a":"1"}}]}`), true},
 		// The single-pass decode skips the entry-time probe and refuses the zero instant on the
 		// decoded entries instead, for every entry-carrying kind and at any entry.

@@ -34,6 +34,12 @@ vi.mock('@devicechain/client', async (importOriginal) => {
 // module, the real form) stays genuine.
 vi.mock('@/components/ui/toast', () => ({ useToast: () => ({ toast: toastMock }) }));
 
+// The held-while-disabled notice is its own component with its own test; here it is a marker,
+// so this file keeps testing the history and issue form without an auth or confirm provider.
+vi.mock('./HeldWhileDisabledNotice', () => ({
+  HeldWhileDisabledNotice: () => <div data-testid="held-notice-slot" />,
+}));
+
 import { GraphQLRequestError } from '@devicechain/client';
 
 import { DeviceCommandsPanel } from './DeviceCommandsPanel';
@@ -446,5 +452,18 @@ describe('DeviceCommandsPanel batch provenance', () => {
 
     const link = within(await queuedRow()).getByRole('link', { name: BATCH_LINK });
     expect(link.getAttribute('href')).toBe('/command-batches/night%2Fshift%201');
+  });
+});
+
+describe('DeviceCommandsPanel held-while-disabled notice', () => {
+  // The panel is where an operator looks at a device's commands, so it is where the hold is
+  // announced: a disabled device's queued commands are not sent and not cancelled, and a
+  // history table full of QUEUED rows would otherwise look like a stuck platform.
+  it('renders the notice above the history', async () => {
+    respondWith(['QUEUED']);
+
+    render(<DeviceCommandsPanel deviceToken="therm-1" />);
+
+    expect(await screen.findByTestId('held-notice-slot')).toBeTruthy();
   });
 });

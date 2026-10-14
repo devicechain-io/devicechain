@@ -291,3 +291,29 @@ func (r *SchemaResolver) ReleaseHeldCommands(ctx context.Context, args struct {
 	}
 	return int32(released), nil
 }
+
+// CancelDeviceCommands cancels every command the platform still holds for one device.
+//
+// The same authority and the same line as CancelCommand, over a device: QUEUED, HELD and PARKED
+// move to CANCELLED, and a command already sent is left alone because nothing here can recall
+// it. It is how an operator discards what a disabled device was holding.
+func (r *SchemaResolver) CancelDeviceCommands(ctx context.Context, args struct {
+	DeviceToken string
+}) (*CancelDeviceCommandsResultResolver, error) {
+	if err := auth.Authorize(ctx, auth.CommandWrite); err != nil {
+		return nil, err
+	}
+
+	cancelled, err := r.GetApi(ctx).CancelDeviceCommands(ctx, args.DeviceToken)
+	if err != nil {
+		return nil, err
+	}
+	return &CancelDeviceCommandsResultResolver{cancelled: cancelled}, nil
+}
+
+// CancelDeviceCommandsResultResolver reports what CancelDeviceCommands did.
+type CancelDeviceCommandsResultResolver struct {
+	cancelled int64
+}
+
+func (r *CancelDeviceCommandsResultResolver) Cancelled() int32 { return int32(r.cancelled) }

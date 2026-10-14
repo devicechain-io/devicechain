@@ -38,5 +38,6 @@ var (
 		NewStrandedSentIndexSchema(),
 		NewQueuedDeviceIndexSchema(),
 		NewCommandDispatchFailuresSchema(),
+		NewDeviceGatesSchema(),
 	}
 )

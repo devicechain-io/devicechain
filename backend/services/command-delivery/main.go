@@ -48,6 +48,10 @@ var (
 	CommandDeliveryProcessor *processor.CommandDeliveryProcessor
 	DeadLetterWriteback      *processor.DeadLetterWriteback
 
+	// RosterConsumer keeps the record of disabled devices current from device-management's
+	// device-roster facts, so commands queued for a disabled device are held, not sent.
+	RosterConsumer *processor.RosterConsumer
+
 	// The Prometheus instruments the two components above export. Both are built ONCE,
 	// in the initialize phase, and shared by every component the NATS manager's oncreate
 	// callback builds. See buildMetrics.
@@ -166,6 +170,7 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	// Floored positive by ApplyDefaults, so what lands here is always usable and never the
 	// "unset" zero the field treats as "use the platform default".
 	CommandDeliveryProcessor.SweepInterval = time.Duration(Configuration.SweepIntervalSeconds) * time.Second
+	CommandDeliveryProcessor.DisabledSource = disabledSource(infra)
 
 	// The dispatch nudge: enqueueing a command hands its DEVICE to the processor's bounded
 	// queue, whose workers dispatch that device's backlog through the same gates the sweep
@@ -211,7 +216,48 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	if err != nil {
 		return err
 	}
-	return DeadLetterWriteback.Initialize(context.Background())
+	if err := DeadLetterWriteback.Initialize(context.Background()); err != nil {
+		return err
+	}
+
+	// The device-roster fact names whether a device is disabled on every roster change. The
+	// durable starts at the stream tail: replaying the retention window would apply old state
+	// as if it were new, and the sync above covers what was disabled before this first ran.
+	// Built here, inside the callback, for the reason the write-back's reader is.
+	rosterReader, err := nmgr.NewReader(streams.DeviceRoster, messaging.ReaderWithDeliverNew())
+	if err != nil {
+		return err
+	}
+	RosterConsumer = processor.NewRosterConsumer(Microservice, rosterReader, core.NewNoOpLifecycleCallbacks(),
+		Api, CommandDeliveryProcessor, deadLetters)
+	return RosterConsumer.Initialize(context.Background())
+}
+
+// disabledSource builds the correction source for the disabled-device record, or nil when
+// device-management or user-management cannot be reached.
+//
+// 🔴 NIL IS A DEGRADED MODE AND IS SAID SO. The record then rests on the device-roster facts
+// alone: a device disabled before this service first ran, or whose fact never arrived, keeps
+// receiving its queued commands until its next roster change. It is not a stall, because the
+// alternative -- holding every command for an authority that cannot be asked -- would turn a
+// configuration gap into a platform-wide outage.
+func disabledSource(infra mscfg.InfrastructureConfiguration) processor.DisabledSource {
+	if infra.ServiceAuth.Secret == "" {
+		log.Warn().Msg("Service secret not configured -- the disabled-device record is NOT synced from device-management; commands queued for a device disabled before this service started will still be sent.")
+		return nil
+	}
+	if infra.DeviceManagement.Hostname == "" || infra.DeviceManagement.Port == 0 ||
+		infra.UserManagement.Hostname == "" || infra.UserManagement.Port == 0 {
+		log.Warn().Msg("device-management or user-management endpoint not configured -- the disabled-device record is NOT synced; commands queued for a device disabled before this service started will still be sent.")
+		return nil
+	}
+	client := svcclient.New(infra.UserManagement, infra.ServiceAuth.Secret, "command-delivery",
+		[]string{string(auth.DeviceRead), string(auth.TenantRead)})
+	dmURL := fmt.Sprintf("http://%s:%d/graphql", infra.DeviceManagement.Hostname, infra.DeviceManagement.Port)
+	umURL := fmt.Sprintf("http://%s:%d/graphql", infra.UserManagement.Hostname, infra.UserManagement.Port)
+	log.Info().Str("deviceManagement", dmURL).
+		Msg("Disabled-device sync enabled; commands queued for a disabled device are held until it is enabled.")
+	return verify.NewDisabledSource(client, dmURL, umURL, Microservice.InstanceId)
 }
 
 // presenceReader builds the presence gate's read side, or nil to run the sweep ungated.
@@ -483,11 +529,19 @@ func afterMicroserviceStarted(ctx context.Context) error {
 		return err
 	}
 
-	return nil
+	return RosterConsumer.Start(ctx)
 }
 
 // Called before microservice has been stopped.
 func beforeMicroserviceStopped(ctx context.Context) error {
+	// The roster consumer first: it can resume a device, which dispatches through the
+	// processor stopped below.
+	if RosterConsumer != nil {
+		if err := RosterConsumer.Stop(ctx); err != nil {
+			return err
+		}
+	}
+
 	// Stop the dead-letter write-back before the broker it reads from and the database it
 	// writes to, in the reverse of the start order.
 	err := DeadLetterWriteback.Stop(ctx)
@@ -515,6 +569,12 @@ func beforeMicroserviceStopped(ctx context.Context) error {
 
 // Called before microservice has been terminated.
 func beforeMicroserviceTerminated(ctx context.Context) error {
+	if RosterConsumer != nil {
+		if err := RosterConsumer.Terminate(ctx); err != nil {
+			return err
+		}
+	}
+
 	// Terminate the dead-letter write-back before the nats manager it reads through.
 	err := DeadLetterWriteback.Terminate(ctx)
 	if err != nil {

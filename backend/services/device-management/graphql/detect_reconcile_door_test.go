@@ -121,3 +121,17 @@ func TestReconcileDoorsRefuseAMalformedCursor(t *testing.T) {
 	}{AfterId: &bad, Limit: 10})
 	assert.Error(t, err)
 }
+
+// The disabled-device door takes device:read like its siblings and refuses a caller without it.
+func TestDisabledDevicePageDoorRequiresDeviceRead(t *testing.T) {
+	api := reconcileDoorApi(t)
+	args := struct {
+		AfterId *string
+		Limit   int32
+	}{Limit: 10}
+	_, err := (&SchemaResolver{}).DisabledDevicePage(reconcileCtx(api, "acme"), args)
+	assert.Error(t, err)
+	page, err := (&SchemaResolver{}).DisabledDevicePage(withAuthorities(reconcileCtx(api, "acme"), auth.DeviceRead), args)
+	require.NoError(t, err)
+	assert.Empty(t, page.DeviceTokens())
+}
