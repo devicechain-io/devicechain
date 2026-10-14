@@ -10,6 +10,7 @@ import type {
   DatasourceSelector,
   DeviceResolver,
   EntityCandidateLister,
+  HubConnectionState,
   LocationSubscription,
   MemberResolver,
   MeasurementSample,
@@ -30,7 +31,7 @@ import {
   resolveContextBindings,
   resolveSlotCandidates,
 } from '@devicechain/dashboards';
-import { useEffect, useMemo, useRef, useState, type RefObject } from 'react';
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type RefObject } from 'react';
 
 import { useWidgetCandidates, type WidgetCandidates } from './context';
 
@@ -520,4 +521,29 @@ export function useElementSize<T extends HTMLElement>(): [RefObject<T | null>, E
   }, []);
 
   return [ref, size];
+}
+
+// What useHubConnectionState needs of a hub: the live implementation (DashboardHub) has it, a
+// synthetic preview source does not, and a host holding only that reads `live`.
+export interface ConnectionStateSource {
+  readonly connectionState: HubConnectionState;
+  onConnectionState(listener: () => void): () => void;
+}
+
+const NO_CONNECTION_SOURCE: ConnectionStateSource = {
+  connectionState: 'live',
+  onConnectionState: () => () => {},
+};
+
+// useHubConnectionState follows a hub's socket state (live / reconnecting / offline) for a
+// header badge. It re-renders only when the state changes.
+export function useHubConnectionState(hub: Partial<ConnectionStateSource> | undefined): HubConnectionState {
+  // A source that reports no connection (a synthetic preview, a recording) is not "down":
+  // there is no socket to lose, so it reads live.
+  const source =
+    hub && typeof hub.onConnectionState === 'function' ? (hub as ConnectionStateSource) : NO_CONNECTION_SOURCE;
+  return useSyncExternalStore(
+    (listener) => source.onConnectionState(listener),
+    () => source.connectionState,
+  );
 }

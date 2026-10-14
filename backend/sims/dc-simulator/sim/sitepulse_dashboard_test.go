@@ -123,8 +123,10 @@ func TestSitepulseBoardShowsEveryMachinesFuel(t *testing.T) {
 		if w.Options["measurement"] != "fuel_pct" || w.Options["unit"] != "%" {
 			t.Errorf("%s: measurement/unit = %v/%v, want fuel_pct/%%", w.Id, w.Options["measurement"], w.Options["unit"])
 		}
-		if want := externalIds[slot]; want == "" || w.Options["title"] != want || def.Slots[slot].Label != want {
-			t.Errorf("%s: title %v / slot label %q, want the externalId %q", w.Id, w.Options["title"], def.Slots[slot].Label, want)
+		// The card is titled with the MEASUREMENT; the machine is named by the frame's subject
+		// line, which shows the slot's device. A title that is the external id says it twice.
+		if want := externalIds[slot]; want == "" || w.Options["title"] != "Fuel %" || def.Slots[slot].Label != want {
+			t.Errorf("%s: title %v / slot label %q, want the title \"Fuel %%\" and the externalId %q as the slot label", w.Id, w.Options["title"], def.Slots[slot].Label, want)
 		}
 		if def.Slots[slot].DefaultBinding == nil || def.Slots[slot].DefaultBinding.DeviceToken != slot {
 			t.Errorf("%s: slot %q does not default-bind the device it is named for", w.Id, slot)
@@ -263,6 +265,9 @@ func TestSitepulseBoardPayloadIsHaulersOnly(t *testing.T) {
 		t.Fatalf("payload cards bind %v, want the six haul trucks %v", got, wantSitepulseHaulerTokens)
 	}
 	for _, w := range cards {
+		if w.Options["title"] != "Payload" {
+			t.Errorf("%s: title %v, want the measurement name \"Payload\"", w.Id, w.Options["title"])
+		}
 		if w.Options["measurement"] != "payload_t" || w.Options["unit"] != "t" {
 			t.Errorf("%s: measurement/unit = %v/%v, want payload_t/t", w.Id, w.Options["measurement"], w.Options["unit"])
 		}
@@ -305,7 +310,11 @@ func TestSitepulseBoardCarriesNoCommandWidgetYet(t *testing.T) {
 }
 
 func TestSitepulseBoardTracksTheResizedFleet(t *testing.T) {
-	for _, tc := range []struct{ devices, perKind int }{{1, 1}, {3, 3}, {7, 6}, {250, 6}} {
+	for _, tc := range []struct{ devices, perKind int }{
+		{1, 1}, {3, 3}, {7, 7},
+		// The cap is one screen of rows per kind; one machine past it must say so.
+		{sitepulseCardsPerKind, sitepulseCardsPerKind}, {sitepulseCardsPerKind + 1, sitepulseCardsPerKind}, {250, sitepulseCardsPerKind},
+	} {
 		s, err := NewSim("sitepulse", 1, Load{DeviceCount: tc.devices})
 		if err != nil {
 			t.Fatalf("NewSim(%d): %v", tc.devices, err)
@@ -319,8 +328,8 @@ func TestSitepulseBoardTracksTheResizedFleet(t *testing.T) {
 			t.Errorf("--devices %d: %d payload cards, want %d", tc.devices, got, tc.perKind)
 		}
 		text, _ := widgetByID(t, def, "sp-fuel-label").Options["text"].(string)
-		if tc.devices > 6 {
-			if want := fmt.Sprintf("first 6 of %d", tc.devices); !strings.Contains(text, want) {
+		if tc.devices > tc.perKind {
+			if want := fmt.Sprintf("first %d of %d", tc.perKind, tc.devices); !strings.Contains(text, want) {
 				t.Errorf("--devices %d: label %q lacks the note %q", tc.devices, text, want)
 			}
 		} else if strings.Contains(text, "showing the first") {
@@ -336,8 +345,8 @@ func TestSitepulseBoardTracksTheResizedFleet(t *testing.T) {
 	}
 }
 
-// The default 18-machine board has exactly six per kind: every machine has a card, so
-// the label must not say the rows are partial.
+// The default 18-machine board has six per kind and every machine has a card, so the
+// label must not say the rows are partial.
 func TestSitepulseDefaultBoardLabelCarriesNoTruncationNote(t *testing.T) {
 	text, _ := widgetByID(t, sitepulseBoard(t, sitepulseManifest(t)), "sp-fuel-label").Options["text"].(string)
 	if strings.Contains(text, "showing the first") {
@@ -345,17 +354,17 @@ func TestSitepulseDefaultBoardLabelCarriesNoTruncationNote(t *testing.T) {
 	}
 }
 
-func TestSitepulseBoardFitsOneScreen(t *testing.T) {
+// The board is not capped to a screen (it may scroll), but its widgets must not overlap or
+// leave the grid, and the ORDERING RULE holds: the alarm surfaces, the KPI row and the map
+// end at or above the fold of a 1080 px-tall window, so a scroll only ever hides cards and
+// gauges. (The pixel floor each widget must clear is the frontend layout lint's job.)
+func TestSitepulseBoardDoesNotOverlapAndKeepsTheKeyWidgetsAboveTheFold(t *testing.T) {
 	def := sitepulseBoard(t, sitepulseManifest(t))
 	occupied := map[[2]int]string{}
-	maxRow := 0
 	for _, w := range def.Widgets {
 		b := w.Layout["base"]
-		if b.Col < 0 || b.Col+b.ColSpan > dashboardGridColumns {
+		if b.Col < 0 || b.Row < 0 || b.Col+b.ColSpan > dashboardGridColumns {
 			t.Errorf("%s spans columns %d..%d of %d", w.Id, b.Col, b.Col+b.ColSpan, dashboardGridColumns)
-		}
-		if b.Row+b.RowSpan > maxRow {
-			maxRow = b.Row + b.RowSpan
 		}
 		for c := b.Col; c < b.Col+b.ColSpan; c++ {
 			for r := b.Row; r < b.Row+b.RowSpan; r++ {
@@ -366,7 +375,10 @@ func TestSitepulseBoardFitsOneScreen(t *testing.T) {
 			}
 		}
 	}
-	if maxRow > 20 {
-		t.Errorf("the board is %d rows tall, want at most 20 (about 960 px) to sit beside a 3D window", maxRow)
+	for _, id := range []string{"sp-alarms-critical", "sp-alarms-major", "sp-plant-throughput", "sp-plant-running", "sp-alarms", "sp-map"} {
+		b := widgetByID(t, def, id).Layout["base"]
+		if end := b.Row + b.RowSpan; end > sitepulseFoldRows {
+			t.Errorf("%s ends at row %d, below the fold of a 1080 px window (%d rows); the alarms, KPIs and map belong above it", id, end, sitepulseFoldRows)
+		}
 	}
 }

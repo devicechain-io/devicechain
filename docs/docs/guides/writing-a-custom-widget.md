@@ -88,6 +88,7 @@ so the definition parser and the validators can read it without loading or trust
 | `constraints` | Optional rules that span more than one option, such as `greater-than`. |
 | `defaults` | The starting options of a newly added widget. |
 | `interactions` | The host callbacks the widget asks for. |
+| `freshness` | Optional, `true` to opt in. On the `measurement` channel only: the frame shows how old the widget's newest sample is. If the widget also declares a numeric `staleAfterSeconds` option, a value older than that is greyed out and badged as stale. Without that option the age is shown and nothing is ever marked stale. A widget that shows a single value passes that sample's time as `<WidgetFrame sampleTime={sample?.occurredTime ?? null}>`, so the age is of the value on screen rather than of whichever measurement arrived last. |
 
 ### Channels and binding policy
 

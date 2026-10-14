@@ -296,8 +296,8 @@
         "base": {
           "col": 0,
           "colSpan": 24,
-          "row": 3,
-          "rowSpan": 1,
+          "row": 13,
+          "rowSpan": 2,
           "z": 0
         }
       },
@@ -320,9 +320,9 @@
       "layout": {
         "base": {
           "col": 0,
-          "colSpan": 4,
-          "row": 4,
-          "rowSpan": 2,
+          "colSpan": 8,
+          "row": 15,
+          "rowSpan": 3,
           "z": 0
         }
       },
@@ -330,7 +330,7 @@
         "flashOnChange": false,
         "measurement": "fuel_pct",
         "precision": 0,
-        "title": "SP-DZ-0001",
+        "title": "Fuel %",
         "unit": "%"
       },
       "type": "latest-card"
@@ -346,10 +346,10 @@
       "id": "sp-fuel-sp-dozer-02",
       "layout": {
         "base": {
-          "col": 4,
-          "colSpan": 4,
-          "row": 4,
-          "rowSpan": 2,
+          "col": 8,
+          "colSpan": 8,
+          "row": 15,
+          "rowSpan": 3,
           "z": 0
         }
       },
@@ -357,7 +357,7 @@
         "flashOnChange": false,
         "measurement": "fuel_pct",
         "precision": 0,
-        "title": "SP-DZ-0002",
+        "title": "Fuel %",
         "unit": "%"
       },
       "type": "latest-card"
@@ -373,10 +373,10 @@
       "id": "sp-fuel-sp-dozer-03",
       "layout": {
         "base": {
-          "col": 8,
-          "colSpan": 4,
-          "row": 4,
-          "rowSpan": 2,
+          "col": 16,
+          "colSpan": 8,
+          "row": 15,
+          "rowSpan": 3,
           "z": 0
         }
       },
@@ -384,7 +384,7 @@
         "flashOnChange": false,
         "measurement": "fuel_pct",
         "precision": 0,
-        "title": "SP-DZ-0003",
+        "title": "Fuel %",
         "unit": "%"
       },
       "type": "latest-card"
@@ -400,10 +400,10 @@
       "id": "sp-fuel-sp-dozer-04",
       "layout": {
         "base": {
-          "col": 12,
-          "colSpan": 4,
-          "row": 4,
-          "rowSpan": 2,
+          "col": 0,
+          "colSpan": 8,
+          "row": 18,
+          "rowSpan": 3,
           "z": 0
         }
       },
@@ -411,7 +411,7 @@
         "flashOnChange": false,
         "measurement": "fuel_pct",
         "precision": 0,
-        "title": "SP-DZ-0004",
+        "title": "Fuel %",
         "unit": "%"
       },
       "type": "latest-card"
@@ -427,10 +427,10 @@
       "id": "sp-fuel-sp-dozer-05",
       "layout": {
         "base": {
-          "col": 16,
-          "colSpan": 4,
-          "row": 4,
-          "rowSpan": 2,
+          "col": 8,
+          "colSpan": 8,
+          "row": 18,
+          "rowSpan": 3,
           "z": 0
         }
       },
@@ -438,7 +438,7 @@
         "flashOnChange": false,
         "measurement": "fuel_pct",
         "precision": 0,
-        "title": "SP-DZ-0005",
+        "title": "Fuel %",
         "unit": "%"
       },
       "type": "latest-card"
@@ -454,10 +454,10 @@
       "id": "sp-fuel-sp-dozer-06",
       "layout": {
         "base": {
-          "col": 20,
-          "colSpan": 4,
-          "row": 4,
-          "rowSpan": 2,
+          "col": 16,
+          "colSpan": 8,
+          "row": 18,
+          "rowSpan": 3,
           "z": 0
         }
       },
@@ -465,7 +465,7 @@
         "flashOnChange": false,
         "measurement": "fuel_pct",
         "precision": 0,
-        "title": "SP-DZ-0006",
+        "title": "Fuel %",
         "unit": "%"
       },
       "type": "latest-card"
@@ -482,9 +482,9 @@
       "layout": {
         "base": {
           "col": 0,
-          "colSpan": 4,
-          "row": 6,
-          "rowSpan": 2,
+          "colSpan": 8,
+          "row": 21,
+          "rowSpan": 3,
           "z": 0
         }
       },
@@ -492,7 +492,7 @@
         "flashOnChange": false,
         "measurement": "fuel_pct",
         "precision": 0,
-        "title": "SP-LD-0001",
+        "title": "Fuel %",
         "unit": "%"
       },
       "type": "latest-card"
@@ -508,10 +508,10 @@
       "id": "sp-fuel-sp-loader-02",
       "layout": {
         "base": {
-          "col": 4,
-          "colSpan": 4,
-          "row": 6,
-          "rowSpan": 2,
+          "col": 8,
+          "colSpan": 8,
+          "row": 21,
+          "rowSpan": 3,
           "z": 0
         }
       },
@@ -519,7 +519,7 @@
         "flashOnChange": false,
         "measurement": "fuel_pct",
         "precision": 0,
-        "title": "SP-LD-0002",
+        "title": "Fuel %",
         "unit": "%"
       },
       "type": "latest-card"
@@ -535,10 +535,10 @@
       "id": "sp-fuel-sp-loader-03",
       "layout": {
         "base": {
-          "col": 8,
-          "colSpan": 4,
-          "row": 6,
-          "rowSpan": 2,
+          "col": 16,
+          "colSpan": 8,
+          "row": 21,
+          "rowSpan": 3,
           "z": 0
         }
       },
@@ -546,7 +546,7 @@
         "flashOnChange": false,
         "measurement": "fuel_pct",
         "precision": 0,
-        "title": "SP-LD-0003",
+        "title": "Fuel %",
         "unit": "%"
       },
       "type": "latest-card"
@@ -562,10 +562,10 @@
       "id": "sp-fuel-sp-loader-04",
       "layout": {
         "base": {
-          "col": 12,
-          "colSpan": 4,
-          "row": 6,
-          "rowSpan": 2,
+          "col": 0,
+          "colSpan": 8,
+          "row": 24,
+          "rowSpan": 3,
           "z": 0
         }
       },
@@ -573,7 +573,7 @@
         "flashOnChange": false,
         "measurement": "fuel_pct",
         "precision": 0,
-        "title": "SP-LD-0004",
+        "title": "Fuel %",
         "unit": "%"
       },
       "type": "latest-card"
@@ -589,10 +589,10 @@
       "id": "sp-fuel-sp-loader-05",
       "layout": {
         "base": {
-          "col": 16,
-          "colSpan": 4,
-          "row": 6,
-          "rowSpan": 2,
+          "col": 8,
+          "colSpan": 8,
+          "row": 24,
+          "rowSpan": 3,
           "z": 0
         }
       },
@@ -600,7 +600,7 @@
         "flashOnChange": false,
         "measurement": "fuel_pct",
         "precision": 0,
-        "title": "SP-LD-0005",
+        "title": "Fuel %",
         "unit": "%"
       },
       "type": "latest-card"
@@ -616,10 +616,10 @@
       "id": "sp-fuel-sp-loader-06",
       "layout": {
         "base": {
-          "col": 20,
-          "colSpan": 4,
-          "row": 6,
-          "rowSpan": 2,
+          "col": 16,
+          "colSpan": 8,
+          "row": 24,
+          "rowSpan": 3,
           "z": 0
         }
       },
@@ -627,7 +627,7 @@
         "flashOnChange": false,
         "measurement": "fuel_pct",
         "precision": 0,
-        "title": "SP-LD-0006",
+        "title": "Fuel %",
         "unit": "%"
       },
       "type": "latest-card"
@@ -644,9 +644,9 @@
       "layout": {
         "base": {
           "col": 0,
-          "colSpan": 4,
-          "row": 8,
-          "rowSpan": 2,
+          "colSpan": 8,
+          "row": 27,
+          "rowSpan": 3,
           "z": 0
         }
       },
@@ -654,7 +654,7 @@
         "flashOnChange": false,
         "measurement": "fuel_pct",
         "precision": 0,
-        "title": "SP-HL-0001",
+        "title": "Fuel %",
         "unit": "%"
       },
       "type": "latest-card"
@@ -670,10 +670,10 @@
       "id": "sp-fuel-sp-hauler-02",
       "layout": {
         "base": {
-          "col": 4,
-          "colSpan": 4,
-          "row": 8,
-          "rowSpan": 2,
+          "col": 8,
+          "colSpan": 8,
+          "row": 27,
+          "rowSpan": 3,
           "z": 0
         }
       },
@@ -681,7 +681,7 @@
         "flashOnChange": false,
         "measurement": "fuel_pct",
         "precision": 0,
-        "title": "SP-HL-0002",
+        "title": "Fuel %",
         "unit": "%"
       },
       "type": "latest-card"
@@ -697,10 +697,10 @@
       "id": "sp-fuel-sp-hauler-03",
       "layout": {
         "base": {
-          "col": 8,
-          "colSpan": 4,
-          "row": 8,
-          "rowSpan": 2,
+          "col": 16,
+          "colSpan": 8,
+          "row": 27,
+          "rowSpan": 3,
           "z": 0
         }
       },
@@ -708,7 +708,7 @@
         "flashOnChange": false,
         "measurement": "fuel_pct",
         "precision": 0,
-        "title": "SP-HL-0003",
+        "title": "Fuel %",
         "unit": "%"
       },
       "type": "latest-card"
@@ -724,10 +724,10 @@
       "id": "sp-fuel-sp-hauler-04",
       "layout": {
         "base": {
-          "col": 12,
-          "colSpan": 4,
-          "row": 8,
-          "rowSpan": 2,
+          "col": 0,
+          "colSpan": 8,
+          "row": 30,
+          "rowSpan": 3,
           "z": 0
         }
       },
@@ -735,7 +735,7 @@
         "flashOnChange": false,
         "measurement": "fuel_pct",
         "precision": 0,
-        "title": "SP-HL-0004",
+        "title": "Fuel %",
         "unit": "%"
       },
       "type": "latest-card"
@@ -751,10 +751,10 @@
       "id": "sp-fuel-sp-hauler-05",
       "layout": {
         "base": {
-          "col": 16,
-          "colSpan": 4,
-          "row": 8,
-          "rowSpan": 2,
+          "col": 8,
+          "colSpan": 8,
+          "row": 30,
+          "rowSpan": 3,
           "z": 0
         }
       },
@@ -762,7 +762,7 @@
         "flashOnChange": false,
         "measurement": "fuel_pct",
         "precision": 0,
-        "title": "SP-HL-0005",
+        "title": "Fuel %",
         "unit": "%"
       },
       "type": "latest-card"
@@ -778,10 +778,10 @@
       "id": "sp-fuel-sp-hauler-06",
       "layout": {
         "base": {
-          "col": 20,
-          "colSpan": 4,
-          "row": 8,
-          "rowSpan": 2,
+          "col": 16,
+          "colSpan": 8,
+          "row": 30,
+          "rowSpan": 3,
           "z": 0
         }
       },
@@ -789,7 +789,7 @@
         "flashOnChange": false,
         "measurement": "fuel_pct",
         "precision": 0,
-        "title": "SP-HL-0006",
+        "title": "Fuel %",
         "unit": "%"
       },
       "type": "latest-card"
@@ -806,9 +806,9 @@
       "layout": {
         "base": {
           "col": 0,
-          "colSpan": 4,
-          "row": 10,
-          "rowSpan": 2,
+          "colSpan": 8,
+          "row": 33,
+          "rowSpan": 3,
           "z": 0
         }
       },
@@ -816,7 +816,7 @@
         "flashOnChange": false,
         "measurement": "payload_t",
         "precision": 1,
-        "title": "SP-HL-0001 payload",
+        "title": "Payload",
         "unit": "t"
       },
       "type": "latest-card"
@@ -832,10 +832,10 @@
       "id": "sp-payload-sp-hauler-02",
       "layout": {
         "base": {
-          "col": 4,
-          "colSpan": 4,
-          "row": 10,
-          "rowSpan": 2,
+          "col": 8,
+          "colSpan": 8,
+          "row": 33,
+          "rowSpan": 3,
           "z": 0
         }
       },
@@ -843,7 +843,7 @@
         "flashOnChange": false,
         "measurement": "payload_t",
         "precision": 1,
-        "title": "SP-HL-0002 payload",
+        "title": "Payload",
         "unit": "t"
       },
       "type": "latest-card"
@@ -859,10 +859,10 @@
       "id": "sp-payload-sp-hauler-03",
       "layout": {
         "base": {
-          "col": 8,
-          "colSpan": 4,
-          "row": 10,
-          "rowSpan": 2,
+          "col": 16,
+          "colSpan": 8,
+          "row": 33,
+          "rowSpan": 3,
           "z": 0
         }
       },
@@ -870,7 +870,7 @@
         "flashOnChange": false,
         "measurement": "payload_t",
         "precision": 1,
-        "title": "SP-HL-0003 payload",
+        "title": "Payload",
         "unit": "t"
       },
       "type": "latest-card"
@@ -886,10 +886,10 @@
       "id": "sp-payload-sp-hauler-04",
       "layout": {
         "base": {
-          "col": 12,
-          "colSpan": 4,
-          "row": 10,
-          "rowSpan": 2,
+          "col": 0,
+          "colSpan": 8,
+          "row": 36,
+          "rowSpan": 3,
           "z": 0
         }
       },
@@ -897,7 +897,7 @@
         "flashOnChange": false,
         "measurement": "payload_t",
         "precision": 1,
-        "title": "SP-HL-0004 payload",
+        "title": "Payload",
         "unit": "t"
       },
       "type": "latest-card"
@@ -913,10 +913,10 @@
       "id": "sp-payload-sp-hauler-05",
       "layout": {
         "base": {
-          "col": 16,
-          "colSpan": 4,
-          "row": 10,
-          "rowSpan": 2,
+          "col": 8,
+          "colSpan": 8,
+          "row": 36,
+          "rowSpan": 3,
           "z": 0
         }
       },
@@ -924,7 +924,7 @@
         "flashOnChange": false,
         "measurement": "payload_t",
         "precision": 1,
-        "title": "SP-HL-0005 payload",
+        "title": "Payload",
         "unit": "t"
       },
       "type": "latest-card"
@@ -940,10 +940,10 @@
       "id": "sp-payload-sp-hauler-06",
       "layout": {
         "base": {
-          "col": 20,
-          "colSpan": 4,
-          "row": 10,
-          "rowSpan": 2,
+          "col": 16,
+          "colSpan": 8,
+          "row": 36,
+          "rowSpan": 3,
           "z": 0
         }
       },
@@ -951,7 +951,7 @@
         "flashOnChange": false,
         "measurement": "payload_t",
         "precision": 1,
-        "title": "SP-HL-0006 payload",
+        "title": "Payload",
         "unit": "t"
       },
       "type": "latest-card"
@@ -966,9 +966,9 @@
       "layout": {
         "base": {
           "col": 0,
-          "colSpan": 12,
-          "row": 12,
-          "rowSpan": 8,
+          "colSpan": 16,
+          "row": 3,
+          "rowSpan": 5,
           "z": 0
         }
       },
@@ -994,10 +994,10 @@
       "id": "sp-map",
       "layout": {
         "base": {
-          "col": 12,
-          "colSpan": 6,
-          "row": 12,
-          "rowSpan": 8,
+          "col": 0,
+          "colSpan": 16,
+          "row": 8,
+          "rowSpan": 5,
           "z": 0
         }
       },
@@ -1010,16 +1010,16 @@
       "id": "sp-machine-select",
       "layout": {
         "base": {
-          "col": 18,
-          "colSpan": 6,
-          "row": 12,
+          "col": 16,
+          "colSpan": 8,
+          "row": 3,
           "rowSpan": 2,
           "z": 0
         }
       },
       "options": {
         "selectionTarget": "selectedMachine",
-        "title": "Machine"
+        "title": ""
       },
       "type": "entity-selector"
     },
@@ -1034,10 +1034,10 @@
       "id": "sp-engine-temp",
       "layout": {
         "base": {
-          "col": 18,
-          "colSpan": 6,
-          "row": 14,
-          "rowSpan": 3,
+          "col": 16,
+          "colSpan": 8,
+          "row": 5,
+          "rowSpan": 4,
           "z": 0
         }
       },
@@ -1062,10 +1062,10 @@
       "id": "sp-tyre",
       "layout": {
         "base": {
-          "col": 18,
-          "colSpan": 6,
-          "row": 17,
-          "rowSpan": 3,
+          "col": 16,
+          "colSpan": 8,
+          "row": 9,
+          "rowSpan": 4,
           "z": 0
         }
       },

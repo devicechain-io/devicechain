@@ -47,6 +47,7 @@ import { useTranslation } from 'react-i18next';
 
 import type { Basemap } from '@devicechain/client';
 
+import { ConnectionStatus } from './ConnectionStatus';
 import { SUPPORTED_LOCALES, setUserLocale } from './i18n/config';
 import { loadErrorMessage } from './i18n/loadError';
 import { signInErrorKey } from './i18n/signInError';
@@ -747,7 +748,14 @@ export function View({
       style={{ display: 'flex', flexDirection: 'column', height: '100%' }}
     >
       {kiosk ? (
-        <FullscreenButton />
+        <>
+          {/* A wall display has no header, but a frozen board must never look live: the
+              connection state floats in the corner opposite the fullscreen button. */}
+          <div style={{ position: 'fixed', top: 8, left: 8, zIndex: 10 }}>
+            <ConnectionStatus hub={hub} />
+          </div>
+          <FullscreenButton />
+        </>
       ) : (
         <header
           style={{
@@ -760,6 +768,7 @@ export function View({
           }}
         >
           <div style={{ flex: '1 1 auto', fontWeight: 600 }}>{title}</div>
+          <ConnectionStatus hub={hub} />
           <LocaleSwitcher />
           {onToggleTheme && (
             <HeaderButton onClick={onToggleTheme} data-shot="dash-theme-toggle">

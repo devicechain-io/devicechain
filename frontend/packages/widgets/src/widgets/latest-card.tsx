@@ -61,7 +61,7 @@ export function LatestCard({ widget, data }: WidgetProps) {
     size.height <= 0 || size.height - Math.ceil(valueFont * 1.1) >= TIMESTAMP_ROOM_PX;
 
   return (
-    <WidgetFrame title={title}>
+    <WidgetFrame title={title} sampleTime={sample?.occurredTime ?? null}>
       <div
         ref={sizeRef}
         style={{
