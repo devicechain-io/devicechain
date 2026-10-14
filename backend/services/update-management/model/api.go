@@ -116,9 +116,8 @@ type Api struct {
 	Secrets secrets.SecretStore
 	// Policy is how long the platform waits in each phase of an attempt.
 	Policy ota.Policy
-	// AllowUnverified is the FIXED config updates.allowUnverifiedArtifacts. While every
-	// artifact is UNVERIFIED (nothing authenticates an artifact's origin yet), false means
-	// nothing can be assigned.
+	// AllowUnverified is the FIXED config updates.allowUnverifiedArtifacts. False means only an
+	// artifact with a signature by an ACTIVE signer (derived trust SIGNED) can be assigned.
 	AllowUnverified bool
 	// DownloadBaseURL is the public base a device reaches the download endpoint at, with no
 	// trailing path. Empty means no capability URL can be minted, and a download request is
@@ -329,6 +328,8 @@ func (api *Api) CreateArtifact(ctx context.Context, req *ArtifactCreateRequest) 
 	if err != nil {
 		return nil, err
 	}
+	// A new artifact has no signatures, so there is nothing to derive.
+	created.Trust = TrustUnverified
 	return created, nil
 }
 
@@ -421,8 +422,23 @@ func firstNonEmpty(vals ...string) string {
 }
 
 // ArtifactByToken returns the tenant's artifact with the given token, or nil when there
-// is none. The tenant scope confines the lookup to the caller's tenant.
+// is none, with its DERIVED trust filled in. The tenant scope confines the lookup to the
+// caller's tenant.
 func (api *Api) ArtifactByToken(ctx context.Context, token string) (*Artifact, error) {
+	a, err := api.ArtifactRowByToken(ctx, token)
+	if err != nil || a == nil {
+		return nil, err
+	}
+	if err := api.fillTrust(ctx, a); err != nil {
+		return nil, err
+	}
+	return a, nil
+}
+
+// ArtifactRowByToken is ArtifactByToken WITHOUT the derived trust (Trust is left empty), for a
+// caller that only needs the row. The upload path is one: it streams a large body, and a lookup
+// that also touches the signer tables costs it work that has nothing to do with the bytes.
+func (api *Api) ArtifactRowByToken(ctx context.Context, token string) (*Artifact, error) {
 	found := make([]*Artifact, 0, 1)
 	if err := rdb.FindByKeys(api.RDB.DB(ctx), &found, "token", []string{token}); err != nil {
 		return nil, err
@@ -436,7 +452,24 @@ func (api *Api) ArtifactByToken(ctx context.Context, token string) (*Artifact, e
 // Artifacts searches the tenant's artifacts.
 func (api *Api) Artifacts(ctx context.Context, criteria ArtifactSearchCriteria) (*ArtifactSearchResults, error) {
 	results := make([]Artifact, 0)
+	var signed *gorm.DB
+	if criteria.TrustStatus != nil {
+		if *criteria.TrustStatus != TrustSigned && *criteria.TrustStatus != TrustUnverified {
+			return nil, refuse(CodeInvalidTrustFilter, "trustStatus must be %s or %s", TrustSigned, TrustUnverified)
+		}
+		var err error
+		if signed, err = api.signedArtifactIDs(ctx); err != nil {
+			return nil, err
+		}
+	}
 	db, pag := api.RDB.ListOf(ctx, &Artifact{}, func(q *gorm.DB) *gorm.DB {
+		if criteria.TrustStatus != nil {
+			if *criteria.TrustStatus == TrustSigned {
+				q = q.Where("artifacts.id IN (?)", signed)
+			} else {
+				q = q.Where("artifacts.id NOT IN (?)", signed)
+			}
+		}
 		if criteria.Kind != nil {
 			q = q.Where("kind = ?", *criteria.Kind)
 		}
@@ -449,6 +482,13 @@ func (api *Api) Artifacts(ctx context.Context, criteria ArtifactSearchCriteria) 
 		return q
 	}, criteria.Pagination)
 	if err := db.Find(&results).Error; err != nil {
+		return nil, err
+	}
+	ptrs := make([]*Artifact, len(results))
+	for i := range results {
+		ptrs[i] = &results[i]
+	}
+	if err := api.fillTrust(ctx, ptrs...); err != nil {
 		return nil, err
 	}
 	return &ArtifactSearchResults{Results: results, Pagination: pag}, nil

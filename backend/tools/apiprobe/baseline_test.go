@@ -698,3 +698,77 @@ input CommandCreateRequest { token: String! }
 			command.Wrap, adapted.Wrap)
 	}
 }
+
+// A release that predates the signer registry cannot express the three signer rows, and must skip
+// them AS A GROUP: the signer row is a leaf (its token is computed, not recorded), and its
+// dependents carry the same Requires, so none is left writing against a registry that is not there.
+// Every other row stays supported.
+func TestAReleaseWithoutTheSignerRegistrySkipsTheSignerGroupTogether(t *testing.T) {
+	b, err := loadBaseline(filepath.Join("..", "..", "services"))
+	if err != nil {
+		t.Fatalf("load the current tree: %v", err)
+	}
+	um := b.schemas["update-management"]
+	if um == nil {
+		t.Fatal("the current tree serves no update-management schema")
+	}
+	gone := map[string]bool{"registerArtifactSigner": true, "revokeArtifactSigner": true,
+		"addArtifactSignature": true, "artifactSigner": true, "artifactSigners": true}
+	var dropped int
+	for name, nt := range um.Types {
+		switch typ := nt.(type) {
+		case *ast.ObjectTypeDefinition:
+			kept := typ.Fields[:0]
+			for _, f := range typ.Fields {
+				if gone[f.Name] {
+					dropped++
+					continue
+				}
+				kept = append(kept, f)
+			}
+			typ.Fields = kept
+			if name == "ArtifactSigner" {
+				typ.Fields = nil // the type itself is new, and so is its keyId
+				dropped++
+			}
+		}
+	}
+	if dropped != len(gone)+1 {
+		t.Fatalf("the stand-in removed %d declaration(s), want %d; it no longer stands in for a release without the registry",
+			dropped, len(gone)+1)
+	}
+
+	group := map[string]bool{"artifact-signer": true, "artifact-signed": true, "artifact-signature": true}
+	seen := 0
+	for _, e := range allEntities() {
+		write, reason, err := plan(e, b)
+		if group[e.Name] {
+			seen++
+			if err != nil {
+				t.Errorf("%q could not be skipped: %v", e.Name, err)
+			}
+			if write || reason == "" {
+				t.Errorf("%q: write=%v reason=%q; want skipped with a reason", e.Name, write, reason)
+			}
+			if e.Record != nil {
+				t.Errorf("%q feeds the shared state, so a baseline cannot skip it", e.Name)
+			}
+			continue
+		}
+		if err != nil || !write {
+			t.Errorf("%q is not written by a release that only lacks the signer registry: write=%v err=%v", e.Name, write, err)
+		}
+	}
+	if seen != len(group) {
+		t.Fatalf("saw %d of the %d signer rows", seen, len(group))
+	}
+}
+
+// The token the dependents compute is the one the platform derives: "signer-" plus the first 16
+// hex digits of the SHA-256 of the key's SPKI DER.
+func TestTheComputedSignerTokenIsTheKeyIdPrefix(t *testing.T) {
+	tok := probeSignerToken()
+	if !strings.HasPrefix(tok, "signer-") || len(tok) != len("signer-")+16 {
+		t.Fatalf("unexpected signer token %q", tok)
+	}
+}

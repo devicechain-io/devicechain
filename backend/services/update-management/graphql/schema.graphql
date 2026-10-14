@@ -28,10 +28,15 @@ type ServiceInfo {
     area: String!
     """
     Whether this instance lets an UNVERIFIED artifact be assigned (updates.allowUnverifiedArtifacts).
-    Every artifact is UNVERIFIED today, so false means nothing can be assigned. True is a
-    development setting: it is shown here so an instance running with it can be seen to be.
+    False means only a SIGNED artifact can be assigned. True is a development setting: it is shown
+    here so an instance running with it can be seen to be.
     """
     allowUnverifiedArtifacts: Boolean!
+    """
+    The largest artifact this deployment accepts, in bytes, as a decimal string: the configured
+    ceiling already clamped to what the object store can take in one upload.
+    """
+    maxArtifactBytes: String!
 }
 
 """What an update artifact is."""
@@ -55,13 +60,82 @@ enum ArtifactState {
 }
 
 """
-How far an artifact's origin has been established. The only value is UNVERIFIED: the
-platform checks that the bytes are the bytes that were declared, and does not authenticate
-who produced them.
+How far an artifact's origin has been established. It is DERIVED each time it is read from the
+signatures on record and the state of the signers behind them, so revoking a signer changes what
+every artifact it vouched for reports, without any write to the artifact.
 """
 enum ArtifactTrustStatus {
-    """The artifact's origin is not authenticated."""
+    """No signature by an ACTIVE signer: the platform checks that the bytes are the declared bytes and does not attribute them to anyone."""
     UNVERIFIED
+    """At least one signature by an ACTIVE signer verified against the artifact's digest."""
+    SIGNED
+}
+
+"""The algorithm of a signer's key."""
+enum SignerAlgorithm {
+    """ECDSA over the NIST P-256 curve, signing the SHA-256 digest (ASN.1 DER signature)."""
+    ECDSA_P256
+    """Ed25519, signing the raw 32-byte SHA-256 digest."""
+    ED25519
+}
+
+"""Whether a signer's signatures still count."""
+enum SignerState {
+    """The signer's signatures count toward an artifact's trust."""
+    ACTIVE
+    """Terminal. The signer's signatures stay on record and no longer count."""
+    REVOKED
+}
+
+"""
+A public key the tenant trusts to vouch for artifacts. The platform holds only the public half.
+"""
+type ArtifactSigner {
+    """Internal identifier."""
+    id: ID!
+    """When the signer was registered, as an RFC 3339 timestamp."""
+    createdAt: String
+    """The signer's token, unique within the tenant."""
+    token: String!
+    """A label for the signer."""
+    name: String!
+    """The key's algorithm."""
+    algorithm: SignerAlgorithm!
+    """The public key as an SPKI PEM block."""
+    publicKeyPem: String!
+    """The key's identity: the lowercase hex SHA-256 of its SubjectPublicKeyInfo DER. Unique within the tenant."""
+    keyId: String!
+    """Whether the signer's signatures still count."""
+    state: SignerState!
+    """When the signer was revoked, as an RFC 3339 timestamp; null while ACTIVE."""
+    revokedAt: String
+    """Who registered the signer."""
+    createdBy: String
+    """Who revoked the signer; null while ACTIVE."""
+    revokedBy: String
+    """
+    How many artifacts have this signer as the ONLY active signer on their signatures, and would
+    therefore fall back to UNVERIFIED if it were revoked. 0 once revoked.
+    """
+    soleSignedArtifactCount: Int!
+}
+
+"""Criteria for searching signers. Every filter is optional."""
+input ArtifactSignerSearchCriteria {
+    """Zero-based page number."""
+    pageNumber: Int!
+    """Records per page."""
+    pageSize: Int!
+    """Only signers in this state."""
+    state: SignerState
+}
+
+"""A page of signers."""
+type ArtifactSignerSearchResults {
+    """The signers on this page, newest first."""
+    results: [ArtifactSigner!]!
+    """Pagination info for the search."""
+    pagination: SearchResultsPagination!
 }
 
 """A tenant-scoped, immutable update artifact."""
@@ -90,7 +164,7 @@ type Artifact {
     mediaType: String!
     """Tokens of the device profiles the artifact may be assigned to."""
     compatibleProfiles: [String!]!
-    """How far the artifact's origin has been established."""
+    """How far the artifact's origin has been established, derived from its signatures at read time."""
     trustStatus: ArtifactTrustStatus!
     """Who declared the artifact and any source or notes they recorded, as a JSON object; null when none."""
     provenance: String
@@ -139,6 +213,8 @@ input ArtifactSearchCriteria {
     state: ArtifactState
     """Only artifacts for this component."""
     component: String
+    """Only artifacts with this derived trust."""
+    trustStatus: ArtifactTrustStatus
 }
 
 """A page of artifacts."""
@@ -285,6 +361,20 @@ type Query {
         """
         criteria: ArtifactSearchCriteria!
     ): ArtifactSearchResults!
+    """Look up a signer by token. Requires artifact:read. Null when there is none in the caller's tenant."""
+    artifactSigner(
+        """
+        The token of the signer to look up.
+        """
+        token: String!
+    ): ArtifactSigner
+    """Search the tenant's signers, newest first. Requires artifact:read."""
+    artifactSigners(
+        """
+        The filters and page to search with.
+        """
+        criteria: ArtifactSignerSearchCriteria!
+    ): ArtifactSignerSearchResults!
     """Look up an update assignment by token. Requires artifact:read. Null when there is none in the caller's tenant."""
     updateAssignment(
         """
@@ -326,8 +416,8 @@ type Mutation {
     ): Artifact!
     """
     Tell a device to install an AVAILABLE artifact. Requires artifact:write. The device must exist and its
-    profile must be on the artifact's compatible list, and an UNVERIFIED artifact is refused unless the
-    instance allows it. A device works toward one target per component: assigning while its previous
+    profile must be on the artifact's compatible list, and an artifact that is not SIGNED is refused unless
+    the instance allows it (UNVERIFIED_ARTIFACT_REFUSED). A device works toward one target per component: assigning while its previous
     update is still live is refused until that is cancelled, assigning the same artifact again returns
     the same assignment, and assigning after the previous update finished supersedes it (the history is kept).
     """
@@ -341,6 +431,55 @@ type Mutation {
         """
         artifactToken: String!
     ): UpdateAssignment!
+    """
+    Register a public key the tenant trusts to sign artifacts. Requires artifact:trust, which is separate
+    from artifact:write on purpose: who may publish a binary and who may decide whose signature makes it
+    trusted are different decisions. Accepts one SPKI PEM block holding an ECDSA P-256 or Ed25519 public
+    key; a PRIVATE key is refused (SIGNER_KEY_REFUSED) without being echoed or stored, as is any other key
+    type or curve. The same key cannot be registered twice (SIGNER_ALREADY_REGISTERED).
+    """
+    registerArtifactSigner(
+        """
+        A label for the signer.
+        """
+        name: String!
+        """
+        The public key as one SPKI PEM block.
+        """
+        publicKeyPem: String!
+    ): ArtifactSigner!
+    """
+    Revoke a signer. Requires artifact:trust. Terminal and idempotent: its signatures stay on record and stop
+    counting, so every artifact it alone vouched for reads UNVERIFIED from this moment. No artifact is
+    rewritten. soleSignedArtifactCount previews how many.
+    """
+    revokeArtifactSigner(
+        """
+        The token of the signer to revoke.
+        """
+        token: String!
+    ): ArtifactSigner!
+    """
+    Attach a signature to an artifact. Requires artifact:write. The signature is verified against the
+    artifact's STORED SHA-256 digest with the signer's key: ECDSA P-256 verifies an ASN.1 signature of the
+    32-byte digest, Ed25519 verifies a signature of the raw 32 digest bytes. A signature that does not
+    verify is refused (SIGNATURE_INVALID) and so is a revoked signer (SIGNER_REVOKED). Signing again with
+    the same signer is idempotent. Returns the artifact with its recomputed trustStatus.
+    """
+    addArtifactSignature(
+        """
+        The token of the artifact that was signed.
+        """
+        artifactToken: String!
+        """
+        The token of the registered signer that made the signature.
+        """
+        signerToken: String!
+        """
+        The signature, standard base64.
+        """
+        signature: String!
+    ): Artifact!
     """
     Cancel an update. Requires artifact:write. A queued update is cancelled at once; before installation the
     request is recorded and completes when the device confirms; from installation on it is refused because it
