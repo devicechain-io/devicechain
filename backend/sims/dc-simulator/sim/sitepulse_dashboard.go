@@ -15,8 +15,9 @@ import (
 // 🔴 THE BOARD ASSUMES ~960 px OF WIDTH (half a 1920 screen, the other half being the 3D
 // window) AND 1080 px OF HEIGHT. It is not capped to one screen: the ORDERING RULE is that
 // the alarms, the KPI row and the map end above the fold (sitepulseFoldRows), and the cards
-// may scroll below it. Every widget is sized to be readable at that width (24 columns of
-// ~32 px), which the frontend layout lint enforces over the committed fixture.
+// scroll below it, as many rows of them as the fleet needs. Every widget is sized to be
+// readable at that width (24 columns of ~32 px), which the frontend layout lint enforces
+// over the committed fixture.
 //
 // 🔴 THE WIDGET LIBRARY HAS NO VIEW THAT DRAWS ONE MEASUREMENT ACROSS MANY DEVICES.
 // useMeasurementStream keys its latest values by measurement NAME only, so a table or
@@ -35,9 +36,10 @@ import (
 // resolves at most one page of members (dashboards resolver.ts ANCHOR_PAGE_SIZE, 500).
 // At the S1 size that is 19 devices and 3 widgets, which is nothing. Under a large
 // `--devices` run the board is both expensive and partial past 500 devices: it is the
-// 18-machine demo's board, and the card bands below cap at one row per kind for the
-// same reason. A tenant-wide alarm widget (no datasource) would avoid the fan-out but
-// the widget gate requires every alarm widget to bind one.
+// 18-machine demo's board, and the card bands below cap at one screen of rows per kind
+// for the same reason (the default fleet of six per kind is well inside it). A tenant-wide
+// alarm widget (no datasource) would avoid the fan-out but the widget gate requires every
+// alarm widget to bind one.
 //
 // The Machine selector lists the anchor's members, which include the crusher: picking it
 // points the two gauges at a device that reports neither metric, so they render empty.
@@ -60,16 +62,21 @@ const (
 	sitepulseSlotPlant   = "plant"
 	sitepulseSlotMachine = "selectedMachine"
 
-	// One row of cards per machine kind, so the per-kind cap is DERIVED from the grid
-	// rather than chosen: four six-column cards fill the 24 columns. A card is 6x3, the
-	// smallest box a latest-card stays legible in at 960 px wide.
-	sitepulseCardColSpan  = 6
-	sitepulseCardRowSpan  = 3
-	sitepulseCardsPerKind = dashboardGridColumns / sitepulseCardColSpan
-
 	// The fold: the rows a 1080 px-tall window shows (rows are 40 px + an 8 px gap). The
 	// alarm surfaces, the KPI row and the map must END at or above it; the rest may scroll.
 	sitepulseFoldRows = 1080 / (dashboardGridRowHeight + dashboardGridGap)
+
+	// Cards. A card is 8x3 (the latest-card floor is 6x3 at 960 px wide), so three fill the
+	// 24 columns and the default fleet's six machines per kind make two FULL rows rather than
+	// a row of four and a row of two. Every machine gets its card: the Unity demo's story runs
+	// through all of them (SP-HL-0006 is the low-fuel truck). A kind wraps onto as many rows
+	// as it needs, up to one screen of rows; the cap is DERIVED from the grid, not chosen,
+	// and only a large `--devices` run reaches it, when the label says the rows are partial.
+	sitepulseCardColSpan     = 8
+	sitepulseCardRowSpan     = 3
+	sitepulseCardsPerRow     = dashboardGridColumns / sitepulseCardColSpan
+	sitepulseCardRowsPerKind = sitepulseFoldRows / sitepulseCardRowSpan
+	sitepulseCardsPerKind    = sitepulseCardsPerRow * sitepulseCardRowsPerKind
 
 	// Rows. KPIs (3 rows) lead, then the alarm table and the map stack beside the machine
 	// controls in a band that ends at row 13; the fuel label (2 rows) and the card bands follow.
@@ -106,6 +113,17 @@ func sitepulseFuelBandText(shown, perKind int) string {
 		text += fmt.Sprintf(" · showing the first %d of %d per machine kind", shown, perKind)
 	}
 	return text
+}
+
+// sitepulseCardBandRows is the grid rows a band of n cards takes once it wraps.
+func sitepulseCardBandRows(n int) int {
+	return (n + sitepulseCardsPerRow - 1) / sitepulseCardsPerRow * sitepulseCardRowSpan
+}
+
+// sitepulseCardBox places the i-th card of a band that starts at row: left to right, then
+// onto the next row.
+func sitepulseCardBox(row, i int) box {
+	return box{sitepulseCardColSpan * (i % sitepulseCardsPerRow), sitepulseCardColSpan, row + sitepulseCardRowSpan*(i/sitepulseCardsPerRow), sitepulseCardRowSpan}
 }
 
 func sitepulseDeviceSlot(label string, d DeviceInstance, scope *dashboardScope) dashboardSlot {
@@ -172,14 +190,16 @@ func buildSitepulseDashboard(devices []DeviceInstance) (string, error) {
 		running,
 	}
 
-	// Card bands. Each kind is capped at one row; the label says when that is partial.
+	// Card bands, one per kind, each wrapping onto the rows it needs; the label says when
+	// the per-kind cap leaves a band partial.
 	shown, perKind := 0, 0
 	type band struct {
 		devices []DeviceInstance
 		row     int
 	}
 	var fuelBands []band
-	for i, kind := range sitepulseMachineKinds {
+	row := sitepulseFuelFirstRow
+	for _, kind := range sitepulseMachineKinds {
 		all := sitepulseMachinesOfType(devices, kind)
 		if len(all) > perKind {
 			perKind = len(all)
@@ -191,7 +211,8 @@ func buildSitepulseDashboard(devices []DeviceInstance) (string, error) {
 		if n > shown {
 			shown = n
 		}
-		fuelBands = append(fuelBands, band{devices: all[:n], row: sitepulseFuelFirstRow + sitepulseCardRowSpan*i})
+		fuelBands = append(fuelBands, band{devices: all[:n], row: row})
+		row += sitepulseCardBandRows(n)
 	}
 
 	widgets = append(widgets, buildLabelWidget("sp-fuel-label", box{0, 24, sitepulseFuelLabelRow, 2}, sitepulseFuelBandText(shown, perKind), "left", 14))
@@ -200,7 +221,7 @@ func buildSitepulseDashboard(devices []DeviceInstance) (string, error) {
 		for i, d := range b.devices {
 			slots[d.Token] = sitepulseDeviceSlot(d.ExternalId, d, nil)
 			// No flash: a draining tank would flash red on every tick.
-			widgets = append(widgets, buildLatestCardWidget("sp-fuel-"+d.Token, box{sitepulseCardColSpan * i, sitepulseCardColSpan, b.row, sitepulseCardRowSpan},
+			widgets = append(widgets, buildLatestCardWidget("sp-fuel-"+d.Token, sitepulseCardBox(b.row, i),
 				widgetSubject{Slot: d.Token, Measurements: []string{SitepulseFuelKey}},
 				"Fuel %", SitepulseFuelKey, "%", 0, false))
 		}
@@ -212,7 +233,7 @@ func buildSitepulseDashboard(devices []DeviceInstance) (string, error) {
 	}
 	for i, d := range haulers {
 		slots[d.Token] = sitepulseDeviceSlot(d.ExternalId, d, nil)
-		widgets = append(widgets, buildLatestCardWidget("sp-payload-"+d.Token, box{sitepulseCardColSpan * i, sitepulseCardColSpan, sitepulseFuelFirstRow + sitepulseCardRowSpan*len(sitepulseMachineKinds), sitepulseCardRowSpan},
+		widgets = append(widgets, buildLatestCardWidget("sp-payload-"+d.Token, sitepulseCardBox(row, i),
 			widgetSubject{Slot: d.Token, Measurements: []string{SitepulsePayloadKey}},
 			"Payload", SitepulsePayloadKey, "t", 1, false))
 	}

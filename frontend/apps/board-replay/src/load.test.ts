@@ -24,7 +24,7 @@ describe('loadReplay', () => {
     const loaded = await loadReplay({ recordingUrl: RECORDING_URL, boardUrl: BOARD_URL, fetchFn: stub.fetchFn, origin: ORIGIN });
     expect(stub.calls).toEqual([RECORDING_URL, BOARD_URL]);
     expect(loaded.recording.runId).toBe('run-fixture');
-    expect(loaded.definition.widgets.length).toBeGreaterThan(20);
+    expect(loaded.definition.widgets.length).toBeGreaterThan(30);
   });
 
   it('takes the site anchor from the pinned board: assigned / customer / acme-earthworks', async () => {

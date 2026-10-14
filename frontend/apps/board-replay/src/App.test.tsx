@@ -20,7 +20,7 @@ import {
   ORIGIN,
   RECORDING_URL,
   boardBytes,
-  excerptText,
+  excerptOnCurrentBoardText,
   fixtureRecordingText,
   manualTicker,
   stubFetch,
@@ -473,7 +473,7 @@ describe.skipIf(!EXCERPT_AVAILABLE)('the first recorded run (converter excerpt)'
   const T_ALARM = 441_124;
 
   it('golden at 441.2 s: one MAJOR alarm, and SP-HL-0003 tyre pressure 599.6 after the drill', async () => {
-    await mountApp(await excerptText());
+    await mountApp(await excerptOnCurrentBoardText());
     await seekTo(441_200);
 
     const text = document.body.textContent ?? '';
@@ -494,7 +494,7 @@ describe.skipIf(!EXCERPT_AVAILABLE)('the first recorded run (converter excerpt)'
   });
 
   it('the Machine selector drives the same gauge', async () => {
-    await mountApp(await excerptText());
+    await mountApp(await excerptOnCurrentBoardText());
     await seekTo(441_200);
     await act(async () => {
       fireEvent.change(screen.getByLabelText('Select selectedMachine'), { target: { value: 'sp-hauler-03' } });
@@ -504,12 +504,12 @@ describe.skipIf(!EXCERPT_AVAILABLE)('the first recorded run (converter excerpt)'
   });
 
   it('shows the map as "Not in this recording", never as an empty map', async () => {
-    await mountApp(await excerptText());
+    await mountApp(await excerptOnCurrentBoardText());
     expect(document.body.textContent).toContain('Not in this recording');
   });
 
   it('a chapter that asserts an alarm lands on a board that shows it', async () => {
-    const { view } = await mountApp(await excerptText());
+    const { view } = await mountApp(await excerptOnCurrentBoardText());
     const chapter = screen.getByRole('button', { name: /tyre alarm/ });
     expect(chapter.textContent).toContain('0:21');
     await act(async () => {
@@ -522,7 +522,7 @@ describe.skipIf(!EXCERPT_AVAILABLE)('the first recorded run (converter excerpt)'
   });
 
   it('control: one millisecond before the chapter the alarm is not yet on the board', async () => {
-    const { view } = await mountApp(await excerptText());
+    const { view } = await mountApp(await excerptOnCurrentBoardText());
     await seekTo(T_ALARM - 1);
     expect(view.container.textContent).not.toContain('tyre-pressure-low');
     expect(view.container.textContent).toContain('Major alarmsacme-earthworks0alarms');

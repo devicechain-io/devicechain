@@ -44,11 +44,20 @@ export async function fixtureRecordingText(mutate?: (doc: Record<string, any>) =
   return JSON.stringify(doc);
 }
 
-// The excerpt is a real run's DATA, committed byte-for-byte (see its .sha256), and it pins the
-// board it was captured against by hash. That board has since been re-laid out, so the hash is
-// re-pointed at the committed fixture here, in memory: what these tests prove is that the
-// current board renders the recorded measurements, not that the board is the captured one.
-export async function excerptText(): Promise<string> {
+// The excerpt is a real run's DATA, committed byte-for-byte (its .sha256 sidecar), and its
+// `board` block is PROVENANCE: the board at `sourceCommit`, which the converter's own test
+// (test_recording_to_board.py) checks against git, not against the working tree, because a
+// later board edit is legitimate. The suites that use this helper ask a different question:
+// does the recorded data still drive the board as it is NOW (same slot and widget ids, the
+// selector, the gauges, the alarm counts)? So the pin is re-pointed at the current fixture,
+// in memory, as fixtureRecordingText does for the synthetic recording. The refusal the pin
+// exists for (a recording paired with a board it was not pinned to) is proven in
+// load.test.ts with a deliberately mismatched hash, and is not weakened by this.
+//
+// Re-pinning the committed file instead would be wrong twice: it would claim the run was
+// recorded against a board it never saw, and its sourceCommit would have to name a branch
+// commit that a squash merge leaves unreachable, which the converter test refuses in CI.
+export async function excerptOnCurrentBoardText(): Promise<string> {
   const doc = JSON.parse(readFileSync(EXCERPT_PATH, 'utf-8'));
   doc.board = { ...doc.board, sha256: await boardSha256() };
   return JSON.stringify(doc);

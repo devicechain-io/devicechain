@@ -20,13 +20,12 @@ var (
 	wantSitepulseHaulerTokens = []string{"sp-hauler-01", "sp-hauler-02", "sp-hauler-03", "sp-hauler-04", "sp-hauler-05", "sp-hauler-06"}
 )
 
-// wantSitepulseCardTokens is the machines that get a card, SORTED, to compare with sortedKeys:
-// the FIRST FOUR of each kind (a card is 6 columns of 24, so a band holds 4).
-func wantSitepulseCardTokens() []string {
+// wantSitepulseMachineTokens is every machine, SORTED, to compare with sortedKeys.
+func wantSitepulseMachineTokens() []string {
 	var all []string
-	all = append(all, wantSitepulseDozerTokens[:4]...)
-	all = append(all, wantSitepulseHaulerTokens[:4]...)
-	all = append(all, wantSitepulseLoaderTokens[:4]...)
+	all = append(all, wantSitepulseDozerTokens...)
+	all = append(all, wantSitepulseHaulerTokens...)
+	all = append(all, wantSitepulseLoaderTokens...)
 	sort.Strings(all)
 	return all
 }
@@ -106,12 +105,12 @@ func TestSitepulseDeclaresTheSiteDashboard(t *testing.T) {
 	}
 }
 
-func TestSitepulseBoardShowsEachKindsFirstFourMachinesFuel(t *testing.T) {
+func TestSitepulseBoardShowsEveryMachinesFuel(t *testing.T) {
 	m := sitepulseManifest(t)
 	def := sitepulseBoard(t, m)
 	cards := cardsFor(def, "fuel_pct")
-	if got, want := sortedKeys(cards), wantSitepulseCardTokens(); !equalStrings(got, want) {
-		t.Fatalf("fuel cards bind %v, want the first four of each kind %v", got, want)
+	if got, want := sortedKeys(cards), wantSitepulseMachineTokens(); !equalStrings(got, want) {
+		t.Fatalf("fuel cards bind %v, want one per machine %v", got, want)
 	}
 	externalIds := map[string]string{}
 	for _, d := range m.Expand(m.Seed) {
@@ -262,8 +261,8 @@ func TestSitepulseBoardBindsThePlantThroughItsOwnSlot(t *testing.T) {
 func TestSitepulseBoardPayloadIsHaulersOnly(t *testing.T) {
 	def := sitepulseBoard(t, sitepulseManifest(t))
 	cards := cardsFor(def, "payload_t")
-	if got, want := sortedKeys(cards), wantSitepulseHaulerTokens[:4]; !equalStrings(got, want) {
-		t.Fatalf("payload cards bind %v, want the first four haul trucks %v", got, want)
+	if got := sortedKeys(cards); !equalStrings(got, wantSitepulseHaulerTokens) {
+		t.Fatalf("payload cards bind %v, want the six haul trucks %v", got, wantSitepulseHaulerTokens)
 	}
 	for _, w := range cards {
 		if w.Options["title"] != "Payload" {
@@ -311,7 +310,11 @@ func TestSitepulseBoardCarriesNoCommandWidgetYet(t *testing.T) {
 }
 
 func TestSitepulseBoardTracksTheResizedFleet(t *testing.T) {
-	for _, tc := range []struct{ devices, perKind int }{{1, 1}, {3, 3}, {7, 4}, {250, 4}} {
+	for _, tc := range []struct{ devices, perKind int }{
+		{1, 1}, {3, 3}, {7, 7},
+		// The cap is one screen of rows per kind; one machine past it must say so.
+		{sitepulseCardsPerKind, sitepulseCardsPerKind}, {sitepulseCardsPerKind + 1, sitepulseCardsPerKind}, {250, sitepulseCardsPerKind},
+	} {
 		s, err := NewSim("sitepulse", 1, Load{DeviceCount: tc.devices})
 		if err != nil {
 			t.Fatalf("NewSim(%d): %v", tc.devices, err)
@@ -325,8 +328,8 @@ func TestSitepulseBoardTracksTheResizedFleet(t *testing.T) {
 			t.Errorf("--devices %d: %d payload cards, want %d", tc.devices, got, tc.perKind)
 		}
 		text, _ := widgetByID(t, def, "sp-fuel-label").Options["text"].(string)
-		if tc.devices > 4 {
-			if want := fmt.Sprintf("first 4 of %d", tc.devices); !strings.Contains(text, want) {
+		if tc.devices > tc.perKind {
+			if want := fmt.Sprintf("first %d of %d", tc.perKind, tc.devices); !strings.Contains(text, want) {
 				t.Errorf("--devices %d: label %q lacks the note %q", tc.devices, text, want)
 			}
 		} else if strings.Contains(text, "showing the first") {
@@ -342,13 +345,12 @@ func TestSitepulseBoardTracksTheResizedFleet(t *testing.T) {
 	}
 }
 
-// The default 18-machine board has six per kind and a band holds four, so the label MUST say
-// the rows are partial: two machines per kind have no card, and the label is how a viewer
-// learns that.
-func TestSitepulseDefaultBoardLabelSaysTheRowsArePartial(t *testing.T) {
+// The default 18-machine board has six per kind and every machine has a card, so the
+// label must not say the rows are partial.
+func TestSitepulseDefaultBoardLabelCarriesNoTruncationNote(t *testing.T) {
 	text, _ := widgetByID(t, sitepulseBoard(t, sitepulseManifest(t)), "sp-fuel-label").Options["text"].(string)
-	if want := "showing the first 4 of 6 per machine kind"; !strings.Contains(text, want) {
-		t.Errorf("default board label %q lacks %q", text, want)
+	if strings.Contains(text, "showing the first") {
+		t.Errorf("default board label %q claims partial rows", text)
 	}
 }
 
@@ -361,6 +363,9 @@ func TestSitepulseBoardDoesNotOverlapAndKeepsTheKeyWidgetsAboveTheFold(t *testin
 	occupied := map[[2]int]string{}
 	for _, w := range def.Widgets {
 		b := w.Layout["base"]
+		if b.Col < 0 || b.Row < 0 || b.Col+b.ColSpan > dashboardGridColumns {
+			t.Errorf("%s spans columns %d..%d of %d", w.Id, b.Col, b.Col+b.ColSpan, dashboardGridColumns)
+		}
 		for c := b.Col; c < b.Col+b.ColSpan; c++ {
 			for r := b.Row; r < b.Row+b.RowSpan; r++ {
 				if other, taken := occupied[[2]int{c, r}]; taken {
@@ -372,8 +377,8 @@ func TestSitepulseBoardDoesNotOverlapAndKeepsTheKeyWidgetsAboveTheFold(t *testin
 	}
 	for _, id := range []string{"sp-alarms-critical", "sp-alarms-major", "sp-plant-throughput", "sp-plant-running", "sp-alarms", "sp-map"} {
 		b := widgetByID(t, def, id).Layout["base"]
-		if end := b.Row + b.RowSpan; end > 22 {
-			t.Errorf("%s ends at row %d, below the fold of a 1080 px window (22 rows); the alarms, KPIs and map belong above it", id, end)
+		if end := b.Row + b.RowSpan; end > sitepulseFoldRows {
+			t.Errorf("%s ends at row %d, below the fold of a 1080 px window (%d rows); the alarms, KPIs and map belong above it", id, end, sitepulseFoldRows)
 		}
 	}
 }

@@ -76,6 +76,22 @@
       "label": "SP-DZ-0004",
       "type": "device"
     },
+    "sp-dozer-05": {
+      "defaultBinding": {
+        "deviceToken": "sp-dozer-05",
+        "kind": "device"
+      },
+      "label": "SP-DZ-0005",
+      "type": "device"
+    },
+    "sp-dozer-06": {
+      "defaultBinding": {
+        "deviceToken": "sp-dozer-06",
+        "kind": "device"
+      },
+      "label": "SP-DZ-0006",
+      "type": "device"
+    },
     "sp-hauler-01": {
       "defaultBinding": {
         "deviceToken": "sp-hauler-01",
@@ -108,6 +124,22 @@
       "label": "SP-HL-0004",
       "type": "device"
     },
+    "sp-hauler-05": {
+      "defaultBinding": {
+        "deviceToken": "sp-hauler-05",
+        "kind": "device"
+      },
+      "label": "SP-HL-0005",
+      "type": "device"
+    },
+    "sp-hauler-06": {
+      "defaultBinding": {
+        "deviceToken": "sp-hauler-06",
+        "kind": "device"
+      },
+      "label": "SP-HL-0006",
+      "type": "device"
+    },
     "sp-loader-01": {
       "defaultBinding": {
         "deviceToken": "sp-loader-01",
@@ -138,6 +170,22 @@
         "kind": "device"
       },
       "label": "SP-LD-0004",
+      "type": "device"
+    },
+    "sp-loader-05": {
+      "defaultBinding": {
+        "deviceToken": "sp-loader-05",
+        "kind": "device"
+      },
+      "label": "SP-LD-0005",
+      "type": "device"
+    },
+    "sp-loader-06": {
+      "defaultBinding": {
+        "deviceToken": "sp-loader-06",
+        "kind": "device"
+      },
+      "label": "SP-LD-0006",
       "type": "device"
     }
   },
@@ -256,7 +304,7 @@
       "options": {
         "align": "left",
         "fontSize": 14,
-        "text": "Fuel level — the low-fuel alarm and refuel command fire below 15 % · showing the first 4 of 6 per machine kind"
+        "text": "Fuel level — the low-fuel alarm and refuel command fire below 15 %"
       },
       "type": "label"
     },
@@ -272,7 +320,7 @@
       "layout": {
         "base": {
           "col": 0,
-          "colSpan": 6,
+          "colSpan": 8,
           "row": 15,
           "rowSpan": 3,
           "z": 0
@@ -298,8 +346,8 @@
       "id": "sp-fuel-sp-dozer-02",
       "layout": {
         "base": {
-          "col": 6,
-          "colSpan": 6,
+          "col": 8,
+          "colSpan": 8,
           "row": 15,
           "rowSpan": 3,
           "z": 0
@@ -325,8 +373,8 @@
       "id": "sp-fuel-sp-dozer-03",
       "layout": {
         "base": {
-          "col": 12,
-          "colSpan": 6,
+          "col": 16,
+          "colSpan": 8,
           "row": 15,
           "rowSpan": 3,
           "z": 0
@@ -352,9 +400,63 @@
       "id": "sp-fuel-sp-dozer-04",
       "layout": {
         "base": {
-          "col": 18,
-          "colSpan": 6,
-          "row": 15,
+          "col": 0,
+          "colSpan": 8,
+          "row": 18,
+          "rowSpan": 3,
+          "z": 0
+        }
+      },
+      "options": {
+        "flashOnChange": false,
+        "measurement": "fuel_pct",
+        "precision": 0,
+        "title": "Fuel %",
+        "unit": "%"
+      },
+      "type": "latest-card"
+    },
+    {
+      "datasource": {
+        "kind": "slot",
+        "measurements": [
+          "fuel_pct"
+        ],
+        "slot": "sp-dozer-05"
+      },
+      "id": "sp-fuel-sp-dozer-05",
+      "layout": {
+        "base": {
+          "col": 8,
+          "colSpan": 8,
+          "row": 18,
+          "rowSpan": 3,
+          "z": 0
+        }
+      },
+      "options": {
+        "flashOnChange": false,
+        "measurement": "fuel_pct",
+        "precision": 0,
+        "title": "Fuel %",
+        "unit": "%"
+      },
+      "type": "latest-card"
+    },
+    {
+      "datasource": {
+        "kind": "slot",
+        "measurements": [
+          "fuel_pct"
+        ],
+        "slot": "sp-dozer-06"
+      },
+      "id": "sp-fuel-sp-dozer-06",
+      "layout": {
+        "base": {
+          "col": 16,
+          "colSpan": 8,
+          "row": 18,
           "rowSpan": 3,
           "z": 0
         }
@@ -380,8 +482,8 @@
       "layout": {
         "base": {
           "col": 0,
-          "colSpan": 6,
-          "row": 18,
+          "colSpan": 8,
+          "row": 21,
           "rowSpan": 3,
           "z": 0
         }
@@ -406,9 +508,9 @@
       "id": "sp-fuel-sp-loader-02",
       "layout": {
         "base": {
-          "col": 6,
-          "colSpan": 6,
-          "row": 18,
+          "col": 8,
+          "colSpan": 8,
+          "row": 21,
           "rowSpan": 3,
           "z": 0
         }
@@ -433,9 +535,9 @@
       "id": "sp-fuel-sp-loader-03",
       "layout": {
         "base": {
-          "col": 12,
-          "colSpan": 6,
-          "row": 18,
+          "col": 16,
+          "colSpan": 8,
+          "row": 21,
           "rowSpan": 3,
           "z": 0
         }
@@ -460,9 +562,63 @@
       "id": "sp-fuel-sp-loader-04",
       "layout": {
         "base": {
-          "col": 18,
-          "colSpan": 6,
-          "row": 18,
+          "col": 0,
+          "colSpan": 8,
+          "row": 24,
+          "rowSpan": 3,
+          "z": 0
+        }
+      },
+      "options": {
+        "flashOnChange": false,
+        "measurement": "fuel_pct",
+        "precision": 0,
+        "title": "Fuel %",
+        "unit": "%"
+      },
+      "type": "latest-card"
+    },
+    {
+      "datasource": {
+        "kind": "slot",
+        "measurements": [
+          "fuel_pct"
+        ],
+        "slot": "sp-loader-05"
+      },
+      "id": "sp-fuel-sp-loader-05",
+      "layout": {
+        "base": {
+          "col": 8,
+          "colSpan": 8,
+          "row": 24,
+          "rowSpan": 3,
+          "z": 0
+        }
+      },
+      "options": {
+        "flashOnChange": false,
+        "measurement": "fuel_pct",
+        "precision": 0,
+        "title": "Fuel %",
+        "unit": "%"
+      },
+      "type": "latest-card"
+    },
+    {
+      "datasource": {
+        "kind": "slot",
+        "measurements": [
+          "fuel_pct"
+        ],
+        "slot": "sp-loader-06"
+      },
+      "id": "sp-fuel-sp-loader-06",
+      "layout": {
+        "base": {
+          "col": 16,
+          "colSpan": 8,
+          "row": 24,
           "rowSpan": 3,
           "z": 0
         }
@@ -488,8 +644,8 @@
       "layout": {
         "base": {
           "col": 0,
-          "colSpan": 6,
-          "row": 21,
+          "colSpan": 8,
+          "row": 27,
           "rowSpan": 3,
           "z": 0
         }
@@ -514,9 +670,9 @@
       "id": "sp-fuel-sp-hauler-02",
       "layout": {
         "base": {
-          "col": 6,
-          "colSpan": 6,
-          "row": 21,
+          "col": 8,
+          "colSpan": 8,
+          "row": 27,
           "rowSpan": 3,
           "z": 0
         }
@@ -541,9 +697,9 @@
       "id": "sp-fuel-sp-hauler-03",
       "layout": {
         "base": {
-          "col": 12,
-          "colSpan": 6,
-          "row": 21,
+          "col": 16,
+          "colSpan": 8,
+          "row": 27,
           "rowSpan": 3,
           "z": 0
         }
@@ -568,9 +724,63 @@
       "id": "sp-fuel-sp-hauler-04",
       "layout": {
         "base": {
-          "col": 18,
-          "colSpan": 6,
-          "row": 21,
+          "col": 0,
+          "colSpan": 8,
+          "row": 30,
+          "rowSpan": 3,
+          "z": 0
+        }
+      },
+      "options": {
+        "flashOnChange": false,
+        "measurement": "fuel_pct",
+        "precision": 0,
+        "title": "Fuel %",
+        "unit": "%"
+      },
+      "type": "latest-card"
+    },
+    {
+      "datasource": {
+        "kind": "slot",
+        "measurements": [
+          "fuel_pct"
+        ],
+        "slot": "sp-hauler-05"
+      },
+      "id": "sp-fuel-sp-hauler-05",
+      "layout": {
+        "base": {
+          "col": 8,
+          "colSpan": 8,
+          "row": 30,
+          "rowSpan": 3,
+          "z": 0
+        }
+      },
+      "options": {
+        "flashOnChange": false,
+        "measurement": "fuel_pct",
+        "precision": 0,
+        "title": "Fuel %",
+        "unit": "%"
+      },
+      "type": "latest-card"
+    },
+    {
+      "datasource": {
+        "kind": "slot",
+        "measurements": [
+          "fuel_pct"
+        ],
+        "slot": "sp-hauler-06"
+      },
+      "id": "sp-fuel-sp-hauler-06",
+      "layout": {
+        "base": {
+          "col": 16,
+          "colSpan": 8,
+          "row": 30,
           "rowSpan": 3,
           "z": 0
         }
@@ -596,8 +806,8 @@
       "layout": {
         "base": {
           "col": 0,
-          "colSpan": 6,
-          "row": 24,
+          "colSpan": 8,
+          "row": 33,
           "rowSpan": 3,
           "z": 0
         }
@@ -622,9 +832,9 @@
       "id": "sp-payload-sp-hauler-02",
       "layout": {
         "base": {
-          "col": 6,
-          "colSpan": 6,
-          "row": 24,
+          "col": 8,
+          "colSpan": 8,
+          "row": 33,
           "rowSpan": 3,
           "z": 0
         }
@@ -649,9 +859,9 @@
       "id": "sp-payload-sp-hauler-03",
       "layout": {
         "base": {
-          "col": 12,
-          "colSpan": 6,
-          "row": 24,
+          "col": 16,
+          "colSpan": 8,
+          "row": 33,
           "rowSpan": 3,
           "z": 0
         }
@@ -676,9 +886,63 @@
       "id": "sp-payload-sp-hauler-04",
       "layout": {
         "base": {
-          "col": 18,
-          "colSpan": 6,
-          "row": 24,
+          "col": 0,
+          "colSpan": 8,
+          "row": 36,
+          "rowSpan": 3,
+          "z": 0
+        }
+      },
+      "options": {
+        "flashOnChange": false,
+        "measurement": "payload_t",
+        "precision": 1,
+        "title": "Payload",
+        "unit": "t"
+      },
+      "type": "latest-card"
+    },
+    {
+      "datasource": {
+        "kind": "slot",
+        "measurements": [
+          "payload_t"
+        ],
+        "slot": "sp-hauler-05"
+      },
+      "id": "sp-payload-sp-hauler-05",
+      "layout": {
+        "base": {
+          "col": 8,
+          "colSpan": 8,
+          "row": 36,
+          "rowSpan": 3,
+          "z": 0
+        }
+      },
+      "options": {
+        "flashOnChange": false,
+        "measurement": "payload_t",
+        "precision": 1,
+        "title": "Payload",
+        "unit": "t"
+      },
+      "type": "latest-card"
+    },
+    {
+      "datasource": {
+        "kind": "slot",
+        "measurements": [
+          "payload_t"
+        ],
+        "slot": "sp-hauler-06"
+      },
+      "id": "sp-payload-sp-hauler-06",
+      "layout": {
+        "base": {
+          "col": 16,
+          "colSpan": 8,
+          "row": 36,
           "rowSpan": 3,
           "z": 0
         }
