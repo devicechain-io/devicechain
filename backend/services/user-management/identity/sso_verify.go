@@ -67,7 +67,9 @@ type ssoKeySetCache struct {
 type ssoKeySetEntry struct {
 	updated time.Time
 	jwksURI string
-	keys    *oidc.RemoteKeySet
+	// caBundle is the bundle the entry's fetches trust; a changed bundle is a new entry.
+	caBundle string
+	keys     *oidc.RemoteKeySet
 }
 
 func (c *ssoKeySetCache) get(conn *iam.IdpConnection, build func() *oidc.RemoteKeySet) *oidc.RemoteKeySet {
@@ -77,11 +79,11 @@ func (c *ssoKeySetCache) get(conn *iam.IdpConnection, build func() *oidc.RemoteK
 		c.entries = map[uint]ssoKeySetEntry{}
 	}
 	uri := conn.DiscoverySnapshot.JwksURI
-	if e, ok := c.entries[conn.ID]; ok && e.updated.Equal(conn.UpdatedAt) && e.jwksURI == uri {
+	if e, ok := c.entries[conn.ID]; ok && e.updated.Equal(conn.UpdatedAt) && e.jwksURI == uri && e.caBundle == conn.CaBundle {
 		return e.keys
 	}
 	ks := build()
-	c.entries[conn.ID] = ssoKeySetEntry{updated: conn.UpdatedAt, jwksURI: uri, keys: ks}
+	c.entries[conn.ID] = ssoKeySetEntry{updated: conn.UpdatedAt, jwksURI: uri, caBundle: conn.CaBundle, keys: ks}
 	return ks
 }
 

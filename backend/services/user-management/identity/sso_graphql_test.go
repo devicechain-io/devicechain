@@ -288,6 +288,19 @@ func TestCaBundleOverTheWire(t *testing.T) {
 	require.NotEmpty(t, r.Errors, r.Body)
 	require.NotContains(t, r.Body, "not a certificate")
 
+	// A signed-in identity that may read users but not write them is refused, whatever
+	// the bundle.
+	s.s.EnsureRole("system", "user-reader", "user:read")
+	s.s.CreateIdentity("reader@example.com", "reader-pass")
+	s.s.GrantSystemRole("reader@example.com", "user-reader")
+	var rd struct{ IdentityToken string }
+	post(t, s.pub, loginSu, map[string]any{"e": "reader@example.com", "p": "reader-pass"}, "", "", "").field(t, "login", &rd)
+	require.NotEmpty(t, rd.IdentityToken)
+	r = post(t, s.admin, `{idpConnections{token}}`, nil, rd.IdentityToken, "", "")
+	require.Empty(t, r.Errors, "the reader may read: "+r.Body)
+	r = post(t, s.admin, set, map[string]any{"b": ""}, rd.IdentityToken, "", "")
+	require.NotEmpty(t, r.Errors, "user:read must not change a CA bundle: "+r.Body)
+
 	var got struct {
 		CaCertificates []struct{ FingerprintSha256 string } `json:"caCertificates"`
 	}

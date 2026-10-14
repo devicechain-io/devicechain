@@ -26,6 +26,7 @@ import (
 
 	mscfg "github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/egress"
+	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-user-management/iam"
 	"github.com/stretchr/testify/require"
 )
@@ -353,12 +354,28 @@ func TestSignInThroughAPrivateCAProvider(t *testing.T) {
 	require.NotZero(t, op.tokenHits.Load(), "the token exchange went over TLS")
 	require.NotZero(t, op.jwksHits.Load(), "the key set was fetched over TLS")
 
+	// Refresh goes through the connection's own client too: with the system-roots client it
+	// would fail on the certificate.
+	_, err = e.m.RefreshIdpDiscovery(ctx, "tls-idp")
+	require.NoError(t, err, "a refresh of a private-CA connection must use its bundle")
+
+	// The create is audited with the fingerprint it added.
+	rows := e.auditRows(t, rdb.AuditOpIdpCaBundleChanged)
+	require.Len(t, rows, 1)
+	require.Contains(t, rows[0].EntityLabel, "tls-idp")
+	require.Contains(t, rows[0].EntityLabel, "added=["+d.CaCertificates[0].FingerprintSHA256+"]")
+	require.Contains(t, rows[0].EntityLabel, "removed=[]")
+
 	// Clearing the bundle returns the connection to the system roots: the provider is no
 	// longer reachable, and nothing the bundle said lingers in a cached client.
 	d, err = e.m.SetIdpCaBundle(ctx, "tls-idp", "")
 	require.NoError(t, err)
 	require.Empty(t, d.CaCertificates)
 	require.Empty(t, d.Connection.CaBundle)
+	rows = e.auditRows(t, rdb.AuditOpIdpCaBundleChanged)
+	require.Len(t, rows, 2)
+	require.Contains(t, rows[1].EntityLabel, "added=[]")
+	require.Contains(t, rows[1].EntityLabel, "removed=["+d2fp(t, ca)+"]")
 	l, _, _, _ := e.signIn(t, "tls-idp", "tls-sub-1", "pat@"+ssoTestDomain)
 	require.NotEmpty(t, l.Error, "without the bundle the sign-in must fail")
 	require.Empty(t, l.Code)
@@ -399,6 +416,7 @@ func TestSetIdpCaBundleVerifiesTheProviderBeforeSaving(t *testing.T) {
 	d, err = e.m.SetIdpCaBundle(ctx, "tls-idp", ca.certPEM)
 	require.NoError(t, err)
 	require.NotNil(t, d.Connection.DiscoveryApprovedAt)
+	require.Len(t, e.auditRows(t, rdb.AuditOpIdpCaBundleChanged), 1, "an identical bundle is not a change and is not audited")
 
 	// A bundle under which the provider answers with DIFFERENT endpoints withdraws it.
 	op.authorizePath = "/authorize-moved"
@@ -406,4 +424,96 @@ func TestSetIdpCaBundleVerifiesTheProviderBeforeSaving(t *testing.T) {
 	require.NoError(t, err)
 	require.Nil(t, d.Connection.DiscoveryApprovedAt, "endpoints that moved are reviewed again")
 	require.Contains(t, d.Connection.DiscoverySnapshot.AuthorizationEndpoint, "/authorize-moved")
+	require.Len(t, e.auditRows(t, rdb.AuditOpIdpCaBundleChanged), 1, "moved endpoints under the same bundle are not a bundle change")
+}
+
+// d2fp is the SHA-256 fingerprint of a test CA's certificate.
+func d2fp(t *testing.T, ca *testCA) string {
+	t.Helper()
+	_, certs, err := ParseCaBundle(ca.certPEM)
+	require.NoError(t, err)
+	return certs[0].FingerprintSHA256
+}
+
+// SetIdpCaBundle writes only the columns it changes: a connection disabled while the
+// administrator was composing the bundle stays disabled.
+func TestSetIdpCaBundleDoesNotRevertAConcurrentEdit(t *testing.T) {
+	e := newSsoEnv(t)
+	installFactory(t, e.m, allowLoopback)
+	ca := newTestCA(t, "Acme Root")
+	op := ca.tlsOP(t)
+	ctx := context.Background()
+	_, err := e.m.CreateIdpConnection(ctx, IdpConnectionInput{
+		Token: "tls-idp", Name: "tls", Kind: iam.IdpKindTenant, Issuer: op.url(), ClientID: ssoTestClientID, CaBundle: ca.certPEM,
+	})
+	require.NoError(t, err)
+
+	// Another writer loaded the row, then this one changes the bundle from a stale copy.
+	stale, err := e.store.IdpConnectionByToken(ctx, "tls-idp")
+	require.NoError(t, err)
+	live, err := e.store.IdpConnectionByToken(ctx, "tls-idp")
+	require.NoError(t, err)
+	live.Name = "renamed during an incident"
+	require.NoError(t, e.store.UpdateIdpConnection(ctx, live))
+
+	stale.CaBundle = ""
+	require.NoError(t, e.store.UpdateIdpConnectionFields(ctx, stale, "CaBundle"))
+	got, err := e.store.IdpConnectionByToken(ctx, "tls-idp")
+	require.NoError(t, err)
+	require.Empty(t, got.CaBundle)
+	require.Equal(t, "renamed during an incident", got.Name, "the stale write reverted another column")
+	require.True(t, got.UpdatedAt.After(live.UpdatedAt) || got.UpdatedAt.Equal(live.UpdatedAt))
+}
+
+// The bundle trusts the system roots in addition to its own: a provider signed by a
+// "system" CA still verifies on a connection that has a bundle set.
+func TestABundleIsTrustedInAdditionToTheSystemRoots(t *testing.T) {
+	system := newTestCA(t, "System Root")
+	private := newTestCA(t, "Private Root")
+	stranger := newTestCA(t, "Stranger")
+	pool := x509.NewCertPool()
+	require.True(t, pool.AppendCertsFromPEM([]byte(system.certPEM)))
+	saved := systemCertPool
+	systemCertPool = func() (*x509.CertPool, error) { return pool.Clone(), nil }
+	t.Cleanup(func() { systemCertPool = saved })
+
+	m := NewManager(nil, nil, nil, nil, 0, 0, "", BootstrapConfig{}, nil)
+	installFactory(t, m, allowLoopback)
+	bundle, _, err := ParseCaBundle(private.certPEM)
+	require.NoError(t, err)
+	client, err := m.clientForBundle(bundle)
+	require.NoError(t, err)
+
+	get := func(ca *testCA) error {
+		srv := ca.startTLS(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {}))
+		resp, err := client.Get(srv.URL)
+		if err == nil {
+			resp.Body.Close()
+		}
+		return err
+	}
+	require.NoError(t, get(private), "the bundle's own CA")
+	require.NoError(t, get(system), "a system root must still verify with a bundle set")
+	requireUnknownAuthority(t, get(stranger))
+}
+
+func TestParseCaBundleCountsAndMarkers(t *testing.T) {
+	var pems []string
+	for i := 0; i < maxCaBundleCerts+1; i++ {
+		pems = append(pems, newTestCA(t, "ca-"+string(rune('A'+i%26))+string(rune('a'+i/26))).certPEM)
+	}
+	_, certs, err := ParseCaBundle(strings.Join(pems[:maxCaBundleCerts], ""))
+	require.NoError(t, err)
+	require.Len(t, certs, maxCaBundleCerts)
+	_, _, err = ParseCaBundle(strings.Join(pems, ""))
+	require.ErrorIs(t, err, ErrCaBundleInvalid, "65 certificates")
+
+	// A middle block corrupted past decoding is refused, not silently dropped.
+	good := pems[0] + pems[1]
+	broken := "-----BEGIN CERTIFICATE-----\n!!!not base64!!!\n-----END CERTIFICATE-----\n"
+	_, _, err = ParseCaBundle(pems[0] + broken + pems[1])
+	require.ErrorIs(t, err, ErrCaBundleInvalid)
+	require.Contains(t, err.Error(), "could not be read")
+	_, _, err = ParseCaBundle(good)
+	require.NoError(t, err)
 }

@@ -240,6 +240,9 @@ func (m *Manager) CreateIdpConnection(ctx context.Context, in IdpConnectionInput
 			return nil, err
 		}
 	}
+	if caBundle != "" {
+		m.recordAuthLabeled(ctx, rdb.AuditOpIdpCaBundleChanged, actor(ctx), "", caAuditLabel(conn.Token, "", caBundle))
+	}
 	if in.Kind == iam.IdpKindInstance && in.MfaEnforcedByIdp {
 		m.recordAuthLabeled(ctx, rdb.AuditOpIdpMfaAcknowledged, actor(ctx), "", conn.Token)
 	}
@@ -403,27 +406,39 @@ func (m *Manager) SetIdpCaBundle(ctx context.Context, token, bundle string) (*Id
 	if err != nil {
 		return nil, err
 	}
+	oldBundle := conn.CaBundle
+	snapChanged := false
 	if canonical != "" {
+		// A failure here is the administrator trying a bundle, not the provider failing
+		// people, so it is not counted as a provider fetch failure.
 		snap, err := m.FetchIdpDiscovery(ctx, conn.Issuer, canonical)
 		if err != nil {
-			m.countIdpFailure(conn.Token)
 			return nil, err
 		}
 		if conn.DiscoverySnapshot == nil || !conn.DiscoverySnapshot.SameEndpoints(*snap) {
 			conn.DiscoverySnapshot = snap
 			conn.DiscoveryApprovedAt = nil
 			conn.DiscoveryApprovedBy = ""
+			snapChanged = true
 		}
 	}
-	if canonical == conn.CaBundle && conn.DiscoveryApprovedAt != nil {
-		// Nothing changed.
+	bundleChanged := canonical != oldBundle
+	if !bundleChanged && !snapChanged {
 		return m.connectionDetail(ctx, conn)
 	}
 	conn.CaBundle = canonical
-	if err := m.iam.UpdateIdpConnection(ctx, conn); err != nil {
+	// Only the columns this call changes: a concurrent edit to any other (disabling the
+	// connection during an incident) must not be reverted by this write.
+	fields := []string{"CaBundle"}
+	if snapChanged {
+		fields = append(fields, "DiscoverySnapshot", "DiscoveryApprovedAt", "DiscoveryApprovedBy")
+	}
+	if err := m.iam.UpdateIdpConnectionFields(ctx, conn, fields...); err != nil {
 		return nil, err
 	}
-	m.recordAuthLabeled(ctx, rdb.AuditOpIdpCaBundleChanged, actor(ctx), "", conn.Token)
+	if bundleChanged {
+		m.recordAuthLabeled(ctx, rdb.AuditOpIdpCaBundleChanged, actor(ctx), "", caAuditLabel(conn.Token, oldBundle, canonical))
+	}
 	return m.IdpConnection(ctx, token)
 }
 
@@ -541,7 +556,7 @@ func (m *Manager) RefreshIdpDiscovery(ctx context.Context, token string) (*IdpCo
 		conn.DiscoverySnapshot = snap
 		conn.DiscoveryApprovedAt = nil
 		conn.DiscoveryApprovedBy = ""
-		if err := m.iam.UpdateIdpConnection(ctx, conn); err != nil {
+		if err := m.iam.UpdateIdpConnectionFields(ctx, conn, "DiscoverySnapshot", "DiscoveryApprovedAt", "DiscoveryApprovedBy"); err != nil {
 			return nil, err
 		}
 	}
