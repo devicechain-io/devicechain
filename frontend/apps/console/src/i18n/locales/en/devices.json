@@ -213,7 +213,7 @@
   "typeProfileDetachConfirm": "Detach “{{token}}” from this device type? Its devices keep working but lose their typed capabilities — no metric typing, commands, or alarms — until a profile is re-attached. The profile itself is not deleted.",
   "typeProfileDetachTitle": "Detach profile",
   "typeProfileDetached": "Profile detached",
-  "typeProfileIntro": "A profile is the reusable capability contract — metrics, commands, and alarm rules — that this device type adopts. Authoring lives on the profile; here you choose which one this type uses.",
+  "typeProfileIntro": "A profile is the reusable capability contract — metrics, commands, detection rules, and configuration and position declarations — that this device type adopts. Authoring lives on the profile; here you choose which one this type uses.",
   "typeProfileLoadError": "Couldn’t load the profiles to choose from. You can still create one below.",
   "typeProfileLoadingProfiles": "Loading profiles…",
   "typeProfileNoOtherProfiles": "No other profiles.",

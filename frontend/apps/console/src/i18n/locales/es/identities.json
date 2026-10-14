@@ -10,7 +10,7 @@
   "deleteIdentityTitle": "Eliminar identidad",
   "description": "El directorio global de identidades. Una persona es una identidad que puede tener membresías en varios inquilinos.",
   "disable": "Deshabilitar",
-  "empty": "Aún no hay identidades. Cree la primera.",
+  "empty": "Aún no hay identidades. Crea la primera.",
   "enable": "Habilitar",
   "filterRolesPlaceholder": "Filtrar roles…",
   "filterTenantsPlaceholder": "Filtrar inquilinos…",
@@ -27,7 +27,7 @@
   "membershipRemovedToast": "Membresía eliminada",
   "membershipsSectionTitle": "Membresías",
   "newIdentity": "Nueva identidad",
-  "newIdentityDescription": "Un principal global identificado por correo electrónico. Añada membresías de inquilino después de crearlo.",
+  "newIdentityDescription": "Un principal global identificado por correo electrónico. Añade membresías de inquilino después de crearlo.",
   "newPasswordPlaceholder": "Nueva contraseña",
   "noMemberships": "Sin membresías de inquilino.",
   "noSystemRolesMessage": "No hay roles de sistema definidos.",
@@ -49,7 +49,7 @@
   "setPasswordLabel": "Establecer contraseña",
   "systemRoles": "Roles de sistema",
   "systemRolesDescription": "Roles que controlan el acceso a la API de administración.",
-  "systemRolesFormDescription": "Los roles de sistema controlan el acceso a la API de administración (p. ej., superuser). Déjelo vacío si no aplica ninguno.",
+  "systemRolesFormDescription": "Los roles de sistema controlan el acceso a la API de administración (p. ej., superuser). Déjalo vacío si no aplica ninguno.",
   "systemRolesUpdatedToast": "Roles de sistema actualizados",
   "title": "Identidades"
 }

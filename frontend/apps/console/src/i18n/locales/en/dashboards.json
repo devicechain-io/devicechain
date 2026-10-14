@@ -281,5 +281,8 @@
   "templateDeviceDetailName": "Device detail",
   "templateDeviceDetailDescription": "Latest values, gauge, telemetry chart, location and alarms for one device.",
   "templateAlarmsBoardName": "Alarms board",
-  "templateAlarmsBoardDescription": "Alarm counts and tables for the whole tenant, active and recently cleared."
+  "templateAlarmsBoardDescription": "Alarm counts and tables for the whole tenant, active and recently cleared.",
+  "syntheticGenerator_sine": "Sine wave",
+  "syntheticGenerator_ramp": "Ramp",
+  "syntheticGenerator_random-walk": "Random walk"
 }
