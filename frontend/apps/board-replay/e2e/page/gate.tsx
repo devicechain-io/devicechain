@@ -64,9 +64,11 @@ const FIXTURE_BOARDS = import.meta.glob<string>('../fixtures/*.json', { query: '
 
 // The committed recording for a board, by board parameter. A recording is captured against one
 // board, so only the board it was captured against is drawn from it.
-const RECORDINGS: Record<string, Loader> = {
-  'sim/sp-dashboard': () => import('../../../../testdata/board-replay/take2-tyre-excerpt.json?raw').then((m) => m.default),
-};
+// A Map, not an object: the key comes from the URL, and a plain object would answer
+// inherited names (`constructor`, `__proto__`) with something that is not a loader.
+const RECORDINGS = new Map<string, Loader>([
+  ['sim/sp-dashboard', () => import('../../../../testdata/board-replay/take2-tyre-excerpt.json?raw').then((m) => m.default)],
+]);
 
 export const SYNTHETIC_READING = 888.8;
 export const SYNTHETIC_NOW = Date.UTC(2026, 11, 28, 22, 58, 58);
@@ -77,7 +79,8 @@ function loaderFor(param: string | null): Loader {
   const [, dir, name] = m;
   const table = dir === 'sim' ? SIM_BOARDS : FIXTURE_BOARDS;
   const base = dir === 'sim' ? '../../../../testdata/sim-dashboards' : '../fixtures';
-  const load = table[`${base}/${name}.json`];
+  const key = `${base}/${name}.json`;
+  const load = Object.prototype.hasOwnProperty.call(table, key) ? table[key] : undefined;
   if (!load) throw new Error(`no such board: ${param}`);
   return load;
 }
@@ -105,7 +108,7 @@ async function prepare(boardParam: string | null): Promise<Prepared> {
   const load = loaderFor(boardParam);
   const registry = hostWidgetRegistry();
   const definition = migrateToSlots(parseDashboardDefinition(JSON.parse(await load()), { catalog: registry.catalog }));
-  const recordingLoader = RECORDINGS[boardParam ?? ''];
+  const recordingLoader = RECORDINGS.get(boardParam ?? '');
   if (!recordingLoader) {
     Date.now = () => SYNTHETIC_NOW;
     return {
