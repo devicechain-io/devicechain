@@ -493,6 +493,11 @@ namespace="$(instance_namespace)"
 sso_stub_redirect_uri="https://stub.invalid/unused" # no sign-in is ever driven here
 # shellcheck disable=SC2034
 sso_stub_ca_configmap="upgrade-rig-idp-ca"
+# The CA is MOUNTED here rather than carried by the connection: the seed creates the
+# connection against the baseline, and a baseline older than per-connection trust (v0.20.0
+# and before) has no caBundle field to carry it in.
+# shellcheck disable=SC2034
+sso_stub_mount_ca=true
 # The caller contract of the library, in order: the stub's helpers need k, say, note and
 # fail (all defined above or below this block, and only CALLED later).
 k() { kubectl --context "$kube_context" "$@"; }

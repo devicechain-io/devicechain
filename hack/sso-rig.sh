@@ -37,16 +37,21 @@
 # REACH IT. It is therefore never exposed: the rig reaches it only through a
 # `kubectl port-forward` on 127.0.0.1, and it exists in a throwaway cluster.
 #
-# The stub provider, its certificate and the rig-only TRUST AND EGRESS edits (a private CA
-# cannot be trusted in production, so this rig mounts one into its own cluster's
-# user-management) live in hack/lib/sso-stub-idp.sh, which hack/upgrade-rig.sh shares; read
-# its header for what those edits are and are not.
+# TRUST is the product's own: Dex's certificate is signed by a CA the rig mints, and the
+# connection carries that CA as its private CA bundle, exactly as an operator would supply
+# an on-premises provider's. Nothing is mounted into user-management. The only rig-only
+# edit is the EGRESS allowance for Dex's address. `control` shows each is load-bearing:
+# with the bundle cleared the provider is refused as untrusted, and with the allowance
+# taken away the egress guard refuses the address. The stub provider, its certificate and
+# the egress edit live in hack/lib/sso-stub-idp.sh, which hack/upgrade-rig.sh shares.
+#
+# The bootstrap prints the superuser's seed password once; this rig filters it out of its
+# own output (redact_secrets), so a teed log of a run does not hold it.
 #
 # Requires: kind, kubectl, docker, jq, curl, openssl, a Go toolchain (the script builds
 # dcctl) and `tofu` OR `terraform` on PATH. It binds host ports 80 and 443 (the kind
-# config's ingress mapping) and 5556 (the Dex port-forward). NOT RUN IN CI. It has not
-# been run on the machine it was written on (no kind there); only its Dex headers flow
-# was exercised, against a local Dex container.
+# config's ingress mapping) and 5556 (the Dex port-forward). NOT RUN IN CI. It has been run
+# end to end on local kind from a Windows git-bash.
 
 # GraphQL documents are single-quoted on purpose: their $variables are GraphQL's, not the
 # shell's.
@@ -72,6 +77,8 @@ tenant="sso-rig"
 connection="dex"
 # shellcheck disable=SC2034 # read by hack/lib/sso-stub-idp.sh
 sso_stub_redirect_uri="$um/sso/callback/$connection"
+# shellcheck disable=SC2034 # read by hack/lib/sso-stub-idp.sh: trust is the connection's bundle
+sso_stub_mount_ca=false
 verified_domain="rig.example"
 mapped_group="dc-viewers"
 mapped_role="sso-viewer"
@@ -119,6 +126,19 @@ k() { kubectl --context "$kube_context" "$@"; }
 # with hack/upgrade-rig.sh. It reads rig_tmp, cluster, namespace, instance and k from here.
 # shellcheck source=lib/sso-stub-idp.sh
 . "$repo_root/hack/lib/sso-stub-idp.sh"
+
+# redact_secrets filters dcctl's output: the bootstrap prints the superuser's generated
+# password once, on a line of its own ("password: <value>"), and a run of this rig is
+# usually teed to a log.
+redact_secrets() { sed -u -E 's/^([[:space:]]*password:[[:space:]]*).+$/\1[redacted by hack\/sso-rig.sh]/'; }
+
+# redact_self_check proves the filter removes a password before any real one goes through it.
+redact_self_check() {
+  local out
+  out="$(printf '  Superuser: superuser@devicechain.local\n           password: s3cr3t-Probe_value\n' | redact_secrets)"
+  ! grep -q 's3cr3t-Probe_value' <<<"$out" || fail "redact_secrets let a password through: $out"
+  grep -q 'Superuser: superuser@devicechain.local' <<<"$out" || fail "redact_secrets removed a line it should keep: $out"
+}
 
 build_dcctl() {
   say "building dcctl"
@@ -352,11 +372,23 @@ Choose another name with DC_SSO_INSTANCE; this rig will not bootstrap over anoth
   fi
   mkdir -p "$(dirname "$owner_marker")"
   printf '%s\n' "$cluster" >"$owner_marker"
+  redact_self_check
   say "installing the cluster prerequisites"
-  "$dcctl" install local --yes --compact --no-tls --kube-context "$kube_context" "${image_args[@]}"
+  "$dcctl" install local --yes --compact --no-tls --kube-context "$kube_context" "${image_args[@]}" 2>&1 |
+    redact_secrets
   say "bootstrapping $instance (plain http on localhost: a loopback issuer)"
   "$dcctl" bootstrap local "$instance" --yes --no-escrow --kube-context "$kube_context" \
-    --host localhost --no-tls "${image_args[@]}"
+    --host localhost --no-tls "${image_args[@]}" 2>&1 | redact_secrets | tee "$rig_tmp/bootstrap.out"
+  # The filter matches dcctl's present wording. If that wording moves, the password would
+  # pass straight through, so check the OUTPUT for the password itself, not for the filter's
+  # marker. The password reaches grep through a process substitution, never on a command line.
+  local pw
+  pw="$(k -n "$namespace" get secret "dci-$instance-superuser" -o jsonpath='{.data.password}' | base64 -d)"
+  [[ -n "$pw" ]] || fail "Secret $namespace/dci-$instance-superuser holds no superuser password to check the redaction against"
+  if grep -qF -f <(printf '%s\n' "$pw") "$rig_tmp/bootstrap.out"; then
+    fail "the superuser password reached this rig's output despite redact_secrets: dcctl's wording changed; fix the filter"
+  fi
+  note "the bootstrap output was checked: the superuser password is not in it"
   if [[ -n "$(k -n "$namespace" get networkpolicy -o name 2>/dev/null || true)" ]]; then
     warn "the instance namespace has NetworkPolicies; user-management's egress to Dex may be blocked"
   fi
@@ -369,9 +401,22 @@ Choose another name with DC_SSO_INSTANCE; this rig will not bootstrap over anoth
 # configure the connection (idempotent)
 # ---------------------------------------------------------------------------
 
+# ensure_egress puts the egress allowance back if a CONTROL 5 that stopped half-way left
+# it out of the instance configuration, so a re-run does not start from a refusal.
+ensure_egress() {
+  local cidr doc
+  cidr="$(sso_stub_dex_cidr)"
+  doc="$(k -n "$namespace" get secret "dci-$instance-config" -o jsonpath='{.data.instance}' | base64 -d)"
+  jq -e --arg c "$cidr" '[.. | objects | to_entries[] | select((.key | ascii_downcase) == "alloweddestinations") | .value[]] | index($c) != null'     >/dev/null <<<"$doc" && return 0
+  warn "the egress allowance for Dex ($cidr) is missing; putting it back"
+  sso_stub_set_egress "$cidr"
+  sso_stub_roll_um
+}
+
 configure_connection() {
   local tier fp
   say "creating the tenant, the role and the connection"
+  ensure_egress
   admin_login
   tier="$(adm '{tenantTiers{token}}' | jq -r '.tenantTiers[0].token')"
   [[ -n "$tier" && "$tier" != null ]] || fail "the instance has no tenant tier to create a tenant at"
@@ -380,14 +425,21 @@ configure_connection() {
   adm_tolerate_exists 'mutation($r:AdminRoleCreateRequest!){createRole(request:$r){token}}' \
     "$(jq -n --arg t "$mapped_role" '{r:{scope:"tenant",token:$t,name:"SSO viewer",authorities:[]}}')" >/dev/null
 
-  # Created disabled, discovery fetched THROUGH the egress guard over TLS: this call is
-  # where a missing egress allowance or an untrusted certificate shows up.
+  # Created disabled, discovery fetched THROUGH the egress guard over TLS, trusting the rig
+  # CA through the connection's own bundle: this call is where a missing egress allowance or
+  # an untrusted certificate shows up.
   adm_tolerate_exists 'mutation($r:IdpConnectionCreateRequest!){createIdpConnection(request:$r){token}}' \
     "$(jq -n --arg t "$connection" --arg i "$dex_issuer" --arg c "$dex_client" --arg s "$dex_secret" \
+      --rawfile ca "$rig_tmp/ca.crt" \
       '{r:{token:$t,name:"Dex (rig)",kind:"tenant",issuer:$i,clientId:$c,clientSecret:$s,
-           scopes:["openid","email","profile","groups"]}}')" >/dev/null ||
-    fail "the connection could not be created. If the message names a certificate or a blocked address,
-the rig's trust or egress edit did not take effect (see sso_stub_trust_and_egress in hack/lib/sso-stub-idp.sh)."
+           scopes:["openid","email","profile","groups"],caBundle:$ca}}')" >/dev/null ||
+    fail "the connection could not be created. If the message names a certificate, the CA bundle was not
+taken; if it names a blocked address, the rig's egress edit did not take effect (see
+sso_stub_trust_and_egress in hack/lib/sso-stub-idp.sh)."
+  # A connection left by an earlier run (or by a control that stopped half-way) is brought
+  # back to the rig CA. An unchanged bundle is a no-op.
+  set_ca_bundle "$(cat "$rig_tmp/ca.crt")" >/dev/null ||
+    fail "the connection's CA bundle could not be set to the rig CA"
   fp="$(adm 'query($t:String!){idpConnection(token:$t){discovery{fingerprint}}}' "$(jq -n --arg t "$connection" '{t:$t}')" |
     jq -r '.idpConnection.discovery.fingerprint')"
   adm 'mutation($t:String!,$f:String!){approveIdpDiscovery(token:$t,fingerprint:$f){token}}' \
@@ -451,11 +503,36 @@ cmd_verify() {
 # fetch_ca recovers the rig CA from the cluster when verify runs in a fresh shell (the
 # working directory is per run). It is the CA the Dex certificate was minted by.
 fetch_ca() {
-  k -n "$namespace" get configmap sso-rig-ca -o jsonpath='{.data.ca\.crt}' >"$rig_tmp/bundle.crt" 2>/dev/null ||
-    fail "the rig CA ConfigMap is missing; run 'hack/sso-rig.sh up' first"
-  # The rig CA is the LAST certificate in the bundle (sso_stub_trust_and_egress appends it).
-  awk '/-----BEGIN CERTIFICATE-----/{n++} {a[n]=a[n] $0 "\n"} END{printf "%s", a[n]}' "$rig_tmp/bundle.crt" >"$rig_tmp/ca.crt"
-  [[ -s "$rig_tmp/ca.crt" ]] || fail "could not recover the rig CA"
+  k -n "$dex_ns" get configmap dex-ca -o jsonpath='{.data.ca\.crt}' >"$rig_tmp/ca.crt" 2>/dev/null ||
+    fail "the rig CA ConfigMap $dex_ns/dex-ca is missing; run 'hack/sso-rig.sh up' first"
+  grep -q 'BEGIN CERTIFICATE' "$rig_tmp/ca.crt" || fail "could not recover the rig CA from $dex_ns/dex-ca"
+}
+
+# set_ca_bundle <pem|""> replaces the connection's private CA bundle ("" clears it).
+set_ca_bundle() {
+  adm 'mutation($t:String!,$b:String!){setIdpCaBundle(token:$t,caBundle:$b){token caCertificates{subject fingerprintSha256}}}' \
+    "$(jq -n --arg t "$connection" --arg b "$1" '{t:$t,b:$b}')"
+}
+
+# refresh_discovery fetches the provider's discovery document again, under the connection's
+# current bundle and through the egress guard as the running pod has it configured. It
+# prints the data on success; on failure the errors go to stderr and it returns 1.
+refresh_discovery() {
+  adm 'mutation($t:String!){refreshIdpDiscovery(token:$t){token}}' "$(jq -n --arg t "$connection" '{t:$t}')"
+}
+
+# refused_for <want-regex> <reject-regex> <what>: refresh_discovery must FAIL, with an
+# error that matches <want-regex> and not <reject-regex>. A transport failure (no GraphQL
+# answer) is never a refusal.
+refused_for() {
+  local want="$1" reject="$2" what="$3" out
+  if out="$(refresh_discovery 2>&1)"; then
+    fail "$what: discovery was fetched successfully, so nothing was refused"
+  fi
+  [[ "$out" != transport:* ]] || fail "$what: no GraphQL answer, so this proves nothing: $out"
+  grep -qE -- "$want" <<<"$out" || fail "$what: refused, but not for the expected reason ($want): $out"
+  ! grep -qE -- "$reject" <<<"$out" || fail "$what: refused for the OTHER reason ($reject): $out"
+  printf '%s\n' "$out"
 }
 
 # ---------------------------------------------------------------------------
@@ -544,7 +621,38 @@ cmd_control() {
     fail "the second redemption failed, but not as a spent code (a transport or server error proves nothing): $out"
   note "the second redemption was refused as an invalid or expired code"
 
-  say "CONTROLS COMPLETE: each of the out-of-domain address, the tampered state and the replayed code was refused for its own reason, and the detector was shown to reject a success and the wrong refusal"
+  # CONTROLS 4 and 5 each take one of the two things that let user-management reach Dex
+  # away, and require a refetch of discovery to be refused for THAT reason and not the
+  # other. A refetch that succeeds first shows the instrument can say yes.
+  local tls_reason='x509: certificate signed by unknown authority' egress_reason='destination address is not permitted'
+  refresh_discovery >/dev/null || fail "discovery could not be refetched with the bundle and the allowance both in place, so the controls below would prove nothing"
+  note "with the CA bundle and the egress allowance in place, discovery refetches"
+
+  say "CONTROL 4: with the connection's CA bundle cleared, the provider must be refused as untrusted"
+  local ca_pem certs
+  ca_pem="$(cat "$rig_tmp/ca.crt")"
+  certs="$(set_ca_bundle "")" || fail "the connection's CA bundle could not be cleared"
+  [[ "$(jq '.setIdpCaBundle.caCertificates | length' <<<"$certs")" == 0 ]] ||
+    fail "the bundle was cleared but the connection still lists CA certificates: $certs"
+  out="$(refused_for "$tls_reason" "$egress_reason" "CONTROL 4")"
+  note "refused: ${out:0:300}"
+  certs="$(set_ca_bundle "$ca_pem")" || fail "the rig CA could not be set back as the connection's bundle"
+  [[ "$(jq -r '[.setIdpCaBundle.caCertificates[].subject] | join(",")' <<<"$certs")" == *dc-sso-rig-ca* ]] ||
+    fail "the bundle was set back but the connection does not list the rig CA: $certs"
+  refresh_discovery >/dev/null || fail "with the rig CA set back, discovery still could not be refetched"
+  note "with the rig CA set back as the bundle, discovery refetches again"
+
+  say "CONTROL 5: with the rig's egress allowance taken away, the egress guard must refuse Dex's address"
+  sso_stub_set_egress
+  sso_stub_roll_um
+  out="$(refused_for "$egress_reason" "$tls_reason" "CONTROL 5")"
+  note "refused: ${out:0:300}"
+  sso_stub_set_egress "$(sso_stub_dex_cidr)"
+  sso_stub_roll_um
+  refresh_discovery >/dev/null || fail "with the egress allowance restored, discovery still could not be refetched"
+  note "with the allowance restored, discovery refetches again"
+
+  say "CONTROLS COMPLETE: the out-of-domain address, the tampered state, the replayed code, the missing CA bundle and the missing egress allowance were each refused for their own reason, and the detector was shown to reject a success and the wrong refusal"
 }
 
 # ---------------------------------------------------------------------------
@@ -603,8 +711,9 @@ with the mapped role through a real provider.
 
 NOT COVERED, so this is not read as more than it is: only Dex's authproxy connector was
 used (not Entra, Okta or Google Workspace); only the tenant connection kind; no session
-ceiling, revocation or Require-SSO path; and the provider's certificate was trusted by a
-rig-only edit, because production offers no way to trust a private CA."
+ceiling, revocation or Require-SSO path; and the egress allowance for the provider's
+address was a rig-only edit to the instance configuration, not an operator's change through
+the chart. The provider's certificate was trusted through the connection's own CA bundle."
     ;;
   *) fail "unknown command ${1}; try up | verify | control | all | down" ;;
 esac
