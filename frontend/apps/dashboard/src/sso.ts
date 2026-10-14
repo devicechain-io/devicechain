@@ -32,6 +32,31 @@ function base64url(bytes: Uint8Array): string {
   return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 }
 
+// The deep-link query (?dashboard=...&kiosk=1...) the viewer was opened with. The provider's
+// return lands on a different address and the return page leaves with a full navigation, so
+// the query would be lost across the hop; it waits in sessionStorage (this tab's alone) and
+// is put back on the address the return page leaves for. Parameters only, never a credential.
+const RETURN_QUERY_KEY = 'dc-dash-return-query';
+
+function writeReturnQuery(search: string): void {
+  try {
+    if (search) window.sessionStorage.setItem(RETURN_QUERY_KEY, search);
+    else window.sessionStorage.removeItem(RETURN_QUERY_KEY);
+  } catch {
+    // unavailable: the viewer lands on the plain /dash/ and picks the dashboard by hand
+  }
+}
+
+function takeReturnQuery(): string {
+  try {
+    const q = window.sessionStorage.getItem(RETURN_QUERY_KEY) ?? '';
+    window.sessionStorage.removeItem(RETURN_QUERY_KEY);
+    return q.startsWith('?') ? q : '';
+  } catch {
+    return '';
+  }
+}
+
 function writeVerifier(v: string | null): void {
   try {
     if (v) window.sessionStorage.setItem(PENDING_KEY, v);
@@ -61,6 +86,7 @@ export async function startSso(email: string): Promise<string | null> {
   const verifier = base64url(raw);
   const digest = await globalThis.crypto.subtle.digest('SHA-256', new TextEncoder().encode(verifier));
   writeVerifier(verifier);
+  writeReturnQuery(window.location.search);
   try {
     const r = await gql(
       'user-management',
@@ -73,10 +99,14 @@ export async function startSso(email: string): Promise<string | null> {
       { anonymous: true },
     );
     const url = r.beginSso?.authorizationUrl ?? null;
-    if (url === null) writeVerifier(null);
+    if (url === null) {
+      writeVerifier(null);
+      writeReturnQuery('');
+    }
     return url;
   } catch (err) {
     writeVerifier(null);
+    writeReturnQuery('');
     throw err;
   }
 }
@@ -187,7 +217,7 @@ export function leaveWithSession(session: SsoSession): boolean {
 
 /** Leaves the return page for /dash/ with a full navigation, never a history push. */
 export function leaveSsoReturn(): void {
-  window.location.replace('/dash/');
+  window.location.replace('/dash/' + takeReturnQuery());
 }
 
 let handedOver: SsoSession | null | undefined;

@@ -4,7 +4,7 @@
 import type { MeasurementSample } from '@devicechain/dashboards';
 import { describe, expect, it } from 'vitest';
 
-import { buildGaugeOption, buildLineOption } from './chart-options';
+import { buildGaugeOption, buildLineOption, GAUGE_AXIS_LABELS_MIN_SIDE } from './chart-options';
 import type { ChartTheme } from './chart-theme';
 
 const theme: ChartTheme = {
@@ -79,5 +79,26 @@ describe('buildGaugeOption', () => {
     expect(small.splitNumber).toBeLessThan(large.splitNumber);
     expect(small.detail.fontSize).toBeLessThan(large.detail.fontSize);
     expect(small.axisLabel.fontSize).toBeLessThanOrEqual(large.axisLabel.fontSize);
+  });
+
+  it('hides axis labels below the minimum short side instead of drawing them tiny', () => {
+    const tiny = seriesOf(buildGaugeOption(20, theme, {}, { width: 200, height: GAUGE_AXIS_LABELS_MIN_SIDE - 1 }))[0];
+    const ok = seriesOf(buildGaugeOption(20, theme, {}, { width: 200, height: GAUGE_AXIS_LABELS_MIN_SIDE }))[0];
+    expect(tiny.axisLabel.show).toBe(false);
+    expect(ok.axisLabel.show).toBe(true);
+  });
+
+  it('applies precision to the readout, and shows the raw value when unset', () => {
+    const withP = seriesOf(buildGaugeOption(21.456, theme, { precision: 1, unit: 'C' }))[0];
+    expect(withP.detail.formatter(21.456)).toBe('21.5 C');
+    const raw = seriesOf(buildGaugeOption(21.456, theme, {}))[0];
+    expect(raw.detail.formatter(21.456)).toBe('21.456');
+  });
+
+  it('fits the readout font to the string length', () => {
+    const size = { width: 140, height: 140 };
+    const short = seriesOf(buildGaugeOption(5, theme, {}, size))[0];
+    const long = seriesOf(buildGaugeOption(123456.789, theme, {}, size))[0];
+    expect(long.detail.fontSize).toBeLessThan(short.detail.fontSize);
   });
 });

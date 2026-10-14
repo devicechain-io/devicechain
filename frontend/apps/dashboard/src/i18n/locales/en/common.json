@@ -1,6 +1,9 @@
 {
   "errorBoundaryTitle": "Something went wrong",
   "languagePicker": "Language",
+  "sessionEndedAction": "Sign in again",
+  "sessionEndedBody": "This display was signed out and is no longer receiving live data. Sign in again to resume.",
+  "sessionEndedTitle": "Your session has ended",
   "signOut": "Sign out",
   "unexpectedError": "Unexpected error"
 }

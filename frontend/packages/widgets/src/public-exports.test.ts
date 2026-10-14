@@ -42,6 +42,7 @@ const FROM_SDK_ROOT = [
   'css',
   'pickSample',
   'optBoolean',
+  'fitValueFont',
 ] as const;
 
 const FROM_SDK_CHARTS = ['EChart', 'buildLineOption', 'buildGaugeOption', 'resolveChartTheme', 'useChartTheme'] as const;

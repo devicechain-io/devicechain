@@ -269,7 +269,7 @@ function PlainPanel({ positions, note }: { positions: PlaceableLocation[]; note:
           right: 0,
           bottom: 0,
           padding: '4px 8px',
-          fontSize: 10,
+          fontSize: 12,
           lineHeight: 1.3,
           textAlign: 'center',
           color: css('muted-foreground'),
@@ -475,7 +475,8 @@ function MapNotice({ glyph, heading, detail }: { glyph?: string; heading: string
         display: 'flex',
         flexDirection: 'column',
         alignItems: 'center',
-        justifyContent: 'center',
+        justifyContent: 'safe center',
+        overflow: 'hidden',
         gap: 4,
         width: '100%',
         height: '100%',
@@ -491,7 +492,7 @@ function MapNotice({ glyph, heading, detail }: { glyph?: string; heading: string
         </div>
       ) : null}
       <div style={{ fontSize: 13, fontWeight: 600 }}>{heading}</div>
-      {detail ? <div style={{ fontSize: 11, opacity: 0.8 }}>{detail}</div> : null}
+      {detail ? <div style={{ fontSize: 12, opacity: 0.8 }}>{detail}</div> : null}
     </div>
   );
 }

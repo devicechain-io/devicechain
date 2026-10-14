@@ -1,4 +1,8 @@
 {
   "change": "Change",
+  "enterFullscreen": "Fullscreen",
+  "exitFullscreen": "Exit fullscreen",
+  "themeToDark": "Dark theme",
+  "themeToLight": "Light theme",
   "untitled": "Dashboard"
 }

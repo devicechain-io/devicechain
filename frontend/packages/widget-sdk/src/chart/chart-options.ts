@@ -7,6 +7,8 @@
 
 import type { MeasurementSample } from '@devicechain/dashboards';
 
+import { fitValueFont } from '../fit-text';
+import { formatValue } from '../format';
 import type { ElementSize } from '../hooks';
 
 import type { ChartTheme } from './chart-theme';
@@ -88,7 +90,13 @@ export interface GaugeChartOptions {
   min?: number;
   max?: number;
   unit?: string;
+  // Decimal places for the readout; unset shows the raw value.
+  precision?: number;
 }
+
+// Below this short side (px) the gauge drops its axis labels: at that size they would be
+// drawn at the 8 px floor, which is noise rather than a scale.
+export const GAUGE_AXIS_LABELS_MIN_SIDE = 120;
 
 // buildGaugeOption maps a single latest value to a gauge. A null value (nothing
 // received yet) shows an em dash and rests the needle at the minimum. Ticks, fonts,
@@ -108,7 +116,10 @@ export function buildGaugeOption(
   const s = shortSide(size);
   const arcWidth = clamp(Math.round(s / 26), 4, 12);
   const labelFont = clamp(Math.round(s / 20), 8, 13);
-  const valueFont = clamp(Math.round(s / 7), 14, 40);
+  const showAxisLabels = s >= GAUGE_AXIS_LABELS_MIN_SIDE;
+  // The readout is fitted to the dial's inner box and its own length, like every big number.
+  const readout = value == null ? '—' : `${formatValue(value, options.precision)}${unitSuffix}`;
+  const valueFont = fitValueFont({ width: s * 0.7, height: s * 0.25 }, readout.length);
 
   return {
     animation: false,
@@ -126,13 +137,13 @@ export function buildGaugeOption(
         axisLine: { lineStyle: { width: arcWidth, color: [[1, theme.border]] } },
         axisTick: { show: false },
         splitLine: { length: arcWidth, lineStyle: { color: theme.border, width: 1 } },
-        axisLabel: { color: theme.mutedForeground, fontSize: labelFont, distance: arcWidth + 2 },
+        axisLabel: { show: showAxisLabels, color: theme.mutedForeground, fontSize: labelFont, distance: arcWidth + 2 },
         detail: {
           valueAnimation: false,
           color: theme.foreground,
           fontSize: valueFont,
           offsetCenter: [0, '30%'],
-          formatter: (v: number) => (value == null ? '—' : `${v}${unitSuffix}`),
+          formatter: (v: number) => (value == null ? '—' : `${formatValue(v, options.precision)}${unitSuffix}`),
         },
         data: [{ value: value ?? min }],
       },
