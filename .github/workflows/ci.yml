@@ -1628,6 +1628,44 @@ jobs:
       - name: Build
         run: npm run build
 
+      # Board readability gate (apps/board-replay/e2e): every committed sim board, drawn by the
+      # real renderer in Chromium at 960 and 1920 px in light and dark, fails on clipped or
+      # overflowing text and on overlapping widgets, against a ratcheted known-failures list,
+      # and a deliberately broken board must fail it. Here, in this job, rather than in a job
+      # of its own: the packages it renders are already built above, and a separate job would
+      # repeat the install and the package build to save the browser install.
+      #
+      # The browser is keyed on the EXACT Playwright version the lockfile installed, so a
+      # Playwright bump downloads its own browser build instead of reusing one it may not
+      # drive. On a cache hit the install still runs: it skips the download and installs the
+      # system libraries, which live outside the cached directory.
+      - name: Playwright version
+        id: playwright
+        run: echo "version=$(node -p "require('@playwright/test/package.json').version")" >> "$GITHUB_OUTPUT"
+
+      - name: Cache the Playwright browser
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ steps.playwright.outputs.version }}-chromium-headless-shell
+
+      - name: Install the Playwright browser
+        run: npx playwright install --with-deps --only-shell chromium
+
+      - name: Board readability gate
+        run: npm run test:readability -w @devicechain/board-replay
+
+      # ADVISORY: a full-page screenshot of every board the gate measured, for a reviewer to
+      # look at. Nothing compares them with a baseline and nothing fails on them.
+      - name: Upload the readability screenshots (advisory)
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: board-readability
+          path: frontend/apps/board-replay/test-results/
+          if-no-files-found: ignore
+          retention-days: 14
+
   # ---------------------------------------------------------------------------
   # C# SDK (sdks/csharp): restore, build both TFMs (netstandard2.1 + net8.0), test.
   # TreatWarningsAsErrors + IsAotCompatible keep the Unity/IL2CPP guarantee honest.

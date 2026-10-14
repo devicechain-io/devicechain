@@ -1,0 +1,118 @@
+{
+  "schemaVersion": 1,
+  "title": "Readability gate negative control",
+  "canvas": {
+    "breakpoints": {
+      "base": 0
+    },
+    "grid": {
+      "columns": 24,
+      "gap": 8,
+      "rowHeight": 40
+    },
+    "sizing": "fill"
+  },
+  "widgets": [
+    {
+      "id": "nc-clean",
+      "type": "label",
+      "layout": {
+        "base": {
+          "col": 0,
+          "colSpan": 8,
+          "row": 0,
+          "rowSpan": 2,
+          "z": 0
+        }
+      },
+      "options": {
+        "align": "left",
+        "fontSize": 14,
+        "text": "Fits"
+      }
+    },
+    {
+      "id": "nc-overflowing-card",
+      "type": "latest-card",
+      "layout": {
+        "base": {
+          "col": 8,
+          "colSpan": 2,
+          "row": 0,
+          "rowSpan": 1,
+          "z": 0
+        }
+      },
+      "datasource": {
+        "kind": "device",
+        "deviceToken": "gate-device-01",
+        "measurements": [
+          "value"
+        ]
+      },
+      "options": {
+        "measurement": "value",
+        "title": "A card title far too long for a card this small",
+        "unit": "kPa"
+      }
+    },
+    {
+      "id": "nc-overflowing-label",
+      "type": "label",
+      "layout": {
+        "base": {
+          "col": 10,
+          "colSpan": 2,
+          "row": 0,
+          "rowSpan": 1,
+          "z": 0
+        }
+      },
+      "options": {
+        "align": "left",
+        "fontSize": 32,
+        "text": "Unbreakablelabeltextthatcannotfit"
+      }
+    },
+    {
+      "id": "nc-overlap-a",
+      "type": "label",
+      "layout": {
+        "base": {
+          "col": 12,
+          "colSpan": 6,
+          "row": 0,
+          "rowSpan": 2,
+          "z": 0
+        }
+      },
+      "options": {
+        "align": "left",
+        "fontSize": 14,
+        "text": "A"
+      }
+    },
+    {
+      "id": "nc-overlap-b",
+      "type": "label",
+      "layout": {
+        "base": {
+          "col": 18,
+          "colSpan": 6,
+          "row": 0,
+          "rowSpan": 2,
+          "z": 0,
+          "offset": {
+            "x": -80,
+            "y": 16
+          }
+        }
+      },
+      "options": {
+        "align": "left",
+        "fontSize": 14,
+        "text": "B"
+      }
+    }
+  ]
+}

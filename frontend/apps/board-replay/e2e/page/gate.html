@@ -1,0 +1,19 @@
+<!doctype html>
+<!-- Copyright The DeviceChain Authors -->
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+<!--
+  The readability gate's page (e2e/readability.e2e.ts). Served by the Vite DEV server only:
+  `vite build` takes index.html alone, so this page and everything it imports never reach
+  the replay bundle that ships.
+-->
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Board readability gate</title>
+  </head>
+  <body>
+    <div id="gate-root"></div>
+    <script type="module" src="./gate.tsx"></script>
+  </body>
+</html>

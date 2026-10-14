@@ -11,5 +11,7 @@ export default defineConfig({
     // Process stylesheets (the replay's theme is imported `?inline` and tested as text).
     css: { include: [/.+/] },
     setupFiles: ['./vitest.setup.ts'],
+    // e2e/ is the Playwright readability gate (npm run test:readability), not a vitest suite.
+    exclude: ['**/node_modules/**', 'e2e/**'],
   },
 });

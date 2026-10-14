@@ -1,0 +1,20 @@
+/* Copyright The DeviceChain Authors */
+/* SPDX-License-Identifier: Apache-2.0 */
+
+/*
+ * The gate page's own rules, on top of /dash's theme. The board is laid out at its natural
+ * height (the page scrolls, not the board), so every widget is in the document and a full-page
+ * screenshot shows the whole board.
+ */
+html,
+body {
+  height: auto;
+}
+
+body {
+  font-family: 'Inter Variable', sans-serif;
+}
+
+#gate-root {
+  height: auto;
+}
