@@ -67,6 +67,23 @@ type dashboardWidget struct {
 	Options    map[string]any          `json:"options,omitempty"`
 }
 
+// dashboardThreshold is one entry of the `thresholds` widget option: a severity band that
+// STARTS at Value and runs to the next entry. Level is a severity NAME (normal, warning, minor,
+// major, critical), never a colour -- the theme decides the colour, and the option schema
+// rejects anything else. Label is optional.
+type dashboardThreshold struct {
+	Value float64 `json:"value"`
+	Level string  `json:"level"`
+	Label string  `json:"label,omitempty"`
+}
+
+// withThresholds sets a widget's `thresholds` option. The entries must ascend in Value, which
+// is how the frontend reads them (it sorts, but a board should state them in the order they apply).
+func withThresholds(w dashboardWidget, thresholds ...dashboardThreshold) dashboardWidget {
+	w.Options["thresholds"] = thresholds
+	return w
+}
+
 // dashboardBox is one breakpoint's layout box as a CSS-Grid SPAN placement (WidgetBox
 // in types.ts): Col/Row are the 0-based start lines and ColSpan/RowSpan how many
 // tracks the widget covers. On the sim boards' grid (dashboardGridColumns below)

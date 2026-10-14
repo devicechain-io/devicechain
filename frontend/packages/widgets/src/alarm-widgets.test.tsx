@@ -79,10 +79,11 @@ describe('AlarmTable', () => {
     expect(screen.queryByText('31.19073834583732')).toBeNull();
   });
 
-  it('shows the raw value when no precision is configured', () => {
-    const alarms = [alarm({ token: 'a-1', lastValue: 31.19073834583732 })];
+  it('never prints a full-width float when no precision is configured', () => {
+    const alarms = [alarm({ token: 'a-1', lastValue: 30.203057033956792 })];
     render(<AlarmTable widget={widget('alarm-table')} data={state({ alarms, total: 1 })} />);
-    expect(screen.getByText('31.19073834583732')).toBeTruthy();
+    expect(screen.getByText('30.203')).toBeTruthy();
+    expect(screen.queryByText('30.203057033956792')).toBeNull();
   });
 
   it('shows "No alarms" when the (loaded) list is empty', () => {

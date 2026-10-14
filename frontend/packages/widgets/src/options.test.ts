@@ -47,7 +47,7 @@ const ROOTS = [SRC, join(SRC, '..', '..', 'dashboards', 'src'), join(SRC, '..', 
 
 // A read through the option helpers: optString(widget.options, 'key'). Single or double
 // quoted, and tolerant of the trailing comma a reformat adds to a wrapped call.
-const HELPER_READ = /opt(?:String|Number|Boolean)\(\s*\w+\.options\s*,\s*["']([^"']+)["']\s*,?\s*\)/g;
+const HELPER_READ = /opt(?:String|Number|Boolean|Thresholds)\(\s*\w+\.options\s*,\s*["']([^"']+)["']\s*,?\s*\)/g;
 // A direct read: `w.options?.selectionTarget`. Anchored on the member access so it does not
 // match the many unrelated local `options` parameters in this package (chart-options,
 // hooks), which are not a widget's bag.
