@@ -5,12 +5,16 @@ package model
 
 import (
 	"context"
+	"regexp"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
+	"gorm.io/gorm/schema"
 )
 
 func newTestRuleStatStore(t *testing.T) *RuleStatStore {
@@ -121,5 +125,47 @@ func TestRuleStatStore_LoadByIDsTenantScopedAndSparse(t *testing.T) {
 	}
 	if _, ok := m["other/p@1/a"]; ok {
 		t.Error("another tenant's rule leaked past the tenant filter")
+	}
+}
+
+// Every column a DO UPDATE SET expression reads must be qualified, as `rule_stats.col` (the
+// existing row) or `excluded.col` (the incoming one). Postgres rejects a bare reference as
+// ambiguous, SQLSTATE 42702, because both rows are in scope there. sqlite accepts it, so the
+// store tests above cannot see the difference: they passed while every RecordFire failed in
+// production, and the rule-health view reported zero fires for every rule on every tenant.
+// The repository has no Postgres test harness, so this pins the property itself.
+//
+// The column set and the table name come from the model's own schema, so a new column, or a
+// renamed table, is checked without anyone remembering to update the test.
+func TestRuleStatUpsertQualifiesEveryColumn(t *testing.T) {
+	sch, err := schema.Parse(&RuleStat{}, &sync.Map{}, schema.NamingStrategy{})
+	if err != nil {
+		t.Fatalf("parse RuleStat schema: %v", err)
+	}
+	qualifiers := map[string]bool{sch.Table: true, "excluded": true}
+
+	up := ruleStatUpsert()
+	if len(up.DoUpdates) == 0 {
+		t.Fatal("ruleStatUpsert has no DO UPDATE assignments; nothing to check")
+	}
+	checked := 0
+	for _, a := range up.DoUpdates {
+		expr, ok := a.Value.(clause.Expr)
+		if !ok {
+			continue // a plain value reads no column
+		}
+		for _, col := range sch.DBNames {
+			re := regexp.MustCompile(`(?:([A-Za-z_][A-Za-z0-9_]*)\.)?\b` + regexp.QuoteMeta(col) + `\b`)
+			for _, m := range re.FindAllStringSubmatch(expr.SQL, -1) {
+				checked++
+				if !qualifiers[m[1]] {
+					t.Errorf("SET %s: column %q is referenced as %q; qualify it as %s.%s or excluded.%s "+
+						"(Postgres rejects a bare reference as ambiguous)", a.Column.Name, col, m[0], sch.Table, col, col)
+				}
+			}
+		}
+	}
+	if checked == 0 {
+		t.Fatal("found no column references in the SET expressions; the check is reading nothing")
 	}
 }
