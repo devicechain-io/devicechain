@@ -14,6 +14,7 @@
 // version. It is bumped only on a rendering change worth surfacing to an author, so a
 // platform release does not make every board look "authored with an older widget".
 
+import { SEVERITY_LEVELS } from '@devicechain/widget-sdk';
 import {
   createWidgetCatalog,
   defineWidgetDescriptor,
@@ -50,7 +51,49 @@ const PRECISION = {
   max: 100,
   labelId: 'widgetLabelPrecision',
   helpId: 'widgetHintPrecision',
-  doc: 'Decimal places to round displayed values to. Unset shows the raw value.',
+  doc: 'Decimal places to round displayed values to. Unset rounds to at most 3 decimals (4 significant digits under 1).',
+} as const satisfies OptionSpec;
+
+// Where a measurement crosses from one severity to the next. A threshold STARTS a band that
+// runs to the next threshold's value, so "overheat above 105" is one entry and "low fuel below
+// 15" is two (critical from 0, normal from 15). `level` is a severity NAME that the theme turns
+// into a colour; there is deliberately no colour field, so a board cannot carry a hex value
+// that ignores dark mode or the host's theme. Optional with no default: absent means no bands,
+// exactly as before the option existed, so it needs no optionsVersion bump.
+const THRESHOLDS = {
+  kind: 'list',
+  maxItems: 12,
+  labelId: 'widgetLabelThresholds',
+  helpId: 'widgetHintThresholds',
+  doc: 'Severity bands over the value. Each entry starts a band at its value that runs to the next entry; below the first, and in a normal band, the widget keeps its own colour.',
+  item: {
+    value: {
+      kind: 'number',
+      required: true,
+      labelId: 'widgetLabelThresholdValue',
+      doc: 'The value at which this band starts.',
+    },
+    level: {
+      kind: 'enum',
+      required: true,
+      values: SEVERITY_LEVELS,
+      labelId: 'widgetLabelThresholdLevel',
+      valueLabelIds: {
+        normal: 'widgetSeverityNormal',
+        warning: 'widgetSeverityWarning',
+        minor: 'widgetSeverityMinor',
+        major: 'widgetSeverityMajor',
+        critical: 'widgetSeverityCritical',
+      },
+      placeholderId: 'widgetPlaceholderThresholdLevel',
+      doc: 'The severity of this band. The theme decides the colour; normal has none.',
+    },
+    label: {
+      kind: 'string',
+      labelId: 'widgetLabelThresholdLabel',
+      doc: 'Text shown on the chart line for this threshold. Defaults to its value.',
+    },
+  },
 } as const satisfies OptionSpec;
 
 const FLASH_ON_CHANGE = {
@@ -166,6 +209,9 @@ export const builtinWidgetDescriptors = {
     binding: { window: { option: 'window', min: 1 } },
     options: {
       title: TITLE,
+      unit: UNIT,
+      precision: PRECISION,
+      thresholds: THRESHOLDS,
       staleAfterSeconds: STALE_AFTER_SECONDS,
       window: WINDOW,
     },
@@ -193,6 +239,7 @@ export const builtinWidgetDescriptors = {
       },
       unit: UNIT,
       precision: PRECISION,
+      thresholds: THRESHOLDS,
       flashOnChange: FLASH_ON_CHANGE,
       staleAfterSeconds: STALE_AFTER_SECONDS,
       window: WINDOW,
@@ -231,6 +278,7 @@ export const builtinWidgetDescriptors = {
       },
       unit: UNIT,
       precision: PRECISION,
+      thresholds: THRESHOLDS,
       flashOnChange: FLASH_ON_CHANGE,
       staleAfterSeconds: STALE_AFTER_SECONDS,
       window: WINDOW,

@@ -119,12 +119,22 @@ anterior.
 
 ## Opciones {#options}
 
-Una opción tiene un `kind` (`string`, `number`, `boolean` o `enum`) y una frase `doc`. Un número puede
+Una opción tiene un `kind` (`string`, `number`, `boolean`, `enum` o `list`) y una frase `doc`. Un número puede
 declarar `min`, `max` e `integer`. Un enum declara sus `values`. Una cadena puede declarar
 `format: 'json'`, que exige que el valor se pueda analizar como JSON. `required` marca una opción cuya
 ausencia deja al widget sin nada que mostrar; una cadena vacía cuenta como ausente. El anfitrión
 valida las opciones almacenadas contra el esquema, y la consola genera su formulario de ajustes a
 partir de él.
+
+Una opción `list` almacena un arreglo de objetos pequeños, como los umbrales de un widget. Declara un
+objeto `item` cuyos campos son especificaciones `string`, `number`, `boolean` o `enum` (un campo puede
+ser `required`, y una lista no se puede anidar) y un `maxItems` opcional. Se rechaza una entrada
+almacenada con un campo que `item` no declara, y el formulario de ajustes muestra una fila por entrada
+con un control por campo. La opción integrada `thresholds` del medidor, la tarjeta de último valor y el
+gráfico de serie temporal es una de ellas: cada entrada nombra una severidad (`normal`, `warning`,
+`minor`, `major` o `critical`), nunca un color, de modo que el tema decide su aspecto en claro y en
+oscuro. Solo los niveles anómalos tienen color: un valor en una banda `normal` se ve exactamente igual
+que sin umbrales, de modo que una lectura sana nunca se colorea.
 
 Lee las opciones de forma defensiva con los ayudantes del SDK `optString`, `optNumber` y
 `optBoolean`. Ante un valor editado a mano del tipo equivocado no lanzan

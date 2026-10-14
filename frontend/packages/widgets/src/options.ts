@@ -41,6 +41,8 @@ import { builtinWidgetCatalog, builtinWidgetDescriptors } from './builtin-descri
 export type {
   BooleanOptionSpec,
   EnumOptionSpec,
+  ListItemFieldSpec,
+  ListOptionSpec,
   NumberOptionSpec,
   OptionIssueCode,
   OptionSpec,
