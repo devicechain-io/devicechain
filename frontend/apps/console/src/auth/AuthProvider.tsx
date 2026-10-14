@@ -24,6 +24,7 @@ import {
 import {
   setAuthTokenGetter,
   setIdentityTokenGetter,
+  createSessionTokens,
   decodeToken,
   isExpired,
   type DecodedClaims,
@@ -234,9 +235,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const identityRef = useRef<StoredIdentity | null>(identity);
   identityRef.current = identity;
 
-  // De-dupe concurrent refreshes: many in-flight requests share one refresh.
-  const refreshInFlight = useRef<Promise<string | null> | null>(null);
-
   const applyTokens = useCallback((next: StoredTokens | null) => {
     tokensRef.current = next;
     setTokens(next);
@@ -249,6 +247,34 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     writeStoredIdentity(next);
   }, []);
 
+  // expireTenant / expireIdentity drop a session that can no longer be sustained
+  // (the refresh call failed, or a no-refresh identity token lapsed) and flag the
+  // cause for the login screen. Clearing the session state flips the route guards,
+  // which redirect to /login — instead of leaving a dead session in place to fire
+  // failing requests and render a raw error.
+  const expireTenant = useCallback((reason: SessionEndReason = 'expired') => {
+    flagSessionExpired(reason);
+    applyTokens(null);
+  }, [applyTokens]);
+
+  const session = useMemo(
+    () =>
+      createSessionTokens({
+        read: () => tokensRef.current,
+        apply: (pair) => applyTokens(pair),
+        refresh: async (refreshToken) => {
+          const pair = await apiRefresh(refreshToken);
+          return { accessToken: pair.accessToken, refreshToken: pair.refreshToken };
+        },
+        onEnd: (err) => {
+          expireTenant(
+            err !== undefined && serverErrorCode(err) === 'SSO_REQUIRED' ? 'ssoRequired' : 'expired',
+          );
+        },
+      }),
+    [applyTokens, expireTenant],
+  );
+
   const logout = useCallback(async () => {
     // Both tokens name the same sign-in when they came from one login; send each that is
     // held, so a stale tenant session left over from an earlier login is ended too.
@@ -259,7 +285,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     // moment they click: waiting on the network (up to LOGOUT_TIMEOUT_MS) before clearing
     // would leave the tokens in localStorage on a shared machine whenever that request
     // never finishes - worse than the client-only sign-out this replaces.
-    refreshInFlight.current = null;
+    session.reset();
     applyTokens(null);
     applyIdentity(null);
     let providerSignOut: string | null = null;
@@ -273,18 +299,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     // Only once the server has confirmed the sign-out here: send the browser to the
     // provider to end the session there too. It comes back to the sign-in page.
     if (providerSignOut) window.location.assign(providerSignOut);
-  }, [applyTokens, applyIdentity, toast]);
-
-  // expireTenant / expireIdentity drop a session that can no longer be sustained
-  // (the refresh call failed, or a no-refresh identity token lapsed) and flag the
-  // cause for the login screen. Clearing the session state flips the route guards,
-  // which redirect to /login — instead of leaving a dead session in place to fire
-  // failing requests and render a raw error.
-  const expireTenant = useCallback((reason: SessionEndReason = 'expired') => {
-    flagSessionExpired(reason);
-    refreshInFlight.current = null;
-    applyTokens(null);
-  }, [applyTokens]);
+  }, [applyTokens, applyIdentity, session, toast]);
 
   const expireIdentity = useCallback(() => {
     flagSessionExpired();
@@ -294,41 +309,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // Hands the GraphQL client a usable access token, refreshing first if the
   // current one is near expiry. If the refresh token itself has lapsed (long
   // inactivity) or the refresh call fails, the tenant session is expired cleanly
-  // and the caller gets null (the route guard then redirects to login).
-  const getToken = useCallback(async (): Promise<string | null> => {
-    const current = tokensRef.current;
-    if (!current) return null;
-    if (isExpired(current.refreshToken, 0)) {
-      expireTenant();
-      return null;
-    }
-    if (!isExpired(current.accessToken)) return current.accessToken;
-
-    if (!refreshInFlight.current) {
-      refreshInFlight.current = (async () => {
-        try {
-          const pair = await apiRefresh(current.refreshToken);
-          // The session can be cleared or replaced while this refresh is in
-          // flight (logout, expiry). A promise can't be cancelled, so guard here:
-          // if the live session is no longer the one we started refreshing, drop
-          // the result instead of resurrecting a dead session into storage.
-          if (tokensRef.current !== current) return null;
-          applyTokens({ accessToken: pair.accessToken, refreshToken: pair.refreshToken });
-          return pair.accessToken;
-        } catch (err) {
-          // Only expire the session this refresh belonged to — not one that has
-          // since been logged out or replaced.
-          if (tokensRef.current === current) {
-            expireTenant(serverErrorCode(err) === 'SSO_REQUIRED' ? 'ssoRequired' : 'expired');
-          }
-          return null;
-        } finally {
-          refreshInFlight.current = null;
-        }
-      })();
-    }
-    return refreshInFlight.current;
-  }, [applyTokens, expireTenant]);
+  // and the caller gets null (the route guard then redirects to login). The
+  // refresh lifecycle (skew, one shared in-flight refresh, dropping a result for a
+  // replaced session) is @devicechain/client's createSessionTokens; this only
+  // supplies where the pair lives and what happens when the session ends.
+  const getToken = session.getAccessToken;
 
   // Hands the admin client the identity token while it is still valid. Identity
   // tokens have no refresh path, so an expired one expires the identity session —

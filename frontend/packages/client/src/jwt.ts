@@ -20,6 +20,8 @@ export interface DecodedClaims {
   typ: string;
   /** Expiry, epoch seconds (from the standard `exp` claim). */
   exp?: number;
+  /** Issue time, epoch seconds (from the standard `iat` claim). */
+  iat?: number;
 }
 
 function base64UrlDecode(segment: string): string {
@@ -46,6 +48,7 @@ export function decodeToken(token: string): DecodedClaims | null {
       authorities: payload.authorities ?? [],
       typ: payload.typ ?? '',
       exp: payload.exp,
+      iat: payload.iat,
     };
   } catch {
     return null;
