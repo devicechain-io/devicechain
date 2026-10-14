@@ -52,6 +52,8 @@ export {
   type NumberOptionSpec,
   type BooleanOptionSpec,
   type EnumOptionSpec,
+  type ListItemFieldSpec,
+  type ListOptionSpec,
   type OptionIssue,
   type OptionIssueCode,
 } from './options';

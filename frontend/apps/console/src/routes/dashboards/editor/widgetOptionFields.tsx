@@ -31,14 +31,20 @@
 
 import {
   clampNumberOption,
+  type ListItemFieldSpec,
+  type ListOptionSpec,
   type NumberOptionSpec,
   type OptionSpec,
   type ResolvedWidgetInstance,
   type WidgetDescriptor,
 } from '@devicechain/dashboards';
 import type { WidgetEditorServices } from '@devicechain/widget-sdk';
+import { Plus, X } from 'lucide-react';
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
+
+import { Button } from '@/components/ui/button';
+import { IconButton } from '@/components/ui/icon-button';
 
 import { Checkbox } from '@/components/ui/checkbox';
 import { Combobox, type ComboboxOption } from '@/components/ui/combobox';
@@ -201,6 +207,168 @@ function SchemaField({
           />
         </FormField>
       );
+    case 'list':
+      return <ListField option={option} spec={spec} label={label} hint={hint} ctx={ctx} />;
+  }
+}
+
+// ---- A list option: one row per entry, one control per declared item field -------
+
+type Row = Record<string, unknown>;
+
+// The stored rows, read defensively: a hand-edited bag may hold anything, and a row that is not
+// an object is shown as an empty row rather than crashing the panel.
+function readRows(value: unknown): Row[] {
+  if (!Array.isArray(value)) return [];
+  return value.map((r) => (typeof r === 'object' && r !== null && !Array.isArray(r) ? (r as Row) : {}));
+}
+
+// A row an author gets from "Add": every REQUIRED field at the first thing its spec offers, so
+// the new row is already valid (the validated write refuses one with a required field absent).
+function newRow(item: ListOptionSpec['item']): Row {
+  const row: Row = {};
+  for (const [field, spec] of Object.entries(item)) {
+    if (!spec.required) continue;
+    if (spec.kind === 'number') row[field] = clampNumberOption(spec, 0) ?? 0;
+    else if (spec.kind === 'enum') row[field] = spec.values[0];
+    else if (spec.kind === 'boolean') row[field] = false;
+  }
+  return row;
+}
+
+function ListField({
+  option,
+  spec,
+  label,
+  hint,
+  ctx,
+}: {
+  option: string;
+  spec: ListOptionSpec;
+  label: string;
+  hint: string | undefined;
+  ctx: OptionFieldContext;
+}) {
+  const { t } = useTranslation('dashboards');
+  const lookup = useMessageLookup();
+  const rows = readRows(ctx.widget.options?.[option]);
+  const full = spec.maxItems !== undefined && rows.length >= spec.maxItems;
+
+  // An empty list drops the key (applyOptionPatch), so removing the last row unsets the option.
+  const write = (next: Row[]) => ctx.setOptions({ [option]: next });
+  const setCell = (index: number, field: string, value: unknown) =>
+    write(
+      rows.map((row, i) => {
+        if (i !== index) return row;
+        const next = { ...row };
+        if (value === undefined || value === '') delete next[field];
+        else next[field] = value;
+        return next;
+      }),
+    );
+
+  return (
+    <FormField label={label} description={hint}>
+      <div className="flex flex-col gap-2">
+        {rows.map((row, index) => (
+          <div
+            // Rows are positional (no identity of their own), so the index is the key.
+            key={index}
+            data-testid={`list-row-${option}-${index}`}
+            className="flex items-start gap-2"
+          >
+            {Object.entries(spec.item).map(([field, fieldSpec]) => (
+              <div key={field} className="min-w-0 flex-1" data-testid={`list-cell-${option}-${index}-${field}`}>
+                <ListCell
+                  fieldSpec={fieldSpec}
+                  value={row[field]}
+                  onChange={(v) => {
+                    // A required field cannot be cleared: the row would be invalid and the
+                    // validated write would refuse it, so a blank keeps the last good value.
+                    if (v === undefined && fieldSpec.required) return;
+                    setCell(index, field, v);
+                  }}
+                  lookup={lookup}
+                  ariaLabel={`${fieldLabel(field, fieldSpec, lookup)} ${index + 1}`}
+                />
+              </div>
+            ))}
+            <IconButton
+              label={t('widgetListRemove', { n: index + 1 })}
+              onClick={() => write(rows.filter((_, i) => i !== index))}
+            >
+              <X className="size-4" />
+            </IconButton>
+          </div>
+        ))}
+        <div>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            disabled={full}
+            data-testid={`list-add-${option}`}
+            onClick={() => write([...rows, newRow(spec.item)])}
+          >
+            <Plus className="mr-1 size-4" />
+            {t('widgetListAdd')}
+          </Button>
+        </div>
+      </div>
+    </FormField>
+  );
+}
+
+// One cell of a list row, chosen by the item field's spec kind exactly as a top-level option's
+// control is chosen by its own.
+function ListCell({
+  fieldSpec,
+  value,
+  onChange,
+  lookup,
+  ariaLabel,
+}: {
+  fieldSpec: ListItemFieldSpec;
+  value: unknown;
+  onChange: (value: string | number | boolean | undefined) => void;
+  lookup: ReturnType<typeof useMessageLookup>;
+  ariaLabel: string;
+}) {
+  const { t } = useTranslation('dashboards');
+  switch (fieldSpec.kind) {
+    case 'number':
+      return (
+        <NumberInput
+          spec={fieldSpec}
+          value={typeof value === 'number' && Number.isFinite(value) ? value : undefined}
+          onChange={onChange}
+          ariaLabel={ariaLabel}
+        />
+      );
+    case 'enum':
+      return (
+        <Combobox
+          ariaLabel={ariaLabel}
+          options={fieldSpec.values.map(
+            (v): ComboboxOption => ({ value: v, label: enumChoiceLabel(fieldSpec, v, lookup) }),
+          )}
+          value={typeof value === 'string' ? value : ''}
+          onChange={(v) => onChange(v || undefined)}
+          placeholder={enumPlaceholder(fieldSpec, lookup, t)}
+        />
+      );
+    case 'boolean':
+      return (
+        <Checkbox checked={value === true} aria-label={ariaLabel} onCheckedChange={(c) => onChange(c === true)} />
+      );
+    case 'string':
+      return (
+        <Input
+          aria-label={ariaLabel}
+          value={typeof value === 'string' ? value : ''}
+          onChange={(e) => onChange(e.target.value)}
+        />
+      );
   }
 }
 
@@ -289,10 +457,12 @@ function NumberInput({
   spec,
   value,
   onChange,
+  ariaLabel,
 }: {
   spec: NumberOptionSpec;
   value: number | undefined;
   onChange: (value: number | undefined) => void;
+  ariaLabel?: string;
 }) {
   const [draft, setDraft] = useState<string | null>(null);
 
@@ -304,6 +474,7 @@ function NumberInput({
   return (
     <Input
       type="number"
+      aria-label={ariaLabel}
       value={draft ?? value ?? ''}
       min={spec?.min}
       max={spec?.max}

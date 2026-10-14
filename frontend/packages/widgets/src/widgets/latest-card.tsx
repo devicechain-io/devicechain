@@ -3,7 +3,10 @@
 
 // latest-card — the current value of one measurement, big and legible.
 
+import { useMemo } from 'react';
+
 import {
+  bandAt,
   css,
   defineWidget,
   fitValueFont,
@@ -13,6 +16,7 @@ import {
   optBoolean,
   optNumber,
   optString,
+  optThresholds,
   pickSample,
   primaryMeasurementName,
   useElementSize,
@@ -21,6 +25,7 @@ import {
   WidgetFrame,
   type WidgetProps,
 } from '@devicechain/widget-sdk';
+import { useChartTheme } from '@devicechain/widget-sdk/echarts';
 
 import { builtinWidgetDescriptors } from '../builtin-descriptors';
 
@@ -31,6 +36,7 @@ const PAD_Y = 12;
 const TIMESTAMP_ROOM_PX = 18;
 
 export function LatestCard({ widget, data }: WidgetProps) {
+  const theme = useChartTheme();
   const [sizeRef, size] = useElementSize<HTMLDivElement>();
   const timeZone = useWidgetTimeZone();
   const name = primaryMeasurementName(widget);
@@ -40,6 +46,11 @@ export function LatestCard({ widget, data }: WidgetProps) {
   const unit = optString(widget.options, 'unit');
   const precision = optNumber(widget.options, 'precision');
   const display = formatValue(sample?.value, precision);
+  // The value reads in the colour of the band it falls in; below the lowest threshold (or with
+  // none) it keeps the foreground. The same severity colours the chart widgets resolve.
+  const thresholds = useMemo(() => optThresholds(widget.options, 'thresholds'), [widget.options]);
+  const band = bandAt(thresholds, sample?.value);
+  const valueColor = band ? theme.severity[band.level] : css('foreground');
 
   // Opt-in directional flash: tint the number green/red on a rise/fall, then fade back. The
   // identity (device + measurement) suppresses a false flash when an anchor's single slot
@@ -75,6 +86,8 @@ export function LatestCard({ widget, data }: WidgetProps) {
         }}
       >
         <div
+          data-threshold-level={band?.level}
+          title={band?.label}
           style={{
             fontSize: valueFont,
             fontWeight: 600,
@@ -83,7 +96,7 @@ export function LatestCard({ widget, data }: WidgetProps) {
             // must not wrap or shift sideways as its digits change.
             whiteSpace: 'nowrap',
             fontVariantNumeric: 'tabular-nums',
-            color: css('foreground'),
+            color: valueColor,
             ...flashTextStyle(flashDirection),
           }}
         >

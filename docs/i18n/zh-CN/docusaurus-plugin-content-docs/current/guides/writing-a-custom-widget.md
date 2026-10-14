@@ -93,7 +93,9 @@ export const tankLevelWidget = defineWidget({
 
 ## 选项 {#options}
 
-选项有 `kind`（`string`、`number`、`boolean` 或 `enum`）和一句 `doc` 说明。数字可声明 `min`、`max` 和 `integer`。枚举声明其 `values`。字符串可声明 `format: 'json'`，要求其值能解析为 JSON。`required` 标记一个缺失就会让组件无内容可显示的选项；空字符串视为缺失。宿主会依据模式校验已存储的选项，控制台也据此生成设置表单。
+选项有 `kind`（`string`、`number`、`boolean`、`enum` 或 `list`）和一句 `doc` 说明。数字可声明 `min`、`max` 和 `integer`。枚举声明其 `values`。字符串可声明 `format: 'json'`，要求其值能解析为 JSON。`required` 标记一个缺失就会让组件无内容可显示的选项；空字符串视为缺失。宿主会依据模式校验已存储的选项，控制台也据此生成设置表单。
+
+`list` 选项存储一个由小对象组成的数组，例如组件的阈值。它声明一个 `item` 对象，其字段为 `string`、`number`、`boolean` 或 `enum` 规格（字段可以是 `required`，列表不能嵌套），以及可选的 `maxItems`。存储的条目若含有 `item` 未声明的字段，则会被拒绝；设置表单为每个条目渲染一行，每个字段一个控件。仪表盘、最新值卡片和时序图内置的 `thresholds` 选项就是这样一个列表：每个条目指明一个严重级别（`normal`、`warning`、`minor`、`major` 或 `critical`），而不是颜色，因此由主题决定它在浅色和深色下的外观。
 
 使用 SDK 的辅助函数 `optString`、`optNumber` 和 `optBoolean` 以防御方式读取选项。对于手工编辑后类型错误的值，它们不会抛出异常：`optString` 和 `optNumber` 返回 `undefined`，`optBoolean` 对除已存储的 `true` 以外的任何值都返回 `false`。
 

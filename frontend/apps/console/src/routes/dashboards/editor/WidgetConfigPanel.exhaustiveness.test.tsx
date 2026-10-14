@@ -51,6 +51,7 @@ import {
   WIDGET_OPTIONS,
   numberOptionSpec,
   validateWidgetOptions,
+  type ListOptionSpec,
   type WidgetOptionSpecs,
 } from '@devicechain/widgets';
 
@@ -166,7 +167,7 @@ const slotFor = (side: Side) => SLOT_NAMES[choiceIndex(SLOT_NAMES.length, side)]
 // the write pass (what the driver enters) and the read pass (what the panel is rendered
 // from). Sharing the definition is what makes the round trip a round trip; the `side`
 // argument is what stops it being a round trip a constant can fake.
-function optionValue(type: WidgetType, key: string, side: Side): string | number | boolean {
+function optionValue(type: WidgetType, key: string, side: Side): string | number | boolean | Row[] {
   // 🔴 THE KEYS WHOSE VALUE IS NOT FREE. Their controls offer only real choices — a slot
   // that exists, a command the device publishes — so their value is whichever real choice
   // this side resolves to, not an invented string.
@@ -188,8 +189,48 @@ function optionValue(type: WidgetType, key: string, side: Side): string | number
       return numberValue(type, key);
     case 'string':
       return `v-${key}`;
+    case 'list':
+      return [listRow(type, key, side)];
   }
 }
+
+// ---- List options ----------------------------------------------------------------
+//
+// A list option is authored as rows of cells, one cell per declared item field. The same
+// two-sided scheme applies PER CELL: the number cell takes a value no other option has, the
+// enum cell an interior entry that differs between the passes, the string cell a value named
+// for its option. Only ONE row is driven here (a controlled panel cannot grow across calls);
+// adding, editing every cell and removing rows is walked by the stateful test at the bottom.
+type Row = Record<string, unknown>;
+
+function listSpec(type: WidgetType, key: string): ListOptionSpec {
+  const spec = specsOf(type)[key];
+  expect(spec.kind, `${type}.${key} is not a list`).toBe('list');
+  return spec as ListOptionSpec;
+}
+
+// The row the bag carries (side 'shown') or the one the driver builds (side 'written').
+function listRow(type: WidgetType, key: string, side: Side): Row {
+  const row: Row = {};
+  const item = listSpec(type, key).item;
+  Object.entries(item).forEach(([field, spec], i) => {
+    if (spec.kind === 'number') row[field] = (side === 'written' ? 40 : 70) + 3 * i + schemaOrder(type).indexOf(key);
+    else if (spec.kind === 'enum') row[field] = spec.values[choiceIndex(spec.values.length, side)];
+    else if (spec.kind === 'string') row[field] = `${side === 'written' ? 'w' : 's'}-${key}-${field}`;
+    else row[field] = true;
+  });
+  return row;
+}
+
+// What a list field is rendered from in the WRITE pass: one row whose cells all differ from
+// what the driver then enters, so a cell that wrote nothing (or a constant) is visible.
+function listSeed(type: WidgetType, key: string): Row[] {
+  const row = listRow(type, key, 'shown');
+  return [row];
+}
+
+const isList = (type: WidgetType, key: string): boolean =>
+  Object.prototype.hasOwnProperty.call(specsOf(type), key) && specsOf(type)[key].kind === 'list';
 
 // Whether an option is authored by PICKING FROM A LIST — the keys the two-sided scheme
 // above actually varies, and so the keys the instrument check below holds it to.
@@ -346,9 +387,30 @@ function choiceFor(
 async function drive(
   type: WidgetType,
   container: HTMLElement,
-): Promise<Record<string, string | number | boolean>> {
+): Promise<Record<string, string | number | boolean | Row[]>> {
   const id = fieldId(container);
   await controlIn(container);
+
+  // A list is rendered from a one-row seed (see listSeed) and driven through its FIRST cell
+  // of each kind; the entered value is the seed with that cell replaced.
+  if (isList(type, id)) {
+    const written = listRow(type, id, 'written');
+    const [seed] = listSeed(type, id);
+    const entered: Row = { ...seed };
+    const item = listSpec(type, id).item;
+    for (const [field, spec] of Object.entries(item)) {
+      if (spec.kind === 'number') {
+        const input = container.querySelector<HTMLInputElement>(`[data-testid="list-cell-${id}-0-${field}"] input`);
+        expect(input, `list ${id}: no number cell for ${field}`).toBeTruthy();
+        fireEvent.change(input!, { target: { value: String(written[field]) } });
+        fireEvent.blur(input!);
+        entered[field] = written[field];
+        // One cell per call: the panel is controlled, so the next edit would start from the seed.
+        return { [id]: [entered] };
+      }
+    }
+    throw new Error(`list ${id} on ${type} declares no number cell the driver can work`);
+  }
 
   const number = container.querySelector<HTMLInputElement>('input[type="number"]');
   if (number) {
@@ -413,7 +475,7 @@ const VALUE_ISSUE_CODES = ['type', 'range', 'enum', 'json', 'unknown'];
 
 async function optionsWrittenBy(type: WidgetType, id: string): Promise<string[]> {
   const onChange = vi.fn();
-  const { container } = renderPanel(type, onChange);
+  const { container } = renderPanel(type, onChange, isList(type, id) ? { [id]: listSeed(type, id) } : {});
   const field = fieldContainers(container).find((el) => fieldId(el) === id);
   expect(field, `field ${id} vanished on a re-render of ${type}`).toBeTruthy();
   const entered = await drive(type, field!);
@@ -485,6 +547,33 @@ async function assertDisplaysItsOwnValue(type: WidgetType, container: HTMLElemen
   const id = fieldId(container);
   await controlIn(container);
   const where = `field ${id} on ${type}`;
+
+  if (isList(type, id)) {
+    const row = listRow(type, id, 'shown');
+    for (const [field, spec] of Object.entries(listSpec(type, id).item)) {
+      const cell = container.querySelector<HTMLElement>(`[data-testid="list-cell-${id}-0-${field}"]`);
+      expect(cell, `${where}: no cell for ${field}`).toBeTruthy();
+      if (spec.kind === 'number') {
+        expect(cell!.querySelector<HTMLInputElement>('input')!.value, `${where}.${field} shows another number`).toBe(
+          String(row[field]),
+        );
+      } else if (spec.kind === 'string') {
+        expect(cell!.querySelector<HTMLInputElement>('input')!.value, `${where}.${field} shows another text`).toBe(
+          String(row[field]),
+        );
+      } else if (spec.kind === 'enum') {
+        const trigger = cell!.querySelector<HTMLElement>('button')!;
+        const shown = (trigger.textContent ?? '').trim();
+        const choices = await openChoices(cell!, trigger);
+        expect(choices.length, `${where}.${field} offered ${choices.length} of ${spec.values.length}`).toBe(
+          spec.values.length,
+        );
+        const at = spec.values.indexOf(row[field] as string);
+        expect(shown, `${where}.${field} shows the wrong choice`).toBe((choices[at].textContent ?? '').trim());
+      }
+    }
+    return;
+  }
 
   const number = container.querySelector<HTMLInputElement>('input[type="number"]');
   if (number) {
@@ -588,6 +677,12 @@ async function assertDisplaysNothing(type: WidgetType, container: HTMLElement): 
   const id = fieldId(container);
   await controlIn(container);
   const where = `field ${id} on ${type}`;
+
+  if (isList(type, id)) {
+    expect(container.querySelector('[data-testid^="list-row-"]'), `${where} shows a row for a list nothing set`).toBeNull();
+    expect(container.querySelector(`[data-testid="list-add-${id}"]`), `${where} offers no way to add a row`).toBeTruthy();
+    return;
+  }
 
   const number = container.querySelector<HTMLInputElement>('input[type="number"]');
   if (number) {

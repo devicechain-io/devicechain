@@ -4,18 +4,38 @@
 // A thin React wrapper over Apache ECharts (ADR-039 chart engine).
 //
 // It imports from echarts/core and registers ONLY the chart types + components the
-// widgets use (line + gauge, grid/tooltip, canvas renderer) — tree-shaking away the
-// rest of ECharts so the bundle carries only what a dashboard needs. The wrapper
+// widgets use (line + gauge, grid/tooltip/legend, threshold markers, canvas renderer) —
+// tree-shaking away the rest of ECharts so the bundle carries only what a dashboard needs. The wrapper
 // owns the imperative lifecycle: init on mount, setOption on change, resize with the
 // container, dispose on unmount.
 
 import { GaugeChart, LineChart } from 'echarts/charts';
-import { GridComponent, TooltipComponent } from 'echarts/components';
+import {
+  GridComponent,
+  LegendComponent,
+  MarkAreaComponent,
+  MarkLineComponent,
+  TooltipComponent,
+} from 'echarts/components';
 import * as echarts from 'echarts/core';
 import { CanvasRenderer } from 'echarts/renderers';
 import { useEffect, useRef } from 'react';
 
-echarts.use([LineChart, GaugeChart, GridComponent, TooltipComponent, CanvasRenderer]);
+// 🔴 EVERY COMPONENT AN OPTION BUILDER EMITS MUST BE REGISTERED HERE. ECharts ignores an
+// option key whose component is not registered -- silently, no warning -- so a `legend` or a
+// `markLine` the builder sets draws nothing. The legend was dropped this way for as long as
+// multi-series charts existed. echart.registration.test.tsx renders each through a real
+// ECharts instance, so a builder that grows a new component fails there until it is added.
+echarts.use([
+  LineChart,
+  GaugeChart,
+  GridComponent,
+  TooltipComponent,
+  LegendComponent,
+  MarkLineComponent,
+  MarkAreaComponent,
+  CanvasRenderer,
+]);
 
 // A resolved ECharts option object (the shape echarts.setOption accepts). Widgets
 // build these with the pure builders in chart-options.ts.

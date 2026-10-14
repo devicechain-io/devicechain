@@ -114,11 +114,19 @@ unavailable state and does not hand your component the previous entity's data.
 
 ## Options
 
-An option has a `kind` (`string`, `number`, `boolean` or `enum`) and a `doc` sentence. A number can
+An option has a `kind` (`string`, `number`, `boolean`, `enum` or `list`) and a `doc` sentence. A number can
 declare `min`, `max` and `integer`. An enum declares its `values`. A string can declare
 `format: 'json'`, which requires the value to parse as JSON. `required` marks an option whose
 absence leaves the widget with nothing to show; an empty string counts as absent. The host
 validates stored options against the schema, and the console generates its settings form from it.
+
+A `list` option stores an array of small objects, such as a widget's thresholds. It declares an
+`item` object whose fields are `string`, `number`, `boolean` or `enum` specs (a field can be
+`required`, and a list cannot be nested), and an optional `maxItems`. A stored entry with a field the
+`item` does not declare is rejected, and the settings form renders one row per entry with one control
+per field. The built-in `thresholds` option on the gauge, latest card and timeseries chart is one: each
+entry names a severity (`normal`, `warning`, `minor`, `major` or `critical`), never a colour, so the
+theme decides how it looks in light and dark.
 
 Read options defensively with the SDK helpers `optString`, `optNumber` and `optBoolean`. For a hand-edited
 value of the wrong type they do not throw: `optString` and `optNumber` return `undefined`, and

@@ -10,6 +10,8 @@ import type { MeasurementSample } from '@devicechain/dashboards';
 import { fitValueFont } from '../fit-text';
 import { formatValue } from '../format';
 import type { ElementSize } from '../hooks';
+import type { SeverityLevel } from '../severity';
+import { bandAt, thresholdBands, type Threshold } from '../thresholds';
 
 import type { ChartTheme } from './chart-theme';
 import type { EChartOption } from './echart';
@@ -23,6 +25,17 @@ function distinctNames(samples: MeasurementSample[]): string[] {
   }
   return seen;
 }
+
+// A severity colour with an alpha, for a band drawn UNDER the data (markArea). The theme's
+// severity colours are comma-form hsl(), so the alpha form is a string edit.
+export function severityFill(theme: ChartTheme, level: SeverityLevel, alpha: number): string {
+  return theme.severity[level].replace(/^hsl\(/, 'hsla(').replace(/\)$/, `, ${alpha})`);
+}
+
+// Opacity of a threshold band behind a line: enough to read as a zone, faint enough that the
+// line and its grid stay the subject. `normal` is fainter still -- green everywhere is noise.
+const BAND_ALPHA = 0.14;
+const NORMAL_BAND_ALPHA = 0.06;
 
 const clamp = (v: number, lo: number, hi: number): number => Math.max(lo, Math.min(hi, v));
 
@@ -38,6 +51,47 @@ export interface LineChartOptions {
   // Measurement names to plot, one series each. Empty → every name seen in the
   // window (first-seen order).
   measurements?: string[];
+  // Unit suffix: named on the y-axis and appended to every tooltip value.
+  unit?: string;
+  // Decimal places for axis labels and tooltip values; unset uses the default rounding.
+  precision?: number;
+  // Severity thresholds, drawn as a labelled line each plus a faint band between them.
+  // Must be sorted ascending (parseThresholds does).
+  thresholds?: readonly Threshold[];
+}
+
+// The markLine / markArea for a chart's thresholds, attached to the first series (the markers
+// belong to a series in ECharts, and every series shares the one y-axis).
+function thresholdMarks(theme: ChartTheme, thresholds: readonly Threshold[], unit: string | undefined, precision: number | undefined, fontSize: number) {
+  const suffix = unit ? ` ${unit}` : '';
+  const markLine = {
+    silent: true,
+    symbol: 'none',
+    animation: false,
+    data: thresholds.map((t) => ({
+      yAxis: t.value,
+      name: t.label ?? String(t.value),
+      lineStyle: { color: theme.severity[t.level], type: 'dashed' as const, width: 1.5 },
+      label: {
+        show: true,
+        position: 'insideEndTop' as const,
+        color: theme.severity[t.level],
+        fontSize,
+        formatter: () => t.label ?? `${formatValue(t.value, precision)}${suffix}`,
+      },
+    })),
+  };
+  const markArea = {
+    silent: true,
+    animation: false,
+    data: thresholdBands(thresholds, -Infinity, Infinity)
+      .filter((b) => b.level !== undefined)
+      .map((b) => [
+        { yAxis: b.from, itemStyle: { color: severityFill(theme, b.level as SeverityLevel, b.level === 'normal' ? NORMAL_BAND_ALPHA : BAND_ALPHA) } },
+        { yAxis: b.to },
+      ]),
+  };
+  return { markLine, markArea };
 }
 
 // buildLineOption maps a rolling window of samples to a multi-series time chart,
@@ -51,9 +105,15 @@ export function buildLineOption(
   const names = options.measurements?.length ? options.measurements : distinctNames(samples);
   const axisFont = clamp(Math.round(shortSide(size) / 22), 8, 12);
 
+  const thresholds = options.thresholds ?? [];
+  const marks = thresholds.length > 0 ? thresholdMarks(theme, thresholds, options.unit, options.precision, axisFont) : undefined;
+  const suffix = options.unit ? ` ${options.unit}` : '';
+  const precision = options.precision;
+
   const series = names.map((name, i) => {
     const color = theme.series[i % theme.series.length];
     return {
+      ...(i === 0 ? marks : undefined),
       name,
       type: 'line' as const,
       showSymbol: false,
@@ -68,8 +128,11 @@ export function buildLineOption(
   return {
     animation: false,
     textStyle: { color: theme.foreground, fontSize: axisFont },
-    grid: { left: 8, right: 12, top: names.length > 1 ? 28 : 12, bottom: 8, containLabel: true },
-    tooltip: { trigger: 'axis' },
+    grid: { left: 8, right: 12, top: names.length > 1 || options.unit ? 28 : 12, bottom: 8, containLabel: true },
+    tooltip: {
+      trigger: 'axis',
+      valueFormatter: (v: unknown) => (typeof v === 'number' ? `${formatValue(v, precision)}${suffix}` : String(v ?? '—')),
+    },
     legend:
       names.length > 1 ? { textStyle: { color: theme.mutedForeground, fontSize: axisFont }, top: 0 } : undefined,
     xAxis: {
@@ -79,8 +142,24 @@ export function buildLineOption(
     },
     yAxis: {
       type: 'value',
+      // The unit rides the axis once, at its head, rather than on every tick.
+      name: options.unit,
+      nameTextStyle: { color: theme.mutedForeground, fontSize: axisFont, align: 'left' as const },
       splitLine: { lineStyle: { color: theme.border } },
-      axisLabel: { color: theme.mutedForeground, fontSize: axisFont },
+      axisLabel: {
+        color: theme.mutedForeground,
+        fontSize: axisFont,
+        // Rounded only when the author asked; otherwise ECharts' own tick rounding applies.
+        ...(precision != null ? { formatter: (v: number) => formatValue(v, precision) } : {}),
+      },
+      // A threshold outside the data's range must still be on the chart: extend the auto
+      // range to take in every threshold value.
+      ...(thresholds.length > 0
+        ? {
+            min: (e: { min: number }) => Math.min(e.min, thresholds[0].value),
+            max: (e: { max: number }) => Math.max(e.max, thresholds[thresholds.length - 1].value),
+          }
+        : {}),
     },
     series,
   };
@@ -90,13 +169,25 @@ export interface GaugeChartOptions {
   min?: number;
   max?: number;
   unit?: string;
-  // Decimal places for the readout; unset shows the raw value.
+  // Decimal places for the readout; unset uses the default rounding.
   precision?: number;
+  // Severity thresholds, drawn as coloured bands on the arc (sorted ascending).
+  thresholds?: readonly Threshold[];
 }
 
 // Below this short side (px) the gauge drops its axis labels: at that size they would be
 // drawn at the 8 px floor, which is noise rather than a scale.
 export const GAUGE_AXIS_LABELS_MIN_SIDE = 120;
+
+// The arc's colour stops: ECharts wants [[endFraction, colour], ...] ending at 1. A neutral
+// stretch (below the lowest threshold) takes the track colour. With no bands: one track.
+function gaugeArcColors(bands: ReturnType<typeof thresholdBands>, min: number, max: number, theme: ChartTheme): [number, string][] {
+  if (bands.length === 0) return [[1, theme.border]];
+  return bands.map((b, i): [number, string] => [
+    i === bands.length - 1 ? 1 : (b.to - min) / (max - min),
+    b.level ? theme.severity[b.level] : theme.border,
+  ]);
+}
 
 // buildGaugeOption maps a single latest value to a gauge. A null value (nothing
 // received yet) shows an em dash and rests the needle at the minimum. Ticks, fonts,
@@ -110,7 +201,12 @@ export function buildGaugeOption(
 ): EChartOption {
   const min = options.min ?? 0;
   const max = options.max ?? 100;
-  const accent = theme.series[0];
+  const thresholds = options.thresholds ?? [];
+  const bands = thresholdBands(thresholds, min, max);
+  // The needle takes the colour of the band the value sits in; with no bands (or below the
+  // lowest) it keeps the chart accent.
+  const hit = bandAt(thresholds, value);
+  const accent = hit ? theme.severity[hit.level] : theme.series[0];
   const unitSuffix = options.unit ? ` ${options.unit}` : '';
 
   const s = shortSide(size);
@@ -131,10 +227,11 @@ export function buildGaugeOption(
         splitNumber: s < 160 ? 4 : 5, // fewer ticks than the default 10 → no cram
         radius: '95%',
         center: ['50%', '58%'],
-        progress: { show: true, width: arcWidth, itemStyle: { color: accent } },
+        // The progress arc would paint over the bands, so with bands the needle alone marks the value.
+        progress: { show: bands.length === 0, width: arcWidth, itemStyle: { color: accent } },
         pointer: { itemStyle: { color: accent }, length: '55%', width: clamp(Math.round(s / 50), 2, 6) },
         anchor: { show: false },
-        axisLine: { lineStyle: { width: arcWidth, color: [[1, theme.border]] } },
+        axisLine: { lineStyle: { width: arcWidth, color: gaugeArcColors(bands, min, max, theme) } },
         axisTick: { show: false },
         splitLine: { length: arcWidth, lineStyle: { color: theme.border, width: 1 } },
         axisLabel: { show: showAxisLabels, color: theme.mutedForeground, fontSize: labelFont, distance: arcWidth + 2 },
