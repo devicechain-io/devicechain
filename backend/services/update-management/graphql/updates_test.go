@@ -6,7 +6,13 @@ package graphql
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
+	"crypto/sha256"
+	"crypto/x509"
+	"encoding/base64"
 	"encoding/json"
+	"encoding/pem"
 	"testing"
 	"time"
 
@@ -40,7 +46,7 @@ func updatePlane(t *testing.T, allowUnverified bool) (*plane, *sink) {
 	require.NoError(t, err)
 	out := &sink{}
 	p.api.Secrets = secrets.NewStore(p.api.RDB.Database, kp)
-	p.api.Devices = devices{profiles: map[string]string{"acme/dev-1": "gateway", "acme/dev-2": "other", "acme/dev-off": "gateway", "globex/dev-1": "gateway"},
+	p.api.Devices = devices{profiles: map[string]string{"acme/dev-1": "gateway", "acme/dev-2": "other", "acme/dev-off": "gateway", "acme/dev-off2": "gateway", "globex/dev-1": "gateway"},
 		disabled: map[string]bool{"acme/dev-off": true}}
 	p.api.Desired = out
 	p.api.AllowUnverified = allowUnverified
@@ -216,4 +222,39 @@ func TestAbandonUnknownThroughTheSchema(t *testing.T) {
 	require.Equal(t, model.CodeAttemptTerminal, code(p.exec(writer, abandon, vars)))
 	require.Equal(t, model.CodeAssignmentNotFound, code(p.exec(writer,
 		`mutation { abandonUnknownUpdate(assignmentToken:"asg-none", reason:"x"){ token } }`, nil)))
+}
+
+func TestSignedByNamesThePinnedSignerAndIsNullWhenNothingIsPinned(t *testing.T) {
+	p, _ := updatePlane(t, true)
+	content := []byte("image")
+	p.available("fw-1", content)
+	p.available("fw-2", []byte("image two"))
+	writer, reader := p.ctx("acme", auth.ArtifactWrite), p.ctx("acme", auth.ArtifactRead)
+
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	require.NoError(t, err)
+	der, err := x509.MarshalPKIXPublicKey(pub)
+	require.NoError(t, err)
+	pemText := string(pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: der}))
+	signer, err := p.api.RegisterSigner(writer, "release key", pemText)
+	require.NoError(t, err)
+	sum := sha256.Sum256(content)
+	_, err = p.api.AddSignature(writer, "fw-1", signer.Token, base64.StdEncoding.EncodeToString(ed25519.Sign(priv, sum[:])))
+	require.NoError(t, err)
+
+	const q = `mutation($d: String!, $a: String!) { assignArtifact(deviceToken: $d, artifactToken: $a) {
+	  signedBy { token name keyId algorithm state } } }`
+	resp := p.exec(writer, q, map[string]any{"d": "dev-1", "a": "fw-1"})
+	require.Empty(t, resp.Errors)
+	require.JSONEq(t, `{"assignArtifact":{"signedBy":{"token":"`+signer.Token+`","name":"release key","keyId":"`+
+		signer.KeyId+`","algorithm":"ED25519","state":"ACTIVE"}}}`, string(resp.Data))
+
+	// The flag admits an unsigned artifact; nothing is pinned.
+	resp = p.exec(writer, q, map[string]any{"d": "dev-off2", "a": "fw-2"})
+	require.Empty(t, resp.Errors)
+	require.JSONEq(t, `{"assignArtifact":{"signedBy":null}}`, string(resp.Data))
+
+	resp = p.exec(reader, `{ updateAssignments(criteria:{pageNumber:0,pageSize:5,deviceToken:"dev-1"}) { results { signedBy { token } } } }`, nil)
+	require.Empty(t, resp.Errors)
+	require.JSONEq(t, `{"updateAssignments":{"results":[{"signedBy":{"token":"`+signer.Token+`"}}]}}`, string(resp.Data))
 }

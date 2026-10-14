@@ -147,6 +147,22 @@ func (r *UpdateAssignmentResolver) Attempt() *UpdateAttemptResolver {
 	return &UpdateAttemptResolver{M: r.M.Attempt}
 }
 
+// SignedBy is the signer behind the assignment's pinned signature, if it pins one.
+func (r *UpdateAssignmentResolver) SignedBy() *assignmentSignerResolver {
+	if r.M.Pin == nil {
+		return nil
+	}
+	return &assignmentSignerResolver{m: r.M.Pin.Signer}
+}
+
+type assignmentSignerResolver struct{ m model.ArtifactSigner }
+
+func (r *assignmentSignerResolver) Token() string     { return r.m.Token }
+func (r *assignmentSignerResolver) Name() string      { return r.m.Name }
+func (r *assignmentSignerResolver) KeyId() string     { return r.m.KeyId }
+func (r *assignmentSignerResolver) Algorithm() string { return r.m.Algorithm }
+func (r *assignmentSignerResolver) State() string     { return r.m.State }
+
 // UpdateAttemptResolver resolves the fields of one update attempt.
 type UpdateAttemptResolver struct{ M model.UpdateAttempt }
 

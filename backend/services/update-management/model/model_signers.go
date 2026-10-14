@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/devicechain-io/dc-microservice/ota"
 	"github.com/devicechain-io/dc-microservice/rdb"
 )
 
@@ -24,6 +25,24 @@ const (
 	AlgorithmECDSAP256 = "ECDSA_P256"
 	AlgorithmEd25519   = "ED25519"
 )
+
+// RegistryAlgorithms lists every algorithm a signer may be registered with; WireAlgorithm must
+// map each one.
+var RegistryAlgorithms = []string{AlgorithmECDSAP256, AlgorithmEd25519}
+
+// WireAlgorithm maps a registry algorithm to the name the device-plane wire uses for the same
+// scheme. The two vocabularies differ for ECDSA (the registry says which curve the key is on; the
+// wire also says which hash the signature covers), so the mapping is explicit and a registry
+// algorithm with no entry is an error rather than a guess.
+func WireAlgorithm(registry string) (string, error) {
+	switch registry {
+	case AlgorithmECDSAP256:
+		return ota.AlgorithmECDSAP256SHA256, nil
+	case AlgorithmEd25519:
+		return ota.AlgorithmEd25519, nil
+	}
+	return "", fmt.Errorf("signer algorithm %q has no wire algorithm", registry)
+}
 
 // Derived artifact trust, computed at read time from the signatures on record and the state of
 // the signers that made them. It is never stored: revoking a signer changes what every artifact

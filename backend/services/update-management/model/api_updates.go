@@ -6,6 +6,8 @@ package model
 import (
 	"context"
 	"crypto/rand"
+	"database/sql"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -21,6 +23,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/rs/zerolog/log"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // Refusal codes of the assignment plane (extensions.code on the GraphQL plane).
@@ -328,13 +331,63 @@ func (api *Api) viewsOf(ctx context.Context, asg []UpdateAssignment) ([]UpdateAs
 	for _, a := range artifacts {
 		byID[a.ID] = a
 	}
+	pins, err := api.pinsOf(api.RDB.DB(ctx), asg)
+	if err != nil {
+		return nil, err
+	}
 	out := make([]UpdateAssignmentView, 0, len(asg))
 	for _, a := range asg {
 		at, ok := byAssignment[a.ID]
 		if !ok {
 			return nil, fmt.Errorf("update assignment %q has no attempt row", a.Token)
 		}
-		out = append(out, UpdateAssignmentView{Assignment: a, Attempt: at, Artifact: byID[a.ArtifactId]})
+		v := UpdateAssignmentView{Assignment: a, Attempt: at, Artifact: byID[a.ArtifactId]}
+		if a.SignatureId.Valid {
+			if p, ok := pins[uint(a.SignatureId.Int64)]; ok {
+				v.Pin = &p
+			}
+		}
+		out = append(out, v)
+	}
+	return out, nil
+}
+
+// pinsOf reads the pinned signatures of the assignments, and the signer row of each, with two
+// reads however many. A pin whose signature or signer row cannot be found is simply absent from
+// the result: the caller tells that apart from "pins nothing" by the assignment's SignatureId.
+func (api *Api) pinsOf(db *gorm.DB, asg []UpdateAssignment) (map[uint]SignaturePin, error) {
+	ids := make([]uint, 0, len(asg))
+	for _, a := range asg {
+		if a.SignatureId.Valid {
+			ids = append(ids, uint(a.SignatureId.Int64))
+		}
+	}
+	out := make(map[uint]SignaturePin, len(ids))
+	if len(ids) == 0 {
+		return out, nil
+	}
+	var sigs []ArtifactSignature
+	if err := rdb.FindByKeys(db, &sigs, "id", ids); err != nil {
+		return nil, err
+	}
+	signerIDs := make([]uint, 0, len(sigs))
+	for _, s := range sigs {
+		signerIDs = append(signerIDs, s.SignerId)
+	}
+	var signers []ArtifactSigner
+	if len(signerIDs) > 0 {
+		if err := rdb.FindByKeys(db, &signers, "id", signerIDs); err != nil {
+			return nil, err
+		}
+	}
+	byID := make(map[uint]ArtifactSigner, len(signers))
+	for _, s := range signers {
+		byID[s.ID] = s
+	}
+	for _, s := range sigs {
+		if signer, ok := byID[s.SignerId]; ok {
+			out[s.ID] = SignaturePin{Signature: s, Signer: signer}
+		}
 	}
 	return out, nil
 }
@@ -465,7 +518,17 @@ func (api *Api) assignInTx(ctx context.Context, tx *gorm.DB, deviceToken string,
 		}
 		if !ota.State(at[0].State).Terminal() {
 			if cur.ArtifactId == artifact.ID {
-				return &UpdateAssignmentView{Assignment: cur, Attempt: at[0], Artifact: *artifact}, nil
+				v := &UpdateAssignmentView{Assignment: cur, Attempt: at[0], Artifact: *artifact}
+				if cur.SignatureId.Valid {
+					pins, err := api.pinsOf(tx, []UpdateAssignment{cur})
+					if err != nil {
+						return nil, err
+					}
+					if p, ok := pins[uint(cur.SignatureId.Int64)]; ok {
+						v.Pin = &p
+					}
+				}
+				return v, nil
 			}
 			return nil, refuse(CodeUpdateInProgress,
 				"device %q is already working on update %q (%s); cancel it before assigning another",
@@ -494,8 +557,22 @@ func (api *Api) assignInTx(ctx context.Context, tx *gorm.DB, deviceToken string,
 	if err != nil {
 		return nil, refuse(CodeInvalidAssignment, "%v", err)
 	}
+	pin, err := api.pinSignature(tx, artifact)
+	if err != nil {
+		return nil, err
+	}
+	if pin == nil && !api.AllowUnverified {
+		// The trust the gate read was derived outside this transaction; the signer behind it was
+		// revoked between that read and this one.
+		return nil, refuse(CodeUnverifiedRefused,
+			"artifact %q is UNVERIFIED and this instance does not allow assigning unverified artifacts "+
+				"(updates.allowUnverifiedArtifacts)", artifact.Token)
+	}
 	asg := UpdateAssignment{Token: asgTok, DeviceToken: deviceToken, Component: artifact.Component,
 		ArtifactId: artifact.ID, Actor: actorOf(ctx)}
+	if pin != nil {
+		asg.SignatureId = sql.NullInt64{Int64: int64(pin.Signature.ID), Valid: true}
+	}
 	if err := tx.Create(&asg).Error; err != nil {
 		// The partial unique index admits one current row per device and component, so a
 		// concurrent assign that got in first surfaces here as a constraint error.
@@ -514,7 +591,36 @@ func (api *Api) assignInTx(ctx context.Context, tx *gorm.DB, deviceToken string,
 	if err := tx.Create(&att).Error; err != nil {
 		return nil, err
 	}
-	return &UpdateAssignmentView{Assignment: asg, Attempt: att, Artifact: *artifact}, nil
+	return &UpdateAssignmentView{Assignment: asg, Attempt: att, Artifact: *artifact, Pin: pin}, nil
+}
+
+// pinSignature picks the signature an assignment is made under: the OLDEST signature of the
+// artifact whose signer is ACTIVE, or nil when there is none. Oldest, so the choice does not move
+// when a newer signer is added.
+//
+// Each candidate signer row is read FOR SHARE (PostgreSQL), so a revoke that is concurrent with
+// this assignment serializes with it: either the revoke committed first and the row reads
+// REVOKED, or it waits until this transaction commits and the pin it leaves behind is the one
+// every later message uses. The lock is a no-op on SQLite, which the unit tests run on.
+func (api *Api) pinSignature(tx *gorm.DB, artifact *Artifact) (*SignaturePin, error) {
+	var sigs []ArtifactSignature
+	if err := tx.Where("artifact_id = ?", artifact.ID).Order("created_at ASC, id ASC").Find(&sigs).Error; err != nil {
+		return nil, err
+	}
+	for _, sig := range sigs {
+		q := tx
+		if tx.Dialector.Name() == "postgres" {
+			q = tx.Clauses(clause.Locking{Strength: "SHARE"})
+		}
+		var signers []ArtifactSigner
+		if err := q.Where("id = ?", sig.SignerId).Limit(1).Find(&signers).Error; err != nil {
+			return nil, err
+		}
+		if len(signers) == 1 && signers[0].State == SignerActive {
+			return &SignaturePin{Signature: sig, Signer: signers[0]}, nil
+		}
+	}
+	return nil, nil
 }
 
 // saveAttempt writes the columns a reducer step decided, only if nobody changed the row since it
@@ -632,7 +738,30 @@ func (api *Api) publishAssignment(ctx context.Context, v *UpdateAssignmentView) 
 	if v.Attempt.CancelRequested || ota.State(v.Attempt.State).Terminal() {
 		return
 	}
-	body, err := ota.EncodeUpdateAssignment(v.Attempt.Token, v.Assignment.Token, v.Assignment.Component, ota.TrustUnverified, nil, ota.AssignmentArtifact{
+	trust, sig := ota.TrustUnverified, (*ota.AssignmentSignature)(nil)
+	if v.Assignment.SignatureId.Valid {
+		// The assignment was made under a signature. If that signature or its signer cannot be
+		// read, the message is NOT sent: sending it as UNVERIFIED would silently downgrade an
+		// assignment the platform decided was signed, which a device that does not require
+		// signatures would then install.
+		if v.Pin == nil {
+			log.Error().Str("assignment", v.Assignment.Token).Int64("signature", v.Assignment.SignatureId.Int64).
+				Msg("An update assignment's pinned signature or signer cannot be read; it is not delivered.")
+			return
+		}
+		alg, err := WireAlgorithm(v.Pin.Signer.Algorithm)
+		if err != nil {
+			log.Error().Err(err).Str("assignment", v.Assignment.Token).
+				Msg("An update assignment's pinned signer has an unmappable algorithm; it is not delivered.")
+			return
+		}
+		trust = ota.TrustSigned
+		sig = &ota.AssignmentSignature{
+			Signature: base64.StdEncoding.EncodeToString(v.Pin.Signature.Signature),
+			KeyID:     v.Pin.Signer.KeyId, Algorithm: alg,
+		}
+	}
+	body, err := ota.EncodeUpdateAssignment(v.Attempt.Token, v.Assignment.Token, v.Assignment.Component, trust, sig, ota.AssignmentArtifact{
 		Version: v.Artifact.Version, Digest: v.Artifact.Digest, Size: v.Artifact.SizeBytes, RequiresReboot: v.Attempt.RequiresReboot,
 	})
 	if err != nil {

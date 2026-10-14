@@ -14,8 +14,7 @@ the device proves it is running the new version.
 device at a time, a resumable download through a short-lived grant, and tracking of each attempt
 with deadlines.
 
-**Not yet:** a device is not yet given an artifact's signature, so it cannot check one itself;
-there is no fleet rollout (staged or percentage-based assignment across many devices); there are no console
+**Not yet:** there is no fleet rollout (staged or percentage-based assignment across many devices); there are no console
 screens for updates, so you use GraphQL and the HTTP upload; and devices that speak only HTTP
 cannot receive updates, because assignments travel on the device's MQTT channel. For the same reason
 [LwM2M](./lwm2m.md) and [Sparkplug](./sparkplug.md) devices cannot receive them either; an LwM2M
@@ -89,6 +88,17 @@ already given works again. A device works toward **one target per component**:
 - assigning the same artifact again while that update is in progress returns the existing assignment;
 - assigning after the previous update finished **supersedes** it, and the history is kept.
 
+**An assignment carries the signature it was made under.** When the artifact is signed, assigning
+picks the oldest signature on it whose signer is still active and **pins** it to the assignment. The
+message the device receives has `trust: SIGNED` together with that signature (standard base64), the
+signer's `keyId`, and the `algorithm` (`ECDSA_P256_SHA256` or `ED25519`), and the device checks them
+against the keys it trusts. `signedBy` on the assignment names the signer it is pinned to. An
+assignment made with no signature by an active signer (only possible while `allowUnverifiedArtifacts`
+is on) pins nothing and stays `UNVERIFIED` on the wire. The pin does not move: if the signer is revoked
+afterwards, an update already in flight keeps the signature it was assigned under, and every re-send of
+the assignment is identical, while a *new* assignment of that artifact is refused. If the platform ever
+cannot read the pinned signature, it sends nothing rather than sending the assignment as `UNVERIFIED`.
+
 `cancelUpdate` cancels a queued update at once. Before installation starts it records the request,
 and the update becomes `CANCELLED` when the device confirms it has dropped the work. Once the device
 has begun installing, cancelling is refused: an installation cannot be recalled.
@@ -117,6 +127,11 @@ reports:
 | `TIMED_OUT` | A deadline passed before installation was reported started. |
 | `UNKNOWN` | A deadline passed during installation or reboot. |
 | `CANCELLED` | The update was cancelled before installation began, or an operator abandoned an `UNKNOWN` update. |
+
+A device that refuses an assignment because of its signature reports `FAILED` at the `DOWNLOADED` stage
+(after it has the bytes and has hashed them) with the code `UNKNOWN_SIGNER`, when it does not trust the
+signer's key, or when it requires a signature and the assignment is `UNVERIFIED`, or `SIGNATURE_INVALID`,
+when the signature does not verify.
 
 Reports only move an attempt forward; a report for an earlier stage is ignored. **`UPDATED` is
 reached only on evidence**: the device reports the target version running, and when the artifact
@@ -176,8 +191,9 @@ already made is not recalled.
 
 `VERIFIED`, and the size and digest check at upload, establish **integrity**: the bytes are the bytes
 that were declared. They say nothing about who produced them; that is what a [signature](#signers) adds.
-An assignment still tells the device `UNVERIFIED` today, so a device that needs to know an image is
-genuine must check a signature of its own.
+An assignment of a signed artifact tells the device `SIGNED` and hands it the signature, so a device
+that holds the signer's public key can check that the image is genuine before it installs it. Both
+signature algorithms sign the 32 raw bytes of the SHA-256 digest, not the file.
 
 ## On the device {#device-side}
 

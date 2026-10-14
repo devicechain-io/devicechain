@@ -14,8 +14,7 @@ artefacto a un dispositivo, envía al dispositivo lo que necesita para obtener l
 a un dispositivo cada vez, una descarga reanudable mediante una concesión de corta duración y el
 seguimiento de cada intento con plazos.
 
-**Todavía no:** a un dispositivo aún no se le entrega la firma de un artefacto, así que no puede
-comprobarla por sí mismo; no hay despliegue por flota (asignación escalonada o por porcentaje a muchos dispositivos); no hay
+**Todavía no:** no hay despliegue por flota (asignación escalonada o por porcentaje a muchos dispositivos); no hay
 pantallas de consola para las actualizaciones, así que se usan GraphQL y la subida por HTTP; y los
 dispositivos que solo usan HTTP no pueden recibir actualizaciones, porque las asignaciones viajan
 por el canal MQTT del dispositivo. Por la misma razón, los dispositivos [LwM2M](./lwm2m.md) y
@@ -92,6 +91,17 @@ actualización y un enlace de descarga que ya tenía vuelve a funcionar. Un disp
 - asignar de nuevo el mismo artefacto mientras esa actualización está en curso devuelve la asignación existente;
 - asignar cuando la actualización anterior ya terminó la **sustituye**, y se conserva el historial.
 
+**Una asignación lleva la firma con la que se hizo.** Cuando el artefacto está firmado, al asignarlo se
+elige la firma más antigua cuyo firmante sigue activo y se **fija** a la asignación. El mensaje que recibe
+el dispositivo lleva `trust: SIGNED` junto con esa firma (base64 estándar), el `keyId` del firmante y el
+`algorithm` (`ECDSA_P256_SHA256` o `ED25519`), y el dispositivo los comprueba con las claves en las que
+confía. `signedBy` en la asignación indica el firmante al que está fijada. Una asignación hecha sin ninguna
+firma de un firmante activo (solo posible mientras `allowUnverifiedArtifacts` esté activado) no fija nada y
+sigue siendo `UNVERIFIED` en el protocolo. La firma fijada no cambia: si el firmante se revoca después, una
+actualización ya en curso conserva la firma con la que se asignó y cada reenvío de la asignación es idéntico,
+mientras que una asignación *nueva* de ese artefacto se rechaza. Si la plataforma no puede leer la firma
+fijada, no envía nada en lugar de enviar la asignación como `UNVERIFIED`.
+
 `cancelUpdate` cancela al instante una actualización en cola. Antes de que empiece la instalación
 registra la petición, y la actualización pasa a `CANCELLED` cuando el dispositivo confirma que ha
 abandonado el trabajo. Una vez que el dispositivo ha empezado a instalar, la cancelación se
@@ -120,6 +130,10 @@ dispositivo:
 | `TIMED_OUT` | Pasó un plazo antes de que se informara del inicio de la instalación. |
 | `UNKNOWN` | Pasó un plazo durante la instalación o el reinicio. |
 | `CANCELLED` | La actualización se canceló antes de empezar la instalación, o un operador abandonó una actualización `UNKNOWN`. |
+
+Un dispositivo que rechaza una asignación por su firma informa `FAILED` en la etapa `DOWNLOADED` (cuando ya
+tiene los bytes y ha calculado su hash) con el código `UNKNOWN_SIGNER`, si no confía en la clave del firmante
+o si exige una firma y la asignación es `UNVERIFIED`, o `SIGNATURE_INVALID`, si la firma no se verifica.
 
 Los informes solo hacen avanzar un intento; un informe de una etapa anterior se ignora. **`UPDATED`
 solo se alcanza con pruebas**: el dispositivo informa de que la versión objetivo está en ejecución
@@ -182,8 +196,9 @@ hecha no se retira.
 
 `VERIFIED`, y la comprobación de tamaño y digest en la subida, establecen la **integridad**: los
 bytes son los que se declararon. No dicen nada de quién los produjo; eso lo añade una [firma](#signers).
-Hoy una asignación sigue comunicando `UNVERIFIED` al dispositivo, así que un dispositivo que necesite saber
-que una imagen es auténtica debe comprobar una firma propia.
+Una asignación de un artefacto firmado comunica `SIGNED` al dispositivo y le entrega la firma, de modo que un
+dispositivo que tenga la clave pública del firmante puede comprobar que la imagen es auténtica antes de
+instalarla. Ambos algoritmos firman los 32 bytes sin procesar del digest SHA-256, no el archivo.
 
 ## En el dispositivo {#device-side}
 
