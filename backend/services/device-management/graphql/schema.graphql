@@ -1608,10 +1608,11 @@ type DeviceImportRowResult {
     row: Int!
     """The row's device token."""
     token: String!
+    """What happened to this row: created, already present unchanged, in conflict with an existing device, invalid, or refused."""
     outcome: DeviceImportOutcome!
     """A machine-readable reason for every outcome but CREATED and EXISTS: CONFLICT, INVALID_VALUE, NOT_FOUND, LIMIT_EXCEEDED, DUPLICATE_IN_FILE or UNSUPPORTED."""
     code: String
-    """What is wrong, naming fields and never values."""
+    """What is wrong. It never contains a credential secret, but may repeat a token the row supplied, such as a device type token."""
     message: String
 }
 
@@ -1621,10 +1622,15 @@ type DeviceImportResult {
     dryRun: Boolean!
     """One outcome per request row, in request order."""
     rows: [DeviceImportRowResult!]!
+    """Rows whose device was created (on a dry run: would be created)."""
     created: Int!
+    """Rows whose device already exists exactly as described, so nothing was written."""
     exists: Int!
+    """Rows that clash with an existing device or one of its unique values; nothing was written for them."""
     conflict: Int!
+    """Rows refused because a value is malformed, missing or duplicated within the file."""
     invalid: Int!
+    """Rows refused because what they ask for is not supported, such as an unsupported credential type."""
     refused: Int!
 }
 
