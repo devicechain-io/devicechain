@@ -11,6 +11,10 @@ const OUT = process.env.GUIDE_OUT ?? 'out';
 const MASK_COLOR = '#e2e8f0';
 // What every [data-shot-pii] element reads in a screenshot (see the frame preparation below).
 const PERSONA_EMAIL = 'dana.okafor@acme-properties.example';
+// The addresses `dcctl sim create` gives the hero and widgets sim identities.
+const SIM_ADDRESSES = [process.env.GUIDE_SIM ?? 'acme', process.env.GUIDE_WIDGETS_SIM ?? 'widgets'].map(
+  (n) => `${n}@sim.devicechain.local`,
+);
 
 // Map tiles come from a HAR recorded once at the guide's fixed map views, so captures
 // are deterministic, offline, and put no load on public tile servers. Record with
@@ -122,9 +126,11 @@ for (const recipe of recipes) {
     // clicked tab or button are an artefact of the capture, not of the screen: blur. (3) Every
     // [data-shot-pii] element (the operator's address, in the sidebar, version and audit tables)
     // is SUBSTITUTED with a fixed persona instead of painted over, so a column that exists to say
-    // who did something still says it.
+    // who did something still says it. (4) The sim identities' own addresses also appear in text
+    // the console renders from data it does not know is an address (an artifact's provenance, an
+    // update's "assigned by"); every text occurrence of one is substituted the same way.
     await page.addStyleTag({ content: '[data-sonner-toaster], [data-sonner-toast] { display: none !important; }' });
-    await page.evaluate((persona) => {
+    await page.evaluate(({ persona, simAddresses }) => {
       (document.activeElement as HTMLElement | null)?.blur?.();
       for (const el of document.querySelectorAll('[data-shot-pii]')) {
         if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) {
@@ -134,7 +140,15 @@ for (const recipe of recipes) {
           el.textContent = persona;
         }
       }
-    }, PERSONA_EMAIL);
+      const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+      for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+        for (const a of simAddresses) if (n.nodeValue?.includes(a)) n.nodeValue = n.nodeValue.split(a).join(persona);
+      }
+      for (const el of document.querySelectorAll('input, textarea')) {
+        const f = el as HTMLInputElement | HTMLTextAreaElement;
+        for (const a of simAddresses) if (f.value.includes(a)) f.value = f.value.split(a).join(persona);
+      }
+    }, { persona: PERSONA_EMAIL, simAddresses: SIM_ADDRESSES });
 
     const opts = {
       animations: 'disabled' as const,
