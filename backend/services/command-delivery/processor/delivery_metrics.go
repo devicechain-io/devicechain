@@ -110,6 +110,20 @@ type DeliveryMetrics struct {
 	UndeliverableFailed prometheus.Counter
 	PresenceReadErrors  prometheus.Counter
 
+	// DisabledGateErrors counts the times the disabled-device record could not be read for a
+	// dispatch batch (the batch is then NOT dispatched, because publishing is an actuation and
+	// the record is the only thing that says the device is shut out) or could not be corrected
+	// from device-management. A standing rate means commands are being delayed, not lost.
+	DisabledGateErrors prometheus.Counter
+
+	// DisabledGateReady is 1 once this process has listed the tenants and read every one of them
+	// for the disabled-device record, and 0 until then; DisabledGatePending is how many tenants
+	// it is still waiting on. Until a tenant's record has been filled once (anywhere: the marker
+	// is shared) its commands are not dispatched, so a gauge stuck at 0 with a flat error counter
+	// is the signature of a restart during an outage of the service it reads from.
+	DisabledGateReady   prometheus.Gauge
+	DisabledGatePending prometheus.Gauge
+
 	// HoldsReleased counts withheld commands returned to QUEUED because their device
 	// came back. Read it against HoldsPlaced: the two should track each other over a
 	// fleet's duty cycle, and holds placed with nothing released is the signature of a
@@ -270,6 +284,14 @@ func NewDeliveryMetrics(ms *core.Microservice) DeliveryMetrics {
 		PresenceReadErrors: ms.NewCounter("command_delivery_presence_read_errors_total",
 			"Sweep passes that could not read the presence projection; the gate fails OPEN, so a "+
 				"standing rate here means commands are being dispatched ungated"),
+		DisabledGateErrors: ms.NewCounter("command_delivery_disabled_gate_errors_total",
+			"Times the disabled-device record could not be read for a dispatch batch (that batch "+
+				"is not dispatched) or could not be synced from device-management"),
+		DisabledGateReady: ms.NewGauge("command_delivery_disabled_gate_ready",
+			"1 once this process has read the disabled devices of every tenant, 0 until then; tenants "+
+				"never synced anywhere are not dispatched to while it is 0"),
+		DisabledGatePending: ms.NewGauge("command_delivery_disabled_gate_pending_tenants",
+			"Tenants whose disabled-device record this process has not yet read; their commands wait"),
 		HoldsReleased: ms.NewCounter("command_delivery_holds_released_total",
 			"Withheld commands returned to the dispatch queue because their device came back"),
 		StrandedObserved: ms.NewCounter("command_delivery_stranded_observed_total",

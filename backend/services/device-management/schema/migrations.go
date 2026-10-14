@@ -40,5 +40,6 @@ var (
 		NewDeviceConfigurationSchema(),
 		NewCredentialSecretDigestSchema(),
 		NewDeviceDisabledSchema(),
+		NewDeviceDisabledIndexSchema(),
 	}
 )

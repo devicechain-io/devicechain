@@ -117,7 +117,7 @@ query {
 
 关注状态集合时使用 `statuses`。“此设备所有仍在处理的命令”包括：
 
-- `HELD`：设备缺席，因此保留。
+- `HELD`：设备缺席或已停用，因此保留。
 - `PARKED`：已发布，但设备实际未唤醒。
 - `SENT`：已派发，尚无答复。
 
@@ -142,6 +142,28 @@ mutation {
 两种情况下都应**检查返回的 `status`**，不要假定取消已生效。没有匹配命令的令牌*会*产生错误。
 
 `cancelCommandBatch` 对整个设备群操作采用完全相同的刹车：取消同样状态，并停在 `SENT` 边界。参见[取消批次](../concepts/commands.md#cancelling-a-batch)。
+
+### 为已停用设备保留的命令 {#held-while-disabled}
+
+设备被[停用](./device-credentials.md#disabling-a-device)后，此前已为它排队的命令会被**保留**：进入 `HELD`，不发布，也不取消。设备重新启用后，若设备在线，它们被释放并按从旧到新的顺序发出；若设备启用时仍离线，命令会继续保持 `HELD`，直到设备重新连接，与任何离线设备相同。等待期间，命令仍会在各自的 `expiresAt` 到期，记录为 `EXPIRED`。这种保留只在设备被启用时结束，这也是它与“为仅仅离线的设备保留的命令”的区别。
+
+要查看保留了什么，查询设备的保留情况。`heldCount` 是设备尚未发送的所有命令（`QUEUED`、`HELD` 或 `PARKED`）的数量，已启用设备为 `0`：
+
+```graphql
+query {
+  deviceCommandHold(deviceToken: "pump-17") { disabled heldCount }
+}
+```
+
+要改为丢弃它们，请取消平台仍为该设备持有的全部命令。它对每条命令适用与 `cancelCommand` 相同的规则，因此 `SENT` 命令绝不会被触及，并报告取消了多少条：
+
+```graphql
+mutation {
+  cancelDeviceCommands(deviceToken: "pump-17") { cancelled }
+}
+```
+
+控制台在设备的 **Commands** 标签页显示同样内容：“N 条排队命令因设备已停用而被保留”，并为有命令写入权限的操作员提供 **Cancel all** 按钮。
 
 ## 设置合适的 TTL {#set-a-ttl-you-can-live-with}
 
