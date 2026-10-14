@@ -17,7 +17,7 @@ Dos comandos, `dcctl install` y `dcctl bootstrap`, levantan todo.
 
 ## Requisitos previos
 
-- **Go** 1.26 o posterior. El workspace declara `go 1.26.6`, y CI compila con la versión que nombra `go.work`.
+- **Go** 1.27 o posterior. El workspace declara `go 1.27.0`, y CI compila con la versión que nombra `go.work`.
 - **Node** 22 o posterior, para el frontend y esta documentación. CI compila con 26.
 - **Docker**, para ejecutar TimescaleDB.
 - **nats-server**, un único binario de unos 10 MB.

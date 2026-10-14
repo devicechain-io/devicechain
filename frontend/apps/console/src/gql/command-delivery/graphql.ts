@@ -186,6 +186,20 @@ export type CancelCommandBatchMutationVariables = Exact<{
 
 export type CancelCommandBatchMutation = { cancelCommandBatch: { cancelled: number, alreadySent: number, alreadyFinished: number, matched: number } };
 
+export type DeviceCommandHoldQueryVariables = Exact<{
+  deviceToken: string;
+}>;
+
+
+export type DeviceCommandHoldQuery = { deviceCommandHold: { disabled: boolean, heldCount: number } };
+
+export type CancelDeviceCommandsMutationVariables = Exact<{
+  deviceToken: string;
+}>;
+
+
+export type CancelDeviceCommandsMutation = { cancelDeviceCommands: { cancelled: number } };
+
 export class TypedDocumentString<TResult, TVariables>
   extends String
   implements DocumentTypeDecoration<TResult, TVariables>
@@ -346,3 +360,18 @@ export const CancelCommandBatchDocument = new TypedDocumentString(`
   }
 }
     `) as unknown as TypedDocumentString<CancelCommandBatchMutation, CancelCommandBatchMutationVariables>;
+export const DeviceCommandHoldDocument = new TypedDocumentString(`
+    query DeviceCommandHold($deviceToken: String!) {
+  deviceCommandHold(deviceToken: $deviceToken) {
+    disabled
+    heldCount
+  }
+}
+    `) as unknown as TypedDocumentString<DeviceCommandHoldQuery, DeviceCommandHoldQueryVariables>;
+export const CancelDeviceCommandsDocument = new TypedDocumentString(`
+    mutation CancelDeviceCommands($deviceToken: String!) {
+  cancelDeviceCommands(deviceToken: $deviceToken) {
+    cancelled
+  }
+}
+    `) as unknown as TypedDocumentString<CancelDeviceCommandsMutation, CancelDeviceCommandsMutationVariables>;

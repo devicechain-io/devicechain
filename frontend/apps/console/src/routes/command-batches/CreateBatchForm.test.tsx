@@ -32,6 +32,10 @@ vi.mock('@devicechain/client', async (importOriginal) => {
 // toast. Faked so it cannot reach sonner from a test with no Toaster mounted.
 vi.mock('@/components/ui/toast', () => ({ useToast: () => ({ toast: toastMock }) }));
 
+// The panel's held-while-disabled notice needs an auth and a confirm provider and is irrelevant
+// to payload parity; it has its own test.
+vi.mock('@/routes/devices/HeldWhileDisabledNotice', () => ({ HeldWhileDisabledNotice: () => null }));
+
 import { CreateBatchForm } from './CreateBatchForm';
 import { DeviceCommandsPanel } from '@/routes/devices/DeviceCommandsPanel';
 

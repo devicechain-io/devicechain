@@ -6,6 +6,8 @@ package model
 import (
 	"context"
 	"fmt"
+
+	"github.com/devicechain-io/dc-microservice/lwm2mpath"
 )
 
 // EnqueueRejectionCode is the STABLE, machine-readable classification of an enqueue
@@ -40,6 +42,11 @@ const (
 	// Permanent for as long as it stays disabled; a command is not held for it, so
 	// re-enabling the device does not deliver what was refused.
 	RejectDeviceDisabled EnqueueRejectionCode = "DEVICE_DISABLED"
+	// RejectCommandDestructiveRefused: the command is a raw, hand-addressed execute of an
+	// operation that wipes the device (LwM2M Factory Reset). It is refused whatever the device's
+	// vocabulary says, on every path that enqueues. Permanent: the same command is refused
+	// identically every time, so REACT must not retry it.
+	RejectCommandDestructiveRefused EnqueueRejectionCode = "COMMAND_DESTRUCTIVE_REFUSED"
 )
 
 // CommandEnqueueVerdict is the answer to "may this command be enqueued to this
@@ -246,6 +253,15 @@ type vocabularyDecision struct {
 // discover a missing device differently (a single lookup returning nothing, versus a
 // token absent from a bulk result).
 func decideAgainstVocabulary(vocab *CommandVocabulary, commandKey string, payload []byte) vocabularyDecision {
+	// Before the free-form backward path, not after it: an unconstrained profile accepts any
+	// ad-hoc command, and that must not include a raw wipe of the device.
+	if lwm2mpath.IsRefusedRawExecute(commandKey, payload) {
+		reason := "this LwM2M path performs a Factory Reset, which cannot be sent as a raw " + commandKey + "; a confirmed named operation is planned"
+		if lwm2mpath.HasAmbiguousPath(payload) {
+			reason = "ambiguous path: the payload names its path more than once"
+		}
+		return vocabularyDecision{code: RejectCommandDestructiveRefused, reason: reason, commandKey: commandKey}
+	}
 	// Decision 4 backward path: no declared vocabulary ⇒ free-form, as today.
 	if !vocab.Constrained {
 		return vocabularyDecision{}

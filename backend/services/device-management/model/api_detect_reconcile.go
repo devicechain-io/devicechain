@@ -249,3 +249,37 @@ func (api *Api) DeviceThresholdAttributePage(ctx context.Context, afterId uint64
 	}
 	return page, nil
 }
+
+// DisabledDevicePage returns one page of the tokens of the tenant's disabled devices, in id order.
+//
+// It exists for command-delivery, which holds a disabled device's queued commands and learns a
+// device was disabled from the device-roster fact. A fact that never reached the stream, or a
+// delivery service that started after the device was disabled, is repaired by walking this at
+// startup and every few minutes. It is the authoritative answer, built from the same column
+// (disabled_at) the roster fact's Disabled field and every device-facing refusal read.
+func (api *Api) DisabledDevicePage(ctx context.Context, afterId uint64, limit int) (*DisabledDevicePage, error) {
+	if err := checkReconcilePageSize("disabled device", limit, MaxRosterPageSize); err != nil {
+		return nil, err
+	}
+	type row struct {
+		Id    uint
+		Token string
+	}
+	rows := make([]row, 0, limit)
+	q := api.RDB.DB(ctx).Model(&Device{}).Select("devices.id AS id, devices.token AS token").
+		Where("devices.disabled_at IS NOT NULL")
+	if afterId > 0 {
+		q = q.Where("devices.id > ?", afterId)
+	}
+	if err := q.Order("devices.id").Limit(limit).Scan(&rows).Error; err != nil {
+		return nil, err
+	}
+	page := &DisabledDevicePage{Tokens: make([]string, 0, len(rows))}
+	for _, r := range rows {
+		page.Tokens = append(page.Tokens, r.Token)
+	}
+	if len(rows) > 0 {
+		page.NextCursor = fullPageCursor(len(rows), limit, rows[len(rows)-1].Id)
+	}
+	return page, nil
+}

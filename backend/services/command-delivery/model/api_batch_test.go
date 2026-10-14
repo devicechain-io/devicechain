@@ -37,7 +37,7 @@ func newBatchTestApi(t *testing.T) *Api {
 	if err := rdb.RegisterTokenGrammar(db); err != nil {
 		t.Fatalf("register token grammar: %v", err)
 	}
-	if err := db.AutoMigrate(&Command{}, &CommandBatch{}); err != nil {
+	if err := db.AutoMigrate(&Command{}, &CommandBatch{}, &DeviceGate{}, &DeviceGateSync{}); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
 	for _, model := range []any{&Command{}, &CommandBatch{}} {

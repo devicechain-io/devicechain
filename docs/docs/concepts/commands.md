@@ -54,7 +54,10 @@ These states mean the command is not finished yet:
   to be away. This is where an offline fleet's backlog collects, and it can sit for days. A held
   command counts as in flight: you can still cancel it, and a TTL that lapses on it records
   `EXPIRED` rather than `TIMEOUT`, because the command never went out. It returns to `QUEUED`
-  when the device comes back.
+  when the device comes back. A command queued for a device that is then
+  [disabled](../guides/device-credentials.md#disabling-a-device) is held too, and stays held until
+  the device is enabled, not until it reconnects: see
+  [Commands held for a disabled device](../guides/sending-commands.md#held-while-disabled).
 - **`SENT`** — published to the device's own command topic, awaiting its response. Read it as
   *dispatched toward a device the platform believed was live*, not as proof the device has it. A
   device that drops between the presence check and the publish still lands here. A command that

@@ -137,3 +137,29 @@ func (r *SchemaResolver) Commands(ctx context.Context, args struct {
 		C: ctx,
 	}, nil
 }
+
+// DeviceCommandHold reports whether a device is disabled and how many commands the platform is
+// holding for it on that account.
+func (r *SchemaResolver) DeviceCommandHold(ctx context.Context, args struct {
+	DeviceToken string
+}) (*DeviceCommandHoldResolver, error) {
+	if err := auth.Authorize(ctx, auth.CommandRead); err != nil {
+		return nil, err
+	}
+
+	disabled, held, err := r.GetApi(ctx).DeviceCommandHold(ctx, args.DeviceToken)
+	if err != nil {
+		return nil, err
+	}
+	return &DeviceCommandHoldResolver{disabled: disabled, held: held}, nil
+}
+
+// DeviceCommandHoldResolver exposes the hold on one device.
+type DeviceCommandHoldResolver struct {
+	disabled bool
+	held     int64
+}
+
+func (r *DeviceCommandHoldResolver) Disabled() bool { return r.disabled }
+
+func (r *DeviceCommandHoldResolver) HeldCount() int32 { return int32(r.held) }

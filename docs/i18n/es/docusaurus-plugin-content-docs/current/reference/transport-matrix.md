@@ -296,7 +296,7 @@ Para dispositivos con recursos limitados sobre CoAP/UDP con DTLS.
 | --- | :---: | --- |
 | Read | ◐ | GET de CoAP; una respuesta de más de 8 KiB se trunca en silencio y se sigue reportando como correcta |
 | Write | ◐ | Un único recurso escalar, solo reemplazo |
-| Execute | ● | Con o sin argumentos |
+| Execute | ● | Con o sin argumentos. Un Execute sin procesar del recurso Factory Reset del objeto Device (`/3/0/5`) se rechaza con `COMMAND_DESTRUCTIVE_REFUSED`; está prevista una operación con nombre y confirmación |
 | Reboot (`lwm2m.reboot`) | ● | Un comando con nombre que ejecuta (Execute) el recurso Reboot del objeto Device; no recibe parámetros |
 | Lectura de información del dispositivo (`lwm2m.readDeviceInfo`) | ● | Un comando con nombre que lee el fabricante, el modelo, el número de serie, la versión de firmware y el nivel de batería del objeto Device, y lista los recursos que el dispositivo no tenía |
 | Recolección de información del dispositivo | ● | Al registrarse se leen una vez los mismos recursos y se guardan como atributos de cliente; como máximo una vez por hora por dispositivo, y nunca retrasa el registro ni la telemetría |

@@ -156,7 +156,7 @@ query {
 Usa `statuses` cuando te importa un conjunto. «Todo lo que sigue en vuelo para este
 dispositivo» es:
 
-- `HELD` — retenido porque el dispositivo está ausente.
+- `HELD` — retenido porque el dispositivo está ausente o está deshabilitado.
 - `PARKED` — publicado hacia un dispositivo que resultó no estar despierto.
 - `SENT` — despachado y sin respuesta.
 
@@ -198,6 +198,41 @@ surtió efecto. Un token que no corresponde a ningún comando *sí* es un error.
 `cancelCommandBatch` aplica exactamente este freno a una escritura de flota completa: se
 cancelan los mismos estados, y se detiene en la misma línea, `SENT`. Consulta [Cancelar un
 lote](../concepts/commands.md#cancelling-a-batch).
+
+### Comandos retenidos para un dispositivo deshabilitado {#held-while-disabled}
+
+Cuando un dispositivo se [deshabilita](./device-credentials.md#disabling-a-device), los comandos
+que ya estaban encolados para él quedan **retenidos**: pasan a `HELD`, no se publican y no se
+cancelan. Cuando el dispositivo se habilita se liberan y salen, del más antiguo al más reciente, siempre
+que el dispositivo esté conectado: uno que sigue desconectado al habilitarlo los mantiene en
+`HELD` hasta que se reconecte, como cualquier dispositivo desconectado. Mientras esperan siguen
+venciendo en su propio `expiresAt`, como `EXPIRED`. Esta retención termina
+solo cuando se habilita el dispositivo, y eso la distingue de un comando retenido para un
+dispositivo que simplemente está desconectado.
+
+Para ver qué está retenido, consulta la retención del dispositivo. `heldCount` es cada comando que
+el dispositivo todavía tiene sin enviar (`QUEUED`, `HELD` o `PARKED`), y es `0` para un
+dispositivo habilitado:
+
+```graphql
+query {
+  deviceCommandHold(deviceToken: "pump-17") { disabled heldCount }
+}
+```
+
+Para descartarlos, cancela todo lo que la plataforma todavía retiene para el dispositivo. Aplica a
+cada comando la misma regla que `cancelCommand`, así que un comando `SENT` nunca se toca, e
+informa cuántos canceló:
+
+```graphql
+mutation {
+  cancelDeviceCommands(deviceToken: "pump-17") { cancelled }
+}
+```
+
+La consola muestra lo mismo en la pestaña **Commands** del dispositivo: «N comandos en cola
+retenidos mientras este dispositivo está deshabilitado», con un botón **Cancel all** para quienes
+pueden escribir comandos.
 
 ## Fija un TTL con el que puedas vivir {#set-a-ttl-you-can-live-with}
 

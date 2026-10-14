@@ -56,7 +56,10 @@ Estos estados significan que el comando aún no ha terminado:
   ausente. Aquí es donde se acumula el pendiente de una flota desconectada, y puede permanecer
   durante días. Un comando retenido cuenta como en tránsito: todavía puedes cancelarlo, y un TTL
   que vence sobre él registra `EXPIRED` y no `TIMEOUT`, porque el comando nunca llegó a salir.
-  Vuelve a `QUEUED` cuando el dispositivo regresa.
+  Vuelve a `QUEUED` cuando el dispositivo regresa. Un comando encolado para un dispositivo que
+  luego se [deshabilita](../guides/device-credentials.md#disabling-a-device) también queda
+  retenido, y sigue así hasta que se habilita el dispositivo, no hasta que se reconecta: consulta
+  [Comandos retenidos para un dispositivo deshabilitado](../guides/sending-commands.md#held-while-disabled).
 - **`SENT`** — publicado en el topic de comandos propio del dispositivo, a la espera de su
   respuesta. Léelo como *despachado hacia un dispositivo que la plataforma creía activo*, no como
   prueba de que el dispositivo lo tiene. Un dispositivo que se cae entre la comprobación de

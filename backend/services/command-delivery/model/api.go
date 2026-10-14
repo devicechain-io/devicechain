@@ -1071,6 +1071,13 @@ func drainableStatusStrings() []string {
 // race, not an error; the current row is returned. (A deleted row surfaces as
 // loadCommand's not-found.)
 //
+// 🔴 IT REFUSES A DISABLED DEVICE'S COMMAND, IN THE UPDATE ITSELF. A disabled device's queued
+// commands are held until it is enabled, and the claim is the one point every dispatch path
+// (the sweep, the nudge, the LwM2M wake drain) passes through, so the rule lives here and not in
+// each caller. The sweep also checks before it claims, to hold the command rather than leave it
+// to fail here every tick; this predicate is what catches a disable that landed in between. A
+// refused claim reads as a lost one: false, nothing published. See DeviceGate.
+//
 // It returns the DISPATCH NONCE it stamped, which the caller must carry in the envelope it
 // publishes. That value is what lets a transport park THIS dispatch and no other; see
 // Command.DispatchNonce and ParkClaim. On a lost claim there is no dispatch, so there is no
@@ -1079,6 +1086,7 @@ func (api *Api) MarkSent(ctx context.Context, id uint) (string, bool, error) {
 	nonce := newDispatchNonce()
 	res := api.RDB.DB(ctx).Model(&Command{Model: gorm.Model{ID: id}}).
 		Where("id = ? AND status IN ?", id, claimableStatusStrings()).
+		Where("(tenant_id, device_token) NOT IN (?)", api.disabledDevices(ctx)).
 		Updates(map[string]any{
 			"status":         CommandSent.String(),
 			"sent_time":      sql.NullTime{Time: time.Now(), Valid: true},
@@ -1720,6 +1728,7 @@ func (api *Api) MarkSentByToken(ctx context.Context, token string) (string, bool
 	nonce := newDispatchNonce()
 	res := api.RDB.DB(ctx).Model(&Command{}).
 		Where("token = ? AND status IN ?", token, claimableStatusStrings()).
+		Where("(tenant_id, device_token) NOT IN (?)", api.disabledDevices(ctx)).
 		Updates(map[string]any{
 			"status":         CommandSent.String(),
 			"sent_time":      sql.NullTime{Time: time.Now(), Valid: true},

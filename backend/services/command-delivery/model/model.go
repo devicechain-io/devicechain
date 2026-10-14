@@ -21,8 +21,9 @@ import (
 //   - QUEUED — accepted; awaiting its FIRST dispatch decision. Genuinely
 //     transient: every row leaves it at the next sweep tick.
 //   - HELD   — the platform is deliberately WITHHOLDING dispatch because the
-//     device is known absent. This is where an offline fleet's backlog
-//     accumulates, and it can sit for days.
+//     device is known absent, or because it is DISABLED (see DeviceGate). This
+//     is where an offline fleet's backlog accumulates, and it can sit for days.
+//     A disabled device's hold ends only when the device is enabled.
 //   - SENT   — dispatched toward a device believed reachable; awaiting its
 //     response.
 //   - PARKED — dispatched, and the transport found the device unreachable, so it
