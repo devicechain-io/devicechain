@@ -260,6 +260,16 @@ export const recipes: Recipe[] = [
     sources: [DEVICES_PAGE],
   },
   {
+    id: 'devices-import',
+    session: 'tenant',
+    route: '/devices',
+    setup: async (page) => {
+      await page.locator('[data-shot="device-import-button"]').click();
+    },
+    anchor: `${DRAWER}[data-shot-drawer="device-import"]`,
+    sources: [DEVICES_PAGE, 'routes/devices/DeviceImportForm.tsx'],
+  },
+  {
     id: 'devices-export-csv',
     session: 'tenant',
     route: '/devices',
