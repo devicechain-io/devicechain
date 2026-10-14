@@ -174,9 +174,11 @@ forward_dex() {
     sleep 1
   done
   # The scratch directory is removed on exit, so say what the log and a last probe said now.
+  local last_probe
+  last_probe="$(curl -sS "${dex_tls[@]}" --resolve "$dex_host:$dex_port:127.0.0.1" -o /dev/null \
+    "https://$dex_host:$dex_port/dex/.well-known/openid-configuration" 2>&1)" || true
   fail "the Dex port-forward never answered. kubectl said: $(tail -n 5 "$rig_tmp/pf.log" 2>/dev/null)
-curl said: $(curl -sS "${dex_tls[@]}" --resolve "$dex_host:$dex_port:127.0.0.1" -o /dev/null \
-    "https://$dex_host:$dex_port/dex/.well-known/openid-configuration" 2>&1 | head -n 1)"
+curl said: $(sed -n '1p' <<<"$last_probe")"
 }
 
 stop_forward() {
