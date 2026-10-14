@@ -19,7 +19,7 @@ import { useQuery } from '@/lib/hooks/use-query';
 import { formatTime } from '@/lib/utils';
 import { useReload } from '@/routes/common';
 
-import { hasNote, remedyKey, shouldPoll, storeProblem, storeState, summarize } from './deletions';
+import { hasNote, isLongDetail, leadClause, remedyKey, shouldPoll, storeProblem, storeState, summarize, translateSummary } from './deletions';
 
 /** How often an in-flight deletion is re-read. Mirrors the alarms page's poll. */
 const POLL_MS = 30000;
@@ -60,7 +60,7 @@ export function TenantDeletionPanel({ token }: { token: string }) {
 
   return (
     <div className="space-y-4">
-      <p className="text-sm">{summary ? t(summary.key, summary.values) : null}</p>
+      <p className="text-sm">{summary ? translateSummary(t, summary) : null}</p>
 
       {data.blockedBy.length > 0 && (
         <ul className="text-sm text-muted-foreground list-disc pl-5 space-y-1">
@@ -102,12 +102,16 @@ function StoreRow({ line }: { line: AdminTenantDeletionStore }) {
         <Badge variant={STATE_VARIANT[state]}>{t(STATE_LABEL[state])}</Badge>
       </DataTableCell>
       <DataTableCell className="text-muted-foreground">
-        {problem}
+        {problem && <Explained text={problem} />}
         {/* The note is a FOOTNOTE to clean, never a problem. A store carrying one is working
             as designed — the telemetry store on an instance with no telemetry, or the
             key-value store's exempted buckets — so it is rendered muted and apart from the
             column that carries things to act on. */}
-        {hasNote(line) && <span className="block text-xs italic mt-1">{line.note}</span>}
+        {hasNote(line) && (
+          <span className="block text-xs italic mt-1">
+            <Explained text={line.note ?? ''} />
+          </span>
+        )}
         {remedy && <span className="block text-xs mt-1">{t(remedy)}</span>}
       </DataTableCell>
       {/* Rows accumulate across passes and are evidence the sweep ran — never a percentage.
@@ -118,6 +122,25 @@ function StoreRow({ line }: { line: AdminTenantDeletionStore }) {
         {line.attemptedAt ? formatTime(line.attemptedAt) : '—'}
       </DataTableCell>
     </DataTableRow>
+  );
+}
+
+/**
+ * A store's explanation. Short text shows as written; a long one shows its lead clause (the
+ * server's own words: what is held and why) with the full text behind a Details control, so
+ * a single store cannot turn the table into a wall of developer prose.
+ */
+function Explained({ text }: { text: string }) {
+  const { t } = useTranslation('tenants');
+  if (!isLongDetail(text)) return <>{text}</>;
+  return (
+    <>
+      <span>{leadClause(text)}</span>
+      <details className="mt-1 text-xs">
+        <summary className="cursor-pointer text-foreground">{t('deletionDetails')}</summary>
+        <p className="mt-1 whitespace-normal">{text}</p>
+      </details>
+    </>
   );
 }
 

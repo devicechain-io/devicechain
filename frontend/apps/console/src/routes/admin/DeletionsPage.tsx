@@ -21,7 +21,7 @@ import type { AdminTenantDeletion } from '@/lib/api/admin';
 import { useQuery } from '@/lib/hooks/use-query';
 import { formatTime } from '@/lib/utils';
 
-import { isComplete, summarize } from './tenants/deletions';
+import { isComplete, summarize, translateSummary } from './tenants/deletions';
 
 /**
  * How many records a page shows.
@@ -161,7 +161,7 @@ function DeletionRow({ deletion }: { deletion: AdminTenantDeletion }) {
           <Badge variant={done ? 'success' : 'secondary'}>
             {t(done ? 'deletionsStatusComplete' : 'deletionsStatusInFlight')}
           </Badge>
-          <span className="text-xs text-muted-foreground">{t(summary.key, summary.values)}</span>
+          <span className="text-xs text-muted-foreground">{translateSummary(t, summary)}</span>
         </div>
       </DataTableCell>
       <DataTableCell className="tabular-nums">{deletion.rowsErased}</DataTableCell>

@@ -17,6 +17,12 @@ const frame = {
   reducedMotion: 'reduce' as const,
   colorScheme: 'light' as const,
   channel: 'chrome', // the installed Chrome: no browser download
+  // No traces, videos or failure screenshots, stated rather than left to the defaults: the
+  // sessions in .auth/ are bearer tokens, and a trace records every request header and the
+  // localStorage the init script writes. The guide's own shots are the only images taken.
+  trace: 'off' as const,
+  video: 'off' as const,
+  screenshot: 'off' as const,
 };
 
 export default defineConfig({
