@@ -56,3 +56,16 @@ func TestTheSignerUniqueIndexes(t *testing.T) {
 	require.NoError(t, sig(1, 2))
 	require.NoError(t, sig(2, 1))
 }
+
+func TestTheAssignmentSignatureMigrationAddsOneNullableColumnAndIsRerunnable(t *testing.T) {
+	require.Greater(t, AssignmentSignatureID, SignersID)
+	db := openDB(t)
+	require.NoError(t, NewAssignmentsSchema().Migrate(db))
+	before := columnNames(t, db, "update_assignments")
+	for range 3 {
+		require.NoError(t, NewAssignmentSignatureSchema().Migrate(db))
+	}
+	require.Equal(t, append(before, "signature_id"), columnNames(t, db, "update_assignments"))
+	require.NoError(t, db.Exec(`INSERT INTO update_assignments (tenant_id, token, device_token, component, artifact_id)
+		VALUES ('acme', 'a1', 'd', 'fw', 1)`).Error, "the column is nullable")
+}

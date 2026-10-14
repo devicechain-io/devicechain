@@ -147,6 +147,28 @@ func (r *UpdateAssignmentResolver) Attempt() *UpdateAttemptResolver {
 	return &UpdateAttemptResolver{M: r.M.Attempt}
 }
 
+// SignedBy is the signer behind the assignment's pinned signature, if it pins one.
+//
+// An assignment that pins a signature whose signature or signer cannot be read is an ERROR, not
+// null: null means "pins nothing", and answering that for a signed assignment would be a downgrade.
+func (r *UpdateAssignmentResolver) SignedBy() (*assignmentSignerResolver, error) {
+	if r.M.Pin == nil {
+		if r.M.Assignment.SignatureId.Valid {
+			return nil, fmt.Errorf("update assignment %q is pinned to a signature that cannot be read", r.M.Assignment.Token)
+		}
+		return nil, nil
+	}
+	return &assignmentSignerResolver{m: r.M.Pin.Signer}, nil
+}
+
+type assignmentSignerResolver struct{ m model.ArtifactSigner }
+
+func (r *assignmentSignerResolver) Token() string     { return r.m.Token }
+func (r *assignmentSignerResolver) Name() string      { return r.m.Name }
+func (r *assignmentSignerResolver) KeyId() string     { return r.m.KeyId }
+func (r *assignmentSignerResolver) Algorithm() string { return r.m.Algorithm }
+func (r *assignmentSignerResolver) State() string     { return r.m.State }
+
 // UpdateAttemptResolver resolves the fields of one update attempt.
 type UpdateAttemptResolver struct{ M model.UpdateAttempt }
 
