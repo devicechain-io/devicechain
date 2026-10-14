@@ -40,5 +40,8 @@
   "adminBadge": "Admin",
   "adminTooltip": "Administración de DeviceChain",
   "adminDeletions": "Eliminaciones",
-  "settings": "Configuración"
+  "settings": "Configuración",
+  "updates": "Actualizaciones",
+  "artifacts": "Artefactos",
+  "signers": "Firmantes"
 }

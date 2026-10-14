@@ -22,7 +22,11 @@ import { cleanup, render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { authorities } = vi.hoisted(() => ({ authorities: { value: [] as string[] } }));
+const { authorities, area } = vi.hoisted(() => ({
+  authorities: { value: [] as string[] },
+  // What area discovery answered for update-management; the Updates group reads it.
+  area: { status: 'unknown' as 'available' | 'absent' | 'unknown' },
+}));
 
 vi.mock('@/auth/AuthProvider', () => ({
   useAuth: () => ({ claims: { authorities: authorities.value } }),
@@ -30,6 +34,10 @@ vi.mock('@/auth/AuthProvider', () => ({
 vi.mock('@/auth/TenantProvider', () => ({
   useCurrentTenant: () => ({ token: 'acme', branding: null }),
 }));
+vi.mock('@/lib/capabilities', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/capabilities')>();
+  return { ...actual, useAreaStatus: () => area.status };
+});
 vi.mock('@/lib/useBrandingLogo', () => ({ useBrandingLogoSrc: () => null }));
 vi.mock('@/routes/NavUser', () => ({ NavUser: () => null }));
 
@@ -39,6 +47,7 @@ import { AppSidebar } from './AppSidebar';
 afterEach(cleanup);
 beforeEach(() => {
   authorities.value = [];
+  area.status = 'unknown';
 });
 
 // The sidebar is an accordion: a group renders its label always, and its CHILDREN
@@ -151,5 +160,30 @@ describe('the record-management nav is untouched by the grouping', () => {
   it('always shows Dashboard, which requires nothing', () => {
     renderWith([]);
     expect(entry('Dashboard')).toBeTruthy();
+  });
+});
+
+describe('the Updates group', () => {
+  // Opt-in area: the group needs the area KNOWN to be deployed AND artifact:read. Each
+  // of the two is withheld in turn, so neither can satisfy the other's test.
+  it('shows Artifacts and Signers when the area is deployed and the caller can read', () => {
+    area.status = 'available';
+    renderWith(['artifact:read'], '/updates/artifacts');
+
+    expect(entry('Updates')).toBeTruthy();
+    expect(entry('Artifacts')).toBeTruthy();
+    expect(entry('Signers')).toBeTruthy();
+  });
+
+  it('is hidden without artifact:read even when the area is deployed', () => {
+    area.status = 'available';
+    renderWith(['device:read']);
+    expect(entry('Updates')).toBeNull();
+  });
+
+  it.each(['unknown', 'absent'] as const)('is hidden while the area is %s, even for a reader', (status) => {
+    area.status = status;
+    renderWith(['artifact:read']);
+    expect(entry('Updates')).toBeNull();
   });
 });

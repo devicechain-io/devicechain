@@ -11,6 +11,7 @@ import {
   ChevronRight,
   CalendarClock,
   Cpu,
+  FileArchive,
   Filter,
   Languages,
   Layers,
@@ -23,8 +24,10 @@ import {
   Palette,
   ScrollText,
   Send,
+  ShieldCheck,
   SlidersHorizontal,
   Tags,
+  UploadCloud,
   Webhook,
   type LucideIcon,
 } from 'lucide-react';
@@ -50,6 +53,7 @@ import { useCurrentTenant } from '@/auth/TenantProvider';
 import { useBrandingLogoSrc } from '@/lib/useBrandingLogo';
 import { hasAuthority, type DecodedClaims } from '@devicechain/client';
 import { NavUser } from '@/routes/NavUser';
+import { useUpdateAccess } from '@/lib/updateAuthority';
 
 interface NavLeaf {
   // A key into the `nav` catalog (ADR-066), resolved with t() at render — never a
@@ -59,6 +63,9 @@ interface NavLeaf {
   icon: LucideIcon;
   // Authority required to see this item; omit for always-visible (e.g. Dashboard).
   requires?: string;
+  // Names a gate beyond authority. 'updates' hides the item unless the update-management
+  // area is KNOWN to be deployed and the caller may read it (see useUpdateAccess).
+  gate?: 'updates';
 }
 
 type NavGroupNode = { labelKey: string; icon: LucideIcon; children: NavLeaf[] };
@@ -137,6 +144,19 @@ const NAV: NavNode[] = [
   // axes, preview matches live, save it as a dynamic group. Cross-cutting like Facets.
   { labelKey: 'browse', href: '/browse', icon: Filter, requires: 'device:read' },
   { labelKey: 'audit', href: '/audit', icon: ScrollText, requires: 'audit:read' },
+  // Over-the-air updates: an OPT-IN area (held out of the default profile), so the whole
+  // group is gated on the area being known to be deployed, not on authority alone. The
+  // nav FAILS CLOSED while discovery is unanswered (a hidden entry is recoverable, an
+  // entry that leads to a "not deployed" page on every default instance is not), which
+  // is the opposite of what the routed pages do; see useUpdateAccess.
+  {
+    labelKey: 'updates',
+    icon: UploadCloud,
+    children: [
+      { labelKey: 'artifacts', href: '/updates/artifacts', icon: FileArchive, requires: 'artifact:read', gate: 'updates' },
+      { labelKey: 'signers', href: '/updates/signers', icon: ShieldCheck, requires: 'artifact:read', gate: 'updates' },
+    ],
+  },
   // Everything above this line manages RECORDS; everything in here configures the
   // TENANT ITSELF. Grouping them separates two genuinely different questions, and the
   // config half is the half that grows.
@@ -180,17 +200,18 @@ function isLeaf(node: NavNode): node is NavLeaf {
   return 'href' in node;
 }
 
-function canSee(leaf: NavLeaf, claims: DecodedClaims | null): boolean {
+function canSee(leaf: NavLeaf, claims: DecodedClaims | null, updatesVisible: boolean): boolean {
+  if (leaf.gate === 'updates' && !updatesVisible) return false;
   return !leaf.requires || hasAuthority(claims, leaf.requires);
 }
 
 // Drop nav the user can't use: leaves they lack the authority for, and any group
 // left with no visible children. Pages stay fail-closed server-side regardless;
 // this just avoids advertising what would only return "forbidden".
-function visibleNav(claims: DecodedClaims | null): NavNode[] {
+function visibleNav(claims: DecodedClaims | null, updatesVisible: boolean): NavNode[] {
   return NAV.flatMap<NavNode>((node) => {
-    if (isLeaf(node)) return canSee(node, claims) ? [node] : [];
-    const children = node.children.filter((c) => canSee(c, claims));
+    if (isLeaf(node)) return canSee(node, claims, updatesVisible) ? [node] : [];
+    const children = node.children.filter((c) => canSee(c, claims, updatesVisible));
     return children.length > 0 ? [{ ...node, children }] : [];
   });
 }
@@ -215,7 +236,8 @@ export function AppSidebar() {
   const tenant = useCurrentTenant();
   const brandLogo = useBrandingLogoSrc(tenant?.branding?.logo);
   const brandHeight = tenant?.branding?.logoMaxHeight ?? 24;
-  const nav = visibleNav(claims);
+  const updates = useUpdateAccess();
+  const nav = visibleNav(claims, updates.canRead);
   const activeGroup = activeGroupKey(pathname);
   // Accordion: at most one group expanded at a time, to keep the rail uncluttered.
   // Default to the group that owns the current route, and follow the route when it
