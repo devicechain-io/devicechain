@@ -15,6 +15,7 @@
   "inheritPlaceholder": "heredar",
   "loadingBranding": "Cargando marca…",
   "logoDescription": "Sube un PNG/JPEG/WebP (≤1 MB, almacenado en el almacén de objetos) o pega una URL https (cualquier imagen, incl. SVG). Se aplica de inmediato — no forma parte de Guardar.",
+  "instanceLogoDescription": "Una URL https a una imagen (cualquier formato, incluido SVG) que ven todos los inquilinos que no han definido su propio logotipo. Se guarda con Guardar anulación.",
   "logoLabel": "Logotipo",
   "logoMaxHeightDescription": "Qué tan alto se muestra el logotipo en el chip/barra lateral (16–200). En blanco = 28.",
   "logoMaxHeightLabel": "Altura máxima del logotipo (px)",
