@@ -436,7 +436,7 @@ describe('no network beyond the two files', () => {
     await act(async () => ticker.frame(3000));
     await seekTo(25_000);
     await act(async () => {
-      fireEvent.change(screen.getByLabelText('Machine'), { target: { value: 'sp-hauler-02' } });
+      fireEvent.change(screen.getByLabelText('Select selectedMachine'), { target: { value: 'sp-hauler-02' } });
     });
     await settle();
 
@@ -449,7 +449,7 @@ describe('no network beyond the two files', () => {
 describe('selection', () => {
   it('lists the Machine selector candidates from the recording, so it is wired and not inert', async () => {
     await mountApp(await fixtureRecordingText());
-    const pick = screen.getByLabelText('Machine') as HTMLSelectElement;
+    const pick = screen.getByLabelText('Select selectedMachine') as HTMLSelectElement;
     expect(Array.from(pick.options).map((o) => o.value)).toEqual(
       expect.arrayContaining(['sp-hauler-01', 'sp-hauler-02', 'sp-plant-01']),
     );
@@ -457,7 +457,7 @@ describe('selection', () => {
 
   it('keeps the selected machine across a seek', async () => {
     await mountApp(await fixtureRecordingText());
-    const pick = () => screen.getByLabelText('Machine') as HTMLSelectElement;
+    const pick = () => screen.getByLabelText('Select selectedMachine') as HTMLSelectElement;
     await act(async () => {
       fireEvent.change(pick(), { target: { value: 'sp-hauler-02' } });
     });
@@ -473,7 +473,7 @@ describe.skipIf(!EXCERPT_AVAILABLE)('the first recorded run (converter excerpt)'
   const T_ALARM = 441_124;
 
   it('golden at 441.2 s: one MAJOR alarm, and SP-HL-0003 tyre pressure 599.6 after the drill', async () => {
-    await mountApp(excerptText());
+    await mountApp(await excerptText());
     await seekTo(441_200);
 
     const text = document.body.textContent ?? '';
@@ -489,27 +489,27 @@ describe.skipIf(!EXCERPT_AVAILABLE)('the first recorded run (converter excerpt)'
       fireEvent.click(screen.getByRole('button', { name: 'sp-hauler-03' }));
     });
     await settle();
-    expect((screen.getByLabelText('Machine') as HTMLSelectElement).value).toBe('sp-hauler-03');
+    expect((screen.getByLabelText('Select selectedMachine') as HTMLSelectElement).value).toBe('sp-hauler-03');
     expect(canvasText.join('|')).toContain('599.6');
   });
 
   it('the Machine selector drives the same gauge', async () => {
-    await mountApp(excerptText());
+    await mountApp(await excerptText());
     await seekTo(441_200);
     await act(async () => {
-      fireEvent.change(screen.getByLabelText('Machine'), { target: { value: 'sp-hauler-03' } });
+      fireEvent.change(screen.getByLabelText('Select selectedMachine'), { target: { value: 'sp-hauler-03' } });
     });
     await settle();
     expect(canvasText.join('|')).toContain('599.6');
   });
 
   it('shows the map as "Not in this recording", never as an empty map', async () => {
-    await mountApp(excerptText());
+    await mountApp(await excerptText());
     expect(document.body.textContent).toContain('Not in this recording');
   });
 
   it('a chapter that asserts an alarm lands on a board that shows it', async () => {
-    const { view } = await mountApp(excerptText());
+    const { view } = await mountApp(await excerptText());
     const chapter = screen.getByRole('button', { name: /tyre alarm/ });
     expect(chapter.textContent).toContain('0:21');
     await act(async () => {
@@ -522,7 +522,7 @@ describe.skipIf(!EXCERPT_AVAILABLE)('the first recorded run (converter excerpt)'
   });
 
   it('control: one millisecond before the chapter the alarm is not yet on the board', async () => {
-    const { view } = await mountApp(excerptText());
+    const { view } = await mountApp(await excerptText());
     await seekTo(T_ALARM - 1);
     expect(view.container.textContent).not.toContain('tyre-pressure-low');
     expect(view.container.textContent).toContain('Major alarmsacme-earthworks0alarms');

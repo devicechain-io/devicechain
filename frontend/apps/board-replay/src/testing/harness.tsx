@@ -44,8 +44,14 @@ export async function fixtureRecordingText(mutate?: (doc: Record<string, any>) =
   return JSON.stringify(doc);
 }
 
-export function excerptText(): string {
-  return readFileSync(EXCERPT_PATH, 'utf-8');
+// The excerpt is a real run's DATA, committed byte-for-byte (see its .sha256), and it pins the
+// board it was captured against by hash. That board has since been re-laid out, so the hash is
+// re-pointed at the committed fixture here, in memory: what these tests prove is that the
+// current board renders the recorded measurements, not that the board is the captured one.
+export async function excerptText(): Promise<string> {
+  const doc = JSON.parse(readFileSync(EXCERPT_PATH, 'utf-8'));
+  doc.board = { ...doc.board, sha256: await boardSha256() };
+  return JSON.stringify(doc);
 }
 
 export interface FetchStub {

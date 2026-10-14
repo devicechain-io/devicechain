@@ -9,8 +9,14 @@ import (
 )
 
 // The sitepulse board, `sp-dashboard`: fleet fuel, haul-truck payload, the site's active
-// alarms, machine positions and the crusher plant, sized to sit on one screen beside the
-// 3D window the Unity player renders.
+// alarms, machine positions and the crusher plant, laid out to sit beside the 3D window the
+// Unity player renders.
+//
+// 🔴 THE BOARD ASSUMES ~960 px OF WIDTH (half a 1920 screen, the other half being the 3D
+// window) AND 1080 px OF HEIGHT. It is not capped to one screen: the ORDERING RULE is that
+// the alarms, the KPI row and the map end above the fold (sitepulseFoldRows), and the cards
+// may scroll below it. Every widget is sized to be readable at that width (24 columns of
+// ~32 px), which the frontend layout lint enforces over the committed fixture.
 //
 // 🔴 THE WIDGET LIBRARY HAS NO VIEW THAT DRAWS ONE MEASUREMENT ACROSS MANY DEVICES.
 // useMeasurementStream keys its latest values by measurement NAME only, so a table or
@@ -55,9 +61,20 @@ const (
 	sitepulseSlotMachine = "selectedMachine"
 
 	// One row of cards per machine kind, so the per-kind cap is DERIVED from the grid
-	// rather than chosen: six four-column cards fill the 24 columns.
-	sitepulseCardColSpan  = 4
+	// rather than chosen: four six-column cards fill the 24 columns. A card is 6x3, the
+	// smallest box a latest-card stays legible in at 960 px wide.
+	sitepulseCardColSpan  = 6
+	sitepulseCardRowSpan  = 3
 	sitepulseCardsPerKind = dashboardGridColumns / sitepulseCardColSpan
+
+	// The fold: the rows a 1080 px-tall window shows (rows are 40 px + an 8 px gap). The
+	// alarm surfaces, the KPI row and the map must END at or above it; the rest may scroll.
+	sitepulseFoldRows = 1080 / (dashboardGridRowHeight + dashboardGridGap)
+
+	// Rows. KPIs (3 rows) lead, then the alarm table and the map stack beside the machine
+	// controls in a band that ends at row 13; the fuel label (2 rows) and the card bands follow.
+	sitepulseFuelLabelRow = 13
+	sitepulseFuelFirstRow = 15
 
 	// Display scales for the two gauges. Not contract values: the only fixed points are
 	// the rule thresholds, and each scale keeps its threshold well inside the arc.
@@ -142,7 +159,7 @@ func buildSitepulseDashboard(devices []DeviceInstance) (string, error) {
 	// An empty unit is no unit: omit the key rather than author a blank one.
 	delete(running.Options, "unit")
 
-	alarms := buildAlarmTableWidget("sp-alarms", box{0, 12, 12, 8}, onSite, "Active alarms", sitepulseSlotMachine)
+	alarms := buildAlarmTableWidget("sp-alarms", box{0, 16, 3, 5}, onSite, "Active alarms", sitepulseSlotMachine)
 	// ACTIVE only: this is an operator board, and a cleared row must not push a live
 	// critical off a 25-row page. The raise-then-clear story shows on the counts and cards.
 	alarms.Options["state"] = AlarmStateActiveWire
@@ -174,18 +191,18 @@ func buildSitepulseDashboard(devices []DeviceInstance) (string, error) {
 		if n > shown {
 			shown = n
 		}
-		fuelBands = append(fuelBands, band{devices: all[:n], row: 4 + 2*i})
+		fuelBands = append(fuelBands, band{devices: all[:n], row: sitepulseFuelFirstRow + sitepulseCardRowSpan*i})
 	}
 
-	widgets = append(widgets, buildLabelWidget("sp-fuel-label", box{0, 24, 3, 1}, sitepulseFuelBandText(shown, perKind), "left", 14))
+	widgets = append(widgets, buildLabelWidget("sp-fuel-label", box{0, 24, sitepulseFuelLabelRow, 2}, sitepulseFuelBandText(shown, perKind), "left", 14))
 
 	for _, b := range fuelBands {
 		for i, d := range b.devices {
 			slots[d.Token] = sitepulseDeviceSlot(d.ExternalId, d, nil)
 			// No flash: a draining tank would flash red on every tick.
-			widgets = append(widgets, buildLatestCardWidget("sp-fuel-"+d.Token, box{sitepulseCardColSpan * i, sitepulseCardColSpan, b.row, 2},
+			widgets = append(widgets, buildLatestCardWidget("sp-fuel-"+d.Token, box{sitepulseCardColSpan * i, sitepulseCardColSpan, b.row, sitepulseCardRowSpan},
 				widgetSubject{Slot: d.Token, Measurements: []string{SitepulseFuelKey}},
-				d.ExternalId, SitepulseFuelKey, "%", 0, false))
+				"Fuel %", SitepulseFuelKey, "%", 0, false))
 		}
 	}
 
@@ -195,20 +212,20 @@ func buildSitepulseDashboard(devices []DeviceInstance) (string, error) {
 	}
 	for i, d := range haulers {
 		slots[d.Token] = sitepulseDeviceSlot(d.ExternalId, d, nil)
-		widgets = append(widgets, buildLatestCardWidget("sp-payload-"+d.Token, box{sitepulseCardColSpan * i, sitepulseCardColSpan, 10, 2},
+		widgets = append(widgets, buildLatestCardWidget("sp-payload-"+d.Token, box{sitepulseCardColSpan * i, sitepulseCardColSpan, sitepulseFuelFirstRow + sitepulseCardRowSpan*len(sitepulseMachineKinds), sitepulseCardRowSpan},
 			widgetSubject{Slot: d.Token, Measurements: []string{SitepulsePayloadKey}},
-			d.ExternalId+" payload", SitepulsePayloadKey, "t", 1, false))
+			"Payload", SitepulsePayloadKey, "t", 1, false))
 	}
 
 	widgets = append(widgets,
 		alarms,
-		buildMapWidget("sp-map", box{12, 6, 12, 8},
+		buildMapWidget("sp-map", box{0, 16, 8, 5},
 			widgetSubject{Slot: sitepulseSlotSite, Measurements: []string{}, Location: "latest"}, "Machine positions"),
-		buildEntitySelectorWidget("sp-machine-select", box{18, 6, 12, 2}, "Machine", sitepulseSlotMachine),
-		buildGaugeWidget("sp-engine-temp", box{18, 6, 14, 3}, onMachine(SitepulseEngineTempKey),
+		buildEntitySelectorWidget("sp-machine-select", box{16, 8, 3, 2}, "", sitepulseSlotMachine),
+		buildGaugeWidget("sp-engine-temp", box{16, 8, 5, 4}, onMachine(SitepulseEngineTempKey),
 			fmt.Sprintf("Engine temp — overheat above %g °C", SitepulseOverheatThreshold),
 			SitepulseEngineTempKey, "°C", 0, sitepulseEngineTempGaugeMax),
-		buildGaugeWidget("sp-tyre", box{18, 6, 17, 3}, onMachine(SitepulseTyreKey),
+		buildGaugeWidget("sp-tyre", box{16, 8, 9, 4}, onMachine(SitepulseTyreKey),
 			fmt.Sprintf("Tyre pressure — low below %g kPa", SitepulseTyrePressureThreshold),
 			SitepulseTyreKey, "kPa", 0, sitepulseTyreGaugeMax),
 	)
