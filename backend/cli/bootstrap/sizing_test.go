@@ -172,6 +172,7 @@ func defaultIngestCeiling(t *testing.T) float64 {
 // limit comes from the sustained-rate rule below, event-processing's from the
 // headroom rule over gkeSplitPoolCores.)
 func TestShippedCPULimitsCarryTheDefaultIngestCeiling(t *testing.T) {
+	t.Parallel()
 	ceiling := defaultIngestCeiling(t)
 	for _, tc := range []struct {
 		name string
@@ -233,6 +234,7 @@ func cpuLimitShortfalls(t *testing.T, got map[string]renderedContainer, perEvent
 // counterweight: it needs about half of 500m, so this rule does not raise it (its
 // limit comes from the headroom rule over gkeSplitPoolCores).
 func TestShippedCPULimitsCarryTheMeasuredSustainedRate(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name string
 		st   *State
@@ -328,6 +330,7 @@ func sizedRequest(cores float64, floor int64) int64 {
 // with no measured request of its own, not restated. Memory requests do not move:
 // no event-path pod's working set passed 51Mi on that cluster, up to 9,200 events/s.
 func TestShippedCPURequestsAreTheMeasuredUseAtTheSizingRate(t *testing.T) {
+	t.Parallel()
 	got := byArea(t, renderContainers(t, helmValues(compactState(false))))
 
 	const plain = "command-delivery"
@@ -460,6 +463,7 @@ func cpuHeadroomShortfalls(t *testing.T, got map[string]renderedContainer) []str
 // The other four pass at 2 cores; event-sources by 40m (1,960m), which a re-measure
 // that moves its figure up will turn into a failure. That is the rule working.
 func TestShippedCPULimitsHaveHeadroomOverTheMeasuredUse(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name string
 		st   *State
@@ -502,6 +506,7 @@ func TestShippedCPULimitsHaveHeadroomOverTheMeasuredUse(t *testing.T) {
 // request came from and how to turn the measured requests off, and turning them
 // off has to work.
 func TestMeasuredRequestAboveAnOperatorsLimitNamesMeasuredRequests(t *testing.T) {
+	t.Parallel()
 	lowered := func() map[string]interface{} {
 		return map[string]interface{}{
 			"functionalAreas": map[string]interface{}{
@@ -570,6 +575,7 @@ func TestMeasuredRequestAboveAnOperatorsLimitNamesMeasuredRequests(t *testing.T)
 // requests at all, so --compact's lowered requests (written at the top level) never
 // reached it.
 func TestAreaResourcesMergeOverTheDefaults(t *testing.T) {
+	t.Parallel()
 	raised := map[string]string{
 		"device-management": "2", "event-management": "2",
 		"event-sources": "2", "device-state": "2", "event-processing": "1",
@@ -700,6 +706,7 @@ func TestAreaResourcesMergeOverTheDefaults(t *testing.T) {
 // that used to be valid: an area that set only requests.memory: 512Mi used to get
 // no limits, and now gets the top-level 256Mi.
 func TestAreaRequestAboveItsLimitIsRefused(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name, dim, request string
 	}{
@@ -760,6 +767,7 @@ func TestAreaRequestAboveItsLimitIsRefused(t *testing.T) {
 // so a top-level request reaches such an area only when they are off: which is
 // exactly what --compact does, and so the case this refusal is for.
 func TestTopLevelRequestAboveAnAreasOwnLimitNamesWhereTheLimitIsSet(t *testing.T) {
+	t.Parallel()
 	_, err := renderChart(t, map[string]interface{}{
 		"useMeasuredRequests": false,
 		"resources": map[string]interface{}{
@@ -794,6 +802,7 @@ func TestTopLevelRequestAboveAnAreasOwnLimitNamesWhereTheLimitIsSet(t *testing.T
 // typo such as `limit:` for `limits:` is merged into the pod spec and the limit
 // it meant is silently not applied.
 func TestAreaResourcesRefuseAnUnknownKey(t *testing.T) {
+	t.Parallel()
 	_, err := renderChart(t, map[string]interface{}{
 		"functionalAreas": map[string]interface{}{
 			"event-sources": map[string]interface{}{
@@ -818,6 +827,7 @@ func TestAreaResourcesRefuseAnUnknownKey(t *testing.T) {
 // hurts most: `avoidEventStorePrimry: false` would render, and the pod would keep
 // the placement rule it was meant to drop.
 func TestAreaValuesRefuseAnUnknownKey(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name string
 		area map[string]interface{}
@@ -872,6 +882,7 @@ func TestAreaValuesRefuseAnUnknownKey(t *testing.T) {
 // The counterweight is every other test here: dcctl's own values, which set only
 // declared keys, still render.
 func TestTopLevelValuesRefuseAnUnknownKey(t *testing.T) {
+	t.Parallel()
 	_, err := renderChart(t, map[string]interface{}{"useMeasuredRequest": false})
 	if err == nil {
 		t.Fatal("a top-level useMeasuredRequest rendered; the chart reads no such key")
@@ -885,6 +896,7 @@ func TestTopLevelValuesRefuseAnUnknownKey(t *testing.T) {
 // is below every limit, which is the one answer the comparison exists to withhold.
 // ".5" is the counterweight, a valid form that must still render.
 func TestAreaResourcesRefuseAnUnreadableQuantity(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct{ dim, quantity string }{
 		{"memory", "1gi"},
 		{"cpu", "2cores"},

@@ -4,12 +4,14 @@
 package bootstrap
 
 import (
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 
 	"helm.sh/helm/v3/pkg/release"
@@ -118,13 +120,47 @@ func TestOnlyTheSweepMayMentionTheLegacyReleaseName(t *testing.T) {
 	}
 }
 
-// packageFiles parses this package's non-test sources.
+// packageFiles returns this package's non-test sources, parsed once per test binary.
+//
+// 🔴 PARSED ONCE, BECAUSE THE CALLERS ARE NOT CHEAP TO MULTIPLY. Every AST gate in the
+// package goes through here, and TestOnlyTheSweepMayMentionTheLegacyReleaseName asks
+// for the string literals of every declaration in turn, so a parse per call made that
+// one test parse the whole package once per function: about 700 times over 80 files.
+// That was 20 s of the package's 165 s without the race detector and 119 s of its
+// 737 s under it, measured, and it is the shape that drove the package past go test's
+// 20 minute budget on a slow CI runner. The sources cannot change while the binary
+// runs, and every caller only reads the trees, so one parse answers them all.
+//
+// The result is shared: a caller must not modify the returned files.
 func packageFiles(t *testing.T) (*token.FileSet, []*ast.File) {
 	t.Helper()
+	parsedPackage.once.Do(func() {
+		parsedPackage.fset, parsedPackage.files, parsedPackage.err = parsePackageFiles()
+	})
+	if parsedPackage.err != nil {
+		t.Fatal(parsedPackage.err)
+	}
+	if len(parsedPackage.files) == 0 {
+		// 🔴 AN EMPTY PARSE WOULD MAKE EVERY GATE IN THIS FILE PASS BY FINDING NOTHING.
+		t.Fatal("parsed no source files, so these gates checked nothing")
+	}
+	return parsedPackage.fset, parsedPackage.files
+}
+
+// parsedPackage holds packageFiles' one parse.
+var parsedPackage struct {
+	once  sync.Once
+	fset  *token.FileSet
+	files []*ast.File
+	err   error
+}
+
+// parsePackageFiles parses every non-test .go file in this package's directory.
+func parsePackageFiles() (*token.FileSet, []*ast.File, error) {
 	fset := token.NewFileSet()
 	entries, err := os.ReadDir(".")
 	if err != nil {
-		t.Fatalf("reading this package's directory: %v", err)
+		return nil, nil, fmt.Errorf("reading this package's directory: %w", err)
 	}
 	var files []*ast.File
 	for _, e := range entries {
@@ -134,15 +170,11 @@ func packageFiles(t *testing.T) (*token.FileSet, []*ast.File) {
 		}
 		f, err := parser.ParseFile(fset, name, nil, 0)
 		if err != nil {
-			t.Fatalf("parsing %s: %v", name, err)
+			return nil, nil, fmt.Errorf("parsing %s: %w", name, err)
 		}
 		files = append(files, f)
 	}
-	if len(files) == 0 {
-		// 🔴 AN EMPTY PARSE WOULD MAKE EVERY GATE IN THIS FILE PASS BY FINDING NOTHING.
-		t.Fatal("parsed no source files, so these gates checked nothing")
-	}
-	return fset, files
+	return fset, files, nil
 }
 
 // callsWithin returns, in source order, which of the named functions are called inside fn.

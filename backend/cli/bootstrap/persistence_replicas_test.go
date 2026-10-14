@@ -127,6 +127,7 @@ var persistenceCases = []struct {
 // The ruling and the measurement: under --ha, without --compact, event-management runs
 // as two pods; every other combination, and every other area, stays at one.
 func TestEventManagementRunsTwoPodsOnlyUnderHaWithoutCompact(t *testing.T) {
+	t.Parallel()
 	for _, c := range persistenceCases {
 		t.Run(c.name, func(t *testing.T) {
 			areas := renderAreas(t, helmValues(persistenceState(c.ha, c.compact, c.profile)))
@@ -190,6 +191,7 @@ func TestEventManagementRunsTwoPodsOnlyUnderHaWithoutCompact(t *testing.T) {
 // the tuned benchmark's values file verbatim gives two pods, a PDB and the spread;
 // replicas 1 gives none of them; and a top-level replicas 2 gives every area a PDB.
 func TestTheRenderedReplicaReaderSeesWhatTheChartWasGiven(t *testing.T) {
+	t.Parallel()
 	two := renderAreas(t, map[string]interface{}{
 		"functionalAreas": map[string]interface{}{"event-management": map[string]interface{}{"replicas": 2}},
 	})
@@ -229,6 +231,7 @@ func TestTheRenderedReplicaReaderSeesWhatTheChartWasGiven(t *testing.T) {
 // Both tools that need the count get it, from the one value: the chart above, and
 // the instance root here, whose event store reserves connections per pod.
 func TestInfraVarsCarryTheEventManagementReplicaCount(t *testing.T) {
+	t.Parallel()
 	for _, c := range persistenceCases {
 		t.Run(c.name, func(t *testing.T) {
 			st := persistenceState(c.ha, c.compact, c.profile)
@@ -250,6 +253,7 @@ func TestInfraVarsCarryTheEventManagementReplicaCount(t *testing.T) {
 // The numbers the reserve is built from: one pod's pool, doubled for a rollout, is
 // the per-pod base, and the rollout that doubling assumes is the chart's maxSurge 1.
 func TestTheEventStoreReserveIsOnePodsRolloutPerPod(t *testing.T) {
+	t.Parallel()
 	if got := tofuVariableDefault(t, "event_management_replicas"); got != "1" {
 		t.Errorf("event_management_replicas defaults to %s, want 1: a direct tofu user who "+
 			"installs the chart at its default must get today's reserve", got)
@@ -277,6 +281,7 @@ func TestTheEventStoreReserveIsOnePodsRolloutPerPod(t *testing.T) {
 // The event-management block is merged into functionalAreas, so another feature's
 // block for another area survives it, and it survives that one.
 func TestEventManagementReplicasLeaveAnotherAreasBlockAlone(t *testing.T) {
+	t.Parallel()
 	st := persistenceState(true, false, "default")
 	st.EnabledAreas = []string{"user-management", "device-management", "event-sources", "event-management", "lwm2m-ingest"}
 	st.Lwm2mIdentities = []Lwm2mIdentity{{Identity: "dev-1", PSK: "c2VjcmV0", Tenant: "acme", ExternalID: "dev-1"}}
@@ -314,6 +319,9 @@ func TestEventManagementReplicasLeaveAnotherAreasBlockAlone(t *testing.T) {
 
 // An upgrade that skips the infrastructure moves the services and not the event
 // store's reserve, so a --ha one says so.
+//
+// Not parallel: captureStdout swaps os.Stdout for the whole process, so a parallel
+// test printing meanwhile would land in this one's capture, or be lost from its own.
 func TestASkippedInfrastructureUpgradeSaysTheReserveDidNotMove(t *testing.T) {
 	opts := UpgradeOptions{Options: Options{Instance: "prod"}}
 	st := persistenceState(true, false, "default")

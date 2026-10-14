@@ -240,6 +240,7 @@ func walkRendered(path string, v interface{}, onMap func(string, map[string]inte
 // gains later is covered the day it renders, which is the whole reason this is not a
 // list.
 func TestEveryRenderedObjectIsInTheInstanceNamespace(t *testing.T) {
+	t.Parallel()
 	want := InstanceNamespace(nsTestInstanceID)
 	docs := renderNamespaceFixture(t)
 
@@ -283,6 +284,7 @@ func TestEveryRenderedObjectIsInTheInstanceNamespace(t *testing.T) {
 // nobody else touches — and it is also the one an install can hide, because
 // instance.createNamespace is optional and dcctl creates the namespace itself.
 func TestTheRenderedNamespaceObjectIsTheInstanceNamespace(t *testing.T) {
+	t.Parallel()
 	want := InstanceNamespace(nsTestInstanceID)
 	docs := renderNamespaceFixture(t)
 
@@ -356,6 +358,7 @@ var promQLNamespaceMatcher = regexp.MustCompile(`\bnamespace\s*(=~|!~|!=|=)\s*"(
 // both PodMonitors and every PrometheusRule are covered by construction, along with
 // anything added next to them.
 func TestEveryNamespaceNamedInTheRenderedManifestIsAccountedFor(t *testing.T) {
+	t.Parallel()
 	want := InstanceNamespace(nsTestInstanceID)
 	docs := renderNamespaceFixture(t)
 
@@ -444,6 +447,7 @@ func TestEveryNamespaceNamedInTheRenderedManifestIsAccountedFor(t *testing.T) {
 // and there is no picker to correct it: bound to the wrong string, every panel is
 // silently empty and the board still loads perfectly.
 func TestGrafanaBoardsAreScopedToTheInstanceNamespace(t *testing.T) {
+	t.Parallel()
 	want := InstanceNamespace(nsTestInstanceID)
 	docs := renderNamespaceFixture(t)
 
@@ -541,6 +545,7 @@ func TestGrafanaBoardsAreScopedToTheInstanceNamespace(t *testing.T) {
 
 // (6) The devicechain.io/instance label — everywhere it appears, including as a selector.
 func TestTheInstanceLabelDidNotGainTheNamespacePrefix(t *testing.T) {
+	t.Parallel()
 	docs := renderNamespaceFixture(t)
 
 	seen := 0
@@ -567,6 +572,7 @@ func TestTheInstanceLabelDidNotGainTheNamespacePrefix(t *testing.T) {
 
 // (7) The devicechain_instance alert label. Alert routing groups on it.
 func TestTheAlertInstanceLabelDidNotGainTheNamespacePrefix(t *testing.T) {
+	t.Parallel()
 	docs := renderNamespaceFixture(t)
 
 	seen := 0
@@ -594,6 +600,7 @@ func TestTheAlertInstanceLabelDidNotGainTheNamespacePrefix(t *testing.T) {
 // (8) DC_INSTANCE_ID in the pod environment. Every service derives its database name, its
 // messaging subjects and its MQTT topics from this.
 func TestTheInstanceIdEnvVarDidNotGainTheNamespacePrefix(t *testing.T) {
+	t.Parallel()
 	docs := renderNamespaceFixture(t)
 
 	seen := 0
@@ -621,6 +628,7 @@ func TestTheInstanceIdEnvVarDidNotGainTheNamespacePrefix(t *testing.T) {
 // install's Secret, ConfigMap, claim, ServiceAccount or policy is ORPHANED by a rename,
 // and the mount, the token and the egress boundary go with it.
 func TestObjectNamesDerivedFromTheInstanceIdDidNotGainTheNamespacePrefix(t *testing.T) {
+	t.Parallel()
 	docs := renderNamespaceFixture(t)
 
 	present := map[string]bool{}
@@ -667,6 +675,7 @@ func TestObjectNamesDerivedFromTheInstanceIdDidNotGainTheNamespacePrefix(t *test
 // set of objects this render actually produced, which is the half that survives a rename
 // applied consistently to the wrong string.
 func TestPodObjectReferencesDidNotGainTheNamespacePrefix(t *testing.T) {
+	t.Parallel()
 	docs := renderNamespaceFixture(t)
 
 	rendered := map[string]bool{}
@@ -736,6 +745,7 @@ func TestPodObjectReferencesDidNotGainTheNamespacePrefix(t *testing.T) {
 // title. All four name the INSTANCE, and all four are how two instances on one cluster
 // stay apart in a sidecar that writes every board into one directory.
 func TestGrafanaBoardIdentityDidNotGainTheNamespacePrefix(t *testing.T) {
+	t.Parallel()
 	docs := renderNamespaceFixture(t)
 
 	boards := 0
