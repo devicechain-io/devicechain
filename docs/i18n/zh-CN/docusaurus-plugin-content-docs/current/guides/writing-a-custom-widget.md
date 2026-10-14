@@ -73,6 +73,7 @@ export const tankLevelWidget = defineWidget({
 | `defaults` | 新添加组件的初始选项。 |
 | `interactions` | 组件请求的宿主回调。 |
 | `freshness` | 可选，设为 `true` 即启用。仅限 `measurement` 通道：框架会显示组件最新样本的时间间隔。若组件还声明了数值选项 `staleAfterSeconds`，超过该时长的数值会变灰并标记为过期。没有该选项时只显示时间间隔，不会标记任何内容为过期。只显示单个数值的组件应通过 `<WidgetFrame sampleTime={sample?.occurredTime ?? null}>` 传入该样本的时间，使时间间隔对应屏幕上的数值，而不是最后到达的测量值。 |
+| `layout` | 可选的尺寸限制，以网格单元计。参见[尺寸](#size)。 |
 
 ### 通道与绑定策略 {#channels-and-binding-policy}
 
@@ -181,6 +182,26 @@ implementation: {
 ```
 
 在 `defineWidget` 中，`options` 和 `setOptions` 的类型来自你的选项模式，因此拼错的键也会成为编译错误。示例包中的卡片组件带有一个完整的编辑器。
+
+## 尺寸 {#size}
+
+组件可在其描述符的可选 `layout` 块中声明自己可以有多大。尺寸以网格单元计（横向列数、纵向行数），而不是像素：
+
+```ts
+layout: {
+  defaultSpan: { cols: 8, rows: 4 }, // 新添加组件的尺寸
+  minSpan: { cols: 4, rows: 2 },     // 可缩小到的最小尺寸（默认 1 x 1）
+  maxSpan: { cols: 24, rows: 12 },   // 可放大到的最大尺寸（默认：无限制）
+  resize: 'both',                    // 'both'（默认）、'horizontal'、'vertical' 或 'none'
+},
+```
+
+每个值都是正整数，并且 `minSpan` 不得大于 `defaultSpan`，`defaultSpan` 不得大于 `maxSpan`。`resize` 取 `both`
+以外的值时会把另一个方向固定为 `defaultSpan`：`'horizontal'` 固定行数，`'vertical'` 固定列数，`'none'` 两者都固定。
+你声明的 `minSpan` 或 `maxSpan` 在固定方向上必须与 `defaultSpan` 一致。宿主构建注册表时，会拒绝违反这些规则的块。
+
+编辑器以 `defaultSpan` 添加新组件。`@devicechain/dashboards` 中的 `lintLayout` 会把超出限制放置该组件的仪表板报告为错误。请把 `minSpan` 设为组件仍然清晰可读的最小尺寸。
+未声明 `layout` 块的组件会以 4 x 2 个单元添加且不设限制，`lintLayout` 会提示它没有声明。单元尺寸与当前网格绑定，后续版本中可能会重新校准。
 
 ## 交互与信任模型 {#interactions-and-the-trust-model}
 

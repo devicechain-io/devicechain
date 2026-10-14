@@ -12,7 +12,9 @@ import {
   SDK_API_VERSION,
   isBuiltinWidgetId,
   isNamespacedWidgetId,
+  pinnedAxes,
   type WidgetChannel,
+  type WidgetResizeMode,
   type WidgetDescriptor,
 } from './widget-descriptor';
 
@@ -139,6 +141,7 @@ function collectDescriptorIssues(d: unknown, id: string): DescriptorIssue[] {
   checkDatasource(d.datasource, channel, add);
   if (channel) checkBinding(d.binding, channel, specs, add);
   checkInteractions(d.interactions, channel, add);
+  checkLayout(d.layout, add);
 
   if (d.freshness !== undefined) {
     if (d.freshness !== true) add('freshness', 'freshness must be true when present');
@@ -426,6 +429,66 @@ function checkBinding(binding: unknown, channel: WidgetChannel, specs: WidgetOpt
   ref('state', isText, 'a string or enum option', false);
   ref('severity', isText, 'a string or enum option', false);
   ref('acknowledged', isBoolEnum, 'an enum option whose values are only "true" and "false"', false);
+}
+
+function readSpan(value: unknown, path: string, add: Add): { cols: number; rows: number } | undefined {
+  if (!isRecord(value)) {
+    add(path, `${path} must be an object with cols and rows`);
+    return undefined;
+  }
+  let ok = true;
+  for (const axis of ['cols', 'rows'] as const) {
+    const n = value[axis];
+    if (typeof n !== 'number' || !Number.isInteger(n) || n < 1) {
+      add(`${path}.${axis}`, `${axis} must be a positive integer, got ${JSON.stringify(n)}`);
+      ok = false;
+    }
+  }
+  for (const key of Object.keys(value)) {
+    if (key !== 'cols' && key !== 'rows') add(`${path}.${key}`, `unknown span field "${key}"`);
+  }
+  return ok ? { cols: value.cols as number, rows: value.rows as number } : undefined;
+}
+
+function checkLayout(layout: unknown, add: Add): void {
+  if (layout === undefined) return;
+  if (!isRecord(layout)) {
+    add('layout', 'layout must be an object');
+    return;
+  }
+  for (const key of Object.keys(layout)) {
+    if (!['defaultSpan', 'minSpan', 'maxSpan', 'resize'].includes(key)) add(`layout.${key}`, `unknown layout field "${key}"`);
+  }
+  let def: { cols: number; rows: number } | undefined;
+  if (layout.defaultSpan === undefined) add('layout.defaultSpan', 'layout needs a defaultSpan');
+  else def = readSpan(layout.defaultSpan, 'layout.defaultSpan', add);
+  const min = layout.minSpan === undefined ? undefined : readSpan(layout.minSpan, 'layout.minSpan', add);
+  const max = layout.maxSpan === undefined ? undefined : readSpan(layout.maxSpan, 'layout.maxSpan', add);
+
+  const mode = layout.resize ?? 'both';
+  if (mode !== 'both' && mode !== 'horizontal' && mode !== 'vertical' && mode !== 'none') {
+    add('layout.resize', `resize must be both, horizontal, vertical or none, got ${JSON.stringify(layout.resize)}`);
+    return;
+  }
+
+  // minSpan <= defaultSpan <= maxSpan, per axis. An absent minSpan is 1 x 1.
+  const floor = min ?? { cols: 1, rows: 1 };
+  for (const axis of ['cols', 'rows'] as const) {
+    if (def && floor[axis] > def[axis]) add('layout.minSpan', `minSpan.${axis} (${floor[axis]}) is above defaultSpan.${axis} (${def[axis]})`);
+    if (def && max && def[axis] > max[axis]) add('layout.maxSpan', `maxSpan.${axis} (${max[axis]}) is below defaultSpan.${axis} (${def[axis]})`);
+    if (!def && min && max && min[axis] > max[axis]) add('layout.maxSpan', `maxSpan.${axis} is below minSpan.${axis}`);
+  }
+
+  // A restricted mode pins an axis at defaultSpan, so a declared bound must not contradict it.
+  // The free axis stays as open as the bounds leave it: no maxSpan means no ceiling there.
+  if (!def) return;
+  for (const axis of pinnedAxes(mode as WidgetResizeMode)) {
+    for (const [name, bound] of [['minSpan', min], ['maxSpan', max]] as const) {
+      if (bound && bound[axis] !== def[axis]) {
+        add('layout.resize', `resize "${mode}" pins ${axis} at ${def[axis]}, but ${name}.${axis} is ${bound[axis]}`);
+      }
+    }
+  }
 }
 
 function checkInteractions(interactions: unknown, channel: WidgetChannel | undefined, add: Add): void {

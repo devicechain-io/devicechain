@@ -152,6 +152,53 @@ export interface WidgetDisplay {
   categoryId?: string;
 }
 
+// ---- Size -------------------------------------------------------------------
+
+// A size in grid CELLS: columns across, rows down.
+export interface WidgetSpan {
+  cols: number;
+  rows: number;
+}
+
+// Which axes a viewer-author may resize. 'both' is the default.
+export type WidgetResizeMode = 'both' | 'horizontal' | 'vertical' | 'none';
+
+// How big a widget is allowed to be, declared by the widget and checked by the layout lint.
+// Plain JSON, validated when the catalog is built.
+//
+// 🔴 Spans are counted in cells of TODAY's 24-column grid (rows are 40 px). A later change
+// to square, constant-size cells re-calibrates every number a widget declares here; the
+// shape of this block does not change.
+export interface WidgetLayoutSpec {
+  // The size a freshly added widget takes.
+  defaultSpan: WidgetSpan;
+  // The resize floor. Absent means 1 x 1.
+  minSpan?: WidgetSpan;
+  // The resize ceiling. Absent means none.
+  maxSpan?: WidgetSpan;
+  // Absent means 'both'. A restricted mode PINS the other axis at defaultSpan: 'horizontal'
+  // pins rows, 'vertical' pins columns, 'none' pins both. A minSpan or maxSpan, if declared,
+  // must agree with defaultSpan on a pinned axis; neither is needed to pin it.
+  resize?: WidgetResizeMode;
+}
+
+// The axes a resize mode holds at defaultSpan.
+export function pinnedAxes(mode: WidgetResizeMode | undefined): readonly ('cols' | 'rows')[] {
+  switch (mode) {
+    case 'horizontal':
+      return ['rows'];
+    case 'vertical':
+      return ['cols'];
+    case 'none':
+      return ['cols', 'rows'];
+    default:
+      return [];
+  }
+}
+
+// Third-party widgets that declare no `layout` are added at this size, with no limits.
+export const FALLBACK_DEFAULT_SPAN: Readonly<WidgetSpan> = Object.freeze({ cols: 4, rows: 2 });
+
 // ---- The descriptor ---------------------------------------------------------
 
 export const SDK_API_VERSION = 1;
@@ -184,6 +231,9 @@ export interface WidgetDescriptor<
   // measurement widget has samples to age. Optional and absent by default, so a descriptor
   // that predates it, and every stored widget, is unchanged.
   freshness?: true;
+  // Size contract (see WidgetLayoutSpec). Required of built-ins by a registry test; optional for
+  // a third-party widget, which then gets FALLBACK_DEFAULT_SPAN and no limits.
+  layout?: WidgetLayoutSpec;
 }
 
 // defineWidgetDescriptor is an identity that exists for inference: it infers the channel

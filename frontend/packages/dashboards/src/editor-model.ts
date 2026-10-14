@@ -22,7 +22,7 @@ import type {
   WidgetBox,
   WidgetInstance,
 } from './types';
-import type { WidgetDescriptor } from './widget-descriptor';
+import { FALLBACK_DEFAULT_SPAN, type WidgetDescriptor } from './widget-descriptor';
 
 // The base box a widget is placed by in the editor.
 export function baseBox(widget: WidgetInstance): WidgetBox {
@@ -100,7 +100,7 @@ export function updateWidget(def: DashboardDefinition, id: string, next: WidgetI
 }
 
 // addWidget appends a new widget of the described kind, placed on top (z = max existing
-// z + 1) at a sensible default base box, datasource left undefined. Its starting options
+// z + 1) at the descriptor's default span, datasource left undefined. Its starting options
 // are the descriptor's own `defaults` — the widget's declaration, not a table in the editor
 // keyed by widget id. Returns the new definition and the new widget's id so the caller can
 // select it.
@@ -114,12 +114,14 @@ export function updateWidget(def: DashboardDefinition, id: string, next: WidgetI
 // moved to a newer one. `version` is the provenance the editor's version notice compares.
 export function addWidget(
   def: DashboardDefinition,
-  descriptor: Pick<WidgetDescriptor, 'id' | 'defaults' | 'version' | 'optionsVersion' | 'sdkApiVersion'>,
+  descriptor: Pick<WidgetDescriptor, 'id' | 'defaults' | 'version' | 'optionsVersion' | 'sdkApiVersion' | 'layout'>,
 ): { definition: DashboardDefinition; id: string } {
   const maxZ = def.widgets.reduce((m, w) => Math.max(m, baseBox(w).z), 0);
   const id = generateWidgetId();
-  // A sensible starter tile on a high-res grid: a third of a 24-col canvas, 4 rows.
-  const box: WidgetBox = { col: 0, colSpan: 8, row: 0, rowSpan: 4, z: maxZ + 1 };
+  // The widget's own declared size; a widget that declares none gets the fallback. Placed at
+  // the origin for now, so a new widget still lands on top of whatever is there.
+  const span = descriptor.layout?.defaultSpan ?? FALLBACK_DEFAULT_SPAN;
+  const box: WidgetBox = { col: 0, colSpan: span.cols, row: 0, rowSpan: span.rows, z: maxZ + 1 };
   const common = {
     id,
     widget: {

@@ -93,6 +93,7 @@ cargar ni confiar en tu código.
 | `defaults` | Las opciones iniciales de un widget recién añadido. |
 | `interactions` | Los callbacks del anfitrión que el widget solicita. |
 | `freshness` | Opcional, `true` para activarlo. Solo en el canal `measurement`: el marco muestra la antigüedad de la muestra más reciente del widget. Si el widget declara además una opción numérica `staleAfterSeconds`, un valor más antiguo que ese umbral se atenúa y se marca como obsoleto. Sin esa opción solo se muestra la antigüedad y nunca se marca nada como obsoleto. Un widget que muestra un único valor pasa la hora de esa muestra como `<WidgetFrame sampleTime={sample?.occurredTime ?? null}>`, para que la antigüedad sea la del valor en pantalla y no la de la última medición recibida. |
+| `layout` | Límites de tamaño opcionales, en celdas de la cuadrícula. Consulta [Tamaño](#size). |
 
 ### Canales y política de enlace {#channels-and-binding-policy}
 
@@ -250,6 +251,32 @@ implementation: {
 Dentro de `defineWidget`, `options` y `setOptions` se tipan a partir de tu esquema de opciones, así
 que una clave mal escrita también es un error de compilación. El widget de tarjeta del paquete de
 ejemplo tiene un editor completo.
+
+## Tamaño {#size}
+
+Un widget declara qué tan grande puede ser en un bloque opcional `layout` de su descriptor. Los tamaños se
+cuentan en celdas de la cuadrícula (columnas a lo ancho, filas a lo alto), no en píxeles:
+
+```ts
+layout: {
+  defaultSpan: { cols: 8, rows: 4 }, // el tamaño de un widget recién añadido
+  minSpan: { cols: 4, rows: 2 },     // el mínimo al que se puede redimensionar (por defecto 1 x 1)
+  maxSpan: { cols: 24, rows: 12 },   // el máximo (por defecto: sin límite)
+  resize: 'both',                    // 'both' (por defecto), 'horizontal', 'vertical' o 'none'
+},
+```
+
+Cada valor es un número entero positivo, y `minSpan` no puede superar a `defaultSpan`, que a su vez no
+puede superar a `maxSpan`. Un modo `resize` distinto de `both` mantiene el otro eje en `defaultSpan`:
+`'horizontal'` fija las filas, `'vertical'` las columnas y `'none'` ambos. Un `minSpan` o `maxSpan` que
+declares debe coincidir con `defaultSpan` en un eje fijo. El registro rechaza un bloque que incumpla estas
+reglas cuando el anfitrión lo construye.
+
+El editor añade un widget nuevo con `defaultSpan`. `lintLayout`, de `@devicechain/dashboards`, informa
+como error de un panel que coloque el widget fuera de sus límites. Elige un `minSpan` que sea la caja más
+pequeña en la que tu widget siga siendo legible. Un widget sin bloque `layout` se añade con 4 x 2 celdas y
+sin límites, y `lintLayout` indica que no declaró ninguno. Los tamaños de celda están ligados a la
+cuadrícula actual y podrían recalibrarse en una versión posterior.
 
 ## Interacciones y modelo de confianza {#interactions-and-the-trust-model}
 

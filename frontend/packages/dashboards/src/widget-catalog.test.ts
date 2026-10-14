@@ -330,3 +330,63 @@ describe('createWidgetCatalog', () => {
     expect(b.list().map((d) => d.id)).toEqual(['acme/other']);
   });
 });
+
+describe('the layout block', () => {
+  const issuesFor = (layout: unknown): DescriptorIssue[] => issuesOf(withField('layout', layout));
+  const GOOD = { defaultSpan: { cols: 8, rows: 4 }, minSpan: { cols: 4, rows: 2 }, maxSpan: { cols: 24, rows: 12 } };
+
+  it('is optional, and a well-formed one passes', () => {
+    expect(issuesOf(valid())).toEqual([]);
+    expect(issuesFor(GOOD)).toEqual([]);
+    expect(issuesFor({ defaultSpan: { cols: 1, rows: 1 } })).toEqual([]);
+  });
+
+  it('needs a defaultSpan of positive integers', () => {
+    expect(issuesFor({}).map((i) => i.path)).toEqual(['layout.defaultSpan']);
+    for (const bad of [0, -1, 1.5, '2', null]) {
+      expect(issuesFor({ defaultSpan: { cols: bad, rows: 2 } }).map((i) => i.path)).toEqual(['layout.defaultSpan.cols']);
+    }
+    expect(issuesFor({ defaultSpan: { cols: 2, rows: 2 }, minSpan: { cols: 2, rows: 0 } }).map((i) => i.path)).toEqual([
+      'layout.minSpan.rows',
+    ]);
+    expect(issuesFor({ ...GOOD, extra: 1 }).map((i) => i.path)).toEqual(['layout.extra']);
+    expect(issuesFor('big').map((i) => i.path)).toEqual(['layout']);
+  });
+
+  it('enforces minSpan <= defaultSpan <= maxSpan on each axis', () => {
+    expect(issuesFor({ ...GOOD, minSpan: { cols: 9, rows: 2 } }).map((i) => i.path)).toEqual(['layout.minSpan']);
+    expect(issuesFor({ ...GOOD, maxSpan: { cols: 24, rows: 3 } }).map((i) => i.path)).toEqual(['layout.maxSpan']);
+    // An absent minSpan is 1 x 1, so any default clears it.
+    expect(issuesFor({ defaultSpan: { cols: 1, rows: 1 }, maxSpan: { cols: 1, rows: 1 } })).toEqual([]);
+  });
+
+  it('rejects an unknown resize mode', () => {
+    expect(issuesFor({ ...GOOD, resize: 'diagonal' }).map((i) => i.path)).toEqual(['layout.resize']);
+  });
+
+  it('pins the restricted axis: horizontal pins rows, vertical pins cols, none pins both', () => {
+    const rowsPinned = { defaultSpan: { cols: 8, rows: 2 }, minSpan: { cols: 4, rows: 2 }, maxSpan: { cols: 24, rows: 2 } };
+    expect(issuesFor({ ...rowsPinned, resize: 'horizontal' })).toEqual([]);
+    // Each contradicting bound is its own issue: here both minSpan and maxSpan disagree.
+    expect(issuesFor({ ...rowsPinned, resize: 'vertical' }).map((i) => i.path)).toEqual(['layout.resize', 'layout.resize']);
+    expect(issuesFor({ ...GOOD, resize: 'horizontal' }).map((i) => i.message)).toEqual([
+      'resize "horizontal" pins rows at 4, but minSpan.rows is 2',
+      'resize "horizontal" pins rows at 4, but maxSpan.rows is 12',
+    ]);
+    expect(issuesFor({ ...rowsPinned, minSpan: { cols: 4, rows: 1 }, resize: 'horizontal' }).map((i) => i.path)).toEqual([
+      'layout.resize',
+    ]);
+    const colsPinned = { defaultSpan: { cols: 6, rows: 3 }, minSpan: { cols: 6, rows: 1 }, maxSpan: { cols: 6, rows: 9 } };
+    expect(issuesFor({ ...colsPinned, resize: 'vertical' })).toEqual([]);
+    const fixed = { defaultSpan: { cols: 6, rows: 3 }, minSpan: { cols: 6, rows: 3 }, maxSpan: { cols: 6, rows: 3 } };
+    expect(issuesFor({ ...fixed, resize: 'none' })).toEqual([]);
+    expect(issuesFor({ ...colsPinned, resize: 'none' }).map((i) => i.path)).toEqual(['layout.resize', 'layout.resize']);
+  });
+
+  it('pins an axis without a minSpan or maxSpan: the mode itself holds it at the default', () => {
+    // No bound is needed on the pinned axis, and none is forced on the free one.
+    expect(issuesFor({ defaultSpan: { cols: 8, rows: 1 }, resize: 'horizontal' })).toEqual([]);
+    expect(issuesFor({ defaultSpan: { cols: 8, rows: 2 }, minSpan: { cols: 4, rows: 2 }, resize: 'horizontal' })).toEqual([]);
+    expect(issuesFor({ defaultSpan: { cols: 3, rows: 3 }, resize: 'none' })).toEqual([]);
+  });
+});

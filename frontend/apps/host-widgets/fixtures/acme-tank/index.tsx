@@ -41,6 +41,7 @@ export const acmeTankWidget = defineWidget({
     },
     defaults: { heading: 'Tank level', unit: '%' },
     interactions: {},
+    layout: { defaultSpan: { cols: 8, rows: 4 }, minSpan: { cols: 4, rows: 2 } },
   },
   implementation: {
     kind: 'trusted-react',

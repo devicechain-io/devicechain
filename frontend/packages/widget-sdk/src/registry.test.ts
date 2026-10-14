@@ -135,6 +135,22 @@ describe('createWidgetRegistry', () => {
     ]);
   });
 
+  it('validates a third-party layout block, and accepts one that is well formed or absent', () => {
+    const layout = (l: unknown) => keys(issuesFor([tank({ layout: l })]));
+    expect(layout({ minSpan: { cols: 2, rows: 1 } })).toEqual(['acme/tank-level:layout.defaultSpan']);
+    expect(layout({ defaultSpan: { cols: 0, rows: 2 } })).toEqual(['acme/tank-level:layout.defaultSpan.cols']);
+    expect(layout({ defaultSpan: { cols: 4, rows: 2 }, maxSpan: { cols: 4, rows: 1 } })).toEqual([
+      'acme/tank-level:layout.maxSpan',
+    ]);
+    expect(layout({ defaultSpan: { cols: 4, rows: 2 }, maxSpan: { cols: 8, rows: 4 }, resize: 'horizontal' })).toEqual([
+      'acme/tank-level:layout.resize',
+    ]);
+    expect(layout({ defaultSpan: { cols: 4, rows: 2 }, gap: 1 })).toEqual(['acme/tank-level:layout.gap']);
+    const ok = { defaultSpan: { cols: 4, rows: 2 }, minSpan: { cols: 2, rows: 2 }, resize: 'horizontal' };
+    expect(createWidgetRegistry([tank({ layout: ok })]).descriptor('acme/tank-level')?.layout).toEqual(ok);
+    expect(createWidgetRegistry([tank()]).descriptor('acme/tank-level')?.layout).toBeUndefined();
+  });
+
   it('rejects a bad implementation (kind, component, editor, missing)', () => {
     const at = (impl: unknown) => keys(issuesFor([withImplementation(impl)]));
     expect(at({ kind: 'sandboxed-iframe', component })).toEqual(['acme/tank-level:implementation.kind']);
