@@ -175,6 +175,12 @@ jobs:
           cache: true
           cache-dependency-path: "**/go.sum"
 
+      # Prefetch the module graph with a bounded retry and a fallback off the module proxy, so
+      # one dropped stream from proxy.golang.org does not fail the job inside whichever build
+      # step happened to trigger the download. See hack/go-mod-download.sh.
+      - name: go mod download
+        run: hack/go-mod-download.sh "${{ matrix.module }}"
+
       # Pinned for the same reasons as ci.yml's image-smoke — and it matters more here.
       # The action's default "latest-release" resolves ko by curl-ing GitHub's
       # AUTHENTICATED API and piping the body to jq, so an API blip fails the job with
@@ -747,6 +753,12 @@ jobs:
           cache: true
           cache-dependency-path: "**/go.sum"
 
+      # Prefetch the module graph with a bounded retry and a fallback off the module proxy, so
+      # one dropped stream from proxy.golang.org does not fail the job inside whichever build
+      # step happened to trigger the download. See hack/go-mod-download.sh.
+      - name: go mod download
+        run: hack/go-mod-download.sh backend/cli
+
       # goreleaser derives the changelog range by walking back from the tag's
       # PARENT to the nearest tag, and that rule silently truncates the notes
       # whenever a release candidate had to be re-cut.
@@ -929,6 +941,12 @@ jobs:
           go-version-file: go.work
           cache: true
           cache-dependency-path: "**/go.sum"
+
+      # Prefetch the module graph with a bounded retry and a fallback off the module proxy, so
+      # one dropped stream from proxy.golang.org does not fail the job inside whichever build
+      # step happened to trigger the download. See hack/go-mod-download.sh.
+      - name: go mod download
+        run: hack/go-mod-download.sh backend/edge/dc-edge-agent
 
       - name: goreleaser build (archives + checksums, no publish)
         uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7
