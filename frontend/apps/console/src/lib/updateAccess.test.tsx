@@ -42,9 +42,12 @@ const claimsWith = (...authorities: string[]) => ({ authorities }) as unknown as
 function Probe() {
   const a = useUpdateAccess();
   return (
-    <span data-testid="access">
-      {[a.present, a.canRead, a.canWrite, a.canTrust].map((b) => (b ? '1' : '0')).join('')}
-    </span>
+    <>
+      <span data-testid="access">
+        {[a.present, a.canRead, a.canWrite, a.canTrust].map((b) => (b ? '1' : '0')).join('')}
+      </span>
+      <span data-testid="status">{a.status}</span>
+    </>
   );
 }
 
@@ -80,10 +83,10 @@ describe('update-management presence (fail closed)', () => {
     listFunctionalAreas.mockResolvedValue(['user-management', 'device-management']);
     auth.claims = claimsWith('*');
     renderProbe();
-    // Wait for the answer to land, then assert: "0000" is also the initial state, so
-    // the call count is what proves the absent answer was actually received.
-    await waitFor(() => expect(listFunctionalAreas).toHaveBeenCalled());
-    await waitFor(() => expect(screen.getByTestId('access').textContent).toBe('0000'));
+    // "0000" is also the initial state, so the status is what proves the absent answer
+    // was actually received rather than still pending.
+    await waitFor(() => expect(screen.getByTestId('status').textContent).toBe('absent'));
+    expect(screen.getByTestId('access').textContent).toBe('0000');
   });
 
   it('hides everything when discovery errors, and says so', async () => {
@@ -91,6 +94,8 @@ describe('update-management presence (fail closed)', () => {
     renderProbe();
     await waitFor(() => expect(console.warn).toHaveBeenCalled());
     expect(screen.getByTestId('access').textContent).toBe('0000');
+    // A routed page must not read this as "not deployed": the answer is unknown.
+    expect(screen.getByTestId('status').textContent).toBe('unknown');
   });
 
   it('hides everything on an implausible reply (no user-management in the set)', async () => {
