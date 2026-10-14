@@ -13,12 +13,13 @@
 //
 // Names read like a real building operator ("Rooftop AHU 2"), not test data.
 //
-// Deliberately NOT here (slice S3, which needs the superuser and an IdP): the SSO
-// connection against Dex, a second superuser membership, a tenant in its deletion window.
+// The instance-administration objects (chapter 15) are seeded as the SUPERUSER, last
+// (seedAdmin): a tier, people, a role, a Google Workspace connection and a throwaway tenant that
+// is deleted. Creating the connection fetches Google's discovery document, so it needs network.
 //
 // Imports carry their .ts extension so Node can run this file directly.
 
-import { createHash, generateKeyPairSync, sign, type KeyObject } from 'node:crypto';
+import { createHash, generateKeyPairSync, randomBytes, sign, type KeyObject } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
@@ -920,6 +921,201 @@ async function seedUpdates() {
   });
 }
 
+// The thermostat type's nameplate: the sim creates the type with no manufacturer or model, so
+// the identity tab would show two empty fields (chapter 4).
+async function seedDeviceTypeNameplate() {
+  const type = async () =>
+    (await gql(DM, `query($t:[String!]!){deviceTypesByToken(tokens:$t){token manufacturer model}}`, { t: ['bp-thermostat'] }))
+      .deviceTypesByToken[0] as { manufacturer: string | null; model: string | null } | undefined;
+  await ensure(
+    'device type bp-thermostat nameplate',
+    async () => (await type())?.manufacturer === 'Honeywell' && (await type())?.model === 'T10 Pro',
+    () =>
+      gql(DM, `mutation($t:String!,$r:DeviceTypeUpdateRequest!){updateDeviceType(token:$t,request:$r){token}}`, {
+        t: 'bp-thermostat',
+        r: { manufacturer: 'Honeywell', model: 'T10 Pro' },
+      }),
+  );
+  assertThat('the thermostat type carries its manufacturer and model', async () => (await type())?.manufacturer === 'Honeywell' && (await type())?.model === 'T10 Pro');
+}
+
+// ---------------------------------------------------------------------------------------
+// Administering the instance (chapter 15), as the SUPERUSER over the admin API. The password is
+// resolved in-process exactly as global-setup does (superuser.ts) and never leaves this process.
+//
+// A tier, a colour on each tier, two people with memberships in the hero tenant and one
+// disabled account, a tenant-scoped role, a Google Workspace connection for the hero tenant,
+// and a THROWAWAY tenant that is deleted so the deletion screens have something to show. The
+// hero tenant is never touched: its deletion shot stops at the confirmation.
+//
+// The people's passwords are random per create and never stored: nobody signs in as them.
+// ---------------------------------------------------------------------------------------
+const ADM = 'user-management/admin';
+const HERO_TENANT = `sim-${SIM}`;
+const THROWAWAY_TENANT = 'harbor-view-pilot';
+const IDP = 'acme-google';
+const PEOPLE = [
+  { email: 'maria.chen@acme-properties.example', firstName: 'Maria', lastName: 'Chen', roles: ['facilities-viewer'], enabled: true },
+  { email: 'jonas.weber@acme-properties.example', firstName: 'Jonas', lastName: 'Weber', roles: ['tenant-admin'], enabled: true },
+  { email: 'lee.park@acme-properties.example', firstName: 'Lee', lastName: 'Park', roles: ['viewer'], enabled: false },
+];
+const TIER_COLORS: [string, string][] = [['bronze', 'orange'], ['silver', 'slate'], ['gold', 'amber'], ['pilot', 'teal']];
+
+async function seedAdmin() {
+  const { resolveAdminPassword } = await import('./superuser.ts');
+  const admin = await resolveAdminPassword();
+  if (admin.password === null) {
+    problems.push(`superuser: ${admin.reason}; chapter 15 cannot be seeded`);
+    return;
+  }
+  const su = await signIn(BASE, process.env.DC_ADMIN_EMAIL ?? 'superuser@devicechain.local', admin.password);
+  const prev = accessToken;
+  accessToken = su.identity.identityToken;
+  try {
+    const tiers = async () => (await gql(ADM, `{tenantTiers{token color}}`)).tenantTiers as { token: string; color: string | null }[];
+    await ensure(
+      'tier pilot',
+      async () => (await tiers()).some((t) => t.token === 'pilot'),
+      () =>
+        gql(ADM, `mutation($r:AdminTenantTierCreateRequest!){createTenantTier(request:$r){token}}`, {
+          r: {
+            token: 'pilot',
+            name: 'Pilot',
+            description: 'Time-boxed evaluations: a small ingest ceiling and the first to be shed under load.',
+            config: JSON.stringify({ ingestReadingsPerSecond: 50, ingestBurst: 100, outboundCallsPerSecond: 5, outboundBurst: 10, shedPriority: 10 }),
+          },
+        }),
+    );
+    for (const [token, color] of TIER_COLORS) {
+      await ensure(
+        `tier ${token} colour ${color}`,
+        async () => (await tiers()).find((t) => t.token === token)?.color === color,
+        () => gql(ADM, `mutation($t:String!,$r:AdminTenantTierUpdateRequest!){updateTenantTier(token:$t,request:$r){token}}`, { t: token, r: { color } }),
+      );
+    }
+
+    const roles = async () => (await gql(ADM, `{roles{scope token}}`)).roles as { scope: string; token: string }[];
+    await ensure(
+      'tenant role facilities-viewer',
+      async () => (await roles()).some((r) => r.scope === 'tenant' && r.token === 'facilities-viewer'),
+      () =>
+        gql(ADM, `mutation($r:AdminRoleCreateRequest!){createRole(request:$r){token}}`, {
+          r: {
+            scope: 'tenant',
+            token: 'facilities-viewer',
+            name: 'Facilities viewer',
+            description: 'Reads devices, live state, telemetry and alarms, and acknowledges alarms. Changes nothing else.',
+            authorities: ['device:read', 'state:read', 'event:read', 'alarm:read', 'alarm:write', 'dashboard:read', 'location:read'],
+          },
+        }),
+    );
+
+    const identities = async () =>
+      (await gql(ADM, `{identities{email enabled memberships{tenant}}}`)).identities as { email: string; enabled: boolean; memberships: { tenant: string }[] }[];
+    for (const p of PEOPLE) {
+      await ensure(
+        `identity ${p.email}`,
+        async () => (await identities()).some((i) => i.email === p.email),
+        () =>
+          gql(ADM, `mutation($r:AdminIdentityCreateRequest!){createIdentity(request:$r){email}}`, {
+            r: { email: p.email, password: randomBytes(24).toString('base64url'), firstName: p.firstName, lastName: p.lastName, enabled: p.enabled, systemRoles: [] },
+          }),
+      );
+      // 🔴 Set explicitly, not trusted to the create: createIdentity(enabled:false) currently stores
+      // an ENABLED identity (the column's gorm `default:true` swallows the zero value).
+      await ensure(
+        `identity ${p.email} ${p.enabled ? 'enabled' : 'disabled'}`,
+        async () => (await identities()).find((i) => i.email === p.email)?.enabled === p.enabled,
+        () => gql(ADM, `mutation($e:String!,$v:Boolean!){setIdentityEnabled(email:$e,enabled:$v){email}}`, { e: p.email, v: p.enabled }),
+      );
+      await ensure(
+        `membership ${p.email} in ${HERO_TENANT}`,
+        async () => (await identities()).find((i) => i.email === p.email)?.memberships.some((m) => m.tenant === HERO_TENANT) ?? false,
+        () => gql(ADM, `mutation($e:String!,$t:String!,$r:[String!]!){addMembership(email:$e,tenant:$t,roleTokens:$r){email}}`, { e: p.email, t: HERO_TENANT, r: p.roles }),
+      );
+    }
+
+    // A tenant connection to Google Workspace. Creating one fetches the provider's discovery
+    // document, so this needs the cluster to reach accounts.google.com; Google connections must
+    // be pinned to the organisation with an `hd` requirement.
+    const idp = async () =>
+      (await gql(ADM, `{idpConnections{token tenants domains{domain} discovery{fingerprint approved}}}`)).idpConnections.find((c: any) => c.token === IDP) as
+        | { tenants: string[]; domains: { domain: string }[]; discovery: { fingerprint: string; approved: boolean } }
+        | undefined;
+    await ensure(
+      `identity provider ${IDP}`,
+      async () => !!(await idp()),
+      () =>
+        gql(ADM, `mutation($r:IdpConnectionCreateRequest!){createIdpConnection(request:$r){token}}`, {
+          r: {
+            token: IDP,
+            name: 'Acme Google Workspace',
+            kind: 'tenant',
+            issuer: 'https://accounts.google.com',
+            clientId: '482910375512-acmeprops.apps.googleusercontent.com',
+            requiredClaims: [{ name: 'hd', value: 'acme-properties.example' }],
+          },
+        }),
+    );
+    await ensure(
+      `identity provider ${IDP} discovery approved`,
+      async () => !!(await idp())?.discovery.approved,
+      async () => gql(ADM, `mutation($t:String!,$f:String!){approveIdpDiscovery(token:$t,fingerprint:$f){token}}`, { t: IDP, f: (await idp())!.discovery.fingerprint }),
+    );
+    await ensure(
+      `identity provider ${IDP} serves ${HERO_TENANT}`,
+      async () => !!(await idp())?.tenants.includes(HERO_TENANT),
+      () => gql(ADM, `mutation($t:String!,$n:[String!]!){setIdpConnectionTenants(token:$t,tenants:$n){token}}`, { t: IDP, n: [HERO_TENANT] }),
+    );
+    await ensure(
+      `identity provider ${IDP} domain`,
+      async () => !!(await idp())?.domains.some((d) => d.domain === 'acme-properties.example'),
+      () => gql(ADM, `mutation($t:String!,$d:String!){addIdpDomain(token:$t,domain:$d){token}}`, { t: IDP, d: 'acme-properties.example' }),
+    );
+
+    // The throwaway tenant: created at the pilot tier, then deleted. Its deletion record
+    // outlives it (/admin/deletions), so "already deleted" is read from either place.
+    const tenants = async () => (await gql(ADM, `{tenants{token purgeState}}`)).tenants as { token: string; purgeState: string }[];
+    const deletions = async () =>
+      (await gql(ADM, `query($c:TenantDeletionSearchCriteria!){tenantDeletions(criteria:$c){results{token}}}`, { c: { pageNumber: 1, pageSize: 50 } }))
+        .tenantDeletions.results as { token: string }[];
+    const deleted = async () =>
+      (await tenants()).some((t) => t.token === THROWAWAY_TENANT && t.purgeState !== 'active') || (await deletions()).some((d) => d.token === THROWAWAY_TENANT);
+    await ensure(
+      `throwaway tenant ${THROWAWAY_TENANT}`,
+      async () => (await tenants()).some((t) => t.token === THROWAWAY_TENANT) || (await deleted()),
+      () =>
+        gql(ADM, `mutation($r:AdminTenantCreateRequest!){createTenant(request:$r){token}}`, {
+          r: { token: THROWAWAY_TENANT, name: 'Harbor View pilot', tierToken: 'pilot' },
+        }),
+    );
+    await ensure(`throwaway tenant ${THROWAWAY_TENANT} deleted`, deleted, () =>
+      gql(ADM, `mutation($t:String!){deleteTenant(token:$t)}`, { t: THROWAWAY_TENANT }),
+    );
+
+    assertThat('chapter 15: the pilot tier, the role, three people, the approved Google connection and the deleted throwaway tenant', async () => {
+      const prevA = accessToken;
+      accessToken = su.identity.identityToken;
+      try {
+        const i = await identities();
+        const c = await idp();
+        return (
+          (await tiers()).some((t) => t.token === 'pilot') &&
+          (await roles()).some((r) => r.token === 'facilities-viewer') &&
+          PEOPLE.every((p) => i.some((x) => x.email === p.email && x.enabled === p.enabled && x.memberships.some((m) => m.tenant === HERO_TENANT))) &&
+          !!c?.discovery.approved && c.tenants.includes(HERO_TENANT) &&
+          (await deleted()) &&
+          (await tenants()).some((t) => t.token === HERO_TENANT && t.purgeState === 'active')
+        );
+      } finally {
+        accessToken = prevA;
+      }
+    });
+  } finally {
+    accessToken = prev;
+  }
+}
+
 // The widgetlab tenant (dashboards chapter) is authored by its simulator; the only thing the
 // guide adds is a human name on its operator, so the sidebar footer is not an e-mail address.
 async function seedWidgetsOperator() {
@@ -934,7 +1130,7 @@ async function seedWidgetsOperator() {
   const prev = accessToken;
   accessToken = s.auth!.accessToken;
   try {
-    await gql(UM, `mutation($r:ProfileUpdateRequest!){updateProfile(request:$r){email}}`, { r: { firstName: 'Dana', lastName: 'Okafor' } });
+    await gql(UM, `mutation($r:ProfileUpdateRequest!){updateProfile(request:$r){email}}`, { r: { firstName: 'Sam', lastName: 'Rivera' } });
     created.push('widgets operator display name (idempotent set)');
   } finally {
     accessToken = prev;
@@ -968,6 +1164,8 @@ async function main() {
     ['branding', seedBrandingAndProfile],
     ['over-the-air updates', seedUpdates],
     ['widgets operator', seedWidgetsOperator],
+    ['device type nameplate', seedDeviceTypeNameplate],
+    ['instance administration (superuser)', seedAdmin],
   ];
   for (const [name, fn] of steps) {
     try {

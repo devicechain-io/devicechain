@@ -47,6 +47,8 @@ import babelParser from '@babel/eslint-parser';
 const EXTRA_ATTRS = [
   // Native form-control enums and browser hints, never display text.
   'type', 'autoComplete', 'spellCheck', 'rel', 'target', 'role',
+  // User-guide capture anchors (hack/guide-capture), as in the console: stable kebab-case ids, never text.
+  'data-shot',
 ];
 const EXTRA_WORDS = ['^DeviceChain$'];
 

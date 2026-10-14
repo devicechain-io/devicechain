@@ -12,7 +12,10 @@
 // renders data-shot-drawer, a tab really renders data-shot-tab, ...) is pinned by the
 // console unit test src/components/guideAnchors.test.tsx, not here.
 //
-//   node hack/guide-capture/check-anchors.mjs [console-src-dir]
+// Recipes with `app: 'dash'` shoot the /dash viewer; their anchors are looked up in its own
+// source (frontend/apps/dashboard/src) instead.
+//
+//   node hack/guide-capture/check-anchors.mjs [console-src-dir] [dash-src-dir]
 
 import { readdirSync, readFileSync } from 'node:fs';
 import { dirname, join, relative, sep } from 'node:path';
@@ -38,10 +41,16 @@ function walk(dir) {
 const COMMENT_LINE = /^\s*(\/\/|\*|\/\*|\{\/\*)/;
 const code = (text) => text.split('\n').filter((l) => !COMMENT_LINE.test(l)).join('\n');
 
-const files = walk(srcDir).map((p) => ({
-  rel: relative(srcDir, p).split(sep).join('/'),
-  text: code(readFileSync(p, 'utf8')),
-}));
+const dashDir = process.argv[3] ?? join(here, '..', '..', 'frontend', 'apps', 'dashboard', 'src');
+const load = (dir) =>
+  walk(dir).map((p) => ({
+    rel: relative(dir, p).split(sep).join('/'),
+    text: code(readFileSync(p, 'utf8')),
+  }));
+const consoleFiles = load(srcDir);
+const dashFiles = load(dashDir);
+// The tree the current recipe's anchors are looked up in (the console's, unless app: 'dash').
+let files = consoleFiles;
 const esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 // data-table.tsx declares the data-shot-mask prop TYPE; only a JSX use counts as a use.
 const JSX_PII = /\sdata-shot-pii[\s>={/]/;
@@ -66,8 +75,9 @@ const rules = {
   // The lookbehind keeps `data-shot="x"` from passing as a drawer id.
   'data-shot-drawer': (v) => new RegExp(`(?<![\\w-])shot=(?:"${esc(v)}"|\\{\`${esc(v)}[\`$])`),
   // A tab id is the `value` of a TabsTrigger, or the `value:` of a registry resource's tab entry
-  // (ResourceDetailPage renders those through one dynamic TabsTrigger).
-  'data-shot-tab': (v) => new RegExp(`<TabsTrigger[^>]*value="${esc(v)}"|\\bvalue:\\s*['"]${esc(v)}['"]`),
+  // (ResourceDetailPage renders those through one dynamic TabsTrigger), or the `key:` of an
+  // instance setting's editor (the admin settings page keys one tab per setting).
+  'data-shot-tab': (v) => new RegExp(`<TabsTrigger[^>]*value="${esc(v)}"|\\b(?:value|key):\\s*['"]${esc(v)}['"]`),
 };
 
 // Every [data-shot*="v"] / [data-testid="v"] / [data-shot-mask] inside a selector string.
@@ -86,6 +96,7 @@ const problems = [];
 const find = (re, among) => (among ?? files).some((f) => re.test(f.text));
 
 for (const r of recipes) {
+  files = r.app === 'dash' ? dashFiles : consoleFiles;
   const sources = (r.sources ?? []).map((rel) => {
     const f = files.find((x) => x.rel === rel);
     if (!f) problems.push(`${r.id}: source file ${rel} does not exist`);
@@ -125,6 +136,7 @@ for (const r of recipes) {
   }
 }
 
+files = consoleFiles;
 // What the harness itself selects on, whichever recipes exist.
 for (const a of PRIMITIVE) {
   if (!find(rules['data-shot'](a))) problems.push(`harness: data-shot="${a}" not found anywhere`);

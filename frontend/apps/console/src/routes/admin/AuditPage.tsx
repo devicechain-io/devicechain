@@ -167,6 +167,7 @@ export default function AdminAuditPage() {
           <Input
             className="h-9 w-48"
             placeholder={t('filterByActorPlaceholder')}
+            data-shot="admin-audit-actor"
             value={actorInput}
             onChange={(e) => setActorInput(e.target.value)}
           />

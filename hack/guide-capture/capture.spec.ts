@@ -5,16 +5,20 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { test } from '@playwright/test';
 import sharp from 'sharp';
 import { recipes, type Recipe } from './recipes';
-import type { Session } from './session';
+import { readSimHandshake, type Session } from './session';
 
 const OUT = process.env.GUIDE_OUT ?? 'out';
 const MASK_COLOR = '#e2e8f0';
 // What every [data-shot-pii] element reads in a screenshot (see the frame preparation below).
 const PERSONA_EMAIL = 'dana.okafor@acme-properties.example';
-// The addresses `dcctl sim create` gives the hero and widgets sim identities.
-const SIM_ADDRESSES = [process.env.GUIDE_SIM ?? 'acme', process.env.GUIDE_WIDGETS_SIM ?? 'widgets'].map(
-  (n) => `${n}@sim.devicechain.local`,
-);
+// The addresses `dcctl sim create` gives the hero and widgets sim identities, each with the
+// persona it reads as. Two personas, not one: the instance's identity list shows both sim
+// identities, and two rows with the same address would read as a duplicate account.
+const WIDGETS_PERSONA_EMAIL = 'sam.rivera@widgetlab.example';
+const SIM_ADDRESSES: [string, string][] = [
+  [`${process.env.GUIDE_SIM ?? 'acme'}@sim.devicechain.local`, PERSONA_EMAIL],
+  [`${process.env.GUIDE_WIDGETS_SIM ?? 'widgets'}@sim.devicechain.local`, WIDGETS_PERSONA_EMAIL],
+];
 
 // Map tiles come from a HAR recorded once at the guide's fixed map views, so captures
 // are deterministic, offline, and put no load on public tile servers. Record with
@@ -37,7 +41,7 @@ function hasUsableHar(): boolean {
   }
 }
 
-function loadSession(name: Exclude<Recipe['session'], 'none'>): Session | null {
+function loadSession(name: Exclude<Recipe['session'], 'none' | 'dash'>): Session | null {
   const file = `.auth/${name}.json`;
   return existsSync(file) ? (JSON.parse(readFileSync(file, 'utf8')) as Session) : null;
 }
@@ -45,9 +49,10 @@ function loadSession(name: Exclude<Recipe['session'], 'none'>): Session | null {
 for (const recipe of recipes) {
   test(`${recipe.id}`, async ({ page, context }, info) => {
     const locale = info.project.name;
-    // `none` is the sign-in screens: the real form, no storage state at all.
-    const session = recipe.session === 'none' ? null : loadSession(recipe.session);
-    if (!session && recipe.session !== 'none') {
+    // `none` is the sign-in screens: the real form, no storage state at all. `dash` is the /dash
+    // viewer, which keeps its session in memory only, so it is signed in through its own form below.
+    const session = recipe.session === 'none' || recipe.session === 'dash' ? null : loadSession(recipe.session);
+    if (!session && recipe.session !== 'none' && recipe.session !== 'dash') {
       // Only the superuser session is optional (its password may be neither exported nor readable
       // from the cluster). A tenant session that is missing is a broken bring-up, not a skip.
       if (recipe.session !== 'superuser') throw new Error(`${recipe.id}: no ${recipe.session} session was minted; see global-setup`);
@@ -70,6 +75,7 @@ for (const recipe of recipes) {
         }
         localStorage.setItem('dc.locale', loc);
         localStorage.setItem('dc-theme', 'light');
+        localStorage.setItem('dc-dash-theme', 'light'); // the /dash viewer's own theme key
       },
       { s: session, loc: locale },
     );
@@ -83,9 +89,19 @@ for (const recipe of recipes) {
       else console.warn(`${recipe.id}: no usable ${TILE_HAR}; map tiles load LIVE from the network (not offline-deterministic)`);
     }
 
+    if (recipe.viewport) await page.setViewportSize(recipe.viewport);
     await page.goto(recipe.route);
-    // Signed-out screens have no app shell, so there is no page region to wait for.
-    if (recipe.session !== 'none') await page.locator('[data-shot="page"]').waitFor({ timeout: 30_000 });
+    if (recipe.session === 'dash') {
+      // The widgetlab tenant's admin, through the viewer's real sign-in form. The password is
+      // typed into a password field the frame never shows (the form is gone once signed in).
+      const w = readSimHandshake(process.env.GUIDE_WIDGETS_SIM ?? 'widgets');
+      await page.locator('[data-shot="dash-email"]').fill(w.email);
+      await page.locator('[data-shot="dash-password"]').fill(w.password);
+      await page.locator('[data-shot="dash-signin-submit"]').click();
+      await page.locator('[data-shot="dash-signin"]').waitFor({ state: 'detached', timeout: 30_000 });
+    }
+    // Signed-out screens and the /dash viewer have no console shell, so no page region to wait for.
+    if (recipe.session !== 'none' && recipe.session !== 'dash') await page.locator('[data-shot="page"]').waitFor({ timeout: 30_000 });
     await recipe.setup?.(page);
     await page.locator(recipe.anchor).first().waitFor({ state: 'visible', timeout: 30_000 });
 
@@ -129,26 +145,32 @@ for (const recipe of recipes) {
     // who did something still says it. (4) The sim identities' own addresses also appear in text
     // the console renders from data it does not know is an address (an artifact's provenance, an
     // update's "assigned by"); every text occurrence of one is substituted the same way.
-    await page.addStyleTag({ content: '[data-sonner-toaster], [data-sonner-toast] { display: none !important; }' });
+    // A recipe whose subject IS the toast (an export's "done" notice) keeps it; its setup holds
+    // the pointer over the toast so its timer is paused.
+    if (!recipe.keepToasts) {
+      await page.addStyleTag({ content: '[data-sonner-toaster], [data-sonner-toast] { display: none !important; }' });
+    }
     await page.evaluate(({ persona, simAddresses }) => {
       (document.activeElement as HTMLElement | null)?.blur?.();
       for (const el of document.querySelectorAll('[data-shot-pii]')) {
         if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) {
-          // The audit filter: show the persona, not the seed identity's real address.
-          el.value = persona;
+          // The audit actor filter: an address typed into it reads as the persona. An EMPTY one
+          // stays empty, so its placeholder shows: writing the persona into it would show a
+          // filter the screen does not have.
+          if (el.value) el.value = persona;
         } else {
           el.textContent = persona;
         }
       }
       const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
       for (let n = walker.nextNode(); n; n = walker.nextNode()) {
-        for (const a of simAddresses) if (n.nodeValue?.includes(a)) n.nodeValue = n.nodeValue.split(a).join(persona);
+        for (const [a, p] of simAddresses) if (n.nodeValue?.includes(a)) n.nodeValue = n.nodeValue.split(a).join(p);
       }
       for (const el of document.querySelectorAll('input, textarea')) {
         const f = el as HTMLInputElement | HTMLTextAreaElement;
-        for (const a of simAddresses) if (f.value.includes(a)) f.value = f.value.split(a).join(persona);
+        for (const [a, p] of simAddresses) if (f.value.includes(a)) f.value = f.value.split(a).join(p);
       }
-    }, { persona: PERSONA_EMAIL, simAddresses: SIM_ADDRESSES });
+    }, { persona: recipe.session === 'widgets' || recipe.session === 'dash' ? WIDGETS_PERSONA_EMAIL : PERSONA_EMAIL, simAddresses: SIM_ADDRESSES });
 
     const opts = {
       animations: 'disabled' as const,
