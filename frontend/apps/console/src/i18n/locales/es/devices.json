@@ -393,7 +393,7 @@
   "updDocsSigning": "Firma de actualizaciones",
   "updDocsSigners": "Cómo funcionan los firmantes",
   "updDeviceDisabled": "Este dispositivo está deshabilitado, por lo que no recibe actualizaciones.",
-  "updDeviceDisabledHint": "No se puede asignar una actualización nueva hasta que se habilite de nuevo. Deshabilitar el dispositivo no revoca una actualización ya en curso; cancélela abajo si no debe continuar.",
+  "updDeviceDisabledHint": "No se puede asignar una actualización nueva hasta que se habilite de nuevo. Deshabilitar el dispositivo no revoca una actualización ya en curso; cancélela abajo si no debe continuar. Una actualización en cola se cancela de inmediato, pero una que el dispositivo ya recibió queda con la cancelación pendiente mientras esté deshabilitado, porque se rechazan sus informes: se completa cuando el dispositivo se vuelve a habilitar y la confirma, o termina por tiempo agotado al vencer el plazo de su etapa.",
   "updCurrentTitle": "Actualización actual",
   "updNoCurrent": "No hay ninguna actualización asignada a este dispositivo.",
   "updHistoryTitle": "Historial de asignaciones",

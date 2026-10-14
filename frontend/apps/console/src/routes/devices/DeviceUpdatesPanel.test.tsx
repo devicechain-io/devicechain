@@ -72,14 +72,15 @@ const assignment = (over: Record<string, unknown> = {}, attempt: Record<string, 
   ...over,
 });
 
-const page = (rows: unknown[]) => ({
+const page = (rows: unknown[], totalRecords = rows.length) => ({
   results: rows,
-  pagination: { pageStart: rows.length ? 1 : 0, pageEnd: rows.length, totalRecords: rows.length },
+  pagination: { pageStart: rows.length ? 1 : 0, pageEnd: rows.length, totalRecords },
 });
 
 interface Server {
   current?: unknown[] | Error;
   history?: unknown[] | Error;
+  historyTotal?: number;
   signer?: unknown | Error;
   artifacts?: unknown[];
   allowUnverified?: boolean;
@@ -94,7 +95,9 @@ function serve(s: Server) {
     if (d.includes('query DeviceUpdateAssignments')) {
       const criteria = vars.criteria as { currentOnly?: boolean };
       const rows = criteria.currentOnly ? (s.current ?? []) : (s.history ?? s.current ?? []);
-      return settle(rows, (r) => ({ updateAssignments: page(r as unknown[]) }));
+      return settle(rows, (r) => ({
+        updateAssignments: page(r as unknown[], criteria.currentOnly ? undefined : s.historyTotal),
+      }));
     }
     if (d.includes('query AssignmentSigner')) {
       return settle(s.signer ?? null, (sg) => ({ updateAssignment: { token: 'asg-1', signedBy: sg } }));
@@ -230,6 +233,54 @@ describe('history', () => {
     expect(asks.every((c) => c.deviceToken === 'dev-1')).toBe(true);
     expect(asks.some((c) => c.currentOnly === true)).toBe(true);
   });
+
+  it('reads the pinned signer for current assignments only, never per history row', async () => {
+    const rows = Array.from({ length: 10 }, (_, i) => assignment({ token: `asg-h${i}`, current: false }));
+    serve({ current: [assignment()], history: rows, signer: SIGNER });
+    renderPanel();
+    await screen.findByTestId('current-assignment');
+    await waitFor(() => expect(screen.getAllByText('DOWNLOADING').length).toBe(11));
+    expect(callsTo('query AssignmentSigner').map((c) => c[2])).toEqual([{ token: 'asg-1' }]);
+  });
+
+  it('asks for the page it shows', async () => {
+    serve({ current: [], history: [assignment({ current: false })], historyTotal: 25 });
+    renderPanel();
+    fireEvent.click(await screen.findByRole('button', { name: /Next/ }));
+    await waitFor(() =>
+      expect(
+        callsTo('query DeviceUpdateAssignments')
+          .map((c) => c[2].criteria)
+          .some((c) => !c.currentOnly && c.pageNumber === 2),
+      ).toBe(true),
+    );
+  });
+});
+
+// Every state against what core/ota offers for it: Cancel (ota.Cancel accepts QUEUED..VERIFIED,
+// refuses UPDATING/REBOOTING/UNKNOWN as beyond recall and terminal states as finished) and
+// Abandon (ota.Abandon accepts UNKNOWN only).
+describe('the actions each state offers', () => {
+  it.each([
+    ['QUEUED', true, false],
+    ['INITIATED', true, false],
+    ['DOWNLOADING', true, false],
+    ['DOWNLOADED', true, false],
+    ['VERIFIED', true, false],
+    ['UPDATING', false, false],
+    ['REBOOTING', false, false],
+    ['UNKNOWN', false, true],
+    ['UPDATED', false, false],
+    ['FAILED', false, false],
+    ['TIMED_OUT', false, false],
+    ['CANCELLED', false, false],
+  ])('%s: cancel=%s abandon=%s', async (state, cancel, abandon) => {
+    serve({ current: [assignment({}, { state })], signer: SIGNER });
+    renderPanel();
+    await screen.findByTestId('current-assignment');
+    expect(screen.queryByRole('button', { name: 'Cancel update' }) !== null).toBe(cancel);
+    expect(screen.queryByRole('button', { name: 'Abandon update' }) !== null).toBe(abandon);
+  });
 });
 
 describe('cancel and abandon', () => {
@@ -241,6 +292,8 @@ describe('cancel and abandon', () => {
     await waitFor(() => expect(callsTo('mutation CancelUpdate')).toHaveLength(1));
     expect(callsTo('mutation CancelUpdate')[0][2]).toEqual({ assignmentToken: 'asg-1' });
     expect(confirmMock.mock.calls[0][0].description).toMatch(/device confirms/);
+    // The tab re-reads what it shows: the cancel moved the attempt.
+    await waitFor(() => expect(callsTo('query DeviceUpdateAssignments').length).toBe(4));
   });
 
   it('does not cancel when the confirmation is declined', async () => {
@@ -298,6 +351,7 @@ describe('cancel and abandon', () => {
       assignmentToken: 'asg-1',
       reason: 'device is in the lab',
     });
+    await waitFor(() => expect(callsTo('query DeviceUpdateAssignments').length).toBe(4));
     expect(confirmMock.mock.calls[0][0].description).toMatch(/may be on either version/);
   });
 
@@ -326,6 +380,7 @@ describe('assign', () => {
     expect(callsTo('mutation AssignArtifact')[0][2]).toEqual({ deviceToken: 'dev-1', artifactToken: 'fw-1' });
     // Only AVAILABLE artifacts are offered.
     expect(callsTo('query Artifacts')[0][2].criteria.state).toBe('AVAILABLE');
+    await waitFor(() => expect(callsTo('query DeviceUpdateAssignments').length).toBe(4));
   });
 
   it('shows the server refusal verbatim', async () => {
@@ -384,6 +439,10 @@ describe('a disabled device', () => {
     serve({ current: [assignment()], artifacts: [artifact()], signer: SIGNER });
     renderPanel({ deviceEnabled: false });
     expect((await screen.findByTestId('updates-device-disabled')).textContent).toMatch(/cut off from updates/);
+    // Try to pick one anyway: whichever guard stops it, Assign must stay unusable.
+    fireEvent.click(screen.getByLabelText('Artifact'));
+    const option = screen.queryByText(/fw 1\.0\.0/);
+    if (option) fireEvent.click(option);
     expect((screen.getByRole('button', { name: 'Assign' }) as HTMLButtonElement).disabled).toBe(true);
     expect(screen.getByRole('button', { name: 'Cancel update' })).toBeTruthy();
   });

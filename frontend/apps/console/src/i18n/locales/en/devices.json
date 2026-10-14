@@ -393,7 +393,7 @@
   "updDocsSigning": "Signing updates",
   "updDocsSigners": "How signers work",
   "updDeviceDisabled": "This device is disabled, so it is cut off from updates.",
-  "updDeviceDisabledHint": "No new update can be assigned until it is enabled again. An update already in flight is not recalled by disabling the device; cancel it below if it should not proceed.",
+  "updDeviceDisabledHint": "No new update can be assigned until it is enabled again. Disabling the device does not recall an update already in flight; cancel it below if it should not proceed. A queued update is cancelled at once, but one the device has already picked up stays cancel-pending while the device is disabled, because its reports are refused: it completes once the device is enabled again and confirms, or ends as timed out at the stage deadline.",
   "updCurrentTitle": "Current update",
   "updNoCurrent": "No update is assigned to this device.",
   "updHistoryTitle": "Assignment history",
