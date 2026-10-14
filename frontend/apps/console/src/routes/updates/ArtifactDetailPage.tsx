@@ -4,13 +4,10 @@
 // One artifact: what it is, whether anyone has vouched for it, and the three things an
 // operator does to it: upload its bytes (while it is still UPLOADING), sign it, retire it.
 //
-// 🔴 WHAT THIS PAGE DOES NOT SHOW, AND WHY. The service derives an artifact's trust from the
-// signatures on record, but it exposes the RESULT (SIGNED / UNVERIFIED), not the signatures
-// themselves: an artifact has no signature list in the API. So the page states the derived
-// trust and lists the tenant's registered signers with their state (revoking one is what
-// moves an artifact back to UNVERIFIED), and it says out loud that the per-artifact list is
-// not available. It never invents one from the registry, which would claim that signers
-// vouched for this artifact when it only knows they exist.
+// The Signatures panel lists the signatures recorded on THIS artifact (Artifact.signatures,
+// oldest first, revoked signers included) and says for each whether it still counts toward
+// trust. It never falls back to the signer registry, which would claim signers vouched for
+// this artifact when it only knows they exist. A failed read is an error, never an empty list.
 //
 // Routed page: the AreaGate in App.tsx covers 'absent'. Write controls require the
 // area to be known present AND artifact:write (useUpdateAccess().canWrite); the service
@@ -46,9 +43,9 @@ import { formatTime, parseJsonObject } from '@/lib/utils';
 import {
   getArtifact,
   getUpdateManagementInfo,
-  listArtifactSigners,
   retireArtifact,
   type Artifact,
+  type ArtifactDetail,
 } from '@/lib/api/update-management';
 import { formatBytes, sha256Digest } from '@/lib/artifactUpload';
 import { Fact } from '@/routes/command-batches/Fact';
@@ -95,15 +92,23 @@ export default function ArtifactDetailPage() {
     );
   }
   // Keyed by token: per-artifact UI state (an upload in progress, a refusal) belongs to one artifact.
-  return <ArtifactDetail key={data.token} artifact={data} reloadKey={reloadKey} onChanged={reload} />;
+  return <ArtifactDetail
+      key={data.token}
+      artifact={data}
+      refreshError={error}
+      reloadKey={reloadKey}
+      onChanged={reload}
+    />;
 }
 
 function ArtifactDetail({
   artifact,
+  refreshError,
   reloadKey,
   onChanged,
 }: {
-  artifact: Artifact;
+  artifact: ArtifactDetail;
+  refreshError: string | null;
   reloadKey: number;
   onChanged: () => void;
 }) {
@@ -158,7 +163,13 @@ function ArtifactDetail({
         {artifact.trustStatus === 'UNVERIFIED' && <UnverifiedNotice />}
         <DetailsPanel artifact={artifact} />
         {artifact.state === 'UPLOADING' && canWrite && <UploadContentPanel artifact={artifact} onUploaded={onChanged} />}
-        <SignaturesPanel artifact={artifact} reloadKey={reloadKey} canWrite={canWrite} onChanged={onChanged} />
+        <SignaturesPanel
+          artifact={artifact}
+          refreshError={refreshError}
+          canWrite={canWrite}
+          reloadKey={reloadKey}
+          onChanged={onChanged}
+        />
       </div>
     </PageShell>
   );
@@ -292,19 +303,19 @@ function UploadContentPanel({ artifact, onUploaded }: { artifact: Artifact; onUp
 
 function SignaturesPanel({
   artifact,
-  reloadKey,
+  refreshError,
   canWrite,
+  reloadKey,
   onChanged,
 }: {
-  artifact: Artifact;
-  reloadKey: number;
+  artifact: ArtifactDetail;
+  refreshError: string | null;
   canWrite: boolean;
+  reloadKey: number;
   onChanged: () => void;
 }) {
   const { t } = useTranslation('updates');
-  // Keyed by reloadKey: adding a signature changes nothing in this list, but a signer
-  // revoked elsewhere does, and a stale state badge would be a wrong answer.
-  const signers = useQuery(() => listArtifactSigners({ pageNumber: 1, pageSize: 1000 }), [reloadKey]);
+  const signatures = artifact.signatures;
   return (
     <SectionPanel title={t('signaturesTitle')} description={t('signaturesDescription')}>
       <div className="flex flex-wrap items-center gap-2">
@@ -313,35 +324,49 @@ function SignaturesPanel({
           {artifact.trustStatus === 'SIGNED' ? t('trustSignedExplain') : t('trustUnverifiedExplain')}
         </span>
       </div>
-      <HintText size="md" className="mt-2">
-        {t('signaturesNotListed')}
-      </HintText>
 
-      <h3 className="mt-5 mb-2 text-sm font-semibold text-foreground">{t('registeredSigners')}</h3>
-      {signers.loading && !signers.data ? (
-        <LoadingState description={t('loadingSigners')} />
-      ) : signers.error && !signers.data ? (
-        <ErrorState description={signers.error} />
-      ) : (signers.data?.results.length ?? 0) === 0 ? (
-        <HintText size="md">{t('noSigners')}</HintText>
+      {/* A failed re-read keeps the last good artifact on screen; say so rather than let the
+          list pass for current. */}
+      {refreshError && (
+        <p role="alert" data-testid="signatures-refresh-error" className="mt-3 text-sm text-destructive">
+          {t('signaturesRefreshFailed', { error: refreshError })}
+        </p>
+      )}
+
+      {signatures.length === 0 ? (
+        <HintText size="md" className="mt-4">
+          {t('noSignatures')}
+        </HintText>
       ) : (
-        <DataTable>
+        <DataTable className="mt-4">
           <DataTableHead>
             <DataTableHeaderCell>{t('colName')}</DataTableHeaderCell>
-            <DataTableHeaderCell>{t('colAlgorithm')}</DataTableHeaderCell>
             <DataTableHeaderCell>{t('colKeyId')}</DataTableHeaderCell>
+            <DataTableHeaderCell>{t('colAlgorithm')}</DataTableHeaderCell>
             <DataTableHeaderCell>{t('colState')}</DataTableHeaderCell>
+            <DataTableHeaderCell>{t('colAddedAt')}</DataTableHeaderCell>
+            <DataTableHeaderCell>{t('colAddedBy')}</DataTableHeaderCell>
+            <DataTableHeaderCell>{t('colCountsTowardTrust')}</DataTableHeaderCell>
           </DataTableHead>
           <DataTableBody>
-            {signers.data!.results.map((s) => (
-              <DataTableRow key={s.id}>
-                <DataTableCell className="font-medium text-foreground">{s.name}</DataTableCell>
-                <DataTableCell className="text-muted-foreground">{s.algorithm}</DataTableCell>
+            {signatures.map((sig) => (
+              <DataTableRow key={sig.id} data-testid="signature-row">
+                <DataTableCell className="font-medium text-foreground">{sig.signer.name}</DataTableCell>
                 <DataTableCell>
-                  <CopyToken value={s.keyId} display={`${s.keyId.slice(0, 12)}…`} />
+                  <CopyToken value={sig.signer.keyId} display={`${sig.signer.keyId.slice(0, 12)}…`} />
                 </DataTableCell>
+                <DataTableCell className="text-muted-foreground">{sig.signer.algorithm}</DataTableCell>
                 <DataTableCell>
-                  <SignerStateBadge state={s.state} />
+                  <SignerStateBadge state={sig.signer.state} />
+                </DataTableCell>
+                <DataTableCell className="text-muted-foreground">{formatTime(sig.createdAt)}</DataTableCell>
+                <DataTableCell className="text-muted-foreground">{sig.createdBy ?? '—'}</DataTableCell>
+                <DataTableCell>
+                  {sig.countsTowardTrust ? (
+                    <span className="text-foreground">{t('countsTowardTrust')}</span>
+                  ) : (
+                    <span className="text-muted-foreground">{t('noLongerCounts')}</span>
+                  )}
                 </DataTableCell>
               </DataTableRow>
             ))}

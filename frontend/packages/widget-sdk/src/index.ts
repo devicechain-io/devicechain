@@ -45,6 +45,7 @@ export {
 // never pulls Apache ECharts (nor MapLibre, nor the built-in catalog).
 export { WidgetFrame, type WidgetFrameProps } from './frame';
 export { css, type ThemeVar } from './theme';
+export { fitValueFont } from './fit-text';
 export { formatDateTime, formatTimestamp, formatValue } from './format';
 export {
   FlashValue,

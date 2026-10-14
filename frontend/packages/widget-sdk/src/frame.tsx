@@ -22,7 +22,10 @@ export interface WidgetFrameProps {
 
 export function WidgetFrame({ title, subtitle, children, bodyStyle }: WidgetFrameProps) {
   const subject = useWidgetSubject();
-  const sub = subtitle ?? subject;
+  // A subtitle that only repeats the title says nothing (a card titled by its device's
+  // external id, under a subject line naming the same device).
+  const rawSub = subtitle ?? subject;
+  const sub = rawSub && rawSub.trim() === title?.trim() ? undefined : rawSub;
   return (
     <div
       style={{
@@ -46,7 +49,19 @@ export function WidgetFrame({ title, subtitle, children, bodyStyle }: WidgetFram
           }}
         >
           {title ? (
-            <div style={{ fontSize: 12, fontWeight: 600, color: css('muted-foreground') }}>{title}</div>
+            <div
+              title={title}
+              style={{
+                fontSize: 12,
+                fontWeight: 600,
+                color: css('muted-foreground'),
+                whiteSpace: 'nowrap',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+              }}
+            >
+              {title}
+            </div>
           ) : null}
           {sub ? (
             <div
@@ -67,7 +82,12 @@ export function WidgetFrame({ title, subtitle, children, bodyStyle }: WidgetFram
           ) : null}
         </div>
       ) : null}
-      <div style={{ flex: 1, minHeight: 0, ...bodyStyle }}>{children}</div>
+      {/* The body clips: the card root already stops a widget painting outside the card, and
+          this stops one that outgrows its slot painting up over the title bar. minWidth 0
+          lets it shrink inside the flex column. */}
+      <div data-widget-body="" style={{ flex: 1, minHeight: 0, minWidth: 0, overflow: 'hidden', ...bodyStyle }}>
+        {children}
+      </div>
     </div>
   );
 }

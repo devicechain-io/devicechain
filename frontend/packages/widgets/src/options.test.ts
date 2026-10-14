@@ -274,7 +274,7 @@ describe('WidgetOptions<T>', () => {
 const VALID: { [T in WidgetType]: WidgetOptions<T> } = {
   'timeseries-chart': { title: 'Zone temperature', window: 600 },
   'latest-card': { title: 'Temp', measurement: 'temp_c', unit: '°C', precision: 1, flashOnChange: true, window: 300 },
-  gauge: { title: 'Humidity', measurement: 'rh', min: 0, max: 100, unit: '%', flashOnChange: false, window: 300 },
+  gauge: { title: 'Humidity', measurement: 'rh', min: 0, max: 100, unit: '%', precision: 1, flashOnChange: false, window: 300 },
   table: { title: 'All measurements', precision: 2, flashOnChange: true, window: 120 },
   label: { title: '', text: 'Floor 3', align: 'left', fontSize: 24 },
   image: { title: 'Floor plan', url: 'https://example.invalid/plan.png', alt: 'Floor plan', fit: 'cover' },

@@ -19,6 +19,7 @@ import {
   optBoolean,
   optNumber,
   optString,
+  useElementSize,
   useWidgetSelect,
   useWidgetTimeZone,
   WidgetFrame,
@@ -46,6 +47,11 @@ const headCell: CSSProperties = {
 // statusLabel collapses the 4-state model (state × acknowledged) into the one signal an
 // operator reads, matching the console's alarm badges: cleared wins regardless of the
 // acknowledged flag; an active alarm is "Acknowledged" once owned, else "Active".
+// Below this measured width the table drops its lowest-value columns (Status, Raised) rather
+// than clipping or scrolling sideways: severity, originator, alarm and value are what an
+// operator reads at a glance. Unmeasured (first frame, jsdom) keeps every column.
+export const ALARM_TABLE_NARROW_PX = 480;
+
 function statusLabel(alarm: AlarmRow): string {
   if (alarm.state === 'CLEARED') return 'Cleared';
   return alarm.acknowledged ? 'Acknowledged' : 'Active';
@@ -55,7 +61,9 @@ export function AlarmTable({ widget, data, actions }: WidgetProps<AlarmStreamSta
   const { alarms, total, loading } = data;
   // Actions render only when the runtime supplies a seam AND the viewer may write.
   const canAct = actions?.can('alarm:write') ?? false;
-  const columns = canAct ? 8 : 7;
+  const [sizeRef, size] = useElementSize<HTMLDivElement>();
+  const narrow = size.width > 0 && size.width < ALARM_TABLE_NARROW_PX;
+  const columns = 5 + (narrow ? 0 : 2) + (canAct ? 1 : 0);
   // Round the triggering value to a fixed precision when configured; unset keeps the raw
   // value (formatValue's default), matching the table widget. An alarm's raw lastValue is
   // otherwise a full-width float (e.g. 31.19073834583732).
@@ -74,7 +82,7 @@ export function AlarmTable({ widget, data, actions }: WidgetProps<AlarmStreamSta
   return (
     <WidgetFrame title={optString(widget.options, 'title')}>
       <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-        <div style={{ flex: 1, minHeight: 0, overflow: 'auto' }}>
+        <div ref={sizeRef} style={{ flex: 1, minHeight: 0, overflow: 'auto' }}>
           <table
             style={{
               width: '100%',
@@ -90,9 +98,11 @@ export function AlarmTable({ widget, data, actions }: WidgetProps<AlarmStreamSta
                 <th scope="col" style={headCell}>
                   Severity
                 </th>
-                <th scope="col" style={headCell}>
-                  Status
-                </th>
+                {narrow ? null : (
+                  <th scope="col" style={headCell}>
+                    Status
+                  </th>
+                )}
                 <th scope="col" style={headCell}>
                   Originator
                 </th>
@@ -102,9 +112,11 @@ export function AlarmTable({ widget, data, actions }: WidgetProps<AlarmStreamSta
                 <th scope="col" style={{ ...headCell, textAlign: 'right' }}>
                   Value
                 </th>
-                <th scope="col" style={headCell}>
-                  Raised
-                </th>
+                {narrow ? null : (
+                  <th scope="col" style={headCell}>
+                    Raised
+                  </th>
+                )}
                 {canAct ? (
                   <th scope="col" style={{ ...headCell, textAlign: 'right' }}>
                     Actions
@@ -134,7 +146,7 @@ export function AlarmTable({ widget, data, actions }: WidgetProps<AlarmStreamSta
                           {severityLabel(alarm.severity)}
                         </span>
                       </td>
-                      <td style={{ ...cell, color: css('muted-foreground') }}>{statusLabel(alarm)}</td>
+                      {narrow ? null : <td style={{ ...cell, color: css('muted-foreground') }}>{statusLabel(alarm)}</td>}
                       <td style={cell}>
                         <OriginatorCell alarm={alarm} drillTo={drillTo} />
                       </td>
@@ -149,9 +161,11 @@ export function AlarmTable({ widget, data, actions }: WidgetProps<AlarmStreamSta
                           identity={alarm.token}
                         />
                       </td>
-                      <td style={{ ...cell, color: css('muted-foreground') }}>
-                        {formatDateTime(alarm.raisedTime, timeZone)}
-                      </td>
+                      {narrow ? null : (
+                        <td style={{ ...cell, color: css('muted-foreground') }}>
+                          {formatDateTime(alarm.raisedTime, timeZone)}
+                        </td>
+                      )}
                       {canAct ? (
                         <td style={{ ...cell, textAlign: 'right' }}>
                           {/* actions is defined whenever canAct is true. */}
