@@ -40,6 +40,13 @@ export {
 export { subscribe, disposeSubscriptions, type SubscriptionSink } from './subscribe';
 
 export {
+  createSessionTokens,
+  type SessionTokens,
+  type SessionTokensOptions,
+  type TokenPair,
+} from './session';
+
+export {
   decodeToken,
   isExpired,
   hasAuthority,

@@ -20,7 +20,13 @@
 // entities — at frontend/testdata/dash-samples. Read that README before pasting one:
 // the scenario it names has to be bootstrapped first, or every widget renders empty.
 
-import { decodeToken, gql, setAuthTokenGetter } from '@devicechain/client';
+import {
+  createSessionTokens,
+  decodeToken,
+  gql,
+  setAuthTokenGetter,
+  type TokenPair,
+} from '@devicechain/client';
 import {
   createDeviceResolver,
   createEntityLister,
@@ -46,7 +52,8 @@ import { loadErrorMessage } from './i18n/loadError';
 import { signInErrorKey } from './i18n/signInError';
 import { loadDashboard, loadPublishedDashboard, type Loaded } from './load';
 import { MAP_RUNTIME } from './map-runtime';
-import { LOGIN, type Membership, SELECT_TENANT, TENANT_BASEMAP } from './queries';
+import { type DashDensity, type DashTheme, parseDashParams } from './params';
+import { LOGIN, type Membership, REFRESH, SELECT_TENANT, TENANT_BASEMAP } from './queries';
 import { endServerSession, finishSignOut } from './signOut';
 import {
   SSO_COMPLETE_PATH,
@@ -57,6 +64,7 @@ import {
   startSso,
   takeSsoSession,
 } from './sso';
+import { useTheme } from './theme';
 
 // The provider-side failure classes the server names on a refused return.
 const SSO_PROVIDER_ERROR_KEYS: Record<string, string> = {
@@ -73,29 +81,69 @@ export default function App() {
   // otherwise both start empty.
   const [handedOver] = useState(takeSsoSession);
   const [token, setToken] = useState<string | null>(handedOver?.accessToken ?? null);
-  const tokenRef = useRef<string | null>(null);
-  tokenRef.current = token;
-  // The refresh token the server issued with it. This viewer never refreshes; it holds the
-  // token only to hand it back to logout, so signing out ends the session on the server.
-  const refreshTokenRef = useRef<string | null>(handedOver?.refreshToken ?? null);
+  // The held access/refresh pair. A ref, not state: it is replaced on every refresh, and a
+  // re-render per refresh would have no reader (the token getter and the logout both read the
+  // ref). `token` above only says whether anyone is signed in, and seeds the authorities.
+  const pairRef = useRef<TokenPair | null>(
+    handedOver ? { accessToken: handedOver.accessToken, refreshToken: handedOver.refreshToken } : null,
+  );
   // Set when the last sign-out could not be confirmed by the server, so the sign-in screen
   // can say so rather than pretend the session is closed.
   const [signOutFailed, setSignOutFailed] = useState(false);
+  // Set when the session could not be sustained (the refresh failed). Shown as a blocking
+  // overlay: a board that quietly stops updating is the worst failure a wall display has.
+  const [sessionEnded, setSessionEnded] = useState(false);
 
-  // The parsed dashboard to view, once loaded. Null → show the load form (Step 2).
+  // The URL parameters this page was opened with (a deep link). Parsed once: the address
+  // is not rewritten, so the parameters survive the sign-in and a "sign in again".
+  const [params] = useState(() => parseDashParams(window.location.search));
+  const [theme, toggleTheme] = useTheme(params.theme);
+  // The deep link's dashboard is loaded once per sign-in; "Change" must be able to leave it.
+  const deepLinkUsed = useRef(false);
+
+  // The parsed dashboard to view, once loaded. Null shows the load form (Step 2).
   const [loaded, setLoaded] = useState<Loaded | null>(null);
 
-  // Register the token getter ONCE at mount: it always returns the latest token
-  // from the ref. There is no refresh logic — this is a reference viewer, so when
-  // the token expires the user simply signs in again.
+  // The refresh lifecycle (skew, one shared in-flight refresh, dropping a stale result) is
+  // the SDK's; this supplies where the pair lives and what ending the session means here.
+  const session = useMemo(
+    () =>
+      createSessionTokens({
+        read: () => pairRef.current,
+        apply: (pair) => {
+          pairRef.current = pair;
+        },
+        refresh: async (refreshToken) =>
+          (await gql('user-management', REFRESH, { refreshToken }, { anonymous: true })).refresh,
+        onEnd: (err) => {
+          console.warn('/dash: the session ended and could not be refreshed', err);
+          pairRef.current = null;
+          setToken(null);
+          setLoaded(null);
+          setSessionEnded(true);
+        },
+      }),
+    [],
+  );
+
+  // Register the token getter ONCE at mount. Every request and every websocket (re)connect
+  // resolves its token through it, so a refreshed token reaches the hub by that route.
   useEffect(() => {
-    setAuthTokenGetter(async () => tokenRef.current);
+    setAuthTokenGetter(() => session.getAccessToken());
     return () => setAuthTokenGetter(null);
-  }, []);
+  }, [session]);
+
+  // Refresh ahead of expiry while signed in. A wall display holds a websocket and makes no
+  // request that would trigger the on-demand path, so nothing else would renew its token.
+  useEffect(() => {
+    if (!token) return undefined;
+    return session.startAutoRefresh();
+  }, [token, session]);
 
   const signOut = () => {
-    const refreshToken = refreshTokenRef.current;
-    refreshTokenRef.current = null;
+    const refreshToken = pairRef.current?.refreshToken ?? null;
+    pairRef.current = null;
+    session.reset();
     forgetSsoSession();
     // Local state clears at once so the viewer is out whatever the network does; the
     // server call runs behind it and reports a failure on the sign-in screen.
@@ -107,8 +155,10 @@ export default function App() {
   };
 
   const onAuthed = (accessToken: string, refreshToken: string) => {
-    refreshTokenRef.current = refreshToken;
+    pairRef.current = { accessToken, refreshToken };
+    deepLinkUsed.current = false;
     setSignOutFailed(false);
+    setSessionEnded(false);
     setToken(accessToken);
   };
 
@@ -116,14 +166,78 @@ export default function App() {
   // stripped (main.tsx). This document is never signed in: the return page only ever leaves
   // by a full navigation (sso.ts explains why), so it renders nothing else.
   if (window.location.pathname === SSO_COMPLETE_PATH) return <SsoComplete />;
+  if (sessionEnded) return <SessionEnded onSignIn={() => setSessionEnded(false)} />;
   if (!token) return <SignIn onAuthed={onAuthed} signOutFailed={signOutFailed} />; // Step 1
-  if (!loaded) return <Load onRender={setLoaded} onSignOut={signOut} />; // Step 2
+  if (!loaded) {
+    return (
+      <Load
+        onRender={setLoaded}
+        onSignOut={signOut}
+        autoLoadToken={deepLinkUsed.current ? null : params.dashboard}
+        onAutoLoadSettled={() => {
+          deepLinkUsed.current = true;
+        }}
+      />
+    ); // Step 2
+  }
   // The viewer's authorities gate action controls (alarm ack/clear); the server enforces
   // them regardless. Decoded from the access token this reference viewer holds.
   const authorities = decodeToken(token)?.authorities ?? [];
   return (
-    <View loaded={loaded} authorities={authorities} onChange={() => setLoaded(null)} onSignOut={signOut} />
+    <View
+      loaded={loaded}
+      authorities={authorities}
+      onChange={() => setLoaded(null)}
+      onSignOut={signOut}
+      kiosk={params.kiosk}
+      density={params.density}
+      theme={theme}
+      onToggleTheme={toggleTheme}
+    />
   ); // Step 3
+}
+
+// ── Session ended ────────────────────────────────────────────────────────────────────
+// The refresh failed, so the board can no longer be kept live. It is replaced by this,
+// full-screen and impossible to miss from across a room, rather than left frozen with the
+// last values on it. The address still carries the deep link, so signing in again brings
+// the same board straight back.
+
+function SessionEnded({ onSignIn }: { onSignIn: () => void }) {
+  const { t } = useTranslation();
+  return (
+    <div
+      role="alertdialog"
+      aria-modal="true"
+      aria-labelledby="dash-session-ended-title"
+      aria-describedby="dash-session-ended-body"
+      style={{
+        position: 'fixed',
+        inset: 0,
+        zIndex: 1000,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        padding: 24,
+        background: 'hsl(var(--background))',
+        color: 'hsl(var(--foreground))',
+      }}
+    >
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 16, maxWidth: 520, textAlign: 'center' }}>
+        <div id="dash-session-ended-title" style={{ fontSize: 28, fontWeight: 600 }}>
+          {t('common:sessionEndedTitle')}
+        </div>
+        <div id="dash-session-ended-body" style={{ fontSize: 16, color: 'hsl(var(--muted-foreground))' }}>
+          {t('common:sessionEndedBody')}
+        </div>
+        <div>
+          <HeaderButton primary onClick={onSignIn}>
+            {t('common:sessionEndedAction')}
+          </HeaderButton>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 // ── Step 1: Sign in ─────────────────────────────────────────────────────────
@@ -413,12 +527,20 @@ const EMPTY_OBJECT = '{ }';
 function Load({
   onRender,
   onSignOut,
+  autoLoadToken = null,
+  onAutoLoadSettled,
 }: {
   onRender: (loaded: Loaded) => void;
   onSignOut: () => void;
+  /** A deep link's dashboard token: loaded straight away, without showing the form. */
+  autoLoadToken?: string | null;
+  /** The deep link's load finished, either way, so "Change" does not reload it. */
+  onAutoLoadSettled?: () => void;
 }) {
   const { t } = useTranslation();
-  const [dashboardToken, setDashboardToken] = useState('');
+  const [dashboardToken, setDashboardToken] = useState(autoLoadToken ?? '');
+  // Held from mount: a deep link shows the loading note, not the form, until its load ends.
+  const [autoLoading, setAutoLoading] = useState(autoLoadToken !== null);
   const [definitionText, setDefinitionText] = useState('');
   const [manifestText, setManifestText] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -433,6 +555,24 @@ function Load({
     onRender(result.loaded);
   };
 
+  // The deep link: load the named dashboard once, on mount. A failure falls back to the form
+  // with the token filled in and the reason shown, so the viewer can see what went wrong.
+  useEffect(() => {
+    if (autoLoadToken === null) return undefined;
+    let live = true;
+    void loadPublishedDashboard(autoLoadToken, '').then((result) => {
+      if (!live) return;
+      onAutoLoadSettled?.();
+      setAutoLoading(false);
+      show(result);
+    });
+    return () => {
+      live = false;
+    };
+    // Mount only: the deep link is consumed once (the parent flips it off when it settles).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // The paste door: synchronous, offline, no server involved.
   const render = () => show(loadDashboard(definitionText, manifestText));
 
@@ -445,6 +585,8 @@ function Load({
       setFetching(false);
     }
   };
+
+  if (autoLoading) return <Centered>{t('load:loading')}</Centered>;
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
@@ -538,11 +680,25 @@ export function View({
   authorities,
   onChange,
   onSignOut,
+  kiosk = false,
+  density = null,
+  theme,
+  onToggleTheme,
 }: {
   loaded: Loaded;
   authorities: string[];
   onChange: () => void;
   onSignOut: () => void;
+  /** Hide the chrome (header and its controls) and offer fullscreen instead. */
+  kiosk?: boolean;
+  /**
+   * The viewer's ?density= override, validated. NOT APPLIED YET: the canvas density option
+   * and the scale it drives arrive with the size-aware frame. It is plumbed to the board
+   * root as `data-density` and nothing reads it, so that change has one place to read from.
+   */
+  density?: DashDensity | null;
+  theme?: DashTheme;
+  onToggleTheme?: () => void;
 }) {
   const { t } = useTranslation();
   const { definition, manifest, registry } = loaded;
@@ -574,22 +730,34 @@ export function View({
   const basemap = useTenantBasemapQuery();
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-      <header
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: 12,
-          padding: '8px 16px',
-          borderBottom: '1px solid hsl(var(--border))',
-          flex: '0 0 auto',
-        }}
-      >
-        <div style={{ flex: '1 1 auto', fontWeight: 600 }}>{title}</div>
-        <LocaleSwitcher />
-        <HeaderButton onClick={onChange}>{t('view:change')}</HeaderButton>
-        <HeaderButton onClick={onSignOut}>{t('common:signOut')}</HeaderButton>
-      </header>
+    <div
+      data-density={density ?? undefined}
+      style={{ display: 'flex', flexDirection: 'column', height: '100%' }}
+    >
+      {kiosk ? (
+        <FullscreenButton />
+      ) : (
+        <header
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 12,
+            padding: '8px 16px',
+            borderBottom: '1px solid hsl(var(--border))',
+            flex: '0 0 auto',
+          }}
+        >
+          <div style={{ flex: '1 1 auto', fontWeight: 600 }}>{title}</div>
+          <LocaleSwitcher />
+          {onToggleTheme && (
+            <HeaderButton onClick={onToggleTheme}>
+              {theme === 'dark' ? t('view:themeToLight') : t('view:themeToDark')}
+            </HeaderButton>
+          )}
+          <HeaderButton onClick={onChange}>{t('view:change')}</HeaderButton>
+          <HeaderButton onClick={onSignOut}>{t('common:signOut')}</HeaderButton>
+        </header>
+      )}
 
       <main style={{ flex: '1 1 auto', minHeight: 0 }}>
         {/* 🔴 The map runtime is BUNDLER WIRING, not configuration, and this app is the
@@ -639,6 +807,33 @@ function useTenantBasemapQuery(): Basemap | null {
     };
   }, []);
   return basemap;
+}
+
+/**
+ * Kiosk chrome: the one control a kiosk board keeps. Hidden when the browser cannot do
+ * fullscreen (or the page is not allowed to), since a button that does nothing is worse than
+ * none. It floats over the board's corner at low opacity so it does not take a row from it.
+ */
+function FullscreenButton() {
+  const { t } = useTranslation();
+  const [on, setOn] = useState(() => document.fullscreenElement != null);
+  useEffect(() => {
+    const sync = () => setOn(document.fullscreenElement != null);
+    document.addEventListener('fullscreenchange', sync);
+    return () => document.removeEventListener('fullscreenchange', sync);
+  }, []);
+  if (!document.fullscreenEnabled) return null;
+  const toggle = () => {
+    const done = on ? document.exitFullscreen() : document.documentElement.requestFullscreen();
+    done.catch((err: unknown) => console.warn('/dash: fullscreen was refused', err));
+  };
+  return (
+    <div style={{ position: 'fixed', top: 8, right: 8, zIndex: 10, opacity: 0.7 }}>
+      <HeaderButton onClick={toggle}>
+        {on ? t('view:exitFullscreen') : t('view:enterFullscreen')}
+      </HeaderButton>
+    </div>
+  );
 }
 
 // ── Presentational helpers (inline styles + CSS vars — no Tailwind/shadcn) ────

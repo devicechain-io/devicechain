@@ -94,8 +94,7 @@ Los widgets de alarma y de control mantienen cada uno su propio flujo y temporiz
 
 La conexión de una suscripción se cierra cuando caduca el token de acceso con el que se abrió (consulta
 [Suscripciones por WebSocket](../reference/graphql-api.md#subscriptions-over-websocket)). El visor
-independiente `/dash` no renueva su token, así que en ese momento sus widgets en vivo se detienen
-hasta que el usuario vuelve a iniciar sesión.
+independiente `/dash` renueva su token de acceso poco antes de que caduque, así que un panel que se deja en una pantalla sigue recibiendo datos en vivo. Si la renovación es rechazada, el visor lo indica (consulta [Renovación de sesión](#session-refresh-and-kiosk-mode)) en lugar de quedarse congelado.
 
 ## Creación, versionado y vista previa
 
@@ -134,5 +133,24 @@ Una aplicación React embebe un panel en vivo construyendo un único hub con un 
 La aplicación independiente **`/dash`** es el embebedor externo de referencia. Tiene su propio inicio de sesión. Indícale el token de un panel y obtiene la versión de ese panel que está activa en ese momento; o pega una definición exportada, que no necesita acceso al servicio y es la vía de un embebedor externo o de una vista previa sin conexión. En ambos casos puedes añadir un manifiesto de vinculación, y renderiza el resultado.
 
 En cuanto a la creación, es solo de visualización: no hay editor ni guardado, y solo pide la versión activa, nunca el borrador. Aun así, las acciones de widget siguen disponibles. Un visor con `alarm:write` o `command:write` puede reconocer y limpiar alarmas y despachar comandos a dispositivos reales desde el panel que renderiza, y el servidor hace valer esos derechos en cualquier caso.
+
+#### Renovación de sesión y modo quiosco {#session-refresh-and-kiosk-mode}
+
+`/dash` renueva su token de acceso antes de que caduque, usando el token de renovación que recibió al iniciar sesión. Si la renovación falla (la sesión se cerró en el servidor, el token de renovación caducó o el servicio no responde), el panel se sustituye por un aviso a pantalla completa, **Tu sesión ha terminado**, con un botón **Iniciar sesión de nuevo**, de modo que una pantalla nunca se queda congelada con valores obsoletos. Al iniciar sesión de nuevo vuelve al mismo panel si la dirección incluye el parámetro `dashboard`.
+
+La dirección puede llevar parámetros, de modo que un marcador o una pantalla de pared abran el panel correcto en el modo correcto:
+
+```text
+/dash/?dashboard=<token>&kiosk=1&theme=dark&density=wall
+```
+
+| Parámetro | Valores | Efecto |
+| --- | --- | --- |
+| `dashboard` | un token de panel | Carga la versión activa de ese panel justo después de iniciar sesión. El parámetro se conserva al iniciar sesión, también con inicio de sesión único. |
+| `kiosk` | `1` (o `true`) | Oculta la cabecera y sus controles y ofrece un botón de pantalla completa. En este modo no hay control para cerrar sesión. |
+| `theme` | `dark`, `light` | Fija el tema de color. Fuera del modo quiosco, un interruptor en la cabecera lo cambia y recuerda la elección; el parámetro `theme` nunca se recuerda. |
+| `density` | `compact`, `comfortable`, `wall` | Reservado para la anulación de la densidad del lienzo. El valor se valida y se acepta, pero todavía no cambia el renderizado. |
+
+Un parámetro con un valor no reconocido se ignora y se escribe un aviso en la consola del navegador; el panel se carga igualmente con ese ajuste en su valor por defecto.
 
 Consulta también la vista general de [Arquitectura](./architecture.md) y la [referencia de la API GraphQL](../reference/graphql-api.md).

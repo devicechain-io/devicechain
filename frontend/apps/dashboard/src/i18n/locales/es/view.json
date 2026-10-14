@@ -1,4 +1,8 @@
 {
   "change": "Cambiar",
+  "enterFullscreen": "Pantalla completa",
+  "exitFullscreen": "Salir de pantalla completa",
+  "themeToDark": "Tema oscuro",
+  "themeToLight": "Tema claro",
   "untitled": "Panel"
 }

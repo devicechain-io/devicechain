@@ -1,6 +1,9 @@
 {
   "errorBoundaryTitle": "Algo salió mal",
   "languagePicker": "Idioma",
+  "sessionEndedAction": "Iniciar sesión de nuevo",
+  "sessionEndedBody": "Esta pantalla se desconectó y ya no recibe datos en vivo. Inicia sesión de nuevo para continuar.",
+  "sessionEndedTitle": "Tu sesión ha terminado",
   "signOut": "Cerrar sesión",
   "unexpectedError": "Error inesperado"
 }

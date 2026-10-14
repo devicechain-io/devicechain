@@ -68,6 +68,28 @@ export const SELECT_TENANT = `
   }
 ` as unknown as TypedDocument<SelectTenantResult, SelectTenantVariables>;
 
+// ── user-management: refresh the tenant session ──────────────────────────────
+// Anonymous (the refresh token is the argument). Exchanges the refresh token for a new
+// access/refresh pair; the old refresh token is spent, so only one refresh may be in
+// flight (createSessionTokens guarantees that). Called ahead of the access token's
+// expiry so a wall display never lapses.
+
+export interface RefreshResult {
+  refresh: { accessToken: string; refreshToken: string };
+}
+export interface RefreshVariables {
+  refreshToken: string;
+}
+
+export const REFRESH = `
+  mutation Refresh($refreshToken: String!) {
+    refresh(refreshToken: $refreshToken) {
+      accessToken
+      refreshToken
+    }
+  }
+` as unknown as TypedDocument<RefreshResult, RefreshVariables>;
+
 // ── user-management: single sign-on ──────────────────────────────────────────
 // Anonymous. beginSso answers with the identity provider's address (null when no
 // connection speaks for the email's domain); completeSso redeems the one-time code the

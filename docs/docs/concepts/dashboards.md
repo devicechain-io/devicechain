@@ -94,8 +94,9 @@ Alarm and control widgets each hold their own stream and timer. Only the telemet
 
 A subscription's connection closes when the access token it opened with expires (see [Subscriptions
 over WebSocket](../reference/graphql-api.md#subscriptions-over-websocket)). The standalone `/dash`
-viewer does not refresh its token, so its live widgets stop at that point until the user signs in
-again.
+viewer renews its access token shortly before it expires, so a board left running on a wall keeps
+receiving live data. If the renewal is refused, the viewer says so (see [Session
+refresh](#session-refresh-and-kiosk-mode)) instead of freezing.
 
 ## Authoring, versioning, and preview
 
@@ -134,5 +135,24 @@ A React application embeds a live dashboard by constructing one hub with a resol
 The standalone **`/dash`** application is the reference external embedder. It has its own login. Give it a dashboard token and it fetches the version of that dashboard that is currently live; or paste an exported definition, which needs no access to the service and is how an external embedder or an offline preview works. Either way you can add a binding manifest, and it renders the result.
 
 It is view-only as to authoring: there is no editor and no save, and it only ever asks for the live version, never the draft. Widget actions stay available, though. A viewer holding `alarm:write` or `command:write` can acknowledge and clear alarms and dispatch commands to real devices from the dashboard it renders, and the server enforces those rights either way.
+
+#### Session refresh and kiosk mode {#session-refresh-and-kiosk-mode}
+
+`/dash` renews its access token ahead of expiry, using the refresh token it received at sign-in. If the renewal fails (the sign-in was ended on the server, the refresh token lapsed, or the service is unreachable), the board is replaced by a full-screen **Your session has ended** notice with a **Sign in again** button, so a display never sits frozen on stale values. Signing in again returns to the same board when the address carries a `dashboard` parameter.
+
+The address can carry parameters, so a bookmark or a wall display opens the right board in the right mode:
+
+```text
+/dash/?dashboard=<token>&kiosk=1&theme=dark&density=wall
+```
+
+| Parameter | Values | Effect |
+| --- | --- | --- |
+| `dashboard` | a dashboard token | Loads that dashboard's live version straight after sign-in. The parameter survives sign-in, including single sign-on. |
+| `kiosk` | `1` (or `true`) | Hides the header and its controls and offers a fullscreen button. There is no sign-out control in this mode. |
+| `theme` | `dark`, `light` | Sets the colour theme. Outside kiosk mode a toggle in the header changes it and remembers the choice; a `theme` parameter is never remembered. |
+| `density` | `compact`, `comfortable`, `wall` | Reserved for the canvas density override. The value is validated and accepted, but it does not change the rendering yet. |
+
+A parameter with an unrecognised value is ignored and a warning is written to the browser console; the board still loads with that setting at its default.
 
 See also the [Architecture](./architecture.md) overview and the [GraphQL API reference](../reference/graphql-api.md).
