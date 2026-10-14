@@ -357,6 +357,15 @@ type AdminTenant {
     # of folding them onto the tier. Resolved by the same code the data plane reads
     # its ceilings through, so it cannot claim something the platform does not do.
     effectiveSettings: [AdminTenantSetting!]!
+    """
+    What the tenant is actually limited to for each single-number setting that is not a
+    rate and burst pair: the held-command ceiling, the shed priority and the three geofence
+    limits. Each entry says which level set it, as effectiveSettings does.
+    """
+    # The scalar counterpart of effectiveSettings: the same override -> tier -> platform
+    # cascade, resolved by the same iam.Tenant methods the data plane reads, for the keys
+    # that have no rate or burst.
+    effectiveScalarSettings: [AdminTenantScalarSetting!]!
 }
 
 """
@@ -451,6 +460,37 @@ type AdminBurstSetting {
     """What the tenant's tier sets for this dimension. Null if the tier sets none."""
     tier: Int
     """The tenant's own override for this dimension. Null if it has none."""
+    override: Int
+}
+
+"""
+The value in force for a tenant on one single-number setting, with where it came from, so
+you can see both the result and the levels behind it. It has the same shape as
+AdminBurstSetting, plus the setting's key and label.
+"""
+# A tenant's effective value for one tier-governed scalar (ADR-065 decision 7), with the
+# provenance that makes it inspectable as tier + delta.
+type AdminTenantScalarSetting {
+    """
+    Name of the setting, such as `heldCommandCeiling`. It is both the key used in a tier's
+    config and the name of the matching override field on tenants.
+    """
+    key: String!
+    """Human-readable heading for the setting, such as "Shed priority"."""
+    label: String!
+    """
+    Which level supplied the value: `override` (the tenant's own setting), `tier` (its
+    tier's setting) or `platform-default` (neither sets one).
+    """
+    source: String!
+    """
+    The value in force. Null when source is `platform-default`: the enforcing service applies
+    its own built-in default, which this API does not report. Null does not mean unlimited.
+    """
+    value: Int
+    """What the tenant's tier sets for this setting. Null if the tier sets none."""
+    tier: Int
+    """The tenant's own override for this setting. Null if it has none."""
     override: Int
 }
 

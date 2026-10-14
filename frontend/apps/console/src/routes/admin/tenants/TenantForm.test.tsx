@@ -96,6 +96,7 @@ function tenant(overrides: Partial<AdminTenant> = {}): AdminTenant {
     geoFenceCeiling: 320,
     geoFencePositionBudget: 44000,
     effectiveSettings: [],
+    effectiveScalarSettings: [],
     createdAt: '2026-08-01T00:00:00Z',
     updatedAt: '2026-08-01T00:00:00Z',
     ...overrides,

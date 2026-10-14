@@ -19,12 +19,21 @@ import (
 // projection is a counting read-model, off the correctness path; a dropped fire only skews an
 // approximate health number (and a replay re-records it).
 type ruleStatRecorder struct {
-	store *model.RuleStatStore
+	store   fireStatStore
+	metrics *DetectMetrics
 }
+
+// fireStatStore is the slice of model.RuleStatStore the recorder needs; a seam so a test can fail it.
+type fireStatStore interface {
+	RecordFire(ctx context.Context, ruleID, tenant string, at time.Time, edge string) error
+}
+
+var _ fireStatStore = (*model.RuleStatStore)(nil)
 
 // RecordFire upserts the rule's stat row, swallowing (logging) any error.
 func (r ruleStatRecorder) RecordFire(ctx context.Context, ruleID, tenant string, at time.Time, edge string) {
 	if err := r.store.RecordFire(ctx, ruleID, tenant, at, edge); err != nil {
+		r.metrics.recordRuleStatWriteFailure()
 		log.Warn().Err(err).Str("rule", ruleID).
 			Msg("Failed to record a rule-health fire stat; dropping (off the correctness path).")
 	}
