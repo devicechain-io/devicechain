@@ -76,7 +76,7 @@ type NavGroupNode = { labelKey: string; icon: LucideIcon; children: NavLeaf[] };
 // adding a construct is a single config entry, not new layout code.
 type NavNode = NavLeaf | NavGroupNode;
 
-const NAV: NavNode[] = [
+export const NAV: NavNode[] = [
   { labelKey: 'dashboard', href: '/', icon: LayoutGrid },
   { labelKey: 'dashboards', href: '/dashboards', icon: LayoutDashboard, requires: 'dashboard:read' },
   { labelKey: 'alarms', href: '/alarms', icon: AlertTriangle, requires: 'alarm:read' },
@@ -196,7 +196,7 @@ const NAV: NavNode[] = [
   // operator.
 ];
 
-function isLeaf(node: NavNode): node is NavLeaf {
+export function isLeaf(node: NavNode): node is NavLeaf {
   return 'href' in node;
 }
 

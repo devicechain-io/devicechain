@@ -24,6 +24,7 @@ import {
 import { useToast } from '@/components/ui/toast';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { formatTime } from '@/lib/utils';
+import { signerStateLabel, updateStateLabel } from '@/lib/enumLabel';
 import { useQuery } from '@/lib/hooks/use-query';
 import { errMessage, useReload } from '@/routes/common';
 import {
@@ -226,7 +227,7 @@ export function DeviceUpdatesPanel({
                       </div>
                     </DataTableCell>
                     <DataTableCell>
-                      <Badge variant={stateVariant(a.attempt.state)}>{a.attempt.state}</Badge>
+                      <Badge variant={stateVariant(a.attempt.state)}>{updateStateLabel(t, a.attempt.state)}</Badge>
                     </DataTableCell>
                     <DataTableCell>
                       {a.attempt.failure ? (
@@ -330,7 +331,7 @@ function CurrentAssignment({
         <span className="text-sm font-medium text-foreground">{a.artifact.name}</span>
         <span className="font-mono text-xs text-foreground">{a.artifact.version}</span>
         <TrustBadge status={a.artifact.trustStatus} />
-        <Badge variant={stateVariant(attempt.state)}>{attempt.state}</Badge>
+        <Badge variant={stateVariant(attempt.state)}>{updateStateLabel(t, attempt.state)}</Badge>
         {attempt.cancelRequested && <Badge variant="warning">{t('updCancelPending')}</Badge>}
       </div>
 
@@ -429,7 +430,7 @@ function PinnedSigner({ assignmentToken }: { assignmentToken: string }) {
         <span>
           <span className="text-foreground">{data.name}</span>{' '}
           <span className="font-mono text-xs break-all">{data.keyId}</span>{' '}
-          <Badge variant={data.state === 'ACTIVE' ? 'success' : 'destructive'}>{data.state}</Badge>
+          <Badge variant={data.state === 'ACTIVE' ? 'success' : 'destructive'}>{signerStateLabel(t, data.state)}</Badge>
           {data.state === 'REVOKED' && (
             <span className="ml-1 text-xs text-muted-foreground">{t('updSignerRevokedNote')}</span>
           )}

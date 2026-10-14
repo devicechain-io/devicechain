@@ -17,6 +17,7 @@ import { CheckCircle2, XCircle } from 'lucide-react';
 import { ErrorBanner } from '@/components/ui/error-banner';
 import { HintText } from '@/components/ui/hint-text';
 import { uploadArtifactContent, formatBytes, type ArtifactUploadResult } from '@/lib/artifactUpload';
+import { artifactStateLabel } from '@/lib/enumLabel';
 import { errMessage } from '@/routes/common';
 import { shortDigest } from './badges';
 
@@ -164,7 +165,7 @@ function Verification({
           })}
         </dd>
         <dt>{t('verifyState')}</dt>
-        <dd>{result.state}</dd>
+        <dd>{artifactStateLabel(t, result.state)}</dd>
       </dl>
       {!ok && <p className="mt-2 text-xs text-destructive">{t('verifyFailedBody')}</p>}
     </div>

@@ -24,7 +24,8 @@
 // passing if the tiled path drifted away from it, and the property that matters is
 // that the two agree.
 
-import { cleanup, render, waitFor } from '@testing-library/react';
+import '@/i18n/config';
+import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // The MapLibre stub records what the editor built and every handler it registered,
@@ -126,7 +127,7 @@ function clickEvent() {
 
 // Render the editor, wait for its map, and return what a single click on empty
 // canvas caused it to store.
-async function firstVertexFrom(props: { tileUrl?: string }) {
+async function firstVertexFrom(props: { tileUrl?: string; tileUrlField?: boolean }) {
   const onChange = vi.fn();
   render(<FenceMap vertices={[]} onChange={onChange} {...props} />);
   await waitFor(() => expect(rec.maps).toHaveLength(1));
@@ -232,5 +233,26 @@ describe('the bundled basemap does not move where a click lands', () => {
     // becomes a raster style pointing at a provider nobody chose.
     expect(Object.keys(bundledStyle.sources).sort()).toEqual(['boundaries', 'land']);
     expect(tiledStyle.sources.basemap?.tiles).toEqual([TILE_URL]);
+  });
+});
+
+describe('the no-tiles hint', () => {
+  const HINT = /Set a tile URL below/;
+
+  // The hint tells someone to use a field underneath the map. Where there is no such
+  // field (the read-only History tab) it pointed at nothing.
+  it('is shown only where the surface has the tile-URL field it names', async () => {
+    await firstVertexFrom({ tileUrlField: true });
+    expect(screen.queryByText(HINT)).not.toBeNull();
+    cleanup();
+    rec.maps.length = 0;
+
+    await firstVertexFrom({});
+    expect(screen.queryByText(HINT)).toBeNull();
+  });
+
+  it('is not shown once tiles are configured', async () => {
+    await firstVertexFrom({ tileUrl: TILE_URL, tileUrlField: true });
+    expect(screen.queryByText(HINT)).toBeNull();
   });
 });

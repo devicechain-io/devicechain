@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { AlarmSnapshot, AlarmSubscription, CommandSnapshot } from './hub';
 import { ALARMS_QUERY } from './internal/alarm-doc';
-import { SyntheticDataSource } from './synthetic';
+import { SYNTHETIC_GENERATORS, SyntheticDataSource } from './synthetic';
 import type { MeasurementSample } from './types';
 import type { DatasourceSelector } from './types';
 
@@ -48,6 +48,10 @@ describe('SyntheticDataSource', () => {
     expect(samples).toHaveLength(0); // no backfill
     vi.advanceTimersByTime(3000);
     expect(samples).toHaveLength(3);
+  });
+
+  it('lists generator ids only, so the host owns the display names', () => {
+    expect(SYNTHETIC_GENERATORS).toEqual(['sine', 'ramp', 'random-walk']);
   });
 
   it('keeps every value within [min, max] for all generators', () => {

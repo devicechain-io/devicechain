@@ -152,7 +152,14 @@ export function DetectionRuleNLDraft({
 
       {unavailable && (
         <div className="rounded-md border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm text-amber-700 dark:text-amber-400" data-shot="nl-unavailable">
-          {result?.unavailableReason ?? t('nlUnavailableDefaultReason')}
+          {/* The console's own (translated) message leads. The server's reason is English-only
+              prose, so it is kept as secondary detail rather than replacing the message. */}
+          <p>{t('nlUnavailableDefaultReason')}</p>
+          {result?.unavailableReason ? (
+            <p className="mt-1 text-xs opacity-80" data-testid="nl-unavailable-detail">
+              {t('nlUnavailableServerDetail', { reason: result.unavailableReason })}
+            </p>
+          ) : null}
         </div>
       )}
 

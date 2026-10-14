@@ -29,13 +29,23 @@ vi.mock('@devicechain/client', async (importOriginal) => {
 const fingerprint = (ring?: readonly { lng: number; lat: number }[]) =>
   ring?.length ? `${ring.length}@${ring[0].lng},${ring[0].lat}` : 'none';
 
+const tenantBasemap = vi.hoisted(() => ({
+  value: null as { tileUrl: string; attribution: string } | null,
+}));
+vi.mock('@/auth/TenantProvider', () => ({
+  useTenantBasemap: () => tenantBasemap.value,
+}));
+
 vi.mock('./FenceMap', () => ({
-  FenceMap: ({ vertices, ghost, disabled }: FenceMapProps) => (
+  FenceMap: ({ vertices, ghost, disabled, tileUrl, attribution, tileUrlField }: FenceMapProps) => (
     <div
       data-testid="fake-map"
       data-vertices={fingerprint(vertices)}
       data-ghost={fingerprint(ghost)}
       data-disabled={String(!!disabled)}
+      data-tile-url={tileUrl ?? ''}
+      data-attribution={attribution ?? ''}
+      data-tile-url-field={String(!!tileUrlField)}
     />
   ),
 }));
@@ -45,7 +55,10 @@ import { FenceHistoryPanel } from './FenceHistoryPanel';
 import type { GeoFence } from '@/lib/api/geofences';
 
 afterEach(cleanup);
-beforeEach(() => gqlMock.mockReset());
+beforeEach(() => {
+  gqlMock.mockReset();
+  tenantBasemap.value = null;
+});
 
 const RING = [
   [12.49, 41.89],
@@ -126,6 +139,18 @@ const NONE_RECORDED =
   'boundary changed, or it is deleted.';
 
 describe('FenceHistoryPanel', () => {
+  it('draws on the tenant basemap, like the Basic tab, and claims no tile field of its own', async () => {
+    tenantBasemap.value = { tileUrl: 'https://tiles.example.com/{z}/{x}/{y}.png', attribution: '© Tenant Tiles' };
+    transport(7, [{ token: 'yard', geometry: doc([OTHER_RING]) }]);
+    render(<FenceHistoryPanel entity={fence()} />);
+
+    const map = await screen.findByTestId('fake-map');
+    expect(map.getAttribute('data-tile-url')).toBe('https://tiles.example.com/{z}/{x}/{y}.png');
+    expect(map.getAttribute('data-attribution')).toBe('© Tenant Tiles');
+    // There is no tile-URL field on this tab, so the map must not point at one.
+    expect(map.getAttribute('data-tile-url-field')).toBe('false');
+  });
+
   it('shows the frozen ring, with the current shape as a ghost beside it', async () => {
     transport(7, [{ token: 'yard', geometry: doc([OTHER_RING]) }]);
     render(<FenceHistoryPanel entity={fence()} />);

@@ -227,6 +227,9 @@ describe('ArtifactDetailPage states', () => {
     expect(screen.getByText('2.0 KiB')).toBeTruthy();
     expect(screen.getByText('edge')).toBeTruthy();
     expect(screen.getByText('ci-build-42')).toBeTruthy();
+    // The provenance key is a localised label, not the raw key.
+    expect(screen.getByText('Source')).toBeTruthy();
+    expect(screen.queryByText('source')).toBeNull();
   });
 });
 

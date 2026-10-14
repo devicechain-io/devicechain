@@ -146,6 +146,8 @@ function ColorField({
         <ColorPicker
           ariaLabel={t('colorSwatchAriaLabel', { label })}
           value={valid ? value : '#000000'}
+          empty={!valid}
+          emptyLabel={value === '' ? t('inheritPlaceholder') : undefined}
           onChange={onChange}
         />
         <Input

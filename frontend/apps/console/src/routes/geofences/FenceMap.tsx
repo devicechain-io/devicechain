@@ -125,6 +125,12 @@ function ringFeature(vertices: readonly Vertex[], ghost: readonly Vertex[] = [])
 }
 
 export interface FenceMapProps {
+  /**
+   * True where the surface has its own tile-URL field, which is what the no-tiles hint
+   * points at ("set a tile URL below"). A read-only surface has no such field, and a hint
+   * naming a control that is not there is worse than none.
+   */
+  tileUrlField?: boolean;
   vertices: Vertex[];
   onChange: (vertices: Vertex[]) => void;
   /**
@@ -182,6 +188,7 @@ export function FenceMap({
   vertices,
   onChange,
   tileUrl,
+  tileUrlField = false,
   attribution,
   onClose,
   closed = false,
@@ -584,7 +591,7 @@ export function FenceMap({
           {t('entities:geofenceMapUnavailable')}
         </p>
       )}
-      {!failed && !tileUrl && (
+      {!failed && !tileUrl && tileUrlField && (
         <p className="text-muted-foreground mt-2 text-xs">{t('entities:geofenceNoTilesHint')}</p>
       )}
     </div>

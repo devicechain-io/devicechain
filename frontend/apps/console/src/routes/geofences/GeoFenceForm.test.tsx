@@ -84,6 +84,7 @@ vi.mock('./FenceMap', () => ({
     disabled,
     closed,
     tileUrl,
+    tileUrlField,
     attribution,
     initialCenter,
     initialZoom,
@@ -93,6 +94,7 @@ vi.mock('./FenceMap', () => ({
       data-disabled={String(!!disabled)}
       data-closed={String(!!closed)}
       data-tile-url={tileUrl ?? ''}
+      data-tile-url-field={String(!!tileUrlField)}
       data-attribution={attribution ?? ''}
       data-initial-center={initialCenter ? initialCenter.join(',') : ''}
       data-initial-zoom={initialZoom === undefined ? '' : String(initialZoom)}
@@ -590,6 +592,8 @@ describe('the tenant basemap', () => {
     const fake = await screen.findByTestId('fake-map');
     expect(fake.getAttribute('data-tile-url')).toBe(TENANT_TILES);
     expect(fake.getAttribute('data-attribution')).toBe('© Tenant Tiles');
+    // The form owns the tile-URL field the no-tiles hint points at.
+    expect(fake.getAttribute('data-tile-url-field')).toBe('true');
   });
 
   it('is overridden by this browser’s own tile URL', async () => {
