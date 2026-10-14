@@ -18,6 +18,7 @@
 //
 // Imports carry their .ts extension so Node can run this file directly.
 
+import { createHash, generateKeyPairSync, sign, type KeyObject } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
@@ -705,6 +706,220 @@ async function seedBrandingAndProfile() {
   });
 }
 
+// ---------------------------------------------------------------------------------------
+// Over-the-air updates (chapter 16). Everything goes through the real API: declare over
+// GraphQL, PUT the bytes to the content endpoint (which verifies size and digest), register
+// signers, sign over GraphQL, assign to a device.
+//
+// 🔴 The signing keys are generated here, per run, and the private halves live only in this
+// process: nothing writes them anywhere. A re-run that finds an artifact already SIGNED has no
+// key to sign with and needs none. One that finds the release signer registered but an artifact
+// still unsigned (a run that failed between the two) registers a fresh release key, because the
+// old private key is gone by design.
+//
+// The images are deterministic pseudo-random bytes, so a declared-but-not-uploaded artifact left
+// by a failed run is completed by the next one with the same digest.
+// ---------------------------------------------------------------------------------------
+const UPD = 'update-management';
+const RELEASE_SIGNER = 'Acme release signing key';
+const OLD_SIGNER = 'Contract manufacturer key (2025)';
+
+interface FirmwareSpec {
+  token: string;
+  version: string;
+  size: number;
+  seed: number;
+  source: string;
+  notes: string;
+  sign: boolean;
+  retire: boolean;
+}
+
+const FIRMWARE: FirmwareSpec[] = [
+  {
+    token: 'thermostat-fw-2-3-1',
+    version: '2.3.1',
+    size: 1_802_240,
+    seed: 0x231,
+    source: 'https://builds.acme-properties.example/thermostat/2.3.1',
+    notes: 'Superseded by 2.4.0.',
+    sign: true,
+    retire: true,
+  },
+  {
+    token: 'thermostat-fw-2-4-0',
+    version: '2.4.0',
+    size: 1_843_712,
+    seed: 0x240,
+    source: 'https://builds.acme-properties.example/thermostat/2.4.0',
+    notes: 'Release build: faster reconnect after a broker failover, quieter fan control.',
+    sign: true,
+    retire: false,
+  },
+  {
+    token: 'thermostat-fw-2-5-0-rc1',
+    version: '2.5.0-rc.1',
+    size: 1_871_360,
+    seed: 0x250,
+    source: 'https://builds.acme-properties.example/thermostat/2.5.0-rc.1',
+    notes: 'Release candidate from the nightly pipeline. Not signed yet.',
+    sign: false,
+    retire: false,
+  },
+];
+const ASSIGNED = 'thermostat-fw-2-4-0';
+
+/** xorshift32 bytes: the same image for the same seed, every run. */
+function firmwareImage(seed: number, size: number): Buffer {
+  const out = Buffer.alloc(size);
+  let x = seed >>> 0 || 1;
+  for (let i = 0; i < size; i++) {
+    x ^= x << 13;
+    x >>>= 0;
+    x ^= x >>> 17;
+    x ^= x << 5;
+    x >>>= 0;
+    out[i] = x & 0xff;
+  }
+  return out;
+}
+
+async function seedUpdates() {
+  try {
+    await gql(UPD, `{updateManagementInfo{area}}`);
+  } catch (err) {
+    problems.push(
+      `update-management is not deployed or not answering (${err instanceof Error ? err.message : err}): ` +
+        'chapter 16 cannot be seeded or shot. Bootstrap with --enable-area update-management',
+    );
+    return;
+  }
+
+  const artifact = async (t: string) =>
+    (await gql(UPD, `query($t:String!){artifact(token:$t){token state trustStatus}}`, { t })).artifact as
+      | { token: string; state: string; trustStatus: string }
+      | null;
+  const signers = async () =>
+    (await gql(UPD, `{artifactSigners(criteria:{pageNumber:1,pageSize:100}){results{token name state}}}`)).artifactSigners
+      .results as { token: string; name: string; state: string }[];
+
+  // The private halves, in memory only, for keys registered by THIS run.
+  const keys = new Map<string, KeyObject>();
+  const register = async (name: string, type: 'ed25519' | 'ec') => {
+    const pair = type === 'ed25519' ? generateKeyPairSync('ed25519') : generateKeyPairSync('ec', { namedCurve: 'P-256' });
+    const pem = pair.publicKey.export({ type: 'spki', format: 'pem' }).toString();
+    const r = await gql(UPD, `mutation($n:String!,$k:String!){registerArtifactSigner(name:$n,publicKeyPem:$k){token}}`, { n: name, k: pem });
+    keys.set(r.registerArtifactSigner.token, pair.privateKey);
+    return r.registerArtifactSigner.token as string;
+  };
+
+  // A retired signer, so the registry shows both states. It is registered and revoked; it signs nothing.
+  await ensure(
+    `signer "${OLD_SIGNER}" (revoked)`,
+    async () => (await signers()).some((s) => s.name === OLD_SIGNER && s.state === 'REVOKED'),
+    async () => {
+      const token = (await signers()).find((s) => s.name === OLD_SIGNER)?.token ?? (await register(OLD_SIGNER, 'ec'));
+      await gql(UPD, `mutation($t:String!){revokeArtifactSigner(token:$t){state}}`, { t: token });
+    },
+  );
+  await ensure(
+    `signer "${RELEASE_SIGNER}"`,
+    async () => (await signers()).some((s) => s.name === RELEASE_SIGNER && s.state === 'ACTIVE'),
+    () => register(RELEASE_SIGNER, 'ed25519'),
+  );
+
+  for (const fw of FIRMWARE) {
+    const bytes = firmwareImage(fw.seed, fw.size);
+    const digestBytes = createHash('sha256').update(bytes).digest();
+
+    await ensure(
+      `artifact ${fw.token} declared`,
+      async () => !!(await artifact(fw.token)),
+      () =>
+        gql(UPD, `mutation($r:ArtifactCreateRequest!){createArtifact(request:$r){token}}`, {
+          r: {
+            token: fw.token,
+            kind: 'FIRMWARE',
+            name: 'Thermostat firmware',
+            version: fw.version,
+            component: 'firmware',
+            sizeBytes: String(fw.size),
+            digest: `sha256:${digestBytes.toString('hex')}`,
+            mediaType: 'application/octet-stream',
+            compatibleProfiles: [PROFILE],
+            source: fw.source,
+            notes: fw.notes,
+          },
+        }),
+    );
+    await ensure(
+      `artifact ${fw.token} content uploaded`,
+      async () => (await artifact(fw.token))?.state !== 'UPLOADING',
+      async () => {
+        const res = await fetch(`${BASE}/api/${UPD}/updates/artifacts/${fw.token}/content`, {
+          method: 'PUT',
+          headers: { authorization: `Bearer ${accessToken}`, 'content-type': 'application/octet-stream' },
+          body: bytes,
+        });
+        if (!res.ok) throw new Error(`content upload: HTTP ${res.status} ${(await res.text()).trim()}`);
+      },
+    );
+    if (fw.sign) {
+      await ensure(
+        `artifact ${fw.token} signed`,
+        async () => (await artifact(fw.token))?.trustStatus === 'SIGNED',
+        async () => {
+          // Only a key registered by this run can sign (see the note above).
+          const active = (await signers()).filter((s) => s.name === RELEASE_SIGNER && s.state === 'ACTIVE');
+          const signer = active.map((s) => s.token).find((t) => keys.has(t)) ?? (await register(RELEASE_SIGNER, 'ed25519'));
+          // Ed25519 over the raw 32 digest bytes, which is what the service verifies.
+          const signature = sign(null, digestBytes, keys.get(signer)!).toString('base64');
+          await gql(
+            UPD,
+            `mutation($a:String!,$s:String!,$g:String!){addArtifactSignature(artifactToken:$a,signerToken:$s,signature:$g){trustStatus}}`,
+            { a: fw.token, s: signer, g: signature },
+          );
+        },
+      );
+    }
+    if (fw.retire) {
+      await ensure(
+        `artifact ${fw.token} retired`,
+        async () => (await artifact(fw.token))?.state === 'RETIRED',
+        () => gql(UPD, `mutation($t:String!){retireArtifact(token:$t){state}}`, { t: fw.token }),
+      );
+    }
+  }
+  keys.clear();
+
+  const current = async () =>
+    (
+      await gql(
+        UPD,
+        `query($d:String){updateAssignments(criteria:{pageNumber:1,pageSize:5,deviceToken:$d,currentOnly:true}){results{token artifact{token}}}}`,
+        { d: DEVICE_A },
+      )
+    ).updateAssignments.results as { token: string; artifact: { token: string } }[];
+  await ensure(
+    `update assignment ${ASSIGNED} -> ${DEVICE_A}`,
+    async () => (await current()).some((a) => a.artifact.token === ASSIGNED),
+    () => gql(UPD, `mutation($d:String!,$a:String!){assignArtifact(deviceToken:$d,artifactToken:$a){token}}`, { d: DEVICE_A, a: ASSIGNED }),
+  );
+
+  assertThat('three firmware artifacts (signed + retired, signed, unverified), both signer states, and an assignment on the lobby thermostat', async () => {
+    const [a231, a240, a250] = await Promise.all(FIRMWARE.map((f) => artifact(f.token)));
+    const s = await signers();
+    return (
+      a231?.state === 'RETIRED' && a231.trustStatus === 'SIGNED' &&
+      a240?.state === 'AVAILABLE' && a240.trustStatus === 'SIGNED' &&
+      a250?.state === 'AVAILABLE' && a250.trustStatus === 'UNVERIFIED' &&
+      s.some((x) => x.name === RELEASE_SIGNER && x.state === 'ACTIVE') &&
+      s.some((x) => x.name === OLD_SIGNER && x.state === 'REVOKED') &&
+      (await current()).some((a) => a.artifact.token === ASSIGNED)
+    );
+  });
+}
+
 // The widgetlab tenant (dashboards chapter) is authored by its simulator; the only thing the
 // guide adds is a human name on its operator, so the sidebar footer is not an e-mail address.
 async function seedWidgetsOperator() {
@@ -751,6 +966,7 @@ async function main() {
     ['credential', seedCredential],
     ['mqtt credential + replacement', seedMqttCredentialAndReplacement],
     ['branding', seedBrandingAndProfile],
+    ['over-the-air updates', seedUpdates],
     ['widgets operator', seedWidgetsOperator],
   ];
   for (const [name, fn] of steps) {

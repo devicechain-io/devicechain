@@ -135,6 +135,11 @@ function newDrawer(id: string, route: string, source: string, session: Recipe['s
   };
 }
 
+/** A list page whose New button opens the FormDrawer with this `shot` id. */
+function newDrawerShot(id: string, route: string, drawer: string, source: string): Recipe {
+  return { ...newDrawer(id, route, source), anchor: `${DRAWER}[data-shot-drawer="${drawer}"]` };
+}
+
 const PROFILE = 'routes/device-profiles/resource.tsx';
 const PROFILE_ROUTE = '/device-profiles/bp-thermostat-profile';
 
@@ -775,6 +780,72 @@ export const recipes: Recipe[] = [
   { id: 'settings-branding', session: 'tenant', route: '/branding', anchor: PAGE },
   { id: 'settings-basemap', session: 'tenant', route: '/basemap', anchor: PAGE },
   { id: 'settings-locale', session: 'tenant', route: '/locale', anchor: PAGE },
+
+  // ---- Chapter 16: Over-the-air updates ------------------------------------------------------------------------
+  // The seed declares three thermostat firmware images (2.3.1 signed and retired, 2.4.0 signed,
+  // 2.5.0-rc.1 unverified), registers an active Ed25519 release signer and a revoked P-256 one,
+  // and assigns 2.4.0 to the lobby thermostat. The thermostats never report update progress,
+  // so that assignment stays where the platform put it.
+  {
+    id: 'updates-artifacts-list',
+    session: 'tenant',
+    route: '/updates/artifacts',
+    anchor: ROWS,
+    minRows: { selector: ROWS, count: 3 },
+  },
+  newDrawerShot('updates-artifact-new', '/updates/artifacts', 'artifact-new', 'routes/updates/ArtifactsPage.tsx'),
+  {
+    // A signed artifact: details, its trust, the registered signers and the add-signature form.
+    id: 'updates-artifact-signed',
+    session: 'tenant',
+    route: '/updates/artifacts/thermostat-fw-2-4-0',
+    anchor: `${PAGE} table tbody tr`,
+    minRows: { selector: `${PAGE} table tbody tr`, count: 1 },
+  },
+  {
+    id: 'updates-artifact-signatures',
+    session: 'tenant',
+    route: '/updates/artifacts/thermostat-fw-2-4-0',
+    setup: async (page) => {
+      // The signatures panel sits below the details: bring it into the middle of the frame.
+      await page.locator(`${PAGE} table`).last().waitFor({ timeout: 30_000 });
+      await page.locator(`${PAGE} table`).last().evaluate((el) => el.scrollIntoView({ block: 'center' }));
+    },
+    anchor: `${PAGE} table tbody tr`,
+    minRows: { selector: `${PAGE} table tbody tr`, count: 1 },
+  },
+  {
+    id: 'updates-artifact-unverified',
+    session: 'tenant',
+    route: '/updates/artifacts/thermostat-fw-2-5-0-rc1',
+    anchor: '[data-testid="unverified-notice"]',
+    sources: ['routes/updates/ArtifactDetailPage.tsx'],
+  },
+  {
+    id: 'updates-signers-list',
+    session: 'tenant',
+    route: '/updates/signers',
+    anchor: ROWS,
+    minRows: { selector: ROWS, count: 2 },
+  },
+  newDrawerShot('updates-signer-register', '/updates/signers', 'signer-register', 'routes/updates/SignersPage.tsx'),
+  {
+    id: 'updates-signer-revoke',
+    session: 'tenant',
+    route: '/updates/signers',
+    setup: async (page) => {
+      // Opens the confirmation and stops there: nothing is revoked.
+      await page.locator('[data-shot="signer-revoke"]').first().click();
+    },
+    anchor: '[data-shot="confirm"]',
+    sources: ['routes/updates/SignersPage.tsx'],
+  },
+  deviceTab('updates-device-tab', 'bp-therm-001', 'updates', {
+    then: async (page) => {
+      await page.locator(`${PAGE} table tbody tr`).first().waitFor({ timeout: 30_000 });
+    },
+    sources: [DEVICE_DETAIL, 'routes/devices/DeviceUpdatesPanel.tsx'],
+  }),
 
   // ---- Superuser plumbing proof (the admin chapter proper is S3) -------------------------------------------------
   {

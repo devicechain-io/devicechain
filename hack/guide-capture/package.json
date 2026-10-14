@@ -6,7 +6,8 @@
   "description": "Console user-guide screenshot harness (maintainer tooling, not part of the npm workspaces)",
   "scripts": {
     "seed": "node seed.ts",
-    "capture": "playwright test"
+    "capture": "playwright test",
+    "test": "node --test superuser.test.ts"
   },
   "devDependencies": {
     "@playwright/test": "1.64.0",

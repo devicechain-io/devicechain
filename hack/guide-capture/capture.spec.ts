@@ -44,13 +44,13 @@ for (const recipe of recipes) {
     // `none` is the sign-in screens: the real form, no storage state at all.
     const session = recipe.session === 'none' ? null : loadSession(recipe.session);
     if (!session && recipe.session !== 'none') {
-      // Only the superuser session is optional (it needs a password this harness never reads
+      // Only the superuser session is optional (its password may be neither exported nor readable
       // from the cluster). A tenant session that is missing is a broken bring-up, not a skip.
       if (recipe.session !== 'superuser') throw new Error(`${recipe.id}: no ${recipe.session} session was minted; see global-setup`);
       if (process.env.GUIDE_REQUIRE_SUPERUSER === '1') {
         throw new Error(`${recipe.id}: no ${recipe.session} session and GUIDE_REQUIRE_SUPERUSER=1`);
       }
-      const why = `${recipe.id}: SKIPPED, no ${recipe.session} session (set $DC_ADMIN_PASSWORD for superuser recipes)`;
+      const why = `${recipe.id}: SKIPPED, no ${recipe.session} session (see global-setup: $DC_ADMIN_PASSWORD, or the instance's Secret)`;
       console.warn(why);
       test.skip(true, why);
       return;
