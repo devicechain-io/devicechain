@@ -34,9 +34,10 @@ const SETTLE_FRAMES = 20;
 // RATCHET, not a waiver: a finding not listed fails (a regression), and so does a listed one
 // that no longer occurs at that width in either theme (the fix landed, so the entry goes).
 const KNOWN_FAILURES: ReadonlySet<string> = new Set<string>([
-  // The alarm table's last column (Raised) is cut off at the card's right edge at 960 px. The
-  // sitepulse re-layout gives the table a wider card and deletes this entry.
-  'sp-dashboard|sp-alarms|text-clipped|960',
+  // The engine-temperature card's title ("Engine temp — overheat above 105 °C") is cut to an
+  // ellipsis at 960 px: the frame keeps titles to one line, and this card is too narrow for it.
+  'sp-dashboard|sp-engine-temp|text-overflow|960',
+  'sp-dashboard|sp-engine-temp|text-clipped|960',
   // The same table in the widget lab's half-width card, with seven columns: Raised is cut off.
   'wl-gallery|wl-alarm-table|text-clipped|960',
   // One unbreakable 101-letter word in a half-width label runs out of the card. The stress
@@ -134,9 +135,10 @@ for (const board of BOARDS) {
 // ---- The negative control --------------------------------------------------------
 //
 // A gate is worth nothing until it has been seen to fail. This board is broken on purpose and
-// kept permanently: a card whose title and reading cannot fit it, a label that cannot fit, and
-// two widgets nudged on top of each other, beside one widget that fits and must NOT be flagged
-// (a check that flagged everything would pass the first half of this test).
+// kept permanently: a card whose title and reading cannot fit it, a card whose title alone
+// cannot fit it, a label that cannot fit, and two widgets nudged on top of each other, beside
+// one widget that fits and must NOT be flagged (a check that flagged everything would pass the
+// first half of this test).
 
 for (const width of WIDTHS) {
   test(`the negative control fails the gate at ${width} px`, async ({ page }) => {
@@ -149,6 +151,15 @@ for (const width of WIDTHS) {
       // from readability.ts fails here.
       expect([...kinds('nc-overflowing-card')].sort(), where).toEqual(['text-clipped', 'text-overflow']);
       expect(kinds('nc-overflowing-label').has('text-clipped'), where).toBe(true);
+      // A frame title cut to an ellipsis is a finding, though the frame truncates it on
+      // purpose (readability.ts says why). This card's reading fits; only its title does not.
+      const title = findings.filter((f) => f.widget === 'nc-long-title');
+      expect([...kinds('nc-long-title')].sort(), where).toEqual(['text-clipped', 'text-overflow']);
+      expect(
+        title.every((f) => f.detail.includes('A frame title far too long')),
+        where,
+      ).toBe(true);
+      expect(title.some((f) => f.kind === 'text-overflow' && f.detail.endsWith('(cut to an ellipsis)')), where).toBe(true);
       expect(
         findings.some((f) => f.kind === 'overlap' && f.widget === 'nc-overlap-a' && f.other === 'nc-overlap-b'),
         where,

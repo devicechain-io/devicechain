@@ -57,6 +57,31 @@
       }
     },
     {
+      "id": "nc-long-title",
+      "type": "latest-card",
+      "layout": {
+        "base": {
+          "col": 0,
+          "colSpan": 6,
+          "row": 2,
+          "rowSpan": 4,
+          "z": 0
+        }
+      },
+      "datasource": {
+        "kind": "device",
+        "deviceToken": "gate-device-01",
+        "measurements": [
+          "value"
+        ]
+      },
+      "options": {
+        "measurement": "value",
+        "title": "A frame title far too long to fit on one line of a card this wide, at either gated width",
+        "unit": "kPa"
+      }
+    },
+    {
       "id": "nc-overflowing-label",
       "type": "label",
       "layout": {

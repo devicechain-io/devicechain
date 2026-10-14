@@ -10,6 +10,14 @@
 //                  more than its box: scrollWidth > clientWidth, or scrollHeight >
 //                  clientHeight on an axis that does not scroll. An ellipsis counts: truncated
 //                  text is text the reader cannot read.
+//
+//                  That includes a frame TITLE, which the frame deliberately cuts to one line
+//                  with an ellipsis and a hover tooltip. The ellipsis is the runtime safety
+//                  net for boards nobody here authored, at widths nobody here chose; this
+//                  gate measures the boards WE commit, which a wall display shows with no
+//                  pointer to hover. A committed board whose title needs the net is laid out
+//                  wrong, so it fails like any other cut text. The finding says so ("cut to
+//                  an ellipsis") so it reads as a layout defect, not a frame bug.
 //   text-clipped   a text node's glyph box lies outside an ancestor that clips it, or outside
 //                  its widget's box, which a card clips and a neighbour sits beside. The frame
 //                  body clips by design, so content that outgrows it no longer overflows
@@ -139,7 +147,8 @@ export function measureReadability(): Measurement {
             'text-overflow',
             snippet(container.textContent ?? ''),
             `"${snippet(container.textContent ?? '')}" needs ${container.scrollWidth}x${container.scrollHeight} px, ` +
-              `has ${container.clientWidth}x${container.clientHeight}`,
+              `has ${container.clientWidth}x${container.clientHeight}` +
+              (getComputedStyle(container).textOverflow === 'ellipsis' ? ' (cut to an ellipsis)' : ''),
           );
         }
       }

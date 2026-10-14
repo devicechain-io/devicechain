@@ -1637,8 +1637,11 @@ jobs:
       #
       # The browser is keyed on the EXACT Playwright version the lockfile installed, so a
       # Playwright bump downloads its own browser build instead of reusing one it may not
-      # drive. On a cache hit the install still runs: it skips the download and installs the
-      # system libraries, which live outside the cached directory.
+      # drive. The runner image (ImageOS, e.g. ubuntu24) and arch are in the key too: the
+      # browser build is per distribution, and a key that survived an image move would restore
+      # a build for the old one and never save the new one. On a cache hit the install still
+      # runs: it skips the download and installs the system libraries, which live outside the
+      # cached directory.
       - name: Playwright version
         id: playwright
         run: echo "version=$(node -p "require('@playwright/test/package.json').version")" >> "$GITHUB_OUTPUT"
@@ -1647,7 +1650,7 @@ jobs:
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cache/ms-playwright
-          key: playwright-${{ runner.os }}-${{ steps.playwright.outputs.version }}-chromium-headless-shell
+          key: playwright-${{ runner.os }}-${{ runner.arch }}-${{ env.ImageOS }}-${{ steps.playwright.outputs.version }}-chromium-headless-shell
 
       - name: Install the Playwright browser
         run: npx playwright install --with-deps --only-shell chromium
