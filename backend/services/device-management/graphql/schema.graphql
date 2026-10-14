@@ -542,8 +542,9 @@ type CommandEnqueueVerdict {
     Why the command was refused, as a stable code; null when allowed. One of
     DEVICE_NOT_FOUND (no device has the token), DEVICE_DISABLED (the device is disabled and
     accepts no commands), COMMAND_NOT_IN_VOCABULARY (the device's published profile declares
-    commands and this key is not one of them) or PAYLOAD_SCHEMA_VIOLATION (the payload does
-    not satisfy the command's parameters).
+    commands and this key is not one of them) PAYLOAD_SCHEMA_VIOLATION (the payload does
+    not satisfy the command's parameters) or COMMAND_DESTRUCTIVE_REFUSED (a raw execute of an
+    operation that wipes the device, such as LwM2M Factory Reset).
     Branch on this, not on reason.
     """
     code: String
@@ -560,7 +561,7 @@ type BatchEnqueueRefusal {
     deviceToken: String!
     """
     Why the command was refused, as a stable code: DEVICE_NOT_FOUND, DEVICE_DISABLED,
-    COMMAND_NOT_IN_VOCABULARY or PAYLOAD_SCHEMA_VIOLATION, with the same meanings as in
+    COMMAND_NOT_IN_VOCABULARY, PAYLOAD_SCHEMA_VIOLATION or COMMAND_DESTRUCTIVE_REFUSED, with the same meanings as in
     validateCommandEnqueue. Branch on this, not on reason.
     """
     code: String!
