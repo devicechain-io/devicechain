@@ -554,7 +554,7 @@ export function DashboardWorkspace({
     <div className="flex items-center gap-2">
       {preview && (
         <Combobox
-          options={SYNTHETIC_GENERATORS.map((g) => ({ value: g.value, label: g.label }))}
+          options={SYNTHETIC_GENERATORS.map((g) => ({ value: g, label: t(`syntheticGenerator_${g}`) }))}
           value={generator}
           onChange={(v) => setGenerator(v as SyntheticGenerator)}
           allowClear={false}

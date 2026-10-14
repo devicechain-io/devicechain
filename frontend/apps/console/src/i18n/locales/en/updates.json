@@ -26,14 +26,6 @@
   "exactBytes": "{{bytes}} bytes",
   "trustSigned": "Signed",
   "trustUnverified": "Unverified",
-  "stateAvailable": "Available",
-  "stateUploading": "Uploading",
-  "stateRetired": "Retired",
-  "signerActive": "Active",
-  "signerRevoked": "Revoked",
-  "kindFirmware": "Firmware",
-  "kindSoftware": "Software",
-  "kindConfiguration": "Configuration",
   "fieldFile": "File",
   "fieldFileHelp": "Largest accepted: {{max}}.",
   "chooseFile": "Choose file",
@@ -93,7 +85,7 @@
   "noLongerCounts": "No longer counts (signer revoked)",
   "addSignatureTitle": "Add a signature",
   "fieldSignerKeyId": "Signer key ID",
-  "fieldSignerKeyIdHelp": "The key ID of a registered signer, as shown above or printed by your signing tooling.",
+  "fieldSignerKeyIdHelp": "The key ID of a registered signer, listed on the Signers page, or printed by your signing tooling.",
   "fieldSignature": "Signature (base64)",
   "fieldSignatureHelp": "The signature over this artifact's digest. Ed25519 signs the 32 raw digest bytes; ECDSA P-256 matches cosign sign-blob.",
   "signatureNotBase64": "This is not standard base64.",
@@ -110,5 +102,8 @@
   "unverifiedAllowed": "This instance allows unverified artifacts to be assigned. That is a development setting; do not rely on it in production.",
   "unverifiedPolicyUnknown": "The instance's policy on unverified artifacts could not be read. Assume this artifact cannot be assigned until it is signed.",
   "unverifiedHowTo": "Register your signing key, sign the artifact's digest and attach the signature below. See",
-  "signingGuide": "the signing guide"
+  "signingGuide": "the signing guide",
+  "prov_uploadedBy": "Uploaded by",
+  "prov_source": "Source",
+  "prov_notes": "Notes"
 }

@@ -45,6 +45,14 @@ export interface ColorPickerProps {
   id?: string;
   disabled?: boolean;
   className?: string;
+  /**
+   * The field has no colour of its own (it inherits). The swatch then shows an explicit
+   * empty state instead of the fallback — a black swatch reads as "this is set to black".
+   * The picker panel still opens on `fallback`, so picking is unchanged.
+   */
+  empty?: boolean;
+  /** Tooltip for the empty swatch, e.g. "inherit". */
+  emptyLabel?: string;
 }
 
 export function ColorPicker({
@@ -55,6 +63,8 @@ export function ColorPicker({
   id,
   disabled,
   className,
+  empty = false,
+  emptyLabel,
 }: ColorPickerProps) {
   const [open, setOpen] = useState(false);
   const shown = isHexColor(value) ? value : fallback;
@@ -67,6 +77,8 @@ export function ColorPicker({
           type="button"
           disabled={disabled}
           aria-label={ariaLabel}
+          title={empty ? emptyLabel : undefined}
+          data-empty={empty ? 'true' : undefined}
           className={cn(
             'size-9 shrink-0 cursor-pointer rounded border border-input p-0.5',
             'focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring',
@@ -76,7 +88,19 @@ export function ColorPicker({
         >
           {/* The swatch itself. An inline style because the colour is DATA — a
               Tailwind class cannot express a value chosen at runtime. */}
-          <span className="block size-full rounded-sm" style={{ backgroundColor: shown }} />
+          {empty ? (
+            // No colour of its own: a muted tile struck through, never a colour.
+            <span
+              data-testid="color-swatch-empty"
+              className="block size-full rounded-sm bg-muted text-muted-foreground"
+              style={{
+                backgroundImage:
+                  'linear-gradient(to top right, transparent calc(50% - 1px), currentColor calc(50% - 1px), currentColor calc(50% + 1px), transparent calc(50% + 1px))',
+              }}
+            />
+          ) : (
+            <span className="block size-full rounded-sm" style={{ backgroundColor: shown }} />
+          )}
         </button>
       </PopoverTrigger>
       <PopoverContent className="w-auto p-3" align="start">

@@ -1,5 +1,5 @@
 {
-  "authoritiesDescription": "Las capacidades que otorga este rol. Use \"*\" para acceso completo.",
+  "authoritiesDescription": "Las capacidades que otorga este rol. Usa \"*\" para acceso completo.",
   "authoritiesLabel": "Permisos",
   "colAuthorities": "Permisos",
   "colScope": "Ámbito",

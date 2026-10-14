@@ -37,6 +37,7 @@ import { COMMAND_STATUSES } from '@devicechain/dashboards';
 import { formatTime } from '@/lib/utils';
 import { CommandWaitingNote } from '@/components/CommandWaitingNote';
 import { commandStatusVariant } from '@/lib/command-status';
+import { commandStatusLabel } from '@/lib/enumLabel';
 import { useQuery } from '@/lib/hooks/use-query';
 import { useReload } from '@/routes/common';
 import {
@@ -317,7 +318,7 @@ function BatchCommandsPanel({ batchToken, reloadKey }: { batchToken: string; rel
             // The lifecycle vocabulary as the frontend holds it — one shared list, so this
             // filter cannot fall behind the statuses the badges already know about. The
             // values are the wire strings and are never localized.
-            options={COMMAND_STATUSES.map((s) => ({ value: s, label: s }))}
+            options={COMMAND_STATUSES.map((s) => ({ value: s, label: commandStatusLabel(t, s) }))}
             value={status}
             onChange={setStatus}
             placeholder={t('filterAllStatuses')}
@@ -361,7 +362,7 @@ function BatchCommandsPanel({ batchToken, reloadKey }: { batchToken: string; rel
                 <DataTableRow key={c.id}>
                   <DataTableCell className="font-mono text-foreground">{c.deviceToken}</DataTableCell>
                   <DataTableCell>
-                    <Badge variant={commandStatusVariant(c.status)}>{c.status}</Badge>
+                    <Badge variant={commandStatusVariant(c.status)}>{commandStatusLabel(t, c.status)}</Badge>
                     <CommandWaitingNote command={c} />
                   </DataTableCell>
                   <DataTableCell className="text-muted-foreground">{c.outcome ?? '—'}</DataTableCell>

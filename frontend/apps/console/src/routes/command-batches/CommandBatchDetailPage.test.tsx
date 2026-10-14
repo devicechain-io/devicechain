@@ -318,8 +318,8 @@ describe('CommandBatchDetailPage commands', () => {
 
     renderPage();
 
-    expect(await screen.findByText('HELD')).toBeTruthy();
-    expect(screen.getByText('SUCCESSFUL')).toBeTruthy();
+    expect(await screen.findByText('Held')).toBeTruthy();
+    expect(screen.getByText('Successful')).toBeTruthy();
   });
 
   it('says so when the batch has no command rows to show', async () => {
@@ -347,7 +347,7 @@ describe('CommandBatchDetailPage CSV export', () => {
     renderPage();
     await screen.findByText('dev-a');
     fireEvent.click(screen.getByRole('button', { name: /Any status/ }));
-    fireEvent.click(screen.getByRole('button', { name: 'FAILED' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Failed' }));
     await waitFor(() => expect(lastCommandsCriteria().status).toBe('FAILED'));
     fireEvent.click(screen.getByRole('button', { name: /export csv/i }));
     await waitFor(() => expect(blobs).toHaveLength(1));

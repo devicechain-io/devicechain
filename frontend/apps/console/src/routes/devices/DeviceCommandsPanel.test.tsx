@@ -207,8 +207,8 @@ describe('DeviceCommandsPanel cancel control', () => {
     // The status is rendered as the raw uppercase value the service sends — there is no
     // translation catalog for statuses, and this test pins that the new ones are shown
     // exactly like the ones that came before.
-    expect(await screen.findByText('HELD')).toBeTruthy();
-    expect(screen.getByText('PARKED')).toBeTruthy();
+    expect(await screen.findByText('Held')).toBeTruthy();
+    expect(screen.getByText('Parked')).toBeTruthy();
     expect(cancelControlFor('HELD')).toBeTruthy();
     expect(cancelControlFor('PARKED')).toBeTruthy();
     expect(cancelControlFor('EXPIRED')).toBeNull();
@@ -278,7 +278,7 @@ describe('DeviceCommandsPanel cancel outcomes', () => {
     const [message, variant] = toastMock.mock.calls[0];
     expect(variant).toBe('error');
     // The status that came back is the useful part, so the operator is told it by name.
-    expect(message).toContain('SENT');
+    expect(message).toContain('Sent');
     expect(message).toContain('wasn’t cancelled');
     // …and it is emphatically not the success toast.
     expect(message).not.toBe('Command “cmd-QUEUED” cancelled');
@@ -296,7 +296,7 @@ describe('DeviceCommandsPanel cancel outcomes', () => {
     await waitFor(() => expect(toastMock).toHaveBeenCalled());
     const [message, variant] = toastMock.mock.calls[0];
     expect(variant).toBe('error');
-    expect(message).toContain('SUCCESSFUL');
+    expect(message).toContain('Successful');
     expect(message).not.toBe('Command “cmd-QUEUED” cancelled');
   });
 });

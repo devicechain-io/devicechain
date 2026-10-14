@@ -40,6 +40,7 @@ import { useQuery } from '@/lib/hooks/use-query';
 import { useUpdateAccess } from '@/lib/updateAuthority';
 import { errMessage, useReload } from '@/routes/common';
 import { formatTime, parseJsonObject } from '@/lib/utils';
+import { artifactKindLabel } from '@/lib/enumLabel';
 import {
   getArtifact,
   getUpdateManagementInfo,
@@ -154,7 +155,7 @@ function ArtifactDetail({
         <div className="mt-1 flex flex-wrap items-center gap-2">
           <TrustBadge status={artifact.trustStatus} />
           <ArtifactStateBadge state={artifact.state} />
-          <Badge variant="outline">{artifact.kind}</Badge>
+          <Badge variant="outline">{artifactKindLabel(t, artifact.kind)}</Badge>
         </div>
       }
     >
@@ -245,7 +246,7 @@ function DetailsPanel({ artifact }: { artifact: Artifact }) {
       {provEntries.length > 0 && (
         <dl className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
           {provEntries.map(([k, v]) => (
-            <Fact key={k} label={k}>
+            <Fact key={k} label={t(`prov_${k}`, { defaultValue: k })}>
               {typeof v === 'string' ? v : JSON.stringify(v)}
             </Fact>
           ))}

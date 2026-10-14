@@ -138,12 +138,12 @@ describe('current assignment', () => {
     const card = await screen.findByTestId('current-assignment');
     expect(within(card).getByText('1.0.0')).toBeTruthy();
     expect(within(card).getByText('Signed')).toBeTruthy();
-    expect(within(card).getByText('DOWNLOADING')).toBeTruthy();
+    expect(within(card).getByText('Downloading')).toBeTruthy();
     expect(within(card).getByText(/512 \/ 2048 B \(25\.0%\)/)).toBeTruthy();
     const signer = await within(card).findByTestId('pinned-signer');
     await waitFor(() => expect(signer.textContent).toContain('abcd1234'));
     expect(signer.textContent).toContain('release key');
-    expect(signer.textContent).toContain('ACTIVE');
+    expect(signer.textContent).toContain('Active');
   });
 
   it('shows an unreadable signer pin as an error beside the assignment, not as none', async () => {
@@ -151,7 +151,7 @@ describe('current assignment', () => {
     renderPanel();
     const card = await screen.findByTestId('current-assignment');
     // The assignment is still there: the pin failing must not take the row with it.
-    expect(within(card).getByText('DOWNLOADING')).toBeTruthy();
+    expect(within(card).getByText('Downloading')).toBeTruthy();
     const alert = await within(card).findByText(/pinned to a signature that cannot be read/);
     expect(alert.getAttribute('role')).toBe('alert');
     expect(within(card).queryByText(/pins no signature/)).toBeNull();
@@ -239,7 +239,7 @@ describe('history', () => {
     serve({ current: [assignment()], history: rows, signer: SIGNER });
     renderPanel();
     await screen.findByTestId('current-assignment');
-    await waitFor(() => expect(screen.getAllByText('DOWNLOADING').length).toBe(11));
+    await waitFor(() => expect(screen.getAllByText('Downloading').length).toBe(11));
     expect(callsTo('query AssignmentSigner').map((c) => c[2])).toEqual([{ token: 'asg-1' }]);
   });
 

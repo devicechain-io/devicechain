@@ -27,7 +27,9 @@ import {
   getGeoFenceSetSnapshot,
   type GeoFence,
 } from '@/lib/api/geofences';
+import { useTenantBasemap } from '@/auth/TenantProvider';
 import { FenceMap } from './FenceMap';
+import { resolveFenceBasemap } from './tileBasemap';
 import { fromGeometryDocument, lookupInSnapshot } from './geometry';
 
 export function FenceHistoryPanel({ entity }: { entity: GeoFence }) {
@@ -55,6 +57,8 @@ export function FenceHistoryPanel({ entity }: { entity: GeoFence }) {
   );
 
   const now = fromGeometryDocument(entity.geometry) ?? [];
+  // The same tiles the Basic tab draws on, so the past is not shown on a different map.
+  const basemap = resolveFenceBasemap(useTenantBasemap());
 
   // 🔴 error FIRST, and the message passed through as-is. useQuery already
   // extracts the server's words into a string, so running it through errMessage —
@@ -181,7 +185,14 @@ export function FenceHistoryPanel({ entity }: { entity: GeoFence }) {
           {/* 🔴 disabled, not merely un-wired: this is a picture of a version that
               has already been frozen. Nothing here can be edited, and a map that
               accepted a drag would imply the past could be rewritten. */}
-          <FenceMap vertices={found.vertices} onChange={() => {}} ghost={now} disabled />
+          <FenceMap
+            vertices={found.vertices}
+            onChange={() => {}}
+            ghost={now}
+            tileUrl={basemap?.tileUrl}
+            attribution={basemap?.attribution ?? undefined}
+            disabled
+          />
           <p className="text-muted-foreground text-xs">
             {t('entities:geofenceHistoryLegend', { version: chosen })}
           </p>
