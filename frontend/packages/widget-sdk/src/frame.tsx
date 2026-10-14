@@ -7,8 +7,15 @@
 
 import { type CSSProperties, type ReactNode } from 'react';
 
-import { useWidgetSubject } from './context';
+import { useWidgetFreshness, useWidgetSubject } from './context';
+import { FreshnessReadout, StaleBadge, useFreshness } from './freshness-readout';
+import { useElementSize } from './hooks';
 import { css } from './theme';
+
+// Below either of these (px, content box) the age readout is dropped so a small widget keeps
+// its room for the value; a stale widget still shows its badge, in the corner.
+const FRESHNESS_MIN_WIDTH = 150;
+const FRESHNESS_MIN_HEIGHT = 110;
 
 export interface WidgetFrameProps {
   title?: string;
@@ -26,9 +33,21 @@ export function WidgetFrame({ title, subtitle, children, bodyStyle }: WidgetFram
   // external id, under a subject line naming the same device).
   const rawSub = subtitle ?? subject;
   const sub = rawSub && rawSub.trim() === title?.trim() ? undefined : rawSub;
+
+  // Present only for a widget whose descriptor opts in. Stale (a known threshold, passed) greys
+  // the value out; with no threshold the age is shown and nothing is ever greyed.
+  const freshness = useWidgetFreshness();
+  const reading = useFreshness(freshness?.at, freshness?.staleAfterSeconds);
+  const [rootRef, size] = useElementSize<HTMLDivElement>();
+  const compact = size.width > 0 && (size.width < FRESHNESS_MIN_WIDTH || size.height < FRESHNESS_MIN_HEIGHT);
+  const stale = reading?.stale === true;
+
   return (
     <div
+      ref={rootRef}
+      data-stale={stale ? 'true' : undefined}
       style={{
+        position: 'relative',
         display: 'flex',
         flexDirection: 'column',
         width: '100%',
@@ -85,9 +104,32 @@ export function WidgetFrame({ title, subtitle, children, bodyStyle }: WidgetFram
       {/* The body clips: the card root already stops a widget painting outside the card, and
           this stops one that outgrows its slot painting up over the title bar. minWidth 0
           lets it shrink inside the flex column. */}
-      <div data-widget-body="" style={{ flex: 1, minHeight: 0, minWidth: 0, overflow: 'hidden', ...bodyStyle }}>
+      <div
+        data-widget-body=""
+        style={{
+          flex: 1,
+          minHeight: 0,
+          minWidth: 0,
+          overflow: 'hidden',
+          ...bodyStyle,
+          ...(stale ? { opacity: 0.45, filter: 'grayscale(1)' } : null),
+        }}
+      >
         {children}
       </div>
+      {reading && !compact ? (
+        <div
+          data-widget-freshness=""
+          style={{ padding: '3px 12px', borderTop: `1px solid ${css('border')}`, flex: '0 0 auto' }}
+        >
+          <FreshnessReadout reading={reading} />
+        </div>
+      ) : null}
+      {reading && compact && stale ? (
+        <div style={{ position: 'absolute', top: 4, right: 4 }}>
+          <StaleBadge />
+        </div>
+      ) : null}
     </div>
   );
 }

@@ -24,7 +24,15 @@ import {
   type WidgetDescriptor,
   type WidgetInstance,
 } from '@devicechain/dashboards';
-import { WidgetCandidatesProvider, WidgetSelectProvider, type WidgetRegistry } from '@devicechain/widget-sdk';
+import {
+  newestSampleTime,
+  resolveStaleAfterSeconds,
+  WidgetCandidatesProvider,
+  WidgetFreshnessProvider,
+  WidgetSelectProvider,
+  type WidgetFreshness,
+  type WidgetRegistry,
+} from '@devicechain/widget-sdk';
 import { useMemo, type ComponentType, type ReactNode } from 'react';
 
 import { alarmSubscription, commandSubscription, measurementWindow } from './binding-policy';
@@ -190,8 +198,25 @@ function MeasurementConnectedWidget({ widget, hub, descriptor, Component, action
     initialSamples,
   });
 
+  // Opt-in through the descriptor. The age is of the newest sample among the measurements this
+  // widget shows (its pinned one, else its datasource's, else whatever has arrived); the
+  // threshold is the widget's own option, and absent means age only.
+  const freshness = useMemo<WidgetFreshness | undefined>(() => {
+    if (descriptor.freshness !== true) return undefined;
+    const pinned = optString(widget.options, 'measurement');
+    const names = pinned ? [pinned] : widget.datasource?.measurements;
+    return {
+      at: newestSampleTime(data.latest, names),
+      staleAfterSeconds: resolveStaleAfterSeconds(widget.options),
+    };
+  }, [descriptor, widget.options, widget.datasource, data.latest]);
+
   if (data.error) return <WidgetErrorFrame widget={widget} error={data.error} />;
-  return <Component widget={widget} data={data} actions={actions} />;
+  return (
+    <WidgetFreshnessProvider freshness={freshness}>
+      <Component widget={widget} data={data} actions={actions} />
+    </WidgetFreshnessProvider>
+  );
 }
 
 function AlarmConnectedWidget({ widget, hub, descriptor, Component, actions }: ChannelProps) {

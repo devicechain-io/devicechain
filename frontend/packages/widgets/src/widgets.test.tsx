@@ -10,7 +10,7 @@ import type {
   WidgetStreamSink,
 } from '@devicechain/dashboards';
 import { act, cleanup, render, screen } from '@testing-library/react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // No globals config, so register testing-library's DOM teardown ourselves —
 // otherwise renders leak across tests and text matches find stale elements.
@@ -160,5 +160,63 @@ describe('ConnectedWidget', () => {
     render(<ConnectedWidget widget={widget('latest-card', { precision: 0 })} hub={hub} />);
     await act(async () => {}); // let the optimistic availability check resolve
     expect(screen.getByText('Device unavailable')).toBeTruthy();
+  });
+});
+
+describe('ConnectedWidget freshness (descriptor opt-in)', () => {
+  const NOW = Date.parse('2026-10-14T12:00:00Z');
+  const at = (secondsAgo: number) => new Date(NOW - secondsAgo * 1000).toISOString();
+
+  function hubWith(ago: number) {
+    let sink: WidgetStreamSink | null = null;
+    const hub = {
+      subscribeWidget: (_ds: DatasourceSelector, s: WidgetStreamSink) => {
+        sink = s;
+        return () => {};
+      },
+      isDatasourceAvailable: async () => true,
+    } as unknown as DashboardHub;
+    return { hub, push: () => act(() => sink?.next(sample('temperature', 42, at(ago)))) };
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+    document.documentElement.lang = 'en';
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('shows the sample age on an opted-in widget and ticks it', () => {
+    const { hub, push } = hubWith(12);
+    render(<ConnectedWidget widget={widget('latest-card', { precision: 0 })} hub={hub} />);
+    push();
+    expect(screen.getByText(/12 sec/)).toBeTruthy();
+    act(() => void vi.advanceTimersByTime(3000));
+    expect(screen.getByText(/15 sec/)).toBeTruthy();
+  });
+
+  it('marks it stale only when the widget sets staleAfterSeconds and the sample is older', () => {
+    const { hub, push } = hubWith(120);
+    const { unmount } = render(
+      <ConnectedWidget widget={widget('latest-card', { precision: 0, staleAfterSeconds: 60 })} hub={hub} />,
+    );
+    push();
+    expect(screen.getByText('stale')).toBeTruthy();
+    unmount();
+
+    const quiet = hubWith(120);
+    render(<ConnectedWidget widget={widget('latest-card', { precision: 0 })} hub={quiet.hub} />);
+    quiet.push();
+    expect(screen.getByText(/2 min/)).toBeTruthy();
+    expect(screen.queryByText('stale')).toBeNull();
+  });
+
+  it('adds nothing to a widget that did not opt in', () => {
+    const { container } = render(
+      <ConnectedWidget widget={widget('label', { text: 'Zone A' }, undefined)} hub={hubWith(1).hub} />,
+    );
+    expect(container.querySelector('[data-widget-freshness]')).toBeNull();
   });
 });
