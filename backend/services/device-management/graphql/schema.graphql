@@ -128,6 +128,13 @@ type DeviceType implements Model & TokenReference & NamedEntity & BrandedEntity 
     """
     profile: DeviceProfile
     """
+    The maintenance window that holds this type's disruptive commands until it opens, or
+    null when the type has none. Commands whose definition has impact DISRUPTIVE or
+    DESTRUCTIVE wait for the window; every other command is sent whenever the device is
+    reachable.
+    """
+    maintenanceWindow: MaintenanceWindow
+    """
     Manufacturer of the devices of this type: free text, up to 128 characters. facetValues
     lists the values already in use.
     """
@@ -562,11 +569,148 @@ type BatchEnqueueRefusal {
     """
     Why the command was refused, as a stable code: DEVICE_NOT_FOUND, DEVICE_DISABLED,
     COMMAND_NOT_IN_VOCABULARY, PAYLOAD_SCHEMA_VIOLATION or COMMAND_DESTRUCTIVE_REFUSED, with the same meanings as in
-    validateCommandEnqueue. Branch on this, not on reason.
+    validateCommandEnqueue; commandDispatchSchedule adds WINDOW_AFTER_EXPIRY (the device
+    type's maintenance window next opens after the command expires). Branch on this, not on
+    reason.
     """
     code: String!
     """Why the command was refused, in words a person can act on. The wording may change."""
     reason: String!
+}
+
+# A maintenance window is a recurring weekly schedule in an IANA time zone. It gates the START
+# of a disruptive operation: a command claimed inside the window finishes whenever it
+# finishes. Assigned to a device type; slots are one JSON document because they are read and
+# validated whole.
+"""
+A recurring weekly schedule, in an IANA time zone, during which disruptive commands may
+start. Assign it to a device type; commands whose definition has impact DISRUPTIVE or
+DESTRUCTIVE then wait for it to open.
+"""
+type MaintenanceWindow implements Model & TokenReference & NamedEntity & MetadataEntity {
+    """Server-assigned numeric identifier, as a string. Address a window by its token instead where you can."""
+    id: ID!
+    """When the window was created, as an RFC 3339 timestamp."""
+    createdAt: String
+    """When the window was last written, as an RFC 3339 timestamp."""
+    updatedAt: String
+    """Always null: deleted windows are not returned."""
+    deletedAt: String
+    """Identifier of the window, unique within the tenant."""
+    token: String!
+    """Human-readable name, up to 128 characters. Null when none is set."""
+    name: String
+    """Free-text description, up to 1024 characters. Null when none is set."""
+    description: String
+    """The IANA time zone the slots are read in, for example Europe/Berlin."""
+    timezone: String!
+    """
+    The weekly openings as a JSON array of objects with day (MONDAY to SUNDAY), start (a
+    24-hour HH:MM wall-clock time in the zone) and durationMinutes (1 to 10080, elapsed
+    time). A slot may run past midnight and past the end of the week.
+    """
+    slots: String!
+    """Caller-defined metadata as a JSON document, or null when none is set."""
+    metadata: String
+}
+
+"""Fields for a new maintenance window."""
+input MaintenanceWindowCreateRequest {
+    """Identifier for the new window. A token already in use in the tenant is refused with CONFLICT."""
+    token: String!
+    """Human-readable name, up to 128 characters."""
+    name: String
+    """Free-text description, up to 1024 characters."""
+    description: String
+    """An IANA time zone name such as Europe/Berlin. Local and unknown names are refused."""
+    timezone: String!
+    """
+    The weekly openings as a JSON array of {day, start, durationMinutes}, at least one and at
+    most 56. Unknown keys and out-of-range values are refused.
+    """
+    slots: String!
+    """Caller-defined metadata. Must be valid JSON; an empty string means none."""
+    metadata: String
+}
+
+# A PARTIAL update; there is deliberately no `token` field — the mutation's own argument
+# identifies the window.
+"""A partial update to a maintenance window: omit a field to leave it alone."""
+input MaintenanceWindowUpdateRequest {
+    """New name, or null to clear it."""
+    name: String
+    """New description, or null to clear it."""
+    description: String
+    """New time zone. An explicit null or an unknown zone is refused."""
+    timezone: String
+    """New weekly openings (validated as on create). An explicit null is refused."""
+    slots: String
+    """New metadata (valid JSON, replacing the stored document), or null to clear it."""
+    metadata: String
+}
+
+"""Criteria for searching maintenance windows. Results are newest first."""
+input MaintenanceWindowSearchCriteria {
+    """Page to return, starting at 1. Values below 1 are read as 1."""
+    pageNumber: Int!
+    """Results per page. Below 1 means the default of 100; above 1000 is capped at 1000."""
+    pageSize: Int!
+}
+
+"""One page of maintenance windows matching a search."""
+type MaintenanceWindowSearchResults {
+    """The windows on this page."""
+    results: [MaintenanceWindow!]!
+    """Where this page sits in the full result set."""
+    pagination: SearchResultsPagination!
+}
+
+"""When an operation under a maintenance window may start."""
+type MaintenanceWindowOpening {
+    """False when no window has the token (it was deleted or never existed); the other fields are then meaningless."""
+    found: Boolean!
+    """True when the window is open at the instant asked about."""
+    openNow: Boolean!
+    """
+    The earliest instant an operation may start, as an RFC 3339 timestamp: the instant asked
+    about when the window is open, otherwise the next opening.
+    """
+    dispatchAfter: String!
+    """When the opening dispatchAfter belongs to ends, as an RFC 3339 timestamp."""
+    closes: String!
+}
+
+"""
+A command bound to one opening of its device type's maintenance window: it may be sent only
+between dispatchAfter and dispatchUntil. When the window is open now, dispatchAfter is already
+past and the command may be sent at once, but only until the window closes.
+"""
+type CommandDispatchHold {
+    """Token of the device the command is for."""
+    deviceToken: String!
+    """Token of the maintenance window that gates the command."""
+    windowToken: String!
+    """The earliest instant the command may be sent, as an RFC 3339 timestamp."""
+    dispatchAfter: String!
+    """When the opening closes, as an RFC 3339 timestamp. The command may not be sent at or after it."""
+    dispatchUntil: String!
+}
+
+"""
+The maintenance-window part of an enqueue decision for one or many devices: which commands
+must wait, and which are refused because the window opens only after they expire.
+"""
+type CommandDispatchSchedule {
+    """
+    Commands gated by a window, whether it is open now or not. A device not listed here and not
+    refused may be sent to at any time.
+    """
+    holds: [CommandDispatchHold!]!
+    """
+    Devices refused with the stable code WINDOW_AFTER_EXPIRY: the window next opens after the
+    command expires, so it could only lapse unsent. Branch on code, not reason.
+    """
+    refusals: [BatchEnqueueRefusal!]!
 }
 
 """One page of the devices an entity group contains, for use as the target of a command."""
@@ -619,6 +763,8 @@ type PublishedCommand {
     description: String
     """The command's parameters as a JSON array of parameter descriptors, or null when it takes no structured arguments."""
     parameterSchema: String
+    """NORMAL, DISRUPTIVE or DESTRUCTIVE. The last two wait for the device type's maintenance window."""
+    impact: String!
 }
 
 """The commands a device currently accepts, from its profile's active published version."""
@@ -691,6 +837,13 @@ type CommandDefinition implements Model & TokenReference & NamedEntity & Metadat
     command takes no structured arguments, in which case payloads are not checked.
     """
     parameterSchema: String
+    """
+    How disruptive the command is to the device's work: NORMAL (a read or a benign write),
+    DISRUPTIVE (interrupts it, such as a reboot) or DESTRUCTIVE (erases state, such as a
+    wipe). DISRUPTIVE and DESTRUCTIVE commands wait for the device type's maintenance window
+    when it has one; NORMAL commands never do.
+    """
+    impact: String!
     """Caller-defined metadata as a JSON document, or null when none is set."""
     metadata: String
 }
@@ -719,6 +872,12 @@ input CommandDefinitionCreateRequest {
     structured arguments.
     """
     parameterSchema: String
+    """
+    How disruptive the command is: NORMAL (the default), DISRUPTIVE or DESTRUCTIVE.
+    DISRUPTIVE and DESTRUCTIVE commands wait for the device type's maintenance window. An
+    unknown value fails the request.
+    """
+    impact: String
     """Caller-defined metadata. Must be valid JSON; an empty string means none."""
     metadata: String
 }
@@ -759,6 +918,11 @@ input CommandDefinitionUpdateRequest {
     structured arguments.
     """
     parameterSchema: String
+    """
+    New impact (NORMAL, DISRUPTIVE or DESTRUCTIVE). An explicit null or an unknown value is
+    refused. The change reaches devices when the profile is published.
+    """
+    impact: String
     """New metadata (valid JSON, replacing the stored document), or null to clear it."""
     metadata: String
 }
@@ -1302,6 +1466,12 @@ input DeviceTypeCreateRequest {
     type with no profile. An unknown token fails the request.
     """
     profileToken: String
+    """
+    Token of the maintenance window that holds the type's disruptive commands until it
+    opens. Omit it, or send an empty value, for a type with no window. An unknown token
+    fails the request.
+    """
+    maintenanceWindowToken: String
     """Manufacturer of the devices of this type, up to 128 characters."""
     manufacturer: String
     """Model of the devices of this type, up to 128 characters."""
@@ -1341,6 +1511,13 @@ input DeviceTypeUpdateRequest {
     what every device of the type measures and accepts.
     """
     profileToken: String
+    """
+    Token of the maintenance window the type should use; null or an empty value removes the
+    current one, after which its disruptive commands are sent whenever the device is
+    reachable. An unknown token fails the whole update. Commands already waiting for the old
+    window are moved to the new schedule within about a minute.
+    """
+    maintenanceWindowToken: String
     """New manufacturer, or null to clear it."""
     manufacturer: String
     """New model, or null to clear it."""
@@ -3229,6 +3406,47 @@ type Query {
     # the type has never been published.
     activeAssetTypeVersion(token: String!): AssetTypeVersion
 
+    """Find maintenance windows by unique id. Ids that match nothing are omitted. Requires device:read."""
+    maintenanceWindowsById(
+        """Ids of the windows to find."""
+        ids: [ID!]!
+    ): [MaintenanceWindow!]!
+    """Find maintenance windows by unique token. Tokens that match nothing are omitted. Requires device:read."""
+    maintenanceWindowsByToken(
+        """Tokens of the windows to find."""
+        tokens: [String!]!
+    ): [MaintenanceWindow!]!
+    """List the tenant's maintenance windows, one page at a time. Requires device:read."""
+    maintenanceWindows(
+        """Which page to return."""
+        criteria: MaintenanceWindowSearchCriteria!
+    ): MaintenanceWindowSearchResults!
+    """
+    When an operation under the maintenance window with this token may start at the given
+    instant. The answer for a deleted window is found=false, not an error. Requires device:read.
+    """
+    maintenanceWindowOpening(
+        """Token of the window."""
+        token: String!
+        """The instant to evaluate at, as an RFC 3339 timestamp. Omit it for now."""
+        at: String
+    ): MaintenanceWindowOpening!
+    """
+    Decides, for a command about to be enqueued, which devices must wait for their device
+    type's maintenance window and which are refused because the window opens after the
+    command expires. Only commands whose definition has impact DISRUPTIVE or DESTRUCTIVE, on
+    a type that has a window, are ever held. Devices that do not exist or are disabled are
+    skipped; validateCommandEnqueue decides those. Requires device:read.
+    """
+    commandDispatchSchedule(
+        """Tokens of the target devices, at most 2000."""
+        deviceTokens: [String!]!
+        """Key of the command to send."""
+        commandKey: String!
+        """When the command expires, as an RFC 3339 timestamp. Omit it for a command that never expires."""
+        expiresAt: String
+    ): CommandDispatchSchedule!
+
     # Find customer types by unique id.
     customerTypesById(ids: [ID!]!): [CustomerType!]!
     # Find customer types by unique token.
@@ -3660,6 +3878,34 @@ type Mutation {
     updateCustomerType(token: String!, request: CustomerTypeUpdateRequest!): CustomerType!
     # Delete a customer type. Refused while any customer references it.
     deleteCustomerType(token: String!): Boolean!
+    """
+    Create a maintenance window. The time zone and slots are validated together, and the slots
+    are stored in canonical form. Requires device:write.
+    """
+    createMaintenanceWindow(
+        """The window to create."""
+        request: MaintenanceWindowCreateRequest!
+    ): MaintenanceWindow!
+    """
+    Update a maintenance window. A partial update: an omitted field is left alone. Commands
+    already waiting on the window follow the new schedule within about a minute. Requires
+    device:write.
+    """
+    updateMaintenanceWindow(
+        """Token of the window to update."""
+        token: String!
+        """The fields to change."""
+        request: MaintenanceWindowUpdateRequest!
+    ): MaintenanceWindow!
+    """
+    Delete a maintenance window. Refused while any device type uses it, because deleting it would
+    stop holding those types' disruptive commands. Requires device:write.
+    """
+    deleteMaintenanceWindow(
+        """Token of the window to delete."""
+        token: String!
+    ): Boolean!
+
     # Create a new customer.
     createCustomer(request: CustomerCreateRequest): Customer!
     # Update an existing customer.

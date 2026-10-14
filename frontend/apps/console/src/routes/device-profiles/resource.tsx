@@ -224,6 +224,7 @@ function commandColumns(t: (key: string) => string): DefinitionColumn<CommandDef
   return [
     { header: 'deviceProfiles:defColKey', cell: (d) => <span className="font-medium">{d.commandKey}</span> },
     { header: 'common:colName', cell: (d) => d.name || <Dash /> },
+    { header: 'deviceProfiles:defColImpact', cell: (d) => t(`deviceProfiles:defImpact.${d.impact}`) },
     { header: 'deviceProfiles:defColParameters', cell: (d) => (d.parameterSchema ? t('deviceProfiles:defParamSchemaDeclared') : <Dash />) },
   ];
 }

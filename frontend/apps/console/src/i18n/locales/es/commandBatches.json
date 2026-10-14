@@ -182,5 +182,6 @@
   "unreadableNothingKnown": "No se sabe si el lote se creó: a diferencia de un fallo de conexión, esta respuesta no dice nada en ningún sentido. Revisa la lista de lotes antes de volver a enviar, para no mandar a la flota una segunda copia.",
   "versionOption": "v{{version}}",
   "versionOptionLabelled": "v{{version}} — {{label}}",
-  "vocabularyUnavailable": "No se pudieron leer los comandos publicados de ese dispositivo, así que la clave del comando es texto libre. La plataforma la comprueba igualmente."
+  "vocabularyUnavailable": "No se pudieron leer los comandos publicados de ese dispositivo, así que la clave del comando es texto libre. La plataforma la comprueba igualmente.",
+  "waitingForWindow": "{{waiting}} de {{accepted}} esperaban una ventana de mantenimiento cuando se disparó este lote."
 }

@@ -245,6 +245,7 @@ El `code` por dispositivo usa el mismo vocabulario abierto que el rechazo de una
 - `COMMAND_NOT_IN_VOCABULARY`
 - `PAYLOAD_SCHEMA_VIOLATION`, transmitido desde el perfil del dispositivo
 - `HELD_CEILING_EXCEEDED`, para los dispositivos que no cupieron en el espacio restante del inquilino
+- `WINDOW_AFTER_EXPIRY`, para los dispositivos cuya [ventana de mantenimiento](./maintenance-windows.md#window-after-expiry) se abre después de que caduque el comando
 
 Consulta [Cuando se rechaza una admisión](./sending-commands.md#when-an-enqueue-is-refused) para
 saber qué significa cada uno.

@@ -30,6 +30,8 @@ export const LWM2M_STANDARD_COMMANDS = [
     commandKey: 'lwm2m.reboot',
     slug: 'lwm2m-reboot',
     name: 'Reboot',
+    // A reboot interrupts the device, so it waits for the device type's maintenance window.
+    impact: 'DISRUPTIVE',
     description: 'Reboots the device (LwM2M Device object, Reboot resource).',
   },
   {
@@ -38,6 +40,7 @@ export const LWM2M_STANDARD_COMMANDS = [
     name: 'Read device information',
     description:
       'Reads manufacturer, model number, serial number, firmware version and battery level, and reports any the device did not provide.',
+    impact: 'NORMAL',
   },
 ] as const;
 
@@ -68,6 +71,7 @@ export function Lwm2mStandardCommands({
           name: c.name,
           description: c.description,
           parameterSchema: null,
+          impact: c.impact,
           metadata: null,
         });
       }

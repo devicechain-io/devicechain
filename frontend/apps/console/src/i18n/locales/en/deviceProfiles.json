@@ -525,5 +525,11 @@
   "coverageRecipientsLabel": "Recipients",
   "coverageRecipientsDescription": "Comma-separated email addresses.",
   "coveragePolicyName": "Notify on {{severity}} alarms",
-  "coverageCreateConfirm": "Create {{severity}} policy"
+  "coverageCreateConfirm": "Create {{severity}} policy",
+  "defColImpact": "Impact",
+  "defImpactLabel": "Impact",
+  "defImpactHint": "Disruptive and destructive commands wait for the device type's maintenance window; normal commands are never held.",
+  "defImpact.NORMAL": "Normal",
+  "defImpact.DISRUPTIVE": "Disruptive",
+  "defImpact.DESTRUCTIVE": "Destructive"
 }

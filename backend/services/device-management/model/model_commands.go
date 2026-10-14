@@ -38,6 +38,14 @@ type CommandDefinition struct {
 	DeviceProfile   *DeviceProfile
 	CommandKey      string          // the command the profile's devices accept
 	ParameterSchema *datatypes.JSON // ordered []ParameterSpec (JSONB); nil = no declared params
+
+	// Impact says how disruptive the command is to the device's work: NORMAL (a read or a
+	// benign write), DISRUPTIVE (a reboot) or DESTRUCTIVE (a wipe). It is vocabulary, like the
+	// key, and travels with the published version. Only DISRUPTIVE and DESTRUCTIVE commands
+	// are held for the device type's maintenance window; NORMAL ones dispatch whenever the
+	// device is reachable. Empty is read as NORMAL, which is what a definition published
+	// before this field existed carries.
+	Impact string `gorm:"size:16"`
 }
 
 // DefaultOrder implements rdb.Sortable with the registry default: newest first, token
@@ -59,7 +67,9 @@ type CommandDefinitionCreateRequest struct {
 	Name               *string
 	Description        *string
 	ParameterSchema    *string
-	Metadata           *string
+	// Impact is NORMAL, DISRUPTIVE or DESTRUCTIVE. Omitted or null is NORMAL.
+	Impact   *string
+	Metadata *string
 }
 
 // A PARTIAL update to a command definition: omit a field to leave the stored value
@@ -79,7 +89,10 @@ type CommandDefinitionUpdateRequest struct {
 	// ParameterSchema is nullable — a command that takes no structured arguments is a
 	// real state — so an explicit null clears it back to that.
 	ParameterSchema dcgraphql.OptionalString
-	Metadata        dcgraphql.OptionalString
+	// Impact is required: an explicit null is refused (a definition always has one), an
+	// unknown value is refused, and omitting it keeps the stored impact.
+	Impact   dcgraphql.OptionalString
+	Metadata dcgraphql.OptionalString
 }
 
 // Search criteria for locating command definitions.

@@ -185,6 +185,13 @@ type Api struct {
 	// because a batch that fell back to looping the single validator would issue one
 	// network round trip per device, which is the cost the batch gate exists to remove.
 	BatchValidator BatchEnqueueValidator
+	// DispatchScheduler, when set, stamps the maintenance-window hold on a command at enqueue
+	// and refuses one whose window opens only after it expires. Nil skips the window gate,
+	// as a nil validator skips the vocabulary gate; main.go logs that mode.
+	DispatchScheduler DispatchScheduler
+	// WindowOpenings, when set, lets the re-stamp pass move waiting commands after their
+	// window is edited. Nil leaves stamps where they were written.
+	WindowOpenings WindowOpeningResolver
 	// GroupTargetResolver, when set, resolves a group-targeted batch to its devices.
 	// Nil makes a group target FAIL rather than resolve to nothing: an empty batch would
 	// report success for a fleet write that reached nobody.
@@ -424,6 +431,16 @@ func (api *Api) CreateCommand(ctx context.Context, request *CommandCreateRequest
 		}
 	}
 
+	// The maintenance-window gate: a DISRUPTIVE or DESTRUCTIVE command on a device type with
+	// a window waits for it. The hold is stamped on the row below and checked by every claim;
+	// a command whose window opens only after it expires is refused here instead of being
+	// accepted to lapse unsent. Same two-outcome discipline as the gate above: a refusal is
+	// relayed, a failure to decide fails closed with a sanitized message.
+	hold, err := api.windowHoldFor(ctx, request.DeviceToken, request.Name, expiresAt)
+	if err != nil {
+		return nil, err
+	}
+
 	// 🔴 CODED, NOT BARE, EVEN THOUGH THE GUARD ABOVE MAKES THESE UNREACHABLE TODAY. Every
 	// client-fault refusal in this service carries a RejectionCode so rejectionCodeOf and
 	// recordBatchOutcome can classify it and the documented rejection table stays true. A
@@ -452,6 +469,9 @@ func (api *Api) CreateCommand(ctx context.Context, request *CommandCreateRequest
 		Status:      CommandQueued.String(),
 		QueuedTime:  time.Now(),
 		ExpiresAt:   expiresAt,
+	}
+	if hold != nil {
+		stampHold(created, *hold)
 	}
 
 	// The held-command ceiling and the insert run in ONE transaction, so the count
@@ -1084,9 +1104,11 @@ func drainableStatusStrings() []string {
 // nonce, and the caller must not publish.
 func (api *Api) MarkSent(ctx context.Context, id uint) (string, bool, error) {
 	nonce := newDispatchNonce()
+	heldSQL, heldArgs := dispatchableNowWhere(time.Now())
 	res := api.RDB.DB(ctx).Model(&Command{Model: gorm.Model{ID: id}}).
 		Where("id = ? AND status IN ?", id, claimableStatusStrings()).
 		Where("(tenant_id, device_token) NOT IN (?)", api.disabledDevices(ctx)).
+		Where(heldSQL, heldArgs...).
 		Updates(map[string]any{
 			"status":         CommandSent.String(),
 			"sent_time":      sql.NullTime{Time: time.Now(), Valid: true},
@@ -1656,11 +1678,13 @@ func (api *Api) DrainableCommands(ctx context.Context, deviceToken string, limit
 	// The horizon is read ONCE, here, rather than per row: a drain that evaluated
 	// `now` while walking would be comparing rows against different instants.
 	liveSQL, liveArgs := liveWhere(time.Now())
+	heldSQL, heldArgs := dispatchableNowWhere(time.Now())
 	found := make([]*Command, 0, limit)
 	result := api.RDB.DB(ctx).
 		Where("device_token = ?", deviceToken).
 		Where("status IN ?", drainableStatusStrings()).
 		Where(liveSQL, liveArgs...).
+		Where(heldSQL, heldArgs...).
 		Order("id ASC").
 		Limit(limit).
 		Find(&found)
@@ -1722,9 +1746,11 @@ func (api *Api) DrainableCommands(ctx context.Context, deviceToken string, limit
 // it back would leave that transport unable to settle anything it delivered.
 func (api *Api) MarkSentByToken(ctx context.Context, token string) (string, bool, error) {
 	nonce := newDispatchNonce()
+	heldSQL, heldArgs := dispatchableNowWhere(time.Now())
 	res := api.RDB.DB(ctx).Model(&Command{}).
 		Where("token = ? AND status IN ?", token, claimableStatusStrings()).
 		Where("(tenant_id, device_token) NOT IN (?)", api.disabledDevices(ctx)).
+		Where(heldSQL, heldArgs...).
 		Updates(map[string]any{
 			"status":         CommandSent.String(),
 			"sent_time":      sql.NullTime{Time: time.Now(), Valid: true},
@@ -1809,9 +1835,11 @@ func (api *Api) ConfirmDispatch(ctx context.Context, token, nonce string) (strin
 // committing between the brake write and this one) cannot be staged through ConfirmDispatch.
 func (api *Api) rotateDispatch(ctx context.Context, where string, args []any) (string, bool, error) {
 	next := newDispatchNonce()
+	heldSQL, heldArgs := dispatchableNowWhere(time.Now())
 	res := api.RDB.DB(ctx).Model(&Command{}).
 		Where(where, args...).
 		Where("status = ?", CommandSent.String()).
+		Where(heldSQL, heldArgs...).
 		Where("(batch_id IS NULL OR batch_id NOT IN (?))", api.cancelledBatchIds(ctx)).
 		Updates(map[string]any{
 			"sent_time":      sql.NullTime{Time: time.Now(), Valid: true},
@@ -2402,7 +2430,9 @@ func (api *Api) TryReconcileLock(ctx context.Context, fn func() error) (bool, er
 // that can wedge.
 func (api *Api) PendingCommands(ctx context.Context) ([]*Command, error) {
 	found := make([]*Command, 0)
+	heldSQL, heldArgs := dispatchableNowWhere(time.Now())
 	result := api.RDB.DB(ctx).Where("status IN ?", sweepableStatusStrings()).
+		Where(heldSQL, heldArgs...).
 		Order("id ASC").Find(&found)
 	if result.Error != nil {
 		return nil, result.Error

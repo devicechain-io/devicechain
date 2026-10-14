@@ -228,6 +228,19 @@ func (api *Api) decideCommandBatch(ctx context.Context, request *CommandBatchCre
 	}
 	admissible := withoutRefused(targets.deviceTokens, refusals)
 
+	// The maintenance-window gate, over the devices the vocabulary gate let through. A device
+	// whose window opens only after the command expires is REFUSED like any other (and so
+	// obeys allowPartial); one whose window is merely closed is admitted with a hold that
+	// every claim will honour.
+	holds, windowRefusals, err := api.scheduleBatchHolds(ctx, admissible, request.Name, expiresAt)
+	if err != nil {
+		return nil, err
+	}
+	if len(windowRefusals) > 0 {
+		refusals = append(refusals, windowRefusals...)
+		admissible = withoutRefused(admissible, windowRefusals)
+	}
+
 	// 🔴 A per-device refusal fails the WHOLE batch unless the caller opted in. allowPartial
 	// means "I accept that some devices may not get this command", one meaning applied to
 	// every refusal reason — a flag that covered ceiling refusals but silently tolerated
@@ -351,6 +364,19 @@ func (api *Api) decideCommandBatch(ctx context.Context, request *CommandBatchCre
 
 		created.Accepted = len(admitted)
 		acct.accepted = len(admitted)
+		// How many of the ADMITTED members wait is a fact about this moment, recorded on
+		// the batch like resolved and accepted. A member bound to the opening that is open
+		// now is gated but not waiting.
+		waiting := 0
+		decidedAt := time.Now()
+		for _, token := range admitted {
+			if hold, held := holds[token]; held && hold.DispatchAfter.After(decidedAt) {
+				waiting++
+			}
+		}
+		if api.DispatchScheduler != nil {
+			created.Waiting = sql.NullInt32{Int32: int32(waiting), Valid: true}
+		}
 		created.Refusals, created.RefusalCounts = summarizeRefusals(refusals)
 		// ON CONFLICT DO NOTHING for the same reason CreateCommand uses it: the replay
 		// probe runs OUTSIDE this transaction, so two concurrent issues of the same batch
@@ -372,7 +398,7 @@ func (api *Api) decideCommandBatch(ctx context.Context, request *CommandBatchCre
 			conflicted = true
 			return nil
 		}
-		return insertBatchCommands(tx, created, admitted, payload, expiresAt)
+		return insertBatchCommands(tx, created, admitted, payload, expiresAt, holds)
 	})
 	if verdict != nil {
 		return nil, verdict
@@ -661,7 +687,7 @@ func lockTenantForBatch(ctx context.Context, tx *gorm.DB) error {
 // different pairs can collide onto one string) and two full-length tokens exceed the
 // 128-character bound.
 func insertBatchCommands(tx *gorm.DB, batch *CommandBatch, deviceTokens []string,
-	payload []byte, expiresAt sql.NullTime) error {
+	payload []byte, expiresAt sql.NullTime, holds map[string]DispatchHold) error {
 	if len(deviceTokens) == 0 {
 		return nil
 	}
@@ -702,6 +728,9 @@ func insertBatchCommands(tx *gorm.DB, batch *CommandBatch, deviceTokens []string
 		cmd.CreatedAt = queuedTime
 		cmd.UpdatedAt = queuedTime
 		cmd.Token = batchCommandToken(batch.ID, i)
+		if hold, held := holds[deviceToken]; held {
+			stampHold(cmd, hold)
+		}
 		if len(payload) > 0 {
 			raw := datatypes.JSON(payload)
 			cmd.Payload = &raw

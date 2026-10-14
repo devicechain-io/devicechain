@@ -171,6 +171,9 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	// "unset" zero the field treats as "use the platform default".
 	CommandDeliveryProcessor.SweepInterval = time.Duration(Configuration.SweepIntervalSeconds) * time.Second
 	CommandDeliveryProcessor.DisabledSource = disabledSource(infra)
+	// The re-stamp pass reads windows from the same owner enqueue asked. Set here for the
+	// reason the line above is: the processor does not exist until this callback runs.
+	CommandDeliveryProcessor.WindowOpenings = Api.WindowOpenings
 
 	// The dispatch nudge: enqueueing a command hands its DEVICE to the processor's bounded
 	// queue, whose workers dispatch that device's backlog through the same gates the sweep
@@ -324,14 +327,14 @@ func tenantLifecycleGate(infra mscfg.InfrastructureConfiguration, gates *governa
 func wireDeviceManagementGates() {
 	infra := Microservice.InstanceConfiguration.Infrastructure
 	if infra.ServiceAuth.Secret == "" {
-		log.Warn().Msg("Service secret not configured — command-delivery will NOT validate commands before enqueue (device existence and payload schema unchecked), including fleet-wide batches; group-targeted batches will be refused.")
+		log.Warn().Msg("Service secret not configured — command-delivery will NOT validate commands before enqueue (device existence and payload schema unchecked), including fleet-wide batches, and will NOT hold disruptive commands for maintenance windows; group-targeted batches will be refused.")
 		return
 	}
 	// Guard the device-management coordinate too: a config document predating this
 	// feature carries no deviceManagement block, and building http://:0/graphql
 	// would fail every enqueue. Degrade to no-validation (loudly) rather than trap.
 	if infra.DeviceManagement.Hostname == "" || infra.DeviceManagement.Port == 0 {
-		log.Warn().Msg("device-management endpoint not configured (infrastructure.deviceManagement) — command-delivery will NOT validate commands before enqueue (device existence and payload schema unchecked), including fleet-wide batches; group-targeted batches will be refused.")
+		log.Warn().Msg("device-management endpoint not configured (infrastructure.deviceManagement) — command-delivery will NOT validate commands before enqueue (device existence and payload schema unchecked), including fleet-wide batches, and will NOT hold disruptive commands for maintenance windows; group-targeted batches will be refused.")
 		return
 	}
 	client := svcclient.New(infra.UserManagement, infra.ServiceAuth.Secret, "command-delivery", []string{string(auth.DeviceRead)})
@@ -339,7 +342,13 @@ func wireDeviceManagementGates() {
 	Api.EnqueueValidator = verify.NewEnqueueValidator(client, url)
 	Api.BatchValidator = verify.NewBatchValidator(client, url)
 	Api.GroupTargetResolver = verify.NewGroupResolver(client, url)
-	log.Info().Str("deviceManagement", url).Msg("Command enqueue will be validated against device-management (device existence + published command vocabulary + payload schema, ADR-043), for single commands and for fleet batches; entity groups will be resolved there as batch targets.")
+	// The maintenance-window gate shares the validator's coordinates and its fate: with no
+	// device-management endpoint there is nobody to ask, and the branch above has already
+	// returned and said so.
+	windows := verify.NewWindowScheduler(client, url)
+	Api.DispatchScheduler = windows
+	Api.WindowOpenings = windows
+	log.Info().Str("deviceManagement", url).Msg("Command enqueue will be validated against device-management (device existence + published command vocabulary + payload schema, ADR-043), for single commands and for fleet batches; entity groups will be resolved there as batch targets; disruptive commands will be held for their device type's maintenance window.")
 }
 
 // wireHeldCeilingResolver wires the PER-TENANT held-command ceiling: an operator's

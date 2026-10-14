@@ -133,6 +133,19 @@ type Command implements Model & TokenReference & MetadataEntity {
     """
     expiresAt: String
     """
+    The start of the maintenance-window opening the command may be sent in, as an RFC 3339
+    timestamp; null when the command is not gated by a window. While the status is QUEUED, HELD
+    or PARKED and this is in the future the command is waiting for the window; it stays QUEUED
+    while it waits. A past value means the opening has begun. A command that is not sent before
+    that opening closes is moved to the next one.
+    """
+    dispatchAfter: String
+    """
+    The token of the maintenance window that gates the command, or null when it is not gated.
+    Editing that window moves the commands still waiting on it to the new schedule.
+    """
+    maintenanceWindowToken: String
+    """
     The payload the device returned with its answer, as a JSON document serialized to a string;
     null until the device answers or when it returned none.
     """
@@ -457,6 +470,13 @@ type CommandBatch implements Model & TokenReference & MetadataEntity {
     batchToken. resolved equals accepted plus the sum of refusalCounts.
     """
     accepted: Int!
+    """
+    How many of the accepted commands were held for their device type's maintenance window when
+    the batch fired. A stored fact about that moment, not a live count; null for a batch from
+    before maintenance windows existed. To see which have gone out since, search commands by
+    batchToken.
+    """
+    waiting: Int
     """
     A bounded sample of the devices that were refused (at most 100 per refusal code). Use
     refusalCounts for exact totals.

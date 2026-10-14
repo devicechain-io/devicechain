@@ -44,6 +44,12 @@ machinery apply exactly as they do to the three above. There is no parallel API.
 | `lwm2m.reboot`         | POST (Execute `/3/0/4`) | none (any payload is ignored) | `success:true` |
 | `lwm2m.readDeviceInfo` | GET `/3/0/0`, `/3/0/1`, `/3/0/2`, `/3/0/3`, `/3/0/9` | none | `success:true`, `payload` = JSON of the values read plus a `missing` list |
 
+Declare `lwm2m.reboot` with `impact: DISRUPTIVE` (the console's "Add LwM2M standard commands" does). A
+DISRUPTIVE command is held for the device type's maintenance window, if it has one: the hold is checked by
+the claim in command-delivery, so the wake drain this adapter runs honours it exactly as the delivery sweep
+does — a sleeping device that registers before its window opens is not drained of the held reboot.
+`lwm2m.readDeviceInfo` stays NORMAL.
+
 `lwm2m.readDeviceInfo` answers with `{"manufacturer":…,"modelNumber":…,"serialNumber":…,
 "firmwareVersion":…,"batteryLevel":<int>,"missing":[{"resource","path","reason"}]}`. A resource the
 device does not report (4.04), will not give the server (4.01/4.03/4.05) or returns in a format other

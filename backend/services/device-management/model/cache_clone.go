@@ -81,6 +81,13 @@ func cloneDeviceTypeValue(in DeviceType) DeviceType {
 	if in.Profile != nil {
 		out.Profile = cloneDeviceProfile(in.Profile)
 	}
+	out.MaintenanceWindowId = clonePtr(in.MaintenanceWindowId)
+	if in.MaintenanceWindow != nil {
+		w := *in.MaintenanceWindow
+		w.Metadata = cloneJSONPtr(in.MaintenanceWindow.Metadata)
+		w.Slots = datatypes.JSON(cloneSlice([]byte(in.MaintenanceWindow.Slots)))
+		out.MaintenanceWindow = &w
+	}
 	if in.Devices != nil {
 		out.Devices = make([]Device, len(in.Devices))
 		for i := range in.Devices {

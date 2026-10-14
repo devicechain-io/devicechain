@@ -5,6 +5,7 @@ package model
 
 import (
 	"context"
+	"time"
 
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/rdb"
@@ -82,9 +83,11 @@ func (api *Api) QueuedCommandsForDevice(ctx context.Context, deviceToken string,
 		limit = rdb.MaxPageSize
 	}
 	found := make([]*Command, 0, limit)
+	heldSQL, heldArgs := dispatchableNowWhere(time.Now())
 	result := api.RDB.DB(ctx).
 		Where("device_token = ?", deviceToken).
 		Where("status IN ?", sweepableStatusStrings()).
+		Where(heldSQL, heldArgs...).
 		Order("id ASC").
 		Limit(limit).
 		Find(&found)

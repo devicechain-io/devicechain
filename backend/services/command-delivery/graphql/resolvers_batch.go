@@ -159,6 +159,13 @@ func (r *CommandBatchResolver) Accepted() int32 {
 	return int32(r.M.Accepted)
 }
 
+func (r *CommandBatchResolver) Waiting() *int32 {
+	if r.M.Waiting.Valid {
+		return &r.M.Waiting.Int32
+	}
+	return nil
+}
+
 // When this batch was called off, if it was.
 func (r *CommandBatchResolver) CancelledAt() *string {
 	if !r.M.CancelledAt.Valid {

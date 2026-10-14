@@ -50,8 +50,10 @@ Un comando emitido se persiste y se rastrea a través de un conjunto de estados.
 
 Estos estados significan que el comando aún no ha terminado:
 
-- **`QUEUED`** — aceptado y validado, a la espera de su primera decisión de despacho. Es realmente
-  transitorio: un comando no se queda aquí.
+- **`QUEUED`** — aceptado y validado, a la espera de su primera decisión de despacho. Normalmente
+  es transitorio: un comando no se queda aquí. La excepción es un comando disruptivo que espera una
+  [ventana de mantenimiento](#maintenance-windows): permanece en `QUEUED`, con `dispatchAfter`
+  fijado en la próxima apertura, hasta que la ventana se abre.
 - **`HELD`** — la plataforma retiene el comando deliberadamente porque sabe que el dispositivo está
   ausente. Aquí es donde se acumula el pendiente de una flota desconectada, y puede permanecer
   durante días. Un comando retenido cuenta como en tránsito: todavía puedes cancelarlo, y un TTL
@@ -336,6 +338,116 @@ al orden de ejecución entre comandos a menos que compartan un carril. Una secue
 significado, como escribir una imagen de firmware y luego ejecutarla, tiene que agruparse en el
 dispositivo, porque la plataforma no puede hacer que un dispositivo que ejecuta dos comandos a la
 vez los ejecute uno tras otro.
+
+## Ventanas de mantenimiento {#maintenance-windows}
+
+Algunos comandos interrumpen un dispositivo (un reinicio) o borran su estado. Una **ventana de
+mantenimiento** es un calendario semanal recurrente que indica cuándo puede *iniciarse* uno de esos
+comandos. Un comando que llega con la ventana cerrada se acepta y espera a la próxima apertura.
+
+### Impacto y ventanas {#maintenance-window-model}
+
+Cada definición de comando tiene un `impact`: `NORMAL` (el valor por defecto: una lectura o una
+escritura inocua), `DISRUPTIVE` (interrumpe el dispositivo, como un reinicio) o `DESTRUCTIVE` (borra
+estado). Solo los comandos `DISRUPTIVE` y `DESTRUCTIVE` se retienen para una ventana; los `NORMAL`
+nunca. El impacto forma parte del vocabulario publicado del perfil, así que viaja con la versión
+publicada, y una definición publicada antes de que existiera el campo se lee como `NORMAL`. El
+comando `lwm2m.reboot` de [LwM2M](./lwm2m.md#named-operations-and-device-information) se crea como
+`DISRUPTIVE`; las definiciones que ya declaraste no cambian.
+
+Una **ventana de mantenimiento** es un recurso del inquilino: un token, un nombre, una zona horaria
+IANA como `Europe/Berlin` (`Local` y los nombres desconocidos se rechazan) y de 1 a 56 franjas
+semanales. Cada franja es un día (`MONDAY` a `SUNDAY`), un `start` como hora de reloj de 24 horas
+`HH:MM` en esa zona y una `durationMinutes` de 1 a 10080. Una franja puede cruzar la medianoche y el
+final de la semana.
+
+```json
+[
+  { "day": "SATURDAY", "start": "22:00", "durationMinutes": 240 },
+  { "day": "SUNDAY",   "start": "02:00", "durationMinutes": 120 }
+]
+```
+
+Una ventana se asigna a un **tipo de dispositivo**, como máximo una por tipo. Ese es todo el alcance
+de la v1: no hay ventana por grupo, por dispositivo ni predeterminada del inquilino, ni ventanas de
+bloqueo o festivos, ni límite de concurrencia por ventana.
+
+### La retención vive en el comando {#maintenance-window-hold}
+
+Cuando un comando `DISRUPTIVE` o `DESTRUCTIVE` se encola para un dispositivo cuyo tipo tiene una
+ventana, y la ventana está cerrada, el comando se acepta y **espera**. Permanece en `QUEUED`, con
+`dispatchAfter` fijado en la próxima apertura y `maintenanceWindowToken` con el nombre de la
+ventana. No se añadió ningún estado nuevo. Si la ventana está abierta, el comando se envía como
+siempre, pero sigue ligado a esa apertura: si no se ha enviado cuando la ventana se cierra (porque
+su dispositivo está desconectado, por ejemplo), espera a la siguiente apertura en lugar de salir
+cuando vuelva el dispositivo. Esto vale igual para un comando individual, un lote y la acción de
+enviar comando de una regla de detección.
+
+La retención es un campo de la fila del comando, y quien la comprueba es la **reclamación** (claim):
+un comando no puede reclamarse para entrega antes de su `dispatchAfter`, ni una vez cerrada la
+apertura a la que está ligado. Es deliberado. Todas las
+rutas de entrega terminan en una reclamación, así que la regla se escribe una vez y ninguna puede
+saltársela: el barrido periódico de entrega, el vaciado al despertar de LwM2M (un dispositivo
+dormido que despierta) y la confirmación en vivo la respetan. Una compuerta colocada delante de cada
+ruta exigiría que todas las rutas, presentes y futuras, se acordaran de ella.
+
+La ventana controla solo el **inicio**. Un comando ya reclamado dentro de la ventana termina cuando
+termine. Un comando en espera cuenta para el [techo de comandos sin entregar](#held-command-ceiling)
+del inquilino y puede cancelarse, también como lote completo, como cualquier comando en cola. El
+registro de un lote informa `waiting`: cuántos miembros admitidos quedaron retenidos para una
+ventana cuando se disparó. Es un hecho almacenado, y `null` en los lotes antiguos.
+
+### Rechazado en lugar de condenado {#window-after-expiry}
+
+Si la próxima apertura es *posterior* al `expiresAt` del comando (por defecto, siete días), el
+encolado se rechaza con el código estable `WINDOW_AFTER_EXPIRY`, en lugar de aceptar un comando que
+solo podría caducar. En un lote es un rechazo por dispositivo como cualquier otro: se rechaza todo el
+lote salvo que se indique `allowPartial`.
+
+### Por qué franjas semanales y una zona horaria, no cron {#maintenance-window-recurrence}
+
+Los operadores describen el mantenimiento como «el sábado por la noche, cuatro horas», no como una
+expresión. Las franjas semanales en una zona con nombre lo dicen directamente, se pueden validar por
+completo al guardar y se pueden mostrar como un calendario. Cron admitiría calendarios (cada 7
+minutos, el día 31 del mes) que no son ventanas de mantenimiento y son difíciles de explicar cuando
+un comando sigue esperando.
+
+El horario de verano sigue dos reglas. Una hora de inicio que no existe (el salto de primavera) se
+abre en el momento en que el reloj salta. Una hora de inicio que ocurre dos veces (la repetición de
+otoño) se abre en la primera ocurrencia. La duración es tiempo **transcurrido**, de modo que una
+ventana de cuatro horas son cuatro horas reales en un día de cambio de horario.
+
+### Editar y eliminar una ventana {#maintenance-window-editing}
+
+Los comandos que ya esperan una ventana siguen su nuevo calendario en aproximadamente un minuto. Un
+pase con bloqueo de líder en la entrega de comandos consulta periódicamente al propietario de la
+ventana. Es un sondeo, no un evento, así que el límite es de unos 60 segundos, y converge incluso si
+una notificación se hubiera perdido. El contador `command_delivery_window_restamps_total` cuenta los
+comandos cuya retención se movió porque la ventana se editó o se eliminó, o se cerró de nuevo antes
+de que volviera el dispositivo.
+
+- Eliminar una ventana se rechaza mientras algún tipo de dispositivo la use. Si una ventana
+  desaparece de todos modos, los comandos en espera se liberan y se despachan con normalidad.
+- Si un dispositivo está desconectado durante toda una apertura, su comando sin entregar ya no
+  puede reclamarse en cuanto la ventana se cierra, y ese mismo pase lo mueve a la siguiente
+  apertura. Si la entrega de comandos no puede contactar con el propietario de la ventana, los
+  comandos en espera siguen esperando; ninguno se libera.
+- Desasignar una ventana de un tipo de dispositivo no libera los comandos ya marcados con ella;
+  siguen esperando a esa ventana.
+
+### Lo que no se controla {#maintenance-window-limits}
+
+- Un `lwm2m.execute` sin procesar, o cualquier comando cuya clave no esté declarada `DISRUPTIVE` o
+  `DESTRUCTIVE` en el vocabulario publicado, no se controla. Eso incluye un perfil que no declara
+  vocabulario.
+- El control de las actualizaciones por aire no está construido. El mismo resolvedor de ventanas
+  está expuesto para que una futura función de actualizaciones lo use.
+- Si la gestión de dispositivos no es alcanzable al encolar, el comando se **rechaza**: la compuerta
+  falla cerrada y nunca envía un comando sin control. Si la entrega de comandos no tiene configurado
+  un endpoint de gestión de dispositivos, la compuerta está desactivada y una advertencia al
+  arrancar lo indica.
+
+Para configurarla, consulta [Ventanas de mantenimiento](../guides/maintenance-windows.md).
 
 ## Un comando, muchos dispositivos {#command-batches}
 

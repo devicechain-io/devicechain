@@ -415,6 +415,83 @@ var entities = []entity{
 		},
 	},
 
+	{
+		// A weekly maintenance window, so the maintenance_windows table has a row the drill
+		// can watch across an upgrade (the table sweep fails on a tenant-scoped table
+		// nothing wrote to). Slots are stored as a canonical JSON document, so selecting
+		// them asserts the canonical form survives the upgrade byte for byte.
+		//
+		// A SKIPPABLE LEAF, with the next two rows: all three carry the Requires of the
+		// feature they belong to, so a baseline that predates maintenance windows skips the
+		// whole group and a newer one runs it. It deliberately does NOT Record: a recorded
+		// row cannot be skipped (plan refuses it, because dependents would send an empty
+		// token), so the windowed device type derives this token with state.tok instead —
+		// a pure function of the name, the same string whether or not this row ran.
+		Name:     "maintenance-window",
+		Area:     "device-management",
+		Mutation: "createMaintenanceWindow",
+		Input:    "MaintenanceWindowCreateRequest!",
+		Read:     "maintenanceWindowsByToken",
+		Requires: []string{"MaintenanceWindowCreateRequest.slots"},
+		Fields:   "token name description timezone slots metadata",
+		Vars: func(s *state) map[string]any {
+			return map[string]any{"req": map[string]any{
+				"token":       s.tok("maintenance-window"),
+				"name":        "apiprobe window",
+				"description": "Sunday 02:00 for four hours, plant time.",
+				"timezone":    "Europe/Berlin",
+				// Canonical form: keys in the order the server re-encodes them, no
+				// whitespace, so the stored document equals what was sent.
+				"slots":    `[{"day":"SUNDAY","start":"02:00","durationMinutes":240}]`,
+				"metadata": meta("maintenance-window"),
+			}}
+		},
+	},
+	{
+		// Depends on: device-profile, maintenance-window. A second device type that uses the
+		// window, so the type -> window reference (a foreign key on an existing table) is
+		// watched across the upgrade as well as the window row itself. Carries the window's
+		// Requires so it can never outlive the row it needs.
+		Name:     "device-type-windowed",
+		Area:     "device-management",
+		Mutation: "createDeviceType",
+		Input:    "DeviceTypeCreateRequest!",
+		Read:     "deviceTypesByToken",
+		Requires: []string{"MaintenanceWindowCreateRequest.slots", "DeviceTypeCreateRequest.maintenanceWindowToken"},
+		Fields:   "token name metadata profile{token} maintenanceWindow{token}",
+		Vars: func(s *state) map[string]any {
+			return map[string]any{"req": map[string]any{
+				"token":                  s.tok("device-type-windowed"),
+				"name":                   "apiprobe windowed type",
+				"profileToken":           s.tokens["profile"],
+				"maintenanceWindowToken": s.tok("maintenance-window"),
+				"metadata":               meta("device-type-windowed"),
+			}}
+		},
+	},
+	{
+		// Depends on: device-profile. A DISRUPTIVE command, so the impact column on
+		// command_definitions is watched across the upgrade: an impact lost to an upgrade
+		// reads back as NORMAL and silently stops holding the command for its window.
+		Name:     "command-definition-disruptive",
+		Area:     "device-management",
+		Mutation: "createCommandDefinition",
+		Input:    "CommandDefinitionCreateRequest!",
+		Read:     "commandDefinitionsByToken",
+		Requires: []string{"CommandDefinitionCreateRequest.impact"},
+		Fields:   "token name commandKey impact metadata deviceProfile{token}",
+		Vars: func(s *state) map[string]any {
+			return map[string]any{"req": map[string]any{
+				"token":              s.tok("command-definition-disruptive"),
+				"deviceProfileToken": s.tokens["profile"],
+				"commandKey":         "apiprobe-wipe",
+				"name":               "Wipe",
+				"impact":             "DISRUPTIVE",
+				"metadata":           meta("command-definition-disruptive"),
+			}}
+		},
+	},
+
 	// ---- device-management: devices --------------------------------------
 	{
 		// Depends on: device-profile (adopts it, un-fused).
@@ -1316,7 +1393,7 @@ func otherWrites() int {
 	return len(seen)
 }
 
-const tenantCreateMutations = 27
+const tenantCreateMutations = 28
 
 // tenantPublishMutations is the same claim for publishes, measured the same way by
 // TestThePublishDenominatorMatchesTheSchemas. Separate from the count above because

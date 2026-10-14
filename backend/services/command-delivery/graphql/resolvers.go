@@ -88,6 +88,20 @@ func (r *CommandResolver) ExpiresAt() *string {
 	return nil
 }
 
+func (r *CommandResolver) DispatchAfter() *string {
+	if r.M.DispatchAfter.Valid {
+		return util.FormatTime(r.M.DispatchAfter.Time)
+	}
+	return nil
+}
+
+func (r *CommandResolver) MaintenanceWindowToken() *string {
+	if r.M.WindowToken.Valid {
+		return &r.M.WindowToken.String
+	}
+	return nil
+}
+
 func (r *CommandResolver) ResponsePayload() *string {
 	return util.MetadataStr(r.M.ResponsePayload)
 }

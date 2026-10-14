@@ -20,6 +20,11 @@ export const METRIC_DATA_TYPES: Option[] = [
   { value: 'BOOLEAN', label: 'Boolean', description: 'On/off, stored as 0/1' },
 ];
 
+// How disruptive a command is. DISRUPTIVE and DESTRUCTIVE commands wait for the device
+// type's maintenance window; NORMAL never does. Wire strings, localized where shown
+// (deviceProfiles:defImpact.<value>).
+export const COMMAND_IMPACTS = ['NORMAL', 'DISRUPTIVE', 'DESTRUCTIVE'] as const;
+
 // Alarm comparison operators (ADR-041). Labels use plain math symbols; the value is
 // the backend token.
 export const ALARM_OPERATORS: Option[] = [

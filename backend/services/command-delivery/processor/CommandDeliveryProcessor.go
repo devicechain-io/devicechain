@@ -174,6 +174,17 @@ type CommandDeliveryProcessor struct {
 	// out a two-minute tick.
 	holdInterval     time.Duration
 	strandedInterval time.Duration
+	// windowInterval is the spacing of the maintenance-window re-stamp pass, with the same
+	// zero-means-default reading as its siblings.
+	windowInterval    time.Duration
+	lastWindowRestamp time.Time
+	// windowCursor is where the next re-stamp pass resumes listing (tenant, window) pairs;
+	// the zero value is the beginning.
+	windowCursor model.WaitingWindow
+
+	// WindowOpenings reads a maintenance window's current schedule from its owner, for the
+	// re-stamp pass. MAY BE NIL, which turns the pass off and leaves stamps as written.
+	WindowOpenings model.WindowOpeningResolver
 
 	// Presence answers, for a batch of one tenant's devices, whether dispatching to
 	// each is worth doing right now. MAY BE NIL — read it through presenceStates, never
@@ -1081,7 +1092,7 @@ func (cproc *CommandDeliveryProcessor) handleResponse(ctx context.Context, msg m
 // at-least-once, as it was before; what the sweep lock removes is the guaranteed,
 // every-single-tick duplication of running N sweepers by design.
 func (cproc *CommandDeliveryProcessor) sweepLocked(ctx context.Context) error {
-	var expiryErr error
+	var expiryErr, restampErr error
 	ran, err := cproc.Api.TrySweepLock(ctx, func() error {
 		count, byFromStatus, err := cproc.Api.ExpireStale(core.WithSystemContext(ctx), time.Now())
 		if err != nil {
@@ -1103,7 +1114,16 @@ func (cproc *CommandDeliveryProcessor) sweepLocked(ctx context.Context) error {
 			log.Info().Int64("expired", count).Interface("fromStatus", byFromStatus).
 				Msg("Command expiry sweep reached a terminal state for stale commands.")
 		}
-		return cproc.deliverPendingCommands(ctx)
+		delivered := cproc.deliverPendingCommands(ctx)
+		// After delivery, so a row whose window just opened is claimed this tick and a row
+		// whose window just closed is rolled on, not the other way round.
+		if err := cproc.restampWindows(ctx); err != nil {
+			log.Error().Err(err).Msg("maintenance window re-stamp pass failed")
+			if restampErr == nil {
+				restampErr = err
+			}
+		}
+		return delivered
 	})
 	// 🔴 `ran` IS READ BEFORE `err`, BECAUSE TryAdvisoryLock RETURNS `true, fn()` — so a
 	// non-nil error means the LOCK failed only when the body never ran. Labelling every
@@ -1120,6 +1140,12 @@ func (cproc *CommandDeliveryProcessor) sweepLocked(ctx context.Context) error {
 	}
 	if expiryErr != nil {
 		return fmt.Errorf("expiring stale commands: %v: %w", expiryErr, core.ErrPassPartial)
+	}
+	if restampErr != nil {
+		if errors.Is(restampErr, core.ErrPassPartial) {
+			return restampErr
+		}
+		return fmt.Errorf("re-stamping maintenance windows: %v: %w", restampErr, core.ErrPassPartial)
 	}
 	return nil
 }

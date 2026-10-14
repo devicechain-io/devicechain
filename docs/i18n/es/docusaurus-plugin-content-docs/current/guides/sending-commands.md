@@ -102,6 +102,7 @@ redacción puede cambiar.
 | `code` | Significado | ¿Reintentar? |
 |---|---|---|
 | `HELD_CEILING_EXCEEDED` | El inquilino está en su límite de comandos **no entregados** — todo lo que sigue en `QUEUED`, `HELD` o `PARKED`, no solo lo retenido para dispositivos ausentes. | **Sí** — se libera conforme esos comandos salen |
+| `WINDOW_AFTER_EXPIRY` | El comando es disruptivo y la [ventana de mantenimiento](./maintenance-windows.md#window-after-expiry) del tipo de dispositivo se abre después de `expiresAt`, así que solo podría caducar. | No — alarga el TTL o cambia la ventana |
 | `DEVICE_NOT_FOUND` | No hay ningún dispositivo con ese token en este inquilino. | No |
 | `DEVICE_DISABLED` | El dispositivo está [deshabilitado](./device-credentials.md#disabling-a-device). El comando no se guarda para más tarde. | No — habilita primero el dispositivo |
 | `COMMAND_NOT_IN_VOCABULARY` | El perfil restringe los comandos y esta clave no es uno de ellos. Revisa mayúsculas y minúsculas. | No |

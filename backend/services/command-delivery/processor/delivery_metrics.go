@@ -130,6 +130,13 @@ type DeliveryMetrics struct {
 	// gate that has become a one-way door.
 	HoldsReleased prometheus.Counter
 
+	// WindowRestamps counts commands whose maintenance-window hold was moved to the window's
+	// current schedule: the window was edited, deleted, or closed again while the command's
+	// device was still absent. A steady rate with no window edits means devices are missing
+	// their windows (offline through every opening), which is the fleet's condition rather
+	// than a fault of the platform.
+	WindowRestamps prometheus.Counter
+
 	// StrandedObserved counts commands the stranded pass found sitting in SENT past the
 	// grace horizon, StrandedRecovered counts those it re-armed (by where they landed),
 	// and StrandedSkipped counts those it declined, by reason.
@@ -294,6 +301,10 @@ func NewDeliveryMetrics(ms *core.Microservice) DeliveryMetrics {
 			"Tenants whose disabled-device record this process has not yet read; their commands wait"),
 		HoldsReleased: ms.NewCounter("command_delivery_holds_released_total",
 			"Withheld commands returned to the dispatch queue because their device came back"),
+		WindowRestamps: ms.NewCounter("command_delivery_window_restamps_total",
+			"Commands whose maintenance-window hold was moved to the window's current schedule "+
+				"because the window was edited or deleted, or closed again before the command's "+
+				"device came back"),
 		StrandedObserved: ms.NewCounter("command_delivery_stranded_observed_total",
 			"Commands found sitting in SENT with no outcome for longer than the platform could "+
 				"still have been retrying them"),

@@ -187,7 +187,7 @@ export type CommandsQueryVariables = Exact<{
 }>;
 
 
-export type CommandsQuery = { commands: { results: Array<{ id: string, token: string, deviceToken: string, batchToken: string | null, name: string, payload: string | null, status: string, queuedTime: string | null, sentTime: string | null, respondedTime: string | null, expiresAt: string | null, responsePayload: string | null, error: string | null, outcome: string | null }>, pagination: { pageStart: number | null, pageEnd: number | null, totalRecords: number | null } } };
+export type CommandsQuery = { commands: { results: Array<{ id: string, token: string, deviceToken: string, batchToken: string | null, name: string, payload: string | null, status: string, queuedTime: string | null, sentTime: string | null, respondedTime: string | null, expiresAt: string | null, dispatchAfter: string | null, maintenanceWindowToken: string | null, responsePayload: string | null, error: string | null, outcome: string | null }>, pagination: { pageStart: number | null, pageEnd: number | null, totalRecords: number | null } } };
 
 export type CreateCommandMutationVariables = Exact<{
   request: CommandCreateRequest;
@@ -201,14 +201,14 @@ export type CommandBatchesQueryVariables = Exact<{
 }>;
 
 
-export type CommandBatchesQuery = { commandBatches: { results: Array<{ id: string, token: string, createdAt: string | null, name: string, targetKind: string, groupToken: string | null, groupVersion: number | null, allowPartial: boolean, resolved: number, accepted: number, cancelledAt: string | null, cancelledCount: number | null }>, pagination: { pageStart: number | null, pageEnd: number | null, totalRecords: number | null } } };
+export type CommandBatchesQuery = { commandBatches: { results: Array<{ id: string, token: string, createdAt: string | null, name: string, targetKind: string, groupToken: string | null, groupVersion: number | null, allowPartial: boolean, resolved: number, accepted: number, waiting: number | null, cancelledAt: string | null, cancelledCount: number | null }>, pagination: { pageStart: number | null, pageEnd: number | null, totalRecords: number | null } } };
 
 export type CommandBatchesByTokenQueryVariables = Exact<{
   tokens: Array<string> | string;
 }>;
 
 
-export type CommandBatchesByTokenQuery = { commandBatchesByToken: Array<{ id: string, token: string, createdAt: string | null, name: string, payload: string | null, targetKind: string, groupToken: string | null, groupVersion: number | null, allowPartial: boolean, resolved: number, accepted: number, cancelledAt: string | null, cancelledCount: number | null, retryOf: string | null, retries: Array<string>, refusals: Array<{ deviceToken: string, code: string, reason: string }>, refusalCounts: Array<{ code: string, count: number }> }> };
+export type CommandBatchesByTokenQuery = { commandBatchesByToken: Array<{ id: string, token: string, createdAt: string | null, name: string, payload: string | null, targetKind: string, groupToken: string | null, groupVersion: number | null, allowPartial: boolean, resolved: number, accepted: number, waiting: number | null, cancelledAt: string | null, cancelledCount: number | null, retryOf: string | null, retries: Array<string>, refusals: Array<{ deviceToken: string, code: string, reason: string }>, refusalCounts: Array<{ code: string, count: number }> }> };
 
 export type CreateCommandBatchMutationVariables = Exact<{
   request: CommandBatchCreateRequest;
@@ -286,6 +286,8 @@ export const CommandsDocument = new TypedDocumentString(`
       sentTime
       respondedTime
       expiresAt
+      dispatchAfter
+      maintenanceWindowToken
       responsePayload
       error
       outcome
@@ -327,6 +329,7 @@ export const CommandBatchesDocument = new TypedDocumentString(`
       allowPartial
       resolved
       accepted
+      waiting
       cancelledAt
       cancelledCount
     }
@@ -352,6 +355,7 @@ export const CommandBatchesByTokenDocument = new TypedDocumentString(`
     allowPartial
     resolved
     accepted
+    waiting
     refusals {
       deviceToken
       code

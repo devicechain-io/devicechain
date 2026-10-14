@@ -79,6 +79,7 @@ var partialUpdateMutations = []partialUpdateMutation{
 	{mutation: "updateDevice", input: "DeviceUpdateRequest"},
 	{mutation: "updateMetricDefinition", input: "MetricDefinitionUpdateRequest"},
 	{mutation: "updateCommandDefinition", input: "CommandDefinitionUpdateRequest"},
+	{mutation: "updateMaintenanceWindow", input: "MaintenanceWindowUpdateRequest"},
 	{mutation: "updateDetectionRule", input: "DetectionRuleUpdateRequest"},
 	{mutation: "updateGeoFence", input: "GeoFenceUpdateRequest"},
 	{
@@ -162,7 +163,7 @@ func newPartialUpdateWireCtx(t *testing.T) context.Context {
 		&model.AssetType{}, &model.Asset{}, &model.CustomerType{}, &model.Customer{},
 		&model.AreaType{}, &model.Area{}, &model.GeoFence{}, &model.GeoFenceSetVersion{},
 		&model.EntityGroup{}, &model.DeviceCredential{}, &model.ProvisioningProfile{},
-		&model.EntityRelationshipType{}); err != nil {
+		&model.EntityRelationshipType{}, &model.MaintenanceWindow{}); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
 	ctx := core.WithTenant(context.Background(), "acme")
