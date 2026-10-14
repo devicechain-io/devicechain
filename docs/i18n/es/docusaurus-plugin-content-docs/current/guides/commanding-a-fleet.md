@@ -294,6 +294,86 @@ En la consola, la página de detalle de un lote muestra estos comandos y tiene u
 Exporta todos los comandos que cumplen el filtro de estado vigente, no solo la página visible, hasta
 10 000 filas; si el lote es mayor, la consola lo indica y acotas el filtro para obtener el resto.
 
+## Reintenta los dispositivos que no tuvieron éxito {#retry-the-devices-that-did-not-succeed}
+
+Una escritura de flota que falla en parte no debería obligarle a reconstruir a mano la lista de
+dispositivos. Cada comando que termina lleva un `outcome`, registrado por la escritura que lo
+terminó, y el reintento se selecciona por ese resultado y no leyendo el texto del error:
+
+| `outcome` | Qué ocurrió | Enviarlo de nuevo |
+|---|---|---|
+| `SUCCEEDED` | El dispositivo informó éxito. | No se puede reintentar. |
+| `NOT_DELIVERED` | La plataforma puede demostrar que el comando nunca llegó al dispositivo: caducó o se canceló mientras la plataforma aún lo tenía, el transporte no tiene vía de comandos o la plataforma dejó de intentar publicarlo. | No puede actuar dos veces. |
+| `REJECTED` | El dispositivo recibió el comando y respondió que no lo ejecutó. | Volver a pedirlo, de forma deliberada. |
+| `UNKNOWN` | El comando puede haber llegado al dispositivo y haber actuado: se envió y nunca se respondió (`TIMEOUT`), o el dispositivo respondió y la plataforma perdió la respuesta. | Puede actuar dos veces. Solo con reconocimiento explícito. |
+
+Un comando que no ha terminado no tiene resultado. El `status` por sí solo no lo da, porque `FAILED`
+abarca nunca entregado, rechazado y desconocido. Busque por resultado:
+
+```graphql
+query {
+  commands(criteria: {
+    pageNumber: 1, pageSize: 100,
+    batchToken: "nightly-reboot-2026-08-14",
+    outcomes: ["NOT_DELIVERED", "REJECTED"]
+  }) {
+    results { deviceToken status outcome error }
+  }
+}
+```
+
+`retryCommandBatch` vuelve a emitir el comando del lote original a los dispositivos que nombre, como un
+**lote nuevo** vinculado al original:
+
+```graphql
+mutation {
+  retryCommandBatch(request: {
+    token: "nightly-reboot-2026-08-14-retry-1",
+    of: "nightly-reboot-2026-08-14",
+    deviceTokens: ["gw-4471", "gw-4472"],
+    includeUnknown: false,
+    allowPartial: true
+  }) {
+    batch { token retryOf resolved accepted }
+    rejection { code reason refusals { deviceToken code reason } }
+  }
+}
+```
+
+- **El comando no va en la solicitud.** La plataforma copia el nombre y la carga del original, de modo
+  que un reintento no puede convertirse en otro comando.
+- **Cada dispositivo debe ser miembro del lote original** y no haber tenido éxito: `NOT_DELIVERED` o
+  `REJECTED`. Un dispositivo cuyo comando tuvo éxito o sigue en curso se rechaza
+  (`RETRY_NOT_ELIGIBLE`), uno que no estaba en el lote se rechaza (`RETRY_NOT_A_MEMBER`), y también se
+  rechaza uno ya cubierto por un reintento activo o exitoso del mismo lote, de modo que un mismo
+  dispositivo nunca recibe el comando dos veces desde un mismo origen.
+- **`UNKNOWN` exige `includeUnknown: true`.** Sin él, esos dispositivos se rechazan con
+  `RETRY_UNKNOWN_NOT_ACKNOWLEDGED`. Actívelo solo tras confirmar que actuar dos veces es inocuo.
+- **Los dispositivos que el original rechazó** solo se pueden reintentar cuando el registro del lote
+  conserva ese rechazo. El registro guarda como máximo 100 dispositivos rechazados por código
+  (`refusalCounts` es exacto), así que un dispositivo de un conjunto mayor se rechaza con
+  `RETRY_NOT_A_MEMBER`.
+- **Un reintento pasa por las mismas comprobaciones que un lote nuevo**: el vocabulario actual de
+  comandos del dispositivo, un dispositivo deshabilitado, un comando que la plataforma se niega a
+  enviar en bruto, el techo de comandos retenidos y `allowPartial`. Reintentar no es una forma de
+  eludir ninguna.
+- **La idempotencia funciona en ambos sentidos.** El reintento tiene su propio `token`; reenviarlo
+  devuelve el reintento y no envía nada más. Enviar el token *original* a `createCommandBatch` sigue
+  devolviendo el lote original y no ejecuta nada. Un token que ya nombra un lote que no es un
+  reintento de este se rechaza (`RETRY_TOKEN_IN_USE`).
+- **El vínculo está en el lote**: `retryOf` nombra el lote que un reintento vuelve a intentar, y
+  `retries` en el original lista los lotes que lo reintentaron. Un reintento de un reintento nombra al
+  reintento.
+
+Reintentar requiere `command:write`, y un original dirigido a un grupo requiere además `device:read`.
+
+En la consola, la página de detalle de un lote tiene la acción **Reintentar…**. Lista los dispositivos
+no satisfactorios en grupos: *nunca entregado* y *rechazado por el dispositivo* vienen seleccionados,
+*rechazado al lanzar* se ofrece (cuando el registro lo conserva) pero no se selecciona, y *resultado
+desconocido* no se selecciona y permanece bloqueado hasta que marque un reconocimiento de que esos
+dispositivos pueden haber actuado ya. Los comandos aún en curso se cuentan y no se pueden seleccionar.
+El lote nuevo se abre al crearse, y ambos lotes se enlazan entre sí.
+
 ## Cancela un lote {#call-the-whole-thing-off}
 
 ```graphql

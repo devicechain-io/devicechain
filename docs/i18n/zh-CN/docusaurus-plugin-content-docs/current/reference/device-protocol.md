@@ -167,6 +167,7 @@ Schema 表达不了的内容：
 | `success` | boolean | 是 | `true` 将命令结束为 `SUCCESSFUL`，`false` 结束为 `FAILED`。省略时按 `false` 处理。 | `true` |
 | `payload` | 任意 JSON 值 | 否 | 命令的结果数据，随命令存储并由 API 返回。字符串按其文本存储；对象、数组、数字或布尔值则按发送时的原样作为该 JSON 值存储，因此设备可以直接返回结构化数据。省略或为 `null` 时，命令没有响应载荷。 | `"rebooting in 5s"` 或 `{"level":3}` |
 | `error` | string | 否 | 命令失败的原因。仅在 `success` 为 `false` 时存储；为 `true` 时被忽略。 | `"actuator jammed"` |
+| `reach` | string | 否 | 供代表设备应答的网关或协议适配器使用；设备自己报告结果时省略。仅在 `success` 为 `false` 时读取。`"UNANSWERED"`：命令已发到链路上但没有任何回应，因此落为 `TIMEOUT`。`"UNSENT"`：适配器在命令到达设备之前就拒绝了它，因此落为 `FAILED` 并记为从未送达。省略时，失败即设备自己的回答。无法识别的值按 `"UNANSWERED"` 处理。 | `"UNANSWERED"` |
 
 ```json
 {"commandToken":"6f1c0f8e-6d1e-4a1a-9a3f-1f2b0d0a5c11","dispatchNonce":"0f6f4a2c-9b71-4d0e-8a5b-3c2d1e0f7a94","success":false,"error":"actuator jammed"}

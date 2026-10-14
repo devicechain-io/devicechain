@@ -88,7 +88,7 @@ Estos estados son terminales. Nada sale de un estado terminal.
 
   En cada uno de estos casos, el campo `error` del comando indica cuál fue, así que nunca confundes
   un `FAILED` del lado de la plataforma con un fallo informado por el dispositivo.
-- **`TIMEOUT`** — se despachó y el dispositivo nunca respondió.
+- **`TIMEOUT`** — se despachó y el dispositivo nunca respondió. Un transporte que ejecuta el intercambio por sí mismo informa de un dispositivo que no responde de la misma forma, así que la «falta de respuesta» del adaptador [LwM2M](./lwm2m.md) también se resuelve como `TIMEOUT`, con su propia redacción en `error`, y no como `FAILED`.
 - **`EXPIRED`** — su TTL transcurrió antes de que llegara a ningún dispositivo.
 - **`CANCELLED`** — un operador o un inquilino lo anuló.
 
@@ -96,6 +96,17 @@ Estos estados son terminales. Nada sale de un estado terminal.
 equivocado. `EXPIRED` significa que el comando nunca llegó a un dispositivo, así que una racha de
 ellos indica que las entregas no están llegando. `TIMEOUT` significa que un comando sí salió y no
 volvió nada, lo que apunta al dispositivo.
+
+### Qué significa un comando terminado {#outcome}
+
+Todo comando terminal lleva además un `outcome` que dice qué ocurrió físicamente, porque `FAILED` por sí solo abarca tres hechos distintos:
+
+- **`SUCCEEDED`** — el dispositivo informó éxito.
+- **`NOT_DELIVERED`** — demostrado que nunca llegó al dispositivo (`EXPIRED`, `CANCELLED` y los casos de `FAILED` en que el transporte no puede llevar comandos o la plataforma dejó de intentar publicarlo).
+- **`REJECTED`** — el dispositivo recibió el comando e informó un fallo.
+- **`UNKNOWN`** — puede haber actuado: `TIMEOUT`, o un `FAILED` en el que el dispositivo respondió y la plataforma perdió la respuesta.
+
+Lo registra la escritura que terminó el comando, no se deduce de `status` y `error`, y un comando activo no lo tiene. [El reintento de un lote](../guides/commanding-a-fleet.md#retry-the-devices-that-did-not-succeed) se selecciona con él.
 
 ### Comandos para un dispositivo ausente {#commands-to-a-device-that-is-away}
 
