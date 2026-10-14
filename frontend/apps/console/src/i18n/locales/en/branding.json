@@ -15,6 +15,7 @@
   "inheritPlaceholder": "inherit",
   "loadingBranding": "Loading branding…",
   "logoDescription": "Upload a PNG/JPEG/WebP (≤1 MB, stored in the object store) or paste an https URL (any image, incl. SVG). Applied immediately — not part of Save.",
+  "instanceLogoDescription": "An https URL to an image (any format, including SVG), shown to every tenant that has not set its own logo. Saved with Save override.",
   "logoLabel": "Logo",
   "logoMaxHeightDescription": "How tall the logo renders in the chip/sidebar (16–200). Blank = 28.",
   "logoMaxHeightLabel": "Logo max height (px)",

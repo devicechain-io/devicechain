@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest';
 
+import i18n from '@/i18n/config';
+
 import type { AdminTenantDeletion, AdminTenantDeletionStore } from '@/lib/api/admin';
 import {
   hasNote,
@@ -9,8 +11,11 @@ import {
   remedyKey,
   shouldPoll,
   storeProblem,
+  leadClause,
+  INLINE_DETAIL_MAX,
   storeState,
   summarize,
+  translateSummary,
 } from './deletions';
 
 const NOW = Date.parse('2026-08-04T12:00:00Z');
@@ -176,5 +181,41 @@ describe('shouldPoll', () => {
     expect(shouldPoll(record())).toBe(true);
     expect(shouldPoll(record({ completedAt: '2026-08-04T11:00:00Z' }))).toBe(false);
     expect(shouldPoll(null)).toBe(false);
+  });
+});
+
+describe('translateSummary', () => {
+  // The unit used to be interpolated raw, so the es sentence read "en unas 12 hours".
+  it('localises the duration instead of interpolating the raw unit', () => {
+    const holding = summarize(record({ awaiting: 'TOKEN_HOLD', elapsesAt: '2026-08-04T21:00:00Z' }), NOW);
+    const es = i18n.getFixedT('es', 'tenants');
+    const en = i18n.getFixedT('en', 'tenants');
+    expect(translateSummary(es, holding)).toContain('aproximadamente 9 horas');
+    expect(translateSummary(es, holding)).not.toMatch(/hours|minutes/);
+    expect(translateSummary(en, holding)).toContain('about 9 hours');
+  });
+
+  it('pluralises the unit', () => {
+    const one = summarize(record({ awaiting: 'SETTLE', elapsesAt: '2026-08-04T12:01:00Z' }), NOW);
+    expect(translateSummary(i18n.getFixedT('en', 'tenants'), one)).toContain('about another 1 minute.');
+    expect(translateSummary(i18n.getFixedT('es', 'tenants'), one)).toContain('1 minuto');
+  });
+});
+
+describe('leadClause', () => {
+  it('returns short text unchanged', () => {
+    expect(leadClause('an object remains')).toBe('an object remains');
+  });
+
+  it('cuts at the first clause break that leaves something to read', () => {
+    const text = `cannot reach the key-value store: ${'nats: connection closed; '.repeat(8)}`;
+    expect(leadClause(text)).toBe('cannot reach the key-value store…');
+  });
+
+  it('falls back to the last whole word that fits', () => {
+    const text = 'word '.repeat(60);
+    const out = leadClause(text);
+    expect(out.length).toBeLessThanOrEqual(INLINE_DETAIL_MAX + 1);
+    expect(out.endsWith('word…')).toBe(true);
   });
 });

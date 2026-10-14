@@ -44,5 +44,16 @@
   "title": "Niveles",
   "tokenDescription": "El id de nivel usado en toda la plataforma; no se puede cambiar.",
   "tokenPlaceholder": "platinum",
-  "truncatedProvidersNotice": "Mostrando los primeros {{count}} de {{total}} proveedores. Este nivel puede conceder un proveedor que no aparece aquí."
+  "truncatedProvidersNotice": "Mostrando los primeros {{count}} de {{total}} proveedores. Este nivel puede conceder un proveedor que no aparece aquí.",
+  "heldCommandCeilingLabel": "Límite de comandos retenidos",
+  "heldCommandCeilingDescription": "Máximo de comandos que un inquilino de este nivel puede tener a la espera de entrega, incluidos los retenidos para dispositivos sin conexión. En blanco hereda el valor predeterminado de la plataforma, que es un límite real.",
+  "shedPriorityLabel": "Prioridad de reducción",
+  "shedPriorityDescription": "Qué inquilinos siguen funcionando durante más tiempo cuando la plataforma está sobrecargada ({{min}}–{{max}}: un valor más alto sobrevive más). Es una preferencia, no un límite. En blanco hereda el valor predeterminado de la plataforma.",
+  "geoFenceCeilingLabel": "Número de geovallas",
+  "geoFenceCeilingDescription": "Cuántas geovallas puede conservar un inquilino de este nivel (hasta {{max}}). En blanco hereda el valor predeterminado de la plataforma.",
+  "geoFencePositionCeilingLabel": "Puntos por geovalla",
+  "geoFencePositionCeilingDescription": "Cuántos puntos puede tener una sola geovalla (hasta {{max}}). En blanco hereda el valor predeterminado de la plataforma.",
+  "geoFencePositionBudgetLabel": "Presupuesto de puntos de geovallas",
+  "geoFencePositionBudgetDescription": "Cuántos puntos pueden sumar las geovallas de un inquilino en todo el conjunto (hasta {{max}}). Usa espacio compartido entre todos los inquilinos. En blanco hereda el valor predeterminado de la plataforma.",
+  "scalarInvalid": "{{label}} debe ser un número entero de 1 a {{max}}, o quedar en blanco para heredar el valor predeterminado de la plataforma."
 }

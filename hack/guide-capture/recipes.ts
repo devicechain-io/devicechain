@@ -13,8 +13,14 @@ import type { Page } from '@playwright/test';
 export interface Recipe {
   /** Stable kebab-case id: the image name (`{id}.{locale}.webp`) and the manifest key. */
   id: string;
-  /** Which signed-in identity shoots it: `tenant` (hero tenant admin), `widgets` (the widgetlab tenant's admin, dashboards chapter), `superuser` (skipped, loudly, without $DC_ADMIN_PASSWORD), or `none` (the sign-in screens: the real form, no storage state). */
-  session: 'tenant' | 'superuser' | 'widgets' | 'none';
+  /** Which signed-in identity shoots it: `tenant` (hero tenant admin), `widgets` (the widgetlab tenant's admin, dashboards chapter), `superuser` (skipped, loudly, without $DC_ADMIN_PASSWORD), `none` (the sign-in screens: the real form, no storage state), or `dash` (the /dash viewer, signed in as the widgetlab admin through its own form). */
+  session: 'tenant' | 'superuser' | 'widgets' | 'none' | 'dash';
+  /** Which app's source carries the anchors: the console (default) or the /dash viewer (frontend/apps/dashboard/src). */
+  app?: 'console' | 'dash';
+  /** Keep toasts in the frame (they are hidden by default): for a shot whose subject is the toast. */
+  keepToasts?: boolean;
+  /** A taller (or wider) frame than the default 1440x900, for a screen that does not fit it. Same for every locale. */
+  viewport?: { width: number; height: number };
   route: string;
   /** Drives the page into the state to shoot (open a drawer, pick a tab). Throwing fails the recipe. */
   setup?: (page: Page) => Promise<void>;
@@ -134,6 +140,37 @@ function newDrawer(id: string, route: string, source: string, session: Recipe['s
     sources: [source],
   };
 }
+
+/** A list page whose New button opens the FormDrawer with this `shot` id. */
+function newDrawerShot(id: string, route: string, drawer: string, source: string, session: Recipe['session'] = 'tenant'): Recipe {
+  return { ...newDrawer(id, route, source, session), anchor: `${DRAWER}[data-shot-drawer="${drawer}"]` };
+}
+
+/** A tab of a superuser (/admin) detail page, opened by its tab key. */
+function adminTab(id: string, route: string, tab: string, source: string, opts: Partial<Recipe> = {}): Recipe {
+  return {
+    id,
+    session: 'superuser',
+    route,
+    setup: async (page) => {
+      await page.locator(`[data-shot-tab="${tab}"]`).click();
+    },
+    anchor: `[data-shot-tab="${tab}"][data-state="active"]`,
+    sources: [source],
+    ...opts,
+  };
+}
+
+// Chapter 15's subjects (seed.ts, seedAdmin).
+const HERO_TENANT = 'sim-acme';
+const THROWAWAY_TENANT = 'harbor-view-pilot';
+const IDP = 'acme-google';
+const TENANT_FORM = 'routes/admin/tenants/TenantForm.tsx';
+const TENANT_DETAIL = 'routes/admin/tenants/TenantDetailPage.tsx';
+const TIER_FORM = 'routes/admin/tiers/TierForm.tsx';
+const IDP_DETAIL = 'routes/admin/identity-providers/IdentityProviderDetailPage.tsx';
+// Chapter 17's board: the widgetlab gallery, as published by its simulator.
+const DASH_BOARD = 'wl-gallery';
 
 const PROFILE = 'routes/device-profiles/resource.tsx';
 const PROFILE_ROUTE = '/device-profiles/bp-thermostat-profile';
@@ -277,9 +314,14 @@ export const recipes: Recipe[] = [
       const download = page.waitForEvent('download');
       await page.locator('[data-shot="export-csv"]').click();
       await download;
+      // The end state is the "exported N rows" toast. Holding the pointer over it pauses its timer,
+      // so it is still there when the frame is taken.
+      await page.locator('[data-sonner-toast]').first().waitFor({ timeout: 30_000 });
+      await page.locator('[data-sonner-toast]').first().hover();
     },
     // The button returns once the export has finished and the notice has rendered.
     anchor: '[data-shot="export-csv"]',
+    keepToasts: true,
     sources: ['components/ExportCsvButton.tsx'],
   },
   {
@@ -671,7 +713,9 @@ export const recipes: Recipe[] = [
     sources: ['routes/geofences/FenceMap.tsx'],
   },
   resourceTab('geofence-history', '/geofences/acme-campus', 'history', 'routes/geofences/resource.tsx', { allowEmpty: true, tiles: true }),
-  newDrawer('geofences-new', '/geofences', 'components/registry/ResourceListPage.tsx'),
+  // Taller than the default frame: the Spanish labels wrap the boundary editor's buttons, which
+  // pushed the bottom of the drawer out of a 900-pixel frame.
+  { ...newDrawer('geofences-new', '/geofences', 'components/registry/ResourceListPage.tsx'), viewport: { width: 1440, height: 1120 } },
 
   // ---- Chapter 11: Groups, facets and Browse ---------------------------------------------------------
   {
@@ -776,11 +820,245 @@ export const recipes: Recipe[] = [
   { id: 'settings-basemap', session: 'tenant', route: '/basemap', anchor: PAGE },
   { id: 'settings-locale', session: 'tenant', route: '/locale', anchor: PAGE },
 
-  // ---- Superuser plumbing proof (the admin chapter proper is S3) -------------------------------------------------
+  // ---- Chapter 16: Over-the-air updates ------------------------------------------------------------------------
+  // The seed declares three thermostat firmware images (2.3.1 signed and retired, 2.4.0 signed,
+  // 2.5.0-rc.1 unverified), registers an active Ed25519 release signer and a revoked P-256 one,
+  // and assigns 2.4.0 to the lobby thermostat. The thermostats never report update progress,
+  // so that assignment stays where the platform put it.
+  {
+    id: 'updates-artifacts-list',
+    session: 'tenant',
+    route: '/updates/artifacts',
+    anchor: ROWS,
+    minRows: { selector: ROWS, count: 3 },
+  },
+  newDrawerShot('updates-artifact-new', '/updates/artifacts', 'artifact-new', 'routes/updates/ArtifactsPage.tsx'),
+  {
+    // A signed artifact: details, its trust, the registered signers and the add-signature form.
+    id: 'updates-artifact-signed',
+    session: 'tenant',
+    route: '/updates/artifacts/thermostat-fw-2-4-0',
+    anchor: `${PAGE} table tbody tr`,
+    minRows: { selector: `${PAGE} table tbody tr`, count: 1 },
+  },
+  {
+    id: 'updates-artifact-signatures',
+    session: 'tenant',
+    route: '/updates/artifacts/thermostat-fw-2-4-0',
+    setup: async (page) => {
+      // The signatures panel sits below the details: bring it into the middle of the frame.
+      await page.locator(`${PAGE} table`).last().waitFor({ timeout: 30_000 });
+      await page.locator(`${PAGE} table`).last().evaluate((el) => el.scrollIntoView({ block: 'center' }));
+    },
+    anchor: `${PAGE} table tbody tr`,
+    minRows: { selector: `${PAGE} table tbody tr`, count: 1 },
+  },
+  {
+    id: 'updates-artifact-unverified',
+    session: 'tenant',
+    route: '/updates/artifacts/thermostat-fw-2-5-0-rc1',
+    anchor: '[data-testid="unverified-notice"]',
+    sources: ['routes/updates/ArtifactDetailPage.tsx'],
+  },
+  {
+    id: 'updates-signers-list',
+    session: 'tenant',
+    route: '/updates/signers',
+    anchor: ROWS,
+    minRows: { selector: ROWS, count: 2 },
+  },
+  newDrawerShot('updates-signer-register', '/updates/signers', 'signer-register', 'routes/updates/SignersPage.tsx'),
+  {
+    id: 'updates-signer-revoke',
+    session: 'tenant',
+    route: '/updates/signers',
+    setup: async (page) => {
+      // Opens the confirmation and stops there: nothing is revoked.
+      await page.locator('[data-shot="signer-revoke"]').first().click();
+    },
+    anchor: '[data-shot="confirm"]',
+    sources: ['routes/updates/SignersPage.tsx'],
+  },
+  deviceTab('updates-device-tab', 'bp-therm-001', 'updates', {
+    then: async (page) => {
+      await page.locator(`${PAGE} table tbody tr`).first().waitFor({ timeout: 30_000 });
+    },
+    sources: [DEVICE_DETAIL, 'routes/devices/DeviceUpdatesPanel.tsx'],
+  }),
+
+  // ---- Chapter 15: Administering the instance (the superuser's /admin console) -----------------------------------
+  // The seed (seedAdmin) adds a Pilot tier and a colour on every tier, three people with memberships
+  // in the hero tenant (one disabled), a tenant role, a Google Workspace connection serving the hero
+  // tenant, and a throwaway tenant (harbor-view-pilot) that it DELETES, so the deletion screens have a
+  // subject. The hero tenant's own deletion stops at the confirmation. AI providers and AI packaging
+  // are not here: the guide instance does not run ai-inference, which console-area-unavailable shows.
   {
     id: 'admin-tenants',
     session: 'superuser',
     route: '/admin/tenants',
-    anchor: `${PAGE} table tbody tr`,
+    anchor: ROWS,
+    minRows: { selector: ROWS, count: 2 },
+  },
+  // A new tenant's form has no tabs until it exists.
+  { id: 'admin-tenant-new', session: 'superuser', route: '/admin/tenants/new', anchor: `${PAGE} input` },
+  adminTab('admin-tenant-basic', `/admin/tenants/${HERO_TENANT}`, 'basic', TENANT_FORM),
+  adminTab('admin-tenant-settings', `/admin/tenants/${HERO_TENANT}`, 'settings', TENANT_FORM),
+  adminTab('admin-tenant-effective', `/admin/tenants/${HERO_TENANT}`, 'effective', TENANT_FORM),
+  {
+    // Opens the confirmation and stops there: the hero tenant is never deleted.
+    id: 'admin-tenant-delete-confirm',
+    session: 'superuser',
+    route: `/admin/tenants/${HERO_TENANT}`,
+    setup: async (page) => {
+      await page.locator('[data-shot="tenant-delete"]').click();
+    },
+    anchor: '[data-shot="confirm"]',
+    sources: [TENANT_DETAIL],
+  },
+  // The throwaway tenant, mid-deletion: its page loses the live-tenant actions and gains a Deletion
+  // tab. Empty is allowed: the purge coordinator writes its record up to a minute after the delete.
+  adminTab('admin-tenant-deletion', `/admin/tenants/${THROWAWAY_TENANT}`, 'deletion', TENANT_FORM, { allowEmpty: true }),
+  {
+    id: 'admin-deletions',
+    session: 'superuser',
+    route: '/admin/deletions',
+    anchor: PAGE,
+    allowEmpty: true,
+  },
+  {
+    id: 'admin-tiers',
+    session: 'superuser',
+    route: '/admin/tiers',
+    anchor: ROWS,
+    minRows: { selector: ROWS, count: 4 },
+  },
+  adminTab('admin-tier-basic', '/admin/tiers/pilot', 'basic', TIER_FORM),
+  adminTab('admin-tier-settings', '/admin/tiers/pilot', 'settings', TIER_FORM),
+  {
+    id: 'admin-identities',
+    session: 'superuser',
+    route: '/admin/identities',
+    anchor: ROWS,
+    minRows: { selector: ROWS, count: 5 },
+  },
+  {
+    id: 'admin-identity-detail',
+    session: 'superuser',
+    route: '/admin/identities/maria.chen%40acme-properties.example',
+    anchor: `${PAGE} h2`,
+  },
+  { id: 'admin-identity-new', session: 'superuser', route: '/admin/identities/new', anchor: `${PAGE} input` },
+  {
+    id: 'admin-roles',
+    session: 'superuser',
+    route: '/admin/roles',
+    anchor: ROWS,
+    minRows: { selector: ROWS, count: 4 },
+  },
+  { id: 'admin-role-detail', session: 'superuser', route: '/admin/roles/tenant/facilities-viewer', anchor: `${PAGE} input` },
+  {
+    id: 'admin-identity-providers',
+    session: 'superuser',
+    route: '/admin/identity-providers',
+    anchor: ROWS,
+    minRows: { selector: ROWS, count: 1 },
+    // The page's second panel, link requests, is empty: nobody has been refused for want of a link.
+    allowEmpty: true,
+  },
+  {
+    ...newDrawerShot('admin-identity-provider-new', '/admin/identity-providers', 'identity-provider-new', 'routes/admin/identity-providers/IdentityProvidersPage.tsx', 'superuser'),
+    allowEmpty: true,
+  },
+  adminTab('admin-identity-provider-discovery', `/admin/identity-providers/${IDP}`, 'discovery', IDP_DETAIL),
+  adminTab('admin-identity-provider-settings', `/admin/identity-providers/${IDP}`, 'settings', IDP_DETAIL),
+  adminTab('admin-identity-provider-tenants', `/admin/identity-providers/${IDP}`, 'tenants', IDP_DETAIL),
+  adminTab('admin-identity-provider-domains', `/admin/identity-providers/${IDP}`, 'domains', IDP_DETAIL),
+  {
+    // The superuser's own administration: the seed's tier, role, people, connection and deletion.
+    // Unfiltered, the journal is all sign-ins (every capture signs in) and the deletion sweep's rows.
+    id: 'admin-audit',
+    session: 'superuser',
+    route: '/admin/audit',
+    setup: async (page) => {
+      await page.locator('[data-shot="admin-audit-actor"]').fill('superuser@devicechain.local');
+      await page.locator(`${PAGE} [data-shot="combobox"]`).nth(1).click();
+      await page.locator('[data-shot="combobox-option"][data-shot-value="mutation"]').click();
+      await page.waitForTimeout(1500);
+    },
+    anchor: ROWS,
+    minRows: { selector: ROWS, count: 5 },
+    sources: ['routes/admin/AuditPage.tsx'],
+  },
+  // Settings tabs are keyed by the setting's key, which each editor declares (`key: '...'`).
+  adminTab('admin-settings', '/admin/settings', 'branding.default', 'routes/admin/settings/BrandingDefaultEditor.tsx'),
+  adminTab('admin-settings-token-masks', '/admin/settings', 'entity.token_masks', 'routes/admin/settings/TokenMasksEditor.tsx'),
+
+  // ---- Chapter 17: Viewing dashboards in /dash ----------------------------------------------------------------------
+  // The viewer the instance serves at /dash/, signed in as the widgetlab tenant's admin through its
+  // own form (session `dash`). It holds its session in memory only, so every shot signs in again.
+  // Its anchors live in frontend/apps/dashboard/src (app: 'dash').
+  {
+    // The real form, nothing signed in. Only the address is typed: the password field stays empty.
+    id: 'dash-signin',
+    session: 'none',
+    app: 'dash',
+    route: '/dash/',
+    setup: async (page) => {
+      await page.locator('[data-shot="dash-email"]').fill('sam.rivera@widgetlab.example');
+    },
+    anchor: '[data-shot="dash-signin"]',
+    sources: ['App.tsx'],
+  },
+  {
+    id: 'dash-load',
+    session: 'dash',
+    app: 'dash',
+    route: '/dash/',
+    setup: async (page) => {
+      await page.locator('[data-shot="dash-token"]').fill(DASH_BOARD);
+    },
+    anchor: '[data-shot="dash-load-published"]:not([disabled])',
+    sources: ['App.tsx'],
+  },
+  {
+    // Loaded by token through the form, the way a viewer first meets a board.
+    id: 'dash-view',
+    session: 'dash',
+    app: 'dash',
+    route: '/dash/',
+    setup: async (page) => {
+      await page.locator('[data-shot="dash-token"]').fill(DASH_BOARD);
+      await page.locator('[data-shot="dash-load-published"]').click();
+      await page.locator('[data-shot="dash-view"]').waitFor({ timeout: 30_000 });
+      await page.waitForTimeout(4000); // live widgets: first values and chart layout
+    },
+    anchor: '[data-shot="dash-theme-toggle"]',
+    sources: ['App.tsx'],
+  },
+  {
+    // A deep link opens the board straight after sign-in; kiosk=1 drops the header for a wall display.
+    id: 'dash-kiosk',
+    session: 'dash',
+    app: 'dash',
+    route: `/dash/?dashboard=${DASH_BOARD}&kiosk=1`,
+    setup: async (page) => {
+      await page.locator('[data-shot="dash-view"]').waitFor({ timeout: 30_000 });
+      await page.waitForTimeout(4000);
+    },
+    anchor: '[data-shot="dash-view"]',
+    sources: ['App.tsx'],
+  },
+  {
+    // The viewer's own theme toggle, switched to dark: the one deliberately dark shot in the guide.
+    id: 'dash-dark',
+    session: 'dash',
+    app: 'dash',
+    route: `/dash/?dashboard=${DASH_BOARD}`,
+    setup: async (page) => {
+      await page.locator('[data-shot="dash-theme-toggle"]').click();
+      await page.waitForTimeout(4000);
+    },
+    anchor: 'html.dark [data-shot="dash-view"]',
+    sources: ['App.tsx'],
   },
 ];

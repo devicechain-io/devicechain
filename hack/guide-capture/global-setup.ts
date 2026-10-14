@@ -6,14 +6,17 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { BASE_URL } from './playwright.config';
 import { readSimHandshake, signIn } from './session';
+import { resolveAdminPassword } from './superuser';
 
 export const AUTH_DIR = '.auth';
 export const OUT_DIR = process.env.GUIDE_OUT ?? 'out';
 
 // Two sessions, both minted over GraphQL (no sign-in form):
 //   tenant     the sim's tenant admin (~/.devicechain/sims/<name>.json)
-//   superuser  the bootstrap admin, from $DC_ADMIN_PASSWORD. Absent => superuser recipes
-//              are SKIPPED, loudly. This harness never reads cluster Secrets.
+//   superuser  the bootstrap admin: $DC_ADMIN_PASSWORD, else the instance's own Secret on the
+//              cluster, as dcctl reads it (superuser.ts). Unreadable => superuser recipes are
+//              SKIPPED, loudly, or the run fails with GUIDE_REQUIRE_SUPERUSER=1. The password
+//              stays in this process's memory: never printed, logged, or written anywhere.
 export default async function globalSetup() {
   mkdirSync(AUTH_DIR, { recursive: true });
 
@@ -42,20 +45,21 @@ export default async function globalSetup() {
     console.log('widgets session minted');
   }
 
-  const adminPassword = process.env.DC_ADMIN_PASSWORD;
   rmSync(`${AUTH_DIR}/superuser.json`, { force: true });
-  if (!adminPassword) {
+  const admin = await resolveAdminPassword();
+  if (admin.password === null) {
     if (process.env.GUIDE_REQUIRE_SUPERUSER === '1') {
-      throw new Error('GUIDE_REQUIRE_SUPERUSER=1 but $DC_ADMIN_PASSWORD is not set');
+      throw new Error(`GUIDE_REQUIRE_SUPERUSER=1 but no superuser password: ${admin.reason}`);
     }
     console.warn(
-      '\n*** SUPERUSER RECIPES WILL BE SKIPPED: $DC_ADMIN_PASSWORD is not set. ' +
-        'Export the bootstrap admin password to capture the admin chapter. ***\n',
+      `\n*** SUPERUSER RECIPES WILL BE SKIPPED: ${admin.reason}. ` +
+        'Export $DC_ADMIN_PASSWORD, or point GUIDE_INSTANCE / GUIDE_KUBE_CONTEXT at the instance. ***\n',
     );
     return;
   }
+  console.log(`superuser password: from ${admin.source === 'env' ? '$DC_ADMIN_PASSWORD' : "the instance's Secret"}`);
   const email = process.env.DC_ADMIN_EMAIL ?? 'superuser@devicechain.local';
-  const superuser = await signIn(BASE_URL, email, adminPassword);
+  const superuser = await signIn(BASE_URL, email, admin.password);
   if (!superuser.identity.superuser) throw new Error(`${email} signed in but is not a superuser`);
   writeFileSync(`${AUTH_DIR}/superuser.json`, JSON.stringify(superuser), { mode: 0o600 });
   console.log('superuser session minted');

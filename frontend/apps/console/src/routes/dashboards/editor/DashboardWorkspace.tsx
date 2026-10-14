@@ -71,6 +71,7 @@ import { DashboardCanvas } from './DashboardCanvas';
 import { UnknownWidgetPanel, WidgetConfigPanel } from './WidgetConfigPanel';
 import { VersionHistorySheet } from './VersionHistorySheet';
 import { AddWidgetMenu } from './AddWidgetMenu';
+import { WorkspaceConnection } from './WorkspaceConnection';
 import { exportDefinitionJson } from './exportDefinition';
 import { DashboardImportDrawer } from '../import/DashboardImportDrawer';
 import { defaultWidgetRegistry, type EditorWidgetRegistry } from './widgetRegistry';
@@ -576,6 +577,7 @@ export function DashboardWorkspace({
 
   const viewActions = (
     <div className="flex items-center gap-2">
+      {!preview && <WorkspaceConnection hub={liveHub} />}
       {statusEl}
       {/* Reachable so edits carried into view mode can be persisted without
           re-entering the editor. */}
@@ -594,6 +596,7 @@ export function DashboardWorkspace({
 
   const editActions = (
     <div className="flex items-center gap-2">
+      {!preview && <WorkspaceConnection hub={liveHub} />}
       {statusEl}
       <AddWidgetMenu registry={registry} onAdd={addWidgetOfType} />
       {previewControl}

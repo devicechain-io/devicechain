@@ -1,3 +1,4 @@
+import type { TFunction } from 'i18next';
 import type { AdminTenantDeletion, AdminTenantDeletionStore } from '@/lib/api/admin';
 
 /**
@@ -51,6 +52,44 @@ export function hasNote(line: AdminTenantDeletionStore): boolean {
 export function storeProblem(line: AdminTenantDeletionStore): string | null {
   if (line.complete) return null;
   return line.retaining || line.lastError || null;
+}
+
+/**
+ * The longest store explanation shown inline in the table: about one line of the Detail
+ * column at the console's usual width. The server's sentences are written for whoever reads
+ * the ledger, and some (a wrapped Go error chain especially) run to several lines; anything
+ * longer is cut to its lead clause, with the full text behind a disclosure.
+ */
+export const INLINE_DETAIL_MAX = 120;
+
+export function isLongDetail(text: string): boolean {
+  return text.length > INLINE_DETAIL_MAX;
+}
+
+/**
+ * The lead clause of a long store explanation, at most INLINE_DETAIL_MAX characters.
+ *
+ * It is the server's own words, not a generic label: the State badge already says
+ * "Retaining" or "Retrying", so the line next to it has to say WHAT is held and WHY, and the
+ * server puts both first ("the object store still holds 2 uploaded assets, and this instance
+ * has no object storage configured — so ..."). The text is cut at the first clause break
+ * (an em dash, a semicolon, a sentence end, or a Go error-wrap colon) that leaves something
+ * worth reading, else at the last word that fits, and marked with an ellipsis.
+ */
+export function leadClause(text: string): string {
+  const t = text.trim();
+  if (t.length <= INLINE_DETAIL_MAX) return t;
+  const MIN = 24;
+  let cut = -1;
+  for (const sep of [' — ', '; ', '. ', ': ']) {
+    const i = t.indexOf(sep);
+    if (i >= MIN && i <= INLINE_DETAIL_MAX && (cut < 0 || i < cut)) cut = i;
+  }
+  if (cut < 0) {
+    const space = t.lastIndexOf(' ', INLINE_DETAIL_MAX);
+    cut = space >= MIN ? space : INLINE_DETAIL_MAX;
+  }
+  return `${t.slice(0, cut).replace(/[\s,;:.—-]+$/, '')}…`;
 }
 
 /** Whether a record has finished. */
@@ -149,6 +188,22 @@ export function summarize(d: AdminTenantDeletion, now: number): DeletionSummary 
 export function humanize(minutes: number): { amount: number; unit: 'minutes' | 'hours' } {
   if (minutes >= 90) return { amount: Math.round(minutes / 60), unit: 'hours' };
   return { amount: minutes, unit: 'minutes' };
+}
+
+/**
+ * Renders a summary in the active language.
+ *
+ * The amount and unit are folded into one localized `duration` ("12 hours", "12 horas")
+ * before interpolation: handing the raw unit to the sentence put an English word inside a
+ * Spanish one. The unit is a pluralized catalog entry, so each language owns its own forms.
+ */
+export function translateSummary(t: TFunction, summary: DeletionSummary): string {
+  const { amount, unit, ...rest } = summary.values;
+  if (typeof amount !== 'number' || (unit !== 'minutes' && unit !== 'hours')) {
+    return t(summary.key, summary.values);
+  }
+  const duration = t(unit === 'hours' ? 'durationHours' : 'durationMinutes', { count: amount });
+  return t(summary.key, { ...rest, duration });
 }
 
 /**

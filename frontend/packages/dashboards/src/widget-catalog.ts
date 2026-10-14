@@ -140,6 +140,11 @@ function collectDescriptorIssues(d: unknown, id: string): DescriptorIssue[] {
   if (channel) checkBinding(d.binding, channel, specs, add);
   checkInteractions(d.interactions, channel, add);
 
+  if (d.freshness !== undefined) {
+    if (d.freshness !== true) add('freshness', 'freshness must be true when present');
+    else if (channel && channel !== 'measurement') add('freshness', 'freshness applies only to the measurement channel');
+  }
+
   return issues;
 }
 

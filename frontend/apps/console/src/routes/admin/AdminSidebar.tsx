@@ -43,7 +43,7 @@ type NavLeaf = { labelKey: string; href: string; icon: LucideIcon };
 type NavGroupNode = { labelKey: string; icon: LucideIcon; children: NavLeaf[] };
 type NavNode = NavLeaf | NavGroupNode;
 
-const isLeaf = (n: NavNode): n is NavLeaf => 'href' in n;
+export const isLeaf = (n: NavNode): n is NavLeaf => 'href' in n;
 
 // The admin console manages the instance-global control plane (ADR-033): tenants and the
 // packaging they are sold, the identity directory, the role catalog, and the AI provider
@@ -52,7 +52,7 @@ const isLeaf = (n: NavNode): n is NavLeaf => 'href' in n;
 // Tenants is a GROUP: its list and the tier catalog that prices tenants live together, so
 // Tiers sits under Tenants alongside an explicit List entry rather than as its own
 // top-level peer (ADR-065 — a tier is packaging OF tenants, not a separate domain).
-const NAV: NavNode[] = [
+export const NAV: NavNode[] = [
   {
     labelKey: 'adminTenants',
     icon: Building2,

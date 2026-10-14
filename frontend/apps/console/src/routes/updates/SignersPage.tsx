@@ -173,7 +173,7 @@ function SignersList({ canTrust }: { canTrust: boolean }) {
                   {canTrust && (
                     <DataTableCell>
                       {s.state === 'ACTIVE' && (
-                        <Button variant="outline" size="sm" onClick={() => void revoke(s)}>
+                        <Button variant="outline" size="sm" onClick={() => void revoke(s)} data-shot="signer-revoke">
                           {t('revoke')}
                         </Button>
                       )}

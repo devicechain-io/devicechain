@@ -264,6 +264,14 @@ describe('instance defaults reuse the tenant editors', () => {
     expect(JSON.parse(value)).toEqual({ primary: '#1f9fb7' });
   });
 
+  it('describes the instance logo as a URL saved with Save override, not an upload', async () => {
+    await renderWith([setting(BRANDING, '{}')]);
+
+    expect(screen.getByText(/Saved with Save override/i)).toBeTruthy();
+    expect(screen.queryByText(/object store/i)).toBeNull();
+    expect(screen.queryByText(/not part of Save/i)).toBeNull();
+  });
+
   it('blocks a non-hex branding colour', async () => {
     await renderWith([setting(BRANDING, '{"primary":"#1f9fb7"}')]);
 

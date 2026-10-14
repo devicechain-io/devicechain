@@ -82,6 +82,18 @@ const WINDOW = {
   doc: 'Samples retained across ALL of the widget\'s measurements before the oldest are dropped. Bounds memory; only the chart draws them. Default 300.',
 } as const satisfies OptionSpec;
 
+// Read by the frame, not by the widget: with it set, a widget whose newest sample is older than
+// this many seconds is greyed out under a "stale" badge. Unset is the DEFAULT and means age
+// only -- there is no built-in threshold, because any number would paint a sparse fleet stale.
+const STALE_AFTER_SECONDS = {
+  kind: 'number',
+  integer: true,
+  min: 1,
+  labelId: 'widgetLabelStaleAfter',
+  helpId: 'widgetHintStaleAfter',
+  doc: 'Seconds after which the newest sample is called stale: the value is greyed out and badged. Unset shows the sample age only and never marks the widget stale.',
+} as const satisfies OptionSpec;
+
 const UNIT = {
   kind: 'string',
   labelId: 'widgetLabelUnit',
@@ -154,10 +166,12 @@ export const builtinWidgetDescriptors = {
     binding: { window: { option: 'window', min: 1 } },
     options: {
       title: TITLE,
+      staleAfterSeconds: STALE_AFTER_SECONDS,
       window: WINDOW,
     },
     defaults: { title: 'Timeseries chart' },
     interactions: {},
+    freshness: true,
   }),
 
   'latest-card': defineWidgetDescriptor({
@@ -180,10 +194,12 @@ export const builtinWidgetDescriptors = {
       unit: UNIT,
       precision: PRECISION,
       flashOnChange: FLASH_ON_CHANGE,
+      staleAfterSeconds: STALE_AFTER_SECONDS,
       window: WINDOW,
     },
     defaults: { title: 'Latest card' },
     interactions: {},
+    freshness: true,
   }),
 
   gauge: defineWidgetDescriptor({
@@ -216,11 +232,13 @@ export const builtinWidgetDescriptors = {
       unit: UNIT,
       precision: PRECISION,
       flashOnChange: FLASH_ON_CHANGE,
+      staleAfterSeconds: STALE_AFTER_SECONDS,
       window: WINDOW,
     },
     constraints: [{ kind: 'greater-than', key: 'max', than: 'min' }],
     defaults: { title: 'Gauge' },
     interactions: {},
+    freshness: true,
   }),
 
   table: defineWidgetDescriptor({
@@ -236,10 +254,12 @@ export const builtinWidgetDescriptors = {
       title: TITLE,
       precision: PRECISION,
       flashOnChange: FLASH_ON_CHANGE,
+      staleAfterSeconds: STALE_AFTER_SECONDS,
       window: WINDOW,
     },
     defaults: { title: 'Table' },
     interactions: {},
+    freshness: true,
   }),
 
   // label and image are static: the `none` channel, no datasource, no subscription and no

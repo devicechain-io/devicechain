@@ -179,6 +179,11 @@ export interface WidgetDescriptor<
   // Starting values for a freshly added widget. Every key optional — see DefaultsOf.
   defaults: DefaultsOf<S>;
   interactions: InteractionsFor<C>;
+  // Opt in to the frame's age readout ("12 sec. ago") for the widget's newest sample, and to
+  // the stale treatment when the widget's `staleAfterSeconds` option sets a threshold. Only a
+  // measurement widget has samples to age. Optional and absent by default, so a descriptor
+  // that predates it, and every stored widget, is unchanged.
+  freshness?: true;
 }
 
 // defineWidgetDescriptor is an identity that exists for inference: it infers the channel

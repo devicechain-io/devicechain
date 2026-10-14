@@ -12,6 +12,46 @@ import { parseJsonObject } from '@/lib/utils';
 // caller passes the server's dimension list, and this needs nothing else from it.
 export type ConfigDimension = { rateField: string; burstField: string };
 
+// The scalar keys a tier carries beside its rate+burst dimensions. They are not dimensions
+// (no burst, no per-second unit), so the server's dimension query does not list them and
+// this editor declares them itself. Ranges mirror the server's validators in
+// iam/tierconfig.go: a whole number from 1 to max. The geofence maxima are the platform
+// constants in core/governance (geofence_caps.go); the held ceiling's is the
+// representational int32 wall. A value outside them is refused at write by the server, so
+// checking here only moves the same refusal in front of the operator.
+//
+// The numbers are copied, not served: no query exposes them. tierConfig.test.ts reads the
+// Go source and fails when a maximum here stops matching it, so a raised platform constant
+// cannot leave this form refusing a value the server would accept.
+export type TierScalar = {
+  key: string;
+  max: number;
+  labelKey: string;
+  descriptionKey: string;
+};
+
+export const TIER_SCALARS: readonly TierScalar[] = [
+  { key: 'heldCommandCeiling', max: 2147483647, labelKey: 'heldCommandCeilingLabel', descriptionKey: 'heldCommandCeilingDescription' },
+  { key: 'shedPriority', max: 100, labelKey: 'shedPriorityLabel', descriptionKey: 'shedPriorityDescription' },
+  { key: 'geoFenceCeiling', max: 4000, labelKey: 'geoFenceCeilingLabel', descriptionKey: 'geoFenceCeilingDescription' },
+  { key: 'geoFencePositionCeiling', max: 1024, labelKey: 'geoFencePositionCeilingLabel', descriptionKey: 'geoFencePositionCeilingDescription' },
+  { key: 'geoFencePositionBudget', max: 128000, labelKey: 'geoFencePositionBudgetLabel', descriptionKey: 'geoFencePositionBudgetDescription' },
+];
+
+/**
+ * The scalar a field's text is not acceptable for, or null when every one is blank or valid.
+ * Blank is valid: omitting the key is how a tier inherits the platform default.
+ */
+export function invalidTierScalar(settings: Record<string, string>): TierScalar | null {
+  for (const s of TIER_SCALARS) {
+    const raw = (settings[s.key] ?? '').trim();
+    if (raw === '') continue;
+    const n = Number(raw);
+    if (!Number.isInteger(n) || n < 1 || n > s.max) return s;
+  }
+  return null;
+}
+
 // parseTierConfig reads a tier's stored config blob into the numeric values the
 // editor renders, as strings.
 //
@@ -73,6 +113,17 @@ export function buildTierConfigPatch(
       const n = Number(raw);
       if (Number.isFinite(n)) rendered[key] = n;
     }
+  }
+
+  // The scalar keys follow the same rule as a dimension's fields: blank omits, a number is
+  // written. A value that is not a valid number is never written (the form refuses it
+  // before this runs), so the key is dropped rather than sent as garbage.
+  for (const s of TIER_SCALARS) {
+    known.add(s.key);
+    const raw = (settings[s.key] ?? '').trim();
+    if (raw === '') continue;
+    const n = Number(raw);
+    if (Number.isFinite(n)) rendered[s.key] = n;
   }
 
   // Anything the editor has no field for survives untouched.

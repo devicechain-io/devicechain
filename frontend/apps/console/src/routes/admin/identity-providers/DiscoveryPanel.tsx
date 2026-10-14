@@ -27,6 +27,7 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { ErrorBanner } from '@/components/ui/error-banner';
 import { SectionPanel } from '@/components/ui/section-panel';
 import { useToast } from '@/components/ui/toast';
+import { formatTime } from '@/lib/utils';
 import { errMessage } from '@/routes/common';
 import { needsReapproval } from './idpForm';
 
@@ -104,7 +105,7 @@ export function DiscoveryPanel({
           <Row label={t('tokenEndpointLabel')} value={d.tokenEndpoint} />
           <Row label={t('jwksUriLabel')} value={d.jwksUri} />
           <Row label={t('endSessionEndpointLabel')} value={d.endSessionEndpoint ?? t('none')} />
-          <Row label={t('fetchedAtLabel')} value={d.fetchedAt ?? t('none')} />
+          <Row label={t('fetchedAtLabel')} value={d.fetchedAt ? formatTime(d.fetchedAt) : t('none')} />
           <Row label={t('fingerprintLabel')} value={d.fingerprint} mono />
           <dt className="text-muted-foreground">{t('approvalLabel')}</dt>
           <dd>
@@ -112,7 +113,7 @@ export function DiscoveryPanel({
               <span className="flex flex-wrap items-center gap-2">
                 <Badge variant="success">{t('discoveryApprovedBadge')}</Badge>
                 <span className="text-muted-foreground">
-                  {t('approvedBy', { by: d.approvedBy ?? t('none'), at: d.approvedAt ?? t('none') })}
+                  {t('approvedBy', { by: d.approvedBy ?? t('none'), at: d.approvedAt ? formatTime(d.approvedAt) : t('none') })}
                 </span>
               </span>
             ) : (
