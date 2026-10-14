@@ -11,6 +11,7 @@ import {
   type AlarmStreamState,
   css,
   defineWidget,
+  fitValueFont,
   optString,
   useElementSize,
   WidgetFrame,
@@ -20,7 +21,8 @@ import {
 import { builtinWidgetDescriptors } from '../builtin-descriptors';
 import { highestSeverity, severityColor, severityLabel } from './severity';
 
-const clamp = (v: number, lo: number, hi: number): number => Math.max(lo, Math.min(hi, v));
+const PAD_X = 16;
+const PAD_Y = 12;
 
 export function AlarmCount({ widget, data }: WidgetProps<AlarmStreamState>) {
   const [sizeRef, size] = useElementSize<HTMLDivElement>();
@@ -32,8 +34,8 @@ export function AlarmCount({ widget, data }: WidgetProps<AlarmStreamState>) {
   const alerting = total > 0 && worst != null;
   const color = alerting ? severityColor(worst) : css('muted-foreground');
 
-  const valueFont = size.height > 0 ? clamp(Math.round(size.height / 2.8), 20, 56) : 40;
   const display = loading && total === 0 ? '—' : String(total);
+  const valueFont = fitValueFont(size, display.length);
   const unit = total === 1 ? 'alarm' : 'alarms';
   const ariaLabel = alerting ? `${total} ${unit}, worst severity ${severityLabel(worst)}` : `${total} ${unit}`;
 
@@ -44,10 +46,12 @@ export function AlarmCount({ widget, data }: WidgetProps<AlarmStreamState>) {
         style={{
           display: 'flex',
           flexDirection: 'column',
-          justifyContent: 'center',
+          justifyContent: 'safe center',
           alignItems: 'center',
           height: '100%',
-          padding: '12px 16px',
+          boxSizing: 'border-box',
+          overflow: 'hidden',
+          padding: `${PAD_Y}px ${PAD_X}px`,
           textAlign: 'center',
         }}
       >

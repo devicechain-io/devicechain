@@ -84,7 +84,17 @@ export function EntitySelector({ widget }: WidgetProps<null>) {
 
   return (
     <WidgetFrame title={title}>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 8, padding: '12px 16px', height: '100%' }}>
+      <div
+        style={{
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 8,
+          padding: '12px 16px',
+          height: '100%',
+          boxSizing: 'border-box',
+          overflow: 'auto',
+        }}
+      >
         {inert ? (
           <span style={hint}>
             {select && target ? 'Selection isn’t available here.' : select ? 'No target slot configured.' : 'Selection is available on the live dashboard.'}

@@ -34,9 +34,11 @@ export function Label({ widget }: WidgetProps<null>) {
       <div
         style={{
           display: 'flex',
-          alignItems: 'center',
+          alignItems: 'safe center',
           justifyContent: justify[align] ?? 'center',
           height: '100%',
+          boxSizing: 'border-box',
+          overflow: 'hidden',
           padding: 12,
         }}
       >

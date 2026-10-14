@@ -6,6 +6,7 @@
 import {
   css,
   defineWidget,
+  fitValueFont,
   flashTextStyle,
   formatTimestamp,
   formatValue,
@@ -23,7 +24,11 @@ import {
 
 import { builtinWidgetDescriptors } from '../builtin-descriptors';
 
-const clamp = (v: number, lo: number, hi: number): number => Math.max(lo, Math.min(hi, v));
+// The column's padding, and the room a timestamp line needs under the value. useElementSize
+// reports the CONTENT box, which already excludes the padding.
+const PAD_X = 16;
+const PAD_Y = 12;
+const TIMESTAMP_ROOM_PX = 18;
 
 export function LatestCard({ widget, data }: WidgetProps) {
   const [sizeRef, size] = useElementSize<HTMLDivElement>();
@@ -45,9 +50,15 @@ export function LatestCard({ widget, data }: WidgetProps) {
     sample && `${sample.deviceToken}:${sample.name}`,
   );
 
-  // Scale the value to the card so it doesn't overflow a small slot (falls back to
-  // a comfortable size before first measure / in a non-DOM test).
-  const valueFont = size.height > 0 ? clamp(Math.round(size.height / 3.5), 16, 44) : 32;
+  // Fit the value to the card from both dimensions and the string length (the unit renders at
+  // half size, so it counts for half its characters). Falls back to a comfortable size before
+  // first measure / in a non-DOM test.
+  const chars = display.length + (sample?.value != null && unit ? Math.ceil(unit.length / 2) + 1 : 0);
+  const valueFont = fitValueFont(size, chars);
+  // The timestamp is the first thing to give: it shows only when the measured box has room
+  // for it under the value (unmeasured -- first frame, jsdom -- it shows).
+  const showTimestamp =
+    size.height <= 0 || size.height - Math.ceil(valueFont * 1.1) >= TIMESTAMP_ROOM_PX;
 
   return (
     <WidgetFrame title={title}>
@@ -56,9 +67,11 @@ export function LatestCard({ widget, data }: WidgetProps) {
         style={{
           display: 'flex',
           flexDirection: 'column',
-          justifyContent: 'center',
+          justifyContent: 'safe center',
           height: '100%',
-          padding: '12px 16px',
+          boxSizing: 'border-box',
+          overflow: 'hidden',
+          padding: `${PAD_Y}px ${PAD_X}px`,
         }}
       >
         <div
@@ -77,7 +90,7 @@ export function LatestCard({ widget, data }: WidgetProps) {
             </span>
           ) : null}
         </div>
-        {sample?.occurredTime ? (
+        {sample?.occurredTime && showTimestamp ? (
           <div style={{ fontSize: 11, color: css('muted-foreground'), marginTop: 4 }}>
             {formatTimestamp(sample.occurredTime, timeZone)}
           </div>
