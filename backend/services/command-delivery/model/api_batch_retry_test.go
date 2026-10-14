@@ -324,3 +324,72 @@ func TestAHeldCommandIsNotRetryable(t *testing.T) {
 	_, err := f.retry("r-held", false, true, "pump-0004")
 	wantCode(t, err, RejectRetryNotEligible)
 }
+
+// A device is covered by a live or successful command ANYWHERE in the retry family, not only in a
+// direct retry of the batch named: a grandchild or a sibling's retry sends it just the same.
+func TestACoveredTargetIsNotRetriedAcrossGenerations(t *testing.T) {
+	f := newRetryFixture(t)
+	failRetry := func(token string) {
+		t.Helper()
+		c := commandsOf(t, f.api, f.ctx, token)[0]
+		if _, won, _ := f.api.MarkSent(f.ctx, c.ID); !won {
+			t.Fatal("claim")
+		}
+		if _, err := f.api.MarkResponse(f.ctx, c.Token, c.DeviceToken, nonceOf(t, f.api, f.ctx, c.ID),
+			false, ReachAnswered, nil, strPtr("still no")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	first, err := f.retry("retry-1", false, false, "pump-0001")
+	if err != nil {
+		t.Fatal(err)
+	}
+	failRetry(first.Token)
+	if _, err := f.api.RetryCommandBatch(f.ctx, &CommandBatchRetryRequest{
+		Token: "retry-of-retry", Of: first.Token, DeviceTokens: []string{"pump-0001"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// The grandchild is live: retrying the ORIGINAL again would send pump-0001 a second time.
+	_, err = f.retry("retry-again", false, false, "pump-0001")
+	wantCode(t, err, RejectRetryNotEligible)
+
+	// And the other way round: a sibling retry of the original is live, so retrying the first
+	// retry (whose own command failed) must not send it again either.
+	g := newRetryFixture(t)
+	f = g
+	first, err = f.retry("retry-1", false, false, "pump-0001")
+	if err != nil {
+		t.Fatal(err)
+	}
+	failRetry(first.Token)
+	if _, err := f.retry("retry-sibling", false, false, "pump-0001"); err != nil {
+		t.Fatal(err)
+	}
+	_, err = f.api.RetryCommandBatch(f.ctx, &CommandBatchRetryRequest{
+		Token: "retry-of-first", Of: first.Token, DeviceTokens: []string{"pump-0001"},
+	})
+	wantCode(t, err, RejectRetryNotEligible)
+}
+
+// A retry's token replayed returns the retry; but if the decisive replay is only discovered inside
+// createCommandBatch's path, it must still refuse a batch that is not a retry of the same original.
+func TestARetryNeverReturnsABatchThatIsNotItsRetry(t *testing.T) {
+	f := newRetryFixture(t)
+	tokens := []string{"pump-0001"}
+	if _, err := f.api.CreateCommandBatch(f.ctx, &CommandBatchCreateRequest{
+		Token: "plain", Name: "reboot", DeviceTokens: &tokens,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	plain, err := f.api.CommandBatchesByToken(f.ctx, []string{"plain"})
+	if err != nil || len(plain) != 1 {
+		t.Fatalf("load plain: %v %v", plain, err)
+	}
+	wantCode(t, retryProvenance(plain[0], "plain", &retryPlan{original: f.original}), RejectRetryTokenInUse)
+	if err := retryProvenance(plain[0], "plain", nil); err != nil {
+		t.Fatalf("an ordinary create replays any batch under its token: %v", err)
+	}
+	_, err = f.retry("plain", false, false, "pump-0001")
+	wantCode(t, err, RejectRetryTokenInUse)
+}

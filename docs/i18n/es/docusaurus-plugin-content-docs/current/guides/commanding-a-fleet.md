@@ -345,8 +345,9 @@ mutation {
 - **Cada dispositivo debe ser miembro del lote original** y no haber tenido éxito: `NOT_DELIVERED` o
   `REJECTED`. Un dispositivo cuyo comando tuvo éxito o sigue en curso se rechaza
   (`RETRY_NOT_ELIGIBLE`), uno que no estaba en el lote se rechaza (`RETRY_NOT_A_MEMBER`), y también se
-  rechaza uno ya cubierto por un reintento activo o exitoso del mismo lote, de modo que un mismo
-  dispositivo nunca recibe el comando dos veces desde un mismo origen.
+  rechaza uno que ya tiene un comando activo o exitoso en otro lote de la misma familia de reintentos
+  (el original, cualquier reintento suyo y cualquier reintento de estos), de modo que un dispositivo
+  nunca recibe el comando dos veces por haber dos reintentos abiertos a la vez.
 - **`UNKNOWN` exige `includeUnknown: true`.** Sin él, esos dispositivos se rechazan con
   `RETRY_UNKNOWN_NOT_ACKNOWLEDGED`. Actívelo solo tras confirmar que actuar dos veces es inocuo.
 - **Los dispositivos que el original rechazó** solo se pueden reintentar cuando el registro del lote

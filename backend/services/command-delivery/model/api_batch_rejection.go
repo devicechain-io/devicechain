@@ -61,8 +61,8 @@ const (
 	// the original refused whose individual refusal the record did not keep (it stores a bounded
 	// sample per code, so it can only vouch for a refusal it holds in full).
 	RejectRetryNotAMember RejectionCode = "RETRY_NOT_A_MEMBER"
-	// RejectRetryNotEligible: a named device's command succeeded, is still in flight, or is
-	// already covered by a live or successful retry of the same batch.
+	// RejectRetryNotEligible: a named device's command succeeded, is still in flight, or another
+	// batch of the same retry family holds a live or successful command for it.
 	RejectRetryNotEligible RejectionCode = "RETRY_NOT_ELIGIBLE"
 	// RejectRetryUnknownNotAcknowledged: a named device's command may already have acted
 	// (outcome UNKNOWN) and the caller did not set includeUnknown.

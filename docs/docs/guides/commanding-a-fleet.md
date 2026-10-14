@@ -338,8 +338,9 @@ mutation {
 - **Every device must be a member of the original batch** and unsuccessful: `NOT_DELIVERED` or
   `REJECTED`. A device whose command succeeded or is still in flight is refused
   (`RETRY_NOT_ELIGIBLE`), a device that was not in the batch is refused (`RETRY_NOT_A_MEMBER`), and
-  a device already covered by a live or successful retry of the same batch is refused too, so the
-  same device is never sent the command twice from one parent.
+  a device that already has a live or successful command in another batch of the same retry family
+  (the original, any retry of it, and any retry of those) is refused too, so a device is never sent
+  the command twice because two retries were open at once.
 - **`UNKNOWN` needs `includeUnknown: true`.** Without it those devices are refused with
   `RETRY_UNKNOWN_NOT_ACKNOWLEDGED`. Set it only after confirming that acting twice is harmless.
 - **Devices the original refused** can be retried only when the batch record holds that refusal. The

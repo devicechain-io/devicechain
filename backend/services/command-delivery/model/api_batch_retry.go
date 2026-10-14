@@ -76,10 +76,8 @@ func (api *Api) decideRetry(ctx context.Context, request *CommandBatchRetryReque
 	if existing, replay, err := api.liveBatchByToken(ctx, request.Token); err != nil {
 		return nil, err
 	} else if replay {
-		if existing.RetryOf.String != request.Of || !existing.RetryOf.Valid {
-			return nil, rejected(RejectRetryTokenInUse,
-				"token %q already names a batch that is not a retry of %q; a retry needs its own token",
-				request.Token, request.Of)
+		if !existing.RetryOf.Valid || existing.RetryOf.String != request.Of {
+			return nil, retryTokenInUse(request.Token, request.Of)
 		}
 		acct.replay = true
 		return existing, nil
@@ -141,8 +139,9 @@ type retryTargetState struct {
 //
 //   - its command is NOT_DELIVERED or REJECTED; or UNKNOWN with includeUnknown;
 //   - it is not in flight, and did not SUCCEED;
-//   - no retry of this same original already holds a live or successful command for it (retrying
-//     twice from one parent would send twice; retry the retry instead).
+//   - no other batch in the original's retry family (its ancestors and every retry beneath their
+//     root, see retryFamilyBatchIds) holds a live or successful command for it — two open
+//     generations would otherwise send it twice.
 //
 // A refused device with no command row is retryable only when its refusal code's stored sample is
 // complete (sample size equals the exact count): the record keeps at most 100 per code, so for a
@@ -168,17 +167,20 @@ func (api *Api) checkRetryEligibility(db *gorm.DB, plan *retryPlan, devices []st
 		return err
 	}
 
-	// Devices a sibling retry already covers: live, or successful.
+	// Devices another batch of the same retry family already covers: live, or successful.
+	family, err := retryFamilyBatchIds(db, plan.original)
+	if err != nil {
+		return err
+	}
 	covered := make(map[string]struct{})
-	for start := 0; start < len(devices); start += retryLookupChunk {
+	for start := 0; start < len(devices) && len(family) > 0; start += retryLookupChunk {
 		end := min(start+retryLookupChunk, len(devices))
 		var rows []Command
 		if err := db.Model(&Command{}).
 			Select("device_token").
 			Where("device_token IN ?", devices[start:end]).
 			Where("(outcome IS NULL OR outcome = ?)", OutcomeSucceeded.String()).
-			Where("batch_id IN (?)", db.Session(&gorm.Session{NewDB: true}).Model(&CommandBatch{}).
-				Select("id").Where("retry_of = ?", plan.original.Token)).
+			Where("batch_id IN ?", family).
 			Find(&rows).Error; err != nil {
 			return err
 		}
@@ -203,12 +205,12 @@ func (api *Api) checkRetryEligibility(db *gorm.DB, plan *retryPlan, devices []st
 					"this device is not a member of the batch being retried, or its refusal was not "+
 						"individually recorded")
 			} else if _, dup := covered[device]; dup {
-				flag(device, RejectRetryNotEligible, "an earlier retry of this batch already covers this device")
+				flag(device, RejectRetryNotEligible, "another retry of this batch, or of a batch it retries or that retries it, already covers this device")
 			}
 			continue
 		}
 		if _, dup := covered[device]; dup {
-			flag(device, RejectRetryNotEligible, "an earlier retry of this batch already covers this device")
+			flag(device, RejectRetryNotEligible, "another retry of this batch, or of a batch it retries or that retries it, already covers this device")
 			continue
 		}
 		if !CommandStatus(state.status).Terminal() {
@@ -233,6 +235,67 @@ func (api *Api) checkRetryEligibility(db *gorm.DB, plan *retryPlan, devices []st
 	}
 	return batchRejection(first, bad, len(devices),
 		"%d of %d named devices cannot be retried", len(bad), len(devices))
+}
+
+// maxRetryFamily bounds the retry-family walk. A family is a root batch plus every retry beneath
+// it, built by hand one retry at a time, so a real one is a handful of batches; the bound exists
+// so a pathological lineage costs a refusal-free but bounded read rather than an unbounded one.
+const maxRetryFamily = 1000
+
+// retryFamilyBatchIds is every batch in the original's retry FAMILY except the original itself:
+// its ancestors up to the root, and every retry beneath that root, at any depth.
+//
+// 🔴 THE FAMILY, NOT THE DIRECT CHILDREN. Checking only retries of the batch being retried lets a
+// device be sent twice whenever two generations are open at once: retry A (R1, fails again),
+// retry R1 (R2, live), then retry A again — A's only child R1 has a finished command, so A looks
+// clear while R2 is still sending. The same hole runs sideways (a live sibling retry of A while R1
+// is retried). Every batch in the family re-attempts the same command to the same devices, so a
+// live or successful command for a device anywhere in it covers that device for all of them.
+//
+// Each read goes through db, so it is tenant-scoped by the same callbacks as every other query,
+// and runs inside the creating transaction (under the tenant batch lock) on the second check.
+func retryFamilyBatchIds(db *gorm.DB, original *CommandBatch) ([]uint, error) {
+	seen := map[string]bool{original.Token: true}
+	ids := make([]uint, 0)
+	root := original.Token
+	// Up: follow retry_of to the root. A missing parent (removed) ends the walk where it is.
+	for parent := original.RetryOf; parent.Valid && !seen[parent.String] && len(seen) < maxRetryFamily; {
+		var rows []CommandBatch
+		if err := db.Model(&CommandBatch{}).Select("id", "token", "retry_of").
+			Where("token = ?", parent.String).Limit(1).Find(&rows).Error; err != nil {
+			return nil, err
+		}
+		if len(rows) == 0 {
+			break
+		}
+		seen[rows[0].Token] = true
+		ids = append(ids, rows[0].ID)
+		root = rows[0].Token
+		parent = rows[0].RetryOf
+	}
+	// Down: every retry beneath the root, a generation at a time. Its own visited set, because the
+	// original and its ancestors are already in `seen` and their subtrees must still be walked.
+	inFamily := map[string]bool{root: true}
+	for frontier := []string{root}; len(frontier) > 0 && len(inFamily) < maxRetryFamily; {
+		var rows []CommandBatch
+		if err := db.Model(&CommandBatch{}).Select("id", "token").
+			Where("retry_of IN ?", frontier).Limit(maxRetryFamily).Find(&rows).Error; err != nil {
+			return nil, err
+		}
+		next := make([]string, 0, len(rows))
+		for _, row := range rows {
+			if inFamily[row.Token] {
+				continue
+			}
+			inFamily[row.Token] = true
+			next = append(next, row.Token)
+			if !seen[row.Token] {
+				ids = append(ids, row.ID)
+			}
+		}
+		frontier = next
+	}
+	return ids, nil
 }
 
 // retryPrecedence orders the retry refusals so the headline code is the most fundamental
@@ -294,6 +357,28 @@ func (api *Api) RetriesOfBatch(ctx context.Context, token string) ([]string, err
 		out = append(out, r.Token)
 	}
 	return out, nil
+}
+
+// retryTokenInUse is the refusal for a retry whose token already names some other batch.
+func retryTokenInUse(token, of string) error {
+	return rejected(RejectRetryTokenInUse,
+		"token %q already names a batch that is not a retry of %q; a retry needs its own token", token, of)
+}
+
+// retryProvenance is the replay rule for a retry, applied wherever decideCommandBatch finds a batch
+// already under the request's token: an ordinary create (plan nil) replays whatever its token
+// names, but a retry may only be answered with a retry of the SAME original. decideRetry checks
+// this before anything else, and decideCommandBatch checks it again on its own replay probe and on
+// a lost insert race, because either can find a batch another request created in the meantime —
+// returning it would hand the caller an unrelated batch as "your retry".
+func retryProvenance(existing *CommandBatch, token string, plan *retryPlan) error {
+	if plan == nil {
+		return nil
+	}
+	if !existing.RetryOf.Valid || existing.RetryOf.String != plan.original.Token {
+		return retryTokenInUse(token, plan.original.Token)
+	}
+	return nil
 }
 
 // retryOfValue is the nullable column value a retry batch stores.

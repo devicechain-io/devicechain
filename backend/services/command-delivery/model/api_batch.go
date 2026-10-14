@@ -193,6 +193,9 @@ func (api *Api) decideCommandBatch(ctx context.Context, request *CommandBatchCre
 		return nil, err
 	}
 	if replay {
+		if err := retryProvenance(existing, request.Token, retry); err != nil {
+			return nil, err
+		}
 		acct.replay = true
 		acct.targetKind = targetKindLabel(BatchTargetKind(existing.TargetKind))
 		// The token IS the identity: the first write wins and a differing re-request does
@@ -388,6 +391,9 @@ func (api *Api) decideCommandBatch(ctx context.Context, request *CommandBatchCre
 			// The winner was soft-deleted between its commit and this read. Rare enough to
 			// be worth reporting honestly rather than papering over with a retry loop.
 			return nil, fmt.Errorf("command batch %q was removed while being created", request.Token)
+		}
+		if err := retryProvenance(existing, request.Token, retry); err != nil {
+			return nil, err
 		}
 		return existing, nil
 	}
