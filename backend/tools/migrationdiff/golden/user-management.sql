@@ -320,7 +320,8 @@ CREATE TABLE "user-management".iam_idp_connections (
  discovery_snapshot text,
  discovery_approved_at timestamp with time zone,
  discovery_approved_by character varying(256) DEFAULT ''::character varying NOT NULL,
- provider_sign_out boolean DEFAULT false NOT NULL
+ provider_sign_out boolean DEFAULT false NOT NULL,
+ ca_bundle text DEFAULT ''::text NOT NULL
 );
 CREATE TABLE "user-management".iam_idp_role_mappings (
  id bigint NOT NULL,

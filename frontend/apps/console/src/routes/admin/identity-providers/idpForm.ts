@@ -28,6 +28,8 @@ export interface IdpCreateState {
   requiredAmr: string;
   // The operator's statement that the provider itself enforces multi-factor sign-in.
   mfaEnforcedByIdp: boolean;
+  // PEM of private CA certificates to trust for this provider, beside the system roots.
+  caBundle: string;
 }
 
 export function newCreateState(): IdpCreateState {
@@ -43,6 +45,7 @@ export function newCreateState(): IdpCreateState {
     claims: [],
     requiredAmr: '',
     mfaEnforcedByIdp: false,
+    caBundle: '',
   };
 }
 
@@ -67,7 +70,24 @@ export type IdpValidationKey =
   | 'issuerNotHttpsError'
   | 'clientIdRequiredError'
   | 'claimIncompleteError'
-  | 'instanceNeedsMfaError';
+  | 'instanceNeedsMfaError'
+  | 'caBundleLooksLikeKeyError'
+  | 'caBundleNotPemError'
+  | 'caBundleTooLargeError';
+
+// The server's cap on a CA bundle.
+export const CA_BUNDLE_MAX_BYTES = 64 * 1024;
+
+// checkCaBundle is a courtesy that says why BEFORE the text leaves the browser — above all
+// that a private key was pasted, which should not be sent anywhere. The server re-validates
+// authoritatively. Empty is fine (no private CA).
+export function checkCaBundle(text: string): IdpValidationKey | null {
+  if (text.trim() === '') return null;
+  if (/PRIVATE KEY/i.test(text)) return 'caBundleLooksLikeKeyError';
+  if (new TextEncoder().encode(text).length > CA_BUNDLE_MAX_BYTES) return 'caBundleTooLargeError';
+  if (!/-----BEGIN CERTIFICATE-----/.test(text)) return 'caBundleNotPemError';
+  return null;
+}
 
 // validateCreate returns the i18n key of the first problem, or null when the form is
 // shaped well enough to send.
@@ -81,6 +101,8 @@ export function validateCreate(s: IdpCreateState): IdpValidationKey | null {
   if (s.claims.some((c) => c.name.trim() === '' || c.value.trim() === '')) {
     return 'claimIncompleteError';
   }
+  const caProblem = checkCaBundle(s.caBundle);
+  if (caProblem) return caProblem;
   // An instance connection can reach a superuser, so it must either demand a
   // multi-factor method of the provider or carry the operator's recorded statement that
   // the provider enforces MFA itself. The API refuses neither-nor; saying so here saves
@@ -109,6 +131,7 @@ export function createRequest(s: IdpCreateState): IdpConnectionCreateRequest {
   if (s.emailClaim.trim() !== '') req.emailClaim = s.emailClaim.trim();
   if (claims.length > 0) req.requiredClaims = claims;
   if (amr.length > 0) req.requiredAmr = amr;
+  if (s.caBundle.trim() !== '') req.caBundle = s.caBundle.trim();
   // The acknowledgement only means anything for an instance connection with no required
   // methods; never send a stale tick left over from a kind the operator switched away from.
   if (s.kind === 'instance' && amr.length === 0 && s.mfaEnforcedByIdp) {

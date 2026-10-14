@@ -92,6 +92,24 @@ func (r *IdpConnectionResolver) CallbackUrl() string { return r.d.CallbackURL }
 func (r *IdpConnectionResolver) ProviderSignOut() bool {
 	return r.d.Connection.ProviderSignOut
 }
+func (r *IdpConnectionResolver) CaCertificates() []*IdpCaCertificateResolver {
+	out := make([]*IdpCaCertificateResolver, 0, len(r.d.CaCertificates))
+	for i := range r.d.CaCertificates {
+		out = append(out, &IdpCaCertificateResolver{c: r.d.CaCertificates[i]})
+	}
+	return out
+}
+
+// IdpCaCertificateResolver resolves the IdpCaCertificate type.
+type IdpCaCertificateResolver struct{ c identity.CaCertificate }
+
+func (r *IdpCaCertificateResolver) FingerprintSha256() string { return r.c.FingerprintSHA256 }
+func (r *IdpCaCertificateResolver) Subject() string           { return r.c.Subject }
+func (r *IdpCaCertificateResolver) Issuer() string            { return r.c.Issuer }
+func (r *IdpCaCertificateResolver) NotBefore() string         { return *gqlcore.FormatTime(r.c.NotBefore) }
+func (r *IdpCaCertificateResolver) NotAfter() string          { return *gqlcore.FormatTime(r.c.NotAfter) }
+func (r *IdpCaCertificateResolver) IsCa() bool                { return r.c.IsCA }
+
 func (r *IdpConnectionResolver) SignOutReturnUrls() []string {
 	return nonNil(r.d.SignOutReturnURLs)
 }
@@ -245,6 +263,7 @@ type idpConnectionCreateInput struct {
 	RequiredClaims   *[]idpClaimRequirementInput
 	RequiredAmr      *[]string
 	MfaEnforcedByIdp *bool
+	CaBundle         *string
 }
 
 func claimsMap(in *[]idpClaimRequirementInput) (map[string]string, error) {
@@ -295,7 +314,21 @@ func (r *AdminResolver) CreateIdpConnection(ctx context.Context, args struct {
 	if rq.MfaEnforcedByIdp != nil {
 		in.MfaEnforcedByIdp = *rq.MfaEnforcedByIdp
 	}
+	if rq.CaBundle != nil {
+		in.CaBundle = *rq.CaBundle
+	}
 	return wrapIdp(r.sso(ctx).CreateIdpConnection(ctx, in))
+}
+
+// SetIdpCaBundle replaces or clears the private CA bundle (requires user:write).
+func (r *AdminResolver) SetIdpCaBundle(ctx context.Context, args struct {
+	Token    string
+	CaBundle string
+}) (*IdpConnectionResolver, error) {
+	if err := auth.Authorize(ctx, auth.UserWrite); err != nil {
+		return nil, err
+	}
+	return wrapIdp(r.sso(ctx).SetIdpCaBundle(ctx, args.Token, args.CaBundle))
 }
 
 // UpdateIdpConnection applies a partial update (requires user:write).

@@ -212,7 +212,7 @@ func TestDiscoveryGoesThroughTheEgressGuard(t *testing.T) {
 
 func TestManagerWithoutAClientRefusesDiscovery(t *testing.T) {
 	m := NewManager(nil, nil, nil, nil, 0, 0, "", BootstrapConfig{}, nil)
-	_, err := m.FetchIdpDiscovery(context.Background(), "https://idp.example")
+	_, err := m.FetchIdpDiscovery(context.Background(), "https://idp.example", "")
 	require.ErrorIs(t, err, ErrDiscoveryNoClient)
 }
 

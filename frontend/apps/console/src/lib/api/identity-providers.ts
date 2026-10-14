@@ -24,6 +24,7 @@ export type IdpConnectionListItem = IdpConnectionsQuery['idpConnections'][number
 export type IdpConnection = NonNullable<IdpConnectionQuery['idpConnection']>;
 export type IdpDomain = IdpConnection['domains'][number];
 export type IdpDiscovery = IdpConnection['discovery'];
+export type IdpCaCertificate = IdpConnection['caCertificates'][number];
 export type SsoLinkRequest = SsoLinkRequestsQuery['ssoLinkRequests'][number];
 export type { IdpConnectionCreateRequest };
 
@@ -88,6 +89,14 @@ const IDP_CONNECTION = graphql(`
       callbackUrl
       providerSignOut
       signOutReturnUrls
+      caCertificates {
+        fingerprintSha256
+        subject
+        issuer
+        notBefore
+        notAfter
+        isCa
+      }
       discovery {
         authorizationEndpoint
         tokenEndpoint
@@ -208,6 +217,21 @@ const SET_IDP_CONNECTION_SECRET = graphql(`
 
 export async function setIdpConnectionSecret(token: string, secret: string): Promise<void> {
   await gql('user-management/admin', SET_IDP_CONNECTION_SECRET, { token, secret }, opts);
+}
+
+const SET_IDP_CA_BUNDLE = graphql(`
+  mutation SetIdpCaBundle($token: String!, $caBundle: String!) {
+    setIdpCaBundle(token: $token, caBundle: $caBundle) {
+      token
+    }
+  }
+`);
+
+// Replaces the connection's private CA bundle (PEM); an empty string clears it. The server
+// fetches the provider's discovery document under a new bundle before saving, so a bundle
+// that does not verify the provider is refused with the reason.
+export async function setIdpCaBundle(token: string, caBundle: string): Promise<void> {
+  await gql('user-management/admin', SET_IDP_CA_BUNDLE, { token, caBundle }, opts);
 }
 
 const SET_IDP_CONNECTION_TENANTS = graphql(`

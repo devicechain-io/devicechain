@@ -12,6 +12,8 @@ import {
   newCreateState,
   splitList,
   validateCreate,
+  checkCaBundle,
+  CA_BUNDLE_MAX_BYTES,
   type IdpCreateState,
 } from './idpForm';
 
@@ -93,6 +95,30 @@ describe('createRequest', () => {
       createRequest(valid({ kind: 'instance', requiredAmr: 'mfa', mfaEnforcedByIdp: true }))
         .mfaEnforcedByIdp,
     ).toBeUndefined();
+  });
+});
+
+describe('the private CA bundle', () => {
+  const CERT = '-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----';
+
+  it('is optional, and sent only when given', () => {
+    expect(validateCreate(valid())).toBeNull();
+    expect(createRequest(valid()).caBundle).toBeUndefined();
+    expect(createRequest(valid({ caBundle: '  \n' })).caBundle).toBeUndefined();
+    expect(createRequest(valid({ caBundle: CERT + '\n' })).caBundle).toBe(CERT);
+  });
+
+  it('refuses a private key, whatever else the text holds', () => {
+    expect(checkCaBundle('-----BEGIN PRIVATE KEY-----\nA\n-----END PRIVATE KEY-----')).toBe('caBundleLooksLikeKeyError');
+    expect(checkCaBundle(CERT + '\n-----BEGIN EC PRIVATE KEY-----\nA')).toBe('caBundleLooksLikeKeyError');
+    expect(validateCreate(valid({ caBundle: '-----BEGIN RSA PRIVATE KEY-----' }))).toBe('caBundleLooksLikeKeyError');
+  });
+
+  it('refuses text that is not PEM certificates, and an oversized bundle', () => {
+    expect(checkCaBundle('https://pki.example.com/root.pem')).toBe('caBundleNotPemError');
+    expect(checkCaBundle(CERT + 'x'.repeat(CA_BUNDLE_MAX_BYTES))).toBe('caBundleTooLargeError');
+    expect(checkCaBundle('')).toBeNull();
+    expect(checkCaBundle(CERT)).toBeNull();
   });
 });
 

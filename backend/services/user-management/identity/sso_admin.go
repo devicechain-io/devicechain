@@ -90,6 +90,9 @@ type IdpConnectionInput struct {
 	// administrator's own statement that the provider enforces multi-factor sign-in. It is
 	// audited at create and not stored (nothing would read it).
 	MfaEnforcedByIdp bool
+	// CaBundle is optional PEM: private CA certificates to trust for this provider's TLS
+	// certificate, beside the system roots (see ParseCaBundle).
+	CaBundle string
 }
 
 // IdpConnectionUpdateRequest is the partial update of a connection. The issuer, kind and
@@ -121,6 +124,9 @@ type IdpConnectionDetail struct {
 	SignOutReturnURLs []string
 	// RoleMappings are the connection's group-to-role mappings, across its tenants.
 	RoleMappings []IdpRoleMappingDetail
+	// CaCertificates are the certificates of the connection's private CA bundle, parsed for
+	// display; empty when it has none.
+	CaCertificates []CaCertificate
 	// Fingerprint identifies the discovery snapshot, so an approval is of THE snapshot the
 	// administrator saw.
 	Fingerprint string
@@ -204,7 +210,11 @@ func (m *Manager) CreateIdpConnection(ctx context.Context, in IdpConnectionInput
 	if len(groupsClaim) > 64 {
 		return nil, invalid("the groups claim name is up to 64 characters")
 	}
-	snap, err := m.FetchIdpDiscovery(ctx, in.Issuer)
+	caBundle, _, err := ParseCaBundle(in.CaBundle)
+	if err != nil {
+		return nil, err
+	}
+	snap, err := m.FetchIdpDiscovery(ctx, in.Issuer, caBundle)
 	if err != nil {
 		return nil, err
 	}
@@ -216,7 +226,7 @@ func (m *Manager) CreateIdpConnection(ctx context.Context, in IdpConnectionInput
 		Token: in.Token, Name: strings.TrimSpace(in.Name), Kind: in.Kind, Issuer: in.Issuer,
 		ClientID: in.ClientID, Scopes: scopes, EmailClaim: in.EmailClaim, GroupsClaim: groupsClaim,
 		RequiredClaims: in.RequiredClaims, RequiredAmr: in.RequiredAmr,
-		DiscoverySnapshot: snap,
+		DiscoverySnapshot: snap, CaBundle: caBundle,
 	}
 	if err := m.iam.CreateIdpConnection(ctx, conn); err != nil {
 		return nil, err
@@ -229,6 +239,9 @@ func (m *Manager) CreateIdpConnection(ctx context.Context, in IdpConnectionInput
 			}
 			return nil, err
 		}
+	}
+	if caBundle != "" {
+		m.recordAuthLabeled(ctx, rdb.AuditOpIdpCaBundleChanged, actor(ctx), "", caAuditLabel(conn.Token, "", caBundle))
 	}
 	if in.Kind == iam.IdpKindInstance && in.MfaEnforcedByIdp {
 		m.recordAuthLabeled(ctx, rdb.AuditOpIdpMfaAcknowledged, actor(ctx), "", conn.Token)
@@ -289,8 +302,13 @@ func (m *Manager) connectionDetail(ctx context.Context, conn *iam.IdpConnection)
 	if err != nil {
 		return nil, err
 	}
+	// The stored bundle was canonicalised on write; a row that no longer parses (edited in
+	// the database) shows no certificates and, because the client builder refuses it too,
+	// reaches no provider: it fails closed rather than quietly trusting the system roots.
+	_, caCerts, _ := ParseCaBundle(conn.CaBundle)
 	return &IdpConnectionDetail{
-		Connection: *conn, Domains: domains, Tenants: tenants, HasSecret: has, RoleMappings: mappings,
+		CaCertificates: caCerts,
+		Connection:     *conn, Domains: domains, Tenants: tenants, HasSecret: has, RoleMappings: mappings,
 		CallbackURL: m.SsoCallbackURL(conn.Token), Fingerprint: snapshotFingerprint(conn.DiscoverySnapshot),
 		SignOutReturnURLs: m.signOutReturnURLs(),
 	}, nil
@@ -363,6 +381,63 @@ func (m *Manager) UpdateIdpConnection(ctx context.Context, token string, req *Id
 	conn.Enabled = enabled
 	if err := m.iam.UpdateIdpConnection(ctx, conn); err != nil {
 		return nil, err
+	}
+	return m.IdpConnection(ctx, token)
+}
+
+// SetIdpCaBundle replaces a connection's private CA bundle; an empty bundle clears it,
+// returning the connection to the system roots alone.
+//
+// A new bundle must WORK: the provider's discovery document is fetched under it before
+// anything is saved, so a bundle that does not verify the provider's certificate is refused
+// with the reason rather than saved and found at the first sign-in. The document so fetched
+// is held to the same rule as RefreshIdpDiscovery: if it names the endpoints a person
+// approved, the approval stands (rotating a private CA must not lock people out); if it
+// names others, it replaces the snapshot and withdraws the approval, so an address that a
+// different trust root vouched for never redirects a sign-in unreviewed. Clearing fetches
+// nothing (the provider may be unreachable by the time the bundle is retired); the next
+// refresh shows whether the provider still answers under the system roots.
+func (m *Manager) SetIdpCaBundle(ctx context.Context, token, bundle string) (*IdpConnectionDetail, error) {
+	conn, err := m.loadConnection(ctx, token)
+	if err != nil {
+		return nil, err
+	}
+	canonical, _, err := ParseCaBundle(bundle)
+	if err != nil {
+		return nil, err
+	}
+	oldBundle := conn.CaBundle
+	snapChanged := false
+	if canonical != "" {
+		// A failure here is the administrator trying a bundle, not the provider failing
+		// people, so it is not counted as a provider fetch failure.
+		snap, err := m.FetchIdpDiscovery(ctx, conn.Issuer, canonical)
+		if err != nil {
+			return nil, err
+		}
+		if conn.DiscoverySnapshot == nil || !conn.DiscoverySnapshot.SameEndpoints(*snap) {
+			conn.DiscoverySnapshot = snap
+			conn.DiscoveryApprovedAt = nil
+			conn.DiscoveryApprovedBy = ""
+			snapChanged = true
+		}
+	}
+	bundleChanged := canonical != oldBundle
+	if !bundleChanged && !snapChanged {
+		return m.connectionDetail(ctx, conn)
+	}
+	conn.CaBundle = canonical
+	// Only the columns this call changes: a concurrent edit to any other (disabling the
+	// connection during an incident) must not be reverted by this write.
+	fields := []string{"CaBundle"}
+	if snapChanged {
+		fields = append(fields, "DiscoverySnapshot", "DiscoveryApprovedAt", "DiscoveryApprovedBy")
+	}
+	if err := m.iam.UpdateIdpConnectionFields(ctx, conn, fields...); err != nil {
+		return nil, err
+	}
+	if bundleChanged {
+		m.recordAuthLabeled(ctx, rdb.AuditOpIdpCaBundleChanged, actor(ctx), "", caAuditLabel(conn.Token, oldBundle, canonical))
 	}
 	return m.IdpConnection(ctx, token)
 }
@@ -472,7 +547,7 @@ func (m *Manager) RefreshIdpDiscovery(ctx context.Context, token string) (*IdpCo
 	if err != nil {
 		return nil, err
 	}
-	snap, err := m.FetchIdpDiscovery(ctx, conn.Issuer)
+	snap, err := m.FetchIdpDiscovery(ctx, conn.Issuer, conn.CaBundle)
 	if err != nil {
 		m.countIdpFailure(conn.Token)
 		return nil, err
@@ -481,7 +556,7 @@ func (m *Manager) RefreshIdpDiscovery(ctx context.Context, token string) (*IdpCo
 		conn.DiscoverySnapshot = snap
 		conn.DiscoveryApprovedAt = nil
 		conn.DiscoveryApprovedBy = ""
-		if err := m.iam.UpdateIdpConnection(ctx, conn); err != nil {
+		if err := m.iam.UpdateIdpConnectionFields(ctx, conn, "DiscoverySnapshot", "DiscoveryApprovedAt", "DiscoveryApprovedBy"); err != nil {
 			return nil, err
 		}
 	}
