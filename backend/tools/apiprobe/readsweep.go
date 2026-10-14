@@ -518,6 +518,7 @@ var sweepTokenArgs = map[string]string{
 	"device-management.activeAssetTypeVersion.token":         "asset-type",
 	"device-management.entityGroupVersions.token":            "entity-group",
 	"device-management.resolveDeviceGroupTargets.groupToken": "entity-group",
+	"device-management.maintenanceWindowOpening.token":       "maintenance-window",
 	"dashboard-management.dashboardVersions.token":           "dashboard",
 	"dashboard-management.dashboardVersion.token":            "dashboard",
 	"outbound-connectors.connectorVersions.token":            "connector",
@@ -542,6 +543,9 @@ var sweepExemptions = map[string]string{
 		"to send; it needs a commandKey from the device's own vocabulary, which is a choice, not a token",
 	"device-management.validateCommandEnqueueBatch": "the batch form of validateCommandEnqueue, and " +
 		"exempt for the same reason",
+	"device-management.commandDispatchSchedule": "a pre-flight decision about a command the CALLER is " +
+		"about to send; it needs a commandKey from the device's own vocabulary, which is a choice, not a " +
+		"token. The window it reads is swept through maintenanceWindowOpening",
 
 	// The two below are exempt because their argument is a GUESS, and a guess that
 	// misses does not fail quietly — `geoFenceSetSnapshot(version:)` on an unknown

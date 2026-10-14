@@ -30,6 +30,7 @@ ALTER SEQUENCE "device-management".facet_keys_id_seq OWNED BY "device-management
 ALTER SEQUENCE "device-management".geo_fence_geometry_blobs_id_seq OWNED BY "device-management".geo_fence_geometry_blobs.id;
 ALTER SEQUENCE "device-management".geo_fence_set_versions_id_seq OWNED BY "device-management".geo_fence_set_versions.id;
 ALTER SEQUENCE "device-management".geo_fences_id_seq OWNED BY "device-management".geo_fences.id;
+ALTER SEQUENCE "device-management".maintenance_windows_id_seq OWNED BY "device-management".maintenance_windows.id;
 ALTER SEQUENCE "device-management".metric_definitions_id_seq OWNED BY "device-management".metric_definitions.id;
 ALTER SEQUENCE "device-management".provisioning_profiles_id_seq OWNED BY "device-management".provisioning_profiles.id;
 ALTER TABLE ONLY "device-management".alarms
@@ -104,6 +105,8 @@ ALTER TABLE ONLY "device-management".device_replacements
  ADD CONSTRAINT device_replacements_pkey PRIMARY KEY (id);
 ALTER TABLE ONLY "device-management".device_replacements ALTER COLUMN id SET DEFAULT nextval('"device-management".device_replacements_id_seq'::regclass);
 ALTER TABLE ONLY "device-management".device_types
+ ADD CONSTRAINT "fk_device-management_device_types_maintenance_window" FOREIGN KEY (maintenance_window_id) REFERENCES "device-management".maintenance_windows(id);
+ALTER TABLE ONLY "device-management".device_types
  ADD CONSTRAINT device_types_pkey PRIMARY KEY (id);
 ALTER TABLE ONLY "device-management".device_types ALTER COLUMN id SET DEFAULT nextval('"device-management".device_types_id_seq'::regclass);
 ALTER TABLE ONLY "device-management".devices
@@ -146,6 +149,9 @@ ALTER TABLE ONLY "device-management".geo_fence_set_versions ALTER COLUMN id SET 
 ALTER TABLE ONLY "device-management".geo_fences
  ADD CONSTRAINT geo_fences_pkey PRIMARY KEY (id);
 ALTER TABLE ONLY "device-management".geo_fences ALTER COLUMN id SET DEFAULT nextval('"device-management".geo_fences_id_seq'::regclass);
+ALTER TABLE ONLY "device-management".maintenance_windows
+ ADD CONSTRAINT maintenance_windows_pkey PRIMARY KEY (id);
+ALTER TABLE ONLY "device-management".maintenance_windows ALTER COLUMN id SET DEFAULT nextval('"device-management".maintenance_windows_id_seq'::regclass);
 ALTER TABLE ONLY "device-management".metric_definitions
  ADD CONSTRAINT metric_definitions_pkey PRIMARY KEY (id);
 ALTER TABLE ONLY "device-management".metric_definitions ALTER COLUMN id SET DEFAULT nextval('"device-management".metric_definitions_id_seq'::regclass);
@@ -208,6 +214,7 @@ CREATE INDEX "idx_device-management_device_replacements_device_id" ON "device-ma
 CREATE INDEX "idx_device-management_device_replacements_occurred_time" ON "device-management".device_replacements USING btree (occurred_time);
 CREATE INDEX "idx_device-management_device_replacements_tenant_id" ON "device-management".device_replacements USING btree (tenant_id);
 CREATE INDEX "idx_device-management_device_types_deleted_at" ON "device-management".device_types USING btree (deleted_at);
+CREATE INDEX "idx_device-management_device_types_maintenance_window_id" ON "device-management".device_types USING btree (maintenance_window_id);
 CREATE INDEX "idx_device-management_device_types_manufacturer" ON "device-management".device_types USING btree (manufacturer);
 CREATE INDEX "idx_device-management_device_types_model_name" ON "device-management".device_types USING btree (model);
 CREATE INDEX "idx_device-management_device_types_profile_id" ON "device-management".device_types USING btree (profile_id);
@@ -243,6 +250,9 @@ CREATE INDEX "idx_device-management_geo_fence_set_versions_tenant_id" ON "device
 CREATE INDEX "idx_device-management_geo_fences_deleted_at" ON "device-management".geo_fences USING btree (deleted_at);
 CREATE INDEX "idx_device-management_geo_fences_tenant_id" ON "device-management".geo_fences USING btree (tenant_id);
 CREATE INDEX "idx_device-management_geo_fences_token" ON "device-management".geo_fences USING btree (token);
+CREATE INDEX "idx_device-management_maintenance_windows_deleted_at" ON "device-management".maintenance_windows USING btree (deleted_at);
+CREATE INDEX "idx_device-management_maintenance_windows_tenant_id" ON "device-management".maintenance_windows USING btree (tenant_id);
+CREATE INDEX "idx_device-management_maintenance_windows_token" ON "device-management".maintenance_windows USING btree (token);
 CREATE INDEX "idx_device-management_metric_definitions_deleted_at" ON "device-management".metric_definitions USING btree (deleted_at);
 CREATE INDEX "idx_device-management_metric_definitions_tenant_id" ON "device-management".metric_definitions USING btree (tenant_id);
 CREATE INDEX "idx_device-management_metric_definitions_token" ON "device-management".metric_definitions USING btree (token);
@@ -462,6 +472,12 @@ CREATE SEQUENCE "device-management".geo_fences_id_seq
  NO MINVALUE
  NO MAXVALUE
  CACHE 1;
+CREATE SEQUENCE "device-management".maintenance_windows_id_seq
+ START WITH 1
+ INCREMENT BY 1
+ NO MINVALUE
+ NO MAXVALUE
+ CACHE 1;
 CREATE SEQUENCE "device-management".metric_definitions_id_seq
  START WITH 1
  INCREMENT BY 1
@@ -593,7 +609,8 @@ CREATE TABLE "device-management".command_definitions (
  metadata jsonb,
  command_key character varying(128) NOT NULL,
  parameter_schema jsonb,
- device_profile_id bigint NOT NULL
+ device_profile_id bigint NOT NULL,
+ impact character varying(16)
 );
 CREATE TABLE "device-management".customer_types (
  id bigint NOT NULL,
@@ -769,7 +786,8 @@ CREATE TABLE "device-management".device_types (
  metadata jsonb,
  profile_id bigint,
  manufacturer character varying(128),
- model character varying(128)
+ model character varying(128),
+ maintenance_window_id bigint
 );
 CREATE TABLE "device-management".devices (
  id bigint NOT NULL,
@@ -931,6 +949,19 @@ CREATE TABLE "device-management".geo_fences (
  metadata jsonb,
  geometry jsonb NOT NULL
 );
+CREATE TABLE "device-management".maintenance_windows (
+ id bigint NOT NULL,
+ created_at timestamp with time zone,
+ updated_at timestamp with time zone,
+ deleted_at timestamp with time zone,
+ tenant_id character varying(128) NOT NULL,
+ token character varying(128) NOT NULL,
+ name character varying(128),
+ description character varying(1024),
+ metadata jsonb,
+ timezone character varying(64) NOT NULL,
+ slots jsonb NOT NULL
+);
 CREATE TABLE "device-management".metric_definitions (
  id bigint NOT NULL,
  created_at timestamp with time zone,
@@ -1009,5 +1040,6 @@ CREATE UNIQUE INDEX uix_facet_keys_tenant_member_key ON "device-management".face
 CREATE UNIQUE INDEX uix_geo_fence_geometry_blobs_tenant_hash ON "device-management".geo_fence_geometry_blobs USING btree (tenant_id, hash);
 CREATE UNIQUE INDEX uix_geo_fence_set_versions_tenant_version ON "device-management".geo_fence_set_versions USING btree (tenant_id, version);
 CREATE UNIQUE INDEX uix_geo_fences_tenant_token ON "device-management".geo_fences USING btree (tenant_id, token) WHERE (deleted_at IS NULL);
+CREATE UNIQUE INDEX uix_maintenance_windows_tenant_token ON "device-management".maintenance_windows USING btree (tenant_id, token) WHERE (deleted_at IS NULL);
 CREATE UNIQUE INDEX uix_metric_definitions_tenant_token ON "device-management".metric_definitions USING btree (tenant_id, token) WHERE (deleted_at IS NULL);
 CREATE UNIQUE INDEX uix_provisioning_profiles_tenant_token ON "device-management".provisioning_profiles USING btree (tenant_id, token) WHERE (deleted_at IS NULL);

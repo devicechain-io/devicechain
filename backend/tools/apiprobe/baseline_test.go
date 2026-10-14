@@ -469,31 +469,13 @@ func TestAnUnsupportedDEPENDENCYIsRefusedRatherThanSkipped(t *testing.T) {
 	}
 }
 
-// 🔴 THE TEST THAT WOULD HAVE CAUGHT IT, AND DID NOT EXIST. Everything else here
-// either points the baseline at the CURRENT tree (where nothing may be skipped) or at
-// a two-line stub (where everything is). Neither shape is what a drill actually runs:
-// a PREVIOUS RELEASE's schema, which declares the mutation, the read and the input
-// type this table names — and not the FIELD a new row sends through them.
-//
-// That gap is why the asset-property rows reached CI green and died in the upgrade
-// drill with `Field "propertySchema" is not defined by type "AssetTypeCreateRequest"`.
-// supports() answered yes, because it matches names and the names were all there.
-//
-// The stand-in is built from the real current schema with exactly the lines a release
-// predating this feature would not have: the two field declarations and the four
-// version doors. That makes it a faithful older release rather than a hand-written
-// fiction that could agree with the code by construction.
-//
-// It asserts BOTH directions, which is what makes it a control rather than a hope:
-// the three field-gated rows are skipped, and every other row in the whole table is
-// still supported. A Requires that matched nothing would fail the second half.
-func TestAReleaseWithoutTheNewFieldsSkipsExactlyTheRowsThatNeedThem(t *testing.T) {
-	// Built on the PARSED tree, not by deleting lines of text: a line filter depends on
-	// how the schema is formatted, and a description or an argument list spread over
-	// several lines would leave it removing half a declaration. Every other area stays
-	// exactly as the current tree serves it (tenant plane only, as loadBaseline reads
-	// it): this is a release missing ONE feature, not a tree missing every area, and a
-	// row skipped for the wrong reason must not be able to hide behind a missing schema.
+// olderRelease builds the stand-in for a release that predates a feature: the CURRENT
+// parsed tree with exactly the named input/object fields and root fields (doors) removed.
+// It fails the test if either list matched nothing, because a stand-in that no longer
+// stands in for anything turns every assertion made against it into "the current tree
+// supports everything".
+func olderRelease(t *testing.T, newFields, doors map[string]bool) *baseline {
+	t.Helper()
 	b, err := loadBaseline(filepath.Join("..", "..", "services"))
 	if err != nil {
 		t.Fatalf("load the current tree: %v", err)
@@ -502,9 +484,6 @@ func TestAReleaseWithoutTheNewFieldsSkipsExactlyTheRowsThatNeedThem(t *testing.T
 	if dm == nil {
 		t.Fatal("the current tree serves no device-management schema")
 	}
-	newFields := map[string]bool{"propertySchema": true, "properties": true}
-	doors := map[string]bool{"publishAssetType": true, "rollbackAssetType": true,
-		"assetTypeVersions": true, "activeAssetTypeVersion": true}
 	var droppedFields, droppedDoors int
 	for _, nt := range dm.Types {
 		switch typ := nt.(type) {
@@ -539,6 +518,38 @@ func TestAReleaseWithoutTheNewFieldsSkipsExactlyTheRowsThatNeedThem(t *testing.T
 		t.Fatalf("the stand-in removed %d field(s) and %d of %d door(s); it is no longer "+
 			"standing in for a release without them", droppedFields, droppedDoors, len(doors))
 	}
+	return b
+}
+
+// 🔴 THE TEST THAT WOULD HAVE CAUGHT IT, AND DID NOT EXIST. Everything else here
+// either points the baseline at the CURRENT tree (where nothing may be skipped) or at
+// a two-line stub (where everything is). Neither shape is what a drill actually runs:
+// a PREVIOUS RELEASE's schema, which declares the mutation, the read and the input
+// type this table names — and not the FIELD a new row sends through them.
+//
+// That gap is why the asset-property rows reached CI green and died in the upgrade
+// drill with `Field "propertySchema" is not defined by type "AssetTypeCreateRequest"`.
+// supports() answered yes, because it matches names and the names were all there.
+//
+// The stand-in is built from the real current schema with exactly the lines a release
+// predating this feature would not have: the two field declarations and the four
+// version doors. That makes it a faithful older release rather than a hand-written
+// fiction that could agree with the code by construction.
+//
+// It asserts BOTH directions, which is what makes it a control rather than a hope:
+// the three field-gated rows are skipped, and every other row in the whole table is
+// still supported. A Requires that matched nothing would fail the second half.
+func TestAReleaseWithoutTheNewFieldsSkipsExactlyTheRowsThatNeedThem(t *testing.T) {
+	// Built on the PARSED tree, not by deleting lines of text: a line filter depends on
+	// how the schema is formatted, and a description or an argument list spread over
+	// several lines would leave it removing half a declaration. Every other area stays
+	// exactly as the current tree serves it (tenant plane only, as loadBaseline reads
+	// it): this is a release missing ONE feature, not a tree missing every area, and a
+	// row skipped for the wrong reason must not be able to hide behind a missing schema.
+	newFields := map[string]bool{"propertySchema": true, "properties": true}
+	doors := map[string]bool{"publishAssetType": true, "rollbackAssetType": true,
+		"assetTypeVersions": true, "activeAssetTypeVersion": true}
+	b := olderRelease(t, newFields, doors)
 
 	wantSkipped := map[string]bool{
 		"asset-type-schema":     true,
@@ -770,5 +781,48 @@ func TestTheComputedSignerTokenIsTheKeyIdPrefix(t *testing.T) {
 	tok := probeSignerToken()
 	if !strings.HasPrefix(tok, "signer-") || len(tok) != len("signer-")+16 {
 		t.Fatalf("unexpected signer token %q", tok)
+	}
+}
+
+// The same control for the maintenance-window group: a release that predates windows and
+// command impact has the create mutations' names and the device type and command definition
+// inputs, but not the fields the three new rows send through them. Exactly those rows must
+// be skipped — as a group, each skippable — and everything else must still be supported.
+func TestAReleaseWithoutMaintenanceWindowsSkipsExactlyTheWindowGroup(t *testing.T) {
+	newFields := map[string]bool{"maintenanceWindowToken": true, "maintenanceWindow": true, "impact": true}
+	doors := map[string]bool{"createMaintenanceWindow": true, "updateMaintenanceWindow": true,
+		"deleteMaintenanceWindow": true, "maintenanceWindowsById": true,
+		"maintenanceWindowsByToken": true, "maintenanceWindows": true}
+	b := olderRelease(t, newFields, doors)
+
+	wantSkipped := map[string]bool{
+		"maintenance-window":            true,
+		"device-type-windowed":          true,
+		"command-definition-disruptive": true,
+	}
+	seen := 0
+	for _, e := range allEntities() {
+		ok, why := b.supports(e)
+		if wantSkipped[e.Name] {
+			seen++
+			if ok {
+				t.Errorf("%q is supported by a baseline without maintenance windows; the seed "+
+					"would be REFUSED by the server instead of skipping the row", e.Name)
+			}
+			write, reason, err := plan(e, b)
+			if err != nil {
+				t.Errorf("%q could not be skipped: %v", e.Name, err)
+			}
+			if write || reason == "" {
+				t.Errorf("%q: planned for writing=%v with reason %q", e.Name, write, reason)
+			}
+			continue
+		}
+		if !ok {
+			t.Errorf("%q is skipped by a baseline that only lacks maintenance windows: %s", e.Name, why)
+		}
+	}
+	if seen != len(wantSkipped) {
+		t.Fatalf("found %d of the %d window rows in the entity table", seen, len(wantSkipped))
 	}
 }
