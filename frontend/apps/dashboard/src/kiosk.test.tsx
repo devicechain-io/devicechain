@@ -127,6 +127,8 @@ describe('kiosk mode', () => {
     expect(screen.queryByText('Wall board')).toBeNull();
     expect(screen.queryByRole('group', { name: t('common:languagePicker') })).toBeNull();
     expect(screen.getByRole('button', { name: t('view:enterFullscreen') })).toBeTruthy();
+    // The chrome goes, the connection state stays: a frozen wall board must not look live.
+    expect(screen.getByRole('status')).toBeTruthy();
     Object.defineProperty(document, 'fullscreenEnabled', { configurable: true, value: undefined });
   });
 
