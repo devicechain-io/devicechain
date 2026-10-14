@@ -150,5 +150,6 @@ mutation {
 
 ## 相关
 
+- **[签名者](../concepts/over-the-air-updates.md#signers)**：签名如何使制品受信任，以及吊销签名者会改变什么。
 - **[空中（OTA）更新](../concepts/over-the-air-updates.md#assigning)**：分配更新，以及一次尝试如何推进。
 - **[连接设备](./connecting-a-device.md#over-the-air-updates)**：分配消息和设备端的校验。

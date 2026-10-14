@@ -150,5 +150,6 @@ Una firma vincula **solo el digest**. No vincula la versión, el componente ni l
 
 ## Relacionado
 
+- **[Firmantes](../concepts/over-the-air-updates.md#signers)**: cómo una firma hace que un artefacto sea de confianza y qué cambia al revocar un firmante.
 - **[Actualizaciones over-the-air](../concepts/over-the-air-updates.md#assigning)**: asignar una actualización y cómo progresa un intento.
 - **[Conexión de un dispositivo](./connecting-a-device.md#over-the-air-updates)**: el mensaje de asignación y la comprobación en el dispositivo.

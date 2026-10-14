@@ -150,5 +150,6 @@ A signature binds the **digest only**. It does not bind the artifact's version, 
 
 ## Related
 
+- **[Signers](../concepts/over-the-air-updates.md#signers)**: how a signature makes an artifact trusted, and what revoking a signer changes.
 - **[Over-the-Air Updates](../concepts/over-the-air-updates.md#assigning)**: assigning an update and how an attempt progresses.
 - **[Connecting a Device](./connecting-a-device.md#over-the-air-updates)**: the assignment message and the device-side check.
