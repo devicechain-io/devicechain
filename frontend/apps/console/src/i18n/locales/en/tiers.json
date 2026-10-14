@@ -48,12 +48,12 @@
   "heldCommandCeilingLabel": "Held command ceiling",
   "heldCommandCeilingDescription": "Most commands a tenant at this tier may have waiting to be delivered, including those held for offline devices. Blank inherits the platform default, which is a real limit.",
   "shedPriorityLabel": "Shed priority",
-  "shedPriorityDescription": "Which tenants keep running longest when the platform is under strain (1–100, higher survives longer). A preference, not a limit. Blank inherits the platform default.",
+  "shedPriorityDescription": "Which tenants keep running longest when the platform is under strain ({{min}}–{{max}}, higher survives longer). A preference, not a limit. Blank inherits the platform default.",
   "geoFenceCeilingLabel": "Geofence count",
-  "geoFenceCeilingDescription": "How many geofences a tenant at this tier may keep (up to 4000). Blank inherits the platform default.",
+  "geoFenceCeilingDescription": "How many geofences a tenant at this tier may keep (up to {{max}}). Blank inherits the platform default.",
   "geoFencePositionCeilingLabel": "Points per geofence",
-  "geoFencePositionCeilingDescription": "How many points a single geofence may have (up to 1024). Blank inherits the platform default.",
+  "geoFencePositionCeilingDescription": "How many points a single geofence may have (up to {{max}}). Blank inherits the platform default.",
   "geoFencePositionBudgetLabel": "Geofence point budget",
-  "geoFencePositionBudgetDescription": "How many points a tenant's geofences may add up to across the whole set (up to 128000). It draws on room shared between all tenants. Blank inherits the platform default.",
+  "geoFencePositionBudgetDescription": "How many points a tenant's geofences may add up to across the whole set (up to {{max}}). It draws on room shared between all tenants. Blank inherits the platform default.",
   "scalarInvalid": "{{label}} must be a whole number from 1 to {{max}}, or blank to inherit the platform default."
 }

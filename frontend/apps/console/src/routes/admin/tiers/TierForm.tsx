@@ -257,7 +257,7 @@ export function TierForm({
               key={s.key}
               label={t(s.labelKey)}
               htmlFor={`tier-${s.key}`}
-              description={t(s.descriptionKey)}
+              description={t(s.descriptionKey, { min: 1, max: s.max })}
             >
               <Input
                 id={`tier-${s.key}`}

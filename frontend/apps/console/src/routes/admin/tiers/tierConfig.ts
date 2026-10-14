@@ -19,6 +19,10 @@ export type ConfigDimension = { rateField: string; burstField: string };
 // constants in core/governance (geofence_caps.go); the held ceiling's is the
 // representational int32 wall. A value outside them is refused at write by the server, so
 // checking here only moves the same refusal in front of the operator.
+//
+// The numbers are copied, not served: no query exposes them. tierConfig.test.ts reads the
+// Go source and fails when a maximum here stops matching it, so a raised platform constant
+// cannot leave this form refusing a value the server would accept.
 export type TierScalar = {
   key: string;
   max: number;

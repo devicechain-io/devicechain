@@ -1,6 +1,8 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { describe, it, expect } from 'vitest';
 import {
   parseTierConfig,
@@ -156,5 +158,41 @@ describe('tier scalar settings', () => {
     expect(invalidTierScalar({ heldCommandCeiling: 'lots' })?.key).toBe('heldCommandCeiling');
     expect(invalidTierScalar({ heldCommandCeiling: '2147483647' })).toBeNull();
     expect(invalidTierScalar({ heldCommandCeiling: '2147483648' })?.key).toBe('heldCommandCeiling');
+  });
+});
+
+// The maxima in TIER_SCALARS are copies of server constants no query exposes. Read them off
+// the Go source so a raised (or lowered) platform maximum fails here instead of leaving the
+// form refusing values the server accepts, or sending ones it refuses.
+describe('tier scalar maxima match the server', () => {
+  const repo = resolve(__dirname, '../../../../../../..');
+  const caps = readFileSync(resolve(repo, 'backend/core/governance/geofence_caps.go'), 'utf8');
+  const tierGo = readFileSync(resolve(repo, 'backend/services/user-management/iam/tierconfig.go'), 'utf8');
+
+  // A Go integer constant declared as `Name = 1_024`; missing is a failure, never a skip.
+  const goConst = (name: string): number => {
+    const m = caps.match(new RegExp(String.raw`^\s*${name}\s*=\s*([0-9_]+)\s*$`, 'm'));
+    expect(m, `${name} not found in geofence_caps.go`).not.toBeNull();
+    return Number(m![1].replace(/_/g, ''));
+  };
+  const max = (key: string) => TIER_SCALARS.find((s) => s.key === key)?.max;
+
+  it('geofence maxima', () => {
+    expect(max('geoFenceCeiling')).toBe(goConst('MaxGeoFenceCeiling'));
+    expect(max('geoFencePositionCeiling')).toBe(goConst('MaxGeoFencePositionCeiling'));
+    expect(max('geoFencePositionBudget')).toBe(goConst('MaxTenantGeometryPositions'));
+  });
+
+  it('shed priority band', () => {
+    const band = tierGo.match(/func validateShedPriority[\s\S]*?if f < (\d+) \|\| f > (\d+) \{/);
+    expect(band, 'validateShedPriority band not found in tierconfig.go').not.toBeNull();
+    expect(band![1]).toBe('1');
+    expect(max('shedPriority')).toBe(Number(band![2]));
+  });
+
+  it('held ceiling stops at the int32 wall', () => {
+    expect(tierGo).toMatch(/func validateHeldCommandCeiling\(v any\) error \{ return validatePositiveBurst\(v\) \}/);
+    expect(tierGo).toMatch(/f <= 0 \|\| f > math\.MaxInt32/);
+    expect(max('heldCommandCeiling')).toBe(2 ** 31 - 1);
   });
 });

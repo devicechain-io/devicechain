@@ -11,6 +11,8 @@ import {
   remedyKey,
   shouldPoll,
   storeProblem,
+  leadClause,
+  INLINE_DETAIL_MAX,
   storeState,
   summarize,
   translateSummary,
@@ -188,7 +190,7 @@ describe('translateSummary', () => {
     const holding = summarize(record({ awaiting: 'TOKEN_HOLD', elapsesAt: '2026-08-04T21:00:00Z' }), NOW);
     const es = i18n.getFixedT('es', 'tenants');
     const en = i18n.getFixedT('en', 'tenants');
-    expect(translateSummary(es, holding)).toContain('unas 9 horas');
+    expect(translateSummary(es, holding)).toContain('aproximadamente 9 horas');
     expect(translateSummary(es, holding)).not.toMatch(/hours|minutes/);
     expect(translateSummary(en, holding)).toContain('about 9 hours');
   });
@@ -197,5 +199,23 @@ describe('translateSummary', () => {
     const one = summarize(record({ awaiting: 'SETTLE', elapsesAt: '2026-08-04T12:01:00Z' }), NOW);
     expect(translateSummary(i18n.getFixedT('en', 'tenants'), one)).toContain('about another 1 minute.');
     expect(translateSummary(i18n.getFixedT('es', 'tenants'), one)).toContain('1 minuto');
+  });
+});
+
+describe('leadClause', () => {
+  it('returns short text unchanged', () => {
+    expect(leadClause('an object remains')).toBe('an object remains');
+  });
+
+  it('cuts at the first clause break that leaves something to read', () => {
+    const text = `cannot reach the key-value store: ${'nats: connection closed; '.repeat(8)}`;
+    expect(leadClause(text)).toBe('cannot reach the key-value store…');
+  });
+
+  it('falls back to the last whole word that fits', () => {
+    const text = 'word '.repeat(60);
+    const out = leadClause(text);
+    expect(out.length).toBeLessThanOrEqual(INLINE_DETAIL_MAX + 1);
+    expect(out.endsWith('word…')).toBe(true);
   });
 });

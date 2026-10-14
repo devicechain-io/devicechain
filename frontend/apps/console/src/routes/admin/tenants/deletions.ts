@@ -55,14 +55,41 @@ export function storeProblem(line: AdminTenantDeletionStore): string | null {
 }
 
 /**
- * The longest store explanation worth showing inline in the table. The server's sentences
- * are written for whoever reads the ledger, and some run to several lines; anything longer
- * than this is summarised and the full text kept behind a disclosure.
+ * The longest store explanation shown inline in the table: about one line of the Detail
+ * column at the console's usual width. The server's sentences are written for whoever reads
+ * the ledger, and some (a wrapped Go error chain especially) run to several lines; anything
+ * longer is cut to its lead clause, with the full text behind a disclosure.
  */
 export const INLINE_DETAIL_MAX = 120;
 
 export function isLongDetail(text: string): boolean {
   return text.length > INLINE_DETAIL_MAX;
+}
+
+/**
+ * The lead clause of a long store explanation, at most INLINE_DETAIL_MAX characters.
+ *
+ * It is the server's own words, not a generic label: the State badge already says
+ * "Retaining" or "Retrying", so the line next to it has to say WHAT is held and WHY, and the
+ * server puts both first ("the object store still holds 2 uploaded assets, and this instance
+ * has no object storage configured — so ..."). The text is cut at the first clause break
+ * (an em dash, a semicolon, a sentence end, or a Go error-wrap colon) that leaves something
+ * worth reading, else at the last word that fits, and marked with an ellipsis.
+ */
+export function leadClause(text: string): string {
+  const t = text.trim();
+  if (t.length <= INLINE_DETAIL_MAX) return t;
+  const MIN = 24;
+  let cut = -1;
+  for (const sep of [' — ', '; ', '. ', ': ']) {
+    const i = t.indexOf(sep);
+    if (i >= MIN && i <= INLINE_DETAIL_MAX && (cut < 0 || i < cut)) cut = i;
+  }
+  if (cut < 0) {
+    const space = t.lastIndexOf(' ', INLINE_DETAIL_MAX);
+    cut = space >= MIN ? space : INLINE_DETAIL_MAX;
+  }
+  return `${t.slice(0, cut).replace(/[\s,;:.—-]+$/, '')}…`;
 }
 
 /** Whether a record has finished. */

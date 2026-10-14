@@ -25,11 +25,18 @@ describe('admin page titles', () => {
 
   it('titles every /admin route declared in App.tsx', () => {
     const app = readFileSync(resolve(__dirname, '../../App.tsx'), 'utf8');
-    const block = app.slice(app.indexOf('path="/admin"'));
-    const paths = [...block.matchAll(/<Route path="([^"]+)"/g)].map((m) => m[1]);
+    // The children of <Route path="/admin">, up to its closing tag. Every child route is
+    // self-closing today, so the first </Route> after the opener is the admin block's own.
+    const start = app.indexOf('<Route path="/admin" ');
+    expect(start, 'the /admin route was not found in App.tsx').toBeGreaterThanOrEqual(0);
+    const end = app.indexOf('</Route>', start);
+    expect(end, 'the /admin route has no closing tag').toBeGreaterThan(start);
+    const block = app.slice(start, end);
+    const paths = [...block.matchAll(/<Route path="([^"/][^"]*)"/g)].map((m) => m[1]);
+    // A regex that matched nothing would pass the loop below vacuously.
+    expect(paths.length).toBeGreaterThanOrEqual(15);
     expect(paths).toContain('deletions');
     for (const p of paths) {
-      if (p.startsWith('/') || p === '*') continue;
       expect(titled(`/admin/${p.replace(/:[^/]+/g, 'x')}`), p).toBeDefined();
     }
   });

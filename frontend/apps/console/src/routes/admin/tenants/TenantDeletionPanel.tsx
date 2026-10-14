@@ -19,7 +19,7 @@ import { useQuery } from '@/lib/hooks/use-query';
 import { formatTime } from '@/lib/utils';
 import { useReload } from '@/routes/common';
 
-import { hasNote, isLongDetail, remedyKey, shouldPoll, storeProblem, storeState, summarize, translateSummary } from './deletions';
+import { hasNote, isLongDetail, leadClause, remedyKey, shouldPoll, storeProblem, storeState, summarize, translateSummary } from './deletions';
 
 /** How often an in-flight deletion is re-read. Mirrors the alarms page's poll. */
 const POLL_MS = 30000;
@@ -102,14 +102,14 @@ function StoreRow({ line }: { line: AdminTenantDeletionStore }) {
         <Badge variant={STATE_VARIANT[state]}>{t(STATE_LABEL[state])}</Badge>
       </DataTableCell>
       <DataTableCell className="text-muted-foreground">
-        {problem && <Explained text={problem} kind={problemKind(line)} />}
+        {problem && <Explained text={problem} />}
         {/* The note is a FOOTNOTE to clean, never a problem. A store carrying one is working
             as designed — the telemetry store on an instance with no telemetry, or the
             key-value store's exempted buckets — so it is rendered muted and apart from the
             column that carries things to act on. */}
         {hasNote(line) && (
           <span className="block text-xs italic mt-1">
-            <Explained text={line.note ?? ''} kind={NOTE_KIND} />
+            <Explained text={line.note ?? ''} />
           </span>
         )}
         {remedy && <span className="block text-xs mt-1">{t(remedy)}</span>}
@@ -126,16 +126,16 @@ function StoreRow({ line }: { line: AdminTenantDeletionStore }) {
 }
 
 /**
- * A store's explanation. Short text shows as written; a long one is replaced by a one-line
- * operator summary with the full text behind a Details control, so a single store cannot
- * turn the table into a wall of developer prose.
+ * A store's explanation. Short text shows as written; a long one shows its lead clause (the
+ * server's own words: what is held and why) with the full text behind a Details control, so
+ * a single store cannot turn the table into a wall of developer prose.
  */
-function Explained({ text, kind }: { text: string; kind: keyof typeof SHORT_LABEL }) {
+function Explained({ text }: { text: string }) {
   const { t } = useTranslation('tenants');
   if (!isLongDetail(text)) return <>{text}</>;
   return (
     <>
-      <span>{t(SHORT_LABEL[kind])}</span>
+      <span>{leadClause(text)}</span>
       <details className="mt-1 text-xs">
         <summary className="cursor-pointer text-foreground">{t('deletionDetails')}</summary>
         <p className="mt-1 whitespace-normal">{text}</p>
@@ -143,18 +143,6 @@ function Explained({ text, kind }: { text: string; kind: keyof typeof SHORT_LABE
     </>
   );
 }
-
-const NOTE_KIND = 'note' as const;
-
-function problemKind(line: AdminTenantDeletionStore): 'retaining' | 'retrying' {
-  return line.retaining ? 'retaining' : 'retrying';
-}
-
-const SHORT_LABEL = {
-  retaining: 'deletionRetainingShort',
-  retrying: 'deletionRetryingShort',
-  note: 'deletionNoteShort',
-} as const;
 
 const STATE_VARIANT = {
   clean: 'success',

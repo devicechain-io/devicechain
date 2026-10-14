@@ -27,13 +27,16 @@ function store(over: Record<string, unknown>) {
 }
 
 describe('TenantDeletionPanel storage rows', () => {
-  it('summarises a long retaining explanation and keeps the full text behind Details', async () => {
+  it('cuts a long explanation to its lead clause and keeps the full text behind a disclosure', async () => {
     getTenantDeletionMock.mockResolvedValue(record([store({ retaining: LONG })]));
     render(<TenantDeletionPanel token="acme" />);
-    expect(await screen.findByText("Still holds this tenant's data.")).toBeTruthy();
-    const full = screen.getByText(LONG);
-    expect(full.closest('details')).not.toBeNull();
-    expect(screen.getByText('Details')).toBeTruthy();
+    // WHAT is held and WHY, in the server's own words, not a generic label.
+    const lead = await screen.findByText(
+      "the object store still holds 2 of this tenant's uploaded asset(s), and this instance has no object storage configured…",
+    );
+    expect(lead.closest('details')).toBeNull();
+    expect(screen.getByText(LONG).closest('details')).not.toBeNull();
+    expect(screen.getByText('Full explanation')).toBeTruthy();
   });
 
   it('shows a short explanation as written, with no disclosure', async () => {
