@@ -93,6 +93,9 @@ describe('SignersPage', () => {
     expect(screen.getByText('ED25519')).toBeTruthy();
     expect(screen.getByText('Active')).toBeTruthy();
     expect(screen.getByText('3')).toBeTruthy();
+    // The server's pages start at 1 (rdb.ListOf reads anything below 1 as 1), so the first
+    // request asks for page 1 — page 0 would make "Next" re-read the first page.
+    expect(ops('ArtifactSigners')[0][2]).toEqual({ criteria: { pageNumber: 1, pageSize: 20 } });
   });
 
   it('explains what a signer is and that only the public key is stored', async () => {
@@ -183,7 +186,7 @@ describe('RegisterSignerForm via SignersPage', () => {
   }
 
   it('refuses a private key client-side, clears the field and never echoes it', async () => {
-    const consoleSpy = vi.spyOn(console, 'log');
+    const consoleSpies = (['log', 'info', 'warn', 'error', 'debug'] as const).map((m) => vi.spyOn(console, m));
     const { name, pem } = await openForm();
     fireEvent.change(name, { target: { value: 'k' } });
     fireEvent.change(pem, { target: { value: PRIVATE_PEM } });
@@ -193,8 +196,10 @@ describe('RegisterSignerForm via SignersPage', () => {
     expect(ops('RegisterArtifactSigner')).toHaveLength(0);
     expect(document.body.textContent).not.toContain('SECRETSECRETSECRET');
     expect(toastMock).not.toHaveBeenCalled();
-    expect(consoleSpy).not.toHaveBeenCalled();
-    consoleSpy.mockRestore();
+    for (const spy of consoleSpies) {
+      expect(spy.mock.calls.flat().map(String).join(' ')).not.toContain('SECRETSECRETSECRET');
+      spy.mockRestore();
+    }
   });
 
   it('registers a public key and refreshes the list', async () => {

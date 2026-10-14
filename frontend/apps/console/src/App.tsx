@@ -87,10 +87,12 @@ export default function App() {
           <Route path="dashboards" element={<DashboardsPage />} />
           <Route path="dashboards/:token" element={<DashboardDetailPage />} />
           <Route path="alarms" element={<AlarmsPage />} />
+          {/* Not wrapped in AreaGate: the page renders its own "not deployed" state on
+              status === 'absent', before any query fires. */}
+          <Route path="updates/signers" element={<SignersPage />} />
           {/* Batch commands are read-only here (list + detail); creating and
               cancelling one are separate slices. Gated because command-delivery is
               absent from the telemetry / ingest-only profiles. */}
-          <Route path="updates/signers" element={<SignersPage />} />
           <Route path="command-batches" element={<AreaGate area={AREA.commandDelivery}><CommandBatchesPage /></AreaGate>} />
           <Route path="command-batches/:token" element={<AreaGate area={AREA.commandDelivery}><CommandBatchDetailPage /></AreaGate>} />
           <Route path="connectors" element={<AreaGate area={AREA.outboundConnectors}><ConnectorsPage /></AreaGate>} />
