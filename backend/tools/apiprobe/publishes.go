@@ -5,8 +5,12 @@ package main
 
 import (
 	"context"
+	"crypto/ed25519"
 	"crypto/sha256"
+	"crypto/x509"
+	"encoding/base64"
 	"encoding/hex"
+	"encoding/pem"
 	"fmt"
 	"io"
 	"net/http"
@@ -414,6 +418,84 @@ var afterPublish = []entity{
 			}
 		},
 	},
+	{
+		// Depends on: device-profile.
+		//
+		// A SIGNER, registered through the real API: update-management's trust registry, and the
+		// table artifact_signers the coverage sweep would otherwise find empty. The key is derived
+		// from a fixed public seed so the receipt, the read-back and the signature below are all
+		// deterministic literals; it is a test key with no authority anywhere. The signer's token
+		// is minted by the platform from the key, so the receipt records the one the response
+		// returned. Only stored fields are selected: soleSignedArtifactCount is derived.
+		Name:     "artifact-signer",
+		Area:     "update-management",
+		Mutation: "registerArtifactSigner",
+		Params: []param{
+			{Name: "name", Type: "String!"},
+			{Name: "publicKeyPem", Type: "String!"},
+		},
+		Read:   "artifactSigner",
+		Single: true,
+		Fields: "token name algorithm publicKeyPem keyId state createdBy",
+		Vars: func(s *state) map[string]any {
+			return map[string]any{"name": "apiprobe signer", "publicKeyPem": probeSignerPEM()}
+		},
+		Record: record("artifact-signer"),
+	},
+	{
+		// Depends on: device-profile.
+		//
+		// The artifact the signature is attached to. Declared only (UPLOADING, no bytes): a
+		// signature is over the declared digest, so nothing is gained by uploading, and keeping it
+		// apart from artifact-available leaves that row's trust UNVERIFIED for its assignment.
+		Name:     "artifact-signed",
+		Area:     "update-management",
+		Mutation: "createArtifact",
+		Input:    "ArtifactCreateRequest!",
+		Read:     "artifact",
+		Single:   true,
+		Fields:   "token kind name version component sizeBytes digest mediaType compatibleProfiles state",
+		Vars: func(s *state) map[string]any {
+			return map[string]any{"req": map[string]any{
+				"token":              s.tok("artifact-signed"),
+				"kind":               "FIRMWARE",
+				"name":               "apiprobe artifact (signed)",
+				"version":            "3.0.0",
+				"component":          "firmware",
+				"sizeBytes":          fmt.Sprint(len(probeArtifactContent)),
+				"digest":             probeArtifactDigest(),
+				"mediaType":          "application/octet-stream",
+				"compatibleProfiles": []string{s.tokens["profile"]},
+			}}
+		},
+	},
+	{
+		// Depends on: artifact-signer, artifact-signed.
+		//
+		// 🔑 THIS WRITE CREATES artifact_signatures, AND ITS READ-BACK IS THE DERIVED TRUST. The
+		// platform verifies the signature against the artifact's stored digest, so a seed that
+		// signed the wrong bytes is refused by name. trustStatus is computed at read time from the
+		// signature and the signer's state; selecting it means verify fails if an upgrade loses the
+		// signature, the signer, or the rule that joins them (the artifact reads UNVERIFIED).
+		Name:     "artifact-signature",
+		Area:     "update-management",
+		Mutation: "addArtifactSignature",
+		Params: []param{
+			{Name: "artifactToken", Type: "String!"},
+			{Name: "signerToken", Type: "String!"},
+			{Name: "signature", Type: "String!"},
+		},
+		Read:   "artifact",
+		Single: true,
+		Fields: "token digest state trustStatus",
+		Vars: func(s *state) map[string]any {
+			return map[string]any{
+				"artifactToken": s.tok("artifact-signed"),
+				"signerToken":   s.tokens["artifact-signer"],
+				"signature":     probeArtifactSignature(),
+			}
+		},
+	},
 }
 
 // probeArtifactContent is the bytes the probe uploads for its AVAILABLE artifact. A fixed literal,
@@ -511,4 +593,26 @@ func allEntities() []entity {
 		out = append(out, p.entity())
 	}
 	return append(out, afterPublish...)
+}
+
+// probeSignerKey is the signer's key pair, derived from a fixed public seed. It is a test key:
+// it signs one constant digest in a drill and has no authority anywhere.
+func probeSignerKey() ed25519.PrivateKey {
+	return ed25519.NewKeyFromSeed([]byte("apiprobe-signer-seed-0123456789!"))
+}
+
+// probeSignerPEM is the SPKI PEM of the signer's public key.
+func probeSignerPEM() string {
+	der, err := x509.MarshalPKIXPublicKey(probeSignerKey().Public())
+	if err != nil {
+		panic(err) // an Ed25519 public key always marshals
+	}
+	return string(pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: der}))
+}
+
+// probeArtifactSignature is the base64 Ed25519 signature over the raw 32-byte digest of the probe
+// artifact content, which is what the platform verifies.
+func probeArtifactSignature() string {
+	sum := sha256.Sum256([]byte(probeArtifactContent))
+	return base64.StdEncoding.EncodeToString(ed25519.Sign(probeSignerKey(), sum[:]))
 }

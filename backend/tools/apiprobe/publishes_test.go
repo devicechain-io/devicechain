@@ -4,8 +4,16 @@
 package main
 
 import (
+	"crypto/ed25519"
+	"crypto/sha256"
+	"crypto/x509"
+	"encoding/base64"
+	"encoding/hex"
+	"encoding/pem"
 	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 // Same reasoning as the create denominator, and the same trap: these files live
@@ -185,4 +193,20 @@ func TestEveryExclusionNamesAMutationTheSchemasDeclare(t *testing.T) {
 				"and is holding the denominator up on its own", mutation)
 		}
 	}
+}
+
+// The seeded signature must be one the platform will accept: Ed25519 over the raw 32-byte digest of
+// the probe content, by the key whose SPKI PEM the seed registers.
+func TestTheProbeSignatureVerifiesAgainstTheRegisteredKey(t *testing.T) {
+	block, rest := pem.Decode([]byte(probeSignerPEM()))
+	require.NotNil(t, block)
+	require.Empty(t, rest)
+	require.Equal(t, "PUBLIC KEY", block.Type)
+	pub, err := x509.ParsePKIXPublicKey(block.Bytes)
+	require.NoError(t, err)
+	sig, err := base64.StdEncoding.DecodeString(probeArtifactSignature())
+	require.NoError(t, err)
+	sum := sha256.Sum256([]byte(probeArtifactContent))
+	require.True(t, ed25519.Verify(pub.(ed25519.PublicKey), sum[:], sig))
+	require.Equal(t, probeArtifactDigest(), "sha256:"+hex.EncodeToString(sum[:]))
 }
