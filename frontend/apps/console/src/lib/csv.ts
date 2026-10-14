@@ -37,10 +37,20 @@ const PLAIN_NUMBER = /^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$/;
 const FORMULA_LEAD = /^[=+\-@＝＋－＠]/;
 
 /** True when a spreadsheet could read the text as a formula. */
-function formulaLike(text: string): boolean {
+export function formulaLike(text: string): boolean {
   if (/^[\t\r]/.test(text)) return true;
   const lead = text.replace(/^\s+/, '');
   return FORMULA_LEAD.test(lead) && !PLAIN_NUMBER.test(text);
+}
+
+/**
+ * The inverse of the export's formula guard, for a file this console exported itself: a cell
+ * `'=cmd` was written from the value `=cmd`, so reading it back restores the value. Only a
+ * leading single quote that is guarding a formula-like remainder is removed, so an ordinary
+ * apostrophe (`'tis`, `'12`) is never touched. Import never evaluates anything either way.
+ */
+export function unguardCell(text: string): string {
+  return text.startsWith("'") && formulaLike(text.slice(1)) ? text.slice(1) : text;
 }
 
 /** Encodes one cell: formula-guarded, then quoted when RFC 4180 requires it. */

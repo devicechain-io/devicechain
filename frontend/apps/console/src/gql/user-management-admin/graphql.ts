@@ -279,6 +279,13 @@ export type IdpClaimRequirementInput = {
 
 /** Data to create a connection. */
 export type IdpConnectionCreateRequest = {
+  /**
+   * PEM text of private CA certificates to trust, besides the system's roots, for this provider's
+   * TLS certificate (an on-premises provider whose certificate a private CA signed). Up to 64 KiB
+   * of CERTIFICATE blocks; a private key is refused. The provider's discovery document must be
+   * reachable under it.
+   */
+  caBundle?: string | null | undefined;
   /** The client identifier registered at the provider. */
   clientId: string;
   /** The client secret. Write-only; leave out for a public client. */
@@ -586,7 +593,7 @@ export type IdpConnectionQueryVariables = Exact<{
 }>;
 
 
-export type IdpConnectionQuery = { idpConnection: { token: string, name: string, kind: string, enabled: boolean, issuer: string, clientId: string, hasSecret: boolean, scopes: Array<string>, emailClaim: string, requiredAmr: Array<string>, tenants: Array<string>, callbackUrl: string, providerSignOut: boolean, signOutReturnUrls: Array<string>, createdAt: string | null, updatedAt: string | null, requiredClaims: Array<{ name: string, value: string }>, domains: Array<{ domain: string, verifiedAt: string, verifiedBy: string }>, discovery: { authorizationEndpoint: string, tokenEndpoint: string, jwksUri: string, endSessionEndpoint: string | null, fetchedAt: string | null, fingerprint: string, approved: boolean, approvedBy: string | null, approvedAt: string | null } } | null };
+export type IdpConnectionQuery = { idpConnection: { token: string, name: string, kind: string, enabled: boolean, issuer: string, clientId: string, hasSecret: boolean, scopes: Array<string>, emailClaim: string, requiredAmr: Array<string>, tenants: Array<string>, callbackUrl: string, providerSignOut: boolean, signOutReturnUrls: Array<string>, createdAt: string | null, updatedAt: string | null, requiredClaims: Array<{ name: string, value: string }>, domains: Array<{ domain: string, verifiedAt: string, verifiedBy: string }>, caCertificates: Array<{ fingerprintSha256: string, subject: string, issuer: string, notBefore: string, notAfter: string, isCa: boolean }>, discovery: { authorizationEndpoint: string, tokenEndpoint: string, jwksUri: string, endSessionEndpoint: string | null, fetchedAt: string | null, fingerprint: string, approved: boolean, approvedBy: string | null, approvedAt: string | null } } | null };
 
 export type SsoLinkRequestsQueryVariables = Exact<{ [key: string]: never; }>;
 
@@ -630,6 +637,14 @@ export type SetIdpConnectionSecretMutationVariables = Exact<{
 
 
 export type SetIdpConnectionSecretMutation = { setIdpConnectionSecret: { token: string } };
+
+export type SetIdpCaBundleMutationVariables = Exact<{
+  token: string;
+  caBundle: string;
+}>;
+
+
+export type SetIdpCaBundleMutation = { setIdpCaBundle: { token: string } };
 
 export type SetIdpConnectionTenantsMutationVariables = Exact<{
   token: string;
@@ -1273,6 +1288,14 @@ export const IdpConnectionDocument = new TypedDocumentString(`
     callbackUrl
     providerSignOut
     signOutReturnUrls
+    caCertificates {
+      fingerprintSha256
+      subject
+      issuer
+      notBefore
+      notAfter
+      isCa
+    }
     discovery {
       authorizationEndpoint
       tokenEndpoint
@@ -1336,6 +1359,13 @@ export const SetIdpConnectionSecretDocument = new TypedDocumentString(`
   }
 }
     `) as unknown as TypedDocumentString<SetIdpConnectionSecretMutation, SetIdpConnectionSecretMutationVariables>;
+export const SetIdpCaBundleDocument = new TypedDocumentString(`
+    mutation SetIdpCaBundle($token: String!, $caBundle: String!) {
+  setIdpCaBundle(token: $token, caBundle: $caBundle) {
+    token
+  }
+}
+    `) as unknown as TypedDocumentString<SetIdpCaBundleMutation, SetIdpCaBundleMutationVariables>;
 export const SetIdpConnectionTenantsDocument = new TypedDocumentString(`
     mutation SetIdpConnectionTenants($token: String!, $tenants: [String!]!) {
   setIdpConnectionTenants(token: $token, tenants: $tenants) {

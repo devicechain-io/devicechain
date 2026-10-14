@@ -143,3 +143,23 @@ func (r *SchemaResolver) UpdateDevice(ctx context.Context, args struct {
 	}
 	return dt, nil
 }
+
+// Import devices from rows, one transaction per row, reporting the outcome of each. The
+// model owns every rule; this only authorizes. Rows (and the credential secrets they may
+// carry) are passed through and never logged here.
+func (r *SchemaResolver) ImportDevices(ctx context.Context, args struct {
+	Rows   []*model.DeviceImportRow
+	Mode   string
+	DryRun bool
+}) (*DeviceImportResultResolver, error) {
+	if err := auth.Authorize(ctx, auth.DeviceWrite); err != nil {
+		return nil, err
+	}
+
+	api := r.GetApi(ctx)
+	result, err := api.ImportDevices(ctx, args.Rows, args.Mode, args.DryRun)
+	if err != nil {
+		return nil, err
+	}
+	return &DeviceImportResultResolver{M: result}, nil
+}

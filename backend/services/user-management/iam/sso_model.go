@@ -100,6 +100,11 @@ type IdpConnection struct {
 	// provider signs the person out of every application it serves.
 	ProviderSignOut bool `gorm:"not null;default:false"`
 
+	// CaBundle is PEM: extra trust anchors (CERTIFICATE blocks only, canonicalised on write)
+	// for this provider's TLS certificate, trusted beside the system roots. Public
+	// certificates, so it is a plain column, not a secret. Empty means system roots only.
+	CaBundle string `gorm:"type:text;not null;default:''"`
+
 	DiscoverySnapshot   *DiscoverySnapshot `gorm:"serializer:json"`
 	DiscoveryApprovedAt *time.Time
 	DiscoveryApprovedBy string `gorm:"not null;size:256"`

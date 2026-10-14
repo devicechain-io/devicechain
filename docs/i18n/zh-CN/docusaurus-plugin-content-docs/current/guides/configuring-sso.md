@@ -19,7 +19,7 @@ title: 配置单点登录
 
 ## 创建连接 {#create}
 
-1. 在控制台中打开 **Admin → Identity providers**，选择 **New connection**。填写令牌（字母、数字和连字符）、名称、类型（`tenant`）、提供商的 **issuer**，以及客户端 ID 和密钥。issuer 和类型之后无法更改；不同的 issuer 就是不同的连接。
+1. 在控制台中打开 **Admin → Identity providers**，选择 **New connection**。填写令牌（字母、数字和连字符）、名称、类型（`tenant`）、提供商的 **issuer**，以及客户端 ID 和密钥。issuer 和类型之后无法更改；不同的 issuer 就是不同的连接。如果提供商的证书由私有证书颁发机构签发，请同时在此提供该机构的证书（[详情](#private-ca)）。
 2. DeviceChain 获取提供商的发现文档，并保留以待批准。连接初始为禁用状态。页面会显示其回调 URL（标签为 **Callback address**），即 `<issuerUrl>/sso/callback/<token>`。请在提供商处将它原样注册为重定向 URI。
 3. 审阅端点，然后选择 **Approve endpoints**。
 4. 添加提供商所代表的邮箱域名（例如 `example.com`）。
@@ -92,7 +92,24 @@ user-management 的 `auth.issuerUrl` 必须是其 API 可从外部访问的地�
 
 ### 访问提供商 {#egress}
 
-对提供商的每个请求都经过出口防护，它会拒绝私有、环回和链路本地目的地。公共提供商无需任何设置。对于本地部署的提供商（你网络中的 ADFS、Keycloak、Dex），请在 `instance.config.infrastructure.egress.allowedDestinations` 下以尽量窄的 CIDR 允许其地址范围。该允许列表对整个实例生效，也适用于 webhook 和连接器，因此请优先使用 /32。提供商的证书必须能链到 user-management 镜像中的系统根证书；此版本没有按连接设置 CA 的选项。
+对提供商的每个请求都经过出口防护，它会拒绝私有、环回和链路本地目的地。公共提供商无需任何设置。对于本地部署的提供商（你网络中的 ADFS、Keycloak、Dex），请在 `instance.config.infrastructure.egress.allowedDestinations` 下以尽量窄的 CIDR 允许其地址范围。该允许列表对整个实例生效，也适用于 webhook 和连接器，因此请优先使用 /32。提供商的证书必须能链到 user-management 镜像中的系统根证书，或链到你为该连接提供的[私有 CA 证书包](#private-ca)。
+
+### 使用私有 CA 证书的提供商 {#private-ca}
+
+本地部署的提供商通常提供由贵组织自己的证书颁发机构签发的 TLS 证书，系统根证书中不包含它。若不处理，创建连接会失败并提示 “certificate signed by unknown authority”。请把该 CA 的证书提供给这个连接，而不是在整个实例范围内放宽任何校验：
+
+1. 以 PEM 文本获取该 CA 的证书（以及中间证书，如有）：一个或多个 `-----BEGIN CERTIFICATE-----` 块，最大 64 KiB。绝不要提供私钥；文本中出现私钥会被拒绝，并且不会被回显。
+2. 创建连接时，把它粘贴到 **Private CA certificates**，或选择文件。对已有连接，使用 **Settings → Private CA**，然后选择 **Verify and save bundle**。在管理 API 中，对应 `createIdpConnection` 的 `caBundle`，或 `setIdpCaBundle`。
+3. 核对列出的证书：每个证书都会显示其主体、到期时间和 SHA-256 指纹。请将指纹与你的 CA 公布的指纹比对。声明自己不是证书颁发机构的证书会被当作恰好这一张证书来信任，并标记为 **Not a CA**。
+
+它做什么、不做什么：
+
+- 证书包**仅适用于该连接**：发现、密钥集和令牌交换都信任它，其他连接和功能则不信任。它是在系统根证书**之外额外**信任的，因此使用公共证书的提供商在设置了证书包后依然可用。
+- 它不会改变出口防护。提供商的地址仍须符合[允许列表](#egress)；证书永远不会让被禁止的地址变得可访问。
+- 证书包只能粘贴或上传，绝不会从某个地址下载，因为下载得到的信任根将由响应下载请求的一方决定。
+- 保存新证书包时，会先用它访问提供商的发现地址，如果证书无法链到它，就会拒绝（不保存任何内容）。如果提供商随后给出的端点与你已批准的不同，批准会被撤销，你需要重新审核；如果相同，批准保持有效，因此轮换 CA 不会让任何人被锁在门外。
+- 提供商的证书仍须在主体备用名称中包含其地址（与 issuer 匹配的 DNS 名称或 IP 地址），并处于有效期内。请在 CA 证书到期前替换证书包。**Remove bundle**（以空字符串调用 `setIdpCaBundle`）会让该连接仅使用系统根证书。
+- 证书包是公开证书，因此与连接一起存储而不是作为机密存储，并会包含在数据库备份中。
 
 ### 位于负载均衡器之后 {#load-balancer}
 

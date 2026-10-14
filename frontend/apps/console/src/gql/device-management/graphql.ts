@@ -399,6 +399,54 @@ export type DeviceFacet =
   /** The model field of device types. */
   | 'MODEL';
 
+/** How an import treats credentials. No mode generates a secret. */
+export type DeviceImportMode =
+  /**
+   * Create each device together with the credential a factory supplied for it, in one
+   * transaction. credentialType and credentialId are required on every row.
+   */
+  | 'FACTORY_CREDENTIALS'
+  /** Create devices only. Credential columns are refused. */
+  | 'NONE';
+
+/** What happened to one row of an import. */
+export type DeviceImportOutcome =
+  /** The device, external id or credential id is taken by something different. Nothing was written. */
+  | 'CONFLICT'
+  /** The device (and its credential, in FACTORY_CREDENTIALS mode) was created; on a dry run, would be. */
+  | 'CREATED'
+  /** The device already exists exactly as the row describes it. A success; nothing was written. */
+  | 'EXISTS'
+  /** The row is malformed or names something that does not exist. */
+  | 'INVALID'
+  /** The row is well-formed and was refused by a rule of the platform. */
+  | 'REFUSED';
+
+/** One device of an import file. */
+export type DeviceImportRow = {
+  /** The id the device presents (the access token itself, or the MQTT username). FACTORY_CREDENTIALS mode only. */
+  credentialId?: string | null | undefined;
+  /** ACCESS_TOKEN or MQTT_BASIC. FACTORY_CREDENTIALS mode only. */
+  credentialType?: string | null | undefined;
+  /**
+   * The MQTT_BASIC password, at least 16 bytes. Write-only: stored as a keyed digest, never
+   * returned, logged or compared on a re-run. FACTORY_CREDENTIALS mode only.
+   */
+  credentialValue?: string | null | undefined;
+  /** Free-text description, up to 1024 characters. */
+  description?: string | null | undefined;
+  /** Token of the device's type. An unknown token makes the row INVALID. */
+  deviceTypeToken: string;
+  /** Optional business identifier, up to 256 characters. Checked for conflicts; never the key. */
+  externalId?: string | null | undefined;
+  /** Caller-defined metadata. Must be valid JSON; an empty string means none. */
+  metadata?: string | null | undefined;
+  /** Human-readable name, up to 128 characters. */
+  name?: string | null | undefined;
+  /** Identifier of the device, and the key a re-run matches on. Required. */
+  token: string;
+};
+
 /**
  * Sets a profile's position declaration. Supplying it states that the devices report their
  * own position; an empty object makes that statement with no expectations.
@@ -1256,6 +1304,15 @@ export type CreateDevicesMutationVariables = Exact<{
 
 
 export type CreateDevicesMutation = { createDevices: Array<{ id: string, token: string, name: string | null }> };
+
+export type ImportDevicesMutationVariables = Exact<{
+  rows: Array<DeviceImportRow> | DeviceImportRow;
+  mode: DeviceImportMode;
+  dryRun: boolean;
+}>;
+
+
+export type ImportDevicesMutation = { importDevices: { dryRun: boolean, created: number, exists: number, conflict: number, invalid: number, refused: number, rows: Array<{ row: number, token: string, outcome: DeviceImportOutcome, code: string | null, message: string | null }> } };
 
 export type UpdateDeviceMutationVariables = Exact<{
   token: string;
@@ -2733,6 +2790,25 @@ export const CreateDevicesDocument = new TypedDocumentString(`
   }
 }
     `) as unknown as TypedDocumentString<CreateDevicesMutation, CreateDevicesMutationVariables>;
+export const ImportDevicesDocument = new TypedDocumentString(`
+    mutation ImportDevices($rows: [DeviceImportRow!]!, $mode: DeviceImportMode!, $dryRun: Boolean!) {
+  importDevices(rows: $rows, mode: $mode, dryRun: $dryRun) {
+    dryRun
+    created
+    exists
+    conflict
+    invalid
+    refused
+    rows {
+      row
+      token
+      outcome
+      code
+      message
+    }
+  }
+}
+    `) as unknown as TypedDocumentString<ImportDevicesMutation, ImportDevicesMutationVariables>;
 export const UpdateDeviceDocument = new TypedDocumentString(`
     mutation UpdateDevice($token: String!, $request: DeviceUpdateRequest!) {
   updateDevice(token: $token, request: $request) {
