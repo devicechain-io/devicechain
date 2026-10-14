@@ -41,6 +41,9 @@ type wireAssignment struct {
 	Component    string                 `json:"component"`
 	Trust        string                 `json:"trust"`
 	Artifact     wireAssignmentArtifact `json:"artifact"`
+	Signature    string                 `json:"signature,omitempty"`
+	KeyID        string                 `json:"keyId,omitempty"`
+	Algorithm    string                 `json:"algorithm,omitempty"`
 }
 
 type wireGrant struct {
@@ -75,6 +78,9 @@ type ClientConfig struct {
 	Component      string
 	InitialVersion string
 	ChunkSize      int64
+	// TrustedKeys and RequireSignature configure the Updater's authenticity check; see Config.
+	TrustedKeys      []string
+	RequireSignature *bool
 	// Transport carries every message the device sends: update reports and download requests.
 	Transport Transport
 	// HTTP fetches the artifact. Nil uses a client with a 30 second timeout.
@@ -112,7 +118,7 @@ func OpenClient(cfg ClientConfig) (*Client, error) {
 	up, err := Open(Config{
 		StatePath: cfg.StatePath, Component: cfg.Component, Transport: cfg.Transport,
 		Source: &httpSource{client: httpc, grants: boxed}, ChunkSize: cfg.ChunkSize,
-		InitialVersion: cfg.InitialVersion,
+		InitialVersion: cfg.InitialVersion, TrustedKeys: cfg.TrustedKeys, RequireSignature: cfg.RequireSignature,
 	})
 	if err != nil {
 		return nil, err
@@ -142,10 +148,14 @@ func (c *Client) HandleDesired(ctx context.Context, payload []byte) error {
 		if m.V != wireVersion || m.Trust == "" {
 			return fmt.Errorf("updater: unsupported update.assignment (v=%d trust=%q)", m.V, m.Trust)
 		}
+		if err := checkWireTrust(m); err != nil {
+			return err
+		}
 		return c.up.Assign(Assignment{
 			AttemptID: m.AttemptID, AssignmentID: m.AssignmentID, Component: m.Component,
 			ArtifactDigest: m.Artifact.Digest, Version: m.Artifact.Version, Size: m.Artifact.Size,
 			RequiresReboot: m.Artifact.RequiresReboot,
+			Trust:          m.Trust, Signature: m.Signature, KeyID: m.KeyID, Algorithm: m.Algorithm,
 		})
 	case kindDownloadGrant:
 		var m wireGrant
@@ -180,6 +190,19 @@ func (c *Client) HandleDesired(ctx context.Context, payload []byte) error {
 	default:
 		return ErrNotUpdateKind
 	}
+}
+
+// checkWireTrust refuses an assignment whose trust and signature fields disagree: SIGNED carries
+// all three of signature, keyId and algorithm, UNVERIFIED carries none.
+func checkWireTrust(m wireAssignment) error {
+	has := m.Signature != "" || m.KeyID != "" || m.Algorithm != ""
+	switch {
+	case m.Trust == trustUnverified && !has:
+		return nil
+	case m.Trust == trustSigned && m.Signature != "" && m.KeyID != "" && m.Algorithm != "":
+		return nil
+	}
+	return fmt.Errorf("updater: update.assignment trust %q does not match its signature fields", m.Trust)
 }
 
 // ErrNotUpdateKind is returned by HandleDesired for a message outside the update family.
