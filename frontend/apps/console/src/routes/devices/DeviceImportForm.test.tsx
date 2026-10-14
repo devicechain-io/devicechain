@@ -7,7 +7,29 @@ import '@/i18n/config';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { gqlMock } = vi.hoisted(() => ({ gqlMock: vi.fn() }));
+const { gqlMock, failedTables, downloads } = vi.hoisted(() => ({
+  gqlMock: vi.fn(),
+  failedTables: [] as string[],
+  downloads: [] as string[],
+}));
+
+// Spies on what the form hands the failed-rows writer and the download, so the tests can see
+// the table the form is HOLDING after an import, which is otherwise invisible state.
+vi.mock('@/routes/devices/deviceImport', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/routes/devices/deviceImport')>();
+  return {
+    ...actual,
+    failedRowsCsv: (...args: Parameters<typeof actual.failedRowsCsv>) => {
+      failedTables.push(JSON.stringify(args[0]));
+      return actual.failedRowsCsv(...args);
+    },
+  };
+});
+
+vi.mock('@/lib/csv', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/csv')>();
+  return { ...actual, downloadCsv: (_name: string, csv: string) => downloads.push(csv) };
+});
 
 vi.mock('@devicechain/client', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@devicechain/client')>();
@@ -28,6 +50,8 @@ function imports(): ImportVars[] {
 
 afterEach(cleanup);
 beforeEach(() => {
+  failedTables.length = 0;
+  downloads.length = 0;
   gqlMock.mockReset();
   gqlMock.mockImplementation((service: string, _doc: unknown, vars?: ImportVars) => {
     if (vars?.rows) {
@@ -124,5 +148,31 @@ describe('the device import wizard', () => {
     expect(imports()[1].rows[0].credentialValue).toBe(SECRET);
     expect(document.body.textContent).not.toContain(SECRET);
     expect(document.body.innerHTML).not.toContain(SECRET);
+  });
+
+  it('holds no secret once the import has ended, in state or in the failed-rows file', async () => {
+    render(<DeviceImportForm onDone={vi.fn()} />);
+    fireEvent.click(screen.getByRole('radio', { name: 'Factory credentials' }));
+    fireEvent.change(screen.getByLabelText('Or paste the rows'), {
+      target: {
+        value:
+          'token,deviceTypeToken,credentialType,credentialId,credentialValue' + String.fromCharCode(10) +
+          `d1,gateway,MQTT_BASIC,u1,${SECRET}` + String.fromCharCode(10) +
+          `bad token,gateway,MQTT_BASIC,u2,${SECRET}-2` + String.fromCharCode(10),
+      },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Use pasted rows' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Check the file' }));
+    await screen.findByText('What an import would do');
+    fireEvent.click(screen.getByRole('button', { name: 'Import 1 device' }));
+    await screen.findByText('Import finished');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Download failed rows' }));
+    expect(failedTables).toHaveLength(1);
+    expect(failedTables[0]).toContain('bad token');
+    expect(failedTables[0]).not.toContain(SECRET);
+    expect(downloads).toHaveLength(1);
+    expect(downloads[0]).toContain('bad token');
+    expect(downloads[0]).not.toContain(SECRET);
   });
 });

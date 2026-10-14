@@ -299,6 +299,21 @@ func TestImportCredentialConflictsAndMissingCredential(t *testing.T) {
 	require.Equal(t, "CONFLICT", res.Rows[0].Outcome)
 }
 
+// An identical existing device whose named credential id belongs to ANOTHER device is a
+// conflict, not an EXISTS: the row would otherwise report success for a credential that
+// authenticates somebody else.
+func TestImportExistingDeviceNamingAnotherDevicesCredentialIsAConflict(t *testing.T) {
+	api, ctx := newImportApi(t)
+	mustImport(t, api, ctx, []*DeviceImportRow{credRow(1, "ACCESS_TOKEN", "bearer-X", "")}, DeviceImportModeCredentials, false)
+	_, err := api.CreateDevice(ctx, &DeviceCreateRequest{Token: "dev-0002", DeviceTypeToken: "sensor", Name: strp("Device 2")})
+	require.NoError(t, err)
+
+	res := mustImport(t, api, ctx, []*DeviceImportRow{credRow(2, "ACCESS_TOKEN", "bearer-X", "")}, DeviceImportModeCredentials, false)
+	require.Equal(t, "CONFLICT", res.Rows[0].Outcome)
+	require.Contains(t, *res.Rows[0].Message, "another device")
+	require.EqualValues(t, 1, countOf(t, api, ctx, &DeviceCredential{}))
+}
+
 func TestImportCredentialRowsAreAtomic(t *testing.T) {
 	api, ctx := newImportApi(t)
 	// A credential already holds the token the import would derive for dev-0001's credential,

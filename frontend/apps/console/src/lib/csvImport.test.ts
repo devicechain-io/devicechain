@@ -82,13 +82,9 @@ describe('parseCsv', () => {
     expect(parseCsv('name\n-5\n@sum\n+1')).toEqual([['name'], ['-5'], ['@sum'], ['+1']]);
   });
 
-  it('reads back what the export wrote: the formula guard is undone, apostrophes are not', () => {
-    const csv = toCsv(
-      [{ header: 'name', value: (v: string) => v }],
-      ['=cmd|calc', '@x', "'tis", '-12.5', 'plain'],
-    );
-    const rows = parseCsv(csv);
-    expect(rows.slice(1).map((r) => r[0])).toEqual(['=cmd|calc', '@x', "'tis", '-12.5', 'plain']);
+  it('returns cells exactly as written, guard apostrophes included', () => {
+    const csv = toCsv([{ header: 'name', value: (v: string) => v }], ['=cmd|calc', "'tis"]);
+    expect(parseCsv(csv).slice(1).map((r) => r[0])).toEqual(["'=cmd|calc", "'tis"]);
   });
 
   it('caps the data rows while parsing', () => {

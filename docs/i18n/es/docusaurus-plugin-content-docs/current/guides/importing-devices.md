@@ -78,7 +78,7 @@ En una nueva ejecución, una fila cuyo dispositivo e id de credencial ya existen
 | `INVALID` | La fila está mal formada o nombra algo que no existe: un token incorrecto, un tipo de dispositivo desconocido, un valor que supera su límite, JSON no válido, un token, id externo o id de credencial repetido en el mismo archivo, o un problema con la credencial. |
 | `REFUSED` | La fila está bien formada y una regla la rechazó: un tipo de credencial no admitido. |
 
-Todo resultado distinto de `CREATED` y `EXISTS` incluye un `code` y un `message` que nombran el campo y nunca un valor. Una importación nunca añade una credencial a un dispositivo que ya existe; usa para eso la creación de credenciales.
+Todo resultado distinto de `CREATED` y `EXISTS` incluye un `code` y un `message` que nombran el campo. Un mensaje nunca contiene el secreto de una credencial; puede repetir un token que enviaste, como el token de un tipo de dispositivo. Una importación nunca añade una credencial a un dispositivo que ya existe; usa para eso la creación de credenciales.
 
 ## Por GraphQL {#graphql}
 

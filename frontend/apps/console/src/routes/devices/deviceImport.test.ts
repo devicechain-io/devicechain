@@ -93,7 +93,31 @@ describe('buildRows', () => {
   });
 });
 
+describe('formula guard and secrets', () => {
+  it('undoes the export guard on ordinary fields but never on the secret', () => {
+    const secret = "'=Xk9-secret-0123456789";
+    const rows = buildRows(
+      [['d1', "'=cmd|calc", 'mqtt_basic', 'u1', secret]],
+      { token: 0, name: 1, credentialType: 2, credentialId: 3, credentialValue: 4 },
+      'FACTORY_CREDENTIALS',
+      'sensor',
+    );
+    expect(rows[0].name).toBe('=cmd|calc');
+    expect(rows[0].credentialValue).toBe(secret);
+  });
+});
+
 describe('chunk', () => {
+  it('also splits by serialized size, keeping a call under the body cap', () => {
+    const big = (i: number) => ({ token: `d${i}`, metadata: 'x'.repeat(1024 * 1024) });
+    expect(chunk([big(1), big(2), big(3), big(4)]).map((p) => p.length)).toEqual([2, 2]);
+    // multi-byte characters count as their bytes
+    const wide = (i: number) => ({ token: `d${i}`, metadata: '日'.repeat(400_000) });
+    expect(chunk([wide(1), wide(2), wide(3)]).map((p) => p.length)).toEqual([2, 1]);
+    // one oversize row still goes, alone
+    expect(chunk([{ m: 'x'.repeat(4 * 1024 * 1024) }, { m: 'y' }]).map((p) => p.length)).toEqual([1, 1]);
+  });
+
   it('splits at the per-call bound', () => {
     const parts = chunk(Array.from({ length: IMPORT_CHUNK_SIZE * 2 + 1 }, (_, i) => i));
     expect(parts.map((p) => p.length)).toEqual([IMPORT_CHUNK_SIZE, IMPORT_CHUNK_SIZE, 1]);

@@ -12,7 +12,7 @@
 // whitespace-sensitive. A credential secret is the exception on purpose: it is sent byte for
 // byte, because the device will present exactly those bytes.
 
-import { csvCell, toCsv, type CsvColumn } from '@/lib/csv';
+import { csvCell, toCsv, unguardCell, type CsvColumn } from '@/lib/csv';
 import type {
   DeviceImportMode,
   DeviceImportOutcome,
@@ -88,7 +88,16 @@ export function autoMap(header: string[], mode: DeviceImportMode): ColumnMapping
   return mapping;
 }
 
-const cell = (row: string[], idx: number | undefined): string | undefined =>
+// A cell with the export's formula guard undone, so a file this console exported reads back
+// to its original values. NOT for the credential secret: see rawCell.
+const cell = (row: string[], idx: number | undefined): string | undefined => {
+  const v = idx === undefined ? undefined : row[idx];
+  return v === undefined ? undefined : unguardCell(v);
+};
+
+// A cell exactly as the file holds it. The credential secret is read this way: a password
+// that begins `'=` is a password, not a guarded formula, and the device presents it as is.
+const rawCell = (row: string[], idx: number | undefined): string | undefined =>
   idx === undefined ? undefined : row[idx];
 
 const trimmed = (v: string | undefined): string | undefined => {
@@ -126,7 +135,7 @@ export function buildRows(
       if (credentialType) out.credentialType = credentialType.toUpperCase();
       const credentialId = cell(r, mapping.credentialId);
       if (credentialId !== undefined && credentialId.trim() !== '') out.credentialId = credentialId.trim();
-      const secret = cell(r, mapping.credentialValue);
+      const secret = rawCell(r, mapping.credentialValue);
       // Verbatim: the device presents exactly these bytes.
       if (secret !== undefined && secret !== '') out.credentialValue = secret;
     }
@@ -135,9 +144,36 @@ export function buildRows(
 }
 
 /** Splits rows into calls of at most `size`. */
-export function chunk<T>(items: T[], size: number = IMPORT_CHUNK_SIZE): T[][] {
+/** Largest serialized request a call may carry; the server refuses a body over 4 MiB. */
+export const IMPORT_CHUNK_MAX_BYTES = 3 * 1024 * 1024;
+
+const encoder = new TextEncoder();
+
+/**
+ * Splits rows into calls of at most `size` rows AND at most `maxBytes` of serialized JSON, so
+ * a chunk of rows with large metadata or secrets stays under the request body cap. A single
+ * row larger than the cap goes alone (the server then refuses it, by field, as it would any
+ * oversize value).
+ */
+export function chunk<T>(
+  items: T[],
+  size: number = IMPORT_CHUNK_SIZE,
+  maxBytes: number = IMPORT_CHUNK_MAX_BYTES,
+): T[][] {
   const out: T[][] = [];
-  for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size));
+  let current: T[] = [];
+  let bytes = 0;
+  for (const item of items) {
+    const n = encoder.encode(JSON.stringify(item)).length + 1;
+    if (current.length > 0 && (current.length >= size || bytes + n > maxBytes)) {
+      out.push(current);
+      current = [];
+      bytes = 0;
+    }
+    current.push(item);
+    bytes += n;
+  }
+  if (current.length > 0) out.push(current);
   return out;
 }
 

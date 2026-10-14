@@ -1609,7 +1609,7 @@ type DeviceImportRowResult {
     """The row's device token."""
     token: String!
     outcome: DeviceImportOutcome!
-    """A machine-readable reason for every outcome but CREATED and EXISTS: CONFLICT, INVALID_VALUE, NOT_FOUND, LIMIT_EXCEEDED, DUPLICATE_IN_FILE, UNSUPPORTED or PROVISIONING_PROFILE_REQUIRED."""
+    """A machine-readable reason for every outcome but CREATED and EXISTS: CONFLICT, INVALID_VALUE, NOT_FOUND, LIMIT_EXCEEDED, DUPLICATE_IN_FILE or UNSUPPORTED."""
     code: String
     """What is wrong, naming fields and never values."""
     message: String

@@ -78,7 +78,7 @@ On a re-run, a row whose device and credential id already exist is `EXISTS`; the
 | `INVALID` | The row is malformed or names something that does not exist: a bad token, an unknown device type, a value over its limit, invalid JSON, a repeated token, external id or credential id elsewhere in the same file, or a credential problem. |
 | `REFUSED` | The row is well-formed and a rule refused it: a credential type that is not supported. |
 
-Every outcome other than `CREATED` and `EXISTS` carries a `code` and a `message` that name the field and never a value. An import never adds a credential to a device that already exists; use the credential's own create for that.
+Every outcome other than `CREATED` and `EXISTS` carries a `code` and a `message` that name the field. A message never contains a credential secret; it may repeat a token you supplied, such as a device type token. An import never adds a credential to a device that already exists; use the credential's own create for that.
 
 ## Over GraphQL {#graphql}
 

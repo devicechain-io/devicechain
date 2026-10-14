@@ -486,8 +486,9 @@ func (api *Api) decideImportRows(ctx context.Context, result *DeviceImportResult
 			created = append(created, device)
 			result.set(i, row, DeviceImportCreated, "", "")
 		case conflict.Is(err):
-			// Lost a race with a concurrent writer after the reads above.
-			result.set(i, row, DeviceImportConflict, conflict.Code, "a value that must be unique was taken by a concurrent write")
+			// A unique value collided at the write: a concurrent writer, or one the reads above
+			// do not cover (the derived credential token).
+			result.set(i, row, DeviceImportConflict, conflict.Code, "a value that must be unique (a token, external id or credential id) is already in use")
 		default:
 			api.emitDeviceRosterBatch(ctx, created)
 			return fmt.Errorf("import stopped at row %d after creating %d devices; re-run the same file and the created rows report EXISTS: %w",

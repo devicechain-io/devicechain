@@ -13,12 +13,11 @@
 //     decoded to replacement characters that would be stored as device names;
 //   - nothing is evaluated. A cell that starts with `=`, `+`, `-` or `@` is just text here (a
 //     formula only matters when a SPREADSHEET opens a file, which is what the export's guard
-//     is for). It is kept verbatim apart from undoing that same guard, so a file this console
-//     exported reads back to the values it was written from;
+//     is for). The parser keeps every cell verbatim; the import undoes the export's guard on
+//     the non-secret fields only, so a file this console exported reads back to the values
+//     it was written from;
 //   - the row count is capped while parsing, so a file of ten million empty lines stops at the
 //     cap instead of building ten million arrays.
-
-import { unguardCell } from '@/lib/csv';
 
 /** Largest file the import will read. */
 export const IMPORT_MAX_BYTES = 5 * 1024 * 1024;
@@ -136,7 +135,10 @@ export function parseCsv(input: string, maxRows: number = IMPORT_MAX_ROWS): stri
   }
   if (quoted) throw new CsvImportError('unterminated_quote');
   if (fieldStarted || field !== '' || row.length > 0) endRow();
-  return rows.map((r) => r.map(unguardCell));
+  // Cells are returned exactly as written. Undoing the export's formula guard is the
+  // caller's decision per column (see unguardCell): a credential secret must never be
+  // touched, since the device presents exactly the bytes in the file.
+  return rows;
 }
 
 /** Parses pasted text (already a string, so only the row cap and structure apply). */
