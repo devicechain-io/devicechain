@@ -85,15 +85,16 @@ func (c *ssoKeySetCache) get(conn *iam.IdpConnection, build func() *oidc.RemoteK
 	return ks
 }
 
-// ssoContext returns ctx carrying the Manager's identity-provider HTTP client for both
+// ssoContext returns ctx carrying the connection's identity-provider HTTP client for both
 // go-oidc and oauth2. Both libraries fall back to http.DefaultClient -- which dials
 // anywhere -- when the context carries none, so a Manager with no client refuses here
 // rather than reaching them.
-func (m *Manager) ssoContext(ctx context.Context) (context.Context, error) {
-	if m.ssoClient == nil {
-		return nil, ErrDiscoveryNoClient
+func (m *Manager) ssoContext(ctx context.Context, conn *iam.IdpConnection) (context.Context, error) {
+	client, err := m.ssoClientFor(conn)
+	if err != nil {
+		return nil, err
 	}
-	return oidc.ClientContext(ctx, m.ssoClient), nil
+	return oidc.ClientContext(ctx, client), nil
 }
 
 // VerifySsoIDToken verifies rawIDToken against a connection's snapshotted issuer and key-set
@@ -105,13 +106,13 @@ func (m *Manager) VerifySsoIDToken(ctx context.Context, conn *iam.IdpConnection,
 		return nil, fmt.Errorf("%w: the connection has no discovery snapshot", errSsoToken)
 	}
 	snap := conn.DiscoverySnapshot
-	cctx, err := m.ssoContext(ctx)
+	cctx, err := m.ssoContext(ctx, conn)
 	if err != nil {
 		return nil, err
 	}
 	// The key set outlives this request (its keys are cached), so it is built over a context
 	// that carries the client but no deadline of this request.
-	keyCtx, err := m.ssoContext(context.Background())
+	keyCtx, err := m.ssoContext(context.Background(), conn)
 	if err != nil {
 		return nil, err
 	}

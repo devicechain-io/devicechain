@@ -15,7 +15,6 @@ import (
 	"time"
 
 	mscfg "github.com/devicechain-io/dc-microservice/config"
-	"github.com/devicechain-io/dc-microservice/egress"
 	"github.com/devicechain-io/dc-user-management/iam"
 )
 
@@ -65,17 +64,11 @@ var discoveryClock = func() time.Time { return time.Now().UTC() }
 // whatever the URL said). It follows no redirects: a discovery document, a token endpoint
 // and a key set are served where the snapshot says they are.
 func NewSsoHTTPClient(infra mscfg.InfrastructureConfiguration) (*http.Client, error) {
-	guard, err := egress.FromConfig(infra.Egress)
+	factory, err := NewSsoClientFactory(infra)
 	if err != nil {
 		return nil, err
 	}
-	return &http.Client{
-		Transport: boundResponses(guard.Transport(), maxIdpResponseBytes),
-		Timeout:   discoveryTimeout,
-		CheckRedirect: func(*http.Request, []*http.Request) error {
-			return http.ErrUseLastResponse
-		},
-	}, nil
+	return factory(nil), nil
 }
 
 // SetSsoHTTPClient installs the client identity-provider fetches go through. It is called
@@ -83,10 +76,15 @@ func NewSsoHTTPClient(infra mscfg.InfrastructureConfiguration) (*http.Client, er
 func (m *Manager) SetSsoHTTPClient(c *http.Client) { m.ssoClient = c }
 
 // FetchIdpDiscovery fetches and validates an issuer's discovery document through the
-// Manager's own client. A Manager that was never given one refuses (ErrDiscoveryNoClient)
-// rather than reaching for a default.
-func (m *Manager) FetchIdpDiscovery(ctx context.Context, issuer string) (*iam.DiscoverySnapshot, error) {
-	return FetchDiscovery(ctx, m.ssoClient, issuer)
+// Manager's own client, or, when caBundle (canonical PEM, see ParseCaBundle) is not empty,
+// one that also trusts it. A Manager that was never given a client refuses
+// (ErrDiscoveryNoClient) rather than reaching for a default.
+func (m *Manager) FetchIdpDiscovery(ctx context.Context, issuer, caBundle string) (*iam.DiscoverySnapshot, error) {
+	client, err := m.clientForBundle(caBundle)
+	if err != nil {
+		return nil, err
+	}
+	return FetchDiscovery(ctx, client, issuer)
 }
 
 // FetchDiscovery fetches issuer's OpenID Connect discovery document with client and

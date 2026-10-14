@@ -19,7 +19,7 @@ The recipes for Microsoft Entra ID, Okta and Google Workspace below are written 
 
 ## Create a connection {#create}
 
-1. In the console, open **Admin → Identity providers** and choose **New connection**. Give it a token (letters, digits and hyphens), a name, the kind (`tenant`), the provider's **issuer**, and the client id and secret. The issuer and kind cannot be changed later; a different issuer is a different connection.
+1. In the console, open **Admin → Identity providers** and choose **New connection**. Give it a token (letters, digits and hyphens), a name, the kind (`tenant`), the provider's **issuer**, and the client id and secret. The issuer and kind cannot be changed later; a different issuer is a different connection. If the provider's certificate was signed by a private certificate authority, also supply its certificate here ([details](#private-ca)).
 2. DeviceChain fetches the provider's discovery document and holds it for approval. The connection starts disabled. The page shows its callback URL, labelled **Callback address**: `<issuerUrl>/sso/callback/<token>`. Register exactly that as the redirect URI at the provider.
 3. Review the endpoints and choose **Approve endpoints**.
 4. Add the email domains the provider speaks for (for example `example.com`).
@@ -92,7 +92,24 @@ user-management's `auth.issuerUrl` must be the externally reachable address of i
 
 ### Reaching the provider {#egress}
 
-Every request to a provider goes through the egress guard, which refuses private, loopback and link-local destinations. A public provider needs nothing. For an on-premises provider (ADFS, Keycloak, Dex on your network), allow its address range under `instance.config.infrastructure.egress.allowedDestinations` as narrow CIDRs. The allow list is instance-wide and also applies to webhooks and connectors, so prefer a /32. The provider's certificate must chain to the system roots in user-management's image; there is no per-connection CA setting in this release.
+Every request to a provider goes through the egress guard, which refuses private, loopback and link-local destinations. A public provider needs nothing. For an on-premises provider (ADFS, Keycloak, Dex on your network), allow its address range under `instance.config.infrastructure.egress.allowedDestinations` as narrow CIDRs. The allow list is instance-wide and also applies to webhooks and connectors, so prefer a /32. The provider's certificate must chain to the system roots in user-management's image, or to a [private CA bundle](#private-ca) you give that connection.
+
+### A provider with a private CA certificate {#private-ca}
+
+An on-premises provider often serves a TLS certificate signed by your organization's own certificate authority, which the system roots do not include. Without help, creating the connection fails with "certificate signed by unknown authority". Give the connection that CA's certificate instead of weakening anything instance-wide:
+
+1. Get the CA certificate (and any intermediate certificates) as PEM text: one or more `-----BEGIN CERTIFICATE-----` blocks, up to 64 KiB. Never a private key; a private key in the text is refused and is not echoed back.
+2. When you create the connection, paste it into **Private CA certificates** or choose the file. On an existing connection, use **Settings → Private CA**, then **Verify and save bundle**. In the admin API this is `caBundle` on `createIdpConnection`, or `setIdpCaBundle`.
+3. Check the listed certificates: each shows its subject, expiry and SHA-256 fingerprint. Compare the fingerprint with the one your CA publishes. A certificate that does not say it is a certificate authority is trusted as exactly that certificate and is flagged **Not a CA**.
+
+What it does and does not do:
+
+- The bundle applies to **that connection only**: discovery, the key set and the token exchange all trust it, and no other connection or feature does. It is trusted **in addition to** the system roots, so a provider on a public certificate keeps working with a bundle set.
+- It does not change the egress guard. The provider's address must still be reachable under [the allow list](#egress); a certificate never makes a forbidden address reachable.
+- The bundle is pasted or uploaded, never fetched from an address, because a fetched trust root is chosen by whoever answers the fetch.
+- Saving a new bundle first reaches the provider's discovery address with it, and refuses (saving nothing) if the certificate does not chain to it. If the provider then names different endpoints than the ones you approved, the approval is withdrawn and you review them again; if it names the same ones, the approval stands, so rotating the CA does not lock anyone out.
+- The provider's certificate must still carry its address (a DNS name or IP address matching the issuer) in its subject alternative names, and be within its validity period. Replace the bundle before a CA certificate expires. **Remove bundle** (`setIdpCaBundle` with an empty string) returns the connection to the system roots alone.
+- The bundle is a public certificate, so it is stored with the connection rather than as a secret, and it is included in a database backup.
 
 ### Behind a load balancer {#load-balancer}
 

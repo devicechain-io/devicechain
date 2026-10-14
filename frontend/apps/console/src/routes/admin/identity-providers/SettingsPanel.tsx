@@ -33,6 +33,7 @@ import { Input } from '@/components/ui/input';
 import { SectionPanel } from '@/components/ui/section-panel';
 import { useToast } from '@/components/ui/toast';
 import { errMessage } from '@/routes/common';
+import { CaBundlePanel } from './CaBundlePanel';
 import { ClaimsEditor } from './IdpCreateForm';
 import { splitList } from './idpForm';
 
@@ -51,6 +52,7 @@ export function SettingsPanel(props: PanelProps) {
       <GeneralSettings {...props} />
       <SecretPanel {...props} />
       <ClaimsPanel {...props} />
+      <CaBundlePanel {...props} />
       <SignOutPanel {...props} />
     </div>
   );

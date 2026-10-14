@@ -21,6 +21,7 @@ import { IconButton } from '@/components/ui/icon-button';
 import { Input } from '@/components/ui/input';
 import { SegmentedControl } from '@/components/ui/segmented-control';
 import { errMessage } from '@/routes/common';
+import { CaBundleInput } from './CaBundlePanel';
 import {
   createRequest,
   newCreateState,
@@ -165,6 +166,10 @@ export function IdpCreateForm({ onDone }: { onDone: (token: string) => void }) {
           placeholder={t('amrPlaceholder')}
           onChange={(e) => set({ requiredAmr: e.target.value })}
         />
+      </FormField>
+
+      <FormField label={t('caBundleLabel')} description={t('caBundleCreateDescription')}>
+        <CaBundleInput value={state.caBundle} onChange={(caBundle) => set({ caBundle })} />
       </FormField>
 
       {needsMfaAck && (

@@ -187,6 +187,10 @@ type Manager struct {
 	// over the egress guard (NewSsoHTTPClient) and installed by main; nil means SSO fetches
 	// refuse rather than fall back to a client that would dial anywhere.
 	ssoClient *http.Client
+	// ssoClientFactory builds a client over the same guard for a connection with a private
+	// CA bundle, and ssoClients caches those per connection version (sso_cabundle.go).
+	ssoClientFactory SsoClientFactory
+	ssoClients       ssoClientCache
 	// ssoStateKV and ssoCodesKV back the single sign-on flow (dc_sso_state, dc_sso_codes),
 	// apart from every other bucket so neither redeemer can be handed the other's record.
 	// Both nil leaves single sign-on off.

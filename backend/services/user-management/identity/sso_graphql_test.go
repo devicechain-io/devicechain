@@ -268,6 +268,34 @@ func TestConnectionAdministrationNeverReturnsTheSecretOverTheWire(t *testing.T) 
 	require.Empty(t, r.Errors)
 }
 
+// The private CA bundle over the admin wire: a private key pasted by mistake is refused and
+// is not echoed in the response; clearing returns the connection with no certificates.
+func TestCaBundleOverTheWire(t *testing.T) {
+	s := newSsoServed(t)
+	var su struct{ IdentityToken string }
+	post(t, s.pub, loginSu, map[string]any{"e": s.s.SuperuserEmail, "p": s.s.SuperuserPassword}, "", "", "").field(t, "login", &su)
+
+	const set = `mutation($b:String!){setIdpCaBundle(token:"acme-idp",caBundle:$b){caCertificates{fingerprintSha256 subject notAfter isCa}}}`
+	const key = "-----BEGIN PRIVATE KEY-----\nU0VDUkVULUtFWS1NQVRFUklBTA==\n-----END PRIVATE KEY-----\n"
+
+	require.Equal(t, http.StatusUnauthorized, post(t, s.admin, set, map[string]any{"b": ""}, "", "", "").Status)
+
+	r := post(t, s.admin, set, map[string]any{"b": key}, su.IdentityToken, "", "")
+	require.Contains(t, r.failed(t), "private key")
+	require.NotContains(t, r.Body, "U0VDUkVULUtFWS1NQVRFUklBTA")
+
+	r = post(t, s.admin, set, map[string]any{"b": "not a certificate"}, su.IdentityToken, "", "")
+	require.NotEmpty(t, r.Errors, r.Body)
+	require.NotContains(t, r.Body, "not a certificate")
+
+	var got struct {
+		CaCertificates []struct{ FingerprintSha256 string } `json:"caCertificates"`
+	}
+	r = post(t, s.admin, set, map[string]any{"b": ""}, su.IdentityToken, "", "")
+	r.field(t, "setIdpCaBundle", &got)
+	require.Empty(t, got.CaCertificates)
+}
+
 func TestRoleMappingsOverTheWire(t *testing.T) {
 	s := newSsoServed(t)
 	s.s.EnsureRole("tenant", "operator", "device:write")

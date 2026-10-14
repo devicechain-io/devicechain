@@ -108,5 +108,8 @@ var (
 		// A connection's switch to sign people out at the provider too (OpenID Connect
 		// RP-initiated logout) when they sign out here. Off for every existing connection.
 		NewSsoProviderSignOutMigration(),
+		// A connection's private CA bundle: extra trust anchors for that provider's TLS
+		// certificate, beside the system roots. Empty for every existing connection.
+		NewSsoCaBundleMigration(),
 	}
 )
