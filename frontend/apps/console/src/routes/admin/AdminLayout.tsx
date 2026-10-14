@@ -9,9 +9,10 @@ import { ErrorBoundary } from '@/components/ui/error-boundary';
 import { BackLink } from '@/routes/common';
 
 // Each admin section maps to a `nav` catalog key (ADR-066) so the top bar localizes.
-const PAGE_TITLES: { pattern: string; key: string }[] = [
+export const PAGE_TITLES: { pattern: string; key: string }[] = [
   { pattern: '/admin/tenants', key: 'adminTenants' },
   { pattern: '/admin/tiers', key: 'adminTiers' },
+  { pattern: '/admin/deletions', key: 'adminDeletions' },
   { pattern: '/admin/identities', key: 'adminIdentities' },
   { pattern: '/admin/roles', key: 'adminRoles' },
   { pattern: '/admin/identity-providers', key: 'adminIdentityProviders' },

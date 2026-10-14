@@ -74,6 +74,61 @@ function updateRequest(): Record<string, unknown> | undefined {
   return undefined;
 }
 
+describe('TierForm scalar settings', () => {
+  beforeEach(() => {
+    gqlMock.mockReset();
+    gqlMock.mockImplementation(async (_area: unknown, document: unknown) => {
+      const doc = String(document);
+      if (doc.includes('GovernanceDimensions')) {
+        return {
+          governanceDimensions: [
+            { name: 'ingest', label: 'Ingest', rateField: 'ingestReadingsPerSecond', burstField: 'ingestBurst', rateUnit: 'readings/sec' },
+          ],
+        };
+      }
+      if (doc.includes('TierColorPalette')) return { tierColorPalette: { colors: ['amber'] } };
+      if (doc.includes('mutation UpdateTenantTier')) return { updateTenantTier: tier() };
+      return {};
+    });
+  });
+  afterEach(cleanup);
+
+  it('shows, edits and sends the held, shed and geofence settings', async () => {
+    render(
+      <TierForm
+        tier={tier({ config: '{"ingestReadingsPerSecond":2000,"shedPriority":70}' })}
+        onDone={() => {}}
+        aiModelsPanel={<div />}
+      />,
+    );
+    fireEvent.mouseDown(await screen.findByRole('tab', { name: /settings/i }));
+    const shed = (await screen.findByLabelText('Shed priority')) as HTMLInputElement;
+    expect(shed.value).toBe('70');
+    fireEvent.change(shed, { target: { value: '90' } });
+    fireEvent.change(screen.getByLabelText('Held command ceiling'), { target: { value: '5000' } });
+    fireEvent.change(screen.getByLabelText('Geofence count'), { target: { value: '100' } });
+    fireEvent.click(screen.getAllByRole('button', { name: /save/i })[0]);
+
+    await waitFor(() => expect(updateRequest()).toBeDefined());
+    expect(JSON.parse(updateRequest()!.config as string)).toEqual({
+      ingestReadingsPerSecond: 2000,
+      shedPriority: 90,
+      heldCommandCeiling: 5000,
+      geoFenceCeiling: 100,
+    });
+  });
+
+  it('refuses an out-of-range value without sending anything', async () => {
+    render(<TierForm tier={tier()} onDone={() => {}} aiModelsPanel={<div />} />);
+    fireEvent.mouseDown(await screen.findByRole('tab', { name: /settings/i }));
+    fireEvent.change(await screen.findByLabelText('Shed priority'), { target: { value: '101' } });
+    fireEvent.click(screen.getAllByRole('button', { name: /save/i })[0]);
+
+    expect(await screen.findByText(/Shed priority must be a whole number from 1 to 100/)).toBeTruthy();
+    expect(updateRequest()).toBeUndefined();
+  });
+});
+
 describe('TierForm', () => {
   beforeEach(() => {
     gqlMock.mockReset();

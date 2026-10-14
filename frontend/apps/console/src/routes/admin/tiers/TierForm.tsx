@@ -24,7 +24,7 @@ import {
 } from '@/lib/api/admin';
 import { errMessage, dimensionLabel, dimensionUnit } from '@/routes/common';
 import { Textarea } from '@/components/ui/textarea';
-import { parseTierConfig, buildTierConfigPatch } from '@/routes/admin/tiers/tierConfig';
+import { parseTierConfig, buildTierConfigPatch, invalidTierScalar, TIER_SCALARS } from '@/routes/admin/tiers/tierConfig';
 
 // TierForm creates a tier (tier absent) or edits one (tier present, token fixed).
 //
@@ -89,6 +89,12 @@ export function TierForm({
 
   const submit = async () => {
     setFormError(null);
+    // Checked only when the editor rendered: otherwise settings are not being sent at all.
+    const bad = settingsEditorReady ? invalidTierScalar(settings) : null;
+    if (bad) {
+      setFormError(t('scalarInvalid', { label: t(bad.labelKey), max: bad.max }));
+      return;
+    }
     setBusy(true);
     try {
       // What to send as config — or UNDEFINED to leave the tier's settings alone.
@@ -245,6 +251,25 @@ export function TierForm({
               onRate={(v) => setSetting(d.rateField, v)}
               onBurst={(v) => setSetting(d.burstField, v)}
             />
+          ))}
+          {TIER_SCALARS.map((s) => (
+            <FormField
+              key={s.key}
+              label={t(s.labelKey)}
+              htmlFor={`tier-${s.key}`}
+              description={t(s.descriptionKey, { min: 1, max: s.max })}
+            >
+              <Input
+                id={`tier-${s.key}`}
+                type="number"
+                min="1"
+                max={s.max}
+                step="1"
+                value={settings[s.key] ?? ''}
+                placeholder={t('platformDefaultPlaceholder')}
+                onChange={(e) => setSetting(s.key, e.target.value)}
+              />
+            </FormField>
           ))}
         </div>
       )}
