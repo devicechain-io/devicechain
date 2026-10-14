@@ -222,3 +222,22 @@ func TestTheSyncDoesNothingForAFlippedDeviceItCannotClassify(t *testing.T) {
 	assert.Empty(t, writer.devices)
 	assert.Equal(t, model.CommandHeld.String(), gateStatusOf(t, api, "c-1"))
 }
+
+// A tenant created after the periodic walk last ran gets its record filled, and its marker
+// written, by its first roster fact instead of waiting for the walk's next turn.
+func TestTheFirstFactOfAnUnsyncedTenantFillsItsRecord(t *testing.T) {
+	api := realApi(t)
+	src := &fakeSource{tenants: []string{"acme"}, disabled: map[string][]string{"acme": {"dev-old"}}}
+	proc := &CommandDeliveryProcessor{Api: api, DeviceCommandsWriter: &recordingWriter{}, DisabledSource: src}
+	rc := newTestRosterConsumer(api, proc)
+
+	rc.handle(context.Background(), rosterMsg(t, "dev-new", true, false))
+
+	synced, err := api.TenantGateSynced(gateTenantCtx())
+	require.NoError(t, err)
+	assert.True(t, synced, "the marker is written")
+	got, err := api.DisabledAmong(gateTenantCtx(), []string{"dev-old", "dev-new"})
+	require.NoError(t, err)
+	assert.True(t, got["dev-old"], "the walk filled what the facts had missed")
+	assert.True(t, got["dev-new"])
+}

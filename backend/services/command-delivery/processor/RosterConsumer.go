@@ -26,6 +26,11 @@ type RosterApi interface {
 	SetDeviceDisabled(ctx context.Context, deviceToken string, disabled bool) (bool, error)
 }
 
+// TenantSyncer fills a tenant's record on its first fact (CommandDeliveryProcessor.EnsureTenantSynced).
+type TenantSyncer interface {
+	EnsureTenantSynced(ctx context.Context, tenant string)
+}
+
 // Resumer is what an enable triggers (CommandDeliveryProcessor.ResumeDevice).
 type Resumer interface {
 	ResumeDevice(ctx context.Context, tenant, deviceToken string) error
@@ -111,6 +116,10 @@ func (rc *RosterConsumer) handle(ctx context.Context, msg messaging.Message) {
 		log.Warn().Err(err).Str("subject", msg.Subject).Msg("Device-roster fact dropped: it does not decode to a device.")
 		msg.Ack()
 		return
+	}
+	// Before the fact is applied, so the fact is newer than the read the sync makes and wins.
+	if syncer, ok := rc.Resumer.(TenantSyncer); ok {
+		syncer.EnsureTenantSynced(ctx, tenant)
 	}
 	wasDisabled, err := rc.Api.SetDeviceDisabled(msgctx, ev.DeviceToken, ev.Disabled)
 	if err != nil {

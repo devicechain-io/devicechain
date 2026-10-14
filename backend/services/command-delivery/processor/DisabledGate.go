@@ -272,6 +272,33 @@ func (cproc *CommandDeliveryProcessor) syncDisabledGate(ctx context.Context) err
 	return nil
 }
 
+// EnsureTenantSynced fills a tenant's record on the first roster fact this service sees for it,
+// if nothing has yet. A tenant created after the periodic walk last ran would otherwise have no
+// "synced once" marker until the walk's next turn, however many facts it had already produced;
+// its first fact is the earliest evidence it exists, and the walk for one tenant is one list and
+// one write. A no-op without a source, or for a tenant already synced. Best-effort: a failure
+// is logged by the sync and the periodic walk tries again.
+func (cproc *CommandDeliveryProcessor) EnsureTenantSynced(ctx context.Context, tenant string) {
+	if cproc == nil || cproc.DisabledSource == nil {
+		return
+	}
+	cproc.gateMu.Lock()
+	synced := cproc.gateSynced[tenant]
+	cproc.gateMu.Unlock()
+	if synced {
+		return
+	}
+	writer, ok := cproc.Api.(disabledGateWriter)
+	if !ok {
+		return
+	}
+	if found, err := writer.TenantGateSynced(core.WithTenant(ctx, tenant)); err == nil && found {
+		cproc.rememberSynced(tenant)
+		return
+	}
+	cproc.syncTenant(ctx, writer, tenant)
+}
+
 // syncTenant corrects one tenant's record and reports whether it succeeded.
 func (cproc *CommandDeliveryProcessor) syncTenant(ctx context.Context, writer disabledGateWriter, tenant string) bool {
 	tenantCtx := core.WithTenant(ctx, tenant)

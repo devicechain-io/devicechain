@@ -81,12 +81,10 @@ func (cproc *CommandDeliveryProcessor) reconcileOnePage(ctx context.Context) err
 		// the last-success gauge fresh on an instance where holds are lapsing to EXPIRED.
 		return cproc.releaseEnabledHolds(ctx)
 	}
-	held, next, err := cproc.Api.HeldCommands(core.WithSystemContext(ctx), cproc.reconcileCursor, reconcilePageSize)
+	held, err := cproc.readHeldPage(ctx)
 	if err != nil {
-		log.Error().Err(err).Msg("unable to read withheld commands for reconciliation")
-		return fmt.Errorf("reading withheld commands: %w", err)
+		return err
 	}
-	cproc.reconcileCursor = next
 	if len(held) == 0 {
 		return nil
 	}
@@ -192,12 +190,10 @@ func (cproc *CommandDeliveryProcessor) releaseEnabledHolds(ctx context.Context) 
 	if reader == nil {
 		return core.ErrPassSkipped
 	}
-	held, next, err := cproc.Api.HeldCommands(core.WithSystemContext(ctx), cproc.reconcileCursor, reconcilePageSize)
+	held, err := cproc.readHeldPage(ctx)
 	if err != nil {
-		log.Error().Err(err).Msg("unable to read withheld commands for reconciliation")
-		return fmt.Errorf("reading withheld commands: %w", err)
+		return err
 	}
-	cproc.reconcileCursor = next
 	for _, batch := range groupByTenant(held, cproc.tenantDeleted) {
 		tenantCtx := core.WithTenant(ctx, batch.tenant)
 		if !cproc.gateReady(tenantCtx, batch.tenant) {
@@ -217,4 +213,24 @@ func (cproc *CommandDeliveryProcessor) releaseEnabledHolds(ctx context.Context) 
 		}
 	}
 	return nil
+}
+
+// readHeldPage reads the next bounded page of the withheld set, across tenants, and advances the
+// walk's cursor.
+//
+// 🔴 THE ONE CROSS-TENANT READ OF THE HOLD RECONCILER, AND THE ONLY ONE IT NEEDS. The withheld set
+// spans every tenant and the walk pages it by row id, so a per-tenant statement would not be the
+// same walk: a tenant with a large stuck backlog would again fill every page. The statement
+// carries no tenant predicate; everything the passes do with its rows is scoped, because they
+// group by the row's own tenant and write under core.WithTenant. Both passes (the presence
+// release and the enabled-device backstop) read through here so there is a single sanctioned
+// bypass, not one per pass.
+func (cproc *CommandDeliveryProcessor) readHeldPage(ctx context.Context) ([]*model.Command, error) {
+	held, next, err := cproc.Api.HeldCommands(core.WithSystemContext(ctx), cproc.reconcileCursor, reconcilePageSize)
+	if err != nil {
+		log.Error().Err(err).Msg("unable to read withheld commands for reconciliation")
+		return nil, fmt.Errorf("reading withheld commands: %w", err)
+	}
+	cproc.reconcileCursor = next
+	return held, nil
 }
