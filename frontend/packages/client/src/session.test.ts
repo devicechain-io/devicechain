@@ -4,6 +4,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createSessionTokens, type TokenPair } from './session';
+import { GraphQLRequestError } from './transport';
 
 const NOW = Date.UTC(2026, 9, 14, 12, 0, 0);
 
@@ -161,5 +162,159 @@ describe('startAutoRefresh', () => {
     tokens.startAutoRefresh()();
     await vi.advanceTimersByTimeAsync(120_000);
     expect(refresh).not.toHaveBeenCalled();
+  });
+});
+
+// What the transport throws: no response at all, an HTTP error status, or a GraphQL error.
+const offline = () => new GraphQLRequestError('Failed to fetch', 0);
+const httpError = (status: number) => new GraphQLRequestError(`Request failed (${status})`, status);
+const refused = (code: string) =>
+  new GraphQLRequestError('refused', 200, [{ message: 'refused', extensions: { code } }]);
+
+describe('transient vs definitive refresh failures', () => {
+  it.each([
+    ['no response', offline()],
+    ['a 503', httpError(503)],
+    ['a 429', httpError(429)],
+  ])('%s keeps a still-valid access token in use, without ending the session', async (_, err) => {
+    const { state, tokens } = host(pair(10), vi.fn().mockRejectedValue(err));
+    const held = state.pair!;
+    expect(await tokens.getAccessToken()).toBe(held.accessToken);
+    expect(state.ended).toEqual([]);
+    expect(state.pair).toBe(held);
+  });
+
+  it('a transient failure once the access token has actually expired ends the session', async () => {
+    const err = offline();
+    const { state, tokens } = host(pair(-1), vi.fn().mockRejectedValue(err));
+    expect(await tokens.getAccessToken()).toBeNull();
+    expect(state.ended).toEqual([err]);
+  });
+
+  it.each([
+    ['a 401', httpError(401)],
+    ['a 400', httpError(400)],
+    ['an invalid refresh token', refused('UNAUTHENTICATED')],
+    ['SSO_REQUIRED', refused('SSO_REQUIRED')],
+    ['a GraphQL error carried on a 500', new GraphQLRequestError('x', 500, [{ message: 'x' }])],
+  ])('%s is definitive: the session ends at once', async (_, err) => {
+    const { state, tokens } = host(pair(10), vi.fn().mockRejectedValue(err));
+    expect(await tokens.getAccessToken()).toBeNull();
+    expect(state.ended).toEqual([err]);
+  });
+});
+
+describe('startAutoRefresh retries', () => {
+  it('rides out a network blip: retries with backoff and keeps the session', async () => {
+    const next = pair(900);
+    const refresh = vi
+      .fn()
+      .mockRejectedValueOnce(offline())
+      .mockRejectedValueOnce(httpError(502))
+      .mockResolvedValueOnce(next)
+      .mockImplementation(async () => pair(900));
+    const { state, tokens } = host(pair(60), refresh); // due at +30 s, expires at +60 s
+    const stop = tokens.startAutoRefresh();
+
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(refresh).toHaveBeenCalledTimes(1);
+    expect(state.ended).toEqual([]);
+
+    // Backoff is 1 s then 2 s, each scaled by 50-100 %: both retries land within 3 s.
+    await vi.advanceTimersByTimeAsync(3_000);
+    expect(refresh).toHaveBeenCalledTimes(3);
+    expect(state.pair).toEqual(next);
+    expect(state.ended).toEqual([]);
+
+    // Re-armed against the new token (minted at +0 s, expiring at +900 s): due at +870 s.
+    await vi.advanceTimersByTimeAsync(836_000); // +869 s
+    expect(refresh).toHaveBeenCalledTimes(3);
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(refresh).toHaveBeenCalledTimes(4);
+    stop();
+  });
+
+  it('gives up only when the access token actually expires, not before', async () => {
+    const refresh = vi.fn().mockRejectedValue(offline());
+    const { state, tokens } = host(pair(60), refresh);
+    const stop = tokens.startAutoRefresh();
+
+    await vi.advanceTimersByTimeAsync(58_000); // 2 s of life left
+    expect(state.ended).toEqual([]);
+    const attempts = refresh.mock.calls.length;
+    expect(attempts).toBeGreaterThan(2);
+
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(state.ended).toHaveLength(1);
+    expect(state.ended[0]).toBeInstanceOf(GraphQLRequestError);
+
+    await vi.advanceTimersByTimeAsync(600_000);
+    expect(refresh.mock.calls.length).toBeLessThanOrEqual(attempts + 1); // and then stops
+    stop();
+  });
+
+  it('a refusal during auto-refresh ends the session at once, with no retry', async () => {
+    const err = refused('UNAUTHENTICATED');
+    const refresh = vi.fn().mockRejectedValue(err);
+    const { state, tokens } = host(pair(60), refresh);
+    tokens.startAutoRefresh();
+    await vi.advanceTimersByTimeAsync(31_000);
+    expect(state.ended).toEqual([err]);
+    await vi.advanceTimersByTimeAsync(600_000);
+    expect(refresh).toHaveBeenCalledTimes(1);
+  });
+
+  it('stop() also cancels a pending retry', async () => {
+    const refresh = vi.fn().mockRejectedValue(offline());
+    const { state, tokens } = host(pair(60), refresh);
+    const stop = tokens.startAutoRefresh();
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(refresh).toHaveBeenCalledTimes(1);
+    stop();
+    await vi.advanceTimersByTimeAsync(600_000);
+    expect(refresh).toHaveBeenCalledTimes(1);
+    expect(state.ended).toEqual([]);
+  });
+});
+
+// An unsigned token carrying both `exp` and `iat` (a lifetime the device clock cannot skew).
+function jwtWithIat(lifetimeSeconds: number): string {
+  const now = Math.floor(Date.now() / 1000);
+  return `h.${btoa(JSON.stringify({ iat: now, exp: now + lifetimeSeconds }))}.s`;
+}
+
+describe('the skew against short-lived tokens', () => {
+  it('is capped at half the token lifetime, so a fresh short-lived token is not already due', async () => {
+    // 120 s skew against a 60 s token would make every token due the moment it is issued.
+    const refresh = vi.fn().mockImplementation(async () => ({ accessToken: jwtWithIat(60), refreshToken: jwt(3600) }));
+    const state = { pair: { accessToken: jwtWithIat(60), refreshToken: jwt(3600) } as TokenPair | null };
+    const tokens = createSessionTokens({
+      read: () => state.pair,
+      apply: (next) => {
+        state.pair = next;
+      },
+      refresh,
+      onEnd: () => {},
+      skewSeconds: 120,
+    });
+    expect(await tokens.getAccessToken()).toBe(state.pair!.accessToken);
+    expect(refresh).not.toHaveBeenCalled();
+
+    const stop = tokens.startAutoRefresh();
+    await vi.advanceTimersByTimeAsync(10 * 60_000);
+    // Due at half-life: about one refresh every 30 s, not a loop.
+    expect(refresh.mock.calls.length).toBeGreaterThanOrEqual(15);
+    expect(refresh.mock.calls.length).toBeLessThanOrEqual(25);
+    stop();
+  });
+
+  it('never refreshes in a loop, even when every token it gets back already looks due', async () => {
+    // A device clock far ahead of the server's: each new token looks expired on arrival.
+    const refresh = vi.fn().mockImplementation(async () => pair(-60, 3600));
+    const { tokens } = host(pair(-60, 3600), refresh);
+    const stop = tokens.startAutoRefresh();
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(refresh.mock.calls.length).toBeLessThanOrEqual(7); // the 10 s floor
+    stop();
   });
 });

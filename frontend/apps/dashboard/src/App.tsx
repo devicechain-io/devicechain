@@ -115,6 +115,12 @@ export default function App() {
         },
         refresh: async (refreshToken) =>
           (await gql('user-management', REFRESH, { refreshToken }, { anonymous: true })).refresh,
+        // Refresh two minutes ahead of expiry rather than the default 30 s. A transient
+        // failure (no network, a 5xx) is retried with backoff until the access token actually
+        // expires, and an unattended wall display wants that window long enough to ride out a
+        // Wi-Fi reconnect. A refusal (revoked or invalid refresh token, SSO required) still
+        // ends the session at once.
+        skewSeconds: 120,
         onEnd: (err) => {
           console.warn('/dash: the session ended and could not be refreshed', err);
           pairRef.current = null;
@@ -824,8 +830,16 @@ function FullscreenButton() {
   }, []);
   if (!document.fullscreenEnabled) return null;
   const toggle = () => {
-    const done = on ? document.exitFullscreen() : document.documentElement.requestFullscreen();
-    done.catch((err: unknown) => console.warn('/dash: fullscreen was refused', err));
+    const refused = (err: unknown) => console.warn('/dash: fullscreen was refused', err);
+    // Promise.resolve: an older engine returns undefined rather than a promise, and one that
+    // throws synchronously is caught the same way, so a refusal never escapes the handler.
+    try {
+      Promise.resolve(on ? document.exitFullscreen() : document.documentElement.requestFullscreen()).catch(
+        refused,
+      );
+    } catch (err) {
+      refused(err);
+    }
   };
   return (
     <div style={{ position: 'fixed', top: 8, right: 8, zIndex: 10, opacity: 0.7 }}>

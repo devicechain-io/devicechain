@@ -136,7 +136,7 @@ En cuanto a la creación, es solo de visualización: no hay editor ni guardado, 
 
 #### Renovación de sesión y modo quiosco {#session-refresh-and-kiosk-mode}
 
-`/dash` renueva su token de acceso antes de que caduque, usando el token de renovación que recibió al iniciar sesión. Si la renovación falla (la sesión se cerró en el servidor, el token de renovación caducó o el servicio no responde), el panel se sustituye por un aviso a pantalla completa, **Tu sesión ha terminado**, con un botón **Iniciar sesión de nuevo**, de modo que una pantalla nunca se queda congelada con valores obsoletos. Al iniciar sesión de nuevo vuelve al mismo panel si la dirección incluye el parámetro `dashboard`.
+`/dash` renueva su token de acceso antes de que caduque, usando el token de renovación que recibió al iniciar sesión. Un corte de red o un error del servidor no termina la sesión: el visor sigue reintentando, con pausas cada vez mayores, hasta que el token de acceso actual caduca de verdad. Si el servidor rechaza la renovación (la sesión se cerró en el servidor o el token de renovación caducó), o el corte dura más que el token de acceso, el panel se sustituye por un aviso a pantalla completa, **Tu sesión ha terminado**, con un botón **Iniciar sesión de nuevo**, de modo que una pantalla nunca se queda congelada con valores obsoletos. Al iniciar sesión de nuevo vuelve al mismo panel si la dirección incluye el parámetro `dashboard`.
 
 La dirección puede llevar parámetros, de modo que un marcador o una pantalla de pared abran el panel correcto en el modo correcto:
 

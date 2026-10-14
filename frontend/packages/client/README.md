@@ -69,6 +69,32 @@ setIdentityTokenGetter(async () => store.identityToken);
 
 Login and refresh calls run without a token; pass `{ anonymous: true }` for those.
 
+`createSessionTokens` supplies the refresh logic for that getter. You tell it where
+the token pair lives and how to call refresh. It refreshes shortly before the
+access token expires, shares one in-flight refresh among concurrent callers
+(refresh tokens rotate), and drops a result that arrives after the session was
+replaced:
+
+```ts
+import { createSessionTokens, gql, setAuthTokenGetter } from '@devicechain/client';
+
+const session = createSessionTokens({
+  read: () => store.pair, // { accessToken, refreshToken } | null
+  apply: (pair) => { store.pair = pair; },
+  refresh: async (refreshToken) =>
+    (await gql('user-management', REFRESH, { refreshToken }, { anonymous: true })).refresh,
+  onEnd: (err) => showSignIn(err), // refused, lapsed, or offline past expiry
+});
+setAuthTokenGetter(session.getAccessToken);
+const stop = session.startAutoRefresh(); // optional: refresh on a timer, not only on demand
+```
+
+A refusal from the server, such as an invalid or revoked refresh token, ends the
+session at once. A transient failure does not: no response, a 5xx, or a 429. While
+the access token is still valid, callers keep getting it, and
+`startAutoRefresh` retries with jittered backoff. The session ends only when the
+access token actually expires.
+
 `decodeToken`, `isExpired` and `hasAuthority` are exported for reading claims
 client-side. They decode, they do not verify — the server is the authority.
 

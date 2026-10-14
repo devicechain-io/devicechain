@@ -6,6 +6,7 @@
 // faked: the renderer because a chart library has no business in these assertions, the fetch
 // because it needs a server.
 
+import { GraphQLRequestError } from '@devicechain/client';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -277,7 +278,7 @@ describe('access-token refresh', () => {
 
   it('refreshes before the access token expires and hands the new one to the transport', async () => {
     landOn('?dashboard=wall&kiosk=1');
-    signedInWith(120);
+    signedInWith(300);
     const next = { accessToken: jwt(900), refreshToken: jwt(86400) };
     const refresh = vi.fn().mockReturnValue({ refresh: next });
     serve({ refresh });
@@ -288,12 +289,12 @@ describe('access-token refresh', () => {
     expect(screen.getByTestId('board')).toBeTruthy();
 
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(80_000);
+      await vi.advanceTimersByTimeAsync(170_000);
     });
-    expect(refresh).not.toHaveBeenCalled(); // 40 s of life left: outside the skew
+    expect(refresh).not.toHaveBeenCalled(); // 130 s of life left: outside the 120 s skew
 
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(15_000); // 25 s of life left: refreshed ahead of expiry
+      await vi.advanceTimersByTimeAsync(15_000); // 115 s of life left: refreshed ahead of expiry
     });
     expect(refresh).toHaveBeenCalledTimes(1);
     // The websocket path resolves its token through this getter on every (re)connect.
@@ -304,10 +305,10 @@ describe('access-token refresh', () => {
 
   it('keeps refreshing, so a display outlives many access tokens', async () => {
     landOn('?dashboard=wall&kiosk=1');
-    signedInWith(100);
+    signedInWith(300);
     let n = 0;
     const refresh = vi.fn().mockImplementation(() => ({
-      refresh: { accessToken: jwt(100), refreshToken: jwt(86400 + ++n) },
+      refresh: { accessToken: jwt(300), refreshToken: jwt(86400 + ++n) },
     }));
     serve({ refresh });
     render(<App />);
@@ -315,9 +316,11 @@ describe('access-token refresh', () => {
       await vi.advanceTimersByTimeAsync(0);
     });
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(10 * 60_000);
+      await vi.advanceTimersByTimeAsync(30 * 60_000);
     });
+    // One refresh every 180 s (300 s tokens, 120 s skew): about ten in half an hour.
     expect(refresh.mock.calls.length).toBeGreaterThanOrEqual(8);
+    expect(refresh.mock.calls.length).toBeLessThanOrEqual(11);
     expect(screen.queryByRole('alertdialog')).toBeNull();
     expect(screen.getByTestId('board')).toBeTruthy();
   });
@@ -325,10 +328,10 @@ describe('access-token refresh', () => {
   it('a failed refresh replaces the board with a visible session-ended overlay', async () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {});
     landOn('?dashboard=wall&kiosk=1');
-    signedInWith(120);
+    signedInWith(300);
     serve({
       refresh: () => {
-        throw new Error('refresh refused');
+        throw new GraphQLRequestError('invalid refresh token', 200, [{ message: 'invalid refresh token' }]);
       },
     });
     render(<App />);
@@ -338,7 +341,7 @@ describe('access-token refresh', () => {
     expect(screen.queryByRole('alertdialog')).toBeNull();
 
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(95_000);
+      await vi.advanceTimersByTimeAsync(185_000); // the first refresh is refused: no retry
     });
     const overlay = screen.getByRole('alertdialog');
     expect(overlay.textContent).toContain(t('common:sessionEndedTitle'));
@@ -349,5 +352,63 @@ describe('access-token refresh', () => {
     fireEvent.click(screen.getByRole('button', { name: t('common:sessionEndedAction') }));
     expect(screen.getByLabelText(t('signIn:emailLabel'))).toBeTruthy();
     expect(window.location.search).toBe('?dashboard=wall&kiosk=1');
+  });
+
+  it('a network blip during the refresh does not end the session: it is retried', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    landOn('?dashboard=wall&kiosk=1');
+    signedInWith(300);
+    const next = { accessToken: jwt(900), refreshToken: jwt(86400) };
+    let calls = 0;
+    const refresh = vi.fn().mockImplementation(() => {
+      calls++;
+      if (calls <= 3) throw new GraphQLRequestError('Failed to fetch', 0);
+      return { refresh: next };
+    });
+    serve({ refresh });
+    render(<App />);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(180_200); // due at +180 s; the first attempt fails
+    });
+    expect(refresh).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+    expect(screen.getByTestId('board')).toBeTruthy();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(15_000); // backoff 1 s, 2 s, 4 s (each 50-100 %)
+    });
+    expect(refresh).toHaveBeenCalledTimes(4);
+    expect(await h.getter!()).toBe(next.accessToken);
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+    expect(screen.getByTestId('board')).toBeTruthy();
+  });
+
+  it('an outage that outlasts the access token ends the session when the token expires, not before', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    landOn('?dashboard=wall&kiosk=1');
+    signedInWith(300);
+    serve({
+      refresh: () => {
+        throw new GraphQLRequestError('Request failed (503)', 503);
+      },
+    });
+    render(<App />);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(297_000); // 3 s of life left, every retry failed
+    });
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+    expect(screen.getByTestId('board')).toBeTruthy();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(3_000);
+    });
+    expect(screen.getByRole('alertdialog')).toBeTruthy();
+    expect(screen.queryByTestId('board')).toBeNull();
   });
 });

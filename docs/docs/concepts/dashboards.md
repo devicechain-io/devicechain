@@ -138,7 +138,7 @@ It is view-only as to authoring: there is no editor and no save, and it only eve
 
 #### Session refresh and kiosk mode {#session-refresh-and-kiosk-mode}
 
-`/dash` renews its access token ahead of expiry, using the refresh token it received at sign-in. If the renewal fails (the sign-in was ended on the server, the refresh token lapsed, or the service is unreachable), the board is replaced by a full-screen **Your session has ended** notice with a **Sign in again** button, so a display never sits frozen on stale values. Signing in again returns to the same board when the address carries a `dashboard` parameter.
+`/dash` renews its access token ahead of expiry, using the refresh token it received at sign-in. A network outage or a server error does not end the session: the viewer keeps retrying, with growing pauses, until the current access token actually expires. If the server refuses the renewal (the sign-in was ended on the server, or the refresh token lapsed), or the outage outlasts the access token, the board is replaced by a full-screen **Your session has ended** notice with a **Sign in again** button, so a display never sits frozen on stale values. Signing in again returns to the same board when the address carries a `dashboard` parameter.
 
 The address can carry parameters, so a bookmark or a wall display opens the right board in the right mode:
 
