@@ -34,10 +34,6 @@ const SETTLE_FRAMES = 20;
 // RATCHET, not a waiver: a finding not listed fails (a regression), and so does a listed one
 // that no longer occurs at that width in either theme (the fix landed, so the entry goes).
 const KNOWN_FAILURES: ReadonlySet<string> = new Set<string>([
-  // The engine-temperature card's title ("Engine temp — overheat above 105 °C") is cut to an
-  // ellipsis at 960 px: the frame keeps titles to one line, and this card is too narrow for it.
-  'sp-dashboard|sp-engine-temp|text-overflow|960',
-  'sp-dashboard|sp-engine-temp|text-clipped|960',
   // The same table in the widget lab's half-width card, with seven columns: Raised is cut off.
   'wl-gallery|wl-alarm-table|text-clipped|960',
   // One unbreakable 101-letter word in a half-width label runs out of the card. The stress
