@@ -175,6 +175,12 @@ jobs:
           cache: true
           cache-dependency-path: "**/go.sum"
 
+      # Prefetch the module graph with a bounded retry and a fallback off the module proxy, so
+      # one dropped stream from proxy.golang.org does not fail the job inside whichever build
+      # step happened to trigger the download. See hack/go-mod-download.sh.
+      - name: go mod download
+        run: hack/go-mod-download.sh "${{ matrix.module }}"
+
       # Pinned for the same reasons as ci.yml's image-smoke — and it matters more here.
       # The action's default "latest-release" resolves ko by curl-ing GitHub's
       # AUTHENTICATED API and piping the body to jq, so an API blip fails the job with
@@ -183,12 +189,6 @@ jobs:
       # reason that has nothing to do with the code. It also means the released images
       # are built by whichever ko happened to be current that day; a release should be
       # reproducible. Keep this in step with ci.yml — bump both together, deliberately.
-      # Prefetch the module graph with a bounded retry and a fallback off the module proxy, so
-      # one dropped stream from proxy.golang.org does not fail the job inside whichever build
-      # step happened to trigger the download. See hack/go-mod-download.sh.
-      - name: go mod download
-        run: hack/go-mod-download.sh "${{ matrix.module }}"
-
       - uses: ko-build/setup-ko@61b4d1d396f5b2e7d6bb6fefdce3dc38d1a13445 # v0.10
         with:
           version: v0.19.1
