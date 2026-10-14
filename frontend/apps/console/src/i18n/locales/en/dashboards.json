@@ -160,7 +160,7 @@
   "widgetTileUncredited": "This tile URL has no credit line, so it is ignored and the widget draws the tenant basemap instead. A tile source and the attribution its licence requires are used together or not at all.",
   "widgetPlaceholderAny": "Any",
   "widgetLabelThresholds": "Thresholds",
-  "widgetHintThresholds": "Each row starts a severity band at its value; the band runs until the next row. Below the first row the widget keeps its normal colour.",
+  "widgetHintThresholds": "Each row starts a severity band at its value; the band runs until the next row. Below the first row, and in a Normal band, the widget keeps its ordinary colour: only abnormal levels are coloured.",
   "widgetLabelThresholdValue": "Starts at",
   "widgetLabelThresholdLevel": "Severity",
   "widgetLabelThresholdLabel": "Label",

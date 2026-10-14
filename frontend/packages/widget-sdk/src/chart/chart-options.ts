@@ -10,7 +10,7 @@ import type { MeasurementSample } from '@devicechain/dashboards';
 import { fitValueFont } from '../fit-text';
 import { formatValue } from '../format';
 import type { ElementSize } from '../hooks';
-import type { SeverityLevel } from '../severity';
+import { isAlarmLevel, levelColor, type AlarmLevel } from '../severity';
 import { bandAt, parseThresholds, thresholdBands, type Threshold } from '../thresholds';
 
 import type { ChartTheme } from './chart-theme';
@@ -28,14 +28,13 @@ function distinctNames(samples: MeasurementSample[]): string[] {
 
 // A severity colour with an alpha, for a band drawn UNDER the data (markArea). The theme's
 // severity colours are comma-form hsl(), so the alpha form is a string edit.
-export function severityFill(theme: ChartTheme, level: SeverityLevel, alpha: number): string {
+export function severityFill(theme: ChartTheme, level: AlarmLevel, alpha: number): string {
   return theme.severity[level].replace(/^hsl\(/, 'hsla(').replace(/\)$/, `, ${alpha})`);
 }
 
 // Opacity of a threshold band behind a line: enough to read as a zone, faint enough that the
-// line and its grid stay the subject. `normal` is fainter still -- green everywhere is noise.
+// line and its grid stay the subject. A `normal` band has no fill at all.
 const BAND_ALPHA = 0.14;
-const NORMAL_BAND_ALPHA = 0.06;
 
 const clamp = (v: number, lo: number, hi: number): number => Math.max(lo, Math.min(hi, v));
 
@@ -64,6 +63,10 @@ export interface LineChartOptions {
 // belong to a series in ECharts, and every series shares the one y-axis).
 function thresholdMarks(theme: ChartTheme, thresholds: readonly Threshold[], unit: string | undefined, precision: number | undefined, fontSize: number) {
   const suffix = unit ? ` ${unit}` : '';
+  // A `normal` threshold is still drawn: it is where the value RETURNS to normal, which an
+  // operator wants to see. It is drawn in the muted text colour, the same ink as the axis
+  // labels, which reads in light and dark and says "boundary" without saying "alarm".
+  const ink = (t: Threshold) => levelColor(theme.severity, t.level) ?? theme.mutedForeground;
   const markLine = {
     silent: true,
     symbol: 'none',
@@ -71,11 +74,11 @@ function thresholdMarks(theme: ChartTheme, thresholds: readonly Threshold[], uni
     data: thresholds.map((t) => ({
       yAxis: t.value,
       name: t.label ?? String(t.value),
-      lineStyle: { color: theme.severity[t.level], type: 'dashed' as const, width: 1.5 },
+      lineStyle: { color: ink(t), type: 'dashed' as const, width: 1.5 },
       label: {
         show: true,
         position: 'insideEndTop' as const,
-        color: theme.severity[t.level],
+        color: ink(t),
         fontSize,
         formatter: () => t.label ?? `${formatValue(t.value, precision)}${suffix}`,
       },
@@ -85,9 +88,9 @@ function thresholdMarks(theme: ChartTheme, thresholds: readonly Threshold[], uni
     silent: true,
     animation: false,
     data: thresholdBands(thresholds, -Infinity, Infinity)
-      .filter((b) => b.level !== undefined)
+      .filter((b) => isAlarmLevel(b.level))
       .map((b) => [
-        { yAxis: b.from, itemStyle: { color: severityFill(theme, b.level as SeverityLevel, b.level === 'normal' ? NORMAL_BAND_ALPHA : BAND_ALPHA) } },
+        { yAxis: b.from, itemStyle: { color: severityFill(theme, b.level as AlarmLevel, BAND_ALPHA) } },
         { yAxis: b.to },
       ]),
   };
@@ -186,12 +189,12 @@ export interface GaugeChartOptions {
 export const GAUGE_AXIS_LABELS_MIN_SIDE = 120;
 
 // The arc's colour stops: ECharts wants [[endFraction, colour], ...] ending at 1. A neutral
-// stretch (below the lowest threshold) takes the track colour. With no bands: one track.
+// stretch (below the lowest threshold, or a `normal` band) takes the track colour. With no bands: one track.
 function gaugeArcColors(bands: ReturnType<typeof thresholdBands>, min: number, max: number, theme: ChartTheme): [number, string][] {
   if (bands.length === 0) return [[1, theme.border]];
   return bands.map((b, i): [number, string] => [
     i === bands.length - 1 ? 1 : (b.to - min) / (max - min),
-    b.level ? theme.severity[b.level] : theme.border,
+    levelColor(theme.severity, b.level) ?? theme.border,
   ]);
 }
 
@@ -209,13 +212,13 @@ export function buildGaugeOption(
   const max = options.max ?? 100;
   const thresholds = parseThresholds(options.thresholds ?? []); // validated + sorted, as above
   const bands = thresholdBands(thresholds, min, max);
-  // Banded only when a severity band actually lands on the arc: thresholds that all sit above
-  // `max` leave a plain neutral track, which keeps the progress arc like any other gauge.
-  const banded = bands.some((b) => b.level !== undefined);
-  // The needle takes the colour of the band the value sits in; with no bands (or below the
-  // lowest) it keeps the chart accent.
-  const hit = bandAt(thresholds, value);
-  const accent = hit ? theme.severity[hit.level] : theme.series[0];
+  // Banded only when a COLOURED band actually lands on the arc: thresholds that all sit above
+  // `max`, or only `normal` bands, leave a plain neutral track, which keeps the progress arc
+  // like any other gauge.
+  const banded = bands.some((b) => isAlarmLevel(b.level));
+  // The needle takes the colour of the band the value sits in; with no bands, below the
+  // lowest, or in a `normal` band it keeps the chart accent.
+  const accent = levelColor(theme.severity, bandAt(thresholds, value)?.level) ?? theme.series[0];
   const unitSuffix = options.unit ? ` ${options.unit}` : '';
 
   const s = shortSide(size);

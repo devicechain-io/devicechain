@@ -13,6 +13,7 @@ import {
   flashTextStyle,
   formatTimestamp,
   formatValue,
+  levelColor,
   optBoolean,
   optNumber,
   optString,
@@ -47,10 +48,10 @@ export function LatestCard({ widget, data }: WidgetProps) {
   const precision = optNumber(widget.options, 'precision');
   const display = formatValue(sample?.value, precision);
   // The value reads in the colour of the band it falls in; below the lowest threshold (or with
-  // none) it keeps the foreground. The same severity colours the chart widgets resolve.
+  // none, or in a `normal` band) it keeps the foreground: colour only for the abnormal.
   const thresholds = useMemo(() => optThresholds(widget.options, 'thresholds'), [widget.options]);
   const band = bandAt(thresholds, sample?.value);
-  const valueColor = band ? severity[band.level] : css('foreground');
+  const valueColor = levelColor(severity, band?.level) ?? css('foreground');
 
   // Opt-in directional flash: tint the number green/red on a rise/fall, then fade back. The
   // identity (device + measurement) suppresses a false flash when an anchor's single slot

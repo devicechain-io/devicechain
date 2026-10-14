@@ -5,7 +5,9 @@
 //
 // A threshold STARTS a band: it holds from its `value` up to the next threshold's value (or
 // without end, for the last). Below the lowest threshold there is no band, so a value there
-// reads in the widget's own neutral colour. This one rule covers both directions:
+// reads in the widget's own neutral colour, as does a value in a `normal` band (normal has no
+// colour; see severity.ts), so a healthy value looks the same under either kind of rule.
+// This one rule covers both directions:
 //   - "overheat above 105"      -> [{ value: 105, level: 'critical' }]
 //   - "low fuel below 15"       -> [{ value: 0, level: 'critical' }, { value: 15, level: 'normal' }]
 // A value ON a threshold belongs to the band that threshold starts (>=), never the one below.

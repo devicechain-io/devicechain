@@ -86,6 +86,13 @@ describe('latest-card colours its value by the band it falls in', () => {
     expect(screen.getByText('90').style.color).toContain('var(--foreground)');
   });
 
+  it('a HEALTHY value (the normal band) has no severity colour: it paints the plain foreground', () => {
+    render(<LatestCard widget={widget('latest-card', { thresholds })} data={data(sample(50))} />);
+    const value = document.querySelector<HTMLElement>('[data-threshold-level]')!;
+    expect(value.getAttribute('data-threshold-level')).toBe('normal');
+    expect(value.style.color).toContain('var(--foreground)');
+  });
+
   it('ignores a malformed list rather than crashing', () => {
     render(<LatestCard widget={widget('latest-card', { thresholds: 'nope' })} data={data(sample(5))} />);
     expect(screen.getByText('5')).toBeTruthy();
@@ -114,6 +121,13 @@ describe('gauge and chart draw their thresholds', () => {
     const stops = series[0].axisLine.lineStyle.color as [number, string][];
     expect(stops.map(([end]) => end)).toEqual([0.15, 0.8, 1]);
     expect(new Set(stops.map(([, colour]) => colour)).size).toBe(3);
+    // The normal band is the plain track, the same colour as a gauge with no thresholds.
+    cleanup();
+    render(<Gauge widget={widget('gauge', { min: 0, max: 100 })} data={data(sample(50))} />);
+    const plain = JSON.parse(screen.getByTestId('echart').getAttribute('data-series') as string);
+    expect(stops[1][1]).toBe(plain[0].axisLine.lineStyle.color[0][1]);
+    // ...and a healthy value keeps the plain needle.
+    expect(series[0].pointer.itemStyle.color).toBe(plain[0].pointer.itemStyle.color);
   });
 
   it('the gauge arc is one neutral track without thresholds', () => {

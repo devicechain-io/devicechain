@@ -65,7 +65,7 @@ const THRESHOLDS = {
   maxItems: 12,
   labelId: 'widgetLabelThresholds',
   helpId: 'widgetHintThresholds',
-  doc: 'Severity bands over the value. Each entry starts a band at its value that runs to the next entry; below the first the widget keeps its own colour.',
+  doc: 'Severity bands over the value. Each entry starts a band at its value that runs to the next entry; below the first, and in a normal band, the widget keeps its own colour.',
   item: {
     value: {
       kind: 'number',
@@ -86,7 +86,7 @@ const THRESHOLDS = {
         critical: 'widgetSeverityCritical',
       },
       placeholderId: 'widgetPlaceholderThresholdLevel',
-      doc: 'The severity of this band. The theme decides the colour.',
+      doc: 'The severity of this band. The theme decides the colour; normal has none.',
     },
     label: {
       kind: 'string',

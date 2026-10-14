@@ -133,7 +133,8 @@ almacenada con un campo que `item` no declara, y el formulario de ajustes muestr
 con un control por campo. La opción integrada `thresholds` del medidor, la tarjeta de último valor y el
 gráfico de serie temporal es una de ellas: cada entrada nombra una severidad (`normal`, `warning`,
 `minor`, `major` o `critical`), nunca un color, de modo que el tema decide su aspecto en claro y en
-oscuro.
+oscuro. Solo los niveles anómalos tienen color: un valor en una banda `normal` se ve exactamente igual
+que sin umbrales, de modo que una lectura sana nunca se colorea.
 
 Lee las opciones de forma defensiva con los ayudantes del SDK `optString`, `optNumber` y
 `optBoolean`. Ante un valor editado a mano del tipo equivocado no lanzan

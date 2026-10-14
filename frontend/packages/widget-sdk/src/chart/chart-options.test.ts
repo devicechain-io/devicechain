@@ -13,7 +13,6 @@ const theme: ChartTheme = {
   border: '#333',
   series: ['#c1', '#c2', '#c3', '#c4', '#c5'],
   severity: {
-    normal: 'hsl(1, 1%, 1%)',
     warning: 'hsl(2, 2%, 2%)',
     minor: 'hsl(3, 3%, 3%)',
     major: 'hsl(4, 4%, 4%)',
@@ -161,6 +160,25 @@ describe('buildLineOption units, precision and thresholds', () => {
     ]);
   });
 
+  it('a normal threshold keeps its (muted) line but gets no band fill', () => {
+    const o = opt(
+      buildLineOption(data, theme, {
+        thresholds: [
+          { value: 0, level: 'major' },
+          { value: 15, level: 'normal' },
+        ],
+      }),
+    );
+    const marks = o.series[0].markLine.data;
+    expect(marks.map((m: { yAxis: number }) => m.yAxis)).toEqual([0, 15]);
+    expect(marks[1].lineStyle.color).toBe('#999'); // mutedForeground: the return-to-normal boundary
+    expect(marks[1].label.color).toBe('#999');
+    const areas = o.series[0].markArea.data;
+    expect(areas).toHaveLength(1);
+    expect(areas[0][0].yAxis).toBe(0);
+    expect(areas[0][1].yAxis).toBe(15);
+  });
+
   it('adds no markers without thresholds', () => {
     expect(opt(buildLineOption(data, theme)).series[0].markLine).toBeUndefined();
   });
@@ -252,8 +270,21 @@ describe('buildGaugeOption', () => {
     )[0];
     expect(gauge.axisLine.lineStyle.color).toEqual([
       [0.5, 'hsl(4, 4%, 4%)'],
-      [1, 'hsl(1, 1%, 1%)'],
+      [1, '#333'], // normal: the neutral track, not a colour
     ]);
+  });
+
+  it('a value in a normal band keeps the plain needle, and an arc with only normal bands keeps the progress arc', () => {
+    const below = { thresholds: [{ value: 0, level: 'major' as const }, { value: 15, level: 'normal' as const }] };
+    const healthy = seriesOf(buildGaugeOption(50, theme, { min: 0, max: 100, ...below }))[0];
+    expect(healthy.pointer.itemStyle.color).toBe('#c1');
+    expect(seriesOf(buildGaugeOption(5, theme, { min: 0, max: 100, ...below }))[0].pointer.itemStyle.color).toBe('hsl(4, 4%, 4%)');
+    const onlyNormal = seriesOf(buildGaugeOption(50, theme, { min: 0, max: 100, thresholds: [{ value: 10, level: 'normal' }] }))[0];
+    expect(onlyNormal.axisLine.lineStyle.color).toEqual([
+      [0.1, '#333'],
+      [1, '#333'],
+    ]);
+    expect(onlyNormal.progress.show).toBe(true);
   });
 
   it('fits the readout font to the string length', () => {

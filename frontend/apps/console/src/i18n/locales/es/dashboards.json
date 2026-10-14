@@ -160,7 +160,7 @@
   "widgetTileUncredited": "Esta URL de teselas no tiene línea de créditos, así que se ignora y el widget dibuja el mapa base del inquilino. Un origen de teselas y la atribución que exige su licencia se usan juntos o no se usa ninguno.",
   "widgetPlaceholderAny": "Cualquiera",
   "widgetLabelThresholds": "Umbrales",
-  "widgetHintThresholds": "Cada fila inicia una banda de severidad en su valor; la banda llega hasta la fila siguiente. Por debajo de la primera fila el widget conserva su color normal.",
+  "widgetHintThresholds": "Cada fila inicia una banda de severidad en su valor; la banda llega hasta la fila siguiente. Por debajo de la primera fila, y en una banda Normal, el widget conserva su color habitual: solo se colorean los niveles anómalos.",
   "widgetLabelThresholdValue": "Comienza en",
   "widgetLabelThresholdLevel": "Severidad",
   "widgetLabelThresholdLabel": "Etiqueta",

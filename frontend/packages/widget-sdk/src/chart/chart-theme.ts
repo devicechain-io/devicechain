@@ -9,7 +9,7 @@
 import { useMemo, useSyncExternalStore } from 'react';
 
 import { useWidgetThemeRoot } from '../context';
-import { severityColorsAt, severityFallbackColors, type SeverityLevel } from '../severity';
+import { severityColorsAt, severityFallbackColors, type AlarmLevel } from '../severity';
 
 // Concrete colors for an ECharts canvas, resolved from the CSS variables in scope
 // at a given element (charts can't use CSS vars directly).
@@ -18,9 +18,10 @@ export interface ChartTheme {
   mutedForeground: string;
   border: string;
   series: string[];
-  // The five threshold colours, concrete (comma-form `hsl(h, s%, l%)`, which every canvas
-  // colour parser accepts and which severityFill can add an alpha to).
-  severity: Record<SeverityLevel, string>;
+  // The four coloured threshold levels, concrete (comma-form `hsl(h, s%, l%)`, which every
+  // canvas colour parser accepts and which severityFill can add an alpha to). `normal` has
+  // none: it renders in the widget's own neutral (see severity.ts).
+  severity: Record<AlarmLevel, string>;
 }
 
 // Fallbacks used when a variable is absent (e.g. jsdom, or a host that hasn't set

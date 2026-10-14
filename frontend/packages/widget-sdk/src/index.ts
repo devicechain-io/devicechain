@@ -61,12 +61,16 @@ export {
 } from './freshness';
 export { formatDateTime, formatTimestamp, formatValue } from './format';
 export {
+  ALARM_LEVELS,
   SEVERITY_LEVELS,
   SEVERITY_TOKENS,
+  isAlarmLevel,
   isSeverityLevel,
+  levelColor,
   severityTokenCss,
   severityVar,
   useSeverityColors,
+  type AlarmLevel,
   type SeverityLevel,
 } from './severity';
 export {

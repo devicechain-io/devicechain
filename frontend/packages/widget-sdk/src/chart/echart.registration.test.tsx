@@ -26,7 +26,6 @@ const theme: ChartTheme = {
   border: '#333',
   series: ['#c1', '#c2', '#c3', '#c4', '#c5'],
   severity: {
-    normal: 'hsl(1, 1%, 1%)',
     warning: 'hsl(2, 2%, 2%)',
     minor: 'hsl(3, 3%, 3%)',
     major: 'hsl(4, 4%, 4%)',

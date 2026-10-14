@@ -126,7 +126,8 @@ A `list` option stores an array of small objects, such as a widget's thresholds.
 `item` does not declare is rejected, and the settings form renders one row per entry with one control
 per field. The built-in `thresholds` option on the gauge, latest card and timeseries chart is one: each
 entry names a severity (`normal`, `warning`, `minor`, `major` or `critical`), never a colour, so the
-theme decides how it looks in light and dark.
+theme decides how it looks in light and dark. Only the abnormal levels have a colour: a value in a
+`normal` band looks exactly as it would with no thresholds, so a healthy reading is never painted.
 
 Read options defensively with the SDK helpers `optString`, `optNumber` and `optBoolean`. For a hand-edited
 value of the wrong type they do not throw: `optString` and `optNumber` return `undefined`, and
