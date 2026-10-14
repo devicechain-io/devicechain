@@ -4,7 +4,7 @@ title: Autoría Asistida por IA
 
 # Autoría Asistida por IA
 
-En DeviceChain puedes crear una regla de detección de tres maneras: un **formulario** tipado, un **lienzo de automatización** visual y, con el servicio de IA habilitado, una puerta **"Describir"** en lenguaje sencillo. Con la puerta Describir escribes *"levanta una alarma alta cuando la temperatura de un congelador se mantenga por encima de -15°C durante más de diez minutos"*, y la plataforma redacta una regla que puedes revisar, ajustar y publicar.
+En DeviceChain puedes crear una regla de detección de tres maneras: un **formulario** tipado, un **lienzo de automatización** visual y, con el servicio de IA habilitado, una puerta **"Describir"** en lenguaje sencillo. Con la puerta Describir escribes *"levanta una alarma alta cuando la temperatura de un congelador se mantenga por encima de -15°C durante más de diez minutos"*, y la plataforma redacta una regla. El borrador se abre en el formulario de reglas, donde lo revisas y ajustas, y luego lo guardas en el borrador del perfil de dispositivo. Como cualquier regla, empieza a ejecutarse solo cuando publicas el perfil.
 
 Las tres puertas convergen en el **mismo esquema de reglas estructurado** y pasan por el **mismo compilador**. La IA es una puerta de entrada más hacia un único backend determinista. Nunca es un segundo motor, y nunca forma parte de la ruta de eventos en vivo.
 
@@ -18,7 +18,7 @@ La mutación `draftDetectionRuleFromText` llama al servicio de IA y ejecuta un c
 
 ## Cómo se verifica una regla redactada {#ai-proposes-the-compiler-disposes}
 
-Cada superficie de autoría produce una regla candidata. Después, el **compilador CEL** la analiza, verifica sus tipos y le aplica límites de costo antes de que pueda guardarse. Una regla mal formada, con tipos incorrectos o que supere el tope de costo de la plataforma es **rechazada al publicar, antes de llegar a ejecutarse**. La puerta de IA no es la excepción: el modelo propone una candidata, y el compilador la acepta o la rechaza exactamente igual que una regla dibujada a mano en el lienzo.
+Cada superficie de autoría produce una regla candidata. Después, el **compilador CEL** la analiza, verifica sus tipos y le aplica límites de costo. La consola hace esa comprobación mientras redactas, y la plataforma la repite al publicar el perfil: una regla mal formada, con tipos incorrectos o que supere el tope de costo de la plataforma es **rechazada al publicar, antes de llegar a ejecutarse**. La puerta de IA no es la excepción: el modelo propone una candidata, y el compilador la acepta o la rechaza exactamente igual que una regla dibujada a mano en el lienzo.
 
 Este es el **límite de determinismo**, y es una línea firme:
 
@@ -26,7 +26,7 @@ Este es el **límite de determinismo**, y es una línea firme:
 - Lo que se ejecuta es la **regla compilada** — CEL determinista sobre el motor de streaming con clave. Por construcción, produce los mismos disparos cuando se reprocesan los eventos ([replay-correct](./event-processing.md)).
 - **Ni el modelo ni el lienzo se sitúan jamás en la ruta de detección replay-correct.** Un reinicio vuelve a derivar disparos idénticos a partir de la regla compilada; el modelo que ayudó a redactarla no está en ningún punto de ese ciclo.
 
-Cuando usas la puerta Describir, el servicio ejecuta un **ciclo acotado de compilación y reparación**. Redacta una candidata y la compila. Si el compilador la rechaza, el servicio le devuelve el error para un número limitado de intentos de reparación. Lo que recibes es una candidata que ya compila. Tú sigues revisándola y publicándola por tu cuenta; nada queda activado en tu nombre.
+Cuando usas la puerta Describir, el servicio ejecuta un **ciclo acotado de compilación y reparación**. Redacta una candidata y la compila. Si el compilador la rechaza, el servicio le devuelve el error para un número limitado de intentos de reparación. Lo que recibes es una candidata que ya compila. Tú sigues revisándola en el formulario y guardándola en el borrador del perfil por tu cuenta, y solo se ejecuta cuando publicas el perfil; nada queda activado en tu nombre.
 
 ## Proveedores de IA {#ai-providers-are-operator-configuration}
 
@@ -49,7 +49,7 @@ Los usuarios **no** eligen un modelo por tarea. La elección de modelo es config
 
 ## En la consola {#where-it-lives-in-the-console}
 
-- **Puerta Describir** — en la superficie de autoría de reglas de detección del perfil de dispositivo, junto al constructor de formularios y el lienzo de automatización. Se ofrece al **crear** una regla nueva; una regla existente la editas en el formulario o en el lienzo. Escribe una descripción, revisa la regla redactada y publícala.
+- **Puerta Describir** — en la superficie de autoría de reglas de detección del perfil de dispositivo, junto al constructor de formularios y el lienzo de automatización. Se ofrece al **crear** una regla nueva; una regla existente la editas en el formulario o en el lienzo. Escribe una descripción, revisa la regla redactada en el formulario y guárdala en el borrador del perfil. Se ejecuta cuando publicas el perfil.
 - **Proveedores de IA** — `/admin/ai-providers` (plano de administración): registra proveedores, configura claves y prueba la conectividad.
 - **Empaquetado de IA** — la matriz de concesiones entre niveles que define qué modelos puede usar cada nivel.
 - **Modelo por inquilino** — se configura en la página de detalle del inquilino, por función, a partir del menú derivado del nivel.

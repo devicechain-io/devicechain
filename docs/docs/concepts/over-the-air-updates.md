@@ -12,12 +12,12 @@ the device proves it is running the new version.
 :::note Status
 **Available today:** the artifact catalogue with a verified streaming upload, assignment to one
 device at a time, a resumable download through a short-lived grant, and tracking of each attempt
-with deadlines.
+with deadlines. The console has screens for artifacts and signers, and an Updates tab on each
+device for assigning and following an update; see [Updates](/user-guide/updates) in the user guide.
 
-**Not yet:** there is no fleet rollout (staged or percentage-based assignment across many devices); there are no console
-screens for updates, so you use GraphQL and the HTTP upload; and devices that speak only HTTP
-cannot receive updates, because assignments travel on the device's MQTT channel. For the same reason
-[LwM2M](./lwm2m.md) and [Sparkplug](./sparkplug.md) devices cannot receive them either; an LwM2M
+**Not yet:** there is no fleet rollout (staged or percentage-based assignment across many devices),
+and devices that speak only HTTP cannot receive updates, because assignments travel on the device's
+MQTT channel. For the same reason [LwM2M](./lwm2m.md) and [Sparkplug](./sparkplug.md) devices cannot receive them either; an LwM2M
 device's firmware is driven with ordinary commands instead.
 :::
 

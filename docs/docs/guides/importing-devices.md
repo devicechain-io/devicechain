@@ -20,7 +20,7 @@ Import is **create-only** and **safe to run again**. The device token is the key
 3. Choose a CSV file, or paste the rows. The file needs a header row.
 4. Check the column mapping. Columns whose header matches a field are mapped for you, including the headers the console's own **Export CSV** writes, so an exported list can be imported as it is. Choose a device type for the whole file if the file has no type column.
 5. Choose **Check the file**. This is a dry run: the server decides every row exactly as the real import will and writes nothing. The results list each row's outcome and can be filtered by outcome.
-6. Choose **Import**. The rows are sent in batches of 1000, one after another, with progress; **Stop after this batch** ends the run cleanly between batches.
+6. Choose **Import N devices** (N is the number of rows the check found would be created). The rows are sent in batches of 1000, one after another, with progress; **Stop after this batch** ends the run cleanly between batches.
 7. When it finishes, download the **results** (every row's outcome) or the **failed rows**, fix them, and import that file. Devices that were already created report `EXISTS` and are left alone.
 
 A file may hold up to 10,000 rows and 5 MiB. A larger file is refused before it is read; split it and import the parts.

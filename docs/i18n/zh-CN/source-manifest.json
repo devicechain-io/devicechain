@@ -202,9 +202,77 @@
       "sourceSha256": "ba33ad7f0231e2fbfbc42c31b76329dc426da287dc61b50d7d52fd54285cc5ff",
       "translationSha256": "537017fd2d281fe0e2de9da13b1afbc207f6b0cd3d0182838577d91a0bd595d4"
     },
+    "user-guide/administering-the-instance.md": {
+      "sourceSha256": "1d04e18823a3e751194d96286ceb9d50a5873e4fdfdee1b17595022b8f666e31",
+      "translationSha256": "d239b6ba06ee3d685df8f120ad95cce468c37299e0c6e9311e0762c6ca8d8442"
+    },
+    "user-guide/alarms.md": {
+      "sourceSha256": "d2c456a84b8c38ff05f7c2edba13d837e642dda1d078b58594722c0b0bf2f21c",
+      "translationSha256": "8e62c88e67e22d9b751641bfc2c3bbc92372649b32e52396161c107019ace7de"
+    },
+    "user-guide/assets-customers-areas.md": {
+      "sourceSha256": "f975674da4c197b30b67fe1da155e475679c1c502694b5c5f707a25f3c475c11",
+      "translationSha256": "26f569084428c949b23abde2802df7701198697cb2da5308bd3a0296a610b13c"
+    },
+    "user-guide/audit.md": {
+      "sourceSha256": "17af061f5e4ed7d5132b7c66d2c5ed30b19072cc474fb4d571aeda6292113ce5",
+      "translationSha256": "05b859c5b7351ee1002976172fe785a2fe01c0b6e9be5e8019fe212e560fa52d"
+    },
+    "user-guide/commanding-a-fleet.md": {
+      "sourceSha256": "c8b89df2280936786090ddd21711483740db83dcdd583e45c5b2ebb6301fea6e",
+      "translationSha256": "034b3eaec9e90d1a4011737d26b7f76e181b83d6264f7df800d423676eaa7d1e"
+    },
+    "user-guide/connectors.md": {
+      "sourceSha256": "db852fb0c0cfe63e941c35a2e664a40b86412fec58e7243253a2789c4ddf75e2",
+      "translationSha256": "6dbc86c3539c1103ea3fd3a4751561ced59722461dd3a3d81f358ee75d09cb16"
+    },
+    "user-guide/console-at-a-glance.md": {
+      "sourceSha256": "647ad8941c7ffb319267c7f48a040b5247b51e7694203f18388cfae8ba5400ce",
+      "translationSha256": "35cec1d62b7614e7e7b95bcd4d210943096d544427abfe410cc61a6abbf6093e"
+    },
+    "user-guide/dashboards.md": {
+      "sourceSha256": "a9928e53bfff0eea668fb991b3fa3dcb438496c08e1c5264c526ca1c1d378c31",
+      "translationSha256": "b46509372901c74a8b404df7815af24c955b457a4df2f8552382ce498a78debd"
+    },
+    "user-guide/detection-rules.md": {
+      "sourceSha256": "13ca0e97825a2202e0c5186ff34ea0fdad9add676b9cfd74e8149a9a87a516f5",
+      "translationSha256": "74dab10b09e26aa25393abb628f78cfc3c6389d3ecf8cc3dc37e9054caf12125"
+    },
+    "user-guide/device-types-and-profiles.md": {
+      "sourceSha256": "a03e22e7785315837adb3a7b50470052acf21cffcddab282ea67ec8e793eb705",
+      "translationSha256": "9ba3246e5a5f47a6784368364377c65d306df701c9168903c28812ad60e51755"
+    },
+    "user-guide/devices.md": {
+      "sourceSha256": "6944c29e8a9ea45b8a1983d2894000b1b274105a2ec0dc7adae133b5ec2dbbd2",
+      "translationSha256": "4c1ac64e4da1b451ad6d4bbd304f6de82bbd0f0477e719dae1fb1e34e388c4e5"
+    },
+    "user-guide/geofences.md": {
+      "sourceSha256": "b4b4be7a336840de039022d11d06fd147b14ea975b0046dde4ce3d2d241e1620",
+      "translationSha256": "0fd7f2d1a0d39c38fc48054ebb2c87f832c597a2aafdc6daf0ae44add7e7c8fa"
+    },
+    "user-guide/groups-facets-browse.md": {
+      "sourceSha256": "e2e4b19cbb001553ed13b589990ebb5217a8a5f4f8a23fbe596d17c9fb66acae",
+      "translationSha256": "1fad2752a4f06c1bb1358c2183655418b4682af986e109a2b107ef40408c2b45"
+    },
     "user-guide/index.md": {
-      "sourceSha256": "c5cef96dc586a823c1ff16d75596de8c16cc4c559ee9bbabd994ebdd34bd281f",
-      "translationSha256": "cef3acad21b427de63ef360e223851b73c06ebaa993a073c59441c2de3bd9960"
+      "sourceSha256": "6228389ad42ca2a9be97a220115893900697e1185141752c9ecc39f149ab5488",
+      "translationSha256": "84d543d6bd2761e5da3fd67feb4b5cbdf57a70161cd5e0aff3e04371c73379dd"
+    },
+    "user-guide/signing-in.md": {
+      "sourceSha256": "e8305918933769a1b71827e6ce1bf93333ab2aa889fd9bec721fb1af30436679",
+      "translationSha256": "f097bf5f6f2fdd74c7b6a81db477442746631576f49d2767dc2d29d01218ce43"
+    },
+    "user-guide/tenant-settings.md": {
+      "sourceSha256": "6d33c73966574661dbe82bdc6ae21655ad5c7494d2e57139e049ba38585468d7",
+      "translationSha256": "59ca1513c69a4b6665554e100c885a35f7ed7cfd982fac9e9a08d03fa2de9a13"
+    },
+    "user-guide/updates.md": {
+      "sourceSha256": "7e0b352272026df3f770c324108cc8fa5fdcb7f6d747804712858fc8c52b8173",
+      "translationSha256": "e2d7ca0ca8b2434e280aa7a6a836109ac59f3b53f73a252a452bb98fa3f77470"
+    },
+    "user-guide/viewing-dashboards-in-dash.md": {
+      "sourceSha256": "6c9ace5bed7c3b92e59dc289aafafa585fce5907d4f232ed2580a00785ee6dcd",
+      "translationSha256": "3e2e04d626da7f4bd6fbf35ab90ba4440351d62d87f8debf01cb15957d4b3714"
     }
   }
 }

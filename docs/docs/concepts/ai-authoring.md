@@ -4,7 +4,7 @@ title: AI-Assisted Authoring
 
 # AI-Assisted Authoring
 
-You can author a detection rule in DeviceChain three ways: a typed **form**, a visual **automation canvas**, and, with the AI service enabled, a plain-English **"Describe" door**. With the Describe door you type *"raise a high alarm when a freezer's temperature stays above -15°C for more than ten minutes"*, and the platform drafts a rule you can review, adjust, and publish.
+You can author a detection rule in DeviceChain three ways: a typed **form**, a visual **automation canvas**, and, with the AI service enabled, a plain-English **"Describe" door**. With the Describe door you type *"raise a high alarm when a freezer's temperature stays above -15°C for more than ten minutes"*, and the platform drafts a rule. The draft opens in the rule form, where you review and adjust it, then save it into the device profile's draft. Like any rule, it starts running only when you publish the profile.
 
 All three doors lower to the **same structured rule schema** and pass through the **same compiler**. The AI is one more front door onto a single, deterministic back end. It is never a second engine, and it is never part of the live event path.
 
@@ -18,7 +18,7 @@ The `draftDetectionRuleFromText` mutation calls the AI service and runs a bounde
 
 ## How a drafted rule is checked {#ai-proposes-the-compiler-disposes}
 
-Every authoring surface produces a candidate rule. The **CEL compiler** then parses it, type-checks it, and cost-gates it before it can be saved. A rule that is malformed, mistyped, or over the platform's cost ceiling is **rejected at publish, before it ever runs**. The AI door is no exception: the model proposes a candidate, and the compiler accepts or rejects it exactly as it does a hand-drawn canvas rule.
+Every authoring surface produces a candidate rule. The **CEL compiler** then parses it, type-checks it, and cost-gates it. The console runs that check as you author, and the platform runs it again when the profile is published: a rule that is malformed, mistyped, or over the platform's cost ceiling is **rejected at publish, before it ever runs**. The AI door is no exception: the model proposes a candidate, and the compiler accepts or rejects it exactly as it does a hand-drawn canvas rule.
 
 This is the **determinism boundary**, and it is a hard line:
 
@@ -26,7 +26,7 @@ This is the **determinism boundary**, and it is a hard line:
 - What runs is the **compiled rule** — deterministic CEL over the keyed-streaming engine. By construction it gives the same firings when events are replayed ([replay-correct](./event-processing.md)).
 - **Neither the model nor the canvas ever sits in the replay-correct detection path.** A restart re-derives identical firings from the compiled rule; the model that helped draft it is nowhere in that loop.
 
-When you use the Describe door, the service runs a **bounded compile-and-repair loop**. It drafts a candidate and compiles it. If the compiler rejects it, the service feeds the error back for a limited number of repair attempts. What you receive is a candidate that already compiles. You still review and publish it yourself; nothing is armed on your behalf.
+When you use the Describe door, the service runs a **bounded compile-and-repair loop**. It drafts a candidate and compiles it. If the compiler rejects it, the service feeds the error back for a limited number of repair attempts. What you receive is a candidate that already compiles. You still review it in the form and save it into the profile's draft yourself, and it runs only once you publish the profile; nothing is armed on your behalf.
 
 ## AI providers {#ai-providers-are-operator-configuration}
 
@@ -49,7 +49,7 @@ Users do **not** pick a model per task. Model choice is operator configuration, 
 
 ## In the console {#where-it-lives-in-the-console}
 
-- **Describe door** — on the device profile's detection-rule authoring surface, alongside the form builder and the automation canvas. It is offered when you **create** a new rule; you edit an existing rule in the form or on the canvas. Type a description, review the drafted rule, publish.
+- **Describe door** — on the device profile's detection-rule authoring surface, alongside the form builder and the automation canvas. It is offered when you **create** a new rule; you edit an existing rule in the form or on the canvas. Type a description, review the drafted rule in the form, and save it into the profile's draft. It runs once you publish the profile.
 - **AI providers** — `/admin/ai-providers` (admin plane): register providers, set keys, test connectivity.
 - **AI packaging** — the cross-tier grant matrix that maps which models each tier may use.
 - **Per-tenant model** — set on the tenant detail page, per function, from the tier-derived menu.

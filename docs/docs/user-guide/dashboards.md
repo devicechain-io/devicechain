@@ -1,0 +1,200 @@
+---
+title: Dashboards
+sidebar_position: 8
+---
+
+import GuideShot from '@site/src/components/GuideShot';
+
+# Dashboards
+
+A dashboard arranges live widgets (charts, gauges, cards, alarm tables, command buttons, maps) on
+one page. Dashboards belong to the tenant, and each one is versioned: you edit a draft, then publish
+it as the version everyone else sees.
+
+This chapter is for people who build and maintain dashboards. It covers the dashboard list,
+creating a dashboard from scratch, from a template or from an exported file, viewing it, editing it
+on the canvas, configuring widgets, previewing with synthetic data, exporting, and publishing and
+rolling back versions. The screenshots use a test tenant whose *Widget Lab* dashboard holds one of
+every built-in widget. For how dashboards work underneath, see [Dashboards](/concepts/dashboards).
+
+:::note Who can do what
+Every member of the tenant can open a dashboard. Creating, editing, publishing and deleting one
+needs the dashboard write permission. A member without it is shown the published version, never the
+draft. If a dashboard has never been published, they are told to ask an author to publish it.
+:::
+
+## The dashboard list
+
+Choose **Dashboards** in the sidebar.
+
+<GuideShot id="dashboards-list" alt="The Dashboards page with Import dashboard and New dashboard buttons. Two dashboards are listed, Widget Lab — Stress and Widget Lab, each with a description, an updated time, and Clone and Delete actions." />
+
+Each row shows the dashboard's name, description and when it was last updated. Select a row to open
+it. **Clone** makes a copy under a new token, and **Delete** removes the dashboard after you
+confirm. Deleting cannot be undone.
+
+## Creating a dashboard
+
+**New dashboard** opens a drawer with two ways to start.
+
+<GuideShot id="dashboards-new" alt="The New dashboard drawer with Token, Name and Description fields and a Create dashboard button. Below, under Or start from a template, three templates are offered: Fleet overview, Device detail and Alarms board, each with a one-line description." />
+
+- **From scratch.** Type a token, the dashboard's permanent id, or use the button beside the field
+  to generate one. The token is the only required field; a name and a description are optional. The
+  field marks a token that is already taken. Choose **Create dashboard** and the empty dashboard
+  opens.
+- **From a template.** Under **Or start from a template**, pick **Fleet overview** (alarm counts by
+  severity, an alarm table and a featured device), **Device detail** (latest values, a gauge, a
+  telemetry chart, location and alarms for one device) or **Alarms board** (alarm counts and tables
+  for the whole tenant). The template opens in the import review described below, where you bind it
+  to your own devices before it is created.
+
+Template measurement names such as `temperature` and `humidity` are examples. Change them in the
+editor to the ones your devices report.
+
+## Importing a dashboard
+
+**Import dashboard** creates a new dashboard from JSON exported from another dashboard or another
+tenant.
+
+<GuideShot id="dashboards-import" alt="The Import dashboard drawer. It explains that the new dashboard is saved as a draft under a new token, and that nothing is overwritten or published. It has a Dashboard JSON text box, a hint that the dashboard can be up to 1 MiB not counting indentation, and Choose file and Review buttons." />
+
+1. Paste the JSON into **Dashboard JSON**, or use **Choose file** to load a `.json` file.
+2. Choose **Review**. The console checks the definition and lists anything you should look at
+   before it is saved:
+   - **Bindings to review**: slots that are not bound yet, or that name a device, customer, area or
+     asset that does not exist in this tenant. Pick one from this tenant for each, or leave the picker
+     at *Leave unbound* and bind it later.
+   - widgets this console cannot show, which are kept as placeholders and block publishing until
+     they are installed or removed;
+   - widget options to fix;
+   - external sites the dashboard loads images or map tiles from.
+3. Give the new dashboard a token and choose **Create draft**.
+
+An import never overwrites an existing dashboard, and it is never published for you. **Clone** and
+the templates use the same review.
+
+## Viewing a dashboard
+
+Opening a dashboard shows it with live data.
+
+<GuideShot id="dashboard-view" alt="The Widget Lab dashboard in view mode, with Preview, Export, History, Edit and Delete buttons. Widgets include a title label, a latest-value card and a gauge for temperature on wl-sensor-01, an Active alarms count for wl-zone-01, an image, a Temperature and humidity chart, and a Latest values table listing battery, humidity, pressure and temperature." />
+
+The buttons along the top:
+
+- **Preview** swaps live data for generated data (see [Previewing with synthetic data](#previewing-with-synthetic-data)).
+- **Export** copies or downloads the dashboard (see [Exporting](#exporting)).
+- **History** opens the version history (see [Versions](#versions)).
+- **Edit** switches to the editor.
+- **Delete** removes the dashboard.
+
+Widgets that carry actions, such as acknowledging an alarm or sending a command, work here too. The
+platform checks each action against your own permissions.
+
+## Editing on the canvas
+
+**Edit** turns the dashboard into a canvas. The buttons change to **Add widget**, **Preview**,
+**Export**, **History**, **Save** and **Done**, and a bar of layout settings appears.
+
+<GuideShot id="dashboard-edit" alt="The Widget Lab dashboard in edit mode. The header shows Add widget, Preview, Export, History, a disabled Save and Done. A settings bar shows Title Widget Lab, Columns 24, Row height 40, Gap 8 and Size Fill area. Widgets are outlined on the canvas; some show a dash or No data yet." />
+
+- **Title** is the dashboard's name.
+- **Columns**, **Row height** and **Gap** set the grid widgets snap to.
+- **Size** decides how the dashboard fills the page: **Fill area**, **Fixed width** or **Fixed
+  height**.
+
+Drag a widget to move it and drag its edges to resize it. Widgets can overlap; select one and use
+**Front** to bring it on top. A widget that has not received data yet shows a dash or *No data yet*.
+
+**Save** stores your changes in the draft. It is greyed out until there is something to save.
+**Done** returns to the view; unsaved changes stay, and **Save** remains available there. If you
+close the tab or use the **Dashboards** back link with unsaved changes, the console asks before
+discarding them. Choosing another page in the sidebar does not ask, so save first. Saving changes the
+draft only. Viewers see nothing new until you publish a version.
+
+### Adding a widget
+
+**Add widget** opens the widget menu, grouped by what each widget does.
+
+<GuideShot id="dashboard-add-widget" alt="The Add widget menu open in edit mode, grouped into Telemetry (Timeseries chart, Latest card, Gauge, Table), Static (Label, Image), Alarms (Alarm table, Alarm count), Control (Command button), Navigation (Entity selector) and Location (Map). Each entry shows its id and version, for example timeseries-chart · v1.0.0." />
+
+| Group | Widgets |
+|---|---|
+| Telemetry | Timeseries chart, Latest card, Gauge, Table |
+| Static | Label, Image |
+| Alarms | Alarm table, Alarm count |
+| Control | Command button |
+| Navigation | Entity selector, which lets a viewer choose which device or entity the dashboard shows |
+| Location | Map, which draws on the tenant's map (see [Tenant settings](/user-guide/tenant-settings)) |
+
+Choose one to add it to the canvas, then configure it.
+
+### Configuring a widget
+
+Select a widget on the canvas to open its settings on the right. **Front** and **Delete** appear on
+the widget itself.
+
+<GuideShot id="dashboard-widget-config" alt="Edit mode with the Temperature latest card selected, showing Front and Delete buttons on the widget. The settings panel on the right, titled Latest card, shows Title Temperature, a Context section with Binds to set to Scoped to a parent, Parent slot zone and Strategy Manual pick, a Data source section explaining it is derived from the parent context, slot sensor, and a Measurement field." />
+
+The settings depend on the widget. Common ones:
+
+- **Title** shown on the widget.
+- **Context**: what the widget is bound to. **Root context** binds it directly to a device or
+  entity. **Scoped to a parent** makes it follow another widget's context, for example a device
+  inside the building chosen elsewhere on the dashboard. With a parent, **Strategy** decides whether
+  it follows the parent's **First member** or a member you choose (**Manual pick**).
+- **Data source** picks the device or entity the widget reads. For a widget scoped to a parent, it
+  explains that the widget follows the parent.
+- **Measurement** and display options such as units, range, precision and how many samples to keep.
+
+Problems with a widget's options, such as an option it does not read, a required one left empty or
+a value out of range, are listed in **Version history**. **Publish version** stays disabled until
+they are fixed.
+
+## Previewing with synthetic data {#previewing-with-synthetic-data}
+
+**Preview** replaces live data with generated values, so you can check scales, thresholds and layout
+before any device reports. A picker beside the button chooses the shape of the data: **Sine wave**,
+**Ramp** or **Random walk**. Preview works in both view and edit mode. Choose **Preview** again to go
+back to live data.
+
+<GuideShot id="dashboard-preview" alt="The Widget Lab dashboard in preview mode, with the generator picker set to Sine wave and the Preview button highlighted. The chart shows smooth sine curves, the alarm count shows 1 alarm, worst Major, and the cards and gauge show generated values." />
+
+Generated data stays in your browser and is never saved.
+
+## Exporting {#exporting}
+
+**Export** offers four choices.
+
+<GuideShot id="dashboard-export" alt="The Export menu open on the Widget Lab dashboard, offering Download JSON, Copy JSON, Copy as template (unbound) and Clone as new dashboard…." />
+
+- **Download JSON** saves the dashboard as a file.
+- **Copy JSON** copies it to the clipboard.
+- **Copy as template (unbound)** copies it without its device and entity bindings, so whoever
+  imports it picks their own.
+- **Clone as new dashboard…** opens the import review with this dashboard, to create a copy under a
+  new token.
+
+## Versions {#versions}
+
+**History** opens the version history. A dashboard's draft is what you edit; a **version** is a
+frozen copy of the draft that viewers are shown.
+
+<GuideShot id="dashboard-history" alt="The Version history panel. A Publish current draft section has an optional Label field, a Description field, the note that publishing makes the new version the one viewers are shown, and a Publish version button. Below, Published versions lists version 1, marked Live, published by dana.okafor@acme-properties.example, with a Roll back button." />
+
+- **Publish current draft.** Add an optional label, such as a release name, and a description, then
+  choose **Publish version**. The new version goes live straight away. Save your changes first: the
+  console publishes the saved draft.
+- **Published versions** lists each version with when and by whom it was published. The live one is
+  marked **Live**.
+- **Make live** serves an earlier version to viewers without touching your draft.
+- **Roll back** replaces the draft with an earlier version. Anything in the draft that you had not
+  published is lost, and the console asks you to confirm.
+
+History only grows. Publishing, making a version live and rolling back each leave the earlier
+versions in place.
+
+## Related
+
+- [Dashboards](/concepts/dashboards): widgets, data sources, versioning and embedding
+- [Basemaps](/concepts/basemaps), for the map widget's tiles

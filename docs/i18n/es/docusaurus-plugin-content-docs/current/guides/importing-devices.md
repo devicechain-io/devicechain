@@ -20,7 +20,7 @@ La importación solo **crea** y se puede **ejecutar de nuevo sin riesgo**. La cl
 3. Elige un archivo CSV o pega las filas. El archivo necesita una fila de encabezado.
 4. Revisa la asignación de columnas. Las columnas cuyo encabezado coincide con un campo se asignan solas, incluidos los encabezados que escribe **Exportar CSV** de la propia consola, de modo que una lista exportada se puede importar tal cual. Si el archivo no tiene columna de tipo, elige un tipo de dispositivo para todo el archivo.
 5. Elige **Comprobar el archivo**. Es una ejecución de prueba: el servidor decide cada fila exactamente como lo hará la importación real y no escribe nada. Los resultados indican el resultado de cada fila y se pueden filtrar por resultado.
-6. Elige **Importar**. Las filas se envían en lotes de 1000, uno tras otro, con indicador de progreso; **Detener tras este lote** termina la ejecución limpiamente entre lotes.
+6. Elige **Importar N dispositivos** (N es el número de filas que, según la comprobación, se crearían). Las filas se envían en lotes de 1000, uno tras otro, con indicador de progreso; **Detener tras este lote** termina la ejecución limpiamente entre lotes.
 7. Al terminar, descarga los **resultados** (el resultado de cada fila) o las **filas fallidas**, corrígelas e importa ese archivo. Los dispositivos ya creados se informan como `EXISTS` y no se tocan.
 
 Un archivo puede tener hasta 10 000 filas y 5 MiB. Un archivo mayor se rechaza antes de leerlo; divídelo e importa las partes.

@@ -110,14 +110,32 @@ const sidebars: SidebarsConfig = {
       ],
     },
     // After Concepts: the console walkthrough. The category links to its own
-    // introduction page rather than a generated index; chapters are added to
-    // `items` as they are written. Its label's translations live in
+    // introduction page rather than a generated index; chapters are listed in
+    // `items` in the console's own order. Its label's translations live in
     // i18n/<locale>/.../current.json under `sidebar.docs.category.User guide`.
     {
       type: 'category',
       label: 'User guide',
       link: { type: 'doc', id: 'user-guide/index' },
-      items: [],
+      items: [
+        'user-guide/signing-in',
+        'user-guide/console-at-a-glance',
+        'user-guide/devices',
+        'user-guide/device-types-and-profiles',
+        'user-guide/detection-rules',
+        'user-guide/alarms',
+        'user-guide/commanding-a-fleet',
+        'user-guide/dashboards',
+        'user-guide/assets-customers-areas',
+        'user-guide/geofences',
+        'user-guide/groups-facets-browse',
+        'user-guide/connectors',
+        'user-guide/audit',
+        'user-guide/tenant-settings',
+        'user-guide/administering-the-instance',
+        'user-guide/updates',
+        'user-guide/viewing-dashboards-in-dash',
+      ],
     },
     {
       type: 'category',
