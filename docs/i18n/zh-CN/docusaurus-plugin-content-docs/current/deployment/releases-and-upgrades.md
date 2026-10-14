@@ -2185,6 +2185,21 @@ upgrade`，如[v0.17.0](#v0170-upgrade)所述。从 `v0.19.0` 或更早版本升
 **行为变化。** 设备对 LwM2M 请求没有应答时，现在记为 `TIMEOUT`，与其他传输一致。如果你依据 LwM2M 命令的状态
 决定下一步操作，请预期这里会出现 `TIMEOUT`。
 
+##### 破坏性命令可以等待维护窗口 {#v0210-maintenance-windows}
+
+可以为设备类型指定一个每周循环的**维护窗口**：一个时区加 1 到 56 个每周时段，在 `device-management` API 中管理
+（`device:write`）。每个命令定义新增 `impact`，取值 `NORMAL`、`DISRUPTIVE` 或 `DESTRUCTIVE`；已存在的定义按
+`NORMAL` 读取，`lwm2m.reboot` 今后创建为 `DISRUPTIVE`。在为设备类型指定窗口、且该类型的命令为 `DISRUPTIVE` 或
+`DESTRUCTIVE` 之前，什么都不会被拦住。
+
+之后，对该类型的设备，在窗口关闭时入队的此类命令会被接受并**等待**，仍为 `QUEUED`，直到下一次开启。在窗口开启时入队的命令
+绑定到该次开启：如果窗口关闭时仍未发出，它会等待下一次开启，而不是在设备回来时随时发出。这适用于单条命令、批次
+和检测规则发出的命令，也适用于每一条发送命令或确认在途命令的路径。`expiresAt` 早于下一次开启的命令会被 `WINDOW_AFTER_EXPIRY`
+拒绝，在批次中作为逐设备的拒绝。批次会报告其中有多少命令处于 `waiting`。
+
+有两点需要了解。设备在窗口关闭后才确认在途命令时，确认会被拒绝；命令随后挂起并移到下一次开启。另外，从设备类型上取消指定窗口，
+不会释放已经按它标记的命令。
+
 ##### 控制台的构建文件移动到 `/_app/` {#v0210-console-app-path}
 
 指向资产页面的链接（`/assets/<token>`）在加载或刷新时会返回 404，因为控制台构建的 JavaScript 和 CSS 位于
@@ -2209,8 +2224,8 @@ upgrade`，如[v0.17.0](#v0170-upgrade)所述。从 `v0.19.0` 或更早版本升
 
 | 服务 | 变更 |
 | --- | --- |
-| `device-management` | `devices.disabled_at timestamptz`（为空表示已启用）和部分索引 `idx_devices_disabled` |
-| `command-delivery` | `device_gates` 和 `device_gate_syncs`，及其唯一索引和部分索引；`commands.outcome`（为已结束的命令填值）、`command_batches.retry_of` 及其上的部分索引 |
+| `device-management` | `devices.disabled_at timestamptz`（为空表示已启用）和部分索引 `idx_devices_disabled`；`maintenance_windows` 表、`device_types.maintenance_window_id` 和 `command_definitions.impact` |
+| `command-delivery` | `device_gates` 和 `device_gate_syncs`，及其唯一索引和部分索引；`commands.outcome`（为已结束的命令填值）、`command_batches.retry_of` 及其上的部分索引；`commands.dispatch_after`、`dispatch_until` 和 `window_token` 及一个部分索引，以及 `command_batches.waiting` |
 | `update-management` | `artifact_signers` 和 `artifact_signatures`（仅含公钥和签名）；工件的信任现在由它们推导，旧的已存储信任列予以保留、不再写入，因此滚动升级是安全的；每个分配还新增一个可为空的 `signature_id`，即它所固定的签名 |
 | `user-management` | 身份提供商上的 `ca_bundle` |
 
@@ -2237,6 +2252,7 @@ upgrade`，如[v0.17.0](#v0170-upgrade)所述。从 `v0.19.0` 或更早版本升
   缺失告警会在其设备被停用、删除或更换类型时清除。
 - **消息传递。** 两个副本同时迁移某个流的保留策略时，不再导致其中一个拒绝启动。
 - **批次重试。** `retryCommandBatch`、每条已结束命令上的 `outcome` 以及按 `outcomes` 搜索，见[批次可以按结果重试](#v0210-batch-retry)。
+- **维护窗口。** 窗口、`impact` 和拦截，见[破坏性命令可以等待维护窗口](#v0210-maintenance-windows)。
 
 ### v0.20.0：通过你自己的身份提供商登录，组件以包的形式发布 {#v0200-upgrade}
 

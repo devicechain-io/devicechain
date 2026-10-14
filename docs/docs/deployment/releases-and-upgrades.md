@@ -3669,6 +3669,26 @@ page in the console has a **Retry…** action. See
 as on the other transports. If you read an LwM2M command's status to decide what to do next, expect
 `TIMEOUT` there.
 
+##### Disruptive commands can wait for a maintenance window {#v0210-maintenance-windows}
+
+A device type can be given a recurring weekly **maintenance window**: a time zone and 1 to 56 weekly
+slots, managed in the `device-management` API (`device:write`). Each command definition gains an
+`impact` of `NORMAL`, `DISRUPTIVE` or `DESTRUCTIVE`; a definition that already exists reads as `NORMAL`,
+and `lwm2m.reboot` is created `DISRUPTIVE` from now on. Nothing is gated until a window is assigned to a
+device type and a command of that type is `DISRUPTIVE` or `DESTRUCTIVE`.
+
+Then, for a device of that type, such a command enqueued while the window is closed is accepted and
+**waits**, still `QUEUED`, until the next opening. One enqueued while the window is open is bound to that
+opening: if it has not been sent when the window closes, it waits for the next one rather than going out
+whenever the device returns. This holds for a single command, a batch and a command sent by a
+detection rule, and on every path that sends a command or confirms one in flight. A command whose
+`expiresAt` falls before the next opening is refused with `WINDOW_AFTER_EXPIRY`, in a batch as a
+per-device refusal. A batch reports how many of its commands are `waiting`.
+
+Two behaviours to know. A device that confirms a command in flight after the window has closed has the
+confirmation refused; the command then parks and moves to the next opening. And unassigning a window from
+a device type does not release commands already stamped from it.
+
 ##### The console's built files move to `/_app/` {#v0210-console-app-path}
 
 A link to an asset's page (`/assets/<token>`) returned 404 on load or refresh, because the console's
@@ -3696,8 +3716,8 @@ by Go 1.26. It is correct JSON, and it is now accepted and stored. Nothing needs
 
 | Area | Change |
 | --- | --- |
-| `device-management` | `devices.disabled_at timestamptz` (null means enabled) and the partial index `idx_devices_disabled` |
-| `command-delivery` | `device_gates` and `device_gate_syncs`, with their unique and partial indexes; `commands.outcome` (filled for finished commands), `command_batches.retry_of` and a partial index on it |
+| `device-management` | `devices.disabled_at timestamptz` (null means enabled) and the partial index `idx_devices_disabled`; the `maintenance_windows` table, `device_types.maintenance_window_id` and `command_definitions.impact` |
+| `command-delivery` | `device_gates` and `device_gate_syncs`, with their unique and partial indexes; `commands.outcome` (filled for finished commands), `command_batches.retry_of` and a partial index on it; `commands.dispatch_after`, `dispatch_until` and `window_token` with a partial index, and `command_batches.waiting` |
 | `update-management` | `artifact_signers` and `artifact_signatures` (public keys and signatures only); artifact trust is now derived from them, and the old stored trust column is kept, written no more, so a rolling upgrade is safe; each assignment also gains a nullable `signature_id`, the signature it is pinned to |
 | `user-management` | `ca_bundle` on identity providers |
 
@@ -3730,6 +3750,7 @@ a bundle.
 - **Messaging.** Two replicas that migrate a stream's retention at the same time no longer make one
   refuse to start.
 - **Batch retry.** `retryCommandBatch`, the `outcome` on every finished command and the `outcomes` search are described under [Batches can be retried by outcome](#v0210-batch-retry).
+- **Maintenance windows.** Windows, `impact` and the hold are described under [Disruptive commands can wait for a maintenance window](#v0210-maintenance-windows).
 
 ### v0.20.0 — sign in through your own identity provider; widgets ship as packages {#v0200-upgrade}
 

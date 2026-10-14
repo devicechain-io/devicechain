@@ -3946,6 +3946,26 @@ tiene una acción **Reintentar…**. Consulta
 ahora como `TIMEOUT`, igual que en los demás transportes. Si lees el estado de un comando LwM2M para
 decidir qué hacer a continuación, espera `TIMEOUT` ahí.
 
+##### Los comandos disruptivos pueden esperar a una ventana de mantenimiento {#v0210-maintenance-windows}
+
+A un tipo de dispositivo se le puede asignar una **ventana de mantenimiento** semanal recurrente: una zona
+horaria y de 1 a 56 franjas semanales, que se gestionan en la API de `device-management` (`device:write`).
+Cada definición de comando gana un `impact` de `NORMAL`, `DISRUPTIVE` o `DESTRUCTIVE`; una definición que ya
+existe se lee como `NORMAL`, y `lwm2m.reboot` se crea ahora como `DISRUPTIVE`. Nada se retiene hasta que se
+asigna una ventana a un tipo de dispositivo y un comando de ese tipo es `DISRUPTIVE` o `DESTRUCTIVE`.
+
+Entonces, para un dispositivo de ese tipo, un comando así encolado mientras la ventana está cerrada se acepta
+y **espera**, aún `QUEUED`, hasta la siguiente apertura. Uno encolado con la ventana abierta queda ligado a esa
+apertura: si no se ha enviado cuando la ventana se cierra, espera a la siguiente en lugar de salir cuando el
+dispositivo vuelva. Esto vale para un comando suelto, un lote y un comando enviado por una regla de detección,
+y en cada ruta que envía un comando o confirma uno en vuelo. Un comando cuyo `expiresAt` cae antes de la
+siguiente apertura se rechaza con `WINDOW_AFTER_EXPIRY`, en un lote como rechazo por dispositivo. Un lote
+informa de cuántos de sus comandos están en `waiting`.
+
+Dos comportamientos que conviene conocer. Si un dispositivo confirma un comando en vuelo después de que la
+ventana se haya cerrado, la confirmación se rechaza; el comando se aparca y pasa a la siguiente apertura. Y
+desasignar una ventana de un tipo de dispositivo no libera los comandos ya marcados con ella.
+
 ##### Los archivos compilados de la consola pasan a `/_app/` {#v0210-console-app-path}
 
 Un enlace a la página de un recurso (`/assets/<token>`) devolvía 404 al cargar o refrescar, porque el
@@ -3976,8 +3996,8 @@ guarda. No hay que hacer nada.
 
 | Área | Cambio |
 | --- | --- |
-| `device-management` | `devices.disabled_at timestamptz` (nulo significa habilitado) y el índice parcial `idx_devices_disabled` |
-| `command-delivery` | `device_gates` y `device_gate_syncs`, con sus índices únicos y parciales; `commands.outcome` (rellenado para los comandos terminados), `command_batches.retry_of` y un índice parcial sobre él |
+| `device-management` | `devices.disabled_at timestamptz` (nulo significa habilitado) y el índice parcial `idx_devices_disabled`; la tabla `maintenance_windows`, `device_types.maintenance_window_id` y `command_definitions.impact` |
+| `command-delivery` | `device_gates` y `device_gate_syncs`, con sus índices únicos y parciales; `commands.outcome` (rellenado para los comandos terminados), `command_batches.retry_of` y un índice parcial sobre él; `commands.dispatch_after`, `dispatch_until` y `window_token` con un índice parcial, y `command_batches.waiting` |
 | `update-management` | `artifact_signers` y `artifact_signatures` (solo claves públicas y firmas); la confianza de un artefacto se deriva ahora de ellas, y la antigua columna de confianza guardada se conserva, sin escribirse más, de modo que una actualización gradual es segura; cada asignación gana además un `signature_id` nulo, la firma a la que está fijada |
 | `user-management` | `ca_bundle` en los proveedores de identidad |
 
@@ -4012,6 +4032,7 @@ conexión sin paquete.
 - **Mensajería.** Dos réplicas que migran a la vez la retención de un flujo ya no hacen que una se
   niegue a arrancar.
 - **Reintento de lotes.** `retryCommandBatch`, el `outcome` de cada comando terminado y la búsqueda por `outcomes` se describen en [Los lotes pueden reintentarse por resultado](#v0210-batch-retry).
+- **Ventanas de mantenimiento.** Las ventanas, `impact` y la retención se describen en [Los comandos disruptivos pueden esperar a una ventana de mantenimiento](#v0210-maintenance-windows).
 
 ### v0.20.0 — inicia sesión con tu propio proveedor de identidad; los widgets se distribuyen como paquetes {#v0200-upgrade}
 
