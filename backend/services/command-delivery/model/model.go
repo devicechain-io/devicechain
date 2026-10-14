@@ -259,9 +259,15 @@ type Command struct {
 	// transport that forgot to ask "is the window open?" would still be refused here.
 	//
 	// The row stays QUEUED while it waits: there is no status for it, so every consumer of
-	// the lifecycle (SDKs, dashboards, the batch cancel) is unchanged. A stamp in the past
-	// is history ("this command waited until then"), not a hold.
+	// the lifecycle (SDKs, dashboards, the batch cancel) is unchanged.
 	DispatchAfter sql.NullTime
+
+	// DispatchUntil is when the opening DispatchAfter belongs to CLOSES; the claims refuse the
+	// row at or after it. Every window-gated command carries both bounds, including one
+	// enqueued while its window was open (DispatchAfter is then already past), so a command
+	// that is not claimed before the close waits for the re-stamp pass to move it onto the
+	// next opening instead of going out between windows. NULL means no hold.
+	DispatchUntil sql.NullTime
 
 	// WindowToken names the maintenance window DispatchAfter came from, so an edit of that
 	// window can move the rows still waiting on it. NULL for a command that was never held.

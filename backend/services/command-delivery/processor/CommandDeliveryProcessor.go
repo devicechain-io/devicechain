@@ -178,6 +178,9 @@ type CommandDeliveryProcessor struct {
 	// zero-means-default reading as its siblings.
 	windowInterval    time.Duration
 	lastWindowRestamp time.Time
+	// windowCursor is where the next re-stamp pass resumes listing (tenant, window) pairs;
+	// the zero value is the beginning.
+	windowCursor model.WaitingWindow
 
 	// WindowOpenings reads a maintenance window's current schedule from its owner, for the
 	// re-stamp pass. MAY BE NIL, which turns the pass off and leaves stamps as written.

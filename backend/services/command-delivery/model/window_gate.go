@@ -10,22 +10,25 @@ import (
 	"time"
 
 	"github.com/rs/zerolog/log"
+	"gorm.io/gorm"
 )
 
-// DispatchHold says one device's command must not be claimed before DispatchAfter, because
-// the device type's maintenance window WindowToken is closed until then.
+// DispatchHold binds one device's command to an opening of its device type's maintenance
+// window WindowToken: it may be claimed only in [DispatchAfter, DispatchUntil). DispatchAfter
+// is already past when the window was open at enqueue.
 type DispatchHold struct {
 	DeviceToken   string
 	WindowToken   string
 	DispatchAfter time.Time
+	DispatchUntil time.Time
 }
 
 // DispatchScheduler asks the owner of the device types and their maintenance windows
 // (device-management) when a command may START, for one device or many.
 //
-// It answers with HOLDS (wait until this instant) and REFUSALS (the window opens only after
-// the command expires, so accepting it could only end in expiry). A device in neither list
-// may be dispatched immediately. An error means the schedule could not be determined and the
+// It answers with HOLDS (start only inside this opening, which may be the one open now) and
+// REFUSALS (the window opens only after the command expires, so accepting it could only end
+// in expiry). A device in neither list is not window-gated. An error means the schedule could not be determined and the
 // caller must fail closed: reading it as "no hold" would send a disruptive command outside
 // its window exactly when the dependency is down.
 //
@@ -46,6 +49,8 @@ type WindowOpening struct {
 	OpenNow bool
 	// DispatchAfter is the instant asked about when open, else the next opening.
 	DispatchAfter time.Time
+	// Closes is when the opening DispatchAfter belongs to ends.
+	Closes time.Time
 }
 
 // WindowOpeningResolver reads a maintenance window's current opening, for the pass that
@@ -54,18 +59,29 @@ type WindowOpeningResolver interface {
 	WindowOpening(ctx context.Context, windowToken string, at time.Time) (WindowOpening, error)
 }
 
-// dispatchableNowWhere is the ONE predicate for "this row's hold, if any, has lapsed", shared
-// by every query that selects work to dispatch and every conditional UPDATE that claims it.
+// dispatchableNowWhere is the ONE predicate for "this row's hold, if any, admits a start now",
+// shared by every query that selects work to dispatch and every conditional UPDATE that claims
+// it: the opening has begun AND has not yet closed.
 //
 // 🔴 IT IS A FUNCTION RATHER THAN A STRING LITERAL IN EACH QUERY because the residual risk of
 // this design is a future query that forgets it. The three claims (MarkSent, MarkSentByToken,
 // ConfirmDispatch's rotation) and the three reads that feed them (PendingCommands,
 // QueuedCommandsForDevice, DrainableCommands) all call this, and the wiring test drives
-// every dispatch road against a held row. NULL is "no hold": the OR spells that out instead
+// every dispatch road against a held row. NULL is "no hold": the ORs spell that out instead
 // of leaning on three-valued logic, which would drop the row from both sides.
+//
+// 🔴 THE UPPER BOUND IS WHAT MAKES THE GATE FAIL CLOSED. Without it a row whose opening passed
+// unclaimed stays claimable until the re-stamp pass rolls it on — a minute in the healthy
+// case, and for as long as device-management is unreachable otherwise — so the pass would be
+// load-bearing for safety. With it the pass only decides WHEN a row may next go, never
+// WHETHER a row may go between windows.
 func dispatchableNowWhere(now time.Time) (string, []any) {
-	return "(dispatch_after IS NULL OR dispatch_after <= ?)", []any{now}
+	return "(dispatch_after IS NULL OR dispatch_after <= ?) AND (dispatch_until IS NULL OR dispatch_until > ?)",
+		[]any{now, now}
 }
+
+// WaitingWindowsPage is how many (tenant, window) pairs one re-stamp pass handles.
+const WaitingWindowsPage = 500
 
 // WaitingWindow is a (tenant, maintenance window) pair that still has undelivered commands
 // stamped from it.
@@ -78,17 +94,24 @@ type WaitingWindow struct {
 // commands, for the re-stamp pass. It crosses tenants, so the caller passes a system
 // context; each pair is then handled under its own tenant.
 //
-// Bounded by limit: a pass that finds more than it can handle takes the rest next time,
-// ordered so the same pairs do not starve the others.
-func (api *Api) WaitingWindows(ctx context.Context, limit int) ([]WaitingWindow, error) {
+// Bounded by limit and paged by a keyset cursor: it returns the pairs strictly after
+// `after` in (tenant, window) order, so a caller that finds a full page resumes from its
+// last pair next time instead of re-reading the same first page forever. With dispatch_until
+// a pair that is never reached is not a safety problem (its rows cannot go out between
+// windows), but its commands would never go out at all.
+func (api *Api) WaitingWindows(ctx context.Context, after WaitingWindow, limit int) ([]WaitingWindow, error) {
 	if limit <= 0 {
-		limit = 500
+		limit = WaitingWindowsPage
 	}
 	found := make([]WaitingWindow, 0)
-	err := api.RDB.DB(ctx).Model(&Command{}).
+	db := api.RDB.DB(ctx).Model(&Command{}).
 		Select("tenant_id, window_token").
-		Where("window_token IS NOT NULL AND status IN ?", claimableStatusStrings()).
-		Group("tenant_id, window_token").
+		Where("window_token IS NOT NULL AND status IN ?", claimableStatusStrings())
+	if after != (WaitingWindow{}) {
+		db = db.Where("(tenant_id > ? OR (tenant_id = ? AND window_token > ?))",
+			after.TenantId, after.TenantId, after.WindowToken)
+	}
+	err := db.Group("tenant_id, window_token").
 		Order("tenant_id, window_token").
 		Limit(limit).
 		Scan(&found).Error
@@ -102,16 +125,19 @@ func (api *Api) WaitingWindows(ctx context.Context, limit int) ([]WaitingWindow,
 // window's CURRENT schedule, and reports how many rows it changed. Called under the window's
 // tenant.
 //
-//   - window gone: the hold is cleared (the stamp and the token), and the commands dispatch
+//   - window gone: the hold is cleared (both bounds and the token), and the commands dispatch
 //     as ordinary ones. Deleting a window that device types still use is refused upstream,
 //     so this is a type that was unassigned or a window removed after.
-//   - window open now: a stamp in the future is brought forward to now.
-//   - window closed: every stamp is set to the next opening, INCLUDING a stamp that is
-//     already in the past. That is the roll-over: a command whose window opened while its
-//     device was absent was never claimed, and without this the device's return a week
-//     later would find an old, open-looking stamp and be sent the command outside any
-//     window. The window gates the START, so a command already claimed is not touched (the
-//     predicate names the three undelivered statuses; SENT is not among them).
+//   - window open now: every row is bound to the current opening — a future start is brought
+//     forward to now, and the close is set to this opening's. That releases a row that was
+//     waiting for it and re-admits one whose earlier opening passed unclaimed.
+//   - window closed: every row is bound to the next opening. A row whose opening passed
+//     unclaimed (its device was absent) was already unclaimable, because its close is past;
+//     this is what moves it on, so it goes out in the next window rather than never.
+//
+// The window gates the START, so a command already claimed is not touched (the predicate
+// names the three undelivered statuses; SENT is not among them). Rows already on the target
+// opening are left alone, so a pass over an unchanged window writes nothing.
 //
 // Each write is one conditional UPDATE, predicated on status, so it composes with a claim
 // racing it: whichever lands first decides, and neither can clobber the other.
@@ -126,44 +152,60 @@ func (api *Api) RestampWindow(ctx context.Context, windowToken string, opening W
 	}
 	switch {
 	case !opening.Found:
-		return update("dispatch_after IS NOT NULL", nil,
-			map[string]any{"dispatch_after": nil, "window_token": nil})
+		return update("1 = 1", nil,
+			map[string]any{"dispatch_after": nil, "dispatch_until": nil, "window_token": nil})
 	case opening.OpenNow:
-		return update("dispatch_after > ?", []any{now}, map[string]any{"dispatch_after": now})
+		// A start already past is kept (any past start admits, and it records when the row
+		// became sendable); only a future one is pulled forward. The close must match.
+		return update("(dispatch_after IS NULL OR dispatch_after > ? OR dispatch_until IS NULL OR dispatch_until <> ?)",
+			[]any{now, opening.Closes},
+			map[string]any{
+				"dispatch_after": gorm.Expr(
+					"CASE WHEN dispatch_after IS NULL OR dispatch_after > ? THEN ? ELSE dispatch_after END", now, now),
+				"dispatch_until": opening.Closes,
+			})
 	default:
-		return update("dispatch_after IS NOT NULL AND dispatch_after <> ?", []any{opening.DispatchAfter},
-			map[string]any{"dispatch_after": opening.DispatchAfter})
+		return update("(dispatch_after IS NULL OR dispatch_after <> ? OR dispatch_until IS NULL OR dispatch_until <> ?)",
+			[]any{opening.DispatchAfter, opening.Closes},
+			map[string]any{"dispatch_after": opening.DispatchAfter, "dispatch_until": opening.Closes})
 	}
 }
 
-// windowHoldFor asks the scheduler whether a command to one device must wait for a
-// maintenance window. It returns the instant to hold until and the window it came from, or
-// the empty window token when the command may dispatch at once (or no scheduler is wired).
+// windowHoldFor asks the scheduler whether a command to one device is gated by a maintenance
+// window. It returns the hold, or nil when the command is not gated (or no scheduler is wired).
 //
 // A refusal comes back as *EnqueueRejected carrying the owner's code; a failure to decide
 // is a plain, sanitized error so the caller fails closed without learning topology.
 func (api *Api) windowHoldFor(ctx context.Context, deviceToken, commandKey string,
-	expiresAt sql.NullTime) (time.Time, string, error) {
+	expiresAt sql.NullTime) (*DispatchHold, error) {
 	if api.DispatchScheduler == nil {
-		return time.Time{}, "", nil
+		return nil, nil
 	}
 	holds, refusals, err := api.DispatchScheduler.ScheduleDispatch(ctx, []string{deviceToken}, commandKey, expiresAt)
 	if err != nil {
 		log.Error().Err(err).Str("deviceToken", deviceToken).Str("command", commandKey).
 			Msg("Maintenance window check failed; refusing enqueue.")
-		return time.Time{}, "", fmt.Errorf("cannot enqueue command: validation is unavailable")
+		return nil, fmt.Errorf("cannot enqueue command: validation is unavailable")
 	}
 	for _, refusal := range refusals {
 		if refusal.DeviceToken == deviceToken {
-			return time.Time{}, "", rejected(refusal.Code, "cannot enqueue command: %s", refusal.Reason)
+			return nil, rejected(refusal.Code, "cannot enqueue command: %s", refusal.Reason)
 		}
 	}
 	for _, hold := range holds {
 		if hold.DeviceToken == deviceToken {
-			return hold.DispatchAfter, hold.WindowToken, nil
+			h := hold
+			return &h, nil
 		}
 	}
-	return time.Time{}, "", nil
+	return nil, nil
+}
+
+// stampHold writes a hold's bounds and window onto a command about to be inserted.
+func stampHold(cmd *Command, hold DispatchHold) {
+	cmd.DispatchAfter = sql.NullTime{Time: hold.DispatchAfter, Valid: true}
+	cmd.DispatchUntil = sql.NullTime{Time: hold.DispatchUntil, Valid: true}
+	cmd.WindowToken = sql.NullString{String: hold.WindowToken, Valid: true}
 }
 
 // scheduleBatchHolds is windowHoldFor for a batch: one scheduler call per chunk of devices,

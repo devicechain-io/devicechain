@@ -169,15 +169,21 @@ type Interval struct {
 	End   time.Time
 }
 
-// Next returns the earliest interval that has not yet closed at `at`: the one open now
-// (Start <= at < End) if there is one, otherwise the next to open (Start > at). When
-// several overlap at `at` the one that opened first is returned.
+// Next returns the earliest opening that has not yet closed at `at`: the one open now
+// (Start <= at < End) if there is one, otherwise the next to open (Start > at).
+//
+// Slots that overlap or touch are ONE opening: Saturday 22:00 for two hours followed by
+// Sunday 00:00 for two hours is open from 22:00 to 02:00, and End reports 02:00, not
+// midnight. A caller that bounds an operation by End (the command dispatch gate refuses a
+// claim at or after it) would otherwise see the window close and reopen at the seam.
 //
 // The interval is never empty: a schedule always has a slot, and slots recur weekly.
 func (s *Schedule) Next(at time.Time) Interval {
 	var best Interval
 	found := false
+	var all []Interval
 	consider := func(iv Interval) {
+		all = append(all, iv)
 		if !iv.End.After(at) {
 			return // already closed
 		}
@@ -199,6 +205,16 @@ func (s *Schedule) Next(at time.Time) Interval {
 			}
 			start := resolveLocal(s.zone, day.Year(), day.Month(), day.Day(), sl.hour, sl.minute)
 			consider(Interval{Start: start, End: start.Add(sl.duration)})
+		}
+	}
+	// Extend the opening through every interval that overlaps or touches it. Bounded by the
+	// scan: a schedule open all week long ends at the scan's horizon, at least a week out.
+	for extended := true; extended; {
+		extended = false
+		for _, iv := range all {
+			if !iv.Start.After(best.End) && iv.End.After(best.End) {
+				best.End, extended = iv.End, true
+			}
 		}
 	}
 	return best

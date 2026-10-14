@@ -189,18 +189,29 @@ func (api *Api) resolveMaintenanceWindowId(ctx context.Context, token *string) (
 // expiresAt, or a window that opens sooner, would be accepted.
 const RejectWindowAfterExpiry EnqueueRejectionCode = "WINDOW_AFTER_EXPIRY"
 
-// CommandDispatchHold is a device's command that must wait: not dispatched before
-// DispatchAfter, because the device type's maintenance window WindowToken is closed.
+// CommandDispatchHold binds a device's command to one opening of its device type's
+// maintenance window WindowToken: it may START in [DispatchAfter, DispatchUntil) and at no
+// other time. When the window is open at enqueue DispatchAfter is already past, so the command
+// may go at once; DispatchUntil is still the close of that opening, because a command that is
+// not claimed before the window closes (its device is offline, or the queue is long) must not
+// be sent whenever its device returns.
 type CommandDispatchHold struct {
 	DeviceToken   string
 	WindowToken   string
 	DispatchAfter time.Time
+	DispatchUntil time.Time
 }
 
 // CommandDispatchSchedule is the dispatch-time half of the window gate, asked at enqueue.
-// For each device it answers one of three things: nothing (the command is not gated, or its
-// window is open now — it may dispatch immediately), a HOLD (not before DispatchAfter), or a
-// REFUSAL (WINDOW_AFTER_EXPIRY — the next opening is after the command expires).
+// For each device it answers one of three things: nothing (the command is not gated — it may
+// dispatch at any time), a HOLD (only inside the opening [DispatchAfter, DispatchUntil), which
+// may be the one open now), or a REFUSAL (WINDOW_AFTER_EXPIRY — the next opening is after the
+// command expires).
+//
+// 🔴 A GATED COMMAND IS ALWAYS HELD, EVEN WHEN ITS WINDOW IS OPEN NOW. Answering "nothing" for
+// an open window would leave the command with no window at all: a device that is offline at
+// enqueue and returns after the close would be sent a disruptive command outside any window,
+// and the re-stamp pass, which finds rows by their window, would never see it.
 //
 // Like the enqueue gate it is a function of the device TYPE: the window and the command's
 // impact are resolved once per distinct type, so a ten-thousand-device batch over three
@@ -252,10 +263,10 @@ func (api *Api) CommandDispatchSchedule(ctx context.Context, deviceTokens []stri
 				}
 				verdicts[device.DeviceTypeId] = v
 			}
-			if !v.gated || v.after.IsZero() {
+			if !v.gated {
 				continue
 			}
-			if expiresAt != nil && v.after.After(*expiresAt) {
+			if expiresAt != nil && v.after.After(at) && v.after.After(*expiresAt) {
 				refusals = append(refusals, &BatchEnqueueRefusal{
 					DeviceToken: token,
 					Code:        RejectWindowAfterExpiry,
@@ -266,7 +277,7 @@ func (api *Api) CommandDispatchSchedule(ctx context.Context, deviceTokens []stri
 				continue
 			}
 			holds = append(holds, &CommandDispatchHold{
-				DeviceToken: token, WindowToken: v.windowToken, DispatchAfter: v.after,
+				DeviceToken: token, WindowToken: v.windowToken, DispatchAfter: v.after, DispatchUntil: v.until,
 			})
 		}
 	}
@@ -278,8 +289,10 @@ type typeWindowDecision struct {
 	// gated: the command is DISRUPTIVE or DESTRUCTIVE on a type that has a window.
 	gated       bool
 	windowToken string
-	// after is the earliest start; the zero time when the window is open now.
+	// [after, until) is the opening the command must start in: the one open now (after is
+	// then not later than the instant asked about), or the next.
 	after time.Time
+	until time.Time
 }
 
 // typeWindowVerdict resolves one device type's decision. windows memoizes the windows loaded
@@ -326,12 +339,8 @@ func (api *Api) typeWindowVerdict(ctx context.Context, deviceTypeId uint, comman
 	if err != nil {
 		return result{}, fmt.Errorf("maintenance window %q cannot be evaluated: %w", window.Token, err)
 	}
-	after := schedule.DispatchAfter(at)
-	out := result{gated: true, windowToken: window.Token}
-	if after.After(at) {
-		out.after = after
-	}
-	return out, nil
+	iv := schedule.Next(at)
+	return result{gated: true, windowToken: window.Token, after: iv.Start, until: iv.End}, nil
 }
 
 // WindowOpening is the answer to "when may an operation under this window start?".

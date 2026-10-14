@@ -19,6 +19,11 @@ import (
 //     mechanism: whichever road reaches a row (the delivery sweep, the LwM2M wake drain,
 //     the live confirm) ends in a conditional UPDATE that refuses a row whose stamp is in
 //     the future.
+//   - commands.dispatch_until: the instant the opening the row was stamped for CLOSES; a claim
+//     at or after it is refused. It is what makes the hold fail closed: a row whose opening
+//     passed unclaimed (its device was away) cannot be sent until it is re-stamped onto the
+//     next opening, so the re-stamp pass being late, or unable to reach the window's owner,
+//     delays the command instead of letting it out between windows.
 //   - commands.window_token: which maintenance window the stamp came from, so an edit of
 //     that window can re-stamp the rows still waiting on it. A token rather than an id
 //     because the window is owned by another service.
@@ -26,7 +31,7 @@ import (
 //     window when the batch was created. A stored fact about that moment, like resolved and
 //     accepted beside it; NULL on a batch from before the column existed.
 //
-// All three are NULLABLE with no default. A constant default is stored in the catalog
+// All four are NULLABLE with no default. A constant default is stored in the catalog
 // (attmissingval) rather than in the rows, which a logical dump and restore loses, and NULL
 // is the true reading of every existing row.
 //
@@ -46,6 +51,7 @@ import (
 func NewDispatchAfterSchema() *gormigrate.Migration {
 	statements := []string{
 		`ALTER TABLE "command-delivery".commands ADD COLUMN IF NOT EXISTS dispatch_after timestamptz;`,
+		`ALTER TABLE "command-delivery".commands ADD COLUMN IF NOT EXISTS dispatch_until timestamptz;`,
 		`ALTER TABLE "command-delivery".commands ADD COLUMN IF NOT EXISTS window_token varchar(128);`,
 		`ALTER TABLE "command-delivery".command_batches ADD COLUMN IF NOT EXISTS waiting integer;`,
 		`CREATE INDEX IF NOT EXISTS idx_commands_window_waiting ` +

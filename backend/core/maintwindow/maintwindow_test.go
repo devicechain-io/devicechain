@@ -99,6 +99,37 @@ func TestMultipleSlotsPickTheEarliest(t *testing.T) {
 	}
 }
 
+// Slots that touch or overlap are one opening, so its close is the close of the last one.
+// Reporting the first slot's close would make a caller that refuses work at End see the
+// window shut and reopen at the seam.
+func TestTouchingAndOverlappingSlotsAreOneOpening(t *testing.T) {
+	s := mustSchedule(t, "UTC",
+		Slot{Day: "SATURDAY", Start: "22:00", DurationMinutes: 120},
+		Slot{Day: "SUNDAY", Start: "00:00", DurationMinutes: 120},
+		Slot{Day: "SUNDAY", Start: "01:00", DurationMinutes: 120}) // overlaps the second
+	for _, at := range []time.Time{
+		utc(2026, 1, 17, 12, 0), // Saturday noon: the next opening
+		utc(2026, 1, 17, 23, 0), // inside the first slot
+		utc(2026, 1, 18, 0, 30), // inside the second
+		utc(2026, 1, 18, 2, 30), // inside only the third
+	} {
+		iv := s.Next(at)
+		if want := utc(2026, 1, 18, 3, 0); !iv.End.Equal(want) {
+			t.Fatalf("at %v: End = %v, want the merged close %v", at, iv.End, want)
+		}
+	}
+	if iv := s.Next(utc(2026, 1, 17, 23, 0)); !iv.Start.Equal(utc(2026, 1, 17, 22, 0)) {
+		t.Fatalf("Start = %v, want the first slot's start", iv.Start)
+	}
+	// A gap of a minute is a gap.
+	g := mustSchedule(t, "UTC",
+		Slot{Day: "SATURDAY", Start: "22:00", DurationMinutes: 119},
+		Slot{Day: "SUNDAY", Start: "00:00", DurationMinutes: 120})
+	if iv := g.Next(utc(2026, 1, 17, 23, 0)); !iv.End.Equal(utc(2026, 1, 17, 23, 59)) {
+		t.Fatalf("End = %v; slots a minute apart were merged", iv.End)
+	}
+}
+
 // Spring forward in Berlin: on 2026-03-29 the clock jumps 02:00 -> 03:00 (01:00 UTC), so
 // 02:30 that Sunday does not exist.
 func TestSpringForwardGapStartOpensAtTheJump(t *testing.T) {

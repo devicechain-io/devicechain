@@ -378,11 +378,14 @@ Cuando un comando `DISRUPTIVE` o `DESTRUCTIVE` se encola para un dispositivo cuy
 ventana, y la ventana está cerrada, el comando se acepta y **espera**. Permanece en `QUEUED`, con
 `dispatchAfter` fijado en la próxima apertura y `maintenanceWindowToken` con el nombre de la
 ventana. No se añadió ningún estado nuevo. Si la ventana está abierta, el comando se envía como
-siempre. Esto vale igual para un comando individual, un lote y la acción de enviar comando de una
-regla de detección.
+siempre, pero sigue ligado a esa apertura: si no se ha enviado cuando la ventana se cierra (porque
+su dispositivo está desconectado, por ejemplo), espera a la siguiente apertura en lugar de salir
+cuando vuelva el dispositivo. Esto vale igual para un comando individual, un lote y la acción de
+enviar comando de una regla de detección.
 
 La retención es un campo de la fila del comando, y quien la comprueba es la **reclamación** (claim):
-un comando no puede reclamarse para entrega antes de su `dispatchAfter`. Es deliberado. Todas las
+un comando no puede reclamarse para entrega antes de su `dispatchAfter`, ni una vez cerrada la
+apertura a la que está ligado. Es deliberado. Todas las
 rutas de entrega terminan en una reclamación, así que la regla se escribe una vez y ninguna puede
 saltársela: el barrido periódico de entrega, el vaciado al despertar de LwM2M (un dispositivo
 dormido que despierta) y la confirmación en vivo la respetan. Una compuerta colocada delante de cada
@@ -425,10 +428,10 @@ de que volviera el dispositivo.
 
 - Eliminar una ventana se rechaza mientras algún tipo de dispositivo la use. Si una ventana
   desaparece de todos modos, los comandos en espera se liberan y se despachan con normalidad.
-- Si un dispositivo está desconectado durante toda una apertura, su comando sin entregar pasa a la
-  siguiente apertura por ese mismo pase, en lugar de enviarse cuando el dispositivo vuelva fuera de
-  la ventana. Hay un retraso acotado de aproximadamente un minuto tras el cierre de una ventana
-  durante el cual un comando sin entregar todavía puede reclamarse.
+- Si un dispositivo está desconectado durante toda una apertura, su comando sin entregar ya no
+  puede reclamarse en cuanto la ventana se cierra, y ese mismo pase lo mueve a la siguiente
+  apertura. Si la entrega de comandos no puede contactar con el propietario de la ventana, los
+  comandos en espera siguen esperando; ninguno se libera.
 - Desasignar una ventana de un tipo de dispositivo no libera los comandos ya marcados con ella;
   siguen esperando a esa ventana.
 

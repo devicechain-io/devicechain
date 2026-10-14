@@ -78,7 +78,7 @@ export async function getMaintenanceWindow(token: string): Promise<MaintenanceWi
 }
 
 const CREATE_MAINTENANCE_WINDOW = graphql(`
-  mutation CreateMaintenanceWindow($request: MaintenanceWindowCreateRequest) {
+  mutation CreateMaintenanceWindow($request: MaintenanceWindowCreateRequest!) {
     createMaintenanceWindow(request: $request) {
       id
       token

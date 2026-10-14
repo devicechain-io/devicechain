@@ -174,6 +174,10 @@ func (r *CommandDispatchHoldResolver) DispatchAfter() string {
 	return r.M.DispatchAfter.UTC().Format(time.RFC3339)
 }
 
+func (r *CommandDispatchHoldResolver) DispatchUntil() string {
+	return r.M.DispatchUntil.UTC().Format(time.RFC3339)
+}
+
 // CommandDispatchScheduleResolver exposes the window half of an enqueue decision.
 type CommandDispatchScheduleResolver struct {
 	holds    []*model.CommandDispatchHold
@@ -233,12 +237,12 @@ func (r *SchemaResolver) CommandDispatchSchedule(ctx context.Context, args struc
 
 // Create a new maintenance window.
 func (r *SchemaResolver) CreateMaintenanceWindow(ctx context.Context, args struct {
-	Request *model.MaintenanceWindowCreateRequest
+	Request model.MaintenanceWindowCreateRequest
 }) (*MaintenanceWindowResolver, error) {
 	if err := auth.Authorize(ctx, auth.DeviceWrite); err != nil {
 		return nil, err
 	}
-	created, err := r.GetApi(ctx).CreateMaintenanceWindow(ctx, args.Request)
+	created, err := r.GetApi(ctx).CreateMaintenanceWindow(ctx, &args.Request)
 	if err != nil {
 		return nil, err
 	}

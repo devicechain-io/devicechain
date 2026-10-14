@@ -33,7 +33,7 @@ func NewWindowScheduler(client *svcclient.Client, graphqlURL string) *WindowSche
 
 const commandDispatchSchedule = `query($deviceTokens: [String!]!, $commandKey: String!, $expiresAt: String) {
   commandDispatchSchedule(deviceTokens: $deviceTokens, commandKey: $commandKey, expiresAt: $expiresAt) {
-    holds { deviceToken windowToken dispatchAfter }
+    holds { deviceToken windowToken dispatchAfter dispatchUntil }
     refusals { deviceToken code reason }
   }
 }`
@@ -57,6 +57,7 @@ func (s *WindowScheduler) ScheduleDispatch(ctx context.Context, deviceTokens []s
 				DeviceToken   string `json:"deviceToken"`
 				WindowToken   string `json:"windowToken"`
 				DispatchAfter string `json:"dispatchAfter"`
+				DispatchUntil string `json:"dispatchUntil"`
 			} `json:"holds"`
 			Refusals *[]struct {
 				DeviceToken string `json:"deviceToken"`
@@ -83,7 +84,12 @@ func (s *WindowScheduler) ScheduleDispatch(ctx context.Context, deviceTokens []s
 		if err != nil {
 			return nil, nil, fmt.Errorf("verify: device-management returned an unreadable dispatch time %q", h.DispatchAfter)
 		}
-		holds = append(holds, model.DispatchHold{DeviceToken: h.DeviceToken, WindowToken: h.WindowToken, DispatchAfter: after})
+		until, err := time.Parse(time.RFC3339, h.DispatchUntil)
+		if err != nil {
+			return nil, nil, fmt.Errorf("verify: device-management returned an unreadable window close %q", h.DispatchUntil)
+		}
+		holds = append(holds, model.DispatchHold{DeviceToken: h.DeviceToken, WindowToken: h.WindowToken,
+			DispatchAfter: after, DispatchUntil: until})
 	}
 	refusals := make([]model.BatchDeviceRefusal, 0, len(*out.CommandDispatchSchedule.Refusals))
 	for _, r := range *out.CommandDispatchSchedule.Refusals {
@@ -96,7 +102,7 @@ func (s *WindowScheduler) ScheduleDispatch(ctx context.Context, deviceTokens []s
 }
 
 const maintenanceWindowOpening = `query($token: String!, $at: String) {
-  maintenanceWindowOpening(token: $token, at: $at) { found openNow dispatchAfter }
+  maintenanceWindowOpening(token: $token, at: $at) { found openNow dispatchAfter closes }
 }`
 
 // WindowOpening implements model.WindowOpeningResolver.
@@ -111,6 +117,7 @@ func (s *WindowScheduler) WindowOpening(ctx context.Context, windowToken string,
 			Found         bool   `json:"found"`
 			OpenNow       bool   `json:"openNow"`
 			DispatchAfter string `json:"dispatchAfter"`
+			Closes        string `json:"closes"`
 		} `json:"maintenanceWindowOpening"`
 	}
 	vars := map[string]any{"token": windowToken, "at": at.UTC().Format(time.RFC3339)}
@@ -128,5 +135,9 @@ func (s *WindowScheduler) WindowOpening(ctx context.Context, windowToken string,
 	if err != nil {
 		return model.WindowOpening{}, fmt.Errorf("verify: device-management returned an unreadable opening %q", o.DispatchAfter)
 	}
-	return model.WindowOpening{Found: true, OpenNow: o.OpenNow, DispatchAfter: after}, nil
+	closes, err := time.Parse(time.RFC3339, o.Closes)
+	if err != nil {
+		return model.WindowOpening{}, fmt.Errorf("verify: device-management returned an unreadable close %q", o.Closes)
+	}
+	return model.WindowOpening{Found: true, OpenNow: o.OpenNow, DispatchAfter: after, Closes: closes}, nil
 }

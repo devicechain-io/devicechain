@@ -362,11 +362,14 @@ concurrency limit.
 When a `DISRUPTIVE` or `DESTRUCTIVE` command is enqueued to a device whose type has a window, and
 the window is closed, the command is accepted and **waits**. It stays `QUEUED`, with
 `dispatchAfter` set to the next opening and `maintenanceWindowToken` naming the window. No new
-status was added. If the window is open, the command is sent as usual. This applies to a single
-command, a batch, and the send-command action of a detection rule alike.
+status was added. If the window is open, the command is sent as usual, but it is still bound to
+that opening: if it has not been sent by the time the window closes (its device is offline, for
+example), it waits for the next opening instead of going out whenever the device returns. This
+applies to a single command, a batch, and the send-command action of a detection rule alike.
 
 The hold is a field on the command row, and the **claim** checks it: a command cannot be claimed for
-delivery before its `dispatchAfter`. That is deliberate. Every delivery path ends in a claim, so the
+delivery before its `dispatchAfter`, or once the opening it is bound to has closed. That is
+deliberate. Every delivery path ends in a claim, so the
 rule is written once and none of them can bypass it: the periodic delivery sweep, the LwM2M wake
 drain (a sleeping device that wakes) and the live confirmation all honour it. A gate placed in
 front of each path would need every present and future path to remember it.
@@ -406,10 +409,9 @@ because the window was edited or deleted, or closed again before the device retu
 
 - Deleting a window is refused while any device type uses it. If a window is gone anyway, waiting
   commands are released and dispatch normally.
-- If a device is offline through a whole opening, its undelivered command is rolled to the next
-  opening by the same pass, rather than being sent whenever the device returns outside the window.
-  There is a bounded lag of about a minute after a window closes during which an undelivered command
-  can still be claimed.
+- If a device is offline through a whole opening, its undelivered command cannot be claimed once
+  the window closes, and the same pass moves it to the next opening. If command delivery cannot
+  reach the window's owner, waiting commands stay waiting; none is released.
 - Unassigning a window from a device type does not release commands already stamped from it; they
   keep waiting for that window.
 

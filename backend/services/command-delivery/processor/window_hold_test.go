@@ -7,6 +7,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -96,7 +97,7 @@ func TestTheRestampPassMovesWaitingRowsOfEveryTenantUnderItsOwnTenant(t *testing
 		seedHeldRow(t, api, tenant, "w-"+tenant, "dev-1", model.CommandHeld, time.Now().Add(time.Hour))
 	}
 	opens := &fakeOpenings{answers: map[string]model.WindowOpening{
-		"plant-a": {Found: true, DispatchAfter: next}}}
+		"plant-a": {Found: true, DispatchAfter: next, Closes: next.Add(4 * time.Hour)}}}
 	proc := &CommandDeliveryProcessor{Api: api, WindowOpenings: opens}
 
 	if err := proc.restampWindows(context.Background()); err != nil {
@@ -116,7 +117,7 @@ func TestTheRestampPassIsThrottled(t *testing.T) {
 	api := realApi(t)
 	seedHeldRow(t, api, "acme", "w", "dev-1", model.CommandHeld, time.Now().Add(time.Hour))
 	opens := &fakeOpenings{answers: map[string]model.WindowOpening{
-		"plant-a": {Found: true, DispatchAfter: time.Now().Add(48 * time.Hour)}}}
+		"plant-a": {Found: true, DispatchAfter: time.Now().Add(48 * time.Hour), Closes: time.Now().Add(52 * time.Hour)}}}
 	proc := &CommandDeliveryProcessor{Api: api, WindowOpenings: opens}
 	for i := 0; i < 3; i++ {
 		if err := proc.restampWindows(context.Background()); err != nil {
@@ -182,7 +183,7 @@ type restampingApi struct {
 	listed int
 }
 
-func (r *restampingApi) WaitingWindows(context.Context, int) ([]model.WaitingWindow, error) {
+func (r *restampingApi) WaitingWindows(context.Context, model.WaitingWindow, int) ([]model.WaitingWindow, error) {
 	r.listed++
 	return nil, nil
 }
@@ -210,5 +211,45 @@ func TestTheSweepRunsTheRestampPassUnderItsLock(t *testing.T) {
 	_ = proc2.sweepLocked(context.Background())
 	if api2.listed != 0 {
 		t.Fatal("a replica without the sweep lock ran the re-stamp pass")
+	}
+}
+
+// pagingApi hands out full pages of (tenant, window) pairs and records where each pass
+// asked to resume from.
+type pagingApi struct {
+	*fakeApi
+	pages  [][]model.WaitingWindow
+	afters []model.WaitingWindow
+}
+
+func (p *pagingApi) WaitingWindows(_ context.Context, after model.WaitingWindow, _ int) ([]model.WaitingWindow, error) {
+	p.afters = append(p.afters, after)
+	page := p.pages[0]
+	p.pages = p.pages[1:]
+	return page, nil
+}
+
+func (p *pagingApi) RestampWindow(context.Context, string, model.WindowOpening, time.Time) (int64, error) {
+	return 0, nil
+}
+
+// More waiting pairs than one pass handles must not starve the ones past the first page: a
+// full page moves the cursor to its last pair, and a short page wraps it to the start.
+func TestTheRestampPassPagesThroughEveryWaitingWindow(t *testing.T) {
+	full := make([]model.WaitingWindow, model.WaitingWindowsPage)
+	for i := range full {
+		full[i] = model.WaitingWindow{TenantId: "acme", WindowToken: fmt.Sprintf("w%04d", i)}
+	}
+	api := &pagingApi{fakeApi: &fakeApi{}, pages: [][]model.WaitingWindow{full, full[:1], full[:1]}}
+	proc := &CommandDeliveryProcessor{Api: api, WindowOpenings: &fakeOpenings{}}
+	for i := 0; i < 3; i++ {
+		proc.lastWindowRestamp = time.Time{}
+		_ = proc.restampWindows(context.Background())
+	}
+	want := []model.WaitingWindow{{}, full[len(full)-1], {}}
+	for i := range want {
+		if api.afters[i] != want[i] {
+			t.Fatalf("pass %d resumed after %v, want %v", i+1, api.afters[i], want[i])
+		}
 	}
 }

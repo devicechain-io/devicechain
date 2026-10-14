@@ -680,14 +680,20 @@ type MaintenanceWindowOpening {
     closes: String!
 }
 
-"""A command that must wait for a maintenance window before it is sent."""
+"""
+A command bound to one opening of its device type's maintenance window: it may be sent only
+between dispatchAfter and dispatchUntil. When the window is open now, dispatchAfter is already
+past and the command may be sent at once, but only until the window closes.
+"""
 type CommandDispatchHold {
     """Token of the device the command is for."""
     deviceToken: String!
-    """Token of the maintenance window the command waits for."""
+    """Token of the maintenance window that gates the command."""
     windowToken: String!
     """The earliest instant the command may be sent, as an RFC 3339 timestamp."""
     dispatchAfter: String!
+    """When the opening closes, as an RFC 3339 timestamp. The command may not be sent at or after it."""
+    dispatchUntil: String!
 }
 
 """
@@ -695,7 +701,10 @@ The maintenance-window part of an enqueue decision for one or many devices: whic
 must wait, and which are refused because the window opens only after they expire.
 """
 type CommandDispatchSchedule {
-    """Commands that must wait. A device not listed here and not refused may be sent to immediately."""
+    """
+    Commands gated by a window, whether it is open now or not. A device not listed here and not
+    refused may be sent to at any time.
+    """
     holds: [CommandDispatchHold!]!
     """
     Devices refused with the stable code WINDOW_AFTER_EXPIRY: the window next opens after the
@@ -3397,12 +3406,21 @@ type Query {
     # the type has never been published.
     activeAssetTypeVersion(token: String!): AssetTypeVersion
 
-    # Find maintenance windows by unique id.
-    maintenanceWindowsById(ids: [ID!]!): [MaintenanceWindow!]!
-    # Find maintenance windows by unique token.
-    maintenanceWindowsByToken(tokens: [String!]!): [MaintenanceWindow!]!
-    # List maintenance windows that meet criteria.
-    maintenanceWindows(criteria: MaintenanceWindowSearchCriteria!): MaintenanceWindowSearchResults!
+    """Find maintenance windows by unique id. Ids that match nothing are omitted. Requires device:read."""
+    maintenanceWindowsById(
+        """Ids of the windows to find."""
+        ids: [ID!]!
+    ): [MaintenanceWindow!]!
+    """Find maintenance windows by unique token. Tokens that match nothing are omitted. Requires device:read."""
+    maintenanceWindowsByToken(
+        """Tokens of the windows to find."""
+        tokens: [String!]!
+    ): [MaintenanceWindow!]!
+    """List the tenant's maintenance windows, one page at a time. Requires device:read."""
+    maintenanceWindows(
+        """Which page to return."""
+        criteria: MaintenanceWindowSearchCriteria!
+    ): MaintenanceWindowSearchResults!
     """
     When an operation under the maintenance window with this token may start at the given
     instant. The answer for a deleted window is found=false, not an error. Requires device:read.
@@ -3860,12 +3878,33 @@ type Mutation {
     updateCustomerType(token: String!, request: CustomerTypeUpdateRequest!): CustomerType!
     # Delete a customer type. Refused while any customer references it.
     deleteCustomerType(token: String!): Boolean!
-    # Create a new maintenance window.
-    createMaintenanceWindow(request: MaintenanceWindowCreateRequest): MaintenanceWindow!
-    # Update an existing maintenance window. Commands waiting for it follow the new schedule.
-    updateMaintenanceWindow(token: String!, request: MaintenanceWindowUpdateRequest!): MaintenanceWindow!
-    # Delete a maintenance window. Refused while any device type uses it.
-    deleteMaintenanceWindow(token: String!): Boolean!
+    """
+    Create a maintenance window. The time zone and slots are validated together, and the slots
+    are stored in canonical form. Requires device:write.
+    """
+    createMaintenanceWindow(
+        """The window to create."""
+        request: MaintenanceWindowCreateRequest!
+    ): MaintenanceWindow!
+    """
+    Update a maintenance window. A partial update: an omitted field is left alone. Commands
+    already waiting on the window follow the new schedule within about a minute. Requires
+    device:write.
+    """
+    updateMaintenanceWindow(
+        """Token of the window to update."""
+        token: String!
+        """The fields to change."""
+        request: MaintenanceWindowUpdateRequest!
+    ): MaintenanceWindow!
+    """
+    Delete a maintenance window. Refused while any device type uses it, because deleting it would
+    stop holding those types' disruptive commands. Requires device:write.
+    """
+    deleteMaintenanceWindow(
+        """Token of the window to delete."""
+        token: String!
+    ): Boolean!
 
     # Create a new customer.
     createCustomer(request: CustomerCreateRequest): Customer!

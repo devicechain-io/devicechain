@@ -365,10 +365,12 @@ func (api *Api) decideCommandBatch(ctx context.Context, request *CommandBatchCre
 		created.Accepted = len(admitted)
 		acct.accepted = len(admitted)
 		// How many of the ADMITTED members wait is a fact about this moment, recorded on
-		// the batch like resolved and accepted.
+		// the batch like resolved and accepted. A member bound to the opening that is open
+		// now is gated but not waiting.
 		waiting := 0
+		decidedAt := time.Now()
 		for _, token := range admitted {
-			if _, held := holds[token]; held {
+			if hold, held := holds[token]; held && hold.DispatchAfter.After(decidedAt) {
 				waiting++
 			}
 		}
@@ -727,8 +729,7 @@ func insertBatchCommands(tx *gorm.DB, batch *CommandBatch, deviceTokens []string
 		cmd.UpdatedAt = queuedTime
 		cmd.Token = batchCommandToken(batch.ID, i)
 		if hold, held := holds[deviceToken]; held {
-			cmd.DispatchAfter = sql.NullTime{Time: hold.DispatchAfter, Valid: true}
-			cmd.WindowToken = sql.NullString{String: hold.WindowToken, Valid: true}
+			stampHold(cmd, hold)
 		}
 		if len(payload) > 0 {
 			raw := datatypes.JSON(payload)

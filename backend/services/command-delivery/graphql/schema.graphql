@@ -133,15 +133,16 @@ type Command implements Model & TokenReference & MetadataEntity {
     """
     expiresAt: String
     """
-    The earliest instant the command may be sent, as an RFC 3339 timestamp, when it is waiting
-    for its device type's maintenance window; null when it was never held. While the status is
-    QUEUED, HELD or PARKED and this is in the future the command is waiting for the window; a
-    past value only records how long it waited. The command stays QUEUED while it waits.
+    The start of the maintenance-window opening the command may be sent in, as an RFC 3339
+    timestamp; null when the command is not gated by a window. While the status is QUEUED, HELD
+    or PARKED and this is in the future the command is waiting for the window; it stays QUEUED
+    while it waits. A past value means the opening has begun. A command that is not sent before
+    that opening closes is moved to the next one.
     """
     dispatchAfter: String
     """
-    The token of the maintenance window the hold came from, or null when the command was never
-    held. Editing that window moves the dispatchAfter of the commands still waiting on it.
+    The token of the maintenance window that gates the command, or null when it is not gated.
+    Editing that window moves the commands still waiting on it to the new schedule.
     """
     maintenanceWindowToken: String
     """

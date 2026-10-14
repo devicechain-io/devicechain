@@ -19,7 +19,7 @@ import (
 // documents): a test double of the delivery API that knows nothing about windows then keeps
 // compiling, and the pass quietly does nothing for it.
 type windowRestamper interface {
-	WaitingWindows(ctx context.Context, limit int) ([]model.WaitingWindow, error)
+	WaitingWindows(ctx context.Context, after model.WaitingWindow, limit int) ([]model.WaitingWindow, error)
 	RestampWindow(ctx context.Context, windowToken string, opening model.WindowOpening, now time.Time) (int64, error)
 }
 
@@ -60,9 +60,16 @@ func (cproc *CommandDeliveryProcessor) restampWindows(ctx context.Context) error
 	// which (tenant, window) pairs have waiting commands, exactly as the delivery sweep's
 	// pending read does. It selects only the pair; every write below is made under that
 	// pair's own tenant.
-	pairs, err := restamper.WaitingWindows(core.WithSystemContext(ctx), 0)
+	pairs, err := restamper.WaitingWindows(core.WithSystemContext(ctx), cproc.windowCursor, model.WaitingWindowsPage)
 	if err != nil {
 		return fmt.Errorf("listing windows with waiting commands: %w", err)
+	}
+	// A full page means there may be more: the next pass resumes after the last pair. A
+	// short page means the end was reached, so the next pass starts from the beginning.
+	if len(pairs) >= model.WaitingWindowsPage {
+		cproc.windowCursor = pairs[len(pairs)-1]
+	} else {
+		cproc.windowCursor = model.WaitingWindow{}
 	}
 	var firstErr error
 	for _, pair := range pairs {

@@ -31,7 +31,7 @@ func TestMaintenanceWindowWireSurface(t *testing.T) {
 		return out
 	}
 
-	created := exec(`mutation($r: MaintenanceWindowCreateRequest) {
+	created := exec(`mutation($r: MaintenanceWindowCreateRequest!) {
 	  createMaintenanceWindow(request: $r) { token timezone slots }
 	}`, map[string]any{"r": map[string]any{
 		"token": "plant", "timezone": "Europe/Berlin",
@@ -65,7 +65,7 @@ func TestMaintenanceWindowWireSurface(t *testing.T) {
 		t.Fatalf("refusals = %v, want an empty list", sched["refusals"])
 	}
 
-	res := schema.Exec(ctx, `mutation($r: MaintenanceWindowCreateRequest) {
+	res := schema.Exec(ctx, `mutation($r: MaintenanceWindowCreateRequest!) {
 	  createMaintenanceWindow(request: $r) { token } }`, "", map[string]any{"r": map[string]any{
 		"token": "bad", "timezone": "Nowhere/Land", "slots": `[{"day":"SUNDAY","start":"02:00","durationMinutes":60}]`}})
 	if len(res.Errors) == 0 {

@@ -206,6 +206,28 @@ func TestEnqueueStampsTheHoldAndKeepsTheRowQueued(t *testing.T) {
 	}
 }
 
+// A gated command enqueued while its window is open is claimable at once, and still carries
+// the window's close and token, so it cannot go out after the close.
+func TestEnqueueInsideAnOpenWindowStampsBothBounds(t *testing.T) {
+	api := newTestApi(t)
+	ctx := core.WithTenant(context.Background(), "A")
+	opened := time.Now().Add(-time.Hour).Truncate(time.Second)
+	closes := time.Now().Add(time.Hour).Truncate(time.Second)
+	api.DispatchScheduler = &fakeScheduler{holds: []DispatchHold{
+		{DeviceToken: "dev-1", WindowToken: "plant-a", DispatchAfter: opened, DispatchUntil: closes}}}
+	if _, err := api.CreateCommand(ctx, &CommandCreateRequest{Token: "c1", DeviceToken: "dev-1", Name: "reboot"}); err != nil {
+		t.Fatal(err)
+	}
+	row := commandRow(t, api, ctx, "c1")
+	if !row.DispatchUntil.Valid || !row.DispatchUntil.Time.Equal(closes) || row.WindowToken.String != "plant-a" {
+		t.Fatalf("stamp = [%v, %v) %v, want closing at %v under plant-a", row.DispatchAfter, row.DispatchUntil,
+			row.WindowToken, closes)
+	}
+	if _, claimed, _ := api.MarkSent(ctx, row.ID); !claimed {
+		t.Fatal("a command inside its open window was not claimable")
+	}
+}
+
 func TestEnqueueHandsTheScheduleTheCommandsExpiry(t *testing.T) {
 	api := newTestApi(t)
 	ctx := core.WithTenant(context.Background(), "A")
@@ -276,8 +298,11 @@ func TestBatchMembersAreStampedAndCounted(t *testing.T) {
 	tokens := deviceTokens(4)
 	after := time.Now().Add(24 * time.Hour).Truncate(time.Second)
 	api.DispatchScheduler = &fakeScheduler{holds: []DispatchHold{
-		{DeviceToken: tokens[0], WindowToken: "plant-a", DispatchAfter: after},
-		{DeviceToken: tokens[2], WindowToken: "plant-a", DispatchAfter: after},
+		{DeviceToken: tokens[0], WindowToken: "plant-a", DispatchAfter: after, DispatchUntil: after.Add(time.Hour)},
+		{DeviceToken: tokens[2], WindowToken: "plant-a", DispatchAfter: after, DispatchUntil: after.Add(time.Hour)},
+		// Gated, but its window is open now: bound to it, not waiting.
+		{DeviceToken: tokens[3], WindowToken: "plant-b", DispatchAfter: time.Now().Add(-time.Hour),
+			DispatchUntil: time.Now().Add(time.Hour)},
 	}}
 
 	batch, err := api.CreateCommandBatch(ctx, batchRequest("b1", tokens))
@@ -293,7 +318,7 @@ func TestBatchMembersAreStampedAndCounted(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, c := range rows.Results {
-		if c.DispatchAfter.Valid {
+		if c.DispatchAfter.Valid && c.DispatchAfter.Time.After(time.Now()) {
 			held++
 			if c.WindowToken.String != "plant-a" || !c.DispatchAfter.Time.Equal(after) {
 				t.Fatalf("member %s stamped %v / %v", c.DeviceToken, c.DispatchAfter, c.WindowToken)
@@ -304,7 +329,12 @@ func TestBatchMembersAreStampedAndCounted(t *testing.T) {
 		}
 	}
 	if held != 2 {
-		t.Fatalf("%d members carry a hold, want 2", held)
+		t.Fatalf("%d members carry a future hold, want 2", held)
+	}
+	for _, c := range rows.Results {
+		if c.DeviceToken == tokens[3] && (!c.DispatchUntil.Valid || c.WindowToken.String != "plant-b") {
+			t.Fatalf("the open-window member was not bound to its window: %v %v", c.DispatchUntil, c.WindowToken)
+		}
 	}
 }
 
@@ -368,7 +398,8 @@ func TestRestampMovesWaitingRowsToTheNewOpening(t *testing.T) {
 
 	now := time.Now()
 	next := now.Add(72 * time.Hour).Truncate(time.Second)
-	moved, err := api.RestampWindow(ctx, "mw", WindowOpening{Found: true, DispatchAfter: next}, now)
+	moved, err := api.RestampWindow(ctx, "mw", WindowOpening{Found: true, DispatchAfter: next,
+		Closes: next.Add(4 * time.Hour)}, now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -397,14 +428,106 @@ func TestRestampRollsAnOpenedButUndeliveredRowToTheNextOpening(t *testing.T) {
 	seedHoldRow(t, api, ctx, "missed", "d1", CommandHeld, anHourAgo())
 	now := time.Now()
 	next := now.Add(7 * 24 * time.Hour).Truncate(time.Second)
-	if _, err := api.RestampWindow(ctx, "mw", WindowOpening{Found: true, OpenNow: false, DispatchAfter: next}, now); err != nil {
+	if _, err := api.RestampWindow(ctx, "mw", WindowOpening{Found: true, OpenNow: false, DispatchAfter: next,
+		Closes: next.Add(4 * time.Hour)}, now); err != nil {
 		t.Fatal(err)
 	}
 	if got := stamp(t, api, ctx, "missed"); !got.Time.Equal(next) {
 		t.Fatalf("stamp = %v, want rolled to %v", got.Time, next)
 	}
+	if got := commandRow(t, api, ctx, "missed").DispatchUntil; !got.Valid || !got.Time.Equal(next.Add(4*time.Hour)) {
+		t.Fatalf("close = %v, want the next opening's close", got)
+	}
 	if drained, _ := api.DrainableCommands(ctx, "d1", 32); len(drained) != 0 {
 		t.Fatal("the returning device would have been sent a disruptive command outside any window")
+	}
+}
+
+// THE FAIL-CLOSED HALF. A row whose opening CLOSED unclaimed must be unclaimable on every road
+// before any re-stamp pass runs: the pass is late by up to its interval in the healthy case,
+// and never runs at all while device-management is unreachable. The control is the same row
+// with its close in the future, which every road takes.
+func TestARowWhoseOpeningClosedUnclaimedIsRefusedWithoutARestamp(t *testing.T) {
+	closeAt := func(t *testing.T, api *Api, ctx context.Context, token string, at time.Time) {
+		t.Helper()
+		if err := api.RDB.DB(ctx).Model(&Command{}).Where("token = ?", token).
+			Update("dispatch_until", at).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Run("sweep", func(t *testing.T) {
+		api := newTestApi(t)
+		ctx := core.WithTenant(context.Background(), "A")
+		id := seedHoldRow(t, api, ctx, "missed", "d1", CommandQueued, anHourAgo())
+		closeAt(t, api, ctx, "missed", time.Now().Add(-time.Minute))
+		if pending, _ := api.PendingCommands(ctx); len(pending) != 0 {
+			t.Fatalf("the sweep selected %v after the window closed", idsOf(pending))
+		}
+		if _, claimed, _ := api.MarkSent(ctx, id); claimed {
+			t.Fatal("MarkSent claimed a row whose opening had closed")
+		}
+		closeAt(t, api, ctx, "missed", time.Now().Add(time.Hour))
+		if _, claimed, _ := api.MarkSent(ctx, id); !claimed {
+			t.Fatal("control: MarkSent refused a row inside its opening")
+		}
+	})
+	t.Run("drain", func(t *testing.T) {
+		api := newTestApi(t)
+		ctx := core.WithTenant(context.Background(), "A")
+		seedHoldRow(t, api, ctx, "missed", "d1", CommandParked, anHourAgo())
+		closeAt(t, api, ctx, "missed", time.Now().Add(-time.Minute))
+		if drained, _ := api.DrainableCommands(ctx, "d1", 32); len(drained) != 0 {
+			t.Fatal("the wake drain offered a row whose opening had closed")
+		}
+		if _, claimed, _ := api.MarkSentByToken(ctx, "missed"); claimed {
+			t.Fatal("MarkSentByToken claimed a row whose opening had closed")
+		}
+		closeAt(t, api, ctx, "missed", time.Now().Add(time.Hour))
+		if _, claimed, _ := api.MarkSentByToken(ctx, "missed"); !claimed {
+			t.Fatal("control: MarkSentByToken refused a row inside its opening")
+		}
+	})
+	t.Run("confirm", func(t *testing.T) {
+		api := newTestApi(t)
+		ctx := core.WithTenant(context.Background(), "A")
+		_, nonce := sentWithNonce(t, api, ctx, "live")
+		closeAt(t, api, ctx, "live", time.Now().Add(-time.Minute))
+		if _, won, _ := api.ConfirmDispatch(ctx, "live", nonce); won {
+			t.Fatal("a late envelope was actuated after its window closed")
+		}
+		closeAt(t, api, ctx, "live", time.Now().Add(time.Hour))
+		if _, won, _ := api.ConfirmDispatch(ctx, "live", nonce); !won {
+			t.Fatal("control: ConfirmDispatch refused a row inside its opening")
+		}
+	})
+}
+
+func TestRestampBindsRowsToTheOpeningThatIsOpenNow(t *testing.T) {
+	api := newTestApi(t)
+	ctx := core.WithTenant(context.Background(), "A")
+	// Its previous opening passed unclaimed; the window is open again now.
+	id := seedHoldRow(t, api, ctx, "missed", "d1", CommandHeld, anHourAgo())
+	if err := api.RDB.DB(ctx).Model(&Command{}).Where("id = ?", id).
+		Update("dispatch_until", time.Now().Add(-30*time.Minute)).Error; err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	closes := now.Add(2 * time.Hour).Truncate(time.Second)
+	open := WindowOpening{Found: true, OpenNow: true, DispatchAfter: now, Closes: closes}
+	if moved, err := api.RestampWindow(ctx, "mw", open, now); err != nil || moved != 1 {
+		t.Fatalf("moved %d (err %v), want 1", moved, err)
+	}
+	row := commandRow(t, api, ctx, "missed")
+	if !row.DispatchUntil.Time.Equal(closes) || row.DispatchAfter.Time.After(now) {
+		t.Fatalf("row = [%v, %v), want bound to the open opening closing at %v", row.DispatchAfter.Time,
+			row.DispatchUntil.Time, closes)
+	}
+	// A second pass over the unchanged window writes nothing.
+	if moved, err := api.RestampWindow(ctx, "mw", open, now.Add(time.Minute)); err != nil || moved != 0 {
+		t.Fatalf("an unchanged window moved %d rows (err %v)", moved, err)
+	}
+	if _, claimed, _ := api.MarkSentByToken(ctx, "missed"); !claimed {
+		t.Fatal("a row bound to the open window was not claimable")
 	}
 }
 
@@ -413,7 +536,8 @@ func TestRestampBringsAHoldForwardWhenTheWindowIsOpenNow(t *testing.T) {
 	ctx := core.WithTenant(context.Background(), "A")
 	id := seedHoldRow(t, api, ctx, "early", "d1", CommandQueued, inAnHour())
 	now := time.Now()
-	if _, err := api.RestampWindow(ctx, "mw", WindowOpening{Found: true, OpenNow: true, DispatchAfter: now}, now); err != nil {
+	if _, err := api.RestampWindow(ctx, "mw", WindowOpening{Found: true, OpenNow: true, DispatchAfter: now,
+		Closes: now.Add(time.Hour)}, now); err != nil {
 		t.Fatal(err)
 	}
 	if _, claimed, _ := api.MarkSent(ctx, id); !claimed {
@@ -429,7 +553,7 @@ func TestRestampReleasesRowsWhoseWindowWasDeleted(t *testing.T) {
 		t.Fatal(err)
 	}
 	row := commandRow(t, api, ctx, "orphan")
-	if row.DispatchAfter.Valid || row.WindowToken.Valid {
+	if row.DispatchAfter.Valid || row.DispatchUntil.Valid || row.WindowToken.Valid {
 		t.Fatalf("hold survived its window: %v %v", row.DispatchAfter, row.WindowToken)
 	}
 	if _, claimed, _ := api.MarkSent(ctx, id); !claimed {
@@ -465,11 +589,22 @@ func TestWaitingWindowsListsEachTenantWindowPairOnce(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got, err := api.WaitingWindows(core.WithSystemContext(context.Background()), 0)
+	sys := core.WithSystemContext(context.Background())
+	got, err := api.WaitingWindows(sys, WaitingWindow{}, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(got) != 2 || got[0] != (WaitingWindow{"A", "mw"}) || got[1] != (WaitingWindow{"B", "mw"}) {
 		t.Fatalf("got %v, want one pair per tenant", got)
+	}
+	// Paged: a page of one, then the page after it, then nothing.
+	if got, _ = api.WaitingWindows(sys, WaitingWindow{}, 1); len(got) != 1 || got[0].TenantId != "A" {
+		t.Fatalf("first page = %v", got)
+	}
+	if got, _ = api.WaitingWindows(sys, got[0], 1); len(got) != 1 || got[0].TenantId != "B" {
+		t.Fatalf("second page = %v; the cursor did not advance", got)
+	}
+	if got, _ = api.WaitingWindows(sys, got[0], 1); len(got) != 0 {
+		t.Fatalf("third page = %v, want the end", got)
 	}
 }

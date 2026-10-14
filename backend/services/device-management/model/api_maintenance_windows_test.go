@@ -85,10 +85,10 @@ func TestADisruptiveCommandIsHeldUntilTheNextOpening(t *testing.T) {
 	if len(holds) != 3 {
 		t.Fatalf("got %d holds, want one per device", len(holds))
 	}
-	want := utcAt(2026, 1, 18, 1, 0)
+	want, closes := utcAt(2026, 1, 18, 1, 0), utcAt(2026, 1, 18, 5, 0)
 	for _, h := range holds {
-		if !h.DispatchAfter.Equal(want) || h.WindowToken != "mw-plant" {
-			t.Fatalf("hold = %+v, want %v under mw-plant", h, want)
+		if !h.DispatchAfter.Equal(want) || !h.DispatchUntil.Equal(closes) || h.WindowToken != "mw-plant" {
+			t.Fatalf("hold = %+v, want [%v, %v) under mw-plant", h, want, closes)
 		}
 	}
 }
@@ -121,13 +121,27 @@ func TestANormalCommandIsNeverHeld(t *testing.T) {
 	}
 }
 
-func TestACommandInsideTheWindowIsNotHeld(t *testing.T) {
+// A command enqueued while its window is open may go at once, but ONLY until the window
+// closes: it is still bound to that opening, so a device that is offline now and returns
+// after the close is not sent a disruptive command between windows. Answering "no hold"
+// here would leave the command with no window at all.
+func TestACommandInsideTheWindowIsBoundToTheCurrentOpening(t *testing.T) {
 	api := newWindowTestApi(t)
 	ctx := core.WithTenant(context.Background(), "A")
 	tokens := seedGatedType(t, api, ctx, "plant", 1)
-	holds, refusals, err := api.CommandDispatchSchedule(ctx, tokens, "reboot", nil, utcAt(2026, 1, 18, 3, 0))
-	if err != nil || len(holds) != 0 || len(refusals) != 0 {
+	at := utcAt(2026, 1, 18, 3, 0) // Sunday 04:00 Berlin, inside 02:00-06:00
+	// An expiry before the close does not refuse it: the window is open now.
+	expires := utcAt(2026, 1, 18, 4, 0)
+	holds, refusals, err := api.CommandDispatchSchedule(ctx, tokens, "reboot", &expires, at)
+	if err != nil || len(holds) != 1 || len(refusals) != 0 {
 		t.Fatalf("inside the window: holds=%v refusals=%v err=%v", holds, refusals, err)
+	}
+	h := holds[0]
+	if h.DispatchAfter.After(at) {
+		t.Fatalf("dispatchAfter = %v; an open window must admit the command now (%v)", h.DispatchAfter, at)
+	}
+	if !h.DispatchUntil.Equal(utcAt(2026, 1, 18, 5, 0)) || h.WindowToken != "mw-plant" {
+		t.Fatalf("hold = %+v, want it bound to the opening that closes at 05:00 UTC under mw-plant", h)
 	}
 }
 

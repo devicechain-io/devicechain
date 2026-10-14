@@ -436,7 +436,7 @@ func (api *Api) CreateCommand(ctx context.Context, request *CommandCreateRequest
 	// a command whose window opens only after it expires is refused here instead of being
 	// accepted to lapse unsent. Same two-outcome discipline as the gate above: a refusal is
 	// relayed, a failure to decide fails closed with a sanitized message.
-	holdAfter, holdWindow, err := api.windowHoldFor(ctx, request.DeviceToken, request.Name, expiresAt)
+	hold, err := api.windowHoldFor(ctx, request.DeviceToken, request.Name, expiresAt)
 	if err != nil {
 		return nil, err
 	}
@@ -470,9 +470,8 @@ func (api *Api) CreateCommand(ctx context.Context, request *CommandCreateRequest
 		QueuedTime:  time.Now(),
 		ExpiresAt:   expiresAt,
 	}
-	if holdWindow != "" {
-		created.DispatchAfter = sql.NullTime{Time: holdAfter, Valid: true}
-		created.WindowToken = sql.NullString{String: holdWindow, Valid: true}
+	if hold != nil {
+		stampHold(created, *hold)
 	}
 
 	// The held-command ceiling and the insert run in ONE transaction, so the count

@@ -1777,7 +1777,7 @@ export type MaintenanceWindowByTokenQueryVariables = Exact<{
 export type MaintenanceWindowByTokenQuery = { maintenanceWindowsByToken: Array<{ id: string, token: string, name: string | null, description: string | null, timezone: string, slots: string, metadata: string | null, createdAt: string | null, updatedAt: string | null }> };
 
 export type CreateMaintenanceWindowMutationVariables = Exact<{
-  request?: MaintenanceWindowCreateRequest | null | undefined;
+  request: MaintenanceWindowCreateRequest;
 }>;
 
 
@@ -3685,7 +3685,7 @@ export const MaintenanceWindowByTokenDocument = new TypedDocumentString(`
 }
     `) as unknown as TypedDocumentString<MaintenanceWindowByTokenQuery, MaintenanceWindowByTokenQueryVariables>;
 export const CreateMaintenanceWindowDocument = new TypedDocumentString(`
-    mutation CreateMaintenanceWindow($request: MaintenanceWindowCreateRequest) {
+    mutation CreateMaintenanceWindow($request: MaintenanceWindowCreateRequest!) {
   createMaintenanceWindow(request: $request) {
     id
     token

@@ -87,7 +87,8 @@ is not declared with one of these impacts, including a raw `lwm2m.execute`, is n
 
 ## Send a command and watch it wait {#send-and-watch-it-wait}
 
-Send the command as usual. If the window is closed, the command is accepted and waits.
+Send the command as usual. If the window is closed, the command is accepted and waits. If the window
+is open, the command is sent at once, but only until the window closes.
 
 ```graphql
 mutation {

@@ -89,7 +89,8 @@ retiene.
 
 ## Enviar un comando y verlo esperar {#send-and-watch-it-wait}
 
-Envía el comando como de costumbre. Si la ventana está cerrada, el comando se acepta y espera.
+Envía el comando como de costumbre. Si la ventana está cerrada, el comando se acepta y espera. Si la
+ventana está abierta, el comando se envía de inmediato, pero solo hasta que la ventana se cierre.
 
 ```graphql
 mutation {
