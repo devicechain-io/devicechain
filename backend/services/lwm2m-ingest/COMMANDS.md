@@ -54,8 +54,9 @@ transport failure ends the read, and the resources not yet asked are listed as n
 **Not offered, deliberately:**
 
 - **Factory Reset (`/3/0/5`)** is destructive and irreversible, and a command key on a profile is a
-  one-step send. It stays reachable only as an explicit `lwm2m.execute` of that path until a
-  confirmation flow is decided.
+  one-step send. A raw `lwm2m.execute` of that path (any instance of object 3) is refused at
+  the enqueue gate (`COMMAND_DESTRUCTIVE_REFUSED`) and again here before the wire; it returns as a
+  confirmed named operation.
 - **Firmware write/execute (Object 5)** stays the operator runbook below. A firmware update is a
   stateful sequence (URI, download, state and result polling), and modelling it as one named command
   would duplicate what the managed update service owns; it should be driven from there.
