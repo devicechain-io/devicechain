@@ -856,6 +856,11 @@ describe('timestamps and the callback address', () => {
     await screen.findByText('Callback address');
     const url = 'https://dc.example.com/api/user-management/sso/callback/acme-sso';
     expect(screen.getAllByText(url).length).toBe(1);
-    expect(screen.getAllByRole('button').filter((b) => b.getAttribute('aria-label')?.includes(url)).length).toBe(1);
+    // Compared as a whole word of the label, not a substring: this is an assertion, not a check
+    // a URL is allowed, and a substring test reads like one.
+    const labelled = screen
+      .getAllByRole('button')
+      .filter((b) => (b.getAttribute('aria-label') ?? '').split(/\s+/).includes(url));
+    expect(labelled.length).toBe(1);
   });
 });
