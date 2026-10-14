@@ -525,5 +525,11 @@
   "coverageRecipientsLabel": "Destinatarios",
   "coverageRecipientsDescription": "Direcciones de correo separadas por comas.",
   "coveragePolicyName": "Notificar alarmas de gravedad {{severity}}",
-  "coverageCreateConfirm": "Crear política de {{severity}}"
+  "coverageCreateConfirm": "Crear política de {{severity}}",
+  "defColImpact": "Impacto",
+  "defImpactLabel": "Impacto",
+  "defImpactHint": "Los comandos disruptivos y destructivos esperan a la ventana de mantenimiento del tipo de dispositivo; los comandos normales nunca se retienen.",
+  "defImpact.NORMAL": "Normal",
+  "defImpact.DISRUPTIVE": "Disruptivo",
+  "defImpact.DESTRUCTIVE": "Destructivo"
 }

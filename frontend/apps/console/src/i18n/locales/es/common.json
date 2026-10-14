@@ -95,5 +95,7 @@
   "tryAgain": "Reintentar",
   "unitCallsPerSec": "llamadas/s",
   "unitReadingsPerSec": "lecturas/s",
-  "unitRequestsPerMin": "solicitudes/min"
+  "unitRequestsPerMin": "solicitudes/min",
+  "commandWaitingForWindow": "Esperando la ventana de mantenimiento hasta {{until}}",
+  "commandWaitingWindowTitle": "Ventana de mantenimiento: {{token}}"
 }

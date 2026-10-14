@@ -348,6 +348,11 @@ const DEVICE_TYPES = graphql(`
           name
           category
         }
+        maintenanceWindow {
+          token
+          name
+          timezone
+        }
         createdAt
       }
       pagination {
@@ -394,6 +399,11 @@ const DEVICE_TYPE_BY_TOKEN = graphql(`
         name
         category
       }
+      maintenanceWindow {
+        token
+        name
+        timezone
+      }
       createdAt
     }
   }
@@ -424,6 +434,11 @@ const CREATE_DEVICE_TYPE = graphql(`
         name
         category
       }
+      maintenanceWindow {
+        token
+        name
+        timezone
+      }
       createdAt
     }
   }
@@ -453,6 +468,11 @@ const UPDATE_DEVICE_TYPE = graphql(`
         token
         name
         category
+      }
+      maintenanceWindow {
+        token
+        name
+        timezone
       }
       createdAt
     }
@@ -1058,6 +1078,7 @@ const COMMAND_DEFINITIONS = graphql(`
         description
         commandKey
         parameterSchema
+        impact
         metadata
       }
       pagination {

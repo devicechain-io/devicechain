@@ -9,6 +9,7 @@ import {
   Boxes,
   Building2,
   ChevronRight,
+  CalendarClock,
   Cpu,
   Filter,
   Languages,
@@ -83,6 +84,9 @@ const NAV: NavNode[] = [
       { labelKey: 'deviceTypes', href: '/device-types', icon: Boxes, requires: 'device:read' },
       { labelKey: 'deviceProfiles', href: '/device-profiles', icon: SlidersHorizontal, requires: 'device:read' },
       { labelKey: 'deviceGroups', href: '/device-groups', icon: Layers, requires: 'device:read' },
+      // A maintenance window is configuration OF device types (a type names the window
+      // that holds its disruptive commands), so it lives beside them.
+      { labelKey: 'maintenanceWindows', href: '/maintenance-windows', icon: CalendarClock, requires: 'device:read' },
       // A command batch is a fleet WRITE — one command fanned out to many devices —
       // so it belongs under the construct it acts on rather than in a group of one.
       // command:read is command-delivery's own authority, not device:read: an

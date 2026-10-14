@@ -95,5 +95,7 @@
   "tryAgain": "Try again",
   "unitCallsPerSec": "calls/sec",
   "unitReadingsPerSec": "readings/sec",
-  "unitRequestsPerMin": "requests/min"
+  "unitRequestsPerMin": "requests/min",
+  "commandWaitingForWindow": "Waiting for maintenance window until {{until}}",
+  "commandWaitingWindowTitle": "Maintenance window: {{token}}"
 }

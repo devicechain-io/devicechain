@@ -1,15 +1,15 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
-import { RegistryTypeForm, tokenColumn, descriptionColumn, createdColumn, type RegistryResource } from '@/components/registry';
+import { tokenColumn, descriptionColumn, createdColumn, type RegistryResource } from '@/components/registry';
 import { TypeCapsule, appearanceOf } from '@/components/TypeCapsule';
 import { TypeAppearanceForm } from '@/components/TypeAppearanceForm';
 import { ProfilePanel } from './ProfilePanel';
 import { TypeIdentityForm } from './TypeIdentityForm';
+import { DeviceTypeForm } from './DeviceTypeForm';
 import {
   listDeviceTypes,
   getDeviceType,
-  createDeviceType,
   updateDeviceType,
   deleteDeviceType,
   type DeviceType,
@@ -35,24 +35,9 @@ export const deviceTypeResource: RegistryResource<DeviceType> = {
     descriptionColumn<DeviceType>(),
     createdColumn<DeviceType>(),
   ],
-  renderForm: (dt, onDone) => (
-    <RegistryTypeForm
-      entity={dt}
-      i18nKey="deviceType"
-      entityType="device-type"
-      create={(req) => createDeviceType(req)}
-      update={(token, req) =>
-        // A partial update: this form edits name and description, so it sends name
-        // and description. Appearance, the profile reference and the facets are
-        // untouched because they are not mentioned.
-        updateDeviceType(token, {
-          name: req.name,
-          description: req.description,
-        })
-      }
-      onDone={onDone}
-    />
-  ),
+  // The form carries the maintenance-window picker, so it is its own component rather than
+  // the shared registry type form.
+  renderForm: (dt, onDone) => <DeviceTypeForm entity={dt} onDone={onDone} />,
   detailTabs: [
     {
       value: 'identity',

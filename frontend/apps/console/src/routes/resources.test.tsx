@@ -125,6 +125,9 @@ const ENTITY = {
     kind: 'POLYGON_2D',
     geometry: { type: 'Polygon', coordinates: [[[12.49, 41.89], [12.51, 41.9], [12.48, 41.88], [12.49, 41.89]]] },
   }),
+  // A maintenance window's schedule — read by its editor, which refuses to open without one.
+  timezone: 'Europe/Berlin',
+  slots: JSON.stringify([{ day: 'SATURDAY', start: '02:00', durationMinutes: 120 }]),
   deviceType: TYPE_ROW,
   assetType: TYPE_ROW,
   customerType: TYPE_ROW,
@@ -351,7 +354,7 @@ describe('every registry resource carries metadata through an edit', () => {
   // array — a barrel gone missing, a mock swallowing it — `it.each([])` reports
   // "no tests" as a pass, and the whole file would become decoration.
   it('has resources to check', () => {
-    expect(REGISTRY_RESOURCES.length).toBeGreaterThanOrEqual(13);
+    expect(REGISTRY_RESOURCES.length).toBeGreaterThanOrEqual(14);
   });
 
   it.each(REGISTRY_RESOURCES.map((r) => [r.basePath, r] as const))(

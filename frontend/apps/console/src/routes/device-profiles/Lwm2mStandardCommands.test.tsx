@@ -66,6 +66,9 @@ describe('Lwm2mStandardCommands', () => {
     expect(created.map((c) => c.request.token)).toEqual(['gateway-lwm2m-reboot', 'gateway-lwm2m-read-device-info']);
     expect(created.every((c) => c.request.deviceProfileToken === 'gateway')).toBe(true);
     expect(created.every((c) => c.request.parameterSchema === null)).toBe(true);
+    // A reboot interrupts the device, so it waits for the maintenance window; reading device
+    // information never does.
+    expect(created.map((c) => c.request.impact)).toEqual(['DISRUPTIVE', 'NORMAL']);
   });
 
   it('stores the canonical names whatever language the console is in', async () => {

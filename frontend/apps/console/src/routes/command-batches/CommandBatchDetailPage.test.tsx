@@ -85,6 +85,8 @@ function commandRow(deviceToken: string, status = 'QUEUED') {
     sentTime: null,
     respondedTime: null,
     expiresAt: null,
+    dispatchAfter: null as string | null,
+    maintenanceWindowToken: null as string | null,
     responsePayload: null as string | null,
     error: null as string | null,
   };
@@ -359,5 +361,34 @@ describe('CommandBatchDetailPage CSV export', () => {
       'Token,Device,Status,Queued,Result,Outcome\r\n' +
         'tok-dev-a,dev-a,FAILED,2026-08-12T12:00:00.000Z,timeout,\r\n',
     );
+  });
+});
+
+describe('CommandBatchDetailPage maintenance-window hold', () => {
+  it('states the stored waiting count, and the rows that are still waiting', async () => {
+    const future = new Date(Date.now() + 36 * 3600 * 1000).toISOString();
+    respondWith(batch({ waiting: 3 }), [
+      { ...commandRow('dev-a'), dispatchAfter: future, maintenanceWindowToken: 'night' },
+      { ...commandRow('dev-b'), dispatchAfter: '2020-01-01T00:00:00Z', maintenanceWindowToken: 'night' },
+    ]);
+    renderPage();
+    expect(await screen.findByTestId('batch-waiting')).toBeTruthy();
+    expect(screen.getByTestId('batch-waiting').textContent).toBe(
+      '3 of 8 waiting for a maintenance window when this batch fired.',
+    );
+    // Only the row whose window has not opened yet carries the note.
+    await screen.findByText('dev-a');
+    const notes = screen.getAllByTestId('command-waiting');
+    expect(notes).toHaveLength(1);
+    expect(notes[0].getAttribute('title')).toBe('Maintenance window: night');
+    expect(notes[0].textContent).toMatch(/^Waiting for maintenance window until /);
+  });
+
+  it('says nothing about waiting for a batch from before windows existed (null, not zero)', async () => {
+    respondWith(batch({ waiting: null }), [commandRow('dev-a')]);
+    renderPage();
+    await screen.findByText('dev-a');
+    expect(screen.queryByTestId('batch-waiting')).toBeNull();
+    expect(screen.queryByTestId('command-waiting')).toBeNull();
   });
 });

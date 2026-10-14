@@ -182,5 +182,6 @@
   "unreadableNothingKnown": "Whether the batch was created is not known — unlike a failure to reach the platform, this answer says nothing either way. Check the batch list before firing again, so you do not send the fleet a second copy.",
   "versionOption": "v{{version}}",
   "versionOptionLabelled": "v{{version}} — {{label}}",
-  "vocabularyUnavailable": "Could not read that device's published commands, so the command key is free text. The platform checks it either way."
+  "vocabularyUnavailable": "Could not read that device's published commands, so the command key is free text. The platform checks it either way.",
+  "waitingForWindow": "{{waiting}} of {{accepted}} waiting for a maintenance window when this batch fired."
 }

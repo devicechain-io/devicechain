@@ -141,6 +141,12 @@ export type CommandDefinitionCreateRequest = {
   description?: string | null | undefined;
   /** Token of the profile to declare the command on. An unknown token fails the request. */
   deviceProfileToken: string;
+  /**
+   * How disruptive the command is: NORMAL (the default), DISRUPTIVE or DESTRUCTIVE.
+   * DISRUPTIVE and DESTRUCTIVE commands wait for the device type's maintenance window. An
+   * unknown value fails the request.
+   */
+  impact?: string | null | undefined;
   /** Caller-defined metadata. Must be valid JSON; an empty string means none. */
   metadata?: string | null | undefined;
   /** Human-readable name, up to 128 characters. */
@@ -189,6 +195,11 @@ export type CommandDefinitionUpdateRequest = {
    * definition ends up in.
    */
   deviceProfileToken?: string | null | undefined;
+  /**
+   * New impact (NORMAL, DISRUPTIVE or DESTRUCTIVE). An explicit null or an unknown value is
+   * refused. The change reaches devices when the profile is published.
+   */
+  impact?: string | null | undefined;
   /** New metadata (valid JSON, replacing the stored document), or null to clear it. */
   metadata?: string | null | undefined;
   /** New name, or null to clear it. */
@@ -561,6 +572,12 @@ export type DeviceTypeCreateRequest = {
   icon?: string | null | undefined;
   /** URL of an image representing the device type, up to 512 characters. */
   imageUrl?: string | null | undefined;
+  /**
+   * Token of the maintenance window that holds the type's disruptive commands until it
+   * opens. Omit it, or send an empty value, for a type with no window. An unknown token
+   * fails the request.
+   */
+  maintenanceWindowToken?: string | null | undefined;
   /** Manufacturer of the devices of this type, up to 128 characters. */
   manufacturer?: string | null | undefined;
   /** Caller-defined metadata. Must be valid JSON; an empty string means none. */
@@ -605,6 +622,13 @@ export type DeviceTypeUpdateRequest = {
   icon?: string | null | undefined;
   /** New image URL, or null to clear it. */
   imageUrl?: string | null | undefined;
+  /**
+   * Token of the maintenance window the type should use; null or an empty value removes the
+   * current one, after which its disruptive commands are sent whenever the device is
+   * reachable. An unknown token fails the whole update. Commands already waiting for the old
+   * window are moved to the new schedule within about a minute.
+   */
+  maintenanceWindowToken?: string | null | undefined;
   /** New manufacturer, or null to clear it. */
   manufacturer?: string | null | undefined;
   /** New metadata (valid JSON, replacing the stored document), or null to clear it. */
@@ -754,6 +778,47 @@ export type GeoFenceUpdateRequest = {
   geometry?: string | null | undefined;
   metadata?: string | null | undefined;
   name?: string | null | undefined;
+};
+
+/** Fields for a new maintenance window. */
+export type MaintenanceWindowCreateRequest = {
+  /** Free-text description, up to 1024 characters. */
+  description?: string | null | undefined;
+  /** Caller-defined metadata. Must be valid JSON; an empty string means none. */
+  metadata?: string | null | undefined;
+  /** Human-readable name, up to 128 characters. */
+  name?: string | null | undefined;
+  /**
+   * The weekly openings as a JSON array of {day, start, durationMinutes}, at least one and at
+   * most 56. Unknown keys and out-of-range values are refused.
+   */
+  slots: string;
+  /** An IANA time zone name such as Europe/Berlin. Local and unknown names are refused. */
+  timezone: string;
+  /** Identifier for the new window. A token already in use in the tenant is refused with CONFLICT. */
+  token: string;
+};
+
+/** Criteria for searching maintenance windows. Results are newest first. */
+export type MaintenanceWindowSearchCriteria = {
+  /** Page to return, starting at 1. Values below 1 are read as 1. */
+  pageNumber: number;
+  /** Results per page. Below 1 means the default of 100; above 1000 is capped at 1000. */
+  pageSize: number;
+};
+
+/** A partial update to a maintenance window: omit a field to leave it alone. */
+export type MaintenanceWindowUpdateRequest = {
+  /** New description, or null to clear it. */
+  description?: string | null | undefined;
+  /** New metadata (valid JSON, replacing the stored document), or null to clear it. */
+  metadata?: string | null | undefined;
+  /** New name, or null to clear it. */
+  name?: string | null | undefined;
+  /** New weekly openings (validated as on create). An explicit null is refused. */
+  slots?: string | null | undefined;
+  /** New time zone. An explicit null or an unknown zone is refused. */
+  timezone?: string | null | undefined;
 };
 
 /** Fields for a new metric definition. */
@@ -1334,21 +1399,21 @@ export type DeviceTypesQueryVariables = Exact<{
 }>;
 
 
-export type DeviceTypesQuery = { deviceTypes: { results: Array<{ id: string, token: string, name: string | null, description: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null, imageUrl: string | null, manufacturer: string | null, model: string | null, metadata: string | null, createdAt: string | null, profile: { token: string, name: string | null, category: string | null } | null }>, pagination: { pageStart: number | null, pageEnd: number | null, totalRecords: number | null } } };
+export type DeviceTypesQuery = { deviceTypes: { results: Array<{ id: string, token: string, name: string | null, description: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null, imageUrl: string | null, manufacturer: string | null, model: string | null, metadata: string | null, createdAt: string | null, profile: { token: string, name: string | null, category: string | null } | null, maintenanceWindow: { token: string, name: string | null, timezone: string } | null }>, pagination: { pageStart: number | null, pageEnd: number | null, totalRecords: number | null } } };
 
 export type DeviceTypeByTokenQueryVariables = Exact<{
   tokens: Array<string> | string;
 }>;
 
 
-export type DeviceTypeByTokenQuery = { deviceTypesByToken: Array<{ id: string, token: string, name: string | null, description: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null, imageUrl: string | null, manufacturer: string | null, model: string | null, metadata: string | null, createdAt: string | null, profile: { token: string, name: string | null, category: string | null } | null }> };
+export type DeviceTypeByTokenQuery = { deviceTypesByToken: Array<{ id: string, token: string, name: string | null, description: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null, imageUrl: string | null, manufacturer: string | null, model: string | null, metadata: string | null, createdAt: string | null, profile: { token: string, name: string | null, category: string | null } | null, maintenanceWindow: { token: string, name: string | null, timezone: string } | null }> };
 
 export type CreateDeviceTypeMutationVariables = Exact<{
   request?: DeviceTypeCreateRequest | null | undefined;
 }>;
 
 
-export type CreateDeviceTypeMutation = { createDeviceType: { id: string, token: string, name: string | null, description: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null, imageUrl: string | null, manufacturer: string | null, model: string | null, metadata: string | null, createdAt: string | null, profile: { token: string, name: string | null, category: string | null } | null } };
+export type CreateDeviceTypeMutation = { createDeviceType: { id: string, token: string, name: string | null, description: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null, imageUrl: string | null, manufacturer: string | null, model: string | null, metadata: string | null, createdAt: string | null, profile: { token: string, name: string | null, category: string | null } | null, maintenanceWindow: { token: string, name: string | null, timezone: string } | null } };
 
 export type UpdateDeviceTypeMutationVariables = Exact<{
   token: string;
@@ -1356,7 +1421,7 @@ export type UpdateDeviceTypeMutationVariables = Exact<{
 }>;
 
 
-export type UpdateDeviceTypeMutation = { updateDeviceType: { id: string, token: string, name: string | null, description: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null, imageUrl: string | null, manufacturer: string | null, model: string | null, metadata: string | null, createdAt: string | null, profile: { token: string, name: string | null, category: string | null } | null } };
+export type UpdateDeviceTypeMutation = { updateDeviceType: { id: string, token: string, name: string | null, description: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null, imageUrl: string | null, manufacturer: string | null, model: string | null, metadata: string | null, createdAt: string | null, profile: { token: string, name: string | null, category: string | null } | null, maintenanceWindow: { token: string, name: string | null, timezone: string } | null } };
 
 export type DeleteDeviceTypeMutationVariables = Exact<{
   token: string;
@@ -1523,7 +1588,7 @@ export type CommandDefinitionsQueryVariables = Exact<{
 }>;
 
 
-export type CommandDefinitionsQuery = { commandDefinitions: { results: Array<{ id: string, token: string, name: string | null, description: string | null, commandKey: string, parameterSchema: string | null, metadata: string | null }>, pagination: { pageStart: number | null, pageEnd: number | null, totalRecords: number | null } } };
+export type CommandDefinitionsQuery = { commandDefinitions: { results: Array<{ id: string, token: string, name: string | null, description: string | null, commandKey: string, parameterSchema: string | null, impact: string, metadata: string | null }>, pagination: { pageStart: number | null, pageEnd: number | null, totalRecords: number | null } } };
 
 export type DeviceCommandVocabularyQueryVariables = Exact<{
   deviceToken: string;
@@ -1696,6 +1761,50 @@ export type GeoFenceSetSnapshotQueryVariables = Exact<{
 
 
 export type GeoFenceSetSnapshotQuery = { geoFenceSetSnapshot: { version: number, fences: { results: Array<{ token: string, geometry: string }>, pagination: { totalRecords: number | null } } } };
+
+export type MaintenanceWindowsQueryVariables = Exact<{
+  criteria: MaintenanceWindowSearchCriteria;
+}>;
+
+
+export type MaintenanceWindowsQuery = { maintenanceWindows: { results: Array<{ id: string, token: string, name: string | null, description: string | null, timezone: string, slots: string, metadata: string | null, createdAt: string | null, updatedAt: string | null }>, pagination: { pageStart: number | null, pageEnd: number | null, totalRecords: number | null } } };
+
+export type MaintenanceWindowByTokenQueryVariables = Exact<{
+  tokens: Array<string> | string;
+}>;
+
+
+export type MaintenanceWindowByTokenQuery = { maintenanceWindowsByToken: Array<{ id: string, token: string, name: string | null, description: string | null, timezone: string, slots: string, metadata: string | null, createdAt: string | null, updatedAt: string | null }> };
+
+export type CreateMaintenanceWindowMutationVariables = Exact<{
+  request?: MaintenanceWindowCreateRequest | null | undefined;
+}>;
+
+
+export type CreateMaintenanceWindowMutation = { createMaintenanceWindow: { id: string, token: string, name: string | null, description: string | null, timezone: string, slots: string, metadata: string | null, createdAt: string | null, updatedAt: string | null } };
+
+export type UpdateMaintenanceWindowMutationVariables = Exact<{
+  token: string;
+  request: MaintenanceWindowUpdateRequest;
+}>;
+
+
+export type UpdateMaintenanceWindowMutation = { updateMaintenanceWindow: { id: string, token: string, name: string | null, description: string | null, timezone: string, slots: string, metadata: string | null, createdAt: string | null, updatedAt: string | null } };
+
+export type DeleteMaintenanceWindowMutationVariables = Exact<{
+  token: string;
+}>;
+
+
+export type DeleteMaintenanceWindowMutation = { deleteMaintenanceWindow: boolean };
+
+export type MaintenanceWindowOpeningQueryVariables = Exact<{
+  token: string;
+  at?: string | null | undefined;
+}>;
+
+
+export type MaintenanceWindowOpeningQuery = { maintenanceWindowOpening: { found: boolean, openNow: boolean, dispatchAfter: string, closes: string } };
 
 export type EntityRelationshipsQueryVariables = Exact<{
   criteria: EntityRelationshipSearchCriteria;
@@ -2859,6 +2968,11 @@ export const DeviceTypesDocument = new TypedDocumentString(`
         name
         category
       }
+      maintenanceWindow {
+        token
+        name
+        timezone
+      }
       createdAt
     }
     pagination {
@@ -2889,6 +3003,11 @@ export const DeviceTypeByTokenDocument = new TypedDocumentString(`
       name
       category
     }
+    maintenanceWindow {
+      token
+      name
+      timezone
+    }
     createdAt
   }
 }
@@ -2913,6 +3032,11 @@ export const CreateDeviceTypeDocument = new TypedDocumentString(`
       name
       category
     }
+    maintenanceWindow {
+      token
+      name
+      timezone
+    }
     createdAt
   }
 }
@@ -2936,6 +3060,11 @@ export const UpdateDeviceTypeDocument = new TypedDocumentString(`
       token
       name
       category
+    }
+    maintenanceWindow {
+      token
+      name
+      timezone
     }
     createdAt
   }
@@ -3233,6 +3362,7 @@ export const CommandDefinitionsDocument = new TypedDocumentString(`
       description
       commandKey
       parameterSchema
+      impact
       metadata
     }
     pagination {
@@ -3517,6 +3647,88 @@ export const GeoFenceSetSnapshotDocument = new TypedDocumentString(`
   }
 }
     `) as unknown as TypedDocumentString<GeoFenceSetSnapshotQuery, GeoFenceSetSnapshotQueryVariables>;
+export const MaintenanceWindowsDocument = new TypedDocumentString(`
+    query MaintenanceWindows($criteria: MaintenanceWindowSearchCriteria!) {
+  maintenanceWindows(criteria: $criteria) {
+    results {
+      id
+      token
+      name
+      description
+      timezone
+      slots
+      metadata
+      createdAt
+      updatedAt
+    }
+    pagination {
+      pageStart
+      pageEnd
+      totalRecords
+    }
+  }
+}
+    `) as unknown as TypedDocumentString<MaintenanceWindowsQuery, MaintenanceWindowsQueryVariables>;
+export const MaintenanceWindowByTokenDocument = new TypedDocumentString(`
+    query MaintenanceWindowByToken($tokens: [String!]!) {
+  maintenanceWindowsByToken(tokens: $tokens) {
+    id
+    token
+    name
+    description
+    timezone
+    slots
+    metadata
+    createdAt
+    updatedAt
+  }
+}
+    `) as unknown as TypedDocumentString<MaintenanceWindowByTokenQuery, MaintenanceWindowByTokenQueryVariables>;
+export const CreateMaintenanceWindowDocument = new TypedDocumentString(`
+    mutation CreateMaintenanceWindow($request: MaintenanceWindowCreateRequest) {
+  createMaintenanceWindow(request: $request) {
+    id
+    token
+    name
+    description
+    timezone
+    slots
+    metadata
+    createdAt
+    updatedAt
+  }
+}
+    `) as unknown as TypedDocumentString<CreateMaintenanceWindowMutation, CreateMaintenanceWindowMutationVariables>;
+export const UpdateMaintenanceWindowDocument = new TypedDocumentString(`
+    mutation UpdateMaintenanceWindow($token: String!, $request: MaintenanceWindowUpdateRequest!) {
+  updateMaintenanceWindow(token: $token, request: $request) {
+    id
+    token
+    name
+    description
+    timezone
+    slots
+    metadata
+    createdAt
+    updatedAt
+  }
+}
+    `) as unknown as TypedDocumentString<UpdateMaintenanceWindowMutation, UpdateMaintenanceWindowMutationVariables>;
+export const DeleteMaintenanceWindowDocument = new TypedDocumentString(`
+    mutation DeleteMaintenanceWindow($token: String!) {
+  deleteMaintenanceWindow(token: $token)
+}
+    `) as unknown as TypedDocumentString<DeleteMaintenanceWindowMutation, DeleteMaintenanceWindowMutationVariables>;
+export const MaintenanceWindowOpeningDocument = new TypedDocumentString(`
+    query MaintenanceWindowOpening($token: String!, $at: String) {
+  maintenanceWindowOpening(token: $token, at: $at) {
+    found
+    openNow
+    dispatchAfter
+    closes
+  }
+}
+    `) as unknown as TypedDocumentString<MaintenanceWindowOpeningQuery, MaintenanceWindowOpeningQueryVariables>;
 export const EntityRelationshipsDocument = new TypedDocumentString(`
     query EntityRelationships($criteria: EntityRelationshipSearchCriteria!) {
   entityRelationships(criteria: $criteria) {

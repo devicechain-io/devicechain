@@ -36,6 +36,7 @@ import { useToast } from '@/components/ui/toast';
 import { Textarea } from '@/components/ui/textarea';
 import { formatTime } from '@/lib/utils';
 import { commandStatusVariant } from '@/lib/command-status';
+import { CommandWaitingNote } from '@/components/CommandWaitingNote';
 import { useQuery } from '@/lib/hooks/use-query';
 import { errMessage, useReload } from '@/routes/common';
 import {
@@ -376,6 +377,7 @@ export function DeviceCommandsPanel({ deviceToken }: { deviceToken: string }) {
                 </DataTableCell>
                 <DataTableCell>
                   <Badge variant={commandStatusVariant(command.status)}>{command.status}</Badge>
+                  <CommandWaitingNote command={command} />
                 </DataTableCell>
                 <DataTableCell className="max-w-xs truncate text-muted-foreground">
                   {command.error || command.responsePayload || '—'}

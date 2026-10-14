@@ -34,6 +34,7 @@ const NAV_SECTION_KEY: Record<string, string> = {
   'device-types': 'deviceTypes',
   'device-profiles': 'deviceProfiles',
   'device-groups': 'deviceGroups',
+  'maintenance-windows': 'maintenanceWindows',
   dashboards: 'dashboards',
   alarms: 'alarms',
   connectors: 'connectors',

@@ -85,6 +85,8 @@ const COMMANDS = graphql(`
         sentTime
         respondedTime
         expiresAt
+        dispatchAfter
+        maintenanceWindowToken
         responsePayload
         error
         outcome
@@ -132,6 +134,7 @@ const COMMAND_BATCHES = graphql(`
         allowPartial
         resolved
         accepted
+        waiting
         cancelledAt
         cancelledCount
       }
@@ -163,6 +166,7 @@ const COMMAND_BATCHES_BY_TOKEN = graphql(`
       allowPartial
       resolved
       accepted
+      waiting
       refusals {
         deviceToken
         code

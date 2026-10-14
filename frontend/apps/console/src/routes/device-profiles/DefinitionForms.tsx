@@ -19,7 +19,7 @@ import { Combobox } from '@/components/ui/combobox';
 import { ErrorBanner } from '@/components/ui/error-banner';
 import { errMessage } from '@/routes/common';
 import { Textarea } from '@/components/ui/textarea';
-import { METRIC_DATA_TYPES } from '@/lib/vocab';
+import { METRIC_DATA_TYPES, COMMAND_IMPACTS } from '@/lib/vocab';
 import {
   createMetricDefinition,
   updateMetricDefinition,
@@ -203,6 +203,9 @@ export function CommandDefinitionForm({
   const [name, setName] = useState(entity?.name ?? '');
   const [description, setDescription] = useState(entity?.description ?? '');
   const [parameterSchema, setParameterSchema] = useState(entity?.parameterSchema ?? '');
+  // NORMAL unless the definition says otherwise; the picker cannot be cleared, so an edit
+  // never sends the null the server refuses.
+  const [impact, setImpact] = useState(entity?.impact ?? 'NORMAL');
   const [formError, setFormError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -213,6 +216,7 @@ export function CommandDefinitionForm({
       // The edit names only what this form shows; metadata is left alone rather than
       // carried forward. See the metric form above for why that reversed.
       const edited = {
+        impact,
         deviceProfileToken: profileToken,
         commandKey: commandKey.trim(),
         name: opt(name),
@@ -268,6 +272,19 @@ export function CommandDefinitionForm({
       </FormField>
       <FormField label={t('common:colDescription')} htmlFor="c-desc">
         <Textarea id="c-desc" value={description} onChange={(e) => setDescription(e.target.value)} />
+      </FormField>
+      <FormField
+        label={t('deviceProfiles:defImpactLabel')}
+        htmlFor="c-impact"
+        description={t('deviceProfiles:defImpactHint')}
+      >
+        <Combobox
+          id="c-impact"
+          options={COMMAND_IMPACTS.map((v) => ({ value: v, label: t(`deviceProfiles:defImpact.${v}`) }))}
+          value={impact}
+          onChange={setImpact}
+          allowClear={false}
+        />
       </FormField>
       <FormField
         label={t('deviceProfiles:defParamSchemaLabel')}

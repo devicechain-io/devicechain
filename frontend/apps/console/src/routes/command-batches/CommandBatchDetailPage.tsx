@@ -35,6 +35,7 @@ import {
 } from '@/components/ui/data-table';
 import { COMMAND_STATUSES } from '@devicechain/dashboards';
 import { formatTime } from '@/lib/utils';
+import { CommandWaitingNote } from '@/components/CommandWaitingNote';
 import { commandStatusVariant } from '@/lib/command-status';
 import { useQuery } from '@/lib/hooks/use-query';
 import { useReload } from '@/routes/common';
@@ -196,6 +197,12 @@ function SummaryPanel({ batch, refused }: { batch: CommandBatch; refused: number
       {!adds && (
         <p className="mt-1 text-sm text-destructive">{t('arithmeticMismatch')}</p>
       )}
+      {/* Null on a batch from before maintenance windows existed — no count is not zero. */}
+      {batch.waiting != null && (
+        <p className="mt-3 text-sm text-muted-foreground" data-testid="batch-waiting">
+          {t('waitingForWindow', { waiting: batch.waiting, accepted: batch.accepted })}
+        </p>
+      )}
       <HintText size="md" className="mt-1">{t('storedFactsHint')}</HintText>
       {/* The two-way link between a batch and its retries. A retry is a batch of its own, so
           it is reached by navigation, not folded into this one. */}
@@ -355,6 +362,7 @@ function BatchCommandsPanel({ batchToken, reloadKey }: { batchToken: string; rel
                   <DataTableCell className="font-mono text-foreground">{c.deviceToken}</DataTableCell>
                   <DataTableCell>
                     <Badge variant={commandStatusVariant(c.status)}>{c.status}</Badge>
+                    <CommandWaitingNote command={c} />
                   </DataTableCell>
                   <DataTableCell className="text-muted-foreground">{c.outcome ?? '—'}</DataTableCell>
                   <DataTableCell className="whitespace-nowrap text-muted-foreground">

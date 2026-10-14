@@ -44,6 +44,7 @@ export const ENTITY_TYPES = [
   'device-type',
   'geofence',
   'group',
+  'maintenance-window',
   'metric-definition',
   'role',
   'tenant',
