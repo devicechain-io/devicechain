@@ -2056,6 +2056,158 @@ gh attestation verify <archive> --repo devicechain-io/devicechain \
 
 无须操作。
 
+### v0.21.0：设备可被整体停用，更新带签名 {#v0210-upgrade}
+
+`v0.21.0` 可从 `v0.20.0` 原地升级：先为集群执行 `dcctl install`，再为每个实例执行 `dcctl
+upgrade`，如[v0.17.0](#v0170-upgrade)所述。从 `v0.19.0` 或更早版本升级时，还请阅读
+[`v0.20.0` 说明](#v0200-upgrade)：其中的行数和 chunk 数检查及各项步骤同样适用于本次升级。
+由 `v0.16.0` 或更早版本构建的实例仍必须[销毁重建](#pre-declaration-recreate)。
+
+本发布大部分是新功能，在你使用之前不会改变任何行为：设备可以被整体停用，更新工件可以签名，
+设备群可以通过 CSV 文件导入，检测规则表单新增了告警预设和通知检查，单点登录连接可以信任私有证书颁发机构。
+对某些人有影响的变化：只能理解未签名更新分配的设备会拒绝带签名的分配，工件只有在被活跃签名者签名后才能分配，
+原始的 LwM2M 恢复出厂设置会被拒绝，被停用的设备无法获取配置、更新和 LwM2M 注册，其已排队的命令被保留，
+控制台的构建文件移动到了新路径。所有二进制文件现在均使用 Go 1.27.2 构建。
+
+#### 升级前 {#v0210-before}
+
+1. **接收空中升级的设备：先部署能验证签名的更新程序。** 分配现在可以携带 `trust: "SIGNED"`，
+   以及签名、密钥 id 和算法，只理解 `UNVERIFIED` 的设备会拒绝它。在租户注册签名者并为工件签名之前，
+   不会有任何分配被签名，因此请在此之前部署能验证签名的更新程序。
+   参见[更新分配可以带签名](#v0210-signed-updates)。
+2. **决定如何信任更新工件。** 当 `updates.allowUnverifiedArtifacts` 保持为 `false` 时，
+   只有由其租户的活跃签名者签名的工件才能被分配。如果你将该标志设为允许分配未签名的工件，它仍然生效。
+   参见[更新分配可以带签名](#v0210-signed-updates)。
+3. **停止发送原始的 LwM2M 恢复出厂设置。** 执行 `/3/0/5` 的命令在入队时就会被拒绝，
+   来自规则或批量操作的也一样。参见[原始的 LwM2M 恢复出厂设置会被拒绝](#v0210-factory-reset)。
+4. **检查有哪些内容依赖控制台的静态路径。** 其构建文件现在从 `/_app/` 而不是 `/assets/` 提供。
+   参见[控制台的构建文件移动](#v0210-console-app-path)。
+
+#### 升级期间 {#v0210-during}
+
+- **同时升级 `device-management` 和 `command-delivery`。** `command-delivery` 保存自己的一份被停用设备记录，
+  并从 `device-management` 填充。租户的命令在该租户首次同步成功之前不会被分发，
+  因此无法访问带有新查询的 `device-management` Pod 的新 `command-delivery` Pod 会保留这些命令。
+  命令不会丢失，同步成功后即会发出。
+- **四个服务在首次启动时会应用迁移**：`device-management` 为设备表添加可为空的 `disabled_at` 列和一个部分索引，
+  `command-delivery` 创建两张小表，`update-management` 创建签名者注册表，`user-management` 为身份提供商添加
+  CA 证书包列。每个迁移都可单独重复执行，都不会重写任何现有行，也都不需要销毁重建。
+  参见[新表和新列](#v0210-migrations)。
+- **`update-management` 仅从新的事实开始读取设备名册**，因此无需追赶，也无需运维人员执行任何步骤。
+
+升级后回退到 `v0.20.0`，会保留新列和新表，`v0.20.0` 会忽略它们。它不认识签名者，
+因此只有 `allowUnverifiedArtifacts` 决定它能分配什么。
+
+#### 升级后 {#v0210-after}
+
+- **重新加载一次控制台。** 持有旧 `index.html` 的浏览器会请求旧的文件路径，直到重新加载。
+  `index.html` 以 `no-cache` 提供，因此只需一次导航。
+- **如果自定义角色要管理签名者，请授予新权限。** 租户管理员拥有 `artifact:trust`；
+  你自己定义的角色没有。参见[更新分配可以带签名](#v0210-signed-updates)。
+- **无需其他操作。** 停用设备、签名、导入、预设和 CA 证书包一开始都处于未使用状态。
+
+#### 变更内容 {#v0210-what-changed}
+
+##### 被停用的设备被整体切断，其已排队的命令被保留 {#v0210-disabled-device}
+
+现在可以将设备整体停用，而无需逐个查找并吊销每个凭据，方法是使用 `updateDevice(enabled: false)`
+或设备页面上的“停用”操作。设备被停用期间：
+
+- 其事件在解析时被拒绝，其代理连接被拒绝，针对它的新命令被拒绝并返回 `DEVICE_DISABLED`；
+- 其配置同步和状态报告被拒绝，更新进度和清单报告、下载授权及下载同样被拒绝，
+  停用之前签发的下载链接会返回 403；`assignArtifact` 以 `DEVICE_DISABLED` 拒绝它；
+- LwM2M 注册返回 4.03 Forbidden，已注册的设备会在下一次 Update 时被终止，从而重新注册并被拒绝；
+- 其缺失规则被解除，因此不会为它触发或保留“设备静默”告警；
+- 已排队的命令会被**保留**：既不发送也不取消。被保留的命令仍会按自身的 TTL 过期。
+  启用设备会按从旧到新的顺序释放它们，删除被停用的设备则会取消它们。
+  `deviceCommandHold` 和 `cancelDeviceCommands` 可显示并清除这些命令。
+
+启用设备时会发送其最新配置一次，并重新提供其当前的更新分配。已经打开的会话会保持打开，
+直到下次检查连接。参见[停用设备](../guides/device-credentials.md#disabling-a-device)。
+
+如果你现在会停用设备，并依赖其已排队的命令发出，这些命令现在会等待。
+
+##### 更新分配可以带签名 {#v0210-signed-updates}
+
+租户可以注册其信任的、用于为更新工件签名的公钥：ECDSA P-256 或 Ed25519，格式为单个 `PUBLIC KEY` PEM。
+对工件 SHA-256 摘要的签名在添加时进行验证，只要同一租户至少有一个活跃签名者为某个工件签过名，
+该工件即视为**已签名**。吊销签名者（此操作是终态的）会使其工件回到未验证状态，而不会改动这些工件。
+任何包含私钥的内容都会被拒绝。
+
+这带来的变化：
+
+- **新权限 `artifact:trust`** 用于注册和吊销签名者。租户管理员拥有它，而你定义的任何角色都没有；
+  `artifact:write` 用于添加签名。
+- **分配需要已签名的工件**，除非 `updates.allowUnverifiedArtifacts` 为 `true`。该设置没有变化，
+  默认仍为 `false`；变化的是，已签名的工件不再需要它。
+- **设备契约有所扩展。** 针对已签名工件的 `update.assignment` 携带 `trust: "SIGNED"`、
+  `signature`（标准 base64）、`keyId`（密钥 DER 编码公钥的 SHA-256 小写十六进制）和 `algorithm`
+  （`ECDSA_P256_SHA256` 或 `ED25519`）；两种算法签名的都是原始的 32 字节摘要。`"v":1` 保持不变，
+  未签名分配与之前逐字节相同。只理解 `UNVERIFIED` 的设备会拒绝 `SIGNED` 分配，即失败时关闭。
+  设备在已下载阶段的 `FAILED` 下报告 `UNKNOWN_SIGNER` 或 `SIGNATURE_INVALID`。
+- **签名不绑定版本。** 对摘要签名说明的是谁生成了这些字节，而不是它们是哪个版本；
+  参见[空中升级](../concepts/over-the-air-updates.md)。
+
+##### 原始的 LwM2M 恢复出厂设置会被拒绝 {#v0210-factory-reset}
+
+对 Device 对象资源 5（`/3/0/5`）的 `lwm2m.execute` 会在入队时以 `COMMAND_DESTRUCTIVE_REFUSED` 被拒绝，
+适用于单条命令、批量操作以及检测规则发送的命令，路径的任何写法都一样，并且在到达设备之前会再次拒绝。
+检测规则将该错误码视为永久性错误，不会重试。重启（`/3/0/4`）、其他执行操作和读取不受影响。
+针对恢复出厂设置的、需确认的单设备命名操作已在计划中；在此之前，原始路径保持关闭。
+执行器还会拒绝任何路径键出现多于一次的读取、写入或执行载荷。
+
+##### 控制台的构建文件移动到 `/_app/` {#v0210-console-app-path}
+
+指向资产页面的链接（`/assets/<token>`）在加载或刷新时会返回 404，因为控制台构建的 JavaScript 和 CSS 位于
+`/assets/` 之下，而 Web 服务器对该路径下它没有的任何内容都返回 404。构建文件现在位于 `/_app/` 之下，
+仍使用相同的一年不可变缓存，资产页面也可以从直接链接加载。`/dash` 下的仪表板应用不变。
+如果你对控制台的路径做了代理、缓存或白名单，请放行 `/_app/`。
+
+##### 缺失的记录以 `NOT_FOUND` 应答 {#v0210-not-found}
+
+当请求指定的角色、租户层级、身份、成员关系、租户、OAuth 客户端、身份提供商或 SSO 链接请求不存在，
+或者 `claimDevice` 找不到设备时，现在会以 `extensions.code` 为 `NOT_FOUND` 应答，
+正如 [GraphQL 参考](../reference/graphql-api.md)所述。以前它只携带 `role not found` 之类的消息，没有错误码。
+消息保持不变，因此按消息匹配的客户端仍然可用；把缺失错误码当作“其他错误”处理的客户端应改为处理该错误码。
+
+##### Go 1.27.2 接受带 JSON 转义的事件时间 {#v0210-go127}
+
+所有二进制文件均使用 Go 1.27.2 构建。如果设备写入的事件时间在字符串中使用了 JSON 转义，
+例如用 `"2026-10-13T12:00:00Z"` 表示 `...Z`，Go 1.26 解码时会把该事件送入死信。
+这是正确的 JSON，现在会被接受并存储。无需任何操作。
+
+##### 新表和新列 {#v0210-migrations}
+
+| 服务 | 变更 |
+| --- | --- |
+| `device-management` | `devices.disabled_at timestamptz`（为空表示已启用）和部分索引 `idx_devices_disabled` |
+| `command-delivery` | `device_gates` 和 `device_gate_syncs`，及其唯一索引和部分索引 |
+| `update-management` | `artifact_signers` 和 `artifact_signatures`（仅含公钥和签名）；工件的信任现在由它们推导，旧的已存储信任列予以保留、不再写入，因此滚动升级是安全的 |
+| `user-management` | 身份提供商上的 `ca_bundle` |
+
+##### 单点登录可以信任私有证书颁发机构 {#v0210-sso-ca}
+
+身份提供商连接可以携带自己的 CA 证书包，在创建时设置，或使用 `setIdpCaBundle` 设置（空字符串表示清除；
+两者都需要实例管理 API 上的 `user:write`）。对该提供商的调用会信任系统根证书加上该证书包，
+仅限该连接，并且仍然经过出站防护。保存之前，使用新证书包的发现必须成功。
+参见[配置单点登录](../guides/configuring-sso.md)。没有证书包的连接不受任何影响。
+
+##### 其他值得了解的行为 {#v0210-other}
+
+- **设备群导入。** `importDevices` 最多接受 1000 行，并将每行应答为 `CREATED`、`EXISTS`、`CONFLICT`、
+  `INVALID` 或 `REFUSED`；它只创建，因此重复运行同一个文件是安全的，试运行不会写入任何内容。
+  它需要 `device:write`。
+- **设备配置。** `restoreDeviceConfiguration` 和 `copyDeviceConfiguration` 通过设备声明的共享属性，
+  重新应用早先的修订版本或另一台设备的配置，并生成新的修订版本。它们需要 `device:write`，
+  并新增错误码 `CONFIGURATION_KEY_UNDECLARED` 和 `CONFIGURATION_CONFLICT`。
+- **Thing Model 导出。** 已发布的配置文件版本可通过 `DeviceProfileVersion.thingModel` 作为
+  W3C Web of Things Thing Model 获取。
+- **LwM2M。** `lwm2m.reboot` 和 `lwm2m.readDeviceInfo` 是命名操作，设备在注册时（最多每小时一次）
+  会读取其制造商、型号、序列号、固件版本和电池电量，并保存为客户端属性。
+- **检测规则。** 控制台表单提供静默设备、值持续高于上限和低电量的预设，并显示规则的严重程度是否会通知到任何人。
+  缺失告警会在其设备被停用、删除或更换类型时清除。
+- **消息传递。** 两个副本同时迁移某个流的保留策略时，不再导致其中一个拒绝启动。
+
 ### v0.20.0：通过你自己的身份提供商登录，组件以包的形式发布 {#v0200-upgrade}
 
 `v0.20.0` 可从 `v0.19.0` 原地升级：先为集群执行 `dcctl install`，再为每个实例执行 `dcctl

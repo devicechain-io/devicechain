@@ -3771,6 +3771,209 @@ gh attestation verify <archive> --repo devicechain-io/devicechain \
 
 No hay que hacer nada.
 
+### v0.21.0 — un dispositivo puede quedar excluido por completo, y las actualizaciones se firman {#v0210-upgrade}
+
+`v0.21.0` es una actualización en su sitio desde `v0.20.0`: `dcctl install` para el clúster y
+después `dcctl upgrade` para cada instancia, como se describe [para la v0.17.0](#v0170-upgrade). Si
+vienes de `v0.19.0` o una versión anterior, lee también las [notas de `v0.20.0`](#v0200-upgrade): sus
+recuentos de filas y de fragmentos y sus pasos se aplican también a esta actualización. Una instancia
+creada por la `v0.16.0` o una versión anterior sigue teniendo que
+[destruirse y crearse de nuevo](#pre-declaration-recreate).
+
+La mayor parte de esta versión es capacidad nueva que no cambia nada hasta que la usas: un
+dispositivo puede deshabilitarse por completo, los artefactos de actualización pueden firmarse, una
+flota puede importarse desde un archivo CSV, los ajustes preestablecidos de alertas y una
+comprobación de notificación se suman al formulario de reglas de detección, y una conexión de inicio
+de sesión único puede confiar en una autoridad de certificación privada. Lo que cambia para alguien:
+un dispositivo creado para entender solo asignaciones de actualización sin firmar rechaza una
+firmada, un artefacto solo puede asignarse cuando lo ha firmado un firmante activo, se rechaza un
+Factory Reset de LwM2M en bruto, un dispositivo deshabilitado queda excluido de la configuración, las
+actualizaciones y el registro LwM2M, con sus comandos en cola retenidos, y los archivos compilados de
+la consola pasan a una ruta nueva. Todos los binarios se compilan ahora con Go 1.27.2.
+
+#### Antes de actualizar {#v0210-before}
+
+1. **Dispositivos que reciben actualizaciones por aire: despliega primero un actualizador que
+   verifique firmas.** Una asignación puede llevar ahora `trust: "SIGNED"` con una firma, un id de
+   clave y un algoritmo, y un dispositivo que solo entiende `UNVERIFIED` la rechaza. Nada firma una
+   asignación hasta que un inquilino registra un firmante y firma un artefacto, así que despliega el
+   actualizador verificador antes de hacerlo. Consulta
+   [Las asignaciones de actualización pueden firmarse](#v0210-signed-updates).
+2. **Decide cómo se confía en los artefactos de actualización.** Con `updates.allowUnverifiedArtifacts`
+   en `false`, solo puede asignarse un artefacto firmado por un firmante activo de su inquilino. Si
+   activas la opción para asignar artefactos sin firmar, sigue aplicándose. Consulta
+   [Las asignaciones de actualización pueden firmarse](#v0210-signed-updates).
+3. **Deja de enviar un Factory Reset de LwM2M en bruto.** Un comando que ejecuta `/3/0/5` se rechaza
+   al encolarse, también desde una regla o un lote. Consulta
+   [Se rechaza un Factory Reset de LwM2M en bruto](#v0210-factory-reset).
+4. **Comprueba qué depende de la ruta estática de la consola.** Sus archivos compilados se sirven
+   ahora desde `/_app/` en lugar de `/assets/`. Consulta
+   [Los archivos compilados de la consola cambian de ruta](#v0210-console-app-path).
+
+#### Durante la actualización {#v0210-during}
+
+- **Actualiza `device-management` y `command-delivery` a la vez.** `command-delivery` conserva su
+  propio registro de qué dispositivos están deshabilitados y lo rellena desde `device-management`.
+  Los comandos de un inquilino no se despachan hasta la primera sincronización correcta de ese
+  inquilino, así que un pod nuevo de `command-delivery` que aún no puede llegar a un pod de
+  `device-management` con la nueva consulta los retiene. No se pierden, y salen en cuanto la
+  sincronización tiene éxito.
+- **Cuatro áreas aplican una migración** en su primer arranque: `device-management` añade a la tabla
+  de dispositivos una columna `disabled_at` anulable y un índice parcial, `command-delivery` crea dos
+  tablas pequeñas, `update-management` crea el registro de firmantes y `user-management` añade una
+  columna de paquete de CA a los proveedores de identidad. Cada una puede volver a ejecutarse por
+  separado, ninguna reescribe una fila existente y ninguna requiere recrear. Consulta
+  [Tablas y columnas nuevas](#v0210-migrations).
+- **`update-management` empieza a leer el censo de dispositivos** solo a partir de hechos nuevos, así
+  que no necesita ponerse al día ni ningún paso del operador.
+
+Volver a `v0.20.0` tras la actualización conserva las columnas y tablas nuevas, que `v0.20.0`
+ignora. No conoce los firmantes, así que `allowUnverifiedArtifacts` por sí solo decide lo que puede
+asignar.
+
+#### Después de actualizar {#v0210-after}
+
+- **Recarga la consola una vez.** Un navegador que conserva el `index.html` anterior pide las rutas
+  de archivo antiguas hasta que se recarga. `index.html` se sirve con `no-cache`, así que basta una
+  navegación.
+- **Da a los roles personalizados la nueva autoridad si gestionan firmantes.** Los administradores de
+  inquilino tienen `artifact:trust`; un rol que hayas definido no. Consulta
+  [Las asignaciones de actualización pueden firmarse](#v0210-signed-updates).
+- **No se requiere nada más.** Deshabilitar un dispositivo, firmar, importar, los ajustes
+  preestablecidos y el paquete de CA empiezan todos sin usarse.
+
+#### Qué cambia {#v0210-what-changed}
+
+##### Un dispositivo deshabilitado queda excluido por completo, y sus comandos en cola se retienen {#v0210-disabled-device}
+
+Un dispositivo puede deshabilitarse por completo en lugar de buscar y revocar cada credencial, con
+`updateDevice(enabled: false)` o la acción Deshabilitar de la página del dispositivo. Mientras está
+deshabilitado:
+
+- sus eventos se rechazan en la resolución, sus conexiones al broker se rechazan y los comandos
+  nuevos para él se rechazan con `DEVICE_DISABLED`;
+- se rechazan su sincronización de configuración y sus informes de estado, así como sus informes de
+  progreso de actualización y de inventario, sus concesiones de descarga y sus descargas, y un
+  enlace de descarga emitido antes de deshabilitarlo responde 403; `assignArtifact` lo rechaza con
+  `DEVICE_DISABLED`;
+- un registro LwM2M responde 4.03 Forbidden, y un dispositivo registrado se da por terminado en su
+  siguiente Update para que se registre de nuevo y sea rechazado;
+- sus reglas de ausencia se desarman, de modo que no se genera ni se mantiene para él ninguna alarma
+  de «dispositivo en silencio»;
+- los comandos ya en cola quedan **retenidos**: ni se envían ni se cancelan. Un comando retenido
+  sigue caducando por su propio TTL. Habilitar el dispositivo los libera, los más antiguos primero, y
+  eliminar un dispositivo deshabilitado los cancela. `deviceCommandHold` y `cancelDeviceCommands` los
+  muestran y los borran.
+
+Habilitar el dispositivo envía una vez su última configuración y vuelve a ofrecer sus asignaciones de
+actualización vigentes. Una sesión ya abierta sigue abierta hasta la siguiente comprobación de la
+conexión. Consulta [Deshabilitar un dispositivo](../guides/device-credentials.md#disabling-a-device).
+
+Si hoy deshabilitas dispositivos y cuentas con que sus comandos en cola salgan, ahora esperan.
+
+##### Las asignaciones de actualización pueden firmarse {#v0210-signed-updates}
+
+Un inquilino puede registrar las claves públicas en las que confía para firmar artefactos de
+actualización: ECDSA P-256 o Ed25519, como un único PEM `PUBLIC KEY`. Una firma sobre el resumen
+SHA-256 de un artefacto se verifica al añadirla, y un artefacto cuenta como **firmado** mientras al
+menos un firmante activo del mismo inquilino lo haya firmado. Revocar un firmante, que es terminal,
+devuelve sus artefactos a sin verificar sin tocarlos. Se rechaza cualquier cosa que contenga una
+clave privada.
+
+Qué cambia con esto:
+
+- **La nueva autoridad `artifact:trust`** registra y revoca firmantes. La tienen los administradores
+  de inquilino y ningún rol que hayas definido; `artifact:write` añade una firma.
+- **Asignar requiere un artefacto firmado**, salvo que `updates.allowUnverifiedArtifacts` sea `true`.
+  Esa opción no cambia y sigue siendo `false` por defecto; lo que cambia es que un artefacto firmado
+  ya no la necesita.
+- **El contrato del dispositivo crece.** Un `update.assignment` para un artefacto firmado lleva
+  `trust: "SIGNED"`, una `signature` (base64 estándar), un `keyId` (el SHA-256 en hexadecimal
+  minúsculo de la clave pública codificada en DER) y un `algorithm` (`ECDSA_P256_SHA256` o
+  `ED25519`); ambos firman el resumen en bruto de 32 bytes. `"v":1` no cambia y una asignación sin
+  firmar es idéntica byte a byte a la de antes. Un dispositivo que solo entiende `UNVERIFIED` rechaza
+  una asignación `SIGNED`, lo que falla de forma cerrada. Un dispositivo informa `UNKNOWN_SIGNER` o
+  `SIGNATURE_INVALID` bajo `FAILED` en la etapa de descarga completada.
+- **Una firma no ata la versión.** Firmar el resumen dice quién produjo los bytes, no de qué versión
+  son; consulta [Actualizaciones por aire](../concepts/over-the-air-updates.md).
+
+##### Se rechaza un Factory Reset de LwM2M en bruto {#v0210-factory-reset}
+
+Un `lwm2m.execute` sobre el recurso 5 del objeto Device (`/3/0/5`) se rechaza al encolarse con
+`COMMAND_DESTRUCTIVE_REFUSED`, tanto para un comando individual como para un lote y para un comando
+enviado por una regla de detección, en cualquier grafía de la ruta, y de nuevo antes de que llegue al
+dispositivo. Las reglas de detección tratan el código como permanente y no reintentan. Reboot
+(`/3/0/4`), los demás execute y las lecturas no se ven afectados. Está prevista una operación con
+nombre, confirmada y para un solo dispositivo, para Factory Reset; hasta entonces la ruta en bruto
+permanece cerrada. El ejecutor también rechaza cualquier carga de lectura, escritura o ejecución
+cuya clave de ruta aparezca más de una vez.
+
+##### Los archivos compilados de la consola pasan a `/_app/` {#v0210-console-app-path}
+
+Un enlace a la página de un recurso (`/assets/<token>`) devolvía 404 al cargar o refrescar, porque el
+JavaScript y el CSS compilados de la consola estaban bajo `/assets/` y el servidor web respondía 404
+a todo lo que allí no tenía. Los archivos compilados están ahora bajo `/_app/`, con la misma caché
+inmutable de un año, y la página del recurso carga desde un enlace directo. La aplicación de paneles
+bajo `/dash` no cambia. Si usas un proxy, una caché o una lista de permitidos para las rutas de la
+consola, permite `/_app/`.
+
+##### Un registro inexistente se responde con `NOT_FOUND` {#v0210-not-found}
+
+Una petición que nombra un rol, nivel de inquilino, identidad, membresía, inquilino, cliente OAuth,
+proveedor de identidad o solicitud de vínculo de SSO que no existe, o un dispositivo que `claimDevice`
+no encuentra, responde ahora con `extensions.code` `NOT_FOUND`, como dice la
+[referencia de GraphQL](../reference/graphql-api.md). Antes solo llevaba un mensaje como
+`role not found` y ningún código. Los mensajes no cambian, así que un cliente que comparaba el
+mensaje sigue funcionando; un cliente que trataba la ausencia de código como «otro error» debe
+manejar el código.
+
+##### Go 1.27.2 acepta horas de evento escritas con escapes JSON {#v0210-go127}
+
+Todos los binarios se compilan con Go 1.27.2. Un dispositivo que escribía la hora de un evento con
+escapes JSON en la cadena, como `"2026-10-13T12:00:00Z"` para `...Z`, veía su evento enviado a la
+cola de mensajes fallidos al decodificarlo con Go 1.26. Es JSON correcto, y ahora se acepta y se
+guarda. No hay que hacer nada.
+
+##### Tablas y columnas nuevas {#v0210-migrations}
+
+| Área | Cambio |
+| --- | --- |
+| `device-management` | `devices.disabled_at timestamptz` (nulo significa habilitado) y el índice parcial `idx_devices_disabled` |
+| `command-delivery` | `device_gates` y `device_gate_syncs`, con sus índices únicos y parciales |
+| `update-management` | `artifact_signers` y `artifact_signatures` (solo claves públicas y firmas); la confianza de un artefacto se deriva ahora de ellas, y la antigua columna de confianza guardada se conserva, sin escribirse más, de modo que una actualización gradual es segura |
+| `user-management` | `ca_bundle` en los proveedores de identidad |
+
+##### El inicio de sesión único puede confiar en una autoridad de certificación privada {#v0210-sso-ca}
+
+Una conexión de proveedor de identidad puede llevar su propio paquete de CA, fijado al crearla o con
+`setIdpCaBundle` (una cadena vacía lo borra; ambos necesitan `user:write` en la API de administración
+de la instancia). Las llamadas a ese proveedor confían en las raíces del sistema más el paquete, solo
+para esa conexión, y siguen pasando por la protección de salida. El descubrimiento debe tener éxito
+con el paquete nuevo antes de guardarlo. Consulta
+[Configurar el inicio de sesión único](../guides/configuring-sso.md). No cambia nada para una
+conexión sin paquete.
+
+##### Otro comportamiento que conviene conocer {#v0210-other}
+
+- **Importación de flota.** `importDevices` admite hasta 1000 filas y responde cada una como
+  `CREATED`, `EXISTS`, `CONFLICT`, `INVALID` o `REFUSED`; solo crea, así que ejecutar un archivo de
+  nuevo es seguro, y una ejecución en seco no escribe nada. Necesita `device:write`.
+- **Configuración de dispositivo.** `restoreDeviceConfiguration` y `copyDeviceConfiguration` vuelven
+  a aplicar una revisión anterior o la configuración de otro dispositivo mediante los atributos
+  compartidos declarados del dispositivo, generando una revisión nueva. Necesitan `device:write` y
+  añaden los códigos `CONFIGURATION_KEY_UNDECLARED` y `CONFIGURATION_CONFLICT`.
+- **Exportación de Thing Model.** Una versión publicada de un perfil está disponible como Thing Model
+  del W3C Web of Things mediante `DeviceProfileVersion.thingModel`.
+- **LwM2M.** `lwm2m.reboot` y `lwm2m.readDeviceInfo` son operaciones con nombre, y el fabricante, el
+  modelo, el número de serie, la versión de firmware y el nivel de batería de un dispositivo se leen
+  cuando se registra (como máximo una vez por hora) y se conservan como atributos de cliente.
+- **Reglas de detección.** El formulario de la consola ofrece ajustes preestablecidos para un
+  dispositivo en silencio, un valor mantenido por encima de un límite y una batería baja, y muestra si
+  la severidad de la regla llega a alguien. Una alarma de ausencia se borra cuando su dispositivo se
+  deshabilita, se elimina o cambia de tipo.
+- **Mensajería.** Dos réplicas que migran a la vez la retención de un flujo ya no hacen que una se
+  niegue a arrancar.
+
 ### v0.20.0 — inicia sesión con tu propio proveedor de identidad; los widgets se distribuyen como paquetes {#v0200-upgrade}
 
 `v0.20.0` es una actualización en su sitio desde `v0.19.0`: `dcctl install` para el clúster y
