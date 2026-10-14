@@ -150,10 +150,14 @@ type Identity struct {
 	// FirstName / LastName are nullable display text: NULL when the identity has no name,
 	// never the empty string. The columns have always allowed NULL; the model now spells
 	// it, so a cleared name is NULL rather than ''.
-	FirstName    sql.NullString `gorm:"size:128"`
-	LastName     sql.NullString `gorm:"size:128"`
-	Enabled      bool           `gorm:"not null;default:true"`
-	PasswordHash string         `gorm:"not null;size:256" json:"-"`
+	FirstName sql.NullString `gorm:"size:128"`
+	LastName  sql.NullString `gorm:"size:128"`
+	// Enabled carries NO gorm `default`: gorm omits a bool's zero value from a Create so the
+	// column DEFAULT wins, which turned an explicit false into true (createIdentity(enabled: false)
+	// made an enabled identity). Every creator states it. The baseline column keeps its DEFAULT true
+	// for a raw INSERT; the model just never leans on it.
+	Enabled      bool   `gorm:"not null"`
+	PasswordHash string `gorm:"not null;size:256" json:"-"`
 	// SessionEpoch is the identity's current session value, embedded as the "sep"
 	// claim in every refresh and identity token minted for it. A token whose epoch
 	// no longer matches this column cannot be exchanged for anything (see
@@ -187,7 +191,7 @@ type Membership struct {
 
 	IdentityID uint   `gorm:"uniqueIndex:idx_iam_membership_identity_tenant;not null"`
 	TenantId   string `gorm:"uniqueIndex:idx_iam_membership_identity_tenant;not null;size:128"`
-	Enabled    bool   `gorm:"not null;default:true"`
+	Enabled    bool   `gorm:"not null"`
 
 	// ManagedBy is the id of the IdP connection that manages this membership, or nil for a
 	// manual one. A managed membership's roles follow the connection; a manual one is never
@@ -275,7 +279,7 @@ type Tenant struct {
 	rdb.NamedEntity
 
 	Token   string         `gorm:"uniqueIndex;not null;size:128"`
-	Enabled bool           `gorm:"not null;default:true"`
+	Enabled bool           `gorm:"not null"`
 	Config  map[string]any `gorm:"serializer:json"`
 
 	// SsoEnforced says the tenant's people must sign in through single sign-on: a session
@@ -484,7 +488,7 @@ type OAuthClient struct {
 	ClientId     string   `gorm:"uniqueIndex;not null;size:128"`
 	RedirectURIs []string `gorm:"serializer:json"`
 	Scopes       []string `gorm:"serializer:json"`
-	Enabled      bool     `gorm:"not null;default:true"`
+	Enabled      bool     `gorm:"not null"`
 	// SecretHash is the bcrypt hash of a confidential client's secret; empty for a
 	// public PKCE client. bcrypt output is 60 bytes — size:100 leaves headroom.
 	SecretHash string `gorm:"size:100"`

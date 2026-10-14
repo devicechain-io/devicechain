@@ -33,7 +33,7 @@ import (
 // wherever needed, and so is the secret-store handle of the private half.
 type SigningKey struct {
 	gorm.Model
-	Active       bool       `gorm:"not null;default:true;index"`
+	Active       bool       `gorm:"not null;index"`
 	PublicKeyPem string     `gorm:"not null;type:text"`
 	RetiredAt    *time.Time `gorm:"index"`
 }
