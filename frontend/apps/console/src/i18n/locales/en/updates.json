@@ -39,6 +39,7 @@
   "chooseFile": "Choose file",
   "pickedFile": "{{name}} ({{size}})",
   "hashing": "Computing SHA-256…",
+  "hashFailed": "The browser could not read this file to compute its SHA-256, so nothing was sent. A very large file may not fit in the browser's memory. ({{error}})",
   "limitUnknown": "The size limit for artifacts could not be read, so no file can be accepted. Reload and try again.",
   "fileTooLarge": "This file is {{size}}, over the {{max}} this instance accepts. Nothing was declared or uploaded.",
   "fileEmpty": "The file is empty.",

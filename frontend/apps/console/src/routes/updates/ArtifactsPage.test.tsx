@@ -212,6 +212,20 @@ describe('ArtifactsPage authority', () => {
     expect(await screen.findByText('new-artifact-form')).toBeTruthy();
   });
 
+  it('re-reads the catalogue when the drawer closes, so a just-declared artifact is listed', async () => {
+    authorities.value = ['artifact:read', 'artifact:write'];
+    respondWith([artifact()]);
+    renderPage();
+    await screen.findByText('sensor-fw');
+    fireEvent.click(screen.getByRole('button', { name: /New artifact/ }));
+    await screen.findByText('new-artifact-form');
+
+    // Declared in the drawer (whose upload may or may not have finished), then closed.
+    respondWith([artifact(), artifact({ id: 'id-2', token: 'gw-2-0', name: 'gateway-fw', state: 'UPLOADING' })]);
+    fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' });
+    expect(await screen.findByText('gateway-fw')).toBeTruthy();
+  });
+
   it('does not offer New artifact while the area is not known to be deployed', async () => {
     authorities.value = ['artifact:read', 'artifact:write'];
     area.status = 'unknown';

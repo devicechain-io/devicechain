@@ -119,7 +119,7 @@ export function NewArtifactForm({ onOpen }: { onOpen: (token: string) => void })
       if (!name) setName(file.name.replace(/\.[^.]+$/, ''));
       if (!mediaType) setMediaType(file.type);
     } catch (err) {
-      setFileError(errMessage(err));
+      setFileError(t('hashFailed', { error: errMessage(err) }));
     } finally {
       setHashing(false);
     }

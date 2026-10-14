@@ -58,7 +58,15 @@ export function formatBytes(raw: string | bigint | number): string {
   return i === 0 ? `${v} B` : `${v.toFixed(v >= 100 ? 0 : 1)} ${units[i]}`;
 }
 
-/** The artifact digest form the service declares: `sha256:` + 64 lowercase hex digits. */
+/**
+ * The artifact digest form the service declares: `sha256:` + 64 lowercase hex digits.
+ *
+ * Known limit: WebCrypto has no incremental digest, so the whole file is read into ONE
+ * ArrayBuffer. The hash itself runs off the main thread, but memory is the file's size, so
+ * a file near a raised maxArtifactBytes (the default is 512 MiB) can fail to allocate. That
+ * failure surfaces as an error to the caller, never as a digest. A chunked hash is the fix
+ * if instances start carrying multi-GB images.
+ */
 export async function sha256Digest(file: Blob): Promise<string> {
   const buf = await file.arrayBuffer();
   const hash = await crypto.subtle.digest('SHA-256', buf);

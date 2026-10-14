@@ -39,6 +39,7 @@
   "chooseFile": "Elegir archivo",
   "pickedFile": "{{name}} ({{size}})",
   "hashing": "Calculando SHA-256…",
+  "hashFailed": "El navegador no pudo leer este archivo para calcular su SHA-256, así que no se envió nada. Un archivo muy grande puede no caber en la memoria del navegador. ({{error}})",
   "limitUnknown": "No se pudo leer el límite de tamaño de los artefactos, así que no se puede aceptar ningún archivo. Recargue e inténtelo de nuevo.",
   "fileTooLarge": "Este archivo ocupa {{size}}, más de los {{max}} que acepta esta instancia. No se declaró ni se subió nada.",
   "fileEmpty": "El archivo está vacío.",

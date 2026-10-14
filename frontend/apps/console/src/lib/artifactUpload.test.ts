@@ -18,6 +18,7 @@ import {
   artifactContentUrl,
   formatBytes,
   parseByteCount,
+  sha256Digest,
   uploadArtifactContent,
 } from './artifactUpload';
 
@@ -141,5 +142,15 @@ describe('byte helpers', () => {
     expect(formatBytes('512')).toBe('512 B');
     expect(formatBytes('2048')).toBe('2.0 KiB');
     expect(formatBytes(5368709120n)).toBe('5.0 GiB');
+  });
+});
+
+describe('sha256Digest', () => {
+  // The declaration is compared byte-for-byte with what the service computes, so the FORM
+  // matters as much as the hash: the prefix, lowercase, and no separators.
+  it('produces the service digest form for a known vector', async () => {
+    expect(await sha256Digest(new Blob(['abc']))).toBe(
+      'sha256:ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad',
+    );
   });
 });

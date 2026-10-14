@@ -11,7 +11,7 @@
 
 import '@/i18n/config';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { MemoryRouter, Route, Routes } from 'react-router-dom';
+import { MemoryRouter, Route, Routes, useNavigate } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const { gqlMock, authorities, area, toastMock } = vi.hoisted(() => ({
@@ -332,7 +332,7 @@ describe('ArtifactDetailPage add signature', () => {
       ]),
     );
     // The new trust comes back with the mutation and is reported.
-    await waitFor(() => expect(toastMock).toHaveBeenCalledWith('Signature added. Trust is now SIGNED.'));
+    await waitFor(() => expect(toastMock).toHaveBeenCalledWith('Signature added. Trust is now Signed.'));
   });
 
   it('refuses to send for a key ID no registered signer has', async () => {
@@ -386,5 +386,55 @@ describe('ArtifactDetailPage add signature', () => {
     expect(await screen.findByText('SIGNATURE_INVALID: signature does not verify against sha256:ab12')).toBeTruthy();
     expect((sigField() as HTMLTextAreaElement).value).toBe('QUJD');
     expect(toastMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('ArtifactDetailPage moving between artifacts', () => {
+  function GoTo({ token }: { token: string }) {
+    const navigate = useNavigate();
+    return <button onClick={() => navigate(`/updates/artifacts/${token}`)}>go-{token}</button>;
+  }
+
+  it("never shows the previous artifact under the next one's URL while it loads", async () => {
+    authorities.value = ['artifact:read', 'artifact:write'];
+    render(
+      <ConfirmProvider>
+        <MemoryRouter initialEntries={['/updates/artifacts/fw-1-2-0']}>
+          <GoTo token="fw-9" />
+          <Routes>
+            <Route path="/updates/artifacts/:token" element={<ArtifactDetailPage />} />
+          </Routes>
+        </MemoryRouter>
+      </ConfirmProvider>,
+    );
+    await screen.findByText('sensor-fw 1.2.0');
+    // The next artifact's read never answers: whatever is on screen is the old one or nothing.
+    const base = gqlMock.getMockImplementation()!;
+    gqlMock.mockImplementation((svc: string, document: unknown, variables: Record<string, unknown>) =>
+      String(document).includes('query Artifact(') ? new Promise(() => {}) : base(svc, document, variables),
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'go-fw-9' }));
+    await screen.findByText('Loading artifact…');
+    expect(screen.queryByText('sensor-fw 1.2.0')).toBeNull();
+    expect(screen.queryByRole('button', { name: /Retire/ })).toBeNull();
+  });
+});
+
+describe('ArtifactDetailPage upload of an UPLOADING artifact', () => {
+  it('refuses a file whose size is not the declared one before sending anything', async () => {
+    authorities.value = ['artifact:read', 'artifact:write'];
+    world.artifact = artifact({ state: 'UPLOADING' });
+    const xhr = vi.fn();
+    vi.stubGlobal('XMLHttpRequest', xhr);
+    try {
+      renderPage();
+      await screen.findByText('Upload content');
+      const input = document.querySelector('input[type=file]') as HTMLInputElement;
+      fireEvent.change(input, { target: { files: [new File(['abc'], 'fw.bin')] } });
+      await screen.findByText(/This file is 3 bytes; the artifact declares 2048/);
+      expect(xhr).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });

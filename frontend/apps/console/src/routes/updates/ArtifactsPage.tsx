@@ -27,7 +27,7 @@ import { LoadingState } from '@/components/ui/loading-state';
 import { ErrorState } from '@/components/ui/error-state';
 import { EmptyState } from '@/components/ui/empty-state';
 import { Pagination } from '@/components/ui/pagination';
-import { rowLinkProps } from '@/routes/common';
+import { rowLinkProps, useReload } from '@/routes/common';
 import {
   DataTable,
   DataTableBody,
@@ -59,6 +59,7 @@ export default function ArtifactsPage() {
   const navigate = useNavigate();
   const { canWrite } = useUpdateAccess();
   const [creating, setCreating] = useState(false);
+  const [reloadKey, reload] = useReload();
   const [pageNumber, setPageNumber] = useState(1);
   const [search, setSearch] = useState('');
   const [trust, setTrust] = useState('');
@@ -77,7 +78,7 @@ export default function ArtifactsPage() {
         state: (state || undefined) as ArtifactState | undefined,
       }),
     // Keyed by EVERY input: a stale result under a new filter is a wrong list.
-    [pageNumber, trust, state],
+    [pageNumber, trust, state, reloadKey],
   );
 
   const results = useMemo(() => {
@@ -130,7 +131,12 @@ export default function ArtifactsPage() {
         <FormDrawer
           shot="artifact-new"
           open={creating}
-          onOpenChange={setCreating}
+          onOpenChange={(open) => {
+            setCreating(open);
+            // Closing the drawer after a declaration (uploaded or not) must not leave the
+            // list without the artifact that now exists.
+            if (!open) reload();
+          }}
           title={t('newArtifact')}
           description={t('newArtifactDescription')}
         >

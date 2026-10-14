@@ -65,7 +65,12 @@ export default function ArtifactDetailPage() {
   const { token: rawToken } = useParams<{ token: string }>();
   const token = rawToken ?? '';
   const [reloadKey, reload] = useReload();
-  const { data, loading, error } = useQuery(() => getArtifact(token), [token, reloadKey]);
+  const query = useQuery(() => getArtifact(token), [token, reloadKey]);
+  const { loading, error } = query;
+  // useQuery keeps the PREVIOUS data while a changed key is in flight (and after it fails).
+  // A reload of the same artifact may show it; another artifact's data must not, or the page
+  // would show artifact A, with A's Retire and signature controls, under artifact B's URL.
+  const data = query.data && query.data.token === token ? query.data : null;
 
   // First-load gating only: useQuery keeps the prior data across a refetch.
   if (loading && !data) {
@@ -89,7 +94,8 @@ export default function ArtifactDetailPage() {
       </PageShell>
     );
   }
-  return <ArtifactDetail artifact={data} reloadKey={reloadKey} onChanged={reload} />;
+  // Keyed by token: per-artifact UI state (an upload in progress, a refusal) belongs to one artifact.
+  return <ArtifactDetail key={data.token} artifact={data} reloadKey={reloadKey} onChanged={reload} />;
 }
 
 function ArtifactDetail({
@@ -263,7 +269,7 @@ function UploadContentPanel({ artifact, onUploaded }: { artifact: Artifact; onUp
         return;
       }
     } catch (err) {
-      setRefusal(errMessage(err));
+      setRefusal(t('hashFailed', { error: errMessage(err) }));
       return;
     }
     if (await upload.start(file)) onUploaded();
@@ -346,7 +352,7 @@ function SignaturesPanel({
       {canWrite && (
         <div className="mt-6 border-t border-border pt-4">
           <h3 className="mb-3 text-sm font-semibold text-foreground">{t('addSignatureTitle')}</h3>
-          <AddSignatureForm artifactToken={artifact.token} onAdded={onChanged} />
+          <AddSignatureForm artifactToken={artifact.token} reloadKey={reloadKey} onAdded={onChanged} />
         </div>
       )}
     </SectionPanel>

@@ -35,14 +35,18 @@ const BASE64 = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$
 
 export function AddSignatureForm({
   artifactToken,
+  reloadKey,
   onAdded,
 }: {
   artifactToken: string;
+  /** The page's reload counter: the registry is re-read with the page, so a signer revoked
+   * since the form mounted is not still offered as ACTIVE. */
+  reloadKey: number;
   onAdded: (artifact: Artifact) => void;
 }) {
   const { t } = useTranslation('updates');
   const { toast } = useToast();
-  const signers = useQuery(() => listArtifactSigners({ pageNumber: 1, pageSize: 1000 }), []);
+  const signers = useQuery(() => listArtifactSigners({ pageNumber: 1, pageSize: 1000 }), [reloadKey]);
   const [keyId, setKeyId] = useState('');
   const [signature, setSignature] = useState('');
   const [busy, setBusy] = useState(false);
@@ -76,7 +80,7 @@ export function AddSignatureForm({
       });
       setSignature('');
       setKeyId('');
-      toast(t('signatureAdded', { trust: updated.trustStatus }));
+      toast(t('signatureAdded', { trust: t(updated.trustStatus === 'SIGNED' ? 'trustSigned' : 'trustUnverified') }));
       onAdded(updated);
     } catch (err) {
       // Verbatim: the refusal code and wording are what a signing runbook tells the operator
