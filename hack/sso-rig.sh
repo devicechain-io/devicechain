@@ -381,11 +381,11 @@ Choose another name with DC_SSO_INSTANCE; this rig will not bootstrap over anoth
     --host localhost --no-tls "${image_args[@]}" 2>&1 | redact_secrets | tee "$rig_tmp/bootstrap.out"
   # The filter matches dcctl's present wording. If that wording moves, the password would
   # pass straight through, so check the OUTPUT for the password itself, not for the filter's
-  # marker. The password goes to grep on stdin (-f -), never on a command line.
+  # marker. The password reaches grep through a process substitution, never on a command line.
   local pw
   pw="$(k -n "$namespace" get secret "dci-$instance-superuser" -o jsonpath='{.data.password}' | base64 -d)"
   [[ -n "$pw" ]] || fail "Secret $namespace/dci-$instance-superuser holds no superuser password to check the redaction against"
-  if printf '%s\n' "$pw" | grep -qF -f - "$rig_tmp/bootstrap.out"; then
+  if grep -qF -f <(printf '%s\n' "$pw") "$rig_tmp/bootstrap.out"; then
     fail "the superuser password reached this rig's output despite redact_secrets: dcctl's wording changed; fix the filter"
   fi
   note "the bootstrap output was checked: the superuser password is not in it"
