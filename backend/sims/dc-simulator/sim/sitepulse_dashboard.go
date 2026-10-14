@@ -80,9 +80,10 @@ const (
 	sitepulseCardsPerKind    = sitepulseCardsPerRow * sitepulseCardRowsPerKind
 
 	// Rows. KPIs (3 rows) lead, then the alarm table and the map stack beside the machine
-	// controls in a band that ends at row 13; the fuel label (2 rows) and the card bands follow.
+	// controls in a band that ends at row 13; the fuel label (1 row: it is just "Fuel level" now
+	// that the low-fuel threshold lives on the cards) and the card bands follow.
 	sitepulseFuelLabelRow = 13
-	sitepulseFuelFirstRow = 15
+	sitepulseFuelFirstRow = 14
 
 	// Display scales for the two gauges. Not contract values: the only fixed points are
 	// the rule thresholds, and each scale keeps its threshold well inside the arc.
@@ -217,7 +218,7 @@ func buildSitepulseDashboard(devices []DeviceInstance) (string, error) {
 		row += sitepulseCardBandRows(n)
 	}
 
-	widgets = append(widgets, buildLabelWidget("sp-fuel-label", box{0, 24, sitepulseFuelLabelRow, 2}, sitepulseFuelBandText(shown, perKind), "left", 14))
+	widgets = append(widgets, buildLabelWidget("sp-fuel-label", box{0, 24, sitepulseFuelLabelRow, sitepulseFuelFirstRow - sitepulseFuelLabelRow}, sitepulseFuelBandText(shown, perKind), "left", 14))
 
 	for _, b := range fuelBands {
 		for i, d := range b.devices {
