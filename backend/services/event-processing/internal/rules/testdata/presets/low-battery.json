@@ -1,0 +1,1 @@
+{"name":"Low battery","type":"duration","description":"Raises an alarm when the battery level stays below 20% for 10 minutes.","severity":"warning","when":{"metric":"battery_level","op":"lt","threshold":20},"hold":"10m","actions":[{"type":"raiseAlarm","raiseAlarm":{"alarmKey":"low-battery"}}]}

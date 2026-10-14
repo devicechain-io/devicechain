@@ -119,6 +119,27 @@ Autoras las reglas en la consola de tres maneras. Las tres usan el mismo esquema
 
 Lo más destacado del lienzo es la **previsualización contra historial**. Ejecutas una regla en *borrador* sobre el historial de eventos reproducido del perfil y ves los flancos de levantamiento/resolución que *habría* producido en una ventana elegida, sin publicar nada. Al seleccionar un disparo se superpone sobre el lienzo una **traza por nodo** que muestra el camino que tomó el evento: qué condición coincidió, qué rama tomó y qué acción se disparó. Edita y vuelve a previsualizar hasta que la regla haga lo que esperas, y luego publícala.
 
+
+El formulario tiene el mismo panel de **previsualización contra historial**, sobre la regla tal como el formulario la guardaría. Está disponible cuando la comprobación del compilador pasa, y muestra los flancos de levantamiento y de resolución. No dibuja una traza por nodo, porque el formulario no tiene lienzo donde dibujarla.
+
+### Empezar desde un preajuste {#start-from-a-preset}
+
+Al crear una regla en el formulario, una fila **Empezar desde un preajuste** ofrece las tres alertas que los operadores piden primero. Elegir una rellena el formulario de debajo. No se guarda nada hasta que crees la regla, y todos los campos siguen siendo editables.
+
+| Preajuste | Tipo de regla | Valores rellenados |
+| --- | --- | --- |
+| **Dispositivo en silencio** | Ausencia | Ventana de silencio `15m`, severidad `major`, clave de alarma `device-silent`. |
+| **Por encima del umbral durante un tiempo** | Duración | La condición debe sostenerse `10m`, operador `>`, severidad `major`, clave de alarma `threshold-held`. La métrica y el límite los eliges tú, así que el límite empieza vacío. |
+| **Batería baja** | Duración | Nivel `< 20` sostenido `10m`, severidad `warning`, clave de alarma `low-battery`. La métrica se preselecciona entre las del perfil cuando un nombre parece de batería (`battery`, `batt`, `soc`). Compruébala antes de crear la regla. Si ningún nombre coincide, el campo queda vacío. |
+
+Conviene tener en cuenta:
+
+- **Dispositivo en silencio abarca todos los dispositivos del perfil.** Una regla de ausencia se rige por la lista de dispositivos del perfil, así que no puede limitarse a un grupo. Para una alarma de desconexión basada en la señal de presencia de un broker y no en el silencio de datos, usa el tipo *conectividad*.
+- **Batería baja puede oscilar en el límite.** La regla espera a que el nivel se mantenga bajo antes de levantarse, pero se resuelve en cuanto el nivel vuelve a superar el límite. Un nivel que oscile en el límite puede levantarla y resolverla repetidamente.
+- **La previsualización es aproximada.** Reproduce hasta 24 horas de historial desde un arranque en frío, así que una ventana de silencio cercana a un día se previsualiza mal.
+
+Debajo de la previsualización, el formulario comprueba si alguien se enteraría de la alarma. Las políticas de notificación enrutan por **severidad**, no por regla, así que la comprobación responde algo más acotado que "¿notificará esta regla a alguien?": ¿hay alguna política habilitada que envíe las alarmas de la severidad de esta regla por un canal que exista y esté habilitado? Si no, **Crear una política** añade una en el momento. Eliges un canal de entrega (y, para correo, los destinatarios), y la nueva política envía **todas** las alarmas de esa severidad del tenant, de cualquier regla. Antes necesitas un canal de entrega; consulta [canales de notificación](../guides/notification-channels.md).
+
 ## El ciclo de vida de la alarma {#the-alarm-lifecycle}
 
 Una alarma levantada es un **objeto con estado**, no un mensaje único. Su estado combina dos ejes en un **modelo de cuatro estados**:

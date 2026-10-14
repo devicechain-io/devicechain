@@ -119,6 +119,27 @@ You author rules in the console in three ways. All three use the same schema, an
 
 The canvas's standout feature is **preview against history**. You run a *draft* rule over the profile's replayed event history and see the raise/resolve edges it *would* have produced over a chosen window, without publishing anything. Selecting a firing overlays a **per-node trace** onto the canvas that shows the path the event took: which condition matched, which branch it took, and which action fired. Edit and re-preview until the rule does what you expect, then publish.
 
+
+The form has the same **Preview against history** panel, over the rule exactly as the form would save it. It becomes available once the compiler check passes and shows both the raise and the resolve edges. It draws no per-node trace, because the form has no canvas to draw it on.
+
+### Start from a preset {#start-from-a-preset}
+
+When you create a rule in the form, a **Start from a preset** row offers the three alerts operators ask for first. Picking one fills the form below it. Nothing is saved until you create the rule, and every field stays editable.
+
+| Preset | Rule type | Pre-filled values |
+| --- | --- | --- |
+| **Device silent** | Absence | Silence window `15m`, severity `major`, alarm key `device-silent`. |
+| **Above threshold for a duration** | Duration | The condition must hold for `10m`, operator `>`, severity `major`, alarm key `threshold-held`. The metric and the limit are yours to choose, so the limit starts empty. |
+| **Low battery** | Duration | Level `< 20` held for `10m`, severity `warning`, alarm key `low-battery`. The metric is pre-selected from the profile's metrics when a name looks like a battery (`battery`, `batt`, `soc`). Check it before creating the rule. If no name matches, the field stays empty. |
+
+Some things to keep in mind:
+
+- **Device silent covers every device on the profile.** An absence rule is driven by the profile's roster of devices, so it cannot be limited to a device group. For an offline alarm driven by a broker's presence signal instead of data silence, use the *connectivity* type.
+- **Low battery can flap at the limit.** The rule waits for the level to stay low before it raises, but it clears the moment the level rises back above the limit. A level hovering at the limit can raise and clear repeatedly.
+- **Preview approximates.** It replays up to 24 hours of history from a cold start, so a silence window close to a day previews poorly.
+
+Below the preview, the form checks whether anyone would hear about the alarm. Notification policies route by **severity**, not by rule, so the check answers a narrower question than "will this rule notify someone": does any enabled policy send alarms of this rule's severity through a channel that exists and is enabled? If not, **Create a policy** adds one inline. You pick a delivery channel (and, for email, the recipients), and the new policy sends **every** alarm of that severity in the tenant, from any rule. You need a delivery channel first; see [notification channels](../guides/notification-channels.md).
+
 ## The alarm lifecycle {#the-alarm-lifecycle}
 
 A raised alarm is a **stateful object**, not a one-off message. Its state combines two axes into a **four-state model**:

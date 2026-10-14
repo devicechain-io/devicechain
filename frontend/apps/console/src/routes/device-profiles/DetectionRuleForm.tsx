@@ -35,6 +35,8 @@ import { errMessage } from '@/routes/common';
 import { AreaUnavailableInline } from '@/components/AreaUnavailable';
 import { AREA, useAreaAbsent } from '@/lib/capabilities';
 import { ConnectorPicker } from './ConnectorPicker';
+import { NotificationCoverage } from './NotificationCoverage';
+import { PreviewPanel } from './canvas/PreviewPanel';
 import { Textarea } from '@/components/ui/textarea';
 import {
   createDetectionRule,
@@ -1306,6 +1308,28 @@ export function DetectionRuleForm({
           ))}
         </ul>
       )}
+
+      {/* Replay preview: the same previewRule query the canvas uses, over the rule as the form would
+          save it right now. Gated on the compiler check above, so what is previewed is exactly a
+          rule that compiles; a structural edit invalidates a shown result. */}
+      <PreviewPanel
+        ruleDefinition={definition ?? undefined}
+        profileToken={profileToken}
+        structuralKey={definition ?? ''}
+        notReadyReason={
+          definition == null
+            ? t('previewCompleteRule')
+            : validation?.status === 'ok'
+              ? null
+              : validation?.status === 'error'
+                ? t('canvasFixCompileErrors')
+                : t('canvasWaitingForCompiler')
+        }
+      />
+
+      {/* Does this rule's severity reach anyone? Policies route by severity only, so the answer is
+          about the severity, not the rule. */}
+      {hasRaiseAlarm && severity !== '' && <NotificationCoverage severity={severity} />}
 
       <div className="flex gap-2 pt-1">
         <Button onClick={submit} loading={busy} disabled={busy || hint != null || scopeHint != null}>

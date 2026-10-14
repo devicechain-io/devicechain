@@ -34,10 +34,9 @@ const (
 	StateRetired = "RETIRED"
 )
 
-// TrustUnverified is the only trust status an artifact can carry. Nothing in this
-// service authenticates an artifact's origin or checks a signature, and a value that
-// could never be emitted would be a promise the code does not keep, so there is no
-// VERIFIED to compare against.
+// TrustUnverified is an artifact with no signature by an ACTIVE signer: the platform checks that
+// its bytes are the bytes that were declared, and does not attribute them to anyone. It is also
+// the only value the stored trust_status column ever holds - see Artifact.TrustStatus.
 const TrustUnverified = "UNVERIFIED"
 
 // BlobPurpose is the object-store purpose segment artifact bytes are stored under:
@@ -79,7 +78,13 @@ type Artifact struct {
 	// CompatibleProfiles is a non-empty JSON array of device-profile tokens the artifact
 	// may be assigned to.
 	CompatibleProfiles datatypes.JSON `gorm:"not null"`
-	TrustStatus        string         `gorm:"not null;size:16"`
+	// TrustStatus is the STORED column and is NOT AUTHORITATIVE: it is written UNVERIFIED at
+	// declaration and never changed, kept only so a replica still running the previous release
+	// (which reads and writes it) keeps working through a rolling upgrade. What an artifact's
+	// trust IS, is derived at read time into Trust from the signatures on record and the state of
+	// the signers behind them, so revoking a signer needs no write to this table. Drop the
+	// column in a later two-phase migration once no release reads it.
+	TrustStatus string `gorm:"not null;size:16"`
 	// Provenance is {uploadedBy, source, notes}, at most MaxProvenanceBytes.
 	Provenance datatypes.JSON
 	// BlobRef locates the stored bytes; null until the artifact is AVAILABLE.
@@ -90,6 +95,12 @@ type Artifact struct {
 	// memory because the service can run more than one replica, and two replicas each
 	// holding a private "one upload at a time" would admit two.
 	UploadingSince sql.NullTime
+
+	// Trust is the artifact's DERIVED trust: SIGNED when at least one signature by an ACTIVE
+	// signer is on record, UNVERIFIED otherwise. It is not a column. Every read path that hands an
+	// artifact out fills it; empty means a path forgot to, and the GraphQL layer refuses to
+	// answer rather than report a plausible value.
+	Trust string `gorm:"-"`
 }
 
 // DefaultOrder implements rdb.Sortable: newest first, token as the tiebreak so the
@@ -119,6 +130,8 @@ type ArtifactSearchCriteria struct {
 	Kind      *string
 	State     *string
 	Component *string
+	// TrustStatus filters on the DERIVED trust: SIGNED or UNVERIFIED.
+	TrustStatus *string
 }
 
 // ArtifactSearchResults is a page of artifacts plus its pagination info.

@@ -118,6 +118,7 @@ func TestCreateDeclaresAnUploadingUnverifiedArtifact(t *testing.T) {
 
 	require.Equal(t, StateUploading, a.State)
 	require.Equal(t, TrustUnverified, a.TrustStatus)
+	require.Equal(t, TrustUnverified, a.Trust, "derived trust of a new artifact")
 	require.False(t, a.BlobRef.Valid, "no content is referenced until a verified upload")
 	require.Equal(t, "application/octet-stream", a.MediaType)
 	require.JSONEq(t, `["gateway"]`, string(a.CompatibleProfiles))

@@ -12,6 +12,9 @@ import type {
   DeviceCreateRequest,
   DeviceUpdateRequest,
   DeviceBulkCreateRequest,
+  DeviceImportRow,
+  DeviceImportMode,
+  DeviceImportOutcome,
   EntityGroupsQuery,
   EntityGroupCreateRequest,
   EntityGroupUpdateRequest,
@@ -218,6 +221,49 @@ const CREATE_DEVICES = graphql(`
 export async function createDevices(request: DeviceBulkCreateRequest): Promise<{ token: string }[]> {
   const data = await gql('device-management', CREATE_DEVICES, { request });
   return data.createDevices;
+}
+
+const IMPORT_DEVICES = graphql(`
+  mutation ImportDevices($rows: [DeviceImportRow!]!, $mode: DeviceImportMode!, $dryRun: Boolean!) {
+    importDevices(rows: $rows, mode: $mode, dryRun: $dryRun) {
+      dryRun
+      created
+      exists
+      conflict
+      invalid
+      refused
+      rows {
+        row
+        token
+        outcome
+        code
+        message
+      }
+    }
+  }
+`);
+
+export type { DeviceImportRow, DeviceImportMode, DeviceImportOutcome };
+
+export interface DeviceImportRowResult {
+  /** 1-based position within the call. */
+  row: number;
+  token: string;
+  outcome: DeviceImportOutcome;
+  code?: string | null;
+  message?: string | null;
+}
+
+// importDevices sends up to 1000 rows; each row is its own transaction on the server, so a
+// bad row never fails the others. dryRun decides every row the same way and writes nothing.
+// The rows may carry credential secrets: they are passed through and not retained here.
+export async function importDevices(
+  rows: DeviceImportRow[],
+  mode: DeviceImportMode,
+  dryRun: boolean,
+): Promise<DeviceImportRowResult[]> {
+  const data = await gql('device-management', IMPORT_DEVICES, { rows, mode, dryRun });
+  return data.importDevices.rows;
 }
 
 const UPDATE_DEVICE = graphql(`

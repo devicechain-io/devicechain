@@ -89,8 +89,11 @@ dispositivo (`assignArtifact`, `cancelUpdate`, `updateAssignment`, `updateAssign
 lleva un intento de actualización cuyo estado pasa de `QUEUED` por `INITIATED`, `DOWNLOADING`, `DOWNLOADED`, `VERIFIED`, `UPDATING`
 y `REBOOTING` hasta `UPDATED`, o a `FAILED`, `TIMED_OUT`, `UNKNOWN` o `CANCELLED`; `UPDATED` solo se alcanza
 cuando el dispositivo informa de que la versión de destino está en ejecución, con un nuevo arranque cuando
-la actualización lo requiere. Asignar un artefacto que nada ha autenticado se rechaza salvo que la instancia
-active `updates.allowUnverifiedArtifacts`, valor que se muestra en `updateManagementInfo`. Una actualización que queda en `UNKNOWN` (el dispositivo calló durante la
+la actualización lo requiere. Asignar un artefacto que ningún firmante activo ha firmado se rechaza salvo que la instancia
+active `updates.allowUnverifiedArtifacts`, valor que se muestra en `updateManagementInfo`. Los firmantes son
+claves públicas que se registran con `registerArtifactSigner` y se revocan con `revokeArtifactSigner` (ambas
+requieren `artifact:trust`); `addArtifactSignature` adjunta una firma que se verifica contra el digest del
+artefacto. Una actualización que queda en `UNKNOWN` (el dispositivo calló durante la
 instalación o el reinicio) bloquea una nueva asignación de ese componente hasta que el dispositivo informe de lo que ejecuta;
 si nunca lo hará, `abandonUnknownUpdate(assignmentToken, reason)` la cierra como `CANCELLED` con su motivo registrado,
 deja constancia del cambio a su nombre y avisa al dispositivo. No averigua qué ejecuta el dispositivo, que puede estar en

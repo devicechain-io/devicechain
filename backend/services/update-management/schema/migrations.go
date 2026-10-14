@@ -28,4 +28,5 @@ var Migrations = []*gormigrate.Migration{
 	NewUploadLeaseSchema(),
 	NewAssignmentsSchema(),
 	secrets.NewSecretStoreSchemaAt(SecretsID),
+	NewSignersSchema(),
 }

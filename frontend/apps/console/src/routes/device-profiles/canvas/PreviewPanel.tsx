@@ -13,7 +13,7 @@ import { Button } from '@/components/ui/button';
 import { SegmentedControl } from '@/components/ui/segmented-control';
 import { ToggleButton } from '@/components/ui/toggle-button';
 import { errMessage } from '@/routes/common';
-import { previewRule, type PreviewResult, type NodeTraceStep } from '@/lib/api/event-processing';
+import { previewRule, type PreviewResult, type PreviewFiring, type NodeTraceStep } from '@/lib/api/event-processing';
 
 // The window presets (hours back from now). A preview is capped server-side to 24h. The label is
 // composed from `previewWindowLabel` + hours at render (not stored here) — model-ish tables like
@@ -34,18 +34,24 @@ type State =
 // layout) — a change to it invalidates any shown/in-flight result so a stale run is never
 // misattributed to the edited draft (Fable 9d-fe M1). onTrace lifts the SELECTED firing's per-node
 // trace (slice 9e) up to the canvas so it can overlay the path; null clears the overlay.
+//
+// The panel previews EITHER a canvas graph OR a form rule's rules.Rule definition (exactly one is
+// given): the form passes `ruleDefinition`, has no canvas to overlay, and so passes no onTrace —
+// it also asks for no per-node trace, which a definition draft cannot carry.
 export function PreviewPanel({
   graph,
+  ruleDefinition,
   profileToken,
   structuralKey,
   notReadyReason,
   onTrace,
 }: {
-  graph: string;
+  graph?: string;
+  ruleDefinition?: string;
   profileToken: string;
   structuralKey: string;
   notReadyReason: string | null;
-  onTrace: (steps: NodeTraceStep[] | null) => void;
+  onTrace?: (steps: NodeTraceStep[] | null) => void;
 }) {
   const { t } = useTranslation('deviceProfiles');
   const [hours, setHours] = useState(24);
@@ -65,7 +71,7 @@ export function PreviewPanel({
   // trace (a structural edit, a new run, an error) so a stale path is never left painted on the graph.
   const clearOverlay = () => {
     setSelected(null);
-    onTraceRef.current(null);
+    onTraceRef.current?.(null);
   };
 
   // Invalidate a shown/in-flight result when the graph structurally changes — the result described a
@@ -88,7 +94,12 @@ export function PreviewPanel({
     try {
       const end = new Date();
       const start = new Date(end.getTime() - ranHours * 3_600_000);
-      const result = await previewRule({ graph, profileToken, start: start.toISOString(), end: end.toISOString(), trace: true });
+      const result = await previewRule({
+        ...(graph != null ? { graph, trace: true } : { ruleDefinition }),
+        profileToken,
+        start: start.toISOString(),
+        end: end.toISOString(),
+      });
       if (runToken.current === myToken) setState({ status: 'done', result, hours: ranHours });
     } catch (err) {
       if (runToken.current === myToken) setState({ status: 'error', message: errMessage(err) });
@@ -103,7 +114,7 @@ export function PreviewPanel({
       return;
     }
     setSelected(idx);
-    onTraceRef.current(steps);
+    onTraceRef.current?.(steps);
   };
 
   return (
@@ -144,7 +155,7 @@ export function PreviewPanel({
       )}
 
       {state.status === 'done' && (
-        <PreviewOutcome result={state.result} hours={state.hours} selected={selected} onSelect={selectFiring} />
+        <PreviewOutcome result={state.result} hours={state.hours} selected={selected} onSelect={onTrace ? selectFiring : undefined} />
       )}
     </div>
   );
@@ -159,7 +170,8 @@ function PreviewOutcome({
   result: PreviewResult;
   hours: number;
   selected: number | null;
-  onSelect: (idx: number, steps: NodeTraceStep[]) => void;
+  // Absent when there is no canvas to overlay a trace on (the form): rows are then plain.
+  onSelect?: (idx: number, steps: NodeTraceStep[]) => void;
 }) {
   const { t } = useTranslation('deviceProfiles');
   if (!result.ok) {
@@ -209,7 +221,7 @@ function PreviewOutcome({
         <p className="text-xs text-muted-foreground">{t('previewNoFirings')}</p>
       ) : (
         <>
-          <p className="text-[11px] text-muted-foreground">{t('previewSelectFiringHint')}</p>
+          {onSelect && <p className="text-[11px] text-muted-foreground">{t('previewSelectFiringHint')}</p>}
           <ul className="max-h-56 space-y-1 overflow-y-auto">
             {firings.map((f, i) => (
               <li key={i}>
@@ -218,30 +230,47 @@ function PreviewOutcome({
                     it is a pressed button rather than a segment. The row's shape is its
                     own (full width, left-aligned, three columns), so it styles itself
                     over the bare ToggleButton instead of borrowing Chip's pill. */}
-                <ToggleButton
-                  pressed={selected === i}
-                  onClick={() => onSelect(i, f.trace)}
-                  className={[
-                    'flex w-full items-center gap-2 rounded px-1.5 py-1 text-left text-xs',
-                    selected === i ? 'bg-primary/10 ring-1 ring-primary' : 'hover:bg-muted',
-                  ].join(' ')}
-                >
-                  <span
+                {onSelect ? (
+                  <ToggleButton
+                    pressed={selected === i}
+                    onClick={() => onSelect(i, f.trace)}
                     className={[
-                      'inline-block w-16 shrink-0 rounded px-1.5 py-0.5 text-center font-medium',
-                      f.signal === 'raised' ? 'bg-destructive/15 text-destructive' : 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-400',
+                      'flex w-full items-center gap-2 rounded px-1.5 py-1 text-left text-xs',
+                      selected === i ? 'bg-primary/10 ring-1 ring-primary' : 'hover:bg-muted',
                     ].join(' ')}
                   >
-                    {f.signal === 'raised' ? t('previewRaise') : t('previewResolve')}
-                  </span>
-                  <span className="font-mono text-muted-foreground">{f.series}</span>
-                  <span className="ml-auto tabular-nums text-muted-foreground">{new Date(f.occurredAt).toLocaleString()}</span>
-                </ToggleButton>
+                    <FiringCells firing={f} />
+                  </ToggleButton>
+                ) : (
+                  <div className="flex w-full items-center gap-2 px-1.5 py-1 text-xs">
+                    <FiringCells firing={f} />
+                  </div>
+                )}
               </li>
             ))}
           </ul>
         </>
       )}
     </div>
+  );
+}
+
+// One firing's three cells: the raise/resolve badge, the series, and when. Shared by the pressed
+// (canvas) and plain (form) row shapes.
+function FiringCells({ firing: f }: { firing: PreviewFiring }) {
+  const { t } = useTranslation('deviceProfiles');
+  return (
+    <>
+      <span
+        className={[
+          'inline-block w-16 shrink-0 rounded px-1.5 py-0.5 text-center font-medium',
+          f.signal === 'raised' ? 'bg-destructive/15 text-destructive' : 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-400',
+        ].join(' ')}
+      >
+        {f.signal === 'raised' ? t('previewRaise') : t('previewResolve')}
+      </span>
+      <span className="font-mono text-muted-foreground">{f.series}</span>
+      <span className="ml-auto tabular-nums text-muted-foreground">{new Date(f.occurredAt).toLocaleString()}</span>
+    </>
   );
 }

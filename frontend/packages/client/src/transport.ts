@@ -34,6 +34,7 @@ export const AREAS = [
   'command-delivery',
   'dashboard-management',
   'outbound-connectors',
+  'notification-management',
   'ai-inference/admin',
 ] as const;
 
@@ -58,7 +59,7 @@ export function areaPath(area: Area): string {
  * Note it is deliberately many-to-one: `user-management`,
  * `user-management/admin` and `user-management/settings` all key to
  * `user-management`, and the reverse direction does not exist — plenty of
- * deployed areas (event-sources, notification-management) have no Area member.
+ * deployed areas (event-sources, sparkplug-ingest) have no Area member.
  */
 export function areaKey(area: Area): string {
   return area.split('/')[0];
