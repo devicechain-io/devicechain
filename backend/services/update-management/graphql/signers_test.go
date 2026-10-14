@@ -4,6 +4,7 @@
 package graphql
 
 import (
+	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -80,7 +81,7 @@ func TestRegisteringAndRevokingASignerNeedsArtifactTrust(t *testing.T) {
 		map[string]any{"a": "fw", "s": s.Token, "sig": "AA=="})))
 	// Reading signers is artifact:read.
 	require.Equal(t, auth.ErrForbidden.Error(), code(p.exec(trust, `{ artifactSigner(token:"x"){ token } }`, nil)))
-	require.Empty(t, p.exec(writer, `{ artifactSigners(criteria:{pageNumber:0,pageSize:5}){ results { token state } } }`, nil).Errors)
+	require.Empty(t, p.exec(writer, `{ artifactSigners(criteria:{pageNumber:1,pageSize:5}){ results { token state } } }`, nil).Errors)
 
 	resp = p.exec(trust, `mutation($t: String!) { revokeArtifactSigner(token: $t){ state revokedAt } }`, map[string]any{"t": s.Token})
 	require.Empty(t, resp.Errors)
@@ -125,7 +126,7 @@ func TestSigningThroughTheSchemaDerivesTrustAndRevocationUndoesIt(t *testing.T) 
 	require.JSONEq(t, `{"addArtifactSignature":{"token":"fw-1","trustStatus":"SIGNED"}}`, string(resp.Data))
 
 	list := func(filter string) string {
-		resp := p.exec(writer, `{ artifacts(criteria:{pageNumber:0,pageSize:10`+filter+`}){ results { token trustStatus } } }`, nil)
+		resp := p.exec(writer, `{ artifacts(criteria:{pageNumber:1,pageSize:10`+filter+`}){ results { token trustStatus } } }`, nil)
 		require.Empty(t, resp.Errors)
 		return string(resp.Data)
 	}
@@ -154,7 +155,7 @@ func TestAnotherTenantCannotSeeASignerThroughTheSchema(t *testing.T) {
 
 	other := p.ctx("globex", auth.ArtifactRead, auth.ArtifactTrust)
 	resp = p.exec(other, `query($t: String!) { artifactSigner(token: $t){ token }
-	  artifactSigners(criteria:{pageNumber:0,pageSize:5}){ results { token } } }`, map[string]any{"t": reg.RegisterArtifactSigner.Token})
+	  artifactSigners(criteria:{pageNumber:1,pageSize:5}){ results { token } } }`, map[string]any{"t": reg.RegisterArtifactSigner.Token})
 	require.Empty(t, resp.Errors)
 	require.JSONEq(t, `{"artifactSigner":null,"artifactSigners":{"results":[]}}`, string(resp.Data))
 	require.Equal(t, model.CodeSignerNotFound, code(p.exec(other,
@@ -191,7 +192,7 @@ func TestAssignmentsCarryTheArtifactsDerivedTrust(t *testing.T) {
 	var got struct{ AssignArtifact struct{ Token string } }
 	require.NoError(t, json.Unmarshal(resp.Data, &got))
 
-	resp = p.exec(writer, `{ updateAssignments(criteria:{pageNumber:0,pageSize:5}){ results { artifact { trustStatus } } } }`, nil)
+	resp = p.exec(writer, `{ updateAssignments(criteria:{pageNumber:1,pageSize:5}){ results { artifact { trustStatus } } } }`, nil)
 	require.Empty(t, resp.Errors)
 	require.JSONEq(t, `{"updateAssignments":{"results":[{"artifact":{"trustStatus":"SIGNED"}}]}}`, string(resp.Data))
 
@@ -203,4 +204,87 @@ func TestAssignmentsCarryTheArtifactsDerivedTrust(t *testing.T) {
 	resp = p.exec(writer, `query($t: String!) { updateAssignment(token: $t) { artifact { trustStatus } } }`,
 		map[string]any{"t": got.AssignArtifact.Token})
 	require.JSONEq(t, `{"updateAssignment":{"artifact":{"trustStatus":"SIGNED"}}}`, string(resp.Data))
+}
+
+func TestArtifactSignaturesListEachSignerAndWhetherItCounts(t *testing.T) {
+	p := newPlane(t)
+	content := []byte("image")
+	writer := p.ctx("acme", auth.ArtifactRead, auth.ArtifactWrite)
+	trust := p.ctx("acme", auth.ArtifactTrust, auth.ArtifactRead)
+	require.Empty(t, p.exec(writer, createMutation, createVars("fw-1", content)).Errors)
+	require.Empty(t, p.exec(writer, createMutation, createVars("fw-2", []byte("other"))).Errors)
+
+	type sig struct {
+		CountsTowardTrust bool
+		Signer            struct{ Token, KeyId, Algorithm, State string }
+	}
+	read := func(ctx context.Context, token string) (single []sig, page map[string][]sig) {
+		resp := p.exec(ctx, `query($t: String!) {
+		  artifact(token: $t) { signatures { id createdAt countsTowardTrust signer { token keyId algorithm state } } }
+		  artifacts(criteria:{pageNumber:1,pageSize:10}) { results { token signatures { countsTowardTrust signer { token keyId algorithm state } } } } }`,
+			map[string]any{"t": token})
+		require.Empty(t, resp.Errors)
+		var out struct {
+			Artifact  *struct{ Signatures []sig }
+			Artifacts struct {
+				Results []struct {
+					Token      string
+					Signatures []sig
+				}
+			}
+		}
+		require.NoError(t, json.Unmarshal(resp.Data, &out))
+		page = map[string][]sig{}
+		for _, a := range out.Artifacts.Results {
+			page[a.Token] = a.Signatures
+		}
+		if out.Artifact != nil {
+			single = out.Artifact.Signatures
+		}
+		return single, page
+	}
+
+	// No signatures: an empty list, never null.
+	single, page := read(writer, "fw-1")
+	require.NotNil(t, single)
+	require.Empty(t, single)
+	require.Empty(t, page["fw-1"])
+
+	k, pub := newKey(t)
+	resp := p.exec(trust, registerSigner, map[string]any{"n": "release", "k": pub})
+	require.Empty(t, resp.Errors)
+	var reg struct{ RegisterArtifactSigner struct{ Token, KeyId string } }
+	require.NoError(t, json.Unmarshal(resp.Data, &reg))
+	signer := reg.RegisterArtifactSigner.Token
+	require.Empty(t, p.exec(writer, addSignature, map[string]any{"a": "fw-1", "s": signer, "sig": signContent(t, k, content)}).Errors)
+
+	// One ACTIVE signature counts, and only on the artifact it was made over.
+	single, page = read(writer, "fw-1")
+	require.Len(t, single, 1)
+	require.True(t, single[0].CountsTowardTrust)
+	require.Equal(t, signer, single[0].Signer.Token)
+	require.Equal(t, reg.RegisterArtifactSigner.KeyId, single[0].Signer.KeyId)
+	require.Equal(t, "ECDSA_P256", single[0].Signer.Algorithm)
+	require.Equal(t, "ACTIVE", single[0].Signer.State)
+	require.Len(t, page["fw-1"], 1)
+	require.Empty(t, page["fw-2"])
+
+	// Revoking the signer keeps the signature on record and stops it counting.
+	require.Empty(t, p.exec(trust, `mutation($t: String!) { revokeArtifactSigner(token: $t){ token } }`, map[string]any{"t": signer}).Errors)
+	single, page = read(writer, "fw-1")
+	require.Len(t, single, 1)
+	require.False(t, single[0].CountsTowardTrust)
+	require.Equal(t, "REVOKED", single[0].Signer.State)
+	require.False(t, page["fw-1"][0].CountsTowardTrust)
+
+	// Another tenant sees neither the artifact nor its signatures.
+	single, page = read(p.ctx("globex", auth.ArtifactRead), "fw-1")
+	require.Empty(t, single)
+	require.Empty(t, page)
+}
+
+func TestArtifactSignaturesNeedArtifactRead(t *testing.T) {
+	p := newPlane(t)
+	resp := p.exec(p.ctx("acme", auth.ArtifactWrite), `{ artifact(token:"x"){ signatures { id } } }`, nil)
+	require.NotEmpty(t, resp.Errors)
 }

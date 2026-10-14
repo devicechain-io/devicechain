@@ -231,7 +231,7 @@ func TestOperationsAreGatedByTheirAuthority(t *testing.T) {
 	require.Equal(t, auth.ErrForbidden.Error(), code(p.exec(reader, `mutation { retireArtifact(token:"fw"){ token } }`, nil)))
 	require.Equal(t, auth.ErrForbidden.Error(), code(p.exec(writer, `{ artifact(token:"fw"){ token } }`, nil)))
 	require.Equal(t, auth.ErrForbidden.Error(), code(p.exec(writer,
-		`{ artifacts(criteria:{pageNumber:0,pageSize:5}){ results { token } } }`, nil)))
+		`{ artifacts(criteria:{pageNumber:1,pageSize:5}){ results { token } } }`, nil)))
 	// The identity probe is open to any caller of the plane.
 	require.Empty(t, p.exec(bare, `{ updateManagementInfo { area } }`, nil).Errors)
 }
@@ -258,7 +258,7 @@ func TestCreateReadSearchRetireRoundTrip(t *testing.T) {
 	require.Equal(t, digest(content), a.Digest)
 	require.Equal(t, []string{"gateway"}, a.CompatibleProfiles)
 
-	resp = p.exec(reader, `{ artifact(token:"fw-1"){ token state } artifacts(criteria:{pageNumber:0,pageSize:5, state: UPLOADING}){
+	resp = p.exec(reader, `{ artifact(token:"fw-1"){ token state } artifacts(criteria:{pageNumber:1,pageSize:5, state: UPLOADING}){
 	  results { token } pagination { totalRecords } } }`, nil)
 	require.Empty(t, resp.Errors)
 	require.JSONEq(t, `{"artifact":{"token":"fw-1","state":"UPLOADING"},
@@ -297,7 +297,7 @@ func TestTenantBCannotSeeTenantAsArtifactsThroughTheAPI(t *testing.T) {
 	require.Empty(t, p.exec(p.ctx("acme", auth.ArtifactWrite), createMutation, createVars("fw-1", []byte("image"))).Errors)
 
 	other := p.ctx("globex", auth.ArtifactRead, auth.ArtifactWrite)
-	resp := p.exec(other, `{ artifact(token:"fw-1"){ token } artifacts(criteria:{pageNumber:0,pageSize:5}){ results { token } } }`, nil)
+	resp := p.exec(other, `{ artifact(token:"fw-1"){ token } artifacts(criteria:{pageNumber:1,pageSize:5}){ results { token } } }`, nil)
 	require.Empty(t, resp.Errors)
 	require.JSONEq(t, `{"artifact":null,"artifacts":{"results":[]}}`, string(resp.Data))
 	require.Equal(t, model.CodeArtifactNotFound, code(p.exec(other, `mutation { retireArtifact(token:"fw-1"){ state } }`, nil)))
@@ -309,7 +309,7 @@ func TestAPlaneWithoutItsAPIFailsLoudly(t *testing.T) {
 	p := newPlane(t)
 	ctx := auth.WithClaims(core.WithTenant(context.Background(), "acme"),
 		&auth.Claims{Tenant: "acme", TokenType: auth.TokenTypeAccess, Authorities: []string{string(auth.ArtifactRead)}})
-	resp := p.exec(ctx, `{ artifacts(criteria:{pageNumber:0,pageSize:5}){ results { token } } }`, nil)
+	resp := p.exec(ctx, `{ artifacts(criteria:{pageNumber:1,pageSize:5}){ results { token } } }`, nil)
 	require.NotEmpty(t, resp.Errors)
 	require.Contains(t, resp.Errors[0].Message, "not wired")
 }

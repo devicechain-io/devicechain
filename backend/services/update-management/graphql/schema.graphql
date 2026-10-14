@@ -122,7 +122,7 @@ type ArtifactSigner {
 
 """Criteria for searching signers. Every filter is optional."""
 input ArtifactSignerSearchCriteria {
-    """Zero-based page number."""
+    """Page to return, starting at 1. A value below 1 is treated as 1."""
     pageNumber: Int!
     """Records per page."""
     pageSize: Int!
@@ -166,10 +166,29 @@ type Artifact {
     compatibleProfiles: [String!]!
     """How far the artifact's origin has been established, derived from its signatures at read time."""
     trustStatus: ArtifactTrustStatus!
+    """
+    The signatures on record for the artifact, oldest first, including those by revoked signers.
+    The signature bytes are not exposed.
+    """
+    signatures: [ArtifactSignature!]!
     """Who declared the artifact and any source or notes they recorded, as a JSON object; null when none."""
     provenance: String
     """Where the artifact is in its lifecycle."""
     state: ArtifactState!
+}
+
+"""One signer's verified signature over an artifact's digest."""
+type ArtifactSignature {
+    """Internal identifier."""
+    id: ID!
+    """When the signature was recorded, as an RFC 3339 timestamp."""
+    createdAt: String
+    """The signer that made the signature."""
+    signer: ArtifactSigner!
+    """Who attached the signature; null when not recorded."""
+    createdBy: String
+    """Whether the signature currently counts toward the artifact's trust: true while its signer is ACTIVE, false once the signer is REVOKED."""
+    countsTowardTrust: Boolean!
 }
 
 """The data needed to declare an artifact. No content travels with it."""
@@ -203,7 +222,7 @@ input ArtifactCreateRequest {
 
 """Criteria for searching artifacts. Every filter is optional."""
 input ArtifactSearchCriteria {
-    """Zero-based page number."""
+    """Page to return, starting at 1. A value below 1 is treated as 1."""
     pageNumber: Int!
     """Records per page."""
     pageSize: Int!
@@ -339,7 +358,7 @@ type AssignmentSigner {
 
 """Criteria for searching update assignments. Every filter is optional."""
 input UpdateAssignmentSearchCriteria {
-    """Zero-based page number."""
+    """Page to return, starting at 1. A value below 1 is treated as 1."""
     pageNumber: Int!
     """Records per page."""
     pageSize: Int!

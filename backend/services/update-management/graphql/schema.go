@@ -77,7 +77,7 @@ func (r *SchemaResolver) Artifact(ctx context.Context, args struct{ Token string
 	if err != nil || a == nil {
 		return nil, err
 	}
-	return &ArtifactResolver{M: *a}, nil
+	return newArtifactResolver(api, *a), nil
 }
 
 // Artifacts searches artifacts.
@@ -108,7 +108,7 @@ func (r *SchemaResolver) Artifacts(ctx context.Context, args struct {
 	if err != nil {
 		return nil, err
 	}
-	return &ArtifactSearchResultsResolver{M: *found}, nil
+	return newArtifactSearchResultsResolver(api, *found), nil
 }
 
 type artifactCreateRequest struct {
@@ -150,7 +150,7 @@ func (r *SchemaResolver) CreateArtifact(ctx context.Context, args struct {
 	if err != nil {
 		return nil, err
 	}
-	return &ArtifactResolver{M: *created}, nil
+	return newArtifactResolver(api, *created), nil
 }
 
 // RetireArtifact withdraws an artifact from new use.
@@ -166,11 +166,20 @@ func (r *SchemaResolver) RetireArtifact(ctx context.Context, args struct{ Token 
 	if err != nil {
 		return nil, err
 	}
-	return &ArtifactResolver{M: *retired}, nil
+	return newArtifactResolver(api, *retired), nil
 }
 
 // ArtifactResolver resolves the fields of one artifact.
-type ArtifactResolver struct{ M model.Artifact }
+type ArtifactResolver struct {
+	M model.Artifact
+	// sigs loads the artifact's signatures the first time the field is selected. Artifacts of one
+	// search page share a loader, so a page costs two queries however many artifacts it holds.
+	sigs *signatureLoader
+}
+
+func newArtifactResolver(api *model.Api, a model.Artifact) *ArtifactResolver {
+	return &ArtifactResolver{M: a, sigs: newSignatureLoader(api, a.ID)}
+}
 
 func (r *ArtifactResolver) Id() gql.ID         { return gql.ID(fmt.Sprint(r.M.ID)) }
 func (r *ArtifactResolver) CreatedAt() *string { return gqlcore.FormatTime(r.M.CreatedAt) }
@@ -215,12 +224,23 @@ func (r *ArtifactResolver) Provenance() *string {
 }
 
 // ArtifactSearchResultsResolver resolves a page of artifacts.
-type ArtifactSearchResultsResolver struct{ M model.ArtifactSearchResults }
+type ArtifactSearchResultsResolver struct {
+	M    model.ArtifactSearchResults
+	sigs *signatureLoader
+}
+
+func newArtifactSearchResultsResolver(api *model.Api, m model.ArtifactSearchResults) *ArtifactSearchResultsResolver {
+	ids := make([]uint, 0, len(m.Results))
+	for _, a := range m.Results {
+		ids = append(ids, a.ID)
+	}
+	return &ArtifactSearchResultsResolver{M: m, sigs: newSignatureLoader(api, ids...)}
+}
 
 func (r *ArtifactSearchResultsResolver) Results() []*ArtifactResolver {
 	out := make([]*ArtifactResolver, 0, len(r.M.Results))
 	for _, a := range r.M.Results {
-		out = append(out, &ArtifactResolver{M: a})
+		out = append(out, &ArtifactResolver{M: a, sigs: r.sigs})
 	}
 	return out
 }

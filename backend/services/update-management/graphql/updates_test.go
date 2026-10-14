@@ -110,7 +110,7 @@ func TestAssignRoundTripThroughTheSchema(t *testing.T) {
 	require.Equal(t, 1, out.n, "the device was told")
 
 	resp = p.exec(reader, `query($t: String!) { updateAssignment(token: $t) { token attempt { state } }
-	  updateAssignments(criteria:{pageNumber:0,pageSize:5,currentOnly:true,deviceToken:"dev-1"}) {
+	  updateAssignments(criteria:{pageNumber:1,pageSize:5,currentOnly:true,deviceToken:"dev-1"}) {
 	    results { token } pagination { totalRecords } } }`, map[string]any{"t": a.Token})
 	require.Empty(t, resp.Errors)
 	require.JSONEq(t, `{"updateAssignment":{"token":"`+a.Token+`","attempt":{"state":"QUEUED"}},
@@ -134,7 +134,7 @@ func TestAssignmentOperationsAreGatedByTheirAuthority(t *testing.T) {
 	require.Equal(t, auth.ErrForbidden.Error(), code(p.exec(reader, `mutation { cancelUpdate(assignmentToken:"x"){ token } }`, nil)))
 	require.Equal(t, auth.ErrForbidden.Error(), code(p.exec(writer, `{ updateAssignment(token:"x"){ token } }`, nil)))
 	require.Equal(t, auth.ErrForbidden.Error(), code(p.exec(writer,
-		`{ updateAssignments(criteria:{pageNumber:0,pageSize:5}){ results { token } } }`, nil)))
+		`{ updateAssignments(criteria:{pageNumber:1,pageSize:5}){ results { token } } }`, nil)))
 }
 
 func TestAssignRefusalsCarryTheirCodes(t *testing.T) {
@@ -171,7 +171,7 @@ func TestOtherTenantsCannotSeeOrCancelAnAssignment(t *testing.T) {
 
 	other := p.ctx("globex", auth.ArtifactRead, auth.ArtifactWrite)
 	resp = p.exec(other, `query($t: String!) { updateAssignment(token: $t){ token }
-	  updateAssignments(criteria:{pageNumber:0,pageSize:5}){ results { token } } }`, map[string]any{"t": got.AssignArtifact.Token})
+	  updateAssignments(criteria:{pageNumber:1,pageSize:5}){ results { token } } }`, map[string]any{"t": got.AssignArtifact.Token})
 	require.Empty(t, resp.Errors)
 	require.JSONEq(t, `{"updateAssignment":null,"updateAssignments":{"results":[]}}`, string(resp.Data))
 	require.Equal(t, model.CodeAssignmentNotFound, code(p.exec(other,
@@ -254,19 +254,19 @@ func TestSignedByNamesThePinnedSignerAndIsNullWhenNothingIsPinned(t *testing.T) 
 	require.Empty(t, resp.Errors)
 	require.JSONEq(t, `{"assignArtifact":{"signedBy":null}}`, string(resp.Data))
 
-	resp = p.exec(reader, `{ updateAssignments(criteria:{pageNumber:0,pageSize:5,deviceToken:"dev-1"}) { results { signedBy { token } } } }`, nil)
+	resp = p.exec(reader, `{ updateAssignments(criteria:{pageNumber:1,pageSize:5,deviceToken:"dev-1"}) { results { signedBy { token } } } }`, nil)
 	require.Empty(t, resp.Errors)
 	require.JSONEq(t, `{"updateAssignments":{"results":[{"signedBy":{"token":"`+signer.Token+`"}}]}}`, string(resp.Data))
 
 	// A revoke does not move the pin, and signedBy reports the signer's state as it is now.
 	_, err = p.api.RevokeSigner(writer, signer.Token)
 	require.NoError(t, err)
-	resp = p.exec(reader, `{ updateAssignments(criteria:{pageNumber:0,pageSize:5,deviceToken:"dev-1"}) { results { signedBy { token state } } } }`, nil)
+	resp = p.exec(reader, `{ updateAssignments(criteria:{pageNumber:1,pageSize:5,deviceToken:"dev-1"}) { results { signedBy { token state } } } }`, nil)
 	require.Empty(t, resp.Errors)
 	require.JSONEq(t, `{"updateAssignments":{"results":[{"signedBy":{"token":"`+signer.Token+`","state":"REVOKED"}}]}}`, string(resp.Data))
 
 	// A pin that cannot be read is an error, never null.
 	require.NoError(t, p.api.RDB.DB(writer).Where("id = ?", signer.ID).Delete(&model.ArtifactSigner{}).Error)
-	resp = p.exec(reader, `{ updateAssignments(criteria:{pageNumber:0,pageSize:5,deviceToken:"dev-1"}) { results { signedBy { token } } } }`, nil)
+	resp = p.exec(reader, `{ updateAssignments(criteria:{pageNumber:1,pageSize:5,deviceToken:"dev-1"}) { results { signedBy { token } } } }`, nil)
 	require.NotEmpty(t, resp.Errors)
 }

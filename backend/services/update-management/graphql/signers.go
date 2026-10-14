@@ -6,6 +6,7 @@ package graphql
 import (
 	"context"
 	"fmt"
+	"sync"
 
 	"github.com/devicechain-io/dc-microservice/auth"
 	gqlcore "github.com/devicechain-io/dc-microservice/graphql"
@@ -107,7 +108,7 @@ func (r *SchemaResolver) AddArtifactSignature(ctx context.Context, args struct {
 	if err != nil {
 		return nil, err
 	}
-	return &ArtifactResolver{M: *a}, nil
+	return newArtifactResolver(api, *a), nil
 }
 
 // ArtifactSignerResolver resolves the fields of one signer.
@@ -164,4 +165,56 @@ func (r *ArtifactSignerSearchResultsResolver) Results() []*ArtifactSignerResolve
 
 func (r *ArtifactSignerSearchResultsResolver) Pagination() *searchResultsPaginationResolver {
 	return &searchResultsPaginationResolver{M: r.M.Pagination}
+}
+
+// signatureLoader loads the signatures of a set of artifacts on first use, once.
+type signatureLoader struct {
+	api  *model.Api
+	ids  []uint
+	once sync.Once
+	got  map[uint][]model.SignatureView
+	err  error
+}
+
+func newSignatureLoader(api *model.Api, ids ...uint) *signatureLoader {
+	return &signatureLoader{api: api, ids: ids}
+}
+
+func (l *signatureLoader) of(ctx context.Context, id uint) ([]model.SignatureView, error) {
+	l.once.Do(func() { l.got, l.err = l.api.SignaturesOf(ctx, l.ids...) })
+	return l.got[id], l.err
+}
+
+// Signatures lists the artifact's signatures. It is loaded only when selected.
+func (r *ArtifactResolver) Signatures(ctx context.Context) ([]*artifactSignatureResolver, error) {
+	if r.sigs == nil {
+		return nil, fmt.Errorf("artifact %q was resolved without a signature loader", r.M.Token)
+	}
+	views, err := r.sigs.of(ctx, r.M.ID)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*artifactSignatureResolver, 0, len(views))
+	for _, v := range views {
+		out = append(out, &artifactSignatureResolver{api: r.sigs.api, v: v})
+	}
+	return out, nil
+}
+
+// artifactSignatureResolver resolves one signature. The signature bytes are deliberately not a field.
+type artifactSignatureResolver struct {
+	api *model.Api
+	v   model.SignatureView
+}
+
+func (r *artifactSignatureResolver) Id() gql.ID { return gql.ID(fmt.Sprint(r.v.Signature.ID)) }
+func (r *artifactSignatureResolver) CreatedAt() *string {
+	return gqlcore.FormatTime(r.v.Signature.CreatedAt)
+}
+func (r *artifactSignatureResolver) CreatedBy() *string { return nonEmpty(r.v.Signature.Actor) }
+func (r *artifactSignatureResolver) CountsTowardTrust() bool {
+	return r.v.CountsTowardTrust()
+}
+func (r *artifactSignatureResolver) Signer() *ArtifactSignerResolver {
+	return &ArtifactSignerResolver{api: r.api, M: r.v.Signer}
 }
