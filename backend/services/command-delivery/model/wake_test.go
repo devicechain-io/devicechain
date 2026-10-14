@@ -111,7 +111,7 @@ func TestTheWakeCannotReviveACommandThatIsNoLongerHeld(t *testing.T) {
 			ctx := core.WithTenant(context.Background(), "acme")
 			ids := heldForDevice(t, api, ctx, "pump-1", 1)
 			if err := api.RDB.DB(ctx).Model(&Command{}).Where("id = ?", ids[0]).
-				Update("status", state.String()).Error; err != nil {
+				Updates(forcedStatus(state.String())).Error; err != nil {
 				t.Fatalf("staging %s failed: %v", state, err)
 			}
 
@@ -154,7 +154,7 @@ func TestTheWakeCountsWhatItActuallyReleased(t *testing.T) {
 	// One of them is answered before the device comes back.
 	if err := api.RDB.DB(ctx).Model(&Command{}).
 		Where("token = ?", "pump-1-held-0002").
-		Update("status", CommandSuccessful.String()).Error; err != nil {
+		Updates(forcedStatus(CommandSuccessful.String())).Error; err != nil {
 		t.Fatalf("staging failed: %v", err)
 	}
 

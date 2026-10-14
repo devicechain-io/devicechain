@@ -102,7 +102,7 @@ func seedCommand(t *testing.T, ctx context.Context, api *model.Api, token string
 		return
 	}
 	if err := api.RDB.DB(ctx).Model(&model.Command{}).
-		Where("id = ?", created.ID).Update("status", status.String()).Error; err != nil {
+		Where("id = ?", created.ID).Updates(forcedStatus(status.String())).Error; err != nil {
 		t.Fatalf("forcing %s to %s failed: %v", token, status, err)
 	}
 }

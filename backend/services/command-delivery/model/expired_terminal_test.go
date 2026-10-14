@@ -53,7 +53,7 @@ func TestExpireStaleLeavesAnUnknownStatusAlone(t *testing.T) {
 		}
 	}
 	if err := api.RDB.DB(sysctx).Model(&Command{}).Where("token = ?", "odd").
-		Update("status", "BOGUS").Error; err != nil {
+		Updates(forcedStatus("BOGUS")).Error; err != nil {
 		t.Fatal(err)
 	}
 

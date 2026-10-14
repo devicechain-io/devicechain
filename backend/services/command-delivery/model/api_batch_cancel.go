@@ -170,7 +170,7 @@ func (api *Api) CancelCommandBatch(ctx context.Context, batch *CommandBatch) (*B
 func cancelBatchPass(tx *gorm.DB, batchId uint) (int, map[string]int, error) {
 	res := tx.Model(&Command{}).
 		Where("batch_id = ? AND status IN ?", batchId, cancellableStatusStrings()).
-		Updates(map[string]any{"status": CommandCancelled.String()})
+		Updates(terminalUpdate(CommandCancelled, OutcomeNotDelivered, nil))
 	if res.Error != nil {
 		return 0, nil, res.Error
 	}

@@ -282,10 +282,10 @@ func TestResponseMustQuoteTheConfirmedNonce(t *testing.T) {
 		t.Fatalf("ConfirmDispatch: won=%v err=%v", won, err)
 	}
 
-	if _, err := api.MarkResponse(ctx, "answer-me", "d", n, true, nil, nil); !errors.Is(err, ErrResponseNonceMismatch) {
+	if _, err := api.MarkResponse(ctx, "answer-me", "d", n, true, ReachAnswered, nil, nil); !errors.Is(err, ErrResponseNonceMismatch) {
 		t.Fatalf("an answer quoting the pre-confirmation nonce: err=%v, want ErrResponseNonceMismatch", err)
 	}
-	cmd, err := api.MarkResponse(ctx, "answer-me", "d", n2, true, nil, nil)
+	cmd, err := api.MarkResponse(ctx, "answer-me", "d", n2, true, ReachAnswered, nil, nil)
 	if err != nil {
 		t.Fatalf("an answer quoting the confirmed nonce was refused: %v", err)
 	}

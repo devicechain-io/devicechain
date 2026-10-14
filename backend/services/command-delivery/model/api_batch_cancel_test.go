@@ -297,7 +297,7 @@ func TestCancelBatchPassCatchesARowPutBackBetweenPasses(t *testing.T) {
 	// queue. (In production the release now retires it instead — but only once the
 	// cancel has COMMITTED, and this window is inside that transaction.)
 	if err := db.Model(&Command{}).Where("token = ?", "cmd-sent-1").
-		Update("status", CommandQueued.String()).Error; err != nil {
+		Updates(forcedStatus(CommandQueued.String())).Error; err != nil {
 		t.Fatalf("stage release: %v", err)
 	}
 

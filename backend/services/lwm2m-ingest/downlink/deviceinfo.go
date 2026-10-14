@@ -248,8 +248,14 @@ func (d DeviceInfo) answer() map[string]any {
 func (o *Ops) readDeviceInfo(ctx context.Context, conn mux.Conn) OpResult {
 	info := ReadDeviceInfo(ctx, conn, infoReadTimeout(ctx))
 	if len(info.Values) == 0 {
-		return OpResult{Op: labelDeviceInfo, Success: false,
+		res := OpResult{Op: labelDeviceInfo, Success: false,
 			Err: strptr("no Device-object resource could be read: " + summarizeMissing(info.Missing))}
+		// An aborted harvest stopped on a transport failure: the device was not answering, which is
+		// the no-answer class. A harvest that merely found nothing readable was answered.
+		if info.Aborted {
+			res.Reach = reachUnanswered
+		}
+		return res
 	}
 	b, err := json.Marshal(info.answer())
 	if err != nil {

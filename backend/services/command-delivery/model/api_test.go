@@ -147,7 +147,7 @@ func TestCreateSentResponseLifecycle(t *testing.T) {
 
 	payload := `{"result":"ok"}`
 	responded, err := api.MarkResponse(ctx, "cmd-1", "device-1",
-		nonceOf(t, api, ctx, created.ID), true, &payload, nil)
+		nonceOf(t, api, ctx, created.ID), true, ReachAnswered, &payload, nil)
 	if err != nil {
 		t.Fatalf("MarkResponse failed: %v", err)
 	}
@@ -157,7 +157,7 @@ func TestCreateSentResponseLifecycle(t *testing.T) {
 
 	// A response to an already-terminal command is ignored (idempotent).
 	again, err := api.MarkResponse(ctx, "cmd-1", "device-1",
-		nonceOf(t, api, ctx, created.ID), false, nil, strPtr("late"))
+		nonceOf(t, api, ctx, created.ID), false, ReachAnswered, nil, strPtr("late"))
 	if err != nil {
 		t.Fatalf("MarkResponse (late) failed: %v", err)
 	}
@@ -337,7 +337,7 @@ func TestMarkSentDoesNotClobberResponse(t *testing.T) {
 	}
 	payload := `{"ok":true}`
 	if _, err := api.MarkResponse(ctx, "cmd-race", "device-1",
-		nonceOf(t, api, ctx, created.ID), true, &payload, nil); err != nil {
+		nonceOf(t, api, ctx, created.ID), true, ReachAnswered, &payload, nil); err != nil {
 		t.Fatalf("MarkResponse failed: %v", err)
 	}
 
@@ -447,7 +447,7 @@ func TestExpireStale(t *testing.T) {
 // thing on the day it does.
 func forceStatus(api *Api, ctx context.Context, id uint, status CommandStatus) error {
 	return api.RDB.DB(ctx).Model(&Command{}).
-		Where("id = ?", id).Update("status", status.String()).Error
+		Where("id = ?", id).Updates(forcedStatus(status.String())).Error
 }
 
 // seedWithStatus creates a command and drives it into the requested state, returning

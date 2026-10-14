@@ -222,3 +222,14 @@ func (r *CommandBatchSearchResultsResolver) Pagination() *SearchResultsPaginatio
 		C: r.C,
 	}
 }
+
+// RetryOf is the batch this one retries; null for an ordinary batch.
+func (r *CommandBatchResolver) RetryOf() *string {
+	return util.NullStr(r.M.RetryOf)
+}
+
+// Retries lists the batches that retried this one. A bounded read on its own index, taken only
+// when the field is selected.
+func (r *CommandBatchResolver) Retries() ([]string, error) {
+	return r.S.GetApi(r.C).RetriesOfBatch(r.C, r.M.Token)
+}

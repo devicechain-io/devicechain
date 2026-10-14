@@ -41,7 +41,8 @@ type deliveryEnvelope struct {
 
 // responseEnvelope is the outcome this adapter publishes on the command-responses subject; it must
 // stay byte-identical to command-delivery/processor.responseEnvelope. command-delivery's
-// MarkResponse maps Success→SUCCESSFUL / !Success→FAILED (a late/duplicate response to a terminal
+// MarkResponse maps Success→SUCCESSFUL, and !Success→FAILED (the device answered no, or the command never left)
+// or TIMEOUT (Reach UNANSWERED: nothing came back) — a late/duplicate response to a terminal
 // command is ignored), keyed by CommandToken.
 type responseEnvelope struct {
 	CommandToken string  `json:"commandToken"`
@@ -49,12 +50,33 @@ type responseEnvelope struct {
 	Payload      *string `json:"payload,omitempty"`
 	Error        *string `json:"error,omitempty"`
 
+	// Reach says how far a failure got: empty when the device answered, "UNANSWERED" when the
+	// exchange ran and nothing came back (command-delivery records that as TIMEOUT, the same fact its
+	// expiry sweep records), "UNSENT" when this adapter refused the command before the wire. Omitted
+	// on success.
+	Reach string `json:"reach,omitempty"`
+
 	// DispatchNonce names the dispatch this outcome answers, and command-delivery REFUSES a
 	// response that carries none. This adapter answers on the device's behalf, so it quotes the
 	// nonce its claim returned: the live confirmation's on the live path (NOT the envelope's,
 	// which the confirmation superseded), and the drain claim's on the wake-drain path, where
 	// there is no envelope at all.
 	DispatchNonce string `json:"dispatchNonce"`
+}
+
+// Reach values; they must match command-delivery/model.Reach.
+const (
+	reachUnanswered = "UNANSWERED"
+	reachUnsent     = "UNSENT"
+)
+
+// reachOf is the reach to publish for a result: nothing for a success, and otherwise what the
+// executor recorded.
+func reachOf(res OpResult) string {
+	if res.Success {
+		return ""
+	}
+	return res.Reach
 }
 
 // OpResult is the outcome of dispatching one command to a device: the CoAP exchange already
@@ -66,6 +88,10 @@ type OpResult struct {
 	Success bool
 	Payload *string
 	Err     *string
+	// Reach is "" when the device answered (a success, or its own 4.xx/5.xx), reachUnanswered when
+	// the exchange got no answer (timeout or transport error), reachUnsent when the command was
+	// refused locally before the wire.
+	Reach string
 	// Op is the normalized command kind for metrics (read/write/execute/other) — never the raw
 	// operator-authored command name, which would be an unbounded metric label (ADR-023).
 	Op string
@@ -1173,6 +1199,7 @@ func (d *Dispatcher) executeAndReport(ctx context.Context, conn mux.Conn, tenant
 		Success:       res.Success,
 		Payload:       res.Payload,
 		Error:         res.Err,
+		Reach:         reachOf(res),
 		DispatchNonce: dispatchNonce,
 	})
 }

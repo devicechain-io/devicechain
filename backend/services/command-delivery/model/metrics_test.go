@@ -167,7 +167,7 @@ func TestWholeBatchReserveAttributionAtTheCallSite(t *testing.T) {
 			request := &CommandBatchCreateRequest{
 				Token: "push", Name: "reboot", DeviceTokens: devices(tc.count),
 			}
-			_, err := api.decideCommandBatch(ctx, request, &acct)
+			_, err := api.decideCommandBatch(ctx, request, &acct, nil)
 			if err == nil {
 				t.Fatalf("a batch of %d against a limit of 80 must be refused", tc.count)
 			}
@@ -339,7 +339,7 @@ func TestPerDeviceReserveAttributionUnderAllowPartial(t *testing.T) {
 	acct := batchAccounting{}
 	created, err := api.decideCommandBatch(ctx, &CommandBatchCreateRequest{
 		Token: "partial-push", Name: "reboot", DeviceTokens: &tokens, AllowPartial: true,
-	}, &acct)
+	}, &acct, nil)
 	if err != nil {
 		t.Fatalf("a partial batch must be admitted up to the headroom: %v", err)
 	}
@@ -403,7 +403,7 @@ func TestConflictedCreateCountsAsAReplay(t *testing.T) {
 	tokens := []string{"pump-a", "pump-b"}
 	got, err := api.decideCommandBatch(ctx, &CommandBatchCreateRequest{
 		Token: "contested", Name: "reboot", DeviceTokens: &tokens,
-	}, &acct)
+	}, &acct, nil)
 	if err != nil {
 		t.Fatalf("losing the race is not an error: %v", err)
 	}

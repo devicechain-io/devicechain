@@ -154,6 +154,21 @@ type Command implements Model & TokenReference & MetadataEntity {
     # token rather than a caller's idempotency key, so this is also the only link back to
     # the name, payload and target the caller actually asked for.
     batchToken: String
+    """
+    What a finished command physically amounted to, recorded by the write that finished it; null
+    while the command is still live. SUCCEEDED: the device reported success. NOT_DELIVERED: proven
+    never to have reached the device (expired or cancelled while the platform held it, or the
+    platform gave up publishing it), so sending it again cannot act twice. REJECTED: the device
+    received it and answered that it did not do it. UNKNOWN: it may have reached the device and
+    acted (sent and never answered, or answered and the answer lost), so sending it again may act
+    twice. Commands that finished before this field existed are UNKNOWN unless their status alone
+    decides it. Branch on this, not on error text.
+    """
+    # The stored outcome class. It is written by the terminating write, not derived from
+    # status and error, because FAILED spans three different facts (never delivered, the
+    # device said no, outcome unknown) and only the writer knows which one it is recording.
+    # Retrying a batch's unsuccessful targets keys on this.
+    outcome: String
 }
 
 """Fields for issuing a command to one device."""
@@ -306,6 +321,11 @@ input CommandSearchCriteria {
     # SENT is deliberately NOT part of that set: a sent command is at the device, and
     # re-dispatching one would actuate hardware a second time.
     statuses: [String!]
+    """
+    Only finished commands whose outcome is one of these (SUCCEEDED, NOT_DELIVERED, REJECTED or
+    UNKNOWN). Live commands have no outcome and never match. An empty list is ignored.
+    """
+    outcomes: [String!]
 }
 
 """One page of commands."""
@@ -469,6 +489,15 @@ type CommandBatch implements Model & TokenReference & MetadataEntity {
     snapshot from that call, not a live count of CANCELLED commands.
     """
     cancelledCount: Int
+    """
+    Token of the batch this one retries, when it was created by retryCommandBatch; null for an
+    ordinary batch. A retry of a retry names the retry, not the first batch.
+    """
+    retryOf: String
+    """
+    Tokens of the batches that retried this one, oldest first, at most 100. Empty when none did.
+    """
+    retries: [String!]!
 }
 
 """
@@ -549,6 +578,48 @@ input CommandBatchCreateRequest {
     # caller states its intent, instead of inheriting one from a schema it may not have
     # read.
     allowPartial: Boolean!
+}
+
+"""
+Fields for re-issuing a batch's command to a chosen subset of its devices. The command name and
+payload are copied from the original batch; they cannot be changed here.
+"""
+# A retry is the same operation to a subset of the same devices, so the command is not part of
+# the request at all: the server reads name and payload from the original.
+input CommandBatchRetryRequest {
+    """
+    Idempotency key for the retry, unique within the tenant and different from the original
+    batch's. Re-sending it returns the retry unchanged and admits nothing further. Re-sending the
+    ORIGINAL batch's token through createCommandBatch still returns the original and executes
+    nothing.
+    """
+    token: String!
+    """Token of the batch to retry. It may itself be a retry."""
+    of: String!
+    """
+    Tokens of the devices to retry, at most 10000. Each must be a member of the original batch
+    and unsuccessful (see includeUnknown). The order is the order devices are admitted in when the
+    retry is partially admitted.
+    """
+    deviceTokens: [String!]!
+    """
+    Whether to also retry devices whose outcome is UNKNOWN: commands that may already have reached
+    the device and acted. Devices with that outcome are refused with RETRY_UNKNOWN_NOT_ACKNOWLEDGED
+    unless this is true. Only set it after confirming that acting twice is harmless.
+    """
+    includeUnknown: Boolean!
+    """
+    Required. As for createCommandBatch: when true, devices that cannot receive the command now
+    are skipped and recorded as refusals; when false, any such device refuses the whole retry.
+    """
+    allowPartial: Boolean!
+    """
+    RFC 3339 timestamp after which the retry's undelivered commands expire. Optional; when omitted
+    the platform's default time-to-live applies.
+    """
+    expiresAt: String
+    """Free-form metadata for the retry batch, as a JSON document serialized to a string. Optional."""
+    metadata: String
 }
 
 """
@@ -889,6 +960,23 @@ type Mutation {
     createCommandBatch(
         """The batch to issue."""
         request: CommandBatchCreateRequest!
+    ): CreateCommandBatchResult!
+    """
+    Re-issues a batch's command to a chosen subset of its devices that did not succeed, as a new
+    batch linked to the original. The server copies the command name and payload from the original
+    and re-validates every device exactly as a fresh batch does (disabled devices, the command
+    vocabulary, the held-command ceiling). Each device must be a member of the original and
+    NOT_DELIVERED or REJECTED; UNKNOWN only with includeUnknown. Refused with RETRY_ORIGINAL_NOT_FOUND,
+    RETRY_NO_TARGETS, RETRY_NOT_A_MEMBER, RETRY_NOT_ELIGIBLE, RETRY_UNKNOWN_NOT_ACKNOWLEDGED or
+    RETRY_TOKEN_IN_USE, or with any code createCommandBatch refuses with. Requires command:write,
+    and also device:read when the original targeted a group.
+    """
+    # Retry selected unsuccessful targets of a fleet write. Never a silent re-execution: the
+    # retry has its own idempotency token, the original is untouched and linked, and a target
+    # whose first attempt may have acted is retried only on explicit acknowledgement.
+    retryCommandBatch(
+        """The retry to issue."""
+        request: CommandBatchRetryRequest!
     ): CreateCommandBatchResult!
     """
     Cancels a command the platform still holds (QUEUED, HELD or PARKED) and returns it. A

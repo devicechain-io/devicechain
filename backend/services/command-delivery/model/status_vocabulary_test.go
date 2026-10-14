@@ -206,7 +206,7 @@ func TestExpireLosesToARowThatMovedOnAfterTheScan(t *testing.T) {
 	// And the device's answer still lands, which is the consequence that actually
 	// matters — a row wrongly expired here would swallow it.
 	if _, err := api.MarkResponse(ctx, "raced-expiry", "d",
-		nonceOfToken(t, api, ctx, "raced-expiry"), true, nil, nil); err != nil {
+		nonceOfToken(t, api, ctx, "raced-expiry"), true, ReachAnswered, nil, nil); err != nil {
 		t.Fatalf("MarkResponse failed: %v", err)
 	}
 	assertStatus(t, api, ctx, "raced-expiry", CommandSuccessful)
@@ -420,7 +420,7 @@ func TestCancelLeavesASentCommandAlone(t *testing.T) {
 	}
 
 	// The point of leaving it alone: the device's real answer still has somewhere to land.
-	answered, err := api.MarkResponse(ctx, "cancel-sent", "d", nonce, true, nil, nil)
+	answered, err := api.MarkResponse(ctx, "cancel-sent", "d", nonce, true, ReachAnswered, nil, nil)
 	if err != nil {
 		t.Fatalf("MarkResponse failed: %v", err)
 	}
