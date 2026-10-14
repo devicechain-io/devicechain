@@ -402,13 +402,6 @@ export type DeviceFacet =
 /** How an import treats credentials. No mode generates a secret. */
 export type DeviceImportMode =
   /**
-   * Create devices only, and require every device type in the file to have an enabled,
-   * unexpired provisioning profile with the CHECK_PRE_PROVISIONED strategy, so the devices
-   * can issue their own credentials at first contact. No secret travels in the file;
-   * credential columns are refused.
-   */
-  | 'CHECK_PRE_PROVISIONED'
-  /**
    * Create each device together with the credential a factory supplied for it, in one
    * transaction. credentialType and credentialId are required on every row.
    */
@@ -426,7 +419,7 @@ export type DeviceImportOutcome =
   | 'EXISTS'
   /** The row is malformed or names something that does not exist. */
   | 'INVALID'
-  /** The row is well-formed and was refused by a rule of the platform or the chosen mode. */
+  /** The row is well-formed and was refused by a rule of the platform. */
   | 'REFUSED';
 
 /** One device of an import file. */

@@ -51,7 +51,6 @@ describe('autoMap', () => {
   it('only maps credential columns in factory-credentials mode', () => {
     const header = ['token', 'credentialType', 'credentialId', 'credentialValue'];
     expect(autoMap(header, 'NONE')).toEqual({ token: 0 });
-    expect(autoMap(header, 'CHECK_PRE_PROVISIONED')).toEqual({ token: 0 });
     expect(autoMap(header, 'FACTORY_CREDENTIALS')).toEqual({
       token: 0,
       credentialType: 1,

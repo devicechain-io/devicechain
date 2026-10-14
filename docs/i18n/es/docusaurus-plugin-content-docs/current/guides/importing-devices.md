@@ -54,14 +54,13 @@ Los dispositivos siempre se crean **habilitados**; no hay columna para deshabili
 | Modo | Qué hace | Secretos en el archivo |
 | --- | --- | --- |
 | **Ninguna** (`NONE`) | Crea solo los dispositivos. Las credenciales se añaden después, desde la pestaña **Credenciales** del dispositivo o por GraphQL. | No |
-| **Preaprovisionados** (`CHECK_PRE_PROVISIONED`) | Crea solo los dispositivos, para una flota que se aprovisiona bajo la política de preaprovisionamiento en lugar de recibir credenciales. Cada tipo de dispositivo del archivo debe tener un perfil de aprovisionamiento habilitado y no caducado cuya estrategia sea `CHECK_PRE_PROVISIONED`; las filas de un tipo que no lo tiene quedan en `REFUSED`. | No |
 | **Credenciales de fábrica** (`FACTORY_CREDENTIALS`) | Crea cada dispositivo junto con la credencial que su fábrica proporcionó, en una sola transacción. Una fila nunca termina con un dispositivo sin credencial, ni al revés. | Sí: el archivo ya existe en tu fábrica; la importación lo consume y no crea ninguno |
 
 No existe un modo que genere credenciales y te entregue un archivo de secretos. DeviceChain no crea archivos que contengan secretos.
 
 Las columnas de credenciales se rechazan fuera del modo de credenciales de fábrica, de modo que un secreto no pueda colarse en un archivo por descuido.
 
-El modo preaprovisionado comprueba que la política de aprovisionamiento está establecida para los tipos de dispositivo que importas. No emite credenciales por sí mismo; consulta [Credenciales de dispositivo](./device-credentials.md) para añadirlas a los dispositivos importados.
+Un modo preaprovisionado, para flotas que se aprovisionan solas, llegará con el aprovisionamiento de autoservicio.
 
 ### Cómo se tratan los secretos {#secrets}
 
@@ -77,7 +76,7 @@ En una nueva ejecución, una fila cuyo dispositivo e id de credencial ya existen
 | `EXISTS` | El dispositivo ya existe exactamente como lo describe la fila. Es un éxito; no se escribió nada. |
 | `CONFLICT` | El token existe con otro `deviceTypeToken`, `externalId`, `name`, `description` o `metadata`; o el id externo o el id de credencial pertenece a otro dispositivo; o el dispositivo existe sin la credencial que nombra la fila. No se escribió nada. |
 | `INVALID` | La fila está mal formada o nombra algo que no existe: un token incorrecto, un tipo de dispositivo desconocido, un valor que supera su límite, JSON no válido, un token, id externo o id de credencial repetido en el mismo archivo, o un problema con la credencial. |
-| `REFUSED` | La fila está bien formada y una regla la rechazó: un tipo de credencial no admitido, o un tipo de dispositivo sin política de preaprovisionamiento en el modo preaprovisionado. |
+| `REFUSED` | La fila está bien formada y una regla la rechazó: un tipo de credencial no admitido. |
 
 Todo resultado distinto de `CREATED` y `EXISTS` incluye un `code` y un `message` que nombran el campo y nunca un valor. Una importación nunca añade una credencial a un dispositivo que ya existe; usa para eso la creación de credenciales.
 

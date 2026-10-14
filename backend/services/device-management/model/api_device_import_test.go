@@ -21,7 +21,7 @@ const importSecret = "factory-secret-0123456789"
 
 func newImportApi(t *testing.T) (*Api, context.Context) {
 	t.Helper()
-	api := newPartialUpdateApi(t, append(append([]any{}, deviceProfileTables...), &DeviceCredential{}, &ProvisioningProfile{})...)
+	api := newPartialUpdateApi(t, append(append([]any{}, deviceProfileTables...), &DeviceCredential{}, &rdb.AuditEvent{})...)
 	// The unique indexes production gets from migrations, so a collision is refused by the
 	// database too and not only by the reads that precede the write.
 	require.NoError(t, rdb.CreateTenantTokenIndex(api.RDB.Database, &Device{}))
@@ -166,27 +166,15 @@ func TestImportDryRunWritesNothingAndPredictsTheRealRun(t *testing.T) {
 	rows[2].DeviceTypeToken = "no-such"                                                                      // invalid
 	rows = append(rows, &DeviceImportRow{Token: "taken", DeviceTypeToken: "sensor", ExternalId: strp("E1")}) // exists
 
-	devices, creds, audits := countOf(t, api, ctx, &Device{}), countOf(t, api, ctx, &DeviceCredential{}), auditRows(t, api)
+	devices, creds := countOf(t, api, ctx, &Device{}), countOf(t, api, ctx, &DeviceCredential{})
 	dry := mustImport(t, api, ctx, rows, DeviceImportModeNone, true)
 	require.True(t, dry.DryRun)
 	require.Equal(t, devices, countOf(t, api, ctx, &Device{}), "a dry run creates no device")
 	require.Equal(t, creds, countOf(t, api, ctx, &DeviceCredential{}))
-	require.Equal(t, audits, auditRows(t, api), "a dry run records no audit entries")
 
 	real := mustImport(t, api, ctx, rows, DeviceImportModeNone, false)
 	require.Equal(t, outcomes(dry), outcomes(real), "the dry run decides each row by the code the real run uses")
 	require.Equal(t, []string{"CREATED", "CONFLICT", "INVALID", "CREATED", "EXISTS"}, outcomes(real))
-}
-
-// auditRows counts the audit table when this fixture has one (SQLite fixtures do not
-// migrate it, in which case the count is a constant 0 and the assertion is vacuous but true).
-func auditRows(t *testing.T, api *Api) int64 {
-	t.Helper()
-	var n int64
-	if err := api.RDB.Database.Table("audit_events").Count(&n).Error; err != nil {
-		return 0
-	}
-	return n
 }
 
 func TestImportRefusesMoreThanTheRowCapAndEmpty(t *testing.T) {
@@ -200,8 +188,10 @@ func TestImportRefusesMoreThanTheRowCapAndEmpty(t *testing.T) {
 	_, err = api.ImportDevices(ctx, nil, DeviceImportModeNone, false)
 	require.Error(t, err)
 
-	_, err = api.ImportDevices(ctx, importRows(1), "GENERATE", false)
-	require.Error(t, err, "there is no generate mode")
+	for _, mode := range []string{"GENERATE", "CHECK_PRE_PROVISIONED", ""} {
+		_, err = api.ImportDevices(ctx, importRows(1), mode, false)
+		require.Error(t, err, "mode %q is not one this build supports", mode)
+	}
 
 	res := mustImport(t, api, ctx, importRows(MaxDeviceImportRows), DeviceImportModeNone, false)
 	require.Equal(t, int32(MaxDeviceImportRows), res.Created, "exactly the cap is accepted")
@@ -246,37 +236,10 @@ func TestImportDuplicatesWithinTheFile(t *testing.T) {
 
 func TestImportCredentialColumnsAreRefusedOutsideCredentialsMode(t *testing.T) {
 	api, ctx := newImportApi(t)
-	for _, mode := range []string{DeviceImportModeNone, DeviceImportModePreProvisioned} {
-		rows := importRows(1)
-		rows[0].CredentialType, rows[0].CredentialId = strp("ACCESS_TOKEN"), strp("tok")
-		res := mustImport(t, api, ctx, rows, mode, true)
-		require.Equal(t, "INVALID", res.Rows[0].Outcome, mode)
-	}
-}
-
-func TestImportPreProvisionedRequiresACheckProfile(t *testing.T) {
-	api, ctx := newImportApi(t)
-	res := mustImport(t, api, ctx, importRows(1), DeviceImportModePreProvisioned, false)
-	require.Equal(t, "REFUSED", res.Rows[0].Outcome)
-	require.Equal(t, "PROVISIONING_PROFILE_REQUIRED", *res.Rows[0].Code)
-	require.Zero(t, countOf(t, api, ctx, &Device{}))
-
-	dt, err := api.DeviceTypesByToken(ctx, []string{"sensor"})
-	require.NoError(t, err)
-	allowNew, err := api.CreateProvisioningProfile(ctx, &ProvisioningProfileCreateRequest{
-		Token: "allow", ProvisionKey: "k1", ProvisionSecret: "s1", Strategy: string(ProvisionAllowNew),
-		DeviceTypeToken: dt[0].Token, Enabled: true})
-	require.NoError(t, err)
-	require.NotNil(t, allowNew)
-	res = mustImport(t, api, ctx, importRows(1), DeviceImportModePreProvisioned, false)
-	require.Equal(t, "REFUSED", res.Rows[0].Outcome, "an ALLOW_NEW profile is not the pre-provisioned posture")
-
-	_, err = api.CreateProvisioningProfile(ctx, &ProvisioningProfileCreateRequest{
-		Token: "check", ProvisionKey: "k2", ProvisionSecret: "s2", Strategy: string(ProvisionCheckPreProvisioned),
-		DeviceTypeToken: dt[0].Token, Enabled: true})
-	require.NoError(t, err)
-	res = mustImport(t, api, ctx, importRows(1), DeviceImportModePreProvisioned, false)
-	require.Equal(t, "CREATED", res.Rows[0].Outcome)
+	rows := importRows(1)
+	rows[0].CredentialType, rows[0].CredentialId = strp("ACCESS_TOKEN"), strp("tok")
+	res := mustImport(t, api, ctx, rows, DeviceImportModeNone, true)
+	require.Equal(t, "INVALID", res.Rows[0].Outcome)
 }
 
 func credRow(i int, ctype, id, secret string) *DeviceImportRow {
@@ -427,4 +390,37 @@ func TestImportHonoursTheTenant(t *testing.T) {
 	other := core.WithTenant(context.Background(), "globex")
 	res := mustImport(t, api, other, importRows(2), DeviceImportModeNone, true)
 	require.Equal(t, []string{"INVALID", "INVALID"}, outcomes(res))
+}
+
+// The audit journal records an imported device and its credential. The journal is a gorm
+// callback, so the fixture registers it and the assertion reads the journal's own table.
+func TestImportWritesAuditEntries(t *testing.T) {
+	api, ctx := newImportApi(t)
+	require.NoError(t, rdb.RegisterAuditJournal(api.RDB.Database))
+
+	mustImport(t, api, ctx, []*DeviceImportRow{credRow(1, "ACCESS_TOKEN", "bearer-1", "")}, DeviceImportModeCredentials, false)
+
+	var rows []rdb.AuditEvent
+	require.NoError(t, api.RDB.DB(ctx).Order("id").Find(&rows).Error)
+	var device, cred bool
+	for _, r := range rows {
+		if r.Operation != "create" {
+			continue
+		}
+		switch r.TableName {
+		case "devices":
+			device = r.EntityLabel == "dev-0001"
+		case "device_credentials":
+			cred = true
+		}
+	}
+	require.True(t, device, "no audit entry for the imported device: %v", rows)
+	require.True(t, cred, "no audit entry for the imported credential: %v", rows)
+
+	// A dry run records nothing.
+	before := len(rows)
+	mustImport(t, api, ctx, importRows(3)[1:], DeviceImportModeNone, true)
+	var after []rdb.AuditEvent
+	require.NoError(t, api.RDB.DB(ctx).Find(&after).Error)
+	require.Len(t, after, before)
 }

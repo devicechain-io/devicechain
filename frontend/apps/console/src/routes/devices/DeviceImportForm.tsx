@@ -64,7 +64,7 @@ type Phase = 'pick' | 'map' | 'checked' | 'running' | 'done';
 type Filter = 'ALL' | DeviceImportOutcome;
 
 const OUTCOMES: DeviceImportOutcome[] = ['CREATED', 'EXISTS', 'CONFLICT', 'INVALID', 'REFUSED'];
-const MODES: DeviceImportMode[] = ['NONE', 'CHECK_PRE_PROVISIONED', 'FACTORY_CREDENTIALS'];
+const MODES: DeviceImportMode[] = ['NONE', 'FACTORY_CREDENTIALS'];
 
 const outcomeVariant = (o: DeviceImportOutcome) =>
   o === 'CREATED' || o === 'EXISTS' ? 'success' : o === 'CONFLICT' ? 'warning' : 'destructive';

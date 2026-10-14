@@ -1557,13 +1557,6 @@ enum DeviceImportMode {
     """Create devices only. Credential columns are refused."""
     NONE
     """
-    Create devices only, for a fleet that provisions itself rather than being given
-    credentials: every device type in the file must have an enabled, unexpired provisioning
-    profile with the CHECK_PRE_PROVISIONED strategy, or its rows are REFUSED. No secret
-    travels in the file; credential columns are refused.
-    """
-    CHECK_PRE_PROVISIONED
-    """
     Create each device together with the credential a factory supplied for it, in one
     transaction. credentialType and credentialId are required on every row.
     """
@@ -1580,7 +1573,7 @@ enum DeviceImportOutcome {
     CONFLICT
     """The row is malformed or names something that does not exist."""
     INVALID
-    """The row is well-formed and was refused by a rule of the platform or the chosen mode."""
+    """The row is well-formed and was refused by a rule of the platform."""
     REFUSED
 }
 

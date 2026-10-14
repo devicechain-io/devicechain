@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"reflect"
 	"strings"
-	"time"
 	"unicode/utf8"
 
 	"github.com/devicechain-io/dc-microservice/conflict"
@@ -33,12 +32,6 @@ const MaxDeviceImportRows = MaxBulkDeviceCount
 const (
 	// DeviceImportModeNone creates devices only. Credential columns are refused.
 	DeviceImportModeNone = "NONE"
-	// DeviceImportModePreProvisioned creates devices only, and asserts the fleet posture:
-	// every device type in the file must have an enabled, unexpired provisioning profile
-	// whose strategy is CHECK_PRE_PROVISIONED (the policy under which only pre-registered
-	// devices may be provisioned). It checks that the policy is in place; it does not mint
-	// anything. No secret travels in the file; credential columns are refused.
-	DeviceImportModePreProvisioned = "CHECK_PRE_PROVISIONED"
 	// DeviceImportModeCredentials creates each device and the credential a factory supplied
 	// for it in one transaction.
 	DeviceImportModeCredentials = "FACTORY_CREDENTIALS"
@@ -55,11 +48,10 @@ const (
 
 // Codes a row outcome carries besides conflict.Code and limit.Code.
 const (
-	importCodeInvalidValue     = "INVALID_VALUE"
-	importCodeNotFound         = "NOT_FOUND"
-	importCodeDuplicateInFile  = "DUPLICATE_IN_FILE"
-	importCodeUnsupported      = "UNSUPPORTED"
-	importCodeProvisioningGate = "PROVISIONING_PROFILE_REQUIRED"
+	importCodeInvalidValue    = "INVALID_VALUE"
+	importCodeNotFound        = "NOT_FOUND"
+	importCodeDuplicateInFile = "DUPLICATE_IN_FILE"
+	importCodeUnsupported     = "UNSUPPORTED"
 )
 
 // DeviceImportRow is one device of an import file. It carries the fields of a single
@@ -315,9 +307,9 @@ func differingFields(d *Device, p *importRow) []string {
 // never logged, echoed or placed in an outcome: messages are built from field names only.
 func (api *Api) ImportDevices(ctx context.Context, rows []*DeviceImportRow, mode string, dryRun bool) (*DeviceImportResult, error) {
 	switch mode {
-	case DeviceImportModeNone, DeviceImportModePreProvisioned, DeviceImportModeCredentials:
+	case DeviceImportModeNone, DeviceImportModeCredentials:
 	default:
-		return nil, fmt.Errorf("mode must be %s, %s or %s", DeviceImportModeNone, DeviceImportModePreProvisioned, DeviceImportModeCredentials)
+		return nil, fmt.Errorf("mode must be %s or %s", DeviceImportModeNone, DeviceImportModeCredentials)
 	}
 	if len(rows) == 0 {
 		return nil, fmt.Errorf("rows must not be empty")
@@ -441,20 +433,6 @@ func (api *Api) decideImportRows(ctx context.Context, result *DeviceImportResult
 			credOwner[ctype+"\x00"+c.CredentialId] = c.DeviceId
 		}
 	}
-	provisionable := map[uint]bool{}
-	if mode == DeviceImportModePreProvisioned {
-		var profiles []*ProvisioningProfile
-		if err := api.RDB.DB(ctx).
-			Where("strategy = ? AND enabled = ? AND (expires_at IS NULL OR expires_at > ?)",
-				string(ProvisionCheckPreProvisioned), true, time.Now().UTC()).
-			Find(&profiles).Error; err != nil {
-			return err
-		}
-		for _, pp := range profiles {
-			provisionable[pp.DeviceTypeId] = true
-		}
-	}
-
 	created := make([]*Device, 0)
 	for _, p := range pending {
 		row := p.row
@@ -489,11 +467,6 @@ func (api *Api) decideImportRows(ctx context.Context, result *DeviceImportResult
 		}
 		if p.external != "" && byExternal[p.external] != nil {
 			result.set(i, row, DeviceImportConflict, conflict.Code, "externalId is already in use by another device")
-			continue
-		}
-		if mode == DeviceImportModePreProvisioned && !provisionable[dt.ID] {
-			result.set(i, row, DeviceImportRefused, importCodeProvisioningGate,
-				"the device type has no enabled, unexpired provisioning profile with strategy CHECK_PRE_PROVISIONED")
 			continue
 		}
 		if mode == DeviceImportModeCredentials {

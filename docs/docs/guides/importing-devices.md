@@ -54,14 +54,13 @@ Devices are always created **enabled**; there is no column for disabling a devic
 | Mode | What it does | Secrets in the file |
 | --- | --- | --- |
 | **None** (`NONE`) | Creates the devices only. Credentials are added afterwards, from the device's **Credentials** tab or over GraphQL. | No |
-| **Pre-provisioned** (`CHECK_PRE_PROVISIONED`) | Creates the devices only, for a fleet that is provisioned under the pre-provisioned policy rather than handed credentials. Every device type in the file must have an enabled, unexpired provisioning profile whose strategy is `CHECK_PRE_PROVISIONED`; rows of a type without one are `REFUSED`. | No |
 | **Factory credentials** (`FACTORY_CREDENTIALS`) | Creates each device together with the credential your factory supplied for it, in one transaction. A row never ends up with a device and no credential, or the reverse. | Yes: the file already exists at your factory; import consumes it and creates none |
 
 There is no mode that generates credentials and hands you a file of secrets. DeviceChain does not author a secret-bearing file.
 
 Credential columns are refused outside factory-credentials mode, so a secret cannot ride along in a file by accident.
 
-The pre-provisioned mode checks that the provisioning policy is in place for the device types you are importing. It does not itself mint credentials; see [Device credentials](./device-credentials.md) for adding them to the imported devices.
+A pre-provisioned mode, for fleets that provision themselves, arrives with self-service provisioning.
 
 ### How secrets are handled {#secrets}
 
@@ -77,7 +76,7 @@ On a re-run, a row whose device and credential id already exist is `EXISTS`; the
 | `EXISTS` | The device already exists exactly as the row describes it. A success; nothing was written. |
 | `CONFLICT` | The token exists with different `deviceTypeToken`, `externalId`, `name`, `description` or `metadata`; or the external id or credential id belongs to another device; or the device exists without the credential the row names. Nothing was written. |
 | `INVALID` | The row is malformed or names something that does not exist: a bad token, an unknown device type, a value over its limit, invalid JSON, a repeated token, external id or credential id elsewhere in the same file, or a credential problem. |
-| `REFUSED` | The row is well-formed and a rule refused it: a credential type that is not supported, or a device type with no pre-provisioned policy in pre-provisioned mode. |
+| `REFUSED` | The row is well-formed and a rule refused it: a credential type that is not supported. |
 
 Every outcome other than `CREATED` and `EXISTS` carries a `code` and a `message` that name the field and never a value. An import never adds a credential to a device that already exists; use the credential's own create for that.
 
