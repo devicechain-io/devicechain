@@ -48,7 +48,7 @@ export function Gauge({ widget, data }: WidgetProps) {
   );
 
   return (
-    <WidgetFrame title={optString(widget.options, 'title') ?? name}>
+    <WidgetFrame title={optString(widget.options, 'title') ?? name} sampleTime={sample?.occurredTime ?? null}>
       <div ref={sizeRef} style={{ width: '100%', height: '100%', ...flashBackgroundStyle(flashDirection) }}>
         <EChart option={option} />
       </div>

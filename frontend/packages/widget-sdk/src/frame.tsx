@@ -25,9 +25,22 @@ export interface WidgetFrameProps {
   children: ReactNode;
   // Extra style for the body region (e.g. removing padding for a chart canvas).
   bodyStyle?: CSSProperties;
+  // The occurredTime of the ONE sample this widget is showing, for a widget that shows a single
+  // value (null while it has none). When set, the age readout ages exactly that sample; left
+  // undefined, it ages the newest sample the host holds for the widget. A single-value widget
+  // must pass it: on a device reporting several measurements, the newest is often not the one
+  // on screen, and the age of another measurement would make a frozen value look live.
+  sampleTime?: string | null;
 }
 
-export function WidgetFrame({ title, subtitle, children, bodyStyle }: WidgetFrameProps) {
+// The epoch-ms time of a sample timestamp, or undefined when it has none or is unparseable.
+function parseSampleTime(time: string | null): number | undefined {
+  if (!time) return undefined;
+  const at = Date.parse(time);
+  return Number.isNaN(at) ? undefined : at;
+}
+
+export function WidgetFrame({ title, subtitle, children, bodyStyle, sampleTime }: WidgetFrameProps) {
   const subject = useWidgetSubject();
   // A subtitle that only repeats the title says nothing (a card titled by its device's
   // external id, under a subject line naming the same device).
@@ -37,7 +50,8 @@ export function WidgetFrame({ title, subtitle, children, bodyStyle }: WidgetFram
   // Present only for a widget whose descriptor opts in. Stale (a known threshold, passed) greys
   // the value out; with no threshold the age is shown and nothing is ever greyed.
   const freshness = useWidgetFreshness();
-  const reading = useFreshness(freshness?.at, freshness?.staleAfterSeconds);
+  const at = freshness === undefined ? undefined : sampleTime === undefined ? freshness.at : parseSampleTime(sampleTime);
+  const reading = useFreshness(at, freshness?.staleAfterSeconds);
   const [rootRef, size] = useElementSize<HTMLDivElement>();
   const compact = size.width > 0 && (size.width < FRESHNESS_MIN_WIDTH || size.height < FRESHNESS_MIN_HEIGHT);
   const stale = reading?.stale === true;

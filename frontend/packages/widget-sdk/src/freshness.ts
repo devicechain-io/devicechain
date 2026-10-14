@@ -61,16 +61,29 @@ export function viewerLocale(): string | undefined {
   return undefined;
 }
 
+// One formatter per locale tag: every readout on a board re-formats once a second, and
+// building an Intl formatter is far dearer than using one.
+const formatters = new Map<string, Intl.RelativeTimeFormat>();
+
+function relativeTimeFormat(locale: string | undefined): Intl.RelativeTimeFormat {
+  const key = locale ?? '';
+  let formatter = formatters.get(key);
+  if (!formatter) {
+    try {
+      formatter = new Intl.RelativeTimeFormat(locale, { numeric: 'auto', style: 'short' });
+    } catch {
+      // An unparseable tag in <html lang> must not take a widget down: the runtime's default.
+      formatter = new Intl.RelativeTimeFormat(undefined, { numeric: 'auto', style: 'short' });
+    }
+    formatters.set(key, formatter);
+  }
+  return formatter;
+}
+
 // formatAge renders an age as "12 sec. ago" / "hace 12 s" in the viewer's locale, stepping up
 // to minutes, hours and days. Under a second it reads "now".
 export function formatAge(age: number, locale: string | undefined = viewerLocale()): string {
-  let formatter: Intl.RelativeTimeFormat;
-  try {
-    formatter = new Intl.RelativeTimeFormat(locale, { numeric: 'auto', style: 'short' });
-  } catch {
-    // An unparseable tag in <html lang> must not take a widget down.
-    formatter = new Intl.RelativeTimeFormat(undefined, { numeric: 'auto', style: 'short' });
-  }
+  const formatter = relativeTimeFormat(locale);
   if (age < 60) return formatter.format(-age, 'second');
   if (age < 3600) return formatter.format(-Math.floor(age / 60), 'minute');
   if (age < 86400) return formatter.format(-Math.floor(age / 3600), 'hour');

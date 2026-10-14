@@ -213,6 +213,28 @@ describe('ConnectedWidget freshness (descriptor opt-in)', () => {
     expect(screen.queryByText('stale')).toBeNull();
   });
 
+  it('ages the value a single-value widget SHOWS, not a fresher sibling measurement', () => {
+    // The card shows temperature (its datasource's first measurement); humidity arrived just
+    // now. Aging the newest sample would make the frozen temperature look live.
+    let sink: WidgetStreamSink | null = null;
+    const hub = {
+      subscribeWidget: (_ds: DatasourceSelector, s: WidgetStreamSink) => {
+        sink = s;
+        return () => {};
+      },
+      isDatasourceAvailable: async () => true,
+    } as unknown as DashboardHub;
+    const ds: DatasourceSelector = { kind: 'device', deviceToken: 'therm-001', measurements: ['temperature', 'humidity'] };
+    render(<ConnectedWidget widget={widget('latest-card', { precision: 0, staleAfterSeconds: 60 }, ds)} hub={hub} />);
+    act(() => {
+      sink?.next(sample('temperature', 42, at(600)));
+      sink?.next(sample('humidity', 55, at(1)));
+    });
+    expect(screen.getByText('42')).toBeTruthy();
+    expect(screen.getByText(/10 min/)).toBeTruthy();
+    expect(screen.getByText('stale')).toBeTruthy();
+  });
+
   it('adds nothing to a widget that did not opt in', () => {
     const { container } = render(
       <ConnectedWidget widget={widget('label', { text: 'Zone A' }, undefined)} hub={hubWith(1).hub} />,

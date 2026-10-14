@@ -72,7 +72,7 @@ export const tankLevelWidget = defineWidget({
 | `constraints` | 可选，跨多个选项的规则，例如 `greater-than`。 |
 | `defaults` | 新添加组件的初始选项。 |
 | `interactions` | 组件请求的宿主回调。 |
-| `freshness` | 可选，设为 `true` 即启用。仅限 `measurement` 通道：框架会显示组件最新样本的时间间隔。若组件还声明了数值选项 `staleAfterSeconds`，超过该时长的数值会变灰并标记为过期。没有该选项时只显示时间间隔，不会标记任何内容为过期。 |
+| `freshness` | 可选，设为 `true` 即启用。仅限 `measurement` 通道：框架会显示组件最新样本的时间间隔。若组件还声明了数值选项 `staleAfterSeconds`，超过该时长的数值会变灰并标记为过期。没有该选项时只显示时间间隔，不会标记任何内容为过期。只显示单个数值的组件应通过 `<WidgetFrame sampleTime={sample?.occurredTime ?? null}>` 传入该样本的时间，使时间间隔对应屏幕上的数值，而不是最后到达的测量值。 |
 
 ### 通道与绑定策略 {#channels-and-binding-policy}
 

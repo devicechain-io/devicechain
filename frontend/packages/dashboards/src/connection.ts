@@ -17,6 +17,13 @@ export type HubConnectionState = 'live' | 'reconnecting' | 'offline';
 // graphql-ws retries with a growing back-off, so a drop that outlasts this is not a blip.
 export const OFFLINE_AFTER_MS = 20_000;
 
+// How long the sockets must stay up before a drop is forgotten. A server that accepts and then
+// drops the socket (a crash-looping pod, a proxy timing out the upgrade) reconnects every few
+// seconds; if each brief reconnect restarted the OFFLINE_AFTER_MS clock, that board would read
+// "reconnecting" forever and never "offline". Within this window a new drop resumes the
+// original clock. The badge still shows `live` the moment the socket is up, because it is.
+export const STABLE_AFTER_MS = 10_000;
+
 // One open subscription's view of its socket. A subscription starts UP: the shared per-area
 // socket may already be connected, and the client then emits no `connected` for a late
 // joiner, so waiting for one would leave a healthy board stuck "reconnecting".
@@ -32,11 +39,15 @@ export class ConnectionTracker {
   private readonly listeners = new Set<() => void>();
   private escalated = false;
   private escalate: ReturnType<typeof setTimeout> | undefined;
+  private recover: ReturnType<typeof setTimeout> | undefined;
   private browserOffline = false;
   private current: HubConnectionState = 'live';
   private detach: (() => void) | undefined;
 
-  constructor(private readonly offlineAfterMs: number = OFFLINE_AFTER_MS) {}
+  constructor(
+    private readonly offlineAfterMs: number = OFFLINE_AFTER_MS,
+    private readonly stableAfterMs: number = STABLE_AFTER_MS,
+  ) {}
 
   get state(): HubConnectionState {
     return this.current;
@@ -95,10 +106,21 @@ export class ConnectionTracker {
 
   private settle(): void {
     if (this.down.size === 0) {
-      if (this.escalate) clearTimeout(this.escalate);
-      this.escalate = undefined;
-      this.escalated = false;
-    } else if (!this.escalate && !this.escalated) {
+      // Up again: forget the drop only once the sockets have stayed up (STABLE_AFTER_MS).
+      if ((this.escalate || this.escalated) && !this.recover) {
+        this.recover = setTimeout(() => {
+          this.recover = undefined;
+          if (this.escalate) clearTimeout(this.escalate);
+          this.escalate = undefined;
+          this.escalated = false;
+        }, this.stableAfterMs);
+      }
+    } else {
+      // Down before the recovery window closed: keep the original clock running.
+      if (this.recover) clearTimeout(this.recover);
+      this.recover = undefined;
+    }
+    if (this.down.size > 0 && !this.escalate && !this.escalated) {
       this.escalate = setTimeout(() => {
         this.escalate = undefined;
         this.escalated = true;

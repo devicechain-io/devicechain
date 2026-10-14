@@ -51,6 +51,38 @@ describe('<Freshness>', () => {
     expect(screen.getByText('stale')).toBeTruthy();
   });
 
+  it('ages a sample stamped AHEAD of the viewer from when it arrived, not "now" forever', () => {
+    // A device clock an hour fast: clamping alone would read "now" for the next hour.
+    render(<Freshness at={T0 + 3_600_000} staleAfterSeconds={30} />);
+    expect(screen.getByText('now')).toBeTruthy();
+    tick(45_000);
+    expect(screen.getByText(/45 sec/)).toBeTruthy();
+    expect(screen.getByText('stale')).toBeTruthy();
+  });
+
+  it('restarts the arrival clock for a new future-stamped sample', () => {
+    const { rerender } = render(<Freshness at={T0 + 3_600_000} />);
+    tick(20_000);
+    expect(screen.getByText(/20 sec/)).toBeTruthy();
+    rerender(<Freshness at={T0 + 3_620_000} />);
+    expect(screen.getByText('now')).toBeTruthy();
+  });
+
+  it('drives every readout on a board from ONE interval', () => {
+    const spy = vi.spyOn(globalThis, 'setInterval');
+    render(
+      <>
+        <Freshness at={T0 - 1_000} />
+        <Freshness at={T0 - 2_000} />
+        <Freshness at={T0 - 3_000} />
+      </>,
+    );
+    expect(spy.mock.calls.filter(([, ms]) => ms === 1000)).toHaveLength(1);
+    tick(1_000);
+    expect(screen.getByText(/4 sec/)).toBeTruthy();
+    spy.mockRestore();
+  });
+
   it('never goes stale without a threshold', () => {
     render(<Freshness at={T0 - 3 * 86400_000} />);
     tick(3_600_000);
@@ -84,6 +116,29 @@ describe('WidgetFrame freshness', () => {
     const body = container.querySelector('[data-widget-body]') as HTMLElement;
     expect(body.style.filter).toBe('grayscale(1)');
     expect(screen.getByText('stale')).toBeTruthy();
+  });
+
+  it('ages the sample the widget shows when it passes one, not the newest the host holds', () => {
+    render(
+      <WidgetFreshnessProvider freshness={{ at: T0 - 2_000, staleAfterSeconds: 60 }}>
+        <WidgetFrame title="t" sampleTime={new Date(T0 - 300_000).toISOString()}>
+          value
+        </WidgetFrame>
+      </WidgetFreshnessProvider>,
+    );
+    expect(screen.getByText(/5 min/)).toBeTruthy();
+    expect(screen.getByText('stale')).toBeTruthy();
+  });
+
+  it('shows no age for a shown value that has no sample yet', () => {
+    const { container } = render(
+      <WidgetFreshnessProvider freshness={{ at: T0 - 2_000, staleAfterSeconds: 60 }}>
+        <WidgetFrame title="t" sampleTime={null}>
+          value
+        </WidgetFrame>
+      </WidgetFreshnessProvider>,
+    );
+    expect(container.querySelector('[data-widget-freshness]')).toBeNull();
   });
 
   it('keeps the value normal while within the threshold', () => {

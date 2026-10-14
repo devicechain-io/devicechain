@@ -199,8 +199,10 @@ function MeasurementConnectedWidget({ widget, hub, descriptor, Component, action
   });
 
   // Opt-in through the descriptor. The age is of the newest sample among the measurements this
-  // widget shows (its pinned one, else its datasource's, else whatever has arrived); the
-  // threshold is the widget's own option, and absent means age only.
+  // widget shows (its pinned one, else its datasource's, else whatever has arrived) -- right for
+  // a chart or a table, which time every point or row. A single-value widget narrows it to the
+  // sample it actually shows by passing that sample's time to its WidgetFrame (`sampleTime`).
+  // The threshold is the widget's own option, and absent means age only.
   const freshness = useMemo<WidgetFreshness | undefined>(() => {
     if (descriptor.freshness !== true) return undefined;
     const pinned = optString(widget.options, 'measurement');

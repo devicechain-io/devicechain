@@ -5,7 +5,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { OFFLINE_AFTER_MS } from './connection';
+import { OFFLINE_AFTER_MS, STABLE_AFTER_MS } from './connection';
 import { DashboardHub, type DeviceResolver } from './hub';
 
 interface FakeSink {
@@ -21,7 +21,7 @@ vi.mock('@devicechain/client', () => ({
     h.sinks.push(sink);
     return () => {};
   },
-  gql: vi.fn(),
+  gql: vi.fn(async () => ({ alarms: { results: [], pagination: { totalRecords: 0 } } })),
   isForbiddenError: () => false,
 }));
 
@@ -69,5 +69,77 @@ describe('DashboardHub connection state', () => {
     expect(hub.connectionState).toBe('reconnecting');
     hub.disposeAll();
     expect(hub.connectionState).toBe('live');
+  });
+
+  it('follows the alarm stream socket too, and releases it when the widget goes', async () => {
+    const hub = new DashboardHub({ resolver });
+    const dispose = hub.subscribeAlarms({ pageSize: 10 }, { next: vi.fn(), error: vi.fn() });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.sinks).toHaveLength(1);
+    const sink = h.sinks[0];
+
+    sink.closed?.();
+    expect(hub.connectionState).toBe('reconnecting');
+    vi.advanceTimersByTime(OFFLINE_AFTER_MS);
+    expect(hub.connectionState).toBe('offline');
+    sink.connected?.(true);
+    expect(hub.connectionState).toBe('live');
+    vi.advanceTimersByTime(STABLE_AFTER_MS);
+
+    sink.closed?.();
+    expect(hub.connectionState).toBe('reconnecting');
+    dispose();
+    expect(hub.connectionState).toBe('live');
+  });
+
+  it('keeps a stream whose retries ran out counted as down until its widget goes', async () => {
+    const hub = new DashboardHub({ resolver });
+    const widgetSink = { next: vi.fn(), error: vi.fn() };
+    const detach = hub.subscribeWidget({ kind: 'device', deviceToken: 'd1', measurements: ['t'] }, widgetSink);
+    await vi.advanceTimersByTimeAsync(0);
+    const sink = h.sinks[0];
+
+    sink.closed?.();
+    vi.advanceTimersByTime(OFFLINE_AFTER_MS);
+    // graphql-ws gives up and errors the operation: the board must not now read live.
+    sink.error?.(new Error('socket closed'));
+    expect(widgetSink.error).toHaveBeenCalled();
+    expect(hub.connectionState).toBe('offline');
+    detach();
+    expect(hub.connectionState).toBe('live');
+  });
+
+  it('a dead stream is released by disposeAll as well', async () => {
+    const hub = new DashboardHub({ resolver });
+    const sink = await openStream(hub);
+    sink.closed?.();
+    sink.error?.(new Error('socket closed'));
+    expect(hub.connectionState).toBe('reconnecting');
+    hub.disposeAll();
+    expect(hub.connectionState).toBe('live');
+  });
+
+  it('a socket that drops again before it is stable resumes the offline clock', async () => {
+    const hub = new DashboardHub({ resolver });
+    const sink = await openStream(hub);
+
+    sink.closed?.();
+    vi.advanceTimersByTime(OFFLINE_AFTER_MS - 5_000);
+    sink.connected?.(true);
+    expect(hub.connectionState).toBe('live');
+    vi.advanceTimersByTime(2_000);
+    sink.closed?.();
+    expect(hub.connectionState).toBe('reconnecting');
+    vi.advanceTimersByTime(5_000);
+    expect(hub.connectionState).toBe('offline');
+
+    // Up long enough to be stable: the next drop starts a fresh clock.
+    sink.connected?.(true);
+    vi.advanceTimersByTime(STABLE_AFTER_MS);
+    sink.closed?.();
+    vi.advanceTimersByTime(OFFLINE_AFTER_MS - 1);
+    expect(hub.connectionState).toBe('reconnecting');
+    vi.advanceTimersByTime(1);
+    expect(hub.connectionState).toBe('offline');
   });
 });
