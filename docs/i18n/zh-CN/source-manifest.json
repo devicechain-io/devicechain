@@ -162,6 +162,10 @@
       "sourceSha256": "1e6373f1af892b33d852cfe850bd4ed7954a8e2e6f060b9b472d6420aa78ad1d",
       "translationSha256": "931b6976af0690e3a6e7696c28f4b59ae59f75626a0edbe5f34c09180f4a066a"
     },
+    "guides/signing-updates.md": {
+      "sourceSha256": "c85308df6d029775dcdc3c89701a256dd95b40b48718dfc7dde4681cfffe27d9",
+      "translationSha256": "e331ff5c9b446f3c38ece81f2284ec49548ba452bf3bf16a7546dc6699fffa5b"
+    },
     "guides/sql-and-bi-access.md": {
       "sourceSha256": "94b760582ade2045591f2668dce3aca5831ca2d5620d58da58842a7c2212ea73",
       "translationSha256": "0dd46bfb66b76d0089a4283b39973d5089bf6e9798bb4b724542d71984ca6f92"
