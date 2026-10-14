@@ -59,7 +59,9 @@ type HttpEventSource struct {
 	// server is built by ExecuteStart and dropped by ExecuteStop, never reused: an
 	// http.Server latches its shutting-down flag permanently, so a restarted one binds
 	// nothing and serves nothing. It is nil before the first start and after every stop.
-	server    *core.HttpServer
+	server *core.HttpServer
+	// tracker is the early-close accounting for the current server, drained by ExecuteStop.
+	tracker   *connTracker
 	lifecycle core.LifecycleManager
 	received  func(string, []byte)
 	decoded   func(string, string, *model.UnresolvedEvent, interface{}, uint64) error
@@ -314,6 +316,7 @@ func (es *HttpEventSource) ExecuteStart(ctx context.Context) error {
 		return fmt.Errorf("unable to start http event source %q: %w", es.Id, err)
 	}
 	es.server = server
+	es.tracker = tracker
 	log.Info().Str("addr", server.Addr()).Msg("HTTP event source listening.")
 	return nil
 }
@@ -345,8 +348,12 @@ func (es *HttpEventSource) ExecuteStop(ctx context.Context) error {
 	if server == nil {
 		return nil
 	}
-	es.server = nil
-	return server.Shutdown(ctx)
+	tracker := es.tracker
+	es.server, es.tracker = nil, nil
+	if err := server.Shutdown(ctx); err != nil {
+		return err
+	}
+	return tracker.drain(ctx)
 }
 
 // Terminate event source
@@ -391,6 +398,11 @@ type connTracker struct {
 	// reached the handler, and every entry is removed by the terminal state net/http
 	// guarantees for each connection (closed or hijacked).
 	served map[net.Conn]struct{}
+	// live is the number of accepted connections that have not yet had their terminal
+	// state callback finish, and idle is closed by the callback that brings it to zero
+	// once a drain is waiting. See drain.
+	live int
+	idle chan struct{}
 }
 
 // connContextKey is the private key this listener's connection is carried under. It is
@@ -438,6 +450,12 @@ func (t *connTracker) connState(conn net.Conn, state http.ConnState) {
 	if t == nil {
 		return
 	}
+	if state == http.StateNew {
+		t.mu.Lock()
+		t.live++
+		t.mu.Unlock()
+		return
+	}
 	if state != http.StateClosed && state != http.StateHijacked {
 		return
 	}
@@ -447,5 +465,42 @@ func (t *connTracker) connState(conn net.Conn, state http.ConnState) {
 	t.mu.Unlock()
 	if !served {
 		t.count(t.source)
+	}
+	t.mu.Lock()
+	t.live--
+	if t.live == 0 && t.idle != nil {
+		close(t.idle)
+		t.idle = nil
+	}
+	t.mu.Unlock()
+}
+
+// drain blocks until every connection the listener accepted has finished its terminal
+// state callback, or ctx ends.
+//
+// 🔴 http.Server.Shutdown RETURNING DOES NOT MEAN THAT. net/http runs a connection's
+// StateClosed callback from a deferred call on the connection's own goroutine, which can
+// still be running after Shutdown has seen the connection go idle and returned. Without
+// this wait a stopped source can still count an early close (touching its metric) after
+// Stop has returned, which a restart or a test tearing down shared state then races with.
+func (t *connTracker) drain(ctx context.Context) error {
+	if t == nil {
+		return nil
+	}
+	t.mu.Lock()
+	if t.live <= 0 {
+		t.mu.Unlock()
+		return nil
+	}
+	if t.idle == nil {
+		t.idle = make(chan struct{})
+	}
+	idle := t.idle
+	t.mu.Unlock()
+	select {
+	case <-idle:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
 	}
 }
