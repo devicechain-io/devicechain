@@ -240,7 +240,7 @@ func (api *Api) DeviceCommandHold(ctx context.Context, deviceToken string) (bool
 func (api *Api) CancelDeviceCommands(ctx context.Context, deviceToken string) (int64, error) {
 	res := api.RDB.DB(ctx).Model(&Command{}).
 		Where("device_token = ? AND status IN ?", deviceToken, cancellableStatusStrings()).
-		Update("status", CommandCancelled.String())
+		Updates(terminalUpdate(CommandCancelled, OutcomeNotDelivered, nil))
 	if res.Error != nil {
 		return 0, res.Error
 	}

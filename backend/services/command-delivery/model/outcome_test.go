@@ -113,6 +113,30 @@ func TestEveryTerminatingWriterStampsItsOutcome(t *testing.T) {
 				}
 				return "cmd-s"
 			}},
+		{"disabled device's held command cancelled", CommandCancelled, OutcomeNotDelivered,
+			func(t *testing.T, api *Api, ctx context.Context) string {
+				seedWithStatus(t, api, ctx, "held-cancel", CommandHeld)
+				if n, err := api.CancelDeviceCommands(ctx, "d"); err != nil || n != 1 {
+					t.Fatalf("CancelDeviceCommands: n=%d err=%v", n, err)
+				}
+				return "held-cancel"
+			}},
+		{"held command lapsed", CommandExpired, OutcomeNotDelivered,
+			func(t *testing.T, api *Api, ctx context.Context) string {
+				past := time.Now().Add(-time.Hour).Format(time.RFC3339)
+				if _, err := api.CreateCommand(ctx, &CommandCreateRequest{
+					Token: "held-lapse", DeviceToken: "d", Name: "x", ExpiresAt: &past}); err != nil {
+					t.Fatal(err)
+				}
+				if err := api.RDB.DB(ctx).Model(&Command{}).Where("token = ?", "held-lapse").
+					Updates(forcedStatus(CommandHeld.String())).Error; err != nil {
+					t.Fatal(err)
+				}
+				if n, _, err := api.ExpireStale(core.WithSystemContext(ctx), time.Now()); err != nil || n != 1 {
+					t.Fatalf("ExpireStale: n=%d err=%v", n, err)
+				}
+				return "held-lapse"
+			}},
 		{"lapsed before it went out", CommandExpired, OutcomeNotDelivered, expire(false)},
 		{"lapsed after it went out", CommandTimeout, OutcomeUnknown, expire(true)},
 	}

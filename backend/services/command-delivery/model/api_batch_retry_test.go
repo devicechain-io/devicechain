@@ -306,3 +306,21 @@ func TestAFinishedCommandWithNoRecordedClassIsTreatedAsUnknown(t *testing.T) {
 	_, err := f.retry("r-legacy", false, true, "pump-0002")
 	wantCode(t, err, RejectRetryUnknownNotAcknowledged)
 }
+
+// A command held because its device is disabled is in flight from the platform's point of view:
+// it will still be delivered when the device is enabled, so retrying it would send it twice.
+func TestAHeldCommandIsNotRetryable(t *testing.T) {
+	f := newRetryFixture(t)
+	c := commandsOf(t, f.api, f.ctx, f.original.Token)
+	var id uint
+	for _, cmd := range c {
+		if cmd.DeviceToken == "pump-0004" {
+			id = cmd.ID
+		}
+	}
+	if err := forceStatus(f.api, f.ctx, id, CommandHeld); err != nil {
+		t.Fatal(err)
+	}
+	_, err := f.retry("r-held", false, true, "pump-0004")
+	wantCode(t, err, RejectRetryNotEligible)
+}
