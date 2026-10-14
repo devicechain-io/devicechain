@@ -25,16 +25,19 @@ export type {
 // in this package and nowhere else — see ./context.
 export {
   WidgetCandidatesProvider,
+  WidgetFreshnessProvider,
   WidgetSelectProvider,
   WidgetSubjectProvider,
   WidgetThemeRootProvider,
   WidgetTimeZoneProvider,
   useWidgetCandidates,
+  useWidgetFreshness,
   useWidgetSelect,
   useWidgetSubject,
   useWidgetThemeRoot,
   useWidgetTimeZone,
   type WidgetCandidates,
+  type WidgetFreshness,
   type WidgetSelect,
 } from './context';
 
@@ -46,6 +49,16 @@ export {
 export { WidgetFrame, type WidgetFrameProps } from './frame';
 export { css, type ThemeVar } from './theme';
 export { fitValueFont } from './fit-text';
+export { HubConnectionBadge, type HubConnectionBadgeProps } from './connection-badge';
+export { Freshness, FreshnessReadout, StaleBadge, useFreshness, useNow, type FreshnessProps, type FreshnessReading } from './freshness-readout';
+export {
+  ageSeconds,
+  formatAge,
+  freshnessStrings,
+  isStale,
+  newestSampleTime,
+  resolveStaleAfterSeconds,
+} from './freshness';
 export { formatDateTime, formatTimestamp, formatValue } from './format';
 export {
   FlashValue,
@@ -62,6 +75,7 @@ export {
   useDashboardHub,
   useDatasourceAvailability,
   useElementSize,
+  useHubConnectionState,
   useLocationStream,
   useMeasurementStream,
   useResolvedBindings,
@@ -69,6 +83,7 @@ export {
   type AlarmStreamState,
   type CandidatesState,
   type CommandStreamState,
+  type ConnectionStateSource,
   type DatasourceAvailability,
   type ElementSize,
   type LocationStreamState,
@@ -96,6 +111,7 @@ export {
   type DescriptorIssue,
   type EnumOptionSpec,
   type GreaterThanConstraint,
+  type HubConnectionState,
   type NamespacedWidgetId,
   type NumberOptionRef,
   type NumberOptionSpec,

@@ -137,6 +137,8 @@ export {
   useLocationStream,
   useDatasourceAvailability,
   useDashboardHub,
+  useHubConnectionState,
+  HubConnectionBadge,
   useResolvedBindings,
   useSlotCandidates,
   useCandidates,
@@ -151,6 +153,7 @@ export {
   type LocationStreamState,
   type CandidatesState,
   type DatasourceAvailability,
+  type HubConnectionBadgeProps,
   type ThemeVar,
 } from '@devicechain/widget-sdk';
 export {

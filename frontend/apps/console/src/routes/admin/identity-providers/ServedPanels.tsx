@@ -32,6 +32,7 @@ import { Input } from '@/components/ui/input';
 import { MultiSelect } from '@/components/ui/multi-select';
 import { SectionPanel } from '@/components/ui/section-panel';
 import { useToast } from '@/components/ui/toast';
+import { formatTime } from '@/lib/utils';
 import { errMessage } from '@/routes/common';
 import { idpErrorMessage } from './idpError';
 
@@ -170,7 +171,7 @@ export function DomainsPanel({ connection: c, reading, onChanged }: PanelProps) 
                 <DataTableRow key={d.domain}>
                   <DataTableCell className="font-medium text-foreground">{d.domain}</DataTableCell>
                   <DataTableCell className="text-muted-foreground">{d.verifiedBy}</DataTableCell>
-                  <DataTableCell className="text-muted-foreground">{d.verifiedAt}</DataTableCell>
+                  <DataTableCell className="text-muted-foreground">{formatTime(d.verifiedAt)}</DataTableCell>
                   <DataTableCell className="text-right">
                     <Button
                       variant="ghost"

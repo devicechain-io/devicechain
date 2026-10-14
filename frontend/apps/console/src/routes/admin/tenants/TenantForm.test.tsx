@@ -236,6 +236,18 @@ describe('editing a tenant', () => {
     expectRequest(await clickSave(), CLEARED);
   });
 
+  // The backend resolves override -> TIER -> platform default, so a hint that says "inherit
+  // the platform default" skips the middle level and misdescribes what blank does.
+  it('says a blank rate or burst inherits the tier first, then the platform default', async () => {
+    renderEdit(tenant());
+    fireEvent.mouseDown(await screen.findByRole('tab', { name: 'Settings' }));
+    await screen.findByLabelText('Held command ceiling');
+    const hints = screen.getAllByText(/Leave blank to inherit the tier's value, then the platform default\./);
+    // ingest rate + burst, outbound rate + burst, AI rate + burst
+    expect(hints).toHaveLength(6);
+    expect(screen.queryByText(/inherit the platform default\.$/)).toBeNull();
+  });
+
   it('sends the held-command ceiling the operator typed', async () => {
     renderEdit(tenant());
     // Radix activates a tab on mousedown, not click.

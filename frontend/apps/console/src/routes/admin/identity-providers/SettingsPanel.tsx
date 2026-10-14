@@ -103,10 +103,7 @@ function GeneralSettings({ connection: c, reading, onChanged }: PanelProps) {
           <Input value={c.issuer} readOnly aria-label={t('issuerLabel')} />
         </FormField>
         <FormField label={t('callbackUrlLabel')} description={t('callbackUrlDescription')}>
-          <div className="flex items-center gap-2 text-sm">
-            <span className="break-all font-mono text-xs">{c.callbackUrl}</span>
-            <CopyToken value={c.callbackUrl} />
-          </div>
+          <CopyToken value={c.callbackUrl} className="max-w-full" />
         </FormField>
         <FormField label={t('common:colName')} htmlFor="idp-edit-name">
           <Input id="idp-edit-name" value={name} onChange={(e) => setName(e.target.value)} />
