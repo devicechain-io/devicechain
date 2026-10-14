@@ -110,6 +110,12 @@ describe('MapWidget — the renderer could not be loaded', () => {
   // A CONFIGURED widget lands here too — the tile source is irrelevant when the thing
   // that would consume it never loaded. Worth its own case because the fallback used
   // to be reachable two ways and it would be easy to leave it wired to only one.
+  it('sets the note at a readable size (not the 10 px it once was)', async () => {
+    render(<MapWidget widget={widget()} data={twoDevices()} />);
+    const note = await screen.findByTestId('map-no-tiles-note');
+    expect(parseInt(note.style.fontSize, 10)).toBeGreaterThanOrEqual(11);
+  });
+
   it('falls back the same way when a tile source WAS configured', async () => {
     render(
       <MapWidget

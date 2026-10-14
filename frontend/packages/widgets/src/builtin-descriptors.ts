@@ -214,6 +214,7 @@ export const builtinWidgetDescriptors = {
         doc: 'High end of the gauge scale. Default 100.',
       },
       unit: UNIT,
+      precision: PRECISION,
       flashOnChange: FLASH_ON_CHANGE,
       window: WINDOW,
     },

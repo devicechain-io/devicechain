@@ -31,10 +31,11 @@ export function Gauge({ widget, data }: WidgetProps) {
   const min = optNumber(widget.options, 'min');
   const max = optNumber(widget.options, 'max');
   const unit = optString(widget.options, 'unit');
+  const precision = optNumber(widget.options, 'precision');
 
   const option = useMemo(
-    () => buildGaugeOption(sample?.value ?? null, theme, { min, max, unit }, size),
-    [sample?.value, theme, min, max, unit, size.width, size.height],
+    () => buildGaugeOption(sample?.value ?? null, theme, { min, max, unit, precision }, size),
+    [sample?.value, theme, min, max, unit, precision, size.width, size.height],
   );
 
   // Opt-in directional flash. The value lives on an opaque canvas, so the cue is a

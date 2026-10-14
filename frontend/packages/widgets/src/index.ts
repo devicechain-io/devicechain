@@ -130,6 +130,7 @@ export {
   flashTextStyle,
   flashBackgroundStyle,
   FlashValue,
+  fitValueFont,
   useMeasurementStream,
   useAlarmStream,
   useCommandStream,
