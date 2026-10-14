@@ -115,6 +115,7 @@ func profilerOn(area string, profiler map[string]interface{}) map[string]interfa
 
 // OFF BY DEFAULT: no area's pod carries the variable, so no service starts a listener.
 func TestNoAreaIsProfiledByDefault(t *testing.T) {
+	t.Parallel()
 	manifest, err := renderChart(t, nil)
 	if err != nil {
 		t.Fatalf("rendering the default chart: %v", err)
@@ -138,6 +139,7 @@ func TestNoAreaIsProfiledByDefault(t *testing.T) {
 // ON FOR ONE AREA: that area's pod gets the default loopback address, and no other pod
 // gets anything, so turning it on restarts that service alone.
 func TestEnablingOneAreaReachesThatPodAlone(t *testing.T) {
+	t.Parallel()
 	manifest, err := renderChart(t, profilerOn("device-management", map[string]interface{}{"enabled": true}))
 	if err != nil {
 		t.Fatalf("rendering with the profiler on: %v", err)
@@ -178,6 +180,7 @@ func TestEnablingOneAreaReachesThatPodAlone(t *testing.T) {
 // NEVER A PORT: the listener is not a container port and not a Service port, so the
 // Service and the ingress cannot route to it.
 func TestTheProfilerIsNeverAPortOfThePodOrItsService(t *testing.T) {
+	t.Parallel()
 	manifest, err := renderChart(t, profilerOn("device-management", map[string]interface{}{"enabled": true}))
 	if err != nil {
 		t.Fatalf("rendering with the profiler on: %v", err)
@@ -198,6 +201,7 @@ func TestTheProfilerIsNeverAPortOfThePodOrItsService(t *testing.T) {
 // write the instance document. The switch is a pod setting, so it must work there
 // too: this is the path a benchmark on a dcctl-installed instance takes.
 func TestTheProfilerWorksOnAnInstanceWhoseConfigIsInASecret(t *testing.T) {
+	t.Parallel()
 	_, install := composedForTest(t, composeStateForTest())
 	mergeFunctionalArea(install, "device-management",
 		map[string]interface{}{"profiler": map[string]interface{}{"enabled": true}})
@@ -215,6 +219,7 @@ func TestTheProfilerWorksOnAnInstanceWhoseConfigIsInASecret(t *testing.T) {
 // port the pod already serves (the service's own listener would then fail to bind, and
 // its error would name the wrong one), and a misspelled key.
 func TestProfilerSettingsThatCannotWorkAreRefused(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name string
 		vals map[string]interface{}
@@ -249,6 +254,7 @@ func TestProfilerSettingsThatCannotWorkAreRefused(t *testing.T) {
 // A collision check that compared numbers alone refused it, saying the pod already
 // served that port.
 func TestAProfilerMayShareANumberWithAUDPPort(t *testing.T) {
+	t.Parallel()
 	vals := map[string]interface{}{
 		"functionalAreas": map[string]interface{}{
 			"event-sources": map[string]interface{}{
@@ -272,6 +278,7 @@ func TestAProfilerMayShareANumberWithAUDPPort(t *testing.T) {
 // profiler must not ride along with it, or that would be the one area an upgrade left
 // profiling.
 func TestAnUpgradeDoesNotCarryAProfilerForward(t *testing.T) {
+	t.Parallel()
 	previous := aPreviousRelease()
 	lwm2m := previous["functionalAreas"].(map[string]interface{})["lwm2m-ingest"].(map[string]interface{})
 	lwm2m["profiler"] = map[string]interface{}{"enabled": true}

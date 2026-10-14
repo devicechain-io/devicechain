@@ -53,6 +53,17 @@ func renderContainers(t *testing.T, vals map[string]interface{}) []renderedConta
 
 // renderChart renders the embedded chart the way the tests here need it and
 // returns the manifest, or the render error for a test that expects a refusal.
+//
+// 🔑 THE TESTS THAT ONLY RENDER RUN IN PARALLEL. A render is a whole client-side chart
+// install, a second or more each under the race detector, and this package has enough
+// of them that run one after another they were a large part of why its race step came
+// close to go test's 20 minute budget on a slow runner. Each render loads a chart of
+// its own and builds its own values, so the tests that do nothing else share nothing
+// and call t.Parallel: gomemlimit, sizing, placement, persistence_replicas,
+// profiler_render and chart_namespace_agreement. A test in those files that swaps a
+// package variable or calls t.Setenv cannot be parallel; give it a file of its own,
+// or drop its t.Parallel, rather than make the others wait. The race step is what
+// catches a shared write between them.
 func renderChart(t *testing.T, vals map[string]interface{}) (string, error) {
 	t.Helper()
 
@@ -205,6 +216,7 @@ func mib(t *testing.T, q string) int64 {
 // The property that matters is the relationship, not the number: an area with a
 // raised limit must get a raised GOMEMLIMIT without anyone editing a second value.
 func TestGoMemLimitIsDerivedFromEachContainersOwnLimit(t *testing.T) {
+	t.Parallel()
 	for _, c := range goContainers(renderContainers(t, enabled(nil))) {
 		if c.memoryLimit == "" {
 			continue
@@ -230,6 +242,7 @@ func TestGoMemLimitIsDerivedFromEachContainersOwnLimit(t *testing.T) {
 // GOMEMLIMIT would still hold: the env var is present, it is below the container
 // limit, and it is a valid quantity.
 func TestGoMemLimitConvertsGibibytesBeforeTakingThePercentage(t *testing.T) {
+	t.Parallel()
 	got := goMemLimitForArea(t, goContainers(renderContainers(t, enabled(map[string]interface{}{
 		"resources": map[string]interface{}{
 			"requests": map[string]interface{}{"cpu": "100m", "memory": "256Mi"},
@@ -247,6 +260,7 @@ func TestGoMemLimitConvertsGibibytesBeforeTakingThePercentage(t *testing.T) {
 // parser as the request/limit comparison; the one before it took the leading
 // integer, so 1.5Gi read as 1Gi and the derived GOMEMLIMIT was a third low.
 func TestGoMemLimitReadsAFractionalLimit(t *testing.T) {
+	t.Parallel()
 	got := goMemLimitForArea(t, goContainers(renderContainers(t, enabled(map[string]interface{}{
 		"resources": map[string]interface{}{
 			"requests": map[string]interface{}{"cpu": "100m", "memory": "256Mi"},
@@ -263,6 +277,7 @@ func TestGoMemLimitReadsAFractionalLimit(t *testing.T) {
 // refusal is a policy on top of the shared parser, which reads 1G for the
 // request/limit comparison.
 func TestGoMemLimitRefusesADecimalLimit(t *testing.T) {
+	t.Parallel()
 	_, err := renderChart(t, enabled(map[string]interface{}{
 		"resources": map[string]interface{}{
 			"requests": map[string]interface{}{"cpu": "100m", "memory": "256Mi"},
@@ -282,6 +297,7 @@ func TestGoMemLimitRefusesADecimalLimit(t *testing.T) {
 // ever produced 100% or more would convert a collectable condition into an
 // OOMKill, which reads as a crash rather than as a tuning mistake.
 func TestGoMemLimitStaysBelowTheContainerLimit(t *testing.T) {
+	t.Parallel()
 	for _, c := range goContainers(renderContainers(t, enabled(nil))) {
 		if c.goMemLimit == "" || c.memoryLimit == "" {
 			continue
@@ -298,6 +314,7 @@ func TestGoMemLimitStaysBelowTheContainerLimit(t *testing.T) {
 // must actually win. Both are escape hatches, and an escape hatch that quietly
 // does nothing is worse than not offering one.
 func TestGoMemLimitEscapeHatches(t *testing.T) {
+	t.Parallel()
 	t.Run("percent 0 removes it from every area that sets none of its own", func(t *testing.T) {
 		for _, c := range renderContainers(t, map[string]interface{}{"goMemLimitPercent": 0}) {
 			if eventPathAreas[c.area] {
@@ -414,6 +431,7 @@ func goMemLimitForArea(t *testing.T, cs []renderedContainer) string {
 // would be inert but misleading, the kind of detail a reader uses to infer what a
 // service is written in.
 func TestGoMemLimitIsNotSetOnTheNginxContainer(t *testing.T) {
+	t.Parallel()
 	var seen bool
 	for _, c := range renderContainers(t, enabled(nil)) {
 		if c.area != frontendArea {
@@ -437,6 +455,7 @@ func TestGoMemLimitIsNotSetOnTheNginxContainer(t *testing.T) {
 // sounds like tuning and is actually the difference between a GC pause and an
 // OOMKill. The chart's own guard is the cheapest place to say no.
 func TestSchemaRejectsAGoMemLimitPercentThatWouldOOMKill(t *testing.T) {
+	t.Parallel()
 	ch, err := loadEmbeddedChart()
 	if err != nil {
 		t.Fatalf("loading embedded chart: %v", err)
@@ -484,6 +503,7 @@ var eventPathAreas = map[string]bool{
 // without GOGC 400 is the cost with none of the benefit. This test holds the pair, and that
 // no other area picked either up.
 func TestEventPathAreasShipGoRuntimeTuningAndNoOtherAreaDoes(t *testing.T) {
+	t.Parallel()
 	seen := map[string]bool{}
 	for _, c := range goContainers(renderContainers(t, nil)) {
 		seen[c.area] = true
@@ -516,6 +536,7 @@ func TestEventPathAreasShipGoRuntimeTuningAndNoOtherAreaDoes(t *testing.T) {
 // when the merged limit is lower, not an area-level limit that would silently beat it. An
 // operator's own area-level limit is used as written, lower than the floor included.
 func TestEventProcessingMemoryFloorYieldsToALargerTopLevelAndToItsOwnLimit(t *testing.T) {
+	t.Parallel()
 	top := func(mem string) map[string]interface{} {
 		return map[string]interface{}{"resources": map[string]interface{}{
 			"requests": map[string]interface{}{"cpu": "100m", "memory": "128Mi"},
@@ -545,6 +566,7 @@ func TestEventProcessingMemoryFloorYieldsToALargerTopLevelAndToItsOwnLimit(t *te
 
 // An area-level goMemLimitPercent of 100 is refused by the schema, as the top-level one is.
 func TestAnAreaGoMemLimitPercentOfOneHundredIsRefused(t *testing.T) {
+	t.Parallel()
 	_, err := renderChart(t, map[string]interface{}{"functionalAreas": map[string]interface{}{
 		"device-management": map[string]interface{}{"goMemLimitPercent": 100}}})
 	if err == nil {
@@ -555,6 +577,7 @@ func TestAnAreaGoMemLimitPercentOfOneHundredIsRefused(t *testing.T) {
 // An area's own percentage beats a non-zero top-level one that differs from 75, and the areas
 // that set none of their own follow the top level.
 func TestAnAreasPercentBeatsADifferentNonZeroTopLevel(t *testing.T) {
+	t.Parallel()
 	got := byArea(t, renderContainers(t, map[string]interface{}{
 		"goMemLimitPercent": 50,
 		"functionalAreas": map[string]interface{}{

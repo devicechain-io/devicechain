@@ -114,6 +114,18 @@ func helmInto(t *testing.T, kubeconfig string) *action.Configuration {
 	return cfg
 }
 
+// chartOfItsOwn loads the embedded chart for one parallel subtest. Helm's install and
+// upgrade take the chart they are given as theirs to process, so subtests running at
+// once are each handed a chart nobody else holds rather than one shared pointer.
+func chartOfItsOwn(t *testing.T) *chart.Chart {
+	t.Helper()
+	ch, err := loadEmbeddedChart()
+	if err != nil {
+		t.Fatalf("loading the embedded chart: %v", err)
+	}
+	return ch
+}
+
 // namespacesNamedBy returns every namespace a document in manifest places an object
 // in that the manifest does not itself create.
 func namespacesNamedBy(t *testing.T, manifest string) []string {
@@ -223,9 +235,12 @@ func everyObjectIsThere(t *testing.T, c client.Client, manifest string) []string
 // and fails on any refusal. A render cannot see what the server enforces about a pod
 // spec: a repeated (topologyKey, whenUnsatisfiable) pair is valid YAML, and it made
 // every --ha install fail when Helm created event-management.
+//
+// The profiles install in parallel, against the one API server, each through a Helm
+// configuration and a chart of its own (chartOfItsOwn says why).
 func TestEveryRenderedProfileIsAcceptedByAnAPIServer(t *testing.T) {
+	t.Parallel()
 	c, kubeconfig := renderAPIServer(t)
-	cfg := helmInto(t, kubeconfig)
 	ch, err := loadEmbeddedChart()
 	if err != nil {
 		t.Fatalf("loading the embedded chart: %v", err)
@@ -258,6 +273,8 @@ func TestEveryRenderedProfileIsAcceptedByAnAPIServer(t *testing.T) {
 
 	for i, p := range renderProfiles {
 		t.Run(p.name, func(t *testing.T) {
+			t.Parallel()
+			cfg, ch := helmInto(t, kubeconfig), chartOfItsOwn(t)
 			instance := fmt.Sprintf("p%02d", i+1)
 			rel, err := installProfile(t, cfg, c, ch, instance, profileValues(t, ch, p, instance))
 			if err != nil {
@@ -410,17 +427,19 @@ func mergedConstraint(cs []corev1.TopologySpreadConstraint, instance string) str
 // holds with what the chart renders. The placement lists have different patch rules
 // (the spread is merged on topologyKey, the preferred affinity terms are replaced
 // whole), so what an upgrade leaves is a property of the patch, not of the render.
+//
+// Each history below is its own instance, with its own release, so they run in
+// parallel against the one API server, each through a Helm configuration and a chart
+// of its own (chartOfItsOwn says why).
 func TestAnUpgradeLeavesTheChartsPlacementInPlace(t *testing.T) {
+	t.Parallel()
 	c, kubeconfig := renderAPIServer(t)
-	cfg := helmInto(t, kubeconfig)
-	ch, err := loadEmbeddedChart()
-	if err != nil {
-		t.Fatalf("loading the embedded chart: %v", err)
-	}
 
 	// A. The released path. The last release rendered no affinity and no spread, no
 	// event-path label, and ran event-management as one pod under --ha.
 	t.Run("from the released placement, one upgrade", func(t *testing.T) {
+		t.Parallel()
+		cfg, ch := helmInto(t, kubeconfig), chartOfItsOwn(t)
 		fixed := haEventManagement(t, ch, "ua")
 		released := fixed.DeepCopy()
 		released.Spec.Template.Spec.Affinity = nil
@@ -447,6 +466,8 @@ func TestAnUpgradeLeavesTheChartsPlacementInPlace(t *testing.T) {
 	// affinity goes from two terms to one and back, each in one upgrade, because the
 	// preferred list is replaced whole.
 	t.Run("--ha off and on, with the real chart", func(t *testing.T) {
+		t.Parallel()
+		cfg, ch := helmInto(t, kubeconfig), chartOfItsOwn(t)
 		const instance = "up"
 		ha := profileValues(t, ch, renderProfiles[1], instance)
 		rel, err := installProfile(t, cfg, c, ch, instance, ha)
@@ -487,6 +508,8 @@ func TestAnUpgradeLeavesTheChartsPlacementInPlace(t *testing.T) {
 	// holds the two-constraint shape, and no event-management Deployment, because the
 	// server refused it. An upgrade creates it from the fixed shape.
 	t.Run("a refused install, then an upgrade", func(t *testing.T) {
+		t.Parallel()
+		cfg, ch := helmInto(t, kubeconfig), chartOfItsOwn(t)
 		fixed := haEventManagement(t, ch, "ud")
 		broken := withSecondConstraint(withoutOwnTerm(t, fixed))
 		ensureTestNamespace(t, c, fixed.Namespace)
@@ -521,6 +544,8 @@ func TestAnUpgradeLeavesTheChartsPlacementInPlace(t *testing.T) {
 		{"the merging upgrade recorded as failed", "uf", true},
 	} {
 		t.Run("from a merged constraint, "+history.name, func(t *testing.T) {
+			t.Parallel()
+			cfg, ch := helmInto(t, kubeconfig), chartOfItsOwn(t)
 			fixed := haEventManagement(t, ch, history.instance)
 			oneConstraint := withoutOwnTerm(t, fixed)
 			twoConstraints := withSecondConstraint(oneConstraint)

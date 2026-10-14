@@ -340,12 +340,18 @@ func TestNoRenderedPodSpecRepeatsASpreadPair(t *testing.T) {
 		}
 	}
 
-	ch, err := loadEmbeddedChart()
-	if err != nil {
-		t.Fatalf("loading the embedded chart: %v", err)
-	}
+	// The profiles render in parallel, each from a chart of its own. Every render is a
+	// full chart install run client-side, so a dozen of them in a row were one of the
+	// package's longest tests under the race detector; the renders share nothing, and
+	// a chart per profile keeps it that way whatever Helm does to the chart it is given.
+	t.Parallel()
 	for i, p := range renderProfiles {
 		t.Run(p.name, func(t *testing.T) {
+			t.Parallel()
+			ch, err := loadEmbeddedChart()
+			if err != nil {
+				t.Fatalf("loading the embedded chart: %v", err)
+			}
 			instance := fmt.Sprintf("p%02d", i+1)
 			vals := profileValues(t, ch, p, instance)
 

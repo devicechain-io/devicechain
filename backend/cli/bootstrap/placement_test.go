@@ -202,6 +202,7 @@ func strayTerms(ra renderedAffinity, area, instance string) []string {
 // load). Preferred, never required, so a small cluster still schedules every pod;
 // and targeted, so the areas it was not measured for keep no affinity at all.
 func TestEventPathAreasPreferNodesWithoutTheEventStorePrimary(t *testing.T) {
+	t.Parallel()
 	avoiders := []string{"device-management", "event-management", "event-sources"}
 	untouched := []string{"device-state", "event-processing", "user-management"}
 
@@ -404,6 +405,7 @@ func spreadsWithTheEventPath(v spreadView, area, instance string) string {
 // schedules every pod; and targeted, so the other areas carry neither the label nor
 // a constraint.
 func TestEventPathPodsSpreadAcrossNodes(t *testing.T) {
+	t.Parallel()
 	spreaders := []string{"device-management", "event-management", "device-state", "event-sources", "event-processing"}
 	untouched := []string{"user-management", "command-delivery", "dashboard-management", "notification-management"}
 

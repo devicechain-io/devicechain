@@ -67,8 +67,14 @@ ROOT="$(cd "$HACK/.." && pwd)"
 # API-server suites it gained (every chart profile installed into envtest) cost about
 # 150 s more under the detector. With them, an independent local run of the
 # package took 605 s under -race: already past the old default, and about half of
-# the 20 minutes. Measure it again before adding slow tests there. A real hang still
-# fails, after 20 minutes.
+# the 20 minutes. It then grew to 515-850 s on CI and timed out twice on slow runners
+# (2026-10-14), and the cost was the tests, not the detector: an AST gate that parsed
+# the whole package once per function (119 s of it), and the API-server suites and
+# profile renders run one after another. With the parse done once and those suites
+# and the render-only tests run in parallel, local runs on 4 CPUs went from
+# 672-737 s to 390-452 s (releasewiring_test.go and gomemlimit_test.go say how).
+# Measure it again before adding slow tests there. A real hang still fails, after
+# 20 minutes.
 RACE_TEST=(go test -race -count=1 -timeout 20m)
 race_test() { "${RACE_TEST[@]}" "$@"; }
 
