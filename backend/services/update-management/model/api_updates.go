@@ -343,7 +343,7 @@ func (api *Api) viewsOf(ctx context.Context, asg []UpdateAssignment) ([]UpdateAs
 		}
 		v := UpdateAssignmentView{Assignment: a, Attempt: at, Artifact: byID[a.ArtifactId]}
 		if a.SignatureId.Valid {
-			if p, ok := pins[uint(a.SignatureId.Int64)]; ok {
+			if p, ok := pins[a.ID]; ok {
 				v.Pin = &p
 			}
 		}
@@ -353,8 +353,9 @@ func (api *Api) viewsOf(ctx context.Context, asg []UpdateAssignment) ([]UpdateAs
 }
 
 // pinsOf reads the pinned signatures of the assignments, and the signer row of each, with two
-// reads however many. A pin whose signature or signer row cannot be found is simply absent from
-// the result: the caller tells that apart from "pins nothing" by the assignment's SignatureId.
+// reads however many, keyed by assignment id. A pin whose signature or signer row cannot be found,
+// or whose signature belongs to a different artifact than the assignment names, is simply absent
+// from the result: the caller tells that apart from "pins nothing" by the assignment's SignatureId.
 func (api *Api) pinsOf(db *gorm.DB, asg []UpdateAssignment) (map[uint]SignaturePin, error) {
 	ids := make([]uint, 0, len(asg))
 	for _, a := range asg {
@@ -384,9 +385,20 @@ func (api *Api) pinsOf(db *gorm.DB, asg []UpdateAssignment) (map[uint]SignatureP
 	for _, s := range signers {
 		byID[s.ID] = s
 	}
+	sigByID := make(map[uint]ArtifactSignature, len(sigs))
 	for _, s := range sigs {
+		sigByID[s.ID] = s
+	}
+	for _, a := range asg {
+		if !a.SignatureId.Valid {
+			continue
+		}
+		s, ok := sigByID[uint(a.SignatureId.Int64)]
+		if !ok || s.ArtifactId != a.ArtifactId {
+			continue
+		}
 		if signer, ok := byID[s.SignerId]; ok {
-			out[s.ID] = SignaturePin{Signature: s, Signer: signer}
+			out[a.ID] = SignaturePin{Signature: s, Signer: signer}
 		}
 	}
 	return out, nil
@@ -524,7 +536,7 @@ func (api *Api) assignInTx(ctx context.Context, tx *gorm.DB, deviceToken string,
 					if err != nil {
 						return nil, err
 					}
-					if p, ok := pins[uint(cur.SignatureId.Int64)]; ok {
+					if p, ok := pins[cur.ID]; ok {
 						v.Pin = &p
 					}
 				}
@@ -739,18 +751,29 @@ func (api *Api) publishAssignment(ctx context.Context, v *UpdateAssignmentView) 
 		return
 	}
 	trust, sig := ota.TrustUnverified, (*ota.AssignmentSignature)(nil)
+	if !v.Assignment.SignatureId.Valid && !api.AllowUnverified {
+		// An assignment that pins no signature was made while the instance allowed unverified
+		// artifacts. The instance no longer does, so it is not (re)sent: the device keeps what it
+		// had, and the operator re-assigns a signed artifact.
+		api.Undelivered.Add(1)
+		log.Warn().Str("assignment", v.Assignment.Token).Str("device", v.Assignment.DeviceToken).
+			Msg("An unsigned update assignment is not delivered: this instance no longer allows unverified artifacts (updates.allowUnverifiedArtifacts).")
+		return
+	}
 	if v.Assignment.SignatureId.Valid {
 		// The assignment was made under a signature. If that signature or its signer cannot be
 		// read, the message is NOT sent: sending it as UNVERIFIED would silently downgrade an
 		// assignment the platform decided was signed, which a device that does not require
 		// signatures would then install.
 		if v.Pin == nil {
+			api.Undelivered.Add(1)
 			log.Error().Str("assignment", v.Assignment.Token).Int64("signature", v.Assignment.SignatureId.Int64).
 				Msg("An update assignment's pinned signature or signer cannot be read; it is not delivered.")
 			return
 		}
 		alg, err := WireAlgorithm(v.Pin.Signer.Algorithm)
 		if err != nil {
+			api.Undelivered.Add(1)
 			log.Error().Err(err).Str("assignment", v.Assignment.Token).
 				Msg("An update assignment's pinned signer has an unmappable algorithm; it is not delivered.")
 			return

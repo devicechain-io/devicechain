@@ -202,3 +202,81 @@ func TestAnUnreadablePinIsNeverDowngradedToUnverified(t *testing.T) {
 		})
 	}
 }
+
+// Assigning the same artifact again while its update is in flight returns the existing assignment:
+// the same pin, and the message re-sent is byte-identical to the first.
+func TestReassigningTheSameArtifactKeepsThePinAndTheMessage(t *testing.T) {
+	e := newUpdateEnv(t)
+	e.api.AllowUnverified = false
+	content := []byte("firmware one")
+	e.availableArtifact(t, "acme", "fw-1", "1.0.0", content)
+	first := e.signedBy(t, "acme", "fw-1", content, newEd25519(t))
+	ctx := tenantCtx("acme")
+
+	v1, err := e.api.AssignArtifact(ctx, "dev-1", "fw-1")
+	require.NoError(t, err)
+	original := e.desired.sent[len(e.desired.sent)-1].body
+
+	// A second signer arrives afterwards; it must not move the pin.
+	e.signedBy(t, "acme", "fw-1", content, newP256(t))
+	v2, err := e.api.AssignArtifact(ctx, "dev-1", "fw-1")
+	require.NoError(t, err)
+	require.Equal(t, v1.Assignment.Token, v2.Assignment.Token)
+	require.Equal(t, v1.Assignment.SignatureId, v2.Assignment.SignatureId)
+	require.NotNil(t, v2.Pin)
+	require.Equal(t, first[0].Token, v2.Pin.Signer.Token)
+	require.Len(t, e.desired.sent, 2)
+	require.Equal(t, string(original), string(e.desired.sent[1].body))
+}
+
+// An unsigned assignment made while the flag was on is not (re)sent once the flag is off.
+func TestAnUnpinnedAssignmentIsNotSentWhileTheInstanceRefusesUnverifiedArtifacts(t *testing.T) {
+	e := newUpdateEnv(t) // flag on
+	e.availableArtifact(t, "acme", "fw-1", "1.0.0", []byte("firmware one"))
+	ctx := tenantCtx("acme")
+	_, err := e.api.AssignArtifact(ctx, "dev-1", "fw-1")
+	require.NoError(t, err)
+	require.Len(t, e.desired.sent, 1)
+	require.Zero(t, e.api.Undelivered.Load())
+
+	e.api.AllowUnverified = false
+	views, err := e.api.CurrentUpdates(ctx, "dev-1")
+	require.NoError(t, err)
+	require.Len(t, views, 1)
+	logs := logSink.Capture(t)
+	e.api.PublishSyncAnswer(ctx, "dev-1", views)
+	require.Len(t, e.desired.sent, 1, "nothing was sent")
+	require.EqualValues(t, 1, e.api.Undelivered.Load())
+	require.Contains(t, logs.String(), "not delivered")
+
+	// Flag back on: it is delivered again, unchanged.
+	e.api.AllowUnverified = true
+	e.api.PublishSyncAnswer(ctx, "dev-1", views)
+	require.Len(t, e.desired.sent, 2)
+}
+
+// A pin naming a signature of some OTHER artifact is unreadable, whatever signer it names.
+func TestAPinNamingAnotherArtifactsSignatureIsNotSent(t *testing.T) {
+	e := newUpdateEnv(t)
+	e.api.AllowUnverified = false
+	c1, c2 := []byte("firmware one"), []byte("firmware two")
+	e.availableArtifact(t, "acme", "fw-1", "1.0.0", c1)
+	e.availableArtifact(t, "acme", "fw-2", "2.0.0", c2)
+	e.signedBy(t, "acme", "fw-1", c1, newEd25519(t))
+	other := e.signedBy(t, "acme", "fw-2", c2, newEd25519(t))
+	ctx := tenantCtx("acme")
+	v, err := e.api.AssignArtifact(ctx, "dev-1", "fw-1")
+	require.NoError(t, err)
+	require.Len(t, e.desired.sent, 1)
+
+	var foreign ArtifactSignature
+	require.NoError(t, e.api.RDB.DB(ctx).Where("signer_id = ?", other[0].ID).First(&foreign).Error)
+	require.NoError(t, e.api.RDB.DB(ctx).Model(&UpdateAssignment{ID: v.Assignment.ID, Token: v.Assignment.Token}).
+		Update("signature_id", foreign.ID).Error)
+
+	views, err := e.api.CurrentUpdates(ctx, "dev-1")
+	require.NoError(t, err)
+	require.Nil(t, views[0].Pin)
+	e.api.PublishSyncAnswer(ctx, "dev-1", views)
+	require.Len(t, e.desired.sent, 1)
+}

@@ -257,4 +257,16 @@ func TestSignedByNamesThePinnedSignerAndIsNullWhenNothingIsPinned(t *testing.T) 
 	resp = p.exec(reader, `{ updateAssignments(criteria:{pageNumber:0,pageSize:5,deviceToken:"dev-1"}) { results { signedBy { token } } } }`, nil)
 	require.Empty(t, resp.Errors)
 	require.JSONEq(t, `{"updateAssignments":{"results":[{"signedBy":{"token":"`+signer.Token+`"}}]}}`, string(resp.Data))
+
+	// A revoke does not move the pin, and signedBy reports the signer's state as it is now.
+	_, err = p.api.RevokeSigner(writer, signer.Token)
+	require.NoError(t, err)
+	resp = p.exec(reader, `{ updateAssignments(criteria:{pageNumber:0,pageSize:5,deviceToken:"dev-1"}) { results { signedBy { token state } } } }`, nil)
+	require.Empty(t, resp.Errors)
+	require.JSONEq(t, `{"updateAssignments":{"results":[{"signedBy":{"token":"`+signer.Token+`","state":"REVOKED"}}]}}`, string(resp.Data))
+
+	// A pin that cannot be read is an error, never null.
+	require.NoError(t, p.api.RDB.DB(writer).Where("id = ?", signer.ID).Delete(&model.ArtifactSigner{}).Error)
+	resp = p.exec(reader, `{ updateAssignments(criteria:{pageNumber:0,pageSize:5,deviceToken:"dev-1"}) { results { signedBy { token } } } }`, nil)
+	require.NotEmpty(t, resp.Errors)
 }
