@@ -12,7 +12,16 @@ import { Copy, Check } from 'lucide-react';
 import { useToast } from '@/components/ui/toast';
 import { cn } from '@/lib/utils';
 
-export function CopyToken({ value, className }: { value: string; className?: string }) {
+export function CopyToken({
+  value,
+  display,
+  className,
+}: {
+  value: string;
+  /** What to SHOW when it differs from what is copied (e.g. a shortened digest). */
+  display?: string;
+  className?: string;
+}) {
   const { t } = useTranslation('common');
   const { toast } = useToast();
   const [copied, setCopied] = useState(false);
@@ -47,7 +56,7 @@ export function CopyToken({ value, className }: { value: string; className?: str
         className,
       )}
     >
-      <span className="min-w-0 truncate">{value}</span>
+      <span className="min-w-0 truncate">{display ?? value}</span>
       {copied ? (
         <Check size={12} className="shrink-0 text-emerald-500" aria-hidden />
       ) : (

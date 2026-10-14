@@ -19,6 +19,8 @@ import { AREA } from '@/lib/capabilities';
 import SignersPage from '@/routes/updates/SignersPage';
 import CommandBatchesPage from '@/routes/command-batches/CommandBatchesPage';
 import CommandBatchDetailPage from '@/routes/command-batches/CommandBatchDetailPage';
+import ArtifactsPage from '@/routes/updates/ArtifactsPage';
+import ArtifactDetailPage from '@/routes/updates/ArtifactDetailPage';
 import ConnectorsPage from '@/routes/connectors/ConnectorsPage';
 import ConnectorDetailPage from '@/routes/connectors/ConnectorDetailPage';
 import AiProvidersPage from '@/routes/admin/ai-providers/AiProvidersPage';
@@ -95,6 +97,10 @@ export default function App() {
               absent from the telemetry / ingest-only profiles. */}
           <Route path="command-batches" element={<AreaGate area={AREA.commandDelivery}><CommandBatchesPage /></AreaGate>} />
           <Route path="command-batches/:token" element={<AreaGate area={AREA.commandDelivery}><CommandBatchDetailPage /></AreaGate>} />
+          {/* Over-the-air updates: an opt-in area, absent from the default profile. The Signers
+              route is a separate slice. */}
+          <Route path="updates/artifacts" element={<AreaGate area={AREA.updateManagement}><ArtifactsPage /></AreaGate>} />
+          <Route path="updates/artifacts/:token" element={<AreaGate area={AREA.updateManagement}><ArtifactDetailPage /></AreaGate>} />
           <Route path="connectors" element={<AreaGate area={AREA.outboundConnectors}><ConnectorsPage /></AreaGate>} />
           <Route path="connectors/:token" element={<AreaGate area={AREA.outboundConnectors}><ConnectorDetailPage /></AreaGate>} />
           <Route path="audit" element={<AuditPage />} />

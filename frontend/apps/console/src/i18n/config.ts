@@ -46,6 +46,7 @@ import enAdminSettings from './locales/en/adminSettings.json';
 import enAdminAudit from './locales/en/adminAudit.json';
 import enEntities from './locales/en/entities.json';
 import enVersions from './locales/en/versions.json';
+import enUpdates from './locales/en/updates.json';
 
 import esCommon from './locales/es/common.json';
 import esLogin from './locales/es/login.json';
@@ -76,6 +77,7 @@ import esAdminSettings from './locales/es/adminSettings.json';
 import esAdminAudit from './locales/es/adminAudit.json';
 import esEntities from './locales/es/entities.json';
 import esVersions from './locales/es/versions.json';
+import esUpdates from './locales/es/updates.json';
 
 export interface Locale {
   /** BCP-47 code; also the ./locales/<code>/ directory name and the i18next lng. */
@@ -157,6 +159,7 @@ export const NAMESPACES = [
   // generic list/detail/form pages resolve `${i18nKey}TitlePlural` etc. against it.
   'entities',
   'versions',
+  'updates',
 ] as const;
 
 // Catalogs are bundled statically: the corpus is still small enough that a
@@ -194,6 +197,7 @@ const resources = {
     adminAudit: enAdminAudit,
     entities: enEntities,
     versions: enVersions,
+    updates: enUpdates,
   },
   es: {
     common: esCommon,
@@ -225,6 +229,7 @@ const resources = {
     adminAudit: esAdminAudit,
     entities: esEntities,
     versions: esVersions,
+    updates: esUpdates,
   },
 } as const;
 
