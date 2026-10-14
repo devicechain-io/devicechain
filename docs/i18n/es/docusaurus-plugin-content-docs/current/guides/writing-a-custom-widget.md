@@ -92,6 +92,7 @@ cargar ni confiar en tu código.
 | `constraints` | Reglas opcionales que abarcan más de una opción, como `greater-than`. |
 | `defaults` | Las opciones iniciales de un widget recién añadido. |
 | `interactions` | Los callbacks del anfitrión que el widget solicita. |
+| `freshness` | Opcional, `true` para activarlo. Solo en el canal `measurement`: el marco muestra la antigüedad de la muestra más reciente del widget. Si el widget declara además una opción numérica `staleAfterSeconds`, un valor más antiguo que ese umbral se atenúa y se marca como obsoleto. Sin esa opción solo se muestra la antigüedad y nunca se marca nada como obsoleto. Un widget que muestra un único valor pasa la hora de esa muestra como `<WidgetFrame sampleTime={sample?.occurredTime ?? null}>`, para que la antigüedad sea la del valor en pantalla y no la de la última medición recibida. |
 
 ### Canales y política de enlace {#channels-and-binding-policy}
 
