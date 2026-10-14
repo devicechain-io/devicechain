@@ -19,7 +19,7 @@ Las recetas para Microsoft Entra ID, Okta y Google Workspace que siguen están e
 
 ## Crear una conexión {#create}
 
-1. En la consola, abre **Admin → Identity providers** y elige **New connection**. Dale un token (letras, dígitos y guiones), un nombre, el tipo (`tenant`), el **issuer** del proveedor, y el id y el secreto de cliente. El emisor y el tipo no se pueden cambiar después; un emisor distinto es una conexión distinta.
+1. En la consola, abre **Admin → Identity providers** y elige **New connection**. Dale un token (letras, dígitos y guiones), un nombre, el tipo (`tenant`), el **issuer** del proveedor, y el id y el secreto de cliente. El emisor y el tipo no se pueden cambiar después; un emisor distinto es una conexión distinta. Si el certificado del proveedor fue firmado por una autoridad de certificación privada, aporta aquí también su certificado ([detalles](#private-ca)).
 2. DeviceChain obtiene el documento de descubrimiento del proveedor y lo retiene para su aprobación. La conexión empieza deshabilitada. La página muestra su callback URL, con la etiqueta **Callback address**: `<issuerUrl>/sso/callback/<token>`. Registra exactamente esa como URI de redirección en el proveedor.
 3. Revisa los endpoints y elige **Approve endpoints**.
 4. Añade los dominios de correo que representa el proveedor (por ejemplo `example.com`).
@@ -92,7 +92,24 @@ El `auth.issuerUrl` de user-management debe ser la dirección accesible externam
 
 ### Llegar al proveedor {#egress}
 
-Toda solicitud a un proveedor pasa por la protección de salida, que rechaza destinos privados, de loopback y de enlace local. Un proveedor público no necesita nada. Para un proveedor local (ADFS, Keycloak, Dex en tu red), permite su rango de direcciones en `instance.config.infrastructure.egress.allowedDestinations` con CIDR estrechos. La lista de permitidos es de toda la instancia y también se aplica a webhooks y conectores, así que prefiere un /32. El certificado del proveedor debe encadenar con las raíces del sistema de la imagen de user-management; en esta versión no hay un ajuste de CA por conexión.
+Toda solicitud a un proveedor pasa por la protección de salida, que rechaza destinos privados, de loopback y de enlace local. Un proveedor público no necesita nada. Para un proveedor local (ADFS, Keycloak, Dex en tu red), permite su rango de direcciones en `instance.config.infrastructure.egress.allowedDestinations` con CIDR estrechos. La lista de permitidos es de toda la instancia y también se aplica a webhooks y conectores, así que prefiere un /32. El certificado del proveedor debe encadenar con las raíces del sistema de la imagen de user-management, o con un [paquete de CA privada](#private-ca) que aportes a esa conexión.
+
+### Un proveedor con certificado de una CA privada {#private-ca}
+
+Un proveedor local suele servir un certificado TLS firmado por la autoridad de certificación de tu propia organización, que las raíces del sistema no incluyen. Sin más, crear la conexión falla con «certificate signed by unknown authority». Aporta a la conexión el certificado de esa CA en lugar de debilitar nada en toda la instancia:
+
+1. Obtén el certificado de la CA (y los intermedios, si los hay) como texto PEM: uno o más bloques `-----BEGIN CERTIFICATE-----`, hasta 64 KiB. Nunca una clave privada; una clave privada en el texto se rechaza y no se devuelve.
+2. Al crear la conexión, pégalo en **Private CA certificates** o elige el archivo. En una conexión existente, usa **Settings → Private CA** y luego **Verify and save bundle**. En la API de administración es `caBundle` en `createIdpConnection`, o `setIdpCaBundle`.
+3. Revisa los certificados listados: cada uno muestra su sujeto, su caducidad y su huella SHA-256. Compara la huella con la que publica tu CA. Un certificado que no indica ser una autoridad de certificación se acepta exactamente como ese certificado y aparece marcado **Not a CA**.
+
+Qué hace y qué no:
+
+- El paquete se aplica **solo a esa conexión**: el descubrimiento, el conjunto de claves y el intercambio de tokens confían en él, y ninguna otra conexión ni función. Se confía en él **además de** las raíces del sistema, así que un proveedor con certificado público sigue funcionando aunque haya un paquete.
+- No cambia la protección de salida. La dirección del proveedor debe seguir siendo accesible según [la lista de permitidos](#egress); un certificado nunca hace accesible una dirección prohibida.
+- El paquete se pega o se sube, nunca se descarga de una dirección, porque una raíz de confianza descargada la elige quien responda a la descarga.
+- Al guardar un paquete nuevo, primero se accede con él a la dirección de descubrimiento del proveedor, y se rechaza (sin guardar nada) si el certificado no encadena con él. Si el proveedor indica entonces endpoints distintos de los que aprobaste, se retira la aprobación y debes revisarlos de nuevo; si indica los mismos, la aprobación se mantiene, de modo que rotar la CA no deja a nadie fuera.
+- El certificado del proveedor debe seguir incluyendo su dirección (un nombre DNS o una IP que coincida con el emisor) en los nombres alternativos del sujeto, y estar dentro de su periodo de validez. Sustituye el paquete antes de que caduque un certificado de CA. **Remove bundle** (`setIdpCaBundle` con una cadena vacía) devuelve la conexión solo a las raíces del sistema.
+- El paquete es un certificado público, así que se guarda con la conexión y no como secreto, y se incluye en una copia de seguridad de la base de datos.
 
 ### Detrás de un balanceador de carga {#load-balancer}
 

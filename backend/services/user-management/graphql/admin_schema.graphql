@@ -1364,6 +1364,11 @@ type IdpConnection {
     """
     providerSignOut: Boolean!
     """
+    The certificates of the private CA bundle this provider's TLS certificate is verified
+    against, in addition to the system's trusted roots. Empty when none is set.
+    """
+    caCertificates: [IdpCaCertificate!]!
+    """
     The addresses to register at the provider as post-logout redirect URIs, one per app (the
     console's sign-in page and the dashboard app), for signing out at the provider. Empty when
     the instance has no public address.
@@ -1445,6 +1450,22 @@ type IdpDiscovery {
     approvedAt: String
 }
 
+"""One certificate of a connection's private CA bundle."""
+type IdpCaCertificate {
+    """SHA-256 fingerprint of the certificate, in hex; compare it with the one your CA publishes."""
+    fingerprintSha256: String!
+    """Subject distinguished name."""
+    subject: String!
+    """Issuer distinguished name."""
+    issuer: String!
+    """Start of the validity period."""
+    notBefore: String!
+    """End of the validity period. The provider cannot be reached once the root it chains to has expired."""
+    notAfter: String!
+    """Whether the certificate says it is a certificate authority. A certificate that is not one is accepted (it pins that exact certificate) but is usually not what was meant."""
+    isCa: Boolean!
+}
+
 """Data to create a connection."""
 input IdpConnectionCreateRequest {
     """Short unique token for the connection (letters, digits and hyphens)."""
@@ -1474,6 +1495,13 @@ input IdpConnectionCreateRequest {
     provider enforces multi-factor sign-in. It is recorded in the audit journal.
     """
     mfaEnforcedByIdp: Boolean
+    """
+    PEM text of private CA certificates to trust, besides the system's roots, for this provider's
+    TLS certificate (an on-premises provider whose certificate a private CA signed). Up to 64 KiB
+    of CERTIFICATE blocks; a private key is refused. The provider's discovery document must be
+    reachable under it.
+    """
+    caBundle: String
 }
 
 """
@@ -2090,6 +2118,20 @@ type Mutation {
         token: String!
         """The client secret."""
         secret: String!
+    ): IdpConnection!
+    """
+    Replaces a connection's private CA bundle and returns the connection; an empty bundle clears
+    it, returning the connection to the system's trusted roots alone. A new bundle must verify the
+    provider: its discovery document is fetched under it before anything is saved, and when that
+    document names different endpoints than the approved ones the approval is withdrawn. The
+    bundle is PEM text (up to 64 KiB of CERTIFICATE blocks); a private key is refused and never
+    echoed. Requires user:write.
+    """
+    setIdpCaBundle(
+        """Token of the connection."""
+        token: String!
+        """The PEM certificates, or an empty string to clear."""
+        caBundle: String!
     ): IdpConnection!
     """
     Sets exactly which tenants a tenant connection serves, and returns it. Sign-ins through it

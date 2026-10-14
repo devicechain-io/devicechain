@@ -54,7 +54,7 @@ func TestTheManagerBuiltLikeMainRefusesAPrivateDiscoveryURL(t *testing.T) {
 		mscfg.InfrastructureConfiguration{})
 	require.NoError(t, err)
 
-	_, err = m.FetchIdpDiscovery(context.Background(), url)
+	_, err = m.FetchIdpDiscovery(context.Background(), url, "")
 	require.ErrorIs(t, err, egress.ErrBlocked,
 		"the Manager main builds must dial through the egress guard; it fetched a loopback address")
 	require.Zero(t, *hits, "the request must be refused at the dial, before the IdP is reached")
@@ -72,7 +72,7 @@ func TestTheEgressAllowanceReachesTheManager(t *testing.T) {
 		mscfg.InfrastructureConfiguration{Egress: mscfg.EgressConfiguration{AllowedDestinations: []string{"127.0.0.0/8"}}})
 	require.NoError(t, err)
 
-	snap, err := m.FetchIdpDiscovery(context.Background(), url)
+	snap, err := m.FetchIdpDiscovery(context.Background(), url, "")
 	require.NoError(t, err)
 	require.Equal(t, url, snap.Issuer)
 	require.Equal(t, 1, *hits)

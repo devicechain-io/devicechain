@@ -69,6 +69,20 @@ func (s *Store) UpdateIdpConnection(ctx context.Context, c *IdpConnection) error
 	return s.sys(ctx).Save(c).Error
 }
 
+// UpdateIdpConnectionFields writes ONLY the named fields (Go field names) of c, so an edit
+// made concurrently to any other column -- disabling a connection during an incident -- is
+// not reverted by a writer that loaded the row earlier. updated_at still advances.
+func (s *Store) UpdateIdpConnectionFields(ctx context.Context, c *IdpConnection, fields ...string) error {
+	if len(fields) == 0 {
+		return nil
+	}
+	cols := make([]interface{}, len(fields)-1)
+	for i, f := range fields[1:] {
+		cols[i] = f
+	}
+	return s.sys(ctx).Model(&IdpConnection{ID: c.ID}).Select(fields[0], cols...).Updates(c).Error
+}
+
 // IdpConnectionByToken resolves a connection by its slug, or gorm.ErrRecordNotFound.
 func (s *Store) IdpConnectionByToken(ctx context.Context, token string) (*IdpConnection, error) {
 	var c IdpConnection

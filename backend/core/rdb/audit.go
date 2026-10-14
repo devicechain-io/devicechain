@@ -42,6 +42,10 @@ const (
 	// AuditOpIdpMfaAcknowledged records an administrator creating an instance connection
 	// on their own assurance that the provider enforces multi-factor sign-in.
 	AuditOpIdpMfaAcknowledged = "idp_mfa_acknowledged"
+	// AuditOpIdpCaBundleChanged records an administrator setting or clearing the private CA
+	// bundle an identity provider connection trusts. The label is the connection token; the
+	// certificates themselves are not recorded.
+	AuditOpIdpCaBundleChanged = "idp_ca_bundle_changed"
 	// AuditOpIdentityProvisioned records a first single sign-on creating the identity it
 	// signed in as (just-in-time provisioning). The actor is the email the provider asserted.
 	AuditOpIdentityProvisioned = "identity_provisioned"

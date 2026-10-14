@@ -58,6 +58,8 @@ type ServedSso struct {
 	CallbackPrefix    string
 	// EnsureRole creates a role in the given scope ("tenant" or "system").
 	EnsureRole func(scope, token string, authorities ...string)
+	// GrantSystemRole gives an existing identity the (already ensured) system role.
+	GrantSystemRole func(email, role string)
 	// CreateMember creates a password identity with a membership in acme.
 	CreateMember func(email, password string)
 	// CreateIdentity creates a password identity with no membership at all.
@@ -84,6 +86,11 @@ func NewServedSsoManager(t *testing.T) *ServedSso {
 		EnsureRole: func(scope, token string, authorities ...string) {
 			t.Helper()
 			require.NoError(t, e.store.EnsureRole(context.Background(), iam.RoleScope(scope), token, token, authorities))
+		},
+		GrantSystemRole: func(email, role string) {
+			t.Helper()
+			_, err := e.admin.SetSystemRoles(context.Background(), email, []string{role})
+			require.NoError(t, err)
 		},
 		CreateMember: func(email, password string) {
 			t.Helper()

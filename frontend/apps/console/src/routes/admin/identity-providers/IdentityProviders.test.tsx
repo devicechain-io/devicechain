@@ -27,6 +27,7 @@ const api = vi.hoisted(() => ({
   setIdpRequiredClaims: vi.fn(),
   deleteIdpConnection: vi.fn(),
   setIdpConnectionSecret: vi.fn(),
+  setIdpCaBundle: vi.fn(),
   setIdpConnectionTenants: vi.fn(),
   addIdpDomain: vi.fn(),
   removeIdpDomain: vi.fn(),
@@ -47,6 +48,7 @@ vi.mock('@/lib/api/identity-providers', () => ({
   setIdpRequiredClaims: (...a: unknown[]) => api.setIdpRequiredClaims(...a),
   deleteIdpConnection: (...a: unknown[]) => api.deleteIdpConnection(...a),
   setIdpConnectionSecret: (...a: unknown[]) => api.setIdpConnectionSecret(...a),
+  setIdpCaBundle: (...a: unknown[]) => api.setIdpCaBundle(...a),
   setIdpConnectionTenants: (...a: unknown[]) => api.setIdpConnectionTenants(...a),
   addIdpDomain: (...a: unknown[]) => api.addIdpDomain(...a),
   removeIdpDomain: (...a: unknown[]) => api.removeIdpDomain(...a),
@@ -97,6 +99,7 @@ function connection(over: Record<string, unknown> = {}) {
     tenants: ['acme'],
     callbackUrl: 'https://dc.example.com/api/user-management/sso/callback/acme-sso',
     providerSignOut: false,
+    caCertificates: [],
     signOutReturnUrls: ['https://dc.example.com/login', 'https://dc.example.com/dash/'],
     discovery: discovery(),
     createdAt: null,
@@ -142,7 +145,7 @@ beforeEach(() => {
   api.confirm.mockResolvedValue(true);
   for (const k of [
     'createIdpConnection', 'updateIdpConnection', 'setIdpRequiredClaims', 'deleteIdpConnection',
-    'setIdpConnectionSecret', 'setIdpConnectionTenants', 'addIdpDomain', 'removeIdpDomain',
+    'setIdpConnectionSecret', 'setIdpCaBundle', 'setIdpConnectionTenants', 'addIdpDomain', 'removeIdpDomain',
     'refreshIdpDiscovery', 'approveIdpDiscovery', 'approveSsoLinkRequest', 'rejectSsoLinkRequest',
   ] as const) {
     api[k].mockResolvedValue(k === 'createIdpConnection' ? { token: 'acme-sso' } : true);
@@ -505,6 +508,82 @@ describe('the client secret', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
     await waitFor(() => expect(api.updateIdpConnection).toHaveBeenCalledTimes(1));
     expect(api.updateIdpConnection).toHaveBeenCalledWith('acme-sso', { clientId: 'client-2' });
+  });
+});
+
+const PEM = '-----BEGIN CERTIFICATE-----\nMIIBkTCB+wIJAL\n-----END CERTIFICATE-----';
+
+function caCert(over: Record<string, unknown> = {}) {
+  return {
+    fingerprintSha256: 'ab12cd34',
+    subject: 'CN=Acme Root',
+    issuer: 'CN=Acme Root',
+    notBefore: '2024-01-01T00:00:00Z',
+    notAfter: '2099-01-01T00:00:00Z',
+    isCa: true,
+    ...over,
+  };
+}
+
+describe('the private CA bundle', () => {
+  it('shows what is trusted: subject, expiry and fingerprint, and warns about a non-CA or expired certificate', async () => {
+    api.getIdpConnection.mockResolvedValue(
+      connection({
+        caCertificates: [
+          caCert(),
+          caCert({ fingerprintSha256: 'ee99', subject: 'CN=idp.internal', isCa: false, notAfter: '2020-01-01T00:00:00Z' }),
+        ],
+      }),
+    );
+    renderDetail();
+    await screen.findByText(FP_OLD);
+    openTab(/settings/i);
+    expect(await screen.findByText('CN=Acme Root')).toBeTruthy();
+    expect(screen.getByText('Valid until 2099-01-01')).toBeTruthy();
+    expect(screen.getByText('SHA-256 ab12cd34')).toBeTruthy();
+    expect(screen.getByText('Not a CA')).toBeTruthy();
+    expect(screen.getByText('Expired')).toBeTruthy();
+  });
+
+  it('saves a pasted bundle and reports the server refusal verbatim', async () => {
+    api.setIdpCaBundle.mockRejectedValueOnce(new Error('x509: certificate signed by unknown authority'));
+    renderDetail();
+    await screen.findByText(FP_OLD);
+    openTab(/settings/i);
+    const box = await screen.findByLabelText('Private CA certificates');
+    fireEvent.change(box, { target: { value: PEM } });
+    fireEvent.click(screen.getByRole('button', { name: 'Verify and save bundle' }));
+    expect(await screen.findByText(/unknown authority/)).toBeTruthy();
+    expect(api.setIdpCaBundle).toHaveBeenCalledWith('acme-sso', PEM);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Verify and save bundle' }));
+    await waitFor(() => expect(api.setIdpCaBundle).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(api.toast).toHaveBeenCalledWith('Private CA bundle saved'));
+  });
+
+  it('refuses a private key in the browser, before anything is sent', async () => {
+    renderDetail();
+    await screen.findByText(FP_OLD);
+    openTab(/settings/i);
+    const box = await screen.findByLabelText('Private CA certificates');
+    fireEvent.change(box, { target: { value: '-----BEGIN PRIVATE KEY-----\nAAAA\n-----END PRIVATE KEY-----' } });
+    expect((await screen.findByRole('alert')).textContent).toMatch(/private key/);
+    fireEvent.click(screen.getByRole('button', { name: 'Verify and save bundle' }));
+    expect(api.setIdpCaBundle).not.toHaveBeenCalled();
+  });
+
+  it('removes the bundle after confirmation, and not when the confirmation is declined', async () => {
+    api.getIdpConnection.mockResolvedValue(connection({ caCertificates: [caCert()] }));
+    renderDetail();
+    await screen.findByText(FP_OLD);
+    openTab(/settings/i);
+    api.confirm.mockResolvedValueOnce(false);
+    fireEvent.click(await screen.findByRole('button', { name: 'Remove bundle' }));
+    await waitFor(() => expect(api.confirm).toHaveBeenCalledTimes(1));
+    expect(api.setIdpCaBundle).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Remove bundle' }));
+    await waitFor(() => expect(api.setIdpCaBundle).toHaveBeenCalledWith('acme-sso', ''));
   });
 });
 

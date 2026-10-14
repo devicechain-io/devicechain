@@ -39,6 +39,12 @@ func newIdentityManager(ms *core.Microservice, db *rdb.RdbManager, lock *messagi
 		return nil, err
 	}
 	m.SetSsoHTTPClient(client)
+	// The same guard, one transport per connection that carries a private CA bundle.
+	factory, err := identity.NewSsoClientFactory(infra)
+	if err != nil {
+		return nil, err
+	}
+	m.SetSsoClientFactory(factory)
 	return m, nil
 }
 

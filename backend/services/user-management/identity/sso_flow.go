@@ -500,7 +500,7 @@ func (m *Manager) HandleSsoCallback(ctx context.Context, connectionToken string,
 		log.Error().Err(err).Str("connection", conn.Token).Msg("The connection's client secret could not be read.")
 		return finish(SsoOutcomeServerError, "", nil)
 	}
-	cctx, err := m.ssoContext(ctx)
+	cctx, err := m.ssoContext(ctx, conn)
 	if err != nil {
 		return finish(SsoOutcomeServerError, "", nil)
 	}
