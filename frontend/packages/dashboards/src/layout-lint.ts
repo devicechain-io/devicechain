@@ -15,6 +15,7 @@
 import { activeBreakpoint, resolveWidgetBox } from './definition';
 import { widgetBinding } from './slots';
 import type { DashboardDefinition, WidgetInstance } from './types';
+import type { WidgetLayoutSpec } from './widget-descriptor';
 
 export type LayoutLintSeverity = 'error' | 'warning' | 'info';
 
@@ -68,6 +69,17 @@ export interface LayoutLintOptions {
     widths: number[];
     minPxOf: (widget: WidgetInstance) => PixelSize | undefined;
   };
+}
+
+// The limits a descriptor's `layout` block declares, in the shape lintLayout takes. A
+// descriptor with no block yields undefined (reported as `no-layout-declared`), so a host
+// wires `spanLimitsOf: (w) => spanLimitsOfLayout(registry.descriptor(w.type)?.layout)`.
+export function spanLimitsOfLayout(layout: WidgetLayoutSpec | undefined): SpanLimits | undefined {
+  if (!layout) return undefined;
+  const limits: SpanLimits = {};
+  if (layout.minSpan) limits.minSpan = layout.minSpan;
+  if (layout.maxSpan) limits.maxSpan = layout.maxSpan;
+  return limits;
 }
 
 const BASE = 'base';

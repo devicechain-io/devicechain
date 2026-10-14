@@ -15,7 +15,7 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { WIDGET_TYPES, addWidget, type WidgetType } from '@devicechain/dashboards';
+import { WIDGET_TYPES, addWidget, baseBox, type WidgetType } from '@devicechain/dashboards';
 import { createWidgetRegistry } from '@devicechain/widget-sdk';
 import { describe, expect, it } from 'vitest';
 
@@ -224,3 +224,31 @@ function sourcesUnder(dir: string): string[] {
   }
   return out;
 }
+
+describe('the built-in size contract', () => {
+  it('declares a layout for every built-in', () => {
+    for (const type of WIDGET_TYPES) {
+      expect(registry.descriptor(type)?.layout, `${type} declares no layout`).toBeDefined();
+    }
+  });
+
+  it('keeps each default inside its own limits, and declares a ceiling', () => {
+    for (const type of WIDGET_TYPES) {
+      const { defaultSpan, minSpan, maxSpan } = registry.descriptor(type)!.layout!;
+      expect(defaultSpan.cols, type).toBeGreaterThanOrEqual(minSpan?.cols ?? 1);
+      expect(defaultSpan.rows, type).toBeGreaterThanOrEqual(minSpan?.rows ?? 1);
+      expect(maxSpan, `${type} declares no ceiling`).toBeDefined();
+      expect(defaultSpan.cols, type).toBeLessThanOrEqual(maxSpan!.cols);
+      expect(defaultSpan.rows, type).toBeLessThanOrEqual(maxSpan!.rows);
+    }
+  });
+
+  it('adds each built-in at its own default span', () => {
+    for (const type of WIDGET_TYPES) {
+      const descriptor = registry.descriptor(type)!;
+      const { definition } = addWidget(empty, descriptor);
+      const box = baseBox(definition.widgets[0]);
+      expect({ cols: box.colSpan, rows: box.rowSpan }, type).toEqual(descriptor.layout!.defaultSpan);
+    }
+  });
+});

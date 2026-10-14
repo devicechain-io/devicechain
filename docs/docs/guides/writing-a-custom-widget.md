@@ -89,6 +89,7 @@ so the definition parser and the validators can read it without loading or trust
 | `defaults` | The starting options of a newly added widget. |
 | `interactions` | The host callbacks the widget asks for. |
 | `freshness` | Optional, `true` to opt in. On the `measurement` channel only: the frame shows how old the widget's newest sample is. If the widget also declares a numeric `staleAfterSeconds` option, a value older than that is greyed out and badged as stale. Without that option the age is shown and nothing is ever marked stale. A widget that shows a single value passes that sample's time as `<WidgetFrame sampleTime={sample?.occurredTime ?? null}>`, so the age is of the value on screen rather than of whichever measurement arrived last. |
+| `layout` | Optional size limits in grid cells. See [Size](#size). |
 
 ### Channels and binding policy
 
@@ -228,6 +229,31 @@ implementation: {
 
 Inside `defineWidget`, `options` and `setOptions` are typed from your option schema, so a misspelled
 key is also a compile error. The example package's card widget has a complete editor.
+
+## Size {#size}
+
+A widget declares how big it may be in an optional `layout` block on its descriptor. Sizes are counted
+in grid cells (columns across, rows down), not pixels:
+
+```ts
+layout: {
+  defaultSpan: { cols: 8, rows: 4 }, // the size a newly added widget takes
+  minSpan: { cols: 4, rows: 2 },     // the smallest it can be resized to (default 1 x 1)
+  maxSpan: { cols: 24, rows: 12 },   // the largest (default: no limit)
+  resize: 'both',                    // 'both' (default), 'horizontal', 'vertical' or 'none'
+},
+```
+
+Every value is a positive whole number, and `minSpan` must not exceed `defaultSpan`, which must not
+exceed `maxSpan`. A `resize` mode other than `both` fixes the other axis: with `'horizontal'`, the rows of
+`minSpan`, `defaultSpan` and `maxSpan` must all be equal, and so on for `'vertical'` (columns) and `'none'`
+(both). The registry rejects a block that breaks these rules when the host builds it.
+
+The editor stops a resize at these limits, and the layout check reports a saved dashboard that places the
+widget outside them as an error. Choose a `minSpan` that is the smallest box in which your widget is still
+readable. A widget without a `layout` block is added at 4 x 2 cells with no limits, and the layout check
+reports that it declared none. Cell sizes are tied to the current grid and may be recalibrated in a later
+release.
 
 ## Interactions and the trust model
 

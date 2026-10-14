@@ -270,6 +270,10 @@ export {
   type WidgetDisplay,
   type WidgetId,
   type WidgetInteractionDeclaration,
+  FALLBACK_DEFAULT_SPAN,
+  type WidgetLayoutSpec,
+  type WidgetResizeMode,
+  type WidgetSpan,
 } from './widget-descriptor';
 export {
   WidgetCatalogError,
@@ -295,6 +299,7 @@ export {
 // limits, the temporary pixel floor) is injected, so this package stays free of `widgets`.
 export {
   lintLayout,
+  spanLimitsOfLayout,
   type LayoutFinding,
   type LayoutLintCode,
   type LayoutLintOptions,

@@ -12,6 +12,7 @@
 
 import { defineWidgetDescriptor } from '../widget-descriptor';
 import type { OptionsOf, WidgetOptionSpecs } from '../option-schema';
+import type { WidgetLayoutSpec } from '../widget-descriptor';
 
 type Equals<A, B> = (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2 ? true : false;
 type Expect<T extends true> = T;
@@ -203,4 +204,72 @@ export const constraintOnNonNumberKey = defineWidgetDescriptor({
   constraints: [{ kind: 'greater-than', key: 'title', than: 'size' }],
   defaults: {},
   interactions: {},
+});
+
+// ---- Layout -----------------------------------------------------------------
+
+export const sized = defineWidgetDescriptor({
+  id: 'acme/sized',
+  version: '1.0.0',
+  sdkApiVersion: 1,
+  optionsVersion: 1,
+  display: { title: 'T' },
+  channel: 'none',
+  datasource: { mode: 'none' },
+  binding: {},
+  options: OPTIONS,
+  defaults: {},
+  interactions: {},
+  layout: { defaultSpan: { cols: 8, rows: 4 }, minSpan: { cols: 4, rows: 2 }, resize: 'horizontal' },
+});
+
+// `layout` stays optional: the examples above compile without it.
+export type LayoutIsOptional = Expect<Equals<typeof ok.layout, WidgetLayoutSpec | undefined>>;
+
+export const badResizeMode = defineWidgetDescriptor({
+  id: 'acme/bad',
+  version: '1.0.0',
+  sdkApiVersion: 1,
+  optionsVersion: 1,
+  display: { title: 'T' },
+  channel: 'none',
+  datasource: { mode: 'none' },
+  binding: {},
+  options: OPTIONS,
+  defaults: {},
+  interactions: {},
+  // @ts-expect-error resize is one of both, horizontal, vertical or none
+  layout: { defaultSpan: { cols: 8, rows: 4 }, resize: 'diagonal' },
+});
+
+export const missingDefaultSpan = defineWidgetDescriptor({
+  id: 'acme/bad',
+  version: '1.0.0',
+  sdkApiVersion: 1,
+  optionsVersion: 1,
+  display: { title: 'T' },
+  channel: 'none',
+  datasource: { mode: 'none' },
+  binding: {},
+  options: OPTIONS,
+  defaults: {},
+  interactions: {},
+  // @ts-expect-error a layout block must say what size a new widget takes
+  layout: { minSpan: { cols: 2, rows: 1 } },
+});
+
+export const stringSpan = defineWidgetDescriptor({
+  id: 'acme/bad',
+  version: '1.0.0',
+  sdkApiVersion: 1,
+  optionsVersion: 1,
+  display: { title: 'T' },
+  channel: 'none',
+  datasource: { mode: 'none' },
+  binding: {},
+  options: OPTIONS,
+  defaults: {},
+  interactions: {},
+  // @ts-expect-error spans are counted in cells, not CSS strings
+  layout: { defaultSpan: { cols: '8', rows: 4 } },
 });

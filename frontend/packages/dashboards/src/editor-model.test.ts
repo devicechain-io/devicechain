@@ -143,6 +143,13 @@ describe('addWidget', () => {
     });
   });
 
+  it("places a widget at its descriptor's default span, and a layout-less one at the fallback 4x2", () => {
+    const sized = addWidget(def(), { ...gauge, layout: { defaultSpan: { cols: 6, rows: 3 } } }).definition.widgets[2];
+    expect(baseBox(sized)).toMatchObject({ colSpan: 6, rowSpan: 3 });
+    const bare = addWidget(def(), gauge).definition.widgets[2];
+    expect(baseBox(bare)).toMatchObject({ colSpan: 4, rowSpan: 2 });
+  });
+
   it('gives each widget its own copy of the defaults', () => {
     const shared = { id: 'label', version: '1.0.0', optionsVersion: 1, sdkApiVersion: 1, defaults: { text: 'New label' } } as const;
     const first = addWidget(def(), shared).definition.widgets[2];
