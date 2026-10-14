@@ -142,7 +142,7 @@ spec:
             devicechain_instance: {{ $id }}
           annotations:
             summary: "Rule-health counters cannot be written"
-            description: "event-processing could not write a rule-health fire counter. Detection is unaffected: the write is best-effort and a failure is dropped, so alarms still raise and clear. What stops is the console's per-rule fire count and last-fired time, which silently go stale. The cause is in event-processing's error log; check its database connection and that the rule-stat table accepts writes."
+            description: "event-processing could not write a rule-health fire counter. Detection is unaffected: the write is best-effort and a failure is dropped, so alarms still raise and clear. What stops is the console's per-rule fire count and last-fired time, which silently go stale. Each failure is logged by event-processing as a warning (not an error) with the cause; check its database connection and that the rule_stats table accepts writes."
         - alert: DetectLiveGapFillFailing
           expr: sum(rate(devicechain_eventprocessing_detect_live_gap_fills_total{namespace="{{ $ns }}",outcome="failed"}[5m])) > 0
           for: 5m
