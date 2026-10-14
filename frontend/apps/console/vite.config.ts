@@ -84,6 +84,9 @@ export default defineConfig(({ mode }) => {
           path.resolve(__dirname, '../../../backend/services/event-processing/internal/detect/predicate'),
           // The connector-action timeout ceiling (taxonomy-lockstep.test.ts).
           path.resolve(__dirname, '../../../backend/services/event-processing/connectorwire'),
+          // The served update-management schema (api/update-management.test.ts), checked
+          // against the operations the console documents cover.
+          path.resolve(__dirname, '../../../backend/services/update-management/graphql'),
         ],
       },
       proxy: {

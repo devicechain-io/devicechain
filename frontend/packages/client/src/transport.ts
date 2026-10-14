@@ -35,6 +35,7 @@ export const AREAS = [
   'dashboard-management',
   'outbound-connectors',
   'notification-management',
+  'update-management',
   'ai-inference/admin',
 ] as const;
 

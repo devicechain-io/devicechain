@@ -114,6 +114,16 @@ const config: CodegenConfig = {
       presetConfig: { fragmentMasking: false },
       config: { documentMode: 'string' },
     },
+    // The opt-in OTA area, served by update-management: the artifact catalogue, the
+    // signer registry, signatures and update assignments. One schema, one client; the
+    // console pages that use it are gated on the area being deployed at all.
+    './src/gql/update-management/': {
+      schema: '../../../backend/services/update-management/graphql/schema.graphql',
+      documents: ['src/lib/api/update-management.ts'],
+      preset: 'client',
+      presetConfig: { fragmentMasking: false },
+      config: { documentMode: 'string' },
+    },
     // The instance-scoped admin API (ADR-033), served by user-management at
     // /admin/graphql. Its own schema + client so the admin console's typed
     // operations never mix with the tenant-scoped user-management ones.

@@ -63,6 +63,10 @@ export const AREA = {
   // `telemetry` and `ingest-only`, so an instance that only ingests genuinely has
   // no command surface to reach â€” hence a gate rather than an assumption.
   commandDelivery: 'command-delivery',
+  // update-management is opt-in: held out of the `default` profile and shipped by `full`,
+  // so most instances genuinely lack it. Its surfaces use useAreaPresent (fail-closed),
+  // not the fail-open AreaGate — see useAreaPresent for why this area differs.
+  updateManagement: 'update-management',
 } as const satisfies Record<string, Area>;
 
 interface CapabilityValue {
@@ -207,4 +211,21 @@ export function useAreaStatus(area: Area): AreaStatus {
  */
 export function useAreaAbsent(area: Area): boolean {
   return useAreaStatus(area) === 'absent';
+}
+
+/**
+ * Whether an area is KNOWN to be deployed — the fail-CLOSED counterpart of
+ * useAreaAbsent, for opt-in areas whose surfaces must not appear at all unless the
+ * instance runs them.
+ *
+ * 'absent' AND 'unknown' (signed out, discovery failed, not yet answered, or no
+ * provider mounted) both read false. That is the opposite of the fail-open rule
+ * documented at the top of this file, deliberately: this is for a nav entry or tab
+ * that would otherwise appear on every instance and 404 on most. Hiding it costs a
+ * moment of delay on a cold load; showing it costs a sidebar full of dead links, or a
+ * toast per failed request, on every instance without the area. Like the rest of this
+ * file it is PRESENTATION, not authorization — the service re-authorizes every call.
+ */
+export function useAreaPresent(area: Area): boolean {
+  return useAreaStatus(area) === 'available';
 }
