@@ -12,6 +12,7 @@
 
 import { gql, isForbiddenError, subscribe, type Area, type SubscriptionSink } from '@devicechain/client';
 
+import { ConnectionTracker, type HubConnectionState } from './connection';
 import {
   ACKNOWLEDGE_ALARM,
   ALARM_STREAM,
@@ -355,9 +356,27 @@ export class DashboardHub implements WidgetDataSource, WidgetActions {
   // device stream), so disposeAll() can tear down every map widget's poll.
   private readonly locationDisposers = new Set<() => void>();
 
+  // Which of this hub's sockets are down, folded into one state a header can show.
+  private readonly connection = new ConnectionTracker();
+  // Streams evicted by an upstream error that still have subscribers: out of `streams`, but
+  // still holding their connection handle (see ensureStream), so disposeAll() can reach them.
+  private readonly deadStreams = new Set<DeviceStream>();
+
   constructor(config: DashboardHubConfig) {
     this.resolver = config.resolver;
     this.authorities = new Set(config.authorities ?? []);
+  }
+
+  // The hub's live-connection state: `live`, `reconnecting` (a socket dropped and is being
+  // retried) or `offline` (down past the point a retry is a blip, or the browser is offline).
+  // A hub with nothing subscribed has nothing to lose and reads `live`. Pair with
+  // onConnectionState (a subscribe/getSnapshot pair, so it drops into useSyncExternalStore).
+  get connectionState(): HubConnectionState {
+    return this.connection.state;
+  }
+
+  onConnectionState(listener: () => void): () => void {
+    return this.connection.subscribe(listener);
   }
 
   // subscribeWidget binds a widget's datasource to a sink and returns a disposer.
@@ -449,13 +468,20 @@ export class DashboardHub implements WidgetDataSource, WidgetActions {
         // widget's scope may span devices) and treat every event as a reconcile
         // trigger — the query re-applies the scope+filters. On reconnect, re-query to
         // catch transitions missed while the socket was down.
+        const handle = this.connection.register();
         const adapter: SubscriptionSink<AlarmStreamResult> = {
           next: () => trigger(),
           connected: (wasRetry) => {
+            handle.connected();
             if (wasRetry) reconcile(scope.tokens, scope.tenantWide);
           },
+          closed: () => handle.closed(),
         };
-        unsubscribe = subscribe(DEVICE_AREA, ALARM_STREAM, {}, adapter);
+        const closeSocket = subscribe(DEVICE_AREA, ALARM_STREAM, {}, adapter);
+        unsubscribe = () => {
+          handle.release();
+          closeSocket();
+        };
         poll = setInterval(() => reconcile(scope.tokens, scope.tenantWide), ALARM_POLL_MS);
         // Register a reconcile trigger so an ack/clear (via the action seam) refreshes
         // this widget immediately, not on the next poll tick.
@@ -788,6 +814,8 @@ export class DashboardHub implements WidgetDataSource, WidgetActions {
   disposeAll(): void {
     for (const stream of this.streams.values()) stream.unsubscribe();
     this.streams.clear();
+    for (const stream of this.deadStreams) stream.unsubscribe();
+    this.deadStreams.clear();
     for (const dispose of [...this.alarmDisposers]) dispose();
     this.alarmDisposers.clear();
     for (const dispose of [...this.commandDisposers]) dispose();
@@ -897,9 +925,12 @@ export class DashboardHub implements WidgetDataSource, WidgetActions {
       // Only tear down and forget the stream if it is STILL the registered stream
       // for this device — an upstream error may have evicted and replaced it, and a
       // lingering old subscriber's detach must not delete the replacement.
-      if (stream.subscribers.size === 0 && this.streams.get(deviceToken) === stream) {
+      if (stream.subscribers.size === 0) {
+        // An evicted stream's operation is already closed; this releases its connection
+        // handle, which it kept so a dead socket reads as down while anything still shows it.
         stream.unsubscribe();
-        this.streams.delete(deviceToken);
+        this.deadStreams.delete(stream);
+        if (this.streams.get(deviceToken) === stream) this.streams.delete(deviceToken);
       }
     };
   }
@@ -917,20 +948,42 @@ export class DashboardHub implements WidgetDataSource, WidgetActions {
     // Subscribe unfiltered by name (name: null) so a device's every reading rides
     // ONE upstream and each subscriber filters to the names it wants — a chart and
     // a card on the same device share the stream instead of opening two.
+    const handle = this.connection.register();
+    let closeSocket: (() => void) | undefined;
+    let operationOpen = true;
+    const closeOperation = (): void => {
+      if (!operationOpen) return;
+      operationOpen = false;
+      closeSocket?.();
+    };
     const adapter: SubscriptionSink<MeasurementStreamResult> = {
       next: (data) => this.fanout(deviceToken, data.measurementStream),
+      connected: () => handle.connected(),
+      closed: () => handle.closed(),
       error: (err) => {
         // The upstream is dead. Evict it (and drop the socket-level subscription)
         // so the NEXT subscriber for this device opens a fresh stream instead of
         // attaching to this corpse and freezing silently — the reconnect path.
         // Guard the delete so a stream that has already been replaced is left be.
         if (this.streams.get(deviceToken) === stream) this.streams.delete(deviceToken);
-        stream.unsubscribe();
+        // 🔴 Close the operation but KEEP the connection handle until the last subscriber
+        // detaches. graphql-ws errors every operation once its retries are spent, so
+        // releasing here would empty the tracker exactly when the socket is beyond
+        // recovery, and a board whose every stream had died would read `live`. A handle
+        // whose socket was up when the operation failed (a server-side error) counts as up.
+        closeOperation();
+        if (stream.subscribers.size > 0) this.deadStreams.add(stream);
+        else handle.release();
         for (const subscriber of stream.subscribers) subscriber.sink.error?.(err);
       },
     };
     const variables: MeasurementStreamVariables = { deviceToken, name: null };
-    stream.unsubscribe = subscribe(EVENT_AREA, MEASUREMENT_STREAM, variables, adapter);
+    closeSocket = subscribe(EVENT_AREA, MEASUREMENT_STREAM, variables, adapter);
+    if (!operationOpen) closeSocket(); // it failed while subscribing
+    stream.unsubscribe = () => {
+      handle.release();
+      closeOperation();
+    };
 
     return stream;
   }

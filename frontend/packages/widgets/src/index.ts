@@ -52,6 +52,8 @@ export {
   type NumberOptionSpec,
   type BooleanOptionSpec,
   type EnumOptionSpec,
+  type ListItemFieldSpec,
+  type ListOptionSpec,
   type OptionIssue,
   type OptionIssueCode,
 } from './options';
@@ -137,6 +139,8 @@ export {
   useLocationStream,
   useDatasourceAvailability,
   useDashboardHub,
+  useHubConnectionState,
+  HubConnectionBadge,
   useResolvedBindings,
   useSlotCandidates,
   useCandidates,
@@ -151,6 +155,7 @@ export {
   type LocationStreamState,
   type CandidatesState,
   type DatasourceAvailability,
+  type HubConnectionBadgeProps,
   type ThemeVar,
 } from '@devicechain/widget-sdk';
 export {

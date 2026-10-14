@@ -1,0 +1,76 @@
+---
+title: 控制台概览
+sidebar_position: 2
+---
+
+import GuideShot from '@site/src/components/GuideShot';
+
+# 控制台概览
+
+本章简要介绍每个页面都会出现的部分：主页、侧边栏、带租户标识的页眉，以及当控制台的某个部分在你的安装环境中不可用时看到的提示。
+
+本章面向刚接触控制台的读者。读完这一章，后面的章节会更容易理解。
+
+## 主页 {#the-home-page}
+
+登录后会进入主页。主页会按姓名问候你，并显示两个数字：租户中有多少台 **Devices**（设备）和多少个 **Device Types**（设备类型）。选择任一数字即可打开对应列表。
+
+<GuideShot id="console-home" alt="控制台主页。左侧是侧边栏。页眉显示 Dashboard，右上角是租户标识“acme (sim)”。页面标题为“Welcome, Dana Okafor”，显示两张卡片：13 Devices 和 1 Device Types。" />
+
+侧边栏顶部的 **Dashboard**（仪表板）始终会带你回到这里。它与 **Dashboards** 不同，后者存放团队创建的仪表板。
+
+## 侧边栏 {#the-sidebar}
+
+左侧的侧边栏是你在控制台中导航的方式。它按固定顺序列出租户的各个功能区。
+
+<GuideShot id="console-sidebar" alt="控制台侧边栏。DeviceChain 徽标和 Management Console 字样下方依次列出 Dashboard、Dashboards、Alarms、Connectors、Devices、Assets、Customers、Areas、Facets、Browse、Audit、Updates 和 Settings。Devices、Assets、Customers、Areas、Updates 和 Settings 带有箭头，表示可展开子菜单。底部是当前登录用户的姓名和邮箱。" />
+
+有些条目打开的是子菜单而不是页面。选择这类条目会展开其子菜单，并进入第一个页面。同一时间只会展开一个子菜单。
+
+| 条目 | 内容 |
+| --- | --- |
+| **Dashboard** | 主页。 |
+| **Dashboards** | 团队创建的仪表板。 |
+| **Alarms**（告警） | 规则已触发的告警。 |
+| **Connectors**（连接器） | 通向其他系统的出站连接。 |
+| **Devices** | **Devices**、**Device Types**、**Device Profiles**（设备配置文件）、**Device Groups**（设备分组）、**Maintenance Windows**（维护窗口）和 **Command Batches**（命令批次）。 |
+| **Assets**（资产） | **Assets**、**Asset Types**（资产类型）和 **Asset Groups**（资产分组）。 |
+| **Customers**（客户） | **Customers**、**Customer Types**（客户类型）和 **Customer Groups**（客户分组）。 |
+| **Areas**（区域） | **Areas**、**Area Types**（区域类型）、**Area Groups**（区域分组）和 **Geofences**（地理围栏）。 |
+| **Facets**（分面） | 用于描述和筛选设备及其他实体的键。 |
+| **Browse**（浏览） | 按分面查找实体的查询构建器。 |
+| **Audit**（审计） | 租户内“谁修改了什么”的记录。 |
+| **Updates**（更新） | 用于空中升级的 **Artifacts**（制品）和 **Signers**（签名者）。 |
+| **Settings**（设置） | **Branding**（品牌）、**Map**（地图）和 **Language**（语言）。 |
+
+你只会看到角色允许访问的条目。例如，如果你的角色无权读取告警，侧边栏中就没有 **Alarms**。只有当你的安装环境运行了更新服务时，才会出现 **Updates**。**Settings** 下的各项面向租户管理员。
+
+你的姓名和邮箱地址位于侧边栏底部，选择它们会打开用户菜单，参见[登录](/user-guide/signing-in#the-user-menu)。
+
+若想给页面腾出更多空间，可以使用页眉左侧的按钮，把侧边栏折叠成仅含图标的窄条。再次使用该按钮即可展开。
+
+## 页眉与租户标识 {#the-page-header-and-the-tenant-chip}
+
+每个页面都有一个页眉栏。左侧是你所在部分的名称。在详情页（例如某一台设备）上，右侧的链接可以回到列表。
+
+最右侧是租户标识，显示你当前所在的租户：上方是租户名称，下方是它的令牌。
+
+<GuideShot id="console-tenant-chip" alt="租户标识：一张小卡片，包含建筑图标、租户名称“acme (sim)”，下方是等宽字体显示的令牌“sim-acme”。" />
+
+如果租户上传了徽标，标识中会用徽标取代建筑图标。你在控制台中看到和修改的一切都属于这个租户。若要切换到其他租户，请退出登录，再次登录时选择该租户。
+
+## 功能区不可用时 {#when-an-area-is-unavailable}
+
+DeviceChain 由多个服务组成，安装者决定运行哪些服务。其中一些是可选的，例如 AI 服务或出站连接器服务。如果某个页面需要你的安装环境未运行的服务，该页面会显示 **Not deployed**（未部署），而不是通常的内容。
+
+<GuideShot id="console-area-unavailable" alt="管理控制台的 AI Providers 页面，显示标题为“Not deployed”的空状态。文字说明该实例部署时未包含 ai-inference 服务，因此该功能不可用，会话本身没有问题，并说明由管理员选择实例运行哪些服务。" />
+
+提示信息会指出缺少的服务。这并不表示你的会话或账户有问题。如果需要该功能，请根据提示中的服务名称联系管理员。
+
+截图展示的是实例管理页面，租户页面的表现相同。例如，出站连接器服务未运行时，**Connectors** 会显示这条提示。
+
+## 相关内容 {#related}
+
+- [架构](/concepts/architecture)：构成 DeviceChain 的各项服务
+- [多租户](/concepts/multi-tenancy)
+- [登录](/user-guide/signing-in)

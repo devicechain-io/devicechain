@@ -12,8 +12,22 @@ describe('formatValue', () => {
     expect(formatValue(undefined, 2)).toBe('—');
   });
 
-  it('leaves the value unrounded when no precision is configured', () => {
-    expect(formatValue(31.19073834583732)).toBe('31.19073834583732');
+  it('does not print full float width when no precision is configured', () => {
+    expect(formatValue(31.19073834583732)).toBe('31.191');
+    expect(formatValue(30.203057033956792)).toBe('30.203');
+  });
+
+  it('default rounding drops trailing zeros, keeps integers and large values whole', () => {
+    expect(formatValue(12)).toBe('12');
+    expect(formatValue(21.5)).toBe('21.5');
+    expect(formatValue(1234567.891234)).toBe('1234567.891');
+    expect(formatValue(-0.5)).toBe('-0.5');
+  });
+
+  it('default rounding keeps significant digits for a value under 1 rather than rounding it away', () => {
+    expect(formatValue(0.000123456)).toBe('0.0001235');
+    expect(formatValue(0.123456)).toBe('0.1235');
+    expect(formatValue(0)).toBe('0');
   });
 
   it('rounds to the configured precision', () => {

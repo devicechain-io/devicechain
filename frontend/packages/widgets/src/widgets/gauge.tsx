@@ -11,6 +11,7 @@ import {
   optBoolean,
   optNumber,
   optString,
+  optThresholds,
   pickSample,
   primaryMeasurementName,
   useElementSize,
@@ -32,10 +33,13 @@ export function Gauge({ widget, data }: WidgetProps) {
   const max = optNumber(widget.options, 'max');
   const unit = optString(widget.options, 'unit');
   const precision = optNumber(widget.options, 'precision');
+  // The stored list is re-parsed only when the options bag changes, so the memo below keys on
+  // a stable array rather than a fresh one per render.
+  const thresholds = useMemo(() => optThresholds(widget.options, 'thresholds'), [widget.options]);
 
   const option = useMemo(
-    () => buildGaugeOption(sample?.value ?? null, theme, { min, max, unit, precision }, size),
-    [sample?.value, theme, min, max, unit, precision, size.width, size.height],
+    () => buildGaugeOption(sample?.value ?? null, theme, { min, max, unit, precision, thresholds }, size),
+    [sample?.value, theme, min, max, unit, precision, thresholds, size.width, size.height],
   );
 
   // Opt-in directional flash. The value lives on an opaque canvas, so the cue is a
@@ -48,7 +52,7 @@ export function Gauge({ widget, data }: WidgetProps) {
   );
 
   return (
-    <WidgetFrame title={optString(widget.options, 'title') ?? name}>
+    <WidgetFrame title={optString(widget.options, 'title') ?? name} sampleTime={sample?.occurredTime ?? null}>
       <div ref={sizeRef} style={{ width: '100%', height: '100%', ...flashBackgroundStyle(flashDirection) }}>
         <EChart option={option} />
       </div>

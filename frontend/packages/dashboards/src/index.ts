@@ -112,6 +112,8 @@ export { createEntityLister } from './entity-lister';
 
 export { WIDGET_TYPES, UNKNOWN_WIDGET_TYPE } from './types';
 
+export { ConnectionTracker, OFFLINE_AFTER_MS, type ConnectionHandle, type HubConnectionState } from './connection';
+
 export {
   DashboardHub,
   type DashboardHubConfig,
@@ -232,6 +234,8 @@ export {
   type BooleanOptionSpec,
   type DefaultsOf,
   type EnumOptionSpec,
+  type ListItemFieldSpec,
+  type ListOptionSpec,
   type GreaterThanConstraint,
   type NumberOptionSpec,
   type OptionConstraint,

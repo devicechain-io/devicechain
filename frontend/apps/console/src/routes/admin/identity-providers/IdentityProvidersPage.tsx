@@ -51,7 +51,7 @@ export default function IdentityProvidersPage() {
       description={t('description')}
       banner="dashboard"
       action={
-        <Button onClick={() => setCreating(true)}>
+        <Button onClick={() => setCreating(true)} data-shot="new-button">
           <Plus size={16} /> {t('newButton')}
         </Button>
       }

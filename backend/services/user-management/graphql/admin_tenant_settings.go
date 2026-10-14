@@ -135,3 +135,61 @@ func (r *AdminTenantResolver) EffectiveSettings() []*AdminTenantSettingResolver 
 	}
 	return out
 }
+
+// AdminTenantScalarSettingResolver resolves one tier-governed scalar's effective value with
+// the same provenance shape as the burst: winner and source, with the tier's value and the
+// tenant's override beside it.
+type AdminTenantScalarSettingResolver struct {
+	key      string
+	label    string
+	source   iam.SettingSource
+	value    *int
+	tier     *int
+	override *int
+}
+
+func (r *AdminTenantScalarSettingResolver) Key() string    { return r.key }
+func (r *AdminTenantScalarSettingResolver) Label() string  { return r.label }
+func (r *AdminTenantScalarSettingResolver) Source() string { return string(r.source) }
+
+// Value, Tier and Override adapt each level's optional int to the GraphQL Int exactly as the
+// burst does (nil stays nil; a value the Int cannot hold is refused, never wrapped).
+func (r *AdminTenantScalarSettingResolver) Value() (*int32, error) {
+	return util.IntPtrInt32("value", r.value)
+}
+func (r *AdminTenantScalarSettingResolver) Tier() (*int32, error) {
+	return util.IntPtrInt32("tier", r.tier)
+}
+func (r *AdminTenantScalarSettingResolver) Override() (*int32, error) {
+	return util.IntPtrInt32("override", r.override)
+}
+
+// EffectiveScalarSettings resolves the tenant's effective value for each tier-governed scalar
+// that is not a rate+burst dimension: the held-command ceiling, the shed priority and the three
+// geofence caps. Each resolves through the same iam.Tenant cascade method the data plane reads
+// (Effective*), with the tier's and the override's own values beside the winner.
+//
+// The set is listed here rather than derived because each scalar is a typed field with its own
+// cascade method (see iam/cascade.go); TestEffectiveScalarSettingsCoversEveryTierKey ties the
+// keys to the tier config registry so a new scalar cannot be registered without appearing here.
+// Like EffectiveSettings it carries no authorization of its own: reaching an AdminTenant already
+// required tenant:read.
+func (r *AdminTenantResolver) EffectiveScalarSettings() []*AdminTenantScalarSettingResolver {
+	m := &r.M
+	row := func(key, label string, eff func() (*int, iam.SettingSource), tier, override *int) *AdminTenantScalarSettingResolver {
+		v, src := eff()
+		return &AdminTenantScalarSettingResolver{key: key, label: label, source: src, value: v, tier: tier, override: override}
+	}
+	return []*AdminTenantScalarSettingResolver{
+		row(iam.HeldCommandCeilingConfigKey, "Held command ceiling", m.EffectiveHeldCommandCeiling,
+			m.Tier.HeldCommandCeiling(), m.OverrideHeldCommandCeiling()),
+		row(iam.ShedPriorityConfigKey, "Shed priority", m.EffectiveShedPriority,
+			m.Tier.ShedPriority(), m.OverrideShedPriority()),
+		row(iam.GeoFenceCeilingConfigKey, "Geofence count ceiling", m.EffectiveGeoFenceCeiling,
+			m.Tier.GeoFenceCeiling(), m.OverrideGeoFenceCeiling()),
+		row(iam.GeoFencePositionCeilingConfigKey, "Geofence position ceiling", m.EffectiveGeoFencePositionCeiling,
+			m.Tier.GeoFencePositionCeiling(), m.OverrideGeoFencePositionCeiling()),
+		row(iam.GeoFencePositionBudgetConfigKey, "Geofence position budget", m.EffectiveGeoFencePositionBudget,
+			m.Tier.GeoFencePositionBudget(), m.OverrideGeoFencePositionBudget()),
+	}
+}

@@ -174,6 +174,12 @@ jobs:
           cache: true
           cache-dependency-path: "**/go.sum"
 
+      # Prefetch the module graph with a bounded retry and a fallback off the module proxy, so
+      # one dropped stream from proxy.golang.org does not fail the job inside whichever build
+      # step happened to trigger the download. See hack/go-mod-download.sh.
+      - name: go mod download
+        run: hack/go-mod-download.sh backend/tools/migrationdiff
+
       - name: Migration chain on PostgreSQL 17
         env:
           MDIFF_IMAGE: operand:ci

@@ -14,6 +14,7 @@
 // version. It is bumped only on a rendering change worth surfacing to an author, so a
 // platform release does not make every board look "authored with an older widget".
 
+import { SEVERITY_LEVELS } from '@devicechain/widget-sdk';
 import {
   createWidgetCatalog,
   defineWidgetDescriptor,
@@ -50,7 +51,49 @@ const PRECISION = {
   max: 100,
   labelId: 'widgetLabelPrecision',
   helpId: 'widgetHintPrecision',
-  doc: 'Decimal places to round displayed values to. Unset shows the raw value.',
+  doc: 'Decimal places to round displayed values to. Unset rounds to at most 3 decimals (4 significant digits under 1).',
+} as const satisfies OptionSpec;
+
+// Where a measurement crosses from one severity to the next. A threshold STARTS a band that
+// runs to the next threshold's value, so "overheat above 105" is one entry and "low fuel below
+// 15" is two (critical from 0, normal from 15). `level` is a severity NAME that the theme turns
+// into a colour; there is deliberately no colour field, so a board cannot carry a hex value
+// that ignores dark mode or the host's theme. Optional with no default: absent means no bands,
+// exactly as before the option existed, so it needs no optionsVersion bump.
+const THRESHOLDS = {
+  kind: 'list',
+  maxItems: 12,
+  labelId: 'widgetLabelThresholds',
+  helpId: 'widgetHintThresholds',
+  doc: 'Severity bands over the value. Each entry starts a band at its value that runs to the next entry; below the first, and in a normal band, the widget keeps its own colour.',
+  item: {
+    value: {
+      kind: 'number',
+      required: true,
+      labelId: 'widgetLabelThresholdValue',
+      doc: 'The value at which this band starts.',
+    },
+    level: {
+      kind: 'enum',
+      required: true,
+      values: SEVERITY_LEVELS,
+      labelId: 'widgetLabelThresholdLevel',
+      valueLabelIds: {
+        normal: 'widgetSeverityNormal',
+        warning: 'widgetSeverityWarning',
+        minor: 'widgetSeverityMinor',
+        major: 'widgetSeverityMajor',
+        critical: 'widgetSeverityCritical',
+      },
+      placeholderId: 'widgetPlaceholderThresholdLevel',
+      doc: 'The severity of this band. The theme decides the colour; normal has none.',
+    },
+    label: {
+      kind: 'string',
+      labelId: 'widgetLabelThresholdLabel',
+      doc: 'Text shown on the chart line for this threshold. Defaults to its value.',
+    },
+  },
 } as const satisfies OptionSpec;
 
 const FLASH_ON_CHANGE = {
@@ -80,6 +123,18 @@ const WINDOW = {
   labelId: 'widgetLabelWindow',
   helpId: 'widgetHintWindow',
   doc: 'Samples retained across ALL of the widget\'s measurements before the oldest are dropped. Bounds memory; only the chart draws them. Default 300.',
+} as const satisfies OptionSpec;
+
+// Read by the frame, not by the widget: with it set, a widget whose newest sample is older than
+// this many seconds is greyed out under a "stale" badge. Unset is the DEFAULT and means age
+// only -- there is no built-in threshold, because any number would paint a sparse fleet stale.
+const STALE_AFTER_SECONDS = {
+  kind: 'number',
+  integer: true,
+  min: 1,
+  labelId: 'widgetLabelStaleAfter',
+  helpId: 'widgetHintStaleAfter',
+  doc: 'Seconds after which the newest sample is called stale: the value is greyed out and badged. Unset shows the sample age only and never marks the widget stale.',
 } as const satisfies OptionSpec;
 
 const UNIT = {
@@ -154,10 +209,15 @@ export const builtinWidgetDescriptors = {
     binding: { window: { option: 'window', min: 1 } },
     options: {
       title: TITLE,
+      unit: UNIT,
+      precision: PRECISION,
+      thresholds: THRESHOLDS,
+      staleAfterSeconds: STALE_AFTER_SECONDS,
       window: WINDOW,
     },
     defaults: { title: 'Timeseries chart' },
     interactions: {},
+    freshness: true,
   }),
 
   'latest-card': defineWidgetDescriptor({
@@ -179,11 +239,14 @@ export const builtinWidgetDescriptors = {
       },
       unit: UNIT,
       precision: PRECISION,
+      thresholds: THRESHOLDS,
       flashOnChange: FLASH_ON_CHANGE,
+      staleAfterSeconds: STALE_AFTER_SECONDS,
       window: WINDOW,
     },
     defaults: { title: 'Latest card' },
     interactions: {},
+    freshness: true,
   }),
 
   gauge: defineWidgetDescriptor({
@@ -215,12 +278,15 @@ export const builtinWidgetDescriptors = {
       },
       unit: UNIT,
       precision: PRECISION,
+      thresholds: THRESHOLDS,
       flashOnChange: FLASH_ON_CHANGE,
+      staleAfterSeconds: STALE_AFTER_SECONDS,
       window: WINDOW,
     },
     constraints: [{ kind: 'greater-than', key: 'max', than: 'min' }],
     defaults: { title: 'Gauge' },
     interactions: {},
+    freshness: true,
   }),
 
   table: defineWidgetDescriptor({
@@ -236,10 +302,12 @@ export const builtinWidgetDescriptors = {
       title: TITLE,
       precision: PRECISION,
       flashOnChange: FLASH_ON_CHANGE,
+      staleAfterSeconds: STALE_AFTER_SECONDS,
       window: WINDOW,
     },
     defaults: { title: 'Table' },
     interactions: {},
+    freshness: true,
   }),
 
   // label and image are static: the `none` channel, no datasource, no subscription and no

@@ -173,6 +173,14 @@ const TENANTS = graphql(`
           override
         }
       }
+      effectiveScalarSettings {
+        key
+        label
+        source
+        value
+        tier
+        override
+      }
       createdAt
       updatedAt
     }

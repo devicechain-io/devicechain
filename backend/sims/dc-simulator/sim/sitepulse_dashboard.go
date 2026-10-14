@@ -6,6 +6,7 @@ package sim
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 )
 
 // The sitepulse board, `sp-dashboard`: fleet fuel, haul-truck payload, the site's active
@@ -79,9 +80,10 @@ const (
 	sitepulseCardsPerKind    = sitepulseCardsPerRow * sitepulseCardRowsPerKind
 
 	// Rows. KPIs (3 rows) lead, then the alarm table and the map stack beside the machine
-	// controls in a band that ends at row 13; the fuel label (2 rows) and the card bands follow.
+	// controls in a band that ends at row 13; the fuel label (1 row: it is just "Fuel level" now
+	// that the low-fuel threshold lives on the cards) and the card bands follow.
 	sitepulseFuelLabelRow = 13
-	sitepulseFuelFirstRow = 15
+	sitepulseFuelFirstRow = 14
 
 	// Display scales for the two gauges. Not contract values: the only fixed points are
 	// the rule thresholds, and each scale keeps its threshold well inside the arc.
@@ -103,12 +105,13 @@ func sitepulseMachinesOfType(devices []DeviceInstance, typ string) []DeviceInsta
 	return out
 }
 
-// sitepulseFuelBandText is the label over the fuel rows. The threshold is read from the
-// constant the rule is built from, so the board cannot state a number the rule does not
+// sitepulseFuelBandText is the label over the fuel rows. The low-fuel threshold is no longer
+// prose here: it is a `thresholds` entry on each card, built from the constant the rule is
+// built from (sitepulseApplyThresholds), so the board cannot state a number the rule does not
 // use. perKind is the largest machine population; when it exceeds the cards shown the
 // label says the rows are partial rather than letting them look complete.
 func sitepulseFuelBandText(shown, perKind int) string {
-	text := fmt.Sprintf("Fuel level — the low-fuel alarm and refuel command fire below %g %%", SitepulseLowFuelThreshold)
+	text := "Fuel level"
 	if perKind > shown {
 		text += fmt.Sprintf(" · showing the first %d of %d per machine kind", shown, perKind)
 	}
@@ -215,7 +218,7 @@ func buildSitepulseDashboard(devices []DeviceInstance) (string, error) {
 		row += sitepulseCardBandRows(n)
 	}
 
-	widgets = append(widgets, buildLabelWidget("sp-fuel-label", box{0, 24, sitepulseFuelLabelRow, 2}, sitepulseFuelBandText(shown, perKind), "left", 14))
+	widgets = append(widgets, buildLabelWidget("sp-fuel-label", box{0, 24, sitepulseFuelLabelRow, sitepulseFuelFirstRow - sitepulseFuelLabelRow}, sitepulseFuelBandText(shown, perKind), "left", 14))
 
 	for _, b := range fuelBands {
 		for i, d := range b.devices {
@@ -244,12 +247,14 @@ func buildSitepulseDashboard(devices []DeviceInstance) (string, error) {
 			widgetSubject{Slot: sitepulseSlotSite, Measurements: []string{}, Location: "latest"}, "Machine positions"),
 		buildEntitySelectorWidget("sp-machine-select", box{16, 8, 3, 2}, "", sitepulseSlotMachine),
 		buildGaugeWidget("sp-engine-temp", box{16, 8, 5, 4}, onMachine(SitepulseEngineTempKey),
-			fmt.Sprintf("Engine temp — overheat above %g °C", SitepulseOverheatThreshold),
+			"Engine temp",
 			SitepulseEngineTempKey, "°C", 0, sitepulseEngineTempGaugeMax),
 		buildGaugeWidget("sp-tyre", box{16, 8, 9, 4}, onMachine(SitepulseTyreKey),
-			fmt.Sprintf("Tyre pressure — low below %g kPa", SitepulseTyrePressureThreshold),
+			"Tyre pressure",
 			SitepulseTyreKey, "kPa", 0, sitepulseTyreGaugeMax),
 	)
+
+	sitepulseApplyThresholds(widgets)
 
 	def := dashboardDefinition{
 		SchemaVersion: 1,
@@ -263,4 +268,27 @@ func buildSitepulseDashboard(devices []DeviceInstance) (string, error) {
 		return "", fmt.Errorf("marshal sitepulse dashboard definition: %w", err)
 	}
 	return string(raw), nil
+}
+
+// sitepulseApplyThresholds gives the fuel cards and the two gauges the severity bands the
+// detection rules fire at. Every number and severity is read from the constants the rules are
+// built from (sitepulse.go), so the board's colours cannot disagree with when an alarm raises.
+// A "below X" rule is two entries -- the rule's severity from 0, normal from X -- because a
+// threshold starts a band that runs to the next one.
+func sitepulseApplyThresholds(widgets []dashboardWidget) {
+	for i, w := range widgets {
+		switch {
+		case strings.HasPrefix(w.Id, "sp-fuel-") && w.Type == "latest-card":
+			widgets[i] = withThresholds(w,
+				dashboardThreshold{Value: 0, Level: SitepulseSeverity},
+				dashboardThreshold{Value: SitepulseLowFuelThreshold, Level: "normal"})
+		case w.Id == "sp-engine-temp":
+			widgets[i] = withThresholds(w,
+				dashboardThreshold{Value: SitepulseOverheatThreshold, Level: SitepulseOverheatSeverity})
+		case w.Id == "sp-tyre":
+			widgets[i] = withThresholds(w,
+				dashboardThreshold{Value: 0, Level: SitepulseTyreSeverity},
+				dashboardThreshold{Value: SitepulseTyrePressureThreshold, Level: "normal"})
+		}
+	}
 }

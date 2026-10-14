@@ -36,6 +36,12 @@ jobs:
         with:
           go-version-file: go.work
 
+      # Prefetch the module graph with a bounded retry and a fallback off the module proxy, so
+      # one dropped stream from proxy.golang.org does not fail the job inside whichever build
+      # step happened to trigger the download. See hack/go-mod-download.sh.
+      - name: go mod download
+        run: hack/go-mod-download.sh backend/services/lwm2m-ingest
+
       # Leshan 2.0.0-M15 is Java-8 bytecode, so Temurin 11 (matching the repo toolchain) builds and
       # runs it. `cache: maven` caches ~/.m2 keyed on the pom so the weekly run does not re-download
       # Leshan/Californium every time.

@@ -9,6 +9,7 @@
 import { useMemo, useSyncExternalStore } from 'react';
 
 import { useWidgetThemeRoot } from '../context';
+import { severityColorsAt, severityFallbackColors, type AlarmLevel } from '../severity';
 
 // Concrete colors for an ECharts canvas, resolved from the CSS variables in scope
 // at a given element (charts can't use CSS vars directly).
@@ -17,6 +18,10 @@ export interface ChartTheme {
   mutedForeground: string;
   border: string;
   series: string[];
+  // The four coloured threshold levels, concrete (comma-form `hsl(h, s%, l%)`, which every
+  // canvas colour parser accepts and which severityFill can add an alpha to). `normal` has
+  // none: it renders in the widget's own neutral (see severity.ts).
+  severity: Record<AlarmLevel, string>;
 }
 
 // Fallbacks used when a variable is absent (e.g. jsdom, or a host that hasn't set
@@ -32,6 +37,7 @@ const FALLBACK: ChartTheme = {
     'hsl(280 65% 60%)',
     'hsl(340 75% 55%)',
   ],
+  severity: severityFallbackColors(),
 };
 
 function readVar(style: CSSStyleDeclaration, name: string, fallback: string): string {
@@ -49,6 +55,7 @@ export function resolveChartTheme(el: Element): ChartTheme {
     mutedForeground: readVar(style, 'muted-foreground', FALLBACK.mutedForeground),
     border: readVar(style, 'border', FALLBACK.border),
     series: FALLBACK.series.map((fallback, i) => readVar(style, `chart-${i + 1}`, fallback)),
+    severity: severityColorsAt(el, style),
   };
 }
 
@@ -106,3 +113,4 @@ export function useChartTheme(): ChartTheme {
   const scoped = useMemo(() => (root ? resolveChartTheme(root) : null), [root]);
   return scoped ?? shared;
 }
+

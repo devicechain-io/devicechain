@@ -36,6 +36,8 @@ const FROM_SDK_ROOT = [
   'useLocationStream',
   'useDatasourceAvailability',
   'useDashboardHub',
+  'useHubConnectionState',
+  'HubConnectionBadge',
   'useResolvedBindings',
   'useSlotCandidates',
   'useCandidates',

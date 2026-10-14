@@ -244,6 +244,12 @@ jobs:
         with:
           version: v0.19.1
 
+      # Prefetch the module graph with a bounded retry and a fallback off the module proxy, so
+      # one dropped stream from proxy.golang.org does not fail the job inside whichever build
+      # step happened to trigger the download. See hack/go-mod-download.sh.
+      - name: go mod download
+        run: hack/go-mod-download.sh backend/cli backend/sims/dc-simulator
+
       - name: Build dcctl
         working-directory: backend/cli
         run: go build -o "$RUNNER_TEMP/dcctl" .

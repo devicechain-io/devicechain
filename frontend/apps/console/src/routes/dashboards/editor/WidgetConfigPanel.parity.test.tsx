@@ -54,6 +54,7 @@ const LEGACY_LABEL: Record<string, string> = {
   precision: 'widgetLabelPrecision',
   measurement: 'widgetLabelMeasurement',
   window: 'widgetLabelWindow',
+  staleAfterSeconds: 'widgetLabelStaleAfter',
   flashOnChange: 'widgetFlashOnChange',
   state: 'widgetLabelState',
   severity: 'widgetLabelSeverity',
@@ -81,6 +82,7 @@ const LEGACY_HINT: Record<string, string | null> = {
   precision: 'widgetHintPrecision',
   measurement: 'widgetHintMeasurement',
   window: 'widgetHintWindow',
+  staleAfterSeconds: 'widgetHintStaleAfter',
   flashOnChange: 'widgetFlashOnChangeHint',
   state: 'widgetStateHint',
   severity: 'widgetSeverityHint',
@@ -199,6 +201,9 @@ describe.each([...WIDGET_TYPES])('the %s settings panel matches the pre-registry
     renderPanel(type);
     for (const [key, spec] of Object.entries(WIDGET_OPTIONS[type])) {
       if (LEGACY_CUSTOM[key]) continue;
+      // A list option post-dates the legacy editor, so there is no legacy wording to match;
+      // WidgetConfigPanel.list.test.tsx owns its controls and their text.
+      if (spec.kind === 'list') continue;
       const field = screen.getByTestId(`widget-option-field-${key}`);
       const hint = LEGACY_HINT_OVERRIDES[type]?.[key] ?? LEGACY_HINT[key];
       const expected = [tr(LEGACY_LABEL[key])];

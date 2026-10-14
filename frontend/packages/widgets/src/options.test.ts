@@ -47,7 +47,7 @@ const ROOTS = [SRC, join(SRC, '..', '..', 'dashboards', 'src'), join(SRC, '..', 
 
 // A read through the option helpers: optString(widget.options, 'key'). Single or double
 // quoted, and tolerant of the trailing comma a reformat adds to a wrapped call.
-const HELPER_READ = /opt(?:String|Number|Boolean)\(\s*\w+\.options\s*,\s*["']([^"']+)["']\s*,?\s*\)/g;
+const HELPER_READ = /opt(?:String|Number|Boolean|Thresholds)\(\s*\w+\.options\s*,\s*["']([^"']+)["']\s*,?\s*\)/g;
 // A direct read: `w.options?.selectionTarget`. Anchored on the member access so it does not
 // match the many unrelated local `options` parameters in this package (chart-options,
 // hooks), which are not a widget's bag.
@@ -115,6 +115,13 @@ function policyKeys(type: WidgetType): string[] {
   };
   walk(builtinWidgetCatalog.get(type)?.binding);
   return keys;
+}
+
+// The option a widget's FRAME reads on its behalf when its descriptor opts in to freshness
+// (`freshness: true`): the host hands the frame the threshold, so no widget source holds the
+// read. The pin in the describe below proves the read still exists where it is claimed.
+function frameKeys(type: WidgetType): string[] {
+  return builtinWidgetCatalog.get(type)?.freshness === true ? ['staleAfterSeconds'] : [];
 }
 
 function sourceFiles(): string[] {
@@ -191,6 +198,15 @@ describe('the option-read scan', () => {
   });
 });
 
+describe('frame-read option references', () => {
+  it('pins that the freshness threshold is still read from the options bag', () => {
+    const sdk = readFileSync(join(SRC, '..', '..', 'widget-sdk', 'src', 'freshness.ts'), 'utf8');
+    expect(stripComments(sdk)).toMatch(/optNumber\(\s*options\s*,\s*'staleAfterSeconds'\s*\)/);
+    expect(frameKeys('latest-card')).toEqual(['staleAfterSeconds']);
+    expect(frameKeys('label')).toEqual([]);
+  });
+});
+
 describe('binding-policy option references', () => {
   // Negative control for the policy half of the evidence: if the walk stopped finding
   // references, the declared-equals-read check would fail only for the keys it used to supply
@@ -219,7 +235,7 @@ describe('WIDGET_OPTIONS', () => {
       const shared = Object.entries(SHARED_KEY_TYPES)
         .filter(([, types]) => types.includes(type))
         .map(([key]) => key);
-      const read = sorted([...optionKeysIn(WIDGET_SOURCES[type]), ...shared, ...policyKeys(type)]);
+      const read = sorted([...optionKeysIn(WIDGET_SOURCES[type]), ...shared, ...policyKeys(type), ...frameKeys(type)]);
       expect(sorted(Object.keys(WIDGET_OPTIONS[type])), type).toEqual(read);
     }
   });

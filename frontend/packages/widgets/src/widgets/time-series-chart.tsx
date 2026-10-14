@@ -9,7 +9,9 @@ import { useMemo } from 'react';
 
 import {
   defineWidget,
+  optNumber,
   optString,
+  optThresholds,
   useElementSize,
   WidgetFrame,
   type WidgetProps,
@@ -23,9 +25,12 @@ export function TimeSeriesChart({ widget, data }: WidgetProps) {
   const [sizeRef, size] = useElementSize<HTMLDivElement>();
 
   const measurements = widget.datasource?.measurements;
+  const unit = optString(widget.options, 'unit');
+  const precision = optNumber(widget.options, 'precision');
+  const thresholds = useMemo(() => optThresholds(widget.options, 'thresholds'), [widget.options]);
   const option = useMemo(
-    () => buildLineOption(data.samples, theme, { measurements }, size),
-    [data.samples, theme, measurements, size.width, size.height],
+    () => buildLineOption(data.samples, theme, { measurements, unit, precision, thresholds }, size),
+    [data.samples, theme, measurements, unit, precision, thresholds, size.width, size.height],
   );
 
   return (

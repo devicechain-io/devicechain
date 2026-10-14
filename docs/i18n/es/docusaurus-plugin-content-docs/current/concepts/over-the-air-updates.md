@@ -12,11 +12,12 @@ artefacto a un dispositivo, envía al dispositivo lo que necesita para obtener l
 :::note Estado
 **Disponible hoy:** el catálogo de artefactos con una subida en streaming verificada, la asignación
 a un dispositivo cada vez, una descarga reanudable mediante una concesión de corta duración y el
-seguimiento de cada intento con plazos.
+seguimiento de cada intento con plazos. La consola tiene pantallas para los artefactos y los
+firmantes, y una pestaña Actualizaciones en cada dispositivo para asignar una actualización y
+seguirla; consulta [Actualizaciones](../user-guide/updates.md) en la guía de usuario.
 
-**Todavía no:** no hay despliegue por flota (asignación escalonada o por porcentaje a muchos dispositivos); no hay
-pantallas de consola para las actualizaciones, así que se usan GraphQL y la subida por HTTP; y los
-dispositivos que solo usan HTTP no pueden recibir actualizaciones, porque las asignaciones viajan
+**Todavía no:** no hay despliegue por flota (asignación escalonada o por porcentaje a muchos dispositivos),
+y los dispositivos que solo usan HTTP no pueden recibir actualizaciones, porque las asignaciones viajan
 por el canal MQTT del dispositivo. Por la misma razón, los dispositivos [LwM2M](./lwm2m.md) y
 [Sparkplug](./sparkplug.md) tampoco pueden recibirlas; el firmware de un dispositivo LwM2M se
 impulsa en cambio con comandos ordinarios.

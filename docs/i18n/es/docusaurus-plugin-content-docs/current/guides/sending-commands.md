@@ -231,8 +231,8 @@ mutation {
 }
 ```
 
-La consola muestra lo mismo en la pestaña **Commands** del dispositivo: «N comandos en cola
-retenidos mientras este dispositivo está deshabilitado», con un botón **Cancel all** para quienes
+La consola muestra lo mismo en la pestaña **Comandos** del dispositivo: «N comandos en cola
+retenidos mientras este dispositivo está deshabilitado», con un botón **Cancelar todos** para quienes
 pueden escribir comandos.
 
 ## Fija un TTL con el que puedas vivir {#set-a-ttl-you-can-live-with}

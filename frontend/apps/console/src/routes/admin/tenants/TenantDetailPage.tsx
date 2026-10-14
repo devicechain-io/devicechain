@@ -131,7 +131,7 @@ export default function TenantDetailPage() {
               {tenant.enabled ? <Ban size={14} /> : <Power size={14} />}
               {tenant.enabled ? t('disable') : t('enable')}
             </Button>
-            <Button variant="destructive" size="sm" onClick={remove}>
+            <Button variant="destructive" size="sm" onClick={remove} data-shot="tenant-delete">
               <Trash2 size={14} /> {t('delete')}
             </Button>
           </>

@@ -91,7 +91,21 @@ export interface EnumOptionSpec<V extends string = string> extends OptionSpecBas
   placeholderId?: string;
 }
 
-export type OptionSpec = StringOptionSpec | NumberOptionSpec | BooleanOptionSpec | EnumOptionSpec;
+// The scalar kinds a list item's fields may take. Not `list` itself: nesting is not offered,
+// so every option stays authorable by one flat editor row.
+export type ListItemFieldSpec = StringOptionSpec | NumberOptionSpec | BooleanOptionSpec | EnumOptionSpec;
+
+// An ordered list of small records, e.g. thresholds: `[{ value, level, label? }]`. Each item is
+// an object whose fields are declared once in `item`; a field marked `required` must be present
+// in every item, and a key the item does not declare is refused (a free `color` next to a
+// severity `level` is exactly what this exists to turn away).
+export interface ListOptionSpec extends OptionSpecBase {
+  kind: 'list';
+  item: Readonly<Record<string, ListItemFieldSpec>>;
+  maxItems?: number;
+}
+
+export type OptionSpec = StringOptionSpec | NumberOptionSpec | BooleanOptionSpec | EnumOptionSpec | ListOptionSpec;
 
 export type WidgetOptionSpecs = Record<string, OptionSpec>;
 
@@ -110,7 +124,9 @@ export type OptionConstraint<K extends string = string> = GreaterThanConstraint<
 
 // The value type a spec accepts. Enum first: an EnumOptionSpec's values carry the literal
 // union, which is the whole point of declaring one.
-export type SpecValue<S> = S extends { kind: 'enum'; values: readonly (infer V)[] }
+export type SpecValue<S> = S extends { kind: 'list'; item: infer I }
+  ? OptionsOf<I>[]
+  : S extends { kind: 'enum'; values: readonly (infer V)[] }
   ? V extends string
     ? V
     : never
@@ -301,6 +317,38 @@ function checkValue(widgetId: string, key: string, spec: OptionSpec, value: unkn
         return issue('enum', `${key} must be one of ${spec.values.join(', ')}, got ${JSON.stringify(value)}`);
       }
       return [];
+
+    case 'list': {
+      if (!Array.isArray(value)) return issue('type', `${key} must be a list, got ${describe(value)}`);
+      if (spec.maxItems !== undefined && value.length > spec.maxItems) {
+        return issue('range', `${key} holds at most ${spec.maxItems} entries, got ${value.length}`);
+      }
+      const out: OptionIssue[] = [];
+      value.forEach((entry, i) => {
+        const at = `${key}[${i}]`;
+        // Reported under the ENTRY's own key (`thresholds[0].level`), so the author is pointed at the cell.
+        const at_ = (path: string, code: OptionIssueCode, message: string): OptionIssue => ({ widgetId, key: path, code, message });
+        if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) {
+          out.push(at_(at, 'type', `${at} must be an object, got ${describe(entry)}`));
+          return;
+        }
+        const record = entry as Record<string, unknown>;
+        for (const [field, fieldSpec] of Object.entries(spec.item)) {
+          const fieldValue = record[field];
+          if (fieldValue === undefined || (fieldSpec.required && fieldValue === '')) {
+            if (fieldSpec.required) out.push(at_(`${at}.${field}`, 'missing', `${at}.${field} is required but not set`));
+            continue;
+          }
+          out.push(...checkValue(widgetId, `${at}.${field}`, fieldSpec, fieldValue));
+        }
+        for (const field of Object.keys(record)) {
+          if (!hasOwn(spec.item, field)) {
+            out.push(at_(`${at}.${field}`, 'unknown', `${at}.${field} is not a field of ${key} entries`));
+          }
+        }
+      });
+      return out;
+    }
   }
 }
 
@@ -388,7 +436,12 @@ export function applyOptionPatch(
   for (const [key, value] of Object.entries(patch)) {
     if (!hasOwn(specs, key)) throw new Error(`${label}: "${key}" is not a declared option`);
     const spec = specs[key];
-    if (value === undefined || value === '' || (spec.kind === 'boolean' && value === false)) {
+    if (
+      value === undefined ||
+      value === '' ||
+      (spec.kind === 'boolean' && value === false) ||
+      (spec.kind === 'list' && Array.isArray(value) && value.length === 0)
+    ) {
       delete next[key];
       continue;
     }
@@ -420,6 +473,14 @@ export function applyOptionPatch(
         }
         next[key] = value;
         break;
+      case 'list': {
+        // Judged exactly as the validator judges a stored list: a wrong-typed field, a missing
+        // required one, or a key the entries do not declare is refused here, not found at publish.
+        const bad = checkValue(label, key, spec, value);
+        if (bad.length > 0) refuse(`a list of ${key} entries (${bad[0].message})`);
+        next[key] = value;
+        break;
+      }
     }
   }
   return next;
