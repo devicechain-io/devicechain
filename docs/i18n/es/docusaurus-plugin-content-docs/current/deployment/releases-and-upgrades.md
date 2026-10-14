@@ -3923,6 +3923,29 @@ nombre, confirmada y para un solo dispositivo, para Factory Reset; hasta entonce
 permanece cerrada. El ejecutor también rechaza cualquier carga de lectura, escritura o ejecución
 cuya clave de ruta aparezca más de una vez.
 
+##### Los lotes pueden reintentarse por resultado, y una petición LwM2M sin respuesta es un TIMEOUT {#v0210-batch-retry}
+
+Cada comando que termina lleva ahora un `outcome` almacenado, escrito por la operación que lo terminó:
+`SUCCEEDED`, `NOT_DELIVERED` (la plataforma puede demostrar que nunca llegó al dispositivo), `REJECTED`
+(el dispositivo dijo que no lo hizo) o `UNKNOWN` (puede haber llegado al dispositivo y haber actuado). Una
+migración añade la columna y la rellena para los comandos ya terminados: `SUCCESSFUL` pasa a `SUCCEEDED`,
+`EXPIRED` y `CANCELLED` pasan a `NOT_DELIVERED`, y cualquier otro comando terminado, incluido uno que
+falló o agotó el tiempo, pasa a `UNKNOWN`. Los `commands` pueden buscarse por `outcomes`.
+
+`retryCommandBatch` emite un lote nuevo, enlazado en ambos sentidos con el original (`retryOf`, `retries`),
+para los dispositivos que indiques y que no tuvieron éxito. El comando se copia del original, nunca se
+reescribe. Los dispositivos con resultado `UNKNOWN` se rechazan con `RETRY_UNKNOWN_NOT_ACKNOWLEDGED` salvo
+que la petición fije `includeUnknown`, de modo que un comando anterior a la actualización que falló o
+agotó el tiempo necesita ese indicador para reintentarse. Un dispositivo que ya tiene un comando vivo o
+con éxito en cualquier lote de la familia del reintento se rechaza, para que no se envíe un comando dos
+veces porque haya dos reintentos abiertos. Requiere `command:write`. La página del lote en la consola
+tiene una acción **Reintentar…**. Consulta
+[Comandar una flota](../guides/commanding-a-fleet.md#retry-the-devices-that-did-not-succeed).
+
+**Cambio de comportamiento.** Una petición LwM2M que no recibe respuesta del dispositivo se notifica
+ahora como `TIMEOUT`, igual que en los demás transportes. Si lees el estado de un comando LwM2M para
+decidir qué hacer a continuación, espera `TIMEOUT` ahí.
+
 ##### Los archivos compilados de la consola pasan a `/_app/` {#v0210-console-app-path}
 
 Un enlace a la página de un recurso (`/assets/<token>`) devolvía 404 al cargar o refrescar, porque el
@@ -3954,7 +3977,7 @@ guarda. No hay que hacer nada.
 | Área | Cambio |
 | --- | --- |
 | `device-management` | `devices.disabled_at timestamptz` (nulo significa habilitado) y el índice parcial `idx_devices_disabled` |
-| `command-delivery` | `device_gates` y `device_gate_syncs`, con sus índices únicos y parciales |
+| `command-delivery` | `device_gates` y `device_gate_syncs`, con sus índices únicos y parciales; `commands.outcome` (rellenado para los comandos terminados), `command_batches.retry_of` y un índice parcial sobre él |
 | `update-management` | `artifact_signers` y `artifact_signatures` (solo claves públicas y firmas); la confianza de un artefacto se deriva ahora de ellas, y la antigua columna de confianza guardada se conserva, sin escribirse más, de modo que una actualización gradual es segura; cada asignación gana además un `signature_id` nulo, la firma a la que está fijada |
 | `user-management` | `ca_bundle` en los proveedores de identidad |
 
@@ -3988,6 +4011,7 @@ conexión sin paquete.
   deshabilita, se elimina o cambia de tipo.
 - **Mensajería.** Dos réplicas que migran a la vez la retención de un flujo ya no hacen que una se
   niegue a arrancar.
+- **Reintento de lotes.** `retryCommandBatch`, el `outcome` de cada comando terminado y la búsqueda por `outcomes` se describen en [Los lotes pueden reintentarse por resultado](#v0210-batch-retry).
 
 ### v0.20.0 — inicia sesión con tu propio proveedor de identidad; los widgets se distribuyen como paquetes {#v0200-upgrade}
 

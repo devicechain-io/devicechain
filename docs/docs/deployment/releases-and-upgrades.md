@@ -3647,6 +3647,28 @@ confirmed, single-device named operation for Factory Reset is planned; until the
 closed. The executor also refuses any read, write or execute payload whose path key appears more
 than once.
 
+##### Batches can be retried by outcome, and an LwM2M request with no answer is a TIMEOUT {#v0210-batch-retry}
+
+Every command that finishes now carries a stored `outcome`, written by the write that finished it:
+`SUCCEEDED`, `NOT_DELIVERED` (the platform can prove it never reached the device), `REJECTED` (the
+device said it did not do it) or `UNKNOWN` (it may have reached the device and acted). A migration adds
+the column and fills it for the commands already finished: `SUCCESSFUL` becomes `SUCCEEDED`, `EXPIRED`
+and `CANCELLED` become `NOT_DELIVERED`, and every other finished command, including one that
+failed or timed out, becomes `UNKNOWN`. `commands` can be searched by `outcomes`.
+
+`retryCommandBatch` issues a new batch, linked both ways to the original (`retryOf`, `retries`), for the
+devices you name that did not succeed. The command is copied from the original, never retyped. Devices
+with an `UNKNOWN` outcome are refused with `RETRY_UNKNOWN_NOT_ACKNOWLEDGED` unless the request sets
+`includeUnknown`, so a command from before the upgrade that failed or timed out needs that flag to be
+retried. A device that already has a live or successful command anywhere in the retry family is refused,
+so no device is sent a command twice because two retries were open. It needs `command:write`. The batch
+page in the console has a **Retry…** action. See
+[Commanding a fleet](../guides/commanding-a-fleet.md#retry-the-devices-that-did-not-succeed).
+
+**Behaviour change.** An LwM2M request that gets no answer from the device is now reported as `TIMEOUT`,
+as on the other transports. If you read an LwM2M command's status to decide what to do next, expect
+`TIMEOUT` there.
+
 ##### The console's built files move to `/_app/` {#v0210-console-app-path}
 
 A link to an asset's page (`/assets/<token>`) returned 404 on load or refresh, because the console's
@@ -3675,7 +3697,7 @@ by Go 1.26. It is correct JSON, and it is now accepted and stored. Nothing needs
 | Area | Change |
 | --- | --- |
 | `device-management` | `devices.disabled_at timestamptz` (null means enabled) and the partial index `idx_devices_disabled` |
-| `command-delivery` | `device_gates` and `device_gate_syncs`, with their unique and partial indexes |
+| `command-delivery` | `device_gates` and `device_gate_syncs`, with their unique and partial indexes; `commands.outcome` (filled for finished commands), `command_batches.retry_of` and a partial index on it |
 | `update-management` | `artifact_signers` and `artifact_signatures` (public keys and signatures only); artifact trust is now derived from them, and the old stored trust column is kept, written no more, so a rolling upgrade is safe; each assignment also gains a nullable `signature_id`, the signature it is pinned to |
 | `user-management` | `ca_bundle` on identity providers |
 
@@ -3707,6 +3729,7 @@ a bundle.
   clears when its device is disabled, deleted or given another type.
 - **Messaging.** Two replicas that migrate a stream's retention at the same time no longer make one
   refuse to start.
+- **Batch retry.** `retryCommandBatch`, the `outcome` on every finished command and the `outcomes` search are described under [Batches can be retried by outcome](#v0210-batch-retry).
 
 ### v0.20.0 — sign in through your own identity provider; widgets ship as packages {#v0200-upgrade}
 

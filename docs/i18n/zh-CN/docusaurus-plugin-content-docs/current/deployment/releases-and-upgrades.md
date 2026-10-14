@@ -2167,6 +2167,24 @@ upgrade`，如[v0.17.0](#v0170-upgrade)所述。从 `v0.19.0` 或更早版本升
 针对恢复出厂设置的、需确认的单设备命名操作已在计划中；在此之前，原始路径保持关闭。
 执行器还会拒绝任何路径键出现多于一次的读取、写入或执行载荷。
 
+##### 批次可以按结果重试，LwM2M 请求无应答现在记为 TIMEOUT {#v0210-batch-retry}
+
+现在每条已结束的命令都带有一个存储的 `outcome`，由结束它的那次写入记录：`SUCCEEDED`、
+`NOT_DELIVERED`（平台可以证明它从未到达设备）、`REJECTED`（设备表示没有执行）或 `UNKNOWN`
+（它可能已到达设备并已执行）。迁移会添加该列，并为已经结束的命令填值：`SUCCESSFUL` 变为 `SUCCEEDED`，
+`EXPIRED` 和 `CANCELLED` 变为 `NOT_DELIVERED`，其他所有已结束的命令（包括失败或超时的）变为 `UNKNOWN`。
+`commands` 可以按 `outcomes` 搜索。
+
+`retryCommandBatch` 会为你指定的、未成功的设备创建一个新批次，并与原批次双向链接（`retryOf`、`retries`）。
+命令从原批次复制，不会重新输入。结果为 `UNKNOWN` 的设备会被 `RETRY_UNKNOWN_NOT_ACKNOWLEDGED` 拒绝，
+除非请求设置了 `includeUnknown`，因此升级前失败或超时的命令需要该标志才能重试。在同一重试家族的任何批次中已有
+进行中或成功命令的设备会被拒绝，这样就不会因为同时存在两个重试而向设备发送两次命令。需要 `command:write`。
+控制台的批次页面有一个**重试…**操作。参见
+[向设备群下发命令](../guides/commanding-a-fleet.md#retry-the-devices-that-did-not-succeed)。
+
+**行为变化。** 设备对 LwM2M 请求没有应答时，现在记为 `TIMEOUT`，与其他传输一致。如果你依据 LwM2M 命令的状态
+决定下一步操作，请预期这里会出现 `TIMEOUT`。
+
 ##### 控制台的构建文件移动到 `/_app/` {#v0210-console-app-path}
 
 指向资产页面的链接（`/assets/<token>`）在加载或刷新时会返回 404，因为控制台构建的 JavaScript 和 CSS 位于
@@ -2192,7 +2210,7 @@ upgrade`，如[v0.17.0](#v0170-upgrade)所述。从 `v0.19.0` 或更早版本升
 | 服务 | 变更 |
 | --- | --- |
 | `device-management` | `devices.disabled_at timestamptz`（为空表示已启用）和部分索引 `idx_devices_disabled` |
-| `command-delivery` | `device_gates` 和 `device_gate_syncs`，及其唯一索引和部分索引 |
+| `command-delivery` | `device_gates` 和 `device_gate_syncs`，及其唯一索引和部分索引；`commands.outcome`（为已结束的命令填值）、`command_batches.retry_of` 及其上的部分索引 |
 | `update-management` | `artifact_signers` 和 `artifact_signatures`（仅含公钥和签名）；工件的信任现在由它们推导，旧的已存储信任列予以保留、不再写入，因此滚动升级是安全的；每个分配还新增一个可为空的 `signature_id`，即它所固定的签名 |
 | `user-management` | 身份提供商上的 `ca_bundle` |
 
@@ -2218,6 +2236,7 @@ upgrade`，如[v0.17.0](#v0170-upgrade)所述。从 `v0.19.0` 或更早版本升
 - **检测规则。** 控制台表单提供静默设备、值持续高于上限和低电量的预设，并显示规则的严重程度是否会通知到任何人。
   缺失告警会在其设备被停用、删除或更换类型时清除。
 - **消息传递。** 两个副本同时迁移某个流的保留策略时，不再导致其中一个拒绝启动。
+- **批次重试。** `retryCommandBatch`、每条已结束命令上的 `outcome` 以及按 `outcomes` 搜索，见[批次可以按结果重试](#v0210-batch-retry)。
 
 ### v0.20.0：通过你自己的身份提供商登录，组件以包的形式发布 {#v0200-upgrade}
 
