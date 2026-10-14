@@ -372,7 +372,7 @@ function SignIn({
   return (
     <Centered>
       <form onSubmit={submit} style={{ display: 'contents' }}>
-        <Card>
+        <Card data-shot="dash-signin">
           <div style={{ fontSize: 18, fontWeight: 600 }}>{t('signIn:title')}</div>
           <Field label={t('signIn:emailLabel')}>
             <TextInput
@@ -381,6 +381,7 @@ function SignIn({
               onChange={setEmail}
               autoComplete="username"
               autoFocus
+              data-shot="dash-email"
             />
           </Field>
           <Field label={t('signIn:passwordLabel')}>
@@ -389,11 +390,12 @@ function SignIn({
               value={password}
               onChange={setPassword}
               autoComplete="current-password"
+              data-shot="dash-password"
             />
           </Field>
           {signOutFailed && <ErrorText>{t('signIn:signOutFailed')}</ErrorText>}
           {error && <ErrorText>{error}</ErrorText>}
-          <HeaderButton type="submit" primary disabled={busy}>
+          <HeaderButton type="submit" primary disabled={busy} data-shot="dash-signin-submit">
             {busy ? t('signIn:submitting') : t('signIn:submit')}
           </HeaderButton>
           <HeaderButton onClick={sso} disabled={busy}>
@@ -593,7 +595,7 @@ function Load({
     }
   };
 
-  if (autoLoading) return <Centered>{t('load:loading')}</Centered>;
+  if (autoLoading) return <Centered data-shot="loading">{t('load:loading')}</Centered>;
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
@@ -613,6 +615,7 @@ function Load({
       </header>
 
       <main
+        data-shot="dash-load"
         style={{
           flex: '1 1 auto',
           minHeight: 0,
@@ -631,6 +634,7 @@ function Load({
             value={dashboardToken}
             onChange={setDashboardToken}
             placeholder={t('load:tokenPlaceholder')}
+            data-shot="dash-token"
           />
         </Field>
         <div>
@@ -638,6 +642,7 @@ function Load({
             onClick={loadPublished}
             primary
             disabled={dashboardToken.trim() === '' || fetching}
+            data-shot="dash-load-published"
           >
             {fetching ? t('load:loading') : t('load:loadPublished')}
           </HeaderButton>
@@ -738,6 +743,7 @@ export function View({
 
   return (
     <div
+      data-shot="dash-view"
       data-density={density ?? undefined}
       style={{ display: 'flex', flexDirection: 'column', height: '100%' }}
     >
@@ -765,7 +771,7 @@ export function View({
           <ConnectionStatus hub={hub} />
           <LocaleSwitcher />
           {onToggleTheme && (
-            <HeaderButton onClick={onToggleTheme}>
+            <HeaderButton onClick={onToggleTheme} data-shot="dash-theme-toggle">
               {theme === 'dark' ? t('view:themeToLight') : t('view:themeToDark')}
             </HeaderButton>
           )}
@@ -851,7 +857,7 @@ function FullscreenButton() {
     }
   };
   return (
-    <div style={{ position: 'fixed', top: 8, right: 8, zIndex: 10, opacity: 0.7 }}>
+    <div data-shot="dash-fullscreen" style={{ position: 'fixed', top: 8, right: 8, zIndex: 10, opacity: 0.7 }}>
       <HeaderButton onClick={toggle}>
         {on ? t('view:exitFullscreen') : t('view:enterFullscreen')}
       </HeaderButton>
@@ -922,9 +928,11 @@ function LocaleSwitcher() {
   );
 }
 
-function Centered({ children }: { children: React.ReactNode }) {
+// `data-shot`: the user-guide capture anchor, as in the console's CONVENTIONS.md.
+function Centered({ children, 'data-shot': shot }: { children: React.ReactNode; 'data-shot'?: string }) {
   return (
     <div
+      data-shot={shot}
       style={{
         height: '100%',
         display: 'flex',
@@ -938,9 +946,10 @@ function Centered({ children }: { children: React.ReactNode }) {
   );
 }
 
-function Card({ children }: { children: React.ReactNode }) {
+function Card({ children, 'data-shot': shot }: { children: React.ReactNode; 'data-shot'?: string }) {
   return (
     <div
+      data-shot={shot}
       style={{
         display: 'flex',
         flexDirection: 'column',
@@ -987,6 +996,7 @@ function TextInput({
   autoComplete,
   autoFocus,
   placeholder,
+  'data-shot': shot,
 }: {
   value: string;
   onChange: (v: string) => void;
@@ -994,9 +1004,11 @@ function TextInput({
   autoComplete?: string;
   autoFocus?: boolean;
   placeholder?: string;
+  'data-shot'?: string;
 }) {
   return (
     <input
+      data-shot={shot}
       type={type}
       value={value}
       onChange={(e) => onChange(e.target.value)}
@@ -1063,15 +1075,18 @@ function HeaderButton({
   disabled,
   primary,
   type = 'button',
+  'data-shot': shot,
 }: {
   children: React.ReactNode;
   onClick?: () => void;
   disabled?: boolean;
   primary?: boolean;
   type?: 'button' | 'submit';
+  'data-shot'?: string;
 }) {
   return (
     <button
+      data-shot={shot}
       type={type}
       onClick={onClick}
       disabled={disabled}
