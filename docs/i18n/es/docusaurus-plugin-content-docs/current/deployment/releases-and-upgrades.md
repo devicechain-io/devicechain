@@ -3966,6 +3966,8 @@ Dos comportamientos que conviene conocer. Si un dispositivo confirma un comando 
 ventana se haya cerrado, la confirmación se rechaza; el comando se aparca y pasa a la siguiente apertura. Y
 desasignar una ventana de un tipo de dispositivo no libera los comandos ya marcados con ella.
 
+Para configurar una, consulta [Ventanas de mantenimiento](../guides/maintenance-windows.md).
+
 ##### Los archivos compilados de la consola pasan a `/_app/` {#v0210-console-app-path}
 
 Un enlace a la página de un recurso (`/assets/<token>`) devolvía 404 al cargar o refrescar, porque el

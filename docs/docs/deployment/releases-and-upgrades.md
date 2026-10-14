@@ -3689,6 +3689,8 @@ Two behaviours to know. A device that confirms a command in flight after the win
 confirmation refused; the command then parks and moves to the next opening. And unassigning a window from
 a device type does not release commands already stamped from it.
 
+To set one up, see [Maintenance windows](../guides/maintenance-windows.md).
+
 ##### The console's built files move to `/_app/` {#v0210-console-app-path}
 
 A link to an asset's page (`/assets/<token>`) returned 404 on load or refresh, because the console's
