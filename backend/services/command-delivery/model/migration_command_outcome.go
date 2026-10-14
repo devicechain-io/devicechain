@@ -31,7 +31,7 @@ import (
 // migrations run with UseTransaction:false and replay from the top after a failure.
 func NewCommandOutcomeSchema() *gormigrate.Migration {
 	return &gormigrate.Migration{
-		ID: "20261013120000",
+		ID: "20261013200000",
 		Migrate: func(tx *gorm.DB) error {
 			for _, ddl := range []string{
 				`ALTER TABLE "command-delivery".commands ` +
