@@ -59,6 +59,46 @@ export type CommandBatchCreateRequest = {
 };
 
 /**
+ * Fields for re-issuing a batch's command to a chosen subset of its devices. The command name and
+ * payload are copied from the original batch; they cannot be changed here.
+ */
+export type CommandBatchRetryRequest = {
+  /**
+   * Required. As for createCommandBatch: when true, devices that cannot receive the command now
+   * are skipped and recorded as refusals; when false, any such device refuses the whole retry.
+   */
+  allowPartial: boolean;
+  /**
+   * Tokens of the devices to retry, at most 10000. Each must be a member of the original batch
+   * and unsuccessful (see includeUnknown). The order is the order devices are admitted in when the
+   * retry is partially admitted.
+   */
+  deviceTokens: Array<string>;
+  /**
+   * RFC 3339 timestamp after which the retry's undelivered commands expire. Optional; when omitted
+   * the platform's default time-to-live applies.
+   */
+  expiresAt?: string | null | undefined;
+  /**
+   * Whether to also retry devices whose outcome is UNKNOWN: commands that may already have reached
+   * the device and acted. Devices with that outcome are refused with RETRY_UNKNOWN_NOT_ACKNOWLEDGED
+   * unless this is true. Only set it after confirming that acting twice is harmless.
+   */
+  includeUnknown: boolean;
+  /** Free-form metadata for the retry batch, as a JSON document serialized to a string. Optional. */
+  metadata?: string | null | undefined;
+  /** Token of the batch to retry. It may itself be a retry. */
+  of: string;
+  /**
+   * Idempotency key for the retry, unique within the tenant and different from the original
+   * batch's. Re-sending it returns the retry unchanged and admits nothing further. Re-sending the
+   * ORIGINAL batch's token through createCommandBatch still returns the original and executes
+   * nothing.
+   */
+  token: string;
+};
+
+/**
  * Filters and paging for searching command batches. All supplied filters must match. Results are
  * newest first.
  */
@@ -124,6 +164,11 @@ export type CommandSearchCriteria = {
   batchToken?: string | null | undefined;
   /** Only commands addressed to this device. */
   deviceToken?: string | null | undefined;
+  /**
+   * Only finished commands whose outcome is one of these (SUCCEEDED, NOT_DELIVERED, REJECTED or
+   * UNKNOWN). Live commands have no outcome and never match. An empty list is ignored.
+   */
+  outcomes?: Array<string> | null | undefined;
   /** Page to return, starting at 1; values below 1 are treated as 1. */
   pageNumber: number;
   /** Results per page. Values below 1 become 100; values above 1000 are capped at 1000. */
@@ -142,7 +187,7 @@ export type CommandsQueryVariables = Exact<{
 }>;
 
 
-export type CommandsQuery = { commands: { results: Array<{ id: string, token: string, deviceToken: string, batchToken: string | null, name: string, payload: string | null, status: string, queuedTime: string | null, sentTime: string | null, respondedTime: string | null, expiresAt: string | null, responsePayload: string | null, error: string | null }>, pagination: { pageStart: number | null, pageEnd: number | null, totalRecords: number | null } } };
+export type CommandsQuery = { commands: { results: Array<{ id: string, token: string, deviceToken: string, batchToken: string | null, name: string, payload: string | null, status: string, queuedTime: string | null, sentTime: string | null, respondedTime: string | null, expiresAt: string | null, responsePayload: string | null, error: string | null, outcome: string | null }>, pagination: { pageStart: number | null, pageEnd: number | null, totalRecords: number | null } } };
 
 export type CreateCommandMutationVariables = Exact<{
   request: CommandCreateRequest;
@@ -163,7 +208,7 @@ export type CommandBatchesByTokenQueryVariables = Exact<{
 }>;
 
 
-export type CommandBatchesByTokenQuery = { commandBatchesByToken: Array<{ id: string, token: string, createdAt: string | null, name: string, payload: string | null, targetKind: string, groupToken: string | null, groupVersion: number | null, allowPartial: boolean, resolved: number, accepted: number, cancelledAt: string | null, cancelledCount: number | null, refusals: Array<{ deviceToken: string, code: string, reason: string }>, refusalCounts: Array<{ code: string, count: number }> }> };
+export type CommandBatchesByTokenQuery = { commandBatchesByToken: Array<{ id: string, token: string, createdAt: string | null, name: string, payload: string | null, targetKind: string, groupToken: string | null, groupVersion: number | null, allowPartial: boolean, resolved: number, accepted: number, cancelledAt: string | null, cancelledCount: number | null, retryOf: string | null, retries: Array<string>, refusals: Array<{ deviceToken: string, code: string, reason: string }>, refusalCounts: Array<{ code: string, count: number }> }> };
 
 export type CreateCommandBatchMutationVariables = Exact<{
   request: CommandBatchCreateRequest;
@@ -171,6 +216,13 @@ export type CreateCommandBatchMutationVariables = Exact<{
 
 
 export type CreateCommandBatchMutation = { createCommandBatch: { batch: { id: string, token: string, name: string, targetKind: string, resolved: number, accepted: number } | null, rejection: { code: string, reason: string, resolved: number | null, refusals: Array<{ deviceToken: string, code: string, reason: string }>, refusalCounts: Array<{ code: string, count: number }> } | null } };
+
+export type RetryCommandBatchMutationVariables = Exact<{
+  request: CommandBatchRetryRequest;
+}>;
+
+
+export type RetryCommandBatchMutation = { retryCommandBatch: { batch: { id: string, token: string, retryOf: string | null, resolved: number, accepted: number } | null, rejection: { code: string, reason: string, resolved: number | null, refusals: Array<{ deviceToken: string, code: string, reason: string }> } | null } };
 
 export type CancelCommandMutationVariables = Exact<{
   token: string;
@@ -236,6 +288,7 @@ export const CommandsDocument = new TypedDocumentString(`
       expiresAt
       responsePayload
       error
+      outcome
     }
     pagination {
       pageStart
@@ -310,6 +363,8 @@ export const CommandBatchesByTokenDocument = new TypedDocumentString(`
     }
     cancelledAt
     cancelledCount
+    retryOf
+    retries
   }
 }
     `) as unknown as TypedDocumentString<CommandBatchesByTokenQuery, CommandBatchesByTokenQueryVariables>;
@@ -341,6 +396,29 @@ export const CreateCommandBatchDocument = new TypedDocumentString(`
   }
 }
     `) as unknown as TypedDocumentString<CreateCommandBatchMutation, CreateCommandBatchMutationVariables>;
+export const RetryCommandBatchDocument = new TypedDocumentString(`
+    mutation RetryCommandBatch($request: CommandBatchRetryRequest!) {
+  retryCommandBatch(request: $request) {
+    batch {
+      id
+      token
+      retryOf
+      resolved
+      accepted
+    }
+    rejection {
+      code
+      reason
+      resolved
+      refusals {
+        deviceToken
+        code
+        reason
+      }
+    }
+  }
+}
+    `) as unknown as TypedDocumentString<RetryCommandBatchMutation, RetryCommandBatchMutationVariables>;
 export const CancelCommandDocument = new TypedDocumentString(`
     mutation CancelCommand($token: String!) {
   cancelCommand(token: $token) {

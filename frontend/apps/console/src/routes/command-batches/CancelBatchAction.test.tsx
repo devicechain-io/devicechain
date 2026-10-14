@@ -95,6 +95,8 @@ function batch(over: Record<string, unknown> = {}) {
     refusalCounts: [] as unknown[],
     cancelledAt: null,
     cancelledCount: null,
+    retryOf: null,
+    retries: [],
     ...over,
   };
 }

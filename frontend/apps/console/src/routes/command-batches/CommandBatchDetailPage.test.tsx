@@ -67,6 +67,8 @@ function batch(over: Record<string, unknown> = {}) {
     refusalCounts: [] as { code: string; count: number }[],
     cancelledAt: null,
     cancelledCount: null,
+    retryOf: null,
+    retries: [],
     ...over,
   };
 }
@@ -354,8 +356,8 @@ describe('CommandBatchDetailPage CSV export', () => {
     expect(exportCall).toMatchObject({ batchToken: 'batch-1', pageNumber: 1, status: 'FAILED' });
     const text = new TextDecoder().decode(new Uint8Array(await blobs[0].arrayBuffer()).slice(3));
     expect(text).toBe(
-      'Token,Device,Status,Queued,Result\r\n' +
-        'tok-dev-a,dev-a,FAILED,2026-08-12T12:00:00.000Z,timeout\r\n',
+      'Token,Device,Status,Queued,Result,Outcome\r\n' +
+        'tok-dev-a,dev-a,FAILED,2026-08-12T12:00:00.000Z,timeout,\r\n',
     );
   });
 });

@@ -12,7 +12,7 @@
 // what the Commands panel at the bottom queries, separately.
 
 import { useEffect, useState } from 'react';
-import { useParams } from 'react-router-dom';
+import { Link, useParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { PageShell } from '@/components/ui/page-shell';
 import { SectionPanel } from '@/components/ui/section-panel';
@@ -51,6 +51,7 @@ import { Fact } from './Fact';
 import { groupRefusals, totalRefused, type RefusalGroup } from './refusals';
 import { RefusalGroupList } from './RefusalGroups';
 import { CancelBatchButton, CancelBatchReport, useBatchCancel } from './CancelBatchAction';
+import { RetryBatchButton, RetryBatchPanel, useBatchRetry } from './RetryBatchAction';
 
 const commandsPageSize = 25;
 
@@ -109,6 +110,7 @@ function CommandBatchDetail({
   // component owning both would have to be one or the other. Holding it here also means
   // the refetch this triggers repaints the page underneath a report that stays put.
   const cancelState = useBatchCancel({ batch, reloadKey, onCancelled });
+  const retryState = useBatchRetry();
 
   return (
     <PageShell
@@ -122,7 +124,12 @@ function CommandBatchDetail({
       // operator lacks command:write, or when the batch is stamped cancelled AND a live
       // count says the platform is holding nothing more of it — deliberately not on the
       // stamp alone, which hid the brake on a batch that still had commands running.
-      action={<CancelBatchButton state={cancelState} />}
+      action={
+        <div className="flex items-center gap-2">
+          <RetryBatchButton state={retryState} />
+          <CancelBatchButton state={cancelState} />
+        </div>
+      }
       description={
         <div className="mt-1 flex flex-wrap items-center gap-2">
           <TargetKindBadge targetKind={batch.targetKind} />
@@ -153,6 +160,7 @@ function CommandBatchDetail({
         {/* First, because it is the most recent thing that happened to this batch and the
             operator pressed a button to make it happen. */}
         <CancelBatchReport state={cancelState} />
+        <RetryBatchPanel batch={batch} state={retryState} reloadKey={reloadKey} />
         <SummaryPanel batch={batch} refused={refused} />
         <RefusalsPanel groups={groups} refused={refused} />
         <BatchCommandsPanel batchToken={batch.token} reloadKey={reloadKey} />
@@ -189,6 +197,29 @@ function SummaryPanel({ batch, refused }: { batch: CommandBatch; refused: number
         <p className="mt-1 text-sm text-destructive">{t('arithmeticMismatch')}</p>
       )}
       <HintText size="md" className="mt-1">{t('storedFactsHint')}</HintText>
+      {/* The two-way link between a batch and its retries. A retry is a batch of its own, so
+          it is reached by navigation, not folded into this one. */}
+      {batch.retryOf && (
+        <p className="mt-3 text-sm text-muted-foreground">
+          {t('retryOfLabel')}{' '}
+          <Link className="font-mono text-foreground underline" to={`/command-batches/${encodeURIComponent(batch.retryOf)}`}>
+            {batch.retryOf}
+          </Link>
+        </p>
+      )}
+      {batch.retries.length > 0 && (
+        <p className="mt-1 text-sm text-muted-foreground">
+          {t('retriedByLabel')}{' '}
+          {batch.retries.map((r, i) => (
+            <span key={r}>
+              {i > 0 && ', '}
+              <Link className="font-mono text-foreground underline" to={`/command-batches/${encodeURIComponent(r)}`}>
+                {r}
+              </Link>
+            </span>
+          ))}
+        </p>
+      )}
       {batch.cancelledAt && (
         <p className="mt-3 text-sm text-muted-foreground">
           {batch.cancelledCount == null
@@ -265,6 +296,7 @@ function BatchCommandsPanel({ batchToken, reloadKey }: { batchToken: string; rel
     { header: t('common:colStatus'), value: (c) => c.status },
     { header: t('colQueued'), value: (c) => isoTime(c.queuedTime) },
     { header: t('colResult'), value: (c) => c.error || c.responsePayload },
+    { header: t('colOutcome'), value: (c) => c.outcome },
   ];
 
   return (
@@ -309,6 +341,7 @@ function BatchCommandsPanel({ batchToken, reloadKey }: { batchToken: string; rel
             <DataTableHead>
               <DataTableHeaderCell>{t('colDevice')}</DataTableHeaderCell>
               <DataTableHeaderCell>{t('common:colStatus')}</DataTableHeaderCell>
+              <DataTableHeaderCell>{t('colOutcome')}</DataTableHeaderCell>
               <DataTableHeaderCell>{t('colQueued')}</DataTableHeaderCell>
               <DataTableHeaderCell>{t('colResult')}</DataTableHeaderCell>
             </DataTableHead>
@@ -323,6 +356,7 @@ function BatchCommandsPanel({ batchToken, reloadKey }: { batchToken: string; rel
                   <DataTableCell>
                     <Badge variant={commandStatusVariant(c.status)}>{c.status}</Badge>
                   </DataTableCell>
+                  <DataTableCell className="text-muted-foreground">{c.outcome ?? '—'}</DataTableCell>
                   <DataTableCell className="whitespace-nowrap text-muted-foreground">
                     {formatTime(c.queuedTime)}
                   </DataTableCell>
