@@ -33,6 +33,12 @@ type UpdateAssignment struct {
 	// SupersededAt is set when a newer assignment replaced this one. Null means this is the
 	// device's current assignment for the component.
 	SupersededAt sql.NullTime
+
+	// SignatureId is the artifact signature the assignment was made under, pinned when the
+	// assignment was created. Null for an assignment made with no signature by an active signer
+	// (only possible under updates.allowUnverifiedArtifacts); such an assignment stays UNVERIFIED
+	// on the wire for its whole life. The column is appended by a later migration, so it is last.
+	SignatureId sql.NullInt64
 }
 
 // AuditLabel names the row in the audit journal.
@@ -159,6 +165,16 @@ type UpdateAssignmentView struct {
 	Assignment UpdateAssignment
 	Attempt    UpdateAttempt
 	Artifact   Artifact
+	// Pin is the signature the assignment is pinned to and the signer that made it. It is nil when
+	// the assignment pins none, and ALSO nil when it pins one that could not be read: the two are
+	// told apart by Assignment.SignatureId, and only the first may be sent as UNVERIFIED.
+	Pin *SignaturePin
+}
+
+// SignaturePin is a pinned signature with the signer row that gives it meaning.
+type SignaturePin struct {
+	Signature ArtifactSignature
+	Signer    ArtifactSigner
 }
 
 // UpdateAssignmentCriteria filters and paginates an assignment search.

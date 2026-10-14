@@ -6,9 +6,15 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/ecdsa"
+	"crypto/ed25519"
+	"crypto/elliptic"
+	"crypto/rand"
 	"crypto/sha256"
+	"crypto/x509"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"io"
@@ -90,6 +96,52 @@ type e2e struct {
 	clockMu  sync.Mutex
 	clock    time.Time
 	sent     atomic.Int64 // messages every device link has published on device-reports
+
+	// keys are the tenants' registered signing keys. Every artifact the tests declare is signed
+	// with its tenant's key, and a device trusts the keys in trusted, so the default flow is the
+	// strict one: the instance refuses unverified artifacts and the device requires a signature.
+	keys    map[string]*signingKey
+	trusted []string
+}
+
+// signingKey is a signer's private key with the PEM of its public half.
+type signingKey struct {
+	pem    string
+	sign   func(digest []byte) []byte
+	signer *model.ArtifactSigner // set once registered
+}
+
+func newSigningKey(t *testing.T, ed bool) *signingKey {
+	t.Helper()
+	var pub any
+	k := &signingKey{}
+	if ed {
+		p, priv, err := ed25519.GenerateKey(rand.Reader)
+		require.NoError(t, err)
+		pub, k.sign = p, func(d []byte) []byte { return ed25519.Sign(priv, d) }
+	} else {
+		priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+		require.NoError(t, err)
+		pub = &priv.PublicKey
+		k.sign = func(d []byte) []byte {
+			sig, err := ecdsa.SignASN1(rand.Reader, priv, d)
+			require.NoError(t, err)
+			return sig
+		}
+	}
+	der, err := x509.MarshalPKIXPublicKey(pub)
+	require.NoError(t, err)
+	k.pem = string(pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: der}))
+	return k
+}
+
+// register adds the key to the tenant's signer registry.
+func (f *e2e) register(tenant string, k *signingKey) *signingKey {
+	f.t.Helper()
+	s, err := Api.RegisterSigner(ctxOf(tenant), "release key", k.pem)
+	require.NoError(f.t, err)
+	k.signer = s
+	return k
 }
 
 func (f *e2e) now() time.Time {
@@ -153,7 +205,7 @@ func startE2E(t *testing.T) *e2e {
 	infra.UserManagement = mscfg.UserManagementConfiguration{Hostname: "um", Port: 8080}
 	infra.DeviceManagement = mscfg.DeviceManagementConfiguration{Hostname: "dm", Port: 8080}
 	infra.Secrets = mscfg.SecretsConfiguration{RootKey: base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{9}, 32))}
-	Microservice.MicroserviceConfigurationRaw = []byte(`{"updates":{"allowUnverifiedArtifacts":true}}`)
+	Microservice.MicroserviceConfigurationRaw = []byte(`{"updates":{"allowUnverifiedArtifacts":false}}`)
 	require.NoError(t, parseConfiguration())
 
 	// The download endpoint is served by the service own mux, as in production.
@@ -179,7 +231,7 @@ func startE2E(t *testing.T) *e2e {
 	Api = api
 	// buildApi carried the configuration across; the lookups go to fakes, not to device-management.
 	require.Equal(t, f.srv.URL, Api.DownloadBaseURL)
-	require.True(t, Api.AllowUnverified)
+	require.False(t, Api.AllowUnverified, "the e2e flow is the strict one: signed artifacts only")
 	require.Equal(t, 600*time.Second, Api.Policy.Download)
 	require.NotNil(t, Api.Devices, "the device lookup was not wired from the instance configuration")
 	Api.Profiles = fixtureProfiles{}
@@ -187,6 +239,13 @@ func startE2E(t *testing.T) *e2e {
 	Api.Clock = f.now
 	require.NoError(t, wireSecrets(context.Background(), Api))
 	require.NotNil(t, Api.Secrets)
+
+	// Each tenant has a registered signer whose key every device trusts.
+	f.keys = map[string]*signingKey{}
+	for _, tenant := range []string{"acme", "globex"} {
+		f.keys[tenant] = f.register(tenant, newSigningKey(t, false))
+	}
+	f.trusted = []string{f.keys["acme"].pem, f.keys["globex"].pem}
 
 	Svc = service.New(Microservice, service.Spec{Nats: &service.NatsSpec{OnCreate: createNatsComponents}})
 	DeadLetters = Svc.DeadLetters
@@ -233,8 +292,24 @@ func digestOf(b []byte) string {
 	return "sha256:" + hex.EncodeToString(sum[:])
 }
 
-// artifact declares and uploads an artifact through the model, as the upload endpoint does.
+// artifact declares and uploads an artifact through the model, as the upload endpoint does, and
+// signs it with the tenant's registered key.
 func (f *e2e) artifact(tenant, token, version string, content []byte) {
+	f.t.Helper()
+	f.unsignedArtifact(tenant, token, version, content)
+	f.sign(tenant, token, content, f.keys[tenant])
+}
+
+// sign adds the key's signature over the artifact's raw digest.
+func (f *e2e) sign(tenant, token string, content []byte, k *signingKey) {
+	f.t.Helper()
+	sum := sha256.Sum256(content)
+	_, err := Api.AddSignature(ctxOf(tenant), token, k.signer.Token, base64.StdEncoding.EncodeToString(k.sign(sum[:])))
+	require.NoError(f.t, err)
+}
+
+// unsignedArtifact is artifact without the signature.
+func (f *e2e) unsignedArtifact(tenant, token, version string, content []byte) {
 	f.t.Helper()
 	ctx := ctxOf(tenant)
 	a, err := Api.CreateArtifact(ctx, &model.ArtifactCreateRequest{
@@ -255,6 +330,7 @@ type natsLink struct {
 	mu             sync.Mutex
 	sub            *nats.Subscription
 	desired        []string // kinds, in order of arrival
+	assignments    [][]byte // every update.assignment payload, verbatim, in order of arrival
 }
 
 func (f *e2e) link(tenant, device string) *natsLink {
@@ -282,6 +358,9 @@ func (l *natsLink) listen(client *updater.Client) {
 			}
 			l.mu.Lock()
 			l.desired = append(l.desired, msg.Kind)
+			if msg.Kind == ota.KindUpdateAssignment {
+				l.assignments = append(l.assignments, append([]byte(nil), m.Data...))
+			}
 			l.mu.Unlock()
 			if err := client.HandleDesired(context.Background(), m.Data); err != nil && !errors.Is(err, updater.ErrNotUpdateKind) && !l.f.nc.IsClosed() {
 				l.f.t.Errorf("device refused %s: %v", msg.Kind, err)
@@ -357,7 +436,7 @@ func (f *e2e) openDevice(tenant, device string, chunk int64, httpc *http.Client,
 	l := f.link(tenant, device)
 	c, err := updater.OpenClient(updater.ClientConfig{
 		StatePath: statePath, Component: "firmware", InitialVersion: "1.0.0", ChunkSize: chunk,
-		Transport: l, HTTP: httpc, Now: f.now, RequireSignature: updater.RequireSignatureOption(false),
+		Transport: l, HTTP: httpc, Now: f.now, TrustedKeys: f.trusted, RequireSignature: updater.RequireSignatureOption(true),
 	})
 	require.NoError(f.t, err)
 	l.listen(c)
@@ -617,4 +696,116 @@ func TestAnotherDeviceOrTenantCannotDownloadSomeoneElsesAssignment(t *testing.T)
 
 func newSweeperForTest() *processor.DeadlineSweeper {
 	return processor.NewDeadlineSweeper(Api, time.Minute, &ReportsMetrics)
+}
+
+func (f *e2e) assignmentOf(tenant, token string) *model.UpdateAssignmentView {
+	f.t.Helper()
+	v, err := Api.AssignmentByToken(ctxOf(tenant), token)
+	require.NoError(f.t, err)
+	require.NotNil(f.t, v)
+	return v
+}
+
+// The platform pins a signature and sends SIGNED with the flag OFF; a device that requires a
+// signature and trusts the signer's key installs it. Both key types, so each registry algorithm
+// crosses the wire under its wire name.
+func TestASignedUpdateCompletesWithTheFlagOff(t *testing.T) {
+	for name, ed := range map[string]bool{"ecdsa-p256": false, "ed25519": true} {
+		t.Run(name, func(t *testing.T) {
+			f := startE2E(t)
+			key := f.register("acme", newSigningKey(t, ed))
+			f.trusted = []string{key.pem}
+			content := image(150_000)
+			f.unsignedArtifact("acme", "fw-2", "2.0.0", content)
+			f.sign("acme", "fw-2", content, key)
+			client, link, _ := f.device("acme", "dev-1", 64<<10, nil)
+
+			view, err := Api.AssignArtifact(ctxOf("acme"), "dev-1", "fw-2")
+			require.NoError(t, err)
+			require.NotNil(t, view.Pin)
+			require.Equal(t, key.signer.Token, view.Pin.Signer.Token)
+			f.run(client, func() bool { return f.attemptState("acme", view.Assignment.Token) == ota.StateUpdated })
+
+			require.Len(t, link.assignments, 1)
+			msg, err := ota.DecodeDesiredUpdate(link.assignments[0])
+			require.NoError(t, err)
+			require.Equal(t, ota.TrustSigned, msg.Assignment.Trust)
+			require.Equal(t, key.signer.KeyId, msg.Assignment.KeyID)
+			wantAlg := ota.AlgorithmECDSAP256SHA256
+			if ed {
+				wantAlg = ota.AlgorithmEd25519
+			}
+			require.Equal(t, wantAlg, msg.Assignment.Algorithm)
+			require.Empty(t, f.letters())
+		})
+	}
+}
+
+// A device that does not hold the signer's key refuses the update with UNKNOWN_SIGNER, failing at
+// the DOWNLOADED stage, and the platform records it against the device.
+func TestADeviceWithoutTheSignersKeyFailsWithUnknownSigner(t *testing.T) {
+	f := startE2E(t)
+	f.trusted = []string{newSigningKey(t, false).pem} // not the registered signer's key
+	f.artifact("acme", "fw-2", "2.0.0", image(150_000))
+	client, _, _ := f.device("acme", "dev-1", 64<<10, nil)
+
+	view, err := Api.AssignArtifact(ctxOf("acme"), "dev-1", "fw-2")
+	require.NoError(t, err)
+	f.run(client, func() bool { return f.attemptState("acme", view.Assignment.Token) == ota.StateFailed })
+
+	got := f.assignmentOf("acme", view.Assignment.Token)
+	require.Equal(t, ota.CodeUnknownSigner, got.Attempt.FailureCode)
+	require.Equal(t, string(ota.StageDownloaded), got.Attempt.FailureStage)
+	require.NotEqual(t, "2.0.0", client.Updater().Snapshot().RunningVersion)
+}
+
+// A signature damaged in transit fails verification on the device: SIGNATURE_INVALID.
+func TestACorruptedSignatureFailsWithSignatureInvalid(t *testing.T) {
+	f := startE2E(t)
+	f.artifact("acme", "fw-2", "2.0.0", image(150_000))
+	client, _, _ := f.device("acme", "dev-1", 64<<10, nil)
+	client.Updater().SetFaults(updater.Faults{CorruptSignature: true})
+
+	view, err := Api.AssignArtifact(ctxOf("acme"), "dev-1", "fw-2")
+	require.NoError(t, err)
+	f.run(client, func() bool { return f.attemptState("acme", view.Assignment.Token) == ota.StateFailed })
+
+	got := f.assignmentOf("acme", view.Assignment.Token)
+	require.Equal(t, ota.CodeSignatureInvalid, got.Attempt.FailureCode)
+	require.Equal(t, string(ota.StageDownloaded), got.Attempt.FailureStage)
+}
+
+// Revoking the signer mid-flight: the update already under way keeps the signature it was
+// assigned under and completes, a re-sync sends the byte-identical message, and a NEW assignment
+// of the same artifact is refused.
+func TestARevokeMidFlightLeavesTheInFlightUpdateAloneAndRefusesNewAssignments(t *testing.T) {
+	f := startE2E(t)
+	f.artifact("acme", "fw-2", "2.0.0", image(600_000))
+	client, link, _ := f.device("acme", "dev-1", 64<<10, nil)
+
+	view, err := Api.AssignArtifact(ctxOf("acme"), "dev-1", "fw-2")
+	require.NoError(t, err)
+	f.run(client, func() bool { return client.Updater().Snapshot().BytesHave >= 128<<10 })
+
+	_, err = Api.RevokeSigner(ctxOf("acme"), f.keys["acme"].signer.Token)
+	require.NoError(t, err)
+
+	// A new assignment of the now-unsigned artifact is refused.
+	_, err = Api.AssignArtifact(ctxOf("acme"), "dev-2", "fw-2")
+	var refusal *model.RefusalError
+	require.ErrorAs(t, err, &refusal)
+	require.Equal(t, model.CodeUnverifiedRefused, refusal.Code)
+
+	// The device syncs: the re-sent assignment is byte-identical to the first.
+	agent, err := updater.OpenConfigAgent(updater.ConfigAgentConfig{Transport: link})
+	require.NoError(t, err)
+	require.NoError(t, agent.Sync(context.Background()))
+	require.Eventually(t, func() bool { link.mu.Lock(); defer link.mu.Unlock(); return len(link.assignments) >= 2 },
+		10*time.Second, 10*time.Millisecond)
+	link.mu.Lock()
+	require.Equal(t, string(link.assignments[0]), string(link.assignments[1]))
+	link.mu.Unlock()
+
+	f.run(client, func() bool { return f.attemptState("acme", view.Assignment.Token) == ota.StateUpdated })
+	require.Equal(t, "2.0.0", client.Updater().Snapshot().RunningVersion)
 }

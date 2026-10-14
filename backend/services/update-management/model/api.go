@@ -12,6 +12,7 @@ import (
 	"hash/fnv"
 	"regexp"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/auth"
@@ -92,6 +93,11 @@ type Limits struct {
 
 // Api is the artifact catalogue's persistence and verification surface.
 type Api struct {
+	// Undelivered counts assignments the platform declined to send because it could not stand
+	// behind their trust (a pin it cannot read, or an unsigned assignment while the instance
+	// refuses unverified artifacts). Each one is also logged.
+	Undelivered atomic.Int64
+
 	RDB    *rdb.RdbManager
 	Blobs  blob.Store
 	Limits Limits

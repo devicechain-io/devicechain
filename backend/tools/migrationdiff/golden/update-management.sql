@@ -176,7 +176,8 @@ CREATE TABLE "update-management".update_assignments (
  component character varying(64) NOT NULL,
  artifact_id bigint NOT NULL,
  actor character varying(256),
- superseded_at timestamp with time zone
+ superseded_at timestamp with time zone,
+ signature_id bigint
 );
 CREATE TABLE "update-management".update_attempts (
  id bigint NOT NULL,

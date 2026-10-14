@@ -319,6 +319,22 @@ type UpdateAssignment {
     current: Boolean!
     """The attempt that carries the assignment out."""
     attempt: UpdateAttempt!
+    """The signer whose signature the assignment is pinned to, and so the one the device is told to verify against. Null when the assignment pins no signature (it was made under updates.allowUnverifiedArtifacts with no active signer). The pin does not move when the signer is later revoked: an update already in flight keeps the signature it was assigned under."""
+    signedBy: AssignmentSigner
+}
+
+"""The signer an update assignment is pinned to."""
+type AssignmentSigner {
+    """The signer's token."""
+    token: String!
+    """The signer's label."""
+    name: String!
+    """The key's identity: the lowercase hex SHA-256 of its SubjectPublicKeyInfo DER."""
+    keyId: String!
+    """The key's algorithm."""
+    algorithm: SignerAlgorithm!
+    """The signer's state now. A REVOKED signer still vouches for the assignments already pinned to it."""
+    state: SignerState!
 }
 
 """Criteria for searching update assignments. Every filter is optional."""
