@@ -238,6 +238,7 @@ The per-device `code` uses the same open vocabulary as a single enqueue rejectio
 - `COMMAND_NOT_IN_VOCABULARY`
 - `PAYLOAD_SCHEMA_VIOLATION`, relayed from the device's profile
 - `HELD_CEILING_EXCEEDED`, for the devices that did not fit under the tenant's remaining headroom
+- `WINDOW_AFTER_EXPIRY`, for devices whose type's [maintenance window](./maintenance-windows.md#window-after-expiry) next opens after the command expires
 
 See [When an enqueue is refused](./sending-commands.md#when-an-enqueue-is-refused) for what each one
 means.

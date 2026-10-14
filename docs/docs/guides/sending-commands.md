@@ -99,6 +99,7 @@ change.
 | `code` | Meaning | Retry? |
 |---|---|---|
 | `HELD_CEILING_EXCEEDED` | The tenant is at its limit of **undelivered** commands — everything still `QUEUED`, `HELD` or `PARKED`, not only what is held for absent devices. | **Yes** — it clears as those commands go out |
+| `WINDOW_AFTER_EXPIRY` | The command is disruptive and its device type's [maintenance window](./maintenance-windows.md#window-after-expiry) next opens after `expiresAt`, so it could only expire. | No — lengthen the TTL or change the window |
 | `DEVICE_NOT_FOUND` | No device with that token in this tenant. | No |
 | `DEVICE_DISABLED` | The device is [disabled](./device-credentials.md#disabling-a-device). The command is not kept for later. | No — enable the device first |
 | `COMMAND_NOT_IN_VOCABULARY` | The profile constrains commands and this key is not one. Check the casing. | No |

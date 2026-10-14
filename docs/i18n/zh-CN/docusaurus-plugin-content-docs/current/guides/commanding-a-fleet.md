@@ -180,6 +180,7 @@ resolved = accepted + the sum of refusalCounts
 - `COMMAND_NOT_IN_VOCABULARY`
 - `PAYLOAD_SCHEMA_VIOLATION`，从设备配置档转达
 - `HELD_CEILING_EXCEEDED`，表示设备超出租户剩余容量
+- `WINDOW_AFTER_EXPIRY`，表示设备类型的[维护窗口](./maintenance-windows.md#window-after-expiry)在命令过期之后才开启
 
 各代码的含义参见[入队被拒绝时](./sending-commands.md#when-an-enqueue-is-refused)。
 

@@ -71,6 +71,7 @@ mutation {
 | `code` | 含义 | 是否重试？ |
 |---|---|---|
 | `HELD_CEILING_EXCEEDED` | 租户达到**未投递**命令上限：全部 `QUEUED`、`HELD`、`PARKED`，不只离线设备保留命令。 | **是**，这些命令投递后会解除 |
+| `WINDOW_AFTER_EXPIRY` | 命令具有破坏性，其设备类型的[维护窗口](./maintenance-windows.md#window-after-expiry)在 `expiresAt` 之后才开启，因此只会过期。 | 否：延长 TTL 或修改窗口 |
 | `DEVICE_NOT_FOUND` | 此租户没有该令牌设备。 | 否 |
 | `DEVICE_DISABLED` | 设备已[停用](./device-credentials.md#disabling-a-device)。命令不会保留到以后。 | 否 — 先启用设备 |
 | `COMMAND_NOT_IN_VOCABULARY` | 配置文件限制命令，而此键不在集合中。检查大小写。 | 否 |

@@ -48,8 +48,10 @@ An issued command is persisted and tracked through a set of states.
 
 These states mean the command is not finished yet:
 
-- **`QUEUED`** — accepted and validated, awaiting its first dispatch decision. It is genuinely
-  transient: a command does not linger here.
+- **`QUEUED`** — accepted and validated, awaiting its first dispatch decision. It is normally
+  transient: a command does not linger here. The exception is a disruptive command waiting for a
+  [maintenance window](#maintenance-windows): it stays `QUEUED`, with `dispatchAfter` set to the
+  next opening, until the window opens.
 - **`HELD`** — the platform is deliberately withholding the command because the device is known
   to be away. This is where an offline fleet's backlog collects, and it can sit for days. A held
   command counts as in flight: you can still cancel it, and a TTL that lapses on it records
@@ -322,6 +324,106 @@ together: the .NET SDK's `MaxConcurrentCommands` setting, for example, gives up 
 between commands unless they share a lane. A sequence whose order is its meaning, such as writing a
 firmware image and then executing it, has to be grouped on the device, because the platform cannot
 make a device that runs two commands at once run them one after the other.
+
+## Maintenance windows {#maintenance-windows}
+
+Some commands interrupt a device (a reboot) or erase its state. A **maintenance window** is a
+recurring weekly schedule that says when such a command may *start*. A command that arrives
+while the window is closed is accepted and waits for the next opening.
+
+### Impact and windows {#maintenance-window-model}
+
+Each command definition has an `impact`: `NORMAL` (the default: a read or a benign write),
+`DISRUPTIVE` (interrupts the device, such as a reboot) or `DESTRUCTIVE` (erases state). Only
+`DISRUPTIVE` and `DESTRUCTIVE` commands are held for a window; `NORMAL` commands never are. Impact is
+part of the profile's published vocabulary, so it travels with a published version, and a
+definition published before the field existed reads as `NORMAL`. The
+[LwM2M](./lwm2m.md#named-operations-and-device-information) `lwm2m.reboot` command is created
+`DISRUPTIVE`; definitions you have already declared are not changed.
+
+A **maintenance window** is a tenant resource: a token, a name, an IANA time zone such as
+`Europe/Berlin` (`Local` and unknown names are refused) and 1 to 56 weekly slots. Each slot is a day
+(`MONDAY` to `SUNDAY`), a `start` as a 24-hour wall-clock `HH:MM` in the zone, and a
+`durationMinutes` from 1 to 10080. A slot can run past midnight and past the end of the week.
+
+```json
+[
+  { "day": "SATURDAY", "start": "22:00", "durationMinutes": 240 },
+  { "day": "SUNDAY",   "start": "02:00", "durationMinutes": 120 }
+]
+```
+
+A window is assigned to a **device type**, at most one per type. That is the whole v1 scope: there is
+no group, per-device or tenant-default window, no blackout windows or holidays, and no per-window
+concurrency limit.
+
+### The hold lives on the command {#maintenance-window-hold}
+
+When a `DISRUPTIVE` or `DESTRUCTIVE` command is enqueued to a device whose type has a window, and
+the window is closed, the command is accepted and **waits**. It stays `QUEUED`, with
+`dispatchAfter` set to the next opening and `maintenanceWindowToken` naming the window. No new
+status was added. If the window is open, the command is sent as usual. This applies to a single
+command, a batch, and the send-command action of a detection rule alike.
+
+The hold is a field on the command row, and the **claim** checks it: a command cannot be claimed for
+delivery before its `dispatchAfter`. That is deliberate. Every delivery path ends in a claim, so the
+rule is written once and none of them can bypass it: the periodic delivery sweep, the LwM2M wake
+drain (a sleeping device that wakes) and the live confirmation all honour it. A gate placed in
+front of each path would need every present and future path to remember it.
+
+The window gates the **start** only. A command already claimed inside the window finishes whenever
+it finishes. A waiting command counts against the tenant's
+[undelivered-command ceiling](#held-command-ceiling) and can be cancelled, including as a whole
+batch, like any queued command. A batch record reports `waiting`: how many admitted members were held
+for a window when it fired. It is a stored fact, and `null` for older batches.
+
+### Refused rather than doomed {#window-after-expiry}
+
+If the next opening is *after* the command's `expiresAt` (the default expiry is seven days), the
+enqueue is refused with the stable code `WINDOW_AFTER_EXPIRY`, instead of accepting a command that
+could only expire. In a batch it is a per-device refusal like any other: the whole batch is refused
+unless `allowPartial` is set.
+
+### Why weekly slots and a time zone, not cron {#maintenance-window-recurrence}
+
+Operators describe maintenance as "Saturday night, four hours", not as an expression. Weekly slots
+in a named zone say that directly, can be validated completely when saved, and can be shown back as
+a calendar. Cron would admit schedules (every 7 minutes, the 31st of the month) that are not
+maintenance windows and are hard to explain when a command is still waiting.
+
+Daylight saving follows two rules. A start time that does not exist (the spring-forward gap) opens at
+the moment the clock jumps. A start time that occurs twice (the fall-back overlap) opens at the
+first occurrence. Duration is **elapsed** time, so a four-hour window is four real hours on a
+daylight-saving change day.
+
+### Editing and deleting a window {#maintenance-window-editing}
+
+Commands already waiting on a window follow its new schedule within about a minute. A leader-locked
+pass in command delivery polls the window's owner for the current schedule. It is a poll, not an
+event, so the bound is about 60 seconds, and it still converges when a notification would have been
+lost. The counter `command_delivery_window_restamps_total` counts commands whose hold was moved
+because the window was edited or deleted, or closed again before the device returned.
+
+- Deleting a window is refused while any device type uses it. If a window is gone anyway, waiting
+  commands are released and dispatch normally.
+- If a device is offline through a whole opening, its undelivered command is rolled to the next
+  opening by the same pass, rather than being sent whenever the device returns outside the window.
+  There is a bounded lag of about a minute after a window closes during which an undelivered command
+  can still be claimed.
+- Unassigning a window from a device type does not release commands already stamped from it; they
+  keep waiting for that window.
+
+### What is not gated {#maintenance-window-limits}
+
+- A raw `lwm2m.execute`, or any command whose key is not declared `DISRUPTIVE` or `DESTRUCTIVE` in
+  the published vocabulary, is not gated. That includes a profile that declares no vocabulary.
+- Over-the-air update gating is not built. The same window resolver is exposed so a later update
+  feature can use it.
+- If device management is unreachable at enqueue time, the command is **refused**: the gate fails
+  closed and never sends a command ungated. If command delivery has no device-management endpoint
+  configured, the gate is off and a startup warning says so.
+
+To set one up, see [Maintenance windows](../guides/maintenance-windows.md).
 
 ## One command, many devices {#command-batches}
 
