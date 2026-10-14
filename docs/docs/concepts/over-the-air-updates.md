@@ -99,6 +99,16 @@ afterwards, an update already in flight keeps the signature it was assigned unde
 the assignment is identical, while a *new* assignment of that artifact is refused. If the platform ever
 cannot read the pinned signature, it sends nothing rather than sending the assignment as `UNVERIFIED`.
 
+Two things follow for operators:
+
+- **A device must hold the key of every signer that could be pinned.** The oldest signature by an
+  active signer wins, so which signer a device is told to verify against depends on who has signed the
+  artifact. Put a new signer's key on your devices **before** you revoke the old one, and before the old
+  signer's signatures stop being the oldest active ones.
+- **Turning `allowUnverifiedArtifacts` off stops unsigned assignments from being sent**, including a
+  re-send when a device syncs. A device keeps whatever it already had; assign a signed artifact to move
+  it forward.
+
 `cancelUpdate` cancels a queued update at once. Before installation starts it records the request,
 and the update becomes `CANCELLED` when the device confirms it has dropped the work. Once the device
 has begun installing, cancelling is refused: an installation cannot be recalled.

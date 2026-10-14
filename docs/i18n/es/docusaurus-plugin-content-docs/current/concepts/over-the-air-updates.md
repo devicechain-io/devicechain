@@ -102,6 +102,16 @@ actualización ya en curso conserva la firma con la que se asignó y cada reenv�
 mientras que una asignación *nueva* de ese artefacto se rechaza. Si la plataforma no puede leer la firma
 fijada, no envía nada en lugar de enviar la asignación como `UNVERIFIED`.
 
+De esto se derivan dos cosas para los operadores:
+
+- **Un dispositivo debe tener la clave de todos los firmantes que podrían fijarse.** Gana la firma más
+  antigua de un firmante activo, así que el firmante contra el que se le indica verificar depende de quién
+  haya firmado el artefacto. Instala la clave de un firmante nuevo en tus dispositivos **antes** de revocar
+  el anterior, y antes de que las firmas del anterior dejen de ser las más antiguas entre las activas.
+- **Desactivar `allowUnverifiedArtifacts` impide que se envíen las asignaciones sin firmar**, también el
+  reenvío cuando un dispositivo se sincroniza. El dispositivo conserva lo que ya tenía; asigna un artefacto
+  firmado para hacerlo avanzar.
+
 `cancelUpdate` cancela al instante una actualización en cola. Antes de que empiece la instalación
 registra la petición, y la actualización pasa a `CANCELLED` cuando el dispositivo confirma que ha
 abandonado el trabajo. Una vez que el dispositivo ha empezado a instalar, la cancelación se
