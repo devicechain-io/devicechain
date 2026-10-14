@@ -257,14 +257,15 @@ layout: {
 ```
 
 Cada valor es un número entero positivo, y `minSpan` no puede superar a `defaultSpan`, que a su vez no
-puede superar a `maxSpan`. Un modo `resize` distinto de `both` fija el otro eje: con `'horizontal'`, las
-filas de `minSpan`, `defaultSpan` y `maxSpan` deben ser iguales, y lo mismo con `'vertical'` (columnas) y
-`'none'` (ambos). El registro rechaza un bloque que incumpla estas reglas cuando el anfitrión lo construye.
+puede superar a `maxSpan`. Un modo `resize` distinto de `both` mantiene el otro eje en `defaultSpan`:
+`'horizontal'` fija las filas, `'vertical'` las columnas y `'none'` ambos. Un `minSpan` o `maxSpan` que
+declares debe coincidir con `defaultSpan` en un eje fijo. El registro rechaza un bloque que incumpla estas
+reglas cuando el anfitrión lo construye.
 
-El editor detiene el redimensionamiento en estos límites, y la comprobación de diseño informa como error
-de un panel guardado que coloque el widget fuera de ellos. Elige un `minSpan` que sea la caja más pequeña
-en la que tu widget siga siendo legible. Un widget sin bloque `layout` se añade con 4 x 2 celdas y sin
-límites, y la comprobación de diseño indica que no declaró ninguno. Los tamaños de celda están ligados a la
+El editor añade un widget nuevo con `defaultSpan`. `lintLayout`, de `@devicechain/dashboards`, informa
+como error de un panel que coloque el widget fuera de sus límites. Elige un `minSpan` que sea la caja más
+pequeña en la que tu widget siga siendo legible. Un widget sin bloque `layout` se añade con 4 x 2 celdas y
+sin límites, y `lintLayout` indica que no declaró ninguno. Los tamaños de celda están ligados a la
 cuadrícula actual y podrían recalibrarse en una versión posterior.
 
 ## Interacciones y modelo de confianza {#interactions-and-the-trust-model}

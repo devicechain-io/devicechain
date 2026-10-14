@@ -136,6 +136,34 @@ describe('lintLayout on a deliberately broken board', () => {
     expect(capped.find((f) => f.widgetId === 'fine')?.message).toContain('above the 6x6 maximum');
   });
 
+  it('holds an axis a resize mode pins at the default span, with no maxSpan declared', () => {
+    // 'fine' is 8x3. Pinning rows at 2 makes it too tall; the free column axis stays open.
+    const lintAs = (layout: Parameters<typeof spanLimitsOfLayout>[0]) =>
+      lintLayout(broken(), { columns: 24, spanLimitsOf: () => spanLimitsOfLayout(layout) }).filter(
+        (f) => f.widgetId === 'fine' && f.code === 'span-out-of-limits',
+      );
+    expect(lintAs({ defaultSpan: { cols: 4, rows: 2 }, resize: 'horizontal' })).toMatchObject([
+      { message: '8x3 is above the 2-row maximum' },
+    ]);
+    expect(lintAs({ defaultSpan: { cols: 4, rows: 3 }, resize: 'horizontal' })).toEqual([]);
+    expect(lintAs({ defaultSpan: { cols: 4, rows: 3 }, resize: 'vertical' })).toMatchObject([
+      { message: '8x3 is above the 4-column maximum' },
+    ]);
+    expect(lintAs({ defaultSpan: { cols: 4, rows: 3 } })).toEqual([]);
+  });
+
+  it('derives limits from a layout block: bounds as declared, pinned axes at the default', () => {
+    expect(spanLimitsOfLayout(undefined)).toBeUndefined();
+    expect(spanLimitsOfLayout({ defaultSpan: { cols: 4, rows: 2 } })).toEqual({});
+    expect(
+      spanLimitsOfLayout({ defaultSpan: { cols: 4, rows: 2 }, minSpan: { cols: 2, rows: 2 }, resize: 'horizontal' }),
+    ).toEqual({ minSpan: { cols: 2, rows: 2 }, maxSpan: { rows: 2 } });
+    expect(spanLimitsOfLayout({ defaultSpan: { cols: 4, rows: 2 }, resize: 'none' })).toEqual({
+      minSpan: { cols: 4, rows: 2 },
+      maxSpan: { cols: 4, rows: 2 },
+    });
+  });
+
   it('is silent about a well-formed widget', () => {
     expect(codes('fine')).toEqual([]);
   });

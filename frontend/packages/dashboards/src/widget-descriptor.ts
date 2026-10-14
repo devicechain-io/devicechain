@@ -163,8 +163,8 @@ export interface WidgetSpan {
 // Which axes a viewer-author may resize. 'both' is the default.
 export type WidgetResizeMode = 'both' | 'horizontal' | 'vertical' | 'none';
 
-// How big a widget is allowed to be, declared by the widget and enforced by the editor and
-// the layout lint. Plain JSON, validated when the catalog is built.
+// How big a widget is allowed to be, declared by the widget and checked by the layout lint.
+// Plain JSON, validated when the catalog is built.
 //
 // 🔴 Spans are counted in cells of TODAY's 24-column grid (rows are 40 px). A later change
 // to square, constant-size cells re-calibrates every number a widget declares here; the
@@ -176,9 +176,24 @@ export interface WidgetLayoutSpec {
   minSpan?: WidgetSpan;
   // The resize ceiling. Absent means none.
   maxSpan?: WidgetSpan;
-  // Absent means 'both'. A restricted axis must be pinned: minSpan, defaultSpan and maxSpan
-  // agree on it ('horizontal' pins rows, 'vertical' pins columns, 'none' pins both).
+  // Absent means 'both'. A restricted mode PINS the other axis at defaultSpan: 'horizontal'
+  // pins rows, 'vertical' pins columns, 'none' pins both. A minSpan or maxSpan, if declared,
+  // must agree with defaultSpan on a pinned axis; neither is needed to pin it.
   resize?: WidgetResizeMode;
+}
+
+// The axes a resize mode holds at defaultSpan.
+export function pinnedAxes(mode: WidgetResizeMode | undefined): readonly ('cols' | 'rows')[] {
+  switch (mode) {
+    case 'horizontal':
+      return ['rows'];
+    case 'vertical':
+      return ['cols'];
+    case 'none':
+      return ['cols', 'rows'];
+    default:
+      return [];
+  }
 }
 
 // Third-party widgets that declare no `layout` are added at this size, with no limits.

@@ -220,7 +220,7 @@ export const sized = defineWidgetDescriptor({
   options: OPTIONS,
   defaults: {},
   interactions: {},
-  layout: { defaultSpan: { cols: 8, rows: 4 }, minSpan: { cols: 4, rows: 2 }, resize: 'horizontal' },
+  layout: { defaultSpan: { cols: 8, rows: 2 }, minSpan: { cols: 4, rows: 2 }, resize: 'horizontal' },
 });
 
 // `layout` stays optional: the examples above compile without it.

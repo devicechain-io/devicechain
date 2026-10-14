@@ -15,7 +15,7 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { WIDGET_TYPES, addWidget, baseBox, type WidgetType } from '@devicechain/dashboards';
+import { WIDGET_TYPES, addWidget, baseBox, spanLimitsOfLayout, type WidgetType } from '@devicechain/dashboards';
 import { createWidgetRegistry } from '@devicechain/widget-sdk';
 import { describe, expect, it } from 'vitest';
 
@@ -232,14 +232,15 @@ describe('the built-in size contract', () => {
     }
   });
 
-  it('keeps each default inside its own limits, and declares a ceiling', () => {
+  it('keeps each default inside its own limits, as the lint reads them', () => {
+    // A freshly added widget must never lint as out of limits.
     for (const type of WIDGET_TYPES) {
-      const { defaultSpan, minSpan, maxSpan } = registry.descriptor(type)!.layout!;
-      expect(defaultSpan.cols, type).toBeGreaterThanOrEqual(minSpan?.cols ?? 1);
-      expect(defaultSpan.rows, type).toBeGreaterThanOrEqual(minSpan?.rows ?? 1);
-      expect(maxSpan, `${type} declares no ceiling`).toBeDefined();
-      expect(defaultSpan.cols, type).toBeLessThanOrEqual(maxSpan!.cols);
-      expect(defaultSpan.rows, type).toBeLessThanOrEqual(maxSpan!.rows);
+      const { defaultSpan } = registry.descriptor(type)!.layout!;
+      const { minSpan = {}, maxSpan = {} } = spanLimitsOfLayout(registry.descriptor(type)!.layout)!;
+      expect(defaultSpan.cols, type).toBeGreaterThanOrEqual(minSpan.cols ?? 1);
+      expect(defaultSpan.rows, type).toBeGreaterThanOrEqual(minSpan.rows ?? 1);
+      expect(defaultSpan.cols, type).toBeLessThanOrEqual(maxSpan.cols ?? Infinity);
+      expect(defaultSpan.rows, type).toBeLessThanOrEqual(maxSpan.rows ?? Infinity);
     }
   });
 

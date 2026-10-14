@@ -245,15 +245,16 @@ layout: {
 ```
 
 Every value is a positive whole number, and `minSpan` must not exceed `defaultSpan`, which must not
-exceed `maxSpan`. A `resize` mode other than `both` fixes the other axis: with `'horizontal'`, the rows of
-`minSpan`, `defaultSpan` and `maxSpan` must all be equal, and so on for `'vertical'` (columns) and `'none'`
-(both). The registry rejects a block that breaks these rules when the host builds it.
+exceed `maxSpan`. A `resize` mode other than `both` holds the other axis at `defaultSpan`: `'horizontal'`
+fixes the rows, `'vertical'` the columns and `'none'` both. A `minSpan` or `maxSpan` you declare must agree
+with `defaultSpan` on a fixed axis. The registry rejects a block that breaks these rules when the host
+builds it.
 
-The editor stops a resize at these limits, and the layout check reports a saved dashboard that places the
-widget outside them as an error. Choose a `minSpan` that is the smallest box in which your widget is still
-readable. A widget without a `layout` block is added at 4 x 2 cells with no limits, and the layout check
-reports that it declared none. Cell sizes are tied to the current grid and may be recalibrated in a later
-release.
+The editor adds a new widget at `defaultSpan`. `lintLayout` in `@devicechain/dashboards` reports a
+dashboard that places the widget outside its limits as an error. Choose a `minSpan` that is the smallest
+box in which your widget is still readable. A widget without a `layout` block is added at 4 x 2 cells
+with no limits, and `lintLayout` reports that it declared none. Cell sizes are tied to the current grid
+and may be recalibrated in a later release.
 
 ## Interactions and the trust model
 

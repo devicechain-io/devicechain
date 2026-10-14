@@ -367,8 +367,12 @@ describe('the layout block', () => {
   it('pins the restricted axis: horizontal pins rows, vertical pins cols, none pins both', () => {
     const rowsPinned = { defaultSpan: { cols: 8, rows: 2 }, minSpan: { cols: 4, rows: 2 }, maxSpan: { cols: 24, rows: 2 } };
     expect(issuesFor({ ...rowsPinned, resize: 'horizontal' })).toEqual([]);
-    expect(issuesFor({ ...rowsPinned, resize: 'vertical' }).map((i) => i.path)).toEqual(['layout.resize']);
-    expect(issuesFor({ ...GOOD, resize: 'horizontal' }).map((i) => i.path)).toEqual(['layout.resize']);
+    // Each contradicting bound is its own issue: here both minSpan and maxSpan disagree.
+    expect(issuesFor({ ...rowsPinned, resize: 'vertical' }).map((i) => i.path)).toEqual(['layout.resize', 'layout.resize']);
+    expect(issuesFor({ ...GOOD, resize: 'horizontal' }).map((i) => i.message)).toEqual([
+      'resize "horizontal" pins rows at 4, but minSpan.rows is 2',
+      'resize "horizontal" pins rows at 4, but maxSpan.rows is 12',
+    ]);
     expect(issuesFor({ ...rowsPinned, minSpan: { cols: 4, rows: 1 }, resize: 'horizontal' }).map((i) => i.path)).toEqual([
       'layout.resize',
     ]);
@@ -376,10 +380,13 @@ describe('the layout block', () => {
     expect(issuesFor({ ...colsPinned, resize: 'vertical' })).toEqual([]);
     const fixed = { defaultSpan: { cols: 6, rows: 3 }, minSpan: { cols: 6, rows: 3 }, maxSpan: { cols: 6, rows: 3 } };
     expect(issuesFor({ ...fixed, resize: 'none' })).toEqual([]);
-    expect(issuesFor({ ...colsPinned, resize: 'none' }).map((i) => i.path)).toEqual(['layout.resize']);
+    expect(issuesFor({ ...colsPinned, resize: 'none' }).map((i) => i.path)).toEqual(['layout.resize', 'layout.resize']);
   });
 
-  it('asks for a maxSpan when a mode pins an axis and none is declared', () => {
-    expect(issuesFor({ defaultSpan: { cols: 8, rows: 1 }, resize: 'horizontal' }).map((i) => i.path)).toEqual(['layout.maxSpan']);
+  it('pins an axis without a minSpan or maxSpan: the mode itself holds it at the default', () => {
+    // No bound is needed on the pinned axis, and none is forced on the free one.
+    expect(issuesFor({ defaultSpan: { cols: 8, rows: 1 }, resize: 'horizontal' })).toEqual([]);
+    expect(issuesFor({ defaultSpan: { cols: 8, rows: 2 }, minSpan: { cols: 4, rows: 2 }, resize: 'horizontal' })).toEqual([]);
+    expect(issuesFor({ defaultSpan: { cols: 3, rows: 3 }, resize: 'none' })).toEqual([]);
   });
 });

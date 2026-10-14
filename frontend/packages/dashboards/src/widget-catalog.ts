@@ -12,7 +12,9 @@ import {
   SDK_API_VERSION,
   isBuiltinWidgetId,
   isNamespacedWidgetId,
+  pinnedAxes,
   type WidgetChannel,
+  type WidgetResizeMode,
   type WidgetDescriptor,
 } from './widget-descriptor';
 
@@ -447,17 +449,14 @@ function checkLayout(layout: unknown, add: Add): void {
     if (!def && min && max && min[axis] > max[axis]) add('layout.maxSpan', `maxSpan.${axis} is below minSpan.${axis}`);
   }
 
-  // A restricted axis is pinned: the viewer cannot move it, so the three agree on it.
-  const pinned: ('cols' | 'rows')[] = mode === 'horizontal' ? ['rows'] : mode === 'vertical' ? ['cols'] : mode === 'none' ? ['cols', 'rows'] : [];
-  for (const axis of pinned) {
-    if (!def) break;
-    if (!max) {
-      add('layout.maxSpan', `resize "${mode}" pins ${axis}: declare a maxSpan whose ${axis} equals defaultSpan.${axis}`);
-    } else if (floor[axis] !== def[axis] || max[axis] !== def[axis]) {
-      add(
-        'layout.resize',
-        `resize "${mode}" pins ${axis}, so minSpan, defaultSpan and maxSpan must all have ${axis} ${def[axis]} (got ${floor[axis]}, ${def[axis]}, ${max[axis]})`,
-      );
+  // A restricted mode pins an axis at defaultSpan, so a declared bound must not contradict it.
+  // The free axis stays as open as the bounds leave it: no maxSpan means no ceiling there.
+  if (!def) return;
+  for (const axis of pinnedAxes(mode as WidgetResizeMode)) {
+    for (const [name, bound] of [['minSpan', min], ['maxSpan', max]] as const) {
+      if (bound && bound[axis] !== def[axis]) {
+        add('layout.resize', `resize "${mode}" pins ${axis} at ${def[axis]}, but ${name}.${axis} is ${bound[axis]}`);
+      }
     }
   }
 }

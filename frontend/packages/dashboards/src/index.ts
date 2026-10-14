@@ -305,6 +305,5 @@ export {
   type LayoutLintOptions,
   type LayoutLintSeverity,
   type PixelSize,
-  type Span,
   type SpanLimits,
 } from './layout-lint';

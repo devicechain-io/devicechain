@@ -15,7 +15,7 @@
 import { activeBreakpoint, resolveWidgetBox } from './definition';
 import { widgetBinding } from './slots';
 import type { DashboardDefinition, WidgetInstance } from './types';
-import type { WidgetLayoutSpec } from './widget-descriptor';
+import { pinnedAxes, type WidgetLayoutSpec, type WidgetSpan } from './widget-descriptor';
 
 export type LayoutLintSeverity = 'error' | 'warning' | 'info';
 
@@ -40,16 +40,11 @@ export interface LayoutFinding {
   width?: number;
 }
 
-export interface Span {
-  cols: number;
-  rows: number;
-}
-
-// What a widget type allows. Either bound may be absent: a widget that declares neither can
-// be any size.
+// What a widget type allows, per axis. Any bound may be absent, on either axis: a widget that
+// declares none can be any size, and one that pins only its rows has no column ceiling.
 export interface SpanLimits {
-  minSpan?: Span;
-  maxSpan?: Span;
+  minSpan?: Partial<WidgetSpan>;
+  maxSpan?: Partial<WidgetSpan>;
 }
 
 export interface PixelSize {
@@ -71,14 +66,21 @@ export interface LayoutLintOptions {
   };
 }
 
-// The limits a descriptor's `layout` block declares, in the shape lintLayout takes. A
-// descriptor with no block yields undefined (reported as `no-layout-declared`), so a host
-// wires `spanLimitsOf: (w) => spanLimitsOfLayout(registry.descriptor(w.type)?.layout)`.
+// The limits a descriptor's `layout` block declares, in the shape lintLayout takes: its
+// minSpan and maxSpan, with an axis its resize mode pins held at defaultSpan. A descriptor with
+// no block yields undefined (reported as `no-layout-declared`), so a host wires
+// `spanLimitsOf: (w) => spanLimitsOfLayout(registry.descriptor(w.type)?.layout)`.
 export function spanLimitsOfLayout(layout: WidgetLayoutSpec | undefined): SpanLimits | undefined {
   if (!layout) return undefined;
+  const min: Partial<WidgetSpan> = { ...layout.minSpan };
+  const max: Partial<WidgetSpan> = { ...layout.maxSpan };
+  for (const axis of pinnedAxes(layout.resize)) {
+    min[axis] = layout.defaultSpan[axis];
+    max[axis] = layout.defaultSpan[axis];
+  }
   const limits: SpanLimits = {};
-  if (layout.minSpan) limits.minSpan = layout.minSpan;
-  if (layout.maxSpan) limits.maxSpan = layout.maxSpan;
+  if (Object.keys(min).length > 0) limits.minSpan = min;
+  if (Object.keys(max).length > 0) limits.maxSpan = max;
   return limits;
 }
 
@@ -166,12 +168,14 @@ export function lintLayout(def: DashboardDefinition, options: LayoutLintOptions)
 }
 
 function spanProblem(cols: number, rows: number, limits: SpanLimits): string | undefined {
-  const { minSpan, maxSpan } = limits;
-  if (minSpan && (cols < minSpan.cols || rows < minSpan.rows)) {
-    return `is below the ${minSpan.cols}x${minSpan.rows} minimum`;
+  const { minSpan = {}, maxSpan = {} } = limits;
+  const bound = (b: Partial<WidgetSpan>) =>
+    b.cols === undefined ? `${b.rows}-row` : b.rows === undefined ? `${b.cols}-column` : `${b.cols}x${b.rows}`;
+  if (cols < (minSpan.cols ?? 1) || rows < (minSpan.rows ?? 1)) {
+    return `is below the ${bound(minSpan)} minimum`;
   }
-  if (maxSpan && (cols > maxSpan.cols || rows > maxSpan.rows)) {
-    return `is above the ${maxSpan.cols}x${maxSpan.rows} maximum`;
+  if (cols > (maxSpan.cols ?? Infinity) || rows > (maxSpan.rows ?? Infinity)) {
+    return `is above the ${bound(maxSpan)} maximum`;
   }
   return undefined;
 }
