@@ -3,7 +3,7 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { parseDashboardDefinition, serializeDefinition } from './definition';
+import { DashboardDefinitionError, parseDashboardDefinition, serializeDefinition } from './definition';
 import {
   copyWidget,
   duplicateWidget,
@@ -14,7 +14,7 @@ import {
 } from './editor-clipboard';
 import { basePlacement } from './editor-model';
 import { effectiveBindings, resolveWidgetDatasource } from './bindings';
-import type { DashboardDefinition, GridPlacement, ResolvedWidgetInstance, WidgetInstance } from './types';
+import { CURRENT_SCHEMA_VERSION, type DashboardDefinition, type GridPlacement, type ResolvedWidgetInstance, type WidgetInstance } from './types';
 
 const at = (col: number, row: number, cols = 3, rows = 3): GridPlacement => ({ mode: 'grid', col, row, cols, rows });
 
@@ -210,6 +210,27 @@ describe('copy and paste', () => {
         JSON.stringify({ format: WIDGET_CLIPBOARD_FORMAT, version: 1, tenant: 't', board: 'x', definition: { widgets: 'no' } }),
       ),
     ).toBeUndefined();
+  });
+
+  // A copy made by a newer release is refused the way a load of that board is: by the parser's
+  // 'schemaTooNew' error, never read as this format (which would paste it drawn wrong) and never
+  // passed off as "not a clipboard".
+  it('refuses a copy from a newer release with schemaTooNew, not converting it down', () => {
+    const env = JSON.parse(serializeWidgetClipboard(copyWidget(source(), 'a', on('board-1'))!)) as Record<string, unknown>;
+    const definition = env.definition as Record<string, unknown>;
+    expect(definition.schemaVersion).toBe(CURRENT_SCHEMA_VERSION);
+    const newer = JSON.stringify({ ...env, definition: { ...definition, schemaVersion: CURRENT_SCHEMA_VERSION + 1 } });
+    let thrown: unknown;
+    try {
+      parseWidgetClipboard(newer);
+    } catch (e) {
+      thrown = e;
+    }
+    expect(thrown).toBeInstanceOf(DashboardDefinitionError);
+    expect((thrown as DashboardDefinitionError).code).toBe('schemaTooNew');
+    expect((thrown as DashboardDefinitionError).found).toBe(CURRENT_SCHEMA_VERSION + 1);
+    // The counterweight: the same copy at this build's version still pastes.
+    expect(parseWidgetClipboard(JSON.stringify(env))?.clipboard.widgets).toHaveLength(1);
   });
 
   it('will not paste a copy that does not say which tenant it came from', () => {

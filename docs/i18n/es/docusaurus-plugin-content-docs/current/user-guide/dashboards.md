@@ -252,7 +252,9 @@ tamaño, configuración y origen de datos en el primer hueco libre en el que cab
 cabecera del editor, añade el último widget copiado en esta pestaña del navegador al panel que
 editas, en el primer hueco libre, así que puedes copiar en un panel y pegar en otro. **Ctrl+V**
 (**Cmd+V**) pega desde el portapapeles, que también llega a un panel abierto en otra pestaña. Un
-tipo de widget que esta consola no tiene no se pega, y la consola lo nombra.
+tipo de widget que esta consola no tiene no se pega, y la consola lo nombra. Tampoco se pega un
+widget copiado en una versión más reciente de DeviceChain: la consola lo indica; actualízala para
+pegarlo.
 
 En el mismo panel, una copia conserva su origen de datos. En otro panel solo lo conserva si ese
 panel tiene un slot con el mismo nombre vinculado al mismo dispositivo o entidad: los slots se

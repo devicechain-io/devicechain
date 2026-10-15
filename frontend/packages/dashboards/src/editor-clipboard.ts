@@ -142,6 +142,11 @@ export function serializeWidgetClipboard(clip: WidgetClipboard): string {
 // another version, or whose definition does not parse, is undefined: the caller leaves the paste
 // alone, and so is text with no tenant stamp: a paste must know where a copy came from. A widget
 // the registry cannot resolve is refused and named.
+//
+// 🔴 One exception to "undefined": a copy made by a NEWER release (its definition's schemaVersion
+// above this build's) THROWS the parser's DashboardDefinitionError, code 'schemaTooNew', exactly as
+// a load of that board would. It is a widget clipboard, so "nothing to paste" would be a lie, and
+// reading it as the current format would paste it drawn wrong; the caller says why it refused.
 export function parseWidgetClipboard(
   text: string,
   options: ParseDefinitionOptions = {},
@@ -159,7 +164,9 @@ export function parseWidgetClipboard(
   let parsed: DashboardDefinition;
   try {
     parsed = parseDashboardDefinition(definition, options);
-  } catch {
+  } catch (err) {
+    // By `code`, not instanceof: it holds across two bundled copies of this package.
+    if ((err as { code?: unknown } | null)?.code === 'schemaTooNew') throw err;
     return undefined;
   }
   const widgets: ResolvedWidgetInstance[] = [];

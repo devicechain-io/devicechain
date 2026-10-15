@@ -261,7 +261,9 @@ settings and data source in the first free space it fits.
 header, adds the widget last copied in this browser tab to the dashboard you are editing, in the
 first free space, so you can copy on one dashboard and paste on another. **Ctrl+V** (**Cmd+V**)
 pastes from the clipboard, which also reaches a dashboard open in another tab. A widget type this
-console does not have is not pasted, and the console names it.
+console does not have is not pasted, and the console names it. Nor is a widget copied in a newer
+version of DeviceChain: the console says so; upgrade it to paste
+the widget.
 
 On the same dashboard a copy keeps its data source. On another dashboard it keeps it only where that
 dashboard has a slot of the same name bound to the same device or entity: slots are numbered per

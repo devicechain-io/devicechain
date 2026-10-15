@@ -255,6 +255,16 @@ describe('undo and redo', () => {
     expect(undoButton().hasAttribute('disabled')).toBe(true);
   });
 
+  it('a rollback refused as a NEWER board records no state: the editor closes, with no undo to offer', () => {
+    edit(board([card('a', 0, 0)]));
+    drag(widgetEl('a'), [[300, 0]]);
+    expect(undoButton().hasAttribute('disabled')).toBe(false);
+    act(() => h.rolledBack?.({ definition: JSON.stringify({ ...board([card('a', 0, 4)]), schemaVersion: 99 }), updatedAt: null }));
+    expect(screen.getByText(/saved by a newer version of DeviceChain/)).toBeTruthy();
+    expect(screen.queryByTestId('undo')).toBeNull();
+    expect(canvasWidgets()).toHaveLength(0);
+  });
+
   it('tells a screen reader what it undid and redid, by the widget’s name', () => {
     edit(board([{ ...card('a', 0, 0), options: { title: 'Tank level' } } as WidgetInstance]));
     drag(widgetEl('a'), [[300, 0]]);
@@ -393,6 +403,24 @@ describe('copy and paste', () => {
     fireEvent.click(screen.getByTestId('paste'));
     expect(canvasWidgets()).toHaveLength(2);
     expect(screen.queryByTestId('paste-unbound')?.textContent ?? '').toContain('copied in another tenant');
+  });
+
+  // A copy made by a newer release goes through the same schema guard a load does: refused and
+  // said so, never read as this format and pasted drawn wrong, and never "nothing to paste".
+  it('refuses a copy made by a NEWER release, pastes nothing and records no undo step', () => {
+    const text = copyFrom(pumpBoard(), 'board-1', 'a');
+    const env = JSON.parse(text) as { definition: Record<string, unknown> };
+    const newer = JSON.stringify({ ...env, definition: { ...env.definition, schemaVersion: 99 } });
+    edit(board([]), 'board-2');
+    const ev = clipboardEvent('paste', document.body, { 'text/plain': newer });
+    expect(ev.defaultPrevented).toBe(true);
+    expect(canvasWidgets()).toHaveLength(0);
+    expect(undoButton().hasAttribute('disabled')).toBe(true);
+    expect(toasts).toContainEqual([expect.stringMatching(/copied in a newer version of DeviceChain/), 'error']);
+    expect(toasts.some(([msg]) => /Nothing to paste/.test(String(msg)))).toBe(false);
+    // The counterweight: the same copy at this build's version pastes.
+    clipboardEvent('paste', document.body, { 'text/plain': text });
+    expect(canvasWidgets()).toHaveLength(1);
   });
 
   it('refuses a widget this console does not have, and names it', () => {

@@ -394,6 +394,7 @@
   "workspacePasteHint": "Paste the widget last copied in this tab (Ctrl+V pastes from the clipboard)",
   "workspacePasteEmpty": "Nothing to paste: copy a widget first.",
   "workspacePasteRefused": "Not pasted: {{type}} is not available in this console. {{reason}}",
+  "workspacePasteTooNew": "Not pasted: this widget was copied in a newer version of DeviceChain. Upgrade this console to paste it.",
   "workspaceWidgetCopied": "Copied {{name}}.",
   "historyUndid": "Undid {{edit}}",
   "historyRedid": "Redid {{edit}}",

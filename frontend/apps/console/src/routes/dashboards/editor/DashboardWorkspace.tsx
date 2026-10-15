@@ -568,9 +568,17 @@ export function DashboardWorkspace({
     void navigator.clipboard?.writeText(text).catch(() => undefined);
   };
 
-  // Pastes clipboard text. False when the text is not a widget clipboard at all.
+  // Pastes clipboard text. False when the text is not a widget clipboard at all. A copy made by a
+  // newer release is refused, and said so, rather than read as this format.
   const pasteText = (text: string): boolean => {
-    const parsed = parseWidgetClipboard(text, { catalog: registry.catalog });
+    let parsed: ReturnType<typeof parseWidgetClipboard>;
+    try {
+      parsed = parseWidgetClipboard(text, { catalog: registry.catalog });
+    } catch (err) {
+      if ((err as DashboardDefinitionError | null)?.code !== 'schemaTooNew') throw err;
+      toast(t('workspacePasteTooNew'), 'error');
+      return true;
+    }
     if (!parsed) return false;
     for (const r of parsed.refused) toast(t('workspacePasteRefused', { type: r.type, reason: r.reason }), 'error');
     if (parsed.clipboard.widgets.length === 0) return true;
