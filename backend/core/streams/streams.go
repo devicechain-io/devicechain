@@ -146,11 +146,12 @@ const (
 	// delivery of its input. Within it the broker stores that message once.
 	//
 	// It rests on a premise its consumer has to MAKE true, not one the broker provides: each
-	// delivery is handled within its own AckWait. Two consumers rely on it. REACT makes it true
-	// by reading through a one-slot capacity reader (a delivery is never left queued behind
-	// another past its clock) and by bounding every sink call by the delivery's ack deadline.
-	// device-management's resolver reads inbound-events through a plain reader, whose contract
-	// (messaging.AckWait) is that a fetched batch clears well inside AckWait: each publish waits
+	// delivery is handled within its own AckWait. Three consumers rely on it. REACT makes it
+	// true by reading through a one-slot capacity reader (a delivery is never left queued
+	// behind another past its clock) and by bounding every sink call by the delivery's ack
+	// deadline. device-management's resolver and event-sources' capture forward read through
+	// plain readers, whose contract (messaging.AckWait) is that a fetched batch clears well
+	// inside AckWait: each publish waits
 	// at most the 5 s publish ceiling plus one failure backoff of at most 2 s. Given that,
 	// successive deliveries are at most two AckWaits apart (the redelivery becomes due one
 	// AckWait after its predecessor was fetched, and can wait up to one more for the message
@@ -187,8 +188,9 @@ const (
 	// server with 35-byte ids, a held id costs about 120 bytes of live heap: about 120 MB per
 	// million ids per server, before the garbage collector's headroom. A table holds the
 	// stream's id rate times its window: at 10,000 ids/s a 120 s window holds 1.2M ids
-	// (~145 MB), 600 s holds 6M (~720 MB) and 1800 s holds 18M (~2.2 GB). Each NATS server is
-	// limited to 2Gi of memory by default.
+	// (~145 MB), 600 s holds 6M (~720 MB) and 1800 s holds 18M (~2.2 GB). The sum over every
+	// stream has to fit each NATS server's memory limit: TestDuplicateWindowsFitTheBrokerMemoryLimit
+	// (core/messaging) holds the declared windows to the shipped limit at the reference load.
 	BrokerDefaultDuplicateWindowSeconds = 120
 )
 
@@ -623,48 +625,38 @@ var All = []Stream{
 	// ---- Device path (Hot): volume scales with fleet size x message rate ----
 
 	// The dedup window makes ingest idempotent (ADR-030 amendment). It suppresses a
-	// re-publish of a capture message event-sources had already forwarded before it
-	// died — the gap between "published to inbound-events" and "acked to the capture
-	// stream". The message is only redelivered once a consumer next fetches it, so
-	// the gap to cover is a POD RESTART, and the restart worth sizing for is not the
-	// healthy one but the bad one: an image-pull backoff or a failing rollout, tens
-	// of minutes rather than seconds.
+	// re-publish of a capture message event-sources had already forwarded but not yet
+	// acked — the gap between "published to inbound-events" and "acked to the capture
+	// stream" — and the same for the other ingest producers' retries. The capture durable
+	// runs the platform retry contract, so while a consumer is running every re-publish
+	// lands inside the redelivery span: (5-1)*2*60 s + 60 s = 540 s.
 	//
-	// Thirty minutes, then. The cost is broker MEMORY — every id seen in the window
-	// is held — and it is affordable only because the ids are small and fixed-size
-	// (tenant plus a capture sequence, ~25 bytes; see processor.DedupID for why
-	// nothing device-controlled may enter them). An id family with device-supplied
-	// content would make this window a memory-exhaustion vector, which is one of the
-	// reasons there isn't one.
+	// Window: RedeliveryDuplicateWindowSeconds = 600 s >= 540 s. Cost at the 10,000
+	// events/s reference load: 6M ids, ~720 MB on EVERY broker server (each replica keeps
+	// its own table). It was 1800 s, sized to a bad pod restart, which held 18M ids
+	// (~2.2 GB per server) — more than the broker's memory limit by itself. The budget
+	// across every stream is TestDuplicateWindowsFitTheBrokerMemoryLimit (core/messaging).
+	// The ids are small and fixed-size (tenant plus a capture sequence, ~25 bytes; see
+	// processor.DedupID for why nothing device-controlled may enter them); an id family
+	// with device-supplied content would make any window a memory-exhaustion vector.
 	//
-	// The cost scales with the AGGREGATE admitted rate across every tenant, not with
-	// any one tenant's, and it lands on EVERY broker server (each replica keeps its own
-	// table): at 250 events/s the table is ~450k entries, ~55 MB; at the 10,000 events/s
-	// reference load it is 18M entries, ~2.2 GB per server, which is more than the
-	// broker's default 2Gi memory limit once ingest has been sustained for the whole
-	// window. See BrokerDefaultDuplicateWindowSeconds for the per-id cost.
-	// RedeliveryDuplicateWindowSeconds would cover every redelivery to a live consumer
-	// (540 s worst case) at a third of that; what the extra twenty minutes buy is the
-	// restart residual below, for at most a publish window of in-flight messages.
-	// Widening the window multiplies the cost linearly.
-	//
-	// Window: RestartDuplicateWindowSeconds = 1800 s >= a 15-minute restart allowance
-	// + the 540 s redelivery span = 1440 s.
-	//
-	// RESIDUAL, stated plainly because it is easy to assume otherwise: a restart
-	// longer than the window leaves the messages that were in flight at the crash
-	// duplicated, with no second line of defence for most events. event-management's
-	// unique index on (tenant_id, alt_id, occurred_time) is PARTIAL — "WHERE alt_id
-	// IS NOT NULL" — and alternate ids are optional and usually absent, so it
-	// backstops only the events that carry one. Widening the window trades memory
-	// for a longer covered outage; it does not remove the residual.
+	// THE TRADE-OFF, stated plainly. A re-publish that waits for a POD RESTART is covered
+	// only if the restart, plus the rest of the redelivery span, fits in the window: a
+	// producer that died after its publish was stored but before it acked is covered for a
+	// restart of up to about 8 minutes (600 s minus one AckWait for the redelivery, and the
+	// fetch). Past that, the messages it had in flight at the crash — at most its publish
+	// window plus one fetch batch — are stored twice. event-management's event key backstops
+	// measurements; nothing backstops DETECT, which applies every delivery on first sight.
+	// The HA answer is not a longer window but a second consumer: run event-sources and
+	// device-management with 2+ replicas, and a dead pod's unacked input goes to a survivor
+	// one AckWait later, inside the window.
 	//
 	// It applies BACKPRESSURE on device-management's backlog: an event device-management has
 	// not resolved is an event nothing downstream has, so a full stream refuses new events
 	// rather than discard one of those. device-management forwards into resolved-events, so
 	// it stops reading here while that stream's gate is closed, and the backlog it leaves is
 	// what closes this one.
-	{Suffix: InboundEvents, Areas: []string{"device-management", "device-state", "event-sources", "lwm2m-ingest", "sparkplug-ingest"}, Tier: Hot, DuplicateWindowSeconds: RestartDuplicateWindowSeconds,
+	{Suffix: InboundEvents, Areas: []string{"device-management", "device-state", "event-sources", "lwm2m-ingest", "sparkplug-ingest"}, Tier: Hot, DuplicateWindowSeconds: RedeliveryDuplicateWindowSeconds,
 		DeadLetterKind:      kindEvent,
 		BackpressureReaders: []string{"device-management"},
 		Forwards:            map[string]string{"device-management": ResolvedEvents},
@@ -687,8 +679,9 @@ var All = []Stream{
 	//
 	// Window: RedeliveryDuplicateWindowSeconds = 600 s >= (5-1)*2*60 s + 60 s = 540 s.
 	// Cost at the 10,000 events/s reference load: 6M ids, ~720 MB per broker server (it was
-	// 1.2M, ~145 MB, at the default). It is NOT sized to a device-management restart: past
-	// it, the events in that pod's publish window are stored twice.
+	// 1.2M, ~145 MB, at the default). Like inbound-events', it covers a device-management
+	// restart of up to about 8 minutes; past that, the events in that pod's publish window are
+	// stored twice, and 2+ device-management replicas are the HA answer.
 	//
 	// It applies BACKPRESSURE on event-management's backlog alone: an event it has not
 	// persisted is lost when evicted. device-state is not listed, because its unread loss is

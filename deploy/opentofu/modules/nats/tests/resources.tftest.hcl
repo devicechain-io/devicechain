@@ -27,14 +27,14 @@ run "defaults_reach_the_chart" {
   assert {
     condition = try(yamldecode(helm_release.nats.values[0]).container.resources, null) == {
       requests = { cpu = "500m", memory = "768Mi" }
-      limits   = { memory = "2Gi" }
+      limits   = { memory = "4Gi" }
     }
-    error_message = "each server must request 500m CPU and 768Mi memory and be limited to 2Gi memory, under container.resources"
+    error_message = "each server must request 500m CPU and 768Mi memory and be limited to 4Gi memory, under container.resources"
   }
 
   assert {
-    condition     = try(yamldecode(helm_release.nats.values[0]).container.env.GOMEMLIMIT, null) == "1638MiB"
-    error_message = "GOMEMLIMIT must be 80% of the 2Gi limit, taken in MiB: 1638MiB"
+    condition     = try(yamldecode(helm_release.nats.values[0]).container.env.GOMEMLIMIT, null) == "3276MiB"
+    error_message = "GOMEMLIMIT must be 80% of the 4Gi limit, taken in MiB: 3276MiB"
   }
 
   assert {
@@ -54,7 +54,7 @@ run "ha_does_not_change_them" {
   assert {
     condition = try(yamldecode(helm_release.nats.values[0]).container.resources, null) == {
       requests = { cpu = "500m", memory = "768Mi" }
-      limits   = { memory = "2Gi" }
+      limits   = { memory = "4Gi" }
     }
     error_message = "ha must leave each server's resources as they are"
   }
@@ -72,13 +72,13 @@ run "compact_requests" {
   assert {
     condition = try(yamldecode(helm_release.nats.values[0]).container.resources, null) == {
       requests = { cpu = "25m", memory = "64Mi" }
-      limits   = { memory = "2Gi" }
+      limits   = { memory = "4Gi" }
     }
-    error_message = "lowered requests must reach the chart, and the limit must stay at 2Gi"
+    error_message = "lowered requests must reach the chart, and the limit must stay at 4Gi"
   }
 
   assert {
-    condition     = try(yamldecode(helm_release.nats.values[0]).container.env.GOMEMLIMIT, null) == "1638MiB"
+    condition     = try(yamldecode(helm_release.nats.values[0]).container.env.GOMEMLIMIT, null) == "3276MiB"
     error_message = "GOMEMLIMIT follows the limit, not the request"
   }
 }
