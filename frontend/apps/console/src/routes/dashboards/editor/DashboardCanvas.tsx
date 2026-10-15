@@ -7,9 +7,10 @@
 // derives the live cell size (the width less the gutters, shared by the columns; a row is as
 // tall as a cell is wide), and maps each grid widget's placement to a pixel rect
 // (gridPlacementToPx) for react-rnd. Drag + resize snap to cell lines and commit a new
-// placement (pxToGridPlacement) through the pure editor-model transforms, which push any widget
-// the new footprint covers down out of its way, so an edit can never produce an overlap the
-// parser would refuse. A widget placed RELATIVE to another is drawn where its host puts it and
+// placement (pxToGridPlacement) through the pure editor-model transforms (moveWidget,
+// resizeWidget), which push any widget the new footprint covers down out of its way, so an edit
+// can never produce an overlap the parser would refuse, and which stop a resize at the widget's
+// declared minSpan / maxSpan and at the axes its `resize` mode allows. A widget placed RELATIVE to another is drawn where its host puts it and
 // can be selected and deleted, but not dragged: editing relative placement is a later slice.
 // It is CONTROLLED: the workspace owns the working DashboardDefinition (and the save/dirty
 // state); this component owns only which widget is selected. Widgets render live (WYSIWYG) but
@@ -28,7 +29,11 @@ import {
   paddingPx,
   pxToGridPlacement,
   resolveFrame,
-  setWidgetPlacement,
+  moveWidget,
+  pinnedAxes,
+  resizeWidget,
+  spanLimitsOfLayout,
+  spanPx,
   BASE_BREAKPOINT,
   UNKNOWN_WIDGET_TYPE,
   type DashboardDefinition,
@@ -222,9 +227,47 @@ export function DashboardCanvas({
           }
           const rect = gridPlacementToPx(placement, geom);
           // Both drag and resize end by snapping a pixel rect back to a footprint, clamped
-          // inside the column count; whatever it now covers is pushed down.
-          const commit = (px: { x: number; y: number; w: number; h: number }) =>
-            onChange(setWidgetPlacement(definition, widget.id, pxToGridPlacement(px, geom, grid.columns)));
+          // inside the column count; a resize also stops at the widget's declared limits, and
+          // whatever the footprint now covers is pushed down.
+          const layout = widget.type === UNKNOWN_WIDGET_TYPE ? undefined : registry.descriptor(widget.type)?.layout;
+          const limits = spanLimitsOfLayout(layout);
+          const pinned = pinnedAxes(layout?.resize);
+          const snap = (px: { x: number; y: number; w: number; h: number }) => pxToGridPlacement(px, geom, grid.columns);
+          const drag = (px: { x: number; y: number; w: number; h: number }) => {
+            const to = snap(px);
+            onChange(moveWidget(definition, widget.id, to, grid.columns));
+          };
+          const resize = (px: { x: number; y: number; w: number; h: number }, dir: string) =>
+            onChange(
+              resizeWidget(
+                definition,
+                widget.id,
+                snap(px),
+                limits,
+                { fromLeft: /left/i.test(dir), fromTop: /top/i.test(dir) },
+                grid.columns,
+              ),
+            );
+          // The live ghost stops where the limits do, so the author sees the stop, not a snap-back.
+          const bounds = {
+            minWidth: limits?.minSpan?.cols ? spanPx(limits.minSpan.cols, geom.cell, gutter.x) : undefined,
+            maxWidth: limits?.maxSpan?.cols ? spanPx(limits.maxSpan.cols, geom.cell, gutter.x) : undefined,
+            minHeight: limits?.minSpan?.rows ? spanPx(limits.minSpan.rows, geom.cell, gutter.y) : undefined,
+            maxHeight: limits?.maxSpan?.rows ? spanPx(limits.maxSpan.rows, geom.cell, gutter.y) : undefined,
+          };
+          // A pinned axis has no handle on it.
+          const noCols = pinned.includes('cols');
+          const noRows = pinned.includes('rows');
+          const enableResizing = {
+            top: !noRows,
+            bottom: !noRows,
+            left: !noCols,
+            right: !noCols,
+            topLeft: !noRows && !noCols,
+            topRight: !noRows && !noCols,
+            bottomLeft: !noRows && !noCols,
+            bottomRight: !noRows && !noCols,
+          };
           return (
             <Rnd
               key={widget.id}
@@ -249,9 +292,11 @@ export function DashboardCanvas({
                 e.stopPropagation(); // don't let the canvas deselect
                 onSelect(widget.id);
               }}
-              onDragStop={(_e, d) => commit({ x: d.x, y: d.y, w: rect.w, h: rect.h })}
-              onResizeStop={(_e, _dir, ref, _delta, pos) =>
-                commit({ x: pos.x, y: pos.y, w: ref.offsetWidth, h: ref.offsetHeight })
+              {...bounds}
+              enableResizing={enableResizing}
+              onDragStop={(_e, d) => drag({ x: d.x, y: d.y, w: rect.w, h: rect.h })}
+              onResizeStop={(_e, dir, ref, _delta, pos) =>
+                resize({ x: pos.x, y: pos.y, w: ref.offsetWidth, h: ref.offsetHeight }, dir)
               }
             >
               {live(widget)}
