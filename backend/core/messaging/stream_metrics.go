@@ -235,6 +235,22 @@ type streamMetrics struct {
 	// the dedup doing its work.
 	publishDuplicates *prometheus.CounterVec
 
+	// Leader affinity (affinity.go). consumerLeaderLocal is 1 while a reader durable's consumer
+	// leader is the server this service's connection is attached to, 0 while it is another
+	// one (each delivery and each ack then crosses a route between servers), and absent while
+	// the durable could not be read. publishLeaderLocal is the same test for each pipelined
+	// writer's stream: 1 while every such writer on the suffix publishes on a connection to
+	// the stream's leader, 0 while one of them publishes through another server. Both are
+	// exported whether or not affinity is switched on: the watcher is built before the thing
+	// it watches, and is never switched off with it.
+	//
+	// leaderMoves counts the consumer-leader moves this replica asked the broker for, by
+	// result: moved (the broker elected the reader's server) or failed (it refused or did not
+	// answer, and nothing changed).
+	consumerLeaderLocal *prometheus.GaugeVec
+	publishLeaderLocal  *prometheus.GaugeVec
+	leaderMoves         *prometheus.CounterVec
+
 	// The key-value caches (cache.go), by the cache's name in the kv inventory — a
 	// platform-declared set of a handful, never a tenant. They answer the question a cache
 	// that has stopped answering raises: is it being skipped (cacheUnavailable), since when
@@ -407,6 +423,21 @@ func newStreamMetrics(ms *core.Microservice) *streamMetrics {
 				"message id, by stream suffix and writer. The message was stored once; this counts the "+
 				"republishes that were absorbed.",
 			[]string{"suffix", "writer"}),
+		consumerLeaderLocal: ms.NewGaugeVec("jetstream_consumer_leader_local",
+			"1 while this durable's consumer leader is the broker server this service is connected to, 0 "+
+				"while it is another server (every delivery and acknowledgement then crosses a route), as of "+
+				"the last 30 s sample. Absent while the durable cannot be read.",
+			[]string{"stream", "durable"}),
+		publishLeaderLocal: ms.NewGaugeVec("jetstream_publish_leader_local",
+			"1 while every pipelined writer on this stream suffix publishes on a connection to the server "+
+				"leading the stream, 0 while one publishes through another server (each publish and its "+
+				"acknowledgement then cross a route), as of the last 30 s sample. Absent while the stream "+
+				"cannot be read.",
+			[]string{"suffix"}),
+		leaderMoves: ms.NewCounterVec("jetstream_consumer_leader_moves_total",
+			"Times this service asked the broker to move a durable's consumer leader to the server its "+
+				"readers are connected to, by result: moved, or failed (refused or unanswered; nothing changed).",
+			[]string{"stream", "durable", "result"}),
 		cacheLatency: ms.NewHistogramVec("kv_cache_request_duration_seconds",
 			"Time a key-value cache operation took at the bucket. A get or set is cut off at 0.5 s; a delete at "+
 				"5 s. A get answered from process memory never reaches the bucket and is not counted here.",
@@ -895,7 +926,7 @@ func sampleFailureLog(ctx context.Context) *zerolog.Event {
 // stream, against that stream's StreamInfo — the same snapshot the fill gauges read —
 // so a durable whose stream could not be read this pass is skipped with it.
 func (m *streamMetrics) sample(ctx context.Context, js nats.JetStreamContext, names []string, sinks map[string]bool,
-	buckets []string, durables []durableRef, desired int, clustered bool) {
+	buckets []string, durables []durableRef, desired int, clustered bool, seen *sampleSeen) {
 	m.brokerClustered.Set(boolGauge(clustered))
 	for _, name := range buckets {
 		if ctx.Err() != nil {
@@ -927,6 +958,7 @@ func (m *streamMetrics) sample(ctx context.Context, js nats.JetStreamContext, na
 			continue
 		}
 		m.sampleReplication(name, info, desired)
+		seen.stream(name, info)
 		m.usedBytes.WithLabelValues(name).Set(float64(info.State.Bytes))
 		m.usedMsgs.WithLabelValues(name).Set(float64(info.State.Msgs))
 		m.limitBytes.WithLabelValues(name).Set(float64(info.Config.MaxBytes))
@@ -958,7 +990,9 @@ func (m *streamMetrics) sample(ctx context.Context, js nats.JetStreamContext, na
 			if ctx.Err() != nil {
 				return
 			}
-			m.sampleDurable(ctx, js, info, d)
+			if ci := m.sampleDurable(ctx, js, info, d); ci != nil {
+				seen.consumer(d, ci)
+			}
 		}
 	}
 }
@@ -1020,13 +1054,13 @@ func (m *streamMetrics) sample(ctx context.Context, js nats.JetStreamContext, na
 // the shared capture stream to this area's advisory subjects. It stays out because it is not a
 // reader (startRecorder keeps it on nmgr.recorder, never in nmgr.readers), and
 // TestTheRecorderDurableIsNotSampledForUnreadLoss pins that from the scrape's side.
-func (m *streamMetrics) sampleDurable(ctx context.Context, js nats.JetStreamContext, info *nats.StreamInfo, d durableRef) {
+func (m *streamMetrics) sampleDurable(ctx context.Context, js nats.JetStreamContext, info *nats.StreamInfo, d durableRef) *nats.ConsumerInfo {
 	ci, err := js.ConsumerInfo(d.stream, d.durable, nats.Context(ctx))
 	if err != nil {
 		sampleFailureLog(ctx).Err(err).Str("stream", d.stream).Str("durable", d.durable).
 			Msg("Durable unread-loss sample failed")
 		m.forgetBacklog(d)
-		return
+		return nil
 	}
 	m.consumerPending.WithLabelValues(d.stream, d.durable).Set(float64(ci.NumPending))
 	m.consumerAckPending.WithLabelValues(d.stream, d.durable).Set(float64(ci.NumAckPending))
@@ -1056,6 +1090,7 @@ func (m *streamMetrics) sampleDurable(ctx context.Context, js nats.JetStreamCont
 	}
 	m.durables[d] = cur
 	m.unreadGap.WithLabelValues(d.stream, d.durable).Set(float64(gap))
+	return ci
 }
 
 // forgetBacklog withdraws a durable's backlog series (pending, ack pending, unread

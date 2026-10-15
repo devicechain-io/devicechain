@@ -60,6 +60,22 @@ type orderedWriter struct {
 	// fails every pending publish of the CONTEXT) away from every other writer's.
 	js nats.JetStreamContext
 
+	// Leader affinity (affinity.go). stream is the suffix's stream name; target is the
+	// connection its writers should publish on, set by the manager's affinity loop and nil for
+	// a writer built by hand; cur is the one this writer publishes on now, touched only by the
+	// submitter; mainJS is the context on the manager's own connection and leaderJS one per
+	// leader connection; conn is cur's connection (nil: the manager's) for the sampler to
+	// read; main is the affinity code's sentinel for the manager's own connection; nextFollow
+	// holds off a swap after a window that would not settle.
+	stream     string
+	target     *atomic.Pointer[pubTarget]
+	main       *pubTarget
+	cur        *pubTarget
+	mainJS     nats.JetStreamContext
+	leaderJS   map[*nats.Conn]nats.JetStreamContext
+	conn       atomic.Pointer[nats.Conn]
+	nextFollow time.Time
+
 	slots   chan struct{}
 	pending chan orderedPending
 
@@ -137,7 +153,8 @@ func (nmgr *NatsManager) NewOrderedWriter(suffix string, writer PublishWriter, w
 	if err := refuseTenantWide(suffix); err != nil {
 		return nil, err
 	}
-	if _, err := nmgr.ensureStream(suffix); err != nil {
+	stream, err := nmgr.ensureStream(suffix)
+	if err != nil {
 		return nil, err
 	}
 	js, err := nmgr.nc.JetStream(nats.PublishAsyncTimeout(publishWait))
@@ -147,7 +164,7 @@ func (nmgr *NatsManager) NewOrderedWriter(suffix string, writer PublishWriter, w
 	nmgr.metrics.initPublish(suffix, publishModePipelined)
 	nmgr.metrics.initWindow(suffix, string(writer))
 	log.Info().Str("suffix", suffix).Str("writer", string(writer)).Int("window", window).Msg("Added new ordered NATS writer")
-	return &orderedWriter{
+	w := &orderedWriter{
 		nmgr:   nmgr,
 		suffix: suffix,
 		writer: writer,
@@ -160,7 +177,13 @@ func (nmgr *NatsManager) NewOrderedWriter(suffix string, writer PublishWriter, w
 		pending:  make(chan orderedPending, window),
 		settled:  make(chan struct{}),
 		draining: make(chan struct{}),
-	}, nil
+		stream:   stream,
+		leaderJS: map[*nats.Conn]nats.JetStreamContext{},
+	}
+	w.target = nmgr.aff().registerWriter(w)
+	w.main = nmgr.aff().main
+	w.cur = w.main
+	return w, nil
 }
 
 // enter claims the writer for one submission, panicking on misuse. The caller releases it
@@ -196,6 +219,8 @@ func (o *orderedWriter) publishGuarded(ctx context.Context, msg Message, done fu
 	}
 	o.enter("Publish")
 	defer o.busy.Store(false)
+
+	o.follow()
 
 	// The slot is taken before anything else, so the ceiling below is measured from the
 	// send and not charged for time spent waiting for room in the window. ctx is not read
@@ -239,6 +264,93 @@ func (o *orderedWriter) publishGuarded(ctx context.Context, msg Message, done fu
 	// Subject, headers and data, as sent: what natsWriter counts.
 	o.gate.notePublished(wireSize(nm))
 	o.pending <- orderedPending{fut: fut, sent: sent, deadline: deadline, callerBound: callerBound, done: done}
+}
+
+// follow moves the writer onto the connection its stream's target names (affinity.go), when
+// that is not the one it publishes on. Only the submitter calls it, before taking a slot.
+//
+// 🔴 IT CHANGES CONNECTION ONLY WITH AN EMPTY WINDOW. Publishes on one connection reach the
+// stream in the order they were sent; publishes on two connections do not. So the submitter
+// first takes every slot of the window, which it can only do once every earlier publish has
+// settled, then changes connection, then gives the slots back. That costs one round trip per
+// leader change. A window that does not settle within affinitySwapSettle is in a failure
+// episode (a held slot is never freed until a success); the writer stays where it is and
+// tries again on a later submission.
+//
+// The one exception is a connection that has CLOSED: nothing more can be stored through it,
+// what it had in flight is reported failed at its deadline, in order, as on any connection
+// loss, and the writer moves at once rather than wait for publishes that cannot settle.
+func (o *orderedWriter) follow() {
+	if o.target == nil {
+		return
+	}
+	want := o.target.Load()
+	curClosed := o.cur.nc != nil && o.cur.nc.IsClosed()
+	// Its own connection closed: back to the manager's at once, without waiting for the
+	// affinity code's close handler (which runs on the client's callback goroutine, a few
+	// publishes later) to say so.
+	if curClosed && (want.nc == nil || want.nc.IsClosed()) {
+		want = o.main
+	}
+	if want == o.cur {
+		return
+	}
+	if want.nc != nil && want.nc.IsClosed() {
+		return
+	}
+	if !curClosed {
+		if time.Now().Before(o.nextFollow) {
+			return
+		}
+		if !o.settleWindow(affinitySwapSettle) {
+			o.nextFollow = time.Now().Add(affinitySwapRetry)
+			return
+		}
+	}
+	if o.cur.nc == nil {
+		o.mainJS = o.js
+	}
+	js := o.mainJS
+	if want.nc != nil {
+		var ok bool
+		if js, ok = o.leaderJS[want.nc]; !ok {
+			var err error
+			if js, err = want.nc.JetStream(nats.PublishAsyncTimeout(publishWait)); err != nil {
+				return
+			}
+			for nc := range o.leaderJS {
+				if nc.IsClosed() {
+					delete(o.leaderJS, nc)
+				}
+			}
+			o.leaderJS[want.nc] = js
+		}
+	}
+	from := o.cur.server
+	o.js, o.cur = js, want
+	o.conn.Store(want.nc)
+	log.Info().Str("suffix", o.suffix).Str("from", from).Str("to", want.server).
+		Msg("Ordered writer changed connection (an empty server is this service's own connection)")
+}
+
+// settleWindow waits, up to d, until every slot of the window is free, which is when every
+// earlier submission has settled. It holds the slots only while it counts them.
+func (o *orderedWriter) settleWindow(d time.Duration) bool {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	n, ok := 0, true
+	for n < cap(o.slots) && ok {
+		select {
+		case o.slots <- struct{}{}:
+			n++
+		case <-t.C:
+			ok = false
+		}
+	}
+	for ; n > 0; n-- {
+		<-o.slots
+	}
+	return ok
 }
 
 // Fail reports err to done, in order, without publishing anything. The settle loop does not

@@ -120,6 +120,53 @@ type NatsConfiguration struct {
 	// setting: it is read once when a reader is built and touches no durable consumer
 	// config, so changing it is a restart, never a consumer recreate.
 	Fetch NatsFetchConfiguration
+	// Affinity keeps each consumer's leader on the server its reader is connected to, and
+	// has each pipelined writer publish over a connection to its stream's leader, so that
+	// neither a delivery nor a publish crosses a route between servers. It is a FIXED-plane
+	// setting, read when a service starts. See NatsAffinityConfiguration.
+	Affinity NatsAffinityConfiguration
+}
+
+// NatsAffinityConfiguration switches the two halves of leader affinity. The gauges that
+// say whether each consumer's leader and each writer's connection are local
+// (jetstream_consumer_leader_local, jetstream_publish_leader_local) are exported whatever
+// these say: the watcher is never switched off with the thing it watches.
+//
+// ABSENT MEANS ON (ApplyDefaults); `false` turns a half off. Pointers, so an absent key can
+// be told from an explicit false.
+//
+// 🔑 ON BY DEFAULT BECAUSE A ROUTE HOP IS A COST, NEVER A MEANING. On the GKE round-10 shape
+// three of the ~11.9 broker messages per event were frames forwarded between servers only
+// because a client was not connected to the server leading its stream or consumer; a run
+// whose one consumer leader happened to sit away from its reader measured 13.7-13.9 against
+// 11.9. Neither half changes what is stored, in what order, or what is acknowledged: a
+// consumer step-down pauses delivery for milliseconds and is what the broker does on any
+// election, and the writer changes connection only between windows, never inside one. On an
+// unclustered broker both halves find nothing to do.
+type NatsAffinityConfiguration struct {
+	// ConsumerLeaders moves a reader's consumer leader to the server the reader is
+	// connected to when it has been elsewhere for several samples in a row and the
+	// broker is healthy. One replica acts, and only when most of the durable's readers
+	// share a server.
+	ConsumerLeaders *bool
+	// PublishToLeader has each pipelined writer publish over a second connection, dialled
+	// to the server leading its stream, and follow the leader when it changes. Any failure
+	// leaves the writer on the service's ordinary connection.
+	PublishToLeader *bool
+}
+
+// ConsumerLeadersEnabled reports whether the consumer-leader reconciler acts. A
+// configuration that never went through ApplyDefaults (a manager assembled by hand in a
+// test) has the key absent, and reads as off: the default is applied where configuration
+// is loaded, once.
+func (c NatsAffinityConfiguration) ConsumerLeadersEnabled() bool {
+	return c.ConsumerLeaders != nil && *c.ConsumerLeaders
+}
+
+// PublishToLeaderEnabled reports whether pipelined writers follow their stream's leader,
+// read the same way as ConsumerLeadersEnabled.
+func (c NatsAffinityConfiguration) PublishToLeaderEnabled() bool {
+	return c.PublishToLeader != nil && *c.PublishToLeader
 }
 
 // Bounds and defaults for NatsFetchConfiguration.
@@ -201,6 +248,10 @@ func (c NatsFetchConfiguration) AheadEnabled() bool {
 
 // AheadFlag returns a pointer to on, for a Go caller that sets Ahead explicitly.
 func AheadFlag(on bool) *bool { return &on }
+
+// BoolFlag returns a pointer to on, for a Go caller that sets an absent-means-on switch
+// (such as NatsAffinityConfiguration's) explicitly.
+func BoolFlag(on bool) *bool { return &on }
 
 // validate checks the parts of the fetch settings that do not depend on the
 // acknowledgement window.
@@ -1038,6 +1089,12 @@ func (c *InstanceConfiguration) ApplyDefaults() {
 	// Only ABSENCE is defaulted: an operator's explicit `ahead: false` is honoured.
 	if nats.Fetch.Ahead == nil {
 		nats.Fetch.Ahead = AheadFlag(true)
+	}
+	if nats.Affinity.ConsumerLeaders == nil {
+		nats.Affinity.ConsumerLeaders = BoolFlag(true)
+	}
+	if nats.Affinity.PublishToLeader == nil {
+		nats.Affinity.PublishToLeader = BoolFlag(true)
 	}
 	// Default the secret-store selection so an instance document that omits it means
 	// "the zero-infra default" (envelope-in-Postgres, instance KEK), not an invalid

@@ -535,6 +535,39 @@ Services that read only as many messages as they have workers free (alarm notifi
 outbound connectors) ignore these settings. When a service stops, a batch it had asked for ahead
 is not acknowledged, so the broker hands it to the next reader once its window closes.
 
+## Keeping traffic on one broker server {#leader-affinity}
+
+On a clustered broker each stream, and each consumer that reads it, is led by one of the NATS
+servers. A service connected to a different server pays an extra hop between servers for
+everything it does with them: each publish is forwarded to the stream's leader and its
+acknowledgement is forwarded back, and each delivery and acknowledgement crosses between the
+consumer's leader and the reader's server. On a three-server cluster under load these forwarded
+messages were about a quarter of everything the broker handled, and the broker's work grows with
+the number of messages, not their size. The two `infrastructure.nats.affinity` settings remove
+them. Both are on by default and are read when a service starts. Neither changes what is stored,
+in what order, or what is acknowledged.
+
+| Setting | Default | What it does |
+| --- | --- | --- |
+| `consumerLeaders` | on | When a consumer's leader has been on a different server from its reader for three samples in a row (about a minute and a half), the service asks the broker to move the leader to the reader's server. It does not ask while the broker is unhealthy: while a stream or consumer has no leader or a replica that is behind, or within two minutes of the service reconnecting. It moves one consumer at most once a minute, and it leaves the leader where it is when the service's replicas are spread across servers with no majority on one. One replica asks, and the others do not. |
+| `publishToLeader` | on | Services that keep many publishes in flight (the resolved events `device-management` publishes, and the device events `event-sources` forwards) open a second connection to the server that leads the stream. When the broker elects a new leader they move to it, after the publishes already in flight have been acknowledged. If that connection cannot be opened, or is lost, they publish through their usual connection, as they do with this off. |
+
+Set either one to `false` to turn it off. On a single-server broker neither has anything to do.
+
+- **`devicechain_<area>_jetstream_consumer_leader_local{stream, durable}`**: 1 while the
+  consumer's leader is the server this service is connected to, 0 while it is another server.
+  Absent while the consumer cannot be read. When several replicas read one consumer from
+  different servers, the ones in the minority read 0, and that is expected.
+- **`devicechain_<area>_jetstream_publish_leader_local{suffix}`**: 1 while every such writer on
+  the stream publishes on a connection to its leader, 0 while one publishes through another
+  server.
+- **`devicechain_<area>_jetstream_consumer_leader_moves_total{stream, durable, result}`**: moves
+  this service asked the broker for. `result="moved"` is a move made; `result="failed"` is one
+  the broker refused or did not answer, which changed nothing.
+
+The two gauges are exported with the settings off too, so turning a setting off shows what it
+was doing.
+
 ## Messages that ran out of delivery attempts {#max-delivery-records}
 
 After five unacknowledged deliveries the broker stops handing a message out. It publishes a

@@ -240,6 +240,18 @@ instance:
         #   batch: 256
         #   ahead: true
         #   aheadHoldBudgetMillis: 1000
+        # Leader affinity (defaults shown; both on when omitted). A fixed setting, read at
+        # startup; neither half changes what is stored, in what order, or what is acked.
+        #   consumerLeaders  move a reader's consumer leader to the server the reader is
+        #                    connected to, after 3 samples away, on a healthy broker, by one
+        #                    replica, only when most replicas share a server.
+        #   publishToLeader  pipelined writers publish over a second connection to the
+        #                    stream's leader, falling back to the usual one on any failure.
+        # jetstream_consumer_leader_local / jetstream_publish_leader_local report both
+        # whether or not they are on. Nothing to do on a single-server broker.
+        # affinity:
+        #   consumerLeaders: true
+        #   publishToLeader: true
         # Client-side TLS to the broker (ADR-025). MUST match the broker: the
         # OpenTofu nats module terminates TLS on the 4222 + 1883 listeners and
         # emits its CA as the `nats_ca` output, which the bring-up threads in here
