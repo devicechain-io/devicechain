@@ -1353,6 +1353,16 @@ functionalAreas:
     #     capture:
     #       publishWindow: 512
     #
+    # Broker-presence publish window: how many presence transitions a pod keeps awaiting
+    # the broker's acknowledgement at once, 1 to 1024 (out of range, 0 included, stops the
+    # service). The reader used to wait for each acknowledgement, which held a pod near 88
+    # transitions/s per subject on a replicated broker. It is also a loss bound: the
+    # advisories are not redelivered, so a pod that dies loses what it had not yet had
+    # acknowledged, and reconciliation recovers it on its next pass.
+    #   config:
+    #     brokerPresence:
+    #       publishWindow: 128
+    #
     # Broker-asserted MQTT presence. The broker knows exactly when a device connects
     # and disconnects; without this, an MQTT device's presence is inferred from "it
     # published recently", and every alarm, dashboard and command-delivery decision

@@ -341,6 +341,7 @@ kube-state-metrics 本身因节点失效等原因移动期间的重启，只要�
 | 设置（`event-sources` 配置） | 默认值 | 作用 |
 | --- | --- | --- |
 | `capture.publishWindow` | `512` | 单个 Pod 同时等待代理确认的事件数，范围 1 到 1024。超出范围（包括 0）时服务启动即失败，不会自动调整。接入速度不会超过该数值除以一次确认所需时间；在复制的代理上一次确认约需 8 到 11 毫秒，所以 128 会把单个 Pod 限制在约每秒 11,000 个事件，而 512 不会。当 `devicechain_eventsources_jetstream_publish_window_full_seconds_total` 每秒增长接近一秒时应调高。窗口中的每个事件连同其来源的设备消息都保留在内存中，直到被确认，因此内存增长量为窗口大小乘以一个事件与一个源消息的大小：普通负载下 512 约为几 MiB。Pod 崩溃后，这些源消息会在消费者确认等待期后重新投递，并以相同消息 ID 再次发布，流会识别出重复（见 `jetstream_publish_duplicates_total`）。固定设置，启动时读取。 |
+| `brokerPresence.publishWindow` | `128` | 单个 Pod 同时等待代理确认的在线状态转换数，范围 1 到 1024。超出范围（包括 0）时服务启动即失败，不会自动调整。代理在线状态读取器过去会等待每次确认后才处理下一个连接或断开，因此每个主题每秒只能处理约 88 次转换（复制的代理上每次约 11 毫秒），一个副本重连 10,000 台设备约需两分钟；设为 128 后约为每秒 11,000 次。当 `devicechain_eventsources_jetstream_publish_window_full_seconds_total` 每秒增长接近一秒时应调高。代理不会确认或重新投递连接通知，所以该值同时是丢失上限：Pod 崩溃时，已接收但尚未确认的转换最多丢失这么多，由对账在下一轮恢复。无法写入的转换不会被悄悄丢弃：会记录日志并计入 `devicechain_eventsources_presence_events_failed_total`，连接写入失败的设备不会唤醒其暂存的命令。固定设置，启动时读取。 |
 
 ## 事件持久化 {#event-persistence}
 
