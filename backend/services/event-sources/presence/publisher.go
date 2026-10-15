@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/devicechain-io/dc-event-sources/adapter"
+	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/rs/zerolog/log"
 )
 
@@ -155,6 +156,18 @@ func (p *Publisher) noteSession(transition Transition) {
 // reports whether the transition reached the stream. It may run on a writer's goroutine, so
 // it never blocks: counters, one log line and Waker.Wake, which is a non-blocking enqueue.
 func (p *Publisher) settled(transition Transition, err error) bool {
+	if errors.Is(err, messaging.ErrAsyncWriterClosed) {
+		// 🔑 A STOP, NOT A FAILED WRITE, SO IT IS NOT COUNTED AS ONE. The writer closes only
+		// in the stop hook, after the subscriptions stop, so what lands here is the one or two
+		// advisories a delivery goroutine was still handing over at that instant: the same
+		// loss as the advisories the unsubscribe drops from the client buffer, which were
+		// never counted either, and repaired the same way. Counting them would put a failure
+		// on presence_events_failed_total on every rolling restart, and an alert that fires on
+		// routine deploys is one nobody reads by the time it means something.
+		log.Warn().Str("transition", transition.describe()).
+			Msg("A broker presence transition arrived as the tap was stopping and was not emitted; reconciliation will recover it.")
+		return false
+	}
 	if err != nil {
 		incr(p.metrics.Failed)
 		log.Error().Err(err).Str("transition", transition.describe()).

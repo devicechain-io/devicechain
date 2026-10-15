@@ -48,19 +48,34 @@ type presenceAsyncWiring struct {
 	stream   string
 }
 
-// startPresenceAsyncWiring wires the tap. window nil is the default; synchronous builds the
-// control: the same wiring with the tap's writer removed, which is how the tap behaved before.
-func startPresenceAsyncWiring(t *testing.T, window *int, synchronous bool,
+// tapWiring is how a test has the tap emit.
+type tapWiring int
+
+const (
+	// tapAsync is production: the writer createNatsComponents built.
+	tapAsync tapWiring = iota
+	// tapSyncOptIn is the control: the test chose the synchronous tap, which is how the tap
+	// behaved before the writer existed.
+	tapSyncOptIn
+	// tapNoWriter is the wiring fault: the writer is gone and nobody opted into the
+	// synchronous tap.
+	tapNoWriter
+)
+
+// startPresenceAsyncWiring wires the tap. window nil is the default.
+func startPresenceAsyncWiring(t *testing.T, window *int, wiring tapWiring,
 	natsCallbacks core.LifecycleCallbacks) *presenceAsyncWiring {
 	t.Helper()
 	savedConfig, savedMs, savedNats, savedGateway := Configuration, Microservice, NatsManager, GatewaySourceId
 	savedInbound, savedFailed, savedPresence := InboundEventsWriter, FailedDecodeWriter, brokerPresence
 	savedWriter, savedSvc, savedSources, savedGW := PresenceWriter, Svc, EventSources, GatewaySource
+	savedSync, savedGate := presenceTapSynchronous, ingestGate
 	t.Cleanup(func() {
 		stopBrokerPresence()
 		Configuration, Microservice, NatsManager, GatewaySourceId = savedConfig, savedMs, savedNats, savedGateway
 		InboundEventsWriter, FailedDecodeWriter, brokerPresence = savedInbound, savedFailed, savedPresence
 		PresenceWriter, Svc, EventSources, GatewaySource = savedWriter, savedSvc, savedSources, savedGW
+		presenceTapSynchronous, ingestGate = savedSync, savedGate
 	})
 
 	srv, err := natsserver.NewServer(&natsserver.Options{
@@ -88,6 +103,9 @@ func startPresenceAsyncWiring(t *testing.T, window *int, synchronous bool,
 	infra.ServiceAuth.Secret = "shh"
 	infra.UserManagement.Hostname, infra.UserManagement.Port = umHost, umPort
 	infra.DeviceState.Hostname, infra.DeviceState.Port = umHost, umPort
+	// command-delivery is configured so the tap runs its command waker, whose stop the writer's
+	// close must precede. A wake it sends goes nowhere useful, which nothing here reads.
+	infra.CommandDelivery.Hostname, infra.CommandDelivery.Port = umHost, umPort
 	initializeMetrics()
 
 	Configuration = &esconfig.EventSourcesConfiguration{BrokerPresence: esconfig.BrokerPresence{PublishWindow: window}}
@@ -108,9 +126,15 @@ func startPresenceAsyncWiring(t *testing.T, window *int, synchronous bool,
 	require.NoError(t, NatsManager.Initialize(ctx))
 	require.NoError(t, NatsManager.Start(ctx))
 	t.Cleanup(func() { _ = NatsManager.Stop(context.Background()) })
-	if synchronous {
+	switch wiring {
+	case tapSyncOptIn:
 		closePresenceWriter()
 		PresenceWriter = nil
+		presenceTapSynchronous = true
+	case tapNoWriter:
+		closePresenceWriter()
+		PresenceWriter = nil
+		presenceTapSynchronous = false
 	}
 
 	w := &presenceAsyncWiring{srv: srv, stream: messaging.StreamName("inst-1", streams.InboundEvents)}
@@ -153,6 +177,20 @@ func (w *presenceAsyncWiring) answerOne() bool {
 	m := w.held[w.answered]
 	w.answered++
 	_ = m.Respond([]byte(fmt.Sprintf(`{"stream":%q,"seq":%d}`, w.stream, w.answered)))
+	return true
+}
+
+// failOne answers the oldest unanswered publish with a JetStream error, as a stream that
+// refuses the write does.
+func (w *presenceAsyncWiring) failOne() bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.answered >= len(w.held) {
+		return false
+	}
+	m := w.held[w.answered]
+	w.answered++
+	_ = m.Respond([]byte(`{"error":{"code":503,"err_code":10077,"description":"refused by the test"}}`))
 	return true
 }
 
@@ -230,15 +268,15 @@ func TestPresenceTapKeepsTheConfiguredWindowInFlight(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
 		window *int
-		sync   bool
+		wiring tapWiring
 		want   int
 	}{
-		{"configured", &seven, false, 7},
-		{"unset", nil, false, esconfig.DefaultPresencePublishWindow},
-		{"control: no async writer, one per subject", &seven, true, 2},
+		{"configured", &seven, tapAsync, 7},
+		{"unset", nil, tapAsync, esconfig.DefaultPresencePublishWindow},
+		{"control: the synchronous tap, chosen, one per subject", &seven, tapSyncOptIn, 2},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			w := startPresenceAsyncWiring(t, tc.window, tc.sync, core.NewNoOpLifecycleCallbacks())
+			w := startPresenceAsyncWiring(t, tc.window, tc.wiring, core.NewNoOpLifecycleCallbacks())
 			total := tc.want*2 + 20
 			if total < 40 {
 				total = 40
@@ -255,23 +293,101 @@ func TestPresenceTapKeepsTheConfiguredWindowInFlight(t *testing.T) {
 	}
 }
 
-// 🔴 A FAILED EMIT SURFACES. The tap's writer is closed under a running tap, which is how a
-// publish fails here without a broker fault: the advisory is neither dropped silently nor
-// counted as emitted. presence_events_failed_total is exported at 0 before any failure, so a
-// rate over it has a baseline.
+// 🔴 A FAILED EMIT SURFACES. The stream refuses the publish: the transition is neither dropped
+// silently nor counted as emitted. presence_events_failed_total is exported at 0 before any
+// failure, so a rate over it has a baseline.
 func TestPresenceTapCountsAFailedEmit(t *testing.T) {
-	w := startPresenceAsyncWiring(t, nil, false, core.NewNoOpLifecycleCallbacks())
+	w := startPresenceAsyncWiring(t, nil, tapAsync, core.NewNoOpLifecycleCallbacks())
 	require.Equal(t, 1, testutil.CollectAndCount(PresenceFailedCounter), "the series must exist before the first failure")
 	require.Zero(t, testutil.ToFloat64(PresenceFailedCounter))
 
-	PresenceWriter.Close()
 	w.advisory(t, true, 1)
 	require.NoError(t, w.nc.Flush())
+	require.Eventually(t, func() bool { return w.seen() == 1 }, 10*time.Second, time.Millisecond,
+		"the transition never reached the stream")
+	require.True(t, w.failOne())
 	require.Eventually(t, func() bool { return testutil.ToFloat64(PresenceFailedCounter) == 1 }, 10*time.Second,
-		time.Millisecond, "a transition that could not be emitted must be counted as failed")
+		time.Millisecond, "a transition the stream refused must be counted as failed")
 	assert.Zero(t, emittedTotal(), "a failed transition was counted as emitted")
+}
+
+// handledAdvisories counts the transitions the tap has taken past its advisory parsing, by
+// standing in for the ingest gate every one of them passes before it is emitted.
+func handledAdvisories(t *testing.T) *atomic.Int64 {
+	t.Helper()
+	var n atomic.Int64
+	ingestGate = func(string, string, time.Time, bool, processor.Origin) bool { n.Add(1); return true }
+	return &n
+}
+
+// 🔴 A CLOSED WRITER IS A STOP, NOT A LOSS TO ALERT ON. The writer closes only in the stop
+// hook, so an advisory refused by it is one that arrived as the tap was stopping. It is not
+// emitted, and it is NOT counted on presence_events_failed_total, which would otherwise rise
+// on every rolling restart and raise BrokerPresenceLosingTransitions on routine deploys.
+func TestAClosedPresenceWriterIsNotCountedAsAFailedEmit(t *testing.T) {
+	w := startPresenceAsyncWiring(t, nil, tapAsync, core.NewNoOpLifecycleCallbacks())
+	handled := handledAdvisories(t)
+	PresenceWriter.Close()
+	w.feed(t, 3)
+	require.Eventually(t, func() bool { return handled.Load() == 6 }, 10*time.Second, time.Millisecond,
+		"the tap never handled the advisories (handled %d)", handled.Load())
+	// The refusal settles inside Submit, on the delivery goroutine, before the gate is
+	// consulted for the next advisory on the same subject; the last one per subject is
+	// given a moment to finish.
+	time.Sleep(100 * time.Millisecond)
+	assert.Zero(t, testutil.ToFloat64(PresenceFailedCounter), "a refusal by the closed writer was counted as a failed emit")
+	assert.Zero(t, emittedTotal())
 	assert.Zero(t, w.seen(), "nothing may reach the stream through a closed writer")
 }
+
+// 🔴 NO WRITER AND NO OPT-IN IS A FAULT THAT SHOWS. The service refuses to start that way
+// (requirePresenceWriter); a tap started that way anyway does not quietly emit synchronously,
+// which would hand back the 88-a-second ceiling with nothing to show for it. Every transition
+// is counted as failed and none reaches the stream.
+func TestATapWithNoWriterFailsLoudlyInsteadOfEmittingSynchronously(t *testing.T) {
+	w := startPresenceAsyncWiring(t, nil, tapNoWriter, core.NewNoOpLifecycleCallbacks())
+	w.feed(t, 3)
+	require.Eventually(t, func() bool { return testutil.ToFloat64(PresenceFailedCounter) == 6 }, 10*time.Second,
+		time.Millisecond, "a tap with no writer must count every transition as failed")
+	assert.Zero(t, w.seen(), "a tap with no writer emitted synchronously: the silent fallback is back")
+	assert.Zero(t, emittedTotal())
+}
+
+// The startup check: an enabled tap must have its writer, unless a test chose otherwise.
+func TestRequirePresenceWriter(t *testing.T) {
+	savedConfig, savedWriter, savedSync := Configuration, PresenceWriter, presenceTapSynchronous
+	t.Cleanup(func() { Configuration, PresenceWriter, presenceTapSynchronous = savedConfig, savedWriter, savedSync })
+	off := false
+	enabled := &esconfig.EventSourcesConfiguration{}
+	enabled.ApplyDefaults()
+	disabled := &esconfig.EventSourcesConfiguration{BrokerPresence: esconfig.BrokerPresence{Enabled: &off}}
+	disabled.ApplyDefaults()
+
+	for _, tc := range []struct {
+		name    string
+		cfg     *esconfig.EventSourcesConfiguration
+		writer  messaging.AsyncWriter
+		sync    bool
+		refused bool
+	}{
+		{"enabled, no writer: refused", enabled, nil, false, true},
+		{"enabled, a writer", enabled, nopAsyncWriter{}, false, false},
+		{"enabled, no writer, a test chose the synchronous tap", enabled, nil, true, false},
+		{"disabled, no writer", disabled, nil, false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			Configuration, PresenceWriter, presenceTapSynchronous = tc.cfg, tc.writer, tc.sync
+			if tc.refused {
+				assert.Error(t, requirePresenceWriter())
+			} else {
+				assert.NoError(t, requirePresenceWriter())
+			}
+		})
+	}
+}
+
+// nopAsyncWriter is an AsyncWriter that is merely present.
+type nopAsyncWriter struct{ messaging.AsyncWriter }
 
 // closeProbe records the moment the tap's writer is closed.
 type closeProbe struct {
@@ -315,12 +431,18 @@ func TestStopHookClosesThePresenceWriterAfterTheSubscriptionsAndBeforeTheBroker(
 		},
 		Postprocess: func(context.Context) error { return nil },
 	}
-	w = startPresenceAsyncWiring(t, nil, false, cb)
+	w = startPresenceAsyncWiring(t, nil, tapAsync, cb)
 
 	// Probes: the tap's subscription stop and the writer's close each record their place.
 	rt := brokerPresence
 	origTapStop := rt.stops[0]
 	rt.stops[0] = func() { origTapStop(); mark("subscriptions") }
+	// The waker's stop is appended last, when command-delivery is configured (it is here).
+	// A writer closed after it would hand its completions' wakes to a waker with no workers.
+	require.GreaterOrEqual(t, len(rt.stops), 3, "the tap must run its command waker here")
+	last := len(rt.stops) - 1
+	origWakerStop := rt.stops[last]
+	rt.stops[last] = func() { mark("waker"); origWakerStop() }
 	var closedOnce sync.Once
 	PresenceWriter = &closeProbe{AsyncWriter: PresenceWriter, onClose: func() { closedOnce.Do(func() { mark("writer") }) }}
 
@@ -352,8 +474,8 @@ func TestStopHookClosesThePresenceWriterAfterTheSubscriptionsAndBeforeTheBroker(
 	orderMu.Lock()
 	got := append([]string(nil), order...)
 	orderMu.Unlock()
-	assert.Equal(t, []string{"subscriptions", "writer", "broker"}, got,
-		"the writer closes after the subscriptions stop and before the broker manager does")
+	assert.Equal(t, []string{"subscriptions", "writer", "waker", "broker"}, got,
+		"the writer closes after the subscriptions stop, and before the command waker and the broker manager do")
 	assert.Equal(t, 3.0, emittedTotal(), "what the writer held at the stop must be settled and counted")
 
 	require.True(t, brokerRan.Load(), "the broker manager's stop never ran")
@@ -377,4 +499,55 @@ func TestNoPresenceWriterWhenThePresenceTapIsDisabled(t *testing.T) {
 	Configuration.ApplyDefaults()
 	require.NoError(t, buildPresenceWriter(nil), "a disabled tap must not even touch the broker manager")
 	assert.Nil(t, PresenceWriter)
+}
+
+// 🔴 A TAP THAT NEVER STARTED STILL CLOSES ITS WRITER, AS A STEP OF ITS OWN STOP. With no
+// system-account credential the tap is off, but the writer was built (the tap is enabled) and
+// the demotion-only runtime is what stopBrokerPresence unwinds: its stops must close it, since
+// there is no deferred close behind them to do it instead.
+func TestTheDemotionRuntimeClosesThePresenceWriter(t *testing.T) {
+	savedConfig, savedMs, savedGateway, savedPresence := Configuration, Microservice, GatewaySourceId, brokerPresence
+	savedWriter, savedInbound := PresenceWriter, InboundEventsWriter
+	t.Cleanup(func() {
+		stopBrokerPresence()
+		Configuration, Microservice, GatewaySourceId, brokerPresence = savedConfig, savedMs, savedGateway, savedPresence
+		PresenceWriter, InboundEventsWriter = savedWriter, savedInbound
+	})
+	um := newFakeUM(t)
+	host, port := um.infra(t)
+	Microservice = &core.Microservice{InstanceId: "inst-1", FunctionalArea: "event-sources"}
+	Microservice.UseMetricsRegistry(prometheus.NewRegistry())
+	infra := &Microservice.InstanceConfiguration.Infrastructure
+	infra.ServiceAuth.Secret = "shh"
+	infra.UserManagement.Hostname, infra.UserManagement.Port = host, port
+	infra.DeviceState.Hostname, infra.DeviceState.Port = host, port
+	initializeMetrics()
+	InboundEventsWriter = nopWriter{}
+	Configuration = &esconfig.EventSourcesConfiguration{}
+	Configuration.ApplyDefaults()
+	GatewaySourceId = "mqtt1"
+	brokerPresence = nil
+
+	var closed atomic.Bool
+	PresenceWriter = &closeProbe{AsyncWriter: closeableNop{}, onClose: func() { closed.Store(true) }}
+	startBrokerPresence(context.Background())
+	require.NotNil(t, brokerPresence, "no system-account credential must leave the demotion runtime")
+	require.Nil(t, brokerPresence.conn, "the tap must not have started")
+	require.False(t, closed.Load())
+
+	stopBrokerPresence()
+	assert.True(t, closed.Load(), "stopping the demotion-only runtime left the presence writer open")
+}
+
+// closeableNop is a present AsyncWriter whose Close does nothing.
+type closeableNop struct{ messaging.AsyncWriter }
+
+func (closeableNop) Close() {}
+
+// The startup refusal is wired: afterMicroserviceStarted checks the writer before it starts
+// the tap. Nothing else drives main's startup hook, so this reads it.
+func TestStartupRefusesAnEnabledTapWithNoWriter(t *testing.T) {
+	calls := callsIn(t, "afterMicroserviceStarted")
+	require.True(t, calls["requirePresenceWriter"], "afterMicroserviceStarted no longer checks the presence writer")
+	require.True(t, calls["startBrokerPresence"])
 }

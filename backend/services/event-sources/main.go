@@ -1160,7 +1160,11 @@ func afterMicroserviceStarted(ctx context.Context) error {
 	}
 
 	// Broker-asserted MQTT presence (ADR-067). Started LAST and never fatal: it is an
-	// enrichment of ingest, not a precondition for it.
+	// enrichment of ingest, not a precondition for it. A missing writer is not an
+	// environment condition but a wiring fault, so it alone stops the service.
+	if err := requirePresenceWriter(); err != nil {
+		return err
+	}
 	startBrokerPresence(ctx)
 
 	return nil

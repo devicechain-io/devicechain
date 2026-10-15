@@ -34,9 +34,33 @@ var brokerPresence *presenceRuntime
 
 // PresenceWriter is the asynchronous inbound-events writer the broker tap emits through, with
 // brokerPresence.publishWindow publishes awaiting their acknowledgement at once. Nil when the
-// tap is disabled by configuration, and in a test that never built the service's broker
-// components, where the tap then emits synchronously. It is closed by stopBrokerPresence.
+// tap is disabled by configuration. It is closed by stopBrokerPresence.
+//
+// 🔴 AN ENABLED TAP WITH NO WRITER IS A WIRING FAULT, NEVER A QUIET SYNCHRONOUS TAP. The
+// synchronous path is the one that held a pod near 88 transitions a second per subject, and
+// a tap that fell back to it would look healthy in every way but throughput, which nobody
+// watches until the reconnect storm. So afterMicroserviceStarted refuses to start without
+// one (requirePresenceWriter), and a tap started without one anyway counts every transition
+// as failed (adapter.ErrNoAsyncWriter). The ONLY way to a synchronous tap is
+// presenceTapSynchronous, which a test sets on purpose.
 var PresenceWriter messaging.AsyncWriter
+
+// presenceTapSynchronous makes startBrokerPresence give the tap no asynchronous emitter, so it
+// waits for each acknowledgement as it did before the writer existed. Only a test sets it: one
+// that never built the service's broker components, or the control that measures the old
+// behaviour. Production never does.
+var presenceTapSynchronous bool
+
+// requirePresenceWriter refuses an enabled tap whose writer was never built. It is checked at
+// startup, so a regression in createNatsComponents stops the service instead of shipping the
+// synchronous ceiling.
+func requirePresenceWriter() error {
+	if Configuration.BrokerPresence.IsEnabled() && PresenceWriter == nil && !presenceTapSynchronous {
+		return errors.New("the broker presence tap is enabled but its asynchronous writer was never built; " +
+			"createNatsComponents must call buildPresenceWriter")
+	}
+	return nil
+}
 
 // newPresenceWriter builds the tap's writer at the configured window. It does not refuse at a
 // closed backpressure gate: a presence transition bypasses the gate by design (see
@@ -243,9 +267,10 @@ func startBrokerPresence(ctx context.Context) {
 
 	tapEmitter := adapter.NewEmitter(InboundEventsWriter, time.Now, presenceDedupPrefix, true)
 	tap := presence.NewTap(Microservice.InstanceId, source, tapEmitter, presenceGate(), presenceMetrics())
-	if PresenceWriter != nil {
+	if !presenceTapSynchronous {
 		// The advisories go through the async writer; the reconciler (which holds the same tap)
-		// keeps the synchronous InboundEventsWriter through Apply.
+		// keeps the synchronous InboundEventsWriter through Apply. A nil PresenceWriter here is
+		// not a fallback: the emitter then fails every transition, loudly (see PresenceWriter).
 		tap.WithAsyncEmitter(tapEmitter.WithAsyncWriter(PresenceWriter))
 	}
 	stopTap, err := tap.Subscribe(conn)
@@ -402,7 +427,9 @@ func startPresenceDemotion(reason presence.TapOffReason) {
 	}
 
 	runCtx, cancel := context.WithCancel(context.Background())
-	rt := &presenceRuntime{cancel: cancel, stopped: make(chan struct{})}
+	// The tap never started, so the writer has nothing queued; it is closed here only so the
+	// stop releases what it holds. The tap's own runtime closes it in its own place.
+	rt := &presenceRuntime{cancel: cancel, stopped: make(chan struct{}), stops: []func(){closePresenceWriter}}
 
 	var runner presence.DemoteRunner
 	if drainReady {
@@ -708,9 +735,10 @@ func stopBrokerPresence() {
 		return
 	}
 	brokerPresence = nil
-	// Whatever else happens below, the writer closes: a stop that returned early on a tap that
-	// never started must not leave it open.
-	defer closePresenceWriter()
+	// 🔑 NO defer closePresenceWriter() HERE. The writer's close is a step IN rt.stops, at the
+	// place its order matters (after the subscriptions, before the waker), on every runtime
+	// that owns it: the tap's and the demotion-only one. A deferred close would run it last
+	// and make that step's position untestable, since removing it would change nothing.
 	rt.cancel()
 	select {
 	case <-rt.stopped:

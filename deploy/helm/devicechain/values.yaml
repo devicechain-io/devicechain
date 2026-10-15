@@ -1358,7 +1358,8 @@ functionalAreas:
     # service). The reader used to wait for each acknowledgement, which held a pod near 88
     # transitions/s per subject on a replicated broker. It is also a loss bound: the
     # advisories are not redelivered, so a pod that dies loses what it had not yet had
-    # acknowledged, and reconciliation recovers it on its next pass.
+    # acknowledged, and reconciliation recovers it on its next pass: until then a device
+    # whose connect was lost reads offline while connected (reconcileSeconds, 300 by default).
     #   config:
     #     brokerPresence:
     #       publishWindow: 128
