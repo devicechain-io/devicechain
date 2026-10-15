@@ -1303,7 +1303,7 @@ which is limited to 384Mi (a floor: a higher top-level `resources.limits.memory`
 | `event-processing` | 400m | 1 core |
 | every other backend service | 100m | 500m |
 
-Each NATS server requests 500m of CPU and 768Mi of memory, and is limited to 2Gi of memory with no
+Each NATS server requests 500m of CPU and 768Mi of memory, and is limited to 4Gi of memory with no
 CPU limit; see [The message broker](#broker-sizing).
 
 Under [`--compact`](#--compact) every backend service and every NATS server requests 25m and 64Mi
@@ -1430,17 +1430,35 @@ The metric that shows a service held back by its limit is
 
 #### The message broker {#broker-sizing}
 
-Each NATS server requests 500m of CPU and 768Mi of memory, and is limited to 2Gi of memory. Its Go
+Each NATS server requests 500m of CPU and 768Mi of memory, and is limited to 4Gi of memory. Its Go
 runtime is given a soft memory limit of 80% of that (`GOMEMLIMIT`), so it collects harder before the
 kernel would stop it. Before, the servers requested and were limited to nothing, which put them
 first in line for eviction when a node ran short of memory.
 
 - **Memory is sized from measurement.** In the release benchmark no server's resident memory passed
   about 830 MiB (working set about 1.3 GiB) in any run up to 9,200 events per second offered, under
-  the 2Gi limit, and none was stopped for memory. The 768Mi request is below that peak: it decides
+  the 2Gi limit those runs had, and none was stopped for memory. The 768Mi request is below that peak: it decides
   where a server is placed, and the limit is what stops one. Those runs were steady ingest: a server rejoining its cluster, or catching up
   a large backlog after a node is lost, was not measured. If a server is ever stopped for running
   out of memory (`OOMKilled` in `kubectl describe pod`), raise its limit.
+- **Duplicate detection holds memory in proportion to sustained ingest, and sets the limit.** So
+  that a redelivered event is stored once, every server remembers the message id of each event
+  published to the incoming-event stream and to the resolved-event stream in the last 10 minutes.
+  Each id costs about 120 bytes on every server, so ingest sustained at E events per second holds
+  about E × 1,200 s × 120 bytes: about 145 MB at 1,000 events per second, 860 MB at 6,000 and
+  1.4 GB at 10,000. Detections and the actions they trigger add theirs: about 420 MB at 1,000
+  detections per second. With the 830 MiB measured above, a server at 10,000 events per second
+  needs about 2.6 GiB, which is why the limit is 4Gi: that keeps it 15% under the 80% soft limit.
+  It takes 10 minutes of steady ingest to reach. If you set `nats_memory_limit` below 4Gi, scale
+  the rate you can sustain with it.
+- **A restart longer than about 8 minutes can store an event twice.** The 10 minutes cover every
+  redelivery while a consumer is running. They also cover an `event-sources` or
+  `device-management` pod that dies and comes back within about 8 minutes. If it takes longer, the
+  events that pod had in flight are stored again: at most its publish window. To avoid this, run
+  `event-sources` and `device-management` with 2 or more replicas, so a surviving pod takes over
+  the work a minute later. A broker that stores a publish, loses its acknowledgement and then
+  fails publishes for longer than about 8 minutes has the same effect, and more replicas do not
+  help there.
 - **CPU is requested below what a server uses under load**: about 4.4 cores across the three
   servers at 6,000 events per second, 1.6 to 1.8 of them on the server leading the incoming-event
   stream. Under `--ha` on three nodes each node runs exactly one server, so the

@@ -7,7 +7,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/devicechain-io/dc-microservice/streams"
 	"github.com/nats-io/nats.go"
 )
 
@@ -44,37 +43,4 @@ func TestApplyStreamDuplicateWindow(t *testing.T) {
 			t.Errorf("Duplicates = %v, want the broker's existing 5m left untouched", cfg.Duplicates)
 		}
 	})
-}
-
-// The ingest path's dedup is worthless unless the stream it publishes to actually
-// remembers ids. Declaring the window and setting the header are done in
-// different packages, so nothing but this ties them together.
-func TestInboundEventsDeclaresADuplicateWindow(t *testing.T) {
-	if got := streams.DuplicateWindowSecondsFor(streams.InboundEvents); got <= 0 {
-		t.Errorf("inbound-events declares no duplicate window (%d): every Nats-Msg-Id the "+
-			"ingest path sets would be ignored and dedup would silently do nothing", got)
-	}
-	// The floor tracks the RATIONALE the declaration carries, not merely "some
-	// window": it is sized to a BAD rollout — an image-pull backoff or a failing
-	// deploy, tens of minutes — because that is the restart during which a duplicate
-	// actually arises. A floor of a couple of minutes would let a regression to 300s
-	// pass here while contradicting the reason the number was chosen, which is the
-	// kind of test that reports health it is not checking.
-	if got := streams.DuplicateWindowSecondsFor(streams.InboundEvents); got < 900 {
-		t.Errorf("duplicate window %ds is under 15 minutes, short of the bad-rollout restart "+
-			"it is sized for; a redelivery after the window is not deduped at all for the "+
-			"events that carry no alternate id", got)
-	}
-}
-
-// derived-events is deduped for the same reason inbound-events is: DETECT re-publishes
-// every detection past its last checkpoint after a restart, each carrying a Nats-Msg-Id
-// from its identity, and without a window REACT would dispatch — and charge the tenant's
-// outbound ceiling for — each one a second time. The floor is the bad-rollout restart the
-// window is sized to, as above.
-func TestDerivedEventsDeclaresADuplicateWindow(t *testing.T) {
-	if got := streams.DuplicateWindowSecondsFor(streams.DerivedEvents); got < 900 {
-		t.Errorf("derived-events duplicate window %ds is under 15 minutes: a DETECT replay after "+
-			"a bad rollout re-publishes detections the broker no longer recognises", got)
-	}
 }

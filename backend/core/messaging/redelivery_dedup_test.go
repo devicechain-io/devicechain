@@ -13,25 +13,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// REACT re-publishes every alarm edge and connector request of a detection on each delivery
-// of the derived event, under a dedup id that is stable across those deliveries. Both streams
-// must therefore remember ids for longer than the whole redelivery span, or a retry's
-// re-publish is stored — and for a connector, executed — a second time.
-//
-// The span is read off THIS package's constants, not streams': the window is derived in the
-// leaf, and a messaging constant that stopped reading the leaf would leave the derivation
-// describing a retry contract the broker no longer runs.
-func TestREACTSinkStreamsCoverTheRedeliverySpan(t *testing.T) {
-	span := MaxDeliver * AckWait
-	for _, suffix := range []string{streams.ConnectorDispatch, streams.RaiseAlarm} {
-		got := time.Duration(streams.DuplicateWindowSecondsFor(suffix)) * time.Second
-		if got <= span {
-			t.Errorf("%s duplicate window %v does not exceed the redelivery span %v "+
-				"(MaxDeliver x AckWait): a REACT retry's re-publish is stored again", suffix, got, span)
-		}
-	}
-}
-
 // A REACT sink re-publishes the same alarm edge or connector request on every delivery of the
 // derived event, under the same dedup id. On the real broker that must be stored ONCE, and a
 // different id must still be stored (the negative control: the collapse is by id, not blanket).

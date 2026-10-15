@@ -339,16 +339,19 @@ variable "memory_limit" {
   description = <<-EOT
     Memory limit of each NATS server, in Mi or Gi. GOMEMLIMIT is set to 80% of it, as
     the nats chart recommends, so the Go runtime collects harder before the kernel
-    kills the server. 2Gi by default: 2.7 times the highest resident memory measured
-    (749 MiB), and above the highest working set (1,166 MiB, mostly page cache the
-    kernel reclaims first). Those were steady-ingest runs: a server rejoining its
-    cluster or catching up a large backlog after a node loss was not measured, so
-    raise this if a server is ever OOM-killed. Binary units only: GOMEMLIMIT is
-    derived from the number, and a decimal unit would make it off by the factor
-    between G and Gi.
+    kills the server. 4Gi by default, set by the duplicate-detection budget: every
+    server holds the message ids of each deduplicated stream's window, about 1.7 GiB
+    at 10,000 events/s sustained, on top of the highest resident memory measured
+    (830 MiB), and that total has to stay 15% under the 80% soft limit.
+    TestDuplicateWindowsFitTheBrokerMemoryLimit (backend/core/messaging) holds the
+    instance root's default to that. Those were steady-ingest runs: a server rejoining
+    its cluster or catching up a large backlog after a node loss was not measured, so
+    raise this if a server is ever OOM-killed. A limit reserves nothing on the node:
+    the request is what places a server. Binary units only: GOMEMLIMIT is derived from
+    the number, and a decimal unit would make it off by the factor between G and Gi.
   EOT
   type        = string
-  default     = "2Gi"
+  default     = "4Gi"
 
   validation {
     condition     = can(regex("^[1-9][0-9]*(Mi|Gi)$", var.memory_limit))

@@ -279,9 +279,9 @@ variable "nats_memory_request" {
 }
 
 variable "nats_memory_limit" {
-  description = "Memory limit of each NATS server, in Mi or Gi; GOMEMLIMIT is set to 80% of it. 2Gi by default. See modules/nats var.memory_limit, including what was not measured."
+  description = "Memory limit of each NATS server, in Mi or Gi; GOMEMLIMIT is set to 80% of it. 4Gi by default, from the duplicate-detection budget at 10,000 events/s. See modules/nats var.memory_limit, including what was not measured."
   type        = string
-  default     = "2Gi"
+  default     = "4Gi"
 
   validation {
     condition     = can(regex("^[1-9][0-9]*(Mi|Gi)$", var.nats_memory_limit))

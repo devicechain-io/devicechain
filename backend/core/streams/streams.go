@@ -146,18 +146,59 @@ const (
 	// delivery of its input. Within it the broker stores that message once.
 	//
 	// It rests on a premise its consumer has to MAKE true, not one the broker provides: each
-	// delivery is handled within its own AckWait. REACT, the one consumer that relies on it,
-	// makes it true by reading through a one-slot capacity reader (a delivery is never left
-	// queued behind another past its clock) and by bounding every sink call by the delivery's
-	// ack deadline. Given that, successive deliveries are at most two AckWaits apart (the
-	// redelivery becomes due one AckWait after its predecessor was fetched, and can wait up to
-	// one more for the message ahead of it to finish), so the last re-publish lands at most
-	// (MaxDeliver-1)*2*AckWait + AckWait after the first. 2*MaxDeliver*AckWait covers that with
-	// one AckWait to spare.
+	// delivery is handled within its own AckWait. Three consumers rely on it. REACT makes it
+	// true by reading through a one-slot capacity reader (a delivery is never left queued
+	// behind another past its clock) and by bounding every sink call by the delivery's ack
+	// deadline. device-management's resolver and event-sources' capture forward read through
+	// plain readers, whose contract (messaging.AckWait) is that a fetched batch clears well
+	// inside AckWait. One publish waits at most the 5 s publish ceiling plus one failure
+	// backoff of at most 2 s, but a BATCH clears inside AckWait only while the broker answers:
+	// a failing stream is published to at one message per backoff, so a plain reader's
+	// fetched batch can be handed out long after its clock ran out. Given the premise,
+	// successive deliveries are at most two AckWaits apart (the redelivery becomes due one
+	// AckWait after its predecessor was fetched, and can wait up to one more for the message
+	// ahead of it to finish), so the last re-publish lands at most
+	// (MaxDeliver-1)*2*AckWait + AckWait = 4*120 s + 60 s = 540 s after the first.
+	// 2*MaxDeliver*AckWait = 600 s covers that with one AckWait to spare. No consumer BackOff
+	// adds to it: no durable sets one, so every redelivery waits exactly AckWait.
 	//
-	// Longer than this is possible only with no consumer at all for the gap — every replica
-	// down, or a lease handover that outlasts it — and then the repeat is stored again.
+	// Longer than this is possible in two ways, and then the repeat is stored again: no
+	// consumer at all for the gap (every replica down, or a lease handover that outlasts it),
+	// or a broker that stored the first publish, lost its acknowledgement and then failed the
+	// stream's publishes for longer than about the window, so that a later delivery, held in a
+	// plain reader's batch through the outage, is published once the broker answers again.
+	// Covering that gap too is what RestartDuplicateWindowSeconds is for, and its memory cost
+	// (see BrokerDefaultDuplicateWindowSeconds) is why it is not the default.
 	RedeliveryDuplicateWindowSeconds = 2 * ConsumerMaxDeliver * ConsumerAckWaitSeconds
+
+	// RestartDuplicateWindowSeconds covers a re-publish that waits for a POD RESTART rather
+	// than for a redelivery to a live consumer: the producer died after its publish was stored
+	// and before it acked the input, and no other replica takes the input over (every area
+	// runs one replica by default). It is sized to a bad restart — an image-pull backoff or a
+	// failing rollout — not a healthy one: 1800 s is a restart of up to 1800 - 540 = 1260 s
+	// (21 minutes) followed by the rest of the redelivery span.
+	RestartDuplicateWindowSeconds = 1800
+
+	// BrokerDefaultDuplicateWindowSeconds is nats-server's own default window
+	// (server.StreamDefaultDuplicatesWindow, two minutes), the one a stream gets when its
+	// config names none. A stream no publisher stamps a Nats-Msg-Id on declares exactly this:
+	// its window holds no ids and costs nothing, and declaring the value the broker already
+	// filled in means an upgrade changes nothing on the existing stream. A test reads the
+	// server's constant, so a broker that changes its default fails a test rather than turning
+	// these declarations into a silent change.
+	//
+	// 🔑 WHAT A WINDOW COSTS. The broker keeps every id published inside the window, in a map
+	// plus an ordered array (nats-server stream.go: ddmap, ddarr), and EVERY replica keeps its
+	// own, so under R3 each server holds every stream's table. Measured against nats-server
+	// v2.15.0 (the embedded test server) with 35-byte ids; the deployed broker is the nats
+	// chart's 2.14.4, whose ddentry, ddmap and ddarr are the same. A held id costs about 120
+	// bytes of live heap, more for a longer id (derived-events' are 67 bytes): about 120 MB per
+	// million ids per server, before the garbage collector's headroom. A table holds the
+	// stream's id rate times its window: at 10,000 ids/s a 120 s window holds 1.2M ids
+	// (~145 MB), 600 s holds 6M (~720 MB) and 1800 s holds 18M (~2.2 GB). The sum over every
+	// stream has to fit each NATS server's memory limit: TestDuplicateWindowsFitTheBrokerMemoryLimit
+	// (core/messaging) holds the declared windows to the shipped limit at the reference load.
+	BrokerDefaultDuplicateWindowSeconds = 120
 )
 
 // String names a shape for the messages that mention one.
@@ -227,11 +268,18 @@ type Stream struct {
 	// tests — automatically rather than needing to be remembered twice.
 	MaxBytesCap int64
 	// DuplicateWindowSeconds, when positive, is how long JetStream remembers a
-	// published message's "Nats-Msg-Id" and suppresses a repeat of it. Zero means
-	// the stream is not managed for dedup at all — which is NOT the same as a
-	// window of zero, and the difference matters: writing 0 into a StreamConfig
-	// would reset a window the broker already has, so ensureStream only ever
-	// widens/narrows a window that was declared here.
+	// published message's "Nats-Msg-Id" and suppresses a repeat of it. Every stream
+	// declares one, and it must be at least the longest time between a message's first
+	// publish and its last possible re-publish: a repeat that arrives after the window
+	// is stored a second time. TestEveryDuplicateWindowCoversItsRepublishInterval
+	// (core/messaging) holds each one to that interval, computed from the live retry
+	// constants. Zero would mean the stream is not managed for dedup at all — which
+	// is NOT the same as a window of zero: writing 0 into a StreamConfig would reset a
+	// window the broker already has, so ensureStream never writes it.
+	//
+	// ensureStream reconciles a declared window onto an EXISTING stream in place
+	// (UpdateStream; JetStream allows the field to change), so an upgrade gets a new
+	// window at the first start of any area that ensures the stream.
 	//
 	// It is seconds rather than a time.Duration to keep this package a LEAF with no
 	// imports at all, which is what lets both core/config and core/messaging depend
@@ -584,41 +632,38 @@ var All = []Stream{
 	// ---- Device path (Hot): volume scales with fleet size x message rate ----
 
 	// The dedup window makes ingest idempotent (ADR-030 amendment). It suppresses a
-	// re-publish of a capture message event-sources had already forwarded before it
-	// died — the gap between "published to inbound-events" and "acked to the capture
-	// stream". The message is only redelivered once a consumer next fetches it, so
-	// the gap to cover is a POD RESTART, and the restart worth sizing for is not the
-	// healthy one but the bad one: an image-pull backoff or a failing rollout, tens
-	// of minutes rather than seconds.
+	// re-publish of a capture message event-sources had already forwarded but not yet
+	// acked — the gap between "published to inbound-events" and "acked to the capture
+	// stream" — and the same for the other ingest producers' retries. The capture durable
+	// runs the platform retry contract, so while a consumer is running every re-publish
+	// lands inside the redelivery span: (5-1)*2*60 s + 60 s = 540 s.
 	//
-	// Thirty minutes, then. The cost is broker MEMORY — every id seen in the window
-	// is held — and it is affordable only because the ids are small and fixed-size
-	// (tenant plus a capture sequence, ~25 bytes; see processor.DedupID for why
-	// nothing device-controlled may enter them). An id family with device-supplied
-	// content would make this window a memory-exhaustion vector, which is one of the
-	// reasons there isn't one.
+	// Window: RedeliveryDuplicateWindowSeconds = 600 s >= 540 s. Cost at the 10,000
+	// events/s reference load: 6M ids, ~720 MB on EVERY broker server (each replica keeps
+	// its own table). It was 1800 s, sized to a bad pod restart, which held 18M ids
+	// (~2.2 GB per server) — more than the broker's memory limit by itself. The budget
+	// across every stream is TestDuplicateWindowsFitTheBrokerMemoryLimit (core/messaging).
+	// The ids are small and fixed-size (tenant plus a capture sequence, ~25 bytes; see
+	// processor.DedupID for why nothing device-controlled may enter them); an id family
+	// with device-supplied content would make any window a memory-exhaustion vector.
 	//
-	// The cost scales with the AGGREGATE admitted rate across every tenant, not with
-	// any one tenant's: at 250 events/s the table is ~450k entries, tens of MB, but
-	// the per-tenant ingest ceiling (ADR-023) defaults well above that and nothing
-	// caps the instance-wide sum, so a busy deployment should read this as low
-	// hundreds of MB. That lands on a broker pod which neither the chart nor the
-	// tofu module gives a memory limit. Widening the window multiplies it linearly.
-	//
-	// RESIDUAL, stated plainly because it is easy to assume otherwise: a restart
-	// longer than the window leaves the messages that were in flight at the crash
-	// duplicated, with no second line of defence for most events. event-management's
-	// unique index on (tenant_id, alt_id, occurred_time) is PARTIAL — "WHERE alt_id
-	// IS NOT NULL" — and alternate ids are optional and usually absent, so it
-	// backstops only the events that carry one. Widening the window trades memory
-	// for a longer covered outage; it does not remove the residual.
+	// THE TRADE-OFF, stated plainly. A re-publish that waits for a POD RESTART is covered
+	// only if the restart, plus the rest of the redelivery span, fits in the window: a
+	// producer that died after its publish was stored but before it acked is covered for a
+	// restart of up to about 8 minutes (600 s minus one AckWait for the redelivery, and the
+	// fetch). Past that, the messages it had in flight at the crash — at most its publish
+	// window plus one fetch batch — are stored twice. event-management's event key backstops
+	// measurements; nothing backstops DETECT, which applies every delivery on first sight.
+	// The HA answer is not a longer window but a second consumer: run event-sources and
+	// device-management with 2+ replicas, and a dead pod's unacked input goes to a survivor
+	// one AckWait later, inside the window.
 	//
 	// It applies BACKPRESSURE on device-management's backlog: an event device-management has
 	// not resolved is an event nothing downstream has, so a full stream refuses new events
 	// rather than discard one of those. device-management forwards into resolved-events, so
 	// it stops reading here while that stream's gate is closed, and the backlog it leaves is
 	// what closes this one.
-	{Suffix: InboundEvents, Areas: []string{"device-management", "device-state", "event-sources", "lwm2m-ingest", "sparkplug-ingest"}, Tier: Hot, DuplicateWindowSeconds: 1800,
+	{Suffix: InboundEvents, Areas: []string{"device-management", "device-state", "event-sources", "lwm2m-ingest", "sparkplug-ingest"}, Tier: Hot, DuplicateWindowSeconds: RedeliveryDuplicateWindowSeconds,
 		DeadLetterKind:      kindEvent,
 		BackpressureReaders: []string{"device-management"},
 		Forwards:            map[string]string{"device-management": ResolvedEvents},
@@ -631,11 +676,19 @@ var All = []Stream{
 	// deliveries loses no event (see ReplayCovered for the split-brain residual).
 	// device-state and event-management are not: their exhausted deliveries are lettered.
 	//
-	// It declares no duplicate window, so the broker's default (two minutes) applies — and
-	// something relies on that default: device-management stamps every resolved publish with
-	// a Nats-Msg-Id that a redelivery of its source reproduces (processor.resolvedDedupID), so
-	// the copy published on the first redelivery, one inbound AckWait after the fetch, is
-	// dropped rather than stored twice. A declared window shorter than that would switch it off.
+	// device-management stamps every resolved publish with a Nats-Msg-Id that a redelivery of
+	// its source reproduces (processor.resolvedDedupID), and a source is redelivered up to
+	// MaxDeliver times: a publish stored on the first delivery whose acknowledgement was lost,
+	// followed by failed publishes on the next deliveries, is published again up to 540 s later
+	// (RedeliveryDuplicateWindowSeconds). The window is that redelivery span. It used to be the
+	// broker's two-minute default, which a source that failed two deliveries in a row outlived,
+	// and the repeat was stored twice — and DETECT applies every delivery on first sight.
+	//
+	// Window: RedeliveryDuplicateWindowSeconds = 600 s >= (5-1)*2*60 s + 60 s = 540 s.
+	// Cost at the 10,000 events/s reference load: 6M ids, ~720 MB per broker server (it was
+	// 1.2M, ~145 MB, at the default). Like inbound-events', it covers a device-management
+	// restart of up to about 8 minutes; past that, the events in that pod's publish window are
+	// stored twice, and 2+ device-management replicas are the HA answer.
 	//
 	// It applies BACKPRESSURE on event-management's backlog alone: an event it has not
 	// persisted is lost when evicted. device-state is not listed, because its unread loss is
@@ -646,9 +699,10 @@ var All = []Stream{
 	// backlog is still warned on (the chart's JetStreamDurableUnreadNearFull), as an upper
 	// bound: the checkpoint is never behind what the durable has acknowledged.
 	{Suffix: ResolvedEvents, PlatformAuthored: true, Areas: []string{"device-management", "device-state", "event-management", "event-processing"}, Tier: Hot, DeadLetterKind: kindEvent,
-		ReplayCovered:       []string{"event-processing"},
-		BackpressureReaders: []string{"event-management"},
-		Why:                 "every ingested event after resolution; device-management produces it, every other area listed is a durable reader"},
+		DuplicateWindowSeconds: RedeliveryDuplicateWindowSeconds,
+		ReplayCovered:          []string{"event-processing"},
+		BackpressureReaders:    []string{"event-management"},
+		Why:                    "every ingested event after resolution; device-management produces it, every other area listed is a durable reader"},
 
 	// One message per detection, and a subscribe-able product in its own right
 	// (ADR-037): clients live-subscribe by tenant like any other event feed.
@@ -665,7 +719,11 @@ var All = []Stream{
 	// charges it again, and connector-dispatch's own window covers only REACT's redelivery span,
 	// so a replay older than this one reaches the connectors service again. Collapsing it then
 	// is the destination's job, on the forwarded idempotency key.
-	{Suffix: DerivedEvents, PlatformAuthored: true, Areas: []string{"event-processing"}, Tier: Hot, DuplicateWindowSeconds: 1800,
+	//
+	// Window: RestartDuplicateWindowSeconds = 1800 s >= a 15-minute restart allowance + the
+	// 540 s redelivery span = 1440 s. Cost: the rule-firing rate times 1800 s, ~270 MB (67-byte ids) per
+	// broker server per 1,000 detections/s.
+	{Suffix: DerivedEvents, PlatformAuthored: true, Areas: []string{"event-processing"}, Tier: Hot, DuplicateWindowSeconds: RestartDuplicateWindowSeconds,
 		DeadLetterKind: kindDetectionAction, Why: "DETECT output — scales with rule firings against device traffic"},
 
 	// Emitted post-commit when a numeric platform-set attribute (ADR-012 scope
@@ -675,14 +733,18 @@ var All = []Stream{
 	// that never reaches the stream is repaired by event-processing's reconcile
 	// against device-management (at every DETECT term start and every five
 	// minutes), not by replay.
-	{Suffix: DeviceAttribute, PlatformAuthored: true, Areas: []string{"device-management", "event-processing"}, Tier: Hot, DeadLetterKind: kindControlFact, Why: "attribute set/delete per device — scales with fleet size"},
+	// Window: device-management publishes it with no Nats-Msg-Id (at-most-once).
+	// 0 ids are held, so the window is inert; it is the broker default, so declaring it moves nothing.
+	{Suffix: DeviceAttribute, DuplicateWindowSeconds: BrokerDefaultDuplicateWindowSeconds, PlatformAuthored: true, Areas: []string{"device-management", "event-processing"}, Tier: Hot, DeadLetterKind: kindControlFact, Why: "attribute set/delete per device — scales with fleet size"},
 
 	// PER-DEVICE: the concrete subject carries the target device's token as a
 	// final segment so the broker grant can confine a device to its own commands.
 	// event-sources also has to recognize this suffix — to tell command traffic
 	// from device telemetry — which is the case that first motivated centralizing
 	// these names: a second literal is how the two drift apart.
-	{Suffix: DeviceCommands, PlatformAuthored: true, Areas: []string{"command-delivery", "lwm2m-ingest"}, Tier: Hot, Shape: ShapeTenantDevice, DeadLetterKind: kindCommand, Why: "outbound commands — scale with fleet size"},
+	// Window: command-delivery publishes it with no Nats-Msg-Id.
+	// 0 ids are held, so the window is inert; it is the broker default, so declaring it moves nothing.
+	{Suffix: DeviceCommands, DuplicateWindowSeconds: BrokerDefaultDuplicateWindowSeconds, PlatformAuthored: true, Areas: []string{"command-delivery", "lwm2m-ingest"}, Tier: Hot, Shape: ShapeTenantDevice, DeadLetterKind: kindCommand, Why: "outbound commands — scale with fleet size"},
 
 	// PER-DEVICE, PLATFORM -> DEVICE: the desired-state downlink (configuration revisions,
 	// and later update assignments). Like DeviceCommands, the concrete subject ends in the
@@ -693,7 +755,9 @@ var All = []Stream{
 	// like every other stream: Limits retention, a week of history and the Cold tier's byte
 	// ceiling, evicting the oldest, so an unread channel cannot grow without limit. Cold
 	// because volume follows state CHANGES, not telemetry samples.
-	{Suffix: DeviceDesired, PlatformAuthored: true, Areas: []string{"device-management", "update-management"}, Tier: Cold, Shape: ShapeTenantDevice, DeadLetterKind: kindControlFact,
+	// Window: device-management and update-management publish it with no Nats-Msg-Id.
+	// 0 ids are held, so the window is inert; it is the broker default, so declaring it moves nothing.
+	{Suffix: DeviceDesired, DuplicateWindowSeconds: BrokerDefaultDuplicateWindowSeconds, PlatformAuthored: true, Areas: []string{"device-management", "update-management"}, Tier: Cold, Shape: ShapeTenantDevice, DeadLetterKind: kindControlFact,
 		Why: "desired-state downlink per device - one message per state change"},
 
 	// PER-DEVICE, DEVICE -> PLATFORM: progress and status reports. The device token in the
@@ -701,7 +765,9 @@ var All = []Stream{
 	// CommandResponses: a payload field is self-asserted. device-management consumes the
 	// configuration kinds and update-management the update kinds, each on its own durable; bounded
 	// exactly as DeviceDesired is.
-	{Suffix: DeviceReports, Areas: []string{"device-management", "update-management"}, Tier: Cold, Shape: ShapeTenantDevice, DeadLetterKind: kindControlFact,
+	// Window: devices publish it, and nothing gives them a Nats-Msg-Id.
+	// 0 ids are held, so the window is inert; it is the broker default, so declaring it moves nothing.
+	{Suffix: DeviceReports, DuplicateWindowSeconds: BrokerDefaultDuplicateWindowSeconds, Areas: []string{"device-management", "update-management"}, Tier: Cold, Shape: ShapeTenantDevice, DeadLetterKind: kindControlFact,
 		Why: "device reports per device - one message per state change"},
 
 	// ADR-030 amendment. The durable capture of raw device telemetry, and the
@@ -737,7 +803,9 @@ var All = []Stream{
 	// queue allows one consumer per subject, so no second reader may be attached.
 	// RecreateOnRetentionChange lets an instance whose stream was created under Limits
 	// retention move onto this one once the old stream has been drained.
-	{Suffix: DeviceEventsCapture, Areas: []string{"event-sources"}, Tier: Hot, Shape: ShapeDeviceEvents,
+	// Window: the broker's MQTT gateway stores device publishes here with no Nats-Msg-Id.
+	// 0 ids are held, so the window is inert; it is the broker default, so declaring it moves nothing.
+	{Suffix: DeviceEventsCapture, DuplicateWindowSeconds: BrokerDefaultDuplicateWindowSeconds, Areas: []string{"event-sources"}, Tier: Hot, Shape: ShapeDeviceEvents,
 		MaxBytesCap: deviceEventsCaptureMaxBytesCap, DeadLetterKind: kindEvent,
 		Retention: RetentionWorkQueue, RecreateOnRetentionChange: true,
 		Forwards: map[string]string{"event-sources": InboundEvents},
@@ -762,7 +830,9 @@ var All = []Stream{
 	// One consumer still reads every response: StreamSubject appends the extra wildcard
 	// level for this shape, so the filter follows the declaration automatically. That
 	// the two must move together is the point of deriving both from here.
-	{Suffix: CommandResponses, Areas: []string{"command-delivery", "event-sources", "lwm2m-ingest"}, Tier: Hot, Shape: ShapeTenantDevice, DeadLetterKind: kindCommandResponse, Why: "device replies to commands — scale with fleet size"},
+	// Window: devices and lwm2m-ingest publish it with no Nats-Msg-Id.
+	// 0 ids are held, so the window is inert; it is the broker default, so declaring it moves nothing.
+	{Suffix: CommandResponses, DuplicateWindowSeconds: BrokerDefaultDuplicateWindowSeconds, Areas: []string{"command-delivery", "event-sources", "lwm2m-ingest"}, Tier: Hot, Shape: ShapeTenantDevice, DeadLetterKind: kindCommandResponse, Why: "device replies to commands — scale with fleet size"},
 
 	// One message per fired httpCall/publish action. The stream is auto-provisioned
 	// when event-processing creates the writer, so publishing is safe before the
@@ -781,6 +851,9 @@ var All = []Stream{
 	// replay: derived-events' own window collapses those before REACT sees them. Past it the
 	// connectors service runs the request again, and the forwarded idempotency key is the
 	// destination's to honour.
+	//
+	// Window: RedeliveryDuplicateWindowSeconds = 600 s >= (5-1)*2*60 s + 60 s = 540 s. Cost:
+	// the connector-action rate times 600 s, ~72 MB per broker server per 1,000 actions/s.
 	{Suffix: ConnectorDispatch, PlatformAuthored: true, Areas: []string{"event-processing", "outbound-connectors"}, Tier: Hot, DuplicateWindowSeconds: RedeliveryDuplicateWindowSeconds,
 		DeadLetterKind: kindConnectorDispatch, VerbatimCopy: ConnectorDispatchDead, Why: "REACT outbound dispatch — scales with rule firings"},
 
@@ -792,7 +865,9 @@ var All = []Stream{
 	// projection, and a fact that never reaches the stream is repaired by
 	// event-processing's reconcile against device-management (at every DETECT term
 	// start and every five minutes), not by replay.
-	{Suffix: DetectionRulesPublished, PlatformAuthored: true, Areas: []string{"device-management", "event-processing"}, Tier: Cold, DeadLetterKind: kindControlFact, Why: "a rule publish — a human authoring action"},
+	// Window: device-management publishes it with no Nats-Msg-Id (at-most-once).
+	// 0 ids are held, so the window is inert; it is the broker default, so declaring it moves nothing.
+	{Suffix: DetectionRulesPublished, DuplicateWindowSeconds: BrokerDefaultDuplicateWindowSeconds, PlatformAuthored: true, Areas: []string{"device-management", "event-processing"}, Tier: Cold, DeadLetterKind: kindControlFact, Why: "a rule publish — a human authoring action"},
 
 	// Emitted post-commit when a device is created or re-typed, naming the device
 	// and the stable profile token its type adopts, so DETECT can arm absence for
@@ -801,7 +876,9 @@ var All = []Stream{
 	// durable projection, and a fact that never reaches the stream is repaired by
 	// event-processing's reconcile against device-management (at every DETECT term
 	// start and every five minutes), not by replay.
-	{Suffix: DeviceRoster, PlatformAuthored: true, Areas: []string{"command-delivery", "device-management", "event-processing", "update-management"}, Tier: Cold, DeadLetterKind: kindControlFact, Why: "roster projection updates"},
+	// Window: device-management publishes it with no Nats-Msg-Id (at-most-once).
+	// 0 ids are held, so the window is inert; it is the broker default, so declaring it moves nothing.
+	{Suffix: DeviceRoster, DuplicateWindowSeconds: BrokerDefaultDuplicateWindowSeconds, PlatformAuthored: true, Areas: []string{"command-delivery", "device-management", "event-processing", "update-management"}, Tier: Cold, DeadLetterKind: kindControlFact, Why: "roster projection updates"},
 
 	// Emitted post-commit whenever a geofence change mints a new fence-set version, naming that
 	// version's fences and the content address of each one's geometry so event-processing's live
@@ -815,17 +892,23 @@ var All = []Stream{
 	// a second copy of its own. A fact that never reaches the stream is recovered by that startup
 	// reconcile, not by replay. Its size depends on the fence COUNT and on nothing the fences
 	// contain, so no fence set can outgrow one message.
-	{Suffix: GeoFenceSetManifest, PlatformAuthored: true, Areas: []string{"device-management", "event-processing"}, Tier: Cold, DeadLetterKind: kindControlFact, Why: "a fence edit — a human authoring action"},
+	// Window: device-management publishes it with no Nats-Msg-Id (at-most-once).
+	// 0 ids are held, so the window is inert; it is the broker default, so declaring it moves nothing.
+	{Suffix: GeoFenceSetManifest, DuplicateWindowSeconds: BrokerDefaultDuplicateWindowSeconds, PlatformAuthored: true, Areas: []string{"device-management", "event-processing"}, Tier: Cold, DeadLetterKind: kindControlFact, Why: "a fence edit — a human authoring action"},
 
 	// ADR-044. Emitted when an edge entity (device, customer, area, asset, and
 	// their groups) is deleted, so cross-service reference holders — such as
 	// event-management's event_anchors — can reconcile dangling references.
 	// At-least-once and idempotent.
-	{Suffix: EntityDeleted, PlatformAuthored: true, Areas: []string{"device-management", "event-management", "event-processing"}, Tier: Cold, DeadLetterKind: kindControlFact, Why: "entity lifecycle fan-out"},
+	// Window: device-management publishes it with no Nats-Msg-Id; its consumers are idempotent.
+	// 0 ids are held, so the window is inert; it is the broker default, so declaring it moves nothing.
+	{Suffix: EntityDeleted, DuplicateWindowSeconds: BrokerDefaultDuplicateWindowSeconds, PlatformAuthored: true, Areas: []string{"device-management", "event-management", "event-processing"}, Tier: Cold, DeadLetterKind: kindControlFact, Why: "entity lifecycle fan-out"},
 
 	// ADR-041, re-emitted on each alarm transition. The substrate for graphql-ws
 	// subscriptions (ADR-037) and for notifications (ADR-017).
-	{Suffix: AlarmEvents, PlatformAuthored: true, Areas: []string{"device-management", "notification-management"}, Tier: Cold, DeadLetterKind: kindNotification, Why: "alarm state changes, not raw telemetry"},
+	// Window: device-management publishes it with no Nats-Msg-Id.
+	// 0 ids are held, so the window is inert; it is the broker default, so declaring it moves nothing.
+	{Suffix: AlarmEvents, DuplicateWindowSeconds: BrokerDefaultDuplicateWindowSeconds, PlatformAuthored: true, Areas: []string{"device-management", "notification-management"}, Tier: Cold, DeadLetterKind: kindNotification, Why: "alarm state changes, not raw telemetry"},
 
 	// ADR-051 5c / ADR-054, carrying a JSON RaiseAlarmRequest. AT-LEAST-once, and
 	// safe as such: ApplyAlarmContributorEdge (ADR-057) is an idempotent
@@ -837,15 +920,31 @@ var All = []Stream{
 	// REACT re-publishes each alarm edge on every delivery of the derived event, under an
 	// edge-scoped token as the dedup id, and the window covers that redelivery span. The fold
 	// would absorb the repeat anyway; the window means device-management does not have to.
+	//
+	// Window: RedeliveryDuplicateWindowSeconds = 600 s >= (5-1)*2*60 s + 60 s = 540 s. Cost:
+	// the alarm-edge rate times 600 s, ~72 MB per broker server per 1,000 edges/s.
 	{Suffix: RaiseAlarm, PlatformAuthored: true, Areas: []string{"device-management", "event-processing"}, Tier: Cold,
 		DuplicateWindowSeconds: RedeliveryDuplicateWindowSeconds, DeadLetterKind: kindDetectionAction, Why: "REACT alarm requests"},
 
-	{Suffix: FailedDecode, Areas: []string{"event-sources"}, Tier: Cold, DeadLetterKind: NotLettered, Why: "error path — near zero in steady state; see the spike caveat below"},
-	{Suffix: FailedEvents, PlatformAuthored: true, Areas: []string{"device-management", "event-management"}, Tier: Cold, DeadLetterKind: NotLettered, Why: "error path — near zero in steady state; see the spike caveat below"},
+	// Window: event-sources publishes it with no Nats-Msg-Id.
+	// 0 ids are held, so the window is inert; it is the broker default, so declaring it moves nothing.
+	{Suffix: FailedDecode, DuplicateWindowSeconds: BrokerDefaultDuplicateWindowSeconds, Areas: []string{"event-sources"}, Tier: Cold, DeadLetterKind: NotLettered, Why: "error path — near zero in steady state; see the spike caveat below"},
+	// device-management publishes each failure record with an id its source's redelivery
+	// reproduces (processor.sourceDedupID), on the same redelivery span as resolved-events;
+	// event-management's records carry none. It used to be the broker's two-minute default.
+	//
+	// Window: RedeliveryDuplicateWindowSeconds = 600 s >= (5-1)*2*60 s + 60 s = 540 s. Cost:
+	// ~0 in steady state; a spike at the full 10,000 events/s holds 6M ids, ~720 MB per server.
+	{Suffix: FailedEvents, PlatformAuthored: true, Areas: []string{"device-management", "event-management"}, Tier: Cold, DeadLetterKind: NotLettered,
+		DuplicateWindowSeconds: RedeliveryDuplicateWindowSeconds, Why: "error path — near zero in steady state; see the spike caveat below"},
 	// The dedup window is what lets the connectors service's own arm and the platform's
 	// max-delivery recorder both write the verbatim copy of one give-up and store it
 	// ONCE: both carry the same id, derived from the original's stream position.
-	{Suffix: ConnectorDispatchDead, Areas: []string{"outbound-connectors"}, Tier: Cold, DuplicateWindowSeconds: 1800,
+	//
+	// Window: RestartDuplicateWindowSeconds = 1800 s >= a 15-minute restart allowance (a
+	// recorder down for a pod restart) + the 540 s redelivery span = 1440 s. Cost: ~0, one id
+	// per give-up.
+	{Suffix: ConnectorDispatchDead, Areas: []string{"outbound-connectors"}, Tier: Cold, DuplicateWindowSeconds: RestartDuplicateWindowSeconds,
 		DeadLetterKind: NotLettered, Why: "terminal dead-letter sink (ADR-060 SD-2)"},
 	// 🔴 user-management IS IN THIS LIST BECAUSE IT READS, NOT BECAUSE IT WRITES. Areas is
 	// the ADR-020 A0 deployment predicate, and NewReader creates the stream exactly as
@@ -859,11 +958,14 @@ var All = []Stream{
 	// an arm that overran its ack window by a long way, and a recorder that was down for
 	// a pod restart, not an outage of any length: past it a second letter is a benign
 	// duplicate, never a loss.
+	//
+	// Window: RestartDuplicateWindowSeconds = 1800 s >= a 15-minute restart allowance + the
+	// 540 s redelivery span = 1440 s. Cost: ~0 in steady state, one id per letter.
 	{Suffix: DeadLetters,
 		Areas: []string{"event-processing", "notification-management", "command-delivery",
 			"device-management", "user-management", "outbound-connectors", "device-state",
 			"event-management", "event-sources", "lwm2m-ingest", "update-management"},
-		Tier: Cold, DuplicateWindowSeconds: 1800, DeadLetterKind: NotLettered,
+		Tier: Cold, DuplicateWindowSeconds: RestartDuplicateWindowSeconds, DeadLetterKind: NotLettered,
 		Why: "ADR-024 dead-letter sink: every area that consumes a stream writes it, user-management " +
 			"stores it, command-delivery reads it back to settle the commands its letters are about"},
 
@@ -887,13 +989,16 @@ var All = []Stream{
 	//     reads, and why nothing may read this stream's cursor gaps as unread loss.
 	//  4. A LEADERLESS STREAM DROPS THE BROKER'S INTERNAL PUBLISH. There is no retry on the
 	//     server side; an advisory emitted while this stream has no leader is gone.
+	//
+	// Window: nats-server publishes the advisories with no Nats-Msg-Id.
+	// 0 ids are held, so the window is inert; it is the broker default, so declaring it moves nothing.
 	{Suffix: MaxDeliveries,
 		Areas: []string{"device-management", "device-state", "event-management", "event-sources",
 			"notification-management", "outbound-connectors", "command-delivery", "user-management",
 			"event-processing", "lwm2m-ingest", "update-management"},
 		Tier: Cold, Shape: ShapeAdvisory, Retention: RetentionWorkQueue, MaxBytesCap: maxDeliveriesMaxBytesCap,
-		DeadLetterKind: NotLettered,
-		Why:            "broker advisories for deliveries that ran out — empty in steady state"},
+		DuplicateWindowSeconds: BrokerDefaultDuplicateWindowSeconds, DeadLetterKind: NotLettered,
+		Why: "broker advisories for deliveries that ran out — empty in steady state"},
 }
 
 // CAVEAT on the error-path streams (FailedDecode / FailedEvents): these are

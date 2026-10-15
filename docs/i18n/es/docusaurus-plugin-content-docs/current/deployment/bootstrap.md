@@ -1411,7 +1411,7 @@ Cada servicio de backend solicita 128Mi de memoria y tiene un límite de 256Mi, 
 | `event-processing` | 400m | 1 núcleo |
 | cualquier otro servicio de backend | 100m | 500m |
 
-Cada servidor NATS solicita 500m de CPU y 768Mi de memoria, con un límite de 2Gi de memoria y sin
+Cada servidor NATS solicita 500m de CPU y 768Mi de memoria, con un límite de 4Gi de memoria y sin
 límite de CPU; consulta [El intermediario de mensajes](#broker-sizing).
 
 Con [`--compact`](#--compact), cada servicio de backend y cada servidor NATS solicita en cambio
@@ -1551,7 +1551,7 @@ La métrica que muestra un servicio frenado por su límite es
 
 #### El intermediario de mensajes {#broker-sizing}
 
-Cada servidor NATS solicita 500m de CPU y 768Mi de memoria, y tiene un límite de 2Gi de memoria. Su
+Cada servidor NATS solicita 500m de CPU y 768Mi de memoria, y tiene un límite de 4Gi de memoria. Su
 runtime de Go recibe un límite de memoria blando del 80% de ese valor (`GOMEMLIMIT`), así que
 recolecta con más intensidad antes de que el kernel lo detenga. Antes, los servidores no
 solicitaban ni tenían límite de nada, lo que los ponía los primeros en la cola de desalojo cuando
@@ -1560,11 +1560,30 @@ un nodo se quedaba sin memoria.
 - **La memoria se dimensiona a partir de mediciones.** En la prueba de rendimiento de la versión,
   la memoria residente de ningún servidor pasó de unos 830 MiB (conjunto de trabajo de unos
   1,3 GiB) en ninguna ejecución hasta 9200 eventos por segundo ofrecidos, por debajo del límite de
-  2Gi, y ninguno se detuvo por memoria. La solicitud de 768Mi queda por debajo de ese pico: decide
+  2Gi que tenían, y ninguno se detuvo por memoria. La solicitud de 768Mi queda por debajo de ese pico: decide
   dónde se coloca un servidor, y lo que lo detiene es el límite. Esas ejecuciones fueron de ingesta constante:
   no se midió un servidor que vuelve a unirse a su clúster ni que se pone al día con una cola
   grande tras perder un nodo. Si alguna vez un servidor se detiene por quedarse sin memoria
   (`OOMKilled` en `kubectl describe pod`), aumenta su límite.
+- **La detección de duplicados ocupa memoria en proporción a la ingesta sostenida, y fija el
+  límite.** Para que un evento reentregado se guarde una sola vez, cada servidor recuerda el id de
+  mensaje de cada evento publicado en el stream de eventos entrantes y en el de eventos resueltos
+  durante los últimos 10 minutos. Cada id cuesta unos 120 bytes en cada servidor, así que una
+  ingesta sostenida de E eventos por segundo ocupa unos E × 1200 s × 120 bytes: unos 145 MB a
+  1000 eventos por segundo, 860 MB a 6000 y 1,4 GB a 10 000. Las detecciones y las acciones que
+  disparan suman lo suyo: unos 420 MB a 1000 detecciones por segundo. Con los 830 MiB medidos
+  arriba, un servidor a 10 000 eventos por segundo necesita unos 2,6 GiB; por eso el límite es de
+  4Gi, que lo deja un 15 % por debajo del límite blando del 80 %. Se tarda 10 minutos de ingesta
+  constante en llegar ahí. Si fijas `nats_memory_limit` por debajo de 4Gi, reduce en proporción
+  el ritmo que puedes sostener.
+- **Un reinicio de más de unos 8 minutos puede guardar un evento dos veces.** Los 10 minutos
+  cubren toda reentrega mientras hay un consumidor en marcha. También cubren un pod de
+  `event-sources` o `device-management` que muere y vuelve en unos 8 minutos. Si tarda más, los
+  eventos que ese pod tenía en curso se guardan de nuevo: como mucho su ventana de publicación.
+  Para evitarlo, ejecuta `event-sources` y `device-management` con 2 o más réplicas, de modo que
+  un pod superviviente retome el trabajo un minuto después. Un broker que guarda una
+  publicación, pierde su confirmación y luego falla las publicaciones durante más de unos 8
+  minutos tiene el mismo efecto, y ahí más réplicas no ayudan.
 - **La CPU se solicita por debajo de lo que un servidor usa con carga**: unos 4,4 núcleos entre
   los tres servidores a 6000 eventos por segundo, de 1,6 a 1,8 de ellos en el servidor que lidera
   el stream de eventos entrantes. Con `--ha` en tres nodos cada nodo ejecuta exactamente un
