@@ -1,5 +1,5 @@
 {{/*
-Alerting rules for event-sources' external MQTT sources.
+Alerting rules for event-sources' external MQTT sources and its broker presence tap.
 
 WHY THIS GROUP EXISTS. A source that reads an operator's own MQTT broker is read by ONE
 event-sources pod at a time, chosen by a per-source lease: the broker gives every session
@@ -21,6 +21,14 @@ source exports no series at all, and an absent() arm would fire on every such in
 The chart cannot tell which installs have one: the sources are free-form service
 configuration. A crash-looping event-sources exports nothing either, and that is a pod
 failing loudly in its own right.
+
+BrokerPresenceLosingTransitions watches presence_events_failed_total, which counts a
+presence transition (from the tap or from a reconciliation repair) that the inbound stream
+refused or never acknowledged. The tap's advisories arrive on core NATS with no
+redelivery, so a failed transition is gone until the next reconciliation pass repairs it.
+A transition refused because the tap was stopping is NOT counted (the writer is closed only
+in the stop hook), so a rolling restart does not move it. Every pod exports it at 0 from
+start, so the first failure after a restart is an increase.
 */}}
 {{- if and .Values.metrics.enabled .Values.metrics.alerts }}
 {{- $ns := include "devicechain.instanceNamespace" . }}
@@ -63,4 +71,16 @@ spec:
           annotations:
             summary: "An external MQTT source is losing events it has already read"
             description: "For at least 10 minutes, external MQTT source {{ "{{ $labels.source }}" }} has been losing events: they were read from your broker and decoded, but publishing them to the platform's event stream failed. That source does not retry, and your broker was already told they arrived, so each one is gone. The cause is on the platform's side, not your broker's: its message broker is refusing or not answering publishes. Check the platform's message broker, and the event-sources log for 'is lost: this transport does not retry', which names the source and tenant of each."
+        # `for` equals the increase window, as for the sibling ingest-loss alerts: a failure
+        # that stops clears inside one window, one that lasts a full window is presence being
+        # lost faster than reconciliation is meant to repair it.
+        - alert: BrokerPresenceLosingTransitions
+          expr: sum(increase(devicechain_eventsources_presence_events_failed_total{namespace="{{ $ns }}"}[10m])) > 0
+          for: 10m
+          labels:
+            severity: warning
+            devicechain_instance: {{ $id }}
+          annotations:
+            summary: "Broker presence transitions are not reaching the event stream"
+            description: "For at least 10 minutes, event-sources has been failing to write device connects and disconnects to the platform's event stream ({{ "{{ $value }}" }} in the last 10 minutes). The broker does not resend connection notices, so each one is lost until the next reconciliation pass (every 5 minutes by default) puts the device right; until then a device can read offline while it is connected, or the other way round, and a reconnecting device's held commands are not released early. The cause is the platform's message broker refusing or not answering publishes. Check it, and the event-sources log for 'Failed to emit a broker presence transition', which names each device."
 {{- end }}

@@ -21,6 +21,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/natsauth"
+	"github.com/devicechain-io/dc-microservice/streams"
 	"github.com/devicechain-io/dc-microservice/svcclient"
 	nats "github.com/nats-io/nats.go"
 	"github.com/prometheus/client_golang/prometheus"
@@ -30,6 +31,66 @@ import (
 // brokerPresence holds everything the $SYS tap owns, so shutdown can undo exactly what
 // startup did. nil when the tap is off.
 var brokerPresence *presenceRuntime
+
+// PresenceWriter is the asynchronous inbound-events writer the broker tap emits through, with
+// brokerPresence.publishWindow publishes awaiting their acknowledgement at once. Nil when the
+// tap is disabled by configuration. It is closed by stopBrokerPresence.
+//
+// 🔴 AN ENABLED TAP WITH NO WRITER IS A WIRING FAULT, NEVER A QUIET SYNCHRONOUS TAP. The
+// synchronous path is the one that held a pod near 88 transitions a second per subject, and
+// a tap that fell back to it would look healthy in every way but throughput, which nobody
+// watches until the reconnect storm. So afterMicroserviceStarted refuses to start without
+// one (requirePresenceWriter), and a tap started without one anyway counts every transition
+// as failed (adapter.ErrNoAsyncWriter). The ONLY way to a synchronous tap is
+// presenceTapSynchronous, which a test sets on purpose.
+var PresenceWriter messaging.AsyncWriter
+
+// presenceTapSynchronous makes startBrokerPresence give the tap no asynchronous emitter, so it
+// waits for each acknowledgement as it did before the writer existed. Only a test sets it: one
+// that never built the service's broker components, or the control that measures the old
+// behaviour. Production never does.
+var presenceTapSynchronous bool
+
+// requirePresenceWriter refuses an enabled tap whose writer was never built. It is checked at
+// startup, so a regression in createNatsComponents stops the service instead of shipping the
+// synchronous ceiling.
+func requirePresenceWriter() error {
+	if Configuration.BrokerPresence.IsEnabled() && PresenceWriter == nil && !presenceTapSynchronous {
+		return errors.New("the broker presence tap is enabled but its asynchronous writer was never built; " +
+			"createNatsComponents must call buildPresenceWriter")
+	}
+	return nil
+}
+
+// newPresenceWriter builds the tap's writer at the configured window. It does not refuse at a
+// closed backpressure gate: a presence transition bypasses the gate by design (see
+// adapter.Emitter), so a refusal could only ever be a wrong one. It is a function of its own
+// so a wiring test can check the configured window reaches the writer.
+func newPresenceWriter(nmgr *messaging.NatsManager) (messaging.AsyncWriter, error) {
+	return nmgr.NewAsyncWriter(streams.InboundEvents, Configuration.BrokerPresence.PublishWindowSize(), false)
+}
+
+// buildPresenceWriter builds PresenceWriter unless the tap is disabled by configuration, in
+// which case no advisory is ever read and a writer would hold a reply subscription for nothing.
+func buildPresenceWriter(nmgr *messaging.NatsManager) error {
+	if !Configuration.BrokerPresence.IsEnabled() {
+		return nil
+	}
+	w, err := newPresenceWriter(nmgr)
+	if err != nil {
+		return err
+	}
+	PresenceWriter = w
+	return nil
+}
+
+// closePresenceWriter settles what the tap queued and closes its writer. Idempotent, and a
+// no-op when there is none.
+func closePresenceWriter() {
+	if w := PresenceWriter; w != nil {
+		w.Close()
+	}
+}
 
 type presenceRuntime struct {
 	conn *nats.Conn
@@ -204,7 +265,14 @@ func startBrokerPresence(ctx context.Context) {
 		return
 	}
 
-	tap := presence.NewTap(Microservice.InstanceId, source, presenceEmitter(), presenceGate(), presenceMetrics())
+	tapEmitter := adapter.NewEmitter(InboundEventsWriter, time.Now, presenceDedupPrefix, true)
+	tap := presence.NewTap(Microservice.InstanceId, source, tapEmitter, presenceGate(), presenceMetrics())
+	if !presenceTapSynchronous {
+		// The advisories go through the async writer; the reconciler (which holds the same tap)
+		// keeps the synchronous InboundEventsWriter through Apply. A nil PresenceWriter here is
+		// not a fallback: the emitter then fails every transition, loudly (see PresenceWriter).
+		tap.WithAsyncEmitter(tapEmitter.WithAsyncWriter(PresenceWriter))
+	}
 	stopTap, err := tap.Subscribe(conn)
 	if err != nil {
 		guard.close(conn)
@@ -220,7 +288,10 @@ func startBrokerPresence(ctx context.Context) {
 	}
 
 	runCtx, cancel := context.WithCancel(context.Background())
-	rt := &presenceRuntime{conn: conn, guard: guard, stops: []func(){stopTap}, cancel: cancel, stopped: make(chan struct{})}
+	// The writer closes right after the subscriptions stop and before the canary and the
+	// waker do, so the completions of what it settles still reach a live waker.
+	rt := &presenceRuntime{conn: conn, guard: guard, stops: []func(){stopTap, closePresenceWriter},
+		cancel: cancel, stopped: make(chan struct{})}
 
 	client := svcclient.New(infra.UserManagement, infra.ServiceAuth.Secret, "event-sources",
 		[]string{string(auth.TenantRead), string(auth.StateRead)})
@@ -356,7 +427,9 @@ func startPresenceDemotion(reason presence.TapOffReason) {
 	}
 
 	runCtx, cancel := context.WithCancel(context.Background())
-	rt := &presenceRuntime{cancel: cancel, stopped: make(chan struct{})}
+	// The tap never started, so the writer has nothing queued; it is closed here only so the
+	// stop releases what it holds. The tap's own runtime closes it in its own place.
+	rt := &presenceRuntime{cancel: cancel, stopped: make(chan struct{}), stops: []func(){closePresenceWriter}}
 
 	var runner presence.DemoteRunner
 	if drainReady {
@@ -658,9 +731,14 @@ func runCanaryLoop(ctx context.Context, c prober, interval time.Duration) {
 func stopBrokerPresence() {
 	rt := brokerPresence
 	if rt == nil {
+		closePresenceWriter()
 		return
 	}
 	brokerPresence = nil
+	// 🔑 NO defer closePresenceWriter() HERE. The writer's close is a step IN rt.stops, at the
+	// place its order matters (after the subscriptions, before the waker), on every runtime
+	// that owns it: the tap's and the demotion-only one. A deferred close would run it last
+	// and make that step's position untestable, since removing it would change nothing.
 	rt.cancel()
 	select {
 	case <-rt.stopped:
@@ -876,8 +954,11 @@ func sanitizeReplica(name string) string {
 func presenceEmitter() presence.Emitter {
 	// "bp" namespaces this source's dedup ids so they can never collide with the
 	// Sparkplug ("sp") or LwM2M ("lw") ids sharing the inbound dedup window.
-	return adapter.NewEmitter(InboundEventsWriter, time.Now, "bp", true)
+	return adapter.NewEmitter(InboundEventsWriter, time.Now, presenceDedupPrefix, true)
 }
+
+// presenceDedupPrefix namespaces the broker presence source's dedup ids; see presenceEmitter.
+const presenceDedupPrefix = "bp"
 
 func presenceMetrics() presence.Metrics {
 	return presence.Metrics{

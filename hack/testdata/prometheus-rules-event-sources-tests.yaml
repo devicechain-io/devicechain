@@ -181,3 +181,85 @@ tests:
       - eval_time: 30m
         alertname: ExternalMqttSourceLosingEvents
         exp_alerts: []
+
+  # BrokerPresenceLosingTransitions. Every pod exports the failed-transition counter at 0 from
+  # start. Healthy pods never move it: quiet.
+  # ------------------------------------------------------------------
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_eventsources_presence_events_failed_total{namespace="dci-devicechain", pod="dc-event-sources-5d8f-aaaaa", job="devicechain/event-sources"}'
+        values: '0x40'
+      - series: 'devicechain_eventsources_presence_events_failed_total{namespace="dci-devicechain", pod="dc-event-sources-5d8f-bbbbb", job="devicechain/event-sources"}'
+        values: '0x40'
+    alert_rule_test:
+      - eval_time: 40m
+        alertname: BrokerPresenceLosingTransitions
+        exp_alerts: []
+
+  # ------------------------------------------------------------------
+  # 🔴 THE PLATFORM BROKER REFUSES PUBLISHES from 10m on: one pod fails 3 transitions a
+  # minute. Quiet inside the pending period, firing after it. One instance-wide alert, not
+  # one per pod: the cause is the broker both pods publish to.
+  # ------------------------------------------------------------------
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_eventsources_presence_events_failed_total{namespace="dci-devicechain", pod="dc-event-sources-5d8f-aaaaa", job="devicechain/event-sources"}'
+        values: '0x10 3+3x30'
+      - series: 'devicechain_eventsources_presence_events_failed_total{namespace="dci-devicechain", pod="dc-event-sources-5d8f-bbbbb", job="devicechain/event-sources"}'
+        values: '0x40'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: BrokerPresenceLosingTransitions
+        exp_alerts: []
+      - eval_time: 25m
+        alertname: BrokerPresenceLosingTransitions
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              devicechain_instance: devicechain
+            exp_annotations:
+              summary: "Broker presence transitions are not reaching the event stream"
+              description: "For at least 10 minutes, event-sources has been failing to write device connects and disconnects to the platform's event stream (30 in the last 10 minutes). The broker does not resend connection notices, so each one is lost until the next reconciliation pass (every 5 minutes by default) puts the device right; until then a device can read offline while it is connected, or the other way round, and a reconnecting device's held commands are not released early. The cause is the platform's message broker refusing or not answering publishes. Check it, and the event-sources log for 'Failed to emit a broker presence transition', which names each device."
+
+  # ------------------------------------------------------------------
+  # A one-off burst (a stop that gave up waiting on what it held) that then stops: it clears
+  # within one window and never outlasts the pending period. Quiet.
+  # ------------------------------------------------------------------
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_eventsources_presence_events_failed_total{namespace="dci-devicechain", pod="dc-event-sources-5d8f-aaaaa", job="devicechain/event-sources"}'
+        values: '0x10 128x30'
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: BrokerPresenceLosingTransitions
+        exp_alerts: []
+      - eval_time: 30m
+        alertname: BrokerPresenceLosingTransitions
+        exp_alerts: []
+
+  # ------------------------------------------------------------------
+  # A ROLLING RESTART: each old pod's series ends and its replacement's starts at 0, three
+  # pods one after another, two minutes apart. A transition refused because the tap was
+  # stopping is not counted, so nothing moves and nothing pages.
+  # ------------------------------------------------------------------
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_eventsources_presence_events_failed_total{namespace="dci-devicechain", pod="dc-event-sources-old-a", job="devicechain/event-sources"}'
+        values: '0x10'
+      - series: 'devicechain_eventsources_presence_events_failed_total{namespace="dci-devicechain", pod="dc-event-sources-old-b", job="devicechain/event-sources"}'
+        values: '0x12'
+      - series: 'devicechain_eventsources_presence_events_failed_total{namespace="dci-devicechain", pod="dc-event-sources-old-c", job="devicechain/event-sources"}'
+        values: '0x14'
+      - series: 'devicechain_eventsources_presence_events_failed_total{namespace="dci-devicechain", pod="dc-event-sources-new-a", job="devicechain/event-sources"}'
+        values: '_x10 0x30'
+      - series: 'devicechain_eventsources_presence_events_failed_total{namespace="dci-devicechain", pod="dc-event-sources-new-b", job="devicechain/event-sources"}'
+        values: '_x12 0x28'
+      - series: 'devicechain_eventsources_presence_events_failed_total{namespace="dci-devicechain", pod="dc-event-sources-new-c", job="devicechain/event-sources"}'
+        values: '_x14 0x26'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: BrokerPresenceLosingTransitions
+        exp_alerts: []
+      - eval_time: 35m
+        alertname: BrokerPresenceLosingTransitions
+        exp_alerts: []

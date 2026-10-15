@@ -5,9 +5,11 @@ package presence
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/devicechain-io/dc-event-sources/adapter"
+	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/rs/zerolog/log"
 )
 
@@ -44,6 +46,9 @@ type Publisher struct {
 	// is exactly the transport that delivers by publishing and therefore has no drain of
 	// its own.
 	waker Waker
+	// async queues an emit without waiting for its acknowledgement, for ApplyAsync. MAY BE
+	// NIL, which is every publisher but the broker tap's.
+	async AsyncEmitter
 }
 
 // NewPublisher binds a publisher emitting under source. gate may be nil only in tests;
@@ -92,16 +97,78 @@ func (p *Publisher) Apply(ctx context.Context, transition Transition) bool {
 	if !p.admit(transition.Tenant) {
 		return false
 	}
+	p.noteSession(transition)
+	return p.settled(transition, p.emitter.EmitPresence(ctx, transition.Tenant, p.source, transition.DeviceToken, transition.Event))
+}
+
+// AsyncEmitter is the asynchronous half of Emitter: queue the transition and report the
+// outcome later. Satisfied by adapter.Emitter once it has an async writer.
+type AsyncEmitter interface {
+	EmitPresenceAsync(ctx context.Context, tenant, source, deviceToken string, ev adapter.PresenceEvent, done func(error))
+}
+
+// ErrNoAsyncEmitter is what ApplyAsync counts as a failed emit when the publisher was never
+// given an AsyncEmitter. It is loud on purpose: the alternative, a silent fall back to the
+// synchronous write, would hand the caller a throughput it did not get.
+var ErrNoAsyncEmitter = errors.New("presence: this publisher has no asynchronous emitter")
+
+// ApplyAsync is Apply for a caller that must not wait for the broker's acknowledgement: the
+// broker tap, whose delivery goroutine would otherwise be held for one acknowledgement per
+// advisory (about 11 ms on a replicated broker, so some 88 transitions a second per
+// subject). It runs the same admission and the same regression check synchronously, then
+// queues the emit; everything that follows the emit (the emitted or failed counters, the
+// log line, the command wake) happens in the completion callback, exactly once.
+//
+// 🔑 THE WAKE MOVED INTO THE COMPLETION, NOT BESIDE IT. It fires only on a CONNECT whose
+// emit was ACKNOWLEDGED, as in Apply: a wake sent when the transition was merely queued
+// would race a write that can still fail, and would release commands into a sweep that
+// reads the device as absent. A failed emit wakes nothing; it is counted and logged, and the
+// reconciler recovers the transition.
+//
+// The reconciler and the demoter keep the synchronous Apply: they report whether each
+// repair landed, and pace themselves on it.
+func (p *Publisher) ApplyAsync(ctx context.Context, transition Transition) {
+	if !p.admit(transition.Tenant) {
+		return
+	}
+	p.noteSession(transition)
+	if p.async == nil {
+		p.settled(transition, ErrNoAsyncEmitter)
+		return
+	}
+	p.async.EmitPresenceAsync(ctx, transition.Tenant, p.source, transition.DeviceToken, transition.Event,
+		func(err error) { p.settled(transition, err) })
+}
+
+// noteSession counts a session id that went backwards for the device. Emitted anyway: the
+// projection's stored session is the authority on whether the transition is stale, and this
+// replica's view is partial. The counter is what makes the clock-skew hazard visible.
+func (p *Publisher) noteSession(transition Transition) {
 	if p.lastSession.regressed(transition.Tenant, transition.DeviceToken, transition.Event.SessionId) {
-		// Emitted anyway: the projection's stored session is the authority on whether
-		// this is stale, and this replica's view is partial. The counter is what makes
-		// the clock-skew hazard visible.
 		incr(p.metrics.RegressedSessions)
 		log.Warn().Str("tenant", transition.Tenant).Str("device", transition.DeviceToken).
 			Uint64("session", transition.Event.SessionId).
 			Msg("Presence session id went backwards for a device; a broker node's clock may be trailing its peers.")
 	}
-	if err := p.emitter.EmitPresence(ctx, transition.Tenant, p.source, transition.DeviceToken, transition.Event); err != nil {
+}
+
+// settled is what happens once an emit has an outcome, whichever path produced it, and it
+// reports whether the transition reached the stream. It may run on a writer's goroutine, so
+// it never blocks: counters, one log line and Waker.Wake, which is a non-blocking enqueue.
+func (p *Publisher) settled(transition Transition, err error) bool {
+	if errors.Is(err, messaging.ErrAsyncWriterClosed) {
+		// 🔑 A STOP, NOT A FAILED WRITE, SO IT IS NOT COUNTED AS ONE. The writer closes only
+		// in the stop hook, after the subscriptions stop, so what lands here is the one or two
+		// advisories a delivery goroutine was still handing over at that instant: the same
+		// loss as the advisories the unsubscribe drops from the client buffer, which were
+		// never counted either, and repaired the same way. Counting them would put a failure
+		// on presence_events_failed_total on every rolling restart, and an alert that fires on
+		// routine deploys is one nobody reads by the time it means something.
+		log.Warn().Str("transition", transition.describe()).
+			Msg("A broker presence transition arrived as the tap was stopping and was not emitted; reconciliation will recover it.")
+		return false
+	}
+	if err != nil {
 		incr(p.metrics.Failed)
 		log.Error().Err(err).Str("transition", transition.describe()).
 			Msg("Failed to emit a broker presence transition; reconciliation will have to recover it.")

@@ -60,6 +60,19 @@ type EventWriter interface {
 	WriteMessages(ctx context.Context, msgs ...messaging.Message) error
 }
 
+// AsyncEventWriter is the part of messaging.AsyncWriter the emitter's asynchronous presence
+// path needs: queue the messages and report the outcome later. Its done contract is
+// messaging.AsyncWriter's (called once, nil only when every message was acknowledged).
+type AsyncEventWriter interface {
+	Submit(ctx context.Context, msgs []messaging.Message, done func(error))
+}
+
+// ErrNoAsyncWriter is what EmitPresenceAsync reports when the emitter was built without an
+// asynchronous writer. It is an error rather than a quiet fallback to the synchronous write:
+// a caller that chose the asynchronous path for its throughput must hear that it did not get
+// one, and a presence transition must never go unaccounted for.
+var ErrNoAsyncWriter = errors.New("adapter: this emitter has no asynchronous writer")
+
 // IngestMetrics are the optional Prometheus counters the ingest path updates; any nil
 // field is skipped so the ingester is usable in tests without a registry.
 type IngestMetrics struct {
@@ -419,6 +432,15 @@ type Emitter struct {
 	// ingest services (lwm2m, sparkplug) construct this true; a caller must opt in
 	// consciously — it is NEVER derived from device-controlled input.
 	authenticatedTransport bool
+	// async is the writer EmitPresenceAsync submits to; nil unless WithAsyncWriter set it.
+	async AsyncEventWriter
+}
+
+// WithAsyncWriter gives the emitter the writer EmitPresenceAsync submits to, and returns the
+// emitter. The synchronous Emit* methods never use it.
+func (e *Emitter) WithAsyncWriter(w AsyncEventWriter) *Emitter {
+	e.async = w
+	return e
 }
 
 // NewEmitter binds an emitter to a durable message writer, a clock (nil ⇒ time.Now),
@@ -633,6 +655,29 @@ func (e *Emitter) EmitPresence(ctx context.Context, tenant, source, deviceToken 
 	return e.emitStateChange(ctx, tenant, source, deviceToken, presenceStateChange(ev))
 }
 
+// EmitPresenceAsync queues one presence transition on the emitter's asynchronous writer and
+// returns without waiting for the broker's acknowledgement; done reports the outcome exactly
+// once (nil only once the transition was acknowledged), on the writer's goroutine, so it must
+// be quick and must not submit again. The message is byte-identical to EmitPresence's, dedup
+// id included, which is a pure function of (tenant, device, session, state): concurrency
+// cannot make two different transitions share one, and an identical one stores once.
+//
+// Ordering is the writer's: one submitting goroutine's calls are published, and their done
+// callbacks run, in that goroutine's call order, and nothing is promised across goroutines.
+func (e *Emitter) EmitPresenceAsync(ctx context.Context, tenant, source, deviceToken string,
+	ev PresenceEvent, done func(error)) {
+	if e.async == nil {
+		done(ErrNoAsyncWriter)
+		return
+	}
+	tctx, msg, err := e.buildStateChange(ctx, tenant, source, deviceToken, presenceStateChange(ev))
+	if err != nil {
+		done(err)
+		return
+	}
+	e.async.Submit(tctx, []messaging.Message{msg}, done)
+}
+
 // presenceStateChange and demotionStateChange are the ONLY mappings from a public event
 // onto the wire shape. They are named functions rather than literals inside the emitters
 // so the dedup-id golden tests can assert the frozen key through the SAME mapping
@@ -688,6 +733,18 @@ type stateChange struct {
 }
 
 func (e *Emitter) emitStateChange(ctx context.Context, tenant, source, deviceToken string, sc stateChange) error {
+	tctx, msg, err := e.buildStateChange(ctx, tenant, source, deviceToken, sc)
+	if err != nil {
+		return err
+	}
+	return e.writer.WriteMessages(tctx, msg)
+}
+
+// buildStateChange builds the tenant-scoped context and the inbound-events message for one
+// presence claim. It is the ONE definition both the synchronous and the asynchronous write
+// use, so the two cannot drift apart in what they put on the wire.
+func (e *Emitter) buildStateChange(ctx context.Context, tenant, source, deviceToken string,
+	sc stateChange) (context.Context, messaging.Message, error) {
 	// 🔴 NEVER EMIT THE ZERO INSTANT, AND FOR A DEMOTION THAT IS NOT A TIDINESS RULE. The
 	// resolver refuses a demotion carrying no occurred time outright ("a demotion is applied
 	// only when it is newer than the row it releases"), so an unstamped one is dead-lettered
@@ -732,10 +789,9 @@ func (e *Emitter) emitStateChange(ctx context.Context, tenant, source, deviceTok
 	}
 	encoded, err := esproto.MarshalUnresolvedEvent(uev)
 	if err != nil {
-		return err
+		return nil, messaging.Message{}, err
 	}
-	tctx := core.WithTenant(ctx, tenant)
-	return e.writer.WriteMessages(tctx, messaging.Message{
+	return core.WithTenant(ctx, tenant), messaging.Message{
 		Key:     []byte(deviceToken),
 		Value:   encoded,
 		DedupID: stateChangeDedupID(e.dedupPrefix, tenant, deviceToken, sc),
@@ -749,7 +805,7 @@ func (e *Emitter) emitStateChange(ctx context.Context, tenant, source, deviceTok
 		// ceiling, which is checked before this write. See
 		// messaging.Message.BypassBackpressure.
 		BypassBackpressure: true,
-	})
+	}, nil
 }
 
 // dedupID builds a compact, deterministic JetStream Nats-Msg-Id from its parts. It is a

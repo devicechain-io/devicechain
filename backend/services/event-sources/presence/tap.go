@@ -128,6 +128,14 @@ func (t *Tap) WithWaker(w Waker) *Tap {
 	return t
 }
 
+// WithAsyncEmitter makes the tap emit through e instead of waiting for each acknowledgement.
+// Only Handle (the broker's advisories) uses it; Apply, which the reconciler calls, stays
+// synchronous.
+func (t *Tap) WithAsyncEmitter(e AsyncEmitter) *Tap {
+	t.Publisher.async = e
+	return t
+}
+
 // NewTap binds a tap for one instance, emitting under source. gate may be nil only in
 // tests; the service always supplies the shared one.
 func NewTap(instanceId, source string, emitter Emitter, gate Gate, metrics Metrics) *Tap {
@@ -199,10 +207,17 @@ func unsubscribeAll(subs []*nats.Subscription) {
 // a NATS delivery callback for a subject with no acknowledgement and no redelivery. A
 // transition lost here is lost, which is precisely the hole reconciliation exists to
 // fill — so the failure is COUNTED and logged rather than swallowed.
+//
+// With an async emitter (WithAsyncEmitter) it returns once the transition is QUEUED, not
+// written: the outcome, failure included, is counted and logged when the broker answers.
 func (t *Tap) Handle(ctx context.Context, connected bool, raw []byte) {
 	transition, skip := TransitionFor(t.instanceId, connected, raw)
 	if skip != "" {
 		t.metrics.skipped(skip)
+		return
+	}
+	if t.async != nil {
+		t.ApplyAsync(ctx, transition)
 		return
 	}
 	t.Apply(ctx, transition)

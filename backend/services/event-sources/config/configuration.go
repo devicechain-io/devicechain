@@ -34,6 +34,17 @@ const (
 	// capture dedup id stores each once.
 	DefaultCapturePublishWindow = 512
 
+	// DefaultPresencePublishWindow is how many presence transitions the broker tap keeps
+	// awaiting the broker's acknowledgement at once, across both of its subscriptions, when
+	// brokerPresence.publishWindow is not set. The tap used to emit from its two delivery
+	// goroutines, each waiting for its own acknowledgement (about 11.4 ms on a replicated
+	// broker), so a pod handled about 88 transitions a second per subject and a 10,000
+	// device reconnect took about two minutes on one replica. 128 lifts that to about
+	// 128 / 11.4 ms, some 11,000 a second. A transition is a few hundred bytes, so the
+	// memory bound is negligible; the window is also a LOSS BOUND (see
+	// BrokerPresence.PublishWindow), which is why it is not the gateway's 512.
+	DefaultPresencePublishWindow = 128
+
 	// DefaultIngestReadingsPerSecond and DefaultIngestBurst are the platform
 	// per-tenant ingest ceiling applied when none is configured, counted in READINGS
 	// after decode and in messages before it, at the same number (see
@@ -206,6 +217,27 @@ type BrokerPresence struct {
 	// judging the inventory incomplete because a server was merely slow — and an
 	// inventory judged incomplete withholds every disconnect that pass.
 	InventoryGatherSeconds int
+	// PublishWindow is how many presence transitions the tap keeps awaiting the broker's
+	// acknowledgement at once, from 1 to messaging.MaxOrderedWindow. Unset (absent or null)
+	// defaults to DefaultPresencePublishWindow; an explicit 0 is refused, not defaulted, and
+	// so is anything outside the range. A fixed setting, read once at startup.
+	//
+	// 🔴 IT IS ALSO A LOSS BOUND. The advisories arrive on core NATS, which has no
+	// acknowledgement and no redelivery, so a pod that dies loses the transitions it had
+	// queued and not yet had acknowledged: up to this many. Reconciliation recovers them (it
+	// compares the broker's live connections with the projection), but only at its next pass.
+	//
+	// A pointer so "not written" and "written as 0" differ; after ApplyDefaults never nil.
+	PublishWindow *int
+}
+
+// PublishWindowSize is the presence publish window in effect: the configured one, or the
+// default when the setting was never written.
+func (b BrokerPresence) PublishWindowSize() int {
+	if b.PublishWindow == nil {
+		return DefaultPresencePublishWindow
+	}
+	return *b.PublishWindow
 }
 
 // ReconcileInterval, CanaryInterval, CanaryDeadline and InventoryGatherWindow render
@@ -349,6 +381,10 @@ func (c *EventSourcesConfiguration) ApplyDefaults() {
 		w := DefaultExternalMqttPublishWindow
 		c.ExternalMqtt.PublishWindow = &w
 	}
+	if c.BrokerPresence.PublishWindow == nil {
+		w := DefaultPresencePublishWindow
+		c.BrokerPresence.PublishWindow = &w
+	}
 }
 
 // RetiredConfigKeys names the keys this service accepted in an earlier release and has
@@ -400,6 +436,9 @@ func (c *EventSourcesConfiguration) Validate() error {
 	}
 	if w := c.ExternalMqtt.PublishWindowSize(); w < 1 || w > messaging.MaxOrderedWindow {
 		return fmt.Errorf("externalMqtt.publishWindow must be between 1 and %d (got %d)", messaging.MaxOrderedWindow, w)
+	}
+	if w := c.BrokerPresence.PublishWindowSize(); w < 1 || w > messaging.MaxOrderedWindow {
+		return fmt.Errorf("brokerPresence.publishWindow must be between 1 and %d (got %d)", messaging.MaxOrderedWindow, w)
 	}
 	if err := c.validateSourceIds(); err != nil {
 		return err

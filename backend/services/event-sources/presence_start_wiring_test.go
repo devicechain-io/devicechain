@@ -27,12 +27,15 @@ import (
 func startPresence(t *testing.T, b *authBroker) (*core.Microservice, *presenceRuntime) {
 	t.Helper()
 	savedConfig, savedMs, savedGateway := Configuration, Microservice, GatewaySourceId
-	savedInbound, savedPresence := InboundEventsWriter, brokerPresence
+	savedInbound, savedPresence, savedSync := InboundEventsWriter, brokerPresence, presenceTapSynchronous
 	t.Cleanup(func() {
 		stopBrokerPresence()
 		Configuration, Microservice, GatewaySourceId = savedConfig, savedMs, savedGateway
-		InboundEventsWriter, brokerPresence = savedInbound, savedPresence
+		InboundEventsWriter, brokerPresence, presenceTapSynchronous = savedInbound, savedPresence, savedSync
 	})
+	// These tests are about the system-account connection, not the emit path, and build no
+	// broker manager: they choose the synchronous tap, on purpose.
+	presenceTapSynchronous = true
 
 	um := newFakeUM(t)
 	host, port := um.infra(t)
