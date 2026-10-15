@@ -1,0 +1,115 @@
+# Copyright The DeviceChain Authors
+# SPDX-License-Identifier: Apache-2.0
+#
+# promtool UNIT TESTS for the device-management cache alerting rules.
+#
+# WHAT THESE ARE FOR, over and above the parse check
+#
+# DeviceCredentialCacheTooSmall and DeviceLookupCacheTooSmall are RATIOS: capacity evictions
+# over lookups, per pod (and per cache for the lookup cache). A ratio rule can parse and be
+# inverted, or divide the wrong series. The quiet cases carry as much weight as the firing:
+#
+#   - low churn (a full cache that evicts 2% of lookups) must not page;
+#   - evictions for another reason (expired, revoked) at a high rate must not page;
+#   - an install exporting no series must not page.
+#
+# THE SERIES (counters, scraped every minute):
+#
+#   - devicechain_devicemanagement_credential_cache_lookups_total{result}
+#   - devicechain_devicemanagement_credential_cache_evictions_total{reason}
+#   - devicechain_devicemanagement_kv_cache_local_lookups_total{cache, result}
+#   - devicechain_devicemanagement_kv_cache_local_evictions_total{cache, reason}
+#
+# Run via hack/check-prometheus-rules.sh, which renders the chart first and copies the
+# rendered group in beside this file as rendered-rules.yaml.
+rule_files:
+  - rendered-rules.yaml
+
+evaluation_interval: 1m
+
+tests:
+  # ------------------------------------------------------------------
+  # Credential cache: 10% of lookups evict at capacity, sustained. Fires.
+  # ------------------------------------------------------------------
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_devicemanagement_credential_cache_lookups_total{namespace="dci-devicechain", pod="dc-device-management-aaaaa", result="miss"}'
+        values: '0+100x60'
+      - series: 'devicechain_devicemanagement_credential_cache_evictions_total{namespace="dci-devicechain", pod="dc-device-management-aaaaa", reason="capacity"}'
+        values: '0+10x60'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: DeviceCredentialCacheTooSmall
+        exp_alerts: []
+      - eval_time: 40m
+        alertname: DeviceCredentialCacheTooSmall
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              devicechain_instance: devicechain
+              pod: dc-device-management-aaaaa
+            exp_annotations:
+              summary: "The device credential cache is too small for the fleet"
+              description: "On dc-device-management-aaaaa, more than 5% of device credential lookups have pushed another credential out of a full cache for 15m (now 10%). The cache is smaller than the set of devices reporting through it, so it is cycling and most checks go to the database. Raise inMemoryCache.credentialCacheMiB for device-management, and raise its memory limit with it."
+
+  # ------------------------------------------------------------------
+  # Credential cache: 2% capacity evictions, and a high rate of expiries and
+  # revocations. Quiet: only capacity evictions count, and 2% is under the line.
+  # ------------------------------------------------------------------
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_devicemanagement_credential_cache_lookups_total{namespace="dci-devicechain", pod="dc-device-management-aaaaa", result="hit"}'
+        values: '0+100x60'
+      - series: 'devicechain_devicemanagement_credential_cache_evictions_total{namespace="dci-devicechain", pod="dc-device-management-aaaaa", reason="capacity"}'
+        values: '0+2x60'
+      - series: 'devicechain_devicemanagement_credential_cache_evictions_total{namespace="dci-devicechain", pod="dc-device-management-aaaaa", reason="expired"}'
+        values: '0+50x60'
+      - series: 'devicechain_devicemanagement_credential_cache_evictions_total{namespace="dci-devicechain", pod="dc-device-management-aaaaa", reason="revoked"}'
+        values: '0+50x60'
+    alert_rule_test:
+      - eval_time: 45m
+        alertname: DeviceCredentialCacheTooSmall
+        exp_alerts: []
+
+  # ------------------------------------------------------------------
+  # Lookup cache: relationships-by-source at 20% capacity evictions fires; a second
+  # cache on the same pod at 1% does not, so the alert is per cache.
+  # ------------------------------------------------------------------
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_devicemanagement_kv_cache_local_lookups_total{namespace="dci-devicechain", pod="dc-device-management-aaaaa", cache="relationships-by-source", result="miss"}'
+        values: '0+100x60'
+      - series: 'devicechain_devicemanagement_kv_cache_local_evictions_total{namespace="dci-devicechain", pod="dc-device-management-aaaaa", cache="relationships-by-source", reason="capacity"}'
+        values: '0+20x60'
+      - series: 'devicechain_devicemanagement_kv_cache_local_lookups_total{namespace="dci-devicechain", pod="dc-device-management-aaaaa", cache="devices", result="hit"}'
+        values: '0+100x60'
+      - series: 'devicechain_devicemanagement_kv_cache_local_evictions_total{namespace="dci-devicechain", pod="dc-device-management-aaaaa", cache="devices", reason="capacity"}'
+        values: '0+1x60'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: DeviceLookupCacheTooSmall
+        exp_alerts: []
+      - eval_time: 40m
+        alertname: DeviceLookupCacheTooSmall
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              devicechain_instance: devicechain
+              pod: dc-device-management-aaaaa
+              cache: relationships-by-source
+            exp_annotations:
+              summary: "A device-management lookup cache is too small for the fleet"
+              description: "On dc-device-management-aaaaa, more than 5% of lookups in the relationships-by-source cache have pushed another entry out of a full cache for 15m (now 20%). The cache is smaller than the set of devices reporting through it, so it is cycling and most lookups go to the key-value bucket. Raise inMemoryCache.perDeviceCacheMiB for device-management, and raise its memory limit with it."
+
+  # ------------------------------------------------------------------
+  # No series at all (no in-memory copy, or nothing reporting). Quiet for both.
+  # ------------------------------------------------------------------
+  - interval: 1m
+    input_series: []
+    alert_rule_test:
+      - eval_time: 45m
+        alertname: DeviceCredentialCacheTooSmall
+        exp_alerts: []
+      - eval_time: 45m
+        alertname: DeviceLookupCacheTooSmall
+        exp_alerts: []
