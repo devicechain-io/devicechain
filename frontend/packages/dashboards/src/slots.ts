@@ -59,7 +59,7 @@ function bindingLabel(b: SlotBinding): string {
 }
 
 // nextSlotName — the lowest unused `slot-N` name in a slots map.
-function nextSlotName(slots: Record<string, SlotDefinition>): string {
+export function nextSlotName(slots: Record<string, SlotDefinition>): string {
   let n = 1;
   while (slots[`slot-${n}`]) n += 1;
   return `slot-${n}`;

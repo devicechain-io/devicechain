@@ -77,9 +77,24 @@ import {
 } from './canvasGeometry';
 import { inlineFindings, layoutFindingsOf, LAYOUT_FINDING_KEYS } from './layoutFindings';
 
+// What a canvas edit did, and to which widget: the label the workspace's undo history records (and
+// announces when the edit is undone). A gesture reports ONE edit, when it is released.
+export interface CanvasEdit {
+  action: 'move' | 'resize' | 'offset' | 'delete' | 'placement' | 'anchor';
+  widgetId: string;
+}
+
+// The edits the toolbar reports (identifiers, not text).
+const PLACEMENT_EDIT: CanvasEdit['action'] = 'placement';
+const ANCHOR_EDIT: CanvasEdit['action'] = 'anchor';
+const DELETE_EDIT: CanvasEdit['action'] = 'delete';
+
 export interface DashboardCanvasProps {
   definition: DashboardDefinition;
-  onChange: (next: DashboardDefinition) => void;
+  onChange: (next: DashboardDefinition, edit: CanvasEdit) => void;
+  // Duplicate and Copy on the selected widget's toolbar. Each is offered only when given.
+  onDuplicate?: (id: string) => void;
+  onCopy?: (id: string) => void;
   hub: WidgetDataSource;
   // The registry every widget on the canvas resolves through -- the one the definition was
   // parsed with. Defaults to the deployment's.
@@ -203,6 +218,8 @@ export function DashboardCanvas({
   bindings,
   selectedId,
   onSelect,
+  onDuplicate,
+  onCopy,
 }: DashboardCanvasProps) {
   const { t } = useTranslation('dashboards');
   const { grid, sizing, frame: canvasFrame } = definition.canvas;
@@ -298,7 +315,8 @@ export function DashboardCanvas({
       if (!ours(e)) return;
       const next = previewRef.current(gesture, at(e));
       setGesture(null);
-      if (next !== definitionRef.current) onChangeRef.current(next);
+      // The whole gesture is one edit, reported once, on release.
+      if (next !== definitionRef.current) onChangeRef.current(next, { action: gesture.kind, widgetId: gesture.id });
     };
     const lost = (e: Event) => {
       if (ours(e)) cancel();
@@ -390,7 +408,7 @@ export function DashboardCanvas({
     const placing = pickingFor;
     setPickingFor(null);
     if (canHostRelative(definition, placing, widget.id)) {
-      onChange(placeRelative(definition, placing, widget.id, 'top-right'));
+      onChange(placeRelative(definition, placing, widget.id, 'top-right'), { action: 'placement', widgetId: placing });
       onSelect(placing);
       elements.current.get(placing)?.focus();
     }
@@ -426,7 +444,9 @@ export function DashboardCanvas({
     e.preventDefault();
     const p = basePlacement(widget);
     let next: DashboardDefinition;
+    let action: CanvasEdit['action'] = 'move';
     if (p.mode === 'relative') {
+      action = 'offset';
       const step = e.shiftKey ? 0.25 : 1;
       next = setRelativeOffset(
         definition,
@@ -435,6 +455,7 @@ export function DashboardCanvas({
         { fine: e.shiftKey, bounds: { cell, gutter, columns: grid.columns } },
       );
     } else if (e.shiftKey) {
+      action = 'resize';
       next = resizeWidget(
         definition,
         widget.id,
@@ -448,7 +469,7 @@ export function DashboardCanvas({
       next = moveWidget(definition, widget.id, { col: p.col + dx, row: p.row + dy }, grid.columns, { nearest: true });
     }
     if (next === definition) return;
-    onChange(next);
+    onChange(next, { action, widgetId: widget.id });
     const after = next.widgets.find((w) => w.id === widget.id);
     const q = after && basePlacement(after);
     if (q?.mode === 'grid') {
@@ -483,7 +504,7 @@ export function DashboardCanvas({
             pressed={placement.mode === 'grid'}
             onClick={() => {
               setPickingFor(null);
-              onChange(placeOnGrid(definition, widget.id));
+              onChange(placeOnGrid(definition, widget.id), { action: PLACEMENT_EDIT, widgetId: widget.id });
             }}
           >
             {t('canvasPlacementGrid')}
@@ -499,14 +520,24 @@ export function DashboardCanvas({
         {placement.mode === 'relative' && (
           <AnchorPicker
             value={placement.anchor}
-            onPick={(anchor) => onChange(setRelativeAnchor(definition, widget.id, anchor))}
+            onPick={(anchor) => onChange(setRelativeAnchor(definition, widget.id, anchor), { action: ANCHOR_EDIT, widgetId: widget.id })}
           />
+        )}
+        {onDuplicate && widget.type !== UNKNOWN_WIDGET_TYPE && (
+          <ToolbarButton data-testid="widget-duplicate" onClick={() => onDuplicate(widget.id)}>
+            {t('canvasDuplicate')}
+          </ToolbarButton>
+        )}
+        {onCopy && widget.type !== UNKNOWN_WIDGET_TYPE && (
+          <ToolbarButton data-testid="widget-copy" onClick={() => onCopy(widget.id)}>
+            {t('canvasCopy')}
+          </ToolbarButton>
         )}
         <ToolbarButton
           danger
           data-testid="widget-delete"
           onClick={() => {
-            onChange(deleteWidget(definition, widget.id));
+            onChange(deleteWidget(definition, widget.id), { action: DELETE_EDIT, widgetId: widget.id });
             onSelect(null);
           }}
         >

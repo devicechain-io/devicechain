@@ -79,7 +79,7 @@ function resolveCollisions(
 // edit to a base placement changes what every breakpoint without its own entry for that widget
 // shows, so a move that is clear at base can still land on another widget's override at a
 // breakpoint (and the parser refuses an overlap at any of them).
-function resolveEverywhere(def: DashboardDefinition, first: readonly string[], aside = false): DashboardDefinition {
+export function resolveEverywhere(def: DashboardDefinition, first: readonly string[], aside = false): DashboardDefinition {
   let next = def;
   // The swap is an edit of the base layout: a breakpoint arrangement the edit reaches only through
   // the inherited base placement is pushed apart, never rearranged.
@@ -205,7 +205,7 @@ export function deleteWidget(def: DashboardDefinition, id: string): DashboardDef
 }
 
 // The span a (possibly relative) placement covers, for re-homing a `fill` widget.
-function hostSpan(p: Placement, def: DashboardDefinition, bp: string): { cols: number; rows: number } {
+export function hostSpan(p: Placement, def: DashboardDefinition, bp: string): { cols: number; rows: number } {
   if (p.mode === 'grid') return { cols: p.cols, rows: p.rows };
   if (!('fill' in p.size)) return p.size;
   const host = def.widgets.find((w) => w.id === p.host);

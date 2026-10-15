@@ -261,6 +261,38 @@ export {
   type GridGeometry,
 } from './editor-model';
 
+// The editor's undo/redo history and its duplicate / copy / paste transforms. Editor-only: each
+// lives in its own module, which nothing a viewer renders imports, so a viewer bundle drops them.
+export {
+  DEFAULT_HISTORY_LIMIT,
+  canRedo,
+  canUndo,
+  commitEdit,
+  createEditHistory,
+  rebaseHistory,
+  redoEdit,
+  sealHistory,
+  undoEdit,
+  type CommitOptions,
+  type EditHistory,
+  type HistoryEntry,
+  type Step,
+} from './editor-history';
+export {
+  WIDGET_CLIPBOARD_FORMAT,
+  WIDGET_CLIPBOARD_VERSION,
+  copyWidget,
+  duplicateWidget,
+  parseWidgetClipboard,
+  pasteWidgets,
+  serializeWidgetClipboard,
+  type ClipboardOrigin,
+  type PasteResult,
+  type RefusedWidget,
+  type UnboundPaste,
+  type WidgetClipboard,
+} from './editor-clipboard';
+
 // The device-management-backed resolver the Hub injects, and the event-management
 // history seeder the renderer backfills charts with — the runtime's coupling to the
 // platform's GraphQL, kept out of the presentational widget layer.

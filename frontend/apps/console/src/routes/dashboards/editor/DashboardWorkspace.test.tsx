@@ -14,12 +14,13 @@ import type { DashboardDefinition, DeviceResolver, SelectionTarget, SlotBinding 
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { CanvasEdit } from './DashboardCanvas';
 
 const h = vi.hoisted(() => ({
   view: [] as Array<Record<string, SlotBinding> | undefined>,
   edit: [] as Array<Record<string, SlotBinding>>,
   select: undefined as ((t: SelectionTarget) => void) | undefined,
-  change: undefined as ((next: DashboardDefinition) => void) | undefined,
+  change: undefined as ((next: DashboardDefinition, edit: CanvasEdit) => void) | undefined,
   definition: undefined as DashboardDefinition | undefined,
 }));
 
@@ -39,7 +40,7 @@ vi.mock('./DashboardCanvas', () => ({
   DashboardCanvas: (props: {
     bindings: Record<string, SlotBinding>;
     definition: DashboardDefinition;
-    onChange: (next: DashboardDefinition) => void;
+    onChange: (next: DashboardDefinition, edit: CanvasEdit) => void;
   }) => {
     h.edit.push(props.bindings);
     h.change = props.onChange;
@@ -125,7 +126,10 @@ describe('the slot manifest each mode renders with', () => {
 
     const base = h.definition as DashboardDefinition;
     act(() =>
-      h.change?.({ ...base, slots: { machine: { type: 'device', defaultBinding: dev('hauler-2') } } }),
+      h.change?.(
+        { ...base, slots: { machine: { type: 'device', defaultBinding: dev('hauler-2') } } },
+        { action: 'move', widgetId: 'card' },
+      ),
     );
     act(() => {
       vi.advanceTimersByTime(200);

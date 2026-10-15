@@ -93,9 +93,9 @@ plataforma comprueba cada acción contra tus propios permisos.
 
 ## Editar en el lienzo
 
-**Editar** convierte el panel en un lienzo. Los botones pasan a ser **Añadir widget**, **Vista
-previa**, **Exportar**, **Historial**, **Guardar** y **Hecho**, y aparece una barra de ajustes de
-diseño.
+**Editar** convierte el panel en un lienzo. Los botones pasan a ser **Deshacer**, **Rehacer**,
+**Añadir widget**, **Pegar**, **Vista previa**, **Exportar**, **Historial**, **Guardar** y
+**Hecho**, y aparece una barra de ajustes de diseño.
 
 <GuideShot id="dashboard-edit" alt="El panel Widget Lab en modo de edición. La cabecera muestra Añadir widget, Vista previa, Exportar, Historial, Guardar desactivado y Hecho. Una barra de ajustes muestra Título Widget Lab, Columnas 12, Celda mínima 56, Separación 8, Margen 0 y Tamaño Llenar área. Los widgets aparecen enmarcados en el lienzo; algunos muestran un guion o el texto de que aún no hay datos." />
 
@@ -228,6 +228,43 @@ dibuja sobre la cuadrícula. Una línea discontinua lo une a su anfitrión. Arr�
 del anclaje en celdas completas, o mantén **Mayús** para moverlo en cuartos de celda. Elige
 **Cuadrícula** para devolverlo a la cuadrícula, en el primer hueco libre. Un widget relativo no
 puede ser a su vez anfitrión.
+
+### Deshacer, duplicar y pegar {#undo-duplicate-and-paste}
+
+**Deshacer** y **Rehacer**, los primeros botones del editor, retroceden y avanzan por tus cambios:
+mover, redimensionar, añadir y eliminar widgets, su configuración y su origen de datos, los ajustes
+de diseño y **Ajustar a los límites**. **Ctrl+Z** (**Cmd+Z** en un Mac) deshace, y
+**Ctrl+Mayús+Z** o **Ctrl+Y** (**Cmd+Mayús+Z**) rehace. Un arrastre o un cambio de tamaño es un
+solo paso por mucho que se mueva el puntero, y escribir en un campo es un solo paso hasta que sales
+del campo. El editor guarda los últimos 100 pasos. Mientras escribes en un campo, estas teclas
+deshacen y rehacen lo escrito en ese campo. Un lector de pantalla anuncia qué deshizo cada paso,
+por ejemplo «Se deshizo: mover Nivel del tanque».
+
+Deshacer solo vuelve a lo que el panel fue de verdad: puede devolver un problema de colocación que
+**Ajustar a los límites** corrigió, pero nunca uno que el panel no tenía. Los pasos se conservan
+hasta que sales del panel o restauras una versión. Guardar y publicar los mantienen, así que puedes
+deshacer un cambio que acabas de guardar; el panel vuelve entonces a tener cambios sin guardar.
+
+**Duplicar**, en el widget seleccionado, o **Ctrl+D** (**Cmd+D**), añade una copia con el mismo
+tamaño, configuración y origen de datos en el primer hueco libre en el que cabe.
+
+**Copiar**, en el widget seleccionado, o **Ctrl+C** (**Cmd+C**), lo copia. **Pegar**, en la
+cabecera del editor, añade el último widget copiado en esta pestaña del navegador al panel que
+editas, en el primer hueco libre, así que puedes copiar en un panel y pegar en otro. **Ctrl+V**
+(**Cmd+V**) pega desde el portapapeles, que también llega a un panel abierto en otra pestaña. Un
+tipo de widget que esta consola no tiene no se pega, y la consola lo nombra. Tampoco se pega un
+widget copiado en una versión más reciente de DeviceChain: la consola lo indica; actualízala para
+pegarlo.
+
+En el mismo panel, una copia conserva su origen de datos. En otro panel solo lo conserva si ese
+panel tiene un slot con el mismo nombre vinculado al mismo dispositivo o entidad: los slots se
+numeran en cada panel, así que el mismo nombre en dos paneles suele indicar dos dispositivos
+distintos. Si no, el widget se pega sin origen de datos y el editor lo indica, con el nombre del
+widget y del slot al que estaba vinculado, hasta que eliges un origen de datos en su configuración.
+Un widget copiado en otro inquilino nunca conserva su origen de datos, sea cual sea el panel: los
+dispositivos pertenecen a su inquilino, así que se pega sin origen de datos y el editor dice por qué.
+Un widget colocado en relación con otro se copia en la cuadrícula con su propio tamaño; elige
+**Relativo a…** para volver a unirlo.
 
 ## Vista previa con datos sintéticos {#previewing-with-synthetic-data}
 
