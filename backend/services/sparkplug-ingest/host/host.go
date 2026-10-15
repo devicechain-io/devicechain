@@ -69,10 +69,18 @@ const (
 	ingestAttemptTimeout = 3 * time.Second
 	ingestMaxAttempts    = 3
 	ingestRetryBackoff   = 500 * time.Millisecond
-	// publishRetryDepth bounds the failed publishes waiting for their next attempt. It is
-	// sized well past the window (a failure takes the whole window with it at once), and a
+	// publishRetryDepth bounds the failed publishes waiting for their next attempt, and a
 	// full queue abandons the publish, counted, rather than blocking the writer's goroutine.
-	publishRetryDepth = 1024
+	//
+	// It is twice the LARGEST window, so it fits two whole windows of failures at any
+	// configured ingest.publishWindow. A broker failure fails at most one window at once:
+	// after it the writer holds the window's slots back and lets one probe through per
+	// backoff until a publish succeeds (messaging's pace), so a second window can fail only
+	// after a success has let the first one's retries back in. Overflow therefore needs
+	// failures faster than the writer itself admits, and is counted like any other loss.
+	// At the default window of 32 the queue normally holds at most 32. It is a channel of
+	// pointers, so the headroom costs 16 KiB per connection.
+	publishRetryDepth = 2 * messaging.MaxOrderedWindow
 	// reconcileProbeWindow is how long the failover reconciliation waits after
 	// rebirthing a tenant's asserted-active nodes before it declares the still-silent
 	// ones dead (ADR-067 SP4b). It must comfortably exceed a healthy node's
@@ -332,8 +340,21 @@ type publishItem struct {
 // publishSettleTimeout is how long a stopping Client waits for the publications it submitted
 // to be stored before the lease can be released. Each publish in flight runs its own 5 s
 // ceiling concurrently, so after the last submission returns everything settles within about
-// one ceiling; this is longer than that and short enough for any shutdown budget.
-const publishSettleTimeout = 10 * time.Second
+// one ceiling; this is longer than that.
+//
+// 🔴 IT IS SIZED AGAINST THE SHUTDOWN BUDGET, NOT ONLY AGAINST THE CEILING. With the chart's
+// defaults (30 s grace, 5 s readiness drain) the teardown gets 30 - 5 - 2 = 23 s, and a
+// stop that runs every step to its bound spends: the OFFLINE STATE publish (publishTimeout,
+// 5 s), the disconnect quiesce (0.25 s), this settle, and then closing the writer, which
+// ends every backoff and waits for what the settle left: one ceiling (5 s) for what was
+// already sent, one more only for a piece that was still waiting for room. At 8 s the usual
+// worst case (one of the two brokers failing) is 8 + 5, about 13 s, and even the 5 s STATE
+// publish on top leaves some 4.7 s for the lease release and the broker manager's drain.
+// Both brokers failing at once with a piece waiting for room can exceed the budget by a
+// fraction of a second, which the service reports as a teardown that did not finish, never
+// as a silent kill. A settle that times out loses nothing by itself: the writer's Close
+// still waits for, and counts, what it left. The external MQTT source uses the same 8 s.
+const publishSettleTimeout = 8 * time.Second
 
 var errNoPublisher = errors.New("this Sparkplug client has no publisher: its publications cannot be stored")
 var errClientStopped = errors.New("the Sparkplug connection is shutting down")

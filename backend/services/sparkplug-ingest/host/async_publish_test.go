@@ -317,3 +317,57 @@ func TestAPublishThatFailsWhileStopIsSettlingIsCounted(t *testing.T) {
 	}
 	assert.Equal(t, 1, pub.submitted(), "a failed publish was resubmitted after the term ended")
 }
+
+// A resubmission waits out ingestRetryBackoff after the failure, as the in-handler retry did:
+// one that went at once would spend the whole budget inside a single broker blip, and the
+// backoff is what makes three attempts span an outage rather than a microsecond.
+func TestAResubmissionWaitsOutTheBackoff(t *testing.T) {
+	pub := &scriptedPublisher{results: []error{errors.New("no PubAck")}}
+	c := quietClient(t, &fakeIngester{}, pub, newFailures())
+
+	failedAt := time.Now()
+	c.ingestSamples("g/n", oneSample())
+	require.Eventually(t, func() bool { return pub.submitted() == 2 }, 10*time.Second, 2*time.Millisecond,
+		"a failed publish was not resubmitted")
+	assert.GreaterOrEqual(t, time.Since(failedAt), ingestRetryBackoff-50*time.Millisecond,
+		"the resubmission did not wait out the backoff")
+}
+
+// 🔴 EVERY RETRY STILL QUEUED WHEN THE TERM ENDS IS COUNTED, not only the one the retry
+// goroutine happens to be holding. Three publishes fail at once (as a window does when the
+// broker drops), the goroutine takes the first and waits out its backoff, and Stop comes
+// inside it: all three are lost, so all three must show on the counter.
+func TestStopCountsEveryQueuedRetry(t *testing.T) {
+	down := errors.New("down")
+	pub := &scriptedPublisher{results: []error{down, down, down}}
+	failures := newFailures()
+	c := quietClient(t, &fakeIngester{}, pub, failures)
+
+	for i := 0; i < 3; i++ {
+		c.ingestSamples("g/n", oneSample())
+	}
+	require.Equal(t, 3, pub.submitted())
+	stopWithin(t, c, 10*time.Second) // well inside the first retry's backoff
+
+	assert.Equal(t, 3, pub.submitted(), "a retry was resubmitted after the term ended")
+	assert.Equal(t, 3.0, testutil.ToFloat64(failures), "a retry still queued at Stop vanished uncounted")
+}
+
+// A term after a Stop retries again. Stop closes the retry queue so that nothing is resubmitted
+// after the lease is released, and the next Connect must open a new one: a client that stayed
+// closed would abandon, counted, every publish that failed once for the rest of the process.
+func TestASecondTermRetriesAgain(t *testing.T) {
+	pub := &scriptedPublisher{}
+	failures := newFailures()
+	c := quietClient(t, &fakeIngester{}, pub, failures)
+	stopWithin(t, c, 10*time.Second)
+
+	pub.mu.Lock()
+	pub.results = []error{errors.New("down")}
+	pub.mu.Unlock()
+	c.Connect()
+	c.ingestSamples("g/n", oneSample())
+	require.Eventually(t, func() bool { return pub.submitted() == 2 }, 10*time.Second, 5*time.Millisecond,
+		"the second term did not resubmit a failed publish")
+	assert.Zero(t, testutil.ToFloat64(failures), "a publish that succeeded on its second attempt is not a loss")
+}

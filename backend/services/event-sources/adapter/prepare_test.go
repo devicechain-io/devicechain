@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -143,4 +145,24 @@ func TestPreparePresence(t *testing.T) {
 	none, err := ing.PreparePresence(context.Background(), "acme", IngestPolicy{Source: "s"}, nil)
 	require.NoError(t, err)
 	assert.Nil(t, none)
+}
+
+// Delivered counts what was STORED and what was dropped for age, and only then: a Publication
+// of one fresh and one too-old sample counts one reading emitted and one too old, both when the
+// publisher reports it acknowledged, which is what Ingest counts after its write returns.
+func TestPrepareIngestDeliveredCountsStoredAndTooOld(t *testing.T) {
+	m, read := newIngestMetrics()
+	tooOld := prometheus.NewCounter(prometheus.CounterOpts{Name: "too_old"})
+	m.TooOldDropped = tooOld
+	ing := NewIngester(NewRegistrar(knownDevice(), "url", "sp-", nil), NewEmitter(&fakeWriter{}, fixedNow, "sp", false), m)
+
+	pub, err := ing.PrepareIngest(context.Background(), "acme", IngestPolicy{Source: "s"}, "g/n",
+		[]Sample{{Name: "t", Value: 1, Time: fixedNowMs}, {Name: "old", Value: 2, Time: 1}})
+	require.NoError(t, err)
+	require.NotNil(t, pub)
+	assert.Zero(t, testutil.ToFloat64(tooOld), "counted before the caller said it was stored")
+
+	pub.Delivered()
+	assert.Equal(t, 1.0, read("emitted"), "only the reading that was published is emitted")
+	assert.Equal(t, 1.0, testutil.ToFloat64(tooOld), "the reading dropped for age is counted once delivered")
 }

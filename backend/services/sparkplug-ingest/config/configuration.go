@@ -63,10 +63,25 @@ type Ingest struct {
 	// 🔴 IT IS ALSO A LOSS BOUND. A Sparkplug host is a clean-session client (its broker
 	// redelivers nothing to a restarted host), and it acknowledges each message to the broker
 	// as soon as it has been handed on, not when it is stored. A pod that dies loses what it
-	// has taken and not yet stored, which was one message per connection and is now up to
-	// this many per connection. An edge node's store-and-forward covers the window in which
-	// the host is offline, not messages already delivered to a host that then died. A clean
-	// stop, or a handover of leadership, waits for them to be stored first.
+	// has taken and not yet stored, which was one message per connection and is now, per
+	// connection:
+	//
+	//   - up to this many awaiting the platform broker's acknowledgement;
+	//   - while publishes are failing, those waiting out their backoff to be tried again.
+	//     The writer lets a failing broker fail at most one window at once, so this is about
+	//     one more window at worst and nothing while the broker is healthy (the queue's hard
+	//     cap is host.publishRetryDepth, and what overflows it is counted as lost);
+	//   - the one message the receive goroutine is handling.
+	//
+	// Messages the MQTT client has read and not yet handed over are not acknowledged to the
+	// broker, but a clean session discards them on the disconnect anyway, as it did before.
+	// An edge node's store-and-forward covers the window in which the host is offline, not
+	// messages already delivered to a host that then died. A clean stop, or a handover of
+	// leadership, waits (bounded) for them to be stored first. What a new leader repairs is
+	// STATE, not history: it announces ONLINE, a node that then sends DATA with no birth on
+	// the new host is asked to rebirth, and failover reconciliation rebirths the nodes the
+	// platform still holds connected, so presence and every metric's current value come back
+	// with the births; readings lost in between do not.
 	//
 	// It is a pointer so that "not written" and "written as 0" are different things; after
 	// ApplyDefaults it is never nil.
