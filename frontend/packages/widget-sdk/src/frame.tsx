@@ -10,16 +10,28 @@
 // first frame, and the SAME box is measured (quantised to 4 px) and handed to everything inside
 // through context (useWidgetScale), so a canvas widget fits to the identical numbers. The header
 // gives way to the body as the widget shrinks: the subtitle goes first, then the title.
+//
+// What the card LOOKS like is the board's to decide (the frame a definition sets on its canvas
+// and per widget, resolved by the renderer and read here through useWidgetFrameStyle): a card, a
+// borderless flat panel, or nothing at all; its border width, radius and colour; its padding;
+// its background; and whether the header shows. Every value is a token. A widget mounted outside
+// a board gets the card.
 
-import { sameLabel } from '@devicechain/dashboards';
+import { resolveFrame, sameLabel, type FrameRadius, type ResolvedFrame, type SpaceTokenName } from '@devicechain/dashboards';
 import { useMemo, type CSSProperties, type ReactNode } from 'react';
 
-import { useWidgetDensityScale, useWidgetFreshness, useWidgetSubject, WidgetBodySizeProvider } from './context';
+import {
+  useWidgetDensityScale,
+  useWidgetFrameStyle,
+  useWidgetFreshness,
+  useWidgetSubject,
+  WidgetBodySizeProvider,
+} from './context';
 import { FreshnessReadout, StaleBadge, useFreshness } from './freshness-readout';
 import { useElementSize } from './hooks';
 import { css } from './theme';
 import { makeWidgetScale, type WidgetScale } from './scale';
-import { fontVar, spaceVar } from './tokens';
+import { fontVar, spaceVar, type SpaceToken } from './tokens';
 
 // Below either of these (px, content box) the age readout is dropped so a small widget keeps
 // its room for the value; a stale widget still shows its badge, in the corner.
@@ -34,6 +46,20 @@ export const FRAME_TITLE_MIN_HEIGHT = 76;
 
 // The content column's size is quantised to this many px before it reaches a widget.
 const BODY_SIZE_STEP = 4;
+
+// The card a widget gets when no board says otherwise.
+const DEFAULT_FRAME: ResolvedFrame = resolveFrame(undefined, undefined);
+
+const RADIUS: Record<FrameRadius, string> = {
+  none: '0px',
+  sm: 'calc(var(--radius, 8px) / 2)',
+  md: 'var(--radius, 8px)',
+  lg: 'calc(var(--radius, 8px) * 1.5)',
+};
+
+function spaceTokenVar(token: SpaceTokenName): string {
+  return token === 'space-0' ? '0px' : spaceVar(Number(token.slice('space-'.length)) as SpaceToken);
+}
 
 export interface WidgetFrameProps {
   title?: string;
@@ -79,10 +105,14 @@ export function WidgetFrame({ title, subtitle, children, bodyStyle, flush, sampl
   const [rootRef, size] = useElementSize<HTMLDivElement>();
   const [columnRef, columnSize] = useElementSize<HTMLDivElement>(BODY_SIZE_STEP);
   const scale = useWidgetDensityScale();
+  const frame = useWidgetFrameStyle() ?? DEFAULT_FRAME;
   // Unmeasured (first frame, jsdom) shows everything; the cq path needs no measure to be right.
+  // `show` keeps the header whatever the size, `hide` drops it whatever the size.
   const measured = size.height > 0;
-  const showSub = !measured || size.height >= FRAME_SUBTITLE_MIN_HEIGHT * scale;
-  const showTitle = !measured || size.height >= FRAME_TITLE_MIN_HEIGHT * scale;
+  const header = frame.header;
+  const showSub = header === 'show' || (header === 'auto' && (!measured || size.height >= FRAME_SUBTITLE_MIN_HEIGHT * scale));
+  const showTitle = header === 'show' || (header === 'auto' && (!measured || size.height >= FRAME_TITLE_MIN_HEIGHT * scale));
+  const rule = frame.border.width > 0 ? `${frame.border.width}px solid ${css(frame.border.color)}` : 'none';
   const sub = showSub ? dupSub : undefined;
   const shownTitle = showTitle ? title : undefined;
   const widgetScale = useMemo(() => makeWidgetScale(columnSize, scale), [columnSize, scale]);
@@ -102,10 +132,10 @@ export function WidgetFrame({ title, subtitle, children, bodyStyle, flush, sampl
         width: '100%',
         height: '100%',
         boxSizing: 'border-box',
-        background: css('card'),
+        background: frame.background === 'transparent' ? 'transparent' : css(frame.background),
         color: css('card-foreground'),
-        border: `1px solid ${css('border')}`,
-        borderRadius: 'var(--radius, 8px)',
+        border: rule,
+        borderRadius: RADIUS[frame.border.radius],
         overflow: 'hidden',
       }}
     >
@@ -113,7 +143,7 @@ export function WidgetFrame({ title, subtitle, children, bodyStyle, flush, sampl
         <div
           style={{
             padding: `${spaceVar(2)} ${spaceVar(3)}`,
-            borderBottom: `1px solid ${css('border')}`,
+            borderBottom: rule,
           }}
         >
           {shownTitle ? (
@@ -177,7 +207,7 @@ export function WidgetFrame({ title, subtitle, children, bodyStyle, flush, sampl
             boxSizing: 'border-box',
             containerType: 'size',
             overflow: 'hidden',
-            padding: flush ? 0 : spaceVar(3),
+            padding: flush ? 0 : spaceTokenVar(frame.padding),
           }}
         >
           <WidgetBodySizeProvider size={columnSize}>
@@ -188,7 +218,7 @@ export function WidgetFrame({ title, subtitle, children, bodyStyle, flush, sampl
       {reading && !compact ? (
         <div
           data-widget-freshness=""
-          style={{ padding: `${spaceVar(1)} ${spaceVar(3)}`, borderTop: `1px solid ${css('border')}`, flex: '0 0 auto' }}
+          style={{ padding: `${spaceVar(1)} ${spaceVar(3)}`, borderTop: rule, flex: '0 0 auto' }}
         >
           <FreshnessReadout reading={reading} />
         </div>

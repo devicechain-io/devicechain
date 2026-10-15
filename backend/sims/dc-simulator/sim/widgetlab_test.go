@@ -807,9 +807,9 @@ type parsedBoard struct {
 		} `json:"scope"`
 	} `json:"slots"`
 	Widgets []struct {
-		Id         string                                              `json:"id"`
-		Type       string                                              `json:"type"`
-		Layout     map[string]struct{ Col, ColSpan, Row, RowSpan int } `json:"layout"`
+		Id         string                           `json:"id"`
+		Type       string                           `json:"type"`
+		Layout     map[string]struct{ Mode string } `json:"layout"`
 		Datasource *struct {
 			Kind         string   `json:"kind"`
 			Slot         string   `json:"slot"`
@@ -893,8 +893,10 @@ func TestWidgetlabBoardsAreStructurallySound(t *testing.T) {
 	for _, token := range []string{WidgetlabGalleryDashboardToken, WidgetlabStressDashboardToken} {
 		t.Run(token, func(t *testing.T) {
 			board := widgetlabBoard(t, token)
-			if board.SchemaVersion != 1 {
-				t.Errorf("schemaVersion is %d, not 1", board.SchemaVersion)
+			// A literal: the frontend parser converts anything older on load, and a sim board must
+			// not need converting.
+			if board.SchemaVersion != 2 {
+				t.Errorf("schemaVersion is %d, not 2", board.SchemaVersion)
 			}
 			if len(board.Widgets) == 0 {
 				t.Fatal("board carries no widgets")
@@ -912,7 +914,7 @@ func TestWidgetlabBoardsAreStructurallySound(t *testing.T) {
 				// parseDashboardDefinition throws on a missing layout.base, so a widget
 				// without one takes the entire board down rather than rendering badly.
 				if _, ok := w.Layout["base"]; !ok {
-					t.Errorf("widget %q has no base layout box; the parser rejects the board", w.Id)
+					t.Errorf("widget %q has no base placement; the parser rejects the board", w.Id)
 				}
 				if w.Datasource == nil {
 					continue
@@ -957,52 +959,6 @@ func TestWidgetlabBoardsAreStructurallySound(t *testing.T) {
 					if _, ok := board.Slots[slot.Scope.Parent]; !ok {
 						t.Errorf("slot %q is scoped to %q, which the board does not declare",
 							name, slot.Scope.Parent)
-					}
-				}
-			}
-		})
-	}
-}
-
-// No widget may sit on top of another. Overlap is legal in the model (z-order
-// exists) and wrong on a board meant to be read.
-//
-// A NEGATIVE coordinate has to be rejected rather than merely mapped, because the
-// parser CLAMPS col and row to zero: two widgets authored at col -6 and col 0 both
-// arrive at column 0, a pixel-perfect overlap — while a gate that marked the
-// authored cells would tick off phantom cells at -6..-1 and see no collision. So the
-// coordinates are checked against the parser's domain before they are marked.
-//
-// Both boards, not just the gallery: the stress board is meant to look hostile, not
-// to be unreadable, and nothing else checks its layout.
-func TestWidgetlabBoardWidgetsDoNotOverlap(t *testing.T) {
-	for _, token := range []string{WidgetlabGalleryDashboardToken, WidgetlabStressDashboardToken} {
-		t.Run(token, func(t *testing.T) {
-			type cell struct{ col, row int }
-			occupied := map[cell]string{}
-			for _, w := range widgetlabBoard(t, token).Widgets {
-				b := w.Layout["base"]
-				if b.Col < 0 || b.Row < 0 {
-					t.Errorf("widget %q is placed at (%d,%d); the parser clamps a negative "+
-						"coordinate to zero, so it would land on top of whatever is there",
-						w.Id, b.Col, b.Row)
-					continue
-				}
-				if b.ColSpan <= 0 || b.RowSpan <= 0 {
-					t.Errorf("widget %q spans %dx%d; it would render as a zero-size box",
-						w.Id, b.ColSpan, b.RowSpan)
-					continue
-				}
-				if b.Col+b.ColSpan > dashboardGridColumns {
-					t.Errorf("widget %q runs from column %d for %d, past the %d-column grid",
-						w.Id, b.Col, b.ColSpan, dashboardGridColumns)
-				}
-				for c := b.Col; c < b.Col+b.ColSpan; c++ {
-					for r := b.Row; r < b.Row+b.RowSpan; r++ {
-						if other, taken := occupied[cell{c, r}]; taken {
-							t.Errorf("widgets %q and %q both occupy cell (%d,%d)", other, w.Id, c, r)
-						}
-						occupied[cell{c, r}] = w.Id
 					}
 				}
 			}

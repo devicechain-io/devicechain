@@ -24,10 +24,10 @@ import {
 } from './importDefinition';
 
 const catalog = defaultWidgetRegistry().catalog;
-const box = { base: { col: 0, colSpan: 6, row: 0, rowSpan: 4, z: 0 } };
+const box = { base: { mode: 'grid' as const, col: 0, row: 0, cols: 6, rows: 4 } };
 
 const board = {
-  schemaVersion: 1,
+  schemaVersion: 2,
   title: 'Plant',
   widgets: [
     {
@@ -40,7 +40,7 @@ const board = {
     {
       id: 'w2',
       type: 'alarm-count',
-      layout: box,
+      layout: { base: { ...box.base, col: 6 } },
       options: { title: 'Alarms', state: 'ACTIVE' },
       datasource: { kind: 'slot', slot: 'site', measurements: [] },
     },
@@ -211,7 +211,7 @@ describe('refusals', () => {
     const widgets = Array.from({ length: 3000 }, (_, i) => ({
       id: `w${i}`,
       type: 'latest-card',
-      layout: { base: { col: 0, colSpan: 6, row: i * 4, rowSpan: 4, z: 0 } },
+      layout: { base: { mode: 'grid' as const, col: 0, row: i * 4, cols: 6, rows: 4 } },
       options: { title: `Card ${i}`, measurement: 'temperature', precision: 1, unit: 'C' },
       datasource: { kind: 'slot', slot: 'press', measurements: ['temperature'] },
     }));
@@ -281,14 +281,14 @@ describe('external content', () => {
       canvas: { background: { imageUrl: 'https://cdn.example.com/bg.png' } },
       widgets: [
         ...board.widgets,
-        { id: 'i1', type: 'image', layout: box, options: { url: 'https://img.example.org/a.png' } },
-        { id: 'i2', type: 'image', layout: box, options: { url: 'https://img.example.org/b.png' } },
+        { id: 'i1', type: 'image', layout: { base: { ...box.base, row: 4 } }, options: { url: 'https://img.example.org/a.png' } },
+        { id: 'i2', type: 'image', layout: { base: { ...box.base, row: 8 } }, options: { url: 'https://img.example.org/b.png' } },
         // Protocol-relative: fetched over the page's own scheme.
-        { id: 'i4', type: 'image', layout: box, options: { url: '//pixel.example.com/p.gif' } },
-        { id: 'i3', type: 'image', layout: box, options: { url: '/static/local.png' } },
-        { id: 'm1', type: 'map', layout: box, options: { tileUrl: 'http://tiles.example.net/{z}/{x}/{y}.png' } },
+        { id: 'i4', type: 'image', layout: { base: { ...box.base, row: 12 } }, options: { url: '//pixel.example.com/p.gif' } },
+        { id: 'i3', type: 'image', layout: { base: { ...box.base, row: 16 } }, options: { url: '/static/local.png' } },
+        { id: 'm1', type: 'map', layout: { base: { ...box.base, row: 20 } }, options: { tileUrl: 'http://tiles.example.net/{z}/{x}/{y}.png' } },
         // A widget this console cannot resolve still renders once its package is installed.
-        { id: 'x1', type: 'vendor.frame', layout: box, options: { nested: { src: 'https://vendor.example.io/x' } } },
+        { id: 'x1', type: 'vendor.frame', layout: { base: { ...box.base, row: 24 } }, options: { nested: { src: 'https://vendor.example.io/x' } } },
       ],
     });
     expect(prepareImport(text, catalog).externalOrigins).toEqual([
@@ -308,7 +308,7 @@ describe('external content', () => {
 describe('widgets this console cannot resolve', () => {
   const withUnknown = JSON.stringify({
     ...board,
-    widgets: [...board.widgets, { id: 'x1', type: 'vendor.thermo-ring', layout: box, options: { a: 1 } }],
+    widgets: [...board.widgets, { id: 'x1', type: 'vendor.thermo-ring', layout: { base: { ...box.base, row: 4 } }, options: { a: 1 } }],
   });
 
   it('keeps them as placeholders, reports them, and keeps their stored JSON', () => {

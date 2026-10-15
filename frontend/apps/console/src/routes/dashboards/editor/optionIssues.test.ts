@@ -86,7 +86,7 @@ describe('widgetLabel', () => {
   const widget = (id: string, type: WidgetType, options?: Record<string, unknown>): WidgetInstance => ({
     id,
     type,
-    layout: { base: { col: 0, row: 0, colSpan: 4, rowSpan: 2, z: 0 } },
+    layout: { base: { mode: 'grid' as const, col: 0, row: 0, cols: 4, rows: 2 } },
     options,
   });
 

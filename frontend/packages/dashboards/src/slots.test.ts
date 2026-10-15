@@ -25,7 +25,7 @@ const anchorSel = (targetToken: string, extra: Partial<DatasourceSelector> = {})
     ...extra,
   }) as DatasourceSelector;
 
-const box = { col: 0, colSpan: 4, row: 0, rowSpan: 3, z: 0 };
+const box = { mode: 'grid' as const, col: 0, row: 0, cols: 4, rows: 3 };
 
 function widget(id: string, datasource?: WidgetInstance['datasource']): WidgetInstance {
   return { id, type: 'gauge', layout: { base: box }, ...(datasource ? { datasource } : {}) };
@@ -33,9 +33,9 @@ function widget(id: string, datasource?: WidgetInstance['datasource']): WidgetIn
 
 function def(widgets: WidgetInstance[], slots?: DashboardDefinition['slots']): DashboardDefinition {
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     title: 'T',
-    canvas: { grid: { columns: 24, gap: 8, rowHeight: 40 }, sizing: 'fill', breakpoints: { base: 0 } },
+    canvas: { grid: { columns: 24, minCellSize: 56, gutter: 8, padding: 0 }, sizing: 'fill', breakpoints: { base: 0 } },
     widgets,
     ...(slots ? { slots } : {}),
   };
@@ -235,9 +235,9 @@ describe('scope-aware slot helpers', () => {
 
 // slot definition helper for the scope-authoring transforms.
 const scopeDef = (slots: Record<string, SlotDefinition>): DashboardDefinition => ({
-  schemaVersion: 1,
+  schemaVersion: 2,
   title: '',
-  canvas: { grid: { columns: 24, gap: 8, rowHeight: 40 }, sizing: 'fill', breakpoints: { base: 0 } },
+  canvas: { grid: { columns: 24, minCellSize: 56, gutter: 8, padding: 0 }, sizing: 'fill', breakpoints: { base: 0 } },
   widgets: [],
   slots,
 });
@@ -314,9 +314,9 @@ describe('slot transforms carry the location series', () => {
 
   it('migrateToSlots moves the entity onto a slot and keeps the location series', () => {
     const def: DashboardDefinition = {
-      schemaVersion: 1,
+      schemaVersion: 2,
       title: '',
-      canvas: { grid: { columns: 24, gap: 8, rowHeight: 40 }, sizing: 'fill', breakpoints: { base: 0 } },
+      canvas: { grid: { columns: 24, minCellSize: 56, gutter: 8, padding: 0 }, sizing: 'fill', breakpoints: { base: 0 } },
       widgets: [
         widget('m1', { kind: 'device', deviceToken: 'dozer-1', measurements: [], location: LATEST }),
       ],
@@ -333,9 +333,9 @@ describe('slot transforms carry the location series', () => {
 
   it('bindWidgetSlot writes the location series when the caller names one', () => {
     const def: DashboardDefinition = {
-      schemaVersion: 1,
+      schemaVersion: 2,
       title: '',
-      canvas: { grid: { columns: 24, gap: 8, rowHeight: 40 }, sizing: 'fill', breakpoints: { base: 0 } },
+      canvas: { grid: { columns: 24, minCellSize: 56, gutter: 8, padding: 0 }, sizing: 'fill', breakpoints: { base: 0 } },
       widgets: [widget('m1')],
     };
     const bound = bindWidgetSlot(def, 'm1', { kind: 'device', deviceToken: 'dozer-1' }, [], LATEST);
@@ -371,9 +371,9 @@ describe('slot transforms carry the location series', () => {
   // with no location key at all, so a pre-existing board still serializes unchanged.
   it('omits the key entirely for a measurement-only widget', () => {
     const def: DashboardDefinition = {
-      schemaVersion: 1,
+      schemaVersion: 2,
       title: '',
-      canvas: { grid: { columns: 24, gap: 8, rowHeight: 40 }, sizing: 'fill', breakpoints: { base: 0 } },
+      canvas: { grid: { columns: 24, minCellSize: 56, gutter: 8, padding: 0 }, sizing: 'fill', breakpoints: { base: 0 } },
       widgets: [widget('g1', { kind: 'device', deviceToken: 'therm-1', measurements: ['t'] })],
     };
     const migrated = migrateToSlots(def);

@@ -58,8 +58,8 @@ func TestBuildBuildingpulseDashboardShape(t *testing.T) {
 		t.Fatal("definition has no top-level widgets field")
 	}
 
-	// The canvas must carry the CSS-Grid shape the viewer's parseCanvas expects
-	// (ADR-039 amendment): a grid with columns/gap/rowHeight and a sizing knob.
+	// The canvas must carry the grid shape the viewer's parseCanvas expects: the square-cell
+	// grid's columns, minimum cell size, gutter and padding, and a sizing knob.
 	canvas, ok := doc["canvas"].(map[string]any)
 	if !ok {
 		t.Fatalf("canvas is not a JSON object: %T", doc["canvas"])
@@ -68,7 +68,7 @@ func TestBuildBuildingpulseDashboardShape(t *testing.T) {
 	if !ok {
 		t.Fatalf("canvas.grid is not a JSON object: %T", canvas["grid"])
 	}
-	for _, key := range []string{"columns", "gap", "rowHeight"} {
+	for _, key := range []string{"columns", "minCellSize", "gutter", "padding"} {
 		if _, ok := grid[key]; !ok {
 			t.Errorf("canvas.grid missing %q", key)
 		}
@@ -147,7 +147,10 @@ func TestBuildBuildingpulseDashboardShape(t *testing.T) {
 		if !ok {
 			t.Fatalf("widgets[%d].layout has no 'base' box", i)
 		}
-		for _, key := range []string{"col", "colSpan", "row", "rowSpan", "z"} {
+		if base["mode"] != "grid" {
+			t.Errorf("widgets[%d].layout.base.mode = %v, want \"grid\"", i, base["mode"])
+		}
+		for _, key := range []string{"col", "row", "cols", "rows"} {
 			if _, ok := base[key]; !ok {
 				t.Errorf("widgets[%d].layout.base missing %q", i, key)
 			}

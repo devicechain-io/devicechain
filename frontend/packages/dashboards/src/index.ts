@@ -15,6 +15,23 @@ export type {
   CanvasGrid,
   CanvasSizing,
   Breakpoints,
+  BreakpointSpec,
+  GridLength,
+  GridPlacement,
+  RelativePlacement,
+  RelativeSize,
+  Placement,
+  PlacementAnchor,
+  PlacementMode,
+  FrameBorder,
+  FrameBorderWidth,
+  FrameHeader,
+  FrameRadius,
+  FrameVariant,
+  ResolvedFrame,
+  SpaceTokenName,
+  ThemeColorToken,
+  WidgetFrameSpec,
   WidgetInstance,
   KnownWidgetInstance,
   ExtensionWidgetInstance,
@@ -27,7 +44,6 @@ export type {
   WidgetImplementationRef,
   WidgetType,
   WidgetLayout,
-  WidgetBox,
   DatasourceSelector,
   DeviceSelector,
   AnchorSelector,
@@ -110,7 +126,20 @@ export {
 export { resolveSlotCandidates } from './candidates';
 export { createEntityLister } from './entity-lister';
 
-export { WIDGET_TYPES, UNKNOWN_WIDGET_TYPE } from './types';
+export {
+  WIDGET_TYPES,
+  UNKNOWN_WIDGET_TYPE,
+  CURRENT_SCHEMA_VERSION,
+  PLACEMENT_ANCHORS,
+  PLACEMENT_MODES,
+  RESERVED_PLACEMENT_MODES,
+  THEME_COLOR_TOKENS,
+  SPACE_TOKEN_PX,
+  FRAME_VARIANTS,
+  FRAME_RADII,
+  FRAME_BORDER_WIDTHS,
+  FRAME_HEADERS,
+} from './types';
 export {
   CANVAS_DENSITIES,
   DEFAULT_CANVAS_DENSITY,
@@ -191,8 +220,7 @@ export {
   serializeDefinition,
   storedDefinition,
   isDirty,
-  resolveWidgetBox,
-  activeBreakpoint,
+  withoutConversionMark,
   generateWidgetId,
   canScopeSlot,
   DashboardDefinitionError,
@@ -202,18 +230,17 @@ export {
 // Pure canvas-editor transforms (move/resize/delete/reorder/add/retitle). The
 // authoring host (console, /dash) wires these to its drag/resize + save UI.
 export {
-  baseBox,
-  setWidgetBox,
+  basePlacement,
+  setWidgetPlacement,
   deleteWidget,
-  bringToFront,
   setTitle,
   setCanvasGrid,
   setCanvasSizing,
   setCanvasDensity,
   updateWidget,
   addWidget,
-  gridBoxToPx,
-  pxToGridBox,
+  gridPlacementToPx,
+  pxToGridPlacement,
   type PixelRect,
   type GridGeometry,
 } from './editor-model';
@@ -306,8 +333,40 @@ export {
   type UnresolvedWidgetReport,
 } from './widget-compat';
 
+// The square-cell grid's geometry: lengths, cell size, where a placement lands, collisions, and
+// the effective frame. The renderers and the editor read it; so does the lint.
+export {
+  DEFAULT_GRID,
+  PHONE_MIN_COLUMNS,
+  activeBreakpoint,
+  anchorFraction,
+  breakpointColumns,
+  breakpointMinWidth,
+  cellSizeAt,
+  containerWidthFor,
+  firstFreeSlot,
+  gridFootprintsOverlap,
+  gridLengthPx,
+  gridRect,
+  gutterPx,
+  isSpaceToken,
+  layoutBreakpoints,
+  layoutRects,
+  paddingPx,
+  pushDown,
+  relativeRect,
+  resolveFrame,
+  resolvePlacement,
+  spanPx,
+  type Gutter,
+  type Insets,
+  type PlacedGrid,
+  type Rect,
+} from './grid';
+export { LEGACY_REFERENCE_WIDTH } from './legacy-grid';
+
 // The layout lint: placement against what each widget can show. Widget knowledge (span
-// limits, the temporary pixel floor) is injected, so this package stays free of `widgets`.
+// limits) is injected, so this package stays free of `widgets`.
 export {
   lintLayout,
   spanLimitsOfLayout,
@@ -315,6 +374,5 @@ export {
   type LayoutLintCode,
   type LayoutLintOptions,
   type LayoutLintSeverity,
-  type PixelSize,
   type SpanLimits,
 } from './layout-lint';

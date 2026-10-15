@@ -96,15 +96,22 @@ platform checks each action against your own permissions.
 **Edit** turns the dashboard into a canvas. The buttons change to **Add widget**, **Preview**,
 **Export**, **History**, **Save** and **Done**, and a bar of layout settings appears.
 
-<GuideShot id="dashboard-edit" alt="The Widget Lab dashboard in edit mode. The header shows Add widget, Preview, Export, History, a disabled Save and Done. A settings bar shows Title Widget Lab, Columns 24, Row height 40, Gap 8 and Size Fill area. Widgets are outlined on the canvas; some show a dash or No data yet." />
+<GuideShot id="dashboard-edit" alt="The Widget Lab dashboard in edit mode. The header shows Add widget, Preview, Export, History, a disabled Save and Done. A settings bar shows Title Widget Lab, Columns 12, Min cell 56, Gutter 8, Padding 0 and Size Fill area. Widgets are outlined on the canvas; some show a dash or No data yet." />
 
 - **Title** is the dashboard's name.
-- **Columns**, **Row height** and **Gap** set the grid widgets snap to.
+- **Columns**, **Min cell**, **Gutter** and **Padding** set the grid widgets snap to. The cells
+  are square and stretch to fill the width; **Min cell** is the smallest a cell may get, in
+  pixels. **Gutter** is the space between cells and **Padding** the margin around the dashboard.
 - **Size** decides how the dashboard fills the page: **Fill area**, **Fixed width** or **Fixed
   height**.
 
-Drag a widget to move it and drag its edges to resize it. Widgets can overlap; select one and use
-**Front** to bring it on top. A widget that has not received data yet shows a dash or *No data yet*.
+Drag a widget to move it and drag its edges to resize it. Widgets never overlap: a widget you
+move or resize onto others pushes them down out of its way, and a new widget goes in the first
+free space. A widget that has not received data yet shows a dash or *No data yet*.
+
+A dashboard saved by an earlier release is converted to the current grid when it opens. The
+conversion is approximate, so the editor shows a note asking you to review the layout. Saving
+keeps the dashboard in the current format and removes the note.
 
 **Save** stores your changes in the draft. It is greyed out until there is something to save.
 **Done** returns to the view; unsaved changes stay, and **Save** remains available there. If you

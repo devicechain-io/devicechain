@@ -13,7 +13,7 @@ afterEach(cleanup);
 const widget = (options: Record<string, unknown>): WidgetInstance => ({
   id: 'sel',
   type: 'entity-selector',
-  layout: { base: { col: 0, colSpan: 4, row: 0, rowSpan: 2, z: 0 } },
+  layout: { base: { mode: 'grid' as const, col: 0, row: 0, cols: 4, rows: 2 } },
   options,
 });
 

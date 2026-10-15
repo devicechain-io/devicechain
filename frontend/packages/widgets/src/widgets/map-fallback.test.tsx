@@ -52,7 +52,7 @@ function render(ui: ReactElement) {
 const widget = (options: Record<string, unknown> = {}): WidgetInstance => ({
   id: 'w',
   type: 'map',
-  layout: { base: { col: 0, colSpan: 6, row: 0, rowSpan: 6, z: 1 } },
+  layout: { base: { mode: 'grid' as const, col: 0, row: 0, cols: 6, rows: 6 } },
   datasource: { kind: 'device', deviceToken: 'dozer-1', measurements: [], location: { series: 'latest' } },
   options,
 });

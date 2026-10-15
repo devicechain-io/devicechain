@@ -66,15 +66,15 @@ const last = <T,>(xs: T[]): T | undefined => xs[xs.length - 1];
 const dev = (deviceToken: string): SlotBinding => ({ kind: 'device', deviceToken });
 
 const loaded: DashboardDefinition = {
-  schemaVersion: 1,
+  schemaVersion: 2,
   title: 'Workspace',
-  canvas: { grid: { columns: 12, gap: 8, rowHeight: 40 }, sizing: 'fill', breakpoints: { base: 0 } },
+  canvas: { grid: { columns: 12, minCellSize: 56, gutter: 8, padding: 0 }, sizing: 'fill', breakpoints: { base: 0 } },
   slots: { machine: { type: 'device', defaultBinding: dev('hauler-1') } },
   widgets: [
     {
       id: 'card',
       type: 'latest-card',
-      layout: { base: { col: 0, colSpan: 4, row: 0, rowSpan: 2, z: 0 } },
+      layout: { base: { mode: 'grid' as const, col: 0, row: 0, cols: 4, rows: 2 } },
       datasource: { kind: 'slot', slot: 'machine', measurements: ['fuel'] },
     },
   ],

@@ -76,15 +76,15 @@ const source: WidgetDataSource = {
 };
 
 const definition: DashboardDefinition = {
-  schemaVersion: 1,
+  schemaVersion: 2,
   title: 'Seeds',
-  canvas: { grid: { columns: 12, gap: 8, rowHeight: 40 }, sizing: 'fill', breakpoints: { base: 0 } },
+  canvas: { grid: { columns: 12, minCellSize: 56, gutter: 8, padding: 0 }, sizing: 'fill', breakpoints: { base: 0 } },
   slots: { machine: { type: 'device' } },
   widgets: [
     {
       id: 'card',
       type: 'latest-card',
-      layout: { base: { col: 0, colSpan: 4, row: 0, rowSpan: 2, z: 0 } },
+      layout: { base: { mode: 'grid' as const, col: 0, row: 0, cols: 4, rows: 2 } },
       datasource: { kind: 'slot', slot: 'machine', measurements: ['fuel'] },
     },
   ],
@@ -190,8 +190,8 @@ describe('the history seed a measurement widget is handed', () => {
       ...definition,
       widgets: [
         ...definition.widgets,
-        { id: 'note', type: 'label', layout: { base: { col: 4, colSpan: 4, row: 0, rowSpan: 1, z: 0 } }, options: { text: 'x' } },
-        { id: 'logo', type: 'image', layout: { base: { col: 8, colSpan: 4, row: 0, rowSpan: 1, z: 0 } }, options: { url: 'u' } },
+        { id: 'note', type: 'label', layout: { base: { mode: 'grid' as const, col: 4, row: 0, cols: 4, rows: 1 } }, options: { text: 'x' } },
+        { id: 'logo', type: 'image', layout: { base: { mode: 'grid' as const, col: 8, row: 0, cols: 4, rows: 1 } }, options: { url: 'u' } },
       ],
     };
     render(<DashboardRenderer definition={withStatic} hub={source} bindings={dev('hauler-1')} />);

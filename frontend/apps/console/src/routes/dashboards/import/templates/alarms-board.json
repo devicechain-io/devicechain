@@ -4,13 +4,14 @@
       "base": 0
     },
     "grid": {
-      "columns": 24,
-      "gap": 8,
-      "rowHeight": 40
+      "columns": 12,
+      "gutter": 8,
+      "minCellSize": 56,
+      "padding": 0
     },
     "sizing": "fill"
   },
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "title": "Alarms board",
   "widgets": [
     {
@@ -18,10 +19,10 @@
       "layout": {
         "base": {
           "col": 0,
-          "colSpan": 6,
+          "cols": 3,
+          "mode": "grid",
           "row": 0,
-          "rowSpan": 4,
-          "z": 0
+          "rows": 2
         }
       },
       "options": {
@@ -34,11 +35,11 @@
       "id": "w-unack",
       "layout": {
         "base": {
-          "col": 6,
-          "colSpan": 6,
+          "col": 3,
+          "cols": 3,
+          "mode": "grid",
           "row": 0,
-          "rowSpan": 4,
-          "z": 0
+          "rows": 2
         }
       },
       "options": {
@@ -52,11 +53,11 @@
       "id": "w-crit",
       "layout": {
         "base": {
-          "col": 12,
-          "colSpan": 6,
+          "col": 6,
+          "cols": 3,
+          "mode": "grid",
           "row": 0,
-          "rowSpan": 4,
-          "z": 0
+          "rows": 2
         }
       },
       "options": {
@@ -70,11 +71,11 @@
       "id": "w-cleared",
       "layout": {
         "base": {
-          "col": 18,
-          "colSpan": 6,
+          "col": 9,
+          "cols": 3,
+          "mode": "grid",
           "row": 0,
-          "rowSpan": 4,
-          "z": 0
+          "rows": 2
         }
       },
       "options": {
@@ -88,10 +89,10 @@
       "layout": {
         "base": {
           "col": 0,
-          "colSpan": 24,
-          "row": 4,
-          "rowSpan": 10,
-          "z": 0
+          "cols": 12,
+          "mode": "grid",
+          "row": 2,
+          "rows": 5
         }
       },
       "options": {
@@ -106,10 +107,10 @@
       "layout": {
         "base": {
           "col": 0,
-          "colSpan": 24,
-          "row": 14,
-          "rowSpan": 6,
-          "z": 0
+          "cols": 12,
+          "mode": "grid",
+          "row": 7,
+          "rows": 3
         }
       },
       "options": {

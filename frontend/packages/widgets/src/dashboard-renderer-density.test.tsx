@@ -22,14 +22,14 @@ afterEach(cleanup);
 const label: WidgetInstance = {
   id: 'l',
   type: 'label',
-  layout: { base: { col: 0, colSpan: 4, row: 0, rowSpan: 2, z: 0 } },
+  layout: { base: { mode: 'grid' as const, col: 0, row: 0, cols: 4, rows: 2 } },
   options: { text: 'hello' },
 };
 
 const board = (density?: 'compact' | 'comfortable' | 'wall'): DashboardDefinition => ({
-  schemaVersion: 1,
+  schemaVersion: 2,
   title: 'Density',
-  canvas: { grid: { columns: 12, gap: 8, rowHeight: 40 }, sizing: 'fill', breakpoints: { base: 0 }, ...(density ? { density } : {}) },
+  canvas: { grid: { columns: 12, minCellSize: 56, gutter: 8, padding: 0 }, sizing: 'fill', breakpoints: { base: 0 }, ...(density ? { density } : {}) },
   widgets: [label],
 });
 

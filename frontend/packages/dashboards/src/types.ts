@@ -172,26 +172,179 @@ export const WIDGET_TYPES = [
 
 export type WidgetType = (typeof WIDGET_TYPES)[number];
 
-// Grid placement + z-order — CSS-Grid-native layout (ADR-039 amendment 2026-07-08).
-// A widget is placed by SPAN on the canvas grid: `col`/`row` are its 0-based start
-// line and `colSpan`/`rowSpan` how many tracks it covers — mapping to
-// `grid-column: col+1 / span colSpan` (rows likewise). Because the columns are
-// fractional (`repeat(columns, 1fr)`), the same box fills whatever width its
-// container gives it — no pixel width baked into the definition. Layering is native
-// via `z`; `offset` is a signed-pixel escape hatch for pixel-perfect nudge/overlap
-// beyond the grid lines (Derek's "margin and -margin").
-export interface WidgetBox {
+// ---- Placement --------------------------------------------------------------
+//
+// Every widget is placed by an explicit MODE, modelled on CSS `position` and CSS anchor
+// positioning, so whether a widget may overlap another is something it DECLARES rather than
+// something a check has to catch afterwards:
+//
+//   grid      aligned to cells and occupying a footprint. Two grid footprints never overlap: the
+//             parser refuses a definition where they do, so no producer (the editor, an import,
+//             a Go builder, the API) can store one. The only mode that takes part in collision,
+//             push-reflow and adaptive reflow.
+//   relative  positioned against a HOST widget's live box, so it moves when the host moves or
+//             reflows. It may sit over the host (a badge on a map) or beside it (a caption under
+//             a chart). It never collides: overlapping is what the mode is for. It paints above
+//             every grid widget.
+//
+// The union is OPEN: RESERVED_PLACEMENT_MODES names the modes a later release may add (`pinned`,
+// fixed to a canvas edge; `sticky`, a grid widget that stays visible while the board scrolls).
+// This release refuses them by name rather than mis-placing them as something else.
+//
+// There is no z-order and no pixel nudge: layering is the relative mode, and every distance is
+// in cells, so an arrangement survives every screen size.
+
+// A point on a box. For `anchor` it is a point on the HOST; for `self`, the point on the
+// relative widget that is placed there.
+export const PLACEMENT_ANCHORS = [
+  'top-left',
+  'top',
+  'top-right',
+  'left',
+  'center',
+  'right',
+  'bottom-left',
+  'bottom',
+  'bottom-right',
+] as const;
+export type PlacementAnchor = (typeof PLACEMENT_ANCHORS)[number];
+
+export const PLACEMENT_MODES = ['grid', 'relative'] as const;
+export type PlacementMode = (typeof PLACEMENT_MODES)[number];
+// Named so a definition from a release that implements them fails with a reason, not as a typo.
+export const RESERVED_PLACEMENT_MODES = ['pinned', 'sticky'] as const;
+
+// A footprint on the grid. `col`/`row` are the 0-based start cell; `cols`/`rows` how many cells
+// it covers. Cells are square, so a span fixes the widget's SHAPE as well as its share.
+export interface GridPlacement {
+  mode: 'grid';
   col: number;
-  colSpan: number;
   row: number;
-  rowSpan: number;
-  z: number;
-  offset?: { x: number; y: number };
+  cols: number;
+  rows: number;
 }
 
-// Per-breakpoint placement, keyed by breakpoint name. 'base' is required; a
-// widget omitting a breakpoint inherits its 'base' box.
-export type WidgetLayout = Record<string, WidgetBox>;
+// A relative widget's own size: a span in cells (the grid's rule: n cells = n*cell +
+// (n-1)*gutter), or exactly the host's box.
+export type RelativeSize = { cols: number; rows: number } | { fill: 'host' };
+
+// A widget placed against another. The geometry, in order: `anchor` picks a point on the host's
+// box, `self` the point on this widget placed there, and `offset` translates it. An offset is a
+// DISTANCE in cell PITCHES (one unit = live cell + gutter on that axis), so a whole-number offset
+// lands exactly on a grid line, and fractions are allowed: `{x: -0.25, y: 0.25}` with
+// anchor = self = 'top-right' insets a badge a quarter pitch from the host's corner at every
+// cell size. The host's area plays no part.
+export interface RelativePlacement {
+  mode: 'relative';
+  // The id of the widget this one is anchored to. It must exist; a relative host may itself be
+  // relative only when ITS host is a grid widget (one level of chaining, no deeper).
+  host: string;
+  anchor: PlacementAnchor;
+  // Absent = the same point as `anchor`.
+  self?: PlacementAnchor;
+  offset?: { x: number; y: number };
+  size: RelativeSize;
+  // Paint order among the relative widgets on the same host. Absent = 0.
+  layer?: number;
+}
+
+export type Placement = GridPlacement | RelativePlacement;
+
+// A widget's placement per breakpoint, keyed by breakpoint name. `base` is required; a widget
+// with no entry for a breakpoint shows its `base` placement there.
+//
+// 🔑 A BREAKPOINT LAYOUT IS AN AUTHORED ARRANGEMENT AT ITS OWN COLUMN COUNT. Placements at a
+// breakpoint are written in the column count canvas.breakpoints declares for it
+// (breakpointColumns; `base` is always canvas.grid.columns), so a phone arrangement pinned at 4
+// columns stays a 4-column arrangement. While the container is wide enough for the active
+// breakpoint's column count at minCellSize, that arrangement renders as authored and takes
+// precedence over the automatic reflow; only a container too narrow even for it reflows it.
+// A board authored only at `base` simply reflows.
+export type WidgetLayout = Record<string, Placement>;
+
+// ---- Frames -----------------------------------------------------------------
+//
+// How a widget's card looks. `canvas.frame` sets the board's default and `widget.frame`
+// overrides it field by field (resolveFrame). Every colour, radius and spacing is a TOKEN, never
+// a free value: the parser refuses `#f00`, so dark mode, the ISA-101 theme and tenant branding
+// stay coherent (a border of `sev-critical` is fine; a hex code is not).
+//
+// The border and padding sit INSIDE the widget's footprint, so changing them never moves the
+// layout.
+
+// The colour tokens a host defines, and the only colours a definition may name.
+// @devicechain/widget-sdk's ThemeVar is this list.
+export const THEME_COLOR_TOKENS = [
+  'background',
+  'foreground',
+  'card',
+  'card-foreground',
+  'muted',
+  'muted-foreground',
+  'primary',
+  'primary-foreground',
+  'border',
+  'destructive',
+  'chart-1',
+  'chart-2',
+  'chart-3',
+  'chart-4',
+  'chart-5',
+  'sev-critical',
+  'sev-major',
+  'sev-minor',
+  'sev-warning',
+] as const;
+export type ThemeColorToken = (typeof THEME_COLOR_TOKENS)[number];
+
+// The spacing steps, in px at density 1; every one multiplies by the density scale. `space-0`
+// is zero, so a seamless tiled board is `gutter: 'space-0'` (or `gutter: 0`).
+export const SPACE_TOKEN_PX = {
+  'space-0': 0,
+  'space-1': 4,
+  'space-2': 8,
+  'space-3': 12,
+  'space-4': 16,
+} as const;
+export type SpaceTokenName = keyof typeof SPACE_TOKEN_PX;
+
+export const FRAME_VARIANTS = ['card', 'flat', 'none'] as const;
+export type FrameVariant = (typeof FRAME_VARIANTS)[number];
+export const FRAME_RADII = ['none', 'sm', 'md', 'lg'] as const;
+export type FrameRadius = (typeof FRAME_RADII)[number];
+export const FRAME_BORDER_WIDTHS = [0, 1, 2, 3] as const;
+export type FrameBorderWidth = (typeof FRAME_BORDER_WIDTHS)[number];
+export const FRAME_HEADERS = ['auto', 'show', 'hide'] as const;
+export type FrameHeader = (typeof FRAME_HEADERS)[number];
+
+export interface FrameBorder {
+  width?: FrameBorderWidth;
+  radius?: FrameRadius;
+  color?: ThemeColorToken;
+}
+
+// Every field optional: an absent field inherits (widget, then canvas, then the variant's preset).
+//   variant  card = border + background + header (the default); flat = a card with no border;
+//            none = frameless (no border, transparent, no header), the usual choice for a
+//            relative badge or caption.
+//   header   auto = the size-aware rules (the subtitle, then the title, give way as the widget
+//            gets short); show = always; hide = never (the title stays the frame's aria-label).
+export interface WidgetFrameSpec {
+  variant?: FrameVariant;
+  border?: FrameBorder;
+  padding?: SpaceTokenName;
+  background?: ThemeColorToken | 'transparent';
+  header?: FrameHeader;
+}
+
+// A frame with every field decided: what the renderer hands the widget frame.
+export interface ResolvedFrame {
+  variant: FrameVariant;
+  border: Required<FrameBorder>;
+  padding: SpaceTokenName;
+  background: ThemeColorToken | 'transparent';
+  header: FrameHeader;
+}
 
 // The type a widget is given when its stored type is not one this build knows — one a
 // newer release added. Deliberately NOT a member of WIDGET_TYPES: it is never authored,
@@ -226,6 +379,8 @@ export interface KnownWidgetInstance {
   // Widget-specific options (series colors, unit, thresholds, …). Owned by the
   // widget package; opaque here.
   options?: Record<string, unknown>;
+  // This widget's frame overrides, field by field over canvas.frame. Absent = the canvas's.
+  frame?: WidgetFrameSpec;
   raw?: undefined;
   reason?: undefined;
 }
@@ -240,6 +395,7 @@ export interface ExtensionWidgetInstance {
   layout: WidgetLayout;
   datasource?: DatasourceSelector;
   options?: Record<string, unknown>;
+  frame?: WidgetFrameSpec;
   raw?: undefined;
   reason?: undefined;
 }
@@ -284,6 +440,7 @@ export interface UnknownWidgetInstance {
   widget?: undefined;
   datasource?: undefined;
   options?: undefined;
+  frame?: undefined;
 }
 
 export type WidgetInstance = KnownWidgetInstance | ExtensionWidgetInstance | UnknownWidgetInstance;
@@ -297,17 +454,27 @@ export interface CanvasBackground {
   imageUrl?: string | null;
 }
 
-// The canvas grid (ADR-039 amendment 2026-07-08). `columns` is high-resolution
-// (24–48) so span placement stays near-free, which is what makes the canvas-first
-// layout possible rather than a fixed grid; `gap` is the gutter, one value or a {row,col} pair;
-// `rowHeight` is the fixed pixel height of each implicit grid row. Columns are
-// fluid (`repeat(columns, 1fr)`) so the board fills its container width; rows are
-// fixed-px (the `aspect` mode — rowHeight = colWidth × ratio — is the documented
-// fast-follow).
+// A length on the canvas: px at density 1 (multiplied by the density scale, like every size
+// token), or a spacing token.
+export type GridLength = number | SpaceTokenName;
+
+// The canvas grid (the Android home-screen model): square cells of roughly constant size.
+//
+//   columns      the AUTHORED column count every `base` placement is written in.
+//   minCellSize  px at density 1. While (container width - padding - (columns-1)*gutter.x) /
+//                columns is at least this, the authored layout renders as authored and the cells
+//                STRETCH (a wall gets bigger cells, hence bigger text). Narrower than that, the
+//                board reflows onto fewer live columns. The gutters come out of the cell, never
+//                the other way round, so widening them can never push a cell below this size.
+//   gutter       the space between cells: one length, or one per axis.
+//   padding      the margin around the board: one length, or one per side.
+//
+// Cells are square: a row is as tall as the live cell is wide.
 export interface CanvasGrid {
   columns: number;
-  gap: number | { row: number; col: number };
-  rowHeight: number;
+  minCellSize: number;
+  gutter: GridLength | { x: GridLength; y: GridLength };
+  padding: GridLength | { top: GridLength; right: GridLength; bottom: GridLength; left: GridLength };
 }
 
 // How the grid is sized into its container — a MOUNT/embed knob the host may
@@ -316,8 +483,13 @@ export interface CanvasGrid {
 // the fluid grid adjusts within. `{height}`: a fixed-px-tall container (rows scroll).
 export type CanvasSizing = 'fill' | { width: number } | { height: number };
 
-// Breakpoint name → min viewport width in px. 'base' is required.
-export type Breakpoints = Record<string, number>;
+// A breakpoint: the container width it starts at, and optionally the column count its layout is
+// authored in. A bare number is the width alone, and its layout is in canvas.grid.columns.
+// `base` starts at 0 and is always in canvas.grid.columns.
+export type BreakpointSpec = number | { minWidth: number; columns: number };
+
+// Breakpoint name → spec. 'base' is required.
+export type Breakpoints = Record<string, BreakpointSpec>;
 
 // How roomy the board renders: a scale applied to every size token (font, spacing) and to the
 // floor of the value-font curve. `comfortable` is the default and is not written when it is
@@ -343,6 +515,8 @@ export interface Canvas {
   grid: CanvasGrid;
   sizing: CanvasSizing;
   breakpoints: Breakpoints;
+  // The board's default frame. Absent = a card.
+  frame?: WidgetFrameSpec;
 }
 
 // A concrete entity a slot resolves to — a device (by token) or an anchor target.
@@ -422,6 +596,10 @@ export interface SelectionTarget {
   binding: SlotBinding;
 }
 
+// The definition format this release writes. 2 is the square-cell grid with explicit placement
+// modes; a stored document below it is converted on load (see ./legacy-grid).
+export const CURRENT_SCHEMA_VERSION = 2;
+
 export interface DashboardDefinition {
   schemaVersion: number;
   title: string;
@@ -430,6 +608,11 @@ export interface DashboardDefinition {
   // Named entity roles bound at mount (ADR-039 runtime binding). Optional — absent
   // on a dashboard that uses no slots.
   slots?: Record<string, SlotDefinition>;
+  // Set by the parser, NEVER stored: the schemaVersion of the document this definition was
+  // converted from, when it was stored in an older format and its layout was mapped onto the
+  // current grid approximately. An editor shows a "review the layout" notice while it is set;
+  // the serializer drops it, so the next save writes the current format and the notice goes.
+  convertedFrom?: number;
 }
 
 // ---- Live telemetry ---------------------------------------------------------

@@ -36,7 +36,7 @@ const { ACME_TANK_WIDGET_JSON, acmeTankWidget } = await import('@devicechain/hos
 const { GraphQLRequestError } = await import('@devicechain/client');
 
 function widget(id: string, type: WidgetType, options?: Record<string, unknown>): WidgetInstance {
-  return { id, type, layout: { base: { col: 0, row: 0, colSpan: 4, rowSpan: 2, z: 0 } }, options };
+  return { id, type, layout: { base: { mode: 'grid' as const, col: 0, row: 0, cols: 4, rows: 2 } }, options };
 }
 
 beforeEach(() => {
@@ -129,7 +129,7 @@ describe('publishDashboard', () => {
 // everything that resolves still publishes. The board is parsed the way the console parses it
 // (with a catalog), so an unresolved widget is the parser's own placeholder.
 describe('publishDashboard with extension widgets', () => {
-  const layout = { base: { col: 0, colSpan: 4, row: 0, rowSpan: 2, z: 0 } };
+  const layout = { base: { mode: 'grid' as const, col: 0, row: 0, cols: 4, rows: 2 } };
   const board = (widgets: unknown[]) => ({ title: 'T', slots: { tank: { type: 'device' } }, widgets });
   const installed = createHostWidgetRegistry([acmeTankWidget]);
   const tank = { ...ACME_TANK_WIDGET_JSON, layout };

@@ -10,7 +10,7 @@ import { stripUnknownOptions, validateDefinitionOptions } from './definition-opt
 // the type and never looked at here, so it is the same empty box everywhere — a board
 // whose widgets overlap is a different concern with its own checks.
 function widget(id: string, type: WidgetType, options?: Record<string, unknown>): WidgetInstance {
-  return { id, type, layout: { base: { col: 0, row: 0, colSpan: 4, rowSpan: 2, z: 0 } }, options };
+  return { id, type, layout: { base: { mode: 'grid' as const, col: 0, row: 0, cols: 4, rows: 2 } }, options };
 }
 
 function board(...widgets: WidgetInstance[]) {

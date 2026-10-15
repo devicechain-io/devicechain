@@ -14,7 +14,7 @@
 
 import { createContext, useContext, type ReactNode } from 'react';
 
-import type { SelectionCandidate, SelectionTarget } from '@devicechain/dashboards';
+import type { ResolvedFrame, SelectionCandidate, SelectionTarget } from '@devicechain/dashboards';
 
 // WidgetSubjectContext carries the resolved entity a widget shows (its datasource's
 // bound device/anchor), computed once by the renderer and provided per widget. The
@@ -188,4 +188,17 @@ export function WidgetFreshnessProvider({
 
 export function useWidgetFreshness(): WidgetFreshness | undefined {
   return useContext(WidgetFreshnessContext);
+}
+
+// The frame a board gives a widget: its canvas default merged with the widget's own override
+// (resolveFrame in @devicechain/dashboards). Absent -- a widget mounted outside a board -- the
+// frame is today's card.
+const WidgetFrameStyleContext = createContext<ResolvedFrame | undefined>(undefined);
+
+export function WidgetFrameStyleProvider({ frame, children }: { frame: ResolvedFrame | undefined; children: ReactNode }) {
+  return <WidgetFrameStyleContext.Provider value={frame}>{children}</WidgetFrameStyleContext.Provider>;
+}
+
+export function useWidgetFrameStyle(): ResolvedFrame | undefined {
+  return useContext(WidgetFrameStyleContext);
 }

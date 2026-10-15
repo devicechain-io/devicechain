@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "title": "Readability gate negative control",
   "canvas": {
     "breakpoints": {
@@ -7,8 +7,9 @@
     },
     "grid": {
       "columns": 24,
-      "gap": 8,
-      "rowHeight": 40
+      "minCellSize": 24,
+      "gutter": 8,
+      "padding": 0
     },
     "sizing": "fill"
   },
@@ -18,11 +19,11 @@
       "type": "label",
       "layout": {
         "base": {
+          "mode": "grid",
           "col": 0,
-          "colSpan": 8,
           "row": 0,
-          "rowSpan": 2,
-          "z": 0
+          "cols": 8,
+          "rows": 2
         }
       },
       "options": {
@@ -36,11 +37,11 @@
       "type": "latest-card",
       "layout": {
         "base": {
+          "mode": "grid",
           "col": 8,
-          "colSpan": 1,
           "row": 0,
-          "rowSpan": 3,
-          "z": 0
+          "cols": 1,
+          "rows": 4
         }
       },
       "datasource": {
@@ -62,11 +63,11 @@
       "type": "latest-card",
       "layout": {
         "base": {
+          "mode": "grid",
           "col": 0,
-          "colSpan": 6,
           "row": 2,
-          "rowSpan": 4,
-          "z": 0
+          "cols": 6,
+          "rows": 4
         }
       },
       "datasource": {
@@ -87,11 +88,11 @@
       "type": "label",
       "layout": {
         "base": {
+          "mode": "grid",
           "col": 10,
-          "colSpan": 2,
           "row": 0,
-          "rowSpan": 1,
-          "z": 0
+          "cols": 2,
+          "rows": 1
         }
       },
       "options": {
@@ -105,11 +106,11 @@
       "type": "label",
       "layout": {
         "base": {
+          "mode": "grid",
           "col": 12,
-          "colSpan": 6,
           "row": 0,
-          "rowSpan": 2,
-          "z": 0
+          "cols": 6,
+          "rows": 2
         }
       },
       "options": {
@@ -119,18 +120,35 @@
       }
     },
     {
+      "id": "nc-overlap-host",
+      "type": "label",
+      "layout": {
+        "base": {
+          "mode": "grid",
+          "col": 18,
+          "row": 0,
+          "cols": 6,
+          "rows": 2
+        }
+      },
+      "options": {
+        "align": "left",
+        "fontSize": 14,
+        "text": "Host"
+      }
+    },
+    {
       "id": "nc-overlap-b",
       "type": "label",
       "layout": {
         "base": {
-          "col": 18,
-          "colSpan": 6,
-          "row": 0,
-          "rowSpan": 2,
-          "z": 0,
-          "offset": {
-            "x": -80,
-            "y": 16
+          "mode": "relative",
+          "host": "nc-overlap-host",
+          "anchor": "left",
+          "self": "right",
+          "size": {
+            "cols": 4,
+            "rows": 2
           }
         }
       },
