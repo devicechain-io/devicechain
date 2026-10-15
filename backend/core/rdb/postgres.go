@@ -181,10 +181,12 @@ func (rdb *RdbManager) initializePostgres(ctx context.Context) error {
 	}
 	var db *gorm.DB
 	if err := core.RetryInfraConnect(ctx, "postgres", func(context.Context) error {
-		var oerr error
-		db, oerr = gorm.Open(postgres.New(postgres.Config{
-			DSN: dsn,
-		}), ownedGormConfig(rdb.Microservice.FunctionalArea))
+		// newPostgresDialector, not postgres.New: see pgx_classic_scan.go.
+		dialector, oerr := newPostgresDialector(postgres.Config{DSN: dsn})
+		if oerr != nil {
+			return oerr
+		}
+		db, oerr = gorm.Open(dialector, ownedGormConfig(rdb.Microservice.FunctionalArea))
 		return oerr
 	}); err != nil {
 		return err

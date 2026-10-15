@@ -47,7 +47,7 @@ type idleSetting struct {
 
 const idleSettingQuery = `SELECT setting, source FROM pg_settings WHERE name = 'idle_in_transaction_session_timeout'`
 
-func itServer(t *testing.T) (host string, port int) {
+func itServer(t testing.TB) (host string, port int) {
 	t.Helper()
 	port = 5432
 	if raw := os.Getenv("DC_IT_PGPORT"); raw != "" {
