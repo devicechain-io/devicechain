@@ -146,7 +146,7 @@ func TestResolutionPublishWindowIsBounded(t *testing.T) {
 	}
 }
 
-// resolution.inboundReaders loads as written, and a document that omits it gets 2.
+// resolution.inboundReaders loads as written, and a document that omits it gets 1.
 func TestResolutionInboundReadersLoadAndDefault(t *testing.T) {
 	cfg := &DeviceManagementConfiguration{}
 	require.NoError(t, core.LoadConfiguration([]byte(`{"resolution":{"inboundReaders":3}}`), cfg))
@@ -154,14 +154,14 @@ func TestResolutionInboundReadersLoadAndDefault(t *testing.T) {
 
 	cfg = &DeviceManagementConfiguration{}
 	require.NoError(t, core.LoadConfiguration([]byte(``), cfg))
-	assert.Equal(t, 2, cfg.Resolution.InboundReaderCount())
+	assert.Equal(t, 1, cfg.Resolution.InboundReaderCount())
 	require.NotNil(t, cfg.Resolution.InboundReaders)
 
 	cfg = &DeviceManagementConfiguration{}
 	require.NoError(t, core.LoadConfiguration([]byte(`{"resolution":{"workers":4}}`), cfg))
-	assert.Equal(t, 2, cfg.Resolution.InboundReaderCount())
-	assert.Equal(t, 2, *NewDeviceManagementConfiguration().Resolution.InboundReaders)
-	assert.Equal(t, 2, DefaultInboundReaders)
+	assert.Equal(t, 1, cfg.Resolution.InboundReaderCount())
+	assert.Equal(t, 1, *NewDeviceManagementConfiguration().Resolution.InboundReaders)
+	assert.Equal(t, 1, DefaultInboundReaders)
 	assert.Equal(t, 4, MaxInboundReaders)
 }
 

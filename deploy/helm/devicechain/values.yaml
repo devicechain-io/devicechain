@@ -1256,10 +1256,12 @@ functionalAreas:
       #                     # broker's acknowledgement, 1 to 1024 (out of range stops
       #                     # the service). Publishing cannot exceed this divided by
       #                     # the acknowledgement time, ~8-11 ms on a replicated broker.
-      #     inboundReaders: 2  # pulls a pod keeps in flight on the inbound events
+      #     inboundReaders: 1  # pulls a pod keeps in flight on the inbound events
       #                     # consumer, 1 to 4 (out of range stops the service). One
-      #                     # pull per broker round trip is what bound a single pod;
-      #                     # a reader adds a pull without a second copy of the caches.
+      #                     # pull per broker round trip bound a single pod near
+      #                     # 10,000 events/s on a replicated broker; a second reader
+      #                     # adds a pull without a second copy of the caches. Raise it
+      #                     # only when resolvers sit idle while the consumer lags.
       #
       # What each replica keeps in its own memory of each of the three lookup caches
       # kept per device (a device by its token, its tracked relationships, its group

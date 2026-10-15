@@ -23,8 +23,7 @@ import (
 // resolution.inboundReaders reaches the BROKER: the processor the service builds keeps that
 // many pull requests waiting on the inbound-events durable at once, counted by the broker
 // itself (ConsumerInfo.NumWaiting) against an empty stream, where every reader's pull is a
-// long poll. A document that omits the setting gets 2. One reader, the shape before the
-// setting existed, holds 1.
+// long poll. A document that omits the setting gets 1, the shape before the setting existed.
 //
 // It is the number the setting exists to move: the r10 round trip bound the pod at one pull
 // in flight, and a second replica lifted it by being a second pull.
@@ -48,8 +47,10 @@ func TestConfiguredInboundReadersHoldThatManyPullsAtTheBroker(t *testing.T) {
 	}{
 		{`{"resolution":{"inboundReaders":3}}`, 3},
 		// Counterweight: the default, so a wiring that always built 3 cannot pass both.
-		{`{}`, 2},
-		{`{"resolution":{"inboundReaders":1}}`, 1},
+		{`{}`, 1},
+		// And a written value that is not the default, so a wiring that always built the
+		// default cannot pass both.
+		{`{"resolution":{"inboundReaders":2}}`, 2},
 	} {
 		t.Run(tc.doc, func(t *testing.T) {
 			Microservice = &core.Microservice{InstanceId: "test", FunctionalArea: "device-management"}

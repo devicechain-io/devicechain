@@ -120,19 +120,36 @@ const DefaultPublishWindow = 512
 // twice as wide and a second pull in flight both buy depth, so the consume end is bound by the
 // round trip, not by what one pull carries.
 //
-// 2 is the second replica's depth without the second replica's cost: a replica holds its own
-// copy of every cache (640-768 MiB each for 60,000 devices) and reads the database again for
-// every cold lookup, while a reader holds only the messages it has fetched. It is not higher
-// because the next limit was already in sight: in the same arms the node holding the inbound
+// A second reader is the second replica's depth without the second replica's cost: a replica
+// holds its own copy of every cache (640-768 MiB each for 60,000 devices) and reads the
+// database again for every cold lookup, while a reader holds only the messages it has
+// fetched. More than two was not measured: in the same arms the node holding the inbound
 // stream's leader ran at 96-97% CPU and the resolved-events PubAck doubled (9.5 to 17.7 ms at
-// the median). More depth than that is a guess, which is why the setting exists.
+// the median).
 //
-// The cost of each reader: up to two batches (one handed out, one fetched ahead, 512 messages
-// at the default batch of 256) held unacknowledged in the pod, which a crash leaves for the
-// broker to redeliver after AckWait, under the same dedup ids. And no per-device order: the
-// readers interleave batches, which is the reorder the resolver pool and a second replica
-// already cause (see ProcessResolvedEvent).
-const DefaultInboundReaders = 2
+// 🔑 WHY THE DEFAULT IS STILL ONE. The gain was measured only on a pod already resolving about
+// 10,000 events a second against a replicated broker: at 10,800 offered the second pull
+// changed nothing, and below that the pull is not what binds. It was also measured at a
+// 128-message batch; the 256 default took the same +12% from the same pull, and what a second
+// reader adds on top of that is unmeasured. Every pod would pay for a second reader anyway:
+//   - up to two more batches held unacknowledged (one handed out, one fetched ahead: 512
+//     messages at the default batch of 256), which a crash or a rollout leaves for the broker
+//     to redeliver after AckWait, under the same dedup ids, and so LATE to detection;
+//   - a wider reorder whenever the consumer is behind (a burst, a catch-up after a restart
+//     or an outage). Each reader then holds full batches of adjacent sequences and they hand
+//     out at once, so events up to a batch and a half apart swap; one reader with the
+//     resolver pool swaps events only about a pool's width apart. Measured on an embedded
+//     broker, 3,000 messages backlogged: one reader handed them out with no inversion, two
+//     with 88,401 inversions spanning up to 410 sequences (405 ms of publishing). On a quiet
+//     stream two readers did not reorder at all. It is the reorder a second replica causes
+//     (see ProcessResolvedEvent), but its width is a batch of the FLEET's events, so on a
+//     slow fleet catching up (256 events at 50 a second is five seconds) it reaches past
+//     detection's default lateness, and the kinds that read arrival order rather than event
+//     time (DeltaRate drops the older sample, CountWindow groups events by arrival) see it.
+//
+// So the setting is raised where its symptom is: the resolvers mostly idle while the inbound
+// consumer falls behind.
+const DefaultInboundReaders = 1
 
 // MaxInboundReaders bounds resolution.inboundReaders. Four readers hold up to 2,048 inbound
 // messages unacknowledged at the default batch: twenty times the 100-slot queue in front of the
