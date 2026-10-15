@@ -519,6 +519,37 @@ type OrderedWriter interface {
 	Close()
 }
 
+// AsyncWriter is OrderedWriter for MANY submitters: the writer a hot ingest path uses when
+// several goroutines publish and none of them may wait a PubAck apiece. Build one with
+// NatsManager.NewAsyncWriter.
+//
+// Contract:
+//   - Submit and Settle are safe for concurrent use. Submissions made by ONE goroutine reach
+//     the stream, and their done callbacks run, in that goroutine's call order; submissions
+//     of different goroutines interleave arbitrarily.
+//   - done runs once per Submit, on the writer's goroutine (except after Close, below), nil
+//     ONLY after every message of the call was PubAcked, else the first error. A multi-message
+//     call publishes every piece even when an earlier one fails. done must be quick and must
+//     not call Submit or Settle.
+//   - Submit blocks while the window is full. A call is refused whole, in order, with a
+//     *BackpressureError when the writer was built to refuse, the gate is closed and any
+//     message lacks Message.BypassBackpressure.
+//   - Settle waits for every Submit that returned before it was called to have had its done
+//     run. It does not close the writer: it is the barrier a lease holder drains with before
+//     releasing, and the writer stays usable. ctx bounds the wait only; a cancelled Settle
+//     returns ctx.Err() and abandons nothing that was already submitted.
+//   - Retry is the caller's, from a goroutine of its own: the writer never retries (a retry
+//     is a reorder, and publish options would break the dedup reasoning on Message.DedupID).
+//   - Close settles what the writer holds and stops it. Submit after Close publishes nothing
+//     and calls done(ErrAsyncWriterClosed) on the caller's goroutine; Settle returns it.
+type AsyncWriter interface {
+	Submit(ctx context.Context, msgs []Message, done func(error))
+	Settle(ctx context.Context) error
+	// Draining ends failure backoff; see OrderedWriter.Draining.
+	Draining()
+	Close()
+}
+
 // ParseTenantFromSubject extracts the tenant id from a messaging subject built
 // as "{instanceId}.{tenantId}.{suffix}" (and the ADR-006/ADR-048 MQTT mapping
 // "{instanceId}.{tenant}.devices.{token}.events" — the tenant is the second
