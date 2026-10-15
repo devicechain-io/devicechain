@@ -115,6 +115,7 @@ func build(ctx context.Context, args []string) error {
 	to := fs.String("to", "", "the window's end, RFC 3339")
 	liveFrom := fs.String("showcase-from", "", "where the showcase starts (a chapter), RFC 3339; the window before it is its history")
 	historyEvery := fs.Duration("history-every", time.Minute, "keep one reading per device and measurement in each step this long before the showcase start (0 keeps all)")
+	fullRate := fs.String("full-rate", recording.DefaultFullRate, "comma-separated measurements whose history is never thinned: the ones the board aggregates (a stat card's Avg or Peak)")
 	board := fs.String("board", "", "the board definition the recording is for (frontend/testdata/sim-dashboards/sp-dashboard.json)")
 	boardPath := fs.String("board-path", "frontend/testdata/sim-dashboards/sp-dashboard.json", "the board's path in the repository, as the recording names it")
 	boardCommit := fs.String("board-commit", "", "the full commit id the board file is at")
@@ -165,6 +166,9 @@ func build(ctx context.Context, args []string) error {
 	}
 	o.PublishLogName, o.AlarmsName = "published.ndjson", "alarms.ndjson"
 	o.HistoryEvery = *historyEvery
+	if *fullRate != "" {
+		o.FullRate = strings.Split(*fullRate, ",")
+	}
 	o.BoardPath, o.BoardCommit, o.GitSha, o.PlatformVersion = *boardPath, *boardCommit, *gitSha, *platformVersion
 	o.Instance, o.Tenant = hs.InstanceId, hs.Tenant
 	if hs.ManifestId != "sitepulse" {

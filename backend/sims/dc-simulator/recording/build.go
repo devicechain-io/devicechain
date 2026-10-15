@@ -28,8 +28,9 @@ const (
 	FormatVersion = 2
 	FormatKind    = "sitepulse-board-recording"
 	ProducerName  = "sitepulse-record"
-	// ProducerVersion is this producer's own version, in converter.version.
-	ProducerVersion = 1
+	// ProducerVersion is this producer's own version, in converter.version. 2: alarms carry
+	// the reading that raised them (`val`), and FullRate measurements are never thinned.
+	ProducerVersion = 2
 )
 
 // BoardMeasurements are the measurements the sitepulse board shows, and the only ones a
@@ -42,6 +43,10 @@ var BoardMeasurements = []string{
 	sim.SitepulseThroughputKey,
 	sim.SitepulseTyreKey,
 }
+
+// DefaultFullRate is what sitepulse-record build keeps at full rate unless told otherwise:
+// the plant's throughput, which the sitepulse board's Avg and Peak stat cards aggregate.
+const DefaultFullRate = sim.SitepulseThroughputKey
 
 // Refusal is a reason the recording must not be written. Never caught and continued past.
 type Refusal struct{ msg string }
@@ -84,6 +89,11 @@ type Options struct {
 	// measurement in each step of this length (the first of each); after LiveFrom every
 	// row is kept. Zero keeps every row.
 	HistoryEvery time.Duration
+	// FullRate names the measurements whose history is never thinned: the ones the board
+	// AGGREGATES over its span (a stat card's Avg or Peak). A thinned history would change
+	// those figures: it drops the peak reading, and it weights the average towards the
+	// unthinned tail. The board-replay tests hold the committed recording to this.
+	FullRate []string
 
 	Devices         []sim.DeviceInstance
 	Instance        string
@@ -177,6 +187,10 @@ type recAlarm struct {
 	Sev    string `json:"sev"`
 	Occ    string `json:"occ"`
 	Ack    *bool  `json:"ack,omitempty"`
+	// Val is the reading that raised the alarm (the alarm table's Value column): the value
+	// the device SENT for the alarm's metric at its raise instant, from the publish log.
+	// Absent when this run sent no reading at that instant (an alarm raised before the run).
+	Val *float64 `json:"val,omitempty"`
 }
 
 type recAlarmEvent struct {
@@ -334,6 +348,14 @@ func Build(ctx context.Context, p Platform, o Options) (*Recording, Report, erro
 	for i, n := range BoardMeasurements {
 		nameIndex[n] = i
 	}
+	fullRate := map[int]bool{}
+	for _, name := range o.FullRate {
+		n, ok := nameIndex[name]
+		if !ok {
+			return nil, rep, refuse("--full-rate %q is not a measurement the board shows", name)
+		}
+		fullRate[n] = true
+	}
 
 	// ---- measurements ----
 	type mrow struct {
@@ -398,7 +420,7 @@ func Build(ctx context.Context, p Platform, o Options) (*Recording, Report, erro
 	every := o.HistoryEvery.Milliseconds()
 	kept := map[[3]int64]bool{}
 	for _, r := range rows {
-		if every > 0 && r.t < live {
+		if every > 0 && r.t < live && !fullRate[r.n] {
 			step := [3]int64{int64(r.d), int64(r.n), r.t / every}
 			if kept[step] {
 				continue
@@ -466,7 +488,7 @@ func Build(ctx context.Context, p Platform, o Options) (*Recording, Report, erro
 	rep.KeptFixes = len(rec.Locations.T)
 
 	// ---- alarms ----
-	if err := foldAlarms(rec, o, index, &rep); err != nil {
+	if err := foldAlarms(rec, o, index, sent, &rep); err != nil {
 		return nil, rep, err
 	}
 	return rec, rep, nil
@@ -477,8 +499,21 @@ func Build(ctx context.Context, p Platform, o Options) (*Recording, Report, erro
 // raise or clear time or acknowledgement differs from the previous answer, at the time
 // that answer came back. An alarm that VANISHES from an answer cannot be an event, so that
 // answer is recorded whole, as a snapshot.
-func foldAlarms(rec *Recording, o Options, index map[string]int, rep *Report) error {
+//
+// Each alarm carries the reading that raised it, from the publish log (see recAlarm.Val). The
+// platform's own lastValue, when the watch has it, must be that reading: a different one is a
+// value this recording cannot explain, and is refused.
+func foldAlarms(rec *Recording, o Options, index map[string]int, sent map[string]published, rep *Report) error {
 	ms := func(t time.Time) int64 { return t.Sub(o.From).Milliseconds() }
+	// The first instant the devices published at: an alarm raised before it was raised before
+	// this run, by a reading the publish log cannot hold.
+	firstSent := time.Time{}
+	for k := range sent {
+		us, _ := strconv.ParseInt(k[strings.LastIndexByte(k, '|')+1:], 10, 64)
+		if at := time.UnixMicro(us); firstSent.IsZero() || at.Before(firstSent) {
+			firstSent = at
+		}
+	}
 	var answers []AlarmWatch
 	sc := bufio.NewScanner(strings.NewReader(string(o.Alarms)))
 	sc.Buffer(make([]byte, 4<<20), 4<<20)
@@ -552,6 +587,31 @@ func foldAlarms(rec *Recording, o Options, index map[string]int, rep *Report) er
 		if a.Acknowledged {
 			yes := true
 			r.Ack = &yes
+		}
+		if a.RaisedTime != nil {
+			raised, err := time.Parse(time.RFC3339Nano, *a.RaisedTime)
+			if err != nil {
+				return recAlarm{}, refuse("alarm raise time %q: %v", *a.RaisedTime, err)
+			}
+			if pub, ok := sent[key(a.Originator, "Measurement", raised)]; ok {
+				if s, ok := pub.values[a.MetricKey]; ok {
+					v, err := strconv.ParseFloat(s, 64)
+					if err != nil {
+						return recAlarm{}, refuse("the publish log holds %s %s = %q at %s, not a number", a.Originator, a.MetricKey, s, *a.RaisedTime)
+					}
+					r.Val = &v
+				}
+			}
+			switch {
+			case a.LastValue == nil:
+			case r.Val != nil && *r.Val != *a.LastValue:
+				return recAlarm{}, refuse("the platform says %s on %s was raised by %v; the device sent %v at its raise instant %s",
+					a.AlarmKey, a.Originator, *a.LastValue, *r.Val, *a.RaisedTime)
+			case r.Val == nil && !raised.Before(firstSent):
+				// Raised while the devices were publishing, by a reading they never sent.
+				return recAlarm{}, refuse("the platform says %s on %s was raised by %v at %s; the device sent no %s at that instant",
+					a.AlarmKey, a.Originator, *a.LastValue, *a.RaisedTime, a.MetricKey)
+			}
 		}
 		return r, nil
 	}

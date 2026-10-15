@@ -38,6 +38,9 @@ type WatchedAlarm struct {
 	RaisedTime   *string `json:"raisedTime"`
 	ClearedTime  *string `json:"clearedTime"`
 	Acknowledged bool    `json:"acknowledged"`
+	// LastValue is the reading that raised the alarm, as the alarm table's Value column
+	// shows it (null when the platform holds none). Build checks it against the publish log.
+	LastValue *float64 `json:"lastValue"`
 }
 
 // AlarmWatch is one answer of the alarm list: when the query was sent, when it was
@@ -56,7 +59,7 @@ const watchPageSize = 500
 
 const alarmsQuery = `query($c: AlarmSearchCriteria!) {
   alarms(criteria: $c) {
-    results { token originatorToken alarmKey metricKey state severity raisedTime clearedTime acknowledged }
+    results { token originatorToken alarmKey metricKey state severity raisedTime clearedTime acknowledged lastValue }
     pagination { totalRecords }
   }
 }`
