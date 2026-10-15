@@ -317,13 +317,20 @@ func tenantSubjectFor(t *testing.T, nmgr *NatsManager, suffix string) string {
 func TestDuplicateWindowsFitTheBrokerMemoryLimit(t *testing.T) {
 	const (
 		referenceEvents = 10_000.0
-		// bytesPerHeldID is the live heap one held id costs, measured against the pinned
-		// nats-server with 35-byte ids (a ddentry, the id's own bytes, a map slot and the
-		// ordered array's pointer). See streams.BrokerDefaultDuplicateWindowSeconds.
+		// bytesPerHeldID is the live heap one held id costs, measured against nats-server
+		// v2.15.0 with 35-byte ids (a ddentry, the id's own bytes, a map slot and the ordered
+		// array's pointer). The deployed broker (nats chart 2.14.4) has the same structures.
+		// See streams.BrokerDefaultDuplicateWindowSeconds.
 		bytesPerHeldID = 120.0
+		// derivedIDExtraBytes: a derived-events id is "de." plus a hex sha256, 67 bytes, which
+		// the allocator rounds to 80 rather than the 48 a 35-byte id takes.
+		derivedIDExtraBytes = 32.0
 		// existingBrokerMiB is the highest resident memory any server reached in the release
 		// benchmark (up to 9,200 events/s). It already includes the dedup tables those runs
 		// had filled, so adding the full tables to it counts some of them twice: it errs high.
+		// Cross-check against GKE round 10's 10,000 events/s x 600 s run: the peak was
+		// 1,124 MiB RSS, holding about 7.2M ids under the old windows (inbound 6M, resolved
+		// 1.2M; ~824 MiB at bytesPerHeldID), so what is not a dedup table is about 300 MiB.
 		existingBrokerMiB = 830.0
 		// The Go runtime's soft limit is 80% of the container limit (modules/nats); the
 		// budget must stay this far under the SOFT limit, so the collector is not running
@@ -359,7 +366,11 @@ func TestDuplicateWindowsFitTheBrokerMemoryLimit(t *testing.T) {
 		}
 		window := float64(streams.DuplicateWindowSecondsFor(suffix))
 		ids := rate * window
-		mib := ids * bytesPerHeldID / (1 << 20)
+		perID := bytesPerHeldID
+		if suffix == streams.DerivedEvents {
+			perID += derivedIDExtraBytes
+		}
+		mib := ids * perID / (1 << 20)
 		totalMiB += mib
 		t.Logf("%-24s %8.0f %7.0fs %10.0f %10.0f", suffix, rate, window, ids, mib)
 	}
@@ -379,14 +390,25 @@ func TestDuplicateWindowsFitTheBrokerMemoryLimit(t *testing.T) {
 	}
 }
 
-// natsMemoryLimitMiB reads the default memory limit an instance gives each NATS server from the
-// OpenTofu root that sets it, so the budget is held to the limit that actually ships.
+// natsMemoryLimitMiB reads the default memory limit each NATS server gets, so the budget is held
+// to the limit that actually ships. Two defaults declare it: the instance root's, which every
+// install passes to the module, and the nats module's own, which a root that passes nothing
+// gets. The budget is held to the LOWER of the two, so neither can drift below it unnoticed.
 func natsMemoryLimitMiB(t *testing.T) float64 {
 	t.Helper()
-	src, err := os.ReadFile(filepath.Join("..", "..", "..", "deploy", "opentofu", "instance", "variables.tf"))
+	opentofu := filepath.Join("..", "..", "..", "deploy", "opentofu")
+	root := tofuDefaultMiB(t, filepath.Join(opentofu, "instance", "variables.tf"), "nats_memory_limit")
+	module := tofuDefaultMiB(t, filepath.Join(opentofu, "modules", "nats", "main.tf"), "memory_limit")
+	return min(root, module)
+}
+
+// tofuDefaultMiB reads the Mi or Gi default of an OpenTofu variable, in MiB.
+func tofuDefaultMiB(t *testing.T, path, variable string) float64 {
+	t.Helper()
+	src, err := os.ReadFile(path)
 	require.NoError(t, err)
-	m := regexp.MustCompile(`(?s)variable "nats_memory_limit" \{.*?default\s*=\s*"(\d+)(Mi|Gi)"`).FindSubmatch(src)
-	require.NotNil(t, m, "no default for nats_memory_limit in deploy/opentofu/instance/variables.tf")
+	m := regexp.MustCompile(`(?s)variable "` + variable + `" \{.*?\n\s*default\s*=\s*"(\d+)(Mi|Gi)"`).FindSubmatch(src)
+	require.NotNil(t, m, "no Mi or Gi default for %s in %s", variable, path)
 	n, err := strconv.Atoi(string(m[1]))
 	require.NoError(t, err)
 	if string(m[2]) == "Gi" {

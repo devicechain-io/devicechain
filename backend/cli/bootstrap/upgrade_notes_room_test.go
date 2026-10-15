@@ -44,6 +44,11 @@ const (
 // in them is held to what that release shipped, not to what the chart requests now.
 var v0190Requests = map[string]int64{"device-management": 800}
 
+// v0190NATSMemoryLimit is the NATS memory limit the v0.19.0 notes were written against. The
+// instance root has since raised it (4Gi, for the duplicate-detection budget in v0.22.0), and
+// the notes are history: they say what that release applied, not what the root renders now.
+const v0190NATSMemoryLimit = "2Gi"
+
 var roomPages = map[string]string{
 	"en": filepath.Join("..", "..", "..", "docs", "docs", "deployment", "releases-and-upgrades.md"),
 	"es": filepath.Join("..", "..", "..", "docs", "i18n", "es", "docusaurus-plugin-content-docs", "current",
@@ -315,12 +320,13 @@ func TestUpgradeNotesMakeRoomIsTheRenderedArithmetic(t *testing.T) {
 			}
 		}
 
-		// The paragraph restates the table's NATS requests and adds the memory limit,
-		// which the table does not give; both are the instance root's, without --compact.
+		// The paragraph restates the table's NATS requests, which are the instance root's
+		// without --compact, and adds the memory limit that release shipped, which the table
+		// does not give.
 		wantNATS := []string{
 			natsSetting(t, plain, "nats_cpu_request"),
 			natsSetting(t, plain, "nats_memory_request"),
-			natsSetting(t, plain, "nats_memory_limit"),
+			v0190NATSMemoryLimit,
 		}
 		if m := roomNATS.FindStringSubmatch(section); m == nil {
 			t.Errorf("%s: no sentence giving each NATS server's requests and limit this test can read", locale)

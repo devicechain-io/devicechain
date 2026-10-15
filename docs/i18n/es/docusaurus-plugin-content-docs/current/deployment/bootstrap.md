@@ -1571,8 +1571,8 @@ un nodo se quedaba sin memoria.
   durante los últimos 10 minutos. Cada id cuesta unos 120 bytes en cada servidor, así que una
   ingesta sostenida de E eventos por segundo ocupa unos E × 1200 s × 120 bytes: unos 145 MB a
   1000 eventos por segundo, 860 MB a 6000 y 1,4 GB a 10 000. Las detecciones y las acciones que
-  disparan suman lo suyo: unos 360 MB a 1000 detecciones por segundo. Con los 830 MiB medidos
-  arriba, un servidor a 10 000 eventos por segundo necesita unos 2,5 GiB; por eso el límite es de
+  disparan suman lo suyo: unos 420 MB a 1000 detecciones por segundo. Con los 830 MiB medidos
+  arriba, un servidor a 10 000 eventos por segundo necesita unos 2,6 GiB; por eso el límite es de
   4Gi, que lo deja un 15 % por debajo del límite blando del 80 %. Se tarda 10 minutos de ingesta
   constante en llegar ahí. Si fijas `nats_memory_limit` por debajo de 4Gi, reduce en proporción
   el ritmo que puedes sostener.
@@ -1581,7 +1581,9 @@ un nodo se quedaba sin memoria.
   `event-sources` o `device-management` que muere y vuelve en unos 8 minutos. Si tarda más, los
   eventos que ese pod tenía en curso se guardan de nuevo: como mucho su ventana de publicación.
   Para evitarlo, ejecuta `event-sources` y `device-management` con 2 o más réplicas, de modo que
-  un pod superviviente retome el trabajo un minuto después.
+  un pod superviviente retome el trabajo un minuto después. Un broker que guarda una
+  publicación, pierde su confirmación y luego falla las publicaciones durante más de unos 8
+  minutos tiene el mismo efecto, y ahí más réplicas no ayudan.
 - **La CPU se solicita por debajo de lo que un servidor usa con carga**: unos 4,4 núcleos entre
   los tres servidores a 6000 eventos por segundo, de 1,6 a 1,8 de ellos en el servidor que lidera
   el stream de eventos entrantes. Con `--ha` en tres nodos cada nodo ejecuta exactamente un

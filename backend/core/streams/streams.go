@@ -151,8 +151,10 @@ const (
 	// behind another past its clock) and by bounding every sink call by the delivery's ack
 	// deadline. device-management's resolver and event-sources' capture forward read through
 	// plain readers, whose contract (messaging.AckWait) is that a fetched batch clears well
-	// inside AckWait: each publish waits
-	// at most the 5 s publish ceiling plus one failure backoff of at most 2 s. Given that,
+	// inside AckWait. One publish waits at most the 5 s publish ceiling plus one failure
+	// backoff of at most 2 s, but a BATCH clears inside AckWait only while the broker answers:
+	// a failing stream is published to at one message per backoff, so a plain reader's
+	// fetched batch can be handed out long after its clock ran out. Given the premise,
 	// successive deliveries are at most two AckWaits apart (the redelivery becomes due one
 	// AckWait after its predecessor was fetched, and can wait up to one more for the message
 	// ahead of it to finish), so the last re-publish lands at most
@@ -160,8 +162,11 @@ const (
 	// 2*MaxDeliver*AckWait = 600 s covers that with one AckWait to spare. No consumer BackOff
 	// adds to it: no durable sets one, so every redelivery waits exactly AckWait.
 	//
-	// Longer than this is possible only with no consumer at all for the gap — every replica
-	// down, or a lease handover that outlasts it — and then the repeat is stored again.
+	// Longer than this is possible in two ways, and then the repeat is stored again: no
+	// consumer at all for the gap (every replica down, or a lease handover that outlasts it),
+	// or a broker that stored the first publish, lost its acknowledgement and then failed the
+	// stream's publishes for longer than about the window, so that a later delivery, held in a
+	// plain reader's batch through the outage, is published once the broker answers again.
 	// Covering that gap too is what RestartDuplicateWindowSeconds is for, and its memory cost
 	// (see BrokerDefaultDuplicateWindowSeconds) is why it is not the default.
 	RedeliveryDuplicateWindowSeconds = 2 * ConsumerMaxDeliver * ConsumerAckWaitSeconds
@@ -184,8 +189,10 @@ const (
 	//
 	// 🔑 WHAT A WINDOW COSTS. The broker keeps every id published inside the window, in a map
 	// plus an ordered array (nats-server stream.go: ddmap, ddarr), and EVERY replica keeps its
-	// own, so under R3 each server holds every stream's table. Measured against the pinned
-	// server with 35-byte ids, a held id costs about 120 bytes of live heap: about 120 MB per
+	// own, so under R3 each server holds every stream's table. Measured against nats-server
+	// v2.15.0 (the embedded test server) with 35-byte ids; the deployed broker is the nats
+	// chart's 2.14.4, whose ddentry, ddmap and ddarr are the same. A held id costs about 120
+	// bytes of live heap, more for a longer id (derived-events' are 67 bytes): about 120 MB per
 	// million ids per server, before the garbage collector's headroom. A table holds the
 	// stream's id rate times its window: at 10,000 ids/s a 120 s window holds 1.2M ids
 	// (~145 MB), 600 s holds 6M (~720 MB) and 1800 s holds 18M (~2.2 GB). The sum over every
@@ -714,7 +721,7 @@ var All = []Stream{
 	// is the destination's job, on the forwarded idempotency key.
 	//
 	// Window: RestartDuplicateWindowSeconds = 1800 s >= a 15-minute restart allowance + the
-	// 540 s redelivery span = 1440 s. Cost: the rule-firing rate times 1800 s, ~216 MB per
+	// 540 s redelivery span = 1440 s. Cost: the rule-firing rate times 1800 s, ~270 MB (67-byte ids) per
 	// broker server per 1,000 detections/s.
 	{Suffix: DerivedEvents, PlatformAuthored: true, Areas: []string{"event-processing"}, Tier: Hot, DuplicateWindowSeconds: RestartDuplicateWindowSeconds,
 		DeadLetterKind: kindDetectionAction, Why: "DETECT output — scales with rule firings against device traffic"},

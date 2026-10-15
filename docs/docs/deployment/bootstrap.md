@@ -1446,9 +1446,9 @@ first in line for eviction when a node ran short of memory.
   published to the incoming-event stream and to the resolved-event stream in the last 10 minutes.
   Each id costs about 120 bytes on every server, so ingest sustained at E events per second holds
   about E × 1,200 s × 120 bytes: about 145 MB at 1,000 events per second, 860 MB at 6,000 and
-  1.4 GB at 10,000. Detections and the actions they trigger add theirs: about 360 MB at 1,000
+  1.4 GB at 10,000. Detections and the actions they trigger add theirs: about 420 MB at 1,000
   detections per second. With the 830 MiB measured above, a server at 10,000 events per second
-  needs about 2.5 GiB, which is why the limit is 4Gi: that keeps it 15% under the 80% soft limit.
+  needs about 2.6 GiB, which is why the limit is 4Gi: that keeps it 15% under the 80% soft limit.
   It takes 10 minutes of steady ingest to reach. If you set `nats_memory_limit` below 4Gi, scale
   the rate you can sustain with it.
 - **A restart longer than about 8 minutes can store an event twice.** The 10 minutes cover every
@@ -1456,7 +1456,9 @@ first in line for eviction when a node ran short of memory.
   `device-management` pod that dies and comes back within about 8 minutes. If it takes longer, the
   events that pod had in flight are stored again: at most its publish window. To avoid this, run
   `event-sources` and `device-management` with 2 or more replicas, so a surviving pod takes over
-  the work a minute later.
+  the work a minute later. A broker that stores a publish, loses its acknowledgement and then
+  fails publishes for longer than about 8 minutes has the same effect, and more replicas do not
+  help there.
 - **CPU is requested below what a server uses under load**: about 4.4 cores across the three
   servers at 6,000 events per second, 1.6 to 1.8 of them on the server leading the incoming-event
   stream. Under `--ha` on three nodes each node runs exactly one server, so the
