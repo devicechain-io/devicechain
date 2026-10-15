@@ -3512,6 +3512,34 @@ gh attestation verify <archive> --repo devicechain-io/devicechain \
 
 Nothing needs doing.
 
+### v0.21.1 — a patch, nothing to do {#v0211-upgrade}
+
+`v0.21.1` is a drop-in upgrade from `v0.21.0`: `dcctl install` for the cluster, then `dcctl
+upgrade` for each instance, as for [v0.21.0](#v0210-upgrade). It adds no migration, so the
+database is untouched, and it changes no API, topic, permission, chart value or configuration
+key. Everything the v0.21.0 section below describes is still exactly what you are running.
+Coming from `v0.20.0` or earlier, follow the [v0.21.0 notes](#v0210-upgrade) first; they apply
+unchanged.
+
+Four fixes:
+
+- **Database reads cost what they did before v0.21.0 again.** v0.21.0 was the first release built
+  with the Go 1.27 toolchain, and with it the PostgreSQL driver did extra type inspection for
+  every column of every row it read. Services that read a lot, device-state above all, spent
+  noticeably more CPU on ingest as a result. Rows are now read the way they were on `v0.20.0`,
+  and device-state's ingest throughput is restored. In a scan-heavy benchmark the same read went
+  from 85–95 ms to 31–35 ms.
+- **The Rule Health view counts fires on PostgreSQL.** Until now it showed no fires and no
+  last-fired time for every rule, because PostgreSQL refused the statement that records a fire.
+  Detection itself was not affected: rules raised and cleared alarms normally throughout. Counts
+  start from the upgrade; fires before it were never recorded.
+- **Creating an identity with `enabled: false` creates a disabled identity.** Before, it was
+  stored enabled. The same fix covers the other records that carry an enabled flag. An identity
+  created disabled under `v0.21.0` or earlier is still enabled: check any you meant to create
+  disabled, and disable them.
+- **Stopping the HTTP event source waits for its connections to finish closing**, so a stopped
+  source no longer updates its metrics after it has stopped.
+
 ### v0.21.0 — a device can be shut out whole, and updates are signed {#v0210-upgrade}
 
 `v0.21.0` is an in-place upgrade from `v0.20.0`: `dcctl install` for the cluster, then `dcctl
