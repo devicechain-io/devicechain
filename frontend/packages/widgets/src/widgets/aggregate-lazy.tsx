@@ -3,8 +3,7 @@
 
 // The aggregate and categorical registrations: descriptor eager, component lazy, from a chunk of
 // their own (aggregate-widgets.ts), so a board without a stat card, bar chart or pie chart never
-// downloads them. The ECharts bar and pie chart types are a further, separate load, on the first
-// chart of each kind.
+// downloads them. The bar and pie charts are SVG, so no chart engine type is loaded for them.
 
 import { defineWidget, type AggregateStreamState } from '@devicechain/widget-sdk';
 

@@ -185,7 +185,7 @@ The settings depend on the widget. Common ones:
   span it covers under the figure, for example "Maximum · 1h". The same **Time span** setting
   pins the card to its own span. A card says why it has no figure (the data source cannot compute
   aggregates, the read failed, or there were no readings in the span) instead of showing a number
-  it could not compute.
+  it could not compute. The number of readings of a span with none is 0.
 - **Order** (bar chart, pie chart): the measurements in the order the data source lists them, or
   sorted smallest or largest first. A measurement that has not reported yet comes last. A bar chart
   draws columns in a wide widget and rows in a tall one.

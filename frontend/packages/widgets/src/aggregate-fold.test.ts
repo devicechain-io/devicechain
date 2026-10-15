@@ -4,7 +4,7 @@
 import type { MeasurementBucket } from '@devicechain/dashboards';
 import { describe, expect, it } from 'vitest';
 
-import { AggregateFieldsError, aggregateBuckets } from './aggregate-fold';
+import { AggregateFieldsError, aggregateBuckets, aggregateRefreshMs, aggregateWindow } from './aggregate-fold';
 
 const bucket = (over: Partial<MeasurementBucket> & Pick<MeasurementBucket, 'avg'>): MeasurementBucket => ({
   bucketStart: '2026-10-14T12:00:00Z',
@@ -67,5 +67,36 @@ describe('aggregateBuckets', () => {
 
   it('refuses a bucket from a server that does not send the count', () => {
     expect(() => aggregateBuckets([bucket({ avg: 5, min: 5, max: 5, sum: 5 })])).toThrow(/no reading count/);
+  });
+});
+
+describe('aggregateWindow', () => {
+  const T = Date.parse('2026-10-14T12:00:00Z');
+  const iso = (ms: number) => new Date(ms).toISOString();
+
+  it('is whole minutes: from a minute boundary to the instant before the last one', () => {
+    const { window, spanSeconds } = aggregateWindow(3600, T + 59_999);
+    expect(window).toEqual({ startTime: iso(T - 3600_000), endTime: iso(T - 1), intervalSeconds: 3600 });
+    expect(spanSeconds).toBe(3600);
+  });
+
+  it('never starts before the span: a part-minute span rounds its start up and covers less', () => {
+    const { window, spanSeconds } = aggregateWindow(150, T);
+    expect(window.startTime).toBe(iso(T - 120_000));
+    expect(spanSeconds).toBe(120);
+  });
+
+  it('reads the totals in one bucket per measurement, which the store serves from its minute summaries', () => {
+    expect(aggregateWindow(604800, T).window.intervalSeconds).toBe(604800);
+    expect(aggregateWindow(604800, T).window.intervalSeconds % 60).toBe(0);
+  });
+});
+
+describe('aggregateRefreshMs', () => {
+  it('is one chart bucket of the span, and never under a minute', () => {
+    expect(aggregateRefreshMs(900)).toBe(60_000);
+    expect(aggregateRefreshMs(3600)).toBe(60_000);
+    expect(aggregateRefreshMs(86400)).toBe(360_000);
+    expect(aggregateRefreshMs(604800)).toBe(2_520_000);
   });
 });

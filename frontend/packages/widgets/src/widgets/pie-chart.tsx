@@ -5,7 +5,9 @@
 // one whole, so it is only drawn for values of zero or more that add to something: a negative
 // value, or all zeros, is an explained state, never a pie that quietly means something else.
 //
-// Drawn as SVG wedges with a DOM legend that names each category, its value and its share: no
+// Drawn as SVG wedges with a DOM legend that names each category, its value and its share (so
+// every figure is on screen with no pointer to hover, and a category with no reading reads "—",
+// not 0 %): no
 // chart type to register (see bar-chart.tsx), and the labels are text the readability gate sees.
 
 import { useMemo } from 'react';
@@ -33,7 +35,7 @@ export function PieChart({ widget, data }: WidgetProps) {
       {items.length === 0 ? (
         <LevelEmpty message={strings.noCategories} />
       ) : problem ? (
-        <LevelEmpty message={problem === 'negative' ? strings.pieNegative : strings.pieNoShare} />
+        <LevelEmpty message={problem === 'negative' ? strings.pieNegative : problem === 'noShare' ? strings.pieNoShare : strings.noData} />
       ) : (
         <Pie items={items} unit={unit} precision={precision} />
       )}
@@ -109,7 +111,7 @@ function Pie({
                 background: css(RAMP[i % RAMP.length]),
               }}
             />
-            {item.label} {percent(slices[i].fraction)}
+            {item.label} {item.value === null ? '—' : `${fmt(item.value)} · ${percent(slices[i].fraction)}`}
           </li>
         ))}
       </ul>

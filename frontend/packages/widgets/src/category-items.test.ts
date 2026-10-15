@@ -101,7 +101,7 @@ describe('pieProblem', () => {
       ]),
     ).toBeUndefined();
   });
-  it('has no problem with nothing reported yet (the chart says so itself)', () => {
-    expect(pieProblem([{ label: 'a', value: null }])).toBeUndefined();
+  it('names nothing reported yet as no data, not as a pie to draw', () => {
+    expect(pieProblem([{ label: 'a', value: null }])).toBe('noData');
   });
 });

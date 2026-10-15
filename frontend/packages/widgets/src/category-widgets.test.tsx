@@ -148,6 +148,24 @@ describe('bar-chart', () => {
     expect(container.querySelector(`[data-bar="${long}"] title`)?.textContent).toContain(long);
   });
 
+  it('prints values only where they fit beside each other, and keeps every one in the description', () => {
+    stubElementSize(240, 160);
+    const wide = { a: 123456.789, b: 234567.891, c: 345678.912, d: 456789.123 };
+    const { container } = render(<BarChart widget={widget('bar-chart', Object.keys(wide), { precision: 3 })} data={stream(wide)} />);
+    const text = [...container.querySelectorAll('[data-bar] text')].map((t) => t.textContent);
+    expect(text).toEqual(['a', 'b', 'c', 'd']); // the labels; no value would fit in a 50 px column
+    expect(container.querySelector('svg')?.getAttribute('aria-label')).toBe('a: 123456.789, b: 234567.891, c: 345678.912, d: 456789.123');
+  });
+
+  it('draws a value that is not a number as no reading, not as a bar', () => {
+    stubElementSize(360, 200);
+    const { container } = render(<BarChart widget={widget('bar-chart', ['a', 'b'])} data={stream({ a: 2, b: NaN })} />);
+    expect(bars(container)).toEqual([
+      { label: 'a', value: '2', drawn: true },
+      { label: 'b', value: null, drawn: false },
+    ]);
+  });
+
   it('says what to do when no measurement is selected and none has reported', () => {
     const { container } = render(<BarChart widget={widget('bar-chart', [])} data={stream({})} />);
     expect(container.querySelector('[data-level-empty]')?.textContent).toBe(aggregateStrings('en').noCategories);
@@ -188,10 +206,10 @@ describe('pie-chart', () => {
     expect(wedges(container).map((w) => w.label)).toEqual(['battery', 'humidity', 'temperature']);
   });
 
-  it('names every category and its share in the legend, as text', () => {
+  it('names every category, its value and its share in the legend, as text: nothing needs a pointer', () => {
     const { container } = render(<PieChart widget={widget('pie-chart', names)} data={stream({ temperature: 10, humidity: 30, battery: 60 })} />);
     const legend = [...container.querySelectorAll('[data-pie-legend] li')].map((li) => li.textContent);
-    expect(legend).toEqual(['temperature 10%', 'humidity 30%', 'battery 60%']);
+    expect(legend).toEqual(['temperature 10 · 10%', 'humidity 30 · 30%', 'battery 60 · 60%']);
   });
 
   it('gives each wedge a title with its value, unit and share', () => {
@@ -207,10 +225,22 @@ describe('pie-chart', () => {
     expect(container.querySelector('[data-slice] ')?.getAttribute('d')).toMatch(/^M50,2A48,48 0 1 1 50,98/);
   });
 
-  it('lists a category with no reading in the legend at zero, and gives it no wedge', () => {
+  it('lists a category with no reading in the legend as no reading, not as 0 %, and gives it no wedge', () => {
     const { container } = render(<PieChart widget={widget('pie-chart', ['a', 'b'])} data={stream({ a: 4 })} />);
     expect(wedges(container).map((w) => w.label)).toEqual(['a']);
-    expect([...container.querySelectorAll('[data-pie-legend] li')].map((li) => li.textContent)).toEqual(['a 100%', 'b 0%']);
+    expect([...container.querySelectorAll('[data-pie-legend] li')].map((li) => li.textContent)).toEqual(['a 4 · 100%', 'b —']);
+  });
+
+  it('treats a value that is not a number (NaN, an infinity) as no reading, never as a share', () => {
+    const { container } = render(<PieChart widget={widget('pie-chart', ['a', 'b', 'c'])} data={stream({ a: 4, b: NaN, c: Infinity })} />);
+    expect(wedges(container)).toEqual([{ label: 'a', fraction: 1 }]);
+    expect([...container.querySelectorAll('[data-pie-legend] li')].map((li) => li.textContent)).toEqual(['a 4 · 100%', 'b —', 'c —']);
+  });
+
+  it('says there is no data when no category has a reading, rather than an empty disc', () => {
+    const { container } = render(<PieChart widget={widget('pie-chart', ['a', 'b'])} data={stream({})} />);
+    expect(container.querySelector('[data-level-empty]')?.textContent).toBe(aggregateStrings('en').noData);
+    expect(container.querySelector('[data-pie]')).toBeNull();
   });
 
   it('refuses a negative value: shares of a whole cannot include one', () => {

@@ -11,15 +11,17 @@
 // buckets is an explained state, not a guess.
 //
 //   - the span is the widget's pinned one, else the board's (DEFAULT_TIME_RANGE_SECONDS off a board);
-//   - live, the read ends now and repeats every AGGREGATE_REFRESH_MS, so the figures keep up with
-//     the readings arriving; paused, it ends at the freeze instant and is read once, so the number
-//     on screen does not move;
+//   - the window is whole minutes (aggregateWindow), so it holds no reading from before the span;
+//   - live, the read ends at the last minute and repeats on the boundaries of aggregateRefreshMs
+//     (one chart bucket of the span: a minute for an hour, 42 minutes for a week), so every card on
+//     the board reads at the same moment and the hub serves identical reads once; paused, it ends
+//     at the freeze instant and is read once, so the number on screen does not move;
+//   - a hidden tab does not read; it reads once when it is shown again;
 //   - a read for a different selector, span or freeze instant is not shown under the new one: a
 //     result is tagged with the key it was read for, and a mismatch reads as loading.
 
 import {
   DEFAULT_TIME_RANGE_SECONDS,
-  historyWindowFor,
   type AggregateResult,
   type AggregateStreamState,
   type WidgetActions,
@@ -30,11 +32,8 @@ import {
 import { useMeasurementStream, useWidgetTimeRange } from '@devicechain/widget-sdk';
 import { useEffect, useMemo, useState, type ComponentType } from 'react';
 
-import { aggregateBuckets } from './aggregate-fold';
+import { aggregateBuckets, aggregateRefreshMs, aggregateWindow } from './aggregate-fold';
 import { measurementSpan } from './binding-policy';
-
-// How often a live aggregate is read again.
-export const AGGREGATE_REFRESH_MS = 15_000;
 
 const LOADING: AggregateResult = { status: 'loading' };
 
@@ -68,13 +67,13 @@ export default function AggregateFeed({ hub, widget, descriptor, Component, acti
     if (!supported || !ds) return;
     let current = true;
     const run = (): void => {
-      const window = historyWindowFor(spanSeconds, pausedAt ?? now());
+      const { window, spanSeconds: covered } = aggregateWindow(spanSeconds, pausedAt ?? now());
       // Folded inside the chain, so a bucket that cannot be trusted fails the read like a network error.
       hub.bucketMeasurements!(ds, window).then(aggregateBuckets).then(
         (byName) => {
           if (!current) return;
           const { startTime, endTime } = window;
-          setTagged({ key, result: { status: 'ready', byName, startTime, endTime, spanSeconds } });
+          setTagged({ key, result: { status: 'ready', byName, startTime, endTime, spanSeconds: covered } });
         },
         (err: unknown) => {
           if (!current) return;
@@ -85,10 +84,28 @@ export default function AggregateFeed({ hub, widget, descriptor, Component, acti
     };
     run();
     // Paused, the window is fixed at the freeze instant: nothing new can land in it.
-    const timer = pausedAt === undefined ? setInterval(run, AGGREGATE_REFRESH_MS) : undefined;
+    if (pausedAt !== undefined) return () => void (current = false);
+    const hidden = () => document.hidden;
+    const every = aggregateRefreshMs(spanSeconds);
+    let timer: ReturnType<typeof setTimeout>;
+    const schedule = (): void => {
+      timer = setTimeout(
+        () => {
+          if (!hidden()) run();
+          schedule();
+        },
+        every - (now() % every),
+      );
+    };
+    schedule();
+    const shown = (): void => {
+      if (!hidden()) run();
+    };
+    document.addEventListener('visibilitychange', shown);
     return () => {
       current = false;
-      if (timer !== undefined) clearInterval(timer);
+      clearTimeout(timer);
+      document.removeEventListener('visibilitychange', shown);
     };
     // `ds` is read through `key` (value identity), not by reference.
     // eslint-disable-next-line react-hooks/exhaustive-deps

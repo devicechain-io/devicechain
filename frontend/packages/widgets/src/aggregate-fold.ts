@@ -12,7 +12,7 @@
 // readings but lacks a field the aggregate needs is therefore a loud failure here, never a
 // quiet substitution.
 
-import type { MeasurementAggregate, MeasurementBucket } from '@devicechain/dashboards';
+import { bucketSecondsFor, type HistoryWindow, type MeasurementAggregate, type MeasurementBucket } from '@devicechain/dashboards';
 
 export class AggregateFieldsError extends Error {
   constructor(message: string) {
@@ -48,4 +48,53 @@ export function aggregateBuckets(buckets: readonly MeasurementBucket[]): Record<
     }
   }
   return out;
+}
+
+// ---- The window a stat reads ------------------------------------------------------------------
+
+const MINUTE_MS = 60_000;
+
+// aggregateRefreshMs is how often a live stat reads again: one bucket of the span's chart
+// (bucketSecondsFor), so never more often than once a minute. Finer is wasted -- the window it
+// reads moves in whole minutes (aggregateWindow) -- and a 7-day figure re-read every few seconds
+// costs the event store a scan of a week of summaries to move by a few seconds' readings.
+export function aggregateRefreshMs(spanSeconds: number): number {
+  return bucketSecondsFor(spanSeconds) * 1000;
+}
+
+export interface AggregateWindow {
+  window: HistoryWindow;
+  // The length the window actually covers, in seconds: the span, or less when the span is not a
+  // whole number of minutes. This, not the span asked for, is what the card says it covers.
+  spanSeconds: number;
+}
+
+// aggregateWindow is the window a stat over `spanSeconds` reads at `at` (epoch ms): whole minutes,
+// ending at the last minute boundary at or before `at`.
+//
+// 🔴 Whole minutes because the event store answers from one-minute summaries, and a summary is
+// read whole: a window starting mid-minute would also count the readings from that minute's
+// start, BEFORE the span, so "Maximum · 1h" could be the maximum of an hour and a minute. Both
+// edges fall on minute boundaries instead, and the end is asked for as the instant just before
+// its boundary (the store's end is inclusive), so the summaries read are exactly the window's.
+// The start rounds UP, so a span that is not a whole number of minutes covers less, never more,
+// and says so (`spanSeconds`).
+//
+// Live cards read again on the boundaries of aggregateRefreshMs (a whole number of minutes), so
+// every card of one span ends its window on the same boundary: cards that read the same
+// measurement ask the same question at the same moment, and the hub answers them with one read.
+// One bucket wide: the card needs only the totals, so the store returns one or two rows per
+// measurement rather than a chart's worth.
+export function aggregateWindow(spanSeconds: number, at: number): AggregateWindow {
+  const end = Math.floor(at / MINUTE_MS) * MINUTE_MS;
+  const start = Math.ceil((end - spanSeconds * 1000) / MINUTE_MS) * MINUTE_MS;
+  const covered = (end - start) / 1000;
+  return {
+    window: {
+      startTime: new Date(start).toISOString(),
+      endTime: new Date(end - 1).toISOString(),
+      intervalSeconds: Math.max(60, covered),
+    },
+    spanSeconds: covered,
+  };
 }

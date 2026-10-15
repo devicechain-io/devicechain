@@ -103,6 +103,50 @@ describe('DashboardHub.bucketMeasurements', () => {
   });
 });
 
+describe('DashboardHub.bucketMeasurements, asked the same question twice', () => {
+  const ds: DatasourceSelector = { kind: 'device', deviceToken: 'd-1', measurements: ['temperature'] };
+
+  it('shares one read between widgets that ask it while it is in flight', async () => {
+    const hub = hubWith();
+    const [a, b, c] = await Promise.all([
+      hub.bucketMeasurements(ds, WINDOW),
+      hub.bucketMeasurements({ ...ds, measurements: ['temperature'] }, { ...WINDOW }),
+      hub.bucketMeasurements(ds, WINDOW),
+    ]);
+    expect(h.gql).toHaveBeenCalledTimes(1);
+    expect(a).toEqual([bucket('temperature')]);
+    expect(b).toEqual(a);
+    expect(c).toEqual(a);
+  });
+
+  it('reads again once the shared read has settled: it is not a cache that could go stale', async () => {
+    const hub = hubWith();
+    await hub.bucketMeasurements(ds, WINDOW);
+    await hub.bucketMeasurements(ds, WINDOW);
+    expect(h.gql).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not share across a different window or measurement', async () => {
+    const hub = hubWith();
+    await Promise.all([
+      hub.bucketMeasurements(ds, WINDOW),
+      hub.bucketMeasurements(ds, { ...WINDOW, startTime: '2026-10-14T11:01:00.000Z' }),
+      hub.bucketMeasurements({ ...ds, measurements: ['humidity'] }, WINDOW),
+    ]);
+    expect(h.gql).toHaveBeenCalledTimes(3);
+  });
+
+  it('does not keep a failure: the next ask reads again', async () => {
+    const hub = hubWith();
+    h.gql.mockRejectedValueOnce(new Error('blip'));
+    const both = await Promise.allSettled([hub.bucketMeasurements(ds, WINDOW), hub.bucketMeasurements(ds, WINDOW)]);
+    expect(both.map((r) => r.status)).toEqual(['rejected', 'rejected']);
+    expect(h.gql).toHaveBeenCalledTimes(1);
+    await expect(hub.bucketMeasurements(ds, WINDOW)).resolves.toEqual([bucket('temperature')]);
+    expect(h.gql).toHaveBeenCalledTimes(2);
+  });
+});
+
 describe('SyntheticDataSource.bucketMeasurements', () => {
   it('answers with one bucket per measurement whose extremes the waveform actually reached', async () => {
     const source = new SyntheticDataSource({ generator: 'sine', min: 10, max: 30 });

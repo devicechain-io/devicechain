@@ -193,7 +193,7 @@ Los ajustes dependen del widget. Los más comunes:
   estadística y el intervalo que abarca, por ejemplo «Máximo · 1h». El mismo ajuste **Intervalo de
   tiempo** fija la tarjeta a un intervalo propio. La tarjeta dice por qué no tiene cifra (la fuente
   de datos no puede calcular agregados, la lectura falló o no hubo lecturas en el intervalo) en lugar
-  de mostrar un número que no pudo calcular.
+  de mostrar un número que no pudo calcular. El número de lecturas de un intervalo sin ninguna es 0.
 - **Orden** (gráfico de barras, gráfico circular): las mediciones en el orden en que las lista la
   fuente de datos, o de menor a mayor o de mayor a menor. Una medición que aún no ha informado va
   la última. El gráfico de barras dibuja columnas en un widget ancho y filas en uno alto.

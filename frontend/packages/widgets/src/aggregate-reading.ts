@@ -20,6 +20,8 @@ export type StatReading =
       value: number;
       // The span the figure covers, in seconds; undefined for the latest reading, which has none.
       spanSeconds: number | undefined;
+      // The latest reading's own time, which the card ages on screen; undefined for an aggregate.
+      time?: string | null;
     }
   | { kind: 'empty'; reason: EmptyReason; name: string | undefined; message?: string; spanSeconds?: number };
 
@@ -43,7 +45,7 @@ export function statReading(widget: WidgetInstance, data: AggregateStreamState, 
     if (aggregates.status === 'ready' && sample.occurredTime && Date.parse(sample.occurredTime) < Date.parse(aggregates.startTime)) {
       return { kind: 'empty', reason: 'noReadings', name, spanSeconds: aggregates.spanSeconds };
     }
-    return { kind: 'value', stat, name, value: sample.value, spanSeconds: undefined };
+    return { kind: 'value', stat, name, value: sample.value, spanSeconds: undefined, time: sample.occurredTime };
   }
 
   if (aggregates.status === 'loading') return { kind: 'empty', reason: 'loading', name: pinned };
@@ -52,6 +54,14 @@ export function statReading(widget: WidgetInstance, data: AggregateStreamState, 
   }
   const name = pinned ?? Object.keys(aggregates.byName)[0];
   const a = name === undefined ? undefined : aggregates.byName[name];
-  if (!a) return { kind: 'empty', reason: 'noReadings', name, spanSeconds: aggregates.spanSeconds };
+  if (!a) {
+    // The number of readings in a span that holds none is a number: zero, which is the figure a
+    // "no readings in the last hour" tile exists to show. It needs a measurement the card is set
+    // to and a datasource it was read from; every other statistic of no readings is undefined.
+    if (stat === 'count' && pinned !== undefined && widget.datasource) {
+      return { kind: 'value', stat, name: pinned, value: 0, spanSeconds: aggregates.spanSeconds };
+    }
+    return { kind: 'empty', reason: 'noReadings', name, spanSeconds: aggregates.spanSeconds };
+  }
   return { kind: 'value', stat, name, value: a[stat], spanSeconds: aggregates.spanSeconds };
 }

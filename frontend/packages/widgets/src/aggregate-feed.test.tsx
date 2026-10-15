@@ -19,11 +19,13 @@ import { WidgetTimeRangeProvider } from '@devicechain/widget-sdk';
 import { act, cleanup, render, screen } from '@testing-library/react';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { AGGREGATE_REFRESH_MS } from './aggregate-feed';
+import { aggregateRefreshMs } from './aggregate-fold';
 import { ConnectedWidget } from './connected-widget';
 import { loadAggregateWidgets } from './widgets/aggregate-lazy';
 
 const NOW = Date.parse('2026-10-14T12:00:00Z');
+// How often a live card over the default hour reads again: a minute.
+const AGGREGATE_REFRESH_MS = aggregateRefreshMs(3600);
 const ds: DatasourceSelector = { kind: 'device', deviceToken: 'd-1', measurements: ['temperature'] };
 
 // The stat card and the feed both arrive as chunks, and a dynamic import resolves on the module
@@ -109,17 +111,18 @@ const caption = () => document.querySelector('[data-stat-caption]')?.textContent
 const empty = () => document.querySelector('[data-level-empty]')?.textContent;
 
 describe('the span a stat card reads', () => {
-  it('is the board range: a window of that span ending now, bucketed for it', async () => {
+  it('is the board range: a window of that span ending at the last minute, read as one bucket', async () => {
     const f = makeHub(() => [bucket()]);
     mount(widget(), f.hub, live(3600));
     await settle();
     expect(f.read).toHaveBeenCalledTimes(1);
     const [selector, window] = f.read.mock.calls[0];
     expect(selector).toEqual(ds);
+    // The store's end is inclusive, so the window ends the instant before its minute boundary.
     expect(window).toEqual({
       startTime: new Date(NOW - 3600_000).toISOString(),
-      endTime: new Date(NOW).toISOString(),
-      intervalSeconds: 60,
+      endTime: new Date(NOW - 1).toISOString(),
+      intervalSeconds: 3600,
     });
     expect(figure()).toBe('40');
     expect(caption()).toBe('Maximum · 1h');
@@ -133,8 +136,8 @@ describe('the span a stat card reads', () => {
     await settle();
     expect(f.read).toHaveBeenCalledTimes(2);
     const window = f.read.mock.calls[1][1];
-    expect(Date.parse(window.endTime) - Date.parse(window.startTime)).toBe(86400_000);
-    expect(window.intervalSeconds).toBe(360); // 24h in 240 buckets
+    expect(Date.parse(window.endTime) + 1 - Date.parse(window.startTime)).toBe(86400_000);
+    expect(window.intervalSeconds).toBe(86400); // the totals only: one bucket, not a chart's worth
     expect(caption()).toBe('Maximum · 1d');
   });
 
@@ -144,7 +147,7 @@ describe('the span a stat card reads', () => {
     await settle();
     expect(caption()).toBe('Maximum · 5m');
     const window = f.read.mock.calls[0][1];
-    expect(Date.parse(window.endTime) - Date.parse(window.startTime)).toBe(300_000);
+    expect(Date.parse(window.endTime) + 1 - Date.parse(window.startTime)).toBe(300_000);
     setRange(live(3600));
     await settle();
     expect(f.read).toHaveBeenCalledTimes(1); // nothing about this card changed
@@ -219,7 +222,7 @@ describe('a live stat card', () => {
     await settle();
     await advance(AGGREGATE_REFRESH_MS);
     const second = f.read.mock.calls[1][1];
-    expect(second.endTime).toBe(new Date(NOW + AGGREGATE_REFRESH_MS).toISOString());
+    expect(second.endTime).toBe(new Date(NOW + AGGREGATE_REFRESH_MS - 1).toISOString());
   });
 
   it('stops reading when it unmounts', async () => {
@@ -232,6 +235,82 @@ describe('a live stat card', () => {
   });
 });
 
+describe('the window a stat card reads', () => {
+  const at = (ms: number) => new Date(ms).toISOString();
+
+  it('starts and ends on whole minutes, so no summary from before the span is read', async () => {
+    vi.setSystemTime(NOW + 30_000);
+    const f = makeHub(() => [bucket()]);
+    mount(widget(), f.hub, live(3600));
+    await settle();
+    const window = f.read.mock.calls[0][1];
+    // The minute in progress is not read: its summary would be read whole, and the hour before it
+    // starts on the boundary, so the window is exactly an hour.
+    expect(window.startTime).toBe(at(NOW - 3600_000));
+    expect(window.endTime).toBe(at(NOW - 1));
+    expect(caption()).toBe('Maximum · 1h');
+  });
+
+  it('covers less, never more, when its span is not whole minutes, and says what it covers', async () => {
+    vi.setSystemTime(NOW + 30_000);
+    const f = makeHub(() => [bucket()]);
+    mount(widget({ windowSeconds: 90 }), f.hub, live());
+    await settle();
+    const window = f.read.mock.calls[0][1];
+    expect(window.startTime).toBe(at(NOW - 60_000));
+    expect(window.endTime).toBe(at(NOW - 1));
+    expect(caption()).toBe('Maximum · 1m');
+  });
+
+  it('a week is read again once a chart bucket (42 minutes), not every few seconds', async () => {
+    const f = makeHub(() => [bucket()]);
+    mount(widget(), f.hub, live(604800));
+    await settle();
+    expect(aggregateRefreshMs(604800)).toBe(42 * 60_000);
+    await advance(15_000);
+    expect(f.read).toHaveBeenCalledTimes(1);
+    // 12:00 is not on a 42-minute boundary: the next read is on the next one, whichever card asks.
+    const next = Math.ceil((NOW + 1) / (42 * 60_000)) * 42 * 60_000;
+    await advance(next - NOW - 15_000 - 1);
+    expect(f.read).toHaveBeenCalledTimes(1);
+    await advance(1);
+    expect(f.read).toHaveBeenCalledTimes(2);
+    expect(f.read.mock.calls[1][1].endTime).toBe(at(next - 1));
+  });
+
+  it('cards mounted at different moments read again at the same moment, asking the same question', async () => {
+    const f = makeHub(() => [bucket()]);
+    mount(widget(), f.hub, live());
+    await settle();
+    await advance(25_000);
+    mount(widget({ stat: 'min' }), f.hub, live());
+    await settle();
+    expect(f.read).toHaveBeenCalledTimes(2);
+    await advance(35_000);
+    expect(f.read).toHaveBeenCalledTimes(4);
+    expect(f.read.mock.calls[2][1]).toEqual(f.read.mock.calls[3][1]);
+  });
+
+  it('does not read while the tab is hidden, and reads once when it is shown again', async () => {
+    const f = makeHub(() => [bucket()]);
+    mount(widget(), f.hub, live());
+    await settle();
+    let hidden = true;
+    const spy = vi.spyOn(document, 'hidden', 'get').mockImplementation(() => hidden);
+    try {
+      await advance(AGGREGATE_REFRESH_MS * 5);
+      expect(f.read).toHaveBeenCalledTimes(1);
+      hidden = false;
+      await act(async () => void document.dispatchEvent(new Event('visibilitychange')));
+      expect(f.read).toHaveBeenCalledTimes(2);
+      await advance(AGGREGATE_REFRESH_MS);
+      expect(f.read).toHaveBeenCalledTimes(3);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+});
+
 describe('a paused board', () => {
   const pausedAt = NOW - 10 * 60_000;
 
@@ -240,7 +319,7 @@ describe('a paused board', () => {
     mount(widget(), f.hub, frozenAt(pausedAt));
     await settle();
     const window = f.read.mock.calls[0][1];
-    expect(window.endTime).toBe(new Date(pausedAt).toISOString());
+    expect(window.endTime).toBe(new Date(pausedAt - 1).toISOString());
     expect(window.startTime).toBe(new Date(pausedAt - 3600_000).toISOString());
   });
 

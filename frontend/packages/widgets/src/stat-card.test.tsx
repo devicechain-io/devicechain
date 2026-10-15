@@ -179,6 +179,27 @@ describe('the stat card when there is no figure', () => {
     expect(r.empty).toBe('No readings in the last 1h');
   });
 
+  it('counts an empty span as zero readings: a count of nothing is a number', () => {
+    const r = show({ stat: 'count' }, data(ready({ byName: {} })));
+    expect(r.figure).toBe('0');
+    expect(r.caption).toBe('Readings · 1h');
+  });
+
+  it('shows no count until the read lands, and none for a card that names no measurement', () => {
+    expect(show({ stat: 'count' }, data({ status: 'loading' })).empty).toBe('Loading');
+    const { container } = render(<StatCard widget={widget({ stat: 'count' }, [])} data={data(ready({ byName: {} }))} />);
+    expect(container.querySelector('[data-level-empty]')?.textContent).toBe('No readings in the last 1h');
+    expect(container.querySelector('[data-level-readout]')).toBeNull();
+  });
+
+  it('ages the latest reading on screen, and no aggregate', () => {
+    const last = render(<StatCard widget={widget({ stat: 'last' })} data={data(ready(), { temperature: sample(22.5) })} />);
+    expect(last.container.querySelector('[data-widget-freshness]')).not.toBeNull();
+    last.unmount();
+    const max = render(<StatCard widget={widget({ stat: 'max' })} data={data(ready(), { temperature: sample(22.5) })} />);
+    expect(max.container.querySelector('[data-widget-freshness]')).toBeNull();
+  });
+
   it('shows the latest reading as no data until one arrives', () => {
     expect(show({ stat: 'last' }, data(ready())).empty).toBe(S.noData);
     expect(show({ stat: 'last' }, data(ready(), { temperature: sample(null) })).empty).toBe(S.noData);

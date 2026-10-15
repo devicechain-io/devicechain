@@ -416,8 +416,24 @@ export class DashboardHub implements WidgetDataSource, WidgetActions {
     return dispose;
   }
 
-  // bucketMeasurements reads the buckets of every (device, measurement) pair over a window, once.
-  async bucketMeasurements(datasource: DatasourceSelector, window: HistoryWindow): Promise<MeasurementBucket[]> {
+  // bucketMeasurements reads the buckets of every (device, measurement) pair over a window. Widgets
+  // that ask the same question while a read is in flight share it: stat cards on one measurement
+  // and span read on the same minute boundaries, so a board of them costs one read per question.
+  private readonly bucketReads = new Map<string, Promise<MeasurementBucket[]>>();
+
+  bucketMeasurements(datasource: DatasourceSelector, window: HistoryWindow): Promise<MeasurementBucket[]> {
+    const key = JSON.stringify([datasource, window]);
+    let read = this.bucketReads.get(key);
+    if (!read) {
+      read = this.readBuckets(datasource, window);
+      this.bucketReads.set(key, read);
+      const forget = () => this.bucketReads.delete(key);
+      read.then(forget, forget);
+    }
+    return read;
+  }
+
+  private async readBuckets(datasource: DatasourceSelector, window: HistoryWindow): Promise<MeasurementBucket[]> {
     const groups = await this.resolveDevices(datasource);
     const reads = groups.flatMap((g) =>
       (g.names.size ? [...g.names] : [undefined]).map((name) =>

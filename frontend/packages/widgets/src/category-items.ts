@@ -31,7 +31,12 @@ export function categoryItems(
 ): CategoryItem[] {
   const named = widget.datasource?.measurements ?? [];
   const names = named.length > 0 ? [...new Set(named)] : Object.keys(data.latest);
-  const items = names.map((label) => ({ label, value: data.latest[label]?.value ?? null }));
+  // A value that is not a finite number (NaN, an infinity) is no reading: it has no length and no
+  // share, and drawing it as either would be a guess.
+  const items = names.map((label) => {
+    const v = data.latest[label]?.value;
+    return { label, value: typeof v === 'number' && Number.isFinite(v) ? v : null };
+  });
   if (sort === 'none') return items;
   const sign = sort === 'ascending' ? 1 : -1;
   return items
@@ -47,9 +52,11 @@ export function categoryItems(
 
 // Why a pie cannot be drawn from these items, or undefined when it can. A pie is shares of a
 // whole: a negative value has no share, and all zeros have nothing to divide.
-export function pieProblem(items: readonly CategoryItem[]): 'negative' | 'noShare' | undefined {
+// With no reading at all there is nothing to divide either, but that is `noData`, not a refusal.
+export function pieProblem(items: readonly CategoryItem[]): 'negative' | 'noShare' | 'noData' | undefined {
   const values = items.map((i) => i.value).filter((v): v is number => v !== null);
+  if (values.length === 0) return 'noData';
   if (values.some((v) => v < 0)) return 'negative';
-  if (values.length > 0 && values.every((v) => v === 0)) return 'noShare';
+  if (values.every((v) => v === 0)) return 'noShare';
   return undefined;
 }

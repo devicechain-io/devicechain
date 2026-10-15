@@ -25,6 +25,8 @@ import {
   spaceVar,
   useSeverityColors,
   WidgetFrame,
+  WidgetFreshnessProvider,
+  type WidgetFreshness,
   type WidgetProps,
 } from '@devicechain/widget-sdk';
 
@@ -35,17 +37,22 @@ import { LevelEmpty, LevelReadout } from '../level-readout';
 // The room the caption under the figure needs, before the density scale.
 const CAPTION_ROOM_PX = 22;
 
+// The latest reading is aged on screen like every other single reading ("12 sec. ago"), and with
+// no threshold of its own it is never called stale -- only its age is shown.
+const AGE_ONLY: WidgetFreshness = { at: undefined, staleAfterSeconds: undefined };
+
 export function StatCard({ widget, data }: WidgetProps<AggregateStreamState>) {
   const severity = useSeverityColors();
   const strings = aggregateStrings();
-  const reading = statReading(widget, data, parseStat(optString(widget.options, 'stat')));
+  const stat = parseStat(optString(widget.options, 'stat'));
+  const reading = statReading(widget, data, stat);
   const thresholds = useMemo(() => optThresholds(widget.options, 'thresholds'), [widget.options]);
   const unit = optString(widget.options, 'unit');
   const precision = optNumber(widget.options, 'precision');
   const title = optString(widget.options, 'title') ?? reading.name;
 
-  return (
-    <WidgetFrame title={title}>
+  const card = (
+    <WidgetFrame title={title} sampleTime={stat === 'last' ? (reading.kind === 'value' ? reading.time ?? null : null) : undefined}>
       {({ size, scale }) => {
         if (reading.kind === 'empty') {
           return <LevelEmpty message={emptyMessage(reading, strings)} />;
@@ -91,6 +98,7 @@ export function StatCard({ widget, data }: WidgetProps<AggregateStreamState>) {
       }}
     </WidgetFrame>
   );
+  return stat === 'last' ? <WidgetFreshnessProvider freshness={AGE_ONLY}>{card}</WidgetFreshnessProvider> : card;
 }
 
 // "Maximum · 1h": the statistic and the span it covers. The latest reading covers no span.

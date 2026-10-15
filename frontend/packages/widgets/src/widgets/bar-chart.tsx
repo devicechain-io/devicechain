@@ -82,7 +82,7 @@ function Bars({
   const withUnit = (v: number) => (unit ? `${fmt(v)} ${unit}` : fmt(v));
   const domain = niceDomain(items.flatMap((i) => (i.value === null ? [] : [i.value])));
   const span = domain.max - domain.min;
-  const labelled = items.length <= MAX_LABELLED_BARS;
+  const few = items.length <= MAX_LABELLED_BARS;
   const widest = (texts: string[]) => texts.reduce((n, t) => Math.max(n, t.length), 0) * charPx;
   const tickText = domain.ticks.map(fmt);
 
@@ -94,7 +94,7 @@ function Bars({
   let x0: number, x1: number, y0: number, y1: number;
   if (horizontal) {
     x0 = Math.min(W * 0.4, widest(items.map((i) => i.label)) + pad * 2);
-    x1 = W - pad - (labelled ? widest(items.map((i) => (i.value === null ? '' : withUnit(i.value)))) + pad : pad);
+    x1 = W - pad - (few ? widest(items.map((i) => (i.value === null ? '' : withUnit(i.value)))) + pad : pad);
     y0 = pad;
     y1 = H - catLabelH;
   } else {
@@ -107,6 +107,12 @@ function Bars({
   // A value's distance along the value axis from the plot's low end (left, or bottom).
   const along = (v: number) => ((v - domain.min) / span) * length;
   const bandPx = (horizontal ? y1 - y0 : x1 - x0) / items.length;
+  // Each bar's value is printed beside it when the labels fit: no more than MAX_LABELLED_BARS, and,
+  // in columns, the widest value no wider than a column (side by side they would run together).
+  // Otherwise every value is still in the chart's accessible description and on each bar's title.
+  const labelled =
+    few &&
+    (horizontal || widest(items.map((i) => (i.value === null ? '' : fmt(i.value)))) <= bandPx);
   const thick = Math.min(bandPx * 0.62, MAX_BAR_PX * ws.scale);
   const muted = { fill: css('muted-foreground') };
   const text = { fontSize: font, fontVariantNumeric: 'tabular-nums' } as const;
