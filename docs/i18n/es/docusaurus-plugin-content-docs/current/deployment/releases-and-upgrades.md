@@ -3802,6 +3802,9 @@ cambia para alguien:
   device-management (de 800m a 450m) y cuántos eventos mantienen en vuelo MQTT externo, Sparkplug y
   la presencia, lo que también aumenta cuántos puede perder un pod que muere de repente en esas
   rutas de como mucho una entrega. Consulta [Valores por defecto que cambiaron](#v0220-defaults).
+- **`dcctl upgrade`, `destroy` y `sim` rechazan un `--kube-context` que nombra un clúster distinto
+  del registrado para la instancia.** Antes sustituía el registro sin avisar. Consulta
+  [dcctl rechaza un `--kube-context` en conflicto](#v0220-kube-context).
 
 #### Antes de actualizar {#v0220-before}
 
@@ -3891,6 +3894,15 @@ guardado por la `v0.22.0` se dibuja con cada widget de una celda de ancho y una 
 ningún error. Los paneles guardados antes de la actualización se siguen dibujando bien con `0.21`
 hasta que se vuelven a guardar.
 
+**Desde `0.22.0`, un panel guardado por una versión más reciente se rechaza en lugar de dibujarse
+mal.** `parseDashboardDefinition` lanza un `DashboardDefinitionError` con `code: 'schemaTooNew'` y
+la versión encontrada en `found`. Comprueba `code` en lugar de `instanceof`, que falla cuando una
+aplicación empaqueta dos copias del paquete. `/dash`, board-replay y, en la consola, la página de
+detalle, la reversión, la importación y la clonación muestran un mensaje que pide actualizar en
+lugar del panel. Esto solo protege a los visores `0.22.0` y posteriores de los paneles guardados
+por una versión futura: un visor `0.21` sigue dibujando mal un panel de la `v0.22.0`, así que
+actualiza primero los paquetes.
+
 **`@devicechain/dashboards`** cambia el modelo de disposición:
 
 - se eliminan `WidgetBox`, `resolveWidgetBox`, `baseBox`, `setWidgetBox`, `bringToFront`,
@@ -3936,6 +3948,18 @@ tabla de flota o al modo de una barra por dispositivo del gráfico de barras. Es
 de último valor, los indicadores, el gráfico de serie temporal, la tabla, el gráfico circular, la
 tarjeta de estadística y un gráfico de barras en su modo por medición. El editor solo ofrece un
 grupo a la tabla de flota, al gráfico de barras, a los widgets de alarmas y al mapa.
+
+##### dcctl rechaza un `--kube-context` en conflicto {#v0220-kube-context}
+
+`dcctl upgrade` con un `--kube-context` que nombra el clúster registrado de la propia instancia
+ahora renderiza exactamente la misma instancia que sin la opción. Antes descartaba el ajuste de
+colocación del almacenamiento de blobs local, y el chart rechazaba el renderizado.
+
+Un `--kube-context` que nombra un contexto **distinto** del registrado para la instancia ahora lo
+rechazan `dcctl upgrade`, `dcctl destroy` y `dcctl sim`. Antes sustituía el registro sin avisar.
+Quita la opción para usar el clúster registrado. Si lo que está mal es el registro, porque el
+clúster se reconstruyó o se renombró su contexto, elimina
+`~/.devicechain/instances/<instance>/instance.json` y vuelve a ejecutar con `--kube-context`.
 
 ##### Valores por defecto que cambiaron {#v0220-defaults}
 
@@ -4043,6 +4067,11 @@ ni se eliminó.
   de descarte y los tres límites de geocercas, y `AdminTenant.effectiveScalarSettings` informa de
   dónde procede cada valor.
 - **La guía de usuario de la consola** tiene 17 capítulos en inglés, español y chino.
+- **La tabla de alarmas parte las claves de alarma y los originadores por los guiones**
+  (`engine-` / `overheat`) en lugar de en mitad de una palabra.
+- **board-replay ya no incluye el polyfill de precarga de módulos de Vite.** En Safari anterior a
+  17 y Firefox anterior a 115, los fragmentos compartidos de un widget que se carga al usarse por
+  primera vez llegan un viaje de ida y vuelta más tarde. Nada más cambia.
 
 ### v0.21.1: un parche, nada que hacer {#v0211-upgrade}
 

@@ -2078,6 +2078,8 @@ gh attestation verify <archive> --repo devicechain-io/devicechain \
 - **三个默认值变化：** 拉取批量（128 改为 256）、device-management 的 CPU 请求（800m 改为
   450m），以及外部 MQTT、Sparkplug 和在线状态保持的在途事件数；后者也提高了这些至多一次路径上
   pod 突然终止时可能丢失的数量。见[变化的默认值](#v0220-defaults)。
+- **`dcctl upgrade`、`destroy` 和 `sim` 会拒绝指向与实例记录不同集群的 `--kube-context`。**
+  以前它会静默覆盖记录。见[dcctl 拒绝冲突的 `--kube-context`](#v0220-kube-context)。
 
 #### 升级前 {#v0220-before}
 
@@ -2144,6 +2146,13 @@ gh attestation verify <archive> --repo devicechain-io/devicechain \
 读成没有跨度的方框，因此 `v0.22.0` 保存的看板会把每个组件画成一个单元格宽、一个单元格高，且不
 报错。升级前存储的看板在再次保存前，用 `0.21` 仍能正确渲染。
 
+**从 `0.22.0` 起，由更新版本保存的看板会被拒绝，而不是被画错。** `parseDashboardDefinition` 会
+抛出 `code: 'schemaTooNew'` 的 `DashboardDefinitionError`，并在 `found` 中给出发现的版本。请检查
+`code` 而不是 `instanceof`；当应用打包了该包的两个副本时，`instanceof` 会失效。`/dash`、
+board-replay 以及控制台的详情页、回滚、导入和克隆会显示提示升级的消息，而不是看板。这只保护
+`0.22.0` 及以后的查看器免受未来版本保存的看板影响：`0.21` 的查看器仍会把 `v0.22.0` 的看板画错，
+因此请先升级这些包。
+
 **`@devicechain/dashboards`** 改变了布局模型：
 
 - 移除 `WidgetBox`、`resolveWidgetBox`、`baseBox`、`setWidgetBox`、`bringToFront`、`gridBoxToPx`
@@ -2180,6 +2189,16 @@ gh attestation verify <archive> --repo devicechain-io/devicechain \
 卡片、仪表、图表或表格会把最后上报的设备当作答案显示。这些组件现在会拒绝设备组，并给出一句话，
 指向设备群表格或柱状图的每设备一根柱模式。涉及最新值卡片、各类仪表、时间序列图表、表格、饼图、
 统计卡片，以及按测量模式的柱状图。编辑器只为设备群表格、柱状图、告警组件和地图提供设备组选项。
+
+##### dcctl 拒绝冲突的 `--kube-context` {#v0220-kube-context}
+
+`dcctl upgrade` 带上指向实例自身已记录集群的 `--kube-context` 时，现在渲染出与不带该参数时完全相同
+的实例。以前它会丢掉本地 blob 存储的共置设置，chart 因而拒绝渲染。
+
+指向与实例记录**不同**上下文的 `--kube-context` 现在会被 `dcctl upgrade`、`dcctl destroy` 和
+`dcctl sim` 拒绝。以前它会静默覆盖记录。去掉该参数即可使用已记录的集群。如果错的是记录本身（集群
+已重建或其上下文已改名），请删除 `~/.devicechain/instances/<instance>/instance.json`，再带上
+`--kube-context` 重新运行。
 
 ##### 变化的默认值 {#v0220-defaults}
 
@@ -2263,6 +2282,9 @@ device-management 在每秒 6,000 个事件时的实测用量。CPU 上限仍为
 - **套餐限制。** 套餐表单可设置保留命令上限、削减优先级和三项地理围栏限制，
   `AdminTenant.effectiveScalarSettings` 报告每个值的来源。
 - **控制台用户指南**共 17 章，提供英文、西班牙文和中文版本。
+- **告警表格在连字符处换行显示告警键和来源**（`engine-` / `overheat`），而不是在单词中间断开。
+- **board-replay 不再包含 Vite 的模块预加载 polyfill。** 在 Safari 17 之前和 Firefox 115 之前的
+  版本中，首次使用时才加载的组件的共享代码块会晚一个往返到达。其他均无变化。
 
 ### v0.21.1：补丁，无需操作 {#v0211-upgrade}
 

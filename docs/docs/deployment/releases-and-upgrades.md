@@ -3540,6 +3540,9 @@ messages per pull. What changes for somebody:
   450m), and how many events external MQTT, Sparkplug and presence keep in flight, which also
   raises how many a pod that dies suddenly can lose on those at-most-once paths. See
   [Defaults that changed](#v0220-defaults).
+- **`dcctl upgrade`, `destroy` and `sim` refuse a `--kube-context` that names a different cluster
+  than the instance is recorded in.** It used to override the record silently. See
+  [dcctl refuses a conflicting `--kube-context`](#v0220-kube-context).
 
 #### Before you upgrade {#v0220-before}
 
@@ -3622,6 +3625,14 @@ and `@devicechain/brand` publish as `0.22.0`.
 renders with every widget one cell wide and one high. It shows no error. Boards stored before the
 upgrade keep rendering correctly with `0.21` until they are saved again.
 
+**From `0.22.0` on, a board saved by a newer version is refused instead of drawn wrong.**
+`parseDashboardDefinition` throws a `DashboardDefinitionError` with `code: 'schemaTooNew'` and the
+version it found in `found`. Check `code` rather than `instanceof`, which fails when an
+application bundles two copies of the package. `/dash`, board-replay and the console's detail
+page, rollback, import and clone show a message saying to upgrade instead of the board. This
+protects `0.22.0` and later viewers from boards saved by a future release only: a `0.21` viewer
+still draws a `v0.22.0` board wrongly, so upgrade the packages first.
+
 **`@devicechain/dashboards`** changes the layout model:
 
 - removed: `WidgetBox`, `resolveWidgetBox`, `baseBox`, `setWidgetBox`, `bringToFront`,
@@ -3665,6 +3676,18 @@ sentence that points to the fleet table, or to the bar chart's one-bar-per-devic
 covers the latest-value card, the gauges, the time-series chart, the table, the pie chart, the
 stat card and a bar chart in its per-measurement mode. The editor offers a group only to the fleet
 table, the bar chart, the alarm widgets and the map.
+
+##### dcctl refuses a conflicting `--kube-context` {#v0220-kube-context}
+
+`dcctl upgrade` with a `--kube-context` that names the instance's own recorded cluster now renders
+exactly the same instance as without the flag. Before, it dropped the local blob-storage
+colocation setting, and the chart refused the render.
+
+A `--kube-context` that names a **different** context than the one recorded for the instance is
+now refused by `dcctl upgrade`, `dcctl destroy` and `dcctl sim`. It used to override the record
+silently. Drop the flag to use the recorded cluster. If the record is what is wrong, because the
+cluster was rebuilt or its context renamed, remove
+`~/.devicechain/instances/<instance>/instance.json` and re-run with `--kube-context`.
 
 ##### Defaults that changed {#v0220-defaults}
 
@@ -3765,6 +3788,11 @@ removed.
 - **Tier limits.** The tier form sets the held-command ceiling, the shed priority and the three
   geofence limits, and `AdminTenant.effectiveScalarSettings` reports where each value comes from.
 - **The console user guide** has 17 chapters in English, Spanish and Chinese.
+- **The alarm table wraps alarm keys and originators at hyphens** (`engine-` / `overheat`)
+  instead of in the middle of a word.
+- **board-replay no longer ships Vite's module-preload polyfill.** On Safari before 17 and Firefox
+  before 115, the shared chunks of a widget that loads on first use arrive one round trip later.
+  Nothing else changes.
 
 ### v0.21.1 — a patch, nothing to do {#v0211-upgrade}
 
